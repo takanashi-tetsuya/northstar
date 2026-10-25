@@ -11,7 +11,7 @@ const gate = 'scripts/check-outbound-xml-construction.mjs';
 const gateSource = fs.readFileSync(path.join(root, gate), 'utf8');
 const baseline = /const BASELINE = new Map\(\[([\s\S]*?)\]\);/.exec(gateSource);
 assert.ok(baseline, 'gate baseline must be present');
-const entries = [...baseline[1].matchAll(/\['(src\/[^']+\.rs)',\s*\d+\]/g)]
+const entries = [...baseline[1].matchAll(/\['((?:src|crates)\/[^']+\.rs)',\s*\d+\]/g)]
   .map((match) => match[1]);
 assert.ok(entries.length > 0, 'gate baseline must contain source files');
 

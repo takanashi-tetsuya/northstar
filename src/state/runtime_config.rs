@@ -1,6 +1,7 @@
 //! Runtime configuration views: policy value types and configuration accessors.
 
 use super::*;
+use northstar_upload_application::UploadSlotLimits;
 
 #[derive(Clone, Copy)]
 pub(crate) struct OfflineDeliveryLimits {
@@ -78,16 +79,6 @@ pub(crate) struct Sasl2FastTokenPolicy {
 pub(crate) struct AdminScramPolicy {
     pub(crate) iterations: u32,
     pub(crate) sha1_enabled: bool,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct UploadSlotLimits {
-    pub(crate) max_file_bytes: u64,
-    pub(crate) max_files_per_user: i64,
-    pub(crate) max_bytes_per_user: i64,
-    pub(crate) max_retained_files: i64,
-    pub(crate) max_retained_bytes: i64,
-    pub(crate) max_pending_jobs: i64,
 }
 
 impl AppState {

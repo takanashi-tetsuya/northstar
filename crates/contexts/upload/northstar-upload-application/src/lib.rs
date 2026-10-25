@@ -32,6 +32,17 @@ pub struct UploadSlotRequest<'a> {
 
 pub type UploadSlotRequestCommand<'a> = UploadSlotRequest<'a>;
 
+/// The configured limits a slot request is admitted against.
+#[derive(Clone, Copy)]
+pub struct UploadSlotLimits {
+    pub max_file_bytes: u64,
+    pub max_files_per_user: i64,
+    pub max_bytes_per_user: i64,
+    pub max_retained_files: i64,
+    pub max_retained_bytes: i64,
+    pub max_pending_jobs: i64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UploadCommandValidationError {
     InvalidFilename,

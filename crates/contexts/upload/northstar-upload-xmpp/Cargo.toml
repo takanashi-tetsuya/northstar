@@ -1,0 +1,18 @@
+[package]
+name = "northstar-upload-xmpp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "XMPP adapter of the Northstar upload context: XEP-0363 slot requests"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+northstar-upload-application = { path = "../northstar-upload-application" }
+northstar-xep-0363 = { path = "../../../kernel/northstar-xep-0363" }
+northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+roxmltree = "0.20"
+tracing = "0.1"
+uuid = { version = "1.12", features = ["v4"] }

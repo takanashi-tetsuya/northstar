@@ -29,6 +29,7 @@ const BASELINE = new Map([
   ['src/xmpp/protocol/roster.rs', 0],
   ['src/xmpp/protocol/sasl2.rs', 0],
   ['src/xmpp/protocol/upload.rs', 0],
+  ['crates/contexts/upload/northstar-upload-xmpp/src/lib.rs', 0],
   ['src/xmpp/protocol/vcard.rs', 0],
   ['src/xmpp/protocol/messaging.rs', 0],
   ['src/xmpp/protocol/muc.rs', 0],

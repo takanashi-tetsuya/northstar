@@ -2682,6 +2682,38 @@
         "zeroize"
       ],
       [
+        "northstar-upload-xmpp",
+        "anyhow"
+      ],
+      [
+        "northstar-upload-xmpp",
+        "northstar-upload-application"
+      ],
+      [
+        "northstar-upload-xmpp",
+        "northstar-xep-0363"
+      ],
+      [
+        "northstar-upload-xmpp",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-upload-xmpp",
+        "northstar-xmpp-types"
+      ],
+      [
+        "northstar-upload-xmpp",
+        "roxmltree"
+      ],
+      [
+        "northstar-upload-xmpp",
+        "tracing"
+      ],
+      [
+        "northstar-upload-xmpp",
+        "uuid"
+      ],
+      [
         "northstar-web-surface",
         "serde"
       ],
@@ -4244,6 +4276,10 @@
       [
         "rust-xmpp-server",
         "northstar-upload-storage"
+      ],
+      [
+        "rust-xmpp-server",
+        "northstar-upload-xmpp"
       ],
       [
         "rust-xmpp-server",
@@ -6658,6 +6694,7 @@
       "northstar-upload-core",
       "northstar-upload-postgres",
       "northstar-upload-storage",
+      "northstar-upload-xmpp",
       "northstar-web-surface",
       "northstar-xep-0016",
       "northstar-xep-0045",

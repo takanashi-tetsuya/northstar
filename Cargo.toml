@@ -55,6 +55,7 @@ members = [
     "crates/contexts/upload/northstar-upload-application",
     "crates/contexts/upload/northstar-upload-storage",
     "crates/contexts/upload/northstar-upload-postgres",
+    "crates/contexts/upload/northstar-upload-xmpp",
     "crates/contexts/session/northstar-session-application",
     "crates/contexts/federation/northstar-federation-core",
     "crates/contexts/federation/northstar-federation-application",
@@ -182,6 +183,7 @@ northstar-upload-core = { path = "crates/contexts/upload/northstar-upload-core" 
 northstar-upload-application = { path = "crates/contexts/upload/northstar-upload-application" }
 northstar-upload-storage = { path = "crates/contexts/upload/northstar-upload-storage" }
 northstar-upload-postgres = { path = "crates/contexts/upload/northstar-upload-postgres" }
+northstar-upload-xmpp = { path = "crates/contexts/upload/northstar-upload-xmpp" }
 northstar-session-application = { path = "crates/contexts/session/northstar-session-application" }
 northstar-stream = { path = "crates/edges/northstar-stream" }
 northstar-federation-core = { path = "crates/contexts/federation/northstar-federation-core" }

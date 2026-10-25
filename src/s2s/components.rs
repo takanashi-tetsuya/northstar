@@ -1,13 +1,11 @@
 use crate::{
-    platform::config::{ComponentConnectionMode, ComponentCredential},
-    s2s,
-    services::federation_outbox::ComponentRoute,
-    state::AppState,
+    s2s, services::federation_outbox::ComponentRoute, state::AppState,
     xmpp::xml_builder::XmlElement,
 };
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use dashmap::{mapref::entry::Entry, DashMap};
+use northstar_config::{ComponentConnectionMode, ComponentCredential};
 use northstar_telemetry::metrics::DurationHistogram;
 use northstar_telemetry::metrics::DurationTimer;
 use rand::{rngs::OsRng, RngCore};

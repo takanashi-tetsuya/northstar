@@ -1,12 +1,10 @@
 //! Shared PostgreSQL wake transport for SM, MIX and account revocation workers.
-use crate::{
-    platform::config::SM_AUTHORITY_LISTENER_MAX_CONNECTIONS,
-    services::{
-        mix::{MixDeliveryWakeBroker, MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL},
-        sm::SmAuthorityBroker,
-    },
+use crate::services::{
+    mix::{MixDeliveryWakeBroker, MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL},
+    sm::SmAuthorityBroker,
 };
 use anyhow::{Context, Result};
+use northstar_config::SM_AUTHORITY_LISTENER_MAX_CONNECTIONS;
 use sqlx::postgres::{PgConnectOptions, PgListener, PgPoolOptions};
 use std::{sync::Arc, time::Duration};
 const SM_AUTHORITY_NOTIFICATION_CHANNEL: &str = "northstar_sm_authority_v1";

@@ -10,7 +10,7 @@ use std::{io::ErrorKind, path::PathBuf};
 /// Preserve dotenvy's parent-directory search and existing-variable precedence.
 /// A missing file is normal for deployments configured entirely by environment;
 /// every other error must stop startup before the environment is consumed.
-pub(crate) fn load_dotenv() -> Result<()> {
+pub fn load_dotenv() -> Result<()> {
     check_dotenv_result(dotenvy::dotenv())
 }
 
@@ -40,7 +40,7 @@ mod tests {
     use super::{check_dotenv_result, load_dotenv};
     use std::{collections::HashMap, fs, io, path::PathBuf, process::Command};
 
-    const DEVELOPMENT_ENV: &str = include_str!("../../../.env.development.example");
+    const DEVELOPMENT_ENV: &str = include_str!("../../../../.env.development.example");
     const PROBE_ENV: &str = "NORTHSTAR_DOTENV_TEST_PROBE";
 
     #[test]
@@ -134,7 +134,7 @@ mod tests {
             command
                 .args([
                     "--exact",
-                    "platform::config::environment::tests::dotenv_subprocess_probe",
+                    "environment::tests::dotenv_subprocess_probe",
                     "--nocapture",
                 ])
                 .env_clear()

@@ -3,8 +3,9 @@ use crate::services::authentication::publication::{
     credential_error, CredentialInvocation, CredentialPreparation, CredentialRollbackSite,
     PreparationResult,
 };
-use crate::{db, platform::config::SmIpPolicy, services::sm::*};
+use crate::{db, services::sm::*};
 use anyhow::Result;
+use northstar_config::SmIpPolicy;
 use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;

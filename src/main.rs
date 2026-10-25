@@ -6,7 +6,6 @@ mod cluster;
 mod db;
 #[cfg(test)]
 mod direct_replay;
-mod platform;
 mod runtime;
 mod s2s;
 mod services;
@@ -18,8 +17,8 @@ mod tools;
 mod xmpp;
 
 use anyhow::{Context, Result};
+use northstar_config::Config;
 use northstar_runtime::workers::{WorkerCriticality, WorkerMode};
-use platform::config::Config;
 use runtime::service_tasks::{
     await_shutdown_notifications, drain_service_tasks, spawn_service_task,
     unexpected_service_task_exit, SERVICE_TASK_ABORT_DRAIN_TIMEOUT, SERVICE_TASK_DRAIN_TIMEOUT,
@@ -172,7 +171,7 @@ async fn run() -> Result<()> {
         }
         println!(
             "{}",
-            serde_json::to_string(&platform::config::runtime_connection_budget_manifest())?
+            serde_json::to_string(&northstar_config::runtime_connection_budget_manifest())?
         );
         return Ok(());
     }
@@ -182,7 +181,7 @@ async fn run() -> Result<()> {
         }
         println!(
             "{}",
-            serde_json::to_string(&platform::config::storage_connection_budget_manifest())?
+            serde_json::to_string(&northstar_config::storage_connection_budget_manifest())?
         );
         return Ok(());
     }
@@ -209,7 +208,7 @@ async fn run() -> Result<()> {
     if arguments != ["serve", "maintenance"]
         && std::env::var("NORTHSTAR_DISABLE_DOTENV").as_deref() != Ok("true")
     {
-        platform::config::load_dotenv()?;
+        northstar_config::load_dotenv()?;
     }
     if let Some(outcome) = tools::identity_audit::maybe_run(&arguments).await? {
         return match outcome {

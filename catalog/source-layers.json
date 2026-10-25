@@ -12,8 +12,7 @@
       "may_use": [
         "composition",
         "adapter",
-        "application",
-        "platform"
+        "application"
       ]
     },
     "adapter": {
@@ -29,8 +28,7 @@
       ],
       "may_use": [
         "adapter",
-        "application",
-        "platform"
+        "application"
       ]
     },
     "application": {
@@ -39,17 +37,7 @@
         "services"
       ],
       "may_use": [
-        "application",
-        "platform"
-      ]
-    },
-    "platform": {
-      "rank": 1,
-      "modules": [
-        "platform"
-      ],
-      "may_use": [
-        "platform"
+        "application"
       ]
     }
   },

@@ -1,3 +1,8 @@
+//! Process configuration for Northstar: loading and validating the environment, secret files, listener plans,
+//! component credentials, connection budgets and the configured XEP extension switches.
+
+#![forbid(unsafe_code)]
+
 mod components;
 mod defaults;
 mod domain_policy;
@@ -9,21 +14,17 @@ mod raw;
 mod runtime_validation;
 mod web_origin;
 
-pub(crate) use environment::load_dotenv;
+pub use environment::load_dotenv;
 
 pub use self::components::*;
 use self::defaults::*;
-// The authentication service tests compare these with the auth core.
-#[cfg(test)]
-pub(crate) use self::defaults::{
-    DEFAULT_SCRAM_ITERATIONS, MAX_SCRAM_ITERATIONS, MIN_SCRAM_ITERATIONS,
-};
-pub(crate) use self::domain_policy::*;
+pub use self::defaults::{DEFAULT_SCRAM_ITERATIONS, MAX_SCRAM_ITERATIONS, MIN_SCRAM_ITERATIONS};
+pub use self::domain_policy::*;
 use self::listeners::*;
 use self::parsing::*;
 pub use self::raw::*;
 use self::runtime_validation::*;
-pub(crate) use self::web_origin::*;
+pub use self::web_origin::*;
 use northstar_security::secret_files::{read_protected_utf8_file, read_secret_file};
 
 use anyhow::{Context, Result};
@@ -46,43 +47,43 @@ pub use northstar_web_surface::{RegistrationMode, UploadMode};
 /// PostgreSQL enforces this limit for the shared production runtime role, not
 /// for an individual pool.  The primary pool must leave room for every
 /// long-lived runtime-role connection owned by this process.
-pub(crate) const RUNTIME_ROLE_CONNECTION_LIMIT: u32 = 64;
+pub const RUNTIME_ROLE_CONNECTION_LIMIT: u32 = 64;
 /// The browser OMEMO recovery pool is deliberately separate from traffic so a
 /// long poll cannot monopolize normal request connections.
-pub(crate) const OMEMO_RECOVERY_POOL_MAX_CONNECTIONS: u32 = 2;
+pub const OMEMO_RECOVERY_POOL_MAX_CONNECTIONS: u32 = 2;
 /// The SM authority listener owns one dedicated PostgreSQL connection.
-pub(crate) const SM_AUTHORITY_LISTENER_MAX_CONNECTIONS: u32 = 1;
+pub const SM_AUTHORITY_LISTENER_MAX_CONNECTIONS: u32 = 1;
 /// Durable restart/shutdown observation owns one dedicated runtime connection.
-pub(crate) const SERVICE_CONTROL_POOL_MAX_CONNECTIONS: u32 = 1;
+pub const SERVICE_CONTROL_POOL_MAX_CONNECTIONS: u32 = 1;
 /// Fixed runtime-role reservations outside `DATABASE_MAX_CONNECTIONS`.
-pub(crate) const RUNTIME_ROLE_RESERVED_CONNECTIONS: u32 = OMEMO_RECOVERY_POOL_MAX_CONNECTIONS
+pub const RUNTIME_ROLE_RESERVED_CONNECTIONS: u32 = OMEMO_RECOVERY_POOL_MAX_CONNECTIONS
     + SM_AUTHORITY_LISTENER_MAX_CONNECTIONS
     + SERVICE_CONTROL_POOL_MAX_CONNECTIONS;
 /// One primary slot remains available to foreground work while one bounded
 /// outbox database turn is in progress.  Accepting a one-connection primary
 /// pool would make that service guarantee impossible.
-pub(crate) const DATABASE_PRIMARY_POOL_MIN_CONNECTIONS: u32 = 2;
+pub const DATABASE_PRIMARY_POOL_MIN_CONNECTIONS: u32 = 2;
 /// Largest primary-pool size that cannot exceed the runtime role's physical
 /// PostgreSQL connection limit on a single process.
-pub(crate) const DATABASE_MAX_CONNECTIONS_LIMIT: u32 =
+pub const DATABASE_MAX_CONNECTIONS_LIMIT: u32 =
     RUNTIME_ROLE_CONNECTION_LIMIT - RUNTIME_ROLE_RESERVED_CONNECTIONS;
 /// Upload persistence has a separate PostgreSQL login. A small pool leaves
 /// headroom below its role limit for overlapping process shutdown/startup.
-pub(crate) const STORAGE_POOL_MAX_CONNECTIONS: u32 = 2;
-pub(crate) const STORAGE_ROLE_CONNECTION_LIMIT: u32 = 16;
-pub(crate) const STORAGE_MAX_ENABLED_NODES: u32 =
+pub const STORAGE_POOL_MAX_CONNECTIONS: u32 = 2;
+pub const STORAGE_ROLE_CONNECTION_LIMIT: u32 = 16;
+pub const STORAGE_MAX_ENABLED_NODES: u32 =
     STORAGE_ROLE_CONNECTION_LIMIT / STORAGE_POOL_MAX_CONNECTIONS;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-pub(crate) struct StorageConnectionBudgetManifest {
-    pub(crate) schema_version: u8,
-    pub(crate) storage_role_connection_limit: u32,
-    pub(crate) enabled_pool_max_connections_per_node: u32,
-    pub(crate) disabled_pool_max_connections_per_node: u32,
-    pub(crate) max_enabled_nodes_at_pool_limit: u32,
+pub struct StorageConnectionBudgetManifest {
+    pub schema_version: u8,
+    pub storage_role_connection_limit: u32,
+    pub enabled_pool_max_connections_per_node: u32,
+    pub disabled_pool_max_connections_per_node: u32,
+    pub max_enabled_nodes_at_pool_limit: u32,
 }
 
-pub(crate) const fn storage_connection_budget_manifest() -> StorageConnectionBudgetManifest {
+pub const fn storage_connection_budget_manifest() -> StorageConnectionBudgetManifest {
     StorageConnectionBudgetManifest {
         schema_version: 1,
         storage_role_connection_limit: STORAGE_ROLE_CONNECTION_LIMIT,
@@ -98,18 +99,18 @@ pub(crate) const fn storage_connection_budget_manifest() -> StorageConnectionBud
 /// running server.  Test harnesses must not maintain a second hand-written
 /// total for the long-lived runtime pools.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-pub(crate) struct RuntimeConnectionBudgetManifest {
-    pub(crate) schema_version: u8,
-    pub(crate) runtime_role_connection_limit: u32,
-    pub(crate) primary_pool_min_connections: u32,
-    pub(crate) primary_pool_max_connections: u32,
-    pub(crate) omemo_recovery_pool_max_connections: u32,
-    pub(crate) sm_authority_listener_max_connections: u32,
-    pub(crate) service_control_pool_max_connections: u32,
-    pub(crate) auxiliary_connections: u32,
+pub struct RuntimeConnectionBudgetManifest {
+    pub schema_version: u8,
+    pub runtime_role_connection_limit: u32,
+    pub primary_pool_min_connections: u32,
+    pub primary_pool_max_connections: u32,
+    pub omemo_recovery_pool_max_connections: u32,
+    pub sm_authority_listener_max_connections: u32,
+    pub service_control_pool_max_connections: u32,
+    pub auxiliary_connections: u32,
 }
 
-pub(crate) const fn runtime_connection_budget_manifest() -> RuntimeConnectionBudgetManifest {
+pub const fn runtime_connection_budget_manifest() -> RuntimeConnectionBudgetManifest {
     RuntimeConnectionBudgetManifest {
         schema_version: 1,
         runtime_role_connection_limit: RUNTIME_ROLE_CONNECTION_LIMIT,
@@ -127,7 +128,7 @@ pub(crate) const fn runtime_connection_budget_manifest() -> RuntimeConnectionBud
 /// has no such principal, so it must share the already-attested primary pool
 /// rather than create a second pool with the same credential.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AdminCommandPoolMode {
+pub enum AdminCommandPoolMode {
     DedicatedProductionRole,
     SharedUnsafeDevelopment,
 }
@@ -152,7 +153,7 @@ fn resolve_admin_command_pool_mode(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum StoragePoolMode {
+pub enum StoragePoolMode {
     Disabled,
     DedicatedProductionRole,
     SharedUnsafeDevelopment,
@@ -187,14 +188,14 @@ fn resolve_storage_pool_mode(
 
 pub struct Config {
     pub raw: RawConfig,
-    pub(crate) admin_command_pool_mode: AdminCommandPoolMode,
-    pub(crate) storage_pool_mode: StoragePoolMode,
+    pub admin_command_pool_mode: AdminCommandPoolMode,
+    pub storage_pool_mode: StoragePoolMode,
     pub domain: String,
     pub public_url: String,
     pub websocket_allowed_origins: Vec<String>,
     pub trusted_proxy_ips: Vec<IpAddr>,
     pub xep_0487_ips: Vec<IpAddr>,
-    pub(crate) xmpp_extensions: Arc<northstar_xep_catalog::ExtensionRuntime>,
+    pub xmpp_extensions: Arc<northstar_xep_catalog::ExtensionRuntime>,
     pub federation_allowlist: Vec<String>,
     pub federation_denylist: Vec<String>,
     /// Test/private-network endpoint overrides. The boolean selects Direct TLS.
@@ -206,12 +207,12 @@ pub struct Config {
     pub cluster_security: Option<Arc<northstar_security::cluster_bus::ClusterSecurityConfig>>,
     /// True only when FAST has a mounted deployment key or the explicit
     /// loopback-only ephemeral development policy was accepted.
-    pub(crate) fast_token_enabled: bool,
-    pub(crate) dummy_scram_secret: Option<Zeroizing<String>>,
-    pub(crate) api_control_secret: Option<String>,
-    pub(crate) api_control_previous_secret: Option<String>,
-    pub(crate) metrics_bearer_token: Option<Arc<Zeroizing<String>>>,
-    pub(crate) web_admin_gateway_token: Option<Arc<Zeroizing<String>>>,
+    pub fast_token_enabled: bool,
+    pub dummy_scram_secret: Option<Zeroizing<String>>,
+    pub api_control_secret: Option<String>,
+    pub api_control_previous_secret: Option<String>,
+    pub metrics_bearer_token: Option<Arc<Zeroizing<String>>>,
+    pub web_admin_gateway_token: Option<Arc<Zeroizing<String>>>,
     /// Immutable result of the deployment-surface capability resolver.  All
     /// route, listener and registration decisions derive from this plan.
     pub web_capabilities: Arc<ResolvedWebCapabilities>,
@@ -240,7 +241,7 @@ impl Config {
         )
     }
 
-    pub(crate) fn external_route_domain_policy(&self) -> ExternalRouteDomainPolicy {
+    pub fn external_route_domain_policy(&self) -> ExternalRouteDomainPolicy {
         ExternalRouteDomainPolicy {
             local_domain: self.domain.clone(),
             federation_enabled: self.raw.federation_enabled,

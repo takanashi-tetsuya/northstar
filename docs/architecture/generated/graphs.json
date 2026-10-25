@@ -1974,6 +1974,70 @@
         "zeroize"
       ],
       [
+        "northstar-config",
+        "anyhow"
+      ],
+      [
+        "northstar-config",
+        "axum"
+      ],
+      [
+        "northstar-config",
+        "chrono"
+      ],
+      [
+        "northstar-config",
+        "dotenvy"
+      ],
+      [
+        "northstar-config",
+        "envy"
+      ],
+      [
+        "northstar-config",
+        "northstar-security"
+      ],
+      [
+        "northstar-config",
+        "northstar-web-surface"
+      ],
+      [
+        "northstar-config",
+        "northstar-xep-catalog"
+      ],
+      [
+        "northstar-config",
+        "northstar-xmpp-types"
+      ],
+      [
+        "northstar-config",
+        "redis"
+      ],
+      [
+        "northstar-config",
+        "serde"
+      ],
+      [
+        "northstar-config",
+        "serde_json"
+      ],
+      [
+        "northstar-config",
+        "sha2"
+      ],
+      [
+        "northstar-config",
+        "subtle"
+      ],
+      [
+        "northstar-config",
+        "uuid"
+      ],
+      [
+        "northstar-config",
+        "zeroize"
+      ],
+      [
         "northstar-delivery-core",
         "northstar-xmpp-types"
       ],
@@ -3896,6 +3960,10 @@
       [
         "rust-xmpp-server",
         "northstar-auth-core"
+      ],
+      [
+        "rust-xmpp-server",
+        "northstar-config"
       ],
       [
         "rust-xmpp-server",
@@ -6368,6 +6436,7 @@
       "northstar-archive-application",
       "northstar-archive-core",
       "northstar-auth-core",
+      "northstar-config",
       "northstar-delivery-core",
       "northstar-federation-application",
       "northstar-federation-core",

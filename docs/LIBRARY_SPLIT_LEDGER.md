@@ -127,7 +127,7 @@ directly.
 | `src/xmpp/framing.rs` | `northstar-xml-framing` | transport buffers, deadlines and socket closure |
 | `src/services/abuse.rs` | `northstar-abuse-policy` | actor-state storage, database locks, clock, randomness and challenge lifecycle |
 | `src/xmpp/protocol/*` | matching XEP crates | authentication, application authorization, transactions, delivery and error mapping |
-| `src/api/mod.rs`, `src/platform/config.rs`, `src/main.rs` | `northstar-web-surface` | listener binding, Axum routing, static assets and supervised task lifetime |
+| `src/api/mod.rs`, `crates/platform/northstar-config/src/lib.rs`, `src/main.rs` | `northstar-web-surface` | listener binding, Axum routing, static assets and supervised task lifetime |
 
 A facade must delegate security-sensitive pure logic; it may not keep a second
 implementation. Architecture checks are updated when ownership legitimately

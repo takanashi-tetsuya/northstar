@@ -6,13 +6,13 @@ use super::{
 };
 use crate::{
     db::mix_repository::PostgresMixRepository,
-    platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter,
     services::mix::{MixAccount, MixChannel, MixService, PamMembership, PresenceOutcome},
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
+use northstar_config::ExternalRouteDomainPolicy;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;
 

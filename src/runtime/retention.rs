@@ -1,6 +1,6 @@
-use crate::platform::config::Config;
 use crate::services::maintenance_repositories::{RetentionRepository, RetentionStore};
 use chrono::Utc;
+use northstar_config::Config;
 use northstar_telemetry::metrics::Metrics;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},

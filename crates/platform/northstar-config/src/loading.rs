@@ -748,7 +748,7 @@ impl Config {
                 "SM snapshot, process-memory, and recovery-queue byte limits are inconsistent"
             );
         }
-        if crate::platform::config::SmIpPolicy::parse(&raw.sm_ip_binding).is_none() {
+        if crate::SmIpPolicy::parse(&raw.sm_ip_binding).is_none() {
             anyhow::bail!("SM_IP_BINDING must be one of: none, exact, subnet");
         }
         if !(60..=86_400).contains(&raw.turn_credentials_ttl_seconds) {

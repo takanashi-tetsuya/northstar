@@ -3,11 +3,11 @@
 use super::{AppState, RuntimeFederationPolicy};
 use crate::{
     db::mix_repository::PostgresMixRepository,
-    platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter,
     services::mix::{MixService, NODE_PRESENCE},
 };
 use anyhow::Result;
+use northstar_config::ExternalRouteDomainPolicy;
 use northstar_xml_builder::XmlElement;
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 use std::sync::Arc;

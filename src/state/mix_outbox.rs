@@ -7,7 +7,6 @@ use super::{
 use crate::{
     cluster::{ClusterMixRouteLookup, ClusterNodeDelivery, NodeDeliveryReceipt},
     db::mix_repository::PostgresMixRepository,
-    platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter,
     services::mix::MixService,
     xmpp::outbound::MixDelivery,
@@ -18,6 +17,7 @@ use crate::{
 };
 use anyhow::Result;
 use dashmap::DashMap;
+use northstar_config::ExternalRouteDomainPolicy;
 use northstar_protocol_runtime::caps::{CapsObservationOwner, CapsResourceIndex, PendingCapsIndex};
 use std::sync::{
     atomic::{AtomicU64, Ordering},

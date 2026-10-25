@@ -183,10 +183,6 @@ use crate::api::contexts::{
 };
 use crate::{
     db,
-    platform::config::{
-        AdminCommandPoolMode, Config, StoragePoolMode, OMEMO_RECOVERY_POOL_MAX_CONNECTIONS,
-        SERVICE_CONTROL_POOL_MAX_CONNECTIONS, STORAGE_POOL_MAX_CONNECTIONS,
-    },
     s2s::FederationRouter,
     services::abuse::{AbuseConfig, AbuseGuard},
     services::upload_safety::{UploadAuthorityGeneration, UploadSafetyGate},
@@ -199,6 +195,10 @@ use hickory_resolver::{
     net::runtime::TokioRuntimeProvider,
     system_conf::read_system_conf,
     TokioResolver,
+};
+use northstar_config::{
+    AdminCommandPoolMode, Config, StoragePoolMode, OMEMO_RECOVERY_POOL_MAX_CONNECTIONS,
+    SERVICE_CONTROL_POOL_MAX_CONNECTIONS, STORAGE_POOL_MAX_CONNECTIONS,
 };
 use northstar_telemetry::metrics::Metrics;
 use sqlx::{
@@ -451,7 +451,7 @@ pub struct AppState {
     federation_outbox: FederationRouter,
     /// Full XEP-0114/XEP-0225 authentication records. `config.components`
     /// retains only redacted routing/discovery metadata after construction.
-    component_credentials: Arc<[crate::platform::config::ComponentCredential]>,
+    component_credentials: Arc<[northstar_config::ComponentCredential]>,
     components: crate::s2s::components::ComponentRegistry,
     s2s_connection_registry: Arc<crate::s2s::S2sConnectionRegistry>,
     /// Shared TTL-aware resolver for SRV, CNAME, A and AAAA federation lookups.

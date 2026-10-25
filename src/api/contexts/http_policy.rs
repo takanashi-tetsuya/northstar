@@ -1,5 +1,5 @@
 //! Public discovery data and HTTP entry policies without application authority.
-use crate::platform::config::{RegistrationMode, UploadMode};
+use northstar_config::{RegistrationMode, UploadMode};
 use std::{
     net::IpAddr,
     sync::{

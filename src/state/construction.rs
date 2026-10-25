@@ -53,7 +53,7 @@ impl AppState {
         }
         let metrics_bearer_token = config.metrics_bearer_token.take();
         let web_admin_gateway_token = config.web_admin_gateway_token.take();
-        let component_credentials: Arc<[crate::platform::config::ComponentCredential]> =
+        let component_credentials: Arc<[northstar_config::ComponentCredential]> =
             std::mem::take(&mut config.components).into();
         config.components = component_credentials
             .iter()
@@ -711,7 +711,7 @@ impl AppState {
             )
             .with_api_control(Arc::clone(&api_control)),
             config.configured_registration_mode()
-                == crate::platform::config::RegistrationMode::InvitationOnly,
+                == northstar_config::RegistrationMode::InvitationOnly,
             config.registration_rate_per_hour,
             config.scram_iterations,
             config.scram_sha1_enabled,

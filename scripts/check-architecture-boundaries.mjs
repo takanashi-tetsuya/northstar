@@ -257,8 +257,8 @@ const state = readProductionModule('src/state.rs', { root });
 // src/cluster.rs is read as its whole production module too (listener.rs,
 // pool.rs and the files a split adds), with items read by unique declaration
 const cluster = readProductionModule('src/cluster.rs', { root });
-// src/platform/config.rs and its non-test child files (the whole production module)
-const configSource = readProductionModule('src/platform/config.rs', { root });
+// crates/platform/northstar-config/src/lib.rs and its non-test sibling modules (the whole production module)
+const configSource = readProductionModule('crates/platform/northstar-config/src/lib.rs', { root });
 const mainSource = read('src/main.rs');
 const responsibilityDocument = read('docs/PROGRAM_RESPONSIBILITIES.md');
 const listenerStressDriver = read('scripts/listener-readiness-stress-wsl.sh');
@@ -801,7 +801,7 @@ if (
 ) {
   throw new Error('production command mode must keep its separately attested command-role pool');
 }
-const adminCommandPoolMode = rustItemBody(configSource, 'pub(crate) enum AdminCommandPoolMode');
+const adminCommandPoolMode = rustItemBody(configSource, 'pub enum AdminCommandPoolMode');
 if (
   !/^\s*DedicatedProductionRole\s*,?\s*$/m.test(adminCommandPoolMode) ||
   !/^\s*SharedUnsafeDevelopment\s*,?\s*$/m.test(adminCommandPoolMode)
@@ -824,7 +824,7 @@ if (
 }
 const runtimePoolBudget = rustItemBody(configSource, 'fn validate_runtime_pool_budget(');
 if (
-  !/pub\(crate\)\s+const\s+DATABASE_PRIMARY_POOL_MIN_CONNECTIONS\s*:\s*u32\s*=\s*2\s*;/.test(
+  !/pub\s+const\s+DATABASE_PRIMARY_POOL_MIN_CONNECTIONS\s*:\s*u32\s*=\s*2\s*;/.test(
     configSource,
   ) ||
   !/!\s*\(\s*DATABASE_PRIMARY_POOL_MIN_CONNECTIONS\s*\.\.\s*=\s*DATABASE_MAX_CONNECTIONS_LIMIT\s*\)\s*\.\s*contains\s*\(\s*&max_connections\s*\)/s.test(
@@ -834,15 +834,15 @@ if (
   throw new Error('the primary runtime pool must reject capacity below two connections');
 }
 for (const invariant of [
-  'pub(crate) const RUNTIME_ROLE_CONNECTION_LIMIT: u32 = 64;',
-  'pub(crate) const OMEMO_RECOVERY_POOL_MAX_CONNECTIONS: u32 = 2;',
-  'pub(crate) const SM_AUTHORITY_LISTENER_MAX_CONNECTIONS: u32 = 1;',
-  'pub(crate) const SERVICE_CONTROL_POOL_MAX_CONNECTIONS: u32 = 1;',
-  'pub(crate) const DATABASE_MAX_CONNECTIONS_LIMIT: u32 =',
+  'pub const RUNTIME_ROLE_CONNECTION_LIMIT: u32 = 64;',
+  'pub const OMEMO_RECOVERY_POOL_MAX_CONNECTIONS: u32 = 2;',
+  'pub const SM_AUTHORITY_LISTENER_MAX_CONNECTIONS: u32 = 1;',
+  'pub const SERVICE_CONTROL_POOL_MAX_CONNECTIONS: u32 = 1;',
+  'pub const DATABASE_MAX_CONNECTIONS_LIMIT: u32 =',
   'RUNTIME_ROLE_CONNECTION_LIMIT - RUNTIME_ROLE_RESERVED_CONNECTIONS;',
   'validate_runtime_pool_budget(raw.database_max_connections, raw.database_min_connections)?;',
-  'pub(crate) struct RuntimeConnectionBudgetManifest',
-  'pub(crate) const fn runtime_connection_budget_manifest()',
+  'pub struct RuntimeConnectionBudgetManifest',
+  'pub const fn runtime_connection_budget_manifest()',
   'auxiliary_connections: RUNTIME_ROLE_RESERVED_CONNECTIONS,',
 ]) {
   if (!configSource.includes(invariant)) {
@@ -850,9 +850,9 @@ for (const invariant of [
   }
 }
 for (const invariant of [
-  'pub(crate) const STORAGE_POOL_MAX_CONNECTIONS: u32 = 2;',
-  'pub(crate) const STORAGE_ROLE_CONNECTION_LIMIT: u32 = 16;',
-  'pub(crate) const fn storage_connection_budget_manifest()',
+  'pub const STORAGE_POOL_MAX_CONNECTIONS: u32 = 2;',
+  'pub const STORAGE_ROLE_CONNECTION_LIMIT: u32 = 16;',
+  'pub const fn storage_connection_budget_manifest()',
 ]) {
   if (!configSource.includes(invariant)) {
     throw new Error(`storage pool-budget invariant is missing: ${invariant}`);

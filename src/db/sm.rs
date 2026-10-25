@@ -134,7 +134,7 @@ pub struct SmCheckpointOutcome {
     pub ownership: SmQueueOwnershipResolution,
 }
 
-pub use crate::platform::config::SmIpPolicy;
+pub use northstar_config::SmIpPolicy;
 
 #[cfg(test)]
 pub fn peer_ip_matches(policy: SmIpPolicy, expected: IpAddr, actual: IpAddr) -> bool {

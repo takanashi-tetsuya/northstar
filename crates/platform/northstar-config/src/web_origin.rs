@@ -5,7 +5,7 @@ use super::*;
 /// Return the canonical serialized origin accepted from a browser `Origin`
 /// header or an explicit WebSocket allowlist entry. Only secure origins are
 /// accepted outside loopback development hosts.
-pub(crate) fn canonical_web_origin(value: &str) -> Option<String> {
+pub fn canonical_web_origin(value: &str) -> Option<String> {
     if value.is_empty() || value.len() > 2_048 || value.trim() != value || value.contains(',') {
         return None;
     }
@@ -21,7 +21,7 @@ pub(crate) fn canonical_web_origin(value: &str) -> Option<String> {
 
 /// Derive an origin from PUBLIC_URL. A deployment may publish HTTP paths, but
 /// browser Origin never contains one, so only scheme/authority participate.
-pub(crate) fn canonical_public_web_origin(value: &str) -> Option<String> {
+pub fn canonical_public_web_origin(value: &str) -> Option<String> {
     let uri = value.parse::<axum::http::Uri>().ok()?;
     canonical_origin_uri(&uri)
 }

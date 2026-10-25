@@ -2,10 +2,10 @@
 
 pub(crate) mod ownership;
 
-use crate::platform::config::SmIpPolicy;
 use crate::services::authentication::publication::{CredentialInvocation, PreparedCredential};
 use anyhow::Result;
 use dashmap::mapref::entry::Entry;
+use northstar_config::SmIpPolicy;
 use std::{
     net::IpAddr,
     sync::{

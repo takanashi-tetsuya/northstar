@@ -164,7 +164,7 @@ mod health_regressions {
 
     #[test]
     fn split_process_budget_includes_all_physical_runtime_role_connections() {
-        let budget = crate::platform::config::runtime_connection_budget_manifest();
+        let budget = northstar_config::runtime_connection_budget_manifest();
         assert_eq!(
             MAX_CORE_PRIMARY_CONNECTIONS
                 + MAINTENANCE_POOL_MAX_CONNECTIONS

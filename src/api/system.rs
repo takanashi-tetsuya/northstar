@@ -639,10 +639,10 @@ fn allowed_websocket_origin(
         },
         _ => return false,
     };
-    let Some(origin) = crate::platform::config::canonical_web_origin(origin) else {
+    let Some(origin) = northstar_config::canonical_web_origin(origin) else {
         return false;
     };
-    crate::platform::config::canonical_public_web_origin(public_url).as_ref() == Some(&origin)
+    northstar_config::canonical_public_web_origin(public_url).as_ref() == Some(&origin)
         || configured_origins
             .iter()
             .any(|configured| configured == &origin)
@@ -674,11 +674,11 @@ pub async fn public_config(
 ) -> Json<Value> {
     let policy = state.policy();
     let registration_mode = state.registration_mode();
-    let open_registration = registration_mode != crate::platform::config::RegistrationMode::Closed;
+    let open_registration = registration_mode != northstar_config::RegistrationMode::Closed;
     let registration_mode = match registration_mode {
-        crate::platform::config::RegistrationMode::Closed => "closed",
-        crate::platform::config::RegistrationMode::Open => "open",
-        crate::platform::config::RegistrationMode::InvitationOnly => "invitation",
+        northstar_config::RegistrationMode::Closed => "closed",
+        northstar_config::RegistrationMode::Open => "open",
+        northstar_config::RegistrationMode::InvitationOnly => "invitation",
     };
     let federation_enabled = state.federation_enabled();
     Json(json!({
@@ -709,9 +709,9 @@ pub async fn public_config(
             "upload_admission":policy.upload_mode.admits_new_uploads(),
             "upload_download":policy.upload_mode.keeps_storage_runtime(),
             "upload_mode":match policy.upload_mode {
-                crate::platform::config::UploadMode::Enabled => "enabled",
-                crate::platform::config::UploadMode::DrainReadOnly => "drain_read_only",
-                crate::platform::config::UploadMode::Disabled => "disabled",
+                northstar_config::UploadMode::Enabled => "enabled",
+                northstar_config::UploadMode::DrainReadOnly => "drain_read_only",
+                northstar_config::UploadMode::Disabled => "disabled",
             }
         }
     }))

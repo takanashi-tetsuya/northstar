@@ -9,13 +9,13 @@ use super::{
 use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
     db::account_repository::PostgresAccountRepository,
-    platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter,
     services::account::{AccountService, DeletionRecoveryJob, RemovedAccount},
     xmpp::xml_builder::XmlElement,
 };
 use anyhow::Result;
 use dashmap::DashMap;
+use northstar_config::ExternalRouteDomainPolicy;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,

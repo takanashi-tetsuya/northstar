@@ -5,15 +5,16 @@
 //! passwords.  Import is one serializable transaction, including its audit
 //! record; `--dry-run` executes the same database writes and then rolls back.
 
+use crate::db;
 use crate::db::pie::model::{
     ArchiveItem, ConflictPolicy, OfflineMessage, PendingPresence, PepItem, PepNode,
     PepSubscription, PieUser, PreparedUser, PrivateXml, RosterItem, ScramCredential,
 };
-use crate::{db, platform::config::Config};
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::{DateTime, Utc};
 use northstar_auth_core as auth;
+use northstar_config::Config;
 use northstar_xmpp_types::jid;
 use roxmltree::{Document, Node};
 use sqlx::{PgPool, Row};

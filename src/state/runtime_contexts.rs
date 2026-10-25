@@ -198,16 +198,16 @@ impl AppState {
             || self.registration_closed.load(Ordering::Acquire)
     }
 
-    pub(crate) fn registration_mode(&self) -> crate::platform::config::RegistrationMode {
+    pub(crate) fn registration_mode(&self) -> northstar_config::RegistrationMode {
         if self.registration_is_closed() {
-            crate::platform::config::RegistrationMode::Closed
+            northstar_config::RegistrationMode::Closed
         } else {
             self.config.configured_registration_mode()
         }
     }
 
     pub(crate) fn registration_requires_invitation(&self) -> bool {
-        self.registration_mode() == crate::platform::config::RegistrationMode::InvitationOnly
+        self.registration_mode() == northstar_config::RegistrationMode::InvitationOnly
     }
 
     pub(crate) fn http_registration_availability(
@@ -217,7 +217,7 @@ impl AppState {
             Arc::clone(&self.registration_closed),
             self.config.registration_dependency_locked(),
             self.config.configured_registration_mode()
-                == crate::platform::config::RegistrationMode::InvitationOnly,
+                == northstar_config::RegistrationMode::InvitationOnly,
         )
     }
 
@@ -342,11 +342,11 @@ impl AppState {
 
     pub(crate) fn component_connect_credentials(
         &self,
-    ) -> Vec<crate::platform::config::ComponentCredential> {
+    ) -> Vec<northstar_config::ComponentCredential> {
         self.component_credentials
             .iter()
             .filter(|credential| {
-                credential.connection == crate::platform::config::ComponentConnectionMode::Connect
+                credential.connection == northstar_config::ComponentConnectionMode::Connect
             })
             .cloned()
             .collect()
@@ -354,14 +354,14 @@ impl AppState {
 
     pub(crate) fn accepts_component_connections(&self) -> bool {
         self.component_credentials.iter().any(|credential| {
-            credential.connection == crate::platform::config::ComponentConnectionMode::Accept
+            credential.connection == northstar_config::ComponentConnectionMode::Accept
         })
     }
 
     pub(crate) fn component_authentication_credential(
         &self,
         domain: &str,
-    ) -> Option<crate::platform::config::ComponentCredential> {
+    ) -> Option<northstar_config::ComponentCredential> {
         let domain = northstar_xmpp_types::jid::prepare_domainpart(domain).ok()?;
         self.component_credentials
             .iter()

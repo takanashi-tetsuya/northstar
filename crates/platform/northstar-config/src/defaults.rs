@@ -26,11 +26,11 @@ pub(super) fn default_db_min_connections() -> u32 {
     2
 }
 /// Lowest accepted `SCRAM_ITERATIONS`; equal to `northstar_auth_core::MIN_SCRAM_ITERATIONS`.
-pub(crate) const MIN_SCRAM_ITERATIONS: u32 = 4_096;
+pub const MIN_SCRAM_ITERATIONS: u32 = 4_096;
 /// Default `SCRAM_ITERATIONS`; equal to `northstar_auth_core::DEFAULT_SCRAM_ITERATIONS`.
-pub(crate) const DEFAULT_SCRAM_ITERATIONS: u32 = 600_000;
+pub const DEFAULT_SCRAM_ITERATIONS: u32 = 600_000;
 /// Highest accepted `SCRAM_ITERATIONS`; equal to `northstar_auth_core::MAX_SCRAM_ITERATIONS`.
-pub(crate) const MAX_SCRAM_ITERATIONS: u32 = 10_000_000;
+pub const MAX_SCRAM_ITERATIONS: u32 = 10_000_000;
 pub(super) fn default_scram_iterations() -> u32 {
     DEFAULT_SCRAM_ITERATIONS
 }

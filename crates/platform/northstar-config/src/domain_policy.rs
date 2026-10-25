@@ -5,7 +5,7 @@ use super::*;
 /// The immutable domains allowed by the configured component and federation
 /// transports. Runtime federation rules are applied separately by AppState.
 #[derive(Clone)]
-pub(crate) struct ExternalRouteDomainPolicy {
+pub struct ExternalRouteDomainPolicy {
     pub(super) local_domain: String,
     pub(super) federation_enabled: bool,
     pub(super) federation_allowlist: Vec<String>,
@@ -14,7 +14,7 @@ pub(crate) struct ExternalRouteDomainPolicy {
 }
 
 impl ExternalRouteDomainPolicy {
-    pub(crate) fn federation_domain_allowed(&self, domain: &str) -> bool {
+    pub fn federation_domain_allowed(&self, domain: &str) -> bool {
         federation_domain_allowed_in(
             domain,
             &self.local_domain,
@@ -24,7 +24,7 @@ impl ExternalRouteDomainPolicy {
         )
     }
 
-    pub(crate) fn external_route_domain_allowed(&self, domain: &str) -> bool {
+    pub fn external_route_domain_allowed(&self, domain: &str) -> bool {
         northstar_xmpp_types::jid::prepare_domainpart(domain)
             .is_ok_and(|domain| self.component_domains.iter().any(|entry| entry == &domain))
             || self.federation_domain_allowed(domain)

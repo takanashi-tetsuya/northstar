@@ -19,8 +19,8 @@ const [abuseSources, abuseTransaction, abuseVerification, config, envExample, ap
   ]).then(([parts, ...policyParts]) => [...parts, policyParts.join('\n')]),
   read('src/db/abuse_transaction_repository.rs'),
   read('src/db/abuse_verification_repository.rs'),
-  // src/platform/config.rs and its non-test child files (the whole production module)
-  readProductionModule('src/platform/config.rs'), read('.env.example'),
+  // crates/platform/northstar-config/src/lib.rs and its non-test sibling modules (the whole production module)
+  readProductionModule('crates/platform/northstar-config/src/lib.rs'), read('.env.example'),
   readRoleSplitFile('src/api/mod.rs'), read('src/api/auth_routes.rs'),
   read('src/api/reports.rs'), readRoleSplitFile('src/xmpp/protocol.rs'), read('src/xmpp/protocol/dispatch.rs'),
   readProductionModule('src/xmpp/protocol/messaging.rs'), read('src/xmpp/protocol/misc.rs'), read('src/xmpp/protocol/ibr.rs'), read('src/services/account.rs'), read('src/db/account_repository.rs'), read('src/state/account_recovery.rs'), readProductionModule('src/db/users.rs'), read('src/db/api_control.rs'), read('src/api/error.rs'), readProductionModule('src/services/xml_util.rs'),

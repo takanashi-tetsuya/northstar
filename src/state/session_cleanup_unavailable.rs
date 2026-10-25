@@ -4,7 +4,6 @@ use super::{bare_jid, session_entries_for_in, AppState, OnlineSession};
 use crate::{
     cluster::ClusterUnavailableDelivery,
     db::{self, sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository},
-    platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter,
     services::{
         messaging::MessageService,
@@ -13,6 +12,7 @@ use crate::{
 };
 use anyhow::Result;
 use dashmap::DashMap;
+use northstar_config::ExternalRouteDomainPolicy;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;
 

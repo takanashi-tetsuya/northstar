@@ -24,7 +24,7 @@ pub(crate) struct ApiQueryRuntime {
     pub(crate) node_id: String,
     pub(crate) require_encrypted_archive: bool,
     pub(crate) federation_configured: bool,
-    pub(crate) configured_registration_mode: crate::platform::config::RegistrationMode,
+    pub(crate) configured_registration_mode: northstar_config::RegistrationMode,
     pub(crate) registration_dependency_locked: bool,
     pub(crate) registration_closed: Arc<AtomicBool>,
     pub(crate) island_mode: Arc<AtomicBool>,
@@ -94,7 +94,7 @@ impl<R: ApiQueryRepository> ApiQueryContext<R> {
     pub(crate) fn registration_requires_invitation(&self) -> bool {
         !self.registration_is_closed()
             && self.runtime.configured_registration_mode
-                == crate::platform::config::RegistrationMode::InvitationOnly
+                == northstar_config::RegistrationMode::InvitationOnly
     }
     pub(crate) fn live_statistics(&self) -> LiveAdminStats {
         LiveAdminStats {

@@ -29,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) const MAINTENANCE_POOL_MAX_CONNECTIONS: u32 = 3;
 pub(crate) const MAX_CORE_PRIMARY_CONNECTIONS: u32 =
-    crate::platform::config::DATABASE_MAX_CONNECTIONS_LIMIT - MAINTENANCE_POOL_MAX_CONNECTIONS;
+    northstar_config::DATABASE_MAX_CONNECTIONS_LIMIT - MAINTENANCE_POOL_MAX_CONNECTIONS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProcessRole {

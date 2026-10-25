@@ -2,11 +2,11 @@
 
 use crate::xmpp::local_routes::{session::OnlineSession, session_table::session_entries_for_in};
 use crate::{
-    cluster::ClusterListenerPresenceRoutes, platform::config::ExternalRouteDomainPolicy,
-    s2s::FederationRouter, xmpp::xml_builder::XmlElement,
+    cluster::ClusterListenerPresenceRoutes, s2s::FederationRouter, xmpp::xml_builder::XmlElement,
 };
 use anyhow::Result;
 use dashmap::DashMap;
+use northstar_config::ExternalRouteDomainPolicy;
 use std::{
     collections::HashSet,
     sync::{atomic::Ordering, Arc},

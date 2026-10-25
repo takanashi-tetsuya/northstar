@@ -1880,6 +1880,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "dotenvy",
+ "envy",
+ "northstar-security",
+ "northstar-web-surface",
+ "northstar-xep-catalog",
+ "northstar-xmpp-types",
+ "redis",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "northstar-delivery-core"
 version = "0.1.0"
 dependencies = [
@@ -3194,6 +3216,7 @@ dependencies = [
  "northstar-archive-application",
  "northstar-archive-core",
  "northstar-auth-core",
+ "northstar-config",
  "northstar-delivery-core",
  "northstar-federation-application",
  "northstar-federation-core",

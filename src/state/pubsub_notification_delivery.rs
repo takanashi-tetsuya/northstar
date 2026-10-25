@@ -4,13 +4,13 @@ use super::{session_entries_for_in, AppState, OnlineSession, RuntimeFederationPo
 use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
     db::{messaging::PostgresMessageRepository, pubsub_repository::PostgresPubSubRepository},
-    platform::config::ExternalRouteDomainPolicy,
     s2s::FederationRouter,
     services::{messaging::MessageService, privacy::PrivacyStanzaKind, pubsub::PubSubService},
     xmpp::xml_builder::XmlElement,
 };
 use anyhow::Result;
 use dashmap::DashMap;
+use northstar_config::ExternalRouteDomainPolicy;
 use northstar_xmpp_types::jid::CanonicalJid;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;

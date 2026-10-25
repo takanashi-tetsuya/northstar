@@ -1,10 +1,10 @@
-use crate::platform::config::Config;
 use crate::services::abuse::{
     AbuseAction, AbuseGuard, GuardError, PowProof, TransactionalGuardOutcome,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use northstar_auth_core as auth;
+use northstar_config::Config;
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::HashMap;

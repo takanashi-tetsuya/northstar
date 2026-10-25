@@ -1,41 +1,23 @@
-//! Upload object storage adapter: the local-disk and S3 upload stores, the guard that
-//! admits their I/O through the upload safety gate, object integrity checks and the
-//! offline object backup tool.
+//! Upload object storage adapter: the local-disk and S3 upload stores behind the
+//! application crate's store port, and the offline object backup tool.
 
 #![forbid(unsafe_code)]
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::{
-    future::Future,
     path::{Path, PathBuf},
-    pin::Pin,
     sync::Arc,
-    task::Poll,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use zeroize::{Zeroize, Zeroizing};
 
-use northstar_upload_application::safety::{UploadIoPermit, UploadSafetyError, UploadSafetyGate};
+use northstar_upload_application::safety::UploadSafetyGate;
+use northstar_upload_application::store::{
+    StageCleanup, StagedUpload, StoreFuture, StoredUpload, StoredUploadReader,
+    UploadIntegrityError, UploadStore,
+};
 use northstar_upload_application::{UploadAuthorityGeneration, UploadIoClass};
-
-#[derive(Debug, thiserror::Error)]
-#[error("upload object integrity verification failed: {0}")]
-pub struct UploadIntegrityError(&'static str);
-
-impl UploadIntegrityError {
-    pub fn new(kind: &'static str) -> Self {
-        Self(kind)
-    }
-}
-
-pub fn is_upload_integrity_error(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<UploadIntegrityError>().is_some()
-}
-
-pub fn is_upload_safety_error(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<UploadSafetyError>().is_some()
-}
 
 pub mod backup;
 mod s3;
@@ -257,8 +239,6 @@ pub fn upload_storage_namespace_id(
     Ok(digest.finalize().into())
 }
 
-pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
-
 const MAX_STARTUP_DIRECTORY_ENTRIES: usize = 16_384;
 const MAX_STARTUP_STAGING_ATTEMPTS: usize = 4_096;
 
@@ -275,397 +255,23 @@ fn push_startup_staging_attempt(
     Ok(())
 }
 
-/// Lease-owned staged bytes. Dropping a completed stage before its database-
-/// fenced promotion schedules cleanup of its provider object, including when
-/// an HTTP future is canceled between ingestion and the DB handoff. Versioned
-/// S3 cleanup names an exact version; key-only cleanup requires an explicit
-/// qualified unversioned mode and a fresh provider-state proof.
-pub struct StagedUpload {
-    bytes_written: u64,
-    sha256: Option<[u8; 32]>,
-    stage_key: String,
-    object_key: String,
-    stage_version: Option<String>,
-    cleanup_path: Option<PathBuf>,
-    remote_cleanup: Option<s3::RemoteS3Cleanup>,
-    cleanup_authority: Option<(Arc<UploadSafetyGate>, UploadAuthorityGeneration)>,
-}
+/// Removes an abandoned local stage file.
+struct LocalStageCleanup(PathBuf);
 
-impl std::fmt::Debug for StagedUpload {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StagedUpload")
-            .field("bytes_written", &self.bytes_written)
-            .field("sha256_present", &self.sha256.is_some())
-            .field("stage_key", &self.stage_key)
-            .field("object_key", &self.object_key)
-            .field("stage_version", &self.stage_version)
-            .finish_non_exhaustive()
-    }
-}
-
-impl StagedUpload {
-    pub fn bytes_written(&self) -> u64 {
-        self.bytes_written
-    }
-
-    pub fn stage_key(&self) -> &str {
-        &self.stage_key
-    }
-
-    /// Digest of the exact byte sequence accepted by the storage backend.
-    /// Mismatched-length stages are aborted and deliberately have no digest.
-    pub fn sha256(&self) -> Option<&[u8; 32]> {
-        self.sha256.as_ref()
-    }
-
-    pub fn object_key(&self) -> &str {
-        &self.object_key
-    }
-
-    pub fn stage_version(&self) -> Option<&str> {
-        self.stage_version.as_deref()
-    }
-
-    /// PostgreSQL now owns reconciliation for this exact stage. From this
-    /// point onward cancellation must not race the durable promotion worker.
-    pub fn durably_recorded(&mut self) {
-        self.cleanup_path = None;
-        self.remote_cleanup = None;
-        self.cleanup_authority = None;
-    }
-
-    fn bind_cleanup_authority(
-        &mut self,
-        gate: Arc<UploadSafetyGate>,
-        generation: UploadAuthorityGeneration,
+impl StageCleanup for LocalStageCleanup {
+    fn cleanup(
+        self: Box<Self>,
+        _authority: Option<(Arc<UploadSafetyGate>, UploadAuthorityGeneration)>,
     ) {
-        self.cleanup_authority = Some((gate, generation));
-    }
-}
-
-impl Drop for StagedUpload {
-    fn drop(&mut self) {
-        let authority = self.cleanup_authority.take();
-        if let Some((gate, generation)) = &authority {
-            if !gate.permits_generation(UploadIoClass::Recovery, *generation) {
-                tracing::warn!(
-                    stage_key = %self.stage_key,
-                    "upload authority changed; durable reconciliation retains staged bytes"
-                );
-                return;
-            }
-        }
-        let Some(path) = self.cleanup_path.take() else {
-            if let Some(cleanup) = self.remote_cleanup.take() {
-                // A completed multipart stage is a normal object. If the HTTP
-                // future is cancelled before PostgreSQL records it, schedule
-                // guarded cleanup. Incomplete multipart parts remain
-                // subject to the mandatory bucket lifecycle policy.
-                if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    let authority = authority.clone();
-                    let stage_key = cleanup.path().to_string();
-                    handle.spawn(async move {
-                        let deleted = if let Some((gate, generation)) = authority {
-                            let Ok(mut permit) = gate.permit(UploadIoClass::Recovery) else {
-                                return;
-                            };
-                            if permit.generation() != generation {
-                                return;
-                            }
-                            tokio::select! {
-                                biased;
-                                _ = permit.invalidated() => return,
-                                deleted = cleanup.delete() => deleted,
-                            }
-                        } else {
-                            cleanup.delete().await
-                        };
-                        if let Err(error) = deleted {
-                            tracing::warn!(stage_key = %stage_key, ?error, "failed to remove abandoned remote upload stage");
-                        }
-                    });
-                }
-            }
-            return;
-        };
-        match std::fs::remove_file(&path) {
+        match std::fs::remove_file(&self.0) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => tracing::warn!(
-                path = %path.display(),
+                path = %self.0.display(),
                 %error,
                 "failed to remove abandoned staged upload"
             ),
         }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StoredUpload {
-    pub backend: String,
-    pub object_key: String,
-    pub object_version: Option<String>,
-    pub size: u64,
-}
-
-pub struct StoredUploadReader {
-    pub reader: Box<dyn AsyncRead + Send + Unpin + 'static>,
-    pub size: u64,
-    pub object_version: Option<String>,
-}
-
-pub trait UploadStore: Send + Sync {
-    fn backend(&self) -> &'static str;
-
-    fn put<'a>(
-        &'a self,
-        key: &'a str,
-        attempt: &'a str,
-        stream: Box<dyn AsyncRead + Send + Unpin + 'a>,
-        max_size: u64,
-    ) -> StoreFuture<'a, StagedUpload>;
-
-    /// Verify/promote outside a PostgreSQL transaction. S3 writes directly to
-    /// its private attempt-qualified final key and this method performs an
-    /// exact-version readback only; local storage promotes its private stage
-    /// to the historical bare-UUID destination with a create-only hard link.
-    fn commit<'a>(
-        &'a self,
-        key: &'a str,
-        attempt: &'a str,
-        expected_stage_version: Option<&'a str>,
-        expected_size: u64,
-        expected_sha256: &'a [u8; 32],
-    ) -> StoreFuture<'a, StoredUpload>;
-
-    /// Remove only one lease-owned staging object.
-    fn abort<'a>(
-        &'a self,
-        key: &'a str,
-        attempt: &'a str,
-        stage_version: Option<&'a str>,
-    ) -> StoreFuture<'a, bool>;
-
-    fn get<'a>(
-        &'a self,
-        object_key: &'a str,
-        object_version: Option<&'a str>,
-    ) -> StoreFuture<'a, Option<StoredUploadReader>>;
-
-    fn delete<'a>(
-        &'a self,
-        object_key: &'a str,
-        object_version: Option<&'a str>,
-    ) -> StoreFuture<'a, bool>;
-
-    /// Rebuild a client from protected credential files. Provider-chain
-    /// clients may use this as a no-op because they refresh internally.
-    fn reload_credentials<'a>(&'a self) -> StoreFuture<'a, bool> {
-        Box::pin(async { Ok(false) })
-    }
-
-    /// Delete only objects owned by this store. Implementations must not
-    /// recursively remove an operator-supplied root directory.
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn clear<'a>(&'a self) -> StoreFuture<'a, u64>;
-}
-
-/// The only production-facing upload-store capability. Every operation is
-/// checked against the process-wide generation-bound gate before it starts,
-/// canceled when the proof changes, and checked again before its result is
-/// released. Returned readers and staged-upload Drop cleanup remain guarded
-/// after the initial future has completed.
-pub struct GuardedUploadStore {
-    inner: Arc<dyn UploadStore>,
-    gate: Arc<UploadSafetyGate>,
-}
-
-impl GuardedUploadStore {
-    pub fn new(inner: Arc<dyn UploadStore>, gate: Arc<UploadSafetyGate>) -> Self {
-        Self { inner, gate }
-    }
-
-    async fn run<T>(mut permit: UploadIoPermit, operation: StoreFuture<'_, T>) -> Result<T> {
-        tokio::select! {
-            biased;
-            _ = permit.invalidated() => {
-                Err(permit.authority_changed_error().into())
-            }
-            result = operation => {
-                let result = result?;
-                permit.ensure_current()?;
-                Ok(result)
-            }
-        }
-    }
-}
-
-struct GuardedUploadReader {
-    inner: Box<dyn AsyncRead + Send + Unpin + 'static>,
-    gate: Arc<UploadSafetyGate>,
-    generation: UploadAuthorityGeneration,
-    invalidated: Pin<Box<dyn Future<Output = ()> + Send + 'static>>,
-}
-
-impl AsyncRead for GuardedUploadReader {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        context: &mut std::task::Context<'_>,
-        buffer: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        if !self
-            .gate
-            .permits_generation(UploadIoClass::Read, self.generation)
-        {
-            return Poll::Ready(Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "upload namespace authority changed while streaming",
-            )));
-        }
-        if self.invalidated.as_mut().poll(context).is_ready() {
-            return Poll::Ready(Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "upload namespace authority changed while streaming",
-            )));
-        }
-        Pin::new(&mut self.inner).poll_read(context, buffer)
-    }
-}
-
-impl UploadStore for GuardedUploadStore {
-    fn backend(&self) -> &'static str {
-        self.inner.backend()
-    }
-
-    fn put<'a>(
-        &'a self,
-        key: &'a str,
-        attempt: &'a str,
-        stream: Box<dyn AsyncRead + Send + Unpin + 'a>,
-        max_size: u64,
-    ) -> StoreFuture<'a, StagedUpload> {
-        let permit = match self.gate.permit(UploadIoClass::NewWrite) {
-            Ok(permit) => permit,
-            Err(error) => return Box::pin(async move { Err(error.into()) }),
-        };
-        let generation = permit.generation();
-        let gate = Arc::clone(&self.gate);
-        let operation = self.inner.put(key, attempt, stream, max_size);
-        Box::pin(async move {
-            let mut permit = permit;
-            tokio::select! {
-                biased;
-                _ = permit.invalidated() => {
-                    Err(permit.authority_changed_error().into())
-                }
-                result = operation => {
-                    let mut staged = result?;
-                    // Bind the durable generation before the final recheck.
-                    // If authority flipped after the provider completed, the
-                    // error path drops this value without deleting bytes that
-                    // now belong to database recovery.
-                    staged.bind_cleanup_authority(gate, generation);
-                    permit.ensure_current()?;
-                    Ok(staged)
-                }
-            }
-        })
-    }
-
-    fn commit<'a>(
-        &'a self,
-        key: &'a str,
-        attempt: &'a str,
-        expected_stage_version: Option<&'a str>,
-        expected_size: u64,
-        expected_sha256: &'a [u8; 32],
-    ) -> StoreFuture<'a, StoredUpload> {
-        let permit = match self.gate.permit(UploadIoClass::Promotion) {
-            Ok(permit) => permit,
-            Err(error) => return Box::pin(async move { Err(error.into()) }),
-        };
-        let operation = self.inner.commit(
-            key,
-            attempt,
-            expected_stage_version,
-            expected_size,
-            expected_sha256,
-        );
-        Box::pin(Self::run(permit, operation))
-    }
-
-    fn abort<'a>(
-        &'a self,
-        key: &'a str,
-        attempt: &'a str,
-        stage_version: Option<&'a str>,
-    ) -> StoreFuture<'a, bool> {
-        let permit = match self.gate.permit(UploadIoClass::Recovery) {
-            Ok(permit) => permit,
-            Err(error) => return Box::pin(async move { Err(error.into()) }),
-        };
-        let operation = self.inner.abort(key, attempt, stage_version);
-        Box::pin(Self::run(permit, operation))
-    }
-
-    fn get<'a>(
-        &'a self,
-        object_key: &'a str,
-        object_version: Option<&'a str>,
-    ) -> StoreFuture<'a, Option<StoredUploadReader>> {
-        let permit = match self.gate.permit(UploadIoClass::Read) {
-            Ok(permit) => permit,
-            Err(error) => return Box::pin(async move { Err(error.into()) }),
-        };
-        let generation = permit.generation();
-        let gate = Arc::clone(&self.gate);
-        let invalidated = gate.invalidation_future(UploadIoClass::Read, generation);
-        let operation = self.inner.get(object_key, object_version);
-        Box::pin(async move {
-            Ok(Self::run(permit, operation)
-                .await?
-                .map(|stored| StoredUploadReader {
-                    reader: Box::new(GuardedUploadReader {
-                        inner: stored.reader,
-                        gate,
-                        generation,
-                        invalidated,
-                    }),
-                    size: stored.size,
-                    object_version: stored.object_version,
-                }))
-        })
-    }
-
-    fn delete<'a>(
-        &'a self,
-        object_key: &'a str,
-        object_version: Option<&'a str>,
-    ) -> StoreFuture<'a, bool> {
-        let permit = match self.gate.permit(UploadIoClass::Recovery) {
-            Ok(permit) => permit,
-            Err(error) => return Box::pin(async move { Err(error.into()) }),
-        };
-        let operation = self.inner.delete(object_key, object_version);
-        Box::pin(Self::run(permit, operation))
-    }
-
-    fn reload_credentials<'a>(&'a self) -> StoreFuture<'a, bool> {
-        let permit = match self.gate.permit(UploadIoClass::CredentialRefresh) {
-            Ok(permit) => permit,
-            Err(error) => return Box::pin(async move { Err(error.into()) }),
-        };
-        let operation = self.inner.reload_credentials();
-        Box::pin(Self::run(permit, operation))
-    }
-
-    fn clear<'a>(&'a self) -> StoreFuture<'a, u64> {
-        let permit = match self.gate.permit(UploadIoClass::Recovery) {
-            Ok(permit) => permit,
-            Err(error) => return Box::pin(async move { Err(error.into()) }),
-        };
-        let operation = self.inner.clear();
-        Box::pin(Self::run(permit, operation))
     }
 }
 
@@ -952,30 +558,26 @@ impl UploadStore for LocalUploadStore {
                 .with_context(|| format!("could not sync upload {}", temporary.display()))?;
             drop(file);
             if bytes_written != max_size {
-                Ok(StagedUpload {
+                Ok(StagedUpload::new(
                     bytes_written,
-                    sha256: None,
-                    stage_key: format!("staging/{id}/{attempt_id}"),
-                    object_key: id.to_string(),
-                    stage_version: None,
-                    cleanup_path: None,
-                    remote_cleanup: None,
-                    cleanup_authority: None,
-                })
+                    None,
+                    format!("staging/{id}/{attempt_id}"),
+                    id.to_string(),
+                    None,
+                    None,
+                ))
             } else {
                 // Exact-size bytes remain staged until the caller locks the
                 // authoritative database row and invokes `commit`.
                 temporary_object.commit();
-                Ok(StagedUpload {
+                Ok(StagedUpload::new(
                     bytes_written,
-                    sha256: Some(digest.finalize().into()),
-                    stage_key: format!("staging/{id}/{attempt_id}"),
-                    object_key: id.to_string(),
-                    stage_version: None,
-                    cleanup_path: Some(temporary),
-                    remote_cleanup: None,
-                    cleanup_authority: None,
-                })
+                    Some(digest.finalize().into()),
+                    format!("staging/{id}/{attempt_id}"),
+                    id.to_string(),
+                    None,
+                    Some(Box::new(LocalStageCleanup(temporary))),
+                ))
             }
         })
     }

@@ -1,5 +1,6 @@
 use super::{
-    StagedUpload, StoreFuture, StoredUpload, StoredUploadReader, UploadIntegrityError, UploadStore,
+    StageCleanup, StagedUpload, StoreFuture, StoredUpload, StoredUploadReader,
+    UploadIntegrityError, UploadStore,
 };
 use anyhow::{Context, Result};
 use axum::http::{Method, Request, StatusCode};
@@ -111,19 +112,59 @@ type ExactDeleteGate = (Arc<tokio::sync::Barrier>, Arc<tokio::sync::Barrier>);
 /// its write. Exact-version cleanup is the default; qualified unversioned
 /// cleanup requires a fresh bucket-state proof. The outer `StagedUpload` Drop
 /// still owns the recovery-generation check.
-pub(super) struct RemoteS3Cleanup {
+struct RemoteS3Cleanup {
     snapshot: Arc<S3ClientSnapshot>,
     path: Path,
     version: Option<String>,
 }
 
 impl RemoteS3Cleanup {
-    pub(super) fn path(&self) -> &Path {
+    fn path(&self) -> &Path {
         &self.path
     }
 
-    pub(super) async fn delete(self) -> Result<bool> {
+    async fn delete(self) -> Result<bool> {
         delete_with_snapshot(&self.snapshot, &self.path, self.version.as_deref(), None).await
+    }
+}
+
+impl StageCleanup for RemoteS3Cleanup {
+    fn cleanup(
+        self: Box<Self>,
+        authority: Option<(Arc<UploadSafetyGate>, UploadAuthorityGeneration)>,
+    ) {
+        // A completed multipart stage is a normal object. If the HTTP
+        // future is cancelled before PostgreSQL records it, schedule
+        // guarded cleanup. Incomplete multipart parts remain
+        // subject to the mandatory bucket lifecycle policy.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let cleanup = *self;
+            let stage_key = cleanup.path().to_string();
+            handle.spawn(async move {
+                let deleted = if let Some((gate, generation)) = authority {
+                    let Ok(mut permit) = gate.permit(UploadIoClass::Recovery) else {
+                        return;
+                    };
+                    if permit.generation() != generation {
+                        return;
+                    }
+                    tokio::select! {
+                        biased;
+                        _ = permit.invalidated() => return,
+                        deleted = cleanup.delete() => deleted,
+                    }
+                } else {
+                    cleanup.delete().await
+                };
+                if let Err(error) = deleted {
+                    tracing::warn!(
+                        stage_key = %stage_key,
+                        ?error,
+                        "failed to remove abandoned remote upload stage"
+                    );
+                }
+            });
+        }
     }
 }
 
@@ -800,16 +841,14 @@ impl UploadStore for S3UploadStore {
                     if writer.abort().await.is_ok() {
                         temporary.commit();
                     }
-                    return Ok(StagedUpload {
+                    return Ok(StagedUpload::new(
                         bytes_written,
-                        sha256: None,
+                        None,
                         stage_key,
                         object_key,
-                        stage_version: None,
-                        cleanup_path: None,
-                        remote_cleanup: None,
-                        cleanup_authority: None,
-                    });
+                        None,
+                        None,
+                    ));
                 }
                 writer.wait_for_capacity(4).await?;
                 writer.write(&buffer[..read]);
@@ -819,16 +858,14 @@ impl UploadStore for S3UploadStore {
                 if writer.abort().await.is_ok() {
                     temporary.commit();
                 }
-                return Ok(StagedUpload {
+                return Ok(StagedUpload::new(
                     bytes_written,
-                    sha256: None,
+                    None,
                     stage_key,
                     object_key,
-                    stage_version: None,
-                    cleanup_path: None,
-                    remote_cleanup: None,
-                    cleanup_authority: None,
-                });
+                    None,
+                    None,
+                ));
             }
             let result = writer
                 .finish()
@@ -836,20 +873,22 @@ impl UploadStore for S3UploadStore {
                 .context("could not complete multipart upload stage")?;
             temporary.commit();
             let version = result.version;
-            Ok(StagedUpload {
+            let mut staged = StagedUpload::new(
                 bytes_written,
-                sha256: Some(digest.finalize().into()),
+                Some(digest.finalize().into()),
                 stage_key,
                 object_key,
-                stage_version: version.clone(),
-                cleanup_path: None,
-                remote_cleanup: Some(RemoteS3Cleanup {
+                version.clone(),
+                Some(Box::new(RemoteS3Cleanup {
                     snapshot,
                     path,
                     version,
-                }),
-                cleanup_authority,
-            })
+                })),
+            );
+            if let Some((gate, generation)) = cleanup_authority {
+                staged.bind_cleanup_authority(gate, generation);
+            }
+            Ok(staged)
         })
     }
 

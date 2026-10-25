@@ -2956,6 +2956,10 @@
     ],
     [
       "northstar-upload-application",
+      "tracing"
+    ],
+    [
+      "northstar-upload-application",
       "uuid"
     ],
     [

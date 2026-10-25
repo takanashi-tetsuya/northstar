@@ -15,8 +15,9 @@ use uuid::Uuid;
 use crate::db::upload_migration::{
     self, BeginRun, CanonicalManifestHasher, MigrationItem, VerifiedItem,
 };
+use northstar_upload_application::store::UploadStore;
 use northstar_upload_storage::{
-    s3_settings_from_env, upload_storage_namespace_id, LocalUploadStore, S3UploadStore, UploadStore,
+    s3_settings_from_env, upload_storage_namespace_id, LocalUploadStore, S3UploadStore,
 };
 
 const OBJECT_IO_DEADLINE: Duration = Duration::from_secs(180);

@@ -9,6 +9,7 @@ pub mod maintenance;
 pub mod repository;
 pub mod safety;
 pub mod service;
+pub mod store;
 pub use repository::*;
 use uuid::Uuid;
 

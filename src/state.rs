@@ -201,10 +201,9 @@ use northstar_config::{
 };
 use northstar_telemetry::metrics::Metrics;
 use northstar_upload_application::safety::UploadSafetyGate;
+use northstar_upload_application::store::{GuardedUploadStore, UploadStore};
 use northstar_upload_application::UploadAuthorityGeneration;
-use northstar_upload_storage::{
-    GuardedUploadStore, LocalUploadStore, S3UploadSettings, S3UploadStore, UploadStore,
-};
+use northstar_upload_storage::{LocalUploadStore, S3UploadSettings, S3UploadStore};
 use sqlx::{
     pool::PoolConnection,
     postgres::{PgConnectOptions, PgPoolOptions},

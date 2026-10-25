@@ -1,5 +1,5 @@
 use super::{validate_relative_key, S3UploadSettings, S3UploadStore};
-use crate::UploadStore;
+use northstar_upload_application::store::UploadStore;
 use object_store::{memory::InMemory, ObjectStore};
 use serde_json::Value;
 use sha2::{Digest, Sha256};

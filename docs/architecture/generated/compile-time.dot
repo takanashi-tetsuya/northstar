@@ -1066,6 +1066,7 @@ digraph compile_time {
   "northstar-upload-application" -> "northstar-xmpp-types";
   "northstar-upload-application" -> "thiserror";
   "northstar-upload-application" -> "tokio";
+  "northstar-upload-application" -> "tracing";
   "northstar-upload-application" -> "uuid";
   "northstar-upload-core" -> "northstar-xmpp-types";
   "northstar-upload-core" -> "serde";

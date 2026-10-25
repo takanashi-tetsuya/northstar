@@ -6,7 +6,7 @@ use super::UploadService;
 use northstar_telemetry::metrics::DurationHistogram;
 use northstar_telemetry::metrics::DurationTimer;
 use northstar_upload_application::service::UploadSlot;
-use northstar_upload_storage::{StoredUploadReader, UploadStore};
+use northstar_upload_application::store::{StoredUploadReader, UploadStore};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;

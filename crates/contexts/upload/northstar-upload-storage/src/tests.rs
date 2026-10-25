@@ -1,7 +1,8 @@
 use super::{
-    push_startup_staging_attempt, GuardedUploadStore, LocalUploadStore, UploadAuthorityGeneration,
-    UploadSafetyGate, UploadStore, MAX_STARTUP_STAGING_ATTEMPTS,
+    push_startup_staging_attempt, LocalUploadStore, UploadAuthorityGeneration, UploadSafetyGate,
+    MAX_STARTUP_STAGING_ATTEMPTS,
 };
+use northstar_upload_application::store::{GuardedUploadStore, UploadStore};
 use sha2::Digest;
 use std::pin::Pin;
 use std::sync::Arc;

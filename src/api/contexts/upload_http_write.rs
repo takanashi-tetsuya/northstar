@@ -6,8 +6,8 @@ use super::UploadService;
 use northstar_telemetry::metrics::DurationHistogram;
 use northstar_telemetry::metrics::DurationTimer;
 use northstar_upload_application::safety::{UploadIoPermit, UploadSafetyError, UploadSafetyGate};
+use northstar_upload_application::store::UploadStore;
 use northstar_upload_application::UploadIoClass;
-use northstar_upload_storage::UploadStore;
 use std::net::IpAddr;
 use std::sync::Arc;
 

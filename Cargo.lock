@@ -2144,6 +2144,7 @@ dependencies = [
  "northstar-xmpp-types",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

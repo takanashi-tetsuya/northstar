@@ -56,6 +56,7 @@ members = [
     "crates/contexts/federation/northstar-federation-core",
     "crates/contexts/federation/northstar-federation-application",
     "crates/contexts/session/northstar-protocol-runtime",
+    "crates/edges/northstar-stream",
     "crates/platform/foundation-postgres",
     "crates/platform/foundation-db-test",
     "crates/platform/foundation-eventing-postgres",

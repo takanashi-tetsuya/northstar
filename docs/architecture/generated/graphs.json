@@ -2410,6 +2410,18 @@
         "uuid"
       ],
       [
+        "northstar-stream",
+        "anyhow"
+      ],
+      [
+        "northstar-stream",
+        "futures"
+      ],
+      [
+        "northstar-stream",
+        "roxmltree"
+      ],
+      [
         "northstar-telemetry",
         "anyhow"
       ],
@@ -6454,6 +6466,7 @@
       "northstar-security",
       "northstar-session-application",
       "northstar-session-core",
+      "northstar-stream",
       "northstar-telemetry",
       "northstar-test-harness",
       "northstar-upload-application",

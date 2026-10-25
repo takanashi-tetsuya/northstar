@@ -280,6 +280,14 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-stream
+    package: northstar-stream
+    path: crates/edges/northstar-stream
+    tier: edge
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-telemetry
     package: northstar-telemetry
     path: crates/platform/northstar-telemetry

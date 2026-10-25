@@ -2097,6 +2097,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-stream"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "roxmltree",
+]
+
+[[package]]
 name = "northstar-telemetry"
 version = "0.1.0"
 dependencies = [

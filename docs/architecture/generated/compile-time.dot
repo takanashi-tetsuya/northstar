@@ -189,6 +189,7 @@ digraph compile_time {
   "northstar-security";
   "northstar-session-application";
   "northstar-session-core";
+  "northstar-stream";
   "northstar-telemetry";
   "northstar-test-harness";
   "northstar-upload-application";
@@ -1038,6 +1039,9 @@ digraph compile_time {
   "northstar-session-core" -> "northstar-xmpp-types";
   "northstar-session-core" -> "serde";
   "northstar-session-core" -> "uuid";
+  "northstar-stream" -> "anyhow";
+  "northstar-stream" -> "futures";
+  "northstar-stream" -> "roxmltree";
   "northstar-telemetry" -> "anyhow";
   "northstar-telemetry" -> "serde_json";
   "northstar-telemetry" -> "tokio";

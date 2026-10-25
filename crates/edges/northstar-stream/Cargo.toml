@@ -1,0 +1,15 @@
+[package]
+name = "northstar-stream"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Session core for Northstar XMPP streams: transport-neutral stanza dispatch"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+roxmltree = "0.20"
+
+[dev-dependencies]
+futures = "0.3"

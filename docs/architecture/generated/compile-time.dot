@@ -177,6 +177,7 @@ digraph compile_time {
   "northstar-federation-core";
   "northstar-message-application";
   "northstar-message-core";
+  "northstar-postgres";
   "northstar-presence-core";
   "northstar-protocol-runtime";
   "northstar-pubsub-application";
@@ -968,6 +969,7 @@ digraph compile_time {
   "northstar-message-application" -> "uuid";
   "northstar-message-core" -> "northstar-federation-core";
   "northstar-message-core" -> "uuid";
+  "northstar-postgres" -> "sqlx";
   "northstar-presence-core" -> "northstar-xmpp-types";
   "northstar-protocol-runtime" -> "dashmap";
   "northstar-protocol-runtime" -> "northstar-session-core";
@@ -1463,6 +1465,7 @@ digraph compile_time {
   "rust-xmpp-server" -> "northstar-federation-core";
   "rust-xmpp-server" -> "northstar-message-application";
   "rust-xmpp-server" -> "northstar-message-core";
+  "rust-xmpp-server" -> "northstar-postgres";
   "rust-xmpp-server" -> "northstar-presence-core";
   "rust-xmpp-server" -> "northstar-protocol-runtime";
   "rust-xmpp-server" -> "northstar-pubsub-application";

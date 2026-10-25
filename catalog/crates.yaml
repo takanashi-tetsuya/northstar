@@ -164,6 +164,14 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-postgres
+    package: northstar-postgres
+    path: crates/platform/northstar-postgres
+    tier: platform
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-presence-core
     package: northstar-presence-core
     path: crates/contexts/roster/northstar-presence-core

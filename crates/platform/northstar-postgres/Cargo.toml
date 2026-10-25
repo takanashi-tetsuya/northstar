@@ -1,0 +1,11 @@
+[package]
+name = "northstar-postgres"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "The Northstar PostgreSQL schema migrations, embedded at build time"
+publish = false
+
+[dependencies]
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros"] }

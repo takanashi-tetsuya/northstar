@@ -35,6 +35,7 @@ members = [
     "crates/platform/northstar-runtime",
     "crates/platform/northstar-security",
     "crates/platform/northstar-config",
+    "crates/platform/northstar-postgres",
     "crates/platform/northstar-telemetry",
     "crates/platform/northstar-web-surface",
     "crates/contexts/message/northstar-message-core",
@@ -160,6 +161,7 @@ northstar-xep-0363 = { path = "crates/kernel/northstar-xep-0363" }
 northstar-runtime = { path = "crates/platform/northstar-runtime" }
 northstar-security = { path = "crates/platform/northstar-security" }
 northstar-config = { path = "crates/platform/northstar-config" }
+northstar-postgres = { path = "crates/platform/northstar-postgres" }
 northstar-telemetry = { path = "crates/platform/northstar-telemetry" }
 northstar-web-surface = { path = "crates/platform/northstar-web-surface" }
 northstar-message-core = { path = "crates/contexts/message/northstar-message-core" }

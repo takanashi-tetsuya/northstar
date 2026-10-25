@@ -24,10 +24,7 @@ use sqlx::PgPool;
 
 mod migration_preflight;
 
-/// The release migration set is part of the trusted binary. Both the explicit
-/// migrator and the runtime checksum verifier use these exact bytes instead of
-/// trusting a mutable working-directory `migrations/` tree.
-pub(crate) static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+pub(crate) use northstar_postgres::MIGRATOR;
 
 pub(crate) mod abuse_actor_state_repository;
 pub(crate) mod abuse_challenge_issuance_repository;

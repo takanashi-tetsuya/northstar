@@ -179,6 +179,7 @@
     "northstar-federation-core",
     "northstar-message-application",
     "northstar-message-core",
+    "northstar-postgres",
     "northstar-presence-core",
     "northstar-protocol-runtime",
     "northstar-pubsub-application",
@@ -2563,6 +2564,10 @@
       "uuid"
     ],
     [
+      "northstar-postgres",
+      "sqlx"
+    ],
+    [
       "northstar-presence-core",
       "northstar-xmpp-types"
     ],
@@ -4541,6 +4546,10 @@
     [
       "rust-xmpp-server",
       "northstar-message-core"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-postgres"
     ],
     [
       "rust-xmpp-server",

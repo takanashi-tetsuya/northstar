@@ -1953,6 +1953,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-postgres"
+version = "0.1.0"
+dependencies = [
+ "sqlx",
+]
+
+[[package]]
 name = "northstar-presence-core"
 version = "0.1.0"
 dependencies = [
@@ -3263,6 +3270,7 @@ dependencies = [
  "northstar-federation-core",
  "northstar-message-application",
  "northstar-message-core",
+ "northstar-postgres",
  "northstar-presence-core",
  "northstar-protocol-runtime",
  "northstar-pubsub-application",

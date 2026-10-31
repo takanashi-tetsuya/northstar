@@ -955,32 +955,7 @@ impl AppState {
             s2s_connection_attempts,
             component_connections,
             connection_actors,
-            challenge_issue_service:
-                northstar_abuse_application::challenge::ChallengeIssueService::new(
-                    northstar_abuse_postgres::challenge::PostgresChallengeRepository::new(
-                        Arc::clone(&abuse),
-                    ),
-                ),
-            challenge_cleanup_service:
-                northstar_abuse_application::challenge::ChallengeCleanupService::new(
-                    northstar_abuse_postgres::challenge::PostgresChallengeRepository::new(
-                        Arc::clone(&abuse),
-                    ),
-                ),
-            sasl_login_abuse_service:
-                northstar_abuse_application::login::SaslLoginAbuseService::new(
-                    northstar_abuse_postgres::login::PostgresSaslLoginAbuseRepository::new(
-                        Arc::clone(&abuse),
-                    ),
-                ),
-            passkey_login_abuse_service: Arc::new(
-                northstar_abuse_application::login::PasskeyLoginAbuseService::new(
-                    northstar_abuse_postgres::login::PostgresPasskeyLoginAbuseRepository::new(
-                        Arc::clone(&abuse),
-                    ),
-                ),
-            ),
-            abuse_key_deployment,
+            abuse: AbuseModule::new(&abuse, abuse_key_deployment),
             started_at,
             process_started_at,
             tls_context: northstar_security::tls::TlsContext::new(tls),

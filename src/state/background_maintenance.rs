@@ -30,7 +30,7 @@ impl AppState {
     pub(crate) fn background_maintenance_context(&self) -> BackgroundMaintenanceContext {
         let counters = self.background_housekeeping_counters();
         BackgroundMaintenanceContext {
-            challenge: self.challenge_cleanup_service.clone(),
+            challenge: self.abuse.challenge_cleanup_service.clone(),
             database: self.background_housekeeping_context(counters.clone()),
             admin: self.admin_command_service.clone(),
             sm_expiry: self.sm_expiry_context(),

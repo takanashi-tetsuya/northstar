@@ -28,7 +28,7 @@ impl axum::extract::FromRef<Arc<AppState>> for ApiSessionHttpContext {
 impl axum::extract::FromRef<Arc<AppState>> for HttpChallengeEndpointContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         Self {
-            service: state.challenge_issue_service.clone(),
+            service: state.abuse.challenge_issue_service.clone(),
             trusted_proxies: state.config.trusted_proxy_ips.clone(),
             requested: Arc::clone(&state.metrics.anti_abuse_challenges_total),
             rate_limited: Arc::clone(&state.metrics.rate_limited_total),
@@ -97,7 +97,7 @@ impl axum::extract::FromRef<Arc<AppState>> for PasskeyStartHttpContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         Self {
             service: Arc::clone(&state.passkey_service),
-            abuse: Arc::clone(&state.passkey_login_abuse_service),
+            abuse: Arc::clone(&state.abuse.passkey_login_abuse_service),
             trusted_proxies: state
                 .http_transport_policy()
                 .trusted_proxies()

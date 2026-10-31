@@ -333,6 +333,7 @@ for (const field of [
   'upload',
   'pubsub',
   'roster',
+  'abuse',
   'message_service',
   'retraction_service',
   'mam_service',

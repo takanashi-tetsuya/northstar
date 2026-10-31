@@ -221,6 +221,7 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use zeroize::{Zeroize, Zeroizing};
 
+mod abuse_module;
 mod admission_guards;
 mod construction;
 mod federation_dns;
@@ -239,6 +240,7 @@ mod suspended_muc;
 mod telemetry_accessors;
 mod upload_module;
 
+use self::abuse_module::*;
 pub use self::admission_guards::*;
 #[cfg(test)]
 use self::construction::*;
@@ -465,24 +467,8 @@ pub struct AppState {
     s2s_connection_attempts: Arc<Semaphore>,
     component_connections: Arc<Semaphore>,
     connection_actors: northstar_runtime::connection_actors::ConnectionActorRegistry,
-    challenge_issue_service: northstar_abuse_application::challenge::ChallengeIssueService<
-        northstar_abuse_postgres::challenge::PostgresChallengeRepository,
-    >,
-    challenge_cleanup_service: northstar_abuse_application::challenge::ChallengeCleanupService<
-        northstar_abuse_postgres::challenge::PostgresChallengeRepository,
-    >,
-    sasl_login_abuse_service: northstar_abuse_application::login::SaslLoginAbuseService<
-        northstar_abuse_postgres::login::PostgresSaslLoginAbuseRepository,
-    >,
-    passkey_login_abuse_service: Arc<
-        northstar_abuse_application::login::PasskeyLoginAbuseService<
-            northstar_abuse_postgres::login::PostgresPasskeyLoginAbuseRepository,
-        >,
-    >,
-    /// Public, irreversible key IDs and the configured generation used by the
-    /// readiness path to detect a node that drifted from PostgreSQL authority.
-    abuse_key_deployment:
-        Option<northstar_abuse_application::guard::records::AbuseKeyDeploymentIdentity>,
+    /// The anti-abuse context; see [`AbuseModule`].
+    abuse: AbuseModule,
     started_at: Instant,
     process_started_at: chrono::DateTime<chrono::Utc>,
     tls_context: northstar_security::tls::TlsContext,

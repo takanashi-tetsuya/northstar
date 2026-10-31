@@ -75,7 +75,7 @@ impl AppState {
             upload: self.upload.safety_gate.readiness_probe(),
             cluster: self.cluster.readiness_probe(),
             workers: self.workers.readiness_probe(),
-            abuse_key_deployment: self.abuse_key_deployment.clone(),
+            abuse_key_deployment: self.abuse.abuse_key_deployment.clone(),
             persistence: self.readiness_service.clone(),
         }
     }
@@ -288,7 +288,7 @@ impl AppState {
     pub(crate) fn abuse_key_deployment(
         &self,
     ) -> Option<&northstar_abuse_application::guard::records::AbuseKeyDeploymentIdentity> {
-        self.abuse_key_deployment.as_ref()
+        self.abuse.abuse_key_deployment.as_ref()
     }
 
     pub(crate) fn upload_store(&self) -> &dyn UploadStore {

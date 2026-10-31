@@ -25,7 +25,7 @@ impl AppState {
     ) -> &northstar_abuse_application::challenge::ChallengeIssueService<
         northstar_abuse_postgres::challenge::PostgresChallengeRepository,
     > {
-        &self.challenge_issue_service
+        &self.abuse.challenge_issue_service
     }
 
     pub(crate) fn sasl_login_abuse_service(
@@ -33,7 +33,7 @@ impl AppState {
     ) -> &northstar_abuse_application::login::SaslLoginAbuseService<
         northstar_abuse_postgres::login::PostgresSaslLoginAbuseRepository,
     > {
-        &self.sasl_login_abuse_service
+        &self.abuse.sasl_login_abuse_service
     }
 
     pub(crate) fn public_discovery_context(&self) -> &PublicDiscoveryContext {

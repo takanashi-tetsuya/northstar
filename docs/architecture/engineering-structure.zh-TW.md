@@ -110,6 +110,7 @@ facade 移出根 crate（5.13），根 crate 只剩上面三層。
 | S19 upload 上下文 | WP-191–203 | 上傳的槽服務、維護 port 與安全閘門移入 `northstar-upload-application`（WP-191）；`-storage` 成為介面卡角色（WP-192），`src/storage` 成為 `northstar-upload-storage`（WP-193），儲存 port 移入 application（WP-194），上傳維護 worker 移入 application（WP-195）；migration 集合移入新的 platform crate `northstar-postgres`（WP-196）；`db/upload*` 成為 `northstar-upload-postgres`（WP-197–199）；IQ 回應與 stanza 錯誤移入 `northstar_xml_builder::stanza`（WP-200）；XEP-0363 槽處理移入 `northstar-upload-xmpp`，會話能力是窄 trait `UploadSlotSession`（WP-201）；`AppState` 的上傳欄位與啟動程式成為組合根的 `UploadModule`（WP-202）；記錄階段（WP-203）。盤點見 5.15 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與完整 CI 通過。已完成：上傳的應用、儲存、持久化與 XMPP 程式碼不再在根 crate；HTTP 端點與管理員重試的去處見 5.15 |
 | S20 archive 上下文 | WP-210–214 | `services/xml_util` 中不依賴伺服器狀態的根元素改寫移入 `northstar_xml_builder::rewrite`，XEP-0359 的權威改寫移入 `northstar_xep_0359::annotate`（WP-210）；`MamService` 移入 `northstar-archive-application`（WP-211）；個人封存、偏好與 MAM 查詢成為 `northstar-archive-postgres`（WP-212）；XEP-0313 處理移入 `northstar-archive-xmpp`，會話能力是窄 trait `MamSession`（WP-213）；記錄階段（WP-214）。盤點見 5.16 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與完整 CI 通過。已完成：archive 自有的應用、持久化與 XMPP 程式碼不再在根 crate；與房間、訊息、聯邦共用交易的部分及保存期限清理的去處見 5.16 |
 | S21 pubsub 上下文 | WP-220–231 | `services/durable_outbox` 移入 `northstar_runtime`（WP-220）；`services/{pubsub,profile,private_storage}` 移入 `northstar-pubsub-application`（WP-221）；PubSub、PEP、vCard、私有儲存與 outbox 的持久化成為 `northstar-pubsub-postgres`（WP-222）；文字檢查移入 kernel（WP-223）；`northstar-pubsub-xmpp` 建立並取得 PEP 載荷驗證（WP-224）、PubSub IQ（WP-225）、私有 XML（WP-226）、vCard（WP-227）與 PEP（WP-228）；`AppState` 以 `PubSubModule` 持有三個服務（WP-229）；記錄階段（WP-230）；PubSub outbox 套件改選 crate 中的測試（WP-231）。盤點見 5.17 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與完整 CI 通過。已完成：pubsub 自有的應用、持久化與 XMPP 處理不再在根 crate；跨名冊交易、caps 與投遞工作者的去處見 5.17 |
+| S22 roster 上下文 | WP-240–248 | `services/{blocking,privacy,presence,s2s_roster_authorization,roster}` 移入 `northstar-roster-application`（WP-240）；名冊、封鎖、隱私與待處理訂閱的持久化成為 `northstar-roster-postgres`，跨上下文的交易步驟抽成 `RosterTransactionEffects`（WP-241）；`northstar-roster-xmpp` 建立（WP-242）並取得 XEP-0191（WP-243）、XEP-0016（WP-244）、RFC 6121 名冊（WP-245）與出席（WP-246）；`AppState` 以 `RosterModule` 持有五個服務（WP-247）；記錄階段（WP-248）。盤點見 5.18 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯、本機 PostgreSQL 套件與完整 CI 通過。已完成：roster 自有的應用、持久化與 XMPP 處理不再在根 crate；跨上下文的交易步驟、線上會話分送與出席組合的去處見 5.18 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -647,9 +648,50 @@ kernel 與通用函式庫，不依賴 `-postgres`、其他上下文與根 crate�
   與根 `pubsub.rs` 的投遞函式：經叢集與聯邦路由投遞，隨 S29、S30 移出。
 - 根 `xmpp/protocol/{pubsub,pep,private,vcard}.rs` 的 `ProtocolSession` 入口與 trait 實作：S30 拆解
   `ProtocolSession` 時處理。
-- `services/xml_util/avatar_update.rs`（XEP-0153）：出席路徑也使用，隨 S22 roster 的出席搬移處理。
+- `services/xml_util/avatar_update.rs`（XEP-0153）：出席路徑也使用，S22 移入 `northstar_roster_xmpp::presence`。
 
 根 crate 由 774 檔 367,951 行變為 745 檔 347,496 行。
+
+### 5.18 S22 盤點：roster 上下文（`99a0485a`）
+
+| 原位置 | 去處 | 角色 |
+| --- | --- | --- |
+| `stanza_error`、`blocked_stanza_error`、`reflected_stanza_error`、`child_text` | `northstar_xml_builder::stanza` | kernel |
+| `services/{blocking,privacy,presence,s2s_roster_authorization,roster}` | `northstar-roster-application` 的同名模組與 `service` | application |
+| `db/roster/`、`db/privacy`、`db/s2s_roster_authorization_repository` | `northstar-roster-postgres` | adapter |
+| `xmpp/protocol/blocking.rs` | `northstar_roster_xmpp::blocking`：`BlockingSession` | adapter |
+| `xmpp/protocol/privacy.rs` | `northstar_roster_xmpp::privacy`：`PrivacySession` | adapter |
+| `xmpp/protocol/roster.rs` 的處理、解析與渲染 | `northstar_roster_xmpp::roster`：`RosterSession`、`RosterGetOutcome` | adapter |
+| `xmpp/protocol/presence/` 與 `services/xml_util/avatar_update.rs` | `northstar_roster_xmpp::presence`：`PresenceSession`、`PresenceGate` | adapter |
+| `AppState` 的五個服務欄位 | `state/roster_module.rs` 的 `RosterModule` | 組合根 |
+
+roster 的五個 crate 共 8,262 行（roster-core 273、presence-core 102、roster-application 1,722、roster-postgres 3,223、roster-xmpp 2,942）。`northstar-roster-xmpp` 只依賴 roster 的 core 與 application、
+kernel 與通用函式庫，不依賴 `-postgres`、其他上下文與根 crate。四個處理模組都是對會話 trait 泛型的自由函式，
+`PresenceSession` 以 `BlockingSession + PrivacySession + RosterSession` 為父 trait，不重複宣告能力；這些 trait 都由
+`ProtocolSession` 實作。名冊取得要在回覆送達傳輸層之後才開始同步，只有會話做得到，所以回傳 `RosterGetOutcome`，
+由根 crate 延遲執行。
+
+`northstar-roster-postgres` 不能依賴其他上下文。名冊交易中有三步碰到別人的資料表：取消失去存取權的 PEP 訂閱、
+寫入 S2S outbox、讀取 MIX 參與者。`RosterTransactionEffects` 把它們定義成接受開啟中交易的 port，放在介面卡內，
+因為它要命名 sqlx。每個會走到這三步的函式都接收 `effects`，呼叫位置不變，所以鎖順序與原子性不變。
+`S2sOutboxPolicy` 與 `normalize_username` 由 `northstar-roster-application` re-export 給介面卡。
+
+根 crate 中仍與 roster 有關的程式碼與去處：
+
+- `db/roster.rs` 的 `RootRosterEffects`：上述三步的實作，依 4.5 屬於 `northstar-workflows`。`db/roster.rs` 其餘是
+  舊簽章的轉接函式，隨呼叫者（`db/users.rs`、MIX）移出。
+- `db/presence_repository.rs`：`PresenceRepository` 同時呼叫 auth、pubsub 的 vCard、operations 的服務訊息與 session
+  的叢集權威，屬於組合，隨這些上下文移動時拆開。
+- `db/privacy.rs` 的 `privacy_denies_for_sm_session`：讀 session 的資料表，隨 S29 移出。
+- 根 `xmpp/protocol/{blocking,privacy,roster,presence}.rs`：`ProtocolSession` 入口與 trait 實作。線上會話分送
+  （`OnlineSession` 的 `sender`、`available`、`directed_presence`）與目前可用性重播依賴 session，隨 S29 移出；
+  入口隨 S30 拆解 `ProtocolSession` 處理。
+- `ProtocolSession::presence` 的 MIX、PubSub、MUC 分派與 MIX 閘門下的可用性轉換：跨上下文組合與會話狀態，隨 S29、
+  S30 處理。
+- `db::presence_service_tests`、`db::privacy_service_tests`、`db::privacy::tests`、`db::roster::blocking_match_tests`：
+  驗證根 crate 綁定的服務或經根 crate 的轉接函式，隨它們移動。
+
+根 crate 由 745 檔 347,496 行變為 738 檔 341,186 行。
 
 ## 6. 委派與驗收協議
 
@@ -809,6 +851,16 @@ kernel 與通用函式庫，不依賴 `-postgres`、其他上下文與根 crate�
      會排在前一批編譯錯誤之後（S21）。
    - 測試名稱與基線一致，只保證測試還在，不保證腳本選得到它：`cargo test` 的選擇器仍指向舊路徑時會跑 0 個測試，只有
      自帶計數檢查的套件才會失敗，而且要到 CI 才發現。搬移測試後要逐一比對 `scripts/` 中的選擇器（S21）。
+   - 上下文介面卡不能命名別的上下文的 core，但它自己的 application crate 可以：application re-export 合約項目，
+     介面卡經 application 取得，層級規則不必放寬（S22）。
+   - 介面卡的交易碰到別人的資料表時，把那一步定義成接受開啟中交易的 port，由腳本沿呼叫鏈傳遞；呼叫位置不動，鎖順序
+     與原子性就不變，之後只要把實作換成 `northstar-workflows`（S22）。
+   - 搬移前先找欄位相同的型別副本與私有函式副本（`PresenceAccount`、`RemoteRemovalPolicy`、`child_text`）。為了避開
+     依賴而複製的型別，在新邊界上會變成逐欄位轉換；合併比補轉換便宜（S22）。
+   - 共用 helper 若只在根 crate，先以腳本下移到 kernel，再請 agy 搬處理器；否則每個 agy 工作都會各自複製一份
+     （S22）。
+   - `catalog/runtime-experiments.json` 的 `command` 也是選擇器：路徑失效會讓門禁失敗，但命令選不到測試時不會。
+     搬移時要同時更新路徑、錨點與命令（S22）。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -1019,3 +1071,12 @@ Stage 證據仍綁定其原提交。
 | WP-229 | 完成：`AppState` 以 `PubSubModule` 持有 PubSub、個人檔案與私有儲存服務，accessor 不變 | 見 `git log --grep '\[WP-229\]'` |
 | WP-230 | 完成：記錄 S21 的階段與盤點（5.17），目標架構記錄 `users` 規則、跨名冊交易的去處，caps 改屬 session。WP-220–229 依序接到 WP-214 之上；fmt、clippy、workspace 測試、層級、模糊測試與全部門禁通過 | 見 `git log --grep '\[WP-230\]'` |
 | WP-231 | 完成：`pubsub-outbox-db-wsl.sh` 改選 `northstar-pubsub-postgres` 的 `outbox::tests`；該測試在隔離 schema 的 PostgreSQL 上通過 | 見 `git log --grep '\[WP-231\]'` |
+| WP-240 | 完成：`services/{blocking,privacy,presence,s2s_roster_authorization,roster}` 移入 `northstar-roster-application`；`RemoteRemovalPolicy` 由 re-export 的 `S2sOutboxPolicy` 取代；PostgreSQL 測試留在根 crate 的 `db::presence_service_tests` 與 `db::privacy_service_tests` | 見 `git log --grep '\[WP-240\]'` |
+| WP-241 | 完成：`northstar-roster-postgres`；`RosterTransactionEffects` 取出 PEP 取消、S2S outbox 與 MIX 讀取，根 crate 的 `RootRosterEffects` 實作；`db/presence_repository.rs` 留在根 crate | 見 `git log --grep '\[WP-241\]'` |
+| WP-242 | 完成：建立 `northstar-roster-xmpp` 與 `SessionIdentity` | 見 `git log --grep '\[WP-242\]'` |
+| WP-243 | 完成：XEP-0191 處理移入 `northstar_roster_xmpp::blocking`，會話能力是 `BlockingSession`；推送迴圈與叢集路由留在根 crate | 見 `git log --grep '\[WP-243\]'` |
+| WP-244 | 完成：XEP-0016 處理與全部測試移入 `northstar_roster_xmpp::privacy`，會話能力是 `PrivacySession` | 見 `git log --grep '\[WP-244\]'` |
+| WP-245 | 完成：RFC 6121 名冊處理移入 `northstar_roster_xmpp::roster`，會話能力是 `RosterSession`，同步由 `RosterGetOutcome` 交回根 crate；目錄的 `RosterService` 路徑與測試命令更新 | 見 `git log --grep '\[WP-245\]'` |
+| WP-246 | 完成：出席處理與 XEP-0153 移入 `northstar_roster_xmpp::presence`：`PresenceSession`、`PresenceGate`；節錯誤反射與 `child_text` 下移 kernel，`PresenceAccount` 合併為 core 型別 | 見 `git log --grep '\[WP-246\]'` |
+| WP-247 | 完成：`AppState` 以 `RosterModule` 持有五個服務，accessor 不變 | 見 `git log --grep '\[WP-247\]'` |
+| WP-248 | 完成：記錄 S22 的階段與盤點（5.18）與 4.5 的例子。WP-240–247 依序接到 WP-231 之上；fmt、clippy、workspace 測試、層級、模糊測試、本機 PostgreSQL 套件與全部門禁通過 | 見 `git log --grep '\[WP-248\]'` |

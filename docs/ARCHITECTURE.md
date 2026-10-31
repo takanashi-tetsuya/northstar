@@ -111,7 +111,8 @@ Key ownership:
   only ordered transport backpressure. A slow socket never retains a primary
   PostgreSQL connection, and an exact unsent suffix can be released without
   clearing rows already transferred to SM, BOSH or socket-write fencing.
-- `src/services/roster.rs` owns authenticated RFC 6121 mutations and one
+- `crates/contexts/roster/northstar-roster-application/src/service.rs` owns
+  authenticated RFC 6121 mutations and one
   repeatable-read XEP-0237/PAM snapshot. Each live resource enters a bounded
   version gate before the snapshot; only after the IQ result owns the
   transport are later committed pushes flushed in order. Overflow or queue

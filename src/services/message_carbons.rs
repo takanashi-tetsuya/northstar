@@ -1,9 +1,9 @@
 //! Post-accept XEP-0280 fanout. The transport port owns live session and
 //! cluster access; this service owns target selection, privacy and deadlines.
 
-use crate::services::privacy::PrivacyStanzaKind;
 use anyhow::Result;
 use futures::{stream::FuturesUnordered, StreamExt};
+use northstar_roster_application::privacy::PrivacyStanzaKind;
 use std::{future::Future, pin::Pin, time::Duration};
 
 const FANOUT_CONCURRENCY: usize = 8;

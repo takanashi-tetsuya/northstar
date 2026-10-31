@@ -52,10 +52,9 @@ impl ClusterListenerBlocking {
             };
             let mut targets = roster_targets.iter().cloned().collect::<HashSet<_>>();
             for directed in session.directed_presence.iter() {
-                if changed_patterns
-                    .iter()
-                    .any(|pattern| crate::services::blocking::matches(pattern, directed.key()))
-                {
+                if changed_patterns.iter().any(|pattern| {
+                    northstar_roster_application::blocking::matches(pattern, directed.key())
+                }) {
                     targets.insert(directed.key().clone());
                 }
             }

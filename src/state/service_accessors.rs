@@ -125,13 +125,15 @@ impl AppState {
 
     pub(crate) fn blocking_service(
         &self,
-    ) -> &crate::services::blocking::BlockingService<db::roster::PostgresBlockingRepository> {
+    ) -> &northstar_roster_application::blocking::BlockingService<
+        db::roster::PostgresBlockingRepository,
+    > {
         &self.blocking_service
     }
 
     pub(crate) fn presence_service(
         &self,
-    ) -> &crate::services::presence::PresenceService<
+    ) -> &northstar_roster_application::presence::PresenceService<
         db::presence_repository::PostgresPresenceRepository,
     > {
         &self.presence_service
@@ -150,9 +152,9 @@ impl AppState {
 
     pub(crate) fn s2s_roster_authorization_service(
         &self,
-    ) -> &crate::services::s2s_roster_authorization::FederatedRosterAuthorizationService<
+    ) -> &northstar_roster_application::s2s_roster_authorization::FederatedRosterAuthorizationService<
         db::s2s_roster_authorization_repository::PostgresFederatedRosterRepository,
-    > {
+    >{
         &self.s2s_roster_authorization_service
     }
 
@@ -186,7 +188,9 @@ impl AppState {
 
     pub(crate) fn privacy_service(
         &self,
-    ) -> &crate::services::privacy::PrivacyService<db::privacy::PostgresPrivacyRepository> {
+    ) -> &northstar_roster_application::privacy::PrivacyService<
+        db::privacy::PostgresPrivacyRepository,
+    > {
         &self.privacy_service
     }
 

@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 pub(crate) struct ClusterListenerMessagePolicy {
     pub(crate) local_domain: String,
-    pub(crate) presence: crate::services::presence::PresenceService<
+    pub(crate) presence: northstar_roster_application::presence::PresenceService<
         db::presence_repository::PostgresPresenceRepository,
     >,
     pub(crate) message:

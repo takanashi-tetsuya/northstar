@@ -1,11 +1,19 @@
 //! Capability-injected roster application boundary, typed commands,
-//! validation rules, and in-memory push synchronization.
+//! validation rules, and in-memory push synchronization, with the
+//! blocking, privacy, presence and federated-roster services.
 
 #![forbid(unsafe_code)]
 
+pub use northstar_federation_core::S2sOutboxPolicy;
 pub use northstar_roster_core::*;
+pub mod blocking;
+pub mod presence;
+pub mod privacy;
 pub mod repository;
+pub mod s2s_roster_authorization;
+pub mod service;
 pub use repository::*;
+pub use service::RosterService;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -81,15 +89,6 @@ pub fn validate_roster_upsert_command(
     Ok(())
 }
 
-/// Outbox policy for remote federation notifications upon roster removal.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RemoteRemovalPolicy {
-    pub ttl_seconds: u64,
-    pub max_rows: i64,
-    pub max_bytes: i64,
-    pub max_per_domain: i64,
-}
-
 /// Delivery route target for roster item removal stanzas.
 #[derive(Clone, Copy, Debug)]
 pub enum RosterRemovalRoute<'a> {
@@ -102,7 +101,7 @@ pub enum RosterRemovalRoute<'a> {
         unsubscribe_stanza: &'a str,
         unsubscribed_stanza: &'a str,
         bounce_to: Option<&'a str>,
-        policy: RemoteRemovalPolicy,
+        policy: S2sOutboxPolicy,
     },
 }
 

@@ -1,8 +1,8 @@
-use crate::services::privacy::PrivacyStanzaKind;
 use crate::services::xml_util::*;
 use crate::xmpp::frame_execution::Stage;
 use crate::xmpp::protocol::{Action, ProtocolSession};
 use anyhow::Result;
+use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::{Document, Node};
 

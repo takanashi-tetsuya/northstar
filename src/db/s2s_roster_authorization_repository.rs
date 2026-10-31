@@ -1,10 +1,10 @@
 //! PostgreSQL subscription read for inbound federation roster visibility.
 
 use crate::db;
-use crate::services::s2s_roster_authorization::{
+use anyhow::Result;
+use northstar_roster_application::s2s_roster_authorization::{
     FederatedRosterRepository, FederatedRosterSubscription,
 };
-use anyhow::Result;
 use sqlx::PgPool;
 use uuid::Uuid;
 

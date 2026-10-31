@@ -45,7 +45,7 @@ cargo test --locked --offline \
   db::privacy::tests::postgres_privacy_lists_are_bounded_ordered_cascading_and_enforced \
   -- --ignored --exact --nocapture --test-threads=1
 cargo test --locked --offline \
-  services::privacy::tests::privacy_service_boundary_preserves_stanza_kind_allow_deny_results \
+  db::privacy_service_tests::privacy_service_boundary_preserves_stanza_kind_allow_deny_results \
   -- --ignored --exact --nocapture --test-threads=1
 
 cleanup

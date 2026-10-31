@@ -1,7 +1,8 @@
 //! PostgreSQL presence policy snapshots and complete subscription mutations.
-use crate::{db, services::presence::*};
+use crate::db;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use northstar_roster_application::presence::*;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 

@@ -59,7 +59,7 @@ pub struct AdminCommandFence<'a> {
     pub result_payload: &'a str,
 }
 
-pub use crate::services::presence::ServiceMessageDeliveryClaim as ClaimedAdminServiceMessage;
+pub use northstar_roster_application::presence::ServiceMessageDeliveryClaim as ClaimedAdminServiceMessage;
 
 pub use crate::services::runtime_control::DurableServiceControl;
 pub(crate) use crate::services::runtime_control::RuntimeControlReadPhase;

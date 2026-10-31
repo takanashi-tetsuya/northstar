@@ -5,13 +5,14 @@ use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
     db::{messaging::PostgresMessageRepository, pubsub_repository::PostgresPubSubRepository},
     s2s::FederationRouter,
-    services::{messaging::MessageService, privacy::PrivacyStanzaKind},
+    services::messaging::MessageService,
     xmpp::xml_builder::XmlElement,
 };
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_config::ExternalRouteDomainPolicy;
 use northstar_pubsub_application::PubSubService;
+use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_xmpp_types::jid::CanonicalJid;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;

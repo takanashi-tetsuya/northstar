@@ -2895,11 +2895,31 @@
     ],
     [
       "northstar-roster-application",
+      "anyhow"
+    ],
+    [
+      "northstar-roster-application",
+      "chrono"
+    ],
+    [
+      "northstar-roster-application",
+      "northstar-federation-core"
+    ],
+    [
+      "northstar-roster-application",
       "northstar-roster-core"
     ],
     [
       "northstar-roster-application",
+      "northstar-xep-0016"
+    ],
+    [
+      "northstar-roster-application",
       "northstar-xmpp-types"
+    ],
+    [
+      "northstar-roster-application",
+      "tokio"
     ],
     [
       "northstar-roster-application",

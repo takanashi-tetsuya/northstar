@@ -1,8 +1,9 @@
 //! Connection-scoped privacy cleanup and finalization observation.
 
 use super::AppState;
-use crate::{db::privacy::PostgresPrivacyRepository, services::privacy::PrivacyService};
+use crate::db::privacy::PostgresPrivacyRepository;
 use anyhow::Result;
+use northstar_roster_application::privacy::PrivacyService;
 use northstar_runtime::workers::WorkerRegistry;
 use northstar_telemetry::metrics::Metrics;
 use std::sync::{atomic::Ordering, Arc};

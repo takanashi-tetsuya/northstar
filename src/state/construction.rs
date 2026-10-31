@@ -503,7 +503,7 @@ impl AppState {
             },
             federation.outbox_wakeup(),
         );
-        let privacy_service = crate::services::privacy::PrivacyService::new(
+        let privacy_service = northstar_roster_application::privacy::PrivacyService::new(
             db::privacy::PostgresPrivacyRepository::new(pool.clone()),
         );
         let replay_service = crate::services::replay::ReplayService::new(
@@ -870,16 +870,16 @@ impl AppState {
             mam_service,
             mix_service,
             sm_service,
-            blocking_service: crate::services::blocking::BlockingService::new(
+            blocking_service: northstar_roster_application::blocking::BlockingService::new(
                 db::roster::PostgresBlockingRepository::new(pool.clone()),
             ),
-            presence_service: crate::services::presence::PresenceService::new(
+            presence_service: northstar_roster_application::presence::PresenceService::new(
                 db::presence_repository::PostgresPresenceRepository::new(pool.clone()),
             ),
             replay_service,
             roster_service,
             s2s_roster_authorization_service:
-                crate::services::s2s_roster_authorization::FederatedRosterAuthorizationService::new(
+                northstar_roster_application::s2s_roster_authorization::FederatedRosterAuthorizationService::new(
                     db::s2s_roster_authorization_repository::PostgresFederatedRosterRepository::new(
                         pool.clone(),
                     ),

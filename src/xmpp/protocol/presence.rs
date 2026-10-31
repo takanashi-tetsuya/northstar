@@ -1,12 +1,12 @@
 use super::{Action, ProtocolSession};
-use crate::services::presence::{
-    LocalPresenceEffect, LocalSubscriptionRequest, PresenceMutation, PresencePolicyDenial,
-    RemoteSubscriptionTransition,
-};
-use crate::services::privacy::PrivacyStanzaKind;
 use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
+use northstar_roster_application::presence::{
+    LocalPresenceEffect, LocalSubscriptionRequest, PresenceMutation, PresencePolicyDenial,
+    RemoteSubscriptionTransition,
+};
+use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::Node;
 use std::sync::{atomic::Ordering, Arc};

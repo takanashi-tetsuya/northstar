@@ -14,7 +14,6 @@ use crate::services::messaging::{
     RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome, ValidatedPersonalMessage,
 };
 use crate::services::muc::{ClusterMucAffiliationSubject, DurableMucInviteOutcome};
-use crate::services::privacy::PrivacyStanzaKind;
 use crate::services::retractions::{DeliveryProjection, RetractionOutcome};
 use crate::services::xml_util::*;
 use crate::services::{
@@ -35,6 +34,7 @@ pub(crate) use northstar_message_core::{
     missing_user_message_should_error, undelivered_disposition, BareMessageRoute,
     DirectDeliveryMode, FullNoMatchRoute, UndeliveredDisposition,
 };
+use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::Node;
 use std::{future::Future, sync::atomic::Ordering};

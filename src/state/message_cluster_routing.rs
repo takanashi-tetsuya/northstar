@@ -7,10 +7,10 @@ use crate::services::messaging::{
 use crate::services::muc::{
     ClusterMucAffiliationSubject, ClusterMucInviteAuthority, ClusterMucPrincipal,
 };
-use crate::services::privacy::PrivacyStanzaKind;
 use crate::services::xml_util::carbon_message;
 use crate::xmpp::outbound::DurableDelivery;
 use anyhow::Result;
+use northstar_roster_application::privacy::PrivacyStanzaKind;
 use std::sync::atomic::Ordering;
 use uuid::Uuid;
 

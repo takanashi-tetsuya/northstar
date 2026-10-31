@@ -8,6 +8,13 @@ description = "Typed commands, validation rules, and in-memory push synchronizat
 publish = false
 
 [dependencies]
+anyhow = "1.0"
+chrono = "0.4"
+northstar-federation-core = { path = "../../federation/northstar-federation-core" }
 northstar-roster-core = { path = "../northstar-roster-core" }
+northstar-xep-0016 = { path = "../../../kernel/northstar-xep-0016" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 uuid = { version = "1.12", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "sync", "time"] }

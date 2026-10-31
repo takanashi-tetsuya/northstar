@@ -1835,8 +1835,8 @@ for (const [name, serviceAccessor, source] of [
   }
 }
 
-const rosterServiceSource = read('src/services/roster.rs');
-const rosterServiceBody = structBody(rosterServiceSource, 'pub(crate) struct RosterService');
+const rosterServiceSource = read('crates/contexts/roster/northstar-roster-application/src/service.rs');
+const rosterServiceBody = structBody(rosterServiceSource, 'pub struct RosterService');
 if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(rosterServiceBody)) {
   throw new Error('RosterService must receive its repository port');
 }
@@ -2323,9 +2323,9 @@ for (const [name, source] of [
   ['MucService', readProductionModule('src/services/muc.rs', { root })],
   ['ProfileService', read('crates/contexts/pubsub/northstar-pubsub-application/src/profile.rs')],
   ['PubSubService', readProductionModule('crates/contexts/pubsub/northstar-pubsub-application/src/service.rs', { root })],
-  ['BlockingService', read('src/services/blocking.rs')],
-  ['PrivacyService', read('src/services/privacy.rs')],
-  ['PresenceService', read('src/services/presence.rs')],
+  ['BlockingService', read('crates/contexts/roster/northstar-roster-application/src/blocking.rs')],
+  ['PrivacyService', read('crates/contexts/roster/northstar-roster-application/src/privacy.rs')],
+  ['PresenceService', read('crates/contexts/roster/northstar-roster-application/src/presence.rs')],
   ['ReplayService', read('src/services/replay.rs')],
   ['AccountService', accountServiceSource],
   ['AdminCommandService', read('src/services/admin_commands.rs')],

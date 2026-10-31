@@ -4,26 +4,26 @@
 //! handles the initial-result/push race without retaining a database connection.
 //! Safety Invariants: MAX_BUFFERED_ROSTER_CHANGES, RosterSyncState::Flushing
 
-use anyhow::Result;
-use northstar_roster_application::{
+use crate::{
     validate_roster_get_command, validate_roster_remove_command, validate_roster_upsert_command,
     RosterGetCommand, RosterRemoveCommand, RosterRepository, RosterUpsertCommand,
 };
+use anyhow::Result;
 use northstar_roster_core::{
     RosterAuthorization, RosterChange, RosterReadSnapshot, RosterRemovalTransition,
 };
 
 #[derive(Clone)]
-pub(crate) struct RosterService<R> {
+pub struct RosterService<R> {
     repository: R,
 }
 
 impl<R: RosterRepository<Error = anyhow::Error>> RosterService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn execute_roster_get(
+    pub async fn execute_roster_get(
         &self,
         command: RosterGetCommand,
     ) -> Result<RosterAuthorization<RosterReadSnapshot>> {
@@ -33,7 +33,7 @@ impl<R: RosterRepository<Error = anyhow::Error>> RosterService<R> {
         self.repository.get_roster(&command).await
     }
 
-    pub(crate) async fn execute_roster_upsert(
+    pub async fn execute_roster_upsert(
         &self,
         command: RosterUpsertCommand,
     ) -> Result<RosterAuthorization<RosterChange>> {
@@ -43,7 +43,7 @@ impl<R: RosterRepository<Error = anyhow::Error>> RosterService<R> {
         self.repository.upsert_item(&command).await
     }
 
-    pub(crate) async fn execute_roster_remove(
+    pub async fn execute_roster_remove(
         &self,
         command: RosterRemoveCommand<'_>,
     ) -> Result<RosterAuthorization<Option<RosterRemovalTransition>>> {
@@ -56,7 +56,7 @@ impl<R: RosterRepository<Error = anyhow::Error>> RosterService<R> {
 
 #[cfg(test)]
 mod tests {
-    use northstar_roster_application::*;
+    use crate::*;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     struct DenyingRepository {
@@ -163,7 +163,7 @@ mod tests {
                 unsubscribe_stanza: "<presence/>",
                 unsubscribed_stanza: "<presence/>",
                 bounce_to: None,
-                policy: RemoteRemovalPolicy {
+                policy: S2sOutboxPolicy {
                     ttl_seconds: 60,
                     max_rows: 20,
                     max_bytes: 10240,

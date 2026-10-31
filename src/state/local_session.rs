@@ -12,7 +12,7 @@ impl AppState {
         &self,
         session: &OnlineSession,
         peer: &str,
-        kind: impl Into<crate::services::privacy::PrivacyStanzaKind>,
+        kind: impl Into<northstar_roster_application::privacy::PrivacyStanzaKind>,
     ) -> anyhow::Result<bool> {
         let active = session
             .privacy_active

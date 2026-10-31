@@ -99,10 +99,12 @@ pub(crate) async fn route_inbound_presence(
             .transition_inbound(recipient.id, state.local_domain(), contact, kind, persisted)
             .await?
         {
-            crate::services::presence::PresenceMutation::Transition(transition) => transition,
-            crate::services::presence::PresenceMutation::PolicyDenied(_)
-            | crate::services::presence::PresenceMutation::Missing
-            | crate::services::presence::PresenceMutation::Unauthorized => {
+            northstar_roster_application::presence::PresenceMutation::Transition(transition) => {
+                transition
+            }
+            northstar_roster_application::presence::PresenceMutation::PolicyDenied(_)
+            | northstar_roster_application::presence::PresenceMutation::Missing
+            | northstar_roster_application::presence::PresenceMutation::Unauthorized => {
                 // The exact local UUID disappeared/was disabled, or its
                 // account-wide inbound policy denied the authenticated remote
                 // stanza. Inbound federation intentionally has no C2S
@@ -117,7 +119,9 @@ pub(crate) async fn route_inbound_presence(
         // (RFC 6121 sections 3.2/3.3). Incoming subscribe requests are sent to
         // available resources; the other state notifications go only to
         // resources that requested the roster.
-        if transition.effect == crate::services::presence::InboundRemotePresenceEffect::Forward {
+        if transition.effect
+            == northstar_roster_application::presence::InboundRemotePresenceEffect::Forward
+        {
             let mut targets = state.session_entries_for(&recipient_bare);
             if kind == "subscribe" {
                 targets.retain(|(_, target)| {
@@ -185,7 +189,8 @@ pub(crate) async fn route_inbound_presence(
             }
         }
         if kind == "subscribe"
-            && transition.effect == crate::services::presence::InboundRemotePresenceEffect::Forward
+            && transition.effect
+                == northstar_roster_application::presence::InboundRemotePresenceEffect::Forward
             && state.sessions_for(&recipient_bare).is_empty()
         {
             if let Err(error) = state.dispatch_push_notification(recipient.id).await {
@@ -302,7 +307,7 @@ pub(super) async fn route_inbound_presence_probe(
     root: roxmltree::Node<'_, '_>,
     requester: &str,
     target_jid: &CanonicalJid,
-    recipient: &crate::services::presence::PresenceAccount,
+    recipient: &northstar_roster_application::presence::PresenceAccount,
 ) -> Result<Option<String>> {
     let requester_bare = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
     let recipient_bare = format!("{}@{}", recipient.username, state.local_domain());

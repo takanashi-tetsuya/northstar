@@ -2103,8 +2103,13 @@ dependencies = [
 name = "northstar-roster-application"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "chrono",
+ "northstar-federation-core",
  "northstar-roster-core",
+ "northstar-xep-0016",
  "northstar-xmpp-types",
+ "tokio",
  "uuid",
 ]
 

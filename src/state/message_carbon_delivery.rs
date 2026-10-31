@@ -1,11 +1,9 @@
 //! Live session and cluster transport for application-owned Carbon fanout.
 
 use super::{AppState, OnlineSession};
-use crate::services::{
-    message_carbons::{CarbonDeliveryPort, Direction},
-    privacy::PrivacyStanzaKind,
-};
+use crate::services::message_carbons::{CarbonDeliveryPort, Direction};
 use anyhow::Result;
+use northstar_roster_application::privacy::PrivacyStanzaKind;
 use std::sync::atomic::Ordering;
 
 impl CarbonDeliveryPort for AppState {

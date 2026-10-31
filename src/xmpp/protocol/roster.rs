@@ -1,11 +1,10 @@
 use super::{Action, ProtocolSession};
-use crate::services::privacy::PrivacyStanzaKind;
 use crate::services::xml_util::*;
 use anyhow::Result;
+use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_roster_application::{
-    BeginRosterSyncError, RemoteRemovalPolicy, RosterFlushBatch, RosterGetCommand,
-    RosterPushDisposition, RosterRemovalRoute, RosterRemoveCommand, RosterSyncGate,
-    RosterSyncPermit, RosterUpsertCommand,
+    BeginRosterSyncError, RosterFlushBatch, RosterGetCommand, RosterPushDisposition,
+    RosterRemovalRoute, RosterRemoveCommand, RosterSyncGate, RosterSyncPermit, RosterUpsertCommand,
 };
 use northstar_roster_core::{RosterAuthorization, RosterChange, RosterReadSnapshot};
 use northstar_xml_builder::XmlElement;
@@ -260,12 +259,7 @@ impl ProtocolSession {
                     unsubscribe_stanza: &unsubscribe,
                     unsubscribed_stanza: &unsubscribed,
                     bounce_to: Some(&owner_jid),
-                    policy: RemoteRemovalPolicy {
-                        ttl_seconds: policy.ttl_seconds,
-                        max_rows: policy.max_rows,
-                        max_bytes: policy.max_bytes,
-                        max_per_domain: policy.max_per_domain,
-                    },
+                    policy,
                 }
             } else {
                 RosterRemovalRoute::Local {

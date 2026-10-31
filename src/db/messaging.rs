@@ -4,11 +4,12 @@ use crate::{
     cluster::{ClusterAdmission, DirectPostCommitMode, DirectSpoolEligibility},
     db,
     services::abuse::PersonalMessageContentKeyring,
-    services::{messaging::*, muc::DurableMucInviteOutcome, privacy::PrivacyStanzaKind},
+    services::{messaging::*, muc::DurableMucInviteOutcome},
 };
 use anyhow::Result;
 use northstar_message_application::direct_commit::{DirectCommitObserver, DirectCommitRepository};
 use northstar_message_application::PersonalMessageCommitRepository;
+use northstar_roster_application::privacy::PrivacyStanzaKind;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;

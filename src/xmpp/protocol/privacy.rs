@@ -1,13 +1,13 @@
 use super::{Action, ProtocolSession};
 use crate::{
-    services::privacy::{
-        PrivacyAction, PrivacyItem, PrivacyList, PrivacyListMutationOutcome, PrivacyMatchType,
-        PrivacySelectionOutcome, MAX_PRIVACY_ITEMS,
-    },
     services::xml_util::{iq_error, iq_result},
     xmpp::xml_builder::XmlElement,
 };
 use anyhow::Result;
+use northstar_roster_application::privacy::{
+    PrivacyAction, PrivacyItem, PrivacyList, PrivacyListMutationOutcome, PrivacyMatchType,
+    PrivacySelectionOutcome, MAX_PRIVACY_ITEMS,
+};
 use roxmltree::Node;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
@@ -548,10 +548,8 @@ mod tests {
 
     #[test]
     fn default_change_conflicts_with_any_other_connected_resource() {
-        assert!(!crate::services::privacy::default_change_conflicts(
-            1, false
-        ));
-        assert!(crate::services::privacy::default_change_conflicts(2, false));
-        assert!(crate::services::privacy::default_change_conflicts(1, true));
+        assert!(!northstar_roster_application::privacy::default_change_conflicts(1, false));
+        assert!(northstar_roster_application::privacy::default_change_conflicts(2, false));
+        assert!(northstar_roster_application::privacy::default_change_conflicts(1, true));
     }
 }

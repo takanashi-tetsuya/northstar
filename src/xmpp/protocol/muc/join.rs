@@ -23,7 +23,7 @@ pub(super) fn muc_sender_is_blocked(
         .any(|sender| {
             patterns
                 .iter()
-                .any(|pattern| crate::services::blocking::matches(pattern, sender))
+                .any(|pattern| northstar_roster_application::blocking::matches(pattern, sender))
         })
 }
 

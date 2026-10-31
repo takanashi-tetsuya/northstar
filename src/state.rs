@@ -281,7 +281,8 @@ pub use northstar_session_core::JoinedMucMembership;
 #[cfg(test)]
 mod muc_membership_snapshot_tests;
 
-type RosterService = crate::services::roster::RosterService<db::roster::PostgresRosterRepository>;
+type RosterService =
+    northstar_roster_application::RosterService<db::roster::PostgresRosterRepository>;
 
 #[cfg(test)]
 #[path = "state/account_revocation_route_tests.rs"]
@@ -324,16 +325,17 @@ pub struct AppState {
     mam_service: northstar_archive_application::MamService<db::mam::PostgresMamRepository>,
     mix_service: crate::services::mix::MixService<db::mix_repository::PostgresMixRepository>,
     sm_service: crate::services::sm::SmService<db::sm_repository::PostgresSmRepository>,
-    blocking_service:
-        crate::services::blocking::BlockingService<db::roster::PostgresBlockingRepository>,
-    presence_service: crate::services::presence::PresenceService<
+    blocking_service: northstar_roster_application::blocking::BlockingService<
+        db::roster::PostgresBlockingRepository,
+    >,
+    presence_service: northstar_roster_application::presence::PresenceService<
         db::presence_repository::PostgresPresenceRepository,
     >,
     replay_service:
         crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>,
     roster_service: RosterService,
     s2s_roster_authorization_service:
-        crate::services::s2s_roster_authorization::FederatedRosterAuthorizationService<
+        northstar_roster_application::s2s_roster_authorization::FederatedRosterAuthorizationService<
             db::s2s_roster_authorization_repository::PostgresFederatedRosterRepository,
         >,
     s2s_outbox_dispatch_service: crate::services::s2s_outbox_dispatch::S2sOutboxDispatchService<
@@ -342,8 +344,9 @@ pub struct AppState {
     s2s_sm_outbox_service: crate::services::s2s_sm_outbox::SmOutboxService<
         db::s2s_sm_outbox_repository::PostgresSmOutboxRepository,
     >,
-    privacy_service:
-        crate::services::privacy::PrivacyService<db::privacy::PostgresPrivacyRepository>,
+    privacy_service: northstar_roster_application::privacy::PrivacyService<
+        db::privacy::PostgresPrivacyRepository,
+    >,
     account_service:
         crate::services::account::AccountService<db::account_repository::PostgresAccountRepository>,
     login_service: crate::services::http_login::HttpLoginService<

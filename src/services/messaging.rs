@@ -6,10 +6,10 @@ pub(crate) use direct_route::{
     DirectMessageRoutePort, DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome,
     DirectRouteRejection, DirectRouteRequest, DirectRouteTarget,
 };
+use northstar_roster_application::privacy::PrivacyStanzaKind;
 
 use super::{
     muc::{ClusterMucInviteAuthority, DurableMucInviteOutcome},
-    privacy::PrivacyStanzaKind,
     retractions::FederationOutboxPolicy,
 };
 use crate::services::abuse::MessageDedupeIdentity;

@@ -2,8 +2,8 @@ use super::{
     bounded_fanout, send_received_carbons, send_sent_carbons, Attempt, AttemptFuture,
     CarbonDeliveryPort, Direction,
 };
-use crate::services::privacy::PrivacyStanzaKind;
 use anyhow::Result;
+use northstar_roster_application::privacy::PrivacyStanzaKind;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,

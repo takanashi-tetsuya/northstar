@@ -49,7 +49,7 @@ cargo test --locked --offline \
   db::roster::blocking_match_tests::roster_removal_settles_local_mutual_pending_and_federated_state_atomically \
   -- --ignored --exact --nocapture --test-threads=1
 cargo test --locked --offline \
-  services::presence::tests:: \
+  db::presence_service_tests:: \
   -- --ignored --nocapture --test-threads=1
 
 cleanup

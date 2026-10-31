@@ -3,22 +3,22 @@
 use anyhow::Result;
 use uuid::Uuid;
 
-pub(crate) type RosterEntry = (String, Option<String>, String, Option<String>);
+pub type RosterEntry = (String, Option<String>, String, Option<String>);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BlockUpdateOutcome {
+pub enum BlockUpdateOutcome {
     Changed(Vec<String>),
     QuotaExceeded,
     Unavailable,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum UnblockUpdateOutcome {
+pub enum UnblockUpdateOutcome {
     Changed(Vec<String>),
     Unavailable,
 }
 
-pub(crate) trait BlockingRepository: Send + Sync {
+pub trait BlockingRepository: Send + Sync {
     fn blocked_jids(
         &self,
         owner: Uuid,
@@ -39,23 +39,23 @@ pub(crate) trait BlockingRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<UnblockUpdateOutcome>> + Send;
 }
 #[derive(Clone)]
-pub(crate) struct BlockingService<R> {
+pub struct BlockingService<R> {
     repository: R,
 }
 impl<R: BlockingRepository> BlockingService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
-    pub(crate) async fn blocked_jids(&self, owner: Uuid) -> Result<Vec<String>> {
+    pub async fn blocked_jids(&self, owner: Uuid) -> Result<Vec<String>> {
         self.repository.blocked_jids(owner).await
     }
-    pub(crate) async fn roster(&self, owner: Uuid) -> Result<Vec<RosterEntry>> {
+    pub async fn roster(&self, owner: Uuid) -> Result<Vec<RosterEntry>> {
         self.repository.roster(owner).await
     }
-    pub(crate) async fn block(&self, owner: Uuid, jids: &[String]) -> Result<BlockUpdateOutcome> {
+    pub async fn block(&self, owner: Uuid, jids: &[String]) -> Result<BlockUpdateOutcome> {
         self.repository.block(owner, jids).await
     }
-    pub(crate) async fn unblock(
+    pub async fn unblock(
         &self,
         owner: Uuid,
         jids: Option<&[String]>,
@@ -63,6 +63,6 @@ impl<R: BlockingRepository> BlockingService<R> {
         self.repository.unblock(owner, jids).await
     }
 }
-pub(crate) fn matches(pattern: &str, jid: &str) -> bool {
+pub fn matches(pattern: &str, jid: &str) -> bool {
     northstar_xmpp_types::jid_scope_matches(pattern, jid)
 }

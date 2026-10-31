@@ -89,7 +89,11 @@ pub mod omemo_recovery;
 pub mod pep_roster;
 pub(crate) mod pie;
 pub mod presence_repository;
+#[cfg(test)]
+mod presence_service_tests;
 pub mod privacy;
+#[cfg(test)]
+mod privacy_service_tests;
 pub mod profile;
 pub mod profile_identity;
 pub mod push;

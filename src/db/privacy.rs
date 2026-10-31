@@ -926,8 +926,9 @@ mod tests {
 }
 
 mod application_repository {
-    use crate::{db, services::privacy::*};
+    use crate::db;
     use anyhow::Result;
+    use northstar_roster_application::privacy::*;
     use sqlx::PgPool;
     use uuid::Uuid;
     #[derive(Clone)]

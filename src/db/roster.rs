@@ -97,12 +97,7 @@ impl RosterRepository for PostgresRosterRepository {
                 unsubscribe_stanza,
                 unsubscribed_stanza,
                 bounce_to,
-                policy: super::S2sOutboxPolicy {
-                    ttl_seconds: policy.ttl_seconds,
-                    max_rows: policy.max_rows,
-                    max_bytes: policy.max_bytes,
-                    max_per_domain: policy.max_per_domain,
-                },
+                policy,
             },
         };
         Ok(
@@ -675,8 +670,9 @@ pub async fn roster_changes_since(
 mod blocking_match_tests;
 
 mod application_repository {
-    use crate::{db, services::blocking::*};
+    use crate::db;
     use anyhow::Result;
+    use northstar_roster_application::blocking::*;
     use sqlx::PgPool;
     use uuid::Uuid;
     #[derive(Clone)]

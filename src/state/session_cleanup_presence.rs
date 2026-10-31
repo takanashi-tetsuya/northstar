@@ -1,11 +1,10 @@
 //! Presence audience and process-local sibling delivery during session cleanup.
 
 use super::{session_entries_for_in, AppState, OnlineSession};
-use crate::{
-    db::presence_repository::PostgresPresenceRepository, services::presence::PresenceService,
-};
+use crate::db::presence_repository::PostgresPresenceRepository;
 use anyhow::Result;
 use dashmap::DashMap;
+use northstar_roster_application::presence::PresenceService;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;
 

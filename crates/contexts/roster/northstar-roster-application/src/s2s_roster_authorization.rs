@@ -6,34 +6,30 @@ use anyhow::Result;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FederatedRosterSubscription {
+pub enum FederatedRosterSubscription {
     From,
     Both,
     Other,
 }
 
-pub(crate) trait FederatedRosterRepository: Send + Sync {
-    async fn subscription_for(
+pub trait FederatedRosterRepository: Send + Sync {
+    fn subscription_for(
         &self,
         recipient_id: Uuid,
         requester_bare: &str,
-    ) -> Result<Option<FederatedRosterSubscription>>;
+    ) -> impl std::future::Future<Output = Result<Option<FederatedRosterSubscription>>> + Send;
 }
 
-pub(crate) struct FederatedRosterAuthorizationService<R> {
+pub struct FederatedRosterAuthorizationService<R> {
     repository: R,
 }
 
 impl<R: FederatedRosterRepository> FederatedRosterAuthorizationService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn allows_presence(
-        &self,
-        recipient_id: Uuid,
-        requester_bare: &str,
-    ) -> Result<bool> {
+    pub async fn allows_presence(&self, recipient_id: Uuid, requester_bare: &str) -> Result<bool> {
         Ok(matches!(
             self.repository
                 .subscription_for(recipient_id, requester_bare)

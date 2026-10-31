@@ -7,24 +7,13 @@ pub(crate) use crate::services::operations::{
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 pub(crate) use northstar_archive_application::{ArchivePage, MamArchiveQuery};
+pub(crate) use northstar_auth_core::api_session::{ApiPrincipal, ApiReadAuthority};
 pub(crate) use northstar_upload_application::admin::{
     UploadDeadLetterBoundary, UploadDeadLetterId, UploadDeadLetterKind, UploadDeadLetterPage,
     UploadDeadLetterRecord,
 };
 use serde::Serialize;
 use uuid::Uuid;
-
-/// Verifier-free identity/status projection for REST bearer authorization.
-/// Password and SCRAM material is structurally absent, so ordinary API
-/// requests cannot accidentally retain reusable credential verifiers.
-#[derive(Clone, Debug)]
-pub struct ApiPrincipal {
-    pub id: Uuid,
-    pub username: String,
-    pub display_name: Option<String>,
-    pub is_admin: bool,
-    pub auth_generation: i64,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PageBoundary {
@@ -131,12 +120,6 @@ pub struct MucRoomView {
 
 /// Revalidated under the same database locks as the requested projection.
 /// Never include the bearer in diagnostics.
-pub(crate) struct ApiReadAuthority<'a> {
-    pub(crate) user_id: Uuid,
-    pub(crate) auth_generation: i64,
-    pub(crate) session_token: &'a str,
-}
-
 pub(crate) struct TimedRead<T> {
     pub(crate) value: T,
     pub(crate) database_now: DateTime<Utc>,

@@ -148,7 +148,7 @@ impl HttpRegistrationAvailability {
 /// operation. The request identity is prepared by the transport from the
 /// original body bytes, before the password is removed from that body.
 pub(crate) struct HttpRegistrationRequest<'a> {
-    pub(crate) idempotency: crate::services::api_mutations::IdempotencyRequest<'a>,
+    pub(crate) idempotency: northstar_operations_core::api_mutations::IdempotencyRequest<'a>,
     pub(crate) username: &'a str,
     pub(crate) password: &'a str,
     pub(crate) invitation_token: Option<&'a str>,
@@ -162,7 +162,7 @@ pub(crate) struct HttpRegistrationRequest<'a> {
 pub(crate) enum HttpRegistrationOutcome {
     Created(Vec<u8>),
     Rejected(Vec<u8>),
-    Replay(crate::services::api_mutations::IdempotentResponse),
+    Replay(northstar_operations_core::api_mutations::IdempotentResponse),
     AbuseDenied(GuardError),
     Closed,
     RateLimited,

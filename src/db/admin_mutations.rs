@@ -3,9 +3,9 @@ use crate::services::operations::AuthorizationPolicy;
 use crate::{
     cluster::{ClusterAdmission, ClusterOperation},
     db,
-    services::api_mutations::*,
 };
 use anyhow::Result;
+use northstar_operations_core::api_mutations::*;
 use serde_json::{json, Value};
 use sqlx::{PgPool, Postgres, Transaction};
 use std::sync::Arc;

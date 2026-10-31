@@ -3,13 +3,13 @@ use crate::api::error::AppError;
 use crate::api::idempotency::{mutation_rejection, stored_api_response};
 use crate::api::*;
 use crate::services::{
-    api_mutations::{
-        AdminMutationAdmission, ApiMutationOutcome, ApiPrincipalKind, StoredApiResponse,
-    },
     governance::*,
     retention_policy::{RetentionMutationAdmission, RetentionPolicyError, UserRetentionPolicy},
 };
 use axum::{extract::State, http::HeaderMap, response::Response, Json};
+use northstar_operations_core::api_mutations::{
+    AdminMutationAdmission, ApiMutationOutcome, ApiPrincipalKind, StoredApiResponse,
+};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;

@@ -1,9 +1,9 @@
 //! Durable operation projections, cancellation and reconciliation policy.
-use crate::services::api_mutations::{
-    AdminMutationAdmission, ApiMutationOutcome, ApiMutationRejection, StoredApiResponse,
-};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use northstar_operations_core::api_mutations::{
+    AdminMutationAdmission, ApiMutationOutcome, ApiMutationRejection, StoredApiResponse,
+};
 use serde_json::Value;
 use uuid::Uuid;
 

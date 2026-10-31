@@ -1,10 +1,8 @@
 //! Administrative invitation commands and input policy.
-use crate::services::{
-    api_mutations::{
-        AdminMutationAdmission, ApiMutationOutcome, ApiMutationRejection, StoredApiResponse,
-    },
-    report_moderation::valid_administrative_text,
+use northstar_operations_core::api_mutations::{
+    AdminMutationAdmission, ApiMutationOutcome, ApiMutationRejection, StoredApiResponse,
 };
+use northstar_operations_core::text::valid_administrative_text;
 use uuid::Uuid;
 
 pub(crate) struct InvitationInput<'a> {

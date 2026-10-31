@@ -15,7 +15,7 @@ pub enum ApiPrincipalKind {
 }
 
 impl ApiPrincipalKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Anonymous => "anonymous",
             Self::User => "user",
@@ -62,14 +62,14 @@ pub fn json_replay_headers() -> BTreeMap<String, String> {
 
 /// The same status, headers and bytes are committed for replay and returned
 /// for the first execution. The transport adapter constructs the HTTP object.
-pub(crate) struct StoredApiResponse {
-    pub(crate) status: u16,
-    pub(crate) headers: BTreeMap<String, String>,
-    pub(crate) body: Vec<u8>,
-    pub(crate) replay_resource_id: Option<Uuid>,
+pub struct StoredApiResponse {
+    pub status: u16,
+    pub headers: BTreeMap<String, String>,
+    pub body: Vec<u8>,
+    pub replay_resource_id: Option<Uuid>,
 }
 impl StoredApiResponse {
-    pub(crate) fn json(status: u16, body: Value) -> anyhow::Result<Self> {
+    pub fn json(status: u16, body: Value) -> anyhow::Result<Self> {
         Ok(Self {
             status,
             headers: json_replay_headers(),
@@ -77,17 +77,17 @@ impl StoredApiResponse {
             replay_resource_id: None,
         })
     }
-    pub(crate) fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.insert(name.into(), value.into());
         self
     }
-    pub(crate) fn with_optional_replay_resource_id(mut self, id: Option<Uuid>) -> Self {
+    pub fn with_optional_replay_resource_id(mut self, id: Option<Uuid>) -> Self {
         self.replay_resource_id = id;
         self
     }
 }
 
-pub(crate) enum ApiMutationRejection {
+pub enum ApiMutationRejection {
     Unauthorized,
     Forbidden,
     BadRequest(&'static str),
@@ -99,31 +99,27 @@ pub(crate) enum ApiMutationRejection {
     CapacityLimited { retry_after: u64 },
     InProgress { retry_after: u64 },
 }
-pub(crate) enum ApiMutationOutcome<T> {
+pub enum ApiMutationOutcome<T> {
     Committed(T),
     Replay(IdempotentResponse),
     Rejected(ApiMutationRejection),
 }
-pub(crate) struct UserMutationAdmission<'a> {
-    pub(crate) authority: crate::services::api_queries::ApiReadAuthority<'a>,
-    pub(crate) idempotency: IdempotencyRequest<'a>,
-    pub(crate) subject: &'a str,
-    pub(crate) actors: &'a [String],
-    pub(crate) proof: Option<&'a northstar_abuse_policy::PowProof>,
-    pub(crate) intent: &'a northstar_abuse_policy::PowIntent,
+pub struct UserMutationAdmission<'a> {
+    pub authority: northstar_auth_core::api_session::ApiReadAuthority<'a>,
+    pub idempotency: IdempotencyRequest<'a>,
+    pub subject: &'a str,
+    pub actors: &'a [String],
+    pub proof: Option<&'a northstar_abuse_policy::PowProof>,
+    pub intent: &'a northstar_abuse_policy::PowIntent,
 }
 
-pub(crate) fn error_response(
-    status: u16,
-    code: &str,
-    message: &str,
-) -> anyhow::Result<StoredApiResponse> {
+pub fn error_response(status: u16, code: &str, message: &str) -> anyhow::Result<StoredApiResponse> {
     StoredApiResponse::json(
         status,
         serde_json::json!({"error":{"code":code,"message":message}}),
     )
 }
-pub(crate) fn guard_denial_response(
+pub fn guard_denial_response(
     error: northstar_abuse_policy::GuardError,
 ) -> anyhow::Result<StoredApiResponse> {
     let requirement = error.requirement();
@@ -143,9 +139,9 @@ pub(crate) fn guard_denial_response(
     Ok(response)
 }
 
-pub(crate) struct AdminMutationAdmission<'a> {
-    pub(crate) authority: crate::services::api_queries::ApiReadAuthority<'a>,
-    pub(crate) idempotency: IdempotencyRequest<'a>,
+pub struct AdminMutationAdmission<'a> {
+    pub authority: northstar_auth_core::api_session::ApiReadAuthority<'a>,
+    pub idempotency: IdempotencyRequest<'a>,
 }
 
 /// Hash the exact media type and bytes consumed by a mutation handler. HTTP

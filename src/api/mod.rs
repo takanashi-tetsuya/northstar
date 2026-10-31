@@ -21,12 +21,12 @@ use crate::api::contexts::{
     MetricsContext, OmemoRecoveryPollContext, PasskeyLoginFinishContext, PublicDiscoveryContext,
     RetentionPolicyContext, UploadHttpReadContext,
 };
-use crate::services::api_mutations::{
-    api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest, IdempotentResponse,
-};
 use crate::state::AppState;
 use northstar_abuse_policy::AbuseAction;
 use northstar_auth_core as auth;
+use northstar_operations_core::api_mutations::{
+    api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest, IdempotentResponse,
+};
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::header::{HeaderMap, HeaderName, HeaderValue};
@@ -745,7 +745,7 @@ fn forwarded_client_ip(peer_ip: IpAddr, forwarded: &str, trusted: &[IpAddr]) -> 
 pub fn abuse_identity(
     action: AbuseAction,
     ip: IpAddr,
-    user: Option<&crate::services::api_queries::ApiPrincipal>,
+    user: Option<&northstar_auth_core::api_session::ApiPrincipal>,
 ) -> (String, Vec<String>) {
     if action == AbuseAction::Registration {
         return (format!("registration:{ip}"), vec![ip_actor(ip)]);
@@ -799,7 +799,7 @@ pub fn rate_limited(error: GuardError) -> AppError {
 }
 
 pub struct ApiUser {
-    user: crate::services::api_queries::ApiPrincipal,
+    user: northstar_auth_core::api_session::ApiPrincipal,
     session_token: zeroize::Zeroizing<String>,
 }
 
@@ -807,8 +807,8 @@ impl ApiUser {
     pub fn session_token(&self) -> &str {
         self.session_token.as_str()
     }
-    pub(crate) fn read_authority(&self) -> crate::services::api_queries::ApiReadAuthority<'_> {
-        crate::services::api_queries::ApiReadAuthority {
+    pub(crate) fn read_authority(&self) -> northstar_auth_core::api_session::ApiReadAuthority<'_> {
+        northstar_auth_core::api_session::ApiReadAuthority {
             user_id: self.id,
             auth_generation: self.auth_generation,
             session_token: self.session_token(),
@@ -817,7 +817,7 @@ impl ApiUser {
 }
 
 impl Deref for ApiUser {
-    type Target = crate::services::api_queries::ApiPrincipal;
+    type Target = northstar_auth_core::api_session::ApiPrincipal;
 
     fn deref(&self) -> &Self::Target {
         &self.user
@@ -848,13 +848,13 @@ pub struct ApiAdmin {
 }
 
 impl ApiAdmin {
-    pub(crate) fn read_authority(&self) -> crate::services::api_queries::ApiReadAuthority<'_> {
+    pub(crate) fn read_authority(&self) -> northstar_auth_core::api_session::ApiReadAuthority<'_> {
         self.user.read_authority()
     }
 }
 
 impl Deref for ApiAdmin {
-    type Target = crate::services::api_queries::ApiPrincipal;
+    type Target = northstar_auth_core::api_session::ApiPrincipal;
 
     fn deref(&self) -> &Self::Target {
         &self.user.user

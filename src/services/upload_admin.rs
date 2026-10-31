@@ -1,9 +1,7 @@
 //! Administrative upload recovery commands and their atomic repository boundary.
-use crate::services::{
-    api_mutations::{
-        api_request_fingerprint, AdminMutationAdmission, ApiMutationOutcome, StoredApiResponse,
-    },
-    api_queries::UploadDeadLetterId,
+use crate::services::api_queries::UploadDeadLetterId;
+use northstar_operations_core::api_mutations::{
+    api_request_fingerprint, AdminMutationAdmission, ApiMutationOutcome, StoredApiResponse,
 };
 
 pub(crate) trait UploadAdminRepository: Send + Sync {

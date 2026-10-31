@@ -81,7 +81,7 @@ impl Drop for User {
     }
 }
 
-pub use crate::services::api_queries::ApiPrincipal;
+pub use northstar_auth_core::api_session::ApiPrincipal;
 
 /// Verifier-free identity returned to externally triggered XMPP routing and
 /// profile/PubSub lookups. Disabled accounts are excluded by construction.

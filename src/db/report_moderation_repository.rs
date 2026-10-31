@@ -4,9 +4,10 @@ use crate::{
         self,
         admin_mutations::{AdminMutationStart, AdminMutationStore},
     },
-    services::{api_mutations::*, report_moderation::*},
+    services::report_moderation::*,
 };
 use anyhow::Result;
+use northstar_operations_core::api_mutations::*;
 
 #[derive(Clone)]
 pub(crate) struct PostgresReportModerationRepository {

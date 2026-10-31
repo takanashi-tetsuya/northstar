@@ -1,5 +1,6 @@
 use super::*;
-use crate::services::{api_mutations::*, api_queries::ApiReadAuthority};
+use northstar_auth_core::api_session::ApiReadAuthority;
+use northstar_operations_core::api_mutations::*;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,

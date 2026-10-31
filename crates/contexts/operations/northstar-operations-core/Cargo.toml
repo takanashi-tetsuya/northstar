@@ -1,0 +1,16 @@
+[package]
+name = "northstar-operations-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Pure contracts of Northstar's API command idempotency and operator input policy."
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
+northstar-auth-core = { path = "../../auth/northstar-auth-core" }
+serde_json = "1.0"
+sha2 = "0.10"
+uuid = { version = "1.12", features = ["v4"] }

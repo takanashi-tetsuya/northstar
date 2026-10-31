@@ -215,7 +215,7 @@ impl AccountRepository for PostgresAccountRepository {
                         &mut publication,
                         &lease,
                         201,
-                        &crate::services::api_mutations::json_replay_headers(),
+                        &northstar_operations_core::api_mutations::json_replay_headers(),
                         &body,
                     )
                     .await?,
@@ -255,7 +255,7 @@ impl AccountRepository for PostgresAccountRepository {
                         &mut publication,
                         &lease,
                         400,
-                        &crate::services::api_mutations::json_replay_headers(),
+                        &northstar_operations_core::api_mutations::json_replay_headers(),
                         &body,
                     )
                     .await?,
@@ -563,11 +563,11 @@ impl AccountRepository for PostgresAccountRepository {
 #[cfg(test)]
 mod registration_guard_tests {
     use super::*;
-    use crate::services::api_mutations::{
-        api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest,
-    };
     use base64::Engine as _;
     use northstar_abuse_policy::{AbuseAction, AbuseConfig, PowChallenge, PowIntent, PowProof};
+    use northstar_operations_core::api_mutations::{
+        api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest,
+    };
     use ring::rand::{SecureRandom, SystemRandom};
     use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -733,7 +733,7 @@ mod registration_guard_tests {
         assert_eq!(replayed.status, 201);
         assert_eq!(
             replayed.headers,
-            crate::services::api_mutations::json_replay_headers()
+            northstar_operations_core::api_mutations::json_replay_headers()
         );
         assert_eq!(replayed.body, created_body);
 
@@ -782,7 +782,7 @@ mod registration_guard_tests {
         assert_eq!(replayed.status, 400);
         assert_eq!(
             replayed.headers,
-            crate::services::api_mutations::json_replay_headers()
+            northstar_operations_core::api_mutations::json_replay_headers()
         );
         assert_eq!(replayed.body, rejected_body);
         pool.close().await;

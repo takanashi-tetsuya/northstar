@@ -1,5 +1,5 @@
 use super::*;
-use crate::services::api_queries::ApiReadAuthority;
+use northstar_auth_core::api_session::ApiReadAuthority;
 use serde_json::Value;
 use sqlx::Row;
 use std::sync::{

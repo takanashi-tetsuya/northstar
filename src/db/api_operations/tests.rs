@@ -178,13 +178,11 @@ async fn enqueue_broadcast(pool: &PgPool, max_attempts: i32) -> OperationRecord 
 #[tokio::test]
 #[ignore = "requires a random isolated TEST_DATABASE_URL PostgreSQL schema"]
 async fn command_port_rolls_back_without_response_and_reauthorizes_replays() {
-    use crate::services::{
-        api_mutations::{
-            AdminMutationAdmission, ApiMutationOutcome, ApiMutationRejection, ApiPrincipalKind,
-            IdempotencyRequest,
-        },
-        api_queries::ApiReadAuthority,
-        operations::OperationAdminService,
+    use crate::services::operations::OperationAdminService;
+    use northstar_auth_core::api_session::ApiReadAuthority;
+    use northstar_operations_core::api_mutations::{
+        AdminMutationAdmission, ApiMutationOutcome, ApiMutationRejection, ApiPrincipalKind,
+        IdempotencyRequest,
     };
     use std::sync::Arc;
 
@@ -329,7 +327,8 @@ async fn command_port_rolls_back_without_response_and_reauthorizes_replays() {
 #[tokio::test]
 #[ignore = "requires a random isolated TEST_DATABASE_URL PostgreSQL schema"]
 async fn query_ports_preserve_target_scope_and_authorization_denials() {
-    use crate::services::api_queries::{ApiQueryService, ApiReadAuthority, ApiReadDenial};
+    use crate::services::api_queries::{ApiQueryService, ApiReadDenial};
+    use northstar_auth_core::api_session::ApiReadAuthority;
 
     let pool = test_pool().await;
     let operation = enqueue_broadcast(&pool, 4).await;

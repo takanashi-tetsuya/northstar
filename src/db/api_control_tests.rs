@@ -124,7 +124,7 @@ fn tls_reload_command_replay_keeps_scope_and_key_rotation_bound_to_the_request()
         "status": "pending"
     }))
     .unwrap();
-    let headers = crate::services::api_mutations::json_replay_headers();
+    let headers = northstar_operations_core::api_mutations::json_replay_headers();
     let old_sealed = old
         .seal_admin_command_response(
             AdminCommandRoute::TlsReload,
@@ -261,7 +261,7 @@ fn registration_command_replay_is_route_and_status_bound() {
         .admin_command_hashes(&request, AdminCommandRoute::TlsReload)
         .is_err());
     let record_id = Uuid::new_v4();
-    let headers = crate::services::api_mutations::json_replay_headers();
+    let headers = northstar_operations_core::api_mutations::json_replay_headers();
     let body = br#"{"open_registration":false}"#;
     let sealed = keys
         .seal_admin_command_response(

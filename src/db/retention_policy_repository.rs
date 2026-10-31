@@ -1,8 +1,6 @@
 //! Complete authorization, retention policy and response replay transactions.
-use crate::{
-    db,
-    services::{api_mutations::*, retention_policy::*},
-};
+use crate::{db, services::retention_policy::*};
+use northstar_operations_core::api_mutations::*;
 use sqlx::{PgPool, Postgres, Transaction};
 use std::sync::Arc;
 use uuid::Uuid;

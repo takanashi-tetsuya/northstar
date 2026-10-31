@@ -83,14 +83,14 @@ pub async fn admin_update_user(
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        crate::services::api_mutations::ApiPrincipalKind::Admin,
+        northstar_operations_core::api_mutations::ApiPrincipalKind::Admin,
         "PATCH",
         "/api/v1/admin/users/{id}",
     );
     idempotency.target_scope = id.as_bytes();
     let outcome = state
         .update_user(
-            crate::services::api_mutations::AdminMutationAdmission {
+            northstar_operations_core::api_mutations::AdminMutationAdmission {
                 authority: actor.read_authority(),
                 idempotency,
             },
@@ -136,14 +136,14 @@ pub async fn admin_update_report(
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        crate::services::api_mutations::ApiPrincipalKind::Admin,
+        northstar_operations_core::api_mutations::ApiPrincipalKind::Admin,
         "PATCH",
         "/api/v1/admin/reports/{id}",
     );
     idempotency.target_scope = id.as_bytes();
     let outcome = state
         .update_report(
-            crate::services::api_mutations::AdminMutationAdmission {
+            northstar_operations_core::api_mutations::AdminMutationAdmission {
                 authority: actor.read_authority(),
                 idempotency,
             },
@@ -164,14 +164,14 @@ pub async fn admin_update_appeal(
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        crate::services::api_mutations::ApiPrincipalKind::Admin,
+        northstar_operations_core::api_mutations::ApiPrincipalKind::Admin,
         "PATCH",
         "/api/v1/admin/appeals/{id}",
     );
     idempotency.target_scope = id.as_bytes();
     let outcome = state
         .update_appeal(
-            crate::services::api_mutations::AdminMutationAdmission {
+            northstar_operations_core::api_mutations::AdminMutationAdmission {
                 authority: actor.read_authority(),
                 idempotency,
             },
@@ -184,11 +184,11 @@ pub async fn admin_update_appeal(
 }
 
 fn admin_mutation_response(
-    outcome: crate::services::api_mutations::ApiMutationOutcome<
-        crate::services::api_mutations::StoredApiResponse,
+    outcome: northstar_operations_core::api_mutations::ApiMutationOutcome<
+        northstar_operations_core::api_mutations::StoredApiResponse,
     >,
 ) -> Result<Response, AppError> {
-    use crate::services::api_mutations::ApiMutationOutcome;
+    use northstar_operations_core::api_mutations::ApiMutationOutcome;
     match outcome {
         ApiMutationOutcome::Committed(response) => idempotency::stored_api_response(response),
         ApiMutationOutcome::Replay(response) => idempotency_replay_response(response),
@@ -204,15 +204,17 @@ pub async fn admin_tls_reload(
     let idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        crate::services::api_mutations::ApiPrincipalKind::Admin,
+        northstar_operations_core::api_mutations::ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/tls/reload",
     );
     let outcome = state
-        .reload_tls(crate::services::api_mutations::AdminMutationAdmission {
-            authority: actor.read_authority(),
-            idempotency,
-        })
+        .reload_tls(
+            northstar_operations_core::api_mutations::AdminMutationAdmission {
+                authority: actor.read_authority(),
+                idempotency,
+            },
+        )
         .await?;
     admin_mutation_response(outcome)
 }
@@ -248,14 +250,14 @@ pub async fn admin_create_invitation(
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        crate::services::api_mutations::ApiPrincipalKind::Admin,
+        northstar_operations_core::api_mutations::ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/invitations",
     );
     idempotency.target_scope = b"invitation:create";
     let outcome = state
         .create(
-            crate::services::api_mutations::AdminMutationAdmission {
+            northstar_operations_core::api_mutations::AdminMutationAdmission {
                 authority: actor.read_authority(),
                 idempotency,
             },
@@ -278,14 +280,14 @@ pub async fn admin_revoke_invitation(
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        crate::services::api_mutations::ApiPrincipalKind::Admin,
+        northstar_operations_core::api_mutations::ApiPrincipalKind::Admin,
         "DELETE",
         "/api/v1/admin/invitations/{id}",
     );
     idempotency.target_scope = id.as_bytes();
     let outcome = state
         .revoke(
-            crate::services::api_mutations::AdminMutationAdmission {
+            northstar_operations_core::api_mutations::AdminMutationAdmission {
                 authority: actor.read_authority(),
                 idempotency,
             },
@@ -312,15 +314,17 @@ pub async fn admin_panic_disconnect(
     let idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        crate::services::api_mutations::ApiPrincipalKind::Admin,
+        northstar_operations_core::api_mutations::ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/panic_disconnect",
     );
     let outcome = state
-        .panic_disconnect(crate::services::api_mutations::AdminMutationAdmission {
-            authority: actor.read_authority(),
-            idempotency,
-        })
+        .panic_disconnect(
+            northstar_operations_core::api_mutations::AdminMutationAdmission {
+                authority: actor.read_authority(),
+                idempotency,
+            },
+        )
         .await?;
     admin_mutation_response(outcome)
 }
@@ -333,14 +337,14 @@ pub async fn admin_toggle_island_mode(
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        crate::services::api_mutations::ApiPrincipalKind::Admin,
+        northstar_operations_core::api_mutations::ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/island_mode",
     );
     idempotency.target_scope = b"island_mode";
     let outcome = state
         .set_island_mode(
-            crate::services::api_mutations::AdminMutationAdmission {
+            northstar_operations_core::api_mutations::AdminMutationAdmission {
                 authority: actor.read_authority(),
                 idempotency,
             },
@@ -358,14 +362,14 @@ pub async fn admin_toggle_registration(
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        crate::services::api_mutations::ApiPrincipalKind::Admin,
+        northstar_operations_core::api_mutations::ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/registration",
     );
     idempotency.target_scope = b"registration_closed";
     let outcome = state
         .set_registration(
-            crate::services::api_mutations::AdminMutationAdmission {
+            northstar_operations_core::api_mutations::AdminMutationAdmission {
                 authority: actor.read_authority(),
                 idempotency,
             },
@@ -414,14 +418,14 @@ pub async fn admin_kick_session(
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        crate::services::api_mutations::ApiPrincipalKind::Admin,
+        northstar_operations_core::api_mutations::ApiPrincipalKind::Admin,
         "DELETE",
         "/api/v1/admin/sessions/{connection_id}",
     );
     idempotency.target_scope = target.as_bytes();
     let outcome = state
         .kick_session(
-            crate::services::api_mutations::AdminMutationAdmission {
+            northstar_operations_core::api_mutations::AdminMutationAdmission {
                 authority: actor.read_authority(),
                 idempotency,
             },
@@ -451,16 +455,18 @@ pub async fn admin_clear_offline_messages(
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        crate::services::api_mutations::ApiPrincipalKind::Admin,
+        northstar_operations_core::api_mutations::ApiPrincipalKind::Admin,
         "DELETE",
         "/api/v1/admin/offline_messages",
     );
     idempotency.target_scope = b"offline_messages";
     let outcome = state
-        .clear_offline_messages(crate::services::api_mutations::AdminMutationAdmission {
-            authority: actor.read_authority(),
-            idempotency,
-        })
+        .clear_offline_messages(
+            northstar_operations_core::api_mutations::AdminMutationAdmission {
+                authority: actor.read_authority(),
+                idempotency,
+            },
+        )
         .await?;
     admin_mutation_response(outcome)
 }
@@ -516,14 +522,14 @@ pub async fn admin_destroy_muc_room(
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        crate::services::api_mutations::ApiPrincipalKind::Admin,
+        northstar_operations_core::api_mutations::ApiPrincipalKind::Admin,
         "DELETE",
         "/api/v1/admin/muc_rooms/{localpart}",
     );
     idempotency.target_scope = room.room_jid().as_bytes();
     let outcome = state
         .destroy_room(
-            crate::services::api_mutations::AdminMutationAdmission {
+            northstar_operations_core::api_mutations::AdminMutationAdmission {
                 authority: actor.read_authority(),
                 idempotency,
             },
@@ -541,13 +547,13 @@ pub async fn admin_broadcast(
     let idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        crate::services::api_mutations::ApiPrincipalKind::Admin,
+        northstar_operations_core::api_mutations::ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/broadcast",
     );
     let outcome = state
         .broadcast(
-            crate::services::api_mutations::AdminMutationAdmission {
+            northstar_operations_core::api_mutations::AdminMutationAdmission {
                 authority: actor.read_authority(),
                 idempotency,
             },
@@ -559,10 +565,10 @@ pub async fn admin_broadcast(
 
 #[cfg(test)]
 mod tests {
-    use crate::services::report_moderation::valid_administrative_text as valid_admin_text;
     use axum::body::Body;
     use axum::extract::FromRequest;
     use axum::http::{HeaderValue, Request};
+    use northstar_operations_core::text::valid_administrative_text as valid_admin_text;
 
     use crate::api::ApiEmpty;
 

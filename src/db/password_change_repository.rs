@@ -3,17 +3,16 @@
 
 use crate::{
     db,
-    services::{
-        api_mutations::{self, StoredApiResponse},
-        password_change::{
-            DisconnectedAccount, PasswordChangeCommand, PasswordChangePolicy,
-            PasswordChangeRepository, PasswordChangeResult,
-        },
+    services::password_change::{
+        DisconnectedAccount, PasswordChangeCommand, PasswordChangePolicy, PasswordChangeRepository,
+        PasswordChangeResult,
     },
 };
 use anyhow::{Context, Result};
 use northstar_abuse_application::guard::{AbuseGuard, TransactionalGuardOutcome};
 use northstar_abuse_policy::AbuseAction;
+use northstar_operations_core::api_mutations;
+use northstar_operations_core::api_mutations::StoredApiResponse;
 use sqlx::{PgPool, Postgres, Transaction};
 use std::sync::Arc;
 
@@ -362,11 +361,11 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::{
-        api_mutations::{api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest},
-        password_change::PasswordChangeService,
-    };
+    use crate::services::password_change::PasswordChangeService;
     use northstar_abuse_policy::{AbuseConfig, PowIntent};
+    use northstar_operations_core::api_mutations::{
+        api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest,
+    };
     use std::{net::IpAddr, time::Duration};
     use uuid::Uuid;
 

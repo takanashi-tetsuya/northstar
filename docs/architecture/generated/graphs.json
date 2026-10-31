@@ -2294,6 +2294,30 @@
         "uuid"
       ],
       [
+        "northstar-operations-core",
+        "anyhow"
+      ],
+      [
+        "northstar-operations-core",
+        "northstar-abuse-policy"
+      ],
+      [
+        "northstar-operations-core",
+        "northstar-auth-core"
+      ],
+      [
+        "northstar-operations-core",
+        "serde_json"
+      ],
+      [
+        "northstar-operations-core",
+        "sha2"
+      ],
+      [
+        "northstar-operations-core",
+        "uuid"
+      ],
+      [
         "northstar-postgres",
         "anyhow"
       ],
@@ -4624,6 +4648,10 @@
       [
         "rust-xmpp-server",
         "northstar-message-core"
+      ],
+      [
+        "rust-xmpp-server",
+        "northstar-operations-core"
       ],
       [
         "rust-xmpp-server",
@@ -7118,6 +7146,7 @@
       "northstar-federation-core",
       "northstar-message-application",
       "northstar-message-core",
+      "northstar-operations-core",
       "northstar-postgres",
       "northstar-presence-core",
       "northstar-protocol-runtime",

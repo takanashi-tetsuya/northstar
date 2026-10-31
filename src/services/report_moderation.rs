@@ -1,7 +1,8 @@
 //! Validation and command ports for report and appeal moderation.
-use crate::services::api_mutations::{
+use northstar_operations_core::api_mutations::{
     AdminMutationAdmission, ApiMutationOutcome, ApiMutationRejection, StoredApiResponse,
 };
+use northstar_operations_core::text::valid_administrative_text;
 use uuid::Uuid;
 
 pub(crate) struct ModerationCommand<'a> {
@@ -105,23 +106,6 @@ fn appeal_validation_error(status: &str, resolution: &str) -> Option<&'static st
         return Some("a resolution is required when resolving an appeal");
     }
     None
-}
-
-pub(crate) fn valid_administrative_text(
-    value: &str,
-    max_chars: usize,
-    max_bytes: usize,
-    multiline: bool,
-) -> bool {
-    !value.is_empty()
-        && value.len() <= max_bytes
-        && value.chars().count() <= max_chars
-        && value.chars().all(|character| {
-            let code = character as u32;
-            let allowed_space = multiline && matches!(character, '\t' | '\n' | '\r');
-            (allowed_space || !(code <= 0x1f || (0x7f..=0x9f).contains(&code)))
-                && !(0x202a..=0x202e).contains(&code)
-        })
 }
 
 #[cfg(test)]

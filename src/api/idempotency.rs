@@ -1,6 +1,6 @@
 use crate::api::error::AppError;
-use crate::services::api_mutations::StoredApiResponse;
 use axum::{body::Body, response::Response};
+use northstar_operations_core::api_mutations::StoredApiResponse;
 
 pub(crate) fn stored_api_response(stored: StoredApiResponse) -> Result<Response, AppError> {
     let mut response = Response::builder().status(stored.status);
@@ -13,9 +13,9 @@ pub(crate) fn stored_api_response(stored: StoredApiResponse) -> Result<Response,
 }
 
 pub(crate) fn mutation_rejection(
-    rejection: crate::services::api_mutations::ApiMutationRejection,
+    rejection: northstar_operations_core::api_mutations::ApiMutationRejection,
 ) -> AppError {
-    use crate::services::api_mutations::ApiMutationRejection;
+    use northstar_operations_core::api_mutations::ApiMutationRejection;
     match rejection {
         ApiMutationRejection::Unauthorized => AppError::Unauthorized,
         ApiMutationRejection::Forbidden => AppError::Forbidden,

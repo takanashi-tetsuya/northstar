@@ -204,6 +204,16 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-operations-core
+    package: northstar-operations-core
+    path: crates/contexts/operations/northstar-operations-core
+    tier: context
+    context: operations
+    role: core
+    owner_team: platform
+    api_stability: internal-stable
+    publish_policy: never
+
   - crate_id: northstar-postgres
     package: northstar-postgres
     path: crates/platform/northstar-postgres

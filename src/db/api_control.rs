@@ -1,9 +1,9 @@
-#[cfg(test)]
-pub use crate::services::api_mutations::{api_request_fingerprint, ApiPrincipalKind};
-pub use crate::services::api_mutations::{IdempotencyRequest, IdempotentResponse};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
+#[cfg(test)]
+pub use northstar_operations_core::api_mutations::{api_request_fingerprint, ApiPrincipalKind};
+pub use northstar_operations_core::api_mutations::{IdempotencyRequest, IdempotentResponse};
 use rand::RngCore;
 use ring::aead;
 use sha2::{Digest, Sha256};

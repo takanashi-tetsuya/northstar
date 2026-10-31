@@ -142,7 +142,7 @@ async fn postgres_retry_idempotency_replay_target_generation_and_not_found_contr
         &mut tx,
         &lease,
         StatusCode::ACCEPTED.as_u16(),
-        &crate::services::api_mutations::json_replay_headers(),
+        &northstar_operations_core::api_mutations::json_replay_headers(),
         response_body.as_bytes(),
     )
     .await
@@ -264,7 +264,7 @@ async fn postgres_retry_idempotency_replay_target_generation_and_not_found_contr
         &mut missing_tx,
         &missing_lease,
         StatusCode::NOT_FOUND.as_u16(),
-        &crate::services::api_mutations::json_replay_headers(),
+        &northstar_operations_core::api_mutations::json_replay_headers(),
         missing_body,
     )
     .await

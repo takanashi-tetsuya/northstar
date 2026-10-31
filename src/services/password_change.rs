@@ -1,8 +1,10 @@
 //! Complete REST password-change command and transport-neutral outcomes.
 
-use crate::services::api_mutations::{IdempotencyRequest, IdempotentResponse, StoredApiResponse};
 use anyhow::Result;
 use northstar_abuse_policy::{PowIntent, PowProof};
+use northstar_operations_core::api_mutations::{
+    IdempotencyRequest, IdempotentResponse, StoredApiResponse,
+};
 use std::net::IpAddr;
 use uuid::Uuid;
 

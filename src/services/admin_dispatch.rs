@@ -1,5 +1,5 @@
 //! Typed administrative intents for the durable operation journal.
-use crate::services::api_mutations::{
+use northstar_operations_core::api_mutations::{
     AdminMutationAdmission, ApiMutationOutcome, ApiMutationRejection, StoredApiResponse,
 };
 

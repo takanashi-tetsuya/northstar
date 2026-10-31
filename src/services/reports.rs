@@ -1,5 +1,5 @@
 //! Report and appeal validation; repositories own authorization, proof and replay commits.
-use crate::services::api_mutations::{
+use northstar_operations_core::api_mutations::{
     ApiMutationOutcome, StoredApiResponse, UserMutationAdmission,
 };
 use std::collections::HashSet;

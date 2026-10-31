@@ -7,9 +7,10 @@ use crate::{
             AdminOperationIntent,
         },
     },
-    services::{admin_dispatch::*, api_mutations::*, operations::AuthorizationPolicy},
+    services::{admin_dispatch::*, operations::AuthorizationPolicy},
 };
 use anyhow::Result;
+use northstar_operations_core::api_mutations::*;
 use serde_json::json;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;

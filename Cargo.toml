@@ -9,6 +9,7 @@ members = [
     "crates/kernel/northstar-xep-0045",
     "crates/kernel/northstar-xep-0016",
     "crates/contexts/auth/northstar-auth-core",
+    "crates/contexts/operations/northstar-operations-core",
     "crates/kernel/northstar-xmpp-types",
     "crates/kernel/northstar-xml-framing",
     "crates/kernel/northstar-xml-builder",
@@ -155,6 +156,7 @@ northstar-xep-catalog = { path = "crates/kernel/northstar-xep-catalog" }
 northstar-xep-0045 = { path = "crates/kernel/northstar-xep-0045" }
 northstar-xep-0016 = { path = "crates/kernel/northstar-xep-0016" }
 northstar-auth-core = { path = "crates/contexts/auth/northstar-auth-core" }
+northstar-operations-core = { path = "crates/contexts/operations/northstar-operations-core" }
 northstar-xmpp-types = { path = "crates/kernel/northstar-xmpp-types" }
 northstar-xml-framing = { path = "crates/kernel/northstar-xml-framing" }
 northstar-xml-builder = { path = "crates/kernel/northstar-xml-builder" }

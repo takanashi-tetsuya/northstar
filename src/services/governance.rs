@@ -1,9 +1,9 @@
 //! Complete legal-hold and governance-export use cases.
-use crate::services::{
-    api_mutations::{AdminMutationAdmission, ApiMutationOutcome, StoredApiResponse},
-    api_queries::ApiReadAuthority,
-};
 use chrono::{DateTime, Utc};
+use northstar_auth_core::api_session::ApiReadAuthority;
+use northstar_operations_core::api_mutations::{
+    AdminMutationAdmission, ApiMutationOutcome, StoredApiResponse,
+};
 use serde::Serialize;
 use uuid::Uuid;
 

@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod api_session;
 pub mod channel_binding;
 pub mod fast;
 pub mod password;

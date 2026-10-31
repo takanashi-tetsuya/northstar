@@ -2020,6 +2020,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-operations-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "northstar-abuse-policy",
+ "northstar-auth-core",
+ "serde_json",
+ "sha2",
+ "uuid",
+]
+
+[[package]]
 name = "northstar-postgres"
 version = "0.1.0"
 dependencies = [
@@ -3460,6 +3472,7 @@ dependencies = [
  "northstar-federation-core",
  "northstar-message-application",
  "northstar-message-core",
+ "northstar-operations-core",
  "northstar-postgres",
  "northstar-presence-core",
  "northstar-protocol-runtime",

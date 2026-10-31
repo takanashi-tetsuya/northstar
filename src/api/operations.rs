@@ -1,5 +1,5 @@
 use super::idempotency::{mutation_rejection, stored_api_response};
-use crate::services::api_mutations::{
+use northstar_operations_core::api_mutations::{
     AdminMutationAdmission, ApiMutationOutcome, ApiPrincipalKind, StoredApiResponse,
 };
 

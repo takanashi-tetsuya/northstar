@@ -1,5 +1,5 @@
 use super::*;
-use crate::services::api_mutations::json_replay_headers;
+use northstar_operations_core::api_mutations::json_replay_headers;
 
 #[test]
 fn public_and_administrator_static_manifests_are_explicitly_isolated() {

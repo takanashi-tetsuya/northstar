@@ -2347,7 +2347,7 @@ for (const [name, source] of [
   ['ApiQueryService', read('src/services/api_queries.rs')],
   ['ApiQueryContext', read('src/api/contexts/api_queries.rs')],
   ['HTTP entry and public discovery policies', read('src/api/contexts/http_policy.rs')],
-  ['API mutation values', read('src/services/api_mutations.rs')],
+  ['API mutation values', read('crates/contexts/operations/northstar-operations-core/src/api_mutations.rs')],
   ['ReportService', read('src/services/reports.rs')],
   ['ReportContext', read('src/api/contexts/reports.rs')],
   ['AccountAdminServices', read('src/services/account_admin.rs')],

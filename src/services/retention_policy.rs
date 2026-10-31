@@ -1,5 +1,7 @@
 //! Account and room retention policies, including the operator's upper bounds.
-use crate::services::api_mutations::{ApiMutationOutcome, IdempotencyRequest, StoredApiResponse};
+use northstar_operations_core::api_mutations::{
+    ApiMutationOutcome, IdempotencyRequest, StoredApiResponse,
+};
 use serde::Serialize;
 use uuid::Uuid;
 

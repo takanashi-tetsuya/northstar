@@ -597,7 +597,7 @@ impl ProtocolSession {
             // advertised only while that flow can actually be selected.
             features.push("jabber:iq:register");
             if !self.state.registration_is_closed() {
-                features.push(super::ibr::IBR2_NS);
+                features.push(northstar_auth_xmpp::ibr::IBR2_NS);
             }
             if super::commands::available_to(self).await? {
                 features.push("http://jabber.org/protocol/commands");

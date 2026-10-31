@@ -169,7 +169,7 @@ impl ProtocolSession {
                 if query.children().filter(|node| node.is_element()).count() != 1 {
                     return Ok(Action::Send(iq_registration_error(id, "bad-request")));
                 }
-                let fields = match strict_xdata_submit(
+                let fields = match northstar_xml_builder::xdata::strict_xdata_submit(
                     x_form,
                     "jabber:iq:register",
                     &[

@@ -1,31 +1,6 @@
-//! Render authentication features and outcomes and handle FAST proofs, rotation planning, and mechanism availability.
+//! Render authentication features and handle FAST proofs, rotation planning, and mechanism availability.
 
 use super::*;
-
-pub(crate) fn failure_xml(condition: &str, text: Option<&str>) -> String {
-    let condition = XmlElement::dynamic(condition)
-        .expect("SASL error condition must be a valid QName")
-        .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-sasl");
-    let mut failure = XmlElement::namespaced("failure", SASL2_NS).child(condition);
-    if let Some(text) = text {
-        failure.push_child(XmlElement::new("text").text(text.to_owned()));
-    }
-    failure.finish()
-}
-
-pub(super) fn fast_token_xml(
-    issued: &northstar_auth_application::authentication::IssuedFastToken,
-) -> String {
-    XmlElement::namespaced("token", FAST_NS)
-        .attr(
-            "expiry",
-            issued
-                .expires_at
-                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        )
-        .attr("token", issued.token.as_str())
-        .finish()
-}
 
 pub(crate) fn authentication_feature_xml(session: &ProtocolSession) -> String {
     let fast_policy = session.state.sasl2_fast_token_policy();
@@ -94,60 +69,6 @@ pub(crate) fn authentication_feature_xml(session: &ProtocolSession) -> String {
         inline.push_child(fast);
     }
     authentication.child(inline).finish()
-}
-
-pub(super) fn sasl2_success_xml(
-    additional_data: Option<&[u8]>,
-    authorization_identifier: &str,
-    extension_fragments: &[&str],
-) -> Result<String> {
-    use base64::Engine;
-
-    let mut success = XmlElement::namespaced("success", SASL2_NS);
-    if let Some(data) = additional_data.filter(|data| !data.is_empty()) {
-        success.push_child(
-            XmlElement::new("additional-data")
-                .text(base64::engine::general_purpose::STANDARD.encode(data)),
-        );
-    }
-    success.push_child(
-        XmlElement::new("authorization-identifier").text(authorization_identifier.to_owned()),
-    );
-    for fragment in extension_fragments
-        .iter()
-        .copied()
-        .filter(|fragment| !fragment.is_empty())
-    {
-        success.push_validated_fragment(fragment)?;
-    }
-    Ok(success.finish())
-}
-
-pub(super) fn inline_resume_envelope_reservation_bytes(
-    additional_data: Option<&[u8]>,
-    authorization_identifier: &str,
-    resumed_control: &str,
-    token_xml: &str,
-    features: &String,
-) -> Option<usize> {
-    // XML text escaping expands one UTF-8 byte by at most six bytes. Standard
-    // Base64 is exactly four bytes per three-byte block. The fixed allowance
-    // covers element names/namespaces and String growth; multiplying the
-    // serialized upper bound by four also dominates allocator capacity
-    // rounding before the actual capacity is verified by ResumePayload.
-    let encoded = match additional_data.filter(|data| !data.is_empty()) {
-        Some(data) => data.len().checked_add(2)?.checked_div(3)?.checked_mul(4)?,
-        None => 0,
-    };
-    let serialized_upper = 4_096usize
-        .checked_add(authorization_identifier.len().checked_mul(6)?)?
-        .checked_add(encoded)?
-        .checked_add(resumed_control.len())?
-        .checked_add(token_xml.len())?;
-    serialized_upper
-        .checked_mul(4)?
-        .checked_add(std::mem::size_of::<String>())?
-        .checked_add(features.capacity())
 }
 
 impl ProtocolSession {

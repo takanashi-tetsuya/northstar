@@ -470,7 +470,7 @@ fn control_xml(control: &wire::ControlInput) -> Result<String> {
             ))
         }
         wire::ControlInput::UnboundFast(control) => {
-            crate::xmpp::protocol::sasl2::stage4_saved_success_xml(
+            northstar_auth_xmpp::sasl2::stage4_saved_success_xml(
                 control.authorization_identifier.as_str(),
             )
         }

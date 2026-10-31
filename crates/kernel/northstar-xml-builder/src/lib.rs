@@ -5,6 +5,7 @@
 pub mod escape;
 pub mod rewrite;
 pub mod stanza;
+pub mod xdata;
 
 use anyhow::{bail, Context, Result};
 use std::borrow::Cow;

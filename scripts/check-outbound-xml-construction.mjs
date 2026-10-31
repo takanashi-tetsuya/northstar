@@ -50,6 +50,8 @@ const BASELINE = new Map([
   ['src/s2s/outbound.rs', 0],
   ['src/s2s/sm.rs', 0],
   ['src/xmpp/protocol/ibr.rs', 0],
+  ['crates/contexts/auth/northstar-auth-xmpp/src/ibr.rs', 0],
+  ['crates/contexts/auth/northstar-auth-xmpp/src/sasl2.rs', 0],
 ]);
 
 // This entry's directory holds independently owned modules, so it checks
@@ -71,7 +73,7 @@ const EXCLUDED_CHILD_MODULES = new Map([
 const STATIC_LITERAL_ALLOWLIST = [
   {
     file: 'src/xmpp/protocol/sasl2.rs',
-    line: 136,
+    line: 24,
     literal: '</stream:stream>',
     reason: 'parser-only synthetic close used to validate a stream opening element',
   },
@@ -406,9 +408,9 @@ if (findings('self-test.rs', splitProductionSelfTest).length !== 2) {
 // The parser-only exemption is pinned independently of the allowlist:
 // exact file, line and literal must match; each single-field change fails closed.
 // These bounded in-memory controls perform no filesystem probes or TAP registration.
-const parserLiteralSelfTest = '\n'.repeat(135) + 'fn parser_input() { let closing = "</stream:stream>"; }\n';
+const parserLiteralSelfTest = '\n'.repeat(23) + 'fn parser_input() { let closing = "</stream:stream>"; }\n';
 if (findings('src/xmpp/protocol/sasl2.rs', parserLiteralSelfTest).length !== 0) {
-  throw new Error('outbound XML detector rejected the exact parser-only literal at line 136');
+  throw new Error('outbound XML detector rejected the exact parser-only literal at line 24');
 }
 const movedParserLiteralSelfTest = findings(
   'src/xmpp/protocol/sasl2.rs',
@@ -416,7 +418,7 @@ const movedParserLiteralSelfTest = findings(
 );
 if (
   movedParserLiteralSelfTest.length !== 1 ||
-  movedParserLiteralSelfTest[0].line !== 137 ||
+  movedParserLiteralSelfTest[0].line !== 25 ||
   movedParserLiteralSelfTest[0].value !== '</stream:stream>'
 ) {
   throw new Error('outbound XML detector exempted the parser-only literal after a line move');
@@ -424,7 +426,7 @@ if (
 const wrongFileParserLiteralSelfTest = findings('self-test.rs', parserLiteralSelfTest);
 if (
   wrongFileParserLiteralSelfTest.length !== 1 ||
-  wrongFileParserLiteralSelfTest[0].line !== 136 ||
+  wrongFileParserLiteralSelfTest[0].line !== 24 ||
   wrongFileParserLiteralSelfTest[0].value !== '</stream:stream>'
 ) {
   throw new Error('outbound XML detector exempted the parser-only literal in a different file');
@@ -435,7 +437,7 @@ const wrongValueParserLiteralSelfTest = findings(
 );
 if (
   wrongValueParserLiteralSelfTest.length !== 1 ||
-  wrongValueParserLiteralSelfTest[0].line !== 136 ||
+  wrongValueParserLiteralSelfTest[0].line !== 24 ||
   wrongValueParserLiteralSelfTest[0].value !== '</stream:other>'
 ) {
   throw new Error('outbound XML detector exempted a different literal at the parser-only anchor');

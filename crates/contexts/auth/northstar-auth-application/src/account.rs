@@ -5,7 +5,8 @@
 //! invitation, credential or deletion transaction.
 
 use anyhow::Result;
-use northstar_abuse_policy::{GuardError, PowIntent, PowProof, WorkRequirement};
+pub use northstar_abuse_policy::PowProof;
+use northstar_abuse_policy::{GuardError, PowIntent, WorkRequirement};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,

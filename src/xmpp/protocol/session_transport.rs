@@ -331,7 +331,7 @@ impl ProtocolSession {
                 &XmlElement::namespaced("register", "http://jabber.org/features/iq-register")
                     .finish(),
             );
-            register.push_str(&ibr::ibr_stream_feature());
+            register.push_str(&northstar_auth_xmpp::ibr::ibr_stream_feature());
         }
         let mut features = stream_features_element();
         if let Some(bindings) = self.channel_bindings.as_ref() {

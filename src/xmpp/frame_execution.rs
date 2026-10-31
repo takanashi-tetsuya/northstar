@@ -217,7 +217,7 @@ fn is_inline_auth(frame: &str) -> bool {
     };
     let root = document.root_element();
     root.tag_name().name() == "authenticate"
-        && root.tag_name().namespace() == Some(super::protocol::sasl2::SASL2_NS)
+        && root.tag_name().namespace() == Some(northstar_auth_xmpp::sasl2::SASL2_NS)
         && root.children().any(|child| {
             child.is_element()
                 && matches!(

@@ -1,6 +1,7 @@
 //! Run legacy SASL authentication, certificate admission, abuse handling and authentication replies.
 
 use super::*;
+use northstar_auth_xmpp::sasl2::{legacy_sasl_auth, legacy_sasl_payload};
 
 impl ProtocolSession {
     pub(in crate::xmpp) fn auth_replies(&mut self, replies: Vec<String>) -> Result<Action> {
@@ -160,7 +161,7 @@ impl ProtocolSession {
                 )
                 .await;
         };
-        let payload = match sasl2::normalize_base64_payload(payload) {
+        let payload = match northstar_auth_xmpp::sasl2::normalize_base64_payload(payload) {
             Ok(payload) => payload,
             Err(condition) => {
                 return Ok(Action::Send(failure(
@@ -190,7 +191,7 @@ impl ProtocolSession {
                 "not-authorized",
             )));
         }
-        let payload = match sasl2::normalize_base64_payload(payload) {
+        let payload = match northstar_auth_xmpp::sasl2::normalize_base64_payload(payload) {
             Ok(payload) => payload,
             Err(condition) => {
                 self.sasl_state = None;
@@ -461,7 +462,10 @@ impl ProtocolSession {
                         self.sasl_state = None;
                         self.legacy_sasl_awaiting_initial_response = false;
                         if self.sasl2_state.take().is_some() {
-                            Ok(Action::Send(sasl2::failure_xml("not-authorized", None)))
+                            Ok(Action::Send(northstar_auth_xmpp::sasl2::failure_xml(
+                                "not-authorized",
+                                None,
+                            )))
                         } else {
                             Ok(Action::Send(failure(
                                 "urn:ietf:params:xml:ns:xmpp-sasl",
@@ -476,7 +480,7 @@ impl ProtocolSession {
                 let b64 = base64::engine::general_purpose::STANDARD.encode(challenge_data);
                 self.sasl_state = Some(sasl_mech);
                 let namespace = if self.sasl2_state.is_some() {
-                    sasl2::SASL2_NS
+                    northstar_auth_xmpp::sasl2::SASL2_NS
                 } else {
                     "urn:ietf:params:xml:ns:xmpp-sasl"
                 };
@@ -509,7 +513,9 @@ impl ProtocolSession {
                     .c2s_authentication_telemetry()
                     .authentication_failed();
                 if self.sasl2_state.take().is_some() {
-                    Ok(Action::Send(sasl2::failure_xml(condition, None)))
+                    Ok(Action::Send(northstar_auth_xmpp::sasl2::failure_xml(
+                        condition, None,
+                    )))
                 } else {
                     Ok(Action::Send(failure(
                         "urn:ietf:params:xml:ns:xmpp-sasl",
@@ -551,7 +557,7 @@ impl ProtocolSession {
         self.sasl_scram_fence = None;
         self.state.c2s_authentication_telemetry().rate_limited();
         if self.sasl2_state.take().is_some() {
-            Action::Send(sasl2::failure_xml(
+            Action::Send(northstar_auth_xmpp::sasl2::failure_xml(
                 "temporary-auth-failure",
                 Some("login rate limit active; retry after cooldown"),
             ))
@@ -583,7 +589,10 @@ impl ProtocolSession {
             "XMPP authentication backend failed"
         );
         if self.sasl2_state.take().is_some() {
-            Action::Send(sasl2::failure_xml("temporary-auth-failure", None))
+            Action::Send(northstar_auth_xmpp::sasl2::failure_xml(
+                "temporary-auth-failure",
+                None,
+            ))
         } else {
             Action::Send(failure(
                 "urn:ietf:params:xml:ns:xmpp-sasl",
@@ -591,44 +600,4 @@ impl ProtocolSession {
             ))
         }
     }
-}
-
-pub(super) fn legacy_sasl_auth(root: Node<'_, '_>) -> Option<(String, Option<Zeroizing<String>>)> {
-    if root.tag_name().name() != "auth"
-        || root.tag_name().namespace() != Some("urn:ietf:params:xml:ns:xmpp-sasl")
-        || root
-            .attributes()
-            .any(|attribute| attribute.namespace().is_some() || attribute.name() != "mechanism")
-        || root.children().any(|child| child.is_element())
-    {
-        return None;
-    }
-    let mechanism = root.attribute("mechanism")?;
-    let text_nodes = root
-        .children()
-        .filter(|child| child.is_text())
-        .filter_map(|child| child.text())
-        .collect::<Vec<_>>();
-    let payload = (!text_nodes.is_empty()).then(|| Zeroizing::new(text_nodes.concat()));
-    if mechanism.is_empty()
-        || mechanism.len() > 128
-        || payload
-            .as_ref()
-            .is_some_and(|payload| payload.len() > 65_536)
-    {
-        return None;
-    }
-    Some((mechanism.to_owned(), payload))
-}
-
-pub(super) fn legacy_sasl_payload(root: Node<'_, '_>) -> Option<Zeroizing<String>> {
-    if root.attributes().len() != 0 || root.children().any(|child| child.is_element()) {
-        return None;
-    }
-    let payload = root
-        .children()
-        .filter(|child| child.is_text())
-        .filter_map(|child| child.text())
-        .collect::<String>();
-    (payload.len() <= 65_536).then(|| Zeroizing::new(payload))
 }

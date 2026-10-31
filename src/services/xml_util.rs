@@ -11,7 +11,7 @@ use northstar_xmpp_types::jid_text::bare_jid;
 pub(crate) use northstar_xmpp_types::text::valid_language_tag;
 use roxmltree::{Document, Node};
 use sha2::Sha256;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 mod message_validation;
 mod muc;
@@ -69,86 +69,6 @@ pub(crate) fn xdata_value_field(
         .attr("var", variable)
         .attr("type", kind)
         .child(XmlElement::new("value").text(value.to_string()))
-}
-
-pub(crate) fn strict_xdata_submit(
-    form: Node<'_, '_>,
-    expected_form_type: &str,
-    allowed_fields: &[&str],
-) -> std::result::Result<HashMap<String, String>, ()> {
-    if form.tag_name().name() != "x"
-        || form.tag_name().namespace() != Some("jabber:x:data")
-        || form.attribute("type") != Some("submit")
-        || form
-            .attributes()
-            .any(|attribute| attribute.name() != "type")
-        || form.children().any(|child| {
-            !child.is_element() && child.text().is_some_and(|text| !text.trim().is_empty())
-        })
-    {
-        return Err(());
-    }
-    let mut values = HashMap::new();
-    for field in form.children().filter(|child| child.is_element()) {
-        if field.tag_name().name() != "field"
-            || field.tag_name().namespace() != Some("jabber:x:data")
-        {
-            return Err(());
-        }
-        let variable = field.attribute("var").ok_or(())?;
-        if variable.is_empty()
-            || variable.len() > 256
-            || field
-                .attributes()
-                .any(|attribute| !matches!(attribute.name(), "var" | "type" | "label"))
-            || field.children().any(|child| {
-                !child.is_element() && child.text().is_some_and(|text| !text.trim().is_empty())
-            })
-        {
-            return Err(());
-        }
-        let children = field
-            .children()
-            .filter(|child| child.is_element())
-            .collect::<Vec<_>>();
-        if children.len() != 1
-            || children[0].tag_name().name() != "value"
-            || children[0].tag_name().namespace() != Some("jabber:x:data")
-            || children[0].attributes().len() != 0
-            || children[0].children().any(|child| child.is_element())
-        {
-            return Err(());
-        }
-        let value = children[0]
-            .children()
-            .filter_map(|child| child.text())
-            .collect::<String>();
-        if value.len() > 4_096 {
-            return Err(());
-        }
-        // XEP-0004 ignores unknown fields; validate their shape and size first
-        // so they remain subject to the same input limits.
-        if variable != "FORM_TYPE" && !allowed_fields.contains(&variable) {
-            continue;
-        }
-        if values.insert(variable.to_owned(), value).is_some() {
-            return Err(());
-        }
-    }
-    if values.get("FORM_TYPE").map(String::as_str) != Some(expected_form_type)
-        || form
-            .children()
-            .find(|child| {
-                child.is_element()
-                    && child.tag_name().name() == "field"
-                    && child.attribute("var") == Some("FORM_TYPE")
-            })
-            .and_then(|field| field.attribute("type"))
-            != Some("hidden")
-    {
-        return Err(());
-    }
-    Ok(values)
 }
 
 pub(crate) fn bool_value(value: bool) -> &'static str {
@@ -835,7 +755,3 @@ mod tests;
 #[cfg(test)]
 #[path = "xml_util_vcard_presence_tests.rs"]
 mod vcard_presence_tests;
-
-#[cfg(test)]
-#[path = "xml_util_strict_xdata_tests.rs"]
-mod strict_xdata_tests;

@@ -52,8 +52,6 @@ mod legacy_auth;
 mod session_sm;
 mod session_transport;
 
-#[cfg(test)]
-use self::legacy_auth::{legacy_sasl_auth, legacy_sasl_payload};
 use self::session_sm::durable_delivery_managed_by_sm;
 pub use self::session_sm::ResumePayload;
 pub(crate) use self::session_sm::ResumeTransportParts;
@@ -63,6 +61,8 @@ use self::session_transport::{
     client_stream_limits_feature, resource_bind_deadline_for, unauthenticated_timed_out_for,
 };
 pub(crate) use self::session_transport::{ClientTransport, StreamLimits, TlsSessionEvidence};
+#[cfg(test)]
+use northstar_auth_xmpp::sasl2::{legacy_sasl_auth, legacy_sasl_payload};
 
 const MAX_SASL_ATTEMPTS_PER_STREAM: u8 = 5;
 const MAX_POST_ACTION_TASKS_PER_SESSION: usize = 16;
@@ -413,10 +413,10 @@ pub struct ProtocolSession {
     pub(crate) sasl_scram_fence:
         Option<Option<northstar_auth_application::authentication::AuthenticationFence>>,
     pub(crate) legacy_sasl_awaiting_initial_response: bool,
-    pub(crate) sasl2_state: Option<sasl2::Sasl2Context>,
+    pub(crate) sasl2_state: Option<northstar_auth_xmpp::sasl2::Sasl2Context>,
     /// Active XEP-0389 challenge transport. A response is accepted only after
     /// this connection selected an advertised flow and received a challenge.
-    pub(crate) ibr_flow: Option<ibr::IbrFlowTransport>,
+    pub(crate) ibr_flow: Option<northstar_auth_xmpp::ibr::IbrFlowTransport>,
     pub(crate) ibr_pow_enabled: bool,
     /// One unauthenticated transport may bootstrap at most one account. After
     /// a successful XEP-0077/XEP-0389 registration only SASL is expected.

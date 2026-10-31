@@ -2,8 +2,9 @@ use crate::services::xml_util::valid_language_tag;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::{Context, Result};
 use northstar_auth_core as auth;
+use northstar_auth_xmpp::sasl2::*;
 use roxmltree::{Document, Node};
-use uuid::{Uuid, Variant};
+use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use super::{Action, ProtocolSession};
@@ -11,123 +12,10 @@ use super::{Action, ProtocolSession};
 mod authentication;
 mod parsing;
 
-pub(crate) use self::authentication::{authentication_feature_xml, failure_xml};
-use self::authentication::{
-    fast_token_xml, inline_resume_envelope_reservation_bytes, sasl2_success_xml,
-};
+pub(crate) use self::authentication::authentication_feature_xml;
 pub(crate) use self::parsing::is_tcp_stream_opening;
-pub(super) use self::parsing::normalize_base64_payload;
-use self::parsing::{
-    attr_is, direct_text, normalize_sasl2_base64_payload, parse_authenticate, singleton_text,
-    structural_text_is_empty,
-};
 #[cfg(test)]
 use self::parsing::{parse_stream_open, ParsedStreamOpen, StreamOpenError};
-
-pub(crate) const SASL2_NS: &str = "urn:xmpp:sasl:2";
-pub(crate) const BIND2_NS: &str = "urn:xmpp:bind:0";
-pub(crate) const FAST_NS: &str = "urn:xmpp:fast:0";
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct Bind2Request {
-    pub tag: Option<String>,
-    pub carbons: bool,
-    pub sm: Option<SmInlineRequest>,
-    pub csi_active: Option<bool>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct SmInlineRequest {
-    pub resume: bool,
-    pub max: Option<u64>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct FastRequest {
-    /// XEP-0484 requires a monotonically increasing count only for TLS 0-RTT.
-    /// Northstar does not advertise or accept early data, so ordinary FAST
-    /// clients may omit it. A supplied value is still enforced atomically.
-    pub count: Option<i64>,
-    pub invalidate: bool,
-}
-
-pub(crate) struct SmResumeRequest {
-    pub previd: Zeroizing<String>,
-    pub h: u32,
-}
-
-pub(crate) struct Sasl2Request {
-    pub mechanism: String,
-    pub initial_response: Option<Zeroizing<String>>,
-    pub user_agent_id: Option<Uuid>,
-    pub bind: Option<Bind2Request>,
-    pub request_token: Option<String>,
-    pub fast: Option<FastRequest>,
-    pub resume: Option<SmResumeRequest>,
-}
-
-pub(crate) struct Sasl2Context {
-    pub request: Sasl2Request,
-    pub fast_should_rotate: bool,
-    pub awaiting_initial_response: bool,
-    pub fast_token_id: Option<Uuid>,
-    pub fast_token_was_new: bool,
-    pub fast_invalidate: bool,
-    pub authenticated_generation: Option<i64>,
-    pub inherited_fast_chain:
-        Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
-}
-
-impl std::fmt::Debug for SmResumeRequest {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("SmResumeRequest")
-            .field("previd", &"[REDACTED]")
-            .field("h", &self.h)
-            .finish()
-    }
-}
-
-impl std::fmt::Debug for Sasl2Request {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("Sasl2Request")
-            .field("mechanism", &self.mechanism)
-            .field(
-                "initial_response",
-                &self.initial_response.as_ref().map(|_| "[REDACTED]"),
-            )
-            .field("user_agent_id", &self.user_agent_id)
-            .field("bind", &self.bind)
-            .field("request_token", &self.request_token)
-            .field("fast", &self.fast)
-            .field("resume", &self.resume)
-            .finish()
-    }
-}
-
-impl std::fmt::Debug for Sasl2Context {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("Sasl2Context")
-            .field("request", &self.request)
-            .field("fast_should_rotate", &self.fast_should_rotate)
-            .field("awaiting_initial_response", &self.awaiting_initial_response)
-            .field("fast_token_id", &self.fast_token_id.map(|_| "[REDACTED]"))
-            .field("fast_token_was_new", &self.fast_token_was_new)
-            .field("fast_invalidate", &self.fast_invalidate)
-            .field("authenticated_generation", &self.authenticated_generation)
-            .field("inherited_fast_chain", &self.inherited_fast_chain)
-            .finish()
-    }
-}
-
-/// Test-only access to the production success builder, with no bearer or
-/// additional-data extension admitted by the closed Stage4 profile.
-#[cfg(test)]
-pub(crate) fn stage4_saved_success_xml(authorization_identifier: &str) -> Result<String> {
-    sasl2_success_xml(None, authorization_identifier, &[])
-}
 
 /// roxmltree requires a complete document. TCP XMPP supplies only the inbound
 /// opening tag at this point, so synthesize a closing tag exclusively for the

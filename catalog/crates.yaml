@@ -166,6 +166,16 @@ crates:
     api_stability: internal
     publish_policy: never
 
+  - crate_id: northstar-auth-xmpp
+    package: northstar-auth-xmpp
+    path: crates/contexts/auth/northstar-auth-xmpp
+    tier: context
+    context: auth
+    role: adapter
+    owner_team: identity-session
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-config
     package: northstar-config
     path: crates/platform/northstar-config

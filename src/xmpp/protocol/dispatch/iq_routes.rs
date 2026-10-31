@@ -109,22 +109,22 @@ const ROUTES: &[(IqRoute, RootIqHandler, RouteGate)] = &[
         RouteGate::Always,
     ),
     (
-        IqRoute::new("register", crate::xmpp::protocol::ibr::IBR2_NS, IqKind::Get),
+        IqRoute::new("register", northstar_auth_xmpp::ibr::IBR2_NS, IqKind::Get),
         ibr2_register_get,
         RouteGate::Always,
     ),
     (
-        IqRoute::new("register", crate::xmpp::protocol::ibr::IBR2_NS, IqKind::Set),
+        IqRoute::new("register", northstar_auth_xmpp::ibr::IBR2_NS, IqKind::Set),
         ibr2_register_set,
         RouteGate::Always,
     ),
     (
-        IqRoute::new("response", crate::xmpp::protocol::ibr::IBR2_NS, IqKind::Set),
+        IqRoute::new("response", northstar_auth_xmpp::ibr::IBR2_NS, IqKind::Set),
         ibr2_response_set,
         RouteGate::Always,
     ),
     (
-        IqRoute::new("cancel", crate::xmpp::protocol::ibr::IBR2_NS, IqKind::Set),
+        IqRoute::new("cancel", northstar_auth_xmpp::ibr::IBR2_NS, IqKind::Set),
         ibr2_cancel_set,
         RouteGate::Always,
     ),

@@ -790,8 +790,8 @@ fn validate_auth(
     )?;
     require(auth.preparation.generation_allowed && auth.preparation.commit == CommitCut::Complete)?;
     require(auth.preparation.stage_epoch.get().is_some() == auth.preparation.stage_present)?;
-    // db/authentication.rs:144–170 derives Some(epoch) only from a staged login;
-    // lines 196–205 pass that presence through COMMIT and the returned result.
+    // publish_credential_commit derives Some(epoch) only from a staged login and
+    // passes that presence through COMMIT and the returned result.
     // Validate supplied reply shape only. No epoch value is matched to a hint,
     // and actual returned observation values remain independently retained.
     match &auth.publication {

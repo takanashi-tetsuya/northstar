@@ -112,6 +112,7 @@ facade 移出根 crate（5.13），根 crate 只剩上面三層。
 | S21 pubsub 上下文 | WP-220–231 | `services/durable_outbox` 移入 `northstar_runtime`（WP-220）；`services/{pubsub,profile,private_storage}` 移入 `northstar-pubsub-application`（WP-221）；PubSub、PEP、vCard、私有儲存與 outbox 的持久化成為 `northstar-pubsub-postgres`（WP-222）；文字檢查移入 kernel（WP-223）；`northstar-pubsub-xmpp` 建立並取得 PEP 載荷驗證（WP-224）、PubSub IQ（WP-225）、私有 XML（WP-226）、vCard（WP-227）與 PEP（WP-228）；`AppState` 以 `PubSubModule` 持有三個服務（WP-229）；記錄階段（WP-230）；PubSub outbox 套件改選 crate 中的測試（WP-231）。盤點見 5.17 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與完整 CI 通過。已完成：pubsub 自有的應用、持久化與 XMPP 處理不再在根 crate；跨名冊交易、caps 與投遞工作者的去處見 5.17 |
 | S22 roster 上下文 | WP-240–248 | `services/{blocking,privacy,presence,s2s_roster_authorization,roster}` 移入 `northstar-roster-application`（WP-240）；名冊、封鎖、隱私與待處理訂閱的持久化成為 `northstar-roster-postgres`，跨上下文的交易步驟抽成 `RosterTransactionEffects`（WP-241）；`northstar-roster-xmpp` 建立（WP-242）並取得 XEP-0191（WP-243）、XEP-0016（WP-244）、RFC 6121 名冊（WP-245）與出席（WP-246）；`AppState` 以 `RosterModule` 持有五個服務（WP-247）；記錄階段（WP-248）。盤點見 5.18 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯、本機 PostgreSQL 套件與完整 CI 通過。已完成：roster 自有的應用、持久化與 XMPP 處理不再在根 crate；跨上下文的交易步驟、線上會話分送與出席組合的去處見 5.18 |
 | S23 abuse 上下文 | WP-250–255 | 根 crate 的重複合約型別併入 `northstar-abuse-policy`（WP-250）；提交觀察改經 core 的 `AdmissionCommitObserver`（WP-251）；guard、登入與挑戰服務成為 `northstar-abuse-application`（WP-252）；十個 repository 成為 `northstar-abuse-postgres`，碰到別人資料表的兩步抽成 `AbuseEffects`（WP-253）；`AppState` 以 `AbuseModule` 持有這些服務（WP-254）；記錄階段（WP-255）。盤點見 5.19 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯、本機 PostgreSQL 套件與完整 CI 通過。已完成：abuse 自有的應用與持久化不再在根 crate；與帳號交易共用的驗證呼叫、訊息准入 port 的去處見 5.19 |
+| S24 auth 上下文 | WP-256–264 | API 命令合約成為 `northstar-operations-core`，API 工作階段值併入 `northstar-auth-core`（WP-256）；憑證收據與結束值進入 core（WP-257）；認證服務成為 `northstar-auth-application`（WP-258），帳號與登入服務隨後加入（WP-259）；帳號、API 工作階段與撤銷 outbox 成為 `northstar-auth-postgres`（WP-260），FAST、憑證 repository 與 passkey 隨後加入（WP-261）；SASL2 與註冊的純解析及線路格式成為 `northstar-auth-xmpp`（WP-262）；`AppState` 以 `AuthModule` 持有九個服務（WP-263）；記錄階段（WP-264）。盤點見 5.20 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與本機 PostgreSQL 套件通過。未完成：與別的上下文同交易的帳號流程等 `northstar-workflows`，SASL 流程控制等 S29/S30，去處見 5.20 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -736,6 +737,60 @@ abuse 的 core，所以 WP-250 先把型別併入 policy，並採用根 crate �
 
 根 crate 由 738 檔 341,186 行變為 725 檔 335,699 行。
 
+### 5.20 S24 盤點：auth 上下文（`2a2ebac6`）
+
+| 原位置 | 去處 | 角色 |
+| --- | --- | --- |
+| `services/api_mutations.rs`、`valid_administrative_text` | `northstar-operations-core` | core |
+| `ApiPrincipal`、`ApiReadAuthority` | `northstar_auth_core` | core |
+| 憑證提交收據與 FAST 提交值 | `northstar_auth_core` | core |
+| 綁定與續接的結束值 | `northstar-session-core` | core |
+| `services/authentication.rs`、`services/authentication/publication.rs` | `northstar_auth_application::authentication` | application |
+| `services/{account,account_admin,account_revocation_consumer,account_teardown,http_login,invitation_admin,passkeys,password_change}.rs` | `northstar_auth_application` 的同名模組 | application |
+| `db/users.rs` 中只碰自有資料表的項目、`db/users/{api_sessions,authentication,registration}.rs` | `northstar_auth_postgres::users` | adapter |
+| `db/account_revocations.rs`、`db/account_revocation_repository.rs`、`db/account_teardown_repository.rs` | `northstar-auth-postgres` 的同名模組 | adapter |
+| `db/fast.rs`、`db/authentication.rs`、`db/passkeys.rs` | `northstar_auth_postgres::{fast,authentication,passkeys}` | adapter |
+| `xmpp/protocol/sasl2.rs`、`sasl2/{authentication,parsing}.rs`、`legacy_auth.rs` 的請求型別、解析與線路格式 | `northstar_auth_xmpp::sasl2` | adapter |
+| `xmpp/protocol/ibr.rs` 的提交值、解析與線路格式 | `northstar_auth_xmpp::ibr` | adapter |
+| `services/xml_util.rs` 的 `strict_xdata_submit` | `northstar_xml_builder::xdata` | kernel |
+| `AppState` 的九個服務欄位 | `state/auth_module.rs` 的 `AuthModule` | 組合根 |
+
+auth 的四個 crate 共 12,477 行（auth-core 2,182、auth-application 5,188、auth-postgres 4,020、auth-xmpp 1,087）。
+
+`northstar-auth-postgres` 的 `PostgresAuthenticationRepository<E>` 有三步碰到別人的資料表，由 `AuthenticationEffects` 在
+同一交易內交給根 crate 的 `RootAuthenticationEffects`：發布登入 epoch（同一條語句讀部署會話宣告）、把連線移到存活會話
+資料列、讀帳號的封存邊界。根 crate 以型別別名固定 `E`，所以呼叫端與測試只多一個建構參數。
+
+`FAST` 與憑證 repository 必須同一個 WP 搬移：兩邊值之間的 `From` 實作在孤兒規則下只能跟著其中一邊走。
+
+新決定：
+
+- `strict_xdata_submit` 進入 kernel，因為它不含伺服器知識，帳號命令與註冊都要用。變成公開 API 後不能再回傳
+  `Result<_, ()>`，它和 `parse_response` 改回傳具名的 `InvalidForm`；呼叫端都只判斷失敗，行為不變。
+- `PowProof` 屬於 abuse 的 core，介面卡不能直接引用，由 `northstar_auth_application::account` 轉出。
+- 被抽出的 handler 上下文的服務不是根 crate 的型別，所以 `FromRef<Arc<AppState>>` 不能直接實作。根 crate 用
+  `api::contexts::ServiceContext<S>` 包住服務。
+- 測試留在根 crate 的條件和 S23 相同：需要根 crate 的 fixture 或別的上下文的資料表。`db::authentication_tests`、
+  `db::fast_tests`、`db::passkeys_tests`、`db::account_revocations_tests` 都是這種情況；純測試隨程式碼移動。
+
+根 crate 中仍與 auth 有關的程式碼與去處：
+
+- `db/account_repository.rs`、`db/http_login_repository.rs`、`db/password_change_repository.rs`、
+  `db/account_admin_repository.rs`，以及 `db/users.rs` 的 `delete_user_with_roster*`、`set_user_status*`、
+  `end_user_sessions`、`replace_admins`、`change_password_guarded_v2`、`create_user_with_invitation_guarded_in_tx_*`：
+  它們和 abuse、冪等命令或別的上下文的資料表共用同一交易，依 4.5 進入 `northstar-workflows`。
+- `db/authentication_effects.rs` 與 `publish_user_agent_login_epoch_in_transaction`：同樣屬於 `northstar-workflows`。
+- `counts_in_tx`、`operational_counts_in_tx`：運維計數，隨 S25 移動。
+- `sasl2.rs`、`legacy_auth.rs`、`ibr.rs` 的 `impl ProtocolSession` 流程與 `xmpp/auth_publication`：依 4.3 屬於
+  `northstar-stream` 的認證流程控制，隨 S29/S30 移動。串流開頭的解析（`sasl2/parsing.rs`）同樣留到那時。
+- `session_identity`、`jid_identity`：依賴會話與別的上下文，隨 `northstar-workflows` 決定。
+
+WP-255a 是 S23 推上 dev 後才補的：WP-253 改了 Stage 4 綁定的 `scripts/test-experiment-contract.py`，但沒有更新
+`_SOURCE_BINDINGS` 的大小與雜湊，本機驗證沒有這條檢查，所以只在 CI 的 Web static 工作失敗。本機的門禁比對與完整驗證
+現在都會檢查這些綁定。
+
+根 crate 由 725 檔 335,699 行變為 705 檔 325,446 行。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點）。
@@ -913,6 +968,17 @@ abuse 的 core，所以 WP-250 先把型別併入 policy，並採用根 crate �
    - Gemini 的內容過濾會拒絕這個上下文的詞彙，S23 全部用腳本完成，規模與 agy 相當，而且可以重放（S23）。
    - 共用的 `target` 會累積舊 worktree 的增量快取，S23 時 `target/debug/incremental` 佔 458G，把磁碟寫滿。階段之間要
      清理超過兩天未動的增量目錄（S23）。
+   - 路徑搬走後，`db::NAME` 形式的負向規則會安靜地變成空檢查。每次搬移後要掃描全部 `scripts/`，把規則改成同時涵蓋新
+     路徑（S24）。
+   - 用 `#[cfg(not(test))]` 的分支在 `test-support` 開啟時會和測試分支一起編譯，要改成
+     `#[cfg(not(any(test, feature = "test-support")))]`（S24）。
+   - 有些門禁以位置解構讀到的來源陣列。擴充掃描範圍時要接在既有元素的字串上，不能加新元素（S24）。
+   - 工作區會統一 feature，所以新 crate 漏掉的 feature 只有 `cargo test -p <crate>` 單獨編譯時才看得到（S24）。
+   - 被 Stage 4 綁定的檔案只要有改動就要重新綁定。本機驗證現在會比對綁定，不再等 CI 才發現（S24）。
+   - `fuzz/` 有自己的 workspace 與 lockfile。fuzz 依賴的 crate 新增依賴時要一起更新，否則只有 `--locked` 的 fuzz 檢查會失敗
+     （S24）。
+   - 官方資料庫腳本對 schema 前綴、角色與「一個測試一個 schema」都有要求。臨時執行時要照腳本設定，否則測試會拒絕執行或互相
+     污染容量計數，看起來像程式碼失敗（S24）。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -1138,3 +1204,13 @@ Stage 證據仍綁定其原提交。
 | WP-253 | 完成：建立 `northstar-abuse-postgres`；`AbuseEffects` 取出金鑰引用計數與過期離線准入清理，根 crate 的 `RootAbuseEffects` 實作；`commit_observed` 移入介面卡；`MessageAdmissionRepository` 留在根 crate，委派給固有方法；含資料庫的金鑰測試移到 `db::abuse_keys_tests` | 見 `git log --grep '\[WP-253\]'` |
 | WP-254 | 完成：`AppState` 以 `AbuseModule` 持有五個欄位，accessor 不變 | 見 `git log --grep '\[WP-254\]'` |
 | WP-255 | 完成：記錄 S23 的階段與盤點（5.19）與 4.5 的例子。WP-250–254 依序接到 WP-248 之上；fmt、clippy、workspace 測試、層級、模糊測試、本機 PostgreSQL 套件與全部門禁通過 | 見 `git log --grep '\[WP-255\]'` |
+| WP-255a | 完成：重新綁定 WP-253 改過的 `scripts/test-experiment-contract.py`，修復 S23 第一次 CI 的 Web static 失敗 | 見 `git log --grep '\[WP-255a\]'` |
+| WP-256 | 完成：建立 `northstar-operations-core`（`api_mutations`、`valid_administrative_text`）；`ApiPrincipal`、`ApiReadAuthority` 併入 `northstar-auth-core` | 見 `git log --grep '\[WP-256\]'` |
+| WP-257 | 完成：憑證提交收據與 FAST 提交值進入 `northstar-auth-core`，結束值進入 `northstar-session-core` | 見 `git log --grep '\[WP-257\]'` |
+| WP-258 | 完成：建立 `northstar-auth-application`（認證服務與發布事實）；碰資料庫的服務測試留在 `db::authentication_tests`，經 `test-support` 取得內部項目 | 見 `git log --grep '\[WP-258\]'` |
+| WP-259 | 完成：八個帳號與登入模組移入 application；`ServiceContext<S>` 承接四個管理端上下文 | 見 `git log --grep '\[WP-259\]'` |
+| WP-260 | 完成：建立 `northstar-auth-postgres`（`users`、API 工作階段、註冊、撤銷 outbox、世代清理）；與別的上下文同交易的步驟留在根 crate | 見 `git log --grep '\[WP-260\]'` |
+| WP-261 | 完成：`fast`、`authentication`、`passkeys` 移入介面卡；`AuthenticationEffects` 取出三個跨上下文步驟，根 crate 的 `RootAuthenticationEffects` 實作 | 見 `git log --grep '\[WP-261\]'` |
+| WP-262 | 完成：建立 `northstar-auth-xmpp`（`sasl2`、`ibr`）；`strict_xdata_submit` 進入 `northstar_xml_builder::xdata` 並回傳 `InvalidForm`；串流開頭解析與 `impl ProtocolSession` 留在根 crate | 見 `git log --grep '\[WP-262\]'` |
+| WP-263 | 完成：`AppState` 以 `AuthModule` 持有九個服務，組合根只保留可能失敗的啟動步驟，accessor 不變 | 見 `git log --grep '\[WP-263\]'` |
+| WP-264 | 完成：記錄 S24 的階段與盤點（5.20）與 4.5 的例子。WP-256–263 依序接到 WP-255a 之上；fmt、clippy、workspace 測試、層級、模糊測試、本機 PostgreSQL 套件與全部門禁通過 | 見 `git log --grep '\[WP-264\]'` |

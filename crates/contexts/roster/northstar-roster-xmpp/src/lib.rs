@@ -3,6 +3,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod blocking;
+
 use northstar_roster_core::PresenceAccount;
 
 /// The client session's identity, which every handler of this crate starts from.

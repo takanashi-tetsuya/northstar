@@ -2141,7 +2141,14 @@ dependencies = [
 name = "northstar-roster-xmpp"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "northstar-roster-application",
  "northstar-roster-core",
+ "northstar-xep-0191",
+ "northstar-xml-builder",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "tracing",
 ]
 
 [[package]]

@@ -8,4 +8,11 @@ description = "Roster, presence, privacy list and blocking handlers of client se
 publish = false
 
 [dependencies]
+anyhow = "1.0"
+northstar-roster-application = { path = "../northstar-roster-application" }
 northstar-roster-core = { path = "../northstar-roster-core" }
+northstar-xep-0191 = { path = "../../../kernel/northstar-xep-0191" }
+northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+roxmltree = "0.20"
+tracing = "0.1"

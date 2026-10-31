@@ -1,12 +1,9 @@
 use super::{Action, ProtocolSession};
-use crate::services::xml_util::*;
+use crate::services::xml_util::{set_to, stream_id};
 use crate::state::AppState;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
-use northstar_roster_application::blocking::{BlockUpdateOutcome, UnblockUpdateOutcome};
-use northstar_xep_0191::{
-    BlockPattern, BlockingCommand, BlockingMutation, PresencePeer, Subscription,
-};
+use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
 use roxmltree::Node;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
@@ -22,19 +19,9 @@ impl ProtocolSession {
         root: Node<'_, '_>,
         _blocklist: Node<'_, '_>,
     ) -> Result<Action> {
-        let Some(user) = &self.authenticated else {
-            return Ok(Action::Send(iq_error(id, "not-authorized")));
-        };
-        if !matches!(
-            northstar_xep_0191::parse_iq(root),
-            Ok(BlockingCommand::GetBlocklist)
-        ) {
-            return Ok(Action::Send(iq_error(id, "bad-request")));
-        }
-        let items = self.state.blocking_service().blocked_jids(user.id).await?;
-        self.blocklist_requested.store(true, Ordering::Release);
-        let payload = northstar_xep_0191::build_blocklist_result(&patterns_from_jids(&items)?);
-        Ok(Action::Send(iq_result(id, &payload)))
+        northstar_roster_xmpp::blocking::blocklist(self, id, root)
+            .await
+            .map(Action::Send)
     }
 
     pub(crate) async fn block(
@@ -43,37 +30,9 @@ impl ProtocolSession {
         root: Node<'_, '_>,
         _block: Node<'_, '_>,
     ) -> Result<Action> {
-        let Some(user) = &self.authenticated else {
-            return Ok(Action::Send(iq_error(id, "not-authorized")));
-        };
-        let items = match northstar_xep_0191::parse_iq(root) {
-            Ok(BlockingCommand::Mutate(BlockingMutation::Block(items))) => items,
-            _ => return Ok(Action::Send(iq_error(id, "bad-request"))),
-        };
-        let items = patterns_to_strings(&items);
-        if items.is_empty() {
-            return Ok(Action::Send(iq_error(id, "bad-request")));
-        }
-        // Resolve presence authorization before mutating the blocklist.  A
-        // post-commit roster failure must not turn a durable command into a
-        // transport error that the client may retry without receiving the
-        // required transition.
-        let roster = self.state.blocking_service().roster(user.id).await?;
-        let changed = match self.state.blocking_service().block(user.id, &items).await? {
-            BlockUpdateOutcome::Changed(changed) => changed,
-            BlockUpdateOutcome::QuotaExceeded => {
-                return Ok(Action::Send(iq_error(id, "resource-constraint")));
-            }
-            BlockUpdateOutcome::Unavailable => {
-                return Ok(Action::Send(iq_error(id, "not-authorized")));
-            }
-        };
-        if !changed.is_empty() {
-            self.notify_blocking_presence(user, &roster, &changed, false)
-                .await;
-            self.push_blocking_change("block", &changed).await;
-        }
-        Ok(Action::Send(iq_result(id, "")))
+        northstar_roster_xmpp::blocking::block(self, id, root)
+            .await
+            .map(Action::Send)
     }
 
     pub(crate) async fn unblock(
@@ -82,55 +41,27 @@ impl ProtocolSession {
         root: Node<'_, '_>,
         _unblock: Node<'_, '_>,
     ) -> Result<Action> {
-        let Some(user) = &self.authenticated else {
-            return Ok(Action::Send(iq_error(id, "not-authorized")));
-        };
-        let mutation = match northstar_xep_0191::parse_iq(root) {
-            Ok(BlockingCommand::Mutate(mutation @ BlockingMutation::Unblock(_)))
-            | Ok(BlockingCommand::Mutate(mutation @ BlockingMutation::UnblockAll)) => mutation,
-            _ => return Ok(Action::Send(iq_error(id, "bad-request"))),
-        };
-        let items = match &mutation {
-            BlockingMutation::Unblock(items) => patterns_to_strings(items),
-            BlockingMutation::UnblockAll => Vec::new(),
-            BlockingMutation::Block(_) => unreachable!("unblock parser returned block mutation"),
-        };
-        let roster = self.state.blocking_service().roster(user.id).await?;
-        let unblock_all = items.is_empty();
-        let changed = match self
-            .state
-            .blocking_service()
-            .unblock(user.id, if unblock_all { None } else { Some(&items) })
-            .await?
-        {
-            UnblockUpdateOutcome::Changed(changed) => changed,
-            UnblockUpdateOutcome::Unavailable => {
-                return Ok(Action::Send(iq_error(id, "not-authorized")));
-            }
-        };
-        if !changed.is_empty() {
-            self.notify_blocking_presence(user, &roster, &changed, true)
-                .await;
-            self.push_blocking_change("unblock", if unblock_all { &[] } else { &changed })
-                .await;
-        }
-        Ok(Action::Send(iq_result(id, "")))
+        northstar_roster_xmpp::blocking::unblock(self, id, root)
+            .await
+            .map(Action::Send)
+    }
+}
+
+impl northstar_roster_xmpp::blocking::BlockingSession for ProtocolSession {
+    fn blocking_service(&self) -> &BlockingService<impl BlockingRepository> {
+        self.state.blocking_service()
     }
 
-    async fn push_blocking_change(&self, action: &str, jids: &[String]) {
-        let Some(user) = &self.authenticated else {
-            return;
-        };
-        let owner = format!("{}@{}", user.username, self.state.local_domain());
-        let Some(payload) = blocking_change_payload(action, jids) else {
-            tracing::error!(action, "refused unknown XEP-0191 push action");
-            return;
-        };
-        for (jid, session) in self.state.session_entries_for(&owner) {
+    fn blocking_mark_requested(&self) {
+        self.blocklist_requested.store(true, Ordering::Release);
+    }
+
+    async fn blocking_push_change(&self, owner: &str, payload: &str) {
+        for (jid, session) in self.state.session_entries_for(owner) {
             if !session.blocklist_requested.load(Ordering::Acquire) {
                 continue;
             }
-            let push = blocking_push_stanza(&jid, &payload);
+            let push = blocking_push_stanza(&jid, payload);
             match tokio::time::timeout(BLOCKING_PUSH_TIMEOUT, session.sender.send(push)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
@@ -153,7 +84,7 @@ impl ProtocolSession {
         }
         match self
             .state
-            .route_remote_blocklist_push(&owner, || blocking_push_stanza(&owner, &payload))
+            .route_remote_blocklist_push(owner, || blocking_push_stanza(owner, payload))
             .await
         {
             Ok(failures) => {
@@ -166,26 +97,18 @@ impl ProtocolSession {
         }
     }
 
-    async fn notify_blocking_presence(
+    async fn blocking_presence_change(
         &self,
-        user: &crate::services::authentication::AuthenticatedAccount,
-        roster: &[(String, Option<String>, String, Option<String>)],
+        owner: &str,
+        targets: &[String],
         changed_patterns: &[String],
         available: bool,
     ) {
-        let targets = blocking_presence_targets(roster, changed_patterns);
-        let owner = format!("{}@{}", user.username, self.state.local_domain());
-        deliver_blocking_presence_change(
-            &self.state,
-            &owner,
-            &targets,
-            changed_patterns,
-            available,
-        )
-        .await;
+        deliver_blocking_presence_change(&self.state, owner, targets, changed_patterns, available)
+            .await;
         match self
             .state
-            .route_remote_blocking_presence_change(&owner, &targets, changed_patterns, available)
+            .route_remote_blocking_presence_change(owner, targets, changed_patterns, available)
             .await
         {
             Ok(failures) => {
@@ -207,60 +130,6 @@ fn blocking_push_stanza(target: &str, payload: &str) -> String {
         .validated_fragment(payload)
         .expect("blocking payload was constructed structurally")
         .finish()
-}
-
-fn blocking_change_payload(action: &str, jids: &[String]) -> Option<String> {
-    let items = patterns_from_jids(jids).ok()?;
-    let mutation = match action {
-        "block" => BlockingMutation::Block(items),
-        "unblock" if items.is_empty() => BlockingMutation::UnblockAll,
-        "unblock" => BlockingMutation::Unblock(items),
-        _ => return None,
-    };
-    Some(northstar_xep_0191::build_payload(&BlockingCommand::Mutate(
-        mutation,
-    )))
-}
-
-fn patterns_from_jids(jids: &[String]) -> Result<Vec<BlockPattern>> {
-    jids.iter()
-        .map(|jid| northstar_xmpp_types::jid::CanonicalJid::parse(jid).map(BlockPattern::new))
-        .collect()
-}
-
-fn patterns_to_strings(patterns: &[BlockPattern]) -> Vec<String> {
-    patterns
-        .iter()
-        .map(|pattern| pattern.jid().to_string())
-        .collect()
-}
-
-fn blocking_presence_targets(
-    roster: &[(String, Option<String>, String, Option<String>)],
-    patterns: &[String],
-) -> Vec<String> {
-    let patterns = patterns
-        .iter()
-        .filter_map(|pattern| northstar_xmpp_types::jid::CanonicalJid::parse(pattern).ok())
-        .map(BlockPattern::new)
-        .collect::<Vec<_>>();
-    let roster = roster
-        .iter()
-        .filter_map(|(jid, _, subscription, _)| {
-            let jid = northstar_xmpp_types::jid::CanonicalJid::parse(jid).ok()?;
-            let subscription = match subscription.as_str() {
-                "to" => Subscription::To,
-                "from" => Subscription::From,
-                "both" => Subscription::Both,
-                _ => Subscription::None,
-            };
-            Some(PresencePeer { jid, subscription })
-        })
-        .collect::<Vec<_>>();
-    northstar_xep_0191::presence_targets(&patterns, &roster, &[])
-        .into_iter()
-        .map(|jid| jid.to_string())
-        .collect()
 }
 
 /// Runs on every node that owns at least one resource of `owner`. This keeps
@@ -374,22 +243,5 @@ mod tests {
         );
         assert!(push.contains("to='alice@example.test/Phone'"));
         assert!(push.contains("<unblock xmlns='urn:xmpp:blocking'/>"));
-    }
-
-    #[test]
-    fn blocking_values_cannot_escape_the_structural_builder() {
-        let payload =
-            blocking_change_payload("block", &["mallory@example.test/'/><injected/>".to_owned()])
-                .unwrap();
-        let document = roxmltree::Document::parse(&payload).unwrap();
-        let root = document.root_element();
-        let item = root.children().find(|node| node.is_element()).unwrap();
-        assert_eq!(root.tag_name().name(), "block");
-        assert_eq!(root.tag_name().namespace(), Some("urn:xmpp:blocking"));
-        assert_eq!(
-            item.attribute("jid"),
-            Some("mallory@example.test/'/><injected/>")
-        );
-        assert_eq!(root.children().filter(|node| node.is_element()).count(), 1);
     }
 }

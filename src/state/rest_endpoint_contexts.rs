@@ -39,7 +39,7 @@ impl axum::extract::FromRef<Arc<AppState>> for HttpChallengeEndpointContext {
 impl axum::extract::FromRef<Arc<AppState>> for HttpRegistrationEndpointContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         Self {
-            service: state.account_service.clone(),
+            service: state.auth.account_service.clone(),
             availability: state.http_registration_availability(),
             trusted_proxies: state.config.trusted_proxy_ips.clone(),
             registrations: Arc::clone(&state.metrics.registrations_total),
@@ -52,7 +52,7 @@ impl axum::extract::FromRef<Arc<AppState>> for HttpRegistrationEndpointContext {
 impl axum::extract::FromRef<Arc<AppState>> for HttpLoginEndpointContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         HttpLoginEndpointContext {
-            service: state.login_service.clone(),
+            service: state.auth.login_service.clone(),
             trusted_proxies: state.config.trusted_proxy_ips.clone(),
             counters: HttpLoginEndpointCounters {
                 rate_limited: Arc::clone(&state.metrics.rate_limited_total),
@@ -76,7 +76,7 @@ impl axum::extract::FromRef<Arc<AppState>> for OmemoRecoveryHttpContext {
 impl axum::extract::FromRef<Arc<AppState>> for PasswordChangeHttpContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         Self {
-            service: state.password_change_service.clone(),
+            service: state.auth.password_change_service.clone(),
             trusted_proxies: state.config.trusted_proxy_ips.clone(),
             domain: state.local_domain().to_owned(),
             rate_limited: Arc::clone(&state.metrics.rate_limited_total),
@@ -88,7 +88,7 @@ impl axum::extract::FromRef<Arc<AppState>> for PasswordChangeHttpContext {
 impl axum::extract::FromRef<Arc<AppState>> for PasskeyAccountHttpContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         Self {
-            service: Arc::clone(&state.passkey_service),
+            service: Arc::clone(&state.auth.passkey_service),
         }
     }
 }
@@ -96,7 +96,7 @@ impl axum::extract::FromRef<Arc<AppState>> for PasskeyAccountHttpContext {
 impl axum::extract::FromRef<Arc<AppState>> for PasskeyStartHttpContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         Self {
-            service: Arc::clone(&state.passkey_service),
+            service: Arc::clone(&state.auth.passkey_service),
             abuse: Arc::clone(&state.abuse.passkey_login_abuse_service),
             trusted_proxies: state
                 .http_transport_policy()
@@ -109,7 +109,7 @@ impl axum::extract::FromRef<Arc<AppState>> for PasskeyStartHttpContext {
 
 impl axum::extract::FromRef<Arc<AppState>> for PasskeyLoginFinishContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
-        Self::new(Arc::clone(&state.passkey_service))
+        Self::new(Arc::clone(&state.auth.passkey_service))
     }
 }
 

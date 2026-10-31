@@ -136,7 +136,7 @@ impl AppState {
 
     pub(crate) fn account_deletion_recovery_context(&self) -> AccountDeletionRecoveryContext {
         AccountDeletionRecoveryContext {
-            accounts: self.account_service.clone(),
+            accounts: self.auth.account_service.clone(),
             sm: self.session_cleanup_sm_revoker(),
             roster: self.roster_push_delivery(),
             presence: AccountDeletionPresence {

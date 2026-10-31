@@ -7,17 +7,17 @@ pub(crate) type BoshMixService =
 
 impl axum::extract::FromRef<Arc<AppState>> for AccountAdminContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
-        state.account_admin_service.clone()
+        state.auth.account_admin_service.clone()
     }
 }
 impl axum::extract::FromRef<Arc<AppState>> for RegistrationAdminContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
-        state.registration_admin_service.clone()
+        state.auth.registration_admin_service.clone()
     }
 }
 impl axum::extract::FromRef<Arc<AppState>> for SessionAdminContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
-        state.session_admin_service.clone()
+        state.auth.session_admin_service.clone()
     }
 }
 
@@ -42,7 +42,7 @@ pub(crate) type CapacityLeaseReaperContext = capacity_maintenance::CapacityLease
 
 impl axum::extract::FromRef<Arc<AppState>> for InvitationAdminContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
-        state.invitation_admin_service.clone()
+        state.auth.invitation_admin_service.clone()
     }
 }
 
@@ -223,6 +223,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 mod abuse_module;
 mod admission_guards;
+mod auth_module;
 mod construction;
 mod federation_dns;
 mod federation_policy;
@@ -242,6 +243,7 @@ mod upload_module;
 
 use self::abuse_module::*;
 pub use self::admission_guards::*;
+use self::auth_module::*;
 #[cfg(test)]
 use self::construction::*;
 use self::federation_policy::*;
@@ -307,7 +309,6 @@ pub struct AppState {
         db::readiness_repository::PostgresReadinessRepository,
     >,
     public_discovery_context: PublicDiscoveryContext,
-    passkey_service: Arc<PasskeyService>,
     /// XEP-0215 TURN credential authority. Long-lived key material and its
     /// bounded rate windows never cross into protocol or public state.
     extdisco_service: crate::services::extdisco::ExtDiscoService,
@@ -337,22 +338,7 @@ pub struct AppState {
     s2s_sm_outbox_service: crate::services::s2s_sm_outbox::SmOutboxService<
         db::s2s_sm_outbox_repository::PostgresSmOutboxRepository,
     >,
-    account_service: northstar_auth_application::account::AccountService<
-        db::account_repository::PostgresAccountRepository,
-    >,
-    login_service: northstar_auth_application::http_login::HttpLoginService<
-        db::http_login_repository::PostgresHttpLoginRepository,
-    >,
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
-    password_change_service: northstar_auth_application::password_change::PasswordChangeService<
-        db::password_change_repository::PostgresPasswordChangeRepository,
-    >,
-    /// Credential lookup, verification and XEP-0484 mutation authority. The
-    /// protocol layer receives typed outcomes but neither PgPool nor the FAST
-    /// derivation key.
-    authentication_service: northstar_auth_application::authentication::AuthenticationService<
-        crate::db::authentication_effects::PostgresAuthenticationRepository,
-    >,
     /// XEP-0050/XEP-0133 session and execution authority. Protocol handlers
     /// never receive the backing PostgreSQL pool through this capability.
     admin_command_service: crate::services::admin_commands::AdminCommandService<
@@ -395,9 +381,6 @@ pub struct AppState {
     /// reserve without giving protocol handlers raw pool access.
     durable_outbox_database_admission:
         northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
-    account_admin_service: AccountAdminContext,
-    registration_admin_service: RegistrationAdminContext,
-    session_admin_service: SessionAdminContext,
     operation_admin_service: OperationAdminContext,
     operation_muc_destroy_service: Arc<
         crate::services::operation_muc_destroy::MucDestroyService<
@@ -423,7 +406,6 @@ pub struct AppState {
     admin_dispatch_service: AdminDispatchContext,
     upload_admin_service: UploadAdminContext,
     report_moderation_service: ReportModerationContext,
-    invitation_admin_service: InvitationAdminContext,
     retention_policy_context: RetentionPolicyContext,
     governance_context: GovernanceContext,
     report_service:
@@ -468,6 +450,8 @@ pub struct AppState {
     s2s_connection_attempts: Arc<Semaphore>,
     component_connections: Arc<Semaphore>,
     connection_actors: northstar_runtime::connection_actors::ConnectionActorRegistry,
+    /// The auth context; see [`AuthModule`].
+    auth: AuthModule,
     /// The anti-abuse context; see [`AbuseModule`].
     abuse: AbuseModule,
     started_at: Instant,

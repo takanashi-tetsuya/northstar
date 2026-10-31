@@ -207,7 +207,7 @@ impl AppState {
     ) -> &northstar_auth_application::account::AccountService<
         db::account_repository::PostgresAccountRepository,
     > {
-        &self.account_service
+        &self.auth.account_service
     }
 
     pub(crate) async fn wake_committed_muc_operation(
@@ -224,7 +224,7 @@ impl AppState {
     ) -> &northstar_auth_application::authentication::AuthenticationService<
         crate::db::authentication_effects::PostgresAuthenticationRepository,
     > {
-        &self.authentication_service
+        &self.auth.authentication_service
     }
 
     pub(crate) fn admin_command_service(

@@ -454,44 +454,6 @@ impl AppState {
             config.domain.clone(),
         );
         let metrics = Arc::new(Metrics::default());
-        let account_service = northstar_auth_application::account::AccountService::new(
-            db::account_repository::PostgresAccountRepository::new(
-                pool.clone(),
-                config.domain.clone(),
-                Arc::clone(&abuse),
-            )
-            .with_api_control(Arc::clone(&api_control)),
-            config.configured_registration_mode()
-                == northstar_config::RegistrationMode::InvitationOnly,
-            config.registration_rate_per_hour,
-            config.scram_iterations,
-            config.scram_sha1_enabled,
-        );
-        let login_service = northstar_auth_application::http_login::HttpLoginService::new(
-            db::http_login_repository::PostgresHttpLoginRepository::new(
-                pool.clone(),
-                Arc::clone(&abuse),
-                Arc::clone(&api_control),
-                northstar_auth_application::http_login::HttpLoginPolicy {
-                    domain: config.domain.clone(),
-                    scram_iterations: config.scram_iterations,
-                    scram_sha1_enabled: config.scram_sha1_enabled,
-                    session_ttl_hours: config.session_ttl_hours,
-                },
-                metrics.clone()
-                    as Arc<dyn northstar_auth_application::http_login::LoginFailureMetrics>,
-            ),
-        );
-        let password_change_service =
-            northstar_auth_application::password_change::PasswordChangeService::new(
-                db::password_change_repository::PostgresPasswordChangeRepository::new(
-                    pool.clone(),
-                    Arc::clone(&api_control),
-                    Arc::clone(&abuse),
-                ),
-                config.scram_iterations,
-                config.scram_sha1_enabled,
-            );
         let dummy_scram_iteration_profiles =
             northstar_auth_postgres::users::scram_iteration_profiles(
                 &pool,
@@ -499,13 +461,6 @@ impl AppState {
             )
             .await
             .context("failed to load dummy SCRAM iteration profiles")?;
-        let authentication_service = northstar_auth_application::authentication::AuthenticationService::new_with_dummy_scram_iteration_profiles(
-                crate::db::authentication_effects::PostgresAuthenticationRepository::new(pool.clone(), Arc::clone(&fast_token_secret), crate::db::authentication_effects::RootAuthenticationEffects),
-                dummy_scram_secret,
-                config.scram_iterations,
-                dummy_scram_iteration_profiles,
-                config.scram_sha1_enabled,
-            );
         let pubsub = PubSubModule::new(&config, &pool, &durable_outbox_database_admission);
         let mam_service = northstar_archive_application::MamService::new(
             db::mam::PostgresMamRepository::new(pool.clone()),
@@ -522,22 +477,6 @@ impl AppState {
             &config.domain,
             config.offline_message_ttl_days,
         );
-        let passkey_service = Arc::new(PasskeyService::new(
-            northstar_auth_postgres::passkeys::PostgresPasskeyRepository::new(
-                pool.clone(),
-                fast_token_secret.clone(),
-            ),
-            northstar_auth_application::passkeys::PasskeyConfig {
-                enabled: config.web_client_enabled && config.fast_token_enabled,
-                public_url: config.public_url.clone(),
-                domain: config.domain.clone(),
-                scram_iterations: config.scram_iterations,
-                scram_sha1_enabled: config.scram_sha1_enabled,
-                fast_token_ttl_days: config.fast_token_ttl_days,
-                fast_strong_reauth_max_days: config.fast_strong_reauth_max_days,
-                session_ttl_hours: config.session_ttl_hours,
-            },
-        ));
         let roster = RosterModule::new(&pool);
         let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;
         let command_pool = match config.admin_command_pool_mode {
@@ -709,38 +648,6 @@ impl AppState {
             Arc::clone(&api_control),
             cluster.admission(),
         );
-        let account_admin_service =
-            northstar_auth_application::account_admin::AccountAdminService::new(
-                db::account_admin_repository::PostgresAccountAdminRepository::new(
-                    admin_mutations.clone(),
-                ),
-            );
-        let registration_admin_service =
-            northstar_auth_application::account_admin::RegistrationAdminService::new(
-                db::account_admin_repository::PostgresRegistrationAdminRepository::new(
-                    db::admin_dispatch_repository::AdminCommandStore::new(
-                        command_pool.clone(),
-                        Arc::clone(&api_control),
-                        cluster.admission(),
-                    ),
-                    pool.clone(),
-                ),
-                Arc::new(account_admin::LocalRegistrationCache::new(
-                    config.registration_dependency_locked(),
-                    Arc::clone(&registration_closed),
-                ))
-                    as Arc<dyn northstar_auth_application::account_admin::RegistrationCache>,
-            );
-        let session_admin_service =
-            northstar_auth_application::account_admin::SessionAdminService::new(
-                db::account_admin_repository::PostgresSessionAdminRepository::new(
-                    admin_mutations.clone(),
-                ),
-                Arc::new(account_admin::LocalAdminSessions::new(Arc::clone(
-                    &sessions,
-                )))
-                    as Arc<dyn northstar_auth_application::account_admin::AdminSessionLookup>,
-            );
         let operation_admin_service = crate::services::operations::OperationAdminService::new(
             db::operation_admin_repository::PostgresOperationAdminRepository::new(
                 admin_mutations.clone(),
@@ -837,12 +744,21 @@ impl AppState {
             ),
             Arc::clone(&metrics),
         );
-        let invitation_admin_service =
-            northstar_auth_application::invitation_admin::InvitationAdminService::new(
-                db::invitation_admin_repository::PostgresInvitationAdminRepository::new(
-                    admin_mutations,
-                ),
-            );
+        let auth = AuthModule::new(AuthModuleParts {
+            config: &config,
+            pool: &pool,
+            command_pool: &command_pool,
+            abuse: &abuse,
+            api_control: &api_control,
+            admin_mutations: &admin_mutations,
+            cluster: &cluster,
+            metrics: &metrics,
+            registration_closed: &registration_closed,
+            sessions: &sessions,
+            fast_token_secret: &fast_token_secret,
+            dummy_scram_secret,
+            dummy_scram_iteration_profiles,
+        });
         let report_service = crate::services::reports::ReportService::new(
             db::report_repository::PostgresReportRepository::new(
                 pool.clone(),
@@ -894,11 +810,6 @@ impl AppState {
             s2s_sm_outbox_service: crate::services::s2s_sm_outbox::SmOutboxService::new(
                 db::s2s_sm_outbox_repository::PostgresSmOutboxRepository::new(pool.clone()),
             ),
-            passkey_service,
-            account_service,
-            login_service,
-            password_change_service,
-            authentication_service,
             admin_command_service: crate::services::admin_commands::AdminCommandService::new(
                 db::admin_command_repository::PostgresAdminCommandRepository::new(
                     pool.clone(),
@@ -928,11 +839,6 @@ impl AppState {
             omemo_recovery_poll_context,
             durable_outbox_database_admission,
             report_service,
-            account_admin_service: crate::api::contexts::ServiceContext(account_admin_service),
-            registration_admin_service: crate::api::contexts::ServiceContext(
-                registration_admin_service,
-            ),
-            session_admin_service: crate::api::contexts::ServiceContext(session_admin_service),
             operation_admin_service,
             operation_muc_destroy_service,
             locked_muc_expiry_service,
@@ -943,9 +849,6 @@ impl AppState {
             admin_dispatch_service,
             upload_admin_service,
             report_moderation_service,
-            invitation_admin_service: crate::api::contexts::ServiceContext(
-                invitation_admin_service,
-            ),
             retention_policy_context,
             governance_context,
             upload,
@@ -972,6 +875,7 @@ impl AppState {
             s2s_connection_attempts,
             component_connections,
             connection_actors,
+            auth,
             abuse: AbuseModule::new(&abuse, abuse_key_deployment),
             started_at,
             process_started_at,

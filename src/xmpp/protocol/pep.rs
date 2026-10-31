@@ -49,9 +49,9 @@ pub(crate) use self::notifications::{
 };
 #[cfg(test)]
 pub(crate) use self::publishing::bookmarks2_items_event;
-pub(crate) use northstar_pubsub_xmpp::payload::{
-    valid_avatar_data, valid_avatar_metadata, valid_png_image,
-};
+#[cfg(test)]
+use northstar_pubsub_xmpp::payload::valid_png_image;
+pub(crate) use northstar_pubsub_xmpp::payload::{valid_avatar_data, valid_avatar_metadata};
 
 const NS_PUBSUB: &str = "http://jabber.org/protocol/pubsub";
 const NS_PUBSUB_EVENT: &str = "http://jabber.org/protocol/pubsub#event";

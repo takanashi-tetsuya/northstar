@@ -3,9 +3,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod events;
 pub mod payload;
 pub mod private_xml;
 pub mod pubsub;
+pub mod vcard;
 
 use northstar_pubsub_application::{
     PepAffiliationRepository, PepItemMutationRepository, PepItemQueryRepository,

@@ -8,7 +8,6 @@ pub(crate) use northstar_xml_builder::stanza::{
 };
 use northstar_xml_builder::{ValidatedXmlFragment, XmlElement};
 use northstar_xmpp_types::jid_text::bare_jid;
-use northstar_xmpp_types::text::contains_unsafe_bidi_controls;
 pub(crate) use northstar_xmpp_types::text::valid_language_tag;
 use roxmltree::{Document, Node};
 use sha2::Sha256;
@@ -41,15 +40,6 @@ use northstar_xml_builder::rewrite::{
 pub(crate) use northstar_xml_builder::rewrite::{
     root_resets_default_namespace, set_client_namespace, set_from, set_root_attribute, set_to,
 };
-
-pub(crate) fn xml_subtree_contains_unsafe_bidi_controls(node: Node<'_, '_>) -> bool {
-    node.descendants().any(|descendant| {
-        descendant.text().is_some_and(contains_unsafe_bidi_controls)
-            || descendant
-                .attributes()
-                .any(|attribute| contains_unsafe_bidi_controls(attribute.value()))
-    })
-}
 
 pub(crate) fn child_text<'a, 'input>(node: Node<'a, 'input>, name: &str) -> Option<&'a str> {
     let parent_namespace = node.tag_name().namespace();

@@ -21,7 +21,7 @@ fn valid_bare_jid(value: &str) -> bool {
     northstar_xmpp_types::jid::CanonicalJid::parse_bare(value).is_ok()
 }
 
-fn xml_subtree_contains_unsafe_bidi_controls(node: Node<'_, '_>) -> bool {
+pub(crate) fn xml_subtree_contains_unsafe_bidi_controls(node: Node<'_, '_>) -> bool {
     node.descendants().any(|descendant| {
         descendant.text().is_some_and(contains_unsafe_bidi_controls)
             || descendant

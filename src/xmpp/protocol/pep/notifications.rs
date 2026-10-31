@@ -1,6 +1,8 @@
 //! Render PEP notifications and prepare or deliver live and last-item events.
 
 use super::*;
+pub(crate) use northstar_pubsub_xmpp::events::profile_item_event;
+pub(super) use northstar_pubsub_xmpp::events::strip_pubsub_item_root_namespaces;
 
 pub(super) fn pep_subscription_element(
     node: &str,
@@ -542,50 +544,12 @@ pub(crate) async fn deliver_pep_last_items_for_federated_resource(
     Ok(())
 }
 
-/// Removes only an `<item>` root's inherited PubSub namespace before the
-/// item is embedded below `pubsub#event`. Nested payload namespace
-/// declarations are deliberately preserved.
-pub(super) fn strip_pubsub_item_root_namespaces(payload: &str) -> Result<String> {
-    let root = XmlElement::new("root");
-    let prefix_len = root.open().len();
-    let wrapped = root.validated_fragment(payload)?.finish();
-    let document = roxmltree::Document::parse(&wrapped)?;
-    let single = format!(" xmlns='{NS_PUBSUB}'");
-    let double = format!(" xmlns=\"{NS_PUBSUB}\"");
-    let mut openings = document
-        .root_element()
-        .children()
-        .filter(|child| child.is_element() && child.tag_name().name() == "item")
-        .filter_map(|item| {
-            let range = item.range();
-            let start = range.start.checked_sub(prefix_len)?;
-            let end = payload[start..].find('>').map(|end| start + end)?;
-            Some((start, end))
-        })
-        .collect::<Vec<_>>();
-    let mut output = payload.to_owned();
-    openings.sort_unstable_by_key(|(start, _)| std::cmp::Reverse(*start));
-    for (start, end) in openings {
-        let opening = output[start..=end].to_owned();
-        let cleaned = opening.replace(&single, "").replace(&double, "");
-        output.replace_range(start..=end, &cleaned);
-    }
-    Ok(output)
-}
-
 pub(super) fn published_event_items(node: &str, items: &[(String, String)]) -> Result<String> {
     let mut container = XmlElement::new("northstar-items");
     for (item_id, payload) in items {
         container.push_validated_fragment(&published_event_item(node, item_id, payload)?)?;
     }
     Ok(container.finish_children())
-}
-
-pub(crate) fn profile_item_event(node: &str, payload: &str) -> Result<String> {
-    let payload = strip_pubsub_item_root_namespaces(payload)?;
-    let mut event = XmlElement::new("items").attr("node", node);
-    event.push_validated_fragment(&payload)?;
-    Ok(event.finish())
 }
 
 pub(super) fn published_event_item(node: &str, item_id: &str, payload: &str) -> Result<String> {

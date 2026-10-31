@@ -1245,9 +1245,11 @@ digraph compile_time {
   "northstar-upload-application" -> "tracing";
   "northstar-upload-application" -> "uuid";
   "northstar-upload-application" -> "zeroize";
+  "northstar-upload-core" -> "chrono";
   "northstar-upload-core" -> "northstar-xmpp-types";
   "northstar-upload-core" -> "serde";
   "northstar-upload-core" -> "uuid";
+  "northstar-upload-core" -> "zeroize";
   "northstar-upload-postgres" -> "anyhow";
   "northstar-upload-postgres" -> "chrono";
   "northstar-upload-postgres" -> "northstar-auth-core";

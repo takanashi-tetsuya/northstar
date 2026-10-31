@@ -1,7 +1,7 @@
 //! The key deployment authority over its PostgreSQL adapter and the tables of the other contexts.
 use crate::db::abuse_effects::RootAbuseEffects;
 use anyhow::Result;
-use northstar_abuse_application::guard::records::AbuseKeyDeploymentIdentity;
+use northstar_abuse_policy::model::AbuseKeyDeploymentIdentity;
 use northstar_abuse_postgres::keys::validate_abuse_key_deployment;
 use sqlx::PgPool;
 use std::time::Duration;

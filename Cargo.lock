@@ -2392,9 +2392,11 @@ dependencies = [
 name = "northstar-upload-core"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "northstar-xmpp-types",
  "serde",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

@@ -24,16 +24,14 @@ pub(super) struct AbuseModule {
     /// Public, irreversible key IDs and the configured generation used by the
     /// readiness path to detect a node that drifted from PostgreSQL authority.
     pub(super) abuse_key_deployment:
-        Option<northstar_abuse_application::guard::records::AbuseKeyDeploymentIdentity>,
+        Option<northstar_abuse_policy::model::AbuseKeyDeploymentIdentity>,
 }
 
 impl AbuseModule {
     /// Builds the services over the guard the other contexts share.
     pub(super) fn new(
         guard: &Arc<AbuseGuard>,
-        abuse_key_deployment: Option<
-            northstar_abuse_application::guard::records::AbuseKeyDeploymentIdentity,
-        >,
+        abuse_key_deployment: Option<northstar_abuse_policy::model::AbuseKeyDeploymentIdentity>,
     ) -> Self {
         Self {
             challenge_issue_service:

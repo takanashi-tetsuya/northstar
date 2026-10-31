@@ -4,6 +4,7 @@
 pub mod account_revocation_repository;
 pub mod account_revocations;
 pub mod account_teardown_repository;
+pub mod api_session_repository;
 pub mod authentication;
 pub mod effects;
 pub mod fast;

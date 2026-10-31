@@ -1,9 +1,7 @@
 //! HTTP logout authority; the repository owns the audited session transaction.
 
-use crate::{
-    db::api_session_repository::PostgresApiSessionRepository,
-    services::api_sessions::ApiSessionService,
-};
+use northstar_auth_application::api_sessions::ApiSessionService;
+use northstar_auth_postgres::api_session_repository::PostgresApiSessionRepository;
 use std::sync::Arc;
 use uuid::Uuid;
 

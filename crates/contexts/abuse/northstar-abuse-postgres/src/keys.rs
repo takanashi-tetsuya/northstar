@@ -1,7 +1,7 @@
 use crate::effects::AbuseEffects;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use northstar_abuse_application::guard::records::AbuseKeyDeploymentIdentity;
+use northstar_abuse_policy::model::AbuseKeyDeploymentIdentity;
 use sqlx::{PgPool, Postgres, Transaction};
 use std::time::Duration;
 

@@ -55,15 +55,3 @@ pub struct VerificationDecision {
     pub outcome: std::result::Result<WorkRequirement, GuardError>,
     pub persist_states: bool,
 }
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AbuseKeyDeploymentIdentity {
-    pub xmpp_domain: String,
-    pub epoch: i64,
-    pub current_key_id: String,
-    pub previous_key_id: Option<String>,
-    /// Set only after every node has been rolled to current=new/previous=old.
-    /// This fences the old generation and starts the complete expiry horizon.
-    pub retire_previous: bool,
-    pub minimum_overlap: Duration,
-}

@@ -5,6 +5,7 @@ pub mod account;
 pub mod account_admin;
 pub mod account_revocation_consumer;
 pub mod account_teardown;
+pub mod api_sessions;
 pub mod authentication;
 pub mod http_login;
 pub mod invitation_admin;

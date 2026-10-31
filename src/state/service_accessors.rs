@@ -12,11 +12,13 @@ impl AppState {
 
     pub(crate) fn api_session_service(
         &self,
-    ) -> crate::services::api_sessions::ApiSessionService<
-        db::api_session_repository::PostgresApiSessionRepository,
+    ) -> northstar_auth_application::api_sessions::ApiSessionService<
+        northstar_auth_postgres::api_session_repository::PostgresApiSessionRepository,
     > {
-        crate::services::api_sessions::ApiSessionService::new(
-            db::api_session_repository::PostgresApiSessionRepository::new(self.pool.clone()),
+        northstar_auth_application::api_sessions::ApiSessionService::new(
+            northstar_auth_postgres::api_session_repository::PostgresApiSessionRepository::new(
+                self.pool.clone(),
+            ),
         )
     }
 

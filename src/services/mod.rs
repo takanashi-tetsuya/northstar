@@ -62,6 +62,4 @@ pub(crate) mod operation_muc_destroy;
 pub(crate) mod operation_muc_wake;
 pub(crate) mod operations;
 
-pub(crate) mod api_sessions;
-
 pub(crate) mod reports;

@@ -5,7 +5,6 @@
 #![forbid(unsafe_code)]
 
 pub use northstar_upload_core::*;
-pub mod admin;
 pub mod maintenance;
 pub mod repository;
 pub mod safety;

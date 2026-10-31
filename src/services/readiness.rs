@@ -4,7 +4,7 @@
 
 use crate::services::admin_session_cleanup_worker::AdminSessionCleanupSnapshot;
 use anyhow::{ensure, Result};
-use northstar_abuse_application::guard::records::AbuseKeyDeploymentIdentity;
+use northstar_abuse_policy::model::AbuseKeyDeploymentIdentity;
 use northstar_security::cluster_keys::ClusterKeyDeploymentIdentity;
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use std::future::Future;

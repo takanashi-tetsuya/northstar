@@ -3627,6 +3627,10 @@
     ],
     [
       "northstar-upload-core",
+      "chrono"
+    ],
+    [
+      "northstar-upload-core",
       "northstar-xmpp-types"
     ],
     [
@@ -3636,6 +3640,10 @@
     [
       "northstar-upload-core",
       "uuid"
+    ],
+    [
+      "northstar-upload-core",
+      "zeroize"
     ],
     [
       "northstar-upload-postgres",

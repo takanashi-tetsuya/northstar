@@ -62,7 +62,7 @@ impl AppState {
         &self,
     ) -> &northstar_pubsub_application::PubSubService<db::pubsub_repository::PostgresPubSubRepository>
     {
-        &self.pubsub_service
+        &self.pubsub.pubsub_service
     }
 
     pub(crate) fn profile_service(
@@ -70,7 +70,7 @@ impl AppState {
     ) -> &northstar_pubsub_application::profile::ProfileService<
         db::profile::PostgresProfileRepository,
     > {
-        &self.profile_service
+        &self.pubsub.profile_service
     }
 
     pub(crate) fn mix_service(
@@ -195,7 +195,7 @@ impl AppState {
     ) -> &northstar_pubsub_application::private_storage::PrivateStorageService<
         northstar_pubsub_postgres::PostgresPrivateStorageRepository,
     > {
-        &self.private_storage_service
+        &self.pubsub.private_storage_service
     }
 
     pub(crate) fn account_service(

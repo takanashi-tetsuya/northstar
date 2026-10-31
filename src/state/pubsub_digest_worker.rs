@@ -15,7 +15,7 @@ pub(crate) struct PubSubDigestWorkerContext {
 impl AppState {
     pub(crate) fn pubsub_digest_worker_context(&self) -> PubSubDigestWorkerContext {
         PubSubDigestWorkerContext {
-            service: self.pubsub_service.clone(),
+            service: self.pubsub.pubsub_service.clone(),
             notification: self.pubsub_notification_delivery(),
         }
     }

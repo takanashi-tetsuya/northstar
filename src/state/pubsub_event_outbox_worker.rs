@@ -29,7 +29,7 @@ pub(crate) struct PubSubEventOutboxWorkerContext {
 impl AppState {
     pub(crate) fn pubsub_event_outbox_worker_context(&self) -> PubSubEventOutboxWorkerContext {
         PubSubEventOutboxWorkerContext {
-            service: self.pubsub_service.clone(),
+            service: self.pubsub.pubsub_service.clone(),
             notification: self.pubsub_notification_delivery(),
             pep: self.pep_last_items_context(),
             delivery_duration: Arc::clone(&self.metrics.outbox_delivery_duration_seconds),

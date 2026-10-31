@@ -331,16 +331,14 @@ for (const typeName of ['RawConfig', 'Config']) {
 
 for (const field of [
   'upload',
+  'pubsub',
   'message_service',
   'retraction_service',
-  'pubsub_service',
   'mam_service',
   'mix_service',
   'presence_service',
   'replay_service',
   'privacy_service',
-  'private_storage_service',
-  'profile_service',
   'account_service',
   'authentication_service',
   'passkey_service',

@@ -31,7 +31,7 @@ pub(crate) struct PubSubNotificationDelivery {
 impl AppState {
     pub(crate) fn pubsub_notification_delivery(&self) -> PubSubNotificationDelivery {
         PubSubNotificationDelivery {
-            blocking: self.pubsub_service.clone(),
+            blocking: self.pubsub.pubsub_service.clone(),
             privacy: self.message_service.clone(),
             sessions: Arc::clone(&self.sessions),
             remote_routes: self.cluster.listener_presence_routes(),

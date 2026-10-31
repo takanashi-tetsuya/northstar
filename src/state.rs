@@ -231,6 +231,7 @@ mod local_muc;
 mod local_session;
 mod muc_resume;
 mod omemo_poll_admission;
+mod pubsub_module;
 mod runtime_config;
 mod runtime_contexts;
 mod runtime_control;
@@ -245,6 +246,7 @@ use self::construction::*;
 use self::federation_policy::*;
 #[cfg(test)]
 pub(crate) use self::local_muc::count_shutdown_notification_completions;
+use self::pubsub_module::*;
 pub(crate) use self::runtime_config::*;
 pub(crate) use self::runtime_control::*;
 use self::upload_module::*;
@@ -290,6 +292,8 @@ pub struct AppState {
     pool: PgPool,
     /// The upload context; see [`UploadModule`].
     upload: UploadModule,
+    /// The pubsub context; see [`PubSubModule`].
+    pubsub: PubSubModule,
     api_query_context: ApiQueryContext,
     metrics_snapshot_service: crate::services::metrics_snapshot::MetricsSnapshotService<
         db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository,
@@ -299,17 +303,6 @@ pub struct AppState {
     >,
     public_discovery_context: PublicDiscoveryContext,
     passkey_service: Arc<PasskeyService>,
-    /// Narrow persistence/orchestration capability for XEP-0060 and PEP.
-    /// Protocol handlers receive this service rather than database authority.
-    pubsub_service: northstar_pubsub_application::PubSubService<
-        db::pubsub_repository::PostgresPubSubRepository,
-    >,
-    /// Account-scoped vCard/vCard4/avatar mutation and public-profile read
-    /// boundary. Profile transactions and authorization never cross into the
-    /// XMPP protocol layer.
-    profile_service: northstar_pubsub_application::profile::ProfileService<
-        db::profile::PostgresProfileRepository,
-    >,
     /// XEP-0215 TURN credential authority. Long-lived key material and its
     /// bounded rate windows never cross into protocol or public state.
     extdisco_service: crate::services::extdisco::ExtDiscoService,
@@ -351,9 +344,6 @@ pub struct AppState {
     >,
     privacy_service:
         crate::services::privacy::PrivacyService<db::privacy::PostgresPrivacyRepository>,
-    private_storage_service: northstar_pubsub_application::private_storage::PrivateStorageService<
-        northstar_pubsub_postgres::PostgresPrivateStorageRepository,
-    >,
     account_service:
         crate::services::account::AccountService<db::account_repository::PostgresAccountRepository>,
     login_service: crate::services::http_login::HttpLoginService<

@@ -8,6 +8,8 @@ pub(crate) use northstar_xml_builder::stanza::{
 };
 use northstar_xml_builder::{ValidatedXmlFragment, XmlElement};
 use northstar_xmpp_types::jid_text::bare_jid;
+use northstar_xmpp_types::text::contains_unsafe_bidi_controls;
+pub(crate) use northstar_xmpp_types::text::valid_language_tag;
 use roxmltree::{Document, Node};
 use sha2::Sha256;
 use std::collections::{HashMap, HashSet};
@@ -39,16 +41,6 @@ use northstar_xml_builder::rewrite::{
 pub(crate) use northstar_xml_builder::rewrite::{
     root_resets_default_namespace, set_client_namespace, set_from, set_root_attribute, set_to,
 };
-
-/// Unicode bidi embeddings, overrides, isolates and their terminators can
-/// reorder neighbouring UI text without being visible themselves. They are
-/// not needed to store ordinary RTL scripts (Arabic/Hebrew characters remain
-/// valid), so profile fields reject these formatting controls at ingress.
-pub(crate) fn contains_unsafe_bidi_controls(value: &str) -> bool {
-    value
-        .chars()
-        .any(|character| matches!(character as u32, 0x202a..=0x202e | 0x2066..=0x2069))
-}
 
 pub(crate) fn xml_subtree_contains_unsafe_bidi_controls(node: Node<'_, '_>) -> bool {
     node.descendants().any(|descendant| {
@@ -193,14 +185,6 @@ pub(crate) fn bool_value(value: bool) -> &'static str {
     } else {
         "0"
     }
-}
-
-/// Validate the RFC 5646/BCP 47 well-formed syntax used by `xml:lang`.
-/// Registry membership is intentionally not required: private-use and future
-/// registered subtags remain valid, while malformed/duplicate extensions and
-/// variants are rejected.
-pub(crate) fn valid_language_tag(value: &str) -> bool {
-    crate::services::stanza_validation::valid_language_tag(value)
 }
 
 /// Reject a client-provided Carbon wrapper.  A server must be the only entity

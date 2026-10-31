@@ -2,12 +2,14 @@
 //!
 //! Component separators are located before applying any Unicode mapping, as
 //! required by RFC 7622. Localparts and resourceparts use the maintained
-//! PRECIS profiles from RFC 8265; domain names use IDNA/UTS #46 processing.
+//! PRECIS profiles from RFC 8265; domain names use IDNA/UTS #46 processing. The `text` module checks `xml:lang`
+//! tags and unsafe bidi controls.
 
 #![forbid(unsafe_code)]
 
 pub mod jid;
 pub mod jid_text;
+pub mod text;
 
 pub use jid::{
     canonical_bare_key, canonical_session_key, canonicalize, canonicalize_bare, domain_to_ascii,

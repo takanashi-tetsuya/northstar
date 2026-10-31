@@ -4,6 +4,7 @@
 //! Keeping it separate from dispatch lets every transport-facing parser use
 //! the exact same admission rules as the production C2S path.
 
+pub(crate) use northstar_xmpp_types::text::valid_language_tag;
 use roxmltree::Node;
 
 const MAX_STANZA_ID_BYTES: usize = 1_024;
@@ -265,122 +266,6 @@ fn direct_client_children<'a, 'input>(root: Node<'a, 'input>, name: &str) -> Vec
                         && child.tag_name().namespace() == Some("jabber:client")))
         })
         .collect()
-}
-
-/// Validate the RFC 5646/BCP 47 well-formed syntax used by `xml:lang`.
-/// Registry membership is intentionally not required: private-use and future
-/// registered subtags remain valid, while malformed/duplicate extensions and
-/// variants are rejected.
-pub(crate) fn valid_language_tag(value: &str) -> bool {
-    if value.is_empty() || value.len() > 255 || !value.is_ascii() {
-        return false;
-    }
-    let lower = value.to_ascii_lowercase();
-    const GRANDFATHERED: &[&str] = &[
-        "art-lojban",
-        "cel-gaulish",
-        "en-gb-oed",
-        "i-ami",
-        "i-bnn",
-        "i-default",
-        "i-enochian",
-        "i-hak",
-        "i-klingon",
-        "i-lux",
-        "i-mingo",
-        "i-navajo",
-        "i-pwn",
-        "i-tao",
-        "i-tay",
-        "i-tsu",
-        "no-bok",
-        "no-nyn",
-        "sgn-be-fr",
-        "sgn-be-nl",
-        "sgn-ch-de",
-        "zh-guoyu",
-        "zh-hakka",
-        "zh-min",
-        "zh-min-nan",
-        "zh-xiang",
-    ];
-    if GRANDFATHERED.contains(&lower.as_str()) {
-        return true;
-    }
-    let parts = lower.split('-').collect::<Vec<_>>();
-    if parts.iter().any(|part| {
-        part.is_empty() || part.len() > 8 || !part.bytes().all(|byte| byte.is_ascii_alphanumeric())
-    }) {
-        return false;
-    }
-    if parts[0] == "x" {
-        return parts.len() > 1;
-    }
-    let primary = parts[0];
-    if !primary.bytes().all(|byte| byte.is_ascii_alphabetic()) || !matches!(primary.len(), 2..=8) {
-        return false;
-    }
-    let mut index = 1;
-    if primary.len() <= 3 {
-        let mut extlangs = 0;
-        while index < parts.len()
-            && parts[index].len() == 3
-            && parts[index].bytes().all(|byte| byte.is_ascii_alphabetic())
-            && extlangs < 3
-        {
-            extlangs += 1;
-            index += 1;
-        }
-    }
-    if index < parts.len()
-        && parts[index].len() == 4
-        && parts[index].bytes().all(|byte| byte.is_ascii_alphabetic())
-    {
-        index += 1;
-    }
-    if index < parts.len()
-        && ((parts[index].len() == 2
-            && parts[index].bytes().all(|byte| byte.is_ascii_alphabetic()))
-            || (parts[index].len() == 3 && parts[index].bytes().all(|byte| byte.is_ascii_digit())))
-    {
-        index += 1;
-    }
-    let mut variants = std::collections::HashSet::new();
-    while index < parts.len()
-        && ((parts[index].len() >= 5)
-            || (parts[index].len() == 4
-                && parts[index]
-                    .as_bytes()
-                    .first()
-                    .is_some_and(u8::is_ascii_digit)))
-    {
-        if !variants.insert(parts[index]) {
-            return false;
-        }
-        index += 1;
-    }
-    let mut extensions = std::collections::HashSet::new();
-    while index < parts.len() && parts[index].len() == 1 && parts[index] != "x" {
-        if !extensions.insert(parts[index]) {
-            return false;
-        }
-        index += 1;
-        let start = index;
-        while index < parts.len() && (2..=8).contains(&parts[index].len()) {
-            index += 1;
-        }
-        if index == start {
-            return false;
-        }
-    }
-    if index < parts.len() && parts[index] == "x" {
-        index += 1;
-        if index == parts.len() {
-            return false;
-        }
-        index = parts.len();
-    }
-    index == parts.len()
 }
 
 #[cfg(test)]

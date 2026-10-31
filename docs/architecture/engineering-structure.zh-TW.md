@@ -111,6 +111,7 @@ facade 移出根 crate（5.13），根 crate 只剩上面三層。
 | S20 archive 上下文 | WP-210–214 | `services/xml_util` 中不依賴伺服器狀態的根元素改寫移入 `northstar_xml_builder::rewrite`，XEP-0359 的權威改寫移入 `northstar_xep_0359::annotate`（WP-210）；`MamService` 移入 `northstar-archive-application`（WP-211）；個人封存、偏好與 MAM 查詢成為 `northstar-archive-postgres`（WP-212）；XEP-0313 處理移入 `northstar-archive-xmpp`，會話能力是窄 trait `MamSession`（WP-213）；記錄階段（WP-214）。盤點見 5.16 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與完整 CI 通過。已完成：archive 自有的應用、持久化與 XMPP 程式碼不再在根 crate；與房間、訊息、聯邦共用交易的部分及保存期限清理的去處見 5.16 |
 | S21 pubsub 上下文 | WP-220–231 | `services/durable_outbox` 移入 `northstar_runtime`（WP-220）；`services/{pubsub,profile,private_storage}` 移入 `northstar-pubsub-application`（WP-221）；PubSub、PEP、vCard、私有儲存與 outbox 的持久化成為 `northstar-pubsub-postgres`（WP-222）；文字檢查移入 kernel（WP-223）；`northstar-pubsub-xmpp` 建立並取得 PEP 載荷驗證（WP-224）、PubSub IQ（WP-225）、私有 XML（WP-226）、vCard（WP-227）與 PEP（WP-228）；`AppState` 以 `PubSubModule` 持有三個服務（WP-229）；記錄階段（WP-230）；PubSub outbox 套件改選 crate 中的測試（WP-231）。盤點見 5.17 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與完整 CI 通過。已完成：pubsub 自有的應用、持久化與 XMPP 處理不再在根 crate；跨名冊交易、caps 與投遞工作者的去處見 5.17 |
 | S22 roster 上下文 | WP-240–248 | `services/{blocking,privacy,presence,s2s_roster_authorization,roster}` 移入 `northstar-roster-application`（WP-240）；名冊、封鎖、隱私與待處理訂閱的持久化成為 `northstar-roster-postgres`，跨上下文的交易步驟抽成 `RosterTransactionEffects`（WP-241）；`northstar-roster-xmpp` 建立（WP-242）並取得 XEP-0191（WP-243）、XEP-0016（WP-244）、RFC 6121 名冊（WP-245）與出席（WP-246）；`AppState` 以 `RosterModule` 持有五個服務（WP-247）；記錄階段（WP-248）。盤點見 5.18 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯、本機 PostgreSQL 套件與完整 CI 通過。已完成：roster 自有的應用、持久化與 XMPP 處理不再在根 crate；跨上下文的交易步驟、線上會話分送與出席組合的去處見 5.18 |
+| S23 abuse 上下文 | WP-250–255 | 根 crate 的重複合約型別併入 `northstar-abuse-policy`（WP-250）；提交觀察改經 core 的 `AdmissionCommitObserver`（WP-251）；guard、登入與挑戰服務成為 `northstar-abuse-application`（WP-252）；十個 repository 成為 `northstar-abuse-postgres`，碰到別人資料表的兩步抽成 `AbuseEffects`（WP-253）；`AppState` 以 `AbuseModule` 持有這些服務（WP-254）；記錄階段（WP-255）。盤點見 5.19 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯、本機 PostgreSQL 套件與完整 CI 通過。已完成：abuse 自有的應用與持久化不再在根 crate；與帳號交易共用的驗證呼叫、訊息准入 port 的去處見 5.19 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -693,6 +694,48 @@ kernel 與通用函式庫，不依賴 `-postgres`、其他上下文與根 crate�
 
 根 crate 由 745 檔 347,496 行變為 738 檔 341,186 行。
 
+### 5.19 S23 盤點：abuse 上下文（`9000962e`）
+
+| 原位置 | 去處 | 角色 |
+| --- | --- | --- |
+| `services/abuse.rs` 的 `PowIntent`、`MessageAdmissionRequest`、`MessageDedupe*`、`ContentIdentityAuthenticator*` | 併入 `northstar-abuse-policy` 的同名型別 | core |
+| `services/message_admission/witness.rs` 對 guard 與介面卡暴露的提交觀察 | `northstar_abuse_policy::admission_execution::AdmissionCommitObserver` | core |
+| `services/abuse.rs` 與 `services/abuse/` | `northstar_abuse_application::guard` | application |
+| `services/login_abuse.rs`、`services/challenge_issuance.rs` | `northstar_abuse_application::{login,challenge}` | application |
+| `db/abuse_*`、`db/challenge_*`、`db/login_abuse_repository`、`db/message_admission_repository` | `northstar-abuse-postgres` 的 `actor_state`、`challenge`、`challenge_cleanup`、`challenge_issuance`、`keys`、`login`、`message_admission`、`persistence`、`transaction`、`verification` | adapter |
+| `commit_observed` | `northstar_abuse_postgres::commit` | adapter |
+| `AppState` 的五個欄位 | `state/abuse_module.rs` 的 `AbuseModule` | 組合根 |
+
+abuse 的三個 crate 共 10,128 行（abuse-policy 4,611、abuse-application 3,676、abuse-postgres 1,841）。abuse 沒有 `-xmpp` crate：`misc.rs` 與 `ibr.rs` 中的 PoW 節處理屬於
+註冊，隨 S24 auth 移動。
+
+根 crate 原本有一份與 policy 欄位相同的合約型別，錯誤文字與可失敗性略有差異。其他上下文的 application 只能依賴
+abuse 的 core，所以 WP-250 先把型別併入 policy，並採用根 crate 的行為：`IntentError` 的文字會經 `AppError` 到達 HTTP
+回應。`ContentIdentityPurpose` 也只留 policy 一份，它現在是公開型別，防止別處選擇用途的門禁因此擴大掃描
+`crates/contexts`。
+
+`AdmissionWitness` 的 `Retained` 變體持有訊息上下文的 `DirectLifecycle`，不能移進 abuse。guard 與介面卡只看
+`AdmissionCommitObserver`，由根 crate 實作；trait 放在 core，因為訊息上下文只能依賴 abuse 的 core。
+
+`northstar-abuse-postgres` 有兩步碰到別人的資料表，由 `AbuseEffects` 交給根 crate 的 `RootAbuseEffects`：
+
+- 金鑰退役時計算仍引用舊金鑰的離線准入、個人訊息、撤回與 MIX 業務資料列。這一步原本和 abuse 自己的計數是同一條
+  語句，現在是同一個部署諮詢鎖交易內的第二條語句。這個檢查的安全性來自諮詢鎖與失敗即拒絕，兩條語句不改變結論。
+- 清理過期的離線准入。它仍是清理的最後一步，而且每條語句本來就各自提交。
+
+根 crate 中仍與 abuse 有關的程式碼與去處：
+
+- `db/users.rs`、`db/users/{authentication,registration}.rs`、`db/account_repository.rs`、
+  `db/http_login_repository.rs`、`db/password_change_repository.rs`、`db/report_repository.rs` 在自己的交易中呼叫
+  `northstar_abuse_postgres::transaction`。根 crate 可以依賴介面卡，但 `auth-postgres` 不行：S24 要把這些呼叫改成
+  port 或移入 `northstar-workflows`，否則證明消耗與帳號變更無法留在同一交易。
+- `db/abuse_effects.rs` 的 `RootAbuseEffects`：依 4.5 屬於 `northstar-workflows`。
+- `MessageAdmissionRepository` 與 `db/message_admission_port.rs`：訊息上下文的 port，介面卡提供固有方法，隨 S27 移動。
+- `db::abuse_guard_tests`、`db::abuse_keys_tests`：需要根 crate 的 fixture 或其他上下文的資料表，隨它們移動。
+  `persistent_guard` 因為要提供 `RootAbuseEffects` 而留在 `db/abuse_effects.rs`。
+
+根 crate 由 738 檔 341,186 行變為 725 檔 335,699 行。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點）。
@@ -861,6 +904,15 @@ kernel 與通用函式庫，不依賴 `-postgres`、其他上下文與根 crate�
      （S22）。
    - `catalog/runtime-experiments.json` 的 `command` 也是選擇器：路徑失效會讓門禁失敗，但命令選不到測試時不會。
      搬移時要同時更新路徑、錨點與命令（S22）。
+   - 根 crate 與 policy 各有一份相同欄位的型別時，要先合併再搬移。合併時保留會影響外部行為的那一份，包括錯誤文字
+     （S23）。
+   - 在 `#[cfg(test)]` 下的項目搬進新 crate 後，只對那個 crate 的測試生效。根 crate 測試要用的項目改用
+     `cfg(any(test, feature = "test-support"))`，或由根 crate 自己提供（S23）。
+   - 把門禁掃描的型別搬到公開的 core 後，原本「不得公開」的檢查會變成空檢查。要改寫成仍然成立的不變量，而不是只更新
+     路徑（S23）。
+   - Gemini 的內容過濾會拒絕這個上下文的詞彙，S23 全部用腳本完成，規模與 agy 相當，而且可以重放（S23）。
+   - 共用的 `target` 會累積舊 worktree 的增量快取，S23 時 `target/debug/incremental` 佔 458G，把磁碟寫滿。階段之間要
+     清理超過兩天未動的增量目錄（S23）。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -1080,3 +1132,9 @@ Stage 證據仍綁定其原提交。
 | WP-246 | 完成：出席處理與 XEP-0153 移入 `northstar_roster_xmpp::presence`：`PresenceSession`、`PresenceGate`；節錯誤反射與 `child_text` 下移 kernel，`PresenceAccount` 合併為 core 型別 | 見 `git log --grep '\[WP-246\]'` |
 | WP-247 | 完成：`AppState` 以 `RosterModule` 持有五個服務，accessor 不變 | 見 `git log --grep '\[WP-247\]'` |
 | WP-248 | 完成：記錄 S22 的階段與盤點（5.18）與 4.5 的例子。WP-240–247 依序接到 WP-231 之上；fmt、clippy、workspace 測試、層級、模糊測試、本機 PostgreSQL 套件與全部門禁通過 | 見 `git log --grep '\[WP-248\]'` |
+| WP-250 | 完成：`PowIntent`、`MessageAdmissionRequest`、`MessageDedupe*`、`ContentIdentityAuthenticator*` 併入 `northstar-abuse-policy`，保留根 crate 的錯誤文字與不可失敗的建構式；根 crate 的 `ContentIdentityPurpose` 移除 | 見 `git log --grep '\[WP-250\]'` |
+| WP-251 | 完成：`AdmissionCommitObserver` 放在 core，`AdmissionWitness` 實作它；`AbusePersistence` 與介面卡改收 `&dyn AdmissionCommitObserver` | 見 `git log --grep '\[WP-251\]'` |
+| WP-252 | 完成：建立 `northstar-abuse-application`；23 個純測試隨 guard 移動，9 個移到 `db::abuse_guard_tests`，經 `test-support` 取得內部項目；`ContentIdentityPurpose` 的掃描擴大到 `crates/contexts` | 見 `git log --grep '\[WP-252\]'` |
+| WP-253 | 完成：建立 `northstar-abuse-postgres`；`AbuseEffects` 取出金鑰引用計數與過期離線准入清理，根 crate 的 `RootAbuseEffects` 實作；`commit_observed` 移入介面卡；`MessageAdmissionRepository` 留在根 crate，委派給固有方法；含資料庫的金鑰測試移到 `db::abuse_keys_tests` | 見 `git log --grep '\[WP-253\]'` |
+| WP-254 | 完成：`AppState` 以 `AbuseModule` 持有五個欄位，accessor 不變 | 見 `git log --grep '\[WP-254\]'` |
+| WP-255 | 完成：記錄 S23 的階段與盤點（5.19）與 4.5 的例子。WP-250–254 依序接到 WP-248 之上；fmt、clippy、workspace 測試、層級、模糊測試、本機 PostgreSQL 套件與全部門禁通過 | 見 `git log --grep '\[WP-255\]'` |

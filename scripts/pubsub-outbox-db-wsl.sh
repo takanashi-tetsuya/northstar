@@ -10,8 +10,8 @@ cd "$project_dir"
 northstar_use_test_toolchain "$project_dir"
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema"
 
-output="$(cargo test --locked --offline \
-  db::pubsub_outbox::tests::commit_claim_lease_takeover_payload_binding_and_ack_are_fenced \
+output="$(cargo test --locked --offline -p northstar-pubsub-postgres \
+  outbox::tests::commit_claim_lease_takeover_payload_binding_and_ack_are_fenced \
   -- --ignored --exact --nocapture 2>&1)" || {
   printf '%s\n' "$output"
   exit 1

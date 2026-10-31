@@ -1046,6 +1046,7 @@ digraph compile_time {
   "northstar-pubsub-xmpp" -> "northstar-xmpp-types";
   "northstar-pubsub-xmpp" -> "roxmltree";
   "northstar-pubsub-xmpp" -> "sha1";
+  "northstar-pubsub-xmpp" -> "tracing";
   "northstar-pubsub-xmpp" -> "uuid";
   "northstar-room-application" -> "northstar-room-core";
   "northstar-room-application" -> "uuid";

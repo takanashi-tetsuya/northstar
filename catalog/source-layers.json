@@ -98,9 +98,6 @@
     "src/xmpp/protocol/pep/publishing.rs": [
       "state"
     ],
-    "src/xmpp/protocol/private.rs": [
-      "state"
-    ],
     "src/xmpp/protocol/pubsub.rs": [
       "state"
     ],

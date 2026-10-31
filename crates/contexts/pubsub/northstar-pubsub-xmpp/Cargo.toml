@@ -18,4 +18,5 @@ northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 roxmltree = "0.20"
 sha1 = "0.10"
+tracing = "0.1"
 uuid = { version = "1.12", features = ["v4"] }

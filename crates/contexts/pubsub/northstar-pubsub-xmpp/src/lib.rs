@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod payload;
+pub mod private_xml;
 pub mod pubsub;
 
 use northstar_pubsub_application::{

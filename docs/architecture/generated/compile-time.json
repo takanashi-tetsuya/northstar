@@ -2855,6 +2855,10 @@
     ],
     [
       "northstar-pubsub-xmpp",
+      "tracing"
+    ],
+    [
+      "northstar-pubsub-xmpp",
       "uuid"
     ],
     [

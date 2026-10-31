@@ -232,6 +232,16 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-pubsub-postgres
+    package: northstar-pubsub-postgres
+    path: crates/contexts/pubsub/northstar-pubsub-postgres
+    tier: context
+    context: pubsub
+    role: adapter
+    owner_team: realtime
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-room-application
     package: northstar-room-application
     path: crates/contexts/room/northstar-room-application

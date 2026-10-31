@@ -23,22 +23,19 @@ use northstar_pubsub_core::{
     PepCreateOutcome, PepDirectOutboxFactory, PepDirectStateSnapshot, PepDirectStateTransition,
     PepItem, PepNodeConfig, PepOutboxAuthorizationMode, PepOutboxAuthorizationOutcome,
     PepOutboxDropReason, PepOutboxEventKind, PepOutboxFactory, PepOwnerMutationOutcome,
-    PepPresenceSubscription, PepPublishOutcome, PepQuotas, PepSubscribeOutboxFactory,
-    PepSubscribeOutcome, PepSubscribeSnapshot, PepSubscription, PepSubscriptionActor,
-    PepUnsubscribeOutcome, PubSubAccount, PubSubAffiliation, PubSubConfigOutcome, PubSubItem,
-    PubSubNode, PubSubNodeConfig, PubSubNodeMetadata, PubSubNotificationDelivery,
-    PubSubOutboxDeliveryKind, PubSubOutboxFailureDisposition, PubSubOutboxInsert,
-    PubSubOutboxSnapshot, PubSubOutboxSource, PubSubSubscription, PubSubSubscriptionOptions,
-    PublishItemsOutcome, RetractItemsOutcome, SetAffiliationsOutcome, SetSubscriptionsOutcome,
-    SubscribeOutcome, SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome,
-    UnsubscribeOutcome,
+    PepPresenceSubscription, PepPublishOutcome, PepSubscribeOutboxFactory, PepSubscribeOutcome,
+    PepSubscribeSnapshot, PepSubscription, PepSubscriptionActor, PepUnsubscribeOutcome,
+    PubSubAccount, PubSubAffiliation, PubSubConfigOutcome, PubSubItem, PubSubNode,
+    PubSubNodeConfig, PubSubNodeMetadata, PubSubOutboxDeliveryKind, PubSubOutboxFailureDisposition,
+    PubSubOutboxInsert, PubSubOutboxSnapshot, PubSubOutboxSource, PubSubSubscription,
+    PubSubSubscriptionOptions, PublishItemsOutcome, RetractItemsOutcome, SetAffiliationsOutcome,
+    SetSubscriptionsOutcome, SubscribeOutcome, SubscriptionAuthorizationOutcome,
+    SubscriptionOptionsOutcome, UnsubscribeOutcome,
 };
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
 
-mod conversions;
-mod outbox_rendering;
 mod pep_ports;
 mod pubsub_outbox;
 mod pubsub_ports;
@@ -302,7 +299,7 @@ impl PostgresPubSubRepository {
         Ok(())
     }
     async fn begin_mutation(&self) -> Result<Transaction<'_, Postgres>> {
-        db::pubsub::begin_bounded_pubsub_mutation(&self.pool).await
+        northstar_pubsub_postgres::begin_bounded_pubsub_mutation(&self.pool).await
     }
     #[allow(clippy::too_many_arguments)]
     async fn exact_pep_outbox(
@@ -664,7 +661,7 @@ pub(crate) fn db_outbox(entries: &[PubSubOutboxInsert]) -> Vec<db::PubSubOutboxI
 fn map_database_busy(error: anyhow::Error) -> anyhow::Error {
     if error.chain().any(|cause| {
         cause
-            .downcast_ref::<db::pubsub::PubSubMutationBusy>()
+            .downcast_ref::<northstar_pubsub_postgres::PubSubMutationBusy>()
             .is_some()
             || cause
                 .downcast_ref::<sqlx::Error>()

@@ -1,12 +1,18 @@
-use super::*;
 use crate::db;
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use northstar_pubsub_application::service::PubSubEventRenderer;
 use northstar_pubsub_application::{
     service::{CollectionDiscoItems, LeafDiscoItems},
     PubSubCollectionDiscoChild,
 };
 use northstar_pubsub_core::{PepAudienceSnapshot, PepOutboxFactory};
+use northstar_pubsub_postgres::*;
+use sqlx::{PgPool, Transaction};
+use std::collections::BTreeSet;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
+use uuid::Uuid;
 
 #[path = "pubsub_integration_tests/access_policy_tests.rs"]
 mod access_policy;
@@ -56,9 +62,7 @@ impl RenderGate {
 }
 
 struct RaceMutationRenderer {
-    inner: northstar_pubsub_application::PubSubService<
-        crate::db::pubsub_repository::PostgresPubSubRepository,
-    >,
+    inner: PubSubEventRenderer,
     observations: tokio::sync::mpsc::UnboundedSender<MutationObservation>,
     gate: Option<Arc<RenderGate>>,
 }
@@ -99,7 +103,7 @@ impl PubSubMutationOutboxRenderer for RaceMutationRenderer {
         audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
         created_at: DateTime<Utc>,
-    ) -> Result<Vec<super::super::PubSubOutboxInsert>> {
+    ) -> Result<Vec<db::PubSubOutboxInsert>> {
         self.observe("create", audience, &[], event_id)?;
         PubSubMutationOutboxRenderer::render_create(
             &self.inner,
@@ -117,7 +121,7 @@ impl PubSubMutationOutboxRenderer for RaceMutationRenderer {
         audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
         created_at: DateTime<Utc>,
-    ) -> Result<Vec<super::super::PubSubOutboxInsert>> {
+    ) -> Result<Vec<db::PubSubOutboxInsert>> {
         self.observe("items", audience, &[], event_id)?;
         PubSubMutationOutboxRenderer::render_items(
             &self.inner,
@@ -135,7 +139,7 @@ impl PubSubMutationOutboxRenderer for RaceMutationRenderer {
         audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
         created_at: DateTime<Utc>,
-    ) -> Result<Vec<super::super::PubSubOutboxInsert>> {
+    ) -> Result<Vec<db::PubSubOutboxInsert>> {
         self.observe("purge", audience, &[], event_id)?;
         PubSubMutationOutboxRenderer::render_purge(
             &self.inner,
@@ -153,7 +157,7 @@ impl PubSubMutationOutboxRenderer for RaceMutationRenderer {
         audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
         created_at: DateTime<Utc>,
-    ) -> Result<Vec<super::super::PubSubOutboxInsert>> {
+    ) -> Result<Vec<db::PubSubOutboxInsert>> {
         self.observe("retract", audience, &[], event_id)?;
         PubSubMutationOutboxRenderer::render_retract(
             &self.inner,
@@ -173,7 +177,7 @@ impl PubSubMutationOutboxRenderer for RaceMutationRenderer {
         nonactive_recipients: &[String],
         event_id: Uuid,
         created_at: DateTime<Utc>,
-    ) -> Result<Vec<super::super::PubSubOutboxInsert>> {
+    ) -> Result<Vec<db::PubSubOutboxInsert>> {
         self.observe("delete", audience, nonactive_recipients, event_id)?;
         PubSubMutationOutboxRenderer::render_delete(
             &self.inner,
@@ -193,7 +197,7 @@ impl PubSubMutationOutboxRenderer for RaceMutationRenderer {
         audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
         created_at: DateTime<Utc>,
-    ) -> Result<Vec<super::super::PubSubOutboxInsert>> {
+    ) -> Result<Vec<db::PubSubOutboxInsert>> {
         self.observe("configuration", audience, &[], event_id)?;
         PubSubMutationOutboxRenderer::render_configuration(
             &self.inner,
@@ -213,7 +217,7 @@ impl PubSubMutationOutboxRenderer for RaceMutationRenderer {
         audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
         created_at: DateTime<Utc>,
-    ) -> Result<Vec<super::super::PubSubOutboxInsert>> {
+    ) -> Result<Vec<db::PubSubOutboxInsert>> {
         self.observe("collection", audience, &[], event_id)?;
         PubSubMutationOutboxRenderer::render_collection_edge(
             &self.inner,
@@ -235,7 +239,7 @@ impl PubSubMutationOutboxRenderer for RaceMutationRenderer {
         last_item: Option<&PubSubItem>,
         event_id: Uuid,
         created_at: DateTime<Utc>,
-    ) -> Result<Vec<super::super::PubSubOutboxInsert>> {
+    ) -> Result<Vec<db::PubSubOutboxInsert>> {
         let mut recipients = notify_recipients.to_vec();
         recipients.extend_from_slice(authorization_recipients);
         if last_item.is_some() {
@@ -261,7 +265,7 @@ impl PubSubMutationOutboxRenderer for RaceMutationRenderer {
         affiliation: &str,
         event_id: Uuid,
         created_at: DateTime<Utc>,
-    ) -> Result<Vec<super::super::PubSubOutboxInsert>> {
+    ) -> Result<Vec<db::PubSubOutboxInsert>> {
         self.observe("affiliation", &[], &[jid.to_owned()], event_id)?;
         PubSubMutationOutboxRenderer::render_affiliation_transition(
             &self.inner,

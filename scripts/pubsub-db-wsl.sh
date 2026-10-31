@@ -183,6 +183,7 @@ export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PG
 
 run_exact_ignored() {
   local test_name="$1"
+  local package="${2:-}"
   local output_log command_status
   output_log="$(mktemp --tmpdir="${TMPDIR:-/tmp}" northstar-pubsub-test.XXXXXXXX)"
   if [[ ! -f "$output_log" || -L "$output_log" ]]; then
@@ -196,7 +197,7 @@ run_exact_ignored() {
   # with no useful evidence. The CI process-group supervisor still owns this
   # pipeline, while the log retains the exact-one-test assertion below.
   set +e
-  cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture 2>&1 | tee "$output_log"
+  cargo test --locked --offline ${package:+-p "$package"} "$test_name" -- --ignored --exact --nocapture 2>&1 | tee "$output_log"
   command_status=${PIPESTATUS[0]}
   set -e
   if (( command_status != 0 )); then
@@ -212,69 +213,69 @@ run_exact_ignored() {
 }
 
 run_exact_ignored \
-  db::pubsub::integration_tests::read_only_disco::query_ports_succeed_with_read_only_database_connections
+  db::pubsub_integration_tests::read_only_disco::query_ports_succeed_with_read_only_database_connections
 run_exact_ignored \
-  db::pubsub::integration_tests::read_only_disco::leaf_disco_uses_read_only_snapshot_and_live_subscription_scope
+  db::pubsub_integration_tests::read_only_disco::leaf_disco_uses_read_only_snapshot_and_live_subscription_scope
 run_exact_ignored \
-  db::pubsub::integration_tests::read_only_disco::leaf_disco_sql_gate_matches_pure_retrieval_policy
+  db::pubsub_integration_tests::read_only_disco::leaf_disco_sql_gate_matches_pure_retrieval_policy
 run_exact_ignored \
-  db::pubsub::integration_tests::read_only_disco::leaf_disco_rechecks_configuration_after_stale_node_lookup
+  db::pubsub_integration_tests::read_only_disco::leaf_disco_rechecks_configuration_after_stale_node_lookup
 run_exact_ignored \
-  db::pubsub::integration_tests::read_only_disco::collection_disco_sql_gate_matches_parent_policy_on_read_only_pool
+  db::pubsub_integration_tests::read_only_disco::collection_disco_sql_gate_matches_parent_policy_on_read_only_pool
 run_exact_ignored \
-  db::pubsub::integration_tests::read_only_disco::collection_disco_rechecks_parent_and_edges_after_stale_lookup
+  db::pubsub_integration_tests::read_only_disco::collection_disco_rechecks_parent_and_edges_after_stale_lookup
 run_exact_ignored \
-  db::pubsub::integration_tests::access_policy::node_metadata_keeps_affiliation_order_and_live_subscription_scope
+  db::pubsub_integration_tests::access_policy::node_metadata_keeps_affiliation_order_and_live_subscription_scope
 run_exact_ignored \
-  db::pubsub::integration_tests::access_policy::restricted_open_publish_is_denied_by_locked_publish_and_retract
+  db::pubsub_integration_tests::access_policy::restricted_open_publish_is_denied_by_locked_publish_and_retract
 run_exact_ignored \
-  db::pubsub::integration_tests::access_policy::publish_rechecks_access_model_after_concurrent_config_change
+  db::pubsub_integration_tests::access_policy::publish_rechecks_access_model_after_concurrent_config_change
 run_exact_ignored \
-  db::pubsub::integration_tests::mutation_transaction::timed_out_mutation_begin_rolls_back_before_releasing_connection
+  db::pubsub_integration_tests::mutation_transaction::timed_out_mutation_begin_rolls_back_before_releasing_connection
 run_exact_ignored \
-  db::pubsub::integration_tests::mutation_transaction::timed_out_mutation_acquire_leaves_no_detached_waiter
+  db::pubsub_integration_tests::mutation_transaction::timed_out_mutation_acquire_leaves_no_detached_waiter
 run_exact_ignored \
-  db::pubsub::integration_tests::digest_lease::graph_cycle_subscription_quota_and_digest_claim_are_atomic
+  db::pubsub_integration_tests::digest_lease::graph_cycle_subscription_quota_and_digest_claim_are_atomic
 run_exact_ignored \
-  db::pubsub::integration_tests::digest_lease::digest_idle_preflight_preserves_leases_and_authority_errors
+  db::pubsub_integration_tests::digest_lease::digest_idle_preflight_preserves_leases_and_authority_errors
 run_exact_ignored \
-  db::pubsub::integration_tests::mutation_transaction::mutation_authority_and_stale_preconditions_are_checked_in_transaction
+  db::pubsub_integration_tests::mutation_transaction::mutation_authority_and_stale_preconditions_are_checked_in_transaction
 run_exact_ignored \
-  db::pubsub::integration_tests::audience::publish_audience_is_linearizable_with_unsubscribe
+  db::pubsub_integration_tests::audience::publish_audience_is_linearizable_with_unsubscribe
 run_exact_ignored \
-  db::pubsub::integration_tests::audience::retract_graph_outcast_and_last_item_snapshots_are_linearizable
+  db::pubsub_integration_tests::audience::retract_graph_outcast_and_last_item_snapshots_are_linearizable
 run_exact_ignored \
-  db::pubsub::integration_tests::audience::mutation_audiences_are_serialized_with_subscribe_and_unsubscribe
+  db::pubsub_integration_tests::audience::mutation_audiences_are_serialized_with_subscribe_and_unsubscribe
 run_exact_ignored \
-  db::pubsub::integration_tests::access_policy::concurrent_config_updates_use_a_locked_expected_snapshot
+  db::pubsub_integration_tests::access_policy::concurrent_config_updates_use_a_locked_expected_snapshot
 run_exact_ignored \
-  db::pubsub::integration_tests::digest_lease::lease_expiry_is_evaluated_after_a_graph_lock_wait
+  db::pubsub_integration_tests::digest_lease::lease_expiry_is_evaluated_after_a_graph_lock_wait
 run_exact_ignored \
-  db::pubsub::integration_tests::access_policy::prohibited_affiliation_wins_atomically_over_owner_subscription_batch
+  db::pubsub_integration_tests::access_policy::prohibited_affiliation_wins_atomically_over_owner_subscription_batch
 run_exact_ignored \
-  db::pubsub::integration_tests::collection_graph::multi_parent_create_emits_one_recursive_audience_snapshot
+  db::pubsub_integration_tests::collection_graph::multi_parent_create_emits_one_recursive_audience_snapshot
 run_exact_ignored \
-  db::pubsub::integration_tests::collection_graph::repeated_associate_is_idempotent_after_a_graph_lock_wait
+  db::pubsub_integration_tests::collection_graph::repeated_associate_is_idempotent_after_a_graph_lock_wait
 run_exact_ignored \
-  db::pubsub::integration_tests::collection_graph::collection_edges_require_child_ownership_and_legacy_edges_do_not_disclose
+  db::pubsub_integration_tests::collection_graph::collection_edges_require_child_ownership_and_legacy_edges_do_not_disclose
 run_exact_ignored \
-  db::pubsub::integration_tests::collection_graph::collection_edge_insert_linearizes_after_child_owner_revocation
+  db::pubsub_integration_tests::collection_graph::collection_edge_insert_linearizes_after_child_owner_revocation
 run_exact_ignored \
-  db::pubsub::integration_tests::subscription_lock_wait::subscription_and_option_retries_do_not_emit_transitions_after_lock_wait
+  db::pubsub_integration_tests::subscription_lock_wait::subscription_and_option_retries_do_not_emit_transitions_after_lock_wait
 run_exact_ignored \
-  db::pubsub::integration_tests::subscription_lock_wait::subscription_options_recheck_node_policy_after_lock_wait
+  db::pubsub_integration_tests::subscription_lock_wait::subscription_options_recheck_node_policy_after_lock_wait
 run_exact_ignored \
-  db::pubsub::integration_tests::subscription_lock_wait::subscribe_options_recheck_remote_show_values_after_lock_wait
+  db::pubsub_integration_tests::subscription_lock_wait::subscribe_options_recheck_remote_show_values_after_lock_wait
 run_exact_ignored \
-  db::pubsub::integration_tests::bookmarks::bookmarks2_outbox_uses_locked_item_diff_after_lock_wait
+  db::pubsub_integration_tests::bookmarks::bookmarks2_outbox_uses_locked_item_diff_after_lock_wait
 run_exact_ignored \
-  db::pubsub::integration_tests::bookmarks::legacy_bookmark_commit_conflict_is_atomic_and_success_uses_locked_diff
+  db::pubsub_integration_tests::bookmarks::legacy_bookmark_commit_conflict_is_atomic_and_success_uses_locked_diff
 run_exact_ignored \
-  db::pep::integration_tests::pep_node_subscription_and_item_transitions_are_atomic
+  db::pep_roster::integration_tests::pep_node_subscription_and_item_transitions_are_atomic
 run_exact_ignored \
-  db::vcard::tests::avatar_conversion_is_atomic_across_pep_and_vcard
+  vcard::tests::avatar_conversion_is_atomic_across_pep_and_vcard northstar-pubsub-postgres
 run_exact_ignored \
-  db::vcard::tests::converted_avatar_uses_the_exact_locked_pep_subscription_snapshot
+  vcard::tests::converted_avatar_uses_the_exact_locked_pep_subscription_snapshot northstar-pubsub-postgres
 
 run_exact_ignored \
   db::profile::tests::profile_publish_uses_exact_subscribe_and_block_snapshot

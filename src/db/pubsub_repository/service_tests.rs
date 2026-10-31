@@ -176,10 +176,7 @@ async fn same_owner_advisory_contention_does_not_exhaust_the_shared_pool() {
 
 #[tokio::test]
 async fn generic_transaction_renderer_preserves_collection_and_last_item_snapshots() {
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .connect_lazy("postgres://unused:unused@localhost/unused")
-        .unwrap();
-    let service = crate::db::pubsub_repository::test_pubsub_service(pool, "example.test");
+    let renderer = northstar_pubsub_application::service::PubSubEventRenderer::new("example.test");
     let child = renderer_node(Uuid::from_u128(10), "child<&", "leaf");
     let parent = renderer_node(Uuid::from_u128(11), "parent<&", "collection");
     let subscription = renderer_subscription(&parent.node, "alice@example.test/phone");
@@ -190,7 +187,7 @@ async fn generic_transaction_renderer_preserves_collection_and_last_item_snapsho
     }];
     let created_at = Utc.with_ymd_and_hms(2031, 1, 2, 3, 4, 5).unwrap();
     let create = db::PubSubMutationOutboxRenderer::render_create(
-        &service,
+        &renderer,
         &child,
         &audience,
         Uuid::from_u128(12),
@@ -231,7 +228,7 @@ async fn generic_transaction_renderer_preserves_collection_and_last_item_snapsho
         created_at,
     };
     let rendered = db::PubSubMutationOutboxRenderer::render_subscription_transition(
-        &service,
+        &renderer,
         &child,
         &pending,
         &["owner@example.test".to_owned()],

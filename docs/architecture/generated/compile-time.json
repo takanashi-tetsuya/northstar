@@ -186,6 +186,7 @@
     "northstar-protocol-runtime",
     "northstar-pubsub-application",
     "northstar-pubsub-core",
+    "northstar-pubsub-postgres",
     "northstar-room-application",
     "northstar-room-core",
     "northstar-roster-application",
@@ -2756,6 +2757,62 @@
       "uuid"
     ],
     [
+      "northstar-pubsub-postgres",
+      "anyhow"
+    ],
+    [
+      "northstar-pubsub-postgres",
+      "chrono"
+    ],
+    [
+      "northstar-pubsub-postgres",
+      "futures"
+    ],
+    [
+      "northstar-pubsub-postgres",
+      "northstar-postgres"
+    ],
+    [
+      "northstar-pubsub-postgres",
+      "northstar-pubsub-application"
+    ],
+    [
+      "northstar-pubsub-postgres",
+      "northstar-pubsub-core"
+    ],
+    [
+      "northstar-pubsub-postgres",
+      "northstar-telemetry"
+    ],
+    [
+      "northstar-pubsub-postgres",
+      "northstar-xep-0060"
+    ],
+    [
+      "northstar-pubsub-postgres",
+      "northstar-xmpp-types"
+    ],
+    [
+      "northstar-pubsub-postgres",
+      "serde"
+    ],
+    [
+      "northstar-pubsub-postgres",
+      "sqlx"
+    ],
+    [
+      "northstar-pubsub-postgres",
+      "thiserror"
+    ],
+    [
+      "northstar-pubsub-postgres",
+      "tokio"
+    ],
+    [
+      "northstar-pubsub-postgres",
+      "uuid"
+    ],
+    [
       "northstar-room-application",
       "northstar-room-core"
     ],
@@ -4782,6 +4839,10 @@
     [
       "rust-xmpp-server",
       "northstar-pubsub-core"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-pubsub-postgres"
     ],
     [
       "rust-xmpp-server",

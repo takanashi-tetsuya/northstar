@@ -35,7 +35,7 @@ lifecycle and private health. `src/runtime/retention.rs` receives only a retenti
 policy, database pool and metrics. Retention SQL belongs to `src/db/retention.rs`.
 `src/runtime/subscription_cleanup.rs` owns physical subscription cleanup with only the
 existing pool, narrow counters and independent readiness; its SQL remains in
-`src/db/pubsub.rs`. Application services and protocol handlers remain outside
+`crates/contexts/pubsub/northstar-pubsub-postgres`. Application services and protocol handlers remain outside
 these maintenance dependency paths.
 
 Core tracks whether a connection has ever attempted to reserve or receive a

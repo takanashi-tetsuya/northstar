@@ -216,7 +216,8 @@ impl PostgresProfileRepository {
         user_id: Uuid,
         expected_auth_generation: i64,
     ) -> Result<Option<(Transaction<'_, Postgres>, String)>> {
-        let mut transaction = crate::db::pubsub::begin_bounded_pubsub_mutation(&self.pool).await?;
+        let mut transaction =
+            northstar_pubsub_postgres::begin_bounded_pubsub_mutation(&self.pool).await?;
         lock_profile_account(&mut transaction, user_id).await?;
         let owner_username = sqlx::query_scalar::<_, String>(
             "SELECT username FROM users
@@ -319,7 +320,7 @@ impl ProfileRepository for PostgresProfileRepository {
         };
         if let Some(data_item) = write.data_item {
             let data_config = db::default_pep_node_config(AVATAR_DATA);
-            let outcome = db::pep::publish_pep_items_in_transaction(
+            let outcome = northstar_pubsub_postgres::publish_pep_items_in_transaction(
                 &mut transaction,
                 write.user_id,
                 AVATAR_DATA,
@@ -335,7 +336,7 @@ impl ProfileRepository for PostgresProfileRepository {
             }
         }
         let metadata_config = db::default_pep_node_config(AVATAR_METADATA);
-        let outcome = db::pep::publish_pep_items_in_transaction(
+        let outcome = northstar_pubsub_postgres::publish_pep_items_in_transaction(
             &mut transaction,
             write.user_id,
             AVATAR_METADATA,
@@ -406,7 +407,7 @@ impl ProfileRepository for PostgresProfileRepository {
             false,
         )
         .await?;
-        let outcome = db::pep::publish_pep_items_in_transaction(
+        let outcome = northstar_pubsub_postgres::publish_pep_items_in_transaction(
             &mut transaction,
             write.user_id,
             write.node,
@@ -496,7 +497,7 @@ impl ProfileRepository for PostgresProfileRepository {
             true,
         )
         .await?;
-        let outcome = db::pep::publish_pep_items_in_transaction(
+        let outcome = northstar_pubsub_postgres::publish_pep_items_in_transaction(
             &mut transaction,
             write.user_id,
             AVATAR_METADATA,
@@ -551,17 +552,6 @@ impl ProfileRepository for PostgresProfileRepository {
             content_changed: changed,
             avatar_presence,
         })
-    }
-}
-
-impl From<db::PepPublishOutcome> for ProfilePublishStatus {
-    fn from(value: db::PepPublishOutcome) -> Self {
-        match value {
-            db::PepPublishOutcome::Published => Self::Published,
-            db::PepPublishOutcome::PreconditionFailed => Self::PreconditionFailed,
-            db::PepPublishOutcome::MaxItemsExceeded => Self::MaxItemsExceeded,
-            db::PepPublishOutcome::QuotaExceeded => Self::QuotaExceeded,
-        }
     }
 }
 

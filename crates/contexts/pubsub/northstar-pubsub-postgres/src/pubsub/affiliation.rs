@@ -31,7 +31,7 @@ pub async fn affiliations_for_jid(
     Ok(rows.iter().map(row_to_affiliation).collect())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn set_affiliations(
     pool: &PgPool,
     node_id: Uuid,

@@ -19,7 +19,7 @@ pub async fn is_subscribed(pool: &PgPool, node_id: Uuid, jid: &str) -> Result<bo
 /// Read affiliation and active subscription from one statement snapshot.
 /// Publication transactions still make their authoritative decision under
 /// their existing locks.
-pub(crate) async fn node_authorization_facts(
+pub async fn node_authorization_facts(
     pool: &PgPool,
     node_id: Uuid,
     requester: &str,
@@ -81,12 +81,12 @@ pub async fn subscriptions_addressing_jid_page(
     Ok(rows.iter().map(row_to_subscription).collect())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn set_subscription(pool: &PgPool, node_id: Uuid, jid: &str, state: &str) -> Result<()> {
     set_subscription_with_outbox(pool, node_id, jid, state, &[]).await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn set_subscription_with_outbox(
     pool: &PgPool,
     node_id: Uuid,
@@ -441,12 +441,12 @@ pub async fn set_subscriptions_with_renderer(
     Ok(SetSubscriptionsOutcome::Updated(transitions))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn unsubscribe(pool: &PgPool, node_id: Uuid, jid: &str) -> Result<bool> {
     unsubscribe_with_outbox(pool, node_id, jid, &[]).await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn unsubscribe_with_outbox(
     pool: &PgPool,
     node_id: Uuid,
@@ -580,7 +580,7 @@ pub async fn get_subscription(
     Ok(row.as_ref().map(row_to_subscription))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn set_subscription_limited(
     pool: &PgPool,
     local_domain: &str,
@@ -605,7 +605,7 @@ pub async fn set_subscription_limited(
 /// Creates/renews a subscription and applies its options in one transaction.
 /// Options and authorization are checked again under the node and subscription
 /// locks before either the subscription or its notification outbox changes.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn set_subscription_limited_with_options(
     pool: &PgPool,
     local_domain: &str,

@@ -86,11 +86,10 @@ pub mod mix_repository;
 pub mod muc;
 pub(crate) mod node_message_projection_repository;
 pub mod omemo_recovery;
-pub mod pep;
+pub mod pep_roster;
 pub(crate) mod pie;
 pub mod presence_repository;
 pub mod privacy;
-pub mod private;
 pub mod profile;
 pub mod profile_identity;
 pub mod push;
@@ -119,7 +118,6 @@ pub(crate) mod sm_teardown_muc_repository;
 pub(crate) mod sm_teardown_presence_repository;
 pub(crate) mod sm_teardown_repository;
 pub mod users;
-pub mod vcard;
 pub use abuse_keys::*;
 pub use account_deletion::*;
 pub use admin_commands::*;
@@ -136,9 +134,8 @@ pub use mix::*;
 pub use mix_muc::*;
 pub use muc::*;
 pub use omemo_recovery::*;
-pub use pep::*;
+pub use pep_roster::*;
 pub use privacy::*;
-pub use private::*;
 pub use push::*;
 pub use reports::*;
 pub use retention::*;
@@ -148,12 +145,10 @@ pub use s2s::*;
 pub use schema::*;
 pub use sm::*;
 pub use users::*;
-pub use vcard::*;
-pub mod pubsub;
-pub mod pubsub_outbox;
+#[cfg(test)]
+mod pubsub_integration_tests;
 pub mod pubsub_repository;
-pub use pubsub::*;
-pub use pubsub_outbox::*;
+pub use northstar_pubsub_postgres::*;
 
 #[cfg(test)]
 pub async fn migrate(pool: &PgPool) -> Result<()> {

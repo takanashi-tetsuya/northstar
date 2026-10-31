@@ -2042,6 +2042,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-pubsub-postgres"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "futures",
+ "northstar-postgres",
+ "northstar-pubsub-application",
+ "northstar-pubsub-core",
+ "northstar-telemetry",
+ "northstar-xep-0060",
+ "northstar-xmpp-types",
+ "serde",
+ "sqlx",
+ "thiserror 2.0.20",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "northstar-room-application"
 version = "0.1.0"
 dependencies = [
@@ -3352,6 +3372,7 @@ dependencies = [
  "northstar-protocol-runtime",
  "northstar-pubsub-application",
  "northstar-pubsub-core",
+ "northstar-pubsub-postgres",
  "northstar-room-application",
  "northstar-room-core",
  "northstar-roster-application",

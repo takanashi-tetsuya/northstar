@@ -9,12 +9,12 @@ use uuid::Uuid;
 /// owns the transaction. A synchronous callback keeps those responsibilities
 /// separated without yielding or opening another database connection inside
 /// the critical section.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub trait ConvertedAvatarOutboxFactory: Send + Sync {
     fn build(&self, subscriber_jids: &[String]) -> Result<Vec<super::PubSubOutboxInsert>>;
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl<F> ConvertedAvatarOutboxFactory for F
 where
     F: Fn(&[String]) -> Result<Vec<super::PubSubOutboxInsert>> + Send + Sync,
@@ -51,7 +51,7 @@ pub async fn get_vcard(pool: &PgPool, user_id: Uuid) -> Result<VCardRecord> {
 /// metadata items as one account-scoped transaction.  The metadata item is
 /// the public avatar switch; no observer can therefore see it without the
 /// matching vCard fallback or after a rejected quota/precondition check.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn set_vcard_with_converted_avatar(
     pool: &PgPool,
     user_id: Uuid,
@@ -76,7 +76,7 @@ pub async fn set_vcard_with_converted_avatar(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn set_vcard_with_converted_avatar_and_outbox(
     pool: &PgPool,
     user_id: Uuid,
@@ -164,7 +164,7 @@ pub async fn set_vcard_with_converted_avatar_and_outbox(
 /// XEP-0398 vCard projection.  The already-published data item is deliberately
 /// not rewritten; its hash and byte length are validated by the protocol
 /// layer immediately before entering this transaction.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub struct AvatarMetadataWrite<'a> {
     pub requested: &'a super::PepNodeConfig,
     pub enforce_preconditions: bool,
@@ -175,7 +175,7 @@ pub struct AvatarMetadataWrite<'a> {
     pub avatar_hash: Option<&'a str>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn publish_avatar_metadata_with_vcard(
     pool: &PgPool,
     user_id: Uuid,
@@ -184,7 +184,7 @@ pub async fn publish_avatar_metadata_with_vcard(
     publish_avatar_metadata_with_vcard_and_outbox(pool, user_id, write, &[]).await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn publish_avatar_metadata_with_vcard_and_outbox(
     pool: &PgPool,
     user_id: Uuid,
@@ -266,7 +266,7 @@ pub async fn publish_avatar_metadata_with_vcard_and_outbox(
     Ok((super::PepPublishOutcome::Published, changed))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 async fn avatar_node_compatible(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
@@ -287,7 +287,7 @@ async fn avatar_node_compatible(
     }))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 async fn upsert_vcard_in_transaction(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
@@ -376,7 +376,7 @@ mod tests {
             .connect(&url)
             .await
             .unwrap();
-        crate::db::migrate(&pool).await.unwrap();
+        northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
         let user_id = Uuid::new_v4();
         sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
             .bind(user_id)
@@ -546,7 +546,7 @@ mod tests {
             .connect(&url)
             .await
             .unwrap();
-        crate::db::migrate(&pool).await.unwrap();
+        northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
 
         let user_id = Uuid::new_v4();
         let username = format!("vcard-race-{}", &user_id.simple().to_string()[..12]);

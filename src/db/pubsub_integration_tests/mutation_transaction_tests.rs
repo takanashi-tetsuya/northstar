@@ -109,7 +109,7 @@ async fn mutation_authority_and_stale_preconditions_are_checked_in_transaction()
         .await
         .unwrap();
     db::migrate(&pool).await.unwrap();
-    let renderer = crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test");
+    let renderer = PubSubEventRenderer::new("example.test");
 
     let suffix = Uuid::new_v4().simple().to_string();
     let owner = format!("owner-{suffix}@example.test");

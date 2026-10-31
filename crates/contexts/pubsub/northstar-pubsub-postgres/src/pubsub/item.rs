@@ -2,7 +2,7 @@
 
 use super::*;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn publish_items(
     pool: &PgPool,
     node: &PubSubNode,
@@ -216,7 +216,7 @@ pub async fn get_items(
         .collect())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn retract_items(
     pool: &PgPool,
     node_id: Uuid,

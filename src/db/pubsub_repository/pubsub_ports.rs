@@ -117,7 +117,7 @@ impl PubSubNodeQueryRepository for PostgresPubSubRepository {
         requester: &str,
         kind: PubSubOwnerReadKind,
     ) -> Result<PubSubOwnerRead> {
-        db::pubsub::owner_read(&self.pool, node, requester, kind)
+        northstar_pubsub_postgres::owner_read(&self.pool, node, requester, kind)
             .await
             .map_err(map_database_busy)
     }

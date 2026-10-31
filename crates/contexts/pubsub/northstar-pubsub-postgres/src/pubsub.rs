@@ -33,19 +33,18 @@ const COLLECTION_ITEMS_XML_BYTES_MAX: i64 = 4 * 1_048_576;
 /// behind PostgreSQL row/advisory locks.
 #[derive(Debug, thiserror::Error)]
 #[error("PubSub mutation capacity is temporarily exhausted")]
-pub(crate) struct PubSubMutationBusy;
+pub struct PubSubMutationBusy;
 
 /// Start a network-facing PubSub/PEP mutation with bounded pool and database
 /// lock waits.  The process-local admission gate in `PubSubService` runs
 /// before this helper; these limits are the cross-process/foreign-transaction
 /// safety net and therefore remain transaction-local.
-pub(crate) async fn begin_bounded_pubsub_mutation(
-    pool: &PgPool,
-) -> Result<Transaction<'_, Postgres>> {
+pub async fn begin_bounded_pubsub_mutation(pool: &PgPool) -> Result<Transaction<'_, Postgres>> {
     begin_bounded_pubsub_mutation_with_timeout(pool, PUBSUB_POOL_ACQUIRE_TIMEOUT).await
 }
 
-async fn begin_bounded_pubsub_mutation_with_timeout(
+/// [`begin_bounded_pubsub_mutation`] with another admission timeout.
+pub async fn begin_bounded_pubsub_mutation_with_timeout(
     pool: &PgPool,
     admission_timeout: Duration,
 ) -> Result<Transaction<'static, Postgres>> {
@@ -67,7 +66,9 @@ async fn begin_bounded_pubsub_mutation_with_timeout(
     Ok(transaction)
 }
 
-async fn finish_bounded_pubsub_begin(
+/// Waits until `deadline` for `begin`, which runs in its own task so that a timeout cannot
+/// interrupt the BEGIN exchange.
+pub async fn finish_bounded_pubsub_begin(
     deadline: tokio::time::Instant,
     begin: impl std::future::Future<
             Output = std::result::Result<Transaction<'static, Postgres>, sqlx::Error>,
@@ -180,7 +181,7 @@ pub struct PubSubSubscriptionOptions {
 }
 
 impl PubSubSubscriptionOptions {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn for_node_type(node_type: &str) -> Self {
         Self {
             deliver: true,
@@ -229,16 +230,16 @@ pub enum PubSubConfigOutcome {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct PubSubNotificationDelivery {
-    pub(crate) subscription_node_id: Uuid,
-    pub(crate) subscription: PubSubSubscription,
-    pub(crate) collection: Option<String>,
+pub struct PubSubNotificationDelivery {
+    pub subscription_node_id: Uuid,
+    pub subscription: PubSubSubscription,
+    pub collection: Option<String>,
 }
 
 /// Application-layer XML renderer invoked only after the repository has
 /// locked the source node, every ancestor collection and their subscription
 /// authority. The returned rows are inserted before the mutation commits.
-pub(crate) trait PubSubMutationOutboxRenderer: Sync {
+pub trait PubSubMutationOutboxRenderer: Sync {
     fn render_create(
         &self,
         node: &PubSubNode,
@@ -370,16 +371,16 @@ pub(crate) trait PubSubMutationOutboxRenderer: Sync {
     }
 }
 
-#[cfg(test)]
-struct NoopMutationOutboxRenderer;
+#[cfg(any(test, feature = "test-support"))]
+pub struct NoopMutationOutboxRenderer;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl PubSubMutationOutboxRenderer for NoopMutationOutboxRenderer {}
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct FixedMutationOutboxRenderer<'a>(&'a [super::PubSubOutboxInsert]);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl PubSubMutationOutboxRenderer for FixedMutationOutboxRenderer<'_> {
     fn render_create(
         &self,
@@ -1039,9 +1040,9 @@ fn row_to_node(row: &sqlx::postgres::PgRow) -> PubSubNode {
 
 // Compatibility shims for legacy repository-level tests. Production callers
 // cannot provide pre-authorized recipients; they must use the renderer APIs.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
-async fn set_subscription_limited_with_options_and_outbox(
+pub async fn set_subscription_limited_with_options_and_outbox(
     pool: &PgPool,
     local_domain: &str,
     node_id: Uuid,
@@ -1072,8 +1073,8 @@ async fn set_subscription_limited_with_options_and_outbox(
     .await
 }
 
-#[cfg(test)]
-async fn unsubscribe_checked_with_outbox(
+#[cfg(any(test, feature = "test-support"))]
+pub async fn unsubscribe_checked_with_outbox(
     pool: &PgPool,
     node_id: Uuid,
     requester: &str,
@@ -1092,8 +1093,8 @@ async fn unsubscribe_checked_with_outbox(
     .await
 }
 
-#[cfg(test)]
-async fn resolve_pending_subscription_with_outbox(
+#[cfg(any(test, feature = "test-support"))]
+pub async fn resolve_pending_subscription_with_outbox(
     pool: &PgPool,
     node_id: Uuid,
     requester: &str,
@@ -1114,8 +1115,8 @@ async fn resolve_pending_subscription_with_outbox(
     .await
 }
 
-#[cfg(test)]
-async fn set_subscriptions_with_outbox(
+#[cfg(any(test, feature = "test-support"))]
+pub async fn set_subscriptions_with_outbox(
     pool: &PgPool,
     node_id: Uuid,
     requester: &str,
@@ -1134,8 +1135,8 @@ async fn set_subscriptions_with_outbox(
     .await
 }
 
-#[cfg(test)]
-async fn set_affiliations_with_outbox(
+#[cfg(any(test, feature = "test-support"))]
+pub async fn set_affiliations_with_outbox(
     pool: &PgPool,
     node_id: Uuid,
     requester: &str,
@@ -1155,7 +1156,3 @@ async fn set_affiliations_with_outbox(
     )
     .await
 }
-
-#[cfg(test)]
-#[path = "pubsub_integration_tests.rs"]
-mod integration_tests;

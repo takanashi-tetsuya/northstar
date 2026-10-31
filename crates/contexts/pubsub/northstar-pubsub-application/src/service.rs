@@ -92,10 +92,6 @@ impl<R> PubSubService<R> {
             durable_outbox_database_admission,
         }
     }
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn repository_for_tests(&self) -> &R {
-        &self.repository
-    }
     pub fn mutation_admission(&self) -> Arc<PubSubMutationAdmission> {
         Arc::clone(&self.mutation_admission)
     }

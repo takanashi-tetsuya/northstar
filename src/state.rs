@@ -352,7 +352,7 @@ pub struct AppState {
     privacy_service:
         crate::services::privacy::PrivacyService<db::privacy::PostgresPrivacyRepository>,
     private_storage_service: northstar_pubsub_application::private_storage::PrivateStorageService<
-        db::private::PostgresPrivateStorageRepository,
+        northstar_pubsub_postgres::PostgresPrivateStorageRepository,
     >,
     account_service:
         crate::services::account::AccountService<db::account_repository::PostgresAccountRepository>,

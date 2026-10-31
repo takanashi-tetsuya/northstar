@@ -12,7 +12,7 @@ impl PubSubMutationOutboxRenderer for FailingRetractRenderer {
         _: &[PubSubNotificationDelivery],
         _: Uuid,
         _: DateTime<Utc>,
-    ) -> Result<Vec<super::super::super::PubSubOutboxInsert>> {
+    ) -> Result<Vec<db::PubSubOutboxInsert>> {
         anyhow::bail!("intentional renderer failure")
     }
 }
@@ -41,7 +41,7 @@ async fn publish_audience_is_linearizable_with_unsubscribe() {
     let gate = Arc::new(RenderGate::default());
     let (observation_tx, mut observation_rx) = tokio::sync::mpsc::unbounded_channel();
     let renderer = Arc::new(RaceMutationRenderer {
-        inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
+        inner: PubSubEventRenderer::new("example.test"),
         observations: observation_tx,
         gate: Some(Arc::clone(&gate)),
     });
@@ -139,7 +139,7 @@ async fn publish_audience_is_linearizable_with_unsubscribe() {
     let waiting_pool = named_single_connection_pool(&url, &application).await;
     let (second_tx, mut second_rx) = tokio::sync::mpsc::unbounded_channel();
     let second_renderer = Arc::new(RaceMutationRenderer {
-        inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
+        inner: PubSubEventRenderer::new("example.test"),
         observations: second_tx,
         gate: None,
     });
@@ -245,7 +245,7 @@ async fn retract_graph_outcast_and_last_item_snapshots_are_linearizable() {
         .unwrap(),
         SubscribeOutcome::Subscribed(_)
     ));
-    let service = crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test");
+    let service = PubSubEventRenderer::new("example.test");
     assert_eq!(
         associate_collection_child_with_renderer(&pool, &collection, &leaf, &owner, &service,)
             .await
@@ -296,7 +296,7 @@ async fn retract_graph_outcast_and_last_item_snapshots_are_linearizable() {
     let graph_first_pool = named_single_connection_pool(&url, &graph_first_application).await;
     let (graph_first_tx, mut graph_first_rx) = tokio::sync::mpsc::unbounded_channel();
     let graph_first_renderer = Arc::new(RaceMutationRenderer {
-        inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
+        inner: PubSubEventRenderer::new("example.test"),
         observations: graph_first_tx,
         gate: None,
     });
@@ -375,7 +375,7 @@ async fn retract_graph_outcast_and_last_item_snapshots_are_linearizable() {
     let gate = Arc::new(RenderGate::default());
     let (mutation_tx, mut mutation_rx) = tokio::sync::mpsc::unbounded_channel();
     let mutation_renderer = Arc::new(RaceMutationRenderer {
-        inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
+        inner: PubSubEventRenderer::new("example.test"),
         observations: mutation_tx,
         gate: Some(Arc::clone(&gate)),
     });
@@ -473,7 +473,7 @@ async fn retract_graph_outcast_and_last_item_snapshots_are_linearizable() {
     ));
     let (outcast_tx, mut outcast_rx) = tokio::sync::mpsc::unbounded_channel();
     let outcast_renderer = RaceMutationRenderer {
-        inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
+        inner: PubSubEventRenderer::new("example.test"),
         observations: outcast_tx,
         gate: None,
     };
@@ -543,7 +543,7 @@ async fn retract_graph_outcast_and_last_item_snapshots_are_linearizable() {
     let last_jid = format!("last-{suffix}@example.test/tablet");
     let (last_tx, mut last_rx) = tokio::sync::mpsc::unbounded_channel();
     let last_renderer = RaceMutationRenderer {
-        inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
+        inner: PubSubEventRenderer::new("example.test"),
         observations: last_tx,
         gate: None,
     };
@@ -675,7 +675,7 @@ async fn mutation_audiences_are_serialized_with_subscribe_and_unsubscribe() {
     let purge_pool = named_single_connection_pool(&url, &purge_application).await;
     let (purge_observation_tx, mut purge_observation_rx) = tokio::sync::mpsc::unbounded_channel();
     let purge_renderer = Arc::new(RaceMutationRenderer {
-        inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
+        inner: PubSubEventRenderer::new("example.test"),
         observations: purge_observation_tx,
         gate: None,
     });
@@ -745,11 +745,11 @@ async fn mutation_audiences_are_serialized_with_subscribe_and_unsubscribe() {
         &format!("config-{suffix}"),
     )
     .await;
-    let unsubscribe_marker = super::super::super::PubSubOutboxInsert::new(
+    let unsubscribe_marker = db::PubSubOutboxInsert::new(
             Uuid::new_v4(),
             format!("test-unsubscribe:{}", config_node.id),
-            super::super::super::PubSubOutboxSource::PubSub,
-            super::super::super::PubSubOutboxDeliveryKind::PubSubDirect,
+            db::PubSubOutboxSource::PubSub,
+            db::PubSubOutboxDeliveryKind::PubSubDirect,
             config_subscriber.clone(),
             format!("<message xmlns='jabber:client' to='{config_subscriber}'><unsubscribe-fence xmlns='urn:test:pubsub-race'/></message>"),
             None,
@@ -800,7 +800,7 @@ async fn mutation_audiences_are_serialized_with_subscribe_and_unsubscribe() {
     let config_pool = named_single_connection_pool(&url, &config_application).await;
     let (config_observation_tx, mut config_observation_rx) = tokio::sync::mpsc::unbounded_channel();
     let config_renderer = Arc::new(RaceMutationRenderer {
-        inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
+        inner: PubSubEventRenderer::new("example.test"),
         observations: config_observation_tx,
         gate: None,
     });
@@ -878,7 +878,7 @@ async fn mutation_audiences_are_serialized_with_subscribe_and_unsubscribe() {
     let delete_gate = Arc::new(RenderGate::default());
     let (delete_observation_tx, mut delete_observation_rx) = tokio::sync::mpsc::unbounded_channel();
     let delete_renderer = Arc::new(RaceMutationRenderer {
-        inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
+        inner: PubSubEventRenderer::new("example.test"),
         observations: delete_observation_tx,
         gate: Some(Arc::clone(&delete_gate)),
     });

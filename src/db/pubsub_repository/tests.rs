@@ -5,7 +5,7 @@ use northstar_pubsub_application::is_pubsub_mutation_busy;
 fn database_pressure_is_retryable_without_hiding_other_failures() {
     for error in [
         anyhow::Error::from(sqlx::Error::PoolTimedOut),
-        anyhow::Error::from(db::pubsub::PubSubMutationBusy),
+        anyhow::Error::from(northstar_pubsub_postgres::PubSubMutationBusy),
     ] {
         assert!(is_pubsub_mutation_busy(&map_database_busy(error)));
     }

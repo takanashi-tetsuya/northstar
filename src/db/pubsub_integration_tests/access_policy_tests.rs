@@ -112,7 +112,7 @@ async fn restricted_open_publish_is_denied_by_locked_publish_and_retract() {
         PubSubConfigOutcome::Updated
     );
     let restricted_node = get_node_by_id(&pool, node_id).await.unwrap().unwrap();
-    let renderer = crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test");
+    let renderer = PubSubEventRenderer::new("example.test");
     let outbox_before: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM pubsub_event_outbox WHERE source_node=$1")
             .bind(&node_name)
@@ -288,10 +288,7 @@ async fn publish_rechecks_access_model_after_concurrent_config_change() {
         let open_node = open_node.clone();
         let outsider = outsider.clone();
         async move {
-            let renderer = crate::db::pubsub_repository::test_pubsub_service(
-                publish_pool.clone(),
-                "example.test",
-            );
+            let renderer = PubSubEventRenderer::new("example.test");
             publish_items_with_renderer(
                 &publish_pool,
                 &open_node,
@@ -358,7 +355,7 @@ async fn concurrent_config_updates_use_a_locked_expected_snapshot() {
     let gate = Arc::new(RenderGate::default());
     let (first_tx, mut first_rx) = tokio::sync::mpsc::unbounded_channel();
     let first_renderer = Arc::new(RaceMutationRenderer {
-        inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
+        inner: PubSubEventRenderer::new("example.test"),
         observations: first_tx,
         gate: Some(Arc::clone(&gate)),
     });
@@ -487,7 +484,7 @@ async fn prohibited_affiliation_wins_atomically_over_owner_subscription_batch() 
         let gate = Arc::new(RenderGate::default());
         let (affiliation_tx, mut affiliation_rx) = tokio::sync::mpsc::unbounded_channel();
         let affiliation_renderer = Arc::new(RaceMutationRenderer {
-            inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
+            inner: PubSubEventRenderer::new("example.test"),
             observations: affiliation_tx,
             gate: Some(Arc::clone(&gate)),
         });
@@ -580,7 +577,7 @@ async fn prohibited_affiliation_wins_atomically_over_owner_subscription_batch() 
             .unwrap();
         let (publish_tx, mut publish_rx) = tokio::sync::mpsc::unbounded_channel();
         let publish_renderer = RaceMutationRenderer {
-            inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
+            inner: PubSubEventRenderer::new("example.test"),
             observations: publish_tx,
             gate: None,
         };

@@ -1010,7 +1010,7 @@ async fn lease_expiry_is_evaluated_after_a_graph_lock_wait() {
     let publish_pool = named_single_connection_pool(&url, &application).await;
     let (observation_tx, mut observation_rx) = tokio::sync::mpsc::unbounded_channel();
     let renderer = Arc::new(RaceMutationRenderer {
-        inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
+        inner: PubSubEventRenderer::new("example.test"),
         observations: observation_tx,
         gate: None,
     });

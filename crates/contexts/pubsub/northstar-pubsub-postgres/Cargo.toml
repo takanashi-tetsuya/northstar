@@ -1,0 +1,31 @@
+[package]
+name = "northstar-pubsub-postgres"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "PostgreSQL persistence of PubSub, PEP, vCards, private XML and the PubSub event outbox for Northstar"
+publish = false
+
+[features]
+# Test-only entry points and outbox shims the root crate's cross-context PubSub tests use.
+test-support = []
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+northstar-pubsub-application = { path = "../northstar-pubsub-application" }
+northstar-pubsub-core = { path = "../northstar-pubsub-core" }
+northstar-telemetry = { path = "../../../platform/northstar-telemetry" }
+northstar-xep-0060 = { path = "../../../kernel/northstar-xep-0060" }
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+serde = { version = "1.0", features = ["derive"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
+thiserror = "2.0"
+tokio = { version = "1.43", features = ["rt", "sync", "time"] }
+uuid = { version = "1.12", features = ["v4"] }
+
+[dev-dependencies]
+futures = "0.3"
+northstar-postgres = { path = "../../../platform/northstar-postgres" }
+tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "sync", "time"] }

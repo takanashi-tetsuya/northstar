@@ -193,7 +193,7 @@ impl AppState {
     pub(crate) fn private_storage_service(
         &self,
     ) -> &northstar_pubsub_application::private_storage::PrivateStorageService<
-        db::private::PostgresPrivateStorageRepository,
+        northstar_pubsub_postgres::PostgresPrivateStorageRepository,
     > {
         &self.private_storage_service
     }

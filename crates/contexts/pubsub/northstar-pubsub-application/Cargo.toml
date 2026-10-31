@@ -21,10 +21,6 @@ sha1 = "0.10"
 tokio = { version = "1.43", features = ["sync", "time"] }
 uuid = { version = "1.12", features = ["v4"] }
 
-[features]
-# Exposes the repository behind a service to root-crate tests.
-test-support = []
-
 [dev-dependencies]
 northstar-runtime = { path = "../../../platform/northstar-runtime", features = ["test-support"] }
 tokio = { version = "1.43", features = ["macros", "rt"] }

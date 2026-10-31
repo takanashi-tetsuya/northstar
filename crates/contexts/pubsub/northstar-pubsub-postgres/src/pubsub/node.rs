@@ -2,7 +2,7 @@
 
 use super::*;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn create_node(
     pool: &PgPool,
     node: &str,
@@ -373,7 +373,7 @@ pub async fn owner_read(
     Ok(result)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn get_node_by_id(pool: &PgPool, node_id: Uuid) -> Result<Option<PubSubNode>> {
     let row = sqlx::query("SELECT id, node, creator_jid, access_model, publish_model, max_items, title, description, deliver_payloads, notify_delete, notify_retract, persist_items, send_last_published_item, node_type, deliver_notifications, notify_config, notify_sub, language, payload_type, max_payload_size, children_max, children_association_policy, children_association_whitelist, created_at FROM pubsub_nodes WHERE id = $1")
         .bind(node_id)
@@ -382,14 +382,14 @@ pub async fn get_node_by_id(pool: &PgPool, node_id: Uuid) -> Result<Option<PubSu
     Ok(row.as_ref().map(row_to_node))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn update_node_config_and_graph(
     pool: &PgPool,
     node: &PubSubNode,
     requester: &str,
     config: &PubSubNodeConfig,
 ) -> Result<PubSubConfigOutcome> {
-    let renderer = crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test");
+    let renderer = northstar_pubsub_application::service::PubSubEventRenderer::new("example.test");
     let mut expected = node.config();
     expected.collections = collection_parents(pool, node.id)
         .await?
@@ -888,7 +888,7 @@ pub async fn purge_node_as_owner_with_outbox(
     Ok(OwnerMutationOutcome::Applied)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn delete_node_with_redirect(
     pool: &PgPool,
     node: &PubSubNode,

@@ -88,7 +88,7 @@ pub async fn legacy_bookmark_snapshot(
     })
 }
 
-pub(crate) async fn lock_private_xml_owner(
+pub async fn lock_private_xml_owner(
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
 ) -> Result<()> {
@@ -123,7 +123,7 @@ pub async fn set_private_xml_batch(
     Ok(outcome)
 }
 
-pub(crate) async fn set_private_xml_batch_in_transaction(
+pub async fn set_private_xml_batch_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     entries: &[PrivateXmlEntry<'_>],
@@ -193,7 +193,7 @@ pub(crate) async fn set_private_xml_batch_in_transaction(
 /// Atomically makes a legacy XEP-0048/XEP-0049 bookmark document and its
 /// XEP-0402 item projection visible.  This is the compatibility commit point:
 /// a quota or node-policy failure leaves both representations unchanged.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn replace_bookmarks_and_private_xml(
     pool: &PgPool,
     user_id: Uuid,
@@ -202,7 +202,7 @@ pub async fn replace_bookmarks_and_private_xml(
     replace_bookmarks_and_private_xml_with_outbox(pool, user_id, write, &[]).await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn replace_bookmarks_and_private_xml_with_outbox(
     pool: &PgPool,
     user_id: Uuid,
@@ -212,7 +212,7 @@ pub async fn replace_bookmarks_and_private_xml_with_outbox(
     replace_bookmarks_and_private_xml_inner(pool, user_id, write, outbox, true).await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 async fn replace_bookmarks_and_private_xml_inner(
     pool: &PgPool,
     user_id: Uuid,
@@ -280,7 +280,7 @@ async fn replace_bookmarks_and_private_xml_inner(
     Ok(Ok(BookmarkCompatibilityCommit { previous_items }))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub struct BookmarkCompatibilityWrite<'a> {
     pub private_entry: PrivateXmlEntry<'a>,
     pub max_private_bytes: i64,
@@ -294,16 +294,16 @@ pub struct BookmarkCompatibilityWrite<'a> {
     pub expected_previous_items: Option<&'a [(String, String)]>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use northstar_pubsub_application::private_storage::preserve_bookmark_extensions;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BookmarkCompatibilityCommit {
     pub previous_items: Vec<(String, String)>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BookmarkCompatibilityFailure {
     Pep,
@@ -314,7 +314,6 @@ pub enum BookmarkCompatibilityFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
 
     #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
@@ -344,7 +343,7 @@ mod tests {
             .connect(&url)
             .await
             .unwrap();
-        db::migrate(&pool).await.unwrap();
+        northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
         let user_id = Uuid::new_v4();
         sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'test')")
             .bind(user_id)
@@ -444,11 +443,11 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let bookmark_config = db::default_pep_node_config("urn:xmpp:bookmarks:1");
+        let bookmark_config = crate::default_pep_node_config("urn:xmpp:bookmarks:1");
         let old_private =
             "<storage xmlns='storage:bookmarks'><conference jid='old@conference.test'/></storage>";
         let old_item = "<item id='old@conference.test'><conference xmlns='urn:xmpp:bookmarks:1'><extensions><state xmlns='urn:example:state' minimized='true'/></extensions></conference></item>";
-        let quotas = db::PepQuotas {
+        let quotas = crate::PepQuotas {
             max_nodes: 10,
             max_storage_bytes: 1_000_000,
         };
@@ -533,7 +532,7 @@ mod tests {
                 .as_deref(),
             Some(old_private)
         );
-        let items = db::pep_items(&pool, user_id, "urn:xmpp:bookmarks:1", None, 10)
+        let items = crate::pep_items(&pool, user_id, "urn:xmpp:bookmarks:1", None, 10)
             .await
             .unwrap();
         assert_eq!(
@@ -556,7 +555,6 @@ mod tests {
 }
 
 mod application_repository {
-    use crate::db;
     use anyhow::Result;
     use northstar_pubsub_application::private_storage::{
         LegacyBookmarkSnapshot, PrivateStorageRepository, PrivateXmlEntry, PrivateXmlWriteOutcome,
@@ -565,11 +563,11 @@ mod application_repository {
     use sqlx::PgPool;
     use uuid::Uuid;
     #[derive(Clone)]
-    pub(crate) struct PostgresPrivateStorageRepository {
+    pub struct PostgresPrivateStorageRepository {
         pool: PgPool,
     }
     impl PostgresPrivateStorageRepository {
-        pub(crate) fn new(pool: PgPool) -> Self {
+        pub fn new(pool: PgPool) -> Self {
             Self { pool }
         }
     }
@@ -580,15 +578,15 @@ mod application_repository {
             element_name: &str,
             element_ns: &str,
         ) -> Result<Option<String>> {
-            db::get_private_xml(&self.pool, owner_id, element_name, element_ns).await
+            crate::get_private_xml(&self.pool, owner_id, element_name, element_ns).await
         }
         async fn legacy_bookmark_snapshot(&self, owner_id: Uuid) -> Result<LegacyBookmarkSnapshot> {
-            let snapshot = db::legacy_bookmark_snapshot(
+            let snapshot = crate::legacy_bookmark_snapshot(
                 &self.pool,
                 owner_id,
                 LEGACY_BOOKMARKS,
                 BOOKMARKS2,
-                i64::from(db::PEP_MAX_ITEMS),
+                i64::from(crate::PEP_MAX_ITEMS),
             )
             .await?;
             Ok(LegacyBookmarkSnapshot {
@@ -605,16 +603,18 @@ mod application_repository {
         ) -> Result<PrivateXmlWriteOutcome> {
             let entries = entries
                 .iter()
-                .map(|entry| db::PrivateXmlEntry {
+                .map(|entry| crate::PrivateXmlEntry {
                     element_name: entry.element_name,
                     element_ns: entry.element_ns,
                     xml_data: entry.xml_data,
                 })
                 .collect::<Vec<_>>();
             Ok(
-                match db::set_private_xml_batch(&self.pool, owner_id, &entries, max_bytes).await? {
-                    db::PrivateXmlWriteOutcome::Stored => PrivateXmlWriteOutcome::Stored,
-                    db::PrivateXmlWriteOutcome::QuotaExceeded => {
+                match crate::set_private_xml_batch(&self.pool, owner_id, &entries, max_bytes)
+                    .await?
+                {
+                    crate::PrivateXmlWriteOutcome::Stored => PrivateXmlWriteOutcome::Stored,
+                    crate::PrivateXmlWriteOutcome::QuotaExceeded => {
                         PrivateXmlWriteOutcome::QuotaExceeded
                     }
                 },
@@ -622,4 +622,4 @@ mod application_repository {
         }
     }
 }
-pub(crate) use application_repository::PostgresPrivateStorageRepository;
+pub use application_repository::PostgresPrivateStorageRepository;

@@ -368,7 +368,7 @@ async fn legacy_bookmark_commit_conflict_is_atomic_and_success_uses_locked_diff(
     assert!(after_conflict.contains(&(changed_id.to_owned(), intervening.clone())));
     assert!(after_conflict.contains(&(removed_id.to_owned(), removed)));
     assert_eq!(
-        db::private::get_private_xml(&pool, owner_id, "storage", "storage:bookmarks")
+        northstar_pubsub_postgres::get_private_xml(&pool, owner_id, "storage", "storage:bookmarks")
             .await
             .unwrap()
             .as_deref(),
@@ -412,7 +412,7 @@ async fn legacy_bookmark_commit_conflict_is_atomic_and_success_uses_locked_diff(
         northstar_pubsub_core::PepBookmarkMutationOutcome::Stored
     );
     assert_eq!(
-        db::private::get_private_xml(&pool, owner_id, "storage", "storage:bookmarks")
+        northstar_pubsub_postgres::get_private_xml(&pool, owner_id, "storage", "storage:bookmarks")
             .await
             .unwrap()
             .as_deref(),

@@ -143,7 +143,7 @@ pub async fn collection_visible_items(
         .collect())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn associate_collection_child(
     pool: &PgPool,
     collection: &PubSubNode,
@@ -305,7 +305,7 @@ pub async fn associate_collection_child_with_renderer(
     Ok(CollectionUpdateOutcome::Updated)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn dissociate_collection_child(
     pool: &PgPool,
     collection: &PubSubNode,

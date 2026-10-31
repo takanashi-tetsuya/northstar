@@ -538,7 +538,7 @@ impl AppState {
             RosterService::new(db::roster::PostgresRosterRepository::new(pool.clone()));
         let private_storage_service =
             northstar_pubsub_application::private_storage::PrivateStorageService::new(
-                db::private::PostgresPrivateStorageRepository::new(pool.clone()),
+                northstar_pubsub_postgres::PostgresPrivateStorageRepository::new(pool.clone()),
                 config.pep_max_nodes_per_account,
                 config.pep_max_storage_bytes_per_account,
             );

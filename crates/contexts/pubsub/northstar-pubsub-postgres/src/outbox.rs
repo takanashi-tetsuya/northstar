@@ -610,7 +610,7 @@ mod tests {
 
     #[test]
     fn pep_authorization_migration_is_isolated_schema_safe() {
-        let migration = include_str!("../../migrations/0116_pep_outbox_authorization.sql");
+        let migration = include_str!("../../../../../migrations/0116_pep_outbox_authorization.sql");
         let lower = migration.to_ascii_lowercase();
         assert!(!lower.contains("public."));
         for invalid in [
@@ -690,7 +690,7 @@ mod tests {
             .connect(&url)
             .await
             .unwrap();
-        crate::db::migrate(&pool).await.unwrap();
+        northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
 
         let suffix = Uuid::new_v4().simple().to_string();
         let ordering_key = format!("pubsub:fixture:{suffix}");
@@ -1029,7 +1029,7 @@ mod tests {
             .connect(&url)
             .await
             .unwrap();
-        crate::db::migrate(&pool).await.unwrap();
+        northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
 
         let suffix = Uuid::new_v4().simple().to_string();
         let sender_id = Uuid::new_v4();

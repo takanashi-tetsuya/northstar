@@ -353,7 +353,7 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
             else {
                 return Ok(PepBookmarkMutationOutcome::Forbidden);
             };
-            db::private::lock_private_xml_owner(&mut transaction, owner.id).await?;
+            northstar_pubsub_postgres::lock_private_xml_owner(&mut transaction, owner.id).await?;
             let previous_items = sqlx::query(
                 "SELECT item_id,payload FROM pep_items
               WHERE owner_id=$1 AND node=$2
@@ -376,7 +376,7 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
                 .map(|(item_id, payload)| (item_id.as_str(), payload.as_str()))
                 .collect::<Vec<_>>();
             let config = db::default_pep_node_config(BOOKMARKS2);
-            let pep_outcome = db::pep::replace_pep_items_in_transaction(
+            let pep_outcome = northstar_pubsub_postgres::replace_pep_items_in_transaction(
                 &mut transaction,
                 owner.id,
                 BOOKMARKS2,
@@ -389,7 +389,7 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
                 transaction.rollback().await?;
                 return Ok(PepBookmarkMutationOutcome::ResourceConstraint);
             }
-            let private_outcome = db::private::set_private_xml_batch_in_transaction(
+            let private_outcome = northstar_pubsub_postgres::set_private_xml_batch_in_transaction(
                 &mut transaction,
                 owner.id,
                 &[db::PrivateXmlEntry {
@@ -507,7 +507,7 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
                 Vec::new()
             };
             let requested = db::PepNodeConfig::from(write.requested);
-            let outcome = db::pep::publish_pep_items_in_transaction(
+            let outcome = northstar_pubsub_postgres::publish_pep_items_in_transaction(
                 &mut transaction,
                 write.user_id,
                 write.node,

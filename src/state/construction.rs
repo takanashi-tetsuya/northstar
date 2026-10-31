@@ -494,7 +494,7 @@ impl AppState {
             crate::db::scram_iteration_profiles(&pool, config.scram_iterations)
                 .await
                 .context("failed to load dummy SCRAM iteration profiles")?;
-        let authentication_service = crate::services::authentication::AuthenticationService::new_with_dummy_scram_iteration_profiles(
+        let authentication_service = northstar_auth_application::authentication::AuthenticationService::new_with_dummy_scram_iteration_profiles(
                 db::authentication::PostgresAuthenticationRepository::new(pool.clone(), Arc::clone(&fast_token_secret)),
                 dummy_scram_secret,
                 config.scram_iterations,

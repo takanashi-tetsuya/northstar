@@ -847,7 +847,7 @@ async fn credential_stage_error_keeps_original_sql_operation_and_device_roles() 
 
 #[test]
 fn credential_refusal_sites_preserve_rollback_propagation_and_never_authorize_commit() {
-    use crate::services::sm::{
+    use northstar_session_core::finalization::{
         BindingFinalizationOutcome, SmResumeFinalizationOutcome, SmResumeFinalizationRequest,
     };
     let sites = [

@@ -1427,7 +1427,9 @@ fn publication_callback_preserves_actual_boolean_and_absent_return() {
 
 #[test]
 fn actual_preseal_publication_capture_uses_phase_neutral_control_identity() {
-    use crate::services::authentication::{publication as actual, CredentialCommitReceipt};
+    use northstar_auth_application::authentication::{
+        publication as actual, CredentialCommitReceipt,
+    };
     let receipt = CredentialCommitReceipt::new(None, None, None);
     let observed = actual::Observation::returned_receipt(&receipt, Some(Uuid::from_u128(1)));
     let s = observed.snapshot();

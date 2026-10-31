@@ -6,9 +6,9 @@ import { readProductionModule, readRoleSplitFile } from './lib/source-module.mjs
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = {
   frame: 'src/xmpp/frame_execution.rs',
-  authFacts: 'src/services/authentication/publication.rs',
+  authFacts: 'crates/contexts/auth/northstar-auth-application/src/authentication/publication.rs',
   authOwner: 'src/xmpp/auth_publication.rs',
-  authService: 'src/services/authentication.rs',
+  authService: 'crates/contexts/auth/northstar-auth-application/src/authentication.rs',
   authCredential: 'crates/contexts/auth/northstar-auth-core/src/credential.rs',
   authDb: 'src/db/authentication.rs',
   authUsers: 'src/db/users.rs',
@@ -156,6 +156,10 @@ function bodyContaining(source, declaration, member) {
   requireBoundary(containing.length === 1, `expected one production body containing ${member}: ${declaration}`);
   return containing[0];
 }
+
+// A test-only item that a sibling crate's tests read is compiled for the owning
+// crate's tests and for its test-support feature, which only dev-dependencies enable.
+const CROSS_CRATE_TEST_ONLY = '#[cfg(any(test, feature = "test-support"))]';
 
 function productionModule(source) {
   const markers = [...codeOnly(source).matchAll(/\n#\[cfg\(test\)\]\s*\nmod\s+tests\b/g)];
@@ -571,7 +575,7 @@ export function verifyAuthPublicationBoundaries(sources) {
   const sasl2 = withoutTestModules(sasl2Module);
   const normalize = value => compact(value).replace(/,([)}])/g, '$1').replace(/,$/, '');
   const method = (source, name) => normalize(body(productionModule(source), `(?:async\\s+)?fn\\s+${name}\\b`));
-  const facts = productionModule(authFacts);
+  const facts = productionModule(authFacts).replaceAll(CROSS_CRATE_TEST_ONLY, '#[cfg(test)]');
   const owner = productionModule(authOwner);
   const observation = body(facts, 'impl\\s+Observation\\b');
   const invocation = body(facts, "impl\\s+Invocation<'_>");
@@ -803,8 +807,8 @@ export function verifyAuthPublicationBoundaries(sources) {
   const prepared = body(facts, 'impl\\s+PreparedCredential\\b');
   const credential = body(facts, "impl\\s+CredentialInvocation<'_>");
   const attempt = body(owner, 'impl\\s+CredentialAttempt\\b');
-  requireBoundary(normalize(body(facts, 'pub\\(crate\\)\\s+struct\\s+PreparedCredential\\b')) === 'observation:CredentialObservation' &&
-    normalize(body(facts, "pub\\(crate\\)\\s+struct\\s+CredentialInvocation<'a>")) === "prepared:&'aPreparedCredential" &&
+  requireBoundary(normalize(body(facts, 'pub\\s+struct\\s+PreparedCredential\\b')) === 'observation:CredentialObservation' &&
+    normalize(body(facts, "pub\\s+struct\\s+CredentialInvocation<'a>")) === "prepared:&'aPreparedCredential" &&
     normalize(body(facts, 'struct\\s+CredentialWitness\\b')) === 'attempt:Uuid,request:CredentialRequest,receipt:ReceiptProjection',
     'credential invocation and witness must keep private original attempt/request/projection authority');
   for (const [implementation, names, label] of [
@@ -927,7 +931,7 @@ export function verifyAuthPublicationBoundaries(sources) {
   for (const [source, kind, service] of [[sasl2, 'UnboundFast', '.commit_fast_with_login_epoch_observed('],
     [authMisc, 'Binding', '.finalize_resource_binding('], [smProtocol, 'Resume', '.finalize_sm_resume(']]) {
     const code = normalize(codeOnly(productionModule(source)));
-    ordered(code, [`self.prepare_credential_attempt(crate::services::authentication::publication::CredentialKind::${kind})?;`, service, 'credential_attempt.prepared()'],
+    ordered(code, [`self.prepare_credential_attempt(northstar_auth_application::authentication::publication::CredentialKind::${kind})?;`, service, 'credential_attempt.prepared()'],
       `credential ${kind} ingress must capture its original attempt before service polling`);
   }
   requireBoundary(method(owner, 'credential_handoff_failed') === 'error.is::<CredentialHandoffIntegrity>()' &&
@@ -942,13 +946,13 @@ export function verifyAuthPublicationBoundaries(sources) {
     '#\\[cfg\\(test\\)\\]\\s*(?:#\\[[^\\]]*\\]\\s*)*' + declaration,
   ).test(codeOnly(source));
   for (const [source, name, fields] of [
-    [facts, 'CredentialAttemptJoin', 'pub(crate)attempt:Uuid,pub(crate)frame:Uuid,pub(crate)connection:Uuid,pub(crate)ordinal:u8,pub(crate)kind:CredentialKind'],
-    [facts, 'CredentialJoins', 'pub(crate)owner:CredentialAttemptJoin,pub(crate)constructed_receipt:Option<Uuid>,pub(crate)returned_receipt:Option<Uuid>,pub(crate)transferred_receipt:Option<Uuid>'],
-    [facts, 'PublicationJoins', 'pub(crate)control:Uuid,pub(crate)frame:Option<Uuid>,pub(crate)receipt:Uuid,pub(crate)credential:Option<CredentialAttemptJoin>,pub(crate)begun_receipt:Option<Uuid>,pub(crate)bound_effects:bool,pub(crate)notification_expected:bool'],
-    [owner, 'ControlAssociation', 'pub(crate)control:Uuid,pub(crate)connection:Uuid,pub(crate)frame:Option<Uuid>,pub(crate)receipt:Uuid,pub(crate)length:usize,pub(crate)digest:[u8;32],pub(crate)publication:crate::services::authentication::publication::PublicationJoins'],
+    [facts, 'CredentialAttemptJoin', 'pubattempt:Uuid,pubframe:Uuid,pubconnection:Uuid,pubordinal:u8,pubkind:CredentialKind'],
+    [facts, 'CredentialJoins', 'pubowner:CredentialAttemptJoin,pubconstructed_receipt:Option<Uuid>,pubreturned_receipt:Option<Uuid>,pubtransferred_receipt:Option<Uuid>'],
+    [facts, 'PublicationJoins', 'pubcontrol:Uuid,pubframe:Option<Uuid>,pubreceipt:Uuid,pubcredential:Option<CredentialAttemptJoin>,pubbegun_receipt:Option<Uuid>,pubbound_effects:bool,pubnotification_expected:bool'],
+    [owner, 'ControlAssociation', 'pub(crate)control:Uuid,pub(crate)connection:Uuid,pub(crate)frame:Option<Uuid>,pub(crate)receipt:Uuid,pub(crate)length:usize,pub(crate)digest:[u8;32],pub(crate)publication:northstar_auth_application::authentication::publication::PublicationJoins'],
     [owner, 'ControlJoins', 'pub(crate)introduced:Option<ControlAssociation>,pub(crate)transferred:Option<ControlAssociation>'],
   ]) {
-    const declaration = 'pub\\(crate\\)\\s+struct\\s+' + name + '\\b';
+    const declaration = (source === facts ? 'pub' : 'pub\\(crate\\)') + '\\s+struct\\s+' + name + '\\b';
     requireBoundary(testOnlyItem(source, declaration) && normalize(body(source, declaration)) === fields,
       `auth ${name} must remain test-only association facts without retained authority`);
   }
@@ -957,7 +961,7 @@ export function verifyAuthPublicationBoundaries(sources) {
       'Self{attempt:snapshot.attempt,frame:snapshot.frame,connection:snapshot.connection,ordinal:snapshot.ordinal,kind:snapshot.kind}',
     'auth credential join anchor must read the original actual attempt snapshot');
   const credentialObservation = body(facts, 'impl\\s+CredentialObservation\\b');
-  requireBoundary(testOnlyItem(credentialObservation, 'pub\\(crate\\)\\s+fn\\s+joins\\s*\\(&self\\)\\s*->\\s*CredentialJoins') &&
+  requireBoundary(testOnlyItem(credentialObservation, 'pub\\s+fn\\s+joins\\s*\\(&self\\)\\s*->\\s*CredentialJoins') &&
     method(credentialObservation, 'joins') ===
       'letstate=self.0.lock().unwrap();CredentialJoins{owner:CredentialAttemptJoin::of(&state.snapshot),constructed_receipt:state.constructed.as_ref().map(|(id,_)|*id),returned_receipt:state.returned.as_ref().map(|(id,_)|*id),transferred_receipt:state.transferred_receipt}',
     'auth credential join reader must independently read actual constructed and raw-returned receipt identities');
@@ -965,14 +969,14 @@ export function verifyAuthPublicationBoundaries(sources) {
     method(prepared, 'new').includes('#[cfg(test)]transferred_receipt:None') &&
     transfer.includes('state.snapshot.transferred=true;#[cfg(test)]{state.transferred_receipt=Some(receipt.publication_identity());}Ok(self.observation.clone())'),
     'auth transferred receipt observation must remain test-only and follow actual checked transfer');
-  requireBoundary(testOnlyItem(observation, 'pub\\(crate\\)\\s+fn\\s+joins\\s*\\(&self\\)\\s*->\\s*PublicationJoins') &&
+  requireBoundary(testOnlyItem(observation, 'pub\\s+fn\\s+joins\\s*\\(&self\\)\\s*->\\s*PublicationJoins') &&
     method(observation, 'joins') ===
       'letstate=self.0.lock().unwrap();PublicationJoins{control:state.snapshot.control,frame:state.snapshot.frame,receipt:state.receipt_id,credential:state.credential.as_ref().map(|credential|credential.joins().owner),begun_receipt:state.begun_receipt,bound_effects:state.bound_effects,notification_expected:state.notification_expected}' &&
     method(observation, 'returned_receipt').includes('credential:None'),
     'auth publication join reader must preserve actual receipt identity and only an observed credential anchor with actual State effect intent');
-  const publicationJoinDeclarations = [...codeOnly(facts).matchAll(/((?:#\[[^\]]*\]\s*)*)pub\(crate\)\s+struct\s+PublicationJoins\b/g)];
+  const publicationJoinDeclarations = [...codeOnly(facts).matchAll(/((?:#\[[^\]]*\]\s*)*)pub\s+struct\s+PublicationJoins\b/g)];
   requireBoundary(publicationJoinDeclarations.length === 1 &&
-    compact(publicationJoinDeclarations[0][0]) === '#[cfg(test)]#[derive(Clone,Copy,Debug,Eq,PartialEq)]pub(crate)structPublicationJoins',
+    compact(publicationJoinDeclarations[0][0]) === '#[cfg(test)]#[derive(Clone,Copy,Debug,Eq,PartialEq)]pubstructPublicationJoins',
     'auth PublicationJoins must preserve its exact test-only derives');
   requireBoundary(normalize(body(facts, 'struct\\s+State\\b')).includes('#[cfg(test)]begun_receipt:Option<Uuid>') &&
     method(observation, 'returned_receipt').includes('#[cfg(test)]begun_receipt:None') &&

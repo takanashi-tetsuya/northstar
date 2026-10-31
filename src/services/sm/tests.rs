@@ -307,7 +307,7 @@ impl super::SmRepository for ResumeRepository {
         _full_jid: &str,
         _lease_seconds: u64,
         _device_id: Option<Uuid>,
-        _fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        _fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
     ) -> Result<BindingFinalizationOutcome> {
         panic!("unexpected persistence operation")
     }
@@ -326,10 +326,10 @@ impl super::SmRepository for ResumeRepository {
         full_jid: &str,
         lease_seconds: u64,
         device_id: Option<Uuid>,
-        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
         invocation: &CredentialInvocation<'_>,
     ) -> Result<BindingFinalizationOutcome> {
-        use crate::services::authentication::publication::{
+        use northstar_auth_application::authentication::publication::{
             CredentialPreparation, PreparationResult,
         };
         invocation.enter_binding(
@@ -369,15 +369,17 @@ impl super::SmRepository for ResumeRepository {
                 .preparation_returned(CredentialPreparation::Fast, PreparationResult::Present);
         }
         self.commit_credential(invocation).await?;
-        let receipt = crate::services::authentication::CredentialCommitReceipt::new(
+        let receipt = northstar_auth_application::authentication::CredentialCommitReceipt::new(
             None,
             Some(stage),
-            Some(crate::services::authentication::BindingPublication {
-                connection_id,
-                user_id,
-                full_jid: full_jid.to_owned(),
-                lease_seconds,
-            }),
+            Some(
+                northstar_auth_application::authentication::BindingPublication {
+                    connection_id,
+                    user_id,
+                    full_jid: full_jid.to_owned(),
+                    lease_seconds,
+                },
+            ),
         );
         invocation.constructed(&receipt);
         Ok(BindingFinalizationOutcome::Committed { receipt })
@@ -387,7 +389,7 @@ impl super::SmRepository for ResumeRepository {
         request: SmResumeFinalizationRequest<'_>,
         invocation: &CredentialInvocation<'_>,
     ) -> Result<SmResumeFinalizationOutcome> {
-        use crate::services::authentication::publication::{
+        use northstar_auth_application::authentication::publication::{
             CredentialPreparation, PreparationResult,
         };
         invocation.enter_resume(&request)?;
@@ -432,8 +434,11 @@ impl super::SmRepository for ResumeRepository {
         invocation.preparation_entered(CredentialPreparation::Privacy);
         invocation.preparation_returned(CredentialPreparation::Privacy, PreparationResult::Present);
         self.commit_credential(invocation).await?;
-        let receipt =
-            crate::services::authentication::CredentialCommitReceipt::new(None, Some(stage), None);
+        let receipt = northstar_auth_application::authentication::CredentialCommitReceipt::new(
+            None,
+            Some(stage),
+            None,
+        );
         invocation.constructed(&receipt);
         Ok(SmResumeFinalizationOutcome::Committed(Box::new(
             super::SmResumeFinalizationCommit {
@@ -483,11 +488,11 @@ impl ResumeRepository {
         connection_id: Uuid,
         user_id: Uuid,
         auth_generation: i64,
-    ) -> crate::services::authentication::StagedLoginEpoch {
+    ) -> northstar_auth_application::authentication::StagedLoginEpoch {
         invocation.preparation_entered(
-            crate::services::authentication::publication::CredentialPreparation::Stage,
+            northstar_auth_application::authentication::publication::CredentialPreparation::Stage,
         );
-        let stage = crate::services::authentication::StagedLoginEpoch {
+        let stage = northstar_auth_application::authentication::StagedLoginEpoch {
             operation_id: Uuid::from_u128(5),
             connection_id,
             user_id,
@@ -517,18 +522,15 @@ impl ResumeRepository {
             }
         })
         .await
-        .map_err(crate::services::authentication::publication::credential_error)
+        .map_err(northstar_auth_application::authentication::publication::credential_error)
     }
 }
 #[tokio::test]
 async fn observed_sm_services_preserve_exact_requests_and_commit_cuts() {
-    use crate::services::authentication::{
-        publication::{
-            CredentialCall, CredentialKind, CredentialReturned, CredentialTerminal,
-            PreparedCredential,
-        },
-        FastCommitPlan,
+    use northstar_auth_application::authentication::publication::{
+        CredentialCall, CredentialKind, CredentialReturned, CredentialTerminal, PreparedCredential,
     };
+    use northstar_auth_application::authentication::FastCommitPlan;
     for kind in [CredentialKind::Binding, CredentialKind::Resume] {
         for cut in [
             CredentialCut::PreCommitError,
@@ -1353,7 +1355,7 @@ async fn resumable_binding_lease_transfers_only_after_transport_publication() {
         0
     );
 
-    let authentication = crate::services::authentication::AuthenticationService::new(
+    let authentication = northstar_auth_application::authentication::AuthenticationService::new(
         crate::db::authentication::PostgresAuthenticationRepository::new(
             pool.clone(),
             std::sync::Arc::new(zeroize::Zeroizing::new(vec![0x56; 32])),
@@ -1364,7 +1366,7 @@ async fn resumable_binding_lease_transfers_only_after_transport_publication() {
     );
     assert!(matches!(
         authentication.publish_credential_commit(&receipt).await,
-        crate::services::authentication::AuthenticationResult::Authenticated(Some(2))
+        northstar_auth_application::authentication::AuthenticationResult::Authenticated(Some(2))
     ));
     assert_eq!(
         sqlx::query_scalar::<_, Uuid>(

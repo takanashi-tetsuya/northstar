@@ -1,8 +1,6 @@
 use super::*;
-use crate::services::authentication::{
-    publication::{HandlerReturn, Knowledge, Returned},
-    BindingPublication, StagedLoginEpoch,
-};
+use northstar_auth_application::authentication::publication::{HandlerReturn, Knowledge, Returned};
+use northstar_auth_application::authentication::{BindingPublication, StagedLoginEpoch};
 use std::{
     panic::AssertUnwindSafe,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -10,12 +8,10 @@ use std::{
 };
 
 async fn observed_unbound_owner(frame: &FrameExecution, connection: Uuid) -> KnownCredentialOwner {
-    use crate::services::authentication::{
-        publication::{
-            CredentialInvocation, CredentialKind, CredentialPreparation, PreparationResult,
-        },
-        FastCommitPlan,
+    use northstar_auth_application::authentication::publication::{
+        CredentialInvocation, CredentialKind, CredentialPreparation, PreparationResult,
     };
+    use northstar_auth_application::authentication::FastCommitPlan;
     let prepared = frame
         .prepare_credential(CredentialKind::UnboundFast, connection)
         .unwrap();
@@ -56,7 +52,7 @@ async fn observed_unbound_owner(frame: &FrameExecution, connection: Uuid) -> Kno
 #[tokio::test]
 async fn unknown_resume_and_successful_fallback_keep_distinct_original_frame_attempts() {
     {
-        use crate::services::authentication::publication::{
+        use northstar_auth_application::authentication::publication::{
             CredentialCall, CredentialKind, CredentialReturned,
         };
         let frame = FrameExecution::for_saved_case(
@@ -120,7 +116,7 @@ async fn unknown_resume_and_successful_fallback_keep_distinct_original_frame_att
         assert!(!snapshot.return_matches);
         assert!(!snapshot.transferred);
     }
-    use crate::services::authentication::publication::{
+    use northstar_auth_application::authentication::publication::{
         CredentialCall, CredentialInvocation, CredentialKind, CredentialPreparation,
         CredentialReturned, PreparationResult,
     };
@@ -743,7 +739,7 @@ fn selection_requires_its_own_exposure_and_validates_every_holder_before_take() 
 
 #[tokio::test]
 async fn unbound_selected_control_does_not_take_queued_bind_owner() {
-    use crate::services::authentication::publication::{
+    use northstar_auth_application::authentication::publication::{
         CredentialCall, CredentialInvocation, CredentialKind, CredentialPreparation,
         PreparationResult,
     };
@@ -1079,7 +1075,7 @@ async fn completed_handler_transfers_publication_lifetime_to_its_control() {
     );
     assert_eq!(
         credential.snapshot().commit,
-        crate::services::authentication::publication::CredentialCall::Ok
+        northstar_auth_application::authentication::publication::CredentialCall::Ok
     );
     assert_eq!(observation.snapshot().terminal, None);
     assert_eq!(observation.snapshot().frame, Some(Uuid::from_u128(350)));

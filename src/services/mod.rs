@@ -5,7 +5,6 @@ pub(crate) mod account_teardown;
 pub(crate) mod admin_commands;
 pub(crate) mod admin_dispatch;
 pub(crate) mod admin_session_cleanup_worker;
-pub(crate) mod authentication;
 pub(crate) mod background_housekeeping;
 pub(crate) mod capacity_maintenance;
 pub(crate) mod cluster_authority;

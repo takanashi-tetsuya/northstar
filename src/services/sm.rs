@@ -2,9 +2,11 @@
 
 pub(crate) mod ownership;
 
-use crate::services::authentication::publication::{CredentialInvocation, PreparedCredential};
 use anyhow::Result;
 use dashmap::mapref::entry::Entry;
+use northstar_auth_application::authentication::publication::{
+    CredentialInvocation, PreparedCredential,
+};
 use northstar_config::SmIpPolicy;
 pub(crate) use northstar_session_core::finalization::{
     ActivatedSmSession, BindingFinalizationOutcome, SmResumeFinalizationCommit,
@@ -625,7 +627,7 @@ pub(crate) trait SmRepository: Send + Sync {
         full_jid: &str,
         lease_seconds: u64,
         device_id: Option<Uuid>,
-        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
     ) -> impl std::future::Future<Output = Result<BindingFinalizationOutcome>> + Send;
     fn finalize_resume(
         &self,
@@ -640,7 +642,7 @@ pub(crate) trait SmRepository: Send + Sync {
         full_jid: &str,
         lease_seconds: u64,
         device_id: Option<Uuid>,
-        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
         invocation: &CredentialInvocation<'_>,
     ) -> impl std::future::Future<Output = Result<BindingFinalizationOutcome>> + Send;
     fn finalize_resume_observed(
@@ -815,7 +817,7 @@ impl<R: SmRepository> SmService<R> {
         full_jid: &str,
         lease_seconds: u64,
         device_id: Option<Uuid>,
-        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
     ) -> Result<BindingFinalizationOutcome> {
         self.repository
             .finalize_binding(
@@ -844,7 +846,7 @@ impl<R: SmRepository> SmService<R> {
         full_jid: &str,
         lease_seconds: u64,
         device_id: Option<Uuid>,
-        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
         prepared: Option<&PreparedCredential>,
     ) -> Result<BindingFinalizationOutcome> {
         let Some(prepared) = prepared else {

@@ -1,6 +1,7 @@
 //! Credential reads and atomic SASL/FAST generation, token and binding fences.
-use crate::{db, services::authentication::*};
+use crate::db;
 use northstar_archive_core::ArchiveBoundary;
+use northstar_auth_application::authentication::*;
 use northstar_auth_core as auth;
 use sqlx::{Connection, PgPool, Row};
 use std::{future::Future, sync::Arc};

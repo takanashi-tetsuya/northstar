@@ -239,9 +239,11 @@ pub(crate) async fn lock_auth_generation_observed<'a>(
     pool: &'a PgPool,
     user_id: Uuid,
     expected_generation: i64,
-    observation: Option<&crate::services::authentication::publication::CredentialInvocation<'_>>,
+    observation: Option<
+        &northstar_auth_application::authentication::publication::CredentialInvocation<'_>,
+    >,
 ) -> Result<Option<sqlx::Transaction<'a, sqlx::Postgres>>> {
-    use crate::services::authentication::publication::{
+    use northstar_auth_application::authentication::publication::{
         credential_error, CredentialInvocation, CredentialRollbackSite,
     };
     let mut tx = CredentialInvocation::begin(observation, pool.begin())

@@ -176,6 +176,7 @@
     "northstar-archive-core",
     "northstar-archive-postgres",
     "northstar-archive-xmpp",
+    "northstar-auth-application",
     "northstar-auth-core",
     "northstar-config",
     "northstar-delivery-core",
@@ -2553,6 +2554,38 @@
     [
       "northstar-archive-xmpp",
       "uuid"
+    ],
+    [
+      "northstar-auth-application",
+      "anyhow"
+    ],
+    [
+      "northstar-auth-application",
+      "chrono"
+    ],
+    [
+      "northstar-auth-application",
+      "northstar-archive-core"
+    ],
+    [
+      "northstar-auth-application",
+      "northstar-auth-core"
+    ],
+    [
+      "northstar-auth-application",
+      "northstar-session-core"
+    ],
+    [
+      "northstar-auth-application",
+      "tokio"
+    ],
+    [
+      "northstar-auth-application",
+      "uuid"
+    ],
+    [
+      "northstar-auth-application",
+      "zeroize"
     ],
     [
       "northstar-auth-core",
@@ -5085,6 +5118,10 @@
     [
       "rust-xmpp-server",
       "northstar-archive-xmpp"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-auth-application"
     ],
     [
       "rust-xmpp-server",

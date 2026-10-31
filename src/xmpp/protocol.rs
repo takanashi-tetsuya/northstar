@@ -378,7 +378,7 @@ pub struct ProtocolSession {
     /// legacy SASL both invalidate it and require a fresh opening tag before
     /// any further negotiation or application stanza is accepted.
     negotiation: northstar_session_core::StreamNegotiation,
-    authenticated: Option<crate::services::authentication::AuthenticatedAccount>,
+    authenticated: Option<northstar_auth_application::authentication::AuthenticatedAccount>,
     pub(crate) authenticated_at: Option<std::time::Instant>,
     pub(crate) full_jid: Option<String>,
     pub(crate) registered_key: Option<String>,
@@ -411,7 +411,7 @@ pub struct ProtocolSession {
     /// disabled identity, preventing delete/recreate between challenge and
     /// final proof from authenticating a different account.
     pub(crate) sasl_scram_fence:
-        Option<Option<crate::services::authentication::AuthenticationFence>>,
+        Option<Option<northstar_auth_application::authentication::AuthenticationFence>>,
     pub(crate) legacy_sasl_awaiting_initial_response: bool,
     pub(crate) sasl2_state: Option<sasl2::Sasl2Context>,
     /// Active XEP-0389 challenge transport. A response is accepted only after
@@ -473,8 +473,8 @@ impl super::auth_publication::PublicationPort for SessionAuthPublication<'_> {
     }
     async fn publish(
         &mut self,
-        invocation: &crate::services::authentication::publication::Invocation<'_>,
-    ) -> crate::services::authentication::AuthenticationResult<Option<i64>> {
+        invocation: &northstar_auth_application::authentication::publication::Invocation<'_>,
+    ) -> northstar_auth_application::authentication::AuthenticationResult<Option<i64>> {
         self.session
             .state
             .authentication_service()
@@ -618,7 +618,7 @@ impl ProtocolSession {
 
     pub(super) fn prepare_credential_attempt(
         &self,
-        kind: crate::services::authentication::publication::CredentialKind,
+        kind: northstar_auth_application::authentication::publication::CredentialKind,
     ) -> Result<super::auth_publication::CredentialAttempt> {
         super::auth_publication::CredentialAttempt::new(
             self.frame_executions.auth_origin(),
@@ -629,7 +629,7 @@ impl ProtocolSession {
 
     pub(super) fn retain_credential_commit(
         &mut self,
-        receipt: crate::services::authentication::CredentialCommitReceipt,
+        receipt: northstar_auth_application::authentication::CredentialCommitReceipt,
         attempt: super::auth_publication::CredentialAttempt,
     ) -> Result<()> {
         let owner = attempt.into_owner(receipt)?;

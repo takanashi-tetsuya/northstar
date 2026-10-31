@@ -13,7 +13,9 @@ pub(crate) fn failure_xml(condition: &str, text: Option<&str>) -> String {
     failure.finish()
 }
 
-pub(super) fn fast_token_xml(issued: &crate::services::authentication::IssuedFastToken) -> String {
+pub(super) fn fast_token_xml(
+    issued: &northstar_auth_application::authentication::IssuedFastToken,
+) -> String {
     XmlElement::namespaced("token", FAST_NS)
         .attr(
             "expiry",
@@ -206,16 +208,18 @@ impl ProtocolSession {
         let verified = self
             .state
             .authentication_service()
-            .authenticate_fast(crate::services::authentication::FastProofRequest {
-                username: &authcid,
-                device_id: user_agent_id,
-                mechanism: &request.mechanism,
-                counter: fast.count,
-                initiator_proof: &decoded[separator + 1..],
-                channel_binding,
-                invalidate: fast.invalidate,
-                rotate_within_days: self.state.sasl2_fast_token_policy().rotation_days,
-            })
+            .authenticate_fast(
+                northstar_auth_application::authentication::FastProofRequest {
+                    username: &authcid,
+                    device_id: user_agent_id,
+                    mechanism: &request.mechanism,
+                    counter: fast.count,
+                    initiator_proof: &decoded[separator + 1..],
+                    channel_binding,
+                    invalidate: fast.invalidate,
+                    rotate_within_days: self.state.sasl2_fast_token_policy().rotation_days,
+                },
+            )
             .await;
         let (
             user,
@@ -227,12 +231,12 @@ impl ProtocolSession {
             strong_auth_at,
             chain_expires_at,
         ) = match verified {
-            crate::services::authentication::AuthenticationResult::Authenticated(verified) => {
+            northstar_auth_application::authentication::AuthenticationResult::Authenticated(verified) => {
                 verified.into_parts()
             }
-            crate::services::authentication::AuthenticationResult::UnknownCredentials
-            | crate::services::authentication::AuthenticationResult::Disabled
-            | crate::services::authentication::AuthenticationResult::ReplayedCredentials => {
+            northstar_auth_application::authentication::AuthenticationResult::UnknownCredentials
+            | northstar_auth_application::authentication::AuthenticationResult::Disabled
+            | northstar_auth_application::authentication::AuthenticationResult::ReplayedCredentials => {
                 if let Err(error) = self.record_sasl_failure(Some(&authcid)).await {
                     return Ok(self.authentication_backend_failure(
                         &request.mechanism,
@@ -243,11 +247,11 @@ impl ProtocolSession {
                 }
                 return Ok(Action::Send(failure_xml("not-authorized", None)));
             }
-            crate::services::authentication::AuthenticationResult::StaleGeneration
-            | crate::services::authentication::AuthenticationResult::ExpiredCredentials => {
+            northstar_auth_application::authentication::AuthenticationResult::StaleGeneration
+            | northstar_auth_application::authentication::AuthenticationResult::ExpiredCredentials => {
                 return Ok(Action::Send(failure_xml("credentials-expired", None)));
             }
-            crate::services::authentication::AuthenticationResult::BackendFailure(error) => {
+            northstar_auth_application::authentication::AuthenticationResult::BackendFailure(error) => {
                 return Ok(self.authentication_backend_failure(
                     &request.mechanism,
                     &authcid,
@@ -255,7 +259,7 @@ impl ProtocolSession {
                     &error,
                 ));
             }
-            crate::services::authentication::AuthenticationResult::IntegrityFailure => {
+            northstar_auth_application::authentication::AuthenticationResult::IntegrityFailure => {
                 self.state
                     .sasl2_authentication_telemetry()
                     .integrity_failed();
@@ -288,7 +292,7 @@ impl ProtocolSession {
     pub(super) fn sasl2_fast_commit_plan(
         &self,
         context: &Sasl2Context,
-    ) -> crate::services::authentication::FastCommitPlan {
+    ) -> northstar_auth_application::authentication::FastCommitPlan {
         let fast_policy = self.state.sasl2_fast_token_policy();
         let mechanism = if context.fast_should_rotate {
             context
@@ -302,16 +306,16 @@ impl ProtocolSession {
         let issue = mechanism
             .filter(|mechanism| self.fast_mechanism_available(mechanism))
             .zip(context.request.user_agent_id)
-            .map(
-                |(mechanism, device_id)| crate::services::authentication::FastTokenIssue {
+            .map(|(mechanism, device_id)| {
+                northstar_auth_application::authentication::FastTokenIssue {
                     device_id,
                     mechanism: mechanism.to_owned(),
                     ttl_days: fast_policy.ttl_days,
                     strong_reauth_max_days: fast_policy.strong_reauth_max_days,
                     inherited_chain: context.inherited_fast_chain,
-                },
-            );
-        crate::services::authentication::FastCommitPlan {
+                }
+            });
+        northstar_auth_application::authentication::FastCommitPlan {
             token_id: context.fast_token_id,
             token_was_new: context.fast_token_was_new,
             invalidate: context.fast_invalidate,

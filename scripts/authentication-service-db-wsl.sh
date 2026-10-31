@@ -103,15 +103,15 @@ run_exact_ignored() {
 }
 
 run_exact_ignored \
-  services::authentication::tests::authentication_service_fences_all_credential_and_inline_state_transitions
+  db::authentication_tests::authentication_service_fences_all_credential_and_inline_state_transitions
 run_exact_ignored \
-  services::authentication::tests::bind2_recovers_failed_pooled_transaction_before_preflight
+  db::authentication_tests::bind2_recovers_failed_pooled_transaction_before_preflight
 run_exact_ignored \
-  services::authentication::tests::bind2_resets_active_pooled_transaction_before_preflight
+  db::authentication_tests::bind2_resets_active_pooled_transaction_before_preflight
 run_exact_ignored \
-  services::authentication::tests::login_epoch_publication_is_fenced_invisible_and_atomic_with_binding
+  db::authentication_tests::login_epoch_publication_is_fenced_invisible_and_atomic_with_binding
 run_exact_ignored \
-  services::authentication::tests::publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
+  db::authentication_tests::publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
 run_exact_ignored \
   db::fast::tests::fast_derivation_integrity_failures_are_side_effect_free
 run_exact_ignored \

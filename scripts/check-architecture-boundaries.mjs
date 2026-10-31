@@ -1968,10 +1968,10 @@ if (!/super\s*::\s*replay\s*::\s*replay_bind2_offline\s*\(/.test(sasl2Source)) {
 // only. The repository owns PostgreSQL and FAST authority; the service owns
 // dummy-SCRAM derivation. A successful identity is structurally
 // incapable of carrying password or SCRAM verifier fields.
-const authenticationServiceSource = read('src/services/authentication.rs');
+const authenticationServiceSource = read('crates/contexts/auth/northstar-auth-application/src/authentication.rs');
 const authenticationServiceBody = structBody(
   authenticationServiceSource,
-  'pub(crate) struct AuthenticationService',
+  'pub struct AuthenticationService',
 );
 if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(authenticationServiceBody)) {
   throw new Error('AuthenticationService must receive its repository port');
@@ -1993,7 +1993,7 @@ if (/^\s*pub(?:\(crate\))?\s+(?:pool|fast_token_secret|dummy_scram_secret)\s*:/m
 }
 const authenticatedAccountBody = structBody(
   authenticationServiceSource,
-  'pub(crate) struct AuthenticatedAccount',
+  'pub struct AuthenticatedAccount',
 );
 for (const forbidden of [
   'password_hash',
@@ -2073,7 +2073,7 @@ for (const connection of [
 if (/\bself\s*\.\s*state\b/.test(read('src/xmpp/direct_delivery.rs'))) {
   throw new Error('direct delivery traverses ProtocolSession into global state');
 }
-if (!/authenticated\s*:\s*\r?\n?\s*Option<crate::services::authentication::AuthenticatedAccount>/.test(legacyAuthProtocolSource)) {
+if (!/authenticated\s*:\s*\r?\n?\s*Option<northstar_auth_application::authentication::AuthenticatedAccount>/.test(legacyAuthProtocolSource)) {
   throw new Error('ProtocolSession must retain only the least-authority AuthenticatedAccount DTO');
 }
 for (const [name, source] of [

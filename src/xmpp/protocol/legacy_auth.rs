@@ -264,17 +264,17 @@ impl ProtocolSession {
                 .scram_credentials(username, algorithm)
                 .await
             {
-                crate::services::authentication::AuthenticationResult::Authenticated(creds) => {
+                northstar_auth_application::authentication::AuthenticationResult::Authenticated(creds) => {
                     let (fence, salt, iterations, stored_key, server_key) =
                         creds.into_mechanism_parts();
                     self.sasl_scram_fence = Some(Some(fence));
                     step = sasl_mech.provide_credentials(salt, iterations, stored_key, server_key);
                 }
-                crate::services::authentication::AuthenticationResult::UnknownCredentials
-                | crate::services::authentication::AuthenticationResult::Disabled
-                | crate::services::authentication::AuthenticationResult::StaleGeneration
-                | crate::services::authentication::AuthenticationResult::ExpiredCredentials
-                | crate::services::authentication::AuthenticationResult::ReplayedCredentials => {
+                northstar_auth_application::authentication::AuthenticationResult::UnknownCredentials
+                | northstar_auth_application::authentication::AuthenticationResult::Disabled
+                | northstar_auth_application::authentication::AuthenticationResult::StaleGeneration
+                | northstar_auth_application::authentication::AuthenticationResult::ExpiredCredentials
+                | northstar_auth_application::authentication::AuthenticationResult::ReplayedCredentials => {
                     self.sasl_scram_fence = Some(None);
                     let (salt, iterations, stored_key, server_key) = self
                         .state
@@ -282,7 +282,7 @@ impl ProtocolSession {
                         .dummy_scram_credentials(username, algorithm);
                     step = sasl_mech.provide_credentials(salt, iterations, stored_key, server_key);
                 }
-                crate::services::authentication::AuthenticationResult::IntegrityFailure => {
+                northstar_auth_application::authentication::AuthenticationResult::IntegrityFailure => {
                     self.state.c2s_authentication_telemetry().integrity_failed();
                     tracing::error!("credential integrity failure while loading SCRAM verifier");
                     return Ok(Action::Send(failure(
@@ -290,7 +290,7 @@ impl ProtocolSession {
                         "temporary-auth-failure",
                     )));
                 }
-                crate::services::authentication::AuthenticationResult::BackendFailure(error) => {
+                northstar_auth_application::authentication::AuthenticationResult::BackendFailure(error) => {
                     return Ok(self.authentication_backend_failure(
                         sasl_mech.name(),
                         username,
@@ -341,7 +341,7 @@ impl ProtocolSession {
                             .authenticate_plain(&username, password)
                             .await
                     } else {
-                        crate::services::authentication::AuthenticationResult::UnknownCredentials
+                        northstar_auth_application::authentication::AuthenticationResult::UnknownCredentials
                     }
                 } else if sasl_mech.name().starts_with("SCRAM-") {
                     let fence = self.sasl_scram_fence.take().flatten();
@@ -358,30 +358,30 @@ impl ProtocolSession {
                 let user_result = if legacy_stream_identity_mismatch
                     && matches!(
                         &user_result,
-                        crate::services::authentication::AuthenticationResult::Authenticated(_)
+                        northstar_auth_application::authentication::AuthenticationResult::Authenticated(_)
                     ) {
-                    crate::services::authentication::AuthenticationResult::UnknownCredentials
+                    northstar_auth_application::authentication::AuthenticationResult::UnknownCredentials
                 } else {
                     user_result
                 };
                 let user = match user_result {
-                    crate::services::authentication::AuthenticationResult::Authenticated(user) => {
+                    northstar_auth_application::authentication::AuthenticationResult::Authenticated(user) => {
                         Some(user)
                     }
-                    crate::services::authentication::AuthenticationResult::UnknownCredentials => {
+                    northstar_auth_application::authentication::AuthenticationResult::UnknownCredentials => {
                         None
                     }
-                    crate::services::authentication::AuthenticationResult::Disabled => {
+                    northstar_auth_application::authentication::AuthenticationResult::Disabled => {
                         tracing::debug!(%username, mechanism = sasl_mech.name(), "authentication rejected for a disabled account");
                         None
                     }
-                    crate::services::authentication::AuthenticationResult::StaleGeneration
-                    | crate::services::authentication::AuthenticationResult::ExpiredCredentials
-                    | crate::services::authentication::AuthenticationResult::ReplayedCredentials => {
+                    northstar_auth_application::authentication::AuthenticationResult::StaleGeneration
+                    | northstar_auth_application::authentication::AuthenticationResult::ExpiredCredentials
+                    | northstar_auth_application::authentication::AuthenticationResult::ReplayedCredentials => {
                         tracing::debug!(%username, mechanism = sasl_mech.name(), "authentication rejected by a stale credential fence");
                         None
                     }
-                    crate::services::authentication::AuthenticationResult::IntegrityFailure => {
+                    northstar_auth_application::authentication::AuthenticationResult::IntegrityFailure => {
                         self.state.c2s_authentication_telemetry().integrity_failed();
                         tracing::error!(
                             "credential integrity failure while completing authentication"
@@ -391,7 +391,7 @@ impl ProtocolSession {
                             "temporary-auth-failure",
                         )));
                     }
-                    crate::services::authentication::AuthenticationResult::BackendFailure(
+                    northstar_auth_application::authentication::AuthenticationResult::BackendFailure(
                         error,
                     ) => {
                         return Ok(self.authentication_backend_failure(

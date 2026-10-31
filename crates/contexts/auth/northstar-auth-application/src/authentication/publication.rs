@@ -27,7 +27,7 @@ impl ReceiptProjection {
 
 // Preserve the original repository error identity at the SQL adapter boundary.
 // The internal observation rejection has no fabricated repository error.
-pub(crate) fn credential_error<E: Into<anyhow::Error>>(error: CommitError<E>) -> anyhow::Error {
+pub fn credential_error<E: Into<anyhow::Error>>(error: CommitError<E>) -> anyhow::Error {
     match error {
         CommitError::Observation(error) => error,
         CommitError::Repository(error) => error.into(),
@@ -37,13 +37,13 @@ pub(crate) fn credential_error<E: Into<anyhow::Error>>(error: CommitError<E>) ->
 // Credential transaction observation is deliberately separate from the
 // transport-gated publication Invocation below. A read handle cannot begin SQL.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CredentialKind {
+pub enum CredentialKind {
     UnboundFast,
     Binding,
     Resume,
 }
 impl CredentialKind {
-    pub(crate) fn index(self) -> usize {
+    pub fn index(self) -> usize {
         match self {
             Self::UnboundFast => 0,
             Self::Binding => 1,
@@ -52,7 +52,7 @@ impl CredentialKind {
     }
 }
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum CredentialCall {
+pub enum CredentialCall {
     #[default]
     NotEntered,
     Entered,
@@ -60,7 +60,7 @@ pub(crate) enum CredentialCall {
     Err,
 }
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum Eligibility {
+pub enum Eligibility {
     #[default]
     NotEntered,
     Entered,
@@ -68,7 +68,7 @@ pub(crate) enum Eligibility {
     Err,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CredentialRollbackSite {
+pub enum CredentialRollbackSite {
     GenerationRefused,
     FastExpired,
     BindingReservationLost,
@@ -119,7 +119,7 @@ impl CredentialRollbackSite {
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CredentialPreparation {
+pub enum CredentialPreparation {
     Binding,
     Stage,
     Fast,
@@ -132,7 +132,7 @@ impl CredentialPreparation {
     }
 }
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum PreparationResult {
+pub enum PreparationResult {
     #[default]
     NotEntered,
     Entered,
@@ -141,7 +141,7 @@ pub(crate) enum PreparationResult {
     Err,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CredentialReturned {
+pub enum CredentialReturned {
     Authenticated,
     UnknownCredentials,
     Disabled,
@@ -160,47 +160,47 @@ pub(crate) enum CredentialReturned {
     Error,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CredentialTerminal {
+pub enum CredentialTerminal {
     Returned,
     Cancelled,
     Panicked,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CredentialSnapshot {
-    pub(crate) attempt: Uuid,
-    pub(crate) frame: Uuid,
-    pub(crate) connection: Uuid,
-    pub(crate) ordinal: u8,
-    pub(crate) kind: CredentialKind,
-    pub(crate) service_started: bool,
-    pub(crate) repository_started: bool,
-    pub(crate) begin: CredentialCall,
-    pub(crate) eligibility: Eligibility,
-    pub(crate) transaction_returned: bool,
-    pub(crate) preparation: [PreparationResult; 5],
-    pub(crate) stage_id: Option<Uuid>,
-    pub(crate) rollback: Option<(CredentialRollbackSite, CredentialCall)>,
-    pub(crate) commit: CredentialCall,
-    pub(crate) receipt_constructed: bool,
-    pub(crate) returned: Option<CredentialReturned>,
-    pub(crate) return_matches: bool,
-    pub(crate) transferred: bool,
-    pub(crate) handler: Option<HandlerReturn>,
-    pub(crate) call_terminal: Option<CredentialTerminal>,
-    pub(crate) integrity_failure: bool,
+pub struct CredentialSnapshot {
+    pub attempt: Uuid,
+    pub frame: Uuid,
+    pub connection: Uuid,
+    pub ordinal: u8,
+    pub kind: CredentialKind,
+    pub service_started: bool,
+    pub repository_started: bool,
+    pub begin: CredentialCall,
+    pub eligibility: Eligibility,
+    pub transaction_returned: bool,
+    pub preparation: [PreparationResult; 5],
+    pub stage_id: Option<Uuid>,
+    pub rollback: Option<(CredentialRollbackSite, CredentialCall)>,
+    pub commit: CredentialCall,
+    pub receipt_constructed: bool,
+    pub returned: Option<CredentialReturned>,
+    pub return_matches: bool,
+    pub transferred: bool,
+    pub handler: Option<HandlerReturn>,
+    pub call_terminal: Option<CredentialTerminal>,
+    pub integrity_failure: bool,
 }
 // These test-only joins describe the actual receipt instances at each cut.
 // They contain no request projection and confer no credential authority.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CredentialAttemptJoin {
-    pub(crate) attempt: Uuid,
-    pub(crate) frame: Uuid,
-    pub(crate) connection: Uuid,
-    pub(crate) ordinal: u8,
-    pub(crate) kind: CredentialKind,
+pub struct CredentialAttemptJoin {
+    pub attempt: Uuid,
+    pub frame: Uuid,
+    pub connection: Uuid,
+    pub ordinal: u8,
+    pub kind: CredentialKind,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl CredentialAttemptJoin {
     fn of(snapshot: &CredentialSnapshot) -> Self {
         Self {
@@ -212,13 +212,13 @@ impl CredentialAttemptJoin {
         }
     }
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CredentialJoins {
-    pub(crate) owner: CredentialAttemptJoin,
-    pub(crate) constructed_receipt: Option<Uuid>,
-    pub(crate) returned_receipt: Option<Uuid>,
-    pub(crate) transferred_receipt: Option<Uuid>,
+pub struct CredentialJoins {
+    pub owner: CredentialAttemptJoin,
+    pub constructed_receipt: Option<Uuid>,
+    pub returned_receipt: Option<Uuid>,
+    pub transferred_receipt: Option<Uuid>,
 }
 
 // All request values are private, non-bearer authority inputs. They are never
@@ -290,7 +290,9 @@ impl CredentialRequest {
             resume: None,
         }
     }
-    fn resume(request: &crate::services::sm::SmResumeFinalizationRequest<'_>) -> Self {
+    fn resume(
+        request: &northstar_session_core::finalization::SmResumeFinalizationRequest<'_>,
+    ) -> Self {
         Self {
             user: request.user_id,
             generation: request.expected_auth_generation,
@@ -326,20 +328,20 @@ struct CredentialState {
     prospective: Option<CredentialWitness>,
     constructed: Option<(Uuid, ReceiptProjection)>,
     returned: Option<(Uuid, ReceiptProjection)>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     transferred_receipt: Option<Uuid>,
     integrity: bool,
 }
 #[derive(Clone)]
-pub(crate) struct CredentialObservation(Arc<Mutex<CredentialState>>);
+pub struct CredentialObservation(Arc<Mutex<CredentialState>>);
 impl std::fmt::Debug for CredentialObservation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("CredentialObservation { request and receipt: [redacted] }")
     }
 }
 impl CredentialObservation {
-    #[cfg(test)]
-    pub(crate) fn joins(&self) -> CredentialJoins {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn joins(&self) -> CredentialJoins {
         let state = self.0.lock().unwrap();
         CredentialJoins {
             owner: CredentialAttemptJoin::of(&state.snapshot),
@@ -348,13 +350,13 @@ impl CredentialObservation {
             transferred_receipt: state.transferred_receipt,
         }
     }
-    pub(crate) fn snapshot(&self) -> CredentialSnapshot {
+    pub fn snapshot(&self) -> CredentialSnapshot {
         let state = self.0.lock().unwrap();
         let mut snapshot = state.snapshot.clone();
         snapshot.integrity_failure = !state.integrity;
         snapshot
     }
-    pub(crate) fn handler_returned(&self, returned: HandlerReturn) {
+    pub fn handler_returned(&self, returned: HandlerReturn) {
         self.0
             .lock()
             .unwrap()
@@ -365,11 +367,11 @@ impl CredentialObservation {
 }
 // Non-Clone: only the invocation owner can lend the recorder or transfer the
 // returned receipt. Retained frame/publication clones are read observations.
-pub(crate) struct PreparedCredential {
+pub struct PreparedCredential {
     observation: CredentialObservation,
 }
 impl PreparedCredential {
-    pub(crate) fn new(frame: Uuid, connection: Uuid, ordinal: u8, kind: CredentialKind) -> Self {
+    pub fn new(frame: Uuid, connection: Uuid, ordinal: u8, kind: CredentialKind) -> Self {
         Self {
             observation: CredentialObservation(Arc::new(Mutex::new(CredentialState {
                 request: None,
@@ -378,7 +380,7 @@ impl PreparedCredential {
                 prospective: None,
                 constructed: None,
                 returned: None,
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 transferred_receipt: None,
                 integrity: true,
                 snapshot: CredentialSnapshot {
@@ -407,7 +409,7 @@ impl PreparedCredential {
             }))),
         }
     }
-    pub(crate) fn observation(&self) -> CredentialObservation {
+    pub fn observation(&self) -> CredentialObservation {
         self.observation.clone()
     }
     fn bind(
@@ -427,7 +429,7 @@ impl PreparedCredential {
         state.snapshot.service_started = true;
         Ok(CredentialInvocation { prepared: self })
     }
-    pub(crate) fn fast(
+    pub fn fast(
         &self,
         user: Uuid,
         generation: i64,
@@ -441,7 +443,7 @@ impl PreparedCredential {
         )
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn binding(
+    pub fn binding(
         &self,
         connection: Uuid,
         user: Uuid,
@@ -456,13 +458,13 @@ impl PreparedCredential {
             CredentialRequest::binding(connection, user, generation, key, lease, device, fast),
         )
     }
-    pub(crate) fn resume(
+    pub fn resume(
         &self,
-        request: &crate::services::sm::SmResumeFinalizationRequest<'_>,
+        request: &northstar_session_core::finalization::SmResumeFinalizationRequest<'_>,
     ) -> Result<CredentialInvocation<'_>> {
         self.bind(CredentialKind::Resume, CredentialRequest::resume(request))
     }
-    pub(crate) fn transfer(
+    pub fn transfer(
         &self,
         receipt: &CredentialCommitReceipt,
         frame: Uuid,
@@ -491,14 +493,14 @@ impl PreparedCredential {
             "credential receipt has no matching same-attempt COMMIT witness"
         );
         state.snapshot.transferred = true;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             state.transferred_receipt = Some(receipt.publication_identity());
         }
         Ok(self.observation.clone())
     }
 }
-pub(crate) struct CredentialInvocation<'a> {
+pub struct CredentialInvocation<'a> {
     prepared: &'a PreparedCredential,
 }
 impl Drop for CredentialInvocation<'_> {
@@ -565,7 +567,7 @@ impl CredentialInvocation<'_> {
         state.snapshot.repository_started = true;
         Ok(())
     }
-    pub(crate) fn enter_fast(
+    pub fn enter_fast(
         &self,
         user: Uuid,
         generation: i64,
@@ -578,7 +580,7 @@ impl CredentialInvocation<'_> {
         ))
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn enter_binding(
+    pub fn enter_binding(
         &self,
         connection: Uuid,
         user: Uuid,
@@ -592,13 +594,13 @@ impl CredentialInvocation<'_> {
             connection, user, generation, key, lease, device, fast,
         ))
     }
-    pub(crate) fn enter_resume(
+    pub fn enter_resume(
         &self,
-        request: &crate::services::sm::SmResumeFinalizationRequest<'_>,
+        request: &northstar_session_core::finalization::SmResumeFinalizationRequest<'_>,
     ) -> Result<()> {
         self.enter_repository(CredentialRequest::resume(request))
     }
-    pub(crate) async fn begin<F, T, E>(
+    pub async fn begin<F, T, E>(
         observation: Option<&Self>,
         future: F,
     ) -> std::result::Result<T, CommitError<E>>
@@ -625,7 +627,7 @@ impl CredentialInvocation<'_> {
         }
         result
     }
-    pub(crate) async fn eligibility<F, E>(
+    pub async fn eligibility<F, E>(
         observation: Option<&Self>,
         future: F,
     ) -> std::result::Result<Option<bool>, CommitError<E>>
@@ -654,10 +656,10 @@ impl CredentialInvocation<'_> {
         }
         result
     }
-    pub(crate) fn transaction_returned(&self) {
+    pub fn transaction_returned(&self) {
         self.update(|state| state.snapshot.transaction_returned = true);
     }
-    pub(crate) fn preparation_entered(&self, operation: CredentialPreparation) {
+    pub fn preparation_entered(&self, operation: CredentialPreparation) {
         self.preparation_update(|state| {
             let slot = &mut state.snapshot.preparation[operation.index()];
             if *slot != PreparationResult::NotEntered {
@@ -667,7 +669,7 @@ impl CredentialInvocation<'_> {
             *slot = PreparationResult::Entered;
         });
     }
-    pub(crate) fn preparation_returned(
+    pub fn preparation_returned(
         &self,
         operation: CredentialPreparation,
         result: PreparationResult,
@@ -681,7 +683,7 @@ impl CredentialInvocation<'_> {
             *slot = result;
         });
     }
-    pub(crate) fn stage_id(&self, operation_id: Uuid) {
+    pub fn stage_id(&self, operation_id: Uuid) {
         self.preparation_update(|state| {
             if state.snapshot.stage_id.is_some()
                 || state.snapshot.preparation[CredentialPreparation::Stage.index()]
@@ -693,7 +695,7 @@ impl CredentialInvocation<'_> {
             state.snapshot.stage_id = Some(operation_id);
         });
     }
-    pub(crate) fn stage_returned(&self, result: &Result<Option<StagedLoginEpoch>>) {
+    pub fn stage_returned(&self, result: &Result<Option<StagedLoginEpoch>>) {
         self.preparation_update(|state| {
             let slot = &mut state.snapshot.preparation[CredentialPreparation::Stage.index()];
             if *slot != PreparationResult::Entered {
@@ -710,7 +712,7 @@ impl CredentialInvocation<'_> {
             }
         });
     }
-    pub(crate) async fn rollback<F, E>(
+    pub async fn rollback<F, E>(
         observation: Option<&Self>,
         site: CredentialRollbackSite,
         future: F,
@@ -801,7 +803,7 @@ impl CredentialInvocation<'_> {
             binding: request.binding.clone(),
         })
     }
-    pub(crate) async fn commit<F, E>(
+    pub async fn commit<F, E>(
         observation: Option<&Self>,
         future: F,
     ) -> std::result::Result<(), CommitError<E>>
@@ -851,7 +853,7 @@ impl CredentialInvocation<'_> {
         }
         result
     }
-    pub(crate) fn constructed(&self, receipt: &CredentialCommitReceipt) {
+    pub fn constructed(&self, receipt: &CredentialCommitReceipt) {
         self.update(|state| {
             if state.constructed.is_some() {
                 state.integrity = false;
@@ -901,7 +903,7 @@ impl CredentialInvocation<'_> {
             state.snapshot.returned = Some(returned);
         });
     }
-    pub(crate) fn fast_returned(&self, result: &AuthenticationResult<CredentialCommitReceipt>) {
+    pub fn fast_returned(&self, result: &AuthenticationResult<CredentialCommitReceipt>) {
         let (returned, receipt) = match result {
             AuthenticationResult::Authenticated(receipt) => {
                 (CredentialReturned::Authenticated, Some(receipt))
@@ -922,11 +924,11 @@ impl CredentialInvocation<'_> {
         };
         self.returned(returned, receipt);
     }
-    pub(crate) fn binding_returned(
+    pub fn binding_returned(
         &self,
-        result: &Result<crate::services::sm::BindingFinalizationOutcome>,
+        result: &Result<northstar_session_core::finalization::BindingFinalizationOutcome>,
     ) {
-        use crate::services::sm::BindingFinalizationOutcome as Outcome;
+        use northstar_session_core::finalization::BindingFinalizationOutcome as Outcome;
         let (returned, receipt) = match result {
             Ok(Outcome::Committed { receipt }) => {
                 (CredentialReturned::BindingCommitted, Some(receipt))
@@ -939,11 +941,11 @@ impl CredentialInvocation<'_> {
         };
         self.returned(returned, receipt);
     }
-    pub(crate) fn resume_returned(
+    pub fn resume_returned(
         &self,
-        result: &Result<crate::services::sm::SmResumeFinalizationOutcome>,
+        result: &Result<northstar_session_core::finalization::SmResumeFinalizationOutcome>,
     ) {
-        use crate::services::sm::SmResumeFinalizationOutcome as Outcome;
+        use northstar_session_core::finalization::SmResumeFinalizationOutcome as Outcome;
         let (returned, receipt) = match result {
             Ok(Outcome::Committed(commit)) => {
                 (CredentialReturned::ResumeCommitted, Some(&commit.receipt))
@@ -960,7 +962,7 @@ impl CredentialInvocation<'_> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum HandlerReturn {
+pub enum HandlerReturn {
     Completed,
     Failed,
     TimedOut,
@@ -968,7 +970,7 @@ pub(crate) enum HandlerReturn {
     Panicked,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Transport {
+pub enum Transport {
     NotStarted,
     Recording,
     WriteEntered,
@@ -978,7 +980,7 @@ pub(crate) enum Transport {
     BoshRefused { rid: u64 },
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Knowledge {
+pub enum Knowledge {
     NotStarted,
     NotRequired,
     BeforeCommit,
@@ -986,14 +988,14 @@ pub(crate) enum Knowledge {
     ReceiptKnown(Option<i64>),
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Rollback {
+pub enum Rollback {
     NotRequested,
     CallEntered,
     Returned,
     Failed,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Returned {
+pub enum Returned {
     Authenticated(Option<i64>),
     UnknownCredentials,
     Disabled,
@@ -1018,7 +1020,7 @@ impl Returned {
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Terminal {
+pub enum Terminal {
     Completed,
     DeferredNotification,
     Failed,
@@ -1028,46 +1030,46 @@ pub(crate) enum Terminal {
     ExposedNotAttempted,
 }
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct Effects {
-    pub(crate) unbound: bool,
-    pub(crate) epoch_applied: bool,
-    pub(crate) route_mapping: Option<bool>,
-    pub(crate) route_activation: Option<bool>,
-    pub(crate) caps_entered: bool,
-    pub(crate) caps_returned: bool,
-    pub(crate) notification_entered: bool,
-    pub(crate) notification_returned: Option<bool>,
+pub struct Effects {
+    pub unbound: bool,
+    pub epoch_applied: bool,
+    pub route_mapping: Option<bool>,
+    pub route_activation: Option<bool>,
+    pub caps_entered: bool,
+    pub caps_returned: bool,
+    pub notification_entered: bool,
+    pub notification_returned: Option<bool>,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Snapshot {
-    pub(crate) control: Uuid,
-    pub(crate) frame: Option<Uuid>,
-    pub(crate) handler: Option<HandlerReturn>,
-    pub(crate) sealed: bool,
-    pub(crate) transport: Transport,
-    pub(crate) publication: Knowledge,
-    pub(crate) service_started: bool,
-    pub(crate) repository_started: bool,
-    pub(crate) rollback: Rollback,
-    pub(crate) returned: Option<Returned>,
-    pub(crate) return_matches: bool,
-    pub(crate) effects: Effects,
-    pub(crate) terminal: Option<Terminal>,
+pub struct Snapshot {
+    pub control: Uuid,
+    pub frame: Option<Uuid>,
+    pub handler: Option<HandlerReturn>,
+    pub sealed: bool,
+    pub transport: Transport,
+    pub publication: Knowledge,
+    pub service_started: bool,
+    pub repository_started: bool,
+    pub rollback: Rollback,
+    pub returned: Option<Returned>,
+    pub return_matches: bool,
+    pub effects: Effects,
+    pub terminal: Option<Terminal>,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PublicationJoins {
-    pub(crate) control: Uuid,
-    pub(crate) frame: Option<Uuid>,
-    pub(crate) receipt: Uuid,
-    pub(crate) credential: Option<CredentialAttemptJoin>,
-    pub(crate) begun_receipt: Option<Uuid>,
-    pub(crate) bound_effects: bool,
-    pub(crate) notification_expected: bool,
+pub struct PublicationJoins {
+    pub control: Uuid,
+    pub frame: Option<Uuid>,
+    pub receipt: Uuid,
+    pub credential: Option<CredentialAttemptJoin>,
+    pub begun_receipt: Option<Uuid>,
+    pub bound_effects: bool,
+    pub notification_expected: bool,
 }
 struct State {
     receipt_id: Uuid,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     begun_receipt: Option<Uuid>,
     receipt: ReceiptProjection,
     bound_effects: bool,
@@ -1076,17 +1078,17 @@ struct State {
     snapshot: Snapshot,
 }
 #[derive(Clone)]
-pub(crate) struct Observation(Arc<Mutex<State>>);
+pub struct Observation(Arc<Mutex<State>>);
 impl std::fmt::Debug for Observation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("AuthPublicationObservation { receipt and identity: [redacted] }")
     }
 }
 impl Observation {
-    pub(crate) fn returned_receipt(receipt: &CredentialCommitReceipt, frame: Option<Uuid>) -> Self {
+    pub fn returned_receipt(receipt: &CredentialCommitReceipt, frame: Option<Uuid>) -> Self {
         Self(Arc::new(Mutex::new(State {
             receipt_id: receipt.publication_identity(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             begun_receipt: None,
             bound_effects: false,
             notification_expected: false,
@@ -1109,7 +1111,7 @@ impl Observation {
             },
         })))
     }
-    pub(crate) fn observed_receipt(
+    pub fn observed_receipt(
         receipt: &CredentialCommitReceipt,
         frame: Uuid,
         credential: CredentialObservation,
@@ -1118,12 +1120,12 @@ impl Observation {
         observation.0.lock().unwrap().credential = Some(credential);
         observation
     }
-    #[cfg(test)]
-    pub(crate) fn credential(&self) -> Option<CredentialObservation> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn credential(&self) -> Option<CredentialObservation> {
         self.0.lock().unwrap().credential.clone()
     }
-    #[cfg(test)]
-    pub(crate) fn joins(&self) -> PublicationJoins {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn joins(&self) -> PublicationJoins {
         let state = self.0.lock().unwrap();
         PublicationJoins {
             control: state.snapshot.control,
@@ -1138,17 +1140,17 @@ impl Observation {
             notification_expected: state.notification_expected,
         }
     }
-    pub(crate) fn snapshot(&self) -> Snapshot {
+    pub fn snapshot(&self) -> Snapshot {
         self.0.lock().unwrap().snapshot.clone()
     }
-    pub(crate) fn handler_returned(&self, returned: HandlerReturn) {
+    pub fn handler_returned(&self, returned: HandlerReturn) {
         let mut state = self.0.lock().unwrap();
         state.snapshot.handler.get_or_insert(returned);
         if !state.snapshot.sealed && state.snapshot.terminal.is_none() {
             state.snapshot.terminal = Some(Terminal::Abandoned);
         }
     }
-    pub(crate) fn sealed(&self, bound: bool, notification: bool) -> Result<()> {
+    pub fn sealed(&self, bound: bool, notification: bool) -> Result<()> {
         let mut state = self.0.lock().unwrap();
         ensure!(
             !state.snapshot.sealed && state.snapshot.terminal.is_none(),
@@ -1159,7 +1161,7 @@ impl Observation {
         state.notification_expected = notification;
         Ok(())
     }
-    pub(crate) fn transport(&self, transport: Transport) -> Result<()> {
+    pub fn transport(&self, transport: Transport) -> Result<()> {
         let mut state = self.0.lock().unwrap();
         ensure!(
             state.snapshot.terminal.is_none(),
@@ -1183,14 +1185,14 @@ impl Observation {
         state.snapshot.transport = transport;
         Ok(())
     }
-    pub(crate) fn effects(&self, update: impl FnOnce(&mut Effects)) {
+    pub fn effects(&self, update: impl FnOnce(&mut Effects)) {
         update(&mut self.0.lock().unwrap().snapshot.effects);
     }
-    pub(crate) fn retire(&self, terminal: Terminal) {
+    pub fn retire(&self, terminal: Terminal) {
         let mut state = self.0.lock().unwrap();
         state.snapshot.terminal.get_or_insert(terminal);
     }
-    pub(crate) fn successful_completion(&self, deferred: bool) -> bool {
+    pub fn successful_completion(&self, deferred: bool) -> bool {
         let state = self.0.lock().unwrap();
         let snapshot = &state.snapshot;
         let Some(Returned::Authenticated(epoch)) = snapshot.returned else {
@@ -1225,18 +1227,18 @@ impl Observation {
             !deferred && !effects.notification_entered && effects.notification_returned.is_none()
         }
     }
-    pub(crate) fn completed(&self) -> bool {
+    pub fn completed(&self) -> bool {
         match self.snapshot().terminal {
             Some(Terminal::Completed) => self.successful_completion(false),
             Some(Terminal::DeferredNotification) => self.successful_completion(true),
             _ => false,
         }
     }
-    pub(crate) fn authenticated_return(&self, epoch: Option<i64>) -> bool {
+    pub fn authenticated_return(&self, epoch: Option<i64>) -> bool {
         let snapshot = self.snapshot();
         snapshot.return_matches && snapshot.returned == Some(Returned::Authenticated(epoch))
     }
-    pub(crate) fn abandon(&self) {
+    pub fn abandon(&self) {
         let terminal = if matches!(
             self.snapshot().transport,
             Transport::Written | Transport::BoshAccepted { .. }
@@ -1247,10 +1249,7 @@ impl Observation {
         };
         self.retire(terminal);
     }
-    pub(crate) fn begin<'a>(
-        &'a self,
-        receipt: &'a CredentialCommitReceipt,
-    ) -> Result<Invocation<'a>> {
+    pub fn begin<'a>(&'a self, receipt: &'a CredentialCommitReceipt) -> Result<Invocation<'a>> {
         let mut state = self.0.lock().unwrap();
         ensure!(
             state.receipt_id == receipt.publication_identity()
@@ -1270,7 +1269,7 @@ impl Observation {
             "auth publication requires successful control transport"
         );
         state.snapshot.publication = Knowledge::BeforeCommit;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             state.begun_receipt = Some(receipt.publication_identity());
         }
@@ -1283,12 +1282,12 @@ impl Observation {
 
 /// The actual owned receipt is lent only to its exact publication invocation.
 /// Repository COMMIT observations and the returned application value are separate.
-pub(crate) struct Invocation<'a> {
+pub struct Invocation<'a> {
     observation: &'a Observation,
     receipt: &'a CredentialCommitReceipt,
 }
 impl Invocation<'_> {
-    pub(crate) fn receipt(&self) -> &CredentialCommitReceipt {
+    pub fn receipt(&self) -> &CredentialCommitReceipt {
         self.receipt
     }
     fn validate(&self, state: &State) -> Result<()> {
@@ -1302,7 +1301,7 @@ impl Invocation<'_> {
         );
         Ok(())
     }
-    pub(crate) fn enter_service(&self) -> Result<()> {
+    pub fn enter_service(&self) -> Result<()> {
         let mut state = self.observation.0.lock().unwrap();
         self.validate(&state)?;
         ensure!(
@@ -1312,7 +1311,7 @@ impl Invocation<'_> {
         state.snapshot.service_started = true;
         Ok(())
     }
-    pub(crate) fn enter_repository(&self) -> Result<()> {
+    pub fn enter_repository(&self) -> Result<()> {
         let mut state = self.observation.0.lock().unwrap();
         self.validate(&state)?;
         ensure!(
@@ -1322,7 +1321,7 @@ impl Invocation<'_> {
         state.snapshot.repository_started = true;
         Ok(())
     }
-    pub(crate) fn not_required(&self) -> Result<()> {
+    pub fn not_required(&self) -> Result<()> {
         let mut state = self.observation.0.lock().unwrap();
         self.validate(&state)?;
         ensure!(
@@ -1337,11 +1336,7 @@ impl Invocation<'_> {
         state.snapshot.publication = Knowledge::NotRequired;
         Ok(())
     }
-    pub(crate) async fn commit<F, E>(
-        &self,
-        future: F,
-        epoch: Option<i64>,
-    ) -> Result<(), CommitError<E>>
+    pub async fn commit<F, E>(&self, future: F, epoch: Option<i64>) -> Result<(), CommitError<E>>
     where
         F: Future<Output = Result<(), E>>,
     {
@@ -1361,7 +1356,7 @@ impl Invocation<'_> {
         self.observation.0.lock().unwrap().snapshot.publication = Knowledge::ReceiptKnown(epoch);
         Ok(())
     }
-    pub(crate) async fn rollback<F, E>(&self, future: F) -> Result<(), CommitError<E>>
+    pub async fn rollback<F, E>(&self, future: F) -> Result<(), CommitError<E>>
     where
         F: Future<Output = Result<(), E>>,
     {
@@ -1385,7 +1380,7 @@ impl Invocation<'_> {
         };
         result
     }
-    pub(crate) fn returned(&self, returned: &AuthenticationResult<Option<i64>>) -> bool {
+    pub fn returned(&self, returned: &AuthenticationResult<Option<i64>>) -> bool {
         let mut state = self.observation.0.lock().unwrap();
         if state.snapshot.returned.is_some() {
             return false;
@@ -1406,7 +1401,7 @@ impl Invocation<'_> {
     }
 }
 #[derive(Debug)]
-pub(crate) enum CommitError<E> {
+pub enum CommitError<E> {
     Observation(anyhow::Error),
     Repository(E),
 }

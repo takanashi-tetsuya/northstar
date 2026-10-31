@@ -452,7 +452,7 @@ enum CredentialFrameCut {
 }
 #[tokio::test(start_paused = true)]
 async fn credential_attempts_survive_actual_frame_pending_timeout_and_unwind_cuts() {
-    use crate::services::authentication::{
+    use northstar_auth_application::authentication::{
         AuthenticationResult, CredentialCommitReceipt, FastCommitPlan,
     };
     use publication::{
@@ -1558,12 +1558,12 @@ async fn publication_is_observed_without_introducing_a_deadline() {
 }
 #[tokio::test]
 async fn credential_trace_retains_bounded_facts_without_private_request_receipt_or_error_data() {
-    use crate::services::authentication::{
-        CredentialCommitReceipt, FastCommitPlan, IssuedFastToken,
-    };
     use crate::services::sm::{
         ActivatedSmSession, BindingFinalizationOutcome, SmResumeFinalizationCommit,
         SmResumeFinalizationOutcome, SmResumeFinalizationRequest,
+    };
+    use northstar_auth_application::authentication::{
+        CredentialCommitReceipt, FastCommitPlan, IssuedFastToken,
     };
     let (capture, _subscriber) =
         TraceCapture::install_with_filter("off,rust_xmpp_server::xmpp::auth_credential=debug");

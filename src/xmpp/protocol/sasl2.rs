@@ -348,7 +348,7 @@ impl ProtocolSession {
 
     pub(crate) async fn complete_sasl2(
         &mut self,
-        user: crate::services::authentication::AuthenticatedAccount,
+        user: northstar_auth_application::authentication::AuthenticatedAccount,
         sasl_data: Option<Zeroizing<Vec<u8>>>,
         authenticated_with_external: bool,
     ) -> Result<Action> {
@@ -368,19 +368,19 @@ impl ProtocolSession {
             .revalidate_generation(user.id, expected_auth_generation)
             .await
         {
-            crate::services::authentication::AuthenticationResult::Authenticated(()) => {}
-            crate::services::authentication::AuthenticationResult::Disabled
-            | crate::services::authentication::AuthenticationResult::StaleGeneration
-            | crate::services::authentication::AuthenticationResult::ExpiredCredentials
-            | crate::services::authentication::AuthenticationResult::ReplayedCredentials => {
+            northstar_auth_application::authentication::AuthenticationResult::Authenticated(()) => {}
+            northstar_auth_application::authentication::AuthenticationResult::Disabled
+            | northstar_auth_application::authentication::AuthenticationResult::StaleGeneration
+            | northstar_auth_application::authentication::AuthenticationResult::ExpiredCredentials
+            | northstar_auth_application::authentication::AuthenticationResult::ReplayedCredentials => {
                 self.sasl_state = None;
                 return Ok(Action::Send(failure_xml("credentials-expired", None)));
             }
-            crate::services::authentication::AuthenticationResult::UnknownCredentials => {
+            northstar_auth_application::authentication::AuthenticationResult::UnknownCredentials => {
                 self.sasl_state = None;
                 return Ok(Action::Send(failure_xml("not-authorized", None)));
             }
-            crate::services::authentication::AuthenticationResult::IntegrityFailure => {
+            northstar_auth_application::authentication::AuthenticationResult::IntegrityFailure => {
                 self.state
                     .sasl2_authentication_telemetry()
                     .integrity_failed();
@@ -388,7 +388,7 @@ impl ProtocolSession {
                 self.sasl_state = None;
                 return Ok(Action::Send(failure_xml("temporary-auth-failure", None)));
             }
-            crate::services::authentication::AuthenticationResult::BackendFailure(error) => {
+            northstar_auth_application::authentication::AuthenticationResult::BackendFailure(error) => {
                 self.state.sasl2_authentication_telemetry().backend_failed();
                 tracing::error!(?error, user_id = %user.id, "could not revalidate SASL2 credentials");
                 self.sasl_state = None;
@@ -428,23 +428,23 @@ impl ProtocolSession {
                 .bind2_archive_boundaries(user.id, expected_auth_generation)
                 .await
             {
-                crate::services::authentication::AuthenticationResult::Authenticated(
+                northstar_auth_application::authentication::AuthenticationResult::Authenticated(
                     boundaries,
                 ) => boundaries,
-                crate::services::authentication::AuthenticationResult::Disabled
-                | crate::services::authentication::AuthenticationResult::StaleGeneration
-                | crate::services::authentication::AuthenticationResult::ExpiredCredentials
-                | crate::services::authentication::AuthenticationResult::ReplayedCredentials => {
+                northstar_auth_application::authentication::AuthenticationResult::Disabled
+                | northstar_auth_application::authentication::AuthenticationResult::StaleGeneration
+                | northstar_auth_application::authentication::AuthenticationResult::ExpiredCredentials
+                | northstar_auth_application::authentication::AuthenticationResult::ReplayedCredentials => {
                     self.sasl_state = None;
                     self.user_agent_id = None;
                     return Ok(Action::Send(failure_xml("credentials-expired", None)));
                 }
-                crate::services::authentication::AuthenticationResult::UnknownCredentials => {
+                northstar_auth_application::authentication::AuthenticationResult::UnknownCredentials => {
                     self.sasl_state = None;
                     self.user_agent_id = None;
                     return Ok(Action::Send(failure_xml("not-authorized", None)));
                 }
-                crate::services::authentication::AuthenticationResult::IntegrityFailure => {
+                northstar_auth_application::authentication::AuthenticationResult::IntegrityFailure => {
                     self.state
                         .sasl2_authentication_telemetry()
                         .integrity_failed();
@@ -453,7 +453,7 @@ impl ProtocolSession {
                     self.user_agent_id = None;
                     return Ok(Action::Send(failure_xml("temporary-auth-failure", None)));
                 }
-                crate::services::authentication::AuthenticationResult::BackendFailure(error) => {
+                northstar_auth_application::authentication::AuthenticationResult::BackendFailure(error) => {
                     self.state.sasl2_authentication_telemetry().backend_failed();
                     tracing::error!(?error, "could not preflight Bind 2 MAM metadata");
                     self.sasl_state = None;
@@ -755,21 +755,21 @@ impl ProtocolSession {
 
     async fn commit_sasl2_unbound_state(
         &self,
-        plan: &crate::services::authentication::FastCommitPlan,
-        user: &crate::services::authentication::AuthenticatedAccount,
+        plan: &northstar_auth_application::authentication::FastCommitPlan,
+        user: &northstar_auth_application::authentication::AuthenticatedAccount,
         expected_auth_generation: i64,
     ) -> Result<
         std::result::Result<
             (
                 String,
-                crate::services::authentication::CredentialCommitReceipt,
+                northstar_auth_application::authentication::CredentialCommitReceipt,
                 crate::xmpp::auth_publication::CredentialAttempt,
             ),
             &'static str,
         >,
     > {
         let credential_attempt = self.prepare_credential_attempt(
-            crate::services::authentication::publication::CredentialKind::UnboundFast,
+            northstar_auth_application::authentication::publication::CredentialKind::UnboundFast,
         )?;
         match self
             .state
@@ -788,7 +788,7 @@ impl ProtocolSession {
             )
             .await
         {
-            crate::services::authentication::AuthenticationResult::Authenticated(mut receipt) => {
+            northstar_auth_application::authentication::AuthenticationResult::Authenticated(mut receipt) => {
                 let token_xml = receipt
                     .take_issued_fast()
                     .as_ref()
@@ -796,16 +796,16 @@ impl ProtocolSession {
                     .unwrap_or_default();
                 Ok(Ok((token_xml, receipt, credential_attempt)))
             }
-            crate::services::authentication::AuthenticationResult::Disabled
-            | crate::services::authentication::AuthenticationResult::StaleGeneration
-            | crate::services::authentication::AuthenticationResult::ExpiredCredentials
-            | crate::services::authentication::AuthenticationResult::ReplayedCredentials => {
+            northstar_auth_application::authentication::AuthenticationResult::Disabled
+            | northstar_auth_application::authentication::AuthenticationResult::StaleGeneration
+            | northstar_auth_application::authentication::AuthenticationResult::ExpiredCredentials
+            | northstar_auth_application::authentication::AuthenticationResult::ReplayedCredentials => {
                 Ok(Err("credentials-expired"))
             }
-            crate::services::authentication::AuthenticationResult::UnknownCredentials => {
+            northstar_auth_application::authentication::AuthenticationResult::UnknownCredentials => {
                 Ok(Err("not-authorized"))
             }
-            crate::services::authentication::AuthenticationResult::IntegrityFailure => {
+            northstar_auth_application::authentication::AuthenticationResult::IntegrityFailure => {
                 self.state
                     .sasl2_authentication_telemetry()
                     .integrity_failed();
@@ -815,7 +815,7 @@ impl ProtocolSession {
                 );
                 Ok(Err("temporary-auth-failure"))
             }
-            crate::services::authentication::AuthenticationResult::BackendFailure(error) => {
+            northstar_auth_application::authentication::AuthenticationResult::BackendFailure(error) => {
                 self.state.sasl2_authentication_telemetry().backend_failed();
                 tracing::error!(?error, "atomic SASL2 credential/session commit failed");
                 Ok(Err("temporary-auth-failure"))

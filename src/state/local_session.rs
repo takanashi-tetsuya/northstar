@@ -38,8 +38,10 @@ impl AppState {
         expected_auth_generation: i64,
         full_jid: &str,
         device_id: Option<uuid::Uuid>,
-        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
-        observation: Option<&crate::services::authentication::publication::PreparedCredential>,
+        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
+        observation: Option<
+            &northstar_auth_application::authentication::publication::PreparedCredential,
+        >,
     ) -> anyhow::Result<crate::services::sm::BindingFinalizationOutcome> {
         self.sm_service
             .finalize_binding_observed(
@@ -58,7 +60,9 @@ impl AppState {
     pub(crate) async fn finalize_sm_resume(
         &self,
         request: crate::services::sm::SmResumeFinalizationRequest<'_>,
-        observation: Option<&crate::services::authentication::publication::PreparedCredential>,
+        observation: Option<
+            &northstar_auth_application::authentication::publication::PreparedCredential,
+        >,
     ) -> anyhow::Result<crate::services::sm::SmResumeFinalizationOutcome> {
         self.sm_service
             .finalize_resume_observed(request, observation)

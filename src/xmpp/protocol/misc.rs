@@ -546,7 +546,7 @@ impl ProtocolSession {
     /// cleanup cannot drift between authentication generations.
     pub(crate) async fn bind_resource_internal(
         &mut self,
-        user: &crate::services::authentication::AuthenticatedAccount,
+        user: &northstar_auth_application::authentication::AuthenticatedAccount,
         resource: String,
     ) -> Result<std::result::Result<String, ResourceBindingFailure>> {
         let result = self
@@ -565,15 +565,15 @@ impl ProtocolSession {
     /// non-routable until both durable finalization and transport success.
     pub(crate) async fn bind_resource_sasl2_internal(
         &mut self,
-        user: &crate::services::authentication::AuthenticatedAccount,
+        user: &northstar_auth_application::authentication::AuthenticatedAccount,
         resource: String,
-        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
         login_device: Option<uuid::Uuid>,
     ) -> Result<
         std::result::Result<
             (
                 String,
-                Option<crate::services::authentication::IssuedFastToken>,
+                Option<northstar_auth_application::authentication::IssuedFastToken>,
             ),
             ResourceBindingFailure,
         >,
@@ -729,7 +729,7 @@ impl ProtocolSession {
         // and externally visible side effects which cannot be rolled back if
         // FAST issuance or the login transaction fails below.
         let credential_attempt = self.prepare_credential_attempt(
-            crate::services::authentication::publication::CredentialKind::Binding,
+            northstar_auth_application::authentication::publication::CredentialKind::Binding,
         )?;
         let finalized = self
             .state

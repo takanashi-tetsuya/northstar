@@ -339,7 +339,7 @@ impl SuspendedMucEndpoint {
 }
 
 pub(crate) struct RestoreLocalMucOccupantsRequest<'a> {
-    pub(crate) user: &'a crate::services::authentication::AuthenticatedAccount,
+    pub(crate) user: &'a northstar_auth_application::authentication::AuthenticatedAccount,
     pub(crate) full_jid: &'a str,
     pub(crate) connection_id: uuid::Uuid,
     pub(crate) sm_session_id: uuid::Uuid,

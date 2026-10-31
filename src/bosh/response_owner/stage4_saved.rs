@@ -620,7 +620,7 @@ impl Session {
         let polled = std::future::poll_fn(|cx| match wire::driver::poll_once(&recorder, site.0, call.as_mut(), cx) {
             Err(stop) => Poll::Ready(Err(stop)),
             Ok(Poll::Ready(actual)) => Poll::Ready(Ok(Poll::Ready(actual))),
-            Ok(Poll::Pending) if drive == wire::AuthDrive::DropPublicationCommit && paused_reads.iter().any(|read| read.live_snapshot().publication == crate::services::authentication::publication::Knowledge::CommitCallEntered) => Poll::Ready(Ok(Poll::Pending)),
+            Ok(Poll::Pending) if drive == wire::AuthDrive::DropPublicationCommit && paused_reads.iter().any(|read| read.live_snapshot().publication == northstar_auth_application::authentication::publication::Knowledge::CommitCallEntered) => Poll::Ready(Ok(Poll::Pending)),
             Ok(Poll::Pending) => Poll::Pending,
         }).await;
         let polled = match polled {
@@ -656,7 +656,7 @@ impl Session {
                 read.capture(wire::Cut::AfterPoll);
                 read.capture_frame_quiescent(wire::Cut::AfterPoll);
             }
-            if drive == wire::AuthDrive::DropPublicationCommit && !paused_reads.iter().any(|read| read.live_snapshot().publication == crate::services::authentication::publication::Knowledge::CommitCallEntered) { observed::lost(&recorder); }
+            if drive == wire::AuthDrive::DropPublicationCommit && !paused_reads.iter().any(|read| read.live_snapshot().publication == northstar_auth_application::authentication::publication::Knowledge::CommitCallEntered) { observed::lost(&recorder); }
         }
         // No retained spawned task exists. Dropping this owning future drops
         // its publication runner and COMMIT child before OperationRunner retires.

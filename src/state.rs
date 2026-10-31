@@ -349,7 +349,7 @@ pub struct AppState {
     /// Credential lookup, verification and XEP-0484 mutation authority. The
     /// protocol layer receives typed outcomes but neither PgPool nor the FAST
     /// derivation key.
-    authentication_service: crate::services::authentication::AuthenticationService<
+    authentication_service: northstar_auth_application::authentication::AuthenticationService<
         db::authentication::PostgresAuthenticationRepository,
     >,
     /// XEP-0050/XEP-0133 session and execution authority. Protocol handlers

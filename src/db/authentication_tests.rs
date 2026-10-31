@@ -1,9 +1,14 @@
-use super::*;
 use crate::db;
 use crate::db::authentication::stage_login_epoch_in_transaction;
+use northstar_archive_core::ArchiveBoundary;
+use northstar_auth_application::authentication::*;
+use northstar_auth_core as auth;
 use sqlx::PgPool;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
+use uuid::Uuid;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone, Copy)]
 enum CredentialCut {
@@ -496,7 +501,7 @@ async fn authentication_service_fences_all_credential_and_inline_state_transitio
     let plain_username = bob.clone();
     let plain_attempt = tokio::spawn(async move {
         plain_service
-            .repository
+            .repository()
             .authenticate_plain_with_hook(
                 &plain_username,
                 "bob old correct horse battery",
@@ -546,7 +551,7 @@ async fn authentication_service_fences_all_credential_and_inline_state_transitio
     let disabled_username = carol.clone();
     let disabled_attempt = tokio::spawn(async move {
         disabled_service
-            .repository
+            .repository()
             .authenticate_plain_with_hook(
                 &disabled_username,
                 "carol correct horse battery",
@@ -586,7 +591,7 @@ async fn authentication_service_fences_all_credential_and_inline_state_transitio
     let boundary_service = service.clone();
     let boundary_attempt = tokio::spawn(async move {
         boundary_service
-            .repository
+            .repository()
             .bind2_archive_boundaries_with_hook(bob_id, bob_generation, move |fence| async move {
                 locked_tx.send(fence).unwrap();
                 release_rx.await.unwrap();
@@ -642,7 +647,7 @@ async fn authentication_service_fences_all_credential_and_inline_state_transitio
     let fast_username = dave.clone();
     let fast_attempt = tokio::spawn(async move {
         fast_service
-            .repository
+            .repository()
             .authenticate_fast_with_hook(
                 FastProofRequest {
                     username: &fast_username,

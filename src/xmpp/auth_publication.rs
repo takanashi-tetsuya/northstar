@@ -4,11 +4,11 @@
 pub(crate) mod stage4_saved;
 
 use super::frame_execution::{FrameExecution, PublicationResult};
-use crate::services::authentication::{
-    publication::{Invocation, Observation, Terminal, Transport},
-    AuthenticationResult, CredentialCommitReceipt,
-};
 use anyhow::{ensure, Result};
+use northstar_auth_application::authentication::publication::{
+    Invocation, Observation, Terminal, Transport,
+};
+use northstar_auth_application::authentication::{AuthenticationResult, CredentialCommitReceipt};
 use sha2::{Digest, Sha256};
 use std::{
     future::Future,
@@ -123,14 +123,14 @@ pub(super) fn credential_handoff_failed(error: &anyhow::Error) -> bool {
 // polled. Missing evidence after an observed call can never choose compatibility.
 pub(super) struct CredentialAttempt {
     origin: Option<FrameExecution>,
-    prepared: Option<crate::services::authentication::publication::PreparedCredential>,
+    prepared: Option<northstar_auth_application::authentication::publication::PreparedCredential>,
     connection: Uuid,
 }
 impl CredentialAttempt {
     pub(super) fn new(
         origin: Option<FrameExecution>,
         connection: Uuid,
-        kind: crate::services::authentication::publication::CredentialKind,
+        kind: northstar_auth_application::authentication::publication::CredentialKind,
     ) -> Result<Self> {
         let prepared = origin
             .as_ref()
@@ -144,7 +144,7 @@ impl CredentialAttempt {
     }
     pub(super) fn prepared(
         &self,
-    ) -> Option<&crate::services::authentication::publication::PreparedCredential> {
+    ) -> Option<&northstar_auth_application::authentication::publication::PreparedCredential> {
         self.prepared.as_ref()
     }
     pub(super) fn into_owner(
@@ -192,7 +192,7 @@ impl KnownCredentialOwner {
         receipt: CredentialCommitReceipt,
         origin: FrameExecution,
         connection: Uuid,
-        prepared: &crate::services::authentication::publication::PreparedCredential,
+        prepared: &northstar_auth_application::authentication::publication::PreparedCredential,
     ) -> Result<Self> {
         let credential = prepared
             .transfer(&receipt, origin.operation_id(), connection)
@@ -293,7 +293,8 @@ pub(crate) struct ControlAssociation {
     pub(crate) receipt: Uuid,
     pub(crate) length: usize,
     pub(crate) digest: [u8; 32],
-    pub(crate) publication: crate::services::authentication::publication::PublicationJoins,
+    pub(crate) publication:
+        northstar_auth_application::authentication::publication::PublicationJoins,
 }
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

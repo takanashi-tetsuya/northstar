@@ -395,11 +395,11 @@ impl ProtocolSession {
         &mut self,
         previd: &str,
         client_h: u32,
-        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
         defer_visibility: bool,
     ) -> Result<(
         Action,
-        Option<crate::services::authentication::IssuedFastToken>,
+        Option<northstar_auth_application::authentication::IssuedFastToken>,
     )> {
         if self.sm.enabled || self.full_jid.is_some() {
             return Ok((Action::Send(sm_failed("unexpected-request")), None));
@@ -843,7 +843,7 @@ impl ProtocolSession {
             .pause_suspended_muc_delivery(claim.session_id)
             .await;
         let credential_attempt = self.prepare_credential_attempt(
-            crate::services::authentication::publication::CredentialKind::Resume,
+            northstar_auth_application::authentication::publication::CredentialKind::Resume,
         )?;
         let finalized = self
             .state

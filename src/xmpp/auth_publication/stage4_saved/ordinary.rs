@@ -3,8 +3,8 @@
 //! scripted component variants are not complete accepted saved compositions.
 //! None of these tests encodes or publishes a saved evidence contract.
 use super::*;
-use crate::services::authentication::publication as actual;
 use crate::xmpp::protocol::mix::stage4_saved::RouteMap;
+use northstar_auth_application::authentication::publication as actual;
 
 pub(crate) fn fixed(n: u128) -> wire::Id {
     wire::Id(Uuid::from_u128(n))

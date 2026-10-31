@@ -43,6 +43,8 @@ pub mod api_operations;
 pub mod api_pages;
 pub mod archive;
 pub mod authentication;
+#[cfg(test)]
+mod authentication_tests;
 pub mod authority_listener;
 pub mod authorization_identity;
 pub(crate) mod background_housekeeping_repository;

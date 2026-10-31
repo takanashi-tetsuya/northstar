@@ -1,7 +1,7 @@
 //! Factual projections copy observed values, never expected input.
 use super::*;
-use crate::services::authentication::publication as actual;
 use crate::xmpp::outbound::TransportOwnershipSource;
+use northstar_auth_application::authentication::publication as actual;
 use wire::EvidenceId as Id;
 
 pub(crate) fn id(value: Uuid) -> Id {

@@ -2,12 +2,14 @@
 //! Actual credential/service/holder/publication owners over finite replies.
 #![cfg(test)]
 use super::*;
-use crate::services::authentication::publication::{CredentialKind, CredentialObservation};
-use crate::services::authentication::{AuthenticationService, FastCommitPlan};
 use crate::services::sm::{BindingFinalizationOutcome, SmService};
 use crate::stage4_replay as wire;
 use crate::xmpp::outbound::OutboundItem;
 use crate::xmpp::protocol::{mix::stage4_saved::RouteHandle, ClientTransport};
+use northstar_auth_application::authentication::publication::{
+    CredentialKind, CredentialObservation,
+};
+use northstar_auth_application::authentication::{AuthenticationService, FastCommitPlan};
 use std::collections::BTreeMap;
 
 pub(crate) mod facts;
@@ -48,17 +50,19 @@ impl AuthRead {
     pub(crate) fn frame_id(&self) -> Uuid {
         self.frame.operation_id()
     }
-    pub(crate) fn live_snapshot(&self) -> crate::services::authentication::publication::Snapshot {
+    pub(crate) fn live_snapshot(
+        &self,
+    ) -> northstar_auth_application::authentication::publication::Snapshot {
         self.publication.snapshot()
     }
     pub(crate) fn publication_joins(
         &self,
-    ) -> crate::services::authentication::publication::PublicationJoins {
+    ) -> northstar_auth_application::authentication::publication::PublicationJoins {
         self.publication.joins()
     }
     pub(crate) fn credential_joins(
         &self,
-    ) -> crate::services::authentication::publication::CredentialJoins {
+    ) -> northstar_auth_application::authentication::publication::CredentialJoins {
         self.credential.joins()
     }
     pub(crate) fn capture(&self, cut: wire::Cut) {
@@ -225,7 +229,7 @@ pub(crate) async fn publish_native(
     let polled = std::future::poll_fn(|cx| match wire::driver::poll_once(recorder, site.0, call.as_mut(), cx) {
         Err(stop) => Poll::Ready(Err(stop)),
         Ok(Poll::Ready(result)) => Poll::Ready(Ok(Poll::Ready(result))),
-        Ok(Poll::Pending) if drive == wire::AuthDrive::DropPublicationCommit && read.live_snapshot().publication == crate::services::authentication::publication::Knowledge::CommitCallEntered => Poll::Ready(Ok(Poll::Pending)),
+        Ok(Poll::Pending) if drive == wire::AuthDrive::DropPublicationCommit && read.live_snapshot().publication == northstar_auth_application::authentication::publication::Knowledge::CommitCallEntered => Poll::Ready(Ok(Poll::Pending)),
         Ok(Poll::Pending) => Poll::Pending,
     }).await;
     let polled = match polled {
@@ -246,7 +250,7 @@ pub(crate) async fn publish_native(
     if dropped
         && (drive != wire::AuthDrive::DropPublicationCommit
             || read.live_snapshot().publication
-                != crate::services::authentication::publication::Knowledge::CommitCallEntered)
+                != northstar_auth_application::authentication::publication::Knowledge::CommitCallEntered)
     {
         facts::lost(recorder);
     }

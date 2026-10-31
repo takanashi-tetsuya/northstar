@@ -136,6 +136,16 @@ crates:
     api_stability: internal
     publish_policy: never
 
+  - crate_id: northstar-auth-application
+    package: northstar-auth-application
+    path: crates/contexts/auth/northstar-auth-application
+    tier: context
+    context: auth
+    role: application
+    owner_team: identity-session
+    api_stability: internal-stable
+    publish_policy: never
+
   - crate_id: northstar-auth-core
     package: northstar-auth-core
     path: crates/contexts/auth/northstar-auth-core

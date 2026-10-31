@@ -4,6 +4,7 @@ import { findRustItem, matchingRustBrace } from './lib/source-module.mjs';
 import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyMixForegroundBoundaries, verifyMixWorkerBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries, verifyBoshResponseBoundaries, verifyBoshSelectionObservations, verifyRouteHelperBoundaries } from './check-execution-boundaries.mjs';
 
 const baseline = readExecutionSources();
+const CROSS_CRATE_TEST_ONLY = '#[cfg(any(test, feature = "test-support"))]';
 function changed(file, before, after) {
   assert.equal(baseline[file].split(before).length, 2, `mutation must match exactly once: ${before}`);
   assert.notEqual(before, after, 'string mutation must not be a no-op');
@@ -358,9 +359,10 @@ for (const [file, name, derive] of [
   ['authOwner', 'ControlAssociation', 'Clone, Copy, Debug, Eq, PartialEq'],
   ['authOwner', 'ControlJoins', 'Clone, Copy, Debug, Default, Eq, PartialEq'],
 ]) {
+  const [attribute, visibility] = file === 'authFacts' ? [CROSS_CRATE_TEST_ONLY, 'pub'] : ['#[cfg(test)]', 'pub(crate)'];
   rejects(`auth ${name} facts cannot escape test configuration`, file,
-    `#[cfg(test)] #[derive(${derive})] pub(crate) struct ${name}`,
-    `#[derive(${derive})] pub(crate) struct ${name}`, /test-only association facts/);
+    `${attribute} #[derive(${derive})] ${visibility} struct ${name}`,
+    `#[derive(${derive})] ${visibility} struct ${name}`, /test-only association facts/);
 }
 for (const [file, field, expected] of [
   ['authFacts', 'transferred_receipt: Option<Uuid>', /test-only and follow actual checked transfer/],
@@ -368,7 +370,7 @@ for (const [file, field, expected] of [
   ['authOwner', 'joins: ControlJoinObservation,', /test-only handoff cut/],
 ]) {
   rejects(`auth private ${field} cannot escape test configuration`, file,
-    `#[cfg(test)] ${field}`, field, expected);
+    `${file === 'authFacts' ? CROSS_CRATE_TEST_ONLY : '#[cfg(test)]'} ${field}`, field, expected);
 }
 rejects('auth credential joins cannot replace raw returned identity with constructed identity', 'authFacts',
   'returned_receipt: state.returned.as_ref().map(|(id, _)| *id)',
@@ -397,7 +399,7 @@ rejects('auth control joins cannot erase the actual frame association', 'authOwn
 
 // Pre-receipt controls use the same exact-one token-span mutation helper.
 rejects('credential prepared owner cannot become Clone', 'authFacts',
-  'pub(crate) struct PreparedCredential', '#[derive(Clone)] pub(crate) struct PreparedCredential', /cannot derive or implement Clone or Copy/);
+  'pub struct PreparedCredential', '#[derive(Clone)] pub struct PreparedCredential', /cannot derive or implement Clone or Copy/);
 rejects('credential receipt handoff cannot acquire the latest frame', 'protocol',
   'let owner = attempt.into_owner(receipt)?;', 'let owner = latest_attempt().into_owner(receipt)?;', /exact captured attempt/);
 rejects('credential observed mode cannot downgrade after a missing witness', 'authOwner',
@@ -1301,8 +1303,8 @@ rejectsSelection('BOSH selection status cannot lose its sticky connection-change
   'Incomplete { omitted_items: usize, missing_auth_associations: usize, }', /fact-only field shape/);
 for (const [name, field] of [
   ['holder', 'Option<crate::xmpp::auth_publication::AuthControlHolder>'],
-  ['receipt', 'Option<crate::services::authentication::CredentialCommitReceipt>'],
-  ['publication observation', 'Option<crate::services::authentication::publication::Observation>'],
+  ['receipt', 'Option<northstar_auth_application::authentication::CredentialCommitReceipt>'],
+  ['publication observation', 'Option<northstar_auth_application::authentication::publication::Observation>'],
   ['consuming owner', 'Option<crate::xmpp::auth_publication::OwnedPublication>'],
   ['response bytes', 'Option<BoshHttpResponse>'],
 ]) {
@@ -1437,16 +1439,16 @@ for (const [name, before, after] of [
   rejects(`auth publication joins reject ${name}`, 'authFacts', before, after, /actual State effect intent/);
 }
 rejects('auth publication intent fields cannot retain an authoritative observation', 'authFacts',
-  'pub(crate) bound_effects: bool, pub(crate) notification_expected: bool',
-  'pub(crate) bound_effects: bool, pub(crate) notification_expected: bool, pub(crate) retained: Observation', /test-only association facts/);
+  'pub bound_effects: bool, pub notification_expected: bool',
+  'pub bound_effects: bool, pub notification_expected: bool, pub retained: Observation', /test-only association facts/);
 rejects('auth publication joins preserve exact read-only derives', 'authFacts',
-  '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(crate) struct PublicationJoins',
-  '#[derive(Clone, Debug, Eq, PartialEq)] pub(crate) struct PublicationJoins', /exact test-only derives/);
+  '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub struct PublicationJoins',
+  '#[derive(Clone, Debug, Eq, PartialEq)] pub struct PublicationJoins', /exact test-only derives/);
 
 test('auth publication joins reject a separate preceding derive attribute', () => {
   const mutant = changedMuc('authFacts',
-    '#[cfg(test)] #[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(crate) struct PublicationJoins',
-    '#[derive(Default)] #[cfg(test)] #[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(crate) struct PublicationJoins');
+    `${CROSS_CRATE_TEST_ONLY} #[derive(Clone, Copy, Debug, Eq, PartialEq)] pub struct PublicationJoins`,
+    `#[derive(Default)] ${CROSS_CRATE_TEST_ONLY} #[derive(Clone, Copy, Debug, Eq, PartialEq)] pub struct PublicationJoins`);
   assert.throws(() => verifyExecutionBoundaries(mutant),
     { message: 'execution boundary: auth PublicationJoins must preserve its exact test-only derives' });
 });

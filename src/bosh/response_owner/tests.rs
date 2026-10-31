@@ -369,7 +369,7 @@ fn auth_control() -> OutboundItem {
 
 #[tokio::test]
 async fn actual_bounded_selection_publishes_unbound_u_without_taking_queued_bind_b() {
-    use crate::services::authentication::publication::{Knowledge, Terminal};
+    use northstar_auth_application::authentication::publication::{Knowledge, Terminal};
     let u_bytes = "<success xmlns='urn:xmpp:sasl:2'/>";
     let b_bytes = "<iq type='result' id='B'><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'/></iq>";
     let (u_holder, u) = fixture_control(u_bytes, AUTH_CONNECTION);
@@ -687,7 +687,7 @@ async fn selected_fact_rebinding_keeps_actual_connections_and_sticky_history_los
 
 #[tokio::test]
 async fn selected_fact_handle_cannot_keep_bound_or_exposed_auth_authority_alive() {
-    use crate::services::authentication::publication::{Knowledge, Terminal, Transport};
+    use northstar_auth_application::authentication::publication::{Knowledge, Terminal, Transport};
     for expose in [false, true] {
         let control = "<success/>";
         let (holder, publication) = fixture_control(control, AUTH_CONNECTION);
@@ -739,7 +739,7 @@ async fn selected_fact_handle_cannot_keep_bound_or_exposed_auth_authority_alive(
 
 #[tokio::test]
 async fn selected_fact_handle_survives_publication_callback_error_and_pending_drop() {
-    use crate::services::authentication::publication::Knowledge;
+    use northstar_auth_application::authentication::publication::Knowledge;
     for pending in [false, true] {
         let (holder, publication) = fixture_control("<success/>", AUTH_CONNECTION);
         let mut harness = Harness::new([OutboundItem::plain("<success/>".to_owned())
@@ -905,7 +905,7 @@ async fn altered_selected_control_bytes_cannot_produce_a_successful_selection_vi
 
 #[tokio::test]
 async fn true_callback_without_selected_owner_completion_cannot_cache() {
-    use crate::services::authentication::publication::{Knowledge, Terminal};
+    use northstar_auth_application::authentication::publication::{Knowledge, Terminal};
     for forge_terminal in [false, true] {
         let operation = operation();
         let control = "<success xmlns='urn:xmpp:sasl:2'/>";

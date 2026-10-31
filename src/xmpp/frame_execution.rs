@@ -14,10 +14,10 @@
 //! authentication recovery after bytes have already reached the client.
 
 use super::protocol::ClientTransport;
-use crate::services::authentication::publication;
 use crate::services::message_admission::witness::DirectOperationHandle;
 use crate::services::mix::foreground::{self, MixForegroundSlot};
 use crate::services::muc::discussion::{self, MucDiscussionSlot};
+use northstar_auth_application::authentication::publication;
 use northstar_message_application::direct_lifecycle::TerminalReason;
 use std::{
     future::Future,

@@ -4,11 +4,11 @@
 //! PostgreSQL capability or the FAST derivation secret. Every successful
 //! identity is fenced to an exact account UUID and credential generation.
 
-pub(crate) mod publication;
+pub mod publication;
 
 use northstar_archive_core::ArchiveBoundary;
 use northstar_auth_core as auth;
-pub(crate) use northstar_auth_core::credential::{
+pub use northstar_auth_core::credential::{
     BindingPublication, CredentialCommitReceipt, FastCommitPlan, FastTokenIssue, IssuedFastToken,
     StagedLoginEpoch,
 };
@@ -17,28 +17,28 @@ use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticationFence {
-    pub(crate) user_id: Uuid,
-    pub(crate) auth_generation: i64,
+pub struct AuthenticationFence {
+    pub user_id: Uuid,
+    pub auth_generation: i64,
 }
 
 /// Least-authority identity installed into an authenticated XMPP session.
 /// Reusable password/SCRAM verifier material is structurally absent rather
 /// than copied and blanked after crossing the service boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedAccount {
-    pub(crate) id: Uuid,
-    pub(crate) username: String,
-    pub(crate) auth_generation: i64,
+pub struct AuthenticatedAccount {
+    pub id: Uuid,
+    pub username: String,
+    pub auth_generation: i64,
 }
 
-pub(crate) struct LoadedAccount {
-    pub(crate) account: AuthenticatedAccount,
-    pub(crate) is_disabled: bool,
+pub struct LoadedAccount {
+    pub account: AuthenticatedAccount,
+    pub is_disabled: bool,
 }
 
 #[derive(Debug)]
-pub(crate) enum AuthenticationResult<T> {
+pub enum AuthenticationResult<T> {
     Authenticated(T),
     UnknownCredentials,
     Disabled,
@@ -51,7 +51,7 @@ pub(crate) enum AuthenticationResult<T> {
 
 /// SCRAM verifier material exists only between the bounded database read and
 /// transfer into the per-connection mechanism. Both owners zeroize it.
-pub(crate) struct ScramCredentialSet {
+pub struct ScramCredentialSet {
     fence: AuthenticationFence,
     salt: Vec<u8>,
     iterations: u32,
@@ -81,7 +81,7 @@ impl Drop for ScramCredentialSet {
 }
 
 impl ScramCredentialSet {
-    pub(crate) fn from_verifier(
+    pub fn from_verifier(
         fence: AuthenticationFence,
         salt: Vec<u8>,
         iterations: u32,
@@ -97,14 +97,12 @@ impl ScramCredentialSet {
         }
     }
 
-    #[cfg(test)]
-    fn fence(&self) -> AuthenticationFence {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fence(&self) -> AuthenticationFence {
         self.fence
     }
 
-    pub(crate) fn into_mechanism_parts(
-        mut self,
-    ) -> (AuthenticationFence, Vec<u8>, u32, Vec<u8>, Vec<u8>) {
+    pub fn into_mechanism_parts(mut self) -> (AuthenticationFence, Vec<u8>, u32, Vec<u8>, Vec<u8>) {
         (
             self.fence,
             std::mem::take(&mut self.salt),
@@ -115,18 +113,18 @@ impl ScramCredentialSet {
     }
 }
 
-pub(crate) struct FastProofRequest<'a> {
-    pub(crate) username: &'a str,
-    pub(crate) device_id: Uuid,
-    pub(crate) mechanism: &'a str,
-    pub(crate) counter: Option<i64>,
-    pub(crate) initiator_proof: &'a [u8],
-    pub(crate) channel_binding: &'a [u8],
-    pub(crate) invalidate: bool,
-    pub(crate) rotate_within_days: i64,
+pub struct FastProofRequest<'a> {
+    pub username: &'a str,
+    pub device_id: Uuid,
+    pub mechanism: &'a str,
+    pub counter: Option<i64>,
+    pub initiator_proof: &'a [u8],
+    pub channel_binding: &'a [u8],
+    pub invalidate: bool,
+    pub rotate_within_days: i64,
 }
 
-pub(crate) struct FastAuthenticationSuccess {
+pub struct FastAuthenticationSuccess {
     user: AuthenticatedAccount,
     responder: Zeroizing<Vec<u8>>,
     should_rotate: bool,
@@ -139,7 +137,7 @@ pub(crate) struct FastAuthenticationSuccess {
 
 impl FastAuthenticationSuccess {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
+    pub fn new(
         user: AuthenticatedAccount,
         responder: Zeroizing<Vec<u8>>,
         should_rotate: bool,
@@ -162,7 +160,7 @@ impl FastAuthenticationSuccess {
     }
 
     #[allow(clippy::type_complexity)]
-    pub(crate) fn into_parts(
+    pub fn into_parts(
         self,
     ) -> (
         AuthenticatedAccount,
@@ -198,12 +196,12 @@ impl FastAuthenticationSuccess {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct AuthenticationPolicy {
-    pub(crate) scram_iterations: u32,
-    pub(crate) scram_sha1_enabled: bool,
+pub struct AuthenticationPolicy {
+    pub scram_iterations: u32,
+    pub scram_sha1_enabled: bool,
 }
 
-pub(crate) trait AuthenticationRepository: Send + Sync {
+pub trait AuthenticationRepository: Send + Sync {
     fn scram_credentials(
         &self,
         username: &str,
@@ -266,7 +264,7 @@ pub(crate) trait AuthenticationRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct AuthenticationService<R> {
+pub struct AuthenticationService<R> {
     repository: R,
     dummy_scram_secret: Arc<Zeroizing<Vec<u8>>>,
     scram_iterations: u32,
@@ -275,8 +273,13 @@ pub(crate) struct AuthenticationService<R> {
 }
 
 impl<R: AuthenticationRepository> AuthenticationService<R> {
-    #[cfg(test)]
-    pub(crate) fn new(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn repository(&self) -> &R {
+        &self.repository
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new(
         repository: R,
         dummy_scram_secret: Arc<Zeroizing<Vec<u8>>>,
         scram_iterations: u32,
@@ -291,7 +294,7 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
         )
     }
 
-    pub(crate) fn new_with_dummy_scram_iteration_profiles(
+    pub fn new_with_dummy_scram_iteration_profiles(
         repository: R,
         dummy_scram_secret: Arc<Zeroizing<Vec<u8>>>,
         scram_iterations: u32,
@@ -321,7 +324,7 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
     /// Return deployment-keyed dummy SCRAM material for an unknown or
     /// disabled account. Keeping selection and derivation behind this service
     /// prevents protocol handlers from ever receiving the master secret.
-    pub(crate) fn dummy_scram_credentials(
+    pub fn dummy_scram_credentials(
         &self,
         username: &str,
         algorithm: auth::ScramAlgorithm,
@@ -341,7 +344,7 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
         (salt, iterations, stored_key, server_key)
     }
 
-    pub(crate) async fn scram_credentials(
+    pub async fn scram_credentials(
         &self,
         username: &str,
         algorithm: auth::ScramAlgorithm,
@@ -358,7 +361,7 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
             .await
     }
 
-    pub(crate) async fn authenticate_plain(
+    pub async fn authenticate_plain(
         &self,
         username: &str,
         password: &str,
@@ -375,7 +378,7 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
             .await
     }
 
-    pub(crate) async fn complete_scram(
+    pub async fn complete_scram(
         &self,
         username: &str,
         fence: Option<AuthenticationFence>,
@@ -401,7 +404,7 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
         }
     }
 
-    pub(crate) async fn authenticate_external(
+    pub async fn authenticate_external(
         &self,
         username: &str,
     ) -> AuthenticationResult<AuthenticatedAccount> {
@@ -417,7 +420,7 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
         }
     }
 
-    pub(crate) async fn revalidate_generation(
+    pub async fn revalidate_generation(
         &self,
         user_id: Uuid,
         expected_auth_generation: i64,
@@ -430,7 +433,7 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
             .await
     }
 
-    pub(crate) async fn bind2_archive_boundaries(
+    pub async fn bind2_archive_boundaries(
         &self,
         user_id: Uuid,
         expected_auth_generation: i64,
@@ -440,14 +443,14 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
             .await
     }
 
-    pub(crate) async fn authenticate_fast(
+    pub async fn authenticate_fast(
         &self,
         request: FastProofRequest<'_>,
     ) -> AuthenticationResult<FastAuthenticationSuccess> {
         self.repository.authenticate_fast(request).await
     }
 
-    pub(crate) async fn commit_fast_with_login_epoch(
+    pub async fn commit_fast_with_login_epoch(
         &self,
         user_id: Uuid,
         expected_auth_generation: i64,
@@ -467,7 +470,7 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn commit_fast_with_login_epoch_observed(
+    pub async fn commit_fast_with_login_epoch_observed(
         &self,
         user_id: Uuid,
         expected_auth_generation: i64,
@@ -511,14 +514,9 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
         result
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Returned-receipt compatibility for SQL controls; live transports use observed publication"
-        )
-    )]
-    pub(crate) async fn publish_credential_commit(
+    /// Returned-receipt compatibility for SQL controls; live transports use observed publication.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn publish_credential_commit(
         &self,
         receipt: &CredentialCommitReceipt,
     ) -> AuthenticationResult<Option<i64>> {
@@ -528,7 +526,7 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
         self.repository.publish_credential_commit(receipt).await
     }
 
-    pub(crate) async fn publish_credential_commit_observed(
+    pub async fn publish_credential_commit_observed(
         &self,
         invocation: &publication::Invocation<'_>,
     ) -> AuthenticationResult<Option<i64>> {
@@ -554,6 +552,3 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
         result
     }
 }
-
-#[cfg(test)]
-mod tests;

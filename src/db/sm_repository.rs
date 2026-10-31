@@ -1,10 +1,10 @@
 //! Atomic SM ownership, transport acknowledgements and binding persistence.
-use crate::services::authentication::publication::{
+use crate::{db, services::sm::*};
+use anyhow::Result;
+use northstar_auth_application::authentication::publication::{
     credential_error, CredentialInvocation, CredentialPreparation, CredentialRollbackSite,
     PreparationResult,
 };
-use crate::{db, services::sm::*};
-use anyhow::Result;
 use northstar_config::SmIpPolicy;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -32,7 +32,7 @@ impl PostgresSmRepository {
         full_jid: &str,
         lease_seconds: u64,
         device_id: Option<Uuid>,
-        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
         observation: Option<&CredentialInvocation<'_>>,
     ) -> Result<BindingFinalizationOutcome> {
         if let Some(observation) = observation {
@@ -132,7 +132,7 @@ impl PostgresSmRepository {
             }
             match fast_result? {
                 db::FastCommitOutcome::Committed(issued) => {
-                    issued.map(crate::services::authentication::IssuedFastToken::from)
+                    issued.map(northstar_auth_application::authentication::IssuedFastToken::from)
                 }
                 db::FastCommitOutcome::CredentialsExpired => {
                     CredentialInvocation::rollback(
@@ -151,15 +151,17 @@ impl PostgresSmRepository {
         CredentialInvocation::commit(observation, tx.commit())
             .await
             .map_err(credential_error)?;
-        let receipt = crate::services::authentication::CredentialCommitReceipt::new(
+        let receipt = northstar_auth_application::authentication::CredentialCommitReceipt::new(
             issued_fast,
             staged_login_epoch,
-            Some(crate::services::authentication::BindingPublication {
-                connection_id,
-                user_id,
-                full_jid: full_jid.to_owned(),
-                lease_seconds,
-            }),
+            Some(
+                northstar_auth_application::authentication::BindingPublication {
+                    connection_id,
+                    user_id,
+                    full_jid: full_jid.to_owned(),
+                    lease_seconds,
+                },
+            ),
         );
         if let Some(observation) = observation {
             observation.constructed(&receipt);
@@ -267,7 +269,7 @@ impl PostgresSmRepository {
             }
             match fast_result? {
                 db::FastCommitOutcome::Committed(issued) => {
-                    issued.map(crate::services::authentication::IssuedFastToken::from)
+                    issued.map(northstar_auth_application::authentication::IssuedFastToken::from)
                 }
                 db::FastCommitOutcome::CredentialsExpired => {
                     CredentialInvocation::rollback(
@@ -316,7 +318,7 @@ impl PostgresSmRepository {
         CredentialInvocation::commit(observation, tx.commit())
             .await
             .map_err(credential_error)?;
-        let receipt = crate::services::authentication::CredentialCommitReceipt::new(
+        let receipt = northstar_auth_application::authentication::CredentialCommitReceipt::new(
             issued_fast,
             staged_login_epoch,
             None,
@@ -571,7 +573,7 @@ impl SmRepository for PostgresSmRepository {
         full_jid: &str,
         lease_seconds: u64,
         device_id: Option<Uuid>,
-        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
     ) -> Result<BindingFinalizationOutcome> {
         self.finalize_binding_inner(
             connection_id,
@@ -594,7 +596,7 @@ impl SmRepository for PostgresSmRepository {
         full_jid: &str,
         lease_seconds: u64,
         device_id: Option<Uuid>,
-        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
         invocation: &CredentialInvocation<'_>,
     ) -> Result<BindingFinalizationOutcome> {
         self.finalize_binding_inner(

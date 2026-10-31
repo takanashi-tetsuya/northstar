@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) async fn begin_authorized_roster_mutation<'a>(
+pub async fn begin_authorized_roster_mutation<'a>(
     pool: &'a PgPool,
     owner_id: Uuid,
     expected_auth_generation: i64,
@@ -68,7 +68,8 @@ pub async fn roster_item(
 /// authenticated credential generation remains enabled. The shared owner-row
 /// lock serializes this commit against password changes and administrative
 /// disablement.
-pub async fn upsert_roster_authorized(
+pub async fn upsert_roster_authorized<E: RosterTransactionEffects>(
+    effects: &E,
     pool: &PgPool,
     owner_id: Uuid,
     expected_auth_generation: i64,
@@ -82,12 +83,14 @@ pub async fn upsert_roster_authorized(
         return Ok(None);
     };
     let change =
-        upsert_roster_in_transaction(&mut transaction, owner_id, jid, name, groups).await?;
+        upsert_roster_in_transaction(effects, &mut transaction, owner_id, jid, name, groups)
+            .await?;
     transaction.commit().await?;
     Ok(Some(change))
 }
 
-pub(super) async fn upsert_roster_in_transaction(
+pub async fn upsert_roster_in_transaction<E: RosterTransactionEffects>(
+    effects: &E,
     transaction: &mut Transaction<'_, Postgres>,
     owner_id: Uuid,
     jid: &str,
@@ -97,7 +100,9 @@ pub(super) async fn upsert_roster_in_transaction(
     let jid = northstar_xmpp_types::jid::canonicalize_bare(jid)?;
     sqlx::query("INSERT INTO roster_items (owner_id, contact_jid, display_name, groups) VALUES ($1, $2, $3, $4) ON CONFLICT (owner_id, contact_jid) DO UPDATE SET display_name = EXCLUDED.display_name, groups = EXCLUDED.groups, updated_at = NOW()")
         .bind(owner_id).bind(&jid).bind(name).bind(serde_json::to_value(groups)?).execute(&mut **transaction).await?;
-    cancel_inaccessible_pep_subscriptions(transaction, owner_id, &jid).await?;
+    effects
+        .cancel_inaccessible_pep_subscriptions(transaction, owner_id, &jid)
+        .await?;
     let version: i64 = sqlx::query_scalar("SELECT northstar_user_bump_roster_version($1)")
         .bind(owner_id)
         .fetch_one(&mut **transaction)
@@ -105,7 +110,8 @@ pub(super) async fn upsert_roster_in_transaction(
     record_roster_change(transaction, owner_id, version, &jid, false).await
 }
 
-pub async fn remove_roster_item_authorized(
+pub async fn remove_roster_item_authorized<E: RosterTransactionEffects>(
+    effects: &E,
     pool: &PgPool,
     owner_id: Uuid,
     expected_auth_generation: i64,
@@ -114,6 +120,7 @@ pub async fn remove_roster_item_authorized(
 ) -> Result<AuthorizedRosterRemoval> {
     let transaction = pool.begin().await?;
     remove_roster_item_in_transaction(
+        effects,
         transaction,
         owner_id,
         Some(expected_auth_generation),
@@ -123,7 +130,8 @@ pub async fn remove_roster_item_authorized(
     .await
 }
 
-pub(super) async fn remove_roster_item_in_transaction(
+pub async fn remove_roster_item_in_transaction<E: RosterTransactionEffects>(
+    effects: &E,
     mut transaction: Transaction<'_, Postgres>,
     owner_id: Uuid,
     expected_auth_generation: Option<i64>,
@@ -308,6 +316,7 @@ pub(super) async fn remove_roster_item_in_transaction(
             if changed {
                 contact_change = Some(
                     update_subscription_in_transaction(
+                        effects,
                         &mut transaction,
                         contact_id,
                         &owner_jid,
@@ -348,24 +357,26 @@ pub(super) async fn remove_roster_item_in_transaction(
     } = route
     {
         if send_unsubscribe {
-            super::super::enqueue_s2s_outbox_in_transaction(
-                &mut transaction,
-                target_domain,
-                unsubscribe_stanza,
-                bounce_to,
-                policy,
-            )
-            .await?;
+            effects
+                .enqueue_federated_stanza(
+                    &mut transaction,
+                    target_domain,
+                    unsubscribe_stanza,
+                    bounce_to,
+                    policy,
+                )
+                .await?;
         }
         if send_unsubscribed {
-            super::super::enqueue_s2s_outbox_in_transaction(
-                &mut transaction,
-                target_domain,
-                unsubscribed_stanza,
-                bounce_to,
-                policy,
-            )
-            .await?;
+            effects
+                .enqueue_federated_stanza(
+                    &mut transaction,
+                    target_domain,
+                    unsubscribed_stanza,
+                    bounce_to,
+                    policy,
+                )
+                .await?;
             sqlx::query(
                 "DELETE FROM federated_presence_pending WHERE recipient_id=$1 AND from_jid=$2",
             )
@@ -381,7 +392,9 @@ pub(super) async fn remove_roster_item_in_transaction(
         .bind(&jid)
         .execute(&mut *transaction)
         .await?;
-    cancel_inaccessible_pep_subscriptions(&mut transaction, owner_id, &jid).await?;
+    effects
+        .cancel_inaccessible_pep_subscriptions(&mut transaction, owner_id, &jid)
+        .await?;
     let version: i64 = sqlx::query_scalar("SELECT northstar_user_bump_roster_version($1)")
         .bind(owner_id)
         .fetch_one(&mut *transaction)
@@ -400,7 +413,8 @@ pub(super) async fn remove_roster_item_in_transaction(
     )))
 }
 
-pub(in crate::db) async fn update_subscription_in_transaction(
+pub async fn update_subscription_in_transaction<E: RosterTransactionEffects>(
+    effects: &E,
     transaction: &mut Transaction<'_, Postgres>,
     owner_id: Uuid,
     jid: &str,
@@ -417,7 +431,9 @@ pub(in crate::db) async fn update_subscription_in_transaction(
         .bind(approved)
         .execute(&mut **transaction)
         .await?;
-    cancel_inaccessible_pep_subscriptions(transaction, owner_id, &jid).await?;
+    effects
+        .cancel_inaccessible_pep_subscriptions(transaction, owner_id, &jid)
+        .await?;
     let version: i64 = sqlx::query_scalar("SELECT northstar_user_bump_roster_version($1)")
         .bind(owner_id)
         .fetch_one(&mut **transaction)
@@ -425,45 +441,7 @@ pub(in crate::db) async fn update_subscription_in_transaction(
     record_roster_change(transaction, owner_id, version, &jid, false).await
 }
 
-/// XEP-0163 section 7.1 requires a PEP service to cancel explicit
-/// subscriptions when a presence subscription or roster group change removes
-/// the subscriber's access. Keeping this in the roster transaction prevents a
-/// committed roster state from retaining stale durable authorization.
-pub(super) async fn cancel_inaccessible_pep_subscriptions(
-    transaction: &mut Transaction<'_, Postgres>,
-    owner_id: Uuid,
-    contact_jid: &str,
-) -> Result<()> {
-    sqlx::query(
-        "DELETE FROM pep_subscriptions ps USING pep_nodes pn
-         WHERE ps.owner_id=$1
-           AND split_part(ps.subscriber_jid, '/', 1)=$2
-           AND pn.owner_id=ps.owner_id
-           AND pn.node=ps.node
-           AND (
-             (pn.access_model='presence' AND NOT EXISTS (
-                SELECT 1 FROM roster_items r
-                 WHERE r.owner_id=$1 AND r.contact_jid=$2
-                   AND r.subscription IN ('from','both')
-             ))
-             OR
-             (pn.access_model='roster' AND NOT EXISTS (
-                SELECT 1 FROM roster_items r,
-                     jsonb_array_elements_text(r.groups) AS g(name)
-                 WHERE r.owner_id=$1 AND r.contact_jid=$2
-                   AND r.subscription IN ('from','both')
-                   AND g.name=ANY(pn.roster_groups_allowed)
-             ))
-           )",
-    )
-    .bind(owner_id)
-    .bind(contact_jid)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
-}
-
-pub(in crate::db) async fn record_roster_change(
+pub async fn record_roster_change(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     owner_id: Uuid,
     version: i64,
@@ -493,7 +471,7 @@ pub(in crate::db) async fn record_roster_change(
     roster_change_from_row(&row)
 }
 
-pub(super) fn roster_change_from_row(row: &sqlx::postgres::PgRow) -> Result<RosterChange> {
+pub fn roster_change_from_row(row: &sqlx::postgres::PgRow) -> Result<RosterChange> {
     Ok(RosterChange {
         version: row.try_get("version")?,
         contact_jid: row.try_get("contact_jid")?,
@@ -506,7 +484,7 @@ pub(super) fn roster_change_from_row(row: &sqlx::postgres::PgRow) -> Result<Rost
     })
 }
 
-pub(super) async fn roster_changes_since_in_transaction(
+pub async fn roster_changes_since_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     owner_id: Uuid,
     requested_version: i64,

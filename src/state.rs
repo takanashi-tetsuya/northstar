@@ -336,7 +336,7 @@ pub struct AppState {
     roster_service: RosterService,
     s2s_roster_authorization_service:
         northstar_roster_application::s2s_roster_authorization::FederatedRosterAuthorizationService<
-            db::s2s_roster_authorization_repository::PostgresFederatedRosterRepository,
+            northstar_roster_postgres::federated_roster::PostgresFederatedRosterRepository,
         >,
     s2s_outbox_dispatch_service: crate::services::s2s_outbox_dispatch::S2sOutboxDispatchService<
         db::s2s_outbox_dispatch_repository::PostgresS2sOutboxDispatchRepository,

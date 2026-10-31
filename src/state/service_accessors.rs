@@ -153,7 +153,7 @@ impl AppState {
     pub(crate) fn s2s_roster_authorization_service(
         &self,
     ) -> &northstar_roster_application::s2s_roster_authorization::FederatedRosterAuthorizationService<
-        db::s2s_roster_authorization_repository::PostgresFederatedRosterRepository,
+        northstar_roster_postgres::federated_roster::PostgresFederatedRosterRepository,
     >{
         &self.s2s_roster_authorization_service
     }

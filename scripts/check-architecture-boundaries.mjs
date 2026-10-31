@@ -1846,7 +1846,7 @@ for (const invariant of [
   'MAX_BUFFERED_ROSTER_CHANGES',
   'RosterSyncState::Flushing',
 ]) {
-  if (!rosterServiceSource.includes(invariant) && !readProductionModule('src/db/roster.rs', { root }).includes(invariant)) {
+  if (!rosterServiceSource.includes(invariant) && !readProductionModule('crates/contexts/roster/northstar-roster-postgres/src/roster.rs', { root }).includes(invariant)) {
     throw new Error(`RosterService lost safety invariant: ${invariant}`);
   }
 }

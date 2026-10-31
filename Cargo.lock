@@ -2105,6 +2105,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "northstar-auth-core",
  "northstar-federation-core",
  "northstar-roster-core",
  "northstar-xep-0016",
@@ -2119,6 +2120,20 @@ version = "0.1.0"
 dependencies = [
  "northstar-xmpp-types",
  "serde",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-roster-postgres"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "northstar-roster-application",
+ "northstar-roster-core",
+ "northstar-xep-0016",
+ "northstar-xmpp-types",
+ "serde_json",
+ "sqlx",
  "uuid",
 ]
 
@@ -3401,6 +3416,7 @@ dependencies = [
  "northstar-room-core",
  "northstar-roster-application",
  "northstar-roster-core",
+ "northstar-roster-postgres",
  "northstar-runtime",
  "northstar-security",
  "northstar-session-application",

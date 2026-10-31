@@ -7,7 +7,8 @@ use super::*;
 /// share one transaction. A username resolved by the protocol layer never
 /// crosses this authority boundary as a reusable UUID.
 #[allow(clippy::too_many_arguments)]
-pub async fn transition_local_presence_subscription_authorized(
+pub async fn transition_local_presence_subscription_authorized<E: RosterTransactionEffects>(
+    effects: &E,
     pool: &PgPool,
     actor_id: Uuid,
     expected_auth_generation: i64,
@@ -18,6 +19,7 @@ pub async fn transition_local_presence_subscription_authorized(
     stamped_stanza: &str,
 ) -> Result<AuthorizedLocalPresenceTransition> {
     transition_local_presence_subscription_authorized_with_hook(
+        effects,
         pool,
         actor_id,
         expected_auth_generation,
@@ -32,7 +34,12 @@ pub async fn transition_local_presence_subscription_authorized(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn transition_local_presence_subscription_authorized_with_hook<F, Fut>(
+pub async fn transition_local_presence_subscription_authorized_with_hook<
+    E: RosterTransactionEffects,
+    F,
+    Fut,
+>(
+    effects: &E,
     pool: &PgPool,
     actor_id: Uuid,
     expected_auth_generation: i64,
@@ -54,7 +61,7 @@ where
         return Ok(AuthorizedLocalPresenceTransition::Missing);
     }
     let actor_domain = northstar_xmpp_types::jid::prepare_domainpart(actor_domain)?;
-    let target_username = northstar_auth_core::normalize_username(target_username)?;
+    let target_username = northstar_roster_application::normalize_username(target_username)?;
     let mut transaction = pool.begin().await?;
 
     // Resolve the target incarnation inside this transaction, then lock the
@@ -155,12 +162,12 @@ where
             PresencePolicyDenial::Blocking,
         ));
     }
-    if super::super::privacy::privacy_denies_in_transaction(
+    if crate::privacy::privacy_denies_in_transaction(
         &mut transaction,
         actor.id,
         Some(connection_id),
         &target_jid,
-        super::super::PrivacyStanzaKind::PresenceOut,
+        crate::privacy::PrivacyStanzaKind::PresenceOut,
     )
     .await?
     {
@@ -173,6 +180,7 @@ where
         suppressed_local_presence_transition()
     } else {
         transition_local_presence_subscription_in_transaction(
+            effects,
             &mut transaction,
             actor.id,
             &actor_jid,
@@ -193,7 +201,7 @@ where
     )))
 }
 
-pub(super) fn suppressed_local_presence_transition() -> LocalPresenceTransition {
+pub fn suppressed_local_presence_transition() -> LocalPresenceTransition {
     LocalPresenceTransition {
         effect: LocalPresenceEffect::Suppressed,
         actor_subscription: "none".to_owned(),
@@ -205,7 +213,8 @@ pub(super) fn suppressed_local_presence_transition() -> LocalPresenceTransition 
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn transition_local_presence_subscription_in_transaction(
+pub async fn transition_local_presence_subscription_in_transaction<E: RosterTransactionEffects>(
+    effects: &E,
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
     actor_jid: &str,
@@ -391,6 +400,7 @@ pub(super) async fn transition_local_presence_subscription_in_transaction(
     let actor_change = if actor_changed {
         Some(
             update_subscription_in_transaction(
+                effects,
                 transaction,
                 actor_id,
                 target_jid,
@@ -406,6 +416,7 @@ pub(super) async fn transition_local_presence_subscription_in_transaction(
     let target_change = if target_changed {
         Some(
             update_subscription_in_transaction(
+                effects,
                 transaction,
                 target_id,
                 actor_jid,
@@ -428,7 +439,7 @@ pub(super) async fn transition_local_presence_subscription_in_transaction(
     })
 }
 
-pub(super) fn add_subscription_direction(current: &str, direction: &str) -> &'static str {
+pub fn add_subscription_direction(current: &str, direction: &str) -> &'static str {
     match (current, direction) {
         ("none", "to") => "to",
         ("none", "from") => "from",
@@ -439,7 +450,7 @@ pub(super) fn add_subscription_direction(current: &str, direction: &str) -> &'st
     }
 }
 
-pub(super) fn remove_subscription_direction(current: &str, direction: &str) -> &'static str {
+pub fn remove_subscription_direction(current: &str, direction: &str) -> &'static str {
     match (current, direction) {
         ("both", "to") => "from",
         ("both", "from") => "to",
@@ -465,7 +476,8 @@ pub async fn pending_presence_subscription_count(pool: &PgPool, recipient_id: Uu
 /// are committed together, so a process/database failure cannot expose a
 /// roster authorization with stale pending state (or consume the request
 /// without the corresponding roster change).
-pub async fn transition_inbound_remote_presence_subscription(
+pub async fn transition_inbound_remote_presence_subscription<E: RosterTransactionEffects>(
+    effects: &E,
     pool: &PgPool,
     recipient_id: Uuid,
     recipient_domain: &str,
@@ -530,12 +542,12 @@ pub async fn transition_inbound_remote_presence_subscription(
             PresencePolicyDenial::Blocking,
         ));
     }
-    if super::super::privacy::privacy_denies_in_transaction(
+    if crate::privacy::privacy_denies_in_transaction(
         &mut transaction,
         recipient.id,
         None,
         &from_jid,
-        super::super::PrivacyStanzaKind::PresenceIn,
+        crate::privacy::PrivacyStanzaKind::PresenceIn,
     )
     .await?
     {
@@ -648,6 +660,7 @@ pub async fn transition_inbound_remote_presence_subscription(
     let change = if changed {
         Some(
             update_subscription_in_transaction(
+                effects,
                 &mut transaction,
                 recipient_id,
                 &from_jid,
@@ -678,7 +691,9 @@ pub async fn transition_inbound_remote_presence_subscription(
 /// Client-authorized federated/component transition without an S2S outbox.
 /// This is intentionally distinct from the inbound-federation path: the
 /// latter authenticates a remote domain and has no C2S credential generation.
-pub async fn transition_remote_presence_subscription_authorized(
+#[allow(clippy::too_many_arguments)]
+pub async fn transition_remote_presence_subscription_authorized<E: RosterTransactionEffects>(
+    effects: &E,
     pool: &PgPool,
     actor_id: Uuid,
     expected_auth_generation: i64,
@@ -688,6 +703,7 @@ pub async fn transition_remote_presence_subscription_authorized(
     kind: &str,
 ) -> Result<AuthorizedRemotePresenceTransition> {
     transition_remote_presence_subscription_authorized_inner(
+        effects,
         pool,
         actor_id,
         expected_auth_generation,
@@ -701,7 +717,10 @@ pub async fn transition_remote_presence_subscription_authorized(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn transition_remote_presence_subscription_with_outbox_authorized(
+pub async fn transition_remote_presence_subscription_with_outbox_authorized<
+    E: RosterTransactionEffects,
+>(
+    effects: &E,
     pool: &PgPool,
     actor_id: Uuid,
     expected_auth_generation: i64,
@@ -712,9 +731,10 @@ pub async fn transition_remote_presence_subscription_with_outbox_authorized(
     target_domain: &str,
     stanza: &str,
     bounce_to: Option<&str>,
-    policy: super::super::S2sOutboxPolicy,
+    policy: S2sOutboxPolicy,
 ) -> Result<AuthorizedRemotePresenceTransition> {
     transition_remote_presence_subscription_authorized_inner(
+        effects,
         pool,
         actor_id,
         expected_auth_generation,
@@ -728,7 +748,10 @@ pub async fn transition_remote_presence_subscription_with_outbox_authorized(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn transition_remote_presence_subscription_authorized_inner(
+pub async fn transition_remote_presence_subscription_authorized_inner<
+    E: RosterTransactionEffects,
+>(
+    effects: &E,
     pool: &PgPool,
     actor_id: Uuid,
     expected_auth_generation: i64,
@@ -736,7 +759,7 @@ pub(super) async fn transition_remote_presence_subscription_authorized_inner(
     actor_domain: &str,
     contact: &str,
     kind: &str,
-    outbox: Option<(&str, &str, Option<&str>, super::super::S2sOutboxPolicy)>,
+    outbox: Option<(&str, &str, Option<&str>, S2sOutboxPolicy)>,
 ) -> Result<AuthorizedRemotePresenceTransition> {
     anyhow::ensure!(
         matches!(
@@ -787,12 +810,12 @@ pub(super) async fn transition_remote_presence_subscription_authorized_inner(
             PresencePolicyDenial::Blocking,
         ));
     }
-    if super::super::privacy::privacy_denies_in_transaction(
+    if crate::privacy::privacy_denies_in_transaction(
         &mut transaction,
         actor.id,
         Some(connection_id),
         &contact,
-        super::super::PrivacyStanzaKind::PresenceOut,
+        crate::privacy::PrivacyStanzaKind::PresenceOut,
     )
     .await?
     {
@@ -802,6 +825,7 @@ pub(super) async fn transition_remote_presence_subscription_authorized_inner(
         ));
     }
     let transition = transition_remote_presence_subscription_in_transaction(
+        effects,
         &mut transaction,
         actor.id,
         &contact,
@@ -816,12 +840,13 @@ pub(super) async fn transition_remote_presence_subscription_authorized_inner(
     )))
 }
 
-pub(super) async fn transition_remote_presence_subscription_in_transaction(
+pub async fn transition_remote_presence_subscription_in_transaction<E: RosterTransactionEffects>(
+    effects: &E,
     transaction: &mut Transaction<'_, Postgres>,
     recipient_id: Uuid,
     from_jid: &str,
     kind: &str,
-    outbox: Option<(&str, &str, Option<&str>, super::super::S2sOutboxPolicy)>,
+    outbox: Option<(&str, &str, Option<&str>, S2sOutboxPolicy)>,
 ) -> Result<Option<RemotePresenceTransition>> {
     let from_jid = northstar_xmpp_types::jid::canonicalize_bare(from_jid)?;
     let existing = sqlx::query(
@@ -894,6 +919,7 @@ pub(super) async fn transition_remote_presence_subscription_in_transaction(
     let change = if changed {
         Some(
             update_subscription_in_transaction(
+                effects,
                 transaction,
                 recipient_id,
                 &from_jid,
@@ -915,14 +941,9 @@ pub(super) async fn transition_remote_presence_subscription_in_transaction(
     }
     if routed {
         if let Some((target_domain, stanza, bounce_to, policy)) = outbox {
-            super::super::enqueue_s2s_outbox_in_transaction(
-                transaction,
-                target_domain,
-                stanza,
-                bounce_to,
-                policy,
-            )
-            .await?;
+            effects
+                .enqueue_federated_stanza(transaction, target_domain, stanza, bounce_to, policy)
+                .await?;
         }
     }
     Ok(Some(RemotePresenceTransition {

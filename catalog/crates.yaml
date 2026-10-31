@@ -292,6 +292,16 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-roster-postgres
+    package: northstar-roster-postgres
+    path: crates/contexts/roster/northstar-roster-postgres
+    tier: context
+    context: roster
+    role: adapter
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-runtime
     package: northstar-runtime
     path: crates/platform/northstar-runtime

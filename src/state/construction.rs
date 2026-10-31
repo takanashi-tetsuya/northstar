@@ -524,8 +524,10 @@ impl AppState {
                 session_ttl_hours: config.session_ttl_hours,
             },
         ));
-        let roster_service =
-            RosterService::new(db::roster::PostgresRosterRepository::new(pool.clone()));
+        let roster_service = RosterService::new(db::roster::PostgresRosterRepository::new(
+            pool.clone(),
+            db::roster::RootRosterEffects,
+        ));
         let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;
         let command_pool = match config.admin_command_pool_mode {
             // The explicit loopback-only exception has no independent
@@ -880,7 +882,7 @@ impl AppState {
             roster_service,
             s2s_roster_authorization_service:
                 northstar_roster_application::s2s_roster_authorization::FederatedRosterAuthorizationService::new(
-                    db::s2s_roster_authorization_repository::PostgresFederatedRosterRepository::new(
+                    northstar_roster_postgres::federated_roster::PostgresFederatedRosterRepository::new(
                         pool.clone(),
                     ),
                 ),

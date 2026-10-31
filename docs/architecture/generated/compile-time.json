@@ -192,6 +192,7 @@
     "northstar-room-core",
     "northstar-roster-application",
     "northstar-roster-core",
+    "northstar-roster-postgres",
     "northstar-runtime",
     "northstar-security",
     "northstar-session-application",
@@ -2903,6 +2904,10 @@
     ],
     [
       "northstar-roster-application",
+      "northstar-auth-core"
+    ],
+    [
+      "northstar-roster-application",
       "northstar-federation-core"
     ],
     [
@@ -2935,6 +2940,38 @@
     ],
     [
       "northstar-roster-core",
+      "uuid"
+    ],
+    [
+      "northstar-roster-postgres",
+      "anyhow"
+    ],
+    [
+      "northstar-roster-postgres",
+      "northstar-roster-application"
+    ],
+    [
+      "northstar-roster-postgres",
+      "northstar-roster-core"
+    ],
+    [
+      "northstar-roster-postgres",
+      "northstar-xep-0016"
+    ],
+    [
+      "northstar-roster-postgres",
+      "northstar-xmpp-types"
+    ],
+    [
+      "northstar-roster-postgres",
+      "serde_json"
+    ],
+    [
+      "northstar-roster-postgres",
+      "sqlx"
+    ],
+    [
+      "northstar-roster-postgres",
       "uuid"
     ],
     [
@@ -4932,6 +4969,10 @@
     [
       "rust-xmpp-server",
       "northstar-roster-core"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-roster-postgres"
     ],
     [
       "rust-xmpp-server",

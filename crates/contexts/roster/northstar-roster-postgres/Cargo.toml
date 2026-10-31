@@ -1,0 +1,22 @@
+[package]
+name = "northstar-roster-postgres"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "PostgreSQL persistence of rosters, presence subscriptions, blocking and privacy lists for Northstar"
+publish = false
+
+[features]
+# Test-only entry points the root crate's cross-context roster tests use.
+test-support = []
+
+[dependencies]
+anyhow = "1.0"
+northstar-roster-application = { path = "../northstar-roster-application" }
+northstar-roster-core = { path = "../northstar-roster-core" }
+northstar-xep-0016 = { path = "../../../kernel/northstar-xep-0016" }
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+serde_json = "1.0"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
+uuid = { version = "1.12", features = ["v4"] }

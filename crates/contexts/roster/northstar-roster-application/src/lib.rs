@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+pub use northstar_auth_core::normalize_username;
 pub use northstar_federation_core::S2sOutboxPolicy;
 pub use northstar_roster_core::*;
 pub mod blocking;

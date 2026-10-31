@@ -12,7 +12,7 @@ pub async fn blocked_jids(pool: &PgPool, owner_id: Uuid) -> Result<Vec<String>> 
     Ok(rows.iter().map(|row| row.get("blocked_jid")).collect())
 }
 
-pub(super) async fn lock_block_policy_in_transaction(
+pub async fn lock_block_policy_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     owner_id: Uuid,
 ) -> Result<()> {
@@ -25,7 +25,7 @@ pub(super) async fn lock_block_policy_in_transaction(
     Ok(())
 }
 
-pub(super) async fn is_blocked_for_account_in_transaction(
+pub async fn is_blocked_for_account_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     owner_id: Uuid,
     owner_bare_jid: &str,
@@ -66,7 +66,7 @@ pub enum UnblockJidsUpdate {
     Unavailable,
 }
 
-pub(super) async fn lock_enabled_block_owner_in_transaction(
+pub async fn lock_enabled_block_owner_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     owner_id: Uuid,
 ) -> Result<bool> {
@@ -80,7 +80,7 @@ pub(super) async fn lock_enabled_block_owner_in_transaction(
     .is_some())
 }
 
-pub(super) fn canonical_blocking_jids(jids: &[String]) -> Result<Vec<String>> {
+pub fn canonical_blocking_jids(jids: &[String]) -> Result<Vec<String>> {
     let mut seen = HashSet::with_capacity(jids.len());
     let mut canonical = Vec::with_capacity(jids.len());
     for jid in jids {
@@ -191,7 +191,7 @@ pub async fn is_blocked(pool: &PgPool, owner_id: Uuid, candidate: &str) -> Resul
     is_blocked_candidates(pool, owner_id, &candidate).await
 }
 
-pub(super) async fn is_blocked_candidates(
+pub async fn is_blocked_candidates(
     pool: &PgPool,
     owner_id: Uuid,
     candidate: &northstar_xmpp_types::jid::CanonicalJid,
@@ -264,7 +264,7 @@ pub async fn blocked_local_accounts_for_candidates(
     Ok(blocked)
 }
 
-pub(super) fn blocking_match_candidates(
+pub fn blocking_match_candidates(
     candidate: &northstar_xmpp_types::jid::CanonicalJid,
 ) -> Vec<String> {
     let mut candidates = Vec::with_capacity(4);
@@ -283,6 +283,6 @@ pub(super) fn blocking_match_candidates(
     candidates
 }
 
-pub(crate) fn blocked_jid_matches(pattern: &str, candidate: &str) -> bool {
+pub fn blocked_jid_matches(pattern: &str, candidate: &str) -> bool {
     northstar_xmpp_types::jid_scope_matches(pattern, candidate)
 }

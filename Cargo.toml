@@ -51,6 +51,7 @@ members = [
     "crates/contexts/pubsub/northstar-pubsub-xmpp",
     "crates/contexts/roster/northstar-roster-core",
     "crates/contexts/roster/northstar-roster-application",
+    "crates/contexts/roster/northstar-roster-postgres",
     "crates/contexts/archive/northstar-archive-core",
     "crates/contexts/archive/northstar-archive-application",
     "crates/contexts/archive/northstar-archive-postgres",
@@ -183,6 +184,7 @@ northstar-pubsub-postgres = { path = "crates/contexts/pubsub/northstar-pubsub-po
 northstar-pubsub-xmpp = { path = "crates/contexts/pubsub/northstar-pubsub-xmpp" }
 northstar-roster-core = { path = "crates/contexts/roster/northstar-roster-core" }
 northstar-roster-application = { path = "crates/contexts/roster/northstar-roster-application" }
+northstar-roster-postgres = { path = "crates/contexts/roster/northstar-roster-postgres" }
 northstar-archive-core = { path = "crates/contexts/archive/northstar-archive-core" }
 northstar-archive-application = { path = "crates/contexts/archive/northstar-archive-application" }
 northstar-archive-postgres = { path = "crates/contexts/archive/northstar-archive-postgres" }
@@ -205,6 +207,7 @@ openssl = { version = "0.10.81", features = ["vendored"] }
 [dev-dependencies]
 northstar-runtime = { path = "crates/platform/northstar-runtime", features = ["test-support"] }
 northstar-pubsub-postgres = { path = "crates/contexts/pubsub/northstar-pubsub-postgres", features = ["test-support"] }
+northstar-roster-postgres = { path = "crates/contexts/roster/northstar-roster-postgres", features = ["test-support"] }
 northstar-security = { path = "crates/platform/northstar-security", features = ["test-support"] }
 northstar-upload-postgres = { path = "crates/contexts/upload/northstar-upload-postgres", features = ["test-support"] }
 northstar-archive-postgres = { path = "crates/contexts/archive/northstar-archive-postgres", features = ["test-support"] }

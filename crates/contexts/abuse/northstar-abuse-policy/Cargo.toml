@@ -7,6 +7,9 @@ license = "AGPL-3.0-only"
 description = "Capability-free anti-abuse policy, PoW escalation, cooldown schedules, and deterministic admission state transitions for Northstar"
 publish = false
 
+[features]
+test-support = []
+
 [dependencies]
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["serde"] }

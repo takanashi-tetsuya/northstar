@@ -175,28 +175,28 @@ pub struct WorkRequirement {
     pub notice: String,
 }
 
-/// Errors occurring during PoW intent creation or validation.
-#[derive(Clone, Debug, Eq, PartialEq, Error)]
+/// Errors occurring during PoW intent creation or validation. The display text
+/// reaches HTTP clients, so it never echoes the rejected value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Error)]
 pub enum IntentError {
-    #[error("invalid PoW intent method: {0}")]
-    InvalidMethod(String),
-    #[error("invalid PoW intent path: {0}")]
-    InvalidPath(String),
-    #[error("PoW intent is not valid for action {action}: {method} {path}")]
-    ActionMismatch {
-        action: AbuseAction,
-        method: String,
-        path: String,
-    },
-    #[error("unsupported PoW intent version: {0}")]
-    UnsupportedVersion(u16),
+    #[error("invalid PoW intent method")]
+    InvalidMethod,
+    #[error("invalid PoW intent path")]
+    InvalidPath,
+    #[error("PoW intent is not valid for this action")]
+    ActionMismatch,
+    #[error("unsupported PoW intent version")]
+    UnsupportedVersion,
     #[error("PoW body digest is not canonical base64url")]
     InvalidDigestEncoding,
-    #[error("PoW body digest must contain {expected} bytes, found {found}")]
-    InvalidDigestLength { expected: usize, found: usize },
+    #[error("PoW body digest must contain 32 bytes")]
+    InvalidDigestLength,
 }
 
-/// Public, non-secret commitment supplied when a client requests a v2 PoW challenge.
+/// Public, non-secret commitment supplied when a capable client requests a
+/// v2 challenge. `body_sha256` is the base64url (unpadded) SHA-256 of the
+/// canonical operation body; callers never send the body itself to the
+/// challenge endpoint.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PowIntentRequest {
@@ -215,8 +215,10 @@ pub struct PowIntentView {
     pub body_sha256: String,
 }
 
-/// Validated semantic action intent bound to a proof-of-work challenge.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// Server-validated action intent.  It is deliberately independent from the
+/// proof envelope: mutation handlers reconstruct this value from their own
+/// route and pow-less body rather than trusting fields repeated by a client.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PowIntent {
     method: String,
     path: String,
@@ -235,17 +237,13 @@ impl PowIntent {
             || method != method.to_ascii_uppercase()
             || !matches!(method, "POST" | "PATCH" | "XMPP")
         {
-            return Err(IntentError::InvalidMethod(method.to_owned()));
+            return Err(IntentError::InvalidMethod);
         }
         if !canonical_pow_path(path) {
-            return Err(IntentError::InvalidPath(path.to_owned()));
+            return Err(IntentError::InvalidPath);
         }
         if !action_accepts_intent(action, method, path) {
-            return Err(IntentError::ActionMismatch {
-                action,
-                method: method.to_owned(),
-                path: path.to_owned(),
-            });
+            return Err(IntentError::ActionMismatch);
         }
         Ok(Self {
             method: method.to_owned(),
@@ -259,16 +257,13 @@ impl PowIntent {
         request: &PowIntentRequest,
     ) -> Result<Self, IntentError> {
         if request.version != POW_INTENT_VERSION {
-            return Err(IntentError::UnsupportedVersion(request.version));
+            return Err(IntentError::UnsupportedVersion);
         }
         let decoded = URL_SAFE_NO_PAD
             .decode(request.body_sha256.as_bytes())
             .map_err(|_| IntentError::InvalidDigestEncoding)?;
         if decoded.len() != POW_BODY_DIGEST_BYTES {
-            return Err(IntentError::InvalidDigestLength {
-                expected: POW_BODY_DIGEST_BYTES,
-                found: decoded.len(),
-            });
+            return Err(IntentError::InvalidDigestLength);
         }
         let mut body_sha256 = [0_u8; POW_BODY_DIGEST_BYTES];
         body_sha256.copy_from_slice(&decoded);
@@ -278,11 +273,7 @@ impl PowIntent {
         Self::new(action, &request.method, &request.path, body_sha256)
     }
 
-    pub fn http_json(
-        action: AbuseAction,
-        path: &str,
-        value: &serde_json::Value,
-    ) -> Result<Self, IntentError> {
+    pub fn http_json(action: AbuseAction, path: &str, value: &serde_json::Value) -> Self {
         Self::http_json_method(action, "POST", path, value)
     }
 
@@ -291,27 +282,30 @@ impl PowIntent {
         method: &str,
         path: &str,
         value: &serde_json::Value,
-    ) -> Result<Self, IntentError> {
+    ) -> Self {
         Self::new(action, method, path, canonical_json_body_digest(value))
+            .expect("server-owned HTTP PoW intent is valid")
     }
 
-    pub fn xmpp(
-        action: AbuseAction,
-        path: &str,
-        canonical_body: &[u8],
-    ) -> Result<Self, IntentError> {
+    pub fn xmpp(action: AbuseAction, path: &str, canonical_body: &[u8]) -> Self {
         Self::new(action, "XMPP", path, Sha256::digest(canonical_body).into())
+            .expect("server-owned XMPP PoW intent is valid")
     }
 
-    /// Build semantic commitment for XEP-0077 and XEP-0389 registration.
+    /// Build the semantic commitment used by both XEP-0077 and XEP-0389
+    /// registration.  Those protocols render the same values through
+    /// different XML shapes, so hashing the wire representation would make a
+    /// challenge transport-specific and vulnerable to harmless serializer
+    /// drift.  Length-prefixed fields are unambiguous; the domain separator
+    /// lets this profile evolve without colliding with other XMPP intents.
     ///
-    /// The password and invitation token are fed directly into SHA-256 and
-    /// are never stored in memory or JSON/XML structures.
+    /// The password and invitation token are fed directly into SHA-256 and are
+    /// never copied into a JSON/XML value or retained by `PowIntent`.
     pub fn xmpp_registration(
         username: &str,
         password: &str,
         invitation_token: Option<&str>,
-    ) -> Result<Self, IntentError> {
+    ) -> Self {
         fn field(digest: &mut Sha256, value: Option<&str>) {
             match value {
                 Some(value) => {
@@ -334,6 +328,7 @@ impl PowIntent {
             "/xmpp/register",
             digest.finalize().into(),
         )
+        .expect("server-owned XMPP registration intent is valid")
     }
 
     pub fn view(&self) -> PowIntentView {
@@ -359,6 +354,17 @@ impl PowIntent {
 
     pub fn body_sha256_base64url(&self) -> String {
         URL_SAFE_NO_PAD.encode(self.body_sha256)
+    }
+
+    /// An intent no constructor would accept, for tests of the binding between
+    /// a challenge and its intent.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn unvalidated(method: &str, path: &str, body_sha256: [u8; POW_BODY_DIGEST_BYTES]) -> Self {
+        Self {
+            method: method.to_owned(),
+            path: path.to_owned(),
+            body_sha256,
+        }
     }
 }
 
@@ -397,7 +403,9 @@ pub fn action_accepts_intent(action: AbuseAction, method: &str, path: &str) -> b
     }
 }
 
-/// Computes a canonical SHA-256 digest over a JSON value where object keys are sorted.
+/// Deterministic JSON used only as a digest preimage. Object keys are sorted;
+/// arrays retain order; scalar serialization follows JSON. The returned bytes
+/// are never persisted. Browser code implements the same small profile.
 pub fn canonical_json_body_digest(value: &serde_json::Value) -> [u8; 32] {
     fn append(value: &serde_json::Value, output: &mut String) {
         match value {
@@ -488,11 +496,12 @@ impl ContentIdentityPurpose {
     }
 }
 
-/// Public commitment produced by the private content-identity keyring.
+/// A public commitment produced by the private content-identity keyring. It
+/// contains no reusable key material and is safe to pass to a repository.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContentIdentityAuthenticator {
-    pub key_id: String,
-    pub mac: [u8; 32],
+    key_id: String,
+    mac: [u8; 32],
 }
 
 impl ContentIdentityAuthenticator {
@@ -513,10 +522,12 @@ impl ContentIdentityAuthenticator {
     }
 }
 
-/// Current and previous commitments for one exact canonical payload.
+/// Current/previous commitments for one exact canonical payload. The first
+/// entry follows the existing rolling-overlap writer rule; verification is
+/// constant-time once the non-secret key generation ID has been selected.
 #[derive(Clone, Debug)]
 pub struct ContentIdentityAuthenticators {
-    pub candidates: Vec<ContentIdentityAuthenticator>,
+    candidates: Vec<ContentIdentityAuthenticator>,
 }
 
 impl ContentIdentityAuthenticators {
@@ -524,8 +535,10 @@ impl ContentIdentityAuthenticators {
         Self { candidates }
     }
 
-    pub fn primary(&self) -> Option<&ContentIdentityAuthenticator> {
-        self.candidates.first()
+    pub fn primary(&self) -> &ContentIdentityAuthenticator {
+        self.candidates
+            .first()
+            .expect("a content identity keyring always has a primary generation")
     }
 
     pub fn verifies(&self, key_id: &str, expected_mac: &[u8]) -> bool {
@@ -539,27 +552,33 @@ impl ContentIdentityAuthenticators {
     }
 }
 
-/// Immutable, validated input to durable message rate admission.
-#[derive(Clone, Copy, Debug)]
+/// Immutable, authenticated input to one durable message-rate admission.
+/// `normalized_payload` is the already validated stanza with the private PoW
+/// envelope and untrusted delay assertions removed.  It is never stored; the
+/// database retains only a keyed digest.
+#[derive(Clone, Copy)]
 pub struct MessageAdmissionRequest<'a> {
     pub actor_id: Uuid,
     pub account_bare: &'a str,
     pub normalized_target: &'a str,
     pub origin_id: Option<&'a str>,
     pub normalized_payload: &'a str,
+    /// Exact client stanza after direct PoW and unauthenticated delay
+    /// elements are removed. This is the v2 body commitment; it is separate
+    /// from the server-rewritten payload used for durable deduplication.
     pub pow_intent_payload: &'a str,
     pub subject: &'a str,
     pub actors: &'a [String],
     pub proof: Option<&'a PowProof>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct MessageDedupeCandidate {
     pub key_id: String,
     pub payload_mac: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct MessageDedupeIdentity {
     pub identity_digest: Vec<u8>,
     pub candidates: Vec<MessageDedupeCandidate>,

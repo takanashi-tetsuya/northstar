@@ -163,8 +163,7 @@ mod tests {
             AbuseAction::Message,
             "/xmpp/message",
             b"<message><body>hello</body></message>",
-        )
-        .unwrap();
+        );
 
         let challenge_id = Uuid::from_u128(0xa000_0000_0000_4000_8000_0000_0000_0001);
         let expires_at = now + chrono::Duration::seconds(120);
@@ -229,8 +228,7 @@ mod tests {
             AbuseAction::Message,
             "/xmpp/message",
             b"<message><body>different content</body></message>",
-        )
-        .unwrap();
+        );
         let mismatch = evaluate_challenge_proof(
             AbuseAction::Message,
             "message:alice",

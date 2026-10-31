@@ -34,19 +34,7 @@ pub(crate) trait MessageAdmissionRepository: Send + Sync {
 
 pub(crate) fn begin_command(request: &MessageAdmissionRequest<'_>) -> Result<Command> {
     crate::services::abuse::validate_message_admission_request(request)?;
-    Ok(Command::Begin(BeginRequest::from(
-        northstar_abuse_policy::MessageAdmissionRequest {
-            actor_id: request.actor_id,
-            account_bare: request.account_bare,
-            normalized_target: request.normalized_target,
-            origin_id: request.origin_id,
-            normalized_payload: request.normalized_payload,
-            pow_intent_payload: request.pow_intent_payload,
-            subject: request.subject,
-            actors: request.actors,
-            proof: request.proof,
-        },
-    )))
+    Ok(Command::Begin(BeginRequest::from(*request)))
 }
 pub(crate) fn acceptance_fence(acceptance: &MessageAdmissionAcceptance<'_>) -> AdmissionFence {
     AdmissionFence {

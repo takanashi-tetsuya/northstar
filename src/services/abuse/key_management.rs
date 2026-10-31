@@ -18,46 +18,6 @@ pub(super) fn derive_actor_key_secret(secret: &[u8]) -> Vec<u8> {
     northstar_abuse_policy::derive_actor_key_secret(secret).to_vec()
 }
 
-/// A public commitment produced by the private content-identity keyring. It
-/// contains no reusable key material and is safe to pass to a repository.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ContentIdentityAuthenticator {
-    pub(super) key_id: String,
-    pub(super) mac: [u8; 32],
-}
-
-impl ContentIdentityAuthenticator {
-    pub(crate) fn key_id(&self) -> &str {
-        &self.key_id
-    }
-
-    pub(crate) fn mac(&self) -> &[u8; 32] {
-        &self.mac
-    }
-}
-
-/// Current/previous commitments for one exact canonical payload. The first
-/// entry follows the existing rolling-overlap writer rule; verification is
-/// constant-time once the non-secret key generation ID has been selected.
-#[derive(Clone, Debug)]
-pub(crate) struct ContentIdentityAuthenticators {
-    pub(super) candidates: Vec<ContentIdentityAuthenticator>,
-}
-
-impl ContentIdentityAuthenticators {
-    pub(crate) fn primary(&self) -> &ContentIdentityAuthenticator {
-        self.candidates
-            .first()
-            .expect("a content identity keyring always has a primary generation")
-    }
-
-    pub(crate) fn verifies(&self, key_id: &str, expected: &[u8]) -> bool {
-        self.candidates.iter().any(|candidate| {
-            candidate.key_id == key_id && bool::from(candidate.mac.as_slice().ct_eq(expected))
-        })
-    }
-}
-
 pub(super) struct ContentIdentityGeneration {
     pub(super) key_id: String,
     pub(super) key: Zeroizing<Vec<u8>>,
@@ -124,41 +84,19 @@ pub(super) fn content_identity_authenticators(
     purpose: ContentIdentityPurpose,
     canonical_payload: &[u8],
 ) -> ContentIdentityAuthenticators {
-    let candidates = generations
-        .iter()
-        .map(|generation| {
-            let mut mac = Hmac::<Sha256>::new_from_slice(generation.key.as_slice())
-                .expect("derived HMAC key is valid");
-            mac.update(b"northstar/content-identity/mac/v1\0");
-            message_admission_mac_field(&mut mac, purpose.label());
-            message_admission_mac_field(&mut mac, canonical_payload);
-            ContentIdentityAuthenticator {
-                key_id: generation.key_id.clone(),
-                mac: mac.finalize().into_bytes().into(),
-            }
-        })
-        .collect();
-    ContentIdentityAuthenticators { candidates }
+    northstar_abuse_policy::compute_content_identity_authenticators(
+        generations
+            .iter()
+            .map(|generation| (generation.key_id.as_str(), generation.key.as_slice())),
+        purpose,
+        canonical_payload,
+    )
 }
 
 pub(super) fn derive_content_identity_key(
     actor_secret: &[u8],
     purpose: ContentIdentityPurpose,
 ) -> Vec<u8> {
-    let purpose = match purpose {
-        ContentIdentityPurpose::PersonalMessage => {
-            northstar_abuse_policy::ContentIdentityPurpose::PersonalMessage
-        }
-        ContentIdentityPurpose::PersonalRetraction => {
-            northstar_abuse_policy::ContentIdentityPurpose::PersonalRetraction
-        }
-        ContentIdentityPurpose::MixMessage => {
-            northstar_abuse_policy::ContentIdentityPurpose::MixMessage
-        }
-        ContentIdentityPurpose::MixRetraction => {
-            northstar_abuse_policy::ContentIdentityPurpose::MixRetraction
-        }
-    };
     northstar_abuse_policy::derive_content_identity_key(actor_secret, purpose).to_vec()
 }
 
@@ -197,7 +135,7 @@ pub(super) fn pow_prefix(
         issued_at,
         expires_at,
         server_nonce,
-        intent.map(PowIntent::commitment),
+        intent.map(northstar_abuse_policy::PowIntentCommitment::from),
     )
 }
 

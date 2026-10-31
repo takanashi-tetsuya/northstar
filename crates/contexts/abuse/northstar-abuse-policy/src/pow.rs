@@ -347,8 +347,7 @@ mod tests {
             AbuseAction::Report,
             "/api/v1/reports",
             &serde_json::json!({"reason":"spam"}),
-        )
-        .unwrap();
+        );
 
         let prefix = compute_pow_prefix(
             secret,

@@ -4,10 +4,12 @@ use crate::services::message_admission::witness::AdmissionWitness;
 use crate::services::message_admission::{begin_command, operation};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use dashmap::DashMap;
-use hmac::{Hmac, Mac};
+#[cfg(test)]
+use northstar_abuse_policy::canonical_json_body_digest;
+use northstar_abuse_policy::{action_accepts_intent, ContentIdentityPurpose};
 pub use northstar_abuse_policy::{
-    AbuseAction, AbuseConfig, GuardError, PowChallenge, PowIntentRequest, PowIntentView, PowProof,
-    WorkRequirement,
+    AbuseAction, AbuseConfig, GuardError, MessageAdmissionRequest, MessageDedupeCandidate,
+    MessageDedupeIdentity, PowChallenge, PowIntent, PowIntentRequest, PowProof, WorkRequirement,
 };
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -31,167 +33,16 @@ pub(crate) mod records;
 
 use self::challenges::{build_requirement, decayed_penalty, max_penalty_decay_horizon};
 #[cfg(test)]
-use self::key_management::{actor_key_id, derive_actor_key_secret, ContentIdentityAuthenticator};
+use self::key_management::{actor_key_id, derive_actor_key_secret};
 use self::key_management::{
     derive_content_identity_key, opaque_actor_key, opaque_challenge_capacity_key, pow_prefix,
     subject_hash, ContentIdentityGeneration,
 };
-pub(crate) use self::key_management::{
-    ContentIdentityAuthenticators, MixMessageContentKeyring, MixRetractionContentKeyring,
-};
+pub(crate) use self::key_management::{MixMessageContentKeyring, MixRetractionContentKeyring};
 use self::persistence::actor_state_keys;
+pub(crate) use northstar_abuse_policy::ContentIdentityAuthenticators;
 
 pub const POW_INTENT_VERSION: u16 = northstar_abuse_policy::POW_INTENT_VERSION;
-const POW_BODY_DIGEST_BYTES: usize = northstar_abuse_policy::POW_BODY_DIGEST_BYTES;
-
-/// Public, non-secret commitment supplied when a capable client requests a
-/// v2 challenge. `body_sha256` is the base64url (unpadded) SHA-256 of the
-/// canonical operation body; callers never send the body itself to the
-/// challenge endpoint.
-/// Server-validated action intent.  It is deliberately independent from the
-/// proof envelope: mutation handlers reconstruct this value from their own
-/// route and pow-less body rather than trusting fields repeated by a client.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PowIntent {
-    method: String,
-    path: String,
-    body_sha256: [u8; POW_BODY_DIGEST_BYTES],
-}
-
-impl PowIntent {
-    pub fn new(
-        action: AbuseAction,
-        method: &str,
-        path: &str,
-        body_sha256: [u8; POW_BODY_DIGEST_BYTES],
-    ) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            method == method.trim()
-                && method == method.to_ascii_uppercase()
-                && matches!(method, "POST" | "PATCH" | "XMPP"),
-            "invalid PoW intent method"
-        );
-        anyhow::ensure!(canonical_pow_path(path), "invalid PoW intent path");
-        anyhow::ensure!(
-            action_accepts_intent(action, method, path),
-            "PoW intent is not valid for this action"
-        );
-        Ok(Self {
-            method: method.to_owned(),
-            path: path.to_owned(),
-            body_sha256,
-        })
-    }
-
-    pub fn from_request(action: AbuseAction, request: &PowIntentRequest) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            request.version == POW_INTENT_VERSION,
-            "unsupported PoW intent version"
-        );
-        let decoded = URL_SAFE_NO_PAD
-            .decode(request.body_sha256.as_bytes())
-            .map_err(|_| anyhow::anyhow!("PoW body digest is not canonical base64url"))?;
-        let body_sha256: [u8; POW_BODY_DIGEST_BYTES] = decoded
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("PoW body digest must contain 32 bytes"))?;
-        anyhow::ensure!(
-            URL_SAFE_NO_PAD.encode(body_sha256) == request.body_sha256,
-            "PoW body digest is not canonical base64url"
-        );
-        Self::new(action, &request.method, &request.path, body_sha256)
-    }
-
-    pub fn http_json(action: AbuseAction, path: &str, value: &serde_json::Value) -> Self {
-        Self::http_json_method(action, "POST", path, value)
-    }
-
-    pub fn http_json_method(
-        action: AbuseAction,
-        method: &str,
-        path: &str,
-        value: &serde_json::Value,
-    ) -> Self {
-        Self::new(action, method, path, canonical_json_body_digest(value))
-            .expect("server-owned HTTP PoW intent is valid")
-    }
-
-    pub fn xmpp(action: AbuseAction, path: &str, canonical_body: &[u8]) -> Self {
-        Self::new(action, "XMPP", path, Sha256::digest(canonical_body).into())
-            .expect("server-owned XMPP PoW intent is valid")
-    }
-
-    /// Build the semantic commitment used by both XEP-0077 and XEP-0389
-    /// registration.  Those protocols render the same values through
-    /// different XML shapes, so hashing the wire representation would make a
-    /// challenge transport-specific and vulnerable to harmless serializer
-    /// drift.  Length-prefixed fields are unambiguous; the domain separator
-    /// lets this profile evolve without colliding with other XMPP intents.
-    ///
-    /// The password and invitation token are fed directly into SHA-256 and are
-    /// never copied into a JSON/XML value or retained by `PowIntent`.
-    pub fn xmpp_registration(
-        username: &str,
-        password: &str,
-        invitation_token: Option<&str>,
-    ) -> Self {
-        fn field(digest: &mut Sha256, value: Option<&str>) {
-            match value {
-                Some(value) => {
-                    digest.update([1]);
-                    digest.update((value.len() as u64).to_be_bytes());
-                    digest.update(value.as_bytes());
-                }
-                None => digest.update([0]),
-            }
-        }
-
-        let mut digest = Sha256::new();
-        digest.update(b"northstar/xmpp-registration-intent/v1\0");
-        field(&mut digest, Some(username));
-        field(&mut digest, Some(password));
-        field(&mut digest, invitation_token);
-        Self::new(
-            AbuseAction::Registration,
-            "XMPP",
-            "/xmpp/register",
-            digest.finalize().into(),
-        )
-        .expect("server-owned XMPP registration intent is valid")
-    }
-
-    fn view(&self) -> PowIntentView {
-        PowIntentView {
-            version: POW_INTENT_VERSION,
-            method: self.method.clone(),
-            path: self.path.clone(),
-            body_sha256: URL_SAFE_NO_PAD.encode(self.body_sha256),
-        }
-    }
-
-    fn commitment(&self) -> northstar_abuse_policy::PowIntentCommitment<'_> {
-        northstar_abuse_policy::PowIntentCommitment {
-            method: &self.method,
-            path: &self.path,
-            body_sha256: &self.body_sha256,
-        }
-    }
-}
-
-fn canonical_pow_path(path: &str) -> bool {
-    northstar_abuse_policy::canonical_pow_path(path)
-}
-
-fn action_accepts_intent(action: AbuseAction, method: &str, path: &str) -> bool {
-    northstar_abuse_policy::action_accepts_intent(action, method, path)
-}
-
-/// Deterministic JSON used only as a digest preimage. Object keys are sorted;
-/// arrays retain order; scalar serialization follows JSON. The returned bytes
-/// are never persisted. Browser code implements the same small profile.
-pub fn canonical_json_body_digest(value: &serde_json::Value) -> [u8; 32] {
-    northstar_abuse_policy::canonical_json_body_digest(value)
-}
-
 const MAX_ACTIVE_POW_CHALLENGES_GLOBAL: usize =
     northstar_abuse_policy::MAX_ACTIVE_POW_CHALLENGES_GLOBAL;
 const MAX_ACTIVE_POW_CHALLENGES_PER_ACTOR: usize =
@@ -258,32 +109,6 @@ impl std::error::Error for AbuseStateBusy {}
 
 pub fn is_abuse_state_busy(error: &anyhow::Error) -> bool {
     error.downcast_ref::<AbuseStateBusy>().is_some()
-}
-
-#[derive(Clone, Copy)]
-enum ContentIdentityPurpose {
-    PersonalMessage,
-    PersonalRetraction,
-    MixMessage,
-    MixRetraction,
-}
-
-impl ContentIdentityPurpose {
-    fn label(self) -> &'static [u8] {
-        match self {
-            Self::PersonalMessage => b"personal-message",
-            Self::PersonalRetraction => b"personal-retraction",
-            Self::MixMessage => b"mix-message",
-            Self::MixRetraction => b"mix-retraction",
-        }
-    }
-}
-
-impl ContentIdentityAuthenticators {
-    #[cfg(test)]
-    pub(crate) fn candidates(&self) -> &[ContentIdentityAuthenticator] {
-        &self.candidates
-    }
 }
 
 #[derive(Clone)]
@@ -356,11 +181,6 @@ fn message_admission_identity<'a>(
         })
 }
 
-fn message_admission_mac_field(mac: &mut Hmac<Sha256>, value: &[u8]) {
-    mac.update(&u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
-    mac.update(value);
-}
-
 /// Stable lookup key for the offline-delivery tombstone. The identity value is
 /// a client-generated XEP-0359 origin-id or a random one-use challenge UUID,
 /// so this digest is not an enumerable account/JID hash. Payload authenticity
@@ -412,26 +232,6 @@ fn ceil_seconds(duration: Duration) -> u64 {
         .max(1)
 }
 
-/// Immutable, authenticated input to one durable message-rate admission.
-/// `normalized_payload` is the already validated stanza with the private PoW
-/// envelope and untrusted delay assertions removed.  It is never stored; the
-/// database retains only a keyed digest.
-#[derive(Clone, Copy)]
-pub struct MessageAdmissionRequest<'a> {
-    pub actor_id: Uuid,
-    pub account_bare: &'a str,
-    pub normalized_target: &'a str,
-    pub origin_id: Option<&'a str>,
-    pub normalized_payload: &'a str,
-    /// Exact client stanza after direct PoW and unauthenticated delay
-    /// elements are removed. This is the v2 body commitment; it is separate
-    /// from the server-rewritten payload used for durable deduplication.
-    pub pow_intent_payload: &'a str,
-    pub subject: &'a str,
-    pub actors: &'a [String],
-    pub proof: Option<&'a PowProof>,
-}
-
 pub(crate) fn validate_message_admission_request(
     request: &MessageAdmissionRequest<'_>,
 ) -> anyhow::Result<()> {
@@ -469,22 +269,10 @@ pub(crate) fn validate_message_admission_request(
     Ok(())
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct MessageDedupeCandidate {
-    pub(crate) key_id: String,
-    pub(crate) payload_mac: Vec<u8>,
-}
-
 pub(crate) struct MessageAdmissionCandidate {
     pub(crate) key_id: String,
     pub(crate) admission_key: Vec<u8>,
     pub(crate) payload_mac: Vec<u8>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct MessageDedupeIdentity {
-    pub(crate) identity_digest: Vec<u8>,
-    pub(crate) candidates: Vec<MessageDedupeCandidate>,
 }
 
 #[derive(Clone)]

@@ -139,14 +139,12 @@ async fn v2_challenge_is_bound_to_method_path_body_and_subject() {
     );
 
     for changed in [
-        PowIntent {
-            method: "XMPP".to_owned(),
-            ..expected.clone()
-        },
-        PowIntent {
-            path: "/api/v1/reports/other".to_owned(),
-            ..expected.clone()
-        },
+        PowIntent::unvalidated("XMPP", expected.path(), *expected.body_sha256()),
+        PowIntent::unvalidated(
+            expected.method(),
+            "/api/v1/reports/other",
+            *expected.body_sha256(),
+        ),
         PowIntent::http_json(
             AbuseAction::Report,
             "/api/v1/reports",
@@ -1087,7 +1085,7 @@ async fn postgres_v2_intent_mismatch_consumes_but_rollback_restores_proof() {
     assert_eq!(stored.0, POW_INTENT_VERSION as i16);
     assert_eq!(stored.1, "POST");
     assert_eq!(stored.2, "/api/v1/reports");
-    assert_eq!(stored.3, expected.body_sha256);
+    assert_eq!(stored.3, *expected.body_sha256());
     assert!(stored.4.len() >= 16);
 
     tokio::time::sleep(

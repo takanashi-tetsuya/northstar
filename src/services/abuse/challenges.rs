@@ -103,7 +103,7 @@ impl AbuseGuard {
         intent: &PowIntent,
     ) -> anyhow::Result<PowChallenge> {
         anyhow::ensure!(
-            action_accepts_intent(action, &intent.method, &intent.path),
+            action_accepts_intent(action, intent.method(), intent.path()),
             "PoW intent action mismatch"
         );
         self.issue_bound(action, subject, actors, Some(intent))

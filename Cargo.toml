@@ -207,6 +207,7 @@ webauthn-rs = { version = "0.5.5", default-features = false, features = ["danger
 openssl = { version = "0.10.81", features = ["vendored"] }
 
 [dev-dependencies]
+northstar-abuse-policy = { path = "crates/contexts/abuse/northstar-abuse-policy", features = ["test-support"] }
 northstar-runtime = { path = "crates/platform/northstar-runtime", features = ["test-support"] }
 northstar-pubsub-postgres = { path = "crates/contexts/pubsub/northstar-pubsub-postgres", features = ["test-support"] }
 northstar-roster-postgres = { path = "crates/contexts/roster/northstar-roster-postgres", features = ["test-support"] }

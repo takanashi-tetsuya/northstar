@@ -384,9 +384,9 @@ impl AbuseGuard {
                         },
                         subject_hash: subject_hash.clone(),
                         actor_sequences,
-                        intent_method: intent.map(|intent| intent.method.clone()),
-                        intent_path: intent.map(|intent| intent.path.clone()),
-                        body_sha256: intent.map(|intent| intent.body_sha256.to_vec()),
+                        intent_method: intent.map(|intent| intent.method().to_owned()),
+                        intent_path: intent.map(|intent| intent.path().to_owned()),
+                        body_sha256: intent.map(|intent| intent.body_sha256().to_vec()),
                     })
                 }),
             )
@@ -531,9 +531,9 @@ impl AbuseGuard {
             self.legacy_v1_allowed()
         } else if protocol_version == POW_INTENT_VERSION {
             intent.is_some_and(|expected| {
-                challenge.intent_method.as_deref() == Some(expected.method.as_str())
-                    && challenge.intent_path.as_deref() == Some(expected.path.as_str())
-                    && challenge.body_sha256.as_deref() == Some(expected.body_sha256.as_slice())
+                challenge.intent_method.as_deref() == Some(expected.method())
+                    && challenge.intent_path.as_deref() == Some(expected.path())
+                    && challenge.body_sha256.as_deref() == Some(expected.body_sha256().as_slice())
             })
         } else {
             false

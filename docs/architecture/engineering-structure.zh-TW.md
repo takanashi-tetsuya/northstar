@@ -109,6 +109,7 @@ facade 移出根 crate（5.13），根 crate 只剩上面三層。
 | S18 會話核心介面 | WP-181–185 | 新的 edge crate `northstar-stream` 提供 IQ 路由表：`IqRoute`（酬載元素、命名空間、get／set）、`IqRouter`（排序後以借用的鍵二分搜尋）與 `IqHandler`（WP-181）；訊息遞送經 session 應用層的 `RemoteRoutePort` 送往遠端網域，協定處理器不再引用 `crate::s2s`（WP-182）；`ProtocolSession::iq` 的 match 改為 48 條各註冊一次的路由，路由的閘門決定請求交給處理器、回 `service-unavailable`，或與沒有路由一樣回 `feature-not-implemented`（WP-183、184）；記錄階段（WP-185）。盤點見 5.14 | 測試名稱只增加；全部門禁、模糊測試編譯與完整 CI 通過。已完成：client IQ 只經路由表分派；協定處理器的生產程式碼不再引用 `bosh`、`s2s` |
 | S19 upload 上下文 | WP-191–203 | 上傳的槽服務、維護 port 與安全閘門移入 `northstar-upload-application`（WP-191）；`-storage` 成為介面卡角色（WP-192），`src/storage` 成為 `northstar-upload-storage`（WP-193），儲存 port 移入 application（WP-194），上傳維護 worker 移入 application（WP-195）；migration 集合移入新的 platform crate `northstar-postgres`（WP-196）；`db/upload*` 成為 `northstar-upload-postgres`（WP-197–199）；IQ 回應與 stanza 錯誤移入 `northstar_xml_builder::stanza`（WP-200）；XEP-0363 槽處理移入 `northstar-upload-xmpp`，會話能力是窄 trait `UploadSlotSession`（WP-201）；`AppState` 的上傳欄位與啟動程式成為組合根的 `UploadModule`（WP-202）；記錄階段（WP-203）。盤點見 5.15 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與完整 CI 通過。已完成：上傳的應用、儲存、持久化與 XMPP 程式碼不再在根 crate；HTTP 端點與管理員重試的去處見 5.15 |
 | S20 archive 上下文 | WP-210–214 | `services/xml_util` 中不依賴伺服器狀態的根元素改寫移入 `northstar_xml_builder::rewrite`，XEP-0359 的權威改寫移入 `northstar_xep_0359::annotate`（WP-210）；`MamService` 移入 `northstar-archive-application`（WP-211）；個人封存、偏好與 MAM 查詢成為 `northstar-archive-postgres`（WP-212）；XEP-0313 處理移入 `northstar-archive-xmpp`，會話能力是窄 trait `MamSession`（WP-213）；記錄階段（WP-214）。盤點見 5.16 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與完整 CI 通過。已完成：archive 自有的應用、持久化與 XMPP 程式碼不再在根 crate；與房間、訊息、聯邦共用交易的部分及保存期限清理的去處見 5.16 |
+| S21 pubsub 上下文 | WP-220–230 | `services/durable_outbox` 移入 `northstar_runtime`（WP-220）；`services/{pubsub,profile,private_storage}` 移入 `northstar-pubsub-application`（WP-221）；PubSub、PEP、vCard、私有儲存與 outbox 的持久化成為 `northstar-pubsub-postgres`（WP-222）；文字檢查移入 kernel（WP-223）；`northstar-pubsub-xmpp` 建立並取得 PEP 載荷驗證（WP-224）、PubSub IQ（WP-225）、私有 XML（WP-226）、vCard（WP-227）與 PEP（WP-228）；`AppState` 以 `PubSubModule` 持有三個服務（WP-229）；記錄階段（WP-230）。盤點見 5.17 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與完整 CI 通過。已完成：pubsub 自有的應用、持久化與 XMPP 處理不再在根 crate；跨名冊交易、caps 與投遞工作者的去處見 5.17 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -610,6 +611,46 @@ repository 型別（`impl MamQueryRepository + MamPreferencesWriter`）回傳，
 
 根 crate 由 776 檔 369,707 行變為 774 檔 367,951 行。
 
+### 5.17 S21 盤點：pubsub 上下文（`f85fe7eb`）
+
+| 原位置 | 去處 | 角色 |
+| --- | --- | --- |
+| `services/durable_outbox` | `northstar_runtime::durable_outbox` | platform |
+| `valid_language_tag`、`contains_unsafe_bidi_controls` | `northstar_xmpp_types::text` | kernel |
+| `services/{pubsub,profile,private_storage}` | `northstar-pubsub-application` 的 `service`、`profile`、`private_storage` | application |
+| `db/{pubsub,pubsub_outbox,pep,vcard,private}` 與 PubSub outbox 的渲染實作 | `northstar-pubsub-postgres` | adapter |
+| `xmpp/protocol/pep/payload_validation.rs` | `northstar_pubsub_xmpp::payload` | adapter |
+| `xmpp/protocol/pubsub/`、`xmpp/mam_pubsub_parsing.rs` | `northstar_pubsub_xmpp::pubsub`：`PubSubHost`、`PubSubReply` 與處理函式 | adapter |
+| `xmpp/protocol/private.rs` | `northstar_pubsub_xmpp::private_xml`：`PrivateXmlSession` | adapter |
+| `xmpp/protocol/vcard.rs`、個人檔案項目事件 | `northstar_pubsub_xmpp::{vcard,events}`：`VCardSession` | adapter |
+| `xmpp/protocol/pep/` | `northstar_pubsub_xmpp::pep`：`PepSession`、`PepAudienceRouting`、`PepLastItemDelivery` | adapter |
+| `AppState` 的三個服務欄位 | `state/pubsub_module.rs` 的 `PubSubModule` | 組合根 |
+
+pubsub 的四個 crate 共 24,612 行（core 1,437、application 5,744、postgres 8,611、xmpp 8,820）。`northstar-pubsub-xmpp` 只依賴 pubsub 的 core 與 application、
+kernel 與通用函式庫，不依賴 `-postgres`、其他上下文與根 crate。處理器是對窄 trait 泛型的自由函式：會話層的
+`PepSession`、`VCardSession`、`PrivateXmlSession` 由 `ProtocolSession` 實作；主機層的 `PubSubHost`、
+`PepAudienceRouting` 由 `AppState` 實作；`PepLastItemDelivery` 由 `PepLastItemsContext` 實作。trait 方法回傳
+`&Service<impl Ports>`，`PubSubRepositories` 把 16 個 PubSub 與 PEP port 集中成一個界限。上下文介面卡不能依賴
+`northstar-session-core`，所以 `PepLastItemDelivery` 以關聯型別 `CapsEpoch` 帶入 caps 世代，由根 crate 綁定。
+根 crate 的同名函式保留 `&AppState` 簽章，只委派給 crate，所以 S2S、discovery 與組合程式碼的呼叫點不變。
+
+根 crate 中仍與 pubsub 有關的程式碼與去處：
+
+- `db/pubsub_repository.rs` 的 `PostgresPubSubRepository`、`db/profile.rs` 與 `db/pep_roster.rs`：在 pubsub 交易
+  中讀取名冊與隱私資料表（`db/profile.rs` 還用 `db::roster::blocked_jid_matches`），依 4.5 屬於
+  `northstar-workflows`。`db::pubsub_integration_tests` 與 `db/pubsub_repository/service_tests.rs` 驗證根 crate
+  綁定的服務，隨它們移動。
+- `xmpp/protocol/caps.rs`：實體能力與叢集、S2S、`AppState`、MIX 緊密耦合，驅動會話路由，屬於 session（4.2 已改），
+  隨 S29 移出。
+- `xmpp/capabilities.rs`：多個上下文共用的窄遙測，隨各使用者移出，不屬於 pubsub（4.2 已改）。
+- `state/{pubsub_digest_worker,pubsub_event_outbox_worker,pubsub_notification_delivery,pep_last_items,caps_effect_dispatch}`
+  與根 `pubsub.rs` 的投遞函式：經叢集與聯邦路由投遞，隨 S29、S30 移出。
+- 根 `xmpp/protocol/{pubsub,pep,private,vcard}.rs` 的 `ProtocolSession` 入口與 trait 實作：S30 拆解
+  `ProtocolSession` 時處理。
+- `services/xml_util/avatar_update.rs`（XEP-0153）：出席路徑也使用，隨 S22 roster 的出席搬移處理。
+
+根 crate 由 774 檔 367,951 行變為 745 檔 347,496 行。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點）。
@@ -761,6 +802,11 @@ repository 型別（`impl MamQueryRepository + MamPreferencesWriter`）回傳，
      並把根 crate 測試仍要用的私有函式改為公開（S20）。
    - 會話能力 trait 不以關聯型別要求具體 repository：協定層既不能引用 `db`（門禁預算為 0），也不能引用組合層的
      `state`，關聯型別還必須公開（E0446）。trait 方法回傳 `impl Trait`，具體綁定留在 `AppState`（S20）。
+   - 大型處理器先由腳本移動或複製到新 crate 並提交（「base」），再請 agy 原地修改：不用重打數千行，差異可以忽略
+     縮排逐行審查；多個 agy 工作從同一基底平行執行，`lib.rs` 與 `Cargo.toml` 由腳本重新產生，修改的檔案不重疊就
+     沒有衝突（S21）。
+   - 檔案搬走後，要同時找根 crate 中失去最後使用者的函式與匯入：它們只在 clippy 的 `-D warnings` 才出現，而且
+     會排在前一批編譯錯誤之後（S21）。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -959,3 +1005,14 @@ Stage 證據仍綁定其原提交。
 | WP-212 | 完成：個人封存、偏好與 MAM 查詢成為 `northstar-archive-postgres`；`test-support` feature；來源契約測試留在根 crate 的 `db/archive/source_contract_tests.rs` | 見 `git log --grep '\[WP-212\]'` |
 | WP-213 | 完成：`northstar-archive-xmpp`：`MamSession`、`MamReply` 與 XEP-0313 處理函式；outbound XML 門禁涵蓋新 crate | 見 `git log --grep '\[WP-213\]'` |
 | WP-214 | 完成：記錄 S20 的階段與盤點（5.16），目標架構的保存期限清理改屬 operations。WP-210–213 依序接到 WP-203 之上；fmt、clippy、workspace 測試、層級、模糊測試與全部門禁通過 | 見 `git log --grep '\[WP-214\]'` |
+| WP-220 | 完成：`services/durable_outbox` 移入 `northstar_runtime::durable_outbox` | 見 `git log --grep '\[WP-220\]'` |
+| WP-221 | 完成：`services/{pubsub,profile,private_storage}` 移入 `northstar-pubsub-application` 的 `service`、`profile`、`private_storage`；根 crate 的測試建構函式改為自由函式（孤兒規則） | 見 `git log --grep '\[WP-221\]'` |
+| WP-222 | 完成：`northstar-pubsub-postgres`：`db/{pubsub,pubsub_outbox,pep,vcard,private}`、型別轉換與 PubSub outbox 渲染實作；跨名冊交易的部分留在根 crate（見 5.17） | 見 `git log --grep '\[WP-222\]'` |
+| WP-223 | 完成：`valid_language_tag` 與 `contains_unsafe_bidi_controls` 移入 `northstar_xmpp_types::text` | 見 `git log --grep '\[WP-223\]'` |
+| WP-224 | 完成：建立 `northstar-pubsub-xmpp`，PEP 載荷驗證移入 `payload`，`PubSubRepositories` 集中 16 個 port | 見 `git log --grep '\[WP-224\]'` |
+| WP-225 | 完成：PubSub IQ 處理移入 `northstar_pubsub_xmpp::pubsub`，主機能力是 `PubSubHost`；投遞工作者留在根 crate；子伺服器邊界門禁同時讀 crate 模組 | 見 `git log --grep '\[WP-225\]'` |
+| WP-226 | 完成：XEP-0049 私有 XML 與舊式書籤移入 `northstar_pubsub_xmpp::private_xml`，會話能力是 `PrivateXmlSession` | 見 `git log --grep '\[WP-226\]'` |
+| WP-227 | 完成：XEP-0054 vcard-temp 移入 `northstar_pubsub_xmpp::vcard`，會話能力是 `VCardSession`；個人檔案項目事件移入 `events`；子樹 bidi 檢查離開 `xml_util` | 見 `git log --grep '\[WP-227\]'` |
+| WP-228 | 完成：PEP 處理、事件分送與 send-last 投遞移入 `northstar_pubsub_xmpp::pep`：`PepSession`、`PepAudienceRouting`、`PepLastItemDelivery`（關聯型別 `CapsEpoch`）；根 crate 只留委派 | 見 `git log --grep '\[WP-228\]'` |
+| WP-229 | 完成：`AppState` 以 `PubSubModule` 持有 PubSub、個人檔案與私有儲存服務，accessor 不變 | 見 `git log --grep '\[WP-229\]'` |
+| WP-230 | 完成：記錄 S21 的階段與盤點（5.17），目標架構記錄 `users` 規則、跨名冊交易的去處，caps 改屬 session。WP-220–229 依序接到 WP-214 之上；fmt、clippy、workspace 測試、層級、模糊測試與全部門禁通過 | 見 `git log --grep '\[WP-230\]'` |

@@ -5,7 +5,6 @@ use crate::{
     db::{
         admin_command_repository::PostgresAdminCommandRepository,
         background_housekeeping_repository::PostgresBackgroundHousekeepingRepository,
-        challenge_issuance_repository::PostgresChallengeRepository,
     },
     services::{
         admin_commands::AdminCommandService,
@@ -13,6 +12,7 @@ use crate::{
     },
 };
 use northstar_abuse_application::challenge::ChallengeCleanupService;
+use northstar_abuse_postgres::challenge::PostgresChallengeRepository;
 use northstar_runtime::workers::WorkerHeartbeat;
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;

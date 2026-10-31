@@ -302,7 +302,7 @@ impl AccountRepository for PostgresAccountRepository {
             transaction.rollback().await?;
             return Ok(RegistrationGuardOutcome::LeaseLost);
         }
-        let outcome = db::abuse_transaction_repository::verify_in_tx(
+        let outcome = northstar_abuse_postgres::transaction::verify_in_tx(
             &mut transaction,
             &self.abuse,
             northstar_abuse_policy::AbuseAction::Registration,
@@ -357,7 +357,7 @@ impl AccountRepository for PostgresAccountRepository {
             .begin()
             .await
             .context("could not begin registration admission")?;
-        let admission_outcome = db::abuse_transaction_repository::verify_in_tx(
+        let admission_outcome = northstar_abuse_postgres::transaction::verify_in_tx(
             &mut transaction,
             &self.abuse,
             northstar_abuse_policy::AbuseAction::Registration,
@@ -666,7 +666,7 @@ mod registration_guard_tests {
         crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
             .await
             .unwrap();
-        let guard = Arc::new(crate::db::abuse_persistence_repository::persistent_guard(
+        let guard = Arc::new(crate::db::abuse_effects::persistent_guard(
             AbuseConfig {
                 base_work_factor: 2,
                 max_work_factor: 64,
@@ -801,7 +801,7 @@ mod registration_guard_tests {
         crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
             .await
             .unwrap();
-        let guard = Arc::new(crate::db::abuse_persistence_repository::persistent_guard(
+        let guard = Arc::new(crate::db::abuse_effects::persistent_guard(
             AbuseConfig {
                 base_work_factor: 2,
                 max_work_factor: 64,
@@ -919,7 +919,7 @@ mod registration_guard_tests {
             .unwrap();
         let abuse_key = test_key();
         let api_key = test_key();
-        let guard = Arc::new(crate::db::abuse_persistence_repository::persistent_guard(
+        let guard = Arc::new(crate::db::abuse_effects::persistent_guard(
             AbuseConfig {
                 base_work_factor: 2,
                 max_work_factor: 64,

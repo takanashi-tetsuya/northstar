@@ -1,8 +1,8 @@
 //! Public proof-of-work issuance; bearer lookup remains with the API query context.
 
-use crate::db::challenge_issuance_repository::PostgresChallengeRepository;
 use northstar_abuse_application::challenge::{ChallengeIssueRequest, ChallengeIssueService};
 use northstar_abuse_policy::PowChallenge;
+use northstar_abuse_postgres::challenge::PostgresChallengeRepository;
 use std::{
     net::IpAddr,
     sync::{

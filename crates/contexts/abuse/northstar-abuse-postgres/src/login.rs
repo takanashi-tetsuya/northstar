@@ -6,12 +6,12 @@ use northstar_abuse_application::login::{PasskeyLoginAbuseRepository, SaslLoginA
 use northstar_abuse_policy::{AbuseAction, GuardError, PowIntent, PowProof, WorkRequirement};
 use std::sync::Arc;
 
-pub(crate) struct PostgresSaslLoginAbuseRepository {
+pub struct PostgresSaslLoginAbuseRepository {
     guard: Arc<AbuseGuard>,
 }
 
 impl PostgresSaslLoginAbuseRepository {
-    pub(crate) fn new(guard: Arc<AbuseGuard>) -> Self {
+    pub fn new(guard: Arc<AbuseGuard>) -> Self {
         Self { guard }
     }
 }
@@ -28,12 +28,12 @@ impl SaslLoginAbuseRepository for PostgresSaslLoginAbuseRepository {
     }
 }
 
-pub(crate) struct PostgresPasskeyLoginAbuseRepository {
+pub struct PostgresPasskeyLoginAbuseRepository {
     guard: Arc<AbuseGuard>,
 }
 
 impl PostgresPasskeyLoginAbuseRepository {
-    pub(crate) fn new(guard: Arc<AbuseGuard>) -> Self {
+    pub fn new(guard: Arc<AbuseGuard>) -> Self {
         Self { guard }
     }
 }

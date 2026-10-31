@@ -1,8 +1,8 @@
 //! One-use PoW consumption under the same transaction as actor state and the
 //! protected business operation.
 
-use crate::db::abuse_actor_state_repository::{lock_db_states, persist_db_states};
-use crate::services::message_admission::witness::commit_observed;
+use crate::actor_state::{lock_db_states, persist_db_states};
+use crate::commit::commit_observed;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_abuse_application::guard::records::{

@@ -338,7 +338,7 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
     let keyring = std::sync::Arc::new(
         crate::db::ApiControlKeyring::new(b"report-api-control-test-key-00000001", None).unwrap(),
     );
-    let guard = crate::db::abuse_persistence_repository::persistent_guard(
+    let guard = crate::db::abuse_effects::persistent_guard(
         AbuseConfig {
             base_work_factor: 2,
             max_work_factor: 1024,
@@ -378,7 +378,7 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
             .unwrap(),
     );
     assert!(matches!(
-        crate::db::abuse_transaction_repository::verify_in_tx(
+        northstar_abuse_postgres::transaction::verify_in_tx(
             &mut tx,
             &guard,
             AbuseAction::Report,
@@ -467,7 +467,7 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
             .unwrap(),
     );
     assert!(matches!(
-        crate::db::abuse_transaction_repository::verify_in_tx(
+        northstar_abuse_postgres::transaction::verify_in_tx(
             &mut crashed_tx,
             &guard,
             AbuseAction::Report,
@@ -506,7 +506,7 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
     );
     assert!(!retry_lease.guard_verified);
     assert!(matches!(
-        crate::db::abuse_transaction_repository::verify_in_tx(
+        northstar_abuse_postgres::transaction::verify_in_tx(
             &mut retry_tx,
             &guard,
             AbuseAction::Report,
@@ -584,7 +584,7 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
             .unwrap(),
     );
     assert!(matches!(
-        crate::db::abuse_transaction_repository::verify_in_tx(
+        northstar_abuse_postgres::transaction::verify_in_tx(
             &mut invalid_tx,
             &guard,
             AbuseAction::Report,

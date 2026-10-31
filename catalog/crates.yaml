@@ -86,6 +86,16 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-abuse-postgres
+    package: northstar-abuse-postgres
+    path: crates/contexts/abuse/northstar-abuse-postgres
+    tier: context
+    context: abuse
+    role: adapter
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-archive-application
     package: northstar-archive-application
     path: crates/contexts/archive/northstar-archive-application

@@ -1,12 +1,10 @@
 //! Passkey HTTP capabilities. Bearer lookup remains with the API query context.
 
 use super::PasskeyService;
-use crate::{
-    db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository,
-    services::passkeys::{PasskeyActor, PasskeyError, PasskeyOptions, PasskeySummary},
-};
+use crate::services::passkeys::{PasskeyActor, PasskeyError, PasskeyOptions, PasskeySummary};
 use northstar_abuse_application::login::PasskeyLoginAbuseService;
 use northstar_abuse_policy::{GuardError, PowIntent, PowProof, WorkRequirement};
+use northstar_abuse_postgres::login::PostgresPasskeyLoginAbuseRepository;
 use std::net::IpAddr;
 use std::sync::Arc;
 use uuid::Uuid;

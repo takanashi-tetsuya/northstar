@@ -61,7 +61,7 @@ impl PostgresHttpLoginRepository {
         attempt_already_recorded: bool,
     ) -> Result<HttpLoginOutcome> {
         if !attempt_already_recorded {
-            db::abuse_transaction_repository::record_failure_in_tx(
+            northstar_abuse_postgres::transaction::record_failure_in_tx(
                 &mut tx,
                 &self.abuse,
                 AbuseAction::Login,
@@ -172,7 +172,7 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
                 guard_tx.rollback().await?;
                 return Ok(Outcome::LeaseLost);
             }
-            let requirement = db::abuse_transaction_repository::current_requirement_in_tx(
+            let requirement = northstar_abuse_postgres::transaction::current_requirement_in_tx(
                 &mut guard_tx,
                 &self.abuse,
                 AbuseAction::Login,
@@ -190,7 +190,7 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
                         northstar_abuse_policy::GuardError::Required(requirement),
                     ));
                 }
-                match db::abuse_transaction_repository::verify_in_tx(
+                match northstar_abuse_postgres::transaction::verify_in_tx(
                     &mut guard_tx,
                     &self.abuse,
                     AbuseAction::Login,

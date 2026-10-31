@@ -9,12 +9,12 @@ use northstar_abuse_policy::PowChallenge;
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub(crate) struct PostgresChallengeRepository {
+pub struct PostgresChallengeRepository {
     guard: Arc<AbuseGuard>,
 }
 
 impl PostgresChallengeRepository {
-    pub(crate) fn new(guard: Arc<AbuseGuard>) -> Self {
+    pub fn new(guard: Arc<AbuseGuard>) -> Self {
         Self { guard }
     }
 }

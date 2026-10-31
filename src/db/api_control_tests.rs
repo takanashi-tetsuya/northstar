@@ -447,7 +447,7 @@ async fn failed_login_penalty_and_replay_are_one_transaction() {
     crate::db::migrate(&pool).await.unwrap();
 
     let keys = ApiControlKeyring::new(b"login-idempotency-secret-0000000001", None).unwrap();
-    let guard = crate::db::abuse_persistence_repository::persistent_guard(
+    let guard = crate::db::abuse_effects::persistent_guard(
         AbuseConfig {
             base_work_factor: 2,
             max_work_factor: 1_000_000,
@@ -493,7 +493,7 @@ async fn failed_login_penalty_and_replay_are_one_transaction() {
     assert!(resume_idempotency_lease_in_tx(&mut failed_tx, &lease, 30)
         .await
         .unwrap());
-    crate::db::abuse_transaction_repository::record_failure_in_tx(
+    northstar_abuse_postgres::transaction::record_failure_in_tx(
         &mut failed_tx,
         &guard,
         AbuseAction::Login,
@@ -541,7 +541,7 @@ async fn failed_login_penalty_and_replay_are_one_transaction() {
     assert!(resume_idempotency_lease_in_tx(&mut retry_tx, &lease, 30)
         .await
         .unwrap());
-    crate::db::abuse_transaction_repository::record_failure_in_tx(
+    northstar_abuse_postgres::transaction::record_failure_in_tx(
         &mut retry_tx,
         &guard,
         AbuseAction::Login,

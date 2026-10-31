@@ -23,7 +23,7 @@ impl PostgresReadinessRepository {
 
 impl ReadinessRepository for PostgresReadinessRepository {
     async fn validate_abuse_key(&self, identity: &AbuseKeyDeploymentIdentity) -> Result<()> {
-        db::validate_abuse_key_deployment(&self.pool, identity).await
+        northstar_abuse_postgres::keys::validate_abuse_key_deployment(&self.pool, identity).await
     }
 
     async fn validate_cluster_key(&self, identity: &ClusterKeyDeploymentIdentity) -> Result<()> {

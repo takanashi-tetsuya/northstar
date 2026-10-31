@@ -169,6 +169,7 @@ digraph compile_time {
   "nom";
   "northstar-abuse-application";
   "northstar-abuse-policy";
+  "northstar-abuse-postgres";
   "northstar-archive-application";
   "northstar-archive-core";
   "northstar-archive-postgres";
@@ -937,6 +938,14 @@ digraph compile_time {
   "northstar-abuse-policy" -> "subtle";
   "northstar-abuse-policy" -> "thiserror";
   "northstar-abuse-policy" -> "uuid";
+  "northstar-abuse-postgres" -> "anyhow";
+  "northstar-abuse-postgres" -> "chrono";
+  "northstar-abuse-postgres" -> "northstar-abuse-application";
+  "northstar-abuse-postgres" -> "northstar-abuse-policy";
+  "northstar-abuse-postgres" -> "serde_json";
+  "northstar-abuse-postgres" -> "sqlx";
+  "northstar-abuse-postgres" -> "tracing";
+  "northstar-abuse-postgres" -> "uuid";
   "northstar-archive-application" -> "anyhow";
   "northstar-archive-application" -> "chrono";
   "northstar-archive-application" -> "northstar-archive-core";
@@ -1584,6 +1593,7 @@ digraph compile_time {
   "rust-xmpp-server" -> "libc";
   "rust-xmpp-server" -> "northstar-abuse-application";
   "rust-xmpp-server" -> "northstar-abuse-policy";
+  "rust-xmpp-server" -> "northstar-abuse-postgres";
   "rust-xmpp-server" -> "northstar-archive-application";
   "rust-xmpp-server" -> "northstar-archive-core";
   "rust-xmpp-server" -> "northstar-archive-postgres";

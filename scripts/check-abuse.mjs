@@ -17,8 +17,8 @@ const [abuseSources, abuseTransaction, abuseVerification, config, envExample, ap
     read('crates/contexts/abuse/northstar-abuse-policy/src/cooldown.rs'),
     read('crates/contexts/abuse/northstar-abuse-policy/src/config.rs'),
   ]).then(([parts, ...policyParts]) => [...parts, policyParts.join('\n')]),
-  read('src/db/abuse_transaction_repository.rs'),
-  read('src/db/abuse_verification_repository.rs'),
+  read('crates/contexts/abuse/northstar-abuse-postgres/src/transaction.rs'),
+  read('crates/contexts/abuse/northstar-abuse-postgres/src/verification.rs'),
   // crates/platform/northstar-config/src/lib.rs and its non-test sibling modules (the whole production module)
   readProductionModule('crates/platform/northstar-config/src/lib.rs'), read('.env.example'),
   readRoleSplitFile('src/api/mod.rs'), read('src/api/auth_routes.rs'),
@@ -31,7 +31,7 @@ const [abuseSources, abuseTransaction, abuseVerification, config, envExample, ap
 const abuse = abuseSources.join('\n');
 const api = `${apiRouter}\n${authRoutes}\n${reportRoutes}`;
 const protocol = `${protocolSession}\n${messaging}\n${xmlUtil}`;
-const abusePersistence = await read('src/db/abuse_persistence_repository.rs');
+const abusePersistence = await read('crates/contexts/abuse/northstar-abuse-postgres/src/persistence.rs');
 const { httpPowIntent, xmppPowIntent } = await import(new URL('../web/pow.js', import.meta.url));
 
 const browserIntentVector = await httpPowIntent('/api/v1/register', {
@@ -97,7 +97,7 @@ assert.match(dispatch, /"message"\s*=>\s*self\.message\(root,\s*xml,\s*client_xm
 assert.match(powIntentMigration, /protocol_version SMALLINT NOT NULL DEFAULT 1/);
 assert.match(powIntentMigration, /intent_method[\s\S]*intent_path[\s\S]*body_sha256[\s\S]*server_nonce[\s\S]*issued_at/,
   'durable challenges must store every v2 intent/time/nonce component');
-assert.match(abuseTransaction, /pub\(crate\) async fn verify_in_tx\([\s\S]+abuse_verification_repository::verify_in_tx/,
+assert.match(abuseTransaction, /pub async fn verify_in_tx\([\s\S]+verification::verify_in_tx/,
   'the database adapter must consume v2 proof inside the mutation transaction');
 assert.match(abuseVerification, /pub\(crate\) async fn verify_in_tx\([\s\S]+DELETE FROM abuse_pow_challenges WHERE id=\$1[\s\S]+persist_db_states/,
   'one-use proof deletion and actor-state persistence must share that transaction');
@@ -108,7 +108,7 @@ assert.match(abuse, /persistence: Option<Arc<dyn AbusePersistence>>/,
 // Exclude inline tests per module file, keeping the policy crate's existing scope.
 assert.doesNotMatch(abuseSources.map(source => source.split(/#\[cfg\(test\)\]\s*mod tests\s*\{/)[0]).join('\n'), /self\.pool/,
   'guard operations must not access a PostgreSQL pool directly');
-assert.match(abusePersistence, /struct PostgresAbusePersistence\s*\{\s*pool: PgPool/,
+assert.match(abusePersistence, /struct PostgresAbusePersistence<E>\s*\{\s*pool: PgPool/,
   'the PostgreSQL adapter must own the pool');
 for (const operation of ['issue', 'verify', 'current_requirement', 'record_failure', 'begin_message_admission', 'cleanup']) {
   assert.match(abusePersistence, new RegExp(`fn ${operation}<'a`),
@@ -139,7 +139,7 @@ assert.match(xmppRegistration, /password_work: northstar_security::password_work
 assert.match(xmppRegistration, /\.pool\s*\.begin\(\)/,
   'the complete registration operation must have one repository-owned transaction');
 assert.match(xmppRegistration,
-  /abuse_transaction_repository::verify_in_tx[\s\S]+prepare_registration_with_reservation[\s\S]+create_user_with_invitation_guarded_in_tx_v2/,
+  /northstar_abuse_postgres::transaction::verify_in_tx[\s\S]+prepare_registration_with_reservation[\s\S]+create_user_with_invitation_guarded_in_tx_v2/,
   'XMPP registration must reject invalid body-bound proofs before password derivation');
 assert.match(xmppRegistration, /request\.proof,\s*request\.intent,\s*true,\s*prepared/,
   'XMPP registration must keep proof consumption and account creation in one transaction');
@@ -190,7 +190,7 @@ const repositoryRegistrationGuard = accountRepository.slice(
   accountRepository.indexOf('async fn register('),
 );
 assert.match(repositoryRegistrationGuard,
-  /\.pool\.begin\(\)[\s\S]+resume_idempotency_lease_fence_in_tx[\s\S]+abuse_transaction_repository::verify_in_tx[\s\S]+mark_idempotency_guard_verified_fence_in_tx[\s\S]+transaction\.commit\(\)/,
+  /\.pool\.begin\(\)[\s\S]+resume_idempotency_lease_fence_in_tx[\s\S]+northstar_abuse_postgres::transaction::verify_in_tx[\s\S]+mark_idempotency_guard_verified_fence_in_tx[\s\S]+transaction\.commit\(\)/,
   'the repository must commit proof consumption and the guard marker together');
 assert.match(repositoryRegistrationGuard,
   /DeniedNeedsCommit[\s\S]+abandon_idempotency_lease_fence_in_tx[\s\S]+transaction\.commit\(\)/,
@@ -204,9 +204,9 @@ const accountDeletion = [
   'async fn begin_account_deletion_quiesce_in_tx(',
   'pub(crate) async fn begin_account_deletion_quiesce(',
 ].map(declaration => findRustItem(dbUsers, declaration).text).join('\n');
-assert.match(passwordChange, /change_password_guarded_v2[\s\S]+abuse_transaction_repository::verify_in_tx[\s\S]+apply_password_credentials_in_tx/,
+assert.match(passwordChange, /change_password_guarded_v2[\s\S]+northstar_abuse_postgres::transaction::verify_in_tx[\s\S]+apply_password_credentials_in_tx/,
   'XMPP password proof consumption and credential rotation must share one transaction');
-assert.match(accountDeletion, /begin_account_deletion_quiesce_guarded_v2[\s\S]+abuse_transaction_repository::verify_in_tx[\s\S]+begin_account_deletion_quiesce_in_tx[\s\S]+transaction\.commit/,
+assert.match(accountDeletion, /begin_account_deletion_quiesce_guarded_v2[\s\S]+northstar_abuse_postgres::transaction::verify_in_tx[\s\S]+begin_account_deletion_quiesce_in_tx[\s\S]+transaction\.commit/,
   'account-removal proof consumption and durable account quiesce must share one transaction');
 assert.match(accountDeletion, /begin_account_deletion_quiesce_in_tx[\s\S]+INSERT INTO account_deletion_requests/,
   'a committed account quiesce must create its crash-recovery owner in the same transaction');

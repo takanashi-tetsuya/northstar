@@ -1,6 +1,6 @@
 //! Compose anti-abuse decisions with caller-owned business transactions.
 
-use crate::db::{abuse_actor_state_repository, abuse_verification_repository};
+use crate::{actor_state, verification};
 use anyhow::Result;
 use northstar_abuse_application::guard::{
     AbuseGuard, PersistentVerificationInput, TransactionalGuardOutcome,
@@ -8,7 +8,7 @@ use northstar_abuse_application::guard::{
 use northstar_abuse_policy::{AbuseAction, PowIntent, PowProof, WorkRequirement};
 use sqlx::{Postgres, Transaction};
 
-pub(crate) async fn verify_in_tx(
+pub async fn verify_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     guard: &AbuseGuard,
     action: AbuseAction,
@@ -29,7 +29,7 @@ pub(crate) async fn verify_in_tx(
         proof,
         intent,
     };
-    let result = abuse_verification_repository::verify_in_tx(
+    let result = verification::verify_in_tx(
         tx,
         &keys,
         input.proof.map(|proof| proof.challenge_id),
@@ -44,7 +44,7 @@ pub(crate) async fn verify_in_tx(
     })
 }
 
-pub(crate) async fn current_requirement_in_tx(
+pub async fn current_requirement_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     guard: &AbuseGuard,
     action: AbuseAction,
@@ -55,13 +55,13 @@ pub(crate) async fn current_requirement_in_tx(
         "transactional abuse decisions require persistent storage"
     );
     let keys = guard.persistent_actor_state_keys(action, actors);
-    abuse_actor_state_repository::apply_in_tx(tx, &keys, |states, now| {
+    actor_state::apply_in_tx(tx, &keys, |states, now| {
         guard.current_requirement_decision(action, actors, states, now)
     })
     .await
 }
 
-pub(crate) async fn record_failure_in_tx(
+pub async fn record_failure_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     guard: &AbuseGuard,
     action: AbuseAction,
@@ -72,7 +72,7 @@ pub(crate) async fn record_failure_in_tx(
         "transactional abuse decisions require persistent storage"
     );
     let keys = guard.persistent_actor_state_keys(action, actors);
-    abuse_actor_state_repository::apply_in_tx(tx, &keys, |states, now| {
+    actor_state::apply_in_tx(tx, &keys, |states, now| {
         guard.record_failure_decision(action, actors, states, now)
     })
     .await

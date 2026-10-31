@@ -731,7 +731,7 @@ pub async fn begin_account_deletion_quiesce_guarded_v2(
     expected_auth_generation: i64,
 ) -> Result<std::result::Result<bool, GuardError>> {
     let mut transaction = pool.begin().await?;
-    match crate::db::abuse_transaction_repository::verify_in_tx(
+    match northstar_abuse_postgres::transaction::verify_in_tx(
         &mut transaction,
         abuse,
         AbuseAction::PasswordChange,

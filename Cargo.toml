@@ -3,6 +3,7 @@ members = [
     ".",
     "crates/contexts/abuse/northstar-abuse-application",
     "crates/contexts/abuse/northstar-abuse-policy",
+    "crates/contexts/abuse/northstar-abuse-postgres",
     "crates/kernel/northstar-xep-core",
     "crates/kernel/northstar-xep-catalog",
     "crates/kernel/northstar-xep-0045",
@@ -97,6 +98,7 @@ publish = false
 [dependencies]
 northstar-abuse-application = { path = "crates/contexts/abuse/northstar-abuse-application" }
 northstar-abuse-policy = { path = "crates/contexts/abuse/northstar-abuse-policy" }
+northstar-abuse-postgres = { path = "crates/contexts/abuse/northstar-abuse-postgres" }
 anyhow = "1.0"
 argon2 = "0.5"
 axum = { version = "0.8", features = ["ws", "multipart"] }

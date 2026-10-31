@@ -26,14 +26,11 @@ mod migration_preflight;
 
 pub(crate) use northstar_postgres::MIGRATOR;
 
-pub(crate) mod abuse_actor_state_repository;
-pub(crate) mod abuse_challenge_issuance_repository;
+pub(crate) mod abuse_effects;
 #[cfg(test)]
 mod abuse_guard_tests;
-pub mod abuse_keys;
-pub(crate) mod abuse_persistence_repository;
-pub(crate) mod abuse_transaction_repository;
-pub(crate) mod abuse_verification_repository;
+#[cfg(test)]
+mod abuse_keys_tests;
 pub mod account_deletion;
 pub mod account_repository;
 pub(crate) mod account_revocation_repository;
@@ -51,8 +48,6 @@ pub mod authorization_identity;
 pub(crate) mod background_housekeeping_repository;
 pub mod capacity;
 pub(crate) mod capacity_maintenance_repository;
-pub(crate) mod challenge_cleanup_repository;
-pub(crate) mod challenge_issuance_repository;
 pub(crate) mod cluster_authority_repository;
 pub(crate) mod cluster_instance_release_repository;
 pub mod cluster_keys;
@@ -73,10 +68,9 @@ pub(crate) mod federation_outbox_repository;
 pub mod identity_migration;
 pub mod jid_identity;
 pub(crate) mod locked_muc_expiry_repository;
-pub(crate) mod login_abuse_repository;
 pub(crate) mod maintenance_ownership;
 pub(crate) mod mam;
-pub(crate) mod message_admission_repository;
+mod message_admission_port;
 pub(crate) mod messaging;
 pub(crate) mod metrics_snapshot_repository;
 #[cfg(test)]
@@ -123,7 +117,6 @@ pub(crate) mod sm_teardown_muc_repository;
 pub(crate) mod sm_teardown_presence_repository;
 pub(crate) mod sm_teardown_repository;
 pub mod users;
-pub use abuse_keys::*;
 pub use account_deletion::*;
 pub use admin_commands::*;
 pub use api_control::*;

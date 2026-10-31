@@ -22,7 +22,7 @@
 
 [Coordinator](../../crates/contexts/abuse/northstar-abuse-policy/src/admission_execution.rs)與
 [純交易決策](../../crates/contexts/abuse/northstar-abuse-policy/src/admission_transaction.rs)由正式
-[service](../../src/services/message_admission.rs)及[SQL repository](../../src/db/message_admission_repository.rs)使用。
+[service](../../src/services/message_admission.rs)及[SQL repository](../../crates/contexts/abuse/northstar-abuse-postgres/src/message_admission.rs)使用。
 SQL原有交易、鎖、authority及fence檢查保留。準備中的prospective fence與已確認receipt分開；
 completion不能替換獨立witness，取消可留下Waiting，多個Unknown不能偷用隱藏world消除不確定性。
 Reconcile保留實際返回的effect與as-of，但尚無production runtime consumer。

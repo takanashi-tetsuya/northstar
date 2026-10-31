@@ -169,7 +169,12 @@ impl AppState {
                 message_free_burst: config.abuse_message_free_burst,
                 approximate_max_device_seconds: config.pow_max_device_seconds,
             },
-            Arc::new(db::abuse_persistence_repository::PostgresAbusePersistence::new(pool.clone())),
+            Arc::new(
+                northstar_abuse_postgres::persistence::PostgresAbusePersistence::new(
+                    pool.clone(),
+                    crate::db::abuse_effects::RootAbuseEffects,
+                ),
+            ),
             abuse_state_hmac_key
                 .as_ref()
                 .map(|secret| secret.as_bytes()),
@@ -401,9 +406,13 @@ impl AppState {
         }
 
         if let Some(identity) = &abuse_key_deployment {
-            db::reconcile_abuse_key_deployment(&pool, identity)
-                .await
-                .context("anti-abuse HMAC deployment consistency check failed")?;
+            northstar_abuse_postgres::keys::reconcile_abuse_key_deployment(
+                &pool,
+                identity,
+                &crate::db::abuse_effects::RootAbuseEffects,
+            )
+            .await
+            .context("anti-abuse HMAC deployment consistency check failed")?;
         }
 
         let bosh = config.bosh_enabled.then(|| {
@@ -830,7 +839,7 @@ impl AppState {
         );
         let message_admission_service =
             crate::services::message_admission::MessageAdmissionService::new(
-                db::message_admission_repository::PostgresMessageAdmissionRepository::new(
+                northstar_abuse_postgres::message_admission::PostgresMessageAdmissionRepository::new(
                     Arc::clone(&abuse),
                     pool.clone(),
                 ),
@@ -948,25 +957,25 @@ impl AppState {
             connection_actors,
             challenge_issue_service:
                 northstar_abuse_application::challenge::ChallengeIssueService::new(
-                    db::challenge_issuance_repository::PostgresChallengeRepository::new(
+                    northstar_abuse_postgres::challenge::PostgresChallengeRepository::new(
                         Arc::clone(&abuse),
                     ),
                 ),
             challenge_cleanup_service:
                 northstar_abuse_application::challenge::ChallengeCleanupService::new(
-                    db::challenge_issuance_repository::PostgresChallengeRepository::new(
+                    northstar_abuse_postgres::challenge::PostgresChallengeRepository::new(
                         Arc::clone(&abuse),
                     ),
                 ),
             sasl_login_abuse_service:
                 northstar_abuse_application::login::SaslLoginAbuseService::new(
-                    db::login_abuse_repository::PostgresSaslLoginAbuseRepository::new(Arc::clone(
-                        &abuse,
-                    )),
+                    northstar_abuse_postgres::login::PostgresSaslLoginAbuseRepository::new(
+                        Arc::clone(&abuse),
+                    ),
                 ),
             passkey_login_abuse_service: Arc::new(
                 northstar_abuse_application::login::PasskeyLoginAbuseService::new(
-                    db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository::new(
+                    northstar_abuse_postgres::login::PostgresPasskeyLoginAbuseRepository::new(
                         Arc::clone(&abuse),
                     ),
                 ),

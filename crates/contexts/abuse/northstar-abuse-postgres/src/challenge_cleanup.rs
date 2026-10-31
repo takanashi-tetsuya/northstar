@@ -1,5 +1,6 @@
 //! Bounded PostgreSQL cleanup for durable anti-abuse state.
 
+use crate::effects::AbuseEffects;
 use anyhow::Result;
 use sqlx::PgPool;
 
@@ -7,6 +8,7 @@ use sqlx::PgPool;
 /// boundary. A failed later deletion does not roll back an earlier batch.
 pub(crate) async fn cleanup(
     pool: &PgPool,
+    effects: &impl AbuseEffects,
     issue_window_seconds: u64,
     actor_stale_seconds: u64,
 ) -> Result<()> {
@@ -60,19 +62,5 @@ pub(crate) async fn cleanup(
     .bind(northstar_abuse_policy::MESSAGE_ADMISSION_CLEANUP_BATCH)
     .execute(pool)
     .await?;
-    sqlx::query(
-        "WITH doomed AS (
-            SELECT identity_digest FROM offline_message_admissions
-            WHERE offline_message_id IS NULL
-              AND expires_at IS NOT NULL AND expires_at <= clock_timestamp()
-            ORDER BY expires_at,identity_digest
-            LIMIT $1 FOR UPDATE SKIP LOCKED
-         )
-         DELETE FROM offline_message_admissions AS target
-         USING doomed WHERE target.identity_digest=doomed.identity_digest",
-    )
-    .bind(northstar_abuse_policy::MESSAGE_ADMISSION_CLEANUP_BATCH)
-    .execute(pool)
-    .await?;
-    Ok(())
+    effects.delete_expired_offline_admissions(pool).await
 }

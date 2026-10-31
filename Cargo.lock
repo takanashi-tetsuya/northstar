@@ -1864,6 +1864,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-abuse-postgres"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "northstar-abuse-application",
+ "northstar-abuse-policy",
+ "serde_json",
+ "sqlx",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "northstar-archive-application"
 version = "0.1.0"
 dependencies = [
@@ -3434,6 +3448,7 @@ dependencies = [
  "libc",
  "northstar-abuse-application",
  "northstar-abuse-policy",
+ "northstar-abuse-postgres",
  "northstar-archive-application",
  "northstar-archive-core",
  "northstar-archive-postgres",

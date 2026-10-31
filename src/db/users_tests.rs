@@ -445,7 +445,7 @@ async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_a
         .await
         .unwrap();
 
-    let guard = std::sync::Arc::new(crate::db::abuse_persistence_repository::persistent_guard(
+    let guard = std::sync::Arc::new(crate::db::abuse_effects::persistent_guard(
         AbuseConfig {
             base_work_factor: 2,
             max_work_factor: 64,
@@ -944,7 +944,7 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
     let keyring = Arc::new(
         crate::db::ApiControlKeyring::new(b"password-api-control-test-key-000001", None).unwrap(),
     );
-    let guard = crate::db::abuse_persistence_repository::persistent_guard(
+    let guard = crate::db::abuse_effects::persistent_guard(
         AbuseConfig {
             base_work_factor: 2,
             max_work_factor: 1024,
@@ -991,7 +991,7 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
     );
     let actors = vec![format!("user:{}", user.id)];
     assert!(matches!(
-        crate::db::abuse_transaction_repository::verify_in_tx(
+        northstar_abuse_postgres::transaction::verify_in_tx(
             &mut reserve,
             &guard,
             AbuseAction::PasswordChange,

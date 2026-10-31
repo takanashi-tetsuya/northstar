@@ -1,15 +1,20 @@
 //! The guard over its PostgreSQL adapter, and the tests that need root's other tables.
-use crate::db::abuse_persistence_repository::persistent_guard;
+use crate::db::abuse_effects::persistent_guard;
 use crate::services::message_admission::{begin_command, operation};
 use northstar_abuse_application::guard::test_support::{
     actor_state_keys, message_admission_identity, message_admission_identity_digest,
     message_admission_material, opaque_actor_key,
 };
 use northstar_abuse_application::guard::{
-    AbuseGuard, ChallengeCapacityExceeded, MessageAdmissionStart, TransactionalGuardOutcome,
+    acceptance_fence, AbuseGuard, ChallengeCapacityExceeded, MessageAdmissionAcceptance,
+    MessageAdmissionStart, TransactionalGuardOutcome,
 };
+use northstar_abuse_policy::admission_execution::Command;
+use northstar_abuse_policy::admission_transaction::FinalizeDecision;
 use northstar_abuse_policy::*;
+use northstar_abuse_postgres::message_admission::accept_observed;
 use sha2::{Digest, Sha256};
+use sqlx::PgPool;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -25,6 +30,26 @@ fn test_config() -> AbuseConfig {
         max_wait: Duration::from_secs(900),
         message_free_burst: 6,
         approximate_max_device_seconds: 8,
+    }
+}
+
+/// One acceptance outside the message workflow, as its own operation.
+async fn accept_message_admission(
+    pool: &PgPool,
+    acceptance: &MessageAdmissionAcceptance<'_>,
+) -> anyhow::Result<()> {
+    let (_, witness) = operation(Command::Finalize(acceptance_fence(acceptance)));
+    match accept_observed(pool, acceptance, &witness).await? {
+        FinalizeDecision::AlreadyAccepted | FinalizeDecision::AcceptPending => Ok(()),
+        FinalizeDecision::Missing => {
+            anyhow::bail!("message admission disappeared before acceptance")
+        }
+        FinalizeDecision::PayloadConflict => {
+            anyhow::bail!("message admission payload changed before acceptance")
+        }
+        FinalizeDecision::LostFence => {
+            anyhow::bail!("message admission fencing lease was lost before acceptance")
+        }
     }
 }
 
@@ -158,7 +183,7 @@ async fn postgres_v2_intent_mismatch_consumes_but_rollback_restores_proof() {
     )
     .await;
     let mut mismatch_tx = pool.begin().await.unwrap();
-    let mismatch_result = crate::db::abuse_transaction_repository::verify_in_tx(
+    let mismatch_result = northstar_abuse_postgres::transaction::verify_in_tx(
         &mut mismatch_tx,
         &guard,
         AbuseAction::Report,
@@ -193,7 +218,7 @@ async fn postgres_v2_intent_mismatch_consumes_but_rollback_restores_proof() {
     .await;
     let mut rollback_tx = pool.begin().await.unwrap();
     assert!(matches!(
-        crate::db::abuse_transaction_repository::verify_in_tx(
+        northstar_abuse_postgres::transaction::verify_in_tx(
             &mut rollback_tx,
             &guard,
             AbuseAction::Report,
@@ -216,7 +241,7 @@ async fn postgres_v2_intent_mismatch_consumes_but_rollback_restores_proof() {
 
     let mut commit_tx = pool.begin().await.unwrap();
     assert!(matches!(
-        crate::db::abuse_transaction_repository::verify_in_tx(
+        northstar_abuse_postgres::transaction::verify_in_tx(
             &mut commit_tx,
             &guard,
             AbuseAction::Report,
@@ -249,7 +274,10 @@ async fn postgres_v2_intent_mismatch_consumes_but_rollback_restores_proof() {
     let rotated = AbuseGuard::new_persistent_for_deployment(
         test_config(),
         Arc::new(
-            crate::db::abuse_persistence_repository::PostgresAbusePersistence::new(pool.clone()),
+            northstar_abuse_postgres::persistence::PostgresAbusePersistence::new(
+                pool.clone(),
+                crate::db::abuse_effects::RootAbuseEffects,
+            ),
         ),
         Some(b"postgres-v2-rotated-test-key-at-least-32-bytes"),
         Some(b"postgres-v2-intent-test-key-at-least-32-bytes"),
@@ -495,7 +523,10 @@ async fn postgres_challenges_are_one_use_restart_safe_and_deidentified() {
     let rotated = AbuseGuard::new_persistent_for_deployment(
         config,
         Arc::new(
-            crate::db::abuse_persistence_repository::PostgresAbusePersistence::new(pool.clone()),
+            northstar_abuse_postgres::persistence::PostgresAbusePersistence::new(
+                pool.clone(),
+                crate::db::abuse_effects::RootAbuseEffects,
+            ),
         ),
         Some(new_secret),
         Some(secret),
@@ -588,7 +619,10 @@ async fn postgres_challenges_are_one_use_restart_safe_and_deidentified() {
     let rotated_issue_guard = AbuseGuard::new_persistent_for_deployment(
         config,
         Arc::new(
-            crate::db::abuse_persistence_repository::PostgresAbusePersistence::new(pool.clone()),
+            northstar_abuse_postgres::persistence::PostgresAbusePersistence::new(
+                pool.clone(),
+                crate::db::abuse_effects::RootAbuseEffects,
+            ),
         ),
         Some(new_secret),
         Some(secret),
@@ -1108,20 +1142,12 @@ async fn postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe() {
     .await
     .unwrap();
     assert_eq!(resumed_sequences, sequences);
-    assert!(
-        crate::db::message_admission_repository::accept_message_admission(
-            &pool,
-            &first_lease.acceptance(),
-        )
+    assert!(accept_message_admission(&pool, &first_lease.acceptance(),)
         .await
-        .is_err()
-    );
-    crate::db::message_admission_repository::accept_message_admission(
-        &pool,
-        &takeover_lease.acceptance(),
-    )
-    .await
-    .unwrap();
+        .is_err());
+    accept_message_admission(&pool, &takeover_lease.acceptance())
+        .await
+        .unwrap();
     assert!(matches!(
         restarted
             .begin_message_admission(&MessageAdmissionRequest {
@@ -1315,7 +1341,10 @@ async fn postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe() {
     let rotated = AbuseGuard::new_persistent_for_deployment(
         config,
         Arc::new(
-            crate::db::abuse_persistence_repository::PostgresAbusePersistence::new(pool.clone()),
+            northstar_abuse_postgres::persistence::PostgresAbusePersistence::new(
+                pool.clone(),
+                crate::db::abuse_effects::RootAbuseEffects,
+            ),
         ),
         Some(new_secret),
         Some(old_secret),
@@ -1451,12 +1480,9 @@ async fn postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe() {
         .unwrap(),
         crate::db::OfflineStoreOutcome::Replay
     );
-    crate::db::message_admission_repository::accept_message_admission(
-        &pool,
-        &rotation_lease.acceptance(),
-    )
-    .await
-    .unwrap();
+    accept_message_admission(&pool, &rotation_lease.acceptance())
+        .await
+        .unwrap();
     assert!(matches!(
         restarted
             .begin_message_admission(&rotation_request)

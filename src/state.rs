@@ -317,7 +317,7 @@ pub struct AppState {
     message_service:
         crate::services::messaging::MessageService<db::messaging::PostgresMessageRepository>,
     message_admission_service: crate::services::message_admission::MessageAdmissionService<
-        db::message_admission_repository::PostgresMessageAdmissionRepository,
+        northstar_abuse_postgres::message_admission::PostgresMessageAdmissionRepository,
     >,
     /// XEP-0424/XEP-0444 tombstone, action archive and federation admission
     /// transaction boundary.
@@ -466,17 +466,17 @@ pub struct AppState {
     component_connections: Arc<Semaphore>,
     connection_actors: northstar_runtime::connection_actors::ConnectionActorRegistry,
     challenge_issue_service: northstar_abuse_application::challenge::ChallengeIssueService<
-        db::challenge_issuance_repository::PostgresChallengeRepository,
+        northstar_abuse_postgres::challenge::PostgresChallengeRepository,
     >,
     challenge_cleanup_service: northstar_abuse_application::challenge::ChallengeCleanupService<
-        db::challenge_issuance_repository::PostgresChallengeRepository,
+        northstar_abuse_postgres::challenge::PostgresChallengeRepository,
     >,
     sasl_login_abuse_service: northstar_abuse_application::login::SaslLoginAbuseService<
-        db::login_abuse_repository::PostgresSaslLoginAbuseRepository,
+        northstar_abuse_postgres::login::PostgresSaslLoginAbuseRepository,
     >,
     passkey_login_abuse_service: Arc<
         northstar_abuse_application::login::PasskeyLoginAbuseService<
-            db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository,
+            northstar_abuse_postgres::login::PostgresPasskeyLoginAbuseRepository,
         >,
     >,
     /// Public, irreversible key IDs and the configured generation used by the

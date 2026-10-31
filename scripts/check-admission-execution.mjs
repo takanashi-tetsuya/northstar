@@ -12,9 +12,10 @@ const paths = {
   witness: 'src/services/message_admission/witness.rs',
   frame: 'src/xmpp/frame_execution.rs',
   messaging: 'src/xmpp/protocol/messaging.rs',
-  repository: 'src/db/message_admission_repository.rs',
-  verification: 'src/db/abuse_verification_repository.rs',
-  actor: 'src/db/abuse_actor_state_repository.rs',
+  repository: 'crates/contexts/abuse/northstar-abuse-postgres/src/message_admission.rs',
+  verification: 'crates/contexts/abuse/northstar-abuse-postgres/src/verification.rs',
+  actor: 'crates/contexts/abuse/northstar-abuse-postgres/src/actor_state.rs',
+  commit: 'crates/contexts/abuse/northstar-abuse-postgres/src/commit.rs',
   directWorkflow: 'src/services/messaging/direct_workflow.rs',
   messageService: 'src/services/messaging.rs',
 };
@@ -328,7 +329,7 @@ export function verifyAdmissionBoundaries(sources) {
       `rated commit purpose ${purpose} lost its distinct witness scope`);
   }
   requireAdmission(finalize.includes('TransactionScope::AdmissionFinalize'), 'finalization lost its transaction scope');
-  const commit = compact(body(sources.witness, 'pub\\(crate\\)\\s+async\\s+fn\\s+commit_observed\\b'));
+  const commit = compact(body(sources.commit, 'pub\\(crate\\)\\s+async\\s+fn\\s+commit_observed\\b'));
   requireAdmission(commit === 'letprepared=witness.prepare(scope,fact)?;tx.commit().await?;witness.received(prepared);Ok(())',
     'COMMIT must record caller entry before its sole await and positive receipt synchronously afterward');
   const verify = compact(body(sources.verification, 'pub\\(crate\\)\\s+async\\s+fn\\s+verify\\b'));

@@ -1958,6 +1958,38 @@
         "uuid"
       ],
       [
+        "northstar-abuse-postgres",
+        "anyhow"
+      ],
+      [
+        "northstar-abuse-postgres",
+        "chrono"
+      ],
+      [
+        "northstar-abuse-postgres",
+        "northstar-abuse-application"
+      ],
+      [
+        "northstar-abuse-postgres",
+        "northstar-abuse-policy"
+      ],
+      [
+        "northstar-abuse-postgres",
+        "serde_json"
+      ],
+      [
+        "northstar-abuse-postgres",
+        "sqlx"
+      ],
+      [
+        "northstar-abuse-postgres",
+        "tracing"
+      ],
+      [
+        "northstar-abuse-postgres",
+        "uuid"
+      ],
+      [
         "northstar-archive-application",
         "anyhow"
       ],
@@ -4547,6 +4579,10 @@
       ],
       [
         "rust-xmpp-server",
+        "northstar-abuse-postgres"
+      ],
+      [
+        "rust-xmpp-server",
         "northstar-archive-application"
       ],
       [
@@ -7070,6 +7106,7 @@
       "nom",
       "northstar-abuse-application",
       "northstar-abuse-policy",
+      "northstar-abuse-postgres",
       "northstar-archive-application",
       "northstar-archive-core",
       "northstar-archive-postgres",

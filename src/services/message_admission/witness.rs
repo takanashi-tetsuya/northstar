@@ -12,7 +12,6 @@ use northstar_message_application::{
     direct_commit, direct_handoff, direct_lifecycle::PreparationAdmission,
 };
 use northstar_message_core::DirectPersonalMessageAdmission;
-use sqlx::{Postgres, Transaction};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -283,20 +282,6 @@ impl AdmissionCommitObserver for AdmissionWitness {
                 .expect("prevalidated retained admission receipt"),
         }
     }
-}
-
-pub(crate) async fn commit_observed(
-    tx: Transaction<'_, Postgres>,
-    witness: &dyn AdmissionCommitObserver,
-    scope: TransactionScope,
-    fact: CommitFact,
-) -> anyhow::Result<()> {
-    // Call boundary entered: this does NOT prove PostgreSQL received COMMIT.
-    let prepared = witness.prepare(scope, fact)?;
-    tx.commit().await?;
-    // No await, logging or caller continuation before this positive fact.
-    witness.received(prepared);
-    Ok(())
 }
 
 #[cfg(test)]

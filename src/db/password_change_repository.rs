@@ -148,7 +148,7 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
             format!("behavior:{}", user.id),
         ];
         if !lease.guard_verified {
-            match db::abuse_transaction_repository::verify_in_tx(
+            match northstar_abuse_postgres::transaction::verify_in_tx(
                 &mut reserve_tx,
                 &self.abuse,
                 AbuseAction::PasswordChange,
@@ -290,7 +290,7 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
                 db::bind_idempotency_actor_in_tx(&mut tx, &lease, user.id).await?,
                 "password-change failure ownership changed"
             );
-            db::abuse_transaction_repository::record_failure_in_tx(
+            northstar_abuse_postgres::transaction::record_failure_in_tx(
                 &mut tx,
                 &self.abuse,
                 AbuseAction::PasswordChange,
@@ -442,7 +442,7 @@ mod tests {
         let keyring = Arc::new(
             db::ApiControlKeyring::new(b"password-service-test-control-key-00001", None).unwrap(),
         );
-        let guard = Arc::new(crate::db::abuse_persistence_repository::persistent_guard(
+        let guard = Arc::new(crate::db::abuse_effects::persistent_guard(
             AbuseConfig {
                 base_work_factor: 2,
                 max_work_factor: 64,

@@ -210,7 +210,7 @@ pub(super) async fn create_user_with_invitation_guarded_in_tx_bound(
     request_id: Option<Uuid>,
 ) -> Result<GuardedRegistrationOutcome> {
     if !guard_already_verified {
-        let decision = crate::db::abuse_transaction_repository::verify_in_tx(
+        let decision = northstar_abuse_postgres::transaction::verify_in_tx(
             tx,
             abuse,
             AbuseAction::Registration,

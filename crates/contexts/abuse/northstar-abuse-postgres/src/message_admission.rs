@@ -1,11 +1,6 @@
 //! PostgreSQL-backed adapter for exact rated-message proof admission leases.
-use crate::{
-    db::{abuse_actor_state_repository, abuse_verification_repository},
-    services::message_admission::{
-        witness::{commit_observed, AdmissionWitness},
-        MessageAdmissionRepository,
-    },
-};
+use crate::commit::commit_observed;
+use crate::{actor_state, verification};
 use anyhow::Result;
 use northstar_abuse_application::guard::{
     acceptance_fence, AbuseGuard, MessageAdmissionAcceptance, MessageAdmissionCandidate,
@@ -27,13 +22,13 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresMessageAdmissionRepository {
+pub struct PostgresMessageAdmissionRepository {
     guard: Arc<AbuseGuard>,
     pool: PgPool,
 }
 
 impl PostgresMessageAdmissionRepository {
-    pub(crate) fn new(guard: Arc<AbuseGuard>, pool: PgPool) -> Self {
+    pub fn new(guard: Arc<AbuseGuard>, pool: PgPool) -> Self {
         Self { guard, pool }
     }
 }
@@ -116,16 +111,15 @@ pub(crate) async fn begin_message_admission(
         BeginRowDecision::InProgress {
             retry_after_seconds,
         } => {
-            let mut requirement =
-                abuse_actor_state_repository::apply_in_tx(&mut tx, &state_keys, |states, now| {
-                    guard.current_requirement_decision(
-                        AbuseAction::Message,
-                        request.actors,
-                        states,
-                        now,
-                    )
-                })
-                .await?;
+            let mut requirement = actor_state::apply_in_tx(&mut tx, &state_keys, |states, now| {
+                guard.current_requirement_decision(
+                    AbuseAction::Message,
+                    request.actors,
+                    states,
+                    now,
+                )
+            })
+            .await?;
             requirement.retry_after_seconds =
                 requirement.retry_after_seconds.max(retry_after_seconds);
             commit_observed(
@@ -151,16 +145,15 @@ pub(crate) async fn begin_message_admission(
             .bind(now)
             .execute(&mut *tx)
             .await?;
-            let requirement =
-                abuse_actor_state_repository::apply_in_tx(&mut tx, &state_keys, |states, now| {
-                    guard.current_requirement_decision(
-                        AbuseAction::Message,
-                        request.actors,
-                        states,
-                        now,
-                    )
-                })
-                .await?;
+            let requirement = actor_state::apply_in_tx(&mut tx, &state_keys, |states, now| {
+                guard.current_requirement_decision(
+                    AbuseAction::Message,
+                    request.actors,
+                    states,
+                    now,
+                )
+            })
+            .await?;
             let fence = AdmissionFence {
                 admission_key: row.admission_key.clone(),
                 payload_mac: row.payload_mac.clone(),
@@ -191,7 +184,7 @@ pub(crate) async fn begin_message_admission(
         "/xmpp/message",
         request.pow_intent_payload.as_bytes(),
     );
-    let guard_outcome = abuse_verification_repository::verify_in_tx(
+    let guard_outcome = verification::verify_in_tx(
         &mut tx,
         &state_keys,
         request.proof.map(|proof| proof.challenge_id),
@@ -330,7 +323,7 @@ fn admission_row(row: &sqlx::postgres::PgRow) -> Result<AdmissionRow> {
 }
 
 /// Independent finalization. Accepted identity precedes token comparison.
-async fn accept_observed(
+pub async fn accept_observed(
     pool: &PgPool,
     acceptance: &MessageAdmissionAcceptance<'_>,
     witness: &dyn AdmissionCommitObserver,
@@ -384,48 +377,24 @@ async fn accept_observed(
     Ok(result)
 }
 
-#[cfg(test)]
-pub(crate) async fn accept_message_admission(
-    pool: &PgPool,
-    acceptance: &MessageAdmissionAcceptance<'_>,
-) -> Result<()> {
-    let (_, witness) = crate::services::message_admission::operation(
-        northstar_abuse_policy::admission_execution::Command::Finalize(acceptance_fence(
-            acceptance,
-        )),
-    );
-    match accept_observed(pool, acceptance, &witness).await? {
-        FinalizeDecision::AlreadyAccepted | FinalizeDecision::AcceptPending => Ok(()),
-        FinalizeDecision::Missing => {
-            anyhow::bail!("message admission disappeared before acceptance")
-        }
-        FinalizeDecision::PayloadConflict => {
-            anyhow::bail!("message admission payload changed before acceptance")
-        }
-        FinalizeDecision::LostFence => {
-            anyhow::bail!("message admission fencing lease was lost before acceptance")
-        }
-    }
-}
-
-impl MessageAdmissionRepository for PostgresMessageAdmissionRepository {
-    async fn begin(
+impl PostgresMessageAdmissionRepository {
+    pub async fn begin(
         &self,
         request: &MessageAdmissionRequest<'_>,
-        witness: &AdmissionWitness,
+        witness: &dyn AdmissionCommitObserver,
     ) -> Result<MessageAdmissionStart> {
         self.guard
             .begin_message_admission_observed(request, witness)
             .await
     }
-    async fn accept(
+    pub async fn accept(
         &self,
         acceptance: &MessageAdmissionAcceptance<'_>,
-        witness: &AdmissionWitness,
+        witness: &dyn AdmissionCommitObserver,
     ) -> Result<FinalizeDecision> {
         accept_observed(&self.pool, acceptance, witness).await
     }
-    async fn reconcile(&self, effect: &Effect) -> Result<ReconcileResult> {
+    pub async fn reconcile(&self, effect: &Effect) -> Result<ReconcileResult> {
         let Command::Reconcile { fence, .. } = &effect.command else {
             anyhow::bail!("admission reconciliation requires a reconcile effect");
         };

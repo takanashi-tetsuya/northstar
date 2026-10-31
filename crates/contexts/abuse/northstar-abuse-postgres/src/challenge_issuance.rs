@@ -1,6 +1,6 @@
 //! Atomic issuance-window, capacity, actor-state, and challenge persistence.
 
-use crate::db::abuse_actor_state_repository::{lock_db_states, persist_db_states};
+use crate::actor_state::{lock_db_states, persist_db_states};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_abuse_application::guard::records::{DbActorState, IssueRecord, IssueRequest};

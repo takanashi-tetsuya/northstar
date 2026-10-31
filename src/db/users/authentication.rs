@@ -710,7 +710,7 @@ pub async fn change_password_guarded_v2(
         .map_err(anyhow::Error::from)
         .context("password-change work admission failed")?;
     let mut tx = pool.begin().await?;
-    match crate::db::abuse_transaction_repository::verify_in_tx(
+    match northstar_abuse_postgres::transaction::verify_in_tx(
         &mut tx,
         abuse,
         AbuseAction::PasswordChange,

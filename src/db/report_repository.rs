@@ -56,7 +56,7 @@ impl PostgresReportRepository {
         let rejection = match acquired {
             db::IdempotencyAcquire::Acquired(lease) => {
                 if !lease.guard_verified {
-                    match db::abuse_transaction_repository::verify_in_tx(
+                    match northstar_abuse_postgres::transaction::verify_in_tx(
                         &mut tx,
                         &self.abuse,
                         action,

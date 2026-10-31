@@ -2963,7 +2963,7 @@ for (const ownerIdentityInvariant of [
 if (!/pg_catalog\.md5\s*\(\s*stanza_id\s*\)/.test(retractionOwnerIdentityMigration)) {
   throw new Error('retraction target index must use a bounded stanza-id bucket');
 }
-if (!/owner_projection_key_id\s*=\s*\$1/.test(read('src/db/abuse_keys.rs'))) {
+if (!/owner_projection_key_id\s*=\s*\$1/.test(read('src/db/abuse_effects.rs'))) {
   throw new Error('anti-abuse key retirement lost owner-topology references');
 }
 
@@ -3137,7 +3137,7 @@ for (const keyedColumn of ['semantic_key_id', 'semantic_mac']) {
 if (/\b(?:semantic_sha256|semantic_sha512|semantic_length)\b/.test(retractionIntentInsertColumns)) {
   throw new Error('new retraction intent writes must never use legacy semantic evidence columns');
 }
-const abuseKeyRepositorySource = read('src/db/abuse_keys.rs');
+const abuseKeyRepositorySource = read('src/db/abuse_effects.rs');
 for (const retirementReference of [
   'FROM personal_message_admissions',
   'WHERE payload_key_id=$1',

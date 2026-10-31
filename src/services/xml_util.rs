@@ -274,6 +274,7 @@ pub(crate) fn sm_failed(condition: &str) -> String {
 }
 
 /// Validate and prepare an RFC 7622 bare JID.
+#[cfg(test)]
 pub(crate) fn valid_bare_jid(value: &str) -> bool {
     northstar_xmpp_types::jid::CanonicalJid::parse_bare(value).is_ok()
 }

@@ -679,8 +679,8 @@
       "id": "visibility",
       "title": "Roster, presence, privacy and blocking",
       "production_owner": {
-        "path": "src/services/roster.rs",
-        "anchor": "pub(crate) struct RosterService<R> {"
+        "path": "crates/contexts/roster/northstar-roster-application/src/service.rs",
+        "anchor": "pub struct RosterService<R> {"
       },
       "runtime_identities": [
         {
@@ -725,8 +725,8 @@
       "budgets": {
         "contract": "Existing bounded gate capacity and transport limits.",
         "source": {
-          "path": "src/services/roster.rs",
-          "anchor": "pub(crate) struct RosterService<R> {"
+          "path": "crates/contexts/roster/northstar-roster-application/src/service.rs",
+          "anchor": "pub struct RosterService<R> {"
         }
       },
       "experiments": [
@@ -734,9 +734,9 @@
           "id": "visibility-regression",
           "level": "deterministic_unit",
           "status": "declared",
-          "command": "cargo test --locked --bin rust-xmpp-server services::roster",
+          "command": "cargo test --locked -p northstar-roster-application service::",
           "test": {
-            "path": "src/services/roster.rs",
+            "path": "crates/contexts/roster/northstar-roster-application/src/service.rs",
             "anchor": "fn represented_versions_are_not_replayed_and_overflow_fails_closed() {"
           },
           "assertions": [

@@ -5,6 +5,7 @@
 
 pub mod blocking;
 pub mod privacy;
+pub mod roster;
 
 use northstar_roster_core::PresenceAccount;
 

@@ -2,10 +2,10 @@
 //! claim token and worker identity fences.
 
 use crate::db;
-use crate::services::admin_session_cleanup_worker::{
+use anyhow::Result;
+use northstar_operations_application::admin_session_cleanup_worker::{
     AdminSessionCleanupLease, AdminSessionCleanupRepository,
 };
-use anyhow::Result;
 use sqlx::PgPool;
 use uuid::Uuid;
 

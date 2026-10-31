@@ -1,7 +1,8 @@
 //! Authorized query transactions for REST snapshots and collections.
-use crate::{db, services::api_queries::*};
+use crate::db;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use northstar_operations_application::api_queries::*;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 

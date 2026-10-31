@@ -2,11 +2,11 @@ use crate::api::contexts::GovernanceContext;
 use crate::api::error::AppError;
 use crate::api::idempotency::{mutation_rejection, stored_api_response};
 use crate::api::*;
-use crate::services::{
-    governance::*,
-    retention_policy::{RetentionMutationAdmission, RetentionPolicyError, UserRetentionPolicy},
-};
 use axum::{extract::State, http::HeaderMap, response::Response, Json};
+use northstar_operations_application::governance::*;
+use northstar_operations_application::retention_policy::{
+    RetentionMutationAdmission, RetentionPolicyError, UserRetentionPolicy,
+};
 use northstar_operations_core::api_mutations::{
     AdminMutationAdmission, ApiMutationOutcome, ApiPrincipalKind, StoredApiResponse,
 };

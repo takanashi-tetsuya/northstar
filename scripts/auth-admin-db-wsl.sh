@@ -100,9 +100,9 @@ if [[ "$scope" == "all" || "$scope" == "fast" ]]; then
 fi
 if [[ "$scope" == "all" || "$scope" == "commands" ]]; then
   run_exact_ignored \
-    services::admin_commands::read_authorization_tests::admin_read_snapshot_blocks_post_authorization_demotion_until_commit
+    db::admin_read_authorization_tests::admin_read_snapshot_blocks_post_authorization_demotion_until_commit
   run_exact_ignored \
-    services::admin_commands::read_authorization_tests::admin_reads_reject_demotion_and_rotation_that_win_the_authorization_race
+    db::admin_read_authorization_tests::admin_reads_reject_demotion_and_rotation_that_win_the_authorization_race
   run_exact_ignored \
     xmpp::protocol::commands::tests::postgres_command_sessions_are_cross_node_atomic
 fi

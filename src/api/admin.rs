@@ -11,7 +11,7 @@ pub async fn admin_stats(
     State(state): State<crate::api::contexts::ApiQueryContext>,
     actor: ApiAdmin,
 ) -> Result<Json<Value>, AppError> {
-    let crate::services::api_queries::AdminStatistics {
+    let northstar_operations_application::api_queries::AdminStatistics {
         users,
         archived,
         offline,
@@ -27,7 +27,7 @@ pub async fn admin_stats(
         .statistics(actor.read_authority(), || state.live_statistics())
         .await?
         .ok_or(AppError::Forbidden)?;
-    let crate::services::api_queries::LiveAdminStats {
+    let northstar_operations_application::api_queries::LiveAdminStats {
         island_mode,
         registration_open,
         online_sessions,

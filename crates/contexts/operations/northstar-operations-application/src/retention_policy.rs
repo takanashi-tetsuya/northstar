@@ -33,19 +33,19 @@ pub enum RetentionPolicyError {
     Internal(#[source] anyhow::Error),
 }
 
-pub(crate) fn effective_days(value: Option<i32>, global: i64) -> i64 {
+pub fn effective_days(value: Option<i32>, global: i64) -> i64 {
     value
         .map(i64::from)
         .unwrap_or_else(|| if global == 0 { i64::MAX } else { global })
 }
 
-pub(crate) fn valid_requested_days(value: Option<i32>, global: i64, minimum: i32) -> bool {
+pub fn valid_requested_days(value: Option<i32>, global: i64, minimum: i32) -> bool {
     value.is_none_or(|days| {
         days >= minimum && days <= 36_500 && (global == 0 || i64::from(days) <= global)
     })
 }
 
-pub(crate) fn policy_does_not_extend(
+pub fn policy_does_not_extend(
     old: UserRetentionPolicy,
     new: UserRetentionPolicy,
     limits: RetentionPolicyLimits,
@@ -63,12 +63,12 @@ pub(crate) fn policy_does_not_extend(
         )
 }
 
-pub(crate) struct RetentionMutationAdmission<'a> {
-    pub(crate) session_token: &'a str,
-    pub(crate) idempotency: IdempotencyRequest<'a>,
+pub struct RetentionMutationAdmission<'a> {
+    pub session_token: &'a str,
+    pub idempotency: IdempotencyRequest<'a>,
 }
 
-pub(crate) trait RetentionPolicyRepository: Send + Sync {
+pub trait RetentionPolicyRepository: Send + Sync {
     fn user_policy(
         &self,
         session_token: &str,
@@ -98,14 +98,14 @@ pub(crate) trait RetentionPolicyRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct RetentionPolicyService<R> {
+pub struct RetentionPolicyService<R> {
     repository: R,
     limits: RetentionPolicyLimits,
     muc_limit_days: i64,
 }
 
 impl<R: RetentionPolicyRepository> RetentionPolicyService<R> {
-    pub(crate) fn new(repository: R, limits: RetentionPolicyLimits, muc_limit_days: i64) -> Self {
+    pub fn new(repository: R, limits: RetentionPolicyLimits, muc_limit_days: i64) -> Self {
         Self {
             repository,
             limits,
@@ -113,22 +113,22 @@ impl<R: RetentionPolicyRepository> RetentionPolicyService<R> {
         }
     }
 
-    pub(crate) fn limits(&self) -> RetentionPolicyLimits {
+    pub fn limits(&self) -> RetentionPolicyLimits {
         self.limits
     }
 
-    pub(crate) fn muc_limit_days(&self) -> i64 {
+    pub fn muc_limit_days(&self) -> i64 {
         self.muc_limit_days
     }
 
-    pub(crate) async fn user_policy(
+    pub async fn user_policy(
         &self,
         session_token: &str,
     ) -> Result<UserRetentionPolicy, RetentionPolicyError> {
         self.repository.user_policy(session_token).await
     }
 
-    pub(crate) async fn muc_policy(
+    pub async fn muc_policy(
         &self,
         session_token: &str,
         room_id: Uuid,
@@ -136,7 +136,7 @@ impl<R: RetentionPolicyRepository> RetentionPolicyService<R> {
         self.repository.muc_policy(session_token, room_id).await
     }
 
-    pub(crate) async fn set_user_policy(
+    pub async fn set_user_policy(
         &self,
         admission: RetentionMutationAdmission<'_>,
         requested: UserRetentionPolicy,
@@ -146,7 +146,7 @@ impl<R: RetentionPolicyRepository> RetentionPolicyService<R> {
             .await
     }
 
-    pub(crate) async fn set_muc_policy(
+    pub async fn set_muc_policy(
         &self,
         admission: RetentionMutationAdmission<'_>,
         room_id: Uuid,

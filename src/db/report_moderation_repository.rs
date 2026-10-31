@@ -1,12 +1,10 @@
 //! Atomic moderation decisions, audit records and idempotent responses.
-use crate::{
-    db::{
-        self,
-        admin_mutations::{AdminMutationStart, AdminMutationStore},
-    },
-    services::report_moderation::*,
+use crate::db::{
+    self,
+    admin_mutations::{AdminMutationStart, AdminMutationStore},
 };
 use anyhow::Result;
+use northstar_operations_application::report_moderation::*;
 use northstar_operations_core::api_mutations::*;
 
 #[derive(Clone)]

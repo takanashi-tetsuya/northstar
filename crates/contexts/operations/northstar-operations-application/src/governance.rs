@@ -8,7 +8,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 pub const GOVERNANCE_EXPORT_LEASE_SECONDS: i64 = 15 * 60;
-pub(crate) const GOVERNANCE_EXPORT_REPLAY_MAX_BYTES: usize = 1024 * 1024;
+pub const GOVERNANCE_EXPORT_REPLAY_MAX_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "id")]
@@ -142,7 +142,7 @@ pub struct LegalHoldExport {
 }
 
 #[derive(Debug)]
-pub(crate) enum GovernanceError {
+pub enum GovernanceError {
     Hold(LegalHoldError),
     InvalidCursor,
     BadRequest(&'static str),
@@ -150,37 +150,37 @@ pub(crate) enum GovernanceError {
 }
 
 #[derive(Debug)]
-pub(crate) struct GovernanceFailure {
-    pub(crate) error: GovernanceError,
-    pub(crate) operation_failed: bool,
-    pub(crate) cursor_rejected: bool,
+pub struct GovernanceFailure {
+    pub error: GovernanceError,
+    pub operation_failed: bool,
+    pub cursor_rejected: bool,
 }
 impl GovernanceFailure {
-    pub(crate) fn quiet(error: GovernanceError) -> Self {
+    pub fn quiet(error: GovernanceError) -> Self {
         Self {
             error,
             operation_failed: false,
             cursor_rejected: false,
         }
     }
-    pub(crate) fn internal(error: impl Into<anyhow::Error>) -> Self {
+    pub fn internal(error: impl Into<anyhow::Error>) -> Self {
         Self::quiet(GovernanceError::Internal(error.into()))
     }
-    pub(crate) fn hold(error: LegalHoldError) -> Self {
+    pub fn hold(error: LegalHoldError) -> Self {
         Self::quiet(GovernanceError::Hold(error))
     }
-    pub(crate) fn operation(mut self) -> Self {
+    pub fn operation(mut self) -> Self {
         self.operation_failed = true;
         self
     }
-    pub(crate) fn rejected_cursor() -> Self {
+    pub fn rejected_cursor() -> Self {
         Self {
             error: GovernanceError::InvalidCursor,
             operation_failed: false,
             cursor_rejected: true,
         }
     }
-    pub(crate) fn export(error: LegalHoldError) -> Self {
+    pub fn export(error: LegalHoldError) -> Self {
         let cursor_rejected = matches!(&error, LegalHoldError::InvalidCursor);
         Self {
             error: GovernanceError::Hold(error),
@@ -190,7 +190,7 @@ impl GovernanceFailure {
     }
 }
 
-pub(crate) fn ensure_governance_export_size(bytes: &[u8]) -> Result<(), GovernanceFailure> {
+pub fn ensure_governance_export_size(bytes: &[u8]) -> Result<(), GovernanceFailure> {
     if bytes.len() > GOVERNANCE_EXPORT_REPLAY_MAX_BYTES {
         return Err(GovernanceFailure::quiet(GovernanceError::BadRequest(
             "governance export exceeds the 1 MiB idempotent replay bound; reduce max_rows",
@@ -199,30 +199,30 @@ pub(crate) fn ensure_governance_export_size(bytes: &[u8]) -> Result<(), Governan
     Ok(())
 }
 
-pub(crate) struct CreateHoldCommand<'a> {
-    pub(crate) admission: AdminMutationAdmission<'a>,
-    pub(crate) title: &'a str,
-    pub(crate) authority_reference: &'a str,
-    pub(crate) reason: &'a str,
-    pub(crate) targets: &'a [LegalHoldTarget],
+pub struct CreateHoldCommand<'a> {
+    pub admission: AdminMutationAdmission<'a>,
+    pub title: &'a str,
+    pub authority_reference: &'a str,
+    pub reason: &'a str,
+    pub targets: &'a [LegalHoldTarget],
 }
-pub(crate) struct HoldExportCommand<'a> {
-    pub(crate) admission: AdminMutationAdmission<'a>,
-    pub(crate) hold_id: Uuid,
-    pub(crate) max_rows: i64,
-    pub(crate) cursor: Option<&'a str>,
+pub struct HoldExportCommand<'a> {
+    pub admission: AdminMutationAdmission<'a>,
+    pub hold_id: Uuid,
+    pub max_rows: i64,
+    pub cursor: Option<&'a str>,
 }
-pub(crate) struct AuditExportCommand<'a> {
-    pub(crate) admission: AdminMutationAdmission<'a>,
-    pub(crate) start: Option<DateTime<Utc>>,
-    pub(crate) end: Option<DateTime<Utc>>,
-    pub(crate) max_rows: i64,
-    pub(crate) cursor: Option<&'a str>,
+pub struct AuditExportCommand<'a> {
+    pub admission: AdminMutationAdmission<'a>,
+    pub start: Option<DateTime<Utc>>,
+    pub end: Option<DateTime<Utc>>,
+    pub max_rows: i64,
+    pub cursor: Option<&'a str>,
 }
 
 /// Encodes only governance continuations. Verification receives the database
 /// clock from the transaction already owning the export request.
-pub(crate) trait GovernanceCursorCodec: Send + Sync {
+pub trait GovernanceCursorCodec: Send + Sync {
     fn decode_hold(
         &self,
         actor: Uuid,
@@ -252,7 +252,7 @@ pub(crate) trait GovernanceCursorCodec: Send + Sync {
     ) -> Result<Option<String>, GovernanceFailure>;
 }
 
-pub(crate) trait GovernanceRepository: Send + Sync {
+pub trait GovernanceRepository: Send + Sync {
     fn list_holds(
         &self,
         actor: ApiReadAuthority<'_>,
@@ -289,14 +289,14 @@ pub(crate) trait GovernanceRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct GovernanceService<R> {
+pub struct GovernanceService<R> {
     repository: R,
 }
 impl<R: GovernanceRepository> GovernanceService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
-    pub(crate) async fn list_holds(
+    pub async fn list_holds(
         &self,
         actor: ApiReadAuthority<'_>,
         active_only: bool,
@@ -307,13 +307,13 @@ impl<R: GovernanceRepository> GovernanceService<R> {
             .list_holds(actor, active_only, limit, access_key_sha256)
             .await
     }
-    pub(crate) async fn create_hold(
+    pub async fn create_hold(
         &self,
         command: CreateHoldCommand<'_>,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>, GovernanceFailure> {
         self.repository.create_hold(command).await
     }
-    pub(crate) async fn release_hold(
+    pub async fn release_hold(
         &self,
         admission: AdminMutationAdmission<'_>,
         id: Uuid,
@@ -321,13 +321,13 @@ impl<R: GovernanceRepository> GovernanceService<R> {
     ) -> Result<ApiMutationOutcome<StoredApiResponse>, GovernanceFailure> {
         self.repository.release_hold(admission, id, reason).await
     }
-    pub(crate) async fn export_hold(
+    pub async fn export_hold(
         &self,
         command: HoldExportCommand<'_>,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>, GovernanceFailure> {
         self.repository.export_hold(command).await
     }
-    pub(crate) async fn export_audit(
+    pub async fn export_audit(
         &self,
         command: AuditExportCommand<'_>,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>, GovernanceFailure> {

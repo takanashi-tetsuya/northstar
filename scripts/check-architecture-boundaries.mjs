@@ -2326,7 +2326,7 @@ for (const [name, source] of [
   ['PresenceService', read('crates/contexts/roster/northstar-roster-application/src/presence.rs')],
   ['ReplayService', read('src/services/replay.rs')],
   ['AccountService', accountServiceSource],
-  ['AdminCommandService', read('src/services/admin_commands.rs')],
+  ['AdminCommandService', read('crates/contexts/operations/northstar-operations-application/src/admin_commands.rs')],
   ['AuthenticationService', authenticationServiceSource],
   ['RetractionService', read('src/services/retractions.rs')],
   ['SmService', read('src/services/sm.rs')],
@@ -2342,25 +2342,25 @@ for (const [name, source] of [
   ['CapacityMaintenanceWorkers', read('src/runtime/capacity_maintenance.rs')],
   ['SmSuspensionContext', read('src/state/suspension.rs')],
   ['SmSuspensionRepository', read('src/services/sm_suspension.rs')],
-  ['ApiQueryService', read('src/services/api_queries.rs')],
+  ['ApiQueryService', read('crates/contexts/operations/northstar-operations-application/src/api_queries.rs')],
   ['ApiQueryContext', read('src/api/contexts/api_queries.rs')],
   ['HTTP entry and public discovery policies', read('src/api/contexts/http_policy.rs')],
   ['API mutation values', read('crates/contexts/operations/northstar-operations-core/src/api_mutations.rs')],
-  ['ReportService', read('src/services/reports.rs')],
+  ['ReportService', read('crates/contexts/operations/northstar-operations-application/src/reports.rs')],
   ['ReportContext', read('src/api/contexts/reports.rs')],
   ['AccountAdminServices', read('crates/contexts/auth/northstar-auth-application/src/account_admin.rs')],
   ['AccountAdminRuntime', read('src/state/account_admin.rs')],
-  ['OperationAdminService', read('src/services/operations.rs')],
-  ['AdminDispatchService', read('src/services/admin_dispatch.rs')],
-  ['GovernanceService', read('src/services/governance.rs')],
+  ['OperationAdminService', read('crates/contexts/operations/northstar-operations-application/src/operations.rs')],
+  ['AdminDispatchService', read('crates/contexts/operations/northstar-operations-application/src/admin_dispatch.rs')],
+  ['GovernanceService', read('crates/contexts/operations/northstar-operations-application/src/governance.rs')],
   ['GovernanceContext', read('src/api/contexts/governance.rs')],
-  ['MetricsSnapshotService', read('src/services/metrics_snapshot.rs')],
+  ['MetricsSnapshotService', read('crates/contexts/operations/northstar-operations-application/src/metrics_snapshot.rs')],
   ['FederationOutboxService', read('src/services/federation_outbox.rs')],
   ['TlsContext', readProductionModule('crates/platform/northstar-security/src/tls.rs', { root })],
-  ['UploadAdminService', read('src/services/upload_admin.rs')],
-  ['ReportModerationService', read('src/services/report_moderation.rs')],
+  ['UploadAdminService', read('crates/contexts/operations/northstar-operations-application/src/upload_admin.rs')],
+  ['ReportModerationService', read('crates/contexts/operations/northstar-operations-application/src/report_moderation.rs')],
   ['InvitationAdminService', read('crates/contexts/auth/northstar-auth-application/src/invitation_admin.rs')],
-  ['RetentionPolicyService', read('src/services/retention_policy.rs')],
+  ['RetentionPolicyService', read('crates/contexts/operations/northstar-operations-application/src/retention_policy.rs')],
   ['RetentionPolicyContext', read('src/api/contexts/retention_policy.rs')],
   ['OmemoRecoveryService', read('src/services/omemo_recovery.rs')],
   ['OmemoRecoveryPollContext', read('src/api/contexts/omemo_poll.rs')],
@@ -2395,11 +2395,11 @@ for (const [path, name] of [
   }
 }
 const adminSessionRoute = structBody(read('src/api/admin.rs'), 'pub async fn admin_sessions(');
-const adminSessionService = structBody(read('src/services/api_queries.rs'), 'pub(crate) async fn sessions<F>(');
+const adminSessionService = structBody(read('crates/contexts/operations/northstar-operations-application/src/api_queries.rs'), 'pub async fn sessions<F>(');
 const adminSessionRepository = structBody(read('src/db/api_queries.rs'), 'async fn sessions<F>(');
 if (/\b(?:sort_unstable_by_key|retain|truncate)\b/.test(adminSessionRoute)
     || !adminSessionService.includes('page_sessions(snapshot(), after, limit)')
-    || !structBody(read('src/services/api_queries.rs'), 'fn page_sessions(').includes('sort_unstable_by_key')) {
+    || !structBody(read('crates/contexts/operations/northstar-operations-application/src/api_queries.rs'), 'fn page_sessions(').includes('sort_unstable_by_key')) {
   throw new Error('administrator session page selection must belong to the application service');
 }
 const sessionAuthorization = adminSessionRepository.indexOf('begin_authorized_read(&actor, true)');
@@ -3645,8 +3645,8 @@ if ([mucOutcome, mucAckTurn, mucAck, mucAckFence, mucDeliveryMetric,
   throw new Error('cluster MUC outbox settlement lost exact ACK, retry, database-turn or metric ordering');
 }
 const operationRuntimeOwnershipSource = read('src/runtime/operation_runtime.rs');
-const mucDestroyServiceSource = read('src/services/operation_muc_destroy.rs');
-const mucDestroyEffect = structBody(mucDestroyServiceSource, 'pub(crate) struct MucDestroyEffect');
+const mucDestroyServiceSource = read('crates/contexts/operations/northstar-operations-application/src/operation_muc_destroy.rs');
+const mucDestroyEffect = structBody(mucDestroyServiceSource, 'pub struct MucDestroyEffect');
 if (/\blocal_domain\b/.test(mucDestroyEffect)
     || !mucDestroyServiceSource.includes('jid.domainpart() == format!("conference.{}", self.local_domain)')
     || !state.includes('config.domain.clone(),')) {

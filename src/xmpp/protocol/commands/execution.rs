@@ -125,7 +125,7 @@ pub(super) async fn execute_list_command(
 pub(super) async fn execute_form_command(
     session: &ProtocolSession,
     actor: &AdminActor,
-    claim: &crate::services::admin_commands::AdminExecutionClaim,
+    claim: &northstar_operations_application::admin_commands::AdminExecutionClaim,
     node: &str,
     submission: Submission,
 ) -> Result<Option<String>> {

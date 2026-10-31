@@ -1,0 +1,27 @@
+[package]
+name = "northstar-operations-application"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Application services of Northstar administration, reporting, governance and the operation journal."
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
+northstar-archive-core = { path = "../../archive/northstar-archive-core" }
+northstar-auth-core = { path = "../../auth/northstar-auth-core" }
+northstar-operations-core = { path = "../northstar-operations-core" }
+northstar-security = { path = "../../../platform/northstar-security" }
+northstar-upload-core = { path = "../../upload/northstar-upload-core" }
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+uuid = { version = "1.12", features = ["v4", "serde"] }
+zeroize = "1.8"
+
+[dev-dependencies]
+tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "sync", "time"] }

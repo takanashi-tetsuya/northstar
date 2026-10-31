@@ -4,40 +4,40 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-pub(crate) struct MucDestroyEffect<'a> {
-    pub(crate) operation_id: Uuid,
-    pub(crate) request_id: Uuid,
-    pub(crate) actor_id: Option<Uuid>,
-    pub(crate) payload: &'a Value,
+pub struct MucDestroyEffect<'a> {
+    pub operation_id: Uuid,
+    pub request_id: Uuid,
+    pub actor_id: Option<Uuid>,
+    pub payload: &'a Value,
 }
 
-pub(crate) struct ValidatedMucDestroy<'a> {
-    pub(crate) operation_id: Uuid,
-    pub(crate) request_id: Uuid,
-    pub(crate) actor_id: Uuid,
-    pub(crate) room_jid: &'a str,
-    pub(crate) localpart: &'a str,
-    pub(crate) alternate_jid: Option<&'a str>,
-    pub(crate) reason: Option<&'a str>,
+pub struct ValidatedMucDestroy<'a> {
+    pub operation_id: Uuid,
+    pub request_id: Uuid,
+    pub actor_id: Uuid,
+    pub room_jid: &'a str,
+    pub localpart: &'a str,
+    pub alternate_jid: Option<&'a str>,
+    pub reason: Option<&'a str>,
 }
 
-pub(crate) struct MucDestroyCommit {
-    pub(crate) room_jid: String,
-    pub(crate) destroyed: bool,
+pub struct MucDestroyCommit {
+    pub room_jid: String,
+    pub destroyed: bool,
     /// Occupancies captured by the committed room incarnation before it was
     /// tombstoned. A later room with the same JID has different identities.
-    pub(crate) audience: Vec<MucDestroyAudience>,
+    pub audience: Vec<MucDestroyAudience>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MucDestroyAudience {
-    pub(crate) full_jid: String,
-    pub(crate) nick: String,
-    pub(crate) occupant_incarnation: Uuid,
-    pub(crate) connection_id: Uuid,
+pub struct MucDestroyAudience {
+    pub full_jid: String,
+    pub nick: String,
+    pub occupant_incarnation: Uuid,
+    pub connection_id: Uuid,
 }
 
-pub(crate) trait MucDestroyRepository: Send + Sync {
+pub trait MucDestroyRepository: Send + Sync {
     fn commit(
         &self,
         command: ValidatedMucDestroy<'_>,
@@ -45,20 +45,20 @@ pub(crate) trait MucDestroyRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct MucDestroyService<R> {
+pub struct MucDestroyService<R> {
     repository: R,
     local_domain: String,
 }
 
 impl<R: MucDestroyRepository> MucDestroyService<R> {
-    pub(crate) fn new(repository: R, local_domain: String) -> Self {
+    pub fn new(repository: R, local_domain: String) -> Self {
         Self {
             repository,
             local_domain,
         }
     }
 
-    pub(crate) async fn execute(&self, effect: MucDestroyEffect<'_>) -> Result<MucDestroyCommit> {
+    pub async fn execute(&self, effect: MucDestroyEffect<'_>) -> Result<MucDestroyCommit> {
         let room_jid = effect
             .payload
             .get("room_jid")

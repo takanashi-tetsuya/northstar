@@ -1,5 +1,5 @@
 //! Retention endpoints receive policy operations and their read timers.
-use crate::services::retention_policy::{
+use northstar_operations_application::retention_policy::{
     RetentionPolicyError, RetentionPolicyRepository, RetentionPolicyService, UserRetentionPolicy,
 };
 use northstar_telemetry::metrics::Metrics;

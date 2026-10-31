@@ -1,12 +1,10 @@
 //! The administrator MUC-destroy effect's complete PostgreSQL transaction.
 
-use crate::{
-    db,
-    services::operation_muc_destroy::{
-        MucDestroyAudience, MucDestroyCommit, MucDestroyRepository, ValidatedMucDestroy,
-    },
-};
+use crate::db;
 use anyhow::{Context, Result};
+use northstar_operations_application::operation_muc_destroy::{
+    MucDestroyAudience, MucDestroyCommit, MucDestroyRepository, ValidatedMucDestroy,
+};
 use sqlx::PgPool;
 use uuid::Uuid;
 

@@ -120,7 +120,7 @@ fn upload_readiness_is_fail_closed_but_allows_bounded_recovery_drain() {
 
 #[test]
 fn admin_cleanup_readiness_requires_capacity_and_convergence() {
-    let healthy = crate::services::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
+    let healthy = northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
         pending: 1,
         running: 0,
         oldest_age_seconds: ADMIN_CLEANUP_MAX_READY_AGE_SECONDS,
@@ -131,32 +131,32 @@ fn admin_cleanup_readiness_requires_capacity_and_convergence() {
     assert!(admin_session_cleanup_ready(&healthy));
 
     assert!(!admin_session_cleanup_ready(
-        &crate::services::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
+        &northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
             oldest_age_seconds: ADMIN_CLEANUP_MAX_READY_AGE_SECONDS + 0.001,
             ..healthy
         }
     ));
     assert!(!admin_session_cleanup_ready(
-        &crate::services::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
+        &northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
             maximum_attempts: ADMIN_CLEANUP_MAX_READY_ATTEMPTS,
             ..healthy
         }
     ));
     assert!(!admin_session_cleanup_ready(
-        &crate::services::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
+        &northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
             pending: 100_000,
             queued: 100_000,
             ..healthy
         }
     ));
     assert!(!admin_session_cleanup_ready(
-        &crate::services::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
+        &northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
             running: 1,
             ..healthy
         }
     ));
     assert!(admin_session_cleanup_ready(
-        &crate::services::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
+        &northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupSnapshot {
             pending: 0,
             oldest_age_seconds: 0.0,
             maximum_attempts: 0,
@@ -633,7 +633,7 @@ fn failed_database_collector_does_not_publish_plausible_zeroes() {
         );
     }
 
-    let snapshot = crate::services::metrics_snapshot::S2sOutboxSnapshot {
+    let snapshot = northstar_operations_application::metrics_snapshot::S2sOutboxSnapshot {
         pending_rows: 11,
         pending_bytes: 12_345,
         oldest_age_seconds: 67.5,
@@ -641,7 +641,7 @@ fn failed_database_collector_does_not_publish_plausible_zeroes() {
         locked_rows: 3,
         component_pending_rows: 4,
     };
-    let operations = crate::services::metrics_snapshot::ApiOperationSnapshot {
+    let operations = northstar_operations_application::metrics_snapshot::ApiOperationSnapshot {
         pending: 6,
         running: 7,
         indeterminate: 8,
@@ -651,7 +651,7 @@ fn failed_database_collector_does_not_publish_plausible_zeroes() {
         5,
         snapshot,
         operations,
-        crate::services::metrics_snapshot::AdminSessionCleanupSnapshot {
+        northstar_operations_application::metrics_snapshot::AdminSessionCleanupSnapshot {
             pending: 27,
             running: 28,
             oldest_age_seconds: 29.5,
@@ -660,13 +660,13 @@ fn failed_database_collector_does_not_publish_plausible_zeroes() {
             capacity: 100_000,
         },
         (9, 10, 11),
-        crate::services::metrics_snapshot::DataGovernanceSnapshot {
+        northstar_operations_application::metrics_snapshot::DataGovernanceSnapshot {
             active_holds: 12,
             preserved_offline_records: 13,
             active_export_leases: 14,
             expired_incomplete_export_leases: 15,
         },
-        crate::services::metrics_snapshot::DeploymentCapacitySnapshot {
+        northstar_operations_application::metrics_snapshot::DeploymentCapacitySnapshot {
             configuration_epoch: 16,
             accounts_used: 17,
             accounts_limit: 18,

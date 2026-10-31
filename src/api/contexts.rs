@@ -55,8 +55,10 @@ pub(crate) type AccountAdminContext = ServiceContext<
     >,
 >;
 
-pub(crate) type AdminDispatchContext = crate::services::admin_dispatch::AdminDispatchService<
-    crate::db::admin_dispatch_repository::PostgresAdminDispatchRepository,
+pub(crate) type AdminDispatchContext = ServiceContext<
+    northstar_operations_application::admin_dispatch::AdminDispatchService<
+        crate::db::admin_dispatch_repository::PostgresAdminDispatchRepository,
+    >,
 >;
 
 pub(crate) type InvitationAdminContext = ServiceContext<
@@ -75,17 +77,22 @@ pub(crate) type RetentionPolicyContext = retention_policy::RetentionPolicyContex
     crate::db::retention_policy_repository::PostgresRetentionPolicyRepository,
 >;
 
-pub(crate) type ReportModerationContext =
-    crate::services::report_moderation::ReportModerationService<
+pub(crate) type ReportModerationContext = ServiceContext<
+    northstar_operations_application::report_moderation::ReportModerationService<
         crate::db::report_moderation_repository::PostgresReportModerationRepository,
-    >;
-
-pub(crate) type UploadAdminContext = crate::services::upload_admin::UploadAdminService<
-    crate::db::upload_admin_repository::PostgresUploadAdminRepository,
+    >,
 >;
 
-pub(crate) type OperationAdminContext = crate::services::operations::OperationAdminService<
-    crate::db::operation_admin_repository::PostgresOperationAdminRepository,
+pub(crate) type UploadAdminContext = ServiceContext<
+    northstar_operations_application::upload_admin::UploadAdminService<
+        crate::db::upload_admin_repository::PostgresUploadAdminRepository,
+    >,
+>;
+
+pub(crate) type OperationAdminContext = ServiceContext<
+    northstar_operations_application::operations::OperationAdminService<
+        crate::db::operation_admin_repository::PostgresOperationAdminRepository,
+    >,
 >;
 
 pub(crate) type ReportContext = reports::ReportContext<

@@ -1,10 +1,10 @@
 //! PostgreSQL adapter for the reserved runtime-control connection.
 
-use crate::{
-    db::{self, DurableServiceControl, RuntimeControlReadPhase},
-    services::runtime_control::{RuntimeControlRepository, RuntimePolicySnapshot},
-};
+use crate::db::{self, DurableServiceControl, RuntimeControlReadPhase};
 use anyhow::Result;
+use northstar_operations_application::runtime_control::{
+    RuntimeControlRepository, RuntimePolicySnapshot,
+};
 use sqlx::{pool::PoolConnection, Postgres};
 
 pub(crate) struct PostgresRuntimeControlRepository {

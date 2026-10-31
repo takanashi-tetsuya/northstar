@@ -1,8 +1,9 @@
 //! One transaction owns report/appeal authorization, one-use proof, mutation and replay.
-use crate::{db, services::reports::*};
+use crate::db;
 use anyhow::Result;
 use northstar_abuse_application::guard::{AbuseGuard, TransactionalGuardOutcome};
 use northstar_abuse_policy::AbuseAction;
+use northstar_operations_application::reports::*;
 use northstar_operations_core::api_mutations::*;
 use sqlx::{PgPool, Postgres, Transaction};
 use std::sync::Arc;

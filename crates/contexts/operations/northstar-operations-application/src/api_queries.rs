@@ -1,14 +1,14 @@
 //! Authorized REST projections and complete read transactions.
-pub(crate) use crate::services::operations::{
+pub use crate::operations::{
     OperationPage, OperationPageBoundary, OperationRecord, OperationTargetPage,
     OperationTargetRecord,
 };
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-pub(crate) use northstar_archive_application::{ArchivePage, MamArchiveQuery};
-pub(crate) use northstar_auth_core::api_session::{ApiPrincipal, ApiReadAuthority};
-pub(crate) use northstar_upload_application::admin::{
+pub use northstar_archive_core::{ArchivePage, MamArchiveQuery};
+pub use northstar_auth_core::api_session::{ApiPrincipal, ApiReadAuthority};
+pub use northstar_upload_core::admin::{
     UploadDeadLetterBoundary, UploadDeadLetterId, UploadDeadLetterKind, UploadDeadLetterPage,
     UploadDeadLetterRecord,
 };
@@ -120,49 +120,49 @@ pub struct MucRoomView {
 
 /// Revalidated under the same database locks as the requested projection.
 /// Never include the bearer in diagnostics.
-pub(crate) struct TimedRead<T> {
-    pub(crate) value: T,
-    pub(crate) database_now: DateTime<Utc>,
+pub struct TimedRead<T> {
+    pub value: T,
+    pub database_now: DateTime<Utc>,
 }
 
-pub(crate) struct SessionPage {
-    pub(crate) rows: Vec<SessionView>,
-    pub(crate) next: Option<Uuid>,
-    pub(crate) database_now: DateTime<Utc>,
+pub struct SessionPage {
+    pub rows: Vec<SessionView>,
+    pub next: Option<Uuid>,
+    pub database_now: DateTime<Utc>,
 }
 
-pub(crate) struct LiveAdminStats {
-    pub(crate) island_mode: bool,
-    pub(crate) registration_open: bool,
-    pub(crate) online_sessions: usize,
-    pub(crate) room_occupants: usize,
+pub struct LiveAdminStats {
+    pub island_mode: bool,
+    pub registration_open: bool,
+    pub online_sessions: usize,
+    pub room_occupants: usize,
 }
 
-pub(crate) struct AdminStatistics {
-    pub(crate) users: i64,
-    pub(crate) archived: i64,
-    pub(crate) offline: i64,
-    pub(crate) rooms: i64,
-    pub(crate) uploads: i64,
-    pub(crate) push_subscriptions: i64,
-    pub(crate) pending_reports: i64,
-    pub(crate) pending_appeals: i64,
-    pub(crate) active_invitations: i64,
-    pub(crate) live: LiveAdminStats,
+pub struct AdminStatistics {
+    pub users: i64,
+    pub archived: i64,
+    pub offline: i64,
+    pub rooms: i64,
+    pub uploads: i64,
+    pub push_subscriptions: i64,
+    pub pending_reports: i64,
+    pub pending_appeals: i64,
+    pub active_invitations: i64,
+    pub live: LiveAdminStats,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum ApiReadDenial {
+pub enum ApiReadDenial {
     Unauthorized,
     Forbidden,
 }
-pub(crate) type AuthorizedRead<T> = std::result::Result<T, ApiReadDenial>;
+pub type AuthorizedRead<T> = std::result::Result<T, ApiReadDenial>;
 
 /// Authorization denial is separate from an empty collection or missing item.
 /// Operation queries retain distinct bearer and administrator-role errors.
 /// Runtime projections are synchronous and execute under the authorization
 /// locks; database transactions never cross this port.
-pub(crate) trait ApiQueryRepository: Send + Sync {
+pub trait ApiQueryRepository: Send + Sync {
     fn operations(
         &self,
         actor: ApiReadAuthority<'_>,
@@ -264,11 +264,11 @@ pub(crate) trait ApiQueryRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct ApiQueryService<R> {
+pub struct ApiQueryService<R> {
     repository: R,
 }
 impl<R: ApiQueryRepository> ApiQueryService<R> {
-    pub(crate) async fn operations(
+    pub async fn operations(
         &self,
         actor: ApiReadAuthority<'_>,
         status: Option<&str>,
@@ -280,14 +280,14 @@ impl<R: ApiQueryRepository> ApiQueryService<R> {
             .operations(actor, status, kind, after, limit)
             .await
     }
-    pub(crate) async fn operation(
+    pub async fn operation(
         &self,
         actor: ApiReadAuthority<'_>,
         id: Uuid,
     ) -> Result<AuthorizedRead<Option<OperationRecord>>> {
         self.repository.operation(actor, id).await
     }
-    pub(crate) async fn operation_targets(
+    pub async fn operation_targets(
         &self,
         actor: ApiReadAuthority<'_>,
         id: Uuid,
@@ -299,7 +299,7 @@ impl<R: ApiQueryRepository> ApiQueryService<R> {
             .operation_targets(actor, id, status, after, limit)
             .await
     }
-    pub(crate) async fn operation_target(
+    pub async fn operation_target(
         &self,
         actor: ApiReadAuthority<'_>,
         operation_id: Uuid,
@@ -310,16 +310,16 @@ impl<R: ApiQueryRepository> ApiQueryService<R> {
             .await
     }
 
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
-    pub(crate) async fn principal(&self, token: &str) -> Result<Option<ApiPrincipal>> {
+    pub async fn principal(&self, token: &str) -> Result<Option<ApiPrincipal>> {
         self.repository.principal(token).await
     }
-    pub(crate) async fn cursor_clock(&self) -> Result<DateTime<Utc>> {
+    pub async fn cursor_clock(&self) -> Result<DateTime<Utc>> {
         self.repository.cursor_clock().await
     }
-    pub(crate) async fn users(
+    pub async fn users(
         &self,
         actor: ApiReadAuthority<'_>,
         after: Option<PageBoundary>,
@@ -327,7 +327,7 @@ impl<R: ApiQueryRepository> ApiQueryService<R> {
     ) -> Result<Option<KeysetPage<UserPageRow>>> {
         self.repository.users(actor, after, limit).await
     }
-    pub(crate) async fn admin_reports(
+    pub async fn admin_reports(
         &self,
         actor: ApiReadAuthority<'_>,
         status: Option<&str>,
@@ -338,7 +338,7 @@ impl<R: ApiQueryRepository> ApiQueryService<R> {
             .admin_reports(actor, status, after, limit)
             .await
     }
-    pub(crate) async fn own_reports(
+    pub async fn own_reports(
         &self,
         actor: ApiReadAuthority<'_>,
         status: Option<&str>,
@@ -349,7 +349,7 @@ impl<R: ApiQueryRepository> ApiQueryService<R> {
             .own_reports(actor, status, after, limit)
             .await
     }
-    pub(crate) async fn invitations(
+    pub async fn invitations(
         &self,
         actor: ApiReadAuthority<'_>,
         after: Option<PageBoundary>,
@@ -357,7 +357,7 @@ impl<R: ApiQueryRepository> ApiQueryService<R> {
     ) -> Result<Option<KeysetPage<InvitationPageRow>>> {
         self.repository.invitations(actor, after, limit).await
     }
-    pub(crate) async fn upload_dead_letters(
+    pub async fn upload_dead_letters(
         &self,
         actor: ApiReadAuthority<'_>,
         kind: UploadDeadLetterKind,
@@ -368,20 +368,20 @@ impl<R: ApiQueryRepository> ApiQueryService<R> {
             .upload_dead_letters(actor, kind, after, limit)
             .await
     }
-    pub(crate) async fn history(
+    pub async fn history(
         &self,
         actor: ApiReadAuthority<'_>,
         query: &MamArchiveQuery,
     ) -> Result<Option<TimedRead<Option<ArchivePage>>>> {
         self.repository.history(actor, query).await
     }
-    pub(crate) async fn offline_statistics(
+    pub async fn offline_statistics(
         &self,
         actor: ApiReadAuthority<'_>,
     ) -> Result<Option<OfflineMessagesStats>> {
         self.repository.offline_statistics(actor).await
     }
-    pub(crate) async fn statistics<F>(
+    pub async fn statistics<F>(
         &self,
         actor: ApiReadAuthority<'_>,
         snapshot: F,
@@ -391,7 +391,7 @@ impl<R: ApiQueryRepository> ApiQueryService<R> {
     {
         self.repository.statistics(actor, snapshot).await
     }
-    pub(crate) async fn sessions<F>(
+    pub async fn sessions<F>(
         &self,
         actor: ApiReadAuthority<'_>,
         after: Option<Uuid>,
@@ -405,7 +405,7 @@ impl<R: ApiQueryRepository> ApiQueryService<R> {
             .sessions(actor, || page_sessions(snapshot(), after, limit))
             .await
     }
-    pub(crate) async fn muc_rooms<F>(
+    pub async fn muc_rooms<F>(
         &self,
         actor: ApiReadAuthority<'_>,
         after: Option<PageBoundary>,

@@ -612,7 +612,7 @@ impl AppState {
             Arc::clone(&federation_write_policy.island_mode),
         );
         let api_query_context = api_queries::ApiQueryContext::new(
-            crate::services::api_queries::ApiQueryService::new(
+            northstar_operations_application::api_queries::ApiQueryService::new(
                 db::api_queries::PostgresApiQueryRepository::new(pool.clone()),
             ),
             Arc::clone(&api_cursor),
@@ -648,13 +648,14 @@ impl AppState {
             Arc::clone(&api_control),
             cluster.admission(),
         );
-        let operation_admin_service = crate::services::operations::OperationAdminService::new(
-            db::operation_admin_repository::PostgresOperationAdminRepository::new(
-                admin_mutations.clone(),
-            ),
-        );
+        let operation_admin_service =
+            northstar_operations_application::operations::OperationAdminService::new(
+                db::operation_admin_repository::PostgresOperationAdminRepository::new(
+                    admin_mutations.clone(),
+                ),
+            );
         let operation_muc_destroy_service = Arc::new(
-            crate::services::operation_muc_destroy::MucDestroyService::new(
+            northstar_operations_application::operation_muc_destroy::MucDestroyService::new(
                 db::operation_muc_destroy_repository::PostgresMucDestroyRepository::new(
                     pool.clone(),
                 ),
@@ -668,13 +669,13 @@ impl AppState {
                 ),
             );
         let operation_effect_fence_service =
-            crate::services::operation_effect_fence::OperationEffectFenceService::new(
+            northstar_operations_application::operation_effect_fence::OperationEffectFenceService::new(
                 db::operation_effect_fence_repository::PostgresOperationEffectFenceRepository::new(
                     pool.clone(),
                 ),
             );
         let operation_journal_worker_service =
-            crate::services::operation_journal_worker::OperationJournalWorkerService::new(
+            northstar_operations_application::operation_journal_worker::OperationJournalWorkerService::new(
                 db::operation_journal_worker_repository::PostgresOperationJournalWorkerRepository::new(
                     pool.clone(),
                 ),
@@ -693,36 +694,38 @@ impl AppState {
                 },
             );
         let admin_session_cleanup_worker_service =
-            crate::services::admin_session_cleanup_worker::AdminSessionCleanupWorkerService::new(
+            northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupWorkerService::new(
                 db::admin_session_cleanup_worker_repository::PostgresAdminSessionCleanupRepository::new(pool.clone()),
             );
-        let admin_dispatch_service = crate::services::admin_dispatch::AdminDispatchService::new(
-            db::admin_dispatch_repository::PostgresAdminDispatchRepository::new(
-                admin_mutations.clone(),
-                command_pool.clone(),
-                Arc::clone(&api_control),
-                cluster.admission(),
-            ),
-            config.domain.clone(),
-        );
-        let upload_admin_service = crate::services::upload_admin::UploadAdminService::new(
-            db::upload_admin_repository::PostgresUploadAdminRepository::new(
-                admin_mutations.clone(),
-            ),
-        );
+        let admin_dispatch_service =
+            northstar_operations_application::admin_dispatch::AdminDispatchService::new(
+                db::admin_dispatch_repository::PostgresAdminDispatchRepository::new(
+                    admin_mutations.clone(),
+                    command_pool.clone(),
+                    Arc::clone(&api_control),
+                    cluster.admission(),
+                ),
+                config.domain.clone(),
+            );
+        let upload_admin_service =
+            northstar_operations_application::upload_admin::UploadAdminService::new(
+                db::upload_admin_repository::PostgresUploadAdminRepository::new(
+                    admin_mutations.clone(),
+                ),
+            );
         let report_moderation_service =
-            crate::services::report_moderation::ReportModerationService::new(
+            northstar_operations_application::report_moderation::ReportModerationService::new(
                 db::report_moderation_repository::PostgresReportModerationRepository::new(
                     admin_mutations.clone(),
                 ),
             );
         let retention_policy_context = retention_policy::RetentionPolicyContext::new(
-            crate::services::retention_policy::RetentionPolicyService::new(
+            northstar_operations_application::retention_policy::RetentionPolicyService::new(
                 db::retention_policy_repository::PostgresRetentionPolicyRepository::new(
                     pool.clone(),
                     Arc::clone(&api_control),
                 ),
-                crate::services::retention_policy::RetentionPolicyLimits {
+                northstar_operations_application::retention_policy::RetentionPolicyLimits {
                     personal_mam_days: config.mam_retention_days,
                     offline_message_days: config.offline_message_ttl_days,
                     moderation_evidence_days: config.moderation_retention_days,
@@ -732,7 +735,7 @@ impl AppState {
             Arc::clone(&metrics),
         );
         let governance_context = governance::GovernanceContext::new(
-            crate::services::governance::GovernanceService::new(
+            northstar_operations_application::governance::GovernanceService::new(
                 db::governance_repository::PostgresGovernanceRepository::new(
                     pool.clone(),
                     admin_mutations.clone(),
@@ -759,7 +762,7 @@ impl AppState {
             dummy_scram_secret,
             dummy_scram_iteration_profiles,
         });
-        let report_service = crate::services::reports::ReportService::new(
+        let report_service = northstar_operations_application::reports::ReportService::new(
             db::report_repository::PostgresReportRepository::new(
                 pool.clone(),
                 Arc::clone(&api_control),
@@ -783,12 +786,12 @@ impl AppState {
             config,
             api_query_context,
             metrics_snapshot_service:
-                crate::services::metrics_snapshot::MetricsSnapshotService::new(
+                northstar_operations_application::metrics_snapshot::MetricsSnapshotService::new(
                     db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository::new(
                         pool.clone(),
                     ),
                 ),
-            readiness_service: crate::services::readiness::ReadinessService::new(
+            readiness_service: northstar_operations_application::readiness::ReadinessService::new(
                 db::readiness_repository::PostgresReadinessRepository::new(pool.clone()),
             ),
             public_discovery_context,
@@ -810,12 +813,13 @@ impl AppState {
             s2s_sm_outbox_service: crate::services::s2s_sm_outbox::SmOutboxService::new(
                 db::s2s_sm_outbox_repository::PostgresSmOutboxRepository::new(pool.clone()),
             ),
-            admin_command_service: crate::services::admin_commands::AdminCommandService::new(
-                db::admin_command_repository::PostgresAdminCommandRepository::new(
-                    pool.clone(),
-                    command_pool,
+            admin_command_service:
+                northstar_operations_application::admin_commands::AdminCommandService::new(
+                    db::admin_command_repository::PostgresAdminCommandRepository::new(
+                        pool.clone(),
+                        command_pool,
+                    ),
                 ),
-            ),
             push_service: crate::services::push::PushService::new(
                 db::push::PostgresPushRepository::new(pool.clone()),
             ),
@@ -839,16 +843,18 @@ impl AppState {
             omemo_recovery_poll_context,
             durable_outbox_database_admission,
             report_service,
-            operation_admin_service,
+            operation_admin_service: crate::api::contexts::ServiceContext(operation_admin_service),
             operation_muc_destroy_service,
             locked_muc_expiry_service,
             locked_muc_expiry_context: std::sync::OnceLock::new(),
             operation_effect_fence_service,
             operation_journal_worker_service,
             admin_session_cleanup_worker_service,
-            admin_dispatch_service,
-            upload_admin_service,
-            report_moderation_service,
+            admin_dispatch_service: crate::api::contexts::ServiceContext(admin_dispatch_service),
+            upload_admin_service: crate::api::contexts::ServiceContext(upload_admin_service),
+            report_moderation_service: crate::api::contexts::ServiceContext(
+                report_moderation_service,
+            ),
             retention_policy_context,
             governance_context,
             upload,

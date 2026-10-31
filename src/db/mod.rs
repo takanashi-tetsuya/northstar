@@ -35,6 +35,8 @@ pub mod account_repository;
 mod account_revocations_tests;
 pub mod admin_command_repository;
 pub mod admin_commands;
+#[cfg(test)]
+mod admin_read_authorization_tests;
 pub mod api_control;
 pub mod api_operations;
 pub mod api_pages;

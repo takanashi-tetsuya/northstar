@@ -38,7 +38,7 @@ pub struct AdminSessionCleanupSnapshot {
 
 const LEASE_SECONDS: i32 = 60;
 
-pub(crate) trait AdminSessionCleanupRepository: Send + Sync {
+pub trait AdminSessionCleanupRepository: Send + Sync {
     fn claim(
         &self,
         worker_id: Uuid,
@@ -69,21 +69,21 @@ pub(crate) trait AdminSessionCleanupRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct AdminSessionCleanupWorkerService<R> {
+pub struct AdminSessionCleanupWorkerService<R> {
     repository: R,
 }
 
 impl<R: AdminSessionCleanupRepository> AdminSessionCleanupWorkerService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn claim(&self, worker_id: Uuid) -> Result<Option<AdminSessionCleanupLease>> {
+    pub async fn claim(&self, worker_id: Uuid) -> Result<Option<AdminSessionCleanupLease>> {
         self.repository.claim(worker_id, LEASE_SECONDS).await
     }
 
     /// A lost renewal fence must cancel the concurrent effect future.
-    pub(crate) async fn renew_or_fail(
+    pub async fn renew_or_fail(
         &self,
         lease: &AdminSessionCleanupLease,
         worker_id: Uuid,
@@ -97,7 +97,7 @@ impl<R: AdminSessionCleanupRepository> AdminSessionCleanupWorkerService<R> {
         Ok(())
     }
 
-    pub(crate) async fn complete(
+    pub async fn complete(
         &self,
         lease: &AdminSessionCleanupLease,
         worker_id: Uuid,
@@ -105,7 +105,7 @@ impl<R: AdminSessionCleanupRepository> AdminSessionCleanupWorkerService<R> {
         self.repository.complete(lease, worker_id).await
     }
 
-    pub(crate) async fn retry(
+    pub async fn retry(
         &self,
         lease: &AdminSessionCleanupLease,
         worker_id: Uuid,
@@ -114,7 +114,7 @@ impl<R: AdminSessionCleanupRepository> AdminSessionCleanupWorkerService<R> {
         self.repository.retry(lease, worker_id, error_code).await
     }
 
-    pub(crate) async fn target_current(
+    pub async fn target_current(
         &self,
         lease: &AdminSessionCleanupLease,
         worker_id: Uuid,

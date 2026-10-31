@@ -1,13 +1,13 @@
 use crate::{
-    services::admin_commands::{
-        AccountCommandAction, AccountCommandTarget, AccountMutationOutcome, AdminActor,
-        AdminCommandRetryable, AdminWriteOutcome, CommandExecutionOutcome, CommandSessionOutcome,
-        CreateAccountOutcome, ExecutionReleaseOutcome,
-    },
     xmpp::protocol::{Action, ProtocolSession},
     xmpp::xml_builder::XmlElement,
 };
 use anyhow::Result;
+use northstar_operations_application::admin_commands::{
+    AccountCommandAction, AccountCommandTarget, AccountMutationOutcome, AdminActor,
+    AdminCommandRetryable, AdminWriteOutcome, CommandExecutionOutcome, CommandSessionOutcome,
+    CreateAccountOutcome, ExecutionReleaseOutcome,
+};
 use roxmltree::Node;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap};

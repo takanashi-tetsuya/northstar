@@ -234,6 +234,16 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-operations-application
+    package: northstar-operations-application
+    path: crates/contexts/operations/northstar-operations-application
+    tier: context
+    context: operations
+    role: application
+    owner_team: platform
+    api_stability: internal-stable
+    publish_policy: never
+
   - crate_id: northstar-operations-core
     package: northstar-operations-core
     path: crates/contexts/operations/northstar-operations-core

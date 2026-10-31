@@ -7,12 +7,10 @@ use crate::{
         api_queries::PostgresApiQueryRepository,
         omemo_recovery_repository::PostgresOmemoRecoveryRepository,
     },
-    services::{
-        api_queries::ApiQueryService,
-        omemo_recovery::{OmemoRecoveryActor, OmemoRecoveryService},
-    },
+    services::omemo_recovery::{OmemoRecoveryActor, OmemoRecoveryService},
 };
 use axum::http::HeaderMap;
+use northstar_operations_application::api_queries::ApiQueryService;
 use northstar_telemetry::metrics::Metrics;
 use std::sync::Arc;
 use uuid::Uuid;

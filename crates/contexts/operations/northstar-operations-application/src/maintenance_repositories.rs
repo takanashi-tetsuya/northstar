@@ -25,7 +25,7 @@ impl RetentionStore {
     }
 }
 
-pub(crate) trait RetentionRepository: Send + Sync {
+pub trait RetentionRepository: Send + Sync {
     fn purge_resolved_retention_batch(
         &self,
         store: RetentionStore,
@@ -58,7 +58,7 @@ pub(crate) trait RetentionRepository: Send + Sync {
     ) -> impl std::future::Future<Output = anyhow::Result<u64>> + Send;
 }
 
-pub(crate) trait SubscriptionCleanupRepository: Send + Sync {
+pub trait SubscriptionCleanupRepository: Send + Sync {
     fn cleanup_expired_subscriptions(
         &self,
         batch_size: i64,

@@ -1,5 +1,5 @@
 //! Read-only runtime capabilities used by REST collection handlers.
-use crate::services::api_queries::{
+use northstar_operations_application::api_queries::{
     ApiQueryRepository, ApiQueryService, LiveAdminStats, SessionView,
 };
 use std::{

@@ -1,8 +1,9 @@
 //! Shared REST keyset-pagination policy.
 
+use crate::api::contexts::ApiQueryContext;
 use crate::api::error::AppError;
-use crate::{api::contexts::ApiQueryContext, services::api_queries::PageBoundary};
 use chrono::{DateTime, Utc};
+use northstar_operations_application::api_queries::PageBoundary;
 use uuid::Uuid;
 
 use super::cursor::{CanonicalScope, CursorBinding, CursorDirection, CursorPosition, CursorValue};

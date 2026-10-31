@@ -1,6 +1,6 @@
 //! Database-owned metrics projection. One connection and one repeatable-read
 //! read-only transaction keep all gauges on the same PostgreSQL snapshot.
-use crate::services::metrics_snapshot::*;
+use northstar_operations_application::metrics_snapshot::*;
 use sqlx::{PgPool, Row};
 
 #[derive(Clone)]

@@ -11,38 +11,38 @@ pub struct ReportEvidenceInput {
     pub client_message_id: Option<String>,
     pub body_text: String,
 }
-pub(crate) struct ReportInput<'a> {
-    pub(crate) reported_jid: &'a str,
-    pub(crate) category: &'a str,
-    pub(crate) description: Option<&'a str>,
-    pub(crate) evidence: Vec<ReportEvidenceInput>,
+pub struct ReportInput<'a> {
+    pub reported_jid: &'a str,
+    pub category: &'a str,
+    pub description: Option<&'a str>,
+    pub evidence: Vec<ReportEvidenceInput>,
 }
-pub(crate) struct ValidatedReport<'a> {
-    pub(crate) reported_jid: String,
-    pub(crate) category: &'a str,
-    pub(crate) description: &'a str,
-    pub(crate) evidence: Vec<ReportEvidenceInput>,
+pub struct ValidatedReport<'a> {
+    pub reported_jid: String,
+    pub category: &'a str,
+    pub description: &'a str,
+    pub evidence: Vec<ReportEvidenceInput>,
 }
-pub(crate) struct ReportCommand<'a> {
-    pub(crate) admission: UserMutationAdmission<'a>,
-    pub(crate) content: Result<ValidatedReport<'a>, &'static str>,
+pub struct ReportCommand<'a> {
+    pub admission: UserMutationAdmission<'a>,
+    pub content: Result<ValidatedReport<'a>, &'static str>,
 }
-pub(crate) struct AppealCommand<'a> {
-    pub(crate) admission: UserMutationAdmission<'a>,
-    pub(crate) report_id: Uuid,
-    pub(crate) reason: Result<&'a str, &'static str>,
+pub struct AppealCommand<'a> {
+    pub admission: UserMutationAdmission<'a>,
+    pub report_id: Uuid,
+    pub reason: Result<&'a str, &'static str>,
 }
-pub(crate) enum ReportEffect {
+pub enum ReportEffect {
     None,
     ReportCreated,
     AppealCreated,
     RateLimited,
 }
-pub(crate) struct ReportCommit {
-    pub(crate) response: StoredApiResponse,
-    pub(crate) effect: ReportEffect,
+pub struct ReportCommit {
+    pub response: StoredApiResponse,
+    pub effect: ReportEffect,
 }
-pub(crate) trait ReportRepository: Send + Sync {
+pub trait ReportRepository: Send + Sync {
     fn create_report(
         &self,
         command: ReportCommand<'_>,
@@ -53,14 +53,14 @@ pub(crate) trait ReportRepository: Send + Sync {
     ) -> impl std::future::Future<Output = anyhow::Result<ApiMutationOutcome<ReportCommit>>> + Send;
 }
 #[derive(Clone)]
-pub(crate) struct ReportService<R> {
+pub struct ReportService<R> {
     repository: R,
 }
 impl<R: ReportRepository> ReportService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
-    pub(crate) async fn create_report<'a>(
+    pub async fn create_report<'a>(
         &self,
         admission: UserMutationAdmission<'a>,
         input: ReportInput<'a>,
@@ -81,7 +81,7 @@ impl<R: ReportRepository> ReportService<R> {
             .create_report(ReportCommand { admission, content })
             .await
     }
-    pub(crate) async fn create_appeal<'a>(
+    pub async fn create_appeal<'a>(
         &self,
         admission: UserMutationAdmission<'a>,
         report_id: Uuid,
@@ -135,7 +135,7 @@ fn valid_client_message_id(value: &str) -> bool {
             .any(|character| character.is_control() || is_bidi_override(character))
 }
 
-pub(crate) fn report_validation_error(body: &ReportInput<'_>) -> Option<&'static str> {
+pub fn report_validation_error(body: &ReportInput<'_>) -> Option<&'static str> {
     if northstar_xmpp_types::jid::canonical_bare_key(body.reported_jid.trim())
         .ok()
         .filter(|jid| jid.contains('@'))
@@ -177,7 +177,7 @@ pub(crate) fn report_validation_error(body: &ReportInput<'_>) -> Option<&'static
     None
 }
 
-pub(crate) fn appeal_validation_error(reason: &str) -> Option<&'static str> {
+pub fn appeal_validation_error(reason: &str) -> Option<&'static str> {
     if valid_user_text(reason, 20, MAX_DESCRIPTION_CHARS, MAX_DESCRIPTION_BYTES) {
         None
     } else {

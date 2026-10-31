@@ -1,11 +1,9 @@
 //! Signed endpoint-specific governance continuations.
-use crate::{
-    api::cursor::{
-        CanonicalScope, CursorBinding, CursorDirection, CursorKeyring, CursorPosition, CursorValue,
-    },
-    services::governance::*,
+use crate::api::cursor::{
+    CanonicalScope, CursorBinding, CursorDirection, CursorKeyring, CursorPosition, CursorValue,
 };
 use chrono::{DateTime, Utc};
+use northstar_operations_application::governance::*;
 use std::sync::Arc;
 use uuid::Uuid;
 

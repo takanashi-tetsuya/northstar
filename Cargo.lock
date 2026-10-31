@@ -2083,6 +2083,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-operations-application"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "northstar-abuse-policy",
+ "northstar-archive-core",
+ "northstar-auth-core",
+ "northstar-operations-core",
+ "northstar-security",
+ "northstar-upload-core",
+ "northstar-xmpp-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "northstar-operations-core"
 version = "0.1.0"
 dependencies = [
@@ -3542,6 +3563,7 @@ dependencies = [
  "northstar-federation-core",
  "northstar-message-application",
  "northstar-message-core",
+ "northstar-operations-application",
  "northstar-operations-core",
  "northstar-postgres",
  "northstar-presence-core",

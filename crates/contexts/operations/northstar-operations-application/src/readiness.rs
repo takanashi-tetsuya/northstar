@@ -2,7 +2,7 @@
 //! The HTTP adapter owns the short cache and live process checks; this service
 //! orders the database checks and evaluates the cleanup convergence policy.
 
-use crate::services::admin_session_cleanup_worker::AdminSessionCleanupSnapshot;
+use crate::admin_session_cleanup_worker::AdminSessionCleanupSnapshot;
 use anyhow::{ensure, Result};
 use northstar_abuse_policy::model::AbuseKeyDeploymentIdentity;
 use northstar_security::cluster_keys::ClusterKeyDeploymentIdentity;
@@ -11,10 +11,10 @@ use std::future::Future;
 
 // Cleanup retries cap at a 300-second backoff. Allow one full capped interval
 // plus recovery margin, but do not advertise readiness indefinitely.
-pub(crate) const ADMIN_CLEANUP_MAX_READY_AGE_SECONDS: f64 = 600.0;
-pub(crate) const ADMIN_CLEANUP_MAX_READY_ATTEMPTS: i64 = 9;
+pub const ADMIN_CLEANUP_MAX_READY_AGE_SECONDS: f64 = 600.0;
+pub const ADMIN_CLEANUP_MAX_READY_ATTEMPTS: i64 = 9;
 
-pub(crate) trait ReadinessRepository: Send + Sync {
+pub trait ReadinessRepository: Send + Sync {
     fn validate_abuse_key(
         &self,
         identity: &AbuseKeyDeploymentIdentity,
@@ -36,29 +36,29 @@ pub(crate) trait ReadinessRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct ReadinessService<R> {
+pub struct ReadinessService<R> {
     repository: R,
 }
 
 /// The critical periodic key guard can only request its one deployment check.
 /// Its timeout and fail-closed worker policy remain with the worker.
 #[derive(Clone)]
-pub(crate) struct AbuseKeyAuthorityProbe<R> {
+pub struct AbuseKeyAuthorityProbe<R> {
     repository: R,
 }
 
 impl<R: ReadinessRepository> AbuseKeyAuthorityProbe<R> {
-    pub(crate) async fn validate(&self, identity: &AbuseKeyDeploymentIdentity) -> Result<()> {
+    pub async fn validate(&self, identity: &AbuseKeyDeploymentIdentity) -> Result<()> {
         self.repository.validate_abuse_key(identity).await
     }
 }
 
 impl<R: ReadinessRepository> ReadinessService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) fn abuse_key_authority_probe(&self) -> AbuseKeyAuthorityProbe<R>
+    pub fn abuse_key_authority_probe(&self) -> AbuseKeyAuthorityProbe<R>
     where
         R: Clone,
     {
@@ -70,7 +70,7 @@ impl<R: ReadinessRepository> ReadinessService<R> {
     /// Keep the original probe order and unconditional final database query.
     /// Each repository call finishes before the next one starts; no transaction
     /// spans a process-local check or external I/O.
-    pub(crate) async fn validate_persistence(
+    pub async fn validate_persistence(
         &self,
         abuse_identity: Option<&AbuseKeyDeploymentIdentity>,
         cluster_authority: Option<&ClusterReadinessAuthority>,
@@ -95,7 +95,7 @@ impl<R: ReadinessRepository> ReadinessService<R> {
     }
 }
 
-pub(crate) fn admin_session_cleanup_ready(cleanup: &AdminSessionCleanupSnapshot) -> bool {
+pub fn admin_session_cleanup_ready(cleanup: &AdminSessionCleanupSnapshot) -> bool {
     cleanup.pending >= 0
         && cleanup.running >= 0
         && cleanup.capacity > 0

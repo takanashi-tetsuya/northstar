@@ -1,6 +1,7 @@
 //! Generation-fenced administrative reads and atomic command mutations.
-use crate::{db, services::admin_commands::*};
+use crate::db;
 use anyhow::Result;
+use northstar_operations_application::admin_commands::*;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
 #[derive(Clone)]

@@ -1,10 +1,10 @@
 //! Shared transaction admission for administrative repository commands.
-use crate::services::operations::AuthorizationPolicy;
 use crate::{
     cluster::{ClusterAdmission, ClusterOperation},
     db,
 };
 use anyhow::Result;
+use northstar_operations_application::operations::AuthorizationPolicy;
 use northstar_operations_core::api_mutations::*;
 use serde_json::{json, Value};
 use sqlx::{PgPool, Postgres, Transaction};

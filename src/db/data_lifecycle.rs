@@ -1,9 +1,9 @@
-pub use crate::services::governance::{
+use anyhow::{Context, Result};
+use chrono::{DateTime, Duration, Utc};
+pub use northstar_operations_application::governance::{
     AuditExport, AuditExportCursor, AuditExportEntry, HeldRecordExport, LegalHoldError,
     LegalHoldExport, LegalHoldExportCursor, LegalHoldSummary, LegalHoldTarget,
 };
-use anyhow::{Context, Result};
-use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -13,14 +13,14 @@ use uuid::Uuid;
 pub const MAX_HOLD_TARGETS: usize = 1_000;
 pub const MAX_GOVERNANCE_EXPORT_ROWS: i64 = 10_000;
 pub const GOVERNANCE_EXPORT_LEASE_SECONDS: i64 =
-    crate::services::governance::GOVERNANCE_EXPORT_LEASE_SECONDS;
+    northstar_operations_application::governance::GOVERNANCE_EXPORT_LEASE_SECONDS;
 pub const GOVERNANCE_SNAPSHOT_ISOLATION_SQL: &str =
     "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ";
 
-use crate::services::retention_policy::{
+use northstar_operations_application::retention_policy::{
     effective_days, policy_does_not_extend, valid_requested_days,
 };
-pub use crate::services::retention_policy::{
+pub use northstar_operations_application::retention_policy::{
     RetentionPolicyError, RetentionPolicyLimits, UserRetentionPolicy,
 };
 

@@ -1,13 +1,13 @@
-use crate::services::operations::{
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
+use northstar_operations_application::operations::{
     contains_secret_key, validate_error_code, validate_json,
     validate_manual_reconciliation_content, MAX_RESULT_BYTES,
 };
-pub use crate::services::operations::{
+pub use northstar_operations_application::operations::{
     AuthorizationPolicy, OperationPage, OperationPageBoundary, OperationRecord, OperationStatus,
     OperationTargetPage, OperationTargetRecord,
 };
-use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 #[cfg(test)]
 use sqlx::PgPool;
@@ -285,7 +285,6 @@ fn operation_from_row(row: &sqlx::postgres::PgRow) -> Result<OperationRecord> {
     Ok(OperationRecord {
         id: row.get("id"),
         request_id: row.get("request_id"),
-        #[cfg(test)]
         idempotency_id: row.get("idempotency_id"),
         actor_id: row.get("actor_id"),
         actor_subject_id: row.get("actor_subject_id"),

@@ -5,17 +5,17 @@ use anyhow::Result;
 use std::future::Future;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EffectFenceDecision {
+pub enum EffectFenceDecision {
     Authorized,
     Denied,
 }
 
-pub(crate) enum FencedEffect<T> {
+pub enum FencedEffect<T> {
     Denied,
     Executed(T),
 }
 
-pub(crate) trait OperationEffectFenceRepository: Send + Sync {
+pub trait OperationEffectFenceRepository: Send + Sync {
     type Parent;
     type Target;
 
@@ -27,18 +27,18 @@ pub(crate) trait OperationEffectFenceRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct OperationEffectFenceService<R> {
+pub struct OperationEffectFenceService<R> {
     repository: R,
 }
 
 impl<R: OperationEffectFenceRepository> OperationEffectFenceService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
     /// The repository has completed its transaction before the effect factory
     /// is called. A denied fence never constructs or runs the effect future.
-    pub(crate) async fn execute_after_commit<T, F, Fut>(
+    pub async fn execute_after_commit<T, F, Fut>(
         &self,
         parent: &R::Parent,
         target: &R::Target,

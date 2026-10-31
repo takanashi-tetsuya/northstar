@@ -9,13 +9,13 @@ use crate::{
         operation_muc_destroy_repository::PostgresMucDestroyRepository,
         operation_muc_wake_repository::PostgresCommittedMucWakeRepository,
     },
-    services::{
-        operation_muc_destroy::{MucDestroyCommit, MucDestroyEffect, MucDestroyService},
-        operation_muc_wake::CommittedMucWakeService,
-    },
+    services::operation_muc_wake::CommittedMucWakeService,
 };
 use anyhow::Result;
 use dashmap::DashMap;
+use northstar_operations_application::operation_muc_destroy::{
+    MucDestroyCommit, MucDestroyEffect, MucDestroyService,
+};
 use std::sync::Arc;
 use uuid::Uuid;
 

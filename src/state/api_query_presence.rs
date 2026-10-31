@@ -1,8 +1,8 @@
 //! The REST query context's read-only view of this node's live session and MUC occupant maps.
 
 use super::{MucOccupant, OnlineSession};
-use crate::services::api_queries::SessionView;
 use dashmap::DashMap;
+use northstar_operations_application::api_queries::SessionView;
 use std::{
     sync::{atomic::Ordering, Arc},
     time::Instant,

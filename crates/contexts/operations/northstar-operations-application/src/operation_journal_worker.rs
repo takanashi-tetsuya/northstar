@@ -8,13 +8,13 @@ use std::future::Future;
 use uuid::Uuid;
 
 #[derive(Clone, Copy)]
-pub(crate) enum TargetClaim<T> {
+pub enum TargetClaim<T> {
     LeaseLost,
     Claimed(T),
     NoTarget,
 }
 
-pub(crate) enum NextTarget<T> {
+pub enum NextTarget<T> {
     LeaseLost,
     Claimed(T),
     Cancelled,
@@ -22,20 +22,20 @@ pub(crate) enum NextTarget<T> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LeaseRenewal {
+pub enum LeaseRenewal {
     Renewed,
     Lost,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TargetSettlement {
+pub enum TargetSettlement {
     Succeeded,
     Indeterminate,
     NotApplied,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ParentTerminalization {
+pub enum ParentTerminalization {
     Succeeded,
     FailedIncomplete,
     LeaseLost,
@@ -43,18 +43,18 @@ pub(crate) enum ParentTerminalization {
 
 /// Only the fields needed to choose local fan-out targets are exposed to the
 /// callback. The repository retains the claimed lease and its transaction.
-pub(crate) struct ClaimedOperation<'a> {
-    pub(crate) kind: &'a str,
-    pub(crate) payload: &'a Value,
+pub struct ClaimedOperation<'a> {
+    pub kind: &'a str,
+    pub payload: &'a Value,
 }
 
-pub(crate) struct TargetSeed {
-    pub(crate) target_key: String,
-    pub(crate) ordinal: i64,
-    pub(crate) payload: Value,
+pub struct TargetSeed {
+    pub target_key: String,
+    pub ordinal: i64,
+    pub payload: Value,
 }
 
-pub(crate) trait OperationJournalWorkerRepository: Send + Sync {
+pub trait OperationJournalWorkerRepository: Send + Sync {
     type Parent;
     type Target;
 
@@ -108,16 +108,16 @@ pub(crate) trait OperationJournalWorkerRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct OperationJournalWorkerService<R> {
+pub struct OperationJournalWorkerService<R> {
     repository: R,
 }
 
 impl<R: OperationJournalWorkerRepository> OperationJournalWorkerService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn claim_parent_with_targets<F>(
+    pub async fn claim_parent_with_targets<F>(
         &self,
         worker_id: Uuid,
         lease_seconds: i64,
@@ -131,7 +131,7 @@ impl<R: OperationJournalWorkerRepository> OperationJournalWorkerService<R> {
             .await
     }
 
-    pub(crate) async fn next_target(
+    pub async fn next_target(
         &self,
         parent: &R::Parent,
         worker_id: Uuid,
@@ -154,7 +154,7 @@ impl<R: OperationJournalWorkerRepository> OperationJournalWorkerService<R> {
         }
     }
 
-    pub(crate) async fn renew_effect_leases(
+    pub async fn renew_effect_leases(
         &self,
         parent: &R::Parent,
         target: &R::Target,
@@ -173,7 +173,7 @@ impl<R: OperationJournalWorkerRepository> OperationJournalWorkerService<R> {
 
     /// The effect has already crossed its durable point of no return. An
     /// executor error therefore becomes indeterminate rather than retryable.
-    pub(crate) async fn settle_target(
+    pub async fn settle_target(
         &self,
         parent: &R::Parent,
         target: &R::Target,
@@ -203,10 +203,7 @@ impl<R: OperationJournalWorkerRepository> OperationJournalWorkerService<R> {
         }
     }
 
-    pub(crate) async fn terminalize_parent(
-        &self,
-        parent: &R::Parent,
-    ) -> Result<ParentTerminalization> {
+    pub async fn terminalize_parent(&self, parent: &R::Parent) -> Result<ParentTerminalization> {
         self.repository.terminalize_parent(parent).await
     }
 }

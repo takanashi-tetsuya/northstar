@@ -2474,6 +2474,66 @@
         "uuid"
       ],
       [
+        "northstar-operations-application",
+        "anyhow"
+      ],
+      [
+        "northstar-operations-application",
+        "chrono"
+      ],
+      [
+        "northstar-operations-application",
+        "northstar-abuse-policy"
+      ],
+      [
+        "northstar-operations-application",
+        "northstar-archive-core"
+      ],
+      [
+        "northstar-operations-application",
+        "northstar-auth-core"
+      ],
+      [
+        "northstar-operations-application",
+        "northstar-operations-core"
+      ],
+      [
+        "northstar-operations-application",
+        "northstar-security"
+      ],
+      [
+        "northstar-operations-application",
+        "northstar-upload-core"
+      ],
+      [
+        "northstar-operations-application",
+        "northstar-xmpp-types"
+      ],
+      [
+        "northstar-operations-application",
+        "serde"
+      ],
+      [
+        "northstar-operations-application",
+        "serde_json"
+      ],
+      [
+        "northstar-operations-application",
+        "thiserror"
+      ],
+      [
+        "northstar-operations-application",
+        "tokio"
+      ],
+      [
+        "northstar-operations-application",
+        "uuid"
+      ],
+      [
+        "northstar-operations-application",
+        "zeroize"
+      ],
+      [
         "northstar-operations-core",
         "anyhow"
       ],
@@ -4856,6 +4916,10 @@
       [
         "rust-xmpp-server",
         "northstar-message-core"
+      ],
+      [
+        "rust-xmpp-server",
+        "northstar-operations-application"
       ],
       [
         "rust-xmpp-server",
@@ -7357,6 +7421,7 @@
       "northstar-federation-core",
       "northstar-message-application",
       "northstar-message-core",
+      "northstar-operations-application",
       "northstar-operations-core",
       "northstar-postgres",
       "northstar-presence-core",

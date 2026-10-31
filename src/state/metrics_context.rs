@@ -5,7 +5,7 @@ use crate::api::contexts::metrics::{
     MetricsLimits, MetricsRenderProbe, MucOccupancyCountProbe, OccupancyCount,
 };
 use crate::api::contexts::MetricsContext;
-use crate::services::metrics_snapshot::SmRecoveryGaugeSnapshot;
+use northstar_operations_application::metrics_snapshot::SmRecoveryGaugeSnapshot;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 

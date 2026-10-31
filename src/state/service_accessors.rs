@@ -44,15 +44,17 @@ impl AppState {
 
     pub(crate) fn report_service(
         &self,
-    ) -> &crate::services::reports::ReportService<db::report_repository::PostgresReportRepository>
-    {
+    ) -> &northstar_operations_application::reports::ReportService<
+        db::report_repository::PostgresReportRepository,
+    > {
         &self.report_service
     }
 
     pub(crate) fn api_query_service(
         &self,
-    ) -> &crate::services::api_queries::ApiQueryService<db::api_queries::PostgresApiQueryRepository>
-    {
+    ) -> &northstar_operations_application::api_queries::ApiQueryService<
+        db::api_queries::PostgresApiQueryRepository,
+    > {
         self.api_query_context.api_query_service()
     }
 
@@ -231,7 +233,7 @@ impl AppState {
 
     pub(crate) fn admin_command_service(
         &self,
-    ) -> &crate::services::admin_commands::AdminCommandService<
+    ) -> &northstar_operations_application::admin_commands::AdminCommandService<
         db::admin_command_repository::PostgresAdminCommandRepository,
     > {
         &self.admin_command_service

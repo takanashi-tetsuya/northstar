@@ -553,7 +553,7 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
     let invalid_key = "report-invalid-key-0003".to_owned();
     let invalid_request =
         report_idempotency_request(&reporter, &invalid_key, b"", b"report-body-invalid");
-    let invalid_payload = crate::services::reports::ReportInput {
+    let invalid_payload = northstar_operations_application::reports::ReportInput {
         reported_jid: "peer@example.test",
         category: "spam",
         evidence: vec![ReportEvidenceInput {
@@ -564,7 +564,7 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
         description: Some("description"),
     };
     assert_eq!(
-        crate::services::reports::report_validation_error(&invalid_payload),
+        northstar_operations_application::reports::report_validation_error(&invalid_payload),
         Some("report evidence is invalid")
     );
     let step_before_invalid = guard

@@ -1,7 +1,7 @@
-pub use crate::services::reports::ReportEvidenceInput;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_auth_core as auth;
+pub use northstar_operations_application::reports::ReportEvidenceInput;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use sqlx::Row;

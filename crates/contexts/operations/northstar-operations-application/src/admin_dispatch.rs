@@ -3,20 +3,20 @@ use northstar_operations_core::api_mutations::{
     AdminMutationAdmission, ApiMutationOutcome, ApiMutationRejection, StoredApiResponse,
 };
 
-pub(crate) struct RoomDestructionTarget {
+pub struct RoomDestructionTarget {
     localpart: String,
     room_jid: String,
 }
 impl RoomDestructionTarget {
-    pub(crate) fn localpart(&self) -> &str {
+    pub fn localpart(&self) -> &str {
         &self.localpart
     }
-    pub(crate) fn room_jid(&self) -> &str {
+    pub fn room_jid(&self) -> &str {
         &self.room_jid
     }
 }
 
-pub(crate) trait AdminDispatchRepository: Send + Sync {
+pub trait AdminDispatchRepository: Send + Sync {
     fn reload_tls(
         &self,
         admission: AdminMutationAdmission<'_>,
@@ -43,34 +43,34 @@ pub(crate) trait AdminDispatchRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct AdminDispatchService<R> {
+pub struct AdminDispatchService<R> {
     repository: R,
     domain: String,
 }
 impl<R: AdminDispatchRepository> AdminDispatchService<R> {
-    pub(crate) fn new(repository: R, domain: String) -> Self {
+    pub fn new(repository: R, domain: String) -> Self {
         Self { repository, domain }
     }
-    pub(crate) async fn reload_tls(
+    pub async fn reload_tls(
         &self,
         admission: AdminMutationAdmission<'_>,
     ) -> anyhow::Result<ApiMutationOutcome<StoredApiResponse>> {
         self.repository.reload_tls(admission).await
     }
-    pub(crate) async fn panic_disconnect(
+    pub async fn panic_disconnect(
         &self,
         admission: AdminMutationAdmission<'_>,
     ) -> anyhow::Result<ApiMutationOutcome<StoredApiResponse>> {
         self.repository.panic_disconnect(admission).await
     }
-    pub(crate) async fn set_island_mode(
+    pub async fn set_island_mode(
         &self,
         admission: AdminMutationAdmission<'_>,
         enabled: bool,
     ) -> anyhow::Result<ApiMutationOutcome<StoredApiResponse>> {
         self.repository.set_island_mode(admission, enabled).await
     }
-    pub(crate) fn room_target(
+    pub fn room_target(
         &self,
         localpart: String,
     ) -> Result<RoomDestructionTarget, ApiMutationRejection> {
@@ -90,14 +90,14 @@ impl<R: AdminDispatchRepository> AdminDispatchService<R> {
             room_jid,
         })
     }
-    pub(crate) async fn destroy_room(
+    pub async fn destroy_room(
         &self,
         admission: AdminMutationAdmission<'_>,
         room: &RoomDestructionTarget,
     ) -> anyhow::Result<ApiMutationOutcome<StoredApiResponse>> {
         self.repository.destroy_room(admission, room).await
     }
-    pub(crate) async fn broadcast(
+    pub async fn broadcast(
         &self,
         admission: AdminMutationAdmission<'_>,
         message: &str,

@@ -62,7 +62,7 @@ impl AppState {
 
     pub(crate) fn abuse_key_authority_probe(
         &self,
-    ) -> crate::services::readiness::AbuseKeyAuthorityProbe<
+    ) -> northstar_operations_application::readiness::AbuseKeyAuthorityProbe<
         db::readiness_repository::PostgresReadinessRepository,
     > {
         self.readiness_service.abuse_key_authority_probe()

@@ -1,9 +1,9 @@
 //! Unit tests for the durable operation worker runtime.
 
 use super::*;
-use crate::services::operation_muc_destroy::MucDestroyAudience;
 use crate::xmpp::local_routes::muc::{MucOccupant, MucOccupantEndpoint};
 use crate::xmpp::local_routes::muc_table::remove_local_muc_occupant_exact_from;
+use northstar_operations_application::operation_muc_destroy::MucDestroyAudience;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::sync::Notify;

@@ -3,7 +3,7 @@
 use std::future::Future;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct S2sOutboxSnapshot {
+pub struct S2sOutboxSnapshot {
     pub pending_rows: i64,
     pub pending_bytes: i64,
     pub oldest_age_seconds: f64,
@@ -12,14 +12,14 @@ pub(crate) struct S2sOutboxSnapshot {
     pub component_pending_rows: i64,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct ApiOperationSnapshot {
+pub struct ApiOperationSnapshot {
     pub pending: i64,
     pub running: i64,
     pub indeterminate: i64,
     pub oldest_active_age_seconds: f64,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct AdminSessionCleanupSnapshot {
+pub struct AdminSessionCleanupSnapshot {
     pub pending: i64,
     pub running: i64,
     pub oldest_age_seconds: f64,
@@ -28,14 +28,14 @@ pub(crate) struct AdminSessionCleanupSnapshot {
     pub capacity: i64,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct DataGovernanceSnapshot {
+pub struct DataGovernanceSnapshot {
     pub active_holds: i64,
     pub preserved_offline_records: i64,
     pub active_export_leases: i64,
     pub expired_incomplete_export_leases: i64,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct DeploymentCapacitySnapshot {
+pub struct DeploymentCapacitySnapshot {
     pub configuration_epoch: i64,
     pub accounts_used: i64,
     pub accounts_limit: i64,
@@ -49,7 +49,7 @@ pub(crate) struct DeploymentCapacitySnapshot {
     pub sessions_per_account_limit: i64,
 }
 
-pub(crate) type DatabaseMetricsSnapshot = (
+pub type DatabaseMetricsSnapshot = (
     i64,
     S2sOutboxSnapshot,
     ApiOperationSnapshot,
@@ -60,9 +60,9 @@ pub(crate) type DatabaseMetricsSnapshot = (
 );
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct DatabasePoolStatus {
-    pub(crate) connections: u32,
-    pub(crate) idle_connections: usize,
+pub struct DatabasePoolStatus {
+    pub connections: u32,
+    pub idle_connections: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,37 +77,37 @@ pub struct ClusterMetricsSnapshot {
 
 /// Copy-only process gauges. Neither the HTTP adapter nor this renderer owns
 /// the live config, cluster, MUC map, metrics registry, or SM governor.
-pub(crate) struct ProcessGaugeSnapshot {
-    pub(crate) base_metrics: String,
-    pub(crate) database_max_connections: u32,
-    pub(crate) s2s_outbox_max_rows: i64,
-    pub(crate) s2s_outbox_max_bytes: i64,
-    pub(crate) s2s_outbox_max_per_domain: i64,
-    pub(crate) muc_occupants: usize,
-    pub(crate) federation_outbound_workers: usize,
-    pub(crate) uptime_seconds: u64,
-    pub(crate) tls_not_after: i64,
-    pub(crate) tls_seconds_remaining: i64,
-    pub(crate) tls_generation: u64,
-    pub(crate) certificate_sessions: northstar_security::tls::CertificateSessionMetrics,
-    pub(crate) cluster: ClusterMetricsSnapshot,
+pub struct ProcessGaugeSnapshot {
+    pub base_metrics: String,
+    pub database_max_connections: u32,
+    pub s2s_outbox_max_rows: i64,
+    pub s2s_outbox_max_bytes: i64,
+    pub s2s_outbox_max_per_domain: i64,
+    pub muc_occupants: usize,
+    pub federation_outbound_workers: usize,
+    pub uptime_seconds: u64,
+    pub tls_not_after: i64,
+    pub tls_seconds_remaining: i64,
+    pub tls_generation: u64,
+    pub certificate_sessions: northstar_security::tls::CertificateSessionMetrics,
+    pub cluster: ClusterMetricsSnapshot,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SmRecoveryGaugeSnapshot {
-    pub(crate) reserved_bytes: u64,
-    pub(crate) limit_bytes: usize,
-    pub(crate) peak_reserved_bytes: u64,
-    pub(crate) admission_rejections_total: u64,
-    pub(crate) invariant_failures_total: u64,
-    pub(crate) recovery_jobs: usize,
-    pub(crate) recovery_job_limit: usize,
-    pub(crate) recovery_bytes: usize,
-    pub(crate) recovery_byte_limit: usize,
-    pub(crate) recovery_oldest_age_seconds: u64,
+pub struct SmRecoveryGaugeSnapshot {
+    pub reserved_bytes: u64,
+    pub limit_bytes: usize,
+    pub peak_reserved_bytes: u64,
+    pub admission_rejections_total: u64,
+    pub invariant_failures_total: u64,
+    pub recovery_jobs: usize,
+    pub recovery_job_limit: usize,
+    pub recovery_bytes: usize,
+    pub recovery_byte_limit: usize,
+    pub recovery_oldest_age_seconds: u64,
 }
 
-pub(crate) trait MetricsSnapshotRepository: Send + Sync {
+pub trait MetricsSnapshotRepository: Send + Sync {
     fn ping(&self) -> impl Future<Output = anyhow::Result<()>> + Send;
     fn pool_status(&self) -> DatabasePoolStatus;
     fn collect(
@@ -117,20 +117,20 @@ pub(crate) trait MetricsSnapshotRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct MetricsSnapshotService<R> {
+pub struct MetricsSnapshotService<R> {
     repository: R,
 }
 impl<R: MetricsSnapshotRepository> MetricsSnapshotService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
-    pub(crate) async fn ping(&self) -> anyhow::Result<()> {
+    pub async fn ping(&self) -> anyhow::Result<()> {
         self.repository.ping().await
     }
-    pub(crate) fn pool_status(&self) -> DatabasePoolStatus {
+    pub fn pool_status(&self) -> DatabasePoolStatus {
         self.repository.pool_status()
     }
-    pub(crate) async fn collect(
+    pub async fn collect(
         &self,
         component_domains: &[String],
     ) -> anyhow::Result<DatabaseMetricsSnapshot> {
@@ -139,7 +139,7 @@ impl<R: MetricsSnapshotRepository> MetricsSnapshotService<R> {
 }
 
 /// Preserve the original Prometheus label names, order, and scalar formatting.
-pub(crate) fn render_process_gauges(
+pub fn render_process_gauges(
     database_up: bool,
     database_ping_seconds: f64,
     pool_status: DatabasePoolStatus,
@@ -225,7 +225,7 @@ pub(crate) fn render_process_gauges(
     body
 }
 
-pub(crate) fn render_sm_recovery_gauges(snapshot: &SmRecoveryGaugeSnapshot) -> String {
+pub fn render_sm_recovery_gauges(snapshot: &SmRecoveryGaugeSnapshot) -> String {
     let mut body = String::new();
     body.push_str(&format!(
         concat!(

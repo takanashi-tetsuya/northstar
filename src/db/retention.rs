@@ -13,7 +13,7 @@ impl PostgresMaintenanceRepository {
     }
 }
 
-impl crate::services::maintenance_repositories::RetentionRepository
+impl northstar_operations_application::maintenance_repositories::RetentionRepository
     for PostgresMaintenanceRepository
 {
     async fn purge_resolved_retention_batch(
@@ -46,7 +46,7 @@ impl crate::services::maintenance_repositories::RetentionRepository
     }
 }
 
-impl crate::services::maintenance_repositories::SubscriptionCleanupRepository
+impl northstar_operations_application::maintenance_repositories::SubscriptionCleanupRepository
     for PostgresMaintenanceRepository
 {
     async fn cleanup_expired_subscriptions(&self, batch_size: i64) -> Result<u64> {
@@ -84,7 +84,7 @@ pub(crate) async fn purge_expired_retraction_intents(
     .rows_affected())
 }
 
-pub use crate::services::maintenance_repositories::RetentionStore;
+pub use northstar_operations_application::maintenance_repositories::RetentionStore;
 
 /// `0` deliberately means that automated deletion is disabled. It never
 /// means "delete everything now", which keeps a missing/zero configuration

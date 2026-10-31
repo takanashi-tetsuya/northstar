@@ -2,10 +2,10 @@
 //! The transaction is committed before the caller may start an effect.
 
 use crate::db::{self, OperationLease, OperationTargetLease};
-use crate::services::operation_effect_fence::{
+use anyhow::Result;
+use northstar_operations_application::operation_effect_fence::{
     EffectFenceDecision, OperationEffectFenceRepository,
 };
-use anyhow::Result;
 use sqlx::PgPool;
 
 #[derive(Clone)]

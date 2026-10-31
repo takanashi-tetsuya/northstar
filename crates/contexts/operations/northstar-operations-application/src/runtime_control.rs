@@ -13,43 +13,45 @@ pub struct DurableServiceControl {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum RuntimeControlReadPhase {
+pub enum RuntimeControlReadPhase {
     Snapshot,
 }
 
-pub(crate) struct RuntimePolicySnapshot {
-    pub(crate) island_mode: bool,
-    pub(crate) registration_closed: bool,
-    pub(crate) blacklist: Vec<String>,
-    pub(crate) whitelist: Vec<String>,
+pub struct RuntimePolicySnapshot {
+    pub island_mode: bool,
+    pub registration_closed: bool,
+    pub blacklist: Vec<String>,
+    pub whitelist: Vec<String>,
 }
 
-pub(crate) trait RuntimeControlRepository: Send {
-    async fn policy_snapshot(
+pub trait RuntimeControlRepository: Send {
+    fn policy_snapshot(
         &mut self,
         read_phase: impl FnMut(RuntimeControlReadPhase) + Send,
-    ) -> Result<RuntimePolicySnapshot>;
+    ) -> impl std::future::Future<Output = Result<RuntimePolicySnapshot>> + Send;
 
-    async fn service_control(&mut self) -> Result<Option<DurableServiceControl>>;
+    fn service_control(
+        &mut self,
+    ) -> impl std::future::Future<Output = Result<Option<DurableServiceControl>>> + Send;
 }
 
-pub(crate) struct RuntimeControlService<R> {
+pub struct RuntimeControlService<R> {
     repository: R,
 }
 
 impl<R: RuntimeControlRepository> RuntimeControlService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn policy_snapshot(
+    pub async fn policy_snapshot(
         &mut self,
         read_phase: impl FnMut(RuntimeControlReadPhase) + Send,
     ) -> Result<RuntimePolicySnapshot> {
         self.repository.policy_snapshot(read_phase).await
     }
 
-    pub(crate) async fn service_control(&mut self) -> Result<Option<DurableServiceControl>> {
+    pub async fn service_control(&mut self) -> Result<Option<DurableServiceControl>> {
         self.repository.service_control().await
     }
 }

@@ -14,14 +14,14 @@ pub enum AuthorizationPolicy {
 }
 
 impl AuthorizationPolicy {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::ReauthorizeUntilEffect => "reauthorize_until_effect",
             Self::CommittedConsequence => "committed_consequence",
         }
     }
 
-    pub(crate) fn parse(value: &str) -> Result<Self> {
+    pub fn parse(value: &str) -> Result<Self> {
         match value {
             "reauthorize_until_effect" => Ok(Self::ReauthorizeUntilEffect),
             "committed_consequence" => Ok(Self::CommittedConsequence),
@@ -45,7 +45,7 @@ pub enum OperationStatus {
 }
 
 impl OperationStatus {
-    pub(crate) fn parse(value: &str) -> Result<Self> {
+    pub fn parse(value: &str) -> Result<Self> {
         match value {
             "pending" => Ok(Self::Pending),
             "running" => Ok(Self::Running),
@@ -100,7 +100,6 @@ pub struct OperationTargetPage {
 pub struct OperationRecord {
     pub id: Uuid,
     pub request_id: Uuid,
-    #[cfg(test)]
     pub idempotency_id: Option<Uuid>,
     pub actor_id: Option<Uuid>,
     pub actor_subject_id: Uuid,
@@ -144,8 +143,8 @@ pub struct OperationTargetRecord {
 }
 
 const MAX_ERROR_CODE_BYTES: usize = 128;
-pub(crate) const MAX_RESULT_BYTES: usize = 1024 * 1024;
-pub(crate) fn validate_json(value: &Value, maximum: usize, label: &str) -> Result<()> {
+pub const MAX_RESULT_BYTES: usize = 1024 * 1024;
+pub fn validate_json(value: &Value, maximum: usize, label: &str) -> Result<()> {
     anyhow::ensure!(
         serde_json::to_vec(value)?.len() <= maximum,
         "{label} exceeds its encoded size limit"
@@ -153,7 +152,7 @@ pub(crate) fn validate_json(value: &Value, maximum: usize, label: &str) -> Resul
     Ok(())
 }
 
-pub(crate) fn contains_secret_key(value: &Value) -> bool {
+pub fn contains_secret_key(value: &Value) -> bool {
     match value {
         Value::Object(object) => object.iter().any(|(key, value)| {
             let key = key.to_ascii_lowercase().replace('-', "_");
@@ -265,7 +264,7 @@ pub fn validate_manual_reconciliation_content(
     Ok(())
 }
 
-pub(crate) fn validate_error_code(error_code: &str) -> Result<()> {
+pub fn validate_error_code(error_code: &str) -> Result<()> {
     anyhow::ensure!(
         !error_code.is_empty()
             && error_code.len() <= MAX_ERROR_CODE_BYTES
@@ -278,11 +277,11 @@ pub(crate) fn validate_error_code(error_code: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) struct ReconciliationInput<'a> {
-    pub(crate) succeeded: bool,
-    pub(crate) result: Option<&'a Value>,
-    pub(crate) error_code: Option<&'a str>,
-    pub(crate) evidence_note: &'a str,
+pub struct ReconciliationInput<'a> {
+    pub succeeded: bool,
+    pub result: Option<&'a Value>,
+    pub error_code: Option<&'a str>,
+    pub evidence_note: &'a str,
 }
 impl ReconciliationInput<'_> {
     fn validate(mut self) -> Result<Self> {
@@ -297,7 +296,7 @@ impl ReconciliationInput<'_> {
     }
 }
 
-pub(crate) trait OperationAdminRepository: Send + Sync {
+pub trait OperationAdminRepository: Send + Sync {
     fn cancel(
         &self,
         admission: AdminMutationAdmission<'_>,
@@ -319,14 +318,14 @@ pub(crate) trait OperationAdminRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct OperationAdminService<R> {
+pub struct OperationAdminService<R> {
     repository: R,
 }
 impl<R: OperationAdminRepository> OperationAdminService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
-    pub(crate) async fn cancel(
+    pub async fn cancel(
         &self,
         admission: AdminMutationAdmission<'_>,
         id: Uuid,
@@ -338,7 +337,7 @@ impl<R: OperationAdminRepository> OperationAdminService<R> {
         }
         self.repository.cancel(admission, id).await
     }
-    pub(crate) async fn reconcile(
+    pub async fn reconcile(
         &self,
         admission: AdminMutationAdmission<'_>,
         id: Uuid,
@@ -359,7 +358,7 @@ impl<R: OperationAdminRepository> OperationAdminService<R> {
         };
         self.repository.reconcile(admission, id, input).await
     }
-    pub(crate) async fn reconcile_target(
+    pub async fn reconcile_target(
         &self,
         admission: AdminMutationAdmission<'_>,
         operation_id: Uuid,

@@ -1,7 +1,7 @@
-use crate::services::admin_session_cleanup_worker::{
+use anyhow::{Context, Result};
+use northstar_operations_application::admin_session_cleanup_worker::{
     AdminSessionCleanupKind, AdminSessionCleanupLease, AdminSessionCleanupSnapshot,
 };
-use anyhow::{Context, Result};
 use sqlx::{Acquire, PgConnection, PgPool, Row};
 use std::collections::HashMap;
 #[cfg(test)]
@@ -61,8 +61,8 @@ pub struct AdminCommandFence<'a> {
 
 pub use northstar_roster_application::presence::ServiceMessageDeliveryClaim as ClaimedAdminServiceMessage;
 
-pub use crate::services::runtime_control::DurableServiceControl;
-pub(crate) use crate::services::runtime_control::RuntimeControlReadPhase;
+pub use northstar_operations_application::runtime_control::DurableServiceControl;
+pub(crate) use northstar_operations_application::runtime_control::RuntimeControlReadPhase;
 
 // The service-control watcher has a three-second WorkerRegistry silence
 // budget. Keep all database phases materially below that budget so a stalled

@@ -1,10 +1,10 @@
 //! Administrative upload recovery commands and their atomic repository boundary.
-use crate::services::api_queries::UploadDeadLetterId;
+use crate::api_queries::UploadDeadLetterId;
 use northstar_operations_core::api_mutations::{
     api_request_fingerprint, AdminMutationAdmission, ApiMutationOutcome, StoredApiResponse,
 };
 
-pub(crate) trait UploadAdminRepository: Send + Sync {
+pub trait UploadAdminRepository: Send + Sync {
     fn retry_dead_letter(
         &self,
         admission: AdminMutationAdmission<'_>,
@@ -13,16 +13,16 @@ pub(crate) trait UploadAdminRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct UploadAdminService<R> {
+pub struct UploadAdminService<R> {
     repository: R,
 }
 
 impl<R: UploadAdminRepository> UploadAdminService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn retry_dead_letter(
+    pub async fn retry_dead_letter(
         &self,
         admission: AdminMutationAdmission<'_>,
         id: UploadDeadLetterId,
@@ -37,7 +37,7 @@ impl<R: UploadAdminRepository> UploadAdminService<R> {
 /// scope means reuse of one key after a credential rotation finds the same
 /// record and fails with a fingerprint conflict instead of opening a second
 /// idempotency namespace.
-pub(crate) fn admin_generation_bound_request_fingerprint(
+pub fn admin_generation_bound_request_fingerprint(
     base: [u8; 32],
     auth_generation: i64,
 ) -> [u8; 32] {

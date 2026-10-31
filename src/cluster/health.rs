@@ -1,7 +1,7 @@
 //! Cluster health state machine: admission, failure recording, reconciliation, readiness and metrics.
 
 use super::*;
-use crate::services::metrics_snapshot::ClusterMetricsSnapshot;
+use northstar_operations_application::metrics_snapshot::ClusterMetricsSnapshot;
 
 /// Admission decisions share the live health state without Redis or publication authority.
 #[derive(Clone)]

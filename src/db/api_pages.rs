@@ -12,7 +12,7 @@ use serde::Serialize;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
 use uuid::Uuid;
 
-pub use crate::services::api_queries::{
+pub use northstar_operations_application::api_queries::{
     InvitationPageRow, KeysetPage, MucRoomPageRow, PageBoundary, ReportPageRow, UserPageRow,
 };
 

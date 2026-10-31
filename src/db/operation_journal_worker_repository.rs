@@ -1,11 +1,11 @@
 //! Atomic lease renewal and target claim for the administrator operation worker.
 
 use crate::db::{self, OperationLease, OperationTargetLease};
-use crate::services::operation_journal_worker::{
+use anyhow::Result;
+use northstar_operations_application::operation_journal_worker::{
     ClaimedOperation, OperationJournalWorkerRepository, ParentTerminalization, TargetClaim,
     TargetSeed,
 };
-use anyhow::Result;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -175,7 +175,7 @@ impl OperationJournalWorkerRepository for PostgresOperationJournalWorkerReposito
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::operation_journal_worker::OperationJournalWorkerService;
+    use northstar_operations_application::operation_journal_worker::OperationJournalWorkerService;
 
     async fn enqueue_broadcast(pool: &PgPool) -> Uuid {
         let actor = Uuid::new_v4();

@@ -11,18 +11,18 @@ use uuid::Uuid;
 
 const MAX_ADMIN_ACCOUNT_PAGE_SIZE: i64 = 200;
 const MAX_ADMIN_ACCOUNT_PAGE_OFFSET: i64 = 10_000;
-pub(crate) const MAX_ADMIN_ROSTER_ITEMS: usize = 10_000;
-pub(crate) const MAX_FEDERATION_RULES_PER_KIND: usize = 1_000;
+pub const MAX_ADMIN_ROSTER_ITEMS: usize = 10_000;
+pub const MAX_FEDERATION_RULES_PER_KIND: usize = 1_000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AdminActor {
+pub struct AdminActor {
     pub user_id: Uuid,
     pub username: String,
     pub auth_generation: i64,
 }
 
 impl AdminActor {
-    pub(crate) fn new(user_id: Uuid, username: String, auth_generation: i64) -> Self {
+    pub fn new(user_id: Uuid, username: String, auth_generation: i64) -> Self {
         Self {
             user_id,
             username,
@@ -32,14 +32,14 @@ impl AdminActor {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CommandSessionOutcome {
+pub enum CommandSessionOutcome {
     Finished,
     Expired,
     Invalid,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum CommandExecutionOutcome {
+pub enum CommandExecutionOutcome {
     Started(AdminExecutionClaim),
     Busy,
     Completed(String),
@@ -48,7 +48,7 @@ pub(crate) enum CommandExecutionOutcome {
 }
 
 #[derive(Eq, PartialEq)]
-pub(crate) struct AdminExecutionClaim {
+pub struct AdminExecutionClaim {
     operation_id: Uuid,
     token: zeroize::Zeroizing<String>,
     actor_id: Uuid,
@@ -71,18 +71,18 @@ impl std::fmt::Debug for AdminExecutionClaim {
     }
 }
 
-pub(crate) struct AdminExecutionFence<'a> {
-    pub(crate) claim_token: &'a str,
-    pub(crate) actor_id: Uuid,
-    pub(crate) actor_username: &'a str,
-    pub(crate) actor_generation: i64,
-    pub(crate) node: &'a str,
-    pub(crate) target_digest: &'a [u8; 32],
-    pub(crate) result_payload: &'a str,
+pub struct AdminExecutionFence<'a> {
+    pub claim_token: &'a str,
+    pub actor_id: Uuid,
+    pub actor_username: &'a str,
+    pub actor_generation: i64,
+    pub node: &'a str,
+    pub target_digest: &'a [u8; 32],
+    pub result_payload: &'a str,
 }
 
 impl AdminExecutionClaim {
-    pub(crate) fn new(
+    pub fn new(
         operation_id: Uuid,
         token: zeroize::Zeroizing<String>,
         actor: &AdminActor,
@@ -98,13 +98,13 @@ impl AdminExecutionClaim {
             target_digest,
         }
     }
-    pub(crate) fn token(&self) -> &str {
+    pub fn token(&self) -> &str {
         self.token.as_str()
     }
-    pub(crate) fn target_digest(&self) -> &[u8; 32] {
+    pub fn target_digest(&self) -> &[u8; 32] {
         &self.target_digest
     }
-    pub(crate) fn fence<'a>(
+    pub fn fence<'a>(
         &'a self,
         actor: &'a AdminActor,
         node: &'a str,
@@ -129,13 +129,13 @@ impl AdminExecutionClaim {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ExecutionReleaseOutcome {
+pub enum ExecutionReleaseOutcome {
     Released,
     Stale,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AdminWriteOutcome {
+pub enum AdminWriteOutcome {
     Applied,
     Unauthorized,
     TargetChanged,
@@ -145,10 +145,10 @@ pub(crate) enum AdminWriteOutcome {
 
 #[derive(Debug, thiserror::Error)]
 #[error("administrative database transaction must be retried")]
-pub(crate) struct AdminCommandRetryable;
+pub struct AdminCommandRetryable;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum AccountMutationOutcome {
+pub enum AccountMutationOutcome {
     Applied,
     Unauthorized,
     TargetChanged,
@@ -158,7 +158,7 @@ pub(crate) enum AccountMutationOutcome {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CreateAccountOutcome {
+pub enum CreateAccountOutcome {
     Created,
     UsernameTaken,
     CapacityExhausted,
@@ -166,26 +166,26 @@ pub(crate) enum CreateAccountOutcome {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BoundedAccountList {
+pub struct BoundedAccountList {
     pub usernames: Vec<String>,
     pub truncated: bool,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct AnnouncementPageCursor {
-    pub(crate) snapshot_at: chrono::DateTime<chrono::Utc>,
-    pub(crate) after_username: String,
-    pub(crate) after_id: Uuid,
+pub struct AnnouncementPageCursor {
+    pub snapshot_at: chrono::DateTime<chrono::Utc>,
+    pub after_username: String,
+    pub after_id: Uuid,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct AnnouncementAccountPage {
+pub struct AnnouncementAccountPage {
     pub usernames: Vec<String>,
     pub next: Option<AnnouncementPageCursor>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AccountCommandAction {
+pub enum AccountCommandAction {
     Delete,
     Disable,
     Reenable,
@@ -193,26 +193,26 @@ pub(crate) enum AccountCommandAction {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AccountCommandTarget {
+pub struct AccountCommandTarget {
     pub username: String,
     pub exact_full_jid: Option<CanonicalJid>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AccountCommandView {
+pub struct AccountCommandView {
     pub user_id: Uuid,
     pub username: String,
     pub last_login_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct AccountRosterView {
+pub struct AccountRosterView {
     pub account: AccountCommandView,
     pub items: Vec<(String, Option<String>, String, Option<String>)>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct AccountStatistics {
+pub struct AccountStatistics {
     pub account: AccountCommandView,
     pub roster_size: i64,
     pub archived_stanzas: i64,
@@ -220,17 +220,17 @@ pub(crate) struct AccountStatistics {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FederationRuleSet {
+pub struct FederationRuleSet {
     pub blacklist: Vec<String>,
     pub whitelist: Vec<String>,
 }
 
 #[derive(Clone)]
-pub(crate) struct AdminCommandService<R> {
+pub struct AdminCommandService<R> {
     repository: R,
 }
 
-pub(crate) trait AdminCommandRepository: Send + Sync {
+pub trait AdminCommandRepository: Send + Sync {
     fn current_admin(
         &self,
         cached: &AdminActor,
@@ -434,19 +434,19 @@ pub(crate) trait AdminCommandRepository: Send + Sync {
 }
 
 impl<R: AdminCommandRepository> AdminCommandService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
-    pub(crate) async fn current_admin(&self, cached: &AdminActor) -> Result<Option<AdminActor>> {
+    pub async fn current_admin(&self, cached: &AdminActor) -> Result<Option<AdminActor>> {
         self.repository.current_admin(cached).await
     }
-    pub(crate) async fn registered_account_count(&self, actor: &AdminActor) -> Result<Option<i64>> {
+    pub async fn registered_account_count(&self, actor: &AdminActor) -> Result<Option<i64>> {
         self.repository.registered_account_count(actor).await
     }
-    pub(crate) async fn disabled_account_count(&self, actor: &AdminActor) -> Result<Option<i64>> {
+    pub async fn disabled_account_count(&self, actor: &AdminActor) -> Result<Option<i64>> {
         self.repository.disabled_account_count(actor).await
     }
-    pub(crate) async fn registered_account_usernames(
+    pub async fn registered_account_usernames(
         &self,
         actor: &AdminActor,
         limit: i64,
@@ -457,7 +457,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             .registered_account_usernames(actor, limit, offset)
             .await
     }
-    pub(crate) async fn disabled_account_usernames(
+    pub async fn disabled_account_usernames(
         &self,
         actor: &AdminActor,
         limit: i64,
@@ -468,7 +468,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             .disabled_account_usernames(actor, limit, offset)
             .await
     }
-    pub(crate) async fn announcement_account_page(
+    pub async fn announcement_account_page(
         &self,
         actor: &AdminActor,
         cursor: Option<&AnnouncementPageCursor>,
@@ -477,14 +477,14 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             .announcement_account_page(actor, cursor)
             .await
     }
-    pub(crate) async fn administrator_usernames(
+    pub async fn administrator_usernames(
         &self,
         actor: &AdminActor,
     ) -> Result<Option<BoundedAccountList>> {
         self.repository.administrator_usernames(actor).await
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn create_account(
+    pub async fn create_account(
         &self,
         actor: &AdminActor,
         claim: &AdminExecutionClaim,
@@ -510,7 +510,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             .await
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn mutate_accounts(
+    pub async fn mutate_accounts(
         &self,
         actor: &AdminActor,
         claim: &AdminExecutionClaim,
@@ -526,7 +526,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             .await
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn reset_account_password(
+    pub async fn reset_account_password(
         &self,
         actor: &AdminActor,
         claim: &AdminExecutionClaim,
@@ -553,28 +553,28 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             )
             .await
     }
-    pub(crate) async fn account_last_login(
+    pub async fn account_last_login(
         &self,
         actor: &AdminActor,
         username: &str,
     ) -> Result<Option<AccountCommandView>> {
         self.repository.account_last_login(actor, username).await
     }
-    pub(crate) async fn account_roster(
+    pub async fn account_roster(
         &self,
         actor: &AdminActor,
         username: &str,
     ) -> Result<Option<AccountRosterView>> {
         self.repository.account_roster(actor, username).await
     }
-    pub(crate) async fn account_statistics(
+    pub async fn account_statistics(
         &self,
         actor: &AdminActor,
         username: &str,
     ) -> Result<Option<AccountStatistics>> {
         self.repository.account_statistics(actor, username).await
     }
-    pub(crate) async fn replace_administrators(
+    pub async fn replace_administrators(
         &self,
         actor: &AdminActor,
         claim: &AdminExecutionClaim,
@@ -587,7 +587,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             .replace_administrators(actor, claim, node, usernames, result_payload)
             .await
     }
-    pub(crate) async fn record_announcement(
+    pub async fn record_announcement(
         &self,
         actor: &AdminActor,
         claim: &AdminExecutionClaim,
@@ -601,7 +601,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             .record_announcement(actor, claim, node, recipients, bytes, result_payload)
             .await
     }
-    pub(crate) async fn set_service_message(
+    pub async fn set_service_message(
         &self,
         actor: &AdminActor,
         claim: &AdminExecutionClaim,
@@ -615,7 +615,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             .set_service_message(actor, claim, node, kind, body, result_payload)
             .await
     }
-    pub(crate) async fn service_message_body(
+    pub async fn service_message_body(
         &self,
         actor: &AdminActor,
         kind: &str,
@@ -626,7 +626,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
         );
         self.repository.service_message_body(actor, kind).await
     }
-    pub(crate) async fn replace_federation_rules(
+    pub async fn replace_federation_rules(
         &self,
         actor: &AdminActor,
         claim: &AdminExecutionClaim,
@@ -640,7 +640,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             .replace_federation_rules(actor, claim, node, kind, entities, result_payload)
             .await
     }
-    pub(crate) async fn federation_rule_domains(
+    pub async fn federation_rule_domains(
         &self,
         actor: &AdminActor,
         kind: &str,
@@ -651,7 +651,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
         );
         self.repository.federation_rule_domains(actor, kind).await
     }
-    pub(crate) async fn cancel_service_control(
+    pub async fn cancel_service_control(
         &self,
         actor: &AdminActor,
         claim: &AdminExecutionClaim,
@@ -665,7 +665,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             .await
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn schedule_service_control(
+    pub async fn schedule_service_control(
         &self,
         actor: &AdminActor,
         claim: &AdminExecutionClaim,
@@ -688,7 +688,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             )
             .await
     }
-    pub(crate) async fn create_session(
+    pub async fn create_session(
         &self,
         actor: &AdminActor,
         owner_full_jid: &str,
@@ -700,7 +700,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             .create_session(actor, owner_full_jid, server_domain, node, stage)
             .await
     }
-    pub(crate) async fn finish_session(
+    pub async fn finish_session(
         &self,
         bearer: &str,
         actor: &AdminActor,
@@ -712,7 +712,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             .finish_session(bearer, actor, owner_full_jid, node, final_stage)
             .await
     }
-    pub(crate) async fn complete_count_session(
+    pub async fn complete_count_session(
         &self,
         bearer: &str,
         actor: &AdminActor,
@@ -724,7 +724,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             .complete_count_session(bearer, actor, owner_full_jid, node, payload)
             .await
     }
-    pub(crate) async fn begin_execution(
+    pub async fn begin_execution(
         &self,
         bearer: &str,
         actor: &AdminActor,
@@ -736,7 +736,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             .begin_execution(bearer, actor, owner_full_jid, node, target_digest)
             .await
     }
-    pub(crate) async fn release_execution(
+    pub async fn release_execution(
         &self,
         actor: &AdminActor,
         claim: &AdminExecutionClaim,
@@ -745,7 +745,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
         claim.fence(actor, node, "")?;
         self.repository.release_execution(actor, claim, node).await
     }
-    pub(crate) async fn renew_execution(
+    pub async fn renew_execution(
         &self,
         actor: &AdminActor,
         claim: &AdminExecutionClaim,
@@ -754,7 +754,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
         claim.fence(actor, node, "")?;
         self.repository.renew_execution(actor, claim, node).await
     }
-    pub(crate) async fn complete_read_execution(
+    pub async fn complete_read_execution(
         &self,
         actor: &AdminActor,
         claim: &AdminExecutionClaim,
@@ -766,7 +766,7 @@ impl<R: AdminCommandRepository> AdminCommandService<R> {
             .complete_read_execution(actor, claim, node, payload)
             .await
     }
-    pub(crate) async fn cleanup_sessions(&self) -> Result<u64> {
+    pub async fn cleanup_sessions(&self) -> Result<u64> {
         self.repository.cleanup_sessions().await
     }
 }
@@ -785,7 +785,7 @@ fn validate_account_page(limit: i64, offset: i64) -> Result<()> {
 
 /// Construct account JIDs at the service boundary so protocol handlers never
 /// pass an unvalidated `username@domain` string into an authority mutation.
-pub(crate) fn canonical_account_jid(username: &str, domain: &str) -> Result<CanonicalJid> {
+pub fn canonical_account_jid(username: &str, domain: &str) -> Result<CanonicalJid> {
     let jid = CanonicalJid::parse_bare(&format!("{username}@{domain}"))?;
     anyhow::ensure!(
         jid.localpart() == Some(username) && jid.domainpart() == domain,
@@ -795,35 +795,8 @@ pub(crate) fn canonical_account_jid(username: &str, domain: &str) -> Result<Cano
 }
 
 #[cfg(test)]
-mod read_authorization_tests {
+mod tests {
     use super::*;
-    use sqlx::PgPool;
-    use std::time::Duration;
-
-    async fn database() -> PgPool {
-        let url = std::env::var("TEST_DATABASE_URL")
-            .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(8)
-            .connect(&url)
-            .await
-            .unwrap();
-        crate::db::migrate(&pool).await.unwrap();
-        pool
-    }
-
-    async fn insert_admin(pool: &PgPool, id: Uuid, username: &str) -> AdminActor {
-        sqlx::query(
-            "INSERT INTO users(id,username,password_hash,is_admin,auth_generation)
-             VALUES($1,$2,'test-only',TRUE,0)",
-        )
-        .bind(id)
-        .bind(username)
-        .execute(pool)
-        .await
-        .unwrap();
-        AdminActor::new(id, username.to_owned(), 0)
-    }
 
     #[test]
     fn administrative_account_pages_have_hard_size_and_offset_bounds() {
@@ -833,124 +806,5 @@ mod read_authorization_tests {
         assert!(validate_account_page(MAX_ADMIN_ACCOUNT_PAGE_SIZE + 1, 0).is_err());
         assert!(validate_account_page(1, -1).is_err());
         assert!(validate_account_page(1, MAX_ADMIN_ACCOUNT_PAGE_OFFSET + 1).is_err());
-    }
-
-    #[tokio::test]
-    #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
-    async fn admin_read_snapshot_blocks_post_authorization_demotion_until_commit() {
-        let pool = database().await;
-        let suffix = Uuid::new_v4().simple().to_string();
-        let actor_id = Uuid::new_v4();
-        let actor = insert_admin(&pool, actor_id, &format!("read-lock-{}", &suffix[..12])).await;
-        let service = AdminCommandService::new(
-            crate::db::admin_command_repository::PostgresAdminCommandRepository::new(
-                pool.clone(),
-                pool.clone(),
-            ),
-        );
-        let (authorized_tx, authorized_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-        let read = tokio::spawn(async move {
-            service
-                .repository
-                .authorized_count_with_hook(&actor, || async move {
-                    authorized_tx.send(()).unwrap();
-                    release_rx.await.unwrap();
-                })
-                .await
-                .unwrap()
-                .expect("fresh administrator must authorize")
-        });
-        authorized_rx.await.unwrap();
-
-        let mutation_pool = pool.clone();
-        let (mutation_started_tx, mutation_started_rx) = tokio::sync::oneshot::channel();
-        let mut demotion = tokio::spawn(async move {
-            mutation_started_tx.send(()).unwrap();
-            sqlx::query("UPDATE users SET is_admin=FALSE WHERE id=$1")
-                .bind(actor_id)
-                .execute(&mutation_pool)
-                .await
-                .unwrap()
-                .rows_affected()
-        });
-        mutation_started_rx.await.unwrap();
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), &mut demotion)
-                .await
-                .is_err(),
-            "demotion committed while the authorized read still held FOR SHARE"
-        );
-
-        release_tx.send(()).unwrap();
-        assert!(read.await.unwrap() >= 1);
-        assert_eq!(demotion.await.unwrap(), 1);
-        assert!(
-            !sqlx::query_scalar::<_, bool>("SELECT is_admin FROM users WHERE id=$1")
-                .bind(actor_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap()
-        );
-        pool.close().await;
-    }
-
-    #[tokio::test]
-    #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
-    async fn admin_reads_reject_demotion_and_rotation_that_win_the_authorization_race() {
-        let pool = database().await;
-        let suffix = Uuid::new_v4().simple().to_string();
-        let actor_id = Uuid::new_v4();
-        let username = format!("read-fence-{}", &suffix[..12]);
-        let actor = insert_admin(&pool, actor_id, &username).await;
-        let service = AdminCommandService::new(
-            crate::db::admin_command_repository::PostgresAdminCommandRepository::new(
-                pool.clone(),
-                pool.clone(),
-            ),
-        );
-
-        let mut blocker = pool.begin().await.unwrap();
-        sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
-            .bind(actor_id)
-            .fetch_one(&mut *blocker)
-            .await
-            .unwrap();
-        let demotion_read = {
-            let service = service.clone();
-            let actor = actor.clone();
-            tokio::spawn(async move { service.registered_account_count(&actor).await.unwrap() })
-        };
-        sqlx::query("UPDATE users SET is_admin=FALSE WHERE id=$1")
-            .bind(actor_id)
-            .execute(&mut *blocker)
-            .await
-            .unwrap();
-        blocker.commit().await.unwrap();
-        assert_eq!(demotion_read.await.unwrap(), None);
-
-        sqlx::query("UPDATE users SET is_admin=TRUE WHERE id=$1")
-            .bind(actor_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        let mut blocker = pool.begin().await.unwrap();
-        sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
-            .bind(actor_id)
-            .fetch_one(&mut *blocker)
-            .await
-            .unwrap();
-        let rotation_read = {
-            let service = service.clone();
-            tokio::spawn(async move { service.registered_account_count(&actor).await.unwrap() })
-        };
-        sqlx::query("UPDATE users SET auth_generation=auth_generation+1 WHERE id=$1")
-            .bind(actor_id)
-            .execute(&mut *blocker)
-            .await
-            .unwrap();
-        blocker.commit().await.unwrap();
-        assert_eq!(rotation_read.await.unwrap(), None);
-        pool.close().await;
     }
 }

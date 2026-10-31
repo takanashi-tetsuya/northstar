@@ -337,7 +337,7 @@ pub async fn history(
             &state,
             &binding,
             chronological_first.map(|(id, created_at)| {
-                crate::services::api_queries::PageBoundary { created_at, id }
+                northstar_operations_application::api_queries::PageBoundary { created_at, id }
             }),
             database_now,
         )?

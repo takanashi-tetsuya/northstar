@@ -8,12 +8,10 @@ use crate::{
         OperationLease,
     },
     runtime::operation_runtime::LocalBroadcastTargetSnapshot,
-    services::{
-        operation_effect_fence::OperationEffectFenceService,
-        operation_journal_worker::OperationJournalWorkerService,
-    },
 };
 use anyhow::Result;
+use northstar_operations_application::operation_effect_fence::OperationEffectFenceService;
+use northstar_operations_application::operation_journal_worker::OperationJournalWorkerService;
 use uuid::Uuid;
 
 pub(crate) struct OperationWorkerControl {

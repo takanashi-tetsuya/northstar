@@ -5,14 +5,14 @@ use northstar_operations_core::api_mutations::{
 use northstar_operations_core::text::valid_administrative_text;
 use uuid::Uuid;
 
-pub(crate) struct ModerationCommand<'a> {
-    pub(crate) admission: AdminMutationAdmission<'a>,
-    pub(crate) id: Uuid,
-    pub(crate) status: &'a str,
-    pub(crate) resolution: &'a str,
+pub struct ModerationCommand<'a> {
+    pub admission: AdminMutationAdmission<'a>,
+    pub id: Uuid,
+    pub status: &'a str,
+    pub resolution: &'a str,
 }
 
-pub(crate) trait ReportModerationRepository: Send + Sync {
+pub trait ReportModerationRepository: Send + Sync {
     fn update_report(
         &self,
         command: ModerationCommand<'_>,
@@ -25,16 +25,16 @@ pub(crate) trait ReportModerationRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct ReportModerationService<R> {
+pub struct ReportModerationService<R> {
     repository: R,
 }
 
 impl<R: ReportModerationRepository> ReportModerationService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn update_report<'a>(
+    pub async fn update_report<'a>(
         &self,
         admission: AdminMutationAdmission<'a>,
         id: Uuid,
@@ -57,7 +57,7 @@ impl<R: ReportModerationRepository> ReportModerationService<R> {
             .await
     }
 
-    pub(crate) async fn update_appeal<'a>(
+    pub async fn update_appeal<'a>(
         &self,
         admission: AdminMutationAdmission<'a>,
         id: Uuid,

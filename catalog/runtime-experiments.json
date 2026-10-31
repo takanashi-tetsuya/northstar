@@ -1317,8 +1317,8 @@
       "id": "diagnostics",
       "title": "Readiness, metrics and failure evidence",
       "production_owner": {
-        "path": "src/services/readiness.rs",
-        "anchor": "pub(crate) struct ReadinessService<R> {"
+        "path": "crates/contexts/operations/northstar-operations-application/src/readiness.rs",
+        "anchor": "pub struct ReadinessService<R> {"
       },
       "runtime_identities": [
         {

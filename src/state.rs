@@ -302,10 +302,10 @@ pub struct AppState {
     /// The roster context; see [`RosterModule`].
     roster: RosterModule,
     api_query_context: ApiQueryContext,
-    metrics_snapshot_service: crate::services::metrics_snapshot::MetricsSnapshotService<
+    metrics_snapshot_service: northstar_operations_application::metrics_snapshot::MetricsSnapshotService<
         db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository,
     >,
-    readiness_service: crate::services::readiness::ReadinessService<
+    readiness_service: northstar_operations_application::readiness::ReadinessService<
         db::readiness_repository::PostgresReadinessRepository,
     >,
     public_discovery_context: PublicDiscoveryContext,
@@ -341,7 +341,7 @@ pub struct AppState {
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
     /// XEP-0050/XEP-0133 session and execution authority. Protocol handlers
     /// never receive the backing PostgreSQL pool through this capability.
-    admin_command_service: crate::services::admin_commands::AdminCommandService<
+    admin_command_service: northstar_operations_application::admin_commands::AdminCommandService<
         db::admin_command_repository::PostgresAdminCommandRepository,
     >,
     push_service: crate::services::push::PushService<db::push::PostgresPushRepository>,
@@ -383,7 +383,7 @@ pub struct AppState {
         northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
     operation_admin_service: OperationAdminContext,
     operation_muc_destroy_service: Arc<
-        crate::services::operation_muc_destroy::MucDestroyService<
+        northstar_operations_application::operation_muc_destroy::MucDestroyService<
             db::operation_muc_destroy_repository::PostgresMucDestroyRepository,
         >,
     >,
@@ -392,15 +392,15 @@ pub struct AppState {
     >,
     locked_muc_expiry_context: std::sync::OnceLock<Arc<locked_muc_expiry::LockedMucExpiryContext>>,
     operation_effect_fence_service:
-        crate::services::operation_effect_fence::OperationEffectFenceService<
+        northstar_operations_application::operation_effect_fence::OperationEffectFenceService<
             db::operation_effect_fence_repository::PostgresOperationEffectFenceRepository,
         >,
     operation_journal_worker_service:
-        crate::services::operation_journal_worker::OperationJournalWorkerService<
+        northstar_operations_application::operation_journal_worker::OperationJournalWorkerService<
             db::operation_journal_worker_repository::PostgresOperationJournalWorkerRepository,
         >,
     admin_session_cleanup_worker_service:
-        crate::services::admin_session_cleanup_worker::AdminSessionCleanupWorkerService<
+        northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupWorkerService<
             db::admin_session_cleanup_worker_repository::PostgresAdminSessionCleanupRepository,
         >,
     admin_dispatch_service: AdminDispatchContext,
@@ -409,7 +409,7 @@ pub struct AppState {
     retention_policy_context: RetentionPolicyContext,
     governance_context: GovernanceContext,
     report_service:
-        crate::services::reports::ReportService<db::report_repository::PostgresReportRepository>,
+        northstar_operations_application::reports::ReportService<db::report_repository::PostgresReportRepository>,
     federation_outbox: FederationRouter,
     /// Full XEP-0114/XEP-0225 authentication records. `config.components`
     /// retains only redacted routing/discovery metadata after construction.

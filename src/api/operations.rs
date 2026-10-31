@@ -10,9 +10,9 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::api::error::AppError;
-use crate::services::{
-    api_queries::{ApiReadDenial, AuthorizedRead, PageBoundary},
-    operations::{OperationPageBoundary, OperationRecord, OperationTargetRecord},
+use northstar_operations_application::api_queries::{ApiReadDenial, AuthorizedRead, PageBoundary};
+use northstar_operations_application::operations::{
+    OperationPageBoundary, OperationRecord, OperationTargetRecord,
 };
 
 use super::{
@@ -278,7 +278,7 @@ fn operation_filter_scope(
 #[cfg(test)]
 mod read_tests {
     use super::*;
-    use crate::services::operations::{AuthorizationPolicy, OperationStatus};
+    use northstar_operations_application::operations::{AuthorizationPolicy, OperationStatus};
     use serde_json::json;
 
     fn operation_record() -> OperationRecord {
@@ -530,8 +530,8 @@ pub struct ReconcileRequest {
 }
 
 impl ReconcileRequest {
-    fn input(&self) -> crate::services::operations::ReconciliationInput<'_> {
-        crate::services::operations::ReconciliationInput {
+    fn input(&self) -> northstar_operations_application::operations::ReconciliationInput<'_> {
+        northstar_operations_application::operations::ReconciliationInput {
             succeeded: self.succeeded,
             result: self.result.as_ref(),
             error_code: self.error_code.as_deref(),

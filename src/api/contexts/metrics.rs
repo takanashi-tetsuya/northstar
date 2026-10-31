@@ -5,11 +5,11 @@
 use crate::cluster::ClusterMetricsProbe;
 use crate::db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository;
 use crate::s2s::S2sOutboundCountProbe;
-use crate::services::metrics_snapshot::{
+use dashmap::DashMap;
+use northstar_operations_application::metrics_snapshot::{
     DatabaseMetricsSnapshot, DatabasePoolStatus, MetricsSnapshotService, ProcessGaugeSnapshot,
     SmRecoveryGaugeSnapshot,
 };
-use dashmap::DashMap;
 use northstar_security::tls::TlsMetricsProbe;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;

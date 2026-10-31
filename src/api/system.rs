@@ -21,9 +21,9 @@ use crate::api::contexts::{MetricsContext, ReadinessContext};
 use crate::api::error::{AppError, Result};
 use crate::xmpp;
 
-use crate::services::metrics_snapshot::DatabaseMetricsSnapshot;
+use northstar_operations_application::metrics_snapshot::DatabaseMetricsSnapshot;
 #[cfg(test)]
-use crate::services::readiness::{
+use northstar_operations_application::readiness::{
     admin_session_cleanup_ready, ADMIN_CLEANUP_MAX_READY_AGE_SECONDS,
     ADMIN_CLEANUP_MAX_READY_ATTEMPTS,
 };
@@ -369,7 +369,7 @@ async fn collect_metrics(context: &MetricsContext) -> String {
         }
     };
     let process = context.process_snapshot();
-    let mut body = crate::services::metrics_snapshot::render_process_gauges(
+    let mut body = northstar_operations_application::metrics_snapshot::render_process_gauges(
         database_up,
         database_ping_seconds,
         pool_status,
@@ -381,7 +381,9 @@ async fn collect_metrics(context: &MetricsContext) -> String {
     body.push_str(&northstar_telemetry::logging::render_metrics());
     body.push_str(&render_database_collector(collector.as_ref()));
     let sm = context.sm_snapshot();
-    body.push_str(&crate::services::metrics_snapshot::render_sm_recovery_gauges(&sm));
+    body.push_str(
+        &northstar_operations_application::metrics_snapshot::render_sm_recovery_gauges(&sm),
+    );
     body
 }
 

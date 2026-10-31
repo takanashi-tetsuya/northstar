@@ -212,3 +212,32 @@ impl PepLastItemsContext {
         Ok(())
     }
 }
+
+impl northstar_pubsub_xmpp::pep::PepLastItemDelivery for PepLastItemsContext {
+    type CapsEpoch = LocalCapsEpoch;
+
+    fn last_item_pubsub_service(
+        &self,
+    ) -> &PubSubService<impl northstar_pubsub_xmpp::PubSubRepositories> {
+        self.pubsub_service()
+    }
+
+    fn last_item_local_domain(&self) -> &str {
+        self.local_domain()
+    }
+
+    fn last_item_notify_nodes(&self, full_jid: &str) -> Vec<String> {
+        self.pep_notify_nodes(full_jid)
+    }
+
+    async fn last_item_route(
+        &self,
+        sender_bare_jid: &str,
+        recipient: &str,
+        message: String,
+        expected_local_epoch: Option<LocalCapsEpoch>,
+    ) -> Result<()> {
+        self.route_message(sender_bare_jid, recipient, message, expected_local_epoch)
+            .await
+    }
+}

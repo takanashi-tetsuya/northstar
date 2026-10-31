@@ -72,7 +72,7 @@ impl northstar_pubsub_xmpp::private_xml::PrivateXmlSession for ProtocolSession {
         event: &str,
         audience: &PepAudienceSnapshot,
     ) -> Result<Vec<(String, String)>> {
-        ProtocolSession::prepare_pep_audience_messages(
+        northstar_pubsub_xmpp::pep::pep_audience_messages(
             self.state.as_ref(),
             publisher_full_jid,
             node,

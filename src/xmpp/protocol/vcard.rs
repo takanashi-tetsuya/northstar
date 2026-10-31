@@ -80,7 +80,7 @@ impl VCardSession for ProtocolSession {
         event: &str,
         audience: &ProfileAudienceSnapshot,
     ) -> Result<Vec<(String, String)>> {
-        ProtocolSession::prepare_profile_audience_messages(
+        northstar_pubsub_xmpp::pep::profile_audience_messages(
             self.state.as_ref(),
             publisher_full_jid,
             node,

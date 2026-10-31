@@ -3335,7 +3335,8 @@ for (const invariant of [
 if (/interval\s*\(\s*CAPS_EFFECT_RETRY_BASE\s*\)/.test(capsProtocolSource)) {
   throw new Error('Caps retry correctness regressed to fixed periodic reconstruction');
 }
-if (/\.take\(128\)/.test(capsProtocolSource + readProductionModule('src/xmpp/protocol/pep.rs', { root }))) {
+if (/\.take\(128\)/.test(capsProtocolSource + readProductionModule('src/xmpp/protocol/pep.rs', { root })
+  + readProductionModule('crates/contexts/pubsub/northstar-pubsub-xmpp/src/pep.rs', { root }))) {
   throw new Error('Caps/PEP fan-out silently truncates a verified notify summary');
 }
 if (countMatches(capsProtocolSource, /self\.entries\.insert\(\s*full_jid,/g) < 2) {

@@ -27,17 +27,17 @@ fn bookmarks_event_contains_only_the_locked_changed_items() {
 fn c2s_pep_subscription_handlers_delegate_authority_to_the_service() {
     let source = super::module_source();
     let subscribe = source
-        .split_once("async fn pep_subscribe(")
+        .split_once("async fn pep_subscribe<")
         .expect("PEP subscribe handler must remain identifiable")
         .1
-        .split_once("async fn pep_unsubscribe(")
+        .split_once("async fn pep_unsubscribe<")
         .expect("PEP subscribe handler must end before unsubscribe")
         .0;
     let unsubscribe = source
-        .split_once("async fn pep_unsubscribe(")
+        .split_once("async fn pep_unsubscribe<")
         .expect("PEP unsubscribe handler must remain identifiable")
         .1
-        .split_once("async fn pep_target_owner(")
+        .split_once("async fn pep_target_owner<")
         .expect("PEP unsubscribe handler must end before target resolution")
         .0;
     for handler in [subscribe, unsubscribe] {

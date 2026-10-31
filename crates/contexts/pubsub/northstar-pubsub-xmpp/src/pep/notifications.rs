@@ -1,8 +1,6 @@
 //! Render PEP notifications and prepare or deliver live and last-item events.
 
 use super::*;
-pub(crate) use northstar_pubsub_xmpp::events::profile_item_event;
-pub(super) use northstar_pubsub_xmpp::events::strip_pubsub_item_root_namespaces;
 
 pub(super) fn pep_subscription_element(
     node: &str,
@@ -44,174 +42,154 @@ pub(super) fn pep_event_message(
     Ok(message.finish())
 }
 
-impl ProtocolSession {
-    /// Render a generic PEP event from the service's transaction-owned
-    /// authorization snapshot. Runtime caps/resources are soft routing hints:
-    /// they may narrow or expand a bare authorized principal to its resources,
-    /// but can never add another principal.
-    pub(crate) fn prepare_pep_audience_messages(
-        state: &crate::state::AppState,
-        publisher_full_jid: Option<&str>,
-        node: &str,
-        event: &str,
-        audience: &PepAudienceSnapshot,
-    ) -> Result<Vec<(String, String)>> {
-        let event_for = |recipient: &str, reply_to_publisher: bool| -> Result<String> {
-            pep_event_message(
-                &audience.owner_bare_jid,
-                recipient,
-                uuid::Uuid::new_v4(),
-                event,
-                reply_to_publisher.then_some(publisher_full_jid).flatten(),
-            )
-        };
-        let mut delivered = HashSet::new();
-        let mut plan = Vec::new();
-        for (full_jid, target) in state.session_entries_for(&audience.owner_bare_jid) {
-            if target.available.load(std::sync::atomic::Ordering::Relaxed)
-                && super::super::caps::wants_pep_node(state, &full_jid, node)
-                && delivered.insert(full_jid.clone())
-            {
-                plan.push((full_jid.clone(), event_for(&full_jid, false)?));
-            }
+/// Render a generic PEP event from the service's transaction-owned
+/// authorization snapshot. Runtime caps/resources are soft routing hints:
+/// they may narrow or expand a bare authorized principal to its resources,
+/// but can never add another principal.
+pub fn pep_audience_messages(
+    routing: &(impl PepAudienceRouting + ?Sized),
+    publisher_full_jid: Option<&str>,
+    node: &str,
+    event: &str,
+    audience: &PepAudienceSnapshot,
+) -> Result<Vec<(String, String)>> {
+    let event_for = |recipient: &str, reply_to_publisher: bool| -> Result<String> {
+        pep_event_message(
+            &audience.owner_bare_jid,
+            recipient,
+            uuid::Uuid::new_v4(),
+            event,
+            reply_to_publisher.then_some(publisher_full_jid).flatten(),
+        )
+    };
+    let mut delivered = HashSet::new();
+    let mut plan = Vec::new();
+    for full_jid in routing.pep_available_resources_wanting(&audience.owner_bare_jid, node) {
+        if delivered.insert(full_jid.clone()) {
+            plan.push((full_jid.clone(), event_for(&full_jid, false)?));
         }
-        for contact in &audience.roster_jids {
-            let contact_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(contact)?;
-            let contact_bare = contact_jid.to_string();
-            if contact_jid.domainpart() == state.local_domain() {
-                for (full_jid, target) in state.session_entries_for(&contact_bare) {
-                    if target.available.load(std::sync::atomic::Ordering::Relaxed)
-                        && super::super::caps::wants_pep_node(state, &full_jid, node)
-                        && delivered.insert(full_jid.clone())
-                    {
-                        plan.push((full_jid.clone(), event_for(&full_jid, true)?));
-                    }
-                }
-            } else {
-                for full_jid in
-                    super::super::caps::interested_resources_for_bare(state, &contact_bare, node)
-                {
-                    if delivered.insert(full_jid.clone()) {
-                        plan.push((full_jid.clone(), event_for(&full_jid, true)?));
-                    }
-                }
-            }
-        }
-        for subscription_jid in &audience.explicit_jids {
-            let parsed = northstar_xmpp_types::jid::CanonicalJid::parse(subscription_jid)?;
-            if parsed.resourcepart().is_some() {
-                if delivered.insert(subscription_jid.clone()) {
-                    plan.push((
-                        subscription_jid.clone(),
-                        event_for(subscription_jid, false)?,
-                    ));
-                }
-                continue;
-            }
-            let subscription_bare = parsed.bare();
-            let interested_resources =
-                super::super::caps::interested_resources_for_bare(state, &subscription_bare, node);
-            if interested_resources.is_empty() {
-                if delivered.insert(subscription_jid.clone()) {
-                    plan.push((
-                        subscription_jid.clone(),
-                        event_for(subscription_jid, false)?,
-                    ));
-                }
-            } else {
-                for resource in interested_resources {
-                    if delivered.insert(resource.clone()) {
-                        plan.push((resource.clone(), event_for(&resource, false)?));
-                    }
-                }
-            }
-        }
-        Ok(plan)
     }
+    for contact in &audience.roster_jids {
+        let contact_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(contact)?;
+        let contact_bare = contact_jid.to_string();
+        if contact_jid.domainpart() == routing.pep_routing_local_domain() {
+            for full_jid in routing.pep_available_resources_wanting(&contact_bare, node) {
+                if delivered.insert(full_jid.clone()) {
+                    plan.push((full_jid.clone(), event_for(&full_jid, true)?));
+                }
+            }
+        } else {
+            for full_jid in routing.pep_interested_resources(&contact_bare, node) {
+                if delivered.insert(full_jid.clone()) {
+                    plan.push((full_jid.clone(), event_for(&full_jid, true)?));
+                }
+            }
+        }
+    }
+    for subscription_jid in &audience.explicit_jids {
+        let parsed = northstar_xmpp_types::jid::CanonicalJid::parse(subscription_jid)?;
+        if parsed.resourcepart().is_some() {
+            if delivered.insert(subscription_jid.clone()) {
+                plan.push((
+                    subscription_jid.clone(),
+                    event_for(subscription_jid, false)?,
+                ));
+            }
+            continue;
+        }
+        let subscription_bare = parsed.bare();
+        let interested_resources = routing.pep_interested_resources(&subscription_bare, node);
+        if interested_resources.is_empty() {
+            if delivered.insert(subscription_jid.clone()) {
+                plan.push((
+                    subscription_jid.clone(),
+                    event_for(subscription_jid, false)?,
+                ));
+            }
+        } else {
+            for resource in interested_resources {
+                if delivered.insert(resource.clone()) {
+                    plan.push((resource.clone(), event_for(&resource, false)?));
+                }
+            }
+        }
+    }
+    Ok(plan)
+}
 
-    /// Render a profile event from a transaction-owned authorization snapshot.
-    /// Session and caps state only narrows delivery to useful resources; it
-    /// cannot add a roster contact or explicit subscriber absent from the
-    /// durable snapshot.
-    pub(crate) fn prepare_profile_audience_messages(
-        state: &crate::state::AppState,
-        publisher_full_jid: Option<&str>,
-        node: &str,
-        event: &str,
-        audience: &ProfileAudienceSnapshot,
-    ) -> Result<Vec<(String, String)>> {
-        let event_for = |recipient: &str, reply_to_publisher: bool| -> Result<String> {
-            pep_event_message(
-                &audience.owner_bare_jid,
-                recipient,
-                uuid::Uuid::new_v4(),
-                event,
-                reply_to_publisher.then_some(publisher_full_jid).flatten(),
-            )
-        };
-        let mut delivered = HashSet::new();
-        let mut plan = Vec::new();
-        for (full_jid, target) in state.session_entries_for(&audience.owner_bare_jid) {
-            if target.available.load(std::sync::atomic::Ordering::Relaxed)
-                && super::super::caps::wants_pep_node(state, &full_jid, node)
-                && delivered.insert(full_jid.clone())
-            {
-                plan.push((full_jid.clone(), event_for(&full_jid, false)?));
-            }
+/// Render a profile event from a transaction-owned authorization snapshot.
+/// Session and caps state only narrows delivery to useful resources; it
+/// cannot add a roster contact or explicit subscriber absent from the
+/// durable snapshot.
+pub fn profile_audience_messages(
+    routing: &(impl PepAudienceRouting + ?Sized),
+    publisher_full_jid: Option<&str>,
+    node: &str,
+    event: &str,
+    audience: &ProfileAudienceSnapshot,
+) -> Result<Vec<(String, String)>> {
+    let event_for = |recipient: &str, reply_to_publisher: bool| -> Result<String> {
+        pep_event_message(
+            &audience.owner_bare_jid,
+            recipient,
+            uuid::Uuid::new_v4(),
+            event,
+            reply_to_publisher.then_some(publisher_full_jid).flatten(),
+        )
+    };
+    let mut delivered = HashSet::new();
+    let mut plan = Vec::new();
+    for full_jid in routing.pep_available_resources_wanting(&audience.owner_bare_jid, node) {
+        if delivered.insert(full_jid.clone()) {
+            plan.push((full_jid.clone(), event_for(&full_jid, false)?));
         }
-        for contact in &audience.roster_jids {
-            let contact_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(contact)?;
-            let contact_bare = contact_jid.to_string();
-            if contact_jid.domainpart() == state.local_domain() {
-                for (full_jid, target) in state.session_entries_for(&contact_bare) {
-                    if target.available.load(std::sync::atomic::Ordering::Relaxed)
-                        && super::super::caps::wants_pep_node(state, &full_jid, node)
-                        && delivered.insert(full_jid.clone())
-                    {
-                        plan.push((full_jid.clone(), event_for(&full_jid, true)?));
-                    }
-                }
-            } else {
-                for full_jid in
-                    super::super::caps::interested_resources_for_bare(state, &contact_bare, node)
-                {
-                    if delivered.insert(full_jid.clone()) {
-                        plan.push((full_jid.clone(), event_for(&full_jid, true)?));
-                    }
-                }
-            }
-        }
-        for subscription_jid in &audience.explicit_jids {
-            let parsed = northstar_xmpp_types::jid::CanonicalJid::parse(subscription_jid)?;
-            if parsed.resourcepart().is_some() {
-                if delivered.insert(subscription_jid.clone()) {
-                    plan.push((
-                        subscription_jid.clone(),
-                        event_for(subscription_jid, false)?,
-                    ));
-                }
-                continue;
-            }
-            let subscription_bare = parsed.bare();
-            let interested_resources =
-                super::super::caps::interested_resources_for_bare(state, &subscription_bare, node);
-            if interested_resources.is_empty() {
-                if delivered.insert(subscription_jid.clone()) {
-                    plan.push((
-                        subscription_jid.clone(),
-                        event_for(subscription_jid, false)?,
-                    ));
-                }
-            } else {
-                for resource in interested_resources {
-                    if delivered.insert(resource.clone()) {
-                        plan.push((resource.clone(), event_for(&resource, false)?));
-                    }
-                }
-            }
-        }
-        Ok(plan)
     }
+    for contact in &audience.roster_jids {
+        let contact_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(contact)?;
+        let contact_bare = contact_jid.to_string();
+        if contact_jid.domainpart() == routing.pep_routing_local_domain() {
+            for full_jid in routing.pep_available_resources_wanting(&contact_bare, node) {
+                if delivered.insert(full_jid.clone()) {
+                    plan.push((full_jid.clone(), event_for(&full_jid, true)?));
+                }
+            }
+        } else {
+            for full_jid in routing.pep_interested_resources(&contact_bare, node) {
+                if delivered.insert(full_jid.clone()) {
+                    plan.push((full_jid.clone(), event_for(&full_jid, true)?));
+                }
+            }
+        }
+    }
+    for subscription_jid in &audience.explicit_jids {
+        let parsed = northstar_xmpp_types::jid::CanonicalJid::parse(subscription_jid)?;
+        if parsed.resourcepart().is_some() {
+            if delivered.insert(subscription_jid.clone()) {
+                plan.push((
+                    subscription_jid.clone(),
+                    event_for(subscription_jid, false)?,
+                ));
+            }
+            continue;
+        }
+        let subscription_bare = parsed.bare();
+        let interested_resources = routing.pep_interested_resources(&subscription_bare, node);
+        if interested_resources.is_empty() {
+            if delivered.insert(subscription_jid.clone()) {
+                plan.push((
+                    subscription_jid.clone(),
+                    event_for(subscription_jid, false)?,
+                ));
+            }
+        } else {
+            for resource in interested_resources {
+                if delivered.insert(resource.clone()) {
+                    plan.push((resource.clone(), event_for(&resource, false)?));
+                }
+            }
+        }
+    }
+    Ok(plan)
 }
 
 pub(super) fn render_pep_direct_state_messages(
@@ -256,13 +234,14 @@ pub(super) fn render_pep_direct_state_messages(
         .collect()
 }
 
-pub(crate) async fn send_pep_last_item(
-    context: &PepLastItemsContext,
+/// Delivers the last published item on `node` for `owner` to `recipient`.
+pub async fn send_pep_last_item<C: PepLastItemDelivery>(
+    context: &C,
     owner: &northstar_pubsub_core::PubSubAccount,
     node: &str,
     recipient: &str,
     on_presence: bool,
-    expected_local_epoch: Option<northstar_session_core::LocalCapsEpoch>,
+    expected_local_epoch: Option<C::CapsEpoch>,
 ) -> Result<()> {
     send_pep_last_item_for_owner(
         context,
@@ -276,7 +255,8 @@ pub(crate) async fn send_pep_last_item(
     .await
 }
 
-pub(crate) fn prepare_pep_last_item_outbox(
+/// Prepares the send-last outbox entries for a PEP subscription.
+pub fn prepare_pep_last_item_outbox(
     snapshot: &PepSubscribeSnapshot,
 ) -> Result<Vec<PubSubOutboxInsert>> {
     let Some(item) = snapshot.last_item.as_ref() else {
@@ -313,16 +293,20 @@ pub(crate) fn prepare_pep_last_item_outbox(
     )?])
 }
 
-pub(super) async fn send_pep_last_item_for_owner(
-    context: &PepLastItemsContext,
+pub(super) async fn send_pep_last_item_for_owner<C: PepLastItemDelivery>(
+    context: &C,
     owner_id: uuid::Uuid,
     owner_username: &str,
     node: &str,
     recipient: &str,
     on_presence: bool,
-    expected_local_epoch: Option<northstar_session_core::LocalCapsEpoch>,
+    expected_local_epoch: Option<C::CapsEpoch>,
 ) -> Result<()> {
-    let Some(config) = context.pubsub_service().pep_node(owner_id, node).await? else {
+    let Some(config) = context
+        .last_item_pubsub_service()
+        .pep_node(owner_id, node)
+        .await?
+    else {
         return Ok(());
     };
     if config.send_last_published_item == "never"
@@ -332,7 +316,7 @@ pub(super) async fn send_pep_last_item_for_owner(
         return Ok(());
     }
     let Some(item) = context
-        .pubsub_service()
+        .last_item_pubsub_service()
         .pep_items_with_timestamp(owner_id, node, 1)
         .await?
         .into_iter()
@@ -340,7 +324,7 @@ pub(super) async fn send_pep_last_item_for_owner(
     else {
         return Ok(());
     };
-    let owner_jid = canonical_account_jid(owner_username, context.local_domain())?;
+    let owner_jid = canonical_account_jid(owner_username, context.last_item_local_domain())?;
     let payload = published_event_item(node, &item.item_id, &item.payload)?;
     let mut items = XmlElement::new("items").attr("node", node);
     items.push_validated_fragment(&payload)?;
@@ -356,29 +340,29 @@ pub(super) async fn send_pep_last_item_for_owner(
         )
         .finish();
     context
-        .route_message(&owner_jid, recipient, message, expected_local_epoch)
+        .last_item_route(&owner_jid, recipient, message, expected_local_epoch)
         .await
 }
 
 /// Delivers XEP-0060 send-last events for durable explicit subscriptions.
 /// Unlike XEP-0163 automatic subscriptions, explicit subscriptions do not
 /// depend on an XEP-0115 `node+notify` feature advertisement.
-pub(crate) async fn deliver_explicit_pep_last_items_for_resource(
-    context: &PepLastItemsContext,
+pub async fn deliver_explicit_pep_last_items_for_resource<C: PepLastItemDelivery>(
+    context: &C,
     full_jid: &str,
-    expected_local_epoch: Option<northstar_session_core::LocalCapsEpoch>,
+    expected_local_epoch: Option<C::CapsEpoch>,
 ) -> Result<()> {
     let full_jid = northstar_xmpp_types::jid::canonical_session_key(full_jid)?;
     for subscription in context
-        .pubsub_service()
+        .last_item_pubsub_service()
         .pep_subscriptions_for_available_resource(&full_jid)
         .await?
     {
         if pep_access_allowed_for_owner(
-            context.pubsub_service(),
+            context.last_item_pubsub_service(),
             subscription.owner_id,
             &subscription.owner_username,
-            context.local_domain(),
+            context.last_item_local_domain(),
             &subscription.node,
             &full_jid,
         )
@@ -399,12 +383,13 @@ pub(crate) async fn deliver_explicit_pep_last_items_for_resource(
     Ok(())
 }
 
-pub(crate) async fn deliver_pep_last_items_for_resource(
-    context: &PepLastItemsContext,
+/// Delivers PEP send-last items for a local resource based on its entity capabilities.
+pub async fn deliver_pep_last_items_for_resource<C: PepLastItemDelivery>(
+    context: &C,
     full_jid: &str,
-    expected_local_epoch: northstar_session_core::LocalCapsEpoch,
+    expected_local_epoch: C::CapsEpoch,
 ) -> Result<()> {
-    let wanted = context.pep_notify_nodes(full_jid);
+    let wanted = context.last_item_notify_nodes(full_jid);
     if wanted.is_empty() {
         return Ok(());
     }
@@ -413,11 +398,15 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
     let Some(username) = full.localpart() else {
         return Ok(());
     };
-    let Some(subscriber) = context.pubsub_service().find_enabled_user(username).await? else {
+    let Some(subscriber) = context
+        .last_item_pubsub_service()
+        .find_enabled_user(username)
+        .await?
+    else {
         return Ok(());
     };
     let explicit = context
-        .pubsub_service()
+        .last_item_pubsub_service()
         .pep_subscriptions_for_available_resource(full_jid)
         .await?
         .into_iter()
@@ -426,7 +415,7 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
     for node in &wanted {
         if !explicit.contains(&(subscriber.id, node.clone()))
             && context
-                .pubsub_service()
+                .last_item_pubsub_service()
                 .pep_node(subscriber.id, node)
                 .await?
                 .is_some()
@@ -442,35 +431,43 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
             .await?;
         }
     }
-    for (contact, _, subscription, _) in context.pubsub_service().roster(subscriber.id).await? {
+    for (contact, _, subscription, _) in context
+        .last_item_pubsub_service()
+        .roster(subscriber.id)
+        .await?
+    {
         if !matches!(subscription.as_str(), "to" | "both") {
             continue;
         }
         let Ok(contact_jid) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&contact) else {
             continue;
         };
-        if contact_jid.domainpart() != context.local_domain() {
+        if contact_jid.domainpart() != context.last_item_local_domain() {
             continue;
         }
         let Some(contact_name) = contact_jid.localpart() else {
             continue;
         };
         let Some(owner) = context
-            .pubsub_service()
+            .last_item_pubsub_service()
             .find_enabled_user(contact_name)
             .await?
         else {
             continue;
         };
-        if context.pubsub_service().is_blocked(owner.id, &bare).await? {
+        if context
+            .last_item_pubsub_service()
+            .is_blocked(owner.id, &bare)
+            .await?
+        {
             continue;
         }
         for node in &wanted {
             if !explicit.contains(&(owner.id, node.clone()))
                 && pep_access_allowed(
-                    context.pubsub_service(),
+                    context.last_item_pubsub_service(),
                     &owner,
-                    context.local_domain(),
+                    context.last_item_local_domain(),
                     node,
                     &bare,
                 )
@@ -491,47 +488,52 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
     Ok(())
 }
 
-pub(crate) async fn deliver_pep_last_items_for_federated_resource(
-    context: &PepLastItemsContext,
+/// Delivers PEP send-last items for a federated resource based on its entity capabilities.
+pub async fn deliver_pep_last_items_for_federated_resource<C: PepLastItemDelivery>(
+    context: &C,
     full_jid: &str,
 ) -> Result<()> {
-    let wanted = context.pep_notify_nodes(full_jid);
+    let wanted = context.last_item_notify_nodes(full_jid);
     if wanted.is_empty() {
         return Ok(());
     }
     let remote = northstar_xmpp_types::jid::CanonicalJid::parse(full_jid)?;
-    if remote.resourcepart().is_none() || remote.domainpart() == context.local_domain() {
+    if remote.resourcepart().is_none() || remote.domainpart() == context.last_item_local_domain() {
         return Ok(());
     }
     let bare = remote.bare();
     let explicit = context
-        .pubsub_service()
+        .last_item_pubsub_service()
         .pep_subscriptions_for_available_resource(full_jid)
         .await?
         .into_iter()
         .map(|subscription| (subscription.owner_id, subscription.node))
         .collect::<HashSet<_>>();
     for username in context
-        .pubsub_service()
+        .last_item_pubsub_service()
         .pep_owner_usernames_for_presence_subscriber(&bare)
         .await?
     {
         let Some(owner) = context
-            .pubsub_service()
+            .last_item_pubsub_service()
             .find_enabled_user(&username)
             .await?
         else {
             continue;
         };
-        if context.pubsub_service().is_blocked(owner.id, &bare).await? {
+        if context
+            .last_item_pubsub_service()
+            .is_blocked(owner.id, &bare)
+            .await?
+        {
             continue;
         }
         for node in &wanted {
             if !explicit.contains(&(owner.id, node.clone()))
                 && pep_access_allowed(
-                    context.pubsub_service(),
+                    context.last_item_pubsub_service(),
                     &owner,
-                    context.local_domain(),
+                    context.last_item_local_domain(),
                     node,
                     full_jid,
                 )

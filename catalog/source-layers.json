@@ -92,12 +92,6 @@
     "src/xmpp/protocol/pep.rs": [
       "state"
     ],
-    "src/xmpp/protocol/pep/notifications.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/pep/publishing.rs": [
-      "state"
-    ],
     "src/xmpp/protocol/pubsub.rs": [
       "state"
     ],

@@ -5,6 +5,7 @@
 
 pub mod events;
 pub mod payload;
+pub mod pep;
 pub mod private_xml;
 pub mod pubsub;
 pub mod vcard;

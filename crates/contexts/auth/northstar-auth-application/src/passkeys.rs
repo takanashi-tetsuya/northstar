@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use webauthn_rs::prelude::*;
 
-pub(crate) fn relying_party(public_url: &str) -> Result<Webauthn> {
+pub fn relying_party(public_url: &str) -> Result<Webauthn> {
     let url = Url::parse(public_url).context("invalid Passkeys origin")?;
     let host = url.host_str().context("Passkeys origin has no host")?;
     anyhow::ensure!(
@@ -22,39 +22,39 @@ pub(crate) fn relying_party(public_url: &str) -> Result<Webauthn> {
 }
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Registration {
+pub struct Registration {
     pub state: PasskeyRegistration,
     pub label: String,
 }
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Login {
+pub struct Login {
     pub state: PasskeyAuthentication,
     pub device_id: Uuid,
     pub credentials: Vec<CredentialVersion>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct CredentialVersion {
+pub struct CredentialVersion {
     pub id: Uuid,
     pub revision: Uuid,
     pub passkey: Passkey,
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct PasskeyActor<'a> {
+pub struct PasskeyActor<'a> {
     pub id: Uuid,
     pub username: &'a str,
     pub auth_generation: i64,
     pub session_token: &'a str,
 }
 
-pub(crate) struct PasskeyAccount {
+pub struct PasskeyAccount {
     pub id: Uuid,
     pub auth_generation: i64,
 }
 
-pub(crate) struct StoredCredential {
+pub struct StoredCredential {
     pub id: Uuid,
     pub label: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -63,32 +63,32 @@ pub(crate) struct StoredCredential {
     pub revision: Uuid,
 }
 
-pub(crate) struct StoredChallenge {
+pub struct StoredChallenge {
     pub user_id: Uuid,
     pub auth_generation: i64,
     pub state: serde_json::Value,
 }
 
 #[derive(Serialize)]
-pub(crate) struct PasskeySummary {
+pub struct PasskeySummary {
     pub id: Uuid,
     pub label: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub last_used_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-pub(crate) struct PasskeyOptions<T> {
+pub struct PasskeyOptions<T> {
     pub challenge_id: Uuid,
     pub options: T,
 }
 
-pub(crate) struct PasskeyLoginOutcome {
+pub struct PasskeyLoginOutcome {
     pub session: PasskeyLoginSession,
     pub jid: String,
     pub device_id: Uuid,
 }
 
-pub(crate) struct PasskeyLoginCommit<'a> {
+pub struct PasskeyLoginCommit<'a> {
     pub user_id: Uuid,
     pub auth_generation: i64,
     pub credential_id: Uuid,
@@ -101,7 +101,7 @@ pub(crate) struct PasskeyLoginCommit<'a> {
     pub session_ttl_hours: i64,
 }
 
-pub(crate) struct PasskeyLoginSession {
+pub struct PasskeyLoginSession {
     pub token: zeroize::Zeroizing<String>,
     pub username: String,
     pub is_admin: bool,
@@ -109,7 +109,7 @@ pub(crate) struct PasskeyLoginSession {
     pub fast_expires_at: chrono::DateTime<chrono::Utc>,
 }
 
-pub(crate) trait PasskeyRepository: Send + Sync {
+pub trait PasskeyRepository: Send + Sync {
     fn account(
         &self,
         username: &str,
@@ -162,7 +162,7 @@ pub(crate) trait PasskeyRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<Option<i64>>> + Send;
 }
 
-pub(crate) struct PasskeyConfig {
+pub struct PasskeyConfig {
     pub enabled: bool,
     pub public_url: String,
     pub domain: String,
@@ -174,7 +174,7 @@ pub(crate) struct PasskeyConfig {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PasskeyError {
+pub enum PasskeyError {
     #[error("unauthorized")]
     Unauthorized,
     #[error("Passkeys are unavailable")]
@@ -195,13 +195,13 @@ impl From<serde_json::Error> for PasskeyError {
     }
 }
 
-pub(crate) struct PasskeyService<R> {
+pub struct PasskeyService<R> {
     repository: R,
     config: PasskeyConfig,
 }
 
 impl<R: PasskeyRepository> PasskeyService<R> {
-    pub(crate) fn new(repository: R, config: PasskeyConfig) -> Self {
+    pub fn new(repository: R, config: PasskeyConfig) -> Self {
         Self { repository, config }
     }
 
@@ -212,16 +212,13 @@ impl<R: PasskeyRepository> PasskeyService<R> {
         relying_party(&self.config.public_url).map_err(|_| PasskeyError::InvalidOrigin)
     }
 
-    pub(crate) fn allowed_origin(&self) -> Result<String, PasskeyError> {
+    pub fn allowed_origin(&self) -> Result<String, PasskeyError> {
         Ok(self.party()?.get_allowed_origins()[0]
             .origin()
             .ascii_serialization())
     }
 
-    pub(crate) async fn list(
-        &self,
-        actor: PasskeyActor<'_>,
-    ) -> Result<Vec<PasskeySummary>, PasskeyError> {
+    pub async fn list(&self, actor: PasskeyActor<'_>) -> Result<Vec<PasskeySummary>, PasskeyError> {
         let credentials = self
             .repository
             .authorized_credentials(&actor)
@@ -260,7 +257,7 @@ impl<R: PasskeyRepository> PasskeyService<R> {
         Ok(())
     }
 
-    pub(crate) async fn register_start(
+    pub async fn register_start(
         &self,
         actor: PasskeyActor<'_>,
         password: &str,
@@ -312,7 +309,7 @@ impl<R: PasskeyRepository> PasskeyService<R> {
         })
     }
 
-    pub(crate) async fn register_finish(
+    pub async fn register_finish(
         &self,
         actor: PasskeyActor<'_>,
         challenge_id: Uuid,
@@ -341,7 +338,7 @@ impl<R: PasskeyRepository> PasskeyService<R> {
             ))
     }
 
-    pub(crate) async fn login_start(
+    pub async fn login_start(
         &self,
         username: &str,
         device_id: Uuid,
@@ -394,7 +391,7 @@ impl<R: PasskeyRepository> PasskeyService<R> {
         })
     }
 
-    pub(crate) async fn login_finish(
+    pub async fn login_finish(
         &self,
         challenge_id: Uuid,
         credential: PublicKeyCredential,
@@ -441,7 +438,7 @@ impl<R: PasskeyRepository> PasskeyService<R> {
         })
     }
 
-    pub(crate) async fn remove(
+    pub async fn remove(
         &self,
         actor: PasskeyActor<'_>,
         password: &str,

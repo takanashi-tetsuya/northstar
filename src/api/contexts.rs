@@ -36,16 +36,33 @@ pub(crate) use self::passkey_login_finish::PasskeyLoginFinishContext;
 pub(crate) use self::readiness::ReadinessContext;
 pub(crate) use self::upload_http_read::{UploadHttpReadContext, UploadHttpReplayReadContext};
 
-pub(crate) type AccountAdminContext = crate::services::account_admin::AccountAdminService<
-    crate::db::account_admin_repository::PostgresAccountAdminRepository,
+/// A service as an extractor context. `FromRef<Arc<AppState>>` can be implemented only for a type of
+/// this crate, and the service of an extracted context is not one.
+#[derive(Clone)]
+pub(crate) struct ServiceContext<S>(pub(crate) S);
+
+impl<S> std::ops::Deref for ServiceContext<S> {
+    type Target = S;
+
+    fn deref(&self) -> &S {
+        &self.0
+    }
+}
+
+pub(crate) type AccountAdminContext = ServiceContext<
+    northstar_auth_application::account_admin::AccountAdminService<
+        crate::db::account_admin_repository::PostgresAccountAdminRepository,
+    >,
 >;
 
 pub(crate) type AdminDispatchContext = crate::services::admin_dispatch::AdminDispatchService<
     crate::db::admin_dispatch_repository::PostgresAdminDispatchRepository,
 >;
 
-pub(crate) type InvitationAdminContext = crate::services::invitation_admin::InvitationAdminService<
-    crate::db::invitation_admin_repository::PostgresInvitationAdminRepository,
+pub(crate) type InvitationAdminContext = ServiceContext<
+    northstar_auth_application::invitation_admin::InvitationAdminService<
+        crate::db::invitation_admin_repository::PostgresInvitationAdminRepository,
+    >,
 >;
 
 pub(crate) type GovernanceContext = governance::GovernanceContext<
@@ -83,18 +100,23 @@ pub(crate) type OmemoRecoveryPollContext = omemo_poll::OmemoRecoveryPollContext<
     crate::db::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository,
 >;
 
-pub(crate) type PasskeyService =
-    crate::services::passkeys::PasskeyService<crate::db::passkeys::PostgresPasskeyRepository>;
+pub(crate) type PasskeyService = northstar_auth_application::passkeys::PasskeyService<
+    crate::db::passkeys::PostgresPasskeyRepository,
+>;
 pub(crate) type UploadService = northstar_upload_application::service::UploadService<
     northstar_upload_postgres::PostgresUploadRepository,
 >;
 
-pub(crate) type RegistrationAdminContext = crate::services::account_admin::RegistrationAdminService<
-    crate::db::account_admin_repository::PostgresRegistrationAdminRepository,
-    Arc<dyn crate::services::account_admin::RegistrationCache>,
+pub(crate) type RegistrationAdminContext = ServiceContext<
+    northstar_auth_application::account_admin::RegistrationAdminService<
+        crate::db::account_admin_repository::PostgresRegistrationAdminRepository,
+        Arc<dyn northstar_auth_application::account_admin::RegistrationCache>,
+    >,
 >;
 
-pub(crate) type SessionAdminContext = crate::services::account_admin::SessionAdminService<
-    crate::db::account_admin_repository::PostgresSessionAdminRepository,
-    Arc<dyn crate::services::account_admin::AdminSessionLookup>,
+pub(crate) type SessionAdminContext = ServiceContext<
+    northstar_auth_application::account_admin::SessionAdminService<
+        crate::db::account_admin_repository::PostgresSessionAdminRepository,
+        Arc<dyn northstar_auth_application::account_admin::AdminSessionLookup>,
+    >,
 >;

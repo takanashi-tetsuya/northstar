@@ -212,8 +212,8 @@ impl AppState {
 
     pub(crate) fn http_registration_availability(
         &self,
-    ) -> crate::services::account::HttpRegistrationAvailability {
-        crate::services::account::HttpRegistrationAvailability::new(
+    ) -> northstar_auth_application::account::HttpRegistrationAvailability {
+        northstar_auth_application::account::HttpRegistrationAvailability::new(
             Arc::clone(&self.registration_closed),
             self.config.registration_dependency_locked(),
             self.config.configured_registration_mode()

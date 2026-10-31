@@ -29,7 +29,9 @@ pub async fn register(
     headers: HeaderMap,
     mut request: ApiJson<RegistrationRequest>,
 ) -> Result<Response, AppError> {
-    use crate::services::account::{HttpRegistrationOutcome as Outcome, HttpRegistrationRequest};
+    use northstar_auth_application::account::{
+        HttpRegistrationOutcome as Outcome, HttpRegistrationRequest,
+    };
 
     let body = &request.value;
     if body
@@ -145,7 +147,7 @@ pub async fn login(
     headers: HeaderMap,
     mut request: ApiJson<Credentials>,
 ) -> Result<Response, AppError> {
-    use crate::services::http_login::{HttpLoginOutcome as Outcome, HttpLoginRequest};
+    use northstar_auth_application::http_login::{HttpLoginOutcome as Outcome, HttpLoginRequest};
 
     let peer_ip =
         super::client_ip_with_trusted_proxies(peer.ip(), &headers, context.trusted_proxies());

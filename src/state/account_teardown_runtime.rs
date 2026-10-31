@@ -7,10 +7,10 @@ use crate::{
     api::contexts::account_teardown::{AccountSessionTeardown, AccountTeardownContext},
     cluster::ClusterAccountTeardownNotifier,
     db::account_teardown_repository::PostgresAccountGenerationRepository,
-    services::account_teardown::AccountGenerationService,
 };
 use axum::extract::FromRef;
 use futures::future::BoxFuture;
+use northstar_auth_application::account_teardown::AccountGenerationService;
 use std::sync::Arc;
 use uuid::Uuid;
 

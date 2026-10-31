@@ -33,7 +33,9 @@ pub async fn change_password(
     headers: HeaderMap,
     mut request: ApiJson<PasswordChange>,
 ) -> Result<Response, AppError> {
-    use crate::services::password_change::{PasswordChangeCommand, PasswordChangeResult};
+    use northstar_auth_application::password_change::{
+        PasswordChangeCommand, PasswordChangeResult,
+    };
 
     let presented_session = zeroize::Zeroizing::new(bearer_token(&headers)?.to_owned());
     let pow_intent = request.value.pow_intent();

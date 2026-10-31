@@ -2,7 +2,7 @@
 //! no bearer-session, anti-abuse, proxy, or broader application authority.
 
 use super::PasskeyService;
-use crate::services::passkeys::{PasskeyError, PasskeyLoginOutcome};
+use northstar_auth_application::passkeys::{PasskeyError, PasskeyLoginOutcome};
 use std::sync::Arc;
 use uuid::Uuid;
 use webauthn_rs::prelude::PublicKeyCredential;

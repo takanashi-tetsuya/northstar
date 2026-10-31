@@ -412,7 +412,7 @@ struct Sessions {
     calls: AtomicUsize,
     live: Mutex<Option<SessionKickSnapshot>>,
 }
-impl AdminSessionLookup for Arc<Sessions> {
+impl AdminSessionLookup for Sessions {
     fn exact_connection(&self, connection_id: Uuid) -> Option<SessionKickSnapshot> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         self.live

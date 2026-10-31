@@ -23,7 +23,7 @@ const [abuseSources, abuseTransaction, abuseVerification, config, envExample, ap
   readProductionModule('crates/platform/northstar-config/src/lib.rs'), read('.env.example'),
   readRoleSplitFile('src/api/mod.rs'), read('src/api/auth_routes.rs'),
   read('src/api/reports.rs'), readRoleSplitFile('src/xmpp/protocol.rs'), read('src/xmpp/protocol/dispatch.rs'),
-  readProductionModule('src/xmpp/protocol/messaging.rs'), read('src/xmpp/protocol/misc.rs'), read('src/xmpp/protocol/ibr.rs'), read('src/services/account.rs'), read('src/db/account_repository.rs'), read('src/state/account_recovery.rs'), readProductionModule('src/db/users.rs'), read('src/db/api_control.rs'), read('src/api/error.rs'), readProductionModule('src/services/xml_util.rs'),
+  readProductionModule('src/xmpp/protocol/messaging.rs'), read('src/xmpp/protocol/misc.rs'), read('src/xmpp/protocol/ibr.rs'), read('crates/contexts/auth/northstar-auth-application/src/account.rs'), read('src/db/account_repository.rs'), read('src/state/account_recovery.rs'), readProductionModule('src/db/users.rs'), read('src/db/api_control.rs'), read('src/api/error.rs'), readProductionModule('src/services/xml_util.rs'),
   read('migrations/0009_abuse_reports.sql'), read('migrations/0078_message_pow_admissions.sql'),
   read('migrations/0084_pow_intent_v2.sql'), read('migrations/0100_parallel_pow_challenges.sql'), read('migrations/0101_durable_account_deletion_recovery.sql'), read('src/main.rs'), read('web/client.js'), read('web/pow.js'), read('web/client.html'),
   read('web/app.js'), read('web/index.html'), read('web/pow-worker.js'),
@@ -121,8 +121,8 @@ assert.match(miscProtocol, /PasswordChangeRequest[\s\S]+\/xmpp\/account-remove[\
 assert.match(accountRepository, /change_password_guarded_v2[\s\S]+begin_account_deletion_quiesce_guarded_v2/,
   'the account repository must own guarded credential and deletion transactions');
 const registrationService = accountService.slice(
-  accountService.indexOf('pub(crate) async fn register('),
-  accountService.indexOf('pub(crate) async fn change_password('),
+  accountService.indexOf('pub async fn register('),
+  accountService.indexOf('pub async fn change_password('),
 );
 assert.ok(
   registrationService.indexOf('password_work::reserve()') >= 0

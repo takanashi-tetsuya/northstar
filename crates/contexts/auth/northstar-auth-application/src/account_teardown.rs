@@ -4,20 +4,20 @@ use anyhow::Result;
 use std::future::Future;
 use uuid::Uuid;
 
-pub(crate) trait AccountGenerationRepository: Send + Sync {
+pub trait AccountGenerationRepository: Send + Sync {
     fn generation(&self, user_id: Uuid) -> impl Future<Output = Result<Option<i64>>> + Send;
 }
 
-pub(crate) struct AccountGenerationService<R> {
+pub struct AccountGenerationService<R> {
     repository: R,
 }
 
 impl<R: AccountGenerationRepository> AccountGenerationService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn committed_generation(&self, user_id: Uuid) -> Result<i64> {
+    pub async fn committed_generation(&self, user_id: Uuid) -> Result<i64> {
         Ok(self
             .repository
             .generation(user_id)

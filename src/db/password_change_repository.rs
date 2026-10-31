@@ -1,16 +1,14 @@
 //! Ordered bearer, idempotency, proof and credential authority for REST
 //! password changes. No transaction or credential-bearing subject escapes.
 
-use crate::{
-    db,
-    services::password_change::{
-        DisconnectedAccount, PasswordChangeCommand, PasswordChangePolicy, PasswordChangeRepository,
-        PasswordChangeResult,
-    },
-};
+use crate::db;
 use anyhow::{Context, Result};
 use northstar_abuse_application::guard::{AbuseGuard, TransactionalGuardOutcome};
 use northstar_abuse_policy::AbuseAction;
+use northstar_auth_application::password_change::{
+    DisconnectedAccount, PasswordChangeCommand, PasswordChangePolicy, PasswordChangeRepository,
+    PasswordChangeResult,
+};
 use northstar_operations_core::api_mutations;
 use northstar_operations_core::api_mutations::StoredApiResponse;
 use sqlx::{PgPool, Postgres, Transaction};
@@ -361,8 +359,8 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::password_change::PasswordChangeService;
     use northstar_abuse_policy::{AbuseConfig, PowIntent};
+    use northstar_auth_application::password_change::PasswordChangeService;
     use northstar_operations_core::api_mutations::{
         api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest,
     };

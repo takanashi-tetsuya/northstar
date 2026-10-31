@@ -95,7 +95,7 @@ pub async fn admin_update_user(
                 idempotency,
             },
             id,
-            crate::services::account_admin::UserStatusPatch {
+            northstar_auth_application::account_admin::UserStatusPatch {
                 disabled: request.disabled,
                 admin: request.admin,
             },
@@ -261,7 +261,7 @@ pub async fn admin_create_invitation(
                 authority: actor.read_authority(),
                 idempotency,
             },
-            crate::services::invitation_admin::InvitationInput {
+            northstar_auth_application::invitation_admin::InvitationInput {
                 label: &request.label,
                 max_uses: request.max_uses,
                 expires_in_hours: request.expires_in_hours,

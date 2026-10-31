@@ -1,9 +1,7 @@
 //! Password-change HTTP authority excluding post-commit account teardown.
 
-use crate::{
-    db::password_change_repository::PostgresPasswordChangeRepository,
-    services::password_change::PasswordChangeService,
-};
+use crate::db::password_change_repository::PostgresPasswordChangeRepository;
+use northstar_auth_application::password_change::PasswordChangeService;
 use std::{
     net::IpAddr,
     sync::{

@@ -8,9 +8,10 @@ use crate::{
             AdminOperationIntent,
         },
     },
-    services::{account_admin::*, operations::AuthorizationPolicy},
+    services::operations::AuthorizationPolicy,
 };
 use anyhow::Result;
+use northstar_auth_application::account_admin::*;
 use northstar_operations_core::api_mutations::*;
 use serde_json::json;
 use sqlx::PgPool;

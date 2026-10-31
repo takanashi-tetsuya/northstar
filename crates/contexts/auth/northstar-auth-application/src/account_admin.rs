@@ -7,12 +7,12 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone, Copy)]
-pub(crate) struct UserStatusPatch {
-    pub(crate) disabled: Option<bool>,
-    pub(crate) admin: Option<bool>,
+pub struct UserStatusPatch {
+    pub disabled: Option<bool>,
+    pub admin: Option<bool>,
 }
 
-pub(crate) trait AccountAdminRepository: Send + Sync {
+pub trait AccountAdminRepository: Send + Sync {
     fn update_user(
         &self,
         admission: AdminMutationAdmission<'_>,
@@ -26,14 +26,14 @@ pub(crate) trait AccountAdminRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct AccountAdminService<R> {
+pub struct AccountAdminService<R> {
     repository: R,
 }
 impl<R: AccountAdminRepository> AccountAdminService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
-    pub(crate) async fn update_user(
+    pub async fn update_user(
         &self,
         admission: AdminMutationAdmission<'_>,
         user_id: Uuid,
@@ -46,7 +46,7 @@ impl<R: AccountAdminRepository> AccountAdminService<R> {
         }
         self.repository.update_user(admission, user_id, patch).await
     }
-    pub(crate) async fn clear_offline_messages(
+    pub async fn clear_offline_messages(
         &self,
         admission: AdminMutationAdmission<'_>,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>> {
@@ -54,7 +54,7 @@ impl<R: AccountAdminRepository> AccountAdminService<R> {
     }
 }
 
-pub(crate) trait RegistrationAdminRepository: Send + Sync {
+pub trait RegistrationAdminRepository: Send + Sync {
     fn set_registration(
         &self,
         admission: AdminMutationAdmission<'_>,
@@ -64,7 +64,7 @@ pub(crate) trait RegistrationAdminRepository: Send + Sync {
         -> impl std::future::Future<Output = Result<bool>> + Send;
 }
 
-pub(crate) trait RegistrationCache: Send + Sync {
+pub trait RegistrationCache: Send + Sync {
     fn dependency_locked(&self) -> bool;
     fn apply_current_closed(&self, closed: bool);
 }
@@ -79,15 +79,15 @@ impl<T: RegistrationCache + ?Sized> RegistrationCache for Arc<T> {
 }
 
 #[derive(Clone)]
-pub(crate) struct RegistrationAdminService<R, C> {
+pub struct RegistrationAdminService<R, C> {
     repository: R,
     cache: C,
 }
 impl<R: RegistrationAdminRepository, C: RegistrationCache> RegistrationAdminService<R, C> {
-    pub(crate) fn new(repository: R, cache: C) -> Self {
+    pub fn new(repository: R, cache: C) -> Self {
         Self { repository, cache }
     }
-    pub(crate) async fn set_registration(
+    pub async fn set_registration(
         &self,
         admission: AdminMutationAdmission<'_>,
         enabled: bool,
@@ -118,13 +118,13 @@ impl<R: RegistrationAdminRepository, C: RegistrationCache> RegistrationAdminServ
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SessionKickSnapshot {
-    pub(crate) user_id: Uuid,
-    pub(crate) auth_generation: i64,
-    pub(crate) connection_id: Uuid,
+pub struct SessionKickSnapshot {
+    pub user_id: Uuid,
+    pub auth_generation: i64,
+    pub connection_id: Uuid,
 }
 
-pub(crate) trait AdminSessionLookup: Send + Sync {
+pub trait AdminSessionLookup: Send + Sync {
     /// Called only after admission and replay lookup. The returned value owns
     /// its identity; no live-session map guard can cross a database await.
     fn exact_connection(&self, connection_id: Uuid) -> Option<SessionKickSnapshot>;
@@ -136,7 +136,7 @@ impl<T: AdminSessionLookup + ?Sized> AdminSessionLookup for Arc<T> {
     }
 }
 
-pub(crate) trait SessionAdminRepository: Send + Sync {
+pub trait SessionAdminRepository: Send + Sync {
     fn kick_session<L: AdminSessionLookup>(
         &self,
         admission: AdminMutationAdmission<'_>,
@@ -146,18 +146,18 @@ pub(crate) trait SessionAdminRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct SessionAdminService<R, L> {
+pub struct SessionAdminService<R, L> {
     repository: R,
     sessions: L,
 }
 impl<R: SessionAdminRepository, L: AdminSessionLookup> SessionAdminService<R, L> {
-    pub(crate) fn new(repository: R, sessions: L) -> Self {
+    pub fn new(repository: R, sessions: L) -> Self {
         Self {
             repository,
             sessions,
         }
     }
-    pub(crate) async fn kick_session(
+    pub async fn kick_session(
         &self,
         admission: AdminMutationAdmission<'_>,
         connection_id: Uuid,

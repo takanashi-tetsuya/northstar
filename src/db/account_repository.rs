@@ -1,7 +1,8 @@
 //! Atomic account registration, credential mutation and deletion persistence.
-use crate::{db, services::account::*};
+use crate::db;
 use anyhow::{Context, Result};
 use northstar_abuse_application::guard::AbuseGuard;
+use northstar_auth_application::account::*;
 use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;

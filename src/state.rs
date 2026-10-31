@@ -337,13 +337,14 @@ pub struct AppState {
     s2s_sm_outbox_service: crate::services::s2s_sm_outbox::SmOutboxService<
         db::s2s_sm_outbox_repository::PostgresSmOutboxRepository,
     >,
-    account_service:
-        crate::services::account::AccountService<db::account_repository::PostgresAccountRepository>,
-    login_service: crate::services::http_login::HttpLoginService<
+    account_service: northstar_auth_application::account::AccountService<
+        db::account_repository::PostgresAccountRepository,
+    >,
+    login_service: northstar_auth_application::http_login::HttpLoginService<
         db::http_login_repository::PostgresHttpLoginRepository,
     >,
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
-    password_change_service: crate::services::password_change::PasswordChangeService<
+    password_change_service: northstar_auth_application::password_change::PasswordChangeService<
         db::password_change_repository::PostgresPasswordChangeRepository,
     >,
     /// Credential lookup, verification and XEP-0484 mutation authority. The
@@ -360,7 +361,7 @@ pub struct AppState {
     push_service: crate::services::push::PushService<db::push::PostgresPushRepository>,
     cluster: crate::cluster::ClusterManager,
     account_revocation_consumer_service:
-        crate::services::account_revocation_consumer::AccountRevocationConsumerService<
+        northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService<
             db::account_revocation_repository::PostgresAccountRevocationRepository,
         >,
     bosh: Option<crate::bosh::BoshManager>,

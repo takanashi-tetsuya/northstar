@@ -614,8 +614,9 @@ impl ClusterFailureSupervisorAuthority {
 impl ClusterRevocationAuthority {
     pub(super) fn identity(
         &self,
-    ) -> crate::services::account_revocation_consumer::AccountRevocationConsumerIdentity {
-        crate::services::account_revocation_consumer::AccountRevocationConsumerIdentity {
+    ) -> northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerIdentity
+    {
+        northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerIdentity {
             domain: self.domain.clone(),
             node_id: self.node_id.clone(),
             instance_uuid: self.instance_uuid,
@@ -637,16 +638,18 @@ impl ClusterRevocationAuthority {
 
 pub(crate) struct AccountRevocationWorkerContext<R> {
     pub(super) service:
-        crate::services::account_revocation_consumer::AccountRevocationConsumerService<R>,
+        northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService<
+            R,
+        >,
     pub(super) routes: crate::xmpp::local_routes::session::AccountRevocationRoutes,
     pub(super) authority: ClusterRevocationAuthority,
 }
 
-impl<R: crate::services::account_revocation_consumer::AccountRevocationRepository>
+impl<R: northstar_auth_application::account_revocation_consumer::AccountRevocationRepository>
     AccountRevocationWorkerContext<R>
 {
     pub(crate) fn new(
-        service: crate::services::account_revocation_consumer::AccountRevocationConsumerService<R>,
+        service: northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService<R>,
         routes: crate::xmpp::local_routes::session::AccountRevocationRoutes,
         authority: ClusterRevocationAuthority,
     ) -> Self {

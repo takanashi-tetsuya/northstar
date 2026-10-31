@@ -1,7 +1,9 @@
 //! Process-local state exposed to registration and exact-session commands.
 use super::OnlineSession;
-use crate::services::account_admin::{AdminSessionLookup, RegistrationCache, SessionKickSnapshot};
 use dashmap::DashMap;
+use northstar_auth_application::account_admin::{
+    AdminSessionLookup, RegistrationCache, SessionKickSnapshot,
+};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,

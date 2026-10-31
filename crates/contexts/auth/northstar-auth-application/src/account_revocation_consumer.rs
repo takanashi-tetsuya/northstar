@@ -7,23 +7,23 @@ use std::future::Future;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AccountRevocationConsumerIdentity {
-    pub(crate) domain: String,
-    pub(crate) node_id: String,
-    pub(crate) instance_uuid: Uuid,
-    pub(crate) instance_epoch: i64,
+pub struct AccountRevocationConsumerIdentity {
+    pub domain: String,
+    pub node_id: String,
+    pub instance_uuid: Uuid,
+    pub instance_epoch: i64,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct AccountRevocationEvent {
-    pub(crate) user_id: Uuid,
-    pub(crate) username: String,
-    pub(crate) before_generation: i64,
-    pub(crate) account_deleted: bool,
-    pub(crate) revision: Uuid,
+pub struct AccountRevocationEvent {
+    pub user_id: Uuid,
+    pub username: String,
+    pub before_generation: i64,
+    pub account_deleted: bool,
+    pub revision: Uuid,
 }
 
-pub(crate) trait AccountRevocationRepository: Send + Sync {
+pub trait AccountRevocationRepository: Send + Sync {
     fn pending(
         &self,
         identity: &AccountRevocationConsumerIdentity,
@@ -39,22 +39,22 @@ pub(crate) trait AccountRevocationRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct AccountRevocationConsumerService<R> {
+pub struct AccountRevocationConsumerService<R> {
     repository: R,
 }
 
 impl<R: AccountRevocationRepository> AccountRevocationConsumerService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn cleanup(&self) -> Result<()> {
+    pub async fn cleanup(&self) -> Result<()> {
         self.repository.cleanup().await
     }
 
     /// Return true when a full batch may have left more work in the queue.
     /// The caller's existing timeout bounds read, local revocation and ACK.
-    pub(crate) async fn consume_batch(
+    pub async fn consume_batch(
         &self,
         identity: &AccountRevocationConsumerIdentity,
         mut revoke_local: impl FnMut(Uuid, &str, Option<i64>),

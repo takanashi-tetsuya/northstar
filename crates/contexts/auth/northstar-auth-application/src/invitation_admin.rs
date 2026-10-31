@@ -5,20 +5,20 @@ use northstar_operations_core::api_mutations::{
 use northstar_operations_core::text::valid_administrative_text;
 use uuid::Uuid;
 
-pub(crate) struct InvitationInput<'a> {
-    pub(crate) label: &'a str,
-    pub(crate) max_uses: Option<i32>,
-    pub(crate) expires_in_hours: Option<i32>,
+pub struct InvitationInput<'a> {
+    pub label: &'a str,
+    pub max_uses: Option<i32>,
+    pub expires_in_hours: Option<i32>,
 }
 
-pub(crate) struct CreateInvitationCommand<'a> {
-    pub(crate) admission: AdminMutationAdmission<'a>,
-    pub(crate) label: &'a str,
-    pub(crate) max_uses: i32,
-    pub(crate) expires_in_hours: Option<i32>,
+pub struct CreateInvitationCommand<'a> {
+    pub admission: AdminMutationAdmission<'a>,
+    pub label: &'a str,
+    pub max_uses: i32,
+    pub expires_in_hours: Option<i32>,
 }
 
-pub(crate) trait InvitationAdminRepository: Send + Sync {
+pub trait InvitationAdminRepository: Send + Sync {
     fn create(
         &self,
         command: CreateInvitationCommand<'_>,
@@ -31,16 +31,16 @@ pub(crate) trait InvitationAdminRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct InvitationAdminService<R> {
+pub struct InvitationAdminService<R> {
     repository: R,
 }
 
 impl<R: InvitationAdminRepository> InvitationAdminService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn create<'a>(
+    pub async fn create<'a>(
         &self,
         admission: AdminMutationAdmission<'a>,
         input: InvitationInput<'a>,
@@ -74,7 +74,7 @@ impl<R: InvitationAdminRepository> InvitationAdminService<R> {
             .await
     }
 
-    pub(crate) async fn revoke(
+    pub async fn revoke(
         &self,
         admission: AdminMutationAdmission<'_>,
         id: Uuid,

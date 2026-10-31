@@ -552,7 +552,7 @@ async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_a
     .await
     .unwrap());
 
-    let service = crate::services::account::AccountService::new(
+    let service = northstar_auth_application::account::AccountService::new(
         crate::db::account_repository::PostgresAccountRepository::new(
             pool.clone(),
             "example.test".to_owned(),
@@ -563,7 +563,7 @@ async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_a
         auth::MIN_SCRAM_ITERATIONS,
         false,
     );
-    let request = crate::services::account::RegistrationRequest {
+    let request = northstar_auth_application::account::RegistrationRequest {
         username: &username,
         password: registration_password,
         invitation_token: Some(&invitation),
@@ -572,7 +572,7 @@ async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_a
         subject: &subject,
         actors: &actors,
     };
-    let crate::services::account::RegistrationOutcome::Created(created) =
+    let northstar_auth_application::account::RegistrationOutcome::Created(created) =
         service.register(request).await.unwrap()
     else {
         panic!("a rolled-back proof and invitation must remain usable");
@@ -584,7 +584,7 @@ async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_a
         registration_password,
         Some(&invitation),
     );
-    let replay = crate::services::account::RegistrationRequest {
+    let replay = northstar_auth_application::account::RegistrationRequest {
         username: &replay_username,
         password: registration_password,
         invitation_token: Some(&invitation),
@@ -595,7 +595,7 @@ async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_a
     };
     assert!(matches!(
         service.register(replay).await.unwrap(),
-        crate::services::account::RegistrationOutcome::AbuseDenied(_)
+        northstar_auth_application::account::RegistrationOutcome::AbuseDenied(_)
     ));
     assert!(find_user(&pool, &replay_username).await.unwrap().is_none());
     assert_eq!(

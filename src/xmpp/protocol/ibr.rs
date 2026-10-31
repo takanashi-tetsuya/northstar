@@ -1,9 +1,9 @@
 use super::{Action, ProtocolSession};
-use crate::services::account::{RegistrationOutcome, RegistrationRequest};
 use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use northstar_abuse_policy::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement};
+use northstar_auth_application::account::{RegistrationOutcome, RegistrationRequest};
 use roxmltree::Node;
 use zeroize::Zeroize;
 

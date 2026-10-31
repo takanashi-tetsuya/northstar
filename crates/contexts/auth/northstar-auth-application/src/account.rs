@@ -13,15 +13,15 @@ use std::sync::{
 use uuid::Uuid;
 
 #[derive(Clone, Copy)]
-pub(crate) struct AccountPolicy {
-    pub(crate) invitation_required: bool,
-    pub(crate) registration_rate_per_hour: u32,
-    pub(crate) scram_iterations: u32,
-    pub(crate) scram_sha1_enabled: bool,
+pub struct AccountPolicy {
+    pub invitation_required: bool,
+    pub registration_rate_per_hour: u32,
+    pub scram_iterations: u32,
+    pub scram_sha1_enabled: bool,
 }
 
 #[derive(Debug)]
-pub(crate) enum RegistrationOutcome {
+pub enum RegistrationOutcome {
     Created(RegistrationAccount),
     AbuseDenied(WorkRequirement),
     InvalidUsername,
@@ -34,30 +34,30 @@ pub(crate) enum RegistrationOutcome {
 }
 
 #[derive(Debug)]
-pub(crate) struct RegistrationAccount {
-    pub(crate) username: String,
+pub struct RegistrationAccount {
+    pub username: String,
 }
 
 #[derive(Debug)]
-pub(crate) enum PasswordChangeOutcome {
+pub enum PasswordChangeOutcome {
     Changed,
     AbuseDenied(WorkRequirement),
     PasswordWorkOverloaded,
 }
 
 #[derive(Debug)]
-pub(crate) enum DeletionQuiesceOutcome {
+pub enum DeletionQuiesceOutcome {
     Quiesced,
     Missing,
     AbuseDenied(WorkRequirement),
 }
 
-pub(crate) type RemovedRosterItem = (String, Option<String>, String, Option<String>);
+pub type RemovedRosterItem = (String, Option<String>, String, Option<String>);
 
 #[derive(Debug)]
-pub(crate) struct RemovedAccount {
-    pub(crate) roster: Vec<RemovedRosterItem>,
-    pub(crate) reverse_roster_changes: Vec<(Uuid, String, northstar_roster_core::RosterChange)>,
+pub struct RemovedAccount {
+    pub roster: Vec<RemovedRosterItem>,
+    pub reverse_roster_changes: Vec<(Uuid, String, northstar_roster_core::RosterChange)>,
 }
 
 #[derive(Clone, Debug)]
@@ -68,12 +68,7 @@ pub struct DeletionRecoveryJob {
     attempts: i32,
 }
 impl DeletionRecoveryJob {
-    pub(crate) fn from_lease(
-        user_id: Uuid,
-        username: String,
-        claim_token: Uuid,
-        attempts: i32,
-    ) -> Self {
+    pub fn from_lease(user_id: Uuid, username: String, claim_token: Uuid, attempts: i32) -> Self {
         Self {
             user_id,
             username,
@@ -81,10 +76,10 @@ impl DeletionRecoveryJob {
             attempts,
         }
     }
-    pub(crate) fn claim_token(&self) -> Uuid {
+    pub fn claim_token(&self) -> Uuid {
         self.claim_token
     }
-    pub(crate) fn attempts(&self) -> i32 {
+    pub fn attempts(&self) -> i32 {
         self.attempts
     }
 }
@@ -92,21 +87,21 @@ impl DeletionRecoveryJob {
 /// Opaque ownership fence for the HTTP registration guard stage. The
 /// application service does not receive a SQLx transaction or DB lease type.
 #[derive(Clone, Copy)]
-pub(crate) struct RegistrationGuardLease {
-    pub(crate) record_id: Uuid,
-    pub(crate) lease_token: Uuid,
+pub struct RegistrationGuardLease {
+    pub record_id: Uuid,
+    pub lease_token: Uuid,
 }
 
-pub(crate) struct RegistrationGuardRequest<'a> {
-    pub(crate) lease: RegistrationGuardLease,
-    pub(crate) lease_seconds: i64,
-    pub(crate) subject: &'a str,
-    pub(crate) actors: &'a [String],
-    pub(crate) proof: Option<&'a PowProof>,
-    pub(crate) intent: &'a PowIntent,
+pub struct RegistrationGuardRequest<'a> {
+    pub lease: RegistrationGuardLease,
+    pub lease_seconds: i64,
+    pub subject: &'a str,
+    pub actors: &'a [String],
+    pub proof: Option<&'a PowProof>,
+    pub intent: &'a PowIntent,
 }
 
-pub(crate) enum RegistrationGuardOutcome {
+pub enum RegistrationGuardOutcome {
     Verified,
     Denied(GuardError),
     LeaseLost,
@@ -116,18 +111,14 @@ pub(crate) enum RegistrationGuardOutcome {
 /// Repository admission reads it after acquiring the idempotency lease; the
 /// final transaction reads it again after password derivation.
 #[derive(Clone)]
-pub(crate) struct HttpRegistrationAvailability {
+pub struct HttpRegistrationAvailability {
     closed: Arc<AtomicBool>,
     dependency_locked: bool,
     invitation_only: bool,
 }
 
 impl HttpRegistrationAvailability {
-    pub(crate) fn new(
-        closed: Arc<AtomicBool>,
-        dependency_locked: bool,
-        invitation_only: bool,
-    ) -> Self {
+    pub fn new(closed: Arc<AtomicBool>, dependency_locked: bool, invitation_only: bool) -> Self {
         Self {
             closed,
             dependency_locked,
@@ -135,11 +126,11 @@ impl HttpRegistrationAvailability {
         }
     }
 
-    pub(crate) fn is_closed(&self) -> bool {
+    pub fn is_closed(&self) -> bool {
         self.dependency_locked || self.closed.load(Ordering::Acquire)
     }
 
-    pub(crate) fn requires_invitation(&self) -> bool {
+    pub fn requires_invitation(&self) -> bool {
         !self.is_closed() && self.invitation_only
     }
 }
@@ -147,19 +138,19 @@ impl HttpRegistrationAvailability {
 /// All HTTP registration work that may commit belongs to one repository
 /// operation. The request identity is prepared by the transport from the
 /// original body bytes, before the password is removed from that body.
-pub(crate) struct HttpRegistrationRequest<'a> {
-    pub(crate) idempotency: northstar_operations_core::api_mutations::IdempotencyRequest<'a>,
-    pub(crate) username: &'a str,
-    pub(crate) password: &'a str,
-    pub(crate) invitation_token: Option<&'a str>,
-    pub(crate) proof: Option<&'a PowProof>,
-    pub(crate) intent: &'a PowIntent,
-    pub(crate) subject: &'a str,
-    pub(crate) actors: &'a [String],
-    pub(crate) availability: HttpRegistrationAvailability,
+pub struct HttpRegistrationRequest<'a> {
+    pub idempotency: northstar_operations_core::api_mutations::IdempotencyRequest<'a>,
+    pub username: &'a str,
+    pub password: &'a str,
+    pub invitation_token: Option<&'a str>,
+    pub proof: Option<&'a PowProof>,
+    pub intent: &'a PowIntent,
+    pub subject: &'a str,
+    pub actors: &'a [String],
+    pub availability: HttpRegistrationAvailability,
 }
 
-pub(crate) enum HttpRegistrationOutcome {
+pub enum HttpRegistrationOutcome {
     Created(Vec<u8>),
     Rejected(Vec<u8>),
     Replay(northstar_operations_core::api_mutations::IdempotentResponse),
@@ -179,36 +170,36 @@ pub(crate) enum HttpRegistrationOutcome {
     LeaseLost,
 }
 
-pub(crate) struct RegistrationRequest<'a> {
-    pub(crate) username: &'a str,
-    pub(crate) password: &'a str,
-    pub(crate) invitation_token: Option<&'a str>,
-    pub(crate) proof: Option<&'a PowProof>,
-    pub(crate) intent: &'a PowIntent,
-    pub(crate) subject: &'a str,
-    pub(crate) actors: &'a [String],
+pub struct RegistrationRequest<'a> {
+    pub username: &'a str,
+    pub password: &'a str,
+    pub invitation_token: Option<&'a str>,
+    pub proof: Option<&'a PowProof>,
+    pub intent: &'a PowIntent,
+    pub subject: &'a str,
+    pub actors: &'a [String],
 }
 
-pub(crate) struct PasswordChangeRequest<'a> {
-    pub(crate) subject: &'a str,
-    pub(crate) actors: &'a [String],
-    pub(crate) proof: Option<&'a PowProof>,
-    pub(crate) intent: &'a PowIntent,
-    pub(crate) user_id: Uuid,
-    pub(crate) expected_auth_generation: i64,
-    pub(crate) password: &'a str,
+pub struct PasswordChangeRequest<'a> {
+    pub subject: &'a str,
+    pub actors: &'a [String],
+    pub proof: Option<&'a PowProof>,
+    pub intent: &'a PowIntent,
+    pub user_id: Uuid,
+    pub expected_auth_generation: i64,
+    pub password: &'a str,
 }
 
-pub(crate) struct DeletionQuiesceRequest<'a> {
-    pub(crate) subject: &'a str,
-    pub(crate) actors: &'a [String],
-    pub(crate) proof: Option<&'a PowProof>,
-    pub(crate) intent: &'a PowIntent,
-    pub(crate) user_id: Uuid,
-    pub(crate) expected_auth_generation: i64,
+pub struct DeletionQuiesceRequest<'a> {
+    pub subject: &'a str,
+    pub actors: &'a [String],
+    pub proof: Option<&'a PowProof>,
+    pub intent: &'a PowIntent,
+    pub user_id: Uuid,
+    pub expected_auth_generation: i64,
 }
 
-pub(crate) trait AccountRepository: Send + Sync {
+pub trait AccountRepository: Send + Sync {
     fn register_http(
         &self,
         request: HttpRegistrationRequest<'_>,
@@ -250,18 +241,18 @@ pub(crate) trait AccountRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct AccountService<R> {
+pub struct AccountService<R> {
     repository: R,
     policy: AccountPolicy,
 }
 impl<R: AccountRepository> AccountService<R> {
-    pub(crate) async fn register_http(
+    pub async fn register_http(
         &self,
         request: HttpRegistrationRequest<'_>,
     ) -> Result<HttpRegistrationOutcome> {
         self.repository.register_http(request, self.policy).await
     }
-    pub(crate) fn new(
+    pub fn new(
         repository: R,
         invitation_required: bool,
         registration_rate_per_hour: u32,
@@ -278,10 +269,7 @@ impl<R: AccountRepository> AccountService<R> {
             },
         }
     }
-    pub(crate) async fn register(
-        &self,
-        request: RegistrationRequest<'_>,
-    ) -> Result<RegistrationOutcome> {
+    pub async fn register(&self, request: RegistrationRequest<'_>) -> Result<RegistrationOutcome> {
         // Reserve bounded CPU capacity before borrowing a database connection.
         // The expensive work runs only after the body-bound v2 guard succeeds,
         // but proof consumption, actor advancement, invitation consumption,
@@ -300,25 +288,25 @@ impl<R: AccountRepository> AccountService<R> {
             .await
     }
 
-    pub(crate) async fn change_password(
+    pub async fn change_password(
         &self,
         request: PasswordChangeRequest<'_>,
     ) -> Result<PasswordChangeOutcome> {
         self.repository.change_password(request, self.policy).await
     }
 
-    pub(crate) async fn quiesce_for_deletion(
+    pub async fn quiesce_for_deletion(
         &self,
         request: DeletionQuiesceRequest<'_>,
     ) -> Result<DeletionQuiesceOutcome> {
         self.repository.quiesce_for_deletion(request).await
     }
 
-    pub(crate) async fn delete_quiesced(&self, user_id: Uuid) -> Result<Option<RemovedAccount>> {
+    pub async fn delete_quiesced(&self, user_id: Uuid) -> Result<Option<RemovedAccount>> {
         self.repository.delete_quiesced(user_id).await
     }
 
-    pub(crate) async fn claim_deletion_recovery(
+    pub async fn claim_deletion_recovery(
         &self,
         limit: i64,
         lease_seconds: i64,
@@ -328,7 +316,7 @@ impl<R: AccountRepository> AccountService<R> {
             .await
     }
 
-    pub(crate) async fn release_deletion_recovery(
+    pub async fn release_deletion_recovery(
         &self,
         job: &DeletionRecoveryJob,
         error_code: &str,

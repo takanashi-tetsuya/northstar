@@ -145,7 +145,7 @@ pub(crate) async fn remove(
     )
 }
 
-use crate::services::passkeys::{
+use northstar_auth_application::passkeys::{
     PasskeyAccount, PasskeyActor, PasskeyLoginCommit, PasskeyLoginSession, PasskeyRepository,
     StoredChallenge, StoredCredential,
 };

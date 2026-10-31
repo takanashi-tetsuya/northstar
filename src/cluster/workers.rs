@@ -5,7 +5,7 @@ use super::*;
 /// Read committed account fences independently of Redis and cluster maintenance.
 /// Notifications reduce latency; polling recovers missed notifications.
 pub(crate) async fn run_account_revocations<
-    R: crate::services::account_revocation_consumer::AccountRevocationRepository,
+    R: northstar_auth_application::account_revocation_consumer::AccountRevocationRepository,
 >(
     context: Arc<AccountRevocationWorkerContext<R>>,
     cancel: CancellationToken,

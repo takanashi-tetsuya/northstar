@@ -1,7 +1,7 @@
 //! PostgreSQL adapter for committed account authorization generations.
 
-use crate::services::account_teardown::AccountGenerationRepository;
 use anyhow::Result;
+use northstar_auth_application::account_teardown::AccountGenerationRepository;
 use sqlx::PgPool;
 use uuid::Uuid;
 

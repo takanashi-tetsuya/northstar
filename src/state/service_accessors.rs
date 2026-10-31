@@ -204,8 +204,9 @@ impl AppState {
 
     pub(crate) fn account_service(
         &self,
-    ) -> &crate::services::account::AccountService<db::account_repository::PostgresAccountRepository>
-    {
+    ) -> &northstar_auth_application::account::AccountService<
+        db::account_repository::PostgresAccountRepository,
+    > {
         &self.account_service
     }
 

@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-pub use crate::services::account::DeletionRecoveryJob as AccountDeletionJob;
+pub use northstar_auth_application::account::DeletionRecoveryJob as AccountDeletionJob;
 
 pub async fn claim_account_deletion_jobs(
     pool: &PgPool,

@@ -1,9 +1,9 @@
 //! PostgreSQL adapter for the exact-instance account revocation outbox.
 
-use crate::services::account_revocation_consumer::{
+use anyhow::Result;
+use northstar_auth_application::account_revocation_consumer::{
     AccountRevocationConsumerIdentity, AccountRevocationEvent, AccountRevocationRepository,
 };
-use anyhow::Result;
 use sqlx::PgPool;
 use uuid::Uuid;
 

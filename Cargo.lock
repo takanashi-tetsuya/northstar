@@ -1934,12 +1934,25 @@ name = "northstar-auth-application"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
+ "northstar-abuse-policy",
  "northstar-archive-core",
  "northstar-auth-core",
+ "northstar-operations-core",
+ "northstar-roster-core",
+ "northstar-security",
  "northstar-session-core",
+ "northstar-telemetry",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.20",
  "tokio",
+ "tracing",
  "uuid",
+ "webauthn-rs",
  "zeroize",
 ]
 

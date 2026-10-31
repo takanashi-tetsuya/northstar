@@ -10,11 +10,11 @@ use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
     db::account_repository::PostgresAccountRepository,
     s2s::FederationRouter,
-    services::account::{AccountService, DeletionRecoveryJob, RemovedAccount},
     xmpp::xml_builder::XmlElement,
 };
 use anyhow::Result;
 use dashmap::DashMap;
+use northstar_auth_application::account::{AccountService, DeletionRecoveryJob, RemovedAccount};
 use northstar_config::ExternalRouteDomainPolicy;
 use std::sync::{
     atomic::{AtomicU64, Ordering},

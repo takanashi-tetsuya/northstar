@@ -1,9 +1,7 @@
 //! REST registration capability: account admission, proxy policy and outcome counters.
 
-use crate::{
-    db::account_repository::PostgresAccountRepository,
-    services::account::{AccountService, HttpRegistrationAvailability},
-};
+use crate::db::account_repository::PostgresAccountRepository;
+use northstar_auth_application::account::{AccountService, HttpRegistrationAvailability};
 use std::{
     net::IpAddr,
     sync::{

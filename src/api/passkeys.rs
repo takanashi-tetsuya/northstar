@@ -4,7 +4,7 @@ use crate::api::contexts::{
     passkey_http::{PasskeyAccountHttpContext, PasskeyStartHttpContext},
     PasskeyLoginFinishContext,
 };
-use crate::services::passkeys::{PasskeyActor, PasskeyError};
+use northstar_auth_application::passkeys::{PasskeyActor, PasskeyError};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;

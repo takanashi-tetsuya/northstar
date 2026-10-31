@@ -1,7 +1,3 @@
-pub(crate) mod account;
-pub(crate) mod account_admin;
-pub(crate) mod account_revocation_consumer;
-pub(crate) mod account_teardown;
 pub(crate) mod admin_commands;
 pub(crate) mod admin_dispatch;
 pub(crate) mod admin_session_cleanup_worker;
@@ -22,7 +18,6 @@ pub(crate) mod direct_spool_wake;
 pub(crate) mod extdisco;
 pub(crate) mod federation_outbox;
 pub(crate) mod governance;
-pub(crate) mod invitation_admin;
 pub(crate) mod jingle;
 pub(crate) mod locked_muc_expiry;
 pub(crate) mod maintenance_repositories;
@@ -34,8 +29,6 @@ pub(crate) mod mix;
 pub(crate) mod muc;
 pub(crate) mod muc_delivery;
 pub(crate) mod node_message_contract_verifier;
-pub(crate) mod passkeys;
-pub(crate) mod password_change;
 pub(crate) mod push;
 pub(crate) mod readiness;
 pub(crate) mod replay;
@@ -70,6 +63,5 @@ pub(crate) mod operation_muc_wake;
 pub(crate) mod operations;
 
 pub(crate) mod api_sessions;
-pub(crate) mod http_login;
 
 pub(crate) mod reports;

@@ -8,28 +8,28 @@ use northstar_operations_core::api_mutations::{
 use std::net::IpAddr;
 use uuid::Uuid;
 
-pub(crate) struct PasswordChangeCommand<'a> {
-    pub(crate) idempotency: IdempotencyRequest<'a>,
-    pub(crate) presented_session: &'a str,
-    pub(crate) current_password: &'a str,
-    pub(crate) new_password: &'a str,
-    pub(crate) proof: Option<&'a PowProof>,
-    pub(crate) intent: &'a PowIntent,
-    pub(crate) peer_ip: IpAddr,
+pub struct PasswordChangeCommand<'a> {
+    pub idempotency: IdempotencyRequest<'a>,
+    pub presented_session: &'a str,
+    pub current_password: &'a str,
+    pub new_password: &'a str,
+    pub proof: Option<&'a PowProof>,
+    pub intent: &'a PowIntent,
+    pub peer_ip: IpAddr,
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct PasswordChangePolicy {
-    pub(crate) scram_iterations: u32,
-    pub(crate) scram_sha1_enabled: bool,
+pub struct PasswordChangePolicy {
+    pub scram_iterations: u32,
+    pub scram_sha1_enabled: bool,
 }
 
-pub(crate) struct DisconnectedAccount {
-    pub(crate) user_id: Uuid,
-    pub(crate) username: String,
+pub struct DisconnectedAccount {
+    pub user_id: Uuid,
+    pub username: String,
 }
 
-pub(crate) enum PasswordChangeResult {
+pub enum PasswordChangeResult {
     Replay(IdempotentResponse),
     Fresh(StoredApiResponse),
     RateLimited(StoredApiResponse),
@@ -46,7 +46,7 @@ pub(crate) enum PasswordChangeResult {
     PublicationUnavailable,
 }
 
-pub(crate) trait PasswordChangeRepository: Send + Sync {
+pub trait PasswordChangeRepository: Send + Sync {
     fn execute(
         &self,
         command: PasswordChangeCommand<'_>,
@@ -56,13 +56,13 @@ pub(crate) trait PasswordChangeRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct PasswordChangeService<R> {
+pub struct PasswordChangeService<R> {
     repository: R,
     policy: PasswordChangePolicy,
 }
 
 impl<R: PasswordChangeRepository> PasswordChangeService<R> {
-    pub(crate) fn new(repository: R, scram_iterations: u32, scram_sha1_enabled: bool) -> Self {
+    pub fn new(repository: R, scram_iterations: u32, scram_sha1_enabled: bool) -> Self {
         Self {
             repository,
             policy: PasswordChangePolicy {
@@ -72,7 +72,7 @@ impl<R: PasswordChangeRepository> PasswordChangeService<R> {
         }
     }
 
-    pub(crate) async fn execute(
+    pub async fn execute(
         &self,
         command: PasswordChangeCommand<'_>,
     ) -> Result<PasswordChangeResult> {

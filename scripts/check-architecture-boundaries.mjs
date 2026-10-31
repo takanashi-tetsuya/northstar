@@ -2101,13 +2101,13 @@ for (const [name, source] of [
 if (/\bstate\s*\.\s*pool\b/.test(sasl2Source)) {
   throw new Error('sasl2.rs regained direct AppState PostgreSQL authority');
 }
-const accountServiceSource = read('src/services/account.rs');
+const accountServiceSource = read('crates/contexts/auth/northstar-auth-application/src/account.rs');
 if (/RegistrationOutcome[\s\S]*?Created\s*\(\s*db::User\s*\)/.test(accountServiceSource)) {
   throw new Error('AccountService registration result leaks the credential-bearing db::User DTO');
 }
 const registrationAccountBody = structBody(
   accountServiceSource,
-  'pub(crate) struct RegistrationAccount',
+  'pub struct RegistrationAccount',
 );
 if (/(?:\bpassword_hash\b|\bscram_[A-Za-z0-9_]*|\bauth_generation\b|\bis_admin\b)/.test(registrationAccountBody)) {
   throw new Error('AccountService RegistrationAccount regained credential or authority fields');
@@ -2317,7 +2317,7 @@ if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(uploadServiceBody)) {
 for (const [name, source] of [
   ['RosterService', rosterServiceSource],
   ['UploadService', uploadServiceSource],
-  ['PasskeyService', read('src/services/passkeys.rs')],
+  ['PasskeyService', read('crates/contexts/auth/northstar-auth-application/src/passkeys.rs')],
   ['MessageService', read('src/services/messaging.rs')],
   ['MamService', mamServiceSource],
   ['MucService', readProductionModule('src/services/muc.rs', { root })],
@@ -2350,7 +2350,7 @@ for (const [name, source] of [
   ['API mutation values', read('crates/contexts/operations/northstar-operations-core/src/api_mutations.rs')],
   ['ReportService', read('src/services/reports.rs')],
   ['ReportContext', read('src/api/contexts/reports.rs')],
-  ['AccountAdminServices', read('src/services/account_admin.rs')],
+  ['AccountAdminServices', read('crates/contexts/auth/northstar-auth-application/src/account_admin.rs')],
   ['AccountAdminRuntime', read('src/state/account_admin.rs')],
   ['OperationAdminService', read('src/services/operations.rs')],
   ['AdminDispatchService', read('src/services/admin_dispatch.rs')],
@@ -2361,7 +2361,7 @@ for (const [name, source] of [
   ['TlsContext', readProductionModule('crates/platform/northstar-security/src/tls.rs', { root })],
   ['UploadAdminService', read('src/services/upload_admin.rs')],
   ['ReportModerationService', read('src/services/report_moderation.rs')],
-  ['InvitationAdminService', read('src/services/invitation_admin.rs')],
+  ['InvitationAdminService', read('crates/contexts/auth/northstar-auth-application/src/invitation_admin.rs')],
   ['RetentionPolicyService', read('src/services/retention_policy.rs')],
   ['RetentionPolicyContext', read('src/api/contexts/retention_policy.rs')],
   ['OmemoRecoveryService', read('src/services/omemo_recovery.rs')],

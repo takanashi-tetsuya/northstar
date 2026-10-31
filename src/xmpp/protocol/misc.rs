@@ -1,16 +1,16 @@
 use super::{Action, ProtocolSession};
 use crate::services::xml_util::*;
 use crate::services::{
-    account::{
-        DeletionQuiesceOutcome, DeletionQuiesceRequest, PasswordChangeOutcome,
-        PasswordChangeRequest, RegistrationOutcome, RegistrationRequest,
-    },
     push::{PushEnableOutcome, PushResponseKind, PushResponseOutcome},
     sm::{BindingFinalizationOutcome, BindingReservationOutcome},
 };
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use northstar_abuse_policy::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement};
+use northstar_auth_application::account::{
+    DeletionQuiesceOutcome, DeletionQuiesceRequest, PasswordChangeOutcome, PasswordChangeRequest,
+    RegistrationOutcome, RegistrationRequest,
+};
 use northstar_auth_core as auth;
 use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::Node;

@@ -137,7 +137,7 @@ pub(crate) struct MixService<R> {
     /// The same capability is shared with PubSub and clustered MUC delivery;
     /// no individual XEP worker can independently consume the primary pool's
     /// foreground reserve.
-    outbox_db_admission: crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
+    outbox_db_admission: northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
     /// Shared cross-process/listener wake broker for the durable delivery
     /// lane. It carries no stanza data and is not a second delivery authority.
     /// MIX-PAM has a distinct eligibility model and deliberately retains its
@@ -159,7 +159,7 @@ impl<R: MixRepository> MixService<R> {
             "local.test".to_owned(),
             message_identity,
             retraction_identity,
-            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
+            northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
                 primary_pool_max_connections,
             ),
             schema,
@@ -171,7 +171,7 @@ impl<R: MixRepository> MixService<R> {
         configured_domain: String,
         message_identity: MixMessageContentKeyring,
         retraction_identity: MixRetractionContentKeyring,
-        outbox_db_admission: crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
+        outbox_db_admission: northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
         schema: String,
     ) -> Result<Self> {
         let outbox_background_budget = outbox_db_admission.capacity();

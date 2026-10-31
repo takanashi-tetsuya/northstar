@@ -408,7 +408,7 @@ pub struct AppState {
     /// durable-outbox database turns. It preserves a primary-pool foreground
     /// reserve without giving protocol handlers raw pool access.
     durable_outbox_database_admission:
-        crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
+        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
     account_admin_service: AccountAdminContext,
     registration_admin_service: RegistrationAdminContext,
     session_admin_service: SessionAdminContext,

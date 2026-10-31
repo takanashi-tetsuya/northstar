@@ -1056,7 +1056,7 @@ const mixServiceProduction = productionWithoutCfgTestModules(
 const mixServiceDefinition = structBody(mixServiceProduction, 'pub(crate) struct MixService');
 if (
   !/^\s*outbox_background_budget\s*:\s*usize\s*,?\s*$/m.test(mixServiceDefinition) ||
-  !/^\s*outbox_db_admission\s*:\s*crate\s*::\s*services\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*,?\s*$/m.test(
+  !/^\s*outbox_db_admission\s*:\s*northstar_runtime\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*,?\s*$/m.test(
     mixServiceDefinition,
   ) ||
   /^\s*pub(?:\(crate\))?\s+outbox_(?:background_budget|db_admission)\s*:/m.test(
@@ -1095,7 +1095,7 @@ if (
 ) {
   throw new Error('MIX protocol scheduling must consume the service-owned typed outbox budget');
 }
-const durableOutboxAdmission = read('src/services/durable_outbox.rs');
+const durableOutboxAdmission = read('crates/platform/northstar-runtime/src/durable_outbox.rs');
 if (
   !/primary_pool_max_connections\s+as\s+usize[\s\S]*?\.\s*saturating_sub\s*\(\s*1\s*\)[\s\S]*?\.\s*clamp\s*\(\s*1\s*,\s*MAX_BACKGROUND_DATABASE_TURNS\s*\)/s.test(
     durableOutboxAdmission,
@@ -1124,7 +1124,7 @@ if (
 }
 const stateOutboxAdmission = rustItemBody(state, 'pub struct AppState');
 if (
-  !/^\s*durable_outbox_database_admission\s*:\s*crate\s*::\s*services\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*,?$/m.test(
+  !/^\s*durable_outbox_database_admission\s*:\s*northstar_runtime\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*,?$/m.test(
     stateOutboxAdmission,
   ) ||
   /^\s*pub(?:\(crate\))?\s+durable_outbox_database_admission\s*:/m.test(stateOutboxAdmission)
@@ -1132,7 +1132,7 @@ if (
   throw new Error('AppState must privately own the shared durable-outbox database admission');
 }
 if (
-  !/let\s+durable_outbox_database_admission\s*=\s*crate\s*::\s*services\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*::\s*for_primary_pool\s*\(\s*config\s*\.\s*database_max_connections\s*,?\s*\)/s.test(
+  !/let\s+durable_outbox_database_admission\s*=\s*northstar_runtime\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*::\s*for_primary_pool\s*\(\s*config\s*\.\s*database_max_connections\s*,?\s*\)/s.test(
     state,
   ) ||
   !/PubSubService\s*::\s*new_with_durable_outbox_database_admission[\s\S]*?durable_outbox_database_admission\s*\.\s*clone\s*\(\s*\)/.test(

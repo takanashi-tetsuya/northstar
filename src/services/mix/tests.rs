@@ -7,37 +7,37 @@ fn outbox_background_budget_scales_with_the_configured_primary_pool() {
     // retains a single durable worker. At two connections, the listener
     // stress profile gets one background worker and one foreground slot.
     assert_eq!(
-        crate::services::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(
+        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(
             1
         ),
         1
     );
     assert_eq!(
-        crate::services::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(
+        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(
             2
         ),
         1
     );
     assert_eq!(
-        crate::services::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(
+        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(
             3
         ),
         2
     );
     assert_eq!(
-        crate::services::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(
+        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(
             17
         ),
         16
     );
     assert_eq!(
-        crate::services::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(
+        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(
             32
         ),
         16
     );
     assert_eq!(
-        crate::services::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(
+        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(
             u32::MAX
         ),
         16

@@ -93,14 +93,14 @@ pub(crate) struct PubSubService<R> {
     repository: R,
     mutation_admission: Arc<PubSubMutationAdmission>,
     durable_outbox_database_admission:
-        crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
+        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
 }
 
 impl<R> PubSubService<R> {
     pub(crate) fn new_with_durable_outbox_database_admission(
         repository: R,
         primary_pool_max_connections: u32,
-        durable_outbox_database_admission: crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
+        durable_outbox_database_admission: northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
     ) -> Self {
         Self {
             repository,

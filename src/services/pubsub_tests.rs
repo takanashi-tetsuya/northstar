@@ -55,7 +55,7 @@ async fn item_queries_do_not_require_mutation_repository_capability() {
     let service = PubSubService::new_with_durable_outbox_database_admission(
         QueryOnlyItems,
         2,
-        crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
+        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
     );
     assert!(service
         .get_items(Uuid::new_v4(), &[], 10)
@@ -135,7 +135,7 @@ async fn retrieval_query_preserves_outcast_precedence_over_open_and_subscription
             calls: Arc::clone(&calls),
         },
         2,
-        crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
+        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
     );
     let node = renderer_node(Uuid::new_v4(), "news", "leaf");
     assert!(!service
@@ -155,7 +155,7 @@ async fn retrieval_query_preserves_affiliation_error_before_access_model_error()
             calls: Arc::clone(&calls),
         },
         2,
-        crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
+        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
     );
     let mut node = renderer_node(Uuid::new_v4(), "news", "leaf");
     node.access_model = "invalid-access-model".to_owned();
@@ -207,7 +207,7 @@ async fn pep_item_queries_do_not_require_mutation_repository_capability() {
     let service = PubSubService::new_with_durable_outbox_database_admission(
         QueryOnlyPepItems,
         2,
-        crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
+        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
     );
     assert!(service
         .pep_items(Uuid::new_v4(), "urn:xmpp:avatar:data", None, 10)
@@ -223,7 +223,7 @@ async fn injected_durable_outbox_admission_stays_separate_from_foreground_mutati
         .connect_lazy("postgres://unused:unused@localhost/unused")
         .expect("a lazy test pool does not connect");
     let durable =
-        crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2);
+        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2);
     let service = PubSubService::new_with_durable_outbox_database_admission(
         db::pubsub_repository::PostgresPubSubRepository::new(pool, "example.test"),
         2,

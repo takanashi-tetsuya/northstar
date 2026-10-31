@@ -21,13 +21,14 @@ const MAX_BACKGROUND_DATABASE_TURNS: usize = 16;
 /// turn: withholding all recovery would make the durable queue permanently
 /// unavailable.
 #[derive(Clone, Debug)]
-pub(crate) struct DurableOutboxDatabaseAdmission {
+pub struct DurableOutboxDatabaseAdmission {
     permits: Arc<Semaphore>,
     capacity: usize,
 }
 
 impl DurableOutboxDatabaseAdmission {
-    pub(crate) fn for_primary_pool(primary_pool_max_connections: u32) -> Self {
+    /// The admission for a primary pool of this many connections.
+    pub fn for_primary_pool(primary_pool_max_connections: u32) -> Self {
         let capacity = Self::capacity_for_primary_pool(primary_pool_max_connections);
         Self {
             permits: Arc::new(Semaphore::new(capacity)),
@@ -35,26 +36,31 @@ impl DurableOutboxDatabaseAdmission {
         }
     }
 
-    pub(crate) fn capacity_for_primary_pool(primary_pool_max_connections: u32) -> usize {
+    /// How many background turns a primary pool of this many connections admits at once.
+    pub fn capacity_for_primary_pool(primary_pool_max_connections: u32) -> usize {
         (primary_pool_max_connections as usize)
             .saturating_sub(1)
             .clamp(1, MAX_BACKGROUND_DATABASE_TURNS)
     }
 
-    pub(crate) const fn capacity(&self) -> usize {
+    /// How many background turns this admission allows at once.
+    pub const fn capacity(&self) -> usize {
         self.capacity
     }
 
-    pub(crate) fn available_permits(&self) -> usize {
+    /// How many background turns could start now.
+    pub fn available_permits(&self) -> usize {
         self.permits.available_permits()
     }
 
-    #[cfg(test)]
-    pub(crate) fn shares_with(&self, other: &Self) -> bool {
+    /// Whether both handles admit through the same permits.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn shares_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.permits, &other.permits)
     }
 
-    pub(crate) async fn acquire(&self) -> OwnedSemaphorePermit {
+    /// Waits for one background database turn; the turn ends when the permit drops.
+    pub async fn acquire(&self) -> OwnedSemaphorePermit {
         self.permits
             .clone()
             .acquire_owned()

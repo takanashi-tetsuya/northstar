@@ -32,7 +32,7 @@ pub(crate) struct ClusterMucOutboxWorkerContext {
     pub(crate) delivery_item: services::cluster_muc_delivery_item::ClusterMucDeliveryItemService<
         db::cluster_muc_delivery_item_repository::PostgresClusterMucDeliveryItemRepository,
     >,
-    pub(crate) admission: services::durable_outbox::DurableOutboxDatabaseAdmission,
+    pub(crate) admission: northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
     pub(crate) metrics: Arc<Metrics>,
 }
 

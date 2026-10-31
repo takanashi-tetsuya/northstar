@@ -277,7 +277,7 @@ impl Bridge {
             configured_domain,
             crate::services::abuse::test_mix_message_content_keyring(),
             crate::services::abuse::test_mix_retraction_content_keyring(),
-            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(4),
+            northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(4),
             "stage4_supplied".into(),
         )?;
         Ok(Self {

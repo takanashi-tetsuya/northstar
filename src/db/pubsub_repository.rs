@@ -657,7 +657,7 @@ impl PubSubService<PostgresPubSubRepository> {
         Self::new_with_durable_outbox_database_admission(
             PostgresPubSubRepository::new(pool, domain),
             capacity,
-            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
+            northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
                 capacity,
             ),
         )

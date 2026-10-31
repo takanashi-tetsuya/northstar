@@ -423,7 +423,7 @@ impl AppState {
         // protocol traffic even during simultaneous MIX, PubSub and MUC
         // recovery.
         let durable_outbox_database_admission =
-            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
+            northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
                 config.database_max_connections,
             );
         let message_service = crate::services::messaging::MessageService::new(

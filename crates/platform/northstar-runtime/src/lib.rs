@@ -3,4 +3,5 @@
 #![forbid(unsafe_code)]
 
 pub mod connection_actors;
+pub mod durable_outbox;
 pub mod workers;

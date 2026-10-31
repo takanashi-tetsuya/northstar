@@ -21,6 +21,7 @@ pub(crate) mod pubsub;
 pub(crate) mod replay;
 pub(crate) mod retractions;
 pub(crate) mod roster;
+mod roster_identity;
 pub(crate) mod sasl2;
 pub(crate) mod sm;
 mod sm_owner;

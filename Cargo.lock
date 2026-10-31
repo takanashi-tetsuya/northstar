@@ -2138,6 +2138,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-roster-xmpp"
+version = "0.1.0"
+dependencies = [
+ "northstar-roster-core",
+]
+
+[[package]]
 name = "northstar-runtime"
 version = "0.1.0"
 dependencies = [
@@ -3417,6 +3424,7 @@ dependencies = [
  "northstar-roster-application",
  "northstar-roster-core",
  "northstar-roster-postgres",
+ "northstar-roster-xmpp",
  "northstar-runtime",
  "northstar-security",
  "northstar-session-application",

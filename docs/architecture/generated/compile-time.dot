@@ -191,6 +191,7 @@ digraph compile_time {
   "northstar-roster-application";
   "northstar-roster-core";
   "northstar-roster-postgres";
+  "northstar-roster-xmpp";
   "northstar-runtime";
   "northstar-security";
   "northstar-session-application";
@@ -1077,6 +1078,7 @@ digraph compile_time {
   "northstar-roster-postgres" -> "serde_json";
   "northstar-roster-postgres" -> "sqlx";
   "northstar-roster-postgres" -> "uuid";
+  "northstar-roster-xmpp" -> "northstar-roster-core";
   "northstar-runtime" -> "anyhow";
   "northstar-runtime" -> "futures";
   "northstar-runtime" -> "serde_json";
@@ -1577,6 +1579,7 @@ digraph compile_time {
   "rust-xmpp-server" -> "northstar-roster-application";
   "rust-xmpp-server" -> "northstar-roster-core";
   "rust-xmpp-server" -> "northstar-roster-postgres";
+  "rust-xmpp-server" -> "northstar-roster-xmpp";
   "rust-xmpp-server" -> "northstar-runtime";
   "rust-xmpp-server" -> "northstar-security";
   "rust-xmpp-server" -> "northstar-session-application";

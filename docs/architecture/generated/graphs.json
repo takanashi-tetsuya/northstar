@@ -2526,6 +2526,10 @@
         "uuid"
       ],
       [
+        "northstar-roster-xmpp",
+        "northstar-roster-core"
+      ],
+      [
         "northstar-runtime",
         "anyhow"
       ],
@@ -4524,6 +4528,10 @@
       [
         "rust-xmpp-server",
         "northstar-roster-postgres"
+      ],
+      [
+        "rust-xmpp-server",
+        "northstar-roster-xmpp"
       ],
       [
         "rust-xmpp-server",
@@ -6976,6 +6984,7 @@
       "northstar-roster-application",
       "northstar-roster-core",
       "northstar-roster-postgres",
+      "northstar-roster-xmpp",
       "northstar-runtime",
       "northstar-security",
       "northstar-session-application",

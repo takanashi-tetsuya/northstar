@@ -1,0 +1,11 @@
+[package]
+name = "northstar-roster-xmpp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Roster, presence, privacy list and blocking handlers of client sessions for Northstar"
+publish = false
+
+[dependencies]
+northstar-roster-core = { path = "../northstar-roster-core" }

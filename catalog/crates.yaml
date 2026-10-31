@@ -302,6 +302,16 @@ crates:
     api_stability: internal
     publish_policy: never
 
+  - crate_id: northstar-roster-xmpp
+    package: northstar-roster-xmpp
+    path: crates/contexts/roster/northstar-roster-xmpp
+    tier: context
+    context: roster
+    role: adapter
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-runtime
     package: northstar-runtime
     path: crates/platform/northstar-runtime

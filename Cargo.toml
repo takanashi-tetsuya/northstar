@@ -52,6 +52,7 @@ members = [
     "crates/contexts/roster/northstar-roster-core",
     "crates/contexts/roster/northstar-roster-application",
     "crates/contexts/roster/northstar-roster-postgres",
+    "crates/contexts/roster/northstar-roster-xmpp",
     "crates/contexts/archive/northstar-archive-core",
     "crates/contexts/archive/northstar-archive-application",
     "crates/contexts/archive/northstar-archive-postgres",
@@ -185,6 +186,7 @@ northstar-pubsub-xmpp = { path = "crates/contexts/pubsub/northstar-pubsub-xmpp" 
 northstar-roster-core = { path = "crates/contexts/roster/northstar-roster-core" }
 northstar-roster-application = { path = "crates/contexts/roster/northstar-roster-application" }
 northstar-roster-postgres = { path = "crates/contexts/roster/northstar-roster-postgres" }
+northstar-roster-xmpp = { path = "crates/contexts/roster/northstar-roster-xmpp" }
 northstar-archive-core = { path = "crates/contexts/archive/northstar-archive-core" }
 northstar-archive-application = { path = "crates/contexts/archive/northstar-archive-application" }
 northstar-archive-postgres = { path = "crates/contexts/archive/northstar-archive-postgres" }

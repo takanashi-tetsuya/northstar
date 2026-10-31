@@ -1,8 +1,5 @@
 //! Invitation resources, audit and encrypted replay commit in one transaction.
-use crate::db::{
-    self,
-    admin_mutations::{AdminMutationStart, AdminMutationStore},
-};
+use crate::db::admin_mutations::{AdminMutationStart, AdminMutationStore};
 use anyhow::Result;
 use northstar_auth_application::invitation_admin::*;
 use northstar_operations_core::api_mutations::*;
@@ -28,7 +25,7 @@ impl InvitationAdminRepository for PostgresInvitationAdminRepository {
         };
         let id = Uuid::new_v4();
         let token = northstar_auth_core::new_session_token();
-        db::create_invitation_in_tx(
+        northstar_operations_postgres::reports::create_invitation_in_tx(
             &mut tx,
             command.admission.authority.user_id,
             id,
@@ -56,7 +53,7 @@ impl InvitationAdminRepository for PostgresInvitationAdminRepository {
             AdminMutationStart::Ready(tx, lease) => (tx, lease),
             AdminMutationStart::Finished(outcome) => return Ok(outcome),
         };
-        let outcome = db::revoke_invitation_in_tx(
+        let outcome = northstar_operations_postgres::reports::revoke_invitation_in_tx(
             &mut tx,
             admission.authority.user_id,
             id,
@@ -64,13 +61,14 @@ impl InvitationAdminRepository for PostgresInvitationAdminRepository {
         )
         .await?;
         let response = match outcome {
-            db::InvitationRevokeOutcome::NotFound => {
+            northstar_operations_postgres::reports::InvitationRevokeOutcome::NotFound => {
                 error_response(404, "not_found", "invitation does not exist")?
             }
-            db::InvitationRevokeOutcome::Revoked | db::InvitationRevokeOutcome::AlreadyRevoked => {
+            northstar_operations_postgres::reports::InvitationRevokeOutcome::Revoked
+            | northstar_operations_postgres::reports::InvitationRevokeOutcome::AlreadyRevoked => {
                 StoredApiResponse::json(
                     200,
-                    serde_json::json!({"revoked":true,"already_revoked":outcome == db::InvitationRevokeOutcome::AlreadyRevoked}),
+                    serde_json::json!({"revoked":true,"already_revoked":outcome == northstar_operations_postgres::reports::InvitationRevokeOutcome::AlreadyRevoked}),
                 )?
             }
         };

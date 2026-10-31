@@ -1,5 +1,4 @@
 //! Complete authorization, retention policy and response replay transactions.
-use crate::db;
 use northstar_operations_application::retention_policy::*;
 use northstar_operations_core::api_mutations::*;
 use sqlx::{PgPool, Postgres, Transaction};
@@ -9,11 +8,15 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub(crate) struct PostgresRetentionPolicyRepository {
     pool: PgPool,
-    keyring: Arc<db::ApiControlKeyring>,
+    keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
 }
 
 enum RetentionMutationStart<'a> {
-    Ready(Transaction<'a, Postgres>, Uuid, db::IdempotencyLease),
+    Ready(
+        Transaction<'a, Postgres>,
+        Uuid,
+        northstar_operations_postgres::api_control::IdempotencyLease,
+    ),
     Finished(ApiMutationOutcome<StoredApiResponse>),
 }
 
@@ -22,7 +25,10 @@ fn backend(error: impl Into<anyhow::Error>) -> RetentionPolicyError {
 }
 
 impl PostgresRetentionPolicyRepository {
-    pub(crate) fn new(pool: PgPool, keyring: Arc<db::ApiControlKeyring>) -> Self {
+    pub(crate) fn new(
+        pool: PgPool,
+        keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
+    ) -> Self {
         Self { pool, keyring }
     }
 
@@ -44,43 +50,46 @@ impl PostgresRetentionPolicyRepository {
         admission: &RetentionMutationAdmission<'_>,
     ) -> Result<RetentionMutationStart<'_>, RetentionPolicyError> {
         let (mut tx, user_id) = self.authorized(admission.session_token).await?;
-        let rejection =
-            match db::acquire_idempotency_in_tx(&self.keyring, &mut tx, &admission.idempotency)
-                .await
-                .map_err(backend)?
-            {
-                db::IdempotencyAcquire::Acquired(lease) => {
-                    return Ok(RetentionMutationStart::Ready(tx, user_id, lease))
-                }
-                db::IdempotencyAcquire::Replay(response) => {
-                    tx.commit().await.map_err(backend)?;
-                    return Ok(RetentionMutationStart::Finished(
-                        ApiMutationOutcome::Replay(response),
-                    ));
-                }
-                db::IdempotencyAcquire::FingerprintConflict
-                | db::IdempotencyAcquire::RotationConflict => {
-                    ApiMutationRejection::IdempotencyConflict
-                }
-                db::IdempotencyAcquire::ReplayInvalidated => {
-                    ApiMutationRejection::ReplayInvalidated
-                }
-                db::IdempotencyAcquire::Busy {
-                    retry_after_seconds,
-                } => ApiMutationRejection::Busy {
-                    retry_after: retry_after_seconds,
-                },
-                db::IdempotencyAcquire::CapacityLimited {
-                    retry_after_seconds,
-                } => ApiMutationRejection::CapacityLimited {
-                    retry_after: retry_after_seconds,
-                },
-                db::IdempotencyAcquire::InProgress {
-                    retry_after_seconds,
-                } => ApiMutationRejection::InProgress {
-                    retry_after: retry_after_seconds,
-                },
-            };
+        let rejection = match northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            &self.keyring,
+            &mut tx,
+            &admission.idempotency,
+        )
+        .await
+        .map_err(backend)?
+        {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(lease) => {
+                return Ok(RetentionMutationStart::Ready(tx, user_id, lease))
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Replay(response) => {
+                tx.commit().await.map_err(backend)?;
+                return Ok(RetentionMutationStart::Finished(
+                    ApiMutationOutcome::Replay(response),
+                ));
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::FingerprintConflict
+            | northstar_operations_postgres::api_control::IdempotencyAcquire::RotationConflict => {
+                ApiMutationRejection::IdempotencyConflict
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::ReplayInvalidated => {
+                ApiMutationRejection::ReplayInvalidated
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Busy {
+                retry_after_seconds,
+            } => ApiMutationRejection::Busy {
+                retry_after: retry_after_seconds,
+            },
+            northstar_operations_postgres::api_control::IdempotencyAcquire::CapacityLimited {
+                retry_after_seconds,
+            } => ApiMutationRejection::CapacityLimited {
+                retry_after: retry_after_seconds,
+            },
+            northstar_operations_postgres::api_control::IdempotencyAcquire::InProgress {
+                retry_after_seconds,
+            } => ApiMutationRejection::InProgress {
+                retry_after: retry_after_seconds,
+            },
+        };
         tx.rollback().await.map_err(backend)?;
         Ok(RetentionMutationStart::Finished(
             ApiMutationOutcome::Rejected(rejection),
@@ -90,12 +99,17 @@ impl PostgresRetentionPolicyRepository {
     async fn finish(
         &self,
         mut tx: Transaction<'_, Postgres>,
-        lease: &db::IdempotencyLease,
+        lease: &northstar_operations_postgres::api_control::IdempotencyLease,
         response: StoredApiResponse,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>, RetentionPolicyError> {
-        if !db::api_mutations::persist_response_in_tx(&self.keyring, &mut tx, lease, &response)
-            .await
-            .map_err(backend)?
+        if !northstar_operations_postgres::api_mutations::persist_response_in_tx(
+            &self.keyring,
+            &mut tx,
+            lease,
+            &response,
+        )
+        .await
+        .map_err(backend)?
         {
             return Err(backend(anyhow::anyhow!(
                 "data-policy idempotency lease changed"
@@ -112,9 +126,11 @@ impl RetentionPolicyRepository for PostgresRetentionPolicyRepository {
         session_token: &str,
     ) -> Result<UserRetentionPolicy, RetentionPolicyError> {
         let (mut tx, user_id) = self.authorized(session_token).await?;
-        let policy = db::user_retention_policy_in_tx(&mut tx, user_id)
-            .await
-            .map_err(backend)?;
+        let policy = northstar_operations_postgres::data_lifecycle::user_retention_policy_in_tx(
+            &mut tx, user_id,
+        )
+        .await
+        .map_err(backend)?;
         tx.commit().await.map_err(backend)?;
         Ok(policy)
     }
@@ -125,7 +141,11 @@ impl RetentionPolicyRepository for PostgresRetentionPolicyRepository {
         room_id: Uuid,
     ) -> Result<Option<i32>, RetentionPolicyError> {
         let (mut tx, user_id) = self.authorized(session_token).await?;
-        let policy = db::muc_retention_policy_authorized_in_tx(&mut tx, user_id, room_id).await?;
+        let policy =
+            northstar_operations_postgres::data_lifecycle::muc_retention_policy_authorized_in_tx(
+                &mut tx, user_id, room_id,
+            )
+            .await?;
         tx.commit().await.map_err(backend)?;
         Ok(policy)
     }
@@ -140,7 +160,7 @@ impl RetentionPolicyRepository for PostgresRetentionPolicyRepository {
             RetentionMutationStart::Ready(tx, user_id, lease) => (tx, user_id, lease),
             RetentionMutationStart::Finished(outcome) => return Ok(outcome),
         };
-        db::set_user_retention_policy_in_tx(
+        northstar_operations_postgres::data_lifecycle::set_user_retention_policy_in_tx(
             &mut tx,
             user_id,
             user_id,
@@ -165,7 +185,7 @@ impl RetentionPolicyRepository for PostgresRetentionPolicyRepository {
             RetentionMutationStart::Ready(tx, user_id, lease) => (tx, user_id, lease),
             RetentionMutationStart::Finished(outcome) => return Ok(outcome),
         };
-        db::set_muc_retention_policy_in_tx(
+        northstar_operations_postgres::data_lifecycle::set_muc_retention_policy_in_tx(
             &mut tx,
             user_id,
             room_id,
@@ -258,7 +278,13 @@ mod tests {
             .unwrap();
         }
         let secret = Uuid::new_v4().simple().to_string();
-        let keyring = Arc::new(db::ApiControlKeyring::new(secret.as_bytes(), None).unwrap());
+        let keyring = Arc::new(
+            northstar_operations_postgres::api_control::ApiControlKeyring::new(
+                secret.as_bytes(),
+                None,
+            )
+            .unwrap(),
+        );
         let service = RetentionPolicyService::new(
             PostgresRetentionPolicyRepository::new(pool.clone(), keyring),
             RetentionPolicyLimits {
@@ -560,7 +586,7 @@ mod tests {
             let service = RetentionPolicyService::new(
                 PostgresRetentionPolicyRepository::new(
                     pool.clone(),
-                    Arc::new(db::ApiControlKeyring::new(secret.as_bytes(), None)?),
+                    Arc::new(northstar_operations_postgres::api_control::ApiControlKeyring::new(secret.as_bytes(), None)?),
                 ),
                 RetentionPolicyLimits {
                     personal_mam_days: 365,
@@ -597,15 +623,15 @@ mod tests {
 
             let affiliation_pool = pool.clone();
             tasks.spawn(async move {
-                let result = db::set_muc_affiliations_batch(
+                let result = crate::db::set_muc_affiliations_batch(
                     &affiliation_pool,
                     room,
-                    &[db::MucAffiliationChange {
-                        target: db::MucAffiliationTarget::LocalUsername(owner_name),
+                    &[crate::db::MucAffiliationChange {
+                        target: crate::db::MucAffiliationTarget::LocalUsername(owner_name),
                         affiliation: "member".to_owned(),
                     }],
                 ).await?;
-                anyhow::ensure!(result == db::MucAffiliationBatchOutcome::Applied,
+                anyhow::ensure!(result == crate::db::MucAffiliationBatchOutcome::Applied,
                     "the production affiliation writer did not apply the demotion");
                 Ok(RetentionRaceCompletion::Demotion)
             });

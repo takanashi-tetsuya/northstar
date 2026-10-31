@@ -144,7 +144,7 @@ impl RegistrationAdminRepository for PostgresRegistrationAdminRepository {
         self.command
             .dispatch(
                 admission,
-                db::api_control::AdminCommandRoute::Registration,
+                northstar_operations_postgres::api_control::AdminCommandRoute::Registration,
                 Some(enabled),
             )
             .await

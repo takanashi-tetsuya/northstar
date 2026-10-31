@@ -21,11 +21,11 @@ if [[ "$scope" != "reports" && "$scope" != "atomic" && "$scope" != "legacy" ]]; 
 fi
 if [[ "$scope" != "abuse" && "$scope" != "atomic" ]]; then
   cargo test --locked --offline \
-    db::reports::tests::report_evidence_is_owned_peer_bound_atomic_and_moderation_is_serialized \
+    db::reports_tests::report_evidence_is_owned_peer_bound_atomic_and_moderation_is_serialized \
     -- --ignored --nocapture
 fi
 if [[ "$scope" != "abuse" && "$scope" != "legacy" ]]; then
   cargo test --locked --offline \
-    db::reports::tests::report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized \
+    db::reports_tests::report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized \
     -- --ignored --nocapture
 fi

@@ -10,9 +10,15 @@ pub(super) const AUXILIARY_POOL_STARTUP_BUDGET: Duration = Duration::from_secs(1
 pub(super) fn api_keyrings(
     current_secret: &[u8],
     previous_secret: Option<&[u8]>,
-) -> anyhow::Result<(db::ApiControlKeyring, crate::api::cursor::CursorKeyring)> {
-    let api_control = db::ApiControlKeyring::new(current_secret, previous_secret)
-        .context("failed to derive API control keys")?;
+) -> anyhow::Result<(
+    northstar_operations_postgres::api_control::ApiControlKeyring,
+    crate::api::cursor::CursorKeyring,
+)> {
+    let api_control = northstar_operations_postgres::api_control::ApiControlKeyring::new(
+        current_secret,
+        previous_secret,
+    )
+    .context("failed to derive API control keys")?;
     let api_cursor = crate::api::cursor::CursorKeyring::new(current_secret, previous_secret)
         .context("failed to derive API cursor keys")?;
     Ok((api_control, api_cursor))

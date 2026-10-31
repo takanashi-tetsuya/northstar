@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use northstar_operations_core::api_mutations::{api_request_fingerprint, ApiPrincipalKind};
 pub use northstar_operations_core::api_mutations::{IdempotencyRequest, IdempotentResponse};
 use rand::RngCore;
@@ -19,9 +19,9 @@ type HmacSha256 = Hmac<Sha256>;
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 200;
 const MAX_REPLAY_BODY_BYTES: usize = 1024 * 1024;
 const MAX_REPLAY_HEADERS_BYTES: usize = 8 * 1024;
-const MAX_STARTED_PER_PRINCIPAL: i64 = 32;
-const MAX_RECORDS_PER_PRINCIPAL: i64 = 128;
-const MAX_GLOBAL_RECORDS: i64 = 100_000;
+pub const MAX_STARTED_PER_PRINCIPAL: i64 = 32;
+pub const MAX_RECORDS_PER_PRINCIPAL: i64 = 128;
+pub const MAX_GLOBAL_RECORDS: i64 = 100_000;
 const STARTED_TTL_SECONDS: i64 = 5 * 60;
 const ALLOWED_REPLAY_HEADERS: &[&str] = &[
     "cache-control",
@@ -56,7 +56,7 @@ pub struct ApiControlKeyring {
 
 /// Keyed request identity passed to a purpose-bound REST command capability.
 /// The HMAC keys and raw Idempotency-Key never reach PostgreSQL.
-pub(crate) struct AdminCommandHashes {
+pub struct AdminCommandHashes {
     pub current_scope: [u8; 32],
     pub previous_scope: Option<[u8; 32]>,
     pub current_principal: [u8; 32],
@@ -66,13 +66,13 @@ pub(crate) struct AdminCommandHashes {
     pub current_key_id: String,
 }
 
-pub(crate) struct SealedAdminReplay {
+pub struct SealedAdminReplay {
     pub key_id: String,
     pub nonce: [u8; 12],
     pub ciphertext: Vec<u8>,
 }
 
-pub(crate) struct AdminCommandReplayRecord<'a> {
+pub struct AdminCommandReplayRecord<'a> {
     pub record_id: Uuid,
     pub request_id: Uuid,
     pub scope_hash: &'a [u8],
@@ -84,14 +84,14 @@ pub(crate) struct AdminCommandReplayRecord<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum AdminCommandRoute {
+pub enum AdminCommandRoute {
     TlsReload,
     PanicDisconnect,
     Registration,
 }
 
 impl AdminCommandRoute {
-    pub(crate) fn path(self) -> &'static str {
+    pub fn path(self) -> &'static str {
         match self {
             Self::TlsReload => "/api/v1/admin/tls/reload",
             Self::PanicDisconnect => "/api/v1/admin/panic_disconnect",
@@ -99,14 +99,14 @@ impl AdminCommandRoute {
         }
     }
 
-    pub(crate) fn target_scope(self) -> &'static [u8] {
+    pub fn target_scope(self) -> &'static [u8] {
         match self {
             Self::Registration => b"registration_closed",
             Self::TlsReload | Self::PanicDisconnect => b"",
         }
     }
 
-    pub(crate) fn response_status(self) -> u16 {
+    pub fn response_status(self) -> u16 {
         match self {
             Self::Registration => 200,
             Self::TlsReload | Self::PanicDisconnect => 202,
@@ -175,7 +175,7 @@ impl ApiControlKeyring {
         }
     }
 
-    pub(crate) fn admin_command_hashes(
+    pub fn admin_command_hashes(
         &self,
         request: &IdempotencyRequest<'_>,
         route: AdminCommandRoute,
@@ -205,7 +205,7 @@ impl ApiControlKeyring {
         })
     }
 
-    pub(crate) fn open_admin_command_replay(
+    pub fn open_admin_command_replay(
         &self,
         route: AdminCommandRoute,
         record: AdminCommandReplayRecord<'_>,
@@ -250,7 +250,7 @@ impl ApiControlKeyring {
         })
     }
 
-    pub(crate) fn seal_admin_command_response(
+    pub fn seal_admin_command_response(
         &self,
         route: AdminCommandRoute,
         record_id: Uuid,
@@ -373,7 +373,7 @@ pub struct IdempotencyLease {
 }
 
 impl IdempotencyLease {
-    pub(crate) fn lease_token(&self) -> Uuid {
+    pub fn lease_token(&self) -> Uuid {
         self.lease_token
     }
 }
@@ -908,7 +908,7 @@ pub async fn resume_idempotency_lease_in_tx(
         .await
 }
 
-pub(crate) async fn resume_idempotency_lease_fence_in_tx(
+pub async fn resume_idempotency_lease_fence_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     record_id: Uuid,
     lease_token: Uuid,
@@ -941,7 +941,7 @@ pub async fn mark_idempotency_guard_verified_in_tx(
     mark_idempotency_guard_verified_fence_in_tx(tx, lease.record_id, lease.lease_token).await
 }
 
-pub(crate) async fn mark_idempotency_guard_verified_fence_in_tx(
+pub async fn mark_idempotency_guard_verified_fence_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     record_id: Uuid,
     lease_token: Uuid,
@@ -1013,7 +1013,7 @@ pub async fn abandon_idempotency_lease_in_tx(
     abandon_idempotency_lease_fence_in_tx(tx, lease.record_id, lease.lease_token).await
 }
 
-pub(crate) async fn abandon_idempotency_lease_fence_in_tx(
+pub async fn abandon_idempotency_lease_fence_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     record_id: Uuid,
     lease_token: Uuid,
@@ -1327,6 +1327,19 @@ fn open_replay(
     let plaintext_len = plaintext.len();
     body.truncate(plaintext_len);
     Ok(())
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ApiControlKeyring {
+    /// The current key's opaque identifier, which root tests compare with stored rows.
+    pub fn current_key_id(&self) -> &str {
+        &self.current.id
+    }
+
+    /// The current key's fingerprint of a request, compared the same way.
+    pub fn current_request_fingerprint(&self, request: &IdempotencyRequest<'_>) -> [u8; 32] {
+        self.request_fingerprints(request).0
+    }
 }
 
 #[cfg(test)]

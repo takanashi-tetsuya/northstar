@@ -13,7 +13,7 @@ pub(crate) struct PostgresAccountRepository {
     pool: PgPool,
     domain: String,
     abuse: Arc<AbuseGuard>,
-    api_control: Option<Arc<db::ApiControlKeyring>>,
+    api_control: Option<Arc<northstar_operations_postgres::api_control::ApiControlKeyring>>,
 }
 impl PostgresAccountRepository {
     pub(crate) fn new(pool: PgPool, domain: String, abuse: Arc<AbuseGuard>) -> Self {
@@ -25,13 +25,19 @@ impl PostgresAccountRepository {
         }
     }
 
-    pub(crate) fn with_api_control(mut self, api_control: Arc<db::ApiControlKeyring>) -> Self {
+    pub(crate) fn with_api_control(
+        mut self,
+        api_control: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
+    ) -> Self {
         self.api_control = Some(api_control);
         self
     }
 
-    async fn yield_http_registration_lease(&self, lease: &db::IdempotencyLease) -> Result<bool> {
-        db::yield_idempotency_lease(&self.pool, lease).await
+    async fn yield_http_registration_lease(
+        &self,
+        lease: &northstar_operations_postgres::api_control::IdempotencyLease,
+    ) -> Result<bool> {
+        northstar_operations_postgres::api_control::yield_idempotency_lease(&self.pool, lease).await
     }
 }
 impl AccountRepository for PostgresAccountRepository {
@@ -47,43 +53,48 @@ impl AccountRepository for PostgresAccountRepository {
             .as_ref()
             .context("HTTP registration API control keyring is missing")?;
         let mut reservation = self.pool.begin().await?;
-        let lease =
-            match db::acquire_idempotency_in_tx(keyring, &mut reservation, &request.idempotency)
-                .await?
-            {
-                db::IdempotencyAcquire::Acquired(lease) => lease,
-                db::IdempotencyAcquire::Replay(replay) => {
-                    reservation.commit().await?;
-                    return Ok(Outcome::Replay(replay));
-                }
-                db::IdempotencyAcquire::FingerprintConflict
-                | db::IdempotencyAcquire::RotationConflict => {
-                    reservation.rollback().await?;
-                    return Ok(Outcome::IdempotencyConflict);
-                }
-                db::IdempotencyAcquire::ReplayInvalidated => {
-                    reservation.rollback().await?;
-                    return Ok(Outcome::ReplayInvalidated);
-                }
-                db::IdempotencyAcquire::Busy {
-                    retry_after_seconds,
-                } => {
-                    reservation.rollback().await?;
-                    return Ok(Outcome::Busy(retry_after_seconds));
-                }
-                db::IdempotencyAcquire::CapacityLimited {
-                    retry_after_seconds,
-                } => {
-                    reservation.rollback().await?;
-                    return Ok(Outcome::CapacityLimited(retry_after_seconds));
-                }
-                db::IdempotencyAcquire::InProgress {
-                    retry_after_seconds,
-                } => {
-                    reservation.rollback().await?;
-                    return Ok(Outcome::InProgress(retry_after_seconds));
-                }
-            };
+        let lease = match northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            keyring,
+            &mut reservation,
+            &request.idempotency,
+        )
+        .await?
+        {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(lease) => {
+                lease
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Replay(replay) => {
+                reservation.commit().await?;
+                return Ok(Outcome::Replay(replay));
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::FingerprintConflict
+            | northstar_operations_postgres::api_control::IdempotencyAcquire::RotationConflict => {
+                reservation.rollback().await?;
+                return Ok(Outcome::IdempotencyConflict);
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::ReplayInvalidated => {
+                reservation.rollback().await?;
+                return Ok(Outcome::ReplayInvalidated);
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Busy {
+                retry_after_seconds,
+            } => {
+                reservation.rollback().await?;
+                return Ok(Outcome::Busy(retry_after_seconds));
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::CapacityLimited {
+                retry_after_seconds,
+            } => {
+                reservation.rollback().await?;
+                return Ok(Outcome::CapacityLimited(retry_after_seconds));
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::InProgress {
+                retry_after_seconds,
+            } => {
+                reservation.rollback().await?;
+                return Ok(Outcome::InProgress(retry_after_seconds));
+            }
+        };
 
         // A replay precedes policy checks. For a fresh lease, abandon and
         // commit the cheap reservation together with the policy decision.
@@ -95,7 +106,12 @@ impl AccountRepository for PostgresAccountRepository {
                 >= i64::from(policy.registration_rate_per_hour)
         };
         if closed || rate_limited {
-            if !db::abandon_idempotency_lease_in_tx(&mut reservation, &lease).await? {
+            if !northstar_operations_postgres::api_control::abandon_idempotency_lease_in_tx(
+                &mut reservation,
+                &lease,
+            )
+            .await?
+            {
                 reservation.rollback().await?;
                 return Ok(Outcome::LeaseLost);
             }
@@ -162,7 +178,7 @@ impl AccountRepository for PostgresAccountRepository {
         };
 
         let mut publication = self.pool.begin().await?;
-        if !db::resume_idempotency_lease_in_tx(
+        if !northstar_operations_postgres::api_control::resume_idempotency_lease_in_tx(
             &mut publication,
             &lease,
             request.idempotency.lease_seconds,
@@ -204,18 +220,23 @@ impl AccountRepository for PostgresAccountRepository {
                 user.password_hash.zeroize();
                 user.password_hash.clear();
                 anyhow::ensure!(
-                    db::mark_idempotency_guard_verified_in_tx(&mut publication, &lease).await?,
+                    northstar_operations_postgres::api_control::mark_idempotency_guard_verified_in_tx(&mut publication, &lease).await?,
                     "registration idempotency guard marker changed"
                 );
                 anyhow::ensure!(
-                    db::bind_idempotency_actor_in_tx(&mut publication, &lease, user_id).await?,
+                    northstar_operations_postgres::api_control::bind_idempotency_actor_in_tx(
+                        &mut publication,
+                        &lease,
+                        user_id
+                    )
+                    .await?,
                     "registration idempotency ownership changed"
                 );
                 let body = serde_json::to_vec(&serde_json::json!({
                     "jid": format!("{}@{}", username, self.domain)
                 }))?;
                 anyhow::ensure!(
-                    db::complete_idempotency_in_tx(
+                    northstar_operations_postgres::api_control::complete_idempotency_in_tx(
                         keyring,
                         &mut publication,
                         &lease,
@@ -230,7 +251,12 @@ impl AccountRepository for PostgresAccountRepository {
                 Ok(Outcome::Created(body))
             }
             db::GuardedRegistrationOutcome::AbuseDenied(error) => {
-                if !db::abandon_idempotency_lease_in_tx(&mut publication, &lease).await? {
+                if !northstar_operations_postgres::api_control::abandon_idempotency_lease_in_tx(
+                    &mut publication,
+                    &lease,
+                )
+                .await?
+                {
                     publication.rollback().await?;
                     return Ok(Outcome::LeaseLost);
                 }
@@ -263,7 +289,7 @@ impl AccountRepository for PostgresAccountRepository {
                     }
                 }))?;
                 anyhow::ensure!(
-                    db::complete_idempotency_in_tx(
+                    northstar_operations_postgres::api_control::complete_idempotency_in_tx(
                         keyring,
                         &mut publication,
                         &lease,
@@ -278,7 +304,12 @@ impl AccountRepository for PostgresAccountRepository {
                 Ok(Outcome::Rejected(body))
             }
             db::GuardedRegistrationOutcome::Rejected(error) => {
-                if !db::abandon_idempotency_lease_in_tx(&mut publication, &lease).await? {
+                if !northstar_operations_postgres::api_control::abandon_idempotency_lease_in_tx(
+                    &mut publication,
+                    &lease,
+                )
+                .await?
+                {
                     publication.rollback().await?;
                     return Ok(Outcome::LeaseLost);
                 }
@@ -318,7 +349,7 @@ impl AccountRepository for PostgresAccountRepository {
         request: RegistrationGuardRequest<'_>,
     ) -> Result<RegistrationGuardOutcome> {
         let mut transaction = self.pool.begin().await?;
-        if !db::api_control::resume_idempotency_lease_fence_in_tx(
+        if !northstar_operations_postgres::api_control::resume_idempotency_lease_fence_in_tx(
             &mut transaction,
             request.lease.record_id,
             request.lease.lease_token,
@@ -341,7 +372,7 @@ impl AccountRepository for PostgresAccountRepository {
         .await?;
         match outcome {
             northstar_abuse_application::guard::TransactionalGuardOutcome::Allowed => {
-                if !db::api_control::mark_idempotency_guard_verified_fence_in_tx(
+                if !northstar_operations_postgres::api_control::mark_idempotency_guard_verified_fence_in_tx(
                     &mut transaction,
                     request.lease.record_id,
                     request.lease.lease_token,
@@ -357,7 +388,7 @@ impl AccountRepository for PostgresAccountRepository {
             northstar_abuse_application::guard::TransactionalGuardOutcome::DeniedNeedsCommit(
                 error,
             ) => {
-                if !db::api_control::abandon_idempotency_lease_fence_in_tx(
+                if !northstar_operations_postgres::api_control::abandon_idempotency_lease_fence_in_tx(
                     &mut transaction,
                     request.lease.record_id,
                     request.lease.lease_token,
@@ -719,8 +750,13 @@ mod registration_guard_tests {
             Some(test_key().as_bytes()),
             None,
         ));
-        let api_control =
-            Arc::new(crate::db::ApiControlKeyring::new(test_key().as_bytes(), None).unwrap());
+        let api_control = Arc::new(
+            northstar_operations_postgres::api_control::ApiControlKeyring::new(
+                test_key().as_bytes(),
+                None,
+            )
+            .unwrap(),
+        );
         let service = AccountService::new(
             PostgresAccountRepository::new(pool.clone(), "example.test".into(), guard)
                 .with_api_control(api_control),
@@ -854,8 +890,13 @@ mod registration_guard_tests {
             Some(test_key().as_bytes()),
             None,
         ));
-        let api_control =
-            Arc::new(crate::db::ApiControlKeyring::new(test_key().as_bytes(), None).unwrap());
+        let api_control = Arc::new(
+            northstar_operations_postgres::api_control::ApiControlKeyring::new(
+                test_key().as_bytes(),
+                None,
+            )
+            .unwrap(),
+        );
         let service = AccountService::new(
             PostgresAccountRepository::new(pool.clone(), "example.test".into(), Arc::clone(&guard))
                 .with_api_control(api_control),
@@ -974,7 +1015,11 @@ mod registration_guard_tests {
         ));
         let repository =
             PostgresAccountRepository::new(pool.clone(), "example.test".into(), Arc::clone(&guard));
-        let keys = crate::db::ApiControlKeyring::new(api_key.as_bytes(), None).unwrap();
+        let keys = northstar_operations_postgres::api_control::ApiControlKeyring::new(
+            api_key.as_bytes(),
+            None,
+        )
+        .unwrap();
         let suffix = Uuid::new_v4().simple().to_string();
         let key = format!("registration-guard-{suffix}");
         let scope = "registration:192.0.2.40";
@@ -1009,11 +1054,17 @@ mod registration_guard_tests {
             lease_seconds: 30,
         };
         let mut reserve = pool.begin().await.unwrap();
-        let lease = match crate::db::acquire_idempotency_in_tx(&keys, &mut reserve, &request)
-            .await
-            .unwrap()
+        let lease = match northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            &keys,
+            &mut reserve,
+            &request,
+        )
+        .await
+        .unwrap()
         {
-            crate::db::IdempotencyAcquire::Acquired(lease) => lease,
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(lease) => {
+                lease
+            }
             other => panic!("expected acquired registration lease, got {other:?}"),
         };
         reserve.commit().await.unwrap();
@@ -1053,17 +1104,26 @@ mod registration_guard_tests {
             "proof must be consumed with the guard marker"
         );
 
-        assert!(crate::db::yield_idempotency_lease(&pool, &lease)
-            .await
-            .unwrap());
+        assert!(
+            northstar_operations_postgres::api_control::yield_idempotency_lease(&pool, &lease)
+                .await
+                .unwrap()
+        );
         let mut takeover = pool.begin().await.unwrap();
-        let replacement = match crate::db::acquire_idempotency_in_tx(&keys, &mut takeover, &request)
+        let replacement =
+            match northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+                &keys,
+                &mut takeover,
+                &request,
+            )
             .await
             .unwrap()
-        {
-            crate::db::IdempotencyAcquire::Acquired(lease) => lease,
-            other => panic!("expected guard-verified takeover, got {other:?}"),
-        };
+            {
+                northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(lease) => {
+                    lease
+                }
+                other => panic!("expected guard-verified takeover, got {other:?}"),
+            };
         assert!(replacement.guard_verified);
         takeover.commit().await.unwrap();
 
@@ -1141,11 +1201,17 @@ mod registration_guard_tests {
         };
         let mut reserve_denied = pool.begin().await.unwrap();
         let denied_lease =
-            match crate::db::acquire_idempotency_in_tx(&keys, &mut reserve_denied, &denied_request)
-                .await
-                .unwrap()
+            match northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+                &keys,
+                &mut reserve_denied,
+                &denied_request,
+            )
+            .await
+            .unwrap()
             {
-                crate::db::IdempotencyAcquire::Acquired(lease) => lease,
+                northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(lease) => {
+                    lease
+                }
                 other => panic!("expected second registration lease, got {other:?}"),
             };
         reserve_denied.commit().await.unwrap();

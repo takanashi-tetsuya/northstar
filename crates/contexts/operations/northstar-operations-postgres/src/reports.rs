@@ -28,13 +28,6 @@ pub enum ReportCreateError {
 pub enum ModerationUpdateError {
     #[error("moderation record does not exist")]
     NotFound,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "production handlers retain the fail-closed match arm although authorization is performed before this repository call"
-        )
-    )]
     #[error("administrator authorization changed")]
     Unauthorized,
     #[error("moderation status transition is not allowed")]
@@ -229,7 +222,7 @@ pub async fn revoke_invitation_in_tx(
     Ok(outcome)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn create_report(
     pool: &PgPool,
     reporter_id: Uuid,
@@ -420,7 +413,7 @@ fn evidence_from_archive(
     Ok((sender, body.to_owned(), "server_verified_plaintext"))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn create_appeal(
     pool: &PgPool,
     report_id: Uuid,
@@ -482,52 +475,6 @@ pub async fn create_appeal_in_tx(
     Ok(id)
 }
 
-#[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-pub async fn admin_update_report_api(
-    pool: &PgPool,
-    id: Uuid,
-    actor_id: Uuid,
-    actor_generation: i64,
-    presented_session: &str,
-    status: &str,
-    resolution: &str,
-) -> std::result::Result<(), ModerationUpdateError> {
-    update_moderation_record(
-        pool,
-        ModerationKind::Report,
-        id,
-        actor_id,
-        status,
-        resolution,
-        Some((actor_generation, presented_session)),
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-pub async fn admin_update_appeal_api(
-    pool: &PgPool,
-    id: Uuid,
-    actor_id: Uuid,
-    actor_generation: i64,
-    presented_session: &str,
-    status: &str,
-    resolution: &str,
-) -> std::result::Result<(), ModerationUpdateError> {
-    update_moderation_record(
-        pool,
-        ModerationKind::Appeal,
-        id,
-        actor_id,
-        status,
-        resolution,
-        Some((actor_generation, presented_session)),
-    )
-    .await
-}
-
 pub async fn admin_update_report_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     id: Uuid,
@@ -569,50 +516,13 @@ pub async fn admin_update_appeal_in_tx(
 }
 
 #[derive(Clone, Copy)]
-enum ModerationKind {
+pub enum ModerationKind {
     Report,
     Appeal,
 }
 
-#[cfg(test)]
-async fn update_moderation_record(
-    pool: &PgPool,
-    kind: ModerationKind,
-    id: Uuid,
-    actor_id: Uuid,
-    status: &str,
-    resolution: &str,
-    api_authorization: Option<(i64, &str)>,
-) -> std::result::Result<(), ModerationUpdateError> {
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|error| ModerationUpdateError::Internal(error.into()))?;
-    if let Some((actor_generation, presented_session)) = api_authorization {
-        let authorized = northstar_auth_postgres::users::authorize_admin_in_tx(
-            &mut tx,
-            actor_id,
-            actor_generation,
-            presented_session,
-        )
-        .await
-        .map_err(ModerationUpdateError::Internal)?;
-        if !authorized {
-            tx.rollback()
-                .await
-                .map_err(|error| ModerationUpdateError::Internal(error.into()))?;
-            return Err(ModerationUpdateError::Unauthorized);
-        }
-    }
-    update_moderation_record_in_tx(&mut tx, kind, id, actor_id, status, resolution, None).await?;
-    tx.commit()
-        .await
-        .map_err(|error| ModerationUpdateError::Internal(error.into()))?;
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
-async fn update_moderation_record_in_tx(
+pub async fn update_moderation_record_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     kind: ModerationKind,
     id: Uuid,
@@ -716,4 +626,5 @@ fn valid_moderation_transition(kind: ModerationKind, current: &str, next: &str) 
 }
 
 #[cfg(test)]
+#[path = "reports_tests.rs"]
 mod tests;

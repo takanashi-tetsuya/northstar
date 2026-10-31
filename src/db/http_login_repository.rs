@@ -1,6 +1,5 @@
 //! Durable REST login: idempotency, abuse admission, verifier work, and
 //! session publication. Password work occurs outside SQL transactions.
-use crate::db;
 use anyhow::{anyhow, Result};
 use northstar_abuse_application::guard::{AbuseGuard, TransactionalGuardOutcome};
 use northstar_abuse_policy::AbuseAction;
@@ -18,7 +17,7 @@ use zeroize::Zeroize;
 pub(crate) struct PostgresHttpLoginRepository {
     pool: PgPool,
     abuse: Arc<AbuseGuard>,
-    api_control: Arc<db::ApiControlKeyring>,
+    api_control: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
     policy: HttpLoginPolicy,
     metrics: Arc<dyn LoginFailureMetrics>,
 }
@@ -27,7 +26,7 @@ impl PostgresHttpLoginRepository {
     pub(crate) fn new(
         pool: PgPool,
         abuse: Arc<AbuseGuard>,
-        api_control: Arc<db::ApiControlKeyring>,
+        api_control: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
         policy: HttpLoginPolicy,
         metrics: Arc<dyn LoginFailureMetrics>,
     ) -> Self {
@@ -40,8 +39,13 @@ impl PostgresHttpLoginRepository {
         }
     }
 
-    async fn yield_lease(&self, lease: &db::IdempotencyLease) -> Result<HttpLoginOutcome> {
-        if db::yield_idempotency_lease(&self.pool, lease).await? {
+    async fn yield_lease(
+        &self,
+        lease: &northstar_operations_postgres::api_control::IdempotencyLease,
+    ) -> Result<HttpLoginOutcome> {
+        if northstar_operations_postgres::api_control::yield_idempotency_lease(&self.pool, lease)
+            .await?
+        {
             Ok(HttpLoginOutcome::BackendUnavailable)
         } else {
             Ok(HttpLoginOutcome::LeaseLost)
@@ -51,7 +55,7 @@ impl PostgresHttpLoginRepository {
     async fn complete_failure(
         &self,
         mut tx: Transaction<'_, Postgres>,
-        lease: &db::IdempotencyLease,
+        lease: &northstar_operations_postgres::api_control::IdempotencyLease,
         actors: &[String],
         attempt_already_recorded: bool,
     ) -> Result<HttpLoginOutcome> {
@@ -64,7 +68,11 @@ impl PostgresHttpLoginRepository {
             )
             .await?;
         }
-        if !db::mark_idempotency_guard_verified_in_tx(&mut tx, lease).await? {
+        if !northstar_operations_postgres::api_control::mark_idempotency_guard_verified_in_tx(
+            &mut tx, lease,
+        )
+        .await?
+        {
             return Ok(HttpLoginOutcome::LeaseLost);
         }
         let body = serde_json::to_vec(&serde_json::json!({
@@ -75,8 +83,15 @@ impl PostgresHttpLoginRepository {
             "www-authenticate".to_owned(),
             "Bearer realm=\"northstar\"".to_owned(),
         );
-        if !db::complete_idempotency_in_tx(&self.api_control, &mut tx, lease, 401, &headers, &body)
-            .await?
+        if !northstar_operations_postgres::api_control::complete_idempotency_in_tx(
+            &self.api_control,
+            &mut tx,
+            lease,
+            401,
+            &headers,
+            &body,
+        )
+        .await?
         {
             return Err(anyhow!("login failure idempotency lease changed"));
         }
@@ -110,43 +125,43 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
     async fn login(&self, request: HttpLoginRequest<'_>) -> Result<HttpLoginOutcome> {
         use HttpLoginOutcome as Outcome;
         let mut reserve_tx = self.pool.begin().await?;
-        let (lease, replay) = match db::acquire_idempotency_in_tx(
+        let (lease, replay) = match northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
             &self.api_control,
             &mut reserve_tx,
             &request.idempotency,
         )
         .await?
         {
-            db::IdempotencyAcquire::Acquired(lease) => {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(lease) => {
                 reserve_tx.commit().await?;
                 (Some(lease), None)
             }
-            db::IdempotencyAcquire::Replay(replay) => {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Replay(replay) => {
                 reserve_tx.commit().await?;
                 (None, Some(replay))
             }
-            db::IdempotencyAcquire::FingerprintConflict
-            | db::IdempotencyAcquire::RotationConflict => {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::FingerprintConflict
+            | northstar_operations_postgres::api_control::IdempotencyAcquire::RotationConflict => {
                 reserve_tx.rollback().await?;
                 return Ok(Outcome::IdempotencyConflict);
             }
-            db::IdempotencyAcquire::ReplayInvalidated => {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::ReplayInvalidated => {
                 reserve_tx.rollback().await?;
                 return Ok(Outcome::ReplayInvalidated);
             }
-            db::IdempotencyAcquire::Busy {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Busy {
                 retry_after_seconds,
             } => {
                 reserve_tx.rollback().await?;
                 return Ok(Outcome::Busy(retry_after_seconds));
             }
-            db::IdempotencyAcquire::CapacityLimited {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::CapacityLimited {
                 retry_after_seconds,
             } => {
                 reserve_tx.rollback().await?;
                 return Ok(Outcome::CapacityLimited(retry_after_seconds));
             }
-            db::IdempotencyAcquire::InProgress {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::InProgress {
                 retry_after_seconds,
             } => {
                 reserve_tx.rollback().await?;
@@ -157,7 +172,7 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
         let mut proof_recorded_attempt = false;
         if let Some(lease) = lease.as_ref().filter(|lease| !lease.guard_verified) {
             let mut guard_tx = self.pool.begin().await?;
-            if !db::resume_idempotency_lease_in_tx(
+            if !northstar_operations_postgres::api_control::resume_idempotency_lease_in_tx(
                 &mut guard_tx,
                 lease,
                 request.idempotency.lease_seconds,
@@ -176,7 +191,12 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
             .await?;
             if requirement.work_factor > 1 || requirement.retry_after_seconds > 0 {
                 if request.proof.is_none() {
-                    if !db::abandon_idempotency_lease_in_tx(&mut guard_tx, lease).await? {
+                    if !northstar_operations_postgres::api_control::abandon_idempotency_lease_in_tx(
+                        &mut guard_tx,
+                        lease,
+                    )
+                    .await?
+                    {
                         guard_tx.rollback().await?;
                         return Ok(Outcome::LeaseLost);
                     }
@@ -198,13 +218,13 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
                 {
                     TransactionalGuardOutcome::Allowed => {
                         proof_recorded_attempt = true;
-                        if !db::mark_idempotency_guard_verified_in_tx(&mut guard_tx, lease).await? {
+                        if !northstar_operations_postgres::api_control::mark_idempotency_guard_verified_in_tx(&mut guard_tx, lease).await? {
                             guard_tx.rollback().await?;
                             return Ok(Outcome::LeaseLost);
                         }
                     }
                     TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
-                        if !db::abandon_idempotency_lease_in_tx(&mut guard_tx, lease).await? {
+                        if !northstar_operations_postgres::api_control::abandon_idempotency_lease_in_tx(&mut guard_tx, lease).await? {
                             guard_tx.rollback().await?;
                             return Ok(Outcome::LeaseLost);
                         }
@@ -230,7 +250,11 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
             Ok(prepared) => prepared,
             Err(error) if northstar_security::password_work::is_overloaded(&error) => {
                 if let Some(lease) = lease.as_ref() {
-                    if !db::yield_idempotency_lease(&self.pool, lease).await? {
+                    if !northstar_operations_postgres::api_control::yield_idempotency_lease(
+                        &self.pool, lease,
+                    )
+                    .await?
+                    {
                         return Ok(Outcome::LeaseLost);
                     }
                 }
@@ -246,7 +270,11 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
             }
             Err(error) => {
                 if let Some(lease) = lease.as_ref() {
-                    if !db::yield_idempotency_lease(&self.pool, lease).await? {
+                    if !northstar_operations_postgres::api_control::yield_idempotency_lease(
+                        &self.pool, lease,
+                    )
+                    .await?
+                    {
                         return Ok(Outcome::LeaseLost);
                     }
                 }
@@ -266,7 +294,7 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
         let lease = lease.expect("acquired lease exists when response is not replayed");
         let Some(prepared) = prepared else {
             let mut tx = self.pool.begin().await?;
-            if !db::resume_idempotency_lease_in_tx(
+            if !northstar_operations_postgres::api_control::resume_idempotency_lease_in_tx(
                 &mut tx,
                 &lease,
                 request.idempotency.lease_seconds,
@@ -290,8 +318,12 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
         let is_admin = prepared.user.is_admin;
         let auth_generation = prepared.user.auth_generation;
         let mut tx = self.pool.begin().await?;
-        if !db::resume_idempotency_lease_in_tx(&mut tx, &lease, request.idempotency.lease_seconds)
-            .await?
+        if !northstar_operations_postgres::api_control::resume_idempotency_lease_in_tx(
+            &mut tx,
+            &lease,
+            request.idempotency.lease_seconds,
+        )
+        .await?
         {
             tx.rollback().await?;
             return Ok(Outcome::LeaseLost);
@@ -322,7 +354,11 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
                 )
                 .await;
         }
-        if !db::bind_idempotency_actor_in_tx(&mut tx, &lease, user_id).await? {
+        if !northstar_operations_postgres::api_control::bind_idempotency_actor_in_tx(
+            &mut tx, &lease, user_id,
+        )
+        .await?
+        {
             return Err(anyhow!("login idempotency ownership changed"));
         }
         let created_session = northstar_auth_postgres::users::create_api_session_in_tx(
@@ -332,7 +368,7 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
             Some(lease.request_id),
         )
         .await?;
-        if !db::bind_idempotency_session_in_tx(
+        if !northstar_operations_postgres::api_control::bind_idempotency_session_in_tx(
             &mut tx,
             &lease,
             created_session.id,
@@ -351,8 +387,15 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
         };
         let body = serde_json::to_vec(&session)?;
         let headers: BTreeMap<String, String> = json_replay_headers();
-        if !db::complete_idempotency_in_tx(&self.api_control, &mut tx, &lease, 200, &headers, &body)
-            .await?
+        if !northstar_operations_postgres::api_control::complete_idempotency_in_tx(
+            &self.api_control,
+            &mut tx,
+            &lease,
+            200,
+            &headers,
+            &body,
+        )
+        .await?
         {
             return Err(anyhow!("login idempotency lease changed"));
         }

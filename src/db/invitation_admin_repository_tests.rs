@@ -48,7 +48,11 @@ impl<'a> Request<'a> {
                 method,
                 route,
                 idempotency_key: &self.key,
-                request_fingerprint: db::api_request_fingerprint("application/json", body),
+                request_fingerprint:
+                    northstar_operations_postgres::api_control::api_request_fingerprint(
+                        "application/json",
+                        body,
+                    ),
                 ttl_seconds: 24 * 60 * 60,
                 lease_seconds: 180,
             },
@@ -67,7 +71,7 @@ fn input() -> InvitationInput<'static> {
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn invitation_ports_revalidate_secret_replay_and_commit_revoke_outcomes_once() {
-    let pool = db::test_support::operation_mutation_pool().await;
+    let pool = crate::db::test_support::operation_mutation_pool().await;
     let admin = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,username,password_hash,is_admin) VALUES($1,$2,'test-only-invalid',TRUE)")
         .bind(admin).bind(format!("invitation-{}", admin.simple())).execute(&pool).await.unwrap();
@@ -79,7 +83,10 @@ async fn invitation_ports_revalidate_secret_replay_and_commit_revoke_outcomes_on
             .await
             .unwrap();
     let secret = Uuid::new_v4().simple().to_string();
-    let keyring = Arc::new(db::ApiControlKeyring::new(secret.as_bytes(), None).unwrap());
+    let keyring = Arc::new(
+        northstar_operations_postgres::api_control::ApiControlKeyring::new(secret.as_bytes(), None)
+            .unwrap(),
+    );
     let service = InvitationAdminService::new(PostgresInvitationAdminRepository::new(
         AdminMutationStore::new(pool.clone(), keyring, cluster.admission()),
     ));

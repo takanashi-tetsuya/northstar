@@ -51,7 +51,11 @@ impl<'a> Request<'a> {
                 method: "POST",
                 route: self.route,
                 idempotency_key: &self.key,
-                request_fingerprint: db::api_request_fingerprint("application/json", &self.body),
+                request_fingerprint:
+                    northstar_operations_postgres::api_control::api_request_fingerprint(
+                        "application/json",
+                        &self.body,
+                    ),
                 ttl_seconds: 24 * 60 * 60,
                 lease_seconds: 180,
             },
@@ -130,7 +134,7 @@ fn hold_command<'a>(
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn governance_ports_replay_before_cursor_validation_and_bound_exports_before_commit() {
-    let pool = db::test_support::operation_mutation_pool().await;
+    let pool = crate::db::test_support::operation_mutation_pool().await;
     let result = tokio::time::timeout(
         Duration::from_secs(45),
         exercise_governance_ports(pool.clone()),
@@ -170,7 +174,10 @@ async fn exercise_governance_ports(pool: PgPool) {
             .await
             .unwrap();
     let secret = Uuid::new_v4().simple().to_string();
-    let keyring = Arc::new(db::ApiControlKeyring::new(secret.as_bytes(), None).unwrap());
+    let keyring = Arc::new(
+        northstar_operations_postgres::api_control::ApiControlKeyring::new(secret.as_bytes(), None)
+            .unwrap(),
+    );
     let mutations =
         AdminMutationStore::new(pool.clone(), Arc::clone(&keyring), cluster.admission());
     let service_for_cursor_key = |secret: &str| {

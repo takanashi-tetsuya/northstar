@@ -2116,6 +2116,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-operations-postgres"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "hmac",
+ "northstar-auth-core",
+ "northstar-operations-application",
+ "northstar-operations-core",
+ "northstar-xmpp-types",
+ "rand 0.8.7",
+ "ring",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "subtle",
+ "thiserror 2.0.20",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "northstar-postgres"
 version = "0.1.0"
 dependencies = [
@@ -3565,6 +3589,7 @@ dependencies = [
  "northstar-message-core",
  "northstar-operations-application",
  "northstar-operations-core",
+ "northstar-operations-postgres",
  "northstar-postgres",
  "northstar-presence-core",
  "northstar-protocol-runtime",

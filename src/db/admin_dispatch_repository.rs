@@ -24,7 +24,7 @@ pub(crate) struct PostgresAdminDispatchRepository {
 #[derive(Clone)]
 pub(crate) struct AdminCommandStore {
     command_pool: PgPool,
-    keyring: Arc<db::ApiControlKeyring>,
+    keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
     cluster: crate::cluster::ClusterAdmission,
 }
 
@@ -32,7 +32,7 @@ impl PostgresAdminDispatchRepository {
     pub(crate) fn new(
         mutations: AdminMutationStore,
         command_pool: PgPool,
-        keyring: Arc<db::ApiControlKeyring>,
+        keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
         cluster: crate::cluster::ClusterAdmission,
     ) -> Self {
         Self {
@@ -63,7 +63,7 @@ impl PostgresAdminDispatchRepository {
 impl AdminCommandStore {
     pub(crate) fn new(
         command_pool: PgPool,
-        keyring: Arc<db::ApiControlKeyring>,
+        keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
         cluster: crate::cluster::ClusterAdmission,
     ) -> Self {
         Self {
@@ -76,12 +76,14 @@ impl AdminCommandStore {
     pub(crate) async fn dispatch(
         &self,
         admission: AdminMutationAdmission<'_>,
-        route: db::api_control::AdminCommandRoute,
+        route: northstar_operations_postgres::api_control::AdminCommandRoute,
         registration_enabled: Option<bool>,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>> {
         anyhow::ensure!(
-            matches!(route, db::api_control::AdminCommandRoute::Registration)
-                == registration_enabled.is_some(),
+            matches!(
+                route,
+                northstar_operations_postgres::api_control::AdminCommandRoute::Registration
+            ) == registration_enabled.is_some(),
             "administrator command payload does not match route"
         );
         let hashes = self
@@ -105,11 +107,11 @@ impl AdminCommandStore {
         let auth_generation = admission.authority.auth_generation;
         let session_hash = northstar_auth_core::token_hash(admission.authority.session_token);
         let admit_sql = match route {
-            db::api_control::AdminCommandRoute::TlsReload =>
+            northstar_operations_postgres::api_control::AdminCommandRoute::TlsReload =>
                 "SELECT * FROM northstar_admin_tls_reload_admit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
-            db::api_control::AdminCommandRoute::PanicDisconnect =>
+            northstar_operations_postgres::api_control::AdminCommandRoute::PanicDisconnect =>
                 "SELECT * FROM northstar_admin_panic_disconnect_admit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
-            db::api_control::AdminCommandRoute::Registration =>
+            northstar_operations_postgres::api_control::AdminCommandRoute::Registration =>
                 "SELECT * FROM northstar_admin_registration_admit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
         };
         let row = sqlx::query(admit_sql)
@@ -166,11 +168,11 @@ impl AdminCommandStore {
                     &response.body,
                 )?;
                 let commit_sql = match route {
-                    db::api_control::AdminCommandRoute::TlsReload =>
+                    northstar_operations_postgres::api_control::AdminCommandRoute::TlsReload =>
                         "SELECT northstar_admin_tls_reload_commit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-                    db::api_control::AdminCommandRoute::PanicDisconnect =>
+                    northstar_operations_postgres::api_control::AdminCommandRoute::PanicDisconnect =>
                         "SELECT northstar_admin_panic_disconnect_commit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-                    db::api_control::AdminCommandRoute::Registration =>
+                    northstar_operations_postgres::api_control::AdminCommandRoute::Registration =>
                         "SELECT northstar_admin_registration_commit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
                 };
                 let commit = sqlx::query_scalar(commit_sql)
@@ -208,7 +210,7 @@ impl AdminCommandStore {
                 let response_ciphertext: Vec<u8> = row.try_get("response_ciphertext")?;
                 let replay = self.keyring.open_admin_command_replay(
                     route,
-                    db::api_control::AdminCommandReplayRecord {
+                    northstar_operations_postgres::api_control::AdminCommandReplayRecord {
                         record_id,
                         request_id,
                         scope_hash: &stored_scope_hash,
@@ -229,11 +231,11 @@ impl AdminCommandStore {
                         &replay.body,
                     )?;
                     let rekey_sql = match route {
-                        db::api_control::AdminCommandRoute::TlsReload =>
+                        northstar_operations_postgres::api_control::AdminCommandRoute::TlsReload =>
                             "SELECT northstar_admin_tls_reload_rekey($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
-                        db::api_control::AdminCommandRoute::PanicDisconnect =>
+                        northstar_operations_postgres::api_control::AdminCommandRoute::PanicDisconnect =>
                             "SELECT northstar_admin_panic_disconnect_rekey($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
-                        db::api_control::AdminCommandRoute::Registration =>
+                        northstar_operations_postgres::api_control::AdminCommandRoute::Registration =>
                             "SELECT northstar_admin_registration_rekey($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
                     };
                     let changed: bool = sqlx::query_scalar(rekey_sql)
@@ -292,7 +294,7 @@ impl AdminDispatchRepository for PostgresAdminDispatchRepository {
         self.command
             .dispatch(
                 admission,
-                db::api_control::AdminCommandRoute::TlsReload,
+                northstar_operations_postgres::api_control::AdminCommandRoute::TlsReload,
                 None,
             )
             .await
@@ -304,7 +306,7 @@ impl AdminDispatchRepository for PostgresAdminDispatchRepository {
         self.command
             .dispatch(
                 admission,
-                db::api_control::AdminCommandRoute::PanicDisconnect,
+                northstar_operations_postgres::api_control::AdminCommandRoute::PanicDisconnect,
                 None,
             )
             .await

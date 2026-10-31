@@ -535,18 +535,11 @@ pub async fn release_legal_hold_in_tx(
     }
 }
 
-/// Reading governance data is itself audited. The read and access event use
-/// one repeatable-read transaction, so the returned snapshot has an exact
-/// audit boundary.
-pub async fn list_legal_holds_audited(
-    pool: &PgPool,
-    actor_id: Uuid,
-    expected_auth_generation: i64,
-    presented_session: &str,
-    active_only: bool,
+/// The bounds of an audited legal hold listing, checked before the listing's transaction opens.
+pub fn validate_legal_hold_listing(
     limit: i64,
     access_key_sha256: &str,
-) -> std::result::Result<Vec<LegalHoldSummary>, LegalHoldError> {
+) -> std::result::Result<(), LegalHoldError> {
     if access_key_sha256.len() != 64
         || !access_key_sha256
             .bytes()
@@ -557,28 +550,18 @@ pub async fn list_legal_holds_audited(
     if !(1..=100).contains(&limit) {
         return Err(LegalHoldError::Invalid);
     }
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|error| LegalHoldError::Internal(error.into()))?;
-    sqlx::query(GOVERNANCE_SNAPSHOT_ISOLATION_SQL)
-        .execute(&mut *tx)
-        .await
-        .map_err(|error| LegalHoldError::Internal(error.into()))?;
-    if !northstar_auth_postgres::users::authorize_admin_in_tx(
-        &mut tx,
-        actor_id,
-        expected_auth_generation,
-        presented_session,
-    )
-    .await
-    .map_err(LegalHoldError::Internal)?
-    {
-        tx.rollback()
-            .await
-            .map_err(|error| LegalHoldError::Internal(error.into()))?;
-        return Err(LegalHoldError::Forbidden);
-    }
+    Ok(())
+}
+
+/// Reading governance data is itself audited. The caller's repeatable-read
+/// transaction gives the returned snapshot an exact audit boundary.
+pub async fn list_legal_holds_audited_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    active_only: bool,
+    limit: i64,
+    access_key_sha256: &str,
+) -> std::result::Result<Vec<LegalHoldSummary>, LegalHoldError> {
     sqlx::query(
         "INSERT INTO audit_log(actor_id,action,target,details)
          VALUES($1,'data.legal_hold.view',NULL,$2)",
@@ -589,7 +572,7 @@ pub async fn list_legal_holds_audited(
         "limit":limit,
         "access_key_sha256":access_key_sha256
     }))
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(|error| LegalHoldError::Internal(error.into()))?;
     let rows = sqlx::query(
@@ -609,7 +592,7 @@ pub async fn list_legal_holds_audited(
     )
     .bind(active_only)
     .bind(limit)
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await
     .map_err(|error| LegalHoldError::Internal(error.into()))?;
     let output = rows
@@ -627,9 +610,6 @@ pub async fn list_legal_holds_audited(
             target_count: row.get("target_count"),
         })
         .collect();
-    tx.commit()
-        .await
-        .map_err(|error| LegalHoldError::Internal(error.into()))?;
     Ok(output)
 }
 
@@ -1391,4 +1371,5 @@ pub async fn purge_governance_export_leases_batch(
 }
 
 #[cfg(test)]
+#[path = "data_lifecycle_tests.rs"]
 mod tests;

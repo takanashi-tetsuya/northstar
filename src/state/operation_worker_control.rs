@@ -5,13 +5,13 @@ use crate::{
     db::{
         operation_effect_fence_repository::PostgresOperationEffectFenceRepository,
         operation_journal_worker_repository::PostgresOperationJournalWorkerRepository,
-        OperationLease,
     },
     runtime::operation_runtime::LocalBroadcastTargetSnapshot,
 };
 use anyhow::Result;
 use northstar_operations_application::operation_effect_fence::OperationEffectFenceService;
 use northstar_operations_application::operation_journal_worker::OperationJournalWorkerService;
+use northstar_operations_postgres::api_operations::OperationLease;
 use uuid::Uuid;
 
 pub(crate) struct OperationWorkerControl {

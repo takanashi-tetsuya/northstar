@@ -1,50 +1,13 @@
-use super::*;
+use anyhow::Result;
+use northstar_operations_postgres::api_operations::*;
+use serde_json::{json, Value};
 use sqlx::PgPool;
+use sqlx::{Postgres, Row, Transaction};
 use std::sync::Arc;
 use tokio::sync::Barrier;
+use uuid::Uuid;
 
-include!("../api_operations_idle_tests.rs");
-
-#[test]
-fn muc_operation_jids_must_be_canonical_bare_room_keys() {
-    assert!(validate_operation_payload(
-        "admin.muc_destroy",
-        1,
-        &json!({
-            "room_jid": "room@conference.example.test",
-            "alternate_jid": "alternate@conference.example.test"
-        }),
-    )
-    .is_ok());
-    assert!(validate_operation_identity_keys(
-        "admin.muc_destroy",
-        Some("room@conference.example.test"),
-        &json!({"room_jid":"room@conference.example.test"}),
-    )
-    .is_ok());
-    assert!(validate_operation_identity_keys(
-        "admin.muc_destroy",
-        Some("Room@conference.example.test"),
-        &json!({"room_jid":"room@conference.example.test"}),
-    )
-    .is_err());
-    for payload in [
-        json!({"room_jid":"Room@conference.example.test"}),
-        json!({"room_jid":"room@BÜCHER.example"}),
-        json!({"room_jid":"room@conference.example.test/Phone"}),
-        json!({"room_jid":"conference.example.test"}),
-        json!({
-            "room_jid":"room@conference.example.test",
-            "alternate_jid":"Alternate@conference.example.test"
-        }),
-        json!({
-            "room_jid":"room@conference.example.test",
-            "alternate_jid":"alternate@conference.example.test/Phone"
-        }),
-    ] {
-        assert!(validate_operation_payload("admin.muc_destroy", 1, &payload).is_err());
-    }
-}
+include!("api_operations_idle_tests.rs");
 
 fn test_pool_options() -> sqlx::postgres::PgPoolOptions {
     let role = std::env::var("TEST_DATABASE_ROLE").ok();
@@ -210,7 +173,8 @@ async fn command_port_rolls_back_without_response_and_reauthorizes_replays() {
             method: "POST",
             route: "/api/v1/admin/operations/{id}/cancel",
             idempotency_key: &key,
-            request_fingerprint: crate::db::api_request_fingerprint("", b""),
+            request_fingerprint:
+                northstar_operations_postgres::api_control::api_request_fingerprint("", b""),
             ttl_seconds: 3600,
             lease_seconds: 30,
         },
@@ -224,7 +188,13 @@ async fn command_port_rolls_back_without_response_and_reauthorizes_replays() {
         crate::db::operation_admin_repository::PostgresOperationAdminRepository::new(
             crate::db::admin_mutations::AdminMutationStore::new(
                 pool.clone(),
-                Arc::new(crate::db::ApiControlKeyring::new(key_material.as_bytes(), None).unwrap()),
+                Arc::new(
+                    northstar_operations_postgres::api_control::ApiControlKeyring::new(
+                        key_material.as_bytes(),
+                        None,
+                    )
+                    .unwrap(),
+                ),
                 cluster.admission(),
             ),
         ),

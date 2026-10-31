@@ -36,7 +36,7 @@ pub(super) struct AuthModuleParts<'a> {
     pub(super) pool: &'a PgPool,
     pub(super) command_pool: &'a PgPool,
     pub(super) abuse: &'a Arc<AbuseGuard>,
-    pub(super) api_control: &'a Arc<db::ApiControlKeyring>,
+    pub(super) api_control: &'a Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
     pub(super) admin_mutations: &'a db::admin_mutations::AdminMutationStore,
     pub(super) cluster: &'a crate::cluster::ClusterManager,
     pub(super) metrics: &'a Arc<Metrics>,

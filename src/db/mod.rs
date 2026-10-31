@@ -37,8 +37,6 @@ pub mod admin_command_repository;
 pub mod admin_commands;
 #[cfg(test)]
 mod admin_read_authorization_tests;
-pub mod api_control;
-pub mod api_operations;
 pub mod api_pages;
 pub mod archive;
 pub(crate) mod authentication_effects;
@@ -62,7 +60,6 @@ pub(crate) mod cluster_muc_outbox_settlement_repository;
 pub(crate) mod cluster_muc_receipt_claim_repository;
 pub(crate) mod cluster_replay_maintenance_repository;
 pub(crate) mod cluster_session_route_maintenance_repository;
-pub mod data_lifecycle;
 pub(crate) mod direct_spool_wake_repository;
 #[cfg(test)]
 mod fast_tests;
@@ -102,7 +99,6 @@ pub(crate) mod readiness_repository;
 pub mod remaining_identity;
 pub mod replay;
 pub mod replay_repository;
-pub mod reports;
 pub mod retention;
 pub mod retractions;
 pub mod role_attestation;
@@ -123,14 +119,11 @@ pub(crate) mod sm_teardown_repository;
 pub mod users;
 pub use account_deletion::*;
 pub use admin_commands::*;
-pub use api_control::*;
-pub use api_operations::*;
 pub use api_pages::*;
 pub use archive::*;
 pub use capacity::*;
 pub use cluster_keys::*;
 pub use cluster_muc::*;
-pub use data_lifecycle::*;
 pub use mix::*;
 pub use mix_muc::*;
 pub use muc::*;
@@ -138,7 +131,6 @@ pub use omemo_recovery::*;
 pub use pep_roster::*;
 pub use privacy::*;
 pub use push::*;
-pub use reports::*;
 pub use retention::*;
 pub use role_attestation::*;
 pub use roster::*;
@@ -248,6 +240,13 @@ pub(crate) mod api_queries;
 
 pub(crate) mod omemo_recovery_repository;
 
-pub(crate) mod api_mutations;
-
 pub(crate) mod report_repository;
+
+#[cfg(test)]
+mod api_control_tests;
+#[cfg(test)]
+mod api_operations_tests;
+#[cfg(test)]
+mod data_lifecycle_tests;
+#[cfg(test)]
+mod reports_tests;

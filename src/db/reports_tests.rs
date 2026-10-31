@@ -1,4 +1,7 @@
-use super::*;
+use northstar_operations_postgres::reports::*;
+use sha2::{Digest, Sha256};
+use sqlx::{PgPool, Row};
+use uuid::Uuid;
 
 fn solve_pow(challenge: &northstar_abuse_policy::PowChallenge) -> northstar_abuse_policy::PowProof {
     let target = u64::MAX / challenge.requirement.work_factor.max(1);
@@ -23,70 +26,33 @@ fn report_idempotency_request<'a>(
     key: &'a str,
     target_scope: &'a [u8],
     body: &[u8],
-) -> crate::db::IdempotencyRequest<'a> {
-    crate::db::IdempotencyRequest {
+) -> northstar_operations_postgres::api_control::IdempotencyRequest<'a> {
+    northstar_operations_postgres::api_control::IdempotencyRequest {
         request_id: Uuid::new_v4(),
         actor_id: Some(*actor_id),
         principal_scope: actor_id.as_bytes(),
         capacity_scope: actor_id.as_bytes(),
         target_scope,
-        principal_kind: crate::db::ApiPrincipalKind::User,
+        principal_kind: northstar_operations_postgres::api_control::ApiPrincipalKind::User,
         method: "POST",
         route: "/api/v1/reports",
         idempotency_key: key,
-        request_fingerprint: crate::db::api_request_fingerprint("application/json", body),
+        request_fingerprint: northstar_operations_postgres::api_control::api_request_fingerprint(
+            "application/json",
+            body,
+        ),
         ttl_seconds: 3600,
         lease_seconds: 180,
     }
 }
 
-fn acquired(outcome: crate::db::IdempotencyAcquire) -> crate::db::IdempotencyLease {
+fn acquired(
+    outcome: northstar_operations_postgres::api_control::IdempotencyAcquire,
+) -> northstar_operations_postgres::api_control::IdempotencyLease {
     match outcome {
-        crate::db::IdempotencyAcquire::Acquired(lease) => lease,
+        northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(lease) => lease,
         other => panic!("expected a newly acquired idempotency lease, got {other:?}"),
     }
-}
-
-#[test]
-fn terminal_moderation_states_cannot_be_silently_reopened() {
-    assert!(valid_moderation_transition(
-        ModerationKind::Report,
-        "submitted",
-        "reviewing"
-    ));
-    assert!(valid_moderation_transition(
-        ModerationKind::Appeal,
-        "reviewing",
-        "upheld"
-    ));
-    assert!(!valid_moderation_transition(
-        ModerationKind::Report,
-        "closed",
-        "submitted"
-    ));
-    assert!(!valid_moderation_transition(
-        ModerationKind::Appeal,
-        "denied",
-        "reviewing"
-    ));
-    assert!(!valid_moderation_transition(
-        ModerationKind::Report,
-        "closed",
-        "closed"
-    ));
-}
-
-#[test]
-fn plaintext_evidence_uses_archive_body_and_omemo_is_explicitly_unverified() {
-    let plaintext = "<message xmlns='jabber:client' from='peer@example.test/phone'><body>server copy</body></message>";
-    let (_, body, source) = evidence_from_archive(plaintext, false, "forged copy").unwrap();
-    assert_eq!(body, "server copy");
-    assert_eq!(source, "server_verified_plaintext");
-
-    let encrypted = "<message xmlns='jabber:client' from='peer@example.test/phone'><encrypted xmlns='urn:xmpp:omemo:2'/><body>This message is encrypted</body></message>";
-    let (_, body, source) = evidence_from_archive(encrypted, true, "user decrypted text").unwrap();
-    assert_eq!(body, "user decrypted text");
-    assert_eq!(source, "user_decrypted_omemo_unverified");
 }
 
 #[tokio::test]
@@ -336,7 +302,11 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
         body_text: "client copy is ignored".into(),
     }];
     let keyring = std::sync::Arc::new(
-        crate::db::ApiControlKeyring::new(b"report-api-control-test-key-00000001", None).unwrap(),
+        northstar_operations_postgres::api_control::ApiControlKeyring::new(
+            b"report-api-control-test-key-00000001",
+            None,
+        )
+        .unwrap(),
     );
     let guard = crate::db::abuse_effects::persistent_guard(
         AbuseConfig {
@@ -373,9 +343,13 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
             .unwrap()
     );
     let first_lease = acquired(
-        crate::db::acquire_idempotency_in_tx(&keyring, &mut tx, &first_request)
-            .await
-            .unwrap(),
+        northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            &keyring,
+            &mut tx,
+            &first_request,
+        )
+        .await
+        .unwrap(),
     );
     assert!(matches!(
         northstar_abuse_postgres::transaction::verify_in_tx(
@@ -392,9 +366,12 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
         TransactionalGuardOutcome::Allowed
     ));
     assert!(
-        crate::db::mark_idempotency_guard_verified_in_tx(&mut tx, &first_lease)
-            .await
-            .unwrap()
+        northstar_operations_postgres::api_control::mark_idempotency_guard_verified_in_tx(
+            &mut tx,
+            &first_lease
+        )
+        .await
+        .unwrap()
     );
     let first_report = create_report_in_tx(
         &mut tx,
@@ -407,24 +384,30 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
     )
     .await
     .unwrap();
-    assert!(crate::db::complete_idempotency_in_tx(
-        &keyring,
-        &mut tx,
-        &first_lease,
-        201,
-        &headers,
-        first_report.to_string().as_bytes(),
-    )
-    .await
-    .unwrap());
+    assert!(
+        northstar_operations_postgres::api_control::complete_idempotency_in_tx(
+            &keyring,
+            &mut tx,
+            &first_lease,
+            201,
+            &headers,
+            first_report.to_string().as_bytes(),
+        )
+        .await
+        .unwrap()
+    );
     tx.commit().await.unwrap();
 
     let mut replay_tx = pool.begin().await.unwrap();
-    match crate::db::acquire_idempotency_in_tx(&keyring, &mut replay_tx, &first_request)
-        .await
-        .unwrap()
+    match northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+        &keyring,
+        &mut replay_tx,
+        &first_request,
+    )
+    .await
+    .unwrap()
     {
-        crate::db::IdempotencyAcquire::Replay(replay) => {
+        northstar_operations_postgres::api_control::IdempotencyAcquire::Replay(replay) => {
             assert_eq!(replay.status, 201);
             assert_eq!(replay.body, first_report.to_string().as_bytes());
         }
@@ -462,9 +445,13 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
     let crash_proof = solve_pow(&crash_challenge);
     let mut crashed_tx = pool.begin().await.unwrap();
     let crashed_lease = acquired(
-        crate::db::acquire_idempotency_in_tx(&keyring, &mut crashed_tx, &crash_request)
-            .await
-            .unwrap(),
+        northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            &keyring,
+            &mut crashed_tx,
+            &crash_request,
+        )
+        .await
+        .unwrap(),
     );
     assert!(matches!(
         northstar_abuse_postgres::transaction::verify_in_tx(
@@ -481,9 +468,12 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
         TransactionalGuardOutcome::Allowed
     ));
     assert!(
-        crate::db::mark_idempotency_guard_verified_in_tx(&mut crashed_tx, &crashed_lease)
-            .await
-            .unwrap()
+        northstar_operations_postgres::api_control::mark_idempotency_guard_verified_in_tx(
+            &mut crashed_tx,
+            &crashed_lease
+        )
+        .await
+        .unwrap()
     );
     let _ = create_report_in_tx(
         &mut crashed_tx,
@@ -500,9 +490,13 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
 
     let mut retry_tx = pool.begin().await.unwrap();
     let retry_lease = acquired(
-        crate::db::acquire_idempotency_in_tx(&keyring, &mut retry_tx, &crash_request)
-            .await
-            .unwrap(),
+        northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            &keyring,
+            &mut retry_tx,
+            &crash_request,
+        )
+        .await
+        .unwrap(),
     );
     assert!(!retry_lease.guard_verified);
     assert!(matches!(
@@ -520,9 +514,12 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
         TransactionalGuardOutcome::Allowed
     ));
     assert!(
-        crate::db::mark_idempotency_guard_verified_in_tx(&mut retry_tx, &retry_lease)
-            .await
-            .unwrap()
+        northstar_operations_postgres::api_control::mark_idempotency_guard_verified_in_tx(
+            &mut retry_tx,
+            &retry_lease
+        )
+        .await
+        .unwrap()
     );
     let retried_report = create_report_in_tx(
         &mut retry_tx,
@@ -535,16 +532,18 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
     )
     .await
     .unwrap();
-    assert!(crate::db::complete_idempotency_in_tx(
-        &keyring,
-        &mut retry_tx,
-        &retry_lease,
-        201,
-        &headers,
-        retried_report.to_string().as_bytes(),
-    )
-    .await
-    .unwrap());
+    assert!(
+        northstar_operations_postgres::api_control::complete_idempotency_in_tx(
+            &keyring,
+            &mut retry_tx,
+            &retry_lease,
+            201,
+            &headers,
+            retried_report.to_string().as_bytes(),
+        )
+        .await
+        .unwrap()
+    );
     retry_tx.commit().await.unwrap();
 
     // PostgreSQL-rejected NUL input is caught by the shared API validator,
@@ -579,9 +578,13 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
     let invalid_proof = solve_pow(&invalid_challenge);
     let mut invalid_tx = pool.begin().await.unwrap();
     let invalid_lease = acquired(
-        crate::db::acquire_idempotency_in_tx(&keyring, &mut invalid_tx, &invalid_request)
-            .await
-            .unwrap(),
+        northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            &keyring,
+            &mut invalid_tx,
+            &invalid_request,
+        )
+        .await
+        .unwrap(),
     );
     assert!(matches!(
         northstar_abuse_postgres::transaction::verify_in_tx(
@@ -598,27 +601,38 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
         TransactionalGuardOutcome::Allowed
     ));
     assert!(
-        crate::db::mark_idempotency_guard_verified_in_tx(&mut invalid_tx, &invalid_lease)
-            .await
-            .unwrap()
+        northstar_operations_postgres::api_control::mark_idempotency_guard_verified_in_tx(
+            &mut invalid_tx,
+            &invalid_lease
+        )
+        .await
+        .unwrap()
     );
-    assert!(crate::db::complete_idempotency_in_tx(
-        &keyring,
-        &mut invalid_tx,
-        &invalid_lease,
-        400,
-        &headers,
-        br#"{"error":{"code":"bad_request"}}"#,
-    )
-    .await
-    .unwrap());
+    assert!(
+        northstar_operations_postgres::api_control::complete_idempotency_in_tx(
+            &keyring,
+            &mut invalid_tx,
+            &invalid_lease,
+            400,
+            &headers,
+            br#"{"error":{"code":"bad_request"}}"#,
+        )
+        .await
+        .unwrap()
+    );
     invalid_tx.commit().await.unwrap();
     let mut invalid_replay_tx = pool.begin().await.unwrap();
     assert!(matches!(
-        crate::db::acquire_idempotency_in_tx(&keyring, &mut invalid_replay_tx, &invalid_request,)
-            .await
-            .unwrap(),
-        crate::db::IdempotencyAcquire::Replay(crate::db::IdempotentResponse { status: 400, .. })
+        northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            &keyring,
+            &mut invalid_replay_tx,
+            &invalid_request,
+        )
+        .await
+        .unwrap(),
+        northstar_operations_postgres::api_control::IdempotencyAcquire::Replay(
+            northstar_operations_postgres::api_control::IdempotentResponse { status: 400, .. }
+        )
     ));
     invalid_replay_tx.commit().await.unwrap();
     assert!(
@@ -674,12 +688,12 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
                 )
                 .await
                 .unwrap());
-                let lease = match crate::db::acquire_idempotency_in_tx(&keyring, &mut tx, &request)
+                let lease = match northstar_operations_postgres::api_control::acquire_idempotency_in_tx(&keyring, &mut tx, &request)
                     .await
                     .unwrap()
                 {
-                    crate::db::IdempotencyAcquire::Acquired(lease) => lease,
-                    crate::db::IdempotencyAcquire::Busy {
+                    northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(lease) => lease,
+                    northstar_operations_postgres::api_control::IdempotencyAcquire::Busy {
                         retry_after_seconds,
                     } => {
                         tx.rollback().await.unwrap();
@@ -697,7 +711,7 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
                     }
                 };
                 assert!(
-                    crate::db::mark_idempotency_guard_verified_in_tx(&mut tx, &lease)
+                    northstar_operations_postgres::api_control::mark_idempotency_guard_verified_in_tx(&mut tx, &lease)
                         .await
                         .unwrap()
                 );
@@ -716,16 +730,18 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
                         panic!("appeal failed: {error:?}")
                     }
                 };
-                assert!(crate::db::complete_idempotency_in_tx(
-                    &keyring,
-                    &mut tx,
-                    &lease,
-                    status,
-                    &headers,
-                    status.to_string().as_bytes(),
-                )
-                .await
-                .unwrap());
+                assert!(
+                    northstar_operations_postgres::api_control::complete_idempotency_in_tx(
+                        &keyring,
+                        &mut tx,
+                        &lease,
+                        status,
+                        &headers,
+                        status.to_string().as_bytes(),
+                    )
+                    .await
+                    .unwrap()
+                );
                 tx.commit().await.unwrap();
                 return status;
             }
@@ -758,20 +774,26 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
     );
     let mut target_tx = pool.begin().await.unwrap();
     let target_lease = acquired(
-        crate::db::acquire_idempotency_in_tx(&keyring, &mut target_tx, &first_target)
-            .await
-            .unwrap(),
+        northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            &keyring,
+            &mut target_tx,
+            &first_target,
+        )
+        .await
+        .unwrap(),
     );
-    assert!(crate::db::complete_idempotency_in_tx(
-        &keyring,
-        &mut target_tx,
-        &target_lease,
-        409,
-        &headers,
-        b"conflict",
-    )
-    .await
-    .unwrap());
+    assert!(
+        northstar_operations_postgres::api_control::complete_idempotency_in_tx(
+            &keyring,
+            &mut target_tx,
+            &target_lease,
+            409,
+            &headers,
+            b"conflict",
+        )
+        .await
+        .unwrap()
+    );
     target_tx.commit().await.unwrap();
     let other_report_id = Uuid::new_v4();
     let other_target = report_idempotency_request(
@@ -782,11 +804,95 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
     );
     let mut conflict_tx = pool.begin().await.unwrap();
     assert!(matches!(
-        crate::db::acquire_idempotency_in_tx(&keyring, &mut conflict_tx, &other_target)
-            .await
-            .unwrap(),
-        crate::db::IdempotencyAcquire::FingerprintConflict
+        northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            &keyring,
+            &mut conflict_tx,
+            &other_target
+        )
+        .await
+        .unwrap(),
+        northstar_operations_postgres::api_control::IdempotencyAcquire::FingerprintConflict
     ));
     conflict_tx.rollback().await.unwrap();
     pool.close().await;
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn admin_update_report_api(
+    pool: &PgPool,
+    id: Uuid,
+    actor_id: Uuid,
+    actor_generation: i64,
+    presented_session: &str,
+    status: &str,
+    resolution: &str,
+) -> std::result::Result<(), ModerationUpdateError> {
+    update_moderation_record(
+        pool,
+        ModerationKind::Report,
+        id,
+        actor_id,
+        status,
+        resolution,
+        Some((actor_generation, presented_session)),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn admin_update_appeal_api(
+    pool: &PgPool,
+    id: Uuid,
+    actor_id: Uuid,
+    actor_generation: i64,
+    presented_session: &str,
+    status: &str,
+    resolution: &str,
+) -> std::result::Result<(), ModerationUpdateError> {
+    update_moderation_record(
+        pool,
+        ModerationKind::Appeal,
+        id,
+        actor_id,
+        status,
+        resolution,
+        Some((actor_generation, presented_session)),
+    )
+    .await
+}
+
+async fn update_moderation_record(
+    pool: &PgPool,
+    kind: ModerationKind,
+    id: Uuid,
+    actor_id: Uuid,
+    status: &str,
+    resolution: &str,
+    api_authorization: Option<(i64, &str)>,
+) -> std::result::Result<(), ModerationUpdateError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|error| ModerationUpdateError::Internal(error.into()))?;
+    if let Some((actor_generation, presented_session)) = api_authorization {
+        let authorized = northstar_auth_postgres::users::authorize_admin_in_tx(
+            &mut tx,
+            actor_id,
+            actor_generation,
+            presented_session,
+        )
+        .await
+        .map_err(ModerationUpdateError::Internal)?;
+        if !authorized {
+            tx.rollback()
+                .await
+                .map_err(|error| ModerationUpdateError::Internal(error.into()))?;
+            return Err(ModerationUpdateError::Unauthorized);
+        }
+    }
+    update_moderation_record_in_tx(&mut tx, kind, id, actor_id, status, resolution, None).await?;
+    tx.commit()
+        .await
+        .map_err(|error| ModerationUpdateError::Internal(error.into()))?;
+    Ok(())
 }

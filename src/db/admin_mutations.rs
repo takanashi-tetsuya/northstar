@@ -1,8 +1,5 @@
 //! Shared transaction admission for administrative repository commands.
-use crate::{
-    cluster::{ClusterAdmission, ClusterOperation},
-    db,
-};
+use crate::cluster::{ClusterAdmission, ClusterOperation};
 use anyhow::Result;
 use northstar_operations_application::operations::AuthorizationPolicy;
 use northstar_operations_core::api_mutations::*;
@@ -14,18 +11,21 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub(crate) struct AdminMutationStore {
     pool: PgPool,
-    keyring: Arc<db::ApiControlKeyring>,
+    keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
     cluster: ClusterAdmission,
 }
 
 pub(crate) enum AdminMutationStart<'a> {
-    Ready(Transaction<'a, Postgres>, db::IdempotencyLease),
+    Ready(
+        Transaction<'a, Postgres>,
+        northstar_operations_postgres::api_control::IdempotencyLease,
+    ),
     Finished(ApiMutationOutcome<StoredApiResponse>),
 }
 impl AdminMutationStore {
     pub(crate) fn new(
         pool: PgPool,
-        keyring: Arc<db::ApiControlKeyring>,
+        keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
         cluster: ClusterAdmission,
     ) -> Self {
         Self {
@@ -60,42 +60,45 @@ impl AdminMutationStore {
                 ApiMutationRejection::Forbidden,
             )));
         }
-        let rejection =
-            match db::acquire_idempotency_in_tx(&self.keyring, &mut tx, &admission.idempotency)
-                .await?
-            {
-                db::IdempotencyAcquire::Acquired(lease) => {
-                    return Ok(AdminMutationStart::Ready(tx, lease))
-                }
-                db::IdempotencyAcquire::Replay(response) => {
-                    tx.commit().await?;
-                    return Ok(AdminMutationStart::Finished(ApiMutationOutcome::Replay(
-                        response,
-                    )));
-                }
-                db::IdempotencyAcquire::FingerprintConflict
-                | db::IdempotencyAcquire::RotationConflict => {
-                    ApiMutationRejection::IdempotencyConflict
-                }
-                db::IdempotencyAcquire::ReplayInvalidated => {
-                    ApiMutationRejection::ReplayInvalidated
-                }
-                db::IdempotencyAcquire::Busy {
-                    retry_after_seconds,
-                } => ApiMutationRejection::Busy {
-                    retry_after: retry_after_seconds,
-                },
-                db::IdempotencyAcquire::CapacityLimited {
-                    retry_after_seconds,
-                } => ApiMutationRejection::CapacityLimited {
-                    retry_after: retry_after_seconds,
-                },
-                db::IdempotencyAcquire::InProgress {
-                    retry_after_seconds,
-                } => ApiMutationRejection::InProgress {
-                    retry_after: retry_after_seconds,
-                },
-            };
+        let rejection = match northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            &self.keyring,
+            &mut tx,
+            &admission.idempotency,
+        )
+        .await?
+        {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(lease) => {
+                return Ok(AdminMutationStart::Ready(tx, lease))
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Replay(response) => {
+                tx.commit().await?;
+                return Ok(AdminMutationStart::Finished(ApiMutationOutcome::Replay(
+                    response,
+                )));
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::FingerprintConflict
+            | northstar_operations_postgres::api_control::IdempotencyAcquire::RotationConflict => {
+                ApiMutationRejection::IdempotencyConflict
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::ReplayInvalidated => {
+                ApiMutationRejection::ReplayInvalidated
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Busy {
+                retry_after_seconds,
+            } => ApiMutationRejection::Busy {
+                retry_after: retry_after_seconds,
+            },
+            northstar_operations_postgres::api_control::IdempotencyAcquire::CapacityLimited {
+                retry_after_seconds,
+            } => ApiMutationRejection::CapacityLimited {
+                retry_after: retry_after_seconds,
+            },
+            northstar_operations_postgres::api_control::IdempotencyAcquire::InProgress {
+                retry_after_seconds,
+            } => ApiMutationRejection::InProgress {
+                retry_after: retry_after_seconds,
+            },
+        };
         tx.rollback().await?;
         Ok(AdminMutationStart::Finished(ApiMutationOutcome::Rejected(
             rejection,
@@ -104,12 +107,17 @@ impl AdminMutationStore {
     pub(crate) async fn finish(
         &self,
         mut tx: Transaction<'_, Postgres>,
-        lease: &db::IdempotencyLease,
+        lease: &northstar_operations_postgres::api_control::IdempotencyLease,
         response: StoredApiResponse,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>> {
         anyhow::ensure!(
-            db::api_mutations::persist_response_in_tx(&self.keyring, &mut tx, lease, &response)
-                .await?,
+            northstar_operations_postgres::api_mutations::persist_response_in_tx(
+                &self.keyring,
+                &mut tx,
+                lease,
+                &response
+            )
+            .await?,
             "administrator idempotency lease changed"
         );
         tx.commit().await?;
@@ -128,12 +136,12 @@ pub(crate) struct AdminOperationIntent<'a> {
 pub(crate) async fn enqueue_operation_response_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     admission: &AdminMutationAdmission<'_>,
-    lease: &db::IdempotencyLease,
+    lease: &northstar_operations_postgres::api_control::IdempotencyLease,
     intent: AdminOperationIntent<'_>,
 ) -> Result<(StoredApiResponse, Uuid)> {
-    let operation = db::enqueue_operation_in_tx(
+    let operation = northstar_operations_postgres::api_operations::enqueue_operation_in_tx(
         tx,
-        &db::EnqueueOperation {
+        &northstar_operations_postgres::api_operations::EnqueueOperation {
             request_id: lease.request_id,
             idempotency_id: lease.record_id,
             idempotency_lease_token: lease.lease_token(),

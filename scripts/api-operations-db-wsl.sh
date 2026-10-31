@@ -82,7 +82,7 @@ fi
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$test_schema"
 export TEST_DATABASE_SCHEMA="$test_schema"
 
-test_output="$(cargo test --locked --offline 'db::api_operations::tests::' \
+test_output="$(cargo test --locked --offline 'db::api_operations_tests::' \
   -- --ignored --nocapture --test-threads=1 2>&1)" || {
   printf '%s\n' "$test_output"
   exit 1

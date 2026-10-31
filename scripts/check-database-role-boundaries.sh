@@ -728,7 +728,7 @@ for capability in northstar_admin_registration_admit \
   require_module_literal src/db/role_attestation.rs "$capability" \
     "command role attestation is missing registration capability: $capability"
 done
-require_literal "$registration_repository" 'db::api_control::AdminCommandRoute::Registration,' \
+require_literal "$registration_repository" 'northstar_operations_postgres::api_control::AdminCommandRoute::Registration,' \
   'REST registration mutation must dispatch through the command store'
 require_literal "$registration_repository" 'Some(enabled),' \
   'REST registration command must carry the requested policy value'

@@ -1,7 +1,6 @@
 //! Ordered bearer, idempotency, proof and credential authority for REST
 //! password changes. No transaction or credential-bearing subject escapes.
 
-use crate::db;
 use anyhow::{Context, Result};
 use northstar_abuse_application::guard::{AbuseGuard, TransactionalGuardOutcome};
 use northstar_abuse_policy::AbuseAction;
@@ -17,14 +16,14 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub(crate) struct PostgresPasswordChangeRepository {
     pool: PgPool,
-    api_control: Arc<db::ApiControlKeyring>,
+    api_control: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
     abuse: Arc<AbuseGuard>,
 }
 
 impl PostgresPasswordChangeRepository {
     pub(crate) fn new(
         pool: PgPool,
-        api_control: Arc<db::ApiControlKeyring>,
+        api_control: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
         abuse: Arc<AbuseGuard>,
     ) -> Self {
         Self {
@@ -34,14 +33,17 @@ impl PostgresPasswordChangeRepository {
         }
     }
 
-    async fn yield_lease(&self, lease: &db::IdempotencyLease) -> Result<bool> {
-        db::yield_idempotency_lease(&self.pool, lease).await
+    async fn yield_lease(
+        &self,
+        lease: &northstar_operations_postgres::api_control::IdempotencyLease,
+    ) -> Result<bool> {
+        northstar_operations_postgres::api_control::yield_idempotency_lease(&self.pool, lease).await
     }
 
     async fn complete_response(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        lease: &db::IdempotencyLease,
+        lease: &northstar_operations_postgres::api_control::IdempotencyLease,
         mut response: StoredApiResponse,
     ) -> Result<StoredApiResponse> {
         if response.status == 401 {
@@ -51,8 +53,13 @@ impl PostgresPasswordChangeRepository {
             );
         }
         anyhow::ensure!(
-            db::api_mutations::persist_response_in_tx(&self.api_control, tx, lease, &response)
-                .await?,
+            northstar_operations_postgres::api_mutations::persist_response_in_tx(
+                &self.api_control,
+                tx,
+                lease,
+                &response
+            )
+            .await?,
             "password-change idempotency lease changed"
         );
         Ok(response)
@@ -71,20 +78,20 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
         // A completed password change revoked the presented bearer. Replay
         // lookup must precede new bearer authorization and take no row lock.
         let mut replay_tx = self.pool.begin().await?;
-        match db::lookup_password_change_replay_in_tx(
+        match northstar_operations_postgres::api_control::lookup_password_change_replay_in_tx(
             &self.api_control,
             &mut replay_tx,
             &command.idempotency,
         )
         .await?
         {
-            db::IdempotencyReplayLookup::Miss => replay_tx.commit().await?,
-            db::IdempotencyReplayLookup::Replay(replay) => {
+            northstar_operations_postgres::api_control::IdempotencyReplayLookup::Miss => replay_tx.commit().await?,
+            northstar_operations_postgres::api_control::IdempotencyReplayLookup::Replay(replay) => {
                 replay_tx.commit().await?;
                 return Ok(Outcome::Replay(replay));
             }
-            db::IdempotencyReplayLookup::FingerprintConflict
-            | db::IdempotencyReplayLookup::RotationConflict => {
+            northstar_operations_postgres::api_control::IdempotencyReplayLookup::FingerprintConflict
+            | northstar_operations_postgres::api_control::IdempotencyReplayLookup::RotationConflict => {
                 replay_tx.rollback().await?;
                 return Ok(Outcome::IdempotencyConflict);
             }
@@ -100,40 +107,42 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
             reserve_tx.rollback().await?;
             return Ok(Outcome::Unauthorized);
         };
-        let lease = match db::acquire_idempotency_in_tx(
+        let lease = match northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
             &self.api_control,
             &mut reserve_tx,
             &command.idempotency,
         )
         .await?
         {
-            db::IdempotencyAcquire::Acquired(lease) => lease,
-            db::IdempotencyAcquire::Replay(replay) => {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(lease) => {
+                lease
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Replay(replay) => {
                 reserve_tx.commit().await?;
                 return Ok(Outcome::Replay(replay));
             }
-            db::IdempotencyAcquire::FingerprintConflict
-            | db::IdempotencyAcquire::RotationConflict => {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::FingerprintConflict
+            | northstar_operations_postgres::api_control::IdempotencyAcquire::RotationConflict => {
                 reserve_tx.rollback().await?;
                 return Ok(Outcome::IdempotencyConflict);
             }
-            db::IdempotencyAcquire::ReplayInvalidated => {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::ReplayInvalidated => {
                 reserve_tx.rollback().await?;
                 return Ok(Outcome::ReplayInvalidated);
             }
-            db::IdempotencyAcquire::Busy {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Busy {
                 retry_after_seconds,
             } => {
                 reserve_tx.rollback().await?;
                 return Ok(Outcome::Busy(retry_after_seconds));
             }
-            db::IdempotencyAcquire::CapacityLimited {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::CapacityLimited {
                 retry_after_seconds,
             } => {
                 reserve_tx.rollback().await?;
                 return Ok(Outcome::CapacityLimited(retry_after_seconds));
             }
-            db::IdempotencyAcquire::InProgress {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::InProgress {
                 retry_after_seconds,
             } => {
                 reserve_tx.rollback().await?;
@@ -160,14 +169,14 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
             {
                 TransactionalGuardOutcome::Allowed => {
                     anyhow::ensure!(
-                        db::mark_idempotency_guard_verified_in_tx(&mut reserve_tx, &lease).await?,
+                        northstar_operations_postgres::api_control::mark_idempotency_guard_verified_in_tx(&mut reserve_tx, &lease).await?,
                         "password-change guard lease changed"
                     );
                 }
                 TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
                     let response = api_mutations::guard_denial_response(error)?;
                     anyhow::ensure!(
-                        db::api_mutations::persist_response_in_tx(
+                        northstar_operations_postgres::api_mutations::persist_response_in_tx(
                             &self.api_control,
                             &mut reserve_tx,
                             &lease,
@@ -185,7 +194,7 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
 
         if invalid_input {
             let mut tx = self.pool.begin().await?;
-            if !db::resume_idempotency_lease_in_tx(
+            if !northstar_operations_postgres::api_control::resume_idempotency_lease_in_tx(
                 &mut tx,
                 &lease,
                 command.idempotency.lease_seconds,
@@ -204,11 +213,17 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
             .await?
             {
                 tx.rollback().await?;
-                db::abandon_idempotency_lease(&self.pool, &lease).await?;
+                northstar_operations_postgres::api_control::abandon_idempotency_lease(
+                    &self.pool, &lease,
+                )
+                .await?;
                 return Ok(Outcome::Unauthorized);
             }
             anyhow::ensure!(
-                db::bind_idempotency_actor_in_tx(&mut tx, &lease, user.id).await?,
+                northstar_operations_postgres::api_control::bind_idempotency_actor_in_tx(
+                    &mut tx, &lease, user.id
+                )
+                .await?,
                 "password-change idempotency ownership changed"
             );
             let response = self
@@ -223,7 +238,7 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
         }
 
         let mut prework_tx = self.pool.begin().await?;
-        if !db::resume_idempotency_lease_in_tx(
+        if !northstar_operations_postgres::api_control::resume_idempotency_lease_in_tx(
             &mut prework_tx,
             &lease,
             command.idempotency.lease_seconds,
@@ -265,8 +280,12 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
         };
 
         let mut tx = self.pool.begin().await?;
-        if !db::resume_idempotency_lease_in_tx(&mut tx, &lease, command.idempotency.lease_seconds)
-            .await?
+        if !northstar_operations_postgres::api_control::resume_idempotency_lease_in_tx(
+            &mut tx,
+            &lease,
+            command.idempotency.lease_seconds,
+        )
+        .await?
         {
             tx.rollback().await?;
             return Ok(Outcome::LeaseLost);
@@ -285,11 +304,17 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
             .await?
             {
                 tx.rollback().await?;
-                db::abandon_idempotency_lease(&self.pool, &lease).await?;
+                northstar_operations_postgres::api_control::abandon_idempotency_lease(
+                    &self.pool, &lease,
+                )
+                .await?;
                 return Ok(Outcome::Unauthorized);
             }
             anyhow::ensure!(
-                db::bind_idempotency_actor_in_tx(&mut tx, &lease, user.id).await?,
+                northstar_operations_postgres::api_control::bind_idempotency_actor_in_tx(
+                    &mut tx, &lease, user.id
+                )
+                .await?,
                 "password-change failure ownership changed"
             );
             northstar_abuse_postgres::transaction::record_failure_in_tx(
@@ -310,7 +335,10 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
             return Ok(Outcome::Fresh(response));
         }
         anyhow::ensure!(
-            db::bind_idempotency_actor_in_tx(&mut tx, &lease, user.id).await?,
+            northstar_operations_postgres::api_control::bind_idempotency_actor_in_tx(
+                &mut tx, &lease, user.id
+            )
+            .await?,
             "password-change idempotency ownership changed"
         );
         let outcome = match northstar_auth_postgres::users::apply_prepared_password_change_in_tx(
@@ -336,7 +364,10 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
         };
         if outcome != northstar_auth_postgres::users::PasswordChangeOutcome::Changed {
             tx.rollback().await?;
-            db::abandon_idempotency_lease(&self.pool, &lease).await?;
+            northstar_operations_postgres::api_control::abandon_idempotency_lease(
+                &self.pool, &lease,
+            )
+            .await?;
             return Ok(Outcome::Unauthorized);
         }
         let response = self
@@ -444,7 +475,11 @@ mod tests {
             .await
             .unwrap();
         let keyring = Arc::new(
-            db::ApiControlKeyring::new(b"password-service-test-control-key-00001", None).unwrap(),
+            northstar_operations_postgres::api_control::ApiControlKeyring::new(
+                b"password-service-test-control-key-00001",
+                None,
+            )
+            .unwrap(),
         );
         let guard = Arc::new(crate::db::abuse_effects::persistent_guard(
             AbuseConfig {

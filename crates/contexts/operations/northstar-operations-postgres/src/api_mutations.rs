@@ -1,9 +1,9 @@
 //! Persists canonical command responses inside the owning use-case transaction.
-use crate::db;
+use crate::api_control as db;
 use northstar_operations_core::api_mutations::StoredApiResponse;
 use sqlx::{Postgres, Transaction};
 
-pub(crate) async fn persist_response_in_tx(
+pub async fn persist_response_in_tx(
     keyring: &db::ApiControlKeyring,
     tx: &mut Transaction<'_, Postgres>,
     lease: &db::IdempotencyLease,

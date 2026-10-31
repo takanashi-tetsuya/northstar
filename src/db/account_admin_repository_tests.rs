@@ -82,7 +82,10 @@ async fn fixture() -> (PgPool, AdminMutationStore, Uuid, String) {
             .await
             .unwrap();
     let secret = Uuid::new_v4().simple().to_string();
-    let keyring = Arc::new(db::ApiControlKeyring::new(secret.as_bytes(), None).unwrap());
+    let keyring = Arc::new(
+        northstar_operations_postgres::api_control::ApiControlKeyring::new(secret.as_bytes(), None)
+            .unwrap(),
+    );
     let store = AdminMutationStore::new(pool.clone(), keyring, cluster.admission());
     (pool, store, actor, session)
 }
@@ -129,7 +132,10 @@ async fn registration_command_repository_commits_200_and_replays_without_reapply
             .await
             .unwrap();
     let secret = Uuid::new_v4().simple().to_string();
-    let keyring = Arc::new(db::ApiControlKeyring::new(secret.as_bytes(), None).unwrap());
+    let keyring = Arc::new(
+        northstar_operations_postgres::api_control::ApiControlKeyring::new(secret.as_bytes(), None)
+            .unwrap(),
+    );
     let repository = PostgresRegistrationAdminRepository::new(
         AdminCommandStore::new(pool.clone(), keyring, cluster.admission()),
         pool.clone(),

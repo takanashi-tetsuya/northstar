@@ -1,11 +1,11 @@
 //! Governance resources, immutable export pages and encrypted response replay.
-use crate::db::{
-    self,
-    admin_mutations::{AdminMutationStart, AdminMutationStore},
-};
+use crate::db::admin_mutations::{AdminMutationStart, AdminMutationStore};
 use northstar_auth_core::api_session::ApiReadAuthority;
 use northstar_operations_application::governance::*;
 use northstar_operations_core::api_mutations::*;
+use northstar_operations_postgres::data_lifecycle::{
+    list_legal_holds_audited_in_tx, validate_legal_hold_listing, GOVERNANCE_SNAPSHOT_ISOLATION_SQL,
+};
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Transaction};
 use std::sync::Arc;
@@ -15,14 +15,14 @@ use uuid::Uuid;
 pub(crate) struct PostgresGovernanceRepository<C> {
     pool: PgPool,
     mutations: AdminMutationStore,
-    keyring: Arc<db::ApiControlKeyring>,
+    keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
     cursors: C,
 }
 impl<C: GovernanceCursorCodec> PostgresGovernanceRepository<C> {
     pub(crate) fn new(
         pool: PgPool,
         mutations: AdminMutationStore,
-        keyring: Arc<db::ApiControlKeyring>,
+        keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
         cursors: C,
     ) -> Self {
         Self {
@@ -36,7 +36,7 @@ impl<C: GovernanceCursorCodec> PostgresGovernanceRepository<C> {
     async fn finish_export<T: Serialize>(
         &self,
         mut tx: Transaction<'_, Postgres>,
-        lease: &db::IdempotencyLease,
+        lease: &northstar_operations_postgres::api_control::IdempotencyLease,
         export: &T,
         next_cursor: Option<String>,
     ) -> Result<ApiMutationOutcome<StoredApiResponse>, GovernanceFailure> {
@@ -52,10 +52,14 @@ impl<C: GovernanceCursorCodec> PostgresGovernanceRepository<C> {
         let response = StoredApiResponse::json(200, value)
             .map_err(|error| GovernanceFailure::internal(error).operation())?;
         ensure_governance_export_size(&response.body).map_err(GovernanceFailure::operation)?;
-        let persisted =
-            db::api_mutations::persist_response_in_tx(&self.keyring, &mut tx, lease, &response)
-                .await
-                .map_err(|error| GovernanceFailure::internal(error).operation())?;
+        let persisted = northstar_operations_postgres::api_mutations::persist_response_in_tx(
+            &self.keyring,
+            &mut tx,
+            lease,
+            &response,
+        )
+        .await
+        .map_err(|error| GovernanceFailure::internal(error).operation())?;
         if !persisted {
             return Err(GovernanceFailure::internal(anyhow::anyhow!(
                 "governance-export idempotency lease changed"
@@ -77,7 +81,7 @@ impl<C: GovernanceCursorCodec> GovernanceRepository for PostgresGovernanceReposi
         limit: i64,
         access_key_sha256: &str,
     ) -> Result<Vec<LegalHoldSummary>, GovernanceFailure> {
-        db::list_legal_holds_audited(
+        list_legal_holds_audited(
             &self.pool,
             actor.user_id,
             actor.auth_generation,
@@ -104,7 +108,7 @@ impl<C: GovernanceCursorCodec> GovernanceRepository for PostgresGovernanceReposi
             AdminMutationStart::Finished(outcome) => return Ok(outcome),
         };
         let id = Uuid::new_v4();
-        let input = db::CreateLegalHold {
+        let input = northstar_operations_postgres::data_lifecycle::CreateLegalHold {
             id,
             title: command.title,
             authority_reference: command.authority_reference,
@@ -112,9 +116,13 @@ impl<C: GovernanceCursorCodec> GovernanceRepository for PostgresGovernanceReposi
             targets: command.targets,
             request_id: lease.request_id,
         };
-        db::create_legal_hold_in_tx(&mut tx, command.admission.authority.user_id, &input)
-            .await
-            .map_err(|error| GovernanceFailure::hold(error).operation())?;
+        northstar_operations_postgres::data_lifecycle::create_legal_hold_in_tx(
+            &mut tx,
+            command.admission.authority.user_id,
+            &input,
+        )
+        .await
+        .map_err(|error| GovernanceFailure::hold(error).operation())?;
         let response = StoredApiResponse::json(
             201,
             serde_json::json!({"id":id,"active":true,"target_count":command.targets.len()}),
@@ -141,7 +149,7 @@ impl<C: GovernanceCursorCodec> GovernanceRepository for PostgresGovernanceReposi
             AdminMutationStart::Ready(tx, lease) => (tx, lease),
             AdminMutationStart::Finished(outcome) => return Ok(outcome),
         };
-        db::release_legal_hold_in_tx(
+        northstar_operations_postgres::data_lifecycle::release_legal_hold_in_tx(
             &mut tx,
             admission.authority.user_id,
             id,
@@ -185,7 +193,7 @@ impl<C: GovernanceCursorCodec> GovernanceRepository for PostgresGovernanceReposi
         } else {
             None
         };
-        let export = db::export_legal_hold_page_in_tx(
+        let export = northstar_operations_postgres::data_lifecycle::export_legal_hold_page_in_tx(
             &mut tx,
             actor,
             command.hold_id,
@@ -225,9 +233,9 @@ impl<C: GovernanceCursorCodec> GovernanceRepository for PostgresGovernanceReposi
         } else {
             None
         };
-        let export = db::export_audit_log_page_in_tx(
+        let export = northstar_operations_postgres::data_lifecycle::export_audit_log_page_in_tx(
             &mut tx,
-            db::AuditExportPageRequest {
+            northstar_operations_postgres::data_lifecycle::AuditExportPageRequest {
                 actor_id: actor,
                 start: command.start,
                 end: command.end,
@@ -244,6 +252,50 @@ impl<C: GovernanceCursorCodec> GovernanceRepository for PostgresGovernanceReposi
             .encode_audit(actor, command.start, command.end, &export)?;
         self.finish_export(tx, &lease, &export, next_cursor).await
     }
+}
+
+/// Reading governance data is itself audited. The read and access event use
+/// one repeatable-read transaction, so the returned snapshot has an exact
+/// audit boundary.
+pub(crate) async fn list_legal_holds_audited(
+    pool: &sqlx::PgPool,
+    actor_id: Uuid,
+    expected_auth_generation: i64,
+    presented_session: &str,
+    active_only: bool,
+    limit: i64,
+    access_key_sha256: &str,
+) -> std::result::Result<Vec<LegalHoldSummary>, LegalHoldError> {
+    validate_legal_hold_listing(limit, access_key_sha256)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|error| LegalHoldError::Internal(error.into()))?;
+    sqlx::query(GOVERNANCE_SNAPSHOT_ISOLATION_SQL)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| LegalHoldError::Internal(error.into()))?;
+    if !northstar_auth_postgres::users::authorize_admin_in_tx(
+        &mut tx,
+        actor_id,
+        expected_auth_generation,
+        presented_session,
+    )
+    .await
+    .map_err(LegalHoldError::Internal)?
+    {
+        tx.rollback()
+            .await
+            .map_err(|error| LegalHoldError::Internal(error.into()))?;
+        return Err(LegalHoldError::Forbidden);
+    }
+    let output =
+        list_legal_holds_audited_in_tx(&mut tx, actor_id, active_only, limit, access_key_sha256)
+            .await?;
+    tx.commit()
+        .await
+        .map_err(|error| LegalHoldError::Internal(error.into()))?;
+    Ok(output)
 }
 
 #[cfg(test)]

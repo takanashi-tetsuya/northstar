@@ -80,17 +80,17 @@ if [[ "$scope" == "all" || "$scope" == "password-api" ]]; then
 fi
 if [[ "$scope" == "all" || "$scope" == "api-control" ]]; then
   run_exact_ignored \
-    db::api_control::tests::capacity_lock_contention_fails_fast_without_starving_pool
+    db::api_control_tests::capacity_lock_contention_fails_fast_without_starving_pool
   run_exact_ignored \
-    db::api_control::tests::yielded_lease_preserves_guard_marker_and_fences_old_worker
+    db::api_control_tests::yielded_lease_preserves_guard_marker_and_fences_old_worker
   run_exact_ignored \
-    db::api_control::tests::postgres_idempotency_is_atomic_rotatable_and_tamper_evident
+    db::api_control_tests::postgres_idempotency_is_atomic_rotatable_and_tamper_evident
   run_exact_ignored \
-    db::api_control::tests::concurrent_register_and_login_execute_once_per_idempotency_key
+    db::api_control_tests::concurrent_register_and_login_execute_once_per_idempotency_key
 fi
 if [[ "$scope" == "all" || "$scope" == "admin-sync" ]]; then
   run_exact_ignored \
-    db::api_control::tests::admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serialized
+    db::api_control_tests::admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serialized
 fi
 if [[ "$scope" == "all" || "$scope" == "fast" ]]; then
   run_exact_ignored \

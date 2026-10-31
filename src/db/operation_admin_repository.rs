@@ -1,8 +1,5 @@
 //! Atomic operation cancellation and audited manual reconciliation.
-use crate::db::{
-    self,
-    admin_mutations::{AdminMutationStart, AdminMutationStore},
-};
+use crate::db::admin_mutations::{AdminMutationStart, AdminMutationStore};
 use anyhow::Result;
 use northstar_operations_application::operations::{OperationAdminRepository, ReconciliationInput};
 use northstar_operations_core::api_mutations::*;
@@ -21,10 +18,10 @@ impl PostgresOperationAdminRepository {
 
 fn reconciliation<'a>(
     admission: &AdminMutationAdmission<'_>,
-    lease: &db::IdempotencyLease,
+    lease: &northstar_operations_postgres::api_control::IdempotencyLease,
     input: ReconciliationInput<'a>,
-) -> db::ManualReconciliation<'a> {
-    db::ManualReconciliation {
+) -> northstar_operations_postgres::api_operations::ManualReconciliation<'a> {
+    northstar_operations_postgres::api_operations::ManualReconciliation {
         reconciled_by: admission.authority.user_id,
         reconciler_auth_generation: admission.authority.auth_generation,
         request_id: lease.request_id,
@@ -35,51 +32,51 @@ fn reconciliation<'a>(
     }
 }
 fn operation_reconciliation_response(
-    outcome: db::ManualReconcileOutcome,
+    outcome: northstar_operations_postgres::api_operations::ManualReconcileOutcome,
 ) -> Result<StoredApiResponse> {
     match outcome {
-        db::ManualReconcileOutcome::NotFound => {
+        northstar_operations_postgres::api_operations::ManualReconcileOutcome::NotFound => {
             error_response(404, "not_found", "operation does not exist")
         }
-        db::ManualReconcileOutcome::NotIndeterminate => {
+        northstar_operations_postgres::api_operations::ManualReconcileOutcome::NotIndeterminate => {
             error_response(409, "conflict", "operation is not indeterminate")
         }
-        db::ManualReconcileOutcome::IndeterminateTargetsRemain => error_response(
+        northstar_operations_postgres::api_operations::ManualReconcileOutcome::IndeterminateTargetsRemain => error_response(
             409,
             "conflict",
             "indeterminate operation targets must be reconciled first",
         ),
-        db::ManualReconcileOutcome::TargetsPreventSuccess => error_response(
+        northstar_operations_postgres::api_operations::ManualReconcileOutcome::TargetsPreventSuccess => error_response(
             409,
             "conflict",
             "operation cannot be marked succeeded because a target did not succeed",
         ),
-        db::ManualReconcileOutcome::Succeeded => {
+        northstar_operations_postgres::api_operations::ManualReconcileOutcome::Succeeded => {
             StoredApiResponse::json(200, json!({"outcome":"succeeded"}))
         }
-        db::ManualReconcileOutcome::Failed => {
+        northstar_operations_postgres::api_operations::ManualReconcileOutcome::Failed => {
             StoredApiResponse::json(200, json!({"outcome":"failed"}))
         }
     }
 }
 fn target_reconciliation_response(
-    outcome: db::ManualReconcileOutcome,
+    outcome: northstar_operations_postgres::api_operations::ManualReconcileOutcome,
 ) -> Result<StoredApiResponse> {
     match outcome {
-        db::ManualReconcileOutcome::NotFound => {
+        northstar_operations_postgres::api_operations::ManualReconcileOutcome::NotFound => {
             error_response(404, "not_found", "operation target does not exist")
         }
-        db::ManualReconcileOutcome::NotIndeterminate => {
+        northstar_operations_postgres::api_operations::ManualReconcileOutcome::NotIndeterminate => {
             error_response(409, "conflict", "operation target is not indeterminate")
         }
-        db::ManualReconcileOutcome::Succeeded => {
+        northstar_operations_postgres::api_operations::ManualReconcileOutcome::Succeeded => {
             StoredApiResponse::json(200, json!({"outcome":"succeeded"}))
         }
-        db::ManualReconcileOutcome::Failed => {
+        northstar_operations_postgres::api_operations::ManualReconcileOutcome::Failed => {
             StoredApiResponse::json(200, json!({"outcome":"failed"}))
         }
-        db::ManualReconcileOutcome::IndeterminateTargetsRemain
-        | db::ManualReconcileOutcome::TargetsPreventSuccess => {
+        northstar_operations_postgres::api_operations::ManualReconcileOutcome::IndeterminateTargetsRemain
+        | northstar_operations_postgres::api_operations::ManualReconcileOutcome::TargetsPreventSuccess => {
             anyhow::bail!("target reconciliation returned a parent-target conflict")
         }
     }
@@ -94,32 +91,35 @@ impl OperationAdminRepository for PostgresOperationAdminRepository {
             AdminMutationStart::Ready(tx, lease) => (tx, lease),
             AdminMutationStart::Finished(result) => return Ok(result),
         };
-        let outcome = db::request_operation_cancel_in_tx(
-            &mut tx,
-            id,
-            admission.authority.user_id,
-            lease.request_id,
-        )
-        .await?;
+        let outcome =
+            northstar_operations_postgres::api_operations::request_operation_cancel_in_tx(
+                &mut tx,
+                id,
+                admission.authority.user_id,
+                lease.request_id,
+            )
+            .await?;
         let response = match outcome {
-            db::CancelOutcome::NotFound => {
+            northstar_operations_postgres::api_operations::CancelOutcome::NotFound => {
                 error_response(404, "not_found", "operation does not exist")?
             }
-            db::CancelOutcome::NotCancelable => {
+            northstar_operations_postgres::api_operations::CancelOutcome::NotCancelable => {
                 error_response(409, "conflict", "operation does not support cancellation")?
             }
-            db::CancelOutcome::PastPointOfNoReturn => error_response(
-                409,
-                "conflict",
-                "operation has passed its point of no return",
-            )?,
-            db::CancelOutcome::Requested => {
+            northstar_operations_postgres::api_operations::CancelOutcome::PastPointOfNoReturn => {
+                error_response(
+                    409,
+                    "conflict",
+                    "operation has passed its point of no return",
+                )?
+            }
+            northstar_operations_postgres::api_operations::CancelOutcome::Requested => {
                 StoredApiResponse::json(200, json!({"outcome":"requested"}))?
             }
-            db::CancelOutcome::Canceled => {
+            northstar_operations_postgres::api_operations::CancelOutcome::Canceled => {
                 StoredApiResponse::json(200, json!({"outcome":"canceled"}))?
             }
-            db::CancelOutcome::AlreadyTerminal => {
+            northstar_operations_postgres::api_operations::CancelOutcome::AlreadyTerminal => {
                 StoredApiResponse::json(200, json!({"outcome":"already_terminal"}))?
             }
         };
@@ -136,7 +136,11 @@ impl OperationAdminRepository for PostgresOperationAdminRepository {
             AdminMutationStart::Finished(result) => return Ok(result),
         };
         let input = reconciliation(&admission, &lease, input);
-        let outcome = db::reconcile_indeterminate_operation_in_tx(&mut tx, id, &input).await?;
+        let outcome =
+            northstar_operations_postgres::api_operations::reconcile_indeterminate_operation_in_tx(
+                &mut tx, id, &input,
+            )
+            .await?;
         self.mutations
             .finish(tx, &lease, operation_reconciliation_response(outcome)?)
             .await
@@ -152,7 +156,7 @@ impl OperationAdminRepository for PostgresOperationAdminRepository {
             AdminMutationStart::Ready(tx, lease) => (tx, lease),
             AdminMutationStart::Finished(result) => return Ok(result),
         };
-        if db::operation_target_by_id(&mut tx, target_id)
+        if northstar_operations_postgres::api_operations::operation_target_by_id(&mut tx, target_id)
             .await?
             .is_none_or(|target| target.operation_id != operation_id)
         {
@@ -166,7 +170,11 @@ impl OperationAdminRepository for PostgresOperationAdminRepository {
                 .await;
         }
         let input = reconciliation(&admission, &lease, input);
-        let outcome = db::reconcile_indeterminate_target_in_tx(&mut tx, target_id, &input).await?;
+        let outcome =
+            northstar_operations_postgres::api_operations::reconcile_indeterminate_target_in_tx(
+                &mut tx, target_id, &input,
+            )
+            .await?;
         self.mutations
             .finish(tx, &lease, target_reconciliation_response(outcome)?)
             .await

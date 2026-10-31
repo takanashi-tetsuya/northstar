@@ -22,7 +22,7 @@ TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
   -- --ignored --exact --nocapture
 TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
   cargo test --locked --offline \
-  db::data_lifecycle::tests::postgres_hold_cleanup_delete_release_and_audit_invariants \
+  db::data_lifecycle_tests::postgres_hold_cleanup_delete_release_and_audit_invariants \
   -- --ignored --exact --nocapture
 TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
   cargo test --locked --offline \

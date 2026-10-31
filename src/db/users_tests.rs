@@ -343,26 +343,31 @@ fn password_idempotency_request<'a>(
     token: &'a str,
     key: &'a str,
     body: &[u8],
-) -> crate::db::IdempotencyRequest<'a> {
-    crate::db::IdempotencyRequest {
+) -> northstar_operations_postgres::api_control::IdempotencyRequest<'a> {
+    northstar_operations_postgres::api_control::IdempotencyRequest {
         request_id: Uuid::new_v4(),
         actor_id: None,
         principal_scope: token.as_bytes(),
         capacity_scope: token.as_bytes(),
         target_scope: b"",
-        principal_kind: crate::db::ApiPrincipalKind::User,
+        principal_kind: northstar_operations_postgres::api_control::ApiPrincipalKind::User,
         method: "PATCH",
         route: "/api/v1/me/password",
         idempotency_key: key,
-        request_fingerprint: crate::db::api_request_fingerprint("application/json", body),
+        request_fingerprint: northstar_operations_postgres::api_control::api_request_fingerprint(
+            "application/json",
+            body,
+        ),
         ttl_seconds: 3600,
         lease_seconds: 180,
     }
 }
 
-fn acquired(outcome: crate::db::IdempotencyAcquire) -> crate::db::IdempotencyLease {
+fn acquired(
+    outcome: northstar_operations_postgres::api_control::IdempotencyAcquire,
+) -> northstar_operations_postgres::api_control::IdempotencyLease {
     match outcome {
-        crate::db::IdempotencyAcquire::Acquired(lease) => lease,
+        northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(lease) => lease,
         other => panic!("expected acquired idempotency lease, got {other:?}"),
     }
 }
@@ -942,7 +947,11 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
     .unwrap();
     let token = create_api_session(&pool, user.id, 1).await.unwrap();
     let keyring = Arc::new(
-        crate::db::ApiControlKeyring::new(b"password-api-control-test-key-000001", None).unwrap(),
+        northstar_operations_postgres::api_control::ApiControlKeyring::new(
+            b"password-api-control-test-key-000001",
+            None,
+        )
+        .unwrap(),
     );
     let guard = crate::db::abuse_effects::persistent_guard(
         AbuseConfig {
@@ -972,10 +981,14 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
 
     let mut lookup = pool.begin().await.unwrap();
     assert!(matches!(
-        crate::db::lookup_password_change_replay_in_tx(&keyring, &mut lookup, &request)
-            .await
-            .unwrap(),
-        crate::db::IdempotencyReplayLookup::Miss
+        northstar_operations_postgres::api_control::lookup_password_change_replay_in_tx(
+            &keyring,
+            &mut lookup,
+            &request
+        )
+        .await
+        .unwrap(),
+        northstar_operations_postgres::api_control::IdempotencyReplayLookup::Miss
     ));
     lookup.commit().await.unwrap();
 
@@ -985,9 +998,13 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
         .unwrap()
         .is_some());
     let lease = acquired(
-        crate::db::acquire_idempotency_in_tx(&keyring, &mut reserve, &request)
-            .await
-            .unwrap(),
+        northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            &keyring,
+            &mut reserve,
+            &request,
+        )
+        .await
+        .unwrap(),
     );
     let actors = vec![format!("user:{}", user.id)];
     assert!(matches!(
@@ -1005,17 +1022,24 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
         TransactionalGuardOutcome::Allowed
     ));
     assert!(
-        crate::db::mark_idempotency_guard_verified_in_tx(&mut reserve, &lease)
-            .await
-            .unwrap()
+        northstar_operations_postgres::api_control::mark_idempotency_guard_verified_in_tx(
+            &mut reserve,
+            &lease
+        )
+        .await
+        .unwrap()
     );
     reserve.commit().await.unwrap();
 
     let mut prework = pool.begin().await.unwrap();
     assert!(
-        crate::db::resume_idempotency_lease_in_tx(&mut prework, &lease, 180)
-            .await
-            .unwrap()
+        northstar_operations_postgres::api_control::resume_idempotency_lease_in_tx(
+            &mut prework,
+            &lease,
+            180
+        )
+        .await
+        .unwrap()
     );
     prework.commit().await.unwrap();
     let prepared = prepare_password_change(
@@ -1032,14 +1056,22 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
     // restore credentials, sessions, audit and replay state together.
     let mut crashed = pool.begin().await.unwrap();
     assert!(
-        crate::db::resume_idempotency_lease_in_tx(&mut crashed, &lease, 180)
-            .await
-            .unwrap()
+        northstar_operations_postgres::api_control::resume_idempotency_lease_in_tx(
+            &mut crashed,
+            &lease,
+            180
+        )
+        .await
+        .unwrap()
     );
     assert!(
-        crate::db::bind_idempotency_actor_in_tx(&mut crashed, &lease, user.id)
-            .await
-            .unwrap()
+        northstar_operations_postgres::api_control::bind_idempotency_actor_in_tx(
+            &mut crashed,
+            &lease,
+            user.id
+        )
+        .await
+        .unwrap()
     );
     assert_eq!(
         apply_prepared_password_change_in_tx(
@@ -1055,16 +1087,18 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
         .unwrap(),
         PasswordChangeOutcome::Changed
     );
-    assert!(crate::db::complete_idempotency_in_tx(
-        &keyring,
-        &mut crashed,
-        &lease,
-        200,
-        &headers,
-        response_body,
-    )
-    .await
-    .unwrap());
+    assert!(
+        northstar_operations_postgres::api_control::complete_idempotency_in_tx(
+            &keyring,
+            &mut crashed,
+            &lease,
+            200,
+            &headers,
+            response_body,
+        )
+        .await
+        .unwrap()
+    );
     crashed.rollback().await.unwrap();
     assert!(user_for_token(&pool, &token).await.unwrap().is_some());
     assert!(auth::verify_password(
@@ -1094,9 +1128,13 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
         .unwrap()
         .is_some());
     let takeover_lease = acquired(
-        crate::db::acquire_idempotency_in_tx(&keyring, &mut takeover, &request)
-            .await
-            .unwrap(),
+        northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            &keyring,
+            &mut takeover,
+            &request,
+        )
+        .await
+        .unwrap(),
     );
     assert!(takeover_lease.guard_verified);
     takeover.commit().await.unwrap();
@@ -1111,14 +1149,22 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
     .unwrap();
     let mut final_tx = pool.begin().await.unwrap();
     assert!(
-        crate::db::resume_idempotency_lease_in_tx(&mut final_tx, &takeover_lease, 180,)
-            .await
-            .unwrap()
+        northstar_operations_postgres::api_control::resume_idempotency_lease_in_tx(
+            &mut final_tx,
+            &takeover_lease,
+            180,
+        )
+        .await
+        .unwrap()
     );
     assert!(
-        crate::db::bind_idempotency_actor_in_tx(&mut final_tx, &takeover_lease, user.id,)
-            .await
-            .unwrap()
+        northstar_operations_postgres::api_control::bind_idempotency_actor_in_tx(
+            &mut final_tx,
+            &takeover_lease,
+            user.id,
+        )
+        .await
+        .unwrap()
     );
     assert_eq!(
         apply_prepared_password_change_in_tx(
@@ -1134,16 +1180,18 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
         .unwrap(),
         PasswordChangeOutcome::Changed
     );
-    assert!(crate::db::complete_idempotency_in_tx(
-        &keyring,
-        &mut final_tx,
-        &takeover_lease,
-        200,
-        &headers,
-        response_body,
-    )
-    .await
-    .unwrap());
+    assert!(
+        northstar_operations_postgres::api_control::complete_idempotency_in_tx(
+            &keyring,
+            &mut final_tx,
+            &takeover_lease,
+            200,
+            &headers,
+            response_body,
+        )
+        .await
+        .unwrap()
+    );
     final_tx.commit().await.unwrap();
     assert!(user_for_token(&pool, &token).await.unwrap().is_none());
     assert_eq!(
@@ -1159,11 +1207,15 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
         1
     );
     let mut replay = pool.begin().await.unwrap();
-    match crate::db::lookup_password_change_replay_in_tx(&keyring, &mut replay, &request)
-        .await
-        .unwrap()
+    match northstar_operations_postgres::api_control::lookup_password_change_replay_in_tx(
+        &keyring,
+        &mut replay,
+        &request,
+    )
+    .await
+    .unwrap()
     {
-        crate::db::IdempotencyReplayLookup::Replay(response) => {
+        northstar_operations_postgres::api_control::IdempotencyReplayLookup::Replay(response) => {
             assert_eq!(response.status, 200);
             assert_eq!(response.body, response_body);
         }
@@ -1195,10 +1247,14 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
     );
     let mut new_lookup = pool.begin().await.unwrap();
     assert!(matches!(
-        crate::db::lookup_password_change_replay_in_tx(&keyring, &mut new_lookup, &new_request,)
-            .await
-            .unwrap(),
-        crate::db::IdempotencyReplayLookup::Miss
+        northstar_operations_postgres::api_control::lookup_password_change_replay_in_tx(
+            &keyring,
+            &mut new_lookup,
+            &new_request,
+        )
+        .await
+        .unwrap(),
+        northstar_operations_postgres::api_control::IdempotencyReplayLookup::Miss
     ));
     new_lookup.commit().await.unwrap();
 
@@ -1295,12 +1351,16 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
                 .unwrap()
                 .is_some());
             authorization_barrier.wait().await;
-            let outcome = crate::db::acquire_idempotency_in_tx(&keyring, &mut tx, &request)
-                .await
-                .unwrap();
+            let outcome = northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+                &keyring, &mut tx, &request,
+            )
+            .await
+            .unwrap();
             let initial = match outcome {
-                crate::db::IdempotencyAcquire::Acquired(_) => InitialAdmission::Acquired,
-                crate::db::IdempotencyAcquire::Busy {
+                northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(_) => {
+                    InitialAdmission::Acquired
+                }
+                northstar_operations_postgres::api_control::IdempotencyAcquire::Busy {
                     retry_after_seconds: 1,
                 } => InitialAdmission::Busy,
                 other => panic!("unexpected password idempotency outcome: {other:?}"),
@@ -1323,11 +1383,17 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
                     .await
                     .unwrap()
                     .is_some());
-                let retried = crate::db::acquire_idempotency_in_tx(&keyring, &mut retry, &request)
+                let retried =
+                    northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+                        &keyring, &mut retry, &request,
+                    )
                     .await
                     .unwrap();
                 assert!(
-                    matches!(retried, crate::db::IdempotencyAcquire::Acquired(_)),
+                    matches!(
+                        retried,
+                        northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(_)
+                    ),
                     "password Busy admission did not recover: {retried:?}"
                 );
                 retry.rollback().await.unwrap();
@@ -1344,14 +1410,17 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
         let lock_token = lock_token.clone();
         tokio::spawn(async move {
             let key = "lock-report-key-0001".to_owned();
-            let body = crate::db::api_request_fingerprint("application/json", b"report-lock");
-            let request = crate::db::IdempotencyRequest {
+            let body = northstar_operations_postgres::api_control::api_request_fingerprint(
+                "application/json",
+                b"report-lock",
+            );
+            let request = northstar_operations_postgres::api_control::IdempotencyRequest {
                 request_id: Uuid::new_v4(),
                 actor_id: Some(lock_user.id),
                 principal_scope: lock_user.id.as_bytes(),
                 capacity_scope: lock_user.id.as_bytes(),
                 target_scope: b"",
-                principal_kind: crate::db::ApiPrincipalKind::User,
+                principal_kind: northstar_operations_postgres::api_control::ApiPrincipalKind::User,
                 method: "POST",
                 route: "/api/v1/reports",
                 idempotency_key: &key,
@@ -1373,12 +1442,16 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
             .await
             .unwrap());
             authorization_barrier.wait().await;
-            let outcome = crate::db::acquire_idempotency_in_tx(&keyring, &mut tx, &request)
-                .await
-                .unwrap();
+            let outcome = northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+                &keyring, &mut tx, &request,
+            )
+            .await
+            .unwrap();
             let initial = match outcome {
-                crate::db::IdempotencyAcquire::Acquired(_) => InitialAdmission::Acquired,
-                crate::db::IdempotencyAcquire::Busy {
+                northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(_) => {
+                    InitialAdmission::Acquired
+                }
+                northstar_operations_postgres::api_control::IdempotencyAcquire::Busy {
                     retry_after_seconds: 1,
                 } => InitialAdmission::Busy,
                 other => panic!("unexpected report idempotency outcome: {other:?}"),
@@ -1401,11 +1474,17 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
                 )
                 .await
                 .unwrap());
-                let retried = crate::db::acquire_idempotency_in_tx(&keyring, &mut retry, &request)
+                let retried =
+                    northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+                        &keyring, &mut retry, &request,
+                    )
                     .await
                     .unwrap();
                 assert!(
-                    matches!(retried, crate::db::IdempotencyAcquire::Acquired(_)),
+                    matches!(
+                        retried,
+                        northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(_)
+                    ),
                     "report Busy admission did not recover: {retried:?}"
                 );
                 retry.rollback().await.unwrap();

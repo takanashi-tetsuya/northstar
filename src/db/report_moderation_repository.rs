@@ -1,8 +1,5 @@
 //! Atomic moderation decisions, audit records and idempotent responses.
-use crate::db::{
-    self,
-    admin_mutations::{AdminMutationStart, AdminMutationStore},
-};
+use crate::db::admin_mutations::{AdminMutationStart, AdminMutationStore};
 use anyhow::Result;
 use northstar_operations_application::report_moderation::*;
 use northstar_operations_core::api_mutations::*;
@@ -34,7 +31,7 @@ impl PostgresReportModerationRepository {
         let actor = command.admission.authority.user_id;
         let result = match kind {
             RecordKind::Report => {
-                db::admin_update_report_in_tx(
+                northstar_operations_postgres::reports::admin_update_report_in_tx(
                     &mut tx,
                     command.id,
                     actor,
@@ -45,7 +42,7 @@ impl PostgresReportModerationRepository {
                 .await
             }
             RecordKind::Appeal => {
-                db::admin_update_appeal_in_tx(
+                northstar_operations_postgres::reports::admin_update_appeal_in_tx(
                     &mut tx,
                     command.id,
                     actor,
@@ -58,19 +55,21 @@ impl PostgresReportModerationRepository {
         };
         let response = match result {
             Ok(()) => StoredApiResponse::json(200, serde_json::json!({"updated":true}))?,
-            Err(db::ModerationUpdateError::NotFound) => {
+            Err(northstar_operations_postgres::reports::ModerationUpdateError::NotFound) => {
                 error_response(404, "not_found", "moderation record does not exist")?
             }
-            Err(db::ModerationUpdateError::InvalidTransition) => {
-                error_response(409, "conflict", "invalid moderation state transition")?
-            }
-            Err(db::ModerationUpdateError::Unauthorized) => {
+            Err(
+                northstar_operations_postgres::reports::ModerationUpdateError::InvalidTransition,
+            ) => error_response(409, "conflict", "invalid moderation state transition")?,
+            Err(northstar_operations_postgres::reports::ModerationUpdateError::Unauthorized) => {
                 tx.rollback().await?;
                 return Ok(ApiMutationOutcome::Rejected(
                     ApiMutationRejection::Forbidden,
                 ));
             }
-            Err(db::ModerationUpdateError::Internal(error)) => return Err(error),
+            Err(northstar_operations_postgres::reports::ModerationUpdateError::Internal(error)) => {
+                return Err(error)
+            }
         };
         self.mutations.finish(tx, &lease, response).await
     }

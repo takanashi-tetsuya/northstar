@@ -182,7 +182,7 @@ pub async fn renew_operation_lease_in_tx(
         == 1)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn mark_operation_point_of_no_return_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     lease: &OperationLease,
@@ -430,7 +430,7 @@ pub async fn fail_operation_in_tx(
     Ok(true)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn retry_backoff_seconds(id: Uuid, attempts: i32) -> i64 {
     let exponent = u32::try_from(attempts.saturating_sub(1))
         .unwrap_or_default()
@@ -441,7 +441,7 @@ pub(super) fn retry_backoff_seconds(id: Uuid, attempts: i32) -> i64 {
     (base + jitter).min(300)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn retry_operation_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     lease: &OperationLease,

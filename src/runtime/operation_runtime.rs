@@ -10,7 +10,6 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    db,
     services::muc::LocalMucOccupantIdentity,
     state::{
         AdminSessionCleanupContext, AppState, OperationIslandEffects, OperationMucDestroyEffects,
@@ -382,8 +381,8 @@ async fn run_one(runtime: &OperationWorkerRuntime, worker_id: Uuid) -> Result<bo
 
 async fn lease_heartbeat(
     control: Arc<OperationWorkerControl>,
-    parent: db::OperationLease,
-    target: db::OperationTargetLease,
+    parent: northstar_operations_postgres::api_operations::OperationLease,
+    target: northstar_operations_postgres::api_operations::OperationTargetLease,
     stop: CancellationToken,
 ) -> Result<()> {
     loop {
@@ -638,7 +637,7 @@ async fn execute_effect(
     island_effects: &OperationIslandEffects,
     muc_destroy_effects: &OperationMucDestroyEffects,
     panic_effects: &OperationPanicEffects,
-    operation: &db::OperationRecord,
+    operation: &northstar_operations_postgres::api_operations::OperationRecord,
     payload: &Value,
 ) -> Result<Value> {
     match operation.kind.as_str() {

@@ -1,11 +1,11 @@
 //! Atomic lease renewal and target claim for the administrator operation worker.
 
-use crate::db::{self, OperationLease, OperationTargetLease};
 use anyhow::Result;
 use northstar_operations_application::operation_journal_worker::{
     ClaimedOperation, OperationJournalWorkerRepository, ParentTerminalization, TargetClaim,
     TargetSeed,
 };
+use northstar_operations_postgres::api_operations::{OperationLease, OperationTargetLease};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -34,11 +34,22 @@ impl OperationJournalWorkerRepository for PostgresOperationJournalWorkerReposito
     where
         F: for<'a> FnOnce(ClaimedOperation<'a>) -> Result<Vec<TargetSeed>> + Send,
     {
-        if !db::operation_work_pending(&self.pool, worker_id, lease_seconds).await? {
+        if !northstar_operations_postgres::api_operations::operation_work_pending(
+            &self.pool,
+            worker_id,
+            lease_seconds,
+        )
+        .await?
+        {
             return Ok(None);
         }
         let mut tx = self.pool.begin().await?;
-        let Some(lease) = db::claim_operation_in_tx(&mut tx, worker_id, lease_seconds).await?
+        let Some(lease) = northstar_operations_postgres::api_operations::claim_operation_in_tx(
+            &mut tx,
+            worker_id,
+            lease_seconds,
+        )
+        .await?
         else {
             // Claim maintenance can expire or revoke rows even when no candidate
             // remains; the original worker commits those transitions.
@@ -50,9 +61,9 @@ impl OperationJournalWorkerRepository for PostgresOperationJournalWorkerReposito
             payload: &lease.operation.payload,
         })?;
         for seed in seeds {
-            db::enqueue_operation_target_in_tx(
+            northstar_operations_postgres::api_operations::enqueue_operation_target_in_tx(
                 &mut tx,
-                &db::EnqueueOperationTarget {
+                &northstar_operations_postgres::api_operations::EnqueueOperationTarget {
                     operation_id: lease.operation.id,
                     target_key: &seed.target_key,
                     ordinal: seed.ordinal,
@@ -74,11 +85,17 @@ impl OperationJournalWorkerRepository for PostgresOperationJournalWorkerReposito
         lease_seconds: i64,
     ) -> Result<TargetClaim<OperationTargetLease>> {
         let mut claim = self.pool.begin().await?;
-        if !db::renew_operation_lease_in_tx(&mut claim, parent, lease_seconds).await? {
+        if !northstar_operations_postgres::api_operations::renew_operation_lease_in_tx(
+            &mut claim,
+            parent,
+            lease_seconds,
+        )
+        .await?
+        {
             claim.rollback().await?;
             return Ok(TargetClaim::LeaseLost);
         }
-        let target = db::claim_operation_target_in_tx(
+        let target = northstar_operations_postgres::api_operations::claim_operation_target_in_tx(
             &mut claim,
             parent.operation.id,
             worker_id,
@@ -94,7 +111,12 @@ impl OperationJournalWorkerRepository for PostgresOperationJournalWorkerReposito
 
     async fn acknowledge_cancel(&self, parent: &OperationLease) -> Result<bool> {
         let mut cancel_tx = self.pool.begin().await?;
-        if db::acknowledge_operation_cancel_in_tx(&mut cancel_tx, parent).await? {
+        if northstar_operations_postgres::api_operations::acknowledge_operation_cancel_in_tx(
+            &mut cancel_tx,
+            parent,
+        )
+        .await?
+        {
             cancel_tx.commit().await?;
             return Ok(true);
         }
@@ -109,9 +131,19 @@ impl OperationJournalWorkerRepository for PostgresOperationJournalWorkerReposito
         lease_seconds: i64,
     ) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
-        let parent_ok = db::renew_operation_lease_in_tx(&mut tx, parent, lease_seconds).await?;
+        let parent_ok = northstar_operations_postgres::api_operations::renew_operation_lease_in_tx(
+            &mut tx,
+            parent,
+            lease_seconds,
+        )
+        .await?;
         let target_ok =
-            db::renew_operation_target_lease_in_tx(&mut tx, target, lease_seconds).await?;
+            northstar_operations_postgres::api_operations::renew_operation_target_lease_in_tx(
+                &mut tx,
+                target,
+                lease_seconds,
+            )
+            .await?;
         if !parent_ok || !target_ok {
             tx.rollback().await?;
             return Ok(false);
@@ -122,7 +154,13 @@ impl OperationJournalWorkerRepository for PostgresOperationJournalWorkerReposito
 
     async fn succeed_target(&self, target: &OperationTargetLease, result: &Value) -> Result<bool> {
         let mut finish = self.pool.begin().await?;
-        if !db::succeed_operation_target_in_tx(&mut finish, target, result).await? {
+        if !northstar_operations_postgres::api_operations::succeed_operation_target_in_tx(
+            &mut finish,
+            target,
+            result,
+        )
+        .await?
+        {
             finish.rollback().await?;
             return Ok(false);
         }
@@ -141,7 +179,7 @@ impl OperationJournalWorkerRepository for PostgresOperationJournalWorkerReposito
         let mut finish = self.pool.begin().await?;
         tracing::warn!(operation_id=%operation_id, target_id=%target_id, ?error, "durable operation effect failed after PONR");
         let details = json!({"message": error.to_string()});
-        if !db::mark_operation_target_indeterminate_in_tx(
+        if !northstar_operations_postgres::api_operations::mark_operation_target_indeterminate_in_tx(
             &mut finish,
             parent,
             target,
@@ -159,8 +197,21 @@ impl OperationJournalWorkerRepository for PostgresOperationJournalWorkerReposito
 
     async fn terminalize_parent(&self, parent: &OperationLease) -> Result<ParentTerminalization> {
         let mut finish = self.pool.begin().await?;
-        if !db::succeed_operation_in_tx(&mut finish, parent, &json!({"completed":true})).await? {
-            if db::fail_operation_in_tx(&mut finish, parent, "target_incomplete", None).await? {
+        if !northstar_operations_postgres::api_operations::succeed_operation_in_tx(
+            &mut finish,
+            parent,
+            &json!({"completed":true}),
+        )
+        .await?
+        {
+            if northstar_operations_postgres::api_operations::fail_operation_in_tx(
+                &mut finish,
+                parent,
+                "target_incomplete",
+                None,
+            )
+            .await?
+            {
                 finish.commit().await?;
                 return Ok(ParentTerminalization::FailedIncomplete);
             }
@@ -219,15 +270,15 @@ mod tests {
         .await
         .unwrap();
         let mut tx = pool.begin().await.unwrap();
-        let operation = db::enqueue_operation_in_tx(
+        let operation = northstar_operations_postgres::api_operations::enqueue_operation_in_tx(
             &mut tx,
-            &db::EnqueueOperation {
+            &northstar_operations_postgres::api_operations::EnqueueOperation {
                 request_id: request,
                 idempotency_id: idempotency,
                 idempotency_lease_token: token,
                 actor_id: actor,
                 actor_auth_generation: 0,
-                authorization_policy: db::AuthorizationPolicy::ReauthorizeUntilEffect,
+                authorization_policy: northstar_operations_postgres::api_operations::AuthorizationPolicy::ReauthorizeUntilEffect,
                 kind: "admin.broadcast",
                 target: None,
                 payload_version: 1,

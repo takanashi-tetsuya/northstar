@@ -188,6 +188,7 @@
     "northstar-message-core",
     "northstar-operations-application",
     "northstar-operations-core",
+    "northstar-operations-postgres",
     "northstar-postgres",
     "northstar-presence-core",
     "northstar-protocol-runtime",
@@ -3015,6 +3016,78 @@
       "uuid"
     ],
     [
+      "northstar-operations-postgres",
+      "anyhow"
+    ],
+    [
+      "northstar-operations-postgres",
+      "chrono"
+    ],
+    [
+      "northstar-operations-postgres",
+      "hmac"
+    ],
+    [
+      "northstar-operations-postgres",
+      "northstar-auth-core"
+    ],
+    [
+      "northstar-operations-postgres",
+      "northstar-operations-application"
+    ],
+    [
+      "northstar-operations-postgres",
+      "northstar-operations-core"
+    ],
+    [
+      "northstar-operations-postgres",
+      "northstar-xmpp-types"
+    ],
+    [
+      "northstar-operations-postgres",
+      "rand"
+    ],
+    [
+      "northstar-operations-postgres",
+      "ring"
+    ],
+    [
+      "northstar-operations-postgres",
+      "roxmltree"
+    ],
+    [
+      "northstar-operations-postgres",
+      "serde"
+    ],
+    [
+      "northstar-operations-postgres",
+      "serde_json"
+    ],
+    [
+      "northstar-operations-postgres",
+      "sha2"
+    ],
+    [
+      "northstar-operations-postgres",
+      "sqlx"
+    ],
+    [
+      "northstar-operations-postgres",
+      "subtle"
+    ],
+    [
+      "northstar-operations-postgres",
+      "thiserror"
+    ],
+    [
+      "northstar-operations-postgres",
+      "uuid"
+    ],
+    [
+      "northstar-operations-postgres",
+      "zeroize"
+    ],
+    [
       "northstar-postgres",
       "anyhow"
     ],
@@ -5381,6 +5454,10 @@
     [
       "rust-xmpp-server",
       "northstar-operations-core"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-operations-postgres"
     ],
     [
       "rust-xmpp-server",

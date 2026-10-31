@@ -79,7 +79,10 @@ async fn moderation_ports_commit_decisions_and_replay_terminal_errors_once() {
             .await
             .unwrap();
     let secret = Uuid::new_v4().simple().to_string();
-    let keyring = Arc::new(db::ApiControlKeyring::new(secret.as_bytes(), None).unwrap());
+    let keyring = Arc::new(
+        northstar_operations_postgres::api_control::ApiControlKeyring::new(secret.as_bytes(), None)
+            .unwrap(),
+    );
     let service = ReportModerationService::new(PostgresReportModerationRepository::new(
         AdminMutationStore::new(pool.clone(), keyring, cluster.admission()),
     ));
@@ -103,7 +106,10 @@ async fn moderation_ports_commit_decisions_and_replay_terminal_errors_once() {
             "resolution": "  Reviewed the evidence.  "
         }))
         .unwrap();
-        let fingerprint = db::api_request_fingerprint("application/json", &body);
+        let fingerprint = northstar_operations_postgres::api_control::api_request_fingerprint(
+            "application/json",
+            &body,
+        );
         let command = || {
             admission(
                 &admin,
@@ -188,7 +194,10 @@ async fn moderation_ports_commit_decisions_and_replay_terminal_errors_once() {
                 "/api/v1/admin/reports/{id}",
                 &invalid_key,
                 invalid_request,
-                db::api_request_fingerprint("application/json", b"invalid"),
+                northstar_operations_postgres::api_control::api_request_fingerprint(
+                    "application/json",
+                    b"invalid",
+                ),
             ),
             report,
             "rejected",

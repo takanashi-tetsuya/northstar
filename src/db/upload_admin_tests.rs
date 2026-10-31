@@ -59,15 +59,15 @@ fn retry_idempotency_request<'a>(
     key: &'a str,
     auth_generation: i64,
     request_id: Uuid,
-) -> crate::db::IdempotencyRequest<'a> {
-    let base = crate::db::api_request_fingerprint("", b"");
-    crate::db::IdempotencyRequest {
+) -> northstar_operations_postgres::api_control::IdempotencyRequest<'a> {
+    let base = northstar_operations_postgres::api_control::api_request_fingerprint("", b"");
+    northstar_operations_postgres::api_control::IdempotencyRequest {
         request_id,
         actor_id: Some(actor_id),
         principal_scope: actor_scope,
         capacity_scope: actor_scope,
         target_scope,
-        principal_kind: crate::db::ApiPrincipalKind::Admin,
+        principal_kind: northstar_operations_postgres::api_control::ApiPrincipalKind::Admin,
         method: "POST",
         route: "/api/v1/admin/upload-dead-letters/{kind}/{id}/retry",
         idempotency_key: key,
@@ -101,9 +101,11 @@ async fn postgres_retry_idempotency_replay_target_generation_and_not_found_contr
     .unwrap();
     let (admin_id, admin_token) = insert_user(&pool, true).await;
     let actor_scope = admin_id.as_bytes();
-    let keys =
-        crate::db::ApiControlKeyring::new(b"upload-dead-letter-idempotency-test-key-0001", None)
-            .unwrap();
+    let keys = northstar_operations_postgres::api_control::ApiControlKeyring::new(
+        b"upload-dead-letter-idempotency-test-key-0001",
+        None,
+    )
+    .unwrap();
 
     let job = insert_storage_dead_letter(&pool, None).await;
     let target = format!("storage_job\0{job}");
@@ -118,11 +120,13 @@ async fn postgres_retry_idempotency_replay_target_generation_and_not_found_contr
         original_request_id,
     );
     let mut tx = pool.begin().await.unwrap();
-    let lease = match crate::db::acquire_idempotency_in_tx(&keys, &mut tx, &original)
-        .await
-        .unwrap()
+    let lease = match northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+        &keys, &mut tx, &original,
+    )
+    .await
+    .unwrap()
     {
-        crate::db::IdempotencyAcquire::Acquired(lease) => lease,
+        northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(lease) => lease,
         other => panic!("unexpected first idempotency outcome: {other:?}"),
     };
     assert_eq!(
@@ -139,16 +143,18 @@ async fn postgres_retry_idempotency_replay_target_generation_and_not_found_contr
         RetryUploadDeadLetter::Retried
     );
     let response_body = format!(r#"{{"kind":"storage_job","id":"{job}","state":"queued"}}"#);
-    assert!(crate::db::complete_idempotency_in_tx(
-        &keys,
-        &mut tx,
-        &lease,
-        StatusCode::ACCEPTED.as_u16(),
-        &northstar_operations_core::api_mutations::json_replay_headers(),
-        response_body.as_bytes(),
-    )
-    .await
-    .unwrap());
+    assert!(
+        northstar_operations_postgres::api_control::complete_idempotency_in_tx(
+            &keys,
+            &mut tx,
+            &lease,
+            StatusCode::ACCEPTED.as_u16(),
+            &northstar_operations_core::api_mutations::json_replay_headers(),
+            response_body.as_bytes(),
+        )
+        .await
+        .unwrap()
+    );
     tx.commit().await.unwrap();
 
     let replay_request = retry_idempotency_request(
@@ -160,11 +166,15 @@ async fn postgres_retry_idempotency_replay_target_generation_and_not_found_contr
         Uuid::new_v4(),
     );
     let mut replay_tx = pool.begin().await.unwrap();
-    let replay = match crate::db::acquire_idempotency_in_tx(&keys, &mut replay_tx, &replay_request)
-        .await
-        .unwrap()
+    let replay = match northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+        &keys,
+        &mut replay_tx,
+        &replay_request,
+    )
+    .await
+    .unwrap()
     {
-        crate::db::IdempotencyAcquire::Replay(replay) => replay,
+        northstar_operations_postgres::api_control::IdempotencyAcquire::Replay(replay) => replay,
         other => panic!("unexpected replay outcome: {other:?}"),
     };
     replay_tx.commit().await.unwrap();
@@ -201,10 +211,14 @@ async fn postgres_retry_idempotency_replay_target_generation_and_not_found_contr
     );
     let mut conflict_tx = pool.begin().await.unwrap();
     assert!(matches!(
-        crate::db::acquire_idempotency_in_tx(&keys, &mut conflict_tx, &target_conflict)
-            .await
-            .unwrap(),
-        crate::db::IdempotencyAcquire::FingerprintConflict
+        northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            &keys,
+            &mut conflict_tx,
+            &target_conflict
+        )
+        .await
+        .unwrap(),
+        northstar_operations_postgres::api_control::IdempotencyAcquire::FingerprintConflict
     ));
     conflict_tx.rollback().await.unwrap();
 
@@ -218,10 +232,14 @@ async fn postgres_retry_idempotency_replay_target_generation_and_not_found_contr
     );
     let mut generation_tx = pool.begin().await.unwrap();
     assert!(matches!(
-        crate::db::acquire_idempotency_in_tx(&keys, &mut generation_tx, &generation_conflict)
-            .await
-            .unwrap(),
-        crate::db::IdempotencyAcquire::FingerprintConflict
+        northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            &keys,
+            &mut generation_tx,
+            &generation_conflict
+        )
+        .await
+        .unwrap(),
+        northstar_operations_postgres::api_control::IdempotencyAcquire::FingerprintConflict
     ));
     generation_tx.rollback().await.unwrap();
 
@@ -238,14 +256,17 @@ async fn postgres_retry_idempotency_replay_target_generation_and_not_found_contr
         missing_original_request_id,
     );
     let mut missing_tx = pool.begin().await.unwrap();
-    let missing_lease =
-        match crate::db::acquire_idempotency_in_tx(&keys, &mut missing_tx, &missing_request)
-            .await
-            .unwrap()
-        {
-            crate::db::IdempotencyAcquire::Acquired(lease) => lease,
-            other => panic!("unexpected missing-row admission: {other:?}"),
-        };
+    let missing_lease = match northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+        &keys,
+        &mut missing_tx,
+        &missing_request,
+    )
+    .await
+    .unwrap()
+    {
+        northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(lease) => lease,
+        other => panic!("unexpected missing-row admission: {other:?}"),
+    };
     assert_eq!(
         retry_upload_dead_letter_in_tx(
             &mut missing_tx,
@@ -261,16 +282,18 @@ async fn postgres_retry_idempotency_replay_target_generation_and_not_found_contr
     );
     let missing_body =
         br#"{"error":{"code":"not_found","message":"upload dead-letter entry is unavailable"}}"#;
-    assert!(crate::db::complete_idempotency_in_tx(
-        &keys,
-        &mut missing_tx,
-        &missing_lease,
-        StatusCode::NOT_FOUND.as_u16(),
-        &northstar_operations_core::api_mutations::json_replay_headers(),
-        missing_body,
-    )
-    .await
-    .unwrap());
+    assert!(
+        northstar_operations_postgres::api_control::complete_idempotency_in_tx(
+            &keys,
+            &mut missing_tx,
+            &missing_lease,
+            StatusCode::NOT_FOUND.as_u16(),
+            &northstar_operations_core::api_mutations::json_replay_headers(),
+            missing_body,
+        )
+        .await
+        .unwrap()
+    );
     missing_tx.commit().await.unwrap();
 
     let missing_replay = retry_idempotency_request(
@@ -282,12 +305,15 @@ async fn postgres_retry_idempotency_replay_target_generation_and_not_found_contr
         Uuid::new_v4(),
     );
     let mut missing_replay_tx = pool.begin().await.unwrap();
-    let replay =
-        crate::db::acquire_idempotency_in_tx(&keys, &mut missing_replay_tx, &missing_replay)
-            .await
-            .unwrap();
+    let replay = northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+        &keys,
+        &mut missing_replay_tx,
+        &missing_replay,
+    )
+    .await
+    .unwrap();
     let replay = match replay {
-        crate::db::IdempotencyAcquire::Replay(replay) => replay,
+        northstar_operations_postgres::api_control::IdempotencyAcquire::Replay(replay) => replay,
         other => panic!("unexpected stored-404 replay outcome: {other:?}"),
     };
     missing_replay_tx.commit().await.unwrap();

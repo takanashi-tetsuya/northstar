@@ -9,7 +9,7 @@ pub use northstar_operations_application::operations::{
     OperationTargetPage, OperationTargetRecord,
 };
 use serde_json::{json, Value};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use sqlx::PgPool;
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -29,7 +29,7 @@ const MAX_TARGET_PAYLOAD_BYTES: usize = 64 * 1024;
 const MAX_TARGET_BYTES: usize = 4096;
 
 /// Test projection for the aggregate operation-backlog query.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ApiOperationSnapshot {
     pub pending: i64,
@@ -38,7 +38,7 @@ pub struct ApiOperationSnapshot {
     pub oldest_active_age_seconds: f64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn api_operation_snapshot(pool: &PgPool) -> Result<ApiOperationSnapshot> {
     let row = sqlx::query(
         "SELECT
@@ -110,7 +110,7 @@ pub enum CancelOutcome {
     NotFound,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RetryOutcome {
     Pending { retry_after_seconds: i64 },
@@ -377,4 +377,5 @@ async fn audit_operation_transition_for_request(
 }
 
 #[cfg(test)]
+#[path = "api_operations_tests.rs"]
 mod tests;

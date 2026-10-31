@@ -32,7 +32,11 @@ impl Request<'_> {
                 method: self.method,
                 route: self.route,
                 idempotency_key: &self.key,
-                request_fingerprint: db::api_request_fingerprint("application/json", b"fixture"),
+                request_fingerprint:
+                    northstar_operations_postgres::api_control::api_request_fingerprint(
+                        "application/json",
+                        b"fixture",
+                    ),
                 ttl_seconds: 3600,
                 lease_seconds: 180,
             },
@@ -65,7 +69,10 @@ async fn administrative_dispatch_preserves_intents_replay_and_atomic_side_record
             .await
             .unwrap();
     let secret = Uuid::new_v4().simple().to_string();
-    let keyring = Arc::new(db::ApiControlKeyring::new(secret.as_bytes(), None).unwrap());
+    let keyring = Arc::new(
+        northstar_operations_postgres::api_control::ApiControlKeyring::new(secret.as_bytes(), None)
+            .unwrap(),
+    );
     let service = AdminDispatchService::new(
         PostgresAdminDispatchRepository::new(
             AdminMutationStore::new(pool.clone(), Arc::clone(&keyring), cluster.admission()),

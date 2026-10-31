@@ -26,17 +26,26 @@ impl northstar_operations_application::maintenance_repositories::RetentionReposi
         crate::db::purge_resolved_retention_batch(&self.pool, store, now, days, batch_size).await
     }
     async fn purge_released_hold_snapshots_batch(&self, days: i64, batch_size: i64) -> Result<u64> {
-        crate::db::purge_released_hold_snapshots_batch(&self.pool, days, batch_size).await
+        northstar_operations_postgres::data_lifecycle::purge_released_hold_snapshots_batch(
+            &self.pool, days, batch_size,
+        )
+        .await
     }
     async fn purge_audit_log_batch(&self, days: i64, batch_size: i64) -> Result<u64> {
-        crate::db::purge_audit_log_batch(&self.pool, days, batch_size).await
+        northstar_operations_postgres::data_lifecycle::purge_audit_log_batch(
+            &self.pool, days, batch_size,
+        )
+        .await
     }
     async fn purge_governance_export_leases_batch(
         &self,
         days: i64,
         batch_size: i64,
     ) -> Result<u64> {
-        crate::db::purge_governance_export_leases_batch(&self.pool, days, batch_size).await
+        northstar_operations_postgres::data_lifecycle::purge_governance_export_leases_batch(
+            &self.pool, days, batch_size,
+        )
+        .await
     }
     async fn cleanup_omemo_recovery_transfers(&self, batch_size: i64) -> Result<u64> {
         crate::db::cleanup_omemo_recovery_transfers(&self.pool, batch_size).await

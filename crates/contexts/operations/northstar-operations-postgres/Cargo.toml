@@ -1,0 +1,32 @@
+[package]
+name = "northstar-operations-postgres"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "PostgreSQL persistence of Northstar's API commands, operation journal, reports and data lifecycle."
+publish = false
+
+[features]
+# Test-only entry points the root crate's cross-context operations tests use.
+test-support = []
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+hmac = "0.12"
+northstar-auth-core = { path = "../../auth/northstar-auth-core" }
+northstar-operations-application = { path = "../northstar-operations-application" }
+northstar-operations-core = { path = "../northstar-operations-core" }
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+rand = "0.8"
+ring = "0.17.14"
+roxmltree = "0.20"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid", "json", "macros"] }
+subtle = "2.6"
+thiserror = "2.0"
+uuid = { version = "1.12", features = ["v4", "serde"] }
+zeroize = "1.8"

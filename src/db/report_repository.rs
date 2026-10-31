@@ -1,5 +1,4 @@
 //! One transaction owns report/appeal authorization, one-use proof, mutation and replay.
-use crate::db;
 use anyhow::Result;
 use northstar_abuse_application::guard::{AbuseGuard, TransactionalGuardOutcome};
 use northstar_abuse_policy::AbuseAction;
@@ -11,17 +10,20 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub(crate) struct PostgresReportRepository {
     pool: PgPool,
-    keyring: Arc<db::ApiControlKeyring>,
+    keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
     abuse: Arc<AbuseGuard>,
 }
 enum MutationStart<'a> {
-    Ready(Transaction<'a, Postgres>, db::IdempotencyLease),
+    Ready(
+        Transaction<'a, Postgres>,
+        northstar_operations_postgres::api_control::IdempotencyLease,
+    ),
     Finished(ApiMutationOutcome<ReportCommit>),
 }
 impl PostgresReportRepository {
     pub(crate) fn new(
         pool: PgPool,
-        keyring: Arc<db::ApiControlKeyring>,
+        keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
         abuse: Arc<AbuseGuard>,
     ) -> Self {
         Self {
@@ -50,10 +52,14 @@ impl PostgresReportRepository {
                 ApiMutationRejection::Unauthorized,
             )));
         }
-        let acquired =
-            db::acquire_idempotency_in_tx(&self.keyring, &mut tx, &admission.idempotency).await?;
+        let acquired = northstar_operations_postgres::api_control::acquire_idempotency_in_tx(
+            &self.keyring,
+            &mut tx,
+            &admission.idempotency,
+        )
+        .await?;
         let rejection = match acquired {
-            db::IdempotencyAcquire::Acquired(lease) => {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Acquired(lease) => {
                 if !lease.guard_verified {
                     match northstar_abuse_postgres::transaction::verify_in_tx(
                         &mut tx,
@@ -68,7 +74,7 @@ impl PostgresReportRepository {
                     {
                         TransactionalGuardOutcome::Allowed => {
                             anyhow::ensure!(
-                                db::mark_idempotency_guard_verified_in_tx(&mut tx, &lease).await?,
+                                northstar_operations_postgres::api_control::mark_idempotency_guard_verified_in_tx(&mut tx, &lease).await?,
                                 "report/appeal idempotency guard lease changed"
                             );
                         }
@@ -83,26 +89,30 @@ impl PostgresReportRepository {
                 }
                 return Ok(MutationStart::Ready(tx, lease));
             }
-            db::IdempotencyAcquire::Replay(response) => {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Replay(response) => {
                 tx.commit().await?;
                 return Ok(MutationStart::Finished(ApiMutationOutcome::Replay(
                     response,
                 )));
             }
-            db::IdempotencyAcquire::FingerprintConflict
-            | db::IdempotencyAcquire::RotationConflict => ApiMutationRejection::IdempotencyConflict,
-            db::IdempotencyAcquire::ReplayInvalidated => ApiMutationRejection::ReplayInvalidated,
-            db::IdempotencyAcquire::Busy {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::FingerprintConflict
+            | northstar_operations_postgres::api_control::IdempotencyAcquire::RotationConflict => {
+                ApiMutationRejection::IdempotencyConflict
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::ReplayInvalidated => {
+                ApiMutationRejection::ReplayInvalidated
+            }
+            northstar_operations_postgres::api_control::IdempotencyAcquire::Busy {
                 retry_after_seconds,
             } => ApiMutationRejection::Busy {
                 retry_after: retry_after_seconds,
             },
-            db::IdempotencyAcquire::CapacityLimited {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::CapacityLimited {
                 retry_after_seconds,
             } => ApiMutationRejection::CapacityLimited {
                 retry_after: retry_after_seconds,
             },
-            db::IdempotencyAcquire::InProgress {
+            northstar_operations_postgres::api_control::IdempotencyAcquire::InProgress {
                 retry_after_seconds,
             } => ApiMutationRejection::InProgress {
                 retry_after: retry_after_seconds,
@@ -116,13 +126,18 @@ impl PostgresReportRepository {
     async fn finish(
         &self,
         mut tx: Transaction<'_, Postgres>,
-        lease: &db::IdempotencyLease,
+        lease: &northstar_operations_postgres::api_control::IdempotencyLease,
         response: StoredApiResponse,
         effect: ReportEffect,
     ) -> Result<ApiMutationOutcome<ReportCommit>> {
         anyhow::ensure!(
-            db::api_mutations::persist_response_in_tx(&self.keyring, &mut tx, lease, &response)
-                .await?,
+            northstar_operations_postgres::api_mutations::persist_response_in_tx(
+                &self.keyring,
+                &mut tx,
+                lease,
+                &response
+            )
+            .await?,
             "report/appeal idempotency lease changed"
         );
         tx.commit().await?;
@@ -154,7 +169,7 @@ impl ReportRepository for PostgresReportRepository {
                     .await
             }
         };
-        let result = db::create_report_in_tx(
+        let result = northstar_operations_postgres::reports::create_report_in_tx(
             &mut tx,
             command.admission.authority.user_id,
             &content.reported_jid,
@@ -166,7 +181,7 @@ impl ReportRepository for PostgresReportRepository {
         .await;
         let id = match result {
             Ok(id) => id,
-            Err(db::ReportCreateError::InvalidEvidence(_)) => {
+            Err(northstar_operations_postgres::reports::ReportCreateError::InvalidEvidence(_)) => {
                 return self
                     .finish(
                         tx,
@@ -176,7 +191,9 @@ impl ReportRepository for PostgresReportRepository {
                     )
                     .await
             }
-            Err(db::ReportCreateError::Internal(error)) => return Err(error),
+            Err(northstar_operations_postgres::reports::ReportCreateError::Internal(error)) => {
+                return Err(error)
+            }
         };
         self.finish(
             tx,
@@ -207,7 +224,7 @@ impl ReportRepository for PostgresReportRepository {
                     .await
             }
         };
-        let id = match db::create_appeal_in_tx(
+        let id = match northstar_operations_postgres::reports::create_appeal_in_tx(
             &mut tx,
             command.report_id,
             command.admission.authority.user_id,
@@ -217,7 +234,7 @@ impl ReportRepository for PostgresReportRepository {
         .await
         {
             Ok(id) => id,
-            Err(error @ db::AppealCreateError::Conflict) => {
+            Err(error @ northstar_operations_postgres::reports::AppealCreateError::Conflict) => {
                 return self
                     .finish(
                         tx,
@@ -227,7 +244,9 @@ impl ReportRepository for PostgresReportRepository {
                     )
                     .await
             }
-            Err(db::AppealCreateError::Internal(error)) => return Err(error),
+            Err(northstar_operations_postgres::reports::AppealCreateError::Internal(error)) => {
+                return Err(error)
+            }
         };
         self.finish(
             tx,

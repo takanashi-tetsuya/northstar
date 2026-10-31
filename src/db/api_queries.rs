@@ -91,7 +91,10 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
             Ok(tx) => tx,
             Err(denial) => return Ok(Err(denial)),
         };
-        let value = db::list_operations(&mut tx, status, kind, after, limit).await?;
+        let value = northstar_operations_postgres::api_operations::list_operations(
+            &mut tx, status, kind, after, limit,
+        )
+        .await?;
         tx.commit().await?;
         Ok(Ok(value))
     }
@@ -104,7 +107,8 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
             Ok(tx) => tx,
             Err(denial) => return Ok(Err(denial)),
         };
-        let value = db::operation_by_id(&mut tx, id).await?;
+        let value =
+            northstar_operations_postgres::api_operations::operation_by_id(&mut tx, id).await?;
         tx.commit().await?;
         Ok(Ok(value))
     }
@@ -120,8 +124,16 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
             Ok(tx) => tx,
             Err(denial) => return Ok(Err(denial)),
         };
-        let value = if db::operation_by_id(&mut tx, id).await?.is_some() {
-            Some(db::list_operation_targets(&mut tx, id, status, after, limit).await?)
+        let value = if northstar_operations_postgres::api_operations::operation_by_id(&mut tx, id)
+            .await?
+            .is_some()
+        {
+            Some(
+                northstar_operations_postgres::api_operations::list_operation_targets(
+                    &mut tx, id, status, after, limit,
+                )
+                .await?,
+            )
         } else {
             None
         };
@@ -138,9 +150,11 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
             Ok(tx) => tx,
             Err(denial) => return Ok(Err(denial)),
         };
-        let value = db::operation_target_by_id(&mut tx, target_id)
-            .await?
-            .filter(|target| target.operation_id == operation_id);
+        let value = northstar_operations_postgres::api_operations::operation_target_by_id(
+            &mut tx, target_id,
+        )
+        .await?
+        .filter(|target| target.operation_id == operation_id);
         tx.commit().await?;
         Ok(Ok(value))
     }
@@ -273,7 +287,7 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
         let (users, archived, offline) = db::counts_in_tx(&mut tx).await?;
         let (rooms, uploads, push_subscriptions) = db::operational_counts_in_tx(&mut tx).await?;
         let (pending_reports, pending_appeals, active_invitations) =
-            db::moderation_counts_in_tx(&mut tx).await?;
+            northstar_operations_postgres::reports::moderation_counts_in_tx(&mut tx).await?;
         let value = AdminStatistics {
             users,
             archived,

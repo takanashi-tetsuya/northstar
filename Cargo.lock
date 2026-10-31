@@ -2142,6 +2142,7 @@ name = "northstar-roster-xmpp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "northstar-presence-core",
  "northstar-roster-application",
  "northstar-roster-core",
  "northstar-xep-0016",

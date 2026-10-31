@@ -1,12 +1,11 @@
 //! Server-authoritative XEP-0153 avatar hash in presence updates.
 
-use super::*;
+use northstar_xml_builder::rewrite::append_root_element;
+use northstar_xml_builder::{ValidatedXmlFragment, XmlElement};
+use roxmltree::{Document, Node};
 
-pub(crate) fn inject_vcard_avatar_hash(
-    raw: &str,
-    _node: Node<'_, '_>,
-    hash: Option<&str>,
-) -> String {
+/// `raw` with its XEP-0153 update replaced by the avatar `hash` the server stored.
+pub fn inject_vcard_avatar_hash(raw: &str, _node: Node<'_, '_>, hash: Option<&str>) -> String {
     let Ok(document) = Document::parse(raw) else {
         return raw.to_owned();
     };

@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod blocking;
+pub mod presence;
 pub mod privacy;
 pub mod roster;
 

@@ -2981,6 +2981,10 @@
     ],
     [
       "northstar-roster-xmpp",
+      "northstar-presence-core"
+    ],
+    [
+      "northstar-roster-xmpp",
       "northstar-roster-application"
     ],
     [

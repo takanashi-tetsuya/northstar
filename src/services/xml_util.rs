@@ -3,21 +3,19 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use hmac::{Hmac, Mac};
 use northstar_xml_builder::stanza::stanza_condition_element;
 pub(crate) use northstar_xml_builder::stanza::{
-    iq_error, iq_error_from, iq_error_to, iq_result, iq_result_from, iq_result_to,
-    stanza_error_type,
+    blocked_stanza_error, child_text, iq_error, iq_error_from, iq_error_to, iq_result,
+    iq_result_from, iq_result_to, reflected_stanza_error, stanza_error, stanza_error_type,
 };
-use northstar_xml_builder::{ValidatedXmlFragment, XmlElement};
+use northstar_xml_builder::XmlElement;
 use northstar_xmpp_types::jid_text::bare_jid;
 pub(crate) use northstar_xmpp_types::text::valid_language_tag;
 use roxmltree::{Document, Node};
 use sha2::Sha256;
 use std::collections::{HashMap, HashSet};
 
-mod avatar_update;
 mod message_validation;
 mod muc;
 
-pub(crate) use self::avatar_update::inject_vcard_avatar_hash;
 use self::message_validation::{
     validate_chat_states, validate_correction, validate_displayed_marker,
     validate_explicit_encryption, validate_fallbacks, validate_file_sharing,
@@ -31,6 +29,7 @@ pub(crate) use self::muc::{
     muc_presence_stanza_with_status, muc_stanza_error, prepare_muc_nick, set_muc_occupant_id,
     valid_muc_nick, valid_muc_room,
 };
+pub(crate) use northstar_roster_xmpp::presence::inject_vcard_avatar_hash;
 pub(crate) use northstar_xep_0313::build_extended_form as mam_extended_form;
 pub(crate) use northstar_xep_0359::{add_stanza_id, strip_stanza_ids_by_domain};
 use northstar_xml_builder::rewrite::{
@@ -40,23 +39,6 @@ use northstar_xml_builder::rewrite::{
 pub(crate) use northstar_xml_builder::rewrite::{
     root_resets_default_namespace, set_client_namespace, set_from, set_root_attribute, set_to,
 };
-
-pub(crate) fn child_text<'a, 'input>(node: Node<'a, 'input>, name: &str) -> Option<&'a str> {
-    let parent_namespace = node.tag_name().namespace();
-    node.children()
-        .find(|n| {
-            n.is_element()
-                && n.tag_name().name() == name
-                && (n.tag_name().namespace() == parent_namespace
-                    // TCP stanzas are parsed without their surrounding
-                    // `jabber:client` stream declaration. Treat a redundant
-                    // explicit declaration as the inherited core namespace,
-                    // while never confusing an extension with a core field.
-                    || (parent_namespace.is_none()
-                        && n.tag_name().namespace() == Some("jabber:client")))
-        })
-        .and_then(|n| n.text())
-}
 
 pub(crate) fn xdata_field<'a, 'input>(form: Node<'a, 'input>, name: &str) -> Option<&'a str> {
     form.children()
@@ -399,14 +381,6 @@ pub(crate) fn stream_error(condition: &str) -> String {
         .finish()
 }
 
-pub(crate) fn stanza_error(root: Node<'_, '_>, error_type: &str, condition: &str) -> String {
-    let error = XmlElement::namespaced("error", "jabber:client")
-        .attr("type", error_type)
-        .child(stanza_condition_element(condition))
-        .finish();
-    reflected_stanza_error(root, &error)
-}
-
 fn sasl_failure_condition_name(condition: &str) -> &'static str {
     match condition {
         "aborted" => "aborted",
@@ -454,18 +428,6 @@ fn stream_error_condition_name(condition: &str) -> &'static str {
     }
 }
 
-pub(crate) fn blocked_stanza_error(root: Node<'_, '_>) -> String {
-    let error = XmlElement::namespaced("error", "jabber:client")
-        .attr("type", "cancel")
-        .child(stanza_condition_element("not-acceptable"))
-        .child(XmlElement::namespaced(
-            "blocked",
-            "urn:xmpp:blocking:errors",
-        ))
-        .finish();
-    reflected_stanza_error(root, &error)
-}
-
 pub(crate) fn abuse_stanza_error(root: Node<'_, '_>, requirement: &WorkRequirement) -> String {
     let error = XmlElement::namespaced("error", "jabber:client")
         .attr("type", "wait")
@@ -489,90 +451,6 @@ pub(crate) fn abuse_stanza_error(root: Node<'_, '_>, requirement: &WorkRequireme
         )
         .finish();
     reflected_stanza_error(root, &error)
-}
-
-pub(crate) fn reflected_stanza_error(root: Node<'_, '_>, error: &str) -> String {
-    let document = root.document();
-    let input = document.input_text();
-    let range = root.range();
-    let Some(raw) = input.get(range.clone()) else {
-        return String::new();
-    };
-    let original_from = root.attribute("from").map(str::to_owned);
-    let original_to = root.attribute("to").map(str::to_owned);
-    let mut reflected = raw.to_owned();
-    let mut old_errors = root
-        .children()
-        .filter(|child| {
-            child.is_element()
-                && child.tag_name().name() == "error"
-                && child.tag_name().namespace() == root.tag_name().namespace()
-        })
-        .map(|child| {
-            let child = child.range();
-            child.start - range.start..child.end - range.start
-        })
-        .collect::<Vec<_>>();
-    old_errors.sort_by_key(|child| std::cmp::Reverse(child.start));
-    for old_error in old_errors {
-        reflected.replace_range(old_error, "");
-    }
-    // XEP-0077 explicitly discourages reflecting password-change payloads in
-    // errors. Apply the same defensive rule to data-form secrets (including
-    // invitation tokens and administrator password forms) so the generic RFC
-    // error reflector cannot echo credentials into client/UI diagnostic logs.
-    let mut sensitive = root
-        .descendants()
-        .filter_map(|node| {
-            if !node.is_element() {
-                return None;
-            }
-            let replacement = if node.tag_name().name() == "password"
-                && node.tag_name().namespace() == Some("jabber:iq:register")
-            {
-                Some(XmlElement::namespaced("password", "jabber:iq:register").finish())
-            } else if node.tag_name().name() == "field"
-                && node.tag_name().namespace() == Some("jabber:x:data")
-                && node.attribute("var").is_some_and(|variable| {
-                    matches!(
-                        variable,
-                        "password"
-                            | "password-verify"
-                            | "old_password"
-                            | "urn:northstar:invite:token"
-                    )
-                })
-            {
-                Some(
-                    XmlElement::namespaced("field", "jabber:x:data")
-                        .attr("var", node.attribute("var").unwrap_or_default())
-                        .finish(),
-                )
-            } else {
-                None
-            }?;
-            let child = node.range();
-            Some((
-                child.start - range.start..child.end - range.start,
-                replacement,
-            ))
-        })
-        .collect::<Vec<_>>();
-    sensitive.sort_by_key(|(child, _)| std::cmp::Reverse(child.start));
-    for (child, replacement) in sensitive {
-        reflected.replace_range(child, &replacement);
-    }
-    reflected = remove_root_attribute(&reflected, "type");
-    reflected = remove_root_attribute(&reflected, "from");
-    reflected = remove_root_attribute(&reflected, "to");
-    reflected = set_root_attribute(&reflected, "type", "error");
-    if let Some(from) = original_to {
-        reflected = set_root_attribute(&reflected, "from", &from);
-    }
-    if let Some(to) = original_from {
-        reflected = set_root_attribute(&reflected, "to", &to);
-    }
-    append_root_validated_fragment(&reflected, error).unwrap_or(reflected)
 }
 
 /// Turn a handler-generated IQ error into the RFC 6120 reflected form. This

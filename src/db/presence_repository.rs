@@ -175,8 +175,8 @@ impl PresenceRepository for PostgresPresenceRepository {
                     transition,
                 } = *authorized;
                 PresenceMutation::Transition(LocalSubscriptionTransition {
-                    actor: map_account(actor),
-                    target: map_account(target),
+                    actor,
+                    target,
                     effect: transition.effect,
                     actor_subscription: transition.actor_subscription,
                     actor_change: transition.actor_change,
@@ -215,7 +215,7 @@ impl PresenceRepository for PostgresPresenceRepository {
                         transition,
                     } = *authorized;
                     PresenceMutation::Transition(InboundSubscriptionTransition {
-                        recipient: map_account(recipient),
+                        recipient,
                         effect: transition.effect,
                         subscription: transition.subscription,
                         change: transition.change,
@@ -271,14 +271,6 @@ impl PresenceRepository for PostgresPresenceRepository {
     }
 }
 
-fn map_account(account: db::PresenceAccount) -> PresenceAccount {
-    PresenceAccount {
-        id: account.id,
-        username: account.username,
-        auth_generation: account.auth_generation,
-    }
-}
-
 fn map_remote_transition(
     outcome: db::AuthorizedRemotePresenceTransition,
 ) -> PresenceMutation<RemoteSubscriptionTransition> {
@@ -290,7 +282,7 @@ fn map_remote_transition(
         db::AuthorizedRemotePresenceTransition::Transition(authorized) => {
             let db::AuthorizedRemotePresence { actor, transition } = *authorized;
             PresenceMutation::Transition(RemoteSubscriptionTransition {
-                actor: map_account(actor),
+                actor,
                 subscription: transition.subscription,
                 change: transition.change,
                 routed: transition.routed,

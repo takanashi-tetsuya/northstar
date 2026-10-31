@@ -1079,6 +1079,7 @@ digraph compile_time {
   "northstar-roster-postgres" -> "sqlx";
   "northstar-roster-postgres" -> "uuid";
   "northstar-roster-xmpp" -> "anyhow";
+  "northstar-roster-xmpp" -> "northstar-presence-core";
   "northstar-roster-xmpp" -> "northstar-roster-application";
   "northstar-roster-xmpp" -> "northstar-roster-core";
   "northstar-roster-xmpp" -> "northstar-xep-0016";

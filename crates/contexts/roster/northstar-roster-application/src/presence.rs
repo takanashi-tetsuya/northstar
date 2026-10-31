@@ -10,15 +10,9 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 pub use northstar_roster_core::{
-    InboundRemotePresenceEffect, LocalPresenceEffect, PresencePolicyDenial, RosterChange,
+    InboundRemotePresenceEffect, LocalPresenceEffect, PresenceAccount, PresencePolicyDenial,
+    RosterChange,
 };
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PresenceAccount {
-    pub id: Uuid,
-    pub username: String,
-    pub auth_generation: i64,
-}
 
 /// An administrative notice with the revision, date and token needed to
 /// acknowledge its exact delivery claim.

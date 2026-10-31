@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
+northstar-presence-core = { path = "../northstar-presence-core" }
 northstar-roster-application = { path = "../northstar-roster-application" }
 northstar-roster-core = { path = "../northstar-roster-core" }
 northstar-xep-0016 = { path = "../../../kernel/northstar-xep-0016" }

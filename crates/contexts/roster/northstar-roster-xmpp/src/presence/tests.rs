@@ -1,9 +1,10 @@
 use super::{
     directed_presence_capacity_reached, directed_presence_target_is_outside_bare_scope,
-    directed_recipient_matches, full_jid_probe_available_response, offline_replay_became_eligible,
-    should_probe_contact_on_presence, should_resend_pending_outbound_subscription,
-    stamped_subscription_presence, unsubscribed_probe_response,
+    full_jid_probe_available_response, should_probe_contact_on_presence,
+    should_resend_pending_outbound_subscription, stamped_subscription_presence,
+    unsubscribed_probe_response,
 };
+use northstar_presence_core::{directed_recipient_matches, offline_replay_became_eligible};
 
 #[test]
 fn offline_replay_starts_on_first_nonnegative_available_priority() {

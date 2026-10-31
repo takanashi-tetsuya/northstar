@@ -23,7 +23,9 @@ use northstar_pubsub_core::{
     PubSubOutboxInsert,
 };
 use northstar_xml_builder::rewrite::set_root_attribute;
-use northstar_xml_builder::stanza::{iq_error, iq_error_from, iq_result, iq_result_from};
+use northstar_xml_builder::stanza::{
+    child_text, iq_error, iq_error_from, iq_result, iq_result_from,
+};
 use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
 #[cfg(test)]
@@ -550,23 +552,6 @@ fn access_error_for_model(access_model: &str) -> &'static str {
         "roster" => "not-in-roster-group",
         _ => "closed-node",
     }
-}
-
-fn child_text<'a, 'input>(node: Node<'a, 'input>, name: &str) -> Option<&'a str> {
-    let parent_namespace = node.tag_name().namespace();
-    node.children()
-        .find(|n| {
-            n.is_element()
-                && n.tag_name().name() == name
-                && (n.tag_name().namespace() == parent_namespace
-                    // TCP stanzas are parsed without their surrounding
-                    // `jabber:client` stream declaration. Treat a redundant
-                    // explicit declaration as the inherited core namespace,
-                    // while never confusing an extension with a core field.
-                    || (parent_namespace.is_none()
-                        && n.tag_name().namespace() == Some("jabber:client")))
-        })
-        .and_then(|n| n.text())
 }
 
 fn xdata_field<'a, 'input>(form: Node<'a, 'input>, name: &str) -> Option<&'a str> {

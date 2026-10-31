@@ -656,14 +656,14 @@ impl AppState {
             config.trusted_proxy_ips.clone(),
             omemo_poll::OmemoRecoveryPollCounters::from_metrics(&metrics),
         );
-        let admin_mutations = db::admin_mutations::AdminMutationStore::new(
+        let admin_mutations = northstar_workflows::admin_mutations::AdminMutationStore::new(
             pool.clone(),
             Arc::clone(&api_control),
             cluster.admission(),
         );
         let operation_admin_service =
             northstar_operations_application::operations::OperationAdminService::new(
-                db::operation_admin_repository::PostgresOperationAdminRepository::new(
+                northstar_workflows::operation_admin_repository::PostgresOperationAdminRepository::new(
                     admin_mutations.clone(),
                 ),
             );
@@ -712,7 +712,7 @@ impl AppState {
             );
         let admin_dispatch_service =
             northstar_operations_application::admin_dispatch::AdminDispatchService::new(
-                db::admin_dispatch_repository::PostgresAdminDispatchRepository::new(
+                northstar_workflows::admin_dispatch_repository::PostgresAdminDispatchRepository::new(
                     admin_mutations.clone(),
                     command_pool.clone(),
                     Arc::clone(&api_control),
@@ -722,13 +722,13 @@ impl AppState {
             );
         let upload_admin_service =
             northstar_operations_application::upload_admin::UploadAdminService::new(
-                db::upload_admin_repository::PostgresUploadAdminRepository::new(
+                northstar_workflows::upload_admin_repository::PostgresUploadAdminRepository::new(
                     admin_mutations.clone(),
                 ),
             );
         let report_moderation_service =
             northstar_operations_application::report_moderation::ReportModerationService::new(
-                db::report_moderation_repository::PostgresReportModerationRepository::new(
+                northstar_workflows::report_moderation_repository::PostgresReportModerationRepository::new(
                     admin_mutations.clone(),
                 ),
             );
@@ -749,7 +749,7 @@ impl AppState {
         );
         let governance_context = governance::GovernanceContext::new(
             northstar_operations_application::governance::GovernanceService::new(
-                db::governance_repository::PostgresGovernanceRepository::new(
+                northstar_workflows::governance_repository::PostgresGovernanceRepository::new(
                     pool.clone(),
                     admin_mutations.clone(),
                     Arc::clone(&api_control),
@@ -776,7 +776,7 @@ impl AppState {
             dummy_scram_iteration_profiles,
         });
         let report_service = northstar_operations_application::reports::ReportService::new(
-            db::report_repository::PostgresReportRepository::new(
+            northstar_workflows::report_repository::PostgresReportRepository::new(
                 pool.clone(),
                 Arc::clone(&api_control),
                 Arc::clone(&abuse),

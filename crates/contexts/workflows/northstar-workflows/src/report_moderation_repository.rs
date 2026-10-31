@@ -1,11 +1,11 @@
 //! Atomic moderation decisions, audit records and idempotent responses.
-use crate::db::admin_mutations::{AdminMutationStart, AdminMutationStore};
+use crate::admin_mutations::{AdminMutationStart, AdminMutationStore};
 use anyhow::Result;
 use northstar_operations_application::report_moderation::*;
 use northstar_operations_core::api_mutations::*;
 
 #[derive(Clone)]
-pub(crate) struct PostgresReportModerationRepository {
+pub struct PostgresReportModerationRepository {
     mutations: AdminMutationStore,
 }
 
@@ -15,7 +15,7 @@ enum RecordKind {
 }
 
 impl PostgresReportModerationRepository {
-    pub(crate) fn new(mutations: AdminMutationStore) -> Self {
+    pub fn new(mutations: AdminMutationStore) -> Self {
         Self { mutations }
     }
 
@@ -90,7 +90,3 @@ impl ReportModerationRepository for PostgresReportModerationRepository {
         self.update(RecordKind::Appeal, command).await
     }
 }
-
-#[cfg(test)]
-#[path = "report_moderation_repository_tests.rs"]
-mod tests;

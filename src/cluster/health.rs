@@ -738,3 +738,9 @@ impl ClusterManager {
         require_cluster_shutdown(&self.health, self.is_enabled());
     }
 }
+
+impl northstar_operations_application::operations::AdminMutationGate for ClusterAdmission {
+    fn admit_admin_mutation(&self) -> Result<()> {
+        self.admit(ClusterOperation::AdminMutation)
+    }
+}

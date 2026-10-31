@@ -1,7 +1,7 @@
-use crate::db::governance_repository::list_legal_holds_audited;
 use chrono::Duration;
 use chrono::Utc;
 use northstar_operations_postgres::data_lifecycle::*;
+use northstar_workflows::governance_repository::list_legal_holds_audited;
 use uuid::Uuid;
 
 #[tokio::test]

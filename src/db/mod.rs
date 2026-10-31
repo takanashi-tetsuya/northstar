@@ -1,20 +1,13 @@
 pub(crate) mod account_admin_repository;
-pub(crate) mod admin_dispatch_repository;
-pub(crate) mod admin_mutations;
-pub(crate) mod governance_repository;
 pub(crate) mod http_login_repository;
-pub(crate) mod invitation_admin_repository;
-pub(crate) mod operation_admin_repository;
 pub(crate) mod operation_effect_fence_repository;
 pub(crate) mod operation_journal_worker_repository;
 pub(crate) mod operation_muc_destroy_repository;
 pub(crate) mod operation_muc_wake_repository;
 pub(crate) mod password_change_repository;
-pub(crate) mod report_moderation_repository;
 pub(crate) mod retention_policy_repository;
 #[cfg(test)]
 pub(crate) mod test_support;
-pub(crate) mod upload_admin_repository;
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 
@@ -236,13 +229,19 @@ pub(crate) mod api_queries;
 
 pub(crate) mod omemo_recovery_repository;
 
-pub(crate) mod report_repository;
-
+#[cfg(test)]
+mod admin_dispatch_repository_tests;
 #[cfg(test)]
 mod api_control_tests;
 #[cfg(test)]
 mod api_operations_tests;
 #[cfg(test)]
 mod data_lifecycle_tests;
+#[cfg(test)]
+mod governance_repository_tests;
+#[cfg(test)]
+mod invitation_admin_repository_tests;
+#[cfg(test)]
+mod report_moderation_repository_tests;
 #[cfg(test)]
 mod reports_tests;

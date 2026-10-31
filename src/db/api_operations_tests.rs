@@ -185,8 +185,8 @@ async fn command_port_rolls_back_without_response_and_reauthorizes_replays() {
             .unwrap();
     let key_material = Uuid::new_v4().simple().to_string();
     let service = OperationAdminService::new(
-        crate::db::operation_admin_repository::PostgresOperationAdminRepository::new(
-            crate::db::admin_mutations::AdminMutationStore::new(
+        northstar_workflows::operation_admin_repository::PostgresOperationAdminRepository::new(
+            northstar_workflows::admin_mutations::AdminMutationStore::new(
                 pool.clone(),
                 Arc::new(
                     northstar_operations_postgres::api_control::ApiControlKeyring::new(

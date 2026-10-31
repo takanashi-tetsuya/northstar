@@ -15,6 +15,7 @@ members = [
     "crates/contexts/operations/northstar-operations-application",
     "crates/contexts/operations/northstar-operations-core",
     "crates/contexts/operations/northstar-operations-postgres",
+    "crates/contexts/workflows/northstar-workflows",
     "crates/kernel/northstar-xmpp-types",
     "crates/kernel/northstar-xml-framing",
     "crates/kernel/northstar-xml-builder",
@@ -167,6 +168,7 @@ northstar-auth-xmpp = { path = "crates/contexts/auth/northstar-auth-xmpp" }
 northstar-operations-application = { path = "crates/contexts/operations/northstar-operations-application" }
 northstar-operations-core = { path = "crates/contexts/operations/northstar-operations-core" }
 northstar-operations-postgres = { path = "crates/contexts/operations/northstar-operations-postgres" }
+northstar-workflows = { path = "crates/contexts/workflows/northstar-workflows" }
 northstar-xmpp-types = { path = "crates/kernel/northstar-xmpp-types" }
 northstar-xml-framing = { path = "crates/kernel/northstar-xml-framing" }
 northstar-xml-builder = { path = "crates/kernel/northstar-xml-builder" }
@@ -223,6 +225,7 @@ webauthn-rs = { version = "0.5.5", default-features = false, features = ["danger
 openssl = { version = "0.10.81", features = ["vendored"] }
 
 [dev-dependencies]
+northstar-workflows = { path = "crates/contexts/workflows/northstar-workflows", features = ["test-support"] }
 northstar-operations-postgres = { path = "crates/contexts/operations/northstar-operations-postgres", features = ["test-support"] }
 northstar-auth-postgres = { path = "crates/contexts/auth/northstar-auth-postgres", features = ["test-support"] }
 northstar-auth-xmpp = { path = "crates/contexts/auth/northstar-auth-xmpp", features = ["test-support"] }

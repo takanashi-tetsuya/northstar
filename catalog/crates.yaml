@@ -510,6 +510,16 @@ crates:
     api_stability: internal
     publish_policy: never
 
+  - crate_id: northstar-workflows
+    package: northstar-workflows
+    path: crates/contexts/workflows/northstar-workflows
+    tier: context
+    context: workflows
+    role: workflows
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-xep-0016
     package: northstar-xep-0016
     path: crates/kernel/northstar-xep-0016

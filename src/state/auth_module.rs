@@ -37,7 +37,7 @@ pub(super) struct AuthModuleParts<'a> {
     pub(super) command_pool: &'a PgPool,
     pub(super) abuse: &'a Arc<AbuseGuard>,
     pub(super) api_control: &'a Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
-    pub(super) admin_mutations: &'a db::admin_mutations::AdminMutationStore,
+    pub(super) admin_mutations: &'a northstar_workflows::admin_mutations::AdminMutationStore,
     pub(super) cluster: &'a crate::cluster::ClusterManager,
     pub(super) metrics: &'a Arc<Metrics>,
     pub(super) registration_closed: &'a Arc<AtomicBool>,
@@ -139,7 +139,7 @@ impl AuthModule {
         let registration_admin_service =
             northstar_auth_application::account_admin::RegistrationAdminService::new(
                 db::account_admin_repository::PostgresRegistrationAdminRepository::new(
-                    db::admin_dispatch_repository::AdminCommandStore::new(
+                    northstar_workflows::admin_dispatch_repository::AdminCommandStore::new(
                         command_pool.clone(),
                         Arc::clone(api_control),
                         cluster.admission(),
@@ -162,7 +162,7 @@ impl AuthModule {
             );
         let invitation_admin_service =
             northstar_auth_application::invitation_admin::InvitationAdminService::new(
-                db::invitation_admin_repository::PostgresInvitationAdminRepository::new(
+                northstar_workflows::invitation_admin_repository::PostgresInvitationAdminRepository::new(
                     admin_mutations.clone(),
                 ),
             );

@@ -57,18 +57,18 @@ pub(crate) type AccountAdminContext = ServiceContext<
 
 pub(crate) type AdminDispatchContext = ServiceContext<
     northstar_operations_application::admin_dispatch::AdminDispatchService<
-        crate::db::admin_dispatch_repository::PostgresAdminDispatchRepository,
+        northstar_workflows::admin_dispatch_repository::PostgresAdminDispatchRepository,
     >,
 >;
 
 pub(crate) type InvitationAdminContext = ServiceContext<
     northstar_auth_application::invitation_admin::InvitationAdminService<
-        crate::db::invitation_admin_repository::PostgresInvitationAdminRepository,
+        northstar_workflows::invitation_admin_repository::PostgresInvitationAdminRepository,
     >,
 >;
 
 pub(crate) type GovernanceContext = governance::GovernanceContext<
-    crate::db::governance_repository::PostgresGovernanceRepository<
+    northstar_workflows::governance_repository::PostgresGovernanceRepository<
         crate::api::governance_cursor::SignedGovernanceCursors,
     >,
 >;
@@ -79,24 +79,24 @@ pub(crate) type RetentionPolicyContext = retention_policy::RetentionPolicyContex
 
 pub(crate) type ReportModerationContext = ServiceContext<
     northstar_operations_application::report_moderation::ReportModerationService<
-        crate::db::report_moderation_repository::PostgresReportModerationRepository,
+        northstar_workflows::report_moderation_repository::PostgresReportModerationRepository,
     >,
 >;
 
 pub(crate) type UploadAdminContext = ServiceContext<
     northstar_operations_application::upload_admin::UploadAdminService<
-        crate::db::upload_admin_repository::PostgresUploadAdminRepository,
+        northstar_workflows::upload_admin_repository::PostgresUploadAdminRepository,
     >,
 >;
 
 pub(crate) type OperationAdminContext = ServiceContext<
     northstar_operations_application::operations::OperationAdminService<
-        crate::db::operation_admin_repository::PostgresOperationAdminRepository,
+        northstar_workflows::operation_admin_repository::PostgresOperationAdminRepository,
     >,
 >;
 
 pub(crate) type ReportContext = reports::ReportContext<
-    crate::db::report_repository::PostgresReportRepository,
+    northstar_workflows::report_repository::PostgresReportRepository,
     crate::db::api_queries::PostgresApiQueryRepository,
 >;
 

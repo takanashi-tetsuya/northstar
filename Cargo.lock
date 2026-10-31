@@ -2509,6 +2509,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-workflows"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "northstar-abuse-application",
+ "northstar-abuse-policy",
+ "northstar-abuse-postgres",
+ "northstar-auth-application",
+ "northstar-auth-core",
+ "northstar-auth-postgres",
+ "northstar-operations-application",
+ "northstar-operations-core",
+ "northstar-operations-postgres",
+ "northstar-postgres",
+ "northstar-upload-postgres",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "uuid",
+]
+
+[[package]]
 name = "northstar-xep-0016"
 version = "0.1.0"
 dependencies = [
@@ -3618,6 +3641,7 @@ dependencies = [
  "northstar-upload-storage",
  "northstar-upload-xmpp",
  "northstar-web-surface",
+ "northstar-workflows",
  "northstar-xep-0016",
  "northstar-xep-0045",
  "northstar-xep-0059",

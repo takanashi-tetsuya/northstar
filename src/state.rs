@@ -409,7 +409,7 @@ pub struct AppState {
     retention_policy_context: RetentionPolicyContext,
     governance_context: GovernanceContext,
     report_service:
-        northstar_operations_application::reports::ReportService<db::report_repository::PostgresReportRepository>,
+        northstar_operations_application::reports::ReportService<northstar_workflows::report_repository::PostgresReportRepository>,
     federation_outbox: FederationRouter,
     /// Full XEP-0114/XEP-0225 authentication records. `config.components`
     /// retains only redacted routing/discovery metadata after construction.

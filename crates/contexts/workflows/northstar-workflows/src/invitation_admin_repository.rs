@@ -1,16 +1,16 @@
 //! Invitation resources, audit and encrypted replay commit in one transaction.
-use crate::db::admin_mutations::{AdminMutationStart, AdminMutationStore};
+use crate::admin_mutations::{AdminMutationStart, AdminMutationStore};
 use anyhow::Result;
 use northstar_auth_application::invitation_admin::*;
 use northstar_operations_core::api_mutations::*;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresInvitationAdminRepository {
+pub struct PostgresInvitationAdminRepository {
     mutations: AdminMutationStore,
 }
 impl PostgresInvitationAdminRepository {
-    pub(crate) fn new(mutations: AdminMutationStore) -> Self {
+    pub fn new(mutations: AdminMutationStore) -> Self {
         Self { mutations }
     }
 }
@@ -75,7 +75,3 @@ impl InvitationAdminRepository for PostgresInvitationAdminRepository {
         self.mutations.finish(tx, &lease, response).await
     }
 }
-
-#[cfg(test)]
-#[path = "invitation_admin_repository_tests.rs"]
-mod tests;

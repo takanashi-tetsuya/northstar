@@ -1,5 +1,5 @@
 //! Durable administrative dispatch, side records and replay share a transaction.
-use crate::db::admin_mutations::{
+use crate::admin_mutations::{
     enqueue_operation_response_in_tx, AdminMutationStart, AdminMutationStore, AdminOperationIntent,
 };
 use anyhow::Result;
@@ -12,31 +12,31 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresAdminDispatchRepository {
+pub struct PostgresAdminDispatchRepository {
     mutations: AdminMutationStore,
     command: AdminCommandStore,
 }
 
 #[derive(Clone)]
-pub(crate) struct AdminCommandStore {
+pub struct AdminCommandStore {
     command_pool: PgPool,
     keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
-    cluster: crate::cluster::ClusterAdmission,
+    gate: Arc<dyn northstar_operations_application::operations::AdminMutationGate>,
 }
 
 impl PostgresAdminDispatchRepository {
-    pub(crate) fn new(
+    pub fn new(
         mutations: AdminMutationStore,
         command_pool: PgPool,
         keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
-        cluster: crate::cluster::ClusterAdmission,
+        gate: impl northstar_operations_application::operations::AdminMutationGate + 'static,
     ) -> Self {
         Self {
             mutations,
             command: AdminCommandStore {
                 command_pool,
                 keyring,
-                cluster,
+                gate: Arc::new(gate),
             },
         }
     }
@@ -57,19 +57,19 @@ impl PostgresAdminDispatchRepository {
 }
 
 impl AdminCommandStore {
-    pub(crate) fn new(
+    pub fn new(
         command_pool: PgPool,
         keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
-        cluster: crate::cluster::ClusterAdmission,
+        gate: impl northstar_operations_application::operations::AdminMutationGate + 'static,
     ) -> Self {
         Self {
             command_pool,
             keyring,
-            cluster,
+            gate: Arc::new(gate),
         }
     }
 
-    pub(crate) async fn dispatch(
+    pub async fn dispatch(
         &self,
         admission: AdminMutationAdmission<'_>,
         route: northstar_operations_postgres::api_control::AdminCommandRoute,
@@ -90,10 +90,7 @@ impl AdminCommandStore {
             "administrator command actor and idempotency identity differ"
         );
         let mut tx = self.command_pool.begin().await?;
-        if let Err(error) = self
-            .cluster
-            .admit(crate::cluster::ClusterOperation::AdminMutation)
-        {
+        if let Err(error) = self.gate.admit_admin_mutation() {
             tx.rollback().await?;
             return Ok(ApiMutationOutcome::Rejected(
                 ApiMutationRejection::Unavailable(error.to_string()),
@@ -406,7 +403,3 @@ impl AdminDispatchRepository for PostgresAdminDispatchRepository {
         .await
     }
 }
-
-#[cfg(test)]
-#[path = "admin_dispatch_repository_tests.rs"]
-mod tests;

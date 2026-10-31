@@ -1,5 +1,5 @@
 //! Governance resources, immutable export pages and encrypted response replay.
-use crate::db::admin_mutations::{AdminMutationStart, AdminMutationStore};
+use crate::admin_mutations::{AdminMutationStart, AdminMutationStore};
 use northstar_auth_core::api_session::ApiReadAuthority;
 use northstar_operations_application::governance::*;
 use northstar_operations_core::api_mutations::*;
@@ -12,14 +12,14 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresGovernanceRepository<C> {
+pub struct PostgresGovernanceRepository<C> {
     pool: PgPool,
     mutations: AdminMutationStore,
     keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
     cursors: C,
 }
 impl<C: GovernanceCursorCodec> PostgresGovernanceRepository<C> {
-    pub(crate) fn new(
+    pub fn new(
         pool: PgPool,
         mutations: AdminMutationStore,
         keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
@@ -257,7 +257,7 @@ impl<C: GovernanceCursorCodec> GovernanceRepository for PostgresGovernanceReposi
 /// Reading governance data is itself audited. The read and access event use
 /// one repeatable-read transaction, so the returned snapshot has an exact
 /// audit boundary.
-pub(crate) async fn list_legal_holds_audited(
+pub async fn list_legal_holds_audited(
     pool: &sqlx::PgPool,
     actor_id: Uuid,
     expected_auth_generation: i64,
@@ -297,7 +297,3 @@ pub(crate) async fn list_legal_holds_audited(
         .map_err(|error| LegalHoldError::Internal(error.into()))?;
     Ok(output)
 }
-
-#[cfg(test)]
-#[path = "governance_repository_tests.rs"]
-mod tests;

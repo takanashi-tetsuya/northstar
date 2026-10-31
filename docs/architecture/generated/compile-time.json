@@ -215,6 +215,7 @@
     "northstar-upload-storage",
     "northstar-upload-xmpp",
     "northstar-web-surface",
+    "northstar-workflows",
     "northstar-xep-0016",
     "northstar-xep-0045",
     "northstar-xep-0059",
@@ -3940,6 +3941,74 @@
       "serde"
     ],
     [
+      "northstar-workflows",
+      "anyhow"
+    ],
+    [
+      "northstar-workflows",
+      "chrono"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-abuse-application"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-abuse-policy"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-abuse-postgres"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-auth-application"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-auth-core"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-auth-postgres"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-operations-application"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-operations-core"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-operations-postgres"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-postgres"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-upload-postgres"
+    ],
+    [
+      "northstar-workflows",
+      "serde"
+    ],
+    [
+      "northstar-workflows",
+      "serde_json"
+    ],
+    [
+      "northstar-workflows",
+      "sqlx"
+    ],
+    [
+      "northstar-workflows",
+      "uuid"
+    ],
+    [
       "northstar-xep-0016",
       "northstar-xep-core"
     ],
@@ -5570,6 +5639,10 @@
     [
       "rust-xmpp-server",
       "northstar-web-surface"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-workflows"
     ],
     [
       "rust-xmpp-server",

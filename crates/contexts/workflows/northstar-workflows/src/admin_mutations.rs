@@ -1,7 +1,6 @@
 //! Shared transaction admission for administrative repository commands.
-use crate::cluster::{ClusterAdmission, ClusterOperation};
 use anyhow::Result;
-use northstar_operations_application::operations::AuthorizationPolicy;
+use northstar_operations_application::operations::{AdminMutationGate, AuthorizationPolicy};
 use northstar_operations_core::api_mutations::*;
 use serde_json::{json, Value};
 use sqlx::{PgPool, Postgres, Transaction};
@@ -9,13 +8,13 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct AdminMutationStore {
+pub struct AdminMutationStore {
     pool: PgPool,
     keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
-    cluster: ClusterAdmission,
+    gate: Arc<dyn AdminMutationGate>,
 }
 
-pub(crate) enum AdminMutationStart<'a> {
+pub enum AdminMutationStart<'a> {
     Ready(
         Transaction<'a, Postgres>,
         northstar_operations_postgres::api_control::IdempotencyLease,
@@ -23,24 +22,24 @@ pub(crate) enum AdminMutationStart<'a> {
     Finished(ApiMutationOutcome<StoredApiResponse>),
 }
 impl AdminMutationStore {
-    pub(crate) fn new(
+    pub fn new(
         pool: PgPool,
         keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
-        cluster: ClusterAdmission,
+        gate: impl AdminMutationGate + 'static,
     ) -> Self {
         Self {
             pool,
             keyring,
-            cluster,
+            gate: Arc::new(gate),
         }
     }
-    pub(crate) async fn start(
+    pub async fn start(
         &self,
         admission: &AdminMutationAdmission<'_>,
     ) -> Result<AdminMutationStart<'_>> {
         let mut tx = self.pool.begin().await?;
         // Recheck after pool admission: health can change while waiting for a connection.
-        if let Err(error) = self.cluster.admit(ClusterOperation::AdminMutation) {
+        if let Err(error) = self.gate.admit_admin_mutation() {
             tx.rollback().await?;
             return Ok(AdminMutationStart::Finished(ApiMutationOutcome::Rejected(
                 ApiMutationRejection::Unavailable(error.to_string()),
@@ -104,7 +103,7 @@ impl AdminMutationStore {
             rejection,
         )))
     }
-    pub(crate) async fn finish(
+    pub async fn finish(
         &self,
         mut tx: Transaction<'_, Postgres>,
         lease: &northstar_operations_postgres::api_control::IdempotencyLease,
@@ -126,14 +125,14 @@ impl AdminMutationStore {
 }
 
 // The caller persists replay bytes and commits together with domain side records.
-pub(crate) struct AdminOperationIntent<'a> {
-    pub(crate) kind: &'a str,
-    pub(crate) target: Option<&'a str>,
-    pub(crate) policy: AuthorizationPolicy,
-    pub(crate) payload: &'a Value,
+pub struct AdminOperationIntent<'a> {
+    pub kind: &'a str,
+    pub target: Option<&'a str>,
+    pub policy: AuthorizationPolicy,
+    pub payload: &'a Value,
 }
 
-pub(crate) async fn enqueue_operation_response_in_tx(
+pub async fn enqueue_operation_response_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     admission: &AdminMutationAdmission<'_>,
     lease: &northstar_operations_postgres::api_control::IdempotencyLease,

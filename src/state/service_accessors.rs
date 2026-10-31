@@ -45,7 +45,7 @@ impl AppState {
     pub(crate) fn report_service(
         &self,
     ) -> &northstar_operations_application::reports::ReportService<
-        db::report_repository::PostgresReportRepository,
+        northstar_workflows::report_repository::PostgresReportRepository,
     > {
         &self.report_service
     }

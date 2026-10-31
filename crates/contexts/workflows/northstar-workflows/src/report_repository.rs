@@ -8,7 +8,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub(crate) struct PostgresReportRepository {
+pub struct PostgresReportRepository {
     pool: PgPool,
     keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
     abuse: Arc<AbuseGuard>,
@@ -21,7 +21,7 @@ enum MutationStart<'a> {
     Finished(ApiMutationOutcome<ReportCommit>),
 }
 impl PostgresReportRepository {
-    pub(crate) fn new(
+    pub fn new(
         pool: PgPool,
         keyring: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
         abuse: Arc<AbuseGuard>,

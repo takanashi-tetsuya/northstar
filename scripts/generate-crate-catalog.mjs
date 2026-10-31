@@ -26,7 +26,9 @@ function tierOf(relativePath) {
     const context = parts[2];
     const name = parts[3];
     let role = 'core';
-    if (name.endsWith('-application') || name === 'northstar-protocol-runtime') {
+    if (context === 'workflows') {
+      role = 'workflows';
+    } else if (name.endsWith('-application') || name === 'northstar-protocol-runtime') {
       role = 'application';
     } else if (['-postgres', '-xmpp', '-http', '-storage'].some((suffix) => name.endsWith(suffix))) {
       role = 'adapter';

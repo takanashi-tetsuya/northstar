@@ -454,7 +454,9 @@ fn expected_tier(path: &str, package: &str) -> Option<(String, Option<String>, O
         } else {
             parts[3]
         };
-        let role = if name.ends_with("-application") || name == "northstar-protocol-runtime" {
+        let role = if context == "workflows" {
+            "workflows"
+        } else if name.ends_with("-application") || name == "northstar-protocol-runtime" {
             "application"
         } else if name.ends_with("-postgres")
             || name.ends_with("-xmpp")
@@ -520,6 +522,15 @@ fn internal_allowed(from: &CrateRecord, to: &CrateRecord) -> bool {
                         && from.context == to.context)
                     || (to.tier == "edge" && to.package == "northstar-stream")
             }
+            Some("workflows") => {
+                to.tier == "kernel"
+                    || to.tier == "platform"
+                    || (to.tier == "context"
+                        && (to.role.as_deref() == Some("core")
+                            || to.role.as_deref() == Some("application")
+                            || (to.role.as_deref() == Some("adapter")
+                                && to.package.ends_with("-postgres"))))
+            }
             _ => false,
         },
         "edge" => {
@@ -549,7 +560,7 @@ fn external_allowed(from: &CrateRecord, to: &str) -> bool {
         "context" => match from.role.as_deref() {
             Some("core") => !in_async && !in_sql && !in_network,
             Some("application") => !in_sql && !in_network,
-            Some("adapter") => true,
+            Some("adapter") | Some("workflows") => true,
             _ => false,
         },
         "edge" => !in_sql,
@@ -954,6 +965,17 @@ mod tests {
                 "context".to_string(),
                 Some("upload".to_string()),
                 Some("adapter".to_string())
+            ))
+        );
+        assert_eq!(
+            expected_tier(
+                "crates/contexts/workflows/northstar-workflows",
+                "northstar-workflows"
+            ),
+            Some((
+                "context".to_string(),
+                Some("workflows".to_string()),
+                Some("workflows".to_string())
             ))
         );
         assert_eq!(

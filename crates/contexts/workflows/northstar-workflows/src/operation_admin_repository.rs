@@ -1,5 +1,5 @@
 //! Atomic operation cancellation and audited manual reconciliation.
-use crate::db::admin_mutations::{AdminMutationStart, AdminMutationStore};
+use crate::admin_mutations::{AdminMutationStart, AdminMutationStore};
 use anyhow::Result;
 use northstar_operations_application::operations::{OperationAdminRepository, ReconciliationInput};
 use northstar_operations_core::api_mutations::*;
@@ -7,11 +7,11 @@ use serde_json::json;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresOperationAdminRepository {
+pub struct PostgresOperationAdminRepository {
     mutations: AdminMutationStore,
 }
 impl PostgresOperationAdminRepository {
-    pub(crate) fn new(mutations: AdminMutationStore) -> Self {
+    pub fn new(mutations: AdminMutationStore) -> Self {
         Self { mutations }
     }
 }

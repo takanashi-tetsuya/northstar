@@ -452,3 +452,9 @@ mod tests {
         .is_err());
     }
 }
+
+/// Admission of an administrative mutation. It is rechecked once a transaction
+/// holds a connection, because health can change while waiting for the pool.
+pub trait AdminMutationGate: Send + Sync {
+    fn admit_admin_mutation(&self) -> anyhow::Result<()>;
+}

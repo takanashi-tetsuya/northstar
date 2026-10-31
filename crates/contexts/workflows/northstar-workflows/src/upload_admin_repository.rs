@@ -1,5 +1,5 @@
 //! Authorized, fenced upload retries with their audit and replay committed together.
-use crate::db::admin_mutations::{AdminMutationStart, AdminMutationStore};
+use crate::admin_mutations::{AdminMutationStart, AdminMutationStore};
 use anyhow::Result;
 use northstar_operations_application::api_queries::{UploadDeadLetterId, UploadDeadLetterKind};
 use northstar_operations_application::upload_admin::UploadAdminRepository;
@@ -10,12 +10,12 @@ use northstar_operations_core::api_mutations::{
 use serde_json::json;
 
 #[derive(Clone)]
-pub(crate) struct PostgresUploadAdminRepository {
+pub struct PostgresUploadAdminRepository {
     mutations: AdminMutationStore,
 }
 
 impl PostgresUploadAdminRepository {
-    pub(crate) fn new(mutations: AdminMutationStore) -> Self {
+    pub fn new(mutations: AdminMutationStore) -> Self {
         Self { mutations }
     }
 }

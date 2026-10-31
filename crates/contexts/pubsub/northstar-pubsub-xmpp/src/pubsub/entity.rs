@@ -2,8 +2,8 @@
 
 use super::*;
 
-pub(super) async fn handle_entity_get(
-    state: &AppState,
+pub(super) async fn handle_entity_get<H: PubSubHost>(
+    host: &H,
     requester: &str,
     operations: Vec<Node<'_, '_>>,
 ) -> Result<PubSubReply> {
@@ -34,9 +34,9 @@ pub(super) async fn handle_entity_get(
                     let Some(name) = valid_node_id(Some(name)) else {
                         return Ok(PubSubReply::Error("bad-request"));
                     };
-                    match state.pubsub_service().get_node(name).await? {
+                    match host.pubsub_application_service().get_node(name).await? {
                         Some(node) => Some(node),
-                        None => return missing_node_reply(state, name).await,
+                        None => return missing_node_reply(host, name).await,
                     }
                 }
                 None => None,
@@ -81,11 +81,15 @@ pub(super) async fn handle_entity_get(
             if normalized_bare(&requested_jid)? != requester {
                 return Ok(PubSubReply::Error("forbidden"));
             }
-            let Some(node) = state.pubsub_service().get_node(node_name).await? else {
-                return missing_node_reply(state, node_name).await;
+            let Some(node) = host
+                .pubsub_application_service()
+                .get_node(node_name)
+                .await?
+            else {
+                return missing_node_reply(host, node_name).await;
             };
-            let Some(subscription) = state
-                .pubsub_service()
+            let Some(subscription) = host
+                .pubsub_application_service()
                 .get_subscription(node.id, &requested_jid)
                 .await?
             else {
@@ -167,7 +171,7 @@ pub(super) async fn handle_entity_get(
                     }
                 }
                 let serverinfo = XmlElement::namespaced("serverinfo", "urn:xmpp:serverinfo:0")
-                    .child(XmlElement::new("domain").attr("name", state.local_domain()));
+                    .child(XmlElement::new("domain").attr("name", host.pubsub_local_domain()));
                 return Ok(PubSubReply::Result(
                     XmlElement::namespaced("pubsub", NS_PUBSUB)
                         .child(
@@ -180,15 +184,19 @@ pub(super) async fn handle_entity_get(
                         .finish(),
                 ));
             }
-            let Some(node) = state.pubsub_service().get_node(node_name).await? else {
-                return missing_node_reply(state, node_name).await;
+            let Some(node) = host
+                .pubsub_application_service()
+                .get_node(node_name)
+                .await?
+            else {
+                return missing_node_reply(host, node_name).await;
             };
-            let affiliation = state
-                .pubsub_service()
+            let affiliation = host
+                .pubsub_application_service()
                 .get_node_affiliation(node.id, &requester)
                 .await?;
-            let subscriptions = state
-                .pubsub_service()
+            let subscriptions = host
+                .pubsub_application_service()
                 .subscriptions_for_jid(&requester_full, Some(node_name))
                 .await?;
             let now = chrono::Utc::now();
@@ -224,8 +232,8 @@ pub(super) async fn handle_entity_get(
                     Ok(limit) => limit,
                     Err(_) => return Ok(PubSubReply::Error("bad-request")),
                 };
-                let visible_items = state
-                    .pubsub_service()
+                let visible_items = host
+                    .pubsub_application_service()
                     .collection_visible_items(
                         node.id,
                         &requester,
@@ -310,8 +318,8 @@ pub(super) async fn handle_entity_get(
             if rsm.is_some() && !requested_ids.is_empty() {
                 return Ok(PubSubReply::Error("bad-request"));
             }
-            let all_stored = state
-                .pubsub_service()
+            let all_stored = host
+                .pubsub_application_service()
                 .get_items(
                     node.id,
                     &requested_ids,
@@ -350,12 +358,17 @@ pub(super) async fn handle_entity_get(
                 if valid_node_id(Some(name)).is_none() {
                     return Ok(PubSubReply::Error("bad-request"));
                 }
-                if state.pubsub_service().get_node(name).await?.is_none() {
-                    return missing_node_reply(state, name).await;
+                if host
+                    .pubsub_application_service()
+                    .get_node(name)
+                    .await?
+                    .is_none()
+                {
+                    return missing_node_reply(host, name).await;
                 }
             }
-            let subscriptions = state
-                .pubsub_service()
+            let subscriptions = host
+                .pubsub_application_service()
                 .subscriptions_for_jid(&requester_full, node_name)
                 .await?;
             let mut entries = XmlElement::new("subscriptions").optional_attr("node", node_name);
@@ -383,12 +396,17 @@ pub(super) async fn handle_entity_get(
                 if valid_node_id(Some(name)).is_none() {
                     return Ok(PubSubReply::Error("bad-request"));
                 }
-                if state.pubsub_service().get_node(name).await?.is_none() {
-                    return missing_node_reply(state, name).await;
+                if host
+                    .pubsub_application_service()
+                    .get_node(name)
+                    .await?
+                    .is_none()
+                {
+                    return missing_node_reply(host, name).await;
                 }
             }
-            let affiliations = state
-                .pubsub_service()
+            let affiliations = host
+                .pubsub_application_service()
                 .affiliations_for_jid(&requester, node_name)
                 .await?;
             let mut entries = XmlElement::new("affiliations");
@@ -409,8 +427,8 @@ pub(super) async fn handle_entity_get(
     }
 }
 
-pub(super) async fn handle_entity_set(
-    state: &AppState,
+pub(super) async fn handle_entity_set<H: PubSubHost>(
+    host: &H,
     requester: &str,
     operations: Vec<Node<'_, '_>>,
 ) -> Result<PubSubReply> {
@@ -443,13 +461,13 @@ pub(super) async fn handle_entity_set(
             if normalized_bare(&requested_jid)? != requester {
                 return Ok(PubSubReply::Error("forbidden"));
             }
-            let (node, subscription) = match state
-                .pubsub_service()
+            let (node, subscription) = match host
+                .pubsub_application_service()
                 .subscription_options_read(node_name, &requested_jid, primary.attribute("subid"))
                 .await?
             {
                 PubSubSubscriptionOptionsRead::MissingNode => {
-                    return missing_node_reply(state, node_name).await;
+                    return missing_node_reply(host, node_name).await;
                 }
                 PubSubSubscriptionOptionsRead::NotSubscribed => {
                     return Ok(PubSubReply::ExtendedError(PubSubError::new(
@@ -483,8 +501,8 @@ pub(super) async fn handle_entity_set(
                 Ok(options) => options,
                 Err(error) => return Ok(error),
             };
-            match state
-                .pubsub_service()
+            match host
+                .pubsub_application_service()
                 .execute_pubsub_update_subscription_options(
                     PubSubUpdateSubscriptionOptionsCommand {
                         node_id: node.id,
@@ -557,10 +575,10 @@ pub(super) async fn handle_entity_set(
                 creator_jid: &requester,
                 node: node_name,
                 config: &config,
-                max_nodes_per_owner: state.pubsub_owner_limits().max_nodes,
+                max_nodes_per_owner: host.pubsub_node_owner_limits().max_nodes,
             });
-            match state
-                .pubsub_service()
+            match host
+                .pubsub_application_service()
                 .execute_pubsub_create_node(cmd)
                 .await?
                 .outcome
@@ -669,7 +687,7 @@ pub(super) async fn handle_entity_set(
                 }
                 items.push((item_id, item_xml));
             }
-            let limits = state.pubsub_owner_limits();
+            let limits = host.pubsub_node_owner_limits();
             let cmd = PubSubPublishCommand::from(PubSubPublishWrite {
                 publisher_jid: &requester,
                 node: node_name,
@@ -678,7 +696,10 @@ pub(super) async fn handle_entity_set(
                 max_storage_bytes_per_owner: limits.max_storage_bytes,
                 max_nodes_per_owner: limits.max_nodes,
             });
-            let result = state.pubsub_service().execute_pubsub_publish(cmd).await?;
+            let result = host
+                .pubsub_application_service()
+                .execute_pubsub_publish(cmd)
+                .await?;
             let item_ids = match result.outcome {
                 PubSubPublishOutcome::Published { item_ids } => item_ids,
                 PubSubPublishOutcome::Conflict => return Ok(PubSubReply::Error("conflict")),
@@ -767,8 +788,12 @@ pub(super) async fn handle_entity_set(
                 Ok(node) => node,
                 Err(reply) => return Ok(reply),
             };
-            let Some(node) = state.pubsub_service().get_node(node_name).await? else {
-                return missing_node_reply(state, node_name).await;
+            let Some(node) = host
+                .pubsub_application_service()
+                .get_node(node_name)
+                .await?
+            else {
+                return missing_node_reply(host, node_name).await;
             };
             let Some(requested_jid) = primary.attribute("jid") else {
                 return Ok(PubSubReply::ExtendedError(PubSubError::new(
@@ -802,7 +827,7 @@ pub(super) async fn handle_entity_set(
                 };
                 if !northstar_xep_0060::subscription_show_values_allowed(
                     northstar_xmpp_types::jid::CanonicalJid::parse_bare(&requester)?.domainpart(),
-                    state.local_domain(),
+                    host.pubsub_local_domain(),
                     &parsed.show_values,
                 ) {
                     return Ok(invalid_subscription_options());
@@ -818,7 +843,10 @@ pub(super) async fn handle_entity_set(
                 options: subscription_options.as_ref(),
                 max_subscriptions: 1_000,
             });
-            let result = state.pubsub_service().execute_pubsub_subscribe(cmd).await?;
+            let result = host
+                .pubsub_application_service()
+                .execute_pubsub_subscribe(cmd)
+                .await?;
             match result.outcome {
                 PubSubSubscribeOutcome::Subscribed(subscription) => {
                     Ok(PubSubReply::Result(subscription_payload(
@@ -844,7 +872,7 @@ pub(super) async fn handle_entity_set(
                 PubSubSubscribeOutcome::LimitExceeded => Ok(PubSubReply::ExtendedError(
                     PubSubError::new("policy-violation", "too-many-subscriptions"),
                 )),
-                PubSubSubscribeOutcome::NotFound => missing_node_reply(state, node_name).await,
+                PubSubSubscribeOutcome::NotFound => missing_node_reply(host, node_name).await,
                 PubSubSubscribeOutcome::Forbidden => Ok(PubSubReply::Error("forbidden")),
                 PubSubSubscribeOutcome::ClosedNode => Ok(PubSubReply::ExtendedError(
                     PubSubError::new("not-allowed", "closed-node"),
@@ -888,15 +916,15 @@ pub(super) async fn handle_entity_set(
                 node: node_name,
                 subid: supplied_subid,
             });
-            let result = state
-                .pubsub_service()
+            let result = host
+                .pubsub_application_service()
                 .execute_pubsub_unsubscribe(cmd)
                 .await?;
             match result.outcome {
                 PubSubUnsubscribeOutcome::Unsubscribed { subid } => Ok(PubSubReply::Result(
                     subscription_payload(node_name, &requested_jid, "none", subid.as_deref(), None),
                 )),
-                PubSubUnsubscribeOutcome::NotFound => missing_node_reply(state, node_name).await,
+                PubSubUnsubscribeOutcome::NotFound => missing_node_reply(host, node_name).await,
                 PubSubUnsubscribeOutcome::NotSubscribed => Ok(PubSubReply::ExtendedError(
                     PubSubError::new("unexpected-request", "not-subscribed"),
                 )),
@@ -959,12 +987,13 @@ pub(super) async fn handle_entity_set(
                 item_ids: &ids,
                 force_notification,
             });
-            let result = state.pubsub_service().execute_pubsub_retract(cmd).await?;
+            let result = host
+                .pubsub_application_service()
+                .execute_pubsub_retract(cmd)
+                .await?;
             match result.outcome {
                 PubSubRetractOutcome::Retracted => {}
-                PubSubRetractOutcome::NotFound => {
-                    return missing_node_reply(state, node_name).await
-                }
+                PubSubRetractOutcome::NotFound => return missing_node_reply(host, node_name).await,
                 PubSubRetractOutcome::ItemNotFound => {
                     return Ok(PubSubReply::Error("item-not-found"));
                 }

@@ -4,7 +4,6 @@ mod direct_delivery;
 pub(crate) mod frame_execution;
 pub(crate) mod framing;
 pub(crate) mod local_routes;
-pub(crate) mod mam_pubsub_parsing;
 pub(crate) mod muc_delivery;
 pub(crate) mod outbound;
 pub(crate) mod protocol;

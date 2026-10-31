@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod payload;
+pub mod pubsub;
 
 use northstar_pubsub_application::{
     PepAffiliationRepository, PepItemMutationRepository, PepItemQueryRepository,

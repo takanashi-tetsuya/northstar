@@ -8,8 +8,14 @@ description = "PubSub, PEP, vCard and private XML handlers of client sessions fo
 publish = false
 
 [dependencies]
+anyhow = "1.0"
 base64 = "0.22"
+chrono = "0.4"
 northstar-pubsub-application = { path = "../northstar-pubsub-application" }
+northstar-pubsub-core = { path = "../northstar-pubsub-core" }
+northstar-xep-0060 = { path = "../../../kernel/northstar-xep-0060" }
+northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 roxmltree = "0.20"
 sha1 = "0.10"
+uuid = { version = "1.12", features = ["v4"] }

@@ -1036,11 +1036,17 @@ digraph compile_time {
   "northstar-pubsub-postgres" -> "thiserror";
   "northstar-pubsub-postgres" -> "tokio";
   "northstar-pubsub-postgres" -> "uuid";
+  "northstar-pubsub-xmpp" -> "anyhow";
   "northstar-pubsub-xmpp" -> "base64";
+  "northstar-pubsub-xmpp" -> "chrono";
   "northstar-pubsub-xmpp" -> "northstar-pubsub-application";
+  "northstar-pubsub-xmpp" -> "northstar-pubsub-core";
+  "northstar-pubsub-xmpp" -> "northstar-xep-0060";
+  "northstar-pubsub-xmpp" -> "northstar-xml-builder";
   "northstar-pubsub-xmpp" -> "northstar-xmpp-types";
   "northstar-pubsub-xmpp" -> "roxmltree";
   "northstar-pubsub-xmpp" -> "sha1";
+  "northstar-pubsub-xmpp" -> "uuid";
   "northstar-room-application" -> "northstar-room-core";
   "northstar-room-application" -> "uuid";
   "northstar-room-core" -> "anyhow";

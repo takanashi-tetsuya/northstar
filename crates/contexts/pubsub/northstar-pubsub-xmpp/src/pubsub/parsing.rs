@@ -5,19 +5,19 @@
 
 use roxmltree::Node;
 
-pub(crate) type PubSubNamespace = northstar_xep_0060::EnvelopeNamespace;
-pub(crate) type ParsedPubSubEnvelope<'a, 'input> =
+pub(super) type PubSubNamespace = northstar_xep_0060::EnvelopeNamespace;
+pub(super) type ParsedPubSubEnvelope<'a, 'input> =
     northstar_xep_0060::ParsedPubSubEnvelope<'a, 'input>;
-pub(crate) type PubSubRsmRequest = northstar_xep_0060::RsmRequest;
+pub(super) type PubSubRsmRequest = northstar_xep_0060::RsmRequest;
 
-pub(crate) fn parse_pubsub_envelope<'a, 'input>(
+pub(super) fn parse_pubsub_envelope<'a, 'input>(
     child: Node<'a, 'input>,
     kind: &str,
 ) -> Result<ParsedPubSubEnvelope<'a, 'input>, &'static str> {
     northstar_xep_0060::parse_pubsub_envelope(child, kind).map_err(|error| error.condition)
 }
 
-pub(crate) fn parse_pubsub_rsm(set: Node<'_, '_>) -> Result<PubSubRsmRequest, &'static str> {
+pub(super) fn parse_pubsub_rsm(set: Node<'_, '_>) -> Result<PubSubRsmRequest, &'static str> {
     northstar_xep_0060::parse_rsm_element(set).map_err(|error| error.condition)
 }
 

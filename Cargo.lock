@@ -2065,11 +2065,17 @@ dependencies = [
 name = "northstar-pubsub-xmpp"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "base64 0.22.1",
+ "chrono",
  "northstar-pubsub-application",
+ "northstar-pubsub-core",
+ "northstar-xep-0060",
+ "northstar-xml-builder",
  "northstar-xmpp-types",
  "roxmltree",
  "sha1",
+ "uuid",
 ]
 
 [[package]]

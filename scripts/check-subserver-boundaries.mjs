@@ -6,7 +6,8 @@ import { readProductionModule } from './lib/source-module.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = { main: 'src/main.rs', subservers: 'src/runtime/subservers.rs', maintenanceOwnership: 'src/db/maintenance_ownership.rs', retention: 'src/runtime/retention.rs',
   subscriptionCleanup: 'src/runtime/subscription_cleanup.rs',
-  pubsubProtocol: 'src/xmpp/protocol/pubsub.rs', pubsubService: 'crates/contexts/pubsub/northstar-pubsub-application/src/service.rs',
+  pubsubProtocol: 'src/xmpp/protocol/pubsub.rs', pubsubAdapter: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/pubsub.rs',
+  pubsubService: 'crates/contexts/pubsub/northstar-pubsub-application/src/service.rs',
   state: 'src/state.rs', runtimeControl: 'src/state/runtime_control_refresh.rs',
   cluster: 'scripts/cluster-wsl.sh', responsibility: 'docs/PROGRAM_RESPONSIBILITIES.md' };
 
@@ -42,11 +43,11 @@ function exactFields(source, declaration, expected) {
 export function readSubserverSources() {
   // State and PubSub sources are read as their whole production modules.
   return Object.fromEntries(Object.entries(files).map(([name, file]) => [name,
-    ['state', 'pubsubProtocol', 'pubsubService'].includes(name)
+    ['state', 'pubsubProtocol', 'pubsubAdapter', 'pubsubService'].includes(name)
       ? readProductionModule(file, { root }) : fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
-export function verifySubserverBoundaries({ main, subservers, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubService, state, runtimeControl, cluster, responsibility }) {
+export function verifySubserverBoundaries({ main, subservers, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubAdapter, pubsubService, state, runtimeControl, cluster, responsibility }) {
   // Alternate control ticks can legitimately perform no SQL. They must not
   // reset a lost advisory-lock session's consecutive database error count.
   const report = codeOnly(body(state, 'fn report_runtime_control_health(')).replace(/\s+/g, '');
@@ -97,7 +98,7 @@ export function verifySubserverBoundaries({ main, subservers, maintenanceOwnersh
   }
   requireBoundary(/const CLEANUP_BATCH_SIZE: i64 = 1_?000/.test(subscriptionCode),
     'subscription cleanup must retain its bounded batch size');
-  requireBoundary(!/\bcleanup_expired_subscriptions\s*\(/.test(codeOnly(pubsubProtocol) + codeOnly(pubsubService)),
+  requireBoundary(!/\bcleanup_expired_subscriptions\s*\(/.test(codeOnly(pubsubProtocol) + codeOnly(pubsubAdapter) + codeOnly(pubsubService)),
     'physical subscription cleanup cannot reacquire delivery-worker or shared-outbox authority');
   const cleanupPass = codeOnly(body(subscriptionProduction, 'async fn run_once_with'));
   requireBoundary(cleanupPass.includes('tokio::time::timeout_at(deadline, async { cleanup().await })') &&

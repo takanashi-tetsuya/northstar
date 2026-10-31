@@ -2815,11 +2815,31 @@
     ],
     [
       "northstar-pubsub-xmpp",
+      "anyhow"
+    ],
+    [
+      "northstar-pubsub-xmpp",
       "base64"
     ],
     [
       "northstar-pubsub-xmpp",
+      "chrono"
+    ],
+    [
+      "northstar-pubsub-xmpp",
       "northstar-pubsub-application"
+    ],
+    [
+      "northstar-pubsub-xmpp",
+      "northstar-pubsub-core"
+    ],
+    [
+      "northstar-pubsub-xmpp",
+      "northstar-xep-0060"
+    ],
+    [
+      "northstar-pubsub-xmpp",
+      "northstar-xml-builder"
     ],
     [
       "northstar-pubsub-xmpp",
@@ -2832,6 +2852,10 @@
     [
       "northstar-pubsub-xmpp",
       "sha1"
+    ],
+    [
+      "northstar-pubsub-xmpp",
+      "uuid"
     ],
     [
       "northstar-room-application",

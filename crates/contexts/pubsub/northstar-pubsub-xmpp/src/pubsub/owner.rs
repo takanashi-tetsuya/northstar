@@ -2,8 +2,8 @@
 
 use super::*;
 
-pub(super) async fn handle_owner_get(
-    state: &AppState,
+pub(super) async fn handle_owner_get<H: PubSubHost>(
+    host: &H,
     requester: &str,
     operations: Vec<Node<'_, '_>>,
 ) -> Result<PubSubReply> {
@@ -52,12 +52,12 @@ pub(super) async fn handle_owner_get(
     } else {
         PubSubOwnerReadKind::CheckOnly
     };
-    let snapshot = match state
-        .pubsub_service()
+    let snapshot = match host
+        .pubsub_application_service()
         .owner_read(node_name, &requester, kind)
         .await?
     {
-        PubSubOwnerRead::Missing => return missing_node_reply(state, node_name).await,
+        PubSubOwnerRead::Missing => return missing_node_reply(host, node_name).await,
         PubSubOwnerRead::Forbidden => return Ok(PubSubReply::Error("forbidden")),
         snapshot => snapshot,
     };
@@ -147,8 +147,8 @@ pub(super) fn requested_default_node_type(
     }
 }
 
-pub(super) async fn handle_owner_set(
-    state: &AppState,
+pub(super) async fn handle_owner_set<H: PubSubHost>(
+    host: &H,
     requester: &str,
     operations: Vec<Node<'_, '_>>,
 ) -> Result<PubSubReply> {
@@ -161,8 +161,12 @@ pub(super) async fn handle_owner_set(
         Ok(node) => node,
         Err(reply) => return Ok(reply),
     };
-    let Some(node) = state.pubsub_service().get_node(node_name).await? else {
-        return missing_node_reply(state, node_name).await;
+    let Some(node) = host
+        .pubsub_application_service()
+        .get_node(node_name)
+        .await?
+    else {
+        return missing_node_reply(host, node_name).await;
     };
     if operation.tag_name().name() == "collection" {
         if !has_only_attributes(operation, &["node"]) {
@@ -191,8 +195,8 @@ pub(super) async fn handle_owner_set(
         } else {
             PubSubCollectionEdgeOperation::Dissociate
         };
-        let result = state
-            .pubsub_service()
+        let result = host
+            .pubsub_application_service()
             .execute_pubsub_collection_edge(PubSubCollectionEdgeCommand {
                 requester: &requester,
                 collection: &node,
@@ -202,7 +206,7 @@ pub(super) async fn handle_owner_set(
             .await?;
         return Ok(collection_edge_reply(result));
     }
-    if !is_owner(state, node.id, &requester).await? {
+    if !is_owner(host, node.id, &requester).await? {
         return Ok(PubSubReply::Error("forbidden"));
     }
     match operation.tag_name().name() {
@@ -221,15 +225,15 @@ pub(super) async fn handle_owner_set(
                 });
             }
             let mut current = node.config();
-            current.collections = state
-                .pubsub_service()
+            current.collections = host
+                .pubsub_application_service()
                 .collection_parents(node.id)
                 .await?
                 .into_iter()
                 .map(|node| node.node)
                 .collect();
-            current.children = state
-                .pubsub_service()
+            current.children = host
+                .pubsub_application_service()
                 .collection_children(node.id)
                 .await?
                 .into_iter()
@@ -246,8 +250,8 @@ pub(super) async fn handle_owner_set(
                 expected: &expected,
                 config: &config,
             });
-            match state
-                .pubsub_service()
+            match host
+                .pubsub_application_service()
                 .execute_pubsub_configure_node(cmd)
                 .await?
                 .outcome
@@ -326,8 +330,8 @@ pub(super) async fn handle_owner_set(
                     node: node_name,
                     changes: &changes,
                 });
-                match state
-                    .pubsub_service()
+                match host
+                    .pubsub_application_service()
                     .execute_pubsub_set_subscriptions(cmd)
                     .await?
                     .outcome
@@ -401,8 +405,8 @@ pub(super) async fn handle_owner_set(
                     node: node_name,
                     changes: &changes,
                 });
-                match state
-                    .pubsub_service()
+                match host
+                    .pubsub_application_service()
                     .execute_pubsub_set_affiliations(cmd)
                     .await?
                     .outcome
@@ -437,8 +441,8 @@ pub(super) async fn handle_owner_set(
                 requester: &requester,
                 node: node_name,
             });
-            match state
-                .pubsub_service()
+            match host
+                .pubsub_application_service()
                 .execute_pubsub_purge_node(cmd)
                 .await?
                 .outcome
@@ -495,8 +499,8 @@ pub(super) async fn handle_owner_set(
                 node: node_name,
                 redirect,
             });
-            match state
-                .pubsub_service()
+            match host
+                .pubsub_application_service()
                 .execute_pubsub_delete_node(cmd)
                 .await?
                 .outcome

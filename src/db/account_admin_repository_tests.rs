@@ -74,7 +74,9 @@ async fn fixture() -> (PgPool, AdminMutationStore, Uuid, String) {
     let actor = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,username,password_hash,is_admin) VALUES($1,$2,'test-only-invalid',TRUE)")
         .bind(actor).bind(format!("account-admin-{}", actor.simple())).execute(&pool).await.unwrap();
-    let session = db::create_api_session(&pool, actor, 1).await.unwrap();
+    let session = northstar_auth_postgres::users::create_api_session(&pool, actor, 1)
+        .await
+        .unwrap();
     let cluster =
         crate::cluster::ClusterManager::new(None, "accounts.test", None, None, None, None)
             .await
@@ -244,7 +246,9 @@ async fn account_disable_commits_exact_old_generation_and_rolls_back_failed_clea
     let (pool, store, actor, session) = fixture().await;
     let service = AccountAdminService::new(PostgresAccountAdminRepository::new(store.clone()));
     let target_user = user(&pool, 17).await;
-    db::create_api_session(&pool, target_user, 1).await.unwrap();
+    northstar_auth_postgres::users::create_api_session(&pool, target_user, 1)
+        .await
+        .unwrap();
     let request = Request::new(
         &actor,
         &session,
@@ -324,7 +328,7 @@ async fn account_disable_commits_exact_old_generation_and_rolls_back_failed_clea
     // An existing active cleanup for this exact generation makes enqueue fail
     // after status mutation; account state and its reservation must roll back.
     let blocked_user = user(&pool, 3).await;
-    db::create_api_session(&pool, blocked_user, 1)
+    northstar_auth_postgres::users::create_api_session(&pool, blocked_user, 1)
         .await
         .unwrap();
     let blocker = Request::new(
@@ -404,7 +408,10 @@ async fn account_disable_commits_exact_old_generation_and_rolls_back_failed_clea
     else {
         panic!("self disable must be rejected")
     };
-    assert_eq!(message, db::UserStatusError::SelfMutation.to_string());
+    assert_eq!(
+        message,
+        northstar_auth_postgres::users::UserStatusError::SelfMutation.to_string()
+    );
     assert_unretained(&pool, self_update.request_id).await;
 }
 

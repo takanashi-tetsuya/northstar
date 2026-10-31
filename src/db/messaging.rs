@@ -350,7 +350,9 @@ impl MessageRepository for PostgresMessageRepository {
         local_domain: &str,
         sender_jid: &str,
     ) -> Result<LocalRecipientDecision> {
-        let Some(recipient) = db::find_enabled_user(&self.pool, username).await? else {
+        let Some(recipient) =
+            northstar_auth_postgres::users::find_enabled_user(&self.pool, username).await?
+        else {
             return Ok(LocalRecipientDecision::Missing);
         };
         let recipient_bare = format!("{}@{local_domain}", recipient.username);

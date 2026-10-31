@@ -17,8 +17,6 @@ use crate::api::contexts::{
     http_registration_endpoint::HttpRegistrationEndpointContext, HttpLoginEndpointContext,
 };
 use crate::api::error::{AppError, Result};
-#[cfg(test)]
-use crate::db;
 use northstar_abuse_application::challenge::ChallengeIssueRequest;
 use northstar_abuse_policy::AbuseAction;
 use northstar_auth_core as auth;
@@ -117,27 +115,36 @@ pub async fn register(
 }
 
 #[cfg(test)]
-fn registration_error(error: db::RegistrationError) -> AppError {
+fn registration_error(error: northstar_auth_postgres::users::RegistrationError) -> AppError {
     match error {
-        db::RegistrationError::InvalidUsername(_) => {
+        northstar_auth_postgres::users::RegistrationError::InvalidUsername(_) => {
             AppError::BadRequest("username is invalid".into())
         }
-        db::RegistrationError::InvitationRejected | db::RegistrationError::UsernameTaken => {
+        northstar_auth_postgres::users::RegistrationError::InvitationRejected
+        | northstar_auth_postgres::users::RegistrationError::UsernameTaken => {
             AppError::BadRequest("registration request could not be accepted".into())
         }
-        db::RegistrationError::Closed => AppError::Forbidden,
-        db::RegistrationError::RateLimited => AppError::TooManyRequests {
-            message: "registration capacity limit reached; try again later".into(),
-            retry_after: 3600,
-        },
-        db::RegistrationError::CapacityExhausted => AppError::TooManyRequests {
-            message: "deployment account capacity reached".into(),
-            retry_after: 3600,
-        },
-        db::RegistrationError::PasswordWorkOverloaded => AppError::Unavailable(
-            "password registration capacity is temporarily exhausted; retry later".into(),
-        ),
-        db::RegistrationError::Internal(error) => AppError::Internal(error),
+        northstar_auth_postgres::users::RegistrationError::Closed => AppError::Forbidden,
+        northstar_auth_postgres::users::RegistrationError::RateLimited => {
+            AppError::TooManyRequests {
+                message: "registration capacity limit reached; try again later".into(),
+                retry_after: 3600,
+            }
+        }
+        northstar_auth_postgres::users::RegistrationError::CapacityExhausted => {
+            AppError::TooManyRequests {
+                message: "deployment account capacity reached".into(),
+                retry_after: 3600,
+            }
+        }
+        northstar_auth_postgres::users::RegistrationError::PasswordWorkOverloaded => {
+            AppError::Unavailable(
+                "password registration capacity is temporarily exhausted; retry later".into(),
+            )
+        }
+        northstar_auth_postgres::users::RegistrationError::Internal(error) => {
+            AppError::Internal(error)
+        }
     }
 }
 
@@ -311,9 +318,13 @@ mod tests {
 
     #[tokio::test]
     async fn public_registration_rejections_do_not_enumerate_accounts_or_invitations() {
-        let username = registration_error(db::RegistrationError::UsernameTaken).into_response();
-        let invitation =
-            registration_error(db::RegistrationError::InvitationRejected).into_response();
+        let username =
+            registration_error(northstar_auth_postgres::users::RegistrationError::UsernameTaken)
+                .into_response();
+        let invitation = registration_error(
+            northstar_auth_postgres::users::RegistrationError::InvitationRejected,
+        )
+        .into_response();
         assert_eq!(username.status(), invitation.status());
         let username_body = axum::body::to_bytes(username.into_body(), 4096)
             .await
@@ -329,8 +340,10 @@ mod tests {
 
     #[tokio::test]
     async fn password_work_overload_is_a_retryable_service_failure() {
-        let response =
-            registration_error(db::RegistrationError::PasswordWorkOverloaded).into_response();
+        let response = registration_error(
+            northstar_auth_postgres::users::RegistrationError::PasswordWorkOverloaded,
+        )
+        .into_response();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = axum::body::to_bytes(response.into_body(), 4096)
             .await

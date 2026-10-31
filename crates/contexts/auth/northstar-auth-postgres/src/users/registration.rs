@@ -20,7 +20,7 @@ pub async fn create_user(
     .map_err(anyhow::Error::from)
     .context("password hashing task failed")?;
     let user_id = Uuid::new_v4();
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-support")))]
     let row = {
         anyhow::ensure!(
             admin,
@@ -59,7 +59,7 @@ pub async fn create_user(
             .fetch_one(pool)
             .await?
     };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     let row = sqlx::query(
         "INSERT INTO users (id, username, password_hash, is_admin, scram_sha256_salt, scram_sha256_iterations, scram_sha256_stored_key, scram_sha256_server_key, scram_sha1_salt, scram_sha1_iterations, scram_sha1_stored_key, scram_sha1_server_key) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *",
     )
@@ -82,15 +82,8 @@ pub async fn create_user(
 }
 
 pub struct PreparedRegistration {
-    pub(super) username: String,
-    pub(super) credentials: auth::PasswordCredentials,
-}
-
-#[derive(Debug)]
-pub enum GuardedRegistrationOutcome {
-    Created(User),
-    AbuseDenied(GuardError),
-    Rejected(RegistrationError),
+    pub username: String,
+    pub credentials: auth::PasswordCredentials,
 }
 
 pub async fn prepare_registration(
@@ -148,99 +141,6 @@ pub async fn prepare_registration_with_reservation(
         username,
         credentials: creds,
     })
-}
-
-/// Atomically consume the registration proof, advance its actor state and
-/// create the account (including invitation consumption, hourly capacity and
-/// audit). Most callers prepare password material before entering this short
-/// transaction. The XMPP application service instead reserves bounded CPU
-/// capacity before opening the transaction and hashes only after the v2 guard
-/// succeeds, preserving the same rollback boundary without allowing invalid
-/// proofs to consume Argon2 work. Callers must commit every returned outcome;
-/// an internal error is returned as `Err` so dropping/rolling back restores the
-/// one-use proof and every registration side effect for a safe retry.
-/// Body-bound registration entry point used by HTTP and both XMPP registration
-/// profiles. The expected intent is reconstructed from the parsed request and
-/// is never accepted from the proof envelope.
-#[allow(clippy::too_many_arguments)]
-pub async fn create_user_with_invitation_guarded_in_tx_v2(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    abuse: &AbuseGuard,
-    subject: &str,
-    actors: &[String],
-    proof: Option<&PowProof>,
-    intent: &northstar_abuse_policy::PowIntent,
-    guard_already_verified: bool,
-    prepared: PreparedRegistration,
-    invitation_token: Option<&str>,
-    invitation_required: bool,
-    registration_rate_per_hour: u32,
-    request_id: Option<Uuid>,
-) -> Result<GuardedRegistrationOutcome> {
-    create_user_with_invitation_guarded_in_tx_bound(
-        tx,
-        abuse,
-        subject,
-        actors,
-        proof,
-        intent,
-        guard_already_verified,
-        prepared,
-        invitation_token,
-        invitation_required,
-        registration_rate_per_hour,
-        request_id,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn create_user_with_invitation_guarded_in_tx_bound(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    abuse: &AbuseGuard,
-    subject: &str,
-    actors: &[String],
-    proof: Option<&PowProof>,
-    intent: &northstar_abuse_policy::PowIntent,
-    guard_already_verified: bool,
-    prepared: PreparedRegistration,
-    invitation_token: Option<&str>,
-    invitation_required: bool,
-    registration_rate_per_hour: u32,
-    request_id: Option<Uuid>,
-) -> Result<GuardedRegistrationOutcome> {
-    if !guard_already_verified {
-        let decision = northstar_abuse_postgres::transaction::verify_in_tx(
-            tx,
-            abuse,
-            AbuseAction::Registration,
-            subject,
-            actors,
-            proof,
-            Some(intent),
-        )
-        .await?;
-        match decision {
-            TransactionalGuardOutcome::Allowed => {}
-            TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
-                return Ok(GuardedRegistrationOutcome::AbuseDenied(error));
-            }
-        }
-    }
-    match create_user_with_invitation_in_tx(
-        tx,
-        prepared,
-        invitation_token,
-        invitation_required,
-        registration_rate_per_hour,
-        request_id,
-    )
-    .await
-    {
-        Ok(user) => Ok(GuardedRegistrationOutcome::Created(user)),
-        Err(RegistrationError::Internal(error)) => Err(error),
-        Err(error) => Ok(GuardedRegistrationOutcome::Rejected(error)),
-    }
 }
 
 #[allow(clippy::too_many_arguments)]

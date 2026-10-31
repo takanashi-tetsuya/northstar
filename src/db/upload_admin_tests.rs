@@ -26,7 +26,9 @@ async fn insert_user(pool: &PgPool, admin: bool) -> (Uuid, String) {
     .execute(pool)
     .await
     .unwrap();
-    let token = crate::db::create_api_session(pool, id, 1).await.unwrap();
+    let token = northstar_auth_postgres::users::create_api_session(pool, id, 1)
+        .await
+        .unwrap();
     (id, token)
 }
 

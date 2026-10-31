@@ -181,12 +181,14 @@ impl From<Credential> for StoredCredential {
 
 impl PasskeyRepository for PostgresPasskeyRepository {
     async fn account(&self, username: &str) -> Result<Option<PasskeyAccount>> {
-        Ok(super::find_enabled_user(&self.pool, username)
-            .await?
-            .map(|user| PasskeyAccount {
-                id: user.id,
-                auth_generation: user.auth_generation,
-            }))
+        Ok(
+            northstar_auth_postgres::users::find_enabled_user(&self.pool, username)
+                .await?
+                .map(|user| PasskeyAccount {
+                    id: user.id,
+                    auth_generation: user.auth_generation,
+                }),
+        )
     }
 
     async fn credentials(&self, user_id: Uuid) -> Result<Vec<StoredCredential>> {
@@ -205,7 +207,7 @@ impl PasskeyRepository for PostgresPasskeyRepository {
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             .execute(&mut *tx)
             .await?;
-        if !super::authorize_user_in_tx(
+        if !northstar_auth_postgres::users::authorize_user_in_tx(
             &mut tx,
             actor.id,
             actor.auth_generation,
@@ -228,13 +230,17 @@ impl PasskeyRepository for PostgresPasskeyRepository {
         iterations: u32,
         sha1: bool,
     ) -> Result<bool> {
-        Ok(
-            super::prepare_login(&self.pool, actor.username, password, iterations, sha1)
-                .await?
-                .is_some_and(|login| {
-                    login.user.id == actor.id && login.user.auth_generation == actor.auth_generation
-                }),
+        Ok(northstar_auth_postgres::users::prepare_login(
+            &self.pool,
+            actor.username,
+            password,
+            iterations,
+            sha1,
         )
+        .await?
+        .is_some_and(|login| {
+            login.user.id == actor.id && login.user.auth_generation == actor.auth_generation
+        }))
     }
 
     async fn challenge(
@@ -313,14 +319,16 @@ impl PasskeyRepository for PostgresPasskeyRepository {
             None,
         )
         .await?;
-        let session = super::create_api_session_in_tx(
+        let session = northstar_auth_postgres::users::create_api_session_in_tx(
             &mut tx,
             command.user_id,
             command.session_ttl_hours,
             None,
         )
         .await?;
-        let Some(user) = super::user_for_token_in_tx(&mut tx, &session.token).await? else {
+        let Some(user) =
+            northstar_auth_postgres::users::user_for_token_in_tx(&mut tx, &session.token).await?
+        else {
             tx.rollback().await?;
             return Ok(None);
         };

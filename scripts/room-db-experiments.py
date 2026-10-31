@@ -66,7 +66,7 @@ EXPECTED_TESTS = {
         'db::fast::tests::fast_derivation_integrity_failures_are_side_effect_free',
         'db::capacity::tests::postgres_capacity_audit_compares_complete_entity_and_counter_sets',
         'db::capacity::tests::postgres_capacity_fixture_is_atomic_leased_and_idempotent',
-        'db::account_revocations::tests::committed_revocations_survive_lost_wakes_and_stale_acknowledgements',
+        'db::account_revocations_tests::committed_revocations_survive_lost_wakes_and_stale_acknowledgements',
         'db::passkeys::tests::ceremonies_are_single_use_and_key_removal_fences_sessions',
     ),
 }

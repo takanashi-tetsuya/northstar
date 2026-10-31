@@ -222,7 +222,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
     // rows from authorization through the complete MAM projection.  A
     // concurrent logout must therefore serialize after that projection,
     // and the same bearer must be rejected immediately afterwards.
-    let bearer = crate::db::create_api_session(&pool, viewer_id, 1)
+    let bearer = northstar_auth_postgres::users::create_api_session(&pool, viewer_id, 1)
         .await
         .unwrap();
     let archive_id = Uuid::new_v4();
@@ -242,11 +242,14 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         .execute(&mut *authorized_history)
         .await
         .unwrap();
-    assert!(
-        crate::db::authorize_user_in_tx(&mut authorized_history, viewer_id, 0, &bearer,)
-            .await
-            .unwrap()
-    );
+    assert!(northstar_auth_postgres::users::authorize_user_in_tx(
+        &mut authorized_history,
+        viewer_id,
+        0,
+        &bearer,
+    )
+    .await
+    .unwrap());
     let mut logout = {
         let pool = pool.clone();
         let bearer = bearer.clone();
@@ -256,10 +259,13 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
                 .execute(&mut *tx)
                 .await
                 .unwrap();
-            let deleted =
-                crate::db::delete_api_session_audited_in_tx(&mut tx, &bearer, Uuid::new_v4())
-                    .await
-                    .unwrap();
+            let deleted = northstar_auth_postgres::users::delete_api_session_audited_in_tx(
+                &mut tx,
+                &bearer,
+                Uuid::new_v4(),
+            )
+            .await
+            .unwrap();
             tx.commit().await.unwrap();
             deleted
         })
@@ -282,11 +288,11 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         .expect("logout deadlocked with authorized history")
         .unwrap());
     let mut stale = pool.begin().await.unwrap();
-    assert!(
-        !crate::db::authorize_user_in_tx(&mut stale, viewer_id, 0, &bearer)
-            .await
-            .unwrap()
-    );
+    assert!(!northstar_auth_postgres::users::authorize_user_in_tx(
+        &mut stale, viewer_id, 0, &bearer
+    )
+    .await
+    .unwrap());
     stale.rollback().await.unwrap();
 
     let old_preferences = MamPreferences {

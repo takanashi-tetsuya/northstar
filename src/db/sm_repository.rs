@@ -46,7 +46,7 @@ impl PostgresSmRepository {
                 fast_plan,
             )?;
         }
-        let Some(mut tx) = db::users::lock_auth_generation_observed(
+        let Some(mut tx) = northstar_auth_postgres::users::lock_auth_generation_observed(
             &self.pool,
             user_id,
             expected_auth_generation,
@@ -176,7 +176,7 @@ impl PostgresSmRepository {
         if let Some(observation) = observation {
             observation.enter_resume(&request)?;
         }
-        let Some(mut tx) = db::users::lock_auth_generation_observed(
+        let Some(mut tx) = northstar_auth_postgres::users::lock_auth_generation_observed(
             &self.pool,
             request.user_id,
             request.expected_auth_generation,
@@ -534,8 +534,12 @@ impl SmRepository for PostgresSmRepository {
         full_jid: &str,
         lease_seconds: u64,
     ) -> Result<BindingReservationOutcome> {
-        let Some(mut tx) =
-            db::lock_auth_generation(&self.pool, user_id, expected_auth_generation).await?
+        let Some(mut tx) = northstar_auth_postgres::users::lock_auth_generation(
+            &self.pool,
+            user_id,
+            expected_auth_generation,
+        )
+        .await?
         else {
             return Ok(BindingReservationOutcome::CredentialsExpired);
         };

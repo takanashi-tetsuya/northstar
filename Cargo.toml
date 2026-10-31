@@ -10,6 +10,7 @@ members = [
     "crates/kernel/northstar-xep-0016",
     "crates/contexts/auth/northstar-auth-application",
     "crates/contexts/auth/northstar-auth-core",
+    "crates/contexts/auth/northstar-auth-postgres",
     "crates/contexts/operations/northstar-operations-core",
     "crates/kernel/northstar-xmpp-types",
     "crates/kernel/northstar-xml-framing",
@@ -158,6 +159,7 @@ northstar-xep-0045 = { path = "crates/kernel/northstar-xep-0045" }
 northstar-xep-0016 = { path = "crates/kernel/northstar-xep-0016" }
 northstar-auth-application = { path = "crates/contexts/auth/northstar-auth-application" }
 northstar-auth-core = { path = "crates/contexts/auth/northstar-auth-core" }
+northstar-auth-postgres = { path = "crates/contexts/auth/northstar-auth-postgres" }
 northstar-operations-core = { path = "crates/contexts/operations/northstar-operations-core" }
 northstar-xmpp-types = { path = "crates/kernel/northstar-xmpp-types" }
 northstar-xml-framing = { path = "crates/kernel/northstar-xml-framing" }
@@ -215,6 +217,7 @@ webauthn-rs = { version = "0.5.5", default-features = false, features = ["danger
 openssl = { version = "0.10.81", features = ["vendored"] }
 
 [dev-dependencies]
+northstar-auth-postgres = { path = "crates/contexts/auth/northstar-auth-postgres", features = ["test-support"] }
 northstar-auth-application = { path = "crates/contexts/auth/northstar-auth-application", features = ["test-support"] }
 northstar-abuse-application = { path = "crates/contexts/abuse/northstar-abuse-application", features = ["test-support"] }
 northstar-abuse-policy = { path = "crates/contexts/abuse/northstar-abuse-policy", features = ["test-support"] }

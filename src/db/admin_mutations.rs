@@ -47,7 +47,7 @@ impl AdminMutationStore {
             )));
         }
         let actor = &admission.authority;
-        if !db::authorize_admin_in_tx(
+        if !northstar_auth_postgres::users::authorize_admin_in_tx(
             &mut tx,
             actor.user_id,
             actor.auth_generation,

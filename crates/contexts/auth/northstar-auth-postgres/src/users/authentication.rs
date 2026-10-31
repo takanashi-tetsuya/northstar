@@ -122,7 +122,7 @@ pub async fn enabled_user_id(pool: &PgPool, username: &str) -> Result<Option<Uui
 /// of an application-owned write transaction.  Administrative disable/delete
 /// takes an exclusive row lock, so a durable projection either commits before
 /// that state change or observes the account as unavailable afterwards.
-pub(crate) async fn lock_enabled_users_in_transaction(
+pub async fn lock_enabled_users_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     user_ids: &[Uuid],
 ) -> Result<bool> {
@@ -246,80 +246,6 @@ pub async fn stage_user_agent_login_epoch_in_transaction(
     Ok(Some(epoch))
 }
 
-/// Transactional form used to publish a login epoch and a replacement binding
-/// lease in one post-transport commit.
-pub(crate) async fn publish_user_agent_login_epoch_in_transaction(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    operation_id: Uuid,
-    connection_id: Uuid,
-    user_id: Uuid,
-    device_id: Uuid,
-    expected_auth_generation: i64,
-    allow_binding_claim: bool,
-) -> Result<Option<i64>> {
-    let epoch = sqlx::query_scalar::<_, i64>(
-        "SELECT stage.epoch
-           FROM user_agent_login_epoch_stages stage
-           JOIN users u ON u.id=stage.user_id
-          WHERE stage.operation_id=$1 AND stage.connection_id=$2
-            AND stage.user_id=$3 AND stage.device_id=$4
-            AND stage.auth_generation=$5 AND stage.expires_at>clock_timestamp()
-            AND NOT u.is_disabled AND u.auth_generation=stage.auth_generation
-            AND (
-                EXISTS (
-                    SELECT 1 FROM deployment_session_leases lease
-                     WHERE lease.connection_id=stage.connection_id
-                       AND lease.user_id=stage.user_id
-                       AND lease.lease_until>clock_timestamp()
-                )
-                OR ($6 AND EXISTS (
-                    SELECT 1 FROM deployment_session_binding_claims claim
-                     WHERE claim.connection_id=stage.connection_id
-                       AND claim.user_id=stage.user_id
-                       AND claim.expires_at>clock_timestamp()
-                ))
-            )
-          FOR UPDATE OF stage,u",
-    )
-    .bind(operation_id)
-    .bind(connection_id)
-    .bind(user_id)
-    .bind(device_id)
-    .bind(expected_auth_generation)
-    .bind(allow_binding_claim)
-    .fetch_optional(&mut **tx)
-    .await?;
-    let Some(epoch) = epoch else {
-        return Ok(None);
-    };
-    sqlx::query(
-        "INSERT INTO user_agent_login_epochs(user_id,device_id,epoch)
-         VALUES($1,$2,$3)
-         ON CONFLICT(user_id,device_id) DO UPDATE
-         SET epoch=GREATEST(user_agent_login_epochs.epoch,EXCLUDED.epoch),
-             updated_at=clock_timestamp()",
-    )
-    .bind(user_id)
-    .bind(device_id)
-    .bind(epoch)
-    .execute(&mut **tx)
-    .await?;
-    let deleted = sqlx::query(
-        "DELETE FROM user_agent_login_epoch_stages
-          WHERE operation_id=$1 AND connection_id=$2",
-    )
-    .bind(operation_id)
-    .bind(connection_id)
-    .execute(&mut **tx)
-    .await?
-    .rows_affected();
-    anyhow::ensure!(
-        deleted == 1,
-        "staged login epoch publication fence was lost"
-    );
-    Ok(Some(epoch))
-}
-
 pub async fn cleanup_expired_user_agent_login_epoch_stages(
     pool: &PgPool,
     limit: i64,
@@ -362,15 +288,15 @@ pub async fn user_agent_login_epochs(
         .collect())
 }
 
-pub(super) struct PreparedScramUpgrade {
-    pub(super) sha256_salt: Vec<u8>,
-    pub(super) sha1_salt: Option<Vec<u8>>,
-    pub(super) sha256_iterations: u32,
-    pub(super) sha1_iterations: Option<u32>,
-    pub(super) sha256_stored_key: Vec<u8>,
-    pub(super) sha256_server_key: Vec<u8>,
-    pub(super) sha1_stored_key: Option<Vec<u8>>,
-    pub(super) sha1_server_key: Option<Vec<u8>>,
+pub struct PreparedScramUpgrade {
+    pub sha256_salt: Vec<u8>,
+    pub sha1_salt: Option<Vec<u8>>,
+    pub sha256_iterations: u32,
+    pub sha1_iterations: Option<u32>,
+    pub sha256_stored_key: Vec<u8>,
+    pub sha256_server_key: Vec<u8>,
+    pub sha1_stored_key: Option<Vec<u8>>,
+    pub sha1_server_key: Option<Vec<u8>>,
 }
 
 impl Drop for PreparedScramUpgrade {
@@ -386,8 +312,8 @@ impl Drop for PreparedScramUpgrade {
 
 pub struct PreparedLogin {
     pub user: User,
-    pub(super) expected_password_hash: Zeroizing<String>,
-    pub(super) scram_upgrade: Option<PreparedScramUpgrade>,
+    pub expected_password_hash: Zeroizing<String>,
+    pub scram_upgrade: Option<PreparedScramUpgrade>,
 }
 
 impl std::fmt::Debug for PreparedLogin {
@@ -410,7 +336,7 @@ impl Drop for PreparedLogin {
     }
 }
 
-pub(super) fn scram_upgrade_targets(
+pub fn scram_upgrade_targets(
     stored_sha256: Option<u32>,
     sha256_floor: u32,
     stored_sha1: Option<u32>,
@@ -685,74 +611,7 @@ pub async fn apply_prepared_password_change_in_tx(
     Ok(PasswordChangeOutcome::Changed)
 }
 
-/// Password rotation for an already-authorized XMPP stream. The XMPP
-/// protocol layer owns that stream's credential-generation check; REST uses
-/// `change_password_cas` because its bearer must also be locked and compared.
-#[allow(clippy::too_many_arguments)]
-pub async fn change_password_guarded_v2(
-    pool: &PgPool,
-    abuse: &AbuseGuard,
-    subject: &str,
-    actors: &[String],
-    proof: Option<&PowProof>,
-    intent: &northstar_abuse_policy::PowIntent,
-    user_id: Uuid,
-    expected_auth_generation: i64,
-    new_password: &str,
-    scram_iterations: u32,
-    scram_sha1_enabled: bool,
-) -> Result<std::result::Result<(), GuardError>> {
-    // Reserve bounded CPU capacity before borrowing a database connection.
-    // Proof consumption and the credential write remain one transaction, but
-    // password-work queueing can no longer occupy the entire PgPool.
-    let password_work = northstar_security::password_work::reserve()
-        .await
-        .map_err(anyhow::Error::from)
-        .context("password-change work admission failed")?;
-    let mut tx = pool.begin().await?;
-    match northstar_abuse_postgres::transaction::verify_in_tx(
-        &mut tx,
-        abuse,
-        AbuseAction::PasswordChange,
-        subject,
-        actors,
-        proof,
-        Some(intent),
-    )
-    .await?
-    {
-        TransactionalGuardOutcome::Allowed => {
-            // Invalid/missing proofs are rejected before Argon2/SCRAM work.
-            // Keep the bounded worker inside this short authoritative
-            // transaction so a rollback restores both proof and actor state.
-            let password = Zeroizing::new(new_password.to_owned());
-            let creds = password_work
-                .run(move || {
-                    auth::hash_password(&password, true, scram_iterations, scram_sha1_enabled)
-                })
-                .await
-                .map_err(anyhow::Error::from)
-                .context("password hashing task failed")?;
-            let changed =
-                apply_password_credentials_in_tx(&mut tx, user_id, expected_auth_generation, creds)
-                    .await?;
-            anyhow::ensure!(
-                changed,
-                "authenticated password-change generation became stale"
-            );
-            tx.commit().await?;
-            Ok(Ok(()))
-        }
-        TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
-            // Challenge consumption and the penalty are intentional denial
-            // state and must commit together; no credential write occurs.
-            tx.commit().await?;
-            Ok(Err(error))
-        }
-    }
-}
-
-pub(super) async fn apply_password_credentials_in_tx(
+pub async fn apply_password_credentials_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
     expected_auth_generation: i64,
@@ -783,7 +642,7 @@ pub(super) async fn apply_password_credentials_in_tx(
     .context("stream password-change capability failed")
 }
 
-pub(super) fn user_from_row(row: &sqlx::postgres::PgRow) -> User {
+pub fn user_from_row(row: &sqlx::postgres::PgRow) -> User {
     let mut salt = row.get::<Option<Vec<u8>>, _>("scram_sha256_salt");
     let iterations = row
         .get::<Option<i32>, _>("scram_sha256_iterations")

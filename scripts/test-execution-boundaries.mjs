@@ -29,7 +29,7 @@ function itemContaining(source, declaration, member) {
 
 test('current production execution owners satisfy the gate', () => verifyExecutionBoundaries(baseline));
 for (const [name, declaration, member] of [
-  ['authUsers', "pub(crate) async fn lock_auth_generation_observed<'a>("],
+  ['authUsers', "pub async fn lock_auth_generation_observed<'a>("],
   ['authUsers', "pub async fn lock_auth_generation<'a>("],
   ['sasl2', 'impl ProtocolSession', 'payload.replace_envelope('],
 ]) {

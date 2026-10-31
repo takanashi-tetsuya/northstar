@@ -57,7 +57,9 @@ async fn administrative_dispatch_preserves_intents_replay_and_atomic_side_record
     let actor = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,username,password_hash,is_admin) VALUES($1,$2,'test-only-invalid',TRUE)")
         .bind(actor).bind(format!("dispatch-{}", actor.simple())).execute(&pool).await.unwrap();
-    let session = db::create_api_session(&pool, actor, 1).await.unwrap();
+    let session = northstar_auth_postgres::users::create_api_session(&pool, actor, 1)
+        .await
+        .unwrap();
     let cluster =
         crate::cluster::ClusterManager::new(None, "dispatch.test", None, None, None, None)
             .await

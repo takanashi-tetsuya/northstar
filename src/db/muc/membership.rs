@@ -440,7 +440,12 @@ pub async fn admit_local_muc_invite(
         )
         .await?;
     }
-    if !super::super::lock_enabled_users_in_transaction(&mut transaction, &[recipient_id]).await? {
+    if !northstar_auth_postgres::users::lock_enabled_users_in_transaction(
+        &mut transaction,
+        &[recipient_id],
+    )
+    .await?
+    {
         transaction.rollback().await?;
         return Ok(DurableMucInviteOutcome::RecipientUnavailable);
     }

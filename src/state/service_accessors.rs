@@ -161,7 +161,7 @@ impl AppState {
     pub(crate) fn account_revocation_worker_context(
         &self,
     ) -> crate::cluster::AccountRevocationWorkerContext<
-        db::account_revocation_repository::PostgresAccountRevocationRepository,
+        northstar_auth_postgres::account_revocation_repository::PostgresAccountRevocationRepository,
     > {
         crate::cluster::AccountRevocationWorkerContext::new(
             self.account_revocation_consumer_service.clone(),

@@ -8,12 +8,12 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresAccountRevocationRepository {
+pub struct PostgresAccountRevocationRepository {
     pool: PgPool,
 }
 
 impl PostgresAccountRevocationRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -23,7 +23,7 @@ impl AccountRevocationRepository for PostgresAccountRevocationRepository {
         &self,
         identity: &AccountRevocationConsumerIdentity,
     ) -> Result<Vec<AccountRevocationEvent>> {
-        Ok(crate::db::account_revocations::pending(
+        Ok(crate::account_revocations::pending(
             &self.pool,
             &identity.domain,
             &identity.node_id,
@@ -47,7 +47,7 @@ impl AccountRevocationRepository for PostgresAccountRevocationRepository {
         identity: &AccountRevocationConsumerIdentity,
         revisions: &[Uuid],
     ) -> Result<()> {
-        crate::db::account_revocations::acknowledge(
+        crate::account_revocations::acknowledge(
             &self.pool,
             &identity.domain,
             &identity.node_id,
@@ -59,6 +59,6 @@ impl AccountRevocationRepository for PostgresAccountRevocationRepository {
     }
 
     async fn cleanup(&self) -> Result<()> {
-        crate::db::account_revocations::cleanup(&self.pool).await
+        crate::account_revocations::cleanup(&self.pool).await
     }
 }

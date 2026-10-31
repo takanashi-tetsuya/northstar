@@ -16,7 +16,10 @@ impl PostgresApiSessionRepository {
 impl ApiSessionRepository for PostgresApiSessionRepository {
     async fn logout(&self, bearer: &str, request_id: Uuid) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-        super::delete_api_session_audited_in_tx(&mut tx, bearer, request_id).await?;
+        northstar_auth_postgres::users::delete_api_session_audited_in_tx(
+            &mut tx, bearer, request_id,
+        )
+        .await?;
         tx.commit().await?;
         Ok(())
     }

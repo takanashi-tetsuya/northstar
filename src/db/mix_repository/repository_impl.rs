@@ -1030,21 +1030,25 @@ impl MixRepository for PostgresMixRepository {
         db::prune_expired_pam_results(&self.pool, limit).await
     }
     async fn find_enabled_user(&self, username: &str) -> Result<Option<MixAccount>> {
-        Ok(db::find_enabled_user(&self.pool, username)
-            .await?
-            .map(|user| MixAccount {
-                id: user.id,
-                username: user.username,
-            }))
+        Ok(
+            northstar_auth_postgres::users::find_enabled_user(&self.pool, username)
+                .await?
+                .map(|user| MixAccount {
+                    id: user.id,
+                    username: user.username,
+                }),
+        )
     }
 
     async fn find_enabled_user_by_id(&self, user_id: Uuid) -> Result<Option<MixAccount>> {
-        Ok(db::find_enabled_user_by_id(&self.pool, user_id)
-            .await?
-            .map(|user| MixAccount {
-                id: user.id,
-                username: user.username,
-            }))
+        Ok(
+            northstar_auth_postgres::users::find_enabled_user_by_id(&self.pool, user_id)
+                .await?
+                .map(|user| MixAccount {
+                    id: user.id,
+                    username: user.username,
+                }),
+        )
     }
     async fn is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool> {
         db::is_blocked(&self.pool, owner_id, candidate).await

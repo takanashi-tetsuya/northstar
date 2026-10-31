@@ -218,7 +218,7 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
 
         // The reservation and guard transactions have committed before
         // bounded real/dummy Argon2 work begins.
-        let prepared = match db::prepare_login(
+        let prepared = match northstar_auth_postgres::users::prepare_login(
             &self.pool,
             request.username,
             request.password,
@@ -296,7 +296,11 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
             tx.rollback().await?;
             return Ok(Outcome::LeaseLost);
         }
-        let login_applied = match db::apply_prepared_login_in_tx(&mut tx, prepared).await {
+        let login_applied = match northstar_auth_postgres::users::apply_prepared_login_in_tx(
+            &mut tx, prepared,
+        )
+        .await
+        {
             Ok(applied) => applied,
             Err(error) => {
                 tx.rollback().await?;
@@ -321,7 +325,7 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
         if !db::bind_idempotency_actor_in_tx(&mut tx, &lease, user_id).await? {
             return Err(anyhow!("login idempotency ownership changed"));
         }
-        let created_session = db::create_api_session_in_tx(
+        let created_session = northstar_auth_postgres::users::create_api_session_in_tx(
             &mut tx,
             user_id,
             self.policy.session_ttl_hours,

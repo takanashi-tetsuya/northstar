@@ -176,6 +176,7 @@ digraph compile_time {
   "northstar-archive-xmpp";
   "northstar-auth-application";
   "northstar-auth-core";
+  "northstar-auth-postgres";
   "northstar-config";
   "northstar-delivery-core";
   "northstar-federation-application";
@@ -1009,6 +1010,19 @@ digraph compile_time {
   "northstar-auth-core" -> "sha2";
   "northstar-auth-core" -> "uuid";
   "northstar-auth-core" -> "zeroize";
+  "northstar-auth-postgres" -> "anyhow";
+  "northstar-auth-postgres" -> "chrono";
+  "northstar-auth-postgres" -> "northstar-auth-application";
+  "northstar-auth-postgres" -> "northstar-auth-core";
+  "northstar-auth-postgres" -> "northstar-config";
+  "northstar-auth-postgres" -> "northstar-security";
+  "northstar-auth-postgres" -> "serde";
+  "northstar-auth-postgres" -> "serde_json";
+  "northstar-auth-postgres" -> "sqlx";
+  "northstar-auth-postgres" -> "thiserror";
+  "northstar-auth-postgres" -> "tracing";
+  "northstar-auth-postgres" -> "uuid";
+  "northstar-auth-postgres" -> "zeroize";
   "northstar-config" -> "anyhow";
   "northstar-config" -> "axum";
   "northstar-config" -> "chrono";
@@ -1632,6 +1646,7 @@ digraph compile_time {
   "rust-xmpp-server" -> "northstar-archive-xmpp";
   "rust-xmpp-server" -> "northstar-auth-application";
   "rust-xmpp-server" -> "northstar-auth-core";
+  "rust-xmpp-server" -> "northstar-auth-postgres";
   "rust-xmpp-server" -> "northstar-config";
   "rust-xmpp-server" -> "northstar-delivery-core";
   "rust-xmpp-server" -> "northstar-federation-application";

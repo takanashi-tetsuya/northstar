@@ -5,12 +5,12 @@ use northstar_auth_application::account_teardown::AccountGenerationRepository;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-pub(crate) struct PostgresAccountGenerationRepository {
+pub struct PostgresAccountGenerationRepository {
     pool: PgPool,
 }
 
 impl PostgresAccountGenerationRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }

@@ -20,7 +20,7 @@ impl PostgresOmemoRecoveryRepository {
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             .execute(&mut *tx)
             .await?;
-        if !db::authorize_user_in_tx(
+        if !northstar_auth_postgres::users::authorize_user_in_tx(
             &mut tx,
             actor.user_id,
             actor.auth_generation,
@@ -144,9 +144,16 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let token = db::create_api_session(&pool, owner, 1).await.unwrap();
-        let other_token = db::create_api_session(&pool, other, 1).await.unwrap();
-        let principal = db::user_for_token(&pool, &token).await.unwrap().unwrap();
+        let token = northstar_auth_postgres::users::create_api_session(&pool, owner, 1)
+            .await
+            .unwrap();
+        let other_token = northstar_auth_postgres::users::create_api_session(&pool, other, 1)
+            .await
+            .unwrap();
+        let principal = northstar_auth_postgres::users::user_for_token(&pool, &token)
+            .await
+            .unwrap()
+            .unwrap();
         let service = OmemoRecoveryService::new(PostgresOmemoRecoveryRepository::new(pool.clone()));
         let actor = || OmemoRecoveryActor {
             user_id: owner,

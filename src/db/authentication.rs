@@ -50,7 +50,7 @@ impl PostgresAuthenticationRepository {
             }
         }
         let db_plan = db::FastCommitPlan::from(plan);
-        let mut tx = match db::users::lock_auth_generation_observed(
+        let mut tx = match northstar_auth_postgres::users::lock_auth_generation_observed(
             &self.pool,
             user_id,
             expected_auth_generation,
@@ -218,7 +218,7 @@ impl PostgresAuthenticationRepository {
         F: FnOnce(AuthenticationFence) -> Fut,
         Fut: Future<Output = ()>,
     {
-        let prepared = match db::prepare_login(
+        let prepared = match northstar_auth_postgres::users::prepare_login(
             &self.pool,
             username,
             password,
@@ -255,7 +255,9 @@ impl PostgresAuthenticationRepository {
             Ok(transaction) => transaction,
             Err(error) => return AuthenticationResult::BackendFailure(error.into()),
         };
-        match db::apply_prepared_login_in_tx(&mut transaction, prepared).await {
+        match northstar_auth_postgres::users::apply_prepared_login_in_tx(&mut transaction, prepared)
+            .await
+        {
             Ok(true) => {
                 if let Err(error) = transaction.commit().await {
                     return AuthenticationResult::BackendFailure(error.into());
@@ -788,7 +790,7 @@ pub(crate) async fn stage_login_epoch_in_transaction_observed(
     if let Some(observation) = observation {
         observation.stage_id(operation_id);
     }
-    let result = db::stage_user_agent_login_epoch_in_transaction(
+    let result = northstar_auth_postgres::users::stage_user_agent_login_epoch_in_transaction(
         tx,
         user_id,
         device_id,
@@ -866,7 +868,7 @@ fn sanitized_user_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Loaded
     })
 }
 
-fn sanitized_user(user: &db::User) -> AuthenticatedAccount {
+fn sanitized_user(user: &northstar_auth_postgres::users::User) -> AuthenticatedAccount {
     AuthenticatedAccount {
         id: user.id,
         username: user.username.clone(),

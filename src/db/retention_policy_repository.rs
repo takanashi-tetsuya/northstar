@@ -31,7 +31,7 @@ impl PostgresRetentionPolicyRepository {
     ) -> Result<(Transaction<'_, Postgres>, Uuid), RetentionPolicyError> {
         let mut tx = self.pool.begin().await.map_err(backend)?;
         // Resolve and hold users -> exact bearer locks through the policy operation.
-        let user = db::user_for_token_in_tx(&mut tx, token)
+        let user = northstar_auth_postgres::users::user_for_token_in_tx(&mut tx, token)
             .await
             .map_err(backend)?
             .ok_or(RetentionPolicyError::Unauthorized)?;
@@ -234,9 +234,15 @@ mod tests {
             sqlx::query("INSERT INTO users(id,username,password_hash,is_admin) VALUES($1,$2,'test-only',$3)")
                 .bind(id).bind(format!("retention_{}", id.simple())).bind(is_admin).execute(&pool).await.unwrap();
         }
-        let token = db::create_api_session(&pool, owner, 1).await.unwrap();
-        let outsider_token = db::create_api_session(&pool, outsider, 1).await.unwrap();
-        let admin_token = db::create_api_session(&pool, admin, 1).await.unwrap();
+        let token = northstar_auth_postgres::users::create_api_session(&pool, owner, 1)
+            .await
+            .unwrap();
+        let outsider_token = northstar_auth_postgres::users::create_api_session(&pool, outsider, 1)
+            .await
+            .unwrap();
+        let admin_token = northstar_auth_postgres::users::create_api_session(&pool, admin, 1)
+            .await
+            .unwrap();
         let room = Uuid::new_v4();
         let second_room = Uuid::new_v4();
         for id in [room, second_room] {
@@ -548,7 +554,7 @@ mod tests {
             }
             sqlx::query("INSERT INTO muc_retention_policies(room_id,retention_days,updated_by) VALUES($1,30,$2)")
                 .bind(room).bind(creator).execute(&pool).await?;
-            let token = db::create_api_session(&pool, owner, 1).await?;
+            let token = northstar_auth_postgres::users::create_api_session(&pool, owner, 1).await?;
             let secret = Uuid::new_v4().simple().to_string();
             let service = RetentionPolicyService::new(
                 PostgresRetentionPolicyRepository::new(

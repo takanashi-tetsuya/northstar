@@ -162,7 +162,9 @@ async fn exercise_governance_ports(pool: PgPool) {
                 .bind(Uuid::new_v4()).bind(owner).bind(&stanza).execute(&pool).await.unwrap();
         }
     }
-    let session = db::create_api_session(&pool, admin, 1).await.unwrap();
+    let session = northstar_auth_postgres::users::create_api_session(&pool, admin, 1)
+        .await
+        .unwrap();
     let cluster =
         crate::cluster::ClusterManager::new(None, "governance.test", None, None, None, None)
             .await

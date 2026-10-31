@@ -156,6 +156,16 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-auth-postgres
+    package: northstar-auth-postgres
+    path: crates/contexts/auth/northstar-auth-postgres
+    tier: context
+    context: auth
+    role: adapter
+    owner_team: identity-session
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-config
     package: northstar-config
     path: crates/platform/northstar-config

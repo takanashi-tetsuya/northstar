@@ -377,7 +377,7 @@ async fn authorization_mutations_retain_sm_presence_and_muc_teardown_state() {
         .unwrap();
     let (hash, id, snapshot) =
         install_authorization_test_sm(&pool, password_user, &password_name, 21).await;
-    crate::db::change_password(
+    northstar_auth_postgres::users::change_password(
         &pool,
         password_user,
         "Correct-Horse-Battery-21",
@@ -1077,7 +1077,7 @@ async fn durable_claim_is_single_consumer_and_revocable() {
     };
     assert!(delayed_suspend.await.unwrap());
     let resumed_connection = Uuid::new_v4();
-    let mut resume_tx = crate::db::lock_auth_generation(&pool, user_id, 0)
+    let mut resume_tx = northstar_auth_postgres::users::lock_auth_generation(&pool, user_id, 0)
         .await
         .unwrap()
         .unwrap();

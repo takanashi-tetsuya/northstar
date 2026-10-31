@@ -448,7 +448,7 @@ mod tests {
             .await
             .unwrap();
         db::migrate(&pool).await.unwrap();
-        let user = db::create_user(
+        let user = northstar_auth_postgres::users::create_user(
             &pool,
             "alice",
             "test-password-long-enough",

@@ -354,7 +354,7 @@ mod integration_tests {
         db::migrate(&pool).await.unwrap();
         let suffix = Uuid::new_v4().simple().to_string();
         let username = format!("push{}", &suffix[..12]);
-        let user = db::create_user(
+        let user = northstar_auth_postgres::users::create_user(
             &pool,
             &username,
             "test-password-long-enough",
@@ -596,7 +596,9 @@ mod application_repository {
             service_jid: &str,
             node: &str,
         ) -> Result<bool> {
-            let Some(recipient) = db::find_user(&self.pool, target_username).await? else {
+            let Some(recipient) =
+                northstar_auth_postgres::users::find_user(&self.pool, target_username).await?
+            else {
                 return Ok(false);
             };
             Ok(

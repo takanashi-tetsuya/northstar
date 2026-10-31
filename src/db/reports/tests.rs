@@ -120,10 +120,10 @@ async fn report_evidence_is_owned_peer_bound_atomic_and_moderation_is_serialized
         .await
         .unwrap();
     }
-    let admin_a_session = crate::db::create_api_session(&pool, admin_a, 1)
+    let admin_a_session = northstar_auth_postgres::users::create_api_session(&pool, admin_a, 1)
         .await
         .unwrap();
-    let admin_b_session = crate::db::create_api_session(&pool, admin_b, 1)
+    let admin_b_session = northstar_auth_postgres::users::create_api_session(&pool, admin_b, 1)
         .await
         .unwrap();
     let archive_id = Uuid::new_v4();
@@ -319,7 +319,7 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
         .execute(&pool)
         .await
         .unwrap();
-    let session = crate::db::create_api_session(&pool, reporter, 1)
+    let session = northstar_auth_postgres::users::create_api_session(&pool, reporter, 1)
         .await
         .unwrap();
     let archive_id = Uuid::new_v4();
@@ -368,7 +368,7 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
     let first_proof = solve_pow(&first_challenge);
     let mut tx = pool.begin().await.unwrap();
     assert!(
-        crate::db::authorize_user_in_tx(&mut tx, reporter, 0, &session)
+        northstar_auth_postgres::users::authorize_user_in_tx(&mut tx, reporter, 0, &session)
             .await
             .unwrap()
     );
@@ -669,11 +669,11 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
             let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
             loop {
                 let mut tx = pool.begin().await.unwrap();
-                assert!(
-                    crate::db::authorize_user_in_tx(&mut tx, reporter, 0, &session)
-                        .await
-                        .unwrap()
-                );
+                assert!(northstar_auth_postgres::users::authorize_user_in_tx(
+                    &mut tx, reporter, 0, &session
+                )
+                .await
+                .unwrap());
                 let lease = match crate::db::acquire_idempotency_in_tx(&keyring, &mut tx, &request)
                     .await
                     .unwrap()

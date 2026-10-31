@@ -493,9 +493,12 @@ impl AppState {
                 config.scram_sha1_enabled,
             );
         let dummy_scram_iteration_profiles =
-            crate::db::scram_iteration_profiles(&pool, config.scram_iterations)
-                .await
-                .context("failed to load dummy SCRAM iteration profiles")?;
+            northstar_auth_postgres::users::scram_iteration_profiles(
+                &pool,
+                config.scram_iterations,
+            )
+            .await
+            .context("failed to load dummy SCRAM iteration profiles")?;
         let authentication_service = northstar_auth_application::authentication::AuthenticationService::new_with_dummy_scram_iteration_profiles(
                 db::authentication::PostgresAuthenticationRepository::new(pool.clone(), Arc::clone(&fast_token_secret)),
                 dummy_scram_secret,
@@ -853,7 +856,7 @@ impl AppState {
             );
         let account_revocation_consumer_service =
             northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService::new(
-                db::account_revocation_repository::PostgresAccountRevocationRepository::new(
+                northstar_auth_postgres::account_revocation_repository::PostgresAccountRevocationRepository::new(
                     pool.clone(),
                 ),
             );

@@ -326,12 +326,12 @@ async fn run() -> Result<()> {
     startup_phase.complete();
     let startup_phase = northstar_telemetry::logging::StartupPhase::begin("credential_maintenance");
     if !config.scram_sha1_enabled {
-        let removed = db::clear_scram_sha1_credentials(&pool).await?;
+        let removed = northstar_auth_postgres::users::clear_scram_sha1_credentials(&pool).await?;
         if removed > 0 {
             tracing::info!(removed, "cleared disabled SCRAM-SHA-1 verifier material");
         }
     }
-    db::ensure_bootstrap_admin(&pool, &config).await?;
+    northstar_auth_postgres::users::ensure_bootstrap_admin(&pool, &config).await?;
     startup_phase.complete();
     let components = s2s::components::registry();
     let (federation, federation_rx) = services::federation_outbox::FederationOutboxService::channel(

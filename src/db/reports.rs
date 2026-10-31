@@ -589,7 +589,7 @@ async fn update_moderation_record(
         .await
         .map_err(|error| ModerationUpdateError::Internal(error.into()))?;
     if let Some((actor_generation, presented_session)) = api_authorization {
-        let authorized = crate::db::authorize_admin_in_tx(
+        let authorized = northstar_auth_postgres::users::authorize_admin_in_tx(
             &mut tx,
             actor_id,
             actor_generation,

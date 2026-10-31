@@ -20,7 +20,7 @@ impl BackgroundHousekeepingRepository for PostgresBackgroundHousekeepingReposito
     }
 
     async fn cleanup_expired_sessions(&self) -> Result<u64> {
-        crate::db::cleanup_expired_sessions(&self.pool).await
+        northstar_auth_postgres::users::cleanup_expired_sessions(&self.pool).await
     }
 
     async fn cleanup_expired_idempotency(&self, batch_size: i64) -> Result<u64> {
@@ -32,6 +32,9 @@ impl BackgroundHousekeepingRepository for PostgresBackgroundHousekeepingReposito
     }
 
     async fn cleanup_expired_login_epoch_stages(&self, batch_size: i64) -> Result<u64> {
-        crate::db::cleanup_expired_user_agent_login_epoch_stages(&self.pool, batch_size).await
+        northstar_auth_postgres::users::cleanup_expired_user_agent_login_epoch_stages(
+            &self.pool, batch_size,
+        )
+        .await
     }
 }

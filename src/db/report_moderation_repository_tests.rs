@@ -52,7 +52,9 @@ async fn moderation_ports_commit_decisions_and_replay_terminal_errors_once() {
         .await
         .unwrap();
     }
-    let session = db::create_api_session(&pool, admin, 1).await.unwrap();
+    let session = northstar_auth_postgres::users::create_api_session(&pool, admin, 1)
+        .await
+        .unwrap();
     let report = Uuid::new_v4();
     let appeal = Uuid::new_v4();
     sqlx::query(

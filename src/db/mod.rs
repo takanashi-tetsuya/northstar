@@ -33,9 +33,8 @@ mod abuse_guard_tests;
 mod abuse_keys_tests;
 pub mod account_deletion;
 pub mod account_repository;
-pub(crate) mod account_revocation_repository;
-pub mod account_revocations;
-pub(crate) mod account_teardown_repository;
+#[cfg(test)]
+mod account_revocations_tests;
 pub mod admin_command_repository;
 pub mod admin_commands;
 pub mod api_control;

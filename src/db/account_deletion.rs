@@ -110,7 +110,7 @@ mod tests {
             .unwrap();
         crate::db::migrate(&pool).await.unwrap();
         let username = format!("delete-recovery-{}", Uuid::new_v4());
-        let user = crate::db::create_user(
+        let user = northstar_auth_postgres::users::create_user(
             &pool,
             &username,
             "recovery-passphrase",

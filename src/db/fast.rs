@@ -561,19 +561,24 @@ pub async fn commit_fast_state_with_login_epoch(
     plan: &FastCommitPlan,
     device_id: Option<Uuid>,
 ) -> Result<Option<(Option<IssuedFastToken>, Option<i64>)>> {
-    let Some(mut tx) =
-        crate::db::lock_auth_generation(pool, user_id, expected_auth_generation).await?
+    let Some(mut tx) = northstar_auth_postgres::users::lock_auth_generation(
+        pool,
+        user_id,
+        expected_auth_generation,
+    )
+    .await?
     else {
         return Ok(None);
     };
     let login_epoch = if let Some(device_id) = device_id {
-        let Some(epoch) = crate::db::next_user_agent_login_epoch_in_transaction(
-            &mut tx,
-            user_id,
-            device_id,
-            expected_auth_generation,
-        )
-        .await?
+        let Some(epoch) =
+            northstar_auth_postgres::users::next_user_agent_login_epoch_in_transaction(
+                &mut tx,
+                user_id,
+                device_id,
+                expected_auth_generation,
+            )
+            .await?
         else {
             tx.rollback().await?;
             return Ok(None);
@@ -1148,10 +1153,15 @@ mod tests {
         for _ in 0..16 {
             let pool = pool.clone();
             tasks.push(tokio::spawn(async move {
-                crate::db::next_user_agent_login_epoch(&pool, user_id, epoch_device, 0)
-                    .await
-                    .unwrap()
-                    .unwrap()
+                northstar_auth_postgres::users::next_user_agent_login_epoch(
+                    &pool,
+                    user_id,
+                    epoch_device,
+                    0,
+                )
+                .await
+                .unwrap()
+                .unwrap()
             }));
         }
         let mut epochs = Vec::new();
@@ -1184,9 +1194,14 @@ mod tests {
         .await
         .is_err());
         assert_eq!(
-            crate::db::next_user_agent_login_epoch(&pool, user_id, epoch_device, 1)
-                .await
-                .unwrap(),
+            northstar_auth_postgres::users::next_user_agent_login_epoch(
+                &pool,
+                user_id,
+                epoch_device,
+                1
+            )
+            .await
+            .unwrap(),
             None
         );
     }
@@ -1370,14 +1385,16 @@ mod tests {
         // This is the exact transaction shape used by Bind 2. A route
         // conflict/Redis failure rolls it back before the pending route is
         // removed, so neither the installation epoch nor FAST slots change.
-        let mut tx = crate::db::lock_auth_generation(&pool, user_id, 0)
+        let mut tx = northstar_auth_postgres::users::lock_auth_generation(&pool, user_id, 0)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(
-            crate::db::next_user_agent_login_epoch_in_transaction(&mut tx, user_id, device_id, 0)
-                .await
-                .unwrap(),
+            northstar_auth_postgres::users::next_user_agent_login_epoch_in_transaction(
+                &mut tx, user_id, device_id, 0
+            )
+            .await
+            .unwrap(),
             Some(1)
         );
         assert!(matches!(
@@ -1422,14 +1439,16 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let mut tx = crate::db::lock_auth_generation(&pool, user_id, 0)
+        let mut tx = northstar_auth_postgres::users::lock_auth_generation(&pool, user_id, 0)
             .await
             .unwrap()
             .unwrap();
-        crate::db::next_user_agent_login_epoch_in_transaction(&mut tx, user_id, device_id, 0)
-            .await
-            .unwrap()
-            .unwrap();
+        northstar_auth_postgres::users::next_user_agent_login_epoch_in_transaction(
+            &mut tx, user_id, device_id, 0,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert!(matches!(
             commit_fast_state_in_transaction(&mut tx, &master, user_id, 0, &plan)
                 .await

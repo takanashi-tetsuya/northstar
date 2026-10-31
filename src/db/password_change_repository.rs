@@ -91,9 +91,11 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
         }
 
         let mut reserve_tx = self.pool.begin().await?;
-        let Some(user) =
-            db::password_change_subject_for_token_in_tx(&mut reserve_tx, command.presented_session)
-                .await?
+        let Some(user) = northstar_auth_postgres::users::password_change_subject_for_token_in_tx(
+            &mut reserve_tx,
+            command.presented_session,
+        )
+        .await?
         else {
             reserve_tx.rollback().await?;
             return Ok(Outcome::Unauthorized);
@@ -193,7 +195,7 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
                 tx.rollback().await?;
                 return Ok(Outcome::LeaseLost);
             }
-            if !db::authorize_user_in_tx(
+            if !northstar_auth_postgres::users::authorize_user_in_tx(
                 &mut tx,
                 user.id,
                 user.auth_generation,
@@ -232,7 +234,7 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
             return Ok(Outcome::LeaseLost);
         }
         prework_tx.commit().await?;
-        let prepared = match db::prepare_password_change(
+        let prepared = match northstar_auth_postgres::users::prepare_password_change(
             user.password_hash(),
             command.current_password,
             command.new_password,
@@ -269,8 +271,11 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
             tx.rollback().await?;
             return Ok(Outcome::LeaseLost);
         }
-        if matches!(prepared, db::PreparedPasswordChange::InvalidCurrentPassword) {
-            if !db::authorize_password_change_in_tx(
+        if matches!(
+            prepared,
+            northstar_auth_postgres::users::PreparedPasswordChange::InvalidCurrentPassword
+        ) {
+            if !northstar_auth_postgres::users::authorize_password_change_in_tx(
                 &mut tx,
                 user.id,
                 user.password_hash(),
@@ -308,7 +313,7 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
             db::bind_idempotency_actor_in_tx(&mut tx, &lease, user.id).await?,
             "password-change idempotency ownership changed"
         );
-        let outcome = match db::apply_prepared_password_change_in_tx(
+        let outcome = match northstar_auth_postgres::users::apply_prepared_password_change_in_tx(
             &mut tx,
             user.id,
             user.password_hash(),
@@ -329,7 +334,7 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
                 return Ok(Outcome::PublicationUnavailable);
             }
         };
-        if outcome != db::PasswordChangeOutcome::Changed {
+        if outcome != northstar_auth_postgres::users::PasswordChangeOutcome::Changed {
             tx.rollback().await?;
             db::abandon_idempotency_lease(&self.pool, &lease).await?;
             return Ok(Outcome::Unauthorized);
@@ -424,7 +429,7 @@ mod tests {
             .unwrap();
         crate::db::migrate(&pool).await.unwrap();
         let suffix = Uuid::new_v4().simple().to_string();
-        let user = db::create_user(
+        let user = northstar_auth_postgres::users::create_user(
             &pool,
             &format!("password{}", &suffix[..10]),
             "password-before-change",
@@ -435,7 +440,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let token = db::create_api_session(&pool, user.id, 1).await.unwrap();
+        let token = northstar_auth_postgres::users::create_api_session(&pool, user.id, 1)
+            .await
+            .unwrap();
         let keyring = Arc::new(
             db::ApiControlKeyring::new(b"password-service-test-control-key-00001", None).unwrap(),
         );
@@ -479,7 +486,12 @@ mod tests {
             response.body,
             br#"{"changed":true,"sessions_revoked":true}"#
         );
-        assert!(db::user_for_token(&pool, &token).await.unwrap().is_none());
+        assert!(
+            northstar_auth_postgres::users::user_for_token(&pool, &token)
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         let replay = run_change(
             &service,

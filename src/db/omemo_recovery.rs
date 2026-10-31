@@ -898,7 +898,7 @@ mod tests {
         let pool = PgPool::connect(&url).await.unwrap();
         crate::db::migrate(&pool).await.unwrap();
         let username = format!("omemo-recovery-{}", Uuid::new_v4().simple());
-        let user = crate::db::create_user(
+        let user = northstar_auth_postgres::users::create_user(
             &pool,
             &username,
             "test password 123",
@@ -909,7 +909,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let token = crate::db::create_api_session(&pool, user.id, 1)
+        let token = northstar_auth_postgres::users::create_api_session(&pool, user.id, 1)
             .await
             .unwrap();
         let first_id = Uuid::new_v4();
@@ -987,12 +987,12 @@ mod tests {
             .unwrap(),
             ConsumeOmemoRecovery::Consumed(_)
         ));
-        let rotated = crate::db::find_user_by_id(&pool, user.id)
+        let rotated = northstar_auth_postgres::users::find_user_by_id(&pool, user.id)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(rotated.auth_generation, user.auth_generation + 1);
-        let replay_token = crate::db::create_api_session(&pool, user.id, 1)
+        let replay_token = northstar_auth_postgres::users::create_api_session(&pool, user.id, 1)
             .await
             .unwrap();
         assert!(matches!(

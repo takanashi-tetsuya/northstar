@@ -143,7 +143,8 @@ fn upload_cascade_capacity_requires_explicit_immutable_provenance() {
     // Deletion has exactly one queue authority. Neither application path
     // may race it by pre-inserting a second cleanup projection.
     for source in [
-        crate::db::users::module_source().as_str(),
+        northstar_auth_postgres::users::module_source().as_str(),
+        include_str!("users.rs"),
         crate::tools::pie::module_source().as_str(),
         include_str!("pie.rs"),
     ] {
@@ -929,7 +930,9 @@ async fn upload_claim_is_atomic_and_cleanup_is_retryable() {
     .await
     .unwrap()
     .unwrap();
-    let live_session = db::create_api_session(&pool, user_id, 1).await.unwrap();
+    let live_session = northstar_auth_postgres::users::create_api_session(&pool, user_id, 1)
+        .await
+        .unwrap();
     assert_eq!(
         queue_user_upload_delete_authorized(
             &pool,
@@ -960,12 +963,18 @@ async fn upload_claim_is_atomic_and_cleanup_is_retryable() {
     .await
     .unwrap()
     .unwrap();
-    let stale_session = db::create_api_session(&pool, user_id, 1).await.unwrap();
+    let stale_session = northstar_auth_postgres::users::create_api_session(&pool, user_id, 1)
+        .await
+        .unwrap();
     let mut logout = pool.begin().await.unwrap();
     assert!(
-        db::delete_api_session_audited_in_tx(&mut logout, &stale_session, Uuid::new_v4(),)
-            .await
-            .unwrap()
+        northstar_auth_postgres::users::delete_api_session_audited_in_tx(
+            &mut logout,
+            &stale_session,
+            Uuid::new_v4(),
+        )
+        .await
+        .unwrap()
     );
     logout.commit().await.unwrap();
     assert_eq!(

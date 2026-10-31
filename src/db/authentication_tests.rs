@@ -357,7 +357,7 @@ async fn isolated_pool() -> PgPool {
 }
 
 async fn create_account(pool: &PgPool, username: &str, password: &str) -> (Uuid, i64) {
-    let mut user = db::create_user(
+    let mut user = northstar_auth_postgres::users::create_user(
         pool,
         username,
         password,
@@ -381,10 +381,11 @@ async fn reserve_test_live_session(
     auth_generation: i64,
     full_jid: &str,
 ) {
-    let mut tx = db::lock_auth_generation(pool, user_id, auth_generation)
-        .await
-        .unwrap()
-        .unwrap();
+    let mut tx =
+        northstar_auth_postgres::users::lock_auth_generation(pool, user_id, auth_generation)
+            .await
+            .unwrap()
+            .unwrap();
     assert_eq!(
         db::reserve_live_session_in_transaction(
             &mut tx,
@@ -418,7 +419,7 @@ async fn authentication_service_fences_all_credential_and_inline_state_transitio
 
     let alice = format!("auth-alice-{}", &Uuid::new_v4().simple().to_string()[..10]);
     let (alice_id, _) = create_account(&pool, &alice, "old correct horse battery").await;
-    let prepared_debug = db::prepare_login(
+    let prepared_debug = northstar_auth_postgres::users::prepare_login(
         &pool,
         &alice,
         "old correct horse battery",
@@ -518,7 +519,7 @@ async fn authentication_service_fences_all_credential_and_inline_state_transitio
     });
     let prepared_fence = verified_rx.await.unwrap();
     assert_eq!(prepared_fence.user_id, bob_id);
-    db::change_password(
+    northstar_auth_postgres::users::change_password(
         &pool,
         bob_id,
         "bob new correct horse battery",
@@ -892,10 +893,11 @@ async fn login_epoch_publication_is_fenced_invisible_and_atomic_with_binding() {
     let connection_id = Uuid::new_v4();
     let full_jid = format!("{username}@example.test/device");
 
-    let mut tx = db::lock_auth_generation(&pool, user_id, auth_generation)
-        .await
-        .unwrap()
-        .unwrap();
+    let mut tx =
+        northstar_auth_postgres::users::lock_auth_generation(&pool, user_id, auth_generation)
+            .await
+            .unwrap()
+            .unwrap();
     assert_eq!(
         db::reserve_live_session_in_transaction(
             &mut tx,
@@ -998,10 +1000,11 @@ async fn login_epoch_publication_is_fenced_invisible_and_atomic_with_binding() {
     let failed_connection = Uuid::new_v4();
     let failed_full_jid = format!("{username}@example.test/failure");
     let failed_stage = {
-        let mut tx = db::lock_auth_generation(&pool, user_id, auth_generation)
-            .await
-            .unwrap()
-            .unwrap();
+        let mut tx =
+            northstar_auth_postgres::users::lock_auth_generation(&pool, user_id, auth_generation)
+                .await
+                .unwrap()
+                .unwrap();
         let stage = stage_login_epoch_in_transaction(
             &mut tx,
             user_id,
@@ -1074,7 +1077,7 @@ async fn login_epoch_publication_is_fenced_invisible_and_atomic_with_binding() {
     .await
     .unwrap();
     assert_eq!(
-        db::cleanup_expired_user_agent_login_epoch_stages(&pool, 10)
+        northstar_auth_postgres::users::cleanup_expired_user_agent_login_epoch_stages(&pool, 10)
             .await
             .unwrap(),
         1
@@ -1112,10 +1115,11 @@ async fn publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
     // The publication-side exact lookup owns both the per-JID advisory
     // barrier and the lease row lock. A concurrent reservation for the
     // same full JID cannot pass the barrier or invert lease/claim order.
-    let mut publication = db::lock_auth_generation(&pool, user_id, auth_generation)
-        .await
-        .unwrap()
-        .unwrap();
+    let mut publication =
+        northstar_auth_postgres::users::lock_auth_generation(&pool, user_id, auth_generation)
+            .await
+            .unwrap()
+            .unwrap();
     assert!(db::publish_binding_live_session_in_transaction(
         &mut publication,
         first_connection,
@@ -1163,10 +1167,11 @@ async fn publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
     // An exact release must likewise wait for the row lock. This is the
     // former EXISTS/delete TOCTOU between authentication publication SQL
     // and commit.
-    let mut publication = db::lock_auth_generation(&pool, user_id, auth_generation)
-        .await
-        .unwrap()
-        .unwrap();
+    let mut publication =
+        northstar_auth_postgres::users::lock_auth_generation(&pool, user_id, auth_generation)
+            .await
+            .unwrap()
+            .unwrap();
     assert!(db::publish_binding_live_session_in_transaction(
         &mut publication,
         first_connection,
@@ -1216,10 +1221,11 @@ async fn publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
     .execute(&pool)
     .await
     .unwrap();
-    let mut publication = db::lock_auth_generation(&pool, user_id, auth_generation)
-        .await
-        .unwrap()
-        .unwrap();
+    let mut publication =
+        northstar_auth_postgres::users::lock_auth_generation(&pool, user_id, auth_generation)
+            .await
+            .unwrap()
+            .unwrap();
     assert!(!db::publish_binding_live_session_in_transaction(
         &mut publication,
         expired_connection,

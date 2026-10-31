@@ -39,36 +39,37 @@ impl AccountAdminRepository for PostgresAccountAdminRepository {
             AdminMutationStart::Finished(outcome) => return Ok(outcome),
         };
         let actor = &admission.authority;
-        let previous_auth_generation = match db::set_user_status_admin_in_tx(
-            &mut tx,
-            actor.user_id,
-            actor.auth_generation,
-            actor.session_token,
-            user_id,
-            patch.disabled,
-            patch.admin,
-        )
-        .await
-        {
-            Ok(generation) => generation,
-            Err(error) => {
-                // These failures did not retain an idempotency reservation in
-                // the HTTP implementation, so they remain retryable here.
-                let rejection = match error {
-                    db::UserStatusError::NotFound =>
+        let previous_auth_generation =
+            match northstar_auth_postgres::users::set_user_status_admin_in_tx(
+                &mut tx,
+                actor.user_id,
+                actor.auth_generation,
+                actor.session_token,
+                user_id,
+                patch.disabled,
+                patch.admin,
+            )
+            .await
+            {
+                Ok(generation) => generation,
+                Err(error) => {
+                    // These failures did not retain an idempotency reservation in
+                    // the HTTP implementation, so they remain retryable here.
+                    let rejection = match error {
+                    northstar_auth_postgres::users::UserStatusError::NotFound =>
                         ApiMutationRejection::BadRequest("user does not exist"),
-                    db::UserStatusError::LastAdministrator =>
+                    northstar_auth_postgres::users::UserStatusError::LastAdministrator =>
                         ApiMutationRejection::Conflict(error.to_string()),
-                    db::UserStatusError::SelfMutation => ApiMutationRejection::BadRequest(
+                    northstar_auth_postgres::users::UserStatusError::SelfMutation => ApiMutationRejection::BadRequest(
                         "an administrator cannot disable or demote the account authorizing this request",
                     ),
-                    db::UserStatusError::Unauthorized => ApiMutationRejection::Forbidden,
-                    db::UserStatusError::Internal(error) => return Err(error),
+                    northstar_auth_postgres::users::UserStatusError::Unauthorized => ApiMutationRejection::Forbidden,
+                    northstar_auth_postgres::users::UserStatusError::Internal(error) => return Err(error),
                 };
-                tx.rollback().await?;
-                return Ok(ApiMutationOutcome::Rejected(rejection));
-            }
-        };
+                    tx.rollback().await?;
+                    return Ok(ApiMutationOutcome::Rejected(rejection));
+                }
+            };
         let response = if patch.disabled == Some(true) {
             let target = format!("user:{user_id}:generation:{previous_auth_generation}");
             let (response, _) = enqueue_operation_response_in_tx(

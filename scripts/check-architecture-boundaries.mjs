@@ -2007,7 +2007,7 @@ for (const forbidden of [
     throw new Error(`AuthenticatedAccount regained credential field ${forbidden}`);
   }
 }
-if (/AuthenticationResult\s*<\s*(?:crate::)?db::User\s*>/.test(authenticationServiceSource)) {
+if (/AuthenticationResult\s*<\s*(?:crate::)?(?:db|northstar_auth_postgres::users)::User\s*>/.test(authenticationServiceSource)) {
   throw new Error('AuthenticationService must never return the credential-bearing db::User DTO');
 }
 const legacyAuthProtocolSource = readRoleSplitFile('src/xmpp/protocol.rs', { root });
@@ -2102,7 +2102,7 @@ if (/\bstate\s*\.\s*pool\b/.test(sasl2Source)) {
   throw new Error('sasl2.rs regained direct AppState PostgreSQL authority');
 }
 const accountServiceSource = read('crates/contexts/auth/northstar-auth-application/src/account.rs');
-if (/RegistrationOutcome[\s\S]*?Created\s*\(\s*db::User\s*\)/.test(accountServiceSource)) {
+if (/RegistrationOutcome[\s\S]*?Created\s*\(\s*(?:db|northstar_auth_postgres::users)::User\s*\)/.test(accountServiceSource)) {
   throw new Error('AccountService registration result leaks the credential-bearing db::User DTO');
 }
 const registrationAccountBody = structBody(
@@ -2113,7 +2113,7 @@ if (/(?:\bpassword_hash\b|\bscram_[A-Za-z0-9_]*|\bauth_generation\b|\bis_admin\b
   throw new Error('AccountService RegistrationAccount regained credential or authority fields');
 }
 const authCorePasswordSource = read('crates/contexts/auth/northstar-auth-core/src/password.rs');
-const usersSource = readProductionModule('src/db/users.rs', { root });
+const usersSource = readProductionModule('crates/contexts/auth/northstar-auth-postgres/src/users.rs', { root });
 for (const [name, source, typeName] of [
   ['PasswordCredentials', authCorePasswordSource, 'PasswordCredentials'],
   ['PreparedScramUpgrade', usersSource, 'PreparedScramUpgrade'],
@@ -2664,10 +2664,10 @@ const mucServiceBody = structBody(mucServiceSource, 'pub(crate) struct MucServic
 if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(mucServiceBody)) {
   throw new Error('MucService must receive its repository port');
 }
-if (/find_user[\s\S]*Result<Option<\s*db::User\s*>>/.test(mucServiceSource)) {
+if (/find_user[\s\S]*Result<Option<\s*(?:db|northstar_auth_postgres::users)::User\s*>>/.test(mucServiceSource)) {
   throw new Error('MucService leaks the credential-bearing db::User DTO');
 }
-if (!/enabled_local_account[\s\S]*db::enabled_user_id/.test(readProductionModule('src/db/room.rs', { root }))) {
+if (!/enabled_local_account[\s\S]*northstar_auth_postgres::users::enabled_user_id/.test(readProductionModule('src/db/room.rs', { root }))) {
   throw new Error('MucService no longer fails closed for disabled local routing targets');
 }
 if (!/find_enabled_user[\s\S]*?FROM users\s+WHERE username=\$1 AND NOT is_disabled/.test(usersSource)) {
@@ -3232,7 +3232,7 @@ for (const credentialField of [
     throw new Error(`LocalRecipient leaks authentication field ${credentialField}`);
   }
 }
-if (/Deliver\s*\(\s*db::User\s*\)/.test(messageServiceSource)) {
+if (/Deliver\s*\(\s*(?:db|northstar_auth_postgres::users)::User\s*\)/.test(messageServiceSource)) {
   throw new Error('MessageService leaks the persistence User credential model to routing code');
 }
 

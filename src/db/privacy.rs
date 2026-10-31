@@ -170,14 +170,16 @@ mod tests {
             .unwrap();
         let first_connection = Uuid::new_v4();
         let second_connection = Uuid::new_v4();
-        let mut first = crate::db::lock_auth_generation(&pool, owner_id, generation)
-            .await
-            .unwrap()
-            .unwrap();
-        let mut second = crate::db::lock_auth_generation(&pool, owner_id, generation)
-            .await
-            .unwrap()
-            .unwrap();
+        let mut first =
+            northstar_auth_postgres::users::lock_auth_generation(&pool, owner_id, generation)
+                .await
+                .unwrap()
+                .unwrap();
+        let mut second =
+            northstar_auth_postgres::users::lock_auth_generation(&pool, owner_id, generation)
+                .await
+                .unwrap()
+                .unwrap();
         // Both resume transactions hold the account lock before either writes
         // its selection. A lock upgrade would block the first operation here.
         for (transaction, connection) in [

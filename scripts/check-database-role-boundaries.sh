@@ -23,7 +23,7 @@ db_module="$project_dir/src/db/mod.rs"
 main_source="$project_dir/src/main.rs"
 state_source="$project_dir/src/state.rs"
 pie_source="$project_dir/src/tools/pie.rs"
-users_source="$project_dir/src/db/users.rs"
+users_source="$project_dir/crates/contexts/auth/northstar-auth-postgres/src/users.rs"
 admin_commands_source="$project_dir/src/db/admin_commands.rs"
 roster_source="$project_dir/crates/contexts/roster/northstar-roster-postgres/src/roster.rs"
 mix_source="$project_dir/src/db/mix.rs"
@@ -741,13 +741,13 @@ if grep -Eiq 'EXECUTE[[:space:]]+[^;]*(requested_|caller_)|format\([^)]*(request
   "$user_capability_migration"; then
   fail 'user command capabilities must not use caller-directed SQL or custom-GUC authority'
 fi
-require_module_literal src/db/users.rs 'SELECT northstar_user_register(' \
+require_module_literal crates/contexts/auth/northstar-auth-postgres/src/users.rs 'SELECT northstar_user_register(' \
   'registration does not use the typed database capability'
-require_module_literal src/db/users.rs 'SELECT northstar_user_apply_login(' \
+require_module_literal crates/contexts/auth/northstar-auth-postgres/src/users.rs 'SELECT northstar_user_apply_login(' \
   'login publication does not use the typed database capability'
-require_module_literal src/db/users.rs 'SELECT northstar_user_change_password_api(' \
+require_module_literal crates/contexts/auth/northstar-auth-postgres/src/users.rs 'SELECT northstar_user_change_password_api(' \
   'REST password rotation does not use the bearer-fenced database capability'
-require_module_literal src/db/users.rs 'SELECT northstar_user_change_password_stream(' \
+require_module_literal crates/contexts/auth/northstar-auth-postgres/src/users.rs 'SELECT northstar_user_change_password_stream(' \
   'XMPP password rotation does not use the generation-fenced database capability'
 require_module_literal src/db/admin_commands.rs 'SELECT northstar_admin_command_user_lifecycle(' \
   'XEP-0133 lifecycle mutation does not consume an execution claim'

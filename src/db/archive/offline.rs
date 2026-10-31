@@ -222,7 +222,12 @@ pub(super) async fn store_offline_idempotent_inner(
     // administrator's FOR UPDATE cannot pass this shared row lock until the
     // queue projection commits, while a disable that won first is observed as
     // unavailable before any admission/tombstone row is created.
-    if !super::super::lock_enabled_users_in_transaction(&mut transaction, &[recipient_id]).await? {
+    if !northstar_auth_postgres::users::lock_enabled_users_in_transaction(
+        &mut transaction,
+        &[recipient_id],
+    )
+    .await?
+    {
         transaction.rollback().await?;
         return Ok(OfflineStoreOutcome::RecipientUnavailable);
     }

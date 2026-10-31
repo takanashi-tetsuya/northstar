@@ -412,7 +412,12 @@ pub(crate) async fn admit_personal_history_in_transaction(
         required_accounts.push(delivery.recipient_id);
         required_accounts.extend(delivery.local_actor_id);
     }
-    if !super::super::lock_enabled_users_in_transaction(transaction, &required_accounts).await? {
+    if !northstar_auth_postgres::users::lock_enabled_users_in_transaction(
+        transaction,
+        &required_accounts,
+    )
+    .await?
+    {
         return Ok(PersonalHistoryAdmission::AccountUnavailable);
     }
     anyhow::ensure!(

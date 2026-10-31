@@ -188,9 +188,10 @@ async fn command_port_rolls_back_without_response_and_reauthorizes_replays() {
 
     let pool = test_pool().await;
     let operation = enqueue_broadcast(&pool, 4).await;
-    let token = crate::db::create_api_session(&pool, operation.actor_subject_id, 1)
-        .await
-        .unwrap();
+    let token =
+        northstar_auth_postgres::users::create_api_session(&pool, operation.actor_subject_id, 1)
+            .await
+            .unwrap();
     let request_id = Uuid::new_v4();
     let key = Uuid::new_v4().to_string();
     let admission = || AdminMutationAdmission {
@@ -332,10 +333,11 @@ async fn query_ports_preserve_target_scope_and_authorization_denials() {
 
     let pool = test_pool().await;
     let operation = enqueue_broadcast(&pool, 4).await;
-    let token = crate::db::create_api_session(&pool, operation.actor_subject_id, 1)
-        .await
-        .unwrap();
-    let principal = crate::db::user_for_token(&pool, &token)
+    let token =
+        northstar_auth_postgres::users::create_api_session(&pool, operation.actor_subject_id, 1)
+            .await
+            .unwrap();
+    let principal = northstar_auth_postgres::users::user_for_token(&pool, &token)
         .await
         .unwrap()
         .unwrap();

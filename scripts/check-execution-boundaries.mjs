@@ -11,7 +11,7 @@ const files = {
   authService: 'crates/contexts/auth/northstar-auth-application/src/authentication.rs',
   authCredential: 'crates/contexts/auth/northstar-auth-core/src/credential.rs',
   authDb: 'src/db/authentication.rs',
-  authUsers: 'src/db/users.rs',
+  authUsers: 'crates/contexts/auth/northstar-auth-postgres/src/users.rs',
   credentialSmService: 'src/services/sm.rs',
   credentialSmDb: 'src/db/sm_repository.rs',
   authCaps: 'src/xmpp/protocol/caps.rs',
@@ -886,7 +886,7 @@ export function verifyAuthPublicationBoundaries(sources) {
   ordered(stageCredential, ['observation.preparation_entered(publication::CredentialPreparation::Stage)',
     'letSome(device_id)=device_idelse{', 'observation.stage_returned(&Ok(None))', 'returnOk(None);',
     'letoperation_id=Uuid::new_v4();', 'observation.stage_id(operation_id);',
-    'db::stage_user_agent_login_epoch_in_transaction(tx,user_id,device_id,auth_generation,connection_id,operation_id,LOGIN_EPOCH_STAGE_TTL_SECONDS)',
+    'northstar_auth_postgres::users::stage_user_agent_login_epoch_in_transaction(tx,user_id,device_id,auth_generation,connection_id,operation_id,LOGIN_EPOCH_STAGE_TTL_SECONDS)',
     'StagedLoginEpoch{operation_id,connection_id,user_id,device_id,auth_generation,epoch}', 'observation.stage_returned(&result);'],
     'credential SQL stage must retain the original generated ID before the query and reuse it in the returned row');
   for (const [source, name, start, receiptResult, sites] of [
@@ -895,7 +895,7 @@ export function verifyAuthPublicationBoundaries(sources) {
     [credentialSmDb, 'finalize_resume_inner', 'observation.enter_resume(', 'SmResumeFinalizationCommit{activated:activated.into(),receipt}', ['ResumeStageMissing', 'ResumeClaimLost', 'ResumeFastExpired', 'ResumePrivacyMissing']],
   ]) {
     const transaction = method(source, name);
-    ordered(transaction, [start, 'db::users::lock_auth_generation_observed(', 'stage_login_epoch_in_transaction_observed(',
+    ordered(transaction, [start, 'northstar_auth_postgres::users::lock_auth_generation_observed(', 'stage_login_epoch_in_transaction_observed(',
       'CredentialInvocation::commit(observation,tx.commit()).await', 'CredentialCommitReceipt::new(', 'observation.constructed(&receipt)', receiptResult],
       `credential ${name} must observe its actual transaction and construct only after acknowledged COMMIT`);
     requireBoundary(count(transaction, 'CredentialInvocation::commit(observation,tx.commit()).await') === 1 &&

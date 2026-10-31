@@ -1251,7 +1251,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
     .execute(&pool)
     .await
     .unwrap();
-    let prepared_a = crate::db::prepare_registration(
+    let prepared_a = northstar_auth_postgres::users::prepare_registration(
         &username,
         password,
         northstar_auth_core::MIN_SCRAM_ITERATIONS,
@@ -1259,7 +1259,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
     )
     .await
     .unwrap();
-    let prepared_b = crate::db::prepare_registration(
+    let prepared_b = northstar_auth_postgres::users::prepare_registration(
         &username,
         password,
         northstar_auth_core::MIN_SCRAM_ITERATIONS,
@@ -1271,7 +1271,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
         "application/json",
         format!("{{\"username\":\"{username}\"}}").as_bytes(),
     );
-    let register_once = |prepared: crate::db::PreparedRegistration| {
+    let register_once = |prepared: northstar_auth_postgres::users::PreparedRegistration| {
         let pool = pool.clone();
         let username = username.clone();
         let invitation = invitation.clone();
@@ -1300,18 +1300,19 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
                     .unwrap()
                 {
                     IdempotencyAcquire::Acquired(lease) => {
-                        let user = crate::db::create_user_with_invitation_in_tx(
-                            &mut tx,
-                            prepared
-                                .take()
-                                .expect("registration credentials were consumed twice"),
-                            Some(&invitation),
-                            true,
-                            100,
-                            Some(lease.request_id),
-                        )
-                        .await
-                        .unwrap();
+                        let user =
+                            northstar_auth_postgres::users::create_user_with_invitation_in_tx(
+                                &mut tx,
+                                prepared
+                                    .take()
+                                    .expect("registration credentials were consumed twice"),
+                                Some(&invitation),
+                                true,
+                                100,
+                                Some(lease.request_id),
+                            )
+                            .await
+                            .unwrap();
                         assert!(bind_idempotency_actor_in_tx(&mut tx, &lease, user.id)
                             .await
                             .unwrap());
@@ -1353,7 +1354,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
         tokio::join!(register_once(prepared_a), register_once(prepared_b));
     assert_eq!(usize::from(registered_a.0) + usize::from(registered_b.0), 1);
     assert_eq!(registered_a.1, registered_b.1);
-    let user = crate::db::find_user(&pool, &username)
+    let user = northstar_auth_postgres::users::find_user(&pool, &username)
         .await
         .unwrap()
         .unwrap();
@@ -1374,7 +1375,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
     .unwrap();
     assert_eq!(registrations, 1);
 
-    let prepared_login_a = crate::db::prepare_login(
+    let prepared_login_a = northstar_auth_postgres::users::prepare_login(
         &pool,
         &username,
         password,
@@ -1384,7 +1385,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
     .await
     .unwrap()
     .unwrap();
-    let prepared_login_b = crate::db::prepare_login(
+    let prepared_login_b = northstar_auth_postgres::users::prepare_login(
         &pool,
         &username,
         password,
@@ -1398,7 +1399,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
         "application/json",
         format!("{{\"username\":\"{username}\"}}").as_bytes(),
     );
-    let login_once = |prepared: crate::db::PreparedLogin| {
+    let login_once = |prepared: northstar_auth_postgres::users::PreparedLogin| {
         let pool = pool.clone();
         async move {
             let keys =
@@ -1425,7 +1426,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
                     .unwrap()
                 {
                     IdempotencyAcquire::Acquired(lease) => {
-                        assert!(crate::db::apply_prepared_login_in_tx(
+                        assert!(northstar_auth_postgres::users::apply_prepared_login_in_tx(
                             &mut tx,
                             prepared
                                 .take()
@@ -1436,7 +1437,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
                         assert!(bind_idempotency_actor_in_tx(&mut tx, &lease, user.id)
                             .await
                             .unwrap());
-                        let session = crate::db::create_api_session_in_tx(
+                        let session = northstar_auth_postgres::users::create_api_session_in_tx(
                             &mut tx,
                             user.id,
                             1,
@@ -1561,7 +1562,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
     // still uncommitted must wait, yielding a deterministic before/after
     // boundary rather than a one-second cache race.
     let race_name = format!("race{}", &suffix[..8]);
-    let race_prepared = crate::db::prepare_registration(
+    let race_prepared = northstar_auth_postgres::users::prepare_registration(
         &race_name,
         "registration-toggle-race-password",
         northstar_auth_core::MIN_SCRAM_ITERATIONS,
@@ -1592,7 +1593,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
         IdempotencyAcquire::Acquired(lease) => lease,
         other => panic!("unexpected toggle-race acquire: {other:?}"),
     };
-    let race_user = crate::db::create_user_with_invitation_in_tx(
+    let race_user = northstar_auth_postgres::users::create_user_with_invitation_in_tx(
         &mut race_tx,
         race_prepared,
         None,
@@ -1635,7 +1636,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
     assert!(!close.is_finished());
     race_tx.commit().await.unwrap();
     close.await.unwrap();
-    assert!(crate::db::find_user(&pool, &race_name)
+    assert!(northstar_auth_postgres::users::find_user(&pool, &race_name)
         .await
         .unwrap()
         .is_some());
@@ -1648,7 +1649,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
     .await
     .unwrap();
     let blocked_name = format!("closed{}", &suffix[..8]);
-    let blocked = crate::db::prepare_registration(
+    let blocked = northstar_auth_postgres::users::prepare_registration(
         &blocked_name,
         "closed-registration-password",
         northstar_auth_core::MIN_SCRAM_ITERATIONS,
@@ -1680,7 +1681,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
         IdempotencyAcquire::Acquired(_)
     ));
     assert!(matches!(
-        crate::db::create_user_with_invitation_in_tx(
+        northstar_auth_postgres::users::create_user_with_invitation_in_tx(
             &mut blocked_tx,
             blocked,
             None,
@@ -1689,13 +1690,15 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
             Some(blocked_request.request_id),
         )
         .await,
-        Err(crate::db::RegistrationError::Closed)
+        Err(northstar_auth_postgres::users::RegistrationError::Closed)
     ));
     blocked_tx.rollback().await.unwrap();
-    assert!(crate::db::find_user(&pool, &blocked_name)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        northstar_auth_postgres::users::find_user(&pool, &blocked_name)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Missing durable control state is database corruption, not an
     // implicit request to reopen public registration.
@@ -1704,7 +1707,7 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
         .await
         .unwrap();
     let missing_name = format!("missing{}", &suffix[..7]);
-    let missing = crate::db::create_user_with_invitation(
+    let missing = northstar_auth_postgres::users::create_user_with_invitation(
         &pool,
         &missing_name,
         "missing-control-row-password",
@@ -1716,12 +1719,16 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
     .await;
     assert!(matches!(
         missing,
-        Err(crate::db::RegistrationError::Internal(_))
+        Err(northstar_auth_postgres::users::RegistrationError::Internal(
+            _
+        ))
     ));
-    assert!(crate::db::find_user(&pool, &missing_name)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        northstar_auth_postgres::users::find_user(&pool, &missing_name)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -1765,7 +1772,7 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
         .await
         .unwrap();
     }
-    let admin_session = crate::db::create_api_session(&pool, admin_id, 1)
+    let admin_session = northstar_auth_postgres::users::create_api_session(&pool, admin_id, 1)
         .await
         .unwrap();
     let keys = ApiControlKeyring::new(b"admin-sync-api-control-key-000000001", None).unwrap();
@@ -1794,11 +1801,14 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
         br#"{"label":"integration","max_uses":2,"expires_in_hours":1}"#,
     );
     let mut invite_tx = pool.begin().await.unwrap();
-    assert!(
-        crate::db::authorize_admin_in_tx(&mut invite_tx, admin_id, 0, &admin_session)
-            .await
-            .unwrap()
-    );
+    assert!(northstar_auth_postgres::users::authorize_admin_in_tx(
+        &mut invite_tx,
+        admin_id,
+        0,
+        &admin_session
+    )
+    .await
+    .unwrap());
     let invite_lease = acquired(
         acquire_idempotency_in_tx(&keys, &mut invite_tx, &invite_request)
             .await
@@ -1857,11 +1867,14 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
     .unwrap();
     assert!(!audit_details.to_string().contains(&invitation_token));
     let mut invite_replay_tx = pool.begin().await.unwrap();
-    assert!(
-        crate::db::authorize_admin_in_tx(&mut invite_replay_tx, admin_id, 0, &admin_session)
-            .await
-            .unwrap()
-    );
+    assert!(northstar_auth_postgres::users::authorize_admin_in_tx(
+        &mut invite_replay_tx,
+        admin_id,
+        0,
+        &admin_session
+    )
+    .await
+    .unwrap());
     match acquire_idempotency_in_tx(&keys, &mut invite_replay_tx, &invite_request)
         .await
         .unwrap()
@@ -1880,11 +1893,14 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
         b"",
     );
     let mut revoke_tx = pool.begin().await.unwrap();
-    assert!(
-        crate::db::authorize_admin_in_tx(&mut revoke_tx, admin_id, 0, &admin_session)
-            .await
-            .unwrap()
-    );
+    assert!(northstar_auth_postgres::users::authorize_admin_in_tx(
+        &mut revoke_tx,
+        admin_id,
+        0,
+        &admin_session
+    )
+    .await
+    .unwrap());
     let revoke_lease = acquired(
         acquire_idempotency_in_tx(&keys, &mut revoke_tx, &revoke_request)
             .await
@@ -1913,7 +1929,7 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
     .unwrap());
     revoke_tx.commit().await.unwrap();
     let mut invalid_secret_replay_tx = pool.begin().await.unwrap();
-    assert!(crate::db::authorize_admin_in_tx(
+    assert!(northstar_auth_postgres::users::authorize_admin_in_tx(
         &mut invalid_secret_replay_tx,
         admin_id,
         0,
@@ -1938,7 +1954,7 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
     .await
     .unwrap();
     let mut expired_secret_replay_tx = pool.begin().await.unwrap();
-    assert!(crate::db::authorize_admin_in_tx(
+    assert!(northstar_auth_postgres::users::authorize_admin_in_tx(
         &mut expired_secret_replay_tx,
         admin_id,
         0,
@@ -1963,7 +1979,7 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
     .await
     .unwrap();
     let mut exhausted_secret_replay_tx = pool.begin().await.unwrap();
-    assert!(crate::db::authorize_admin_in_tx(
+    assert!(northstar_auth_postgres::users::authorize_admin_in_tx(
         &mut exhausted_secret_replay_tx,
         admin_id,
         0,
@@ -1994,11 +2010,14 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
         b"",
     );
     let mut second_revoke_tx = pool.begin().await.unwrap();
-    assert!(
-        crate::db::authorize_admin_in_tx(&mut second_revoke_tx, admin_id, 0, &admin_session)
-            .await
-            .unwrap()
-    );
+    assert!(northstar_auth_postgres::users::authorize_admin_in_tx(
+        &mut second_revoke_tx,
+        admin_id,
+        0,
+        &admin_session
+    )
+    .await
+    .unwrap());
     let second_revoke_lease = acquired(
         acquire_idempotency_in_tx(&keys, &mut second_revoke_tx, &second_revoke)
             .await
@@ -2073,11 +2092,14 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
             br#"{"status":"reviewing"}"#,
         );
         let mut tx = pool.begin().await.unwrap();
-        assert!(
-            crate::db::authorize_admin_in_tx(&mut tx, admin_id, 0, &admin_session)
-                .await
-                .unwrap()
-        );
+        assert!(northstar_auth_postgres::users::authorize_admin_in_tx(
+            &mut tx,
+            admin_id,
+            0,
+            &admin_session
+        )
+        .await
+        .unwrap());
         let lease = acquired(
             acquire_idempotency_in_tx(&keys, &mut tx, &mutation)
                 .await
@@ -2126,11 +2148,14 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
             1
         );
         let mut replay_tx = pool.begin().await.unwrap();
-        assert!(
-            crate::db::authorize_admin_in_tx(&mut replay_tx, admin_id, 0, &admin_session)
-                .await
-                .unwrap()
-        );
+        assert!(northstar_auth_postgres::users::authorize_admin_in_tx(
+            &mut replay_tx,
+            admin_id,
+            0,
+            &admin_session
+        )
+        .await
+        .unwrap());
         assert!(matches!(
             acquire_idempotency_in_tx(&keys, &mut replay_tx, &mutation)
                 .await
@@ -2170,11 +2195,14 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
         b"",
     );
     let mut clear_tx = pool.begin().await.unwrap();
-    assert!(
-        crate::db::authorize_admin_in_tx(&mut clear_tx, admin_id, 0, &admin_session)
-            .await
-            .unwrap()
-    );
+    assert!(northstar_auth_postgres::users::authorize_admin_in_tx(
+        &mut clear_tx,
+        admin_id,
+        0,
+        &admin_session
+    )
+    .await
+    .unwrap());
     let clear_lease = acquired(
         acquire_idempotency_in_tx(&keys, &mut clear_tx, &clear_request)
             .await
@@ -2232,11 +2260,14 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
         1
     );
     let mut clear_replay_tx = pool.begin().await.unwrap();
-    assert!(
-        crate::db::authorize_admin_in_tx(&mut clear_replay_tx, admin_id, 0, &admin_session)
-            .await
-            .unwrap()
-    );
+    assert!(northstar_auth_postgres::users::authorize_admin_in_tx(
+        &mut clear_replay_tx,
+        admin_id,
+        0,
+        &admin_session
+    )
+    .await
+    .unwrap());
     assert!(matches!(
         acquire_idempotency_in_tx(&keys, &mut clear_replay_tx, &clear_request)
             .await
@@ -2260,11 +2291,14 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
         .await
         .unwrap();
     let mut denied_tx = pool.begin().await.unwrap();
-    assert!(
-        !crate::db::authorize_admin_in_tx(&mut denied_tx, admin_id, 0, &admin_session)
-            .await
-            .unwrap()
-    );
+    assert!(!northstar_auth_postgres::users::authorize_admin_in_tx(
+        &mut denied_tx,
+        admin_id,
+        0,
+        &admin_session
+    )
+    .await
+    .unwrap());
     denied_tx.rollback().await.unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>(

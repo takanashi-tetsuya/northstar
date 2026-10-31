@@ -36,7 +36,7 @@ impl PostgresReportRepository {
     ) -> Result<MutationStart<'_>> {
         let mut tx = self.pool.begin().await?;
         let actor = &admission.authority;
-        if !db::authorize_user_in_tx(
+        if !northstar_auth_postgres::users::authorize_user_in_tx(
             &mut tx,
             actor.user_id,
             actor.auth_generation,

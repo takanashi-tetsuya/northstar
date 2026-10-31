@@ -117,9 +117,11 @@ impl MucRepository for PostgresMucRepository {
     }
 
     async fn enabled_local_account(&self, username: &str) -> Result<Option<MucLocalAccount>> {
-        Ok(db::enabled_user_id(&self.pool, username)
-            .await?
-            .map(|id| MucLocalAccount { id }))
+        Ok(
+            northstar_auth_postgres::users::enabled_user_id(&self.pool, username)
+                .await?
+                .map(|id| MucLocalAccount { id }),
+        )
     }
 
     async fn is_blocked_for_account(
@@ -144,9 +146,10 @@ impl MucRepository for PostgresMucRepository {
         encrypted: bool,
         policy: OfflineStorePolicy,
     ) -> Result<OfflineStoreOutcome> {
-        let recipient = db::find_enabled_user_by_id(&self.pool, recipient_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("MUC offline recipient account is unavailable"))?;
+        let recipient =
+            northstar_auth_postgres::users::find_enabled_user_by_id(&self.pool, recipient_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("MUC offline recipient account is unavailable"))?;
         let recipient_bare_jid = northstar_xmpp_types::jid::canonicalize_bare(&format!(
             "{}@{}",
             recipient.username, configured_domain
@@ -339,9 +342,12 @@ impl MucRepository for PostgresMucRepository {
         policy: OfflineStorePolicy,
         cluster_authority: Option<&ClusterMucInviteAuthority>,
     ) -> Result<DurableMucInviteOutcome> {
-        let recipient = db::find_enabled_user_by_id(&self.pool, recipient_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("local MUC invite recipient account is unavailable"))?;
+        let recipient =
+            northstar_auth_postgres::users::find_enabled_user_by_id(&self.pool, recipient_id)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("local MUC invite recipient account is unavailable")
+                })?;
         let recipient_bare_jid = northstar_xmpp_types::jid::canonicalize_bare(&format!(
             "{}@{}",
             recipient.username, configured_domain

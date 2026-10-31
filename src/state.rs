@@ -362,7 +362,7 @@ pub struct AppState {
     cluster: crate::cluster::ClusterManager,
     account_revocation_consumer_service:
         northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService<
-            db::account_revocation_repository::PostgresAccountRevocationRepository,
+            northstar_auth_postgres::account_revocation_repository::PostgresAccountRevocationRepository,
         >,
     bosh: Option<crate::bosh::BoshManager>,
     sessions: Arc<DashMap<String, OnlineSession>>,

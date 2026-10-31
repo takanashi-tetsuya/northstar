@@ -1,0 +1,27 @@
+[package]
+name = "northstar-auth-postgres"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "PostgreSQL persistence of Northstar accounts, API sessions and credential revocations."
+publish = false
+
+[features]
+# Test-only entry points the root crate's cross-context auth tests use.
+test-support = []
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+northstar-auth-application = { path = "../northstar-auth-application" }
+northstar-auth-core = { path = "../northstar-auth-core" }
+northstar-config = { path = "../../../platform/northstar-config" }
+northstar-security = { path = "../../../platform/northstar-security" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "chrono", "macros"] }
+thiserror = "2.0"
+tracing = "0.1"
+uuid = { version = "1.12", features = ["v4", "serde"] }
+zeroize = "1.8"

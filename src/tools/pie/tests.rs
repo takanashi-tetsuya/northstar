@@ -366,7 +366,7 @@ async fn portable_data_roundtrip_conflicts_and_rollback_are_atomic() {
         .await
         .unwrap();
     crate::db::migrate(&pool).await.unwrap();
-    let alice = crate::db::create_user(
+    let alice = northstar_auth_postgres::users::create_user(
         &pool,
         "alice",
         "alice-portable-password",
@@ -377,7 +377,7 @@ async fn portable_data_roundtrip_conflicts_and_rollback_are_atomic() {
     )
     .await
     .unwrap();
-    let bob = crate::db::create_user(
+    let bob = northstar_auth_postgres::users::create_user(
         &pool,
         "bob",
         "bob-portable-password",
@@ -421,7 +421,7 @@ async fn portable_data_roundtrip_conflicts_and_rollback_are_atomic() {
         .bind(Uuid::new_v4()).bind(alice.id)
         .bind("<message xmlns='jabber:client' from='alice@example.test/phone' to='bob@example.test' type='chat' id='origin-1'><encrypted xmlns='urn:xmpp:omemo:2'><header sid='1'/><payload>Yg==</payload></encrypted></message>")
         .execute(&pool).await.unwrap();
-    let expected_scram = crate::db::get_scram_credentials(
+    let expected_scram = northstar_auth_postgres::users::get_scram_credentials(
         &pool,
         "alice",
         northstar_auth_core::ScramAlgorithm::Sha256,
@@ -460,9 +460,15 @@ async fn portable_data_roundtrip_conflicts_and_rollback_are_atomic() {
     assert_eq!(users_after_dry_run, 0);
     options.dry_run = false;
     import(&pool, &runtime, &options).await.unwrap();
-    let restored_alice = crate::db::find_user(&pool, "alice").await.unwrap().unwrap();
-    let restored_bob = crate::db::find_user(&pool, "bob").await.unwrap().unwrap();
-    let restored_scram = crate::db::get_scram_credentials(
+    let restored_alice = northstar_auth_postgres::users::find_user(&pool, "alice")
+        .await
+        .unwrap()
+        .unwrap();
+    let restored_bob = northstar_auth_postgres::users::find_user(&pool, "bob")
+        .await
+        .unwrap()
+        .unwrap();
+    let restored_scram = northstar_auth_postgres::users::get_scram_credentials(
         &pool,
         "alice",
         northstar_auth_core::ScramAlgorithm::Sha256,
@@ -496,7 +502,7 @@ async fn portable_data_roundtrip_conflicts_and_rollback_are_atomic() {
     options.conflict = ConflictPolicy::Skip;
     import(&pool, &runtime, &options).await.unwrap();
     assert_eq!(
-        crate::db::find_user(&pool, "alice")
+        northstar_auth_postgres::users::find_user(&pool, "alice")
             .await
             .unwrap()
             .unwrap()
@@ -504,7 +510,7 @@ async fn portable_data_roundtrip_conflicts_and_rollback_are_atomic() {
         restored_alice.id
     );
     assert_eq!(
-        crate::db::find_user(&pool, "bob")
+        northstar_auth_postgres::users::find_user(&pool, "bob")
             .await
             .unwrap()
             .unwrap()
@@ -514,7 +520,7 @@ async fn portable_data_roundtrip_conflicts_and_rollback_are_atomic() {
     options.conflict = ConflictPolicy::Replace;
     import(&pool, &runtime, &options).await.unwrap();
     assert_ne!(
-        crate::db::find_user(&pool, "alice")
+        northstar_auth_postgres::users::find_user(&pool, "alice")
             .await
             .unwrap()
             .unwrap()
@@ -529,7 +535,7 @@ async fn portable_data_roundtrip_conflicts_and_rollback_are_atomic() {
         1
     );
 
-    let existing = crate::db::create_user(
+    let existing = northstar_auth_postgres::users::create_user(
         &pool,
         "zrollback",
         "rollback-existing-password",
@@ -548,12 +554,14 @@ async fn portable_data_roundtrip_conflicts_and_rollback_are_atomic() {
     options.input = rollback_file;
     options.conflict = ConflictPolicy::Fail;
     assert!(import(&pool, &runtime, &options).await.is_err());
-    assert!(crate::db::find_user(&pool, "arollback")
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        northstar_auth_postgres::users::find_user(&pool, "arollback")
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
-        crate::db::find_user(&pool, "zrollback")
+        northstar_auth_postgres::users::find_user(&pool, "zrollback")
             .await
             .unwrap()
             .unwrap()

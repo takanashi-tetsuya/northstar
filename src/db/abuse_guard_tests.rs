@@ -979,7 +979,7 @@ async fn postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe() {
     crate::db::migrate(&pool).await.unwrap();
     let marker = Uuid::new_v4();
     let username = format!("msgpow{}", &marker.simple().to_string()[..16]);
-    let user = crate::db::create_user(
+    let user = northstar_auth_postgres::users::create_user(
         &pool,
         &username,
         "message-admission-test-password-42",
@@ -1594,7 +1594,7 @@ async fn postgres_message_admission_capacity_and_cleanup_are_bounded() {
     let marker = Uuid::new_v4();
     let marker_text = marker.simple().to_string();
     let username = format!("msgcap{}", &marker_text[..16]);
-    let user = crate::db::create_user(
+    let user = northstar_auth_postgres::users::create_user(
         &pool,
         &username,
         "message-capacity-test-password-42",

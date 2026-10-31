@@ -51,8 +51,10 @@ impl SmTeardownPresenceRepository for PostgresSmTeardownPresenceRepository {
     }
 
     async fn enabled_user_id(&self, username: &str) -> Result<Option<Uuid>> {
-        Ok(db::find_enabled_user(&self.pool, username)
-            .await?
-            .map(|recipient| recipient.id))
+        Ok(
+            northstar_auth_postgres::users::find_enabled_user(&self.pool, username)
+                .await?
+                .map(|recipient| recipient.id),
+        )
     }
 }

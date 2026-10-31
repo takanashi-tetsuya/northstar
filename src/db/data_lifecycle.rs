@@ -565,7 +565,7 @@ pub async fn list_legal_holds_audited(
         .execute(&mut *tx)
         .await
         .map_err(|error| LegalHoldError::Internal(error.into()))?;
-    if !super::users::authorize_admin_in_tx(
+    if !northstar_auth_postgres::users::authorize_admin_in_tx(
         &mut tx,
         actor_id,
         expected_auth_generation,

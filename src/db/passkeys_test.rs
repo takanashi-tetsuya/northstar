@@ -31,7 +31,9 @@ async fn ceremonies_are_single_use_and_key_removal_fences_sessions() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    let token = crate::db::create_api_session(&pool, user, 1).await.unwrap();
+    let token = northstar_auth_postgres::users::create_api_session(&pool, user, 1)
+        .await
+        .unwrap();
     let session = northstar_auth_core::token_hash(&token);
     let state = serde_json::json!({"fixture":"database lifecycle; signature verification is tested separately"});
     assert!(
@@ -170,10 +172,12 @@ async fn ceremonies_are_single_use_and_key_removal_fences_sessions() {
         .unwrap();
     let logged_in = repository.complete_login(commit()).await.unwrap().unwrap();
     assert_eq!(logged_in.username, "alice");
-    assert!(crate::db::user_for_token(&pool, &logged_in.token)
-        .await
-        .unwrap()
-        .is_some());
+    assert!(
+        northstar_auth_postgres::users::user_for_token(&pool, &logged_in.token)
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert!(repository.complete_login(commit()).await.unwrap().is_none());
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM fast_tokens")
@@ -231,14 +235,18 @@ async fn ceremonies_are_single_use_and_key_removal_fences_sessions() {
         Some(generation + 1)
     );
     assert!(credentials(&pool, user).await.unwrap().is_empty());
-    assert!(crate::db::user_for_token(&pool, &token)
-        .await
-        .unwrap()
-        .is_none());
-    assert!(crate::db::user_for_token(&pool, &logged_in.token)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        northstar_auth_postgres::users::user_for_token(&pool, &token)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        northstar_auth_postgres::users::user_for_token(&pool, &logged_in.token)
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(consume(&pool, pending, "login", None)
         .await
         .unwrap()

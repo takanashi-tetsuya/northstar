@@ -27,13 +27,15 @@ impl PepNodeQueryRepository for PostgresPubSubRepository {
     }
     async fn find_enabled_user(&self, username: &str) -> Result<Option<PubSubAccount>> {
         let outcome: Result<_> = async {
-            Ok(db::find_enabled_user(&self.pool, username)
-                .await?
-                .map(|user| PubSubAccount {
-                    id: user.id,
-                    username: user.username,
-                    auth_generation: user.auth_generation,
-                }))
+            Ok(
+                northstar_auth_postgres::users::find_enabled_user(&self.pool, username)
+                    .await?
+                    .map(|user| PubSubAccount {
+                        id: user.id,
+                        username: user.username,
+                        auth_generation: user.auth_generation,
+                    }),
+            )
         }
         .await;
         outcome.map_err(map_database_busy)

@@ -6,11 +6,11 @@ use super::{
 use crate::{
     api::contexts::account_teardown::{AccountSessionTeardown, AccountTeardownContext},
     cluster::ClusterAccountTeardownNotifier,
-    db::account_teardown_repository::PostgresAccountGenerationRepository,
 };
 use axum::extract::FromRef;
 use futures::future::BoxFuture;
 use northstar_auth_application::account_teardown::AccountGenerationService;
+use northstar_auth_postgres::account_teardown_repository::PostgresAccountGenerationRepository;
 use std::sync::Arc;
 use uuid::Uuid;
 

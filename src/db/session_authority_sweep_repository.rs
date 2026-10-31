@@ -21,25 +21,27 @@ impl SessionAuthoritySweepRepository for PostgresSessionAuthoritySweepRepository
         &self,
         user_ids: &[Uuid],
     ) -> Result<HashMap<Uuid, AccountAuthState>> {
-        Ok(crate::db::auth_states_for_users(&self.pool, user_ids)
-            .await?
-            .into_iter()
-            .map(|(user_id, state)| {
-                (
-                    user_id,
-                    AccountAuthState {
-                        auth_generation: state.auth_generation,
-                        is_disabled: state.is_disabled,
-                    },
-                )
-            })
-            .collect())
+        Ok(
+            northstar_auth_postgres::users::auth_states_for_users(&self.pool, user_ids)
+                .await?
+                .into_iter()
+                .map(|(user_id, state)| {
+                    (
+                        user_id,
+                        AccountAuthState {
+                            auth_generation: state.auth_generation,
+                            is_disabled: state.is_disabled,
+                        },
+                    )
+                })
+                .collect(),
+        )
     }
 
     async fn user_agent_login_epochs(
         &self,
         agents: &[(Uuid, Uuid)],
     ) -> Result<HashMap<(Uuid, Uuid), i64>> {
-        crate::db::user_agent_login_epochs(&self.pool, agents).await
+        northstar_auth_postgres::users::user_agent_login_epochs(&self.pool, agents).await
     }
 }

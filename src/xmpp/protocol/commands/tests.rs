@@ -491,7 +491,7 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
         .await
         .unwrap();
     assert!(
-        db::find_user_by_id(&pool, member)
+        northstar_auth_postgres::users::find_user_by_id(&pool, member)
             .await
             .unwrap()
             .unwrap()
@@ -723,14 +723,14 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
         .unwrap()
         .is_none());
 
-    let before = db::find_user_by_id(&pool, member)
+    let before = northstar_auth_postgres::users::find_user_by_id(&pool, member)
         .await
         .unwrap()
         .unwrap()
         .auth_generation;
     assert!(db::end_user_sessions(&pool, admin, member).await.unwrap());
     assert_eq!(
-        db::find_user_by_id(&pool, member)
+        northstar_auth_postgres::users::find_user_by_id(&pool, member)
             .await
             .unwrap()
             .unwrap()

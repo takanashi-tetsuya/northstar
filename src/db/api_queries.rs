@@ -19,7 +19,7 @@ impl PostgresApiQueryRepository {
         actor: ApiReadAuthority<'_>,
     ) -> Result<AuthorizedRead<Transaction<'_, Postgres>>> {
         let mut tx = self.pool.begin().await?;
-        if !db::authorize_user_in_tx(
+        if !northstar_auth_postgres::users::authorize_user_in_tx(
             &mut tx,
             actor.user_id,
             actor.auth_generation,
@@ -30,7 +30,7 @@ impl PostgresApiQueryRepository {
             tx.rollback().await?;
             return Ok(Err(ApiReadDenial::Unauthorized));
         }
-        if !db::authorize_admin_in_tx(
+        if !northstar_auth_postgres::users::authorize_admin_in_tx(
             &mut tx,
             actor.user_id,
             actor.auth_generation,
@@ -54,7 +54,7 @@ impl PostgresApiQueryRepository {
             .execute(&mut *tx)
             .await?;
         let allowed = if administrator {
-            db::authorize_admin_in_tx(
+            northstar_auth_postgres::users::authorize_admin_in_tx(
                 &mut tx,
                 actor.user_id,
                 actor.auth_generation,
@@ -62,7 +62,7 @@ impl PostgresApiQueryRepository {
             )
             .await?
         } else {
-            db::authorize_user_in_tx(
+            northstar_auth_postgres::users::authorize_user_in_tx(
                 &mut tx,
                 actor.user_id,
                 actor.auth_generation,
@@ -145,7 +145,7 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
     }
 
     async fn principal(&self, token: &str) -> Result<Option<ApiPrincipal>> {
-        db::user_for_token(&self.pool, token).await
+        northstar_auth_postgres::users::user_for_token(&self.pool, token).await
     }
     async fn cursor_clock(&self) -> Result<DateTime<Utc>> {
         db::database_cursor_clock(&self.pool).await
@@ -352,7 +352,9 @@ mod tests {
         let generation: i64 = sqlx::query_scalar(
             "INSERT INTO users(id,username,password_hash,is_admin) VALUES($1,$2,'test-only',TRUE) RETURNING auth_generation",
         ).bind(id).bind(format!("query_{}", id.simple())).fetch_one(&pool).await.unwrap();
-        let token = db::create_api_session(&pool, id, 1).await.unwrap();
+        let token = northstar_auth_postgres::users::create_api_session(&pool, id, 1)
+            .await
+            .unwrap();
         let service = ApiQueryService::new(PostgresApiQueryRepository::new(pool.clone()));
         let actor = || ApiReadAuthority {
             user_id: id,

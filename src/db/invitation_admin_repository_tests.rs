@@ -71,7 +71,9 @@ async fn invitation_ports_revalidate_secret_replay_and_commit_revoke_outcomes_on
     let admin = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,username,password_hash,is_admin) VALUES($1,$2,'test-only-invalid',TRUE)")
         .bind(admin).bind(format!("invitation-{}", admin.simple())).execute(&pool).await.unwrap();
-    let session = db::create_api_session(&pool, admin, 1).await.unwrap();
+    let session = northstar_auth_postgres::users::create_api_session(&pool, admin, 1)
+        .await
+        .unwrap();
     let cluster =
         crate::cluster::ClusterManager::new(None, "invitation-admin.test", None, None, None, None)
             .await

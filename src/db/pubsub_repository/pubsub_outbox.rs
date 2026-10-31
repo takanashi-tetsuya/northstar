@@ -31,7 +31,9 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
 
     async fn local_account_blocks_pubsub(&self, username: &str, service: &str) -> Result<bool> {
         let outcome: Result<_> = async {
-            let Some(user) = db::find_enabled_user(&self.pool, username).await? else {
+            let Some(user) =
+                northstar_auth_postgres::users::find_enabled_user(&self.pool, username).await?
+            else {
                 return Ok(false);
             };
             db::is_blocked(&self.pool, user.id, service).await

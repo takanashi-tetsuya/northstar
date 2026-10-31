@@ -1975,6 +1975,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-auth-postgres"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "northstar-auth-application",
+ "northstar-auth-core",
+ "northstar-config",
+ "northstar-security",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.20",
+ "tracing",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "northstar-config"
 version = "0.1.0"
 dependencies = [
@@ -3497,6 +3516,7 @@ dependencies = [
  "northstar-archive-xmpp",
  "northstar-auth-application",
  "northstar-auth-core",
+ "northstar-auth-postgres",
  "northstar-config",
  "northstar-delivery-core",
  "northstar-federation-application",

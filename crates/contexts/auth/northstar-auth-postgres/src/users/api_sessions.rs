@@ -6,7 +6,7 @@ use super::*;
 /// Its Argon2 verifier is zeroized as soon as the request path releases it.
 pub struct PasswordChangeSubject {
     pub principal: ApiPrincipal,
-    pub(super) password_hash: Zeroizing<String>,
+    pub password_hash: Zeroizing<String>,
 }
 
 impl PasswordChangeSubject {
@@ -23,7 +23,7 @@ impl std::ops::Deref for PasswordChangeSubject {
     }
 }
 
-pub(super) const MAX_API_SESSIONS_PER_USER: i64 = 32;
+pub const MAX_API_SESSIONS_PER_USER: i64 = 32;
 
 pub struct CreatedApiSession {
     pub id: Uuid,
@@ -346,7 +346,7 @@ pub async fn set_user_status_admin_in_tx(
     }
 }
 
-pub(super) fn api_principal_from_row(row: &sqlx::postgres::PgRow) -> ApiPrincipal {
+pub fn api_principal_from_row(row: &sqlx::postgres::PgRow) -> ApiPrincipal {
     ApiPrincipal {
         id: row.get("id"),
         username: row.get("username"),

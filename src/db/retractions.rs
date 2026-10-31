@@ -118,7 +118,12 @@ impl RetractionRepository for PostgresRetractionRepository {
             required_accounts.push(delivery.projection.recipient_id);
             required_accounts.extend(delivery.projection.local_actor_id);
         }
-        if !db::lock_enabled_users_in_transaction(&mut transaction, &required_accounts).await? {
+        if !northstar_auth_postgres::users::lock_enabled_users_in_transaction(
+            &mut transaction,
+            &required_accounts,
+        )
+        .await?
+        {
             transaction.rollback().await?;
             return Ok(RetractionOutcome::AccountUnavailable);
         }

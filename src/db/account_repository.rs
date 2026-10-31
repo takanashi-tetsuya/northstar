@@ -91,7 +91,7 @@ impl AccountRepository for PostgresAccountRepository {
         let rate_limited = if closed {
             false
         } else {
-            db::registrations_last_hour_in_tx(&mut reservation).await?
+            northstar_auth_postgres::users::registrations_last_hour_in_tx(&mut reservation).await?
                 >= i64::from(policy.registration_rate_per_hour)
         };
         if closed || rate_limited {
@@ -132,7 +132,7 @@ impl AccountRepository for PostgresAccountRepository {
         // No transaction spans password work. The committed guard marker
         // allows an exact retry to skip already-consumed proof after a worker
         // or database failure, while the rotated lease fences the old worker.
-        let prepared = match db::prepare_registration(
+        let prepared = match northstar_auth_postgres::users::prepare_registration(
             request.username,
             request.password,
             policy.scram_iterations,
@@ -146,11 +146,15 @@ impl AccountRepository for PostgresAccountRepository {
                     return Ok(Outcome::LeaseLost);
                 }
                 return match error {
-                    db::RegistrationError::InvalidUsername(_) => Ok(Outcome::InvalidUsername),
-                    db::RegistrationError::PasswordWorkOverloaded => {
+                    northstar_auth_postgres::users::RegistrationError::InvalidUsername(_) => {
+                        Ok(Outcome::InvalidUsername)
+                    }
+                    northstar_auth_postgres::users::RegistrationError::PasswordWorkOverloaded => {
                         Ok(Outcome::PasswordWorkOverloaded)
                     }
-                    db::RegistrationError::Internal(error) => Err(error),
+                    northstar_auth_postgres::users::RegistrationError::Internal(error) => {
+                        Err(error)
+                    }
                     other => Err(anyhow::anyhow!(other)
                         .context("registration preparation returned an impossible outcome")),
                 };
@@ -234,16 +238,24 @@ impl AccountRepository for PostgresAccountRepository {
                 Ok(Outcome::AbuseDenied(error))
             }
             db::GuardedRegistrationOutcome::Rejected(
-                error @ (db::RegistrationError::UsernameTaken
-                | db::RegistrationError::InvitationRejected),
+                error @ (northstar_auth_postgres::users::RegistrationError::UsernameTaken
+                | northstar_auth_postgres::users::RegistrationError::InvitationRejected),
             ) => {
                 let reason = match error {
-                    db::RegistrationError::UsernameTaken => "username_unavailable",
-                    db::RegistrationError::InvitationRejected => "invitation_rejected",
+                    northstar_auth_postgres::users::RegistrationError::UsernameTaken => {
+                        "username_unavailable"
+                    }
+                    northstar_auth_postgres::users::RegistrationError::InvitationRejected => {
+                        "invitation_rejected"
+                    }
                     _ => unreachable!("pattern is restricted above"),
                 };
-                db::audit_registration_rejection_in_tx(&mut publication, lease.request_id, reason)
-                    .await?;
+                northstar_auth_postgres::users::audit_registration_rejection_in_tx(
+                    &mut publication,
+                    lease.request_id,
+                    reason,
+                )
+                .await?;
                 let body = serde_json::to_vec(&serde_json::json!({
                     "error": {
                         "code": "bad_request",
@@ -272,16 +284,30 @@ impl AccountRepository for PostgresAccountRepository {
                 }
                 publication.commit().await?;
                 match error {
-                    db::RegistrationError::CapacityExhausted => Ok(Outcome::CapacityExhausted),
-                    db::RegistrationError::Closed => Ok(Outcome::Closed),
-                    db::RegistrationError::RateLimited => Ok(Outcome::RateLimited),
-                    db::RegistrationError::PasswordWorkOverloaded => {
+                    northstar_auth_postgres::users::RegistrationError::CapacityExhausted => {
+                        Ok(Outcome::CapacityExhausted)
+                    }
+                    northstar_auth_postgres::users::RegistrationError::Closed => {
+                        Ok(Outcome::Closed)
+                    }
+                    northstar_auth_postgres::users::RegistrationError::RateLimited => {
+                        Ok(Outcome::RateLimited)
+                    }
+                    northstar_auth_postgres::users::RegistrationError::PasswordWorkOverloaded => {
                         Ok(Outcome::PasswordWorkOverloaded)
                     }
-                    db::RegistrationError::InvalidUsername(_) => Ok(Outcome::InvalidUsername),
-                    db::RegistrationError::InvitationRejected => Ok(Outcome::InvitationRejected),
-                    db::RegistrationError::UsernameTaken => Ok(Outcome::UsernameTaken),
-                    db::RegistrationError::Internal(error) => Err(error),
+                    northstar_auth_postgres::users::RegistrationError::InvalidUsername(_) => {
+                        Ok(Outcome::InvalidUsername)
+                    }
+                    northstar_auth_postgres::users::RegistrationError::InvitationRejected => {
+                        Ok(Outcome::InvitationRejected)
+                    }
+                    northstar_auth_postgres::users::RegistrationError::UsernameTaken => {
+                        Ok(Outcome::UsernameTaken)
+                    }
+                    northstar_auth_postgres::users::RegistrationError::Internal(error) => {
+                        Err(error)
+                    }
                 }
             }
         }
@@ -383,7 +409,7 @@ impl AccountRepository for PostgresAccountRepository {
             }
         }
 
-        let prepared = match db::prepare_registration_with_reservation(
+        let prepared = match northstar_auth_postgres::users::prepare_registration_with_reservation(
             request.username,
             request.password,
             policy.scram_iterations,
@@ -393,19 +419,19 @@ impl AccountRepository for PostgresAccountRepository {
         .await
         {
             Ok(prepared) => prepared,
-            Err(db::RegistrationError::InvalidUsername(_)) => {
+            Err(northstar_auth_postgres::users::RegistrationError::InvalidUsername(_)) => {
                 if let Err(rollback_error) = transaction.rollback().await {
                     tracing::error!(?rollback_error, "registration rollback failed");
                 }
                 return Ok(RegistrationOutcome::InvalidUsername);
             }
-            Err(db::RegistrationError::PasswordWorkOverloaded) => {
+            Err(northstar_auth_postgres::users::RegistrationError::PasswordWorkOverloaded) => {
                 if let Err(rollback_error) = transaction.rollback().await {
                     tracing::error!(?rollback_error, "registration rollback failed");
                 }
                 return Ok(RegistrationOutcome::PasswordWorkOverloaded);
             }
-            Err(db::RegistrationError::Internal(error)) => {
+            Err(northstar_auth_postgres::users::RegistrationError::Internal(error)) => {
                 if let Err(rollback_error) = transaction.rollback().await {
                     tracing::error!(?rollback_error, "registration rollback failed");
                 }
@@ -459,18 +485,30 @@ impl AccountRepository for PostgresAccountRepository {
                 RegistrationOutcome::AbuseDenied(error.requirement().clone())
             }
             db::GuardedRegistrationOutcome::Rejected(error) => match error {
-                db::RegistrationError::InvalidUsername(_) => RegistrationOutcome::InvalidUsername,
-                db::RegistrationError::InvitationRejected => {
+                northstar_auth_postgres::users::RegistrationError::InvalidUsername(_) => {
+                    RegistrationOutcome::InvalidUsername
+                }
+                northstar_auth_postgres::users::RegistrationError::InvitationRejected => {
                     RegistrationOutcome::InvitationRejected
                 }
-                db::RegistrationError::UsernameTaken => RegistrationOutcome::UsernameTaken,
-                db::RegistrationError::RateLimited => RegistrationOutcome::RateLimited,
-                db::RegistrationError::CapacityExhausted => RegistrationOutcome::CapacityExhausted,
-                db::RegistrationError::PasswordWorkOverloaded => {
+                northstar_auth_postgres::users::RegistrationError::UsernameTaken => {
+                    RegistrationOutcome::UsernameTaken
+                }
+                northstar_auth_postgres::users::RegistrationError::RateLimited => {
+                    RegistrationOutcome::RateLimited
+                }
+                northstar_auth_postgres::users::RegistrationError::CapacityExhausted => {
+                    RegistrationOutcome::CapacityExhausted
+                }
+                northstar_auth_postgres::users::RegistrationError::PasswordWorkOverloaded => {
                     RegistrationOutcome::PasswordWorkOverloaded
                 }
-                db::RegistrationError::Closed => RegistrationOutcome::Closed,
-                db::RegistrationError::Internal(error) => return Err(error),
+                northstar_auth_postgres::users::RegistrationError::Closed => {
+                    RegistrationOutcome::Closed
+                }
+                northstar_auth_postgres::users::RegistrationError::Internal(error) => {
+                    return Err(error)
+                }
             },
         })
     }

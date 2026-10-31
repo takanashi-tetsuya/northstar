@@ -241,7 +241,7 @@ async fn postgres_hold_cleanup_delete_release_and_audit_invariants() {
     .unwrap();
     tx.commit().await.unwrap();
 
-    let admin_session = crate::db::create_api_session(&pool, admin, 1)
+    let admin_session = northstar_auth_postgres::users::create_api_session(&pool, admin, 1)
         .await
         .unwrap();
     let access_key_sha256 = "ab".repeat(32);
@@ -271,13 +271,15 @@ async fn postgres_hold_cleanup_delete_release_and_audit_invariants() {
         Err(LegalHoldError::Invalid)
     ));
     let mut logout = pool.begin().await.unwrap();
-    assert!(crate::db::delete_api_session_audited_in_tx(
-        &mut logout,
-        &admin_session,
-        Uuid::new_v4(),
-    )
-    .await
-    .unwrap());
+    assert!(
+        northstar_auth_postgres::users::delete_api_session_audited_in_tx(
+            &mut logout,
+            &admin_session,
+            Uuid::new_v4(),
+        )
+        .await
+        .unwrap()
+    );
     logout.commit().await.unwrap();
     assert!(matches!(
         list_legal_holds_audited(

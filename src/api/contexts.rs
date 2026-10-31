@@ -101,7 +101,7 @@ pub(crate) type OmemoRecoveryPollContext = omemo_poll::OmemoRecoveryPollContext<
 >;
 
 pub(crate) type PasskeyService = northstar_auth_application::passkeys::PasskeyService<
-    crate::db::passkeys::PostgresPasskeyRepository,
+    northstar_auth_postgres::passkeys::PostgresPasskeyRepository,
 >;
 pub(crate) type UploadService = northstar_upload_application::service::UploadService<
     northstar_upload_postgres::PostgresUploadRepository,

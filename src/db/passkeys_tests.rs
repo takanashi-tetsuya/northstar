@@ -1,6 +1,10 @@
-use super::*;
+use northstar_auth_application::passkeys::*;
+use northstar_auth_postgres::passkeys::*;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::str::FromStr;
+use std::sync::Arc;
+use uuid::Uuid;
+use zeroize::Zeroizing;
 
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL for a disposable PostgreSQL schema"]

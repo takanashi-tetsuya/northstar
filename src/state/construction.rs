@@ -500,7 +500,7 @@ impl AppState {
             .await
             .context("failed to load dummy SCRAM iteration profiles")?;
         let authentication_service = northstar_auth_application::authentication::AuthenticationService::new_with_dummy_scram_iteration_profiles(
-                db::authentication::PostgresAuthenticationRepository::new(pool.clone(), Arc::clone(&fast_token_secret)),
+                crate::db::authentication_effects::PostgresAuthenticationRepository::new(pool.clone(), Arc::clone(&fast_token_secret), crate::db::authentication_effects::RootAuthenticationEffects),
                 dummy_scram_secret,
                 config.scram_iterations,
                 dummy_scram_iteration_profiles,
@@ -523,7 +523,10 @@ impl AppState {
             config.offline_message_ttl_days,
         );
         let passkey_service = Arc::new(PasskeyService::new(
-            db::passkeys::PostgresPasskeyRepository::new(pool.clone(), fast_token_secret.clone()),
+            northstar_auth_postgres::passkeys::PostgresPasskeyRepository::new(
+                pool.clone(),
+                fast_token_secret.clone(),
+            ),
             northstar_auth_application::passkeys::PasskeyConfig {
                 enabled: config.web_client_enabled && config.fast_token_enabled,
                 public_url: config.public_url.clone(),

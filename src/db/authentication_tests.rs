@@ -1,8 +1,8 @@
 use crate::db;
-use crate::db::authentication::stage_login_epoch_in_transaction;
 use northstar_archive_core::ArchiveBoundary;
 use northstar_auth_application::authentication::*;
 use northstar_auth_core as auth;
+use northstar_auth_postgres::authentication::stage_login_epoch_in_transaction;
 use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -315,9 +315,10 @@ async fn dummy_scram_identity_is_independent_from_fast_key_rotation() {
         .unwrap();
     let make_service = |fast_byte, dummy_byte| {
         AuthenticationService::new(
-            crate::db::authentication::PostgresAuthenticationRepository::new(
+            crate::db::authentication_effects::PostgresAuthenticationRepository::new(
                 pool.clone(),
                 Arc::new(Zeroizing::new(vec![fast_byte; 32])),
+                crate::db::authentication_effects::RootAuthenticationEffects,
             ),
             Arc::new(Zeroizing::new(vec![dummy_byte; 32])),
             auth::MIN_SCRAM_ITERATIONS,
@@ -408,9 +409,10 @@ async fn authentication_service_fences_all_credential_and_inline_state_transitio
     let pool = isolated_pool().await;
     let fast_secret = Arc::new(Zeroizing::new(vec![0x5a; 32]));
     let service = AuthenticationService::new(
-        crate::db::authentication::PostgresAuthenticationRepository::new(
+        crate::db::authentication_effects::PostgresAuthenticationRepository::new(
             pool.clone(),
             Arc::clone(&fast_secret),
+            crate::db::authentication_effects::RootAuthenticationEffects,
         ),
         Arc::new(Zeroizing::new(vec![0xa5; 32])),
         auth::MIN_SCRAM_ITERATIONS,
@@ -627,7 +629,7 @@ async fn authentication_service_fences_all_credential_and_inline_state_transitio
     let (dave_id, dave_generation) =
         create_account(&pool, &dave, "dave correct horse battery").await;
     let device_id = Uuid::new_v4();
-    let issued = db::issue_fast_token(
+    let issued = northstar_auth_postgres::fast::issue_fast_token(
         &pool,
         fast_secret.as_slice(),
         dave_id,
@@ -713,7 +715,7 @@ fn fast_service_dto_conversions_keep_secrets_move_only() {
     let device_id = Uuid::new_v4();
     let token_id = Uuid::new_v4();
 
-    let db_issued = db::IssuedFastToken {
+    let db_issued = northstar_auth_postgres::fast::IssuedFastToken {
         token: Zeroizing::new("secret-fast-token-value".to_string()),
         expires_at: later,
     };
@@ -728,7 +730,7 @@ fn fast_service_dto_conversions_keep_secrets_move_only() {
         strong_reauth_max_days: 90,
         inherited_chain: Some((now, later)),
     };
-    let db_issue = db::FastTokenIssue::from(&service_issue);
+    let db_issue = northstar_auth_postgres::fast::FastTokenIssue::from(&service_issue);
     assert_eq!(db_issue.device_id, device_id);
     assert_eq!(db_issue.mechanism, "HT-SHA-256-NONE");
     assert_eq!(db_issue.ttl_days, 30);
@@ -744,7 +746,7 @@ fn fast_service_dto_conversions_keep_secrets_move_only() {
         invalidate: true,
         issue: Some(service_issue),
     };
-    let db_plan = db::FastCommitPlan::from(&service_plan);
+    let db_plan = northstar_auth_postgres::fast::FastCommitPlan::from(&service_plan);
     assert_eq!(db_plan.token_id, Some(token_id));
     assert!(db_plan.token_was_new);
     assert!(db_plan.invalidate);
@@ -799,9 +801,10 @@ async fn bind2_recovers_failed_pooled_transaction_before_preflight() {
         Some("25001")
     );
 
-    let repository = crate::db::authentication::PostgresAuthenticationRepository::new(
+    let repository = crate::db::authentication_effects::PostgresAuthenticationRepository::new(
         pool.clone(),
         Arc::new(Zeroizing::new(vec![0x5a; 32])),
+        crate::db::authentication_effects::RootAuthenticationEffects,
     );
     assert!(matches!(
         repository
@@ -842,9 +845,10 @@ async fn bind2_resets_active_pooled_transaction_before_preflight() {
         .unwrap();
     assert_eq!(isolation, "read committed");
 
-    let repository = crate::db::authentication::PostgresAuthenticationRepository::new(
+    let repository = crate::db::authentication_effects::PostgresAuthenticationRepository::new(
         pool.clone(),
         Arc::new(Zeroizing::new(vec![0x5a; 32])),
+        crate::db::authentication_effects::RootAuthenticationEffects,
     );
     assert!(matches!(
         repository
@@ -881,9 +885,10 @@ async fn login_epoch_publication_is_fenced_invisible_and_atomic_with_binding() {
     let (user_id, auth_generation) =
         create_account(&pool, &username, "epoch correct horse battery").await;
     let service = AuthenticationService::new(
-        crate::db::authentication::PostgresAuthenticationRepository::new(
+        crate::db::authentication_effects::PostgresAuthenticationRepository::new(
             pool.clone(),
             Arc::new(Zeroizing::new(vec![0x61; 32])),
+            crate::db::authentication_effects::RootAuthenticationEffects,
         ),
         Arc::new(Zeroizing::new(vec![0xa6; 32])),
         auth::MIN_SCRAM_ITERATIONS,

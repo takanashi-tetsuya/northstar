@@ -94,9 +94,9 @@ if [[ "$scope" == "all" || "$scope" == "admin-sync" ]]; then
 fi
 if [[ "$scope" == "all" || "$scope" == "fast" ]]; then
   run_exact_ignored \
-    db::fast::tests::durable_fast_tokens_support_optional_counts_replay_and_status_revocation
+    db::fast_tests::durable_fast_tokens_support_optional_counts_replay_and_status_revocation
   run_exact_ignored \
-    db::fast::tests::bind2_fast_side_effects_rollback_with_route_sql_and_commit_failures
+    db::fast_tests::bind2_fast_side_effects_rollback_with_route_sql_and_commit_failures
 fi
 if [[ "$scope" == "all" || "$scope" == "commands" ]]; then
   run_exact_ignored \

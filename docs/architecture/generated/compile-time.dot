@@ -1016,6 +1016,7 @@ digraph compile_time {
   "northstar-auth-postgres" -> "northstar-auth-core";
   "northstar-auth-postgres" -> "northstar-config";
   "northstar-auth-postgres" -> "northstar-security";
+  "northstar-auth-postgres" -> "rand";
   "northstar-auth-postgres" -> "serde";
   "northstar-auth-postgres" -> "serde_json";
   "northstar-auth-postgres" -> "sqlx";

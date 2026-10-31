@@ -6,7 +6,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Serialize)]
-pub(crate) struct Credential {
+pub struct Credential {
     pub id: Uuid,
     pub label: String,
     pub created_at: DateTime<Utc>,
@@ -17,7 +17,7 @@ pub(crate) struct Credential {
     pub revision: Uuid,
 }
 
-pub(crate) async fn credentials(pool: &PgPool, user: Uuid) -> Result<Vec<Credential>> {
+pub async fn credentials(pool: &PgPool, user: Uuid) -> Result<Vec<Credential>> {
     Ok(sqlx::query_as(
         "SELECT id,label,created_at,last_used_at,credential,revision
         FROM webauthn_credentials WHERE user_id=$1 ORDER BY created_at,id LIMIT 10",
@@ -27,7 +27,7 @@ pub(crate) async fn credentials(pool: &PgPool, user: Uuid) -> Result<Vec<Credent
     .await?)
 }
 
-pub(crate) async fn credentials_in_tx(
+pub async fn credentials_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     user: Uuid,
 ) -> Result<Vec<Credential>> {
@@ -40,7 +40,7 @@ pub(crate) async fn credentials_in_tx(
     .await?)
 }
 
-pub(crate) async fn challenge(
+pub async fn challenge(
     pool: &PgPool,
     user: Uuid,
     generation: i64,
@@ -61,13 +61,13 @@ pub(crate) async fn challenge(
 }
 
 #[derive(sqlx::FromRow)]
-pub(crate) struct Challenge {
+pub struct Challenge {
     pub user_id: Uuid,
     pub auth_generation: i64,
     pub state: Value,
 }
 
-pub(crate) async fn consume(
+pub async fn consume(
     pool: &PgPool,
     id: Uuid,
     kind: &str,
@@ -83,7 +83,7 @@ pub(crate) async fn consume(
     )
 }
 
-pub(crate) async fn register(
+pub async fn register(
     pool: &PgPool,
     user: Uuid,
     generation: i64,
@@ -105,7 +105,7 @@ pub(crate) async fn register(
     )
 }
 
-pub(crate) async fn accept(
+pub async fn accept(
     tx: &mut Transaction<'_, Postgres>,
     user: Uuid,
     generation: i64,
@@ -127,7 +127,7 @@ pub(crate) async fn accept(
     )
 }
 
-pub(crate) async fn remove(
+pub async fn remove(
     pool: &PgPool,
     user: Uuid,
     generation: i64,
@@ -152,13 +152,13 @@ use northstar_auth_application::passkeys::{
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
-pub(crate) struct PostgresPasskeyRepository {
+pub struct PostgresPasskeyRepository {
     pool: PgPool,
     fast_token_secret: Arc<Zeroizing<Vec<u8>>>,
 }
 
 impl PostgresPasskeyRepository {
-    pub(crate) fn new(pool: PgPool, fast_token_secret: Arc<Zeroizing<Vec<u8>>>) -> Self {
+    pub fn new(pool: PgPool, fast_token_secret: Arc<Zeroizing<Vec<u8>>>) -> Self {
         Self {
             pool,
             fast_token_secret,
@@ -181,14 +181,12 @@ impl From<Credential> for StoredCredential {
 
 impl PasskeyRepository for PostgresPasskeyRepository {
     async fn account(&self, username: &str) -> Result<Option<PasskeyAccount>> {
-        Ok(
-            northstar_auth_postgres::users::find_enabled_user(&self.pool, username)
-                .await?
-                .map(|user| PasskeyAccount {
-                    id: user.id,
-                    auth_generation: user.auth_generation,
-                }),
-        )
+        Ok(crate::users::find_enabled_user(&self.pool, username)
+            .await?
+            .map(|user| PasskeyAccount {
+                id: user.id,
+                auth_generation: user.auth_generation,
+            }))
     }
 
     async fn credentials(&self, user_id: Uuid) -> Result<Vec<StoredCredential>> {
@@ -207,7 +205,7 @@ impl PasskeyRepository for PostgresPasskeyRepository {
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             .execute(&mut *tx)
             .await?;
-        if !northstar_auth_postgres::users::authorize_user_in_tx(
+        if !crate::users::authorize_user_in_tx(
             &mut tx,
             actor.id,
             actor.auth_generation,
@@ -230,17 +228,13 @@ impl PasskeyRepository for PostgresPasskeyRepository {
         iterations: u32,
         sha1: bool,
     ) -> Result<bool> {
-        Ok(northstar_auth_postgres::users::prepare_login(
-            &self.pool,
-            actor.username,
-            password,
-            iterations,
-            sha1,
+        Ok(
+            crate::users::prepare_login(&self.pool, actor.username, password, iterations, sha1)
+                .await?
+                .is_some_and(|login| {
+                    login.user.id == actor.id && login.user.auth_generation == actor.auth_generation
+                }),
         )
-        .await?
-        .is_some_and(|login| {
-            login.user.id == actor.id && login.user.auth_generation == actor.auth_generation
-        }))
     }
 
     async fn challenge(
@@ -307,7 +301,7 @@ impl PasskeyRepository for PostgresPasskeyRepository {
             tx.rollback().await?;
             return Ok(None);
         }
-        let fast = super::issue_fast_token_in_transaction(
+        let fast = crate::fast::issue_fast_token_in_transaction(
             &mut tx,
             &self.fast_token_secret,
             command.user_id,
@@ -319,16 +313,14 @@ impl PasskeyRepository for PostgresPasskeyRepository {
             None,
         )
         .await?;
-        let session = northstar_auth_postgres::users::create_api_session_in_tx(
+        let session = crate::users::create_api_session_in_tx(
             &mut tx,
             command.user_id,
             command.session_ttl_hours,
             None,
         )
         .await?;
-        let Some(user) =
-            northstar_auth_postgres::users::user_for_token_in_tx(&mut tx, &session.token).await?
-        else {
+        let Some(user) = crate::users::user_for_token_in_tx(&mut tx, &session.token).await? else {
             tx.rollback().await?;
             return Ok(None);
         };
@@ -353,7 +345,3 @@ impl PasskeyRepository for PostgresPasskeyRepository {
         .await
     }
 }
-
-#[cfg(test)]
-#[path = "passkeys_test.rs"]
-mod tests;

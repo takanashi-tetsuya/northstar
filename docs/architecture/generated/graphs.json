@@ -2259,6 +2259,10 @@
       ],
       [
         "northstar-auth-postgres",
+        "rand"
+      ],
+      [
+        "northstar-auth-postgres",
         "serde"
       ],
       [

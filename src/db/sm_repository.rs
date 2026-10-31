@@ -88,7 +88,7 @@ impl PostgresSmRepository {
             return Ok(BindingFinalizationOutcome::ReservationLost);
         }
         let staged_login_epoch =
-            crate::db::authentication::stage_login_epoch_in_transaction_observed(
+            northstar_auth_postgres::authentication::stage_login_epoch_in_transaction_observed(
                 &mut tx,
                 user_id,
                 device_id,
@@ -108,11 +108,11 @@ impl PostgresSmRepository {
             return Ok(BindingFinalizationOutcome::CredentialsExpired);
         }
         let issued_fast = if let Some(plan) = fast_plan {
-            let db_plan = db::FastCommitPlan::from(plan);
+            let db_plan = northstar_auth_postgres::fast::FastCommitPlan::from(plan);
             if let Some(observation) = observation {
                 observation.preparation_entered(CredentialPreparation::Fast);
             }
-            let fast_result = db::commit_fast_state_in_transaction(
+            let fast_result = northstar_auth_postgres::fast::commit_fast_state_in_transaction(
                 &mut tx,
                 self.fast_token_secret.as_slice(),
                 user_id,
@@ -124,17 +124,21 @@ impl PostgresSmRepository {
                 observation.preparation_returned(
                     CredentialPreparation::Fast,
                     match &fast_result {
-                        Ok(db::FastCommitOutcome::Committed(_)) => PreparationResult::Present,
-                        Ok(db::FastCommitOutcome::CredentialsExpired) => PreparationResult::Absent,
+                        Ok(northstar_auth_postgres::fast::FastCommitOutcome::Committed(_)) => {
+                            PreparationResult::Present
+                        }
+                        Ok(
+                            northstar_auth_postgres::fast::FastCommitOutcome::CredentialsExpired,
+                        ) => PreparationResult::Absent,
                         Err(_) => PreparationResult::Err,
                     },
                 );
             }
             match fast_result? {
-                db::FastCommitOutcome::Committed(issued) => {
+                northstar_auth_postgres::fast::FastCommitOutcome::Committed(issued) => {
                     issued.map(northstar_auth_application::authentication::IssuedFastToken::from)
                 }
-                db::FastCommitOutcome::CredentialsExpired => {
+                northstar_auth_postgres::fast::FastCommitOutcome::CredentialsExpired => {
                     CredentialInvocation::rollback(
                         observation,
                         CredentialRollbackSite::BindingFastExpired,
@@ -187,7 +191,7 @@ impl PostgresSmRepository {
             return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
         };
         let staged_login_epoch =
-            crate::db::authentication::stage_login_epoch_in_transaction_observed(
+            northstar_auth_postgres::authentication::stage_login_epoch_in_transaction_observed(
                 &mut tx,
                 request.user_id,
                 request.user_agent_id,
@@ -245,11 +249,11 @@ impl PostgresSmRepository {
             return Ok(SmResumeFinalizationOutcome::ClaimLost);
         };
         let issued_fast = if let Some(plan) = request.fast_plan {
-            let db_plan = db::FastCommitPlan::from(plan);
+            let db_plan = northstar_auth_postgres::fast::FastCommitPlan::from(plan);
             if let Some(observation) = observation {
                 observation.preparation_entered(CredentialPreparation::Fast);
             }
-            let fast_result = db::commit_fast_state_in_transaction(
+            let fast_result = northstar_auth_postgres::fast::commit_fast_state_in_transaction(
                 &mut tx,
                 self.fast_token_secret.as_slice(),
                 request.user_id,
@@ -261,17 +265,21 @@ impl PostgresSmRepository {
                 observation.preparation_returned(
                     CredentialPreparation::Fast,
                     match &fast_result {
-                        Ok(db::FastCommitOutcome::Committed(_)) => PreparationResult::Present,
-                        Ok(db::FastCommitOutcome::CredentialsExpired) => PreparationResult::Absent,
+                        Ok(northstar_auth_postgres::fast::FastCommitOutcome::Committed(_)) => {
+                            PreparationResult::Present
+                        }
+                        Ok(
+                            northstar_auth_postgres::fast::FastCommitOutcome::CredentialsExpired,
+                        ) => PreparationResult::Absent,
                         Err(_) => PreparationResult::Err,
                     },
                 );
             }
             match fast_result? {
-                db::FastCommitOutcome::Committed(issued) => {
+                northstar_auth_postgres::fast::FastCommitOutcome::Committed(issued) => {
                     issued.map(northstar_auth_application::authentication::IssuedFastToken::from)
                 }
-                db::FastCommitOutcome::CredentialsExpired => {
+                northstar_auth_postgres::fast::FastCommitOutcome::CredentialsExpired => {
                     CredentialInvocation::rollback(
                         observation,
                         CredentialRollbackSite::ResumeFastExpired,

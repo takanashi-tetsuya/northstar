@@ -28,7 +28,7 @@ impl BackgroundHousekeepingRepository for PostgresBackgroundHousekeepingReposito
     }
 
     async fn cleanup_fast_tokens(&self) -> Result<u64> {
-        crate::db::cleanup_fast_tokens(&self.pool).await
+        northstar_auth_postgres::fast::cleanup_fast_tokens(&self.pool).await
     }
 
     async fn cleanup_expired_login_epoch_stages(&self, batch_size: i64) -> Result<u64> {

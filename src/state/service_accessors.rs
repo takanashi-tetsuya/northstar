@@ -222,7 +222,7 @@ impl AppState {
     pub(crate) fn authentication_service(
         &self,
     ) -> &northstar_auth_application::authentication::AuthenticationService<
-        db::authentication::PostgresAuthenticationRepository,
+        crate::db::authentication_effects::PostgresAuthenticationRepository,
     > {
         &self.authentication_service
     }

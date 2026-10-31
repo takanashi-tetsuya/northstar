@@ -1,6 +1,5 @@
 //! Credential reads and atomic SASL/FAST generation, token and binding fences.
-use crate::db;
-use northstar_archive_core::ArchiveBoundary;
+use crate::effects::AuthenticationEffects;
 use northstar_auth_application::authentication::*;
 use northstar_auth_core as auth;
 use sqlx::{Connection, PgPool, Row};
@@ -11,17 +10,21 @@ use zeroize::Zeroizing;
 const LOGIN_EPOCH_STAGE_TTL_SECONDS: u64 = 120;
 
 #[derive(Clone)]
-pub(crate) struct PostgresAuthenticationRepository {
+pub struct PostgresAuthenticationRepository<E> {
     pool: PgPool,
     fast_token_secret: Arc<Zeroizing<Vec<u8>>>,
+    effects: E,
 }
-impl PostgresAuthenticationRepository {
-    pub(crate) fn new(pool: PgPool, fast_token_secret: Arc<Zeroizing<Vec<u8>>>) -> Self {
+impl<E> PostgresAuthenticationRepository<E> {
+    pub fn new(pool: PgPool, fast_token_secret: Arc<Zeroizing<Vec<u8>>>, effects: E) -> Self {
         Self {
             pool,
             fast_token_secret,
+            effects,
         }
     }
+}
+impl<E: AuthenticationEffects> PostgresAuthenticationRepository<E> {
     #[allow(clippy::too_many_arguments)]
     async fn commit_fast_with_login_epoch_inner(
         &self,
@@ -49,8 +52,8 @@ impl PostgresAuthenticationRepository {
                 return AuthenticationResult::IntegrityFailure;
             }
         }
-        let db_plan = db::FastCommitPlan::from(plan);
-        let mut tx = match northstar_auth_postgres::users::lock_auth_generation_observed(
+        let db_plan = crate::fast::FastCommitPlan::from(plan);
+        let mut tx = match crate::users::lock_auth_generation_observed(
             &self.pool,
             user_id,
             expected_auth_generation,
@@ -78,7 +81,7 @@ impl PostgresAuthenticationRepository {
         if let Some(observation) = observation {
             observation.preparation_entered(CredentialPreparation::Fast);
         }
-        let fast_result = db::commit_fast_state_in_transaction(
+        let fast_result = crate::fast::commit_fast_state_in_transaction(
             &mut tx,
             self.fast_token_secret.as_slice(),
             user_id,
@@ -90,15 +93,17 @@ impl PostgresAuthenticationRepository {
             observation.preparation_returned(
                 CredentialPreparation::Fast,
                 match &fast_result {
-                    Ok(db::FastCommitOutcome::Committed(_)) => PreparationResult::Present,
-                    Ok(db::FastCommitOutcome::CredentialsExpired) => PreparationResult::Absent,
+                    Ok(crate::fast::FastCommitOutcome::Committed(_)) => PreparationResult::Present,
+                    Ok(crate::fast::FastCommitOutcome::CredentialsExpired) => {
+                        PreparationResult::Absent
+                    }
                     Err(_) => PreparationResult::Err,
                 },
             );
         }
         let issued = match fast_result {
-            Ok(db::FastCommitOutcome::Committed(issued)) => issued,
-            Ok(db::FastCommitOutcome::CredentialsExpired) => {
+            Ok(crate::fast::FastCommitOutcome::Committed(issued)) => issued,
+            Ok(crate::fast::FastCommitOutcome::CredentialsExpired) => {
                 let _ = CredentialInvocation::rollback(
                     observation,
                     CredentialRollbackSite::FastExpired,
@@ -144,16 +149,18 @@ impl PostgresAuthenticationRepository {
         // matching phase-two finalization. If the binding transfer fails, the
         // epoch publication and claim consumption roll back with it.
         let published_epoch = if let Some(stage) = receipt.staged_login_epoch() {
-            match db::publish_user_agent_login_epoch_in_transaction(
-                &mut tx,
-                stage.operation_id,
-                stage.connection_id,
-                stage.user_id,
-                stage.device_id,
-                stage.auth_generation,
-                receipt.binding_publication().is_some(),
-            )
-            .await
+            match self
+                .effects
+                .publish_user_agent_login_epoch(
+                    &mut tx,
+                    stage.operation_id,
+                    stage.connection_id,
+                    stage.user_id,
+                    stage.device_id,
+                    stage.auth_generation,
+                    receipt.binding_publication().is_some(),
+                )
+                .await
             {
                 Ok(Some(epoch)) => Some(epoch),
                 Ok(None) => {
@@ -172,14 +179,16 @@ impl PostgresAuthenticationRepository {
             None
         };
         if let Some(binding) = receipt.binding_publication() {
-            match db::publish_binding_live_session_in_transaction(
-                &mut tx,
-                binding.connection_id,
-                binding.user_id,
-                &binding.full_jid,
-                binding.lease_seconds,
-            )
-            .await
+            match self
+                .effects
+                .publish_binding_live_session(
+                    &mut tx,
+                    binding.connection_id,
+                    binding.user_id,
+                    &binding.full_jid,
+                    binding.lease_seconds,
+                )
+                .await
             {
                 Ok(true) => {}
                 Ok(false) => {
@@ -207,7 +216,7 @@ impl PostgresAuthenticationRepository {
             Err(error) => AuthenticationResult::BackendFailure(error),
         }
     }
-    pub(crate) async fn authenticate_plain_with_hook<F, Fut>(
+    pub async fn authenticate_plain_with_hook<F, Fut>(
         &self,
         username: &str,
         password: &str,
@@ -218,7 +227,7 @@ impl PostgresAuthenticationRepository {
         F: FnOnce(AuthenticationFence) -> Fut,
         Fut: Future<Output = ()>,
     {
-        let prepared = match northstar_auth_postgres::users::prepare_login(
+        let prepared = match crate::users::prepare_login(
             &self.pool,
             username,
             password,
@@ -255,9 +264,7 @@ impl PostgresAuthenticationRepository {
             Ok(transaction) => transaction,
             Err(error) => return AuthenticationResult::BackendFailure(error.into()),
         };
-        match northstar_auth_postgres::users::apply_prepared_login_in_tx(&mut transaction, prepared)
-            .await
-        {
+        match crate::users::apply_prepared_login_in_tx(&mut transaction, prepared).await {
             Ok(true) => {
                 if let Err(error) = transaction.commit().await {
                     return AuthenticationResult::BackendFailure(error.into());
@@ -298,7 +305,7 @@ impl PostgresAuthenticationRepository {
             Err(error) => AuthenticationResult::BackendFailure(error),
         }
     }
-    pub(crate) async fn bind2_archive_boundaries_with_hook<F, Fut>(
+    pub async fn bind2_archive_boundaries_with_hook<F, Fut>(
         &self,
         user_id: Uuid,
         expected_auth_generation: i64,
@@ -377,7 +384,7 @@ impl PostgresAuthenticationRepository {
                 auth_generation,
             })
             .await;
-            let boundaries = match db::archive_boundaries_visible_in_transaction(
+            let boundaries = match self.effects.archive_boundaries_visible(
                 &mut transaction,
                 user_id,
             )
@@ -397,7 +404,7 @@ impl PostgresAuthenticationRepository {
         }
         result
     }
-    pub(crate) async fn authenticate_fast_with_hook<F, Fut>(
+    pub async fn authenticate_fast_with_hook<F, Fut>(
         &self,
         request: FastProofRequest<'_>,
         after_account_locked: F,
@@ -433,10 +440,10 @@ impl PostgresAuthenticationRepository {
             auth_generation: user.auth_generation,
         })
         .await;
-        let verified = db::authenticate_fast_token_in_transaction(
+        let verified = crate::fast::authenticate_fast_token_in_transaction(
             &mut transaction,
             self.fast_token_secret.as_slice(),
-            db::FastAuthenticationRequest {
+            crate::fast::FastAuthenticationRequest {
                 user_id: user.id,
                 device_id: request.device_id,
                 mechanism: request.mechanism,
@@ -450,26 +457,26 @@ impl PostgresAuthenticationRepository {
         )
         .await;
         let verified = match verified {
-            Ok(db::FastAuthentication::Success(verified)) => verified,
-            Ok(db::FastAuthentication::CredentialsExpired) => {
+            Ok(crate::fast::FastAuthentication::Success(verified)) => verified,
+            Ok(crate::fast::FastAuthentication::CredentialsExpired) => {
                 let _ = transaction.rollback().await;
                 return AuthenticationResult::ExpiredCredentials;
             }
-            Ok(db::FastAuthentication::Invalid) => {
+            Ok(crate::fast::FastAuthentication::Invalid) => {
                 let _ = transaction.rollback().await;
                 return AuthenticationResult::UnknownCredentials;
             }
-            Ok(db::FastAuthentication::Replayed) => {
+            Ok(crate::fast::FastAuthentication::Replayed) => {
                 let _ = transaction.rollback().await;
                 return AuthenticationResult::ReplayedCredentials;
             }
-            Ok(db::FastAuthentication::IntegrityFailure) => {
+            Ok(crate::fast::FastAuthentication::IntegrityFailure) => {
                 let _ = transaction.rollback().await;
                 return AuthenticationResult::IntegrityFailure;
             }
             Err(error) => return AuthenticationResult::BackendFailure(error),
         };
-        let db::AuthenticatedFastToken {
+        let crate::fast::AuthenticatedFastToken {
             token,
             should_rotate,
             id,
@@ -544,7 +551,7 @@ impl PostgresAuthenticationRepository {
         }
     }
 }
-impl AuthenticationRepository for PostgresAuthenticationRepository {
+impl<E: AuthenticationEffects> AuthenticationRepository for PostgresAuthenticationRepository<E> {
     async fn scram_credentials(
         &self,
         username: &str,
@@ -745,14 +752,9 @@ impl AuthenticationRepository for PostgresAuthenticationRepository {
             .await
     }
 }
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Unobserved compatibility helper for existing SQL controls"
-    )
-)]
-pub(crate) async fn stage_login_epoch_in_transaction(
+/// Unobserved compatibility helper for existing SQL controls.
+#[cfg(any(test, feature = "test-support"))]
+pub async fn stage_login_epoch_in_transaction(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
     device_id: Option<Uuid>,
@@ -769,7 +771,7 @@ pub(crate) async fn stage_login_epoch_in_transaction(
     )
     .await
 }
-pub(crate) async fn stage_login_epoch_in_transaction_observed(
+pub async fn stage_login_epoch_in_transaction_observed(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
     device_id: Option<Uuid>,
@@ -790,7 +792,7 @@ pub(crate) async fn stage_login_epoch_in_transaction_observed(
     if let Some(observation) = observation {
         observation.stage_id(operation_id);
     }
-    let result = northstar_auth_postgres::users::stage_user_agent_login_epoch_in_transaction(
+    let result = crate::users::stage_user_agent_login_epoch_in_transaction(
         tx,
         user_id,
         device_id,
@@ -868,7 +870,7 @@ fn sanitized_user_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Loaded
     })
 }
 
-fn sanitized_user(user: &northstar_auth_postgres::users::User) -> AuthenticatedAccount {
+fn sanitized_user(user: &crate::users::User) -> AuthenticatedAccount {
     AuthenticatedAccount {
         id: user.id,
         username: user.username.clone(),
@@ -876,16 +878,16 @@ fn sanitized_user(user: &northstar_auth_postgres::users::User) -> AuthenticatedA
     }
 }
 
-impl From<db::IssuedFastToken> for IssuedFastToken {
-    fn from(issued: db::IssuedFastToken) -> Self {
+impl From<crate::fast::IssuedFastToken> for IssuedFastToken {
+    fn from(issued: crate::fast::IssuedFastToken) -> Self {
         Self {
             token: issued.token,
             expires_at: issued.expires_at,
         }
     }
 }
-impl From<db::FastTokenIssue> for FastTokenIssue {
-    fn from(issue: db::FastTokenIssue) -> Self {
+impl From<crate::fast::FastTokenIssue> for FastTokenIssue {
+    fn from(issue: crate::fast::FastTokenIssue) -> Self {
         Self {
             device_id: issue.device_id,
             mechanism: issue.mechanism,
@@ -895,7 +897,7 @@ impl From<db::FastTokenIssue> for FastTokenIssue {
         }
     }
 }
-impl From<FastTokenIssue> for db::FastTokenIssue {
+impl From<FastTokenIssue> for crate::fast::FastTokenIssue {
     fn from(issue: FastTokenIssue) -> Self {
         Self {
             device_id: issue.device_id,
@@ -906,7 +908,7 @@ impl From<FastTokenIssue> for db::FastTokenIssue {
         }
     }
 }
-impl From<&FastTokenIssue> for db::FastTokenIssue {
+impl From<&FastTokenIssue> for crate::fast::FastTokenIssue {
     fn from(issue: &FastTokenIssue) -> Self {
         Self {
             device_id: issue.device_id,
@@ -917,8 +919,8 @@ impl From<&FastTokenIssue> for db::FastTokenIssue {
         }
     }
 }
-impl From<db::FastCommitPlan> for FastCommitPlan {
-    fn from(plan: db::FastCommitPlan) -> Self {
+impl From<crate::fast::FastCommitPlan> for FastCommitPlan {
+    fn from(plan: crate::fast::FastCommitPlan) -> Self {
         Self {
             token_id: plan.token_id,
             token_was_new: plan.token_was_new,
@@ -927,7 +929,7 @@ impl From<db::FastCommitPlan> for FastCommitPlan {
         }
     }
 }
-impl From<FastCommitPlan> for db::FastCommitPlan {
+impl From<FastCommitPlan> for crate::fast::FastCommitPlan {
     fn from(plan: FastCommitPlan) -> Self {
         Self {
             token_id: plan.token_id,
@@ -937,7 +939,7 @@ impl From<FastCommitPlan> for db::FastCommitPlan {
         }
     }
 }
-impl From<&FastCommitPlan> for db::FastCommitPlan {
+impl From<&FastCommitPlan> for crate::fast::FastCommitPlan {
     fn from(plan: &FastCommitPlan) -> Self {
         Self {
             token_id: plan.token_id,

@@ -6,7 +6,7 @@
 
 pub mod publication;
 
-use northstar_archive_core::ArchiveBoundary;
+pub use northstar_archive_core::ArchiveBoundary;
 use northstar_auth_core as auth;
 pub use northstar_auth_core::credential::{
     BindingPublication, CredentialCommitReceipt, FastCommitPlan, FastTokenIssue, IssuedFastToken,

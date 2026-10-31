@@ -1356,9 +1356,10 @@ async fn resumable_binding_lease_transfers_only_after_transport_publication() {
     );
 
     let authentication = northstar_auth_application::authentication::AuthenticationService::new(
-        crate::db::authentication::PostgresAuthenticationRepository::new(
+        crate::db::authentication_effects::PostgresAuthenticationRepository::new(
             pool.clone(),
             std::sync::Arc::new(zeroize::Zeroizing::new(vec![0x56; 32])),
+            crate::db::authentication_effects::RootAuthenticationEffects,
         ),
         std::sync::Arc::new(zeroize::Zeroizing::new(vec![0xa7; 32])),
         northstar_auth_core::MIN_SCRAM_ITERATIONS,

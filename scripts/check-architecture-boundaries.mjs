@@ -1977,7 +1977,7 @@ if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(authenticationServiceBody)) {
   throw new Error('AuthenticationService must receive its repository port');
 }
 const authenticationAdapterBody = structBody(
-  read('src/db/authentication.rs'), 'pub(crate) struct PostgresAuthenticationRepository',
+  read('crates/contexts/auth/northstar-auth-postgres/src/authentication.rs'), 'pub struct PostgresAuthenticationRepository',
 );
 if (!/^\s*pool\s*:\s*PgPool\s*,?\s*$/m.test(authenticationAdapterBody)) {
   throw new Error('Authentication repository PostgreSQL capability must remain private');

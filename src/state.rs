@@ -351,7 +351,7 @@ pub struct AppState {
     /// protocol layer receives typed outcomes but neither PgPool nor the FAST
     /// derivation key.
     authentication_service: northstar_auth_application::authentication::AuthenticationService<
-        db::authentication::PostgresAuthenticationRepository,
+        crate::db::authentication_effects::PostgresAuthenticationRepository,
     >,
     /// XEP-0050/XEP-0133 session and execution authority. Protocol handlers
     /// never receive the backing PostgreSQL pool through this capability.

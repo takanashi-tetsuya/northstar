@@ -28,7 +28,7 @@ async fn query_ports_succeed_with_read_only_database_connections() {
         .unwrap();
     assert_eq!(read_only, "on");
 
-    let service = crate::services::pubsub::PubSubService::new(read_pool, "example.test");
+    let service = crate::db::pubsub_repository::test_pubsub_service(read_pool, "example.test");
     assert_eq!(
         service.get_node(&node_name).await.unwrap().unwrap().id,
         node.id
@@ -348,7 +348,7 @@ async fn leaf_disco_uses_read_only_snapshot_and_live_subscription_scope() {
         .connect(&url)
         .await
         .unwrap();
-    let service = PubSubService::new(read_pool, "example.test");
+    let service = crate::db::pubsub_repository::test_pubsub_service(read_pool, "example.test");
     assert_eq!(
         service.leaf_disco_items(&node_name, &owner).await.unwrap(),
         LeafDiscoItems::Items(vec!["newer".to_owned(), "older".to_owned()])
@@ -432,7 +432,7 @@ async fn leaf_disco_sql_gate_matches_pure_retrieval_policy() {
     .execute(&pool)
     .await
     .unwrap();
-    let service = PubSubService::new(pool.clone(), "example.test");
+    let service = crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test");
 
     for access in ["open", "whitelist", "authorize"] {
         sqlx::query("UPDATE pubsub_nodes SET access_model=$2 WHERE id=$1")
@@ -544,7 +544,7 @@ async fn leaf_disco_rechecks_configuration_after_stale_node_lookup() {
     let owner = format!("owner-{suffix}@example.test");
     let outsider = format!("outsider-{suffix}@example.test");
     let stale = create_default_test_node(&pool, &node_name, &owner).await;
-    let service = PubSubService::new(pool.clone(), "example.test");
+    let service = crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test");
     assert_eq!(
         service
             .leaf_disco_items(&node_name, &outsider)
@@ -673,7 +673,8 @@ async fn collection_disco_sql_gate_matches_parent_policy_on_read_only_pool() {
         .connect(&url)
         .await
         .unwrap();
-    let service = PubSubService::new(read_pool.clone(), "example.test");
+    let service =
+        crate::db::pubsub_repository::test_pubsub_service(read_pool.clone(), "example.test");
     let expected_children = vec![
         PubSubCollectionDiscoChild {
             node: first.node.clone(),
@@ -825,7 +826,7 @@ async fn collection_disco_rechecks_parent_and_edges_after_stale_lookup() {
             .unwrap(),
         CollectionUpdateOutcome::Updated
     );
-    let service = PubSubService::new(pool.clone(), "example.test");
+    let service = crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test");
     assert_eq!(
         service
             .collection_disco_items(&parent_name, &outsider)

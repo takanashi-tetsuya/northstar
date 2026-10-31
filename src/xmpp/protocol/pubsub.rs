@@ -1,25 +1,30 @@
 use super::{Action, ProtocolSession};
-use crate::services::pubsub::{
-    subscription_event_children, CollectionDiscoItems, CollectionUpdateOutcome, CreateNodeOutcome,
-    LeafDiscoItems, OwnerMutationOutcome, PubSubAuthorizeSubscriptionCommand,
-    PubSubCollectionEdgeCommand, PubSubCollectionEdgeOperation, PubSubCollectionEdgeResult,
-    PubSubConfigOutcome, PubSubConfigureNodeCommand, PubSubConfigureNodeWrite,
-    PubSubCreateNodeCommand, PubSubCreateNodeWrite, PubSubDeleteNodeCommand, PubSubDeleteNodeWrite,
-    PubSubItem, PubSubListPageQuery, PubSubNode, PubSubNodeConfig, PubSubOwnerRead,
-    PubSubOwnerReadKind, PubSubPublishCommand, PubSubPublishOutcome, PubSubPublishWrite,
-    PubSubPurgeNodeCommand, PubSubPurgeNodeWrite, PubSubRetractCommand, PubSubRetractOutcome,
-    PubSubRetractWrite, PubSubRootDiscoQuery, PubSubSetAffiliationsCommand,
-    PubSubSetAffiliationsWrite, PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsWrite,
-    PubSubSubscribeCommand, PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription,
-    PubSubSubscriptionOptions, PubSubSubscriptionOptionsRead, PubSubUnsubscribeCommand,
-    PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, PubSubUpdateSubscriptionOptionsCommand,
-    SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscriptionOptionsOutcome,
-};
 use crate::services::xml_util::*;
 use crate::state::{pubsub_digest_worker::PubSubDigestWorkerContext, AppState};
 use crate::xmpp::mam_pubsub_parsing::{self, PubSubNamespace, PubSubRsmRequest};
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
+use northstar_pubsub_application::{
+    service::{
+        subscription_event_children, CollectionDiscoItems, LeafDiscoItems,
+        PubSubSubscriptionOptionsRead,
+    },
+    PubSubAuthorizeSubscriptionCommand, PubSubCollectionEdgeCommand, PubSubCollectionEdgeOperation,
+    PubSubCollectionEdgeResult, PubSubConfigureNodeCommand, PubSubCreateNodeCommand,
+    PubSubDeleteNodeCommand, PubSubListPageQuery, PubSubOwnerRead, PubSubOwnerReadKind,
+    PubSubPublishCommand, PubSubPurgeNodeCommand, PubSubRetractCommand, PubSubRootDiscoQuery,
+    PubSubSetAffiliationsCommand, PubSubSetSubscriptionsCommand, PubSubSubscribeCommand,
+    PubSubUnsubscribeCommand, PubSubUpdateSubscriptionOptionsCommand,
+};
+use northstar_pubsub_core::{
+    CollectionUpdateOutcome, CreateNodeOutcome, OwnerMutationOutcome, PubSubConfigOutcome,
+    PubSubConfigureNodeWrite, PubSubCreateNodeWrite, PubSubDeleteNodeWrite, PubSubItem, PubSubNode,
+    PubSubNodeConfig, PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeWrite,
+    PubSubRetractOutcome, PubSubRetractWrite, PubSubSetAffiliationsWrite,
+    PubSubSetSubscriptionsWrite, PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription,
+    PubSubSubscriptionOptions, PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite,
+    SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscriptionOptionsOutcome,
+};
 use roxmltree::Node;
 use std::{
     borrow::Cow,
@@ -438,7 +443,7 @@ impl ProtocolSession {
         };
         let reply = match handle_request(&self.state, full_jid, kind, child).await {
             Ok(reply) => reply,
-            Err(error) if crate::services::pubsub::is_pubsub_mutation_busy(&error) => {
+            Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
                 PubSubReply::Error("resource-constraint")
             }
             Err(error) => return Err(error),

@@ -196,7 +196,7 @@ impl ProtocolSession {
                 Some("item-required"),
             )));
         }
-        if items.len() > crate::services::pubsub::PEP_MAX_ITEMS as usize {
+        if items.len() > northstar_pubsub_core::PEP_MAX_ITEMS as usize {
             return Ok(Action::Send(pep_error(
                 id,
                 None,
@@ -245,7 +245,7 @@ impl ProtocolSession {
                 .map(str::to_owned)
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let item_id =
-                match crate::services::pubsub::canonical_profile_item_id(node, &wire_item_id) {
+                match northstar_pubsub_core::canonical_profile_item_id(node, &wire_item_id) {
                     Ok(item_id) => item_id,
                     Err(_) => {
                         return Ok(Action::Send(pep_error(
@@ -514,7 +514,7 @@ impl ProtocolSession {
         }
         let Some(item_ids) = item_ids.filter(|ids| {
             !ids.is_empty()
-                && ids.len() <= crate::services::pubsub::PEP_MAX_ITEMS as usize
+                && ids.len() <= northstar_pubsub_core::PEP_MAX_ITEMS as usize
                 && ids
                     .iter()
                     .all(|item_id| !item_id.is_empty() && item_id.len() <= 1024)
@@ -530,7 +530,7 @@ impl ProtocolSession {
         let mut canonical_ids = Vec::with_capacity(item_ids.len());
         let mut unique_ids = HashSet::new();
         for item_id in item_ids {
-            let Ok(item_id) = crate::services::pubsub::canonical_profile_item_id(node, item_id)
+            let Ok(item_id) = northstar_pubsub_core::canonical_profile_item_id(node, item_id)
             else {
                 return Ok(Action::Send(pep_error(
                     id,
@@ -608,7 +608,7 @@ pub(super) fn publish_options(
     pubsub: Node<'_, '_>,
     node: &str,
 ) -> std::result::Result<PublishOptions, ()> {
-    let mut config = crate::services::pubsub::default_pep_node_config(node);
+    let mut config = northstar_pubsub_core::default_pep_node_config(node);
     let Some(options) = pubsub.children().find(|child| {
         child.is_element()
             && child.tag_name().namespace() == Some(NS_PUBSUB)
@@ -653,11 +653,11 @@ pub(super) fn publish_options(
             "pubsub#max_items" => {
                 let value = child_text(field, "value").ok_or(())?;
                 config.max_items = if value == "max" {
-                    crate::services::pubsub::PEP_MAX_ITEMS
+                    northstar_pubsub_core::PEP_MAX_ITEMS
                 } else {
                     value.parse().map_err(|_| ())?
                 };
-                if !(1..=crate::services::pubsub::PEP_MAX_ITEMS).contains(&config.max_items) {
+                if !(1..=northstar_pubsub_core::PEP_MAX_ITEMS).contains(&config.max_items) {
                     return Err(());
                 }
             }
@@ -702,7 +702,7 @@ pub(super) fn publish_options(
         && (config.access_model != "open"
             || !config.persist_items
             || node == OMEMO_DEVICES && config.max_items != 1
-            || node == OMEMO_BUNDLES && config.max_items != crate::services::pubsub::PEP_MAX_ITEMS)
+            || node == OMEMO_BUNDLES && config.max_items != northstar_pubsub_core::PEP_MAX_ITEMS)
     {
         return Err(());
     }

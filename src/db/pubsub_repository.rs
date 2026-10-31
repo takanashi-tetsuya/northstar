@@ -1,7 +1,38 @@
 //! Complete PostgreSQL PubSub/PEP operations and locked audience snapshots.
-use crate::{db, services::pubsub::*};
+use crate::db;
 use anyhow::{Context, Result};
+#[cfg(test)]
+use northstar_pubsub_application::PubSubService;
+use northstar_pubsub_application::{
+    service::PubSubEventRenderer, PepAffiliationRepository, PepCommitLegacyBookmarksCommand,
+    PepCommitLegacyBookmarksResult, PepItemMutationRepository, PepItemQueryRepository,
+    PepNodeMutationRepository, PepNodeQueryRepository, PepPublishItemsCommand,
+    PepPublishItemsOutcome, PepPublishItemsResult, PepSubscribeCommand, PepSubscribeResult,
+    PepSubscriptionMutationRepository, PepSubscriptionQueryRepository, PepUnsubscribeCommand,
+    PepUnsubscribeResult, PubSubAffiliationMutationRepository, PubSubAffiliationQueryRepository,
+    PubSubCollectionDiscoChild, PubSubCollectionDiscoSnapshot, PubSubItemMutationRepository,
+    PubSubItemQueryRepository, PubSubLeafDiscoSnapshot, PubSubNodeMutationRepository,
+    PubSubNodeQueryRepository, PubSubOutboxRepository, PubSubOwnerRead, PubSubOwnerReadKind,
+    PubSubRootDiscoveryQueryRepository, PubSubSubscriptionMutationRepository,
+    PubSubSubscriptionQueryRepository,
+};
 use northstar_pubsub_core::PubSubRootDiscoPage;
+use northstar_pubsub_core::{
+    ClaimedPubSubOutboxDelivery, CollectionUpdateOutcome, CollectionVisibleItem, CreateNodeOutcome,
+    DuePubSubDigest, OwnerMutationOutcome, PepAudienceSnapshot, PepBookmarkMutationOutcome,
+    PepCreateOutcome, PepDirectOutboxFactory, PepDirectStateSnapshot, PepDirectStateTransition,
+    PepItem, PepNodeConfig, PepOutboxAuthorizationMode, PepOutboxAuthorizationOutcome,
+    PepOutboxDropReason, PepOutboxEventKind, PepOutboxFactory, PepOwnerMutationOutcome,
+    PepPresenceSubscription, PepPublishOutcome, PepQuotas, PepSubscribeOutboxFactory,
+    PepSubscribeOutcome, PepSubscribeSnapshot, PepSubscription, PepSubscriptionActor,
+    PepUnsubscribeOutcome, PubSubAccount, PubSubAffiliation, PubSubConfigOutcome, PubSubItem,
+    PubSubNode, PubSubNodeConfig, PubSubNodeMetadata, PubSubNotificationDelivery,
+    PubSubOutboxDeliveryKind, PubSubOutboxFailureDisposition, PubSubOutboxInsert,
+    PubSubOutboxSnapshot, PubSubOutboxSource, PubSubSubscription, PubSubSubscriptionOptions,
+    PublishItemsOutcome, RetractItemsOutcome, SetAffiliationsOutcome, SetSubscriptionsOutcome,
+    SubscribeOutcome, SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome,
+    UnsubscribeOutcome,
+};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
@@ -651,18 +682,21 @@ fn map_database_busy(error: anyhow::Error) -> anyhow::Error {
     }
 }
 #[cfg(test)]
-impl PubSubService<PostgresPubSubRepository> {
-    pub(crate) fn new(pool: PgPool, domain: &str) -> Self {
-        let capacity = pool.options().get_max_connections();
-        Self::new_with_durable_outbox_database_admission(
-            PostgresPubSubRepository::new(pool, domain),
+pub(crate) fn test_pubsub_service(
+    pool: PgPool,
+    domain: &str,
+) -> PubSubService<PostgresPubSubRepository> {
+    let capacity = pool.options().get_max_connections();
+    PubSubService::new_with_durable_outbox_database_admission(
+        PostgresPubSubRepository::new(pool, domain),
+        capacity,
+        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
             capacity,
-            northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
-                capacity,
-            ),
-        )
-    }
+        ),
+    )
 }
 
+#[cfg(test)]
+mod service_tests;
 #[cfg(test)]
 mod tests;

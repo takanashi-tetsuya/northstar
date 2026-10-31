@@ -79,7 +79,7 @@ impl ProtocolSession {
         match self.pubsub_authorization_response(root).await {
             Ok(true) => return Ok(Action::None),
             Ok(false) => {}
-            Err(error) if crate::services::pubsub::is_pubsub_mutation_busy(&error) => {
+            Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
                 tracing::warn!(
                     "dropping PubSub authorization form while mutation capacity is exhausted"
                 );

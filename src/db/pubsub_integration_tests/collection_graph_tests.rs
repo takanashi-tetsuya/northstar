@@ -100,7 +100,7 @@ async fn multi_parent_create_emits_one_recursive_audience_snapshot() {
     let create_pool = named_single_connection_pool(&url, &application).await;
     let (observation_tx, mut observation_rx) = tokio::sync::mpsc::unbounded_channel();
     let renderer = Arc::new(RaceMutationRenderer {
-        inner: crate::services::pubsub::PubSubService::new(pool.clone(), "example.test"),
+        inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
         observations: observation_tx,
         gate: None,
     });
@@ -347,7 +347,7 @@ async fn repeated_associate_is_idempotent_after_a_graph_lock_wait() {
     let repeat_pool = named_single_connection_pool(&url, &application).await;
     let (observation_tx, mut observation_rx) = tokio::sync::mpsc::unbounded_channel();
     let renderer = Arc::new(RaceMutationRenderer {
-        inner: crate::services::pubsub::PubSubService::new(pool.clone(), "example.test"),
+        inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
         observations: observation_tx,
         gate: None,
     });
@@ -603,7 +603,7 @@ async fn collection_edges_require_child_ownership_and_legacy_edges_do_not_disclo
         .execute(&pool)
         .await
         .unwrap();
-    let service = crate::services::pubsub::PubSubService::new(pool.clone(), "example.test");
+    let service = crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test");
     assert_eq!(
         publish_items_with_renderer(
             &pool,

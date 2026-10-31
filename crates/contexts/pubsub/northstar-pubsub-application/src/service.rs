@@ -1,11 +1,9 @@
 //! PubSub command validation, mutation admission and publication policy.
-use crate::services::profile::{
+use crate::profile::{
     ProfileOutboxFactory, ProfilePepWrite, ProfilePublishResult, ProfileRepository, ProfileService,
 };
-use anyhow::Result;
-pub(crate) use northstar_pubsub_application::{
-    authorization_precheck, existing_node_publish_admission_outcome,
-    is_pubsub_mutation_busy as is_pubsub_mutation_busy_core, publish_validation_outcome,
+use crate::{
+    authorization_precheck, existing_node_publish_admission_outcome, publish_validation_outcome,
     subscription_options_precheck, validate_pep_commit_legacy_bookmarks_command,
     validate_pep_configure_node_command, validate_pep_create_node_command,
     validate_pep_delete_node_command, validate_pep_publish_command,
@@ -21,43 +19,36 @@ pub(crate) use northstar_pubsub_application::{
     validate_pubsub_update_subscription_options_command, PepCommitLegacyBookmarksCommand,
     PepCommitLegacyBookmarksResult, PepConfigureNodeCommand, PepConfigureNodeResult,
     PepCreateNodeCommand, PepCreateNodeResult, PepDeleteNodeCommand, PepDeleteNodeResult,
-    PepPublishItemsCommand, PepPublishItemsOutcome, PepPublishItemsResult, PepPurgeNodeCommand,
-    PepPurgeNodeResult, PepRetractCommand, PepRetractResult, PepSetAffiliationsCommand,
-    PepSetAffiliationsResult, PepSubscribeCommand, PepSubscribeResult, PepUnsubscribeBatchCommand,
-    PepUnsubscribeBatchResult, PepUnsubscribeCommand, PepUnsubscribeResult,
-    PubSubAuthorizeSubscriptionCommand, PubSubAuthorizeSubscriptionResult,
-    PubSubCollectionDiscoChild, PubSubCollectionDiscoSnapshot, PubSubCollectionEdgeCommand,
+    PepPublishItemsCommand, PepPublishItemsResult, PepPurgeNodeCommand, PepPurgeNodeResult,
+    PepRetractCommand, PepRetractResult, PepSetAffiliationsCommand, PepSetAffiliationsResult,
+    PepSubscribeCommand, PepSubscribeResult, PepUnsubscribeBatchCommand, PepUnsubscribeBatchResult,
+    PepUnsubscribeCommand, PepUnsubscribeResult, PubSubAuthorizeSubscriptionCommand,
+    PubSubAuthorizeSubscriptionResult, PubSubCollectionDiscoChild, PubSubCollectionEdgeCommand,
     PubSubCollectionEdgeOperation, PubSubCollectionEdgeResult, PubSubConfigureNodeCommand,
     PubSubConfigureNodeResult, PubSubCreateNodeCommand, PubSubCreateNodeResult,
-    PubSubDeleteNodeCommand, PubSubDeleteNodeResult, PubSubLeafDiscoSnapshot, PubSubListPageQuery,
-    PubSubMutationPermit as ApplicationPubSubMutationPermit, PubSubOwnerRead, PubSubOwnerReadKind,
-    PubSubPublishCommand, PubSubPublishResult, PubSubPurgeNodeCommand, PubSubPurgeNodeResult,
-    PubSubRetractCommand, PubSubRetractResult, PubSubRootDiscoQuery, PubSubRootDiscoResult,
-    PubSubSetAffiliationsCommand, PubSubSetAffiliationsResult, PubSubSetSubscriptionsCommand,
-    PubSubSetSubscriptionsResult, PubSubSubscribeCommand, PubSubSubscribeResult,
-    PubSubSubscriptionOptionsPrecheck, PubSubUnsubscribeCommand, PubSubUnsubscribeResult,
-    PubSubUpdateSubscriptionOptionsCommand, PubSubUpdateSubscriptionOptionsResult,
+    PubSubDeleteNodeCommand, PubSubDeleteNodeResult, PubSubMutationAdmission, PubSubMutationPermit,
+    PubSubOwnerRead, PubSubOwnerReadKind, PubSubPublishCommand, PubSubPublishResult,
+    PubSubPurgeNodeCommand, PubSubPurgeNodeResult, PubSubRetractCommand, PubSubRetractResult,
+    PubSubRootDiscoQuery, PubSubRootDiscoResult, PubSubSetAffiliationsCommand,
+    PubSubSetAffiliationsResult, PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsResult,
+    PubSubSubscribeCommand, PubSubSubscribeResult, PubSubSubscriptionOptionsPrecheck,
+    PubSubUnsubscribeCommand, PubSubUnsubscribeResult, PubSubUpdateSubscriptionOptionsCommand,
+    PubSubUpdateSubscriptionOptionsResult,
 };
+use anyhow::Result;
 use northstar_pubsub_core::{pubsub_subscribe_policy, PubSubSubscribePolicy};
-pub(crate) use northstar_pubsub_core::{
-    CollectionUpdateOutcome, CollectionVisibleItem, CreateNodeOutcome, OwnerMutationOutcome,
-    PepAudienceSnapshot, PepBookmarkMutationOutcome, PepConfigureNodeWrite, PepCreateOutcome,
-    PepDeleteNodeWrite, PepDirectStateSnapshot, PepDirectStateTransition, PepItem, PepNodeConfig,
-    PepOwnerMutationOutcome, PepPresenceSubscription, PepProfileWrite, PepPublishOutcome,
-    PepPublishWrite, PepPurgeNodeWrite, PepQuotas, PepRetractWrite, PepSetAffiliationsWrite,
-    PepSubscribeOutcome, PepSubscribeSnapshot, PepSubscribeWrite, PepSubscription,
-    PepSubscriptionActor, PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount,
-    PubSubAffiliation, PubSubConfigOutcome, PubSubConfigureNodeWrite, PubSubCreateNodeWrite,
-    PubSubDeleteNodeWrite, PubSubItem, PubSubNode, PubSubNodeConfig, PubSubNodeMetadata,
-    PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeWrite, PubSubRetractOutcome,
-    PubSubRetractWrite, PubSubSetAffiliationsWrite, PubSubSetSubscriptionsWrite,
-    PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions,
-    PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, PublishItemsOutcome, RetractItemsOutcome,
-    SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscribeOutcome,
-    SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome, UnsubscribeOutcome,
+use northstar_pubsub_core::{
+    CollectionVisibleItem, CreateNodeOutcome, OwnerMutationOutcome, PepItem, PepNodeConfig,
+    PepOwnerMutationOutcome, PepPresenceSubscription, PepProfileWrite, PepSubscription,
+    PubSubAccount, PubSubAffiliation, PubSubConfigOutcome, PubSubItem, PubSubNode,
+    PubSubNodeConfig, PubSubNodeMetadata, PubSubPublishOutcome, PubSubRetractOutcome,
+    PubSubSubscribeOutcome, PubSubSubscription, PubSubSubscriptionOptions,
+    PubSubUnsubscribeOutcome, PublishItemsOutcome, RetractItemsOutcome, SetAffiliationsOutcome,
+    SetSubscriptionsOutcome, SubscribeOutcome, SubscriptionAuthorizationOutcome,
+    SubscriptionOptionsOutcome, UnsubscribeOutcome,
 };
 
-pub(crate) use northstar_pubsub_application::{
+use crate::{
     PepAffiliationRepository, PepItemMutationRepository, PepItemQueryRepository,
     PepNodeMutationRepository, PepNodeQueryRepository, PepSubscriptionMutationRepository,
     PepSubscriptionQueryRepository, PubSubAffiliationMutationRepository,
@@ -66,13 +57,11 @@ pub(crate) use northstar_pubsub_application::{
     PubSubRootDiscoveryQueryRepository, PubSubSubscriptionMutationRepository,
     PubSubSubscriptionQueryRepository,
 };
-pub(crate) use northstar_pubsub_core::{
-    canonical_profile_item_id, default_pep_node_config, ClaimedPubSubOutboxDelivery,
-    DuePubSubDigest, PepDirectOutboxFactory, PepOutboxAuthorizationMode,
-    PepOutboxAuthorizationOutcome, PepOutboxDropReason, PepOutboxEventKind, PepOutboxFactory,
-    PepSubscribeOutboxFactory, PubSubNotificationDelivery, PubSubOutboxDeliveryKind,
-    PubSubOutboxFailureDisposition, PubSubOutboxInsert, PubSubOutboxSnapshot, PubSubOutboxSource,
-    PEP_MAX_ITEMS,
+use northstar_pubsub_core::{
+    ClaimedPubSubOutboxDelivery, DuePubSubDigest, PepDirectOutboxFactory,
+    PepOutboxAuthorizationOutcome, PepOutboxFactory, PepSubscribeOutboxFactory,
+    PubSubNotificationDelivery, PubSubOutboxDeliveryKind, PubSubOutboxFailureDisposition,
+    PubSubOutboxInsert, PubSubOutboxSnapshot, PubSubOutboxSource,
 };
 use northstar_xml_builder::XmlElement;
 use std::sync::Arc;
@@ -81,15 +70,8 @@ use uuid::Uuid;
 mod outbox;
 mod repository_access;
 
-pub(crate) type PubSubMutationAdmission = northstar_pubsub_application::PubSubMutationAdmission;
-pub(crate) type PubSubMutationPermit = ApplicationPubSubMutationPermit;
-
-pub(crate) fn is_pubsub_mutation_busy(error: &anyhow::Error) -> bool {
-    is_pubsub_mutation_busy_core(error)
-}
-
 #[derive(Clone)]
-pub(crate) struct PubSubService<R> {
+pub struct PubSubService<R> {
     repository: R,
     mutation_admission: Arc<PubSubMutationAdmission>,
     durable_outbox_database_admission:
@@ -97,7 +79,7 @@ pub(crate) struct PubSubService<R> {
 }
 
 impl<R> PubSubService<R> {
-    pub(crate) fn new_with_durable_outbox_database_admission(
+    pub fn new_with_durable_outbox_database_admission(
         repository: R,
         primary_pool_max_connections: u32,
         durable_outbox_database_admission: northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
@@ -110,11 +92,11 @@ impl<R> PubSubService<R> {
             durable_outbox_database_admission,
         }
     }
-    #[cfg(test)]
-    pub(crate) fn repository_for_tests(&self) -> &R {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn repository_for_tests(&self) -> &R {
         &self.repository
     }
-    pub(crate) fn mutation_admission(&self) -> Arc<PubSubMutationAdmission> {
+    pub fn mutation_admission(&self) -> Arc<PubSubMutationAdmission> {
         Arc::clone(&self.mutation_admission)
     }
     async fn admit_mutation(
@@ -132,7 +114,7 @@ impl<R> PubSubService<R> {
 }
 
 impl<R> PubSubService<R> {
-    pub(crate) async fn publish_profile_items(
+    pub async fn publish_profile_items(
         &self,
         profile_service: &ProfileService<impl ProfileRepository>,
         write: PepProfileWrite<'_>,
@@ -157,7 +139,7 @@ impl<R> PubSubService<R> {
             )
             .await
     }
-    pub(crate) async fn publish_avatar_metadata(
+    pub async fn publish_avatar_metadata(
         &self,
         profile_service: &ProfileService<impl ProfileRepository>,
         write: PepProfileWrite<'_>,
@@ -193,7 +175,7 @@ impl<
             + PubSubAffiliationMutationRepository,
     > PubSubService<R>
 {
-    pub(crate) async fn execute_pubsub_publish(
+    pub async fn execute_pubsub_publish(
         &self,
         command: PubSubPublishCommand<'_>,
     ) -> Result<PubSubPublishResult> {
@@ -282,7 +264,7 @@ impl<
             outcome: pubsub_outcome,
         })
     }
-    pub(crate) async fn execute_pubsub_subscribe(
+    pub async fn execute_pubsub_subscribe(
         &self,
         command: PubSubSubscribeCommand<'_>,
     ) -> Result<PubSubSubscribeResult> {
@@ -359,7 +341,7 @@ impl<
             outcome: pubsub_outcome,
         })
     }
-    pub(crate) async fn execute_pubsub_unsubscribe(
+    pub async fn execute_pubsub_unsubscribe(
         &self,
         command: PubSubUnsubscribeCommand<'_>,
     ) -> Result<PubSubUnsubscribeResult> {
@@ -405,7 +387,7 @@ impl<
             outcome: pubsub_outcome,
         })
     }
-    pub(crate) async fn execute_pubsub_retract(
+    pub async fn execute_pubsub_retract(
         &self,
         command: PubSubRetractCommand<'_>,
     ) -> Result<PubSubRetractResult> {
@@ -448,7 +430,7 @@ impl<
             outcome: pubsub_outcome,
         })
     }
-    pub(crate) async fn execute_pubsub_create_node(
+    pub async fn execute_pubsub_create_node(
         &self,
         command: PubSubCreateNodeCommand<'_>,
     ) -> Result<PubSubCreateNodeResult> {
@@ -464,7 +446,7 @@ impl<
             .await?;
         Ok(PubSubCreateNodeResult { outcome })
     }
-    pub(crate) async fn execute_pubsub_delete_node(
+    pub async fn execute_pubsub_delete_node(
         &self,
         command: PubSubDeleteNodeCommand<'_>,
     ) -> Result<PubSubDeleteNodeResult> {
@@ -480,7 +462,7 @@ impl<
             .await?;
         Ok(PubSubDeleteNodeResult { outcome })
     }
-    pub(crate) async fn execute_pubsub_purge_node(
+    pub async fn execute_pubsub_purge_node(
         &self,
         command: PubSubPurgeNodeCommand<'_>,
     ) -> Result<PubSubPurgeNodeResult> {
@@ -501,7 +483,7 @@ impl<
             .await?;
         Ok(PubSubPurgeNodeResult { outcome })
     }
-    pub(crate) async fn execute_pubsub_configure_node(
+    pub async fn execute_pubsub_configure_node(
         &self,
         command: PubSubConfigureNodeCommand<'_>,
     ) -> Result<PubSubConfigureNodeResult> {
@@ -522,7 +504,7 @@ impl<
             .await?;
         Ok(PubSubConfigureNodeResult { outcome })
     }
-    pub(crate) async fn execute_pubsub_set_subscriptions(
+    pub async fn execute_pubsub_set_subscriptions(
         &self,
         command: PubSubSetSubscriptionsCommand<'_>,
     ) -> Result<PubSubSetSubscriptionsResult> {
@@ -538,7 +520,7 @@ impl<
             .await?;
         Ok(PubSubSetSubscriptionsResult { outcome })
     }
-    pub(crate) async fn execute_pubsub_set_affiliations(
+    pub async fn execute_pubsub_set_affiliations(
         &self,
         command: PubSubSetAffiliationsCommand<'_>,
     ) -> Result<PubSubSetAffiliationsResult> {
@@ -563,7 +545,7 @@ impl<
             + PepAffiliationRepository,
     > PubSubService<R>
 {
-    pub(crate) async fn execute_pep_retract(
+    pub async fn execute_pep_retract(
         &self,
         command: PepRetractCommand<'_>,
         factory: &dyn PepOutboxFactory,
@@ -583,7 +565,7 @@ impl<
             .await?;
         Ok(PepRetractResult { outcome })
     }
-    pub(crate) async fn execute_pep_delete_node(
+    pub async fn execute_pep_delete_node(
         &self,
         command: PepDeleteNodeCommand<'_>,
         factory: &dyn PepOutboxFactory,
@@ -595,7 +577,7 @@ impl<
             .await?;
         Ok(PepDeleteNodeResult { outcome })
     }
-    pub(crate) async fn execute_pep_purge_node(
+    pub async fn execute_pep_purge_node(
         &self,
         command: PepPurgeNodeCommand<'_>,
         factory: &dyn PepOutboxFactory,
@@ -607,7 +589,7 @@ impl<
             .await?;
         Ok(PepPurgeNodeResult { outcome })
     }
-    pub(crate) async fn execute_pep_configure_node(
+    pub async fn execute_pep_configure_node(
         &self,
         command: PepConfigureNodeCommand<'_>,
         factory: &dyn PepOutboxFactory,
@@ -626,7 +608,7 @@ impl<
             .await?;
         Ok(PepConfigureNodeResult { outcome })
     }
-    pub(crate) async fn execute_pep_set_affiliations(
+    pub async fn execute_pep_set_affiliations(
         &self,
         command: PepSetAffiliationsCommand<'_>,
         factory: &dyn PepDirectOutboxFactory,
@@ -654,7 +636,7 @@ impl<
             + PepAffiliationRepository,
     > PubSubService<R>
 {
-    pub(crate) async fn execute_pep_create_node(
+    pub async fn execute_pep_create_node(
         &self,
         command: PepCreateNodeCommand<'_>,
     ) -> Result<PepCreateNodeResult> {
@@ -673,7 +655,7 @@ impl<
             .await
             .map(Into::into)
     }
-    pub(crate) async fn subscribe_pep_node(
+    pub async fn subscribe_pep_node(
         &self,
         command: PepSubscribeCommand<'_>,
         factory: &dyn PepSubscribeOutboxFactory,
@@ -686,7 +668,7 @@ impl<
             .await?;
         self.repository.subscribe_pep_node(command, factory).await
     }
-    pub(crate) async fn unsubscribe_pep_node(
+    pub async fn unsubscribe_pep_node(
         &self,
         command: PepUnsubscribeCommand<'_>,
     ) -> Result<PepUnsubscribeResult> {
@@ -698,7 +680,7 @@ impl<
             .await?;
         self.repository.unsubscribe_pep_node(command).await
     }
-    pub(crate) async fn update_pep_node_config(
+    pub async fn update_pep_node_config(
         &self,
         owner: &PubSubAccount,
         sender_connection_id: Uuid,
@@ -713,7 +695,7 @@ impl<
             .update_pep_node_config(owner, sender_connection_id, node, expected, config, factory)
             .await
     }
-    pub(crate) async fn update_pep_affiliations(
+    pub async fn update_pep_affiliations(
         &self,
         owner: &PubSubAccount,
         sender_connection_id: Uuid,
@@ -735,7 +717,7 @@ impl<
             )
             .await
     }
-    pub(crate) async fn purge_pep_node(
+    pub async fn purge_pep_node(
         &self,
         owner: &PubSubAccount,
         sender_connection_id: Uuid,
@@ -748,7 +730,7 @@ impl<
             .purge_pep_node(owner, sender_connection_id, node, factory)
             .await
     }
-    pub(crate) async fn delete_pep_node(
+    pub async fn delete_pep_node(
         &self,
         owner: &PubSubAccount,
         sender_connection_id: Uuid,
@@ -761,7 +743,7 @@ impl<
             .delete_pep_node(owner, sender_connection_id, node, factory)
             .await
     }
-    pub(crate) async fn retract_pep_items(
+    pub async fn retract_pep_items(
         &self,
         owner: &PubSubAccount,
         sender_connection_id: Uuid,
@@ -776,7 +758,7 @@ impl<
             .retract_pep_items(owner, sender_connection_id, node, item_ids, notify, factory)
             .await
     }
-    pub(crate) async fn execute_pep_unsubscribe_batch(
+    pub async fn execute_pep_unsubscribe_batch(
         &self,
         command: PepUnsubscribeBatchCommand<'_>,
         factory: &dyn PepDirectOutboxFactory,
@@ -797,7 +779,7 @@ impl<
             .await
             .map(Into::into)
     }
-    pub(crate) async fn commit_legacy_bookmarks(
+    pub async fn commit_legacy_bookmarks(
         &self,
         command: PepCommitLegacyBookmarksCommand<'_>,
         factory: &dyn PepOutboxFactory,
@@ -812,7 +794,7 @@ impl<
             .commit_legacy_bookmarks(command, factory)
             .await
     }
-    pub(crate) async fn publish_pep_items(
+    pub async fn publish_pep_items(
         &self,
         command: PepPublishItemsCommand<'_>,
         factory: &dyn PepOutboxFactory,
@@ -833,7 +815,7 @@ impl<
             + PubSubSubscriptionMutationRepository,
     > PubSubService<R>
 {
-    pub(crate) async fn execute_pubsub_authorize_subscription(
+    pub async fn execute_pubsub_authorize_subscription(
         &self,
         command: PubSubAuthorizeSubscriptionCommand<'_>,
     ) -> Result<PubSubAuthorizeSubscriptionResult> {
@@ -884,7 +866,7 @@ impl<
 }
 
 impl<R: PubSubNodeQueryRepository + PubSubNodeMutationRepository> PubSubService<R> {
-    pub(crate) async fn execute_pubsub_collection_edge(
+    pub async fn execute_pubsub_collection_edge(
         &self,
         command: PubSubCollectionEdgeCommand<'_>,
     ) -> Result<PubSubCollectionEdgeResult> {
@@ -917,7 +899,7 @@ impl<R: PubSubNodeQueryRepository + PubSubNodeMutationRepository> PubSubService<
     }
 }
 
-pub(crate) enum PubSubSubscriptionOptionsRead {
+pub enum PubSubSubscriptionOptionsRead {
     MissingNode,
     NotSubscribed,
     InvalidSubid,
@@ -928,7 +910,7 @@ pub(crate) enum PubSubSubscriptionOptionsRead {
 }
 
 impl<R: PubSubNodeQueryRepository + PubSubSubscriptionQueryRepository> PubSubService<R> {
-    pub(crate) async fn subscription_options_read(
+    pub async fn subscription_options_read(
         &self,
         node_name: &str,
         subscriber_jid: &str,
@@ -960,7 +942,7 @@ impl<R: PubSubNodeQueryRepository + PubSubSubscriptionQueryRepository> PubSubSer
 }
 
 impl<R: PubSubSubscriptionMutationRepository> PubSubService<R> {
-    pub(crate) async fn execute_pubsub_update_subscription_options(
+    pub async fn execute_pubsub_update_subscription_options(
         &self,
         command: PubSubUpdateSubscriptionOptionsCommand<'_>,
     ) -> Result<PubSubUpdateSubscriptionOptionsResult> {
@@ -1003,7 +985,7 @@ impl<R: PubSubSubscriptionMutationRepository> PubSubService<R> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum LeafDiscoItems {
+pub enum LeafDiscoItems {
     NotFound,
     NotLeaf,
     Forbidden,
@@ -1011,7 +993,7 @@ pub(crate) enum LeafDiscoItems {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CollectionDiscoItems {
+pub enum CollectionDiscoItems {
     NotFound,
     NotCollection,
     Forbidden,
@@ -1019,11 +1001,11 @@ pub(crate) enum CollectionDiscoItems {
 }
 
 #[derive(Clone)]
-pub(crate) struct PubSubEventRenderer {
+pub struct PubSubEventRenderer {
     service_jid: String,
 }
 impl PubSubEventRenderer {
-    pub(crate) fn new(domain: &str) -> Self {
+    pub fn new(domain: &str) -> Self {
         Self {
             service_jid: format!("pubsub.{domain}"),
         }
@@ -1058,7 +1040,7 @@ fn pubsub_bool_text(value: bool) -> &'static str {
 /// Render a complete node-configuration form from a locked database snapshot.
 /// The same helper is used for owner IQ responses and durable notifications so
 /// notification XML cannot be assembled from a pre-lock request object.
-pub(crate) fn pubsub_node_config_form(config: &PubSubNodeConfig, form_type: &str) -> String {
+pub fn pubsub_node_config_form(config: &PubSubNodeConfig, form_type: &str) -> String {
     let mut form = XmlElement::namespaced("x", NS_DATA).attr("type", form_type);
     form.push_child(pubsub_config_field(
         "FORM_TYPE",
@@ -1183,7 +1165,7 @@ pub(crate) fn pubsub_node_config_form(config: &PubSubNodeConfig, form_type: &str
 }
 const SUBSCRIBE_AUTH_FORM: &str = "http://jabber.org/protocol/pubsub#subscribe_authorization";
 
-pub(crate) fn subscription_event_children(
+pub fn subscription_event_children(
     subscription: &PubSubSubscription,
     event: &str,
     collection: Option<&str>,
@@ -1207,5 +1189,4 @@ pub(crate) fn subscription_event_children(
 }
 
 #[cfg(test)]
-#[path = "pubsub_tests.rs"]
 mod tests;

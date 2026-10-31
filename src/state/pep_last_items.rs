@@ -8,12 +8,13 @@ use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
     db::{messaging::PostgresMessageRepository, pubsub_repository::PostgresPubSubRepository},
     s2s::FederationRouter,
-    services::{messaging::MessageService, privacy::PrivacyStanzaKind, pubsub::PubSubService},
+    services::{messaging::MessageService, privacy::PrivacyStanzaKind},
 };
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_config::ExternalRouteDomainPolicy;
 use northstar_protocol_runtime::caps::{CapsObservationOwner, CapsResourceIndex, PendingCapsIndex};
+use northstar_pubsub_application::PubSubService;
 use northstar_session_core::LocalCapsEpoch;
 use northstar_xmpp_types::jid::CanonicalJid;
 use std::sync::{atomic::Ordering, Arc};

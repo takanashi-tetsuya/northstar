@@ -2239,7 +2239,15 @@
       ],
       [
         "northstar-pubsub-application",
+        "chrono"
+      ],
+      [
+        "northstar-pubsub-application",
         "northstar-pubsub-core"
+      ],
+      [
+        "northstar-pubsub-application",
+        "northstar-runtime"
       ],
       [
         "northstar-pubsub-application",
@@ -2247,7 +2255,23 @@
       ],
       [
         "northstar-pubsub-application",
+        "northstar-xep-0060"
+      ],
+      [
+        "northstar-pubsub-application",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-pubsub-application",
+        "northstar-xmpp-types"
+      ],
+      [
+        "northstar-pubsub-application",
         "roxmltree"
+      ],
+      [
+        "northstar-pubsub-application",
+        "sha1"
       ],
       [
         "northstar-pubsub-application",

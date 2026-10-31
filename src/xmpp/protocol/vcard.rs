@@ -1,12 +1,12 @@
 use super::{Action, ProtocolSession};
-use crate::services::profile::{
-    detected_media_type, sha1_hex, AvatarPresenceUpdate, LegacyVCardWrite, ProfileAudienceSnapshot,
-    ProfilePublishStatus, PublicVCard,
-};
 use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use northstar_pubsub_application::profile::{
+    detected_media_type, sha1_hex, AvatarPresenceUpdate, LegacyVCardWrite, ProfileAudienceSnapshot,
+    ProfilePublishStatus, PublicVCard,
+};
 use roxmltree::Node;
 
 const AVATAR_DATA: &str = "urn:xmpp:avatar:data";
@@ -359,7 +359,7 @@ impl ProtocolSession {
             .await
         {
             Ok(outcome) => outcome,
-            Err(error) if crate::services::pubsub::is_pubsub_mutation_busy(&error) => {
+            Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
                 return Ok(Action::Send(iq_error(id, "resource-constraint")));
             }
             Err(error) => return Err(error),

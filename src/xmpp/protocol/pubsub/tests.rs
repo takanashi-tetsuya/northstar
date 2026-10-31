@@ -7,11 +7,12 @@ use super::{
     valid_item_id, valid_node_id, DiscoItem, PubSubError, PubSubReply, MAX_PUBLISH_ITEMS,
     NODE_CONFIG_FORM, PUBLISH_OPTIONS_FORM, SERVICE_FEATURES, SUBSCRIBE_OPTIONS_FORM,
 };
-use crate::services::pubsub::{
-    CollectionUpdateOutcome, PubSubCollectionEdgeResult, PubSubItem, PubSubNodeConfig,
-    PubSubSubscription, PubSubSubscriptionOptions,
-};
 use chrono::Utc;
+use northstar_pubsub_application::PubSubCollectionEdgeResult;
+use northstar_pubsub_core::{
+    CollectionUpdateOutcome, PubSubItem, PubSubNodeConfig, PubSubSubscription,
+    PubSubSubscriptionOptions,
+};
 use roxmltree::Document;
 
 #[test]

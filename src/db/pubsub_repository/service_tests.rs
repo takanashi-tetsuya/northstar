@@ -1,75 +1,33 @@
-use super::*;
 use crate::db;
 use crate::db::pubsub_repository::{
     db_outbox, pep_outbox_authorization_lock_plan, PepOutboxAuthorizationLockPlan,
 };
+use anyhow::Result;
 use chrono::{TimeZone, Utc};
+use northstar_pubsub_application::{
+    is_pubsub_mutation_busy, PepCreateNodeCommand, PepPublishItemsCommand, PepPublishItemsOutcome,
+    PubSubUpdateSubscriptionOptionsCommand,
+};
+use northstar_pubsub_core::{
+    PepAudienceSnapshot, PepCreateOutcome, PepNodeConfig, PepOutboxAuthorizationMode,
+    PepOutboxAuthorizationOutcome, PepOutboxDropReason, PepOutboxEventKind, PepPublishWrite,
+    PepQuotas, PepSubscribeOutcome, PepSubscribeSnapshot, PepSubscribeWrite, PepSubscriptionActor,
+    PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount, PubSubOutboxInsert,
+    PubSubSubscription, PubSubSubscriptionOptions, SubscriptionOptionsOutcome,
+};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
+use uuid::Uuid;
 
-struct QueryOnlyItems;
-
-impl PubSubItemQueryRepository for QueryOnlyItems {
-    async fn leaf_disco_snapshot(
-        &self,
-        _node: &str,
-        _requester: &str,
-    ) -> Result<Option<PubSubLeafDiscoSnapshot>> {
-        Ok(None)
-    }
-
-    async fn collection_disco_snapshot(
-        &self,
-        _node: &str,
-        _requester: &str,
-    ) -> Result<Option<PubSubCollectionDiscoSnapshot>> {
-        Ok(None)
-    }
-
-    async fn get_items(
-        &self,
-        _node_id: Uuid,
-        _item_ids: &[String],
-        _limit: i64,
-    ) -> Result<Vec<PubSubItem>> {
-        Ok(Vec::new())
-    }
-
-    async fn collection_visible_items(
-        &self,
-        _collection_id: Uuid,
-        _requester: &str,
-        _global_item_limit: i64,
-        _xml_byte_limit: i64,
-    ) -> Result<Vec<CollectionVisibleItem>> {
-        Ok(Vec::new())
-    }
-
-    async fn can_publish(&self, _node: &PubSubNode, _requester: &str) -> Result<bool> {
-        Ok(false)
-    }
-}
-
-#[tokio::test]
-async fn item_queries_do_not_require_mutation_repository_capability() {
-    let service = PubSubService::new_with_durable_outbox_database_admission(
-        QueryOnlyItems,
-        2,
-        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
-    );
-    assert!(service
-        .get_items(Uuid::new_v4(), &[], 10)
-        .await
-        .unwrap()
-        .is_empty());
-}
+const NS_PUBSUB_EVENT: &str = "http://jabber.org/protocol/pubsub#event";
+const SUBSCRIBE_AUTH_FORM: &str = "http://jabber.org/protocol/pubsub#subscribe_authorization";
 
 #[tokio::test]
 async fn remote_subscription_options_fail_before_mutation_admission() {
     let pool = sqlx::postgres::PgPoolOptions::new()
         .connect_lazy("postgres://unused:unused@localhost/unused")
         .unwrap();
-    let service = PubSubService::new(pool, "example.test");
+    let service = crate::db::pubsub_repository::test_pubsub_service(pool, "example.test");
     let mut options = PubSubSubscriptionOptions::for_node_type("leaf");
     options.show_values = vec!["online".to_owned()];
     let result = service
@@ -96,162 +54,6 @@ async fn remote_subscription_options_fail_before_mutation_admission() {
     assert_eq!(result.outcome, SubscriptionOptionsOutcome::Forbidden);
 }
 
-struct RetrievalFacts {
-    affiliation: Option<String>,
-    subscribed: bool,
-    calls: Arc<Mutex<Vec<&'static str>>>,
-}
-
-impl PubSubAffiliationQueryRepository for RetrievalFacts {
-    async fn retrieval_authorization_facts(
-        &self,
-        _node_id: Uuid,
-        _jid: &str,
-    ) -> Result<(Option<String>, bool)> {
-        self.calls.lock().unwrap().push("facts");
-        Ok((self.affiliation.clone(), self.subscribed))
-    }
-
-    async fn get_node_affiliation(&self, _node_id: Uuid, _jid: &str) -> Result<Option<String>> {
-        panic!("retrieval should use the combined facts query")
-    }
-
-    async fn affiliations_for_jid(
-        &self,
-        _jid: &str,
-        _node: Option<&str>,
-    ) -> Result<Vec<PubSubAffiliation>> {
-        panic!("retrieval should not enumerate affiliations")
-    }
-}
-
-#[tokio::test]
-async fn retrieval_query_preserves_outcast_precedence_over_open_and_subscription() {
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let service = PubSubService::new_with_durable_outbox_database_admission(
-        RetrievalFacts {
-            affiliation: Some("outcast".to_owned()),
-            subscribed: true,
-            calls: Arc::clone(&calls),
-        },
-        2,
-        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
-    );
-    let node = renderer_node(Uuid::new_v4(), "news", "leaf");
-    assert!(!service
-        .can_retrieve_node(&node, "reader@example.test/mobile")
-        .await
-        .unwrap());
-    assert_eq!(*calls.lock().unwrap(), ["facts"]);
-}
-
-#[tokio::test]
-async fn retrieval_query_preserves_affiliation_error_before_access_model_error() {
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let service = PubSubService::new_with_durable_outbox_database_admission(
-        RetrievalFacts {
-            affiliation: Some("invalid-affiliation".to_owned()),
-            subscribed: true,
-            calls: Arc::clone(&calls),
-        },
-        2,
-        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
-    );
-    let mut node = renderer_node(Uuid::new_v4(), "news", "leaf");
-    node.access_model = "invalid-access-model".to_owned();
-    let error = service
-        .can_retrieve_node(&node, "reader@example.test")
-        .await
-        .unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("invalid stored PubSub affiliation"));
-    assert_eq!(*calls.lock().unwrap(), ["facts"]);
-}
-
-struct QueryOnlyPepItems;
-
-impl PepItemQueryRepository for QueryOnlyPepItems {
-    async fn pep_items(
-        &self,
-        _owner_id: Uuid,
-        _node: &str,
-        _item_id: Option<&str>,
-        _limit: i64,
-    ) -> Result<Vec<(String, String)>> {
-        Ok(Vec::new())
-    }
-
-    async fn pep_items_by_ids(
-        &self,
-        _owner_id: Uuid,
-        _node: &str,
-        _item_ids: &[&str],
-        _limit: i64,
-    ) -> Result<Vec<(String, String)>> {
-        Ok(Vec::new())
-    }
-
-    async fn pep_items_with_timestamp(
-        &self,
-        _owner_id: Uuid,
-        _node: &str,
-        _limit: i64,
-    ) -> Result<Vec<PepItem>> {
-        Ok(Vec::new())
-    }
-}
-
-#[tokio::test]
-async fn pep_item_queries_do_not_require_mutation_repository_capability() {
-    let service = PubSubService::new_with_durable_outbox_database_admission(
-        QueryOnlyPepItems,
-        2,
-        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
-    );
-    assert!(service
-        .pep_items(Uuid::new_v4(), "urn:xmpp:avatar:data", None, 10)
-        .await
-        .unwrap()
-        .is_empty());
-}
-
-#[tokio::test]
-async fn injected_durable_outbox_admission_stays_separate_from_foreground_mutations() {
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(2)
-        .connect_lazy("postgres://unused:unused@localhost/unused")
-        .expect("a lazy test pool does not connect");
-    let durable =
-        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2);
-    let service = PubSubService::new_with_durable_outbox_database_admission(
-        db::pubsub_repository::PostgresPubSubRepository::new(pool, "example.test"),
-        2,
-        durable.clone(),
-    );
-
-    assert!(service
-        .durable_outbox_database_admission
-        .shares_with(&durable));
-    assert_eq!(
-        service.mutation_admission.available_transaction_permits(),
-        1,
-        "the foreground mutation budget remains independently available"
-    );
-}
-
-#[test]
-fn atom_event_body_limit_never_splits_a_utf8_character() {
-    let summary = format!("{}ƞ", "a".repeat(1_023));
-    let event =
-        format!("<entry xmlns='http://www.w3.org/2005/Atom'><summary>{summary}</summary></entry>");
-    let body = northstar_xep_0060::extract_atom_event_body(&event)
-        .unwrap()
-        .unwrap();
-    assert_eq!(body.len(), 1_023);
-    assert_eq!(body, "a".repeat(1_023));
-}
-
 #[test]
 fn live_pep_authorization_locks_audience_before_block_policy() {
     assert_eq!(
@@ -261,68 +63,6 @@ fn live_pep_authorization_locks_audience_before_block_policy() {
     assert_eq!(
         pep_outbox_authorization_lock_plan(PepOutboxAuthorizationMode::CausalAudience),
         PepOutboxAuthorizationLockPlan::BlockPolicyOnly
-    );
-}
-
-#[test]
-fn publish_validation_reports_the_specific_payload_failure() {
-    let items = vec![(
-        "one".to_owned(),
-        "<item id='one'><payload xmlns='urn:test:wrong'>value</payload></item>".to_owned(),
-    )];
-    let mut config = PubSubNodeConfig {
-        payload_type: Some("urn:test:expected".to_owned()),
-        ..PubSubNodeConfig::default()
-    };
-
-    assert_eq!(
-        publish_validation_outcome(&config, &items),
-        Some(PubSubPublishOutcome::InvalidPayload),
-    );
-
-    config.payload_type = None;
-    config.max_payload_size = 1;
-    assert_eq!(
-        publish_validation_outcome(&config, &items),
-        Some(PubSubPublishOutcome::PayloadTooBig),
-    );
-
-    config.max_payload_size = 1_048_576;
-    let missing_payload = vec![("two".to_owned(), "<item id='two'/>".to_owned())];
-    assert_eq!(
-        publish_validation_outcome(&config, &missing_payload),
-        Some(PubSubPublishOutcome::PayloadRequired),
-    );
-}
-
-#[test]
-fn existing_node_publish_hides_payload_policy_before_authorization() {
-    let items = vec![(
-        "wrong-namespace".to_owned(),
-        "<item id='wrong-namespace'><payload xmlns='urn:test:wrong'/></item>".to_owned(),
-    )];
-    let node_config = PubSubNodeConfig {
-        payload_type: Some("urn:test:expected".to_owned()),
-        ..PubSubNodeConfig::default()
-    };
-    let stale_options = PubSubNodeConfig {
-        max_items: node_config.max_items + 1,
-        ..node_config.clone()
-    };
-
-    // The same request has both policy-sensitive failures, but a caller
-    // without publish authorization must learn neither one.
-    assert_eq!(
-        existing_node_publish_admission_outcome(false, &node_config, Some(&stale_options), &items,),
-        Some(PubSubPublishOutcome::Forbidden),
-    );
-    assert_eq!(
-        existing_node_publish_admission_outcome(true, &node_config, Some(&stale_options), &items,),
-        Some(PubSubPublishOutcome::PreconditionNotMet),
-    );
-    assert_eq!(
-        existing_node_publish_admission_outcome(true, &node_config, None, &items,),
-        Some(PubSubPublishOutcome::InvalidPayload),
     );
 }
 
@@ -372,67 +112,6 @@ fn renderer_subscription(node: &str, jid: &str) -> db::PubSubSubscription {
     }
 }
 
-#[tokio::test]
-async fn mutation_admission_waits_before_database_capacity_and_fails_bounded() {
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(4)
-        .connect_lazy("postgres://unused:unused@localhost/unused")
-        .unwrap();
-    let admission = PubSubMutationAdmission::new(pool.options().get_max_connections() as usize);
-    // One of four configured database connections remains outside the
-    // PubSub mutation budget for unrelated authentication/routing work.
-    assert_eq!(admission.available_transaction_permits(), 3);
-
-    let first = admission
-        .acquire_with_timeout(&["alice@example.test"], false, Duration::from_millis(50))
-        .await
-        .unwrap();
-    let rejected_before =
-        northstar_telemetry::admission_gauges::pubsub_mutation_admission_rejections_total();
-    let error = admission
-        .acquire_with_timeout(&["alice@example.test"], false, Duration::from_millis(20))
-        .await
-        .unwrap_err();
-    assert!(error
-        .downcast_ref::<northstar_pubsub_application::PubSubMutationBusy>()
-        .is_some());
-    assert!(
-        northstar_telemetry::admission_gauges::pubsub_mutation_admission_rejections_total()
-            > rejected_before
-    );
-    drop(first);
-
-    admission
-        .acquire_with_timeout(&["alice@example.test"], false, Duration::from_millis(50))
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn collection_graph_admission_serializes_distinct_owners_without_pool_waiters() {
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(8)
-        .connect_lazy("postgres://unused:unused@localhost/unused")
-        .unwrap();
-    let admission = PubSubMutationAdmission::new(pool.options().get_max_connections() as usize);
-    let first = admission
-        .acquire_with_timeout(&["alice@example.test"], true, Duration::from_millis(50))
-        .await
-        .unwrap();
-    let error = admission
-        .acquire_with_timeout(&["bob@example.test"], true, Duration::from_millis(20))
-        .await
-        .unwrap_err();
-    assert!(error
-        .downcast_ref::<northstar_pubsub_application::PubSubMutationBusy>()
-        .is_some());
-    drop(first);
-    admission
-        .acquire_with_timeout(&["bob@example.test"], true, Duration::from_millis(50))
-        .await
-        .unwrap();
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn same_owner_advisory_contention_does_not_exhaust_the_shared_pool() {
@@ -459,7 +138,10 @@ async fn same_owner_advisory_contention_does_not_exhaust_the_shared_pool() {
         .execute(&mut *blocker)
         .await
         .unwrap();
-    let service = Arc::new(PubSubService::new(pool.clone(), "example.test"));
+    let service = Arc::new(crate::db::pubsub_repository::test_pubsub_service(
+        pool.clone(),
+        "example.test",
+    ));
     let mut requests = Vec::new();
     for index in 0..16 {
         let service = Arc::clone(&service);
@@ -497,7 +179,7 @@ async fn generic_transaction_renderer_preserves_collection_and_last_item_snapsho
     let pool = sqlx::postgres::PgPoolOptions::new()
         .connect_lazy("postgres://unused:unused@localhost/unused")
         .unwrap();
-    let service = PubSubService::new(pool, "example.test");
+    let service = crate::db::pubsub_repository::test_pubsub_service(pool, "example.test");
     let child = renderer_node(Uuid::from_u128(10), "child<&", "leaf");
     let parent = renderer_node(Uuid::from_u128(11), "parent<&", "collection");
     let subscription = renderer_subscription(&parent.node, "alice@example.test/phone");
@@ -779,7 +461,7 @@ async fn paused_pep_delivery_rechecks_block_privacy_disable_and_sensitive_acl() 
         .await
         .unwrap();
     transaction.commit().await.unwrap();
-    let service = PubSubService::new(pool.clone(), "example.test");
+    let service = crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test");
     let item = service
         .claim_pubsub_outbox(100)
         .await
@@ -924,7 +606,10 @@ async fn pep_publish_audience_is_linearizable_with_every_revocation_input() {
         .await
         .unwrap();
 
-    let service = Arc::new(PubSubService::new(pool.clone(), "example.test"));
+    let service = Arc::new(crate::db::pubsub_repository::test_pubsub_service(
+        pool.clone(),
+        "example.test",
+    ));
     let gate = Arc::new((Mutex::new(false), Condvar::new()));
     let factory_gate = Arc::clone(&gate);
     let (snapshot_tx, mut snapshot_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1131,7 +816,10 @@ async fn pep_subscription_admission_is_linearizable_and_principal_scoped() {
         username: owner_username.clone(),
         auth_generation: owner_generation,
     };
-    let service = Arc::new(PubSubService::new(pool.clone(), "example.test"));
+    let service = Arc::new(crate::db::pubsub_repository::test_pubsub_service(
+        pool.clone(),
+        "example.test",
+    ));
     let subscriber = format!("remote{}@remote.test/phone", Uuid::new_v4().simple());
     let subscriber_bare = northstar_xmpp_types::jid::canonical_bare_key(&subscriber).unwrap();
 

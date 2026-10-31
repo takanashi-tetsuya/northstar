@@ -1,27 +1,27 @@
 use super::{Action, ProtocolSession};
 use crate::services::xml_util::*;
-use crate::services::{
-    profile::{
-        detected_media_type as detected_avatar_media_type, AvatarPresenceUpdate,
-        ProfileAudienceSnapshot, ProfilePublishResult, ProfilePublishStatus,
-    },
-    pubsub::{
-        PepAudienceSnapshot, PepConfigureNodeCommand, PepConfigureNodeWrite, PepCreateNodeCommand,
-        PepCreateOutcome, PepDeleteNodeCommand, PepDeleteNodeWrite, PepDirectStateSnapshot,
-        PepDirectStateTransition, PepNodeConfig, PepOutboxAuthorizationMode, PepOutboxEventKind,
-        PepOutboxFactory, PepOwnerMutationOutcome, PepProfileWrite, PepPublishOutcome,
-        PepPublishWrite, PepPurgeNodeCommand, PepPurgeNodeWrite, PepRetractCommand,
-        PepRetractWrite, PepSetAffiliationsCommand, PepSetAffiliationsWrite, PepSubscribeOutcome,
-        PepSubscribeSnapshot, PepSubscribeWrite, PepSubscriptionActor, PepUnsubscribeBatchCommand,
-        PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount, PubSubOutboxInsert,
-        PubSubService,
-    },
-};
 use crate::state::pep_last_items::PepLastItemsContext;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use northstar_pubsub_application::PepPublishItemsCommand;
+use northstar_pubsub_application::{
+    profile::{
+        detected_media_type as detected_avatar_media_type, AvatarPresenceUpdate,
+        ProfileAudienceSnapshot, ProfilePublishResult, ProfilePublishStatus,
+    },
+    PepConfigureNodeCommand, PepCreateNodeCommand, PepDeleteNodeCommand, PepPurgeNodeCommand,
+    PepRetractCommand, PepSetAffiliationsCommand, PepUnsubscribeBatchCommand, PubSubService,
+};
+use northstar_pubsub_core::{
+    PepAudienceSnapshot, PepConfigureNodeWrite, PepCreateOutcome, PepDeleteNodeWrite,
+    PepDirectStateSnapshot, PepDirectStateTransition, PepNodeConfig, PepOutboxAuthorizationMode,
+    PepOutboxEventKind, PepOutboxFactory, PepOwnerMutationOutcome, PepProfileWrite,
+    PepPublishOutcome, PepPublishWrite, PepPurgeNodeWrite, PepRetractWrite,
+    PepSetAffiliationsWrite, PepSubscribeOutcome, PepSubscribeSnapshot, PepSubscribeWrite,
+    PepSubscriptionActor, PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount,
+    PubSubOutboxInsert,
+};
 use roxmltree::Node;
 use sha1::{Digest, Sha1};
 use std::collections::HashSet;
@@ -290,7 +290,7 @@ impl ProtocolSession {
         &self,
         iq: Node<'_, '_>,
         requester: &crate::services::authentication::AuthenticatedAccount,
-    ) -> Result<Option<crate::services::pubsub::PubSubAccount>> {
+    ) -> Result<Option<northstar_pubsub_core::PubSubAccount>> {
         let username = if let Some(to) = iq.attribute("to") {
             let Ok(to) = northstar_xmpp_types::jid::CanonicalJid::parse(to) else {
                 return Ok(None);
@@ -406,7 +406,7 @@ impl ProtocolSession {
             })
             .collect::<Option<Vec<_>>>();
         let Some(requested) =
-            requested.filter(|ids| ids.len() <= crate::services::pubsub::PEP_MAX_ITEMS as usize)
+            requested.filter(|ids| ids.len() <= northstar_pubsub_core::PEP_MAX_ITEMS as usize)
         else {
             return Ok(Action::Send(iq_error_from_optional(
                 id,
@@ -417,7 +417,7 @@ impl ProtocolSession {
         let mut canonical_requested = Vec::with_capacity(requested.len());
         let mut unique_requested = HashSet::new();
         for item_id in requested {
-            let Ok(item_id) = crate::services::pubsub::canonical_profile_item_id(node, item_id)
+            let Ok(item_id) = northstar_pubsub_core::canonical_profile_item_id(node, item_id)
             else {
                 return Ok(Action::Send(iq_error_from_optional(
                     id,
@@ -440,7 +440,7 @@ impl ProtocolSession {
             .collect::<Vec<_>>();
         let max_items = match items.attribute("max_items") {
             Some(value) => match value.parse::<i64>() {
-                Ok(value) if value > 0 => value.min(crate::services::pubsub::PEP_MAX_ITEMS as i64),
+                Ok(value) if value > 0 => value.min(northstar_pubsub_core::PEP_MAX_ITEMS as i64),
                 _ => {
                     return Ok(Action::Send(iq_error_from_optional(
                         id,
@@ -449,7 +449,7 @@ impl ProtocolSession {
                     )));
                 }
             },
-            None => crate::services::pubsub::PEP_MAX_ITEMS as i64,
+            None => northstar_pubsub_core::PEP_MAX_ITEMS as i64,
         };
         let stored = if requested.is_empty() {
             self.state
@@ -512,8 +512,8 @@ fn access_error_for_model(access_model: &str) -> &'static str {
 }
 
 pub(crate) async fn pep_access_allowed(
-    service: &PubSubService<impl crate::services::pubsub::PepNodeQueryRepository>,
-    owner: &crate::services::pubsub::PubSubAccount,
+    service: &PubSubService<impl northstar_pubsub_application::PepNodeQueryRepository>,
+    owner: &northstar_pubsub_core::PubSubAccount,
     domain: &str,
     node: &str,
     requester_jid: &str,
@@ -530,7 +530,7 @@ pub(crate) async fn pep_access_allowed(
 }
 
 async fn pep_access_allowed_for_owner(
-    service: &PubSubService<impl crate::services::pubsub::PepNodeQueryRepository>,
+    service: &PubSubService<impl northstar_pubsub_application::PepNodeQueryRepository>,
     owner_id: uuid::Uuid,
     owner_username: &str,
     domain: &str,
@@ -560,7 +560,7 @@ async fn pep_access_allowed_for_owner(
 }
 
 async fn pep_access_allowed_with_config(
-    service: &PubSubService<impl crate::services::pubsub::PepNodeQueryRepository>,
+    service: &PubSubService<impl northstar_pubsub_application::PepNodeQueryRepository>,
     owner_id: uuid::Uuid,
     owner_username: &str,
     domain: &str,
@@ -602,7 +602,7 @@ async fn pep_access_allowed_with_config(
 
 pub(crate) async fn federated_pep_disco_info(
     state: &crate::state::AppState,
-    owner: &crate::services::pubsub::PubSubAccount,
+    owner: &northstar_pubsub_core::PubSubAccount,
     requester: &str,
     requested_node: Option<&str>,
 ) -> Result<Option<String>> {
@@ -701,7 +701,7 @@ pub(crate) async fn federated_pep_disco_info(
 
 pub(crate) async fn federated_pep_disco_items(
     state: &crate::state::AppState,
-    owner: &crate::services::pubsub::PubSubAccount,
+    owner: &northstar_pubsub_core::PubSubAccount,
     requester: &str,
     requested_node: Option<&str>,
 ) -> Result<Option<String>> {

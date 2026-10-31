@@ -1,9 +1,10 @@
 use super::*;
 use crate::db;
-use crate::services::pubsub::{
-    CollectionDiscoItems, LeafDiscoItems, PepAudienceSnapshot, PepOutboxFactory,
-    PubSubCollectionDiscoChild, PubSubService,
+use northstar_pubsub_application::{
+    service::{CollectionDiscoItems, LeafDiscoItems},
+    PubSubCollectionDiscoChild,
 };
+use northstar_pubsub_core::{PepAudienceSnapshot, PepOutboxFactory};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -55,7 +56,7 @@ impl RenderGate {
 }
 
 struct RaceMutationRenderer {
-    inner: crate::services::pubsub::PubSubService<
+    inner: northstar_pubsub_application::PubSubService<
         crate::db::pubsub_repository::PostgresPubSubRepository,
     >,
     observations: tokio::sync::mpsc::UnboundedSender<MutationObservation>,

@@ -1,11 +1,10 @@
 //! Durable digest claims and their policy-checked delivery endpoint.
 
 use super::{pubsub_notification_delivery::PubSubNotificationDelivery, AppState};
-use crate::{
-    db::pubsub_repository::PostgresPubSubRepository,
-    services::pubsub::{DuePubSubDigest, PubSubService},
-};
+use crate::db::pubsub_repository::PostgresPubSubRepository;
 use anyhow::Result;
+use northstar_pubsub_application::PubSubService;
+use northstar_pubsub_core::DuePubSubDigest;
 use uuid::Uuid;
 
 pub(crate) struct PubSubDigestWorkerContext {

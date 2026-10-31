@@ -57,7 +57,7 @@ async fn subscription_and_option_retries_do_not_emit_transitions_after_lock_wait
     let retry_pool = named_single_connection_pool(&url, &application).await;
     let (observation_tx, mut observation_rx) = tokio::sync::mpsc::unbounded_channel();
     let renderer = Arc::new(RaceMutationRenderer {
-        inner: crate::services::pubsub::PubSubService::new(pool.clone(), "example.test"),
+        inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
         observations: observation_tx,
         gate: None,
     });
@@ -289,7 +289,7 @@ async fn subscription_options_recheck_node_policy_after_lock_wait() {
     let subscribe_pool = named_single_connection_pool(&url, &application).await;
     let mut subscribe_options = PubSubSubscriptionOptions::for_node_type("leaf");
     subscribe_options.include_body = true;
-    let renderer = PubSubService::new(pool.clone(), "example.test");
+    let renderer = crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test");
     let expected_node_type = node.node_type.clone();
     let expected_access_model = node.access_model.clone();
     let subid = format!("payload-{suffix}");
@@ -474,7 +474,7 @@ async fn subscribe_options_recheck_remote_show_values_after_lock_wait() {
     let retry_pool = named_single_connection_pool(&url, &application).await;
     let (observation_tx, mut observation_rx) = tokio::sync::mpsc::unbounded_channel();
     let renderer = Arc::new(RaceMutationRenderer {
-        inner: PubSubService::new(pool.clone(), "example.test"),
+        inner: crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test"),
         observations: observation_tx,
         gate: None,
     });

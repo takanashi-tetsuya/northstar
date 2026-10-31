@@ -389,7 +389,7 @@ pub async fn update_node_config_and_graph(
     requester: &str,
     config: &PubSubNodeConfig,
 ) -> Result<PubSubConfigOutcome> {
-    let renderer = crate::services::pubsub::PubSubService::new(pool.clone(), "example.test");
+    let renderer = crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test");
     let mut expected = node.config();
     expected.collections = collection_parents(pool, node.id)
         .await?

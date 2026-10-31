@@ -493,15 +493,16 @@ impl AppState {
                 config.scram_sha1_enabled,
             );
         let pubsub_service =
-            crate::services::pubsub::PubSubService::new_with_durable_outbox_database_admission(
+            northstar_pubsub_application::PubSubService::new_with_durable_outbox_database_admission(
                 db::pubsub_repository::PostgresPubSubRepository::new(pool.clone(), &config.domain),
                 pool.options().get_max_connections(),
                 durable_outbox_database_admission.clone(),
             );
-        let profile_service = crate::services::profile::ProfileService::with_mutation_admission(
-            db::profile::PostgresProfileRepository::new(pool.clone(), config.domain.clone()),
-            pubsub_service.mutation_admission(),
-        );
+        let profile_service =
+            northstar_pubsub_application::profile::ProfileService::with_mutation_admission(
+                db::profile::PostgresProfileRepository::new(pool.clone(), config.domain.clone()),
+                pubsub_service.mutation_admission(),
+            );
         let mam_service = northstar_archive_application::MamService::new(
             db::mam::PostgresMamRepository::new(pool.clone()),
             northstar_archive_application::FederatedMamOutboxLimits {
@@ -535,11 +536,12 @@ impl AppState {
         ));
         let roster_service =
             RosterService::new(db::roster::PostgresRosterRepository::new(pool.clone()));
-        let private_storage_service = crate::services::private_storage::PrivateStorageService::new(
-            db::private::PostgresPrivateStorageRepository::new(pool.clone()),
-            config.pep_max_nodes_per_account,
-            config.pep_max_storage_bytes_per_account,
-        );
+        let private_storage_service =
+            northstar_pubsub_application::private_storage::PrivateStorageService::new(
+                db::private::PostgresPrivateStorageRepository::new(pool.clone()),
+                config.pep_max_nodes_per_account,
+                config.pep_max_storage_bytes_per_account,
+            );
         let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;
         let command_pool = match config.admin_command_pool_mode {
             // The explicit loopback-only exception has no independent

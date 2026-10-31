@@ -509,11 +509,11 @@ pub(super) fn parse_owner_config(
             "pubsub#max_items" => {
                 let value = child_text(field, "value").ok_or(())?;
                 config.max_items = if value == "max" {
-                    crate::services::pubsub::PEP_MAX_ITEMS
+                    northstar_pubsub_core::PEP_MAX_ITEMS
                 } else {
                     value.parse().map_err(|_| ())?
                 };
-                if !(1..=crate::services::pubsub::PEP_MAX_ITEMS).contains(&config.max_items) {
+                if !(1..=northstar_pubsub_core::PEP_MAX_ITEMS).contains(&config.max_items) {
                     return Err(());
                 }
             }
@@ -558,7 +558,7 @@ pub(super) fn parse_owner_config(
         && (config.access_model != "open"
             || !config.persist_items
             || node == OMEMO_DEVICES && config.max_items != 1
-            || node == OMEMO_BUNDLES && config.max_items != crate::services::pubsub::PEP_MAX_ITEMS)
+            || node == OMEMO_BUNDLES && config.max_items != northstar_pubsub_core::PEP_MAX_ITEMS)
     {
         return Err(());
     }

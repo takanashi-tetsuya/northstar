@@ -286,10 +286,10 @@ run_exact_ignored \
   db::profile::tests::deleted_account_incarnation_and_corrupt_vcard_fail_closed
 
 run_exact_ignored \
-  services::pubsub::tests::same_owner_advisory_contention_does_not_exhaust_the_shared_pool
+  db::pubsub_repository::service_tests::same_owner_advisory_contention_does_not_exhaust_the_shared_pool
 run_exact_ignored \
-  services::pubsub::tests::paused_pep_delivery_rechecks_block_privacy_disable_and_sensitive_acl
+  db::pubsub_repository::service_tests::paused_pep_delivery_rechecks_block_privacy_disable_and_sensitive_acl
 run_exact_ignored \
-  services::pubsub::tests::pep_publish_audience_is_linearizable_with_every_revocation_input
+  db::pubsub_repository::service_tests::pep_publish_audience_is_linearizable_with_every_revocation_input
 run_exact_ignored \
-  services::pubsub::tests::pep_subscription_admission_is_linearizable_and_principal_scoped
+  db::pubsub_repository::service_tests::pep_subscription_admission_is_linearizable_and_principal_scoped

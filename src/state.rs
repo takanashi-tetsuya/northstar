@@ -301,13 +301,15 @@ pub struct AppState {
     passkey_service: Arc<PasskeyService>,
     /// Narrow persistence/orchestration capability for XEP-0060 and PEP.
     /// Protocol handlers receive this service rather than database authority.
-    pubsub_service:
-        crate::services::pubsub::PubSubService<db::pubsub_repository::PostgresPubSubRepository>,
+    pubsub_service: northstar_pubsub_application::PubSubService<
+        db::pubsub_repository::PostgresPubSubRepository,
+    >,
     /// Account-scoped vCard/vCard4/avatar mutation and public-profile read
     /// boundary. Profile transactions and authorization never cross into the
     /// XMPP protocol layer.
-    profile_service:
-        crate::services::profile::ProfileService<db::profile::PostgresProfileRepository>,
+    profile_service: northstar_pubsub_application::profile::ProfileService<
+        db::profile::PostgresProfileRepository,
+    >,
     /// XEP-0215 TURN credential authority. Long-lived key material and its
     /// bounded rate windows never cross into protocol or public state.
     extdisco_service: crate::services::extdisco::ExtDiscoService,
@@ -349,7 +351,7 @@ pub struct AppState {
     >,
     privacy_service:
         crate::services::privacy::PrivacyService<db::privacy::PostgresPrivacyRepository>,
-    private_storage_service: crate::services::private_storage::PrivateStorageService<
+    private_storage_service: northstar_pubsub_application::private_storage::PrivateStorageService<
         db::private::PostgresPrivateStorageRepository,
     >,
     account_service:

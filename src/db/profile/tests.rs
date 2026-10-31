@@ -1,13 +1,12 @@
 use super::*;
-use crate::services::profile::ProfileService;
+use northstar_pubsub_application::profile::ProfileService;
+use northstar_pubsub_application::profile::VCARD4;
 
-impl ProfileService<PostgresProfileRepository> {
-    fn new(pool: PgPool, domain: String) -> Self {
-        let admission = Arc::new(crate::services::pubsub::PubSubMutationAdmission::new(
-            pool.options().get_max_connections() as usize,
-        ));
-        Self::with_mutation_admission(PostgresProfileRepository::new(pool, domain), admission)
-    }
+fn profile_service(pool: PgPool, domain: String) -> ProfileService<PostgresProfileRepository> {
+    let admission = Arc::new(northstar_pubsub_application::PubSubMutationAdmission::new(
+        pool.options().get_max_connections() as usize,
+    ));
+    ProfileService::with_mutation_admission(PostgresProfileRepository::new(pool, domain), admission)
 }
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -135,7 +134,7 @@ async fn profile_publish_uses_exact_subscribe_and_block_snapshot() {
         .unwrap()
         .unwrap();
 
-    let service = Arc::new(ProfileService::new(
+    let service = Arc::new(profile_service(
         database.pool.clone(),
         "example.test".to_owned(),
     ));
@@ -346,7 +345,7 @@ async fn first_profile_publish_snapshots_roster_privacy_and_rolls_back_atomicall
     .await
     .unwrap();
 
-    let service = ProfileService::new(database.pool.clone(), "example.test".to_owned());
+    let service = profile_service(database.pool.clone(), "example.test".to_owned());
     let config = db::default_pep_node_config(VCARD4);
     let payload = vcard4_item("profile", "atomic");
     let items = [("profile", payload.as_str())];
@@ -433,7 +432,7 @@ async fn first_profile_publish_snapshots_roster_privacy_and_rolls_back_atomicall
 async fn legacy_and_metadata_race_never_restores_a_stale_vcard_baseline() {
     let database = IsolatedDatabase::create("legacy_metadata").await;
     let (owner_id, _, auth_generation) = insert_user(&database.pool, "owner").await;
-    let service = Arc::new(ProfileService::new(
+    let service = Arc::new(profile_service(
         database.pool.clone(),
         "example.test".to_owned(),
     ));
@@ -545,7 +544,7 @@ async fn deleted_account_incarnation_and_corrupt_vcard_fail_closed() {
     let (old_id, username, auth_generation) = insert_user(&database.pool, "owner").await;
     let mut blocker = database.pool.begin().await.unwrap();
     lock_profile_account(&mut blocker, old_id).await.unwrap();
-    let service = Arc::new(ProfileService::new(
+    let service = Arc::new(profile_service(
         database.pool.clone(),
         "example.test".to_owned(),
     ));

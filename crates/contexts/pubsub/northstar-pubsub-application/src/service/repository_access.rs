@@ -3,17 +3,13 @@
 use super::*;
 
 impl<R: PepNodeQueryRepository> PubSubService<R> {
-    pub(crate) async fn pep_node(
-        &self,
-        owner_id: Uuid,
-        node: &str,
-    ) -> Result<Option<PepNodeConfig>> {
+    pub async fn pep_node(&self, owner_id: Uuid, node: &str) -> Result<Option<PepNodeConfig>> {
         self.repository.pep_node(owner_id, node).await
     }
 }
 
 impl<R: PepItemQueryRepository> PubSubService<R> {
-    pub(crate) async fn pep_items(
+    pub async fn pep_items(
         &self,
         owner_id: Uuid,
         node: &str,
@@ -24,7 +20,7 @@ impl<R: PepItemQueryRepository> PubSubService<R> {
             .pep_items(owner_id, node, item_id, limit)
             .await
     }
-    pub(crate) async fn pep_items_by_ids(
+    pub async fn pep_items_by_ids(
         &self,
         owner_id: Uuid,
         node: &str,
@@ -35,7 +31,7 @@ impl<R: PepItemQueryRepository> PubSubService<R> {
             .pep_items_by_ids(owner_id, node, item_ids, limit)
             .await
     }
-    pub(crate) async fn pep_items_with_timestamp(
+    pub async fn pep_items_with_timestamp(
         &self,
         owner_id: Uuid,
         node: &str,
@@ -48,20 +44,20 @@ impl<R: PepItemQueryRepository> PubSubService<R> {
 }
 
 impl<R: PepNodeQueryRepository> PubSubService<R> {
-    pub(crate) async fn pep_nodes(&self, owner_id: Uuid) -> Result<Vec<String>> {
+    pub async fn pep_nodes(&self, owner_id: Uuid) -> Result<Vec<String>> {
         self.repository.pep_nodes(owner_id).await
     }
 }
 
 impl<R: PepSubscriptionQueryRepository> PubSubService<R> {
-    pub(crate) async fn pep_subscribers(
+    pub async fn pep_subscribers(
         &self,
         owner_id: Uuid,
         node: &str,
     ) -> Result<Vec<PepSubscription>> {
         self.repository.pep_subscribers(owner_id, node).await
     }
-    pub(crate) async fn pep_subscriptions_for_available_resource(
+    pub async fn pep_subscriptions_for_available_resource(
         &self,
         subscriber_jid: &str,
     ) -> Result<Vec<PepPresenceSubscription>> {
@@ -69,7 +65,7 @@ impl<R: PepSubscriptionQueryRepository> PubSubService<R> {
             .pep_subscriptions_for_available_resource(subscriber_jid)
             .await
     }
-    pub(crate) async fn pep_owner_usernames_for_presence_subscriber(
+    pub async fn pep_owner_usernames_for_presence_subscriber(
         &self,
         subscriber_bare: &str,
     ) -> Result<Vec<String>> {
@@ -80,26 +76,26 @@ impl<R: PepSubscriptionQueryRepository> PubSubService<R> {
 }
 
 impl<R: PepNodeQueryRepository> PubSubService<R> {
-    pub(crate) async fn find_enabled_user(&self, username: &str) -> Result<Option<PubSubAccount>> {
+    pub async fn find_enabled_user(&self, username: &str) -> Result<Option<PubSubAccount>> {
         self.repository.find_enabled_user(username).await
     }
-    pub(crate) async fn roster(
+    pub async fn roster(
         &self,
         owner_id: Uuid,
     ) -> Result<Vec<(String, Option<String>, String, Option<String>)>> {
         self.repository.roster(owner_id).await
     }
-    pub(crate) async fn roster_item(
+    pub async fn roster_item(
         &self,
         owner_id: Uuid,
         jid: &str,
     ) -> Result<Option<(String, Option<String>, String, Option<String>)>> {
         self.repository.roster_item(owner_id, jid).await
     }
-    pub(crate) async fn is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool> {
+    pub async fn is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool> {
         self.repository.is_blocked(owner_id, candidate).await
     }
-    pub(crate) async fn roster_group_allowed(
+    pub async fn roster_group_allowed(
         &self,
         owner_id: Uuid,
         jid: &str,
@@ -118,7 +114,7 @@ impl<
             + PubSubAffiliationMutationRepository,
     > PubSubService<R>
 {
-    pub(crate) async fn create_node(
+    pub async fn create_node(
         &self,
         node: &str,
         creator_jid: &str,
@@ -130,7 +126,7 @@ impl<
             .create_node(node, creator_jid, config, max_nodes_per_owner)
             .await
     }
-    pub(crate) async fn publish_items(
+    pub async fn publish_items(
         &self,
         node: &PubSubNode,
         publisher_jid: &str,
@@ -146,7 +142,7 @@ impl<
             .await
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn set_subscription_limited_with_options(
+    pub async fn set_subscription_limited_with_options(
         &self,
         node_id: Uuid,
         requester: &str,
@@ -176,7 +172,7 @@ impl<
             )
             .await
     }
-    pub(crate) async fn unsubscribe_checked(
+    pub async fn unsubscribe_checked(
         &self,
         node_id: Uuid,
         requester: &str,
@@ -191,7 +187,7 @@ impl<
             .unsubscribe_checked(node_id, requester, subscriber_jid, expected_subid)
             .await
     }
-    pub(crate) async fn retract_items(
+    pub async fn retract_items(
         &self,
         node_id: Uuid,
         item_ids: &[String],
@@ -206,7 +202,7 @@ impl<
             .retract_items(node_id, item_ids, publisher_jid, force_notification)
             .await
     }
-    pub(crate) async fn update_node_config_and_graph_with_outbox(
+    pub async fn update_node_config_and_graph_with_outbox(
         &self,
         node: &PubSubNode,
         requester: &str,
@@ -219,7 +215,7 @@ impl<
             .update_node_config_and_graph_with_outbox(node, requester, expected, config)
             .await
     }
-    pub(crate) async fn set_subscriptions(
+    pub async fn set_subscriptions(
         &self,
         node_id: Uuid,
         requester: &str,
@@ -231,7 +227,7 @@ impl<
             .set_subscriptions(node_id, requester, changes)
             .await
     }
-    pub(crate) async fn set_affiliations(
+    pub async fn set_affiliations(
         &self,
         node_id: Uuid,
         requester: &str,
@@ -243,7 +239,7 @@ impl<
             .set_affiliations(node_id, requester, changes)
             .await
     }
-    pub(crate) async fn purge_node_as_owner_with_outbox(
+    pub async fn purge_node_as_owner_with_outbox(
         &self,
         node_id: Uuid,
         requester: &str,
@@ -254,7 +250,7 @@ impl<
             .purge_node_as_owner_with_outbox(node_id, requester)
             .await
     }
-    pub(crate) async fn delete_node_as_owner_with_redirect_and_outbox(
+    pub async fn delete_node_as_owner_with_redirect_and_outbox(
         &self,
         node_id: Uuid,
         requester: &str,
@@ -269,7 +265,7 @@ impl<
 }
 
 impl<R: PubSubNodeQueryRepository> PubSubService<R> {
-    pub(crate) async fn owner_read(
+    pub async fn owner_read(
         &self,
         node: &str,
         requester: &str,
@@ -278,50 +274,46 @@ impl<R: PubSubNodeQueryRepository> PubSubService<R> {
         self.repository.owner_read(node, requester, kind).await
     }
 
-    pub(crate) async fn get_node(&self, node: &str) -> Result<Option<PubSubNode>> {
+    pub async fn get_node(&self, node: &str) -> Result<Option<PubSubNode>> {
         self.repository.get_node(node).await
     }
 
-    pub(crate) async fn node_redirect(&self, node: &str) -> Result<Option<String>> {
+    pub async fn node_redirect(&self, node: &str) -> Result<Option<String>> {
         self.repository.node_redirect(node).await
     }
 
-    pub(crate) async fn collection_parents(&self, child_id: Uuid) -> Result<Vec<PubSubNode>> {
+    pub async fn collection_parents(&self, child_id: Uuid) -> Result<Vec<PubSubNode>> {
         self.repository.collection_parents(child_id).await
     }
 
-    pub(crate) async fn collection_children(&self, collection_id: Uuid) -> Result<Vec<PubSubNode>> {
+    pub async fn collection_children(&self, collection_id: Uuid) -> Result<Vec<PubSubNode>> {
         self.repository.collection_children(collection_id).await
     }
 
-    pub(crate) async fn is_owner(&self, node_id: Uuid, requester: &str) -> Result<bool> {
+    pub async fn is_owner(&self, node_id: Uuid, requester: &str) -> Result<bool> {
         self.repository.is_owner(node_id, requester).await
     }
 
-    pub(crate) async fn node_metadata(&self, node_id: Uuid) -> Result<PubSubNodeMetadata> {
+    pub async fn node_metadata(&self, node_id: Uuid) -> Result<PubSubNodeMetadata> {
         self.repository.node_metadata(node_id).await
     }
 }
 
 impl<R: PubSubRootDiscoveryQueryRepository> PubSubService<R> {
-    pub(crate) async fn discover_roots(
+    pub async fn discover_roots(
         &self,
         query: PubSubRootDiscoQuery<'_>,
     ) -> Result<Option<PubSubRootDiscoResult>> {
-        northstar_pubsub_application::discover_roots(&self.repository, query).await
+        crate::discover_roots(&self.repository, query).await
     }
 }
 
 impl<R: PubSubAffiliationQueryRepository> PubSubService<R> {
-    pub(crate) async fn get_node_affiliation(
-        &self,
-        node_id: Uuid,
-        jid: &str,
-    ) -> Result<Option<String>> {
+    pub async fn get_node_affiliation(&self, node_id: Uuid, jid: &str) -> Result<Option<String>> {
         self.repository.get_node_affiliation(node_id, jid).await
     }
 
-    pub(crate) async fn affiliations_for_jid(
+    pub async fn affiliations_for_jid(
         &self,
         jid: &str,
         node: Option<&str>,
@@ -331,7 +323,7 @@ impl<R: PubSubAffiliationQueryRepository> PubSubService<R> {
 }
 
 impl<R: PubSubAffiliationQueryRepository> PubSubService<R> {
-    pub(crate) async fn can_retrieve_node(&self, node: &PubSubNode, jid: &str) -> Result<bool> {
+    pub async fn can_retrieve_node(&self, node: &PubSubNode, jid: &str) -> Result<bool> {
         // Affiliation and subscription share one statement snapshot. The
         // caller loaded node configuration separately for its response.
         let (affiliation, subscribed) = self
@@ -356,7 +348,7 @@ impl<R: PubSubAffiliationQueryRepository> PubSubService<R> {
 }
 
 impl<R: PubSubSubscriptionQueryRepository> PubSubService<R> {
-    pub(crate) async fn subscriptions_for_jid(
+    pub async fn subscriptions_for_jid(
         &self,
         jid: &str,
         node: Option<&str>,
@@ -364,7 +356,7 @@ impl<R: PubSubSubscriptionQueryRepository> PubSubService<R> {
         self.repository.subscriptions_for_jid(jid, node).await
     }
 
-    pub(crate) async fn subscriptions_addressing_jid_page(
+    pub async fn subscriptions_addressing_jid_page(
         &self,
         jid: &str,
         after: Option<(&str, &str)>,
@@ -375,7 +367,7 @@ impl<R: PubSubSubscriptionQueryRepository> PubSubService<R> {
             .await
     }
 
-    pub(crate) async fn get_subscription(
+    pub async fn get_subscription(
         &self,
         node_id: Uuid,
         jid: &str,
@@ -385,11 +377,7 @@ impl<R: PubSubSubscriptionQueryRepository> PubSubService<R> {
 }
 
 impl<R: PubSubItemQueryRepository> PubSubService<R> {
-    pub(crate) async fn leaf_disco_items(
-        &self,
-        node: &str,
-        requester: &str,
-    ) -> Result<LeafDiscoItems> {
+    pub async fn leaf_disco_items(&self, node: &str, requester: &str) -> Result<LeafDiscoItems> {
         let Some(snapshot) = self.repository.leaf_disco_snapshot(node, requester).await? else {
             return Ok(LeafDiscoItems::NotFound);
         };
@@ -406,7 +394,7 @@ impl<R: PubSubItemQueryRepository> PubSubService<R> {
         Ok(LeafDiscoItems::Items(snapshot.item_ids))
     }
 
-    pub(crate) async fn collection_disco_items(
+    pub async fn collection_disco_items(
         &self,
         node: &str,
         requester: &str,
@@ -431,7 +419,7 @@ impl<R: PubSubItemQueryRepository> PubSubService<R> {
         Ok(CollectionDiscoItems::Items(snapshot.children))
     }
 
-    pub(crate) async fn get_items(
+    pub async fn get_items(
         &self,
         node_id: Uuid,
         item_ids: &[String],
@@ -440,7 +428,7 @@ impl<R: PubSubItemQueryRepository> PubSubService<R> {
         self.repository.get_items(node_id, item_ids, limit).await
     }
 
-    pub(crate) async fn collection_visible_items(
+    pub async fn collection_visible_items(
         &self,
         collection_id: Uuid,
         requester: &str,
@@ -452,7 +440,7 @@ impl<R: PubSubItemQueryRepository> PubSubService<R> {
             .await
     }
 
-    pub(crate) async fn can_publish(&self, node: &PubSubNode, requester: &str) -> Result<bool> {
+    pub async fn can_publish(&self, node: &PubSubNode, requester: &str) -> Result<bool> {
         self.repository.can_publish(node, requester).await
     }
 }

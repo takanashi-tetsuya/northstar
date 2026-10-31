@@ -3,7 +3,7 @@
 use super::*;
 
 impl<R: PubSubOutboxRepository> PubSubService<R> {
-    pub(crate) async fn outbox_get_subscription(
+    pub async fn outbox_get_subscription(
         &self,
         node_id: Uuid,
         jid: &str,
@@ -15,16 +15,12 @@ impl<R: PubSubOutboxRepository> PubSubService<R> {
 }
 
 impl<R: PubSubOutboxRepository> PubSubService<R> {
-    pub(crate) async fn local_account_blocks_pubsub(
-        &self,
-        username: &str,
-        service: &str,
-    ) -> Result<bool> {
+    pub async fn local_account_blocks_pubsub(&self, username: &str, service: &str) -> Result<bool> {
         self.repository
             .local_account_blocks_pubsub(username, service)
             .await
     }
-    pub(crate) async fn presence_delivery_denied(
+    pub async fn presence_delivery_denied(
         &self,
         recipient_id: Uuid,
         active_privacy_list: Option<&str>,
@@ -35,7 +31,7 @@ impl<R: PubSubOutboxRepository> PubSubService<R> {
             .presence_delivery_denied(recipient_id, active_privacy_list, connection_id, service)
             .await
     }
-    pub(crate) async fn authorize_pep_outbox_delivery(
+    pub async fn authorize_pep_outbox_delivery(
         &self,
         item: &ClaimedPubSubOutboxDelivery,
     ) -> Result<PepOutboxAuthorizationOutcome> {
@@ -43,7 +39,7 @@ impl<R: PubSubOutboxRepository> PubSubService<R> {
 
         self.repository.authorize_pep_outbox_delivery(item).await
     }
-    pub(crate) async fn claim_pubsub_outbox(
+    pub async fn claim_pubsub_outbox(
         &self,
         limit: i64,
     ) -> Result<Vec<ClaimedPubSubOutboxDelivery>> {
@@ -51,7 +47,7 @@ impl<R: PubSubOutboxRepository> PubSubService<R> {
 
         self.repository.claim_pubsub_outbox(limit).await
     }
-    pub(crate) async fn acknowledge_pubsub_outbox(
+    pub async fn acknowledge_pubsub_outbox(
         &self,
         delivery_id: Uuid,
         lease_token: Uuid,
@@ -62,7 +58,7 @@ impl<R: PubSubOutboxRepository> PubSubService<R> {
             .acknowledge_pubsub_outbox(delivery_id, lease_token)
             .await
     }
-    pub(crate) async fn renew_pubsub_outbox_lease(
+    pub async fn renew_pubsub_outbox_lease(
         &self,
         delivery_id: Uuid,
         lease_token: Uuid,
@@ -73,7 +69,7 @@ impl<R: PubSubOutboxRepository> PubSubService<R> {
             .renew_pubsub_outbox_lease(delivery_id, lease_token)
             .await
     }
-    pub(crate) async fn retry_pubsub_outbox(
+    pub async fn retry_pubsub_outbox(
         &self,
         item: &ClaimedPubSubOutboxDelivery,
         error: &str,
@@ -82,7 +78,7 @@ impl<R: PubSubOutboxRepository> PubSubService<R> {
 
         self.repository.retry_pubsub_outbox(item, error).await
     }
-    pub(crate) async fn dead_letter_pubsub_outbox(
+    pub async fn dead_letter_pubsub_outbox(
         &self,
         delivery_id: Uuid,
         lease_token: Uuid,
@@ -95,29 +91,29 @@ impl<R: PubSubOutboxRepository> PubSubService<R> {
             .dead_letter_pubsub_outbox(delivery_id, lease_token, reason, error)
             .await
     }
-    pub(crate) async fn expire_pubsub_outbox(&self, limit: i64) -> Result<u64> {
+    pub async fn expire_pubsub_outbox(&self, limit: i64) -> Result<u64> {
         let _database_turn = self.durable_outbox_database_turn().await;
 
         self.repository.expire_pubsub_outbox(limit).await
     }
-    pub(crate) async fn cleanup_pubsub_dead_letters(&self, limit: i64) -> Result<u64> {
+    pub async fn cleanup_pubsub_dead_letters(&self, limit: i64) -> Result<u64> {
         let _database_turn = self.durable_outbox_database_turn().await;
 
         self.repository.cleanup_pubsub_dead_letters(limit).await
     }
-    pub(crate) async fn cleanup_idle_pubsub_event_streams(&self, limit: i64) -> Result<u64> {
+    pub async fn cleanup_idle_pubsub_event_streams(&self, limit: i64) -> Result<u64> {
         let _database_turn = self.durable_outbox_database_turn().await;
 
         self.repository
             .cleanup_idle_pubsub_event_streams(limit)
             .await
     }
-    pub(crate) async fn pubsub_outbox_snapshot(&self) -> Result<PubSubOutboxSnapshot> {
+    pub async fn pubsub_outbox_snapshot(&self) -> Result<PubSubOutboxSnapshot> {
         let _database_turn = self.durable_outbox_database_turn().await;
 
         self.repository.pubsub_outbox_snapshot().await
     }
-    pub(crate) async fn enqueue_pubsub_digest_snapshot(
+    pub async fn enqueue_pubsub_digest_snapshot(
         &self,
         source_delivery_id: Uuid,
         node_id: Uuid,
@@ -139,7 +135,7 @@ impl<R: PubSubOutboxRepository> PubSubService<R> {
             )
             .await
     }
-    pub(crate) async fn enqueue_pubsub_digest(
+    pub async fn enqueue_pubsub_digest(
         &self,
         node_id: Uuid,
         subscriber_jid: &str,
@@ -154,20 +150,17 @@ impl<R: PubSubOutboxRepository> PubSubService<R> {
             .enqueue_pubsub_digest(node_id, subscriber_jid, event_xml, frequency_ms)
             .await
     }
-    pub(crate) async fn claim_due_pubsub_digests(
-        &self,
-        limit: i64,
-    ) -> Result<Vec<DuePubSubDigest>> {
+    pub async fn claim_due_pubsub_digests(&self, limit: i64) -> Result<Vec<DuePubSubDigest>> {
         let _database_turn = self.durable_outbox_database_turn().await;
 
         self.repository.claim_due_pubsub_digests(limit).await
     }
-    pub(crate) async fn release_pubsub_digests(&self, ids: &[Uuid]) -> Result<()> {
+    pub async fn release_pubsub_digests(&self, ids: &[Uuid]) -> Result<()> {
         let _database_turn = self.durable_outbox_database_turn().await;
 
         self.repository.release_pubsub_digests(ids).await
     }
-    pub(crate) async fn acknowledge_pubsub_digests(&self, ids: &[Uuid]) -> Result<()> {
+    pub async fn acknowledge_pubsub_digests(&self, ids: &[Uuid]) -> Result<()> {
         let _database_turn = self.durable_outbox_database_turn().await;
 
         self.repository.acknowledge_pubsub_digests(ids).await
@@ -189,7 +182,7 @@ pub(super) fn subscription_delivery_kind(
 }
 
 impl PubSubEventRenderer {
-    pub(crate) fn render_transactional_node_event(
+    pub fn render_transactional_node_event(
         &self,
         node: &PubSubNode,
         audience: &[PubSubNotificationDelivery],
@@ -252,7 +245,7 @@ impl PubSubEventRenderer {
 }
 
 impl PubSubEventRenderer {
-    pub(crate) fn render_create(
+    pub fn render_create(
         &self,
         node: &PubSubNode,
         audience: &[PubSubNotificationDelivery],
@@ -263,7 +256,7 @@ impl PubSubEventRenderer {
         self.render_transactional_node_event(node, audience, &[], &event, event_id, created_at)
     }
 
-    pub(crate) fn render_items(
+    pub fn render_items(
         &self,
         node: &PubSubNode,
         items: &[(String, String)],
@@ -289,7 +282,7 @@ impl PubSubEventRenderer {
         )
     }
 
-    pub(crate) fn render_purge(
+    pub fn render_purge(
         &self,
         node: &PubSubNode,
         audience: &[PubSubNotificationDelivery],
@@ -300,7 +293,7 @@ impl PubSubEventRenderer {
         self.render_transactional_node_event(node, audience, &[], &event, event_id, created_at)
     }
 
-    pub(crate) fn render_retract(
+    pub fn render_retract(
         &self,
         node: &PubSubNode,
         item_ids: &[String],
@@ -322,7 +315,7 @@ impl PubSubEventRenderer {
         )
     }
 
-    pub(crate) fn render_delete(
+    pub fn render_delete(
         &self,
         node: &PubSubNode,
         redirect: Option<&str>,
@@ -348,7 +341,7 @@ impl PubSubEventRenderer {
         )
     }
 
-    pub(crate) fn render_configuration(
+    pub fn render_configuration(
         &self,
         node: &PubSubNode,
         config: &PubSubNodeConfig,
@@ -369,7 +362,7 @@ impl PubSubEventRenderer {
         )
     }
 
-    pub(crate) fn render_collection_edge(
+    pub fn render_collection_edge(
         &self,
         source: &PubSubNode,
         action: &str,
@@ -390,7 +383,7 @@ impl PubSubEventRenderer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn render_subscription_transition(
+    pub fn render_subscription_transition(
         &self,
         node: &PubSubNode,
         subscription: &PubSubSubscription,
@@ -487,7 +480,7 @@ impl PubSubEventRenderer {
         Ok(outbox)
     }
 
-    pub(crate) fn render_affiliation_transition(
+    pub fn render_affiliation_transition(
         &self,
         node: &PubSubNode,
         jid: &str,

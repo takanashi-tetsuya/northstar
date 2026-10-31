@@ -220,7 +220,7 @@ pub(crate) async fn route_inbound_iq(
         let reply =
             match crate::xmpp::protocol::pubsub::handle_request(state, from, kind, child).await {
                 Ok(reply) => reply,
-                Err(error) if crate::services::pubsub::is_pubsub_mutation_busy(&error) => {
+                Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
                     crate::xmpp::protocol::pubsub::PubSubReply::Error("resource-constraint")
                 }
                 Err(error) => return Err(error),
@@ -257,11 +257,13 @@ pub(crate) async fn route_inbound_iq(
                 return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
             };
             let payload = match state.profile_service().public_vcard(owner_name).await? {
-                crate::services::profile::PublicVCard::MissingAccount => {
+                northstar_pubsub_application::profile::PublicVCard::MissingAccount => {
                     return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
                 }
-                crate::services::profile::PublicVCard::Profile(Some(payload)) => payload,
-                crate::services::profile::PublicVCard::Profile(None) => {
+                northstar_pubsub_application::profile::PublicVCard::Profile(Some(payload)) => {
+                    payload
+                }
+                northstar_pubsub_application::profile::PublicVCard::Profile(None) => {
                     XmlElement::namespaced("vCard", "vcard-temp").finish()
                 }
             };
@@ -412,9 +414,9 @@ pub(crate) async fn route_inbound_iq(
                     .pubsub_service()
                     .subscribe_pep_node(
                         northstar_pubsub_application::PepSubscribeCommand::from(
-                            crate::services::pubsub::PepSubscribeWrite {
+                            northstar_pubsub_core::PepSubscribeWrite {
                                 owner: &owner,
-                                actor: crate::services::pubsub::PepSubscriptionActor {
+                                actor: northstar_pubsub_core::PepSubscriptionActor {
                                     jid: from,
                                     local_account: None,
                                 },
@@ -429,7 +431,7 @@ pub(crate) async fn route_inbound_iq(
                     .await
                 {
                     Ok(outcome) => outcome,
-                    Err(error) if crate::services::pubsub::is_pubsub_mutation_busy(&error) => {
+                    Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
                         return Ok(Some(crate::xmpp::protocol::pubsub::pubsub_s2s_iq_error(
                             id,
                             to,
@@ -442,19 +444,19 @@ pub(crate) async fn route_inbound_iq(
                     Err(error) => return Err(error),
                 };
                 let subscription = match outcome.outcome {
-                    crate::services::pubsub::PepSubscribeOutcome::Subscribed(subscription) => {
+                    northstar_pubsub_core::PepSubscribeOutcome::Subscribed(subscription) => {
                         subscription
                     }
-                    crate::services::pubsub::PepSubscribeOutcome::NotFound => {
+                    northstar_pubsub_core::PepSubscribeOutcome::NotFound => {
                         return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
                     }
-                    crate::services::pubsub::PepSubscribeOutcome::Forbidden => {
+                    northstar_pubsub_core::PepSubscribeOutcome::Forbidden => {
                         return Ok(Some(s2s_iq_error(id, to, from, "forbidden")));
                     }
-                    crate::services::pubsub::PepSubscribeOutcome::NotAuthorized(_) => {
+                    northstar_pubsub_core::PepSubscribeOutcome::NotAuthorized(_) => {
                         return Ok(Some(s2s_iq_error(id, to, from, "not-authorized")));
                     }
-                    crate::services::pubsub::PepSubscribeOutcome::LimitExceeded => {
+                    northstar_pubsub_core::PepSubscribeOutcome::LimitExceeded => {
                         return Ok(Some(s2s_iq_error(id, to, from, "policy-violation")));
                     }
                 };
@@ -474,9 +476,9 @@ pub(crate) async fn route_inbound_iq(
                     .pubsub_service()
                     .unsubscribe_pep_node(
                         northstar_pubsub_application::PepUnsubscribeCommand::from(
-                            crate::services::pubsub::PepUnsubscribeWrite {
+                            northstar_pubsub_core::PepUnsubscribeWrite {
                                 owner: &owner,
-                                actor: crate::services::pubsub::PepSubscriptionActor {
+                                actor: northstar_pubsub_core::PepSubscriptionActor {
                                     jid: from,
                                     local_account: None,
                                 },
@@ -489,7 +491,7 @@ pub(crate) async fn route_inbound_iq(
                     .await
                 {
                     Ok(outcome) => outcome,
-                    Err(error) if crate::services::pubsub::is_pubsub_mutation_busy(&error) => {
+                    Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
                         return Ok(Some(crate::xmpp::protocol::pubsub::pubsub_s2s_iq_error(
                             id,
                             to,
@@ -502,14 +504,14 @@ pub(crate) async fn route_inbound_iq(
                     Err(error) => return Err(error),
                 };
                 match outcome.outcome {
-                    crate::services::pubsub::PepUnsubscribeOutcome::Unsubscribed(_) => {}
-                    crate::services::pubsub::PepUnsubscribeOutcome::NotFound => {
+                    northstar_pubsub_core::PepUnsubscribeOutcome::Unsubscribed(_) => {}
+                    northstar_pubsub_core::PepUnsubscribeOutcome::NotFound => {
                         return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
                     }
-                    crate::services::pubsub::PepUnsubscribeOutcome::Forbidden => {
+                    northstar_pubsub_core::PepUnsubscribeOutcome::Forbidden => {
                         return Ok(Some(s2s_iq_error(id, to, from, "forbidden")));
                     }
-                    crate::services::pubsub::PepUnsubscribeOutcome::InvalidSubid => {
+                    northstar_pubsub_core::PepUnsubscribeOutcome::InvalidSubid => {
                         return Ok(Some(s2s_iq_error(id, to, from, "unexpected-request")));
                     }
                 }

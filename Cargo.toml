@@ -200,6 +200,7 @@ openssl = { version = "0.10.81", features = ["vendored"] }
 
 [dev-dependencies]
 northstar-runtime = { path = "crates/platform/northstar-runtime", features = ["test-support"] }
+northstar-pubsub-application = { path = "crates/contexts/pubsub/northstar-pubsub-application", features = ["test-support"] }
 northstar-security = { path = "crates/platform/northstar-security", features = ["test-support"] }
 northstar-upload-postgres = { path = "crates/contexts/upload/northstar-upload-postgres", features = ["test-support"] }
 northstar-archive-postgres = { path = "crates/contexts/archive/northstar-archive-postgres", features = ["test-support"] }

@@ -256,7 +256,7 @@ pub(super) fn render_pep_direct_state_messages(
 
 pub(crate) async fn send_pep_last_item(
     context: &PepLastItemsContext,
-    owner: &crate::services::pubsub::PubSubAccount,
+    owner: &northstar_pubsub_core::PubSubAccount,
     node: &str,
     recipient: &str,
     on_presence: bool,

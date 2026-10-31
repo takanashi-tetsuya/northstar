@@ -19,6 +19,10 @@ use northstar_pubsub_core::{
 };
 pub mod repository;
 pub use repository::*;
+pub mod private_storage;
+pub mod profile;
+pub mod service;
+pub use service::PubSubService;
 mod list_page;
 pub use list_page::{page_pubsub_list, PubSubListPage, PubSubListPageError, PubSubListPageQuery};
 mod root_discovery;

@@ -2015,9 +2015,15 @@ name = "northstar-pubsub-application"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "northstar-pubsub-core",
+ "northstar-runtime",
  "northstar-telemetry",
+ "northstar-xep-0060",
+ "northstar-xml-builder",
+ "northstar-xmpp-types",
  "roxmltree",
+ "sha1",
  "tokio",
  "uuid",
 ]

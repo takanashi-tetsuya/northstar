@@ -6,24 +6,24 @@ use sha1::{Digest, Sha1};
 use std::sync::Arc;
 use uuid::Uuid;
 
-pub(crate) const AVATAR_DATA: &str = "urn:xmpp:avatar:data";
-pub(crate) const AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
-pub(crate) const VCARD4: &str = "urn:xmpp:vcard4";
+pub const AVATAR_DATA: &str = "urn:xmpp:avatar:data";
+pub const AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
+pub const VCARD4: &str = "urn:xmpp:vcard4";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PublicVCard {
+pub enum PublicVCard {
     MissingAccount,
     Profile(Option<String>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum AvatarPresenceUpdate {
+pub enum AvatarPresenceUpdate {
     Unchanged,
     Changed(Option<String>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ProfilePublishStatus {
+pub enum ProfilePublishStatus {
     Published,
     Unauthorized,
     PreconditionFailed,
@@ -33,14 +33,14 @@ pub(crate) enum ProfilePublishStatus {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ProfilePublishResult {
-    pub(crate) status: ProfilePublishStatus,
-    pub(crate) content_changed: bool,
-    pub(crate) avatar_presence: AvatarPresenceUpdate,
+pub struct ProfilePublishResult {
+    pub status: ProfilePublishStatus,
+    pub content_changed: bool,
+    pub avatar_presence: AvatarPresenceUpdate,
 }
 
 impl ProfilePublishResult {
-    pub(crate) fn rejected(status: ProfilePublishStatus) -> Self {
+    pub fn rejected(status: ProfilePublishStatus) -> Self {
         Self {
             status,
             content_changed: false,
@@ -49,41 +49,41 @@ impl ProfilePublishResult {
     }
 }
 
-pub(crate) struct LegacyVCardWrite<'a> {
-    pub(crate) user_id: Uuid,
-    pub(crate) auth_generation: i64,
-    pub(crate) connection_id: Uuid,
-    pub(crate) payload: &'a str,
-    pub(crate) avatar_hash: Option<&'a str>,
-    pub(crate) data_item: Option<(&'a str, &'a str)>,
-    pub(crate) metadata_item: (&'a str, &'a str),
-    pub(crate) max_nodes: i64,
-    pub(crate) max_storage_bytes: i64,
+pub struct LegacyVCardWrite<'a> {
+    pub user_id: Uuid,
+    pub auth_generation: i64,
+    pub connection_id: Uuid,
+    pub payload: &'a str,
+    pub avatar_hash: Option<&'a str>,
+    pub data_item: Option<(&'a str, &'a str)>,
+    pub metadata_item: (&'a str, &'a str),
+    pub max_nodes: i64,
+    pub max_storage_bytes: i64,
 }
 
-pub(crate) struct ProfilePepWrite<'a> {
-    pub(crate) user_id: Uuid,
-    pub(crate) auth_generation: i64,
-    pub(crate) connection_id: Uuid,
-    pub(crate) node: &'a str,
-    pub(crate) requested: &'a northstar_pubsub_core::PepNodeConfig,
-    pub(crate) enforce_preconditions: bool,
-    pub(crate) items: &'a [(&'a str, &'a str)],
-    pub(crate) max_nodes: i64,
-    pub(crate) max_storage_bytes: i64,
+pub struct ProfilePepWrite<'a> {
+    pub user_id: Uuid,
+    pub auth_generation: i64,
+    pub connection_id: Uuid,
+    pub node: &'a str,
+    pub requested: &'a northstar_pubsub_core::PepNodeConfig,
+    pub enforce_preconditions: bool,
+    pub items: &'a [(&'a str, &'a str)],
+    pub max_nodes: i64,
+    pub max_storage_bytes: i64,
 }
 
 /// Exact durable authorization snapshot captured while the profile account,
 /// PEP node and audience-policy locks are held. Online resources/caps remain
 /// soft routing hints, but they can only narrow these authorized principals.
-pub(crate) struct ProfileAudienceSnapshot {
-    pub(crate) owner_bare_jid: String,
-    pub(crate) roster_jids: Vec<String>,
-    pub(crate) explicit_jids: Vec<String>,
+pub struct ProfileAudienceSnapshot {
+    pub owner_bare_jid: String,
+    pub roster_jids: Vec<String>,
+    pub explicit_jids: Vec<String>,
 }
 
 impl ProfileAudienceSnapshot {
-    pub(crate) fn authorizes_routed_jid(&self, recipient: &str) -> bool {
+    pub fn authorizes_routed_jid(&self, recipient: &str) -> bool {
         let Ok(recipient) = northstar_xmpp_types::jid::CanonicalJid::parse(recipient) else {
             return false;
         };
@@ -109,7 +109,7 @@ impl ProfileAudienceSnapshot {
 /// Synchronously renders a transaction-owned profile audience. The callback
 /// must not perform I/O: keeping it synchronous prevents a PostgreSQL
 /// transaction from spanning a network operation or a second pool wait.
-pub(crate) trait ProfileOutboxFactory: Send + Sync {
+pub trait ProfileOutboxFactory: Send + Sync {
     fn build(&self, audience: &ProfileAudienceSnapshot) -> Result<Vec<(String, String)>>;
 }
 
@@ -124,7 +124,7 @@ where
 
 /// Profile data, converted avatar items and notification audiences commit as
 /// one operation. Implementations recheck the account generation under lock.
-pub(crate) trait ProfileRepository: Send + Sync {
+pub trait ProfileRepository: Send + Sync {
     fn public_vcard(
         &self,
         username: &str,
@@ -147,15 +147,15 @@ pub(crate) trait ProfileRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<ProfilePublishResult>> + Send;
 }
 
-pub(crate) struct ProfileService<R> {
+pub struct ProfileService<R> {
     repository: R,
-    mutation_admission: Arc<crate::services::pubsub::PubSubMutationAdmission>,
+    mutation_admission: Arc<crate::PubSubMutationAdmission>,
 }
 
 impl<R: ProfileRepository> ProfileService<R> {
-    pub(crate) fn with_mutation_admission(
+    pub fn with_mutation_admission(
         repository: R,
-        mutation_admission: Arc<crate::services::pubsub::PubSubMutationAdmission>,
+        mutation_admission: Arc<crate::PubSubMutationAdmission>,
     ) -> Self {
         Self {
             repository,
@@ -163,11 +163,11 @@ impl<R: ProfileRepository> ProfileService<R> {
         }
     }
 
-    pub(crate) async fn public_vcard(&self, username: &str) -> Result<PublicVCard> {
+    pub async fn public_vcard(&self, username: &str) -> Result<PublicVCard> {
         self.repository.public_vcard(username).await
     }
 
-    pub(crate) async fn set_legacy_vcard(
+    pub async fn set_legacy_vcard(
         &self,
         write: LegacyVCardWrite<'_>,
         explicit_factory: &dyn ProfileOutboxFactory,
@@ -183,7 +183,7 @@ impl<R: ProfileRepository> ProfileService<R> {
             .await
     }
 
-    pub(crate) async fn publish_profile_items(
+    pub async fn publish_profile_items(
         &self,
         write: ProfilePepWrite<'_>,
         explicit_factory: &dyn ProfileOutboxFactory,
@@ -204,7 +204,7 @@ impl<R: ProfileRepository> ProfileService<R> {
             .await
     }
 
-    pub(crate) async fn publish_avatar_metadata(
+    pub async fn publish_avatar_metadata(
         &self,
         write: ProfilePepWrite<'_>,
         explicit_factory: &dyn ProfileOutboxFactory,
@@ -225,14 +225,14 @@ impl<R: ProfileRepository> ProfileService<R> {
     }
 }
 
-pub(crate) fn sha1_hex(bytes: &[u8]) -> String {
+pub fn sha1_hex(bytes: &[u8]) -> String {
     Sha1::digest(bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
 
-pub(crate) fn detected_media_type(bytes: &[u8]) -> Option<&'static str> {
+pub fn detected_media_type(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")
     } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
@@ -259,7 +259,7 @@ pub(crate) fn detected_media_type(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn replace_vcard_temp_photo(
+pub fn replace_vcard_temp_photo(
     existing: &str,
     media_type: Option<&str>,
     encoded: Option<&str>,
@@ -325,7 +325,7 @@ fn empty_vcard_with_photo(
 
 /// Strict enough to reject truncated, reordered, CRC-corrupted or trailing
 /// PNG containers used as a metadata hash oracle.
-pub(crate) fn valid_png_image(bytes: &[u8]) -> bool {
+pub fn valid_png_image(bytes: &[u8]) -> bool {
     const SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
     if !bytes.starts_with(SIGNATURE) {
         return false;
@@ -519,7 +519,7 @@ mod tests {
         let repository = Arc::new(FaultRepository::default());
         let service = ProfileService::with_mutation_admission(
             repository.clone(),
-            Arc::new(crate::services::pubsub::PubSubMutationAdmission::new(8)),
+            Arc::new(crate::PubSubMutationAdmission::new(8)),
         );
         let error = service
             .publish_profile_items(
@@ -536,7 +536,7 @@ mod tests {
     #[tokio::test]
     async fn publication_holds_shared_admission_until_failure_or_cancellation() {
         let repository = Arc::new(FaultRepository::default());
-        let admission = Arc::new(crate::services::pubsub::PubSubMutationAdmission::new(8));
+        let admission = Arc::new(crate::PubSubMutationAdmission::new(8));
         let service = Arc::new(ProfileService::with_mutation_admission(
             repository.clone(),
             admission.clone(),

@@ -758,8 +758,8 @@
       "id": "pubsub",
       "title": "PubSub, PEP, profile and archive",
       "production_owner": {
-        "path": "src/services/pubsub.rs",
-        "anchor": "pub(crate) struct PubSubService<R> {"
+        "path": "crates/contexts/pubsub/northstar-pubsub-application/src/service.rs",
+        "anchor": "pub struct PubSubService<R> {"
       },
       "runtime_identities": [
         {
@@ -804,8 +804,8 @@
       "budgets": {
         "contract": "Existing bounded outbox batch, retries and watchdog contracts.",
         "source": {
-          "path": "src/services/pubsub.rs",
-          "anchor": "pub(crate) struct PubSubService<R> {"
+          "path": "crates/contexts/pubsub/northstar-pubsub-application/src/service.rs",
+          "anchor": "pub struct PubSubService<R> {"
         }
       },
       "experiments": [
@@ -813,13 +813,13 @@
           "id": "pubsub-regression",
           "level": "deterministic_unit",
           "status": "declared",
-          "command": "cargo test --locked --bin rust-xmpp-server services::pubsub",
+          "command": "cargo test --locked -p northstar-pubsub-application service::tests",
           "test": {
-            "path": "src/services/pubsub_tests.rs",
-            "anchor": "async fn remote_subscription_options_fail_before_mutation_admission() {"
+            "path": "crates/contexts/pubsub/northstar-pubsub-application/src/service/tests.rs",
+            "anchor": "async fn item_queries_do_not_require_mutation_repository_capability() {"
           },
           "assertions": [
-            "PubSub service tests query/mutation capability, subscription rejection and access-policy precedence."
+            "PubSub service tests query/mutation capability, access-policy precedence and publish validation."
           ],
           "artifacts": [
             "command.log",

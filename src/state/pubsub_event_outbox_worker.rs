@@ -5,14 +5,13 @@ use super::{
     AppState,
 };
 use crate::{
-    db::pubsub_repository::PostgresPubSubRepository,
-    services::pubsub::{
-        ClaimedPubSubOutboxDelivery, PepOutboxAuthorizationOutcome, PubSubOutboxDeliveryKind,
-        PubSubService,
-    },
-    xmpp::capabilities::PubSubOutboxTelemetry,
+    db::pubsub_repository::PostgresPubSubRepository, xmpp::capabilities::PubSubOutboxTelemetry,
 };
 use anyhow::Result;
+use northstar_pubsub_application::PubSubService;
+use northstar_pubsub_core::{
+    ClaimedPubSubOutboxDelivery, PepOutboxAuthorizationOutcome, PubSubOutboxDeliveryKind,
+};
 use northstar_telemetry::metrics::DurationHistogram;
 use northstar_telemetry::metrics::DurationTimer;
 use std::sync::{atomic::AtomicU64, Arc};

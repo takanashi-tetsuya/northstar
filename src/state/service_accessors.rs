@@ -60,14 +60,16 @@ impl AppState {
 
     pub(crate) fn pubsub_service(
         &self,
-    ) -> &crate::services::pubsub::PubSubService<db::pubsub_repository::PostgresPubSubRepository>
+    ) -> &northstar_pubsub_application::PubSubService<db::pubsub_repository::PostgresPubSubRepository>
     {
         &self.pubsub_service
     }
 
     pub(crate) fn profile_service(
         &self,
-    ) -> &crate::services::profile::ProfileService<db::profile::PostgresProfileRepository> {
+    ) -> &northstar_pubsub_application::profile::ProfileService<
+        db::profile::PostgresProfileRepository,
+    > {
         &self.profile_service
     }
 
@@ -190,7 +192,7 @@ impl AppState {
 
     pub(crate) fn private_storage_service(
         &self,
-    ) -> &crate::services::private_storage::PrivateStorageService<
+    ) -> &northstar_pubsub_application::private_storage::PrivateStorageService<
         db::private::PostgresPrivateStorageRepository,
     > {
         &self.private_storage_service

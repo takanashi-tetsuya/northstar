@@ -79,7 +79,7 @@ fn generated_or_canonicalized_pep_id_is_inserted_into_stored_item() {
 #[test]
 fn contact_notifications_preserve_the_rfc7622_ulabel_identity() {
     let canonical =
-        crate::services::pubsub::canonical_profile_item_id(CONTACTS, "TEMP@xn--bcher-kva.example")
+        northstar_pubsub_core::canonical_profile_item_id(CONTACTS, "TEMP@xn--bcher-kva.example")
             .unwrap();
     assert_eq!(canonical, "temp@bücher.example");
 
@@ -252,7 +252,7 @@ fn publish_options_apply_omemo_defaults_and_reject_unknown_fields() {
     assert_eq!(options.config.access_model, "open");
     assert_eq!(
         options.config.max_items,
-        crate::services::pubsub::PEP_MAX_ITEMS
+        northstar_pubsub_core::PEP_MAX_ITEMS
     );
 
     let invalid = xml.replace("pubsub#max_items", "pubsub#unknown");
@@ -269,7 +269,7 @@ fn bookmarks_require_private_persistent_publish_options() {
     assert_eq!(options.config.access_model, "whitelist");
     assert_eq!(
         options.config.max_items,
-        crate::services::pubsub::PEP_MAX_ITEMS
+        northstar_pubsub_core::PEP_MAX_ITEMS
     );
     assert!(options.config.persist_items);
     assert_eq!(options.config.send_last_published_item, "never");

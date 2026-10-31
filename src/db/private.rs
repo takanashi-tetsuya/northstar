@@ -295,7 +295,7 @@ pub struct BookmarkCompatibilityWrite<'a> {
 }
 
 #[cfg(test)]
-use crate::services::private_storage::preserve_bookmark_extensions;
+use northstar_pubsub_application::private_storage::preserve_bookmark_extensions;
 
 #[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -556,8 +556,12 @@ mod tests {
 }
 
 mod application_repository {
-    use crate::{db, services::private_storage::*};
+    use crate::db;
     use anyhow::Result;
+    use northstar_pubsub_application::private_storage::{
+        LegacyBookmarkSnapshot, PrivateStorageRepository, PrivateXmlEntry, PrivateXmlWriteOutcome,
+        BOOKMARKS2, LEGACY_BOOKMARKS,
+    };
     use sqlx::PgPool;
     use uuid::Uuid;
     #[derive(Clone)]

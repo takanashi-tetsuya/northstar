@@ -347,8 +347,8 @@ impl AppState {
         }
     }
 
-    pub(crate) fn pep_account_quotas(&self) -> crate::services::pubsub::PepQuotas {
-        crate::services::pubsub::PepQuotas {
+    pub(crate) fn pep_account_quotas(&self) -> northstar_pubsub_core::PepQuotas {
+        northstar_pubsub_core::PepQuotas {
             max_nodes: self.config.pep_max_nodes_per_account,
             max_storage_bytes: self.config.pep_max_storage_bytes_per_account,
         }

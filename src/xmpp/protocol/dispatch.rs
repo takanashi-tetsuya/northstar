@@ -17,7 +17,7 @@ fn xmpp_version_os() -> &'static str {
 
 fn map_pubsub_capacity_result(id: &str, result: Result<Action>) -> Result<Action> {
     match result {
-        Err(error) if crate::services::pubsub::is_pubsub_mutation_busy(&error) => {
+        Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
             Ok(Action::Send(iq_error(id, "resource-constraint")))
         }
         result => result,

@@ -490,5 +490,5 @@ pub(super) fn first_field<'a>(
 }
 
 pub(super) fn node_config_form(config: &PubSubNodeConfig, form_type: &str) -> String {
-    crate::services::pubsub::pubsub_node_config_form(config, form_type)
+    northstar_pubsub_application::service::pubsub_node_config_form(config, form_type)
 }

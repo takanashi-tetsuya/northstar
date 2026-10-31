@@ -128,7 +128,7 @@ impl AppState {
     ) -> &northstar_roster_application::blocking::BlockingService<
         db::roster::PostgresBlockingRepository,
     > {
-        &self.blocking_service
+        &self.roster.blocking_service
     }
 
     pub(crate) fn presence_service(
@@ -136,7 +136,7 @@ impl AppState {
     ) -> &northstar_roster_application::presence::PresenceService<
         db::presence_repository::PostgresPresenceRepository,
     > {
-        &self.presence_service
+        &self.roster.presence_service
     }
 
     pub(crate) fn replay_service(
@@ -147,7 +147,7 @@ impl AppState {
     }
 
     pub(crate) fn roster_service(&self) -> &RosterService {
-        &self.roster_service
+        &self.roster.roster_service
     }
 
     pub(crate) fn s2s_roster_authorization_service(
@@ -155,7 +155,7 @@ impl AppState {
     ) -> &northstar_roster_application::s2s_roster_authorization::FederatedRosterAuthorizationService<
         northstar_roster_postgres::federated_roster::PostgresFederatedRosterRepository,
     >{
-        &self.s2s_roster_authorization_service
+        &self.roster.s2s_roster_authorization_service
     }
 
     pub(crate) fn account_revocation_worker_context(
@@ -191,7 +191,7 @@ impl AppState {
     ) -> &northstar_roster_application::privacy::PrivacyService<
         db::privacy::PostgresPrivacyRepository,
     > {
-        &self.privacy_service
+        &self.roster.privacy_service
     }
 
     pub(crate) fn private_storage_service(

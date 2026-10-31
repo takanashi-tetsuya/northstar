@@ -18,7 +18,7 @@ pub(crate) struct SessionCleanupBookkeeping {
 impl AppState {
     pub(crate) fn session_cleanup_bookkeeping(&self) -> SessionCleanupBookkeeping {
         SessionCleanupBookkeeping {
-            privacy: self.privacy_service.clone(),
+            privacy: self.roster.privacy_service.clone(),
             metrics: Arc::clone(&self.metrics),
             workers: Arc::clone(&self.workers),
         }

@@ -503,9 +503,6 @@ impl AppState {
             },
             federation.outbox_wakeup(),
         );
-        let privacy_service = northstar_roster_application::privacy::PrivacyService::new(
-            db::privacy::PostgresPrivacyRepository::new(pool.clone()),
-        );
         let replay_service = crate::services::replay::ReplayService::new(
             db::replay_repository::PostgresReplayRepository::new(pool.clone()),
             &config.domain,
@@ -524,10 +521,7 @@ impl AppState {
                 session_ttl_hours: config.session_ttl_hours,
             },
         ));
-        let roster_service = RosterService::new(db::roster::PostgresRosterRepository::new(
-            pool.clone(),
-            db::roster::RootRosterEffects,
-        ));
+        let roster = RosterModule::new(&pool);
         let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;
         let command_pool = match config.admin_command_pool_mode {
             // The explicit loopback-only exception has no independent
@@ -864,6 +858,7 @@ impl AppState {
                 db::omemo_recovery_repository::PostgresOmemoRecoveryRepository::new(pool.clone()),
             ),
             pubsub,
+            roster,
             extdisco_service,
             muc_service,
             message_service,
@@ -872,26 +867,12 @@ impl AppState {
             mam_service,
             mix_service,
             sm_service,
-            blocking_service: northstar_roster_application::blocking::BlockingService::new(
-                db::roster::PostgresBlockingRepository::new(pool.clone()),
-            ),
-            presence_service: northstar_roster_application::presence::PresenceService::new(
-                db::presence_repository::PostgresPresenceRepository::new(pool.clone()),
-            ),
             replay_service,
-            roster_service,
-            s2s_roster_authorization_service:
-                northstar_roster_application::s2s_roster_authorization::FederatedRosterAuthorizationService::new(
-                    northstar_roster_postgres::federated_roster::PostgresFederatedRosterRepository::new(
-                        pool.clone(),
-                    ),
-                ),
             s2s_outbox_dispatch_service,
             s2s_sm_outbox_service: crate::services::s2s_sm_outbox::SmOutboxService::new(
                 db::s2s_sm_outbox_repository::PostgresSmOutboxRepository::new(pool.clone()),
             ),
             passkey_service,
-            privacy_service,
             account_service,
             login_service,
             password_change_service,

@@ -17,7 +17,7 @@ pub(crate) struct SessionCleanupPresence {
 impl AppState {
     pub(crate) fn session_cleanup_presence(&self) -> SessionCleanupPresence {
         SessionCleanupPresence {
-            audience: self.presence_service.clone(),
+            audience: self.roster.presence_service.clone(),
             sessions: Arc::clone(&self.sessions),
             domain: self.local_domain().to_owned(),
         }

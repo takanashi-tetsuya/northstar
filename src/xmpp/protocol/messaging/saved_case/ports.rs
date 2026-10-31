@@ -50,7 +50,7 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
                 candidates: vec![],
             },
         );
-        let fact = admission::CommitFact::Reserved(message_admission::acceptance_fence(
+        let fact = admission::CommitFact::Reserved(crate::services::abuse::acceptance_fence(
             &lease.acceptance(),
         ));
         witness::saved_case_commit_observed(
@@ -106,7 +106,7 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
             observation,
             admission::TransactionScope::AdmissionFinalize,
             admission::CommitFact::Finalized {
-                fence: message_admission::acceptance_fence(acceptance),
+                fence: crate::services::abuse::acceptance_fence(acceptance),
                 result: admission::FinalizeSuccess::PendingAccepted,
             },
         )

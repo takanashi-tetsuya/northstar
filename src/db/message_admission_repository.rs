@@ -2,20 +2,19 @@
 use crate::{
     db::{abuse_actor_state_repository, abuse_verification_repository},
     services::abuse::{
-        AbuseAction, AbuseGuard, MessageAdmissionAcceptance, MessageAdmissionCandidate,
-        MessageAdmissionLease, MessageAdmissionRequest, MessageAdmissionStart,
-        MessageDedupeIdentity, PersistentVerificationInput, PowIntent,
+        acceptance_fence, AbuseAction, AbuseGuard, MessageAdmissionAcceptance,
+        MessageAdmissionCandidate, MessageAdmissionLease, MessageAdmissionRequest,
+        MessageAdmissionStart, MessageDedupeIdentity, PersistentVerificationInput, PowIntent,
     },
     services::message_admission::{
-        acceptance_fence,
         witness::{commit_observed, AdmissionWitness},
         MessageAdmissionRepository,
     },
 };
 use anyhow::Result;
 use northstar_abuse_policy::admission_execution::{
-    BeginCommitPurpose, Command, CommitFact, Effect, FinalizeSuccess, ReconcileResult,
-    TransactionScope,
+    AdmissionCommitObserver, BeginCommitPurpose, Command, CommitFact, Effect, FinalizeSuccess,
+    ReconcileResult, TransactionScope,
 };
 use northstar_abuse_policy::admission_transaction::{
     self as decision, AdmissionCandidate, AdmissionFence, AdmissionRow, BeginRowDecision,
@@ -45,7 +44,7 @@ pub(crate) async fn begin_message_admission(
     request: &MessageAdmissionRequest<'_>,
     candidates: &[MessageAdmissionCandidate],
     offline_dedupe: MessageDedupeIdentity,
-    witness: &AdmissionWitness,
+    witness: &dyn AdmissionCommitObserver,
 ) -> Result<MessageAdmissionStart> {
     let candidate_keys = candidates
         .iter()
@@ -332,7 +331,7 @@ fn admission_row(row: &sqlx::postgres::PgRow) -> Result<AdmissionRow> {
 async fn accept_observed(
     pool: &PgPool,
     acceptance: &MessageAdmissionAcceptance<'_>,
-    witness: &AdmissionWitness,
+    witness: &dyn AdmissionCommitObserver,
 ) -> Result<FinalizeDecision> {
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock($1)")

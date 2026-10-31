@@ -911,6 +911,7 @@ digraph compile_time {
   "multer" -> "version_check";
   "nom" -> "memchr";
   "nom" -> "minimal-lexical";
+  "northstar-abuse-policy" -> "anyhow";
   "northstar-abuse-policy" -> "base64";
   "northstar-abuse-policy" -> "chrono";
   "northstar-abuse-policy" -> "hmac";

@@ -1,7 +1,7 @@
 //! Operation-local knowledge at the real SQL COMMIT await. No async Drop work.
 use northstar_abuse_policy::admission_execution::{
-    Command, CommitFact, CommitWitness, Effect, EffectResult, ExecutionOutcome, PreparedCommit,
-    Receipt, TransactionScope,
+    AdmissionCommitObserver, Command, CommitFact, CommitWitness, Effect, EffectResult,
+    ExecutionOutcome, PreparedCommit, Receipt, TransactionScope,
 };
 #[cfg(test)]
 use northstar_message_application::direct_lifecycle::OperationSnapshot;
@@ -238,11 +238,10 @@ impl AdmissionWitness {
                 .clone(),
         }
     }
-    pub(super) fn prepare(
-        &self,
-        scope: TransactionScope,
-        fact: CommitFact,
-    ) -> anyhow::Result<PreparedCommit> {
+}
+
+impl AdmissionCommitObserver for AdmissionWitness {
+    fn prepare(&self, scope: TransactionScope, fact: CommitFact) -> anyhow::Result<PreparedCommit> {
         let prepared = PreparedCommit {
             correlation: self.snapshot().effect().correlation,
             scope,
@@ -263,7 +262,7 @@ impl AdmissionWitness {
         }
         Ok(prepared)
     }
-    pub(super) fn received(&self, prepared: PreparedCommit) {
+    fn received(&self, prepared: PreparedCommit) {
         let receipt = Receipt {
             correlation: prepared.correlation,
             scope: prepared.scope,
@@ -288,7 +287,7 @@ impl AdmissionWitness {
 
 pub(crate) async fn commit_observed(
     tx: Transaction<'_, Postgres>,
-    witness: &AdmissionWitness,
+    witness: &dyn AdmissionCommitObserver,
     scope: TransactionScope,
     fact: CommitFact,
 ) -> anyhow::Result<()> {

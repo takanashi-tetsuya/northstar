@@ -620,7 +620,7 @@ impl MessageAdmissionRepository for AdmissionRepository {
             },
             witness,
             admission::TransactionScope::RatedBegin(admission::BeginCommitPurpose::NewReservation),
-            admission::CommitFact::Reserved(message_admission::acceptance_fence(
+            admission::CommitFact::Reserved(crate::services::abuse::acceptance_fence(
                 &lease.acceptance(),
             )),
         )
@@ -648,7 +648,7 @@ impl MessageAdmissionRepository for AdmissionRepository {
             witness,
             admission::TransactionScope::AdmissionFinalize,
             admission::CommitFact::Finalized {
-                fence: message_admission::acceptance_fence(acceptance),
+                fence: crate::services::abuse::acceptance_fence(acceptance),
                 result: admission::FinalizeSuccess::PendingAccepted,
             },
         )

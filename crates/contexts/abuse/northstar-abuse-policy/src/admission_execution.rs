@@ -146,6 +146,15 @@ pub enum Knowledge {
     ReceiptKnown(Receipt),
 }
 
+/// The operation-local knowledge a repository reports its admission COMMIT to.
+/// The message context owns the implementation; the abuse context sees only this.
+pub trait AdmissionCommitObserver: Send + Sync {
+    /// Retains the exact prospective fact before the COMMIT await.
+    fn prepare(&self, scope: TransactionScope, fact: CommitFact) -> anyhow::Result<PreparedCommit>;
+    /// Records the positive receipt, synchronously after the COMMIT await.
+    fn received(&self, prepared: PreparedCommit);
+}
+
 /// Independently retained repository knowledge. Invalid updates leave it intact.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommitWitness {

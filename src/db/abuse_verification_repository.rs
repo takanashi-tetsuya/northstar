@@ -1,7 +1,7 @@
 //! One-use PoW consumption under the same transaction as actor state and the
 //! protected business operation.
 
-use crate::services::message_admission::witness::{commit_observed, AdmissionWitness};
+use crate::services::message_admission::witness::commit_observed;
 use crate::{
     db::abuse_actor_state_repository::{lock_db_states, persist_db_states},
     services::abuse::{
@@ -11,6 +11,7 @@ use crate::{
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use northstar_abuse_policy::admission_execution::AdmissionCommitObserver;
 use northstar_abuse_policy::admission_execution::{CommitFact, GuardDecision, TransactionScope};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -24,7 +25,7 @@ pub(crate) async fn verify(
         DateTime<Utc>,
         Option<ConsumedChallenge>,
     ) -> Result<VerificationDecision>,
-    witness: Option<&AdmissionWitness>,
+    witness: Option<&dyn AdmissionCommitObserver>,
 ) -> Result<std::result::Result<WorkRequirement, GuardError>> {
     let mut tx = pool.begin().await?;
     let outcome = verify_in_tx(&mut tx, state_keys, challenge_id, decide).await?;

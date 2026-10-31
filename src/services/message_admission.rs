@@ -3,7 +3,7 @@
 pub(crate) mod witness;
 
 use crate::services::abuse::{
-    MessageAdmissionAcceptance, MessageAdmissionLease, MessageAdmissionRequest,
+    acceptance_fence, MessageAdmissionAcceptance, MessageAdmissionLease, MessageAdmissionRequest,
     MessageAdmissionStart,
 };
 use anyhow::Result;
@@ -35,13 +35,6 @@ pub(crate) trait MessageAdmissionRepository: Send + Sync {
 pub(crate) fn begin_command(request: &MessageAdmissionRequest<'_>) -> Result<Command> {
     crate::services::abuse::validate_message_admission_request(request)?;
     Ok(Command::Begin(BeginRequest::from(*request)))
-}
-pub(crate) fn acceptance_fence(acceptance: &MessageAdmissionAcceptance<'_>) -> AdmissionFence {
-    AdmissionFence {
-        admission_key: acceptance.admission_key().to_vec(),
-        payload_mac: acceptance.payload_mac().to_vec(),
-        lease_token: acceptance.lease_token(),
-    }
 }
 pub(crate) fn operation(command: Command) -> (Coordinator, AdmissionWitness) {
     let coordinator = Coordinator::new(
@@ -329,7 +322,7 @@ pub(crate) mod continuation_fixture {
     use super::*;
     use crate::services::abuse::{MessageDedupeIdentity, WorkRequirement};
     use northstar_abuse_policy::admission_execution::{
-        BeginCommitPurpose, CommitFact, FinalizeSuccess,
+        AdmissionCommitObserver, BeginCommitPurpose, CommitFact, FinalizeSuccess,
     };
     use std::sync::{Arc, Mutex};
 
@@ -471,7 +464,7 @@ mod tests {
     use super::*;
     use crate::services::abuse::{MessageDedupeIdentity, WorkRequirement};
     use northstar_abuse_policy::admission_execution::{
-        BeginCommitPurpose, CommitFact, FinalizeSuccess,
+        AdmissionCommitObserver, BeginCommitPurpose, CommitFact, FinalizeSuccess,
     };
 
     #[derive(Clone, Copy)]

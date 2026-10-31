@@ -11,6 +11,7 @@ publish = false
 test-support = []
 
 [dependencies]
+anyhow = "1.0"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["serde"] }
 hmac = "0.12"

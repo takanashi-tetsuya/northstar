@@ -451,7 +451,7 @@ impl AbuseGuard {
         actors: &[String],
         proof: Option<&PowProof>,
         intent: Option<&PowIntent>,
-        witness: Option<&AdmissionWitness>,
+        witness: Option<&dyn AdmissionCommitObserver>,
     ) -> anyhow::Result<std::result::Result<WorkRequirement, GuardError>> {
         let persistence = self.persistence.as_ref().expect("persistent abuse storage");
         let _db_state_gates = self.acquire_db_state_gates(action, actors).await;

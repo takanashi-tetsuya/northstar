@@ -25,7 +25,7 @@ async fn owner(mode: DirectPostCommitMode, finish: bool) -> DirectOperationHandl
             candidates: vec![],
         },
     );
-    let fence = message_admission::acceptance_fence(&lease.acceptance());
+    let fence = crate::services::abuse::acceptance_fence(&lease.acceptance());
     let begin = owner.begin(&request).unwrap();
     begin
         .start(&message_admission::begin_command(&request).unwrap())

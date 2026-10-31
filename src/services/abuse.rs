@@ -1,9 +1,10 @@
 use self::records::DbActorState;
-use crate::services::message_admission::witness::AdmissionWitness;
 #[cfg(test)]
 use crate::services::message_admission::{begin_command, operation};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use dashmap::DashMap;
+use northstar_abuse_policy::admission_execution::AdmissionCommitObserver;
+use northstar_abuse_policy::admission_transaction::AdmissionFence;
 #[cfg(test)]
 use northstar_abuse_policy::canonical_json_body_digest;
 use northstar_abuse_policy::{action_accepts_intent, ContentIdentityPurpose};
@@ -291,6 +292,14 @@ pub(crate) struct MessageAdmissionAcceptance<'a> {
     lease_token: Uuid,
 }
 
+pub(crate) fn acceptance_fence(acceptance: &MessageAdmissionAcceptance<'_>) -> AdmissionFence {
+    AdmissionFence {
+        admission_key: acceptance.admission_key().to_vec(),
+        payload_mac: acceptance.payload_mac().to_vec(),
+        lease_token: acceptance.lease_token(),
+    }
+}
+
 #[derive(Debug)]
 pub enum MessageAdmissionStart {
     Proceed {
@@ -363,7 +372,7 @@ pub(crate) trait AbusePersistence: Send + Sync {
         actor_state_keys: &'a [String],
         challenge_id: Option<Uuid>,
         decide: VerificationPolicy<'a>,
-        witness: Option<&'a AdmissionWitness>,
+        witness: Option<&'a dyn AdmissionCommitObserver>,
     ) -> AbusePersistenceFuture<'a, std::result::Result<WorkRequirement, GuardError>>;
 
     fn current_requirement<'a>(
@@ -384,7 +393,7 @@ pub(crate) trait AbusePersistence: Send + Sync {
         request: &'a MessageAdmissionRequest<'r>,
         candidates: &'a [MessageAdmissionCandidate],
         offline_dedupe: MessageDedupeIdentity,
-        witness: &'a AdmissionWitness,
+        witness: &'a dyn AdmissionCommitObserver,
     ) -> AbusePersistenceFuture<'a, MessageAdmissionStart>;
 
     fn cleanup<'a>(
@@ -559,7 +568,7 @@ impl AbuseGuard {
     pub(crate) async fn begin_message_admission_observed(
         &self,
         request: &MessageAdmissionRequest<'_>,
-        witness: &AdmissionWitness,
+        witness: &dyn AdmissionCommitObserver,
     ) -> anyhow::Result<MessageAdmissionStart> {
         validate_message_admission_request(request)?;
 

@@ -2309,6 +2309,10 @@
     ],
     [
       "northstar-abuse-policy",
+      "anyhow"
+    ],
+    [
+      "northstar-abuse-policy",
       "base64"
     ],
     [

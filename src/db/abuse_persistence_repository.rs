@@ -1,6 +1,5 @@
 //! PostgreSQL implementation of the anti-abuse persistence port.
 
-use crate::services::message_admission::witness::AdmissionWitness;
 use crate::{
     db::{
         abuse_actor_state_repository, abuse_challenge_issuance_repository,
@@ -12,6 +11,7 @@ use crate::{
         MessageDedupeIdentity, RequirementPolicy, VerificationPolicy,
     },
 };
+use northstar_abuse_policy::admission_execution::AdmissionCommitObserver;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -41,7 +41,7 @@ impl AbusePersistence for PostgresAbusePersistence {
         actor_state_keys: &'a [String],
         challenge_id: Option<Uuid>,
         decide: VerificationPolicy<'a>,
-        witness: Option<&'a AdmissionWitness>,
+        witness: Option<&'a dyn AdmissionCommitObserver>,
     ) -> AbusePersistenceFuture<
         'a,
         std::result::Result<
@@ -88,7 +88,7 @@ impl AbusePersistence for PostgresAbusePersistence {
         request: &'a MessageAdmissionRequest<'r>,
         candidates: &'a [MessageAdmissionCandidate],
         offline_dedupe: MessageDedupeIdentity,
-        witness: &'a AdmissionWitness,
+        witness: &'a dyn AdmissionCommitObserver,
     ) -> AbusePersistenceFuture<'a, MessageAdmissionStart> {
         Box::pin(async move {
             message_admission_repository::begin_message_admission(

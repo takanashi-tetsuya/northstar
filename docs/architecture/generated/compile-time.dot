@@ -978,6 +978,7 @@ digraph compile_time {
   "northstar-auth-core" -> "anyhow";
   "northstar-auth-core" -> "argon2";
   "northstar-auth-core" -> "base64";
+  "northstar-auth-core" -> "chrono";
   "northstar-auth-core" -> "hmac";
   "northstar-auth-core" -> "northstar-xmpp-types";
   "northstar-auth-core" -> "pbkdf2";
@@ -1158,6 +1159,8 @@ digraph compile_time {
   "northstar-session-application" -> "serde";
   "northstar-session-application" -> "tokio";
   "northstar-session-application" -> "uuid";
+  "northstar-session-core" -> "northstar-auth-core";
+  "northstar-session-core" -> "northstar-delivery-core";
   "northstar-session-core" -> "northstar-xmpp-types";
   "northstar-session-core" -> "serde";
   "northstar-session-core" -> "uuid";

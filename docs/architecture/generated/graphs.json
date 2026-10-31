@@ -2115,6 +2115,10 @@
       ],
       [
         "northstar-auth-core",
+        "chrono"
+      ],
+      [
+        "northstar-auth-core",
         "hmac"
       ],
       [
@@ -2832,6 +2836,14 @@
       [
         "northstar-session-application",
         "uuid"
+      ],
+      [
+        "northstar-session-core",
+        "northstar-auth-core"
+      ],
+      [
+        "northstar-session-core",
+        "northstar-delivery-core"
       ],
       [
         "northstar-session-core",

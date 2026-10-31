@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod finalization;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

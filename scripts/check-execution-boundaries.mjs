@@ -9,6 +9,7 @@ const files = {
   authFacts: 'src/services/authentication/publication.rs',
   authOwner: 'src/xmpp/auth_publication.rs',
   authService: 'src/services/authentication.rs',
+  authCredential: 'crates/contexts/auth/northstar-auth-core/src/credential.rs',
   authDb: 'src/db/authentication.rs',
   authUsers: 'src/db/users.rs',
   credentialSmService: 'src/services/sm.rs',
@@ -563,7 +564,7 @@ export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseC
 // Auth-specific lexical drift checks for independent credential transaction
 // observations and the existing receipt/transport-bound publication owner.
 export function verifyAuthPublicationBoundaries(sources) {
-  const { authFacts, authOwner, authService, authDb, authUsers: usersModule, credentialSmService, credentialSmDb, authCaps, protocol, frame,
+  const { authFacts, authOwner, authService, authCredential, authDb, authUsers: usersModule, credentialSmService, credentialSmDb, authCaps, protocol, frame,
     transport, websocket, bosh, boshResponse, sasl2: sasl2Module, smProtocol, authMisc, state } = sources;
   // These sources include child files after their parent's test-module boundary.
   const authUsers = withoutTestModules(usersModule);
@@ -574,17 +575,17 @@ export function verifyAuthPublicationBoundaries(sources) {
   const owner = productionModule(authOwner);
   const observation = body(facts, 'impl\\s+Observation\\b');
   const invocation = body(facts, "impl\\s+Invocation<'_>");
-  const receipt = normalize(body(authService, 'pub\\(crate\\)\\s+struct\\s+CredentialCommitReceipt\\b'));
+  const receipt = normalize(body(authCredential, 'pub\\s+struct\\s+CredentialCommitReceipt\\b'));
   requireBoundary(receipt.includes('publication_identity:Uuid') && !/pub(?:\([^)]*\))?publication_identity:/.test(receipt),
     'auth receipt instance identity must remain private');
-  const receiptImpl = body(authService, 'impl\\s+CredentialCommitReceipt\\b');
+  const receiptImpl = body(authCredential, 'impl\\s+CredentialCommitReceipt\\b');
   requireBoundary(method(receiptImpl, 'new').includes('publication_identity:Uuid::new_v4()'),
     'auth receipt instance identity must be minted at its actual constructor');
-  for (const [source, name] of [[authService, 'CredentialCommitReceipt'], [owner, 'KnownCredentialOwner'],
+  for (const [source, name] of [[authCredential, 'CredentialCommitReceipt'], [owner, 'KnownCredentialOwner'],
     [owner, 'OwnedPublication'], [owner, 'SelectedControls'], [facts, 'Invocation'],
     [facts, 'PreparedCredential'], [facts, 'CredentialInvocation'], [owner, 'CredentialAttempt']]) {
     const code = codeOnly(productionModule(source));
-    const declaration = code.match(new RegExp(`((?:#\\[[^\\]]*\\]\\s*)*)(?:pub\\([^)]*\\)\\s+)?struct\\s+${name}\\b`));
+    const declaration = code.match(new RegExp(`((?:#\\[[^\\]]*\\]\\s*)*)(?:pub(?:\\([^)]*\\))?\\s+)?struct\\s+${name}\\b`));
     requireBoundary(declaration && !/\bderive\s*\([^)]*\b(?:Clone|Copy)\b/.test(declaration[1]) &&
       !new RegExp(`\\bimpl\\b[^{};]*\\b(?:Clone|Copy)\\s+for\\s+${name}\\b`).test(code),
     `auth ${name} cannot derive or implement Clone or Copy`);
@@ -635,7 +636,7 @@ export function verifyAuthPublicationBoundaries(sources) {
     validate.includes('state.snapshot.terminal.is_none()&&state.snapshot.publication==Knowledge::BeforeCommit&&state.snapshot.returned.is_none()'),
     'auth borrowed invocation must revalidate actual identity and current phase');
   const observedService = method(body(authService, 'impl<R:\\s*AuthenticationRepository>\\s+AuthenticationService<R>'), 'publish_credential_commit_observed');
-  requireBoundary(observedService === 'ifinvocation.enter_service().is_err(){returnAuthenticationResult::IntegrityFailure;}letreceipt=invocation.receipt();letresult=ifreceipt.staged_login_epoch.is_none()&&receipt.binding_publication.is_none(){ifinvocation.not_required().is_err(){AuthenticationResult::IntegrityFailure}else{AuthenticationResult::Authenticated(None)}}else{self.repository.publish_credential_commit_observed(invocation).await};if!invocation.returned(&result){returnAuthenticationResult::IntegrityFailure;}result',
+  requireBoundary(observedService === 'ifinvocation.enter_service().is_err(){returnAuthenticationResult::IntegrityFailure;}letreceipt=invocation.receipt();letresult=ifreceipt.staged_login_epoch().is_none()&&receipt.binding_publication().is_none(){ifinvocation.not_required().is_err(){AuthenticationResult::IntegrityFailure}else{AuthenticationResult::Authenticated(None)}}else{self.repository.publish_credential_commit_observed(invocation).await};if!invocation.returned(&result){returnAuthenticationResult::IntegrityFailure;}result',
     'auth service must retain the no-SQL branch and observe the actual repository return');
   requireBoundary(method(authDb, 'publish_credential_commit_observed') === 'ifinvocation.enter_repository().is_err(){returnAuthenticationResult::IntegrityFailure;}self.publish_credential_commit_inner(invocation.receipt(),Some(invocation)).await' &&
     method(authDb, 'publish_credential_commit') === 'self.publish_credential_commit_inner(receipt,None).await',

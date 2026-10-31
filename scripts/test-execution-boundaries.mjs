@@ -243,7 +243,7 @@ rejects('BOSH plain compatibility finish must remain test-only', 'boshResponse',
   'pub(super) fn finish(', /test-only compatibility methods/);
 
 // Finite auth owner/adapter negatives reuse the same exact token-span helper.
-rejects('auth receipt identity cannot become public substitution authority', 'authService',
+rejects('auth receipt identity cannot become public substitution authority', 'authCredential',
   'publication_identity: Uuid,', 'pub publication_identity: Uuid,', /receipt instance identity must remain private/);
 rejects('auth value-equal receipt cannot substitute its private instance', 'authFacts',
   'state.receipt_id == receipt.publication_identity() && state.receipt == ReceiptProjection::of(receipt)',
@@ -329,7 +329,9 @@ rejects('auth actual TCP record cannot start before exact byte validation', 'tra
 rejects('auth inline resume cannot seal before final activation', 'sasl2',
   'payload.activate_route = true;\n                    self.seal_resume_authentication(&mut payload)?;',
   'self.seal_resume_authentication(&mut payload)?; payload.activate_route = true;', /inline resume must seal/);
-for (const [file, owner] of [['authService', 'CredentialCommitReceipt'], ['authOwner', 'KnownCredentialOwner'],
+rejects('auth CredentialCommitReceipt cannot derive Clone', 'authCredential',
+  'pub struct CredentialCommitReceipt', '#[derive(Clone)] pub struct CredentialCommitReceipt', /cannot derive or implement Clone or Copy/);
+for (const [file, owner] of [['authOwner', 'KnownCredentialOwner'],
   ['authOwner', 'OwnedPublication'], ['authOwner', 'SelectedControls']]) {
   rejects(`auth ${owner} cannot derive Clone`, file,
     `pub(crate) struct ${owner}`, `#[derive(Clone)] pub(crate) struct ${owner}`, /cannot derive or implement Clone or Copy/);

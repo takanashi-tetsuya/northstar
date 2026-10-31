@@ -13,6 +13,7 @@
 
 pub mod api_session;
 pub mod channel_binding;
+pub mod credential;
 pub mod fast;
 pub mod password;
 pub mod sasl;

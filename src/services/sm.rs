@@ -6,6 +6,10 @@ use crate::services::authentication::publication::{CredentialInvocation, Prepare
 use anyhow::Result;
 use dashmap::mapref::entry::Entry;
 use northstar_config::SmIpPolicy;
+pub(crate) use northstar_session_core::finalization::{
+    ActivatedSmSession, BindingFinalizationOutcome, SmResumeFinalizationCommit,
+    SmResumeFinalizationOutcome, SmResumeFinalizationRequest,
+};
 use std::{
     net::IpAddr,
     sync::{
@@ -148,12 +152,6 @@ impl SmResumeClaim {
         }
         Some(bytes)
     }
-}
-
-#[derive(Debug)]
-pub(crate) struct ActivatedSmSession {
-    pub(crate) outbound_h: u32,
-    pub(crate) unacked: Vec<northstar_delivery_core::SmUnackedStanza>,
 }
 
 pub(crate) struct SmSessionCreationRequest<'a> {
@@ -552,51 +550,6 @@ pub(crate) enum BindingReservationOutcome {
     CredentialsExpired,
     Conflict,
     CapacityExhausted,
-}
-
-#[derive(Debug)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Finalization returns the actual credential receipt by value without another allocation"
-)]
-pub(crate) enum BindingFinalizationOutcome {
-    Committed {
-        receipt: crate::services::authentication::CredentialCommitReceipt,
-    },
-    CredentialsExpired,
-    ReservationLost,
-}
-
-pub(crate) struct SmResumeFinalizationRequest<'a> {
-    pub session_id: Uuid,
-    pub claim_token: Uuid,
-    pub connection_id: Uuid,
-    pub user_id: Uuid,
-    pub expected_auth_generation: i64,
-    pub client_h: u32,
-    pub acknowledged_count: usize,
-    pub peer_ip: IpAddr,
-    pub user_agent_id: Option<Uuid>,
-    pub active_privacy_list: Option<&'a str>,
-    pub ttl_seconds: u64,
-    pub live_lease_seconds: u64,
-    pub max_stanzas: usize,
-    pub max_bytes: usize,
-    pub fast_plan: Option<&'a crate::services::authentication::FastCommitPlan>,
-}
-
-#[derive(Debug)]
-pub(crate) struct SmResumeFinalizationCommit {
-    pub(crate) activated: ActivatedSmSession,
-    pub(crate) receipt: crate::services::authentication::CredentialCommitReceipt,
-}
-
-#[derive(Debug)]
-pub(crate) enum SmResumeFinalizationOutcome {
-    Committed(Box<SmResumeFinalizationCommit>),
-    CredentialsExpired,
-    ClaimLost,
-    PrivacySelectionMissing,
 }
 
 #[derive(Clone)]

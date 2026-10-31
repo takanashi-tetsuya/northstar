@@ -1936,6 +1936,7 @@ dependencies = [
  "anyhow",
  "argon2",
  "base64 0.22.1",
+ "chrono",
  "hmac",
  "northstar-xmpp-types",
  "pbkdf2",
@@ -2260,6 +2261,8 @@ dependencies = [
 name = "northstar-session-core"
 version = "0.1.0"
 dependencies = [
+ "northstar-auth-core",
+ "northstar-delivery-core",
  "northstar-xmpp-types",
  "serde",
  "uuid",

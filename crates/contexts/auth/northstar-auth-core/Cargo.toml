@@ -11,6 +11,7 @@ publish = false
 anyhow = "1.0"
 argon2 = "0.5"
 base64 = "0.22"
+chrono = "0.4"
 hmac = "0.12"
 pbkdf2 = { version = "0.12", features = ["hmac"] }
 rand = "0.8"

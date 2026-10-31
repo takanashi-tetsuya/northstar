@@ -8,6 +8,10 @@ pub(crate) mod publication;
 
 use northstar_archive_core::ArchiveBoundary;
 use northstar_auth_core as auth;
+pub(crate) use northstar_auth_core::credential::{
+    BindingPublication, CredentialCommitReceipt, FastCommitPlan, FastTokenIssue, IssuedFastToken,
+    StagedLoginEpoch,
+};
 use std::sync::Arc;
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
@@ -191,136 +195,6 @@ impl FastAuthenticationSuccess {
             chain_expires_at,
         )
     }
-}
-
-pub(crate) struct IssuedFastToken {
-    pub(crate) token: Zeroizing<String>,
-    pub(crate) expires_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl std::fmt::Debug for IssuedFastToken {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("IssuedFastToken")
-            .field("token", &"[REDACTED]")
-            .field("expires_at", &self.expires_at)
-            .finish()
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub(crate) struct StagedLoginEpoch {
-    pub(crate) operation_id: Uuid,
-    pub(crate) connection_id: Uuid,
-    pub(crate) user_id: Uuid,
-    pub(crate) device_id: Uuid,
-    pub(crate) auth_generation: i64,
-    pub(crate) epoch: i64,
-}
-
-impl std::fmt::Debug for StagedLoginEpoch {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("StagedLoginEpoch")
-            .field("operation_id", &self.operation_id)
-            .field("connection_id", &self.connection_id)
-            .field("user_id", &self.user_id)
-            .field("device_id", &self.device_id)
-            .field("auth_generation", &self.auth_generation)
-            .field("epoch", &self.epoch)
-            .finish()
-    }
-}
-
-/// Durable proof that FAST side effects committed. The issued bearer can be
-/// consumed exactly once for the SASL2 success XML; the staged login epoch is
-/// published only by the transport-success callback.
-pub(crate) struct CredentialCommitReceipt {
-    publication_identity: Uuid,
-    issued_fast: Option<IssuedFastToken>,
-    staged_login_epoch: Option<StagedLoginEpoch>,
-    binding_publication: Option<BindingPublication>,
-}
-
-#[derive(Clone, Eq, PartialEq)]
-pub(crate) struct BindingPublication {
-    pub(crate) connection_id: Uuid,
-    pub(crate) user_id: Uuid,
-    pub(crate) full_jid: String,
-    pub(crate) lease_seconds: u64,
-}
-
-impl std::fmt::Debug for BindingPublication {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("BindingPublication")
-            .field("connection_id", &self.connection_id)
-            .field("user_id", &self.user_id)
-            .field("full_jid", &self.full_jid)
-            .field("lease_seconds", &self.lease_seconds)
-            .finish()
-    }
-}
-
-impl std::fmt::Debug for CredentialCommitReceipt {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("CredentialCommitReceipt")
-            .field(
-                "issued_fast",
-                &self.issued_fast.as_ref().map(|_| "[REDACTED]"),
-            )
-            .field("staged_login_epoch", &self.staged_login_epoch)
-            .field("binding_publication", &self.binding_publication)
-            .finish()
-    }
-}
-
-impl CredentialCommitReceipt {
-    pub(crate) fn publication_identity(&self) -> Uuid {
-        self.publication_identity
-    }
-    pub(crate) fn staged_login_epoch(&self) -> Option<StagedLoginEpoch> {
-        self.staged_login_epoch
-    }
-    pub(crate) fn binding_publication(&self) -> Option<&BindingPublication> {
-        self.binding_publication.as_ref()
-    }
-
-    pub(crate) fn new(
-        issued_fast: Option<IssuedFastToken>,
-        staged_login_epoch: Option<StagedLoginEpoch>,
-        binding_publication: Option<BindingPublication>,
-    ) -> Self {
-        Self {
-            publication_identity: Uuid::new_v4(),
-            issued_fast,
-            staged_login_epoch,
-            binding_publication,
-        }
-    }
-
-    pub(crate) fn take_issued_fast(&mut self) -> Option<IssuedFastToken> {
-        self.issued_fast.take()
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FastTokenIssue {
-    pub(crate) device_id: Uuid,
-    pub(crate) mechanism: String,
-    pub(crate) ttl_days: i64,
-    pub(crate) strong_reauth_max_days: i64,
-    pub(crate) inherited_chain:
-        Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct FastCommitPlan {
-    pub(crate) token_id: Option<Uuid>,
-    pub(crate) token_was_new: bool,
-    pub(crate) invalidate: bool,
-    pub(crate) issue: Option<FastTokenIssue>,
 }
 
 #[derive(Clone, Copy)]
@@ -648,7 +522,7 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
         &self,
         receipt: &CredentialCommitReceipt,
     ) -> AuthenticationResult<Option<i64>> {
-        if receipt.staged_login_epoch.is_none() && receipt.binding_publication.is_none() {
+        if receipt.staged_login_epoch().is_none() && receipt.binding_publication().is_none() {
             return AuthenticationResult::Authenticated(None);
         }
         self.repository.publish_credential_commit(receipt).await
@@ -663,7 +537,7 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
         }
         let receipt = invocation.receipt();
         let result =
-            if receipt.staged_login_epoch.is_none() && receipt.binding_publication.is_none() {
+            if receipt.staged_login_epoch().is_none() && receipt.binding_publication().is_none() {
                 if invocation.not_required().is_err() {
                     AuthenticationResult::IntegrityFailure
                 } else {

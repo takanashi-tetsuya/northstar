@@ -2539,6 +2539,10 @@
       ],
       [
         "northstar-roster-xmpp",
+        "northstar-xep-0016"
+      ],
+      [
+        "northstar-roster-xmpp",
         "northstar-xep-0191"
       ],
       [
@@ -2556,6 +2560,10 @@
       [
         "northstar-roster-xmpp",
         "tracing"
+      ],
+      [
+        "northstar-roster-xmpp",
+        "uuid"
       ],
       [
         "northstar-runtime",

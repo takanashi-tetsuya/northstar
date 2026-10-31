@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod blocking;
+pub mod privacy;
 
 use northstar_roster_core::PresenceAccount;
 

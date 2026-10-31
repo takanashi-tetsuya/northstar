@@ -1081,11 +1081,13 @@ digraph compile_time {
   "northstar-roster-xmpp" -> "anyhow";
   "northstar-roster-xmpp" -> "northstar-roster-application";
   "northstar-roster-xmpp" -> "northstar-roster-core";
+  "northstar-roster-xmpp" -> "northstar-xep-0016";
   "northstar-roster-xmpp" -> "northstar-xep-0191";
   "northstar-roster-xmpp" -> "northstar-xml-builder";
   "northstar-roster-xmpp" -> "northstar-xmpp-types";
   "northstar-roster-xmpp" -> "roxmltree";
   "northstar-roster-xmpp" -> "tracing";
+  "northstar-roster-xmpp" -> "uuid";
   "northstar-runtime" -> "anyhow";
   "northstar-runtime" -> "futures";
   "northstar-runtime" -> "serde_json";

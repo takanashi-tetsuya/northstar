@@ -11,8 +11,10 @@ publish = false
 anyhow = "1.0"
 northstar-roster-application = { path = "../northstar-roster-application" }
 northstar-roster-core = { path = "../northstar-roster-core" }
+northstar-xep-0016 = { path = "../../../kernel/northstar-xep-0016" }
 northstar-xep-0191 = { path = "../../../kernel/northstar-xep-0191" }
 northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 roxmltree = "0.20"
 tracing = "0.1"
+uuid = { version = "1.12", features = ["v4"] }

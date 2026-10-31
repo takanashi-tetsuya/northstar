@@ -16,3 +16,5 @@ pub async fn database_cursor_clock_in_tx(
         .fetch_one(&mut **tx)
         .await?)
 }
+
+pub mod role_attestation;

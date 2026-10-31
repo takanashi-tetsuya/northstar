@@ -2125,6 +2125,7 @@ dependencies = [
  "northstar-auth-core",
  "northstar-operations-application",
  "northstar-operations-core",
+ "northstar-roster-core",
  "northstar-xmpp-types",
  "rand 0.8.7",
  "ring",
@@ -2135,6 +2136,7 @@ dependencies = [
  "sqlx",
  "subtle",
  "thiserror 2.0.20",
+ "tokio",
  "uuid",
  "zeroize",
 ]
@@ -2274,6 +2276,7 @@ dependencies = [
 name = "northstar-roster-core"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "northstar-xmpp-types",
  "serde",
  "uuid",

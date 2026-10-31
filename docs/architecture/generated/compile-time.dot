@@ -1100,6 +1100,7 @@ digraph compile_time {
   "northstar-operations-postgres" -> "northstar-auth-core";
   "northstar-operations-postgres" -> "northstar-operations-application";
   "northstar-operations-postgres" -> "northstar-operations-core";
+  "northstar-operations-postgres" -> "northstar-roster-core";
   "northstar-operations-postgres" -> "northstar-xmpp-types";
   "northstar-operations-postgres" -> "rand";
   "northstar-operations-postgres" -> "ring";
@@ -1110,6 +1111,7 @@ digraph compile_time {
   "northstar-operations-postgres" -> "sqlx";
   "northstar-operations-postgres" -> "subtle";
   "northstar-operations-postgres" -> "thiserror";
+  "northstar-operations-postgres" -> "tokio";
   "northstar-operations-postgres" -> "uuid";
   "northstar-operations-postgres" -> "zeroize";
   "northstar-postgres" -> "anyhow";
@@ -1183,6 +1185,7 @@ digraph compile_time {
   "northstar-roster-application" -> "northstar-xmpp-types";
   "northstar-roster-application" -> "tokio";
   "northstar-roster-application" -> "uuid";
+  "northstar-roster-core" -> "chrono";
   "northstar-roster-core" -> "northstar-xmpp-types";
   "northstar-roster-core" -> "serde";
   "northstar-roster-core" -> "uuid";

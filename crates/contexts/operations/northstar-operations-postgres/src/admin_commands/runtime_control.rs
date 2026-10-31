@@ -316,7 +316,7 @@ pub async fn admin_runtime_settings(pool: &PgPool) -> Result<(bool, bool)> {
 /// statement gives both projections the same MVCC snapshot and avoids a
 /// second network/scheduler round trip on every policy refresh.
 /// The observer records only which fixed read is in flight; it performs no I/O.
-pub(crate) async fn runtime_control_snapshot(
+pub async fn runtime_control_snapshot(
     connection: &mut PgConnection,
     mut read_phase: impl FnMut(RuntimeControlReadPhase),
 ) -> Result<(bool, bool, Vec<String>, Vec<String>)> {

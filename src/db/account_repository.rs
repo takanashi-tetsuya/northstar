@@ -733,9 +733,11 @@ mod registration_guard_tests {
             .await
             .unwrap();
         crate::db::migrate(&pool).await.unwrap();
-        crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
-            .await
-            .unwrap();
+        northstar_operations_postgres::admin_commands::initialize_admin_runtime_settings(
+            &pool, false, false, false,
+        )
+        .await
+        .unwrap();
         let guard = Arc::new(crate::db::abuse_effects::persistent_guard(
             AbuseConfig {
                 base_work_factor: 2,
@@ -873,9 +875,11 @@ mod registration_guard_tests {
             .await
             .unwrap();
         crate::db::migrate(&pool).await.unwrap();
-        crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
-            .await
-            .unwrap();
+        northstar_operations_postgres::admin_commands::initialize_admin_runtime_settings(
+            &pool, false, false, false,
+        )
+        .await
+        .unwrap();
         let guard = Arc::new(crate::db::abuse_effects::persistent_guard(
             AbuseConfig {
                 base_work_factor: 2,
@@ -994,9 +998,11 @@ mod registration_guard_tests {
             .await
             .unwrap();
         crate::db::migrate(&pool).await.unwrap();
-        crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
-            .await
-            .unwrap();
+        northstar_operations_postgres::admin_commands::initialize_admin_runtime_settings(
+            &pool, false, false, false,
+        )
+        .await
+        .unwrap();
         let abuse_key = test_key();
         let api_key = test_key();
         let guard = Arc::new(crate::db::abuse_effects::persistent_guard(

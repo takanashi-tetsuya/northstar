@@ -401,7 +401,7 @@ pub struct AppState {
         >,
     admin_session_cleanup_worker_service:
         northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupWorkerService<
-            db::admin_session_cleanup_worker_repository::PostgresAdminSessionCleanupRepository,
+            northstar_operations_postgres::admin_session_cleanup_worker_repository::PostgresAdminSessionCleanupRepository,
         >,
     admin_dispatch_service: AdminDispatchContext,
     upload_admin_service: UploadAdminContext,

@@ -18,6 +18,7 @@ hmac = "0.12"
 northstar-auth-core = { path = "../../auth/northstar-auth-core" }
 northstar-operations-application = { path = "../northstar-operations-application" }
 northstar-operations-core = { path = "../northstar-operations-core" }
+northstar-roster-core = { path = "../../roster/northstar-roster-core" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 rand = "0.8"
 ring = "0.17.14"
@@ -28,5 +29,6 @@ sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid", "json", "macros"] }
 subtle = "2.6"
 thiserror = "2.0"
+tokio = { version = "1.43", features = ["time"] }
 uuid = { version = "1.12", features = ["v4", "serde"] }
 zeroize = "1.8"

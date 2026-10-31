@@ -47,7 +47,8 @@ impl ReadinessRepository for PostgresReadinessRepository {
     }
 
     async fn admin_session_cleanup_snapshot(&self) -> Result<AdminSessionCleanupSnapshot> {
-        db::admin_session_cleanup_snapshot(&self.pool).await
+        northstar_operations_postgres::admin_commands::admin_session_cleanup_snapshot(&self.pool)
+            .await
     }
 }
 

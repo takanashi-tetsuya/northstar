@@ -305,7 +305,7 @@ async fn baseline_0013_upgrades_through_the_real_domain_migrator() {
     );
 
     let (capability_signatures, _) =
-        super::role_attestation::security_definer_capability_manifest().unwrap();
+        northstar_postgres::role_attestation::security_definer_capability_manifest().unwrap();
     let security_definers_are_schema_local: bool = sqlx::query_scalar(
         r#"
         WITH expected(signature) AS (

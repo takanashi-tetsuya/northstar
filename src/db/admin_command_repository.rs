@@ -19,17 +19,19 @@ impl PostgresAdminCommandRepository {
         claim: &'a AdminExecutionClaim,
         node: &'a str,
         payload: &'a str,
-    ) -> Result<db::AdminCommandFence<'a>> {
+    ) -> Result<northstar_operations_postgres::admin_commands::AdminCommandFence<'a>> {
         let value = claim.fence(actor, node, payload)?;
-        Ok(db::AdminCommandFence {
-            claim_token: value.claim_token,
-            actor_id: value.actor_id,
-            actor_username: value.actor_username,
-            actor_generation: value.actor_generation,
-            node: value.node,
-            target_digest: value.target_digest,
-            result_payload: value.result_payload,
-        })
+        Ok(
+            northstar_operations_postgres::admin_commands::AdminCommandFence {
+                claim_token: value.claim_token,
+                actor_id: value.actor_id,
+                actor_username: value.actor_username,
+                actor_generation: value.actor_generation,
+                node: value.node,
+                target_digest: value.target_digest,
+                result_payload: value.result_payload,
+            },
+        )
     }
     /// Establish the authorization linearization point for a sensitive read.
     ///
@@ -282,12 +284,12 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
             Err(error) => return Err(error),
         };
         Ok(match outcome {
-            db::AdminCreateAccountOutcome::Created => CreateAccountOutcome::Created,
-            db::AdminCreateAccountOutcome::UsernameTaken => CreateAccountOutcome::UsernameTaken,
-            db::AdminCreateAccountOutcome::CapacityExhausted => {
+            northstar_operations_postgres::admin_commands::AdminCreateAccountOutcome::Created => CreateAccountOutcome::Created,
+            northstar_operations_postgres::admin_commands::AdminCreateAccountOutcome::UsernameTaken => CreateAccountOutcome::UsernameTaken,
+            northstar_operations_postgres::admin_commands::AdminCreateAccountOutcome::CapacityExhausted => {
                 CreateAccountOutcome::CapacityExhausted
             }
-            db::AdminCreateAccountOutcome::Unauthorized => CreateAccountOutcome::Unauthorized,
+            northstar_operations_postgres::admin_commands::AdminCreateAccountOutcome::Unauthorized => CreateAccountOutcome::Unauthorized,
         })
     }
     #[allow(clippy::too_many_arguments)]
@@ -312,17 +314,19 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
         let exact = identities
             .into_iter()
             .zip(targets)
-            .map(|(identity, target)| db::AdminAccountMutationTarget {
-                id: identity.id,
-                username: identity.username,
-                exact_full_jid: target.exact_full_jid.as_ref().map(ToString::to_string),
+            .map(|(identity, target)| {
+                northstar_operations_postgres::admin_commands::AdminAccountMutationTarget {
+                    id: identity.id,
+                    username: identity.username,
+                    exact_full_jid: target.exact_full_jid.as_ref().map(ToString::to_string),
+                }
             })
             .collect::<Vec<_>>();
         let action = match action {
-            AccountCommandAction::Delete => db::AdminAccountMutationAction::Delete,
-            AccountCommandAction::Disable => db::AdminAccountMutationAction::Disable,
-            AccountCommandAction::Reenable => db::AdminAccountMutationAction::Reenable,
-            AccountCommandAction::EndSessions => db::AdminAccountMutationAction::EndSessions,
+            AccountCommandAction::Delete => northstar_operations_postgres::admin_commands::AdminAccountMutationAction::Delete,
+            AccountCommandAction::Disable => northstar_operations_postgres::admin_commands::AdminAccountMutationAction::Disable,
+            AccountCommandAction::Reenable => northstar_operations_postgres::admin_commands::AdminAccountMutationAction::Reenable,
+            AccountCommandAction::EndSessions => northstar_operations_postgres::admin_commands::AdminAccountMutationAction::EndSessions,
         };
         let outcome = db::mutate_admin_accounts_authorized(
             &self.pool,
@@ -340,13 +344,13 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
             Err(error) => return Err(error),
         };
         Ok(match outcome {
-            db::AdminBatchAccountWriteOutcome::Applied(_) => AccountMutationOutcome::Applied,
-            db::AdminBatchAccountWriteOutcome::Unauthorized => AccountMutationOutcome::Unauthorized,
-            db::AdminBatchAccountWriteOutcome::TargetChanged => {
+            northstar_operations_postgres::admin_commands::AdminBatchAccountWriteOutcome::Applied(_) => AccountMutationOutcome::Applied,
+            northstar_operations_postgres::admin_commands::AdminBatchAccountWriteOutcome::Unauthorized => AccountMutationOutcome::Unauthorized,
+            northstar_operations_postgres::admin_commands::AdminBatchAccountWriteOutcome::TargetChanged => {
                 AccountMutationOutcome::TargetChanged
             }
-            db::AdminBatchAccountWriteOutcome::SelfMutation => AccountMutationOutcome::SelfMutation,
-            db::AdminBatchAccountWriteOutcome::LastAdministrator => {
+            northstar_operations_postgres::admin_commands::AdminBatchAccountWriteOutcome::SelfMutation => AccountMutationOutcome::SelfMutation,
+            northstar_operations_postgres::admin_commands::AdminBatchAccountWriteOutcome::LastAdministrator => {
                 AccountMutationOutcome::LastAdministrator
             }
         })
@@ -531,7 +535,7 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
         result_payload: &str,
     ) -> Result<AdminWriteOutcome> {
         Ok(
-            if db::record_admin_announcement_command(
+            if northstar_operations_postgres::admin_commands::record_admin_announcement_command(
                 &self.pool,
                 self.fence(actor, claim, node, result_payload)?,
                 recipients,
@@ -555,7 +559,7 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
         result_payload: &str,
     ) -> Result<AdminWriteOutcome> {
         Ok(
-            if db::set_admin_service_message_command(
+            if northstar_operations_postgres::admin_commands::set_admin_service_message_command(
                 &self.pool,
                 self.fence(actor, claim, node, result_payload)?,
                 kind,
@@ -589,7 +593,7 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
         entities: &[String],
         result_payload: &str,
     ) -> Result<Option<FederationRuleSet>> {
-        let Some((blacklist, whitelist)) = db::replace_federation_runtime_rules_command(
+        let Some((blacklist, whitelist)) = northstar_operations_postgres::admin_commands::replace_federation_runtime_rules_command(
             &self.pool,
             self.fence(actor, claim, node, result_payload)?,
             kind,
@@ -634,7 +638,7 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
         result_payload: &str,
     ) -> Result<AdminWriteOutcome> {
         Ok(
-            if db::apply_admin_service_control_command(
+            if northstar_operations_postgres::admin_commands::apply_admin_service_control_command(
                 &self.pool,
                 self.fence(actor, claim, node, result_payload)?,
                 action,
@@ -663,7 +667,7 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
         result_payload: &str,
     ) -> Result<AdminWriteOutcome> {
         Ok(
-            if db::apply_admin_service_control_command(
+            if northstar_operations_postgres::admin_commands::apply_admin_service_control_command(
                 &self.pool,
                 self.fence(actor, claim, node, result_payload)?,
                 action,
@@ -688,7 +692,7 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
         node: &str,
         stage: &str,
     ) -> Result<Option<zeroize::Zeroizing<String>>> {
-        db::create_admin_command_session(
+        northstar_operations_postgres::admin_commands::create_admin_command_session(
             &self.command_pool,
             actor.user_id,
             owner_full_jid,
@@ -708,7 +712,7 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
         final_stage: &str,
     ) -> Result<CommandSessionOutcome> {
         Ok(map_session_outcome(
-            db::finish_admin_command_session(
+            northstar_operations_postgres::admin_commands::finish_admin_command_session(
                 &self.command_pool,
                 bearer,
                 actor.user_id,
@@ -729,7 +733,7 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
         payload: &str,
     ) -> Result<CommandSessionOutcome> {
         Ok(map_session_outcome(
-            db::complete_admin_count_command_session(
+            northstar_operations_postgres::admin_commands::complete_admin_count_command_session(
                 &self.command_pool,
                 bearer,
                 actor.user_id,
@@ -750,7 +754,7 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
         target_digest: &[u8; 32],
     ) -> Result<CommandExecutionOutcome> {
         Ok(
-            match db::begin_admin_command_execution(
+            match northstar_operations_postgres::admin_commands::begin_admin_command_execution(
                 &self.command_pool,
                 bearer,
                 actor.user_id,
@@ -761,7 +765,7 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
             )
             .await?
             {
-                db::AdminCommandExecutionState::Started(inner) => {
+                northstar_operations_postgres::admin_commands::AdminCommandExecutionState::Started(inner) => {
                     CommandExecutionOutcome::Started(AdminExecutionClaim::new(
                         inner.operation_id,
                         inner.token,
@@ -770,12 +774,12 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
                         *target_digest,
                     ))
                 }
-                db::AdminCommandExecutionState::Busy => CommandExecutionOutcome::Busy,
-                db::AdminCommandExecutionState::Completed(payload) => {
+                northstar_operations_postgres::admin_commands::AdminCommandExecutionState::Busy => CommandExecutionOutcome::Busy,
+                northstar_operations_postgres::admin_commands::AdminCommandExecutionState::Completed(payload) => {
                     CommandExecutionOutcome::Completed(payload)
                 }
-                db::AdminCommandExecutionState::Expired => CommandExecutionOutcome::Expired,
-                db::AdminCommandExecutionState::Invalid => CommandExecutionOutcome::Invalid,
+                northstar_operations_postgres::admin_commands::AdminCommandExecutionState::Expired => CommandExecutionOutcome::Expired,
+                northstar_operations_postgres::admin_commands::AdminCommandExecutionState::Invalid => CommandExecutionOutcome::Invalid,
             },
         )
     }
@@ -787,7 +791,7 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
     ) -> Result<ExecutionReleaseOutcome> {
         self.fence(actor, claim, node, "")?;
         Ok(
-            if db::release_admin_command_execution(
+            if northstar_operations_postgres::admin_commands::release_admin_command_execution(
                 &self.command_pool,
                 claim.token(),
                 actor.user_id,
@@ -811,7 +815,7 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
         node: &str,
     ) -> Result<bool> {
         self.fence(actor, claim, node, "")?;
-        db::renew_admin_command_execution(
+        northstar_operations_postgres::admin_commands::renew_admin_command_execution(
             &self.command_pool,
             claim.token(),
             actor.user_id,
@@ -831,7 +835,7 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
     ) -> Result<AdminWriteOutcome> {
         self.fence(actor, claim, node, payload)?;
         Ok(
-            if db::complete_admin_command_read_execution(
+            if northstar_operations_postgres::admin_commands::complete_admin_command_read_execution(
                 &self.command_pool,
                 claim.token(),
                 actor.user_id,
@@ -850,7 +854,10 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
         )
     }
     async fn cleanup_sessions(&self) -> Result<u64> {
-        db::cleanup_admin_command_sessions(&self.command_pool).await
+        northstar_operations_postgres::admin_commands::cleanup_admin_command_sessions(
+            &self.command_pool,
+        )
+        .await
     }
 }
 fn is_serialization_failure(error: &sqlx::Error) -> bool {
@@ -860,20 +867,38 @@ fn is_serialization_failure(error: &sqlx::Error) -> bool {
     }
 }
 
-fn map_session_outcome(value: db::AdminCommandSessionState) -> CommandSessionOutcome {
+fn map_session_outcome(
+    value: northstar_operations_postgres::admin_commands::AdminCommandSessionState,
+) -> CommandSessionOutcome {
     match value {
-        db::AdminCommandSessionState::Finished => CommandSessionOutcome::Finished,
-        db::AdminCommandSessionState::Expired => CommandSessionOutcome::Expired,
-        db::AdminCommandSessionState::Invalid => CommandSessionOutcome::Invalid,
+        northstar_operations_postgres::admin_commands::AdminCommandSessionState::Finished => {
+            CommandSessionOutcome::Finished
+        }
+        northstar_operations_postgres::admin_commands::AdminCommandSessionState::Expired => {
+            CommandSessionOutcome::Expired
+        }
+        northstar_operations_postgres::admin_commands::AdminCommandSessionState::Invalid => {
+            CommandSessionOutcome::Invalid
+        }
     }
 }
 
-fn map_account_write(value: db::AdminAccountWriteOutcome) -> AdminWriteOutcome {
+fn map_account_write(
+    value: northstar_operations_postgres::admin_commands::AdminAccountWriteOutcome,
+) -> AdminWriteOutcome {
     match value {
-        db::AdminAccountWriteOutcome::Applied => AdminWriteOutcome::Applied,
-        db::AdminAccountWriteOutcome::Unauthorized => AdminWriteOutcome::Unauthorized,
-        db::AdminAccountWriteOutcome::TargetChanged => AdminWriteOutcome::TargetChanged,
-        db::AdminAccountWriteOutcome::SelfMutation => AdminWriteOutcome::SelfMutation,
+        northstar_operations_postgres::admin_commands::AdminAccountWriteOutcome::Applied => {
+            AdminWriteOutcome::Applied
+        }
+        northstar_operations_postgres::admin_commands::AdminAccountWriteOutcome::Unauthorized => {
+            AdminWriteOutcome::Unauthorized
+        }
+        northstar_operations_postgres::admin_commands::AdminAccountWriteOutcome::TargetChanged => {
+            AdminWriteOutcome::TargetChanged
+        }
+        northstar_operations_postgres::admin_commands::AdminAccountWriteOutcome::SelfMutation => {
+            AdminWriteOutcome::SelfMutation
+        }
     }
 }
 

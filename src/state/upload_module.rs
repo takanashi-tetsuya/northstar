@@ -39,7 +39,7 @@ impl UploadModule {
             StoragePoolMode::SharedUnsafeDevelopment => Some(pool.clone()),
             StoragePoolMode::DedicatedProductionRole => {
                 let deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;
-                let options = db::pin_public_application_schema(
+                let options = northstar_postgres::role_attestation::pin_public_application_schema(
                     PgPoolOptions::new()
                         .max_connections(STORAGE_POOL_MAX_CONNECTIONS)
                         .min_connections(0)
@@ -52,11 +52,12 @@ impl UploadModule {
                     |_| options.clone().connect(&config.storage_database_url),
                 )
                 .await?;
-                tokio::time::timeout_at(deadline, db::attest_storage_role(&storage_pool))
-                    .await
-                    .context(
-                        "storage role attestation exceeded its startup admission deadline",
-                    )??;
+                tokio::time::timeout_at(
+                    deadline,
+                    northstar_postgres::role_attestation::attest_storage_role(&storage_pool),
+                )
+                .await
+                .context("storage role attestation exceeded its startup admission deadline")??;
                 Some(storage_pool)
             }
         };

@@ -1,7 +1,7 @@
 //! PostgreSQL adapter for the administrator session-cleanup worker's exact
 //! claim token and worker identity fences.
 
-use crate::db;
+use crate::admin_commands as db;
 use anyhow::Result;
 use northstar_operations_application::admin_session_cleanup_worker::{
     AdminSessionCleanupLease, AdminSessionCleanupRepository,
@@ -10,12 +10,12 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresAdminSessionCleanupRepository {
+pub struct PostgresAdminSessionCleanupRepository {
     pool: PgPool,
 }
 
 impl PostgresAdminSessionCleanupRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }

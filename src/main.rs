@@ -107,19 +107,20 @@ async fn connect_migrator_pool(environment: &MigrationEnvironment) -> Result<PgP
     let pool_options = if environment.allow_unsafe_role_for_development {
         pool_options
     } else {
-        db::pin_public_application_schema(pool_options)
+        northstar_postgres::role_attestation::pin_public_application_schema(pool_options)
     };
     let pool = pool_options
         .connect(environment.database_url.as_str())
         .await
         .context("could not connect to PostgreSQL with the migrator role")?;
     if environment.allow_unsafe_role_for_development {
-        db::attest_development_database_is_loopback(&pool).await?;
+        northstar_postgres::role_attestation::attest_development_database_is_loopback(&pool)
+            .await?;
         eprintln!(
             "warning: explicit loopback development override skips PostgreSQL migrator role attestation"
         );
     } else {
-        db::attest_migrator_role(&pool).await?;
+        northstar_postgres::role_attestation::attest_migrator_role(&pool).await?;
     }
     Ok(pool)
 }
@@ -289,19 +290,20 @@ async fn run() -> Result<()> {
     let pool_options = if config.database_allow_unsafe_role_for_development {
         pool_options
     } else {
-        db::pin_public_application_schema(pool_options)
+        northstar_postgres::role_attestation::pin_public_application_schema(pool_options)
     };
     let pool = pool_options
         .connect(&config.database_url)
         .await
         .context("could not connect to PostgreSQL")?;
     if config.database_allow_unsafe_role_for_development {
-        db::attest_development_database_is_loopback(&pool).await?;
+        northstar_postgres::role_attestation::attest_development_database_is_loopback(&pool)
+            .await?;
         tracing::warn!(
             "explicit loopback development override skips PostgreSQL runtime role attestation"
         );
     } else {
-        db::attest_runtime_role(&pool).await?;
+        northstar_postgres::role_attestation::attest_runtime_role(&pool).await?;
     }
     startup_phase.complete();
     let startup_phase = northstar_telemetry::logging::StartupPhase::begin("schema_verification");

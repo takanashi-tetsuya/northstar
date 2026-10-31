@@ -1,10 +1,6 @@
 //! Durable administrative dispatch, side records and replay share a transaction.
-use crate::db::{
-    self,
-    admin_mutations::{
-        enqueue_operation_response_in_tx, AdminMutationStart, AdminMutationStore,
-        AdminOperationIntent,
-    },
+use crate::db::admin_mutations::{
+    enqueue_operation_response_in_tx, AdminMutationStart, AdminMutationStore, AdminOperationIntent,
 };
 use anyhow::Result;
 use northstar_operations_application::admin_dispatch::*;
@@ -320,7 +316,7 @@ impl AdminDispatchRepository for PostgresAdminDispatchRepository {
             AdminMutationStart::Ready(tx, lease) => (tx, lease),
             AdminMutationStart::Finished(outcome) => return Ok(outcome),
         };
-        db::set_admin_runtime_setting_in_tx(
+        northstar_operations_postgres::admin_commands::set_admin_runtime_setting_in_tx(
             &mut tx,
             admission.authority.user_id,
             "island_mode",

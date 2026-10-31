@@ -112,7 +112,7 @@ async fn dropped_pending_control_turn_reports_its_actual_phase() {
         let task = tokio::spawn(async move {
             match phase {
                 RuntimeControlPhase::SnapshotRead => {
-                    guard.database_read(crate::db::RuntimeControlReadPhase::Snapshot);
+                    guard.database_read(northstar_operations_postgres::admin_commands::RuntimeControlReadPhase::Snapshot);
                 }
                 other => guard.enter(other),
             }
@@ -139,7 +139,9 @@ async fn normal_shutdown_drops_a_stalled_control_turn_without_warning() {
     let (mut guard, captured) = diagnostic_guard(root_cancel.clone());
     let (entered, observed) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
-        guard.database_read(crate::db::RuntimeControlReadPhase::Snapshot);
+        guard.database_read(
+            northstar_operations_postgres::admin_commands::RuntimeControlReadPhase::Snapshot,
+        );
         guard.phase_started -= Duration::from_secs(6);
         guard.last_reported -= Duration::from_secs(6);
         entered.send(()).unwrap();
@@ -160,7 +162,9 @@ async fn short_control_phases_do_not_reset_total_heartbeat_silence() {
     let (next_phase, continue_turn) = tokio::sync::oneshot::channel();
     let (changed, change_observed) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
-        guard.database_read(crate::db::RuntimeControlReadPhase::Snapshot);
+        guard.database_read(
+            northstar_operations_postgres::admin_commands::RuntimeControlReadPhase::Snapshot,
+        );
         guard.last_reported -= Duration::from_secs(6);
         entered.send(()).unwrap();
         continue_turn.await.unwrap();
@@ -190,7 +194,9 @@ async fn an_existing_health_report_resets_only_the_diagnostic_clock() {
     let (report, continue_turn) = tokio::sync::oneshot::channel();
     let (reported, report_observed) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
-        guard.database_read(crate::db::RuntimeControlReadPhase::Snapshot);
+        guard.database_read(
+            northstar_operations_postgres::admin_commands::RuntimeControlReadPhase::Snapshot,
+        );
         guard.last_reported -= Duration::from_secs(6);
         entered.send(()).unwrap();
         continue_turn.await.unwrap();

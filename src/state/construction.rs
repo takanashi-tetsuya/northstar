@@ -1,6 +1,7 @@
 //! AppState construction: database pools, API keyrings, services, contexts and startup workers.
 
 use super::*;
+use northstar_postgres::role_attestation;
 
 // Auxiliary pools retain their two-second acquisition policy while serving.
 // Only initial handshakes may retry, within one shared admission window.
@@ -385,17 +386,23 @@ impl AppState {
             .activate()
             .await
             .context("failed to publish the initial signed cluster node lease")?;
-        db::initialize_admin_runtime_settings(
+        northstar_operations_postgres::admin_commands::initialize_admin_runtime_settings(
             &pool,
             false,
             !open_registration,
             config.registration_dependency_locked(),
         )
         .await?;
-        let (island_mode, registration_closed) = db::admin_runtime_settings(&pool).await?;
+        let (island_mode, registration_closed) =
+            northstar_operations_postgres::admin_commands::admin_runtime_settings(&pool).await?;
         let registration_closed = Arc::new(AtomicBool::new(registration_closed));
-        let process_started_at = db::admin_service_control_startup_time(&pool).await?;
-        let (runtime_blacklist, runtime_whitelist) = db::federation_runtime_rules(&pool).await?;
+        let process_started_at =
+            northstar_operations_postgres::admin_commands::admin_service_control_startup_time(
+                &pool,
+            )
+            .await?;
+        let (runtime_blacklist, runtime_whitelist) =
+            northstar_operations_postgres::admin_commands::federation_runtime_rules(&pool).await?;
 
         db::recover_remote_pam_after_restart(&pool)
             .await
@@ -492,7 +499,7 @@ impl AppState {
             // boundary, so share the already-attested primary pool instead.
             AdminCommandPoolMode::SharedUnsafeDevelopment => pool.clone(),
             AdminCommandPoolMode::DedicatedProductionRole => {
-                let command_pool_options = crate::db::pin_public_application_schema(
+                let command_pool_options = role_attestation::pin_public_application_schema(
                     PgPoolOptions::new()
                         .max_connections(4)
                         .min_connections(0)
@@ -510,7 +517,7 @@ impl AppState {
                 )
                 .await?;
                 tokio::time::timeout_at(auxiliary_pool_deadline, async {
-                    crate::db::attest_admin_command_role(&command_pool).await?;
+                    role_attestation::attest_admin_command_role(&command_pool).await?;
                     anyhow::Ok(())
                 })
                 .await
@@ -525,7 +532,7 @@ impl AppState {
         let omemo_recovery_pool_options = if config.database_allow_unsafe_role_for_development {
             omemo_recovery_pool_options
         } else {
-            crate::db::pin_public_application_schema(omemo_recovery_pool_options)
+            role_attestation::pin_public_application_schema(omemo_recovery_pool_options)
         };
         let omemo_recovery_poll_pool = startup_database_connect(
             auxiliary_pool_deadline,
@@ -701,7 +708,7 @@ impl AppState {
             );
         let admin_session_cleanup_worker_service =
             northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupWorkerService::new(
-                db::admin_session_cleanup_worker_repository::PostgresAdminSessionCleanupRepository::new(pool.clone()),
+                northstar_operations_postgres::admin_session_cleanup_worker_repository::PostgresAdminSessionCleanupRepository::new(pool.clone()),
             );
         let admin_dispatch_service =
             northstar_operations_application::admin_dispatch::AdminDispatchService::new(

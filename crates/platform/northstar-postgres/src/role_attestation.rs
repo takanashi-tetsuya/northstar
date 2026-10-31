@@ -10,10 +10,10 @@ use self::catalog::*;
 use self::manifests::*;
 
 const CAPABILITY_MANIFEST_SQL: &str =
-    include_str!("../../deploy/postgres-init/lib/northstar-capability-manifest.sql");
+    include_str!("../../../../deploy/postgres-init/lib/northstar-capability-manifest.sql");
 const RUNTIME_RELATION_MANIFEST_SQL: &str = CAPABILITY_MANIFEST_SQL;
 const MIGRATION_LEDGER_MANIFEST_SQL: &str =
-    include_str!("../../deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql");
+    include_str!("../../../../deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql");
 // PostgreSQL's polymorphic `unnest` overload accepts one array at a time.
 // Keep independently typed manifest arrays aligned through ordinality instead
 // of relying on a non-existent `unnest(int8[], text[], text[])` signature.
@@ -113,7 +113,7 @@ fn validate_migration_ledger_source(
     Ok(())
 }
 
-pub(super) fn security_definer_capability_manifest() -> Result<(Vec<String>, Vec<String>)> {
+pub fn security_definer_capability_manifest() -> Result<(Vec<String>, Vec<String>)> {
     parse_security_definer_capability_manifest(CAPABILITY_MANIFEST_SQL)
 }
 

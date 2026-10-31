@@ -216,7 +216,7 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
     .await
     .unwrap();
     let owner = "cmd@example.test/Console";
-    let command = db::create_admin_command_session(
+    let command = northstar_operations_postgres::admin_commands::create_admin_command_session(
         &pool,
         admin,
         owner,
@@ -234,7 +234,7 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
     let first_bearer = command.to_string();
     let second_bearer = command.to_string();
     let first = tokio::spawn(async move {
-        crate::db::finish_admin_command_session(
+        northstar_operations_postgres::admin_commands::finish_admin_command_session(
             &first_pool,
             &first_bearer,
             admin,
@@ -247,7 +247,7 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
         .unwrap()
     });
     let second = tokio::spawn(async move {
-        crate::db::finish_admin_command_session(
+        northstar_operations_postgres::admin_commands::finish_admin_command_session(
             &second_pool,
             &second_bearer,
             admin,
@@ -263,19 +263,20 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
     assert_eq!(
         outcomes
             .iter()
-            .filter(|state| **state == crate::db::AdminCommandSessionState::Finished)
+            .filter(|state| **state == northstar_operations_postgres::admin_commands::AdminCommandSessionState::Finished)
             .count(),
         1
     );
     assert_eq!(
         outcomes
             .iter()
-            .filter(|state| **state == crate::db::AdminCommandSessionState::Invalid)
+            .filter(|state| **state
+                == northstar_operations_postgres::admin_commands::AdminCommandSessionState::Invalid)
             .count(),
         1
     );
 
-    let demoted = db::create_admin_command_session(
+    let demoted = northstar_operations_postgres::admin_commands::create_admin_command_session(
         &pool,
         admin,
         owner,
@@ -293,7 +294,7 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
         .await
         .unwrap();
     assert_eq!(
-        crate::db::finish_admin_command_session(
+        northstar_operations_postgres::admin_commands::finish_admin_command_session(
             &pool,
             demoted.as_str(),
             admin,
@@ -304,7 +305,7 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
         )
         .await
         .unwrap(),
-        crate::db::AdminCommandSessionState::Invalid
+        northstar_operations_postgres::admin_commands::AdminCommandSessionState::Invalid
     );
     sqlx::query("UPDATE users SET is_admin=TRUE WHERE id=$1")
         .bind(admin)
@@ -312,7 +313,7 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
         .await
         .unwrap();
 
-    let expired = db::create_admin_command_session(
+    let expired = northstar_operations_postgres::admin_commands::create_admin_command_session(
         &pool,
         admin,
         owner,
@@ -335,7 +336,7 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
     .await
     .unwrap();
     assert_eq!(
-        crate::db::finish_admin_command_session(
+        northstar_operations_postgres::admin_commands::finish_admin_command_session(
             &pool,
             expired.as_str(),
             admin,
@@ -346,10 +347,10 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
         )
         .await
         .unwrap(),
-        crate::db::AdminCommandSessionState::Expired
+        northstar_operations_postgres::admin_commands::AdminCommandSessionState::Expired
     );
 
-    let execution = db::create_admin_command_session(
+    let execution = northstar_operations_postgres::admin_commands::create_admin_command_session(
         &pool,
         admin,
         owner,
@@ -369,7 +370,7 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
     let first_digest = digest.clone();
     let second_digest = digest.clone();
     let first = tokio::spawn(async move {
-        crate::db::begin_admin_command_execution(
+        northstar_operations_postgres::admin_commands::begin_admin_command_execution(
             &first_pool,
             &first_bearer,
             admin,
@@ -382,7 +383,7 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
         .unwrap()
     });
     let second = tokio::spawn(async move {
-        crate::db::begin_admin_command_execution(
+        northstar_operations_postgres::admin_commands::begin_admin_command_execution(
             &second_pool,
             &second_bearer,
             admin,
@@ -399,8 +400,12 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
     let mut busy = 0;
     for outcome in outcomes {
         match outcome {
-            crate::db::AdminCommandExecutionState::Started(started) => claim = Some(started),
-            crate::db::AdminCommandExecutionState::Busy => busy += 1,
+            northstar_operations_postgres::admin_commands::AdminCommandExecutionState::Started(
+                started,
+            ) => claim = Some(started),
+            northstar_operations_postgres::admin_commands::AdminCommandExecutionState::Busy => {
+                busy += 1
+            }
             other => panic!("unexpected concurrent execution state: {other:?}"),
         }
     }
@@ -408,18 +413,20 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
     assert_eq!(busy, 1);
     // A semantic validation failure releases only its own incarnation and
     // leaves the XEP-0050 session reusable.
-    assert!(crate::db::release_admin_command_execution(
-        &pool,
-        claim.token.as_str(),
-        admin,
-        username,
-        0,
-        REGISTERED_LIST,
-        &digest,
-    )
-    .await
-    .unwrap());
-    let claim = match crate::db::begin_admin_command_execution(
+    assert!(
+        northstar_operations_postgres::admin_commands::release_admin_command_execution(
+            &pool,
+            claim.token.as_str(),
+            admin,
+            username,
+            0,
+            REGISTERED_LIST,
+            &digest,
+        )
+        .await
+        .unwrap()
+    );
+    let claim = match northstar_operations_postgres::admin_commands::begin_admin_command_execution(
         &pool,
         execution.as_str(),
         admin,
@@ -431,24 +438,28 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
     .await
     .unwrap()
     {
-        crate::db::AdminCommandExecutionState::Started(claim) => claim,
+        northstar_operations_postgres::admin_commands::AdminCommandExecutionState::Started(
+            claim,
+        ) => claim,
         other => panic!("unexpected execution state: {other:?}"),
     };
     let payload = "<x xmlns='jabber:x:data' type='result'/>";
-    assert!(crate::db::complete_admin_command_read_execution(
-        &pool,
-        claim.token.as_str(),
-        admin,
-        username,
-        0,
-        REGISTERED_LIST,
-        &digest,
-        payload,
-    )
-    .await
-    .unwrap());
+    assert!(
+        northstar_operations_postgres::admin_commands::complete_admin_command_read_execution(
+            &pool,
+            claim.token.as_str(),
+            admin,
+            username,
+            0,
+            REGISTERED_LIST,
+            &digest,
+            payload,
+        )
+        .await
+        .unwrap()
+    );
     assert_eq!(
-        crate::db::begin_admin_command_execution(
+        northstar_operations_postgres::admin_commands::begin_admin_command_execution(
             &pool,
             execution.as_str(),
             admin,
@@ -459,11 +470,13 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
         )
         .await
         .unwrap(),
-        crate::db::AdminCommandExecutionState::Completed(payload.to_owned())
+        northstar_operations_postgres::admin_commands::AdminCommandExecutionState::Completed(
+            payload.to_owned()
+        )
     );
     let different_digest = Sha256::digest(b"different-request").to_vec();
     assert_eq!(
-        crate::db::begin_admin_command_execution(
+        northstar_operations_postgres::admin_commands::begin_admin_command_execution(
             &pool,
             execution.as_str(),
             admin,
@@ -474,7 +487,7 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
         )
         .await
         .unwrap(),
-        crate::db::AdminCommandExecutionState::Invalid
+        northstar_operations_postgres::admin_commands::AdminCommandExecutionState::Invalid
     );
 
     let member = uuid::Uuid::new_v4();
@@ -498,23 +511,41 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
             .is_admin
     );
 
-    db::set_admin_service_message(&pool, admin, 0, "welcome", Some("Welcome"))
-        .await
-        .unwrap();
-    db::set_admin_service_message(&pool, admin, 0, "motd", Some("Daily"))
-        .await
-        .unwrap();
+    northstar_operations_postgres::admin_commands::set_admin_service_message(
+        &pool,
+        admin,
+        0,
+        "welcome",
+        Some("Welcome"),
+    )
+    .await
+    .unwrap();
+    northstar_operations_postgres::admin_commands::set_admin_service_message(
+        &pool,
+        admin,
+        0,
+        "motd",
+        Some("Daily"),
+    )
+    .await
+    .unwrap();
     let first_pool = pool.clone();
     let second_pool = pool.clone();
     let first = tokio::spawn(async move {
-        db::claim_admin_service_messages(&first_pool, member)
-            .await
-            .unwrap()
+        northstar_operations_postgres::admin_commands::claim_admin_service_messages(
+            &first_pool,
+            member,
+        )
+        .await
+        .unwrap()
     });
     let second = tokio::spawn(async move {
-        db::claim_admin_service_messages(&second_pool, member)
-            .await
-            .unwrap()
+        northstar_operations_postgres::admin_commands::claim_admin_service_messages(
+            &second_pool,
+            member,
+        )
+        .await
+        .unwrap()
     });
     let mut claims = first.await.unwrap();
     claims.extend(second.await.unwrap());
@@ -530,10 +561,12 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
             ("welcome".to_owned(), "Welcome".to_owned())
         ]
     );
-    assert!(db::claim_admin_service_messages(&pool, member)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        northstar_operations_postgres::admin_commands::claim_admin_service_messages(&pool, member)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let motd_claim = claims.iter().find(|claim| claim.kind == "motd").unwrap();
     sqlx::query(
         "UPDATE admin_service_message_deliveries
@@ -544,62 +577,101 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
     .execute(&pool)
     .await
     .unwrap();
-    let reclaimed = db::claim_admin_service_messages(&pool, member)
-        .await
-        .unwrap();
+    let reclaimed =
+        northstar_operations_postgres::admin_commands::claim_admin_service_messages(&pool, member)
+            .await
+            .unwrap();
     assert_eq!(reclaimed.len(), 1);
     assert_eq!(reclaimed[0].kind, "motd");
     assert!(
-        db::complete_admin_service_message_claim(&pool, member, &reclaimed[0])
-            .await
-            .unwrap()
+        northstar_operations_postgres::admin_commands::complete_admin_service_message_claim(
+            &pool,
+            member,
+            &reclaimed[0]
+        )
+        .await
+        .unwrap()
     );
     let welcome_claim = claims.iter().find(|claim| claim.kind == "welcome").unwrap();
     assert!(
-        db::complete_admin_service_message_claim(&pool, member, welcome_claim)
+        northstar_operations_postgres::admin_commands::complete_admin_service_message_claim(
+            &pool,
+            member,
+            welcome_claim
+        )
+        .await
+        .unwrap()
+    );
+    northstar_operations_postgres::admin_commands::set_admin_service_message(
+        &pool, admin, 0, "welcome", None,
+    )
+    .await
+    .unwrap();
+    northstar_operations_postgres::admin_commands::set_admin_service_message(
+        &pool,
+        admin,
+        0,
+        "welcome",
+        Some("New welcome"),
+    )
+    .await
+    .unwrap();
+    assert!(
+        northstar_operations_postgres::admin_commands::claim_admin_service_messages(&pool, member)
             .await
             .unwrap()
+            .is_empty()
     );
-    db::set_admin_service_message(&pool, admin, 0, "welcome", None)
-        .await
-        .unwrap();
-    db::set_admin_service_message(&pool, admin, 0, "welcome", Some("New welcome"))
-        .await
-        .unwrap();
-    assert!(db::claim_admin_service_messages(&pool, member)
-        .await
-        .unwrap()
-        .is_empty());
-    db::set_admin_service_message(&pool, admin, 0, "motd", Some("Corrected"))
-        .await
-        .unwrap();
-    let corrected = db::claim_admin_service_messages(&pool, member)
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|claim| (claim.kind, claim.body))
-        .collect::<Vec<_>>();
+    northstar_operations_postgres::admin_commands::set_admin_service_message(
+        &pool,
+        admin,
+        0,
+        "motd",
+        Some("Corrected"),
+    )
+    .await
+    .unwrap();
+    let corrected =
+        northstar_operations_postgres::admin_commands::claim_admin_service_messages(&pool, member)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|claim| (claim.kind, claim.body))
+            .collect::<Vec<_>>();
     assert_eq!(corrected, vec![("motd".to_owned(), "Corrected".to_owned())]);
 
-    db::initialize_admin_runtime_settings(&pool, false, false, false)
-        .await
-        .unwrap();
+    northstar_operations_postgres::admin_commands::initialize_admin_runtime_settings(
+        &pool, false, false, false,
+    )
+    .await
+    .unwrap();
     assert_eq!(
-        db::admin_runtime_settings(&pool).await.unwrap(),
+        northstar_operations_postgres::admin_commands::admin_runtime_settings(&pool)
+            .await
+            .unwrap(),
         (false, false)
     );
     let mut control_connection = pool.acquire().await.unwrap();
     assert_eq!(
-        db::runtime_control_snapshot(&mut control_connection, |_| {})
-            .await
-            .unwrap(),
+        northstar_operations_postgres::admin_commands::runtime_control_snapshot(
+            &mut control_connection,
+            |_| {}
+        )
+        .await
+        .unwrap(),
         (false, false, Vec::<String>::new(), Vec::<String>::new())
     );
     drop(control_connection);
     assert!(
-        db::set_admin_runtime_setting(&pool, admin, 0, "registration_closed", true,)
-            .await
-            .unwrap()
+        northstar_operations_postgres::admin_commands::set_admin_runtime_setting(
+            &pool,
+            admin,
+            0,
+            "registration_closed",
+            true,
+        )
+        .await
+        .unwrap()
     );
     let observer_pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
@@ -607,7 +679,9 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
         .await
         .unwrap();
     assert_eq!(
-        db::admin_runtime_settings(&observer_pool).await.unwrap(),
+        northstar_operations_postgres::admin_commands::admin_runtime_settings(&observer_pool)
+            .await
+            .unwrap(),
         (false, true)
     );
 
@@ -618,12 +692,18 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
     ];
     entities.sort();
     assert!(
-        db::replace_federation_runtime_rules(&pool, admin, 0, "blacklist", &entities,)
-            .await
-            .unwrap()
+        northstar_operations_postgres::admin_commands::replace_federation_runtime_rules(
+            &pool,
+            admin,
+            0,
+            "blacklist",
+            &entities,
+        )
+        .await
+        .unwrap()
     );
     assert_eq!(
-        db::federation_runtime_rules(&observer_pool)
+        northstar_operations_postgres::admin_commands::federation_runtime_rules(&observer_pool)
             .await
             .unwrap()
             .0,
@@ -635,9 +715,12 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
     // of a required setting must still fail instead of reopening service.
     let mut control_connection = observer_pool.acquire().await.unwrap();
     assert_eq!(
-        db::runtime_control_snapshot(&mut control_connection, |_| {})
-            .await
-            .unwrap(),
+        northstar_operations_postgres::admin_commands::runtime_control_snapshot(
+            &mut control_connection,
+            |_| {}
+        )
+        .await
+        .unwrap(),
         (false, true, entities.clone(), Vec::<String>::new())
     );
     let mut control_tx = control_connection.begin().await.unwrap();
@@ -649,9 +732,12 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
     .await
     .unwrap();
     assert_eq!(
-        db::runtime_control_snapshot(&mut control_tx, |_| {})
-            .await
-            .unwrap(),
+        northstar_operations_postgres::admin_commands::runtime_control_snapshot(
+            &mut control_tx,
+            |_| {}
+        )
+        .await
+        .unwrap(),
         (
             false,
             true,
@@ -663,36 +749,64 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
         .execute(&mut *control_tx)
         .await
         .unwrap();
-    assert!(db::runtime_control_snapshot(&mut control_tx, |_| {})
+    assert!(
+        northstar_operations_postgres::admin_commands::runtime_control_snapshot(
+            &mut control_tx,
+            |_| {}
+        )
         .await
         .unwrap_err()
         .to_string()
-        .contains("registration_closed runtime setting is missing"));
+        .contains("registration_closed runtime setting is missing")
+    );
     control_tx.rollback().await.unwrap();
     drop(control_connection);
 
-    let scheduled =
-        db::schedule_admin_service_control(&pool, admin, 0, "restart", 5, Some("Maintenance"))
-            .await
-            .unwrap()
-            .unwrap();
+    let scheduled = northstar_operations_postgres::admin_commands::schedule_admin_service_control(
+        &pool,
+        admin,
+        0,
+        "restart",
+        5,
+        Some("Maintenance"),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert!(
-        db::schedule_admin_service_control(&observer_pool, admin, 0, "shutdown", 5, None,)
-            .await
-            .unwrap()
-            .is_none()
+        northstar_operations_postgres::admin_commands::schedule_admin_service_control(
+            &observer_pool,
+            admin,
+            0,
+            "shutdown",
+            5,
+            None,
+        )
+        .await
+        .unwrap()
+        .is_none()
     );
     assert_eq!(
-        db::cancel_admin_service_control(&observer_pool, admin, 0)
-            .await
-            .unwrap(),
+        northstar_operations_postgres::admin_commands::cancel_admin_service_control(
+            &observer_pool,
+            admin,
+            0
+        )
+        .await
+        .unwrap(),
         Some(scheduled.generation)
     );
-    let scheduled =
-        db::schedule_admin_service_control(&observer_pool, admin, 0, "shutdown", 5, None)
-            .await
-            .unwrap()
-            .unwrap();
+    let scheduled = northstar_operations_postgres::admin_commands::schedule_admin_service_control(
+        &observer_pool,
+        admin,
+        0,
+        "shutdown",
+        5,
+        None,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     sqlx::query(
         "UPDATE admin_service_control SET execute_at=clock_timestamp()-INTERVAL '1 second'",
     )
@@ -701,27 +815,37 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
     .unwrap();
     let mut control_connection = pool.acquire().await.unwrap();
     let mut observer_control_connection = observer_pool.acquire().await.unwrap();
-    let fired = db::poll_admin_service_control(&mut control_connection)
-        .await
-        .unwrap()
-        .unwrap();
-    let observed = db::poll_admin_service_control(&mut observer_control_connection)
-        .await
-        .unwrap()
-        .unwrap();
+    let fired = northstar_operations_postgres::admin_commands::poll_admin_service_control(
+        &mut control_connection,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let observed = northstar_operations_postgres::admin_commands::poll_admin_service_control(
+        &mut observer_control_connection,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(fired.generation, scheduled.generation);
     assert_eq!(observed.generation, scheduled.generation);
     assert_eq!(fired.fired_at, observed.fired_at);
     assert!(
-        db::schedule_admin_service_control(&pool, admin, 0, "restart", 5, None,)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(db::cancel_admin_service_control(&pool, admin, 0)
+        northstar_operations_postgres::admin_commands::schedule_admin_service_control(
+            &pool, admin, 0, "restart", 5, None,
+        )
         .await
         .unwrap()
-        .is_none());
+        .is_none()
+    );
+    assert!(
+        northstar_operations_postgres::admin_commands::cancel_admin_service_control(
+            &pool, admin, 0
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
 
     let before = northstar_auth_postgres::users::find_user_by_id(&pool, member)
         .await

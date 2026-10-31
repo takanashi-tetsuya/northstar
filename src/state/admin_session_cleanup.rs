@@ -3,9 +3,9 @@
 use super::{
     fence_local_session_in, AccountRevocationRoutes, AppState, LocalSessionFence, OnlineSession,
 };
-use crate::db::admin_session_cleanup_worker_repository::PostgresAdminSessionCleanupRepository;
 use dashmap::DashMap;
 use northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupWorkerService;
+use northstar_operations_postgres::admin_session_cleanup_worker_repository::PostgresAdminSessionCleanupRepository;
 use std::sync::Arc;
 use uuid::Uuid;
 

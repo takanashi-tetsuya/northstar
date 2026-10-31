@@ -1417,7 +1417,7 @@ fn federation_entity_rules_follow_domain_bare_and_full_jid_specificity() {
 #[test]
 fn service_control_only_stops_processes_started_before_the_fire_epoch() {
     let fired_at = chrono::Utc::now();
-    let control = crate::db::DurableServiceControl {
+    let control = northstar_operations_postgres::admin_commands::DurableServiceControl {
         generation: uuid::Uuid::new_v4(),
         action: "restart".to_owned(),
         execute_at: fired_at - chrono::Duration::seconds(1),
@@ -1433,7 +1433,7 @@ fn service_control_only_stops_processes_started_before_the_fire_epoch() {
         fired_at + chrono::Duration::seconds(1),
         &control
     ));
-    let pending = crate::db::DurableServiceControl {
+    let pending = northstar_operations_postgres::admin_commands::DurableServiceControl {
         fired_at: None,
         ..control
     };

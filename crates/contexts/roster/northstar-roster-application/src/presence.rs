@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 pub use northstar_roster_core::{
     InboundRemotePresenceEffect, LocalPresenceEffect, PresenceAccount, PresencePolicyDenial,
-    RosterChange,
+    RosterChange, ServiceMessageDeliveryClaim,
 };
 
 /// An administrative notice with the revision, date and token needed to
@@ -85,15 +85,6 @@ pub struct LocalSubscriptionRequest<'a> {
     pub target_username: &'a str,
     pub kind: &'a str,
     pub stanza: &'a str,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ServiceMessageDeliveryClaim {
-    pub kind: String,
-    pub body: String,
-    pub revision: Uuid,
-    pub delivery_date: chrono::NaiveDate,
-    pub claim_id: Uuid,
 }
 
 pub trait PresenceRepository: Send + Sync {

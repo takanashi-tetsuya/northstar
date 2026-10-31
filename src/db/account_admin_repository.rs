@@ -150,7 +150,10 @@ impl RegistrationAdminRepository for PostgresRegistrationAdminRepository {
             .await
     }
     async fn current_registration_closed(&self) -> Result<bool> {
-        let (_, closed) = db::admin_runtime_settings(&self.settings_pool).await?;
+        let (_, closed) = northstar_operations_postgres::admin_commands::admin_runtime_settings(
+            &self.settings_pool,
+        )
+        .await?;
         Ok(closed)
     }
 }

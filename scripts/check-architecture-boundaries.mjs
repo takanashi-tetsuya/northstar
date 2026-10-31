@@ -383,7 +383,7 @@ for (const invariant of [
   'max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
   'min_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
   'acquire_timeout(attempt_budget)',
-  'db::pin_public_application_schema(options)',
+  'northstar_postgres::role_attestation::pin_public_application_schema(options)',
 ]) {
   if (!runtimeControlPoolConstruction.includes(invariant)) {
     throw new Error(`runtime-control pool lost its isolated runtime-pool invariant: ${invariant}`);
@@ -392,7 +392,7 @@ for (const invariant of [
 const runtimeControlRefresh = rustItemBody(state, 'fn start_runtime_control_refresh(');
 const runtimeControlContext = read('src/state/runtime_control_refresh.rs');
 const runtimeControlRun = structBody(runtimeControlContext, 'pub(super) async fn run(');
-const runtimeControlAdapter = read('src/db/runtime_control_repository.rs');
+const runtimeControlAdapter = read('crates/contexts/operations/northstar-operations-postgres/src/runtime_control_repository.rs');
 if (!/let repository = self\.connection\.lock\(\)\.await\.take\(\)/.test(runtimeControlRun)
     || !/let mut control = RuntimeControlService::new\(repository\)/.test(runtimeControlRun)
     || !/match control\s*\.policy_snapshot\(\|phase\|\s*diagnostics\.database_read\(phase\)\)/s.test(runtimeControlRun)
@@ -859,7 +859,7 @@ for (const invariant of [
 if (!mainSource.includes('Some("--storage-connection-budget")')
     || !uploadModuleStart.includes('StoragePoolMode::Disabled => None')
     || !uploadModuleStart.includes('StoragePoolMode::SharedUnsafeDevelopment => Some(pool.clone())')
-    || !uploadModuleStart.includes('db::attest_storage_role(&storage_pool)')
+    || !uploadModuleStart.includes('northstar_postgres::role_attestation::attest_storage_role(&storage_pool)')
     || !commandPoolConstruction.includes('UploadModule::start(&config, &pool).await?')) {
   throw new Error('storage pool must be absent when disabled and attested in production');
 }

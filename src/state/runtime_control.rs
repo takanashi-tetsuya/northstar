@@ -28,7 +28,7 @@ pub(super) fn runtime_control_pool_options(
     if config.database_allow_unsafe_role_for_development {
         options
     } else {
-        db::pin_public_application_schema(options)
+        northstar_postgres::role_attestation::pin_public_application_schema(options)
     }
 }
 
@@ -172,9 +172,14 @@ impl RuntimeControlDiagnostics {
         self.phase_started = tokio::time::Instant::now();
     }
 
-    pub(super) fn database_read(&mut self, phase: db::RuntimeControlReadPhase) {
+    pub(super) fn database_read(
+        &mut self,
+        phase: northstar_operations_postgres::admin_commands::RuntimeControlReadPhase,
+    ) {
         self.enter(match phase {
-            db::RuntimeControlReadPhase::Snapshot => RuntimeControlPhase::SnapshotRead,
+            northstar_operations_postgres::admin_commands::RuntimeControlReadPhase::Snapshot => {
+                RuntimeControlPhase::SnapshotRead
+            }
         });
     }
 
@@ -256,9 +261,13 @@ pub(crate) async fn reserve_runtime_control_connection(
     // deadline. A completed handshake alone never authorizes serving traffic.
     tokio::time::timeout_at(deadline, async {
         if config.database_allow_unsafe_role_for_development {
-            crate::db::attest_development_database_is_loopback(&runtime_control_pool).await?;
+            northstar_postgres::role_attestation::attest_development_database_is_loopback(
+                &runtime_control_pool,
+            )
+            .await?;
         } else {
-            crate::db::attest_runtime_role(&runtime_control_pool).await?;
+            northstar_postgres::role_attestation::attest_runtime_role(&runtime_control_pool)
+                .await?;
         }
         runtime_control_pool
             .acquire()

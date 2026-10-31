@@ -82,7 +82,7 @@ pub(super) fn federation_rule_matches(
 
 pub(super) fn service_control_applies(
     process_started_at: chrono::DateTime<chrono::Utc>,
-    control: &db::DurableServiceControl,
+    control: &northstar_operations_postgres::admin_commands::DurableServiceControl,
 ) -> bool {
     control
         .fired_at

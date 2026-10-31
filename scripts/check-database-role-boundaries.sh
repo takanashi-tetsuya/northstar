@@ -16,7 +16,7 @@ grant_image="$project_dir/deploy/database-grants.Dockerfile"
 backup_image="$project_dir/deploy/backup.Dockerfile"
 backup_runner="$project_dir/scripts/backup.sh"
 postgres_runner="$project_dir/scripts/run-postgres.py"
-role_attestation="$project_dir/src/db/role_attestation.rs"
+role_attestation="$project_dir/crates/platform/northstar-postgres/src/role_attestation.rs"
 registration_repository="$project_dir/src/db/account_admin_repository.rs"
 admin_dispatch_repository="$project_dir/src/db/admin_dispatch_repository.rs"
 db_module="$project_dir/src/db/mod.rs"
@@ -257,7 +257,7 @@ for capability in northstar_admin_command_issue_delete_cleanup \
     "migration 0111 is missing administrator cleanup capability: $capability"
   require_literal "$grant_apply" "$capability" \
     "runtime SECURITY DEFINER allowlist is missing administrator cleanup capability: $capability"
-  require_module_literal src/db/role_attestation.rs "$capability" \
+  require_module_literal crates/platform/northstar-postgres/src/role_attestation.rs "$capability" \
     "runtime role attestation is missing administrator cleanup capability: $capability"
 done
 require_literal "$compose" 'NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets' \
@@ -494,7 +494,7 @@ require_literal "$init_script" 'CONNECTION LIMIT 64' \
   'fresh init does not bound runtime database connections'
 require_literal "$init_script" 'CONNECTION LIMIT 8' \
   'fresh init does not bound XEP-0133 command database connections'
-require_literal "$main_source" 'db::attest_migrator_role(&pool).await?;' \
+require_literal "$main_source" 'northstar_postgres::role_attestation::attest_migrator_role(&pool)' \
   'migrator command does not attest its database owner identity'
 [[ "$(grep -Fc 'db::migrate_for_domain(&pool, &environment.domain).await?;' "$main_source")" == 1 ]] \
   || fail 'database DDL must have exactly one main-process call site: the explicit migrator command'
@@ -508,27 +508,27 @@ require_literal "$db_module" "northstar-database-role-policy-v1" \
   'migration command uses a different database policy lock key'
 require_literal "$grant_policy" "northstar-database-role-policy-v1" \
   'ACL reconciliation uses a different database policy lock key'
-require_literal "$main_source" 'db::attest_runtime_role(&pool).await?;' \
+require_literal "$main_source" 'northstar_postgres::role_attestation::attest_runtime_role(&pool)' \
   'long-lived server does not attest its runtime database identity'
-require_module_literal src/state.rs 'crate::db::attest_admin_command_role(&command_pool).await?;' \
+require_module_literal src/state.rs 'role_attestation::attest_admin_command_role(&command_pool)' \
   'isolated XEP-0133 command pool does not attest its exact role'
-require_literal "$main_source" 'db::pin_public_application_schema(pool_options)' \
+require_literal "$main_source" 'northstar_postgres::role_attestation::pin_public_application_schema(pool_options)' \
   'production migrator/runtime pools do not override DSN search_path options'
 require_module_literal src/state.rs \
-  'crate::db::pin_public_application_schema(omemo_recovery_pool_options)' \
+  'role_attestation::pin_public_application_schema(omemo_recovery_pool_options)' \
   'isolated OMEMO recovery pool does not inherit the production schema pin'
-require_module_literal src/tools/pie.rs 'crate::db::pin_public_application_schema(pool_options)' \
+require_module_literal src/tools/pie.rs 'northstar_postgres::role_attestation::pin_public_application_schema(pool_options)' \
   'PIE worker pool does not override DSN search_path options'
-require_module_literal src/db/role_attestation.rs \
+require_module_literal crates/platform/northstar-postgres/src/role_attestation.rs \
   "set_config('search_path','public',FALSE)" \
   'production pool schema pin is missing or transaction-local'
-require_module_literal src/db/role_attestation.rs "role.rolname='northstar_runtime'" \
+require_module_literal crates/platform/northstar-postgres/src/role_attestation.rs "role.rolname='northstar_runtime'" \
   'runtime role attestation is not bound to the exact workload identity'
-require_module_literal src/db/role_attestation.rs 'embedded migration ledger contains an unreviewed version gap' \
+require_module_literal crates/platform/northstar-postgres/src/role_attestation.rs 'embedded migration ledger contains an unreviewed version gap' \
   'runtime embedded ledger accepts an unreviewed migration-version gap'
-require_module_literal src/db/role_attestation.rs "session_user=current_user" \
+require_module_literal crates/platform/northstar-postgres/src/role_attestation.rs "session_user=current_user" \
   'database role attestation does not reject SET ROLE identity masquerading'
-require_module_literal src/db/role_attestation.rs "current_schemas(FALSE)=ARRAY['public'::pg_catalog.name]" \
+require_module_literal crates/platform/northstar-postgres/src/role_attestation.rs "current_schemas(FALSE)=ARRAY['public'::pg_catalog.name]" \
   'production role attestation does not pin the exact application schema'
 require_literal "$backup_runner" "current_user='northstar_backup'" \
   'backup does not attest its exact read-only database identity'
@@ -602,7 +602,7 @@ require_literal "$grant_apply" \
 require_literal "$role_runner" \
   'pg_temp.northstar_runtime_relation_manifest expected' \
   'existing-volume role audit does not consume the canonical runtime relation manifest'
-require_module_literal src/db/role_attestation.rs \
+require_module_literal crates/platform/northstar-postgres/src/role_attestation.rs \
   'attest_runtime_relation_capability_manifest(pool).await?' \
   'startup role attestation does not consume the canonical runtime relation manifest'
 if grep -Fq 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public' "$grant_apply"; then
@@ -635,10 +635,10 @@ require_literal "$grant_apply" \
 require_literal "$role_runner" \
   "routine.prorettype<>'pg_catalog.trigger'::pg_catalog.regtype" \
   'runtime role audit must classify trigger-only SECURITY INVOKER helpers as owner-only direct execution'
-require_module_literal src/db/role_attestation.rs \
+require_module_literal crates/platform/northstar-postgres/src/role_attestation.rs \
   "routine.prorettype='pg_catalog.trigger'::pg_catalog.regtype" \
   'startup role attestation must reject runtime direct EXECUTE on trigger-only invoker helpers'
-require_module_literal src/db/role_attestation.rs \
+require_module_literal crates/platform/northstar-postgres/src/role_attestation.rs \
   'trigger-only runtime routine execution' \
   'startup role attestation must describe trigger-only invoker execution drift'
 require_literal "$grant_apply" \
@@ -680,7 +680,7 @@ for capability in northstar_user_register northstar_user_create_bootstrap_admin 
     "migration 0108 is missing typed capability: $capability"
   require_literal "$grant_apply" "$capability" \
     "runtime SECURITY DEFINER allowlist is missing: $capability"
-  require_module_literal src/db/role_attestation.rs "$capability" \
+  require_module_literal crates/platform/northstar-postgres/src/role_attestation.rs "$capability" \
     "runtime role attestation is missing: $capability"
 done
 for capability in northstar_admin_command_create_session \
@@ -692,7 +692,7 @@ for capability in northstar_admin_command_create_session \
     "migration 0108 is missing command-issuer capability: $capability"
   require_literal "$grant_apply" "$capability" \
     "command role allowlist is missing: $capability"
-  require_module_literal src/db/role_attestation.rs "$capability" \
+  require_module_literal crates/platform/northstar-postgres/src/role_attestation.rs "$capability" \
     "command role attestation is missing: $capability"
 done
 for capability in northstar_admin_tls_reload_admit \
@@ -703,7 +703,7 @@ for capability in northstar_admin_tls_reload_admit \
     "command role allowlist is missing TLS reload capability: $capability"
   [[ "$(grep -Fc -- "$capability" "$grant_apply")" == "3" ]] ||
     fail "TLS reload capability must appear in grant and both exact role audits: $capability"
-  require_module_literal src/db/role_attestation.rs "$capability" \
+  require_module_literal crates/platform/northstar-postgres/src/role_attestation.rs "$capability" \
     "command role attestation is missing TLS reload capability: $capability"
 done
 for capability in northstar_admin_panic_disconnect_admit \
@@ -714,7 +714,7 @@ for capability in northstar_admin_panic_disconnect_admit \
     "command role allowlist is missing panic-disconnect capability: $capability"
   [[ "$(grep -Fc -- "$capability" "$grant_apply")" == "3" ]] ||
     fail "panic-disconnect capability must appear in grant and both exact role audits: $capability"
-  require_module_literal src/db/role_attestation.rs "$capability" \
+  require_module_literal crates/platform/northstar-postgres/src/role_attestation.rs "$capability" \
     "command role attestation is missing panic-disconnect capability: $capability"
 done
 for capability in northstar_admin_registration_admit \
@@ -725,7 +725,7 @@ for capability in northstar_admin_registration_admit \
     "command role allowlist is missing registration capability: $capability"
   [[ "$(grep -Fc -- "$capability" "$grant_apply")" == "3" ]] ||
     fail "registration capability must appear in grant and both exact role audits: $capability"
-  require_module_literal src/db/role_attestation.rs "$capability" \
+  require_module_literal crates/platform/northstar-postgres/src/role_attestation.rs "$capability" \
     "command role attestation is missing registration capability: $capability"
 done
 require_literal "$registration_repository" 'northstar_operations_postgres::api_control::AdminCommandRoute::Registration,' \

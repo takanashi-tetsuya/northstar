@@ -216,7 +216,7 @@ pub(crate) async fn run_maintenance() -> Result<()> {
     let options = if config.database_allow_unsafe_role_for_development {
         options
     } else {
-        db::pin_public_application_schema(options)
+        northstar_postgres::role_attestation::pin_public_application_schema(options)
     };
     let connect_options = PgConnectOptions::from_str(&url)
         .map_err(|_| anyhow::anyhow!("invalid maintenance PostgreSQL URL"))?
@@ -231,9 +231,10 @@ pub(crate) async fn run_maintenance() -> Result<()> {
         .await
         .context("maintenance PostgreSQL connection failed")?;
     if config.database_allow_unsafe_role_for_development {
-        db::attest_development_database_is_loopback(&pool).await?;
+        northstar_postgres::role_attestation::attest_development_database_is_loopback(&pool)
+            .await?;
     } else {
-        db::attest_runtime_role(&pool).await?;
+        northstar_postgres::role_attestation::attest_runtime_role(&pool).await?;
     }
     db::verify_schema(&pool, &config.xmpp_domain)
         .await

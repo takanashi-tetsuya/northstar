@@ -73,11 +73,15 @@ impl PresenceRepository for PostgresPresenceRepository {
     }
 
     async fn claim_service_messages(&self, user_id: Uuid) -> Result<Vec<ServiceMessageClaim>> {
-        Ok(db::claim_admin_service_messages(&self.pool, user_id)
+        Ok(
+            northstar_operations_postgres::admin_commands::claim_admin_service_messages(
+                &self.pool, user_id,
+            )
             .await?
             .into_iter()
             .map(ServiceMessageClaim::from_lease)
-            .collect())
+            .collect(),
+        )
     }
 
     async fn complete_service_message_claim(
@@ -85,7 +89,12 @@ impl PresenceRepository for PostgresPresenceRepository {
         user_id: Uuid,
         claim: &ServiceMessageClaim,
     ) -> Result<bool> {
-        db::complete_admin_service_message_claim(&self.pool, user_id, claim.lease()).await
+        northstar_operations_postgres::admin_commands::complete_admin_service_message_claim(
+            &self.pool,
+            user_id,
+            claim.lease(),
+        )
+        .await
     }
 
     async fn transition_remote_with_outbox(

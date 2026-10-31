@@ -55,7 +55,7 @@ rejectsMutation('subscription cleanup cannot silently increase batch size', 'sub
 rejectsMutation('readiness also requires worker health', 'subservers', 'workers.readiness_error().is_none()', 'true', /bounded local authority/);
 rejectsMutation('reap health connections on cancellation', 'subservers', 'connections.shutdown().await', 'drop(connections)', /bounded local authority/);
 rejectsMutation('reject raw health error disclosure', 'subservers', 'let permits =', 'let detail = error.to_string();\nlet permits =', /failure details/);
-rejectsMutation('keep runtime role attestation', 'subservers', 'db::attest_runtime_role(&pool)', 'skip_attestation(&pool)', /startup\/shutdown/);
+rejectsMutation('keep runtime role attestation', 'subservers', 'northstar_postgres::role_attestation::attest_runtime_role(&pool)', 'skip_attestation(&pool)', /startup\/shutdown/);
 rejectsMutation('close the exact advisory-lock session on early return', 'maintenanceOwnership', 'connection.close_on_drop()', 'connection.flush()', /physical session/);
 rejectsMutation('probe the exact ownership connection', 'maintenanceOwnership', 'execute(&mut **connection)', 'execute(&pool)', /physical session/);
 rejectsMutation('maintenance probes its reserved connection', 'subservers', 'probe_exact(&mut ownership)', 'probe_exact(&mut pool)', /physical session/);

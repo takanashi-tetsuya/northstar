@@ -271,3 +271,12 @@ pub enum InboundRemotePresenceEffect {
     /// RFC 6121 says this transition has no effect in the current state.
     Suppressed,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServiceMessageDeliveryClaim {
+    pub kind: String,
+    pub body: String,
+    pub revision: Uuid,
+    pub delivery_date: chrono::NaiveDate,
+    pub claim_id: Uuid,
+}

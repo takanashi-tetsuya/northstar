@@ -4,12 +4,11 @@ use super::{
     report_runtime_control_health, service_control_applies, AppState, FederationWritePolicy,
     RuntimeControlDiagnostics, RuntimeControlPhase, RuntimeFederationPolicy,
 };
-use crate::{
-    db::runtime_control_repository::PostgresRuntimeControlRepository, s2s::S2sOutboundClearance,
-};
+use crate::s2s::S2sOutboundClearance;
 use anyhow::Result;
 use arc_swap::ArcSwap;
 use northstar_operations_application::runtime_control::RuntimeControlService;
+use northstar_operations_postgres::runtime_control_repository::PostgresRuntimeControlRepository;
 use northstar_runtime::workers::WorkerHeartbeat;
 use sqlx::{pool::PoolConnection, Postgres};
 use std::{

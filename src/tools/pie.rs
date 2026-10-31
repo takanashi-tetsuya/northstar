@@ -131,18 +131,19 @@ pub async fn run(config: &Config, arguments: &[String]) -> Result<()> {
     let pool_options = if config.database_allow_unsafe_role_for_development {
         pool_options
     } else {
-        crate::db::pin_public_application_schema(pool_options)
+        northstar_postgres::role_attestation::pin_public_application_schema(pool_options)
     };
     let pool = pool_options
         .connect(database_url.as_str())
         .await
         .context("PIE could not connect to PostgreSQL")?;
     if config.database_allow_unsafe_role_for_development {
-        crate::db::attest_development_database_is_loopback(&pool).await?;
+        northstar_postgres::role_attestation::attest_development_database_is_loopback(&pool)
+            .await?;
     } else if import_uses_migrator {
-        crate::db::attest_migrator_role(&pool).await?;
+        northstar_postgres::role_attestation::attest_migrator_role(&pool).await?;
     } else {
-        crate::db::attest_runtime_role(&pool).await?;
+        northstar_postgres::role_attestation::attest_runtime_role(&pool).await?;
     }
     assert_schema_ready(&pool).await?;
     match command {

@@ -47,7 +47,7 @@ impl Request<'_> {
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn administrative_dispatch_preserves_intents_replay_and_atomic_side_records() {
-    let pool = db::test_support::operation_mutation_pool().await;
+    let pool = crate::db::test_support::operation_mutation_pool().await;
     // The fixture runs these tests serially. Prior cases may retain active
     // singleton controls; their immutable audit history stays in this schema.
     sqlx::query("DELETE FROM api_muc_destroy_intents")

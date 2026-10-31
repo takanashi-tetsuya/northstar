@@ -116,9 +116,11 @@ async fn assert_unretained(pool: &PgPool, request_id: Uuid) {
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn registration_command_repository_commits_200_and_replays_without_reapplying_policy() {
     let (pool, _, actor, session) = fixture().await;
-    db::initialize_admin_runtime_settings(&pool, false, false, false)
-        .await
-        .unwrap();
+    northstar_operations_postgres::admin_commands::initialize_admin_runtime_settings(
+        &pool, false, false, false,
+    )
+    .await
+    .unwrap();
     sqlx::query(
         "INSERT INTO admin_runtime_settings(key,enabled)
          VALUES('registration_closed',FALSE)

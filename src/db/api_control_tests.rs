@@ -1182,9 +1182,11 @@ async fn concurrent_register_and_login_execute_once_per_idempotency_key() {
         .await
         .unwrap();
     crate::db::migrate(&pool).await.unwrap();
-    crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
-        .await
-        .unwrap();
+    northstar_operations_postgres::admin_commands::initialize_admin_runtime_settings(
+        &pool, false, false, false,
+    )
+    .await
+    .unwrap();
 
     let suffix = Uuid::new_v4().simple().to_string();
     let username = format!("idem{}", &suffix[..10]);
@@ -1691,9 +1693,11 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
         .await
         .unwrap();
     crate::db::migrate(&pool).await.unwrap();
-    crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
-        .await
-        .unwrap();
+    northstar_operations_postgres::admin_commands::initialize_admin_runtime_settings(
+        &pool, false, false, false,
+    )
+    .await
+    .unwrap();
     // A prior test may deliberately remove this fail-closed row.
     sqlx::query(
         "INSERT INTO admin_runtime_settings(key,enabled)

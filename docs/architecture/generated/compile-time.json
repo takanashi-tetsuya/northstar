@@ -3041,6 +3041,10 @@
     ],
     [
       "northstar-operations-postgres",
+      "northstar-roster-core"
+    ],
+    [
+      "northstar-operations-postgres",
       "northstar-xmpp-types"
     ],
     [
@@ -3078,6 +3082,10 @@
     [
       "northstar-operations-postgres",
       "thiserror"
+    ],
+    [
+      "northstar-operations-postgres",
+      "tokio"
     ],
     [
       "northstar-operations-postgres",
@@ -3370,6 +3378,10 @@
     [
       "northstar-roster-application",
       "uuid"
+    ],
+    [
+      "northstar-roster-core",
+      "chrono"
     ],
     [
       "northstar-roster-core",

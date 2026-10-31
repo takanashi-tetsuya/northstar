@@ -383,9 +383,11 @@ async fn concurrent_registration_cannot_exceed_the_global_hourly_limit() {
         .await
         .unwrap();
     crate::db::migrate(&pool).await.unwrap();
-    crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
-        .await
-        .unwrap();
+    northstar_operations_postgres::admin_commands::initialize_admin_runtime_settings(
+        &pool, false, false, false,
+    )
+    .await
+    .unwrap();
 
     let existing = registrations_last_hour(&pool).await.unwrap();
     let limit = u32::try_from(existing + 2).unwrap();
@@ -446,9 +448,11 @@ async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_a
         .await
         .unwrap();
     crate::db::migrate(&pool).await.unwrap();
-    crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
-        .await
-        .unwrap();
+    northstar_operations_postgres::admin_commands::initialize_admin_runtime_settings(
+        &pool, false, false, false,
+    )
+    .await
+    .unwrap();
 
     let guard = std::sync::Arc::new(crate::db::abuse_effects::persistent_guard(
         AbuseConfig {

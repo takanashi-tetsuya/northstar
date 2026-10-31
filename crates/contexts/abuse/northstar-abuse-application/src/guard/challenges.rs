@@ -34,7 +34,7 @@ impl AbuseGuard {
         groups
     }
 
-    pub(super) fn challenge_issue_groups(
+    pub fn challenge_issue_groups(
         &self,
         action: AbuseAction,
         actors: &[String],
@@ -301,7 +301,7 @@ impl AbuseGuard {
         })
     }
 
-    pub(super) fn challenge_issue_limit(&self, action: AbuseAction) -> usize {
+    pub fn challenge_issue_limit(&self, action: AbuseAction) -> usize {
         match action {
             // The bundled capable client intentionally prefetches a one-use
             // challenge for each outgoing stanza. Do not punish that normal

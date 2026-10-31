@@ -1,18 +1,16 @@
 use super::{Action, ProtocolSession};
 use crate::services::xml_util::*;
-use crate::xmpp::xml_builder::XmlElement;
-use crate::{
-    services::abuse::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement},
-    services::{
-        account::{
-            DeletionQuiesceOutcome, DeletionQuiesceRequest, PasswordChangeOutcome,
-            PasswordChangeRequest, RegistrationOutcome, RegistrationRequest,
-        },
-        push::{PushEnableOutcome, PushResponseKind, PushResponseOutcome},
-        sm::{BindingFinalizationOutcome, BindingReservationOutcome},
+use crate::services::{
+    account::{
+        DeletionQuiesceOutcome, DeletionQuiesceRequest, PasswordChangeOutcome,
+        PasswordChangeRequest, RegistrationOutcome, RegistrationRequest,
     },
+    push::{PushEnableOutcome, PushResponseKind, PushResponseOutcome},
+    sm::{BindingFinalizationOutcome, BindingReservationOutcome},
 };
+use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
+use northstar_abuse_policy::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement};
 use northstar_auth_core as auth;
 use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::Node;
@@ -284,12 +282,14 @@ impl ProtocolSession {
                 let challenge = match self
                     .state
                     .challenge_issue_service()
-                    .issue(crate::services::challenge_issuance::ChallengeIssueRequest {
-                        action: AbuseAction::Registration,
-                        subject: &subject,
-                        actors: &actors,
-                        intent: Some(&intent),
-                    })
+                    .issue(
+                        northstar_abuse_application::challenge::ChallengeIssueRequest {
+                            action: AbuseAction::Registration,
+                            subject: &subject,
+                            actors: &actors,
+                            intent: Some(&intent),
+                        },
+                    )
                     .await
                 {
                     Ok(challenge) => Some(challenge),
@@ -369,7 +369,7 @@ impl ProtocolSession {
             format!("behavior:{}", user.id),
         ];
         let subject = format!("password_change:{}", user.id);
-        let intent = crate::services::abuse::PowIntent::xmpp(
+        let intent = northstar_abuse_policy::PowIntent::xmpp(
             AbuseAction::PasswordChange,
             "/xmpp/password-change",
             powless_query.as_bytes(),
@@ -443,7 +443,7 @@ impl ProtocolSession {
             format!("user:{}", user.id),
             format!("behavior:{}", user.id),
         ];
-        let intent = crate::services::abuse::PowIntent::xmpp(
+        let intent = northstar_abuse_policy::PowIntent::xmpp(
             AbuseAction::PasswordChange,
             "/xmpp/account-remove",
             powless_query.as_bytes(),

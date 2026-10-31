@@ -131,7 +131,7 @@ where
 
 pub(crate) async fn continue_prepared_local_direct<'live, A, P, F>(
     applied: AppliedLocalDirect<'live>,
-    lease: &mut Option<crate::services::abuse::MessageAdmissionLease>,
+    lease: &mut Option<northstar_abuse_application::guard::MessageAdmissionLease>,
     admission: &MessageAdmissionService<A>,
     route: &P,
     enter_followup: F,

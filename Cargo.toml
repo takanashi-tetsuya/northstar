@@ -1,6 +1,7 @@
 [workspace]
 members = [
     ".",
+    "crates/contexts/abuse/northstar-abuse-application",
     "crates/contexts/abuse/northstar-abuse-policy",
     "crates/kernel/northstar-xep-core",
     "crates/kernel/northstar-xep-catalog",
@@ -94,6 +95,7 @@ readme = "README.md"
 publish = false
 
 [dependencies]
+northstar-abuse-application = { path = "crates/contexts/abuse/northstar-abuse-application" }
 northstar-abuse-policy = { path = "crates/contexts/abuse/northstar-abuse-policy" }
 anyhow = "1.0"
 argon2 = "0.5"
@@ -207,6 +209,7 @@ webauthn-rs = { version = "0.5.5", default-features = false, features = ["danger
 openssl = { version = "0.10.81", features = ["vendored"] }
 
 [dev-dependencies]
+northstar-abuse-application = { path = "crates/contexts/abuse/northstar-abuse-application", features = ["test-support"] }
 northstar-abuse-policy = { path = "crates/contexts/abuse/northstar-abuse-policy", features = ["test-support"] }
 northstar-runtime = { path = "crates/platform/northstar-runtime", features = ["test-support"] }
 northstar-pubsub-postgres = { path = "crates/contexts/pubsub/northstar-pubsub-postgres", features = ["test-support"] }

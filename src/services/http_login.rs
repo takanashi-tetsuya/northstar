@@ -1,8 +1,8 @@
 //! REST login application port. Transport builds the canonical request identity;
 //! persistence owns the guard, credential verification, and session transaction.
-use crate::services::abuse::{GuardError, PowIntent, PowProof};
 use crate::services::api_mutations::{IdempotencyRequest, IdempotentResponse, StoredApiResponse};
 use anyhow::Result;
+use northstar_abuse_policy::{GuardError, PowIntent, PowProof};
 
 /// Narrow instrumentation capability for verifier-integrity events that must
 /// be counted at detection, even if a later transaction cannot commit.

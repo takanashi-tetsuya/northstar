@@ -1,8 +1,7 @@
-use crate::services::abuse::{
-    AbuseAction, AbuseGuard, GuardError, PowProof, TransactionalGuardOutcome,
-};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use northstar_abuse_application::guard::{AbuseGuard, TransactionalGuardOutcome};
+use northstar_abuse_policy::{AbuseAction, GuardError, PowProof};
 use northstar_auth_core as auth;
 use northstar_config::Config;
 use serde::Serialize;
@@ -727,7 +726,7 @@ pub async fn begin_account_deletion_quiesce_guarded_v2(
     subject: &str,
     actors: &[String],
     proof: Option<&PowProof>,
-    intent: &crate::services::abuse::PowIntent,
+    intent: &northstar_abuse_policy::PowIntent,
     user_id: Uuid,
     expected_auth_generation: i64,
 ) -> Result<std::result::Result<bool, GuardError>> {

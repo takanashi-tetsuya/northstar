@@ -182,11 +182,7 @@ use crate::api::contexts::{
     RegistrationAdminContext, ReportContext, ReportModerationContext, RetentionPolicyContext,
     SessionAdminContext, UploadAdminContext, UploadService,
 };
-use crate::{
-    db,
-    s2s::FederationRouter,
-    services::abuse::{AbuseConfig, AbuseGuard},
-};
+use crate::{db, s2s::FederationRouter};
 use anyhow::Context;
 use dashmap::DashMap;
 use hickory_resolver::{
@@ -195,6 +191,8 @@ use hickory_resolver::{
     system_conf::read_system_conf,
     TokioResolver,
 };
+use northstar_abuse_application::guard::AbuseGuard;
+use northstar_abuse_policy::AbuseConfig;
 use northstar_config::{
     AdminCommandPoolMode, Config, StoragePoolMode, OMEMO_RECOVERY_POOL_MAX_CONNECTIONS,
     SERVICE_CONTROL_POOL_MAX_CONNECTIONS, STORAGE_POOL_MAX_CONNECTIONS,
@@ -467,23 +465,24 @@ pub struct AppState {
     s2s_connection_attempts: Arc<Semaphore>,
     component_connections: Arc<Semaphore>,
     connection_actors: northstar_runtime::connection_actors::ConnectionActorRegistry,
-    challenge_issue_service: crate::services::challenge_issuance::ChallengeIssueService<
+    challenge_issue_service: northstar_abuse_application::challenge::ChallengeIssueService<
         db::challenge_issuance_repository::PostgresChallengeRepository,
     >,
-    challenge_cleanup_service: crate::services::challenge_issuance::ChallengeCleanupService<
+    challenge_cleanup_service: northstar_abuse_application::challenge::ChallengeCleanupService<
         db::challenge_issuance_repository::PostgresChallengeRepository,
     >,
-    sasl_login_abuse_service: crate::services::login_abuse::SaslLoginAbuseService<
+    sasl_login_abuse_service: northstar_abuse_application::login::SaslLoginAbuseService<
         db::login_abuse_repository::PostgresSaslLoginAbuseRepository,
     >,
     passkey_login_abuse_service: Arc<
-        crate::services::login_abuse::PasskeyLoginAbuseService<
+        northstar_abuse_application::login::PasskeyLoginAbuseService<
             db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository,
         >,
     >,
     /// Public, irreversible key IDs and the configured generation used by the
     /// readiness path to detect a node that drifted from PostgreSQL authority.
-    abuse_key_deployment: Option<crate::services::abuse::records::AbuseKeyDeploymentIdentity>,
+    abuse_key_deployment:
+        Option<northstar_abuse_application::guard::records::AbuseKeyDeploymentIdentity>,
     started_at: Instant,
     process_started_at: chrono::DateTime<chrono::Utc>,
     tls_context: northstar_security::tls::TlsContext,

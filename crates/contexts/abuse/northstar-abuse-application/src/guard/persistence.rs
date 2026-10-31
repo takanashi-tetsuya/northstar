@@ -148,7 +148,7 @@ impl std::fmt::Debug for MessageAdmissionLease {
 }
 
 impl MessageAdmissionLease {
-    pub(crate) fn new(
+    pub fn new(
         admission_key: Vec<u8>,
         payload_mac: Vec<u8>,
         lease_token: Uuid,
@@ -162,7 +162,7 @@ impl MessageAdmissionLease {
         }
     }
 
-    pub(crate) fn acceptance(&self) -> MessageAdmissionAcceptance<'_> {
+    pub fn acceptance(&self) -> MessageAdmissionAcceptance<'_> {
         MessageAdmissionAcceptance {
             admission_key: &self.admission_key,
             payload_mac: &self.payload_mac,
@@ -172,15 +172,15 @@ impl MessageAdmissionLease {
 }
 
 impl MessageAdmissionAcceptance<'_> {
-    pub(crate) fn admission_key(&self) -> &[u8] {
+    pub fn admission_key(&self) -> &[u8] {
         self.admission_key
     }
 
-    pub(crate) fn payload_mac(&self) -> &[u8] {
+    pub fn payload_mac(&self) -> &[u8] {
         self.payload_mac
     }
 
-    pub(crate) fn lease_token(&self) -> Uuid {
+    pub fn lease_token(&self) -> Uuid {
         self.lease_token
     }
 }
@@ -274,7 +274,7 @@ impl AbuseGuard {
         }
     }
 
-    pub(crate) fn current_requirement_decision(
+    pub fn current_requirement_decision(
         &self,
         action: AbuseAction,
         actors: &[String],
@@ -287,7 +287,7 @@ impl AbuseGuard {
         requirement_from_db(action, states, &shared_ip_keys, now, &self.config)
     }
 
-    pub(crate) fn record_failure_decision(
+    pub fn record_failure_decision(
         &self,
         action: AbuseAction,
         actors: &[String],
@@ -306,7 +306,7 @@ impl AbuseGuard {
         actors: &[String],
         intent: Option<&PowIntent>,
     ) -> anyhow::Result<PowChallenge> {
-        use crate::services::abuse::records::{IssueRecord, IssueRequest};
+        use super::records::{IssueRecord, IssueRequest};
 
         let persistence = self.persistence.as_ref().expect("persistent abuse storage");
         let _db_state_gates = self.acquire_db_state_gates(action, actors).await;
@@ -479,14 +479,14 @@ impl AbuseGuard {
             .await
     }
 
-    pub(crate) fn decide_persistent_verification(
+    pub fn decide_persistent_verification(
         &self,
         input: PersistentVerificationInput<'_>,
         states: &mut [DbActorState],
         now: chrono::DateTime<chrono::Utc>,
-        challenge: Option<crate::services::abuse::records::ConsumedChallenge>,
-    ) -> anyhow::Result<crate::services::abuse::records::VerificationDecision> {
-        use crate::services::abuse::records::VerificationDecision;
+        challenge: Option<super::records::ConsumedChallenge>,
+    ) -> anyhow::Result<super::records::VerificationDecision> {
+        use super::records::VerificationDecision;
         let PersistentVerificationInput {
             action,
             subject,
@@ -681,7 +681,7 @@ impl AbuseGuard {
         })
     }
 
-    pub(crate) async fn cleanup_challenges(&self) -> anyhow::Result<()> {
+    pub async fn cleanup_challenges(&self) -> anyhow::Result<()> {
         if let Some(persistence) = self.persistence.as_ref() {
             let stale_seconds = self
                 .config

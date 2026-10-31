@@ -184,7 +184,7 @@ impl AppState {
         // every Redis/non-loopback deployment, participate in DB authority.
         let abuse_key_deployment = config.abuse_state_hmac_key_file.as_ref().map(|_| {
             let (current_key_id, previous_key_id) = abuse.deployment_key_ids();
-            crate::services::abuse::records::AbuseKeyDeploymentIdentity {
+            northstar_abuse_application::guard::records::AbuseKeyDeploymentIdentity {
                 xmpp_domain: config.domain.clone(),
                 epoch: config.abuse_state_hmac_key_epoch,
                 current_key_id: current_key_id.to_owned(),
@@ -947,24 +947,25 @@ impl AppState {
             component_connections,
             connection_actors,
             challenge_issue_service:
-                crate::services::challenge_issuance::ChallengeIssueService::new(
+                northstar_abuse_application::challenge::ChallengeIssueService::new(
                     db::challenge_issuance_repository::PostgresChallengeRepository::new(
                         Arc::clone(&abuse),
                     ),
                 ),
             challenge_cleanup_service:
-                crate::services::challenge_issuance::ChallengeCleanupService::new(
+                northstar_abuse_application::challenge::ChallengeCleanupService::new(
                     db::challenge_issuance_repository::PostgresChallengeRepository::new(
                         Arc::clone(&abuse),
                     ),
                 ),
-            sasl_login_abuse_service: crate::services::login_abuse::SaslLoginAbuseService::new(
-                db::login_abuse_repository::PostgresSaslLoginAbuseRepository::new(Arc::clone(
-                    &abuse,
-                )),
-            ),
+            sasl_login_abuse_service:
+                northstar_abuse_application::login::SaslLoginAbuseService::new(
+                    db::login_abuse_repository::PostgresSaslLoginAbuseRepository::new(Arc::clone(
+                        &abuse,
+                    )),
+                ),
             passkey_login_abuse_service: Arc::new(
-                crate::services::login_abuse::PasskeyLoginAbuseService::new(
+                northstar_abuse_application::login::PasskeyLoginAbuseService::new(
                     db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository::new(
                         Arc::clone(&abuse),
                     ),

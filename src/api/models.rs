@@ -1,5 +1,5 @@
-use crate::services::abuse::{AbuseAction, PowIntent, PowIntentRequest, PowProof};
 use chrono::{DateTime, Utc};
+use northstar_abuse_policy::{AbuseAction, PowIntent, PowIntentRequest, PowProof};
 use serde::Deserialize;
 use zeroize::Zeroize;
 

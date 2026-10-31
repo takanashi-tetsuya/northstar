@@ -1827,6 +1827,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-abuse-application"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "dashmap",
+ "hmac",
+ "northstar-abuse-policy",
+ "northstar-xmpp-types",
+ "rand 0.8.7",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tokio",
+ "tracing",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "northstar-abuse-policy"
 version = "0.1.0"
 dependencies = [
@@ -3411,6 +3432,7 @@ dependencies = [
  "hmac",
  "idna",
  "libc",
+ "northstar-abuse-application",
  "northstar-abuse-policy",
  "northstar-archive-application",
  "northstar-archive-core",

@@ -109,8 +109,8 @@ pub(crate) struct UserMutationAdmission<'a> {
     pub(crate) idempotency: IdempotencyRequest<'a>,
     pub(crate) subject: &'a str,
     pub(crate) actors: &'a [String],
-    pub(crate) proof: Option<&'a crate::services::abuse::PowProof>,
-    pub(crate) intent: &'a crate::services::abuse::PowIntent,
+    pub(crate) proof: Option<&'a northstar_abuse_policy::PowProof>,
+    pub(crate) intent: &'a northstar_abuse_policy::PowIntent,
 }
 
 pub(crate) fn error_response(
@@ -124,7 +124,7 @@ pub(crate) fn error_response(
     )
 }
 pub(crate) fn guard_denial_response(
-    error: crate::services::abuse::GuardError,
+    error: northstar_abuse_policy::GuardError,
 ) -> anyhow::Result<StoredApiResponse> {
     let requirement = error.requirement();
     let retry_after = requirement

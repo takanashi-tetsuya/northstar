@@ -168,7 +168,7 @@ impl ProtocolSession {
                     // Fail closed before routing/archive. A backend failure may
                     // leave this admission or a separate guard transaction
                     // unconfirmed; it does not prove rollback or permit retry.
-                    if crate::services::abuse::is_abuse_state_busy(&error) {
+                    if northstar_abuse_application::guard::is_abuse_state_busy(&error) {
                         tracing::warn!(user_id = %user.id, "message anti-abuse actor state was busy; rejected without waiting on a database connection lock");
                         self.state.personal_message_telemetry().rate_limited();
                         return Ok(message_error(root, "wait", "resource-constraint"));

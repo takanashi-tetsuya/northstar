@@ -275,8 +275,8 @@ impl Bridge {
         let service = MixService::new_with_outbox_database_admission(
             repository.clone(),
             configured_domain,
-            crate::services::abuse::test_mix_message_content_keyring(),
-            crate::services::abuse::test_mix_retraction_content_keyring(),
+            northstar_abuse_application::guard::test_mix_message_content_keyring(),
+            northstar_abuse_application::guard::test_mix_retraction_content_keyring(),
             northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(4),
             "stage4_supplied".into(),
         )?;

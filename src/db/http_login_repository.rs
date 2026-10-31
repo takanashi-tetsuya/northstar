@@ -2,7 +2,6 @@
 //! session publication. Password work occurs outside SQL transactions.
 use crate::{
     db,
-    services::abuse::{AbuseAction, AbuseGuard, TransactionalGuardOutcome},
     services::{
         api_mutations::{json_replay_headers, StoredApiResponse},
         http_login::{
@@ -12,6 +11,8 @@ use crate::{
     },
 };
 use anyhow::{anyhow, Result};
+use northstar_abuse_application::guard::{AbuseGuard, TransactionalGuardOutcome};
+use northstar_abuse_policy::AbuseAction;
 use northstar_auth_core as auth;
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Transaction};
@@ -186,7 +187,7 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
                     }
                     guard_tx.commit().await?;
                     return Ok(Outcome::AbuseDenied(
-                        crate::services::abuse::GuardError::Required(requirement),
+                        northstar_abuse_policy::GuardError::Required(requirement),
                     ));
                 }
                 match db::abuse_transaction_repository::verify_in_tx(

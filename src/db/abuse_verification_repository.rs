@@ -1,18 +1,16 @@
 //! One-use PoW consumption under the same transaction as actor state and the
 //! protected business operation.
 
+use crate::db::abuse_actor_state_repository::{lock_db_states, persist_db_states};
 use crate::services::message_admission::witness::commit_observed;
-use crate::{
-    db::abuse_actor_state_repository::{lock_db_states, persist_db_states},
-    services::abuse::{
-        records::{ConsumedChallenge, DbActorState, VerificationDecision},
-        GuardError, WorkRequirement,
-    },
-};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use northstar_abuse_application::guard::records::{
+    ConsumedChallenge, DbActorState, VerificationDecision,
+};
 use northstar_abuse_policy::admission_execution::AdmissionCommitObserver;
 use northstar_abuse_policy::admission_execution::{CommitFact, GuardDecision, TransactionScope};
+use northstar_abuse_policy::{GuardError, WorkRequirement};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 

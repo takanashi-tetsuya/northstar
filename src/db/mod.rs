@@ -28,6 +28,8 @@ pub(crate) use northstar_postgres::MIGRATOR;
 
 pub(crate) mod abuse_actor_state_repository;
 pub(crate) mod abuse_challenge_issuance_repository;
+#[cfg(test)]
+mod abuse_guard_tests;
 pub mod abuse_keys;
 pub(crate) mod abuse_persistence_repository;
 pub(crate) mod abuse_transaction_repository;

@@ -146,8 +146,8 @@ async fn outbox_db_admission_gate_is_clone_shared_and_fifo() {
     // therefore gives this outbox gate exactly one FIFO permit.
     let service = MixService::new(
         crate::db::mix_repository::PostgresMixRepository::new(pool),
-        crate::services::abuse::test_mix_message_content_keyring(),
-        crate::services::abuse::test_mix_retraction_content_keyring(),
+        northstar_abuse_application::guard::test_mix_message_content_keyring(),
+        northstar_abuse_application::guard::test_mix_retraction_content_keyring(),
         2,
         "public".to_owned(),
     )
@@ -195,8 +195,8 @@ async fn outbox_db_admission_permits_match_the_service_budget() {
         .expect("a lazy test pool does not connect");
     let service = MixService::new(
         crate::db::mix_repository::PostgresMixRepository::new(pool),
-        crate::services::abuse::test_mix_message_content_keyring(),
-        crate::services::abuse::test_mix_retraction_content_keyring(),
+        northstar_abuse_application::guard::test_mix_message_content_keyring(),
+        northstar_abuse_application::guard::test_mix_retraction_content_keyring(),
         3,
         "public".to_owned(),
     )

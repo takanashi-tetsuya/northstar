@@ -287,7 +287,7 @@ impl AppState {
 
     pub(crate) fn abuse_key_deployment(
         &self,
-    ) -> Option<&crate::services::abuse::records::AbuseKeyDeploymentIdentity> {
+    ) -> Option<&northstar_abuse_application::guard::records::AbuseKeyDeploymentIdentity> {
         self.abuse_key_deployment.as_ref()
     }
 

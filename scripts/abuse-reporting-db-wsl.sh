@@ -13,10 +13,10 @@ export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PG
 scope="${ABUSE_REPORTING_TEST_SCOPE:-all}"
 if [[ "$scope" != "reports" && "$scope" != "atomic" && "$scope" != "legacy" ]]; then
   cargo test --locked --offline \
-    abuse::tests::postgres_challenges_are_one_use_restart_safe_and_deidentified \
+    abuse_guard_tests::postgres_challenges_are_one_use_restart_safe_and_deidentified \
     -- --ignored --nocapture
   cargo test --locked --offline \
-    abuse::tests::postgres_accepts_one_thousand_independent_actor_decisions \
+    abuse_guard_tests::postgres_accepts_one_thousand_independent_actor_decisions \
     -- --ignored --nocapture
 fi
 if [[ "$scope" != "abuse" && "$scope" != "atomic" ]]; then

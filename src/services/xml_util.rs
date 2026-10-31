@@ -1,6 +1,6 @@
-use crate::services::abuse::WorkRequirement;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use hmac::{Hmac, Mac};
+use northstar_abuse_policy::WorkRequirement;
 use northstar_xml_builder::stanza::stanza_condition_element;
 pub(crate) use northstar_xml_builder::stanza::{
     blocked_stanza_error, child_text, iq_error, iq_error_from, iq_error_to, iq_result,

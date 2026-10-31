@@ -4,12 +4,12 @@ use super::super::{
 };
 use super::*;
 use crate::{
-    services::abuse::{MessageAdmissionLease, MessageAdmissionStart},
     services::message_admission::continuation_fixture::{
         self as admission_fixture, Admission, Events, FinalizeCut,
     },
     xmpp::outbound::{OutboundSender, RouteEnqueue, RouteSendError},
 };
+use northstar_abuse_application::guard::{MessageAdmissionLease, MessageAdmissionStart};
 use northstar_delivery_core::DurableDelivery;
 use northstar_message_application::{
     direct_lifecycle::{OriginalAdmission, TerminalReason},

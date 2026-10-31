@@ -434,7 +434,7 @@ async fn capacity_lock_contention_fails_fast_without_starving_pool() {
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn failed_login_penalty_and_replay_are_one_transaction() {
-    use crate::services::abuse::{AbuseAction, AbuseConfig, AbuseGuard};
+    use northstar_abuse_policy::{AbuseAction, AbuseConfig};
     use std::time::Duration;
 
     let url = std::env::var("TEST_DATABASE_URL")
@@ -447,7 +447,7 @@ async fn failed_login_penalty_and_replay_are_one_transaction() {
     crate::db::migrate(&pool).await.unwrap();
 
     let keys = ApiControlKeyring::new(b"login-idempotency-secret-0000000001", None).unwrap();
-    let guard = AbuseGuard::new_persistent(
+    let guard = crate::db::abuse_persistence_repository::persistent_guard(
         AbuseConfig {
             base_work_factor: 2,
             max_work_factor: 1_000_000,

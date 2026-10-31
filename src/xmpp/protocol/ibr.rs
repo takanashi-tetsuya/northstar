@@ -1,11 +1,9 @@
 use super::{Action, ProtocolSession};
+use crate::services::account::{RegistrationOutcome, RegistrationRequest};
 use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
-use crate::{
-    services::abuse::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement},
-    services::account::{RegistrationOutcome, RegistrationRequest},
-};
 use anyhow::Result;
+use northstar_abuse_policy::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement};
 use roxmltree::Node;
 use zeroize::Zeroize;
 
@@ -355,12 +353,14 @@ impl ProtocolSession {
                 match self
                     .state
                     .challenge_issue_service()
-                    .issue(crate::services::challenge_issuance::ChallengeIssueRequest {
-                        action: AbuseAction::Registration,
-                        subject: &subject,
-                        actors: &actors,
-                        intent: Some(&intent),
-                    })
+                    .issue(
+                        northstar_abuse_application::challenge::ChallengeIssueRequest {
+                            action: AbuseAction::Registration,
+                            subject: &subject,
+                            actors: &actors,
+                            intent: Some(&intent),
+                        },
+                    )
                     .await
                 {
                     Ok(challenge) => {

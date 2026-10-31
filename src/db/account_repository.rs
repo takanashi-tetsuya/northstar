@@ -1,6 +1,7 @@
 //! Atomic account registration, credential mutation and deletion persistence.
-use crate::{db, services::abuse::AbuseGuard, services::account::*};
+use crate::{db, services::account::*};
 use anyhow::{Context, Result};
+use northstar_abuse_application::guard::AbuseGuard;
 use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -304,7 +305,7 @@ impl AccountRepository for PostgresAccountRepository {
         let outcome = db::abuse_transaction_repository::verify_in_tx(
             &mut transaction,
             &self.abuse,
-            crate::services::abuse::AbuseAction::Registration,
+            northstar_abuse_policy::AbuseAction::Registration,
             request.subject,
             request.actors,
             request.proof,
@@ -312,7 +313,7 @@ impl AccountRepository for PostgresAccountRepository {
         )
         .await?;
         match outcome {
-            crate::services::abuse::TransactionalGuardOutcome::Allowed => {
+            northstar_abuse_application::guard::TransactionalGuardOutcome::Allowed => {
                 if !db::api_control::mark_idempotency_guard_verified_fence_in_tx(
                     &mut transaction,
                     request.lease.record_id,
@@ -326,7 +327,9 @@ impl AccountRepository for PostgresAccountRepository {
                 transaction.commit().await?;
                 Ok(RegistrationGuardOutcome::Verified)
             }
-            crate::services::abuse::TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
+            northstar_abuse_application::guard::TransactionalGuardOutcome::DeniedNeedsCommit(
+                error,
+            ) => {
                 if !db::api_control::abandon_idempotency_lease_fence_in_tx(
                     &mut transaction,
                     request.lease.record_id,
@@ -357,7 +360,7 @@ impl AccountRepository for PostgresAccountRepository {
         let admission_outcome = db::abuse_transaction_repository::verify_in_tx(
             &mut transaction,
             &self.abuse,
-            crate::services::abuse::AbuseAction::Registration,
+            northstar_abuse_policy::AbuseAction::Registration,
             request.subject,
             request.actors,
             request.proof,
@@ -366,8 +369,10 @@ impl AccountRepository for PostgresAccountRepository {
         .await
         .context("registration anti-abuse admission failed")?;
         match admission_outcome {
-            crate::services::abuse::TransactionalGuardOutcome::Allowed => {}
-            crate::services::abuse::TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
+            northstar_abuse_application::guard::TransactionalGuardOutcome::Allowed => {}
+            northstar_abuse_application::guard::TransactionalGuardOutcome::DeniedNeedsCommit(
+                error,
+            ) => {
                 let requirement = error.requirement().clone();
                 transaction
                     .commit()
@@ -558,11 +563,11 @@ impl AccountRepository for PostgresAccountRepository {
 #[cfg(test)]
 mod registration_guard_tests {
     use super::*;
-    use crate::services::abuse::{AbuseAction, AbuseConfig, PowChallenge, PowIntent, PowProof};
     use crate::services::api_mutations::{
         api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest,
     };
     use base64::Engine as _;
+    use northstar_abuse_policy::{AbuseAction, AbuseConfig, PowChallenge, PowIntent, PowProof};
     use ring::rand::{SecureRandom, SystemRandom};
     use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -661,7 +666,7 @@ mod registration_guard_tests {
         crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
             .await
             .unwrap();
-        let guard = Arc::new(AbuseGuard::new_persistent(
+        let guard = Arc::new(crate::db::abuse_persistence_repository::persistent_guard(
             AbuseConfig {
                 base_work_factor: 2,
                 max_work_factor: 64,
@@ -796,7 +801,7 @@ mod registration_guard_tests {
         crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
             .await
             .unwrap();
-        let guard = Arc::new(AbuseGuard::new_persistent(
+        let guard = Arc::new(crate::db::abuse_persistence_repository::persistent_guard(
             AbuseConfig {
                 base_work_factor: 2,
                 max_work_factor: 64,
@@ -914,7 +919,7 @@ mod registration_guard_tests {
             .unwrap();
         let abuse_key = test_key();
         let api_key = test_key();
-        let guard = Arc::new(AbuseGuard::new_persistent(
+        let guard = Arc::new(crate::db::abuse_persistence_repository::persistent_guard(
             AbuseConfig {
                 base_work_factor: 2,
                 max_work_factor: 64,
@@ -1120,7 +1125,7 @@ mod registration_guard_tests {
                 })
                 .await
                 .unwrap(),
-            RegistrationGuardOutcome::Denied(crate::services::abuse::GuardError::Invalid(..))
+            RegistrationGuardOutcome::Denied(northstar_abuse_policy::GuardError::Invalid(..))
         ));
         let retained: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM api_idempotency_records WHERE id=$1")

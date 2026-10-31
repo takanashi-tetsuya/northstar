@@ -19,8 +19,8 @@ use crate::api::contexts::{
 use crate::api::error::{AppError, Result};
 #[cfg(test)]
 use crate::db;
-use crate::services::abuse::AbuseAction;
-use crate::services::challenge_issuance::ChallengeIssueRequest;
+use northstar_abuse_application::challenge::ChallengeIssueRequest;
+use northstar_abuse_policy::AbuseAction;
 use northstar_auth_core as auth;
 
 pub async fn register(
@@ -264,7 +264,7 @@ pub async fn anti_abuse_challenge(
     let intent = body
         .intent
         .as_ref()
-        .map(|requested| crate::services::abuse::PowIntent::from_request(action, requested))
+        .map(|requested| northstar_abuse_policy::PowIntent::from_request(action, requested))
         .transpose()
         .map_err(|error| AppError::BadRequest(error.to_string()))?;
     let issued = context
@@ -278,9 +278,9 @@ pub async fn anti_abuse_challenge(
     let challenge = match issued {
         Ok(challenge) => challenge,
         Err(error) => {
-            if let Some(capacity) =
-                error.downcast_ref::<crate::services::abuse::ChallengeCapacityExceeded>()
-            {
+            if let Some(capacity) = error
+                .downcast_ref::<northstar_abuse_application::guard::ChallengeCapacityExceeded>(
+            ) {
                 context.capacity_exhausted();
                 return Err(AppError::TooManyRequests {
                     message: "proof-of-work challenge capacity reached; try again later".into(),
@@ -288,7 +288,7 @@ pub async fn anti_abuse_challenge(
                 });
             }
             if error
-                .downcast_ref::<crate::services::abuse::LegacyPowV1Disabled>()
+                .downcast_ref::<northstar_abuse_application::guard::LegacyPowV1Disabled>()
                 .is_some()
             {
                 return Err(AppError::BadRequest(

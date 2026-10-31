@@ -10,9 +10,9 @@ use crate::{
     services::{
         admin_commands::AdminCommandService,
         background_housekeeping::{BackgroundHousekeepingContext, BackgroundHousekeepingCounters},
-        challenge_issuance::ChallengeCleanupService,
     },
 };
+use northstar_abuse_application::challenge::ChallengeCleanupService;
 use northstar_runtime::workers::WorkerHeartbeat;
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;

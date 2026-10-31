@@ -105,15 +105,16 @@ fn xep_0077_errors_include_legacy_and_modern_conditions() {
 
 #[tokio::test]
 async fn metered_registration_error_carries_a_parseable_bound_v2_challenge() {
-    let guard = crate::services::abuse::AbuseGuard::new(crate::services::abuse::AbuseConfig {
-        base_work_factor: 2,
-        max_work_factor: 256,
-        window: Duration::from_secs(300),
-        cooldown_step: Duration::from_secs(30),
-        max_wait: Duration::from_secs(8),
-        message_free_burst: 5,
-        approximate_max_device_seconds: 8,
-    });
+    let guard =
+        northstar_abuse_application::guard::AbuseGuard::new(northstar_abuse_policy::AbuseConfig {
+            base_work_factor: 2,
+            max_work_factor: 256,
+            window: Duration::from_secs(300),
+            cooldown_step: Duration::from_secs(30),
+            max_wait: Duration::from_secs(8),
+            message_free_burst: 5,
+            approximate_max_device_seconds: 8,
+        });
     let intent = PowIntent::xmpp_registration(
         "alice",
         "correct horse battery staple",

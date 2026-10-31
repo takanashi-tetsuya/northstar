@@ -1,17 +1,15 @@
 //! PostgreSQL implementation of the anti-abuse persistence port.
 
-use crate::{
-    db::{
-        abuse_actor_state_repository, abuse_challenge_issuance_repository,
-        abuse_verification_repository, challenge_cleanup_repository, message_admission_repository,
-    },
-    services::abuse::{
-        AbuseGuard, AbusePersistence, AbusePersistenceFuture, FailurePolicy, IssueDecision,
-        MessageAdmissionCandidate, MessageAdmissionRequest, MessageAdmissionStart,
-        MessageDedupeIdentity, RequirementPolicy, VerificationPolicy,
-    },
+use crate::db::{
+    abuse_actor_state_repository, abuse_challenge_issuance_repository,
+    abuse_verification_repository, challenge_cleanup_repository, message_admission_repository,
+};
+use northstar_abuse_application::guard::{
+    AbuseGuard, AbusePersistence, AbusePersistenceFuture, FailurePolicy, IssueDecision,
+    MessageAdmissionCandidate, MessageAdmissionStart, RequirementPolicy, VerificationPolicy,
 };
 use northstar_abuse_policy::admission_execution::AdmissionCommitObserver;
+use northstar_abuse_policy::{MessageAdmissionRequest, MessageDedupeIdentity};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -28,9 +26,9 @@ impl PostgresAbusePersistence {
 impl AbusePersistence for PostgresAbusePersistence {
     fn issue<'a>(
         &'a self,
-        request: crate::services::abuse::records::IssueRequest,
+        request: northstar_abuse_application::guard::records::IssueRequest,
         decide: IssueDecision<'a>,
-    ) -> AbusePersistenceFuture<'a, crate::services::abuse::PowChallenge> {
+    ) -> AbusePersistenceFuture<'a, northstar_abuse_policy::PowChallenge> {
         Box::pin(async move {
             abuse_challenge_issuance_repository::issue(&self.pool, request, decide).await
         })
@@ -45,8 +43,8 @@ impl AbusePersistence for PostgresAbusePersistence {
     ) -> AbusePersistenceFuture<
         'a,
         std::result::Result<
-            crate::services::abuse::WorkRequirement,
-            crate::services::abuse::GuardError,
+            northstar_abuse_policy::WorkRequirement,
+            northstar_abuse_policy::GuardError,
         >,
     > {
         Box::pin(async move {
@@ -65,7 +63,7 @@ impl AbusePersistence for PostgresAbusePersistence {
         &'a self,
         actor_state_keys: &'a [String],
         decide: RequirementPolicy<'a>,
-    ) -> AbusePersistenceFuture<'a, crate::services::abuse::WorkRequirement> {
+    ) -> AbusePersistenceFuture<'a, northstar_abuse_policy::WorkRequirement> {
         Box::pin(async move {
             abuse_actor_state_repository::current_requirement(&self.pool, actor_state_keys, decide)
                 .await
@@ -112,4 +110,22 @@ impl AbusePersistence for PostgresAbusePersistence {
             challenge_cleanup_repository::cleanup(&self.pool, window_seconds, stale_seconds).await
         })
     }
+}
+
+/// A guard over this adapter for tests, keeping every durable artifact on the current key.
+#[cfg(test)]
+pub(crate) fn persistent_guard(
+    config: northstar_abuse_policy::AbuseConfig,
+    pool: PgPool,
+    shared_secret: Option<&[u8]>,
+    previous_shared_secret: Option<&[u8]>,
+) -> AbuseGuard {
+    AbuseGuard::new_persistent_for_deployment(
+        config,
+        std::sync::Arc::new(PostgresAbusePersistence::new(pool)),
+        shared_secret,
+        previous_shared_secret,
+        false,
+        Some(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+    )
 }

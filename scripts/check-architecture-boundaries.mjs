@@ -3044,7 +3044,7 @@ if (/\b(?:payload_digest|payload_value)\b/.test(personalAdmissionInsertColumns))
   throw new Error('new personal admission writes must never use legacy/plaintext evidence columns');
 }
 
-const abuseSource = readProductionModule('src/services/abuse.rs', { root });
+const abuseSource = readProductionModule('crates/contexts/abuse/northstar-abuse-application/src/guard.rs', { root });
 const abuseProductionSource = productionWithoutCfgTestModules(abuseSource, 'abuse.rs production');
 if (/\bpub\s+async\s+fn\s+accept_message_admission\s*\(/.test(abuseProductionSource)) {
   throw new Error('message admission acceptance must remain behind its issued service/repository fence');
@@ -3055,13 +3055,10 @@ for (const typeName of [
   'PersonalMessageContentKeyring',
   'PersonalRetractionContentKeyring',
 ]) {
-  const body = structBody(abuseSource, `pub(crate) struct ${typeName}`);
+  const body = structBody(abuseSource, `pub struct ${typeName}`);
   if (/^\s*pub(?:\(crate\))?\s+(?:generations|keys|secret)\s*:/m.test(body)) {
     throw new Error(`${typeName} exposed its derived content key material`);
   }
-}
-if (/pub(?:\(crate\))?\s+enum\s+ContentIdentityPurpose\b/.test(abuseSource)) {
-  throw new Error('content identity purpose selection must remain private to AbuseGuard');
 }
 for (const requiredFactory of [
   'personal_message_content_keyring',
@@ -3078,10 +3075,9 @@ if (!/\bpersistent_actor_key_candidates\s*\(\s*\)/.test(contentGenerationBody)) 
 if (/\bapi_control\b|ApiControlKeyring/.test(contentGenerationBody)) {
   throw new Error('API control secrets must never be reused for durable content identity');
 }
-// The abuse module owns the private purpose selector; its callers must not name it.
-const abuseModuleFiles = new Set(moduleFiles('src/services/abuse.rs', { root }));
+// The abuse context owns the purpose selector; its callers must not name it.
 const sourceFilesNamingContentPurpose = [];
-for (const directory of ['src/services', 'src/xmpp/protocol', 'src/db']) {
+for (const directory of ['src/services', 'src/xmpp/protocol', 'src/db', 'crates/contexts']) {
   const pending = [path.join(root, directory)];
   while (pending.length > 0) {
     const current = pending.pop();
@@ -3090,7 +3086,7 @@ for (const directory of ['src/services', 'src/xmpp/protocol', 'src/db']) {
       if (entry.isDirectory()) pending.push(full);
       else if (entry.isFile() && entry.name.endsWith('.rs')) {
         const relative = path.relative(root, full).replaceAll('\\', '/');
-        if (abuseModuleFiles.has(relative)) continue;
+        if (relative.startsWith('crates/contexts/abuse/')) continue;
         const source = fs.readFileSync(full, 'utf8');
         if (/\bContentIdentityPurpose\b/.test(source)) {
           sourceFilesNamingContentPurpose.push(relative);

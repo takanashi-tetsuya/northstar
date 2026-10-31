@@ -177,7 +177,7 @@ impl MixRepository for ControlledRepository {
     fn store_mix_message(
         &self,
         request: StoreMixMessageRequest<'_>,
-        authenticators: Option<&crate::services::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&northstar_abuse_policy::ContentIdentityAuthenticators>,
     ) -> impl std::future::Future<Output = Result<StoreMixMessageAdmission>> + Send {
         std::future::ready(Err(self.unused("store_mix_message")))
     }
@@ -186,7 +186,7 @@ impl MixRepository for ControlledRepository {
         channel_id: Uuid,
         actor: &str,
         identity: &MixReplayIdentity,
-        authenticators: &crate::services::abuse::ContentIdentityAuthenticators,
+        authenticators: &northstar_abuse_policy::ContentIdentityAuthenticators,
     ) -> impl std::future::Future<Output = Result<MixBusinessReplay>> + Send {
         std::future::ready(Err(self.unused("lookup_mix_message_replay")))
     }
@@ -196,7 +196,7 @@ impl MixRepository for ControlledRepository {
         actor: &str,
         target_id: Uuid,
         identity: &MixReplayIdentity,
-        authenticators: &crate::services::abuse::ContentIdentityAuthenticators,
+        authenticators: &northstar_abuse_policy::ContentIdentityAuthenticators,
     ) -> impl std::future::Future<Output = Result<MixBusinessReplay>> + Send {
         std::future::ready(Err(self.unused("lookup_mix_retraction_replay")))
     }
@@ -343,7 +343,7 @@ impl MixRepository for ControlledRepository {
     fn retract_mix_message(
         &self,
         request: RetractMixMessageRequest<'_>,
-        authenticators: Option<&crate::services::abuse::ContentIdentityAuthenticators>,
+        authenticators: Option<&northstar_abuse_policy::ContentIdentityAuthenticators>,
     ) -> impl std::future::Future<Output = Result<RetractMixMessageAdmission>> + Send {
         std::future::ready(Err(self.unused("retract_mix_message")))
     }
@@ -655,7 +655,7 @@ impl MixRepository for ControlledRepository {
     async fn store_mix_message_observed(
         &self,
         request: &foreground::StoreRequest,
-        _authenticators: Option<&crate::services::abuse::ContentIdentityAuthenticators>,
+        _authenticators: Option<&northstar_abuse_policy::ContentIdentityAuthenticators>,
     ) -> Result<StoreMixMessageAdmission> {
         let ((stored, cut), capture) = {
             let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -700,7 +700,7 @@ impl MixRepository for ControlledRepository {
     async fn lookup_mix_message_replay_observed(
         &self,
         request: &foreground::ReplayRequest,
-        authenticators: &crate::services::abuse::ContentIdentityAuthenticators,
+        authenticators: &northstar_abuse_policy::ContentIdentityAuthenticators,
     ) -> Result<MixBusinessReplay> {
         let (raw, capture) = {
             let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());

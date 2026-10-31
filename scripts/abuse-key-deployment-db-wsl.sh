@@ -67,8 +67,8 @@ cargo test --locked --offline \
   db::abuse_keys::tests::postgres_authority_enforces_bootstrap_overlap_and_retirement \
   -- --ignored --nocapture
 cargo test --locked --offline \
-  abuse::tests::postgres_challenges_are_one_use_restart_safe_and_deidentified \
+  abuse_guard_tests::postgres_challenges_are_one_use_restart_safe_and_deidentified \
   -- --ignored --nocapture
 cargo test --locked --offline \
-  abuse::tests::postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe \
+  abuse_guard_tests::postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe \
   -- --ignored --nocapture

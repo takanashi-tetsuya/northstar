@@ -253,7 +253,7 @@ Key ownership:
 - `northstar-delivery-core::OrderedOutboundSink` separates session ordering
   from the Tokio queue adapter. A rejected or stale item is returned to its
   durable owner, and only the adapter owns channel/cancellation primitives.
-- `src/services/abuse.rs` owns PostgreSQL-backed PoW/rate/message-admission policy.
+- `northstar-abuse-application` owns PostgreSQL-backed PoW/rate/message-admission policy.
 - `src/cluster.rs` owns optional Redis leases/PubSub, the node/delivery-contract
   protocol v13 and its explicit degraded state machine;
   `crates/platform/northstar-security/src/cluster_bus.rs` independently owns the signed Ed25519 envelope

@@ -1,21 +1,19 @@
 use self::records::DbActorState;
-#[cfg(test)]
-use crate::services::message_admission::{begin_command, operation};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use dashmap::DashMap;
 use northstar_abuse_policy::admission_execution::AdmissionCommitObserver;
 use northstar_abuse_policy::admission_transaction::AdmissionFence;
 #[cfg(test)]
 use northstar_abuse_policy::canonical_json_body_digest;
+#[cfg(test)]
+use northstar_abuse_policy::PowIntentRequest;
 use northstar_abuse_policy::{action_accepts_intent, ContentIdentityPurpose};
-pub use northstar_abuse_policy::{
+use northstar_abuse_policy::{
     AbuseAction, AbuseConfig, GuardError, MessageAdmissionRequest, MessageDedupeCandidate,
-    MessageDedupeIdentity, PowChallenge, PowIntent, PowIntentRequest, PowProof, WorkRequirement,
+    MessageDedupeIdentity, PowChallenge, PowIntent, PowProof, WorkRequirement,
 };
 use rand::RngCore;
 use sha2::{Digest, Sha256};
-#[cfg(test)]
-use sqlx::PgPool;
 use std::{
     collections::{HashSet, VecDeque},
     future::Future,
@@ -30,20 +28,20 @@ use zeroize::Zeroizing;
 mod challenges;
 mod key_management;
 mod persistence;
-pub(crate) mod records;
+pub mod records;
 
 use self::challenges::{build_requirement, decayed_penalty, max_penalty_decay_horizon};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use self::key_management::{actor_key_id, derive_actor_key_secret};
 use self::key_management::{
     derive_content_identity_key, opaque_actor_key, opaque_challenge_capacity_key, pow_prefix,
     subject_hash, ContentIdentityGeneration,
 };
-pub(crate) use self::key_management::{MixMessageContentKeyring, MixRetractionContentKeyring};
+pub use self::key_management::{MixMessageContentKeyring, MixRetractionContentKeyring};
 use self::persistence::actor_state_keys;
-pub(crate) use northstar_abuse_policy::ContentIdentityAuthenticators;
+use northstar_abuse_policy::ContentIdentityAuthenticators;
 
-pub const POW_INTENT_VERSION: u16 = northstar_abuse_policy::POW_INTENT_VERSION;
+const POW_INTENT_VERSION: u16 = northstar_abuse_policy::POW_INTENT_VERSION;
 const MAX_ACTIVE_POW_CHALLENGES_GLOBAL: usize =
     northstar_abuse_policy::MAX_ACTIVE_POW_CHALLENGES_GLOBAL;
 const MAX_ACTIVE_POW_CHALLENGES_PER_ACTOR: usize =
@@ -52,27 +50,13 @@ const MAX_ACTIVE_POW_CHALLENGES_PER_IP: usize =
     northstar_abuse_policy::MAX_ACTIVE_POW_CHALLENGES_PER_IP;
 const MAX_CHALLENGE_ISSUES_PER_IP_WINDOW: usize =
     northstar_abuse_policy::MAX_CHALLENGE_ISSUES_PER_IP_WINDOW;
-#[cfg(test)]
-const MESSAGE_ADMISSION_CAPACITY_SHARDS: u8 =
-    northstar_abuse_policy::MESSAGE_ADMISSION_CAPACITY_SHARDS;
-#[cfg(test)]
-const MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_SHARD: i32 =
-    northstar_abuse_policy::MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_SHARD;
-#[cfg(test)]
-const MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_USER: i64 =
-    northstar_abuse_policy::MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_USER;
-#[cfg(test)]
-const MESSAGE_ADMISSION_LEASE: Duration = northstar_abuse_policy::MESSAGE_ADMISSION_LEASE;
 const MESSAGE_ADMISSION_ACCEPTED_TTL: Duration =
     northstar_abuse_policy::MESSAGE_ADMISSION_ACCEPTED_TTL;
-#[cfg(test)]
-const MESSAGE_ADMISSION_CLEANUP_BATCH: i64 =
-    northstar_abuse_policy::MESSAGE_ADMISSION_CLEANUP_BATCH;
 /// A delivered offline message retains its replay tombstone for exactly this
 /// long.  The PostgreSQL trigger in migration 0079 uses the same 30-day value.
 /// Live queued messages can outlast this bound and are therefore protected by
 /// the deployment reference fence in `db::abuse_keys` as well.
-pub(crate) const OFFLINE_MESSAGE_ADMISSION_REPLAY_GRACE: Duration =
+pub const OFFLINE_MESSAGE_ADMISSION_REPLAY_GRACE: Duration =
     northstar_abuse_policy::OFFLINE_MESSAGE_ADMISSION_REPLAY_GRACE;
 /// Local waiters queue on these stripes before acquiring a PgPool connection.
 /// PostgreSQL try-locks below remain the cross-process authority.
@@ -80,7 +64,7 @@ const ABUSE_STATE_GATE_SHARDS: usize = northstar_abuse_policy::ABUSE_STATE_GATE_
 
 #[derive(Debug)]
 pub struct ChallengeCapacityExceeded {
-    pub(crate) retry_after_seconds: u64,
+    pub retry_after_seconds: u64,
 }
 
 impl ChallengeCapacityExceeded {
@@ -113,16 +97,16 @@ pub fn is_abuse_state_busy(error: &anyhow::Error) -> bool {
 }
 
 #[derive(Clone)]
-pub(crate) struct PersonalMessageContentKeyring {
+pub struct PersonalMessageContentKeyring {
     generations: Arc<Vec<ContentIdentityGeneration>>,
 }
 
 #[derive(Clone)]
-pub(crate) struct PersonalRetractionContentKeyring {
+pub struct PersonalRetractionContentKeyring {
     generations: Arc<Vec<ContentIdentityGeneration>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn test_content_identity_generations(
     purpose: ContentIdentityPurpose,
 ) -> Arc<Vec<ContentIdentityGeneration>> {
@@ -138,29 +122,29 @@ fn test_content_identity_generations(
     }])
 }
 
-#[cfg(test)]
-pub(crate) fn test_personal_message_content_keyring() -> PersonalMessageContentKeyring {
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_personal_message_content_keyring() -> PersonalMessageContentKeyring {
     PersonalMessageContentKeyring {
         generations: test_content_identity_generations(ContentIdentityPurpose::PersonalMessage),
     }
 }
 
-#[cfg(test)]
-pub(crate) fn test_personal_retraction_content_keyring() -> PersonalRetractionContentKeyring {
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_personal_retraction_content_keyring() -> PersonalRetractionContentKeyring {
     PersonalRetractionContentKeyring {
         generations: test_content_identity_generations(ContentIdentityPurpose::PersonalRetraction),
     }
 }
 
-#[cfg(test)]
-pub(crate) fn test_mix_message_content_keyring() -> MixMessageContentKeyring {
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_mix_message_content_keyring() -> MixMessageContentKeyring {
     MixMessageContentKeyring {
         generations: test_content_identity_generations(ContentIdentityPurpose::MixMessage),
     }
 }
 
-#[cfg(test)]
-pub(crate) fn test_mix_retraction_content_keyring() -> MixRetractionContentKeyring {
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_mix_retraction_content_keyring() -> MixRetractionContentKeyring {
     MixRetractionContentKeyring {
         generations: test_content_identity_generations(ContentIdentityPurpose::MixRetraction),
     }
@@ -233,7 +217,7 @@ fn ceil_seconds(duration: Duration) -> u64 {
         .max(1)
 }
 
-pub(crate) fn validate_message_admission_request(
+pub fn validate_message_admission_request(
     request: &MessageAdmissionRequest<'_>,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(
@@ -270,10 +254,10 @@ pub(crate) fn validate_message_admission_request(
     Ok(())
 }
 
-pub(crate) struct MessageAdmissionCandidate {
-    pub(crate) key_id: String,
-    pub(crate) admission_key: Vec<u8>,
-    pub(crate) payload_mac: Vec<u8>,
+pub struct MessageAdmissionCandidate {
+    pub key_id: String,
+    pub admission_key: Vec<u8>,
+    pub payload_mac: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -281,18 +265,18 @@ pub struct MessageAdmissionLease {
     admission_key: Vec<u8>,
     payload_mac: Vec<u8>,
     lease_token: Uuid,
-    pub(crate) offline_dedupe: MessageDedupeIdentity,
+    pub offline_dedupe: MessageDedupeIdentity,
 }
 
 /// The exact admission fence handed to the database after message delivery.
 /// Only a lease issued by the guard can construct this view.
-pub(crate) struct MessageAdmissionAcceptance<'a> {
+pub struct MessageAdmissionAcceptance<'a> {
     admission_key: &'a [u8],
     payload_mac: &'a [u8],
     lease_token: Uuid,
 }
 
-pub(crate) fn acceptance_fence(acceptance: &MessageAdmissionAcceptance<'_>) -> AdmissionFence {
+pub fn acceptance_fence(acceptance: &MessageAdmissionAcceptance<'_>) -> AdmissionFence {
     AdmissionFence {
         admission_key: acceptance.admission_key().to_vec(),
         payload_mac: acceptance.payload_mac().to_vec(),
@@ -324,46 +308,46 @@ pub enum TransactionalGuardOutcome {
     DeniedNeedsCommit(GuardError),
 }
 
-pub(crate) struct PersistentVerificationInput<'a> {
-    pub(crate) action: AbuseAction,
-    pub(crate) subject: &'a str,
-    pub(crate) actors: &'a [String],
-    pub(crate) proof: Option<&'a PowProof>,
-    pub(crate) intent: Option<&'a PowIntent>,
+pub struct PersistentVerificationInput<'a> {
+    pub action: AbuseAction,
+    pub subject: &'a str,
+    pub actors: &'a [String],
+    pub proof: Option<&'a PowProof>,
+    pub intent: Option<&'a PowIntent>,
 }
 
-pub(crate) type AbusePersistenceFuture<'a, T> =
+pub type AbusePersistenceFuture<'a, T> =
     Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'a>>;
-pub(crate) type IssueDecision<'a> = Box<
+pub type IssueDecision<'a> = Box<
     dyn FnOnce(
             &mut [DbActorState],
             chrono::DateTime<chrono::Utc>,
-        ) -> anyhow::Result<crate::services::abuse::records::IssueRecord>
+        ) -> anyhow::Result<records::IssueRecord>
         + Send
         + 'a,
 >;
-pub(crate) type VerificationPolicy<'a> = Box<
+pub type VerificationPolicy<'a> = Box<
     dyn FnOnce(
             &mut [DbActorState],
             chrono::DateTime<chrono::Utc>,
-            Option<crate::services::abuse::records::ConsumedChallenge>,
-        ) -> anyhow::Result<crate::services::abuse::records::VerificationDecision>
+            Option<records::ConsumedChallenge>,
+        ) -> anyhow::Result<records::VerificationDecision>
         + Send
         + 'a,
 >;
-pub(crate) type RequirementPolicy<'a> = Box<
+pub type RequirementPolicy<'a> = Box<
     dyn FnOnce(&mut [DbActorState], chrono::DateTime<chrono::Utc>) -> WorkRequirement + Send + 'a,
 >;
-pub(crate) type FailurePolicy<'a> =
+pub type FailurePolicy<'a> =
     Box<dyn FnOnce(&mut [DbActorState], chrono::DateTime<chrono::Utc>) + Send + 'a>;
 
 /// Persistence operations own their transactions and connection pool. Policy,
 /// signing, and key-rotation decisions remain with the guard and run only
 /// while the repository holds the required actor-state locks.
-pub(crate) trait AbusePersistence: Send + Sync {
+pub trait AbusePersistence: Send + Sync {
     fn issue<'a>(
         &'a self,
-        request: crate::services::abuse::records::IssueRequest,
+        request: records::IssueRequest,
         decide: IssueDecision<'a>,
     ) -> AbusePersistenceFuture<'a, PowChallenge>;
 
@@ -479,23 +463,6 @@ pub struct AbuseGuard {
 }
 
 impl AbuseGuard {
-    #[cfg(test)]
-    pub fn new_persistent(
-        config: AbuseConfig,
-        pool: PgPool,
-        shared_secret: Option<&[u8]>,
-        previous_shared_secret: Option<&[u8]>,
-    ) -> Self {
-        Self::new_persistent_for_deployment(
-            config,
-            Arc::new(crate::db::abuse_persistence_repository::PostgresAbusePersistence::new(pool)),
-            shared_secret,
-            previous_shared_secret,
-            false,
-            Some(chrono::DateTime::<chrono::Utc>::MAX_UTC),
-        )
-    }
-
     fn content_identity_generations(
         &self,
         purpose: ContentIdentityPurpose,
@@ -514,14 +481,14 @@ impl AbuseGuard {
     /// A MessageService receives only the message-purpose subkeys. It cannot
     /// produce or verify a retraction commitment even though both generations
     /// originate from the same mounted deployment secret.
-    pub(crate) fn personal_message_content_keyring(&self) -> PersonalMessageContentKeyring {
+    pub fn personal_message_content_keyring(&self) -> PersonalMessageContentKeyring {
         PersonalMessageContentKeyring {
             generations: self.content_identity_generations(ContentIdentityPurpose::PersonalMessage),
         }
     }
 
     /// RetractionService receives a separate least-authority capability.
-    pub(crate) fn personal_retraction_content_keyring(&self) -> PersonalRetractionContentKeyring {
+    pub fn personal_retraction_content_keyring(&self) -> PersonalRetractionContentKeyring {
         PersonalRetractionContentKeyring {
             generations: self
                 .content_identity_generations(ContentIdentityPurpose::PersonalRetraction),
@@ -538,7 +505,7 @@ impl AbuseGuard {
         self.issue_memory_bound(action, subject, actors, None)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn verify_or_allow(
         &self,
         action: AbuseAction,
@@ -555,17 +522,7 @@ impl AbuseGuard {
     /// fencing lease expires without consuming the proof or advancing the
     /// actor step twice. An accepted retry is suppressed. The same identity
     /// with different content is always a conflict.
-    #[cfg(test)]
-    pub async fn begin_message_admission(
-        &self,
-        request: &MessageAdmissionRequest<'_>,
-    ) -> anyhow::Result<MessageAdmissionStart> {
-        let (_, witness) = operation(begin_command(request)?);
-        self.begin_message_admission_observed(request, &witness)
-            .await
-    }
-
-    pub(crate) async fn begin_message_admission_observed(
+    pub async fn begin_message_admission_observed(
         &self,
         request: &MessageAdmissionRequest<'_>,
         witness: &dyn AdmissionCommitObserver,
@@ -706,6 +663,59 @@ fn state_key(action: AbuseAction, actor: &str) -> String {
         actor.to_owned()
     } else {
         format!("{}:{actor}", action.as_str())
+    }
+}
+
+/// What the root crate's cross-context tests need of the guard's internals.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    use super::*;
+
+    pub fn actor_state_keys(action: AbuseAction, actors: &[String], secret: &[u8]) -> Vec<String> {
+        super::actor_state_keys(action, actors, secret)
+    }
+
+    pub fn opaque_actor_key(action: AbuseAction, actor: &str, secret: &[u8]) -> String {
+        super::opaque_actor_key(action, actor, secret)
+    }
+
+    pub fn message_admission_identity<'a>(
+        request: &'a MessageAdmissionRequest<'a>,
+    ) -> Option<(&'static [u8], Vec<u8>)> {
+        super::message_admission_identity(request)
+    }
+
+    pub fn message_admission_identity_digest(
+        request: &MessageAdmissionRequest<'_>,
+        identity_kind: &[u8],
+        identity_value: &[u8],
+    ) -> Vec<u8> {
+        super::message_admission_identity_digest(request, identity_kind, identity_value)
+    }
+
+    pub fn message_admission_material(
+        request: &MessageAdmissionRequest<'_>,
+        secret: &[u8],
+        identity_kind: &[u8],
+        identity_value: &[u8],
+    ) -> (Vec<u8>, Vec<u8>) {
+        super::message_admission_material(request, secret, identity_kind, identity_value)
+    }
+
+    impl AbuseGuard {
+        pub fn actor_key_id(&self) -> &str {
+            &self.actor_key_id
+        }
+
+        pub fn actor_key_secret(&self) -> &[u8] {
+            &self.actor_key_secret
+        }
+    }
+
+    impl MessageAdmissionLease {
+        pub fn admission_key(&self) -> &[u8] {
+            &self.admission_key
+        }
     }
 }
 

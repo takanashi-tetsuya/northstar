@@ -1,10 +1,10 @@
 //! Login-specific anti-abuse capabilities for SASL and Passkeys.
 
-use crate::services::abuse::{GuardError, PowIntent, PowProof, WorkRequirement};
 use anyhow::Result;
+use northstar_abuse_policy::{GuardError, PowIntent, PowProof, WorkRequirement};
 use std::future::Future;
 
-pub(crate) trait SaslLoginAbuseRepository: Send + Sync {
+pub trait SaslLoginAbuseRepository: Send + Sync {
     fn current_requirement(
         &self,
         actors: &[String],
@@ -12,26 +12,26 @@ pub(crate) trait SaslLoginAbuseRepository: Send + Sync {
     fn record_failure(&self, actors: &[String]) -> impl Future<Output = Result<()>> + Send;
 }
 
-pub(crate) struct SaslLoginAbuseService<R> {
+pub struct SaslLoginAbuseService<R> {
     repository: R,
 }
 
 impl<R: SaslLoginAbuseRepository> SaslLoginAbuseService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn is_limited(&self, actors: &[String]) -> Result<bool> {
+    pub async fn is_limited(&self, actors: &[String]) -> Result<bool> {
         let requirement = self.repository.current_requirement(actors).await?;
         Ok(requirement.work_factor > 1 || requirement.retry_after_seconds > 0)
     }
 
-    pub(crate) async fn record_failure(&self, actors: &[String]) -> Result<()> {
+    pub async fn record_failure(&self, actors: &[String]) -> Result<()> {
         self.repository.record_failure(actors).await
     }
 }
 
-pub(crate) trait PasskeyLoginAbuseRepository: Send + Sync {
+pub trait PasskeyLoginAbuseRepository: Send + Sync {
     fn verify(
         &self,
         subject: &str,
@@ -41,16 +41,16 @@ pub(crate) trait PasskeyLoginAbuseRepository: Send + Sync {
     ) -> impl Future<Output = Result<std::result::Result<WorkRequirement, GuardError>>> + Send;
 }
 
-pub(crate) struct PasskeyLoginAbuseService<R> {
+pub struct PasskeyLoginAbuseService<R> {
     repository: R,
 }
 
 impl<R: PasskeyLoginAbuseRepository> PasskeyLoginAbuseService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn verify(
+    pub async fn verify(
         &self,
         subject: &str,
         actors: &[String],

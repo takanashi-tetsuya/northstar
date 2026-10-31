@@ -4,10 +4,6 @@
 //! pending cfg(test) SessionExecutions::for_saved_frame constructor.
 //! No SQL, AppState, spawned tasks, new timers, Stage3 adapter, or verdicts.
 use super::{MucDiscussionLive, PreparedMucDiscussion};
-use crate::services::abuse::{
-    MessageAdmissionAcceptance, MessageAdmissionLease, MessageAdmissionRequest,
-    MessageAdmissionStart, MessageDedupeIdentity, WorkRequirement,
-};
 use crate::services::message_admission::{
     self,
     witness::{self, AdmissionWitness, DirectOperationHandle},
@@ -25,10 +21,14 @@ use crate::xmpp::{
     frame_execution::{FrameExecution, SessionExecutions, Stage},
 };
 use anyhow::{Context as _, Result};
+use northstar_abuse_application::guard::{
+    MessageAdmissionAcceptance, MessageAdmissionLease, MessageAdmissionStart,
+};
 use northstar_abuse_policy::{
     admission_execution as admission,
     admission_transaction::{AdmissionFence, FinalizeDecision},
 };
+use northstar_abuse_policy::{MessageAdmissionRequest, MessageDedupeIdentity, WorkRequirement};
 use northstar_delivery_core::native_write as native;
 use northstar_message_application::direct_lifecycle;
 use northstar_room_application::{
@@ -620,7 +620,7 @@ impl MessageAdmissionRepository for AdmissionRepository {
             },
             witness,
             admission::TransactionScope::RatedBegin(admission::BeginCommitPurpose::NewReservation),
-            admission::CommitFact::Reserved(crate::services::abuse::acceptance_fence(
+            admission::CommitFact::Reserved(northstar_abuse_application::guard::acceptance_fence(
                 &lease.acceptance(),
             )),
         )
@@ -648,7 +648,7 @@ impl MessageAdmissionRepository for AdmissionRepository {
             witness,
             admission::TransactionScope::AdmissionFinalize,
             admission::CommitFact::Finalized {
-                fence: crate::services::abuse::acceptance_fence(acceptance),
+                fence: northstar_abuse_application::guard::acceptance_fence(acceptance),
                 result: admission::FinalizeSuccess::PendingAccepted,
             },
         )

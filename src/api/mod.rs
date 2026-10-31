@@ -21,17 +21,17 @@ use crate::api::contexts::{
     MetricsContext, OmemoRecoveryPollContext, PasskeyLoginFinishContext, PublicDiscoveryContext,
     RetentionPolicyContext, UploadHttpReadContext,
 };
-use crate::services::abuse::AbuseAction;
 use crate::services::api_mutations::{
     api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest, IdempotentResponse,
 };
 use crate::state::AppState;
+use northstar_abuse_policy::AbuseAction;
 use northstar_auth_core as auth;
 
-use crate::services::abuse::GuardError;
 use axum::extract::DefaultBodyLimit;
 use axum::http::header::{HeaderMap, HeaderName, HeaderValue};
 use axum::routing::{delete, options, patch};
+use northstar_abuse_policy::GuardError;
 use std::net::IpAddr;
 use std::ops::Deref;
 use tower_http::services::{ServeDir, ServeFile};

@@ -685,7 +685,7 @@ async fn supplied_frame_identity_preserves_initial_policy_and_actual_runner_reti
     );
     let retained = frame.direct_operation();
     let mut runner = Box::pin(frame.run(async {
-        let request = crate::services::abuse::MessageAdmissionRequest {
+        let request = northstar_abuse_policy::MessageAdmissionRequest {
             actor_id: Uuid::from_u128(1),
             account_bare: "alice@example.test",
             normalized_target: "bob@example.test",
@@ -1352,7 +1352,7 @@ async fn replacing_current_frame_preserves_the_old_retained_owner_and_terminal()
     let mut executions = SessionExecutions::default();
     let original = executions.begin(ClientTransport::Bosh, "<message/>");
     let old_owner = original.direct_operation();
-    let request = crate::services::abuse::MessageAdmissionRequest {
+    let request = northstar_abuse_policy::MessageAdmissionRequest {
         actor_id: Uuid::from_u128(100),
         account_bare: "alice@example.test",
         normalized_target: "bob@example.test/resource",

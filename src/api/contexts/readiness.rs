@@ -10,7 +10,7 @@ pub(crate) struct ReadinessContext {
     pub(crate) cluster: crate::cluster::ClusterReadinessProbe,
     pub(crate) workers: northstar_runtime::workers::WorkerReadinessProbe,
     pub(crate) abuse_key_deployment:
-        Option<crate::services::abuse::records::AbuseKeyDeploymentIdentity>,
+        Option<northstar_abuse_application::guard::records::AbuseKeyDeploymentIdentity>,
     pub(crate) persistence: crate::services::readiness::ReadinessService<
         crate::db::readiness_repository::PostgresReadinessRepository,
     >,

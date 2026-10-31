@@ -4,8 +4,8 @@
 //! requesting persistence. Each repository mutation owns its complete PoW,
 //! invitation, credential or deletion transaction.
 
-use crate::services::abuse::{GuardError, PowIntent, PowProof, WorkRequirement};
 use anyhow::Result;
+use northstar_abuse_policy::{GuardError, PowIntent, PowProof, WorkRequirement};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,

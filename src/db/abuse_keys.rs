@@ -1,6 +1,6 @@
-use crate::services::abuse::records::AbuseKeyDeploymentIdentity;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use northstar_abuse_application::guard::records::AbuseKeyDeploymentIdentity;
 use sqlx::{PgPool, Postgres, Transaction};
 use std::time::Duration;
 

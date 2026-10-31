@@ -169,6 +169,7 @@
     "multer",
     "ndk-context",
     "nom",
+    "northstar-abuse-application",
     "northstar-abuse-policy",
     "northstar-archive-application",
     "northstar-archive-core",
@@ -2306,6 +2307,66 @@
     [
       "nom",
       "minimal-lexical"
+    ],
+    [
+      "northstar-abuse-application",
+      "anyhow"
+    ],
+    [
+      "northstar-abuse-application",
+      "base64"
+    ],
+    [
+      "northstar-abuse-application",
+      "chrono"
+    ],
+    [
+      "northstar-abuse-application",
+      "dashmap"
+    ],
+    [
+      "northstar-abuse-application",
+      "hmac"
+    ],
+    [
+      "northstar-abuse-application",
+      "northstar-abuse-policy"
+    ],
+    [
+      "northstar-abuse-application",
+      "northstar-xmpp-types"
+    ],
+    [
+      "northstar-abuse-application",
+      "rand"
+    ],
+    [
+      "northstar-abuse-application",
+      "serde_json"
+    ],
+    [
+      "northstar-abuse-application",
+      "sha2"
+    ],
+    [
+      "northstar-abuse-application",
+      "subtle"
+    ],
+    [
+      "northstar-abuse-application",
+      "tokio"
+    ],
+    [
+      "northstar-abuse-application",
+      "tracing"
+    ],
+    [
+      "northstar-abuse-application",
+      "uuid"
+    ],
+    [
+      "northstar-abuse-application",
+      "zeroize"
     ],
     [
       "northstar-abuse-policy",
@@ -4926,6 +4987,10 @@
     [
       "rust-xmpp-server",
       "libc"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-abuse-application"
     ],
     [
       "rust-xmpp-server",

@@ -24,7 +24,7 @@ pub(super) struct ContentIdentityGeneration {
 }
 
 impl PersonalMessageContentKeyring {
-    pub(crate) fn authenticators(&self, canonical_payload: &[u8]) -> ContentIdentityAuthenticators {
+    pub fn authenticators(&self, canonical_payload: &[u8]) -> ContentIdentityAuthenticators {
         content_identity_authenticators(
             &self.generations,
             ContentIdentityPurpose::PersonalMessage,
@@ -37,12 +37,12 @@ impl PersonalMessageContentKeyring {
 /// It cannot produce personal-message or MIX-retraction commitments even
 /// though all generations originate from the same mounted deployment secret.
 #[derive(Clone)]
-pub(crate) struct MixMessageContentKeyring {
+pub struct MixMessageContentKeyring {
     pub(super) generations: Arc<Vec<ContentIdentityGeneration>>,
 }
 
 impl MixMessageContentKeyring {
-    pub(crate) fn authenticators(&self, canonical_payload: &[u8]) -> ContentIdentityAuthenticators {
+    pub fn authenticators(&self, canonical_payload: &[u8]) -> ContentIdentityAuthenticators {
         content_identity_authenticators(
             &self.generations,
             ContentIdentityPurpose::MixMessage,
@@ -55,12 +55,12 @@ impl MixMessageContentKeyring {
 /// Keeping it distinct from channel-message identity prevents a compromised
 /// service path from forging an authenticator for the other operation family.
 #[derive(Clone)]
-pub(crate) struct MixRetractionContentKeyring {
+pub struct MixRetractionContentKeyring {
     pub(super) generations: Arc<Vec<ContentIdentityGeneration>>,
 }
 
 impl MixRetractionContentKeyring {
-    pub(crate) fn authenticators(&self, canonical_payload: &[u8]) -> ContentIdentityAuthenticators {
+    pub fn authenticators(&self, canonical_payload: &[u8]) -> ContentIdentityAuthenticators {
         content_identity_authenticators(
             &self.generations,
             ContentIdentityPurpose::MixRetraction,
@@ -70,7 +70,7 @@ impl MixRetractionContentKeyring {
 }
 
 impl PersonalRetractionContentKeyring {
-    pub(crate) fn authenticators(&self, canonical_payload: &[u8]) -> ContentIdentityAuthenticators {
+    pub fn authenticators(&self, canonical_payload: &[u8]) -> ContentIdentityAuthenticators {
         content_identity_authenticators(
             &self.generations,
             ContentIdentityPurpose::PersonalRetraction,
@@ -140,7 +140,7 @@ pub(super) fn pow_prefix(
 }
 
 impl AbuseGuard {
-    pub(crate) fn persistent_storage_enabled(&self) -> bool {
+    pub fn persistent_storage_enabled(&self) -> bool {
         self.persistence.is_some()
     }
 
@@ -167,7 +167,7 @@ impl AbuseGuard {
         }
     }
 
-    pub(crate) fn new_persistent_for_deployment(
+    pub fn new_persistent_for_deployment(
         config: AbuseConfig,
         persistence: Arc<dyn AbusePersistence>,
         shared_secret: Option<&[u8]>,
@@ -210,13 +210,13 @@ impl AbuseGuard {
     /// every process is operating in the PostgreSQL-authorized key generation.
     /// They are safe to persist and log; the mounted HMAC material is never
     /// returned by this interface.
-    pub(crate) fn deployment_key_ids(&self) -> (&str, Option<&str>) {
+    pub fn deployment_key_ids(&self) -> (&str, Option<&str>) {
         (&self.actor_key_id, self.previous_actor_key_id.as_deref())
     }
 
     /// MIX channel-message admission receives a purpose-separated capability;
     /// it cannot authenticate personal messages or any retraction family.
-    pub(crate) fn mix_message_content_keyring(&self) -> MixMessageContentKeyring {
+    pub fn mix_message_content_keyring(&self) -> MixMessageContentKeyring {
         MixMessageContentKeyring {
             generations: self.content_identity_generations(ContentIdentityPurpose::MixMessage),
         }
@@ -224,7 +224,7 @@ impl AbuseGuard {
 
     /// MIX retraction admission receives a separate capability from MIX
     /// messages so the two durable replay journals cannot forge each other.
-    pub(crate) fn mix_retraction_content_keyring(&self) -> MixRetractionContentKeyring {
+    pub fn mix_retraction_content_keyring(&self) -> MixRetractionContentKeyring {
         MixRetractionContentKeyring {
             generations: self.content_identity_generations(ContentIdentityPurpose::MixRetraction),
         }
@@ -234,7 +234,7 @@ impl AbuseGuard {
     /// object which can reference it and the complete exponential penalty
     /// history have expired.  Keeping this calculation beside the constants
     /// prevents the deployment protocol from drifting away from abuse policy.
-    pub(crate) fn minimum_key_rotation_overlap(&self) -> Duration {
+    pub fn minimum_key_rotation_overlap(&self) -> Duration {
         self.config
             .window
             .max(self.config.max_wait)
@@ -288,7 +288,7 @@ impl AbuseGuard {
         }
     }
 
-    pub(crate) fn persistent_actor_state_keys(
+    pub fn persistent_actor_state_keys(
         &self,
         action: AbuseAction,
         actors: &[String],

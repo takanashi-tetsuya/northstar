@@ -22,8 +22,9 @@ fn personal_identity<'a>(
         actor_scope,
         target_scope,
         identity_value,
-        payload_authenticators: crate::services::abuse::test_personal_message_content_keyring()
-            .authenticators(payload.as_bytes()),
+        payload_authenticators:
+            northstar_abuse_application::guard::test_personal_message_content_keyring()
+                .authenticators(payload.as_bytes()),
         legacy_payload_digest: Sha256::digest(payload.as_bytes()).into(),
     }
 }

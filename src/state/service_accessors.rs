@@ -22,7 +22,7 @@ impl AppState {
 
     pub(crate) fn challenge_issue_service(
         &self,
-    ) -> &crate::services::challenge_issuance::ChallengeIssueService<
+    ) -> &northstar_abuse_application::challenge::ChallengeIssueService<
         db::challenge_issuance_repository::PostgresChallengeRepository,
     > {
         &self.challenge_issue_service
@@ -30,7 +30,7 @@ impl AppState {
 
     pub(crate) fn sasl_login_abuse_service(
         &self,
-    ) -> &crate::services::login_abuse::SaslLoginAbuseService<
+    ) -> &northstar_abuse_application::login::SaslLoginAbuseService<
         db::login_abuse_repository::PostgresSaslLoginAbuseRepository,
     > {
         &self.sasl_login_abuse_service

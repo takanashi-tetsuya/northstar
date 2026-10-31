@@ -3,12 +3,10 @@
 use super::PasskeyService;
 use crate::{
     db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository,
-    services::abuse::{GuardError, PowIntent, PowProof, WorkRequirement},
-    services::{
-        login_abuse::PasskeyLoginAbuseService,
-        passkeys::{PasskeyActor, PasskeyError, PasskeyOptions, PasskeySummary},
-    },
+    services::passkeys::{PasskeyActor, PasskeyError, PasskeyOptions, PasskeySummary},
 };
+use northstar_abuse_application::login::PasskeyLoginAbuseService;
+use northstar_abuse_policy::{GuardError, PowIntent, PowProof, WorkRequirement};
 use std::net::IpAddr;
 use std::sync::Arc;
 use uuid::Uuid;

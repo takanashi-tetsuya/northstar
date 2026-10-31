@@ -71,19 +71,19 @@ fi
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema"
 
 cargo test --locked --offline \
-  abuse::tests::postgres_v2_intent_mismatch_consumes_but_rollback_restores_proof \
+  abuse_guard_tests::postgres_v2_intent_mismatch_consumes_but_rollback_restores_proof \
   -- --ignored --nocapture
 cargo test --locked --offline \
-  abuse::tests::postgres_parallel_message_challenges_are_independent_bounded_and_one_use \
+  abuse_guard_tests::postgres_parallel_message_challenges_are_independent_bounded_and_one_use \
   -- --ignored --nocapture
 cargo test --locked --offline \
-  abuse::tests::postgres_challenge_capacity_is_concurrent_restart_safe_and_hard_limited \
+  abuse_guard_tests::postgres_challenge_capacity_is_concurrent_restart_safe_and_hard_limited \
   -- --ignored --nocapture
 cargo test --locked --offline \
-  abuse::tests::postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe \
+  abuse_guard_tests::postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe \
   -- --ignored --nocapture
 cargo test --locked --offline \
-  abuse::tests::postgres_message_admission_capacity_and_cleanup_are_bounded \
+  abuse_guard_tests::postgres_message_admission_capacity_and_cleanup_are_bounded \
   -- --ignored --nocapture
 cargo test --locked --offline \
   db::archive::offline_queue_tests::offline_dedupe_rotation_grace_capacity_and_cleanup_are_bounded \

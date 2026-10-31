@@ -8,7 +8,7 @@ const root = new URL('../', import.meta.url);
 const read = (path) => readFile(new URL(path, root), 'utf8');
 const [abuseSources, abuseTransaction, abuseVerification, config, envExample, apiRouter, authRoutes, reportRoutes, protocolSession, dispatch, messaging, miscProtocol, ibrProtocol, accountService, accountRepository, accountRecovery, dbUsers, apiControl, appError, xmlUtil, migration, messageAdmissionMigration, powIntentMigration, parallelChallengeMigration, deletionRecoveryMigration, main, client, powClient, clientHtml, admin, adminHtml, workerSource] = await Promise.all([
   Promise.all([
-    readModuleParts('src/services/abuse.rs', { includeTests: false }).map(({ source }) => source),
+    readModuleParts('crates/contexts/abuse/northstar-abuse-application/src/guard.rs', { includeTests: false }).map(({ source }) => source),
     read('crates/contexts/abuse/northstar-abuse-policy/src/lib.rs'),
     read('crates/contexts/abuse/northstar-abuse-policy/src/model.rs'),
     read('crates/contexts/abuse/northstar-abuse-policy/src/escalation.rs'),
@@ -147,9 +147,9 @@ assert.doesNotMatch(xmppRegistration, /verify_or_allow_in_tx\(/,
   'XMPP registration must not retain an unbound v1 proof path');
 assert.match(abuse, /pub fn xmpp_registration\([\s\S]+northstar\/xmpp-registration-intent\/v1/,
   'both XMPP registration transports need one semantic body commitment');
-assert.match(miscProtocol, /PowIntent::xmpp_registration[\s\S]+\.challenge_issue_service\(\)[\s\S]+\.issue\(crate::services::challenge_issuance::ChallengeIssueRequest\s*\{[\s\S]+action:\s*AbuseAction::Registration,[\s\S]+intent:\s*Some\(&intent\)/,
+assert.match(miscProtocol, /PowIntent::xmpp_registration[\s\S]+\.challenge_issue_service\(\)[\s\S]+\.issue\(\s*northstar_abuse_application::challenge::ChallengeIssueRequest\s*\{[\s\S]+action:\s*AbuseAction::Registration,[\s\S]+intent:\s*Some\(&intent\)/,
   'XEP-0077 metered retries must issue body-bound v2 challenges only after submission');
-assert.match(ibrProtocol, /ibr_challenge\(None, None\)[\s\S]+PowIntent::xmpp_registration[\s\S]+\.challenge_issue_service\(\)[\s\S]+\.issue\(crate::services::challenge_issuance::ChallengeIssueRequest\s*\{[\s\S]+action:\s*AbuseAction::Registration,[\s\S]+intent:\s*Some\(&intent\)/,
+assert.match(ibrProtocol, /ibr_challenge\(None, None\)[\s\S]+PowIntent::xmpp_registration[\s\S]+\.challenge_issue_service\(\)[\s\S]+\.issue\(\s*northstar_abuse_application::challenge::ChallengeIssueRequest\s*\{[\s\S]+action:\s*AbuseAction::Registration,[\s\S]+intent:\s*Some\(&intent\)/,
   'XEP-0389 must start without an unbound challenge and use an iterative v2 retry');
 assert.doesNotMatch(`${miscProtocol}\n${ibrProtocol}`, /\.issue\(\s*AbuseAction::Registration/,
   'XMPP registration must not issue legacy v1 challenges');

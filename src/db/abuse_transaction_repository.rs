@@ -1,13 +1,11 @@
 //! Compose anti-abuse decisions with caller-owned business transactions.
 
-use crate::{
-    db::{abuse_actor_state_repository, abuse_verification_repository},
-    services::abuse::{
-        AbuseAction, AbuseGuard, PersistentVerificationInput, PowIntent, PowProof,
-        TransactionalGuardOutcome, WorkRequirement,
-    },
-};
+use crate::db::{abuse_actor_state_repository, abuse_verification_repository};
 use anyhow::Result;
+use northstar_abuse_application::guard::{
+    AbuseGuard, PersistentVerificationInput, TransactionalGuardOutcome,
+};
+use northstar_abuse_policy::{AbuseAction, PowIntent, PowProof, WorkRequirement};
 use sqlx::{Postgres, Transaction};
 
 pub(crate) async fn verify_in_tx(

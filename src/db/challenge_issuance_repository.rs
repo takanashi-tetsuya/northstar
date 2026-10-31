@@ -1,12 +1,11 @@
 //! Persistence-backed anti-abuse challenge adapter.
 
-use crate::{
-    services::abuse::{AbuseGuard, PowChallenge},
-    services::challenge_issuance::{
-        ChallengeCleanupRepository, ChallengeIssueRepository, ChallengeIssueRequest,
-    },
-};
 use anyhow::Result;
+use northstar_abuse_application::challenge::{
+    ChallengeCleanupRepository, ChallengeIssueRepository, ChallengeIssueRequest,
+};
+use northstar_abuse_application::guard::AbuseGuard;
+use northstar_abuse_policy::PowChallenge;
 use std::sync::Arc;
 
 #[derive(Clone)]

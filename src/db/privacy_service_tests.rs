@@ -43,7 +43,7 @@ async fn privacy_service_boundary_preserves_stanza_kind_allow_deny_results() {
     let messaging = crate::services::messaging::MessageService::new(
         crate::db::messaging::PostgresMessageRepository::new(
             pool.clone(),
-            crate::services::abuse::test_personal_message_content_keyring(),
+            northstar_abuse_application::guard::test_personal_message_content_keyring(),
             "example.test",
             100,
             8_000_000,

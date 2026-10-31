@@ -40,19 +40,19 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
         else {
             anyhow::bail!("unexpected rated admission call");
         };
-        let lease = crate::services::abuse::MessageAdmissionLease::new(
+        let lease = northstar_abuse_application::guard::MessageAdmissionLease::new(
             wire::unhex(&fence.admission_key_hex).map_err(|_| anyhow::anyhow!("invalid fence"))?,
             wire::unhex(&fence.payload_mac_hex).map_err(|_| anyhow::anyhow!("invalid fence"))?,
             fence.lease_token.0,
-            crate::services::abuse::MessageDedupeIdentity {
+            northstar_abuse_policy::MessageDedupeIdentity {
                 identity_digest: wire::unhex(&fence.dedupe_digest_hex)
                     .map_err(|_| anyhow::anyhow!("invalid dedupe binding"))?,
                 candidates: vec![],
             },
         );
-        let fact = admission::CommitFact::Reserved(crate::services::abuse::acceptance_fence(
-            &lease.acceptance(),
-        ));
+        let fact = admission::CommitFact::Reserved(
+            northstar_abuse_application::guard::acceptance_fence(&lease.acceptance()),
+        );
         witness::saved_case_commit_observed(
             async {
                 self.log.prefix();
@@ -70,7 +70,7 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
         self.log.prefix();
         Ok(MessageAdmissionStart::Proceed {
             lease: Some(lease),
-            requirement: crate::services::abuse::WorkRequirement {
+            requirement: northstar_abuse_policy::WorkRequirement {
                 action: requirement.action.clone(),
                 step: requirement.step,
                 work_factor: requirement.work_factor,
@@ -85,7 +85,7 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
     }
     async fn accept(
         &self,
-        acceptance: &crate::services::abuse::MessageAdmissionAcceptance<'_>,
+        acceptance: &northstar_abuse_application::guard::MessageAdmissionAcceptance<'_>,
         observation: &AdmissionWitness,
     ) -> Result<FinalizeDecision> {
         let wire::Admission::Reserved {
@@ -106,7 +106,7 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
             observation,
             admission::TransactionScope::AdmissionFinalize,
             admission::CommitFact::Finalized {
-                fence: crate::services::abuse::acceptance_fence(acceptance),
+                fence: northstar_abuse_application::guard::acceptance_fence(acceptance),
                 result: admission::FinalizeSuccess::PendingAccepted,
             },
         )

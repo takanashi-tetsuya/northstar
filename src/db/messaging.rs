@@ -3,10 +3,10 @@
 use crate::{
     cluster::{ClusterAdmission, DirectPostCommitMode, DirectSpoolEligibility},
     db,
-    services::abuse::PersonalMessageContentKeyring,
     services::{messaging::*, muc::DurableMucInviteOutcome},
 };
 use anyhow::Result;
+use northstar_abuse_application::guard::PersonalMessageContentKeyring;
 use northstar_message_application::direct_commit::{DirectCommitObserver, DirectCommitRepository};
 use northstar_message_application::PersonalMessageCommitRepository;
 use northstar_roster_application::privacy::PrivacyStanzaKind;

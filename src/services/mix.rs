@@ -3,9 +3,9 @@
 //! The service owns replay proofs, admission limits and committed delivery wakes.
 //! Repository operations preserve each cross-table transaction.
 
-use crate::services::abuse::{MixMessageContentKeyring, MixRetractionContentKeyring};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use northstar_abuse_application::guard::{MixMessageContentKeyring, MixRetractionContentKeyring};
 use northstar_xml_builder::XmlElement;
 use std::collections::BTreeSet;
 use std::sync::Arc;

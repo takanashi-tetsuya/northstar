@@ -1,10 +1,9 @@
 //! PostgreSQL-backed login abuse adapters with distinct SASL and Passkey grants.
 
-use crate::{
-    services::abuse::{AbuseAction, AbuseGuard, GuardError, PowIntent, PowProof, WorkRequirement},
-    services::login_abuse::{PasskeyLoginAbuseRepository, SaslLoginAbuseRepository},
-};
 use anyhow::Result;
+use northstar_abuse_application::guard::AbuseGuard;
+use northstar_abuse_application::login::{PasskeyLoginAbuseRepository, SaslLoginAbuseRepository};
+use northstar_abuse_policy::{AbuseAction, GuardError, PowIntent, PowProof, WorkRequirement};
 use std::sync::Arc;
 
 pub(crate) struct PostgresSaslLoginAbuseRepository {

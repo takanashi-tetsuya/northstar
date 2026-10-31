@@ -183,7 +183,7 @@ async fn login_publication_preserves_each_scram_family_across_rolling_configurat
     assert_eq!(rebuilt_iterations, (10_000, 8_000));
 }
 
-fn solve_pow(challenge: &crate::services::abuse::PowChallenge) -> crate::services::abuse::PowProof {
+fn solve_pow(challenge: &northstar_abuse_policy::PowChallenge) -> northstar_abuse_policy::PowProof {
     use sha2::{Digest, Sha256};
 
     let target = u64::MAX / challenge.requirement.work_factor.max(1);
@@ -194,7 +194,7 @@ fn solve_pow(challenge: &crate::services::abuse::PowChallenge) -> crate::service
         hasher.update(nonce.as_bytes());
         let digest = hasher.finalize();
         if u64::from_be_bytes(digest[..8].try_into().unwrap()) <= target {
-            return crate::services::abuse::PowProof {
+            return northstar_abuse_policy::PowProof {
                 challenge_id: challenge.challenge_id,
                 nonce,
             };
@@ -430,7 +430,7 @@ async fn concurrent_registration_cannot_exceed_the_global_hourly_limit() {
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL pointing at a disposable random PostgreSQL schema"]
 async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_audit() {
-    use crate::services::abuse::{AbuseConfig, AbuseGuard};
+    use northstar_abuse_policy::AbuseConfig;
     use std::time::Duration;
 
     let url = std::env::var("TEST_DATABASE_URL")
@@ -445,7 +445,7 @@ async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_a
         .await
         .unwrap();
 
-    let guard = std::sync::Arc::new(AbuseGuard::new_persistent(
+    let guard = std::sync::Arc::new(crate::db::abuse_persistence_repository::persistent_guard(
         AbuseConfig {
             base_work_factor: 2,
             max_work_factor: 64,
@@ -474,7 +474,7 @@ async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_a
     let actors = vec![format!("ip:198.51.100.{}", suffix.as_bytes()[0])];
     let subject = format!("registration:{}", actors[0]);
     let registration_password = "guarded-registration-password";
-    let intent = crate::services::abuse::PowIntent::xmpp_registration(
+    let intent = northstar_abuse_policy::PowIntent::xmpp_registration(
         &username,
         registration_password,
         Some(&invitation),
@@ -579,7 +579,7 @@ async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_a
     };
     assert_eq!(created.username, username);
 
-    let replay_intent = crate::services::abuse::PowIntent::xmpp_registration(
+    let replay_intent = northstar_abuse_policy::PowIntent::xmpp_registration(
         &replay_username,
         registration_password,
         Some(&invitation),
@@ -914,7 +914,8 @@ async fn rest_password_cas_and_admin_authorization_are_atomic() {
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
-    use crate::services::abuse::{AbuseAction, AbuseConfig, AbuseGuard, TransactionalGuardOutcome};
+    use northstar_abuse_application::guard::TransactionalGuardOutcome;
+    use northstar_abuse_policy::{AbuseAction, AbuseConfig};
     use std::collections::BTreeMap;
     use std::sync::Arc;
     use std::time::Duration;
@@ -943,7 +944,7 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
     let keyring = Arc::new(
         crate::db::ApiControlKeyring::new(b"password-api-control-test-key-000001", None).unwrap(),
     );
-    let guard = AbuseGuard::new_persistent(
+    let guard = crate::db::abuse_persistence_repository::persistent_guard(
         AbuseConfig {
             base_work_factor: 2,
             max_work_factor: 1024,

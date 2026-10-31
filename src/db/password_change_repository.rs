@@ -3,7 +3,6 @@
 
 use crate::{
     db,
-    services::abuse::{AbuseAction, AbuseGuard, TransactionalGuardOutcome},
     services::{
         api_mutations::{self, StoredApiResponse},
         password_change::{
@@ -13,6 +12,8 @@ use crate::{
     },
 };
 use anyhow::{Context, Result};
+use northstar_abuse_application::guard::{AbuseGuard, TransactionalGuardOutcome};
+use northstar_abuse_policy::AbuseAction;
 use sqlx::{PgPool, Postgres, Transaction};
 use std::sync::Arc;
 
@@ -361,13 +362,11 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        services::abuse::{AbuseConfig, PowIntent},
-        services::{
-            api_mutations::{api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest},
-            password_change::PasswordChangeService,
-        },
+    use crate::services::{
+        api_mutations::{api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest},
+        password_change::PasswordChangeService,
     };
+    use northstar_abuse_policy::{AbuseConfig, PowIntent};
     use std::{net::IpAddr, time::Duration};
     use uuid::Uuid;
 
@@ -443,7 +442,7 @@ mod tests {
         let keyring = Arc::new(
             db::ApiControlKeyring::new(b"password-service-test-control-key-00001", None).unwrap(),
         );
-        let guard = Arc::new(AbuseGuard::new_persistent(
+        let guard = Arc::new(crate::db::abuse_persistence_repository::persistent_guard(
             AbuseConfig {
                 base_work_factor: 2,
                 max_work_factor: 64,

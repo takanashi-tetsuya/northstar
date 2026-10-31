@@ -182,7 +182,7 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     let service = MessageService::new(
         PostgresMessageRepository::new(
             pool.clone(),
-            crate::services::abuse::test_personal_message_content_keyring(),
+            northstar_abuse_application::guard::test_personal_message_content_keyring(),
             "local.test",
             100,
             8_000_000,
@@ -442,7 +442,7 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     let quota_service = MessageService::new(
         PostgresMessageRepository::new(
             pool.clone(),
-            crate::services::abuse::test_personal_message_content_keyring(),
+            northstar_abuse_application::guard::test_personal_message_content_keyring(),
             "local.test",
             1,
             8_000_000,

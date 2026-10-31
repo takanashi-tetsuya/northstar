@@ -2,9 +2,9 @@
 //! archiving (room context). The personal archive, its preferences and the MAM queries are
 //! northstar-archive-postgres, re-exported here.
 
-use crate::services::abuse::ContentIdentityAuthenticators;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use northstar_abuse_policy::ContentIdentityAuthenticators;
 use northstar_archive_core::{decide_mam_room_read, MamRoomReadDecision};
 use rand::RngCore;
 use sha2::{Digest, Sha256};

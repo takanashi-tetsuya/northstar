@@ -167,6 +167,7 @@ digraph compile_time {
   "multer";
   "ndk-context";
   "nom";
+  "northstar-abuse-application";
   "northstar-abuse-policy";
   "northstar-archive-application";
   "northstar-archive-core";
@@ -911,6 +912,21 @@ digraph compile_time {
   "multer" -> "version_check";
   "nom" -> "memchr";
   "nom" -> "minimal-lexical";
+  "northstar-abuse-application" -> "anyhow";
+  "northstar-abuse-application" -> "base64";
+  "northstar-abuse-application" -> "chrono";
+  "northstar-abuse-application" -> "dashmap";
+  "northstar-abuse-application" -> "hmac";
+  "northstar-abuse-application" -> "northstar-abuse-policy";
+  "northstar-abuse-application" -> "northstar-xmpp-types";
+  "northstar-abuse-application" -> "rand";
+  "northstar-abuse-application" -> "serde_json";
+  "northstar-abuse-application" -> "sha2";
+  "northstar-abuse-application" -> "subtle";
+  "northstar-abuse-application" -> "tokio";
+  "northstar-abuse-application" -> "tracing";
+  "northstar-abuse-application" -> "uuid";
+  "northstar-abuse-application" -> "zeroize";
   "northstar-abuse-policy" -> "anyhow";
   "northstar-abuse-policy" -> "base64";
   "northstar-abuse-policy" -> "chrono";
@@ -1566,6 +1582,7 @@ digraph compile_time {
   "rust-xmpp-server" -> "hmac";
   "rust-xmpp-server" -> "idna";
   "rust-xmpp-server" -> "libc";
+  "rust-xmpp-server" -> "northstar-abuse-application";
   "rust-xmpp-server" -> "northstar-abuse-policy";
   "rust-xmpp-server" -> "northstar-archive-application";
   "rust-xmpp-server" -> "northstar-archive-core";

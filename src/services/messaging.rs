@@ -12,9 +12,9 @@ use super::{
     muc::{ClusterMucInviteAuthority, DurableMucInviteOutcome},
     retractions::FederationOutboxPolicy,
 };
-use crate::services::abuse::MessageDedupeIdentity;
 use crate::xmpp::outbound::{OutboundItem, RouteEnqueue};
 use anyhow::Result;
+use northstar_abuse_policy::MessageDedupeIdentity;
 use northstar_delivery_core::DurableDelivery;
 use northstar_message_application::direct_commit::{
     CommitError as DirectCommitError, DirectCommitRepository,

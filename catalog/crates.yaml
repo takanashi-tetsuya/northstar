@@ -66,6 +66,16 @@ crates:
     api_stability: internal
     publish_policy: never
 
+  - crate_id: northstar-abuse-application
+    package: northstar-abuse-application
+    path: crates/contexts/abuse/northstar-abuse-application
+    tier: context
+    context: abuse
+    role: application
+    owner_team: platform
+    api_stability: internal-stable
+    publish_policy: never
+
   - crate_id: northstar-abuse-policy
     package: northstar-abuse-policy
     path: crates/contexts/abuse/northstar-abuse-policy

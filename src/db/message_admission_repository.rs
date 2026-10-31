@@ -1,17 +1,16 @@
 //! PostgreSQL-backed adapter for exact rated-message proof admission leases.
 use crate::{
     db::{abuse_actor_state_repository, abuse_verification_repository},
-    services::abuse::{
-        acceptance_fence, AbuseAction, AbuseGuard, MessageAdmissionAcceptance,
-        MessageAdmissionCandidate, MessageAdmissionLease, MessageAdmissionRequest,
-        MessageAdmissionStart, MessageDedupeIdentity, PersistentVerificationInput, PowIntent,
-    },
     services::message_admission::{
         witness::{commit_observed, AdmissionWitness},
         MessageAdmissionRepository,
     },
 };
 use anyhow::Result;
+use northstar_abuse_application::guard::{
+    acceptance_fence, AbuseGuard, MessageAdmissionAcceptance, MessageAdmissionCandidate,
+    MessageAdmissionLease, MessageAdmissionStart, PersistentVerificationInput,
+};
 use northstar_abuse_policy::admission_execution::{
     AdmissionCommitObserver, BeginCommitPurpose, Command, CommitFact, Effect, FinalizeSuccess,
     ReconcileResult, TransactionScope,
@@ -19,6 +18,9 @@ use northstar_abuse_policy::admission_execution::{
 use northstar_abuse_policy::admission_transaction::{
     self as decision, AdmissionCandidate, AdmissionFence, AdmissionRow, BeginRowDecision,
     CapacityDecision, FinalizeDecision, RowState,
+};
+use northstar_abuse_policy::{
+    AbuseAction, MessageAdmissionRequest, MessageDedupeIdentity, PowIntent,
 };
 use sqlx::{PgPool, Row};
 use std::sync::Arc;

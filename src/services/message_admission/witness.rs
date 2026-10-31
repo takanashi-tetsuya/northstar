@@ -34,7 +34,7 @@ impl DirectOperationHandle {
 
     pub(crate) fn begin(
         &self,
-        request: &crate::services::abuse::MessageAdmissionRequest<'_>,
+        request: &northstar_abuse_policy::MessageAdmissionRequest<'_>,
     ) -> anyhow::Result<RetainedAdmission> {
         // The existing validator runs before cloning any authority input.
         let Command::Begin(request) = super::begin_command(request)? else {
@@ -53,7 +53,7 @@ impl DirectOperationHandle {
 
     pub(crate) fn finalize(
         &self,
-        lease: &crate::services::abuse::MessageAdmissionLease,
+        lease: &northstar_abuse_application::guard::MessageAdmissionLease,
     ) -> anyhow::Result<RetainedAdmission> {
         let fence = super::acceptance_fence(&lease.acceptance());
         let mut operation = self.0.lock().unwrap_or_else(|e| e.into_inner());

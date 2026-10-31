@@ -2,16 +2,16 @@
 //! Reservation, independent finalization and guard-only transactions stay distinct.
 pub(crate) mod witness;
 
-use crate::services::abuse::{
-    acceptance_fence, MessageAdmissionAcceptance, MessageAdmissionLease, MessageAdmissionRequest,
-    MessageAdmissionStart,
-};
 use anyhow::Result;
+use northstar_abuse_application::guard::{
+    acceptance_fence, MessageAdmissionAcceptance, MessageAdmissionLease, MessageAdmissionStart,
+};
 use northstar_abuse_policy::admission_execution::{
     BeginRequest, BeginResult, Command, Completion, Coordinator, Correlation, Effect, EffectResult,
     ExecutionOutcome, FailureKind, GuardDecision, Knowledge, ReconcileResult, TransactionScope,
 };
 use northstar_abuse_policy::admission_transaction::{AdmissionFence, FinalizeDecision};
+use northstar_abuse_policy::MessageAdmissionRequest;
 use uuid::Uuid;
 use witness::{AdmissionWitness, RetainedAdmission};
 
@@ -33,7 +33,7 @@ pub(crate) trait MessageAdmissionRepository: Send + Sync {
 }
 
 pub(crate) fn begin_command(request: &MessageAdmissionRequest<'_>) -> Result<Command> {
-    crate::services::abuse::validate_message_admission_request(request)?;
+    northstar_abuse_application::guard::validate_message_admission_request(request)?;
     Ok(Command::Begin(BeginRequest::from(*request)))
 }
 pub(crate) fn operation(command: Command) -> (Coordinator, AdmissionWitness) {
@@ -63,7 +63,7 @@ struct AdmissionExecutionError {
 }
 
 fn failure(error: &anyhow::Error) -> FailureKind {
-    if crate::services::abuse::is_abuse_state_busy(error) {
+    if northstar_abuse_application::guard::is_abuse_state_busy(error) {
         FailureKind::ActorBusy
     } else {
         FailureKind::Backend
@@ -74,7 +74,7 @@ fn error_for(outcome: ExecutionOutcome) -> anyhow::Error {
         outcome,
         ExecutionOutcome::PreCommitFailure(FailureKind::ActorBusy)
     ) {
-        return crate::services::abuse::AbuseStateBusy.into();
+        return northstar_abuse_application::guard::AbuseStateBusy.into();
     }
     AdmissionExecutionError { outcome }.into()
 }
@@ -320,10 +320,10 @@ pub(crate) async fn finalize_message_admission_with<A, O, F, E>(
 #[cfg(test)]
 pub(crate) mod continuation_fixture {
     use super::*;
-    use crate::services::abuse::{MessageDedupeIdentity, WorkRequirement};
     use northstar_abuse_policy::admission_execution::{
         AdmissionCommitObserver, BeginCommitPurpose, CommitFact, FinalizeSuccess,
     };
+    use northstar_abuse_policy::{MessageDedupeIdentity, WorkRequirement};
     use std::sync::{Arc, Mutex};
 
     pub(crate) type Events = Arc<Mutex<Vec<&'static str>>>;
@@ -462,10 +462,10 @@ pub(crate) mod continuation_fixture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::abuse::{MessageDedupeIdentity, WorkRequirement};
     use northstar_abuse_policy::admission_execution::{
         AdmissionCommitObserver, BeginCommitPurpose, CommitFact, FinalizeSuccess,
     };
+    use northstar_abuse_policy::{MessageDedupeIdentity, WorkRequirement};
 
     #[derive(Clone, Copy)]
     enum Mode {
@@ -545,7 +545,7 @@ mod tests {
                     )?;
                     anyhow::bail!("backend error with forbidden-private-row-text")
                 }
-                Mode::Busy => Err(crate::services::abuse::AbuseStateBusy.into()),
+                Mode::Busy => Err(northstar_abuse_application::guard::AbuseStateBusy.into()),
                 Mode::Conflict => Ok(MessageAdmissionStart::Conflict),
             }
         }
@@ -621,7 +621,9 @@ mod tests {
             .begin_message_admission(&request())
             .await
             .unwrap_err();
-        assert!(crate::services::abuse::is_abuse_state_busy(&busy));
+        assert!(northstar_abuse_application::guard::is_abuse_state_busy(
+            &busy
+        ));
         let unknown = MessageAdmissionService::new(Repository(Mode::CommitUnknown))
             .begin_message_admission(&request())
             .await
@@ -715,8 +717,8 @@ mod tests {
                 (Ok(MessageAdmissionStart::Conflict), Ok(MessageAdmissionStart::Conflict)) => {}
                 (Err(actual), Err(ordinary)) => {
                     assert_eq!(
-                        crate::services::abuse::is_abuse_state_busy(actual),
-                        crate::services::abuse::is_abuse_state_busy(ordinary)
+                        northstar_abuse_application::guard::is_abuse_state_busy(actual),
+                        northstar_abuse_application::guard::is_abuse_state_busy(ordinary)
                     );
                     if let (Some(actual), Some(ordinary)) = (
                         actual.downcast_ref::<AdmissionExecutionError>(),

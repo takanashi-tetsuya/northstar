@@ -187,6 +187,7 @@
     "northstar-pubsub-application",
     "northstar-pubsub-core",
     "northstar-pubsub-postgres",
+    "northstar-pubsub-xmpp",
     "northstar-room-application",
     "northstar-room-core",
     "northstar-roster-application",
@@ -2813,6 +2814,26 @@
       "uuid"
     ],
     [
+      "northstar-pubsub-xmpp",
+      "base64"
+    ],
+    [
+      "northstar-pubsub-xmpp",
+      "northstar-pubsub-application"
+    ],
+    [
+      "northstar-pubsub-xmpp",
+      "northstar-xmpp-types"
+    ],
+    [
+      "northstar-pubsub-xmpp",
+      "roxmltree"
+    ],
+    [
+      "northstar-pubsub-xmpp",
+      "sha1"
+    ],
+    [
       "northstar-room-application",
       "northstar-room-core"
     ],
@@ -4843,6 +4864,10 @@
     [
       "rust-xmpp-server",
       "northstar-pubsub-postgres"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-pubsub-xmpp"
     ],
     [
       "rust-xmpp-server",

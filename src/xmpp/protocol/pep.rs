@@ -3,12 +3,12 @@ use crate::services::xml_util::*;
 use crate::state::pep_last_items::PepLastItemsContext;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
+#[cfg(test)]
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use northstar_pubsub_application::PepPublishItemsCommand;
 use northstar_pubsub_application::{
     profile::{
-        detected_media_type as detected_avatar_media_type, AvatarPresenceUpdate,
-        ProfileAudienceSnapshot, ProfilePublishResult, ProfilePublishStatus,
+        AvatarPresenceUpdate, ProfileAudienceSnapshot, ProfilePublishResult, ProfilePublishStatus,
     },
     PepConfigureNodeCommand, PepCreateNodeCommand, PepDeleteNodeCommand, PepPurgeNodeCommand,
     PepRetractCommand, PepSetAffiliationsCommand, PepUnsubscribeBatchCommand, PubSubService,
@@ -23,12 +23,12 @@ use northstar_pubsub_core::{
     PubSubOutboxInsert,
 };
 use roxmltree::Node;
+#[cfg(test)]
 use sha1::{Digest, Sha1};
 use std::collections::HashSet;
 
 mod node_management;
 mod notifications;
-mod payload_validation;
 mod publishing;
 
 use self::node_management::{parse_form_bool, valid_node_name};
@@ -36,7 +36,7 @@ use self::notifications::{
     pep_subscription_element, published_event_items, render_pep_direct_state_messages,
     strip_pubsub_item_root_namespaces,
 };
-use self::payload_validation::valid_pep_payload;
+use northstar_pubsub_xmpp::payload::valid_pep_payload;
 
 #[cfg(test)]
 use self::notifications::published_event_item;
@@ -47,16 +47,15 @@ pub(crate) use self::notifications::{
     deliver_explicit_pep_last_items_for_resource, deliver_pep_last_items_for_federated_resource,
     deliver_pep_last_items_for_resource, prepare_pep_last_item_outbox, profile_item_event,
 };
-pub(crate) use self::payload_validation::{
-    valid_avatar_data, valid_avatar_metadata, valid_png_image,
-};
 #[cfg(test)]
 pub(crate) use self::publishing::bookmarks2_items_event;
+pub(crate) use northstar_pubsub_xmpp::payload::{
+    valid_avatar_data, valid_avatar_metadata, valid_png_image,
+};
 
 const NS_PUBSUB: &str = "http://jabber.org/protocol/pubsub";
 const NS_PUBSUB_EVENT: &str = "http://jabber.org/protocol/pubsub#event";
 const NS_XDATA: &str = "jabber:x:data";
-const NS_OMEMO2: &str = "urn:xmpp:omemo:2";
 const OMEMO_DEVICES: &str = "urn:xmpp:omemo:2:devices";
 const OMEMO_BUNDLES: &str = "urn:xmpp:omemo:2:bundles";
 const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
@@ -793,10 +792,6 @@ const MODULE_SOURCE: &[(&str, &str)] = &[
     ("publishing", include_str!("pep/publishing.rs")),
     ("notifications", include_str!("pep/notifications.rs")),
     ("node_management", include_str!("pep/node_management.rs")),
-    (
-        "payload_validation",
-        include_str!("pep/payload_validation.rs"),
-    ),
 ];
 
 #[cfg(test)]

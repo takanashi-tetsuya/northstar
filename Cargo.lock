@@ -2062,6 +2062,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-pubsub-xmpp"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "northstar-pubsub-application",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "sha1",
+]
+
+[[package]]
 name = "northstar-room-application"
 version = "0.1.0"
 dependencies = [
@@ -3373,6 +3384,7 @@ dependencies = [
  "northstar-pubsub-application",
  "northstar-pubsub-core",
  "northstar-pubsub-postgres",
+ "northstar-pubsub-xmpp",
  "northstar-room-application",
  "northstar-room-core",
  "northstar-roster-application",

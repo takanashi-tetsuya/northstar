@@ -1,0 +1,15 @@
+[package]
+name = "northstar-pubsub-xmpp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "PubSub, PEP, vCard and private XML handlers of client sessions for Northstar"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+northstar-pubsub-application = { path = "../northstar-pubsub-application" }
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+roxmltree = "0.20"
+sha1 = "0.10"

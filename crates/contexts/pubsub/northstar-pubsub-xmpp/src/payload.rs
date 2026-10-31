@@ -1,8 +1,38 @@
 //! Validate PEP payloads and their profile, avatar, bookmark, and OMEMO representations.
 
-use super::*;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use northstar_pubsub_application::profile::detected_media_type as detected_avatar_media_type;
+pub use northstar_pubsub_application::profile::valid_png_image;
+use northstar_xmpp_types::text::contains_unsafe_bidi_controls;
+use roxmltree::Node;
+use sha1::{Digest, Sha1};
+use std::collections::HashSet;
 
-pub(super) fn valid_pep_payload(node: &str, item_id: &str, item: Node<'_, '_>) -> bool {
+const NS_OMEMO2: &str = "urn:xmpp:omemo:2";
+const OMEMO_DEVICES: &str = "urn:xmpp:omemo:2:devices";
+const OMEMO_BUNDLES: &str = "urn:xmpp:omemo:2:bundles";
+const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
+const AVATAR_DATA: &str = "urn:xmpp:avatar:data";
+const AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
+const VCARD4: &str = "urn:xmpp:vcard4";
+const CONTACTS: &str = "urn:xmpp:contacts";
+
+fn valid_bare_jid(value: &str) -> bool {
+    northstar_xmpp_types::jid::CanonicalJid::parse_bare(value).is_ok()
+}
+
+fn xml_subtree_contains_unsafe_bidi_controls(node: Node<'_, '_>) -> bool {
+    node.descendants().any(|descendant| {
+        descendant.text().is_some_and(contains_unsafe_bidi_controls)
+            || descendant
+                .attributes()
+                .any(|attribute| contains_unsafe_bidi_controls(attribute.value()))
+    })
+}
+
+/// Whether the PEP item `item` with id `item_id` holds exactly one payload, and a valid one where `node` is
+/// a profile, avatar, bookmark, contact or OMEMO node.
+pub fn valid_pep_payload(node: &str, item_id: &str, item: Node<'_, '_>) -> bool {
     let payloads = item
         .children()
         .filter(|child| child.is_element())
@@ -67,7 +97,7 @@ pub(super) fn valid_pep_payload(node: &str, item_id: &str, item: Node<'_, '_>) -
     }
 }
 
-pub(super) fn valid_vcard4(payload: Node<'_, '_>) -> bool {
+fn valid_vcard4(payload: Node<'_, '_>) -> bool {
     const VCARD4_NS: &str = "urn:ietf:params:xml:ns:vcard-4.0";
     if payload.tag_name().name() != "vcard"
         || payload.tag_name().namespace() != Some(VCARD4_NS)
@@ -137,12 +167,14 @@ pub(super) fn valid_vcard4(payload: Node<'_, '_>) -> bool {
         })
 }
 
-pub(crate) fn valid_avatar_data(item_id: &str, payload: Node<'_, '_>) -> bool {
+/// Whether `payload` is XEP-0084 avatar data: base64 of a supported image of at most 256 KiB, a PNG
+/// being well formed, whose SHA-1 is `item_id`.
+pub fn valid_avatar_data(item_id: &str, payload: Node<'_, '_>) -> bool {
     decode_avatar_data(payload)
         .is_some_and(|bytes| valid_png_image(&bytes) && sha1_matches(item_id, &bytes))
 }
 
-pub(super) fn decode_avatar_data(payload: Node<'_, '_>) -> Option<Vec<u8>> {
+fn decode_avatar_data(payload: Node<'_, '_>) -> Option<Vec<u8>> {
     if payload.tag_name().name() != "data"
         || payload.tag_name().namespace() != Some(AVATAR_DATA)
         || payload.attributes().len() != 0
@@ -160,7 +192,8 @@ pub(super) fn decode_avatar_data(payload: Node<'_, '_>) -> Option<Vec<u8>> {
         .then_some(bytes)
 }
 
-pub(crate) fn valid_avatar_metadata(item_id: &str, payload: Node<'_, '_>) -> bool {
+/// Whether `payload` is valid XEP-0084 avatar metadata for the item `item_id`.
+pub fn valid_avatar_metadata(item_id: &str, payload: Node<'_, '_>) -> bool {
     if payload.tag_name().name() != "metadata"
         || payload.tag_name().namespace() != Some(AVATAR_METADATA)
         || payload.attributes().len() != 0
@@ -286,11 +319,11 @@ pub(crate) fn valid_avatar_metadata(item_id: &str, payload: Node<'_, '_>) -> boo
     info_count > 0 && has_png_representation && png_matches_item
 }
 
-pub(super) fn valid_sha1(value: &str) -> bool {
+fn valid_sha1(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-pub(super) fn valid_avatar_media_type(value: &str, allow_video: bool) -> bool {
+fn valid_avatar_media_type(value: &str, allow_video: bool) -> bool {
     let Some((top_level, subtype)) = value.split_once('/') else {
         return false;
     };
@@ -308,7 +341,7 @@ pub(super) fn valid_avatar_media_type(value: &str, allow_video: bool) -> bool {
         })
 }
 
-pub(super) fn valid_http_url(value: &str) -> bool {
+fn valid_http_url(value: &str) -> bool {
     if value
         .chars()
         .any(|character| character.is_control() || character.is_whitespace())
@@ -335,120 +368,7 @@ pub(super) fn valid_http_url(value: &str) -> bool {
 /// bounded by the avatar payload quota and verifies chunk bounds and CRCs, the
 /// required chunk state machine, IHDR fields, critical-chunk names, and the
 /// absence of trailing data. Image decompression remains the client's task.
-pub(crate) fn valid_png_image(bytes: &[u8]) -> bool {
-    const SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
-    if !bytes.starts_with(SIGNATURE) {
-        return false;
-    }
-
-    let mut offset = SIGNATURE.len();
-    let mut saw_ihdr = false;
-    let mut saw_plte = false;
-    let mut saw_idat = false;
-    let mut left_idat_run = false;
-    let mut color_type = 0_u8;
-
-    while offset < bytes.len() {
-        let Some(header_end) = offset.checked_add(8) else {
-            return false;
-        };
-        if header_end > bytes.len() {
-            return false;
-        }
-        let length = u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-        let chunk_type = &bytes[offset + 4..header_end];
-        let Some(data_end) = header_end.checked_add(length) else {
-            return false;
-        };
-        let Some(chunk_end) = data_end.checked_add(4) else {
-            return false;
-        };
-        if chunk_end > bytes.len()
-            || !chunk_type.iter().all(u8::is_ascii_alphabetic)
-            || png_crc32(&bytes[offset + 4..data_end])
-                != u32::from_be_bytes(bytes[data_end..chunk_end].try_into().unwrap())
-        {
-            return false;
-        }
-
-        match chunk_type {
-            b"IHDR" => {
-                if saw_ihdr || offset != SIGNATURE.len() || length != 13 {
-                    return false;
-                }
-                let data = &bytes[header_end..data_end];
-                let width = u32::from_be_bytes(data[0..4].try_into().unwrap());
-                let height = u32::from_be_bytes(data[4..8].try_into().unwrap());
-                let bit_depth = data[8];
-                color_type = data[9];
-                let valid_depth = match color_type {
-                    0 => matches!(bit_depth, 1 | 2 | 4 | 8 | 16),
-                    2 | 4 | 6 => matches!(bit_depth, 8 | 16),
-                    3 => matches!(bit_depth, 1 | 2 | 4 | 8),
-                    _ => false,
-                };
-                if width == 0
-                    || height == 0
-                    || !valid_depth
-                    || data[10] != 0
-                    || data[11] != 0
-                    || data[12] > 1
-                {
-                    return false;
-                }
-                saw_ihdr = true;
-            }
-            b"PLTE" => {
-                if !saw_ihdr
-                    || saw_plte
-                    || saw_idat
-                    || matches!(color_type, 0 | 4)
-                    || length == 0
-                    || length > 768
-                    || !length.is_multiple_of(3)
-                {
-                    return false;
-                }
-                saw_plte = true;
-            }
-            b"IDAT" => {
-                if !saw_ihdr || left_idat_run || color_type == 3 && !saw_plte {
-                    return false;
-                }
-                saw_idat = true;
-            }
-            b"IEND" => {
-                return saw_ihdr && saw_idat && length == 0 && chunk_end == bytes.len();
-            }
-            // Unknown critical chunks cannot be interpreted safely. Unknown
-            // ancillary chunks are explicitly forward-compatible in PNG.
-            _ if chunk_type[0].is_ascii_uppercase() => return false,
-            _ => {
-                if !saw_ihdr {
-                    return false;
-                }
-            }
-        }
-        if saw_idat && chunk_type != b"IDAT" {
-            left_idat_run = true;
-        }
-        offset = chunk_end;
-    }
-    false
-}
-
-pub(super) fn png_crc32(bytes: &[u8]) -> u32 {
-    let mut crc = u32::MAX;
-    for byte in bytes {
-        crc ^= u32::from(*byte);
-        for _ in 0..8 {
-            crc = (crc >> 1) ^ (0xedb8_8320 & 0_u32.wrapping_sub(crc & 1));
-        }
-    }
-    !crc
-}
-
-pub(super) fn sha1_matches(expected: &str, bytes: &[u8]) -> bool {
+fn sha1_matches(expected: &str, bytes: &[u8]) -> bool {
     let digest = Sha1::digest(bytes);
     let actual = digest
         .iter()
@@ -457,7 +377,7 @@ pub(super) fn sha1_matches(expected: &str, bytes: &[u8]) -> bool {
     actual.eq_ignore_ascii_case(expected)
 }
 
-pub(super) fn valid_bookmark(item_id: &str, conference: Node<'_, '_>) -> bool {
+fn valid_bookmark(item_id: &str, conference: Node<'_, '_>) -> bool {
     if conference.tag_name().name() != "conference"
         || conference.tag_name().namespace() != Some(BOOKMARKS2)
         || conference.attribute("jid").is_some()
@@ -518,7 +438,7 @@ pub(super) fn valid_bookmark(item_id: &str, conference: Node<'_, '_>) -> bool {
         })
 }
 
-pub(super) fn valid_omemo_bundle(bundle: Node<'_, '_>) -> bool {
+fn valid_omemo_bundle(bundle: Node<'_, '_>) -> bool {
     if bundle.attributes().len() != 0 {
         return false;
     }
@@ -602,14 +522,14 @@ pub(super) fn valid_omemo_bundle(bundle: Node<'_, '_>) -> bool {
         })
 }
 
-pub(super) fn valid_leaf_b64_exact(node: Node<'_, '_>, decoded_len: usize) -> bool {
+fn valid_leaf_b64_exact(node: Node<'_, '_>, decoded_len: usize) -> bool {
     !node.children().any(|child| child.is_element())
         && node
             .text()
             .is_some_and(|text| valid_b64_exact(text, decoded_len))
 }
 
-pub(super) fn valid_b64_exact(value: &str, decoded_len: usize) -> bool {
+fn valid_b64_exact(value: &str, decoded_len: usize) -> bool {
     if value.len() > decoded_len.saturating_mul(2).saturating_add(16) {
         return false;
     }
@@ -622,6 +542,6 @@ pub(super) fn valid_b64_exact(value: &str, decoded_len: usize) -> bool {
         .is_ok_and(|decoded| decoded.len() == decoded_len)
 }
 
-pub(super) fn parse_positive_i32(value: &str) -> Option<i32> {
+fn parse_positive_i32(value: &str) -> Option<i32> {
     value.parse::<i32>().ok().filter(|value| *value > 0)
 }

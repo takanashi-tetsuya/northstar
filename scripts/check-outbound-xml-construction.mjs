@@ -37,6 +37,7 @@ const BASELINE = new Map([
   ['src/xmpp/protocol/mix.rs', 0],
   ['src/xmpp/protocol/pubsub.rs', 0],
   ['src/xmpp/protocol/pep.rs', 0],
+  ['crates/contexts/pubsub/northstar-pubsub-xmpp/src/lib.rs', 0],
   ['src/xmpp/protocol/federated_muc.rs', 0],
   ['src/xmpp/protocol/misc.rs', 0],
   ['src/xmpp/protocol/sm.rs', 0],

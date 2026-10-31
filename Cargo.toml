@@ -48,6 +48,7 @@ members = [
     "crates/contexts/pubsub/northstar-pubsub-application",
     "crates/contexts/pubsub/northstar-pubsub-core",
     "crates/contexts/pubsub/northstar-pubsub-postgres",
+    "crates/contexts/pubsub/northstar-pubsub-xmpp",
     "crates/contexts/roster/northstar-roster-core",
     "crates/contexts/roster/northstar-roster-application",
     "crates/contexts/archive/northstar-archive-core",
@@ -179,6 +180,7 @@ northstar-room-application = { path = "crates/contexts/room/northstar-room-appli
 northstar-pubsub-application = { path = "crates/contexts/pubsub/northstar-pubsub-application" }
 northstar-pubsub-core = { path = "crates/contexts/pubsub/northstar-pubsub-core" }
 northstar-pubsub-postgres = { path = "crates/contexts/pubsub/northstar-pubsub-postgres" }
+northstar-pubsub-xmpp = { path = "crates/contexts/pubsub/northstar-pubsub-xmpp" }
 northstar-roster-core = { path = "crates/contexts/roster/northstar-roster-core" }
 northstar-roster-application = { path = "crates/contexts/roster/northstar-roster-application" }
 northstar-archive-core = { path = "crates/contexts/archive/northstar-archive-core" }

@@ -242,6 +242,16 @@ crates:
     api_stability: internal
     publish_policy: never
 
+  - crate_id: northstar-pubsub-xmpp
+    package: northstar-pubsub-xmpp
+    path: crates/contexts/pubsub/northstar-pubsub-xmpp
+    tier: context
+    context: pubsub
+    role: adapter
+    owner_team: realtime
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-room-application
     package: northstar-room-application
     path: crates/contexts/room/northstar-room-application

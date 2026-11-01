@@ -213,8 +213,6 @@ mod upload_admin_tests;
 
 pub(crate) mod sm_suspension;
 
-pub(crate) mod api_queries;
-
 pub(crate) mod omemo_recovery_repository;
 
 #[cfg(test)]
@@ -231,6 +229,8 @@ mod api_control_tests;
 mod api_operations_tests;
 #[cfg(test)]
 mod api_pages_tests;
+#[cfg(test)]
+mod api_queries_tests;
 #[cfg(test)]
 mod data_lifecycle_tests;
 #[cfg(test)]

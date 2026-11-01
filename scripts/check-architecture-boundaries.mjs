@@ -2396,7 +2396,7 @@ for (const [path, name] of [
 }
 const adminSessionRoute = structBody(read('src/api/admin.rs'), 'pub async fn admin_sessions(');
 const adminSessionService = structBody(read('crates/contexts/operations/northstar-operations-application/src/api_queries.rs'), 'pub async fn sessions<F>(');
-const adminSessionRepository = structBody(read('src/db/api_queries.rs'), 'async fn sessions<F>(');
+const adminSessionRepository = structBody(read('crates/contexts/workflows/northstar-workflows/src/api_queries.rs'), 'async fn sessions<F>(');
 if (/\b(?:sort_unstable_by_key|retain|truncate)\b/.test(adminSessionRoute)
     || !adminSessionService.includes('page_sessions(snapshot(), after, limit)')
     || !structBody(read('crates/contexts/operations/northstar-operations-application/src/api_queries.rs'), 'fn page_sessions(').includes('sort_unstable_by_key')) {

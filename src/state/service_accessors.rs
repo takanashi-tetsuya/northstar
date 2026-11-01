@@ -53,7 +53,7 @@ impl AppState {
     pub(crate) fn api_query_service(
         &self,
     ) -> &northstar_operations_application::api_queries::ApiQueryService<
-        db::api_queries::PostgresApiQueryRepository,
+        northstar_workflows::api_queries::PostgresApiQueryRepository,
     > {
         self.api_query_context.api_query_service()
     }

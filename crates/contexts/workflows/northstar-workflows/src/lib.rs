@@ -10,6 +10,7 @@ pub mod admin_command_repository;
 pub mod admin_dispatch_repository;
 pub mod admin_mutations;
 pub mod api_pages;
+pub mod api_queries;
 pub mod governance_repository;
 pub mod invitation_admin_repository;
 pub mod metrics_snapshot_repository;

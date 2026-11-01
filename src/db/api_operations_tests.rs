@@ -337,9 +337,9 @@ async fn query_ports_preserve_target_scope_and_authorization_denials() {
     .unwrap();
     setup.commit().await.unwrap();
 
-    let service = ApiQueryService::new(crate::db::api_queries::PostgresApiQueryRepository::new(
-        pool.clone(),
-    ));
+    let service = ApiQueryService::new(
+        northstar_workflows::api_queries::PostgresApiQueryRepository::new(pool.clone()),
+    );
     let page = service
         .operations(actor(), Some("running"), Some("admin.broadcast"), None, 25)
         .await

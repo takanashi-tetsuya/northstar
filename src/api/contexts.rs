@@ -97,11 +97,11 @@ pub(crate) type OperationAdminContext = ServiceContext<
 
 pub(crate) type ReportContext = reports::ReportContext<
     northstar_workflows::report_repository::PostgresReportRepository,
-    crate::db::api_queries::PostgresApiQueryRepository,
+    northstar_workflows::api_queries::PostgresApiQueryRepository,
 >;
 
 pub(crate) type ApiQueryContext =
-    api_queries::ApiQueryContext<crate::db::api_queries::PostgresApiQueryRepository>;
+    api_queries::ApiQueryContext<northstar_workflows::api_queries::PostgresApiQueryRepository>;
 
 pub(crate) type OmemoRecoveryPollContext = omemo_poll::OmemoRecoveryPollContext<
     crate::db::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository,

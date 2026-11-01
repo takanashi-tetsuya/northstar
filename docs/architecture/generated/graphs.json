@@ -3571,6 +3571,10 @@
       ],
       [
         "northstar-workflows",
+        "northstar-archive-postgres"
+      ],
+      [
+        "northstar-workflows",
         "northstar-auth-application"
       ],
       [

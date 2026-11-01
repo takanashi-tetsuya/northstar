@@ -626,7 +626,7 @@ impl AppState {
         );
         let api_query_context = api_queries::ApiQueryContext::new(
             northstar_operations_application::api_queries::ApiQueryService::new(
-                db::api_queries::PostgresApiQueryRepository::new(pool.clone()),
+                northstar_workflows::api_queries::PostgresApiQueryRepository::new(pool.clone()),
             ),
             Arc::clone(&api_cursor),
             api_queries::ApiQueryRuntime {

@@ -1,22 +1,22 @@
 //! Ordered live effects after MUC admission. This owner has no repository,
 //! acknowledgement or retry authority. The caller retains its room gate.
 
-use northstar_room_application::discussion::{Fanout, FanoutPermit, Rejected};
+use crate::discussion::{Fanout, FanoutPermit, Rejected};
 use std::future::Future;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MucFanoutDisposition {
+pub enum MucFanoutDisposition {
     Accepted,
     Replay,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MucFanoutStage {
+pub enum MucFanoutStage {
     Cluster,
     Local,
 }
 
-pub(crate) trait MucFanoutPort: Sync {
+pub trait MucFanoutPort: Sync {
     type Recipient: Send + Sync;
     type Blocked: Send;
 
@@ -37,10 +37,7 @@ pub(crate) trait MucFanoutPort: Sync {
 /// Returns whether a fresh accepted message attempted its effects, never an
 /// acknowledgement. A replay does not re-publish, fetch recipients or emit a
 /// routed-message metric. Dropping this future does not retry admission.
-pub(crate) async fn run_muc_fanout(
-    port: &impl MucFanoutPort,
-    disposition: MucFanoutDisposition,
-) -> bool {
+pub async fn run_muc_fanout(port: &impl MucFanoutPort, disposition: MucFanoutDisposition) -> bool {
     if disposition == MucFanoutDisposition::Replay {
         return false;
     }
@@ -52,7 +49,7 @@ pub(crate) async fn run_muc_fanout(
 
 /// Only the accepted discussion envelope can supply this consuming permit.
 /// Replay has no permit and uses the unchanged zero-effects disposition.
-pub(crate) async fn run_muc_discussion_fanout(
+pub async fn run_muc_discussion_fanout(
     port: &impl MucFanoutPort,
     permit: FanoutPermit,
 ) -> Result<bool, Rejected> {
@@ -324,8 +321,8 @@ mod tests {
 
     #[tokio::test]
     async fn observed_discussion_keeps_acquired_order_and_completed_prefix() {
-        use crate::services::muc::discussion::fixture;
-        use northstar_room_application::discussion::FanoutStage;
+        use crate::discussion::FanoutStage;
+        use crate::muc_service::discussion::fixture;
         let (observation, completion) = fixture::accepted().await;
         let permit = completion.into_fanout(&observation).unwrap().unwrap();
         let mut port = Port::new();
@@ -356,8 +353,8 @@ mod tests {
 
     #[tokio::test]
     async fn observed_discussion_cancellation_retains_receipt_and_actual_effect_prefix() {
-        use crate::services::muc::discussion::fixture;
-        use northstar_room_application::discussion::{FanoutStage, KnowledgeClass, TerminalReason};
+        use crate::discussion::{FanoutStage, KnowledgeClass, TerminalReason};
+        use crate::muc_service::discussion::fixture;
         for cut in 0..3 {
             let (observation, completion) = fixture::accepted().await;
             let permit = completion.into_fanout(&observation).unwrap().unwrap();
@@ -401,8 +398,8 @@ mod tests {
 
     #[tokio::test]
     async fn retired_discussion_permit_cannot_start_any_live_effect() {
-        use crate::services::muc::discussion::fixture;
-        use northstar_room_application::discussion::TerminalReason;
+        use crate::discussion::TerminalReason;
+        use crate::muc_service::discussion::fixture;
         let (observation, completion) = fixture::accepted().await;
         let permit = completion.into_fanout(&observation).unwrap().unwrap();
         observation.retire(TerminalReason::Cancelled);

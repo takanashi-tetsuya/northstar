@@ -57,7 +57,7 @@ impl SmSuspensionRepository for PostgresSmSuspensionRepository {
     async fn suspend_muc_occupant(
         &self,
         request: MucSuspensionRequest<'_>,
-    ) -> Result<crate::services::muc::ClusterMucTransitionOutcome> {
+    ) -> Result<northstar_room_application::muc_service::ClusterMucTransitionOutcome> {
         let room = db::muc_room(&self.pool, request.room_localpart)
             .await?
             .context("SM suspension references a missing MUC room")?;
@@ -87,7 +87,7 @@ impl SmSuspensionRepository for PostgresSmSuspensionRepository {
     async fn committed_muc_wake(
         &self,
         operation_id: Uuid,
-    ) -> Result<Option<crate::services::muc::ClusterMucWakeDescriptor>> {
+    ) -> Result<Option<northstar_room_application::muc_service::ClusterMucWakeDescriptor>> {
         db::cluster_muc_wake_descriptor(&self.pool, operation_id).await
     }
 }

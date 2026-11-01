@@ -1,6 +1,6 @@
 //! Local MUC occupant records, their endpoints and suspended SM endpoint buffers.
 
-use crate::services::muc::{LocalMucOccupantIdentity, SerializableMucOccupant};
+use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
 use std::{collections::VecDeque, sync::Arc};
 
 #[derive(Clone)]

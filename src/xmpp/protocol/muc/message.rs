@@ -224,15 +224,17 @@ impl ProtocolSession {
             .unwrap_or_default()
             .into_iter()
             .filter_map(|(nick, json)| {
-                serde_json::from_str::<crate::services::muc::SerializableMucOccupant>(&json)
-                    .ok()
-                    .map(|occupant| (nick, occupant))
+                serde_json::from_str::<
+                    northstar_room_application::muc_service::SerializableMucOccupant,
+                >(&json)
+                .ok()
+                .map(|occupant| (nick, occupant))
             })
             .collect::<std::collections::HashMap<_, _>>();
         for (_, occupant) in self.state.muc_occupants_for(&room_jid) {
             occupants.insert(
                 occupant.nick.clone(),
-                crate::services::muc::SerializableMucOccupant::from(&occupant),
+                northstar_room_application::muc_service::SerializableMucOccupant::from(&occupant),
             );
         }
         match voice_form {
@@ -343,7 +345,9 @@ impl ProtocolSession {
                         )));
                     }
                     let Some(updated_occupant) = self.state.set_local_muc_role_exact(
-                        crate::services::muc::LocalMucOccupantIdentity::from(target),
+                        northstar_room_application::muc_service::LocalMucOccupantIdentity::from(
+                            target,
+                        ),
                         "visitor",
                         "participant",
                         None,
@@ -356,7 +360,9 @@ impl ProtocolSession {
                         )));
                     };
                     let updated =
-                        crate::services::muc::SerializableMucOccupant::from(&updated_occupant);
+                        northstar_room_application::muc_service::SerializableMucOccupant::from(
+                            &updated_occupant,
+                        );
                     drop(_guard);
                     for (_, recipient) in self.state.muc_occupants_for(&room_jid) {
                         let self_presence = recipient.full_jid == updated.full_jid
@@ -415,11 +421,12 @@ impl ProtocolSession {
                         "item-not-found",
                     )));
                 }
-                let operation_id = crate::services::muc::operation_id(&serde_json::json!({
-                    "kind":"voice_approval","stream":self.connection_id,
-                    "stanza_id":root.attribute("id"),"room":room_jid,
-                    "actor":actor_target,"target":target_authority,"role":"participant"
-                }))?;
+                let operation_id =
+                    northstar_room_application::muc_service::operation_id(&serde_json::json!({
+                        "kind":"voice_approval","stream":self.connection_id,
+                        "stanza_id":root.attribute("id"),"room":room_jid,
+                        "actor":actor_target,"target":target_authority,"role":"participant"
+                    }))?;
                 match service
                     .change_local_cluster_role(
                         operation_id,
@@ -517,7 +524,10 @@ impl ProtocolSession {
                 .await
                 .unwrap_or_default();
             let Some(target) = occupants.get(target_nick).and_then(|json| {
-                serde_json::from_str::<crate::services::muc::SerializableMucOccupant>(json).ok()
+                serde_json::from_str::<
+                    northstar_room_application::muc_service::SerializableMucOccupant,
+                >(json)
+                .ok()
             }) else {
                 return Ok(Action::Send(muc_stanza_error(
                     root,
@@ -660,11 +670,13 @@ impl ProtocolSession {
 
                         let local_durable_invite_id =
                             if room.members_only && invitee_domain == self.state.local_domain() {
-                                Some(crate::services::muc::operation_id(&serde_json::json!({
-                                    "kind":"muc_invitation","stream":self.connection_id,
-                                    "stanza_id":root.attribute("id"),"room":room_jid,
-                                    "actor":from,"invitee":invitee_bare,"reason":reason,
-                                }))?)
+                                Some(northstar_room_application::muc_service::operation_id(
+                                    &serde_json::json!({
+                                        "kind":"muc_invitation","stream":self.connection_id,
+                                        "stanza_id":root.attribute("id"),"room":room_jid,
+                                        "actor":from,"invitee":invitee_bare,"reason":reason,
+                                    }),
+                                )?)
                             } else {
                                 None
                             };
@@ -866,7 +878,7 @@ impl ProtocolSession {
                                 {
                                     Ok(occupants) => occupants.into_values().any(|json| {
                                         serde_json::from_str::<
-                                            crate::services::muc::SerializableMucOccupant,
+                                            northstar_room_application::muc_service::SerializableMucOccupant,
                                         >(&json)
                                         .ok()
                                         .and_then(|occupant| {
@@ -1062,11 +1074,13 @@ impl ProtocolSession {
                             }
                         } else if room.members_only {
                             let operation_id =
-                                crate::services::muc::operation_id(&serde_json::json!({
-                                    "kind":"muc_invitation","stream":self.connection_id,
-                                    "stanza_id":root.attribute("id"),"room":room_jid,
-                                    "actor":from,"invitee":invitee_bare,"reason":reason,
-                                }))?;
+                                northstar_room_application::muc_service::operation_id(
+                                    &serde_json::json!({
+                                        "kind":"muc_invitation","stream":self.connection_id,
+                                        "stanza_id":root.attribute("id"),"room":room_jid,
+                                        "actor":from,"invitee":invitee_bare,"reason":reason,
+                                    }),
+                                )?;
                             let cluster_authority = if self.state.muc_pg_authority_enabled() {
                                 self.state.admit_muc_pg_mutation()?;
                                 let Some(actor_target) = self

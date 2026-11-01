@@ -207,7 +207,8 @@ impl ClusterMaintenanceRedis {
         nick: &str,
         json: &str,
     ) -> Result<bool> {
-        let incoming: crate::services::muc::SerializableMucOccupant = serde_json::from_str(json)?;
+        let incoming: northstar_room_application::muc_service::SerializableMucOccupant =
+            serde_json::from_str(json)?;
         anyhow::ensure!(
             !incoming.cluster_epoch.is_nil()
                 && !incoming.connection_id.is_nil()
@@ -352,7 +353,9 @@ impl crate::services::session_route_maintenance::SessionRouteRenewalPort
     }
 }
 
-impl crate::services::muc::MucSoftStateProjectionPort for &ClusterMaintenanceRedis {
+impl northstar_room_application::muc_service::MucSoftStateProjectionPort
+    for &ClusterMaintenanceRedis
+{
     async fn join_room(&self, room_jid: &str) -> Result<()> {
         self.join_muc(room_jid).await
     }
@@ -375,7 +378,7 @@ impl crate::services::muc::MucSoftStateProjectionPort for &ClusterMaintenanceRed
 impl ClusterMaintenanceControl {
     pub(super) fn record_muc_projection_failure(
         &self,
-        error: crate::services::muc::MucSoftStateDegradation,
+        error: northstar_room_application::muc_service::MucSoftStateDegradation,
     ) -> anyhow::Error {
         // A PG-renewed snapshot can race a kick, rename or same-nick rejoin.
         // The Redis CAS must reject another exact identity, but that is not a
@@ -384,7 +387,7 @@ impl ClusterMaintenanceControl {
         // reconciliation cannot declare readiness until every refresh passes.
         let identity_conflict = matches!(
             &error,
-            crate::services::muc::MucSoftStateDegradation::IdentityRejected
+            northstar_room_application::muc_service::MucSoftStateDegradation::IdentityRejected
         );
         let error = anyhow::Error::from(error);
         if !identity_conflict {

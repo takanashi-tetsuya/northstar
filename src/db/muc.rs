@@ -871,7 +871,7 @@ fn muc_room_from_row(row: &sqlx::postgres::PgRow) -> MucRoom {
 }
 
 #[cfg(test)]
-pub(crate) use crate::services::muc::{
+pub(crate) use northstar_room_application::muc_service::{
     hash_room_password as hash_muc_password, verify_room_password as verify_muc_password,
 };
 

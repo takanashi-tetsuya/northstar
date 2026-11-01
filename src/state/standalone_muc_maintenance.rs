@@ -1,13 +1,11 @@
 //! PostgreSQL MUC occupancy renewal when Redis clustering is disabled.
 
-use crate::{
-    services::muc::{
-        ClusterMucOccupancyTarget, MucOccupancyLookup, MucResolvedOccupancy,
-        MAX_MUC_OCCUPANCY_RENEW_BATCH,
-    },
-    state::cluster_maintenance_context::StandaloneMucMaintenanceContext,
-};
+use crate::state::cluster_maintenance_context::StandaloneMucMaintenanceContext;
 use anyhow::{ensure, Result};
+use northstar_room_application::muc_service::{
+    ClusterMucOccupancyTarget, MucOccupancyLookup, MucResolvedOccupancy,
+    MAX_MUC_OCCUPANCY_RENEW_BATCH,
+};
 use northstar_runtime::workers::WorkerHeartbeat;
 use std::{
     collections::{HashMap, HashSet},

@@ -1,9 +1,7 @@
 //! One lazy frame-owned discussion slot. Absence is selected by the session,
 //! never by converting retired/conflicting registration into a legacy path.
 
-pub(crate) use northstar_room_application::discussion::{
-    Observation, PreparedDiscussion, Rejected, Summary, TerminalReason,
-};
+pub use crate::discussion::{Observation, PreparedDiscussion, Rejected, Summary, TerminalReason};
 use std::sync::Mutex;
 
 #[derive(Default)]
@@ -13,10 +11,10 @@ struct SlotState {
 }
 
 #[derive(Default)]
-pub(crate) struct MucDiscussionSlot(Mutex<SlotState>);
+pub struct MucDiscussionSlot(Mutex<SlotState>);
 
 impl MucDiscussionSlot {
-    pub(crate) fn register(&self, prepared: &PreparedDiscussion) -> Result<Observation, Rejected> {
+    pub fn register(&self, prepared: &PreparedDiscussion) -> Result<Observation, Rejected> {
         let mut slot = self.0.lock().unwrap_or_else(|error| error.into_inner());
         if slot.terminal.is_some() {
             return Err(Rejected::Retired);
@@ -35,7 +33,7 @@ impl MucDiscussionSlot {
         Ok(observation)
     }
 
-    pub(crate) fn retire(&self, reason: TerminalReason) -> Option<Summary> {
+    pub fn retire(&self, reason: TerminalReason) -> Option<Summary> {
         let mut slot = self.0.lock().unwrap_or_else(|error| error.into_inner());
         let reason = *slot.terminal.get_or_insert(reason);
         slot.observation
@@ -44,11 +42,9 @@ impl MucDiscussionSlot {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod fixture {
-    use northstar_room_application::{
-        discussion::*, MucDiscussionRepository, RepositoryFuture, RoomApplication,
-    };
+#[cfg(any(test, feature = "test-support"))]
+pub mod fixture {
+    use crate::{discussion::*, MucDiscussionRepository, RepositoryFuture, RoomApplication};
     use northstar_room_core::{
         MucActorAuthority, MucActorPrincipal, MucDiscussion, MucDiscussionAdmission, MucRoom,
     };
@@ -59,7 +55,7 @@ pub(crate) mod fixture {
     use uuid::Uuid;
 
     #[derive(Clone, Copy)]
-    pub(crate) enum Cut {
+    pub enum Cut {
         Return,
         BeforeCommit,
         DuringCommit,
@@ -68,14 +64,14 @@ pub(crate) mod fixture {
         FailAfterReceipt,
     }
 
-    pub(crate) struct Repository {
-        pub(crate) cut: Cut,
-        pub(crate) outcome: Option<MucDiscussionAdmission>,
-        pub(crate) calls: Arc<AtomicUsize>,
+    pub struct Repository {
+        pub cut: Cut,
+        pub outcome: Option<MucDiscussionAdmission>,
+        pub calls: Arc<AtomicUsize>,
     }
 
     impl Repository {
-        pub(crate) fn new(cut: Cut) -> Self {
+        pub fn new(cut: Cut) -> Self {
             Self {
                 cut,
                 outcome: None,
@@ -139,11 +135,11 @@ pub(crate) mod fixture {
         }
     }
 
-    pub(crate) fn application(cut: Cut) -> RoomApplication<Repository> {
+    pub fn application(cut: Cut) -> RoomApplication<Repository> {
         RoomApplication::new(Repository::new(cut), "local.test")
     }
 
-    pub(crate) fn command(archive: bool, identity: bool) -> MucDiscussion {
+    pub fn command(archive: bool, identity: bool) -> MucDiscussion {
         MucDiscussion {
             id: Uuid::from_u128(11),
             room_id: Uuid::from_u128(12),
@@ -174,7 +170,7 @@ pub(crate) mod fixture {
         }
     }
 
-    pub(crate) fn room() -> MucRoom {
+    pub fn room() -> MucRoom {
         MucRoom {
             id: Uuid::from_u128(12),
             room_epoch: Uuid::from_u128(13),
@@ -202,10 +198,10 @@ pub(crate) mod fixture {
         }
     }
 
-    pub(crate) fn live_input() -> (MucDiscussion, String, String) {
+    pub fn live_input() -> (MucDiscussion, String, String) {
         let mut command = command(true, true);
         let room_jid = "room@conference.local.test".to_owned();
-        let stanza = crate::services::xml_util::add_stanza_id(
+        let stanza = northstar_xep_0359::add_stanza_id(
             "<message xmlns='jabber:client' from='room@conference.local.test/Alice' to='room@conference.local.test' type='groupchat'><body>hello</body></message>",
             &room_jid,
             command.id,
@@ -214,7 +210,7 @@ pub(crate) mod fixture {
         (command, room_jid, stanza)
     }
 
-    pub(crate) async fn accepted() -> (Observation, Completion) {
+    pub async fn accepted() -> (Observation, Completion) {
         let application = application(Cut::Return);
         let observation = Observation::new(application.prepare_discussion(command(true, true)));
         let request = observation.request().unwrap();

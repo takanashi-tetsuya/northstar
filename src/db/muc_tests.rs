@@ -1344,7 +1344,7 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
     );
 
     // A local username cannot be re-used under a foreign domain.  Both
-    // the service boundary (unit-tested in services::muc) and this locked
+    // the service boundary (unit-tested in northstar_room_application::muc_service) and this locked
     // repository fence reject the forged principal without a projection.
     let forged_domain_id = Uuid::new_v4();
     let forged_domain = admit_muc_discussion(

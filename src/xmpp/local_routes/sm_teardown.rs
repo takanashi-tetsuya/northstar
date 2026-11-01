@@ -4,8 +4,8 @@
 
 use super::muc::{MucOccupant, SuspendedMucEndpoint};
 use super::suspended_muc::muc_suspended_teardown_identity_matches;
-use crate::services::muc::SerializableMucOccupant;
 use dashmap::DashMap;
+use northstar_room_application::muc_service::SerializableMucOccupant;
 use std::sync::Arc;
 use uuid::Uuid;
 

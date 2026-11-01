@@ -53,7 +53,7 @@ impl ClusterMucDeparture {
         self.publisher
             .send_muc_presence_with_status(
                 &departed.room_jid,
-                &crate::services::muc::SerializableMucOccupant::from(departed),
+                &northstar_room_application::muc_service::SerializableMucOccupant::from(departed),
                 true,
                 false,
                 None,
@@ -205,7 +205,7 @@ impl ClusterSmMucTeardown {
         &self,
         room_jid: &str,
         sm_session_id: uuid::Uuid,
-        occupant: &crate::services::muc::SerializableMucOccupant,
+        occupant: &northstar_room_application::muc_service::SerializableMucOccupant,
     ) -> Result<()> {
         let Some(pool) = &self.sender.publisher.pool else {
             return Ok(());
@@ -326,7 +326,8 @@ impl ClusterSmSuspension {
         json: &str,
     ) -> Result<bool> {
         admit_health(&self.publisher.health, ClusterOperation::Resume)?;
-        let incoming: crate::services::muc::SerializableMucOccupant = serde_json::from_str(json)?;
+        let incoming: northstar_room_application::muc_service::SerializableMucOccupant =
+            serde_json::from_str(json)?;
         anyhow::ensure!(
             incoming.sm_session_id == Some(sm_session_id)
                 && !incoming.cluster_epoch.is_nil()
@@ -441,7 +442,7 @@ pub(super) async fn send_muc_operation_wake(
     Ok(())
 }
 
-impl crate::services::muc::MucWakePort for ClusterSmSuspension {
+impl northstar_room_application::muc_service::MucWakePort for ClusterSmSuspension {
     async fn wake(&self, descriptor: &northstar_room_core::ClusterMucWakeDescriptor) -> Result<()> {
         self.send_muc_operation_wake(descriptor).await
     }
@@ -451,7 +452,7 @@ impl crate::services::muc::MucWakePort for ClusterSmSuspension {
     }
 }
 
-impl crate::services::muc::MucWakePort for ClusterMucOperationWake {
+impl northstar_room_application::muc_service::MucWakePort for ClusterMucOperationWake {
     async fn wake(&self, descriptor: &northstar_room_core::ClusterMucWakeDescriptor) -> Result<()> {
         send_muc_operation_wake(&self.publisher, &self.muc_outbox_notify, descriptor).await
     }

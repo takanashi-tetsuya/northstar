@@ -1,11 +1,9 @@
 //! Room authorization, local ordering and committed-operation notifications.
 
-pub(crate) mod discussion;
-pub(crate) mod fanout;
+pub mod discussion;
+pub mod fanout;
 
-use anyhow::Result;
-use chrono::{DateTime, Utc};
-pub(crate) use northstar_room_application::{
+pub use crate::{
     validate_muc_affiliation_batch_command, validate_muc_configuration_command,
     validate_muc_registration_command, validate_muc_retraction_command,
     validate_muc_subject_command, MucAffiliationBatchCommand, MucAffiliationBatchResult,
@@ -13,7 +11,9 @@ pub(crate) use northstar_room_application::{
     MucRegistrationCommand, MucRegistrationResult, MucRetractionCommand, MucRetractionResult,
     MucSubjectCommand, MucSubjectResult, RepositoryFuture, RoomApplication,
 };
-pub(crate) use northstar_room_core::{
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+pub use northstar_room_core::{
     ClusterMucAffiliationSubject, ClusterMucConfigurationOutcome, ClusterMucInviteAuthority,
     ClusterMucJoin, ClusterMucJoinOutcome, ClusterMucOccupancy, ClusterMucOccupancyTarget,
     ClusterMucPrincipal, ClusterMucRegistrationOutcome, ClusterMucTransitionOutcome,
@@ -33,15 +33,13 @@ use uuid::Uuid;
 mod cluster_operations;
 mod room_operations;
 
-pub(crate) use northstar_room_core::occupancy::{
-    LocalMucOccupantIdentity, SerializableMucOccupant,
-};
+pub use northstar_room_core::occupancy::{LocalMucOccupantIdentity, SerializableMucOccupant};
 
 /// One ordered item in an XEP-0045 administrative IQ. Target names have
 /// already been canonicalized by the protocol parser; the repository checks
 /// them again before taking any lock or applying any change.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub(crate) enum MucAdminBatchChange {
+pub enum MucAdminBatchChange {
     Affiliation {
         target: MucAffiliationTarget,
         affiliation: String,
@@ -55,7 +53,7 @@ pub(crate) enum MucAdminBatchChange {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MucAdminBatchOutcome {
+pub enum MucAdminBatchOutcome {
     Applied,
     Replay,
     DuplicateTarget,
@@ -68,15 +66,15 @@ pub(crate) enum MucAdminBatchOutcome {
     TooManyProjections,
 }
 
-pub(crate) struct MucAdminBatchResult {
+pub struct MucAdminBatchResult {
     pub operation_id: Uuid,
     pub outcome: MucAdminBatchOutcome,
 }
 
-pub(crate) const MAX_MUC_OCCUPANCY_RENEW_BATCH: usize = 128;
+pub const MAX_MUC_OCCUPANCY_RENEW_BATCH: usize = 128;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct MucOccupancyLookup {
+pub struct MucOccupancyLookup {
     pub room_localpart: String,
     pub full_jid: String,
     pub nick: String,
@@ -85,7 +83,7 @@ pub(crate) struct MucOccupancyLookup {
 }
 
 impl MucOccupancyLookup {
-    pub(crate) fn new(
+    pub fn new(
         room_jid: &str,
         full_jid: &str,
         nick: &str,
@@ -109,7 +107,7 @@ impl MucOccupancyLookup {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MucResolvedOccupancy {
+pub struct MucResolvedOccupancy {
     pub room_localpart: String,
     pub target: ClusterMucOccupancyTarget,
 }
@@ -121,7 +119,7 @@ use argon2::{
 
 /// Node-local MUC lease maintenance has no room mutation or outbox authority.
 /// The snapshot contains only the exact target columns needed to fence renewals.
-pub(crate) trait ClusterMucOccupancyMaintenanceRepository: Send + Sync {
+pub trait ClusterMucOccupancyMaintenanceRepository: Send + Sync {
     fn authoritative_for_node(
         &self,
         node_id: &str,
@@ -154,23 +152,23 @@ pub(crate) trait ClusterMucOccupancyMaintenanceRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<Vec<ClusterMucOccupancyTarget>>> + Send;
 }
 
-pub(crate) struct ClusterMucOccupancyMaintenanceService<R> {
+pub struct ClusterMucOccupancyMaintenanceService<R> {
     repository: R,
 }
 
 impl<R: ClusterMucOccupancyMaintenanceRepository> ClusterMucOccupancyMaintenanceService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn authoritative_for_node(
+    pub async fn authoritative_for_node(
         &self,
         node_id: &str,
     ) -> Result<Vec<ClusterMucOccupancyTarget>> {
         self.repository.authoritative_for_node(node_id).await
     }
 
-    pub(crate) async fn resolve_exact_batch(
+    pub async fn resolve_exact_batch(
         &self,
         candidates: &[MucOccupancyLookup],
         owner_node_id: &str,
@@ -214,7 +212,7 @@ impl<R: ClusterMucOccupancyMaintenanceRepository> ClusterMucOccupancyMaintenance
         Ok(resolved)
     }
 
-    pub(crate) async fn renew_exact(
+    pub async fn renew_exact(
         &self,
         target: &ClusterMucOccupancyTarget,
         owner_node_id: &str,
@@ -226,7 +224,7 @@ impl<R: ClusterMucOccupancyMaintenanceRepository> ClusterMucOccupancyMaintenance
 
     /// A committed revocation ends only the room membership. An absent,
     /// expired or transferred occupancy still fences its C2S connection.
-    pub(crate) async fn committed_terminal_exact_batch(
+    pub async fn committed_terminal_exact_batch(
         &self,
         candidates: &[MucOccupancyLookup],
         owner_node_id: &str,
@@ -252,7 +250,7 @@ impl<R: ClusterMucOccupancyMaintenanceRepository> ClusterMucOccupancyMaintenance
         Ok(terminal)
     }
 
-    pub(crate) async fn renew_exact_batch(
+    pub async fn renew_exact_batch(
         &self,
         targets: &[ClusterMucOccupancyTarget],
         owner_node_id: &str,
@@ -286,7 +284,7 @@ impl<R: ClusterMucOccupancyMaintenanceRepository> ClusterMucOccupancyMaintenance
 
 /// The disconnect path can only resolve and retire the precise local stream
 /// incarnation it just quiesced. Resumable SM suspension uses its own path.
-pub(crate) trait ClusterMucOccupancyDepartureRepository: Send + Sync {
+pub trait ClusterMucOccupancyDepartureRepository: Send + Sync {
     #[allow(clippy::too_many_arguments)]
     fn find_exact_for_disconnect(
         &self,
@@ -308,23 +306,23 @@ pub(crate) trait ClusterMucOccupancyDepartureRepository: Send + Sync {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MucDisconnectLeaveResult {
+pub struct MucDisconnectLeaveResult {
     pub operation_id: Uuid,
     pub outcome: ClusterMucTransitionOutcome,
 }
 
 #[derive(Clone)]
-pub(crate) struct ClusterMucOccupancyDepartureService<R> {
+pub struct ClusterMucOccupancyDepartureService<R> {
     repository: R,
 }
 
 impl<R: ClusterMucOccupancyDepartureRepository> ClusterMucOccupancyDepartureService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn find_exact_for_disconnect(
+    pub async fn find_exact_for_disconnect(
         &self,
         room_jid: &str,
         full_jid: &str,
@@ -350,7 +348,7 @@ impl<R: ClusterMucOccupancyDepartureRepository> ClusterMucOccupancyDepartureServ
             .await
     }
 
-    pub(crate) async fn leave_exact_for_disconnect(
+    pub async fn leave_exact_for_disconnect(
         &self,
         connection_uuid: Uuid,
         target: &ClusterMucOccupancyTarget,
@@ -383,7 +381,7 @@ mod cluster_muc_occupancy_departure_tests;
 
 /// Each mutation retains its account/room/occupant fences and its complete
 /// outbox projection. The port never exposes a connection or an open transaction.
-pub(crate) trait MucRepository:
+pub trait MucRepository:
     MucDiscussionRepository<Error = anyhow::Error> + Clone + Send + Sync
 {
     fn local_room_snapshot(
@@ -754,7 +752,7 @@ pub(crate) trait MucRepository:
     ) -> impl std::future::Future<Output = Result<Option<ClusterMucWakeDescriptor>>> + Send;
 }
 
-pub(crate) trait MucWakePort: Send + Sync {
+pub trait MucWakePort: Send + Sync {
     fn wake(
         &self,
         descriptor: &ClusterMucWakeDescriptor,
@@ -765,7 +763,7 @@ pub(crate) trait MucWakePort: Send + Sync {
 /// Redis holds a disposable projection of a PostgreSQL-fenced MUC occupant.
 /// It cannot grant room authority; a failed refresh prevents reconciliation
 /// from declaring the projection healthy.
-pub(crate) trait MucSoftStateProjectionPort: Send + Sync {
+pub trait MucSoftStateProjectionPort: Send + Sync {
     fn join_room(&self, room_jid: &str) -> impl std::future::Future<Output = Result<()>> + Send;
     fn refresh_occupant(
         &self,
@@ -780,7 +778,7 @@ pub(crate) trait MucSoftStateProjectionPort: Send + Sync {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum MucSoftStateDegradation {
+pub enum MucSoftStateDegradation {
     #[error("MUC Redis room join failed")]
     Join(#[source] anyhow::Error),
     #[error("MUC Redis exact occupant refresh failed")]
@@ -791,19 +789,19 @@ pub(crate) enum MucSoftStateDegradation {
     Reconcile(#[source] anyhow::Error),
 }
 
-pub(crate) struct MucSoftStateProjectionService<P> {
+pub struct MucSoftStateProjectionService<P> {
     port: P,
 }
 
 impl<P: MucSoftStateProjectionPort> MucSoftStateProjectionService<P> {
-    pub(crate) fn new(port: P) -> Self {
+    pub fn new(port: P) -> Self {
         Self { port }
     }
 
     /// The room index is published before its exact occupant value, matching
     /// the existing recovery order. A rejected identity never counts as a
     /// successful refresh.
-    pub(crate) async fn refresh(
+    pub async fn refresh(
         &self,
         room_jid: &str,
         nick: &str,
@@ -824,7 +822,7 @@ impl<P: MucSoftStateProjectionPort> MucSoftStateProjectionService<P> {
         Ok(())
     }
 
-    pub(crate) async fn reconcile_room(
+    pub async fn reconcile_room(
         &self,
         room_jid: &str,
     ) -> std::result::Result<(), MucSoftStateDegradation> {
@@ -835,10 +833,10 @@ impl<P: MucSoftStateProjectionPort> MucSoftStateProjectionService<P> {
     }
 }
 
-const LOCAL_JOIN_GATE_SHARDS: usize = 256;
+pub const LOCAL_JOIN_GATE_SHARDS: usize = 256;
 
 #[derive(Clone)]
-pub(crate) struct MucService<R> {
+pub struct MucService<R> {
     repository: R,
     discussion_application: RoomApplication<R>,
     configured_domain: Arc<str>,
@@ -846,7 +844,7 @@ pub(crate) struct MucService<R> {
 }
 
 impl<R: MucRepository> MucService<R> {
-    pub(crate) fn new(repository: R, configured_domain: impl AsRef<str>) -> Self {
+    pub fn new(repository: R, configured_domain: impl AsRef<str>) -> Self {
         let configured_domain: Arc<str> = Arc::from(configured_domain.as_ref());
         let local_join_gates: Arc<[Arc<tokio::sync::Mutex<()>>]> = (0..LOCAL_JOIN_GATE_SHARDS)
             .map(|_| Arc::new(tokio::sync::Mutex::new(())))
@@ -862,7 +860,12 @@ impl<R: MucRepository> MucService<R> {
             local_join_gates,
         }
     }
-    pub(crate) async fn lock_local_room_mutation(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn local_join_gate_count(&self) -> usize {
+        self.local_join_gates.len()
+    }
+
+    pub async fn lock_local_room_mutation(
         &self,
         room_id: Uuid,
     ) -> tokio::sync::OwnedMutexGuard<()> {
@@ -872,22 +875,22 @@ impl<R: MucRepository> MucService<R> {
         Arc::clone(&self.local_join_gates[shard]).lock_owned().await
     }
 
-    pub(crate) async fn lock_local_join(&self, room_id: Uuid) -> tokio::sync::OwnedMutexGuard<()> {
+    pub async fn lock_local_join(&self, room_id: Uuid) -> tokio::sync::OwnedMutexGuard<()> {
         self.lock_local_room_mutation(room_id).await
     }
 
-    pub(crate) fn prepare_muc_discussion(
+    pub fn prepare_muc_discussion(
         &self,
         command: MucDiscussion,
-    ) -> northstar_room_application::discussion::PreparedDiscussion {
+    ) -> crate::discussion::PreparedDiscussion {
         self.discussion_application.prepare_discussion(command)
     }
 
-    pub(crate) async fn execute_muc_discussion_observed(
+    pub async fn execute_muc_discussion_observed(
         &self,
-        request: &northstar_room_application::discussion::Request,
-    ) -> Result<northstar_room_application::discussion::Completion> {
-        use northstar_room_application::discussion::AdmissionError;
+        request: &crate::discussion::Request,
+    ) -> Result<crate::discussion::Completion> {
+        use crate::discussion::AdmissionError;
         self.discussion_application
             .admit_discussion_observed(request)
             .await
@@ -897,12 +900,12 @@ impl<R: MucRepository> MucService<R> {
             })
     }
 
-    pub(crate) async fn room(&self, localpart: &str) -> Result<Option<MucRoom>> {
+    pub async fn room(&self, localpart: &str) -> Result<Option<MucRoom>> {
         self.local_room_snapshot(localpart).await
     }
 }
 
-pub(crate) async fn notify_committed_operation(
+pub async fn notify_committed_operation(
     descriptor: impl std::future::Future<Output = Result<Option<ClusterMucWakeDescriptor>>>,
     wake: &impl MucWakePort,
     operation_id: Uuid,
@@ -922,7 +925,7 @@ pub(crate) async fn notify_committed_operation(
     }
 }
 
-pub(crate) fn operation_id(identity: &serde_json::Value) -> Result<Uuid> {
+pub fn operation_id(identity: &serde_json::Value) -> Result<Uuid> {
     let bytes = serde_json::to_vec(identity)?;
     let digest = Sha256::digest(bytes);
     let mut id = [0_u8; 16];
@@ -932,18 +935,13 @@ pub(crate) fn operation_id(identity: &serde_json::Value) -> Result<Uuid> {
     Ok(Uuid::from_bytes(id))
 }
 
-pub(crate) fn is_capacity_exhausted(error: &anyhow::Error) -> bool {
+pub fn is_capacity_exhausted(error: &anyhow::Error) -> bool {
     error.downcast_ref::<MucCapacityExceeded>().is_some()
-}
-
-#[cfg(test)]
-pub(crate) fn archive_page_is_last(page: &crate::db::MamRsmPage) -> bool {
-    matches!(page, crate::db::MamRsmPage::Last)
 }
 
 /// Hash a room password for storage. XEP-0045 transmits this value inside the
 /// TLS-protected XMPP stream, but the server never stores the cleartext value.
-pub(crate) fn hash_room_password(password: &str) -> Result<String> {
+pub fn hash_room_password(password: &str) -> Result<String> {
     if password.is_empty() || password.len() > 1024 {
         anyhow::bail!("room password must contain 1 to 1024 bytes");
     }
@@ -954,7 +952,7 @@ pub(crate) fn hash_room_password(password: &str) -> Result<String> {
         .map_err(|error| anyhow::anyhow!("room password hashing failed: {error}"))
 }
 
-pub(crate) fn verify_room_password(password_hash: &str, candidate: &str) -> bool {
+pub fn verify_room_password(password_hash: &str, candidate: &str) -> bool {
     if candidate.len() > 1024 {
         return false;
     }
@@ -964,9 +962,6 @@ pub(crate) fn verify_room_password(password_hash: &str, candidate: &str) -> bool
             .is_ok()
     })
 }
-
-#[cfg(test)]
-mod tests;
 
 #[cfg(test)]
 mod muc_soft_state_projection_tests;

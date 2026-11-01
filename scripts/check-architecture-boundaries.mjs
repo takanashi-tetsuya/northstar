@@ -2317,7 +2317,7 @@ for (const [name, source] of [
   ['PasskeyService', read('crates/contexts/auth/northstar-auth-application/src/passkeys.rs')],
   ['MessageService', read('src/services/messaging.rs')],
   ['MamService', mamServiceSource],
-  ['MucService', readProductionModule('src/services/muc.rs', { root })],
+  ['MucService', readProductionModule('crates/contexts/room/northstar-room-application/src/muc_service.rs', { root })],
   ['ProfileService', read('crates/contexts/pubsub/northstar-pubsub-application/src/profile.rs')],
   ['PubSubService', readProductionModule('crates/contexts/pubsub/northstar-pubsub-application/src/service.rs', { root })],
   ['BlockingService', read('crates/contexts/roster/northstar-roster-application/src/blocking.rs')],
@@ -2650,13 +2650,13 @@ if (/\.wake_committed_operation\s*\(\s*&state\.pool\b/.test(operationRuntimeSour
   throw new Error('operation_runtime.rs bypasses MucService for committed MUC wakes');
 }
 const operationMucDestroyEffectsSource = read('src/state/operation_muc_destroy_effects.rs');
-const committedMucWakeServiceSource = read('src/services/operation_muc_wake.rs');
+const committedMucWakeServiceSource = read('crates/contexts/room/northstar-room-application/src/operation_muc_wake.rs');
 if (!/muc_destroy_effects\.notify_committed\(operation\.id\)\.await/.test(operationRuntimeSource)
     || !operationMucDestroyEffectsSource.includes('self.wake.notify(&self.publisher, operation_id).await')
     || !committedMucWakeServiceSource.includes('notify_committed_operation(self.repository.descriptor(operation_id), wake, operation_id)')) {
   throw new Error('operation worker must wake committed MUC effects through the typed post-commit port');
 }
-const mucServiceSource = readProductionModule('src/services/muc.rs', { root });
+const mucServiceSource = readProductionModule('crates/contexts/room/northstar-room-application/src/muc_service.rs', { root });
 const mucServiceBody = structBody(mucServiceSource, 'pub(crate) struct MucService');
 if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(mucServiceBody)) {
   throw new Error('MucService must receive its repository port');
@@ -3784,7 +3784,7 @@ const sessionRouteRedisAdapter = rustItemBody(clusterSource, 'impl crate::servic
 const sessionRouteRelease = rustItemBody(clusterSource, 'async fn release_session_authority(');
 const mucSoftStatePort = structBody(mucServiceSource, 'pub(crate) trait MucSoftStateProjectionPort');
 const mucSoftStateService = structBody(mucServiceSource, 'impl<P: MucSoftStateProjectionPort> MucSoftStateProjectionService<P>');
-const mucRedisAdapter = rustItemBody(clusterSource, 'impl crate::services::muc::MucSoftStateProjectionPort for &ClusterMaintenanceRedis');
+const mucRedisAdapter = rustItemBody(clusterSource, 'impl northstar_room_application::muc_service::MucSoftStateProjectionPort for &ClusterMaintenanceRedis');
 if (/\bstate\.cluster\b/.test(clusterMaintenance)
     || /\b(?:signer|pubsub|publisher|delivery_route)\s*:/.test(clusterRedisMaintenance)
     || !sessionRoutePort.includes('fn renew_authority(')

@@ -5,9 +5,9 @@ use super::muc::{
     MucOccupant, MucOccupantEndpoint, SuspendedMucBuffer, SuspendedMucEndpoint, SuspendedMucPhase,
     SuspendedMucRoute, SuspendedMucStanza,
 };
-use crate::services::muc::SerializableMucOccupant;
 use anyhow::Context;
 use dashmap::DashMap;
+use northstar_room_application::muc_service::SerializableMucOccupant;
 use northstar_session_core::JoinedMucMembership;
 use std::collections::VecDeque;
 use std::sync::Arc;

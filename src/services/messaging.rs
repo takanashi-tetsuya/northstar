@@ -8,10 +8,7 @@ pub(crate) use direct_route::{
 };
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 
-use super::{
-    muc::{ClusterMucInviteAuthority, DurableMucInviteOutcome},
-    retractions::FederationOutboxPolicy,
-};
+use super::retractions::FederationOutboxPolicy;
 use crate::xmpp::outbound::{OutboundItem, RouteEnqueue};
 use anyhow::Result;
 use northstar_abuse_policy::MessageDedupeIdentity;
@@ -29,6 +26,7 @@ pub(crate) use northstar_message_core::{
     MessagePostCommit, PersonalMessageDestination, ValidatedPersonalMessage,
 };
 use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
+use northstar_room_application::muc_service::{ClusterMucInviteAuthority, DurableMucInviteOutcome};
 use std::future::Future;
 use uuid::Uuid;
 

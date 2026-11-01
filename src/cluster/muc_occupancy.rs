@@ -18,11 +18,11 @@ pub enum MucRename {
 
 #[derive(Clone)]
 pub enum MucRoleChange {
-    Changed(Box<crate::services::muc::SerializableMucOccupant>),
+    Changed(Box<northstar_room_application::muc_service::SerializableMucOccupant>),
     Stale,
 }
 
-impl crate::services::muc::MucWakePort for ClusterManager {
+impl northstar_room_application::muc_service::MucWakePort for ClusterManager {
     async fn wake(&self, descriptor: &northstar_room_core::ClusterMucWakeDescriptor) -> Result<()> {
         self.send_muc_operation_wake(descriptor).await
     }
@@ -53,7 +53,8 @@ impl ClusterManager {
         max_occupants: usize,
     ) -> Result<MucRegistration> {
         self.admit(ClusterOperation::MucMutation)?;
-        let incoming: crate::services::muc::SerializableMucOccupant = serde_json::from_str(json)?;
+        let incoming: northstar_room_application::muc_service::SerializableMucOccupant =
+            serde_json::from_str(json)?;
         let canonical_room = northstar_xmpp_types::jid::canonicalize_bare(room_jid)?;
         let prepared_nick = northstar_room_core::stanza::prepare_muc_nick(nick)?;
         anyhow::ensure!(
@@ -181,7 +182,7 @@ impl ClusterManager {
         );
         for (json, expected_nick) in [(old_json, old_nick.as_str()), (new_json, new_nick.as_str())]
         {
-            let occupant: crate::services::muc::SerializableMucOccupant =
+            let occupant: northstar_room_application::muc_service::SerializableMucOccupant =
                 serde_json::from_str(json)?;
             anyhow::ensure!(
                 occupant.cluster_epoch == expected_epoch
@@ -190,9 +191,9 @@ impl ClusterManager {
                 "MUC rename payload does not describe the guarded occupancy"
             );
         }
-        let old_occupant: crate::services::muc::SerializableMucOccupant =
+        let old_occupant: northstar_room_application::muc_service::SerializableMucOccupant =
             serde_json::from_str(old_json)?;
-        let new_occupant: crate::services::muc::SerializableMucOccupant =
+        let new_occupant: northstar_room_application::muc_service::SerializableMucOccupant =
             serde_json::from_str(new_json)?;
         anyhow::ensure!(
             old_occupant.full_jid == new_occupant.full_jid
@@ -267,7 +268,7 @@ impl ClusterManager {
     pub async fn change_muc_occupant_role(
         &self,
         room_jid: &str,
-        occupant: &crate::services::muc::SerializableMucOccupant,
+        occupant: &northstar_room_application::muc_service::SerializableMucOccupant,
         new_role: &str,
     ) -> Result<MucRoleChange> {
         self.admit(ClusterOperation::MucMutation)?;
@@ -334,7 +335,7 @@ impl ClusterManager {
     pub async fn change_muc_occupant_affiliation(
         &self,
         room_jid: &str,
-        occupant: &crate::services::muc::SerializableMucOccupant,
+        occupant: &northstar_room_application::muc_service::SerializableMucOccupant,
         affiliation: &str,
         role: &str,
     ) -> Result<MucRoleChange> {
@@ -407,7 +408,7 @@ impl ClusterManager {
     pub async fn change_muc_occupant_policy(
         &self,
         room_jid: &str,
-        occupant: &crate::services::muc::SerializableMucOccupant,
+        occupant: &northstar_room_application::muc_service::SerializableMucOccupant,
         role: &str,
         room_non_anonymous: bool,
     ) -> Result<MucRoleChange> {
@@ -487,8 +488,8 @@ impl ClusterManager {
     /// epoch and durable SM session id must remain unchanged.
     pub async fn resume_muc_occupant(
         &self,
-        previous: &crate::services::muc::SerializableMucOccupant,
-        resumed: &crate::services::muc::SerializableMucOccupant,
+        previous: &northstar_room_application::muc_service::SerializableMucOccupant,
+        resumed: &northstar_room_application::muc_service::SerializableMucOccupant,
     ) -> Result<bool> {
         self.admit(ClusterOperation::Resume)?;
         anyhow::ensure!(
@@ -654,7 +655,7 @@ impl ClusterManager {
     /// kick/ban from touching a later user who reused the nickname.
     pub async fn evict_muc_occupant(
         &self,
-        occupant: &crate::services::muc::SerializableMucOccupant,
+        occupant: &northstar_room_application::muc_service::SerializableMucOccupant,
         status: u16,
         actor_nick: Option<&str>,
         reason: Option<&str>,

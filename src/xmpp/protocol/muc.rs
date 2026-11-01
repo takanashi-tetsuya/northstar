@@ -30,10 +30,16 @@ use self::moderate::{parse_moderation_request, ModerationRequest};
 pub(super) use self::owner::muc_room_configuration_form;
 
 use super::{Action, ProtocolSession};
-use crate::services::muc::fanout::{
+use crate::services::xml_util::*;
+use crate::state::muc_cluster_effects::MucPresencePublication;
+use crate::xmpp::frame_execution::Stage;
+use crate::xmpp::xml_builder::XmlElement;
+use anyhow::Result;
+use northstar_room_application::discussion as discussion_owner;
+use northstar_room_application::muc_service::fanout::{
     run_muc_discussion_fanout, run_muc_fanout, MucFanoutDisposition, MucFanoutPort, MucFanoutStage,
 };
-use crate::services::muc::{
+use northstar_room_application::muc_service::{
     ClusterMucAffiliationSubject, ClusterMucConfigurationOutcome, ClusterMucInviteAuthority,
     ClusterMucJoin, ClusterMucJoinOutcome, ClusterMucPrincipal, ClusterMucRegistrationOutcome,
     ClusterMucTransitionOutcome, DurableMucInviteOutcome, MucActorAuthority, MucActorPrincipal,
@@ -45,12 +51,6 @@ use crate::services::muc::{
     MucRetractionKind, MucRetractionMutation, MucRetractionOutcome, MucRoom, MucSubjectCommand,
     MucSubjectMutation, MucSubjectOutcome, OfflineStoreOutcome, OfflineStorePolicy,
 };
-use crate::services::xml_util::*;
-use crate::state::muc_cluster_effects::MucPresencePublication;
-use crate::xmpp::frame_execution::Stage;
-use crate::xmpp::xml_builder::XmlElement;
-use anyhow::Result;
-use northstar_room_application::discussion as discussion_owner;
 #[cfg(test)]
 use northstar_room_application::PostCommitAdmissionError as MucPostCommitAdmissionError;
 use northstar_room_application::PostCommitPlan as MucPostCommitPlan;
@@ -143,7 +143,7 @@ enum MucClusterEffect {
         stage: &'static str,
     },
     Evict {
-        occupant: crate::services::muc::SerializableMucOccupant,
+        occupant: northstar_room_application::muc_service::SerializableMucOccupant,
         status: u16,
         actor_nick: Option<String>,
         reason: Option<String>,
@@ -161,7 +161,7 @@ enum MucClusterEffect {
     },
     Presence {
         room: String,
-        occupant: crate::services::muc::SerializableMucOccupant,
+        occupant: northstar_room_application::muc_service::SerializableMucOccupant,
         unavailable: bool,
         created: bool,
         removal_status: Option<u16>,
@@ -293,7 +293,7 @@ async fn run_muc_cluster_fan_out(
 async fn run_muc_cluster_eviction(
     state: &crate::state::AppState,
     room: &str,
-    occupant: crate::services::muc::SerializableMucOccupant,
+    occupant: northstar_room_application::muc_service::SerializableMucOccupant,
     status: u16,
     actor_nick: Option<&str>,
     reason: Option<&str>,
@@ -334,7 +334,7 @@ async fn run_muc_cluster_occupant_refresh(
     room: &str,
     nick: &str,
     json: String,
-    occupant: crate::services::muc::SerializableMucOccupant,
+    occupant: northstar_room_application::muc_service::SerializableMucOccupant,
 ) {
     let mut plan = MucPostCommitPlan::<MucClusterEffect, 2>::new();
     plan.try_push(MucClusterEffect::Register {

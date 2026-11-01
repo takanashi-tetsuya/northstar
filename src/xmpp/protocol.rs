@@ -595,10 +595,10 @@ impl ProtocolSession {
 
     pub(super) fn muc_discussion_operation(
         &self,
-        prepared: &crate::services::muc::discussion::PreparedDiscussion,
+        prepared: &northstar_room_application::muc_service::discussion::PreparedDiscussion,
     ) -> Result<
-        Option<crate::services::muc::discussion::Observation>,
-        crate::services::muc::discussion::Rejected,
+        Option<northstar_room_application::muc_service::discussion::Observation>,
+        northstar_room_application::muc_service::discussion::Rejected,
     > {
         self.frame_executions.muc_discussion(prepared)
     }
@@ -982,7 +982,7 @@ impl ProtocolSession {
             self.joined_rooms
                 .remove_if(&room_jid, |_, current| current == &membership);
             self.state.remove_local_muc_occupant_exact(
-                crate::services::muc::LocalMucOccupantIdentity {
+                northstar_room_application::muc_service::LocalMucOccupantIdentity {
                     room_jid: &room_jid,
                     nick: &membership.nick,
                     full_jid: &full_jid,

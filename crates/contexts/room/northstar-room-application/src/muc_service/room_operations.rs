@@ -3,14 +3,14 @@
 use super::*;
 
 impl<R: MucRepository> MucService<R> {
-    pub(crate) async fn execute_muc_discussion(
+    pub async fn execute_muc_discussion(
         &self,
         command: &MucDiscussion,
     ) -> Result<MucDiscussionAdmission> {
         self.admit_local_discussion(command.clone()).await
     }
 
-    pub(crate) async fn execute_muc_subject(
+    pub async fn execute_muc_subject(
         &self,
         command: MucSubjectCommand<'_>,
     ) -> Result<MucSubjectResult> {
@@ -25,7 +25,7 @@ impl<R: MucRepository> MucService<R> {
         Ok(MucSubjectResult { outcome })
     }
 
-    pub(crate) async fn execute_muc_retraction(
+    pub async fn execute_muc_retraction(
         &self,
         command: MucRetractionCommand<'_>,
     ) -> Result<MucRetractionResult> {
@@ -40,7 +40,7 @@ impl<R: MucRepository> MucService<R> {
         Ok(MucRetractionResult { outcome })
     }
 
-    pub(crate) async fn execute_muc_affiliation_batch(
+    pub async fn execute_muc_affiliation_batch(
         &self,
         command: MucAffiliationBatchCommand<'_>,
     ) -> Result<MucAffiliationBatchResult> {
@@ -55,7 +55,7 @@ impl<R: MucRepository> MucService<R> {
         Ok(MucAffiliationBatchResult { outcome })
     }
 
-    pub(crate) async fn execute_muc_configuration(
+    pub async fn execute_muc_configuration(
         &self,
         command: MucConfigurationCommand<'_>,
     ) -> Result<MucConfigurationResult> {
@@ -74,7 +74,7 @@ impl<R: MucRepository> MucService<R> {
         Ok(MucConfigurationResult { outcome })
     }
 
-    pub(crate) async fn execute_muc_registration(
+    pub async fn execute_muc_registration(
         &self,
         command: MucRegistrationCommand<'_>,
     ) -> Result<MucRegistrationResult> {
@@ -96,30 +96,26 @@ impl<R: MucRepository> MucService<R> {
         Ok(MucRegistrationResult { outcome })
     }
 
-    pub(crate) async fn admit_local_discussion(
+    pub async fn admit_local_discussion(
         &self,
         message: MucDiscussion,
     ) -> Result<MucDiscussionAdmission> {
         self.discussion_application.admit_discussion(&message).await
     }
 
-    pub(crate) async fn local_room_snapshot(&self, localpart: &str) -> Result<Option<MucRoom>> {
+    pub async fn local_room_snapshot(&self, localpart: &str) -> Result<Option<MucRoom>> {
         self.repository.local_room_snapshot(localpart).await
     }
 
-    pub(crate) async fn federated_room_snapshot(&self, localpart: &str) -> Result<Option<MucRoom>> {
+    pub async fn federated_room_snapshot(&self, localpart: &str) -> Result<Option<MucRoom>> {
         self.local_room_snapshot(localpart).await
     }
 
-    pub(crate) async fn local_affiliation(
-        &self,
-        room_id: Uuid,
-        user_id: Uuid,
-    ) -> Result<Option<String>> {
+    pub async fn local_affiliation(&self, room_id: Uuid, user_id: Uuid) -> Result<Option<String>> {
         self.repository.local_affiliation(room_id, user_id).await
     }
 
-    pub(crate) async fn federated_affiliation(
+    pub async fn federated_affiliation(
         &self,
         room_id: Uuid,
         bare_jid: &str,
@@ -129,14 +125,11 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn enabled_local_account(
-        &self,
-        username: &str,
-    ) -> Result<Option<MucLocalAccount>> {
+    pub async fn enabled_local_account(&self, username: &str) -> Result<Option<MucLocalAccount>> {
         self.repository.enabled_local_account(username).await
     }
 
-    pub(crate) async fn is_blocked_for_account(
+    pub async fn is_blocked_for_account(
         &self,
         owner_id: Uuid,
         owner_bare_jid: &str,
@@ -147,11 +140,11 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn blocked_jids(&self, user_id: Uuid) -> Result<Vec<String>> {
+    pub async fn blocked_jids(&self, user_id: Uuid) -> Result<Vec<String>> {
         self.repository.blocked_jids(user_id).await
     }
 
-    pub(crate) async fn store_local_muc_offline(
+    pub async fn store_local_muc_offline(
         &self,
         recipient_id: Uuid,
         sender_jid: &str,
@@ -171,7 +164,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn store_federated_muc_offline(
+    pub async fn store_federated_muc_offline(
         &self,
         recipient_id: Uuid,
         sender_jid: &str,
@@ -183,7 +176,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn local_message_by_id(
+    pub async fn local_message_by_id(
         &self,
         room_id: Uuid,
         message_id: Uuid,
@@ -193,7 +186,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn federated_message_by_id(
+    pub async fn federated_message_by_id(
         &self,
         room_id: Uuid,
         message_id: Uuid,
@@ -201,7 +194,7 @@ impl<R: MucRepository> MucService<R> {
         self.local_message_by_id(room_id, message_id).await
     }
 
-    pub(crate) async fn local_history_since(
+    pub async fn local_history_since(
         &self,
         room_id: Uuid,
         limit: i64,
@@ -212,7 +205,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn federated_history_since(
+    pub async fn federated_history_since(
         &self,
         room_id: Uuid,
         limit: i64,
@@ -221,11 +214,11 @@ impl<R: MucRepository> MucService<R> {
         self.local_history_since(room_id, limit, since).await
     }
 
-    pub(crate) async fn delete_expired_locked_room(&self, room_id: Uuid) -> Result<bool> {
+    pub async fn delete_expired_locked_room(&self, room_id: Uuid) -> Result<bool> {
         self.repository.delete_expired_locked_room(room_id).await
     }
 
-    pub(crate) async fn delete_temporary_room(
+    pub async fn delete_temporary_room(
         &self,
         room_id: Uuid,
         room_epoch: Uuid,
@@ -236,7 +229,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn local_reserved_nick(
+    pub async fn local_reserved_nick(
         &self,
         room_id: Uuid,
         user_id: Uuid,
@@ -244,7 +237,7 @@ impl<R: MucRepository> MucService<R> {
         self.repository.local_reserved_nick(room_id, user_id).await
     }
 
-    pub(crate) async fn local_nick_reserved_for_other(
+    pub async fn local_nick_reserved_for_other(
         &self,
         room_id: Uuid,
         user_id: Uuid,
@@ -255,7 +248,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn federated_reserved_nick(
+    pub async fn federated_reserved_nick(
         &self,
         room_id: Uuid,
         bare_jid: &str,
@@ -265,7 +258,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn federated_nick_reserved_for_other(
+    pub async fn federated_nick_reserved_for_other(
         &self,
         room_id: Uuid,
         bare_jid: &str,
@@ -276,7 +269,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn get_or_create_local_room(
+    pub async fn get_or_create_local_room(
         &self,
         localpart: &str,
         creator_id: Uuid,
@@ -287,7 +280,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn get_or_create_federated_room(
+    pub async fn get_or_create_federated_room(
         &self,
         localpart: &str,
         creator_full_jid: &str,
@@ -297,7 +290,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn public_room_page(
+    pub async fn public_room_page(
         &self,
         after: Option<&str>,
         before: Option<Option<&str>>,
@@ -306,7 +299,7 @@ impl<R: MucRepository> MucService<R> {
         self.repository.public_room_page(after, before, max).await
     }
 
-    pub(crate) async fn federated_public_room_page(
+    pub async fn federated_public_room_page(
         &self,
         after: Option<&str>,
         before: Option<Option<&str>>,
@@ -315,7 +308,7 @@ impl<R: MucRepository> MucService<R> {
         self.public_room_page(after, before, max).await
     }
 
-    pub(crate) async fn register_local_member(
+    pub async fn register_local_member(
         &self,
         room_id: Uuid,
         user_id: Uuid,
@@ -326,17 +319,13 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn unregister_local_member(
-        &self,
-        room_id: Uuid,
-        user_id: Uuid,
-    ) -> Result<bool> {
+    pub async fn unregister_local_member(&self, room_id: Uuid, user_id: Uuid) -> Result<bool> {
         self.repository
             .unregister_local_member(room_id, user_id)
             .await
     }
 
-    pub(crate) async fn register_federated_member(
+    pub async fn register_federated_member(
         &self,
         room_id: Uuid,
         bare_jid: &str,
@@ -347,18 +336,14 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn unregister_federated_member(
-        &self,
-        room_id: Uuid,
-        bare_jid: &str,
-    ) -> Result<bool> {
+    pub async fn unregister_federated_member(&self, room_id: Uuid, bare_jid: &str) -> Result<bool> {
         self.repository
             .unregister_federated_member(room_id, bare_jid)
             .await
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn admit_local_invite_command(
+    pub async fn admit_local_invite_command(
         &self,
         id: Uuid,
         room_id: Uuid,
@@ -385,7 +370,7 @@ impl<R: MucRepository> MucService<R> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn admit_federated_invite_command(
+    pub async fn admit_federated_invite_command(
         &self,
         room_id: Uuid,
         invitee_bare_jid: &str,
@@ -408,7 +393,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn set_local_subject(
+    pub async fn set_local_subject(
         &self,
         mutation: MucSubjectMutation<'_>,
         archive: bool,
@@ -423,7 +408,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn retract_local_message_and_archive_action(
+    pub async fn retract_local_message_and_archive_action(
         &self,
         mutation: MucRetractionMutation<'_>,
     ) -> Result<MucRetractionOutcome> {
@@ -439,7 +424,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn update_local_legacy_config(
+    pub async fn update_local_legacy_config(
         &self,
         room_id: Uuid,
         actor_full_jid: &str,
@@ -450,21 +435,17 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn cancel_locked_room(
-        &self,
-        room_id: Uuid,
-        actor_full_jid: &str,
-    ) -> Result<bool> {
+    pub async fn cancel_locked_room(&self, room_id: Uuid, actor_full_jid: &str) -> Result<bool> {
         self.repository
             .cancel_locked_room(room_id, actor_full_jid)
             .await
     }
 
-    pub(crate) async fn delete_room(&self, room_id: Uuid) -> Result<()> {
+    pub async fn delete_room(&self, room_id: Uuid) -> Result<()> {
         self.repository.delete_room(room_id).await
     }
 
-    pub(crate) async fn set_local_legacy_affiliations_batch(
+    pub async fn set_local_legacy_affiliations_batch(
         &self,
         room_id: Uuid,
         changes: &[MucAffiliationChange],
@@ -474,7 +455,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn local_affiliations(
+    pub async fn local_affiliations(
         &self,
         room_id: Uuid,
         affiliation: &str,
@@ -484,7 +465,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn federated_affiliations(
+    pub async fn federated_affiliations(
         &self,
         room_id: Uuid,
         affiliation: &str,
@@ -495,7 +476,7 @@ impl<R: MucRepository> MucService<R> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn authorized_admin_role_list(
+    pub async fn authorized_admin_role_list(
         &self,
         room_id: Uuid,
         expected_room_epoch: Uuid,
@@ -521,7 +502,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn authorized_admin_affiliation_list(
+    pub async fn authorized_admin_affiliation_list(
         &self,
         room_id: Uuid,
         expected_room_epoch: Uuid,

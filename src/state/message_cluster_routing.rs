@@ -4,12 +4,12 @@ use super::{AppState, OnlineSession};
 use crate::services::messaging::{
     DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
 };
-use crate::services::muc::{
-    ClusterMucAffiliationSubject, ClusterMucInviteAuthority, ClusterMucPrincipal,
-};
 use crate::services::xml_util::carbon_message;
 use crate::xmpp::outbound::DurableDelivery;
 use anyhow::Result;
+use northstar_room_application::muc_service::{
+    ClusterMucAffiliationSubject, ClusterMucInviteAuthority, ClusterMucPrincipal,
+};
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use std::sync::atomic::Ordering;
 use uuid::Uuid;

@@ -410,7 +410,9 @@ async fn federated_muc_message_owned(
                         return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
                     }
                     let Some(updated_occupant) = state.set_local_muc_role_exact(
-                        crate::services::muc::LocalMucOccupantIdentity::from(target),
+                        northstar_room_application::muc_service::LocalMucOccupantIdentity::from(
+                            target,
+                        ),
                         "visitor",
                         "participant",
                         None,
@@ -472,11 +474,12 @@ async fn federated_muc_message_owned(
                         "item-not-found",
                     ));
                 }
-                let operation_id = crate::services::muc::operation_id(&serde_json::json!({
-                    "kind":"voice_approval","stream":connection_id,
-                    "stanza_id":request.stanza.id,"room":room_jid,
-                    "actor":actor_target,"target":target_authority,"role":"participant"
-                }))?;
+                let operation_id =
+                    northstar_room_application::muc_service::operation_id(&serde_json::json!({
+                        "kind":"voice_approval","stream":connection_id,
+                        "stanza_id":request.stanza.id,"room":room_jid,
+                        "actor":actor_target,"target":target_authority,"role":"participant"
+                    }))?;
                 match service
                     .change_local_cluster_role(
                         operation_id,
@@ -649,11 +652,13 @@ async fn federated_muc_message_owned(
             }
             let local_durable_invite_id =
                 if room.members_only && invitee_domain == state.local_domain() {
-                    Some(crate::services::muc::operation_id(&serde_json::json!({
-                        "kind":"muc_invitation","stream":connection_id,
-                        "stanza_id":request.stanza.id,"room":room_jid,
-                        "actor":actor_full_jid,"invitee":invitee_bare,"reason":reason,
-                    }))?)
+                    Some(northstar_room_application::muc_service::operation_id(
+                        &serde_json::json!({
+                            "kind":"muc_invitation","stream":connection_id,
+                            "stanza_id":request.stanza.id,"room":room_jid,
+                            "actor":actor_full_jid,"invitee":invitee_bare,"reason":reason,
+                        }),
+                    )?)
                 } else {
                     None
                 };
@@ -955,11 +960,12 @@ async fn federated_muc_message_owned(
                     }
                 }
             } else if room.members_only {
-                let operation_id = crate::services::muc::operation_id(&serde_json::json!({
-                    "kind":"muc_invitation","stream":connection_id,
-                    "stanza_id":request.stanza.id,"room":room_jid,
-                    "actor":actor_full_jid,"invitee":invitee_bare,"reason":reason,
-                }))?;
+                let operation_id =
+                    northstar_room_application::muc_service::operation_id(&serde_json::json!({
+                        "kind":"muc_invitation","stream":connection_id,
+                        "stanza_id":request.stanza.id,"room":room_jid,
+                        "actor":actor_full_jid,"invitee":invitee_bare,"reason":reason,
+                    }))?;
                 let cluster_authority = if state.federated_muc_pg_authority_enabled() {
                     state.federated_muc_admit_mutation()?;
                     let Some(actor_target) = state
@@ -1318,10 +1324,11 @@ async fn federated_muc_message_owned(
             {
                 return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
             }
-            let operation_id = crate::services::muc::operation_id(&serde_json::json!({
-                "kind":"subject","stream":connection_id,"stanza_id":request.stanza.id,
-                "room":room_jid,"actor":actor_target,"subject":subject,"archive":archive_enabled
-            }))?;
+            let operation_id =
+                northstar_room_application::muc_service::operation_id(&serde_json::json!({
+                    "kind":"subject","stream":connection_id,"stanza_id":request.stanza.id,
+                    "room":room_jid,"actor":actor_target,"subject":subject,"archive":archive_enabled
+                }))?;
             match service
                 .set_local_cluster_subject(
                     operation_id,

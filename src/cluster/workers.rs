@@ -297,10 +297,12 @@ pub(super) async fn maintenance_once(
         }
         renewed_muc.push(occupant);
     }
-    for chunk in unrenewed_muc.chunks(crate::services::muc::MAX_MUC_OCCUPANCY_RENEW_BATCH) {
+    for chunk in
+        unrenewed_muc.chunks(northstar_room_application::muc_service::MAX_MUC_OCCUPANCY_RENEW_BATCH)
+    {
         let mut candidates = Vec::with_capacity(chunk.len());
         for occupant in chunk {
-            match crate::services::muc::MucOccupancyLookup::new(
+            match northstar_room_application::muc_service::MucOccupancyLookup::new(
                 &occupant.room_jid,
                 &occupant.full_jid,
                 &occupant.nick,
@@ -343,11 +345,13 @@ pub(super) async fn maintenance_once(
     }
     // Clear lost authority before any Redis network wait can postpone its
     // route fence. Redis remains a disposable projection of renewed actors.
-    let soft_state = crate::services::muc::MucSoftStateProjectionService::new(redis);
+    let soft_state =
+        northstar_room_application::muc_service::MucSoftStateProjectionService::new(redis);
     let mut muc_soft_state_errors = 0_u64;
     let mut active_muc_rooms = HashSet::new();
     for occupant in renewed_muc {
-        let serializable = crate::services::muc::SerializableMucOccupant::from(&occupant);
+        let serializable =
+            northstar_room_application::muc_service::SerializableMucOccupant::from(&occupant);
         let json = serde_json::to_string(&serializable)?;
         if let Err(error) = soft_state
             .refresh(&occupant.room_jid, &occupant.nick, &json)

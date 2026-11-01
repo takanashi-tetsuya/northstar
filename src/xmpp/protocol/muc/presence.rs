@@ -41,7 +41,7 @@ impl ProtocolSession {
                 .await?
             else {
                 self.state.remove_local_muc_occupant_exact(
-                    crate::services::muc::LocalMucOccupantIdentity {
+                    northstar_room_application::muc_service::LocalMucOccupantIdentity {
                         room_jid: &room_jid,
                         nick: &joined.nick,
                         full_jid: &full_jid,
@@ -56,7 +56,7 @@ impl ProtocolSession {
             };
             if refreshed_room.room_epoch != initial_room.room_epoch {
                 self.state.remove_local_muc_occupant_exact(
-                    crate::services::muc::LocalMucOccupantIdentity {
+                    northstar_room_application::muc_service::LocalMucOccupantIdentity {
                         room_jid: &room_jid,
                         nick: &joined.nick,
                         full_jid: &full_jid,
@@ -140,7 +140,7 @@ impl ProtocolSession {
         self.joined_rooms
             .remove_if(&room_jid, |_, current| current == &joined);
         let Some(departed) = self.state.remove_local_muc_occupant_exact(
-            crate::services::muc::LocalMucOccupantIdentity {
+            northstar_room_application::muc_service::LocalMucOccupantIdentity {
                 room_jid: &room_jid,
                 nick: &joined.nick,
                 full_jid: &full_jid,
@@ -151,7 +151,8 @@ impl ProtocolSession {
             return Ok(Action::None);
         };
 
-        let serializable = crate::services::muc::SerializableMucOccupant::from(&departed);
+        let serializable =
+            northstar_room_application::muc_service::SerializableMucOccupant::from(&departed);
         let locally_empty = self.state.muc_occupants_for(&room_jid).is_empty();
         if locally_empty {
             if let Some(room) = local_departure_room.as_ref() {
@@ -188,7 +189,9 @@ impl ProtocolSession {
         if !clustered_leave {
             for (_, target) in &remaining {
                 let presence = muc_presence_stanza(
-                    &crate::services::muc::SerializableMucOccupant::from(&departed),
+                    &northstar_room_application::muc_service::SerializableMucOccupant::from(
+                        &departed,
+                    ),
                     &target.full_jid,
                     true,
                     false,
@@ -200,7 +203,7 @@ impl ProtocolSession {
             }
         }
         let self_presence = muc_presence_stanza(
-            &crate::services::muc::SerializableMucOccupant::from(&departed),
+            &northstar_room_application::muc_service::SerializableMucOccupant::from(&departed),
             &full_jid,
             true,
             true,

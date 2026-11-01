@@ -478,7 +478,7 @@
       "id": "muc",
       "title": "MUC room authority and fan-out",
       "production_owner": {
-        "path": "src/services/muc.rs",
+        "path": "crates/contexts/room/northstar-room-application/src/muc_service.rs",
         "anchor": "pub(crate) struct MucService<R> {"
       },
       "runtime_identities": [
@@ -508,7 +508,7 @@
       "budgets": {
         "contract": "Existing C2S frame budget applies to ingress; standalone room mutex intentionally spans admission/fan-out; clustered policy delivery has its own 5s attempt.",
         "source": {
-          "path": "src/services/muc.rs",
+          "path": "crates/contexts/room/northstar-room-application/src/muc_service.rs",
           "anchor": "pub(crate) async fn lock_local_room_mutation("
         }
       },
@@ -535,9 +535,9 @@
           "id": "muc-fanout-owner",
           "level": "deterministic_unit",
           "status": "declared",
-          "command": "cargo test --locked --bin rust-xmpp-server services::muc::fanout::tests",
+          "command": "cargo test --locked -p northstar-room-application muc_service::fanout::tests",
           "test": {
-            "path": "src/services/muc/fanout.rs",
+            "path": "crates/contexts/room/northstar-room-application/src/muc_service/fanout.rs",
             "anchor": "async fn accepted_fanout_preserves_snapshot_privacy_and_endpoint_order() {"
           },
           "assertions": [

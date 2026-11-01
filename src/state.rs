@@ -256,7 +256,6 @@ use self::roster_module::*;
 pub(crate) use self::runtime_config::*;
 pub(crate) use self::runtime_control::*;
 use self::upload_module::*;
-use crate::services::muc::{LocalMucOccupantIdentity, SerializableMucOccupant};
 use crate::xmpp::local_routes::{
     muc::{
         LocalMucJoinPublication, LocalMucNicknameMove, MucOccupant, MucOccupantEndpoint,
@@ -266,6 +265,7 @@ use crate::xmpp::local_routes::{
     session::{AccountRevocationRoutes, OnlineSession, SmPresenceEpoch, SmStagedRouteClaim},
 };
 use crate::xmpp::local_routes::{muc_table::*, session_table::*, suspended_muc::*};
+use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
 use northstar_xml_builder::escape::attr_escape;
 use northstar_xmpp_types::jid_text::*;
 
@@ -309,7 +309,7 @@ pub struct AppState {
     extdisco_service: crate::services::extdisco::ExtDiscoService,
     /// PostgreSQL-authoritative MUC application service. Redis capabilities
     /// deliberately do not cross this boundary.
-    muc_service: crate::services::muc::MucService<db::room::PostgresMucRepository>,
+    muc_service: northstar_room_application::muc_service::MucService<db::room::PostgresMucRepository>,
     /// Personal-message authorization and durable admission boundary. The
     /// protocol layer must not compose its own archive/outbox/offline writes.
     message_service:

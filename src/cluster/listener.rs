@@ -564,9 +564,9 @@ pub(super) async fn listen_once(
                 .as_str()
                 .and_then(|value| uuid::Uuid::parse_str(value).ok())
                 .zip(
-                    serde_json::from_value::<crate::services::muc::SerializableMucOccupant>(
-                        json["occupant"].clone(),
-                    )
+                    serde_json::from_value::<
+                        northstar_room_application::muc_service::SerializableMucOccupant,
+                    >(json["occupant"].clone())
                     .ok(),
                 );
             if let Some((sm_session_id, occupant)) = parsed {
@@ -590,7 +590,7 @@ pub(super) async fn listen_once(
             }
         } else if is_muc_evict {
             if let Ok(occupant) = serde_json::from_value::<
-                crate::services::muc::SerializableMucOccupant,
+                northstar_room_application::muc_service::SerializableMucOccupant,
             >(json["occupant"].clone())
             {
                 let status = json["status"]
@@ -650,7 +650,7 @@ pub(super) async fn listen_once(
                             continue;
                         }
                         let removed = muc_endpoints.remove_local_exact(
-                            crate::services::muc::LocalMucOccupantIdentity {
+                            northstar_room_application::muc_service::LocalMucOccupantIdentity {
                                 room_jid: &room,
                                 nick: &identity.nick,
                                 full_jid: &identity.full_jid,
@@ -660,7 +660,7 @@ pub(super) async fn listen_once(
                         );
                         if let Some(occupant) = removed {
                             let serializable =
-                                crate::services::muc::SerializableMucOccupant::from(&occupant);
+                                northstar_room_application::muc_service::SerializableMucOccupant::from(&occupant);
                             muc_endpoints.remove_live_membership_exact(&serializable);
                             let presence = northstar_room_core::stanza::muc_destroy_presence(
                                 &serializable,
@@ -679,7 +679,7 @@ pub(super) async fn listen_once(
             }
         } else if is_muc_role_change {
             if let Ok(occupant) = serde_json::from_value::<
-                crate::services::muc::SerializableMucOccupant,
+                northstar_room_application::muc_service::SerializableMucOccupant,
             >(json["occupant"].clone())
             {
                 if occupant.room_jid == target
@@ -714,12 +714,12 @@ pub(super) async fn listen_once(
             }
         } else if is_muc_nickname_change {
             if let (Ok(old_occupant), Ok(new_occupant)) = (
-                serde_json::from_value::<crate::services::muc::SerializableMucOccupant>(
-                    json["old_occupant"].clone(),
-                ),
-                serde_json::from_value::<crate::services::muc::SerializableMucOccupant>(
-                    json["new_occupant"].clone(),
-                ),
+                serde_json::from_value::<
+                    northstar_room_application::muc_service::SerializableMucOccupant,
+                >(json["old_occupant"].clone()),
+                serde_json::from_value::<
+                    northstar_room_application::muc_service::SerializableMucOccupant,
+                >(json["new_occupant"].clone()),
             ) {
                 if old_occupant.cluster_epoch == new_occupant.cluster_epoch
                     && old_occupant.full_jid == new_occupant.full_jid
@@ -731,7 +731,9 @@ pub(super) async fn listen_once(
                     for session in muc_endpoints.room_occupants(target) {
                         let unavailable = northstar_room_core::stanza::muc_nickname_change_presence(
                             &old_occupant,
-                            &crate::services::muc::SerializableMucOccupant::from(&session),
+                            &northstar_room_application::muc_service::SerializableMucOccupant::from(
+                                &session,
+                            ),
                             &new_occupant.nick,
                             id,
                         );
@@ -761,7 +763,7 @@ pub(super) async fn listen_once(
             }
         } else if is_muc_presence {
             if let Ok(occupant) = serde_json::from_value::<
-                crate::services::muc::SerializableMucOccupant,
+                northstar_room_application::muc_service::SerializableMucOccupant,
             >(json["occupant"].clone())
             {
                 let unavailable = json["unavailable"].as_bool().unwrap_or(false);

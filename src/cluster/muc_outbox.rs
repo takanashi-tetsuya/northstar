@@ -253,7 +253,7 @@ pub(super) fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<
     let room_non_anonymous = context.details["non_anonymous"]
         .as_bool()
         .unwrap_or(context.room_non_anonymous);
-    let subject = crate::services::muc::SerializableMucOccupant {
+    let subject = northstar_room_application::muc_service::SerializableMucOccupant {
         full_jid: snapshot.full_jid.clone(),
         room_jid: room_jid.to_owned(),
         nick: snapshot.nick.clone(),
@@ -326,8 +326,8 @@ pub(super) fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<
 }
 
 pub(super) fn render_cluster_muc_departure_presence(
-    target: &crate::services::muc::SerializableMucOccupant,
-    recipient: &crate::services::muc::SerializableMucOccupant,
+    target: &northstar_room_application::muc_service::SerializableMucOccupant,
+    recipient: &northstar_room_application::muc_service::SerializableMucOccupant,
     event_id: &str,
     room_non_anonymous: bool,
     operation_kind: &str,
@@ -487,7 +487,8 @@ pub(super) async fn deliver_cluster_muc_event(
         recipient.role = original.role;
         recipient.affiliation = original.affiliation;
     }
-    let recipient_serializable = crate::services::muc::SerializableMucOccupant::from(&recipient);
+    let recipient_serializable =
+        northstar_room_application::muc_service::SerializableMucOccupant::from(&recipient);
     let event_id = delivery.event_id.to_string();
     let target = context
         .target
@@ -497,23 +498,25 @@ pub(super) async fn deliver_cluster_muc_event(
                 target.occupancy_epoch >= 1 && target.connection_epoch >= 1,
                 "cluster MUC target has invalid authority epochs"
             );
-            Ok(crate::services::muc::SerializableMucOccupant {
-                full_jid: target.full_jid.clone(),
-                room_jid: room_jid.clone(),
-                nick: target.nick.clone(),
-                affiliation: target.affiliation.clone(),
-                role: target.role.clone(),
-                room_non_anonymous: context.room_non_anonymous,
-                occupant_id: northstar_room_core::stanza::muc_occupant_id(
-                    &context.occupant_id_secret,
-                    &target.bare_jid,
-                ),
-                cluster_epoch: target.occupant_incarnation,
-                connection_id: target.connection_uuid,
-                federated_domain: None,
-                sm_session_id: None,
-                payload: target.presence_payload.clone(),
-            })
+            Ok(
+                northstar_room_application::muc_service::SerializableMucOccupant {
+                    full_jid: target.full_jid.clone(),
+                    room_jid: room_jid.clone(),
+                    nick: target.nick.clone(),
+                    affiliation: target.affiliation.clone(),
+                    role: target.role.clone(),
+                    room_non_anonymous: context.room_non_anonymous,
+                    occupant_id: northstar_room_core::stanza::muc_occupant_id(
+                        &context.occupant_id_secret,
+                        &target.bare_jid,
+                    ),
+                    cluster_epoch: target.occupant_incarnation,
+                    connection_id: target.connection_uuid,
+                    federated_domain: None,
+                    sm_session_id: None,
+                    payload: target.presence_payload.clone(),
+                },
+            )
         })
         .transpose()?;
     let mut stanzas = Vec::with_capacity(2);

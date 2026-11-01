@@ -4,7 +4,13 @@
 //! account. Remote occupants therefore live in the room map with a federated
 //! endpoint and use a separate persistent-affiliation table.
 
-use crate::services::muc::{
+use crate::services::xml_util::*;
+use crate::state::AppState;
+use crate::xmpp::local_routes::muc::{MucOccupant, MucOccupantEndpoint};
+use crate::xmpp::xml_builder::XmlElement;
+use anyhow::{Context, Result};
+use northstar_archive_application::{FederatedMamMetadataCommand, MamMetadataResult};
+use northstar_room_application::muc_service::{
     ClusterMucAffiliationSubject, ClusterMucConfigurationOutcome, ClusterMucInviteAuthority,
     ClusterMucJoin, ClusterMucJoinOutcome, ClusterMucPrincipal, ClusterMucRegistrationOutcome,
     ClusterMucTransitionOutcome, DurableMucInviteOutcome, MucActorAuthority, MucActorPrincipal,
@@ -13,12 +19,6 @@ use crate::services::muc::{
     MucRetractionKind, MucRetractionMutation, MucRetractionOutcome, MucRoom, MucSubjectMutation,
     MucSubjectOutcome, OfflineStoreOutcome, SerializableMucOccupant,
 };
-use crate::services::xml_util::*;
-use crate::state::AppState;
-use crate::xmpp::local_routes::muc::{MucOccupant, MucOccupantEndpoint};
-use crate::xmpp::xml_builder::XmlElement;
-use anyhow::{Context, Result};
-use northstar_archive_application::{FederatedMamMetadataCommand, MamMetadataResult};
 use northstar_room_core::stanza::*;
 use northstar_room_core::MucJoinSnapshotError;
 use northstar_xmpp_types::jid_text::{bare_jid, localpart};

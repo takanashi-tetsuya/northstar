@@ -9,7 +9,6 @@ use crate::services::message_admission::{
     witness::{self, AdmissionWitness, DirectOperationHandle},
     MessageAdmissionRepository, MessageAdmissionService,
 };
-use crate::services::muc::fanout::{run_muc_discussion_fanout, MucFanoutPort, MucFanoutStage};
 use crate::stage4_replay::{self as wire, driver};
 use crate::xmpp::outbound::{
     DurableDelivery, MixDelivery, OutboundItem, OutboundSender, RouteEnqueue,
@@ -31,6 +30,9 @@ use northstar_abuse_policy::{
 use northstar_abuse_policy::{MessageAdmissionRequest, MessageDedupeIdentity, WorkRequirement};
 use northstar_delivery_core::native_write as native;
 use northstar_message_application::direct_lifecycle;
+use northstar_room_application::muc_service::fanout::{
+    run_muc_discussion_fanout, MucFanoutPort, MucFanoutStage,
+};
 use northstar_room_application::{
     discussion as muc, MucDiscussionRepository, RepositoryFuture, RoomApplication,
 };

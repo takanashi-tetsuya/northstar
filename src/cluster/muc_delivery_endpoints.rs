@@ -1,13 +1,13 @@
 //! Process-local endpoints and projections for committed MUC outbox events.
 
 use crate::db::ClusterMucAudienceSnapshot;
-use crate::services::muc::{LocalMucOccupantIdentity, SerializableMucOccupant};
 use crate::xmpp::local_routes::{
     muc::{MucOccupant, MucOccupantEndpoint, SuspendedMucEndpoint},
     muc_table::{remove_local_muc_occupant_exact_from, with_local_muc_occupant_exact},
     session::OnlineSession,
 };
 use dashmap::DashMap;
+use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
 use std::sync::Arc;
 
 pub(crate) struct ClusterMucDeliveryEndpoints {

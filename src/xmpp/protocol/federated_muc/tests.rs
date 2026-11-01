@@ -443,9 +443,7 @@ fn federated_iq_parser_captures_bounded_mam_and_moderation_controls() {
     assert_eq!(query.query_id.as_deref(), Some("q1"));
     assert_eq!(query.query.with_jid.as_deref(), Some("alice@remote.test"));
     assert_eq!(query.query.max, 100);
-    assert!(crate::services::muc::archive_page_is_last(
-        &query.query.page
-    ));
+    assert!(matches!(query.query.page, crate::db::MamRsmPage::Last));
 
     let metadata = "<iq from='owner@remote.test/Phone' to='room@conference.example.test' type='get'><metadata xmlns='urn:xmpp:mam:2'/></iq>";
     let document = roxmltree::Document::parse(metadata).unwrap();

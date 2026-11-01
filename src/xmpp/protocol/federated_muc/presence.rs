@@ -410,7 +410,9 @@ async fn federated_muc_presence_owned(
                 }
             }
             let move_outcome = state.move_local_muc_nickname_exact(
-                crate::services::muc::LocalMucOccupantIdentity::from(&old_occupant),
+                northstar_room_application::muc_service::LocalMucOccupantIdentity::from(
+                    &old_occupant,
+                ),
                 &occupant,
                 cluster_operation.is_some(),
             );
@@ -754,7 +756,7 @@ async fn federated_muc_presence_owned(
         .await
     {
         Ok(result) => result,
-        Err(error) if crate::services::muc::is_capacity_exhausted(&error) => {
+        Err(error) if northstar_room_application::muc_service::is_capacity_exhausted(&error) => {
             state.federated_muc_telemetry().capacity_rejected();
             return Ok(federated_error(
                 &request.stanza,
@@ -811,10 +813,12 @@ async fn federated_muc_presence_owned(
         let supplied = zeroize::Zeroizing::new(request.password.clone());
         let password_hash = zeroize::Zeroizing::new(password_hash.to_owned());
         let valid = match northstar_security::password_work::run(move || {
-            Ok(crate::services::muc::verify_room_password(
-                &password_hash,
-                &supplied,
-            ))
+            Ok(
+                northstar_room_application::muc_service::verify_room_password(
+                    &password_hash,
+                    &supplied,
+                ),
+            )
         })
         .await
         {

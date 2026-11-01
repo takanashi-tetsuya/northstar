@@ -61,10 +61,10 @@ impl AppState {
 
     pub(crate) fn cluster_muc_occupancy_maintenance_service(
         &self,
-    ) -> crate::services::muc::ClusterMucOccupancyMaintenanceService<
+    ) -> northstar_room_application::muc_service::ClusterMucOccupancyMaintenanceService<
         db::room::PostgresClusterMucOccupancyMaintenanceRepository,
     > {
-        crate::services::muc::ClusterMucOccupancyMaintenanceService::new(
+        northstar_room_application::muc_service::ClusterMucOccupancyMaintenanceService::new(
             db::room::PostgresClusterMucOccupancyMaintenanceRepository::new(self.pool.clone()),
         )
     }

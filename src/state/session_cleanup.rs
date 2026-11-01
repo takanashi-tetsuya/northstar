@@ -8,7 +8,6 @@
 //! cleanup can therefore never remove a replacement session.
 
 use crate::cluster::{ClusterMucDeparture, ClusterSessionRouteRelease};
-use crate::services::muc::ClusterMucTransitionOutcome;
 use crate::services::sm_suspension;
 use crate::state::AppState;
 use crate::state::{
@@ -22,6 +21,7 @@ use crate::state::{
 use crate::xmpp::muc_delivery::MucDeliveryContext;
 use anyhow::Result;
 use dashmap::DashMap;
+use northstar_room_application::muc_service::ClusterMucTransitionOutcome;
 use std::{
     collections::HashMap,
     sync::{
@@ -735,7 +735,7 @@ impl SessionCleanupService {
                 plan.joined_rooms
                     .remove_if(&room_jid, |_, current| current == &membership);
                 let Some(departed) = local.remove_local_muc_occupant_exact(
-                    crate::services::muc::LocalMucOccupantIdentity {
+                    northstar_room_application::muc_service::LocalMucOccupantIdentity {
                         room_jid: &room_jid,
                         nick: &membership.nick,
                         full_jid,
@@ -1160,7 +1160,9 @@ impl SessionCleanupService {
             if !pg_authoritative {
                 for (_, target) in &departure.remaining {
                     let presence = northstar_room_core::stanza::muc_presence_stanza(
-                        &crate::services::muc::SerializableMucOccupant::from(&departure.departed),
+                        &northstar_room_application::muc_service::SerializableMucOccupant::from(
+                            &departure.departed,
+                        ),
                         &target.full_jid,
                         true,
                         false,

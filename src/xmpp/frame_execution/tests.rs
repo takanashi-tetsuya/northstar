@@ -5,7 +5,7 @@ use std::{future::pending, io::Write, panic::AssertUnwindSafe, sync::Mutex, task
 #[tokio::test]
 async fn supplied_session_frame_keeps_registered_room_owners_through_actual_retirement() {
     use crate::services::mix::foreground::fixture as mix_fixture;
-    use crate::services::muc::discussion::fixture as muc_fixture;
+    use northstar_room_application::muc_service::discussion::fixture as muc_fixture;
 
     for complete in [false, true] {
         let id = Uuid::from_u128(if complete { 701 } else { 702 });
@@ -106,7 +106,7 @@ async fn supplied_session_frame_keeps_registered_room_owners_through_actual_reti
 #[tokio::test]
 async fn supplied_retired_session_frame_preserves_existing_authority_guards_and_slots() {
     use crate::services::mix::foreground::fixture as mix_fixture;
-    use crate::services::muc::discussion::fixture as muc_fixture;
+    use northstar_room_application::muc_service::discussion::fixture as muc_fixture;
 
     for complete in [false, true] {
         for populated in [false, true] {
@@ -1071,10 +1071,11 @@ impl Drop for MucChildDropMarker {
 
 #[tokio::test(start_paused = true)]
 async fn muc_receipt_return_and_terminal_survive_actual_frame_drop_timeout_and_panic() {
-    use crate::services::muc::discussion::fixture::{self, Cut};
     use northstar_room_application::discussion::{
         AcceptanceClass, AdmissionError, KnowledgeClass, ReturnClass,
     };
+    use northstar_room_application::muc_service::discussion::fixture;
+    use northstar_room_application::muc_service::discussion::fixture::Cut;
     for cut in 0..9 {
         let application = fixture::application(match cut {
             1 => Cut::BeforeCommit,
@@ -1183,7 +1184,8 @@ async fn muc_receipt_return_and_terminal_survive_actual_frame_drop_timeout_and_p
 
 #[tokio::test]
 async fn muc_slot_distinguishes_legacy_absence_conflict_and_retired_frames() {
-    use crate::services::muc::discussion::fixture::{self, Cut};
+    use northstar_room_application::muc_service::discussion::fixture;
+    use northstar_room_application::muc_service::discussion::fixture::Cut;
     let application = fixture::application(Cut::Return);
     let prepared = application.prepare_discussion(fixture::command(true, true));
     let conflicting = application.prepare_discussion(fixture::command(true, true));

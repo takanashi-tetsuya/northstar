@@ -4,7 +4,7 @@ use super::*;
 
 impl<R: MucRepository> MucService<R> {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn mutate_local_cluster_registration(
+    pub async fn mutate_local_cluster_registration(
         &self,
         operation_id: Uuid,
         room_id: Uuid,
@@ -27,7 +27,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn set_local_cluster_subject(
+    pub async fn set_local_cluster_subject(
         &self,
         operation_id: Uuid,
         expected_room_epoch: Uuid,
@@ -48,14 +48,14 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn claim_local_cluster_occupancy(
+    pub async fn claim_local_cluster_occupancy(
         &self,
         request: ClusterMucJoin<'_>,
     ) -> Result<ClusterMucJoinOutcome> {
         self.repository.claim_local_cluster_occupancy(request).await
     }
 
-    pub(crate) async fn renew_local_cluster_occupancy(
+    pub async fn renew_local_cluster_occupancy(
         &self,
         target: &ClusterMucOccupancyTarget,
         owner_node_id: &str,
@@ -66,7 +66,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn refresh_local_cluster_presence(
+    pub async fn refresh_local_cluster_presence(
         &self,
         target: &ClusterMucOccupancyTarget,
         owner_node_id: &str,
@@ -79,7 +79,7 @@ impl<R: MucRepository> MucService<R> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn transition_local_cluster_occupancy(
+    pub async fn transition_local_cluster_occupancy(
         &self,
         operation_id: Uuid,
         target: &ClusterMucOccupancyTarget,
@@ -104,7 +104,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn rebind_federated_cluster_occupancy(
+    pub async fn rebind_federated_cluster_occupancy(
         &self,
         operation_id: Uuid,
         target: &ClusterMucOccupancyTarget,
@@ -125,7 +125,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn disconnect_local_cluster_occupancy(
+    pub async fn disconnect_local_cluster_occupancy(
         &self,
         operation_id: Uuid,
         target: &ClusterMucOccupancyTarget,
@@ -136,7 +136,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn rename_local_cluster_occupancy(
+    pub async fn rename_local_cluster_occupancy(
         &self,
         operation_id: Uuid,
         target: &ClusterMucOccupancyTarget,
@@ -149,7 +149,7 @@ impl<R: MucRepository> MucService<R> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn update_local_cluster_config(
+    pub async fn update_local_cluster_config(
         &self,
         operation_id: Uuid,
         room_id: Uuid,
@@ -175,7 +175,7 @@ impl<R: MucRepository> MucService<R> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn apply_local_cluster_affiliations_batch(
+    pub async fn apply_local_cluster_affiliations_batch(
         &self,
         operation_id: Uuid,
         room_id: Uuid,
@@ -204,7 +204,7 @@ impl<R: MucRepository> MucService<R> {
     /// the same authenticated stream and IQ id must hit the stored digest and
     /// fail as a conflict, even if a target nick no longer exists.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn apply_local_cluster_admin_batch(
+    pub async fn apply_local_cluster_admin_batch(
         &self,
         stream_id: Uuid,
         iq_id: &str,
@@ -246,7 +246,7 @@ impl<R: MucRepository> MucService<R> {
         })
     }
 
-    pub(crate) async fn kick_local_cluster_occupancy(
+    pub async fn kick_local_cluster_occupancy(
         &self,
         operation_id: Uuid,
         actor: &ClusterMucOccupancyTarget,
@@ -258,7 +258,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn change_local_cluster_role(
+    pub async fn change_local_cluster_role(
         &self,
         operation_id: Uuid,
         actor: &ClusterMucOccupancyTarget,
@@ -272,7 +272,7 @@ impl<R: MucRepository> MucService<R> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn destroy_local_cluster_room(
+    pub async fn destroy_local_cluster_room(
         &self,
         operation_id: Uuid,
         room_id: Uuid,
@@ -297,7 +297,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn local_cluster_occupancy_target(
+    pub async fn local_cluster_occupancy_target(
         &self,
         room_id: Uuid,
         occupant_incarnation: Uuid,
@@ -308,7 +308,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn local_cluster_occupancy_target_by_nick(
+    pub async fn local_cluster_occupancy_target_by_nick(
         &self,
         room_id: Uuid,
         expected_room_epoch: Uuid,
@@ -319,7 +319,7 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn exact_local_cluster_occupancy_snapshot(
+    pub async fn exact_local_cluster_occupancy_snapshot(
         &self,
         target: &ClusterMucOccupancyTarget,
     ) -> Result<Option<ClusterMucOccupancy>> {
@@ -328,11 +328,11 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub(crate) async fn cluster_room_is_empty(&self, room_id: Uuid) -> Result<bool> {
+    pub async fn cluster_room_is_empty(&self, room_id: Uuid) -> Result<bool> {
         self.repository.cluster_room_is_empty(room_id).await
     }
 
-    pub(crate) async fn wake_committed_operation<W: MucWakePort>(
+    pub async fn wake_committed_operation<W: MucWakePort>(
         &self,
         wake: &W,
         operation_id: Uuid,

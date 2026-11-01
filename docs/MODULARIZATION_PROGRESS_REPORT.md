@@ -138,7 +138,7 @@ capabilities. XML handlers must retain zero commit composition.
 Completed: Subject, moderation/retraction, affiliation, configuration and registration commands
 now run behind typed application commands (`MucSubjectCommand`, `MucRetractionCommand`,
 `MucAffiliationBatchCommand`, `MucConfigurationCommand`, `MucRegistrationCommand`) in
-`northstar-room-application` and pure domain types in `northstar-room-core`. `src/services/muc.rs`
+`northstar-room-application` and pure domain types in `northstar-room-core`. `crates/contexts/room/northstar-room-application/src/muc_service.rs`
 provides unified `execute_muc_*` atomic methods, and `src/xmpp/protocol/muc.rs` exclusively dispatches
 typed commands without ad-hoc transaction composition.
 

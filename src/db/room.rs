@@ -1,8 +1,9 @@
 //! PostgreSQL implementation of the room application port.
 
-use crate::{db, services::muc::*};
+use crate::db;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use northstar_room_application::muc_service::*;
 use sqlx::PgPool;
 use std::time::Duration;
 use uuid::Uuid;

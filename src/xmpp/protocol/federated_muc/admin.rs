@@ -147,7 +147,7 @@ pub(super) async fn publish_occupant_change(
     let actor_nick = actor.nick.as_str();
     if let Some(status) = removal_status {
         let Some(mut departed) = state.remove_local_muc_occupant_exact(
-            crate::services::muc::LocalMucOccupantIdentity::from(&target),
+            northstar_room_application::muc_service::LocalMucOccupantIdentity::from(&target),
         ) else {
             return Ok(());
         };
@@ -202,7 +202,7 @@ pub(super) async fn publish_occupant_change(
     } else {
         let Some(updated) = (if let Some(affiliation) = change.affiliation {
             state.set_local_muc_affiliation_exact(
-                crate::services::muc::LocalMucOccupantIdentity::from(&target),
+                northstar_room_application::muc_service::LocalMucOccupantIdentity::from(&target),
                 affiliation,
                 room.moderated,
                 false,
@@ -210,7 +210,7 @@ pub(super) async fn publish_occupant_change(
             )
         } else {
             state.set_local_muc_role_exact(
-                crate::services::muc::LocalMucOccupantIdentity::from(&target),
+                northstar_room_application::muc_service::LocalMucOccupantIdentity::from(&target),
                 &target.role,
                 proposed_role,
                 Some(target.room_non_anonymous),
@@ -466,7 +466,8 @@ pub(super) async fn federated_muc_admin_set(
             };
             return Ok(federated_error(stanza, &stanza.from, kind, condition));
         }
-        if result.outcome == crate::services::muc::MucAdminBatchOutcome::Applied {
+        if result.outcome == northstar_room_application::muc_service::MucAdminBatchOutcome::Applied
+        {
             if let Err(error) = state
                 .wake_committed_muc_operation(result.operation_id)
                 .await
@@ -692,11 +693,12 @@ pub(super) async fn federated_muc_admin_set(
             else {
                 return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"));
             };
-            let operation_id = crate::services::muc::operation_id(&serde_json::json!({
-                "kind":"admin_affiliation_batch","stream":requester.connection_id,
-                "iq_id":stanza.id,"room":requester.room_jid,"actor":requester.full_jid,
-                "changes":durable_changes,
-            }))?;
+            let operation_id =
+                northstar_room_application::muc_service::operation_id(&serde_json::json!({
+                    "kind":"admin_affiliation_batch","stream":requester.connection_id,
+                    "iq_id":stanza.id,"room":requester.room_jid,"actor":requester.full_jid,
+                    "changes":durable_changes,
+                }))?;
             let outcome = state
                 .muc_service()
                 .apply_local_cluster_affiliations_batch(
@@ -784,11 +786,12 @@ pub(super) async fn federated_muc_admin_set(
                 ));
             };
             let new_role = item.role.as_deref().expect("role item validated above");
-            let operation_id = crate::services::muc::operation_id(&serde_json::json!({
-                "kind":"admin_role","stream":requester.connection_id,"iq_id":stanza.id,
-                "room":requester.room_jid,"actor":actor_target,"target":target,
-                "role":new_role,"reason":item.reason,
-            }))?;
+            let operation_id =
+                northstar_room_application::muc_service::operation_id(&serde_json::json!({
+                    "kind":"admin_role","stream":requester.connection_id,"iq_id":stanza.id,
+                    "room":requester.room_jid,"actor":actor_target,"target":target,
+                    "role":new_role,"reason":item.reason,
+                }))?;
             let outcome = if new_role == "none" {
                 state
                     .muc_service()

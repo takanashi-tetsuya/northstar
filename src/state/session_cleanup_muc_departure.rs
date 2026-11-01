@@ -2,11 +2,11 @@
 
 use super::AppState;
 use crate::cluster::ClusterMucDeparture;
-use crate::{
-    db,
-    services::muc::{ClusterMucOccupancyDepartureService, ClusterMucTransitionOutcome},
-};
+use crate::db;
 use anyhow::Result;
+use northstar_room_application::muc_service::{
+    ClusterMucOccupancyDepartureService, ClusterMucTransitionOutcome,
+};
 
 /// One exact PostgreSQL withdrawal for a quiesced C2S MUC actor. The
 /// application cleanup has no access to the database pool or owner-node ID.

@@ -12,7 +12,6 @@ pub(crate) mod message_admission;
 pub(crate) mod message_carbons;
 pub(crate) mod messaging;
 pub(crate) mod mix;
-pub(crate) mod muc;
 pub(crate) mod node_message_contract_verifier;
 pub(crate) mod push;
 pub(crate) mod replay;
@@ -32,5 +31,3 @@ pub(crate) mod xml_util;
 pub(crate) mod sm_suspension;
 
 pub(crate) mod omemo_recovery;
-
-pub(crate) mod operation_muc_wake;

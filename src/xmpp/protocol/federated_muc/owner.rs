@@ -405,7 +405,7 @@ pub(super) async fn federated_muc_owner(
             let replacement_password_hash = if let Some(secret) = config.password_secret {
                 let secret = zeroize::Zeroizing::new(secret);
                 match northstar_security::password_work::run(move || {
-                    crate::services::muc::hash_room_password(&secret)
+                    northstar_room_application::muc_service::hash_room_password(&secret)
                 })
                 .await
                 {
@@ -560,9 +560,9 @@ pub(super) async fn federated_muc_owner(
                     .federated_muc_global_occupants(&requester.room_jid)
                     .await?;
                 for (nick, raw) in global {
-                    let Ok(mut occupant) =
-                        serde_json::from_str::<crate::services::muc::SerializableMucOccupant>(&raw)
-                    else {
+                    let Ok(mut occupant) = serde_json::from_str::<
+                        northstar_room_application::muc_service::SerializableMucOccupant,
+                    >(&raw) else {
                         continue;
                     };
                     if occupant.room_jid != requester.room_jid

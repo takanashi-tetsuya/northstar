@@ -151,12 +151,12 @@ impl<R: SmSuspensionRepository> SmSuspensionContext<R> {
                         anyhow::ensure!(
                             matches!(
                                 outcome,
-                                crate::services::muc::ClusterMucTransitionOutcome::Applied
-                                    | crate::services::muc::ClusterMucTransitionOutcome::Replay
+                                northstar_room_application::muc_service::ClusterMucTransitionOutcome::Applied
+                                    | northstar_room_application::muc_service::ClusterMucTransitionOutcome::Replay
                             ),
                             "PG MUC suspension rejected stale occupancy: {outcome:?}"
                         );
-                        crate::services::muc::notify_committed_operation(
+                        northstar_room_application::muc_service::notify_committed_operation(
                             self.repository.committed_muc_wake(operation_id),
                             &self.cluster,
                             operation_id,
@@ -266,7 +266,9 @@ impl<R: SmSuspensionRepository> SmSuspensionContext<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::muc::{ClusterMucTransitionOutcome, ClusterMucWakeDescriptor};
+    use northstar_room_application::muc_service::{
+        ClusterMucTransitionOutcome, ClusterMucWakeDescriptor,
+    };
     use std::{collections::HashMap, sync::Mutex};
     use uuid::Uuid;
 

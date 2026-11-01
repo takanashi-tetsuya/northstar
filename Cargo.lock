@@ -2265,9 +2265,19 @@ name = "northstar-room-application"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "argon2",
+ "chrono",
+ "futures",
  "northstar-room-core",
  "northstar-xep-0016",
+ "northstar-xep-0359",
+ "northstar-xmpp-types",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.20",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

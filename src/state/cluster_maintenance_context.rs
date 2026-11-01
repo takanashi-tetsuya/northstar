@@ -14,9 +14,10 @@ pub(crate) struct StandaloneMucMaintenanceContext {
     pub(crate) node_id: String,
     pub(crate) muc_domain: String,
     pub(crate) locals: ClusterMaintenanceLocals,
-    pub(crate) occupancy: services::muc::ClusterMucOccupancyMaintenanceService<
-        db::room::PostgresClusterMucOccupancyMaintenanceRepository,
-    >,
+    pub(crate) occupancy:
+        northstar_room_application::muc_service::ClusterMucOccupancyMaintenanceService<
+            db::room::PostgresClusterMucOccupancyMaintenanceRepository,
+        >,
     pub(crate) last_complete_pass: Mutex<Instant>,
 }
 

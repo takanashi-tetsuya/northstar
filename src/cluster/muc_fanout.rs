@@ -124,7 +124,7 @@ impl ClusterManager {
     pub async fn send_muc_presence(
         &self,
         room_jid: &str,
-        occupant: &crate::services::muc::SerializableMucOccupant,
+        occupant: &northstar_room_application::muc_service::SerializableMucOccupant,
         unavailable: bool,
         created: bool,
         id: Option<&str>,
@@ -145,8 +145,8 @@ impl ClusterManager {
     pub async fn send_muc_nickname_change(
         &self,
         room_jid: &str,
-        old_occupant: &crate::services::muc::SerializableMucOccupant,
-        new_occupant: &crate::services::muc::SerializableMucOccupant,
+        old_occupant: &northstar_room_application::muc_service::SerializableMucOccupant,
+        new_occupant: &northstar_room_application::muc_service::SerializableMucOccupant,
         id: Option<&str>,
     ) -> Result<()> {
         let Some(pool) = &self.pool else {
@@ -208,9 +208,9 @@ impl ClusterManager {
         let mut identities = Vec::new();
         let mut nodes = HashSet::new();
         for (nick, raw) in &raw_occupants {
-            let Ok(occupant) =
-                serde_json::from_str::<crate::services::muc::SerializableMucOccupant>(raw)
-            else {
+            let Ok(occupant) = serde_json::from_str::<
+                northstar_room_application::muc_service::SerializableMucOccupant,
+            >(raw) else {
                 continue;
             };
             if occupant.room_jid != room || occupant.nick != *nick {
@@ -272,7 +272,7 @@ impl ClusterManager {
     pub async fn send_muc_presence_with_status(
         &self,
         room_jid: &str,
-        occupant: &crate::services::muc::SerializableMucOccupant,
+        occupant: &northstar_room_application::muc_service::SerializableMucOccupant,
         unavailable: bool,
         created: bool,
         id: Option<&str>,

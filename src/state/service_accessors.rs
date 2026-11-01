@@ -89,7 +89,7 @@ impl AppState {
 
     pub(crate) fn muc_service(
         &self,
-    ) -> &crate::services::muc::MucService<db::room::PostgresMucRepository> {
+    ) -> &northstar_room_application::muc_service::MucService<db::room::PostgresMucRepository> {
         &self.muc_service
     }
 

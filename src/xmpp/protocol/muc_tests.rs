@@ -13,7 +13,8 @@ use super::{
 
 #[test]
 fn discussion_envelope_rejects_mismatched_archive_room_and_live_identity() {
-    use crate::services::muc::discussion::fixture::{self, Cut};
+    use northstar_room_application::muc_service::discussion::fixture;
+    use northstar_room_application::muc_service::discussion::fixture::Cut;
     let application = fixture::application(Cut::Return);
     for change in 0..6 {
         let (mut command, mut room_jid, mut live) = fixture::live_input();
@@ -48,8 +49,9 @@ fn discussion_envelope_rejects_mismatched_archive_room_and_live_identity() {
 
 #[tokio::test]
 async fn discussion_envelope_binds_exact_input_and_rejects_another_invocations_completion() {
-    use crate::services::muc::discussion::fixture::{self, Cut};
     use northstar_room_application::discussion::Observation;
+    use northstar_room_application::muc_service::discussion::fixture;
+    use northstar_room_application::muc_service::discussion::fixture::Cut;
     let application = fixture::application(Cut::Return);
     let (command, room_jid, live) = fixture::live_input();
     let prepared = application.prepare_discussion(command.clone());
@@ -91,8 +93,9 @@ async fn discussion_envelope_binds_exact_input_and_rejects_another_invocations_c
 
 #[tokio::test]
 async fn discussion_envelope_preserves_original_live_bytes_after_observed_acceptance() {
-    use crate::services::muc::discussion::fixture::{self, Cut};
     use northstar_room_application::discussion::Observation;
+    use northstar_room_application::muc_service::discussion::fixture;
+    use northstar_room_application::muc_service::discussion::fixture::Cut;
     let application = fixture::application(Cut::Return);
     let (mut command, room_jid, live) = fixture::live_input();
     command.encrypted = true;
@@ -121,7 +124,8 @@ async fn discussion_envelope_preserves_original_live_bytes_after_observed_accept
 
 #[tokio::test]
 async fn discussion_replay_consumes_completion_without_a_live_envelope() {
-    use crate::services::muc::discussion::fixture::{self, Cut, Repository};
+    use northstar_room_application::muc_service::discussion::fixture;
+    use northstar_room_application::muc_service::discussion::fixture::{Cut, Repository};
     use northstar_room_application::{discussion::Observation, RoomApplication};
     let original = super::MucDiscussionAdmission::Replay(uuid::Uuid::from_u128(90));
     let mut repository = Repository::new(Cut::Return);

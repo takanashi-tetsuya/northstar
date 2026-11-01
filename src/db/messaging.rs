@@ -3,12 +3,13 @@
 use crate::{
     cluster::{ClusterAdmission, DirectPostCommitMode, DirectSpoolEligibility},
     db,
-    services::{messaging::*, muc::DurableMucInviteOutcome},
+    services::messaging::*,
 };
 use anyhow::Result;
 use northstar_abuse_application::guard::PersonalMessageContentKeyring;
 use northstar_message_application::direct_commit::{DirectCommitObserver, DirectCommitRepository};
 use northstar_message_application::PersonalMessageCommitRepository;
+use northstar_room_application::muc_service::DurableMucInviteOutcome;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;

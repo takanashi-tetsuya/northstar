@@ -581,7 +581,7 @@ impl AppState {
         config.raw.admin_command_database_url.clear();
         config.raw.storage_database_url.zeroize();
         config.raw.storage_database_url.clear();
-        let muc_service = crate::services::muc::MucService::new(
+        let muc_service = northstar_room_application::muc_service::MucService::new(
             db::room::PostgresMucRepository::new(pool.clone()),
             config.domain.clone(),
         );

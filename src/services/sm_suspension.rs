@@ -1,9 +1,9 @@
 //! Durable operations needed to recover an exact SM suspension.
-use crate::services::{
-    muc::{ClusterMucTransitionOutcome, ClusterMucWakeDescriptor},
-    sm::SmSessionSnapshot,
-};
+use crate::services::sm::SmSessionSnapshot;
 use anyhow::Result;
+use northstar_room_application::muc_service::{
+    ClusterMucTransitionOutcome, ClusterMucWakeDescriptor,
+};
 use std::time::Duration;
 use uuid::Uuid;
 

@@ -9,13 +9,10 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{
-    services::muc::LocalMucOccupantIdentity,
-    state::{
-        AdminSessionCleanupContext, AppState, OperationIslandEffects, OperationMucDestroyEffects,
-        OperationPanicEffects, OperationSessionEffects, OperationTlsReloadEffects,
-        OperationWorkerControl,
-    },
+use crate::state::{
+    AdminSessionCleanupContext, AppState, OperationIslandEffects, OperationMucDestroyEffects,
+    OperationPanicEffects, OperationSessionEffects, OperationTlsReloadEffects,
+    OperationWorkerControl,
 };
 use northstar_operations_application::admin_session_cleanup_worker::{
     AdminSessionCleanupKind, AdminSessionCleanupLease, AdminSessionCleanupRepository,
@@ -26,6 +23,7 @@ use northstar_operations_application::operation_journal_worker::{
     ClaimedOperation, LeaseRenewal, NextTarget, TargetSeed, TargetSettlement,
 };
 use northstar_operations_application::operation_muc_destroy::MucDestroyCommit;
+use northstar_room_application::muc_service::LocalMucOccupantIdentity;
 
 const LEASE_SECONDS: i64 = 60;
 

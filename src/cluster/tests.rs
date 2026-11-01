@@ -475,10 +475,10 @@ async fn muc_projection_identity_conflict_preserves_healthy_listener() {
     // Redis refusing that different exact identity must still be reported as
     // an unsuccessful projection, without rotating the healthy subscription.
     let error = control.record_muc_projection_failure(
-        crate::services::muc::MucSoftStateDegradation::IdentityRejected,
+        northstar_room_application::muc_service::MucSoftStateDegradation::IdentityRejected,
     );
     assert!(error
-        .downcast_ref::<crate::services::muc::MucSoftStateDegradation>()
+        .downcast_ref::<northstar_room_application::muc_service::MucSoftStateDegradation>()
         .is_some());
     assert!(manager.readiness_error().is_none());
     assert!(!manager.health.listener_requires_rotation(generation));
@@ -487,7 +487,7 @@ async fn muc_projection_identity_conflict_preserves_healthy_listener() {
 
 #[tokio::test]
 async fn muc_projection_command_errors_still_fence_the_control_plane() {
-    use crate::services::muc::MucSoftStateDegradation;
+    use northstar_room_application::muc_service::MucSoftStateDegradation;
     for error in [
         MucSoftStateDegradation::Join(anyhow::anyhow!("join outage")),
         MucSoftStateDegradation::Refresh(anyhow::anyhow!("refresh outage")),
@@ -1466,8 +1466,8 @@ fn carbon_privacy_uses_the_forwarded_conversation_peer() {
 pub(super) fn rename_occupant(
     epoch: uuid::Uuid,
     nick: &str,
-) -> crate::services::muc::SerializableMucOccupant {
-    crate::services::muc::SerializableMucOccupant {
+) -> northstar_room_application::muc_service::SerializableMucOccupant {
+    northstar_room_application::muc_service::SerializableMucOccupant {
         full_jid: "alice@example.test/Phone".to_owned(),
         room_jid: "room@conference.example.test".to_owned(),
         nick: nick.to_owned(),
@@ -1792,15 +1792,16 @@ async fn redis_muc_nickname_and_voice_mutations_reject_conflicts_and_aba() {
         MucRoleChange::Changed(ref occupant)
             if occupant.role == "participant" && occupant.room_non_anonymous
     ));
-    let persisted: crate::services::muc::SerializableMucOccupant = serde_json::from_str(
-        first
-            .get_muc_occupants(room)
-            .await
-            .unwrap()
-            .get("Old")
-            .unwrap(),
-    )
-    .unwrap();
+    let persisted: northstar_room_application::muc_service::SerializableMucOccupant =
+        serde_json::from_str(
+            first
+                .get_muc_occupants(room)
+                .await
+                .unwrap()
+                .get("Old")
+                .unwrap(),
+        )
+        .unwrap();
     assert_eq!(persisted.role, "participant");
     assert!(persisted.room_non_anonymous);
     // A policy write is a full serialized-value compare-and-set, not only

@@ -1,5 +1,8 @@
-use super::*;
 use crate::db::room::PostgresMucRepository;
+use anyhow::Result;
+use northstar_room_application::muc_service::*;
+use std::time::Duration;
+use uuid::Uuid;
 
 #[tokio::test]
 async fn committed_wake_failures_preserve_success_and_record_degradation() {
@@ -69,7 +72,7 @@ async fn local_room_mutation_gate_serializes_one_room_without_a_growing_registry
     )
     .await
     .expect("room gate released");
-    assert_eq!(service.local_join_gates.len(), LOCAL_JOIN_GATE_SHARDS);
+    assert_eq!(service.local_join_gate_count(), LOCAL_JOIN_GATE_SHARDS);
 }
 
 #[tokio::test(start_paused = true)]

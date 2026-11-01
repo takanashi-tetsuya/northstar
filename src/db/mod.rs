@@ -58,6 +58,8 @@ pub mod mix_identity;
 pub mod mix_muc;
 pub mod mix_repository;
 pub mod muc;
+#[cfg(test)]
+mod muc_service_tests;
 pub(crate) mod node_message_projection_repository;
 pub mod omemo_recovery;
 #[cfg(test)]

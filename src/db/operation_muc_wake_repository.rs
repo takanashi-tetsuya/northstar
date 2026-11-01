@@ -1,7 +1,8 @@
 //! Read only the committed outbox descriptor for an administrator MUC wake.
 
-use crate::{db, services::operation_muc_wake::CommittedMucWakeRepository};
+use crate::db;
 use anyhow::Result;
+use northstar_room_application::operation_muc_wake::CommittedMucWakeRepository;
 use northstar_room_core::ClusterMucWakeDescriptor;
 use sqlx::PgPool;
 use uuid::Uuid;

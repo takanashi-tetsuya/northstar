@@ -2927,6 +2927,18 @@
       ],
       [
         "northstar-room-application",
+        "argon2"
+      ],
+      [
+        "northstar-room-application",
+        "chrono"
+      ],
+      [
+        "northstar-room-application",
+        "futures"
+      ],
+      [
+        "northstar-room-application",
         "northstar-room-core"
       ],
       [
@@ -2935,7 +2947,35 @@
       ],
       [
         "northstar-room-application",
+        "northstar-xep-0359"
+      ],
+      [
+        "northstar-room-application",
+        "northstar-xmpp-types"
+      ],
+      [
+        "northstar-room-application",
+        "serde"
+      ],
+      [
+        "northstar-room-application",
+        "serde_json"
+      ],
+      [
+        "northstar-room-application",
+        "sha2"
+      ],
+      [
+        "northstar-room-application",
+        "thiserror"
+      ],
+      [
+        "northstar-room-application",
         "tokio"
+      ],
+      [
+        "northstar-room-application",
+        "tracing"
       ],
       [
         "northstar-room-application",

@@ -453,10 +453,12 @@ impl ProtocolSession {
                         "forbidden",
                     )));
                 }
-                let operation_id = crate::services::muc::operation_id(&serde_json::json!({
-                    "kind":"subject","stream":self.connection_id,"stanza_id":root.attribute("id"),
-                    "room":room_jid,"actor":actor_target,"subject":subject,"archive":archive_enabled
-                }))?;
+                let operation_id = northstar_room_application::muc_service::operation_id(
+                    &serde_json::json!({
+                        "kind":"subject","stream":self.connection_id,"stanza_id":root.attribute("id"),
+                        "room":room_jid,"actor":actor_target,"subject":subject,"archive":archive_enabled
+                    }),
+                )?;
                 self.enter_frame_stage(Stage::MucAdmission);
                 match service
                     .set_local_cluster_subject(

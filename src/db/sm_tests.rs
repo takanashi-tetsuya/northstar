@@ -405,9 +405,15 @@ async fn authorization_mutations_retain_sm_presence_and_muc_teardown_state() {
         .unwrap();
     let (hash, id, snapshot) =
         install_authorization_test_sm(&pool, disabled_user, &disabled_name, 22).await;
-    crate::db::set_user_status(&pool, actor_id, disabled_user, Some(true), None)
-        .await
-        .unwrap();
+    northstar_workflows::account_lifecycle::set_user_status(
+        &pool,
+        actor_id,
+        disabled_user,
+        Some(true),
+        None,
+    )
+    .await
+    .unwrap();
     assert_authorization_revocation_is_durably_teardownable(
         &pool,
         disabled_user,
@@ -427,9 +433,11 @@ async fn authorization_mutations_retain_sm_presence_and_muc_teardown_state() {
         .unwrap();
     let (hash, id, snapshot) =
         install_authorization_test_sm(&pool, ended_user, &ended_name, 23).await;
-    assert!(crate::db::end_user_sessions(&pool, actor_id, ended_user)
-        .await
-        .unwrap());
+    assert!(
+        northstar_workflows::account_lifecycle::end_user_sessions(&pool, actor_id, ended_user)
+            .await
+            .unwrap()
+    );
     assert_authorization_revocation_is_durably_teardownable(
         &pool, ended_user, &hash, id, &snapshot,
     )
@@ -1550,9 +1558,11 @@ async fn account_deletion_quiesce_closes_all_sm_race_barriers() {
             .unwrap();
     assert_eq!(persisted_token, Some(claim.claim_token));
 
-    assert!(crate::db::begin_account_deletion_quiesce(&pool, user_id)
-        .await
-        .unwrap());
+    assert!(
+        northstar_workflows::account_lifecycle::begin_account_deletion_quiesce(&pool, user_id)
+            .await
+            .unwrap()
+    );
 
     // Barrier 2: a claim obtained before quiesce cannot activate after it.
     let mut activation = pool.begin().await.unwrap();

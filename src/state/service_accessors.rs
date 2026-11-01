@@ -234,7 +234,7 @@ impl AppState {
     pub(crate) fn admin_command_service(
         &self,
     ) -> &northstar_operations_application::admin_commands::AdminCommandService<
-        db::admin_command_repository::PostgresAdminCommandRepository,
+        crate::db::roster::RootAdminCommandRepository,
     > {
         &self.admin_command_service
     }

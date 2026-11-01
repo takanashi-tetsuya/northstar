@@ -1,10 +1,9 @@
 use anyhow::{Context, Result};
-#[cfg(test)]
-use chrono::Utc;
 use northstar_abuse_application::guard::{AbuseGuard, TransactionalGuardOutcome};
 use northstar_abuse_policy::{AbuseAction, GuardError, PowProof};
 use northstar_auth_core as auth;
 use northstar_auth_postgres::users::*;
+use northstar_roster_postgres::RosterTransactionEffects;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -15,8 +14,8 @@ use zeroize::Zeroizing;
 /// snapshot.  The post-commit disconnect path or the expiry maintenance
 /// worker can then lease that row and complete unavailable/occupant teardown;
 /// deleting it here would irreversibly lose those side effects on a crash.
-#[cfg(test)]
-pub(super) async fn expire_user_sm_sessions_in_transaction(
+#[cfg(any(test, feature = "test-support"))]
+pub async fn expire_user_sm_sessions_in_transaction(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
 ) -> Result<()> {
@@ -32,7 +31,7 @@ pub(super) async fn expire_user_sm_sessions_in_transaction(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn set_user_status(
     pool: &PgPool,
     actor_id: Uuid,
@@ -58,7 +57,7 @@ pub async fn set_user_status(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn set_user_status_api(
     pool: &PgPool,
     actor_id: Uuid,
@@ -92,7 +91,7 @@ pub async fn set_user_status_api(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 async fn set_user_status_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     actor_id: Uuid,
@@ -181,7 +180,7 @@ async fn set_user_status_in_tx(
 /// The executing administrator must remain enabled and present in the new
 /// set, which prevents both accidental lockout and a stale command session
 /// from revoking its own authority mid-transaction.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn replace_admins(pool: &PgPool, actor_id: Uuid, admin_ids: &[Uuid]) -> Result<()> {
     anyhow::ensure!(!admin_ids.is_empty(), "administrator list cannot be empty");
     let mut ids = admin_ids.to_vec();
@@ -257,7 +256,7 @@ pub async fn replace_admins(pool: &PgPool, actor_id: Uuid, admin_ids: &[Uuid]) -
 /// password.  Advancing the credential epoch makes the operation safe across
 /// nodes and against delayed cluster controls; future password authentication
 /// immediately observes the new epoch and may log in again.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn end_user_sessions(pool: &PgPool, actor_id: Uuid, user_id: Uuid) -> Result<bool> {
     let mut tx = pool.begin().await?;
     let changed = sqlx::query_scalar::<_, i64>(
@@ -337,7 +336,7 @@ pub async fn begin_account_deletion_quiesce_guarded_v2(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 async fn begin_account_deletion_quiesce_in_tx(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
@@ -381,8 +380,8 @@ async fn begin_account_deletion_quiesce_in_tx(
 
 /// Test-only seam used by durable-SM recovery fixtures. Production callers
 /// cannot bypass the guarded v2 proof/quiesce transaction above.
-#[cfg(test)]
-pub(crate) async fn begin_account_deletion_quiesce(pool: &PgPool, user_id: Uuid) -> Result<bool> {
+#[cfg(any(test, feature = "test-support"))]
+pub async fn begin_account_deletion_quiesce(pool: &PgPool, user_id: Uuid) -> Result<bool> {
     let mut transaction = pool.begin().await?;
     let found = begin_account_deletion_quiesce_in_tx(&mut transaction, user_id).await?;
     if !found {
@@ -423,16 +422,27 @@ pub async fn operational_counts_in_tx(
     Ok((rooms, uploads, push_subscriptions))
 }
 
+/// The steps of an account deletion owned by contexts still in the root crate.
+pub trait AccountDeletionEffects: RosterTransactionEffects {
+    /// Fences every live room incarnation the account owns before its user row is erased.
+    fn revoke_room_account_in_tx(
+        &self,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        user_id: Uuid,
+        account_bare_jid: &str,
+    ) -> impl std::future::Future<Output = Result<u64>> + Send;
+}
+
 pub type RemovedRosterItem = (String, Option<String>, String, Option<String>);
 
 #[derive(Debug)]
 pub struct RemovedAccount {
     pub roster: Vec<RemovedRosterItem>,
     /// Exact committed roster-version snapshots for affected local contacts.
-    pub reverse_roster_changes: Vec<(Uuid, String, super::roster::RosterChange)>,
+    pub reverse_roster_changes: Vec<(Uuid, String, northstar_roster_core::RosterChange)>,
 }
 
-pub(super) struct AdminDeletionFence<'a> {
+pub struct AdminDeletionFence<'a> {
     pub actor_id: Uuid,
     pub actor_username: &'a str,
     pub actor_generation: i64,
@@ -448,25 +458,28 @@ pub(super) struct AdminDeletionFence<'a> {
 /// serializable isolation prevents a concurrent roster/FK insertion from
 /// slipping in after the XEP-0077 cancellation snapshot. Account-owned state
 /// cascades; room ownership and audit actors deliberately become NULL.
-#[cfg(test)]
-pub async fn delete_user_with_roster(
+#[cfg(any(test, feature = "test-support"))]
+pub async fn delete_user_with_roster<E: AccountDeletionEffects>(
+    effects: &E,
     pool: &PgPool,
     user_id: Uuid,
     domain: &str,
 ) -> Result<Option<RemovedAccount>> {
-    delete_user_with_roster_inner(pool, user_id, domain, None).await
+    delete_user_with_roster_inner(effects, pool, user_id, domain, None).await
 }
 
 /// XEP-0077 account cancellation with an audit record committed by the same
 /// serializable transaction. If either the audit insert or deletion fails,
 /// neither side is allowed to survive independently.
-pub async fn delete_user_with_roster_audited(
+pub async fn delete_user_with_roster_audited<E: AccountDeletionEffects>(
+    effects: &E,
     pool: &PgPool,
     user_id: Uuid,
     domain: &str,
     details: serde_json::Value,
 ) -> Result<Option<RemovedAccount>> {
     delete_user_with_roster_inner(
+        effects,
         pool,
         user_id,
         domain,
@@ -475,7 +488,8 @@ pub async fn delete_user_with_roster_audited(
     .await
 }
 
-async fn delete_user_with_roster_inner(
+async fn delete_user_with_roster_inner<E: AccountDeletionEffects>(
+    effects: &E,
     pool: &PgPool,
     user_id: Uuid,
     domain: &str,
@@ -548,6 +562,7 @@ async fn delete_user_with_roster_inner(
         return Ok(None);
     }
     let removed = delete_user_with_roster_locked_in_transaction(
+        effects,
         &mut transaction,
         user_id,
         domain,
@@ -564,7 +579,8 @@ async fn delete_user_with_roster_inner(
 /// reverse-roster peer. Keeping this unit transaction-agnostic lets an
 /// administrative multi-account command use one SERIALIZABLE transaction for
 /// the complete batch instead of committing a successful prefix.
-pub(super) async fn delete_user_with_roster_locked_in_transaction(
+pub async fn delete_user_with_roster_locked_in_transaction<E: AccountDeletionEffects>(
+    effects: &E,
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
     domain: &str,
@@ -622,7 +638,8 @@ pub(super) async fn delete_user_with_roster_locked_in_transaction(
             without_deleted_subscriber
         };
         if cancelled != existing {
-            let change = super::roster::update_subscription_in_transaction(
+            let change = northstar_roster_postgres::roster::update_subscription_in_transaction(
+                effects,
                 transaction,
                 *contact_id,
                 &account,
@@ -634,7 +651,7 @@ pub(super) async fn delete_user_with_roster_locked_in_transaction(
             reverse_roster_changes.push((*contact_id, contact_username.clone(), change));
         }
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     let unaudited_test_delete = audit.is_none();
     if let Some((actor_id, action, details)) = audit {
         sqlx::query(
@@ -734,7 +751,9 @@ pub(super) async fn delete_user_with_roster_locked_in_transaction(
             .execute(&mut **transaction)
             .await?;
     }
-    super::cluster_muc::revoke_cluster_muc_account_in_tx(transaction, user_id, &account).await?;
+    effects
+        .revoke_room_account_in_tx(transaction, user_id, &account)
+        .await?;
     let deletion: Result<()> = if let Some(fence) = admin_fence {
         let outcome: String = sqlx::query_scalar(
             "SELECT northstar_admin_command_delete_user(
@@ -758,7 +777,7 @@ pub(super) async fn delete_user_with_roster_locked_in_transaction(
         );
         Ok(())
     } else {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if unaudited_test_delete {
             return sqlx::query("DELETE FROM users WHERE id=$1")
                 .bind(user_id)
@@ -797,7 +816,7 @@ fn remove_subscription_direction(current: &str, direction: &str) -> String {
 
 /// Transactional form used to publish a login epoch and a replacement binding
 /// lease in one post-transport commit.
-pub(crate) async fn publish_user_agent_login_epoch_in_transaction(
+pub async fn publish_user_agent_login_epoch_in_transaction(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     operation_id: Uuid,
     connection_id: Uuid,
@@ -988,7 +1007,7 @@ pub async fn create_user_with_invitation_guarded_in_tx_v2(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn create_user_with_invitation_guarded_in_tx_bound(
+pub async fn create_user_with_invitation_guarded_in_tx_bound(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     abuse: &AbuseGuard,
     subject: &str,
@@ -1035,6 +1054,3 @@ pub(super) async fn create_user_with_invitation_guarded_in_tx_bound(
         Err(error) => Ok(GuardedRegistrationOutcome::Rejected(error)),
     }
 }
-#[cfg(test)]
-#[path = "users_tests.rs"]
-mod tests;

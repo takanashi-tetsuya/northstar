@@ -9,5 +9,7 @@ pub mod api_control;
 pub mod api_mutations;
 pub mod api_operations;
 pub mod data_lifecycle;
+pub mod operation_effect_fence_repository;
+pub mod operation_journal_worker_repository;
 pub mod reports;
 pub mod runtime_control_repository;

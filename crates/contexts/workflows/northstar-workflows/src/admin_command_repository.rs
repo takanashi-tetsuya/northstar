@@ -1,17 +1,22 @@
 //! Generation-fenced administrative reads and atomic command mutations.
-use crate::db;
+use crate::admin_accounts as db;
 use anyhow::Result;
 use northstar_operations_application::admin_commands::*;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
 #[derive(Clone)]
-pub(crate) struct PostgresAdminCommandRepository {
+pub struct PostgresAdminCommandRepository<E> {
     pool: PgPool,
     command_pool: PgPool,
+    effects: E,
 }
-impl PostgresAdminCommandRepository {
-    pub(crate) fn new(pool: PgPool, command_pool: PgPool) -> Self {
-        Self { pool, command_pool }
+impl<E> PostgresAdminCommandRepository<E> {
+    pub fn new(pool: PgPool, command_pool: PgPool, effects: E) -> Self {
+        Self {
+            pool,
+            command_pool,
+            effects,
+        }
     }
     fn fence<'a>(
         &self,
@@ -89,8 +94,8 @@ impl PostgresAdminCommandRepository {
         unreachable!("admin read authorization loop always returns")
     }
 
-    #[cfg(test)]
-    pub(crate) async fn authorized_count_with_hook<F, Fut>(
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn authorized_count_with_hook<F, Fut>(
         &self,
         actor: &AdminActor,
         after_authorized: F,
@@ -110,7 +115,9 @@ impl PostgresAdminCommandRepository {
         Ok(Some(count))
     }
 }
-impl AdminCommandRepository for PostgresAdminCommandRepository {
+impl<E: crate::account_lifecycle::AccountDeletionEffects + Clone + 'static> AdminCommandRepository
+    for PostgresAdminCommandRepository<E>
+{
     async fn current_admin(&self, cached: &AdminActor) -> Result<Option<AdminActor>> {
         let current = sqlx::query(
             "SELECT username,auth_generation FROM users
@@ -329,6 +336,7 @@ impl AdminCommandRepository for PostgresAdminCommandRepository {
             AccountCommandAction::EndSessions => northstar_operations_postgres::admin_commands::AdminAccountMutationAction::EndSessions,
         };
         let outcome = db::mutate_admin_accounts_authorized(
+            &self.effects,
             &self.pool,
             self.fence(actor, claim, node, result_payload)?,
             &exact,

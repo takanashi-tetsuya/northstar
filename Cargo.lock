@@ -2137,6 +2137,7 @@ dependencies = [
  "subtle",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
  "uuid",
  "zeroize",
 ]
@@ -2524,11 +2525,17 @@ dependencies = [
  "northstar-operations-core",
  "northstar-operations-postgres",
  "northstar-postgres",
+ "northstar-roster-core",
+ "northstar-roster-postgres",
+ "northstar-security",
  "northstar-upload-postgres",
+ "northstar-xmpp-types",
  "serde",
  "serde_json",
  "sqlx",
+ "thiserror 2.0.20",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

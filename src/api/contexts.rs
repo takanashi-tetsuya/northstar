@@ -51,7 +51,7 @@ impl<S> std::ops::Deref for ServiceContext<S> {
 
 pub(crate) type AccountAdminContext = ServiceContext<
     northstar_auth_application::account_admin::AccountAdminService<
-        crate::db::account_admin_repository::PostgresAccountAdminRepository,
+        northstar_workflows::account_admin_repository::PostgresAccountAdminRepository,
     >,
 >;
 
@@ -74,7 +74,7 @@ pub(crate) type GovernanceContext = governance::GovernanceContext<
 >;
 
 pub(crate) type RetentionPolicyContext = retention_policy::RetentionPolicyContext<
-    crate::db::retention_policy_repository::PostgresRetentionPolicyRepository,
+    northstar_workflows::retention_policy_repository::PostgresRetentionPolicyRepository,
 >;
 
 pub(crate) type ReportModerationContext = ServiceContext<
@@ -116,14 +116,14 @@ pub(crate) type UploadService = northstar_upload_application::service::UploadSer
 
 pub(crate) type RegistrationAdminContext = ServiceContext<
     northstar_auth_application::account_admin::RegistrationAdminService<
-        crate::db::account_admin_repository::PostgresRegistrationAdminRepository,
+        northstar_workflows::account_admin_repository::PostgresRegistrationAdminRepository,
         Arc<dyn northstar_auth_application::account_admin::RegistrationCache>,
     >,
 >;
 
 pub(crate) type SessionAdminContext = ServiceContext<
     northstar_auth_application::account_admin::SessionAdminService<
-        crate::db::account_admin_repository::PostgresSessionAdminRepository,
+        northstar_workflows::account_admin_repository::PostgresSessionAdminRepository,
         Arc<dyn northstar_auth_application::account_admin::AdminSessionLookup>,
     >,
 >;

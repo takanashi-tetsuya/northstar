@@ -66,17 +66,17 @@ run_exact_ignored() {
 }
 if [[ "$scope" == "all" || "$scope" == "users" ]]; then
   run_exact_ignored \
-    db::users::tests::concurrent_registration_cannot_exceed_the_global_hourly_limit
+    db::users_tests::concurrent_registration_cannot_exceed_the_global_hourly_limit
   run_exact_ignored \
-    db::users::tests::guarded_registration_rolls_back_and_replays_proof_invitation_user_and_audit
+    db::users_tests::guarded_registration_rolls_back_and_replays_proof_invitation_user_and_audit
   run_exact_ignored \
-    db::users::tests::scram_families_hide_unknown_and_disabled_accounts_but_surface_corruption
+    db::users_tests::scram_families_hide_unknown_and_disabled_accounts_but_surface_corruption
   run_exact_ignored \
-    db::users::tests::rest_password_cas_and_admin_authorization_are_atomic
+    db::users_tests::rest_password_cas_and_admin_authorization_are_atomic
 fi
 if [[ "$scope" == "all" || "$scope" == "password-api" ]]; then
   run_exact_ignored \
-    db::users::tests::rest_password_idempotency_logout_and_lock_order_are_atomic
+    db::users_tests::rest_password_idempotency_logout_and_lock_order_are_atomic
 fi
 if [[ "$scope" == "all" || "$scope" == "api-control" ]]; then
   run_exact_ignored \

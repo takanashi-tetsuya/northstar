@@ -4,11 +4,11 @@ use northstar_operations_application::metrics_snapshot::*;
 use sqlx::{PgPool, Row};
 
 #[derive(Clone)]
-pub(crate) struct PostgresMetricsSnapshotRepository {
+pub struct PostgresMetricsSnapshotRepository {
     pool: PgPool,
 }
 impl PostgresMetricsSnapshotRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }

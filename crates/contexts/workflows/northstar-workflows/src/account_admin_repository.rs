@@ -1,23 +1,23 @@
 //! Account status and cleanup intents share their durable admission transaction.
-use crate::db::{self};
+use crate::admin_accounts as db;
+use crate::admin_dispatch_repository::AdminCommandStore;
+use crate::admin_mutations::{
+    enqueue_operation_response_in_tx, AdminMutationStart, AdminMutationStore, AdminOperationIntent,
+};
 use anyhow::Result;
 use northstar_auth_application::account_admin::*;
 use northstar_operations_application::operations::AuthorizationPolicy;
 use northstar_operations_core::api_mutations::*;
-use northstar_workflows::admin_dispatch_repository::AdminCommandStore;
-use northstar_workflows::admin_mutations::{
-    enqueue_operation_response_in_tx, AdminMutationStart, AdminMutationStore, AdminOperationIntent,
-};
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresAccountAdminRepository {
+pub struct PostgresAccountAdminRepository {
     mutations: AdminMutationStore,
 }
 impl PostgresAccountAdminRepository {
-    pub(crate) fn new(mutations: AdminMutationStore) -> Self {
+    pub fn new(mutations: AdminMutationStore) -> Self {
         Self { mutations }
     }
 }
@@ -120,12 +120,12 @@ impl AccountAdminRepository for PostgresAccountAdminRepository {
 }
 
 #[derive(Clone)]
-pub(crate) struct PostgresRegistrationAdminRepository {
+pub struct PostgresRegistrationAdminRepository {
     command: AdminCommandStore,
     settings_pool: PgPool,
 }
 impl PostgresRegistrationAdminRepository {
-    pub(crate) fn new(command: AdminCommandStore, settings_pool: PgPool) -> Self {
+    pub fn new(command: AdminCommandStore, settings_pool: PgPool) -> Self {
         Self {
             command,
             settings_pool,
@@ -156,11 +156,11 @@ impl RegistrationAdminRepository for PostgresRegistrationAdminRepository {
 }
 
 #[derive(Clone)]
-pub(crate) struct PostgresSessionAdminRepository {
+pub struct PostgresSessionAdminRepository {
     mutations: AdminMutationStore,
 }
 impl PostgresSessionAdminRepository {
-    pub(crate) fn new(mutations: AdminMutationStore) -> Self {
+    pub fn new(mutations: AdminMutationStore) -> Self {
         Self { mutations }
     }
 }
@@ -204,7 +204,3 @@ impl SessionAdminRepository for PostgresSessionAdminRepository {
         self.mutations.finish(tx, &lease, response).await
     }
 }
-
-#[cfg(test)]
-#[path = "account_admin_repository_tests.rs"]
-mod tests;

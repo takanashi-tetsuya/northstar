@@ -1,11 +1,9 @@
 //! Ordered once-per-minute maintenance with only its cleanup capabilities.
 
 use super::{sm_expiry::SmExpiryContext, AppState};
+use crate::db::roster::RootAdminCommandRepository;
 use crate::{
-    db::{
-        admin_command_repository::PostgresAdminCommandRepository,
-        background_housekeeping_repository::PostgresBackgroundHousekeepingRepository,
-    },
+    db::background_housekeeping_repository::PostgresBackgroundHousekeepingRepository,
     services::background_housekeeping::{
         BackgroundHousekeepingContext, BackgroundHousekeepingCounters,
     },
@@ -20,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 pub(crate) struct BackgroundMaintenanceContext {
     challenge: ChallengeCleanupService<PostgresChallengeRepository>,
     database: BackgroundHousekeepingContext<PostgresBackgroundHousekeepingRepository>,
-    admin: AdminCommandService<PostgresAdminCommandRepository>,
+    admin: AdminCommandService<RootAdminCommandRepository>,
     sm_expiry: SmExpiryContext,
     caps_cache: Arc<northstar_protocol_runtime::caps::CapsCacheIndex>,
     counters: BackgroundHousekeepingCounters,

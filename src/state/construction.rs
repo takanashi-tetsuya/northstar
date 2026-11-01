@@ -683,13 +683,13 @@ impl AppState {
             );
         let operation_effect_fence_service =
             northstar_operations_application::operation_effect_fence::OperationEffectFenceService::new(
-                db::operation_effect_fence_repository::PostgresOperationEffectFenceRepository::new(
+                northstar_operations_postgres::operation_effect_fence_repository::PostgresOperationEffectFenceRepository::new(
                     pool.clone(),
                 ),
             );
         let operation_journal_worker_service =
             northstar_operations_application::operation_journal_worker::OperationJournalWorkerService::new(
-                db::operation_journal_worker_repository::PostgresOperationJournalWorkerRepository::new(
+                northstar_operations_postgres::operation_journal_worker_repository::PostgresOperationJournalWorkerRepository::new(
                     pool.clone(),
                 ),
             );
@@ -734,7 +734,7 @@ impl AppState {
             );
         let retention_policy_context = retention_policy::RetentionPolicyContext::new(
             northstar_operations_application::retention_policy::RetentionPolicyService::new(
-                db::retention_policy_repository::PostgresRetentionPolicyRepository::new(
+                northstar_workflows::retention_policy_repository::PostgresRetentionPolicyRepository::new(
                     pool.clone(),
                     Arc::clone(&api_control),
                 ),
@@ -800,7 +800,7 @@ impl AppState {
             api_query_context,
             metrics_snapshot_service:
                 northstar_operations_application::metrics_snapshot::MetricsSnapshotService::new(
-                    db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository::new(
+                    northstar_workflows::metrics_snapshot_repository::PostgresMetricsSnapshotRepository::new(
                         pool.clone(),
                     ),
                 ),
@@ -828,9 +828,10 @@ impl AppState {
             ),
             admin_command_service:
                 northstar_operations_application::admin_commands::AdminCommandService::new(
-                    db::admin_command_repository::PostgresAdminCommandRepository::new(
+                    crate::db::roster::RootAdminCommandRepository::new(
                         pool.clone(),
                         command_pool,
+                        db::roster::RootRosterEffects,
                     ),
                 ),
             push_service: crate::services::push::PushService::new(

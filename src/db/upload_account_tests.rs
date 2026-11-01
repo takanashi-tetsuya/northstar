@@ -144,20 +144,24 @@ fn upload_cascade_capacity_requires_explicit_immutable_provenance() {
     // may race it by pre-inserting a second cleanup projection.
     for source in [
         northstar_auth_postgres::users::module_source().as_str(),
-        include_str!("users.rs"),
+        include_str!(
+            "../../crates/contexts/workflows/northstar-workflows/src/account_lifecycle.rs"
+        ),
         crate::tools::pie::module_source().as_str(),
         include_str!("pie.rs"),
     ] {
         assert!(!source.contains("INSERT INTO upload_cleanup_queue"));
     }
-    let account_delete = include_str!("users.rs")
-        .split("async fn delete_user_with_roster_inner(")
-        .nth(1)
-        .and_then(|tail| {
-            tail.split("pub(super) async fn delete_user_with_roster_locked_in_transaction(")
-                .next()
-        })
-        .expect("self-service account deletion implementation");
+    let account_delete = include_str!(
+        "../../crates/contexts/workflows/northstar-workflows/src/account_lifecycle.rs"
+    )
+    .split("async fn delete_user_with_roster_inner<")
+    .nth(1)
+    .and_then(|tail| {
+        tail.split("pub async fn delete_user_with_roster_locked_in_transaction<")
+            .next()
+    })
+    .expect("self-service account deletion implementation");
     let capacity_lock = account_delete
         .find("SELECT northstar_upload_capacity_lock()")
         .expect("account deletion capacity lock");
@@ -513,9 +517,14 @@ async fn account_delete_and_upload_mutations_share_retryable_ledger_first_order(
         .fetch_one(&mut *cleanup_tx)
         .await
         .unwrap();
-    let delete_error = crate::db::users::delete_user_with_roster(&pool, user_id, "example.test")
-        .await
-        .unwrap_err();
+    let delete_error = northstar_workflows::account_lifecycle::delete_user_with_roster(
+        &crate::db::roster::RootRosterEffects,
+        &pool,
+        user_id,
+        "example.test",
+    )
+    .await
+    .unwrap_err();
     assert!(delete_error
         .to_string()
         .contains("upload storage capacity busy; retry account deletion"));
@@ -527,10 +536,15 @@ async fn account_delete_and_upload_mutations_share_retryable_ledger_first_order(
         .await
         .unwrap();
     assert!(
-        crate::db::users::delete_user_with_roster(&pool, user_id, "example.test",)
-            .await
-            .unwrap()
-            .is_some()
+        northstar_workflows::account_lifecycle::delete_user_with_roster(
+            &crate::db::roster::RootRosterEffects,
+            &pool,
+            user_id,
+            "example.test",
+        )
+        .await
+        .unwrap()
+        .is_some()
     );
 }
 

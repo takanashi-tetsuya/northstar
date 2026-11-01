@@ -1,20 +1,20 @@
 //! Atomic journal authorization and target point-of-no-return transition.
 //! The transaction is committed before the caller may start an effect.
 
+use crate::api_operations::{OperationLease, OperationTargetLease};
 use anyhow::Result;
 use northstar_operations_application::operation_effect_fence::{
     EffectFenceDecision, OperationEffectFenceRepository,
 };
-use northstar_operations_postgres::api_operations::{OperationLease, OperationTargetLease};
 use sqlx::PgPool;
 
 #[derive(Clone)]
-pub(crate) struct PostgresOperationEffectFenceRepository {
+pub struct PostgresOperationEffectFenceRepository {
     pool: PgPool,
 }
 
 impl PostgresOperationEffectFenceRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -29,12 +29,19 @@ impl OperationEffectFenceRepository for PostgresOperationEffectFenceRepository {
         target: &OperationTargetLease,
     ) -> Result<EffectFenceDecision> {
         let mut fence = self.pool.begin().await?;
-        if northstar_operations_postgres::api_operations::authorize_operation_effect_in_tx(&mut fence, parent).await?
-            != northstar_operations_postgres::api_operations::EffectAuthorizationOutcome::Authorized
-            || !northstar_operations_postgres::api_operations::mark_operation_target_point_of_no_return_in_tx(&mut fence, target).await?
+        if crate::api_operations::authorize_operation_effect_in_tx(&mut fence, parent).await?
+            != crate::api_operations::EffectAuthorizationOutcome::Authorized
+            || !crate::api_operations::mark_operation_target_point_of_no_return_in_tx(
+                &mut fence, target,
+            )
+            .await?
         {
-            let _ = northstar_operations_postgres::api_operations::acknowledge_operation_target_cancel_in_tx(&mut fence, target).await?;
-            let _ = northstar_operations_postgres::api_operations::acknowledge_operation_cancel_in_tx(&mut fence, parent).await?;
+            let _ = crate::api_operations::acknowledge_operation_target_cancel_in_tx(
+                &mut fence, target,
+            )
+            .await?;
+            let _ = crate::api_operations::acknowledge_operation_cancel_in_tx(&mut fence, parent)
+                .await?;
             fence.commit().await?;
             return Ok(EffectFenceDecision::Denied);
         }

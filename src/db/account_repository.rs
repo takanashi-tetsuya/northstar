@@ -188,21 +188,22 @@ impl AccountRepository for PostgresAccountRepository {
             publication.rollback().await?;
             return Ok(Outcome::LeaseLost);
         }
-        let outcome = db::create_user_with_invitation_guarded_in_tx_v2(
-            &mut publication,
-            &self.abuse,
-            request.subject,
-            request.actors,
-            request.proof,
-            request.intent,
-            true,
-            prepared,
-            request.invitation_token,
-            request.availability.requires_invitation(),
-            policy.registration_rate_per_hour,
-            Some(lease.request_id),
-        )
-        .await;
+        let outcome =
+            northstar_workflows::account_lifecycle::create_user_with_invitation_guarded_in_tx_v2(
+                &mut publication,
+                &self.abuse,
+                request.subject,
+                request.actors,
+                request.proof,
+                request.intent,
+                true,
+                prepared,
+                request.invitation_token,
+                request.availability.requires_invitation(),
+                policy.registration_rate_per_hour,
+                Some(lease.request_id),
+            )
+            .await;
         let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -214,7 +215,9 @@ impl AccountRepository for PostgresAccountRepository {
             }
         };
         match outcome {
-            db::GuardedRegistrationOutcome::Created(mut user) => {
+            northstar_workflows::account_lifecycle::GuardedRegistrationOutcome::Created(
+                mut user,
+            ) => {
                 let username = std::mem::take(&mut user.username);
                 let user_id = user.id;
                 user.password_hash.zeroize();
@@ -250,7 +253,9 @@ impl AccountRepository for PostgresAccountRepository {
                 publication.commit().await?;
                 Ok(Outcome::Created(body))
             }
-            db::GuardedRegistrationOutcome::AbuseDenied(error) => {
+            northstar_workflows::account_lifecycle::GuardedRegistrationOutcome::AbuseDenied(
+                error,
+            ) => {
                 if !northstar_operations_postgres::api_control::abandon_idempotency_lease_in_tx(
                     &mut publication,
                     &lease,
@@ -263,7 +268,7 @@ impl AccountRepository for PostgresAccountRepository {
                 publication.commit().await?;
                 Ok(Outcome::AbuseDenied(error))
             }
-            db::GuardedRegistrationOutcome::Rejected(
+            northstar_workflows::account_lifecycle::GuardedRegistrationOutcome::Rejected(
                 error @ (northstar_auth_postgres::users::RegistrationError::UsernameTaken
                 | northstar_auth_postgres::users::RegistrationError::InvitationRejected),
             ) => {
@@ -303,7 +308,7 @@ impl AccountRepository for PostgresAccountRepository {
                 publication.commit().await?;
                 Ok(Outcome::Rejected(body))
             }
-            db::GuardedRegistrationOutcome::Rejected(error) => {
+            northstar_workflows::account_lifecycle::GuardedRegistrationOutcome::Rejected(error) => {
                 if !northstar_operations_postgres::api_control::abandon_idempotency_lease_in_tx(
                     &mut publication,
                     &lease,
@@ -476,21 +481,22 @@ impl AccountRepository for PostgresAccountRepository {
                     .context("registration preparation returned an impossible outcome"));
             }
         };
-        let outcome = db::create_user_with_invitation_guarded_in_tx_v2(
-            &mut transaction,
-            &self.abuse,
-            request.subject,
-            request.actors,
-            request.proof,
-            request.intent,
-            true,
-            prepared,
-            request.invitation_token,
-            policy.invitation_required,
-            policy.registration_rate_per_hour,
-            None,
-        )
-        .await;
+        let outcome =
+            northstar_workflows::account_lifecycle::create_user_with_invitation_guarded_in_tx_v2(
+                &mut transaction,
+                &self.abuse,
+                request.subject,
+                request.actors,
+                request.proof,
+                request.intent,
+                true,
+                prepared,
+                request.invitation_token,
+                policy.invitation_required,
+                policy.registration_rate_per_hour,
+                None,
+            )
+            .await;
         let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -506,41 +512,45 @@ impl AccountRepository for PostgresAccountRepository {
             .context("guarded registration commit failed")?;
 
         Ok(match outcome {
-            db::GuardedRegistrationOutcome::Created(mut user) => {
+            northstar_workflows::account_lifecycle::GuardedRegistrationOutcome::Created(
+                mut user,
+            ) => {
                 let username = std::mem::take(&mut user.username);
                 user.password_hash.zeroize();
                 user.password_hash.clear();
                 RegistrationOutcome::Created(RegistrationAccount { username })
             }
-            db::GuardedRegistrationOutcome::AbuseDenied(error) => {
-                RegistrationOutcome::AbuseDenied(error.requirement().clone())
+            northstar_workflows::account_lifecycle::GuardedRegistrationOutcome::AbuseDenied(
+                error,
+            ) => RegistrationOutcome::AbuseDenied(error.requirement().clone()),
+            northstar_workflows::account_lifecycle::GuardedRegistrationOutcome::Rejected(error) => {
+                match error {
+                    northstar_auth_postgres::users::RegistrationError::InvalidUsername(_) => {
+                        RegistrationOutcome::InvalidUsername
+                    }
+                    northstar_auth_postgres::users::RegistrationError::InvitationRejected => {
+                        RegistrationOutcome::InvitationRejected
+                    }
+                    northstar_auth_postgres::users::RegistrationError::UsernameTaken => {
+                        RegistrationOutcome::UsernameTaken
+                    }
+                    northstar_auth_postgres::users::RegistrationError::RateLimited => {
+                        RegistrationOutcome::RateLimited
+                    }
+                    northstar_auth_postgres::users::RegistrationError::CapacityExhausted => {
+                        RegistrationOutcome::CapacityExhausted
+                    }
+                    northstar_auth_postgres::users::RegistrationError::PasswordWorkOverloaded => {
+                        RegistrationOutcome::PasswordWorkOverloaded
+                    }
+                    northstar_auth_postgres::users::RegistrationError::Closed => {
+                        RegistrationOutcome::Closed
+                    }
+                    northstar_auth_postgres::users::RegistrationError::Internal(error) => {
+                        return Err(error)
+                    }
+                }
             }
-            db::GuardedRegistrationOutcome::Rejected(error) => match error {
-                northstar_auth_postgres::users::RegistrationError::InvalidUsername(_) => {
-                    RegistrationOutcome::InvalidUsername
-                }
-                northstar_auth_postgres::users::RegistrationError::InvitationRejected => {
-                    RegistrationOutcome::InvitationRejected
-                }
-                northstar_auth_postgres::users::RegistrationError::UsernameTaken => {
-                    RegistrationOutcome::UsernameTaken
-                }
-                northstar_auth_postgres::users::RegistrationError::RateLimited => {
-                    RegistrationOutcome::RateLimited
-                }
-                northstar_auth_postgres::users::RegistrationError::CapacityExhausted => {
-                    RegistrationOutcome::CapacityExhausted
-                }
-                northstar_auth_postgres::users::RegistrationError::PasswordWorkOverloaded => {
-                    RegistrationOutcome::PasswordWorkOverloaded
-                }
-                northstar_auth_postgres::users::RegistrationError::Closed => {
-                    RegistrationOutcome::Closed
-                }
-                northstar_auth_postgres::users::RegistrationError::Internal(error) => {
-                    return Err(error)
-                }
-            },
         })
     }
 
@@ -549,7 +559,7 @@ impl AccountRepository for PostgresAccountRepository {
         request: PasswordChangeRequest<'_>,
         policy: AccountPolicy,
     ) -> Result<PasswordChangeOutcome> {
-        match db::change_password_guarded_v2(
+        match northstar_workflows::account_lifecycle::change_password_guarded_v2(
             &self.pool,
             &self.abuse,
             request.subject,
@@ -579,7 +589,7 @@ impl AccountRepository for PostgresAccountRepository {
         &self,
         request: DeletionQuiesceRequest<'_>,
     ) -> Result<DeletionQuiesceOutcome> {
-        match db::begin_account_deletion_quiesce_guarded_v2(
+        match northstar_workflows::account_lifecycle::begin_account_deletion_quiesce_guarded_v2(
             &self.pool,
             &self.abuse,
             request.subject,
@@ -600,17 +610,20 @@ impl AccountRepository for PostgresAccountRepository {
     }
 
     async fn delete_quiesced(&self, user_id: Uuid) -> Result<Option<RemovedAccount>> {
-        Ok(db::delete_user_with_roster_audited(
-            &self.pool,
-            user_id,
-            &self.domain,
-            serde_json::json!({"source":"xep-0077"}),
+        Ok(
+            northstar_workflows::account_lifecycle::delete_user_with_roster_audited(
+                &crate::db::roster::RootRosterEffects,
+                &self.pool,
+                user_id,
+                &self.domain,
+                serde_json::json!({"source":"xep-0077"}),
+            )
+            .await?
+            .map(|removed| RemovedAccount {
+                roster: removed.roster,
+                reverse_roster_changes: removed.reverse_roster_changes,
+            }),
         )
-        .await?
-        .map(|removed| RemovedAccount {
-            roster: removed.roster,
-            reverse_roster_changes: removed.reverse_roster_changes,
-        }))
     }
 
     async fn claim_deletion_recovery(

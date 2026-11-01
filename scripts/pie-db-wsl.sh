@@ -21,7 +21,7 @@ if ! grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$test_output"; then
   exit 1
 fi
 
-deletion_test="db::users::tests::account_deletion_atomically_cancels_local_reverse_rosters"
+deletion_test="db::users_tests::account_deletion_atomically_cancels_local_reverse_rosters"
 deletion_output="$(cargo test --locked --offline "$deletion_test" -- --ignored --exact --nocapture 2>&1)" || {
   printf '%s\n' "$deletion_output"
   exit 1

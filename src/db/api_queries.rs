@@ -163,7 +163,7 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
         northstar_auth_postgres::users::user_for_token(&self.pool, token).await
     }
     async fn cursor_clock(&self) -> Result<DateTime<Utc>> {
-        db::database_cursor_clock(&self.pool).await
+        northstar_workflows::api_pages::database_cursor_clock(&self.pool).await
     }
     async fn users(
         &self,
@@ -174,7 +174,7 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
         let Some(mut tx) = self.begin_authorized_read(&actor, true).await? else {
             return Ok(None);
         };
-        let value = db::users_page_in_tx(&mut tx, after, limit).await?;
+        let value = northstar_workflows::api_pages::users_page_in_tx(&mut tx, after, limit).await?;
         tx.commit().await?;
         Ok(Some(value))
     }
@@ -188,7 +188,9 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
         let Some(mut tx) = self.begin_authorized_read(&actor, true).await? else {
             return Ok(None);
         };
-        let value = db::admin_reports_page_in_tx(&mut tx, status, after, limit).await?;
+        let value =
+            northstar_workflows::api_pages::admin_reports_page_in_tx(&mut tx, status, after, limit)
+                .await?;
         tx.commit().await?;
         Ok(Some(value))
     }
@@ -202,8 +204,14 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
         let Some(mut tx) = self.begin_authorized_read(&actor, false).await? else {
             return Ok(None);
         };
-        let value =
-            db::own_reports_page_in_tx(&mut tx, actor.user_id, status, after, limit).await?;
+        let value = northstar_workflows::api_pages::own_reports_page_in_tx(
+            &mut tx,
+            actor.user_id,
+            status,
+            after,
+            limit,
+        )
+        .await?;
         tx.commit().await?;
         Ok(Some(value))
     }
@@ -216,7 +224,8 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
         let Some(mut tx) = self.begin_authorized_read(&actor, true).await? else {
             return Ok(None);
         };
-        let value = db::invitations_page_in_tx(&mut tx, after, limit).await?;
+        let value =
+            northstar_workflows::api_pages::invitations_page_in_tx(&mut tx, after, limit).await?;
         tx.commit().await?;
         Ok(Some(value))
     }
@@ -284,8 +293,10 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
         let Some(mut tx) = self.begin_authorized_read(&actor, true).await? else {
             return Ok(None);
         };
-        let (users, archived, offline) = db::counts_in_tx(&mut tx).await?;
-        let (rooms, uploads, push_subscriptions) = db::operational_counts_in_tx(&mut tx).await?;
+        let (users, archived, offline) =
+            northstar_workflows::account_lifecycle::counts_in_tx(&mut tx).await?;
+        let (rooms, uploads, push_subscriptions) =
+            northstar_workflows::account_lifecycle::operational_counts_in_tx(&mut tx).await?;
         let (pending_reports, pending_appeals, active_invitations) =
             northstar_operations_postgres::reports::moderation_counts_in_tx(&mut tx).await?;
         let value = AdminStatistics {
@@ -337,7 +348,9 @@ impl ApiQueryRepository for PostgresApiQueryRepository {
         let Some(mut tx) = self.begin_authorized_read(&actor, true).await? else {
             return Ok(None);
         };
-        let page = db::admin_muc_rooms_page_in_tx(&mut tx, after, limit).await?;
+        let page =
+            northstar_workflows::api_pages::admin_muc_rooms_page_in_tx(&mut tx, after, limit)
+                .await?;
         let value = KeysetPage {
             rows: snapshot(page.rows),
             next: page.next,

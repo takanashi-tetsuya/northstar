@@ -70,7 +70,9 @@ fn readiness_persistence_uses_service_without_transport_database_authority() {
 
 #[test]
 fn database_metrics_use_one_read_only_transaction_without_pool_fanout() {
-    let source = include_str!("../../db/metrics_snapshot_repository.rs");
+    let source = include_str!(
+        "../../../crates/contexts/workflows/northstar-workflows/src/metrics_snapshot_repository.rs"
+    );
     let collector = source
         .split("async fn collect(")
         .nth(1)

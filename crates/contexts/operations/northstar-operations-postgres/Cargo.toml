@@ -30,5 +30,6 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 subtle = "2.6"
 thiserror = "2.0"
 tokio = { version = "1.43", features = ["time"] }
+tracing = "0.1"
 uuid = { version = "1.12", features = ["v4", "serde"] }
 zeroize = "1.8"

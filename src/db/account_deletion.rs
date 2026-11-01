@@ -154,9 +154,11 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert!(crate::db::begin_account_deletion_quiesce(&pool, user.id)
-            .await
-            .unwrap());
+        assert!(
+            northstar_workflows::account_lifecycle::begin_account_deletion_quiesce(&pool, user.id)
+                .await
+                .unwrap()
+        );
         assert!(claim_account_deletion_jobs(&pool, 8, 60)
             .await
             .unwrap()
@@ -196,7 +198,8 @@ mod tests {
                 .unwrap()
         );
 
-        crate::db::delete_user_with_roster_audited(
+        northstar_workflows::account_lifecycle::delete_user_with_roster_audited(
+            &crate::db::roster::RootRosterEffects,
             &pool,
             user.id,
             "example.test",

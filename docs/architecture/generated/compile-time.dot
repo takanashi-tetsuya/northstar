@@ -1113,6 +1113,7 @@ digraph compile_time {
   "northstar-operations-postgres" -> "subtle";
   "northstar-operations-postgres" -> "thiserror";
   "northstar-operations-postgres" -> "tokio";
+  "northstar-operations-postgres" -> "tracing";
   "northstar-operations-postgres" -> "uuid";
   "northstar-operations-postgres" -> "zeroize";
   "northstar-postgres" -> "anyhow";
@@ -1338,11 +1339,17 @@ digraph compile_time {
   "northstar-workflows" -> "northstar-operations-core";
   "northstar-workflows" -> "northstar-operations-postgres";
   "northstar-workflows" -> "northstar-postgres";
+  "northstar-workflows" -> "northstar-roster-core";
+  "northstar-workflows" -> "northstar-roster-postgres";
+  "northstar-workflows" -> "northstar-security";
   "northstar-workflows" -> "northstar-upload-postgres";
+  "northstar-workflows" -> "northstar-xmpp-types";
   "northstar-workflows" -> "serde";
   "northstar-workflows" -> "serde_json";
   "northstar-workflows" -> "sqlx";
+  "northstar-workflows" -> "thiserror";
   "northstar-workflows" -> "uuid";
+  "northstar-workflows" -> "zeroize";
   "northstar-xep-0016" -> "northstar-xep-core";
   "northstar-xep-0016" -> "northstar-xmpp-types";
   "northstar-xep-0045" -> "northstar-xep-core";

@@ -23,7 +23,7 @@ const [abuseSources, abuseTransaction, abuseVerification, config, envExample, ap
   readProductionModule('crates/platform/northstar-config/src/lib.rs'), read('.env.example'),
   readRoleSplitFile('src/api/mod.rs'), read('src/api/auth_routes.rs'),
   read('src/api/reports.rs'), readRoleSplitFile('src/xmpp/protocol.rs'), read('src/xmpp/protocol/dispatch.rs'),
-  readProductionModule('src/xmpp/protocol/messaging.rs'), read('src/xmpp/protocol/misc.rs'), read('src/xmpp/protocol/ibr.rs'), read('crates/contexts/auth/northstar-auth-application/src/account.rs'), read('src/db/account_repository.rs'), read('src/state/account_recovery.rs'), readProductionModule('src/db/users.rs') + '\n' + readProductionModule('crates/contexts/auth/northstar-auth-postgres/src/users.rs'), read('crates/contexts/operations/northstar-operations-postgres/src/api_control.rs'), read('src/api/error.rs'), readProductionModule('src/services/xml_util.rs'),
+  readProductionModule('src/xmpp/protocol/messaging.rs'), read('src/xmpp/protocol/misc.rs'), read('src/xmpp/protocol/ibr.rs'), read('crates/contexts/auth/northstar-auth-application/src/account.rs'), read('src/db/account_repository.rs'), read('src/state/account_recovery.rs'), readProductionModule('crates/contexts/workflows/northstar-workflows/src/account_lifecycle.rs') + '\n' + readProductionModule('crates/contexts/auth/northstar-auth-postgres/src/users.rs'), read('crates/contexts/operations/northstar-operations-postgres/src/api_control.rs'), read('src/api/error.rs'), readProductionModule('src/services/xml_util.rs'),
   read('migrations/0009_abuse_reports.sql'), read('migrations/0078_message_pow_admissions.sql'),
   read('migrations/0084_pow_intent_v2.sql'), read('migrations/0100_parallel_pow_challenges.sql'), read('migrations/0101_durable_account_deletion_recovery.sql'), read('src/main.rs'), read('web/client.js'), read('web/pow.js'), read('web/client.html'),
   read('web/app.js'), read('web/index.html'), read('web/pow-worker.js'),
@@ -202,7 +202,7 @@ const passwordChange = findRustItem(dbUsers, 'pub async fn change_password_guard
 const accountDeletion = [
   'pub async fn begin_account_deletion_quiesce_guarded_v2(',
   'async fn begin_account_deletion_quiesce_in_tx(',
-  'pub(crate) async fn begin_account_deletion_quiesce(',
+  'pub async fn begin_account_deletion_quiesce(',
 ].map(declaration => findRustItem(dbUsers, declaration).text).join('\n');
 assert.match(passwordChange, /change_password_guarded_v2[\s\S]+northstar_abuse_postgres::transaction::verify_in_tx[\s\S]+apply_password_credentials_in_tx/,
   'XMPP password proof consumption and credential rotation must share one transaction');

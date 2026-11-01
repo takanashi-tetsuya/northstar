@@ -1,11 +1,7 @@
-pub(crate) mod account_admin_repository;
 pub(crate) mod http_login_repository;
-pub(crate) mod operation_effect_fence_repository;
-pub(crate) mod operation_journal_worker_repository;
 pub(crate) mod operation_muc_destroy_repository;
 pub(crate) mod operation_muc_wake_repository;
 pub(crate) mod password_change_repository;
-pub(crate) mod retention_policy_repository;
 #[cfg(test)]
 pub(crate) mod test_support;
 use anyhow::{Context, Result};
@@ -24,11 +20,8 @@ pub mod account_deletion;
 pub mod account_repository;
 #[cfg(test)]
 mod account_revocations_tests;
-pub mod admin_command_repository;
-pub mod admin_commands;
 #[cfg(test)]
 mod admin_read_authorization_tests;
-pub mod api_pages;
 pub mod archive;
 pub(crate) mod authentication_effects;
 #[cfg(test)]
@@ -62,7 +55,6 @@ pub(crate) mod maintenance_ownership;
 pub(crate) mod mam;
 mod message_admission_port;
 pub(crate) mod messaging;
-pub(crate) mod metrics_snapshot_repository;
 #[cfg(test)]
 mod migration_upgrade_test;
 pub mod mix;
@@ -106,10 +98,7 @@ pub mod sm_repository;
 pub(crate) mod sm_teardown_muc_repository;
 pub(crate) mod sm_teardown_presence_repository;
 pub(crate) mod sm_teardown_repository;
-pub mod users;
 pub use account_deletion::*;
-pub use admin_commands::*;
-pub use api_pages::*;
 pub use archive::*;
 pub use capacity::*;
 pub use cluster_keys::*;
@@ -121,12 +110,11 @@ pub use omemo_recovery::*;
 pub use pep_roster::*;
 pub use privacy::*;
 pub use push::*;
-pub use retention::*;
+pub(crate) use retention::*;
 pub use roster::*;
 pub use s2s::*;
 pub use schema::*;
 pub use sm::*;
-pub use users::*;
 #[cfg(test)]
 mod pubsub_integration_tests;
 pub mod pubsub_repository;
@@ -230,11 +218,17 @@ pub(crate) mod api_queries;
 pub(crate) mod omemo_recovery_repository;
 
 #[cfg(test)]
+mod account_admin_repository_tests;
+#[cfg(test)]
+mod admin_commands_boundary_tests;
+#[cfg(test)]
 mod admin_dispatch_repository_tests;
 #[cfg(test)]
 mod api_control_tests;
 #[cfg(test)]
 mod api_operations_tests;
+#[cfg(test)]
+mod api_pages_tests;
 #[cfg(test)]
 mod data_lifecycle_tests;
 #[cfg(test)]
@@ -242,6 +236,14 @@ mod governance_repository_tests;
 #[cfg(test)]
 mod invitation_admin_repository_tests;
 #[cfg(test)]
+mod operation_journal_worker_repository_tests;
+#[cfg(test)]
 mod report_moderation_repository_tests;
 #[cfg(test)]
 mod reports_tests;
+#[cfg(test)]
+mod retention_policy_repository_tests;
+#[cfg(test)]
+mod retention_tests;
+#[cfg(test)]
+mod users_tests;

@@ -1,4 +1,10 @@
-use super::*;
+use chrono::Utc;
+use northstar_abuse_policy::AbuseAction;
+use northstar_auth_core as auth;
+use northstar_auth_postgres::users::*;
+use northstar_workflows::account_lifecycle::*;
+use uuid::Uuid;
+use zeroize::Zeroizing;
 
 #[test]
 fn authentication_verifiers_are_redacted_from_debug_output() {
@@ -1738,9 +1744,14 @@ async fn account_deletion_atomically_cancels_local_reverse_rosters() {
 
     // Invalid historical group data makes journal materialization fail.
     // The reverse subscription update and user delete must both roll back.
-    assert!(delete_user_with_roster(&pool, removed_id, "example.test")
-        .await
-        .is_err());
+    assert!(delete_user_with_roster(
+        &crate::db::roster::RootRosterEffects,
+        &pool,
+        removed_id,
+        "example.test"
+    )
+    .await
+    .is_err());
     assert!(find_user(&pool, &removed_name).await.unwrap().is_some());
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pubsub_nodes WHERE id = ANY($1)")
@@ -1790,10 +1801,15 @@ async fn account_deletion_atomically_cancels_local_reverse_rosters() {
         .execute(&pool)
         .await
         .unwrap();
-    let removed = delete_user_with_roster(&pool, removed_id, "example.test")
-        .await
-        .unwrap()
-        .unwrap();
+    let removed = delete_user_with_roster(
+        &crate::db::roster::RootRosterEffects,
+        &pool,
+        removed_id,
+        "example.test",
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(removed.roster.len(), 1);
     assert_eq!(removed.reverse_roster_changes.len(), 1);
     assert_eq!(removed.reverse_roster_changes[0].0, contact_id);

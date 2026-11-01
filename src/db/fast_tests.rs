@@ -507,9 +507,15 @@ async fn durable_fast_tokens_support_optional_counts_replay_and_status_revocatio
     epochs.sort_unstable();
     assert_eq!(epochs, (1..=16).collect::<Vec<_>>());
 
-    crate::db::set_user_status(&pool, admin_id, user_id, Some(true), None)
-        .await
-        .unwrap();
+    northstar_workflows::account_lifecycle::set_user_status(
+        &pool,
+        admin_id,
+        user_id,
+        Some(true),
+        None,
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         authenticate_fast_token(&pool, &master, authenticate(None))
             .await

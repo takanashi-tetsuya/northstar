@@ -69,11 +69,11 @@ run_exact_ignored() {
 }
 
 run_exact_ignored \
-  db::admin_commands::boundary_tests::admin_cleanup_effects_are_atomic_lease_fenced_and_compacted
+  db::admin_commands_boundary_tests::admin_cleanup_effects_are_atomic_lease_fenced_and_compacted
 run_exact_ignored \
-  db::admin_commands::boundary_tests::admin_cleanup_effects_survive_delete_and_do_not_retarget_rebinds
+  db::admin_commands_boundary_tests::admin_cleanup_effects_survive_delete_and_do_not_retarget_rebinds
 run_exact_ignored \
-  db::admin_commands::boundary_tests::service_control_poll_isolates_traffic_exhaustion_and_fails_closed_on_lock
+  db::admin_commands_boundary_tests::service_control_poll_isolates_traffic_exhaustion_and_fails_closed_on_lock
 
 cleanup
 created=0

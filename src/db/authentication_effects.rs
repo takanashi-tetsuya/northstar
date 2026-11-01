@@ -25,7 +25,7 @@ impl AuthenticationEffects for RootAuthenticationEffects {
         expected_auth_generation: i64,
         allow_binding_claim: bool,
     ) -> Result<Option<i64>> {
-        super::users::publish_user_agent_login_epoch_in_transaction(
+        northstar_workflows::account_lifecycle::publish_user_agent_login_epoch_in_transaction(
             transaction,
             operation_id,
             connection_id,

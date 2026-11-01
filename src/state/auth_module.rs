@@ -132,13 +132,13 @@ impl AuthModule {
         ));
         let account_admin_service =
             northstar_auth_application::account_admin::AccountAdminService::new(
-                db::account_admin_repository::PostgresAccountAdminRepository::new(
+                northstar_workflows::account_admin_repository::PostgresAccountAdminRepository::new(
                     admin_mutations.clone(),
                 ),
             );
         let registration_admin_service =
             northstar_auth_application::account_admin::RegistrationAdminService::new(
-                db::account_admin_repository::PostgresRegistrationAdminRepository::new(
+                northstar_workflows::account_admin_repository::PostgresRegistrationAdminRepository::new(
                     northstar_workflows::admin_dispatch_repository::AdminCommandStore::new(
                         command_pool.clone(),
                         Arc::clone(api_control),
@@ -154,7 +154,7 @@ impl AuthModule {
             );
         let session_admin_service =
             northstar_auth_application::account_admin::SessionAdminService::new(
-                db::account_admin_repository::PostgresSessionAdminRepository::new(
+                northstar_workflows::account_admin_repository::PostgresSessionAdminRepository::new(
                     admin_mutations.clone(),
                 ),
                 Arc::new(account_admin::LocalAdminSessions::new(Arc::clone(sessions)))

@@ -1,11 +1,23 @@
-use super::*;
+use crate::db;
+use northstar_auth_application::account_admin::*;
 use northstar_auth_core::api_session::ApiReadAuthority;
+use northstar_operations_application::operations::AuthorizationPolicy;
+use northstar_operations_core::api_mutations::*;
+use northstar_workflows::account_admin_repository::*;
+use northstar_workflows::admin_dispatch_repository::AdminCommandStore;
+use northstar_workflows::admin_mutations::enqueue_operation_response_in_tx;
+use northstar_workflows::admin_mutations::AdminMutationStart;
+use northstar_workflows::admin_mutations::AdminMutationStore;
+use northstar_workflows::admin_mutations::AdminOperationIntent;
+use serde_json::json;
 use serde_json::Value;
+use sqlx::PgPool;
 use sqlx::Row;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
 };
+use uuid::Uuid;
 
 struct Request<'a> {
     actor: &'a Uuid,
@@ -590,7 +602,10 @@ async fn offline_clear_preserves_transport_owned_queue_and_retries_the_rolled_ba
     else {
         panic!("transport-owned rows must block clearing")
     };
-    assert_eq!(message, db::OfflineMessagesTransportOwned.to_string());
+    assert_eq!(
+        message,
+        northstar_workflows::admin_accounts::OfflineMessagesTransportOwned.to_string()
+    );
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM offline_messages")
             .fetch_one(&pool)

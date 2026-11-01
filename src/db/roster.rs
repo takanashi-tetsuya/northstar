@@ -19,10 +19,30 @@ mod blocking_match_tests;
 /// The roster adapter with the root crate's transaction steps.
 pub(crate) type PostgresRosterRepository =
     northstar_roster_postgres::roster::PostgresRosterRepository<RootRosterEffects>;
+pub(crate) type RootAdminCommandRepository =
+    northstar_workflows::admin_command_repository::PostgresAdminCommandRepository<
+        RootRosterEffects,
+    >;
 
 /// Runs the roster transaction steps over the tables of the contexts still in the root crate.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RootRosterEffects;
+
+impl northstar_workflows::account_lifecycle::AccountDeletionEffects for RootRosterEffects {
+    async fn revoke_room_account_in_tx(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        user_id: Uuid,
+        account_bare_jid: &str,
+    ) -> Result<u64> {
+        crate::db::cluster_muc::revoke_cluster_muc_account_in_tx(
+            transaction,
+            user_id,
+            account_bare_jid,
+        )
+        .await
+    }
+}
 
 impl RosterTransactionEffects for RootRosterEffects {
     async fn cancel_inaccessible_pep_subscriptions(
@@ -368,26 +388,6 @@ pub async fn update_subscription(
         jid,
         subscription,
         ask,
-    )
-    .await
-}
-
-pub async fn update_subscription_in_transaction(
-    transaction: &mut Transaction<'_, Postgres>,
-    owner_id: Uuid,
-    jid: &str,
-    subscription: &str,
-    ask: Option<&str>,
-    approved: Option<bool>,
-) -> Result<RosterChange> {
-    northstar_roster_postgres::roster::update_subscription_in_transaction(
-        &RootRosterEffects,
-        transaction,
-        owner_id,
-        jid,
-        subscription,
-        ask,
-        approved,
     )
     .await
 }

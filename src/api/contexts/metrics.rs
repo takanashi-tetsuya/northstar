@@ -3,7 +3,6 @@
 //! cluster control authority, or a raw PostgreSQL pool.
 
 use crate::cluster::ClusterMetricsProbe;
-use crate::db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository;
 use crate::s2s::S2sOutboundCountProbe;
 use dashmap::DashMap;
 use northstar_operations_application::metrics_snapshot::{
@@ -11,6 +10,7 @@ use northstar_operations_application::metrics_snapshot::{
     SmRecoveryGaugeSnapshot,
 };
 use northstar_security::tls::TlsMetricsProbe;
+use northstar_workflows::metrics_snapshot_repository::PostgresMetricsSnapshotRepository;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

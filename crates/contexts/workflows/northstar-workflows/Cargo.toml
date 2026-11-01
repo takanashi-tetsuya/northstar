@@ -24,8 +24,14 @@ northstar-operations-application = { path = "../../operations/northstar-operatio
 northstar-operations-core = { path = "../../operations/northstar-operations-core" }
 northstar-operations-postgres = { path = "../../operations/northstar-operations-postgres" }
 northstar-postgres = { path = "../../../platform/northstar-postgres" }
+northstar-roster-core = { path = "../../roster/northstar-roster-core" }
+northstar-roster-postgres = { path = "../../roster/northstar-roster-postgres" }
+northstar-security = { path = "../../../platform/northstar-security" }
 northstar-upload-postgres = { path = "../../upload/northstar-upload-postgres" }
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+thiserror = "2.0"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid", "json", "macros"] }
+zeroize = "1.8"
 uuid = { version = "1.12", features = ["v4", "serde"] }

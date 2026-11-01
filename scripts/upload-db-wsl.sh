@@ -147,7 +147,7 @@ cargo test --locked --offline \
 # durable state in the shared isolated schema.
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$test_schema"
 cargo test --locked --offline \
-  db::users::tests::account_deletion_atomically_cancels_local_reverse_rosters \
+  db::users_tests::account_deletion_atomically_cancels_local_reverse_rosters \
   -- --ignored --nocapture --test-threads=1
 
 cleanup

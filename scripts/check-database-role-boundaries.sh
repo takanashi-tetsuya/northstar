@@ -17,14 +17,14 @@ backup_image="$project_dir/deploy/backup.Dockerfile"
 backup_runner="$project_dir/scripts/backup.sh"
 postgres_runner="$project_dir/scripts/run-postgres.py"
 role_attestation="$project_dir/crates/platform/northstar-postgres/src/role_attestation.rs"
-registration_repository="$project_dir/src/db/account_admin_repository.rs"
+registration_repository="$project_dir/crates/contexts/workflows/northstar-workflows/src/account_admin_repository.rs"
 admin_dispatch_repository="$project_dir/crates/contexts/workflows/northstar-workflows/src/admin_dispatch_repository.rs"
 db_module="$project_dir/src/db/mod.rs"
 main_source="$project_dir/src/main.rs"
 state_source="$project_dir/src/state.rs"
 pie_source="$project_dir/src/tools/pie.rs"
 users_source="$project_dir/crates/contexts/auth/northstar-auth-postgres/src/users.rs"
-admin_commands_source="$project_dir/src/db/admin_commands.rs"
+admin_commands_source="$project_dir/crates/contexts/workflows/northstar-workflows/src/admin_accounts.rs"
 roster_source="$project_dir/crates/contexts/roster/northstar-roster-postgres/src/roster.rs"
 mix_source="$project_dir/src/db/mix.rs"
 muc_source="$project_dir/src/db/muc.rs"
@@ -749,7 +749,7 @@ require_module_literal crates/contexts/auth/northstar-auth-postgres/src/users.rs
   'REST password rotation does not use the bearer-fenced database capability'
 require_module_literal crates/contexts/auth/northstar-auth-postgres/src/users.rs 'SELECT northstar_user_change_password_stream(' \
   'XMPP password rotation does not use the generation-fenced database capability'
-require_module_literal src/db/admin_commands.rs 'SELECT northstar_admin_command_user_lifecycle(' \
+require_module_literal crates/contexts/workflows/northstar-workflows/src/admin_accounts.rs 'SELECT northstar_admin_command_user_lifecycle(' \
   'XEP-0133 lifecycle mutation does not consume an execution claim'
 require_module_literal crates/contexts/roster/northstar-roster-postgres/src/roster.rs 'SELECT northstar_user_bump_roster_version($1)' \
   'roster mutation still writes users directly'

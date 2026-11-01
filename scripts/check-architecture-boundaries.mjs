@@ -2814,7 +2814,7 @@ if (!/\.admin_command_service\s*\(\s*\)/.test(commandsProductionSource)) {
   throw new Error('commands.rs no longer routes persistence through admin_command_service()');
 }
 const adminCommandServiceSource = productionWithoutCfgTestModules(
-  read('src/db/admin_command_repository.rs'),
+  read('crates/contexts/workflows/northstar-workflows/src/admin_command_repository.rs'),
   'admin_commands repository',
 );
 const adminReadBoundary = adminCommandServiceSource;

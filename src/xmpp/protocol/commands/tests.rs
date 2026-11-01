@@ -1,5 +1,4 @@
 use super::*;
-use crate::db;
 use roxmltree::Document;
 use sqlx::Acquire;
 
@@ -500,7 +499,7 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
     .execute(&pool)
     .await
     .unwrap();
-    db::replace_admins(&pool, admin, &[admin, member])
+    northstar_workflows::account_lifecycle::replace_admins(&pool, admin, &[admin, member])
         .await
         .unwrap();
     assert!(
@@ -852,7 +851,11 @@ async fn postgres_command_sessions_are_cross_node_atomic() {
         .unwrap()
         .unwrap()
         .auth_generation;
-    assert!(db::end_user_sessions(&pool, admin, member).await.unwrap());
+    assert!(
+        northstar_workflows::account_lifecycle::end_user_sessions(&pool, admin, member)
+            .await
+            .unwrap()
+    );
     assert_eq!(
         northstar_auth_postgres::users::find_user_by_id(&pool, member)
             .await

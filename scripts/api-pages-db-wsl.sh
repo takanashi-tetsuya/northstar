@@ -48,7 +48,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
 fi
 
 for test_name in \
-    db::api_pages::tests::postgres_keyset_pages_are_stable_isolated_and_indexed \
+    db::api_pages_tests::postgres_keyset_pages_are_stable_isolated_and_indexed \
     db::api_queries::tests::authorized_projection_holds_account_and_bearer_until_snapshot_finishes; do
     if ! test_output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture 2>&1)"; then
         printf '%s\n' "$test_output"

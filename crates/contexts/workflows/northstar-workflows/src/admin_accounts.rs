@@ -8,9 +8,12 @@ mod accounts;
 
 pub use self::accounts::*;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
-pub async fn mutate_admin_accounts_authorized_with_failure_after(
+pub async fn mutate_admin_accounts_authorized_with_failure_after<
+    E: crate::account_lifecycle::AccountDeletionEffects,
+>(
+    effects: &E,
     pool: &PgPool,
     fence: AdminCommandFence<'_>,
     targets: &[AdminAccountMutationTarget],
@@ -18,12 +21,23 @@ pub async fn mutate_admin_accounts_authorized_with_failure_after(
     domain: &str,
     fail_after: usize,
 ) -> Result<AdminBatchAccountWriteOutcome> {
-    mutate_admin_accounts_authorized_inner(pool, fence, targets, action, domain, Some(fail_after))
-        .await
+    mutate_admin_accounts_authorized_inner(
+        effects,
+        pool,
+        fence,
+        targets,
+        action,
+        domain,
+        Some(fail_after),
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn mutate_admin_accounts_authorized_inner(
+async fn mutate_admin_accounts_authorized_inner<
+    E: crate::account_lifecycle::AccountDeletionEffects,
+>(
+    effects: &E,
     pool: &PgPool,
     fence: AdminCommandFence<'_>,
     targets: &[AdminAccountMutationTarget],
@@ -242,7 +256,8 @@ async fn mutate_admin_accounts_authorized_inner(
                     tx.rollback().await?;
                     return Ok(AdminBatchAccountWriteOutcome::TargetChanged);
                 }
-                crate::db::users::delete_user_with_roster_locked_in_transaction(
+                crate::account_lifecycle::delete_user_with_roster_locked_in_transaction(
+                    effects,
                     &mut tx,
                     target.id,
                     &domain,
@@ -252,7 +267,7 @@ async fn mutate_admin_accounts_authorized_inner(
                         "admin.user.delete",
                         serde_json::json!({"source":"xep-0133","username":target.username}),
                     )),
-                    Some(crate::db::users::AdminDeletionFence {
+                    Some(crate::account_lifecycle::AdminDeletionFence {
                         actor_id: fence.actor_id,
                         actor_username: fence.actor_username,
                         actor_generation: fence.actor_generation,
@@ -411,6 +426,3 @@ pub async fn clear_offline_messages_in_tx(
     .await?;
     Ok(removed)
 }
-
-#[cfg(test)]
-mod boundary_tests;

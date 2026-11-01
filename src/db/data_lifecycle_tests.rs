@@ -189,14 +189,20 @@ async fn postgres_hold_cleanup_delete_release_and_audit_invariants() {
     ));
 
     for store in [
-        crate::db::RetentionStore::PersonalMam,
-        crate::db::RetentionStore::MucMam,
-        crate::db::RetentionStore::OfflineMessages,
+        northstar_workflows::retention::RetentionStore::PersonalMam,
+        northstar_workflows::retention::RetentionStore::MucMam,
+        northstar_workflows::retention::RetentionStore::OfflineMessages,
     ] {
         assert_eq!(
-            crate::db::purge_resolved_retention_batch(&pool, store, Utc::now(), 30, 100)
-                .await
-                .unwrap(),
+            northstar_workflows::retention::purge_resolved_retention_batch(
+                &pool,
+                store,
+                Utc::now(),
+                30,
+                100
+            )
+            .await
+            .unwrap(),
             0
         );
     }
@@ -355,9 +361,9 @@ async fn postgres_hold_cleanup_delete_release_and_audit_invariants() {
         1
     );
     assert_eq!(
-        crate::db::purge_resolved_retention_batch(
+        northstar_workflows::retention::purge_resolved_retention_batch(
             &pool,
-            crate::db::RetentionStore::PersonalMam,
+            northstar_workflows::retention::RetentionStore::PersonalMam,
             Utc::now(),
             30,
             100,
@@ -367,9 +373,9 @@ async fn postgres_hold_cleanup_delete_release_and_audit_invariants() {
         1
     );
     assert_eq!(
-        crate::db::purge_resolved_retention_batch(
+        northstar_workflows::retention::purge_resolved_retention_batch(
             &pool,
-            crate::db::RetentionStore::MucMam,
+            northstar_workflows::retention::RetentionStore::MucMam,
             Utc::now(),
             30,
             100,

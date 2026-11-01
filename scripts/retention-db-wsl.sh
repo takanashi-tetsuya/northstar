@@ -10,15 +10,15 @@ cd "$project_dir"
 northstar_use_test_toolchain "$project_dir"
 TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
   cargo test --locked --offline \
-  db::retention::tests::bounded_concurrent_cleanup_is_restart_safe_and_preserves_evidence \
+  db::retention_tests::bounded_concurrent_cleanup_is_restart_safe_and_preserves_evidence \
   -- --ignored --exact --nocapture
 TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
   cargo test --locked --offline \
-  db::retention::tests::asymmetric_mam_retention_preserves_admission_until_the_last_projection_ends \
+  db::retention_tests::asymmetric_mam_retention_preserves_admission_until_the_last_projection_ends \
   -- --ignored --exact --nocapture
 TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
   cargo test --locked --offline \
-  db::retention::tests::offline_retention_and_admin_clear_respect_sm_and_bosh_owners \
+  db::retention_tests::offline_retention_and_admin_clear_respect_sm_and_bosh_owners \
   -- --ignored --exact --nocapture
 TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
   cargo test --locked --offline \

@@ -303,7 +303,7 @@ pub struct AppState {
     roster: RosterModule,
     api_query_context: ApiQueryContext,
     metrics_snapshot_service: northstar_operations_application::metrics_snapshot::MetricsSnapshotService<
-        db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository,
+        northstar_workflows::metrics_snapshot_repository::PostgresMetricsSnapshotRepository,
     >,
     readiness_service: northstar_operations_application::readiness::ReadinessService<
         db::readiness_repository::PostgresReadinessRepository,
@@ -342,7 +342,7 @@ pub struct AppState {
     /// XEP-0050/XEP-0133 session and execution authority. Protocol handlers
     /// never receive the backing PostgreSQL pool through this capability.
     admin_command_service: northstar_operations_application::admin_commands::AdminCommandService<
-        db::admin_command_repository::PostgresAdminCommandRepository,
+        crate::db::roster::RootAdminCommandRepository,
     >,
     push_service: crate::services::push::PushService<db::push::PostgresPushRepository>,
     cluster: crate::cluster::ClusterManager,
@@ -393,11 +393,11 @@ pub struct AppState {
     locked_muc_expiry_context: std::sync::OnceLock<Arc<locked_muc_expiry::LockedMucExpiryContext>>,
     operation_effect_fence_service:
         northstar_operations_application::operation_effect_fence::OperationEffectFenceService<
-            db::operation_effect_fence_repository::PostgresOperationEffectFenceRepository,
+            northstar_operations_postgres::operation_effect_fence_repository::PostgresOperationEffectFenceRepository,
         >,
     operation_journal_worker_service:
         northstar_operations_application::operation_journal_worker::OperationJournalWorkerService<
-            db::operation_journal_worker_repository::PostgresOperationJournalWorkerRepository,
+            northstar_operations_postgres::operation_journal_worker_repository::PostgresOperationJournalWorkerRepository,
         >,
     admin_session_cleanup_worker_service:
         northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupWorkerService<

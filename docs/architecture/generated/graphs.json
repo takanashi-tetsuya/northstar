@@ -2631,6 +2631,10 @@
       ],
       [
         "northstar-operations-postgres",
+        "tracing"
+      ],
+      [
+        "northstar-operations-postgres",
         "uuid"
       ],
       [
@@ -3531,7 +3535,23 @@
       ],
       [
         "northstar-workflows",
+        "northstar-roster-core"
+      ],
+      [
+        "northstar-workflows",
+        "northstar-roster-postgres"
+      ],
+      [
+        "northstar-workflows",
+        "northstar-security"
+      ],
+      [
+        "northstar-workflows",
         "northstar-upload-postgres"
+      ],
+      [
+        "northstar-workflows",
+        "northstar-xmpp-types"
       ],
       [
         "northstar-workflows",
@@ -3547,7 +3567,15 @@
       ],
       [
         "northstar-workflows",
+        "thiserror"
+      ],
+      [
+        "northstar-workflows",
         "uuid"
+      ],
+      [
+        "northstar-workflows",
+        "zeroize"
       ],
       [
         "northstar-xep-0016",

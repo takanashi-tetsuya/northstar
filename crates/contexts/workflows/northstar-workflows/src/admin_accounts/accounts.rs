@@ -207,14 +207,18 @@ pub async fn reset_admin_account_password_authorized(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn mutate_admin_accounts_authorized(
+pub async fn mutate_admin_accounts_authorized<
+    E: crate::account_lifecycle::AccountDeletionEffects,
+>(
+    effects: &E,
     pool: &PgPool,
     fence: AdminCommandFence<'_>,
     targets: &[AdminAccountMutationTarget],
     action: AdminAccountMutationAction,
     domain: &str,
 ) -> Result<AdminBatchAccountWriteOutcome> {
-    mutate_admin_accounts_authorized_inner(pool, fence, targets, action, domain, None).await
+    mutate_admin_accounts_authorized_inner(effects, pool, fence, targets, action, domain, None)
+        .await
 }
 
 pub async fn replace_admins_authorized(

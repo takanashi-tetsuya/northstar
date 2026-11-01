@@ -2162,7 +2162,7 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
             .unwrap(),
     );
     assert_eq!(
-        crate::db::clear_offline_messages_in_tx(
+        northstar_workflows::admin_accounts::clear_offline_messages_in_tx(
             &mut clear_tx,
             admin_id,
             Some(clear_lease.request_id),

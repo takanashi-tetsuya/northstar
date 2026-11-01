@@ -500,9 +500,14 @@ mod integration_tests {
             .unwrap()
             .iter()
             .all(|target| target.service_jid == "push.example.test" && !target.node.is_empty()));
-        db::delete_user_with_roster(&pool, user.id, "example.test")
-            .await
-            .unwrap();
+        northstar_workflows::account_lifecycle::delete_user_with_roster(
+            &crate::db::roster::RootRosterEffects,
+            &pool,
+            user.id,
+            "example.test",
+        )
+        .await
+        .unwrap();
     }
 }
 

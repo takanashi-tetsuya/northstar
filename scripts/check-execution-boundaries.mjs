@@ -40,7 +40,7 @@ const files = {
   mixWorkerCore: 'crates/contexts/message/northstar-delivery-core/src/mix_outbox.rs',
   mixWorkerOwner: 'crates/contexts/room/northstar-room-application/src/mix_service/outbox.rs',
   mixWorker: 'crates/contexts/room/northstar-mix-xmpp/src/worker.rs',
-  mixArchive: 'src/db/archive.rs',
+  mixArchive: 'crates/contexts/workflows/northstar-workflows/src/mix_archive.rs',
   state: 'src/state.rs',
   sessionTable: 'src/xmpp/local_routes/session_table.rs',
   mixOutboxState: 'src/state/mix_outbox.rs',

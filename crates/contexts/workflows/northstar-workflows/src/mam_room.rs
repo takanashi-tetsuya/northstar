@@ -1,10 +1,13 @@
 //! MUC MAM room archive reads under the room authorization, local and federated.
 
-use super::*;
+use anyhow::Result;
+use northstar_archive_postgres::*;
 use northstar_room_postgres::mam_authorization::{
     authorize_federated_mam_room_in_transaction, authorize_mam_room_in_transaction,
     FederatedMamRoomGuard,
 };
+use sqlx::{PgPool, Postgres, Transaction};
+use uuid::Uuid;
 
 pub async fn mam_room_archive_boundaries_authorized(
     pool: &PgPool,
@@ -129,7 +132,7 @@ pub async fn mam_federated_room_archive_boundaries_authorized(
     Ok(outcome)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn mam_federated_room_archive_page_authorized(
     pool: &PgPool,
     localpart: &str,
@@ -161,7 +164,7 @@ pub async fn mam_federated_room_archive_page_authorized(
 /// response projection before commit without reopening a TOCTOU window. The
 /// transaction must come from `FederatedMamRoomGuard::begin_snapshot` on the
 /// same connection, and `expected_room_id` must come from that guard.
-pub(crate) async fn mam_federated_room_archive_page_authorized_in_transaction(
+pub async fn mam_federated_room_archive_page_authorized_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     expected_room_id: Uuid,
     localpart: &str,

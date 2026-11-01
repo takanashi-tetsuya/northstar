@@ -491,7 +491,8 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         .execute(&pool)
         .await
         .unwrap();
-    let metadata_repository = crate::db::mam::PostgresMamRepository::new(pool.clone());
+    let metadata_repository =
+        northstar_workflows::mam_repository::PostgresMamRepository::new(pool.clone());
     let federated_metadata = |actor_full_jid: &str| {
         FederatedMamMetadataCommand::from_authenticated_actor(
             "snapshot-room".to_owned(),
@@ -862,7 +863,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         max_per_domain: 1,
     };
     let service = MamService::new(
-        crate::db::mam::PostgresMamRepository::new(pool.clone()),
+        northstar_workflows::mam_repository::PostgresMamRepository::new(pool.clone()),
         limits,
         wake.clone(),
     );
@@ -916,7 +917,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
     assert!(receiver.try_recv().is_err());
 
     let service = MamService::new(
-        crate::db::mam::PostgresMamRepository::new(pool.clone()),
+        northstar_workflows::mam_repository::PostgresMamRepository::new(pool.clone()),
         FederatedMamOutboxLimits {
             max_rows: 8,
             max_per_domain: 8,

@@ -18,7 +18,8 @@ mod abuse_keys_tests;
 mod account_revocations_tests;
 #[cfg(test)]
 mod admin_read_authorization_tests;
-pub mod archive;
+#[cfg(test)]
+mod archive;
 pub(crate) mod authentication_effects;
 #[cfg(test)]
 mod authentication_tests;
@@ -43,7 +44,6 @@ pub(crate) mod federation_outbox_repository;
 pub mod identity_migration;
 pub mod jid_identity;
 pub(crate) mod maintenance_ownership;
-pub(crate) mod mam;
 #[cfg(test)]
 mod message_repository_tests;
 #[cfg(test)]
@@ -104,6 +104,7 @@ pub mod sm;
 pub mod sm_repository;
 pub(crate) mod sm_teardown_presence_repository;
 pub(crate) mod sm_teardown_repository;
+#[cfg(test)]
 pub use archive::*;
 pub use capacity::*;
 pub use cluster_keys::*;

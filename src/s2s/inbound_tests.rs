@@ -645,7 +645,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
     .await
     .unwrap();
     assert_eq!(retained_subscription, persisted_subscribe);
-    db::archive_message(
+    northstar_archive_postgres::archive_message(
         &pool,
         uuid::Uuid::new_v4(),
         recipient_id,
@@ -656,7 +656,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
     )
     .await
     .unwrap();
-    db::archive_message(
+    northstar_archive_postgres::archive_message(
         &pool,
         uuid::Uuid::new_v4(),
         sender_id,
@@ -819,7 +819,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
     assert!(tombstone.contains("urn:xmpp:message-retract:1"));
     assert!(!tombstone.contains("recipient original"));
 
-    db::archive_message(
+    northstar_archive_postgres::archive_message(
         &pool,
         uuid::Uuid::new_v4(),
         recipient_id,
@@ -954,7 +954,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
         }
     );
     let rollback_original_id = uuid::Uuid::new_v4();
-    db::archive_message(
+    northstar_archive_postgres::archive_message(
         &pool,
         rollback_original_id,
         sender_id,

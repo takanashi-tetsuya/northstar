@@ -483,7 +483,7 @@ impl AppState {
             .context("failed to load dummy SCRAM iteration profiles")?;
         let pubsub = PubSubModule::new(&config, &pool, &durable_outbox_database_admission);
         let mam_service = northstar_archive_application::MamService::new(
-            db::mam::PostgresMamRepository::new(pool.clone()),
+            northstar_workflows::mam_repository::PostgresMamRepository::new(pool.clone()),
             northstar_archive_application::FederatedMamOutboxLimits {
                 ttl_seconds: config.s2s_outbox_ttl_seconds,
                 max_rows: config.s2s_outbox_max_rows,

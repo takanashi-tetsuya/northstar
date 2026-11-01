@@ -325,7 +325,7 @@ pub struct AppState {
     retraction_service: northstar_message_application::retractions::RetractionService<
         northstar_workflows::retraction_repository::PostgresRetractionRepository,
     >,
-    mam_service: northstar_archive_application::MamService<db::mam::PostgresMamRepository>,
+    mam_service: northstar_archive_application::MamService<northstar_workflows::mam_repository::PostgresMamRepository>,
     sm_service: crate::services::sm::SmService<db::sm_repository::PostgresSmRepository>,
     replay_service:
         crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>,

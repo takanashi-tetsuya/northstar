@@ -4235,6 +4235,10 @@
       ],
       [
         "northstar-workflows",
+        "northstar-archive-application"
+      ],
+      [
+        "northstar-workflows",
         "northstar-archive-postgres"
       ],
       [
@@ -4248,6 +4252,10 @@
       [
         "northstar-workflows",
         "northstar-auth-postgres"
+      ],
+      [
+        "northstar-workflows",
+        "northstar-delivery-core"
       ],
       [
         "northstar-workflows",

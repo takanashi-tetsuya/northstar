@@ -1,26 +1,27 @@
 //! Archive snapshots and atomic federation response admission.
 
-use crate::db;
+use crate::mam_room;
 use anyhow::Result;
 use northstar_archive_application::*;
+use northstar_archive_postgres as archive;
 use northstar_room_postgres::mam_authorization::FederatedMamRoomGuard;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresMamRepository {
+pub struct PostgresMamRepository {
     pool: PgPool,
 }
 
 impl PostgresMamRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
     async fn personal_boundaries(
         &self,
         owner_id: Uuid,
     ) -> Result<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)> {
-        db::archive_boundaries_visible(&self.pool, owner_id).await
+        archive::archive_boundaries_visible(&self.pool, owner_id).await
     }
 
     async fn authorized_room_boundaries(
@@ -30,7 +31,7 @@ impl PostgresMamRepository {
         currently_joined: bool,
     ) -> Result<MamRoomReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>> {
         map_room_read(
-            db::mam_room_archive_boundaries_authorized(
+            mam_room::mam_room_archive_boundaries_authorized(
                 &self.pool,
                 localpart,
                 viewer_id,
@@ -45,7 +46,7 @@ impl PostgresMamRepository {
         owner_id: Uuid,
         query: &MamArchiveQuery,
     ) -> Result<Option<ArchivePage>> {
-        db::mam_user_archive_page(&self.pool, owner_id, query).await
+        archive::mam_user_archive_page(&self.pool, owner_id, query).await
     }
 
     async fn authorized_room_page(
@@ -56,7 +57,7 @@ impl PostgresMamRepository {
         query: &MamArchiveQuery,
     ) -> Result<MamRoomReadOutcome<Option<ArchivePage>>> {
         map_room_read(
-            db::mam_room_archive_page_authorized(
+            mam_room::mam_room_archive_page_authorized(
                 &self.pool,
                 localpart,
                 viewer_id,
@@ -121,7 +122,7 @@ impl MamQueryRepository for PostgresMamRepository {
         command: FederatedMamMetadataCommand,
     ) -> Result<MamMetadataResult> {
         let read = map_room_read(
-            db::mam_federated_room_archive_boundaries_authorized(
+            mam_room::mam_federated_room_archive_boundaries_authorized(
                 &self.pool,
                 command.localpart(),
                 command.viewer_bare_jid(),
@@ -133,7 +134,7 @@ impl MamQueryRepository for PostgresMamRepository {
     }
 
     async fn get_preferences(&self, command: MamPreferencesGetCommand) -> Result<MamPreferences> {
-        db::mam_preferences(&self.pool, command.owner_id).await
+        archive::mam_preferences(&self.pool, command.owner_id).await
     }
     /// Resolve room policy and affiliation in one repository snapshot, then
     /// return a capability that can be used for MAM reads.
@@ -152,11 +153,11 @@ impl MamQueryRepository for PostgresMamRepository {
             )
             .await?
             {
-                db::MamRoomReadOutcome::Allowed { access, .. } => {
+                archive::MamRoomReadOutcome::Allowed { access, .. } => {
                     MamRoomAccessOutcome::Allowed(map_room_access(access))
                 }
-                db::MamRoomReadOutcome::Missing => MamRoomAccessOutcome::Missing,
-                db::MamRoomReadOutcome::Forbidden => MamRoomAccessOutcome::Forbidden,
+                archive::MamRoomReadOutcome::Missing => MamRoomAccessOutcome::Missing,
+                archive::MamRoomReadOutcome::Forbidden => MamRoomAccessOutcome::Forbidden,
             },
         )
     }
@@ -176,11 +177,11 @@ impl MamQueryRepository for PostgresMamRepository {
             )
             .await?
             {
-                db::MamRoomReadOutcome::Allowed { access, .. } => {
+                archive::MamRoomReadOutcome::Allowed { access, .. } => {
                     MamRoomAccessOutcome::Allowed(map_room_access(access))
                 }
-                db::MamRoomReadOutcome::Missing => MamRoomAccessOutcome::Missing,
-                db::MamRoomReadOutcome::Forbidden => MamRoomAccessOutcome::Forbidden,
+                archive::MamRoomReadOutcome::Missing => MamRoomAccessOutcome::Missing,
+                archive::MamRoomReadOutcome::Forbidden => MamRoomAccessOutcome::Forbidden,
             },
         )
     }
@@ -190,7 +191,7 @@ impl MamPreferencesWriter for PostgresMamRepository {
     type Error = anyhow::Error;
 
     async fn set_preferences(&self, command: MamPreferencesSetCommand) -> Result<()> {
-        db::set_mam_preferences(&self.pool, command.owner_id, &command.preferences).await
+        archive::set_mam_preferences(&self.pool, command.owner_id, &command.preferences).await
     }
 }
 
@@ -216,7 +217,7 @@ impl FederatedMamStreamWriter for PostgresMamRepository {
         };
         let room_id = guard.room_id();
         let mut transaction = guard.begin_snapshot().await?;
-        let page = match db::mam_federated_room_archive_page_authorized_in_transaction(
+        let page = match mam_room::mam_federated_room_archive_page_authorized_in_transaction(
             &mut transaction,
             room_id,
             request.localpart,
@@ -226,21 +227,21 @@ impl FederatedMamStreamWriter for PostgresMamRepository {
         )
         .await?
         {
-            db::MamRoomReadOutcome::Allowed {
+            archive::MamRoomReadOutcome::Allowed {
                 access,
                 value: Some(page),
             } => map_federated_stream_page(access, page),
-            db::MamRoomReadOutcome::Allowed { value: None, .. } => {
+            archive::MamRoomReadOutcome::Allowed { value: None, .. } => {
                 transaction.commit().await?;
                 guard.release().await;
                 return Ok(FederatedMamAdmissionOutcome::PageMissing);
             }
-            db::MamRoomReadOutcome::Missing => {
+            archive::MamRoomReadOutcome::Missing => {
                 transaction.commit().await?;
                 guard.release().await;
                 return Ok(FederatedMamAdmissionOutcome::Missing);
             }
-            db::MamRoomReadOutcome::Forbidden => {
+            archive::MamRoomReadOutcome::Forbidden => {
                 transaction.commit().await?;
                 guard.release().await;
                 return Ok(FederatedMamAdmissionOutcome::Forbidden);
@@ -293,7 +294,7 @@ impl FederatedMamStreamWriter for PostgresMamRepository {
     }
 }
 
-fn map_room_access(access: db::MamRoomArchiveAccess) -> MamRoomAccess {
+fn map_room_access(access: archive::MamRoomArchiveAccess) -> MamRoomAccess {
     MamRoomAccess {
         localpart: access.localpart,
         occupant_id_secret: access.occupant_id_secret,
@@ -301,20 +302,20 @@ fn map_room_access(access: db::MamRoomArchiveAccess) -> MamRoomAccess {
     }
 }
 
-fn map_room_read<T>(outcome: db::MamRoomReadOutcome<T>) -> Result<MamRoomReadOutcome<T>> {
+fn map_room_read<T>(outcome: archive::MamRoomReadOutcome<T>) -> Result<MamRoomReadOutcome<T>> {
     Ok(match outcome {
-        db::MamRoomReadOutcome::Allowed { access, value } => MamRoomReadOutcome::Allowed {
+        archive::MamRoomReadOutcome::Allowed { access, value } => MamRoomReadOutcome::Allowed {
             access: map_room_access(access),
             value,
         },
-        db::MamRoomReadOutcome::Missing => MamRoomReadOutcome::Missing,
-        db::MamRoomReadOutcome::Forbidden => MamRoomReadOutcome::Forbidden,
+        archive::MamRoomReadOutcome::Missing => MamRoomReadOutcome::Missing,
+        archive::MamRoomReadOutcome::Forbidden => MamRoomReadOutcome::Forbidden,
     })
 }
 
 fn map_federated_stream_page(
-    access: db::MamRoomArchiveAccess,
-    page: db::ArchivePage,
+    access: archive::MamRoomArchiveAccess,
+    page: archive::ArchivePage,
 ) -> FederatedMamStreamPage {
     FederatedMamStreamPage {
         access: map_room_access(access),

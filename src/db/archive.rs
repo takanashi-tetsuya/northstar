@@ -1,51 +1,18 @@
-//! Personal history admission and the offline queue (message context), room MAM authorization and MIX reflection
-//! archiving (room context). The personal archive, its preferences and the MAM queries are
-//! northstar-archive-postgres, re-exported here.
+//! Cross-context history tests and the offline delivery fixtures they share.
 
 use anyhow::Result;
-#[cfg(test)]
 use chrono::{DateTime, Utc};
+use northstar_archive_postgres::*;
+use northstar_message_postgres::{offline::*, personal_history::*};
+use northstar_room_postgres::mam_authorization::*;
+use northstar_workflows::{mam_room::*, mix_archive::*, personal_history::*};
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Postgres, Row, Transaction};
-#[cfg(test)]
+use sqlx::PgPool;
 use std::time::Duration;
 use uuid::Uuid;
 
-mod mam_room;
-mod mix_archive;
-
-pub use self::mam_room::*;
-pub use self::mix_archive::*;
-pub use northstar_archive_postgres::*;
-#[cfg(test)]
-use northstar_message_postgres::{offline::*, personal_history::*};
-#[cfg(test)]
-use northstar_workflows::personal_history::*;
-
-/// Production source of this module: the file itself followed by each
-/// production child module file, so source-contract tests keep reading the
-/// whole module after code moves between them. The children are listed in
-/// the order their code had in the former single file, because some
-/// contracts split the source on a marker that occurs in more than one child.
-/// `module_source_lists_every_child_module` keeps this list in step with the
-/// non-test `mod` declarations above.
-#[cfg(test)]
-const MODULE_SOURCE: &[(&str, &str)] = &[
-    ("archive", include_str!("archive.rs")),
-    ("mix_archive", include_str!("archive/mix_archive.rs")),
-    ("mam_room", include_str!("archive/mam_room.rs")),
-];
-
-#[cfg(test)]
-mod offline_queue_tests;
-
-#[cfg(test)]
-mod source_contract_tests;
-
-#[cfg(test)]
-use northstar_room_postgres::mam_authorization::*;
-#[cfg(test)]
 mod history_identity_pg_tests;
+mod offline_queue_tests;
 
 /// Deliver queued offline messages without deleting a stanza until it has
 /// been accepted by the connection's outbound queue. The per-recipient
@@ -53,7 +20,6 @@ mod history_identity_pg_tests;
 /// from claiming the same rows. If the connection closes or remains
 /// backpressured, the unsent suffix stays durable for the next availability
 /// transition.
-#[cfg(test)]
 pub async fn deliver_offline(
     pool: &PgPool,
     recipient_id: Uuid,
@@ -74,7 +40,6 @@ pub async fn deliver_offline(
 
 /// Bind 2 MAM catch-up consumes permanently archived queue duplicates but
 /// still delivers temporary-only XEP-0334 no-permanent-store messages.
-#[cfg(test)]
 pub async fn deliver_bind2_offline(
     pool: &PgPool,
     recipient_id: Uuid,
@@ -93,7 +58,6 @@ pub async fn deliver_bind2_offline(
     .await
 }
 
-#[cfg(test)]
 pub(super) async fn deliver_offline_mode(
     pool: &PgPool,
     recipient_id: Uuid,

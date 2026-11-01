@@ -1520,10 +1520,12 @@ digraph compile_time {
   "northstar-workflows" -> "northstar-abuse-application";
   "northstar-workflows" -> "northstar-abuse-policy";
   "northstar-workflows" -> "northstar-abuse-postgres";
+  "northstar-workflows" -> "northstar-archive-application";
   "northstar-workflows" -> "northstar-archive-postgres";
   "northstar-workflows" -> "northstar-auth-application";
   "northstar-workflows" -> "northstar-auth-core";
   "northstar-workflows" -> "northstar-auth-postgres";
+  "northstar-workflows" -> "northstar-delivery-core";
   "northstar-workflows" -> "northstar-federation-core";
   "northstar-workflows" -> "northstar-federation-postgres";
   "northstar-workflows" -> "northstar-message-application";

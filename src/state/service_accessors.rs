@@ -123,7 +123,9 @@ impl AppState {
 
     pub(crate) fn mam_service(
         &self,
-    ) -> &northstar_archive_application::MamService<db::mam::PostgresMamRepository> {
+    ) -> &northstar_archive_application::MamService<
+        northstar_workflows::mam_repository::PostgresMamRepository,
+    > {
         &self.mam_service
     }
 

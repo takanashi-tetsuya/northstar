@@ -20,10 +20,16 @@ pub(crate) type PostgresMucRepository =
 pub(crate) type PostgresMixRepository =
     northstar_room_postgres::mix_repository::PostgresMixRepository<RootRoomEffects>;
 
-fn source_admission(admission: db::SourceArchiveAdmission) -> SourceArchiveAdmission {
+fn source_admission(
+    admission: northstar_workflows::mix_archive::SourceArchiveAdmission,
+) -> SourceArchiveAdmission {
     match admission {
-        db::SourceArchiveAdmission::Stored(id) => SourceArchiveAdmission::Stored(id),
-        db::SourceArchiveAdmission::Replay(id) => SourceArchiveAdmission::Replay(id),
+        northstar_workflows::mix_archive::SourceArchiveAdmission::Stored(id) => {
+            SourceArchiveAdmission::Stored(id)
+        }
+        northstar_workflows::mix_archive::SourceArchiveAdmission::Replay(id) => {
+            SourceArchiveAdmission::Replay(id)
+        }
     }
 }
 
@@ -230,7 +236,7 @@ impl RoomEffects for RootRoomEffects {
         encrypted: bool,
         client_stanza_id: Option<&str>,
     ) -> Result<SourceArchiveAdmission> {
-        db::archive_mix_message_once(
+        northstar_workflows::mix_archive::archive_mix_message_once(
             pool,
             personal_archive_id,
             owner_id,
@@ -249,7 +255,7 @@ impl RoomEffects for RootRoomEffects {
         pool: &PgPool,
         request: &ArchiveRequest,
     ) -> Result<SourceArchiveAdmission> {
-        db::archive_mix_message_once_observed(pool, request)
+        northstar_workflows::mix_archive::archive_mix_message_once_observed(pool, request)
             .await
             .map(source_admission)
     }

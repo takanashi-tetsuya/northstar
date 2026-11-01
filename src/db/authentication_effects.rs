@@ -60,6 +60,7 @@ impl AuthenticationEffects for RootAuthenticationEffects {
         transaction: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
     ) -> Result<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)> {
-        super::archive_boundaries_visible_in_transaction(transaction, user_id).await
+        northstar_archive_postgres::archive_boundaries_visible_in_transaction(transaction, user_id)
+            .await
     }
 }

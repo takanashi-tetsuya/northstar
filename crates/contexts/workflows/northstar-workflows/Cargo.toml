@@ -17,11 +17,13 @@ chrono = { version = "0.4", features = ["serde"] }
 northstar-abuse-application = { path = "../../abuse/northstar-abuse-application" }
 northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
 northstar-abuse-postgres = { path = "../../abuse/northstar-abuse-postgres" }
+northstar-archive-application = { path = "../../archive/northstar-archive-application" }
 northstar-archive-postgres = { path = "../../archive/northstar-archive-postgres" }
 northstar-auth-application = { path = "../../auth/northstar-auth-application" }
 northstar-auth-core = { path = "../../auth/northstar-auth-core" }
 northstar-auth-postgres = { path = "../../auth/northstar-auth-postgres" }
 northstar-message-application = { path = "../../message/northstar-message-application" }
+northstar-delivery-core = { path = "../../message/northstar-delivery-core" }
 northstar-federation-core = { path = "../../federation/northstar-federation-core" }
 northstar-federation-postgres = { path = "../../federation/northstar-federation-postgres" }
 northstar-message-core = { path = "../../message/northstar-message-core" }

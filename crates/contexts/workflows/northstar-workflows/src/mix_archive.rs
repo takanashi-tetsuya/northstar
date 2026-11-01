@@ -1,6 +1,9 @@
 //! Exactly-once archiving of reflected MIX messages into personal archives.
 
-use super::*;
+use anyhow::Result;
+use sha2::{Digest, Sha256};
+use sqlx::{PgPool, Postgres, Row, Transaction};
+use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SourceArchiveAdmission {
@@ -57,7 +60,7 @@ pub async fn archive_mix_message_once_observed(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn archive_mix_message_once_inner(
+async fn archive_mix_message_once_inner(
     pool: &PgPool,
     personal_archive_id: Uuid,
     owner_id: Uuid,
@@ -167,7 +170,7 @@ pub(super) async fn archive_mix_message_once_inner(
     Ok(SourceArchiveAdmission::Replay(existing_id))
 }
 
-pub(super) async fn commit_mix_archive(
+async fn commit_mix_archive(
     transaction: Transaction<'_, Postgres>,
     observation: Option<&northstar_delivery_core::mix_outbox::ArchiveRequest>,
     outcome: SourceArchiveAdmission,

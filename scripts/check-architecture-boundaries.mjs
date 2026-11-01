@@ -2147,7 +2147,7 @@ for (const authority of [
   'mam_muc_archive_page',
   'mam_muc_archive_page_visible',
 ]) {
-  if (new RegExp(`\\bdb\\s*::\\s*${authority}\\b`).test(federatedMucSource)) {
+  if (new RegExp(`\\b(?:db|northstar_\\w+(?:\\s*::\\s*\\w+)*?)\\s*::\\s*${authority}\\b`).test(federatedMucSource)) {
     throw new Error(
       `federated_muc.rs bypasses the authorized MAM snapshot via db::${authority}`,
     );
@@ -2183,7 +2183,7 @@ for (const forbidden of [
   'enqueue_s2s_outbox_in_transaction',
   'mam_federated_room_archive_page_authorized_in_transaction',
 ]) {
-  if (new RegExp(`\\bdb\\s*::\\s*${forbidden}\\b`).test(federatedMucSource)) {
+  if (new RegExp(`\\b(?:db|northstar_\\w+(?:\\s*::\\s*\\w+)*?)\\s*::\\s*${forbidden}\\b`).test(federatedMucSource)) {
     throw new Error(`federated_muc.rs regained transactional authority via db::${forbidden}`);
   }
 }
@@ -2192,9 +2192,9 @@ const mamServiceBody = structBody(mamServiceSource, 'pub struct MamService');
 if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(mamServiceBody)) {
   throw new Error('MamService must receive its repository port');
 }
-const mamRepositorySource = read('src/db/mam.rs');
+const mamRepositorySource = read('crates/contexts/workflows/northstar-workflows/src/mam_repository.rs');
 const mamMetadataRepository = structBody(mamRepositorySource, 'async fn get_federated_boundaries(');
-if (!mamMetadataRepository.includes('db::mam_federated_room_archive_boundaries_authorized(')
+if (!mamMetadataRepository.includes('mam_room::mam_federated_room_archive_boundaries_authorized(')
   || !mamMetadataRepository.includes('MamMetadataResult::from_room_read(read)')) {
   throw new Error('federated MAM metadata lost its authorized archive repository result');
 }
@@ -2205,8 +2205,7 @@ if (!genericMamMetadataRepository.includes('MamQueryScope::FederatedRoom { .. } 
   throw new Error('generic federated MAM metadata or page scope no longer fails closed');
 }
 const federatedMetadataSnapshot = structBody(
-  // whole production module (the file and its non-test child files)
-  readProductionModule('src/db/archive.rs', { root }),
+  read('crates/contexts/workflows/northstar-workflows/src/mam_room.rs'),
   'pub async fn mam_federated_room_archive_boundaries_authorized(',
 );
 let previousFederatedMetadataStep = -1;
@@ -2709,7 +2708,7 @@ for (const authority of [
   'claim_push_deliveries',
   'complete_push_response',
 ]) {
-  if (new RegExp(`\\bdb\\s*::\\s*${authority}\\b`).test(miscSource)) {
+  if (new RegExp(`\\b(?:db|northstar_\\w+(?:\\s*::\\s*\\w+)*?)\\s*::\\s*${authority}\\b`).test(miscSource)) {
     throw new Error(`misc.rs bypasses its account/push application service via ${authority}`);
   }
 }
@@ -3015,7 +3014,7 @@ for (const upgradeEvidence of [
   }
 }
 // reads the whole module including test-only child files
-const archiveRepositorySource = `${readModule('src/db/archive.rs', { root })}\n${readModule('crates/contexts/message/northstar-message-postgres/src/personal_history.rs', { root })}\n${readModule('crates/contexts/workflows/northstar-workflows/src/personal_history.rs', { root })}`;
+const archiveRepositorySource = `${readModule('src/db/archive.rs', { root })}\n${readModule('crates/contexts/message/northstar-message-postgres/src/personal_history.rs', { root })}\n${readModule('crates/contexts/workflows/northstar-workflows/src/personal_history.rs', { root })}\n${read('crates/contexts/workflows/northstar-workflows/src/mam_room.rs')}\n${read('crates/contexts/workflows/northstar-workflows/src/mix_archive.rs')}`;
 if (/\bpayload_value\b/.test(archiveRepositorySource)) {
   throw new Error('archive repository must not read, bind, or persist plaintext admission payload_value');
 }

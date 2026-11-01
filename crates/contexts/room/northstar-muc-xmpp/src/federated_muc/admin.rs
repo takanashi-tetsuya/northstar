@@ -2,11 +2,11 @@
 
 use super::*;
 
-pub(super) async fn federated_muc_admin_get(
-    state: &AppState,
+pub async fn federated_muc_admin_get<H: MucHost>(
+    state: &H,
     stanza: &FederatedStanza,
     room: &MucRoom,
-    requester: &MucOccupant,
+    requester: &Occupant<H>,
     requested_affiliation: Option<String>,
     requested_role: Option<String>,
 ) -> Result<Option<String>> {
@@ -110,17 +110,17 @@ pub(super) async fn federated_muc_admin_get(
     )))
 }
 
-pub(super) struct OccupantChange<'a> {
-    pub(super) affiliation: Option<&'a str>,
-    pub(super) role: Option<&'a str>,
-    pub(super) reason: Option<&'a str>,
+pub struct OccupantChange<'a> {
+    pub affiliation: Option<&'a str>,
+    pub role: Option<&'a str>,
+    pub reason: Option<&'a str>,
 }
 
-pub(super) async fn publish_occupant_change(
-    state: &AppState,
+pub async fn publish_occupant_change<H: MucHost>(
+    state: &H,
     room: &MucRoom,
-    actor: &MucOccupant,
-    mut target: MucOccupant,
+    actor: &Occupant<H>,
+    mut target: Occupant<H>,
     change: OccupantChange<'_>,
 ) -> Result<()> {
     let proposed_affiliation = change.affiliation.unwrap_or(&target.affiliation).to_owned();
@@ -244,18 +244,18 @@ pub(super) async fn publish_occupant_change(
     Ok(())
 }
 
-pub(super) struct FederatedMucAdminActor<'a> {
-    pub(super) requester: Option<&'a MucOccupant>,
-    pub(super) authenticated_domain: &'a str,
-    pub(super) connection_id: uuid::Uuid,
-    pub(super) full_jid: &'a str,
+pub struct FederatedMucAdminActor<'a, L, E> {
+    pub requester: Option<&'a MucOccupant<L, E>>,
+    pub authenticated_domain: &'a str,
+    pub connection_id: uuid::Uuid,
+    pub full_jid: &'a str,
 }
 
-pub(super) async fn federated_muc_admin_set(
-    state: &AppState,
+pub async fn federated_muc_admin_set<H: MucHost>(
+    state: &H,
     stanza: &FederatedStanza,
     room: &MucRoom,
-    actor: FederatedMucAdminActor<'_>,
+    actor: FederatedMucAdminActor<'_, H::Outbound, H::SuspendedEndpoint>,
     items: Vec<FederatedAdminItem>,
 ) -> Result<Option<String>> {
     let FederatedMucAdminActor {
@@ -676,7 +676,7 @@ pub(super) async fn federated_muc_admin_set(
         if state.federated_muc_pg_authority_enabled() && !durable_changes.is_empty() {
             state.federated_muc_admit_mutation()?;
             let authenticated_domain = match &requester.endpoint {
-                crate::xmpp::local_routes::muc::MucOccupantEndpoint::Federated {
+                MucOccupantEndpoint::Federated {
                     authenticated_domain,
                     ..
                 } => authenticated_domain.clone(),

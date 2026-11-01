@@ -798,7 +798,7 @@ fn register_get<'a>(
     Box::pin(async move {
         let muc_domain = session.muc_domain();
         let is_local_muc_room = request.stanza.attribute("to").is_some_and(|to| {
-            crate::xmpp::protocol::muc::canonical_local_muc_room(to, &muc_domain).is_some()
+            northstar_muc_xmpp::muc::canonical_local_muc_room(to, &muc_domain).is_some()
         });
         if is_local_muc_room {
             session.muc_register_get(request.id, request.stanza).await
@@ -815,7 +815,7 @@ fn register_set<'a>(
     Box::pin(async move {
         let muc_domain = session.muc_domain();
         let is_local_muc_room = request.stanza.attribute("to").is_some_and(|to| {
-            crate::xmpp::protocol::muc::canonical_local_muc_room(to, &muc_domain).is_some()
+            northstar_muc_xmpp::muc::canonical_local_muc_room(to, &muc_domain).is_some()
         });
         if is_local_muc_room {
             session

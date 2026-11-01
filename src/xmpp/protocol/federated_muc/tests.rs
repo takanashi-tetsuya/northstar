@@ -1,7 +1,9 @@
 //! Tests for federated MUC.
 
-use super::owner::{parse_federated_owner_action, FederatedOwnerAction};
 use super::*;
+use northstar_muc_xmpp::federated_muc::owner::{
+    parse_federated_owner_action, FederatedOwnerAction,
+};
 use std::sync::Mutex;
 
 struct JoinProjectionFaultPort {

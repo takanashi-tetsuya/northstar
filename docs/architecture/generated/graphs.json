@@ -2586,6 +2586,114 @@
         "uuid"
       ],
       [
+        "northstar-muc-xmpp",
+        "anyhow"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "chrono"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "dashmap"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "futures"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-archive-core"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-delivery-core"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-federation-core"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-message-core"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-room-application"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-room-core"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-security"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-session-core"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-xep-0045"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-xep-0199"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-xep-0280"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-xep-0313"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-xep-0359"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-xep-core"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-xmpp-types"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "roxmltree"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "serde_json"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "sha2"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "tokio"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "tracing"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "uuid"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "zeroize"
+      ],
+      [
         "northstar-operations-application",
         "anyhow"
       ],
@@ -5511,6 +5619,10 @@
       ],
       [
         "rust-xmpp-server",
+        "northstar-muc-xmpp"
+      ],
+      [
+        "rust-xmpp-server",
         "northstar-operations-application"
       ],
       [
@@ -8030,6 +8142,7 @@
       "northstar-message-application",
       "northstar-message-core",
       "northstar-mix-xmpp",
+      "northstar-muc-xmpp",
       "northstar-operations-application",
       "northstar-operations-core",
       "northstar-operations-postgres",

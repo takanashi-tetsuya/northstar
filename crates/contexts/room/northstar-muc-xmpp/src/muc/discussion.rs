@@ -4,20 +4,20 @@ use super::*;
 
 /// The protocol's generated live stanza and its archive projection are bound
 /// once, before admission. No later caller supplies replacement fanout bytes.
-pub(super) struct PreparedMucDiscussion {
-    pub(super) prepared: discussion_owner::PreparedDiscussion,
-    pub(super) live: MucDiscussionLive,
+pub struct PreparedMucDiscussion {
+    pub prepared: discussion_owner::PreparedDiscussion,
+    pub live: MucDiscussionLive,
 }
 
-pub(super) struct MucDiscussionLive {
-    pub(super) room_jid: String,
-    pub(super) room_from: String,
-    pub(super) sender: String,
-    pub(super) stanza: String,
+pub struct MucDiscussionLive {
+    pub room_jid: String,
+    pub room_from: String,
+    pub sender: String,
+    pub stanza: String,
 }
 
 impl PreparedMucDiscussion {
-    pub(super) fn new(
+    pub fn new(
         prepared: discussion_owner::PreparedDiscussion,
         room: &MucRoom,
         room_jid: String,
@@ -71,10 +71,7 @@ impl PreparedMucDiscussion {
         })
     }
 
-    pub(super) fn bind(
-        self,
-        observation: discussion_owner::Observation,
-    ) -> Result<BoundMucDiscussion> {
+    pub fn bind(self, observation: discussion_owner::Observation) -> Result<BoundMucDiscussion> {
         anyhow::ensure!(
             observation.is_for(&self.prepared),
             "MUC discussion invocation mismatch"
@@ -88,14 +85,14 @@ impl PreparedMucDiscussion {
     }
 }
 
-pub(super) struct BoundMucDiscussion {
-    pub(super) request: discussion_owner::Request,
-    pub(super) observation: discussion_owner::Observation,
-    pub(super) live: MucDiscussionLive,
+pub struct BoundMucDiscussion {
+    pub request: discussion_owner::Request,
+    pub observation: discussion_owner::Observation,
+    pub live: MucDiscussionLive,
 }
 
 impl BoundMucDiscussion {
-    pub(super) fn finish(
+    pub fn finish(
         self,
         completion: discussion_owner::Completion,
     ) -> Result<Option<AcceptedMucDiscussion>> {
@@ -107,13 +104,13 @@ impl BoundMucDiscussion {
     }
 }
 
-pub(super) struct AcceptedMucDiscussion {
-    pub(super) live: MucDiscussionLive,
-    pub(super) permit: discussion_owner::FanoutPermit,
+pub struct AcceptedMucDiscussion {
+    pub live: MucDiscussionLive,
+    pub permit: discussion_owner::FanoutPermit,
 }
 
 impl AcceptedMucDiscussion {
-    pub(super) async fn fanout(self, session: &ProtocolSession) -> Result<bool> {
+    pub async fn fanout(self, session: &impl MucSession) -> Result<bool> {
         let Self { live, permit } = self;
         Ok(run_muc_discussion_fanout(
             &MucMessageFanout {
@@ -132,28 +129,28 @@ impl AcceptedMucDiscussion {
 /// Adapts the accepted live-message effects without exposing persistence or
 /// acknowledgement authority to the fan-out owner. The caller still owns its
 /// standalone room mutation guard across this entire operation.
-pub(super) struct MucMessageFanout<'a> {
-    pub(super) session: &'a ProtocolSession,
-    pub(super) room_jid: &'a str,
-    pub(super) room_from: &'a str,
-    pub(super) sender: &'a str,
-    pub(super) stanza: &'a str,
+pub struct MucMessageFanout<'a, S> {
+    pub session: &'a S,
+    pub room_jid: &'a str,
+    pub room_from: &'a str,
+    pub sender: &'a str,
+    pub stanza: &'a str,
 }
 
-impl MucFanoutPort for MucMessageFanout<'_> {
-    type Recipient = crate::xmpp::local_routes::muc::MucOccupant;
+impl<S: MucSession> MucFanoutPort for MucMessageFanout<'_, S> {
+    type Recipient = Occupant<S::Host>;
     type Blocked = std::collections::HashSet<String>;
 
     fn enter(&self, stage: MucFanoutStage) {
         self.session.enter_frame_stage(match stage {
-            MucFanoutStage::Cluster => Stage::MucClusterFanout,
-            MucFanoutStage::Local => Stage::MucLocalFanout,
+            MucFanoutStage::Cluster => MucFrameStage::ClusterFanout,
+            MucFanoutStage::Local => MucFrameStage::LocalFanout,
         });
     }
 
     async fn publish_cluster(&self) {
         run_muc_cluster_fan_out(
-            &self.session.state,
+            self.session.host(),
             self.room_jid,
             self.stanza,
             Some(self.sender),
@@ -164,7 +161,7 @@ impl MucFanoutPort for MucMessageFanout<'_> {
 
     fn recipients(&self) -> Vec<Self::Recipient> {
         self.session
-            .state
+            .host()
             .muc_occupants_for(self.room_jid)
             .into_iter()
             .map(|(_, occupant)| occupant)
@@ -173,7 +170,7 @@ impl MucFanoutPort for MucMessageFanout<'_> {
 
     async fn blocked<'a>(&'a self, recipients: &'a [Self::Recipient]) -> Self::Blocked {
         self.session
-            .state
+            .host()
             .blocked_muc_recipient_accounts(
                 recipients,
                 &[self.room_from.to_owned(), self.sender.to_owned()],
@@ -189,14 +186,14 @@ impl MucFanoutPort for MucMessageFanout<'_> {
         let delivery = set_to(self.stanza, &recipient.full_jid);
         tracing::debug!(room = self.room_jid, to = %recipient.full_jid, "MUC routing stanza");
         self.session
-            .state
+            .host()
             .deliver_to_muc_occupant_unchecked(recipient, delivery)
             .await
     }
 
     fn record_failure(&self, recipient: &Self::Recipient) {
         record_muc_post_commit_failure(
-            &self.session.state,
+            self.session.host(),
             self.room_jid,
             &recipient.full_jid,
             "local/federated occupant queue",

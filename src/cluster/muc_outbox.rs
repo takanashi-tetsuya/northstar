@@ -674,7 +674,7 @@ pub(super) async fn deliver_cluster_muc_event(
                         .context("cluster MUC offline affiliation has no affiliation")?;
                     let nick = offline.get("nick").and_then(serde_json::Value::as_str);
                     let reason = offline.get("reason").and_then(serde_json::Value::as_str);
-                    let notice = crate::xmpp::protocol::muc::muc_offline_affiliation_change_notice(
+                    let notice = northstar_muc_xmpp::muc::muc_offline_affiliation_change_notice(
                         &room_jid,
                         bare_jid,
                         affiliation,
@@ -734,14 +734,13 @@ pub(super) async fn deliver_cluster_muc_event(
                             change["affiliation"].as_str().expect("batch was validated");
                         let nick = change["nick"].as_str();
                         let reason = change["reason"].as_str();
-                        let notice =
-                            crate::xmpp::protocol::muc::muc_offline_affiliation_change_notice(
-                                &room_jid,
-                                bare_jid,
-                                affiliation,
-                                nick,
-                                reason,
-                            );
+                        let notice = northstar_muc_xmpp::muc::muc_offline_affiliation_change_notice(
+                            &room_jid,
+                            bare_jid,
+                            affiliation,
+                            nick,
+                            reason,
+                        );
                         let notice =
                             crate::services::xml_util::set_to(&notice, &recipient.full_jid);
                         stanzas.push(crate::services::xml_util::set_root_attribute(

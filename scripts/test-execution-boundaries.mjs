@@ -512,35 +512,35 @@ function rejectsRoom(name, file, before, after, expected) {
 }
 test('current production room owners satisfy the gate', () => verifyRoomExecutionBoundaries(baseline));
 rejectsRoom('MUC policy observation cannot be removed', 'muc',
-  'self.enter_frame_stage(Stage::MucPolicy);', '', /MUC message policy/);
+  'session.enter_frame_stage(MucFrameStage::Policy);', '', /MUC message policy/);
 rejectsRoom('MUC wait stage cannot be supplied by a comment', 'muc',
-  'self.enter_frame_stage(Stage::MucGateWait);',
-  '/* self.enter_frame_stage(Stage::MucGateWait); */', /MUC standalone gate wait/);
+  'session.enter_frame_stage(MucFrameStage::GateWait);',
+  '/* session.enter_frame_stage(MucFrameStage::GateWait); */', /MUC standalone gate wait/);
 rejectsRoom('MUC authority observation cannot be removed', 'muc',
-  'self.enter_frame_stage(Stage::MucAuthority);', '', /MUC standalone gate wait/);
+  'session.enter_frame_stage(MucFrameStage::Authority);', '', /MUC standalone gate wait/);
 for (const call of [
-  'match self\n                .state\n                .muc_service()\n                .execute_muc_retraction(',
+  'match session\n                .host()\n                .muc_service()\n                .execute_muc_retraction(',
   'match service\n                    .set_local_cluster_subject(',
   'match service\n                .execute_muc_subject(',
 ]) {
   const gap = call.includes('set_local_cluster_subject') ? '\n                ' : '\n            ';
   rejectsRoom(`MUC admission hook cannot disappear before ${call.split('.').at(-1)}`, 'muc',
-    'self.enter_frame_stage(Stage::MucAdmission);' + gap + call, call, /MUC admission stage/);
+    'session.enter_frame_stage(MucFrameStage::Admission);' + gap + call, call, /MUC admission stage/);
 }
 rejectsRoom('observed MUC admission must retain its frame stage', 'muc',
-  'self.enter_frame_stage(Stage::MucAdmission);\n                let completion = self',
-  'let completion = self', /MUC admission stage/);
+  'session.enter_frame_stage(MucFrameStage::Admission);\n                let completion = session',
+  'let completion = session', /MUC admission stage/);
 rejectsRoom('legacy MUC admission must retain its frame stage', 'muc',
-  'self.enter_frame_stage(Stage::MucAdmission);\n                self.state\n                    .muc_service()\n                    .execute_muc_discussion(',
-  'self.state\n                    .muc_service()\n                    .execute_muc_discussion(', /MUC admission stage/);
+  'session.enter_frame_stage(MucFrameStage::Admission);\n                session.host()\n                    .muc_service()\n                    .execute_muc_discussion(',
+  'session.host()\n                    .muc_service()\n                    .execute_muc_discussion(', /MUC admission stage/);
 rejectsRoom('MUC replay cannot become fresh live fanout', 'muc',
   'fanout_disposition = MucFanoutDisposition::Replay;',
   'fanout_disposition = MucFanoutDisposition::Accepted;', /MUC replay and accepted fanout/);
 rejectsRoom('MUC message cannot bypass reviewed fanout owner', 'muc',
-  'accepted.fanout(self).await?', 'unreviewed_fanout(self).await?', /MUC replay and accepted fanout/);
+  'accepted.fanout(session).await?', 'unreviewed_fanout(session).await?', /MUC replay and accepted fanout/);
 rejectsRoom('MUC fanout stage adapter cannot swap local and cluster meaning', 'muc',
-  'MucFanoutStage::Cluster => Stage::MucClusterFanout,',
-  'MucFanoutStage::Cluster => Stage::MucLocalFanout,', /MUC fanout adapter/);
+  'MucFanoutStage::Cluster => MucFrameStage::ClusterFanout,',
+  'MucFanoutStage::Cluster => MucFrameStage::LocalFanout,', /MUC fanout adapter/);
 rejectsRoom('MUC fanout cannot report effects for replay', 'mucFanout',
   'if disposition == MucFanoutDisposition::Replay {\n        return false;\n    }',
   'if disposition == MucFanoutDisposition::Replay {\n        return true;\n    }', /MUC fanout must skip replay/);
@@ -677,8 +677,8 @@ rejectsRoom('worker-owned MIX result cannot skip acknowledgement', 'mix',
 rejectsMixWorker('MIX claimed delivery cannot bypass lazy settlement owner', 'mix',
   'completion.settlement(command, closed)?', 'unreviewed_settlement(command, closed)?', /MIX claimed delivery/);
 test('MUC room guard cannot be released before accepted fanout', () => {
-  const start = baseline.muc.indexOf('        let attempted = if let Some(accepted) = discussion_fanout {');
-  const release = '        drop(local_authority_guard);';
+  const start = baseline.muc.indexOf('    let attempted = if let Some(accepted) = discussion_fanout {');
+  const release = '    drop(local_authority_guard);';
   const end = baseline.muc.indexOf(release, start);
   assert.ok(start >= 0 && end > start);
   const before = baseline.muc.slice(start, end + release.length);
@@ -774,8 +774,8 @@ rejectsMucDiscussion('MUC bound envelope cannot consume another invocation resul
 rejectsMucDiscussion('MUC accepted envelope cannot substitute fanout payload', 'muc',
   'stanza: &live.stanza', 'stanza: &replacement', /cannot substitute live payload/);
 rejectsRoom('MUC discussion registration failure cannot select legacy fallback', 'muc',
-  'self.muc_discussion_operation(&prepared.prepared)?',
-  'self.muc_discussion_operation(&prepared.prepared).ok().flatten()', /MUC discussion dispatch/);
+  'session.muc_discussion_operation(&prepared.prepared)?',
+  'session.muc_discussion_operation(&prepared.prepared).ok().flatten()', /MUC discussion dispatch/);
 rejectsRoom('MUC active frame cannot be filtered into legacy admission', 'muc',
   'if let Some(operation) = operation {',
   'if let Some(operation) = operation.filter(|_| false) {', /MUC discussion dispatch/);

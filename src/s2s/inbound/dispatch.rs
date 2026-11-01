@@ -295,7 +295,7 @@ pub(super) async fn route_inbound_scoped(
         };
         return match root.tag_name().name() {
             "presence" => {
-                crate::xmpp::protocol::federated_muc::federated_muc_presence(
+                northstar_muc_xmpp::federated_muc::federated_muc_presence(
                     state,
                     authenticated_domain,
                     connection_id,
@@ -305,7 +305,7 @@ pub(super) async fn route_inbound_scoped(
                 .await
             }
             "message" => {
-                crate::xmpp::protocol::federated_muc::federated_muc_message(
+                northstar_muc_xmpp::federated_muc::federated_muc_message(
                     state,
                     authenticated_domain,
                     connection_id,
@@ -315,7 +315,7 @@ pub(super) async fn route_inbound_scoped(
                 .await
             }
             "iq" => {
-                crate::xmpp::protocol::federated_muc::federated_muc_iq(
+                northstar_muc_xmpp::federated_muc::federated_muc_iq(
                     state,
                     authenticated_domain,
                     connection_id,

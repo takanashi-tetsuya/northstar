@@ -2117,6 +2117,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-muc-xmpp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dashmap",
+ "futures",
+ "northstar-archive-core",
+ "northstar-delivery-core",
+ "northstar-federation-core",
+ "northstar-message-core",
+ "northstar-room-application",
+ "northstar-room-core",
+ "northstar-security",
+ "northstar-session-core",
+ "northstar-xep-0045",
+ "northstar-xep-0199",
+ "northstar-xep-0280",
+ "northstar-xep-0313",
+ "northstar-xep-0359",
+ "northstar-xep-core",
+ "northstar-xml-builder",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "northstar-operations-application"
 version = "0.1.0"
 dependencies = [
@@ -3741,6 +3774,7 @@ dependencies = [
  "northstar-message-application",
  "northstar-message-core",
  "northstar-mix-xmpp",
+ "northstar-muc-xmpp",
  "northstar-operations-application",
  "northstar-operations-core",
  "northstar-operations-postgres",

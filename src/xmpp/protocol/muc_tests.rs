@@ -5,10 +5,10 @@ use super::{
     muc_voice_request, parse_moderation_request, parse_muc_admin_batch, parse_muc_admin_raw_items,
     parse_muc_author_retraction, parse_muc_history_request, parse_muc_invitation_decline,
     parse_muc_origin_id, parse_muc_subject_command, parse_muc_voice_form,
-    should_broadcast_offline_affiliation_change, ModerationRequest, MucAdminBatchChange,
-    MucAdminBatchOutcome, MucAdminChange, MucAdminMutationKind, MucAdminParseError,
-    MucAdminRawItem, MucHistoryRequest, MucPostCommitAdmissionError, MucPostCommitPlan,
-    MucVoiceForm,
+    should_broadcast_offline_affiliation_change, MalformedMucStanza, ModerationRequest,
+    MucAdminBatchChange, MucAdminBatchOutcome, MucAdminChange, MucAdminMutationKind,
+    MucAdminParseError, MucAdminRawItem, MucHistoryRequest, MucPostCommitAdmissionError,
+    MucPostCommitPlan, MucVoiceForm,
 };
 
 #[test]
@@ -294,7 +294,7 @@ fn admin_batch_parser_preserves_order_and_normalizes_targets() {
         }
     );
     // The new shape is parsed, but no non-atomic writer is allowed to run it.
-    assert_eq!(classify_muc_admin_items(&items), Err(()));
+    assert_eq!(classify_muc_admin_items(&items), Err(MalformedMucStanza));
 }
 
 #[test]
@@ -349,7 +349,7 @@ fn admin_batch_parser_bounds_items_and_preserves_malformed_target_error() {
         .filter(|node| node.is_element())
         .collect::<Vec<_>>();
     assert_eq!(parse_muc_admin_batch(&nodes).unwrap().items.len(), 63);
-    assert_eq!(classify_muc_admin_items(&nodes), Err(()));
+    assert_eq!(classify_muc_admin_items(&nodes), Err(MalformedMucStanza));
 
     let xml = format!("<query xmlns='http://jabber.org/protocol/muc#admin'>{items}<item nick='Extra' role='none'/></query>");
     let document = roxmltree::Document::parse(&xml).unwrap();

@@ -414,8 +414,8 @@ pub(super) async fn handle_hostname_binding(
     // Everything derived from the stanza parser is now owned (`id` and
     // `hostname`); release the document before the asynchronous MUC cleanup.
     drop(document);
-    if let Err(error) = crate::xmpp::protocol::federated_muc::federated_muc_connection_closed(
-        &state,
+    if let Err(error) = northstar_muc_xmpp::federated_muc::federated_muc_connection_closed(
+        state.as_ref(),
         &hostname,
         connection_id,
     )
@@ -583,8 +583,8 @@ pub(super) async fn cleanup_component_muc(
     connection_id: Uuid,
 ) {
     for domain in domains {
-        if let Err(error) = crate::xmpp::protocol::federated_muc::federated_muc_connection_closed(
-            &state,
+        if let Err(error) = northstar_muc_xmpp::federated_muc::federated_muc_connection_closed(
+            state.as_ref(),
             &domain,
             connection_id,
         )

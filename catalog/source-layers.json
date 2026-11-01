@@ -77,9 +77,6 @@
     "src/xmpp/protocol/caps.rs": [
       "state"
     ],
-    "src/xmpp/protocol/federated_muc.rs": [
-      "state"
-    ],
     "src/xmpp/protocol/misc.rs": [
       "state"
     ],

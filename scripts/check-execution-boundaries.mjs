@@ -24,7 +24,7 @@ const files = {
   bosh: 'src/bosh.rs',
   boshAction: 'src/bosh/action.rs',
   outbound: 'src/xmpp/outbound.rs',
-  muc: 'src/xmpp/protocol/muc.rs',
+  muc: 'crates/contexts/room/northstar-muc-xmpp/src/muc.rs',
   mucFanout: 'crates/contexts/room/northstar-room-application/src/muc_service/fanout.rs',
   mucCore: 'crates/contexts/room/northstar-room-application/src/discussion.rs',
   mucApplication: 'crates/contexts/room/northstar-room-application/src/lib.rs',
@@ -1835,38 +1835,38 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
 export function verifyRoomExecutionBoundaries(sources) {
   const { muc, mucFanout, mix } = sources;
   const message = compact(body(muc, 'async\\s+fn\\s+muc_message\\b'));
-  requireBoundary(message.startsWith('self.enter_frame_stage(Stage::MucPolicy);'),
+  requireBoundary(message.startsWith('session.enter_frame_stage(MucFrameStage::Policy);'),
     'MUC message policy stage must precede principal and protocol policy checks');
-  requireBoundary(message.includes('letlocal_authority_guard=ifself.state.muc_pg_authority_enabled(){None}else{self.enter_frame_stage(Stage::MucGateWait);Some(self.state.muc_service().lock_local_room_mutation(initial_room.id).await,)};self.enter_frame_stage(Stage::MucAuthority);'),
+  requireBoundary(message.includes('letlocal_authority_guard=ifsession.host().muc_pg_authority_enabled(){None}else{session.enter_frame_stage(MucFrameStage::GateWait);Some(session.host().muc_service().lock_local_room_mutation(initial_room.id).await,)};session.enter_frame_stage(MucFrameStage::Authority);'),
     'MUC standalone gate wait and authority stages must surround the actual guard acquisition');
   for (const call of [
-    'matchself.state.muc_service().execute_muc_retraction(',
+    'matchsession.host().muc_service().execute_muc_retraction(',
     'matchservice.set_local_cluster_subject(',
     'matchservice.execute_muc_subject(',
-    'letcompletion=self.state.muc_service().execute_muc_discussion_observed(',
-    'self.state.muc_service().execute_muc_discussion(',
+    'letcompletion=session.host().muc_service().execute_muc_discussion_observed(',
+    'session.host().muc_service().execute_muc_discussion(',
   ]) {
-    requireBoundary(message.includes('self.enter_frame_stage(Stage::MucAdmission);' + call),
+    requireBoundary(message.includes('session.enter_frame_stage(MucFrameStage::Admission);' + call),
       `MUC admission stage must immediately precede ${call}`);
   }
-  const discussionDispatch = 'letoperation=self.muc_discussion_operation(&prepared.prepared)?;' +
+  const discussionDispatch = 'letoperation=session.muc_discussion_operation(&prepared.prepared)?;' +
     'letadmission=ifletSome(operation)=operation{' +
     'letbound=prepared.bind(operation)?;' +
-    'self.enter_frame_stage(Stage::MucAdmission);' +
-    'letcompletion=self.state.muc_service().execute_muc_discussion_observed(&bound.request).await?;' +
+    'session.enter_frame_stage(MucFrameStage::Admission);' +
+    'letcompletion=session.host().muc_service().execute_muc_discussion_observed(&bound.request).await?;' +
     'letadmission=completion.outcome();discussion_fanout=bound.finish(completion)?;admission' +
-    '}else{self.enter_frame_stage(Stage::MucAdmission);' +
-    'self.state.muc_service().execute_muc_discussion(prepared.prepared.command()).await?};';
+    '}else{session.enter_frame_stage(MucFrameStage::Admission);' +
+    'session.host().muc_service().execute_muc_discussion(prepared.prepared.command()).await?};';
   requireBoundary(message.replace(/,\)/g, ')').includes(discussionDispatch),
     'MUC discussion dispatch must retain the unfiltered active-frame branch and bound request/completion chain');
   requireBoundary(message.includes('MucDiscussionAdmission::Replay(_)=>{fanout_disposition=MucFanoutDisposition::Replay;}') &&
-    message.includes('letoperation=self.muc_discussion_operation(&prepared.prepared)?;') &&
+    message.includes('letoperation=session.muc_discussion_operation(&prepared.prepared)?;') &&
     message.includes('discussion_fanout=bound.finish(completion)?;') &&
-    message.includes('letattempted=ifletSome(accepted)=discussion_fanout{accepted.fanout(self).await?}else{run_muc_fanout(&MucMessageFanout{session:self,room_jid:&room_jid,room_from:&room_from,sender:from,stanza:&rewritten,},fanout_disposition,).await};if!attempted{returnOk(Action::None);}drop(local_authority_guard);'),
+    message.includes('letattempted=ifletSome(accepted)=discussion_fanout{accepted.fanout(session).await?}else{run_muc_fanout(&MucMessageFanout{session,room_jid:&room_jid,room_from:&room_from,sender:from,stanza:&rewritten,},fanout_disposition,).await};if!attempted{returnOk(MucAction::None);}drop(local_authority_guard);'),
   'MUC replay and accepted fanout must use the typed owner before releasing the room guard');
-  const adapter = body(muc, 'impl\\s+MucFanoutPort\\s+for\\s+MucMessageFanout\\b');
+  const adapter = body(muc, 'impl<S:\\s*MucSession>\\s+MucFanoutPort\\s+for\\s+MucMessageFanout\\b');
   const stageAdapter = compact(body(adapter, 'fn\\s+enter\\b'));
-  requireBoundary(stageAdapter === 'self.session.enter_frame_stage(matchstage{MucFanoutStage::Cluster=>Stage::MucClusterFanout,MucFanoutStage::Local=>Stage::MucLocalFanout,});',
+  requireBoundary(stageAdapter === 'self.session.enter_frame_stage(matchstage{MucFanoutStage::Cluster=>MucFrameStage::ClusterFanout,MucFanoutStage::Local=>MucFrameStage::LocalFanout,});',
     'MUC fanout adapter must attribute both stages to the originating session');
   const fanout = compact(body(mucFanout, 'async\\s+fn\\s+run_muc_fanout\\b'));
   requireBoundary(fanout === 'ifdisposition==MucFanoutDisposition::Replay{returnfalse;}run_muc_fanout_effects(port,None).await.expect();true',

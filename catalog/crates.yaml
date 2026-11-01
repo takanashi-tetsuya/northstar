@@ -244,6 +244,16 @@ crates:
     api_stability: internal
     publish_policy: never
 
+  - crate_id: northstar-muc-xmpp
+    package: northstar-muc-xmpp
+    path: crates/contexts/room/northstar-muc-xmpp
+    tier: context
+    context: room
+    role: adapter
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-operations-application
     package: northstar-operations-application
     path: crates/contexts/operations/northstar-operations-application

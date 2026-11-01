@@ -6,8 +6,6 @@ use northstar_archive_application::{
 use northstar_room_core::stanza::{mam_muc_stanza, muc_occupant_id, set_muc_occupant_id};
 use roxmltree::Node;
 
-pub(crate) use northstar_archive_core::mam_parse::{parse_mam_query, ParsedMamQuery};
-
 fn action(reply: northstar_archive_xmpp::MamReply) -> Action {
     match reply {
         northstar_archive_xmpp::MamReply::Send(x) => Action::Send(x),

@@ -4,14 +4,14 @@ use super::admin::{publish_occupant_change, OccupantChange};
 use super::*;
 
 #[derive(Debug)]
-pub(super) struct FederatedRoomConfig {
-    pub(super) title: Option<String>,
+pub struct FederatedRoomConfig {
+    pub title: Option<String>,
     description: Option<String>,
     persistent: bool,
     members_only: bool,
-    pub(super) public: bool,
+    pub public: bool,
     moderated: bool,
-    pub(super) non_anonymous: bool,
+    pub non_anonymous: bool,
     max_occupants: i32,
     password_secret: Option<String>,
     keep_password_hash: bool,
@@ -22,7 +22,7 @@ pub(super) struct FederatedRoomConfig {
     allow_registration: bool,
 }
 
-pub(super) enum FederatedOwnerAction {
+pub enum FederatedOwnerAction {
     Cancel,
     Destroy {
         alternate: Option<String>,
@@ -31,12 +31,12 @@ pub(super) enum FederatedOwnerAction {
     Configure(FederatedRoomConfig),
 }
 
-pub(super) enum FederatedRegistrationAction {
+pub enum FederatedRegistrationAction {
     Remove,
     Register(String),
 }
 
-pub(super) fn parse_federated_registration_action(
+pub fn parse_federated_registration_action(
     raw: &str,
 ) -> std::result::Result<FederatedRegistrationAction, &'static str> {
     let document = roxmltree::Document::parse(raw).map_err(|_| "bad-request")?;
@@ -84,7 +84,7 @@ fn federated_owner_form(room: &MucRoom) -> String {
     )
 }
 
-pub(super) fn parse_federated_owner_action(
+pub fn parse_federated_owner_action(
     raw: &str,
     room: &MucRoom,
 ) -> std::result::Result<FederatedOwnerAction, &'static str> {
@@ -223,11 +223,11 @@ pub(super) fn parse_federated_owner_action(
     }))
 }
 
-pub(super) async fn federated_muc_owner(
-    state: &AppState,
+pub async fn federated_muc_owner<H: MucHost>(
+    state: &H,
     stanza: &FederatedStanza,
     room: &MucRoom,
-    requester: &MucOccupant,
+    requester: &Occupant<H>,
     set: bool,
 ) -> Result<Option<String>> {
     let mut guarded_room = None;
@@ -431,7 +431,7 @@ pub(super) async fn federated_muc_owner(
             let outcome = if state.federated_muc_pg_authority_enabled() {
                 state.federated_muc_admit_mutation()?;
                 let authenticated_domain = match &requester.endpoint {
-                    crate::xmpp::local_routes::muc::MucOccupantEndpoint::Federated {
+                    MucOccupantEndpoint::Federated {
                         authenticated_domain,
                         ..
                     } => authenticated_domain.clone(),

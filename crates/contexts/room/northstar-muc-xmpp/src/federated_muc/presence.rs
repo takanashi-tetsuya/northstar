@@ -5,8 +5,8 @@ use super::*;
 /// Handle a presence addressed to a local conference room by a remote entity.
 /// `authenticated_domain` and `connection_id` MUST come from the authenticated
 /// S2S stream, never from stanza attributes.
-pub(crate) fn federated_muc_presence<'a>(
-    state: &'a AppState,
+pub fn federated_muc_presence<'a>(
+    state: &'a impl MucHost,
     authenticated_domain: &str,
     connection_id: uuid::Uuid,
     root: Node<'_, '_>,
@@ -20,7 +20,7 @@ pub(crate) fn federated_muc_presence<'a>(
 }
 
 async fn federated_muc_presence_owned(
-    state: &AppState,
+    state: &impl MucHost,
     authenticated_domain: &str,
     connection_id: uuid::Uuid,
     request: FederatedPresenceRequest,
@@ -658,7 +658,7 @@ async fn federated_muc_presence_owned(
             };
             let history_request = match request.history_request {
                 Ok(request) => request,
-                Err(()) => {
+                Err(MalformedMucStanza) => {
                     return Ok(federated_error(
                         &request.stanza,
                         from,
@@ -946,7 +946,7 @@ async fn federated_muc_presence_owned(
     }
     let history_request = match request.history_request {
         Ok(history_request) => history_request,
-        Err(()) => {
+        Err(MalformedMucStanza) => {
             return Ok(federated_error(
                 &request.stanza,
                 from,

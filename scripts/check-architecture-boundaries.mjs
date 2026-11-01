@@ -2132,7 +2132,7 @@ if (!/impl\s+std::fmt::Debug\s+for\s+PasswordCredentials\b/.test(authCorePasswor
 // cursor validation or archive page may be composed directly in the protocol
 // handler. These checks apply to the whole production module (the file and its
 // non-test child files).
-const federatedMucSource = readProductionModule('src/xmpp/protocol/federated_muc.rs', { root });
+const federatedMucSource = readProductionModule('crates/contexts/room/northstar-muc-xmpp/src/federated_muc.rs', { root });
 if (/\bstate\s*\.\s*cluster\b/.test(federatedMucSource)) {
   throw new Error('federated MUC handlers must use purpose-specific state operations, not cluster authority');
 }
@@ -2154,7 +2154,8 @@ for (const authority of [
     );
   }
 }
-if (!/\.mam_service\s*\(\s*\)/.test(federatedMucSource)) {
+if (!/\.execute_federated_mam_metadata\s*\(/.test(federatedMucSource)
+  || !/self\s*\.mam_service\s*\(\s*\)\s*\.execute_federated_mam_metadata\s*\(/.test(read('src/state/muc_host.rs'))) {
   throw new Error('federated_muc.rs no longer routes MAM authority through mam_service()');
 }
 const federatedIqHandler = rustItemBody(federatedMucSource, 'async fn federated_muc_iq_owned(');
@@ -2599,7 +2600,7 @@ for (const handler of ['prepare_omemo_recovery', 'seal_omemo_recovery', 'get_ome
 // than hiding every item after the first cfg(test) marker. These checks apply
 // to the whole production module (the file and its non-test child files), so
 // code moved into a child file stays covered.
-const mucProtocolSource = readProductionModule('src/xmpp/protocol/muc.rs', { root });
+const mucProtocolSource = readProductionModule('crates/contexts/room/northstar-muc-xmpp/src/muc.rs', { root });
 const mucProductionSource = productionWithoutCfgTestModules(
   mucProtocolSource,
   'muc.rs production',
@@ -3720,7 +3721,7 @@ if (/\bself\.state\s*\.metrics\b/.test(presenceProtocol)
   throw new Error('cross-node presence replay failures must use their one-counter telemetry port');
 }
 // reads the whole module including test-only child files
-const mucProtocol = readModule('src/xmpp/protocol/muc.rs', { root });
+const mucProtocol = readModule('crates/contexts/room/northstar-muc-xmpp/src/muc.rs', { root });
 if (/\b(?:self\.)?state\s*\.metrics\b/.test(mucProtocol)
     || !mucProtocol.includes('state.muc_telemetry().post_commit_failure()')) {
   throw new Error('MUC authority and post-commit reporting must use its narrow telemetry port');

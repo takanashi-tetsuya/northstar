@@ -263,8 +263,8 @@ pub(super) async fn drive_authenticated_inbound(
         .remove_bidirectional_if_connection(&route_key, connection_id);
     crate::xmpp::protocol::caps::federated_caps_connection_closed(&state, connection_id).await;
     let cleanup = AssertUnwindSafe(
-        crate::xmpp::protocol::federated_muc::federated_muc_connection_closed(
-            &state,
+        northstar_muc_xmpp::federated_muc::federated_muc_connection_closed(
+            state.as_ref(),
             &authenticated_domain,
             connection_id,
         ),

@@ -170,8 +170,8 @@ pub(super) async fn connect_and_multiplex(
     .await;
     crate::xmpp::protocol::caps::federated_caps_connection_closed(state, connection_id).await;
     let cleanup = AssertUnwindSafe(
-        crate::xmpp::protocol::federated_muc::federated_muc_connection_closed(
-            state,
+        northstar_muc_xmpp::federated_muc::federated_muc_connection_closed(
+            state.as_ref(),
             target_domain,
             connection_id,
         ),

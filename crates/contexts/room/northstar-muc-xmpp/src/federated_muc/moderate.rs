@@ -2,11 +2,11 @@
 
 use super::*;
 
-pub(super) async fn federated_muc_moderate(
-    state: &AppState,
+pub async fn federated_muc_moderate<H: MucHost>(
+    state: &H,
     stanza: &FederatedStanza,
     room: &MucRoom,
-    moderator: &MucOccupant,
+    moderator: &Occupant<H>,
     target: Option<String>,
     reason: Option<String>,
     has_retract: bool,

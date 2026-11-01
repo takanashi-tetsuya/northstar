@@ -4,8 +4,8 @@ use super::*;
 
 /// Handle messages from a remote room actor. Authorization is bound to the
 /// occupant endpoint, not merely to a claimed room nickname.
-pub(crate) fn federated_muc_message<'a>(
-    state: &'a AppState,
+pub fn federated_muc_message<'a>(
+    state: &'a impl MucHost,
     authenticated_domain: &str,
     connection_id: uuid::Uuid,
     root: Node<'_, '_>,
@@ -20,7 +20,7 @@ pub(crate) fn federated_muc_message<'a>(
 }
 
 async fn federated_muc_message_owned(
-    state: &AppState,
+    state: &impl MucHost,
     authenticated_domain: &str,
     connection_id: uuid::Uuid,
     request: FederatedMessageRequest,
@@ -76,7 +76,7 @@ async fn federated_muc_message_owned(
     }
     let decline = match &request.decline {
         Ok(decline) => decline.clone(),
-        Err(()) => {
+        Err(MalformedMucStanza) => {
             return Ok(federated_error(
                 &request.stanza,
                 from,
@@ -174,21 +174,17 @@ async fn federated_muc_message_owned(
             }
             let mut targets = state.session_entries_for(&target_raw);
             if target.resourcepart().is_none() {
-                targets.retain(|(_, session)| {
-                    session.available.load(Ordering::Relaxed)
-                        && session.priority.load(Ordering::Relaxed) >= 0
-                });
+                targets.retain(|(_, session)| session.is_available() && session.priority() >= 0);
                 targets.sort_by(|(left_jid, left), (right_jid, right)| {
                     right
-                        .priority
-                        .load(Ordering::Relaxed)
-                        .cmp(&left.priority.load(Ordering::Relaxed))
+                        .priority()
+                        .cmp(&left.priority())
                         .then_with(|| left_jid.cmp(right_jid))
                 });
             }
             let mut delivered = targets
                 .into_iter()
-                .any(|(_, session)| session.sender.try_send(forwarded.clone()).is_ok());
+                .any(|(_, session)| session.sender().try_send(forwarded.clone()).is_ok());
             if !delivered {
                 delivered = state
                     .route_federated_muc_account_message_remote(&target_raw, &forwarded, None)
@@ -226,8 +222,7 @@ async fn federated_muc_message_owned(
         }
         if !state.xmpp_external_route_domain_allowed(target.domainpart())
             || !state
-                .federation_outbox()
-                .send(target.domainpart(), forwarded, Some(room_jid.clone()))
+                .send_federated(target.domainpart(), forwarded, Some(room_jid.clone()))
                 .await
         {
             return Ok(federated_error(
@@ -277,7 +272,7 @@ async fn federated_muc_message_owned(
     };
     let voice_form = match &request.voice_form {
         Ok(form) => form.as_ref(),
-        Err(()) => {
+        Err(MalformedMucStanza) => {
             return Ok(federated_error(
                 &request.stanza,
                 from,
@@ -814,29 +809,25 @@ async fn federated_muc_message_owned(
                 };
                 let mut targets = state.session_entries_for(&invitee_jid);
                 if invitee.resourcepart().is_none() {
-                    targets.retain(|(_, session)| {
-                        session.available.load(Ordering::Relaxed)
-                            && session.priority.load(Ordering::Relaxed) >= 0
-                    });
+                    targets
+                        .retain(|(_, session)| session.is_available() && session.priority() >= 0);
                     targets.sort_by(|(left_jid, left), (right_jid, right)| {
                         right
-                            .priority
-                            .load(Ordering::Relaxed)
-                            .cmp(&left.priority.load(Ordering::Relaxed))
+                            .priority()
+                            .cmp(&left.priority())
                             .then_with(|| left_jid.cmp(right_jid))
                     });
                 }
                 if let Some(message_id) = durable_invite {
                     if state.federated_muc_pg_authority_enabled()
-                        && (!crate::services::messaging::committed_live_delivery_has_fence(
+                        && (!northstar_message_core::live_reservation_valid(
                             true,
                             message_id,
                             live_claim_id,
-                        ) || state.message_service().direct_mode()
-                            != crate::cluster::DirectPostCommitMode::Live)
+                        ) || state.message_direct_mode()
+                            != northstar_message_core::DirectPostCommitMode::Live)
                     {
                         state
-                            .message_service()
                             .rearm_unrouted_live_direct(
                                 local_user.id,
                                 message_id,
@@ -847,7 +838,7 @@ async fn federated_muc_message_owned(
                     }
                 }
                 let live_delivery =
-                    durable_invite.map(|message_id| crate::xmpp::outbound::DurableDelivery {
+                    durable_invite.map(|message_id| northstar_delivery_core::DurableDelivery {
                         recipient_id: local_user.id,
                         message_id,
                         claim_id: live_claim_id,
@@ -857,11 +848,11 @@ async fn federated_muc_message_owned(
                 for (full_jid, session) in targets {
                     let accepted = if let Some(delivery) = live_delivery {
                         session
-                            .sender
+                            .sender()
                             .try_send_durable(invitation.clone(), delivery)
                             .is_ok()
                     } else {
-                        session.sender.try_send(invitation.clone()).is_ok()
+                        session.sender().try_send(invitation.clone()).is_ok()
                     };
                     if accepted {
                         state
@@ -875,11 +866,10 @@ async fn federated_muc_message_owned(
                 if !delivered {
                     if let Some(message_id) = durable_invite {
                         if state.federated_muc_pg_authority_enabled()
-                            && state.message_service().direct_mode()
-                                != crate::cluster::DirectPostCommitMode::Live
+                            && state.message_direct_mode()
+                                != northstar_message_core::DirectPostCommitMode::Live
                         {
                             state
-                                .message_service()
                                 .rearm_unrouted_live_direct(
                                     local_user.id,
                                     message_id,
@@ -904,7 +894,6 @@ async fn federated_muc_message_owned(
                 if !delivered {
                     if let Some(message_id) = durable_invite {
                         state
-                            .message_service()
                             .rearm_unrouted_live_direct(
                                 local_user.id,
                                 message_id,
@@ -915,16 +904,16 @@ async fn federated_muc_message_owned(
                 }
                 if delivered {
                     if request.carbon_eligible
-                        && state.message_service().direct_mode()
-                            == crate::cluster::DirectPostCommitMode::Live
+                        && state.message_direct_mode()
+                            == northstar_message_core::DirectPostCommitMode::Live
                     {
-                        crate::services::message_carbons::send_received_carbons(
-                            state,
-                            &invitee_bare,
-                            delivered_full_jid.as_deref(),
-                            &invitation,
-                        )
-                        .await;
+                        state
+                            .send_received_carbons(
+                                &invitee_bare,
+                                delivered_full_jid.as_deref(),
+                                &invitation,
+                            )
+                            .await;
                     }
                 } else if durable_invite.is_none() && request.temporary_storage {
                     let delayed = add_delay_from(&invitation, chrono::Utc::now(), Some(&room_jid));
@@ -952,8 +941,8 @@ async fn federated_muc_message_owned(
                 }
                 if !delivered
                     && request.temporary_storage
-                    && state.message_service().direct_mode()
-                        == crate::cluster::DirectPostCommitMode::Live
+                    && state.message_direct_mode()
+                        == northstar_message_core::DirectPostCommitMode::Live
                 {
                     if let Err(error) = state.dispatch_push_notification(local_user.id).await {
                         tracing::warn!(?error, recipient_id = %local_user.id, %room_jid, "accepted federated offline mediated MUC invitation could not trigger push notification");
@@ -1005,13 +994,13 @@ async fn federated_muc_message_owned(
                         invitee_domain,
                         &invitation,
                         Some(&room_jid),
-                        state.federation_outbox().outbox_policy(),
+                        state.federation_outbox_policy(),
                         cluster_authority.as_ref(),
                     )
                     .await
                 {
                     Ok(true) => {
-                        state.federation_outbox().wake_outbox();
+                        state.wake_federation_outbox();
                         if cluster_authority.is_some() {
                             state.wake_committed_muc_operation(operation_id).await?;
                         }
@@ -1030,8 +1019,7 @@ async fn federated_muc_message_owned(
                     }
                 }
             } else if !state
-                .federation_outbox()
-                .send(invitee_domain, invitation, Some(room_jid.clone()))
+                .send_federated(invitee_domain, invitation, Some(room_jid.clone()))
                 .await
             {
                 return Ok(federated_error(
@@ -1140,7 +1128,7 @@ async fn federated_muc_message_owned(
     }
     let subject_command = match &request.subject {
         Ok(subject) => subject.as_deref(),
-        Err(()) => {
+        Err(MalformedMucStanza) => {
             return Ok(federated_error(
                 &request.stanza,
                 from,
@@ -1151,7 +1139,7 @@ async fn federated_muc_message_owned(
     };
     let origin_id = match &request.origin_id {
         Ok(origin_id) => origin_id.as_deref(),
-        Err(()) => {
+        Err(MalformedMucStanza) => {
             return Ok(federated_error(
                 &request.stanza,
                 from,
@@ -1162,7 +1150,7 @@ async fn federated_muc_message_owned(
     };
     let author_retraction = match request.author_retraction {
         Ok(retraction) => retraction,
-        Err(()) => {
+        Err(MalformedMucStanza) => {
             return Ok(federated_error(
                 &request.stanza,
                 from,

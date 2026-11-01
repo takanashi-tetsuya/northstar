@@ -2,21 +2,21 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use northstar_abuse_policy::WorkRequirement;
 pub(crate) use northstar_xml_builder::message_policy::{
     add_delay_from, encrypted_archive_stanza, encrypted_retraction_archive_stanza,
-    has_explicit_no_store_hint, has_no_store_hint, is_abuse_rated_message, mam_storage_eligible,
-    message_storage_policy, offline_storage_permitted, processing_hints_fragment,
-    MessageStoragePolicy,
+    has_explicit_no_store_hint, is_abuse_rated_message, mam_storage_eligible,
+    message_storage_policy, offline_storage_permitted,
 };
 #[cfg(test)]
-pub(crate) use northstar_xml_builder::stanza::iq_error_to;
+pub(crate) use northstar_xml_builder::message_policy::{
+    has_no_store_hint, processing_hints_fragment, MessageStoragePolicy,
+};
 use northstar_xml_builder::stanza::stanza_condition_element;
 pub(crate) use northstar_xml_builder::stanza::{
     blocked_stanza_error, child_text, iq_error, iq_error_from, iq_result, iq_result_from,
-    iq_result_to, is_encrypted, is_encryption_node, reflected_stanza_error, stanza_error,
-    stanza_error_type,
+    is_encrypted, is_encryption_node, reflected_stanza_error, stanza_error, stanza_error_type,
 };
-pub(crate) use northstar_xml_builder::xdata::{
-    bool_value, xdata_bool, xdata_field, xdata_value_field,
-};
+#[cfg(test)]
+pub(crate) use northstar_xml_builder::stanza::{iq_error_to, iq_result_to};
+pub(crate) use northstar_xml_builder::xdata::xdata_value_field;
 use northstar_xml_builder::XmlElement;
 pub(crate) use northstar_xmpp_types::text::valid_language_tag;
 use roxmltree::{Document, Node};
@@ -33,7 +33,6 @@ use self::message_validation::{
 };
 pub(crate) use northstar_roster_xmpp::presence::inject_vcard_avatar_hash;
 pub(crate) use northstar_xep_0280::should_copy as should_carbon;
-pub(crate) use northstar_xep_0313::build_extended_form as mam_extended_form;
 pub(crate) use northstar_xep_0359::{add_stanza_id, strip_stanza_ids_by_domain};
 use northstar_xml_builder::rewrite::remove_root_attribute;
 pub(crate) use northstar_xml_builder::rewrite::{

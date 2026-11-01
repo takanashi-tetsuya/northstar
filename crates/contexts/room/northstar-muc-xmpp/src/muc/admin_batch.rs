@@ -3,24 +3,24 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum MucAdminMutationKind {
+pub enum MucAdminMutationKind {
     AffiliationBatch,
     Role,
 }
 
 impl MucAdminMutationKind {
-    pub(super) fn requires_affiliation_batch(self) -> bool {
+    pub fn requires_affiliation_batch(self) -> bool {
         matches!(self, Self::AffiliationBatch)
     }
 }
 
 // Each committed projection needs one receipt ordinal. The transaction writer
 // also bounds the expanded audience, which can be larger than the IQ itself.
-pub(in crate::xmpp::protocol) const MAX_MUC_ADMIN_BATCH_ITEMS: usize = 63;
-pub(super) const MUC_ADMIN_NS: &str = "http://jabber.org/protocol/muc#admin";
+pub const MAX_MUC_ADMIN_BATCH_ITEMS: usize = 63;
+pub const MUC_ADMIN_NS: &str = "http://jabber.org/protocol/muc#admin";
 
 #[derive(Debug, Eq, PartialEq)]
-pub(super) enum MucAdminChange {
+pub enum MucAdminChange {
     Affiliation {
         target_bare_jid: String,
         affiliation: String,
@@ -32,18 +32,18 @@ pub(super) enum MucAdminChange {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(super) struct MucAdminItem {
-    pub(super) change: MucAdminChange,
-    pub(super) reason: Option<String>,
+pub struct MucAdminItem {
+    pub change: MucAdminChange,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(in crate::xmpp::protocol) struct MucAdminBatch {
-    pub(super) items: Vec<MucAdminItem>,
+pub struct MucAdminBatch {
+    pub items: Vec<MucAdminItem>,
 }
 
 impl MucAdminBatch {
-    pub(in crate::xmpp::protocol) fn service_changes(
+    pub fn service_changes(
         &self,
         local_domain: &str,
     ) -> std::result::Result<Vec<MucAdminBatchChange>, MucAdminParseError> {
@@ -78,9 +78,7 @@ impl MucAdminBatch {
     }
 }
 
-pub(in crate::xmpp::protocol) fn muc_admin_batch_error(
-    outcome: MucAdminBatchOutcome,
-) -> Option<&'static str> {
+pub fn muc_admin_batch_error(outcome: MucAdminBatchOutcome) -> Option<&'static str> {
     match outcome {
         MucAdminBatchOutcome::Applied | MucAdminBatchOutcome::Replay => None,
         MucAdminBatchOutcome::DuplicateTarget => Some("bad-request"),
@@ -95,13 +93,13 @@ pub(in crate::xmpp::protocol) fn muc_admin_batch_error(
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(in crate::xmpp::protocol) enum MucAdminParseError {
+pub enum MucAdminParseError {
     BadRequest,
     JidMalformed,
     NotAcceptable,
 }
 
-pub(in crate::xmpp::protocol) struct MucAdminRawItem<'a> {
+pub struct MucAdminRawItem<'a> {
     pub jid: Option<&'a str>,
     pub nick: Option<&'a str>,
     pub affiliation: Option<&'a str>,
@@ -112,7 +110,7 @@ pub(in crate::xmpp::protocol) struct MucAdminRawItem<'a> {
 /// Normalize targets before a batch reaches either the local or clustered
 /// writer. A full JID and its bare form address the same affiliation target;
 /// duplicate normalized targets must not acquire order-dependent semantics.
-pub(in crate::xmpp::protocol) fn parse_muc_admin_batch(
+pub fn parse_muc_admin_batch(
     items: &[Node<'_, '_>],
 ) -> std::result::Result<MucAdminBatch, MucAdminParseError> {
     if items.iter().any(|item| {
@@ -139,7 +137,7 @@ pub(in crate::xmpp::protocol) fn parse_muc_admin_batch(
     parse_muc_admin_raw_items(&raw)
 }
 
-pub(in crate::xmpp::protocol) fn parse_muc_admin_raw_items(
+pub fn parse_muc_admin_raw_items(
     items: &[MucAdminRawItem<'_>],
 ) -> std::result::Result<MucAdminBatch, MucAdminParseError> {
     if items.is_empty() || items.len() > MAX_MUC_ADMIN_BATCH_ITEMS {
@@ -200,19 +198,21 @@ pub(in crate::xmpp::protocol) fn parse_muc_admin_raw_items(
     Ok(MucAdminBatch { items: parsed })
 }
 
-pub(super) fn classify_muc_admin_items(items: &[Node<'_, '_>]) -> Result<MucAdminMutationKind, ()> {
+pub fn classify_muc_admin_items(
+    items: &[Node<'_, '_>],
+) -> Result<MucAdminMutationKind, MalformedMucStanza> {
     if items.is_empty()
         || items.len() > MAX_MUC_ADMIN_BATCH_ITEMS
         || items.iter().any(|node| node.tag_name().name() != "item")
     {
-        return Err(());
+        return Err(MalformedMucStanza);
     }
     if items.iter().any(|item| {
         item.attribute("affiliation").is_some() == item.attribute("role").is_some()
             || (item.attribute("affiliation").is_some() && item.attribute("jid").is_none())
             || (item.attribute("role").is_some() && item.attribute("nick").is_none())
     }) {
-        return Err(());
+        return Err(MalformedMucStanza);
     }
     let affiliation_count = items
         .iter()
@@ -222,7 +222,7 @@ pub(super) fn classify_muc_admin_items(items: &[Node<'_, '_>]) -> Result<MucAdmi
     if (affiliation_count > 0 && role_count > 0) || role_count > 1 {
         // Affiliation batches are atomic, while role changes operate on one
         // live occupant. Do not admit an ambiguous mixed request.
-        return Err(());
+        return Err(MalformedMucStanza);
     }
     if affiliation_count > 0 {
         Ok(MucAdminMutationKind::AffiliationBatch)
@@ -237,9 +237,9 @@ pub(super) fn classify_muc_admin_items(items: &[Node<'_, '_>]) -> Result<MucAdmi
 /// action must not make a replacement connection or a new occupant epoch look
 /// like the removed actor.  The removal paths use this when they deliver the
 /// target's self-presence separately from the room audience.
-pub(super) fn is_exact_muc_removal_target(
-    recipient: &crate::xmpp::local_routes::muc::MucOccupant,
-    target: &crate::xmpp::local_routes::muc::MucOccupant,
+pub fn is_exact_muc_removal_target<L, E>(
+    recipient: &MucOccupant<L, E>,
+    target: &MucOccupant<L, E>,
 ) -> bool {
     northstar_room_core::occupancy::muc_departure_identity_matches(
         recipient,

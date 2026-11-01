@@ -13,8 +13,8 @@ use super::*;
 /// Handle room/service IQs from an authenticated remote room actor. XML is
 /// converted to owned data before this future is created, so S2S connection
 /// tasks remain `Send` across database and network awaits.
-pub(crate) fn federated_muc_iq<'a>(
-    state: &'a AppState,
+pub fn federated_muc_iq<'a>(
+    state: &'a impl MucHost,
     authenticated_domain: &str,
     connection_id: uuid::Uuid,
     root: Node<'_, '_>,
@@ -26,7 +26,7 @@ pub(crate) fn federated_muc_iq<'a>(
 }
 
 async fn federated_muc_iq_owned(
-    state: &AppState,
+    state: &impl MucHost,
     authenticated_domain: &str,
     connection_id: uuid::Uuid,
     request: FederatedIqRequest,
@@ -679,11 +679,10 @@ async fn federated_muc_iq_owned(
             .any(|(_, occupant)| same_remote_actor(&occupant.full_jid, &actor_full_jid));
         return match &request.payload {
             FederatedIqPayload::MamForm => match state
-                .mam_service()
                 .authorize_federated_room(&room.localpart, &actor_bare_jid, joined)
                 .await?
             {
-                northstar_archive_application::MamRoomAccessOutcome::Allowed(_) => {
+                northstar_archive_core::MamRoomAccessOutcome::Allowed(_) => {
                     Ok(Some(federated_iq_result(
                         &request.stanza,
                         &room_jid,
@@ -691,10 +690,13 @@ async fn federated_muc_iq_owned(
                         mam_extended_form(),
                     )))
                 }
-                northstar_archive_application::MamRoomAccessOutcome::Missing => Ok(
-                    federated_error(&request.stanza, from, "cancel", "item-not-found"),
-                ),
-                northstar_archive_application::MamRoomAccessOutcome::Forbidden => {
+                northstar_archive_core::MamRoomAccessOutcome::Missing => Ok(federated_error(
+                    &request.stanza,
+                    from,
+                    "cancel",
+                    "item-not-found",
+                )),
+                northstar_archive_core::MamRoomAccessOutcome::Forbidden => {
                     Ok(federated_error(&request.stanza, from, "auth", "forbidden"))
                 }
             },
@@ -712,31 +714,28 @@ async fn federated_muc_iq_owned(
                         "not-authorized",
                     ));
                 };
-                let (access, first, last) = match state
-                    .mam_service()
-                    .execute_federated_mam_metadata(command)
-                    .await?
-                {
-                    MamMetadataResult::Boundaries {
-                        room: Some(access),
-                        start,
-                        end,
-                    } => (access, start, end),
-                    MamMetadataResult::Boundaries { room: None, .. } => {
-                        return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
-                    }
-                    MamMetadataResult::ItemNotFound => {
-                        return Ok(federated_error(
-                            &request.stanza,
-                            from,
-                            "cancel",
-                            "item-not-found",
-                        ));
-                    }
-                    MamMetadataResult::Forbidden => {
-                        return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
-                    }
-                };
+                let (access, first, last) =
+                    match state.execute_federated_mam_metadata(command).await? {
+                        MamMetadataResult::Boundaries {
+                            room: Some(access),
+                            start,
+                            end,
+                        } => (access, start, end),
+                        MamMetadataResult::Boundaries { room: None, .. } => {
+                            return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
+                        }
+                        MamMetadataResult::ItemNotFound => {
+                            return Ok(federated_error(
+                                &request.stanza,
+                                from,
+                                "cancel",
+                                "item-not-found",
+                            ));
+                        }
+                        MamMetadataResult::Forbidden => {
+                            return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
+                        }
+                    };
                 debug_assert_eq!(access.localpart(), room.localpart);
                 let mut metadata = XmlElement::namespaced("metadata", "urn:xmpp:mam:2");
                 if let Some(value) = first {
@@ -768,12 +767,11 @@ async fn federated_muc_iq_owned(
             }
             FederatedIqPayload::MamError(condition) => {
                 match state
-                    .mam_service()
                     .authorize_federated_room(&room.localpart, &actor_bare_jid, joined)
                     .await?
                 {
-                    northstar_archive_application::MamRoomAccessOutcome::Allowed(_) => {}
-                    northstar_archive_application::MamRoomAccessOutcome::Missing => {
+                    northstar_archive_core::MamRoomAccessOutcome::Allowed(_) => {}
+                    northstar_archive_core::MamRoomAccessOutcome::Missing => {
                         return Ok(federated_error(
                             &request.stanza,
                             from,
@@ -781,7 +779,7 @@ async fn federated_muc_iq_owned(
                             "item-not-found",
                         ));
                     }
-                    northstar_archive_application::MamRoomAccessOutcome::Forbidden => {
+                    northstar_archive_core::MamRoomAccessOutcome::Forbidden => {
                         return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
                     }
                 }
@@ -1029,7 +1027,7 @@ async fn federated_muc_iq_owned(
 }
 
 async fn federated_muc_mam(
-    state: &AppState,
+    state: &impl MucHost,
     authenticated_domain: &str,
     stanza: &FederatedStanza,
     authorization: (&str, &str, bool),
@@ -1041,9 +1039,8 @@ async fn federated_muc_mam(
     let flip_page = query.flip_page;
     let query_id = query.query_id.clone();
     let outcome = state
-        .mam_service()
         .admit_federated_room_stream(
-            northstar_archive_application::FederatedMamStreamRequest::new(
+            northstar_archive_core::FederatedMamStreamRequest::new(
                 authenticated_domain,
                 room_localpart,
                 actor_bare_jid,
@@ -1109,15 +1106,18 @@ async fn federated_muc_mam(
         )
         .await?;
     match outcome {
-        northstar_archive_application::FederatedMamAdmissionOutcome::Queued => Ok(None),
-        northstar_archive_application::FederatedMamAdmissionOutcome::Missing
-        | northstar_archive_application::FederatedMamAdmissionOutcome::PageMissing => Ok(
-            federated_error(stanza, &stanza.from, "cancel", "item-not-found"),
-        ),
-        northstar_archive_application::FederatedMamAdmissionOutcome::Forbidden => {
+        northstar_archive_core::FederatedMamAdmissionOutcome::Queued => Ok(None),
+        northstar_archive_core::FederatedMamAdmissionOutcome::Missing
+        | northstar_archive_core::FederatedMamAdmissionOutcome::PageMissing => Ok(federated_error(
+            stanza,
+            &stanza.from,
+            "cancel",
+            "item-not-found",
+        )),
+        northstar_archive_core::FederatedMamAdmissionOutcome::Forbidden => {
             Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"))
         }
-        northstar_archive_application::FederatedMamAdmissionOutcome::OutboxRejected => Ok(
+        northstar_archive_core::FederatedMamAdmissionOutcome::OutboxRejected => Ok(
             federated_error(stanza, &stanza.from, "wait", "remote-server-timeout"),
         ),
     }

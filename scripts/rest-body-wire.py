@@ -26,12 +26,34 @@ def connect(port, method, path, body=b"{", length=128):
     return stream
 
 
-def read_closed(stream, expected, *, diagnostic_case=None, diagnostic_request="POST /api/v1/login"):
+# Through TLS Caddy, Go's server may read the unfinished declared body after
+# relaying a complete Connection: close reply, until the 20-second body deadline
+# or, after a lost race, with no deadline. For these requests, read the complete
+# response, close our TLS side as RFC 9112 section 9.6 asks, and require the
+# proxy's close within the same socket timeout. The direct application path
+# still requires the application's own EOF.
+def read_closed(stream, expected, *, diagnostic_case=None, diagnostic_request="POST /api/v1/login", unfinished_body=False):
     with stream:
         data = bytearray()
+        phase = "response"
         try:
-            while part := stream.recv(65536):
-                data.extend(part)
+            if unfinished_body and isinstance(stream, ssl.SSLSocket):
+                while part := stream.recv(65536):
+                    data.extend(part)
+                    if summarize_http_response((data,))["receive_phase"] == "awaiting_recv_eof":
+                        break
+                summary = summarize_http_response((data,))
+                assert summary["http_response_complete"] and summary["connection_close"], summary
+                phase = "close"
+                try:
+                    raw = stream.unwrap()
+                    tail = raw.recv(1)
+                    assert tail == b"", tail
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # The proxy had closed before our close_notify arrived.
+            else:
+                while part := stream.recv(65536):
+                    data.extend(part)
         except OSError:
             if diagnostic_case is not None:
                 try:
@@ -41,7 +63,7 @@ def read_closed(stream, expected, *, diagnostic_case=None, diagnostic_request="P
                         f"synthetic slow-body admission: case={diagnostic_case} "
                         f"request={diagnostic_request} expected_status={expected} "
                         f"held_incomplete_bodies=8 declared_body_bytes=128 sent_body_bytes=1 "
-                        f"transport={'tls' if isinstance(stream, ssl.SSLSocket) else 'tcp'} "
+                        f"transport={'tls' if isinstance(stream, ssl.SSLSocket) else 'tcp'} phase={phase} "
                         f"response_diagnostic={json.dumps(summarize_http_response((data,)), separators=(',', ':'))} "
                         f"partial_status_line_80={status_line!r} partial_reply_prefix_512={preview!r}",
                         file=sys.stderr, flush=True,
@@ -93,12 +115,12 @@ def main():
                 diagnostic_case = "public_tls" if args.tls else "public"
             else:
                 diagnostic_case = "admin"
-            reply = read_closed(denied, 429, diagnostic_case=diagnostic_case)
+            reply = read_closed(denied, 429, diagnostic_case=diagnostic_case, unfinished_body=True)
             assert b"retry-after: 1" in reply.lower(), reply
         for index, stream in enumerate(pending, start=1):
             method, path = routes[index - 1]
             diagnostic_case = f"{'public_tls' if args.tls else 'public'}_held_{index}_of_8"
-            reply = read_closed(stream, 408, diagnostic_case=diagnostic_case, diagnostic_request=f"{method} {path}")
+            reply = read_closed(stream, 408, diagnostic_case=diagnostic_case, diagnostic_request=f"{method} {path}", unfinished_body=True)
             assert b'"code":"request_timeout"' in reply, reply
             assert b"connection: close" in reply.lower(), reply
         elapsed = time.monotonic() - started

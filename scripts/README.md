@@ -36,13 +36,16 @@ status, framing, declared/received body lengths and receive phase, with a
 64 KiB header-capture limit and the existing 512-byte reply preview. Only
 unambiguous Content-Length framing is classified as HTTP-complete; chunked,
 duplicate/conflicting lengths and other unsupported framing remain unknown.
-The REST-body probe uses the helper only when a receive operation fails; there,
-complete HTTP bytes and `Connection: close` do not satisfy the unchanged
-recv-EOF requirement, prove clean TLS shutdown, or identify why a receive timed
-out. Diagnostic failures preserve the original receive error. These pure
-controls do not reproduce socket behavior, and the real-application TLS EOF
-timeouts recorded in `docs/evidence/experimental-rebuild/tls-response-eof-unresolved.json`
-remain undiagnosed; a later green CI run does not establish their cause.
+Through TLS Caddy, the REST-body probe's denied 429 and held 408 reads use the
+same complete-response-then-client-close sequence as the early-rejection probe
+below, with their existing 3-second and 23-second socket timeouts and assertions;
+the direct application run and every other read still require the server's EOF.
+A receive or close failure prints the helper summary, the phase and the 512-byte
+preview, then re-raises; a diagnostic failure preserves the original receive
+error. `docs/evidence/experimental-rebuild/rest-body-tls-eof-diagnosis.json`
+records the diagnosis of the two real-application TLS EOF timeouts listed in
+`docs/evidence/experimental-rebuild/tls-response-eof-unresolved.json`, which
+stays unchanged.
 
 The Caddy synthetic early-rejection probe declares a 128-byte body, sends one
 byte and expects the fixture's 408, 413 or 429. Go's HTTP server inside Caddy

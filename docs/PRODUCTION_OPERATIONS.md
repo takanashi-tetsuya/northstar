@@ -116,10 +116,11 @@ the same TLS connection still succeeds. Slow-upload, BOSH long-poll and WebSocke
 fixtures outlive the ordinary body deadline. The protocol integration job also
 repeats the eight-connection unauthenticated slow-body regression through TLS
 Caddy against the real application, including the shared public/admin budget
-and capacity recovery. These are bounded fixture checks, not public deployment
-or HTTP/2/3 saturation qualification. Keep the backend private and validate the
-same policies at any additional ingress; body-read admission does not cap idle
-sockets before headers are received.
+and capacity recovery; there too the client closes after each complete 408 or
+429 and requires Caddy's prompt close. These are bounded fixture checks, not
+public deployment or HTTP/2/3 saturation qualification. Keep the backend private
+and validate the same policies at any additional ingress; body-read admission
+does not cap idle sockets before headers are received.
 
 ## Console log delivery
 

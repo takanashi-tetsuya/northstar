@@ -1,0 +1,501 @@
+{
+  "schema": "northstar-fixture-diagnostic-source-v1",
+  "status": "MechanismReproducedProbeCloseBounded",
+  "base_commit": "4c702ba9a0c551887b20a2df2ad5cdb2757490a2",
+  "scope": "Diagnosis of real_application_expected_429 and real_application_held_expected_408 from tls-response-eof-unresolved.json: scripts/rest-body-wire.py --tls through the pinned Caddy to the real application, called by scripts/test-caddy-ingress.py --backend-port. Also the probe change for those two reads.",
+  "claim_limit": "The mechanism is reproduced locally with the real application, the pinned Caddy binary and the unmodified probe. That each of the two recorded CI occurrences was this mechanism is inferred: neither of those runs captured partial reply bytes. The later occurrence in ci_recurrence captured the complete reply, but not the hold state. The changed probe had not run in CI when this record was written.",
+  "summary": "Both observations fit the Go net/http post-handler body drain that 72641d1 diagnosed for the synthetic early rejection. Caddy relays the real application's complete 429 or 408 with Connection: close. It then reads the unfinished 128-byte declared body before closing: until the 20-second request_body deadline, or with no deadline after a race. The 3-second denied reader fails on both hold states. The 23-second held reader fails only on the hold without a deadline. Under CPU contention, the unmodified probe failed in this lab at both reads with the same TimeoutError after receiving the complete reply; the changed probe did not fail.",
+  "observations": [
+    {
+      "id": "real_application_expected_429",
+      "commit": "ce2da7456cf793b0c43ac36cdcd014d5ab1c2560",
+      "job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37207813100/job/111452589481",
+      "read": "read_closed(denied, 429) after denied.settimeout(3); scripts/rest-body-wire.py blob 19a794f8, line 71; public TLS iteration",
+      "verdict": "inferred",
+      "ci_timeline": {
+        "caddy_server_running": "2026-10-04T14:14:24.250Z (log line 733, ts 1791123264.2500)",
+        "sequence": "test-caddy-ingress.py --backend-port runs the 10-second header-deadline check, then rest-body-wire.py --tls: direct JSON request, eight held requests, a 0.3 s pause, then the denied request.",
+        "caddy_502_resets": "Eight 'readfrom ... connection reset by peer' errors at 14:14:37.7295-37.7297Z (log lines 738-745), each a read on Caddy's TLS listener port 57785, the --port of the failing rest-body-wire.py.",
+        "timeout": "TimeoutError traceback logged at 14:14:37.84Z (log lines 705-720).",
+        "reading": "The resets mark the fixture's finally closing the eight unread held sockets right after the denied read timed out, so that read began about 14:14:34.73Z. That matches the sequence above, about 10.5 s after Caddy started."
+      },
+      "confirmed": [
+        "Locally, behind the pinned Caddy, the real application's header-only 429 arrives complete with Connection: close, and Caddy then holds the connection in the post-handler body drain (see local_reproduction.contention_run).",
+        "Under CPU contention, 716 of 7760 denied requests got EOF 19.9842-20.01 s after the complete 429 (body_deadline_hold) and 8 got no EOF within 26 s (deadline_free_hold); the 3-second reader would fail on 724.",
+        "The unmodified rest-body-wire.py --tls, looped through the pinned Caddy under contention, failed 28 times at this denied read with TimeoutError; its diagnostic line shows the complete 429, Connection: close and receive_phase awaiting_recv_eof (local_reproduction.ci_faithful_ab).",
+        "The eight 502 resets are a consequence of the timeout, not its cause: closing a held TLS socket whose session tickets were never read sends RST, and the pinned Caddy logs the same readfrom ... connection reset by peer 502 error for it."
+      ],
+      "inferred": [
+        "The CI denied request got its complete 429 and then waited in one of the two hold states. A 3-second timeout cannot tell which; the 20-second hold is far more frequent in this lab."
+      ],
+      "unknown": [
+        "Whether the CI 429 was received at all: ce2da74 logged no partial bytes. The Caddy log cannot settle it. A denied request left unanswered for 3 s and then closed produced no Caddy log line in 5 of 5 local runs, so the absence of a ninth error line is uninformative."
+      ]
+    },
+    {
+      "id": "real_application_held_expected_408",
+      "commit": "16a7dc01082d5d6ebec6608b7a3e2ce4f12cd24c",
+      "job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/37218634592/job/111484242933",
+      "read": "read_closed(stream, 408) on a held socket with the 23-second timeout from open_socket; scripts/rest-body-wire.py blob 607e5d22, line 95; public TLS iteration",
+      "verdict": "inferred",
+      "ci_timeline": {
+        "caddy_server_running": "2026-10-04T17:07:51.075Z (log line 733, ts 1791133671.0752)",
+        "held_requests_sent_estimate": "about 17:08:01.2Z, after the 10-second header-deadline check",
+        "application_408_estimate": "about 17:08:16.2-16.3Z: the application answers 15.04-15.07 s after the request in every local run",
+        "timeout": "TimeoutError traceback at 17:08:39.33Z (log lines 705-720), 23 s after the expected 408s",
+        "control_flow": "Reaching line 95 means the public and admin expected-429 reads had passed.",
+        "caddy_log": "No per-request Caddy line was printed."
+      },
+      "confirmed": [
+        "Locally, behind the pinned Caddy, the real application's 408 after its 15-second body deadline arrives complete with Connection: close. Under CPU contention, 3 of 6208 held requests then got no EOF within 26 s; the proxy closed within 0.0031 s once the client sent close_notify.",
+        "Goroutine dumps taken during two of those held holds each show exactly one deadline-free drain. The server goroutine is in finishRequest -> body.Close -> io.CopyN -> tls.(*Conn).Read, and the writeLoop in writeBody's deferred Close waits on that same body's mutex. The dump-time ss shows both ends established, the 408 sent 26 s earlier, and a keepalive timer only.",
+        "In the A/B run, the unmodified rest-body-wire.py --tls failed 1 time at a held 408 read (case=public_tls_held_6_of_8 request=POST /api/v1/passkeys/login/start). The TimeoutError came after the complete 408 with Connection: close (receive_phase awaiting_recv_eof), and the process ran 38.337 s. In CI the TimeoutError came about 38 s after the held requests were sent (about 17:08:01.2Z to 17:08:39.33Z).",
+        "No held request hit the 20-second body-deadline hold (0 of 6208). That deadline is set at the request start, so such a hold would end about 5 s after the 408, inside the 23-second reader.",
+        "If the application never answers, the pinned Caddy answers itself at the 20-second body deadline (504, or an empty 200) with Connection: close and then EOF. The CI reader would have raised AssertionError about 17:08:21Z, not TimeoutError at 17:08:39.33Z."
+      ],
+      "inferred": [
+        "The CI held socket got its complete 408 and then waited in the deadline-free hold. This is by elimination: a 408 with a deadline-bound hold passes; socket 1 getting no reply would time out about 17:08:24.5Z; any held socket getting no reply would draw Caddy's own 20-second reply. The local reproduction matches the signature exactly: 408 at about 15 s, no EOF, and a TimeoutError 23 s later, both with the harness and with the unmodified probe."
+      ],
+      "unknown": [
+        "Which held index and route failed, and the partial bytes: 16a7dc0 printed no diagnostic for held reads."
+      ]
+    }
+  ],
+  "ci_recurrence": {
+    "id": "real_application_expected_429_recurrence",
+    "commit": "ab53d7f96d47972e52e00b771d452128bcdf9cb3",
+    "run_id": 41191681678,
+    "run_attempt": 1,
+    "job_id": 124509578142,
+    "job_name": "PostgreSQL protocol integration",
+    "step": "Run isolated protocol integration",
+    "job_url": "https://github.com/takanashi-tetsuya/northstar/actions/runs/41191681678/job/124509578142",
+    "job_conclusion": "failure",
+    "read": "read_closed(denied, 429) after denied.settimeout(3); scripts/rest-body-wire.py sha256 a960bc0d783f037580c51a703ce3ba5f630aae491b737d5324295778756ec042, line 96; case=public_tls. This is the probe before the change recorded here.",
+    "response_diagnostic": {
+      "received_bytes": 1057,
+      "header_bytes": 972,
+      "status": 429,
+      "framing": "content_length",
+      "declared_body_bytes": 85,
+      "received_body_bytes": 85,
+      "connection_close": true,
+      "http_response_complete": true,
+      "receive_phase": "awaiting_recv_eof",
+      "recv_eof_observed": false
+    },
+    "timeline": "Caddy logged server running at ts 1793442162.384 (10:22:42.38Z). The diagnostic line and TimeoutError came at 10:22:55.85Z, so the 3-second read began about 10.5 s after Caddy started, as in real_application_expected_429.",
+    "caddy_log": "Seven 'readfrom ... connection reset by peer' errors at ts 1793442175.8540-1793442175.8543, the same fixture cleanup signature as real_application_expected_429.",
+    "rerun": "Attempt 2 of the same run passed on the same commit with the same unmodified probe.",
+    "reading": "For this occurrence the complete 429 with Connection: close did arrive, and no EOF followed within 3 s. That is the signature of local_reproduction.ci_faithful_ab. The run does not show which hold state Caddy was in, and it adds nothing about the partial bytes of the two older runs."
+  },
+  "mechanism": {
+    "same_as": "docs/evidence/experimental-rebuild/caddy-ingress-receive-diagnostics.json (72641d1): response.finishRequest calls conn.r.abortPendingRead() then reqBody.Close(), and body.Close drains up to 256 KiB of the unfinished body before the connection closes.",
+    "states_with_real_application": [
+      {
+        "id": "immediate_close",
+        "denied": 7036,
+        "held": 6205,
+        "observed": "EOF within 0.007 s (denied) and 0.0131 s (held) of the complete reply under contention."
+      },
+      {
+        "id": "body_deadline_hold",
+        "denied": 716,
+        "held": 0,
+        "observed": "Denied: EOF 19.9842-20.01 s after the complete 429, at the request_body read_timeout set when the request started. Dumps: server goroutine draining while the writeLoop waits on the body mutex in its first body read.",
+        "why_not_held": "Inference from the source: by the 408 the writeLoop has waited 15 s in a body read, so abortPendingRead always finds a read to abort and clears the deadline. Either way the request_body deadline would end such a hold about 5 s after the 408."
+      },
+      {
+        "id": "deadline_free_hold",
+        "denied": 8,
+        "held": 3,
+        "observed": "No EOF within 26 s of the complete reply, and the proxy closed within 3.1 ms after the client's close_notify.",
+        "goroutine_order": "In all four dumps the server goroutine holds the body mutex and drains with no deadline, while the writeLoop waits on it in writeBody's deferred Close. This is the reverse of the order in 72641d1's deadline_free_hold, where the writeLoop drained and the server goroutine waited. The effect is the same: abortPendingRead has already cleared the read deadline when the drain read starts.",
+        "ordering_basis": "Inferred from the Go source plus the dumps; no execution trace recorded the interleaving."
+      }
+    ],
+    "source_references": [
+      {
+        "fact": "finishRequest: flush, abortPendingRead, then reqBody.Close.",
+        "url": "https://github.com/golang/go/blob/go1.26.3/src/net/http/server.go#L1664-L1686"
+      },
+      {
+        "fact": "abortPendingRead sets a past read deadline only while a read is in progress, waits for it, then clears the deadline.",
+        "url": "https://github.com/golang/go/blob/go1.26.3/src/net/http/server.go#L741-L753"
+      },
+      {
+        "fact": "body.Close holds body.mu and, with doEarlyClose, drains with io.CopyN up to maxPostHandlerReadBytes (256 KiB).",
+        "url": "https://github.com/golang/go/blob/go1.26.3/src/net/http/transfer.go#L971-L1010"
+      },
+      {
+        "fact": "transferWriter.writeBody's deferred Close closes the request body after a body read error.",
+        "url": "https://github.com/golang/go/blob/go1.26.3/src/net/http/transfer.go#L338-L347"
+      },
+      {
+        "fact": "request_body sets the connection read deadline to now + read_timeout (20 s for the REST matcher).",
+        "url": "https://github.com/caddyserver/caddy/blob/v2.11.4/modules/caddyhttp/requestbody/requestbody.go#L84-L91"
+      },
+      {
+        "fact": "The application rejects from headers with 429 when the per-IP or global body admission is full, and with 408 when to_bytes exceeds the admission timeout; reject() adds Connection: close on HTTP/1.",
+        "path": "src/api/body_limits.rs#L36-L71"
+      }
+    ]
+  },
+  "excluded_alternatives": [
+    {
+      "hypothesis": "The application never answered a held request.",
+      "test": "Held request through the pinned Caddy to an upstream that accepts and never replies.",
+      "result": "Caddy answered after 20.04-20.05 s: 504 Gateway Timeout for POST /api/v1/login (logged as error 'readfrom ... i/o timeout') or an empty 200 for DELETE /api/v1/session (not logged), each with Connection: close and EOF.",
+      "verdict": "Excluded for the held 408: the CI reader would have raised AssertionError about 20 s after sending, not TimeoutError at 17:08:39.33Z."
+    },
+    {
+      "hypothesis": "The eight Caddy 502 resets in the 429 job caused the denied timeout.",
+      "test": "The same Caddyfile and application; held sockets closed without reading, and a denied socket read with a 3-second timeout and then closed.",
+      "result": "Held sockets closed with unread TLS session tickets produced the same 502 'readfrom ... connection reset by peer' line for 2-7 of 8 sockets per run (6 runs). A socket read for 3 s and then closed produced no Caddy line (0 of 5).",
+      "verdict": "Excluded as a cause: the resets come from the fixture's cleanup after the timeout. The Caddy log cannot show whether the 429 was received.",
+      "correction": "An earlier step of this diagnosis read the missing ninth error line as proof that the 429 was delivered. This test refuted that, so that reading is not used."
+    },
+    {
+      "hypothesis": "The held 408 hit the 20-second body-deadline hold.",
+      "verdict": "Excluded by timing: that hold would end about 17:08:21.2Z, 5 s after the 408 and inside the 23-second reader."
+    }
+  ],
+  "local_reproduction": {
+    "caddy": {
+      "path": "target/security-fixes-2026-09-29/caddy",
+      "version": "v2.11.4 h1:XKxkMTgNSizEvKG6QHue6cAsFOteU2qA61w2tKkCWi0=",
+      "sha256": "b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9",
+      "matches_ci": "Same binary as the 72641d1 reproduction, extracted from the Compose-pinned image."
+    },
+    "application": {
+      "binary_sha256": "077aaca6a07b4dbe275637767107970ee5614fecdd7464dbe957d4077869befd",
+      "version": "0.2.0",
+      "built": "2026-10-19 11:10 JST debug build in the main checkout, which was then at dev f1b63cc; at that commit src/api/body_limits.rs was unchanged since ae1773c. See port.mechanism_inputs for its later import change.",
+      "database": "PostgreSQL 17 on loopback with a disposable schema, migrated by the binary's migrate command",
+      "environment": "The integration environment from scripts/integration-wsl.sh, including TRUSTED_PROXY_IPS=127.0.0.1,::1 and the default body admission (8 per IP, 128 global, 15 s)."
+    },
+    "setup": "deploy/Caddyfile rendered as scripts/test-caddy-ingress.py renders it, with TLS on loopback. The admin endpoint was enabled only in the dump run, to read /debug/pprof/goroutine. Through trusted loopback proxies, each loopback source address (127.0.0.N) gets its own per-IP admission bucket, so parallel groups do not share the 8-request limit. Contention runs pinned Caddy, the application and the clients to CPUs 0-3 with GOMAXPROCS=4, alongside six busy-loop processes.",
+    "unloaded_baseline": "The unmodified CI sequence passed: direct rest-body-wire.py in 15.0 s, then test-caddy-ingress.py --backend-port. Two groups without contention: 6 denied and 16 held requests, each closed within 0.1 ms of the complete reply.",
+    "contention_run": {
+      "description": "12 groups, each with 8 held requests (4 login, 2 passkey login start, 2 session delete; 128 declared bytes, 1 sent), a 0.3 s pause, then 10 denied requests; repeated for 20 minutes. Per socket: time to the complete reply and to EOF, waiting up to 26 s after the reply; on a timeout the client sent close_notify and timed the proxy's close.",
+      "denied": {
+        "requests": 7760,
+        "eof_within_1s": 7036,
+        "eof_late": 716,
+        "no_eof_within_wait": 8,
+        "max_eof_within_1s": 0.007,
+        "late_eof_range": [
+          19.9842,
+          20.01
+        ],
+        "late_end_at_range": [
+          20.0377,
+          20.0518
+        ],
+        "no_eof_outcomes": {
+          "timeout_then_proxy_closed_after_client_close": 8
+        },
+        "client_close_to_proxy_close_max": 0.0008,
+        "no_eof_complete_at_range": [
+          0.0418,
+          0.0456
+        ],
+        "ci_reader_would_fail": 724
+      },
+      "held": {
+        "requests": 6208,
+        "eof_within_1s": 6205,
+        "eof_late": 0,
+        "no_eof_within_wait": 3,
+        "max_eof_within_1s": 0.0131,
+        "no_eof_outcomes": {
+          "timeout_then_proxy_closed_after_client_close": 3
+        },
+        "client_close_to_proxy_close_max": 0.0031,
+        "no_eof_complete_at_range": [
+          15.0438,
+          15.0729
+        ],
+        "ci_reader_would_fail": 3,
+        "complete_at_range": [
+          15.0374,
+          15.0729
+        ]
+      },
+      "held_no_eof_requests": [
+        {
+          "request": "POST /api/v1/login",
+          "complete_at": 15.0527,
+          "end_at": 41.2206,
+          "client_close_to_proxy_close_seconds": 0.0031
+        },
+        {
+          "request": "DELETE /api/v1/session",
+          "complete_at": 15.0438,
+          "end_at": 41.1943,
+          "client_close_to_proxy_close_seconds": 0.0003
+        },
+        {
+          "request": "DELETE /api/v1/session",
+          "complete_at": 15.0729,
+          "end_at": 41.1045,
+          "client_close_to_proxy_close_seconds": 0.0015
+        }
+      ],
+      "dumps": [
+        {
+          "taken_at": "denied hold without deadline, 26 s after the 429",
+          "server_drain_tls_read": 15,
+          "writeloop_first_read_waiting": 14,
+          "writeloop_deferred_close_waiting": 1,
+          "requests_in_flight": 64
+        },
+        {
+          "taken_at": "denied hold without deadline, 26 s after the 429",
+          "server_drain_tls_read": 18,
+          "writeloop_first_read_waiting": 17,
+          "writeloop_deferred_close_waiting": 1,
+          "requests_in_flight": 48
+        },
+        {
+          "taken_at": "held hold without deadline, 26 s after the 408",
+          "server_drain_tls_read": 10,
+          "writeloop_first_read_waiting": 9,
+          "writeloop_deferred_close_waiting": 1,
+          "requests_in_flight": 80
+        },
+        {
+          "taken_at": "held hold without deadline, 26 s after the 408",
+          "server_drain_tls_read": 8,
+          "writeloop_first_read_waiting": 7,
+          "writeloop_deferred_close_waiting": 1,
+          "requests_in_flight": 78
+        }
+      ],
+      "dump_reading": "Every draining server goroutine (finishRequest -> body.Close -> io.CopyN -> tls.(*Conn).Read, IO wait) pairs with exactly one writeLoop blocked on the same body mutex: the lockSlow address equals that *body pointer + 0x2c. In each dump exactly one pair has its writeLoop in writeBody's deferred Close, meaning its body read had been aborted: that is the hold without a deadline. Every other pair has a writeLoop that never started its body read, which is a body-deadline hold. In the held dumps, no denied deadline-free hold was open at dump time; this is estimated from row order (rows are written as each socket finishes, about 11 rows/s, and the nearest denied deadline-free holds ended about 17 s before or began about 18 s after)."
+    },
+    "ci_faithful_ab": {
+      "description": "The unmodified rest-body-wire.py (HEAD 72641d1) and the changed one ran at the same time against one application through two pinned Caddy instances, under the same CPU contention, for 20 minutes. Each had 6 workers looping the script exactly as test-caddy-ingress.py --backend-port calls it. Each worker's sockets are bound to its own loopback source address.",
+      "unmodified": {
+        "iterations": 451,
+        "passed": 422,
+        "failed": 29,
+        "elapsed_seconds_range": [
+          15.06,
+          15.1
+        ],
+        "failures": [
+          {
+            "exception": "TimeoutError",
+            "case": "public_tls",
+            "phase": null,
+            "receive_phase": "awaiting_recv_eof",
+            "status": 429,
+            "http_response_complete": true,
+            "connection_close": true,
+            "count": 28
+          },
+          {
+            "exception": "TimeoutError",
+            "case": "public_tls_held_6_of_8",
+            "phase": null,
+            "receive_phase": "awaiting_recv_eof",
+            "status": 408,
+            "http_response_complete": true,
+            "connection_close": true,
+            "count": 1
+          }
+        ]
+      },
+      "changed": {
+        "iterations": 459,
+        "passed": 459,
+        "failed": 0,
+        "elapsed_seconds_range": [
+          15.06,
+          15.09
+        ],
+        "failures": []
+      },
+      "reading": "The unmodified probe failed 28 times at the public TLS denied 429 read and 1 time at a held 408 read; 29 of these failures had already received the complete reply with Connection: close (receive_phase awaiting_recv_eof)."
+    },
+    "scripts": "Reproduction, dump and stress scripts lived in a session scratch directory and are not part of this change."
+  },
+  "probe_change": {
+    "source": {
+      "path": "scripts/rest-body-wire.py",
+      "previous_sha256": "a960bc0d783f037580c51a703ce3ba5f630aae491b737d5324295778756ec042",
+      "sha256": "02fad7974f817b1003855a910e5f1ffed444f8879004018b822f5785046c3041",
+      "bytes": 6866
+    },
+    "behavior": [
+      "read_closed takes unfinished_body=False. Only the denied 429 and held 408 reads pass True, and only a TLS stream (the request went through Caddy) takes the new path.",
+      "On that path it reads until the shared helper classifies the reply as Content-Length complete, and asserts strict completeness and Connection: close. It then closes its own TLS side (close_notify via unwrap) and requires the proxy's close_notify and TCP EOF within the same socket timeout: 3 s denied, 23 s held.",
+      "BrokenPipeError or ConnectionResetError at the close step is accepted: the proxy had already closed when the client's close_notify arrived.",
+      "A receive or close OSError prints the existing diagnostic line, now with phase=response or phase=close, and re-raises the original error."
+    ],
+    "rationale": "RFC 9112 section 9.6 asks a client that receives Connection: close to close after reading the response. Section 9.5 asks a client whose body is unwanted to stop sending it and close. Go's server inside Caddy may wait for that client close while draining. The probe no longer depends on the proxy closing first, but still fails when the reply is incomplete or wrong, or when the proxy does not close promptly after the client does.",
+    "no_longer_required": [
+      "Proxy-initiated closure before the client closes, for the denied and held reads through TLS Caddy."
+    ],
+    "stricter_than_before": [
+      "Through TLS Caddy, the denied and held replies must be Content-Length complete with Connection: close before the client closes."
+    ],
+    "unchanged": [
+      "The direct application run (plain TCP), which still requires the application's own EOF for every read",
+      "The admin-port denied read, which is plain TCP to the application",
+      "ordinary_json and the cancellation section",
+      "3-second denied and 23-second held socket timeouts; 14 <= elapsed < 23",
+      "Request bytes, route order, pauses and the finally cleanup",
+      "Status, x-request-id, retry-after: 1, request_timeout and connection: close assertions",
+      "deploy/Caddyfile and every product timeout and limit"
+    ],
+    "documentation": [
+      "scripts/README.md: REST-body probe paragraph",
+      "scripts/lib/http_response_diagnostics.py: module docstring",
+      "docs/PRODUCTION_OPERATIONS.md: the real-application slow-body regression sentence"
+    ],
+    "verification": {
+      "ci_rerun": false,
+      "fake_tls_peer": {
+        "description": "read_closed driven against loopback peers that send a complete or incomplete reply and then close in different ways; 3-second socket timeout.",
+        "changed": [
+          "tls close_first unfinished_body=True: passed",
+          "tls close_after_client unfinished_body=True: passed",
+          "tls hold_after_response unfinished_body=True: TimeoutError (phase=close, receive_phase=awaiting_recv_eof)",
+          "tls reset_while_client_closes unfinished_body=True: passed",
+          "tls no_connection_close unfinished_body=True: AssertionError",
+          "tls short_body_then_hold unfinished_body=True: TimeoutError (phase=response, receive_phase=awaiting_response_body)",
+          "tls short_body_then_close unfinished_body=True: AssertionError",
+          "tls wrong_status unfinished_body=True: AssertionError",
+          "tcp close_first unfinished_body=True: passed",
+          "tcp hold_after_response unfinished_body=True: TimeoutError (phase=response, receive_phase=awaiting_recv_eof)",
+          "tls close_first unfinished_body=False: passed",
+          "tls close_after_client unfinished_body=False: TimeoutError (phase=response, receive_phase=awaiting_recv_eof)"
+        ],
+        "unmodified": [
+          "tls close_first: passed",
+          "tls close_after_client: TimeoutError (receive_phase=awaiting_recv_eof)",
+          "tls hold_after_response: TimeoutError (receive_phase=awaiting_recv_eof)",
+          "tls reset_while_client_closes: passed",
+          "tls no_connection_close: TimeoutError (receive_phase=awaiting_recv_eof)",
+          "tls short_body_then_hold: TimeoutError (receive_phase=awaiting_response_body)",
+          "tls short_body_then_close: passed",
+          "tls wrong_status: AssertionError",
+          "tcp close_first: passed",
+          "tcp hold_after_response: TimeoutError (receive_phase=awaiting_recv_eof)"
+        ]
+      },
+      "contention_ab": "See local_reproduction.ci_faithful_ab.",
+      "syntax": "ast.parse and compile of scripts/rest-body-wire.py and scripts/lib/http_response_diagnostics.py",
+      "pure_helper_tests": "python3 scripts/test-http-response-diagnostics.py: 17 tests passed",
+      "documentation_gate": "node scripts/check-documentation-consistency.mjs passed",
+      "python": "3.14.8"
+    }
+  },
+  "port": {
+    "diagnosed_at": {
+      "commit": "72641d1fd574e441bd84cb53211c45280b2cba62",
+      "note": "Head of pull request 18, which landed on dev as squash commit d5d18b04f91fb753d1d8b913589d6847671a50ec, so it is not an ancestor of base_commit. Where this record names 72641d1 it means work done at that commit. observations, mechanism, excluded_alternatives, local_reproduction and probe_change.verification were produced there."
+    },
+    "source_commit": "f6637b751d4cb888bd4e85a956f8013a6e460409",
+    "source_commit_note": "Never pushed; local branch diag/real-app-tls-eof.",
+    "source_changes": [
+      "scripts/rest-body-wire.py, scripts/lib/http_response_diagnostics.py and docs/PRODUCTION_OPERATIONS.md have identical blobs at 72641d1 and base_commit, so their changes applied unchanged and probe_change.source holds as recorded.",
+      "scripts/README.md differs at base_commit only by a1c99400's removal of the contract-compatibility text, outside the changed paragraph."
+    ],
+    "mechanism_inputs": [
+      "deploy/Caddyfile and the Compose Caddy image digest are unchanged since f1b63cc.",
+      "scripts/test-caddy-ingress.py has the same blob at 72641d1 and base_commit.",
+      "src/api/body_limits.rs differs from f1b63cc only by one import replaced by two, which moves the cited range from L35-L70 to L36-L71."
+    ],
+    "measured_again": {
+      "commit": "ab53d7f96d47972e52e00b771d452128bcdf9cb3",
+      "commit_note": "Dev's tip when this section was measured, and the parent of the ported change at that time. The rebase section records what was repeated on base_commit.",
+      "application": {
+        "binary_sha256": "458b57fb92ddfb7ce0966fea02bec89c10c8112d6fdd955effce2172befadebd",
+        "built": "2026-11-01 debug build of the ported change on that commit, whose Rust sources and lockfile equal that commit"
+      },
+      "caddy": "The binary in local_reproduction.caddy, same sha256.",
+      "database": "PostgreSQL 17 on loopback with a disposable schema, migrated by the binary's migrate command.",
+      "unloaded_run": "scripts/integration-wsl.sh, skipping its cargo build and protocol suite and stopping after this probe. Direct rest-body-wire.py passed in 15.01 s. test-caddy-ingress.py --backend-port passed, with rest-body-wire.py --tls passing in 15.06 s.",
+      "contention_ab": {
+        "description": "The design of local_reproduction.ci_faithful_ab for 6 minutes instead of 20: the unmodified and changed probe files ran at the same time against one application through two pinned Caddy instances, with 6 workers per probe, each bound to its own loopback source address. Caddy, the application and the clients were pinned to CPUs 0-3 with GOMAXPROCS=4 alongside six busy-loop processes. Other work was running on the host, and PostgreSQL was not pinned.",
+        "unmodified": {
+          "iterations": 143,
+          "passed": 137,
+          "failed": 6,
+          "failures": [
+            {
+              "exception": "TimeoutError",
+              "case": "public_tls",
+              "phase": null,
+              "receive_phase": "awaiting_recv_eof",
+              "status": 429,
+              "http_response_complete": true,
+              "connection_close": true,
+              "count": 6
+            }
+          ]
+        },
+        "changed": {
+          "iterations": 138,
+          "passed": 138,
+          "failed": 0,
+          "failures": []
+        }
+      },
+      "fake_tls_peer": {
+        "description": "A new harness of the same design, driving the probe files of the ported change and of that commit.",
+        "changed": "All 12 cases in probe_change.verification.fake_tls_peer.changed gave the recorded outcome and phase.",
+        "changed_added_case": "tcp close_after_client unfinished_body=True: TimeoutError (phase=response, receive_phase=awaiting_recv_eof). A plain TCP read does not close first even with the flag set.",
+        "unmodified": "9 of the 10 recorded cases gave the recorded outcome. tls reset_while_client_closes gave TimeoutError instead of passed, because this harness's peer resets only after the client's close_notify, which the unmodified probe never sends."
+      },
+      "checks": [
+        "ast.parse and compile of scripts/rest-body-wire.py and scripts/lib/http_response_diagnostics.py",
+        "python3 scripts/test-http-response-diagnostics.py: 17 tests passed",
+        "node scripts/check-documentation-consistency.mjs passed",
+        "A sweep of scripts/check-*.mjs, scripts/check-*.sh and scripts/test-*.mjs gave results identical to the same sweep at that commit",
+        "scripts/test-stage4-public-regressions.py _SOURCE_BINDINGS binds none of the changed files; all 15 bindings match the tree"
+      ],
+      "python": "3.14.8"
+    },
+    "rebase": {
+      "reason": "Stage S25 landed on dev before this change was pushed.",
+      "from_commit": "ab53d7f96d47972e52e00b771d452128bcdf9cb3",
+      "base_differences": "186 Rust files and Cargo.lock differ from from_commit. scripts/rest-body-wire.py, scripts/lib/http_response_diagnostics.py, scripts/README.md, docs/PRODUCTION_OPERATIONS.md, scripts/integration-wsl.sh, scripts/test-caddy-ingress.py and src/api/body_limits.rs have the same blobs at both commits, and deploy/, the Compose files, the Dockerfiles and .github have no difference.",
+      "application": {
+        "binary_sha256": "7764fe8be6c6744e3fb0d67226bdc319fc800dff275bf439b311562eb6f23d2b",
+        "built": "2026-11-01 debug build of this change's tree, whose Rust sources and lockfile equal base_commit"
+      },
+      "unloaded_run": "The same run as measured_again.unloaded_run, with the binary above. Direct rest-body-wire.py passed in 15.0 s. test-caddy-ingress.py --backend-port passed, with rest-body-wire.py --tls passing in 15.06 s.",
+      "checks": [
+        "python3 scripts/test-http-response-diagnostics.py: 17 tests passed",
+        "node scripts/check-documentation-consistency.mjs passed",
+        "The sweep in measured_again.checks gave results identical to the same sweep at base_commit",
+        "scripts/test-stage4-public-regressions.py _SOURCE_BINDINGS binds none of the changed files; every binding matches the tree"
+      ]
+    },
+    "not_measured_again": [
+      "On base_commit: contention_ab and fake_tls_peer. Both ran at measured_again.commit. The probe files and Caddy are the same at base_commit, but contention_ab's application binary is not.",
+      "The 20-minute contention_run and its hold-state counts",
+      "The goroutine dumps",
+      "The excluded_alternatives tests",
+      "The CI runner's Python: every local run used the version above. The same client close sequence already runs there in test-caddy-ingress.py's early-rejection probe."
+    ]
+  },
+  "related": {
+    "tls_response_eof_unresolved": {
+      "path": "docs/evidence/experimental-rebuild/tls-response-eof-unresolved.json",
+      "modified": false,
+      "reason_unmodified": "rest-body-held408-diagnostics.json and caddy-ingress-receive-diagnostics.json pin this file's sha256.",
+      "sha256": "c01e56f298dc7ef2faed1c052508c259a61319764eea13e610b5bfbabd6e8b40",
+      "observation_ids": [
+        "real_application_expected_429",
+        "real_application_held_expected_408"
+      ]
+    },
+    "caddy_ingress_receive_diagnostics": "docs/evidence/experimental-rebuild/caddy-ingress-receive-diagnostics.json says these two observations 'remain open'. That file is unchanged; this record supersedes that sentence.",
+    "production_note": "The application closes promptly; the holds are in the proxy. In production, the same race can hold an HTTP/1 connection after the application's 408 or 429, until the request_body deadline or, without a deadline, until the client sends data or closes. docs/PRODUCTION_OPERATIONS.md already states this for 408, 413 and 429. No product policy was changed."
+  }
+}

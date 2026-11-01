@@ -2,10 +2,11 @@
 
 This is an observer, not a protocol parser. It never reads a stream or changes
 a deadline. Only an unambiguous Content-Length response is classified as
-complete; unsupported framing stays unknown. The REST-body probe calls it only
-after recv fails and still requires recv EOF. The Caddy early-rejection probe
-uses its completion classification to decide when the client may close; see
-scripts/README.md. No response values or body bytes are logged.
+complete; unsupported framing stays unknown. The Caddy early-rejection probe
+and the REST-body probe's requests through TLS Caddy with an unfinished body
+use its completion classification to decide when the client may close; the
+REST-body probe otherwise calls it only after recv fails. See scripts/README.md.
+No response values or body bytes are logged.
 """
 
 import re

@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) fn join_error(id: &str, from: &str, to: &str, outcome: JoinChannelOutcome) -> String {
+pub fn join_error(id: &str, from: &str, to: &str, outcome: JoinChannelOutcome) -> String {
     let (kind, condition) = match outcome {
         JoinChannelOutcome::Banned => ("auth", "forbidden"),
         JoinChannelOutcome::NotAllowed => ("auth", "registration-required"),
@@ -14,15 +14,15 @@ pub(super) fn join_error(id: &str, from: &str, to: &str, outcome: JoinChannelOut
     iq_error_to(id, from, to, kind, condition)
 }
 
-pub(super) async fn handle_channel_iq(
-    state: &Arc<AppState>,
+pub async fn handle_channel_iq(
+    state: &Arc<impl MixHost>,
     request: &OwnedIq,
     actor_bare: &str,
     addressed: &str,
     reply_to: &str,
     federated: Option<&FederatedMixMutation>,
 ) -> Result<String> {
-    let mix_domain = local_mix_domain(state);
+    let mix_domain = local_mix_domain(state.local_domain());
     let target = match CanonicalJid::parse_bare(addressed) {
         Ok(target) => target,
         Err(_) => {
@@ -449,14 +449,14 @@ pub(super) async fn handle_channel_iq(
                     .find_enabled_user_by_id(*user_id)
                     .await?
                 {
-                    super::super::roster::deliver_roster_change(
-                        state,
-                        *user_id,
-                        &user.username,
-                        change,
-                        Some(&outcome.participant.participant_id.to_string()),
-                    )
-                    .await?;
+                    state
+                        .deliver_roster_change(
+                            *user_id,
+                            &user.username,
+                            change,
+                            Some(&outcome.participant.participant_id.to_string()),
+                        )
+                        .await?;
                 }
             }
             let preference_payload = XmlElement::namespaced("user-preference", ANON_NS)

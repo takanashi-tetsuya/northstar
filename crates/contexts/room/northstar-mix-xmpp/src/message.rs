@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) fn message_children(raw: &str) -> Result<(String, bool)> {
+pub fn message_children(raw: &str) -> Result<(String, bool)> {
     let document = Document::parse(raw).context("malformed MIX message")?;
     let root = document.root_element();
     anyhow::ensure!(root.tag_name().name() == "message", "not a MIX message");
@@ -28,7 +28,7 @@ pub(super) fn message_children(raw: &str) -> Result<(String, bool)> {
     Ok((children, encrypted))
 }
 
-pub(super) fn private_message_children(raw: &str) -> Result<(String, bool, &'static str)> {
+pub fn private_message_children(raw: &str) -> Result<(String, bool, &'static str)> {
     let document = Document::parse(raw).context("malformed MIX private message")?;
     let root = document.root_element();
     anyhow::ensure!(root.tag_name().name() == "message", "not a MIX message");
@@ -53,8 +53,8 @@ pub(super) fn private_message_children(raw: &str) -> Result<(String, bool, &'sta
     Ok((children, encrypted, kind))
 }
 
-pub(super) async fn process_private_message(
-    state: &Arc<AppState>,
+pub async fn process_private_message(
+    state: &Arc<impl MixHost>,
     actor_bare: &str,
     actor_full: &str,
     raw: &str,
@@ -154,7 +154,7 @@ pub(super) async fn process_private_message(
     Ok(None)
 }
 
-pub(super) fn validate_reflected_mix_identity(root: Node<'_, '_>) -> Result<()> {
+pub fn validate_reflected_mix_identity(root: Node<'_, '_>) -> Result<()> {
     let identities = root
         .children()
         .filter(|node| {
@@ -193,7 +193,7 @@ pub(super) fn validate_reflected_mix_identity(root: Node<'_, '_>) -> Result<()> 
     Ok(())
 }
 
-pub(super) fn reflected_mix_stanza_id(root: Node<'_, '_>) -> Result<Uuid> {
+pub fn reflected_mix_stanza_id(root: Node<'_, '_>) -> Result<Uuid> {
     let from =
         northstar_xmpp_types::jid::CanonicalJid::parse(root.attribute("from").unwrap_or_default())?;
     anyhow::ensure!(
@@ -240,7 +240,7 @@ pub(super) fn reflected_mix_stanza_id(root: Node<'_, '_>) -> Result<Uuid> {
     Ok(id)
 }
 
-pub(super) fn validate_reflected_mix_presence_identity(root: Node<'_, '_>) -> Result<()> {
+pub fn validate_reflected_mix_presence_identity(root: Node<'_, '_>) -> Result<()> {
     let identities = root
         .children()
         .filter(|node| {
@@ -279,7 +279,7 @@ pub(super) fn validate_reflected_mix_presence_identity(root: Node<'_, '_>) -> Re
     Ok(())
 }
 
-pub(super) fn mix_retraction_target(root: Node<'_, '_>) -> Result<Option<Uuid>> {
+pub fn mix_retraction_target(root: Node<'_, '_>) -> Result<Option<Uuid>> {
     let retracts = root
         .children()
         .filter(|node| {
@@ -315,7 +315,7 @@ pub(super) fn mix_retraction_target(root: Node<'_, '_>) -> Result<Option<Uuid>> 
     Ok(Some(target))
 }
 
-pub(super) fn trusted_mix_origin_id(root: Node<'_, '_>) -> Result<Option<String>> {
+pub fn trusted_mix_origin_id(root: Node<'_, '_>) -> Result<Option<String>> {
     let origins = root
         .children()
         .filter(|node| {
@@ -343,7 +343,7 @@ pub(super) fn trusted_mix_origin_id(root: Node<'_, '_>) -> Result<Option<String>
     Ok(Some(id.to_owned()))
 }
 
-pub(super) fn mix_replay_semantics(
+pub fn mix_replay_semantics(
     operation: &str,
     actor: &str,
     channel: &str,
@@ -368,7 +368,7 @@ pub(super) fn mix_replay_semantics(
     commitment
 }
 
-pub(super) fn mix_message_identity(nick: Option<&str>, jid: Option<&str>) -> XmlElement {
+pub fn mix_message_identity(nick: Option<&str>, jid: Option<&str>) -> XmlElement {
     let mut identity = XmlElement::namespaced("mix", CORE_NS);
     if let Some(nick) = nick {
         identity.push_child(XmlElement::new("nick").text(nick));
@@ -379,16 +379,16 @@ pub(super) fn mix_message_identity(nick: Option<&str>, jid: Option<&str>) -> Xml
     identity
 }
 
-pub(super) struct MixChannelMessage<'a> {
-    pub(super) from: &'a str,
-    pub(super) to: Option<&'a str>,
-    pub(super) id: Uuid,
-    pub(super) payload: Option<&'a str>,
-    pub(super) nick: Option<&'a str>,
-    pub(super) jid: Option<&'a str>,
+pub struct MixChannelMessage<'a> {
+    pub from: &'a str,
+    pub to: Option<&'a str>,
+    pub id: Uuid,
+    pub payload: Option<&'a str>,
+    pub nick: Option<&'a str>,
+    pub jid: Option<&'a str>,
 }
 
-pub(super) fn mix_channel_message(message: MixChannelMessage<'_>) -> Result<String> {
+pub fn mix_channel_message(message: MixChannelMessage<'_>) -> Result<String> {
     let mut stanza = XmlElement::namespaced("message", "jabber:client")
         .attr("from", message.from)
         .optional_attr("to", message.to)
@@ -405,7 +405,7 @@ pub(super) fn mix_channel_message(message: MixChannelMessage<'_>) -> Result<Stri
     ))
 }
 
-pub(super) fn mix_retraction_action(
+pub fn mix_retraction_action(
     from: &str,
     to: Option<&str>,
     id: Uuid,
@@ -423,22 +423,22 @@ pub(super) fn mix_retraction_action(
     add_stanza_id(&stanza.finish(), from.split('/').next().unwrap_or(from), id)
 }
 
-pub(super) async fn process_channel_message(
-    state: &Arc<AppState>,
+pub async fn process_channel_message(
+    state: &Arc<impl MixHost>,
     actor_bare: &str,
     actor_full: &str,
     raw: &str,
-    observation: Option<&SessionExecutions>,
+    observation: Option<&dyn MixFrameObserver>,
 ) -> Result<Option<String>> {
     if let Some(observation) = observation {
-        observation.enter(Stage::MixPolicy);
+        observation.enter(MixFrameStage::Policy);
     }
     let document = Document::parse(raw).context("malformed MIX message")?;
     let root = document.root_element();
     let to = root.attribute("to").unwrap_or_default().to_owned();
     let id = root.attribute("id").unwrap_or_default().to_owned();
     let target = CanonicalJid::parse(&to)?;
-    let mix_domain = local_mix_domain(state);
+    let mix_domain = local_mix_domain(state.local_domain());
     if target.domainpart() != mix_domain {
         return Ok(None);
     }
@@ -511,7 +511,7 @@ pub(super) async fn process_channel_message(
     // genuinely absent frame retains the explicit compatibility behavior.
     let foreground = if retraction_target.is_none() {
         if let Some(frames) = observation {
-            frames.mix_foreground(|| {
+            frames.mix_foreground(Box::new(|| {
                 state.mix_service().prepare_mix_foreground(
                     northstar_room_application::mix_service::foreground::Ingress {
                         channel_id: channel.id,
@@ -523,7 +523,7 @@ pub(super) async fn process_channel_message(
                         identity: message_replay_identity.clone(),
                     },
                 )
-            })?
+            }))?
         } else {
             None
         }
@@ -632,7 +632,7 @@ pub(super) async fn process_channel_message(
             archived_jid,
         );
         if let Some(observation) = observation {
-            observation.enter(Stage::MixAdmission);
+            observation.enter(MixFrameStage::Admission);
         }
         let admission = state
             .mix_service()
@@ -699,7 +699,7 @@ pub(super) async fn process_channel_message(
     // left and prevents a post-join subscriber from missing an archive that
     // linearized after their subscription.
     if let Some(observation) = observation {
-        observation.enter(Stage::MixAdmission);
+        observation.enter(MixFrameStage::Admission);
     }
     let admission = if let Some(owner) = &foreground {
         let request = owner.store_request(
@@ -769,13 +769,7 @@ pub(super) async fn process_channel_message(
     Ok(None)
 }
 
-pub(super) fn message_error(
-    id: &str,
-    from: &str,
-    to: &str,
-    error_type: &str,
-    condition: &str,
-) -> String {
+pub fn message_error(id: &str, from: &str, to: &str, error_type: &str, condition: &str) -> String {
     let condition = XmlElement::dynamic(condition)
         .unwrap_or_else(|_| XmlElement::new("undefined-condition"))
         .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-stanzas");

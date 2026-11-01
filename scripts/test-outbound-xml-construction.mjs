@@ -34,7 +34,7 @@ function fixture(run) {
     }
     for (const entry of entries) write(entry, '');
     roleSplits([]);
-    write('src/xmpp/protocol/mix/worker.rs', '');
+    write('crates/contexts/room/northstar-mix-xmpp/src/worker.rs', '');
     write('crates/contexts/room/northstar-room-application/src/mix_service.rs', 'pub mod foreground;\npub mod outbox;\n');
     for (const child of ['foreground', 'outbox']) {
       write(`crates/contexts/room/northstar-room-application/src/mix_service/${child}.rs`, `mod nested;\n${rawXml}`);

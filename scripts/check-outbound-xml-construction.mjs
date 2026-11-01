@@ -35,6 +35,7 @@ const BASELINE = new Map([
   ['src/xmpp/protocol/messaging.rs', 0],
   ['src/xmpp/protocol/muc.rs', 0],
   ['src/xmpp/protocol/mix.rs', 0],
+  ['crates/contexts/room/northstar-mix-xmpp/src/lib.rs', 0],
   ['src/xmpp/protocol/pubsub.rs', 0],
   ['src/xmpp/protocol/pep.rs', 0],
   ['crates/contexts/pubsub/northstar-pubsub-xmpp/src/lib.rs', 0],
@@ -443,8 +444,9 @@ if (
   throw new Error('outbound XML detector exempted a different literal at the parser-only anchor');
 }
 
-const mixModuleFiles = productionModuleFiles('src/xmpp/protocol/mix.rs', { root });
-if (!mixModuleFiles.includes('src/xmpp/protocol/mix/worker.rs') || mixModuleFiles.some(p => p.includes('/stage4_saved'))) {
+const mixModuleFiles = productionModuleFiles('crates/contexts/room/northstar-mix-xmpp/src/lib.rs', { root });
+const mixSeamFiles = productionModuleFiles('src/xmpp/protocol/mix.rs', { root });
+if (!mixModuleFiles.includes('crates/contexts/room/northstar-mix-xmpp/src/worker.rs') || mixSeamFiles.some(p => p.includes('/stage4_saved'))) {
   throw new Error('outbound XML gate lost module expansion');
 }
 

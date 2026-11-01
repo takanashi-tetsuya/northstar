@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) fn presence_children(raw: &str) -> Result<(String, bool)> {
+pub fn presence_children(raw: &str) -> Result<(String, bool)> {
     let document = Document::parse(raw).context("malformed MIX presence")?;
     let root = document.root_element();
     anyhow::ensure!(root.tag_name().name() == "presence", "not a MIX presence");
@@ -24,8 +24,8 @@ pub(super) fn presence_children(raw: &str) -> Result<(String, bool)> {
     Ok((children, unavailable))
 }
 
-pub(super) async fn process_channel_presence(
-    state: &Arc<AppState>,
+pub async fn process_channel_presence(
+    state: &Arc<impl MixHost>,
     actor_bare: &str,
     actor_full: &str,
     raw: &str,
@@ -35,7 +35,7 @@ pub(super) async fn process_channel_presence(
     let to = root.attribute("to").unwrap_or_default();
     let id = root.attribute("id").unwrap_or_default();
     let target = CanonicalJid::parse_bare(to)?;
-    let mix_domain = local_mix_domain(state);
+    let mix_domain = local_mix_domain(state.local_domain());
     let Some(channel_localpart) = target.localpart() else {
         return Ok(Some(presence_error(
             id,
@@ -84,8 +84,8 @@ pub(super) async fn process_channel_presence(
 /// verified. Once capability verification succeeds, publish a conservative
 /// available state so a fresh cache or server restart does not permanently
 /// omit that resource from MIX. Later presence updates replace this item.
-pub(crate) async fn publish_verified_mix_presence_with(
-    context: &MixPresenceRecoveryContext,
+pub async fn publish_verified_mix_presence_with(
+    context: &impl MixPresenceRecoveryPort,
     actor_full: &str,
     expected_connection_id: Uuid,
     expected_caps_generation: u64,
@@ -124,7 +124,7 @@ pub(crate) async fn publish_verified_mix_presence_with(
             continue;
         };
         let domain = channel.domainpart();
-        let directed = crate::services::xml_util::set_to(&available, &membership.channel_jid);
+        let directed = northstar_xml_builder::rewrite::set_to(&available, &membership.channel_jid);
         // Hold the epoch for only one durable projection. User/membership
         // discovery above is intentionally outside it. Explicit presence or
         // teardown can therefore make progress between channels, and every
@@ -170,8 +170,8 @@ pub(crate) async fn publish_verified_mix_presence_with(
     Ok(())
 }
 
-pub(crate) fn mix_presence_route_is_current(
-    state: &AppState,
+pub fn mix_presence_route_is_current(
+    state: &impl MixHost,
     full_jid: &str,
     expected_connection_id: Uuid,
     expected_gate: &Arc<tokio::sync::Mutex<()>>,
@@ -185,13 +185,7 @@ pub(crate) fn mix_presence_route_is_current(
     )
 }
 
-pub(super) fn presence_error(
-    id: &str,
-    from: &str,
-    to: &str,
-    error_type: &str,
-    condition: &str,
-) -> String {
+pub fn presence_error(id: &str, from: &str, to: &str, error_type: &str, condition: &str) -> String {
     let condition = XmlElement::dynamic(condition)
         .unwrap_or_else(|_| XmlElement::new("undefined-condition"))
         .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-stanzas");

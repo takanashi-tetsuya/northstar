@@ -3,22 +3,22 @@
 use super::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum RelayPayload {
+pub enum RelayPayload {
     VCardTemp,
     VCard4 { item_id: Option<String> },
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct RelayIq {
-    pub(super) id: String,
-    pub(super) kind: String,
-    pub(super) from: String,
-    pub(super) to: String,
-    pub(super) payload_xml: String,
-    pub(super) request: Option<RelayPayload>,
+pub struct RelayIq {
+    pub id: String,
+    pub kind: String,
+    pub from: String,
+    pub to: String,
+    pub payload_xml: String,
+    pub request: Option<RelayPayload>,
 }
 
-pub(super) fn parse_relay_iq(raw: &str) -> Result<Option<RelayIq>> {
+pub fn parse_relay_iq(raw: &str) -> Result<Option<RelayIq>> {
     if raw.len() > 1_048_576 {
         anyhow::bail!("MIX IQ relay stanza is too large");
     }
@@ -125,7 +125,7 @@ pub(super) fn parse_relay_iq(raw: &str) -> Result<Option<RelayIq>> {
     }))
 }
 
-pub(super) fn relay_iq_xml(iq: &RelayIq, id: &str, from: &str, to: &str) -> String {
+pub fn relay_iq_xml(iq: &RelayIq, id: &str, from: &str, to: &str) -> String {
     let mut reply = XmlElement::namespaced("iq", "jabber:client")
         .attr("type", &iq.kind)
         .attr("from", from)
@@ -137,19 +137,19 @@ pub(super) fn relay_iq_xml(iq: &RelayIq, id: &str, from: &str, to: &str) -> Stri
     reply.finish()
 }
 
-pub(super) fn relay_error(id: &str, from: &str, to: &str, kind: &str, condition: &str) -> String {
+pub fn relay_error(id: &str, from: &str, to: &str, kind: &str, condition: &str) -> String {
     iq_error_to(id, from, to, kind, condition)
 }
 
-pub(super) fn register_mix_iq_relay(
-    state: &Arc<AppState>,
+pub fn register_mix_iq_relay(
+    state: &Arc<impl MixHost>,
     id: String,
     stage: MixIqRelayStage,
 ) -> bool {
     state.pending_mix_iq().admit(id, stage, Instant::now())
 }
 
-pub(super) async fn expire_mix_iq_relay(route: &MixIqRelayRoute, pending: PendingMixIqRelay) {
+pub async fn expire_mix_iq_relay(route: &impl MixIqRelayRoutePort, pending: PendingMixIqRelay) {
     let (requester, stanza) = match pending.stage {
         MixIqRelayStage::Participant {
             requester_full_jid,
@@ -185,16 +185,12 @@ pub(super) async fn expire_mix_iq_relay(route: &MixIqRelayRoute, pending: Pendin
     route.deliver(&requester, stanza).await;
 }
 
-pub(super) async fn deliver_mix_relay_stanza(
-    state: &Arc<AppState>,
-    recipient: &str,
-    stanza: String,
-) {
+pub async fn deliver_mix_relay_stanza(state: &Arc<impl MixHost>, recipient: &str, stanza: String) {
     state.mix_iq_relay_route().deliver(recipient, stanza).await;
 }
 
-pub(super) async fn relay_vcard_payload(
-    state: &Arc<AppState>,
+pub async fn relay_vcard_payload(
+    state: &Arc<impl MixHost>,
     user: &northstar_room_application::mix_service::MixAccount,
     request: &RelayPayload,
 ) -> Result<std::result::Result<String, &'static str>> {
@@ -232,7 +228,7 @@ pub(super) async fn relay_vcard_payload(
     }
 }
 
-pub(super) fn encoded_participant_full_jid(
+pub fn encoded_participant_full_jid(
     channel_jid: &str,
     participant_id: &str,
     resource: &str,
@@ -241,8 +237,8 @@ pub(super) fn encoded_participant_full_jid(
     northstar_xmpp_types::jid::canonicalize(&format!("{bare}/{resource}"))
 }
 
-pub(super) async fn handle_channel_relay_request(
-    state: &Arc<AppState>,
+pub async fn handle_channel_relay_request(
+    state: &Arc<impl MixHost>,
     request: &RelayIq,
     actor_full: &str,
 ) -> Result<String> {
@@ -254,7 +250,7 @@ pub(super) async fn handle_channel_relay_request(
     let (target_id, channel_jid) = decode_participant_jid(&target.bare())?;
     let channel = CanonicalJid::parse_bare(&channel_jid)?;
     let channel_domain = channel.domainpart();
-    let local_mix = local_mix_domain(state);
+    let local_mix = local_mix_domain(state.local_domain());
     anyhow::ensure!(
         channel_domain == local_mix,
         "MIX relay channel is not hosted locally"

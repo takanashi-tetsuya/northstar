@@ -10,13 +10,14 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use northstar_config::ExternalRouteDomainPolicy;
+use northstar_mix_xmpp::ports::{MixPresenceRecoveryPort, MixPresenceRoutes};
 use northstar_room_application::mix_service::{
     MixAccount, MixChannel, MixService, PamMembership, PresenceOutcome,
 };
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;
 
-pub(crate) struct MixPresenceRecoveryContext {
+pub struct MixPresenceRecoveryContext {
     routes: MixPresenceRecoveryRoutes,
     service: MixService<PostgresMixRepository>,
     local_domain: String,
@@ -25,7 +26,7 @@ pub(crate) struct MixPresenceRecoveryContext {
     federation: FederationRouter,
 }
 
-pub(crate) struct MixPresenceRecoveryRoutes {
+pub struct MixPresenceRecoveryRoutes {
     sessions: Arc<DashMap<String, OnlineSession>>,
 }
 
@@ -46,8 +47,10 @@ impl MixPresenceRecoveryRoutes {
     pub(crate) fn new(sessions: Arc<DashMap<String, OnlineSession>>) -> Self {
         Self { sessions }
     }
+}
 
-    pub(crate) fn local_epochs(&self, participant: &str) -> Vec<(String, Uuid, u64)> {
+impl MixPresenceRoutes for MixPresenceRecoveryRoutes {
+    fn local_epochs(&self, participant: &str) -> Vec<(String, Uuid, u64)> {
         session_entries_for_in(&self.sessions, participant)
             .into_iter()
             .map(|(full_jid, session)| {
@@ -60,18 +63,14 @@ impl MixPresenceRecoveryRoutes {
             .collect()
     }
 
-    pub(crate) fn gate(
-        &self,
-        full_jid: &str,
-        connection_id: Uuid,
-    ) -> Option<Arc<tokio::sync::Mutex<()>>> {
+    fn gate(&self, full_jid: &str, connection_id: Uuid) -> Option<Arc<tokio::sync::Mutex<()>>> {
         self.sessions
             .get(full_jid)
             .filter(|session| session.connection_id == connection_id)
             .map(|session| Arc::clone(&session.mix_presence_gate))
     }
 
-    pub(crate) fn epoch_state(
+    fn epoch_state(
         &self,
         full_jid: &str,
         expected_connection_id: Uuid,
@@ -99,21 +98,23 @@ impl MixPresenceRecoveryRoutes {
     }
 }
 
-impl MixPresenceRecoveryContext {
-    pub(crate) fn routes(&self) -> &MixPresenceRecoveryRoutes {
+impl MixPresenceRecoveryPort for MixPresenceRecoveryContext {
+    type Routes = MixPresenceRecoveryRoutes;
+
+    fn routes(&self) -> &MixPresenceRecoveryRoutes {
         &self.routes
     }
 
-    pub(crate) fn local_domain(&self) -> &str {
+    fn local_domain(&self) -> &str {
         &self.local_domain
     }
 
-    pub(crate) fn local_mix_domain(&self) -> String {
+    fn local_mix_domain(&self) -> String {
         northstar_xmpp_types::jid::prepare_domainpart(&format!("mix.{}", self.local_domain))
             .expect("configured XMPP domain must form a valid MIX service domain")
     }
 
-    pub(crate) fn federation_domain_allowed(&self, domain: &str) -> bool {
+    fn federation_domain_allowed(&self, domain: &str) -> bool {
         let Ok(domain) = northstar_xmpp_types::jid::prepare_domainpart(domain) else {
             return false;
         };
@@ -121,37 +122,28 @@ impl MixPresenceRecoveryContext {
             && self.runtime_policy.load().allows_domain(&domain)
     }
 
-    pub(crate) async fn send_federated(
-        &self,
-        domain: &str,
-        stanza: String,
-        source: Option<String>,
-    ) {
+    async fn send_federated(&self, domain: &str, stanza: String, source: Option<String>) {
         let _ = self.federation.send(domain, stanza, source).await;
     }
 
-    pub(crate) async fn find_enabled_user(&self, username: &str) -> Result<Option<MixAccount>> {
+    async fn find_enabled_user(&self, username: &str) -> Result<Option<MixAccount>> {
         self.service.find_enabled_user(username).await
     }
 
-    pub(crate) async fn wake_delivery_recipient(&self, bare_jid: &str) -> Result<()> {
+    async fn wake_delivery_recipient(&self, bare_jid: &str) -> Result<()> {
         self.service.wake_mix_delivery_recipient(bare_jid).await?;
         Ok(())
     }
 
-    pub(crate) async fn pam_memberships(&self, user_id: Uuid) -> Result<Vec<PamMembership>> {
+    async fn pam_memberships(&self, user_id: Uuid) -> Result<Vec<PamMembership>> {
         self.service.pam_memberships(user_id).await
     }
 
-    pub(crate) async fn mix_channel(
-        &self,
-        domain: &str,
-        localpart: &str,
-    ) -> Result<Option<MixChannel>> {
+    async fn mix_channel(&self, domain: &str, localpart: &str) -> Result<Option<MixChannel>> {
         self.service.mix_channel(domain, localpart).await
     }
 
-    pub(crate) async fn ensure_presence(
+    async fn ensure_presence(
         &self,
         channel_id: Uuid,
         actor_bare: &str,
@@ -162,7 +154,7 @@ impl MixPresenceRecoveryContext {
             .await
     }
 
-    pub(crate) async fn expire_unrefreshed(&self, cutoff: DateTime<Utc>) -> Result<usize> {
+    async fn expire_unrefreshed(&self, cutoff: DateTime<Utc>) -> Result<usize> {
         Ok(self
             .service
             .expire_unrefreshed_mix_presence(cutoff)

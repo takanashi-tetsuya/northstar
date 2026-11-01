@@ -1,17 +1,17 @@
 use super::{field_first, validate_form_fields, ANON_NS};
-use crate::xmpp::xml_builder::XmlElement;
 use anyhow::{Context, Result};
 use northstar_room_application::mix_service::MixParticipantPreference;
+use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
 use std::collections::BTreeMap;
 
-pub(super) fn is_xdata(node: Node<'_, '_>) -> bool {
+pub fn is_xdata(node: Node<'_, '_>) -> bool {
     node.is_element()
         && node.tag_name().name() == "x"
         && node.tag_name().namespace() == Some("jabber:x:data")
 }
 
-pub(super) fn parse_fields(form: Node<'_, '_>) -> Result<BTreeMap<String, Vec<String>>> {
+pub fn parse_fields(form: Node<'_, '_>) -> Result<BTreeMap<String, Vec<String>>> {
     anyhow::ensure!(
         matches!(form.attribute("type"), Some("submit" | "result")),
         "invalid MIX data form"
@@ -53,7 +53,7 @@ fn mix_xdata_option(value: &'static str) -> XmlElement {
     XmlElement::new("option").child(XmlElement::new("value").text(value))
 }
 
-pub(super) fn preference_result_form(preference: &MixParticipantPreference) -> String {
+pub fn preference_result_form(preference: &MixParticipantPreference) -> String {
     XmlElement::namespaced("x", "jabber:x:data")
         .attr("type", "result")
         .child(mix_xdata_value_field("FORM_TYPE", Some("hidden"), ANON_NS))
@@ -80,7 +80,7 @@ pub(super) fn preference_result_form(preference: &MixParticipantPreference) -> S
         .finish()
 }
 
-pub(super) fn preference_template_form() -> String {
+pub fn preference_template_form() -> String {
     let mut visibility = XmlElement::new("field")
         .attr("type", "list-single")
         .attr("var", "JID Visibility");
@@ -115,7 +115,7 @@ pub(super) fn preference_template_form() -> String {
         .finish()
 }
 
-pub(super) fn parse_preference_submission(
+pub fn parse_preference_submission(
     fields: &BTreeMap<String, Vec<String>>,
     current: Option<&MixParticipantPreference>,
 ) -> Result<MixParticipantPreference> {

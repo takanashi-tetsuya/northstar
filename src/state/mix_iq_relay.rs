@@ -4,11 +4,12 @@ use super::{session_entries_for_in, AppState, OnlineSession, RuntimeFederationPo
 use crate::s2s::FederationRouter;
 use dashmap::DashMap;
 use northstar_config::ExternalRouteDomainPolicy;
+use northstar_mix_xmpp::ports::{MixIqRelayExpiryPort, MixIqRelayRoutePort};
 use northstar_room_core::mix_iq_relay::{MixIqRelayIndex, PendingMixIqRelay};
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 use std::{sync::Arc, time::Instant};
 
-pub(crate) struct MixIqRelayRoute {
+pub struct MixIqRelayRoute {
     sessions: Arc<DashMap<String, OnlineSession>>,
     local_domain: String,
     static_policy: ExternalRouteDomainPolicy,
@@ -16,7 +17,7 @@ pub(crate) struct MixIqRelayRoute {
     federation: FederationRouter,
 }
 
-pub(crate) struct MixIqRelayExpiryContext {
+pub struct MixIqRelayExpiryContext {
     pending: Arc<MixIqRelayIndex>,
     route: MixIqRelayRoute,
 }
@@ -40,18 +41,20 @@ impl AppState {
     }
 }
 
-impl MixIqRelayExpiryContext {
-    pub(crate) fn take_expired(&self, now: Instant) -> Vec<PendingMixIqRelay> {
+impl MixIqRelayExpiryPort for MixIqRelayExpiryContext {
+    type Route = MixIqRelayRoute;
+
+    fn take_expired(&self, now: Instant) -> Vec<PendingMixIqRelay> {
         self.pending.take_expired(now)
     }
 
-    pub(crate) fn route(&self) -> &MixIqRelayRoute {
+    fn route(&self) -> &MixIqRelayRoute {
         &self.route
     }
 }
 
-impl MixIqRelayRoute {
-    pub(crate) async fn deliver(&self, recipient: &str, stanza: String) {
+impl MixIqRelayRoutePort for MixIqRelayRoute {
+    async fn deliver(&self, recipient: &str, stanza: String) {
         let Ok(recipient_jid) = CanonicalJid::parse(recipient) else {
             return;
         };

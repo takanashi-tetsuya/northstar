@@ -181,8 +181,10 @@ impl ProtocolSession {
                 northstar_room_application::mix_muc::MirrorDirection::Muc,
                 &muc_domain,
             );
-            let query =
-                super::mix::mix_service_disco_info_payload(self.state.server_name(), &mirror)?;
+            let query = northstar_mix_xmpp::mix_service_disco_info_payload(
+                self.state.server_name(),
+                &mirror,
+            )?;
             return Ok(Action::Send(iq_result_from(id, from, &query)));
         }
         if target.localpart().is_some() && target.domainpart() == mix_domain {
@@ -225,7 +227,7 @@ impl ProtocolSession {
                 northstar_room_application::mix_muc::MirrorDirection::Muc,
                 &muc_domain,
             );
-            let query = super::mix::mix_channel_disco_info_payload(
+            let query = northstar_mix_xmpp::mix_channel_disco_info_payload(
                 channel.name.as_deref().unwrap_or(&channel.localpart),
                 channel.allow_user_message_retraction
                     || channel.administrator_retraction_rights != "nobody",

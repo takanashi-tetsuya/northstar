@@ -5,7 +5,7 @@ import { readProductionModule } from './lib/source-module.mjs';
 
 // The whole production MIX protocol module (the file and its non-test child
 // files), so each mutation keeps finding its body after a module split.
-const baseline = readProductionModule('src/xmpp/protocol/mix.rs')
+const baseline = readProductionModule('crates/contexts/room/northstar-mix-xmpp/src/lib.rs')
   .replace(/\r\n/g, '\n');
 
 // Mutate one real production body in memory. No Rust fixture is compiled or
@@ -30,7 +30,7 @@ function rejects(name, declaration, before, after, expected) {
 const claim = 'async fn drainable_mix_outbox_claim<';
 const lane = 'async fn run_mix_outbox_lane(';
 const join = 'async fn join_mix_outbox_lanes';
-const start = 'pub(crate) fn start_mix_delivery_outbox(';
+const start = 'pub fn start_mix_delivery_outbox(';
 const admission = /claim admission/;
 const freshToken = /independent hard token|independent hard token and receive/;
 

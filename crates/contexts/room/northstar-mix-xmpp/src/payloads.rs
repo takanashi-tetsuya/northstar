@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(crate) fn mix_service_disco_info_payload(server_name: &str, mirror: &str) -> Result<String> {
+pub fn mix_service_disco_info_payload(server_name: &str, mirror: &str) -> Result<String> {
     let mut query = XmlElement::namespaced("query", "http://jabber.org/protocol/disco#info").child(
         XmlElement::new("identity")
             .attr("category", "conference")
@@ -23,7 +23,7 @@ pub(crate) fn mix_service_disco_info_payload(server_name: &str, mirror: &str) ->
     Ok(query.finish())
 }
 
-pub(crate) fn mix_channel_disco_info_payload(
+pub fn mix_channel_disco_info_payload(
     name: &str,
     supports_retraction: bool,
     supports_private_messages: bool,
@@ -74,7 +74,7 @@ pub(crate) fn mix_channel_disco_info_payload(
     Ok(query.finish())
 }
 
-pub(super) fn join_body(
+pub fn join_body(
     participant: &MixParticipant,
     subscriptions: &[String],
     preference: Option<&MixParticipantPreference>,
@@ -94,7 +94,7 @@ pub(super) fn join_body(
 
 /// XEP-0369 identifies the participant with the Stable Participant ID in an
 /// `id` attribute on the channel's direct join result.
-pub(super) fn core_join_payload(
+pub fn core_join_payload(
     participant: &MixParticipant,
     subscriptions: &[String],
     preference: Option<&MixParticipantPreference>,
@@ -110,7 +110,7 @@ pub(super) fn core_join_payload(
 /// XEP-0405 exposes the stable participant reference to a client as an
 /// encoded bare JID: `stable-id#channel@mix-service`.  Ensure that embedding
 /// the opaque ID in an RFC 7622 localpart does not change it under PRECIS.
-pub(super) fn encoded_participant_jid(channel_jid: &str, participant_id: &str) -> Result<String> {
+pub fn encoded_participant_jid(channel_jid: &str, participant_id: &str) -> Result<String> {
     anyhow::ensure!(
         northstar_room_application::mix_service::valid_stable_participant_id(participant_id),
         "invalid MIX stable participant id"
@@ -131,7 +131,7 @@ pub(super) fn encoded_participant_jid(channel_jid: &str, participant_id: &str) -
     Ok(encoded.to_string())
 }
 
-pub(super) fn decode_participant_jid(value: &str) -> Result<(String, String)> {
+pub fn decode_participant_jid(value: &str) -> Result<(String, String)> {
     let raw_localpart = value
         .split_once('@')
         .map(|(localpart, _)| localpart)
@@ -156,7 +156,7 @@ pub(super) fn decode_participant_jid(value: &str) -> Result<(String, String)> {
     Ok((participant_id.to_owned(), channel.to_string()))
 }
 
-pub(super) fn participant_id_from_encoded_jid(value: &str, channel_jid: &str) -> Result<String> {
+pub fn participant_id_from_encoded_jid(value: &str, channel_jid: &str) -> Result<String> {
     let (participant_id, encoded_channel) = decode_participant_jid(value)?;
     let channel = northstar_xmpp_types::jid::CanonicalJid::parse_bare(channel_jid)?;
     anyhow::ensure!(
@@ -166,7 +166,7 @@ pub(super) fn participant_id_from_encoded_jid(value: &str, channel_jid: &str) ->
     Ok(participant_id)
 }
 
-pub(super) fn pam_join_payload(
+pub fn pam_join_payload(
     channel_jid: &str,
     participant: &MixParticipant,
     subscriptions: &[String],
@@ -183,20 +183,20 @@ pub(super) fn pam_join_payload(
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(super) struct RemoteJoinResult {
-    pub(super) participant_id: String,
-    pub(super) participant_jid: String,
-    pub(super) subscriptions: Vec<String>,
-    pub(super) nick: Option<String>,
+pub struct RemoteJoinResult {
+    pub participant_id: String,
+    pub participant_jid: String,
+    pub subscriptions: Vec<String>,
+    pub nick: Option<String>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(super) struct RemoteIqError {
-    pub(super) error_type: String,
-    pub(super) condition: String,
+pub struct RemoteIqError {
+    pub error_type: String,
+    pub condition: String,
 }
 
-pub(super) fn parse_remote_iq_error(raw: &str) -> Result<RemoteIqError> {
+pub fn parse_remote_iq_error(raw: &str) -> Result<RemoteIqError> {
     const STANZA_ERRORS_NS: &str = "urn:ietf:params:xml:ns:xmpp-stanzas";
     const CONDITIONS: [&str; 22] = [
         "bad-request",
@@ -261,7 +261,7 @@ pub(super) fn parse_remote_iq_error(raw: &str) -> Result<RemoteIqError> {
     })
 }
 
-pub(super) fn parse_remote_join_result(raw: &str, channel_jid: &str) -> Result<RemoteJoinResult> {
+pub fn parse_remote_join_result(raw: &str, channel_jid: &str) -> Result<RemoteJoinResult> {
     let document = Document::parse(raw).context("malformed federated MIX join result")?;
     let root = document.root_element();
     anyhow::ensure!(
@@ -306,10 +306,7 @@ pub(super) fn parse_remote_join_result(raw: &str, channel_jid: &str) -> Result<R
     })
 }
 
-pub(super) fn parse_remote_pam_success(
-    raw: &str,
-    channel_jid: &str,
-) -> Result<Option<RemoteJoinResult>> {
+pub fn parse_remote_pam_success(raw: &str, channel_jid: &str) -> Result<Option<RemoteJoinResult>> {
     let document = Document::parse(raw).context("malformed federated MIX result")?;
     let root = document.root_element();
     anyhow::ensure!(
@@ -339,7 +336,7 @@ pub(super) fn parse_remote_pam_success(
     }
 }
 
-pub(super) fn mix_pubsub_publish_ack(node: &str, item_id: &str) -> String {
+pub fn mix_pubsub_publish_ack(node: &str, item_id: &str) -> String {
     XmlElement::namespaced("pubsub", PUBSUB_NS)
         .child(
             XmlElement::new("publish")
@@ -349,6 +346,6 @@ pub(super) fn mix_pubsub_publish_ack(node: &str, item_id: &str) -> String {
         .finish()
 }
 
-pub(super) fn mix_empty_pubsub() -> String {
+pub fn mix_empty_pubsub() -> String {
     XmlElement::namespaced("pubsub", PUBSUB_NS).finish()
 }

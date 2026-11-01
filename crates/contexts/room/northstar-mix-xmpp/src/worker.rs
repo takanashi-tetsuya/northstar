@@ -3,53 +3,53 @@ use super::*;
 // Main grants background workers 15 seconds to join. Stop admission first and
 // let bounded claims and owned deliveries drain for 14 seconds. The supervisor
 // then drops unfinished work; an uncertain lease recovers only through expiry.
-pub(super) const MIX_OUTBOX_DRAIN_GRACE: Duration = Duration::from_secs(14);
+pub const MIX_OUTBOX_DRAIN_GRACE: Duration = Duration::from_secs(14);
 /// A claimed delivery may have already crossed a process or network boundary,
 /// so its lease is the recovery authority.  Keep the entire local attempt —
 /// effect, lease renewal, and final durable transition — within one absolute
 /// deadline.  A later worker can safely recover a fenced row after its lease
 /// expires; this worker must never retain its lane indefinitely.
-pub(super) const MIX_OUTBOX_ATTEMPT_DEADLINE: Duration = Duration::from_secs(20);
+pub const MIX_OUTBOX_ATTEMPT_DEADLINE: Duration = Duration::from_secs(20);
 /// Bound claim and maintenance turns separately so a pool acquire or database
 /// wait cannot make a worker appear healthy while progress has stopped. A
 /// claim whose commit response is lost may still own a lease in PostgreSQL.
-pub(super) const MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE: Duration = Duration::from_secs(5);
+pub const MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE: Duration = Duration::from_secs(5);
 /// Retention has a fixed deadline owned by the worker lifecycle, rather than
 /// by individual delivery wakes.  Recreating this deadline after every claim
 /// would let sustained traffic starve bounded maintenance forever.
-pub(super) const MIX_OUTBOX_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60);
+pub const MIX_OUTBOX_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60);
 /// Renew well before the durable lease expires, but never immediately after a
 /// claim.  Tokio intervals tick immediately, which used to let a renewal wait
 /// on the same admission permit as the still-running effect.
-pub(super) const MIX_OUTBOX_LEASE_RENEWAL_INTERVAL: Duration = Duration::from_secs(10);
+pub const MIX_OUTBOX_LEASE_RENEWAL_INTERVAL: Duration = Duration::from_secs(10);
 /// An unavailable or not-yet-verified local route is not a failed delivery.
 /// Keep its durable projection parked for a bounded recovery interval.  The
 /// service layer reactivates it immediately when capability verification
 /// completes; this timer is only the fallback for a missed wake-up.
-pub(super) const MIX_DELIVERY_ROUTE_RECOVERY_DELAY_SECS: i64 = 30;
+pub const MIX_DELIVERY_ROUTE_RECOVERY_DELAY_SECS: i64 = 30;
 // PAM results include peer-facing correlation/acknowledgement work.  Keep the
 // historical narrow window even when ordinary MIX delivery has a larger
 // capacity budget, so a burst cannot crowd out the remote listener's exact
 // response path.
-pub(super) const PAM_RESULT_MAX_CONCURRENCY: usize = 2;
+pub const PAM_RESULT_MAX_CONCURRENCY: usize = 2;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum MixOutboxQueue {
+pub enum MixOutboxQueue {
     Delivery,
     PamResult,
 }
 
 /// Only delivery has a retained commit/reconnect wake. Its empty recovery
 /// scans may back off to one second; PAM retains the fixed 250 ms cadence.
-pub(super) struct MixClaimSchedule {
-    pub(super) next_claim: tokio::time::Instant,
-    pub(super) empty_delay: Duration,
-    pub(super) max_empty_delay: Duration,
+pub struct MixClaimSchedule {
+    pub next_claim: tokio::time::Instant,
+    pub empty_delay: Duration,
+    pub max_empty_delay: Duration,
 }
 
 impl MixClaimSchedule {
-    pub(super) const BASE_DELAY: Duration = Duration::from_millis(250);
+    pub const BASE_DELAY: Duration = Duration::from_millis(250);
 
-    pub(super) fn starting_at(queue: MixOutboxQueue, now: tokio::time::Instant) -> Self {
+    pub fn starting_at(queue: MixOutboxQueue, now: tokio::time::Instant) -> Self {
         Self {
             next_claim: now,
             empty_delay: Self::BASE_DELAY,
@@ -60,7 +60,7 @@ impl MixClaimSchedule {
         }
     }
 
-    pub(super) fn record_claim(&mut self, now: tokio::time::Instant, has_work: bool) {
+    pub fn record_claim(&mut self, now: tokio::time::Instant, has_work: bool) {
         if has_work {
             self.empty_delay = Self::BASE_DELAY;
         }
@@ -70,29 +70,29 @@ impl MixClaimSchedule {
         }
     }
 
-    pub(super) fn record_progress(&mut self, now: tokio::time::Instant) {
+    pub fn record_progress(&mut self, now: tokio::time::Instant) {
         self.empty_delay = Self::BASE_DELAY;
         self.next_claim = now;
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct MixMaintenanceSchedule {
-    pub(super) next_deadline: tokio::time::Instant,
+pub struct MixMaintenanceSchedule {
+    pub next_deadline: tokio::time::Instant,
 }
 
 impl MixMaintenanceSchedule {
-    pub(super) fn starting_at(now: tokio::time::Instant) -> Self {
+    pub fn starting_at(now: tokio::time::Instant) -> Self {
         Self {
             next_deadline: now + MIX_OUTBOX_MAINTENANCE_INTERVAL,
         }
     }
 
-    pub(super) fn due(self, now: tokio::time::Instant) -> bool {
+    pub fn due(self, now: tokio::time::Instant) -> bool {
         now >= self.next_deadline
     }
 
-    pub(super) fn record_completed_page(&mut self, completed_at: tokio::time::Instant) {
+    pub fn record_completed_page(&mut self, completed_at: tokio::time::Instant) {
         // Schedule one future page from the actual completion point. This is
         // intentionally skip-like: delayed workers never burst an arbitrary
         // number of maintenance pages ahead of delivery work.
@@ -104,7 +104,7 @@ impl MixMaintenanceSchedule {
 /// connection.  Keep one independently startable PAM lane, capped at its
 /// protocol-safe window; MixService separately limits each short database
 /// round to the configured background budget.
-pub(super) const fn mix_outbox_lane_budgets(background_budget: usize) -> (usize, usize) {
+pub const fn mix_outbox_lane_budgets(background_budget: usize) -> (usize, usize) {
     let pam_budget = if background_budget < PAM_RESULT_MAX_CONCURRENCY {
         background_budget
     } else {
@@ -113,7 +113,7 @@ pub(super) const fn mix_outbox_lane_budgets(background_budget: usize) -> (usize,
     (background_budget, pam_budget)
 }
 
-pub(super) enum MixOutboxWork {
+pub enum MixOutboxWork {
     Delivery(northstar_room_application::mix_service::outbox::OwnedAttempt),
     PamResult(ClaimedPamResult),
 }
@@ -122,8 +122,8 @@ pub(super) enum MixOutboxWork {
 /// PAM lanes concurrently, while the service serializes their short database
 /// turns.  A slow external delivery therefore never holds the start slot of a
 /// correlated PAM reply.
-pub(super) fn claim_mix_outbox_work(
-    context: Arc<MixOutboxContext>,
+pub fn claim_mix_outbox_work(
+    context: Arc<impl MixOutboxPort>,
     stop_claiming: tokio_util::sync::CancellationToken,
     cancel: tokio_util::sync::CancellationToken,
     queue: MixOutboxQueue,
@@ -180,12 +180,12 @@ pub(super) fn claim_mix_outbox_work(
     }
 }
 
-pub(super) type MixOutboxTask = BoxFuture<'static, (MixOutboxQueue, Result<()>)>;
-pub(super) type MixOutboxClaimTask = BoxFuture<'static, Result<Vec<MixOutboxWork>>>;
-pub(super) type MixOutboxMaintenanceTask = BoxFuture<'static, Result<()>>;
+pub type MixOutboxTask = BoxFuture<'static, (MixOutboxQueue, Result<()>)>;
+pub type MixOutboxClaimTask = BoxFuture<'static, Result<Vec<MixOutboxWork>>>;
+pub type MixOutboxMaintenanceTask = BoxFuture<'static, Result<()>>;
 
-pub(super) fn process_mix_outbox_work(
-    context: Arc<MixOutboxContext>,
+pub fn process_mix_outbox_work(
+    context: Arc<impl MixOutboxPort>,
     work: MixOutboxWork,
     cancel: tokio_util::sync::CancellationToken,
 ) -> MixOutboxTask {
@@ -209,8 +209,8 @@ pub(super) fn process_mix_outbox_work(
 /// It may commit a lease before returning its token, so ordinary admission
 /// shutdown must keep polling it; only hard cancellation or its deadline can
 /// leave that unknown token for lease recovery.
-pub(super) fn process_mix_outbox_claim(
-    context: Arc<MixOutboxContext>,
+pub fn process_mix_outbox_claim(
+    context: Arc<impl MixOutboxPort>,
     stop_claiming: tokio_util::sync::CancellationToken,
     cancel: tokio_util::sync::CancellationToken,
     queue: MixOutboxQueue,
@@ -224,8 +224,8 @@ pub(super) fn process_mix_outbox_claim(
 /// separate task prevents a pool/gate wait in retention from becoming a point
 /// at which a claimed delivery can no longer make the progress needed to
 /// release that same resource.
-pub(super) fn process_mix_outbox_maintenance(
-    context: Arc<MixOutboxContext>,
+pub fn process_mix_outbox_maintenance(
+    context: Arc<impl MixOutboxPort>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> MixOutboxMaintenanceTask {
     Box::pin(async move {
@@ -250,7 +250,7 @@ pub(super) fn process_mix_outbox_maintenance(
     })
 }
 
-pub(super) enum MixOutboxProgress {
+pub enum MixOutboxProgress {
     InFlight(MixOutboxQueue, Result<()>),
     Claim(Result<Vec<MixOutboxWork>>),
     Maintenance(Result<()>),
@@ -261,7 +261,7 @@ pub(super) enum MixOutboxProgress {
 /// released only when an already-claimed future is polled. Keeping all three
 /// in one select prevents either foreground claim or retention from becoming
 /// an accidental progress barrier for the delivery lane.
-pub(super) async fn next_mix_outbox_progress(
+pub async fn next_mix_outbox_progress(
     in_flight: &mut FuturesUnordered<MixOutboxTask>,
     claim: &mut Option<MixOutboxClaimTask>,
     maintenance: &mut Option<MixOutboxMaintenanceTask>,
@@ -301,7 +301,7 @@ pub(super) async fn next_mix_outbox_progress(
 /// immediately if PostgreSQL committed a recipient row while the lane was
 /// claiming or delivering its previous batch.  The `None` branch is pending
 /// forever and is used only by the separate PAM lane.
-pub(super) async fn wait_for_mix_delivery_wake(
+pub async fn wait_for_mix_delivery_wake(
     subscription: &mut Option<northstar_room_application::mix_service::MixDeliveryWakeSubscription>,
 ) -> bool {
     match subscription {
@@ -310,8 +310,8 @@ pub(super) async fn wait_for_mix_delivery_wake(
     }
 }
 
-pub(super) async fn run_mix_outbox_lane(
-    context: Arc<MixOutboxContext>,
+pub async fn run_mix_outbox_lane(
+    context: Arc<impl MixOutboxPort>,
     stop_claiming: tokio_util::sync::CancellationToken,
     cancel: tokio_util::sync::CancellationToken,
     queue: MixOutboxQueue,
@@ -500,7 +500,7 @@ pub(super) async fn run_mix_outbox_lane(
 /// peer finish already-issued claims and owned work inside the supervisor's
 /// existing drain budget. Unknown or transferred tokens are never released
 /// by the joiner.
-pub(super) async fn join_mix_outbox_lanes<D, P>(
+pub async fn join_mix_outbox_lanes<D, P>(
     stop_claiming: tokio_util::sync::CancellationToken,
     lane_cancel: tokio_util::sync::CancellationToken,
     delivery: D,
@@ -532,8 +532,8 @@ where
     }
 }
 
-pub(crate) fn start_mix_delivery_outbox(
-    context: Arc<MixOutboxContext>,
+pub fn start_mix_delivery_outbox(
+    context: Arc<impl MixOutboxPort>,
     registry: Arc<northstar_runtime::workers::WorkerRegistry>,
     cancel: tokio_util::sync::CancellationToken,
 ) {

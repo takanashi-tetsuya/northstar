@@ -3,12 +3,12 @@
 use super::*;
 
 #[derive(Debug, Eq, PartialEq)]
-pub(super) struct AuthenticatedMixIqActor {
-    pub(super) bare: String,
-    pub(super) reply_to: String,
+pub struct AuthenticatedMixIqActor {
+    pub bare: String,
+    pub reply_to: String,
 }
 
-pub(super) fn authenticated_actor(
+pub fn authenticated_actor(
     from: &str,
     authenticated_domain: &str,
 ) -> Result<AuthenticatedMixIqActor> {
@@ -27,7 +27,7 @@ pub(super) fn authenticated_actor(
     })
 }
 
-pub(super) fn authenticated_mix_disco_requester(
+pub fn authenticated_mix_disco_requester(
     from: &str,
     authenticated_domain: &str,
 ) -> Result<AuthenticatedMixIqActor> {
@@ -42,7 +42,7 @@ pub(super) fn authenticated_mix_disco_requester(
     })
 }
 
-pub(super) fn authenticated_full_actor(from: &str, authenticated_domain: &str) -> Result<String> {
+pub fn authenticated_full_actor(from: &str, authenticated_domain: &str) -> Result<String> {
     let actor = northstar_xmpp_types::jid::CanonicalJid::parse(from)?;
     anyhow::ensure!(
         actor.localpart().is_some(),
@@ -59,7 +59,7 @@ pub(super) fn authenticated_full_actor(from: &str, authenticated_domain: &str) -
     Ok(actor.to_string())
 }
 
-pub(super) fn authenticated_mix_service(asserted_domain: &str, authenticated_domain: &str) -> bool {
+pub fn authenticated_mix_service(asserted_domain: &str, authenticated_domain: &str) -> bool {
     let Ok(authenticated_domain) = prepare_domainpart(authenticated_domain) else {
         return false;
     };
@@ -67,8 +67,8 @@ pub(super) fn authenticated_mix_service(asserted_domain: &str, authenticated_dom
         .is_ok_and(|asserted| same_jid_domain(&asserted, &authenticated_domain))
 }
 
-pub(super) async fn federated_mix_disco_info(
-    state: &Arc<AppState>,
+pub async fn federated_mix_disco_info(
+    state: &Arc<impl MixHost>,
     request: &MixDiscoInfoRequest,
     requester: &AuthenticatedMixIqActor,
 ) -> Result<String> {
@@ -93,7 +93,10 @@ pub(super) async fn federated_mix_disco_info(
     let target = match CanonicalJid::parse(&request.to) {
         Ok(target)
             if target.resourcepart().is_none()
-                && same_jid_domain(target.domainpart(), &local_mix_domain(state)) =>
+                && same_jid_domain(
+                    target.domainpart(),
+                    &local_mix_domain(state.local_domain()),
+                ) =>
         {
             target
         }
@@ -107,7 +110,7 @@ pub(super) async fn federated_mix_disco_info(
             ));
         }
     };
-    let muc_domain = local_muc_domain(state);
+    let muc_domain = local_muc_domain(state.local_domain());
     let mirror = if let Some(localpart) = target.localpart() {
         let Some(channel) = state
             .mix_service()
@@ -179,7 +182,7 @@ pub(super) async fn federated_mix_disco_info(
     ))
 }
 
-pub(super) fn pam_membership_receives(membership: &PamMembership, node: &str) -> bool {
+pub fn pam_membership_receives(membership: &PamMembership, node: &str) -> bool {
     membership.state == "joined"
         && membership
             .subscriptions
@@ -187,15 +190,15 @@ pub(super) fn pam_membership_receives(membership: &PamMembership, node: &str) ->
             .any(|subscription| subscription == node)
 }
 
-pub(super) fn federated_mix_iq_is_mutation(request: &OwnedIq) -> bool {
+pub fn federated_mix_iq_is_mutation(request: &OwnedIq) -> bool {
     request.kind == "set" || matches!(&request.operation, IqOperation::Invite { .. })
 }
 
 /// S2S entry point.  The S2S layer must call this only after authenticating
 /// `authenticated_domain`; the function independently verifies the stanza's
 /// asserted `from` before creating or mutating a remote participant actor.
-pub(crate) async fn federated_mix_iq(
-    state: Arc<AppState>,
+pub async fn federated_mix_iq(
+    state: Arc<impl MixHost>,
     authenticated_domain: &str,
     raw: String,
 ) -> Result<bool> {
@@ -218,7 +221,7 @@ pub(crate) async fn federated_mix_iq(
     };
     let from = request.from.as_deref().unwrap_or_default();
     let to = request.to.as_deref().unwrap_or_default();
-    let local_mix = local_mix_domain(&state);
+    let local_mix = local_mix_domain(state.local_domain());
     let to_jid = CanonicalJid::parse(to)?;
     if to_jid.domainpart() == local_mix {
         let actor = authenticated_actor(from, authenticated_domain)?;
@@ -541,8 +544,8 @@ pub(crate) async fn federated_mix_iq(
     Ok(false)
 }
 
-pub(super) async fn federated_mix_iq_relay(
-    state: &Arc<AppState>,
+pub async fn federated_mix_iq_relay(
+    state: &Arc<impl MixHost>,
     authenticated_domain: &str,
     request: RelayIq,
 ) -> Result<bool> {
@@ -621,7 +624,7 @@ pub(super) async fn federated_mix_iq_relay(
                     same_jid_domain(&source_domain, authenticated_domain),
                     "forged MIX IQ target response"
                 );
-                let local_mix = local_mix_domain(state);
+                let local_mix = local_mix_domain(state.local_domain());
                 let channel_address = CanonicalJid::parse_bare(&channel_jid)?;
                 let Some(channel_localpart) = channel_address.localpart() else {
                     state.pending_mix_iq().remove(&request.id);
@@ -665,7 +668,7 @@ pub(super) async fn federated_mix_iq_relay(
         return Ok(false);
     }
 
-    let local_mix = local_mix_domain(state);
+    let local_mix = local_mix_domain(state.local_domain());
     let to = northstar_xmpp_types::jid::CanonicalJid::parse(&request.to)?;
     if to.domainpart() == local_mix && decode_participant_jid(&to.bare()).is_ok() {
         let actor = northstar_xmpp_types::jid::CanonicalJid::parse(&request.from)?;
@@ -748,8 +751,8 @@ pub(super) async fn federated_mix_iq_relay(
     Ok(false)
 }
 
-pub(crate) async fn federated_mix_message(
-    state: Arc<AppState>,
+pub async fn federated_mix_message(
+    state: Arc<impl MixHost>,
     authenticated_domain: &str,
     raw: String,
 ) -> Result<bool> {
@@ -761,7 +764,7 @@ pub(crate) async fn federated_mix_message(
         }
         let validation_error = state.validate_routed_message(root).err().map(|condition| {
             (
-                crate::services::xml_util::stanza_error_type(condition),
+                northstar_xml_builder::stanza::stanza_error_type(condition),
                 condition,
             )
         });
@@ -776,7 +779,7 @@ pub(crate) async fn federated_mix_message(
             validation_error,
         )
     };
-    let local_mix = local_mix_domain(&state);
+    let local_mix = local_mix_domain(state.local_domain());
     let to_jid = CanonicalJid::parse(&to)?;
     if let Some((error_type, condition)) = validation_error {
         if kind != "error" {
@@ -860,8 +863,8 @@ pub(crate) async fn federated_mix_message(
             return Ok(true);
         }
         for (jid, session) in state.session_entries_for(&to_jid.to_string()) {
-            if session_mix_capability(&state, &jid) == MixSessionCapability::Supported {
-                let _ = session.sender.try_send(raw.clone());
+            if state.session_mix_capability(&jid) == MixSessionCapability::Supported {
+                let _ = session.sender().try_send(raw.clone());
             }
         }
         return Ok(true);
@@ -869,8 +872,8 @@ pub(crate) async fn federated_mix_message(
     Ok(false)
 }
 
-pub(crate) async fn federated_mix_presence(
-    state: Arc<AppState>,
+pub async fn federated_mix_presence(
+    state: Arc<impl MixHost>,
     authenticated_domain: &str,
     raw: String,
 ) -> Result<bool> {
@@ -915,8 +918,8 @@ pub(crate) async fn federated_mix_presence(
             return Ok(true);
         }
         for (full_jid, session) in state.session_entries_for(&to) {
-            if session.available.load(std::sync::atomic::Ordering::Relaxed)
-                && session_mix_capability(&state, &full_jid) == MixSessionCapability::Supported
+            if session.is_available()
+                && state.session_mix_capability(&full_jid) == MixSessionCapability::Supported
             {
                 let response = XmlElement::namespaced("presence", "jabber:client")
                     .attr("from", &full_jid)
@@ -931,7 +934,7 @@ pub(crate) async fn federated_mix_presence(
         return Ok(true);
     }
     let from_jid = northstar_xmpp_types::jid::CanonicalJid::parse(&from)?;
-    let local_mix = local_mix_domain(&state);
+    let local_mix = local_mix_domain(state.local_domain());
     if to_jid.domainpart() == local_mix {
         if from_jid.resourcepart().is_none() {
             // A bare-JID presence to a channel is a state refresh request.
@@ -958,7 +961,7 @@ pub(crate) async fn federated_mix_presence(
         );
         if kind == "error" {
             for (_, session) in state.session_entries_for(&to) {
-                let _ = session.sender.try_send(raw.clone());
+                let _ = session.sender().try_send(raw.clone());
             }
             return Ok(true);
         }
@@ -988,8 +991,8 @@ pub(crate) async fn federated_mix_presence(
             return Ok(true);
         }
         for (jid, session) in state.session_entries_for(&to_jid.to_string()) {
-            if session_mix_capability(&state, &jid) == MixSessionCapability::Supported {
-                let _ = session.sender.try_send(raw.clone());
+            if state.session_mix_capability(&jid) == MixSessionCapability::Supported {
+                let _ = session.sender().try_send(raw.clone());
             }
         }
         return Ok(true);

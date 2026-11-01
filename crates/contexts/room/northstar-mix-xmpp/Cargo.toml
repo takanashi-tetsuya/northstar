@@ -1,0 +1,36 @@
+[package]
+name = "northstar-mix-xmpp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "XEP-0369 MIX, XEP-0405 MIX-PAM and XEP-0406 MIX administration handlers of Northstar."
+publish = false
+
+[features]
+test-support = []
+
+[dependencies]
+anyhow = "1.0"
+chrono = "0.4"
+dashmap = "6.1"
+futures = "0.3"
+northstar-archive-core = { path = "../../archive/northstar-archive-core" }
+northstar-delivery-core = { path = "../../message/northstar-delivery-core" }
+northstar-federation-core = { path = "../../federation/northstar-federation-core" }
+northstar-room-application = { path = "../northstar-room-application" }
+northstar-room-core = { path = "../northstar-room-core" }
+northstar-roster-core = { path = "../../roster/northstar-roster-core" }
+northstar-runtime = { path = "../../../platform/northstar-runtime" }
+northstar-xep-0199 = { path = "../../../kernel/northstar-xep-0199" }
+northstar-xep-0313 = { path = "../../../kernel/northstar-xep-0313" }
+northstar-xep-0359 = { path = "../../../kernel/northstar-xep-0359" }
+northstar-xep-core = { path = "../../../kernel/northstar-xep-core" }
+northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+roxmltree = "0.20"
+sha2 = "0.10"
+tokio = { version = "1.43", features = ["sync", "time", "macros"] }
+tokio-util = "0.7"
+tracing = "0.1"
+uuid = { version = "1.12", features = ["v4"] }

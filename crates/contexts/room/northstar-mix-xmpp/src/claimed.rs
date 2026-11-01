@@ -3,7 +3,7 @@
 use super::*;
 
 #[derive(Debug)]
-pub(super) struct MixOutboxShutdown;
+pub struct MixOutboxShutdown;
 
 impl std::fmt::Display for MixOutboxShutdown {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -13,7 +13,7 @@ impl std::fmt::Display for MixOutboxShutdown {
 
 impl std::error::Error for MixOutboxShutdown {}
 
-pub(super) fn mix_outbox_is_shutting_down(error: &anyhow::Error) -> bool {
+pub fn mix_outbox_is_shutting_down(error: &anyhow::Error) -> bool {
     error.downcast_ref::<MixOutboxShutdown>().is_some()
 }
 
@@ -22,7 +22,7 @@ pub(super) fn mix_outbox_is_shutting_down(error: &anyhow::Error) -> bool {
 /// recovery path, rather than attempting another state change after ownership
 /// may have become uncertain.
 #[derive(Debug)]
-pub(super) struct MixOutboxDeadlineElapsed;
+pub struct MixOutboxDeadlineElapsed;
 
 impl std::fmt::Display for MixOutboxDeadlineElapsed {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -32,7 +32,7 @@ impl std::fmt::Display for MixOutboxDeadlineElapsed {
 
 impl std::error::Error for MixOutboxDeadlineElapsed {}
 
-pub(super) fn mix_outbox_deadline_elapsed(error: &anyhow::Error) -> bool {
+pub fn mix_outbox_deadline_elapsed(error: &anyhow::Error) -> bool {
     error.downcast_ref::<MixOutboxDeadlineElapsed>().is_some()
 }
 
@@ -40,7 +40,7 @@ pub(super) fn mix_outbox_deadline_elapsed(error: &anyhow::Error) -> bool {
 /// caller-owned absolute deadline.  Dropping the pending future also drops a
 /// pending semaphore/pool acquisition, so no detached task retains a worker
 /// lane after the caller has stopped owning the attempt.
-pub(super) async fn bounded_mix_outbox_turn<T>(
+pub async fn bounded_mix_outbox_turn<T>(
     cancel: &tokio_util::sync::CancellationToken,
     deadline: tokio::time::Instant,
     turn: impl std::future::Future<Output = Result<T>>,
@@ -63,7 +63,7 @@ pub(super) async fn bounded_mix_outbox_turn<T>(
 /// deadline.  Give each database turn a short, explicit progress budget;
 /// claimed effects use their shared attempt deadline through
 /// [`bounded_mix_outbox_turn`] directly.
-pub(super) async fn cancellable_mix_outbox_turn<T>(
+pub async fn cancellable_mix_outbox_turn<T>(
     cancel: &tokio_util::sync::CancellationToken,
     turn: impl std::future::Future<Output = Result<T>>,
 ) -> Result<T> {
@@ -79,7 +79,7 @@ pub(super) async fn cancellable_mix_outbox_turn<T>(
 /// keeps the same five-second database budget and returns its exact tokens
 /// during graceful shutdown. Hard cancellation still leaves any uncertain
 /// commit fenced for lease expiry; no token is guessed or released in Drop.
-pub(super) async fn drainable_mix_outbox_claim<T>(
+pub async fn drainable_mix_outbox_claim<T>(
     stop_claiming: &tokio_util::sync::CancellationToken,
     cancel: &tokio_util::sync::CancellationToken,
     claim: impl std::future::Future<Output = Result<Vec<T>>>,
@@ -98,7 +98,7 @@ pub(super) async fn drainable_mix_outbox_claim<T>(
 ///
 /// `Ok(None)` means the lease was no longer ours.  The caller must not attempt
 /// an acknowledgement or retry in that case.
-pub(super) async fn run_claimed_mix_effect_with_lease<T>(
+pub async fn run_claimed_mix_effect_with_lease<T>(
     cancel: tokio_util::sync::CancellationToken,
     deadline: tokio::time::Instant,
     renewal_interval: Duration,
@@ -145,7 +145,7 @@ pub(super) async fn run_claimed_mix_effect_with_lease<T>(
 
 /// Only the route and observed durable turns vary between worker environments.
 /// The shared policy owns deadlines, renewal scope, and settlement selection.
-pub(super) trait ClaimedMixDeliveryPort: Clone + Send + Sync + 'static {
+pub trait ClaimedMixDeliveryPort: Clone + Send + Sync + 'static {
     fn route(
         &self,
         request: &mix_worker::RouteRequest,
@@ -162,17 +162,24 @@ pub(super) trait ClaimedMixDeliveryPort: Clone + Send + Sync + 'static {
     ) -> impl std::future::Future<Output = Result<mix_worker::SettlementResult>> + Send;
 }
 
-#[derive(Clone)]
-pub(super) struct MixOutboxDeliveryPort {
-    pub(super) context: Arc<MixOutboxContext>,
+pub struct MixOutboxDeliveryPort<C> {
+    pub context: Arc<C>,
 }
 
-impl ClaimedMixDeliveryPort for MixOutboxDeliveryPort {
+impl<C> Clone for MixOutboxDeliveryPort<C> {
+    fn clone(&self) -> Self {
+        Self {
+            context: Arc::clone(&self.context),
+        }
+    }
+}
+
+impl<C: MixOutboxPort> ClaimedMixDeliveryPort for MixOutboxDeliveryPort<C> {
     async fn route(
         &self,
         request: &mix_worker::RouteRequest,
     ) -> Result<ChannelStanzaDeliveryOutcome> {
-        deliver_claimed_channel_stanza(&self.context, request).await
+        deliver_claimed_channel_stanza(self.context.as_ref(), request).await
     }
 
     async fn renew(&self, request: &mix_worker::RenewalRequest) -> Result<bool> {
@@ -193,8 +200,8 @@ impl ClaimedMixDeliveryPort for MixOutboxDeliveryPort {
     }
 }
 
-pub(super) async fn process_claimed_mix_delivery(
-    context: Arc<MixOutboxContext>,
+pub async fn process_claimed_mix_delivery(
+    context: Arc<impl MixOutboxPort>,
     attempt: mix_worker::Attempt,
     handle: outbox::AttemptHandle,
     cancel: tokio_util::sync::CancellationToken,
@@ -208,7 +215,7 @@ pub(super) async fn process_claimed_mix_delivery(
     .await
 }
 
-pub(super) async fn process_claimed_mix_delivery_with_port<P: ClaimedMixDeliveryPort>(
+pub async fn process_claimed_mix_delivery_with_port<P: ClaimedMixDeliveryPort>(
     port: P,
     attempt: mix_worker::Attempt,
     handle: outbox::AttemptHandle,
@@ -360,13 +367,13 @@ pub(super) async fn process_claimed_mix_delivery_with_port<P: ClaimedMixDelivery
     Ok(())
 }
 
-pub(super) enum PamResultRoute {
+pub enum PamResultRoute {
     Accepted,
     Offline,
 }
 
-pub(super) async fn deliver_claimed_pam_result(
-    context: &MixOutboxContext,
+pub async fn deliver_claimed_pam_result(
+    context: &impl MixOutboxPort,
     result: &ClaimedPamResult,
 ) -> Result<PamResultRoute> {
     let target = CanonicalJid::parse(&result.requester_full_jid)?;
@@ -375,17 +382,17 @@ pub(super) async fn deliver_claimed_pam_result(
         "PAM result target is not a full JID"
     );
     for (jid, session) in context.session_entries_for(&result.requester_full_jid) {
-        if jid != result.requester_full_jid || session.user_id != result.user_id {
+        if jid != result.requester_full_jid || session.user_id() != result.user_id {
             continue;
         }
         let (receipt_tx, mut receipt_rx) = tokio::sync::mpsc::unbounded_channel();
         if let Err(error) = session
-            .sender
+            .sender()
             .try_send_with_transport_receipt(result.response_xml.clone(), receipt_tx)
         {
             if matches!(&error, tokio::sync::mpsc::error::TrySendError::Full(_)) {
-                session.sender.disconnect_backpressured_transport();
-                session.disconnect.cancel();
+                session.sender().disconnect_backpressured_transport();
+                session.disconnect().cancel();
             }
             anyhow::bail!("PAM result resource rejected durable delivery: {error}");
         }
@@ -396,8 +403,8 @@ pub(super) async fn deliver_claimed_pam_result(
                 // The stanza may still be sitting in the ordered socket
                 // queue. Close that transport before a retry can overtake it;
                 // the journal remains authoritative for reconnect/retry.
-                session.sender.disconnect_backpressured_transport();
-                session.disconnect.cancel();
+                session.sender().disconnect_backpressured_transport();
+                session.disconnect().cancel();
                 anyhow::bail!("PAM result transport ownership timed out");
             }
         }
@@ -421,8 +428,8 @@ pub(super) async fn deliver_claimed_pam_result(
     Ok(PamResultRoute::Offline)
 }
 
-pub(super) async fn process_claimed_pam_result(
-    context: Arc<MixOutboxContext>,
+pub async fn process_claimed_pam_result(
+    context: Arc<impl MixOutboxPort>,
     result: ClaimedPamResult,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
@@ -432,7 +439,7 @@ pub(super) async fn process_claimed_pam_result(
         cancel.clone(),
         attempt_deadline,
         MIX_OUTBOX_LEASE_RENEWAL_INTERVAL,
-        async { Ok(deliver_claimed_pam_result(&context, &result).await) },
+        async { Ok(deliver_claimed_pam_result(context.as_ref(), &result).await) },
         move || -> BoxFuture<'static, Result<bool>> {
             let context = Arc::clone(&renewal_context);
             let operation_id = result.operation_id;
@@ -521,8 +528,8 @@ pub(super) async fn process_claimed_pam_result(
     Ok(())
 }
 
-pub(super) fn record_mix_post_commit_failure(
-    context: &MixOutboxContext,
+pub fn record_mix_post_commit_failure(
+    context: &impl MixOutboxPort,
     channel_jid: &str,
     recipient: &str,
     stage: &str,

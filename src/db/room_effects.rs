@@ -12,7 +12,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct RootRoomEffects;
+pub struct RootRoomEffects;
 
 pub(crate) type PostgresMucRepository =
     northstar_room_postgres::room::PostgresMucRepository<RootRoomEffects>;

@@ -32,14 +32,14 @@ const files = {
   mucSlot: 'crates/contexts/room/northstar-room-application/src/muc_service/discussion.rs',
   mucDb: 'crates/contexts/room/northstar-room-postgres/src/muc.rs',
   mucRepository: 'crates/contexts/room/northstar-room-postgres/src/room.rs',
-  mix: 'src/xmpp/protocol/mix.rs',
+  mix: 'crates/contexts/room/northstar-mix-xmpp/src/lib.rs',
   mixService: 'crates/contexts/room/northstar-room-application/src/mix_service.rs',
   mixCore: 'crates/contexts/room/northstar-room-application/src/mix.rs',
   mixData: 'crates/contexts/room/northstar-room-core/src/mix.rs',
   mixSlot: 'crates/contexts/room/northstar-room-application/src/mix_service/foreground.rs',
   mixWorkerCore: 'crates/contexts/message/northstar-delivery-core/src/mix_outbox.rs',
   mixWorkerOwner: 'crates/contexts/room/northstar-room-application/src/mix_service/outbox.rs',
-  mixWorker: 'src/xmpp/protocol/mix/worker.rs',
+  mixWorker: 'crates/contexts/room/northstar-mix-xmpp/src/worker.rs',
   mixArchive: 'src/db/archive.rs',
   state: 'src/state.rs',
   sessionTable: 'src/xmpp/local_routes/session_table.rs',
@@ -1128,11 +1128,11 @@ export function verifyRouteHelperBoundaries({ state, sessionTable, mixOutboxStat
   requireBoundary(item(stateCode, "activate_session_if_current", "pub(crate)fnactivate_session_if_current(&self,full_jid:&str,connection_id:uuid::Uuid,user_id:uuid::Uuid,auth_generation:i64,lifecycle:&Arc<AtomicU8>,disconnect:&CancellationToken)->bool", "AppState") ===
     "activate_session_if_current_in(&self.sessions,full_jid,connection_id,user_id,auth_generation,lifecycle,disconnect)",
     "route helper activate_session_if_current must preserve all exact activation arguments");
-  requireBoundary(item(capsCode, "session_mix_capability", "pub(crate)fnsession_mix_capability(&self,full_jid:&str)->MixSessionCapability", "MixOutboxContext") ===
+  requireBoundary(item(capsCode, "session_mix_capability", "fnsession_mix_capability(&self,full_jid:&str)->MixSessionCapability", "MixOutboxPortforMixOutboxContext") ===
     "session_mix_capability_in(&self.sessions,&self.caps_by_jid,&self.pending_caps,full_jid)",
     "route helper session_mix_capability must preserve all exact capability map/index/key arguments");
   const route = item(mixCode, 'deliver_channel_stanza_inner',
-    "pub(super) async fn deliver_channel_stanza_inner(context: &MixOutboxContext, delivery: ChannelStanzaDelivery<'_>, observation: Option<&mix_worker::RouteRequest>) -> Result<ChannelStanzaDeliveryOutcome>");
+    "pub async fn deliver_channel_stanza_inner(context: &impl MixOutboxPort, delivery: ChannelStanzaDelivery<'_>, observation: Option<&mix_worker::RouteRequest>) -> Result<ChannelStanzaDeliveryOutcome>");
   const targets = 'letmutlocal_targets=context.session_entries_for(&recipient.jid);local_targets.sort_unstable_by(|(left,_),(right,_)|left.cmp(right));ifletSome(delivery_id)=durable_delivery_id{tracing::debug!(delivery_id=%delivery_id,target_count=local_targets.len());}letmuthad_deliverable_target=false;letmuthad_unknown_target=false;letmuthad_route_target=!local_targets.is_empty();letmutcluster_delivery_failed=false;letmutaccepted=false;letmuttransferred_to_recoverable_transport=false;for(jid,session)in&local_targets{matchcontext.session_mix_capability(jid){';
   const archive = route.indexOf('ifarchive{');
   requireBoundary(count(route, 'ifarchive{') === 1 && route.includes(targets) &&
@@ -1569,15 +1569,15 @@ export function verifyMixForegroundBoundaries({ mix, mixCore, mixData, mixSlot, 
     'MIX retirement must remain in the frame terminal phase');
   const channel = dense(body(mix, 'async\\s+fn\\s+process_channel_message\\b'));
   const foregroundRegistration = 'letforeground=ifretraction_target.is_none(){ifletSome(frames)=observation{' +
-    'frames.mix_foreground(||{state.mix_service().prepare_mix_foreground(northstar_room_application::mix_service::foreground::Ingress{' +
+    'frames.mix_foreground(Box::new(||{state.mix_service().prepare_mix_foreground(northstar_room_application::mix_service::foreground::Ingress{' +
     'channel_id:channel.id,channel_jid:channel.jid(),actor_bare:actor_bare.to_owned(),actor_full:actor_full.to_owned(),' +
     'children:message_children.as_deref().unwrap_or_default().to_owned(),encrypted:message_encrypted,identity:message_replay_identity.clone()' +
-    '})})?}else{None}}else{None};';
+    '})}))?}else{None}}else{None};';
   const replaySelection = 'ifletSome(identity)=message_replay_identity.as_ref(){letreplay=ifletSome(owner)=&foreground{' +
     'letrequest=owner.replay_request()?.ok_or(northstar_room_application::mix_service::foreground::Rejected::Input)?;' +
     'state.mix_service().lookup_mix_message_replay_observed(&request).await?' +
     '}else{state.mix_service().lookup_mix_message_replay(channel.id,actor_bare,identity).await?};matchreplay{';
-  const storeSelection = 'ifletSome(observation)=observation{observation.enter(Stage::MixAdmission);}' +
+  const storeSelection = 'ifletSome(observation)=observation{observation.enter(MixFrameStage::Admission);}' +
     'letadmission=ifletSome(owner)=&foreground{' +
     'letrequest=owner.store_request(northstar_room_application::mix_service::foreground::StoreCommand{' +
     'channel_id:channel.id,actor:actor_bare.to_owned(),item_id:archive_id,payload:archive,identity:message_replay_identity,' +
@@ -1592,7 +1592,7 @@ export function verifyMixForegroundBoundaries({ mix, mixCore, mixData, mixSlot, 
   requireBoundary(count(channel, 'mix_participant(channel.id,actor_bare)') === 1 &&
     channel.indexOf('mix_participant(channel.id,actor_bare)') > channel.indexOf('lookup_mix_message_replay_observed(&request).await?'),
     'MIX mutable membership must follow immutable replay');
-  ordered(channel, ['letforeground=ifretraction_target.is_none()', 'frames.mix_foreground(||{state.mix_service().prepare_mix_foreground(',
+  ordered(channel, ['letforeground=ifretraction_target.is_none()', 'frames.mix_foreground(Box::new(||{state.mix_service().prepare_mix_foreground(',
     'owner.replay_request()?', 'lookup_mix_message_replay_observed(&request).await?',
     'matchreplay{', 'MixBusinessReplay::Replay(_)=>returnOk(None)', 'mix_participant(channel.id,actor_bare)',
     'owner.store_request(', 'store_mix_message_observed(&request).await?', 'store_mix_message(StoreMixMessageRequest{'],
@@ -1772,7 +1772,7 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
   const routeInner = method(mixProduction, 'deliver_channel_stanza_inner');
   for (const span of [
     'letadmission=ifletSome(owner)=observation{letrequest=owner.archive_request(user.id,archive_id,Some(client_stanza_id.clone()))?;context.service().outbox_archive_mix_message_once_observed(&request).await',
-    'letresult=ifletSome(owner)=observation{letrequest=owner.local_request(jid.clone())?;try_send_local_durable_mix_observed(&session.sender,&session.disconnect,&request).await}',
+    'letresult=ifletSome(owner)=observation{letrequest=owner.local_request(jid.clone())?;try_send_local_durable_mix_observed(session.sender(),session.disconnect(),&request).await}',
     'letresult=ifletSome(owner)=observation{letrequest=owner.cluster_request(node_id.clone())?;send_claimed_cluster_mix(context,&request).await}',
   ]) requireBoundary(routeInner.includes(span), 'MIX observed route must retain the unfiltered bound archive/local/cluster branches');
   requireBoundary(method(mixProduction, 'try_send_local_durable_mix_observed') === 'try_send_local_durable_mix_inner(sender,disconnect,request.stanza().to_owned(),request.source(),Some(request)).await',
@@ -1781,7 +1781,7 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
   requireBoundary(local.startsWith('ifletSome(request)=observation{request.start().map_err(MixLocalTransportFailure::Observation)?;}letreceiver=matchsender.try_send_durable_mix(stanza,source){') &&
     local.includes('letmutpending=PendingMixLocalHandoff::new(sender.clone(),disconnect.clone());ifletSome(request)=observation{request.enqueued().map_err(MixLocalTransportFailure::Observation)?;}letcompletion=matchreceiver.await{'),
     'MIX local effect must start before enqueue and retain the existing pending-disconnect guard');
-  requireBoundary(local.includes('pending.mark_completed();ifletSome(request)=observation{letboundary=matchcompletion{crate::xmpp::outbound::MixTransportCompletion::SocketFenced{connection_id}=>{mix_worker::TransferBoundary::SocketFenced(connection_id)}crate::xmpp::outbound::MixTransportCompletion::SmPersisted{session_id}=>{mix_worker::TransferBoundary::SmPersisted(session_id)}crate::xmpp::outbound::MixTransportCompletion::BoshPersisted{session_id}=>{mix_worker::TransferBoundary::BoshPersisted(session_id)}};request.returned(mix_worker::LocalResult::Transferred(boundary)).map_err(MixLocalTransportFailure::Observation)?;}Ok(completion)'),
+  requireBoundary(local.includes('pending.mark_completed();ifletSome(request)=observation{letboundary=matchcompletion{northstar_delivery_core::MixTransportCompletion::SocketFenced{connection_id}=>{mix_worker::TransferBoundary::SocketFenced(connection_id)}northstar_delivery_core::MixTransportCompletion::SmPersisted{session_id}=>{mix_worker::TransferBoundary::SmPersisted(session_id)}northstar_delivery_core::MixTransportCompletion::BoshPersisted{session_id}=>{mix_worker::TransferBoundary::BoshPersisted(session_id)}};request.returned(mix_worker::LocalResult::Transferred(boundary)).map_err(MixLocalTransportFailure::Observation)?;}Ok(completion)'),
     'MIX local typed transfer must be consumed immediately before any later await or return');
   requireBoundary(method(mixProduction, 'send_claimed_cluster_mix') === 'request.start()?;letresult=context.send_cluster_mix(request.node(),request.recipient(),request.stanza(),Some(request.source())).await;record_claimed_cluster_result(request,&result)?;result',
     'MIX cluster invocation must consume its actual typed result before returning');
@@ -1795,10 +1795,10 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
     'fnrenew(&self,request:&mix_worker::RenewalRequest)->implstd::future::Future<Output=Result<bool>>+Send;' +
     'fnsettle(&self,request:&mix_worker::SettlementRequest)->implstd::future::Future<Output=Result<mix_worker::SettlementResult>>+Send;',
     'MIX shared policy port must contain only route and observed renewal/settlement turns');
-  requireBoundary(dense(body(mixProduction, 'struct\\s+MixOutboxDeliveryPort\\b')) === 'pub(super)context:Arc<MixOutboxContext>,',
+  requireBoundary(dense(body(mixProduction, 'struct\\s+MixOutboxDeliveryPort\\b')) === 'pubcontext:Arc<C>,',
     'MIX production port must retain only its existing context');
-  const port = body(mixProduction, 'impl\\s+ClaimedMixDeliveryPort\\s+for\\s+MixOutboxDeliveryPort\\b');
-  requireBoundary(method(port, 'route') === 'deliver_claimed_channel_stanza(&self.context,request).await' &&
+  const port = body(mixProduction, 'impl<C:\\s*MixOutboxPort>\\s*ClaimedMixDeliveryPort\\s+for\\s+MixOutboxDeliveryPort<C>');
+  requireBoundary(method(port, 'route') === 'deliver_claimed_channel_stanza(self.context.as_ref(),request).await' &&
     method(port, 'renew') === 'self.context.service().renew_mix_delivery_lease_observed(request).await' &&
     method(port, 'settle') === 'self.context.service().settle_mix_delivery_observed(request).await',
     'MIX production port must forward each exact request to its existing observed effect');
@@ -1880,17 +1880,17 @@ export function verifyRoomExecutionBoundaries(sources) {
   verifyMucDiscussionBoundaries(sources);
 
   const mixIngress = compact(body(mix, 'async\\s+fn\\s+try_mix_message\\b'));
-  requireBoundary(mixIngress.includes('if!CanonicalJid::parse(to).is_ok_and(|target|target.domainpart()==self.mix_domain()){returnOk(None);}self.enter_frame_stage(Stage::MixPolicy);letSome(user)=self.authenticated.as_ref()') &&
-    mixIngress.includes('process_channel_message(&self.state,&actor_bare,full_jid,raw,Some(&self.frame_executions),).await?'),
+  requireBoundary(mixIngress.includes('if!CanonicalJid::parse(to).is_ok_and(|target|target.domainpart()==mix_domain(session)){returnOk(None);}session.frame_observer().enter(MixFrameStage::Policy);letSome(user)=session.user()') &&
+    mixIngress.includes('process_channel_message(session.host(),&actor_bare,full_jid,raw,Some(session.frame_observer()),).await?'),
   'C2S MIX must attribute policy after target selection and pass its originating observation');
   const channelMessage = compact(body(mix, 'async\\s+fn\\s+process_channel_message\\b'));
-  requireBoundary(channelMessage.startsWith('ifletSome(observation)=observation{observation.enter(Stage::MixPolicy);}'),
+  requireBoundary(channelMessage.startsWith('ifletSome(observation)=observation{observation.enter(MixFrameStage::Policy);}'),
     'MIX shared owner must retain optional policy observation');
   for (const call of ['retract_mix_message']) {
-    requireBoundary(channelMessage.includes(`ifletSome(observation)=observation{observation.enter(Stage::MixAdmission);}letadmission=state.mix_service().${call}(`),
+    requireBoundary(channelMessage.includes(`ifletSome(observation)=observation{observation.enter(MixFrameStage::Admission);}letadmission=state.mix_service().${call}(`),
       `MIX admission stage must immediately precede ${call}`);
   }
-  requireBoundary(channelMessage.includes('ifletSome(observation)=observation{observation.enter(Stage::MixAdmission);}letadmission=ifletSome(owner)=&foreground{'),
+  requireBoundary(channelMessage.includes('ifletSome(observation)=observation{observation.enter(MixFrameStage::Admission);}letadmission=ifletSome(owner)=&foreground{'),
     'MIX admission stage must immediately precede the foreground admission branch');
   verifyMixForegroundBoundaries(sources);
   const federated = compact(body(mix, 'async\\s+fn\\s+federated_mix_message\\b'));

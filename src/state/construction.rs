@@ -824,19 +824,19 @@ impl AppState {
             Arc::clone(&state.sm_suspension_recovery),
             worker_cancel.clone(),
         );
-        crate::xmpp::protocol::mix::start_mix_presence_recovery(
+        northstar_mix_xmpp::start_mix_presence_recovery(
             Arc::new(state.mix_presence_recovery_context()),
             Arc::clone(state.worker_registry()),
             mix_presence_recovery.0,
             mix_presence_recovery.1,
             worker_cancel.clone(),
         );
-        crate::xmpp::protocol::mix::start_mix_iq_relay_expiry(
+        northstar_mix_xmpp::start_mix_iq_relay_expiry(
             Arc::new(state.mix_iq_relay_expiry_context()),
             Arc::clone(state.worker_registry()),
             worker_cancel.clone(),
         );
-        crate::xmpp::protocol::mix::start_mix_delivery_outbox(
+        northstar_mix_xmpp::start_mix_delivery_outbox(
             Arc::new(state.mix_outbox_context()),
             Arc::clone(state.worker_registry()),
             worker_cancel.clone(),

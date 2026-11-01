@@ -2494,6 +2494,98 @@
         "uuid"
       ],
       [
+        "northstar-mix-xmpp",
+        "anyhow"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "chrono"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "dashmap"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "futures"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "northstar-archive-core"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "northstar-delivery-core"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "northstar-federation-core"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "northstar-room-application"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "northstar-room-core"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "northstar-roster-core"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "northstar-runtime"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "northstar-xep-0199"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "northstar-xep-0313"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "northstar-xep-0359"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "northstar-xep-core"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "northstar-xmpp-types"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "roxmltree"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "sha2"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "tokio"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "tokio-util"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "tracing"
+      ],
+      [
+        "northstar-mix-xmpp",
+        "uuid"
+      ],
+      [
         "northstar-operations-application",
         "anyhow"
       ],
@@ -5411,6 +5503,10 @@
       ],
       [
         "rust-xmpp-server",
+        "northstar-mix-xmpp"
+      ],
+      [
+        "rust-xmpp-server",
         "northstar-operations-application"
       ],
       [
@@ -7929,6 +8025,7 @@
       "northstar-federation-core",
       "northstar-message-application",
       "northstar-message-core",
+      "northstar-mix-xmpp",
       "northstar-operations-application",
       "northstar-operations-core",
       "northstar-operations-postgres",

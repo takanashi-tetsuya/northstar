@@ -15,6 +15,7 @@ use anyhow::Result;
 use dashmap::DashMap;
 use northstar_config::ExternalRouteDomainPolicy;
 use northstar_delivery_core::node_delivery::NodeDeliveryReceipt;
+use northstar_mix_xmpp::ports::MixOutboxPort;
 use northstar_protocol_runtime::caps::{CapsObservationOwner, CapsResourceIndex, PendingCapsIndex};
 use northstar_room_application::mix_service::MixService;
 use northstar_room_core::mix::{MixSessionCapability, CORE_NS, PAM_NS};
@@ -24,7 +25,7 @@ use std::sync::{
 };
 use uuid::Uuid;
 
-pub(crate) struct MixOutboxContext {
+pub struct MixOutboxContext {
     service: MixService<PostgresMixRepository>,
     sessions: Arc<DashMap<String, OnlineSession>>,
     caps_by_jid: Arc<CapsResourceIndex>,
@@ -104,16 +105,20 @@ impl AppState {
     }
 }
 
-impl MixOutboxContext {
-    pub(crate) fn service(&self) -> &MixService<PostgresMixRepository> {
+impl MixOutboxPort for MixOutboxContext {
+    type Repository = PostgresMixRepository;
+    type Session = OnlineSession;
+    type Federation = FederationRouter;
+
+    fn service(&self) -> &MixService<PostgresMixRepository> {
         &self.service
     }
 
-    pub(crate) fn local_domain(&self) -> &str {
+    fn local_domain(&self) -> &str {
         &self.local_domain
     }
 
-    pub(crate) fn federation_domain_allowed(&self, domain: &str) -> bool {
+    fn federation_domain_allowed(&self, domain: &str) -> bool {
         let Ok(domain) = northstar_xmpp_types::jid::prepare_domainpart(domain) else {
             return false;
         };
@@ -121,18 +126,18 @@ impl MixOutboxContext {
             && self.runtime_policy.load().allows_domain(&domain)
     }
 
-    pub(crate) fn federation_outbox(&self) -> &FederationRouter {
+    fn federation_outbox(&self) -> &FederationRouter {
         &self.federation
     }
 
-    pub(crate) fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
+    fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
         session_entries_for_in(&self.sessions, jid)
     }
 
     /// The same verified observation and stale-local-epoch eviction used by
     /// ordinary CAPS routing. An unknown observation keeps durable delivery
     /// parked until verification or the recipient's next route wake.
-    pub(crate) fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability {
+    fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability {
         session_mix_capability_in(
             &self.sessions,
             &self.caps_by_jid,
@@ -141,12 +146,12 @@ impl MixOutboxContext {
         )
     }
 
-    pub(crate) async fn lookup_nodes(&self, jid: &str) -> Result<Vec<String>> {
+    async fn lookup_nodes(&self, jid: &str) -> Result<Vec<String>> {
         let nodes = self.cluster_routes.lookup_nodes(jid).await?;
         Ok(remote_nodes_in_order(nodes, self.cluster_routes.node_id()))
     }
 
-    pub(crate) async fn outbox_lookup_cluster_nodes(&self, jid: &str) -> Result<Vec<String>> {
+    async fn outbox_lookup_cluster_nodes(&self, jid: &str) -> Result<Vec<String>> {
         let nodes = self
             .service
             .outbox_lookup_cluster_nodes(&self.cluster_routes, jid)
@@ -154,7 +159,7 @@ impl MixOutboxContext {
         Ok(remote_nodes_in_order(nodes, self.cluster_routes.node_id()))
     }
 
-    pub(crate) async fn send_cluster_mix(
+    async fn send_cluster_mix(
         &self,
         node_id: &str,
         recipient: &str,
@@ -166,7 +171,7 @@ impl MixOutboxContext {
             .await
     }
 
-    pub(crate) async fn send_cluster_pam_result(
+    async fn send_cluster_pam_result(
         &self,
         node_id: &str,
         target_full_jid: &str,
@@ -178,7 +183,7 @@ impl MixOutboxContext {
             .await
     }
 
-    pub(crate) fn record_post_commit_failure(&self) {
+    fn record_post_commit_failure(&self) {
         MixPostCommitTelemetry::new(&self.delivery_failures, &self.post_accept_failures)
             .delivery_failed();
     }

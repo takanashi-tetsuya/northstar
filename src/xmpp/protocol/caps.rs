@@ -280,7 +280,7 @@ async fn execute_caps_effects_inner(
     if job.effects.contains(CapsEffects::VERIFIED_MIX_PRESENCE) {
         let result = match job.owner {
             CapsObservationOwner::Local(epoch) => {
-                super::mix::publish_verified_mix_presence_with(
+                northstar_mix_xmpp::publish_verified_mix_presence_with(
                     context.mix(),
                     &job.full_jid,
                     epoch.connection_id,
@@ -524,18 +524,18 @@ impl ProtocolSession {
         &self,
         presence: Node<'_, '_>,
         full_jid: &str,
-    ) -> super::mix::MixSessionCapability {
+    ) -> northstar_room_core::mix::MixSessionCapability {
         if !self
             .state
             .xmpp_extension_enabled(northstar_xep_0115::XEP_ID)
         {
-            return super::mix::MixSessionCapability::Unknown;
+            return northstar_room_core::mix::MixSessionCapability::Unknown;
         }
         let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(full_jid) else {
-            return super::mix::MixSessionCapability::Unknown;
+            return northstar_room_core::mix::MixSessionCapability::Unknown;
         };
         let Some(key) = observed_caps_key(presence, &full_jid) else {
-            return super::mix::MixSessionCapability::Unknown;
+            return northstar_room_core::mix::MixSessionCapability::Unknown;
         };
         let summary = self
             .state
@@ -545,12 +545,12 @@ impl ProtocolSession {
             .and_then(|observation| observation.summary)
             .or_else(|| self.state.caps_cache().query(&key, Instant::now()));
         let Some(summary) = summary else {
-            return super::mix::MixSessionCapability::Unknown;
+            return northstar_room_core::mix::MixSessionCapability::Unknown;
         };
         if summary.has_feature("urn:xmpp:mix:core:1") || summary.has_feature("urn:xmpp:mix:pam:2") {
-            super::mix::MixSessionCapability::Supported
+            northstar_room_core::mix::MixSessionCapability::Supported
         } else {
-            super::mix::MixSessionCapability::Unsupported
+            northstar_room_core::mix::MixSessionCapability::Unsupported
         }
     }
 

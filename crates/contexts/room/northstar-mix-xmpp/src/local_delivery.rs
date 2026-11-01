@@ -3,9 +3,9 @@
 use super::*;
 
 #[derive(Debug)]
-pub(super) struct PermanentMixDeliveryError {
-    pub(super) reason: &'static str,
-    pub(super) detail: String,
+pub struct PermanentMixDeliveryError {
+    pub reason: &'static str,
+    pub detail: String,
 }
 
 impl std::fmt::Display for PermanentMixDeliveryError {
@@ -17,7 +17,7 @@ impl std::fmt::Display for PermanentMixDeliveryError {
 impl std::error::Error for PermanentMixDeliveryError {}
 
 #[derive(Debug)]
-pub(super) struct MixDeliveryRoutePending;
+pub struct MixDeliveryRoutePending;
 
 impl std::fmt::Display for MixDeliveryRoutePending {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -32,7 +32,7 @@ impl std::error::Error for MixDeliveryRoutePending {}
 /// occurs, or its database retention window expires.  A successful personal
 /// archive write is deliberately not a live-delivery acknowledgement.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum DurableMixRouteAvailability {
+pub enum DurableMixRouteAvailability {
     NoTarget,
     UnknownCapability,
     Unsupported,
@@ -40,7 +40,7 @@ pub(super) enum DurableMixRouteAvailability {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum DurableMixRouteDisposition {
+pub enum DurableMixRouteDisposition {
     Accepted,
     Park,
     RetryCluster,
@@ -52,7 +52,7 @@ pub(super) enum DurableMixRouteDisposition {
 /// documents and tests that a MAM projection cannot turn an unavailable route
 /// into an acknowledged durable delivery.  There is intentionally no delivery
 /// age input; elapsed capability discovery is not a terminal state.
-pub(super) fn classify_durable_mix_route(
+pub fn classify_durable_mix_route(
     _archive_projection_present: bool,
     accepted: bool,
     availability: DurableMixRouteAvailability,
@@ -74,7 +74,7 @@ pub(super) fn classify_durable_mix_route(
 /// authoritative until the transport either writes it or persists a typed
 /// hand-off to XEP-0198/BOSH.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum MixLocalTransportFailure {
+pub enum MixLocalTransportFailure {
     QueueFull,
     QueueClosed,
     HandoffClosed,
@@ -103,17 +103,14 @@ impl std::fmt::Display for MixLocalTransportFailure {
 /// old 500 ms receipt timeout: the normal path waits for the actual durable
 /// hand-off, while cancellation, shutdown, or the outbox attempt deadline
 /// closes the one transport that could otherwise later expose a stale item.
-pub(super) struct PendingMixLocalHandoff {
-    pub(super) sender: crate::xmpp::outbound::OutboundSender,
-    pub(super) disconnect: tokio_util::sync::CancellationToken,
-    pub(super) completed: bool,
+pub struct PendingMixLocalHandoff<O: MixOutbound> {
+    pub sender: O,
+    pub disconnect: tokio_util::sync::CancellationToken,
+    pub completed: bool,
 }
 
-impl PendingMixLocalHandoff {
-    pub(super) fn new(
-        sender: crate::xmpp::outbound::OutboundSender,
-        disconnect: tokio_util::sync::CancellationToken,
-    ) -> Self {
+impl<O: MixOutbound> PendingMixLocalHandoff<O> {
+    pub fn new(sender: O, disconnect: tokio_util::sync::CancellationToken) -> Self {
         Self {
             sender,
             disconnect,
@@ -121,12 +118,12 @@ impl PendingMixLocalHandoff {
         }
     }
 
-    pub(super) fn mark_completed(&mut self) {
+    pub fn mark_completed(&mut self) {
         self.completed = true;
     }
 }
 
-impl Drop for PendingMixLocalHandoff {
+impl<O: MixOutbound> Drop for PendingMixLocalHandoff<O> {
     fn drop(&mut self) {
         if !self.completed {
             self.sender.disconnect_backpressured_transport();
@@ -143,20 +140,22 @@ impl Drop for PendingMixLocalHandoff {
 /// would violate in-order delivery on the old stream. A caller may safely try
 /// another qualified resource; only a typed hand-off lets it transfer or
 /// consume the source.
-pub(super) async fn try_send_local_durable_mix(
-    sender: &crate::xmpp::outbound::OutboundSender,
+pub async fn try_send_local_durable_mix(
+    sender: &impl MixOutbound,
     disconnect: &tokio_util::sync::CancellationToken,
     stanza: String,
-    source: crate::xmpp::outbound::MixDelivery,
-) -> std::result::Result<crate::xmpp::outbound::MixTransportCompletion, MixLocalTransportFailure> {
+    source: northstar_delivery_core::MixDelivery,
+) -> std::result::Result<northstar_delivery_core::MixTransportCompletion, MixLocalTransportFailure>
+{
     try_send_local_durable_mix_inner(sender, disconnect, stanza, source, None).await
 }
 
-pub(super) async fn try_send_local_durable_mix_observed(
-    sender: &crate::xmpp::outbound::OutboundSender,
+pub async fn try_send_local_durable_mix_observed(
+    sender: &impl MixOutbound,
     disconnect: &tokio_util::sync::CancellationToken,
     request: &mix_worker::LocalRequest,
-) -> std::result::Result<crate::xmpp::outbound::MixTransportCompletion, MixLocalTransportFailure> {
+) -> std::result::Result<northstar_delivery_core::MixTransportCompletion, MixLocalTransportFailure>
+{
     try_send_local_durable_mix_inner(
         sender,
         disconnect,
@@ -167,13 +166,14 @@ pub(super) async fn try_send_local_durable_mix_observed(
     .await
 }
 
-pub(super) async fn try_send_local_durable_mix_inner(
-    sender: &crate::xmpp::outbound::OutboundSender,
+pub async fn try_send_local_durable_mix_inner(
+    sender: &impl MixOutbound,
     disconnect: &tokio_util::sync::CancellationToken,
     stanza: String,
-    source: crate::xmpp::outbound::MixDelivery,
+    source: northstar_delivery_core::MixDelivery,
     observation: Option<&mix_worker::LocalRequest>,
-) -> std::result::Result<crate::xmpp::outbound::MixTransportCompletion, MixLocalTransportFailure> {
+) -> std::result::Result<northstar_delivery_core::MixTransportCompletion, MixLocalTransportFailure>
+{
     if let Some(request) = observation {
         request
             .start()
@@ -222,13 +222,13 @@ pub(super) async fn try_send_local_durable_mix_inner(
     pending.mark_completed();
     if let Some(request) = observation {
         let boundary = match completion {
-            crate::xmpp::outbound::MixTransportCompletion::SocketFenced { connection_id } => {
+            northstar_delivery_core::MixTransportCompletion::SocketFenced { connection_id } => {
                 mix_worker::TransferBoundary::SocketFenced(connection_id)
             }
-            crate::xmpp::outbound::MixTransportCompletion::SmPersisted { session_id } => {
+            northstar_delivery_core::MixTransportCompletion::SmPersisted { session_id } => {
                 mix_worker::TransferBoundary::SmPersisted(session_id)
             }
-            crate::xmpp::outbound::MixTransportCompletion::BoshPersisted { session_id } => {
+            northstar_delivery_core::MixTransportCompletion::BoshPersisted { session_id } => {
                 mix_worker::TransferBoundary::BoshPersisted(session_id)
             }
         };
@@ -239,7 +239,7 @@ pub(super) async fn try_send_local_durable_mix_inner(
     Ok(completion)
 }
 
-pub(super) fn permanent_mix_delivery_error(
+pub fn permanent_mix_delivery_error(
     reason: &'static str,
     detail: impl Into<String>,
 ) -> anyhow::Error {

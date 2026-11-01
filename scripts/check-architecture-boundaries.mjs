@@ -530,17 +530,17 @@ if (!responsibilityDocument.includes('| runtime control pool | `northstar_runtim
   throw new Error('program responsibility model must document the dedicated runtime control pool');
 }
 // whole production module (the file and its non-test child files)
-const mixProtocol = readProductionModule('src/xmpp/protocol/mix.rs', { root });
+const mixProtocol = readProductionModule('crates/contexts/room/northstar-mix-xmpp/src/lib.rs', { root });
 const mixProtocolProduction = productionWithoutCfgTestModules(
   mixProtocol,
-  'src/xmpp/protocol/mix.rs',
+  'crates/contexts/room/northstar-mix-xmpp/src/lib.rs',
 );
 export function verifyMixOutboxLifecycle(mixProtocol) {
   // Match executable source shape rather than comments, string descriptions or
   // cfg(test) examples. This uses the same bounded masking convention as the
   // subserver source gate, not a general Rust parser.
   const mixProtocolProduction = productionWithoutCfgTestModules(
-    mixProtocol, 'src/xmpp/protocol/mix.rs',
+    mixProtocol, 'crates/contexts/room/northstar-mix-xmpp/src/lib.rs',
   ).replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"/g,
     (text) => text.replace(/[^\r\n]/g, ' '));
   const mixOutboxQueue = structBody(mixProtocolProduction, 'enum MixOutboxQueue');
@@ -639,7 +639,7 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
   ) {
     throw new Error('MIX lane join must cancel and drain its peer before surfacing a terminal lane result');
   }
-  const startMixOutbox = structBody(mixProtocolProduction, 'pub(crate) fn start_mix_delivery_outbox(');
+  const startMixOutbox = structBody(mixProtocolProduction, 'pub fn start_mix_delivery_outbox(');
   const deliveryLaneStart = startMixOutbox.search(/let\s+delivery\s*=\s*run_mix_outbox_lane\s*\(/);
   const pamLaneStart = startMixOutbox.search(/let\s+pam\s*=\s*run_mix_outbox_lane\s*\(/);
   const laneJoin = startMixOutbox.search(/join_mix_outbox_lanes\s*\(\s*cancel\s*,\s*lane_cancel\s*,\s*delivery\s*,\s*pam\s*,?\s*\)\s*\.\s*await/);
@@ -1355,12 +1355,12 @@ const processClaimedMixDelivery = structBody(
   mixProtocolProduction,
   'async fn process_claimed_mix_delivery_with_port<',
 );
-const mixDeliveryPort = structBody(mixProtocolProduction, 'impl ClaimedMixDeliveryPort for MixOutboxDeliveryPort');
+const mixDeliveryPort = structBody(mixProtocolProduction, 'impl<C: MixOutboxPort> ClaimedMixDeliveryPort for MixOutboxDeliveryPort<C>');
 const mixDeliveryPortRoute = structBody(mixDeliveryPort, 'async fn route(');
 const deliverClaimedMixStanza = structBody(mixProtocolProduction, 'async fn deliver_claimed_channel_stanza(');
 if (
   !/port\.route\s*\(\s*&request\s*\)/.test(processClaimedMixDelivery) ||
-  !/deliver_claimed_channel_stanza\s*\(\s*&self\.context\s*,\s*request\s*\)/.test(mixDeliveryPortRoute) ||
+  !/deliver_claimed_channel_stanza\s*\(\s*self\.context\.as_ref\(\)\s*,\s*request\s*\)/.test(mixDeliveryPortRoute) ||
   !/deliver_channel_stanza_inner\s*\([\s\S]*?ChannelStanzaDelivery\s*\{[\s\S]*?database_lane\s*:\s*ChannelStanzaDatabaseLane\s*::\s*DurableOutbox/s.test(deliverClaimedMixStanza) ||
   !/Some\(request\)\s*,?\s*\)\s*\.await/.test(deliverClaimedMixStanza)
 ) {
@@ -1797,7 +1797,7 @@ if (discoveryDbDomainReferences > MAX_DISCOVERY_DB_DOMAIN_REFERENCES) {
 for (const [name, serviceAccessor, source] of [
   ['pubsub.rs', 'pubsub_service', readProductionModule('src/xmpp/protocol/pubsub.rs', { root })],
   ['pep.rs', 'pubsub_service', readProductionModule('src/xmpp/protocol/pep.rs', { root })],
-  ['mix.rs', 'mix_service', readProductionModule('src/xmpp/protocol/mix.rs', { root })],
+  ['mix.rs', 'mix_service', readProductionModule('crates/contexts/room/northstar-mix-xmpp/src/lib.rs', { root })],
   ['mam.rs', 'mam_service', readProductionModule('src/xmpp/protocol/mam.rs', { root })],
   ['privacy.rs', 'privacy_service', readProductionModule('src/xmpp/protocol/privacy.rs', { root })],
   ['private.rs', 'private_storage_service', readProductionModule('src/xmpp/protocol/private.rs', { root })],
@@ -3430,9 +3430,9 @@ const workerResponsibilityEvidence = {
   'sm-authority-listener': ['src/db/authority_listener.rs', 'AppState database listener startup', '15 s'],
   'sm-suspension-recovery': ['src/state/session_cleanup.rs', 'session-cleanup service startup', '30 s'],
   'caps-side-effects': ['src/xmpp/protocol/caps.rs', 'Caps subsystem startup', '60 s'],
-  'mix-iq-relay-expiry': ['src/xmpp/protocol/mix.rs', 'MIX protocol capability startup', '10 s'],
-  'mix-delivery-outbox': ['src/xmpp/protocol/mix/worker.rs', 'MIX capability startup', '30 s'],
-  'mix-presence-recovery': ['src/xmpp/protocol/mix.rs', 'MIX capability startup', '90 s'],
+  'mix-iq-relay-expiry': ['crates/contexts/room/northstar-mix-xmpp/src/lib.rs', 'MIX protocol capability startup', '10 s'],
+  'mix-delivery-outbox': ['crates/contexts/room/northstar-mix-xmpp/src/worker.rs', 'MIX capability startup', '30 s'],
+  'mix-presence-recovery': ['crates/contexts/room/northstar-mix-xmpp/src/lib.rs', 'MIX capability startup', '90 s'],
   'pubsub-digest-delivery': ['src/xmpp/protocol/pubsub.rs', 'PubSub capability startup', '5 s'],
   'pubsub-event-outbox-delivery': ['src/xmpp/protocol/pubsub.rs', 'PubSub capability startup', '30 s'],
 };
@@ -3447,7 +3447,7 @@ const workerDocumentBehaviorEvidence = {
   'pubsub-subscription-cleanup': ['60 s', '40 s', '1,000', 'delivery'],
 };
 const productionRustSources = [];
-const pendingResponsibilitySources = [path.join(root, 'src')];
+const pendingResponsibilitySources = [path.join(root, 'src'), path.join(root, 'crates')];
 while (pendingResponsibilitySources.length > 0) {
   const current = pendingResponsibilitySources.pop();
   for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
@@ -3726,7 +3726,7 @@ if (/\b(?:self\.)?state\s*\.metrics\b/.test(mucProtocol)
   throw new Error('MUC authority and post-commit reporting must use its narrow telemetry port');
 }
 const mixOutboxContext = read('src/state/mix_outbox.rs');
-const mixOutboxStart = structBody(mixProtocolProduction, 'pub(crate) fn start_mix_delivery_outbox(');
+const mixOutboxStart = structBody(mixProtocolProduction, 'pub fn start_mix_delivery_outbox(');
 if (/\bstate\s*\.metrics\b/.test(mixProtocol)
     || !mixProtocol.includes('context.record_post_commit_failure()')
     || !mixOutboxContext.includes('MixPostCommitTelemetry::new(&self.delivery_failures, &self.post_accept_failures)')
@@ -3982,9 +3982,9 @@ if (!lockedMucExpiryWorker.includes('.locked_muc_expiry_context')
     || /(?:db|muc)::delete_expired_locked_muc_rooms\s*\(/.test(lockedMucExpiryWorker)) {
   throw new Error('locked MUC expiry worker must commit through its repository service');
 }
-const mixPresenceRecovery = structBody(readProductionModule('src/xmpp/protocol/mix.rs', { root }), 'pub(crate) fn start_mix_presence_recovery(');
+const mixPresenceRecovery = structBody(readProductionModule('crates/contexts/room/northstar-mix-xmpp/src/lib.rs', { root }), 'pub fn start_mix_presence_recovery(');
 const mixPresenceContext = read('src/state/mix_presence_recovery.rs');
-const verifiedMixPresence = structBody(readProductionModule('src/xmpp/protocol/mix.rs', { root }), 'async fn publish_verified_mix_presence_with(');
+const verifiedMixPresence = structBody(readProductionModule('crates/contexts/room/northstar-mix-xmpp/src/lib.rs', { root }), 'async fn publish_verified_mix_presence_with(');
 if (!state.includes('Arc::new(state.mix_presence_recovery_context())')
     || /\b(?:AppState|PgPool|ClusterManager)\b/.test(mixPresenceRecovery)
     || /\b(?:Arc<AppState>|PgPool|ClusterManager)\b/.test(mixPresenceContext)

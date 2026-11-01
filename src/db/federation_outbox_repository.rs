@@ -4,7 +4,7 @@ use northstar_federation_core::S2sOutboxPolicy;
 use sqlx::PgPool;
 
 #[derive(Clone)]
-pub(crate) struct PostgresFederationOutboxRepository {
+pub struct PostgresFederationOutboxRepository {
     pool: PgPool,
 }
 

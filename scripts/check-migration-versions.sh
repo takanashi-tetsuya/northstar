@@ -793,7 +793,7 @@ fi
 # declaration rather than up to whichever declaration follows them.
 mix_db_production_source=$(module_source --production crates/contexts/room/northstar-room-postgres/src/mix.rs) || exit 1
 mix_db_module_source=$(module_source crates/contexts/room/northstar-room-postgres/src/mix.rs) || exit 1
-mix_protocol_production_source=$(module_source --production src/xmpp/protocol/mix.rs) || exit 1
+mix_protocol_production_source=$(module_source --production crates/contexts/room/northstar-mix-xmpp/src/lib.rs) || exit 1
 mix_service_production_source=$(module_source --production crates/contexts/room/northstar-room-application/src/mix_service.rs) || exit 1
 mix_repository_production_source=$(module_source --production crates/contexts/room/northstar-room-postgres/src/mix_repository.rs) || exit 1
 replay_db_production_source=$(module_source --production src/db/replay.rs) || exit 1
@@ -1228,7 +1228,7 @@ for required_source_fragment in \
     'self.next_claim = now;' \
     'self.empty_delay = Self::BASE_DELAY;'
 do
-    if ! grep -Fq "$required_source_fragment" src/xmpp/protocol/mix/worker.rs; then
+    if ! grep -Fq "$required_source_fragment" crates/contexts/room/northstar-mix-xmpp/src/worker.rs; then
         echo "MIX durable delivery lane is missing lossless wake invariant: $required_source_fragment" >&2
         exit 1
     fi

@@ -1,10 +1,12 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use northstar_abuse_policy::WorkRequirement;
+#[cfg(test)]
+pub(crate) use northstar_xml_builder::stanza::iq_error_to;
 use northstar_xml_builder::stanza::stanza_condition_element;
 pub(crate) use northstar_xml_builder::stanza::{
-    blocked_stanza_error, child_text, iq_error, iq_error_from, iq_error_to, iq_result,
-    iq_result_from, iq_result_to, is_encrypted, is_encryption_node, reflected_stanza_error,
-    stanza_error, stanza_error_type,
+    blocked_stanza_error, child_text, iq_error, iq_error_from, iq_result, iq_result_from,
+    iq_result_to, is_encrypted, is_encryption_node, reflected_stanza_error, stanza_error,
+    stanza_error_type,
 };
 use northstar_xml_builder::XmlElement;
 pub(crate) use northstar_xmpp_types::text::valid_language_tag;

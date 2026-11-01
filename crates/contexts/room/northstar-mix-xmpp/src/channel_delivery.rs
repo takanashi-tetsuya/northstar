@@ -3,7 +3,7 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ChannelStanzaDatabaseLane {
+pub enum ChannelStanzaDatabaseLane {
     /// A client-originated stanza uses the normal application pool without
     /// borrowing durable outbox capacity.
     LiveIngress,
@@ -15,23 +15,23 @@ pub(super) enum ChannelStanzaDatabaseLane {
     DurableOutbox,
 }
 
-pub(super) struct ChannelStanzaDelivery<'a> {
+pub struct ChannelStanzaDelivery<'a> {
     /// Present only for a claimed durable outbox recipient.  It makes the
     /// bounded stage logs below correlate with the authoritative lease without
     /// logging stanza content or any client-supplied payload.
-    pub(super) delivery_id: Option<Uuid>,
+    pub delivery_id: Option<Uuid>,
     /// The exact leased MIX recipient source for a durable outbox row. A
     /// source is deliberately absent for live ingress: only a claimed source
     /// may be transferred to a recoverable transport or acknowledged.
-    pub(super) mix_source: Option<crate::xmpp::outbound::MixDelivery>,
-    pub(super) channel_jid: &'a str,
-    pub(super) recipient: &'a MixParticipant,
-    pub(super) stanza: String,
-    pub(super) authoritative_stanza_id: Option<Uuid>,
-    pub(super) archive: bool,
-    pub(super) encrypted: bool,
-    pub(super) durable: bool,
-    pub(super) database_lane: ChannelStanzaDatabaseLane,
+    pub mix_source: Option<northstar_delivery_core::MixDelivery>,
+    pub channel_jid: &'a str,
+    pub recipient: &'a MixParticipant,
+    pub stanza: String,
+    pub authoritative_stanza_id: Option<Uuid>,
+    pub archive: bool,
+    pub encrypted: bool,
+    pub durable: bool,
+    pub database_lane: ChannelStanzaDatabaseLane,
 }
 
 /// The outcome that determines who may consume a claimed MIX recipient row.
@@ -39,7 +39,7 @@ pub(super) struct ChannelStanzaDelivery<'a> {
 /// typed transport owner. Federation outbox admission leaves final deletion
 /// with the claiming worker.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ChannelStanzaDeliveryOutcome {
+pub enum ChannelStanzaDeliveryOutcome {
     CompletedByClaimingWorker,
     TransferredToRecoverableTransport,
 }
@@ -49,7 +49,7 @@ pub(super) enum ChannelStanzaDeliveryOutcome {
 /// source. After a socket/SM/BOSH hand-off its old token must never be used for
 /// acknowledgement, retry or dead-letter settlement.
 #[allow(dead_code)] // Compatibility selector retained for the existing typed-owner controls.
-pub(super) async fn finish_mix_delivery_owner<Acknowledge, Completion>(
+pub async fn finish_mix_delivery_owner<Acknowledge, Completion>(
     outcome: ChannelStanzaDeliveryOutcome,
     acknowledge: Acknowledge,
 ) -> Result<bool>
@@ -63,15 +63,15 @@ where
     }
 }
 
-pub(super) async fn deliver_channel_stanza(
-    context: &MixOutboxContext,
+pub async fn deliver_channel_stanza(
+    context: &impl MixOutboxPort,
     delivery: ChannelStanzaDelivery<'_>,
 ) -> Result<ChannelStanzaDeliveryOutcome> {
     deliver_channel_stanza_inner(context, delivery, None).await
 }
 
-pub(super) async fn deliver_claimed_channel_stanza(
-    context: &MixOutboxContext,
+pub async fn deliver_claimed_channel_stanza(
+    context: &impl MixOutboxPort,
     request: &mix_worker::RouteRequest,
 ) -> Result<ChannelStanzaDeliveryOutcome> {
     request.start()?;
@@ -100,8 +100,8 @@ pub(super) async fn deliver_claimed_channel_stanza(
     .await
 }
 
-pub(super) async fn send_claimed_cluster_mix(
-    context: &MixOutboxContext,
+pub async fn send_claimed_cluster_mix(
+    context: &impl MixOutboxPort,
     request: &mix_worker::ClusterRequest,
 ) -> Result<northstar_delivery_core::node_delivery::NodeDeliveryReceipt> {
     request.start()?;
@@ -117,7 +117,7 @@ pub(super) async fn send_claimed_cluster_mix(
     result
 }
 
-pub(super) fn record_claimed_cluster_result(
+pub fn record_claimed_cluster_result(
     request: &mix_worker::ClusterRequest,
     result: &Result<northstar_delivery_core::node_delivery::NodeDeliveryReceipt>,
 ) -> Result<()> {
@@ -139,8 +139,8 @@ pub(super) fn record_claimed_cluster_result(
     Ok(())
 }
 
-pub(super) async fn deliver_channel_stanza_inner(
-    context: &MixOutboxContext,
+pub async fn deliver_channel_stanza_inner(
+    context: &impl MixOutboxPort,
     delivery: ChannelStanzaDelivery<'_>,
     observation: Option<&mix_worker::RouteRequest>,
 ) -> Result<ChannelStanzaDeliveryOutcome> {
@@ -374,15 +374,15 @@ pub(super) async fn deliver_channel_stanza_inner(
                         let result = if let Some(owner) = observation {
                             let request = owner.local_request(jid.clone())?;
                             try_send_local_durable_mix_observed(
-                                &session.sender,
-                                &session.disconnect,
+                                session.sender(),
+                                session.disconnect(),
                                 &request,
                             )
                             .await
                         } else {
                             try_send_local_durable_mix(
-                                &session.sender,
-                                &session.disconnect,
+                                session.sender(),
+                                session.disconnect(),
                                 stanza.clone(),
                                 source,
                             )
@@ -390,13 +390,13 @@ pub(super) async fn deliver_channel_stanza_inner(
                         };
                         match result {
                             Ok(
-                                crate::xmpp::outbound::MixTransportCompletion::SocketFenced {
+                                northstar_delivery_core::MixTransportCompletion::SocketFenced {
                                     ..
                                 }
-                                | crate::xmpp::outbound::MixTransportCompletion::SmPersisted {
+                                | northstar_delivery_core::MixTransportCompletion::SmPersisted {
                                     ..
                                 }
-                                | crate::xmpp::outbound::MixTransportCompletion::BoshPersisted {
+                                | northstar_delivery_core::MixTransportCompletion::BoshPersisted {
                                     ..
                                 },
                             ) => {
@@ -414,7 +414,7 @@ pub(super) async fn deliver_channel_stanza_inner(
                                 );
                             }
                         }
-                    } else if let Err(error) = session.sender.try_send(stanza.clone()) {
+                    } else if let Err(error) = session.sender().try_send(stanza.clone()) {
                         record_mix_post_commit_failure(
                             context,
                             channel_jid,
@@ -578,8 +578,8 @@ pub(super) async fn deliver_channel_stanza_inner(
     Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker)
 }
 
-pub(super) fn addressed_mix_delivery(template: &str, recipient: &str) -> Result<String> {
-    let stanza = crate::services::xml_util::set_to(template, recipient);
+pub fn addressed_mix_delivery(template: &str, recipient: &str) -> Result<String> {
+    let stanza = northstar_xml_builder::rewrite::set_to(template, recipient);
     let document = Document::parse(&stanza).context("invalid durable MIX stanza template")?;
     anyhow::ensure!(
         document.root_element().attribute("to") == Some(recipient),

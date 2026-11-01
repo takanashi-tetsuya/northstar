@@ -548,18 +548,18 @@ rejectsRoom('MUC fanout cannot move local stage before cluster publication', 'mu
   'port.enter(MucFanoutStage::Cluster);\n    port.publish_cluster().await;',
   'port.enter(MucFanoutStage::Local);\n    port.publish_cluster().await;', /MUC effects must preserve/);
 rejectsRoom('C2S MIX cannot discard originating frame observation', 'mix',
-  'Some(&self.frame_executions),', 'None,', /C2S MIX must attribute/);
+  'Some(session.frame_observer()),', 'None,', /C2S MIX must attribute/);
 rejectsRoom('MIX shared message owner cannot lose policy observation', 'mix',
-  'observation.enter(Stage::MixPolicy);', '', /MIX shared owner/);
+  'observation.enter(MixFrameStage::Policy);', '', /MIX shared owner/);
 for (const call of ['retract_mix_message']) {
   const indentation = call === 'retract_mix_message' ? '        ' : '    ';
-  const before = `if let Some(observation) = observation {\n${indentation}    observation.enter(Stage::MixAdmission);\n${indentation}}\n${indentation}let admission = state\n${indentation}    .mix_service()\n${indentation}    .${call}(`;
+  const before = `if let Some(observation) = observation {\n${indentation}    observation.enter(MixFrameStage::Admission);\n${indentation}}\n${indentation}let admission = state\n${indentation}    .mix_service()\n${indentation}    .${call}(`;
   const after = `let admission = state\n${indentation}    .mix_service()\n${indentation}    .${call}(`;
   rejectsRoom(`MIX ${call} must retain its admission hook`, 'mix', before, after, /MIX admission stage/);
 }
 test('MIX foreground admission must retain its admission hook', () => {
   assert.throws(() => verifyRoomExecutionBoundaries(changedMuc('mix',
-    'if let Some(observation) = observation { observation.enter(Stage::MixAdmission); } let admission = if let Some(owner) = &foreground {',
+    'if let Some(observation) = observation { observation.enter(MixFrameStage::Admission); } let admission = if let Some(owner) = &foreground {',
     'let admission = if let Some(owner) = &foreground {')), /MIX admission stage/);
 });
 
@@ -646,8 +646,8 @@ rejectsMixForeground('MIX conflicting registration cannot be downgraded', 'mixSl
   'if !observation.is_for(prepared) { return Err(Rejected::Input); }',
   'if !observation.is_for(prepared) { return Ok(observation.clone()); }', /retired\/conflicting owners/);
 rejectsMixForeground('MIX observed ingress cannot fall back after registration failure', 'mix',
-  'frames.mix_foreground(|| { state.mix_service().prepare_mix_foreground(',
-  'legacy_or_failed_registration(|| { state.mix_service().prepare_mix_foreground(', /contiguous unfiltered registration/);
+  'frames.mix_foreground(Box::new(|| { state.mix_service().prepare_mix_foreground(',
+  'legacy_or_failed_registration(Box::new(|| { state.mix_service().prepare_mix_foreground(', /contiguous unfiltered registration/);
 rejectsMixForeground('MIX active frame cannot be filtered into legacy compatibility', 'mix',
   'if let Some(frames) = observation {',
   'if let Some(frames) = observation.filter(|_| false) {', /contiguous unfiltered registration/);
@@ -1051,19 +1051,19 @@ rejectsMixWorker('MIX shared worker port cannot grow a generic executor operatio
   "trait ClaimedMixDeliveryPort: Clone + Send + Sync + 'static { fn execute(&self);", /port must contain only/);
 test('MIX production port cannot retain an extra field', () => {
   assert.throws(() => verifyMixWorkerBoundaries(changed('mix',
-    'struct MixOutboxDeliveryPort {\n    pub(super) context: Arc<MixOutboxContext>,\n}',
-    'struct MixOutboxDeliveryPort {\n    pub(super) context: Arc<MixOutboxContext>,\n    retained: bool,\n}')),
+    'struct MixOutboxDeliveryPort<C> {\n    pub context: Arc<C>,\n}',
+    'struct MixOutboxDeliveryPort<C> {\n    pub context: Arc<C>,\n    retained: bool,\n}')),
   { message: 'execution boundary: MIX production port must retain only its existing context' });
 });
 test('MIX production port cannot substitute its context type', () => {
   assert.throws(() => verifyMixWorkerBoundaries(changed('mix',
-    'struct MixOutboxDeliveryPort {\n    pub(super) context: Arc<MixOutboxContext>,\n}',
-    'struct MixOutboxDeliveryPort {\n    pub(super) context: Arc<()>,\n}')),
+    'struct MixOutboxDeliveryPort<C> {\n    pub context: Arc<C>,\n}',
+    'struct MixOutboxDeliveryPort<C> {\n    pub context: Arc<()>,\n}')),
   { message: 'execution boundary: MIX production port must retain only its existing context' });
 });
 rejectsMixWorker('MIX production route port cannot substitute its request', 'mix',
-  'deliver_claimed_channel_stanza(&self.context, request).await',
-  'deliver_claimed_channel_stanza(&self.context, other_request).await', /port must forward/);
+  'deliver_claimed_channel_stanza(self.context.as_ref(), request).await',
+  'deliver_claimed_channel_stanza(self.context.as_ref(), other_request).await', /port must forward/);
 for (const operation of ['renew_mix_delivery_lease_observed', 'settle_mix_delivery_observed']) {
   rejectsMixWorker(`MIX production ${operation} port cannot bypass observed service work`, 'mix',
     `self.context.service().${operation}(request).await`, 'Ok(true)', /port must forward/);
@@ -1487,8 +1487,8 @@ rejectsRoute("route activation delegate cannot become test-only", "state",
   "pub(crate) fn activate_session_if_current(\n        &self,\n        full_jid: &str,\n        connection_id: uuid::Uuid,\n        user_id: uuid::Uuid,\n        auth_generation: i64,\n        lifecycle: &Arc<AtomicU8>,\n        disconnect: &CancellationToken,\n    ) -> bool",
   "#[cfg(test)] pub(crate) fn activate_session_if_current(\n        &self,\n        full_jid: &str,\n        connection_id: uuid::Uuid,\n        user_id: uuid::Uuid,\n        auth_generation: i64,\n        lifecycle: &Arc<AtomicU8>,\n        disconnect: &CancellationToken,\n    ) -> bool");
 rejectsRoute("route caps delegate cannot become test-only", "mixOutboxState",
-  "pub(crate) fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability",
-  "#[cfg(test)] pub(crate) fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability");
+  "fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability",
+  "#[cfg(test)] fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability");
 rejectsRoute("route epoch delegate preserves the supplied key", "state",
   "publish_user_agent_epoch_if_current_in(&self.sessions, key, connection_id, user_id, auth_generation, lifecycle, user_agent_epoch)",
   "publish_user_agent_epoch_if_current_in(&self.sessions, full_jid, connection_id, user_id, auth_generation, lifecycle, user_agent_epoch)", true);

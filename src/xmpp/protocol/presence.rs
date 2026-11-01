@@ -67,8 +67,8 @@ impl ProtocolSession {
         let mix_presence_epoch = Arc::clone(&self.presence.mix_presence_gate)
             .lock_owned()
             .await;
-        if !super::mix::mix_presence_route_is_current(
-            &self.state,
+        if !northstar_mix_xmpp::mix_presence_route_is_current(
+            self.state.as_ref(),
             &from,
             self.connection_id,
             &self.presence.mix_presence_gate,

@@ -1,286 +1,340 @@
 //! XEP-0369 MIX Core, XEP-0405 MIX-PAM, and XEP-0406 MIX Administration.
 //!
-//! MIX channel nodes intentionally use their own persistence and permission
-//! checks.  They are not exposed through the general-purpose PubSub service:
-//! in particular, clients cannot publish participant, configuration, allowed,
-//! or banned items without going through the MIX authorization model.
+//! `northstar-mix-xmpp` holds the handlers. This seam gives them the live
+//! sessions, routes and federation outbox the root crate still owns, and maps
+//! their replies back to session actions.
 
-mod channel_delivery;
-mod channel_iq;
-mod channel_mam;
-mod channel_pubsub;
-mod claimed;
-mod federation;
-mod forms;
-mod iq_parse;
-mod local_delivery;
-mod message;
-mod payloads;
-mod presence;
-mod relay;
-mod session;
-#[cfg(test)]
-pub(crate) mod stage4_saved;
-mod worker;
-
-use self::channel_delivery::{
-    addressed_mix_delivery, deliver_channel_stanza, deliver_claimed_channel_stanza,
-    ChannelStanzaDatabaseLane, ChannelStanzaDelivery, ChannelStanzaDeliveryOutcome,
-};
-#[cfg(test)]
-use self::channel_delivery::{finish_mix_delivery_owner, record_claimed_cluster_result};
-use self::channel_iq::{handle_channel_iq, join_error};
-use self::channel_mam::handle_mix_mam_iq;
-use self::channel_pubsub::{
-    field_first, pubsub_get, pubsub_publish, pubsub_retract, validate_form_fields,
-    PubSubRetractRequest,
-};
-#[cfg(test)]
-use self::claimed::{
-    bounded_mix_outbox_turn, process_claimed_mix_delivery_with_port,
-    run_claimed_mix_effect_with_lease, ClaimedMixDeliveryPort, MixOutboxDeadlineElapsed,
-    MixOutboxShutdown,
-};
-use self::claimed::{
-    cancellable_mix_outbox_turn, drainable_mix_outbox_claim, mix_outbox_deadline_elapsed,
-    mix_outbox_is_shutting_down, process_claimed_mix_delivery, process_claimed_pam_result,
-    record_mix_post_commit_failure,
-};
-use self::federation::pam_membership_receives;
-#[cfg(test)]
-use self::federation::{
-    authenticated_actor, authenticated_full_actor, authenticated_mix_service,
-    federated_mix_iq_is_mutation, AuthenticatedMixIqActor,
-};
-pub(crate) use self::federation::{
-    federated_mix_iq, federated_mix_message, federated_mix_presence,
-};
-use self::iq_parse::{
-    mix_iq_route_candidate, parse_iq, parse_join, parse_mix_disco_info, IqOperation,
-    MixDiscoInfoRequest, OwnedIq,
-};
-#[cfg(test)]
-use self::local_delivery::MixLocalTransportFailure;
-use self::local_delivery::{
-    classify_durable_mix_route, permanent_mix_delivery_error, try_send_local_durable_mix,
-    try_send_local_durable_mix_observed, DurableMixRouteAvailability, DurableMixRouteDisposition,
-    MixDeliveryRoutePending, PermanentMixDeliveryError,
-};
-#[cfg(test)]
-use self::message::{
-    message_children, mix_replay_semantics, mix_retraction_target, private_message_children,
-};
-use self::message::{
-    message_error, process_channel_message, reflected_mix_stanza_id,
-    validate_reflected_mix_identity, validate_reflected_mix_presence_identity,
-};
-#[cfg(test)]
-use self::payloads::parse_remote_join_result;
-use self::payloads::{
-    core_join_payload, decode_participant_jid, encoded_participant_jid, mix_empty_pubsub,
-    mix_pubsub_publish_ack, pam_join_payload, parse_remote_iq_error, parse_remote_pam_success,
-};
-pub(crate) use self::payloads::{mix_channel_disco_info_payload, mix_service_disco_info_payload};
-pub(crate) use self::presence::{
-    mix_presence_route_is_current, publish_verified_mix_presence_with,
-};
-use self::presence::{presence_children, process_channel_presence};
-use self::relay::{
-    deliver_mix_relay_stanza, expire_mix_iq_relay, handle_channel_relay_request, parse_relay_iq,
-    register_mix_iq_relay, relay_error, relay_iq_xml, relay_vcard_payload, RelayIq,
-};
-#[cfg(test)]
-use self::relay::{encoded_participant_full_jid, RelayPayload};
-use self::session::push_mix_roster_update;
-#[cfg(test)]
-use self::session::{mix_broadcast_presence_action, MixBroadcastPresenceAction};
 use super::{Action, ProtocolSession};
-use crate::services::xml_util::{
-    add_stanza_id, iq_error_to, iq_result_to, is_encrypted, mam_extended_form, stanza_error,
-    stanza_error_type,
-};
-use crate::state::mix_iq_relay::{MixIqRelayExpiryContext, MixIqRelayRoute};
+use crate::s2s::FederationRouter;
+use crate::state::mix_iq_relay::MixIqRelayRoute;
 use crate::state::mix_outbox::MixOutboxContext;
-use crate::state::mix_presence_recovery::MixPresenceRecoveryContext;
 use crate::state::AppState;
 use crate::xmpp::frame_execution::{SessionExecutions, Stage};
-use crate::xmpp::xml_builder::XmlElement;
-use anyhow::{Context, Result};
-use northstar_room_application::mix_service::outbox;
-use northstar_room_application::mix_service::outbox::core as mix_worker;
-use northstar_room_application::mix_service::{
-    ArchiveBoundary, BeginRemotePamJoin, BeginRemotePamLeave, ClaimedPamResult,
-    CreateChannelOutcome, FederatedMixIqReplay, FederatedMixMutation, JoinChannelOutcome,
-    JoinMixRequest, MamArchiveQuery, MixAccessEntryOperation, MixAccessEntryUpdate, MixAccessList,
-    MixBusinessReplay, MixChannel, MixConfigUpdate, MixEvent, MixInfoUpdate, MixInvitationProof,
-    MixMutationOutcome, MixParticipant, MixParticipantPreference, MixPresenceProbeTarget,
-    MixReadOutcome, MixReplayIdentity, MixRoleUpdate, PamMembership, PamOperationReplay,
-    PresenceOutcome, RegisterMixNickOutcome, RemotePamCompletionOutcome, RemotePamJoin,
-    RetractMixMessageOutcome, RetractMixMessageRequest, SetNickError, SourceArchiveAdmission,
-    StoreEventOutcome, StoreMixMessageRequest, ALL_NODES, NODE_ALLOWED, NODE_AVATAR_DATA,
-    NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG, NODE_INFO, NODE_JIDMAP, NODE_MESSAGES,
-    NODE_PRESENCE,
+use crate::xmpp::local_routes::session::OnlineSession;
+use crate::xmpp::outbound::{MixDelivery, MixTransportCompletion, OutboundSender};
+use anyhow::Result;
+use dashmap::DashSet;
+use northstar_federation_core::S2sOutboxPolicy;
+use northstar_mix_xmpp::ports::{
+    MixAction, MixFederationPort, MixFrameObserver, MixFrameStage, MixHost, MixLocalSession,
+    MixOutbound, MixOutboxPort, MixSession, MixSessionUser,
 };
-pub(crate) use northstar_room_core::mix::{
-    MixSessionCapability, ADMIN_NS, ANON_NS, CORE_NS, MISC_NS, PAM_NS, PRESENCE_NS,
+use northstar_room_application::mix_service::{foreground, MixService};
+use northstar_room_core::mix::{MixSessionCapability, CORE_NS, PAM_NS};
+use northstar_room_core::mix_iq_relay::MixIqRelayIndex;
+use northstar_roster_core::RosterChange;
+use roxmltree::Node;
+use std::sync::{atomic::Ordering, Arc};
+use tokio::sync::{
+    mpsc::{self, error::TrySendError},
+    oneshot, Mutex,
 };
-use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
-pub(crate) use worker::start_mix_delivery_outbox;
-use worker::*;
-
-use forms::{
-    is_xdata, parse_fields, parse_preference_submission, preference_result_form,
-    preference_template_form,
-};
-use futures::{future::BoxFuture, stream::FuturesUnordered, StreamExt};
-use northstar_room_core::mix_iq_relay::{MixIqRelayStage, PendingMixIqRelay};
-use roxmltree::{Document, Node};
-use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+#[cfg(test)]
+pub(crate) mod stage4_saved;
+
+impl MixOutbound for OutboundSender {
+    fn try_send(&self, stanza: String) -> Result<(), TrySendError<String>> {
+        OutboundSender::try_send(self, stanza)
+    }
+
+    fn try_send_with_transport_receipt(
+        &self,
+        stanza: String,
+        receipt: mpsc::UnboundedSender<()>,
+    ) -> Result<(), TrySendError<String>> {
+        OutboundSender::try_send_with_transport_receipt(self, stanza, receipt)
+    }
+
+    fn try_send_durable_mix(
+        &self,
+        stanza: String,
+        delivery: MixDelivery,
+    ) -> Result<oneshot::Receiver<MixTransportCompletion>, TrySendError<String>> {
+        OutboundSender::try_send_durable_mix(self, stanza, delivery)
+    }
+
+    fn disconnect_backpressured_transport(&self) {
+        OutboundSender::disconnect_backpressured_transport(self);
+    }
+}
+
+impl MixLocalSession for OnlineSession {
+    type Outbound = OutboundSender;
+
+    fn sender(&self) -> &OutboundSender {
+        &self.sender
+    }
+
+    fn disconnect(&self) -> &CancellationToken {
+        &self.disconnect
+    }
+
+    fn user_id(&self) -> Uuid {
+        self.user_id
+    }
+
+    fn is_available(&self) -> bool {
+        self.available.load(Ordering::Relaxed)
+    }
+}
+
+impl MixFederationPort for FederationRouter {
+    fn outbox_policy(&self) -> S2sOutboxPolicy {
+        FederationRouter::outbox_policy(self)
+    }
+
+    fn wake_outbox(&self) {
+        FederationRouter::wake_outbox(self);
+    }
+
+    async fn send(&self, target_domain: &str, stanza: String, bounce_to: Option<String>) -> bool {
+        FederationRouter::send(self, target_domain, stanza, bounce_to).await
+    }
+}
+
+impl MixFrameObserver for SessionExecutions {
+    fn enter(&self, stage: MixFrameStage) {
+        SessionExecutions::enter(
+            self,
+            match stage {
+                MixFrameStage::Policy => Stage::MixPolicy,
+                MixFrameStage::Admission => Stage::MixAdmission,
+            },
+        );
+    }
+
+    fn mix_foreground(
+        &self,
+        prepare: Box<
+            dyn FnOnce() -> Result<foreground::PreparedIngress, foreground::Rejected> + '_,
+        >,
+    ) -> Result<Option<foreground::Observation>, foreground::Rejected> {
+        SessionExecutions::mix_foreground(self, prepare)
+    }
+}
+
+impl MixHost for AppState {
+    type Repository = <MixOutboxContext as MixOutboxPort>::Repository;
+    type Session = OnlineSession;
+    type Federation = FederationRouter;
+    type IqRelayRoute = MixIqRelayRoute;
+    type OutboxContext = MixOutboxContext;
+
+    fn mix_service(&self) -> &MixService<Self::Repository> {
+        AppState::mix_service(self)
+    }
+
+    fn federation_outbox(&self) -> &FederationRouter {
+        AppState::federation_outbox(self)
+    }
+
+    fn local_domain(&self) -> &str {
+        AppState::local_domain(self)
+    }
+
+    fn server_name(&self) -> &str {
+        AppState::server_name(self)
+    }
+
+    fn pending_mix_iq(&self) -> &MixIqRelayIndex {
+        AppState::pending_mix_iq(self)
+    }
+
+    fn federation_domain_allowed(&self, domain: &str) -> bool {
+        AppState::federation_domain_allowed(self, domain)
+    }
+
+    fn mix_muc_mirror_enabled(&self) -> bool {
+        AppState::mix_muc_mirror_enabled(self)
+    }
+
+    fn xmpp_extension_enabled(&self, id: northstar_xep_core::XepId) -> bool {
+        AppState::xmpp_extension_enabled(self, id)
+    }
+
+    fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
+        AppState::session_entries_for(self, jid)
+    }
+
+    fn sessions_for(&self, jid: &str) -> Vec<OnlineSession> {
+        AppState::sessions_for(self, jid)
+    }
+
+    fn mix_iq_relay_route(&self) -> MixIqRelayRoute {
+        AppState::mix_iq_relay_route(self)
+    }
+
+    fn mix_outbox_context(&self) -> MixOutboxContext {
+        AppState::mix_outbox_context(self)
+    }
+
+    fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability {
+        match super::caps::verified_caps_has_any_feature(self, full_jid, &[CORE_NS, PAM_NS]) {
+            Some(true) => MixSessionCapability::Supported,
+            Some(false) => MixSessionCapability::Unsupported,
+            None => MixSessionCapability::Unknown,
+        }
+    }
+
+    fn validate_routed_message(&self, root: Node<'_, '_>) -> Result<(), &'static str> {
+        AppState::validate_routed_message(self, root)
+    }
+
+    fn local_mix_presence_route_is_current(
+        &self,
+        full_jid: &str,
+        expected_connection_id: Uuid,
+        expected_gate: &Arc<Mutex<()>>,
+        require_available: bool,
+    ) -> bool {
+        AppState::local_mix_presence_route_is_current(
+            self,
+            full_jid,
+            expected_connection_id,
+            expected_gate,
+            require_available,
+        )
+    }
+
+    async fn deliver_roster_change(
+        &self,
+        owner_id: Uuid,
+        owner: &str,
+        change: &RosterChange,
+        participant_id: Option<&str>,
+    ) -> Result<()> {
+        super::roster::deliver_roster_change(self, owner_id, owner, change, participant_id).await
+    }
+
+    fn valid_avatar_data(&self, item_id: &str, payload: Node<'_, '_>) -> bool {
+        super::pep::valid_avatar_data(item_id, payload)
+    }
+
+    fn valid_avatar_metadata(&self, item_id: &str, payload: Node<'_, '_>) -> bool {
+        super::pep::valid_avatar_metadata(item_id, payload)
+    }
+}
+
+impl MixSession for ProtocolSession {
+    type Host = AppState;
+
+    fn host(&self) -> &Arc<AppState> {
+        &self.state
+    }
+
+    fn user(&self) -> Option<MixSessionUser<'_>> {
+        self.authenticated.as_ref().map(|user| MixSessionUser {
+            id: user.id,
+            username: &user.username,
+        })
+    }
+
+    fn full_jid(&self) -> Option<&str> {
+        self.full_jid.as_deref()
+    }
+
+    fn connection_id(&self) -> Uuid {
+        self.connection_id
+    }
+
+    fn mix_presence_gate(&self) -> &Arc<Mutex<()>> {
+        &self.presence.mix_presence_gate
+    }
+
+    fn mix_presence_fallback_suppressed(&self) -> &DashSet<String> {
+        &self.presence.mix_presence_fallback_suppressed
+    }
+
+    fn frame_observer(&self) -> &dyn MixFrameObserver {
+        &self.frame_executions
+    }
+}
+
+impl From<MixAction> for Action {
+    fn from(action: MixAction) -> Self {
+        match action {
+            MixAction::Send(stanza) => Action::Send(stanza),
+            MixAction::SendMany(stanzas) => Action::SendMany(stanzas),
+            MixAction::None => Action::None,
+        }
+    }
+}
+
+impl ProtocolSession {
+    pub(crate) fn mix_domain(&self) -> String {
+        northstar_mix_xmpp::local_mix_domain(self.state.local_domain())
+    }
+
+    pub(crate) async fn try_mix_iq(&self, raw: &str) -> Result<Option<Action>> {
+        let action = northstar_mix_xmpp::session::try_mix_iq(self, raw).await?;
+        Ok(action.map(Action::from))
+    }
+
+    pub(crate) async fn try_mix_message(
+        &self,
+        root: Node<'_, '_>,
+        raw: &str,
+    ) -> Result<Option<Action>> {
+        let action = northstar_mix_xmpp::session::try_mix_message(self, root, raw).await?;
+        Ok(action.map(Action::from))
+    }
+
+    pub(crate) async fn try_mix_presence(
+        &self,
+        root: Node<'_, '_>,
+        raw: &str,
+    ) -> Result<Option<Action>> {
+        let action = northstar_mix_xmpp::session::try_mix_presence(self, root, raw).await?;
+        Ok(action.map(Action::from))
+    }
+
+    pub(crate) async fn forward_presence_to_mix_channels(
+        &self,
+        kind: &str,
+        advertised_capability: MixSessionCapability,
+        raw: &str,
+    ) -> Result<()> {
+        northstar_mix_xmpp::session::forward_presence_to_mix_channels(
+            self,
+            kind,
+            advertised_capability,
+            raw,
+        )
+        .await
+    }
+}
 
 #[cfg(test)]
 use crate::xmpp::local_routes::session_table::{
     mix_presence_epoch_is_current, mix_presence_fallback_is_suppressed,
 };
-
-const PUBSUB_NS: &str = "http://jabber.org/protocol/pubsub";
-const MAM_NS: &str = "urn:xmpp:mam:2";
-const MAX_CHANNELS_PER_OWNER: i64 = 100;
-const MAX_ITEMS_PAGE: i64 = 200;
-
-/// One linearizable correlation budget for every MIX IQ relay. Expiry is
-/// drained by a single supervised worker; admission never creates one timer
-/// task per untrusted request.
-#[allow(unused_imports)]
-pub(crate) use northstar_room_core::mix_iq_relay::MixIqRelayIndex;
-pub(crate) use northstar_room_core::mix_iq_relay::MIX_IQ_RELAY_TTL;
-
-fn same_jid_domain(left: &str, right: &str) -> bool {
-    matches!(
-        (prepare_domainpart(left), prepare_domainpart(right)),
-        (Ok(left), Ok(right)) if left == right
-    )
-}
-
-fn local_mix_domain(state: &AppState) -> String {
-    prepare_domainpart(&format!("mix.{}", state.local_domain()))
-        .expect("configured XMPP domain must form a valid MIX service domain")
-}
-
-fn local_muc_domain(state: &AppState) -> String {
-    prepare_domainpart(&format!("conference.{}", state.local_domain()))
-        .expect("configured XMPP domain must form a valid MUC service domain")
-}
-
-pub(crate) fn session_mix_capability(state: &AppState, full_jid: &str) -> MixSessionCapability {
-    match super::caps::verified_caps_has_any_feature(state, full_jid, &[CORE_NS, PAM_NS]) {
-        Some(true) => MixSessionCapability::Supported,
-        Some(false) => MixSessionCapability::Unsupported,
-        None => MixSessionCapability::Unknown,
-    }
-}
-
-pub(crate) fn start_mix_iq_relay_expiry(
-    context: Arc<MixIqRelayExpiryContext>,
-    registry: Arc<northstar_runtime::workers::WorkerRegistry>,
-    cancel: tokio_util::sync::CancellationToken,
-) {
-    registry.supervise(
-        "mix-iq-relay-expiry",
-        northstar_runtime::workers::WorkerCriticality::Restartable,
-        northstar_runtime::workers::WorkerMode::Continuous,
-        Some(Duration::from_secs(10)),
-        cancel.clone(),
-        move |heartbeat| {
-            let context = Arc::clone(&context);
-            let cancel = cancel.clone();
-            async move {
-                let mut interval = tokio::time::interval(Duration::from_millis(250));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                loop {
-                    tokio::select! {
-                        _ = cancel.cancelled() => return Ok(()),
-                        _ = interval.tick() => {
-                            for pending in context.take_expired(Instant::now()) {
-                                expire_mix_iq_relay(context.route(), pending).await;
-                            }
-                            heartbeat.ok();
-                        }
-                    }
-                }
-            }
-        },
-    );
-}
-
-pub(crate) fn start_mix_presence_recovery(
-    context: Arc<MixPresenceRecoveryContext>,
-    registry: Arc<northstar_runtime::workers::WorkerRegistry>,
-    cutoff: chrono::DateTime<chrono::Utc>,
-    // The state layer snapshots these targets straight from its own
-    // repository query; the persistence-type conversion happens on this
-    // boundary so the protocol never names the storage DTO.
-    probes: impl IntoIterator<Item = impl Into<MixPresenceProbeTarget>>,
-    cancel: tokio_util::sync::CancellationToken,
-) {
-    let probes: Vec<MixPresenceProbeTarget> = probes.into_iter().map(Into::into).collect();
-    registry.supervise(
-        "mix-presence-recovery",
-        northstar_runtime::workers::WorkerCriticality::Restartable,
-        northstar_runtime::workers::WorkerMode::OneShot,
-        Some(Duration::from_secs(90)),
-        cancel,
-        move |heartbeat| {
-            let context = Arc::clone(&context);
-            let probes = probes.clone();
-            async move {
-        for probe in probes {
-            let Ok(participant) = CanonicalJid::parse_bare(&probe.participant_jid) else {
-                tracing::warn!(participant = %probe.participant_jid, "ignored malformed persisted MIX participant JID");
-                continue;
-            };
-            let domain = participant.domainpart();
-            if same_jid_domain(domain, context.local_domain()) {
-                for (full_jid, connection_id, caps_generation) in context.routes().local_epochs(&probe.participant_jid) {
-                    publish_verified_mix_presence_with(
-                        &context,
-                        &full_jid,
-                        connection_id,
-                        caps_generation,
-                    )
-                    .await?;
-                }
-                continue;
-            }
-            if !context.federation_domain_allowed(domain) { continue; }
-            let stanza = XmlElement::namespaced("presence", "jabber:client")
-                .attr("type", "probe")
-                .attr("from", &probe.channel_jid)
-                .attr("to", &probe.participant_jid)
-                .finish();
-            context.send_federated(domain, stanza, None).await;
-        }
-        // The deadline is intentionally short and bounded: a remote resource
-        // that cannot answer a startup probe is no longer authoritative
-        // current state. A later available presence recreates the item.
-        tokio::time::sleep(MIX_IQ_RELAY_TTL).await;
-        let _expired_count = match context.expire_unrefreshed(cutoff).await {
-            Ok(expired) => expired,
-            Err(error) => {
-                return Err(error).context("failed to expire unrefreshed MIX presence");
-            }
-        };
-        // Expiry and every unavailable projection were committed atomically;
-        // the delivery worker owns transport retries.
-        heartbeat.ok();
-        Ok(())
-            }
-        },
-    );
-}
+#[cfg(test)]
+use futures::{future::BoxFuture, stream::FuturesUnordered};
+#[cfg(test)]
+use northstar_mix_xmpp::{
+    channel_delivery::*, claimed::*, federation::*, iq_parse::*, local_delivery::*, message::*,
+    payloads::*, relay::*, session::*, worker::*,
+};
+#[cfg(test)]
+use northstar_room_application::mix_service::outbox;
+#[cfg(test)]
+use northstar_room_application::mix_service::outbox::core as mix_worker;
+#[cfg(test)]
+use northstar_room_application::mix_service::{
+    MamArchiveQuery, MixBusinessReplay, MixParticipant, PamMembership, StoreEventOutcome,
+    NODE_MESSAGES, NODE_PRESENCE,
+};
+#[cfg(test)]
+use northstar_room_core::mix_iq_relay::MixIqRelayStage;
+#[cfg(test)]
+use northstar_xmpp_types::jid::CanonicalJid;
+#[cfg(test)]
+use roxmltree::Document;
+#[cfg(test)]
+use std::time::{Duration, Instant};
 
 #[cfg(test)]
 #[path = "mix_tests.rs"]

@@ -2,8 +2,8 @@
 
 use super::*;
 
-pub(super) async fn pubsub_get(
-    state: &Arc<AppState>,
+pub async fn pubsub_get(
+    state: &Arc<impl MixHost>,
     request: &OwnedIq,
     channel: &MixChannel,
     actor: &str,
@@ -139,17 +139,14 @@ pub(super) async fn pubsub_get(
     ))
 }
 
-pub(super) fn field_first<'a>(
-    fields: &'a BTreeMap<String, Vec<String>>,
-    name: &str,
-) -> Option<&'a str> {
+pub fn field_first<'a>(fields: &'a BTreeMap<String, Vec<String>>, name: &str) -> Option<&'a str> {
     fields
         .get(name)
         .and_then(|values| values.first())
         .map(String::as_str)
 }
 
-pub(super) fn field_bool(
+pub fn field_bool(
     fields: &BTreeMap<String, Vec<String>>,
     name: &str,
     default: bool,
@@ -162,7 +159,7 @@ pub(super) fn field_bool(
     }
 }
 
-pub(super) fn validate_form_fields(
+pub fn validate_form_fields(
     fields: &BTreeMap<String, Vec<String>>,
     allowed: &[&str],
     multi_value: &[&str],
@@ -176,7 +173,7 @@ pub(super) fn validate_form_fields(
     Ok(())
 }
 
-pub(super) fn validate_fixed_field(
+pub fn validate_fixed_field(
     fields: &BTreeMap<String, Vec<String>>,
     name: &str,
     expected: &str,
@@ -187,7 +184,7 @@ pub(super) fn validate_fixed_field(
     Ok(())
 }
 
-pub(super) fn validate_fixed_config(
+pub fn validate_fixed_config(
     fields: &BTreeMap<String, Vec<String>>,
     channel: &MixChannel,
 ) -> Result<()> {
@@ -238,8 +235,8 @@ pub(super) fn validate_fixed_config(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn pubsub_publish(
-    state: &Arc<AppState>,
+pub async fn pubsub_publish(
+    state: &Arc<impl MixHost>,
     request: &OwnedIq,
     channel: &MixChannel,
     actor: &str,
@@ -266,9 +263,9 @@ pub(super) async fn pubsub_publish(
                 Document::parse(&payloads[0]).context("malformed MIX avatar payload")?;
             let payload = payload_document.root_element();
             let valid = if node == NODE_AVATAR_DATA {
-                super::super::pep::valid_avatar_data(&item_ids[0], payload)
+                state.valid_avatar_data(&item_ids[0], payload)
             } else {
-                super::super::pep::valid_avatar_metadata(&item_ids[0], payload)
+                state.valid_avatar_metadata(&item_ids[0], payload)
             };
             anyhow::ensure!(valid, "invalid MIX avatar payload");
             if !state
@@ -617,18 +614,18 @@ pub(super) async fn pubsub_publish(
     ))
 }
 
-pub(super) struct PubSubRetractRequest<'a> {
-    pub(super) request: &'a OwnedIq,
-    pub(super) channel: &'a MixChannel,
-    pub(super) actor: &'a str,
-    pub(super) reply_to: &'a str,
-    pub(super) node: &'a str,
-    pub(super) item_ids: &'a [String],
-    pub(super) federated: Option<&'a FederatedMixMutation>,
+pub struct PubSubRetractRequest<'a> {
+    pub request: &'a OwnedIq,
+    pub channel: &'a MixChannel,
+    pub actor: &'a str,
+    pub reply_to: &'a str,
+    pub node: &'a str,
+    pub item_ids: &'a [String],
+    pub federated: Option<&'a FederatedMixMutation>,
 }
 
-pub(super) async fn pubsub_retract(
-    state: &Arc<AppState>,
+pub async fn pubsub_retract(
+    state: &Arc<impl MixHost>,
     operation: PubSubRetractRequest<'_>,
 ) -> Result<String> {
     let PubSubRetractRequest {

@@ -3,24 +3,24 @@
 use super::*;
 
 #[derive(Clone, Debug)]
-pub(super) struct OwnedIq {
-    pub(super) id: String,
-    pub(super) kind: String,
-    pub(super) from: Option<String>,
-    pub(super) to: Option<String>,
-    pub(super) operation: IqOperation,
+pub struct OwnedIq {
+    pub id: String,
+    pub kind: String,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub operation: IqOperation,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct MixDiscoInfoRequest {
-    pub(super) id: String,
-    pub(super) from: String,
-    pub(super) to: String,
-    pub(super) node: Option<String>,
-    pub(super) error: Option<&'static str>,
+pub struct MixDiscoInfoRequest {
+    pub id: String,
+    pub from: String,
+    pub to: String,
+    pub node: Option<String>,
+    pub error: Option<&'static str>,
 }
 
-pub(super) fn parse_mix_disco_info(raw: &str) -> Result<Option<MixDiscoInfoRequest>> {
+pub fn parse_mix_disco_info(raw: &str) -> Result<Option<MixDiscoInfoRequest>> {
     let document = Document::parse(raw).context("malformed MIX disco IQ")?;
     let root = document.root_element();
     if root.tag_name().name() != "iq" {
@@ -67,7 +67,7 @@ pub(super) fn parse_mix_disco_info(raw: &str) -> Result<Option<MixDiscoInfoReque
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum IqOperation {
+pub enum IqOperation {
     Create {
         channel: Option<String>,
     },
@@ -103,7 +103,7 @@ pub(super) enum IqOperation {
         node: String,
         item_ids: Vec<String>,
     },
-    Mam(super::super::mam::ParsedMamQuery),
+    Mam(northstar_archive_core::mam_parse::ParsedMamQuery),
     MamForm,
     MamMetadata,
     MamError(&'static str),
@@ -120,15 +120,15 @@ pub(super) enum IqOperation {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct JoinData {
-    pub(super) nodes: Vec<String>,
-    pub(super) nick: Option<String>,
-    pub(super) invitation: Option<MixInvitationProof>,
-    pub(super) preference: Option<MixParticipantPreference>,
-    pub(super) anonymous_profile: bool,
+pub struct JoinData {
+    pub nodes: Vec<String>,
+    pub nick: Option<String>,
+    pub invitation: Option<MixInvitationProof>,
+    pub preference: Option<MixParticipantPreference>,
+    pub anonymous_profile: bool,
 }
 
-pub(super) fn parse_iq(raw: &str) -> Result<Option<OwnedIq>> {
+pub fn parse_iq(raw: &str) -> Result<Option<OwnedIq>> {
     let document = Document::parse(raw).context("malformed MIX IQ")?;
     let root = document.root_element();
     if root.tag_name().name() != "iq" {
@@ -317,7 +317,7 @@ pub(super) fn parse_iq(raw: &str) -> Result<Option<OwnedIq>> {
                 }
             }
             Some((child, "query", Some(MAM_NS))) if kind == "set" => {
-                match super::super::mam::parse_mam_query(child) {
+                match northstar_archive_core::mam_parse::parse_mam_query(child) {
                     Ok(query) => IqOperation::Mam(query),
                     Err(condition) => IqOperation::MamError(condition),
                 }
@@ -349,7 +349,7 @@ pub(super) fn parse_iq(raw: &str) -> Result<Option<OwnedIq>> {
     }))
 }
 
-pub(super) fn mix_iq_route_candidate(raw: &str, mix_domain: &str) -> bool {
+pub fn mix_iq_route_candidate(raw: &str, mix_domain: &str) -> bool {
     let Ok(document) = Document::parse(raw) else {
         return false;
     };
@@ -375,7 +375,7 @@ pub(super) fn mix_iq_route_candidate(raw: &str, mix_domain: &str) -> bool {
         .is_some_and(|target| target.domainpart() == mix_domain)
 }
 
-pub(super) fn parse_join(node: Node<'_, '_>) -> Result<JoinData> {
+pub fn parse_join(node: Node<'_, '_>) -> Result<JoinData> {
     let mut nodes = Vec::new();
     let mut nick = None;
     let mut invitation = None;
@@ -455,7 +455,7 @@ pub(super) fn parse_join(node: Node<'_, '_>) -> Result<JoinData> {
     })
 }
 
-pub(super) fn parse_subscription_changes(node: Node<'_, '_>) -> Result<(Vec<String>, Vec<String>)> {
+pub fn parse_subscription_changes(node: Node<'_, '_>) -> Result<(Vec<String>, Vec<String>)> {
     let mut subscribe = Vec::new();
     let mut unsubscribe = Vec::new();
     for child in node.children().filter(Node::is_element) {
@@ -481,7 +481,7 @@ pub(super) fn parse_subscription_changes(node: Node<'_, '_>) -> Result<(Vec<Stri
     ))
 }
 
-pub(super) fn parse_pubsub(pubsub: Node<'_, '_>, raw: &str) -> Result<IqOperation> {
+pub fn parse_pubsub(pubsub: Node<'_, '_>, raw: &str) -> Result<IqOperation> {
     let actions = pubsub
         .children()
         .filter(Node::is_element)

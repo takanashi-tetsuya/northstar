@@ -31,7 +31,7 @@ pub(crate) trait ComponentWake: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct FederationOutboxService<R> {
+pub struct FederationOutboxService<R> {
     repository: R,
     wake: mpsc::Sender<()>,
     policy: S2sOutboxPolicy,

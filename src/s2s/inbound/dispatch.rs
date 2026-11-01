@@ -221,7 +221,7 @@ pub(super) async fn federated_mix_iq_owned(
     authenticated_domain: String,
     raw: String,
 ) -> Result<bool> {
-    crate::xmpp::protocol::mix::federated_mix_iq(state, &authenticated_domain, raw).await
+    northstar_mix_xmpp::federated_mix_iq(state, &authenticated_domain, raw).await
 }
 
 pub(super) async fn federated_mix_message_owned(
@@ -229,7 +229,7 @@ pub(super) async fn federated_mix_message_owned(
     authenticated_domain: String,
     raw: String,
 ) -> Result<bool> {
-    crate::xmpp::protocol::mix::federated_mix_message(state, &authenticated_domain, raw).await
+    northstar_mix_xmpp::federated_mix_message(state, &authenticated_domain, raw).await
 }
 
 pub(super) async fn federated_mix_presence_owned(
@@ -237,7 +237,7 @@ pub(super) async fn federated_mix_presence_owned(
     authenticated_domain: String,
     raw: String,
 ) -> Result<bool> {
-    crate::xmpp::protocol::mix::federated_mix_presence(state, &authenticated_domain, raw).await
+    northstar_mix_xmpp::federated_mix_presence(state, &authenticated_domain, raw).await
 }
 
 pub(super) async fn route_inbound_scoped(

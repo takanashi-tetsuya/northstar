@@ -2,8 +2,8 @@
 
 use super::*;
 
-pub(super) async fn handle_mix_mam_iq(
-    state: &Arc<AppState>,
+pub async fn handle_mix_mam_iq(
+    state: &Arc<impl MixHost>,
     request: &OwnedIq,
     actor: &str,
     addressed: &str,
@@ -30,7 +30,7 @@ pub(super) async fn handle_mix_mam_iq(
             )]);
         }
     };
-    let mix_domain = local_mix_domain(state);
+    let mix_domain = local_mix_domain(state.local_domain());
     let Some(localpart) = target.localpart() else {
         return Ok(vec![iq_error_to(
             &request.id,

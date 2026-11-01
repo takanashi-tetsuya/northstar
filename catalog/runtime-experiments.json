@@ -628,8 +628,8 @@
       "budgets": {
         "contract": "Existing attempt/renewal/worker watchdog and bounded DB lane limits, not a new common timeout.",
         "source": {
-          "path": "src/xmpp/protocol/mix/worker.rs",
-          "anchor": "pub(super) const fn mix_outbox_lane_budgets("
+          "path": "crates/contexts/room/northstar-mix-xmpp/src/worker.rs",
+          "anchor": "pub const fn mix_outbox_lane_budgets("
         }
       },
       "experiments": [
@@ -1195,19 +1195,19 @@
         },
         {
           "id": "worker:mix-delivery-outbox",
-          "owner": "src/xmpp/protocol/mix/worker.rs",
+          "owner": "crates/contexts/room/northstar-mix-xmpp/src/worker.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "worker:mix-iq-relay-expiry",
-          "owner": "src/xmpp/protocol/mix.rs",
+          "owner": "crates/contexts/room/northstar-mix-xmpp/src/lib.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "worker:mix-presence-recovery",
-          "owner": "src/xmpp/protocol/mix.rs",
+          "owner": "crates/contexts/room/northstar-mix-xmpp/src/lib.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },

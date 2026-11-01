@@ -344,17 +344,18 @@ test('rustItemBody returns exactly the text between the braces', () => {
 });
 
 test('Real repository checks', () => {
-  const files = moduleFiles('src/xmpp/protocol/mix.rs');
-  assert.equal(files[0], 'src/xmpp/protocol/mix.rs');
-  assert.ok(files.includes('src/xmpp/protocol/mix/worker.rs'));
+  const files = moduleFiles('crates/contexts/room/northstar-mix-xmpp/src/lib.rs');
+  assert.equal(files[0], 'crates/contexts/room/northstar-mix-xmpp/src/lib.rs');
+  assert.ok(files.includes('crates/contexts/room/northstar-mix-xmpp/src/worker.rs'));
   
   const body = rustItemBody(readModule('src/runtime/operation_runtime.rs'), 'async fn run_one(');
   assert.ok(body.includes('lease_heartbeat('));
   
-  const prodFiles = productionModuleFiles('src/xmpp/protocol/mix.rs');
-  assert.ok(prodFiles.includes('src/xmpp/protocol/mix/worker.rs'));
+  const prodFiles = productionModuleFiles('crates/contexts/room/northstar-mix-xmpp/src/lib.rs');
+  assert.ok(prodFiles.includes('crates/contexts/room/northstar-mix-xmpp/src/worker.rs'));
   // exclude every path under src/xmpp/protocol/mix/stage4_saved
-  for (const f of prodFiles) {
+  assert.ok(moduleFiles('src/xmpp/protocol/mix.rs').some(f => f.includes('stage4_saved')));
+  for (const f of productionModuleFiles('src/xmpp/protocol/mix.rs')) {
     assert.ok(!f.includes('stage4_saved'));
   }
 });
@@ -367,15 +368,17 @@ test('CLI tests', () => {
   assert.ok(res.stdout.endsWith('}\n'));
   
   // files output
-  res = spawnSync(process.execPath, [libraryPath, 'files', 'src/xmpp/protocol/mix.rs'], { encoding: 'utf8' });
+  res = spawnSync(process.execPath, [libraryPath, 'files', 'crates/contexts/room/northstar-mix-xmpp/src/lib.rs'], { encoding: 'utf8' });
   assert.equal(res.status, 0);
-  assert.ok(res.stdout.includes('src/xmpp/protocol/mix.rs\n'));
-  assert.ok(res.stdout.includes('src/xmpp/protocol/mix/worker.rs\n'));
+  assert.ok(res.stdout.includes('crates/contexts/room/northstar-mix-xmpp/src/lib.rs\n'));
+  assert.ok(res.stdout.includes('crates/contexts/room/northstar-mix-xmpp/src/worker.rs\n'));
 
   // production files output
+  res = spawnSync(process.execPath, [libraryPath, 'files', '--production', 'crates/contexts/room/northstar-mix-xmpp/src/lib.rs'], { encoding: 'utf8' });
+  assert.equal(res.status, 0);
+  assert.ok(res.stdout.includes('crates/contexts/room/northstar-mix-xmpp/src/worker.rs'));
   res = spawnSync(process.execPath, [libraryPath, 'files', '--production', 'src/xmpp/protocol/mix.rs'], { encoding: 'utf8' });
   assert.equal(res.status, 0);
-  assert.ok(res.stdout.includes('src/xmpp/protocol/mix/worker.rs'));
   assert.ok(!res.stdout.includes('stage4_saved'));
 
   // usage error

@@ -23,7 +23,7 @@ impl axum::extract::FromRef<Arc<AppState>> for SessionAdminContext {
 
 impl axum::extract::FromRef<Arc<AppState>> for AdminDispatchContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
-        state.admin_dispatch_service.clone()
+        state.operations.admin_dispatch_service.clone()
     }
 }
 impl axum::extract::FromRef<Arc<AppState>> for PublicDiscoveryContext {
@@ -48,31 +48,31 @@ impl axum::extract::FromRef<Arc<AppState>> for InvitationAdminContext {
 
 impl axum::extract::FromRef<Arc<AppState>> for GovernanceContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
-        state.governance_context.clone()
+        state.operations.governance_context.clone()
     }
 }
 
 impl axum::extract::FromRef<Arc<AppState>> for RetentionPolicyContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
-        state.retention_policy_context.clone()
+        state.operations.retention_policy_context.clone()
     }
 }
 
 impl axum::extract::FromRef<Arc<AppState>> for ReportModerationContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
-        state.report_moderation_service.clone()
+        state.operations.report_moderation_service.clone()
     }
 }
 
 impl axum::extract::FromRef<Arc<AppState>> for UploadAdminContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
-        state.upload_admin_service.clone()
+        state.operations.upload_admin_service.clone()
     }
 }
 
 impl axum::extract::FromRef<Arc<AppState>> for OperationAdminContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
-        state.operation_admin_service.clone()
+        state.operations.operation_admin_service.clone()
     }
 }
 
@@ -231,6 +231,7 @@ mod local_muc;
 mod local_session;
 mod muc_resume;
 mod omemo_poll_admission;
+mod operations_module;
 mod pubsub_module;
 mod roster_module;
 mod runtime_config;
@@ -249,6 +250,7 @@ use self::construction::*;
 use self::federation_policy::*;
 #[cfg(test)]
 pub(crate) use self::local_muc::count_shutdown_notification_completions;
+use self::operations_module::*;
 use self::pubsub_module::*;
 use self::roster_module::*;
 pub(crate) use self::runtime_config::*;
@@ -301,13 +303,6 @@ pub struct AppState {
     pubsub: PubSubModule,
     /// The roster context; see [`RosterModule`].
     roster: RosterModule,
-    api_query_context: ApiQueryContext,
-    metrics_snapshot_service: northstar_operations_application::metrics_snapshot::MetricsSnapshotService<
-        northstar_workflows::metrics_snapshot_repository::PostgresMetricsSnapshotRepository,
-    >,
-    readiness_service: northstar_operations_application::readiness::ReadinessService<
-        db::readiness_repository::PostgresReadinessRepository,
-    >,
     public_discovery_context: PublicDiscoveryContext,
     /// XEP-0215 TURN credential authority. Long-lived key material and its
     /// bounded rate windows never cross into protocol or public state.
@@ -339,11 +334,6 @@ pub struct AppState {
         db::s2s_sm_outbox_repository::PostgresSmOutboxRepository,
     >,
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
-    /// XEP-0050/XEP-0133 session and execution authority. Protocol handlers
-    /// never receive the backing PostgreSQL pool through this capability.
-    admin_command_service: northstar_operations_application::admin_commands::AdminCommandService<
-        crate::db::roster::RootAdminCommandRepository,
-    >,
     push_service: crate::services::push::PushService<db::push::PostgresPushRepository>,
     cluster: crate::cluster::ClusterManager,
     account_revocation_consumer_service:
@@ -381,35 +371,10 @@ pub struct AppState {
     /// reserve without giving protocol handlers raw pool access.
     durable_outbox_database_admission:
         northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
-    operation_admin_service: OperationAdminContext,
-    operation_muc_destroy_service: Arc<
-        northstar_operations_application::operation_muc_destroy::MucDestroyService<
-            db::operation_muc_destroy_repository::PostgresMucDestroyRepository,
-        >,
-    >,
     locked_muc_expiry_service: crate::services::locked_muc_expiry::LockedMucExpiryService<
         db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
     >,
     locked_muc_expiry_context: std::sync::OnceLock<Arc<locked_muc_expiry::LockedMucExpiryContext>>,
-    operation_effect_fence_service:
-        northstar_operations_application::operation_effect_fence::OperationEffectFenceService<
-            northstar_operations_postgres::operation_effect_fence_repository::PostgresOperationEffectFenceRepository,
-        >,
-    operation_journal_worker_service:
-        northstar_operations_application::operation_journal_worker::OperationJournalWorkerService<
-            northstar_operations_postgres::operation_journal_worker_repository::PostgresOperationJournalWorkerRepository,
-        >,
-    admin_session_cleanup_worker_service:
-        northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupWorkerService<
-            northstar_operations_postgres::admin_session_cleanup_worker_repository::PostgresAdminSessionCleanupRepository,
-        >,
-    admin_dispatch_service: AdminDispatchContext,
-    upload_admin_service: UploadAdminContext,
-    report_moderation_service: ReportModerationContext,
-    retention_policy_context: RetentionPolicyContext,
-    governance_context: GovernanceContext,
-    report_service:
-        northstar_operations_application::reports::ReportService<northstar_workflows::report_repository::PostgresReportRepository>,
     federation_outbox: FederationRouter,
     /// Full XEP-0114/XEP-0225 authentication records. `config.components`
     /// retains only redacted routing/discovery metadata after construction.
@@ -452,6 +417,8 @@ pub struct AppState {
     connection_actors: northstar_runtime::connection_actors::ConnectionActorRegistry,
     /// The auth context; see [`AuthModule`].
     auth: AuthModule,
+    /// The operations context; see [`OperationsModule`].
+    operations: OperationsModule,
     /// The anti-abuse context; see [`AbuseModule`].
     abuse: AbuseModule,
     started_at: Instant,

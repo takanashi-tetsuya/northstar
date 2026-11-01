@@ -45,7 +45,7 @@ impl crate::api::contexts::metrics::SmRecoveryGauges for SmRecoveryMetricsProbe 
 pub(super) fn metrics_context(state: &AppState) -> MetricsContext {
     MetricsContext {
         bearer_token: state.metrics_bearer_token.clone(),
-        persistence: state.metrics_snapshot_service.clone(),
+        persistence: state.operations.metrics_snapshot_service.clone(),
         registry: MetricsRenderProbe {
             registry: Arc::clone(&state.metrics),
         },

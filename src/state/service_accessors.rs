@@ -47,7 +47,7 @@ impl AppState {
     ) -> &northstar_operations_application::reports::ReportService<
         northstar_workflows::report_repository::PostgresReportRepository,
     > {
-        &self.report_service
+        &self.operations.report_service
     }
 
     pub(crate) fn api_query_service(
@@ -55,11 +55,11 @@ impl AppState {
     ) -> &northstar_operations_application::api_queries::ApiQueryService<
         northstar_workflows::api_queries::PostgresApiQueryRepository,
     > {
-        self.api_query_context.api_query_service()
+        self.operations.api_query_context.api_query_service()
     }
 
     pub(crate) fn api_query_context(&self) -> ApiQueryContext {
-        self.api_query_context.clone()
+        self.operations.api_query_context.clone()
     }
 
     pub(crate) fn pubsub_service(
@@ -236,7 +236,7 @@ impl AppState {
     ) -> &northstar_operations_application::admin_commands::AdminCommandService<
         crate::db::roster::RootAdminCommandRepository,
     > {
-        &self.admin_command_service
+        &self.operations.admin_command_service
     }
 
     pub(crate) fn push_service(

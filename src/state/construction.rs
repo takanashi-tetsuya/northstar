@@ -624,28 +624,6 @@ impl AppState {
             Arc::clone(&registration_closed),
             Arc::clone(&federation_write_policy.island_mode),
         );
-        let api_query_context = api_queries::ApiQueryContext::new(
-            northstar_operations_application::api_queries::ApiQueryService::new(
-                northstar_workflows::api_queries::PostgresApiQueryRepository::new(pool.clone()),
-            ),
-            Arc::clone(&api_cursor),
-            api_queries::ApiQueryRuntime {
-                domain: config.domain.clone(),
-                node_id: cluster.node_id.clone(),
-                require_encrypted_archive: config.require_encrypted_archive,
-                federation_configured: config.federation_enabled,
-                configured_registration_mode: config.configured_registration_mode(),
-                registration_dependency_locked: config.registration_dependency_locked(),
-                registration_closed: Arc::clone(&registration_closed),
-                island_mode: Arc::clone(&federation_write_policy.island_mode),
-                presence: Arc::new(api_query_presence::LocalApiQueryPresence {
-                    sessions: Arc::clone(&sessions),
-                    occupants: Arc::clone(&muc_occupants),
-                }),
-                metrics: Arc::clone(&metrics),
-                started_at,
-            },
-        );
         let omemo_recovery_poll_context = omemo_poll::OmemoRecoveryPollContext::new(
             crate::services::omemo_recovery::OmemoRecoveryPollService::new(
                 db::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository::new(
@@ -661,35 +639,9 @@ impl AppState {
             Arc::clone(&api_control),
             cluster.admission(),
         );
-        let operation_admin_service =
-            northstar_operations_application::operations::OperationAdminService::new(
-                northstar_workflows::operation_admin_repository::PostgresOperationAdminRepository::new(
-                    admin_mutations.clone(),
-                ),
-            );
-        let operation_muc_destroy_service = Arc::new(
-            northstar_operations_application::operation_muc_destroy::MucDestroyService::new(
-                db::operation_muc_destroy_repository::PostgresMucDestroyRepository::new(
-                    pool.clone(),
-                ),
-                config.domain.clone(),
-            ),
-        );
         let locked_muc_expiry_service =
             crate::services::locked_muc_expiry::LockedMucExpiryService::new(
                 db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository::new(
-                    pool.clone(),
-                ),
-            );
-        let operation_effect_fence_service =
-            northstar_operations_application::operation_effect_fence::OperationEffectFenceService::new(
-                northstar_operations_postgres::operation_effect_fence_repository::PostgresOperationEffectFenceRepository::new(
-                    pool.clone(),
-                ),
-            );
-        let operation_journal_worker_service =
-            northstar_operations_application::operation_journal_worker::OperationJournalWorkerService::new(
-                northstar_operations_postgres::operation_journal_worker_repository::PostgresOperationJournalWorkerRepository::new(
                     pool.clone(),
                 ),
             );
@@ -706,60 +658,6 @@ impl AppState {
                     max_attempts: config.s2s_outbox_max_attempts,
                 },
             );
-        let admin_session_cleanup_worker_service =
-            northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupWorkerService::new(
-                northstar_operations_postgres::admin_session_cleanup_worker_repository::PostgresAdminSessionCleanupRepository::new(pool.clone()),
-            );
-        let admin_dispatch_service =
-            northstar_operations_application::admin_dispatch::AdminDispatchService::new(
-                northstar_workflows::admin_dispatch_repository::PostgresAdminDispatchRepository::new(
-                    admin_mutations.clone(),
-                    command_pool.clone(),
-                    Arc::clone(&api_control),
-                    cluster.admission(),
-                ),
-                config.domain.clone(),
-            );
-        let upload_admin_service =
-            northstar_operations_application::upload_admin::UploadAdminService::new(
-                northstar_workflows::upload_admin_repository::PostgresUploadAdminRepository::new(
-                    admin_mutations.clone(),
-                ),
-            );
-        let report_moderation_service =
-            northstar_operations_application::report_moderation::ReportModerationService::new(
-                northstar_workflows::report_moderation_repository::PostgresReportModerationRepository::new(
-                    admin_mutations.clone(),
-                ),
-            );
-        let retention_policy_context = retention_policy::RetentionPolicyContext::new(
-            northstar_operations_application::retention_policy::RetentionPolicyService::new(
-                northstar_workflows::retention_policy_repository::PostgresRetentionPolicyRepository::new(
-                    pool.clone(),
-                    Arc::clone(&api_control),
-                ),
-                northstar_operations_application::retention_policy::RetentionPolicyLimits {
-                    personal_mam_days: config.mam_retention_days,
-                    offline_message_days: config.offline_message_ttl_days,
-                    moderation_evidence_days: config.moderation_retention_days,
-                },
-                config.muc_mam_retention_days,
-            ),
-            Arc::clone(&metrics),
-        );
-        let governance_context = governance::GovernanceContext::new(
-            northstar_operations_application::governance::GovernanceService::new(
-                northstar_workflows::governance_repository::PostgresGovernanceRepository::new(
-                    pool.clone(),
-                    admin_mutations.clone(),
-                    Arc::clone(&api_control),
-                    crate::api::governance_cursor::SignedGovernanceCursors::new(Arc::clone(
-                        &api_cursor,
-                    )),
-                ),
-            ),
-            Arc::clone(&metrics),
-        );
         let auth = AuthModule::new(AuthModuleParts {
             config: &config,
             pool: &pool,
@@ -775,13 +673,22 @@ impl AppState {
             dummy_scram_secret,
             dummy_scram_iteration_profiles,
         });
-        let report_service = northstar_operations_application::reports::ReportService::new(
-            northstar_workflows::report_repository::PostgresReportRepository::new(
-                pool.clone(),
-                Arc::clone(&api_control),
-                Arc::clone(&abuse),
-            ),
-        );
+        let operations = OperationsModule::new(OperationsModuleParts {
+            config: &config,
+            pool: &pool,
+            command_pool: &command_pool,
+            abuse: &abuse,
+            api_control: &api_control,
+            api_cursor: &api_cursor,
+            admin_mutations: &admin_mutations,
+            cluster: &cluster,
+            metrics: &metrics,
+            registration_closed: &registration_closed,
+            federation_write_policy: &federation_write_policy,
+            sessions: &sessions,
+            muc_occupants: &muc_occupants,
+            started_at,
+        });
         let message_admission_service =
             crate::services::message_admission::MessageAdmissionService::new(
                 northstar_abuse_postgres::message_admission::PostgresMessageAdmissionRepository::new(
@@ -797,16 +704,6 @@ impl AppState {
             );
         let state = Arc::new(Self {
             config,
-            api_query_context,
-            metrics_snapshot_service:
-                northstar_operations_application::metrics_snapshot::MetricsSnapshotService::new(
-                    northstar_workflows::metrics_snapshot_repository::PostgresMetricsSnapshotRepository::new(
-                        pool.clone(),
-                    ),
-                ),
-            readiness_service: northstar_operations_application::readiness::ReadinessService::new(
-                db::readiness_repository::PostgresReadinessRepository::new(pool.clone()),
-            ),
             public_discovery_context,
             omemo_recovery_service: crate::services::omemo_recovery::OmemoRecoveryService::new(
                 db::omemo_recovery_repository::PostgresOmemoRecoveryRepository::new(pool.clone()),
@@ -826,14 +723,6 @@ impl AppState {
             s2s_sm_outbox_service: crate::services::s2s_sm_outbox::SmOutboxService::new(
                 db::s2s_sm_outbox_repository::PostgresSmOutboxRepository::new(pool.clone()),
             ),
-            admin_command_service:
-                northstar_operations_application::admin_commands::AdminCommandService::new(
-                    crate::db::roster::RootAdminCommandRepository::new(
-                        pool.clone(),
-                        command_pool,
-                        db::roster::RootRosterEffects,
-                    ),
-                ),
             push_service: crate::services::push::PushService::new(
                 db::push::PostgresPushRepository::new(pool.clone()),
             ),
@@ -856,21 +745,8 @@ impl AppState {
             web_admin_gateway_token,
             omemo_recovery_poll_context,
             durable_outbox_database_admission,
-            report_service,
-            operation_admin_service: crate::api::contexts::ServiceContext(operation_admin_service),
-            operation_muc_destroy_service,
             locked_muc_expiry_service,
             locked_muc_expiry_context: std::sync::OnceLock::new(),
-            operation_effect_fence_service,
-            operation_journal_worker_service,
-            admin_session_cleanup_worker_service,
-            admin_dispatch_service: crate::api::contexts::ServiceContext(admin_dispatch_service),
-            upload_admin_service: crate::api::contexts::ServiceContext(upload_admin_service),
-            report_moderation_service: crate::api::contexts::ServiceContext(
-                report_moderation_service,
-            ),
-            retention_policy_context,
-            governance_context,
             upload,
             federation_outbox: federation,
             component_credentials,
@@ -896,6 +772,7 @@ impl AppState {
             component_connections,
             connection_actors,
             auth,
+            operations,
             abuse: AbuseModule::new(&abuse, abuse_key_deployment),
             started_at,
             process_started_at,

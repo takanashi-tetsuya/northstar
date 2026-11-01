@@ -30,7 +30,7 @@ impl AppState {
         BackgroundMaintenanceContext {
             challenge: self.abuse.challenge_cleanup_service.clone(),
             database: self.background_housekeeping_context(counters.clone()),
-            admin: self.admin_command_service.clone(),
+            admin: self.operations.admin_command_service.clone(),
             sm_expiry: self.sm_expiry_context(),
             caps_cache: Arc::clone(&self.caps_cache),
             counters,

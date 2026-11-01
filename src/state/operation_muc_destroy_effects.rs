@@ -33,7 +33,7 @@ struct LocalMucDestroyAudience {
 impl AppState {
     pub(crate) fn operation_muc_destroy_effects(&self) -> OperationMucDestroyEffects {
         OperationMucDestroyEffects {
-            destroy: Arc::clone(&self.operation_muc_destroy_service),
+            destroy: Arc::clone(&self.operations.operation_muc_destroy_service),
             wake: CommittedMucWakeService::new(PostgresCommittedMucWakeRepository::new(
                 self.pool.clone(),
             )),

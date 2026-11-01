@@ -20,7 +20,7 @@ pub(crate) struct AdminSessionCleanupContext {
 impl AppState {
     pub(crate) fn admin_session_cleanup_context(&self) -> AdminSessionCleanupContext {
         AdminSessionCleanupContext {
-            service: self.admin_session_cleanup_worker_service.clone(),
+            service: self.operations.admin_session_cleanup_worker_service.clone(),
             notifier: self.cluster_account_teardown_notifier(),
             routes: AccountRevocationRoutes::new(Arc::clone(&self.sessions)),
             sessions: Arc::clone(&self.sessions),

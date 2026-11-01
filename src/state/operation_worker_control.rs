@@ -19,8 +19,8 @@ pub(crate) struct OperationWorkerControl {
 impl AppState {
     pub(crate) fn operation_worker_control(&self) -> OperationWorkerControl {
         OperationWorkerControl {
-            journal: self.operation_journal_worker_service.clone(),
-            effects: self.operation_effect_fence_service.clone(),
+            journal: self.operations.operation_journal_worker_service.clone(),
+            effects: self.operations.operation_effect_fence_service.clone(),
             routes: self.broadcast_routes().target_snapshot(),
         }
     }

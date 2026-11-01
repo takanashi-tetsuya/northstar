@@ -70,7 +70,9 @@ impl AppState {
     ) -> northstar_operations_application::readiness::AbuseKeyAuthorityProbe<
         db::readiness_repository::PostgresReadinessRepository,
     > {
-        self.readiness_service.abuse_key_authority_probe()
+        self.operations
+            .readiness_service
+            .abuse_key_authority_probe()
     }
 
     pub(crate) fn readiness_context(&self) -> ReadinessContext {
@@ -81,7 +83,7 @@ impl AppState {
             cluster: self.cluster.readiness_probe(),
             workers: self.workers.readiness_probe(),
             abuse_key_deployment: self.abuse.abuse_key_deployment.clone(),
-            persistence: self.readiness_service.clone(),
+            persistence: self.operations.readiness_service.clone(),
         }
     }
 

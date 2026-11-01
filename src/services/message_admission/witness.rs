@@ -52,7 +52,7 @@ impl DirectOperationHandle {
 
     pub(crate) fn finalize(
         &self,
-        lease: &northstar_abuse_application::guard::MessageAdmissionLease,
+        lease: &northstar_abuse_policy::message_admission::MessageAdmissionLease,
     ) -> anyhow::Result<RetainedAdmission> {
         let fence = super::acceptance_fence(&lease.acceptance());
         let mut operation = self.0.lock().unwrap_or_else(|e| e.into_inner());

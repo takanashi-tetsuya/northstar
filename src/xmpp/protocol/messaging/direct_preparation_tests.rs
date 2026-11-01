@@ -34,7 +34,7 @@ impl MessageAdmissionRepository for MemoryGuard {
     }
     async fn accept(
         &self,
-        _: &northstar_abuse_application::guard::MessageAdmissionAcceptance<'_>,
+        _: &northstar_abuse_policy::message_admission::MessageAdmissionAcceptance<'_>,
         _: &AdmissionWitness,
     ) -> Result<FinalizeDecision> {
         panic!("preparation does not finalize")

@@ -40,7 +40,7 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
         else {
             anyhow::bail!("unexpected rated admission call");
         };
-        let lease = northstar_abuse_application::guard::MessageAdmissionLease::new(
+        let lease = northstar_abuse_policy::message_admission::MessageAdmissionLease::new(
             wire::unhex(&fence.admission_key_hex).map_err(|_| anyhow::anyhow!("invalid fence"))?,
             wire::unhex(&fence.payload_mac_hex).map_err(|_| anyhow::anyhow!("invalid fence"))?,
             fence.lease_token.0,
@@ -51,7 +51,7 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
             },
         );
         let fact = admission::CommitFact::Reserved(
-            northstar_abuse_application::guard::acceptance_fence(&lease.acceptance()),
+            northstar_abuse_policy::message_admission::acceptance_fence(&lease.acceptance()),
         );
         witness::saved_case_commit_observed(
             async {
@@ -85,7 +85,7 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
     }
     async fn accept(
         &self,
-        acceptance: &northstar_abuse_application::guard::MessageAdmissionAcceptance<'_>,
+        acceptance: &northstar_abuse_policy::message_admission::MessageAdmissionAcceptance<'_>,
         observation: &AdmissionWitness,
     ) -> Result<FinalizeDecision> {
         let wire::Admission::Reserved {
@@ -106,7 +106,7 @@ impl MessageAdmissionRepository for AdmissionPort<'_> {
             observation,
             admission::TransactionScope::AdmissionFinalize,
             admission::CommitFact::Finalized {
-                fence: northstar_abuse_application::guard::acceptance_fence(acceptance),
+                fence: northstar_abuse_policy::message_admission::acceptance_fence(acceptance),
                 result: admission::FinalizeSuccess::PendingAccepted,
             },
         )

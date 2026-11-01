@@ -6,7 +6,7 @@
 //! tombstones, action archives and local or federated delivery together.
 
 use anyhow::{Context, Result};
-use northstar_abuse_application::guard::PersonalRetractionContentKeyring;
+use northstar_abuse_policy::content_identity::PersonalRetractionContentKeyring;
 use northstar_abuse_policy::ContentIdentityAuthenticators;
 pub(crate) use northstar_message_core::ArchiveProjection as ArchiveWrite;
 use northstar_xml_builder::XmlElement;

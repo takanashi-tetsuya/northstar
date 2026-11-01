@@ -3049,11 +3049,12 @@ if (/\bpub\s+async\s+fn\s+accept_message_admission\s*\(/.test(abuseProductionSou
 }
 // Ordered SQL authority and extracted pure fence decisions are checked together.
 verifyAdmissionBoundaries(readAdmissionSources());
+const contentIdentitySource = readProductionModule('crates/contexts/abuse/northstar-abuse-policy/src/content_identity.rs', { root });
 for (const typeName of [
   'PersonalMessageContentKeyring',
   'PersonalRetractionContentKeyring',
 ]) {
-  const body = structBody(abuseSource, `pub struct ${typeName}`);
+  const body = structBody(contentIdentitySource, `pub struct ${typeName}`);
   if (/^\s*pub(?:\(crate\))?\s+(?:generations|keys|secret)\s*:/m.test(body)) {
     throw new Error(`${typeName} exposed its derived content key material`);
   }

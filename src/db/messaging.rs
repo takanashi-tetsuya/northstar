@@ -6,7 +6,7 @@ use crate::{
     services::messaging::*,
 };
 use anyhow::Result;
-use northstar_abuse_application::guard::PersonalMessageContentKeyring;
+use northstar_abuse_policy::content_identity::PersonalMessageContentKeyring;
 use northstar_message_application::direct_commit::{DirectCommitObserver, DirectCommitRepository};
 use northstar_message_application::PersonalMessageCommitRepository;
 use northstar_room_application::muc_service::DurableMucInviteOutcome;

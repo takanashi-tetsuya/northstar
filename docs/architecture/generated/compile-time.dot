@@ -944,6 +944,7 @@ digraph compile_time {
   "northstar-abuse-policy" -> "chrono";
   "northstar-abuse-policy" -> "hmac";
   "northstar-abuse-policy" -> "northstar-xml-builder";
+  "northstar-abuse-policy" -> "northstar-xmpp-types";
   "northstar-abuse-policy" -> "roxmltree";
   "northstar-abuse-policy" -> "serde";
   "northstar-abuse-policy" -> "serde_json";

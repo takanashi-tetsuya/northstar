@@ -20,7 +20,7 @@ use crate::xmpp::{
     frame_execution::{FrameExecution, SessionExecutions, Stage},
 };
 use anyhow::{Context as _, Result};
-use northstar_abuse_application::guard::{
+use northstar_abuse_policy::message_admission::{
     MessageAdmissionAcceptance, MessageAdmissionLease, MessageAdmissionStart,
 };
 use northstar_abuse_policy::{
@@ -622,9 +622,9 @@ impl MessageAdmissionRepository for AdmissionRepository {
             },
             witness,
             admission::TransactionScope::RatedBegin(admission::BeginCommitPurpose::NewReservation),
-            admission::CommitFact::Reserved(northstar_abuse_application::guard::acceptance_fence(
-                &lease.acceptance(),
-            )),
+            admission::CommitFact::Reserved(
+                northstar_abuse_policy::message_admission::acceptance_fence(&lease.acceptance()),
+            ),
         )
         .await?;
         self.observed.frame(wire::Cut::PortReturn);
@@ -650,7 +650,7 @@ impl MessageAdmissionRepository for AdmissionRepository {
             witness,
             admission::TransactionScope::AdmissionFinalize,
             admission::CommitFact::Finalized {
-                fence: northstar_abuse_application::guard::acceptance_fence(acceptance),
+                fence: northstar_abuse_policy::message_admission::acceptance_fence(acceptance),
                 result: admission::FinalizeSuccess::PendingAccepted,
             },
         )

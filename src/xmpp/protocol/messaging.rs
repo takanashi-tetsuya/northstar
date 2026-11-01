@@ -20,7 +20,7 @@ use crate::services::{
 };
 use crate::xmpp::frame_execution::Stage;
 use anyhow::Result;
-use northstar_abuse_application::guard::{MessageAdmissionLease, MessageAdmissionStart};
+use northstar_abuse_policy::message_admission::{MessageAdmissionLease, MessageAdmissionStart};
 use northstar_abuse_policy::stanza::{abuse_stanza_error, strip_pow_element};
 use northstar_abuse_policy::{MessageAdmissionRequest, PowProof};
 use northstar_message_application::{

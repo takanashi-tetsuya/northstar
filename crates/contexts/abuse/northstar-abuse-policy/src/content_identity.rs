@@ -12,6 +12,48 @@ pub struct ContentIdentityGeneration {
     pub key: Zeroizing<Vec<u8>>,
 }
 
+/// Least-authority capability for personal message content identities.
+/// A MessageService receives only these subkeys, so it cannot produce or
+/// verify a retraction commitment.
+#[derive(Clone)]
+pub struct PersonalMessageContentKeyring {
+    generations: Arc<Vec<ContentIdentityGeneration>>,
+}
+
+impl PersonalMessageContentKeyring {
+    pub fn new(generations: Arc<Vec<ContentIdentityGeneration>>) -> Self {
+        Self { generations }
+    }
+
+    pub fn authenticators(&self, canonical_payload: &[u8]) -> ContentIdentityAuthenticators {
+        content_identity_authenticators(
+            &self.generations,
+            ContentIdentityPurpose::PersonalMessage,
+            canonical_payload,
+        )
+    }
+}
+
+/// Least-authority capability for personal retraction content identities.
+#[derive(Clone)]
+pub struct PersonalRetractionContentKeyring {
+    generations: Arc<Vec<ContentIdentityGeneration>>,
+}
+
+impl PersonalRetractionContentKeyring {
+    pub fn new(generations: Arc<Vec<ContentIdentityGeneration>>) -> Self {
+        Self { generations }
+    }
+
+    pub fn authenticators(&self, canonical_payload: &[u8]) -> ContentIdentityAuthenticators {
+        content_identity_authenticators(
+            &self.generations,
+            ContentIdentityPurpose::PersonalRetraction,
+            canonical_payload,
+        )
+    }
+}
+
 /// Least-authority capability for XEP-0369 channel message replay identities.
 /// It cannot produce personal-message or MIX-retraction commitments even
 /// though all generations originate from the same mounted deployment secret.

@@ -3,8 +3,7 @@ use crate::commit::commit_observed;
 use crate::{actor_state, verification};
 use anyhow::Result;
 use northstar_abuse_application::guard::{
-    acceptance_fence, AbuseGuard, MessageAdmissionAcceptance, MessageAdmissionCandidate,
-    MessageAdmissionLease, MessageAdmissionStart, PersistentVerificationInput,
+    AbuseGuard, MessageAdmissionCandidate, PersistentVerificationInput,
 };
 use northstar_abuse_policy::admission_execution::{
     AdmissionCommitObserver, BeginCommitPurpose, Command, CommitFact, Effect, FinalizeSuccess,
@@ -13,6 +12,9 @@ use northstar_abuse_policy::admission_execution::{
 use northstar_abuse_policy::admission_transaction::{
     self as decision, AdmissionCandidate, AdmissionFence, AdmissionRow, BeginRowDecision,
     CapacityDecision, FinalizeDecision, RowState,
+};
+use northstar_abuse_policy::message_admission::{
+    acceptance_fence, MessageAdmissionAcceptance, MessageAdmissionLease, MessageAdmissionStart,
 };
 use northstar_abuse_policy::{
     AbuseAction, MessageAdmissionRequest, MessageDedupeIdentity, PowIntent,

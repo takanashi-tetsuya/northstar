@@ -16,7 +16,7 @@ async fn owner(mode: DirectPostCommitMode, finish: bool) -> DirectOperationHandl
         actors: &[],
         proof: None,
     };
-    let lease = northstar_abuse_application::guard::MessageAdmissionLease::new(
+    let lease = northstar_abuse_policy::message_admission::MessageAdmissionLease::new(
         vec![1; 32],
         vec![2; 32],
         Uuid::from_u128(6),
@@ -25,7 +25,7 @@ async fn owner(mode: DirectPostCommitMode, finish: bool) -> DirectOperationHandl
             candidates: vec![],
         },
     );
-    let fence = northstar_abuse_application::guard::acceptance_fence(&lease.acceptance());
+    let fence = northstar_abuse_policy::message_admission::acceptance_fence(&lease.acceptance());
     let begin = owner.begin(&request).unwrap();
     begin
         .start(&message_admission::begin_command(&request).unwrap())

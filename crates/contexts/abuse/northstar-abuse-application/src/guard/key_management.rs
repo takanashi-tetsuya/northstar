@@ -18,26 +18,6 @@ pub(super) fn derive_actor_key_secret(secret: &[u8]) -> Vec<u8> {
     northstar_abuse_policy::derive_actor_key_secret(secret).to_vec()
 }
 
-impl PersonalMessageContentKeyring {
-    pub fn authenticators(&self, canonical_payload: &[u8]) -> ContentIdentityAuthenticators {
-        content_identity_authenticators(
-            &self.generations,
-            ContentIdentityPurpose::PersonalMessage,
-            canonical_payload,
-        )
-    }
-}
-
-impl PersonalRetractionContentKeyring {
-    pub fn authenticators(&self, canonical_payload: &[u8]) -> ContentIdentityAuthenticators {
-        content_identity_authenticators(
-            &self.generations,
-            ContentIdentityPurpose::PersonalRetraction,
-            canonical_payload,
-        )
-    }
-}
-
 pub(super) fn derive_content_identity_key(
     actor_secret: &[u8],
     purpose: ContentIdentityPurpose,

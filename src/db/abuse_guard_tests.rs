@@ -6,11 +6,13 @@ use northstar_abuse_application::guard::test_support::{
     message_admission_material, opaque_actor_key,
 };
 use northstar_abuse_application::guard::{
-    acceptance_fence, AbuseGuard, ChallengeCapacityExceeded, MessageAdmissionAcceptance,
-    MessageAdmissionStart, TransactionalGuardOutcome,
+    AbuseGuard, ChallengeCapacityExceeded, TransactionalGuardOutcome,
 };
 use northstar_abuse_policy::admission_execution::Command;
 use northstar_abuse_policy::admission_transaction::FinalizeDecision;
+use northstar_abuse_policy::message_admission::{
+    acceptance_fence, MessageAdmissionAcceptance, MessageAdmissionStart,
+};
 use northstar_abuse_policy::*;
 use northstar_abuse_postgres::message_admission::accept_observed;
 use sha2::{Digest, Sha256};

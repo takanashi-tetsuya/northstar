@@ -1939,6 +1939,10 @@
       ],
       [
         "northstar-abuse-policy",
+        "northstar-xmpp-types"
+      ],
+      [
+        "northstar-abuse-policy",
         "roxmltree"
       ],
       [

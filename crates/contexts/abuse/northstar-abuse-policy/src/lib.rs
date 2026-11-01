@@ -8,6 +8,7 @@ pub mod config;
 pub mod content_identity;
 pub mod cooldown;
 pub mod escalation;
+pub mod message_admission;
 pub mod model;
 pub mod pow;
 pub mod stanza;

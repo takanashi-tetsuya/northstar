@@ -9,7 +9,7 @@ use crate::{
     },
     xmpp::outbound::{OutboundSender, RouteEnqueue, RouteSendError},
 };
-use northstar_abuse_application::guard::{MessageAdmissionLease, MessageAdmissionStart};
+use northstar_abuse_policy::message_admission::{MessageAdmissionLease, MessageAdmissionStart};
 use northstar_delivery_core::DurableDelivery;
 use northstar_message_application::{
     direct_lifecycle::{OriginalAdmission, TerminalReason},

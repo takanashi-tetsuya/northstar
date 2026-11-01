@@ -2,7 +2,6 @@ use self::records::DbActorState;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use dashmap::DashMap;
 use northstar_abuse_policy::admission_execution::AdmissionCommitObserver;
-use northstar_abuse_policy::admission_transaction::AdmissionFence;
 #[cfg(test)]
 use northstar_abuse_policy::canonical_json_body_digest;
 #[cfg(test)]
@@ -39,10 +38,14 @@ use self::key_management::{
 };
 use self::persistence::actor_state_keys;
 use northstar_abuse_policy::content_identity::{
-    content_identity_authenticators, ContentIdentityGeneration, MixMessageContentKeyring,
-    MixRetractionContentKeyring,
+    ContentIdentityGeneration, MixMessageContentKeyring, MixRetractionContentKeyring,
+    PersonalMessageContentKeyring, PersonalRetractionContentKeyring,
 };
-use northstar_abuse_policy::ContentIdentityAuthenticators;
+#[cfg(test)]
+use northstar_abuse_policy::message_admission::{is_abuse_state_busy, AbuseStateBusy};
+use northstar_abuse_policy::message_admission::{
+    validate_message_admission_request, MessageAdmissionStart,
+};
 
 const POW_INTENT_VERSION: u16 = northstar_abuse_policy::POW_INTENT_VERSION;
 const MAX_ACTIVE_POW_CHALLENGES_GLOBAL: usize =
@@ -84,31 +87,6 @@ impl std::fmt::Display for ChallengeCapacityExceeded {
 
 impl std::error::Error for ChallengeCapacityExceeded {}
 
-#[derive(Debug)]
-pub struct AbuseStateBusy;
-
-impl std::fmt::Display for AbuseStateBusy {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("anti-abuse actor state is busy; retry later")
-    }
-}
-
-impl std::error::Error for AbuseStateBusy {}
-
-pub fn is_abuse_state_busy(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<AbuseStateBusy>().is_some()
-}
-
-#[derive(Clone)]
-pub struct PersonalMessageContentKeyring {
-    generations: Arc<Vec<ContentIdentityGeneration>>,
-}
-
-#[derive(Clone)]
-pub struct PersonalRetractionContentKeyring {
-    generations: Arc<Vec<ContentIdentityGeneration>>,
-}
-
 #[cfg(any(test, feature = "test-support"))]
 fn test_content_identity_generations(
     purpose: ContentIdentityPurpose,
@@ -127,16 +105,16 @@ fn test_content_identity_generations(
 
 #[cfg(any(test, feature = "test-support"))]
 pub fn test_personal_message_content_keyring() -> PersonalMessageContentKeyring {
-    PersonalMessageContentKeyring {
-        generations: test_content_identity_generations(ContentIdentityPurpose::PersonalMessage),
-    }
+    PersonalMessageContentKeyring::new(test_content_identity_generations(
+        ContentIdentityPurpose::PersonalMessage,
+    ))
 }
 
 #[cfg(any(test, feature = "test-support"))]
 pub fn test_personal_retraction_content_keyring() -> PersonalRetractionContentKeyring {
-    PersonalRetractionContentKeyring {
-        generations: test_content_identity_generations(ContentIdentityPurpose::PersonalRetraction),
-    }
+    PersonalRetractionContentKeyring::new(test_content_identity_generations(
+        ContentIdentityPurpose::PersonalRetraction,
+    ))
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -220,86 +198,10 @@ fn ceil_seconds(duration: Duration) -> u64 {
         .max(1)
 }
 
-pub fn validate_message_admission_request(
-    request: &MessageAdmissionRequest<'_>,
-) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        request.actor_id != Uuid::nil(),
-        "message admission actor must not be nil"
-    );
-    anyhow::ensure!(
-        northstar_xmpp_types::jid::canonical_bare_key(request.account_bare)
-            .is_ok_and(|value| value == request.account_bare),
-        "message admission account must be a canonical bare JID"
-    );
-    anyhow::ensure!(
-        northstar_xmpp_types::jid::canonicalize(request.normalized_target)
-            .is_ok_and(|value| value == request.normalized_target),
-        "message admission target must already be canonical"
-    );
-    anyhow::ensure!(
-        !request.normalized_payload.is_empty() && request.normalized_payload.len() <= 1_048_576,
-        "message admission payload must contain 1 byte to 1 MiB"
-    );
-    anyhow::ensure!(
-        !request.pow_intent_payload.is_empty() && request.pow_intent_payload.len() <= 1_048_576,
-        "message PoW intent payload must contain 1 byte to 1 MiB"
-    );
-    if let Some(origin_id) = request.origin_id {
-        anyhow::ensure!(
-            !origin_id.is_empty()
-                && origin_id.len() <= 1_024
-                && !origin_id.chars().any(char::is_control),
-            "message origin-id must contain 1 to 1024 non-control bytes"
-        );
-    }
-
-    Ok(())
-}
-
 pub struct MessageAdmissionCandidate {
     pub key_id: String,
     pub admission_key: Vec<u8>,
     pub payload_mac: Vec<u8>,
-}
-
-#[derive(Clone)]
-pub struct MessageAdmissionLease {
-    admission_key: Vec<u8>,
-    payload_mac: Vec<u8>,
-    lease_token: Uuid,
-    pub offline_dedupe: MessageDedupeIdentity,
-}
-
-/// The exact admission fence handed to the database after message delivery.
-/// Only a lease issued by the guard can construct this view.
-pub struct MessageAdmissionAcceptance<'a> {
-    admission_key: &'a [u8],
-    payload_mac: &'a [u8],
-    lease_token: Uuid,
-}
-
-pub fn acceptance_fence(acceptance: &MessageAdmissionAcceptance<'_>) -> AdmissionFence {
-    AdmissionFence {
-        admission_key: acceptance.admission_key().to_vec(),
-        payload_mac: acceptance.payload_mac().to_vec(),
-        lease_token: acceptance.lease_token(),
-    }
-}
-
-#[derive(Debug)]
-pub enum MessageAdmissionStart {
-    Proceed {
-        lease: Option<MessageAdmissionLease>,
-        requirement: WorkRequirement,
-    },
-    ReplayAccepted,
-    InProgress {
-        requirement: WorkRequirement,
-    },
-    Denied(GuardError),
-    Conflict,
-    CapacityLimited,
 }
 
 /// A denial has already mutated persistent challenge/rate state in the
@@ -485,17 +387,16 @@ impl AbuseGuard {
     /// produce or verify a retraction commitment even though both generations
     /// originate from the same mounted deployment secret.
     pub fn personal_message_content_keyring(&self) -> PersonalMessageContentKeyring {
-        PersonalMessageContentKeyring {
-            generations: self.content_identity_generations(ContentIdentityPurpose::PersonalMessage),
-        }
+        PersonalMessageContentKeyring::new(
+            self.content_identity_generations(ContentIdentityPurpose::PersonalMessage),
+        )
     }
 
     /// RetractionService receives a separate least-authority capability.
     pub fn personal_retraction_content_keyring(&self) -> PersonalRetractionContentKeyring {
-        PersonalRetractionContentKeyring {
-            generations: self
-                .content_identity_generations(ContentIdentityPurpose::PersonalRetraction),
-        }
+        PersonalRetractionContentKeyring::new(
+            self.content_identity_generations(ContentIdentityPurpose::PersonalRetraction),
+        )
     }
 
     #[cfg(test)]
@@ -712,12 +613,6 @@ pub mod test_support {
 
         pub fn actor_key_secret(&self) -> &[u8] {
             &self.actor_key_secret
-        }
-    }
-
-    impl MessageAdmissionLease {
-        pub fn admission_key(&self) -> &[u8] {
-            &self.admission_key
         }
     }
 }

@@ -141,50 +141,6 @@ pub(super) fn punish_db_states(
     }
 }
 
-impl std::fmt::Debug for MessageAdmissionLease {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("MessageAdmissionLease { authority: [redacted] }")
-    }
-}
-
-impl MessageAdmissionLease {
-    pub fn new(
-        admission_key: Vec<u8>,
-        payload_mac: Vec<u8>,
-        lease_token: Uuid,
-        offline_dedupe: MessageDedupeIdentity,
-    ) -> Self {
-        Self {
-            admission_key,
-            payload_mac,
-            lease_token,
-            offline_dedupe,
-        }
-    }
-
-    pub fn acceptance(&self) -> MessageAdmissionAcceptance<'_> {
-        MessageAdmissionAcceptance {
-            admission_key: &self.admission_key,
-            payload_mac: &self.payload_mac,
-            lease_token: self.lease_token,
-        }
-    }
-}
-
-impl MessageAdmissionAcceptance<'_> {
-    pub fn admission_key(&self) -> &[u8] {
-        self.admission_key
-    }
-
-    pub fn payload_mac(&self) -> &[u8] {
-        self.payload_mac
-    }
-
-    pub fn lease_token(&self) -> Uuid {
-        self.lease_token
-    }
-}
-
 impl AbuseGuard {
     pub(super) async fn acquire_db_state_gates(
         &self,

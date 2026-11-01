@@ -3,7 +3,7 @@
 use super::{session_entries_for_in, AppState, OnlineSession, RuntimeFederationPolicy};
 use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
-    db::{messaging::PostgresMessageRepository, pubsub_repository::PostgresPubSubRepository},
+    db::pubsub_repository::PostgresPubSubRepository,
     s2s::FederationRouter,
     xmpp::xml_builder::XmlElement,
 };
@@ -13,6 +13,7 @@ use northstar_config::ExternalRouteDomainPolicy;
 use northstar_message_application::messaging::MessageService;
 use northstar_pubsub_application::PubSubService;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
+use northstar_workflows::message_repository::PostgresMessageRepository;
 use northstar_xmpp_types::jid::CanonicalJid;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;

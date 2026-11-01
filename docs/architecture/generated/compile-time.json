@@ -4716,7 +4716,23 @@
     ],
     [
       "northstar-workflows",
+      "northstar-federation-core"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-federation-postgres"
+    ],
+    [
+      "northstar-workflows",
       "northstar-message-application"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-message-core"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-message-postgres"
     ],
     [
       "northstar-workflows",
@@ -4760,7 +4776,19 @@
     ],
     [
       "northstar-workflows",
+      "northstar-xep-0016"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-xml-builder"
+    ],
+    [
+      "northstar-workflows",
       "northstar-xmpp-types"
+    ],
+    [
+      "northstar-workflows",
+      "roxmltree"
     ],
     [
       "northstar-workflows",
@@ -4772,7 +4800,15 @@
     ],
     [
       "northstar-workflows",
+      "sha2"
+    ],
+    [
+      "northstar-workflows",
       "sqlx"
+    ],
+    [
+      "northstar-workflows",
+      "subtle"
     ],
     [
       "northstar-workflows",

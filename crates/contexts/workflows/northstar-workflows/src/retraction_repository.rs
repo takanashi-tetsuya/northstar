@@ -1,7 +1,7 @@
 //! Atomic retraction intents, archive tombstones and delivery projections.
-use crate::cluster::DirectSpoolEligibility;
 use anyhow::Result;
 use northstar_message_application::retractions::*;
+use northstar_message_core::DirectSpoolEligibility;
 use northstar_message_postgres::direct_cluster::DirectCommitCluster;
 use roxmltree::Document;
 use sqlx::{PgPool, Row};
@@ -11,22 +11,19 @@ use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresRetractionRepository {
+pub struct PostgresRetractionRepository {
     pool: PgPool,
     cluster: Option<Arc<dyn DirectCommitCluster>>,
 }
 impl PostgresRetractionRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self {
             pool,
             cluster: None,
         }
     }
 
-    pub(crate) fn with_cluster_admission(
-        mut self,
-        cluster: impl DirectCommitCluster + 'static,
-    ) -> Self {
+    pub fn with_cluster_admission(mut self, cluster: impl DirectCommitCluster + 'static) -> Self {
         self.cluster = Some(Arc::new(cluster));
         self
     }

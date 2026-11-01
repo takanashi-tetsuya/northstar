@@ -7,21 +7,20 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};
-use std::collections::HashSet;
 #[cfg(test)]
 use std::time::Duration;
 use uuid::Uuid;
 
 mod mam_room;
 mod mix_archive;
-mod personal_history;
 
 pub use self::mam_room::*;
 pub use self::mix_archive::*;
-pub use self::personal_history::*;
 pub use northstar_archive_postgres::*;
 #[cfg(test)]
 use northstar_message_postgres::{offline::*, personal_history::*};
+#[cfg(test)]
+use northstar_workflows::personal_history::*;
 
 /// Production source of this module: the file itself followed by each
 /// production child module file, so source-contract tests keep reading the
@@ -33,10 +32,6 @@ use northstar_message_postgres::{offline::*, personal_history::*};
 #[cfg(test)]
 const MODULE_SOURCE: &[(&str, &str)] = &[
     ("archive", include_str!("archive.rs")),
-    (
-        "personal_history",
-        include_str!("archive/personal_history.rs"),
-    ),
     ("mix_archive", include_str!("archive/mix_archive.rs")),
     ("mam_room", include_str!("archive/mam_room.rs")),
 ];

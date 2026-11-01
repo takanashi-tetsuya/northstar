@@ -92,7 +92,7 @@ Key ownership:
 - `crates/contexts/message/northstar-message-application/src/messaging.rs` owns personal-message communication policy and
   durable admission. The stanza handler still owns XML and live routing, but
   cannot directly query users/blocking/privacy or compose MAM, S2S outbox, C2S
-  spool and offline writes. `src/db/messaging.rs` implements the injected
+  spool and offline writes. `crates/contexts/workflows/northstar-workflows/src/message_repository.rs` implements the injected
   repository and retains each complete admission transaction, including
   members-only invitations. Typed decisions keep blocked, privacy-denied,
   missing, stored, replay and quota outcomes explicit at the boundary.

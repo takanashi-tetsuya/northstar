@@ -2897,8 +2897,8 @@ const retractionServiceBody = structBody(
 if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(retractionServiceBody)) {
   throw new Error('RetractionService must receive its repository port');
 }
-const retractionRepositorySource = read('src/db/retractions.rs');
-const retractionRepositoryBody = structBody(retractionRepositorySource, 'pub(crate) struct PostgresRetractionRepository');
+const retractionRepositorySource = read('crates/contexts/workflows/northstar-workflows/src/retraction_repository.rs');
+const retractionRepositoryBody = structBody(retractionRepositorySource, 'pub struct PostgresRetractionRepository');
 if (!/^\s*pool\s*:\s*PgPool\s*,?\s*$/m.test(retractionRepositoryBody)) {
   throw new Error('Retraction repository PostgreSQL capability must remain private');
 }
@@ -3015,7 +3015,7 @@ for (const upgradeEvidence of [
   }
 }
 // reads the whole module including test-only child files
-const archiveRepositorySource = `${readModule('src/db/archive.rs', { root })}\n${readModule('crates/contexts/message/northstar-message-postgres/src/personal_history.rs', { root })}`;
+const archiveRepositorySource = `${readModule('src/db/archive.rs', { root })}\n${readModule('crates/contexts/message/northstar-message-postgres/src/personal_history.rs', { root })}\n${readModule('crates/contexts/workflows/northstar-workflows/src/personal_history.rs', { root })}`;
 if (/\bpayload_value\b/.test(archiveRepositorySource)) {
   throw new Error('archive repository must not read, bind, or persist plaintext admission payload_value');
 }
@@ -3099,9 +3099,9 @@ if (sourceFilesNamingContentPurpose.length > 0) {
     `application/DB/protocol code regained caller-selectable content purpose: ${sourceFilesNamingContentPurpose.join(', ')}`,
   );
 }
-const keyedMessageRepositorySource = read('src/db/messaging.rs');
+const keyedMessageRepositorySource = read('crates/contexts/workflows/northstar-workflows/src/message_repository.rs');
 for (const [serviceName, body, expectedKeyring] of [
-  ['PostgresMessageRepository', structBody(keyedMessageRepositorySource, 'pub(crate) struct PostgresMessageRepository'), 'PersonalMessageContentKeyring'],
+  ['PostgresMessageRepository', structBody(keyedMessageRepositorySource, 'pub struct PostgresMessageRepository'), 'PersonalMessageContentKeyring'],
   ['RetractionService', retractionServiceBody, 'PersonalRetractionContentKeyring'],
 ]) {
   if (!new RegExp(`^\\s*content_identity\\s*:\\s*${expectedKeyring}\\s*,?\\s*$`, 'm').test(body)) {

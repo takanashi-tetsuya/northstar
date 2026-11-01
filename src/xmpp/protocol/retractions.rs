@@ -199,7 +199,9 @@ mod tests {
             })
             .collect::<Vec<_>>();
         RetractionService::new(
-            crate::db::retractions::PostgresRetractionRepository::new(pool.clone()),
+            northstar_workflows::retraction_repository::PostgresRetractionRepository::new(
+                pool.clone(),
+            ),
             northstar_abuse_application::guard::test_personal_retraction_content_keyring(),
             "local.test",
         )

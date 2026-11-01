@@ -1524,7 +1524,11 @@ digraph compile_time {
   "northstar-workflows" -> "northstar-auth-application";
   "northstar-workflows" -> "northstar-auth-core";
   "northstar-workflows" -> "northstar-auth-postgres";
+  "northstar-workflows" -> "northstar-federation-core";
+  "northstar-workflows" -> "northstar-federation-postgres";
   "northstar-workflows" -> "northstar-message-application";
+  "northstar-workflows" -> "northstar-message-core";
+  "northstar-workflows" -> "northstar-message-postgres";
   "northstar-workflows" -> "northstar-operations-application";
   "northstar-workflows" -> "northstar-operations-core";
   "northstar-workflows" -> "northstar-operations-postgres";
@@ -1535,10 +1539,15 @@ digraph compile_time {
   "northstar-workflows" -> "northstar-roster-postgres";
   "northstar-workflows" -> "northstar-security";
   "northstar-workflows" -> "northstar-upload-postgres";
+  "northstar-workflows" -> "northstar-xep-0016";
+  "northstar-workflows" -> "northstar-xml-builder";
   "northstar-workflows" -> "northstar-xmpp-types";
+  "northstar-workflows" -> "roxmltree";
   "northstar-workflows" -> "serde";
   "northstar-workflows" -> "serde_json";
+  "northstar-workflows" -> "sha2";
   "northstar-workflows" -> "sqlx";
+  "northstar-workflows" -> "subtle";
   "northstar-workflows" -> "thiserror";
   "northstar-workflows" -> "tracing";
   "northstar-workflows" -> "uuid";

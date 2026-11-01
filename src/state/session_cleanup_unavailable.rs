@@ -17,7 +17,8 @@ use uuid::Uuid;
 pub(crate) struct SessionCleanupUnavailable {
     policy: SmTeardownPresenceService<PostgresSmTeardownPresenceRepository>,
     recipients: Arc<DashMap<String, OnlineSession>>,
-    message_service: MessageService<db::messaging::PostgresMessageRepository>,
+    message_service:
+        MessageService<northstar_workflows::message_repository::PostgresMessageRepository>,
     remote: ClusterUnavailableDelivery,
     federation: FederationRouter,
     domains: ExternalRouteDomainPolicy,

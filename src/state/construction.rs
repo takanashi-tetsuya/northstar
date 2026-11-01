@@ -454,7 +454,7 @@ impl AppState {
                 config.database_max_connections,
             );
         let message_service = northstar_message_application::messaging::MessageService::new(
-            db::messaging::PostgresMessageRepository::new(
+            northstar_workflows::message_repository::PostgresMessageRepository::new(
                 pool.clone(),
                 message_content_identity,
                 config.domain.clone(),
@@ -466,8 +466,10 @@ impl AppState {
             config.require_encrypted_archive,
         );
         let retraction_service = northstar_message_application::retractions::RetractionService::new(
-            db::retractions::PostgresRetractionRepository::new(pool.clone())
-                .with_cluster_admission(cluster.admission()),
+            northstar_workflows::retraction_repository::PostgresRetractionRepository::new(
+                pool.clone(),
+            )
+            .with_cluster_admission(cluster.admission()),
             retraction_content_identity,
             config.domain.clone(),
         );
@@ -710,7 +712,7 @@ impl AppState {
                 db::s2s_sm_outbox_repository::PostgresSmOutboxRepository::new(pool.clone()),
             ),
             push_service: northstar_message_application::push::PushService::new(
-                db::push_repository::PostgresPushRepository::new(pool.clone()),
+                northstar_workflows::push_repository::PostgresPushRepository::new(pool.clone()),
             ),
             pool,
             cluster,

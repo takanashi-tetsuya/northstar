@@ -9,7 +9,9 @@ use uuid::Uuid;
 #[test]
 fn owner_lookup_uses_peer_and_stanza_buckets_with_exists_collision_probe() {
     let migration = include_str!("../../migrations/0119_personal_retraction_owner_identity.sql");
-    let source = include_str!("retractions.rs");
+    let source = include_str!(
+        "../../crates/contexts/workflows/northstar-workflows/src/retraction_repository.rs"
+    );
     assert!(migration.contains("pg_catalog.md5(peer_jid)"));
     assert!(migration.contains("pg_catalog.md5(stanza_id)"));
     assert!(source.contains("pg_catalog.md5(peer_jid)=pg_catalog.md5($2::TEXT)"));
@@ -100,7 +102,7 @@ async fn c2s_projection_is_atomic_idempotent_and_retains_replay_intent() {
         .await
         .unwrap();
     let service = RetractionService::new(
-        crate::db::retractions::PostgresRetractionRepository::new(pool.clone()),
+        northstar_workflows::retraction_repository::PostgresRetractionRepository::new(pool.clone()),
         northstar_abuse_application::guard::test_personal_retraction_content_keyring(),
         "local.test",
     );
@@ -636,7 +638,7 @@ async fn exact_replay_conflict_and_outbox_failure_are_atomic() {
         .unwrap();
 
     let service = RetractionService::new(
-        crate::db::retractions::PostgresRetractionRepository::new(pool.clone()),
+        northstar_workflows::retraction_repository::PostgresRetractionRepository::new(pool.clone()),
         northstar_abuse_application::guard::test_personal_retraction_content_keyring(),
         "local.test",
     );

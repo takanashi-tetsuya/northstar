@@ -44,7 +44,8 @@ pub mod identity_migration;
 pub mod jid_identity;
 pub(crate) mod maintenance_ownership;
 pub(crate) mod mam;
-pub(crate) mod messaging;
+#[cfg(test)]
+mod message_repository_tests;
 #[cfg(test)]
 mod migration_upgrade_test;
 #[cfg(test)]
@@ -80,7 +81,6 @@ mod privacy_service_tests;
 pub mod profile;
 pub mod profile_identity;
 pub mod push_identity;
-pub(crate) mod push_repository;
 #[cfg(test)]
 mod push_tests;
 pub(crate) mod readiness_repository;
@@ -90,7 +90,6 @@ pub mod replay_repository;
 pub mod retention;
 #[cfg(test)]
 mod retraction_service_tests;
-pub mod retractions;
 pub(crate) mod room_effects;
 pub mod roster;
 pub(crate) mod s2s_outbox_dispatch_repository;

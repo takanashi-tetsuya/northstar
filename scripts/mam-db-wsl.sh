@@ -73,5 +73,5 @@ TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5
 
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$runner_schema" \
   cargo test --locked --offline \
-  db::messaging::tests::members_only_invite_is_one_replay_safe_transaction \
+  db::message_repository_tests::members_only_invite_is_one_replay_safe_transaction \
   -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee -a "$test_log"

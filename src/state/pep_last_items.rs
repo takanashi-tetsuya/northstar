@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
-    db::{messaging::PostgresMessageRepository, pubsub_repository::PostgresPubSubRepository},
+    db::pubsub_repository::PostgresPubSubRepository,
     s2s::FederationRouter,
 };
 use anyhow::Result;
@@ -17,6 +17,7 @@ use northstar_protocol_runtime::caps::{CapsObservationOwner, CapsResourceIndex, 
 use northstar_pubsub_application::PubSubService;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_session_core::LocalCapsEpoch;
+use northstar_workflows::message_repository::PostgresMessageRepository;
 use northstar_xmpp_types::jid::CanonicalJid;
 use std::sync::{atomic::Ordering, Arc};
 

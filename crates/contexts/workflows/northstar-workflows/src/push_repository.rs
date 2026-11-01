@@ -1,16 +1,15 @@
 //! The push repository, which also counts the account's pending subscriptions.
 
-use crate::db;
 use anyhow::Result;
 use northstar_message_application::push::*;
 use sqlx::PgPool;
 use uuid::Uuid;
 #[derive(Clone)]
-pub(crate) struct PostgresPushRepository {
+pub struct PostgresPushRepository {
     pool: PgPool,
 }
 impl PostgresPushRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -57,7 +56,10 @@ impl PushRepository for PostgresPushRepository {
         let message_count =
             northstar_message_postgres::offline::offline_message_count(&self.pool, user_id).await?;
         let pending_subscription_count =
-            db::pending_presence_subscription_count(&self.pool, user_id).await?;
+            northstar_roster_postgres::roster::pending_presence_subscription_count(
+                &self.pool, user_id,
+            )
+            .await?;
         let deliveries =
             northstar_message_postgres::push::claim_push_deliveries(&self.pool, user_id)
                 .await?

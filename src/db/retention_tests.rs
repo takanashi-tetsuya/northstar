@@ -354,9 +354,13 @@ async fn asymmetric_mam_retention_preserves_admission_until_the_last_projection_
         },
     ];
     assert_eq!(
-        db::admit_personal_history(&pool, Some(&identity), &writes)
-            .await
-            .unwrap(),
+        northstar_workflows::personal_history::admit_personal_history(
+            &pool,
+            Some(&identity),
+            &writes
+        )
+        .await
+        .unwrap(),
         northstar_message_postgres::personal_history::PersonalHistoryAdmission::Stored(vec![
             sender_archive_id,
             recipient_archive_id
@@ -424,9 +428,13 @@ async fn asymmetric_mam_retention_preserves_admission_until_the_last_projection_
         },
     ];
     assert_eq!(
-        db::admit_personal_history(&pool, Some(&identity), &replay_writes)
-            .await
-            .unwrap(),
+        northstar_workflows::personal_history::admit_personal_history(
+            &pool,
+            Some(&identity),
+            &replay_writes
+        )
+        .await
+        .unwrap(),
         northstar_message_postgres::personal_history::PersonalHistoryAdmission::Replay(vec![
             recipient_archive_id
         ]),
@@ -434,11 +442,15 @@ async fn asymmetric_mam_retention_preserves_admission_until_the_last_projection_
     );
     let changed_identity = personal_identity("<message id='changed-retention-payload'/>");
     assert!(
-        db::admit_personal_history(&pool, Some(&changed_identity), &replay_writes)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("conflicting personal history identity")
+        northstar_workflows::personal_history::admit_personal_history(
+            &pool,
+            Some(&changed_identity),
+            &replay_writes
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("conflicting personal history identity")
     );
 
     // Prove that finalization refreshes, rather than preserves, an older
@@ -505,9 +517,13 @@ async fn asymmetric_mam_retention_preserves_admission_until_the_last_projection_
         "the 30-day grace must begin after the final projection ends"
     );
     assert_eq!(
-        db::admit_personal_history(&pool, Some(&identity), &replay_writes)
-            .await
-            .unwrap(),
+        northstar_workflows::personal_history::admit_personal_history(
+            &pool,
+            Some(&identity),
+            &replay_writes
+        )
+        .await
+        .unwrap(),
         northstar_message_postgres::personal_history::PersonalHistoryAdmission::Replay(Vec::new())
     );
 
@@ -534,9 +550,13 @@ async fn asymmetric_mam_retention_preserves_admission_until_the_last_projection_
         1
     );
     assert_eq!(
-        db::admit_personal_history(&pool, Some(&identity), &replay_writes)
-            .await
-            .unwrap(),
+        northstar_workflows::personal_history::admit_personal_history(
+            &pool,
+            Some(&identity),
+            &replay_writes
+        )
+        .await
+        .unwrap(),
         northstar_message_postgres::personal_history::PersonalHistoryAdmission::Stored(
             replay_writes.iter().map(|write| write.id).collect()
         ),

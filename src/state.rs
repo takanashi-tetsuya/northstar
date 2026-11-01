@@ -316,14 +316,14 @@ pub struct AppState {
     /// Personal-message authorization and durable admission boundary. The
     /// protocol layer must not compose its own archive/outbox/offline writes.
     message_service:
-        northstar_message_application::messaging::MessageService<db::messaging::PostgresMessageRepository>,
+        northstar_message_application::messaging::MessageService<northstar_workflows::message_repository::PostgresMessageRepository>,
     message_admission_service: northstar_message_application::message_admission::MessageAdmissionService<
         northstar_workflows::message_admission_port::AbuseMessageAdmissionPort,
     >,
     /// XEP-0424/XEP-0444 tombstone, action archive and federation admission
     /// transaction boundary.
     retraction_service: northstar_message_application::retractions::RetractionService<
-        db::retractions::PostgresRetractionRepository,
+        northstar_workflows::retraction_repository::PostgresRetractionRepository,
     >,
     mam_service: northstar_archive_application::MamService<db::mam::PostgresMamRepository>,
     sm_service: crate::services::sm::SmService<db::sm_repository::PostgresSmRepository>,
@@ -336,7 +336,7 @@ pub struct AppState {
         db::s2s_sm_outbox_repository::PostgresSmOutboxRepository,
     >,
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
-    push_service: northstar_message_application::push::PushService<db::push_repository::PostgresPushRepository>,
+    push_service: northstar_message_application::push::PushService<northstar_workflows::push_repository::PostgresPushRepository>,
     cluster: crate::cluster::ClusterManager,
     account_revocation_consumer_service:
         northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService<

@@ -32,7 +32,7 @@ pub(crate) struct MucDeliveryContext {
     pub(crate) sm_max_unacked_bytes: usize,
     pub(crate) federation_outbox: FederationRouter,
     pub(crate) message_service:
-        northstar_message_application::messaging::MessageService<db::messaging::PostgresMessageRepository>,
+        northstar_message_application::messaging::MessageService<northstar_workflows::message_repository::PostgresMessageRepository>,
 }
 
 impl MucDeliveryContext {

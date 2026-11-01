@@ -100,7 +100,7 @@ impl AppState {
     pub(crate) fn message_service(
         &self,
     ) -> &northstar_message_application::messaging::MessageService<
-        db::messaging::PostgresMessageRepository,
+        northstar_workflows::message_repository::PostgresMessageRepository,
     > {
         &self.message_service
     }
@@ -116,7 +116,7 @@ impl AppState {
     pub(crate) fn retraction_service(
         &self,
     ) -> &northstar_message_application::retractions::RetractionService<
-        db::retractions::PostgresRetractionRepository,
+        northstar_workflows::retraction_repository::PostgresRetractionRepository,
     > {
         &self.retraction_service
     }
@@ -248,7 +248,7 @@ impl AppState {
     pub(crate) fn push_service(
         &self,
     ) -> &northstar_message_application::push::PushService<
-        db::push_repository::PostgresPushRepository,
+        northstar_workflows::push_repository::PostgresPushRepository,
     > {
         &self.push_service
     }

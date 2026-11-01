@@ -22,6 +22,10 @@ northstar-auth-application = { path = "../../auth/northstar-auth-application" }
 northstar-auth-core = { path = "../../auth/northstar-auth-core" }
 northstar-auth-postgres = { path = "../../auth/northstar-auth-postgres" }
 northstar-message-application = { path = "../../message/northstar-message-application" }
+northstar-federation-core = { path = "../../federation/northstar-federation-core" }
+northstar-federation-postgres = { path = "../../federation/northstar-federation-postgres" }
+northstar-message-core = { path = "../../message/northstar-message-core" }
+northstar-message-postgres = { path = "../../message/northstar-message-postgres" }
 northstar-operations-application = { path = "../../operations/northstar-operations-application" }
 northstar-operations-core = { path = "../../operations/northstar-operations-core" }
 northstar-operations-postgres = { path = "../../operations/northstar-operations-postgres" }
@@ -32,9 +36,14 @@ northstar-roster-core = { path = "../../roster/northstar-roster-core" }
 northstar-roster-postgres = { path = "../../roster/northstar-roster-postgres" }
 northstar-security = { path = "../../../platform/northstar-security" }
 northstar-upload-postgres = { path = "../../upload/northstar-upload-postgres" }
+northstar-xep-0016 = { path = "../../../kernel/northstar-xep-0016" }
+northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+roxmltree = "0.20"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"
+subtle = "2.6"
 thiserror = "2.0"
 tracing = "0.1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid", "json", "macros"] }

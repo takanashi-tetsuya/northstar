@@ -1,11 +1,15 @@
 //! Personal history admission: archive writes, history identity fences and C2S/S2S delivery admission.
 
-use super::*;
+use anyhow::Result;
 use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
 use northstar_message_postgres::direct_cluster::DirectCommitCluster;
 use northstar_message_postgres::direct_spool_wake::record_direct_spool_wake_in_transaction;
 use northstar_message_postgres::personal_history::*;
 use northstar_postgres::cluster_lock::lock_direct_spool_instance_claims_in_transaction;
+use sha2::{Digest, Sha256};
+use sqlx::{PgPool, Postgres, Transaction};
+use std::collections::HashSet;
+use uuid::Uuid;
 
 /// Atomically write every personal MAM projection of one message.  When a
 /// trusted XEP-0359 identity is supplied, concurrent retries are admitted
@@ -53,7 +57,7 @@ pub async fn admit_outbound_personal_history(
         .map(|result| result.0)
 }
 
-pub(crate) async fn admit_personal_history_with_direct_fence(
+pub async fn admit_personal_history_with_direct_fence(
     pool: &PgPool,
     identity: Option<&PersonalHistoryIdentity<'_>>,
     writes: &[PersonalArchiveWrite<'_>],
@@ -76,13 +80,13 @@ pub(crate) async fn admit_personal_history_with_direct_fence(
     .await
 }
 
-pub(super) struct DirectCommitContext<'a> {
-    pub(super) cluster: Option<(&'a dyn DirectCommitCluster, DirectSpoolEligibility)>,
-    pub(super) observer:
+pub struct DirectCommitContext<'a> {
+    pub cluster: Option<(&'a dyn DirectCommitCluster, DirectSpoolEligibility)>,
+    pub observer:
         Option<&'a dyn northstar_message_application::direct_commit::DirectCommitObserver>,
 }
 
-pub(crate) async fn admit_personal_history_observed_direct(
+pub async fn admit_personal_history_observed_direct(
     pool: &PgPool,
     identity: Option<&PersonalHistoryIdentity<'_>>,
     writes: &[PersonalArchiveWrite<'_>],
@@ -105,7 +109,7 @@ pub(crate) async fn admit_personal_history_observed_direct(
     .await
 }
 
-pub(super) fn direct_transaction_outcome(
+pub fn direct_transaction_outcome(
     outcome: &PersonalHistoryAdmission,
     delivery: Option<&PersonalC2sDeliveryAdmission<'_>>,
     live_claim_id: Option<Uuid>,
@@ -129,7 +133,7 @@ pub(super) fn direct_transaction_outcome(
     })
 }
 
-pub(super) async fn admit_personal_history_inner(
+pub async fn admit_personal_history_inner(
     pool: &PgPool,
     identity: Option<&PersonalHistoryIdentity<'_>>,
     writes: &[PersonalArchiveWrite<'_>],
@@ -231,7 +235,7 @@ pub(super) async fn admit_personal_history_inner(
 /// The caller owns commit/rollback. In particular, a replay does not commit
 /// the transaction here: a service may still need to roll back projections
 /// made by another repository before returning its typed replay result.
-pub(crate) async fn admit_personal_history_in_transaction(
+pub async fn admit_personal_history_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     identity: Option<&PersonalHistoryIdentity<'_>>,
     writes: &[PersonalArchiveWrite<'_>],

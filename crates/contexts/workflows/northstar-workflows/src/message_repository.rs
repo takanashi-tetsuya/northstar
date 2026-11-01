@@ -1,17 +1,14 @@
 //! PostgreSQL transactions for personal messages and members-only invitations.
 
-use crate::{
-    cluster::{DirectPostCommitMode, DirectSpoolEligibility},
-    db,
-};
 use anyhow::Result;
 use northstar_abuse_policy::content_identity::PersonalMessageContentKeyring;
 use northstar_message_application::direct_commit::{DirectCommitObserver, DirectCommitRepository};
 use northstar_message_application::messaging::*;
 use northstar_message_application::PersonalMessageCommitRepository;
+use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
 use northstar_message_postgres::direct_cluster::DirectCommitCluster;
 use northstar_room_application::muc_service::DurableMucInviteOutcome;
-use northstar_roster_application::privacy::PrivacyStanzaKind;
+use northstar_xep_0016::PrivacyStanzaKind;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -25,7 +22,7 @@ struct OfflineLimits {
 }
 
 #[derive(Clone)]
-pub(crate) struct PostgresMessageRepository {
+pub struct PostgresMessageRepository {
     pool: PgPool,
     content_identity: PersonalMessageContentKeyring,
     configured_domain: String,
@@ -181,7 +178,7 @@ impl PostgresMessageRepository {
             );
             let delivery = delivery
                 .ok_or_else(|| anyhow::anyhow!("local direct observer requires delivery"))?;
-            return db::archive::admit_personal_history_observed_direct(
+            return crate::personal_history::admit_personal_history_observed_direct(
                 pool,
                 identity,
                 archives,
@@ -197,17 +194,22 @@ impl PostgresMessageRepository {
             // the existing transaction behavior without a cluster fence.
             let outcome = match (outbox, delivery) {
                 (Some(outbox), None) => {
-                    db::admit_outbound_personal_history(pool, identity, archives, outbox).await?
+                    crate::personal_history::admit_outbound_personal_history(
+                        pool, identity, archives, outbox,
+                    )
+                    .await?
                 }
                 (None, Some(delivery)) => {
-                    db::admit_personal_history_and_c2s_delivery(pool, identity, archives, delivery)
-                        .await?
+                    crate::personal_history::admit_personal_history_and_c2s_delivery(
+                        pool, identity, archives, delivery,
+                    )
+                    .await?
                 }
                 _ => anyhow::bail!("personal message requires exactly one durable destination"),
             };
             return Ok((outcome, DirectPostCommitMode::Live, None));
         };
-        db::admit_personal_history_with_direct_fence(
+        crate::personal_history::admit_personal_history_with_direct_fence(
             pool,
             identity,
             archives,
@@ -272,7 +274,7 @@ impl PostgresMessageRepository {
         }
     }
 
-    pub(crate) fn new(
+    pub fn new(
         pool: PgPool,
         content_identity: PersonalMessageContentKeyring,
         configured_domain: impl Into<String>,
@@ -293,10 +295,7 @@ impl PostgresMessageRepository {
         }
     }
 
-    pub(crate) fn with_cluster_admission(
-        mut self,
-        cluster: impl DirectCommitCluster + 'static,
-    ) -> Self {
+    pub fn with_cluster_admission(mut self, cluster: impl DirectCommitCluster + 'static) -> Self {
         self.cluster = Some(Arc::new(cluster));
         self
     }
@@ -337,15 +336,22 @@ impl MessageRepository for PostgresMessageRepository {
         active_privacy_list: Option<&str>,
         target: &str,
     ) -> Result<OutboundPolicyDecision> {
-        if db::is_blocked_for_account(&self.pool, owner_id, owner_bare_jid, target).await? {
+        if northstar_roster_postgres::roster::is_blocked_for_account(
+            &self.pool,
+            owner_id,
+            owner_bare_jid,
+            target,
+        )
+        .await?
+        {
             return Ok(OutboundPolicyDecision::Blocked);
         }
-        if db::privacy_denies(
+        if northstar_roster_postgres::privacy::privacy_denies(
             &self.pool,
             owner_id,
             active_privacy_list,
             target,
-            db::PrivacyStanzaKind::Message,
+            PrivacyStanzaKind::Message,
         )
         .await?
         {
@@ -370,7 +376,13 @@ impl MessageRepository for PostgresMessageRepository {
             return Ok(LocalRecipientDecision::Missing);
         };
         let recipient_bare = format!("{}@{local_domain}", recipient.username);
-        if db::is_blocked_for_account(&self.pool, recipient.id, &recipient_bare, sender_jid).await?
+        if northstar_roster_postgres::roster::is_blocked_for_account(
+            &self.pool,
+            recipient.id,
+            &recipient_bare,
+            sender_jid,
+        )
+        .await?
         {
             return Ok(LocalRecipientDecision::Blocked);
         }
@@ -385,12 +397,12 @@ impl MessageRepository for PostgresMessageRepository {
         recipient_id: Uuid,
         sender_jid: &str,
     ) -> Result<bool> {
-        db::privacy_denies(
+        northstar_roster_postgres::privacy::privacy_denies(
             &self.pool,
             recipient_id,
             None,
             sender_jid,
-            db::PrivacyStanzaKind::Message,
+            PrivacyStanzaKind::Message,
         )
         .await
     }
@@ -407,13 +419,25 @@ impl MessageRepository for PostgresMessageRepository {
         kind: PrivacyStanzaKind,
     ) -> Result<bool> {
         if active_privacy_list.is_some() {
-            db::refresh_active_privacy_session(&self.pool, user_id, connection_id).await?;
+            northstar_roster_postgres::privacy::refresh_active_privacy_session(
+                &self.pool,
+                user_id,
+                connection_id,
+            )
+            .await?;
         }
-        Ok(!db::privacy_denies(&self.pool, user_id, active_privacy_list, peer, kind).await?)
+        Ok(!northstar_roster_postgres::privacy::privacy_denies(
+            &self.pool,
+            user_id,
+            active_privacy_list,
+            peer,
+            kind,
+        )
+        .await?)
     }
 
     async fn archive_allowed(&self, owner_id: Uuid, peer_jid: &str) -> Result<bool> {
-        db::archive_allowed(&self.pool, owner_id, peer_jid).await
+        northstar_archive_postgres::archive_allowed(&self.pool, owner_id, peer_jid).await
     }
 
     /// Atomically admit a local-room invitation addressed to a federated
@@ -442,7 +466,7 @@ impl MessageRepository for PostgresMessageRepository {
         };
         let mut transaction = self.pool.begin().await?;
         self.fence_live_invite(&mut transaction).await?;
-        let history = match db::admit_personal_history_in_transaction(
+        let history = match crate::personal_history::admit_personal_history_in_transaction(
             &mut transaction,
             identity.as_ref(),
             &archives,
@@ -553,7 +577,7 @@ impl MessageRepository for PostgresMessageRepository {
             .await?;
         }
         self.fence_live_invite(&mut transaction).await?;
-        let history = match db::admit_personal_history_in_transaction(
+        let history = match crate::personal_history::admit_personal_history_in_transaction(
             &mut transaction,
             identity.as_ref(),
             &archives,
@@ -643,7 +667,7 @@ impl MessageRepository for PostgresMessageRepository {
         }
         let writes = persistence_archive_writes(writes);
         if let Some(cluster) = self.cluster.as_deref() {
-            db::admit_personal_history_with_direct_fence(
+            crate::personal_history::admit_personal_history_with_direct_fence(
                 &self.pool,
                 None,
                 &writes,
@@ -655,7 +679,7 @@ impl MessageRepository for PostgresMessageRepository {
             .await
             .map(|_| ())
         } else {
-            db::admit_personal_history(&self.pool, None, &writes)
+            crate::personal_history::admit_personal_history(&self.pool, None, &writes)
                 .await
                 .map(|_| ())
         }

@@ -755,7 +755,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
     .unwrap();
     let online_stable_id = uuid::Uuid::new_v4();
     let retraction_service = RetractionService::new(
-        crate::db::retractions::PostgresRetractionRepository::new(pool.clone()),
+        northstar_workflows::retraction_repository::PostgresRetractionRepository::new(pool.clone()),
         northstar_abuse_application::guard::test_personal_retraction_content_keyring(),
         "local.test",
     );

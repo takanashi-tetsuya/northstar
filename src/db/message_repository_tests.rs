@@ -1,5 +1,10 @@
-use super::*;
+use northstar_message_application::messaging::*;
+use northstar_room_application::muc_service::DurableMucInviteOutcome;
+use northstar_workflows::message_repository::*;
+use sha2::{Digest, Sha256};
+use sqlx::PgPool;
 use std::time::Duration;
+use uuid::Uuid;
 
 async fn downgrade_personal_evidence(pool: &PgPool, identity_value: &str, payload: &str) {
     sqlx::query(
@@ -26,66 +31,6 @@ async fn assert_personal_evidence_is_keyed(pool: &PgPool, identity_value: &str) 
     assert!(row.0.is_some());
     assert_eq!(row.1.as_deref().map(|value| value.len()), Some(32));
     assert_eq!(row.2, None);
-}
-
-#[test]
-fn durable_results_do_not_expose_repository_row_ids() {
-    assert_eq!(
-        map_history_outcome(
-            northstar_message_postgres::personal_history::PersonalHistoryAdmission::Stored(vec![
-                Uuid::new_v4()
-            ]),
-            true,
-            MessagePostCommit::WakeFederationOutbox,
-        )
-        .unwrap(),
-        DurableAdmissionOutcome::Stored {
-            archive_written: true,
-            post_commit: MessagePostCommit::WakeFederationOutbox,
-        }
-    );
-    assert_eq!(
-        map_history_outcome(
-            northstar_message_postgres::personal_history::PersonalHistoryAdmission::Replay(vec![]),
-            false,
-            MessagePostCommit::WakeFederationOutbox,
-        )
-        .unwrap(),
-        DurableAdmissionOutcome::Replay
-    );
-}
-
-#[test]
-fn only_explicit_full_normal_messages_receive_resource_affinity() {
-    assert_eq!(
-        durable_target_full_jid(
-            "<message to='alice@example.test/Phone'><body>normal</body></message>"
-        )
-        .unwrap()
-        .as_deref(),
-        Some("alice@example.test/Phone")
-    );
-    for stanza in [
-        "<message to='alice@example.test'><body>bare</body></message>",
-        "<message type='chat' to='alice@example.test/Phone'><body>fallback</body></message>",
-        "<message><body>implicit self</body></message>",
-    ] {
-        assert_eq!(durable_target_full_jid(stanza).unwrap(), None);
-    }
-}
-
-#[test]
-fn durable_recipient_authority_is_canonical_and_local() {
-    assert!(
-        validate_local_recipient_authority_for_domain("alice@example.test", "example.test").is_ok()
-    );
-    assert!(
-        validate_local_recipient_authority_for_domain("alice@evil.test", "example.test").is_err()
-    );
-    assert!(
-        validate_local_recipient_authority_for_domain("Alice@example.test", "example.test")
-            .is_err()
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -352,7 +297,7 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     let (outbound, mut receiver) = tokio::sync::mpsc::channel(1);
     let outbound = crate::xmpp::outbound::OutboundSender::new(outbound);
     assert_eq!(
-        db::deliver_bind2_offline(&pool, recipient_id, 30, &outbound, None)
+        crate::db::deliver_bind2_offline(&pool, recipient_id, 30, &outbound, None)
             .await
             .unwrap(),
         0

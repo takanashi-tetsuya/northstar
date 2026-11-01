@@ -2523,6 +2523,10 @@
       ],
       [
         "northstar-message-application",
+        "thiserror"
+      ],
+      [
+        "northstar-message-application",
         "tokio"
       ],
       [
@@ -4124,6 +4128,10 @@
       [
         "northstar-workflows",
         "northstar-auth-postgres"
+      ],
+      [
+        "northstar-workflows",
+        "northstar-message-application"
       ],
       [
         "northstar-workflows",

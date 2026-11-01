@@ -1,6 +1,6 @@
 //! Rated admission drives the same coordinator as controlled cases.
 //! Reservation, independent finalization and guard-only transactions stay distinct.
-pub(crate) mod witness;
+pub mod witness;
 
 use anyhow::Result;
 use northstar_abuse_policy::admission_execution::{
@@ -15,7 +15,7 @@ use northstar_abuse_policy::MessageAdmissionRequest;
 use uuid::Uuid;
 use witness::{AdmissionWitness, RetainedAdmission};
 
-pub(crate) trait MessageAdmissionRepository: Send + Sync {
+pub trait MessageAdmissionRepository: Send + Sync {
     fn begin(
         &self,
         request: &MessageAdmissionRequest<'_>,
@@ -32,11 +32,11 @@ pub(crate) trait MessageAdmissionRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<ReconcileResult>> + Send;
 }
 
-pub(crate) fn begin_command(request: &MessageAdmissionRequest<'_>) -> Result<Command> {
+pub fn begin_command(request: &MessageAdmissionRequest<'_>) -> Result<Command> {
     northstar_abuse_policy::message_admission::validate_message_admission_request(request)?;
     Ok(Command::Begin(BeginRequest::from(*request)))
 }
-pub(crate) fn operation(command: Command) -> (Coordinator, AdmissionWitness) {
+pub fn operation(command: Command) -> (Coordinator, AdmissionWitness) {
     let coordinator = Coordinator::new(
         Correlation {
             operation: Uuid::new_v4(),
@@ -51,7 +51,7 @@ pub(crate) fn operation(command: Command) -> (Coordinator, AdmissionWitness) {
 }
 
 #[derive(Clone)]
-pub(crate) struct MessageAdmissionService<R> {
+pub struct MessageAdmissionService<R> {
     repository: R,
 }
 
@@ -104,13 +104,13 @@ fn begin_result(result: &MessageAdmissionStart, knowledge: &Knowledge) -> BeginR
 }
 
 impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
     /// Production frame callers create `retained` synchronously outside this
     /// future. Dropping this await cannot discard its witness or exact command.
-    pub(crate) async fn begin_message_admission_retained(
+    pub async fn begin_message_admission_retained(
         &self,
         request: &MessageAdmissionRequest<'_>,
         retained: &RetainedAdmission,
@@ -131,7 +131,7 @@ impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
             } => {
                 // Only an accepted Stage2 completion issues authority. Guard
                 // success remains distinct from a durable reservation receipt.
-                use northstar_message_application::direct_lifecycle::AdmissionGrant;
+                use crate::direct_lifecycle::AdmissionGrant;
                 match (&result, retained.admission_grant()) {
                     (
                         Ok(MessageAdmissionStart::Proceed { lease: Some(_), .. }),
@@ -152,7 +152,7 @@ impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
         }
     }
 
-    pub(crate) async fn accept_message_admission_retained(
+    pub async fn accept_message_admission_retained(
         &self,
         lease: &MessageAdmissionLease,
         retained: &RetainedAdmission,
@@ -177,7 +177,7 @@ impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
         }
     }
 
-    pub(crate) async fn begin_message_admission(
+    pub async fn begin_message_admission(
         &self,
         request: &MessageAdmissionRequest<'_>,
     ) -> Result<MessageAdmissionStart> {
@@ -207,10 +207,7 @@ impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
         }
     }
 
-    pub(crate) async fn accept_message_admission(
-        &self,
-        lease: &MessageAdmissionLease,
-    ) -> Result<()> {
+    pub async fn accept_message_admission(&self, lease: &MessageAdmissionLease) -> Result<()> {
         let acceptance = lease.acceptance();
         let (mut coordinator, witness) =
             operation(Command::Finalize(acceptance_fence(&acceptance)));
@@ -243,7 +240,7 @@ impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
 
     /// Read-only observation, not permission to repeat Begin or route. Stage3 owns scheduling.
     #[allow(dead_code)]
-    pub(crate) async fn reconcile_message_admission(
+    pub async fn reconcile_message_admission(
         &self,
         unresolved: Correlation,
         fence: AdmissionFence,
@@ -279,7 +276,7 @@ impl<R: MessageAdmissionRepository> MessageAdmissionService<R> {
 
 /// Shared finalization body. The lazy owner lookup is intentionally skipped
 /// when no lease exists; preparing the retained handle precedes taking it.
-pub(crate) async fn finalize_message_admission_with<A, O, F, E>(
+pub async fn finalize_message_admission_with<A, O, F, E>(
     service: &MessageAdmissionService<A>,
     lease: &mut Option<MessageAdmissionLease>,
     route_label: &'static str,
@@ -317,8 +314,8 @@ pub(crate) async fn finalize_message_admission_with<A, O, F, E>(
     }
 }
 
-#[cfg(test)]
-pub(crate) mod continuation_fixture {
+#[cfg(any(test, feature = "test-support"))]
+pub mod continuation_fixture {
     use super::*;
     use northstar_abuse_policy::admission_execution::{
         AdmissionCommitObserver, BeginCommitPurpose, CommitFact, FinalizeSuccess,
@@ -326,15 +323,15 @@ pub(crate) mod continuation_fixture {
     use northstar_abuse_policy::{MessageDedupeIdentity, WorkRequirement};
     use std::sync::{Arc, Mutex};
 
-    pub(crate) type Events = Arc<Mutex<Vec<&'static str>>>;
+    pub type Events = Arc<Mutex<Vec<&'static str>>>;
     #[derive(Clone, Copy, Eq, PartialEq)]
-    pub(crate) enum Admission {
+    pub enum Admission {
         Reserved,
         GuardOnly,
         NotRated,
     }
     #[derive(Clone, Copy, Default, Eq, PartialEq)]
-    pub(crate) enum FinalizeCut {
+    pub enum FinalizeCut {
         #[default]
         Success,
         PreCommitError,
@@ -343,12 +340,12 @@ pub(crate) mod continuation_fixture {
         PendingBeforeCommit,
         PendingCommit,
     }
-    pub(crate) struct Repository {
-        pub(crate) admission: Admission,
-        pub(crate) cut: FinalizeCut,
-        pub(crate) events: Events,
+    pub struct Repository {
+        pub admission: Admission,
+        pub cut: FinalizeCut,
+        pub events: Events,
     }
-    pub(crate) fn lease(token: u128) -> MessageAdmissionLease {
+    pub fn lease(token: u128) -> MessageAdmissionLease {
         MessageAdmissionLease::new(
             vec![1; 32],
             vec![2; 32],
@@ -359,7 +356,7 @@ pub(crate) mod continuation_fixture {
             },
         )
     }
-    pub(crate) fn request() -> MessageAdmissionRequest<'static> {
+    pub fn request() -> MessageAdmissionRequest<'static> {
         MessageAdmissionRequest {
             actor_id: Uuid::from_u128(1),
             account_bare: "alice@example.test",

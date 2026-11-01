@@ -245,6 +245,7 @@ northstar-auth-xmpp = { path = "crates/contexts/auth/northstar-auth-xmpp", featu
 northstar-auth-application = { path = "crates/contexts/auth/northstar-auth-application", features = ["test-support"] }
 northstar-abuse-application = { path = "crates/contexts/abuse/northstar-abuse-application", features = ["test-support"] }
 northstar-abuse-policy = { path = "crates/contexts/abuse/northstar-abuse-policy", features = ["test-support"] }
+northstar-message-application = { path = "crates/contexts/message/northstar-message-application", features = ["test-support"] }
 northstar-runtime = { path = "crates/platform/northstar-runtime", features = ["test-support"] }
 northstar-pubsub-postgres = { path = "crates/contexts/pubsub/northstar-pubsub-postgres", features = ["test-support"] }
 northstar-roster-postgres = { path = "crates/contexts/roster/northstar-roster-postgres", features = ["test-support"] }

@@ -4,11 +4,6 @@
 //! pending cfg(test) SessionExecutions::for_saved_frame constructor.
 //! No SQL, AppState, spawned tasks, new timers, Stage3 adapter, or verdicts.
 use super::{MucDiscussionLive, PreparedMucDiscussion};
-use crate::services::message_admission::{
-    self,
-    witness::{self, AdmissionWitness, DirectOperationHandle},
-    MessageAdmissionRepository, MessageAdmissionService,
-};
 use crate::stage4_replay::{self as wire, driver};
 use crate::xmpp::outbound::{
     DurableDelivery, MixDelivery, OutboundItem, OutboundSender, RouteEnqueue,
@@ -30,6 +25,13 @@ use northstar_abuse_policy::{
 use northstar_abuse_policy::{MessageAdmissionRequest, MessageDedupeIdentity, WorkRequirement};
 use northstar_delivery_core::native_write as native;
 use northstar_message_application::direct_lifecycle;
+use northstar_message_application::message_admission;
+use northstar_message_application::message_admission::witness::{
+    AdmissionWitness, DirectOperationHandle,
+};
+use northstar_message_application::message_admission::{
+    witness, MessageAdmissionRepository, MessageAdmissionService,
+};
 use northstar_room_application::muc_service::fanout::{
     run_muc_discussion_fanout, MucFanoutPort, MucFanoutStage,
 };

@@ -680,11 +680,8 @@ impl AppState {
             started_at,
         });
         let message_admission_service =
-            crate::services::message_admission::MessageAdmissionService::new(
-                northstar_abuse_postgres::message_admission::PostgresMessageAdmissionRepository::new(
-                    Arc::clone(&abuse),
-                    pool.clone(),
-                ),
+            northstar_message_application::message_admission::MessageAdmissionService::new(northstar_workflows::message_admission_port::AbuseMessageAdmissionPort::new(northstar_abuse_postgres::message_admission::PostgresMessageAdmissionRepository::new(Arc::clone(&abuse),
+                    pool.clone())),
             );
         let account_revocation_consumer_service =
             northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService::new(

@@ -16,6 +16,7 @@ pub mod api_queries;
 pub mod governance_repository;
 pub mod http_login_repository;
 pub mod invitation_admin_repository;
+pub mod message_admission_port;
 pub mod metrics_snapshot_repository;
 pub mod operation_admin_repository;
 pub mod operation_muc_destroy_repository;

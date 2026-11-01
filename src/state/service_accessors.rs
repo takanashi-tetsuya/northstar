@@ -105,8 +105,8 @@ impl AppState {
 
     pub(crate) fn message_admission_service(
         &self,
-    ) -> &crate::services::message_admission::MessageAdmissionService<
-        northstar_abuse_postgres::message_admission::PostgresMessageAdmissionRepository,
+    ) -> &northstar_message_application::message_admission::MessageAdmissionService<
+        northstar_workflows::message_admission_port::AbuseMessageAdmissionPort,
     > {
         &self.message_admission_service
     }

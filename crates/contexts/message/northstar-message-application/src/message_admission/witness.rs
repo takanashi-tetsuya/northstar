@@ -1,15 +1,13 @@
 //! Operation-local knowledge at the real SQL COMMIT await. No async Drop work.
+#[cfg(any(test, feature = "test-support"))]
+use crate::direct_lifecycle::OperationSnapshot;
+use crate::direct_lifecycle::{
+    AdmissionEffectHandle, AdmissionGrant, DirectLifecycle, OperationSummary, TerminalReason,
+};
+use crate::{direct_commit, direct_handoff, direct_lifecycle::PreparationAdmission};
 use northstar_abuse_policy::admission_execution::{
     AdmissionCommitObserver, Command, CommitFact, CommitWitness, Effect, EffectResult,
     ExecutionOutcome, PreparedCommit, Receipt, TransactionScope,
-};
-#[cfg(test)]
-use northstar_message_application::direct_lifecycle::OperationSnapshot;
-use northstar_message_application::direct_lifecycle::{
-    AdmissionEffectHandle, AdmissionGrant, DirectLifecycle, OperationSummary, TerminalReason,
-};
-use northstar_message_application::{
-    direct_commit, direct_handoff, direct_lifecycle::PreparationAdmission,
 };
 use northstar_message_core::DirectPersonalMessageAdmission;
 use std::sync::{Arc, Mutex};
@@ -18,7 +16,7 @@ use uuid::Uuid;
 /// The outer frame creates this owner before polling the handler. Clones name
 /// the same operation; a later frame gets a different owner, never a reset slot.
 #[derive(Clone)]
-pub(crate) struct DirectOperationHandle(Arc<Mutex<DirectLifecycle>>);
+pub struct DirectOperationHandle(Arc<Mutex<DirectLifecycle>>);
 
 impl std::fmt::Debug for DirectOperationHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -27,11 +25,11 @@ impl std::fmt::Debug for DirectOperationHandle {
 }
 
 impl DirectOperationHandle {
-    pub(crate) fn new(operation: Uuid) -> Self {
+    pub fn new(operation: Uuid) -> Self {
         Self(Arc::new(Mutex::new(DirectLifecycle::new(operation, 0, 1))))
     }
 
-    pub(crate) fn begin(
+    pub fn begin(
         &self,
         request: &northstar_abuse_policy::MessageAdmissionRequest<'_>,
     ) -> anyhow::Result<RetainedAdmission> {
@@ -50,7 +48,7 @@ impl DirectOperationHandle {
         })
     }
 
-    pub(crate) fn finalize(
+    pub fn finalize(
         &self,
         lease: &northstar_abuse_policy::message_admission::MessageAdmissionLease,
     ) -> anyhow::Result<RetainedAdmission> {
@@ -70,25 +68,25 @@ impl DirectOperationHandle {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn snapshot(&self) -> OperationSnapshot {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn snapshot(&self) -> OperationSnapshot {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).snapshot()
     }
 
-    pub(crate) fn retire(&self, reason: TerminalReason) -> OperationSummary {
+    pub fn retire(&self, reason: TerminalReason) -> OperationSummary {
         self.0
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .retire(reason)
     }
 
-    pub(crate) fn begin_handoff(&self) -> Result<direct_handoff::Next, direct_handoff::Rejected> {
+    pub fn begin_handoff(&self) -> Result<direct_handoff::Next, direct_handoff::Rejected> {
         self.0
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .begin_handoff()
     }
-    pub(crate) fn observe_handoff_health(
+    pub fn observe_handoff_health(
         &self,
         permit: direct_handoff::HealthPermit,
         mode: northstar_message_core::DirectPostCommitMode,
@@ -98,7 +96,7 @@ impl DirectOperationHandle {
             .unwrap_or_else(|e| e.into_inner())
             .observe_handoff_health(permit, mode)
     }
-    pub(crate) fn consume_route(
+    pub fn consume_route(
         &self,
         grant: direct_handoff::RouteGrant,
         source: northstar_delivery_core::DurableDelivery,
@@ -108,7 +106,7 @@ impl DirectOperationHandle {
             .unwrap_or_else(|e| e.into_inner())
             .consume_route(grant, source)
     }
-    pub(crate) fn consume_recovery(
+    pub fn consume_recovery(
         &self,
         grant: direct_handoff::RecoveryGrant,
     ) -> Result<direct_handoff::HandoffHandle, direct_handoff::Rejected> {
@@ -118,7 +116,7 @@ impl DirectOperationHandle {
             .consume_recovery(grant)
     }
 
-    pub(crate) fn prepare_direct(
+    pub fn prepare_direct(
         &self,
         admission: PreparationAdmission<'_>,
         command: direct_commit::DirectCommandFacts,
@@ -129,7 +127,7 @@ impl DirectOperationHandle {
             .unwrap_or_else(|e| e.into_inner())
             .prepare_direct(admission, command)?)
     }
-    pub(crate) fn start_direct(
+    pub fn start_direct(
         &self,
         effect: &direct_commit::DirectEffect,
     ) -> Result<(), direct_commit::Rejected> {
@@ -138,7 +136,7 @@ impl DirectOperationHandle {
             .unwrap_or_else(|e| e.into_inner())
             .start_direct(effect)
     }
-    pub(crate) fn prepare_direct_commit(
+    pub fn prepare_direct_commit(
         &self,
         effect: &direct_commit::DirectEffect,
         prepared: direct_commit::PreparedCommit,
@@ -148,7 +146,7 @@ impl DirectOperationHandle {
             .unwrap_or_else(|e| e.into_inner())
             .enter_direct_commit(effect, prepared)
     }
-    pub(crate) fn receive_direct_commit(
+    pub fn receive_direct_commit(
         &self,
         effect: &direct_commit::DirectEffect,
         prepared: direct_commit::PreparedCommit,
@@ -158,7 +156,7 @@ impl DirectOperationHandle {
             .unwrap_or_else(|e| e.into_inner())
             .receive_direct_commit(effect, prepared)
     }
-    pub(crate) fn complete_direct(
+    pub fn complete_direct(
         &self,
         effect: &direct_commit::DirectEffect,
         result: Option<DirectPersonalMessageAdmission>,
@@ -172,13 +170,13 @@ impl DirectOperationHandle {
 
 /// An exact pre-I/O handle, not a reservation or durable-message capability.
 #[derive(Clone, Debug)]
-pub(crate) struct RetainedAdmission {
+pub struct RetainedAdmission {
     owner: DirectOperationHandle,
     handle: AdmissionEffectHandle,
 }
 
 impl RetainedAdmission {
-    pub(crate) fn start(&self, command: &Command) -> anyhow::Result<()> {
+    pub fn start(&self, command: &Command) -> anyhow::Result<()> {
         self.owner
             .0
             .lock()
@@ -187,25 +185,23 @@ impl RetainedAdmission {
         Ok(())
     }
 
-    pub(crate) fn witness(&self) -> AdmissionWitness {
+    pub fn witness(&self) -> AdmissionWitness {
         AdmissionWitness::Retained(Box::new(self.clone()))
     }
 
-    pub(crate) fn complete(&self, result: EffectResult) -> anyhow::Result<ExecutionOutcome> {
+    pub fn complete(&self, result: EffectResult) -> anyhow::Result<ExecutionOutcome> {
         self.owner
             .0
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .complete(&self.handle, result)
             .map_err(|error| match error {
-                northstar_message_application::direct_lifecycle::Rejected::Completion(error) => {
-                    error.into()
-                }
+                crate::direct_lifecycle::Rejected::Completion(error) => error.into(),
                 other => other.into(),
             })
     }
 
-    pub(crate) fn admission_grant(&self) -> Option<AdmissionGrant> {
+    pub fn admission_grant(&self) -> Option<AdmissionGrant> {
         self.owner
             .0
             .lock()
@@ -215,16 +211,16 @@ impl RetainedAdmission {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum AdmissionWitness {
+pub enum AdmissionWitness {
     Standalone(Arc<Mutex<CommitWitness>>),
     Retained(Box<RetainedAdmission>),
 }
 
 impl AdmissionWitness {
-    pub(crate) fn new(effect: Effect) -> Self {
+    pub fn new(effect: Effect) -> Self {
         Self::Standalone(Arc::new(Mutex::new(CommitWitness::new(effect))))
     }
-    pub(crate) fn snapshot(&self) -> CommitWitness {
+    pub fn snapshot(&self) -> CommitWitness {
         match self {
             Self::Standalone(state) => state.lock().unwrap_or_else(|e| e.into_inner()).clone(),
             Self::Retained(retained) => retained
@@ -284,8 +280,8 @@ impl AdmissionCommitObserver for AdmissionWitness {
     }
 }
 
-#[cfg(test)]
-pub(crate) async fn saved_case_commit_observed<F>(
+#[cfg(any(test, feature = "test-support"))]
+pub async fn saved_case_commit_observed<F>(
     commit: F,
     witness: &AdmissionWitness,
     scope: TransactionScope,

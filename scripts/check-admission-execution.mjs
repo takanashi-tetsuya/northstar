@@ -8,8 +8,8 @@ const paths = {
   execution: 'crates/contexts/abuse/northstar-abuse-policy/src/admission_execution.rs',
   transaction: 'crates/contexts/abuse/northstar-abuse-policy/src/admission_transaction.rs',
   lifecycle: 'crates/contexts/message/northstar-message-application/src/direct_lifecycle.rs',
-  service: 'src/services/message_admission.rs',
-  witness: 'src/services/message_admission/witness.rs',
+  service: 'crates/contexts/message/northstar-message-application/src/message_admission.rs',
+  witness: 'crates/contexts/message/northstar-message-application/src/message_admission/witness.rs',
   frame: 'src/xmpp/frame_execution.rs',
   messaging: 'src/xmpp/protocol/messaging.rs',
   repository: 'crates/contexts/abuse/northstar-abuse-postgres/src/message_admission.rs',
@@ -139,7 +139,7 @@ function verifyDirectContinuation(sources) {
     finalize.split('.await').length === 3,
   'shared finalization must preserve retained, failed-construction and no-owner behavior without retry');
   const finalizeWrapper = normalize(body(sources.messaging, 'async\\s+fn\\s+finalize_message_admission\\b'));
-  requireAdmission(finalizeWrapper === 'crate::services::message_admission::finalize_message_admission_with(self.state.message_admission_service(),lease,route,||self.message_operation(),||self.enter_frame_stage(Stage::MessageFollowup),||self.state.personal_message_telemetry().post_accept_failed()).await;',
+  requireAdmission(finalizeWrapper === 'northstar_message_application::message_admission::finalize_message_admission_with(self.state.message_admission_service(),lease,route,||self.message_operation(),||self.enter_frame_stage(Stage::MessageFollowup),||self.state.personal_message_telemetry().post_accept_failed()).await;',
     'protocol finalization must forward its exact lease and lazy originating owner to the shared body');
 
   const message = normalize(body(sources.messaging, 'async\\s+fn\\s+message\\b'));
@@ -218,7 +218,7 @@ export function verifyAdmissionBoundaries(sources) {
   requireAdmission(complete.includes('Knowledge::CommitCallEntered(prepared)=>{ExecutionOutcome::Unknown{prepared,cause}}'),
     'Unknown must retain the unconfirmed prospective transaction fact');
   for (const name of ['begin_message_admission', 'accept_message_admission', 'reconcile_message_admission']) {
-    const driver = compact(body(sources.service, `pub\\(crate\\)\\s+async\\s+fn\\s+${name}\\b`));
+    const driver = compact(body(sources.service, `pub\\s+async\\s+fn\\s+${name}\\b`));
     requireAdmission(driver.includes('coordinator.complete(Completion{') && driver.includes('matchoutcome{'),
       `${name} must consume the shared coordinator result`);
     ordered(driver, ['letobserved=witness.snapshot();', 'coordinator.observe_witness(&observed)?;',
@@ -229,7 +229,7 @@ export function verifyAdmissionBoundaries(sources) {
   // Protect the actual frame-backed path as well as the convenience drivers.
   // These anchors detect source drift; the Rust drop/fake-port tests establish
   // the behavior independently, and neither gate proves SQL conformance.
-  const retainedBegin = compact(body(sources.service, 'pub\\(crate\\)\\s+async\\s+fn\\s+begin_message_admission_retained\\b'));
+  const retainedBegin = compact(body(sources.service, 'pub\\s+async\\s+fn\\s+begin_message_admission_retained\\b'));
   ordered(retainedBegin, ['retained.start(&begin_command(request)?)?',
     'self.repository.begin(request,&witness).await', 'retained.complete(completion)?',
     'matchoutcome{'], 'retained begin');
@@ -237,7 +237,7 @@ export function verifyAdmissionBoundaries(sources) {
     && retainedBegin.includes('Some(AdmissionGrant::Reserved(')
     && retainedBegin.includes('Some(AdmissionGrant::GuardOnly('),
     'retained begin must consume the actual closed admission grant');
-  const retainedFinalize = compact(body(sources.service, 'pub\\(crate\\)\\s+async\\s+fn\\s+accept_message_admission_retained\\b'));
+  const retainedFinalize = compact(body(sources.service, 'pub\\s+async\\s+fn\\s+accept_message_admission_retained\\b'));
   ordered(retainedFinalize, ['letacceptance=lease.acceptance();',
     'retained.start(&Command::Finalize(acceptance_fence(&acceptance)))?',
     'self.repository.accept(&acceptance,&witness).await', 'retained.complete(completion)?'],
@@ -315,7 +315,7 @@ export function verifyAdmissionBoundaries(sources) {
     'row.lease_token!=fence.lease_token', 'FinalizeDecision::AcceptPending'], 'shared finalize fence');
   requireAdmission(!/expires_at|lease_expires_at|decide_actor_capacity/.test(finalizeDecision),
     'finalization must not silently acquire a new expiry or capacity policy');
-  const acceptService = compact(body(sources.service, 'pub\\(crate\\)\\s+async\\s+fn\\s+accept_message_admission\\b'));
+  const acceptService = compact(body(sources.service, 'pub\\s+async\\s+fn\\s+accept_message_admission\\b'));
   requireAdmission(acceptService.includes('letacceptance=lease.acceptance();')
     && acceptService.includes('self.repository.accept(&acceptance,&witness).await'),
     'service finalization must consume the issued lease fence through the repository');

@@ -42,7 +42,6 @@ pub mod identity_migration;
 pub mod jid_identity;
 pub(crate) mod maintenance_ownership;
 pub(crate) mod mam;
-mod message_admission_port;
 pub(crate) mod messaging;
 #[cfg(test)]
 mod migration_upgrade_test;

@@ -317,8 +317,8 @@ pub struct AppState {
     /// protocol layer must not compose its own archive/outbox/offline writes.
     message_service:
         crate::services::messaging::MessageService<db::messaging::PostgresMessageRepository>,
-    message_admission_service: crate::services::message_admission::MessageAdmissionService<
-        northstar_abuse_postgres::message_admission::PostgresMessageAdmissionRepository,
+    message_admission_service: northstar_message_application::message_admission::MessageAdmissionService<
+        northstar_workflows::message_admission_port::AbuseMessageAdmissionPort,
     >,
     /// XEP-0424/XEP-0444 tombstone, action archive and federation admission
     /// transaction boundary.

@@ -1,10 +1,11 @@
 use super::*;
-use crate::services::message_admission::{
-    witness::AdmissionWitness, MessageAdmissionRepository, MessageAdmissionService,
-};
 use northstar_abuse_policy::{
     admission_execution::{Effect, ReconcileResult},
     admission_transaction::FinalizeDecision,
+};
+use northstar_message_application::message_admission::witness::AdmissionWitness;
+use northstar_message_application::message_admission::{
+    MessageAdmissionRepository, MessageAdmissionService,
 };
 use uuid::Uuid;
 

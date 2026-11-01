@@ -1090,6 +1090,7 @@ digraph compile_time {
   "northstar-message-application" -> "northstar-xep-0280";
   "northstar-message-application" -> "northstar-xmpp-types";
   "northstar-message-application" -> "roxmltree";
+  "northstar-message-application" -> "thiserror";
   "northstar-message-application" -> "tokio";
   "northstar-message-application" -> "tracing";
   "northstar-message-application" -> "uuid";
@@ -1491,6 +1492,7 @@ digraph compile_time {
   "northstar-workflows" -> "northstar-auth-application";
   "northstar-workflows" -> "northstar-auth-core";
   "northstar-workflows" -> "northstar-auth-postgres";
+  "northstar-workflows" -> "northstar-message-application";
   "northstar-workflows" -> "northstar-operations-application";
   "northstar-workflows" -> "northstar-operations-core";
   "northstar-workflows" -> "northstar-operations-postgres";

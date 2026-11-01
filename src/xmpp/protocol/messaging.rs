@@ -2,6 +2,10 @@ use super::{Action, ProtocolSession};
 use crate::cluster::{DirectPostCommitMode, DirectSpoolEligibility};
 #[cfg(test)]
 use crate::services::messaging::direct_workflow::PreparedHandoffNext;
+use crate::services::messaging::direct_workflow::{
+    continue_prepared_local_direct, preserved_transaction, ContinuedLocalDirect, LiveDirectBinding,
+    LocalPreparation, PreparedLocalDirect,
+};
 use crate::services::messaging::{
     admit_offline_then_push, ArchiveWrite, DirectMessageRouter, DirectRouteDelivery,
     DirectRouteOutcome, DirectRouteRejection, DirectRouteRequest, DirectRouteTarget,
@@ -11,18 +15,12 @@ use crate::services::messaging::{
     RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome, ValidatedPersonalMessage,
 };
 use crate::services::retractions::{DeliveryProjection, RetractionOutcome};
-use crate::services::{
-    message_admission::witness::DirectOperationHandle,
-    messaging::direct_workflow::{
-        continue_prepared_local_direct, preserved_transaction, ContinuedLocalDirect,
-        LiveDirectBinding, LocalPreparation, PreparedLocalDirect,
-    },
-};
 use crate::xmpp::frame_execution::Stage;
 use anyhow::Result;
 use northstar_abuse_policy::message_admission::{MessageAdmissionLease, MessageAdmissionStart};
 use northstar_abuse_policy::stanza::{abuse_stanza_error, strip_pow_element};
 use northstar_abuse_policy::{MessageAdmissionRequest, PowProof};
+use northstar_message_application::message_admission::witness::DirectOperationHandle;
 use northstar_message_application::{
     direct_commit::TransactionOutcome,
     direct_lifecycle::{OriginalAdmission, PreparationAdmission},
@@ -443,7 +441,7 @@ impl ProtocolSession {
         lease: &mut Option<MessageAdmissionLease>,
         route: &'static str,
     ) {
-        crate::services::message_admission::finalize_message_admission_with(
+        northstar_message_application::message_admission::finalize_message_admission_with(
             self.state.message_admission_service(),
             lease,
             route,

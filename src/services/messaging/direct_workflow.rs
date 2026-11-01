@@ -2,9 +2,9 @@
 //! continuation through borrowed admission and routing capabilities.
 //! Buffers stay with the original protocol preparation; this module parses no
 //! XML and owns no AppState, clock, SQL, socket, task, or retry capability.
-use crate::services::message_admission::{
-    finalize_message_admission_with, witness::DirectOperationHandle, MessageAdmissionRepository,
-    MessageAdmissionService,
+use northstar_message_application::message_admission::witness::DirectOperationHandle;
+use northstar_message_application::message_admission::{
+    finalize_message_admission_with, MessageAdmissionRepository, MessageAdmissionService,
 };
 use northstar_message_application::{direct_commit::*, direct_lifecycle::PreparationAdmission};
 use northstar_message_core::{

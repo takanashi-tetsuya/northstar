@@ -1,6 +1,5 @@
 //! The guard over its PostgreSQL adapter, and the tests that need root's other tables.
 use crate::db::abuse_effects::persistent_guard;
-use crate::services::message_admission::{begin_command, operation};
 use northstar_abuse_application::guard::test_support::{
     actor_state_keys, message_admission_identity, message_admission_identity_digest,
     message_admission_material, opaque_actor_key,
@@ -15,6 +14,7 @@ use northstar_abuse_policy::message_admission::{
 };
 use northstar_abuse_policy::*;
 use northstar_abuse_postgres::message_admission::accept_observed;
+use northstar_message_application::message_admission::{begin_command, operation};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::{

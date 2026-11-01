@@ -121,7 +121,8 @@ impl ProtocolSession {
 
     pub(in crate::xmpp) fn message_operation(
         &self,
-    ) -> Option<crate::services::message_admission::witness::DirectOperationHandle> {
+    ) -> Option<northstar_message_application::message_admission::witness::DirectOperationHandle>
+    {
         self.frame_executions.direct_operation()
     }
 

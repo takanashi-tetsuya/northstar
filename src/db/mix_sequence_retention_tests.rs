@@ -1,6 +1,9 @@
 //! Force a producer commit after GC's snapshot and before its row lock.
-use super::*;
+use anyhow::Result;
+use northstar_room_postgres::mix::*;
+use sqlx::PgPool;
 use std::time::Duration;
+use uuid::Uuid;
 
 async fn fixture_pool(url: &str, schema: &str, application: &str) -> Result<PgPool> {
     let options = url
@@ -226,7 +229,7 @@ async fn empty_delivery_claim_avoids_the_event_lock_and_recovers_after_insert() 
         // cached and cannot hide a subsequent committed insertion.
         let recipient = format!("{}@example.test", Uuid::new_v4().simple());
         let (_, delivery_id) =
-            delivery_route_wake_integration_tests::insert_delivery(&pool, &recipient, 1).await;
+            crate::db::mix_delivery_route_wake_tests::insert_delivery(&pool, &recipient, 1).await;
         let claimed = claim_mix_deliveries(&pool, 1, 65_536).await?;
         anyhow::ensure!(claimed.len() == 1 && claimed[0].delivery_id == delivery_id);
         anyhow::ensure!(

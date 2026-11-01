@@ -46,10 +46,20 @@ mod message_admission_port;
 pub(crate) mod messaging;
 #[cfg(test)]
 mod migration_upgrade_test;
-pub mod mix;
-pub mod mix_identity;
-pub mod mix_muc;
-pub mod mix_repository;
+#[cfg(test)]
+mod mix_delivery_capacity_tests;
+#[cfg(test)]
+mod mix_delivery_route_wake_tests;
+#[cfg(test)]
+mod mix_identity_tests;
+#[cfg(test)]
+mod mix_mam_tests;
+#[cfg(test)]
+mod mix_muc_tests;
+#[cfg(test)]
+mod mix_pam_durability_tests;
+#[cfg(test)]
+mod mix_sequence_retention_tests;
 #[cfg(test)]
 mod muc_service_tests;
 #[cfg(test)]
@@ -92,8 +102,6 @@ pub(crate) mod sm_teardown_repository;
 pub use archive::*;
 pub use capacity::*;
 pub use cluster_keys::*;
-pub use mix::*;
-pub use mix_muc::*;
 pub use omemo_recovery::*;
 pub use pep_roster::*;
 pub use privacy::*;
@@ -123,7 +131,7 @@ pub async fn migrate(pool: &PgPool) -> Result<()> {
     push_identity::canonicalize_push_identity_storage(pool)
         .await
         .context("RFC 7622 push service JID identity migration failed")?;
-    mix_identity::canonicalize_mix_identity_storage(pool)
+    northstar_room_postgres::mix_identity::canonicalize_mix_identity_storage(pool)
         .await
         .context("RFC 7622 MIX JID identity migration failed")?;
     profile_identity::canonicalize_profile_identity_storage(pool)

@@ -76,6 +76,7 @@ pub async fn authorized_mix_access_entries(
 }
 
 pub async fn update_mix_info(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     channel_id: Uuid,
     actor: &str,
@@ -186,6 +187,7 @@ pub async fn update_mix_info(
     )
     .await?;
     finalize_federated_mix_mutation_tx(
+        effects,
         &mut transaction,
         federated,
         FederatedMixSuccess::PubSubPublish {
@@ -207,7 +209,9 @@ pub async fn update_mix_info(
     )))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn update_mix_config(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     channel_id: Uuid,
     actor: &str,
@@ -452,6 +456,7 @@ pub async fn update_mix_config(
     )
     .await?;
     finalize_federated_mix_mutation_tx(
+        effects,
         &mut transaction,
         federated,
         FederatedMixSuccess::PubSubPublish {
@@ -474,6 +479,7 @@ pub async fn update_mix_config(
 }
 
 pub async fn set_mix_access_entry(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     update: MixAccessEntryUpdate<'_>,
     payloads: &dyn MixEventPayloadRenderer,
@@ -638,7 +644,8 @@ pub async fn set_mix_access_entry(
                 .fetch_all(&mut *transaction)
                 .await?;
                 for user_id in local_users {
-                    delete_mix_roster_tx(&mut transaction, user_id, &channel.jid()).await?;
+                    delete_mix_roster_tx(effects, &mut transaction, user_id, &channel.jid())
+                        .await?;
                     outcome.removed_local_users.push(user_id);
                 }
                 sqlx::query(
@@ -768,6 +775,7 @@ pub async fn set_mix_access_entry(
         .await?;
     }
     finalize_federated_mix_mutation_tx(
+        effects,
         &mut transaction,
         federated,
         FederatedMixSuccess::PubSubEmpty,

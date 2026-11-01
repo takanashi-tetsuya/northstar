@@ -112,13 +112,13 @@ impl AppState {
         let api_control = Arc::new(api_control);
         let startup_phase =
             northstar_telemetry::logging::StartupPhase::begin("mix_delivery_capacity_audit");
-        db::audit_mix_delivery_capacity_ledger(&pool)
+        northstar_room_postgres::mix::audit_mix_delivery_capacity_ledger(&pool)
             .await
             .context("MIX delivery capacity ledger failed startup reconciliation")?;
         startup_phase.complete();
         let startup_phase =
             northstar_telemetry::logging::StartupPhase::begin("mix_pam_capacity_audit");
-        db::audit_mix_pam_operation_capacity(&pool)
+        northstar_room_postgres::mix::audit_mix_pam_operation_capacity(&pool)
             .await
             .context("MIX-PAM operation capacity authority failed startup audit")?;
         startup_phase.complete();
@@ -404,17 +404,22 @@ impl AppState {
         let (runtime_blacklist, runtime_whitelist) =
             northstar_operations_postgres::admin_commands::federation_runtime_rules(&pool).await?;
 
-        db::recover_remote_pam_after_restart(&pool)
+        northstar_room_postgres::mix::recover_remote_pam_after_restart(&pool)
             .await
             .context("failed to recover pending MIX-PAM federation operations")?;
-        let mix_presence_recovery = db::prepare_mix_presence_after_restart(&pool, &config.domain)
-            .await
-            .context("failed to prepare XEP-0403 presence recovery")?;
+        let mix_presence_recovery =
+            northstar_room_postgres::mix::prepare_mix_presence_after_restart(&pool, &config.domain)
+                .await
+                .context("failed to prepare XEP-0403 presence recovery")?;
         if config.mix_muc_mirror_enabled {
             let mix_domain = format!("mix.{}", config.domain);
-            let linked = db::reconcile_mix_muc_mirrors(&pool, &mix_domain, &config.domain)
-                .await
-                .context("failed to reconcile XEP-0408 MIX/MUC mirror associations")?;
+            let linked = northstar_room_postgres::mix_muc::reconcile_mix_muc_mirrors(
+                &pool,
+                &mix_domain,
+                &config.domain,
+            )
+            .await
+            .context("failed to reconcile XEP-0408 MIX/MUC mirror associations")?;
             tracing::info!(linked, "XEP-0408 partial MIX/MUC mirror mode enabled");
         }
 
@@ -568,7 +573,7 @@ impl AppState {
         // notification as delivery authority; schema matching only prevents
         // a shared database's unrelated schema from creating local scan load.
         let mix_service = northstar_room_application::mix_service::MixService::new_with_outbox_database_admission(
-            db::mix_repository::PostgresMixRepository::new(pool.clone()),
+            crate::db::room_effects::PostgresMixRepository::new(pool.clone()),
             config.domain.clone(),
             mix_message_content_identity,
             mix_retraction_content_identity,

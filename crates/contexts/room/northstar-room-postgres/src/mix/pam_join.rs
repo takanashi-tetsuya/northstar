@@ -14,7 +14,7 @@ pub struct BeginRemotePamJoin<'a> {
     pub request_digest: &'a [u8; 32],
     pub remote_domain: &'a str,
     pub outbound_stanza: &'a str,
-    pub policy: super::super::S2sOutboxPolicy,
+    pub policy: northstar_federation_core::S2sOutboxPolicy,
 }
 
 pub struct BeginRemotePamLeave<'a> {
@@ -27,7 +27,7 @@ pub struct BeginRemotePamLeave<'a> {
     pub request_digest: &'a [u8; 32],
     pub remote_domain: &'a str,
     pub outbound_stanza: &'a str,
-    pub policy: super::super::S2sOutboxPolicy,
+    pub policy: northstar_federation_core::S2sOutboxPolicy,
 }
 
 #[derive(Clone, Copy)]
@@ -45,12 +45,12 @@ pub enum RemotePamCompletionOutcome {
     Missing,
 }
 
-pub(super) const MIX_PAM_RESULT_LEASE_SECONDS: i64 = 90;
-pub(super) const MIX_PAM_RESULT_MAX_ATTEMPTS: i32 = 20;
+pub const MIX_PAM_RESULT_LEASE_SECONDS: i64 = 90;
+pub const MIX_PAM_RESULT_MAX_ATTEMPTS: i32 = 20;
 
-pub(super) struct MixPamCapacityReconciliationCommitted(pub(super) ());
+pub struct MixPamCapacityReconciliationCommitted(pub ());
 
-pub(super) async fn reconcile_mix_pam_capacity_committed(
+pub async fn reconcile_mix_pam_capacity_committed(
     pool: &PgPool,
 ) -> Result<MixPamCapacityReconciliationCommitted> {
     let mut transaction = pool.begin().await?;
@@ -65,10 +65,7 @@ pub(super) async fn reconcile_mix_pam_capacity_committed(
     Ok(MixPamCapacityReconciliationCommitted(()))
 }
 
-pub(super) fn pam_operation_replay(
-    row: &sqlx::postgres::PgRow,
-    digest: &[u8; 32],
-) -> PamOperationReplay {
+pub fn pam_operation_replay(row: &sqlx::postgres::PgRow, digest: &[u8; 32]) -> PamOperationReplay {
     if row.get::<Vec<u8>, _>("request_digest").as_slice() != digest {
         PamOperationReplay::Conflict
     } else if let Some(response) = row.get::<Option<String>, _>("response_xml") {
@@ -105,7 +102,7 @@ pub async fn lookup_remote_pam_operation(
         .unwrap_or(PamOperationReplay::Miss))
 }
 
-pub(super) async fn lock_pam_admission_tx(
+pub async fn lock_pam_admission_tx(
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     channel_jid: &str,
@@ -131,7 +128,7 @@ pub(super) async fn lock_pam_admission_tx(
 /// before this function may check out its transaction, so each process
 /// contributes at most one database waiter. Database triggers subsequently
 /// lock global -> exact user counter.
-pub(super) async fn remote_pam_account_matches_actor_tx(
+pub async fn remote_pam_account_matches_actor_tx(
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     actor_jid: &str,
@@ -148,14 +145,14 @@ pub(super) async fn remote_pam_account_matches_actor_tx(
         .map_err(Into::into)
 }
 
-pub(super) fn validate_pam_outbound(
+pub fn validate_pam_outbound(
     outbound: &str,
     request_id: &str,
     actor: &str,
     channel: &str,
 ) -> Result<()> {
     anyhow::ensure!(
-        !outbound.is_empty() && outbound.len() <= super::super::MAX_S2S_STANZA_BYTES,
+        !outbound.is_empty() && outbound.len() <= northstar_federation_core::MAX_S2S_STANZA_BYTES,
         "invalid remote PAM stanza size"
     );
     let document = roxmltree::Document::parse(outbound).context("invalid remote PAM stanza")?;
@@ -171,7 +168,7 @@ pub(super) fn validate_pam_outbound(
     Ok(())
 }
 
-pub(super) async fn existing_pam_operation_tx(
+pub async fn existing_pam_operation_tx(
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     requester_full_jid: &str,
@@ -194,7 +191,8 @@ pub(super) async fn existing_pam_operation_tx(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn insert_pam_operation_and_outbox_tx(
+pub async fn insert_pam_operation_and_outbox_tx(
+    effects: &impl crate::effects::RoomEffects,
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     channel_jid: &str,
@@ -208,7 +206,7 @@ pub(super) async fn insert_pam_operation_and_outbox_tx(
     prior_participant_id: Option<&str>,
     prior_nick: Option<&str>,
     prior_subscriptions: &[String],
-    policy: super::super::S2sOutboxPolicy,
+    policy: northstar_federation_core::S2sOutboxPolicy,
 ) -> Result<()> {
     let expected_username = northstar_xmpp_types::jid::CanonicalJid::parse(requester_full_jid)?
         .localpart()
@@ -216,15 +214,16 @@ pub(super) async fn insert_pam_operation_and_outbox_tx(
         .to_owned();
     let operation_id = Uuid::new_v4();
     let request_outbox_id = Uuid::new_v4();
-    super::super::enqueue_s2s_outbox_with_id_in_transaction(
-        transaction,
-        request_outbox_id,
-        remote_domain,
-        outbound_stanza,
-        None,
-        policy,
-    )
-    .await?;
+    effects
+        .enqueue_federated_stanza_with_id(
+            transaction,
+            request_outbox_id,
+            remote_domain,
+            outbound_stanza,
+            None,
+            policy,
+        )
+        .await?;
     let deadline_seconds = i64::try_from(policy.ttl_seconds.clamp(30, 86_400))
         .context("remote PAM timeout is too large")?;
     sqlx::query(
@@ -254,6 +253,7 @@ pub(super) async fn insert_pam_operation_and_outbox_tx(
 }
 
 pub async fn begin_remote_pam_join(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     request: BeginRemotePamJoin<'_>,
 ) -> Result<PamOperationReplay> {
@@ -377,6 +377,7 @@ pub async fn begin_remote_pam_join(
             .await?;
     }
     insert_pam_operation_and_outbox_tx(
+        effects,
         &mut transaction,
         request.user_id,
         &channel_jid,
@@ -405,7 +406,7 @@ pub async fn recover_remote_pam_after_restart(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn locked_pam_membership_tx(
+pub async fn locked_pam_membership_tx(
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     channel_jid: &str,
@@ -441,7 +442,7 @@ pub(super) async fn locked_pam_membership_tx(
     }))
 }
 
-pub(super) fn terminal_pam_completion(
+pub fn terminal_pam_completion(
     row: &sqlx::postgres::PgRow,
     response_digest: &[u8; 32],
 ) -> RemotePamCompletionOutcome {

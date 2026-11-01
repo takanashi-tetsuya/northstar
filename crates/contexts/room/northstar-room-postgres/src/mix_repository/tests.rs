@@ -2,20 +2,26 @@ use super::*;
 #[test]
 fn mix_muc_repository_outcomes_map_without_collapsing_authority_failures() {
     for (repository, service) in [
-        (db::LinkMixMucOutcome::Linked, MixMucLinkOutcome::Linked),
         (
-            db::LinkMixMucOutcome::AlreadyLinked,
+            crate::mix_muc::LinkMixMucOutcome::Linked,
+            MixMucLinkOutcome::Linked,
+        ),
+        (
+            crate::mix_muc::LinkMixMucOutcome::AlreadyLinked,
             MixMucLinkOutcome::AlreadyLinked,
         ),
         (
-            db::LinkMixMucOutcome::MissingCounterpart,
+            crate::mix_muc::LinkMixMucOutcome::MissingCounterpart,
             MixMucLinkOutcome::MissingCounterpart,
         ),
         (
-            db::LinkMixMucOutcome::NotCommonOwner,
+            crate::mix_muc::LinkMixMucOutcome::NotCommonOwner,
             MixMucLinkOutcome::NotCommonOwner,
         ),
-        (db::LinkMixMucOutcome::Conflict, MixMucLinkOutcome::Conflict),
+        (
+            crate::mix_muc::LinkMixMucOutcome::Conflict,
+            MixMucLinkOutcome::Conflict,
+        ),
     ] {
         assert_eq!(map_mix_muc_link_outcome(repository), service);
     }
@@ -30,22 +36,22 @@ fn mix_muc_repository_outcomes_map_without_collapsing_authority_failures() {
 
 #[test]
 fn mix_node_vocabulary_matches_the_repository_constants() {
-    assert_eq!(NODE_MESSAGES, db::NODE_MESSAGES);
-    assert_eq!(NODE_PRESENCE, db::NODE_PRESENCE);
-    assert_eq!(NODE_PARTICIPANTS, db::NODE_PARTICIPANTS);
-    assert_eq!(NODE_INFO, db::NODE_INFO);
-    assert_eq!(NODE_CONFIG, db::NODE_CONFIG);
-    assert_eq!(NODE_ALLOWED, db::NODE_ALLOWED);
-    assert_eq!(NODE_BANNED, db::NODE_BANNED);
-    assert_eq!(NODE_JIDMAP, db::NODE_JIDMAP);
-    assert_eq!(NODE_AVATAR_DATA, db::NODE_AVATAR_DATA);
-    assert_eq!(NODE_AVATAR_METADATA, db::NODE_AVATAR_METADATA);
-    assert_eq!(ALL_NODES, db::ALL_NODES);
+    assert_eq!(NODE_MESSAGES, crate::mix::NODE_MESSAGES);
+    assert_eq!(NODE_PRESENCE, crate::mix::NODE_PRESENCE);
+    assert_eq!(NODE_PARTICIPANTS, crate::mix::NODE_PARTICIPANTS);
+    assert_eq!(NODE_INFO, crate::mix::NODE_INFO);
+    assert_eq!(NODE_CONFIG, crate::mix::NODE_CONFIG);
+    assert_eq!(NODE_ALLOWED, crate::mix::NODE_ALLOWED);
+    assert_eq!(NODE_BANNED, crate::mix::NODE_BANNED);
+    assert_eq!(NODE_JIDMAP, crate::mix::NODE_JIDMAP);
+    assert_eq!(NODE_AVATAR_DATA, crate::mix::NODE_AVATAR_DATA);
+    assert_eq!(NODE_AVATAR_METADATA, crate::mix::NODE_AVATAR_METADATA);
+    assert_eq!(ALL_NODES, crate::mix::ALL_NODES);
 }
 
 #[test]
 fn pam_membership_map_preserves_every_field() {
-    let row = db::PamMembership {
+    let row = crate::mix::PamMembership {
         id: Uuid::new_v4(),
         user_id: Uuid::new_v4(),
         channel_jid: "room@mix.example.test".to_owned(),
@@ -70,9 +76,9 @@ fn pam_membership_map_preserves_every_field() {
 
 #[test]
 fn event_and_page_maps_preserve_ordering_and_metadata() {
-    let row = db::MixEvent {
+    let row = crate::mix::MixEvent {
         id: Uuid::new_v4(),
-        item_id: db::mix_timestamp_item_id(),
+        item_id: crate::mix::mix_timestamp_item_id(),
         payload: "<body/>".to_owned(),
         created_at: Utc::now(),
     };
@@ -82,7 +88,7 @@ fn event_and_page_maps_preserve_ordering_and_metadata() {
     assert_eq!(mapped.payload, row.payload);
     assert_eq!(mapped.created_at, row.created_at);
 
-    let page = db::MixEventPage {
+    let page = crate::mix::MixEventPage {
         events: vec![row.clone()],
     };
     let mapped_page = MixEventPage {
@@ -97,15 +103,15 @@ fn event_and_page_maps_preserve_ordering_and_metadata() {
 
 #[test]
 fn mam_page_and_boundary_maps_preserve_paging_metadata() {
-    let first = db::ArchiveBoundary {
+    let first = northstar_archive_core::ArchiveBoundary {
         id: Uuid::new_v4(),
         created_at: Utc::now(),
     };
-    let last = db::ArchiveBoundary {
+    let last = northstar_archive_core::ArchiveBoundary {
         id: Uuid::new_v4(),
         created_at: Utc::now(),
     };
-    let mapped_page = mam_page(db::MixMamPage {
+    let mapped_page = mam_page(crate::mix::MixMamPage {
         events: Vec::new(),
         total: 42,
         first_index: 7,
@@ -126,14 +132,14 @@ fn mam_page_and_boundary_maps_preserve_paging_metadata() {
 #[test]
 fn mam_query_translates_every_rsm_shape_in_both_directions() {
     let shapes = [
-        db::MamRsmPage::First,
-        db::MamRsmPage::Last,
-        db::MamRsmPage::Before(Uuid::new_v4()),
-        db::MamRsmPage::After(Uuid::new_v4()),
-        db::MamRsmPage::Index(17),
+        northstar_archive_core::MamRsmPage::First,
+        northstar_archive_core::MamRsmPage::Last,
+        northstar_archive_core::MamRsmPage::Before(Uuid::new_v4()),
+        northstar_archive_core::MamRsmPage::After(Uuid::new_v4()),
+        northstar_archive_core::MamRsmPage::Index(17),
     ];
     for page in shapes {
-        let db_query = db::MamArchiveQuery {
+        let db_query = northstar_archive_core::MamArchiveQuery {
             with_jid: Some("peer@example.test".to_owned()),
             start: Some(Utc::now()),
             end: None,
@@ -152,11 +158,17 @@ fn mam_query_translates_every_rsm_shape_in_both_directions() {
         assert_eq!(mapped.ids, db_query.ids);
         assert_eq!(mapped.max, db_query.max);
         match (db_query.page, mapped.page) {
-            (db::MamRsmPage::First, MamRsmPage::First)
-            | (db::MamRsmPage::Last, MamRsmPage::Last) => {}
-            (db::MamRsmPage::Before(a), MamRsmPage::Before(b)) => assert_eq!(a, b),
-            (db::MamRsmPage::After(a), MamRsmPage::After(b)) => assert_eq!(a, b),
-            (db::MamRsmPage::Index(a), MamRsmPage::Index(b)) => assert_eq!(a, b),
+            (northstar_archive_core::MamRsmPage::First, MamRsmPage::First)
+            | (northstar_archive_core::MamRsmPage::Last, MamRsmPage::Last) => {}
+            (northstar_archive_core::MamRsmPage::Before(a), MamRsmPage::Before(b)) => {
+                assert_eq!(a, b)
+            }
+            (northstar_archive_core::MamRsmPage::After(a), MamRsmPage::After(b)) => {
+                assert_eq!(a, b)
+            }
+            (northstar_archive_core::MamRsmPage::Index(a), MamRsmPage::Index(b)) => {
+                assert_eq!(a, b)
+            }
             _ => panic!("MIX RSM shape changed during translation"),
         }
         let round_trip = mam_query_db(&mapped);
@@ -167,7 +179,7 @@ fn mam_query_translates_every_rsm_shape_in_both_directions() {
 
 #[test]
 fn probe_target_preserves_channel_and_participant_identity() {
-    let probe = db::MixPresenceProbeTarget {
+    let probe = crate::mix::MixPresenceProbeTarget {
         channel_jid: "room@mix.example.test".to_owned(),
         participant_jid: "alice@remote.test/Phone".to_owned(),
     };
@@ -183,12 +195,12 @@ fn access_change_map_preserves_removal_observations() {
         jid: "alice@example.test".to_owned(),
         nick: None,
     };
-    let presence_row = db::MixPresenceItem {
+    let presence_row = crate::mix::MixPresenceItem {
         item_id: "item-1".to_owned(),
         payload: "<presence/>".to_owned(),
         source_full_jid: Some("alice@example.test/Phone".to_owned()),
     };
-    let mapped = access_change_outcome(db::AccessChangeOutcome {
+    let mapped = access_change_outcome(crate::mix::AccessChangeOutcome {
         removed_participants: vec![Uuid::new_v4()],
         removed_local_users: vec![Uuid::new_v4()],
         removed_presence: vec![(participant_row.clone(), vec![presence_row.clone()])],
@@ -207,20 +219,20 @@ fn access_change_map_preserves_removal_observations() {
 fn outcome_maps_preserve_retraction_store_and_join_variants() {
     for (repository, service) in [
         (
-            db::RetractMixMessageOutcome::Retracted,
+            crate::mix::RetractMixMessageOutcome::Retracted,
             RetractMixMessageOutcome::Retracted,
         ),
         (
-            db::RetractMixMessageOutcome::NotFound,
+            crate::mix::RetractMixMessageOutcome::NotFound,
             RetractMixMessageOutcome::NotFound,
         ),
         (
-            db::RetractMixMessageOutcome::Forbidden,
+            crate::mix::RetractMixMessageOutcome::Forbidden,
             RetractMixMessageOutcome::Forbidden,
         ),
     ] {
         let admission = retract_mix_message_admission(
-            db::RetractMixMessageAdmission {
+            crate::mix::RetractMixMessageAdmission {
                 outcome: repository,
                 recipients: vec![MixParticipant {
                     participant_id: Uuid::new_v4(),
@@ -234,40 +246,43 @@ fn outcome_maps_preserve_retraction_store_and_join_variants() {
     }
 
     for repository in [
-        db::StoreEventOutcome::Stored(Uuid::new_v4()),
-        db::StoreEventOutcome::NotParticipant,
-        db::StoreEventOutcome::Conflict,
-        db::StoreEventOutcome::TooLarge,
+        crate::mix::StoreEventOutcome::Stored(Uuid::new_v4()),
+        crate::mix::StoreEventOutcome::NotParticipant,
+        crate::mix::StoreEventOutcome::Conflict,
+        crate::mix::StoreEventOutcome::TooLarge,
     ] {
         let mapped = store_event_outcome(repository.clone());
         match (repository, mapped) {
-            (db::StoreEventOutcome::Stored(a), StoreEventOutcome::Stored(b)) => {
+            (crate::mix::StoreEventOutcome::Stored(a), StoreEventOutcome::Stored(b)) => {
                 assert_eq!(a, b)
             }
-            (db::StoreEventOutcome::NotParticipant, StoreEventOutcome::NotParticipant) => {}
-            (db::StoreEventOutcome::Conflict, StoreEventOutcome::Conflict) => {}
-            (db::StoreEventOutcome::TooLarge, StoreEventOutcome::TooLarge) => {}
+            (crate::mix::StoreEventOutcome::NotParticipant, StoreEventOutcome::NotParticipant) => {}
+            (crate::mix::StoreEventOutcome::Conflict, StoreEventOutcome::Conflict) => {}
+            (crate::mix::StoreEventOutcome::TooLarge, StoreEventOutcome::TooLarge) => {}
             _ => panic!("store-event outcome variant changed during translation"),
         }
     }
 
     for repository in [
-        db::CreateChannelOutcome::Created(Uuid::new_v4()),
-        db::CreateChannelOutcome::Conflict,
-        db::CreateChannelOutcome::QuotaExceeded,
+        crate::mix::CreateChannelOutcome::Created(Uuid::new_v4()),
+        crate::mix::CreateChannelOutcome::Conflict,
+        crate::mix::CreateChannelOutcome::QuotaExceeded,
     ] {
         let mapped = create_outcome(repository);
         match (repository, mapped) {
-            (db::CreateChannelOutcome::Created(a), CreateChannelOutcome::Created(b)) => {
+            (crate::mix::CreateChannelOutcome::Created(a), CreateChannelOutcome::Created(b)) => {
                 assert_eq!(a, b)
             }
-            (db::CreateChannelOutcome::Conflict, CreateChannelOutcome::Conflict) => {}
-            (db::CreateChannelOutcome::QuotaExceeded, CreateChannelOutcome::QuotaExceeded) => {}
+            (crate::mix::CreateChannelOutcome::Conflict, CreateChannelOutcome::Conflict) => {}
+            (
+                crate::mix::CreateChannelOutcome::QuotaExceeded,
+                CreateChannelOutcome::QuotaExceeded,
+            ) => {}
             _ => panic!("create-channel outcome variant changed during translation"),
         }
     }
 
-    let joined = join_outcome(db::JoinChannelOutcome::Joined {
+    let joined = join_outcome(crate::mix::JoinChannelOutcome::Joined {
         participant: MixParticipant {
             participant_id: Uuid::new_v4(),
             jid: "alice@example.test".to_owned(),
@@ -286,36 +301,36 @@ fn outcome_maps_preserve_retraction_store_and_join_variants() {
         }
     ));
     assert!(matches!(
-        join_outcome(db::JoinChannelOutcome::Banned),
+        join_outcome(crate::mix::JoinChannelOutcome::Banned),
         JoinChannelOutcome::Banned
     ));
     assert!(matches!(
-        join_outcome(db::JoinChannelOutcome::NotAllowed),
+        join_outcome(crate::mix::JoinChannelOutcome::NotAllowed),
         JoinChannelOutcome::NotAllowed
     ));
     assert!(matches!(
-        join_outcome(db::JoinChannelOutcome::Full),
+        join_outcome(crate::mix::JoinChannelOutcome::Full),
         JoinChannelOutcome::Full
     ));
     assert!(matches!(
-        join_outcome(db::JoinChannelOutcome::MissingNick),
+        join_outcome(crate::mix::JoinChannelOutcome::MissingNick),
         JoinChannelOutcome::MissingNick
     ));
     assert!(matches!(
-        join_outcome(db::JoinChannelOutcome::NickConflict),
+        join_outcome(crate::mix::JoinChannelOutcome::NickConflict),
         JoinChannelOutcome::NickConflict
     ));
 
     assert!(matches!(
-        presence_outcome(db::PresenceOutcome::Unchanged),
+        presence_outcome(crate::mix::PresenceOutcome::Unchanged),
         PresenceOutcome::Unchanged
     ));
     assert!(matches!(
-        presence_outcome(db::PresenceOutcome::NotSharing),
+        presence_outcome(crate::mix::PresenceOutcome::NotSharing),
         PresenceOutcome::NotSharing
     ));
     assert!(matches!(
-        presence_outcome(db::PresenceOutcome::NotParticipant),
+        presence_outcome(crate::mix::PresenceOutcome::NotParticipant),
         PresenceOutcome::NotParticipant
     ));
 }

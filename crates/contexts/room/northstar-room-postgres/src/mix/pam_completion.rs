@@ -4,6 +4,7 @@ use super::*;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn complete_remote_pam_success(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     authenticated_domain: &str,
     channel_jid: &str,
@@ -108,7 +109,8 @@ pub async fn complete_remote_pam_success(
             membership.client_request_id = None;
             membership.requester_full_jid = None;
             membership.subscriptions = subscriptions.clone();
-            upsert_mix_roster_tx(&mut transaction, user_id, &channel_jid, None, true).await?;
+            upsert_mix_roster_tx(effects, &mut transaction, user_id, &channel_jid, None, true)
+                .await?;
             match reconciliation_response.as_ref() {
                 Some(response) => response.clone(),
                 None => payloads.pam_join_result(PamJoinResult {
@@ -132,7 +134,7 @@ pub async fn complete_remote_pam_success(
                     &channel_jid,
                 )?,
             };
-            delete_mix_roster_tx(&mut transaction, user_id, &channel_jid).await?;
+            delete_mix_roster_tx(effects, &mut transaction, user_id, &channel_jid).await?;
             sqlx::query("DELETE FROM mix_pam_memberships WHERE id=$1")
                 .bind(membership.id)
                 .execute(&mut *transaction)
@@ -169,7 +171,7 @@ pub async fn complete_remote_pam_success(
     }))
 }
 
-pub(super) async fn pam_membership_from_row(
+pub async fn pam_membership_from_row(
     pool: &PgPool,
     row: sqlx::postgres::PgRow,
 ) -> Result<PamMembership> {
@@ -238,6 +240,7 @@ pub async fn local_pam_users_for_channel(pool: &PgPool, channel_jid: &str) -> Re
 }
 
 pub async fn begin_remote_pam_leave(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     request: BeginRemotePamLeave<'_>,
 ) -> Result<PamOperationReplay> {
@@ -312,6 +315,7 @@ pub async fn begin_remote_pam_leave(
         return Ok(PamOperationReplay::Miss);
     }
     insert_pam_operation_and_outbox_tx(
+        effects,
         &mut transaction,
         request.user_id,
         &channel_jid,

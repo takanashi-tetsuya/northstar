@@ -13,7 +13,7 @@ pub(crate) struct ClusterListenerMessagePolicy {
     pub(crate) message:
         crate::services::messaging::MessageService<db::messaging::PostgresMessageRepository>,
     pub(crate) mix: northstar_room_application::mix_service::MixService<
-        db::mix_repository::PostgresMixRepository,
+        crate::db::room_effects::PostgresMixRepository,
     >,
     pub(crate) verifier:
         crate::services::node_message_contract_verifier::NodeMessageContractVerifier<

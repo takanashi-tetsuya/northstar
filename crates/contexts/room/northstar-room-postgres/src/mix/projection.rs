@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) async fn mix_subscribers_tx(
+pub async fn mix_subscribers_tx(
     transaction: &mut Transaction<'_, Postgres>,
     channel_id: Uuid,
     node: &str,
@@ -18,7 +18,7 @@ pub(super) async fn mix_subscribers_tx(
     Ok(rows.iter().map(participant_from_row).collect())
 }
 
-pub(super) async fn mix_node_audience_tx(
+pub async fn mix_node_audience_tx(
     transaction: &mut Transaction<'_, Postgres>,
     channel_id: Uuid,
     node: &str,
@@ -40,7 +40,7 @@ pub(super) async fn mix_node_audience_tx(
     mix_subscribers_tx(transaction, channel_id, node).await
 }
 
-pub(super) fn extend_unique_mix_recipients(
+pub fn extend_unique_mix_recipients(
     recipients: &mut Vec<MixParticipant>,
     extras: impl IntoIterator<Item = MixParticipant>,
 ) {
@@ -56,17 +56,17 @@ pub(super) fn extend_unique_mix_recipients(
     recipients.sort_by_key(|participant| participant.participant_id);
 }
 
-pub(super) struct MixPresenceProjection<'a> {
-    pub(super) channel: &'a MixChannel,
-    pub(super) participant: &'a MixParticipant,
-    pub(super) preference: &'a MixParticipantPreference,
-    pub(super) item: &'a MixPresenceItem,
-    pub(super) unavailable: bool,
-    pub(super) event_id: Uuid,
-    pub(super) extra_recipients: Vec<MixParticipant>,
+pub struct MixPresenceProjection<'a> {
+    pub channel: &'a MixChannel,
+    pub participant: &'a MixParticipant,
+    pub preference: &'a MixParticipantPreference,
+    pub item: &'a MixPresenceItem,
+    pub unavailable: bool,
+    pub event_id: Uuid,
+    pub extra_recipients: Vec<MixParticipant>,
 }
 
-pub(super) async fn enqueue_mix_presence_event_tx(
+pub async fn enqueue_mix_presence_event_tx(
     transaction: &mut Transaction<'_, Postgres>,
     fence: &MixDeliveryAdmissionFence,
     projection: MixPresenceProjection<'_>,
@@ -124,7 +124,7 @@ pub(super) async fn enqueue_mix_presence_event_tx(
     Ok(recipients)
 }
 
-pub(super) async fn reproject_mix_presence_visibility_tx(
+pub async fn reproject_mix_presence_visibility_tx(
     transaction: &mut Transaction<'_, Postgres>,
     fence: &MixDeliveryAdmissionFence,
     old_channel: &MixChannel,
@@ -249,17 +249,17 @@ pub(super) async fn reproject_mix_presence_visibility_tx(
     Ok(())
 }
 
-pub(super) struct MixNodeProjection<'a> {
-    pub(super) channel: &'a MixChannel,
-    pub(super) node: &'a str,
-    pub(super) item_id: &'a str,
-    pub(super) payload: Option<&'a str>,
-    pub(super) retract: bool,
-    pub(super) event_id: Uuid,
-    pub(super) extra_recipients: Vec<MixParticipant>,
+pub struct MixNodeProjection<'a> {
+    pub channel: &'a MixChannel,
+    pub node: &'a str,
+    pub item_id: &'a str,
+    pub payload: Option<&'a str>,
+    pub retract: bool,
+    pub event_id: Uuid,
+    pub extra_recipients: Vec<MixParticipant>,
 }
 
-pub(super) async fn enqueue_mix_node_event_tx(
+pub async fn enqueue_mix_node_event_tx(
     transaction: &mut Transaction<'_, Postgres>,
     fence: &MixDeliveryAdmissionFence,
     projection: MixNodeProjection<'_>,

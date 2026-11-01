@@ -3079,7 +3079,19 @@
       ],
       [
         "northstar-room-postgres",
+        "northstar-abuse-policy"
+      ],
+      [
+        "northstar-room-postgres",
+        "northstar-archive-core"
+      ],
+      [
+        "northstar-room-postgres",
         "northstar-auth-core"
+      ],
+      [
+        "northstar-room-postgres",
+        "northstar-delivery-core"
       ],
       [
         "northstar-room-postgres",
@@ -3099,7 +3111,19 @@
       ],
       [
         "northstar-room-postgres",
+        "northstar-roster-core"
+      ],
+      [
+        "northstar-room-postgres",
         "northstar-session-core"
+      ],
+      [
+        "northstar-room-postgres",
+        "northstar-telemetry"
+      ],
+      [
+        "northstar-room-postgres",
+        "northstar-xep-0313"
       ],
       [
         "northstar-room-postgres",

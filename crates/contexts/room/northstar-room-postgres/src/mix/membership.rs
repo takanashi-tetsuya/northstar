@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) async fn prune_mix_events_tx(
+pub async fn prune_mix_events_tx(
     transaction: &mut Transaction<'_, Postgres>,
     channel_id: Uuid,
     max_events: i32,
@@ -45,7 +45,7 @@ pub(super) async fn prune_mix_events_tx(
     Ok(())
 }
 
-pub(super) async fn store_mix_event_tx(
+pub async fn store_mix_event_tx(
     transaction: &mut Transaction<'_, Postgres>,
     channel: &MixChannel,
     node: &str,
@@ -82,13 +82,14 @@ pub(super) async fn store_mix_event_tx(
     Ok(Some(id))
 }
 
-pub(super) async fn upsert_mix_roster_tx(
+pub async fn upsert_mix_roster_tx(
+    effects: &impl crate::effects::RoomEffects,
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     channel_jid: &str,
     display_name: Option<&str>,
     share_presence: bool,
-) -> Result<super::super::RosterChange> {
+) -> Result<northstar_roster_core::RosterChange> {
     let channel_jid = northstar_xmpp_types::jid::canonicalize_bare(channel_jid)?;
     sqlx::query(
         "INSERT INTO roster_items (owner_id, contact_jid, display_name, subscription, ask) VALUES ($1, $2, $3, $4, NULL) ON CONFLICT (owner_id, contact_jid) DO UPDATE SET display_name = EXCLUDED.display_name, subscription = EXCLUDED.subscription, ask = NULL, updated_at = NOW()",
@@ -103,15 +104,17 @@ pub(super) async fn upsert_mix_roster_tx(
         .bind(user_id)
         .fetch_one(&mut **transaction)
         .await?;
-    super::super::roster::record_roster_change(transaction, user_id, version, &channel_jid, false)
+    effects
+        .record_roster_change(transaction, user_id, version, &channel_jid, false)
         .await
 }
 
-pub(super) async fn delete_mix_roster_tx(
+pub async fn delete_mix_roster_tx(
+    effects: &impl crate::effects::RoomEffects,
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     channel_jid: &str,
-) -> Result<Option<super::super::RosterChange>> {
+) -> Result<Option<northstar_roster_core::RosterChange>> {
     let channel_jid = northstar_xmpp_types::jid::canonicalize_bare(channel_jid)?;
     let deleted = sqlx::query("DELETE FROM roster_items WHERE owner_id = $1 AND contact_jid = $2")
         .bind(user_id)
@@ -127,18 +130,14 @@ pub(super) async fn delete_mix_roster_tx(
         .fetch_one(&mut **transaction)
         .await?;
     Ok(Some(
-        super::super::roster::record_roster_change(
-            transaction,
-            user_id,
-            version,
-            &channel_jid,
-            true,
-        )
-        .await?,
+        effects
+            .record_roster_change(transaction, user_id, version, &channel_jid, true)
+            .await?,
     ))
 }
 
 pub async fn join_mix_channel(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     channel_id: Uuid,
     request: JoinMixRequest<'_>,
@@ -464,6 +463,7 @@ pub async fn join_mix_channel(
         }
         roster_change = Some(Box::new(
             upsert_mix_roster_tx(
+                effects,
                 &mut transaction,
                 user_id,
                 &channel.jid(),
@@ -474,6 +474,7 @@ pub async fn join_mix_channel(
         ));
     }
     finalize_federated_mix_mutation_tx(
+        effects,
         &mut transaction,
         federated,
         FederatedMixSuccess::Join {

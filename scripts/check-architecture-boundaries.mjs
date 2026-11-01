@@ -1366,12 +1366,12 @@ if (
 ) {
   throw new Error('claimed MIX outbox work must select the bounded durable database lane before transport I/O');
 }
-const mixAdapterSource = readProductionModule('src/db/mix_repository.rs', { root });
+const mixAdapterSource = readProductionModule('crates/contexts/room/northstar-room-postgres/src/mix_repository.rs', { root });
 for (const [serviceMethod] of mixProducerMappings) {
   const body = structBody(mixServiceSource, `pub async fn ${serviceMethod}(`);
   const gate = body.indexOf('self.delivery_admission_guard().await');
   const adapter = structBody(mixAdapterSource, `async fn ${serviceMethod}(`);
-  if (!adapter.includes(`db::${serviceMethod}(`)) {
+  if (!adapter.includes(`crate::mix::${serviceMethod}(`)) {
     throw new Error(`MIX producer adapter ${serviceMethod} lost its reviewed atomic repository operation`);
   }
   const repositoryCall = body.search(new RegExp(`self\\s*\\.\\s*repository\\s*\\.\\s*${serviceMethod}\\s*\\(`));
@@ -1382,12 +1382,12 @@ for (const [serviceMethod] of mixProducerMappings) {
   }
 }
 
-// Every file of the MIX repository module (src/db/mix.rs and its child module
+// Every file of the MIX repository module (crates/contexts/room/northstar-room-postgres/src/mix.rs and its child module
 // files) is exempt from the src-wide repository-caller scans below, as the
 // single file was before the module was split.
-const mixRepositoryModuleFiles = new Set(moduleFiles('src/db/mix.rs', { root }));
+const mixRepositoryModuleFiles = new Set(moduleFiles('crates/contexts/room/northstar-room-postgres/src/mix.rs', { root }));
 // Production files of the MIX repository adapter module are exempt from the same scans.
-const mixRepositoryAdapterFiles = new Set(moduleFiles('src/db/mix_repository.rs', { root, includeTests: false }));
+const mixRepositoryAdapterFiles = new Set(moduleFiles('crates/contexts/room/northstar-room-postgres/src/mix_repository.rs', { root, includeTests: false }));
 
 const mixDeliveryProducerBypassPattern = new RegExp(
   `\\bdb::(?:${mixProducerMethods.join('|')})\\s*\\(`,
@@ -1437,12 +1437,12 @@ const mixRepositoryTransactionEntries = [
   'retract_mix_message',
 ];
 // whole production module (the file and its non-test child files)
-const mixRepositorySource = readProductionModule('src/db/mix.rs', { root });
+const mixRepositorySource = readProductionModule('crates/contexts/room/northstar-room-postgres/src/mix.rs', { root });
 const mixRepositoryProduction = productionWithoutCfgTestModules(
   mixRepositorySource,
-  'src/db/mix.rs',
+  'crates/contexts/room/northstar-room-postgres/src/mix.rs',
 );
-const mixRepositoryFunctions = asyncFunctionSpans(mixRepositoryProduction, 'src/db/mix.rs');
+const mixRepositoryFunctions = asyncFunctionSpans(mixRepositoryProduction, 'crates/contexts/room/northstar-room-postgres/src/mix.rs');
 const actualMixRepositoryEntries = [];
 const mixAdmissionPattern = /begin_mix_delivery_admission\(pool\)\.await\?/g;
 for (let match; (match = mixAdmissionPattern.exec(mixRepositoryProduction)) !== null; ) {
@@ -1452,7 +1452,7 @@ for (let match; (match = mixAdmissionPattern.exec(mixRepositoryProduction)) !== 
   if (!owner) {
     const line = countMatches(mixRepositoryProduction.slice(0, match.index), /\n/g) + 1;
     throw new Error(
-      `src/db/mix.rs:${line} acquires the MIX delivery fence outside a parseable async function`,
+      `crates/contexts/room/northstar-room-postgres/src/mix.rs:${line} acquires the MIX delivery fence outside a parseable async function`,
     );
   }
   actualMixRepositoryEntries.push(owner.name);
@@ -1588,9 +1588,9 @@ if (
     /SELECT northstar_mix_pam_operation_insert\(/g,
   ) !== 1 ||
   !mixPamInsertHelper.includes('MIX-PAM requester requires a localpart') ||
-  !mixPamInsertHelper.includes('enqueue_s2s_outbox_with_id_in_transaction(') ||
+  !mixPamInsertHelper.includes('.enqueue_federated_stanza_with_id(') ||
   !mixPamInsertHelper.includes('SELECT northstar_mix_pam_operation_insert(') ||
-  mixPamInsertHelper.indexOf('enqueue_s2s_outbox_with_id_in_transaction(') >
+  mixPamInsertHelper.indexOf('.enqueue_federated_stanza_with_id(') >
     mixPamInsertHelper.indexOf('SELECT northstar_mix_pam_operation_insert(')
 ) {
   throw new Error(

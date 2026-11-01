@@ -940,7 +940,7 @@ rejectsBosh('BOSH item cannot receive a different rotated source', 'boshOwner', 
 rejectsBosh('BOSH handoff cannot name another session', 'boshOwner', /session_id: local\.session_id\(\),/g, 'session_id: other_session,', /notification attempt/);
 rejectsBosh('BOSH cannot discard the actual FIFO result', 'boshOwner', /local\.queue_returned\(accepted\);/g, 'local.queue_returned(true);', /actual FIFO result/);
 rejectsBosh('BOSH MIX service cannot replace the closed request', 'mixService', /self\.repository\.transfer_mix_delivery_to_bosh\(request\)/g, 'self.repository.transfer_mix_delivery_to_bosh(other_request)', /same closed request/);
-rejectsBosh('BOSH repository cannot discard the closed request', 'mixRepository', /db::mix::transfer_mix_delivery_to_bosh\(&self\.pool,\s*request\)/g, 'db::mix::transfer_mix_delivery_to_bosh(&self.pool, other_request)', /same closed request/);
+rejectsBosh('BOSH repository cannot discard the closed request', 'mixRepository', /crate::mix::transfer_mix_delivery_to_bosh\(&self\.pool,\s*request\)/g, 'crate::mix::transfer_mix_delivery_to_bosh(&self.pool, other_request)', /same closed request/);
 rejectsBosh('BOSH SQL cannot replace the bound source', 'mixDb', /(pub async fn transfer_mix_delivery_to_bosh\([\s\S]*?\{\s*request\.validate_for_io\(\)\?;\s*)let source = request\.source\(\);/g, '$1let source = other_source;', /closed inputs/);
 rejectsBosh('BOSH SQL cannot replace the bound session', 'mixDb', /let session_id = request\.session_id\(\);/g, 'let session_id = other_session;', /closed inputs/);
 rejectsBosh('BOSH SQL cannot bypass the COMMIT observer', 'mixDb', /bosh_ownership::transfer_commit_observed/g, 'bosh_ownership::unobserved_commit', /actual COMMIT receipt/);
@@ -1228,18 +1228,18 @@ rejectsMixWorker('MIX transferred route cannot select worker ACK', 'mix',
   'let settlement = request.returned(mix_worker::RouteResult::CompletedByWorker)?.settlement(mix_worker::SettlementCommand::Ack, closed)?; return Ok(());', /consume transfer or lazily/);
 for (const [kind, database, other] of [['Ack', 'acknowledge', 'defer'], ['Defer', 'defer', 'acknowledge'], ['Retry', 'retry', 'dead_letter'], ['DeadLetter', 'dead_letter', 'retry']]) {
   rejectsMixWorker(`MIX ${kind} repository cannot select another settlement`, 'mixRepository',
-    `db::${database}_mix_delivery_worker_observed(&self.pool, request).await?`,
-    `db::${other}_mix_delivery_worker_observed(&self.pool, request).await?`, /typed command and exact request/);
+    `crate::mix::${database}_mix_delivery_worker_observed(&self.pool, request).await?`,
+    `crate::mix::${other}_mix_delivery_worker_observed(&self.pool, request).await?`, /typed command and exact request/);
 }
 rejectsMixWorker('MIX claim projection cannot replace its actual lease token', 'mixDb',
-  'source: crate::xmpp::outbound::MixDelivery { delivery_id: delivery.delivery_id, lease_token: delivery.lease_token, },',
-  'source: crate::xmpp::outbound::MixDelivery { delivery_id: delivery.delivery_id, lease_token: other_token, },', /claimed attempt projection/);
+  'source: northstar_delivery_core::MixDelivery { delivery_id: delivery.delivery_id, lease_token: delivery.lease_token, },',
+  'source: northstar_delivery_core::MixDelivery { delivery_id: delivery.delivery_id, lease_token: other_token, },', /claimed attempt projection/);
 rejectsMixWorker('MIX archive adapter cannot retarget a personal projection', 'mixArchive',
   'pool, command.personal_archive_id, command.owner_id, &command.channel_jid,',
   'pool, command.personal_archive_id, other_owner, &command.channel_jid,', /bound command/);
 rejectsMixWorker('MIX archive repository cannot turn Replay into Stored', 'mixRepository',
-  'db::SourceArchiveAdmission::Replay(id) => outbox::core::ArchiveResult::Replay(id)',
-  'db::SourceArchiveAdmission::Replay(id) => outbox::core::ArchiveResult::Stored(id)', /same request/);
+  'SourceArchiveAdmission::Replay(id) => outbox::core::ArchiveResult::Replay(id)',
+  'SourceArchiveAdmission::Replay(id) => outbox::core::ArchiveResult::Stored(id)', /same request/);
 rejectsMixWorker('MIX pending route cannot change the existing defer delay policy', 'mix',
   'mix_worker::SettlementCommand::Defer { delay_seconds: MIX_DELIVERY_ROUTE_RECOVERY_DELAY_SECS }',
   'mix_worker::SettlementCommand::Defer { delay_seconds: 1 }', /actual route result/);

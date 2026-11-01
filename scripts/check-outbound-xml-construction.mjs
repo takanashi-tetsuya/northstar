@@ -43,7 +43,7 @@ const BASELINE = new Map([
   ['src/xmpp/protocol/misc.rs', 0],
   ['src/xmpp/protocol/sm.rs', 0],
   ['crates/contexts/room/northstar-room-application/src/mix_service.rs', 0],
-  ['src/db/mix.rs', 0],
+  ['crates/contexts/room/northstar-room-postgres/src/mix.rs', 0],
   ['src/s2s/components.rs', 0],
   ['src/cluster.rs', 0],
   ['src/s2s/inbound.rs', 0],

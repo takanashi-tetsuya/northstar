@@ -740,7 +740,8 @@ async fn rotate_new_mix_source_for_sm_transfer(
     // A remote-node hand-off carries this exact rotated token. Consume its
     // bounded cluster fence before recording the next SM owner so a target
     // node which later exits cannot release a source now owned by XEP-0198.
-    super::mix::consume_mix_cluster_delivery_fence_tx(transaction, previous).await?;
+    northstar_room_postgres::mix::consume_mix_cluster_delivery_fence_tx(transaction, previous)
+        .await?;
     let current = outbound::MixDelivery {
         delivery_id: previous.delivery_id,
         lease_token: Uuid::new_v4(),

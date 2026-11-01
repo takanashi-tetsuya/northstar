@@ -2,8 +2,9 @@ pub(crate) mod account_admin;
 // The composition root binds transport service handles to concrete adapters.
 pub(crate) type BoshReplayService =
     crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>;
-pub(crate) type BoshMixService =
-    northstar_room_application::mix_service::MixService<db::mix_repository::PostgresMixRepository>;
+pub(crate) type BoshMixService = northstar_room_application::mix_service::MixService<
+    crate::db::room_effects::PostgresMixRepository,
+>;
 
 impl axum::extract::FromRef<Arc<AppState>> for AccountAdminContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
@@ -323,7 +324,7 @@ pub struct AppState {
         db::retractions::PostgresRetractionRepository,
     >,
     mam_service: northstar_archive_application::MamService<db::mam::PostgresMamRepository>,
-    mix_service: northstar_room_application::mix_service::MixService<db::mix_repository::PostgresMixRepository>,
+    mix_service: northstar_room_application::mix_service::MixService<crate::db::room_effects::PostgresMixRepository>,
     sm_service: crate::services::sm::SmService<db::sm_repository::PostgresSmRepository>,
     replay_service:
         crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>,

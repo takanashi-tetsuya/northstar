@@ -14,12 +14,18 @@ test-support = []
 [dependencies]
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
+northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
+northstar-archive-core = { path = "../../archive/northstar-archive-core" }
 northstar-auth-core = { path = "../../auth/northstar-auth-core" }
+northstar-delivery-core = { path = "../../message/northstar-delivery-core" }
 northstar-federation-core = { path = "../../federation/northstar-federation-core" }
 northstar-postgres = { path = "../../../platform/northstar-postgres" }
 northstar-room-application = { path = "../northstar-room-application" }
 northstar-room-core = { path = "../northstar-room-core" }
+northstar-roster-core = { path = "../../roster/northstar-roster-core" }
 northstar-session-core = { path = "../../session/northstar-session-core" }
+northstar-telemetry = { path = "../../../platform/northstar-telemetry" }
+northstar-xep-0313 = { path = "../../../kernel/northstar-xep-0313" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 rand = "0.8"
 roxmltree = "0.20"

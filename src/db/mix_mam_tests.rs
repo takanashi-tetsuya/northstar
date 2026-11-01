@@ -1,8 +1,15 @@
-use super::*;
 use crate::db;
+use northstar_room_postgres::mix::*;
+use sha2::{Digest, Sha256};
+use sqlx::Row;
+use std::collections::BTreeSet;
+use uuid::Uuid;
 
-fn query(page: super::super::MamRsmPage, max: i64) -> super::super::MamArchiveQuery {
-    super::super::MamArchiveQuery {
+fn query(
+    page: northstar_archive_core::MamRsmPage,
+    max: i64,
+) -> northstar_archive_core::MamArchiveQuery {
+    northstar_archive_core::MamArchiveQuery {
         with_jid: None,
         start: None,
         end: None,
@@ -31,6 +38,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     let owner = format!("owner-{suffix}@example.test");
     let localpart = format!("mam-{}", &suffix[..16]);
     let (outcome, _) = create_mix_channel(
+        &crate::db::room_effects::RootRoomEffects,
         &pool,
         "mix.example.test",
         Some(&localpart),
@@ -76,7 +84,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     let first_page = mix_mam_page(
         &pool,
         channel_id,
-        &query(super::super::MamRsmPage::First, 2),
+        &query(northstar_archive_core::MamRsmPage::First, 2),
     )
     .await
     .unwrap()
@@ -96,7 +104,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     let after = mix_mam_page(
         &pool,
         channel_id,
-        &query(super::super::MamRsmPage::After(second), 2),
+        &query(northstar_archive_core::MamRsmPage::After(second), 2),
     )
     .await
     .unwrap()
@@ -115,7 +123,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     let before = mix_mam_page(
         &pool,
         channel_id,
-        &query(super::super::MamRsmPage::Before(third), 1),
+        &query(northstar_archive_core::MamRsmPage::Before(third), 1),
     )
     .await
     .unwrap()
@@ -127,7 +135,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     let indexed = mix_mam_page(
         &pool,
         channel_id,
-        &query(super::super::MamRsmPage::Index(1), 2),
+        &query(northstar_archive_core::MamRsmPage::Index(1), 2),
     )
     .await
     .unwrap()
@@ -143,7 +151,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     assert_eq!(indexed.first_index, 1);
     assert!(!indexed.complete);
 
-    let mut intersected = query(super::super::MamRsmPage::Before(fourth), 10);
+    let mut intersected = query(northstar_archive_core::MamRsmPage::Before(fourth), 10);
     intersected.after_id = Some(first);
     let intersected = mix_mam_page(&pool, channel_id, &intersected)
         .await
@@ -161,7 +169,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     assert_eq!(intersected.first_index, 0);
     assert!(intersected.complete);
 
-    let mut filtered = query(super::super::MamRsmPage::Last, 1);
+    let mut filtered = query(northstar_archive_core::MamRsmPage::Last, 1);
     filtered.with_jid = Some("bob@example.test".to_owned());
     let filtered = mix_mam_page(&pool, channel_id, &filtered)
         .await
@@ -171,7 +179,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     assert_eq!(filtered.first_index, 1);
     assert_eq!(filtered.events[0].id, fourth);
 
-    let mut filtered_cursor = query(super::super::MamRsmPage::After(first), 10);
+    let mut filtered_cursor = query(northstar_archive_core::MamRsmPage::After(first), 10);
     filtered_cursor.with_jid = Some("bob@example.test".to_owned());
     let filtered_cursor = mix_mam_page(&pool, channel_id, &filtered_cursor)
         .await
@@ -188,7 +196,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     assert_eq!(filtered_cursor.total, 2);
     assert!(filtered_cursor.complete);
 
-    let mut filtered_form_cursor = query(super::super::MamRsmPage::First, 10);
+    let mut filtered_form_cursor = query(northstar_archive_core::MamRsmPage::First, 10);
     filtered_form_cursor.with_jid = Some("bob@example.test".to_owned());
     filtered_form_cursor.after_id = Some(first);
     let filtered_form_cursor = mix_mam_page(&pool, channel_id, &filtered_form_cursor)
@@ -204,7 +212,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
         vec![second, fourth]
     );
 
-    let mut filtered_item_id = query(super::super::MamRsmPage::First, 10);
+    let mut filtered_item_id = query(northstar_archive_core::MamRsmPage::First, 10);
     filtered_item_id.with_jid = Some("bob@example.test".to_owned());
     filtered_item_id.ids = vec![first];
     assert!(
@@ -242,7 +250,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
         &pool,
         channel_id,
         viewer_id,
-        &query(super::super::MamRsmPage::First, 10),
+        &query(northstar_archive_core::MamRsmPage::First, 10),
     )
     .await
     .unwrap()
@@ -261,7 +269,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
             &pool,
             channel_id,
             viewer_id,
-            &query(super::super::MamRsmPage::After(second), 10),
+            &query(northstar_archive_core::MamRsmPage::After(second), 10),
         )
         .await
         .unwrap()
@@ -278,7 +286,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
         &pool,
         channel_id,
         viewer_id,
-        &query(super::super::MamRsmPage::First, 10),
+        &query(northstar_archive_core::MamRsmPage::First, 10),
     )
     .await
     .unwrap()
@@ -296,7 +304,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     let zero = mix_mam_page(
         &pool,
         channel_id,
-        &query(super::super::MamRsmPage::First, 0),
+        &query(northstar_archive_core::MamRsmPage::First, 0),
     )
     .await
     .unwrap()
@@ -308,7 +316,10 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     let missing = mix_mam_page(
         &pool,
         channel_id,
-        &query(super::super::MamRsmPage::Before(Uuid::new_v4()), 10),
+        &query(
+            northstar_archive_core::MamRsmPage::Before(Uuid::new_v4()),
+            10,
+        ),
     )
     .await
     .unwrap();
@@ -340,6 +351,7 @@ async fn authorized_mix_mam_peer_filter_uses_current_visibility_snapshot() {
     let owner = format!("owner-{suffix}@example.test");
     let localpart = format!("mam-policy-{}", &suffix[..16]);
     let (created, _) = create_mix_channel(
+        &crate::db::room_effects::RootRoomEffects,
         &pool,
         "mix.example.test",
         Some(&localpart),
@@ -353,7 +365,7 @@ async fn authorized_mix_mam_peer_filter_uses_current_visibility_snapshot() {
     let CreateChannelOutcome::Created(channel_id) = created else {
         panic!("unique MIX MAM policy test channel was not created");
     };
-    let mut filtered = query(super::super::MamRsmPage::First, 10);
+    let mut filtered = query(northstar_archive_core::MamRsmPage::First, 10);
     filtered.with_jid = Some("peer@example.test".to_owned());
 
     let visible_channel = mix_channel_by_id(&pool, channel_id).await.unwrap().unwrap();
@@ -375,7 +387,7 @@ async fn authorized_mix_mam_peer_filter_uses_current_visibility_snapshot() {
             channel_id,
             &owner,
             None,
-            &query(super::super::MamRsmPage::First, 10)
+            &query(northstar_archive_core::MamRsmPage::First, 10)
         )
         .await
         .unwrap(),
@@ -428,6 +440,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
     let guest = format!("guest-{suffix}@example.test");
     let localpart = format!("family-{}", &suffix[..16]);
     let (created, _) = create_mix_channel(
+        &crate::db::room_effects::RootRoomEffects,
         &pool,
         "mix.example.test",
         Some(&localpart),
@@ -457,6 +470,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
         ..MixParticipantPreference::default()
     };
     let owner_join = join_mix_channel(
+        &crate::db::room_effects::RootRoomEffects,
         &pool,
         channel_id,
         JoinMixRequest {
@@ -485,6 +499,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
         ..MixParticipantPreference::default()
     };
     let guest_join = join_mix_channel(
+        &crate::db::room_effects::RootRoomEffects,
         &pool,
         channel_id,
         JoinMixRequest {
@@ -509,6 +524,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
         panic!("guest did not join")
     };
     let registration = register_mix_nick(
+        &crate::db::room_effects::RootRoomEffects,
         &pool,
         "mix.example.test",
         &owner,
@@ -585,10 +601,18 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
     );
     let mut allowed_guest = guest_preference;
     allowed_guest.private_messages = "allow".to_owned();
-    update_mix_participant_preference(&pool, channel_id, &guest, &allowed_guest, &payloads, None)
-        .await
-        .unwrap()
-        .unwrap();
+    update_mix_participant_preference(
+        &crate::db::room_effects::RootRoomEffects,
+        &pool,
+        channel_id,
+        &guest,
+        &allowed_guest,
+        &payloads,
+        None,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert!(mix_private_message_recipient(
         &pool,
         channel_id,
@@ -611,6 +635,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
         .unwrap()
         .is_none());
     assert!(publish_mix_avatar(
+        &crate::db::room_effects::RootRoomEffects,
         &pool,
         channel_id,
         &owner,
@@ -623,6 +648,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
     .await
     .unwrap());
     assert!(!publish_mix_avatar(
+        &crate::db::room_effects::RootRoomEffects,
         &pool,
         channel_id,
         &guest,
@@ -736,6 +762,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
     let mut concurrent_unsubscribe = tokio::spawn(async move {
         let _ = started_tx.send(());
         update_mix_subscriptions(
+            &crate::db::room_effects::RootRoomEffects,
             &concurrent_pool,
             channel_id,
             &concurrent_guest,
@@ -836,7 +863,7 @@ async fn federated_mutation_result_and_outbox_share_the_authority_transaction() 
         request_digest: digest,
         addressed: "mix.example.test".to_owned(),
         reply_to: format!("{actor}/device"),
-        policy: super::super::S2sOutboxPolicy {
+        policy: northstar_federation_core::S2sOutboxPolicy {
             ttl_seconds: 300,
             max_rows: 0,
             max_bytes: 1_048_576,
@@ -845,6 +872,7 @@ async fn federated_mutation_result_and_outbox_share_the_authority_transaction() 
     };
 
     assert!(create_mix_channel(
+        &crate::db::room_effects::RootRoomEffects,
         &pool,
         "mix.example.test",
         Some(&localpart),
@@ -875,6 +903,7 @@ async fn federated_mutation_result_and_outbox_share_the_authority_transaction() 
 
     context.policy.max_rows = 100_000;
     let (created, _) = create_mix_channel(
+        &crate::db::room_effects::RootRoomEffects,
         &pool,
         "mix.example.test",
         Some(&localpart),
@@ -908,6 +937,7 @@ async fn federated_mutation_result_and_outbox_share_the_authority_transaction() 
     assert_eq!(create.attribute("channel"), Some(localpart.as_str()));
     assert!(
         create_mix_channel(
+            &crate::db::room_effects::RootRoomEffects,
             &pool,
             "mix.example.test",
             Some(&localpart),

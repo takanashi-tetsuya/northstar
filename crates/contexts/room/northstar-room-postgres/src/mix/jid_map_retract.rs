@@ -2,7 +2,7 @@
 
 use super::*;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn mix_jid_map_entries(
     pool: &PgPool,
     channel_id: Uuid,
@@ -86,6 +86,7 @@ pub async fn authorized_mix_jid_map_entries(
     reason = "the atomic invitation mutation keeps its principals, token lifetime, renderer, and federation fence explicit"
 )]
 pub async fn issue_mix_invitation(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     channel_id: Uuid,
     inviter: &str,
@@ -139,6 +140,7 @@ pub async fn issue_mix_invitation(
     .execute(&mut *transaction)
     .await?;
     finalize_federated_mix_mutation_tx(
+        effects,
         &mut transaction,
         federated,
         FederatedMixSuccess::Invitation {

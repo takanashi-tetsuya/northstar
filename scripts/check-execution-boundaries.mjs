@@ -47,7 +47,7 @@ const files = {
   nativeWrite: 'src/xmpp/direct_delivery.rs',
   nativeCore: 'crates/contexts/message/northstar-delivery-core/src/native_write.rs',
   replayDb: 'src/db/replay.rs',
-  mixDb: 'src/db/mix.rs',
+  mixDb: 'crates/contexts/room/northstar-room-postgres/src/mix.rs',
   smProtocol: 'src/xmpp/protocol/sm.rs',
   smOwner: 'src/xmpp/protocol/sm_owner.rs',
   smCore: 'crates/contexts/message/northstar-delivery-core/src/sm_ownership.rs',
@@ -55,7 +55,7 @@ const files = {
   smDb: 'src/db/sm.rs',
   boshOwner: 'src/bosh/ownership.rs',
   boshCore: 'crates/contexts/message/northstar-delivery-core/src/bosh_ownership.rs',
-  mixRepository: 'src/db/mix_repository.rs',
+  mixRepository: 'crates/contexts/room/northstar-room-postgres/src/mix_repository.rs',
   boshResponse: 'src/bosh/response_owner.rs',
   boshResponseCore: 'crates/contexts/message/northstar-delivery-core/src/bosh_ownership/response.rs',
   replayService: 'src/services/replay.rs',
@@ -428,7 +428,7 @@ export function verifyBoshTransferBoundaries({ bosh, boshOwner, boshCore, mixSer
   requireBoundary(service === 'let_admission=self.outbox_db_admission_guard().await;self.repository.transfer_mix_delivery_to_bosh(request).await',
     'BOSH MIX service must retain existing admission and forward the same closed request');
   const repository = normalize(body(mixRepository, 'async\\s+fn\\s+transfer_mix_delivery_to_bosh\\b'));
-  requireBoundary(repository === 'db::mix::transfer_mix_delivery_to_bosh(&self.pool,request).await',
+  requireBoundary(repository === 'crate::mix::transfer_mix_delivery_to_bosh(&self.pool,request).await',
     'BOSH MIX repository must forward the same closed request');
   const sql = normalize(body(mixDb, 'pub\\s+async\\s+fn\\s+transfer_mix_delivery_to_bosh\\b'));
   ordered(sql, ['request.validate_for_io()?;', 'letsource=request.source();', 'letsession_id=request.session_id();',
@@ -1469,7 +1469,7 @@ export function verifyMixForegroundBoundaries({ mix, mixCore, mixData, mixSlot, 
   requireBoundary(serviceConstructor.includes('letconfigured_mix_domain=northstar_xmpp_types::prepare_domainpart(&format!())?;') &&
     serviceConstructor.includes('repository,configured_mix_domain,message_identity,'),
     'MIX receiving domain must come from the configured service constructor');
-  requireBoundary(dense(codeOnly(state)).includes('MixService::new_with_outbox_database_admission(db::mix_repository::PostgresMixRepository::new(pool.clone()),config.domain.clone(),'),
+  requireBoundary(dense(codeOnly(state)).includes('MixService::new_with_outbox_database_admission(crate::db::room_effects::PostgresMixRepository::new(pool.clone()),config.domain.clone(),'),
     'MIX AppState construction must supply actual runtime configuration');
   const preparation = dense(body(mixService, 'fn\\s+prepare_mix_foreground\\b'));
   requireBoundary(preparation === 'if!ingress.matches_receiving_domain(&self.configured_mix_domain){returnErr(foreground::Rejected::Input);}Ok(foreground::PreparedIngress::new(ingress))',
@@ -1534,7 +1534,7 @@ export function verifyMixForegroundBoundaries({ mix, mixCore, mixData, mixSlot, 
     enqueue.includes('sequence:sequences[&recipient.jid]') && enqueue.includes('participant:recipient.clone()'),
     'MIX projection facts must retain actual IDs/sequences and no empty durable event');
   const repository = dense(body(mixRepository, 'async\\s+fn\\s+store_mix_message_observed\\b'));
-  ordered(repository, ['db::store_mix_message_observed(&self.pool,request,identity,&MixPayloads).await?',
+  ordered(repository, ['crate::mix::store_mix_message_observed(&self.pool,request,identity,&MixPayloads).await?',
     'existing.target_id.is_none()&&authenticators.verifies(&existing.semantic_key_id,&existing.semantic_mac)',
     'request.authenticated(&raw,classified)?;'],
     'MIX Existing must be classified by the repository after SQL rollback');
@@ -1546,7 +1546,7 @@ export function verifyMixForegroundBoundaries({ mix, mixCore, mixData, mixSlot, 
   requireBoundary(repository.includes(storeClassification),
     'MIX store authentication must map exact evidence to original-ID Replay and mismatched evidence to Conflict');
   const read = dense(body(mixRepository, 'async\\s+fn\\s+lookup_mix_message_replay_observed\\b'));
-  ordered(read, ['db::lookup_mix_business_intent(', 'request.observed_existing(raw.clone())?;',
+  ordered(read, ['crate::mix::lookup_mix_business_intent(', 'request.observed_existing(raw.clone())?;',
     'existing.target_id.is_none()&&authenticators.verifies(&existing.semantic_key_id,&existing.semantic_mac)',
     'request.authenticated(&raw,result)?;', 'Ok(result)'],
     'MIX preflight replay must retain raw then authenticated repository evidence');
@@ -1713,19 +1713,19 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
     'MIX worker settlement wake must follow the matching actual result only');
   const repository = method(mixRepository, 'settle_mix_delivery_observed');
   for (const [kind, database] of [['Ack', 'acknowledge'], ['Defer', 'defer'], ['Retry', 'retry'], ['DeadLetter', 'dead_letter']]) {
-    requireBoundary(repository.includes(`SettlementCommand::${kind}${kind === 'Ack' ? '' : '{..}'}=>SettlementResult::${kind}(db::${database}_mix_delivery_worker_observed(&self.pool,request).await?)`),
+    requireBoundary(repository.includes(`SettlementCommand::${kind}${kind === 'Ack' ? '' : '{..}'}=>SettlementResult::${kind}(crate::mix::${database}_mix_delivery_worker_observed(&self.pool,request).await?)`),
       'MIX settlement repository must preserve its typed command and exact request');
   }
-  requireBoundary(method(mixRepository, 'claim_mix_deliveries_observed') === 'db::claim_mix_deliveries_observed(&self.pool,request).await' &&
-    method(mixRepository, 'renew_mix_delivery_lease_observed') === 'db::renew_mix_delivery_lease_observed(&self.pool,request).await' &&
-    method(mixRepository, 'archive_mix_message_once_observed') === 'Ok(matchdb::archive_mix_message_once_observed(&self.pool,request).await?{db::SourceArchiveAdmission::Stored(id)=>outbox::core::ArchiveResult::Stored(id),db::SourceArchiveAdmission::Replay(id)=>outbox::core::ArchiveResult::Replay(id)})',
+  requireBoundary(method(mixRepository, 'claim_mix_deliveries_observed') === 'crate::mix::claim_mix_deliveries_observed(&self.pool,request).await' &&
+    method(mixRepository, 'renew_mix_delivery_lease_observed') === 'crate::mix::renew_mix_delivery_lease_observed(&self.pool,request).await' &&
+    method(mixRepository, 'archive_mix_message_once_observed') === 'Ok(matchself.effects.archive_mix_message_once_observed(&self.pool,request).await?{SourceArchiveAdmission::Stored(id)=>outbox::core::ArchiveResult::Stored(id),SourceArchiveAdmission::Replay(id)=>outbox::core::ArchiveResult::Replay(id)})',
     'MIX observed repository adapters must forward the same request');
   const claimDb = method(mixDb, 'claim_mix_deliveries_inner');
   requireBoundary(claimDb.includes('ifauthorized&&!pending{returnifletSome(request)=observation{request.read_empty()?;Ok(MixClaimReturn::Observed(Vec::new().into()))}else{Ok(MixClaimReturn::Compatibility(Vec::new()))};}letentered=observation.map(|request|request.enter_statement()).transpose()?;letrows=sqlx::query(') &&
     claimDb.includes('.fetch_all(&mut*connection).await?;letdeliveries:Vec<_>=rows.into_iter()') &&
     claimDb.includes('request.received(entered.expect(),rows.clone())?;Ok(MixClaimReturn::Observed(rows))'),
     'MIX claim must distinguish authorized read-empty from the actual autocommit statement receipt');
-  requireBoundary(claimDb.includes('std::sync::Arc::new(northstar_delivery_core::mix_outbox::Row{source:crate::xmpp::outbound::MixDelivery{delivery_id:delivery.delivery_id,lease_token:delivery.lease_token},event_id:delivery.event_id,channel_id:delivery.channel_id,channel_jid:delivery.channel_jid,participant_id:delivery.recipient.participant_id,recipient_jid:delivery.recipient.jid,recipient_nick:delivery.recipient.nick,stanza:delivery.stanza,authoritative_stanza_id:delivery.authoritative_stanza_id,archive:delivery.archive,encrypted:delivery.encrypted,attempt_count:delivery.attempt_count,route_wake_generation:delivery.route_wake_generation})'),
+  requireBoundary(claimDb.includes('std::sync::Arc::new(northstar_delivery_core::mix_outbox::Row{source:northstar_delivery_core::MixDelivery{delivery_id:delivery.delivery_id,lease_token:delivery.lease_token},event_id:delivery.event_id,channel_id:delivery.channel_id,channel_jid:delivery.channel_jid,participant_id:delivery.recipient.participant_id,recipient_jid:delivery.recipient.jid,recipient_nick:delivery.recipient.nick,stanza:delivery.stanza,authoritative_stanza_id:delivery.authoritative_stanza_id,archive:delivery.archive,encrypted:delivery.encrypted,attempt_count:delivery.attempt_count,route_wake_generation:delivery.route_wake_generation})'),
     'MIX claimed attempt projection must retain actual source, payload and optional archive identity');
   requireBoundary(method(mixDb, 'claim_mix_deliveries_observed').includes('letcommand=request.command();matchclaim_mix_deliveries_inner(pool,command.limit,command.max_bytes,Some(request)).await?'),
     'MIX claim SQL must use the bound limits and same observation');

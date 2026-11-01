@@ -2,17 +2,17 @@
 
 use super::*;
 
-pub(super) struct MixDeliveryProjection<'a> {
-    pub(super) channel: &'a MixChannel,
-    pub(super) event_id: Uuid,
-    pub(super) recipients: &'a [MixParticipant],
-    pub(super) stanza_template: &'a str,
-    pub(super) authoritative_stanza_id: Option<Uuid>,
-    pub(super) archive: bool,
-    pub(super) encrypted: bool,
+pub struct MixDeliveryProjection<'a> {
+    pub channel: &'a MixChannel,
+    pub event_id: Uuid,
+    pub recipients: &'a [MixParticipant],
+    pub stanza_template: &'a str,
+    pub authoritative_stanza_id: Option<Uuid>,
+    pub archive: bool,
+    pub encrypted: bool,
 }
 
-pub(super) async fn enqueue_mix_deliveries_tx(
+pub async fn enqueue_mix_deliveries_tx(
     transaction: &mut Transaction<'_, Postgres>,
     fence: &MixDeliveryAdmissionFence,
     projection: MixDeliveryProjection<'_>,
@@ -21,7 +21,7 @@ pub(super) async fn enqueue_mix_deliveries_tx(
     Ok(())
 }
 
-pub(super) async fn enqueue_mix_deliveries_tx_with_facts(
+pub async fn enqueue_mix_deliveries_tx_with_facts(
     transaction: &mut Transaction<'_, Postgres>,
     fence: &MixDeliveryAdmissionFence,
     projection: MixDeliveryProjection<'_>,
@@ -177,7 +177,7 @@ pub(super) async fn enqueue_mix_deliveries_tx_with_facts(
     }))
 }
 
-pub(super) async fn remove_mix_delivery_tx(
+pub async fn remove_mix_delivery_tx(
     transaction: &mut Transaction<'_, Postgres>,
     delivery_id: Uuid,
     lease_token: Uuid,
@@ -204,7 +204,7 @@ pub(super) async fn remove_mix_delivery_tx(
     Ok(Some((event_id, recipient_jid)))
 }
 
-pub(super) async fn move_mix_delivery_to_dead_letter_tx(
+pub async fn move_mix_delivery_to_dead_letter_tx(
     transaction: &mut Transaction<'_, Postgres>,
     delivery_id: Uuid,
     lease_token: Uuid,
@@ -265,7 +265,7 @@ pub(super) async fn move_mix_delivery_to_dead_letter_tx(
     Ok(true)
 }
 
-pub(super) async fn dead_letter_expired_mix_deliveries(pool: &PgPool, limit: i64) -> Result<()> {
+pub async fn dead_letter_expired_mix_deliveries(pool: &PgPool, limit: i64) -> Result<()> {
     let mut transaction = pool.begin().await?;
     let mut moved = 0_u64;
     let rows = sqlx::query(
@@ -330,7 +330,7 @@ pub(super) async fn dead_letter_expired_mix_deliveries(pool: &PgPool, limit: i64
     Ok(())
 }
 
-pub(super) async fn prune_empty_mix_delivery_sequences(pool: &PgPool, limit: i64) -> Result<()> {
+pub async fn prune_empty_mix_delivery_sequences(pool: &PgPool, limit: i64) -> Result<()> {
     let mut transaction = pool.begin().await?;
     // The producer updates this authority before inserting its recipients.
     // A single SELECT/DELETE statement can retain a snapshot from before that
@@ -421,12 +421,12 @@ pub async fn claim_mix_deliveries_observed(
     }
 }
 
-pub(super) enum MixClaimReturn {
+pub enum MixClaimReturn {
     Compatibility(Vec<ClaimedMixDelivery>),
     Observed(northstar_delivery_core::mix_outbox::Rows),
 }
 
-pub(super) async fn claim_mix_deliveries_inner(
+pub async fn claim_mix_deliveries_inner(
     pool: &PgPool,
     limit: i64,
     max_bytes: i64,
@@ -572,7 +572,7 @@ pub(super) async fn claim_mix_deliveries_inner(
             .into_iter()
             .map(|delivery| {
                 std::sync::Arc::new(northstar_delivery_core::mix_outbox::Row {
-                    source: crate::xmpp::outbound::MixDelivery {
+                    source: northstar_delivery_core::MixDelivery {
                         delivery_id: delivery.delivery_id,
                         lease_token: delivery.lease_token,
                     },
@@ -634,7 +634,7 @@ pub async fn acknowledge_mix_delivery(
     acknowledge_mix_delivery_observed(pool, delivery_id, lease_token, None).await
 }
 
-pub(crate) async fn acknowledge_mix_delivery_observed(
+pub async fn acknowledge_mix_delivery_observed(
     pool: &PgPool,
     delivery_id: Uuid,
     lease_token: Uuid,
@@ -642,8 +642,8 @@ pub(crate) async fn acknowledge_mix_delivery_observed(
 ) -> Result<bool> {
     use northstar_delivery_core::native_write::{commit_observed, AckDisposition};
     if let Some(observation) = observation {
-        observation.validate_source(crate::xmpp::outbound::TransportOwnershipSource::Mix(
-            crate::xmpp::outbound::MixDelivery {
+        observation.validate_source(northstar_delivery_core::TransportOwnershipSource::Mix(
+            northstar_delivery_core::MixDelivery {
                 delivery_id,
                 lease_token,
             },

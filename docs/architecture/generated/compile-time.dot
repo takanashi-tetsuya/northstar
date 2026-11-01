@@ -1227,12 +1227,18 @@ digraph compile_time {
   "northstar-room-core" -> "uuid";
   "northstar-room-postgres" -> "anyhow";
   "northstar-room-postgres" -> "chrono";
+  "northstar-room-postgres" -> "northstar-abuse-policy";
+  "northstar-room-postgres" -> "northstar-archive-core";
   "northstar-room-postgres" -> "northstar-auth-core";
+  "northstar-room-postgres" -> "northstar-delivery-core";
   "northstar-room-postgres" -> "northstar-federation-core";
   "northstar-room-postgres" -> "northstar-postgres";
   "northstar-room-postgres" -> "northstar-room-application";
   "northstar-room-postgres" -> "northstar-room-core";
+  "northstar-room-postgres" -> "northstar-roster-core";
   "northstar-room-postgres" -> "northstar-session-core";
+  "northstar-room-postgres" -> "northstar-telemetry";
+  "northstar-room-postgres" -> "northstar-xep-0313";
   "northstar-room-postgres" -> "northstar-xmpp-types";
   "northstar-room-postgres" -> "rand";
   "northstar-room-postgres" -> "roxmltree";

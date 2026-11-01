@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) async fn mix_mam_blocked_patterns(
+pub async fn mix_mam_blocked_patterns(
     transaction: &mut Transaction<'_, Postgres>,
     viewer_id: Option<Uuid>,
 ) -> Result<Vec<MamBlockedPattern>> {
@@ -21,7 +21,7 @@ pub(super) async fn mix_mam_blocked_patterns(
     ))
 }
 
-pub(super) fn push_mix_mam_archive_base(
+pub fn push_mix_mam_archive_base(
     query_builder: &mut QueryBuilder<'_, Postgres>,
     channel_id: Uuid,
     blocked_patterns: &[MamBlockedPattern],
@@ -48,10 +48,10 @@ pub(super) fn push_mix_mam_archive_base(
     }
 }
 
-pub(super) fn push_mix_mam_scope(
+pub fn push_mix_mam_scope(
     query_builder: &mut QueryBuilder<'_, Postgres>,
     channel_id: Uuid,
-    query: &super::super::MamArchiveQuery,
+    query: &northstar_archive_core::MamArchiveQuery,
     blocked_patterns: &[MamBlockedPattern],
     after_point: Option<(DateTime<Utc>, Uuid)>,
     before_point: Option<(DateTime<Utc>, Uuid)>,
@@ -95,12 +95,12 @@ pub(super) fn push_mix_mam_scope(
 /// Query a MIX channel's mandatory messages archive using one repeatable-read
 /// snapshot. Cursor validation, the result count, page rows and first index
 /// therefore cannot disagree if retention runs concurrently.
-pub(super) async fn mix_mam_page_for(
+pub async fn mix_mam_page_for(
     pool: &PgPool,
     channel_id: Uuid,
     viewer_id: Option<Uuid>,
     actor: Option<&str>,
-    query: &super::super::MamArchiveQuery,
+    query: &northstar_archive_core::MamArchiveQuery,
 ) -> Result<MixReadOutcome<MixMamPage>> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
@@ -262,11 +262,11 @@ pub(super) async fn mix_mam_page_for(
     }))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn mix_mam_page(
     pool: &PgPool,
     channel_id: Uuid,
-    query: &super::super::MamArchiveQuery,
+    query: &northstar_archive_core::MamArchiveQuery,
 ) -> Result<Option<MixMamPage>> {
     Ok(
         match mix_mam_page_for(pool, channel_id, None, None, query).await? {
@@ -276,12 +276,12 @@ pub async fn mix_mam_page(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn mix_mam_page_visible(
     pool: &PgPool,
     channel_id: Uuid,
     viewer_id: Uuid,
-    query: &super::super::MamArchiveQuery,
+    query: &northstar_archive_core::MamArchiveQuery,
 ) -> Result<Option<MixMamPage>> {
     Ok(
         match mix_mam_page_for(pool, channel_id, Some(viewer_id), None, query).await? {
@@ -296,18 +296,18 @@ pub async fn authorized_mix_mam_page(
     channel_id: Uuid,
     actor: &str,
     viewer_id: Option<Uuid>,
-    query: &super::super::MamArchiveQuery,
+    query: &northstar_archive_core::MamArchiveQuery,
 ) -> Result<MixReadOutcome<MixMamPage>> {
     mix_mam_page_for(pool, channel_id, viewer_id, Some(actor), query).await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn mix_mam_boundaries(
     pool: &PgPool,
     channel_id: Uuid,
 ) -> Result<(
-    Option<super::super::ArchiveBoundary>,
-    Option<super::super::ArchiveBoundary>,
+    Option<northstar_archive_core::ArchiveBoundary>,
+    Option<northstar_archive_core::ArchiveBoundary>,
 )> {
     let first = sqlx::query(
         "SELECT authoritative_id AS id, created_at FROM mix_events
@@ -327,7 +327,7 @@ pub async fn mix_mam_boundaries(
     .bind(NODE_MESSAGES)
     .fetch_optional(pool)
     .await?;
-    let convert = |row: sqlx::postgres::PgRow| super::super::ArchiveBoundary {
+    let convert = |row: sqlx::postgres::PgRow| northstar_archive_core::ArchiveBoundary {
         id: row.get("id"),
         created_at: row.get("created_at"),
     };
@@ -341,8 +341,8 @@ pub async fn authorized_mix_mam_boundaries(
     viewer_id: Option<Uuid>,
 ) -> Result<
     MixReadOutcome<(
-        Option<super::super::ArchiveBoundary>,
-        Option<super::super::ArchiveBoundary>,
+        Option<northstar_archive_core::ArchiveBoundary>,
+        Option<northstar_archive_core::ArchiveBoundary>,
     )>,
 > {
     let mut transaction = pool.begin().await?;
@@ -377,7 +377,7 @@ pub async fn authorized_mix_mam_boundaries(
         .build()
         .fetch_optional(&mut *transaction)
         .await?;
-    let convert = |row: sqlx::postgres::PgRow| super::super::ArchiveBoundary {
+    let convert = |row: sqlx::postgres::PgRow| northstar_archive_core::ArchiveBoundary {
         id: row.get("id"),
         created_at: row.get("created_at"),
     };

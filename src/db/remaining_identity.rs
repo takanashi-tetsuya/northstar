@@ -501,7 +501,8 @@ async fn canonicalize_mix_metadata(transaction: &mut Transaction<'_, Postgres>) 
             .map(|value| bare(value, "mix_events.publisher_jid", id))
             .transpose()?;
         let (canonical_item, canonical_payload) = match node.as_str() {
-            crate::db::NODE_ALLOWED | crate::db::NODE_BANNED => {
+            northstar_room_postgres::mix::NODE_ALLOWED
+            | northstar_room_postgres::mix::NODE_BANNED => {
                 let pattern = if item.contains('@') {
                     bare(&item, "mix_events access ItemID", id)?
                 } else {
@@ -515,7 +516,7 @@ async fn canonicalize_mix_metadata(transaction: &mut Transaction<'_, Postgres>) 
                     ),
                 )
             }
-            crate::db::NODE_PRESENCE => (
+            northstar_room_postgres::mix::NODE_PRESENCE => (
                 full(&item, "mix_events presence ItemID", id)?,
                 payload.clone(),
             ),

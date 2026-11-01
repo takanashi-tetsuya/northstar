@@ -114,15 +114,15 @@ pub async fn audit_mix_pam_operation_capacity(pool: &PgPool) -> Result<()> {
 
 /// Proof that this transaction acquired the schema-local delivery admission
 /// authority before taking any MIX business or sequence row lock.
-pub(super) struct MixDeliveryAdmissionFence(pub(super) ());
+pub struct MixDeliveryAdmissionFence(pub ());
 
 /// Proof that orphan reclamation and release-journal folding committed before
 /// the producer transaction began. This phase must never share the producer's
 /// rollback fate: a capacity rejection cannot resurrect the same false-full
 /// ledger state for the next attempt.
-pub(super) struct MixDeliveryReconciliationCommitted(pub(super) ());
+pub struct MixDeliveryReconciliationCommitted(pub ());
 
-pub(super) async fn acquire_mix_delivery_admission_fence_tx(
+pub async fn acquire_mix_delivery_admission_fence_tx(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<MixDeliveryAdmissionFence> {
     // Only admissions mutate the capacity ledger. Delivery completion emits
@@ -144,7 +144,7 @@ pub(super) async fn acquire_mix_delivery_admission_fence_tx(
     Ok(MixDeliveryAdmissionFence(()))
 }
 
-pub(super) async fn begin_mix_delivery_fenced_transaction(
+pub async fn begin_mix_delivery_fenced_transaction(
     pool: &PgPool,
 ) -> Result<(Transaction<'_, Postgres>, MixDeliveryAdmissionFence)> {
     let mut transaction = pool.begin().await?;
@@ -156,7 +156,7 @@ pub(super) async fn begin_mix_delivery_fenced_transaction(
     Ok((transaction, fence))
 }
 
-pub(super) async fn reconcile_mix_delivery_capacity_committed(
+pub async fn reconcile_mix_delivery_capacity_committed(
     pool: &PgPool,
 ) -> Result<MixDeliveryReconciliationCommitted> {
     let mut transaction = pool.begin().await?;
@@ -170,18 +170,18 @@ pub(super) async fn reconcile_mix_delivery_capacity_committed(
     Ok(MixDeliveryReconciliationCommitted(()))
 }
 
-pub(super) async fn begin_mix_delivery_admission(
+pub async fn begin_mix_delivery_admission(
     pool: &PgPool,
 ) -> Result<(Transaction<'_, Postgres>, MixDeliveryAdmissionFence)> {
     let _committed = reconcile_mix_delivery_capacity_committed(pool).await?;
     begin_mix_delivery_fenced_transaction(pool).await
 }
 
-pub(super) fn mix_delivery_capacity_bucket(id: Uuid) -> i16 {
+pub fn mix_delivery_capacity_bucket(id: Uuid) -> i16 {
     i16::from(id.as_bytes()[0] & 63)
 }
 
-pub(super) fn add_mix_delivery_capacity_delta(
+pub fn add_mix_delivery_capacity_delta(
     deltas: &mut BTreeMap<i16, (i64, i64)>,
     bucket: i16,
     rows: i64,
@@ -203,7 +203,7 @@ pub(super) fn add_mix_delivery_capacity_delta(
 /// schema-local capacity fence is held. A delete and its release fact commit
 /// atomically; deleting a fact and decrementing the ledger do too, so a crash
 /// can only leave conservative over-accounting, never reusable phantom space.
-pub(super) async fn drain_mix_delivery_capacity_releases_tx(
+pub async fn drain_mix_delivery_capacity_releases_tx(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<()> {
     // The owner-held capability is the only DELETE surface on the write-once
@@ -216,7 +216,7 @@ pub(super) async fn drain_mix_delivery_capacity_releases_tx(
     Ok(())
 }
 
-pub(super) async fn prune_empty_mix_delivery_events_tx(
+pub async fn prune_empty_mix_delivery_events_tx(
     transaction: &mut Transaction<'_, Postgres>,
     limit: i64,
 ) -> Result<()> {
@@ -272,7 +272,7 @@ pub(super) async fn prune_empty_mix_delivery_events_tx(
     Ok(())
 }
 
-pub(super) async fn prune_empty_mix_delivery_events(pool: &PgPool, limit: i64) -> Result<()> {
+pub async fn prune_empty_mix_delivery_events(pool: &PgPool, limit: i64) -> Result<()> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
         .execute(&mut *transaction)
@@ -282,7 +282,7 @@ pub(super) async fn prune_empty_mix_delivery_events(pool: &PgPool, limit: i64) -
     Ok(())
 }
 
-pub(super) async fn reserve_mix_delivery_capacity_tx(
+pub async fn reserve_mix_delivery_capacity_tx(
     transaction: &mut Transaction<'_, Postgres>,
     _fence: &MixDeliveryAdmissionFence,
     deltas: &BTreeMap<i16, (i64, i64)>,

@@ -33,9 +33,11 @@ pub async fn canonicalize_all_identity_storage(pool: &PgPool, domain: &str) -> R
     super::push_identity::canonicalize_push_identity_storage_in_transaction(&mut transaction)
         .await
         .context("push identity migration failed")?;
-    super::mix_identity::canonicalize_mix_identity_storage_in_transaction(&mut transaction)
-        .await
-        .context("MIX identity migration failed")?;
+    northstar_room_postgres::mix_identity::canonicalize_mix_identity_storage_in_transaction(
+        &mut transaction,
+    )
+    .await
+    .context("MIX identity migration failed")?;
     super::profile_identity::canonicalize_profile_identity_storage_in_transaction(&mut transaction)
         .await
         .context("profile PEP identity migration failed")?;

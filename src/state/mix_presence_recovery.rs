@@ -4,7 +4,8 @@ use super::{
     mix_presence_epoch_is_current, mix_presence_fallback_is_suppressed, session_entries_for_in,
     AppState, OnlineSession, RuntimeFederationPolicy,
 };
-use crate::{db::mix_repository::PostgresMixRepository, s2s::FederationRouter};
+use crate::db::room_effects::PostgresMixRepository;
+use crate::s2s::FederationRouter;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;

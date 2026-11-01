@@ -640,7 +640,7 @@
           "command": "bash scripts/mix-family-db-wsl.sh",
           "test": {
             "path": "scripts/mix-family-db-wsl.sh",
-            "anchor": "  db::mix::delivery_sequence_retention_integration_tests::empty_delivery_claim_preserves_database_authority_errors"
+            "anchor": "  db::mix_sequence_retention_tests::empty_delivery_claim_preserves_database_authority_errors"
           },
           "assertions": [
             "MIX DB suite tests PAM authority, sequence/event GC races, delivery capacity and exact route-wake claim/requeue behavior."

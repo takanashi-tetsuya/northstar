@@ -9,6 +9,7 @@ pub enum RegisterMixNickOutcome {
 }
 
 pub async fn register_mix_nick(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     service_domain: &str,
     actor: &str,
@@ -163,6 +164,7 @@ pub async fn register_mix_nick(
         .await?;
     }
     finalize_federated_mix_mutation_tx(
+        effects,
         &mut transaction,
         federated,
         FederatedMixSuccess::RegisterNick { nick: nick.clone() },
@@ -194,9 +196,7 @@ pub async fn mix_participant_preference(
     }))
 }
 
-pub(super) fn validate_mix_participant_preference(
-    preference: &MixParticipantPreference,
-) -> Result<()> {
+pub fn validate_mix_participant_preference(preference: &MixParticipantPreference) -> Result<()> {
     anyhow::ensure!(
         matches!(
             preference.jid_visibility.as_str(),
@@ -213,6 +213,7 @@ pub(super) fn validate_mix_participant_preference(
 }
 
 pub async fn update_mix_participant_preference(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     channel_id: Uuid,
     actor: &str,
@@ -414,6 +415,7 @@ pub async fn update_mix_participant_preference(
         .await?;
         for user_id in local_users {
             let change = upsert_mix_roster_tx(
+                effects,
                 &mut transaction,
                 user_id,
                 &channel.jid(),
@@ -425,6 +427,7 @@ pub async fn update_mix_participant_preference(
         }
     }
     finalize_federated_mix_mutation_tx(
+        effects,
         &mut transaction,
         federated,
         FederatedMixSuccess::Preference {

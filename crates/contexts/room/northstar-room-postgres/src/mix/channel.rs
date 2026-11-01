@@ -16,7 +16,7 @@ pub enum JoinChannelOutcome {
         preference: MixParticipantPreference,
         subscriptions: Vec<String>,
         newly_joined: bool,
-        roster_change: Option<Box<super::super::RosterChange>>,
+        roster_change: Option<Box<northstar_roster_core::RosterChange>>,
     },
     Banned,
     NotAllowed,
@@ -59,7 +59,7 @@ pub struct MixMutationAdmission {
 pub struct LeaveMixOutcome {
     pub participant: MixParticipant,
     pub presence_items: Vec<MixPresenceItem>,
-    pub roster_change: Option<super::super::RosterChange>,
+    pub roster_change: Option<northstar_roster_core::RosterChange>,
 }
 
 #[derive(Clone, Debug)]
@@ -88,7 +88,7 @@ pub struct UpdateSubscriptionsOutcome {
 #[derive(Clone, Debug)]
 pub struct MixParticipantPreferenceUpdateOutcome {
     pub participant: MixParticipant,
-    pub roster_changes: Vec<(Uuid, super::super::RosterChange)>,
+    pub roster_changes: Vec<(Uuid, northstar_roster_core::RosterChange)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -131,7 +131,7 @@ pub struct MixAccessEntryUpdate<'a> {
 /// JID plus the publishing resource, never by the participant's real full
 /// JID.  Keeping this constructor beside persistence makes that privacy
 /// invariant hard to bypass accidentally.
-pub(crate) fn mix_presence_item_id(
+pub fn mix_presence_item_id(
     channel: &MixChannel,
     participant_id: Uuid,
     public_resource: &str,
@@ -149,7 +149,7 @@ pub(crate) fn mix_presence_item_id(
     Ok(encoded)
 }
 
-pub(super) fn canonical_user_bare(jid: &str) -> Result<String> {
+pub fn canonical_user_bare(jid: &str) -> Result<String> {
     let jid = northstar_xmpp_types::jid::CanonicalJid::parse(jid)?;
     anyhow::ensure!(
         jid.localpart().is_some(),
@@ -158,7 +158,7 @@ pub(super) fn canonical_user_bare(jid: &str) -> Result<String> {
     Ok(jid.bare())
 }
 
-pub(super) async fn pam_account_matches_actor_tx(
+pub async fn pam_account_matches_actor_tx(
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     actor_jid: &str,
@@ -177,17 +177,17 @@ pub(super) async fn pam_account_matches_actor_tx(
     .map_err(Into::into)
 }
 
-pub(super) fn canonical_service_domain(domain: &str) -> Result<String> {
+pub fn canonical_service_domain(domain: &str) -> Result<String> {
     northstar_xmpp_types::jid::prepare_domainpart(domain)
 }
 
-pub(super) fn canonical_channel_localpart(localpart: &str) -> Result<String> {
+pub fn canonical_channel_localpart(localpart: &str) -> Result<String> {
     let value = northstar_xmpp_types::jid::prepare_localpart(localpart)?;
     anyhow::ensure!(value.len() <= 1023, "MIX channel localpart is too large");
     Ok(value)
 }
 
-pub(super) fn channel_from_row(row: &sqlx::postgres::PgRow) -> MixChannel {
+pub fn channel_from_row(row: &sqlx::postgres::PgRow) -> MixChannel {
     let contacts = row
         .get::<serde_json::Value, _>("contacts")
         .as_array()
@@ -220,7 +220,7 @@ pub(super) fn channel_from_row(row: &sqlx::postgres::PgRow) -> MixChannel {
     }
 }
 
-pub(super) fn participant_from_row(row: &sqlx::postgres::PgRow) -> MixParticipant {
+pub fn participant_from_row(row: &sqlx::postgres::PgRow) -> MixParticipant {
     MixParticipant {
         participant_id: row.get("participant_id"),
         jid: row.get("jid"),
@@ -228,7 +228,9 @@ pub(super) fn participant_from_row(row: &sqlx::postgres::PgRow) -> MixParticipan
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_mix_channel(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     service_domain: &str,
     requested_localpart: Option<&str>,
@@ -308,6 +310,7 @@ pub async fn create_mix_channel(
     )
     .await?;
     finalize_federated_mix_mutation_tx(
+        effects,
         &mut transaction,
         federated,
         FederatedMixSuccess::Create {
@@ -336,7 +339,7 @@ pub async fn mix_channel(
     Ok(row.as_ref().map(channel_from_row))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn mix_channel_by_id(pool: &PgPool, channel_id: Uuid) -> Result<Option<MixChannel>> {
     let row = sqlx::query("SELECT * FROM mix_channels WHERE id = $1")
         .bind(channel_id)
@@ -525,6 +528,7 @@ pub async fn mix_channel_discoverable_to(
 }
 
 pub async fn destroy_mix_channel(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     channel_id: Uuid,
     actor: &str,
@@ -600,7 +604,7 @@ pub async fn destroy_mix_channel(
             .fetch_all(&mut *transaction)
             .await?;
     for user_id in local_users {
-        delete_mix_roster_tx(&mut transaction, user_id, &channel_jid).await?;
+        delete_mix_roster_tx(effects, &mut transaction, user_id, &channel_jid).await?;
     }
     sqlx::query("DELETE FROM mix_pam_memberships WHERE channel_jid = $1")
         .bind(&channel_jid)
@@ -611,6 +615,7 @@ pub async fn destroy_mix_channel(
         .execute(&mut *transaction)
         .await?;
     finalize_federated_mix_mutation_tx(
+        effects,
         &mut transaction,
         federated,
         FederatedMixSuccess::Destroy {

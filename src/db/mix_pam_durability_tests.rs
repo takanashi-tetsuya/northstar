@@ -1,5 +1,6 @@
-use super::*;
 use crate::db;
+use northstar_room_postgres::mix::*;
+use uuid::Uuid;
 
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]

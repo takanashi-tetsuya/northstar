@@ -4,9 +4,9 @@ use super::{
     local_caps_route_epoch_matches, session_entries_for_in, AppState, OnlineSession,
     RuntimeFederationPolicy,
 };
+use crate::db::room_effects::PostgresMixRepository;
 use crate::{
     cluster::{ClusterMixRouteLookup, ClusterNodeDelivery, NodeDeliveryReceipt},
-    db::mix_repository::PostgresMixRepository,
     s2s::FederationRouter,
     xmpp::outbound::MixDelivery,
     xmpp::{

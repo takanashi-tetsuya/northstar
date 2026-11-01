@@ -10,9 +10,7 @@ pub struct MixIntentEvidence {
     pub target_id: Option<Uuid>,
 }
 
-pub(in crate::db) fn foreground_existing(
-    raw: &MixIntentEvidence,
-) -> northstar_room_core::mix::Existing {
+pub fn foreground_existing(raw: &MixIntentEvidence) -> northstar_room_core::mix::Existing {
     northstar_room_core::mix::Existing {
         authoritative_id: raw.authoritative_id,
         semantic_key_id: raw.semantic_key_id.clone(),
@@ -33,7 +31,7 @@ pub struct MixBusinessIdentity<'a> {
 /// outcome even if the actor subsequently leaves, permissions change, or the
 /// retracted event ages out. A miss is not inserted here: first execution is
 /// still admitted only after all current authorization checks succeed.
-pub(super) async fn existing_mix_business_intent_tx(
+pub async fn existing_mix_business_intent_tx(
     transaction: &mut Transaction<'_, Postgres>,
     channel_id: Uuid,
     actor: &str,
@@ -101,7 +99,7 @@ pub async fn lookup_mix_business_intent(
     }))
 }
 
-pub(super) async fn admit_mix_business_intent_tx(
+pub async fn admit_mix_business_intent_tx(
     transaction: &mut Transaction<'_, Postgres>,
     channel_id: Uuid,
     actor: &str,
@@ -201,7 +199,7 @@ pub enum FederatedMixIqReplay {
     Conflict,
 }
 
-pub(super) fn validate_federated_mix_mutation(context: &FederatedMixMutation) -> Result<()> {
+pub fn validate_federated_mix_mutation(context: &FederatedMixMutation) -> Result<()> {
     anyhow::ensure!(
         northstar_xmpp_types::jid::prepare_domainpart(&context.authenticated_domain)?
             == context.authenticated_domain,
@@ -232,7 +230,7 @@ pub(super) fn validate_federated_mix_mutation(context: &FederatedMixMutation) ->
 /// the durable result. A changed request digest is handled by the same lookup
 /// as a conflict. The advisory key is only a serialization fence, never a
 /// security identity or durable commitment.
-pub(super) async fn guard_federated_mix_mutation_tx(
+pub async fn guard_federated_mix_mutation_tx(
     transaction: &mut Transaction<'_, Postgres>,
     context: Option<&FederatedMixMutation>,
 ) -> Result<()> {
@@ -282,7 +280,8 @@ pub(super) async fn guard_federated_mix_mutation_tx(
 /// same transaction as the authoritative state change. Once this succeeds,
 /// a process kill can at worst delay delivery; an exact retry returns the
 /// journaled bytes and never executes the business mutation again.
-pub(super) async fn finalize_federated_mix_mutation_tx(
+pub async fn finalize_federated_mix_mutation_tx(
+    effects: &impl crate::effects::RoomEffects,
     transaction: &mut Transaction<'_, Postgres>,
     context: Option<&FederatedMixMutation>,
     success: FederatedMixSuccess,
@@ -314,14 +313,15 @@ pub(super) async fn finalize_federated_mix_mutation_tx(
         inserted == 1,
         "federated MIX result fence changed inside one transaction"
     );
-    super::super::enqueue_s2s_outbox_in_transaction(
-        transaction,
-        &context.authenticated_domain,
-        &response,
-        None,
-        context.policy,
-    )
-    .await?;
+    effects
+        .enqueue_federated_stanza(
+            transaction,
+            &context.authenticated_domain,
+            &response,
+            None,
+            context.policy,
+        )
+        .await?;
     Ok(())
 }
 
@@ -361,14 +361,16 @@ pub async fn federated_mix_iq_replay(
 /// Persist the exact authenticated mutation result and admit its S2S reply in
 /// one transaction. A retry with changed bytes cannot reuse the IQ id; an
 /// exact retry re-enqueues the original result rather than recomputing it.
+#[allow(clippy::too_many_arguments)]
 pub async fn admit_federated_mix_iq_result(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     authenticated_domain: &str,
     actor_jid: &str,
     request_id: &str,
     request_digest: &[u8; 32],
     response: &str,
-    policy: super::super::S2sOutboxPolicy,
+    policy: northstar_federation_core::S2sOutboxPolicy,
 ) -> Result<FederatedMixIqReplay> {
     let authenticated_domain = northstar_xmpp_types::jid::prepare_domainpart(authenticated_domain)?;
     let actor_jid = northstar_xmpp_types::jid::CanonicalJid::parse(actor_jid)?.to_string();
@@ -423,14 +425,15 @@ pub async fn admit_federated_mix_iq_result(
         }
         row.get("response")
     };
-    super::super::enqueue_s2s_outbox_in_transaction(
-        &mut transaction,
-        &authenticated_domain,
-        &exact_response,
-        None,
-        policy,
-    )
-    .await?;
+    effects
+        .enqueue_federated_stanza(
+            &mut transaction,
+            &authenticated_domain,
+            &exact_response,
+            None,
+            policy,
+        )
+        .await?;
     transaction.commit().await?;
     Ok(FederatedMixIqReplay::Replay(exact_response))
 }

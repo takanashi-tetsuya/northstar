@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl MixRepository for PostgresMixRepository {
+impl<E: RoomEffects> MixRepository for PostgresMixRepository<E> {
     async fn link_local_muc_mirror(
         &self,
         mix_domain: &str,
@@ -11,7 +11,7 @@ impl MixRepository for PostgresMixRepository {
         local_domain: &str,
     ) -> Result<MixMucLinkOutcome> {
         Ok(map_mix_muc_link_outcome(
-            db::link_mix_muc_by_localpart(
+            crate::mix_muc::link_mix_muc_by_localpart(
                 &self.pool,
                 mix_domain,
                 localpart,
@@ -29,7 +29,8 @@ impl MixRepository for PostgresMixRepository {
         max_channels_per_owner: i64,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<(CreateChannelOutcome, String)> {
-        let (outcome, localpart) = db::create_mix_channel(
+        let (outcome, localpart) = crate::mix::create_mix_channel(
+            &self.effects,
             &self.pool,
             service_domain,
             requested_localpart,
@@ -46,7 +47,7 @@ impl MixRepository for PostgresMixRepository {
         service_domain: &str,
         localpart: &str,
     ) -> Result<Option<MixChannel>> {
-        db::mix_channel(&self.pool, service_domain, localpart).await
+        crate::mix::mix_channel(&self.pool, service_domain, localpart).await
     }
     async fn discoverable_mix_channel_page(
         &self,
@@ -56,7 +57,7 @@ impl MixRepository for PostgresMixRepository {
         before: Option<Option<&str>>,
         max: i64,
     ) -> Result<Option<MixDiscoPage>> {
-        Ok(db::discoverable_mix_channel_page(
+        Ok(crate::mix::discoverable_mix_channel_page(
             &self.pool,
             service_domain,
             requester,
@@ -72,10 +73,10 @@ impl MixRepository for PostgresMixRepository {
         }))
     }
     async fn mix_role(&self, channel_id: Uuid, jid: &str) -> Result<Option<String>> {
-        db::mix_role(&self.pool, channel_id, jid).await
+        crate::mix::mix_role(&self.pool, channel_id, jid).await
     }
     async fn mix_channel_discoverable_to(&self, channel: &MixChannel, actor: &str) -> Result<bool> {
-        db::mix_channel_discoverable_to(&self.pool, channel, actor).await
+        crate::mix::mix_channel_discoverable_to(&self.pool, channel, actor).await
     }
     async fn destroy_mix_channel(
         &self,
@@ -83,7 +84,15 @@ impl MixRepository for PostgresMixRepository {
         actor: &str,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<bool> {
-        db::destroy_mix_channel(&self.pool, channel_id, actor, &MixPayloads, federated).await
+        crate::mix::destroy_mix_channel(
+            &self.effects,
+            &self.pool,
+            channel_id,
+            actor,
+            &MixPayloads,
+            federated,
+        )
+        .await
     }
     async fn join_mix_channel(
         &self,
@@ -97,13 +106,14 @@ impl MixRepository for PostgresMixRepository {
         let db_invitation = request
             .invitation
             .as_ref()
-            .map(db::MixInvitationProof::from);
+            .map(crate::mix::MixInvitationProof::from);
         let db_preference = request.preference.as_ref().cloned();
 
-        let outcome = db::join_mix_channel(
+        let outcome = crate::mix::join_mix_channel(
+            &self.effects,
             &self.pool,
             channel_id,
-            db::JoinMixRequest {
+            crate::mix::JoinMixRequest {
                 actor_jid: &request.actor_jid,
                 nick: request.nick.as_deref(),
                 nodes: &request.nodes,
@@ -119,28 +129,28 @@ impl MixRepository for PostgresMixRepository {
         Ok(join_outcome(outcome))
     }
     async fn mix_participant(&self, channel_id: Uuid, jid: &str) -> Result<Option<MixParticipant>> {
-        db::mix_participant(&self.pool, channel_id, jid).await
+        crate::mix::mix_participant(&self.pool, channel_id, jid).await
     }
     async fn mix_participant_by_id(
         &self,
         channel_id: Uuid,
         participant_id: Uuid,
     ) -> Result<Option<MixParticipant>> {
-        db::mix_participant_by_id(&self.pool, channel_id, participant_id).await
+        crate::mix::mix_participant_by_id(&self.pool, channel_id, participant_id).await
     }
     async fn mix_presence_source_jid(
         &self,
         channel_id: Uuid,
         item_id: &str,
     ) -> Result<Option<String>> {
-        db::mix_presence_source_jid(&self.pool, channel_id, item_id).await
+        crate::mix::mix_presence_source_jid(&self.pool, channel_id, item_id).await
     }
     async fn expire_unrefreshed_mix_presence(
         &self,
         cutoff: DateTime<Utc>,
     ) -> Result<Vec<ExpiredMixPresence>> {
         Ok(
-            db::expire_unrefreshed_mix_presence(&self.pool, cutoff, &MixPayloads)
+            crate::mix::expire_unrefreshed_mix_presence(&self.pool, cutoff, &MixPayloads)
                 .await?
                 .into_iter()
                 .map(|expired| ExpiredMixPresence {
@@ -161,7 +171,8 @@ impl MixRepository for PostgresMixRepository {
         unsubscribe: &[String],
         federated: Option<&FederatedMixMutation>,
     ) -> Result<Option<UpdateSubscriptionsOutcome>> {
-        Ok(db::update_mix_subscriptions(
+        Ok(crate::mix::update_mix_subscriptions(
+            &self.effects,
             &self.pool,
             channel_id,
             actor,
@@ -189,12 +200,20 @@ impl MixRepository for PostgresMixRepository {
         federated: Option<&FederatedMixMutation>,
     ) -> Result<std::result::Result<MixParticipant, SetNickError>> {
         Ok(
-            match db::set_mix_nick(&self.pool, channel_id, actor, nick, &MixPayloads, federated)
-                .await?
+            match crate::mix::set_mix_nick(
+                &self.effects,
+                &self.pool,
+                channel_id,
+                actor,
+                nick,
+                &MixPayloads,
+                federated,
+            )
+            .await?
             {
                 Ok(stored_participant) => Ok(stored_participant),
-                Err(db::SetNickError::NotParticipant) => Err(SetNickError::NotParticipant),
-                Err(db::SetNickError::Conflict) => Err(SetNickError::Conflict),
+                Err(crate::mix::SetNickError::NotParticipant) => Err(SetNickError::NotParticipant),
+                Err(crate::mix::SetNickError::Conflict) => Err(SetNickError::Conflict),
             },
         )
     }
@@ -205,7 +224,8 @@ impl MixRepository for PostgresMixRepository {
         pam_user_id: Option<Uuid>,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<Option<LeaveMixOutcome>> {
-        Ok(db::leave_mix_channel(
+        Ok(crate::mix::leave_mix_channel(
+            &self.effects,
             &self.pool,
             channel_id,
             actor,
@@ -229,7 +249,7 @@ impl MixRepository for PostgresMixRepository {
         unavailable: bool,
     ) -> Result<PresenceOutcome> {
         Ok(presence_outcome(
-            db::store_mix_presence(
+            crate::mix::store_mix_presence(
                 &self.pool,
                 channel_id,
                 actor_bare,
@@ -249,7 +269,7 @@ impl MixRepository for PostgresMixRepository {
         payload: &str,
     ) -> Result<PresenceOutcome> {
         Ok(presence_outcome(
-            db::ensure_mix_presence(
+            crate::mix::ensure_mix_presence(
                 &self.pool,
                 channel_id,
                 actor_bare,
@@ -281,14 +301,14 @@ impl MixRepository for PostgresMixRepository {
                 .zip(authenticators.as_ref())
                 .map(|(identity, authenticators)| {
                     let primary = authenticators.primary();
-                    db::MixBusinessIdentity {
+                    crate::mix::MixBusinessIdentity {
                         client_id: &identity.client_id,
                         semantic_key_id: primary.key_id(),
                         semantic_mac: primary.mac(),
                     }
                 });
 
-        let admission = db::store_mix_message(
+        let admission = crate::mix::store_mix_message(
             &self.pool,
             channel_id,
             actor,
@@ -303,7 +323,7 @@ impl MixRepository for PostgresMixRepository {
         .await?;
 
         let outcome = match admission.outcome {
-            db::StoreEventOutcome::Existing(existing) => {
+            crate::mix::StoreEventOutcome::Existing(existing) => {
                 let exact = authenticators.as_ref().is_some_and(|authenticators| {
                     existing.target_id.is_none()
                         && authenticators
@@ -330,7 +350,7 @@ impl MixRepository for PostgresMixRepository {
         let identity = request.command().identity.as_ref().zip(authenticators).map(
             |(identity, authenticators)| {
                 let primary = authenticators.primary();
-                db::MixBusinessIdentity {
+                crate::mix::MixBusinessIdentity {
                     client_id: &identity.client_id,
                     semantic_key_id: primary.key_id(),
                     semantic_mac: primary.mac(),
@@ -338,10 +358,11 @@ impl MixRepository for PostgresMixRepository {
             },
         );
         let admission =
-            db::store_mix_message_observed(&self.pool, request, identity, &MixPayloads).await?;
+            crate::mix::store_mix_message_observed(&self.pool, request, identity, &MixPayloads)
+                .await?;
         let outcome = match admission.outcome {
-            db::StoreEventOutcome::Existing(existing) => {
-                let raw = db::mix::foreground_existing(&existing);
+            crate::mix::StoreEventOutcome::Existing(existing) => {
+                let raw = crate::mix::foreground_existing(&existing);
                 let exact = authenticators.is_some_and(|authenticators| {
                     existing.target_id.is_none()
                         && authenticators
@@ -377,7 +398,7 @@ impl MixRepository for PostgresMixRepository {
             .identity
             .as_ref()
             .ok_or(foreground::Rejected::Input)?;
-        let existing = db::lookup_mix_business_intent(
+        let existing = crate::mix::lookup_mix_business_intent(
             &self.pool,
             ingress.channel_id,
             &ingress.actor_bare,
@@ -389,7 +410,7 @@ impl MixRepository for PostgresMixRepository {
             request.observed_miss()?;
             return Ok(MixBusinessReplay::Miss);
         };
-        let raw = db::mix::foreground_existing(&existing);
+        let raw = crate::mix::foreground_existing(&existing);
         request.observed_existing(raw.clone())?;
         let result = if existing.target_id.is_none()
             && authenticators.verifies(&existing.semantic_key_id, &existing.semantic_mac)
@@ -409,7 +430,7 @@ impl MixRepository for PostgresMixRepository {
         identity: &MixReplayIdentity,
         authenticators: &northstar_abuse_policy::ContentIdentityAuthenticators,
     ) -> Result<MixBusinessReplay> {
-        let existing = db::lookup_mix_business_intent(
+        let existing = crate::mix::lookup_mix_business_intent(
             &self.pool,
             channel_id,
             actor,
@@ -437,7 +458,7 @@ impl MixRepository for PostgresMixRepository {
         identity: &MixReplayIdentity,
         authenticators: &northstar_abuse_policy::ContentIdentityAuthenticators,
     ) -> Result<MixBusinessReplay> {
-        let existing = db::lookup_mix_business_intent(
+        let existing = crate::mix::lookup_mix_business_intent(
             &self.pool,
             channel_id,
             actor,
@@ -466,14 +487,16 @@ impl MixRepository for PostgresMixRepository {
         limit: i64,
     ) -> Result<MixReadOutcome<MixEventPage>> {
         Ok(
-            match db::authorized_mix_event_page(&self.pool, channel_id, actor, node, before, limit)
-                .await?
+            match crate::mix::authorized_mix_event_page(
+                &self.pool, channel_id, actor, node, before, limit,
+            )
+            .await?
             {
-                db::MixReadOutcome::Found(page) => MixReadOutcome::Found(MixEventPage {
+                crate::mix::MixReadOutcome::Found(page) => MixReadOutcome::Found(MixEventPage {
                     events: page.events.into_iter().map(event).collect(),
                 }),
-                db::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
-                db::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
+                crate::mix::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
+                crate::mix::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
             },
         )
     }
@@ -486,7 +509,8 @@ impl MixRepository for PostgresMixRepository {
         payload: &str,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<bool> {
-        db::publish_mix_avatar(
+        crate::mix::publish_mix_avatar(
+            &self.effects,
             &self.pool,
             channel_id,
             actor,
@@ -506,7 +530,8 @@ impl MixRepository for PostgresMixRepository {
         item_id: &str,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<bool> {
-        db::retract_mix_avatar(
+        crate::mix::retract_mix_avatar(
+            &self.effects,
             &self.pool,
             channel_id,
             actor,
@@ -525,7 +550,7 @@ impl MixRepository for PostgresMixRepository {
         query: &MamArchiveQuery,
     ) -> Result<MixReadOutcome<MixMamPage>> {
         Ok(
-            match db::authorized_mix_mam_page(
+            match crate::mix::authorized_mix_mam_page(
                 &self.pool,
                 channel_id,
                 actor,
@@ -534,9 +559,9 @@ impl MixRepository for PostgresMixRepository {
             )
             .await?
             {
-                db::MixReadOutcome::Found(page) => MixReadOutcome::Found(mam_page(page)),
-                db::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
-                db::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
+                crate::mix::MixReadOutcome::Found(page) => MixReadOutcome::Found(mam_page(page)),
+                crate::mix::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
+                crate::mix::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
             },
         )
     }
@@ -547,14 +572,16 @@ impl MixRepository for PostgresMixRepository {
         viewer_id: Option<Uuid>,
     ) -> Result<MixReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>> {
         Ok(
-            match db::authorized_mix_mam_boundaries(&self.pool, channel_id, actor, viewer_id)
-                .await?
+            match crate::mix::authorized_mix_mam_boundaries(
+                &self.pool, channel_id, actor, viewer_id,
+            )
+            .await?
             {
-                db::MixReadOutcome::Found((first, last)) => {
+                crate::mix::MixReadOutcome::Found((first, last)) => {
                     MixReadOutcome::Found((first.map(boundary), last.map(boundary)))
                 }
-                db::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
-                db::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
+                crate::mix::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
+                crate::mix::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
             },
         )
     }
@@ -566,12 +593,14 @@ impl MixRepository for PostgresMixRepository {
         limit: i64,
     ) -> Result<MixReadOutcome<Vec<String>>> {
         Ok(
-            match db::authorized_mix_access_entries(&self.pool, channel_id, actor, banned, limit)
-                .await?
+            match crate::mix::authorized_mix_access_entries(
+                &self.pool, channel_id, actor, banned, limit,
+            )
+            .await?
             {
-                db::MixReadOutcome::Found(entries) => MixReadOutcome::Found(entries),
-                db::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
-                db::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
+                crate::mix::MixReadOutcome::Found(entries) => MixReadOutcome::Found(entries),
+                crate::mix::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
+                crate::mix::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
             },
         )
     }
@@ -583,11 +612,12 @@ impl MixRepository for PostgresMixRepository {
         federated: Option<&FederatedMixMutation>,
     ) -> Result<MixMutationOutcome> {
         Ok(
-            match db::update_mix_info(
+            match crate::mix::update_mix_info(
+                &self.effects,
                 &self.pool,
                 channel_id,
                 actor,
-                db::MixInfoUpdate {
+                crate::mix::MixInfoUpdate {
                     item_id: &update.item_id,
                     expected_revision: update.expected_revision,
                     name: update.name.as_deref(),
@@ -599,12 +629,12 @@ impl MixRepository for PostgresMixRepository {
             )
             .await?
             {
-                db::MixMutationOutcome::Applied(admission) => {
+                crate::mix::MixMutationOutcome::Applied(admission) => {
                     MixMutationOutcome::Applied(Box::new(mutation_admission(*admission)))
                 }
-                db::MixMutationOutcome::Conflict => MixMutationOutcome::Conflict,
-                db::MixMutationOutcome::Forbidden => MixMutationOutcome::Forbidden,
-                db::MixMutationOutcome::NotFound => MixMutationOutcome::NotFound,
+                crate::mix::MixMutationOutcome::Conflict => MixMutationOutcome::Conflict,
+                crate::mix::MixMutationOutcome::Forbidden => MixMutationOutcome::Forbidden,
+                crate::mix::MixMutationOutcome::NotFound => MixMutationOutcome::NotFound,
             },
         )
     }
@@ -617,11 +647,12 @@ impl MixRepository for PostgresMixRepository {
         federated: Option<&FederatedMixMutation>,
     ) -> Result<MixMutationOutcome> {
         Ok(
-            match db::update_mix_config(
+            match crate::mix::update_mix_config(
+                &self.effects,
                 &self.pool,
                 channel_id,
                 actor,
-                db::MixConfigUpdate {
+                crate::mix::MixConfigUpdate {
                     item_id: &update.item_id,
                     expected_revision: update.expected_revision,
                     access_model: &update.access_model,
@@ -635,7 +666,7 @@ impl MixRepository for PostgresMixRepository {
                     administrator_retraction_rights: &update.administrator_retraction_rights,
                     enforce_registered_nick: update.enforce_registered_nick,
                 },
-                db::MixRoleUpdate {
+                crate::mix::MixRoleUpdate {
                     owners: roles.owners.as_deref(),
                     administrators: roles.administrators.as_deref(),
                 },
@@ -644,12 +675,12 @@ impl MixRepository for PostgresMixRepository {
             )
             .await?
             {
-                db::MixMutationOutcome::Applied(admission) => {
+                crate::mix::MixMutationOutcome::Applied(admission) => {
                     MixMutationOutcome::Applied(Box::new(mutation_admission(*admission)))
                 }
-                db::MixMutationOutcome::Conflict => MixMutationOutcome::Conflict,
-                db::MixMutationOutcome::Forbidden => MixMutationOutcome::Forbidden,
-                db::MixMutationOutcome::NotFound => MixMutationOutcome::NotFound,
+                crate::mix::MixMutationOutcome::Conflict => MixMutationOutcome::Conflict,
+                crate::mix::MixMutationOutcome::Forbidden => MixMutationOutcome::Forbidden,
+                crate::mix::MixMutationOutcome::NotFound => MixMutationOutcome::NotFound,
             },
         )
     }
@@ -659,19 +690,20 @@ impl MixRepository for PostgresMixRepository {
         federated: Option<&FederatedMixMutation>,
     ) -> Result<Option<AccessChangeOutcome>> {
         let list = match update.list {
-            MixAccessList::Allowed => db::MixAccessList::Allowed,
-            MixAccessList::Banned => db::MixAccessList::Banned,
+            MixAccessList::Allowed => crate::mix::MixAccessList::Allowed,
+            MixAccessList::Banned => crate::mix::MixAccessList::Banned,
         };
         let operation = match update.operation {
             MixAccessEntryOperation::Publish { reason } => {
-                db::MixAccessEntryOperation::Publish { reason }
+                crate::mix::MixAccessEntryOperation::Publish { reason }
             }
-            MixAccessEntryOperation::Retract => db::MixAccessEntryOperation::Retract,
+            MixAccessEntryOperation::Retract => crate::mix::MixAccessEntryOperation::Retract,
         };
 
-        Ok(db::set_mix_access_entry(
+        Ok(crate::mix::set_mix_access_entry(
+            &self.effects,
             &self.pool,
-            db::MixAccessEntryUpdate {
+            crate::mix::MixAccessEntryUpdate {
                 channel_id: update.channel_id,
                 actor: update.actor,
                 pattern: update.pattern,
@@ -692,7 +724,8 @@ impl MixRepository for PostgresMixRepository {
         federated: Option<&FederatedMixMutation>,
     ) -> Result<RegisterMixNickOutcome> {
         Ok(
-            match db::register_mix_nick(
+            match crate::mix::register_mix_nick(
+                &self.effects,
                 &self.pool,
                 service_domain,
                 actor,
@@ -702,10 +735,10 @@ impl MixRepository for PostgresMixRepository {
             )
             .await?
             {
-                db::RegisterMixNickOutcome::Registered { nick } => {
+                crate::mix::RegisterMixNickOutcome::Registered { nick } => {
                     RegisterMixNickOutcome::Registered { nick }
                 }
-                db::RegisterMixNickOutcome::Conflict => RegisterMixNickOutcome::Conflict,
+                crate::mix::RegisterMixNickOutcome::Conflict => RegisterMixNickOutcome::Conflict,
             },
         )
     }
@@ -714,7 +747,7 @@ impl MixRepository for PostgresMixRepository {
         channel_id: Uuid,
         actor: &str,
     ) -> Result<Option<MixParticipantPreference>> {
-        db::mix_participant_preference(&self.pool, channel_id, actor).await
+        crate::mix::mix_participant_preference(&self.pool, channel_id, actor).await
     }
     async fn update_mix_participant_preference(
         &self,
@@ -723,7 +756,8 @@ impl MixRepository for PostgresMixRepository {
         preference: &MixParticipantPreference,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<Option<MixParticipantPreferenceUpdateOutcome>> {
-        Ok(db::update_mix_participant_preference(
+        Ok(crate::mix::update_mix_participant_preference(
+            &self.effects,
             &self.pool,
             channel_id,
             actor,
@@ -744,10 +778,12 @@ impl MixRepository for PostgresMixRepository {
         limit: i64,
     ) -> Result<MixReadOutcome<Vec<(String, String)>>> {
         Ok(
-            match db::authorized_mix_jid_map_entries(&self.pool, channel_id, actor, limit).await? {
-                db::MixReadOutcome::Found(entries) => MixReadOutcome::Found(entries),
-                db::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
-                db::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
+            match crate::mix::authorized_mix_jid_map_entries(&self.pool, channel_id, actor, limit)
+                .await?
+            {
+                crate::mix::MixReadOutcome::Found(entries) => MixReadOutcome::Found(entries),
+                crate::mix::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
+                crate::mix::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
             },
         )
     }
@@ -760,7 +796,8 @@ impl MixRepository for PostgresMixRepository {
         lifetime: chrono::Duration,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<bool> {
-        db::issue_mix_invitation(
+        crate::mix::issue_mix_invitation(
+            &self.effects,
             &self.pool,
             channel_id,
             inviter,
@@ -778,7 +815,8 @@ impl MixRepository for PostgresMixRepository {
         sender: &str,
         recipient_id: Uuid,
     ) -> Result<Option<(MixParticipant, MixParticipant)>> {
-        db::mix_private_message_recipient(&self.pool, channel_id, sender, recipient_id).await
+        crate::mix::mix_private_message_recipient(&self.pool, channel_id, sender, recipient_id)
+            .await
     }
     async fn retract_mix_message(
         &self,
@@ -801,14 +839,14 @@ impl MixRepository for PostgresMixRepository {
                 .zip(authenticators.as_ref())
                 .map(|(identity, authenticators)| {
                     let primary = authenticators.primary();
-                    db::MixBusinessIdentity {
+                    crate::mix::MixBusinessIdentity {
                         client_id: &identity.client_id,
                         semantic_key_id: primary.key_id(),
                         semantic_mac: primary.mac(),
                     }
                 });
 
-        let admission = db::retract_mix_message(
+        let admission = crate::mix::retract_mix_message(
             &self.pool,
             channel_id,
             actor,
@@ -839,9 +877,10 @@ impl MixRepository for PostgresMixRepository {
         request: BeginRemotePamJoin,
     ) -> Result<PamOperationReplay> {
         Ok(map_pam_replay(
-            db::begin_remote_pam_join(
+            crate::mix::begin_remote_pam_join(
+                &self.effects,
                 &self.pool,
-                db::BeginRemotePamJoin {
+                crate::mix::BeginRemotePamJoin {
                     user_id: request.user_id,
                     actor_jid: &request.actor_jid,
                     channel_jid: &request.channel_jid,
@@ -853,7 +892,7 @@ impl MixRepository for PostgresMixRepository {
                     request_digest: &request.request_digest,
                     remote_domain: &request.remote_domain,
                     outbound_stanza: &request.outbound_stanza,
-                    policy: db::S2sOutboxPolicy {
+                    policy: northstar_federation_core::S2sOutboxPolicy {
                         ttl_seconds: request.policy.ttl_seconds,
                         max_rows: request.policy.max_rows,
                         max_bytes: request.policy.max_bytes,
@@ -872,7 +911,7 @@ impl MixRepository for PostgresMixRepository {
         request_digest: &[u8; 32],
     ) -> Result<PamOperationReplay> {
         Ok(map_pam_replay(
-            db::lookup_remote_pam_operation(
+            crate::mix::lookup_remote_pam_operation(
                 &self.pool,
                 user_id,
                 requester_full_jid,
@@ -887,9 +926,10 @@ impl MixRepository for PostgresMixRepository {
         request: BeginRemotePamLeave,
     ) -> Result<PamOperationReplay> {
         Ok(map_pam_replay(
-            db::begin_remote_pam_leave(
+            crate::mix::begin_remote_pam_leave(
+                &self.effects,
                 &self.pool,
-                db::BeginRemotePamLeave {
+                crate::mix::BeginRemotePamLeave {
                     user_id: request.user_id,
                     actor_jid: &request.actor_jid,
                     channel_jid: &request.channel_jid,
@@ -899,7 +939,7 @@ impl MixRepository for PostgresMixRepository {
                     request_digest: &request.request_digest,
                     remote_domain: &request.remote_domain,
                     outbound_stanza: &request.outbound_stanza,
-                    policy: db::S2sOutboxPolicy {
+                    policy: northstar_federation_core::S2sOutboxPolicy {
                         ttl_seconds: request.policy.ttl_seconds,
                         max_rows: request.policy.max_rows,
                         max_bytes: request.policy.max_bytes,
@@ -919,13 +959,14 @@ impl MixRepository for PostgresMixRepository {
         response_digest: &[u8; 32],
         join: Option<RemotePamJoin<'_>>,
     ) -> Result<RemotePamCompletionOutcome> {
-        let join = join.map(|join| db::RemotePamJoin {
+        let join = join.map(|join| crate::mix::RemotePamJoin {
             participant_id: join.participant_id,
             subscriptions: join.subscriptions,
             nick: join.nick,
         });
         Ok(map_pam_completion(
-            db::complete_remote_pam_success(
+            crate::mix::complete_remote_pam_success(
+                &self.effects,
                 &self.pool,
                 authenticated_domain,
                 channel_jid,
@@ -950,7 +991,7 @@ impl MixRepository for PostgresMixRepository {
         condition: &str,
     ) -> Result<RemotePamCompletionOutcome> {
         Ok(map_pam_completion(
-            db::complete_remote_pam_error(
+            crate::mix::complete_remote_pam_error(
                 &self.pool,
                 authenticated_domain,
                 channel_jid,
@@ -965,7 +1006,7 @@ impl MixRepository for PostgresMixRepository {
         ))
     }
     async fn pam_memberships(&self, user_id: Uuid) -> Result<Vec<PamMembership>> {
-        Ok(db::pam_memberships(&self.pool, user_id)
+        Ok(crate::mix::pam_memberships(&self.pool, user_id)
             .await?
             .into_iter()
             .map(pam_membership)
@@ -976,19 +1017,19 @@ impl MixRepository for PostgresMixRepository {
         user_id: Uuid,
         channel_jid: &str,
     ) -> Result<Option<PamMembership>> {
-        Ok(db::pam_membership(&self.pool, user_id, channel_jid)
+        Ok(crate::mix::pam_membership(&self.pool, user_id, channel_jid)
             .await?
             .map(pam_membership))
     }
     async fn local_pam_users_for_channel(&self, channel_jid: &str) -> Result<Vec<Uuid>> {
-        db::local_pam_users_for_channel(&self.pool, channel_jid).await
+        crate::mix::local_pam_users_for_channel(&self.pool, channel_jid).await
     }
     async fn reconcile_expired_remote_pam(&self, limit: i64) -> Result<u64> {
-        db::reconcile_expired_remote_pam(&self.pool, limit, &MixPayloads).await
+        crate::mix::reconcile_expired_remote_pam(&self.pool, limit, &MixPayloads).await
     }
     async fn claim_pam_results(&self, limit: i64) -> Result<Vec<ClaimedPamResult>> {
         let results = {
-            let results = db::claim_pam_results(&self.pool, limit).await?;
+            let results = crate::mix::claim_pam_results(&self.pool, limit).await?;
             results
         };
         Ok(results
@@ -1004,10 +1045,10 @@ impl MixRepository for PostgresMixRepository {
             .collect())
     }
     async fn renew_pam_result_lease(&self, operation_id: Uuid, lease_token: Uuid) -> Result<bool> {
-        db::renew_pam_result_lease(&self.pool, operation_id, lease_token).await
+        crate::mix::renew_pam_result_lease(&self.pool, operation_id, lease_token).await
     }
     async fn acknowledge_pam_result(&self, operation_id: Uuid, lease_token: Uuid) -> Result<bool> {
-        db::acknowledge_pam_result(&self.pool, operation_id, lease_token).await
+        crate::mix::acknowledge_pam_result(&self.pool, operation_id, lease_token).await
     }
     async fn defer_pam_result(
         &self,
@@ -1015,7 +1056,7 @@ impl MixRepository for PostgresMixRepository {
         lease_token: Uuid,
         delay_seconds: i64,
     ) -> Result<bool> {
-        db::defer_pam_result(&self.pool, operation_id, lease_token, delay_seconds).await
+        crate::mix::defer_pam_result(&self.pool, operation_id, lease_token, delay_seconds).await
     }
     async fn retry_pam_result(
         &self,
@@ -1024,25 +1065,24 @@ impl MixRepository for PostgresMixRepository {
         attempt_count: i32,
         error: &str,
     ) -> Result<bool> {
-        db::retry_pam_result(&self.pool, operation_id, lease_token, attempt_count, error).await
+        crate::mix::retry_pam_result(&self.pool, operation_id, lease_token, attempt_count, error)
+            .await
     }
     async fn prune_expired_pam_results(&self, limit: i64) -> Result<u64> {
-        db::prune_expired_pam_results(&self.pool, limit).await
+        crate::mix::prune_expired_pam_results(&self.pool, limit).await
     }
     async fn find_enabled_user(&self, username: &str) -> Result<Option<MixAccount>> {
-        Ok(
-            northstar_auth_postgres::users::find_enabled_user(&self.pool, username)
-                .await?
-                .map(|user| MixAccount {
-                    id: user.id,
-                    username: user.username,
-                }),
-        )
+        Ok(crate::accounts::find_enabled_user(&self.pool, username)
+            .await?
+            .map(|user| MixAccount {
+                id: user.id,
+                username: user.username,
+            }))
     }
 
     async fn find_enabled_user_by_id(&self, user_id: Uuid) -> Result<Option<MixAccount>> {
         Ok(
-            northstar_auth_postgres::users::find_enabled_user_by_id(&self.pool, user_id)
+            crate::accounts::find_enabled_user_by_id(&self.pool, user_id)
                 .await?
                 .map(|user| MixAccount {
                     id: user.id,
@@ -1051,21 +1091,13 @@ impl MixRepository for PostgresMixRepository {
         )
     }
     async fn is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool> {
-        db::is_blocked(&self.pool, owner_id, candidate).await
+        self.effects
+            .is_blocked(&self.pool, owner_id, candidate)
+            .await
     }
 
     async fn pep_node(&self, owner_id: Uuid, node: &str) -> Result<Option<PepNodeConfig>> {
-        Ok(db::pep_node(&self.pool, owner_id, node)
-            .await?
-            .map(|config| PepNodeConfig {
-                access_model: config.access_model,
-                max_items: config.max_items,
-                persist_items: config.persist_items,
-                send_last_published_item: config.send_last_published_item,
-                deliver_notifications: config.deliver_notifications,
-                roster_groups_allowed: config.roster_groups_allowed,
-                access_whitelist: config.access_whitelist,
-            }))
+        self.effects.pep_node(&self.pool, owner_id, node).await
     }
     async fn pep_items(
         &self,
@@ -1074,33 +1106,38 @@ impl MixRepository for PostgresMixRepository {
         item_id: Option<&str>,
         limit: i64,
     ) -> Result<Vec<(String, String)>> {
-        db::pep_items(&self.pool, owner_id, node, item_id, limit).await
+        self.effects
+            .pep_items(&self.pool, owner_id, node, item_id, limit)
+            .await
     }
     async fn get_vcard(&self, user_id: Uuid) -> Result<VCardRecord> {
-        let record = db::get_vcard(&self.pool, user_id).await?;
-        Ok(VCardRecord {
-            payload_vcard_temp: record.payload_vcard_temp,
-        })
+        self.effects.get_vcard(&self.pool, user_id).await
     }
     async fn latest_roster_change_for_contact(
         &self,
         user_id: Uuid,
         contact_jid: &str,
     ) -> Result<Option<northstar_roster_core::RosterChange>> {
-        db::latest_roster_change_for_contact(&self.pool, user_id, contact_jid).await
+        self.effects
+            .latest_roster_change_for_contact(&self.pool, user_id, contact_jid)
+            .await
     }
     async fn mix_muc_mirror_for_mix(&self, mix_channel_id: Uuid) -> Result<Option<MixMucMirror>> {
-        Ok(db::mix_muc_mirror_for_mix(&self.pool, mix_channel_id)
-            .await?
-            .map(mix_muc_mirror))
+        Ok(
+            crate::mix_muc::mix_muc_mirror_for_mix(&self.pool, mix_channel_id)
+                .await?
+                .map(mix_muc_mirror),
+        )
     }
     async fn mix_muc_mirror_for_muc(&self, muc_room_id: Uuid) -> Result<Option<MixMucMirror>> {
-        Ok(db::mix_muc_mirror_for_muc(&self.pool, muc_room_id)
-            .await?
-            .map(mix_muc_mirror))
+        Ok(
+            crate::mix_muc::mix_muc_mirror_for_muc(&self.pool, muc_room_id)
+                .await?
+                .map(mix_muc_mirror),
+        )
     }
     async fn mix_muc_mirror_service_complete(&self, mix_domain: &str) -> Result<bool> {
-        db::mix_muc_mirror_service_complete(&self.pool, mix_domain).await
+        crate::mix_muc::mix_muc_mirror_service_complete(&self.pool, mix_domain).await
     }
     #[allow(clippy::too_many_arguments)]
     async fn archive_mix_message_once(
@@ -1113,8 +1150,8 @@ impl MixRepository for PostgresMixRepository {
         encrypted: bool,
         client_stanza_id: Option<&str>,
     ) -> Result<SourceArchiveAdmission> {
-        Ok(
-            match db::archive_mix_message_once(
+        self.effects
+            .archive_mix_message_once(
                 &self.pool,
                 personal_archive_id,
                 owner_id,
@@ -1124,12 +1161,7 @@ impl MixRepository for PostgresMixRepository {
                 encrypted,
                 client_stanza_id,
             )
-            .await?
-            {
-                db::SourceArchiveAdmission::Stored(id) => SourceArchiveAdmission::Stored(id),
-                db::SourceArchiveAdmission::Replay(id) => SourceArchiveAdmission::Replay(id),
-            },
-        )
+            .await
     }
 
     async fn enqueue_s2s_response_batch(
@@ -1138,7 +1170,7 @@ impl MixRepository for PostgresMixRepository {
         responses: &[String],
         policy: S2sOutboxPolicy,
     ) -> Result<()> {
-        let policy = db::S2sOutboxPolicy {
+        let policy = northstar_federation_core::S2sOutboxPolicy {
             ttl_seconds: policy.ttl_seconds,
             max_rows: policy.max_rows,
             max_bytes: policy.max_bytes,
@@ -1146,14 +1178,9 @@ impl MixRepository for PostgresMixRepository {
         };
         let mut transaction = self.pool.begin().await?;
         for response in responses {
-            db::enqueue_s2s_outbox_in_transaction(
-                &mut transaction,
-                target_domain,
-                response,
-                None,
-                policy,
-            )
-            .await?;
+            self.effects
+                .enqueue_federated_stanza(&mut transaction, target_domain, response, None, policy)
+                .await?;
         }
         transaction.commit().await?;
         Ok(())
@@ -1166,7 +1193,7 @@ impl MixRepository for PostgresMixRepository {
         request_digest: &[u8; 32],
     ) -> Result<FederatedMixIqReplay> {
         Ok(
-            match db::federated_mix_iq_replay(
+            match crate::mix::federated_mix_iq_replay(
                 &self.pool,
                 authenticated_domain,
                 actor_jid,
@@ -1175,11 +1202,11 @@ impl MixRepository for PostgresMixRepository {
             )
             .await?
             {
-                db::FederatedMixIqReplay::Miss => FederatedMixIqReplay::Miss,
-                db::FederatedMixIqReplay::Replay(response) => {
+                crate::mix::FederatedMixIqReplay::Miss => FederatedMixIqReplay::Miss,
+                crate::mix::FederatedMixIqReplay::Replay(response) => {
                     FederatedMixIqReplay::Replay(response)
                 }
-                db::FederatedMixIqReplay::Conflict => FederatedMixIqReplay::Conflict,
+                crate::mix::FederatedMixIqReplay::Conflict => FederatedMixIqReplay::Conflict,
             },
         )
     }
@@ -1192,14 +1219,15 @@ impl MixRepository for PostgresMixRepository {
         response: &str,
         policy: S2sOutboxPolicy,
     ) -> Result<FederatedMixIqReplay> {
-        let policy = db::S2sOutboxPolicy {
+        let policy = northstar_federation_core::S2sOutboxPolicy {
             ttl_seconds: policy.ttl_seconds,
             max_rows: policy.max_rows,
             max_bytes: policy.max_bytes,
             max_per_domain: policy.max_per_domain,
         };
         Ok(
-            match db::admit_federated_mix_iq_result(
+            match crate::mix::admit_federated_mix_iq_result(
+                &self.effects,
                 &self.pool,
                 authenticated_domain,
                 actor_jid,
@@ -1210,11 +1238,11 @@ impl MixRepository for PostgresMixRepository {
             )
             .await?
             {
-                db::FederatedMixIqReplay::Miss => FederatedMixIqReplay::Miss,
-                db::FederatedMixIqReplay::Replay(response) => {
+                crate::mix::FederatedMixIqReplay::Miss => FederatedMixIqReplay::Miss,
+                crate::mix::FederatedMixIqReplay::Replay(response) => {
                     FederatedMixIqReplay::Replay(response)
                 }
-                db::FederatedMixIqReplay::Conflict => FederatedMixIqReplay::Conflict,
+                crate::mix::FederatedMixIqReplay::Conflict => FederatedMixIqReplay::Conflict,
             },
         )
     }
@@ -1224,7 +1252,7 @@ impl MixRepository for PostgresMixRepository {
         max_bytes: i64,
     ) -> Result<Vec<ClaimedMixDelivery>> {
         let deliveries = {
-            let deliveries = db::claim_mix_deliveries(&self.pool, limit, max_bytes).await?;
+            let deliveries = crate::mix::claim_mix_deliveries(&self.pool, limit, max_bytes).await?;
             deliveries
         };
         Ok(deliveries
@@ -1249,16 +1277,20 @@ impl MixRepository for PostgresMixRepository {
         &self,
         request: &outbox::core::ClaimRequest,
     ) -> Result<outbox::core::Rows> {
-        db::claim_mix_deliveries_observed(&self.pool, request).await
+        crate::mix::claim_mix_deliveries_observed(&self.pool, request).await
     }
     async fn archive_mix_message_once_observed(
         &self,
         request: &outbox::core::ArchiveRequest,
     ) -> Result<outbox::core::ArchiveResult> {
         Ok(
-            match db::archive_mix_message_once_observed(&self.pool, request).await? {
-                db::SourceArchiveAdmission::Stored(id) => outbox::core::ArchiveResult::Stored(id),
-                db::SourceArchiveAdmission::Replay(id) => outbox::core::ArchiveResult::Replay(id),
+            match self
+                .effects
+                .archive_mix_message_once_observed(&self.pool, request)
+                .await?
+            {
+                SourceArchiveAdmission::Stored(id) => outbox::core::ArchiveResult::Stored(id),
+                SourceArchiveAdmission::Replay(id) => outbox::core::ArchiveResult::Replay(id),
             },
         )
     }
@@ -1266,7 +1298,7 @@ impl MixRepository for PostgresMixRepository {
         &self,
         request: &outbox::core::RenewalRequest,
     ) -> Result<bool> {
-        db::renew_mix_delivery_lease_observed(&self.pool, request).await
+        crate::mix::renew_mix_delivery_lease_observed(&self.pool, request).await
     }
     async fn settle_mix_delivery_observed(
         &self,
@@ -1275,27 +1307,27 @@ impl MixRepository for PostgresMixRepository {
         use outbox::core::{SettlementCommand, SettlementResult};
         Ok(match request.command() {
             SettlementCommand::Ack => SettlementResult::Ack(
-                db::acknowledge_mix_delivery_worker_observed(&self.pool, request).await?,
+                crate::mix::acknowledge_mix_delivery_worker_observed(&self.pool, request).await?,
             ),
             SettlementCommand::Defer { .. } => SettlementResult::Defer(
-                db::defer_mix_delivery_worker_observed(&self.pool, request).await?,
+                crate::mix::defer_mix_delivery_worker_observed(&self.pool, request).await?,
             ),
             SettlementCommand::Retry { .. } => SettlementResult::Retry(
-                db::retry_mix_delivery_worker_observed(&self.pool, request).await?,
+                crate::mix::retry_mix_delivery_worker_observed(&self.pool, request).await?,
             ),
             SettlementCommand::DeadLetter { .. } => SettlementResult::DeadLetter(
-                db::dead_letter_mix_delivery_worker_observed(&self.pool, request).await?,
+                crate::mix::dead_letter_mix_delivery_worker_observed(&self.pool, request).await?,
             ),
         })
     }
     async fn maintain_mix_delivery_retention(&self) -> Result<()> {
-        db::maintain_mix_delivery_retention(&self.pool).await
+        crate::mix::maintain_mix_delivery_retention(&self.pool).await
     }
     async fn prune_expired_business_intents(&self, limit: i64) -> Result<u64> {
-        db::prune_expired_mix_business_intents(&self.pool, limit).await
+        crate::mix::prune_expired_mix_business_intents(&self.pool, limit).await
     }
     async fn prune_expired_federated_iq_results(&self, limit: i64) -> Result<u64> {
-        db::prune_expired_federated_mix_iq_results(&self.pool, limit).await
+        crate::mix::prune_expired_federated_mix_iq_results(&self.pool, limit).await
     }
     async fn acknowledge_mix_delivery(
         &self,
@@ -1305,7 +1337,7 @@ impl MixRepository for PostgresMixRepository {
     ) -> Result<bool> {
         match observation {
             Some(observation) => {
-                db::mix::acknowledge_mix_delivery_observed(
+                crate::mix::acknowledge_mix_delivery_observed(
                     &self.pool,
                     delivery_id,
                     lease_token,
@@ -1313,23 +1345,25 @@ impl MixRepository for PostgresMixRepository {
                 )
                 .await
             }
-            None => db::acknowledge_mix_delivery(&self.pool, delivery_id, lease_token).await,
+            None => {
+                crate::mix::acknowledge_mix_delivery(&self.pool, delivery_id, lease_token).await
+            }
         }
     }
     async fn fence_mix_socket_write(
         &self,
-        source: crate::xmpp::outbound::MixDelivery,
-    ) -> Result<crate::xmpp::outbound::MixDelivery> {
-        db::mix::fence_mix_socket_write(&self.pool, source).await
+        source: northstar_delivery_core::MixDelivery,
+    ) -> Result<northstar_delivery_core::MixDelivery> {
+        crate::mix::fence_mix_socket_write(&self.pool, source).await
     }
     async fn transfer_mix_delivery_to_cluster(
         &self,
-        source: crate::xmpp::outbound::MixDelivery,
+        source: northstar_delivery_core::MixDelivery,
         node_id: &str,
         request_id: Uuid,
         ttl_seconds: u64,
-    ) -> Result<crate::xmpp::outbound::MixDelivery> {
-        db::mix::transfer_mix_delivery_to_cluster(
+    ) -> Result<northstar_delivery_core::MixDelivery> {
+        crate::mix::transfer_mix_delivery_to_cluster(
             &self.pool,
             source,
             node_id,
@@ -1340,24 +1374,25 @@ impl MixRepository for PostgresMixRepository {
     }
     async fn release_mix_cluster_delivery(
         &self,
-        source: crate::xmpp::outbound::MixDelivery,
+        source: northstar_delivery_core::MixDelivery,
         node_id: &str,
         request_id: Uuid,
     ) -> Result<bool> {
         let released =
-            db::mix::release_mix_cluster_delivery(&self.pool, source, node_id, request_id).await?;
+            crate::mix::release_mix_cluster_delivery(&self.pool, source, node_id, request_id)
+                .await?;
 
         Ok(released)
     }
     async fn transfer_mix_delivery_to_bosh(
         &self,
         request: &northstar_delivery_core::bosh_ownership::TransferRequest,
-    ) -> Result<crate::xmpp::outbound::MixDelivery> {
-        db::mix::transfer_mix_delivery_to_bosh(&self.pool, request).await
+    ) -> Result<northstar_delivery_core::MixDelivery> {
+        crate::mix::transfer_mix_delivery_to_bosh(&self.pool, request).await
     }
 
     async fn renew_mix_delivery_lease(&self, delivery_id: Uuid, lease_token: Uuid) -> Result<bool> {
-        db::renew_mix_delivery_lease(&self.pool, delivery_id, lease_token).await
+        crate::mix::renew_mix_delivery_lease(&self.pool, delivery_id, lease_token).await
     }
     async fn dead_letter_mix_delivery(
         &self,
@@ -1366,7 +1401,7 @@ impl MixRepository for PostgresMixRepository {
         terminal_reason: &str,
         error: &str,
     ) -> Result<bool> {
-        let moved = db::dead_letter_mix_delivery(
+        let moved = crate::mix::dead_letter_mix_delivery(
             &self.pool,
             delivery_id,
             lease_token,
@@ -1389,7 +1424,7 @@ impl MixRepository for PostgresMixRepository {
         // exact lease row lock. Keep the protocol-facing snapshot argument
         // until the protocol completion DTO can be narrowed independently,
         // but never let it decide the terminal boundary.
-        let outcome = db::retry_mix_delivery(
+        let outcome = crate::mix::retry_mix_delivery(
             &self.pool,
             delivery_id,
             lease_token,
@@ -1406,7 +1441,7 @@ impl MixRepository for PostgresMixRepository {
         route_wake_generation: i64,
         delay_seconds: i64,
     ) -> Result<bool> {
-        db::defer_mix_delivery(
+        crate::mix::defer_mix_delivery(
             &self.pool,
             delivery_id,
             lease_token,
@@ -1416,7 +1451,7 @@ impl MixRepository for PostgresMixRepository {
         .await
     }
     async fn wake_mix_delivery_recipient(&self, recipient_jid: &str) -> Result<u64> {
-        let woken = db::wake_mix_delivery_recipient(&self.pool, recipient_jid).await?;
+        let woken = crate::mix::wake_mix_delivery_recipient(&self.pool, recipient_jid).await?;
 
         Ok(woken)
     }
@@ -1426,7 +1461,8 @@ impl MixRepository for PostgresMixRepository {
         before: Option<(DateTime<Utc>, Uuid)>,
         limit: i64,
     ) -> Result<Vec<MixDeliveryDeadLetter>> {
-        let dead_letters = { db::mix_delivery_dead_letters(&self.pool, before, limit).await? };
+        let dead_letters =
+            { crate::mix::mix_delivery_dead_letters(&self.pool, before, limit).await? };
         Ok(dead_letters
             .into_iter()
             .map(|dead| MixDeliveryDeadLetter {
@@ -1445,7 +1481,8 @@ impl MixRepository for PostgresMixRepository {
     }
     #[allow(dead_code)]
     async fn requeue_mix_delivery_dead_letter(&self, dead_letter_id: Uuid) -> Result<bool> {
-        let requeued = db::requeue_mix_delivery_dead_letter(&self.pool, dead_letter_id).await?;
+        let requeued =
+            crate::mix::requeue_mix_delivery_dead_letter(&self.pool, dead_letter_id).await?;
 
         Ok(requeued)
     }

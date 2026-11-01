@@ -45,7 +45,7 @@ pub async fn ensure_mix_presence(
     clippy::too_many_arguments,
     reason = "the MIX presence transaction keeps identity, payload, availability, and replacement policy explicit"
 )]
-pub(super) async fn store_mix_presence_with_policy(
+pub async fn store_mix_presence_with_policy(
     pool: &PgPool,
     channel_id: Uuid,
     actor_bare: &str,
@@ -264,7 +264,7 @@ pub async fn store_mix_message_observed(
     clippy::too_many_arguments,
     reason = "one shared existing transaction keeps the bound compatibility and observed inputs explicit"
 )]
-pub(super) async fn store_mix_message_inner(
+pub async fn store_mix_message_inner(
     pool: &PgPool,
     channel_id: Uuid,
     actor: &str,
@@ -433,7 +433,7 @@ pub(super) async fn store_mix_message_inner(
     }
 }
 
-pub(super) async fn authorize_mix_node_read_tx(
+pub async fn authorize_mix_node_read_tx(
     transaction: &mut Transaction<'_, Postgres>,
     channel_id: Uuid,
     actor: &str,
@@ -546,6 +546,7 @@ pub async fn authorized_mix_event_page(
     reason = "the atomic avatar mutation keeps its authorization, event, renderer, and federation inputs explicit"
 )]
 pub async fn publish_mix_avatar(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     channel_id: Uuid,
     actor: &str,
@@ -617,6 +618,7 @@ pub async fn publish_mix_avatar(
     )
     .await?;
     finalize_federated_mix_mutation_tx(
+        effects,
         &mut transaction,
         federated,
         FederatedMixSuccess::PubSubPublish {
@@ -630,7 +632,9 @@ pub async fn publish_mix_avatar(
     Ok(true)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn retract_mix_avatar(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     channel_id: Uuid,
     actor: &str,
@@ -692,6 +696,7 @@ pub async fn retract_mix_avatar(
         .await?;
     }
     finalize_federated_mix_mutation_tx(
+        effects,
         &mut transaction,
         federated,
         FederatedMixSuccess::PubSubEmpty,

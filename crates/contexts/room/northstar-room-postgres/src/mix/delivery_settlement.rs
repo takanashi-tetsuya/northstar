@@ -19,7 +19,7 @@ pub async fn renew_mix_delivery_lease_observed(
         .await
 }
 
-pub(super) async fn renew_mix_delivery_lease_inner(
+pub async fn renew_mix_delivery_lease_inner(
     pool: &PgPool,
     delivery_id: Uuid,
     lease_token: Uuid,
@@ -84,7 +84,7 @@ pub async fn dead_letter_mix_delivery_worker_observed(
     .await
 }
 
-pub(super) async fn dead_letter_mix_delivery_inner(
+pub async fn dead_letter_mix_delivery_inner(
     pool: &PgPool,
     delivery_id: Uuid,
     lease_token: Uuid,
@@ -153,7 +153,7 @@ pub async fn retry_mix_delivery_worker_observed(
     .await
 }
 
-pub(super) async fn retry_mix_delivery_inner(
+pub async fn retry_mix_delivery_inner(
     pool: &PgPool,
     delivery_id: Uuid,
     lease_token: Uuid,
@@ -320,7 +320,7 @@ pub async fn defer_mix_delivery_worker_observed(
     .await
 }
 
-pub(super) async fn defer_mix_delivery_inner(
+pub async fn defer_mix_delivery_inner(
     pool: &PgPool,
     delivery_id: Uuid,
     lease_token: Uuid,
@@ -366,7 +366,7 @@ pub(super) async fn defer_mix_delivery_inner(
     Ok(updated)
 }
 
-pub(super) async fn commit_mix_worker_settlement(
+pub async fn commit_mix_worker_settlement(
     transaction: Transaction<'_, Postgres>,
     observation: Option<&northstar_delivery_core::mix_outbox::SettlementRequest>,
     result: northstar_delivery_core::mix_outbox::SettlementResult,

@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use northstar_archive_application::MAX_MAM_PAGE_SIZE;
 use northstar_archive_core::{
     classify_mam_blocked_jids, finish_mam_page, mam_referenced_ids, mix_mam_peer_filter_allowed,
     resolve_mam_query, MamBlockedIdentitySource, MamBlockedPattern,
@@ -16,6 +15,9 @@ use std::{
     sync::atomic::Ordering,
 };
 use uuid::Uuid;
+
+/// The XEP parser's wire-level limit.
+const MAX_MAM_PAGE_SIZE: i64 = northstar_xep_0313::MAX_MAM_RESULTS as i64;
 
 mod admin;
 mod channel;
@@ -48,7 +50,7 @@ pub use self::nick_preference::*;
 pub use self::pam_completion::*;
 pub use self::pam_join::*;
 pub use self::participant::*;
-use self::projection::*;
+pub use self::projection::*;
 pub use self::publish::*;
 
 pub const NODE_MESSAGES: &str = "urn:xmpp:mix:nodes:messages";
@@ -75,13 +77,13 @@ pub const ALL_NODES: [&str; 10] = [
     NODE_AVATAR_METADATA,
 ];
 
-pub(crate) use northstar_room_application::mix_service::valid_stable_participant_id;
+pub use northstar_room_application::mix_service::valid_stable_participant_id;
 
-pub(crate) use northstar_room_application::mix_service::mix_timestamp_item_id;
+pub use northstar_room_application::mix_service::mix_timestamp_item_id;
 
-pub(crate) use northstar_room_application::mix_service::MixChannel;
+pub use northstar_room_application::mix_service::MixChannel;
 
-pub(crate) use northstar_room_application::mix_service::MixParticipant;
+pub use northstar_room_application::mix_service::MixParticipant;
 
 #[derive(Clone, Debug)]
 pub struct MixEvent {
@@ -139,27 +141,27 @@ pub struct PamMembership {
     pub subscriptions: Vec<String>,
 }
 
-pub(crate) use northstar_room_application::mix_service::MixParticipantPreference;
+pub use northstar_room_application::mix_service::MixParticipantPreference;
 
 /// Authenticated federation identity and durable reply policy attached to one
 /// mutating MIX IQ.  A successful repository mutation must journal its exact
 /// result and enqueue that result before the business transaction commits.
 /// Keeping this context explicit avoids task-local state leaking across
 /// unrelated async work and makes every mutation boundary reviewable.
-pub(crate) use northstar_room_application::mix_service::FederatedMixMutation;
+pub use northstar_room_application::mix_service::FederatedMixMutation;
 
 /// Typed successful effects from which the application serializer produces
 /// the exact IQ result persisted by the mutation transaction.
-pub(crate) use northstar_room_application::mix_service::FederatedMixSuccess;
+pub use northstar_room_application::mix_service::FederatedMixSuccess;
 
-pub(crate) use northstar_room_application::mix_service::MixPresenceDelivery;
+pub use northstar_room_application::mix_service::MixPresenceDelivery;
 
-pub(crate) use northstar_room_application::mix_service::PamJoinResult;
+pub use northstar_room_application::mix_service::PamJoinResult;
 
 /// Application-layer serializer used while a durable MIX mutation is still
 /// inside its database transaction. Persistence owns atomic storage, but it
 /// never constructs protocol XML or interpolates untrusted stanza values.
-pub(crate) use northstar_room_application::mix_service::MixEventPayloadRenderer;
+pub use northstar_room_application::mix_service::MixEventPayloadRenderer;
 
 #[derive(Clone, Debug)]
 pub struct ClaimedMixDelivery {
@@ -186,7 +188,7 @@ pub struct ClaimedMixDelivery {
 /// snapshot can be stale by the time the worker releases its lease.  In
 /// particular, a committed route wake at the attempt limit is a durable
 /// routing fact which gets one fresh claim before the normal terminal path.
-pub(crate) use northstar_room_application::mix_service::MixDeliveryRetryOutcome;
+pub use northstar_room_application::mix_service::MixDeliveryRetryOutcome;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PamOperationReplay {
@@ -230,7 +232,7 @@ pub struct MixDeliveryDeadLetter {
 
 const MIX_DELIVERY_MAX_ROWS: i64 = 100_000;
 const MIX_DELIVERY_MAX_BYTES: i64 = 268_435_456;
-const MIX_DELIVERY_RECIPIENT_OVERHEAD: i64 = 128;
+pub const MIX_DELIVERY_RECIPIENT_OVERHEAD: i64 = 128;
 const MIX_DELIVERY_DEAD_LETTER_LIMIT: i64 = 10_000;
 const MIX_DELIVERY_LEASE_SECONDS: i64 = 90;
 // Direct sockets have no peer acknowledgement below XEP-0198. Keep a
@@ -243,38 +245,15 @@ const MIX_SOCKET_WRITE_FENCE_SECONDS: i64 = 30;
 /// MIX recommends the RFC 7700 nickname profile of PRECIS OpaqueString. The
 /// resourcepart preparation used by RFC 7622 has the same case-preserving
 /// OpaqueString behavior and enforces the protocol's 1023-octet bound.
-pub(crate) use northstar_room_application::mix_service::prepare_mix_nick;
+pub use northstar_room_application::mix_service::prepare_mix_nick;
 
-pub(crate) use northstar_room_application::mix_service::valid_join_nodes;
+pub use northstar_room_application::mix_service::valid_join_nodes;
 
-pub(crate) use northstar_room_application::mix_service::canonical_mix_access_pattern;
+pub use northstar_room_application::mix_service::canonical_mix_access_pattern;
 
-pub(crate) use northstar_room_application::mix_service::participant_jid_visible;
-
-#[cfg(test)]
-#[path = "mix_pam_durability_tests.rs"]
-mod pam_durability_integration_tests;
+pub use northstar_room_application::mix_service::participant_jid_visible;
 
 #[cfg(test)]
-#[path = "mix_delivery_capacity_tests.rs"]
-mod delivery_capacity_integration_tests;
-
-#[cfg(test)]
-#[path = "mix_sequence_retention_tests.rs"]
-mod delivery_sequence_retention_integration_tests;
-
-#[cfg(test)]
-#[path = "mix_delivery_route_wake_tests.rs"]
-mod delivery_route_wake_integration_tests;
-
-#[cfg(test)]
-#[path = "mix_nickname_tests.rs"]
-mod nickname_tests;
-
-#[cfg(test)]
-#[path = "mix_delivery_order_contract_tests.rs"]
 mod delivery_order_contract_tests;
-
 #[cfg(test)]
-#[path = "mix_mam_tests.rs"]
-mod mam_integration_tests;
+mod nickname_tests;

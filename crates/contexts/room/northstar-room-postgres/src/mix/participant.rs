@@ -159,7 +159,9 @@ pub async fn expire_unrefreshed_mix_presence(
     Ok(expired)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn update_mix_subscriptions(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     channel_id: Uuid,
     actor: &str,
@@ -285,6 +287,7 @@ pub async fn update_mix_subscriptions(
         .await?;
     }
     finalize_federated_mix_mutation_tx(
+        effects,
         &mut transaction,
         federated,
         FederatedMixSuccess::UpdateSubscriptions {
@@ -302,6 +305,7 @@ pub async fn update_mix_subscriptions(
 }
 
 pub async fn set_mix_nick(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     channel_id: Uuid,
     actor: &str,
@@ -397,6 +401,7 @@ pub async fn set_mix_nick(
     .execute(&mut *transaction)
     .await?;
     finalize_federated_mix_mutation_tx(
+        effects,
         &mut transaction,
         federated,
         FederatedMixSuccess::SetNick { nick: nick.clone() },
@@ -414,6 +419,7 @@ pub enum SetNickError {
 }
 
 pub async fn leave_mix_channel(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     channel_id: Uuid,
     actor: &str,
@@ -532,9 +538,11 @@ pub async fn leave_mix_channel(
             .bind(channel.jid())
             .execute(&mut *transaction)
             .await?;
-        roster_change = delete_mix_roster_tx(&mut transaction, user_id, &channel.jid()).await?;
+        roster_change =
+            delete_mix_roster_tx(effects, &mut transaction, user_id, &channel.jid()).await?;
     }
     finalize_federated_mix_mutation_tx(
+        effects,
         &mut transaction,
         federated,
         FederatedMixSuccess::Leave,

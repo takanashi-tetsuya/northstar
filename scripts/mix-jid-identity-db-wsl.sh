@@ -52,7 +52,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
 fi
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$test_schema"
 
-test_name="db::mix_identity::tests::postgres_mix_graph_is_atomic_fk_safe_resource_exact_and_idempotent"
+test_name="db::mix_identity_tests::postgres_mix_graph_is_atomic_fk_safe_resource_exact_and_idempotent"
 if ! output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture --test-threads=1 2>&1)"; then
   printf '%s\n' "$output"
   exit 1

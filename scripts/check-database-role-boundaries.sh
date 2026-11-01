@@ -26,7 +26,7 @@ pie_source="$project_dir/src/tools/pie.rs"
 users_source="$project_dir/crates/contexts/auth/northstar-auth-postgres/src/users.rs"
 admin_commands_source="$project_dir/crates/contexts/workflows/northstar-workflows/src/admin_accounts.rs"
 roster_source="$project_dir/crates/contexts/roster/northstar-roster-postgres/src/roster.rs"
-mix_source="$project_dir/src/db/mix.rs"
+mix_source="$project_dir/crates/contexts/room/northstar-room-postgres/src/mix.rs"
 muc_source="$project_dir/crates/contexts/room/northstar-room-postgres/src/muc.rs"
 muc_test_source="$project_dir/src/db/muc_tests.rs"
 muc_protocol_source="$project_dir/src/xmpp/protocol/muc.rs"
@@ -753,7 +753,7 @@ require_module_literal crates/contexts/workflows/northstar-workflows/src/admin_a
   'XEP-0133 lifecycle mutation does not consume an execution claim'
 require_module_literal crates/contexts/roster/northstar-roster-postgres/src/roster.rs 'SELECT northstar_user_bump_roster_version($1)' \
   'roster mutation still writes users directly'
-require_module_literal src/db/mix.rs 'SELECT northstar_user_bump_roster_version($1)' \
+require_module_literal crates/contexts/room/northstar-room-postgres/src/mix.rs 'SELECT northstar_user_bump_roster_version($1)' \
   'MIX roster mutation still writes users directly'
 require_literal "$omemo_recovery_source" 'SELECT northstar_user_consume_recovery_generation($1,$2,$3)' \
   'OMEMO recovery does not use the exact bearer/generation capability'

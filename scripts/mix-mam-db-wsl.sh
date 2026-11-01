@@ -15,7 +15,7 @@ for test_name in \
   federated_mutation_result_and_outbox_share_the_authority_transaction; do
   if ! output="$(TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
     cargo test --locked --offline \
-    "db::mix::mam_integration_tests::$test_name" \
+    "db::mix_mam_tests::$test_name" \
     -- --ignored --exact --nocapture 2>&1)"; then
     printf '%s\n' "$output"
     exit 1

@@ -2148,6 +2148,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-operations-xmpp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "northstar-auth-core",
+ "northstar-operations-application",
+ "northstar-security",
+ "northstar-xml-builder",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "sha2",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "northstar-postgres"
 version = "0.1.0"
 dependencies = [
@@ -3628,6 +3645,7 @@ dependencies = [
  "northstar-operations-application",
  "northstar-operations-core",
  "northstar-operations-postgres",
+ "northstar-operations-xmpp",
  "northstar-postgres",
  "northstar-presence-core",
  "northstar-protocol-runtime",

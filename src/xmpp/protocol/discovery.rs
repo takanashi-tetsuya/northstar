@@ -499,9 +499,12 @@ impl ProtocolSession {
         if is_server {
             if let Some(node) = request.attribute("node") {
                 if node == "http://jabber.org/protocol/commands"
-                    || super::commands::is_command(node)
+                    || northstar_operations_xmpp::commands::is_command(node)
                 {
-                    if let Some(reply) = super::commands::disco_info(self, id, from, node).await? {
+                    if let Some(reply) =
+                        northstar_operations_xmpp::commands::disco_info(self, id, from, node)
+                            .await?
+                    {
                         return Ok(Action::Send(reply));
                     } else {
                         return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
@@ -599,7 +602,7 @@ impl ProtocolSession {
             if !self.state.registration_is_closed() {
                 features.push(northstar_auth_xmpp::ibr::IBR2_NS);
             }
-            if super::commands::available_to(self).await? {
+            if northstar_operations_xmpp::commands::available_to(self).await? {
                 features.push("http://jabber.org/protocol/commands");
             }
             features.extend(self.state.server_disco_features());
@@ -677,7 +680,10 @@ impl ProtocolSession {
         {
             if let Some(node) = requested_node {
                 if node == "http://jabber.org/protocol/commands" {
-                    if let Some(reply) = super::commands::disco_items(self, id, from, node).await? {
+                    if let Some(reply) =
+                        northstar_operations_xmpp::commands::disco_items(self, id, from, node)
+                            .await?
+                    {
                         return Ok(Action::Send(reply));
                     } else {
                         return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));

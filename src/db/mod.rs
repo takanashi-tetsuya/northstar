@@ -220,6 +220,8 @@ pub(crate) mod omemo_recovery_repository;
 #[cfg(test)]
 mod account_admin_repository_tests;
 #[cfg(test)]
+mod admin_command_sessions_tests;
+#[cfg(test)]
 mod admin_commands_boundary_tests;
 #[cfg(test)]
 mod admin_dispatch_repository_tests;

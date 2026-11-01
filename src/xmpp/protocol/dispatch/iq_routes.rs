@@ -385,13 +385,14 @@ fn command<'a>(
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(async move {
-        crate::xmpp::protocol::commands::handle(
+        northstar_operations_xmpp::commands::handle(
             session,
             request.id,
             request.stanza,
             request.payload,
         )
         .await
+        .map(Action::Send)
     })
 }
 

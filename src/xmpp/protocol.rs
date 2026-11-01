@@ -1,6 +1,6 @@
 pub(crate) mod blocking;
 pub(crate) mod caps;
-pub(crate) mod commands;
+mod commands;
 pub(crate) mod csi;
 pub(crate) mod discovery;
 pub(crate) mod dispatch;

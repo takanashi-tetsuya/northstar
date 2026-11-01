@@ -104,7 +104,7 @@ if [[ "$scope" == "all" || "$scope" == "commands" ]]; then
   run_exact_ignored \
     db::admin_read_authorization_tests::admin_reads_reject_demotion_and_rotation_that_win_the_authorization_race
   run_exact_ignored \
-    xmpp::protocol::commands::tests::postgres_command_sessions_are_cross_node_atomic
+    db::admin_command_sessions_tests::postgres_command_sessions_are_cross_node_atomic
 fi
 
 cleanup

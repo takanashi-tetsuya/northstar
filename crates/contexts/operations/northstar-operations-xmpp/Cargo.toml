@@ -1,0 +1,21 @@
+[package]
+name = "northstar-operations-xmpp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "XEP-0050 and XEP-0133 administrative command handlers of client sessions for Northstar"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+northstar-auth-core = { path = "../../auth/northstar-auth-core" }
+northstar-operations-application = { path = "../northstar-operations-application" }
+northstar-security = { path = "../../../platform/northstar-security" }
+northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+roxmltree = "0.20"
+sha2 = "0.10"
+tracing = "0.1"
+uuid = { version = "1.12", features = ["v4"] }

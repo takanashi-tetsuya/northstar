@@ -16,7 +16,7 @@ const BASELINE = new Map([
   ['src/xmpp/protocol/blocking.rs', 0],
   ['src/xmpp/protocol/caps.rs', 0],
   ['src/xmpp/protocol/csi.rs', 0],
-  ['src/xmpp/protocol/commands.rs', 0],
+  ['crates/contexts/operations/northstar-operations-xmpp/src/commands.rs', 0],
   ['src/xmpp/protocol/discovery.rs', 0],
   ['src/xmpp/protocol/extdisco.rs', 0],
   ['src/services/jingle.rs', 0],

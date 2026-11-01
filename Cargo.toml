@@ -13,6 +13,7 @@ members = [
     "crates/contexts/auth/northstar-auth-postgres",
     "crates/contexts/auth/northstar-auth-xmpp",
     "crates/contexts/operations/northstar-operations-application",
+    "crates/contexts/operations/northstar-operations-xmpp",
     "crates/contexts/operations/northstar-operations-core",
     "crates/contexts/operations/northstar-operations-postgres",
     "crates/contexts/workflows/northstar-workflows",
@@ -166,6 +167,7 @@ northstar-auth-core = { path = "crates/contexts/auth/northstar-auth-core" }
 northstar-auth-postgres = { path = "crates/contexts/auth/northstar-auth-postgres" }
 northstar-auth-xmpp = { path = "crates/contexts/auth/northstar-auth-xmpp" }
 northstar-operations-application = { path = "crates/contexts/operations/northstar-operations-application" }
+northstar-operations-xmpp = { path = "crates/contexts/operations/northstar-operations-xmpp" }
 northstar-operations-core = { path = "crates/contexts/operations/northstar-operations-core" }
 northstar-operations-postgres = { path = "crates/contexts/operations/northstar-operations-postgres" }
 northstar-workflows = { path = "crates/contexts/workflows/northstar-workflows" }

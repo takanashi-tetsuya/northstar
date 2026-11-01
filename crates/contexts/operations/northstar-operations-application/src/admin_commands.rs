@@ -230,6 +230,13 @@ pub struct AdminCommandService<R> {
     repository: R,
 }
 
+/// Stretching parameters of the verifiers the commands derive.
+#[derive(Clone, Copy)]
+pub struct AdminScramPolicy {
+    pub iterations: u32,
+    pub sha1_enabled: bool,
+}
+
 pub trait AdminCommandRepository: Send + Sync {
     fn current_admin(
         &self,

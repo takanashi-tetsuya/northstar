@@ -110,7 +110,7 @@ test('file-scoped entries leave independently owned siblings outside their budge
 
 for (const entry of [
   'src/services/xml_util.rs',
-  'src/xmpp/protocol/commands.rs',
+  'crates/contexts/operations/northstar-operations-xmpp/src/commands.rs',
   'src/xmpp/protocol/presence.rs',
   'src/xmpp/protocol/sasl2.rs',
   'src/xmpp/protocol/messaging.rs',

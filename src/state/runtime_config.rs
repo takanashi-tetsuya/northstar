@@ -75,12 +75,6 @@ pub(crate) struct Sasl2FastTokenPolicy {
     pub(crate) strong_reauth_max_days: i64,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct AdminScramPolicy {
-    pub(crate) iterations: u32,
-    pub(crate) sha1_enabled: bool,
-}
-
 impl AppState {
     pub(crate) fn tls_context(&self) -> &northstar_security::tls::TlsContext {
         &self.tls_context
@@ -292,8 +286,10 @@ impl AppState {
         self.config.scram_sha1_enabled
     }
 
-    pub(crate) fn admin_scram_policy(&self) -> AdminScramPolicy {
-        AdminScramPolicy {
+    pub(crate) fn admin_scram_policy(
+        &self,
+    ) -> northstar_operations_application::admin_commands::AdminScramPolicy {
+        northstar_operations_application::admin_commands::AdminScramPolicy {
             iterations: self.config.scram_iterations,
             sha1_enabled: self.config.scram_sha1_enabled,
         }

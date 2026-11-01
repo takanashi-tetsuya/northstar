@@ -16,7 +16,7 @@ pub(super) fn result_field(variable: &str, value: impl Into<String>) -> XmlEleme
 }
 
 pub(super) async fn request_form(
-    session: &ProtocolSession,
+    session: &impl CommandSession,
     actor: &AdminActor,
     node: &str,
 ) -> Result<String> {
@@ -50,8 +50,7 @@ pub(super) async fn request_form(
         )],
         EDIT_ADMIN => {
             let rows = session
-                .state
-                .admin_command_service()
+                .command_service()
                 .administrator_usernames(actor)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("administrator authorization changed"))?;
@@ -62,7 +61,7 @@ pub(super) async fn request_form(
             let values = rows
                 .usernames
                 .iter()
-                .map(|username| local_account_jid(username, session.state.local_domain()))
+                .map(|username| local_account_jid(username, session.command_local_domain()))
                 .collect::<Result<Vec<_>>>()?;
             vec![field(
                 "adminjids",
@@ -80,7 +79,7 @@ pub(super) async fn request_form(
                 } else {
                     "SHUTDOWN"
                 },
-                session.state.local_domain(),
+                session.command_local_domain(),
             );
             vec![
                 field(
@@ -115,8 +114,7 @@ pub(super) async fn request_form(
         )],
         SET_MOTD | EDIT_MOTD => {
             let current = session
-                .state
-                .admin_command_service()
+                .command_service()
                 .service_message_body(actor, "motd")
                 .await?
                 .into_iter()
@@ -131,8 +129,7 @@ pub(super) async fn request_form(
         }
         SET_WELCOME => {
             let current = session
-                .state
-                .admin_command_service()
+                .command_service()
                 .service_message_body(actor, "welcome")
                 .await?
                 .into_iter()
@@ -159,8 +156,7 @@ pub(super) async fn request_form(
                 ("whitelist", "whitelistjids")
             };
             let current = session
-                .state
-                .admin_command_service()
+                .command_service()
                 .federation_rule_domains(actor, kind)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("administrator authorization changed"))?;

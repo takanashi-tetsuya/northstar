@@ -3,7 +3,7 @@
 use super::*;
 
 pub(super) async fn execute_count_command(
-    session: &ProtocolSession,
+    session: &impl CommandSession,
     actor: &AdminActor,
     node: &str,
 ) -> Result<String> {
@@ -14,8 +14,7 @@ pub(super) async fn execute_count_command(
         }
         REGISTERED_COUNT => {
             let users = session
-                .state
-                .admin_command_service()
+                .command_service()
                 .registered_account_count(actor)
                 .await?
                 .unwrap_or_default();
@@ -23,8 +22,7 @@ pub(super) async fn execute_count_command(
         }
         DISABLED_COUNT => {
             let users = session
-                .state
-                .admin_command_service()
+                .command_service()
                 .disabled_account_count(actor)
                 .await?
                 .unwrap_or_default();
@@ -52,7 +50,7 @@ pub(super) async fn execute_count_command(
 }
 
 pub(super) async fn execute_list_command(
-    session: &ProtocolSession,
+    session: &impl CommandSession,
     actor: &AdminActor,
     node: &str,
     max_items: usize,
@@ -71,26 +69,24 @@ pub(super) async fn execute_list_command(
         REGISTERED_LIST => (
             "registereduserjids",
             session
-                .state
-                .admin_command_service()
+                .command_service()
                 .registered_account_usernames(actor, max_items as i64, offset as i64)
                 .await?
                 .unwrap_or_default()
                 .into_iter()
-                .map(|username| local_account_jid(&username, session.state.local_domain()))
+                .map(|username| local_account_jid(&username, session.command_local_domain()))
                 .collect::<Result<Vec<_>>>()?,
         ),
         DISABLED_LIST => {
             let rows = session
-                .state
-                .admin_command_service()
+                .command_service()
                 .disabled_account_usernames(actor, max_items as i64, offset as i64)
                 .await?
                 .unwrap_or_default();
             (
                 "disableduserjids",
                 rows.into_iter()
-                    .map(|username| local_account_jid(&username, session.state.local_domain()))
+                    .map(|username| local_account_jid(&username, session.command_local_domain()))
                     .collect::<Result<Vec<_>>>()?,
             )
         }
@@ -123,7 +119,7 @@ pub(super) async fn execute_list_command(
 }
 
 pub(super) async fn execute_form_command(
-    session: &ProtocolSession,
+    session: &impl CommandSession,
     actor: &AdminActor,
     claim: &northstar_operations_application::admin_commands::AdminExecutionClaim,
     node: &str,
@@ -154,7 +150,7 @@ pub(super) async fn execute_form_command(
         ADD_USER => {
             let Some(username) = local_account_username(
                 submission.one("accountjid").ok(),
-                session.state.local_domain(),
+                session.command_local_domain(),
             ) else {
                 return Ok(None);
             };
@@ -168,18 +164,16 @@ pub(super) async fn execute_form_command(
             }
             let payload = empty_result();
             if !session
-                .state
-                .admin_command_service()
+                .command_service()
                 .renew_execution(actor, claim, node)
                 .await?
             {
                 return Ok(None);
             }
-            let scram_policy = session.state.admin_scram_policy();
+            let scram_policy = session.command_scram_policy();
             if !matches!(
                 session
-                    .state
-                    .admin_command_service()
+                    .command_service()
                     .create_account(
                         actor,
                         claim,
@@ -209,7 +203,8 @@ pub(super) async fn execute_form_command(
                     else {
                         return Ok(None);
                     };
-                    if jid.domainpart() != session.state.local_domain() || jid.localpart().is_none()
+                    if jid.domainpart() != session.command_local_domain()
+                        || jid.localpart().is_none()
                     {
                         return Ok(None);
                     }
@@ -221,7 +216,7 @@ pub(super) async fn execute_form_command(
                     (username, jid.resourcepart().is_some().then_some(jid))
                 } else {
                     let Some(username) =
-                        local_account_username(Some(value), session.state.local_domain())
+                        local_account_username(Some(value), session.command_local_domain())
                     else {
                         return Ok(None);
                     };
@@ -241,15 +236,14 @@ pub(super) async fn execute_form_command(
             };
             let payload = empty_result();
             let outcome = session
-                .state
-                .admin_command_service()
+                .command_service()
                 .mutate_accounts(
                     actor,
                     claim,
                     node,
                     &targets,
                     action,
-                    session.state.local_domain(),
+                    session.command_local_domain(),
                     &payload,
                 )
                 .await?;
@@ -266,7 +260,7 @@ pub(super) async fn execute_form_command(
         CHANGE_USER_PASSWORD => {
             let Some(username) = local_account_username(
                 submission.one("accountjid").ok(),
-                session.state.local_domain(),
+                session.command_local_domain(),
             ) else {
                 return Ok(None);
             };
@@ -275,17 +269,15 @@ pub(super) async fn execute_form_command(
             };
             let payload = empty_result();
             if !session
-                .state
-                .admin_command_service()
+                .command_service()
                 .renew_execution(actor, claim, node)
                 .await?
             {
                 return Ok(None);
             }
-            let scram_policy = session.state.admin_scram_policy();
+            let scram_policy = session.command_scram_policy();
             let outcome = session
-                .state
-                .admin_command_service()
+                .command_service()
                 .reset_account_password(
                     actor,
                     claim,
@@ -294,7 +286,7 @@ pub(super) async fn execute_form_command(
                     password,
                     scram_policy.iterations,
                     scram_policy.sha1_enabled,
-                    session.state.local_domain(),
+                    session.command_local_domain(),
                     &payload,
                 )
                 .await?;
@@ -313,20 +305,19 @@ pub(super) async fn execute_form_command(
             };
             let Some(username) = local_account_username(
                 values.first().map(String::as_str),
-                session.state.local_domain(),
+                session.command_local_domain(),
             ) else {
                 return Ok(None);
             };
             if node == GET_USER_LAST_LOGIN {
                 let Some(target) = session
-                    .state
-                    .admin_command_service()
+                    .command_service()
                     .account_last_login(actor, &username)
                     .await?
                 else {
                     return Ok(None);
                 };
-                let account = local_account_jid(&target.username, session.state.local_domain())?;
+                let account = local_account_jid(&target.username, session.command_local_domain())?;
                 let value = target
                     .last_login_at
                     .map(|timestamp| timestamp.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
@@ -341,15 +332,14 @@ pub(super) async fn execute_form_command(
                 ));
             }
             let Some(roster) = session
-                .state
-                .admin_command_service()
+                .command_service()
                 .account_roster(actor, &username)
                 .await?
             else {
                 return Ok(None);
             };
             let account =
-                local_account_jid(&roster.account.username, session.state.local_domain())?;
+                local_account_jid(&roster.account.username, session.command_local_domain())?;
             let mut query = XmlElement::namespaced("query", "jabber:iq:roster");
             for (jid, name, subscription, ask) in roster.items {
                 query.push_child(
@@ -372,13 +362,12 @@ pub(super) async fn execute_form_command(
         USER_STATS => {
             let Some(username) = local_account_username(
                 submission.one("accountjid").ok(),
-                session.state.local_domain(),
+                session.command_local_domain(),
             ) else {
                 return Ok(None);
             };
             let Some(stats) = session
-                .state
-                .admin_command_service()
+                .command_service()
                 .account_statistics(actor, &username)
                 .await?
             else {
@@ -390,7 +379,7 @@ pub(super) async fn execute_form_command(
                     .child(form_type_field())
                     .child(result_field(
                         "accountjid",
-                        local_account_jid(&stats.account.username, session.state.local_domain())?,
+                        local_account_jid(&stats.account.username, session.command_local_domain())?,
                     ))
                     .child(result_field("rostersize", stats.roster_size.to_string()))
                     .child(result_field(
@@ -412,7 +401,7 @@ pub(super) async fn execute_form_command(
             let mut usernames = Vec::with_capacity(values.len());
             for value in values {
                 let Some(username) =
-                    local_account_username(Some(value), session.state.local_domain())
+                    local_account_username(Some(value), session.command_local_domain())
                 else {
                     return Ok(None);
                 };
@@ -420,8 +409,7 @@ pub(super) async fn execute_form_command(
             }
             let payload = empty_result();
             if session
-                .state
-                .admin_command_service()
+                .command_service()
                 .replace_administrators(actor, claim, node, &usernames, &payload)
                 .await?
                 != AdminWriteOutcome::Applied
@@ -441,8 +429,7 @@ pub(super) async fn execute_form_command(
                 .child(result_field("onlineusersnum", recipients.to_string()))
                 .finish();
             if session
-                .state
-                .admin_command_service()
+                .command_service()
                 .record_announcement(actor, claim, node, recipients, body.len(), &payload)
                 .await?
                 != AdminWriteOutcome::Applied
@@ -463,8 +450,7 @@ pub(super) async fn execute_form_command(
             };
             let payload = empty_result();
             if session
-                .state
-                .admin_command_service()
+                .command_service()
                 .set_service_message(actor, claim, node, kind, Some(&body), &payload)
                 .await?
                 != AdminWriteOutcome::Applied
@@ -484,8 +470,7 @@ pub(super) async fn execute_form_command(
             };
             let payload = empty_result();
             if session
-                .state
-                .admin_command_service()
+                .command_service()
                 .set_service_message(actor, claim, node, kind, None, &payload)
                 .await?
                 != AdminWriteOutcome::Applied
@@ -513,16 +498,13 @@ pub(super) async fn execute_form_command(
             let entities = entities.into_iter().collect::<Vec<_>>();
             let payload = empty_result();
             let Some(rules) = session
-                .state
-                .admin_command_service()
+                .command_service()
                 .replace_federation_rules(actor, claim, node, kind, &entities, &payload)
                 .await?
             else {
                 return Ok(None);
             };
-            session
-                .state
-                .replace_runtime_federation_cache(rules.blacklist, rules.whitelist);
+            session.command_replace_federation_rules(rules.blacklist, rules.whitelist);
             Ok(Some(payload))
         }
         RESTART | SHUTDOWN => {
@@ -532,8 +514,7 @@ pub(super) async fn execute_form_command(
             if confirm == "CANCEL" {
                 let payload = empty_result();
                 if session
-                    .state
-                    .admin_command_service()
+                    .command_service()
                     .cancel_service_control(
                         actor,
                         claim,
@@ -559,7 +540,7 @@ pub(super) async fn execute_form_command(
                 } else {
                     "SHUTDOWN"
                 },
-                session.state.local_domain(),
+                session.command_local_domain(),
             );
             if confirm != expected {
                 return Ok(None);
@@ -579,8 +560,7 @@ pub(super) async fn execute_form_command(
                 .filter(|value| !value.trim().is_empty() && value.len() <= 65_536);
             let payload = empty_result();
             let scheduled = session
-                .state
-                .admin_command_service()
+                .command_service()
                 .schedule_service_control(
                     actor,
                     claim,
@@ -637,12 +617,12 @@ pub(super) fn joined_text_field(submission: &Submission, name: &str) -> Option<S
 }
 
 pub(super) async fn send_announcement(
-    session: &ProtocolSession,
+    session: &impl CommandSession,
     actor: &AdminActor,
     body: &str,
 ) -> Result<usize> {
     let stanza = XmlElement::namespaced("message", "jabber:client")
-        .attr("from", session.state.local_domain())
+        .attr("from", session.command_local_domain())
         .attr("type", "headline")
         .attr("id", uuid::Uuid::new_v4())
         .child(XmlElement::new("body").text(body.to_owned()))
@@ -651,22 +631,20 @@ pub(super) async fn send_announcement(
     // accounts are traversed once in a keyset-paginated database snapshot and
     // counted as each page is released, so a 100k-account announcement cannot
     // grow a second 100k-entry recipient set in this protocol task.
-    let local_recipients = session.state.send_local_announcement(&stanza);
+    let local_recipients = session.command_send_local_announcement(&stanza);
     let mut recipient_count = local_recipients.len();
-    if session.state.admin_remote_announcement_enabled() {
+    if session.command_remote_announcement_enabled() {
         let mut cursor = None;
         loop {
             let page = session
-                .state
-                .admin_command_service()
+                .command_service()
                 .announcement_account_page(actor, cursor.as_ref())
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("administrator authorization changed"))?;
             for username in page.usernames {
-                let bare = local_account_jid(&username, session.state.local_domain())?;
+                let bare = local_account_jid(&username, session.command_local_domain())?;
                 let delivered_remotely = session
-                    .state
-                    .send_remote_announcement_to_account(&bare, &stanza)
+                    .command_send_remote_announcement(&bare, &stanza)
                     .await?;
                 if delivered_remotely && !local_recipients.contains(&bare) {
                     recipient_count += 1;
@@ -681,12 +659,12 @@ pub(super) async fn send_announcement(
     Ok(recipient_count)
 }
 
-pub(super) async fn online_bare_jids(session: &ProtocolSession) -> Result<BTreeSet<String>> {
-    session.state.admin_online_bare_jids().await
+pub(super) async fn online_bare_jids(session: &impl CommandSession) -> Result<BTreeSet<String>> {
+    session.command_online_bare_jids().await
 }
 
 pub(super) async fn activity_bare_jids(
-    session: &ProtocolSession,
+    session: &impl CommandSession,
 ) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
-    session.state.admin_activity_bare_jids().await
+    session.command_activity_bare_jids().await
 }

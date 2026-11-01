@@ -2662,6 +2662,50 @@
         "zeroize"
       ],
       [
+        "northstar-operations-xmpp",
+        "anyhow"
+      ],
+      [
+        "northstar-operations-xmpp",
+        "chrono"
+      ],
+      [
+        "northstar-operations-xmpp",
+        "northstar-auth-core"
+      ],
+      [
+        "northstar-operations-xmpp",
+        "northstar-operations-application"
+      ],
+      [
+        "northstar-operations-xmpp",
+        "northstar-security"
+      ],
+      [
+        "northstar-operations-xmpp",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-operations-xmpp",
+        "northstar-xmpp-types"
+      ],
+      [
+        "northstar-operations-xmpp",
+        "roxmltree"
+      ],
+      [
+        "northstar-operations-xmpp",
+        "sha2"
+      ],
+      [
+        "northstar-operations-xmpp",
+        "tracing"
+      ],
+      [
+        "northstar-operations-xmpp",
+        "uuid"
+      ],
+      [
         "northstar-postgres",
         "anyhow"
       ],
@@ -5128,6 +5172,10 @@
       [
         "rust-xmpp-server",
         "northstar-operations-postgres"
+      ],
+      [
+        "rust-xmpp-server",
+        "northstar-operations-xmpp"
       ],
       [
         "rust-xmpp-server",
@@ -7632,6 +7680,7 @@
       "northstar-operations-application",
       "northstar-operations-core",
       "northstar-operations-postgres",
+      "northstar-operations-xmpp",
       "northstar-postgres",
       "northstar-presence-core",
       "northstar-protocol-runtime",

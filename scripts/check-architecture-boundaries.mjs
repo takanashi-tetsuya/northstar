@@ -2787,7 +2787,7 @@ if (!/\.finalize_sm_resume\s*\(/.test(smProtocolSource)) {
 // must delegate persistence, audit and command lifecycle authority to the
 // private AdminCommandService. Keep protocol code limited to form parsing,
 // in-memory routing effects and stanza construction.
-const commandsSource = readProductionModule('src/xmpp/protocol/commands.rs', { root });
+const commandsSource = readProductionModule('crates/contexts/operations/northstar-operations-xmpp/src/commands.rs', { root });
 const commandsProductionSource = productionWithoutCfgTestModules(
   commandsSource,
   'commands.rs production',
@@ -2810,8 +2810,8 @@ for (const [description, pattern] of [
     throw new Error(`commands.rs production bypasses AdminCommandService through ${description}`);
   }
 }
-if (!/\.admin_command_service\s*\(\s*\)/.test(commandsProductionSource)) {
-  throw new Error('commands.rs no longer routes persistence through admin_command_service()');
+if (!/\.command_service\s*\(\s*\)/.test(commandsProductionSource)) {
+  throw new Error('commands.rs no longer routes persistence through command_service()');
 }
 const adminCommandServiceSource = productionWithoutCfgTestModules(
   read('crates/contexts/workflows/northstar-workflows/src/admin_command_repository.rs'),

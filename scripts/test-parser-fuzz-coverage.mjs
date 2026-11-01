@@ -54,7 +54,7 @@ rejects((model) => {
 }, /must directly reference production crate northstar-xml-framing/);
 
 rejects((model) => {
-  const validator = path.join(model.root, "src", "services", "stanza_validation.rs");
+  const validator = path.join(model.root, "crates", "kernel", "northstar-xml-builder", "src", "stanza_validation.rs");
   model.moduleSources.set(validator, model.moduleSources.get(validator)
     .replaceAll("northstar_xmpp_types::jid::", "jid::")
     + "\n// northstar_xmpp_types::jid:: only appears in a comment.\n");

@@ -1,8 +1,8 @@
 use roxmltree::Node;
 use std::collections::HashSet;
 
-pub(crate) const JINGLE_NS: &str = "urn:xmpp:jingle:1";
-pub(crate) const JMI_NS: &str = "urn:xmpp:jingle-message:0";
+pub const JINGLE_NS: &str = "urn:xmpp:jingle:1";
+pub const JMI_NS: &str = "urn:xmpp:jingle-message:0";
 const RTP_INFO_NS: &str = "urn:xmpp:jingle:apps:rtp:info:1";
 
 const MAX_CONTENTS: usize = 16;
@@ -798,7 +798,7 @@ fn validate_reason(reason: Node<'_, '_>) -> Result<(), &'static str> {
 /// Validate server-visible XEP-0166 signalling without acting as a Jingle
 /// endpoint. The raw IQ remains client asserted and is routed unchanged apart
 /// from the ordinary authenticated `from` rewrite.
-pub(crate) fn validate_jingle_iq(
+pub fn validate_jingle_iq(
     root: Node<'_, '_>,
     jingle: Node<'_, '_>,
     authenticated_from: Option<&str>,
@@ -970,7 +970,7 @@ fn validate_jmi_reason_children(
 /// Validate visible XEP-0353 payloads. Encrypted JMI has no server-visible
 /// action child and therefore continues through the normal encrypted-message
 /// path without inspection.
-pub(crate) fn validate_jmi_message(root: Node<'_, '_>) -> Result<(), &'static str> {
+pub fn validate_jmi_message(root: Node<'_, '_>) -> Result<(), &'static str> {
     // RFC 6120 error stanzas carry an unmodified copy of the original
     // payload.  A JMI action in that copy is not a new call action and MUST
     // not be rejected merely because the outer message type is `error`.

@@ -2084,6 +2084,8 @@ name = "northstar-message-core"
 version = "0.1.0"
 dependencies = [
  "northstar-federation-core",
+ "northstar-xmpp-types",
+ "roxmltree",
  "uuid",
 ]
 
@@ -2971,6 +2973,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "northstar-xmpp-types",
  "roxmltree",
  "tracing",
 ]

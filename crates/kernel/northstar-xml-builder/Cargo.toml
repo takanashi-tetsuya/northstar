@@ -10,5 +10,6 @@ publish = false
 [dependencies]
 anyhow = "1.0"
 chrono = "0.4"
+northstar-xmpp-types = { path = "../northstar-xmpp-types" }
 roxmltree = "0.20"
 tracing = "0.1"

@@ -194,9 +194,11 @@ pub(crate) async fn route_inbound_iq(
     };
     if kind == "set"
         && child.tag_name().name() == "jingle"
-        && child.tag_name().namespace() == Some(crate::services::jingle::JINGLE_NS)
+        && child.tag_name().namespace() == Some(northstar_message_core::jingle::JINGLE_NS)
     {
-        if let Err(condition) = crate::services::jingle::validate_jingle_iq(root, child, None) {
+        if let Err(condition) =
+            northstar_message_core::jingle::validate_jingle_iq(root, child, None)
+        {
             return Ok(Some(s2s_iq_error(id, to, from, condition)));
         }
     }

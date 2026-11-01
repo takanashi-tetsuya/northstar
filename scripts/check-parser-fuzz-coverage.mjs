@@ -55,7 +55,7 @@ const targets = new Map([
     "semantic_stanza",
     {
       modules: [
-        ["stanza_validation", "../../src/services/stanza_validation.rs"],
+        ["stanza_validation", "../../crates/kernel/northstar-xml-builder/src/stanza_validation.rs"],
       ],
       crates: [
         ["northstar-xml-framing", /\buse\s+northstar_xml_framing\s+as\s+framing\s*;/],
@@ -253,10 +253,11 @@ export function validateParserFuzzCoverage(model) {
       }
 
       const resolvedModule = path.resolve(targetDirectory, modulePath);
-      const sourceRoot = `${path.join(root, "src")}${path.sep}`;
-      if (!resolvedModule.startsWith(sourceRoot) || !existingPaths.has(resolvedModule)) {
+      const sourceRoots = ["src", "crates"].map((directory) => `${path.join(root, directory)}${path.sep}`);
+      if (!sourceRoots.some((sourceRoot) => resolvedModule.startsWith(sourceRoot))
+        || !existingPaths.has(resolvedModule)) {
         violations.push(
-          `${relativeFile}: declared production module does not resolve below src/: ${modulePath}`,
+          `${relativeFile}: declared production module does not resolve below src/ or crates/: ${modulePath}`,
         );
       }
     }

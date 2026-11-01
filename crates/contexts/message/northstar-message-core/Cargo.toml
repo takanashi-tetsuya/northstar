@@ -8,5 +8,7 @@ description = "Capability-free personal-message commands and commit results for 
 publish = false
 
 [dependencies]
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+roxmltree = "0.20"
 uuid = "1.12"
 northstar-federation-core = { path = "../../federation/northstar-federation-core" }

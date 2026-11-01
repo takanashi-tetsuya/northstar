@@ -1082,6 +1082,8 @@ digraph compile_time {
   "northstar-message-application" -> "tokio";
   "northstar-message-application" -> "uuid";
   "northstar-message-core" -> "northstar-federation-core";
+  "northstar-message-core" -> "northstar-xmpp-types";
+  "northstar-message-core" -> "roxmltree";
   "northstar-message-core" -> "uuid";
   "northstar-mix-xmpp" -> "anyhow";
   "northstar-mix-xmpp" -> "chrono";
@@ -1598,6 +1600,7 @@ digraph compile_time {
   "northstar-xep-catalog" -> "northstar-xep-core";
   "northstar-xml-builder" -> "anyhow";
   "northstar-xml-builder" -> "chrono";
+  "northstar-xml-builder" -> "northstar-xmpp-types";
   "northstar-xml-builder" -> "roxmltree";
   "northstar-xml-builder" -> "tracing";
   "northstar-xml-framing" -> "anyhow";

@@ -2491,6 +2491,14 @@
       ],
       [
         "northstar-message-core",
+        "northstar-xmpp-types"
+      ],
+      [
+        "northstar-message-core",
+        "roxmltree"
+      ],
+      [
+        "northstar-message-core",
         "uuid"
       ],
       [
@@ -4552,6 +4560,10 @@
       [
         "northstar-xml-builder",
         "chrono"
+      ],
+      [
+        "northstar-xml-builder",
+        "northstar-xmpp-types"
       ],
       [
         "northstar-xml-builder",

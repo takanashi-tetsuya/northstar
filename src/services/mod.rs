@@ -7,7 +7,6 @@ pub(crate) mod cluster_session_route_maintenance;
 pub(crate) mod direct_spool_wake;
 pub(crate) mod extdisco;
 pub(crate) mod federation_outbox;
-pub(crate) mod jingle;
 pub(crate) mod message_admission;
 pub(crate) mod message_carbons;
 pub(crate) mod messaging;
@@ -24,7 +23,6 @@ pub(crate) mod sm;
 pub(crate) mod sm_capacity;
 pub(crate) mod sm_teardown;
 pub(crate) mod sm_teardown_presence;
-pub(crate) mod stanza_validation;
 pub(crate) mod xml_util;
 
 pub(crate) mod sm_suspension;

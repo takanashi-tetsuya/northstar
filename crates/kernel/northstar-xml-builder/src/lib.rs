@@ -7,6 +7,7 @@ pub mod escape;
 pub mod message_policy;
 pub mod rewrite;
 pub mod stanza;
+pub mod stanza_validation;
 pub mod xdata;
 
 use anyhow::{bail, Context, Result};

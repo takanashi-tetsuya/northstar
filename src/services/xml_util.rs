@@ -373,7 +373,7 @@ pub(crate) fn validate_modern_message_payloads(root: Node<'_, '_>) -> Result<(),
     validate_processing_hints(root)?;
     validate_private_carbon_marker(root)?;
     validate_stanza_ids(root)?;
-    crate::services::jingle::validate_jmi_message(root)?;
+    northstar_message_core::jingle::validate_jmi_message(root)?;
     validate_chat_states(root)?;
     validate_omemo2_envelope(root)?;
     validate_explicit_encryption(root)?;

@@ -9,7 +9,7 @@ use roxmltree::Node;
 
 const MAX_STANZA_ID_BYTES: usize = 1_024;
 
-pub(crate) fn validate_client_stanza(root: Node<'_, '_>) -> std::result::Result<(), &'static str> {
+pub fn validate_client_stanza(root: Node<'_, '_>) -> std::result::Result<(), &'static str> {
     for attribute in root.attributes() {
         match attribute.namespace() {
             None if !matches!(attribute.name(), "id" | "to" | "from" | "type") => {

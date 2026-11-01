@@ -4,7 +4,7 @@ use libfuzzer_sys::fuzz_target;
 use northstar_xml_framing as framing;
 use roxmltree::Document;
 
-#[path = "../../src/services/stanza_validation.rs"]
+#[path = "../../crates/kernel/northstar-xml-builder/src/stanza_validation.rs"]
 mod stanza_validation;
 
 const MAX_INPUT: usize = 1_048_576;

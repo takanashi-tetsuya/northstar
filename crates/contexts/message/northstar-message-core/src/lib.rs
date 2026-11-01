@@ -5,6 +5,8 @@
 //! server application service commits it through the matching repository
 //! transaction.
 
+pub mod jingle;
+
 use uuid::Uuid;
 
 /// One enabled personal-history projection of an accepted stanza.

@@ -347,7 +347,7 @@ pub(super) fn component_stanza_error(root: Node<'_, '_>, condition: &str) -> Opt
         "service-unavailable" => ("cancel", "service-unavailable"),
         _ => ("cancel", "undefined-condition"),
     };
-    Some(crate::services::xml_util::reflected_stanza_error(
+    Some(northstar_xml_builder::stanza::reflected_stanza_error(
         root,
         &crate::xmpp::xml_builder::XmlElement::new("error")
             .attr(

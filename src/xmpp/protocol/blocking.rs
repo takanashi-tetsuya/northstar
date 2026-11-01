@@ -1,9 +1,10 @@
 use super::{Action, ProtocolSession};
-use crate::services::xml_util::{set_to, stream_id};
 use crate::state::AppState;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
+use northstar_xml_builder::rewrite::set_to;
+use northstar_xml_builder::stream::stream_id;
 use roxmltree::Node;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;

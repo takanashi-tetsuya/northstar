@@ -1,19 +1,28 @@
 use super::{
-    add_delay_from, add_stanza_id, blocked_stanza_error, carbon_message, child_text, failure,
-    has_no_store_hint, iq_error, iq_error_to, iq_result, iq_result_to, is_abuse_rated_message,
-    mam_storage_eligible, message_storage_policy, offline_storage_permitted,
-    reflect_iq_error_response, set_from, set_to, should_carbon, stanza_error, stanza_error_type,
-    stream_error, stream_id, strip_stanza_ids_by_domain, strip_untrusted_direct_delays,
-    valid_bare_jid, valid_language_tag, validate_delivery_receipts,
-    validate_modern_message_payloads, validate_no_client_carbon, validate_routed_message, BASE64,
+    carbon_message, strip_untrusted_direct_delays, validate_delivery_receipts,
+    validate_modern_message_payloads, validate_no_client_carbon, validate_routed_message,
     MAX_OMEMO2_PAYLOAD_BYTES,
 };
-use base64::Engine;
-use northstar_room_core::stanza::{
-    add_muc_user_status, mam_muc_stanza, muc_occupant_id, muc_occupant_key,
-    muc_presence_stanza_with_status, prepare_muc_nick, set_muc_occupant_id, valid_muc_nick,
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use northstar_xep_0280::should_copy as should_carbon;
+use northstar_xep_0359::{add_stanza_id, strip_stanza_ids_by_domain};
+use northstar_xml_builder::message_policy::{
+    add_delay_from, encrypted_archive_stanza, has_no_store_hint, is_abuse_rated_message,
+    mam_storage_eligible, message_storage_policy, offline_storage_permitted,
+    processing_hints_fragment, MessageStoragePolicy,
 };
+use northstar_xml_builder::rewrite::{set_from, set_to};
+use northstar_xml_builder::stanza::{
+    blocked_stanza_error, child_text, iq_error, iq_error_to, iq_result, iq_result_to, is_encrypted,
+    reflect_iq_error_response, stanza_error, stanza_error_type,
+};
+use northstar_xml_builder::stream::{failure, stream_error, stream_id};
+use northstar_xmpp_types::text::valid_language_tag;
 use roxmltree::Document;
+
+fn valid_bare_jid(value: &str) -> bool {
+    northstar_xmpp_types::jid::CanonicalJid::parse_bare(value).is_ok()
+}
 
 fn transient(xml: &str) -> bool {
     let document = Document::parse(xml).expect("test message must be valid XML");
@@ -573,7 +582,7 @@ fn processing_hints_on_error_messages_are_ignored() {
     let root = document.root_element();
     assert_eq!(
         message_storage_policy(root).unwrap(),
-        super::MessageStoragePolicy {
+        MessageStoragePolicy {
             temporary: false,
             permanent: false,
         }
@@ -587,7 +596,7 @@ fn service_rewrites_preserve_processing_hints_verbatim() {
     let raw = "<message><x/><no-store xmlns='urn:xmpp:hints'/><future xmlns='urn:xmpp:hints' opaque='yes'/></message>";
     let document = Document::parse(raw).unwrap();
     assert_eq!(
-        super::processing_hints_fragment(document.root_element(), raw),
+        processing_hints_fragment(document.root_element(), raw),
         "<no-store xmlns='urn:xmpp:hints'/><future xmlns='urn:xmpp:hints' opaque='yes'/>"
     );
 }
@@ -783,25 +792,6 @@ fn carbon_wrapper_restores_the_inherited_client_namespace() {
 }
 
 #[test]
-fn muc_mam_payload_never_trusts_archived_identity_extensions() {
-    let archived = "<message xmlns='jabber:client' from='room@conference.example.test/nick' to='alice@example.test/phone'><body>hi</body><x xmlns='http://jabber.org/protocol/muc#user'><item jid='forged@example.test'/></x><x xmlns='urn:northstar:muc:sender:0' jid='forged@example.test'/></message>";
-    let hidden = mam_muc_stanza(archived, "real@example.test/phone", false);
-    assert!(!hidden.contains(" to="));
-    assert!(!hidden.contains("forged@example.test"));
-    assert!(!hidden.contains("real@example.test"));
-
-    let revealed = mam_muc_stanza(archived, "real@example.test/phone", true);
-    assert!(!revealed.contains("forged@example.test"));
-    assert!(revealed.contains("<item jid='real@example.test/phone'/>"));
-    assert_eq!(
-        revealed
-            .matches("http://jabber.org/protocol/muc#user")
-            .count(),
-        1
-    );
-}
-
-#[test]
 fn explicit_no_store_always_wins() {
     assert!(transient(
         "<message><body>secret</body><no-store xmlns='urn:xmpp:hints'/></message>"
@@ -829,7 +819,7 @@ fn no_permanent_store_keeps_temporary_offline_recovery_only() {
     assert!(!mam_storage_eligible(root));
     assert_eq!(
         message_storage_policy(root).unwrap(),
-        super::MessageStoragePolicy {
+        MessageStoragePolicy {
             temporary: true,
             permanent: false,
         }
@@ -868,14 +858,14 @@ fn overlapping_storage_hints_use_privacy_preserving_precedence() {
     for (xml, expected) in [
         (
             "<message><store xmlns='urn:xmpp:hints'/><no-permanent-store xmlns='urn:xmpp:hints'/></message>",
-            super::MessageStoragePolicy {
+            MessageStoragePolicy {
                 temporary: true,
                 permanent: false,
             },
         ),
         (
             "<message><store xmlns='urn:xmpp:hints'/><no-permanent-store xmlns='urn:xmpp:hints'/><no-store xmlns='urn:xmpp:hints'/></message>",
-            super::MessageStoragePolicy {
+            MessageStoragePolicy {
                 temporary: false,
                 permanent: false,
             },
@@ -956,8 +946,8 @@ fn encrypted_archive_preserves_ciphertext_and_eme_but_not_fallback_text() {
             "<message><body>plaintext fallback</body>{payload}<encryption xmlns='urn:xmpp:eme:0' namespace='{namespace}'/><origin-id xmlns='urn:xmpp:sid:0' id='m1'/><replace xmlns='urn:xmpp:message-correct:0' id='old'/><reply xmlns='urn:xmpp:reply:0' id='parent'/><markable xmlns='urn:xmpp:chat-markers:0'/><request xmlns='urn:xmpp:receipts'/><fallback xmlns='urn:xmpp:fallback:0' for='urn:xmpp:reply:0'/></message>"
         );
         let document = Document::parse(&stanza).unwrap();
-        assert!(super::is_encrypted(document.root_element()), "{namespace}");
-        let archived = super::encrypted_archive_stanza(&stanza);
+        assert!(is_encrypted(document.root_element()), "{namespace}");
+        let archived = encrypted_archive_stanza(&stanza);
         assert!(archived.contains("cipher"), "{namespace}");
         assert!(archived.contains("urn:xmpp:eme:0"), "{namespace}");
         assert!(archived.contains("urn:xmpp:sid:0"), "{namespace}");
@@ -977,7 +967,7 @@ fn encrypted_archive_preserves_ciphertext_and_eme_but_not_fallback_text() {
         "<message><wrapper xmlns='urn:example'><encrypted xmlns='urn:xmpp:omemo:2'/></wrapper></message>",
     )
     .unwrap();
-    assert!(!super::is_encrypted(nested.root_element()));
+    assert!(!is_encrypted(nested.root_element()));
 
     // XEP-0380 is only an informational assertion.  It is abuse-rated,
     // but cannot by itself satisfy an encrypted-archive policy.
@@ -985,11 +975,11 @@ fn encrypted_archive_preserves_ciphertext_and_eme_but_not_fallback_text() {
         "<message><encryption xmlns='urn:xmpp:eme:0' namespace='urn:xmpp:omemo:2'/></message>",
     )
     .unwrap();
-    assert!(!super::is_encrypted(marker_only.root_element()));
-    assert!(super::is_abuse_rated_message(marker_only.root_element()));
+    assert!(!is_encrypted(marker_only.root_element()));
+    assert!(is_abuse_rated_message(marker_only.root_element()));
 
     let omemo2 = "<message><encrypted xmlns='urn:xmpp:omemo:2'><header sid='7'><keys jid='alice@example.test'><key rid='9'>AQ==</key></keys></header><payload>Ag==</payload></encrypted><encryption xmlns='urn:xmpp:eme:0' namespace='urn:xmpp:omemo:2'/><store xmlns='urn:xmpp:hints'/></message>";
-    let archived = super::encrypted_archive_stanza(omemo2);
+    let archived = encrypted_archive_stanza(omemo2);
     assert!(archived.contains("urn:xmpp:omemo:2"));
     assert!(archived.contains("<payload>Ag==</payload>"));
     assert!(archived.contains("<store xmlns='urn:xmpp:hints'/>"));
@@ -1038,7 +1028,7 @@ fn omemo2_payload_store_requirement_does_not_override_no_store_policy() {
     assert_eq!(validate_modern_message_payloads(root), Ok(()));
     assert_eq!(
         message_storage_policy(root),
-        Ok(super::MessageStoragePolicy {
+        Ok(MessageStoragePolicy {
             temporary: false,
             permanent: false,
         })
@@ -1129,103 +1119,4 @@ fn local_domain_identity_sanitization_removes_every_forged_account() {
     assert!(!cleaned.contains("id='one'"));
     assert!(!cleaned.contains("id='two'"));
     assert!(cleaned.contains("id='remote'"));
-}
-
-#[test]
-fn occupant_ids_are_stable_and_scoped_to_a_room_secret() {
-    let first = muc_occupant_id(&[7_u8; 32], "Alice@Example.test/phone");
-    assert_eq!(
-        first,
-        muc_occupant_id(&[7_u8; 32], "alice@example.test/laptop")
-    );
-    assert_ne!(first, muc_occupant_id(&[8_u8; 32], "alice@example.test"));
-    assert_eq!(first.len(), 64);
-}
-
-#[test]
-fn authoritative_occupant_id_replaces_client_spoofing() {
-    let stanza = set_muc_occupant_id(
-        "<message><body>hello</body><occupant-id xmlns='urn:xmpp:occupant-id:0' id='spoofed'/></message>",
-        "authoritative",
-    );
-    assert!(!stanza.contains("spoofed"));
-    assert!(stanza.contains("id='authoritative'"));
-    assert_eq!(stanza.matches("urn:xmpp:occupant-id:0").count(), 1);
-}
-
-#[test]
-fn muc_removal_presence_carries_self_kick_and_occupant_identity() {
-    let occupant = northstar_room_application::muc_service::SerializableMucOccupant {
-        full_jid: "alice@example.test/phone".to_owned(),
-        room_jid: "room@conference.example.test".to_owned(),
-        nick: "alice".to_owned(),
-        affiliation: "member".to_owned(),
-        role: "none".to_owned(),
-        room_non_anonymous: false,
-        occupant_id: "opaque-id".to_owned(),
-        cluster_epoch: uuid::Uuid::new_v4(),
-        connection_id: uuid::Uuid::new_v4(),
-        federated_domain: None,
-        sm_session_id: None,
-        payload: String::new(),
-    };
-    let stanza = muc_presence_stanza_with_status(
-        &occupant,
-        &occupant.full_jid,
-        true,
-        true,
-        false,
-        Some("leave-1"),
-        true,
-        Some(307),
-        Some("moderator"),
-        Some("flooding"),
-    );
-    assert!(stanza.contains("<status code='110'/><status code='307'/>"));
-    assert!(stanza.contains("<actor nick='moderator'/><reason>flooding</reason>"));
-    assert!(stanza.contains("id='opaque-id'"));
-}
-
-#[test]
-fn muc_status_insertion_handles_prefixed_self_closing_extensions() {
-    let input = "<c:presence xmlns:c='jabber:client'><m:x xmlns:m='http://jabber.org/protocol/muc#user'/></c:presence>";
-    let stanza = add_muc_user_status(input, 170);
-    let document = Document::parse(&stanza).unwrap();
-    let status = document
-        .descendants()
-        .find(|node| node.is_element() && node.tag_name().name() == "status")
-        .unwrap();
-    assert_eq!(
-        status.tag_name().namespace(),
-        Some("http://jabber.org/protocol/muc#user")
-    );
-    assert_eq!(status.attribute("code"), Some("170"));
-    assert_eq!(
-        document
-            .descendants()
-            .filter(|node| node.is_element() && node.tag_name().name() == "status")
-            .count(),
-        1
-    );
-}
-
-#[test]
-fn muc_occupant_keys_preserve_precis_opaque_nickname_case() {
-    let upper = muc_occupant_key("ROOM@Conference.Example.test", "Nick");
-    let lower = muc_occupant_key("room@conference.example.test", "nick");
-    assert_eq!(upper, "room@conference.example.test/Nick");
-    assert_eq!(lower, "room@conference.example.test/nick");
-    assert_ne!(upper, lower);
-}
-
-#[test]
-fn muc_nickname_preparation_normalizes_without_trimming_or_case_mapping() {
-    assert_eq!(prepare_muc_nick("A\u{30a}").unwrap(), "\u{c5}");
-    assert_eq!(prepare_muc_nick(" Nick ").unwrap(), " Nick ");
-    assert_ne!(
-        prepare_muc_nick("Nick").unwrap(),
-        prepare_muc_nick("nick").unwrap()
-    );
-    assert!(!valid_muc_nick(""));
-    assert!(!valid_muc_nick("bad\u{0007}nick"));
 }

@@ -31,7 +31,9 @@ impl ProtocolSession {
         // XEP-0352 is advertised immediately after authentication, alongside
         // resource binding, so the state may be changed before binding.
         if self.authenticated.is_none() {
-            return Action::Send(crate::services::xml_util::stream_error("not-authorized"));
+            return Action::Send(northstar_xml_builder::stream::stream_error(
+                "not-authorized",
+            ));
         }
         self.csi.state.apply_indication(indication);
         if indication.is_inactive() {

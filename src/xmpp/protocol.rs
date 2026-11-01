@@ -29,10 +29,10 @@ pub(crate) mod vcard;
 
 use super::capabilities::PostActionTelemetry;
 use super::xml_builder::XmlElement;
-use crate::services::xml_util::*;
 use crate::state::{AppState, SmBufferLimits, SmSessionPolicy};
 use anyhow::{Context, Result};
 use dashmap::DashSet;
+use northstar_xml_builder::stream::{failure, is_counted_stanza, stream_error, stream_id};
 
 use roxmltree::Node;
 use std::{

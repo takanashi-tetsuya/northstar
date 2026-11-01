@@ -6,6 +6,7 @@
 //! transaction.
 
 pub mod jingle;
+pub mod validation;
 
 use uuid::Uuid;
 

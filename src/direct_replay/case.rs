@@ -74,9 +74,9 @@ impl Case {
             {
                 return Err(Rejection::IdentityBinding);
             }
-            if crate::services::xml_util::is_abuse_rated_message(root)
+            if northstar_xml_builder::message_policy::is_abuse_rated_message(root)
                 != matches!(self.admission[index], Admission::Reserved { .. })
-                || crate::services::xml_util::is_encrypted(root) != policy.encrypted
+                || northstar_xml_builder::stanza::is_encrypted(root) != policy.encrypted
             {
                 return Err(Rejection::IdentityBinding);
             }

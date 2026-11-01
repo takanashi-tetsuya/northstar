@@ -1,11 +1,11 @@
 use super::{Action, ProtocolSession};
-use crate::services::xml_util::inject_vcard_avatar_hash;
 use anyhow::Result;
 use northstar_pubsub_application::profile::{
     ProfileAudienceSnapshot, ProfileRepository, ProfileService,
 };
 use northstar_pubsub_core::{PepQuotas, PubSubAccount};
 use northstar_pubsub_xmpp::vcard::VCardSession;
+use northstar_roster_xmpp::presence::inject_vcard_avatar_hash;
 use roxmltree::Node;
 
 impl ProtocolSession {

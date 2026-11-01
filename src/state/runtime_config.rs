@@ -348,7 +348,10 @@ impl AppState {
         &self,
         root: roxmltree::Node<'_, '_>,
     ) -> Result<(), &'static str> {
-        crate::services::xml_util::validate_routed_message(root, &self.config.xmpp_extensions)
+        northstar_message_core::validation::validate_routed_message(
+            root,
+            &self.config.xmpp_extensions,
+        )
     }
 
     pub(crate) fn archive_requires_encryption(&self) -> bool {

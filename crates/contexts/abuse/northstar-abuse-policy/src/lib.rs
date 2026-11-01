@@ -10,6 +10,7 @@ pub mod cooldown;
 pub mod escalation;
 pub mod model;
 pub mod pow;
+pub mod stanza;
 
 pub use admission::{
     build_message_dedupe_identity, decay_actor_state_snapshot, evaluate_challenge_proof,

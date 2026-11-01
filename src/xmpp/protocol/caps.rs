@@ -1,5 +1,4 @@
 use super::ProtocolSession;
-use crate::services::xml_util::{iq_result_from, stream_id};
 use crate::state::{caps_effect_dispatch::CapsEffectDispatchContext, AppState};
 use crate::xmpp::capabilities::CapsEffectTelemetry;
 use crate::xmpp::xml_builder::XmlElement;
@@ -10,6 +9,8 @@ use northstar_xep_0115::{
     generate_canonical_verification_string, parse_caps_from_presence, parse_disco_info_element,
     CapsHashAlgorithm,
 };
+use northstar_xml_builder::stanza::iq_result_from;
+use northstar_xml_builder::stream::stream_id;
 use roxmltree::Node;
 use std::future::Future;
 use std::pin::Pin;

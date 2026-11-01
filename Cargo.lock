@@ -1855,6 +1855,8 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "hmac",
+ "northstar-xml-builder",
+ "roxmltree",
  "serde",
  "serde_json",
  "sha2",
@@ -2083,7 +2085,20 @@ dependencies = [
 name = "northstar-message-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "chrono",
  "northstar-federation-core",
+ "northstar-xep-0085",
+ "northstar-xep-0184",
+ "northstar-xep-0280",
+ "northstar-xep-0308",
+ "northstar-xep-0333",
+ "northstar-xep-0359",
+ "northstar-xep-0380",
+ "northstar-xep-0444",
+ "northstar-xep-0461",
+ "northstar-xep-catalog",
+ "northstar-xml-builder",
  "northstar-xmpp-types",
  "roxmltree",
  "uuid",
@@ -2976,6 +2991,7 @@ dependencies = [
  "northstar-xmpp-types",
  "roxmltree",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

@@ -84,7 +84,7 @@ impl SessionCleanupMix {
                 }
             } else if self.federation_domain_allowed(domain) {
                 let directed =
-                    crate::services::xml_util::set_to(&unavailable, &membership.channel_jid);
+                    northstar_xml_builder::rewrite::set_to(&unavailable, &membership.channel_jid);
                 let _ = self
                     .federation
                     .send(domain, directed, Some(actor_bare.to_owned()))

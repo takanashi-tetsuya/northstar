@@ -7,11 +7,11 @@ use super::{
     DirectSpoolEligibility, DurableAdmissionOutcome, FullNoMatchRoute, MessagePostCommit,
     UndeliveredDisposition,
 };
-use crate::services::xml_util::{
-    set_from, set_root_attribute, strip_pow_element, strip_untrusted_direct_delays,
-};
+use northstar_abuse_policy::stanza::strip_pow_element;
 use northstar_abuse_policy::{AbuseAction, PowIntent};
 use northstar_message_core::durable_full_no_match_recovers;
+use northstar_message_core::validation::strip_untrusted_direct_delays;
+use northstar_xml_builder::rewrite::{set_from, set_root_attribute};
 use roxmltree::Document;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},

@@ -464,7 +464,7 @@ fn control_xml(control: &wire::ControlInput) -> Result<String> {
                     .text(control.full_jid.as_str().to_owned()),
             )
             .finish();
-            Ok(crate::services::xml_util::iq_result(
+            Ok(northstar_xml_builder::stanza::iq_result(
                 control.iq_id.as_str(),
                 &payload,
             ))

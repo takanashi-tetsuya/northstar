@@ -29,7 +29,7 @@ impl CarbonDeliveryPort for AppState {
     }
 
     fn wrap(&self, direction: Direction, from: &str, to: &str, forwarded: &str) -> Option<String> {
-        crate::services::xml_util::carbon_message(direction.as_str(), from, to, forwarded)
+        northstar_message_core::validation::carbon_message(direction.as_str(), from, to, forwarded)
     }
 
     async fn privacy_allows(

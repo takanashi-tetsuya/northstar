@@ -744,3 +744,6 @@ fn should_probe_contact_on_presence(first_available: bool, subscription: &str) -
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod vcard_presence_tests;

@@ -1,10 +1,10 @@
 use super::{Action, ProtocolSession};
-use crate::services::xml_util::{iq_error_from, iq_result_from};
 use crate::state::{pubsub_digest_worker::PubSubDigestWorkerContext, AppState};
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use northstar_pubsub_application::{service::subscription_event_children, PubSubService};
 use northstar_pubsub_core::PubSubNode;
+use northstar_xml_builder::stanza::{iq_error_from, iq_result_from};
 use roxmltree::Node;
 use std::{sync::Arc, time::Duration};
 

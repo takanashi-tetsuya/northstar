@@ -109,7 +109,7 @@ test('file-scoped entries leave independently owned siblings outside their budge
 });
 
 for (const entry of [
-  'src/services/xml_util.rs',
+  'crates/contexts/message/northstar-message-core/src/validation.rs',
   'crates/contexts/operations/northstar-operations-xmpp/src/commands.rs',
   'src/xmpp/protocol/presence.rs',
   'src/xmpp/protocol/sasl2.rs',

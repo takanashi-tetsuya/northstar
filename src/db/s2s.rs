@@ -302,13 +302,13 @@ fn durable_federation_stanza(stanza: &str, outbox_id: Uuid) -> Result<String> {
     let authority = northstar_xmpp_types::jid::CanonicalJid::parse(from)
         .context("federation message from JID is invalid")?
         .bare();
-    let sanitized = crate::services::xml_util::strip_stanza_ids_by_domain(
+    let sanitized = northstar_xep_0359::strip_stanza_ids_by_domain(
         stanza,
         northstar_xmpp_types::jid::CanonicalJid::parse(&authority)
             .expect("authority was parsed above")
             .domainpart(),
     );
-    Ok(crate::services::xml_util::add_stanza_id(
+    Ok(northstar_xep_0359::add_stanza_id(
         &sanitized, &authority, outbox_id,
     ))
 }

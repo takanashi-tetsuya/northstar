@@ -1,6 +1,9 @@
 //! Validates message extension wire shapes and their bounded metadata before routing and storage.
 
 use super::*;
+use northstar_xml_builder::message_policy::message_storage_policy;
+use northstar_xml_builder::stanza::is_encryption_node;
+use northstar_xmpp_types::text::valid_language_tag;
 
 /// Validate the server-visible XEP-0449 v0.2.0 marker. Sticker media is
 /// carried by XEP-0447, while sticker-pack payloads remain ordinary bounded

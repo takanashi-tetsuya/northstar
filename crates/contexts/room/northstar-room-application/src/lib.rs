@@ -630,3 +630,6 @@ mod tests {
         assert!(validate_muc_affiliation_batch_command(&valid_cmd).is_ok());
     }
 }
+
+#[cfg(test)]
+mod muc_stanza_tests;

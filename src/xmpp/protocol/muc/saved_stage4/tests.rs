@@ -731,7 +731,7 @@ async fn actual_set_to_expansion_drives_preflight_and_keeps_actual_frame_cancell
     native.write.chunk_limit = chunk;
     let mut recipients = i.recipients.as_slice().to_vec();
     recipients[0].full_jid = text(&format!("a@example.test/{}", "r".repeat(700)));
-    let actual = crate::services::xml_util::set_to(
+    let actual = northstar_xml_builder::rewrite::set_to(
         i.command.stanza.as_str(),
         recipients[0].full_jid.as_str(),
     );
@@ -998,7 +998,7 @@ async fn expanded_native_item_above_4096_within_call_budget_retains_real_success
     assert_eq!(i.command.stanza.as_str().len(), 4090);
     let mut recipients = i.recipients.as_slice().to_vec();
     recipients[0].full_jid = text(&format!("a@example.test/{}", "r".repeat(700)));
-    let materialized = crate::services::xml_util::set_to(
+    let materialized = northstar_xml_builder::rewrite::set_to(
         i.command.stanza.as_str(),
         recipients[0].full_jid.as_str(),
     );

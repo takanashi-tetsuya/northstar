@@ -4,10 +4,10 @@ use crate::services::sm::{
     SmResumeFinalizationRequest, SmSessionCreationOutcome, SmSessionCreationRequest,
     SmSessionSnapshot,
 };
-use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use northstar_xep_0198::build_failed_str as sm_failed;
 use northstar_xep_0198::{
     acknowledgement_delta, resumability_allowed, resumed_offline_replay_eligible,
 };

@@ -347,7 +347,7 @@ impl RetractionRepository for PostgresRetractionRepository {
                 let existing_encrypted = existing.get::<bool, _>("encrypted");
                 let existing_encryption_shape =
                     Document::parse(&existing_stanza).ok().map(|document| {
-                        crate::services::xml_util::is_encrypted(document.root_element())
+                        northstar_xml_builder::stanza::is_encrypted(document.root_element())
                     });
                 if existing_encrypted != command_encrypted
                     || existing_encryption_shape != Some(existing_encrypted)
@@ -362,10 +362,11 @@ impl RetractionRepository for PostgresRetractionRepository {
                     command.target_id,
                 );
                 let expected_semantics = if command_encrypted {
-                    let sanitized = crate::services::xml_util::encrypted_retraction_archive_stanza(
-                        command.semantic_payload,
-                        command.target_id,
-                    );
+                    let sanitized =
+                        northstar_xml_builder::message_policy::encrypted_retraction_archive_stanza(
+                            command.semantic_payload,
+                            command.target_id,
+                        );
                     canonical_retraction_semantics(
                         &sanitized,
                         &canonical_sender,

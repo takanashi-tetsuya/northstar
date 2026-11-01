@@ -4,7 +4,7 @@
 
 use crate::rewrite::{append_root_validated_fragment, remove_root_attribute, set_root_attribute};
 use crate::XmlElement;
-use roxmltree::Node;
+use roxmltree::{Document, Node};
 
 pub fn is_encrypted(root: Node<'_, '_>) -> bool {
     root.children().any(is_encryption_node)
@@ -280,4 +280,36 @@ pub fn reflected_stanza_error(root: Node<'_, '_>, error: &str) -> String {
         reflected = set_root_attribute(&reflected, "to", &to);
     }
     append_root_validated_fragment(&reflected, error).unwrap_or(reflected)
+}
+
+/// Turn a handler-generated IQ error into the RFC 6120 reflected form. This
+/// preserves the original request payload and swaps its addressing while
+/// retaining any standard or application-specific error extensions.
+pub fn reflect_iq_error_response(request: Node<'_, '_>, response: &str) -> Option<String> {
+    let document = Document::parse(response).ok()?;
+    let response_root = document.root_element();
+    if response_root.tag_name().name() != "iq" || response_root.attribute("type") != Some("error") {
+        return None;
+    }
+    let error = response_root.children().find(|child| {
+        child.is_element()
+            && child.tag_name().name() == "error"
+            && child.tag_name().namespace() == response_root.tag_name().namespace()
+    })?;
+    let error = document.input_text().get(error.range())?;
+    let mut reflected = reflected_stanza_error(request, error);
+    // A handler can be the authoritative service entity for an implicitly
+    // addressed IQ (Carbons controls are answered by the account bare JID,
+    // for example). Preserve those explicit server-selected addresses while
+    // still reflecting the request payload and error extension. Responses
+    // without explicit addressing retain the ordinary RFC swap above.
+    if let Some(from) = response_root.attribute("from") {
+        reflected = remove_root_attribute(&reflected, "from");
+        reflected = set_root_attribute(&reflected, "from", from);
+    }
+    if let Some(to) = response_root.attribute("to") {
+        reflected = remove_root_attribute(&reflected, "to");
+        reflected = set_root_attribute(&reflected, "to", to);
+    }
+    Some(reflected)
 }

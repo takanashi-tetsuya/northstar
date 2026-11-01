@@ -442,5 +442,5 @@ pub(super) fn presence_probe_status_response(
 }
 
 pub(super) fn canonical_subscription_stanza(raw: &str, from: &str, to: &str) -> String {
-    crate::services::xml_util::set_client_namespace(&set_to(&set_from(raw, from), to))
+    northstar_xml_builder::rewrite::set_client_namespace(&set_to(&set_from(raw, from), to))
 }

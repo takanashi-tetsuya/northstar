@@ -210,7 +210,7 @@ pub(crate) async fn route_inbound_iq(
         if let Some(result) =
             crate::xmpp::protocol::caps::cached_disco_result(state, id, to, child.attribute("node"))
         {
-            return Ok(Some(crate::services::xml_util::set_to(&result, from)));
+            return Ok(Some(northstar_xml_builder::rewrite::set_to(&result, from)));
         }
     }
     if to_jid.localpart().is_none()

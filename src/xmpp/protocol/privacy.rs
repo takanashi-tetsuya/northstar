@@ -87,7 +87,7 @@ impl northstar_roster_xmpp::privacy::PrivacySession for ProtocolSession {
             if !session.privacy_requested.load(Ordering::Acquire) {
                 continue;
             }
-            let push = crate::services::xml_util::set_to(base, &jid);
+            let push = northstar_xml_builder::rewrite::set_to(base, &jid);
             if session.connection_id == self.connection_id {
                 current_push = Some(push);
             } else if let Err(error) = session.sender.try_send(push) {

@@ -8,6 +8,19 @@ description = "Capability-free personal-message commands and commit results for 
 publish = false
 
 [dependencies]
+base64 = "0.22"
+chrono = "0.4"
+northstar-xep-0085 = { path = "../../../kernel/northstar-xep-0085" }
+northstar-xep-0184 = { path = "../../../kernel/northstar-xep-0184" }
+northstar-xep-0280 = { path = "../../../kernel/northstar-xep-0280" }
+northstar-xep-0308 = { path = "../../../kernel/northstar-xep-0308" }
+northstar-xep-0333 = { path = "../../../kernel/northstar-xep-0333" }
+northstar-xep-0359 = { path = "../../../kernel/northstar-xep-0359" }
+northstar-xep-0380 = { path = "../../../kernel/northstar-xep-0380" }
+northstar-xep-0444 = { path = "../../../kernel/northstar-xep-0444" }
+northstar-xep-0461 = { path = "../../../kernel/northstar-xep-0461" }
+northstar-xep-catalog = { path = "../../../kernel/northstar-xep-catalog" }
+northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 roxmltree = "0.20"
 uuid = "1.12"

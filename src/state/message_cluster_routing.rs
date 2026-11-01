@@ -4,9 +4,9 @@ use super::{AppState, OnlineSession};
 use crate::services::messaging::{
     DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
 };
-use crate::services::xml_util::carbon_message;
 use crate::xmpp::outbound::DurableDelivery;
 use anyhow::Result;
+use northstar_message_core::validation::carbon_message;
 use northstar_room_application::muc_service::{
     ClusterMucAffiliationSubject, ClusterMucInviteAuthority, ClusterMucPrincipal,
 };

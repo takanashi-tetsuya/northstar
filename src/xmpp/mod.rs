@@ -480,7 +480,7 @@ where
                     &mut io,
                     &domain,
                     opening,
-                    &crate::services::xml_util::stream_error("policy-violation"),
+                    &northstar_xml_builder::stream::stream_error("policy-violation"),
                 ).await;
                 return Ok(DriveOutcome::Done);
             }
@@ -509,7 +509,7 @@ where
                     &mut io,
                     &domain,
                     !session.is_stream_open(),
-                    &crate::services::xml_util::stream_error("policy-violation"),
+                    &northstar_xml_builder::stream::stream_error("policy-violation"),
                 ).await;
                 return Ok(DriveOutcome::Done);
             }
@@ -532,7 +532,7 @@ where
                         &mut io,
                         session.local_domain(),
                         opening,
-                        &crate::services::xml_util::stream_error("unsupported-encoding"),
+                        &northstar_xml_builder::stream::stream_error("unsupported-encoding"),
                     )
                     .await?;
                     return Ok(DriveOutcome::Done);
@@ -557,7 +557,7 @@ where
                                     &mut io,
                                     session.local_domain(),
                                     opening,
-                                    &crate::services::xml_util::stream_error("policy-violation"),
+                                    &northstar_xml_builder::stream::stream_error("policy-violation"),
                                 )
                                 .await?;
                                 return Ok(DriveOutcome::Done);
@@ -576,7 +576,7 @@ where
                                     &mut io,
                                     session.local_domain(),
                                     opening,
-                                    &crate::services::xml_util::stream_error("policy-violation"),
+                                    &northstar_xml_builder::stream::stream_error("policy-violation"),
                                 )
                                 .await?;
                                 return Ok(DriveOutcome::Done);
@@ -592,7 +592,7 @@ where
                                 &mut io,
                                 session.local_domain(),
                                 opening,
-                                &crate::services::xml_util::stream_error(condition),
+                                &northstar_xml_builder::stream::stream_error(condition),
                             )
                             .await?;
                             return Ok(DriveOutcome::Done);
@@ -609,7 +609,7 @@ where
                                 &mut io,
                                 session.local_domain(),
                                 opening,
-                                &crate::services::xml_util::stream_error("internal-server-error"),
+                                &northstar_xml_builder::stream::stream_error("internal-server-error"),
                             )
                             .await?;
                             return Ok(DriveOutcome::Done);
@@ -697,7 +697,7 @@ fn websocket_server_open(domain: &str) -> String {
     xml_builder::XmlElement::new("open")
         .attr("xmlns", WEBSOCKET_FRAMING_NS)
         .attr("from", domain)
-        .attr("id", crate::services::xml_util::stream_id())
+        .attr("id", northstar_xml_builder::stream::stream_id())
         .attr("version", "1.0")
         .attr("xml:lang", "en")
         .finish()
@@ -863,7 +863,7 @@ async fn send<S: AsyncWrite + Unpin>(io: &mut S, stanza: &str) -> Result<()> {
 fn tcp_server_open(domain: &str) -> String {
     crate::xmpp::xml_builder::XmlElement::new("stream:stream")
         .attr("from", domain)
-        .attr("id", crate::services::xml_util::stream_id())
+        .attr("id", northstar_xml_builder::stream::stream_id())
         .attr("version", "1.0")
         .attr("xml:lang", "en")
         .attr("xmlns", "jabber:client")
@@ -976,7 +976,7 @@ async fn tcp_internal_backend_error<S: AsyncWrite + Unpin>(
         io,
         &domain,
         opening,
-        &crate::services::xml_util::stream_error("internal-server-error"),
+        &northstar_xml_builder::stream::stream_error("internal-server-error"),
     )
     .await;
 }
@@ -1056,7 +1056,7 @@ pub async fn websocket_connection(
                     &mut socket,
                     &domain,
                     opening,
-                    crate::services::xml_util::stream_error("policy-violation"),
+                    northstar_xml_builder::stream::stream_error("policy-violation"),
                     &mut terminal_sequence,
                 ).await;
                 break;
@@ -1071,7 +1071,7 @@ pub async fn websocket_connection(
                         &mut socket,
                         &domain,
                         opening,
-                        crate::services::xml_util::stream_error("policy-violation"),
+                        northstar_xml_builder::stream::stream_error("policy-violation"),
                         &mut terminal_sequence,
                     ).await;
                     break;
@@ -1086,7 +1086,7 @@ pub async fn websocket_connection(
                         &mut socket,
                         &domain,
                         opening,
-                        crate::services::xml_util::stream_error("internal-server-error"),
+                        northstar_xml_builder::stream::stream_error("internal-server-error"),
                         &mut terminal_sequence,
                     ).await;
                     break;
@@ -1100,7 +1100,7 @@ pub async fn websocket_connection(
                     &mut socket,
                     &domain,
                     opening,
-                    crate::services::xml_util::stream_error("policy-violation"),
+                    northstar_xml_builder::stream::stream_error("policy-violation"),
                     &mut terminal_sequence,
                 ).await;
                 break;
@@ -1130,7 +1130,7 @@ pub async fn websocket_connection(
                                     &mut socket,
                                     &domain,
                                     opening,
-                                    crate::services::xml_util::stream_error(condition),
+                                    northstar_xml_builder::stream::stream_error(condition),
                                     &mut terminal_sequence,
                                 ).await;
                                 break;
@@ -1144,7 +1144,7 @@ pub async fn websocket_connection(
                                 &mut socket,
                                 &domain,
                                 opening,
-                                crate::services::xml_util::stream_error("invalid-namespace"),
+                                northstar_xml_builder::stream::stream_error("invalid-namespace"),
                                 &mut terminal_sequence,
                             ).await;
                             break;
@@ -1157,7 +1157,7 @@ pub async fn websocket_connection(
                                 &mut socket,
                                 &domain,
                                 opening,
-                                crate::services::xml_util::stream_error("not-well-formed"),
+                                northstar_xml_builder::stream::stream_error("not-well-formed"),
                                 &mut terminal_sequence,
                             ).await;
                             break;
@@ -1225,7 +1225,7 @@ pub async fn websocket_connection(
                             &mut socket,
                             &domain,
                             opening,
-                            crate::services::xml_util::stream_error("unsupported-stanza-type"),
+                            northstar_xml_builder::stream::stream_error("unsupported-stanza-type"),
                             &mut terminal_sequence,
                         ).await;
                         break;
@@ -1306,7 +1306,7 @@ async fn websocket_record_and_send_item(
                         socket,
                         &domain,
                         opening,
-                        crate::services::xml_util::stream_error("internal-server-error"),
+                        northstar_xml_builder::stream::stream_error("internal-server-error"),
                         terminal,
                     )
                     .await;

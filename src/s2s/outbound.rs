@@ -808,9 +808,9 @@ pub(crate) fn delivery_failure_stanza(stanza: &str, condition: &str) -> Option<S
         // another stanza error.
         return None;
     }
-    Some(crate::services::xml_util::stanza_error(
+    Some(northstar_xml_builder::stanza::stanza_error(
         root,
-        crate::services::xml_util::stanza_error_type(condition),
+        northstar_xml_builder::stanza::stanza_error_type(condition),
         condition,
     ))
 }

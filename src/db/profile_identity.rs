@@ -139,7 +139,7 @@ async fn load_identities(
         let canonical_payload = if original_id == canonical_id {
             original_payload.clone()
         } else {
-            crate::services::xml_util::set_root_attribute(&original_payload, "id", &canonical_id)
+            northstar_xml_builder::rewrite::set_root_attribute(&original_payload, "id", &canonical_id)
         };
         Ok(ProfileItemIdentity {
             owner_id,

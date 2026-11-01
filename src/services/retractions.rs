@@ -258,7 +258,7 @@ impl<R: RetractionRepository> RetractionService<R> {
         let command_document = Document::parse(command.semantic_payload)
             .context("retraction command is invalid XML")?;
         let command_encrypted =
-            crate::services::xml_util::is_encrypted(command_document.root_element());
+            northstar_xml_builder::stanza::is_encrypted(command_document.root_element());
         let configured_domain =
             northstar_xmpp_types::jid::prepare_domainpart(&self.configured_domain)?;
         anyhow::ensure!(
@@ -331,7 +331,7 @@ impl<R: RetractionRepository> RetractionService<R> {
             let write_document = Document::parse(write.stanza)
                 .context("retraction action archive is invalid XML")?;
             anyhow::ensure!(
-                crate::services::xml_util::is_encrypted(write_document.root_element())
+                northstar_xml_builder::stanza::is_encrypted(write_document.root_element())
                     == write.encrypted,
                 "retraction action archive encryption flag does not match stanza"
             );
@@ -340,10 +340,11 @@ impl<R: RetractionRepository> RetractionService<R> {
                 "retraction action archive encryption flag differs from authenticated action"
             );
             let expected_write_semantics = if write.encrypted {
-                let sanitized = crate::services::xml_util::encrypted_retraction_archive_stanza(
-                    command.semantic_payload,
-                    command.target_id,
-                );
+                let sanitized =
+                    northstar_xml_builder::message_policy::encrypted_retraction_archive_stanza(
+                        command.semantic_payload,
+                        command.target_id,
+                    );
                 canonical_retraction_semantics(
                     &sanitized,
                     &canonical_sender,
@@ -461,7 +462,7 @@ fn normalize_delivery_projection<'a>(
         && recipient_jid.resourcepart().is_some())
     .then(|| recipient_full_jid.clone());
     anyhow::ensure!(
-        crate::services::xml_util::is_encrypted(root) == delivery.encrypted,
+        northstar_xml_builder::stanza::is_encrypted(root) == delivery.encrypted,
         "retraction delivery encryption flag does not match stanza"
     );
     let delivery_semantics = canonical_retraction_transport_semantics(
@@ -924,7 +925,7 @@ pub(crate) fn retractable_message(root: Node<'_, '_>) -> bool {
             && (((matches!(node.tag_name().name(), "body" | "subject")
                 && matches!(node.tag_name().namespace(), None | Some("jabber:client")))
                 && node.text().is_some_and(|text| !text.is_empty()))
-                || crate::services::xml_util::is_encryption_node(node)
+                || northstar_xml_builder::stanza::is_encryption_node(node)
                 || matches!(
                     (node.tag_name().namespace(), node.tag_name().name()),
                     (Some("urn:xmpp:sfs:0"), "file-sharing")

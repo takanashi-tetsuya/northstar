@@ -44,7 +44,7 @@ impl SessionCleanupPresence {
         {
             let _ = target
                 .sender
-                .try_send(crate::services::xml_util::set_to(presence, &jid));
+                .try_send(northstar_xml_builder::rewrite::set_to(presence, &jid));
         }
     }
 }

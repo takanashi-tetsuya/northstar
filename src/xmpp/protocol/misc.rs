@@ -1,17 +1,23 @@
 use super::{Action, ProtocolSession};
-use crate::services::xml_util::*;
 use crate::services::{
     push::{PushEnableOutcome, PushResponseKind, PushResponseOutcome},
     sm::{BindingFinalizationOutcome, BindingReservationOutcome},
 };
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
+use northstar_abuse_policy::stanza::strip_pow_element;
 use northstar_abuse_policy::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement};
 use northstar_auth_application::account::{
     DeletionQuiesceOutcome, DeletionQuiesceRequest, PasswordChangeOutcome, PasswordChangeRequest,
     RegistrationOutcome, RegistrationRequest,
 };
 use northstar_auth_core as auth;
+use northstar_xml_builder::rewrite::set_to;
+use northstar_xml_builder::stanza::{
+    child_text, iq_error, iq_error_from, iq_result, iq_result_from, stanza_error, stanza_error_type,
+};
+use northstar_xml_builder::stream::stream_error;
+use northstar_xml_builder::xdata::xdata_value_field;
 use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::Node;
 use std::sync::{atomic::AtomicBool, atomic::AtomicU64, atomic::Ordering, Arc};

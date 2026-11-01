@@ -1,8 +1,8 @@
-use crate::services::xml_util::valid_language_tag;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::{Context, Result};
 use northstar_auth_core as auth;
 use northstar_auth_xmpp::sasl2::*;
+use northstar_xmpp_types::text::valid_language_tag;
 use roxmltree::{Document, Node};
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -35,7 +35,7 @@ impl ProtocolSession {
             return Ok(Action::Send(failure_xml("encryption-required", None)));
         }
         if self.authenticated.is_some() {
-            return Ok(Action::Send(crate::services::xml_util::stream_error(
+            return Ok(Action::Send(northstar_xml_builder::stream::stream_error(
                 "not-authorized",
             )));
         }
@@ -463,7 +463,7 @@ impl ProtocolSession {
                     self.sasl_state = None;
                     return Ok(Action::Close);
                 }
-                Ok(_) => resume_xml = crate::services::xml_util::sm_failed("undefined-condition"),
+                Ok(_) => resume_xml = northstar_xep_0198::build_failed_str("undefined-condition"),
                 Err(error)
                     if self.pending_credential_commit.is_some()
                         || crate::xmpp::auth_publication::credential_handoff_failed(&error) =>
@@ -484,7 +484,7 @@ impl ProtocolSession {
                 }
                 Err(error) => {
                     tracing::error!(?error, user_id = %user.id, "inline SM resumption backend failed");
-                    resume_xml = crate::services::xml_util::sm_failed("internal-server-error");
+                    resume_xml = northstar_xep_0198::build_failed_str("internal-server-error");
                 }
             }
         }

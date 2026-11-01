@@ -1,8 +1,15 @@
-use crate::services::xml_util::*;
 use crate::xmpp::frame_execution::Stage;
 use crate::xmpp::protocol::{Action, ProtocolSession};
 use anyhow::Result;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
+use northstar_xml_builder::rewrite::{
+    root_resets_default_namespace, set_from, set_root_attribute, set_to,
+};
+use northstar_xml_builder::stanza::{
+    blocked_stanza_error, iq_error, iq_error_from, iq_result, iq_result_from,
+    reflect_iq_error_response, stanza_error,
+};
+use northstar_xml_builder::stream::stream_error;
 use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::{Document, Node};
 

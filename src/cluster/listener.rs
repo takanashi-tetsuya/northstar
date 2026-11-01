@@ -446,14 +446,14 @@ pub(super) async fn listen_once(
                                     .and_then(|hash| {
                                         let document =
                                             roxmltree::Document::parse(&presence).ok()?;
-                                        Some(crate::services::xml_util::inject_vcard_avatar_hash(
+                                        Some(northstar_roster_xmpp::presence::inject_vcard_avatar_hash(
                                             &presence,
                                             document.root_element(),
                                             hash.as_deref(),
                                         ))
                                     })
                                     .unwrap_or(presence);
-                                crate::services::xml_util::set_to(&presence, &recipient)
+                                set_to(&presence, &recipient)
                             })
                             .unwrap_or_else(|| {
                                 crate::xmpp::xml_builder::XmlElement::namespaced(
@@ -952,7 +952,7 @@ pub(super) async fn listen_once(
             if is_muc_private {
                 if let Some(nick) = json["target_nick"].as_str() {
                     if let Some(session) = muc_endpoints.cached_recipient(target, nick) {
-                        let delivery = crate::services::xml_util::set_to(stanza, &session.full_jid);
+                        let delivery = set_to(stanza, &session.full_jid);
                         let blocked = muc_delivery
                             .blocked_muc_recipient_accounts(
                                 std::slice::from_ref(&session),
@@ -981,7 +981,7 @@ pub(super) async fn listen_once(
                     {
                         continue;
                     }
-                    let delivery = crate::services::xml_util::set_to(stanza, &session.full_jid);
+                    let delivery = set_to(stanza, &session.full_jid);
                     delivered += usize::from(
                         muc_delivery
                             .deliver_to_muc_occupant_unchecked(&session, delivery)
@@ -1268,7 +1268,7 @@ pub(super) async fn listen_once(
                         || roster_requested_only
                         || privacy_requested_only
                     {
-                        crate::services::xml_util::set_to(stanza, &jid)
+                        set_to(stanza, &jid)
                     } else {
                         node_delivery_stanza(stanza, carbons_only, &jid)
                     };
@@ -1300,8 +1300,7 @@ pub(super) async fn listen_once(
                     let accepted = if roster_requested_only {
                         let version = roster_version
                             .expect("cluster roster shape validated before session fanout");
-                        let annotated = roster_annotated_stanza
-                            .map(|stanza| crate::services::xml_util::set_to(stanza, &jid));
+                        let annotated = roster_annotated_stanza.map(|stanza| set_to(stanza, &jid));
                         match session.roster_sync.route(
                             &session.roster_requested,
                             &session.mix_roster_annotations,

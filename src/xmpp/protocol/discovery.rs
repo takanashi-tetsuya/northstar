@@ -1,5 +1,4 @@
 use super::{Action, ProtocolSession};
-use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use northstar_room_application::mix_service::{
@@ -7,6 +6,7 @@ use northstar_room_application::mix_service::{
     NODE_JIDMAP,
 };
 use northstar_xml_builder::disco::{disco_rsm_result_element, parse_disco_items_query};
+use northstar_xml_builder::stanza::{iq_error, iq_error_from, iq_result_from};
 
 const DISCO_INFO_NS: &str = "http://jabber.org/protocol/disco#info";
 const DISCO_ITEMS_NS: &str = "http://jabber.org/protocol/disco#items";

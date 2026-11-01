@@ -2372,8 +2372,11 @@ fn mix_contract_carries_only_the_exact_recipient_lease() {
 #[test]
 fn durable_contract_is_bound_to_the_exact_spooled_payload() {
     let routed = "<message from='alice@example.test/Phone' to='bob@example.test' type='chat' id='m1'><body>hello</body></message>";
-    let stored =
-        crate::services::xml_util::add_delay_from(routed, chrono::Utc::now(), Some("example.test"));
+    let stored = northstar_xml_builder::message_policy::add_delay_from(
+        routed,
+        chrono::Utc::now(),
+        Some("example.test"),
+    );
     assert!(
         crate::services::node_message_contract_verifier::durable_projection_matches(
             &stored, routed

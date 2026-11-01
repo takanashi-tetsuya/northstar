@@ -1,8 +1,8 @@
 use super::{Action, ProtocolSession};
 use crate::services::extdisco::CredentialIssueError;
-use crate::services::xml_util::{iq_error_from, iq_result_from};
 use anyhow::Result;
 use northstar_xep_0215::{CredentialedService, ExtDiscoRequest, SecretText, ServiceCredentials};
+use northstar_xml_builder::stanza::{iq_error_from, iq_result_from};
 use roxmltree::Node;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 

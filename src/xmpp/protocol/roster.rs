@@ -1,5 +1,4 @@
 use super::{Action, ProtocolSession};
-use crate::services::xml_util::set_to;
 use anyhow::Result;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_roster_application::{
@@ -10,6 +9,7 @@ use northstar_roster_core::{LocalRosterContact, PresenceAccount, RosterChange};
 use northstar_roster_xmpp::roster::{
     roster_change_item_element, roster_push_xml, RosterGetOutcome,
 };
+use northstar_xml_builder::rewrite::set_to;
 use roxmltree::Node;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;

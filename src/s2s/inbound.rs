@@ -3,7 +3,6 @@ use crate::state::s2s_direct_route::S2sDirectRoutePort;
 use crate::{
     cluster::{DirectPostCommitMode, DirectSpoolEligibility},
     db,
-    services::xml_util::*,
     services::{
         messaging::{
             DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome, DirectRouteRejection,
@@ -21,6 +20,15 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use futures::FutureExt;
+use northstar_message_core::validation::strip_untrusted_direct_delays;
+use northstar_xep_0280::should_copy as should_carbon;
+use northstar_xep_0359::{add_stanza_id, strip_stanza_ids_by_domain};
+use northstar_xml_builder::message_policy::{
+    add_delay_from, encrypted_archive_stanza, mam_storage_eligible, offline_storage_permitted,
+};
+use northstar_xml_builder::rewrite::{set_from, set_to};
+use northstar_xml_builder::stanza::{is_encrypted, stanza_error_type};
+use northstar_xml_builder::stream::stream_id;
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 use roxmltree::Document;
 use std::borrow::Cow;

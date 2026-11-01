@@ -1935,6 +1935,14 @@
       ],
       [
         "northstar-abuse-policy",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-abuse-policy",
+        "roxmltree"
+      ],
+      [
+        "northstar-abuse-policy",
         "serde"
       ],
       [
@@ -2487,7 +2495,59 @@
       ],
       [
         "northstar-message-core",
+        "base64"
+      ],
+      [
+        "northstar-message-core",
+        "chrono"
+      ],
+      [
+        "northstar-message-core",
         "northstar-federation-core"
+      ],
+      [
+        "northstar-message-core",
+        "northstar-xep-0085"
+      ],
+      [
+        "northstar-message-core",
+        "northstar-xep-0184"
+      ],
+      [
+        "northstar-message-core",
+        "northstar-xep-0280"
+      ],
+      [
+        "northstar-message-core",
+        "northstar-xep-0308"
+      ],
+      [
+        "northstar-message-core",
+        "northstar-xep-0333"
+      ],
+      [
+        "northstar-message-core",
+        "northstar-xep-0359"
+      ],
+      [
+        "northstar-message-core",
+        "northstar-xep-0380"
+      ],
+      [
+        "northstar-message-core",
+        "northstar-xep-0444"
+      ],
+      [
+        "northstar-message-core",
+        "northstar-xep-0461"
+      ],
+      [
+        "northstar-message-core",
+        "northstar-xep-catalog"
+      ],
+      [
+        "northstar-message-core",
+        "northstar-xml-builder"
       ],
       [
         "northstar-message-core",
@@ -4572,6 +4632,10 @@
       [
         "northstar-xml-builder",
         "tracing"
+      ],
+      [
+        "northstar-xml-builder",
+        "uuid"
       ],
       [
         "northstar-xml-framing",

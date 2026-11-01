@@ -625,7 +625,7 @@ pub(super) async fn deliver_cluster_muc_event(
                 alternate,
                 reason,
             );
-            stanzas.push(crate::services::xml_util::set_root_attribute(
+            stanzas.push(northstar_xml_builder::rewrite::set_root_attribute(
                 &stanza, "id", &event_id,
             ));
         }
@@ -633,9 +633,9 @@ pub(super) async fn deliver_cluster_muc_event(
             let stanza = context.details["stanza"]
                 .as_str()
                 .context("cluster MUC subject event has no committed stanza")?;
-            let stanza = crate::services::xml_util::set_to(stanza, &recipient.full_jid);
-            let stanza = crate::services::xml_util::set_from(&stanza, &room_jid);
-            stanzas.push(crate::services::xml_util::add_stanza_id(
+            let stanza = northstar_xml_builder::rewrite::set_to(stanza, &recipient.full_jid);
+            let stanza = northstar_xml_builder::rewrite::set_from(&stanza, &room_jid);
+            stanzas.push(northstar_xep_0359::add_stanza_id(
                 &stanza,
                 &room_jid,
                 delivery.event_id,
@@ -681,8 +681,9 @@ pub(super) async fn deliver_cluster_muc_event(
                         nick,
                         reason,
                     );
-                    let notice = crate::services::xml_util::set_to(&notice, &recipient.full_jid);
-                    stanzas.push(crate::services::xml_util::set_root_attribute(
+                    let notice =
+                        northstar_xml_builder::rewrite::set_to(&notice, &recipient.full_jid);
+                    stanzas.push(northstar_xml_builder::rewrite::set_root_attribute(
                         &notice, "id", &event_id,
                     ));
                 }
@@ -742,8 +743,8 @@ pub(super) async fn deliver_cluster_muc_event(
                             reason,
                         );
                         let notice =
-                            crate::services::xml_util::set_to(&notice, &recipient.full_jid);
-                        stanzas.push(crate::services::xml_util::set_root_attribute(
+                            northstar_xml_builder::rewrite::set_to(&notice, &recipient.full_jid);
+                        stanzas.push(northstar_xml_builder::rewrite::set_root_attribute(
                             &notice, "id", &event_id,
                         ));
                     }
@@ -758,7 +759,7 @@ pub(super) async fn deliver_cluster_muc_event(
             i32::try_from(ordinal).context("MUC event has too many stanza projections")?;
         let stable_item_id = format!("{}:{ordinal}", delivery.event_id);
         let stanza = if context.operation_kind == "admin_batch" {
-            crate::services::xml_util::set_root_attribute(&stanza, "id", &stable_item_id)
+            northstar_xml_builder::rewrite::set_root_attribute(&stanza, "id", &stable_item_id)
         } else {
             stanza
         };

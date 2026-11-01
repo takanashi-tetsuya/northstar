@@ -23,7 +23,6 @@ pub(crate) mod sm;
 pub(crate) mod sm_capacity;
 pub(crate) mod sm_teardown;
 pub(crate) mod sm_teardown_presence;
-pub(crate) mod xml_util;
 
 pub(crate) mod sm_suspension;
 

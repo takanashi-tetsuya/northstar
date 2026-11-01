@@ -1,5 +1,4 @@
 use super::{Action, ProtocolSession};
-use crate::services::xml_util::{set_to, stanza_error};
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use northstar_roster_application::presence::{PresenceRepository, PresenceService};
@@ -9,6 +8,8 @@ use northstar_roster_xmpp::presence::{
     announced_priority, announced_show, broadcast_presence, deliver_service_messages,
     directed_presence_gate, inject_vcard_avatar_hash, route_directed_presence, PresenceGate,
 };
+use northstar_xml_builder::rewrite::set_to;
+use northstar_xml_builder::stanza::stanza_error;
 use roxmltree::Node;
 use std::sync::{atomic::Ordering, Arc};
 

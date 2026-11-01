@@ -222,7 +222,7 @@ async fn tcp_initial_header_failure_opens_errors_and_closes_the_stream() {
         &mut server,
         "example.test",
         true,
-        &crate::services::xml_util::stream_error("invalid-namespace"),
+        &northstar_xml_builder::stream::stream_error("invalid-namespace"),
     )
     .await
     .unwrap();
@@ -241,7 +241,7 @@ async fn tcp_backend_failure_is_a_terminal_internal_server_error_on_wire() {
         &mut server,
         "example.test",
         false,
-        &crate::services::xml_util::stream_error("internal-server-error"),
+        &northstar_xml_builder::stream::stream_error("internal-server-error"),
     )
     .await
     .unwrap();
@@ -262,7 +262,7 @@ async fn tcp_terminal_write_failure_returns_instead_of_hanging() {
             &mut server,
             "example.test",
             false,
-            &crate::services::xml_util::stream_error("internal-server-error"),
+            &northstar_xml_builder::stream::stream_error("internal-server-error"),
         ),
     )
     .await;

@@ -12,6 +12,7 @@ use bb8::Pool;
 use futures::{future::BoxFuture, FutureExt, StreamExt};
 use northstar_room_application::cluster_muc_outbox_settlement::AckOutcome;
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
+use northstar_xml_builder::rewrite::set_to;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;

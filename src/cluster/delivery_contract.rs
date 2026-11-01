@@ -599,5 +599,5 @@ pub(super) fn node_delivery_stanza(stanza: &str, carbons_only: bool, session_key
     let Ok(exact_full_jid) = northstar_xmpp_types::jid::canonical_session_key(session_key) else {
         return stanza.to_owned();
     };
-    crate::services::xml_util::set_to(stanza, &exact_full_jid)
+    northstar_xml_builder::rewrite::set_to(stanza, &exact_full_jid)
 }

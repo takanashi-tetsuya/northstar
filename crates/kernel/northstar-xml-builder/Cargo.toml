@@ -13,3 +13,4 @@ chrono = "0.4"
 northstar-xmpp-types = { path = "../northstar-xmpp-types" }
 roxmltree = "0.20"
 tracing = "0.1"
+uuid = { version = "1.12", features = ["v4"] }

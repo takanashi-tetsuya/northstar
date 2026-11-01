@@ -943,6 +943,8 @@ digraph compile_time {
   "northstar-abuse-policy" -> "base64";
   "northstar-abuse-policy" -> "chrono";
   "northstar-abuse-policy" -> "hmac";
+  "northstar-abuse-policy" -> "northstar-xml-builder";
+  "northstar-abuse-policy" -> "roxmltree";
   "northstar-abuse-policy" -> "serde";
   "northstar-abuse-policy" -> "serde_json";
   "northstar-abuse-policy" -> "sha2";
@@ -1081,7 +1083,20 @@ digraph compile_time {
   "northstar-message-application" -> "northstar-message-core";
   "northstar-message-application" -> "tokio";
   "northstar-message-application" -> "uuid";
+  "northstar-message-core" -> "base64";
+  "northstar-message-core" -> "chrono";
   "northstar-message-core" -> "northstar-federation-core";
+  "northstar-message-core" -> "northstar-xep-0085";
+  "northstar-message-core" -> "northstar-xep-0184";
+  "northstar-message-core" -> "northstar-xep-0280";
+  "northstar-message-core" -> "northstar-xep-0308";
+  "northstar-message-core" -> "northstar-xep-0333";
+  "northstar-message-core" -> "northstar-xep-0359";
+  "northstar-message-core" -> "northstar-xep-0380";
+  "northstar-message-core" -> "northstar-xep-0444";
+  "northstar-message-core" -> "northstar-xep-0461";
+  "northstar-message-core" -> "northstar-xep-catalog";
+  "northstar-message-core" -> "northstar-xml-builder";
   "northstar-message-core" -> "northstar-xmpp-types";
   "northstar-message-core" -> "roxmltree";
   "northstar-message-core" -> "uuid";
@@ -1603,6 +1618,7 @@ digraph compile_time {
   "northstar-xml-builder" -> "northstar-xmpp-types";
   "northstar-xml-builder" -> "roxmltree";
   "northstar-xml-builder" -> "tracing";
+  "northstar-xml-builder" -> "uuid";
   "northstar-xml-framing" -> "anyhow";
   "northstar-xml-framing" -> "thiserror";
   "northstar-xmpp-types" -> "anyhow";

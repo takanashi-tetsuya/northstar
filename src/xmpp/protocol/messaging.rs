@@ -11,7 +11,6 @@ use crate::services::messaging::{
     RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome, ValidatedPersonalMessage,
 };
 use crate::services::retractions::{DeliveryProjection, RetractionOutcome};
-use crate::services::xml_util::*;
 use crate::services::{
     message_admission::witness::DirectOperationHandle,
     messaging::direct_workflow::{
@@ -22,11 +21,13 @@ use crate::services::{
 use crate::xmpp::frame_execution::Stage;
 use anyhow::Result;
 use northstar_abuse_application::guard::{MessageAdmissionLease, MessageAdmissionStart};
+use northstar_abuse_policy::stanza::{abuse_stanza_error, strip_pow_element};
 use northstar_abuse_policy::{MessageAdmissionRequest, PowProof};
 use northstar_message_application::{
     direct_commit::TransactionOutcome,
     direct_lifecycle::{OriginalAdmission, PreparationAdmission},
 };
+use northstar_message_core::validation::strip_untrusted_direct_delays;
 pub(crate) use northstar_message_core::{
     bare_message_route, durable_direct_delivery_allowed, full_no_match_route,
     missing_user_message_should_error, undelivered_disposition, BareMessageRoute,
@@ -36,6 +37,16 @@ use northstar_room_application::muc_service::{
     ClusterMucAffiliationSubject, DurableMucInviteOutcome,
 };
 use northstar_roster_application::privacy::PrivacyStanzaKind;
+use northstar_xep_0280::should_copy as should_carbon;
+use northstar_xep_0359::{add_stanza_id, strip_stanza_ids_by_domain};
+use northstar_xml_builder::message_policy::{
+    add_delay_from, encrypted_archive_stanza, has_explicit_no_store_hint, is_abuse_rated_message,
+    mam_storage_eligible, offline_storage_permitted,
+};
+use northstar_xml_builder::rewrite::{set_from, set_root_attribute};
+use northstar_xml_builder::stanza::{
+    blocked_stanza_error, is_encrypted, stanza_error, stanza_error_type,
+};
 use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::Node;
 use std::{future::Future, sync::atomic::Ordering};

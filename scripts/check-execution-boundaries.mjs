@@ -30,8 +30,8 @@ const files = {
   mucApplication: 'crates/contexts/room/northstar-room-application/src/lib.rs',
   mucService: 'crates/contexts/room/northstar-room-application/src/muc_service.rs',
   mucSlot: 'crates/contexts/room/northstar-room-application/src/muc_service/discussion.rs',
-  mucDb: 'src/db/muc.rs',
-  mucRepository: 'src/db/room.rs',
+  mucDb: 'crates/contexts/room/northstar-room-postgres/src/muc.rs',
+  mucRepository: 'crates/contexts/room/northstar-room-postgres/src/room.rs',
   mix: 'src/xmpp/protocol/mix.rs',
   mixService: 'crates/contexts/room/northstar-room-application/src/mix_service.rs',
   mixCore: 'crates/contexts/room/northstar-room-application/src/mix.rs',
@@ -1400,7 +1400,7 @@ export function verifyMucDiscussionBoundaries({ muc, mucCore, mucApplication, mu
     commit.includes('MucDiscussionAdmission::Replay(id)=>{northstar_room_core::MucDiscussionAdmission::Replay(id)}'),
   'MUC SQL wrapper must observe the actual transaction and its unchanged result identity');
   const repository = compact(body(mucRepository, 'fn\\s+admit_discussion_observed\\b'));
-  requireBoundary(repository.includes('db::admit_muc_discussion_observed(&self.pool,request).await?'),
+  requireBoundary(repository.includes('crate::muc::admit_muc_discussion_observed(&self.pool,request).await?'),
     'MUC production repository must use the observed SQL entry');
   const serviceOwner = bodyContaining(mucService, 'impl<R:\\s*MucRepository>\\s+MucService<R>', 'fn\\s+new\\b');
   const serviceNew = compact(body(serviceOwner, 'fn\\s+new\\b'));

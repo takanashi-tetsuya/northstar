@@ -21,7 +21,7 @@ use std::{sync::Arc, time::Duration};
 pub(crate) struct MucDeliveryContext {
     pub(crate) repository: PostgresMucDeliveryRepository,
     pub(crate) receipt_claim: ClusterMucReceiptClaimService<
-        db::cluster_muc_receipt_claim_repository::PostgresClusterMucReceiptClaimRepository,
+        northstar_room_postgres::cluster_muc_receipt_claim_repository::PostgresClusterMucReceiptClaimRepository,
     >,
     pub(crate) local_domain: String,
     pub(crate) sessions: Arc<DashMap<String, OnlineSession>>,
@@ -118,7 +118,7 @@ impl MucDeliveryContext {
         &self,
         occupant: &MucOccupant,
         stanza: String,
-        delivery: &db::ClusterMucOutboxDelivery,
+        delivery: &northstar_room_postgres::cluster_muc::ClusterMucOutboxDelivery,
     ) -> anyhow::Result<bool> {
         let (receipt, mut received) = tokio::sync::mpsc::unbounded_channel();
         let accepted = self

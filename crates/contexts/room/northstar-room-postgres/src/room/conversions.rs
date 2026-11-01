@@ -2,8 +2,8 @@
 
 use super::*;
 
-impl From<db::MucRoom> for MucRoom {
-    fn from(room: db::MucRoom) -> Self {
+impl From<crate::muc::MucRoom> for MucRoom {
+    fn from(room: crate::muc::MucRoom) -> Self {
         Self {
             id: room.id,
             room_epoch: room.room_epoch,
@@ -32,8 +32,8 @@ impl From<db::MucRoom> for MucRoom {
     }
 }
 
-impl From<db::MucMessage> for MucMessage {
-    fn from(message: db::MucMessage) -> Self {
+impl From<crate::muc::MucMessage> for MucMessage {
+    fn from(message: crate::muc::MucMessage) -> Self {
         Self {
             sender_jid: message.sender_jid,
             stanza: message.stanza,
@@ -42,8 +42,8 @@ impl From<db::MucMessage> for MucMessage {
     }
 }
 
-impl From<db::MucDiscoPage> for MucDiscoPage {
-    fn from(page: db::MucDiscoPage) -> Self {
+impl From<crate::muc::MucDiscoPage> for MucDiscoPage {
+    fn from(page: crate::muc::MucDiscoPage) -> Self {
         Self {
             rooms: page.rooms.into_iter().map(Into::into).collect(),
             total: page.total,
@@ -52,29 +52,7 @@ impl From<db::MucDiscoPage> for MucDiscoPage {
     }
 }
 
-impl From<db::OfflineStoreOutcome> for OfflineStoreOutcome {
-    fn from(outcome: db::OfflineStoreOutcome) -> Self {
-        match outcome {
-            db::OfflineStoreOutcome::Stored => Self::Stored,
-            db::OfflineStoreOutcome::Replay => Self::Replay,
-            db::OfflineStoreOutcome::QuotaExceeded => Self::QuotaExceeded,
-            db::OfflineStoreOutcome::RecipientUnavailable => Self::RecipientUnavailable,
-        }
-    }
-}
-
-impl From<OfflineStorePolicy> for db::OfflineStorePolicy {
-    fn from(policy: OfflineStorePolicy) -> Self {
-        Self {
-            max_messages: policy.max_messages,
-            max_bytes: policy.max_bytes,
-            ttl_days: policy.ttl_days,
-            mam_backed: policy.mam_backed,
-        }
-    }
-}
-
-impl From<&ClusterMucPrincipal> for db::ClusterMucPrincipal {
+impl From<&ClusterMucPrincipal> for crate::cluster_muc::ClusterMucPrincipal {
     fn from(principal: &ClusterMucPrincipal) -> Self {
         match principal {
             ClusterMucPrincipal::Local { user_id, bare_jid } => Self::Local {
@@ -92,7 +70,7 @@ impl From<&ClusterMucPrincipal> for db::ClusterMucPrincipal {
     }
 }
 
-impl From<&ClusterMucAffiliationSubject> for db::ClusterMucAffiliationSubject {
+impl From<&ClusterMucAffiliationSubject> for crate::cluster_muc::ClusterMucAffiliationSubject {
     fn from(subject: &ClusterMucAffiliationSubject) -> Self {
         match subject {
             ClusterMucAffiliationSubject::Local { user_id, bare_jid } => Self::Local {
@@ -106,8 +84,8 @@ impl From<&ClusterMucAffiliationSubject> for db::ClusterMucAffiliationSubject {
     }
 }
 
-pub(super) fn occupancy_target_from_db(
-    target: db::ClusterMucOccupancyTarget,
+pub fn occupancy_target_from_db(
+    target: crate::cluster_muc::ClusterMucOccupancyTarget,
 ) -> ClusterMucOccupancyTarget {
     ClusterMucOccupancyTarget {
         room_id: target.room_id,
@@ -121,7 +99,7 @@ pub(super) fn occupancy_target_from_db(
     }
 }
 
-impl From<&ClusterMucOccupancyTarget> for db::ClusterMucOccupancyTarget {
+impl From<&ClusterMucOccupancyTarget> for crate::cluster_muc::ClusterMucOccupancyTarget {
     fn from(target: &ClusterMucOccupancyTarget) -> Self {
         Self {
             room_id: target.room_id,
@@ -136,27 +114,27 @@ impl From<&ClusterMucOccupancyTarget> for db::ClusterMucOccupancyTarget {
     }
 }
 
-pub(super) fn actor_principal_to_db(principal: &MucActorPrincipal) -> db::MucActorPrincipal<'_> {
+pub fn actor_principal_to_db(principal: &MucActorPrincipal) -> crate::muc::MucActorPrincipal<'_> {
     match principal {
         MucActorPrincipal::Local {
             user_id,
             local_domain,
-        } => db::MucActorPrincipal::Local {
+        } => crate::muc::MucActorPrincipal::Local {
             user_id: *user_id,
             local_domain,
         },
         MucActorPrincipal::Federated {
             bare_jid,
             authenticated_domain,
-        } => db::MucActorPrincipal::Federated {
+        } => crate::muc::MucActorPrincipal::Federated {
             bare_jid,
             authenticated_domain,
         },
     }
 }
 
-pub(super) fn actor_authority_to_db(authority: &MucActorAuthority) -> db::MucActorAuthority<'_> {
-    db::MucActorAuthority {
+pub fn actor_authority_to_db(authority: &MucActorAuthority) -> crate::muc::MucActorAuthority<'_> {
+    crate::muc::MucActorAuthority {
         clustered: authority.clustered,
         expected_room_epoch: authority.expected_room_epoch,
         principal: actor_principal_to_db(&authority.principal),
@@ -171,7 +149,7 @@ pub(super) fn actor_authority_to_db(authority: &MucActorAuthority) -> db::MucAct
     }
 }
 
-impl From<&ClusterMucInviteAuthority> for db::ClusterMucInviteAuthority {
+impl From<&ClusterMucInviteAuthority> for crate::cluster_muc::ClusterMucInviteAuthority {
     fn from(authority: &ClusterMucInviteAuthority) -> Self {
         Self {
             operation_id: authority.operation_id,
@@ -186,46 +164,46 @@ impl From<&ClusterMucInviteAuthority> for db::ClusterMucInviteAuthority {
     }
 }
 
-impl From<db::MucRegistrationOutcome> for MucRegistrationOutcome {
-    fn from(outcome: db::MucRegistrationOutcome) -> Self {
+impl From<crate::muc::MucRegistrationOutcome> for MucRegistrationOutcome {
+    fn from(outcome: crate::muc::MucRegistrationOutcome) -> Self {
         match outcome {
-            db::MucRegistrationOutcome::Registered {
+            crate::muc::MucRegistrationOutcome::Registered {
                 affiliation_changed,
             } => Self::Registered {
                 affiliation_changed,
             },
-            db::MucRegistrationOutcome::Conflict => Self::Conflict,
-            db::MucRegistrationOutcome::Outcast => Self::Outcast,
+            crate::muc::MucRegistrationOutcome::Conflict => Self::Conflict,
+            crate::muc::MucRegistrationOutcome::Outcast => Self::Outcast,
         }
     }
 }
 
-impl From<db::ClusterMucRegistrationOutcome> for ClusterMucRegistrationOutcome {
-    fn from(outcome: db::ClusterMucRegistrationOutcome) -> Self {
+impl From<crate::cluster_muc::ClusterMucRegistrationOutcome> for ClusterMucRegistrationOutcome {
+    fn from(outcome: crate::cluster_muc::ClusterMucRegistrationOutcome) -> Self {
         match outcome {
-            db::ClusterMucRegistrationOutcome::Applied {
+            crate::cluster_muc::ClusterMucRegistrationOutcome::Applied {
                 affiliation_changed,
             } => Self::Applied {
                 affiliation_changed,
             },
-            db::ClusterMucRegistrationOutcome::Replay {
+            crate::cluster_muc::ClusterMucRegistrationOutcome::Replay {
                 affiliation_changed,
             } => Self::Replay {
                 affiliation_changed,
             },
-            db::ClusterMucRegistrationOutcome::Conflict => Self::Conflict,
-            db::ClusterMucRegistrationOutcome::Outcast => Self::Outcast,
-            db::ClusterMucRegistrationOutcome::NotAllowed => Self::NotAllowed,
-            db::ClusterMucRegistrationOutcome::Stale => Self::Stale,
-            db::ClusterMucRegistrationOutcome::Destroyed => Self::Destroyed,
+            crate::cluster_muc::ClusterMucRegistrationOutcome::Conflict => Self::Conflict,
+            crate::cluster_muc::ClusterMucRegistrationOutcome::Outcast => Self::Outcast,
+            crate::cluster_muc::ClusterMucRegistrationOutcome::NotAllowed => Self::NotAllowed,
+            crate::cluster_muc::ClusterMucRegistrationOutcome::Stale => Self::Stale,
+            crate::cluster_muc::ClusterMucRegistrationOutcome::Destroyed => Self::Destroyed,
         }
     }
 }
 
-impl From<db::DurableMucInviteOutcome> for DurableMucInviteOutcome {
-    fn from(outcome: db::DurableMucInviteOutcome) -> Self {
+impl From<crate::muc::DurableMucInviteOutcome> for DurableMucInviteOutcome {
+    fn from(outcome: crate::muc::DurableMucInviteOutcome) -> Self {
         match outcome {
-            db::DurableMucInviteOutcome::Stored {
+            crate::muc::DurableMucInviteOutcome::Stored {
                 id,
                 affiliation_changed,
                 live_claim_id,
@@ -234,70 +212,72 @@ impl From<db::DurableMucInviteOutcome> for DurableMucInviteOutcome {
                 affiliation_changed,
                 live_claim_id,
             },
-            db::DurableMucInviteOutcome::Replay { id } => Self::Replay { id },
-            db::DurableMucInviteOutcome::QuotaExceeded => Self::QuotaExceeded,
-            db::DurableMucInviteOutcome::RecipientUnavailable => Self::RecipientUnavailable,
-            db::DurableMucInviteOutcome::Outcast => Self::Outcast,
-            db::DurableMucInviteOutcome::AuthorityRejected => Self::AuthorityRejected,
-            db::DurableMucInviteOutcome::Stale => Self::Stale,
+            crate::muc::DurableMucInviteOutcome::Replay { id } => Self::Replay { id },
+            crate::muc::DurableMucInviteOutcome::QuotaExceeded => Self::QuotaExceeded,
+            crate::muc::DurableMucInviteOutcome::RecipientUnavailable => Self::RecipientUnavailable,
+            crate::muc::DurableMucInviteOutcome::Outcast => Self::Outcast,
+            crate::muc::DurableMucInviteOutcome::AuthorityRejected => Self::AuthorityRejected,
+            crate::muc::DurableMucInviteOutcome::Stale => Self::Stale,
         }
     }
 }
 
-impl From<db::ClusterMucTransitionOutcome> for ClusterMucTransitionOutcome {
-    fn from(outcome: db::ClusterMucTransitionOutcome) -> Self {
+impl From<crate::cluster_muc::ClusterMucTransitionOutcome> for ClusterMucTransitionOutcome {
+    fn from(outcome: crate::cluster_muc::ClusterMucTransitionOutcome) -> Self {
         match outcome {
-            db::ClusterMucTransitionOutcome::Applied => Self::Applied,
-            db::ClusterMucTransitionOutcome::Replay => Self::Replay,
-            db::ClusterMucTransitionOutcome::Stale => Self::Stale,
-            db::ClusterMucTransitionOutcome::Destroyed => Self::Destroyed,
-            db::ClusterMucTransitionOutcome::Conflict => Self::Conflict,
-            db::ClusterMucTransitionOutcome::Unauthorized => Self::Unauthorized,
+            crate::cluster_muc::ClusterMucTransitionOutcome::Applied => Self::Applied,
+            crate::cluster_muc::ClusterMucTransitionOutcome::Replay => Self::Replay,
+            crate::cluster_muc::ClusterMucTransitionOutcome::Stale => Self::Stale,
+            crate::cluster_muc::ClusterMucTransitionOutcome::Destroyed => Self::Destroyed,
+            crate::cluster_muc::ClusterMucTransitionOutcome::Conflict => Self::Conflict,
+            crate::cluster_muc::ClusterMucTransitionOutcome::Unauthorized => Self::Unauthorized,
         }
     }
 }
 
-impl From<db::MucConfigurationOutcome> for MucConfigurationOutcome {
-    fn from(outcome: db::MucConfigurationOutcome) -> Self {
+impl From<crate::muc::MucConfigurationOutcome> for MucConfigurationOutcome {
+    fn from(outcome: crate::muc::MucConfigurationOutcome) -> Self {
         match outcome {
-            db::MucConfigurationOutcome::Applied => Self::Applied,
-            db::MucConfigurationOutcome::LockedByAnother => Self::LockedByAnother,
-            db::MucConfigurationOutcome::Expired => Self::Expired,
-            db::MucConfigurationOutcome::Missing => Self::Missing,
+            crate::muc::MucConfigurationOutcome::Applied => Self::Applied,
+            crate::muc::MucConfigurationOutcome::LockedByAnother => Self::LockedByAnother,
+            crate::muc::MucConfigurationOutcome::Expired => Self::Expired,
+            crate::muc::MucConfigurationOutcome::Missing => Self::Missing,
         }
     }
 }
 
-impl From<db::ClusterMucConfigurationOutcome> for ClusterMucConfigurationOutcome {
-    fn from(outcome: db::ClusterMucConfigurationOutcome) -> Self {
+impl From<crate::cluster_muc::ClusterMucConfigurationOutcome> for ClusterMucConfigurationOutcome {
+    fn from(outcome: crate::cluster_muc::ClusterMucConfigurationOutcome) -> Self {
         match outcome {
-            db::ClusterMucConfigurationOutcome::Applied => Self::Applied,
-            db::ClusterMucConfigurationOutcome::Replay => Self::Replay,
-            db::ClusterMucConfigurationOutcome::LockedByAnother => Self::LockedByAnother,
-            db::ClusterMucConfigurationOutcome::Expired => Self::Expired,
-            db::ClusterMucConfigurationOutcome::Missing => Self::Missing,
-            db::ClusterMucConfigurationOutcome::Stale => Self::Stale,
-            db::ClusterMucConfigurationOutcome::Unauthorized => Self::Unauthorized,
-            db::ClusterMucConfigurationOutcome::Destroyed => Self::Destroyed,
+            crate::cluster_muc::ClusterMucConfigurationOutcome::Applied => Self::Applied,
+            crate::cluster_muc::ClusterMucConfigurationOutcome::Replay => Self::Replay,
+            crate::cluster_muc::ClusterMucConfigurationOutcome::LockedByAnother => {
+                Self::LockedByAnother
+            }
+            crate::cluster_muc::ClusterMucConfigurationOutcome::Expired => Self::Expired,
+            crate::cluster_muc::ClusterMucConfigurationOutcome::Missing => Self::Missing,
+            crate::cluster_muc::ClusterMucConfigurationOutcome::Stale => Self::Stale,
+            crate::cluster_muc::ClusterMucConfigurationOutcome::Unauthorized => Self::Unauthorized,
+            crate::cluster_muc::ClusterMucConfigurationOutcome::Destroyed => Self::Destroyed,
         }
     }
 }
 
-impl From<db::MucAffiliationBatchOutcome> for MucAffiliationBatchOutcome {
-    fn from(outcome: db::MucAffiliationBatchOutcome) -> Self {
+impl From<crate::muc::MucAffiliationBatchOutcome> for MucAffiliationBatchOutcome {
+    fn from(outcome: crate::muc::MucAffiliationBatchOutcome) -> Self {
         match outcome {
-            db::MucAffiliationBatchOutcome::Applied => Self::Applied,
-            db::MucAffiliationBatchOutcome::DuplicateTarget => Self::DuplicateTarget,
-            db::MucAffiliationBatchOutcome::LastOwner => Self::LastOwner,
-            db::MucAffiliationBatchOutcome::MissingTarget => Self::MissingTarget,
-            db::MucAffiliationBatchOutcome::Unauthorized => Self::Unauthorized,
-            db::MucAffiliationBatchOutcome::Stale => Self::Stale,
-            db::MucAffiliationBatchOutcome::Destroyed => Self::Destroyed,
+            crate::muc::MucAffiliationBatchOutcome::Applied => Self::Applied,
+            crate::muc::MucAffiliationBatchOutcome::DuplicateTarget => Self::DuplicateTarget,
+            crate::muc::MucAffiliationBatchOutcome::LastOwner => Self::LastOwner,
+            crate::muc::MucAffiliationBatchOutcome::MissingTarget => Self::MissingTarget,
+            crate::muc::MucAffiliationBatchOutcome::Unauthorized => Self::Unauthorized,
+            crate::muc::MucAffiliationBatchOutcome::Stale => Self::Stale,
+            crate::muc::MucAffiliationBatchOutcome::Destroyed => Self::Destroyed,
         }
     }
 }
 
-impl From<&MucAffiliationTarget> for db::MucAffiliationTarget {
+impl From<&MucAffiliationTarget> for crate::muc::MucAffiliationTarget {
     fn from(target: &MucAffiliationTarget) -> Self {
         match target {
             MucAffiliationTarget::LocalUsername(username) => Self::LocalUsername(username.clone()),
@@ -306,7 +286,7 @@ impl From<&MucAffiliationTarget> for db::MucAffiliationTarget {
     }
 }
 
-impl From<&MucAffiliationChange> for db::MucAffiliationChange {
+impl From<&MucAffiliationChange> for crate::muc::MucAffiliationChange {
     fn from(change: &MucAffiliationChange) -> Self {
         Self {
             target: (&change.target).into(),
@@ -315,7 +295,7 @@ impl From<&MucAffiliationChange> for db::MucAffiliationChange {
     }
 }
 
-impl From<&MucAdminBatchChange> for db::ClusterMucAdminChange {
+impl From<&MucAdminBatchChange> for crate::cluster_muc::ClusterMucAdminChange {
     fn from(change: &MucAdminBatchChange) -> Self {
         match change {
             MucAdminBatchChange::Affiliation {
@@ -340,37 +320,41 @@ impl From<&MucAdminBatchChange> for db::ClusterMucAdminChange {
     }
 }
 
-impl From<db::ClusterMucAdminBatchOutcome> for MucAdminBatchOutcome {
-    fn from(outcome: db::ClusterMucAdminBatchOutcome) -> Self {
+impl From<crate::cluster_muc::ClusterMucAdminBatchOutcome> for MucAdminBatchOutcome {
+    fn from(outcome: crate::cluster_muc::ClusterMucAdminBatchOutcome) -> Self {
         match outcome {
-            db::ClusterMucAdminBatchOutcome::Applied => Self::Applied,
-            db::ClusterMucAdminBatchOutcome::Replay => Self::Replay,
-            db::ClusterMucAdminBatchOutcome::DuplicateTarget => Self::DuplicateTarget,
-            db::ClusterMucAdminBatchOutcome::LastOwner => Self::LastOwner,
-            db::ClusterMucAdminBatchOutcome::MissingTarget => Self::MissingTarget,
-            db::ClusterMucAdminBatchOutcome::Unauthorized => Self::Unauthorized,
-            db::ClusterMucAdminBatchOutcome::Stale => Self::Stale,
-            db::ClusterMucAdminBatchOutcome::Destroyed => Self::Destroyed,
-            db::ClusterMucAdminBatchOutcome::Conflict => Self::Conflict,
-            db::ClusterMucAdminBatchOutcome::TooManyProjections => Self::TooManyProjections,
+            crate::cluster_muc::ClusterMucAdminBatchOutcome::Applied => Self::Applied,
+            crate::cluster_muc::ClusterMucAdminBatchOutcome::Replay => Self::Replay,
+            crate::cluster_muc::ClusterMucAdminBatchOutcome::DuplicateTarget => {
+                Self::DuplicateTarget
+            }
+            crate::cluster_muc::ClusterMucAdminBatchOutcome::LastOwner => Self::LastOwner,
+            crate::cluster_muc::ClusterMucAdminBatchOutcome::MissingTarget => Self::MissingTarget,
+            crate::cluster_muc::ClusterMucAdminBatchOutcome::Unauthorized => Self::Unauthorized,
+            crate::cluster_muc::ClusterMucAdminBatchOutcome::Stale => Self::Stale,
+            crate::cluster_muc::ClusterMucAdminBatchOutcome::Destroyed => Self::Destroyed,
+            crate::cluster_muc::ClusterMucAdminBatchOutcome::Conflict => Self::Conflict,
+            crate::cluster_muc::ClusterMucAdminBatchOutcome::TooManyProjections => {
+                Self::TooManyProjections
+            }
         }
     }
 }
 
-impl From<db::MucSubjectOutcome> for MucSubjectOutcome {
-    fn from(outcome: db::MucSubjectOutcome) -> Self {
+impl From<crate::muc::MucSubjectOutcome> for MucSubjectOutcome {
+    fn from(outcome: crate::muc::MucSubjectOutcome) -> Self {
         match outcome {
-            db::MucSubjectOutcome::Applied => Self::Applied,
-            db::MucSubjectOutcome::Unauthorized => Self::Unauthorized,
-            db::MucSubjectOutcome::Stale => Self::Stale,
+            crate::muc::MucSubjectOutcome::Applied => Self::Applied,
+            crate::muc::MucSubjectOutcome::Unauthorized => Self::Unauthorized,
+            crate::muc::MucSubjectOutcome::Stale => Self::Stale,
         }
     }
 }
 
-pub(super) fn subject_mutation_into_db<'a>(
+pub fn subject_mutation_into_db<'a>(
     m: MucSubjectMutation<'a>,
-) -> db::MucSubjectMutation<'a> {
-    db::MucSubjectMutation {
+) -> crate::muc::MucSubjectMutation<'a> {
+    crate::muc::MucSubjectMutation {
         stanza_id: m.stanza_id,
         room_id: m.room_id,
         actor_scope: m.actor_scope,
@@ -382,7 +366,7 @@ pub(super) fn subject_mutation_into_db<'a>(
     }
 }
 
-impl From<MucRetractionKind> for db::MucRetractionKind {
+impl From<MucRetractionKind> for crate::muc::MucRetractionKind {
     fn from(kind: MucRetractionKind) -> Self {
         match kind {
             MucRetractionKind::Author => Self::Author,
@@ -391,10 +375,10 @@ impl From<MucRetractionKind> for db::MucRetractionKind {
     }
 }
 
-pub(super) fn retraction_mutation_as_db<'a>(
+pub fn retraction_mutation_as_db<'a>(
     m: &'a MucRetractionMutation<'a>,
-) -> db::MucRetractionMutation<'a> {
-    db::MucRetractionMutation {
+) -> crate::muc::MucRetractionMutation<'a> {
+    crate::muc::MucRetractionMutation {
         action_id: m.action_id,
         room_id: m.room_id,
         target_id: m.target_id,
@@ -410,19 +394,19 @@ pub(super) fn retraction_mutation_as_db<'a>(
     }
 }
 
-impl From<db::MucRetractionOutcome> for MucRetractionOutcome {
-    fn from(outcome: db::MucRetractionOutcome) -> Self {
+impl From<crate::muc::MucRetractionOutcome> for MucRetractionOutcome {
+    fn from(outcome: crate::muc::MucRetractionOutcome) -> Self {
         match outcome {
-            db::MucRetractionOutcome::Applied => Self::Applied,
-            db::MucRetractionOutcome::Conflict => Self::Conflict,
-            db::MucRetractionOutcome::Unauthorized => Self::Unauthorized,
-            db::MucRetractionOutcome::Stale => Self::Stale,
+            crate::muc::MucRetractionOutcome::Applied => Self::Applied,
+            crate::muc::MucRetractionOutcome::Conflict => Self::Conflict,
+            crate::muc::MucRetractionOutcome::Unauthorized => Self::Unauthorized,
+            crate::muc::MucRetractionOutcome::Stale => Self::Stale,
         }
     }
 }
 
-impl From<db::MucAdminRoleList> for MucAdminRoleList {
-    fn from(list: db::MucAdminRoleList) -> Self {
+impl From<crate::muc::MucAdminRoleList> for MucAdminRoleList {
+    fn from(list: crate::muc::MucAdminRoleList) -> Self {
         Self {
             requester_role: list.requester_role,
             non_anonymous: list.non_anonymous,
@@ -439,19 +423,19 @@ impl From<db::MucAdminRoleList> for MucAdminRoleList {
     }
 }
 
-pub(super) fn map_admin_snapshot<T, U>(
-    snapshot: db::MucAdminSnapshot<T>,
+pub fn map_admin_snapshot<T, U>(
+    snapshot: crate::muc::MucAdminSnapshot<T>,
     map: impl FnOnce(T) -> U,
 ) -> MucAdminSnapshot<U> {
     match snapshot {
-        db::MucAdminSnapshot::Authorized(value) => MucAdminSnapshot::Authorized(map(value)),
-        db::MucAdminSnapshot::Unauthorized => MucAdminSnapshot::Unauthorized,
-        db::MucAdminSnapshot::Stale => MucAdminSnapshot::Stale,
+        crate::muc::MucAdminSnapshot::Authorized(value) => MucAdminSnapshot::Authorized(map(value)),
+        crate::muc::MucAdminSnapshot::Unauthorized => MucAdminSnapshot::Unauthorized,
+        crate::muc::MucAdminSnapshot::Stale => MucAdminSnapshot::Stale,
     }
 }
 
-pub(super) fn config_update_into_db<'a>(c: MucConfigUpdate<'a>) -> db::MucConfigUpdate<'a> {
-    db::MucConfigUpdate {
+pub fn config_update_into_db<'a>(c: MucConfigUpdate<'a>) -> crate::muc::MucConfigUpdate<'a> {
+    crate::muc::MucConfigUpdate {
         title: c.title,
         description: c.description,
         persistent: c.persistent,
@@ -469,8 +453,8 @@ pub(super) fn config_update_into_db<'a>(c: MucConfigUpdate<'a>) -> db::MucConfig
     }
 }
 
-impl From<db::ClusterMucOccupancy> for ClusterMucOccupancy {
-    fn from(occupancy: db::ClusterMucOccupancy) -> Self {
+impl From<crate::cluster_muc::ClusterMucOccupancy> for ClusterMucOccupancy {
+    fn from(occupancy: crate::cluster_muc::ClusterMucOccupancy) -> Self {
         Self {
             room_id: occupancy.room_id,
             room_epoch: occupancy.room_epoch,
@@ -496,8 +480,8 @@ impl From<db::ClusterMucOccupancy> for ClusterMucOccupancy {
     }
 }
 
-pub(super) fn cluster_join_into_db<'a>(j: ClusterMucJoin<'a>) -> db::ClusterMucJoin<'a> {
-    db::ClusterMucJoin {
+pub fn cluster_join_into_db<'a>(j: ClusterMucJoin<'a>) -> crate::cluster_muc::ClusterMucJoin<'a> {
+    crate::cluster_muc::ClusterMucJoin {
         operation_id: j.operation_id,
         room_id: j.room_id,
         expected_room_epoch: j.expected_room_epoch,
@@ -515,21 +499,27 @@ pub(super) fn cluster_join_into_db<'a>(j: ClusterMucJoin<'a>) -> db::ClusterMucJ
     }
 }
 
-impl From<db::ClusterMucJoinOutcome> for ClusterMucJoinOutcome {
-    fn from(outcome: db::ClusterMucJoinOutcome) -> Self {
+impl From<crate::cluster_muc::ClusterMucJoinOutcome> for ClusterMucJoinOutcome {
+    fn from(outcome: crate::cluster_muc::ClusterMucJoinOutcome) -> Self {
         match outcome {
-            db::ClusterMucJoinOutcome::Joined(occupancy) => Self::Joined(occupancy.into()),
-            db::ClusterMucJoinOutcome::Replay(occupancy) => Self::Replay(occupancy.into()),
-            db::ClusterMucJoinOutcome::RoomMissing => Self::RoomMissing,
-            db::ClusterMucJoinOutcome::RoomDestroyed => Self::RoomDestroyed,
-            db::ClusterMucJoinOutcome::RoomLocked => Self::RoomLocked,
-            db::ClusterMucJoinOutcome::StaleRoom => Self::StaleRoom,
-            db::ClusterMucJoinOutcome::Outcast => Self::Outcast,
-            db::ClusterMucJoinOutcome::MembershipRequired => Self::MembershipRequired,
-            db::ClusterMucJoinOutcome::ReservedNickname => Self::ReservedNickname,
-            db::ClusterMucJoinOutcome::NicknameConflict => Self::NicknameConflict,
-            db::ClusterMucJoinOutcome::FullJidConflict => Self::FullJidConflict,
-            db::ClusterMucJoinOutcome::Full => Self::Full,
+            crate::cluster_muc::ClusterMucJoinOutcome::Joined(occupancy) => {
+                Self::Joined(occupancy.into())
+            }
+            crate::cluster_muc::ClusterMucJoinOutcome::Replay(occupancy) => {
+                Self::Replay(occupancy.into())
+            }
+            crate::cluster_muc::ClusterMucJoinOutcome::RoomMissing => Self::RoomMissing,
+            crate::cluster_muc::ClusterMucJoinOutcome::RoomDestroyed => Self::RoomDestroyed,
+            crate::cluster_muc::ClusterMucJoinOutcome::RoomLocked => Self::RoomLocked,
+            crate::cluster_muc::ClusterMucJoinOutcome::StaleRoom => Self::StaleRoom,
+            crate::cluster_muc::ClusterMucJoinOutcome::Outcast => Self::Outcast,
+            crate::cluster_muc::ClusterMucJoinOutcome::MembershipRequired => {
+                Self::MembershipRequired
+            }
+            crate::cluster_muc::ClusterMucJoinOutcome::ReservedNickname => Self::ReservedNickname,
+            crate::cluster_muc::ClusterMucJoinOutcome::NicknameConflict => Self::NicknameConflict,
+            crate::cluster_muc::ClusterMucJoinOutcome::FullJidConflict => Self::FullJidConflict,
+            crate::cluster_muc::ClusterMucJoinOutcome::Full => Self::Full,
         }
     }
 }

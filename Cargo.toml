@@ -54,6 +54,7 @@ members = [
     "crates/contexts/message/northstar-delivery-core",
     "crates/contexts/roster/northstar-presence-core",
     "crates/contexts/room/northstar-room-core",
+    "crates/contexts/room/northstar-room-postgres",
     "crates/contexts/room/northstar-room-application",
     "crates/contexts/pubsub/northstar-pubsub-application",
     "crates/contexts/pubsub/northstar-pubsub-core",
@@ -198,6 +199,7 @@ northstar-session-core = { path = "crates/contexts/session/northstar-session-cor
 northstar-delivery-core = { path = "crates/contexts/message/northstar-delivery-core" }
 northstar-presence-core = { path = "crates/contexts/roster/northstar-presence-core" }
 northstar-room-core = { path = "crates/contexts/room/northstar-room-core" }
+northstar-room-postgres = { path = "crates/contexts/room/northstar-room-postgres" }
 northstar-room-application = { path = "crates/contexts/room/northstar-room-application" }
 northstar-pubsub-application = { path = "crates/contexts/pubsub/northstar-pubsub-application" }
 northstar-pubsub-core = { path = "crates/contexts/pubsub/northstar-pubsub-core" }
@@ -229,6 +231,7 @@ openssl = { version = "0.10.81", features = ["vendored"] }
 [dev-dependencies]
 northstar-operations-application = { path = "crates/contexts/operations/northstar-operations-application", features = ["test-support"] }
 northstar-room-application = { path = "crates/contexts/room/northstar-room-application", features = ["test-support"] }
+northstar-room-postgres = { path = "crates/contexts/room/northstar-room-postgres", features = ["test-support"] }
 northstar-workflows = { path = "crates/contexts/workflows/northstar-workflows", features = ["test-support"] }
 northstar-operations-postgres = { path = "crates/contexts/operations/northstar-operations-postgres", features = ["test-support"] }
 northstar-auth-postgres = { path = "crates/contexts/auth/northstar-auth-postgres", features = ["test-support"] }

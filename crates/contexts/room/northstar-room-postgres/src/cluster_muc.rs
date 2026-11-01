@@ -22,6 +22,8 @@ mod outbox;
 mod query;
 mod room;
 mod session_route;
+#[cfg(test)]
+mod tests;
 
 pub use self::admin_batch::*;
 pub use self::affiliation::*;
@@ -116,7 +118,7 @@ pub struct ClusterMucInviteAuthority {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ClusterMucAffiliationMutationOutcome {
+pub enum ClusterMucAffiliationMutationOutcome {
     Applied { affiliation_changed: bool },
     Replay { affiliation_changed: bool },
     Conflict,
@@ -514,7 +516,7 @@ fn request_digest(value: &impl Serialize) -> Result<Vec<u8>> {
     .to_vec())
 }
 
-fn payload_digest(payload: &str) -> Vec<u8> {
+pub fn payload_digest(payload: &str) -> Vec<u8> {
     Sha256::digest(payload.as_bytes()).to_vec()
 }
 
@@ -583,10 +585,7 @@ async fn lock_room(
     }))
 }
 
-pub(super) async fn expire_due_in_room(
-    tx: &mut Transaction<'_, Postgres>,
-    room_id: Uuid,
-) -> Result<u64> {
+pub async fn expire_due_in_room(tx: &mut Transaction<'_, Postgres>, room_id: Uuid) -> Result<u64> {
     let room = sqlx::query(
         "SELECT room_epoch,config_version FROM muc_rooms
           WHERE id=$1 AND destroyed_at IS NULL",
@@ -1005,8 +1004,8 @@ fn principal_matches_occupancy(
 /// module file, so source-contract tests keep reading the whole module after
 /// code moves between them. `module_source_lists_every_child_module` keeps
 /// this list in step with the `mod` declarations above.
-#[cfg(test)]
-const MODULE_SOURCE: &[(&str, &str)] = &[
+#[cfg(any(test, feature = "test-support"))]
+pub const MODULE_SOURCE: &[(&str, &str)] = &[
     ("cluster_muc", include_str!("cluster_muc.rs")),
     ("admin_batch", include_str!("cluster_muc/admin_batch.rs")),
     ("affiliation", include_str!("cluster_muc/affiliation.rs")),
@@ -1021,8 +1020,8 @@ const MODULE_SOURCE: &[(&str, &str)] = &[
     ),
 ];
 
-#[cfg(test)]
-fn module_source() -> String {
+#[cfg(any(test, feature = "test-support"))]
+pub fn module_source() -> String {
     MODULE_SOURCE
         .iter()
         .map(|(_, text)| *text)
@@ -1034,7 +1033,8 @@ fn module_source() -> String {
 mod delivery_handoff_schema_tests {
     #[test]
     fn handoff_is_versioned_authoritative_and_barrier_is_recipient_scoped() {
-        let migration = include_str!("../../migrations/0094_cluster_muc_delivery_receipts.sql");
+        let migration =
+            include_str!("../../../../../migrations/0094_cluster_muc_delivery_receipts.sql");
         for required in [
             "cluster_muc_delivery_handoffs",
             "handoff_version",
@@ -1085,7 +1085,3 @@ mod delivery_handoff_schema_tests {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "cluster_muc_tests.rs"]
-mod tests;

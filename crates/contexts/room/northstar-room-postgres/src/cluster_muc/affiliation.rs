@@ -582,7 +582,7 @@ pub async fn mutate_cluster_muc_registration(
 /// Called by the existing durable invitation admissions while their
 /// PostgreSQL transaction is still open. A later quota/outbox failure rolls
 /// back the affiliation operation and every notification projection too.
-pub(in crate::db) async fn grant_cluster_muc_invitation_in_tx(
+pub async fn grant_cluster_muc_invitation_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     room_id: Uuid,
     authority: &ClusterMucInviteAuthority,

@@ -188,7 +188,7 @@ pub async fn set_muc_affiliations_batch(
     Ok(MucAffiliationBatchOutcome::Applied)
 }
 
-pub(super) enum LocalAdminPrincipalCheck {
+pub enum LocalAdminPrincipalCheck {
     Authorized {
         members_only: bool,
         non_anonymous: bool,
@@ -197,7 +197,7 @@ pub(super) enum LocalAdminPrincipalCheck {
     Stale,
 }
 
-pub(super) async fn lock_local_admin_principal(
+pub async fn lock_local_admin_principal(
     transaction: &mut Transaction<'_, Postgres>,
     room_id: Uuid,
     expected_room_epoch: Uuid,
@@ -246,7 +246,7 @@ pub(super) async fn lock_local_admin_principal(
     })
 }
 
-pub(super) async fn lock_local_admin_affiliation(
+pub async fn lock_local_admin_affiliation(
     transaction: &mut Transaction<'_, Postgres>,
     room_id: Uuid,
     user_id: Uuid,
@@ -271,7 +271,7 @@ pub async fn authorized_muc_admin_role_list(
     actor_scope: &str,
     local_domain: &str,
     asserted_local_role: &str,
-    actor_target: Option<&super::super::cluster_muc::ClusterMucOccupancyTarget>,
+    actor_target: Option<&crate::cluster_muc::ClusterMucOccupancyTarget>,
     clustered: bool,
     requested_role: &str,
 ) -> Result<MucAdminSnapshot<MucAdminRoleList>> {
@@ -288,7 +288,7 @@ pub async fn authorized_muc_admin_role_list(
     );
     let actor_scope = canonical_history_actor(actor_scope)?;
     let mut transaction = pool.begin().await?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     maybe_pause_muc_authorization_for_test("admin_role").await;
     let non_anonymous = match lock_local_admin_principal(
         &mut transaction,
@@ -431,7 +431,7 @@ pub async fn authorized_muc_admin_affiliation_list(
     let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
     let actor_scope = canonical_history_actor(actor_scope)?;
     let mut transaction = pool.begin().await?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     maybe_pause_muc_authorization_for_test("admin_affiliation").await;
     let (members_only, non_anonymous) = match lock_local_admin_principal(
         &mut transaction,

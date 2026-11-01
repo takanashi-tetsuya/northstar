@@ -4,10 +4,10 @@ use super::{
     remove_live_muc_membership_in, remove_local_muc_occupant_exact_from, AppState, MucOccupant,
     OnlineSession, SerializableMucOccupant,
 };
-use crate::db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository;
 use crate::xmpp::muc_delivery::MucDeliveryContext;
 use dashmap::DashMap;
 use northstar_room_application::locked_muc_expiry::LockedMucExpiryService;
+use northstar_room_postgres::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository;
 use northstar_runtime::workers::WorkerHeartbeat;
 use std::{
     sync::{Arc, Weak},

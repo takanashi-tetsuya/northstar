@@ -336,12 +336,12 @@ pub async fn federated_muc_nick_reserved_for_other(
 /// a durable C2S projection. This helper takes only the final room/user lock,
 /// preserving the global -> account -> room lock order used by every invite
 /// admission path. It never commits or rolls back.
-pub(crate) async fn grant_local_muc_invite_affiliation_in_transaction(
+pub async fn grant_local_muc_invite_affiliation_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     id: Uuid,
     room_id: Uuid,
     recipient_id: Uuid,
-    cluster_authority: Option<&super::super::cluster_muc::ClusterMucInviteAuthority>,
+    cluster_authority: Option<&crate::cluster_muc::ClusterMucInviteAuthority>,
 ) -> Result<DurableMucInviteOutcome> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::TEXT, 17))")
         .bind(format!("{room_id}:{recipient_id}"))
@@ -351,36 +351,36 @@ pub(crate) async fn grant_local_muc_invite_affiliation_in_transaction(
         anyhow::ensure!(
             matches!(
                 &authority.subject,
-                super::super::cluster_muc::ClusterMucAffiliationSubject::Local {
+                crate::cluster_muc::ClusterMucAffiliationSubject::Local {
                     user_id,
                     ..
                 } if *user_id == recipient_id
             ),
             "clustered local MUC invite subject does not match recipient"
         );
-        match super::super::cluster_muc::grant_cluster_muc_invitation_in_tx(
+        match crate::cluster_muc::grant_cluster_muc_invitation_in_tx(
             transaction,
             room_id,
             authority,
         )
         .await?
         {
-            super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::Applied {
+            crate::cluster_muc::ClusterMucAffiliationMutationOutcome::Applied {
                 affiliation_changed,
             } => affiliation_changed,
-            super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::Replay { .. } => {
+            crate::cluster_muc::ClusterMucAffiliationMutationOutcome::Replay { .. } => {
                 return Ok(DurableMucInviteOutcome::Replay { id });
             }
-            super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::Outcast => {
+            crate::cluster_muc::ClusterMucAffiliationMutationOutcome::Outcast => {
                 return Ok(DurableMucInviteOutcome::Outcast);
             }
-            super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::Stale
-            | super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::Destroyed => {
+            crate::cluster_muc::ClusterMucAffiliationMutationOutcome::Stale
+            | crate::cluster_muc::ClusterMucAffiliationMutationOutcome::Destroyed => {
                 return Ok(DurableMucInviteOutcome::Stale);
             }
-            super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::Conflict
-            | super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::NotAllowed
-            | super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::Unauthorized => {
+            crate::cluster_muc::ClusterMucAffiliationMutationOutcome::Conflict
+            | crate::cluster_muc::ClusterMucAffiliationMutationOutcome::NotAllowed
+            | crate::cluster_muc::ClusterMucAffiliationMutationOutcome::Unauthorized => {
                 return Ok(DurableMucInviteOutcome::AuthorityRejected);
             }
         }
@@ -419,6 +419,7 @@ pub(crate) async fn grant_local_muc_invite_affiliation_in_transaction(
 /// affiliation plus a recoverable at-least-once invite.
 #[allow(clippy::too_many_arguments)]
 pub async fn admit_local_muc_invite(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     id: Uuid,
     room_id: Uuid,
@@ -427,24 +428,20 @@ pub async fn admit_local_muc_invite(
     sender_jid: &str,
     stanza: &str,
     encrypted: bool,
-    policy: super::super::OfflineStorePolicy,
-    cluster_authority: Option<&super::super::cluster_muc::ClusterMucInviteAuthority>,
+    policy: northstar_room_core::OfflineStorePolicy,
+    cluster_authority: Option<&crate::cluster_muc::ClusterMucInviteAuthority>,
 ) -> Result<DurableMucInviteOutcome> {
     let mut transaction = pool.begin().await?;
     if cluster_authority.is_some() {
         // The node-instance claim takes this lock exclusively. Acquire its
         // shared side before user and room locks, as for personal direct
         // admission, so a new instance cannot miss this late wake fanout.
-        super::super::cluster_keys::lock_direct_spool_instance_claims_in_transaction(
-            &mut transaction,
-        )
-        .await?;
+        effects
+            .lock_direct_spool_instance_claims(&mut transaction)
+            .await?;
     }
-    if !northstar_auth_postgres::users::lock_enabled_users_in_transaction(
-        &mut transaction,
-        &[recipient_id],
-    )
-    .await?
+    if !crate::accounts::lock_enabled_users_in_transaction(&mut transaction, &[recipient_id])
+        .await?
     {
         transaction.rollback().await?;
         return Ok(DurableMucInviteOutcome::RecipientUnavailable);
@@ -456,7 +453,7 @@ pub async fn admit_local_muc_invite(
         anyhow::ensure!(
             matches!(
                 &authority.subject,
-                super::super::cluster_muc::ClusterMucAffiliationSubject::Local { user_id, bare_jid }
+                crate::cluster_muc::ClusterMucAffiliationSubject::Local { user_id, bare_jid }
                     if *user_id == recipient_id && bare_jid == &recipient_bare_jid
             ),
             "cluster MUC invite recipient authority does not match the durable row"
@@ -599,18 +596,16 @@ pub async fn admit_local_muc_invite(
     .execute(&mut *transaction)
     .await?;
     let live_claim_id = if cluster_authority.is_some() {
-        super::super::archive::reserve_cluster_live_delivery_in_transaction(
-            &mut transaction,
-            recipient_id,
-            id,
-        )
-        .await?;
-        super::super::direct_spool_wake_repository::record_direct_spool_wake_in_transaction(
-            &mut transaction,
-            recipient_authority.domainpart(),
-            recipient_id,
-        )
-        .await?;
+        effects
+            .reserve_cluster_live_delivery(&mut transaction, recipient_id, id)
+            .await?;
+        effects
+            .record_direct_spool_wake(
+                &mut transaction,
+                recipient_authority.domainpart(),
+                recipient_id,
+            )
+            .await?;
         Some(id)
     } else {
         None
@@ -627,14 +622,15 @@ pub async fn admit_local_muc_invite(
 /// the affiliation and the durable S2S outbox row.
 #[allow(clippy::too_many_arguments)]
 pub async fn admit_federated_muc_invite(
+    effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
     room_id: Uuid,
     invitee_bare_jid: &str,
     target_domain: &str,
     stanza: &str,
     bounce_to: Option<&str>,
-    policy: super::super::S2sOutboxPolicy,
-    cluster_authority: Option<&super::super::cluster_muc::ClusterMucInviteAuthority>,
+    policy: northstar_federation_core::S2sOutboxPolicy,
+    cluster_authority: Option<&crate::cluster_muc::ClusterMucInviteAuthority>,
 ) -> Result<bool> {
     let invitee = northstar_xmpp_types::jid::CanonicalJid::parse_bare(invitee_bare_jid)?;
     anyhow::ensure!(
@@ -646,14 +642,9 @@ pub async fn admit_federated_muc_invite(
     // The S2S outbox has one global capacity lock. Acquire it before the
     // room/user lock so personal-history + outbox admissions can append the
     // same room mutation without creating an outbox <-> room inversion.
-    if let Err(error) = super::super::enqueue_s2s_outbox_in_transaction(
-        &mut transaction,
-        target_domain,
-        stanza,
-        bounce_to,
-        policy,
-    )
-    .await
+    if let Err(error) = effects
+        .enqueue_federated_stanza(&mut transaction, target_domain, stanza, bounce_to, policy)
+        .await
     {
         transaction.rollback().await?;
         return Err(error);
@@ -697,11 +688,11 @@ pub async fn admit_federated_muc_invite(
 /// Apply only the federated member authorization mutation in a caller-owned
 /// transaction. Callers that also enqueue S2S must acquire the outbox lock
 /// first; this helper then appends the final room/invitee lock.
-pub(crate) async fn grant_federated_muc_invite_affiliation_in_transaction(
+pub async fn grant_federated_muc_invite_affiliation_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     room_id: Uuid,
     invitee_bare_jid: &str,
-    cluster_authority: Option<&super::super::cluster_muc::ClusterMucInviteAuthority>,
+    cluster_authority: Option<&crate::cluster_muc::ClusterMucInviteAuthority>,
 ) -> Result<FederatedMucInviteAffiliationOutcome> {
     let invitee = northstar_xmpp_types::jid::CanonicalJid::parse_bare(invitee_bare_jid)?;
     anyhow::ensure!(
@@ -717,30 +708,30 @@ pub(crate) async fn grant_federated_muc_invite_affiliation_in_transaction(
         anyhow::ensure!(
             matches!(
                 &authority.subject,
-                super::super::cluster_muc::ClusterMucAffiliationSubject::Federated { bare_jid }
+                crate::cluster_muc::ClusterMucAffiliationSubject::Federated { bare_jid }
                     if bare_jid == &invitee
             ),
             "clustered federated MUC invite subject does not match recipient"
         );
-        match super::super::cluster_muc::grant_cluster_muc_invitation_in_tx(
+        match crate::cluster_muc::grant_cluster_muc_invitation_in_tx(
             transaction,
             room_id,
             authority,
         )
         .await?
         {
-            super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::Applied { .. } => {}
-            super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::Replay { .. } => {
+            crate::cluster_muc::ClusterMucAffiliationMutationOutcome::Applied { .. } => {}
+            crate::cluster_muc::ClusterMucAffiliationMutationOutcome::Replay { .. } => {
                 return Ok(FederatedMucInviteAffiliationOutcome::Replay);
             }
-            super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::Outcast
-            | super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::Conflict
-            | super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::NotAllowed
-            | super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::Unauthorized => {
+            crate::cluster_muc::ClusterMucAffiliationMutationOutcome::Outcast
+            | crate::cluster_muc::ClusterMucAffiliationMutationOutcome::Conflict
+            | crate::cluster_muc::ClusterMucAffiliationMutationOutcome::NotAllowed
+            | crate::cluster_muc::ClusterMucAffiliationMutationOutcome::Unauthorized => {
                 return Ok(FederatedMucInviteAffiliationOutcome::Rejected);
             }
-            super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::Stale
-            | super::super::cluster_muc::ClusterMucAffiliationMutationOutcome::Destroyed => {
+            crate::cluster_muc::ClusterMucAffiliationMutationOutcome::Stale
+            | crate::cluster_muc::ClusterMucAffiliationMutationOutcome::Destroyed => {
                 return Ok(FederatedMucInviteAffiliationOutcome::Stale);
             }
         }

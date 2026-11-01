@@ -16,10 +16,12 @@ impl PostgresClusterSessionRouteMaintenanceRepository {
 
 impl ClusterSessionRouteMaintenanceRepository for PostgresClusterSessionRouteMaintenanceRepository {
     async fn cleanup_routes(&self, limit: i32) -> Result<u64> {
-        super::cleanup_cluster_session_routes(&self.pool, limit).await
+        northstar_room_postgres::cluster_muc::cleanup_cluster_session_routes(&self.pool, limit)
+            .await
     }
 
     async fn validate_authority(&self) -> Result<()> {
-        super::validate_cluster_session_route_authority(&self.pool).await
+        northstar_room_postgres::cluster_muc::validate_cluster_session_route_authority(&self.pool)
+            .await
     }
 }

@@ -1,6 +1,6 @@
 //! PostgreSQL implementation of the room application port.
 
-use crate::db;
+use crate::effects::RoomEffects;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_room_application::muc_service::*;
@@ -17,39 +17,43 @@ use self::conversions::{
 };
 
 #[derive(Clone)]
-pub(crate) struct PostgresMucRepository {
+pub struct PostgresMucRepository<E> {
     pool: PgPool,
+    effects: E,
 }
 
-impl PostgresMucRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
-        Self { pool }
+impl<E: RoomEffects> PostgresMucRepository<E> {
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            pool,
+            effects: E::default(),
+        }
     }
 }
 
-pub(crate) struct PostgresClusterMucOccupancyMaintenanceRepository {
+pub struct PostgresClusterMucOccupancyMaintenanceRepository {
     pool: PgPool,
 }
 
 impl PostgresClusterMucOccupancyMaintenanceRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
 
 #[derive(Clone)]
-pub(crate) struct PostgresClusterMucOccupancyDepartureRepository {
+pub struct PostgresClusterMucOccupancyDepartureRepository {
     pool: PgPool,
 }
 
 impl PostgresClusterMucOccupancyDepartureRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
 
-pub(super) fn discussion_to_db(command: &MucDiscussion) -> db::MucDiscussion<'_> {
-    db::MucDiscussion {
+pub fn discussion_to_db(command: &MucDiscussion) -> crate::muc::MucDiscussion<'_> {
+    crate::muc::MucDiscussion {
         id: command.id,
         room_id: command.room_id,
         actor_scope: &command.actor_scope,
@@ -64,7 +68,7 @@ pub(super) fn discussion_to_db(command: &MucDiscussion) -> db::MucDiscussion<'_>
     }
 }
 
-impl MucDiscussionRepository for PostgresMucRepository {
+impl<E: RoomEffects> MucDiscussionRepository for PostgresMucRepository<E> {
     type Error = anyhow::Error;
 
     fn admit_discussion<'a>(
@@ -73,13 +77,19 @@ impl MucDiscussionRepository for PostgresMucRepository {
     ) -> RepositoryFuture<'a, Self::Error> {
         Box::pin(async move {
             Ok(
-                match db::admit_muc_discussion(&self.pool, discussion_to_db(command)).await? {
-                    db::MucDiscussionAdmission::Stored(id) => MucDiscussionAdmission::Stored(id),
-                    db::MucDiscussionAdmission::Replay(id) => MucDiscussionAdmission::Replay(id),
-                    db::MucDiscussionAdmission::Unauthorized => {
+                match crate::muc::admit_muc_discussion(&self.pool, discussion_to_db(command))
+                    .await?
+                {
+                    crate::muc::MucDiscussionAdmission::Stored(id) => {
+                        MucDiscussionAdmission::Stored(id)
+                    }
+                    crate::muc::MucDiscussionAdmission::Replay(id) => {
+                        MucDiscussionAdmission::Replay(id)
+                    }
+                    crate::muc::MucDiscussionAdmission::Unauthorized => {
                         MucDiscussionAdmission::Unauthorized
                     }
-                    db::MucDiscussionAdmission::Stale => MucDiscussionAdmission::Stale,
+                    crate::muc::MucDiscussionAdmission::Stale => MucDiscussionAdmission::Stale,
                 },
             )
         })
@@ -91,38 +101,42 @@ impl MucDiscussionRepository for PostgresMucRepository {
     ) -> RepositoryFuture<'a, Self::Error> {
         Box::pin(async move {
             Ok(
-                match db::admit_muc_discussion_observed(&self.pool, request).await? {
-                    db::MucDiscussionAdmission::Stored(id) => MucDiscussionAdmission::Stored(id),
-                    db::MucDiscussionAdmission::Replay(id) => MucDiscussionAdmission::Replay(id),
-                    db::MucDiscussionAdmission::Unauthorized => {
+                match crate::muc::admit_muc_discussion_observed(&self.pool, request).await? {
+                    crate::muc::MucDiscussionAdmission::Stored(id) => {
+                        MucDiscussionAdmission::Stored(id)
+                    }
+                    crate::muc::MucDiscussionAdmission::Replay(id) => {
+                        MucDiscussionAdmission::Replay(id)
+                    }
+                    crate::muc::MucDiscussionAdmission::Unauthorized => {
                         MucDiscussionAdmission::Unauthorized
                     }
-                    db::MucDiscussionAdmission::Stale => MucDiscussionAdmission::Stale,
+                    crate::muc::MucDiscussionAdmission::Stale => MucDiscussionAdmission::Stale,
                 },
             )
         })
     }
 }
 
-impl MucRepository for PostgresMucRepository {
+impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
     async fn local_room_snapshot(&self, localpart: &str) -> Result<Option<MucRoom>> {
-        Ok(db::muc_room(&self.pool, localpart).await?.map(Into::into))
+        Ok(crate::muc::muc_room(&self.pool, localpart)
+            .await?
+            .map(Into::into))
     }
 
     async fn local_affiliation(&self, room_id: Uuid, user_id: Uuid) -> Result<Option<String>> {
-        db::muc_affiliation(&self.pool, room_id, user_id).await
+        crate::muc::muc_affiliation(&self.pool, room_id, user_id).await
     }
 
     async fn federated_affiliation(&self, room_id: Uuid, bare_jid: &str) -> Result<Option<String>> {
-        db::federated_muc_affiliation(&self.pool, room_id, bare_jid).await
+        crate::muc::federated_muc_affiliation(&self.pool, room_id, bare_jid).await
     }
 
     async fn enabled_local_account(&self, username: &str) -> Result<Option<MucLocalAccount>> {
-        Ok(
-            northstar_auth_postgres::users::enabled_user_id(&self.pool, username)
-                .await?
-                .map(|id| MucLocalAccount { id }),
-        )
+        Ok(crate::accounts::enabled_user_id(&self.pool, username)
+            .await?
+            .map(|id| MucLocalAccount { id }))
     }
 
     async fn is_blocked_for_account(
@@ -131,11 +145,13 @@ impl MucRepository for PostgresMucRepository {
         owner_bare_jid: &str,
         candidate: &str,
     ) -> Result<bool> {
-        db::is_blocked_for_account(&self.pool, owner_id, owner_bare_jid, candidate).await
+        self.effects
+            .is_blocked_for_account(&self.pool, owner_id, owner_bare_jid, candidate)
+            .await
     }
 
     async fn blocked_jids(&self, user_id: Uuid) -> Result<Vec<String>> {
-        db::blocked_jids(&self.pool, user_id).await
+        self.effects.blocked_jids(&self.pool, user_id).await
     }
 
     async fn store_local_muc_offline(
@@ -147,25 +163,24 @@ impl MucRepository for PostgresMucRepository {
         encrypted: bool,
         policy: OfflineStorePolicy,
     ) -> Result<OfflineStoreOutcome> {
-        let recipient =
-            northstar_auth_postgres::users::find_enabled_user_by_id(&self.pool, recipient_id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("MUC offline recipient account is unavailable"))?;
+        let recipient = crate::accounts::find_enabled_user_by_id(&self.pool, recipient_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("MUC offline recipient account is unavailable"))?;
         let recipient_bare_jid = northstar_xmpp_types::jid::canonicalize_bare(&format!(
             "{}@{}",
             recipient.username, configured_domain
         ))?;
-        Ok(db::store_offline_for_recipient(
-            &self.pool,
-            recipient_id,
-            &recipient_bare_jid,
-            sender_jid,
-            stanza,
-            encrypted,
-            policy.into(),
-        )
-        .await?
-        .into())
+        self.effects
+            .store_offline_for_recipient(
+                &self.pool,
+                recipient_id,
+                &recipient_bare_jid,
+                sender_jid,
+                stanza,
+                encrypted,
+                policy,
+            )
+            .await
     }
 
     async fn local_message_by_id(
@@ -173,9 +188,11 @@ impl MucRepository for PostgresMucRepository {
         room_id: Uuid,
         message_id: Uuid,
     ) -> Result<Option<MucMessage>> {
-        Ok(db::muc_message_by_id(&self.pool, room_id, message_id)
-            .await?
-            .map(Into::into))
+        Ok(
+            crate::muc::muc_message_by_id(&self.pool, room_id, message_id)
+                .await?
+                .map(Into::into),
+        )
     }
 
     async fn local_history_since(
@@ -184,15 +201,17 @@ impl MucRepository for PostgresMucRepository {
         limit: i64,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<MucMessage>> {
-        Ok(db::muc_history_since(&self.pool, room_id, limit, since)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect())
+        Ok(
+            crate::muc::muc_history_since(&self.pool, room_id, limit, since)
+                .await?
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        )
     }
 
     async fn delete_expired_locked_room(&self, room_id: Uuid) -> Result<bool> {
-        db::delete_expired_locked_muc_room(&self.pool, room_id).await
+        crate::muc::delete_expired_locked_muc_room(&self.pool, room_id).await
     }
 
     async fn delete_temporary_room(
@@ -201,11 +220,11 @@ impl MucRepository for PostgresMucRepository {
         room_epoch: Uuid,
         config_version: i64,
     ) -> Result<bool> {
-        db::delete_temporary_muc_room(&self.pool, room_id, room_epoch, config_version).await
+        crate::muc::delete_temporary_muc_room(&self.pool, room_id, room_epoch, config_version).await
     }
 
     async fn local_reserved_nick(&self, room_id: Uuid, user_id: Uuid) -> Result<Option<String>> {
-        db::muc_reserved_nick(&self.pool, room_id, user_id).await
+        crate::muc::muc_reserved_nick(&self.pool, room_id, user_id).await
     }
 
     async fn local_nick_reserved_for_other(
@@ -214,7 +233,7 @@ impl MucRepository for PostgresMucRepository {
         user_id: Uuid,
         nick: &str,
     ) -> Result<bool> {
-        db::muc_nick_reserved_for_other(&self.pool, room_id, user_id, nick).await
+        crate::muc::muc_nick_reserved_for_other(&self.pool, room_id, user_id, nick).await
     }
 
     async fn federated_reserved_nick(
@@ -222,7 +241,7 @@ impl MucRepository for PostgresMucRepository {
         room_id: Uuid,
         bare_jid: &str,
     ) -> Result<Option<String>> {
-        db::federated_muc_reserved_nick(&self.pool, room_id, bare_jid).await
+        crate::muc::federated_muc_reserved_nick(&self.pool, room_id, bare_jid).await
     }
 
     async fn federated_nick_reserved_for_other(
@@ -231,7 +250,7 @@ impl MucRepository for PostgresMucRepository {
         bare_jid: &str,
         nick: &str,
     ) -> Result<bool> {
-        db::federated_muc_nick_reserved_for_other(&self.pool, room_id, bare_jid, nick).await
+        crate::muc::federated_muc_nick_reserved_for_other(&self.pool, room_id, bare_jid, nick).await
     }
 
     async fn get_or_create_local_room(
@@ -241,7 +260,7 @@ impl MucRepository for PostgresMucRepository {
         creator_full_jid: &str,
     ) -> Result<(MucRoom, bool)> {
         let (room, created) =
-            db::get_or_create_muc_room(&self.pool, localpart, creator_id, creator_full_jid)
+            crate::muc::get_or_create_muc_room(&self.pool, localpart, creator_id, creator_full_jid)
                 .await
                 .map_err(map_capacity_error)?;
         Ok((room.into(), created))
@@ -253,7 +272,7 @@ impl MucRepository for PostgresMucRepository {
         creator_full_jid: &str,
     ) -> Result<(MucRoom, bool)> {
         let (room, created) =
-            db::get_or_create_federated_muc_room(&self.pool, localpart, creator_full_jid)
+            crate::muc::get_or_create_federated_muc_room(&self.pool, localpart, creator_full_jid)
                 .await
                 .map_err(map_capacity_error)?;
         Ok((room.into(), created))
@@ -265,9 +284,11 @@ impl MucRepository for PostgresMucRepository {
         before: Option<Option<&str>>,
         max: i64,
     ) -> Result<Option<MucDiscoPage>> {
-        Ok(db::public_muc_room_page(&self.pool, after, before, max)
-            .await?
-            .map(Into::into))
+        Ok(
+            crate::muc::public_muc_room_page(&self.pool, after, before, max)
+                .await?
+                .map(Into::into),
+        )
     }
 
     async fn register_local_member(
@@ -277,14 +298,14 @@ impl MucRepository for PostgresMucRepository {
         nick: &str,
     ) -> Result<MucRegistrationOutcome> {
         Ok(
-            db::register_local_muc_member(&self.pool, room_id, user_id, nick)
+            crate::muc::register_local_muc_member(&self.pool, room_id, user_id, nick)
                 .await?
                 .into(),
         )
     }
 
     async fn unregister_local_member(&self, room_id: Uuid, user_id: Uuid) -> Result<bool> {
-        db::unregister_local_muc_member(&self.pool, room_id, user_id).await
+        crate::muc::unregister_local_muc_member(&self.pool, room_id, user_id).await
     }
 
     async fn register_federated_member(
@@ -294,14 +315,14 @@ impl MucRepository for PostgresMucRepository {
         nick: &str,
     ) -> Result<MucRegistrationOutcome> {
         Ok(
-            db::register_federated_muc_member(&self.pool, room_id, bare_jid, nick)
+            crate::muc::register_federated_muc_member(&self.pool, room_id, bare_jid, nick)
                 .await?
                 .into(),
         )
     }
 
     async fn unregister_federated_member(&self, room_id: Uuid, bare_jid: &str) -> Result<bool> {
-        db::unregister_federated_muc_member(&self.pool, room_id, bare_jid).await
+        crate::muc::unregister_federated_muc_member(&self.pool, room_id, bare_jid).await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -316,7 +337,7 @@ impl MucRepository for PostgresMucRepository {
         reserved_nick: Option<&str>,
     ) -> Result<ClusterMucRegistrationOutcome> {
         let principal = principal.into();
-        Ok(db::mutate_cluster_muc_registration(
+        Ok(crate::cluster_muc::mutate_cluster_muc_registration(
             &self.pool,
             operation_id,
             room_id,
@@ -343,18 +364,16 @@ impl MucRepository for PostgresMucRepository {
         policy: OfflineStorePolicy,
         cluster_authority: Option<&ClusterMucInviteAuthority>,
     ) -> Result<DurableMucInviteOutcome> {
-        let recipient =
-            northstar_auth_postgres::users::find_enabled_user_by_id(&self.pool, recipient_id)
-                .await?
-                .ok_or_else(|| {
-                    anyhow::anyhow!("local MUC invite recipient account is unavailable")
-                })?;
+        let recipient = crate::accounts::find_enabled_user_by_id(&self.pool, recipient_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("local MUC invite recipient account is unavailable"))?;
         let recipient_bare_jid = northstar_xmpp_types::jid::canonicalize_bare(&format!(
             "{}@{}",
             recipient.username, configured_domain
         ))?;
         let cluster_authority = cluster_authority.map(Into::into);
-        Ok(db::admit_local_muc_invite(
+        Ok(crate::muc::admit_local_muc_invite(
+            &self.effects,
             &self.pool,
             id,
             room_id,
@@ -363,7 +382,7 @@ impl MucRepository for PostgresMucRepository {
             sender_jid,
             stanza,
             encrypted,
-            policy.into(),
+            policy,
             cluster_authority.as_ref(),
         )
         .await?
@@ -382,7 +401,8 @@ impl MucRepository for PostgresMucRepository {
         cluster_authority: Option<&ClusterMucInviteAuthority>,
     ) -> Result<bool> {
         let cluster_authority = cluster_authority.map(Into::into);
-        db::admit_federated_muc_invite(
+        crate::muc::admit_federated_muc_invite(
+            &self.effects,
             &self.pool,
             room_id,
             invitee_bare_jid,
@@ -402,7 +422,7 @@ impl MucRepository for PostgresMucRepository {
         authority: MucActorAuthority,
     ) -> Result<MucSubjectOutcome> {
         let authority = actor_authority_to_db(&authority);
-        Ok(db::set_local_muc_subject(
+        Ok(crate::muc::set_local_muc_subject(
             &self.pool,
             subject_mutation_into_db(mutation),
             archive,
@@ -422,7 +442,7 @@ impl MucRepository for PostgresMucRepository {
         archive: bool,
     ) -> Result<ClusterMucTransitionOutcome> {
         let actor = actor.into();
-        Ok(db::set_cluster_muc_subject(
+        Ok(crate::cluster_muc::set_cluster_muc_subject(
             &self.pool,
             operation_id,
             expected_room_epoch,
@@ -439,7 +459,7 @@ impl MucRepository for PostgresMucRepository {
         &self,
         mutation: MucRetractionMutation<'_>,
     ) -> Result<MucRetractionOutcome> {
-        Ok(db::retract_muc_message_and_archive_action(
+        Ok(crate::muc::retract_muc_message_and_archive_action(
             &self.pool,
             retraction_mutation_as_db(&mutation),
         )
@@ -453,7 +473,7 @@ impl MucRepository for PostgresMucRepository {
         actor_full_jid: &str,
         config: MucConfigUpdate<'_>,
     ) -> Result<MucConfigurationOutcome> {
-        Ok(db::update_muc_config(
+        Ok(crate::muc::update_muc_config(
             &self.pool,
             room_id,
             actor_full_jid,
@@ -464,11 +484,11 @@ impl MucRepository for PostgresMucRepository {
     }
 
     async fn cancel_locked_room(&self, room_id: Uuid, actor_full_jid: &str) -> Result<bool> {
-        db::cancel_locked_muc_room(&self.pool, room_id, actor_full_jid).await
+        crate::muc::cancel_locked_muc_room(&self.pool, room_id, actor_full_jid).await
     }
 
     async fn delete_room(&self, room_id: Uuid) -> Result<()> {
-        db::delete_muc_room(&self.pool, room_id).await
+        crate::muc::delete_muc_room(&self.pool, room_id).await
     }
 
     async fn set_local_legacy_affiliations_batch(
@@ -478,14 +498,14 @@ impl MucRepository for PostgresMucRepository {
     ) -> Result<MucAffiliationBatchOutcome> {
         let changes = changes.iter().map(Into::into).collect::<Vec<_>>();
         Ok(
-            db::set_muc_affiliations_batch(&self.pool, room_id, &changes)
+            crate::muc::set_muc_affiliations_batch(&self.pool, room_id, &changes)
                 .await?
                 .into(),
         )
     }
 
     async fn local_affiliations(&self, room_id: Uuid, affiliation: &str) -> Result<Vec<String>> {
-        db::get_muc_affiliations(&self.pool, room_id, affiliation).await
+        crate::muc::get_muc_affiliations(&self.pool, room_id, affiliation).await
     }
 
     async fn federated_affiliations(
@@ -493,7 +513,7 @@ impl MucRepository for PostgresMucRepository {
         room_id: Uuid,
         affiliation: &str,
     ) -> Result<Vec<String>> {
-        db::get_federated_muc_affiliations(&self.pool, room_id, affiliation).await
+        crate::muc::get_federated_muc_affiliations(&self.pool, room_id, affiliation).await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -510,7 +530,7 @@ impl MucRepository for PostgresMucRepository {
         requested_role: &str,
     ) -> Result<MucAdminSnapshot<MucAdminRoleList>> {
         let actor_target = actor_target.map(Into::into);
-        let snapshot = db::authorized_muc_admin_role_list(
+        let snapshot = crate::muc::authorized_muc_admin_role_list(
             &self.pool,
             room_id,
             expected_room_epoch,
@@ -535,7 +555,7 @@ impl MucRepository for PostgresMucRepository {
         actor_scope: &str,
         requested_affiliation: &str,
     ) -> Result<MucAdminSnapshot<Vec<MucAdminAffiliationEntry>>> {
-        let snapshot = db::authorized_muc_admin_affiliation_list(
+        let snapshot = crate::muc::authorized_muc_admin_affiliation_list(
             &self.pool,
             room_id,
             expected_room_epoch,
@@ -560,11 +580,12 @@ impl MucRepository for PostgresMucRepository {
         &self,
         request: ClusterMucJoin<'_>,
     ) -> Result<ClusterMucJoinOutcome> {
-        Ok(
-            db::claim_cluster_muc_occupancy(&self.pool, cluster_join_into_db(request))
-                .await?
-                .into(),
+        Ok(crate::cluster_muc::claim_cluster_muc_occupancy(
+            &self.pool,
+            cluster_join_into_db(request),
         )
+        .await?
+        .into())
     }
 
     async fn renew_local_cluster_occupancy(
@@ -574,7 +595,8 @@ impl MucRepository for PostgresMucRepository {
         lease: Duration,
     ) -> Result<bool> {
         let target = target.into();
-        db::renew_cluster_muc_occupancy(&self.pool, &target, owner_node_id, lease).await
+        crate::cluster_muc::renew_cluster_muc_occupancy(&self.pool, &target, owner_node_id, lease)
+            .await
     }
 
     async fn refresh_local_cluster_presence(
@@ -585,7 +607,7 @@ impl MucRepository for PostgresMucRepository {
         lease: Duration,
     ) -> Result<bool> {
         let target = target.into();
-        db::refresh_cluster_muc_presence(
+        crate::cluster_muc::refresh_cluster_muc_presence(
             &self.pool,
             &target,
             owner_node_id,
@@ -608,7 +630,7 @@ impl MucRepository for PostgresMucRepository {
         lease: Duration,
     ) -> Result<ClusterMucTransitionOutcome> {
         let target = target.into();
-        Ok(db::transition_cluster_muc_occupancy(
+        Ok(crate::cluster_muc::transition_cluster_muc_occupancy(
             &self.pool,
             operation_id,
             &target,
@@ -632,7 +654,7 @@ impl MucRepository for PostgresMucRepository {
         new_connection_uuid: Uuid,
         lease: Duration,
     ) -> Result<ClusterMucTransitionOutcome> {
-        Ok(db::rebind_federated_cluster_muc_occupancy(
+        Ok(crate::cluster_muc::rebind_federated_cluster_muc_occupancy(
             &self.pool,
             operation_id,
             &target.into(),
@@ -651,7 +673,7 @@ impl MucRepository for PostgresMucRepository {
         target: &ClusterMucOccupancyTarget,
         owner_node_id: &str,
     ) -> Result<ClusterMucTransitionOutcome> {
-        Ok(db::disconnect_cluster_muc_occupancy(
+        Ok(crate::cluster_muc::disconnect_cluster_muc_occupancy(
             &self.pool,
             operation_id,
             &target.into(),
@@ -669,7 +691,7 @@ impl MucRepository for PostgresMucRepository {
         new_nick: &str,
     ) -> Result<ClusterMucTransitionOutcome> {
         let target = target.into();
-        Ok(db::rename_cluster_muc_occupancy(
+        Ok(crate::cluster_muc::rename_cluster_muc_occupancy(
             &self.pool,
             operation_id,
             &target,
@@ -694,7 +716,7 @@ impl MucRepository for PostgresMucRepository {
     ) -> Result<ClusterMucConfigurationOutcome> {
         let actor_target = actor_target.into();
         let principal = principal.into();
-        Ok(db::update_cluster_muc_config(
+        Ok(crate::cluster_muc::update_cluster_muc_config(
             &self.pool,
             operation_id,
             room_id,
@@ -724,9 +746,9 @@ impl MucRepository for PostgresMucRepository {
         let actor_target = actor_target.into();
         let actor = actor.into();
         let changes = changes.iter().map(Into::into).collect::<Vec<_>>();
-        Ok(db::apply_cluster_muc_affiliations_batch(
+        Ok(crate::cluster_muc::apply_cluster_muc_affiliations_batch(
             &self.pool,
-            db::ClusterMucAffiliationBatch {
+            crate::cluster_muc::ClusterMucAffiliationBatch {
                 operation_id,
                 room_id,
                 expected_room_epoch,
@@ -757,9 +779,9 @@ impl MucRepository for PostgresMucRepository {
         let actor_target = actor_target.map(Into::into);
         let actor = actor.into();
         let changes = changes.iter().map(Into::into).collect::<Vec<_>>();
-        Ok(db::apply_cluster_muc_admin_batch(
+        Ok(crate::cluster_muc::apply_cluster_muc_admin_batch(
             &self.pool,
-            db::ClusterMucAdminBatch {
+            crate::cluster_muc::ClusterMucAdminBatch {
                 operation_id,
                 room_id,
                 expected_room_epoch,
@@ -784,11 +806,15 @@ impl MucRepository for PostgresMucRepository {
     ) -> Result<ClusterMucTransitionOutcome> {
         let actor = actor.into();
         let target = target.into();
-        Ok(
-            db::kick_cluster_muc_occupancy(&self.pool, operation_id, &actor, &target, reason)
-                .await?
-                .into(),
+        Ok(crate::cluster_muc::kick_cluster_muc_occupancy(
+            &self.pool,
+            operation_id,
+            &actor,
+            &target,
+            reason,
         )
+        .await?
+        .into())
     }
 
     async fn change_local_cluster_role(
@@ -801,18 +827,16 @@ impl MucRepository for PostgresMucRepository {
     ) -> Result<ClusterMucTransitionOutcome> {
         let actor = actor.into();
         let target = target.into();
-        Ok(
-            db::change_cluster_muc_role(
-                &self.pool,
-                operation_id,
-                &actor,
-                &target,
-                new_role,
-                reason,
-            )
-            .await?
-            .into(),
+        Ok(crate::cluster_muc::change_cluster_muc_role(
+            &self.pool,
+            operation_id,
+            &actor,
+            &target,
+            new_role,
+            reason,
         )
+        .await?
+        .into())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -828,7 +852,7 @@ impl MucRepository for PostgresMucRepository {
         reason: Option<&str>,
     ) -> Result<ClusterMucTransitionOutcome> {
         let actor = actor.map(Into::into);
-        Ok(db::destroy_cluster_muc_room(
+        Ok(crate::cluster_muc::destroy_cluster_muc_room(
             &self.pool,
             operation_id,
             room_id,
@@ -849,7 +873,7 @@ impl MucRepository for PostgresMucRepository {
         occupant_incarnation: Uuid,
         connection_uuid: Uuid,
     ) -> Result<Option<ClusterMucOccupancyTarget>> {
-        Ok(db::cluster_muc_occupancy_target(
+        Ok(crate::cluster_muc::cluster_muc_occupancy_target(
             &self.pool,
             room_id,
             occupant_incarnation,
@@ -865,16 +889,14 @@ impl MucRepository for PostgresMucRepository {
         expected_room_epoch: Uuid,
         nick: &str,
     ) -> Result<Option<ClusterMucOccupancyTarget>> {
-        Ok(
-            db::cluster_muc_occupancy_target_by_nick(
-                &self.pool,
-                room_id,
-                expected_room_epoch,
-                nick,
-            )
-            .await?
-            .map(occupancy_target_from_db),
+        Ok(crate::cluster_muc::cluster_muc_occupancy_target_by_nick(
+            &self.pool,
+            room_id,
+            expected_room_epoch,
+            nick,
         )
+        .await?
+        .map(occupancy_target_from_db))
     }
 
     async fn exact_local_cluster_occupancy_snapshot(
@@ -883,23 +905,23 @@ impl MucRepository for PostgresMucRepository {
     ) -> Result<Option<ClusterMucOccupancy>> {
         let target = target.into();
         Ok(
-            db::cluster_muc_exact_occupancy_snapshot(&self.pool, &target)
+            crate::cluster_muc::cluster_muc_exact_occupancy_snapshot(&self.pool, &target)
                 .await?
                 .map(Into::into),
         )
     }
 
     async fn cluster_room_is_empty(&self, room_id: Uuid) -> Result<bool> {
-        db::cluster_muc_room_is_empty(&self.pool, room_id).await
+        crate::cluster_muc::cluster_muc_room_is_empty(&self.pool, room_id).await
     }
 
     async fn committed_wake(&self, operation_id: Uuid) -> Result<Option<ClusterMucWakeDescriptor>> {
-        db::cluster_muc_wake_descriptor(&self.pool, operation_id).await
+        crate::cluster_muc::cluster_muc_wake_descriptor(&self.pool, operation_id).await
     }
 }
 
 fn map_capacity_error(error: anyhow::Error) -> anyhow::Error {
-    if db::is_capacity_exhausted(&error) {
+    if northstar_postgres::is_capacity_exhausted(&error) {
         error.context(MucCapacityExceeded)
     } else {
         error

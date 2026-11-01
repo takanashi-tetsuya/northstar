@@ -2310,6 +2310,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-room-postgres"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "northstar-auth-core",
+ "northstar-federation-core",
+ "northstar-postgres",
+ "northstar-room-application",
+ "northstar-room-core",
+ "northstar-session-core",
+ "northstar-xmpp-types",
+ "rand 0.8.7",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "northstar-roster-application"
 version = "0.1.0"
 dependencies = [
@@ -3686,6 +3710,7 @@ dependencies = [
  "northstar-pubsub-xmpp",
  "northstar-room-application",
  "northstar-room-core",
+ "northstar-room-postgres",
  "northstar-roster-application",
  "northstar-roster-core",
  "northstar-roster-postgres",

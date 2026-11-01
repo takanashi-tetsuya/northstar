@@ -38,7 +38,7 @@ impl northstar_workflows::account_lifecycle::AccountDeletionEffects for RootRost
         user_id: Uuid,
         account_bare_jid: &str,
     ) -> Result<u64> {
-        crate::db::cluster_muc::revoke_cluster_muc_account_in_tx(
+        northstar_room_postgres::cluster_muc::revoke_cluster_muc_account_in_tx(
             transaction,
             user_id,
             account_bare_jid,

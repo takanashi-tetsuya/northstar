@@ -1,6 +1,5 @@
 //! The administrator MUC-destroy effect's complete PostgreSQL transaction.
 
-use crate::db;
 use anyhow::{Context, Result};
 use northstar_operations_application::operation_muc_destroy::{
     MucDestroyAudience, MucDestroyCommit, MucDestroyRepository, ValidatedMucDestroy,
@@ -45,7 +44,7 @@ impl MucDestroyRepository for PostgresMucDestroyRepository {
         .await?;
         let actor_label = command.actor_id.to_string();
         let committed_audience = if let Some(room_id) = room_id {
-            db::admin_destroy_cluster_muc_room_in_tx(
+            northstar_room_postgres::cluster_muc::admin_destroy_cluster_muc_room_in_tx(
                 &mut tx,
                 command.operation_id,
                 room_id,
@@ -105,7 +104,7 @@ mod tests {
             .connect(&url)
             .await
             .unwrap();
-        db::migrate(&pool).await.unwrap();
+        crate::db::migrate(&pool).await.unwrap();
         let operation_id = Uuid::new_v4();
         let room_jid = "absent-room@conference.example.test";
         let before: i64 =

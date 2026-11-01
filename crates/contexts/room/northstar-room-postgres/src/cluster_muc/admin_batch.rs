@@ -14,13 +14,13 @@ pub struct ClusterMucAffiliationBatch<'a> {
     pub actor_target: &'a ClusterMucOccupancyTarget,
     pub actor: &'a ClusterMucPrincipal,
     pub actor_full_jid: &'a str,
-    pub changes: &'a [super::super::muc::MucAffiliationChange],
+    pub changes: &'a [crate::muc::MucAffiliationChange],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum ClusterMucAdminChange {
     Affiliation {
-        target: super::super::muc::MucAffiliationTarget,
+        target: crate::muc::MucAffiliationTarget,
         affiliation: String,
         reason: Option<String>,
     },
@@ -61,7 +61,7 @@ pub struct ClusterMucAdminBatch<'a> {
 pub async fn apply_cluster_muc_affiliations_batch(
     pool: &PgPool,
     batch: ClusterMucAffiliationBatch<'_>,
-) -> Result<super::super::muc::MucAffiliationBatchOutcome> {
+) -> Result<crate::muc::MucAffiliationBatchOutcome> {
     let ClusterMucAffiliationBatch {
         operation_id,
         room_id,
@@ -79,7 +79,7 @@ pub async fn apply_cluster_muc_affiliations_batch(
         "MUC affiliation actor does not own the authenticated full JID"
     );
     if changes.is_empty() {
-        return Ok(super::super::muc::MucAffiliationBatchOutcome::Applied);
+        return Ok(crate::muc::MucAffiliationBatchOutcome::Applied);
     }
 
     #[derive(Serialize)]
@@ -91,12 +91,12 @@ pub async fn apply_cluster_muc_affiliations_batch(
     let digest_changes = changes
         .iter()
         .map(|change| match &change.target {
-            super::super::muc::MucAffiliationTarget::LocalUsername(username) => DigestChange {
+            crate::muc::MucAffiliationTarget::LocalUsername(username) => DigestChange {
                 target_kind: "local",
                 target: username,
                 affiliation: &change.affiliation,
             },
-            super::super::muc::MucAffiliationTarget::FederatedBareJid(jid) => DigestChange {
+            crate::muc::MucAffiliationTarget::FederatedBareJid(jid) => DigestChange {
                 target_kind: "federated",
                 target: jid,
                 affiliation: &change.affiliation,
@@ -125,23 +125,23 @@ pub async fn apply_cluster_muc_affiliations_batch(
         .is_some()
     {
         tx.commit().await?;
-        return Ok(super::super::muc::MucAffiliationBatchOutcome::Applied);
+        return Ok(crate::muc::MucAffiliationBatchOutcome::Applied);
     }
     let Some(room) = lock_room(&mut tx, room_id).await? else {
         tx.rollback().await?;
-        return Ok(super::super::muc::MucAffiliationBatchOutcome::MissingTarget);
+        return Ok(crate::muc::MucAffiliationBatchOutcome::MissingTarget);
     };
     if room.destroyed {
         tx.rollback().await?;
-        return Ok(super::super::muc::MucAffiliationBatchOutcome::Destroyed);
+        return Ok(crate::muc::MucAffiliationBatchOutcome::Destroyed);
     }
     if room.room_epoch != expected_room_epoch || room.config_version != expected_config_version {
         tx.rollback().await?;
-        return Ok(super::super::muc::MucAffiliationBatchOutcome::Stale);
+        return Ok(crate::muc::MucAffiliationBatchOutcome::Stale);
     }
     if actor_target.room_id != room_id || actor_target.room_epoch != room.room_epoch {
         tx.rollback().await?;
-        return Ok(super::super::muc::MucAffiliationBatchOutcome::Stale);
+        return Ok(crate::muc::MucAffiliationBatchOutcome::Stale);
     }
     let actor_row = sqlx::query(
         "SELECT * FROM cluster_muc_occupancies
@@ -162,7 +162,7 @@ pub async fn apply_cluster_muc_affiliations_batch(
     .await?;
     let Some(actor_row) = actor_row else {
         tx.rollback().await?;
-        return Ok(super::super::muc::MucAffiliationBatchOutcome::Unauthorized);
+        return Ok(crate::muc::MucAffiliationBatchOutcome::Unauthorized);
     };
     let actor_snapshot = occupancy_from_row(&actor_row);
     if !exact_target_matches_row(actor_target, &actor_snapshot)
@@ -170,14 +170,14 @@ pub async fn apply_cluster_muc_affiliations_batch(
         || !principal_matches_occupancy(actor, &actor_snapshot)
     {
         tx.rollback().await?;
-        return Ok(super::super::muc::MucAffiliationBatchOutcome::Unauthorized);
+        return Ok(crate::muc::MucAffiliationBatchOutcome::Unauthorized);
     }
     let actor_affiliation = affiliation_in_tx(&mut tx, room_id, actor)
         .await?
         .unwrap_or_else(|| "none".to_owned());
     if !matches!(actor_affiliation.as_str(), "owner" | "admin") {
         tx.rollback().await?;
-        return Ok(super::super::muc::MucAffiliationBatchOutcome::MissingTarget);
+        return Ok(crate::muc::MucAffiliationBatchOutcome::MissingTarget);
     }
     let mut seen = std::collections::HashSet::with_capacity(changes.len());
     let mut resolved = Vec::with_capacity(changes.len());
@@ -191,7 +191,7 @@ pub async fn apply_cluster_muc_affiliations_batch(
             "invalid clustered MUC affiliation"
         );
         let (key, target, previous) = match &change.target {
-            super::super::muc::MucAffiliationTarget::LocalUsername(username) => {
+            crate::muc::MucAffiliationTarget::LocalUsername(username) => {
                 let Some(user_id) =
                     sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE username=$1")
                         .bind(username)
@@ -199,7 +199,7 @@ pub async fn apply_cluster_muc_affiliations_batch(
                         .await?
                 else {
                     tx.rollback().await?;
-                    return Ok(super::super::muc::MucAffiliationBatchOutcome::MissingTarget);
+                    return Ok(crate::muc::MucAffiliationBatchOutcome::MissingTarget);
                 };
                 let previous = sqlx::query_scalar::<_, String>(
                     "SELECT affiliation FROM muc_affiliations
@@ -215,7 +215,7 @@ pub async fn apply_cluster_muc_affiliations_batch(
                     previous,
                 )
             }
-            super::super::muc::MucAffiliationTarget::FederatedBareJid(jid) => {
+            crate::muc::MucAffiliationTarget::FederatedBareJid(jid) => {
                 let jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(jid)?;
                 anyhow::ensure!(
                     jid.localpart().is_some(),
@@ -239,14 +239,14 @@ pub async fn apply_cluster_muc_affiliations_batch(
         };
         if !seen.insert(key) {
             tx.rollback().await?;
-            return Ok(super::super::muc::MucAffiliationBatchOutcome::DuplicateTarget);
+            return Ok(crate::muc::MucAffiliationBatchOutcome::DuplicateTarget);
         }
         if actor_affiliation == "admin"
             && (matches!(previous.as_deref(), Some("owner" | "admin"))
                 || matches!(change.affiliation.as_str(), "owner" | "admin"))
         {
             tx.rollback().await?;
-            return Ok(super::super::muc::MucAffiliationBatchOutcome::MissingTarget);
+            return Ok(crate::muc::MucAffiliationBatchOutcome::MissingTarget);
         }
         if previous.as_deref() == Some("owner") && change.affiliation != "owner" {
             owner_delta -= 1;
@@ -269,7 +269,7 @@ pub async fn apply_cluster_muc_affiliations_batch(
     .await?;
     if existing_owners + owner_delta < 1 {
         tx.rollback().await?;
-        return Ok(super::super::muc::MucAffiliationBatchOutcome::LastOwner);
+        return Ok(crate::muc::MucAffiliationBatchOutcome::LastOwner);
     }
 
     let audience = active_audience(&mut tx, room_id).await?;
@@ -439,7 +439,7 @@ pub async fn apply_cluster_muc_affiliations_batch(
     )
     .await?;
     tx.commit().await?;
-    Ok(super::super::muc::MucAffiliationBatchOutcome::Applied)
+    Ok(crate::muc::MucAffiliationBatchOutcome::Applied)
 }
 
 /// Apply the complete ordered administrative IQ while the room is locked.
@@ -630,7 +630,7 @@ async fn apply_cluster_muc_admin_batch_once(
                     "invalid MUC affiliation"
                 );
                 let (key, subject, bare_jid) = match target {
-                    super::super::muc::MucAffiliationTarget::LocalUsername(username) => {
+                    crate::muc::MucAffiliationTarget::LocalUsername(username) => {
                         anyhow::ensure!(
                             northstar_xmpp_types::jid::prepare_localpart(username)? == *username,
                             "noncanonical MUC local affiliation target"
@@ -650,7 +650,7 @@ async fn apply_cluster_muc_admin_batch_once(
                             format!("{username}@{local_domain}"),
                         )
                     }
-                    super::super::muc::MucAffiliationTarget::FederatedBareJid(jid) => {
+                    crate::muc::MucAffiliationTarget::FederatedBareJid(jid) => {
                         let canonical = northstar_xmpp_types::jid::CanonicalJid::parse_bare(jid)?;
                         anyhow::ensure!(
                             canonical.localpart().is_some()

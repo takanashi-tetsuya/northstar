@@ -20,6 +20,7 @@ impl ClusterReplayMaintenanceRepository for PostgresClusterReplayMaintenanceRepo
     }
 
     async fn validate_capacity_authority(&self) -> Result<()> {
-        super::validate_cluster_replay_capacity_authority(&self.pool).await
+        northstar_room_postgres::cluster_muc::validate_cluster_replay_capacity_authority(&self.pool)
+            .await
     }
 }

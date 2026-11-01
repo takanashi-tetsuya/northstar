@@ -23,14 +23,16 @@ impl SessionTerminationAuthorityRepository for PostgresSessionTerminationAuthori
         full_jid: &str,
     ) -> Result<Option<SessionRouteAuthority>> {
         Ok(
-            crate::db::cluster_session_route_authority(&self.pool, namespace, full_jid)
-                .await?
-                .map(|route| SessionRouteAuthority {
-                    owner_node_id: route.owner_node_id,
-                    owner_instance_uuid: route.owner_instance_uuid,
-                    owner_instance_epoch: route.owner_instance_epoch,
-                    connection_uuid: route.connection_uuid,
-                }),
+            northstar_room_postgres::cluster_muc::cluster_session_route_authority(
+                &self.pool, namespace, full_jid,
+            )
+            .await?
+            .map(|route| SessionRouteAuthority {
+                owner_node_id: route.owner_node_id,
+                owner_instance_uuid: route.owner_instance_uuid,
+                owner_instance_epoch: route.owner_instance_epoch,
+                connection_uuid: route.connection_uuid,
+            }),
         )
     }
 }

@@ -20,19 +20,21 @@ impl PostgresSmTeardownMucRepository {
 
 impl SmTeardownMucRepository for PostgresSmTeardownMucRepository {
     async fn room(&self, localpart: &str) -> Result<Option<SmTeardownMucRoom>> {
-        Ok(db::muc_room(&self.pool, localpart)
-            .await?
-            .map(|room| SmTeardownMucRoom {
-                id: room.id,
-                room_epoch: room.room_epoch,
-                config_version: room.config_version,
-                non_anonymous: room.non_anonymous,
-                occupant_id_secret: room.occupant_id_secret,
-            }))
+        Ok(
+            northstar_room_postgres::muc::muc_room(&self.pool, localpart)
+                .await?
+                .map(|room| SmTeardownMucRoom {
+                    id: room.id,
+                    room_epoch: room.room_epoch,
+                    config_version: room.config_version,
+                    non_anonymous: room.non_anonymous,
+                    occupant_id_secret: room.occupant_id_secret,
+                }),
+        )
     }
 
     async fn affiliation(&self, room_id: Uuid, user_id: Uuid) -> Result<Option<String>> {
-        db::muc_affiliation(&self.pool, room_id, user_id).await
+        northstar_room_postgres::muc::muc_affiliation(&self.pool, room_id, user_id).await
     }
 
     async fn blocked_local_audience(
@@ -56,6 +58,12 @@ impl SmTeardownMucRepository for PostgresSmTeardownMucRepository {
         room_epoch: Uuid,
         config_version: i64,
     ) -> Result<bool> {
-        db::delete_temporary_muc_room(&self.pool, room_id, room_epoch, config_version).await
+        northstar_room_postgres::muc::delete_temporary_muc_room(
+            &self.pool,
+            room_id,
+            room_epoch,
+            config_version,
+        )
+        .await
     }
 }

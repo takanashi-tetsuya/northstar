@@ -19,6 +19,6 @@ pub(crate) struct ClusterMaintenanceContext {
     >,
     pub(crate) muc_occupancy:
         northstar_room_application::muc_service::ClusterMucOccupancyMaintenanceService<
-            db::room::PostgresClusterMucOccupancyMaintenanceRepository,
+            northstar_room_postgres::room::PostgresClusterMucOccupancyMaintenanceRepository,
         >,
 }

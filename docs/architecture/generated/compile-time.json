@@ -199,6 +199,7 @@
     "northstar-pubsub-xmpp",
     "northstar-room-application",
     "northstar-room-core",
+    "northstar-room-postgres",
     "northstar-roster-application",
     "northstar-roster-core",
     "northstar-roster-postgres",
@@ -3530,6 +3531,78 @@
       "uuid"
     ],
     [
+      "northstar-room-postgres",
+      "anyhow"
+    ],
+    [
+      "northstar-room-postgres",
+      "chrono"
+    ],
+    [
+      "northstar-room-postgres",
+      "northstar-auth-core"
+    ],
+    [
+      "northstar-room-postgres",
+      "northstar-federation-core"
+    ],
+    [
+      "northstar-room-postgres",
+      "northstar-postgres"
+    ],
+    [
+      "northstar-room-postgres",
+      "northstar-room-application"
+    ],
+    [
+      "northstar-room-postgres",
+      "northstar-room-core"
+    ],
+    [
+      "northstar-room-postgres",
+      "northstar-session-core"
+    ],
+    [
+      "northstar-room-postgres",
+      "northstar-xmpp-types"
+    ],
+    [
+      "northstar-room-postgres",
+      "rand"
+    ],
+    [
+      "northstar-room-postgres",
+      "roxmltree"
+    ],
+    [
+      "northstar-room-postgres",
+      "serde"
+    ],
+    [
+      "northstar-room-postgres",
+      "serde_json"
+    ],
+    [
+      "northstar-room-postgres",
+      "sha2"
+    ],
+    [
+      "northstar-room-postgres",
+      "sqlx"
+    ],
+    [
+      "northstar-room-postgres",
+      "tokio"
+    ],
+    [
+      "northstar-room-postgres",
+      "tracing"
+    ],
+    [
+      "northstar-room-postgres",
+      "uuid"
+    ],
+    [
       "northstar-roster-application",
       "anyhow"
     ],
@@ -5796,6 +5869,10 @@
     [
       "rust-xmpp-server",
       "northstar-room-core"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-room-postgres"
     ],
     [
       "rust-xmpp-server",

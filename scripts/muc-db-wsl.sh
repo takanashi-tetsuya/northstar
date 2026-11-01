@@ -186,20 +186,20 @@ fi
 
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema"
 cargo test --locked --offline \
-  db::muc::tests::locked_room_configuration_is_atomic_restart_safe_and_bounded \
+  db::muc_tests::locked_room_configuration_is_atomic_restart_safe_and_bounded \
   -- --ignored --nocapture
 cargo test --locked --offline \
-  db::muc::tests::durable_invitation_admission_is_atomic_under_injected_failures \
+  db::muc_tests::durable_invitation_admission_is_atomic_under_injected_failures \
   -- --ignored --nocapture
 cargo test --locked --offline \
-  db::muc::tests::history_identity_and_mutations_are_atomic_under_replay_and_failure \
+  db::muc_tests::history_identity_and_mutations_are_atomic_under_replay_and_failure \
   -- --ignored --nocapture
 cargo test --locked --offline \
-  db::cluster_muc::tests::postgres_outbox_maintenance_is_atomic_and_snapshot_is_complete \
+  db::cluster_muc_tests::postgres_outbox_maintenance_is_atomic_and_snapshot_is_complete \
   -- --ignored --exact --nocapture
 cargo test --locked --offline \
-  db::cluster_muc::tests::postgres_admin_batch_is_atomic_under_replay_and_failure \
+  db::cluster_muc_tests::postgres_admin_batch_is_atomic_under_replay_and_failure \
   -- --ignored --exact --nocapture
 cargo test --locked --offline \
-  db::cluster_muc::tests::federated_rebind_is_atomic_and_fences_the_old_connection \
+  db::cluster_muc_tests::federated_rebind_is_atomic_and_fences_the_old_connection \
   -- --ignored --exact --nocapture

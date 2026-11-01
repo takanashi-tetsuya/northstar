@@ -2,7 +2,7 @@
 
 use super::AppState;
 use crate::{
-    db, db::muc_delivery_repository::PostgresMucDeliveryRepository,
+    db::muc_delivery_repository::PostgresMucDeliveryRepository,
     xmpp::muc_delivery::MucDeliveryContext,
 };
 use northstar_room_application::cluster_muc_receipt_claim::ClusterMucReceiptClaimService;
@@ -13,7 +13,7 @@ impl AppState {
         MucDeliveryContext {
             repository: PostgresMucDeliveryRepository::new(self.pool.clone()),
             receipt_claim: ClusterMucReceiptClaimService::new(
-                db::cluster_muc_receipt_claim_repository::PostgresClusterMucReceiptClaimRepository::new(
+                northstar_room_postgres::cluster_muc_receipt_claim_repository::PostgresClusterMucReceiptClaimRepository::new(
                     self.pool.clone(),
                 ),
             ),

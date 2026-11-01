@@ -560,7 +560,7 @@ mod tests {
             .unwrap();
         let inviter_bare = format!("{inviter_name}@{domain}");
         let inviter_full = format!("{inviter_bare}/desk");
-        let (room, created) = crate::db::muc::get_or_create_muc_room(
+        let (room, created) = northstar_room_postgres::muc::get_or_create_muc_room(
             &pool,
             &format!("room-{}", &suffix[..8]),
             inviter_id,
@@ -570,17 +570,17 @@ mod tests {
         .unwrap();
         assert!(created);
         let invitee_bare = format!("reserved-{}@{domain}", &suffix[..8]);
-        let muc_authority = crate::db::cluster_muc::ClusterMucInviteAuthority {
+        let muc_authority = northstar_room_postgres::cluster_muc::ClusterMucInviteAuthority {
             operation_id: Uuid::new_v4(),
             expected_room_epoch: room.room_epoch,
             expected_config_version: room.config_version,
-            actor: crate::db::cluster_muc::ClusterMucPrincipal::Local {
+            actor: northstar_room_postgres::cluster_muc::ClusterMucPrincipal::Local {
                 user_id: inviter_id,
                 bare_jid: inviter_bare.clone(),
             },
             actor_full_jid: inviter_full,
             actor_target: None,
-            subject: crate::db::cluster_muc::ClusterMucAffiliationSubject::Local {
+            subject: northstar_room_postgres::cluster_muc::ClusterMucAffiliationSubject::Local {
                 user_id: reserved_recipient,
                 bare_jid: invitee_bare.clone(),
             },
@@ -589,7 +589,8 @@ mod tests {
         let room_invite_id = Uuid::new_v4();
         let room_invite =
             format!("<message from='room@conference.{domain}' to='{invitee_bare}' type='normal'/>");
-        let room_outcome = crate::db::muc::admit_local_muc_invite(
+        let room_outcome = northstar_room_postgres::muc::admit_local_muc_invite(
+            &crate::db::room_effects::RootRoomEffects,
             &pool,
             room_invite_id,
             room.id,
@@ -598,7 +599,7 @@ mod tests {
             &muc_authority.actor_full_jid,
             &room_invite,
             false,
-            crate::db::OfflineStorePolicy {
+            northstar_room_core::OfflineStorePolicy {
                 max_messages: 100,
                 max_bytes: 1_000_000,
                 ttl_days: 30,
@@ -610,7 +611,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             room_outcome,
-            crate::db::DurableMucInviteOutcome::Stored {
+            northstar_room_postgres::muc::DurableMucInviteOutcome::Stored {
                 id,
                 live_claim_id: Some(claim),
                 ..

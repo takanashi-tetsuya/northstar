@@ -361,7 +361,7 @@ impl ClusterListenerPresenceRoutes {
             .get()
             .context("cluster session authority pool is unavailable")?;
         let nodes = if jid.resourcepart().is_some() {
-            crate::db::cluster_session_route_authority(
+            northstar_room_postgres::cluster_muc::cluster_session_route_authority(
                 authority_pool,
                 &self.namespace,
                 &jid.to_string(),
@@ -371,8 +371,12 @@ impl ClusterListenerPresenceRoutes {
             .into_iter()
             .collect()
         } else {
-            crate::db::cluster_session_nodes_for_bare(authority_pool, &self.namespace, &jid.bare())
-                .await?
+            northstar_room_postgres::cluster_muc::cluster_session_nodes_for_bare(
+                authority_pool,
+                &self.namespace,
+                &jid.bare(),
+            )
+            .await?
         };
         Ok(nodes)
     }

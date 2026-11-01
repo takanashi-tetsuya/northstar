@@ -17,4 +17,22 @@ pub async fn database_cursor_clock_in_tx(
         .await?)
 }
 
+/// Whether an error comes from a capacity trigger's rejection, however many contexts wrap it.
+pub fn is_capacity_exhausted(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<sqlx::Error>()
+            .is_some_and(is_capacity_sqlx_error)
+            || cause.to_string().contains("capacity exhausted")
+    })
+}
+
+/// A capacity trigger raises `P0001` with this wording; no other error code carries the meaning.
+pub fn is_capacity_sqlx_error(error: &sqlx::Error) -> bool {
+    error.as_database_error().is_some_and(|database| {
+        database.code().as_deref() == Some("P0001")
+            && database.message().contains("capacity exhausted")
+    })
+}
+
 pub mod role_attestation;

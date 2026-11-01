@@ -45,7 +45,7 @@ fn muc_disconnect_outbox_renders_status_333_on_every_attempt() {
 fn muc_admin_batch_preflights_every_projection_before_delivery() {
     let room_id = uuid::Uuid::from_u128(1);
     let room_epoch = uuid::Uuid::from_u128(2);
-    let target = crate::db::ClusterMucOccupancyTarget {
+    let target = northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget {
         room_id,
         room_epoch,
         occupant_incarnation: uuid::Uuid::from_u128(3),
@@ -55,7 +55,7 @@ fn muc_admin_batch_preflights_every_projection_before_delivery() {
         connection_uuid: uuid::Uuid::from_u128(4),
         connection_epoch: 1,
     };
-    let snapshot = crate::db::ClusterMucPolicySnapshot {
+    let snapshot = northstar_room_postgres::cluster_muc::ClusterMucPolicySnapshot {
         room_id,
         room_epoch,
         occupant_incarnation: target.occupant_incarnation,

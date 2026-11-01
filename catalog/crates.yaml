@@ -362,6 +362,16 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-room-postgres
+    package: northstar-room-postgres
+    path: crates/contexts/room/northstar-room-postgres
+    tier: context
+    context: room
+    role: adapter
+    owner_team: realtime
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-roster-application
     package: northstar-roster-application
     path: crates/contexts/roster/northstar-roster-application

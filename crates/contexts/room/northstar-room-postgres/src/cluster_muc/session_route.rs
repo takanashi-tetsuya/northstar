@@ -198,3 +198,19 @@ pub async fn cleanup_cluster_session_routes(pool: &PgPool, limit: i32) -> Result
         .await?;
     Ok(removed.max(0) as u64)
 }
+
+impl From<northstar_session_core::SessionRouteClaimProof> for ClusterSessionRouteClaimProof {
+    fn from(value: northstar_session_core::SessionRouteClaimProof) -> Self {
+        use northstar_session_core::SessionRouteClaimProof as Proof;
+        match value {
+            Proof::Binding => Self::Binding,
+            Proof::SmResume {
+                session_id,
+                claim_token,
+            } => Self::SmResume {
+                session_id,
+                claim_token,
+            },
+        }
+    }
+}

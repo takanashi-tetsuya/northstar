@@ -58,10 +58,10 @@ impl SmSuspensionRepository for PostgresSmSuspensionRepository {
         &self,
         request: MucSuspensionRequest<'_>,
     ) -> Result<northstar_room_application::muc_service::ClusterMucTransitionOutcome> {
-        let room = db::muc_room(&self.pool, request.room_localpart)
+        let room = northstar_room_postgres::muc::muc_room(&self.pool, request.room_localpart)
             .await?
             .context("SM suspension references a missing MUC room")?;
-        let target = db::cluster_muc_occupancy_target(
+        let target = northstar_room_postgres::cluster_muc::cluster_muc_occupancy_target(
             &self.pool,
             room.id,
             request.occupant_incarnation,
@@ -69,7 +69,7 @@ impl SmSuspensionRepository for PostgresSmSuspensionRepository {
         )
         .await?
         .context("SM suspension lost its exact MUC occupancy")?;
-        db::transition_cluster_muc_occupancy(
+        northstar_room_postgres::cluster_muc::transition_cluster_muc_occupancy(
             &self.pool,
             request.operation_id,
             &target,
@@ -88,6 +88,7 @@ impl SmSuspensionRepository for PostgresSmSuspensionRepository {
         &self,
         operation_id: Uuid,
     ) -> Result<Option<northstar_room_application::muc_service::ClusterMucWakeDescriptor>> {
-        db::cluster_muc_wake_descriptor(&self.pool, operation_id).await
+        northstar_room_postgres::cluster_muc::cluster_muc_wake_descriptor(&self.pool, operation_id)
+            .await
     }
 }

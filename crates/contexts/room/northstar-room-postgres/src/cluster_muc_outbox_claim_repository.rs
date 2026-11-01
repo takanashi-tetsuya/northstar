@@ -1,17 +1,17 @@
 //! PostgreSQL adapter for the atomic, node-scoped clustered-MUC outbox claim.
 
-use crate::db::{self, ClusterMucOutboxDelivery};
+use crate::cluster_muc::ClusterMucOutboxDelivery;
 use anyhow::Result;
 use northstar_room_application::cluster_muc_outbox_claim::ClusterMucOutboxClaimRepository;
 use sqlx::PgPool;
 use std::time::Duration;
 
-pub(crate) struct PostgresClusterMucOutboxClaimRepository {
+pub struct PostgresClusterMucOutboxClaimRepository {
     pool: PgPool,
 }
 
 impl PostgresClusterMucOutboxClaimRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -25,6 +25,6 @@ impl ClusterMucOutboxClaimRepository for PostgresClusterMucOutboxClaimRepository
         limit: i64,
         lease: Duration,
     ) -> Result<Vec<ClusterMucOutboxDelivery>> {
-        db::claim_cluster_muc_outbox(&self.pool, node_id, limit, lease).await
+        crate::cluster_muc::claim_cluster_muc_outbox(&self.pool, node_id, limit, lease).await
     }
 }

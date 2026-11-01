@@ -101,7 +101,7 @@ impl ClusterMaintenanceRedis {
             .get()
             .context("cluster session authority pool is unavailable")?;
         let owner_instance_epoch = self.instance_epoch.load(Ordering::Acquire);
-        let renewed = crate::db::refresh_cluster_session_route(
+        let renewed = northstar_room_postgres::cluster_muc::refresh_cluster_session_route(
             authority_pool,
             &self.namespace,
             &full_jid,
@@ -185,7 +185,7 @@ impl ClusterMaintenanceRedis {
             .authority_pool
             .get()
             .context("cluster session authority pool is unavailable")?;
-        crate::db::release_cluster_session_route(
+        northstar_room_postgres::cluster_muc::release_cluster_session_route(
             authority_pool,
             &self.namespace,
             &full_jid,

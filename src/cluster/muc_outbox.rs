@@ -113,7 +113,7 @@ pub(super) async fn run_muc_outbox_delivery(
 
 pub(super) struct ClusterMucPolicyRender<'a> {
     pub(super) endpoints: &'a super::muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
-    pub(super) context: &'a crate::db::ClusterMucEventContext,
+    pub(super) context: &'a northstar_room_postgres::cluster_muc::ClusterMucEventContext,
     pub(super) room_jid: &'a str,
     pub(super) recipient: &'a crate::xmpp::local_routes::muc::MucOccupant,
     pub(super) event_id: &'a str,
@@ -125,13 +125,13 @@ pub(super) struct ClusterMucPolicyRender<'a> {
 pub(super) fn cluster_muc_policy_result(
     change: &serde_json::Value,
 ) -> Result<(
-    crate::db::ClusterMucOccupancyTarget,
-    crate::db::ClusterMucPolicySnapshot,
+    northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget,
+    northstar_room_postgres::cluster_muc::ClusterMucPolicySnapshot,
 )> {
-    let target: crate::db::ClusterMucOccupancyTarget =
+    let target: northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget =
         serde_json::from_value(change["target"].clone())
             .context("cluster MUC policy target tuple is invalid")?;
-    let snapshot: crate::db::ClusterMucPolicySnapshot =
+    let snapshot: northstar_room_postgres::cluster_muc::ClusterMucPolicySnapshot =
         serde_json::from_value(change["snapshot"].clone())
             .context("cluster MUC policy result snapshot is invalid")?;
     anyhow::ensure!(
@@ -363,7 +363,7 @@ pub(super) fn render_cluster_muc_departure_presence(
 
 pub(super) async fn deliver_cluster_muc_event(
     worker: &super::muc_outbox_worker::ClusterMucOutboxWorkerContext,
-    delivery: &crate::db::ClusterMucOutboxDelivery,
+    delivery: &northstar_room_postgres::cluster_muc::ClusterMucOutboxDelivery,
 ) -> Result<()> {
     let endpoints = &worker.endpoints;
     anyhow::ensure!(
@@ -457,7 +457,7 @@ pub(super) async fn deliver_cluster_muc_event(
         // A later role change or SM handoff may alter the live endpoint, but
         // neither may change the visibility rules of this committed event.
         let original = if let Some(snapshot) = payload.get("original_audience") {
-            serde_json::from_value::<crate::db::ClusterMucAudienceSnapshot>(snapshot.clone())
+            serde_json::from_value::<northstar_room_postgres::cluster_muc::ClusterMucAudienceSnapshot>(snapshot.clone())
                 .context("cluster MUC batch payload original audience is malformed")?
         } else {
             let _database_turn = worker.database_turn().await;

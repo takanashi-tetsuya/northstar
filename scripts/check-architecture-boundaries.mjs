@@ -2664,7 +2664,7 @@ if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(mucServiceBody)) {
 if (/find_user[\s\S]*Result<Option<\s*(?:db|northstar_auth_postgres::users)::User\s*>>/.test(mucServiceSource)) {
   throw new Error('MucService leaks the credential-bearing db::User DTO');
 }
-if (!/enabled_local_account[\s\S]*northstar_auth_postgres::users::enabled_user_id/.test(readProductionModule('src/db/room.rs', { root }))) {
+if (!/enabled_local_account[\s\S]*crate::accounts::enabled_user_id/.test(readProductionModule('crates/contexts/room/northstar-room-postgres/src/room.rs', { root }))) {
   throw new Error('MucService no longer fails closed for disabled local routing targets');
 }
 if (!/find_enabled_user[\s\S]*?FROM users\s+WHERE username=\$1 AND NOT is_disabled/.test(usersSource)) {
@@ -3566,15 +3566,15 @@ const clusterMucOutboxContext = structBody(
 if (!clusterMucOutboxWorker.includes('let housekeeping = &context.housekeeping;')
     || !state.includes('state.cluster_muc_outbox_worker_context()')
     || /\b(?:AppState|ClusterManager|PgPool)\b/.test(clusterMucOutboxContext)
-    || /crate::db::(?:cleanup_cluster_muc_dead_letters|cleanup_cluster_muc_history|cluster_muc_outbox_snapshot)\s*\(/.test(clusterMucOutboxWorker)) {
+    || /(?:crate::db|northstar_room_postgres::cluster_muc)::(?:cleanup_cluster_muc_dead_letters|cleanup_cluster_muc_history|cluster_muc_outbox_snapshot)\s*\(/.test(clusterMucOutboxWorker)) {
   throw new Error('cluster MUC outbox housekeeping must use separate narrow repository operations');
 }
 const mucPreclaimService = read('crates/contexts/room/northstar-room-application/src/cluster_muc_outbox_preclaim.rs');
-const mucPreclaimRepository = read('src/db/cluster_muc_outbox_preclaim_repository.rs');
+const mucPreclaimRepository = read('crates/contexts/room/northstar-room-postgres/src/cluster_muc_outbox_preclaim_repository.rs');
 if (!mucPreclaimService.includes('self.repository.expire_occupancies(room_limit).await?;')
     || !mucPreclaimService.includes('self.repository.dead_letter_expired(outbox_limit).await?;')
-    || !mucPreclaimRepository.includes('db::expire_cluster_muc_occupancies(&self.pool, room_limit).await')
-    || !mucPreclaimRepository.includes('db::dead_letter_expired_cluster_muc_outbox(&self.pool, limit).await')) {
+    || !mucPreclaimRepository.includes('crate::cluster_muc::expire_cluster_muc_occupancies(&self.pool, room_limit).await')
+    || !mucPreclaimRepository.includes('crate::cluster_muc::dead_letter_expired_cluster_muc_outbox(&self.pool, limit).await')) {
   throw new Error('cluster MUC preclaim maintenance must preserve ordered independent database operations');
 }
 const mucClaimTurn = clusterMucOutboxWorker.indexOf('let _database_turn = context.database_turn().await;');
@@ -3587,8 +3587,8 @@ const mucClaimCommit = clusterMucOutboxWorker.indexOf('if deliveries.is_empty()'
 const mucDeliveryStart = clusterMucOutboxWorker.indexOf('for delivery in deliveries', mucClaimCommit);
 if ([mucClaimTurn, mucPreclaim, mucClaim, mucClaimDatabaseTurn, mucClaimCall, mucClaimLease, mucClaimCommit, mucDeliveryStart].some((offset) => offset < 0)
     || mucPreclaim >= mucClaim || mucClaim >= mucClaimDatabaseTurn || mucClaimDatabaseTurn >= mucClaimCall
-    || /crate::db::(?:expire_cluster_muc_occupancies|dead_letter_expired_cluster_muc_outbox)\s*\(/.test(clusterMucOutboxWorker)
-    || /crate::db::claim_cluster_muc_outbox\s*\(/.test(clusterMucOutboxWorker)) {
+    || /(?:crate::db|northstar_room_postgres::cluster_muc)::(?:expire_cluster_muc_occupancies|dead_letter_expired_cluster_muc_outbox)\s*\(/.test(clusterMucOutboxWorker)
+    || /(?:crate::db|northstar_room_postgres::cluster_muc)::claim_cluster_muc_outbox\s*\(/.test(clusterMucOutboxWorker)) {
   throw new Error('cluster MUC preclaim maintenance and claim must complete under the bounded database turn before delivery');
 }
 const clusterMucOutboxSettlementService = read('crates/contexts/room/northstar-room-application/src/cluster_muc_outbox_settlement.rs');
@@ -3609,7 +3609,7 @@ if ([mucContextTurn, mucContextRead, mucCacheBranch, mucSnapshotTurn, mucSnapsho
     || mucSnapshotRead >= mucAbsentCheck
     || mucAbsentCheck >= mucCurrentRead
     || mucCurrentRead >= mucOriginalTurn
-    || /crate::db::(?:cluster_muc_event_context|cluster_muc_delivery_recipient_snapshot|cluster_muc_delivery_audience_is_current)\s*\(/.test(clusterMucDelivery)) {
+    || /(?:crate::db|northstar_room_postgres::cluster_muc)::(?:cluster_muc_event_context|cluster_muc_delivery_recipient_snapshot|cluster_muc_delivery_audience_is_current)\s*\(/.test(clusterMucDelivery)) {
   throw new Error('cluster MUC event and audience reads must keep independent database turns and the cached-recipient fast path');
 }
 const itemReadTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;', clusterMucDelivery.indexOf('let stable_item_id ='));
@@ -3618,10 +3618,10 @@ const itemTransport = clusterMucDelivery.indexOf('.deliver_to_muc_occupant_with_
 const itemWriteTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;', itemTransport);
 const itemCompleteExact = clusterMucDelivery.indexOf('.complete_exact(delivery, ordinal, &stable_item_id)', itemWriteTurn);
 if ([itemReadTurn, itemCompleted, itemTransport, itemWriteTurn, itemCompleteExact].some((offset) => offset < 0)
-    || /crate::db::(?:cluster_muc_delivery_item_completed|complete_cluster_muc_delivery_item)\s*\(/.test(clusterMucDelivery)) {
+    || /(?:crate::db|northstar_room_postgres::cluster_muc)::(?:cluster_muc_delivery_item_completed|complete_cluster_muc_delivery_item)\s*\(/.test(clusterMucDelivery)) {
   throw new Error('MUC delivery-item completion must follow the durable receipt across independent database turns');
 }
-const clusterMucOutboxSettlementRepository = read('src/db/cluster_muc_outbox_settlement_repository.rs');
+const clusterMucOutboxSettlementRepository = read('crates/contexts/room/northstar-room-postgres/src/cluster_muc_outbox_settlement_repository.rs');
 const mucOutcome = clusterMucOutboxWorker.indexOf('let outcome = tokio::time::timeout(');
 const mucAckTurn = clusterMucOutboxWorker.indexOf('let _database_turn = context.database_turn().await;', mucOutcome);
 const mucAck = clusterMucOutboxWorker.indexOf('.acknowledge(&delivery)', mucAckTurn);
@@ -3634,13 +3634,13 @@ const mucRetryMetric = clusterMucOutboxWorker.indexOf('context.record_retry()', 
 const mucHeartbeat = clusterMucOutboxWorker.indexOf('heartbeat.ok();', mucRetryMetric);
 if ([mucOutcome, mucAckTurn, mucAck, mucAckFence, mucDeliveryMetric,
      mucRetryWarning, mucRetryTurn, mucRetry, mucRetryMetric, mucHeartbeat].some((offset) => offset < 0)
-    || /crate::db::(?:ack_cluster_muc_outbox|retry_cluster_muc_outbox)\s*\(/.test(clusterMucOutboxWorker)
+    || /(?:crate::db|northstar_room_postgres::cluster_muc)::(?:ack_cluster_muc_outbox|retry_cluster_muc_outbox)\s*\(/.test(clusterMucOutboxWorker)
     || !clusterMucOutboxWorker.includes('acknowledged == AckOutcome::Acknowledged')
     || !clusterMucOutboxSettlementService.includes('let _ = self.repository.record_retry(delivery, error).await?;')
     || !/self\.metrics\s*\.cluster_muc_outbox_deliveries_total\s*\.fetch_add\(1, Ordering::Relaxed\)/.test(clusterMucOutboxContextSource)
     || !/self\.metrics\s*\.cluster_muc_outbox_retries_total\s*\.fetch_add\(1, Ordering::Relaxed\)/.test(clusterMucOutboxContextSource)
-    || !clusterMucOutboxSettlementRepository.includes('db::ack_cluster_muc_outbox(&self.pool, delivery.delivery_id, delivery.claim_token)')
-    || !clusterMucOutboxSettlementRepository.includes('db::retry_cluster_muc_outbox(&self.pool, delivery, error)')) {
+    || !/crate::cluster_muc::ack_cluster_muc_outbox\(\s*&self\.pool,\s*delivery\.delivery_id,\s*delivery\.claim_token,?\s*\)/.test(clusterMucOutboxSettlementRepository)
+    || !clusterMucOutboxSettlementRepository.includes('crate::cluster_muc::retry_cluster_muc_outbox(&self.pool, delivery, error)')) {
   throw new Error('cluster MUC outbox settlement lost exact ACK, retry, database-turn or metric ordering');
 }
 const operationRuntimeOwnershipSource = read('src/runtime/operation_runtime.rs');
@@ -3817,7 +3817,7 @@ if (/\bstate\.cluster\b/.test(clusterMaintenance)
 }
 if (!clusterMaintenance.includes('let occupancy_maintenance = &context.muc_occupancy;')
     || !clusterMaintenance.includes('.renew_exact(authority, &control.node_id)')
-    || /crate::db::(?:authoritative_cluster_muc_occupancies_for_node|renew_cluster_muc_occupancy)\s*\(/.test(clusterMaintenance)) {
+    || /(?:crate::db|northstar_room_postgres::cluster_muc)::(?:authoritative_cluster_muc_occupancies_for_node|renew_cluster_muc_occupancy)\s*\(/.test(clusterMaintenance)) {
   throw new Error('cluster MUC reconciliation must snapshot and renew exact authority through its narrow port');
 }
 const clusterListener = rustItemBody(readProductionModule('src/cluster/listener.rs', { root }), 'async fn listen_once(');
@@ -3979,7 +3979,7 @@ const lockedMucExpiryWorker = rustItemBody(state, 'fn start_locked_muc_expiry(')
 const lockedMucExpiryContext = read('src/state/locked_muc_expiry.rs');
 if (!lockedMucExpiryWorker.includes('.locked_muc_expiry_context')
     || !lockedMucExpiryContext.includes('.expire_locked_rooms(')
-    || /db::delete_expired_locked_muc_rooms\s*\(/.test(lockedMucExpiryWorker)) {
+    || /(?:db|muc)::delete_expired_locked_muc_rooms\s*\(/.test(lockedMucExpiryWorker)) {
   throw new Error('locked MUC expiry worker must commit through its repository service');
 }
 const mixPresenceRecovery = structBody(readProductionModule('src/xmpp/protocol/mix.rs', { root }), 'pub(crate) fn start_mix_presence_recovery(');

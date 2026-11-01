@@ -23,7 +23,8 @@ pub(super) struct RestoredMucActor {
     pub(super) sm_session_id: uuid::Uuid,
     pub(super) endpoint: Arc<SuspendedMucEndpoint>,
     pub(super) membership: crate::services::sm::SmMucMembership,
-    pub(super) resumed_cluster_target: Option<db::ClusterMucOccupancyTarget>,
+    pub(super) resumed_cluster_target:
+        Option<northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget>,
 }
 
 impl RestoredLocalMucOccupants {
@@ -227,7 +228,7 @@ impl AppState {
 
                 let resumed_cluster_target = if self.cluster.is_enabled() {
                     let resume = async {
-                        let target = db::cluster_muc_occupancy_target(
+                        let target = northstar_room_postgres::cluster_muc::cluster_muc_occupancy_target(
                             &self.pool,
                             room.id,
                             previous.cluster_epoch,
@@ -240,7 +241,7 @@ impl AppState {
                             .checked_add(1)
                             .context("MUC connection epoch overflow")?;
                         let operation_id = uuid::Uuid::new_v4();
-                        let outcome = db::transition_cluster_muc_occupancy(
+                        let outcome = northstar_room_postgres::cluster_muc::transition_cluster_muc_occupancy(
                             &self.pool,
                             operation_id,
                             &target,
@@ -255,8 +256,8 @@ impl AppState {
                         anyhow::ensure!(
                             matches!(
                                 outcome,
-                                db::ClusterMucTransitionOutcome::Applied
-                                    | db::ClusterMucTransitionOutcome::Replay
+                                northstar_room_postgres::cluster_muc::ClusterMucTransitionOutcome::Applied
+                                    | northstar_room_postgres::cluster_muc::ClusterMucTransitionOutcome::Replay
                             ),
                             "PG MUC resume rejected stale occupancy: {outcome:?}"
                         );
@@ -371,22 +372,23 @@ impl AppState {
             }
 
             let cluster_authority = if self.cluster.is_enabled() {
-                let authority = match db::suspended_cluster_muc_occupancy(
-                    &self.pool,
-                    room.id,
-                    room.room_epoch,
-                    sm_session_id,
-                    &full_jid,
-                    &nick,
-                )
-                .await
-                {
-                    Ok(Some(authority)) => authority,
-                    Ok(None) | Err(_) => {
-                        failures.push(membership.clone());
-                        continue;
-                    }
-                };
+                let authority =
+                    match northstar_room_postgres::cluster_muc::suspended_cluster_muc_occupancy(
+                        &self.pool,
+                        room.id,
+                        room.room_epoch,
+                        sm_session_id,
+                        &full_jid,
+                        &nick,
+                    )
+                    .await
+                    {
+                        Ok(Some(authority)) => authority,
+                        Ok(None) | Err(_) => {
+                            failures.push(membership.clone());
+                            continue;
+                        }
+                    };
                 Some(authority)
             } else {
                 None
@@ -445,7 +447,9 @@ impl AppState {
             }
 
             let resumed_cluster_target = if let Some(authority) = cluster_authority.as_ref() {
-                let target = db::ClusterMucOccupancyTarget::from(authority);
+                let target = northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget::from(
+                    authority,
+                );
                 let Some(next_epoch) = target.connection_epoch.checked_add(1) else {
                     self.muc_occupants.remove_if(&key, |_, occupant| {
                         suspended_occupant_is_created(occupant, &created_endpoint)
@@ -456,7 +460,7 @@ impl AppState {
                     continue;
                 };
                 let operation_id = uuid::Uuid::new_v4();
-                match db::transition_cluster_muc_occupancy(
+                match northstar_room_postgres::cluster_muc::transition_cluster_muc_occupancy(
                     &self.pool,
                     operation_id,
                     &target,
@@ -469,8 +473,12 @@ impl AppState {
                 )
                 .await
                 {
-                    Ok(db::ClusterMucTransitionOutcome::Applied)
-                    | Ok(db::ClusterMucTransitionOutcome::Replay) => {
+                    Ok(
+                        northstar_room_postgres::cluster_muc::ClusterMucTransitionOutcome::Applied,
+                    )
+                    | Ok(
+                        northstar_room_postgres::cluster_muc::ClusterMucTransitionOutcome::Replay,
+                    ) => {
                         if let Err(error) = self
                             .muc_service()
                             .wake_committed_operation(&self.cluster, operation_id)
@@ -590,14 +598,14 @@ impl AppState {
 
     pub(super) async fn compensate_resumed_muc_target(
         &self,
-        target: &db::ClusterMucOccupancyTarget,
+        target: &northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget,
         sm_session_id: uuid::Uuid,
     ) {
         if !self.cluster.is_enabled() {
             return;
         }
         let operation_id = uuid::Uuid::new_v4();
-        match db::transition_cluster_muc_occupancy(
+        match northstar_room_postgres::cluster_muc::transition_cluster_muc_occupancy(
             &self.pool,
             operation_id,
             target,
@@ -610,8 +618,8 @@ impl AppState {
         )
         .await
         {
-            Ok(db::ClusterMucTransitionOutcome::Applied)
-            | Ok(db::ClusterMucTransitionOutcome::Replay) => {
+            Ok(northstar_room_postgres::cluster_muc::ClusterMucTransitionOutcome::Applied)
+            | Ok(northstar_room_postgres::cluster_muc::ClusterMucTransitionOutcome::Replay) => {
                 if let Err(error) = self
                     .muc_service()
                     .wake_committed_operation(&self.cluster, operation_id)

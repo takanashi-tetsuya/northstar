@@ -1,4 +1,4 @@
-use crate::db::room::PostgresMucRepository;
+use crate::db::room_effects::PostgresMucRepository;
 use anyhow::Result;
 use northstar_room_application::muc_service::*;
 use std::time::Duration;

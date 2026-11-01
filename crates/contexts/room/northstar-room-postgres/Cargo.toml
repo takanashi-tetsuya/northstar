@@ -1,0 +1,32 @@
+[package]
+name = "northstar-room-postgres"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "PostgreSQL persistence of Northstar's MUC rooms and MIX channels."
+publish = false
+
+[features]
+# Test-only entry points the root crate's cross-context room tests use.
+test-support = []
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+northstar-auth-core = { path = "../../auth/northstar-auth-core" }
+northstar-federation-core = { path = "../../federation/northstar-federation-core" }
+northstar-postgres = { path = "../../../platform/northstar-postgres" }
+northstar-room-application = { path = "../northstar-room-application" }
+northstar-room-core = { path = "../northstar-room-core" }
+northstar-session-core = { path = "../../session/northstar-session-core" }
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+rand = "0.8"
+roxmltree = "0.20"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid", "json", "macros"] }
+tokio = { version = "1.43", features = ["sync", "time"] }
+tracing = "0.1"
+uuid = { version = "1.12", features = ["v4", "serde"] }

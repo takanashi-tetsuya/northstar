@@ -1,4 +1,7 @@
-use super::{
+use crate::db::room_effects::RootRoomEffects;
+use northstar_federation_core::S2sOutboxPolicy;
+use northstar_room_core::OfflineStorePolicy;
+use northstar_room_postgres::muc::{
     admit_federated_muc_invite, admit_local_muc_invite, admit_muc_discussion,
     authorized_muc_admin_affiliation_list, authorized_muc_admin_role_list, cancel_locked_muc_room,
     delete_expired_locked_muc_room, get_or_create_muc_room, hash_muc_password,
@@ -12,7 +15,6 @@ use super::{
     MucDiscussion, MucDiscussionAdmission, MucRegistrationOutcome, MucRetractionKind,
     MucRetractionMutation, MucRetractionOutcome, MucSubjectMutation, MucSubjectOutcome,
 };
-use crate::db::{OfflineStorePolicy, S2sOutboxPolicy};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::Arc;
@@ -284,17 +286,21 @@ async fn locked_room_configuration_is_atomic_restart_safe_and_bounded() {
         MucAffiliationBatchOutcome::Applied
     );
     assert_eq!(
-        super::muc_affiliation(&restarted, room.id, bob_id)
+        northstar_room_postgres::muc::muc_affiliation(&restarted, room.id, bob_id)
             .await
             .unwrap()
             .as_deref(),
         Some("owner")
     );
     assert_eq!(
-        super::federated_muc_affiliation(&restarted, room.id, "admin@remote.test")
-            .await
-            .unwrap()
-            .as_deref(),
+        northstar_room_postgres::muc::federated_muc_affiliation(
+            &restarted,
+            room.id,
+            "admin@remote.test"
+        )
+        .await
+        .unwrap()
+        .as_deref(),
         Some("admin")
     );
 
@@ -324,14 +330,14 @@ async fn locked_room_configuration_is_atomic_restart_safe_and_bounded() {
         MucAffiliationBatchOutcome::LastOwner
     );
     assert_eq!(
-        super::muc_affiliation(&restarted, room.id, bob_id)
+        northstar_room_postgres::muc::muc_affiliation(&restarted, room.id, bob_id)
             .await
             .unwrap()
             .as_deref(),
         Some("owner")
     );
     assert_eq!(
-        super::muc_affiliation(&restarted, room.id, alice_id)
+        northstar_room_postgres::muc::muc_affiliation(&restarted, room.id, alice_id)
             .await
             .unwrap()
             .as_deref(),
@@ -374,7 +380,7 @@ async fn locked_room_configuration_is_atomic_restart_safe_and_bounded() {
             outcome
         );
         assert_eq!(
-            super::muc_affiliation(&restarted, room.id, alice_id)
+            northstar_room_postgres::muc::muc_affiliation(&restarted, room.id, alice_id)
                 .await
                 .unwrap()
                 .as_deref(),
@@ -509,6 +515,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         .await
         .unwrap();
     assert!(admit_local_muc_invite(
+        &RootRoomEffects,
         &pool,
         Uuid::new_v4(),
         room_id,
@@ -539,6 +546,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         "<message from='room@conference.local.test' to='invitee@local.test' type='normal'><stanza-id xmlns='urn:xmpp:sid:0' by='invitee@local.test' id='{offline_id}'/></message>"
     );
     let admitted_offline_id = match admit_local_muc_invite(
+        &RootRoomEffects,
         &pool,
         offline_id,
         room_id,
@@ -607,6 +615,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         "<message from='room@conference.local.test' to='invitee@local.test' type='normal'><x xmlns='http://jabber.org/protocol/muc#user'><invite from='alice@remote.test/device'/></x><stanza-id xmlns='urn:xmpp:sid:0' by='invitee@local.test' id='{repeated_invite_id}'/></message>"
     );
     let admitted_repeated_invite_id = match admit_local_muc_invite(
+        &RootRoomEffects,
         &pool,
         repeated_invite_id,
         room_id,
@@ -662,6 +671,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         .unwrap();
     assert_eq!(
         admit_local_muc_invite(
+            &RootRoomEffects,
             &pool,
             Uuid::new_v4(),
             room_id,
@@ -689,6 +699,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         .await
         .unwrap();
     let injected_outbox_error = admit_federated_muc_invite(
+        &RootRoomEffects,
         &pool,
         room_id,
         "guest@remote.test",
@@ -717,6 +728,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         .await
         .unwrap();
     assert!(admit_federated_muc_invite(
+        &RootRoomEffects,
         &pool,
         room_id,
         "guest@remote.test",
@@ -739,6 +751,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         .await
         .unwrap();
     assert!(!admit_federated_muc_invite(
+        &RootRoomEffects,
         &pool,
         room_id,
         "banned@remote.test",
@@ -1301,7 +1314,7 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
         MucAffiliationOutcome::LastOwner
     );
     assert_eq!(
-        super::muc_affiliation(&pool, room_id, owner_id)
+        northstar_room_postgres::muc::muc_affiliation(&pool, room_id, owner_id)
             .await
             .unwrap()
             .as_deref(),
@@ -1709,7 +1722,7 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
     .execute(&pool)
     .await
     .unwrap();
-    let cluster_target = crate::db::ClusterMucOccupancyTarget {
+    let cluster_target = northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget {
         room_id,
         room_epoch,
         occupant_incarnation: cluster_incarnation,
@@ -1811,16 +1824,17 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
     .execute(&pool)
     .await
     .unwrap();
-    let federated_cluster_target = crate::db::ClusterMucOccupancyTarget {
-        room_id,
-        room_epoch,
-        occupant_incarnation: federated_cluster_incarnation,
-        occupancy_epoch: 9002,
-        full_jid: "cluster@remote.test/Phone".to_owned(),
-        nick: "ClusterRemote".to_owned(),
-        connection_uuid: federated_cluster_connection,
-        connection_epoch: 1,
-    };
+    let federated_cluster_target =
+        northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget {
+            room_id,
+            room_epoch,
+            occupant_incarnation: federated_cluster_incarnation,
+            occupancy_epoch: 9002,
+            full_jid: "cluster@remote.test/Phone".to_owned(),
+            nick: "ClusterRemote".to_owned(),
+            connection_uuid: federated_cluster_connection,
+            connection_epoch: 1,
+        };
     let federated_cluster_race_id = Uuid::new_v4();
     let (entered, resume) = install_muc_authorization_test_pause("discussion");
     let federated_cluster_race = {
@@ -1957,7 +1971,7 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
         .unwrap()
         .is_none());
     assert_eq!(
-        super::muc_affiliation(&pool, room_id, owner_id)
+        northstar_room_postgres::muc::muc_affiliation(&pool, room_id, owner_id)
             .await
             .unwrap()
             .as_deref(),

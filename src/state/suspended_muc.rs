@@ -48,20 +48,23 @@ impl AppState {
             let encoded = serde_json::to_string(&serializable).unwrap_or_default();
             if self.cluster.is_enabled() {
                 let association = async {
-                    let room =
-                        db::muc_room(&self.pool, crate::state::localpart(&serializable.room_jid))
-                            .await?
-                            .context("SM association references a missing MUC room")?;
-                    let target = db::cluster_muc_occupancy_target(
+                    let room = northstar_room_postgres::muc::muc_room(
                         &self.pool,
-                        room.id,
-                        serializable.cluster_epoch,
-                        serializable.connection_id,
+                        crate::state::localpart(&serializable.room_jid),
                     )
                     .await?
-                    .context("SM association lost its exact MUC occupancy")?;
+                    .context("SM association references a missing MUC room")?;
+                    let target =
+                        northstar_room_postgres::cluster_muc::cluster_muc_occupancy_target(
+                            &self.pool,
+                            room.id,
+                            serializable.cluster_epoch,
+                            serializable.connection_id,
+                        )
+                        .await?
+                        .context("SM association lost its exact MUC occupancy")?;
                     anyhow::ensure!(
-                        db::associate_cluster_muc_sm_session(
+                        northstar_room_postgres::cluster_muc::associate_cluster_muc_sm_session(
                             &self.pool,
                             &target,
                             &self.cluster.node_id,

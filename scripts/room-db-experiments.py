@@ -37,12 +37,12 @@ SUITE_TIMEOUT_SECONDS = 1800
 PASSWORD = 'xmpp-test-password'  # Fixed disposable identity required by these suites.
 EXPECTED_TESTS = {
     'muc': (
-        'db::muc::tests::locked_room_configuration_is_atomic_restart_safe_and_bounded',
-        'db::muc::tests::durable_invitation_admission_is_atomic_under_injected_failures',
-        'db::muc::tests::history_identity_and_mutations_are_atomic_under_replay_and_failure',
-        'db::cluster_muc::tests::postgres_outbox_maintenance_is_atomic_and_snapshot_is_complete',
-        'db::cluster_muc::tests::postgres_admin_batch_is_atomic_under_replay_and_failure',
-        'db::cluster_muc::tests::federated_rebind_is_atomic_and_fences_the_old_connection',
+        'db::muc_tests::locked_room_configuration_is_atomic_restart_safe_and_bounded',
+        'db::muc_tests::durable_invitation_admission_is_atomic_under_injected_failures',
+        'db::muc_tests::history_identity_and_mutations_are_atomic_under_replay_and_failure',
+        'db::cluster_muc_tests::postgres_outbox_maintenance_is_atomic_and_snapshot_is_complete',
+        'db::cluster_muc_tests::postgres_admin_batch_is_atomic_under_replay_and_failure',
+        'db::cluster_muc_tests::federated_rebind_is_atomic_and_fences_the_old_connection',
     ),
     'mix': (
         'db::mix::pam_durability_integration_tests::pam_restart_and_result_claims_preserve_authority_and_token_fencing',

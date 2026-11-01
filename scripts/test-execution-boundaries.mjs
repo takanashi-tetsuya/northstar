@@ -746,8 +746,8 @@ rejectsMucDiscussion('MUC replay SQL COMMIT must observe its original ID', 'mucD
   'commit_muc_discussion(transaction, request, MucDiscussionAdmission::Replay(existing_id)).await',
   'commit_muc_discussion(transaction, request, MucDiscussionAdmission::Replay(message.id)).await', /all three existing COMMIT exits/);
 rejectsMucDiscussion('MUC PostgreSQL repository cannot select legacy returned-only admission', 'mucRepository',
-  'db::admit_muc_discussion_observed(&self.pool, request).await?',
-  'db::admit_muc_discussion(&self.pool, discussion_to_db(request.command())).await?', /observed SQL entry/);
+  'crate::muc::admit_muc_discussion_observed(&self.pool, request).await?',
+  'crate::muc::admit_muc_discussion(&self.pool, discussion_to_db(request.command())).await?', /observed SQL entry/);
 rejectsMucDiscussion('MUC service cannot skip the request-bound application', 'mucService',
   '.admit_discussion_observed(request)', '.legacy_discussion(request)', /request-bound application/);
 rejectsMucDiscussion('MUC service constructor cannot substitute a different configured domain', 'mucService',

@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) fn canonical_history_actor(actor_scope: &str) -> Result<String> {
+pub fn canonical_history_actor(actor_scope: &str) -> Result<String> {
     anyhow::ensure!(
         !actor_scope.is_empty() && actor_scope.len() <= 3071,
         "MUC history actor scope must contain 1 to 3071 bytes"
@@ -20,7 +20,7 @@ pub(super) fn canonical_history_actor(actor_scope: &str) -> Result<String> {
     Ok(canonical)
 }
 
-pub(super) fn canonical_history_sender(sender_jid: &str) -> Result<String> {
+pub fn canonical_history_sender(sender_jid: &str) -> Result<String> {
     anyhow::ensure!(
         !sender_jid.is_empty() && sender_jid.len() <= 3071,
         "MUC history sender JID must contain 1 to 3071 bytes"
@@ -33,7 +33,7 @@ pub(super) fn canonical_history_sender(sender_jid: &str) -> Result<String> {
     Ok(canonical)
 }
 
-pub(super) fn validate_history_payload(nick: &str, stanza: &str) -> Result<()> {
+pub fn validate_history_payload(nick: &str, stanza: &str) -> Result<()> {
     anyhow::ensure!(
         !nick.is_empty() && nick.len() <= MAX_MUC_NICK_BYTES,
         "MUC history nickname must contain 1 to 128 bytes"
@@ -45,7 +45,7 @@ pub(super) fn validate_history_payload(nick: &str, stanza: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn validate_origin_id(origin_id: &str) -> Result<()> {
+pub fn validate_origin_id(origin_id: &str) -> Result<()> {
     anyhow::ensure!(
         !origin_id.is_empty() && origin_id.len() <= MAX_ORIGIN_ID_BYTES,
         "MUC origin-id must contain 1 to 128 bytes"
@@ -57,7 +57,7 @@ pub(super) fn validate_origin_id(origin_id: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn muc_origin_digest(actor_scope: &str, origin_id: &str) -> Vec<u8> {
+pub fn muc_origin_digest(actor_scope: &str, origin_id: &str) -> Vec<u8> {
     let mut digest = Sha256::new();
     digest.update(b"northstar:muc-origin-id:v1\0");
     digest.update((actor_scope.len() as u32).to_be_bytes());
@@ -68,13 +68,13 @@ pub(super) fn muc_origin_digest(actor_scope: &str, origin_id: &str) -> Vec<u8> {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct LockedMucActor {
-    pub(super) role: String,
-    pub(super) affiliation: String,
+pub struct LockedMucActor {
+    pub role: String,
+    pub affiliation: String,
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum MucAuthorityCheck {
+pub enum MucAuthorityCheck {
     Authorized(LockedMucActor),
     Unauthorized,
     Stale,
@@ -88,7 +88,7 @@ pub(super) enum MucAuthorityCheck {
 /// affiliation. They must never acquire this lock after a room, occupancy or
 /// affiliation row. Cluster writers intentionally do not use namespace 29 and
 /// follow room -> occupancy -> affiliation, so they cannot form a reverse edge.
-pub(super) async fn lock_muc_affiliation_namespace(
+pub async fn lock_muc_affiliation_namespace(
     transaction: &mut Transaction<'_, Postgres>,
     room_id: Uuid,
 ) -> Result<()> {
@@ -108,7 +108,7 @@ pub(super) async fn lock_muc_affiliation_namespace(
 /// advisory / advisory -> room-row deadlock cycle and also makes a missing
 /// affiliation row safe: a concurrent insert/delete cannot slip between the
 /// authorization check and the durable projection.
-pub(super) async fn lock_muc_actor_authority(
+pub async fn lock_muc_actor_authority(
     transaction: &mut Transaction<'_, Postgres>,
     room_id: Uuid,
     authority: &MucActorAuthority<'_>,
@@ -145,7 +145,7 @@ pub(super) async fn lock_muc_actor_authority(
     }
 
     lock_muc_affiliation_namespace(transaction, room_id).await?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     maybe_pause_muc_authorization_for_test("discussion_after_advisory").await;
     let room = sqlx::query(
         "SELECT room_epoch,members_only,destroyed_at,configuration_state
@@ -310,7 +310,7 @@ pub(super) async fn lock_muc_actor_authority(
     }))
 }
 
-pub(super) async fn commit_muc_discussion(
+pub async fn commit_muc_discussion(
     transaction: Transaction<'_, Postgres>,
     request: Option<&northstar_room_application::discussion::Request>,
     outcome: MucDiscussionAdmission,
@@ -340,7 +340,7 @@ pub(super) async fn commit_muc_discussion(
     Ok(outcome)
 }
 
-pub(super) async fn admit_muc_discussion_inner(
+pub async fn admit_muc_discussion_inner(
     pool: &PgPool,
     message: MucDiscussion<'_>,
     request: Option<&northstar_room_application::discussion::Request>,
@@ -349,7 +349,7 @@ pub(super) async fn admit_muc_discussion_inner(
     let sender_jid = canonical_history_sender(message.sender_jid)?;
     validate_history_payload(message.nick, message.stanza)?;
     let mut transaction = pool.begin().await?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     maybe_pause_muc_authorization_for_test("discussion").await;
     if message.authority.actor_scope != actor_scope
         || message.authority.full_jid != sender_jid
@@ -602,7 +602,7 @@ pub async fn retract_muc_message_and_archive_action(
     // A concurrent affiliation change can then commit, after which this
     // transaction takes the normal namespace/row locks and observes the
     // changed authority instead of creating a time-of-check/time-of-use gap.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     maybe_pause_muc_authorization_for_test("retraction").await;
     if mutation.authority.actor_scope != actor_scope
         || mutation.authority.full_jid != sender_jid

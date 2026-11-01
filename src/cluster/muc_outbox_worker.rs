@@ -3,8 +3,8 @@
 //! sign messages or issue Redis commands.
 
 use super::muc_delivery_endpoints::ClusterMucDeliveryEndpoints;
+use crate::cluster::ClusterMucOutboxSignal;
 use crate::xmpp::muc_delivery::MucDeliveryContext;
-use crate::{cluster::ClusterMucOutboxSignal, db};
 use northstar_telemetry::metrics::Metrics;
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::OwnedSemaphorePermit;
@@ -15,22 +15,22 @@ pub(crate) struct ClusterMucOutboxWorkerContext {
     pub(crate) endpoints: ClusterMucDeliveryEndpoints,
     pub(crate) delivery: MucDeliveryContext,
     pub(crate) preclaim: northstar_room_application::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService<
-        db::cluster_muc_outbox_preclaim_repository::PostgresClusterMucOutboxPreclaimRepository,
+        northstar_room_postgres::cluster_muc_outbox_preclaim_repository::PostgresClusterMucOutboxPreclaimRepository,
     >,
     pub(crate) claim: northstar_room_application::cluster_muc_outbox_claim::ClusterMucOutboxClaimService<
-        db::cluster_muc_outbox_claim_repository::PostgresClusterMucOutboxClaimRepository,
+        northstar_room_postgres::cluster_muc_outbox_claim_repository::PostgresClusterMucOutboxClaimRepository,
     >,
     pub(crate) settlement: northstar_room_application::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService<
-        db::cluster_muc_outbox_settlement_repository::PostgresClusterMucOutboxSettlementRepository,
+        northstar_room_postgres::cluster_muc_outbox_settlement_repository::PostgresClusterMucOutboxSettlementRepository,
     >,
     pub(crate) housekeeping: northstar_room_application::cluster_muc_outbox_housekeeping::ClusterMucOutboxHousekeepingService<
-        db::cluster_muc_outbox_housekeeping_repository::PostgresClusterMucOutboxHousekeepingRepository,
+        northstar_room_postgres::cluster_muc_outbox_housekeeping_repository::PostgresClusterMucOutboxHousekeepingRepository,
     >,
     pub(crate) delivery_read: northstar_room_application::cluster_muc_delivery_read::ClusterMucDeliveryReadService<
-        db::cluster_muc_delivery_read_repository::PostgresClusterMucDeliveryReadRepository,
+        northstar_room_postgres::cluster_muc_delivery_read_repository::PostgresClusterMucDeliveryReadRepository,
     >,
     pub(crate) delivery_item: northstar_room_application::cluster_muc_delivery_item::ClusterMucDeliveryItemService<
-        db::cluster_muc_delivery_item_repository::PostgresClusterMucDeliveryItemRepository,
+        northstar_room_postgres::cluster_muc_delivery_item_repository::PostgresClusterMucDeliveryItemRepository,
     >,
     pub(crate) admission: northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
     pub(crate) metrics: Arc<Metrics>,

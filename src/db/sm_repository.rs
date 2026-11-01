@@ -373,7 +373,7 @@ impl SmRepository for PostgresSmRepository {
                 id: created.id,
                 ownership: created.ownership.into(),
             }),
-            Err(error) if db::is_capacity_exhausted(&error) => {
+            Err(error) if northstar_postgres::is_capacity_exhausted(&error) => {
                 Ok(SmSessionCreationOutcome::CapacityExhausted)
             }
             Err(error) => Err(error),
@@ -670,20 +670,6 @@ impl SmRepository for PostgresSmRepository {
     }
 }
 
-impl From<SessionRouteClaimProof> for db::ClusterSessionRouteClaimProof {
-    fn from(value: SessionRouteClaimProof) -> Self {
-        match value {
-            SessionRouteClaimProof::Binding => Self::Binding,
-            SessionRouteClaimProof::SmResume {
-                session_id,
-                claim_token,
-            } => Self::SmResume {
-                session_id,
-                claim_token,
-            },
-        }
-    }
-}
 impl From<&db::SmSessionSnapshot> for SmSessionSnapshot {
     fn from(value: &db::SmSessionSnapshot) -> Self {
         Self {

@@ -309,7 +309,7 @@ pub struct AppState {
     extdisco_service: crate::services::extdisco::ExtDiscoService,
     /// PostgreSQL-authoritative MUC application service. Redis capabilities
     /// deliberately do not cross this boundary.
-    muc_service: northstar_room_application::muc_service::MucService<db::room::PostgresMucRepository>,
+    muc_service: northstar_room_application::muc_service::MucService<crate::db::room_effects::PostgresMucRepository>,
     /// Personal-message authorization and durable admission boundary. The
     /// protocol layer must not compose its own archive/outbox/offline writes.
     message_service:
@@ -372,7 +372,7 @@ pub struct AppState {
     durable_outbox_database_admission:
         northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
     locked_muc_expiry_service: northstar_room_application::locked_muc_expiry::LockedMucExpiryService<
-        db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
+        northstar_room_postgres::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
     >,
     locked_muc_expiry_context: std::sync::OnceLock<Arc<locked_muc_expiry::LockedMucExpiryContext>>,
     federation_outbox: FederationRouter,

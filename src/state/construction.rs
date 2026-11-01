@@ -582,7 +582,7 @@ impl AppState {
         config.raw.storage_database_url.zeroize();
         config.raw.storage_database_url.clear();
         let muc_service = northstar_room_application::muc_service::MucService::new(
-            db::room::PostgresMucRepository::new(pool.clone()),
+            crate::db::room_effects::PostgresMucRepository::new(pool.clone()),
             config.domain.clone(),
         );
         let sessions = Arc::new(DashMap::new());
@@ -641,7 +641,7 @@ impl AppState {
         );
         let locked_muc_expiry_service =
             northstar_room_application::locked_muc_expiry::LockedMucExpiryService::new(
-                db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository::new(
+                northstar_room_postgres::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository::new(
                     pool.clone(),
                 ),
             );

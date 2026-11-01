@@ -430,15 +430,15 @@ async fn retention_commit_holds_secondary_owner_until_affiliation_demotion() {
 
         let affiliation_pool = pool.clone();
         tasks.spawn(async move {
-            let result = crate::db::set_muc_affiliations_batch(
+            let result = northstar_room_postgres::muc::set_muc_affiliations_batch(
                 &affiliation_pool,
                 room,
-                &[crate::db::MucAffiliationChange {
-                    target: crate::db::MucAffiliationTarget::LocalUsername(owner_name),
+                &[northstar_room_postgres::muc::MucAffiliationChange {
+                    target: northstar_room_postgres::muc::MucAffiliationTarget::LocalUsername(owner_name),
                     affiliation: "member".to_owned(),
                 }],
             ).await?;
-            anyhow::ensure!(result == crate::db::MucAffiliationBatchOutcome::Applied,
+            anyhow::ensure!(result == northstar_room_postgres::muc::MucAffiliationBatchOutcome::Applied,
                 "the production affiliation writer did not apply the demotion");
             Ok(RetentionRaceCompletion::Demotion)
         });

@@ -58,16 +58,16 @@ require_literal "$project_dir/migrations/0094_cluster_muc_delivery_receipts.sql"
   "cluster MUC handoff has no exact authoritative history" "handoff history authority fence"
 require_literal "$project_dir/migrations/0094_cluster_muc_delivery_receipts.sql" \
   "REVOKE ALL ON FUNCTION northstar_transfer_cluster_muc_outbox" "outbox mutation privilege revocation"
-cluster_muc_module_source="$(module_source "src/db/cluster_muc.rs")" || exit 1
+cluster_muc_module_source="$(module_source "crates/contexts/room/northstar-room-postgres/src/cluster_muc.rs")" || exit 1
 if grep -Fq -- "northstar.cluster_muc_resume_handoff" \
   "$project_dir/migrations/0094_cluster_muc_delivery_receipts.sql" \
   || grep -Fq -- "northstar.cluster_muc_resume_handoff" <<<"$cluster_muc_module_source"; then
   echo "cluster MUC handoff must not trust a caller-controlled GUC" >&2
   exit 1
 fi
-require_module_literal "src/db/cluster_muc.rs" \
+require_module_literal "crates/contexts/room/northstar-room-postgres/src/cluster_muc.rs" \
   'parent.claim_token=$4' "parent claim-token fence"
-require_module_literal "src/db/cluster_muc.rs" \
+require_module_literal "crates/contexts/room/northstar-room-postgres/src/cluster_muc.rs" \
   'lease_until>clock_timestamp()' "lease ownership predicate"
 require_literal "$project_dir/migrations/0096_bosh_ack_ownership_bounds.sql" \
   "first_owned_at+INTERVAL '5 minutes'" "bounded first-owner interval"
@@ -75,9 +75,9 @@ require_literal "$project_dir/migrations/0095_cluster_replay_fence.sql" \
   "northstar_admit_cluster_envelope_replay" "cluster replay admission fence"
 require_literal "$project_dir/migrations/0095_cluster_replay_fence.sql" \
   "existing.destination_instance_uuid<>p_destination_uuid" "destination instance replay fence"
-require_module_literal "src/db/muc.rs" \
+require_module_literal "crates/contexts/room/northstar-room-postgres/src/muc.rs" \
   "ON CONFLICT (localpart) WHERE destroyed_at IS NULL DO NOTHING" "live-room create idempotency" \
-  "$project_dir/src/db/muc.rs"
+  "$project_dir/crates/contexts/room/northstar-room-postgres/src/muc.rs"
 require_module_literal "src/cluster/listener.rs" \
   "executable MUC control rejected" "untrusted executable MUC control rejection" \
   "$project_dir/src/cluster/listener.rs"
@@ -85,11 +85,11 @@ require_module_literal "src/cluster.rs" \
   "worker.delivery_read.recipient_snapshot(delivery).await" "recipient snapshot service boundary"
 require_literal "$project_dir/crates/contexts/room/northstar-room-application/src/cluster_muc_delivery_read.rs" \
   "self.repository.recipient_snapshot(delivery).await" "recipient snapshot repository delegation"
-require_literal "$project_dir/src/db/cluster_muc_delivery_read_repository.rs" \
+require_literal "$project_dir/crates/contexts/room/northstar-room-postgres/src/cluster_muc_delivery_read_repository.rs" \
   "db::cluster_muc_delivery_recipient_snapshot(&self.pool, delivery).await" "recipient snapshot authority"
-require_module_literal "src/db/cluster_muc.rs" \
+require_module_literal "crates/contexts/room/northstar-room-postgres/src/cluster_muc.rs" \
   "mutate_cluster_muc_registration" "membership mutation authority"
-require_module_literal "src/db/cluster_muc.rs" \
+require_module_literal "crates/contexts/room/northstar-room-postgres/src/cluster_muc.rs" \
   "grant_cluster_muc_invitation_in_tx" "invitation mutation authority"
 require_module_literal "src/cluster.rs" \
   '"offline_affiliation"' "offline affiliation projection"
@@ -188,7 +188,7 @@ fi
 # `redis+unix:///absolute/path` is the Rust redis client syntax accepted by
 # Config's local Unix-socket transport validation.
 export TEST_REDIS_URL="redis+unix://$redis_socket"
-cargo test --locked --offline db::cluster_muc::tests:: -- --nocapture
+cargo test --locked --offline -p northstar-room-postgres cluster_muc::tests:: -- --nocapture
 cargo test --locked --offline \
   cluster::tests::redis_muc_nickname_and_voice_mutations_reject_conflicts_and_aba \
   -- --ignored --nocapture

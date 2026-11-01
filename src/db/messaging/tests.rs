@@ -147,7 +147,7 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     let failure_recipient = format!("failure-{}@local.test", &marker[..8]);
     let quota_recipient = format!("quota-{}@local.test", &marker[..8]);
     let concurrent_recipient = format!("concurrent-{}@local.test", &marker[..8]);
-    let (room, _) = db::get_or_create_muc_room(
+    let (room, _) = northstar_room_postgres::muc::get_or_create_muc_room(
         &pool,
         &format!("invite-{}", &marker[..8]),
         sender_id,
@@ -155,7 +155,7 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     )
     .await
     .unwrap();
-    let (failure_room, _) = db::get_or_create_muc_room(
+    let (failure_room, _) = northstar_room_postgres::muc::get_or_create_muc_room(
         &pool,
         &format!("invite-failure-{}", &marker[..8]),
         sender_id,
@@ -163,7 +163,7 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     )
     .await
     .unwrap();
-    let (quota_room, _) = db::get_or_create_muc_room(
+    let (quota_room, _) = northstar_room_postgres::muc::get_or_create_muc_room(
         &pool,
         &format!("invite-quota-{}", &marker[..8]),
         sender_id,
@@ -171,7 +171,7 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     )
     .await
     .unwrap();
-    let (concurrent_room, _) = db::get_or_create_muc_room(
+    let (concurrent_room, _) = northstar_room_postgres::muc::get_or_create_muc_room(
         &pool,
         &format!("invite-concurrent-{}", &marker[..8]),
         sender_id,
@@ -880,7 +880,8 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
         tokio::time::timeout(Duration::from_secs(5), async {
             tokio::join!(
                 service.admit_remote_muc_invite(&concurrent_remote),
-                db::admit_federated_muc_invite(
+                northstar_room_postgres::muc::admit_federated_muc_invite(
+                    &crate::db::room_effects::RootRoomEffects,
                     &pool,
                     room.id,
                     &remote_target,

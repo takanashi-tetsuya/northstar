@@ -16,7 +16,7 @@ pub async fn update_cluster_muc_config(
     actor_target: &ClusterMucOccupancyTarget,
     principal: &ClusterMucPrincipal,
     actor_full_jid: &str,
-    config: super::super::muc::MucConfigUpdate<'_>,
+    config: crate::muc::MucConfigUpdate<'_>,
 ) -> Result<ClusterMucConfigurationOutcome> {
     principal.validate()?;
     let actor_full_jid = northstar_xmpp_types::jid::canonicalize(actor_full_jid)?;
@@ -300,7 +300,7 @@ pub async fn set_cluster_muc_subject(
     expected_room_epoch: Uuid,
     expected_config_version: i64,
     actor: &ClusterMucOccupancyTarget,
-    mutation: super::super::muc::MucSubjectMutation<'_>,
+    mutation: crate::muc::MucSubjectMutation<'_>,
     archive: bool,
 ) -> Result<ClusterMucTransitionOutcome> {
     anyhow::ensure!(

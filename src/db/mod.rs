@@ -1,5 +1,4 @@
 pub(crate) mod operation_muc_destroy_repository;
-pub(crate) mod operation_muc_wake_repository;
 #[cfg(test)]
 pub(crate) mod test_support;
 use anyhow::{Context, Result};
@@ -30,14 +29,8 @@ pub(crate) mod capacity_maintenance_repository;
 pub(crate) mod cluster_authority_repository;
 pub(crate) mod cluster_instance_release_repository;
 pub mod cluster_keys;
-pub mod cluster_muc;
-pub(crate) mod cluster_muc_delivery_item_repository;
-pub(crate) mod cluster_muc_delivery_read_repository;
-pub(crate) mod cluster_muc_outbox_claim_repository;
-pub(crate) mod cluster_muc_outbox_housekeeping_repository;
-pub(crate) mod cluster_muc_outbox_preclaim_repository;
-pub(crate) mod cluster_muc_outbox_settlement_repository;
-pub(crate) mod cluster_muc_receipt_claim_repository;
+#[cfg(test)]
+mod cluster_muc_tests;
 pub(crate) mod cluster_replay_maintenance_repository;
 pub(crate) mod cluster_session_route_maintenance_repository;
 pub(crate) mod direct_spool_wake_repository;
@@ -46,7 +39,6 @@ mod fast_tests;
 pub(crate) mod federation_outbox_repository;
 pub mod identity_migration;
 pub mod jid_identity;
-pub(crate) mod locked_muc_expiry_repository;
 pub(crate) mod maintenance_ownership;
 pub(crate) mod mam;
 mod message_admission_port;
@@ -57,9 +49,10 @@ pub mod mix;
 pub mod mix_identity;
 pub mod mix_muc;
 pub mod mix_repository;
-pub mod muc;
 #[cfg(test)]
 mod muc_service_tests;
+#[cfg(test)]
+mod muc_tests;
 pub(crate) mod node_message_projection_repository;
 pub mod omemo_recovery;
 #[cfg(test)]
@@ -82,7 +75,7 @@ pub mod replay;
 pub mod replay_repository;
 pub mod retention;
 pub mod retractions;
-pub(crate) mod room;
+pub(crate) mod room_effects;
 pub mod roster;
 pub mod s2s;
 pub(crate) mod s2s_outbox_dispatch_repository;
@@ -99,10 +92,8 @@ pub(crate) mod sm_teardown_repository;
 pub use archive::*;
 pub use capacity::*;
 pub use cluster_keys::*;
-pub use cluster_muc::*;
 pub use mix::*;
 pub use mix_muc::*;
-pub use muc::*;
 pub use omemo_recovery::*;
 pub use pep_roster::*;
 pub use privacy::*;

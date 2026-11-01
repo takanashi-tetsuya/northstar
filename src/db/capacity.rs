@@ -1353,24 +1353,11 @@ pub async fn deployment_capacity_snapshot(pool: &PgPool) -> Result<DeploymentCap
     })
 }
 
-pub fn is_capacity_exhausted(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<sqlx::Error>()
-            .is_some_and(is_capacity_sqlx_error)
-            || cause.to_string().contains("capacity exhausted")
-    })
-}
-
 #[cfg(test)]
 mod lock_order_schema_tests;
 
-fn is_capacity_sqlx_error(error: &sqlx::Error) -> bool {
-    error.as_database_error().is_some_and(|database| {
-        database.code().as_deref() == Some("P0001")
-            && database.message().contains("capacity exhausted")
-    })
-}
+#[cfg(test)]
+use northstar_postgres::{is_capacity_exhausted, is_capacity_sqlx_error};
 
 #[cfg(test)]
 mod tests;

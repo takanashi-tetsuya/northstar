@@ -464,7 +464,7 @@ impl MessageRepository for PostgresMessageRepository {
             return Ok(RemoteMucInviteAdmissionOutcome::Replay);
         }
         let cluster_authority = request.cluster_authority.map(Into::into);
-        let affiliation = match db::grant_federated_muc_invite_affiliation_in_transaction(
+        let affiliation = match northstar_room_postgres::muc::grant_federated_muc_invite_affiliation_in_transaction(
             &mut transaction,
             request.room_id,
             request.invitee_bare_jid,
@@ -479,19 +479,19 @@ impl MessageRepository for PostgresMessageRepository {
             }
         };
         let outcome = match affiliation {
-            db::FederatedMucInviteAffiliationOutcome::Stored => {
+            northstar_room_postgres::muc::FederatedMucInviteAffiliationOutcome::Stored => {
                 self.commit_live_invite(transaction, None).await?;
                 RemoteMucInviteAdmissionOutcome::Stored
             }
-            db::FederatedMucInviteAffiliationOutcome::Replay => {
+            northstar_room_postgres::muc::FederatedMucInviteAffiliationOutcome::Replay => {
                 transaction.rollback().await?;
                 RemoteMucInviteAdmissionOutcome::Replay
             }
-            db::FederatedMucInviteAffiliationOutcome::Rejected => {
+            northstar_room_postgres::muc::FederatedMucInviteAffiliationOutcome::Rejected => {
                 transaction.rollback().await?;
                 RemoteMucInviteAdmissionOutcome::Rejected
             }
-            db::FederatedMucInviteAffiliationOutcome::Stale => {
+            northstar_room_postgres::muc::FederatedMucInviteAffiliationOutcome::Stale => {
                 transaction.rollback().await?;
                 RemoteMucInviteAdmissionOutcome::Stale
             }
@@ -568,23 +568,24 @@ impl MessageRepository for PostgresMessageRepository {
         }
 
         let cluster_authority = request.cluster_authority.map(Into::into);
-        let affiliation = match db::grant_local_muc_invite_affiliation_in_transaction(
-            &mut transaction,
-            request.delivery_id,
-            request.room_id,
-            request.recipient_id,
-            cluster_authority.as_ref(),
-        )
-        .await
-        {
-            Ok(affiliation) => affiliation,
-            Err(error) => {
-                transaction.rollback().await?;
-                return Err(error);
-            }
-        };
+        let affiliation =
+            match northstar_room_postgres::muc::grant_local_muc_invite_affiliation_in_transaction(
+                &mut transaction,
+                request.delivery_id,
+                request.room_id,
+                request.recipient_id,
+                cluster_authority.as_ref(),
+            )
+            .await
+            {
+                Ok(affiliation) => affiliation,
+                Err(error) => {
+                    transaction.rollback().await?;
+                    return Err(error);
+                }
+            };
         match affiliation {
-            db::DurableMucInviteOutcome::Stored { .. } => {
+            northstar_room_postgres::muc::DurableMucInviteOutcome::Stored { .. } => {
                 let live_claim_id = self
                     .commit_live_invite(
                         transaction,
@@ -595,7 +596,7 @@ impl MessageRepository for PostgresMessageRepository {
                     id: request.delivery_id,
                     affiliation_changed: matches!(
                         affiliation,
-                        db::DurableMucInviteOutcome::Stored {
+                        northstar_room_postgres::muc::DurableMucInviteOutcome::Stored {
                             affiliation_changed: true,
                             ..
                         }
@@ -603,12 +604,12 @@ impl MessageRepository for PostgresMessageRepository {
                     live_claim_id,
                 });
             }
-            db::DurableMucInviteOutcome::Replay { .. }
-            | db::DurableMucInviteOutcome::QuotaExceeded
-            | db::DurableMucInviteOutcome::RecipientUnavailable
-            | db::DurableMucInviteOutcome::Outcast
-            | db::DurableMucInviteOutcome::AuthorityRejected
-            | db::DurableMucInviteOutcome::Stale => {
+            northstar_room_postgres::muc::DurableMucInviteOutcome::Replay { .. }
+            | northstar_room_postgres::muc::DurableMucInviteOutcome::QuotaExceeded
+            | northstar_room_postgres::muc::DurableMucInviteOutcome::RecipientUnavailable
+            | northstar_room_postgres::muc::DurableMucInviteOutcome::Outcast
+            | northstar_room_postgres::muc::DurableMucInviteOutcome::AuthorityRejected
+            | northstar_room_postgres::muc::DurableMucInviteOutcome::Stale => {
                 transaction.rollback().await?;
             }
         }

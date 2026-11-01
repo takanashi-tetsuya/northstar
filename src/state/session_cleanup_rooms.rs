@@ -1,7 +1,7 @@
 //! Temporary-room cleanup after an exact local occupant departure.
 
 use super::AppState;
-use crate::db::room::PostgresMucRepository;
+use crate::db::room_effects::PostgresMucRepository;
 use anyhow::Result;
 use northstar_room_application::muc_service::MucService;
 

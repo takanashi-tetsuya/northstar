@@ -2,7 +2,6 @@
 
 use super::AppState;
 use crate::cluster::ClusterMucDeparture;
-use crate::db;
 use anyhow::Result;
 use northstar_room_application::muc_service::{
     ClusterMucOccupancyDepartureService, ClusterMucTransitionOutcome,
@@ -12,7 +11,7 @@ use northstar_room_application::muc_service::{
 /// application cleanup has no access to the database pool or owner-node ID.
 pub(crate) struct SessionCleanupPgMucDeparture {
     service: ClusterMucOccupancyDepartureService<
-        db::room::PostgresClusterMucOccupancyDepartureRepository,
+        northstar_room_postgres::room::PostgresClusterMucOccupancyDepartureRepository,
     >,
     node_id: String,
 }
@@ -54,7 +53,7 @@ impl AppState {
         (self.muc_pg_authority_enabled() && !self.cluster_workers_enabled()).then(|| {
             SessionCleanupPgMucDeparture {
                 service: ClusterMucOccupancyDepartureService::new(
-                    db::room::PostgresClusterMucOccupancyDepartureRepository::new(
+                    northstar_room_postgres::room::PostgresClusterMucOccupancyDepartureRepository::new(
                         self.pool.clone(),
                     ),
                 ),

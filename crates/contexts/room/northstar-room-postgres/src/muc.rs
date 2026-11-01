@@ -57,13 +57,13 @@ impl MucRoom {
         self.configuration_owner_jid.is_some()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn configuration_is_expired(&self, now: DateTime<Utc>) -> bool {
         self.configuration_expires_at
             .is_some_and(|expires_at| expires_at <= now)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn can_configure_locked_room(&self, actor_full_jid: &str, now: DateTime<Utc>) -> bool {
         self.configuration_owner_jid.as_deref() == Some(actor_full_jid)
             && !self.configuration_is_expired(now)
@@ -193,7 +193,7 @@ pub enum MucRetractionOutcome {
     Stale,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone)]
 struct MucAuthorizationTestPause {
     operation: &'static str,
@@ -201,13 +201,13 @@ struct MucAuthorizationTestPause {
     resume: std::sync::Arc<tokio::sync::Notify>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static MUC_AUTHORIZATION_TEST_PAUSE: std::sync::OnceLock<
     std::sync::Mutex<Option<MucAuthorizationTestPause>>,
 > = std::sync::OnceLock::new();
 
-#[cfg(test)]
-fn install_muc_authorization_test_pause(
+#[cfg(any(test, feature = "test-support"))]
+pub fn install_muc_authorization_test_pause(
     operation: &'static str,
 ) -> (
     std::sync::Arc<tokio::sync::Notify>,
@@ -226,7 +226,7 @@ fn install_muc_authorization_test_pause(
     (entered, resume)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 async fn maybe_pause_muc_authorization_for_test(operation: &'static str) {
     let hook = {
         let mut hook = MUC_AUTHORIZATION_TEST_PAUSE
@@ -533,7 +533,7 @@ pub enum DurableMucInviteOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FederatedMucInviteAffiliationOutcome {
+pub enum FederatedMucInviteAffiliationOutcome {
     Stored,
     Replay,
     Rejected,
@@ -553,7 +553,7 @@ pub async fn admit_muc_discussion(
 
 /// Project only this bound request into the unchanged SQL transaction. No
 /// independent borrowed command can be paired with its COMMIT observation.
-pub(crate) async fn admit_muc_discussion_observed(
+pub async fn admit_muc_discussion_observed(
     pool: &PgPool,
     request: &northstar_room_application::discussion::Request,
 ) -> Result<MucDiscussionAdmission> {
@@ -870,12 +870,12 @@ fn muc_room_from_row(row: &sqlx::postgres::PgRow) -> MucRoom {
     }
 }
 
-#[cfg(test)]
-pub(crate) use northstar_room_application::muc_service::{
+#[cfg(any(test, feature = "test-support"))]
+pub use northstar_room_application::muc_service::{
     hash_room_password as hash_muc_password, verify_room_password as verify_muc_password,
 };
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MucAffiliationOutcome {
     Applied,
@@ -908,7 +908,7 @@ pub enum MucAffiliationBatchOutcome {
     Destroyed,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn set_muc_affiliation(
     pool: &PgPool,
     room_id: Uuid,
@@ -984,7 +984,7 @@ pub async fn set_muc_affiliation(
     Ok(MucAffiliationOutcome::Applied)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn set_federated_muc_affiliation(
     pool: &PgPool,
     room_id: Uuid,
@@ -1096,26 +1096,22 @@ pub enum MucAdminSnapshot<T> {
 /// contracts split the source on a marker that occurs in more than one child.
 /// `module_source_lists_every_child_module` keeps this list in step with the
 /// non-test `mod` declarations above.
-#[cfg(test)]
-pub(super) const MODULE_SOURCE: &[(&str, &str)] = &[
+#[cfg(any(test, feature = "test-support"))]
+pub const MODULE_SOURCE: &[(&str, &str)] = &[
     ("muc", include_str!("muc.rs")),
     ("history", include_str!("muc/history.rs")),
     ("membership", include_str!("muc/membership.rs")),
     ("admin", include_str!("muc/admin.rs")),
 ];
 
-#[cfg(test)]
-pub(super) fn module_source() -> String {
+#[cfg(any(test, feature = "test-support"))]
+pub fn module_source() -> String {
     MODULE_SOURCE
         .iter()
         .map(|(_, text)| *text)
         .collect::<Vec<_>>()
         .join("\n")
 }
-
-#[cfg(test)]
-#[path = "muc_tests.rs"]
-mod tests;
 
 #[cfg(test)]
 mod module_source_tests;

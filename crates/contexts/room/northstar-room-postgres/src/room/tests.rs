@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn registration_outcomes_preserve_authorization_distinctions() {
     assert_eq!(
-        MucRegistrationOutcome::from(db::MucRegistrationOutcome::Registered {
+        MucRegistrationOutcome::from(crate::muc::MucRegistrationOutcome::Registered {
             affiliation_changed: true,
         }),
         MucRegistrationOutcome::Registered {
@@ -11,11 +11,15 @@ fn registration_outcomes_preserve_authorization_distinctions() {
         }
     );
     assert_eq!(
-        ClusterMucRegistrationOutcome::from(db::ClusterMucRegistrationOutcome::NotAllowed),
+        ClusterMucRegistrationOutcome::from(
+            crate::cluster_muc::ClusterMucRegistrationOutcome::NotAllowed
+        ),
         ClusterMucRegistrationOutcome::NotAllowed
     );
     assert_eq!(
-        ClusterMucRegistrationOutcome::from(db::ClusterMucRegistrationOutcome::Stale),
+        ClusterMucRegistrationOutcome::from(
+            crate::cluster_muc::ClusterMucRegistrationOutcome::Stale
+        ),
         ClusterMucRegistrationOutcome::Stale
     );
 }
@@ -23,31 +27,31 @@ fn registration_outcomes_preserve_authorization_distinctions() {
 #[test]
 fn durable_delivery_outcomes_do_not_collapse_security_failures() {
     assert_eq!(
-        DurableMucInviteOutcome::from(db::DurableMucInviteOutcome::RecipientUnavailable),
+        DurableMucInviteOutcome::from(crate::muc::DurableMucInviteOutcome::RecipientUnavailable),
         DurableMucInviteOutcome::RecipientUnavailable
     );
     assert_eq!(
-        DurableMucInviteOutcome::from(db::DurableMucInviteOutcome::AuthorityRejected),
+        DurableMucInviteOutcome::from(crate::muc::DurableMucInviteOutcome::AuthorityRejected),
         DurableMucInviteOutcome::AuthorityRejected
-    );
-    assert_eq!(
-        OfflineStoreOutcome::from(db::OfflineStoreOutcome::QuotaExceeded),
-        OfflineStoreOutcome::QuotaExceeded
     );
 }
 
 #[test]
 fn cluster_transition_mapping_keeps_stale_and_unauthorized_separate() {
     assert_eq!(
-        ClusterMucTransitionOutcome::from(db::ClusterMucTransitionOutcome::Stale),
+        ClusterMucTransitionOutcome::from(crate::cluster_muc::ClusterMucTransitionOutcome::Stale),
         ClusterMucTransitionOutcome::Stale
     );
     assert_eq!(
-        ClusterMucTransitionOutcome::from(db::ClusterMucTransitionOutcome::Unauthorized),
+        ClusterMucTransitionOutcome::from(
+            crate::cluster_muc::ClusterMucTransitionOutcome::Unauthorized
+        ),
         ClusterMucTransitionOutcome::Unauthorized
     );
     assert_eq!(
-        ClusterMucConfigurationOutcome::from(db::ClusterMucConfigurationOutcome::LockedByAnother),
+        ClusterMucConfigurationOutcome::from(
+            crate::cluster_muc::ClusterMucConfigurationOutcome::LockedByAnother
+        ),
         ClusterMucConfigurationOutcome::LockedByAnother
     );
 }
@@ -64,7 +68,7 @@ fn occupancy_target_conversion_preserves_all_fencing_fields() {
         connection_uuid: Uuid::new_v4(),
         connection_epoch: 19,
     };
-    let repository: db::ClusterMucOccupancyTarget = (&target).into();
+    let repository: crate::cluster_muc::ClusterMucOccupancyTarget = (&target).into();
     assert_eq!(occupancy_target_from_db(repository), target);
 }
 
@@ -75,8 +79,8 @@ fn federated_authority_conversion_preserves_domain_and_outbox_limits() {
         authenticated_domain: "remote.test".to_owned(),
     };
     assert_eq!(
-        db::ClusterMucPrincipal::from(&principal),
-        db::ClusterMucPrincipal::Federated {
+        crate::cluster_muc::ClusterMucPrincipal::from(&principal),
+        crate::cluster_muc::ClusterMucPrincipal::Federated {
             bare_jid: "alice@remote.test".to_owned(),
             authenticated_domain: "remote.test".to_owned(),
         }
@@ -88,7 +92,7 @@ fn federated_authority_conversion_preserves_domain_and_outbox_limits() {
         max_bytes: 1_048_576,
         max_per_domain: 10,
     };
-    let repository: db::S2sOutboxPolicy = policy;
+    let repository: northstar_federation_core::S2sOutboxPolicy = policy;
     assert_eq!(repository.ttl_seconds, 3600);
     assert_eq!(repository.max_rows, 100);
     assert_eq!(repository.max_bytes, 1_048_576);

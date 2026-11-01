@@ -325,9 +325,11 @@ mod tests {
         .await
         .unwrap();
         let creator = format!("{username}@example.invalid/Test");
-        let (room, created) = db::get_or_create_muc_room(&pool, &localpart, user_id, &creator)
-            .await
-            .unwrap();
+        let (room, created) = northstar_room_postgres::muc::get_or_create_muc_room(
+            &pool, &localpart, user_id, &creator,
+        )
+        .await
+        .unwrap();
         assert!(created);
         let actor = format!("{username}@example.invalid");
         let payloads = northstar_room_application::mix_service::MixPayloads;

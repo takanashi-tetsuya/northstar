@@ -1,7 +1,7 @@
 //! PostgreSQL adapter for committed clustered-MUC delivery projections.
 
-use crate::db::{
-    self, ClusterMucAudienceSnapshot, ClusterMucEventContext, ClusterMucOutboxDelivery,
+use crate::cluster_muc::{
+    ClusterMucAudienceSnapshot, ClusterMucEventContext, ClusterMucOutboxDelivery,
 };
 use anyhow::{Context, Result};
 use northstar_room_application::cluster_muc_delivery_read::ClusterMucDeliveryReadRepository;
@@ -9,12 +9,12 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-pub(crate) struct PostgresClusterMucDeliveryReadRepository {
+pub struct PostgresClusterMucDeliveryReadRepository {
     pool: PgPool,
 }
 
 impl PostgresClusterMucDeliveryReadRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -25,14 +25,14 @@ impl ClusterMucDeliveryReadRepository for PostgresClusterMucDeliveryReadReposito
     type AudienceSnapshot = ClusterMucAudienceSnapshot;
 
     async fn event_context(&self, operation_id: Uuid) -> Result<Option<ClusterMucEventContext>> {
-        db::cluster_muc_event_context(&self.pool, operation_id).await
+        crate::cluster_muc::cluster_muc_event_context(&self.pool, operation_id).await
     }
 
     async fn recipient_snapshot(
         &self,
         delivery: &ClusterMucOutboxDelivery,
     ) -> Result<Option<ClusterMucAudienceSnapshot>> {
-        db::cluster_muc_delivery_recipient_snapshot(&self.pool, delivery).await
+        crate::cluster_muc::cluster_muc_delivery_recipient_snapshot(&self.pool, delivery).await
     }
 
     async fn original_audience_snapshot(
@@ -87,6 +87,6 @@ impl ClusterMucDeliveryReadRepository for PostgresClusterMucDeliveryReadReposito
     }
 
     async fn audience_is_current(&self, delivery: &ClusterMucOutboxDelivery) -> Result<bool> {
-        db::cluster_muc_delivery_audience_is_current(&self.pool, delivery).await
+        crate::cluster_muc::cluster_muc_delivery_audience_is_current(&self.pool, delivery).await
     }
 }

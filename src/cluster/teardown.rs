@@ -128,7 +128,7 @@ impl ClusterAccountTeardownNotifier {
             .authority_pool
             .get()
             .context("cluster session authority pool is unavailable")?;
-        let Some(route) = crate::db::cluster_session_route_authority(
+        let Some(route) = northstar_room_postgres::cluster_muc::cluster_session_route_authority(
             authority_pool,
             &self.routes.namespace,
             &full_jid,
@@ -500,7 +500,7 @@ impl ClusterSessionRouteRelease {
             .authority_pool
             .get()
             .context("cluster session authority pool is unavailable")?;
-        let _ = crate::db::release_cluster_session_route(
+        let _ = northstar_room_postgres::cluster_muc::release_cluster_session_route(
             authority_pool,
             &self.namespace,
             &full_jid,

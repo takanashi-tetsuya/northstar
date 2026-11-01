@@ -2,8 +2,18 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cluster_muc_delivery_item;
+pub mod cluster_muc_delivery_read;
+pub mod cluster_muc_outbox_claim;
+pub mod cluster_muc_outbox_housekeeping;
+pub mod cluster_muc_outbox_preclaim;
+pub mod cluster_muc_outbox_settlement;
+pub mod cluster_muc_receipt_claim;
 pub mod discussion;
+pub mod locked_muc_expiry;
 pub mod mix;
+pub mod muc_delivery;
+pub mod sm_teardown_muc;
 
 use northstar_room_core::{
     MucActorAuthority, MucAffiliationBatchOutcome, MucAffiliationBatchWrite,

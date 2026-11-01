@@ -6,7 +6,7 @@ use anyhow::Result;
 use std::future::Future;
 use uuid::Uuid;
 
-pub(crate) trait ClusterMucDeliveryReadRepository: Send + Sync {
+pub trait ClusterMucDeliveryReadRepository: Send + Sync {
     type Delivery;
     type EventContext;
     type AudienceSnapshot;
@@ -32,37 +32,34 @@ pub(crate) trait ClusterMucDeliveryReadRepository: Send + Sync {
     ) -> impl Future<Output = Result<bool>> + Send;
 }
 
-pub(crate) struct ClusterMucDeliveryReadService<R> {
+pub struct ClusterMucDeliveryReadService<R> {
     repository: R,
 }
 
 impl<R: ClusterMucDeliveryReadRepository> ClusterMucDeliveryReadService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn event_context(
-        &self,
-        operation_id: Uuid,
-    ) -> Result<Option<R::EventContext>> {
+    pub async fn event_context(&self, operation_id: Uuid) -> Result<Option<R::EventContext>> {
         self.repository.event_context(operation_id).await
     }
 
-    pub(crate) async fn recipient_snapshot(
+    pub async fn recipient_snapshot(
         &self,
         delivery: &R::Delivery,
     ) -> Result<Option<R::AudienceSnapshot>> {
         self.repository.recipient_snapshot(delivery).await
     }
 
-    pub(crate) async fn original_audience_snapshot(
+    pub async fn original_audience_snapshot(
         &self,
         delivery: &R::Delivery,
     ) -> Result<Option<R::AudienceSnapshot>> {
         self.repository.original_audience_snapshot(delivery).await
     }
 
-    pub(crate) async fn audience_is_current(&self, delivery: &R::Delivery) -> Result<bool> {
+    pub async fn audience_is_current(&self, delivery: &R::Delivery) -> Result<bool> {
         self.repository.audience_is_current(delivery).await
     }
 }

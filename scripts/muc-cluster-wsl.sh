@@ -83,7 +83,7 @@ require_module_literal "src/cluster/listener.rs" \
   "$project_dir/src/cluster/listener.rs"
 require_module_literal "src/cluster.rs" \
   "worker.delivery_read.recipient_snapshot(delivery).await" "recipient snapshot service boundary"
-require_literal "$project_dir/src/services/cluster_muc_delivery_read.rs" \
+require_literal "$project_dir/crates/contexts/room/northstar-room-application/src/cluster_muc_delivery_read.rs" \
   "self.repository.recipient_snapshot(delivery).await" "recipient snapshot repository delegation"
 require_literal "$project_dir/src/db/cluster_muc_delivery_read_repository.rs" \
   "db::cluster_muc_delivery_recipient_snapshot(&self.pool, delivery).await" "recipient snapshot authority"

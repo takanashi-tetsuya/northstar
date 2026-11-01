@@ -4,22 +4,22 @@ use anyhow::Result;
 use std::{collections::HashSet, future::Future};
 use uuid::Uuid;
 
-pub(crate) struct SmTeardownMucRoom {
-    pub(crate) id: Uuid,
-    pub(crate) room_epoch: Uuid,
-    pub(crate) config_version: i64,
-    pub(crate) non_anonymous: bool,
-    pub(crate) occupant_id_secret: Vec<u8>,
+pub struct SmTeardownMucRoom {
+    pub id: Uuid,
+    pub room_epoch: Uuid,
+    pub config_version: i64,
+    pub non_anonymous: bool,
+    pub occupant_id_secret: Vec<u8>,
 }
 
-pub(crate) struct SmTeardownMucOccupantProjection {
-    pub(crate) affiliation: String,
-    pub(crate) role: &'static str,
-    pub(crate) room_non_anonymous: bool,
-    pub(crate) occupant_id: String,
+pub struct SmTeardownMucOccupantProjection {
+    pub affiliation: String,
+    pub role: &'static str,
+    pub room_non_anonymous: bool,
+    pub occupant_id: String,
 }
 
-pub(crate) trait SmTeardownMucRepository: Send + Sync {
+pub trait SmTeardownMucRepository: Send + Sync {
     fn room(
         &self,
         localpart: &str,
@@ -47,16 +47,16 @@ pub(crate) trait SmTeardownMucRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct SmTeardownMucService<R> {
+pub struct SmTeardownMucService<R> {
     repository: R,
 }
 
 impl<R: SmTeardownMucRepository> SmTeardownMucService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn occupant_projection(
+    pub async fn occupant_projection(
         &self,
         room_localpart: &str,
         user_id: Uuid,
@@ -92,7 +92,7 @@ impl<R: SmTeardownMucRepository> SmTeardownMucService<R> {
         })
     }
 
-    pub(crate) async fn blocked_local_audience(
+    pub async fn blocked_local_audience(
         &self,
         local_domain: &str,
         occupant_jids: &[String],
@@ -103,7 +103,7 @@ impl<R: SmTeardownMucRepository> SmTeardownMucService<R> {
             .await
     }
 
-    pub(crate) async fn retire_empty_temporary_room(&self, room_localpart: &str) -> Result<bool> {
+    pub async fn retire_empty_temporary_room(&self, room_localpart: &str) -> Result<bool> {
         let Some(room) = self.repository.room(room_localpart).await? else {
             return Ok(false);
         };

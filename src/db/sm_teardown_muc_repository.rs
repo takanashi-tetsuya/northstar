@@ -1,7 +1,8 @@
 //! PostgreSQL adapter for SM-owned MUC teardown projections and exact cleanup.
 
-use crate::{db, services::sm_teardown_muc::*};
+use crate::db;
 use anyhow::Result;
+use northstar_room_application::sm_teardown_muc::*;
 use sqlx::PgPool;
 use std::collections::HashSet;
 use uuid::Uuid;

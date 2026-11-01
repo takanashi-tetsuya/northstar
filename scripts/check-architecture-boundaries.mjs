@@ -3569,7 +3569,7 @@ if (!clusterMucOutboxWorker.includes('let housekeeping = &context.housekeeping;'
     || /crate::db::(?:cleanup_cluster_muc_dead_letters|cleanup_cluster_muc_history|cluster_muc_outbox_snapshot)\s*\(/.test(clusterMucOutboxWorker)) {
   throw new Error('cluster MUC outbox housekeeping must use separate narrow repository operations');
 }
-const mucPreclaimService = read('src/services/cluster_muc_outbox_preclaim.rs');
+const mucPreclaimService = read('crates/contexts/room/northstar-room-application/src/cluster_muc_outbox_preclaim.rs');
 const mucPreclaimRepository = read('src/db/cluster_muc_outbox_preclaim_repository.rs');
 if (!mucPreclaimService.includes('self.repository.expire_occupancies(room_limit).await?;')
     || !mucPreclaimService.includes('self.repository.dead_letter_expired(outbox_limit).await?;')
@@ -3591,7 +3591,7 @@ if ([mucClaimTurn, mucPreclaim, mucClaim, mucClaimDatabaseTurn, mucClaimCall, mu
     || /crate::db::claim_cluster_muc_outbox\s*\(/.test(clusterMucOutboxWorker)) {
   throw new Error('cluster MUC preclaim maintenance and claim must complete under the bounded database turn before delivery');
 }
-const clusterMucOutboxSettlementService = read('src/services/cluster_muc_outbox_settlement.rs');
+const clusterMucOutboxSettlementService = read('crates/contexts/room/northstar-room-application/src/cluster_muc_outbox_settlement.rs');
 const clusterMucDelivery = rustItemBody(cluster, 'async fn deliver_cluster_muc_event(');
 const mucContextTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;');
 const mucContextRead = clusterMucDelivery.indexOf('.event_context(delivery.operation_id)', mucContextTurn);

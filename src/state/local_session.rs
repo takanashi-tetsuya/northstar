@@ -472,10 +472,10 @@ impl AppState {
 
     pub(super) fn sm_teardown_muc_service(
         &self,
-    ) -> crate::services::sm_teardown_muc::SmTeardownMucService<
+    ) -> northstar_room_application::sm_teardown_muc::SmTeardownMucService<
         db::sm_teardown_muc_repository::PostgresSmTeardownMucRepository,
     > {
-        crate::services::sm_teardown_muc::SmTeardownMucService::new(
+        northstar_room_application::sm_teardown_muc::SmTeardownMucService::new(
             db::sm_teardown_muc_repository::PostgresSmTeardownMucRepository::new(self.pool.clone()),
         )
     }

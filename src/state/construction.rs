@@ -640,7 +640,7 @@ impl AppState {
             cluster.admission(),
         );
         let locked_muc_expiry_service =
-            crate::services::locked_muc_expiry::LockedMucExpiryService::new(
+            northstar_room_application::locked_muc_expiry::LockedMucExpiryService::new(
                 db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository::new(
                     pool.clone(),
                 ),

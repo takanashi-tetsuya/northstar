@@ -3,7 +3,7 @@
 use anyhow::{ensure, Result};
 use std::{future::Future, time::Duration};
 
-pub(crate) trait ClusterMucReceiptClaimRepository: Send + Sync {
+pub trait ClusterMucReceiptClaimRepository: Send + Sync {
     type Delivery: Sync;
 
     fn renew_exact(
@@ -13,16 +13,16 @@ pub(crate) trait ClusterMucReceiptClaimRepository: Send + Sync {
     ) -> impl Future<Output = Result<bool>> + Send;
 }
 
-pub(crate) struct ClusterMucReceiptClaimService<R> {
+pub struct ClusterMucReceiptClaimService<R> {
     repository: R,
 }
 
 impl<R: ClusterMucReceiptClaimRepository> ClusterMucReceiptClaimService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn renew_exact(&self, delivery: &R::Delivery, lease: Duration) -> Result<()> {
+    pub async fn renew_exact(&self, delivery: &R::Delivery, lease: Duration) -> Result<()> {
         ensure!(
             self.repository.renew_exact(delivery, lease).await?,
             "cluster MUC transport receipt lost its exact outbox claim"

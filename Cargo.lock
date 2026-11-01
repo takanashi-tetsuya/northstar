@@ -2264,7 +2264,10 @@ dependencies = [
 name = "northstar-room-application"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "northstar-room-core",
+ "northstar-xep-0016",
+ "tokio",
  "uuid",
 ]
 

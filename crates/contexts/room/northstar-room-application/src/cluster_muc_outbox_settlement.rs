@@ -6,12 +6,12 @@ use anyhow::Result;
 use std::future::Future;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AckOutcome {
+pub enum AckOutcome {
     Acknowledged,
     LostClaim,
 }
 
-pub(crate) trait ClusterMucOutboxSettlementRepository: Send + Sync {
+pub trait ClusterMucOutboxSettlementRepository: Send + Sync {
     type Delivery;
 
     fn ack_exact(&self, delivery: &Self::Delivery) -> impl Future<Output = Result<bool>> + Send;
@@ -23,16 +23,16 @@ pub(crate) trait ClusterMucOutboxSettlementRepository: Send + Sync {
     ) -> impl Future<Output = Result<bool>> + Send;
 }
 
-pub(crate) struct ClusterMucOutboxSettlementService<R> {
+pub struct ClusterMucOutboxSettlementService<R> {
     repository: R,
 }
 
 impl<R: ClusterMucOutboxSettlementRepository> ClusterMucOutboxSettlementService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn acknowledge(&self, delivery: &R::Delivery) -> Result<AckOutcome> {
+    pub async fn acknowledge(&self, delivery: &R::Delivery) -> Result<AckOutcome> {
         if self.repository.ack_exact(delivery).await? {
             Ok(AckOutcome::Acknowledged)
         } else {
@@ -43,7 +43,7 @@ impl<R: ClusterMucOutboxSettlementRepository> ClusterMucOutboxSettlementService<
     /// A false repository result is not an error: the original retry path
     /// counts a successful SQL call even when its exact claim had already
     /// vanished or been dead-lettered by a concurrent worker.
-    pub(crate) async fn retry(&self, delivery: &R::Delivery, error: &str) -> Result<()> {
+    pub async fn retry(&self, delivery: &R::Delivery, error: &str) -> Result<()> {
         let _ = self.repository.record_retry(delivery, error).await?;
         Ok(())
     }

@@ -3,11 +3,9 @@
 use super::{
     bare_jid, localpart, AppState, MucOccupant, MucOccupantEndpoint, SerializableMucOccupant,
 };
-use crate::{
-    db::sm_teardown_muc_repository::PostgresSmTeardownMucRepository,
-    services::sm_teardown_muc::SmTeardownMucService,
-};
+use crate::db::sm_teardown_muc_repository::PostgresSmTeardownMucRepository;
 use dashmap::DashMap;
+use northstar_room_application::sm_teardown_muc::SmTeardownMucService;
 use std::sync::Arc;
 use uuid::Uuid;
 

@@ -1,7 +1,8 @@
 //! PostgreSQL adapter for exact clustered-MUC outbox lease renewal.
 
-use crate::{db, services::cluster_muc_receipt_claim::ClusterMucReceiptClaimRepository};
+use crate::db;
 use anyhow::Result;
+use northstar_room_application::cluster_muc_receipt_claim::ClusterMucReceiptClaimRepository;
 use sqlx::PgPool;
 use std::time::Duration;
 

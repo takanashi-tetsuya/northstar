@@ -5,8 +5,8 @@ use crate::xmpp::local_routes::sm_teardown::SmTeardownLocalEffects;
 use crate::{
     cluster::ClusterSmMucTeardownProjection,
     db::sm_teardown_muc_repository::PostgresSmTeardownMucRepository,
-    services::sm_teardown_muc::SmTeardownMucService,
 };
+use northstar_room_application::sm_teardown_muc::SmTeardownMucService;
 use northstar_xmpp_types::jid_text::localpart;
 
 pub(crate) struct ClusterListenerSmMucTeardown {

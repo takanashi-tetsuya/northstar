@@ -2923,7 +2923,19 @@
       ],
       [
         "northstar-room-application",
+        "anyhow"
+      ],
+      [
+        "northstar-room-application",
         "northstar-room-core"
+      ],
+      [
+        "northstar-room-application",
+        "northstar-xep-0016"
+      ],
+      [
+        "northstar-room-application",
+        "tokio"
       ],
       [
         "northstar-room-application",

@@ -5,7 +5,7 @@ use northstar_xep_0016::PrivacyStanzaKind;
 use std::{collections::HashSet, future::Future};
 use uuid::Uuid;
 
-pub(crate) trait MucDeliveryRepository: Send + Sync {
+pub trait MucDeliveryRepository: Send + Sync {
     fn blocked_local_accounts(
         &self,
         local_domain: &str,

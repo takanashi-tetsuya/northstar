@@ -3,8 +3,8 @@
 use crate::db::{
     self, ClusterMucAudienceSnapshot, ClusterMucEventContext, ClusterMucOutboxDelivery,
 };
-use crate::services::cluster_muc_delivery_read::ClusterMucDeliveryReadRepository;
 use anyhow::{Context, Result};
+use northstar_room_application::cluster_muc_delivery_read::ClusterMucDeliveryReadRepository;
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;

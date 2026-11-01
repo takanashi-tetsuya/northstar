@@ -6,7 +6,10 @@ license = "AGPL-3.0-only"
 publish = false
 
 [dependencies]
+anyhow = "1.0"
 northstar-room-core = { path = "../northstar-room-core" }
+northstar-xep-0016 = { path = "../../../kernel/northstar-xep-0016" }
+uuid = { version = "1.12", features = ["v4", "serde"] }
 
 [dev-dependencies]
-uuid = "1.12"
+tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "sync", "time"] }

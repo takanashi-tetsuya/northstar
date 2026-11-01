@@ -1,7 +1,7 @@
 //! PostgreSQL adapter for the existing locked-room expiry transaction.
 
-use crate::services::locked_muc_expiry::LockedMucExpiryRepository;
 use anyhow::Result;
+use northstar_room_application::locked_muc_expiry::LockedMucExpiryRepository;
 use sqlx::PgPool;
 
 #[derive(Clone)]

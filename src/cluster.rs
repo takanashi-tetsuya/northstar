@@ -2,7 +2,6 @@ use crate::services::cluster_authority::{ClusterAuthorityRepository, ClusterAuth
 use crate::services::cluster_instance_release::{
     ClusterInstanceReleaseIdentity, ClusterInstanceReleaseRepository, ClusterInstanceReleaseService,
 };
-use crate::services::cluster_muc_outbox_settlement::AckOutcome;
 use crate::services::node_message_contract_verifier::{
     NodeMessageContractVerifier, NodeMessageProjectionRepository, RequestedNodeMessageProjection,
     VerifiedNodeMessageProjection,
@@ -11,6 +10,7 @@ use crate::services::session_route_maintenance::SessionRouteAuthorityToken;
 use anyhow::{Context, Result};
 use bb8::Pool;
 use futures::{future::BoxFuture, FutureExt, StreamExt};
+use northstar_room_application::cluster_muc_outbox_settlement::AckOutcome;
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};

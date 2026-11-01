@@ -1,8 +1,8 @@
 //! PostgreSQL adapter for the two independent pre-claim maintenance steps.
 
 use crate::db;
-use crate::services::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimRepository;
 use anyhow::Result;
+use northstar_room_application::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimRepository;
 use sqlx::PgPool;
 
 pub(crate) struct PostgresClusterMucOutboxPreclaimRepository {

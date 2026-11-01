@@ -371,7 +371,7 @@ pub struct AppState {
     /// reserve without giving protocol handlers raw pool access.
     durable_outbox_database_admission:
         northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
-    locked_muc_expiry_service: crate::services::locked_muc_expiry::LockedMucExpiryService<
+    locked_muc_expiry_service: northstar_room_application::locked_muc_expiry::LockedMucExpiryService<
         db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
     >,
     locked_muc_expiry_context: std::sync::OnceLock<Arc<locked_muc_expiry::LockedMucExpiryContext>>,

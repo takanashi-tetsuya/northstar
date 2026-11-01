@@ -1,10 +1,10 @@
 //! PostgreSQL adapter for the three independent clustered-MUC housekeeping calls.
 
 use crate::db;
-use crate::services::cluster_muc_outbox_housekeeping::{
+use anyhow::Result;
+use northstar_room_application::cluster_muc_outbox_housekeeping::{
     ClusterMucOutboxGaugeSnapshot, ClusterMucOutboxHousekeepingRepository,
 };
-use anyhow::Result;
 use sqlx::PgPool;
 
 pub(crate) struct PostgresClusterMucOutboxHousekeepingRepository {

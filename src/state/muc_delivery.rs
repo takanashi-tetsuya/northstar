@@ -3,9 +3,9 @@
 use super::AppState;
 use crate::{
     db, db::muc_delivery_repository::PostgresMucDeliveryRepository,
-    services::cluster_muc_receipt_claim::ClusterMucReceiptClaimService,
     xmpp::muc_delivery::MucDeliveryContext,
 };
+use northstar_room_application::cluster_muc_receipt_claim::ClusterMucReceiptClaimService;
 use std::sync::Arc;
 
 impl AppState {

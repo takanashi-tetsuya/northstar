@@ -5,7 +5,7 @@
 use anyhow::Result;
 use std::{future::Future, time::Duration};
 
-pub(crate) trait ClusterMucOutboxClaimRepository: Send + Sync {
+pub trait ClusterMucOutboxClaimRepository: Send + Sync {
     type Delivery;
 
     fn claim_batch(
@@ -16,16 +16,16 @@ pub(crate) trait ClusterMucOutboxClaimRepository: Send + Sync {
     ) -> impl Future<Output = Result<Vec<Self::Delivery>>> + Send;
 }
 
-pub(crate) struct ClusterMucOutboxClaimService<R> {
+pub struct ClusterMucOutboxClaimService<R> {
     repository: R,
 }
 
 impl<R: ClusterMucOutboxClaimRepository> ClusterMucOutboxClaimService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn claim_batch(
+    pub async fn claim_batch(
         &self,
         node_id: &str,
         limit: i64,

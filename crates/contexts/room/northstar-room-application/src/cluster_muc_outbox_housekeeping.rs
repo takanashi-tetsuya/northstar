@@ -9,13 +9,13 @@ const HISTORY_RETENTION_DAYS: i64 = 90;
 const HISTORY_PURGE_LIMIT: i64 = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ClusterMucOutboxGaugeSnapshot {
-    pub(crate) queued_rows: i64,
-    pub(crate) dead_letter_rows: i64,
-    pub(crate) oldest_age_seconds: i64,
+pub struct ClusterMucOutboxGaugeSnapshot {
+    pub queued_rows: i64,
+    pub dead_letter_rows: i64,
+    pub oldest_age_seconds: i64,
 }
 
-pub(crate) trait ClusterMucOutboxHousekeepingRepository: Send + Sync {
+pub trait ClusterMucOutboxHousekeepingRepository: Send + Sync {
     fn purge_expired_dead_letters(&self, limit: i64) -> impl Future<Output = Result<u64>> + Send;
 
     fn purge_history(
@@ -27,30 +27,30 @@ pub(crate) trait ClusterMucOutboxHousekeepingRepository: Send + Sync {
     fn snapshot(&self) -> impl Future<Output = Result<ClusterMucOutboxGaugeSnapshot>> + Send;
 }
 
-pub(crate) struct ClusterMucOutboxHousekeepingService<R> {
+pub struct ClusterMucOutboxHousekeepingService<R> {
     repository: R,
 }
 
 impl<R: ClusterMucOutboxHousekeepingRepository> ClusterMucOutboxHousekeepingService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn purge_expired_dead_letters(&self) -> Result<()> {
+    pub async fn purge_expired_dead_letters(&self) -> Result<()> {
         self.repository
             .purge_expired_dead_letters(DEAD_LETTER_PURGE_LIMIT)
             .await?;
         Ok(())
     }
 
-    pub(crate) async fn purge_history(&self) -> Result<()> {
+    pub async fn purge_history(&self) -> Result<()> {
         self.repository
             .purge_history(HISTORY_RETENTION_DAYS, HISTORY_PURGE_LIMIT)
             .await?;
         Ok(())
     }
 
-    pub(crate) async fn snapshot(&self) -> Result<ClusterMucOutboxGaugeSnapshot> {
+    pub async fn snapshot(&self) -> Result<ClusterMucOutboxGaugeSnapshot> {
         self.repository.snapshot().await
     }
 }

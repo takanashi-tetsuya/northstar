@@ -1,8 +1,8 @@
 //! PostgreSQL adapter for clustered-MUC stable item progress.
 
 use crate::db::{self, ClusterMucOutboxDelivery};
-use crate::services::cluster_muc_delivery_item::ClusterMucDeliveryItemRepository;
 use anyhow::Result;
+use northstar_room_application::cluster_muc_delivery_item::ClusterMucDeliveryItemRepository;
 use sqlx::PgPool;
 use uuid::Uuid;
 

@@ -4,7 +4,7 @@
 
 use super::muc_delivery_endpoints::ClusterMucDeliveryEndpoints;
 use crate::xmpp::muc_delivery::MucDeliveryContext;
-use crate::{cluster::ClusterMucOutboxSignal, db, services};
+use crate::{cluster::ClusterMucOutboxSignal, db};
 use northstar_telemetry::metrics::Metrics;
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::OwnedSemaphorePermit;
@@ -14,22 +14,22 @@ pub(crate) struct ClusterMucOutboxWorkerContext {
     pub(crate) domain: String,
     pub(crate) endpoints: ClusterMucDeliveryEndpoints,
     pub(crate) delivery: MucDeliveryContext,
-    pub(crate) preclaim: services::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService<
+    pub(crate) preclaim: northstar_room_application::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService<
         db::cluster_muc_outbox_preclaim_repository::PostgresClusterMucOutboxPreclaimRepository,
     >,
-    pub(crate) claim: services::cluster_muc_outbox_claim::ClusterMucOutboxClaimService<
+    pub(crate) claim: northstar_room_application::cluster_muc_outbox_claim::ClusterMucOutboxClaimService<
         db::cluster_muc_outbox_claim_repository::PostgresClusterMucOutboxClaimRepository,
     >,
-    pub(crate) settlement: services::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService<
+    pub(crate) settlement: northstar_room_application::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService<
         db::cluster_muc_outbox_settlement_repository::PostgresClusterMucOutboxSettlementRepository,
     >,
-    pub(crate) housekeeping: services::cluster_muc_outbox_housekeeping::ClusterMucOutboxHousekeepingService<
+    pub(crate) housekeeping: northstar_room_application::cluster_muc_outbox_housekeeping::ClusterMucOutboxHousekeepingService<
         db::cluster_muc_outbox_housekeeping_repository::PostgresClusterMucOutboxHousekeepingRepository,
     >,
-    pub(crate) delivery_read: services::cluster_muc_delivery_read::ClusterMucDeliveryReadService<
+    pub(crate) delivery_read: northstar_room_application::cluster_muc_delivery_read::ClusterMucDeliveryReadService<
         db::cluster_muc_delivery_read_repository::PostgresClusterMucDeliveryReadRepository,
     >,
-    pub(crate) delivery_item: services::cluster_muc_delivery_item::ClusterMucDeliveryItemService<
+    pub(crate) delivery_item: northstar_room_application::cluster_muc_delivery_item::ClusterMucDeliveryItemService<
         db::cluster_muc_delivery_item_repository::PostgresClusterMucDeliveryItemRepository,
     >,
     pub(crate) admission: northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
@@ -55,7 +55,7 @@ impl ClusterMucOutboxWorkerContext {
 
     pub(crate) fn record_gauges(
         &self,
-        snapshot: services::cluster_muc_outbox_housekeeping::ClusterMucOutboxGaugeSnapshot,
+        snapshot: northstar_room_application::cluster_muc_outbox_housekeeping::ClusterMucOutboxGaugeSnapshot,
     ) {
         self.metrics
             .cluster_muc_outbox_queued

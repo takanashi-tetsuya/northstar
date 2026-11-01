@@ -1,8 +1,8 @@
 //! PostgreSQL adapter for exact clustered-MUC delivery settlement.
 
 use crate::db::{self, ClusterMucOutboxDelivery};
-use crate::services::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementRepository;
 use anyhow::Result;
+use northstar_room_application::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementRepository;
 use sqlx::PgPool;
 
 pub(crate) struct PostgresClusterMucOutboxSettlementRepository {

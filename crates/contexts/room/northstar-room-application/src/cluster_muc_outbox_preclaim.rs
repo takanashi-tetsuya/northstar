@@ -4,21 +4,21 @@
 use anyhow::Result;
 use std::future::Future;
 
-pub(crate) trait ClusterMucOutboxPreclaimRepository: Send + Sync {
+pub trait ClusterMucOutboxPreclaimRepository: Send + Sync {
     fn expire_occupancies(&self, room_limit: i64) -> impl Future<Output = Result<u64>> + Send;
     fn dead_letter_expired(&self, limit: i64) -> impl Future<Output = Result<u64>> + Send;
 }
 
-pub(crate) struct ClusterMucOutboxPreclaimService<R> {
+pub struct ClusterMucOutboxPreclaimService<R> {
     repository: R,
 }
 
 impl<R: ClusterMucOutboxPreclaimRepository> ClusterMucOutboxPreclaimService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn prepare_pass(&self, room_limit: i64, outbox_limit: i64) -> Result<()> {
+    pub async fn prepare_pass(&self, room_limit: i64, outbox_limit: i64) -> Result<()> {
         self.repository.expire_occupancies(room_limit).await?;
         self.repository.dead_letter_expired(outbox_limit).await?;
         Ok(())

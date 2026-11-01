@@ -10,15 +10,11 @@ use crate::xmpp::local_routes::{
     suspended_muc::muc_actor_identity_matches,
 };
 use crate::{
-    db,
-    db::muc_delivery_repository::PostgresMucDeliveryRepository,
-    s2s::FederationRouter,
-    services::{
-        cluster_muc_receipt_claim::ClusterMucReceiptClaimService,
-        muc_delivery::MucDeliveryRepository,
-    },
+    db, db::muc_delivery_repository::PostgresMucDeliveryRepository, s2s::FederationRouter,
 };
 use dashmap::DashMap;
+use northstar_room_application::cluster_muc_receipt_claim::ClusterMucReceiptClaimService;
+use northstar_room_application::muc_delivery::MucDeliveryRepository;
 use northstar_session_core::JoinedMucMembership;
 use std::{sync::Arc, time::Duration};
 

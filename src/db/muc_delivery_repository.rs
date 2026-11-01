@@ -1,7 +1,8 @@
 //! PostgreSQL adapter for MUC blocklists and suspended SM delivery.
 
-use crate::{db, services::muc_delivery::MucDeliveryRepository};
+use crate::db;
 use anyhow::Result;
+use northstar_room_application::muc_delivery::MucDeliveryRepository;
 use sqlx::PgPool;
 use std::collections::HashSet;
 use uuid::Uuid;

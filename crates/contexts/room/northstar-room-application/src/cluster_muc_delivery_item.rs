@@ -6,7 +6,7 @@ use anyhow::Result;
 use std::future::Future;
 use uuid::Uuid;
 
-pub(crate) trait ClusterMucDeliveryItemRepository: Send + Sync {
+pub trait ClusterMucDeliveryItemRepository: Send + Sync {
     type Delivery;
 
     fn completed(
@@ -24,16 +24,16 @@ pub(crate) trait ClusterMucDeliveryItemRepository: Send + Sync {
     ) -> impl Future<Output = Result<bool>> + Send;
 }
 
-pub(crate) struct ClusterMucDeliveryItemService<R> {
+pub struct ClusterMucDeliveryItemService<R> {
     repository: R,
 }
 
 impl<R: ClusterMucDeliveryItemRepository> ClusterMucDeliveryItemService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn completed(
+    pub async fn completed(
         &self,
         delivery_id: Uuid,
         ordinal: i32,
@@ -46,7 +46,7 @@ impl<R: ClusterMucDeliveryItemRepository> ClusterMucDeliveryItemService<R> {
 
     /// False means the exact claim or stable item identity was lost. The
     /// delivery caller must fail its attempt rather than ACK the outbox row.
-    pub(crate) async fn complete_exact(
+    pub async fn complete_exact(
         &self,
         delivery: &R::Delivery,
         ordinal: i32,

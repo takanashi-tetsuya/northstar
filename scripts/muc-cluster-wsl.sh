@@ -86,7 +86,7 @@ require_module_literal "src/cluster.rs" \
 require_literal "$project_dir/crates/contexts/room/northstar-room-application/src/cluster_muc_delivery_read.rs" \
   "self.repository.recipient_snapshot(delivery).await" "recipient snapshot repository delegation"
 require_literal "$project_dir/crates/contexts/room/northstar-room-postgres/src/cluster_muc_delivery_read_repository.rs" \
-  "db::cluster_muc_delivery_recipient_snapshot(&self.pool, delivery).await" "recipient snapshot authority"
+  "crate::cluster_muc::cluster_muc_delivery_recipient_snapshot(&self.pool, delivery).await" "recipient snapshot authority"
 require_module_literal "crates/contexts/room/northstar-room-postgres/src/cluster_muc.rs" \
   "mutate_cluster_muc_registration" "membership mutation authority"
 require_module_literal "crates/contexts/room/northstar-room-postgres/src/cluster_muc.rs" \

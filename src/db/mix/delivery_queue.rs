@@ -619,7 +619,7 @@ pub async fn acknowledge_mix_delivery_worker_observed(
         northstar_delivery_core::mix_outbox::SettlementResult::Ack(removed),
     )
     .await
-    .map_err(crate::services::mix::outbox::commit_error)?;
+    .map_err(northstar_room_application::mix_service::outbox::commit_error)?;
     if !removed {
         MIX_DELIVERY_LEASE_LOST_TOTAL.fetch_add(1, Ordering::Relaxed);
     }

@@ -79,7 +79,9 @@ impl AppState {
 
     pub(crate) fn mix_service(
         &self,
-    ) -> &crate::services::mix::MixService<db::mix_repository::PostgresMixRepository> {
+    ) -> &northstar_room_application::mix_service::MixService<
+        db::mix_repository::PostgresMixRepository,
+    > {
         &self.mix_service
     }
 

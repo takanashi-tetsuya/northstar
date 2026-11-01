@@ -1,7 +1,7 @@
 use super::{field_first, validate_form_fields, ANON_NS};
-use crate::services::mix::MixParticipantPreference;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::{Context, Result};
+use northstar_room_application::mix_service::MixParticipantPreference;
 use roxmltree::Node;
 use std::collections::BTreeMap;
 

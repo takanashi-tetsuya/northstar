@@ -11,7 +11,6 @@ pub(crate) mod jingle;
 pub(crate) mod message_admission;
 pub(crate) mod message_carbons;
 pub(crate) mod messaging;
-pub(crate) mod mix;
 pub(crate) mod node_message_contract_verifier;
 pub(crate) mod push;
 pub(crate) mod replay;

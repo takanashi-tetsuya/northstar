@@ -1,7 +1,7 @@
 //! Tests of the shared claimed delivery policy.
 
 use super::*;
-use crate::services::mix::outbox::core;
+use northstar_room_application::mix_service::outbox::core;
 use std::sync::Mutex;
 
 // These ordinary policy controls supply route and repository facts. They

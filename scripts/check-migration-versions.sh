@@ -794,7 +794,7 @@ fi
 mix_db_production_source=$(module_source --production src/db/mix.rs) || exit 1
 mix_db_module_source=$(module_source src/db/mix.rs) || exit 1
 mix_protocol_production_source=$(module_source --production src/xmpp/protocol/mix.rs) || exit 1
-mix_service_production_source=$(module_source --production src/services/mix.rs) || exit 1
+mix_service_production_source=$(module_source --production crates/contexts/room/northstar-room-application/src/mix_service.rs) || exit 1
 mix_repository_production_source=$(module_source --production src/db/mix_repository.rs) || exit 1
 replay_db_production_source=$(module_source --production src/db/replay.rs) || exit 1
 sm_db_production_source=$(module_source --production src/db/sm.rs) || exit 1
@@ -1210,7 +1210,7 @@ for required_source_fragment in \
     'MixDeliveryWakeBroker' \
     'MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL: &str = "northstar_mix_delivery_v1"' \
     'watch::Sender<u64>' \
-    'pub(crate) fn subscribe_delivery_wake' \
+    'pub fn subscribe_delivery_wake' \
     'accept_committed_notification' \
     'publish_listener_transition'
 do
@@ -1301,7 +1301,7 @@ if printf '%s\n' "$mix_delivery_retry_source" | grep -Fq 'dead_letter_mix_delive
     echo "MIX retry terminal completion must stay in the locked retry transaction" >&2
     exit 1
 fi
-mix_delivery_retry_service_source=$(module_item src/services/mix.rs 'pub(crate) async fn retry_mix_delivery(') || exit 1
+mix_delivery_retry_service_source=$(module_item crates/contexts/room/northstar-room-application/src/mix_service.rs 'pub async fn retry_mix_delivery(') || exit 1
 for required_service_fragment in \
     'MixDeliveryRetryOutcome::RouteWokenAtAttemptLimit' \
     'MixDeliveryRetryOutcome::DeadLettered' \

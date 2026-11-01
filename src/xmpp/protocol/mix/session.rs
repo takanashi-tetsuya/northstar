@@ -7,7 +7,7 @@ use super::*;
 /// so `_removed` is unused; a joined membership adds its participant id.
 pub(super) async fn push_mix_roster_update(
     state: &Arc<AppState>,
-    user: &crate::services::mix::MixAccount,
+    user: &northstar_room_application::mix_service::MixAccount,
     channel_jid: &str,
     _removed: bool,
 ) -> Result<()> {

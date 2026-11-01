@@ -812,7 +812,7 @@ pub(crate) async fn federated_mix_message(
             .resourcepart()
             .context("reflected MIX message requires a stable participant resource")?;
         anyhow::ensure!(
-            crate::services::mix::valid_stable_participant_id(participant_id),
+            northstar_room_application::mix_service::valid_stable_participant_id(participant_id),
             "invalid reflected MIX stable participant id"
         );
         anyhow::ensure!(

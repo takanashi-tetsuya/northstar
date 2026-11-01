@@ -6,39 +6,39 @@ use super::*;
 /// layer. Field names deliberately mirror the repository row so the mapping in
 /// this service is a pure, reviewable translation.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MixChannel {
-    pub(crate) id: Uuid,
-    pub(crate) revision: i64,
-    pub(crate) service_domain: String,
-    pub(crate) localpart: String,
-    pub(crate) creator_jid: String,
-    pub(crate) name: Option<String>,
-    pub(crate) description: Option<String>,
-    pub(crate) contacts: Vec<String>,
-    pub(crate) access_model: String,
-    pub(crate) jid_visibility: String,
-    pub(crate) nick_required: bool,
-    pub(crate) max_participants: i32,
-    pub(crate) max_events: i32,
-    pub(crate) allow_private_messages: bool,
-    pub(crate) allow_participant_invites: bool,
-    pub(crate) allow_user_message_retraction: bool,
-    pub(crate) administrator_retraction_rights: String,
-    pub(crate) enforce_registered_nick: bool,
+pub struct MixChannel {
+    pub id: Uuid,
+    pub revision: i64,
+    pub service_domain: String,
+    pub localpart: String,
+    pub creator_jid: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub contacts: Vec<String>,
+    pub access_model: String,
+    pub jid_visibility: String,
+    pub nick_required: bool,
+    pub max_participants: i32,
+    pub max_events: i32,
+    pub allow_private_messages: bool,
+    pub allow_participant_invites: bool,
+    pub allow_user_message_retraction: bool,
+    pub administrator_retraction_rights: String,
+    pub enforce_registered_nick: bool,
 }
 
 impl MixChannel {
-    pub(crate) fn jid(&self) -> String {
+    pub fn jid(&self) -> String {
         format!("{}@{}", self.localpart, self.service_domain)
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MixParticipantPreference {
-    pub(crate) jid_visibility: String,
-    pub(crate) private_messages: String,
-    pub(crate) vcard: String,
-    pub(crate) share_presence: bool,
+pub struct MixParticipantPreference {
+    pub jid_visibility: String,
+    pub private_messages: String,
+    pub vcard: String,
+    pub share_presence: bool,
 }
 
 impl Default for MixParticipantPreference {
@@ -53,101 +53,94 @@ impl Default for MixParticipantPreference {
 }
 
 /// Retained returned-only compatibility DTO; observed workers own core attempts.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "legacy return type; observed workers own attempts"
-    )
-)]
 #[derive(Clone, Debug)]
-pub(crate) struct ClaimedMixDelivery {
-    pub(crate) delivery_id: Uuid,
-    pub(crate) event_id: Uuid,
-    pub(crate) channel_id: Uuid,
-    pub(crate) channel_jid: String,
-    pub(crate) recipient: MixParticipant,
-    pub(crate) stanza: String,
-    pub(crate) authoritative_stanza_id: Option<Uuid>,
-    pub(crate) archive: bool,
-    pub(crate) encrypted: bool,
-    pub(crate) attempt_count: i32,
-    pub(crate) lease_token: Uuid,
-    pub(crate) route_wake_generation: i64,
+pub struct ClaimedMixDelivery {
+    pub delivery_id: Uuid,
+    pub event_id: Uuid,
+    pub channel_id: Uuid,
+    pub channel_jid: String,
+    pub recipient: MixParticipant,
+    pub stanza: String,
+    pub authoritative_stanza_id: Option<Uuid>,
+    pub archive: bool,
+    pub encrypted: bool,
+    pub attempt_count: i32,
+    pub lease_token: Uuid,
+    pub route_wake_generation: i64,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ClaimedPamResult {
-    pub(crate) operation_id: Uuid,
-    pub(crate) user_id: Uuid,
-    pub(crate) requester_full_jid: String,
-    pub(crate) response_xml: String,
-    pub(crate) attempt_count: i32,
-    pub(crate) lease_token: Uuid,
+pub struct ClaimedPamResult {
+    pub operation_id: Uuid,
+    pub user_id: Uuid,
+    pub requester_full_jid: String,
+    pub response_xml: String,
+    pub attempt_count: i32,
+    pub lease_token: Uuid,
 }
 
 #[allow(dead_code)] // MIX admin HTTP wiring is intentionally left to the root integration pass.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MixDeliveryDeadLetter {
-    pub(crate) dead_letter_id: Uuid,
-    pub(crate) delivery_id: Uuid,
-    pub(crate) event_id: Uuid,
-    pub(crate) channel_id: Uuid,
-    pub(crate) channel_jid: String,
-    pub(crate) recipient_jid: String,
-    pub(crate) attempt_count: i32,
-    pub(crate) terminal_reason: String,
-    pub(crate) last_error: Option<String>,
-    pub(crate) failed_at: DateTime<Utc>,
+pub struct MixDeliveryDeadLetter {
+    pub dead_letter_id: Uuid,
+    pub delivery_id: Uuid,
+    pub event_id: Uuid,
+    pub channel_id: Uuid,
+    pub channel_jid: String,
+    pub recipient_jid: String,
+    pub attempt_count: i32,
+    pub terminal_reason: String,
+    pub last_error: Option<String>,
+    pub failed_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ExpiredMixPresence {
-    pub(crate) channel_id: Uuid,
-    pub(crate) participant: MixParticipant,
-    pub(crate) item_id: String,
-    pub(crate) payload: String,
-    pub(crate) source_full_jid: Option<String>,
+pub struct ExpiredMixPresence {
+    pub channel_id: Uuid,
+    pub participant: MixParticipant,
+    pub item_id: String,
+    pub payload: String,
+    pub source_full_jid: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PamMembership {
-    pub(crate) id: Uuid,
-    pub(crate) user_id: Uuid,
-    pub(crate) channel_jid: String,
-    pub(crate) participant_id: Option<String>,
-    pub(crate) state: String,
-    pub(crate) request_id: Option<String>,
-    pub(crate) client_request_id: Option<String>,
-    pub(crate) requester_full_jid: Option<String>,
-    pub(crate) subscriptions: Vec<String>,
+pub struct PamMembership {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub channel_jid: String,
+    pub participant_id: Option<String>,
+    pub state: String,
+    pub request_id: Option<String>,
+    pub client_request_id: Option<String>,
+    pub requester_full_jid: Option<String>,
+    pub subscriptions: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MixInvitationProof {
-    pub(crate) inviter_jid: String,
-    pub(crate) invitee_jid: String,
-    pub(crate) channel_jid: String,
-    pub(crate) token: String,
+pub struct MixInvitationProof {
+    pub inviter_jid: String,
+    pub invitee_jid: String,
+    pub channel_jid: String,
+    pub token: String,
 }
 
 /// Owned MIX join request. The repository keeps its borrowed view; this copy
 /// is what the protocol layer constructs from parsed XML.
 #[derive(Clone, Debug)]
-pub(crate) struct JoinMixRequest {
-    pub(crate) actor_jid: String,
-    pub(crate) nick: Option<String>,
-    pub(crate) nodes: Vec<String>,
+pub struct JoinMixRequest {
+    pub actor_jid: String,
+    pub nick: Option<String>,
+    pub nodes: Vec<String>,
     /// Set only for a local MIX-PAM operation. The membership is committed in
     /// the same transaction as the local channel participant.
-    pub(crate) pam_user_id: Option<Uuid>,
+    pub pam_user_id: Option<Uuid>,
     /// A XEP-0407 invitation is consumed atomically with an allow-list join.
-    pub(crate) invitation: Option<MixInvitationProof>,
+    pub invitation: Option<MixInvitationProof>,
     /// XEP-0404 preferences supplied with the join. Missing preferences use
     /// the specification defaults and are committed with membership.
-    pub(crate) preference: Option<MixParticipantPreference>,
+    pub preference: Option<MixParticipantPreference>,
     /// Selects the anonymous-profile namespace on the direct Core result.
-    pub(crate) anonymous_profile: bool,
+    pub anonymous_profile: bool,
 }
 
 /// Owned MIX-PAM federation request.  Keeping every parsed value owned at the
@@ -155,37 +148,37 @@ pub(crate) struct JoinMixRequest {
 /// retaining protocol-buffer borrows and gives the service one place to bind
 /// the account UUID to the authenticated canonical actor.
 #[derive(Clone, Debug)]
-pub(crate) struct BeginRemotePamJoin {
-    pub(crate) user_id: Uuid,
-    pub(crate) actor_jid: String,
-    pub(crate) channel_jid: String,
-    pub(crate) nick: Option<String>,
-    pub(crate) nodes: Vec<String>,
-    pub(crate) request_id: String,
-    pub(crate) client_request_id: String,
-    pub(crate) requester_full_jid: String,
-    pub(crate) request_digest: [u8; 32],
-    pub(crate) remote_domain: String,
-    pub(crate) outbound_stanza: String,
-    pub(crate) policy: S2sOutboxPolicy,
+pub struct BeginRemotePamJoin {
+    pub user_id: Uuid,
+    pub actor_jid: String,
+    pub channel_jid: String,
+    pub nick: Option<String>,
+    pub nodes: Vec<String>,
+    pub request_id: String,
+    pub client_request_id: String,
+    pub requester_full_jid: String,
+    pub request_digest: [u8; 32],
+    pub remote_domain: String,
+    pub outbound_stanza: String,
+    pub policy: S2sOutboxPolicy,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct BeginRemotePamLeave {
-    pub(crate) user_id: Uuid,
-    pub(crate) actor_jid: String,
-    pub(crate) channel_jid: String,
-    pub(crate) request_id: String,
-    pub(crate) client_request_id: String,
-    pub(crate) requester_full_jid: String,
-    pub(crate) request_digest: [u8; 32],
-    pub(crate) remote_domain: String,
-    pub(crate) outbound_stanza: String,
-    pub(crate) policy: S2sOutboxPolicy,
+pub struct BeginRemotePamLeave {
+    pub user_id: Uuid,
+    pub actor_jid: String,
+    pub channel_jid: String,
+    pub request_id: String,
+    pub client_request_id: String,
+    pub requester_full_jid: String,
+    pub request_digest: [u8; 32],
+    pub remote_domain: String,
+    pub outbound_stanza: String,
+    pub policy: S2sOutboxPolicy,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PamOperationReplay {
+pub enum PamOperationReplay {
     Miss,
     Pending,
     Replay(String),
@@ -193,15 +186,15 @@ pub(crate) enum PamOperationReplay {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct RemotePamCompletion {
-    pub(crate) response_xml: String,
-    pub(crate) membership: Option<PamMembership>,
-    pub(crate) applied: bool,
-    pub(crate) roster_removed: Option<bool>,
+pub struct RemotePamCompletion {
+    pub response_xml: String,
+    pub membership: Option<PamMembership>,
+    pub applied: bool,
+    pub roster_removed: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum RemotePamCompletionOutcome {
+pub enum RemotePamCompletionOutcome {
     Applied(RemotePamCompletion),
     Replay(RemotePamCompletion),
     Conflict,
@@ -209,28 +202,28 @@ pub(crate) enum RemotePamCompletionOutcome {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct RemotePamJoin<'a> {
-    pub(crate) participant_id: &'a str,
-    pub(crate) subscriptions: &'a [String],
-    pub(crate) nick: Option<&'a str>,
+pub struct RemotePamJoin<'a> {
+    pub participant_id: &'a str,
+    pub subscriptions: &'a [String],
+    pub nick: Option<&'a str>,
 }
 
 /// Idempotent personal archive projection for a reflected MIX message.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SourceArchiveAdmission {
+pub enum SourceArchiveAdmission {
     Stored(Uuid),
     Replay(Uuid),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CreateChannelOutcome {
+pub enum CreateChannelOutcome {
     Created(Uuid),
     Conflict,
     QuotaExceeded,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum JoinChannelOutcome {
+pub enum JoinChannelOutcome {
     Joined {
         participant: MixParticipant,
         preference: MixParticipantPreference,
@@ -248,23 +241,23 @@ pub(crate) enum JoinChannelOutcome {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MixMutationAdmission {
-    pub(crate) channel: MixChannel,
-    pub(crate) node: String,
-    pub(crate) item_id: String,
-    pub(crate) payload: String,
-    pub(crate) recipients: Vec<MixParticipant>,
+pub struct MixMutationAdmission {
+    pub channel: MixChannel,
+    pub node: String,
+    pub item_id: String,
+    pub payload: String,
+    pub recipients: Vec<MixParticipant>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct LeaveMixOutcome {
-    pub(crate) participant: MixParticipant,
-    pub(crate) presence_items: Vec<MixPresenceItem>,
-    pub(crate) roster_change: Option<northstar_roster_core::RosterChange>,
+pub struct LeaveMixOutcome {
+    pub participant: MixParticipant,
+    pub presence_items: Vec<MixPresenceItem>,
+    pub roster_change: Option<northstar_roster_core::RosterChange>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum PresenceOutcome {
+pub enum PresenceOutcome {
     Published,
     Retracted,
     Unchanged,
@@ -273,42 +266,42 @@ pub(crate) enum PresenceOutcome {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct UpdateSubscriptionsOutcome {
-    pub(crate) subscriptions: Vec<String>,
-    pub(crate) participant: MixParticipant,
-    pub(crate) removed_presence: Vec<MixPresenceItem>,
+pub struct UpdateSubscriptionsOutcome {
+    pub subscriptions: Vec<String>,
+    pub participant: MixParticipant,
+    pub removed_presence: Vec<MixPresenceItem>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct MixParticipantPreferenceUpdateOutcome {
-    pub(crate) participant: MixParticipant,
-    pub(crate) roster_changes: Vec<(Uuid, northstar_roster_core::RosterChange)>,
+pub struct MixParticipantPreferenceUpdateOutcome {
+    pub participant: MixParticipant,
+    pub roster_changes: Vec<(Uuid, northstar_roster_core::RosterChange)>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct AccessChangeOutcome {
-    pub(crate) removed_participants: Vec<Uuid>,
-    pub(crate) removed_local_users: Vec<Uuid>,
+pub struct AccessChangeOutcome {
+    pub removed_participants: Vec<Uuid>,
+    pub removed_local_users: Vec<Uuid>,
     /// Current presence items removed as a consequence of a ban.  The
     /// protocol layer uses these to publish the mandatory unavailable
     /// transition instead of leaving subscribers with a ghost resource.
-    pub(crate) removed_presence: Vec<(MixParticipant, Vec<MixPresenceItem>)>,
+    pub removed_presence: Vec<(MixParticipant, Vec<MixPresenceItem>)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SetNickError {
+pub enum SetNickError {
     NotParticipant,
     Conflict,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum RegisterMixNickOutcome {
+pub enum RegisterMixNickOutcome {
     Registered { nick: String },
     Conflict,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RetractMixMessageOutcome {
+pub enum RetractMixMessageOutcome {
     Retracted,
     Replay(Uuid),
     Conflict,
@@ -316,70 +309,70 @@ pub(crate) enum RetractMixMessageOutcome {
     Forbidden,
 }
 
-pub(crate) struct StoreMixMessageRequest<'a> {
-    pub(crate) channel_id: Uuid,
-    pub(crate) actor: &'a str,
-    pub(crate) item_id: &'a str,
-    pub(crate) payload: &'a str,
-    pub(crate) identity: Option<MixReplayIdentity>,
-    pub(crate) delivery_payload: &'a str,
-    pub(crate) visible_jid: Option<&'a str>,
-    pub(crate) encrypted: bool,
+pub struct StoreMixMessageRequest<'a> {
+    pub channel_id: Uuid,
+    pub actor: &'a str,
+    pub item_id: &'a str,
+    pub payload: &'a str,
+    pub identity: Option<MixReplayIdentity>,
+    pub delivery_payload: &'a str,
+    pub visible_jid: Option<&'a str>,
+    pub encrypted: bool,
 }
 
-pub(crate) struct RetractMixMessageRequest<'a> {
-    pub(crate) channel_id: Uuid,
-    pub(crate) actor: &'a str,
-    pub(crate) target_id: Uuid,
-    pub(crate) retraction_id: Uuid,
-    pub(crate) tombstone_payload: &'a str,
-    pub(crate) retraction_payload: &'a str,
-    pub(crate) identity: Option<MixReplayIdentity>,
-    pub(crate) visible_jid: Option<&'a str>,
+pub struct RetractMixMessageRequest<'a> {
+    pub channel_id: Uuid,
+    pub actor: &'a str,
+    pub target_id: Uuid,
+    pub retraction_id: Uuid,
+    pub tombstone_payload: &'a str,
+    pub retraction_payload: &'a str,
+    pub identity: Option<MixReplayIdentity>,
+    pub visible_jid: Option<&'a str>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RetractMixMessageAdmission {
-    pub(crate) outcome: RetractMixMessageOutcome,
-    pub(crate) recipients: Vec<MixParticipant>,
+pub struct RetractMixMessageAdmission {
+    pub outcome: RetractMixMessageOutcome,
+    pub recipients: Vec<MixParticipant>,
 }
 
 /// Owned channel information update built from a parsed XEP-0060 publish.
 #[derive(Clone, Debug)]
-pub(crate) struct MixInfoUpdate {
-    pub(crate) item_id: String,
-    pub(crate) expected_revision: i64,
-    pub(crate) name: Option<String>,
-    pub(crate) description: Option<String>,
-    pub(crate) contacts: Vec<String>,
+pub struct MixInfoUpdate {
+    pub item_id: String,
+    pub expected_revision: i64,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub contacts: Vec<String>,
 }
 
 /// Owned channel configuration update built from a parsed XEP-0060 publish.
 #[derive(Clone, Debug)]
-pub(crate) struct MixConfigUpdate {
-    pub(crate) item_id: String,
-    pub(crate) expected_revision: i64,
-    pub(crate) access_model: String,
-    pub(crate) jid_visibility: String,
-    pub(crate) nick_required: bool,
-    pub(crate) max_participants: i32,
-    pub(crate) max_events: i32,
-    pub(crate) allow_private_messages: bool,
-    pub(crate) allow_participant_invites: bool,
-    pub(crate) allow_user_message_retraction: bool,
-    pub(crate) administrator_retraction_rights: String,
-    pub(crate) enforce_registered_nick: bool,
+pub struct MixConfigUpdate {
+    pub item_id: String,
+    pub expected_revision: i64,
+    pub access_model: String,
+    pub jid_visibility: String,
+    pub nick_required: bool,
+    pub max_participants: i32,
+    pub max_events: i32,
+    pub allow_private_messages: bool,
+    pub allow_participant_invites: bool,
+    pub allow_user_message_retraction: bool,
+    pub administrator_retraction_rights: String,
+    pub enforce_registered_nick: bool,
 }
 
 /// Owned administrator role replacement; `None` preserves the current list.
 #[derive(Clone, Debug)]
-pub(crate) struct MixRoleUpdate {
-    pub(crate) owners: Option<Vec<String>>,
-    pub(crate) administrators: Option<Vec<String>>,
+pub struct MixRoleUpdate {
+    pub owners: Option<Vec<String>>,
+    pub administrators: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum MixMutationOutcome {
+pub enum MixMutationOutcome {
     Applied(Box<MixMutationAdmission>),
     Conflict,
     Forbidden,
@@ -390,25 +383,25 @@ pub(crate) enum MixMutationOutcome {
 /// Production protocol code must attach this context to the repository
 /// mutation so state, result journal and S2S outbox share one transaction.
 #[derive(Clone, Debug)]
-pub(crate) struct FederatedMixMutation {
-    pub(crate) authenticated_domain: String,
-    pub(crate) actor_jid: String,
-    pub(crate) request_id: String,
-    pub(crate) request_digest: [u8; 32],
-    pub(crate) addressed: String,
-    pub(crate) reply_to: String,
-    pub(crate) policy: S2sOutboxPolicy,
+pub struct FederatedMixMutation {
+    pub authenticated_domain: String,
+    pub actor_jid: String,
+    pub request_id: String,
+    pub request_digest: [u8; 32],
+    pub addressed: String,
+    pub reply_to: String,
+    pub policy: S2sOutboxPolicy,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum FederatedMixIqReplay {
+pub enum FederatedMixIqReplay {
     Miss,
     Replay(String),
     Conflict,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MixMucLinkOutcome {
+pub enum MixMucLinkOutcome {
     Linked,
     AlreadyLinked,
     MissingCounterpart,
@@ -418,9 +411,9 @@ pub(crate) enum MixMucLinkOutcome {
 
 /// Minimum enabled local identity needed by MIX/PEP/vCard relays.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MixAccount {
-    pub(crate) id: Uuid,
-    pub(crate) username: String,
+pub struct MixAccount {
+    pub id: Uuid,
+    pub username: String,
 }
 
 /// Business target for one MIX access-list mutation.
@@ -429,27 +422,27 @@ pub(crate) struct MixAccount {
 /// handlers select an XEP-0406 operation, while the repository retains the
 /// persistence representation and transaction semantics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MixAccessList {
+pub enum MixAccessList {
     Allowed,
     Banned,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MixAccessEntryOperation<'a> {
+pub enum MixAccessEntryOperation<'a> {
     Publish { reason: Option<&'a str> },
     Retract,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MixAccessEntryUpdate<'a> {
-    pub(crate) channel_id: Uuid,
-    pub(crate) actor: &'a str,
-    pub(crate) pattern: &'a str,
-    pub(crate) list: MixAccessList,
-    pub(crate) operation: MixAccessEntryOperation<'a>,
+pub struct MixAccessEntryUpdate<'a> {
+    pub channel_id: Uuid,
+    pub actor: &'a str,
+    pub pattern: &'a str,
+    pub list: MixAccessList,
+    pub operation: MixAccessEntryOperation<'a>,
 }
 
-pub(crate) trait MixRepository: Send + Sync {
+pub trait MixRepository: Send + Sync {
     fn link_local_muc_mirror(
         &self,
         mix_domain: &str,

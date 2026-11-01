@@ -19,7 +19,7 @@ mod operations;
 mod payloads;
 mod wake;
 
-pub(crate) use self::contracts::{
+pub use self::contracts::{
     AccessChangeOutcome, BeginRemotePamJoin, BeginRemotePamLeave, ClaimedMixDelivery,
     ClaimedPamResult, CreateChannelOutcome, ExpiredMixPresence, FederatedMixIqReplay,
     FederatedMixMutation, JoinChannelOutcome, JoinMixRequest, LeaveMixOutcome,
@@ -32,7 +32,7 @@ pub(crate) use self::contracts::{
     RetractMixMessageOutcome, RetractMixMessageRequest, SetNickError, SourceArchiveAdmission,
     StoreMixMessageRequest, UpdateSubscriptionsOutcome,
 };
-pub(crate) use self::operations::{
+pub use self::operations::{
     canonical_mix_access_pattern, mix_timestamp_item_id, participant_jid_visible, prepare_mix_nick,
     valid_join_nodes, valid_stable_participant_id, ArchiveBoundary, MamArchiveQuery, MamRsmPage,
     MixClusterRouteLookup, MixDiscoPage, MixEvent, MixEventPage, MixMamPage, MixMucMirror,
@@ -42,14 +42,14 @@ pub(crate) use self::operations::{
 use self::payloads::{
     render_access_payload, render_config_payload, render_info_payload, render_participant_payload,
 };
-pub(crate) use self::payloads::{
+pub use self::payloads::{
     FederatedMixSuccess, MixEventPayloadRenderer, MixPayloads, MixPresenceDelivery, PamJoinResult,
 };
-pub(crate) use self::wake::{MixDeliveryWakeBroker, MixDeliveryWakeSubscription};
+pub use self::wake::{MixDeliveryWakeBroker, MixDeliveryWakeSubscription};
 
-pub(crate) mod foreground;
-pub(crate) mod outbox;
-pub(crate) use northstar_room_core::mix::{
+pub mod foreground;
+pub mod outbox;
+pub use northstar_room_core::mix::{
     Admission as StoreMixMessageAdmission, Outcome as StoreEventOutcome,
     Participant as MixParticipant, Replay as MixBusinessReplay,
     ReplayIdentity as MixReplayIdentity,
@@ -58,23 +58,23 @@ pub(crate) use northstar_room_core::mix::{
 // XEP-0369 node identifiers owned by the application boundary.  The repository
 // keeps identically-valued storage constants; protocol code may only name
 // these.
-pub(crate) const NODE_MESSAGES: &str = "urn:xmpp:mix:nodes:messages";
-pub(crate) const NODE_PRESENCE: &str = "urn:xmpp:mix:nodes:presence";
-pub(crate) const NODE_PARTICIPANTS: &str = "urn:xmpp:mix:nodes:participants";
-pub(crate) const NODE_INFO: &str = "urn:xmpp:mix:nodes:info";
-pub(crate) const NODE_CONFIG: &str = "urn:xmpp:mix:nodes:config";
-pub(crate) const NODE_ALLOWED: &str = "urn:xmpp:mix:nodes:allowed";
-pub(crate) const NODE_BANNED: &str = "urn:xmpp:mix:nodes:banned";
-pub(crate) const NODE_JIDMAP: &str = "urn:xmpp:mix:nodes:jidmap";
-pub(crate) const NODE_AVATAR_DATA: &str = "urn:xmpp:avatar:data";
-pub(crate) const NODE_AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
+pub const NODE_MESSAGES: &str = "urn:xmpp:mix:nodes:messages";
+pub const NODE_PRESENCE: &str = "urn:xmpp:mix:nodes:presence";
+pub const NODE_PARTICIPANTS: &str = "urn:xmpp:mix:nodes:participants";
+pub const NODE_INFO: &str = "urn:xmpp:mix:nodes:info";
+pub const NODE_CONFIG: &str = "urn:xmpp:mix:nodes:config";
+pub const NODE_ALLOWED: &str = "urn:xmpp:mix:nodes:allowed";
+pub const NODE_BANNED: &str = "urn:xmpp:mix:nodes:banned";
+pub const NODE_JIDMAP: &str = "urn:xmpp:mix:nodes:jidmap";
+pub const NODE_AVATAR_DATA: &str = "urn:xmpp:avatar:data";
+pub const NODE_AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
 /// Transaction-ordered PostgreSQL wake channel for durable MIX delivery.
 ///
 /// The notification payload is only the database schema that committed the
 /// row.  It is never authorization data: workers still claim the fenced row
 /// from PostgreSQL before producing any externally visible effect.
-pub(crate) const MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL: &str = "northstar_mix_delivery_v1";
-pub(crate) const SUBSCRIBABLE_NODES: [&str; 6] = [
+pub const MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL: &str = "northstar_mix_delivery_v1";
+pub const SUBSCRIBABLE_NODES: [&str; 6] = [
     NODE_MESSAGES,
     NODE_PRESENCE,
     NODE_PARTICIPANTS,
@@ -82,9 +82,8 @@ pub(crate) const SUBSCRIBABLE_NODES: [&str; 6] = [
     NODE_AVATAR_DATA,
     NODE_AVATAR_METADATA,
 ];
-pub(crate) const CORE_NODES: [&str; 4] =
-    [NODE_MESSAGES, NODE_PRESENCE, NODE_PARTICIPANTS, NODE_INFO];
-pub(crate) const ALL_NODES: [&str; 10] = [
+pub const CORE_NODES: [&str; 4] = [NODE_MESSAGES, NODE_PRESENCE, NODE_PARTICIPANTS, NODE_INFO];
+pub const ALL_NODES: [&str; 10] = [
     NODE_MESSAGES,
     NODE_PRESENCE,
     NODE_PARTICIPANTS,
@@ -99,11 +98,11 @@ pub(crate) const ALL_NODES: [&str; 10] = [
 
 /// Owned mirror of the federation admission policy the protocol reads from
 /// the S2S router before batching a federated MAM response stream.
-pub(crate) use northstar_federation_core::S2sOutboxPolicy;
+pub use northstar_federation_core::S2sOutboxPolicy;
 
 impl MixDeliveryWakeBroker {
-    #[cfg(test)]
-    pub(crate) fn for_test() -> Arc<Self> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_test() -> Arc<Self> {
         Self::new("public".to_owned()).expect("test wake schema is valid")
     }
 
@@ -113,8 +112,18 @@ impl MixDeliveryWakeBroker {
     }
 }
 
+/// The one operation MIX needs while it owns its database admission permit.
+/// It cannot read the federation repository or wake a dispatcher prematurely.
+pub trait FederationOutboxAdmission: Send + Sync {
+    fn admit<'a>(
+        &'a self,
+        target_domain: &'a str,
+        stanza: String,
+    ) -> impl std::future::Future<Output = bool> + Send + 'a;
+}
+
 #[derive(Clone)]
-pub(crate) struct MixService<R> {
+pub struct MixService<R> {
     repository: R,
     /// Receiving configuration, independent of any per-call claimed domain.
     configured_mix_domain: String,
@@ -147,9 +156,9 @@ pub(crate) struct MixService<R> {
     delivery_wake: Arc<MixDeliveryWakeBroker>,
 }
 
-impl<R: MixRepository> MixService<R> {
-    #[cfg(test)]
-    pub(crate) fn new(
+impl<R> MixService<R> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new(
         repository: R,
         message_identity: MixMessageContentKeyring,
         retraction_identity: MixRetractionContentKeyring,
@@ -168,7 +177,7 @@ impl<R: MixRepository> MixService<R> {
         )
     }
 
-    pub(crate) fn new_with_outbox_database_admission(
+    pub fn new_with_outbox_database_admission(
         repository: R,
         configured_domain: String,
         message_identity: MixMessageContentKeyring,
@@ -195,7 +204,7 @@ impl<R: MixRepository> MixService<R> {
     /// Maximum concurrent durable MIX outbox operations permitted for this
     /// process.  The service owns the primary-pool capacity policy so callers
     /// cannot infer it by reaching into a `database connection`.
-    pub(crate) const fn outbox_background_budget(&self) -> usize {
+    pub const fn outbox_background_budget(&self) -> usize {
         self.outbox_background_budget
     }
 
@@ -210,11 +219,13 @@ impl<R: MixRepository> MixService<R> {
     async fn outbox_db_admission_guard(&self) -> OwnedSemaphorePermit {
         self.outbox_db_admission.acquire().await
     }
+}
 
+impl<R: MixRepository> MixService<R> {
     /// Subscribe one durable MIX worker lane before it evaluates its next
     /// wait.  A committed PostgreSQL wake arriving while the lane is busy is
     /// retained by the subscription and causes an immediate next claim.
-    pub(crate) fn subscribe_delivery_wake(&self) -> MixDeliveryWakeSubscription {
+    pub fn subscribe_delivery_wake(&self) -> MixDeliveryWakeSubscription {
         self.delivery_wake.subscribe()
     }
 
@@ -222,7 +233,7 @@ impl<R: MixRepository> MixService<R> {
         self.delivery_wake.publish_local_commit();
     }
 
-    pub(crate) async fn destroy_mix_channel(
+    pub async fn destroy_mix_channel(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -233,7 +244,7 @@ impl<R: MixRepository> MixService<R> {
             .destroy_mix_channel(channel_id, actor, federated)
             .await
     }
-    pub(crate) async fn join_mix_channel(
+    pub async fn join_mix_channel(
         &self,
         channel_id: Uuid,
         request: JoinMixRequest,
@@ -244,7 +255,7 @@ impl<R: MixRepository> MixService<R> {
             .join_mix_channel(channel_id, request, federated)
             .await
     }
-    pub(crate) async fn expire_unrefreshed_mix_presence(
+    pub async fn expire_unrefreshed_mix_presence(
         &self,
         cutoff: DateTime<Utc>,
     ) -> Result<Vec<ExpiredMixPresence>> {
@@ -253,7 +264,7 @@ impl<R: MixRepository> MixService<R> {
             .expire_unrefreshed_mix_presence(cutoff)
             .await
     }
-    pub(crate) async fn update_mix_subscriptions(
+    pub async fn update_mix_subscriptions(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -266,7 +277,7 @@ impl<R: MixRepository> MixService<R> {
             .update_mix_subscriptions(channel_id, actor, subscribe, unsubscribe, federated)
             .await
     }
-    pub(crate) async fn set_mix_nick(
+    pub async fn set_mix_nick(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -278,7 +289,7 @@ impl<R: MixRepository> MixService<R> {
             .set_mix_nick(channel_id, actor, nick, federated)
             .await
     }
-    pub(crate) async fn leave_mix_channel(
+    pub async fn leave_mix_channel(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -290,7 +301,7 @@ impl<R: MixRepository> MixService<R> {
             .leave_mix_channel(channel_id, actor, pam_user_id, federated)
             .await
     }
-    pub(crate) async fn store_mix_presence(
+    pub async fn store_mix_presence(
         &self,
         channel_id: Uuid,
         actor_bare: &str,
@@ -303,7 +314,7 @@ impl<R: MixRepository> MixService<R> {
             .store_mix_presence(channel_id, actor_bare, actor_full, payload, unavailable)
             .await
     }
-    pub(crate) async fn ensure_mix_presence(
+    pub async fn ensure_mix_presence(
         &self,
         channel_id: Uuid,
         actor_bare: &str,
@@ -315,7 +326,7 @@ impl<R: MixRepository> MixService<R> {
             .ensure_mix_presence(channel_id, actor_bare, actor_full, payload)
             .await
     }
-    pub(crate) async fn store_mix_message(
+    pub async fn store_mix_message(
         &self,
         request: StoreMixMessageRequest<'_>,
     ) -> Result<StoreMixMessageAdmission> {
@@ -335,7 +346,7 @@ impl<R: MixRepository> MixService<R> {
         Ok(result)
     }
 
-    pub(crate) fn prepare_mix_foreground(
+    pub fn prepare_mix_foreground(
         &self,
         ingress: foreground::Ingress,
     ) -> std::result::Result<foreground::PreparedIngress, foreground::Rejected> {
@@ -345,7 +356,7 @@ impl<R: MixRepository> MixService<R> {
         Ok(foreground::PreparedIngress::new(ingress))
     }
 
-    pub(crate) async fn store_mix_message_observed(
+    pub async fn store_mix_message_observed(
         &self,
         request: &foreground::StoreRequest,
     ) -> Result<Arc<StoreMixMessageAdmission>> {
@@ -354,7 +365,7 @@ impl<R: MixRepository> MixService<R> {
                 .authenticators(&identity.canonical_semantics)
         });
         let _admission = self.delivery_admission_guard().await;
-        let completion = northstar_room_application::mix::admit_observed(
+        let completion = crate::mix::admit_observed(
             request,
             &self.configured_mix_domain,
             self.repository
@@ -369,7 +380,7 @@ impl<R: MixRepository> MixService<R> {
         Ok(result)
     }
 
-    pub(crate) async fn lookup_mix_message_replay_observed(
+    pub async fn lookup_mix_message_replay_observed(
         &self,
         request: &foreground::ReplayRequest,
     ) -> Result<MixBusinessReplay> {
@@ -381,7 +392,7 @@ impl<R: MixRepository> MixService<R> {
         let authenticators = self
             .message_identity
             .authenticators(&identity.canonical_semantics);
-        northstar_room_application::mix::read_observed(
+        crate::mix::read_observed(
             request,
             &self.configured_mix_domain,
             self.repository
@@ -391,7 +402,7 @@ impl<R: MixRepository> MixService<R> {
         .map_err(foreground::effect_error)
     }
 
-    pub(crate) async fn publish_mix_avatar(
+    pub async fn publish_mix_avatar(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -406,7 +417,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn retract_mix_avatar(
+    pub async fn retract_mix_avatar(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -419,7 +430,7 @@ impl<R: MixRepository> MixService<R> {
             .retract_mix_avatar(channel_id, actor, node, item_id, federated)
             .await
     }
-    pub(crate) async fn update_mix_info(
+    pub async fn update_mix_info(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -432,7 +443,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn update_mix_config(
+    pub async fn update_mix_config(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -446,7 +457,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn set_mix_access_entry(
+    pub async fn set_mix_access_entry(
         &self,
         update: MixAccessEntryUpdate<'_>,
         federated: Option<&FederatedMixMutation>,
@@ -456,7 +467,7 @@ impl<R: MixRepository> MixService<R> {
             .set_mix_access_entry(update, federated)
             .await
     }
-    pub(crate) async fn register_mix_nick(
+    pub async fn register_mix_nick(
         &self,
         service_domain: &str,
         actor: &str,
@@ -468,7 +479,7 @@ impl<R: MixRepository> MixService<R> {
             .register_mix_nick(service_domain, actor, nick, federated)
             .await
     }
-    pub(crate) async fn update_mix_participant_preference(
+    pub async fn update_mix_participant_preference(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -480,7 +491,7 @@ impl<R: MixRepository> MixService<R> {
             .update_mix_participant_preference(channel_id, actor, preference, federated)
             .await
     }
-    pub(crate) async fn retract_mix_message(
+    pub async fn retract_mix_message(
         &self,
         request: RetractMixMessageRequest<'_>,
     ) -> Result<RetractMixMessageAdmission> {
@@ -500,7 +511,7 @@ impl<R: MixRepository> MixService<R> {
         }
         Ok(result)
     }
-    pub(crate) async fn begin_remote_pam_join(
+    pub async fn begin_remote_pam_join(
         &self,
         request: BeginRemotePamJoin,
     ) -> Result<PamOperationReplay> {
@@ -508,7 +519,7 @@ impl<R: MixRepository> MixService<R> {
         self.repository.begin_remote_pam_join(request).await
     }
 
-    pub(crate) async fn begin_remote_pam_leave(
+    pub async fn begin_remote_pam_leave(
         &self,
         request: BeginRemotePamLeave,
     ) -> Result<PamOperationReplay> {
@@ -516,12 +527,12 @@ impl<R: MixRepository> MixService<R> {
         self.repository.begin_remote_pam_leave(request).await
     }
 
-    pub(crate) async fn reconcile_expired_remote_pam(&self, limit: i64) -> Result<u64> {
+    pub async fn reconcile_expired_remote_pam(&self, limit: i64) -> Result<u64> {
         let _outbox_db_admission = self.outbox_db_admission_guard().await;
         self.repository.reconcile_expired_remote_pam(limit).await
     }
 
-    pub(crate) async fn claim_pam_results(&self, limit: i64) -> Result<Vec<ClaimedPamResult>> {
+    pub async fn claim_pam_results(&self, limit: i64) -> Result<Vec<ClaimedPamResult>> {
         tracing::debug!(
             available_permits = self.outbox_db_admission.available_permits(),
             "MIX PAM result claim waiting for database admission"
@@ -530,7 +541,7 @@ impl<R: MixRepository> MixService<R> {
         self.repository.claim_pam_results(limit).await
     }
 
-    pub(crate) async fn renew_pam_result_lease(
+    pub async fn renew_pam_result_lease(
         &self,
         operation_id: Uuid,
         lease_token: Uuid,
@@ -541,7 +552,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn acknowledge_pam_result(
+    pub async fn acknowledge_pam_result(
         &self,
         operation_id: Uuid,
         lease_token: Uuid,
@@ -552,7 +563,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn defer_pam_result(
+    pub async fn defer_pam_result(
         &self,
         operation_id: Uuid,
         lease_token: Uuid,
@@ -564,7 +575,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn retry_pam_result(
+    pub async fn retry_pam_result(
         &self,
         operation_id: Uuid,
         lease_token: Uuid,
@@ -577,7 +588,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn prune_expired_pam_results(&self, limit: i64) -> Result<u64> {
+    pub async fn prune_expired_pam_results(&self, limit: i64) -> Result<u64> {
         let _outbox_db_admission = self.outbox_db_admission_guard().await;
         let _admission = self.pam_capacity_admission_guard().await;
         self.repository.prune_expired_pam_results(limit).await
@@ -589,10 +600,7 @@ impl<R: MixRepository> MixService<R> {
     /// worker must leave the service-owned foreground connection reserve
     /// intact.  The permit is released before the caller performs any socket,
     /// cluster, or federation I/O.
-    pub(crate) async fn outbox_find_enabled_user(
-        &self,
-        username: &str,
-    ) -> Result<Option<MixAccount>> {
+    pub async fn outbox_find_enabled_user(&self, username: &str) -> Result<Option<MixAccount>> {
         tracing::debug!(
             available_permits = self.outbox_db_admission.available_permits(),
             "MIX durable local-account lookup waiting for database admission"
@@ -604,7 +612,7 @@ impl<R: MixRepository> MixService<R> {
     /// Outbox-only variant of the live privacy lookup.  Keep the permit
     /// scoped to this database await rather than to the enclosing durable
     /// delivery attempt, which can wait on a local transport or remote peer.
-    pub(crate) async fn outbox_is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool> {
+    pub async fn outbox_is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool> {
         let _outbox_db_admission = self.outbox_db_admission_guard().await;
         self.repository.is_blocked(owner_id, candidate).await
     }
@@ -617,9 +625,7 @@ impl<R: MixRepository> MixService<R> {
     /// socket. The permit is consequently released before the S2S dispatcher
     /// performs any network work, while preserving component-route wake-up
     /// semantics owned by the outbox service.
-    pub(crate) async fn outbox_admit_federated_stanza<
-        F: crate::services::federation_outbox::FederationOutboxAdmission,
-    >(
+    pub async fn outbox_admit_federated_stanza<F: FederationOutboxAdmission>(
         &self,
         federation: &F,
         target_domain: &str,
@@ -634,7 +640,7 @@ impl<R: MixRepository> MixService<R> {
     /// This preserves the normal archive/replay result exactly, but does not
     /// allow the caller to retain a database permit while routing the stanza.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn outbox_archive_mix_message_once(
+    pub async fn outbox_archive_mix_message_once(
         &self,
         personal_archive_id: Uuid,
         owner_id: Uuid,
@@ -659,7 +665,7 @@ impl<R: MixRepository> MixService<R> {
     }
 
     #[allow(dead_code)] // Explicit returned-only compatibility entry; observed workers use bound requests.
-    pub(crate) async fn claim_mix_deliveries(
+    pub async fn claim_mix_deliveries(
         &self,
         limit: i64,
         max_bytes: i64,
@@ -672,7 +678,7 @@ impl<R: MixRepository> MixService<R> {
         self.repository.claim_mix_deliveries(limit, max_bytes).await
     }
 
-    pub(crate) async fn claim_mix_deliveries_observed(
+    pub async fn claim_mix_deliveries_observed(
         &self,
         request: &outbox::core::ClaimRequest,
     ) -> Result<Vec<outbox::OwnedAttempt>> {
@@ -691,7 +697,7 @@ impl<R: MixRepository> MixService<R> {
         }
     }
 
-    pub(crate) async fn outbox_archive_mix_message_once_observed(
+    pub async fn outbox_archive_mix_message_once_observed(
         &self,
         request: &outbox::core::ArchiveRequest,
     ) -> Result<outbox::core::ArchiveResult> {
@@ -710,7 +716,7 @@ impl<R: MixRepository> MixService<R> {
         }
     }
 
-    pub(crate) async fn renew_mix_delivery_lease_observed(
+    pub async fn renew_mix_delivery_lease_observed(
         &self,
         request: &outbox::core::RenewalRequest,
     ) -> Result<bool> {
@@ -729,7 +735,7 @@ impl<R: MixRepository> MixService<R> {
         }
     }
 
-    pub(crate) async fn settle_mix_delivery_observed(
+    pub async fn settle_mix_delivery_observed(
         &self,
         request: &outbox::core::SettlementRequest,
     ) -> Result<outbox::core::SettlementResult> {
@@ -759,17 +765,17 @@ impl<R: MixRepository> MixService<R> {
     /// Keep MIX retention bounded without putting cleanup ahead of a live
     /// recipient claim. This remains a short repository-only turn under the
     /// private outbox admission capability.
-    pub(crate) async fn maintain_mix_delivery_retention(&self) -> Result<()> {
+    pub async fn maintain_mix_delivery_retention(&self) -> Result<()> {
         let _admission = self.outbox_db_admission_guard().await;
         self.repository.maintain_mix_delivery_retention().await
     }
 
-    pub(crate) async fn prune_expired_business_intents(&self, limit: i64) -> Result<u64> {
+    pub async fn prune_expired_business_intents(&self, limit: i64) -> Result<u64> {
         let _admission = self.outbox_db_admission_guard().await;
         self.repository.prune_expired_business_intents(limit).await
     }
 
-    pub(crate) async fn prune_expired_federated_iq_results(&self, limit: i64) -> Result<u64> {
+    pub async fn prune_expired_federated_iq_results(&self, limit: i64) -> Result<u64> {
         let _admission = self.outbox_db_admission_guard().await;
         self.repository
             .prune_expired_federated_iq_results(limit)
@@ -777,7 +783,7 @@ impl<R: MixRepository> MixService<R> {
     }
 
     #[allow(dead_code)] // Compatibility ACK remains distinct from native and observed worker ownership.
-    pub(crate) async fn acknowledge_mix_delivery(
+    pub async fn acknowledge_mix_delivery(
         &self,
         delivery_id: Uuid,
         lease_token: Uuid,
@@ -786,7 +792,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn acknowledge_mix_socket_write(
+    pub async fn acknowledge_mix_socket_write(
         &self,
         request: &northstar_delivery_core::native_write::AckRequest,
     ) -> Result<bool> {
@@ -818,7 +824,7 @@ impl<R: MixRepository> MixService<R> {
     /// Give a direct C2S writer a rotated, bounded MIX source lease before
     /// it can place bytes on TCP/WebSocket. The protocol layer receives no
     /// SQL capability and must treat the returned token as writer-private.
-    pub(crate) async fn fence_mix_socket_write(
+    pub async fn fence_mix_socket_write(
         &self,
         source: northstar_delivery_core::MixDelivery,
     ) -> Result<northstar_delivery_core::MixDelivery> {
@@ -828,7 +834,7 @@ impl<R: MixRepository> MixService<R> {
 
     /// Persist a remote-node ownership fence before a signed cluster command
     /// is allowed to enqueue this exact MIX source on the destination node.
-    pub(crate) async fn transfer_mix_delivery_to_cluster(
+    pub async fn transfer_mix_delivery_to_cluster(
         &self,
         source: northstar_delivery_core::MixDelivery,
         node_id: &str,
@@ -843,7 +849,7 @@ impl<R: MixRepository> MixService<R> {
 
     /// Release only the exact remote-node MIX hand-off which never reached a
     /// local durable boundary. A later transfer is never overwritten.
-    pub(crate) async fn release_mix_cluster_delivery(
+    pub async fn release_mix_cluster_delivery(
         &self,
         source: northstar_delivery_core::MixDelivery,
         node_id: &str,
@@ -863,7 +869,7 @@ impl<R: MixRepository> MixService<R> {
     /// Persist a typed BOSH owner for a claimed MIX recipient row. This is a
     /// transport transfer, not a delivery acknowledgement: client BOSH ACK
     /// processing remains responsible for the final exact source deletion.
-    pub(crate) async fn transfer_mix_delivery_to_bosh(
+    pub async fn transfer_mix_delivery_to_bosh(
         &self,
         request: &northstar_delivery_core::bosh_ownership::TransferRequest,
     ) -> Result<northstar_delivery_core::MixDelivery> {
@@ -872,7 +878,7 @@ impl<R: MixRepository> MixService<R> {
     }
 
     #[allow(dead_code)] // Compatibility source tuple does not construct an observed renewal request.
-    pub(crate) async fn renew_mix_delivery_lease(
+    pub async fn renew_mix_delivery_lease(
         &self,
         delivery_id: Uuid,
         lease_token: Uuid,
@@ -884,7 +890,7 @@ impl<R: MixRepository> MixService<R> {
     }
 
     #[allow(dead_code)] // Explicit compatibility result, including NotMoved.
-    pub(crate) async fn dead_letter_mix_delivery(
+    pub async fn dead_letter_mix_delivery(
         &self,
         delivery_id: Uuid,
         lease_token: Uuid,
@@ -903,7 +909,7 @@ impl<R: MixRepository> MixService<R> {
     }
 
     #[allow(dead_code)] // Preserve the historical bool API separately from typed observed retry results.
-    pub(crate) async fn retry_mix_delivery(
+    pub async fn retry_mix_delivery(
         &self,
         delivery_id: Uuid,
         lease_token: Uuid,
@@ -934,7 +940,7 @@ impl<R: MixRepository> MixService<R> {
     }
 
     #[allow(dead_code)] // Compatibility source tuple does not construct an observed settlement request.
-    pub(crate) async fn defer_mix_delivery(
+    pub async fn defer_mix_delivery(
         &self,
         delivery_id: Uuid,
         lease_token: Uuid,
@@ -956,7 +962,7 @@ impl<R: MixRepository> MixService<R> {
     /// delivery head routable sooner than its timer recovery probe. The
     /// database row remains the delivery authority; this advances its durable
     /// route epoch and brings an unleased head's next claim forward.
-    pub(crate) async fn wake_mix_delivery_recipient(&self, recipient_jid: &str) -> Result<u64> {
+    pub async fn wake_mix_delivery_recipient(&self, recipient_jid: &str) -> Result<u64> {
         let _admission = self.outbox_db_admission_guard().await;
         let result = self
             .repository
@@ -969,7 +975,7 @@ impl<R: MixRepository> MixService<R> {
     }
 
     #[allow(dead_code)] // Exposed for the pending admin recovery endpoint wiring.
-    pub(crate) async fn mix_delivery_dead_letters(
+    pub async fn mix_delivery_dead_letters(
         &self,
         before: Option<(DateTime<Utc>, Uuid)>,
         limit: i64,
@@ -981,10 +987,7 @@ impl<R: MixRepository> MixService<R> {
     }
 
     #[allow(dead_code)] // Exposed for the pending admin recovery endpoint wiring.
-    pub(crate) async fn requeue_mix_delivery_dead_letter(
-        &self,
-        dead_letter_id: Uuid,
-    ) -> Result<bool> {
+    pub async fn requeue_mix_delivery_dead_letter(&self, dead_letter_id: Uuid) -> Result<bool> {
         let _admission = self.delivery_admission_guard().await;
         let _outbox_db_admission = self.outbox_db_admission_guard().await;
         let result = self
@@ -998,7 +1001,7 @@ impl<R: MixRepository> MixService<R> {
     }
 }
 
-pub(crate) use northstar_delivery_core::mix_outbox::RetryResult as MixDeliveryRetryOutcome;
+pub use northstar_delivery_core::mix_outbox::RetryResult as MixDeliveryRetryOutcome;
 
 #[cfg(test)]
 mod tests;

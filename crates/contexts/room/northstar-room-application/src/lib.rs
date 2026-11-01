@@ -12,6 +12,7 @@ pub mod cluster_muc_receipt_claim;
 pub mod discussion;
 pub mod locked_muc_expiry;
 pub mod mix;
+pub mod mix_service;
 pub mod muc_delivery;
 pub mod muc_service;
 pub mod operation_muc_wake;

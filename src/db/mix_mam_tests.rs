@@ -25,7 +25,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
         .await
         .unwrap();
     db::migrate(&pool).await.unwrap();
-    let payloads = crate::services::mix::MixPayloads;
+    let payloads = northstar_room_application::mix_service::MixPayloads;
 
     let suffix = Uuid::new_v4().simple().to_string();
     let owner = format!("owner-{suffix}@example.test");
@@ -345,7 +345,7 @@ async fn authorized_mix_mam_peer_filter_uses_current_visibility_snapshot() {
         Some(&localpart),
         &owner,
         100,
-        &crate::services::mix::MixPayloads,
+        &northstar_room_application::mix_service::MixPayloads,
         None,
     )
     .await
@@ -413,7 +413,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
         .await
         .unwrap();
     db::migrate(&pool).await.unwrap();
-    let payloads = crate::services::mix::MixPayloads;
+    let payloads = northstar_room_application::mix_service::MixPayloads;
 
     let suffix = Uuid::new_v4().simple().to_string();
     let owner_user_id = Uuid::new_v4();
@@ -823,7 +823,7 @@ async fn federated_mutation_result_and_outbox_share_the_authority_transaction() 
         .await
         .unwrap();
     db::migrate(&pool).await.unwrap();
-    let payloads = crate::services::mix::MixPayloads;
+    let payloads = northstar_room_application::mix_service::MixPayloads;
     let suffix = Uuid::new_v4().simple().to_string();
     let localpart = format!("atomic-{}", &suffix[..16]);
     let actor = format!("owner-{suffix}@remote.example.test");

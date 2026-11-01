@@ -3,7 +3,7 @@ pub(crate) mod account_admin;
 pub(crate) type BoshReplayService =
     crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>;
 pub(crate) type BoshMixService =
-    crate::services::mix::MixService<db::mix_repository::PostgresMixRepository>;
+    northstar_room_application::mix_service::MixService<db::mix_repository::PostgresMixRepository>;
 
 impl axum::extract::FromRef<Arc<AppState>> for AccountAdminContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
@@ -323,7 +323,7 @@ pub struct AppState {
         db::retractions::PostgresRetractionRepository,
     >,
     mam_service: northstar_archive_application::MamService<db::mam::PostgresMamRepository>,
-    mix_service: crate::services::mix::MixService<db::mix_repository::PostgresMixRepository>,
+    mix_service: northstar_room_application::mix_service::MixService<db::mix_repository::PostgresMixRepository>,
     sm_service: crate::services::sm::SmService<db::sm_repository::PostgresSmRepository>,
     replay_service:
         crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>,

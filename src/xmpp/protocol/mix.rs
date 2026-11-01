@@ -95,8 +95,20 @@ use self::session::push_mix_roster_update;
 #[cfg(test)]
 use self::session::{mix_broadcast_presence_action, MixBroadcastPresenceAction};
 use super::{Action, ProtocolSession};
-use crate::services::mix::outbox::{self, core as mix_worker};
-use crate::services::mix::{
+use crate::services::xml_util::{
+    add_stanza_id, iq_error_to, iq_result_to, is_encrypted, mam_extended_form, stanza_error,
+    stanza_error_type,
+};
+use crate::state::mix_iq_relay::{MixIqRelayExpiryContext, MixIqRelayRoute};
+use crate::state::mix_outbox::MixOutboxContext;
+use crate::state::mix_presence_recovery::MixPresenceRecoveryContext;
+use crate::state::AppState;
+use crate::xmpp::frame_execution::{SessionExecutions, Stage};
+use crate::xmpp::xml_builder::XmlElement;
+use anyhow::{Context, Result};
+use northstar_room_application::mix_service::outbox;
+use northstar_room_application::mix_service::outbox::core as mix_worker;
+use northstar_room_application::mix_service::{
     ArchiveBoundary, BeginRemotePamJoin, BeginRemotePamLeave, ClaimedPamResult,
     CreateChannelOutcome, FederatedMixIqReplay, FederatedMixMutation, JoinChannelOutcome,
     JoinMixRequest, MamArchiveQuery, MixAccessEntryOperation, MixAccessEntryUpdate, MixAccessList,
@@ -109,17 +121,6 @@ use crate::services::mix::{
     NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG, NODE_INFO, NODE_JIDMAP, NODE_MESSAGES,
     NODE_PRESENCE,
 };
-use crate::services::xml_util::{
-    add_stanza_id, iq_error_to, iq_result_to, is_encrypted, mam_extended_form, stanza_error,
-    stanza_error_type,
-};
-use crate::state::mix_iq_relay::{MixIqRelayExpiryContext, MixIqRelayRoute};
-use crate::state::mix_outbox::MixOutboxContext;
-use crate::state::mix_presence_recovery::MixPresenceRecoveryContext;
-use crate::state::AppState;
-use crate::xmpp::frame_execution::{SessionExecutions, Stage};
-use crate::xmpp::xml_builder::XmlElement;
-use anyhow::{Context, Result};
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 pub(crate) use worker::start_mix_delivery_outbox;
 use worker::*;

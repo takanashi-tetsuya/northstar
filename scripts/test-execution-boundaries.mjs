@@ -581,8 +581,8 @@ rejectsMixForeground('MIX observed service cannot substitute claimed domain', 'm
   'request, &self.configured_mix_domain, self.repository.store_mix_message_observed(',
   'request, claimed_domain(), self.repository.store_mix_message_observed(', /receiving domain and bound repository/);
 rejectsMixForeground('MIX observed service retains the fair pre-pool guard', 'mixService',
-  'let _admission = self.delivery_admission_guard().await; let completion = northstar_room_application::mix::admit_observed(',
-  'let completion = northstar_room_application::mix::admit_observed(', /fair admission/);
+  'let _admission = self.delivery_admission_guard().await; let completion = crate::mix::admit_observed(',
+  'let completion = crate::mix::admit_observed(', /fair admission/);
 rejectsMixForeground('MIX compatibility service retains the fair pre-pool guard', 'mixService',
   'let _admission = self.delivery_admission_guard().await; let result = self.repository.store_mix_message(',
   'let result = self.repository.store_mix_message(', /compatibility service/);
@@ -700,7 +700,7 @@ test('MUC service constructor cannot appear in multiple impl blocks', () => {
 });
 test('MUC service preparation must stay in the constructor-bearing impl', () => {
   const source = baseline.mucService;
-  const item = findRustItem(source, 'pub(crate) fn prepare_muc_discussion(');
+  const item = findRustItem(source, 'pub fn prepare_muc_discussion(');
   const mucService = source.slice(0, item.start) + source.slice(item.close + 1)
     + '\nimpl<R: MucRepository> MucService<R> {\n' + item.text + '\n}\n';
   assert.throws(() => verifyMucDiscussionBoundaries({ ...baseline, mucService }), /expected one production body: .*prepare_muc_discussion/);
@@ -803,8 +803,8 @@ function rejectsNativeAck(name, declaration, before, after, expected) {
     assert.throws(() => verifyNativeAckService(source), expected);
   });
 }
-const legacyAck = 'pub(crate) async fn acknowledge_mix_delivery(';
-const nativeAck = 'pub(crate) async fn acknowledge_mix_socket_write(';
+const legacyAck = 'pub async fn acknowledge_mix_delivery(';
+const nativeAck = 'pub async fn acknowledge_mix_socket_write(';
 const sharedAck = 'async fn acknowledge_mix_delivery_inner(';
 rejectsNativeAck('legacy MIX ACK cannot replace the exact delivery', legacyAck, 'delivery_id,', 'other_delivery,', /legacy MIX acknowledgement/);
 rejectsNativeAck('legacy MIX ACK cannot replace the exact token', legacyAck, 'lease_token,', 'other_token,', /legacy MIX acknowledgement/);
@@ -1249,7 +1249,7 @@ for (const [name, request, result] of [
   ['renew_mix_delivery_lease_observed', 'RenewalRequest', 'bool'],
   ['settle_mix_delivery_observed', 'SettlementRequest', 'outbox::core::SettlementResult'],
 ]) {
-  const declaration = `pub(crate) async fn ${name}(&self, request: &outbox::core::${request}) -> Result<${result}> {`;
+  const declaration = `pub async fn ${name}(&self, request: &outbox::core::${request}) -> Result<${result}> {`;
   rejectsMixWorker(`MIX ${name} cannot skip the fair outbox gate`, 'mixService',
     `${declaration} let _admission = self.outbox_db_admission_guard().await;`, declaration,
     /fair admission and exact request/);

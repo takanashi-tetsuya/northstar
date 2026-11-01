@@ -114,7 +114,7 @@ pub(super) const fn mix_outbox_lane_budgets(background_budget: usize) -> (usize,
 }
 
 pub(super) enum MixOutboxWork {
-    Delivery(crate::services::mix::outbox::OwnedAttempt),
+    Delivery(northstar_room_application::mix_service::outbox::OwnedAttempt),
     PamResult(ClaimedPamResult),
 }
 
@@ -133,8 +133,11 @@ pub(super) fn claim_mix_outbox_work(
         .expect("MIX outbox background budget is bounded by its fixed maximum");
     match queue {
         MixOutboxQueue::Delivery => {
-            let turn = crate::services::mix::outbox::ClaimTurn::new(claim_limit, 8 * 1024 * 1024)
-                .expect("fresh MIX claim owner issues one request");
+            let turn = northstar_room_application::mix_service::outbox::ClaimTurn::new(
+                claim_limit,
+                8 * 1024 * 1024,
+            )
+            .expect("fresh MIX claim owner issues one request");
             let run = turn.run(move |request, handle| async move {
                 let result = drainable_mix_outbox_claim(
                     &stop_claiming,
@@ -145,11 +148,11 @@ pub(super) fn claim_mix_outbox_work(
                 if let Err(error) = &result {
                     if mix_outbox_is_shutting_down(error) {
                         handle.finish_as(
-                            crate::services::mix::outbox::core::TerminalReason::Cancelled,
+                            northstar_room_application::mix_service::outbox::core::TerminalReason::Cancelled,
                         );
                     } else if mix_outbox_deadline_elapsed(error) {
                         handle.finish_as(
-                            crate::services::mix::outbox::core::TerminalReason::TimedOut,
+                            northstar_room_application::mix_service::outbox::core::TerminalReason::TimedOut,
                         );
                     }
                 }
@@ -299,7 +302,7 @@ pub(super) async fn next_mix_outbox_progress(
 /// claiming or delivering its previous batch.  The `None` branch is pending
 /// forever and is used only by the separate PAM lane.
 pub(super) async fn wait_for_mix_delivery_wake(
-    subscription: &mut Option<crate::services::mix::MixDeliveryWakeSubscription>,
+    subscription: &mut Option<northstar_room_application::mix_service::MixDeliveryWakeSubscription>,
 ) -> bool {
     match subscription {
         Some(subscription) => subscription.changed().await,

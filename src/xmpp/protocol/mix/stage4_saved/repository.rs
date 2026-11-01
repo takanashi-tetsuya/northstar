@@ -1,10 +1,10 @@
 //! One-use supplied repository replies. Every unneeded trait method rejects.
 //! No SQL, timers, network, spawned tasks or self-produced transport completions.
 use super::*;
-use crate::services::mix::foreground;
-use crate::services::mix::*;
 use chrono::{DateTime, Utc};
 use northstar_room_application::mix as foreground_core;
+use northstar_room_application::mix_service::foreground;
+use northstar_room_application::mix_service::*;
 use northstar_room_core::mix as room;
 use std::sync::Mutex;
 

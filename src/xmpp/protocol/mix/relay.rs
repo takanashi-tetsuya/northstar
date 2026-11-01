@@ -195,7 +195,7 @@ pub(super) async fn deliver_mix_relay_stanza(
 
 pub(super) async fn relay_vcard_payload(
     state: &Arc<AppState>,
-    user: &crate::services::mix::MixAccount,
+    user: &northstar_room_application::mix_service::MixAccount,
     request: &RelayPayload,
 ) -> Result<std::result::Result<String, &'static str>> {
     match request {

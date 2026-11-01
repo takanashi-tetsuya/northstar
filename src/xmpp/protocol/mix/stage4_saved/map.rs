@@ -1,8 +1,8 @@
 //! Factual, fallible copies. No expected-result fallback and no owner minting.
-use crate::services::mix::outbox::core as c;
 use crate::stage4_replay as w;
 use anyhow::Result;
 use northstar_room_application::mix as f;
+use northstar_room_application::mix_service::outbox::core as c;
 use northstar_room_core::mix as m;
 use std::sync::atomic::Ordering;
 use uuid::Uuid;

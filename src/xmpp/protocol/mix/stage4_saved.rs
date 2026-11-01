@@ -6,11 +6,11 @@ mod routes;
 #[cfg(test)]
 mod tests;
 use super::*;
-use crate::services::mix::MixService;
 use crate::stage4_replay as wire;
 use crate::xmpp::frame_execution::{FrameExecution, SessionExecutions};
 use anyhow::{ensure, Context, Result};
 use northstar_room_application::mix as fg;
+use northstar_room_application::mix_service::MixService;
 use northstar_room_core::mix as room;
 pub(crate) use repository::ControlledRepository;
 pub(crate) use routes::{RouteHandle, RouteMap};

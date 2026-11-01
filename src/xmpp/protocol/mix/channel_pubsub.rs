@@ -332,7 +332,7 @@ pub(super) async fn pubsub_publish(
             let name = field_first(fields, "Name").or(current.name.as_deref());
             let description = field_first(fields, "Description").or(current.description.as_deref());
             let contacts = fields.get("Contact").cloned().unwrap_or(current.contacts);
-            let item_id = crate::services::mix::mix_timestamp_item_id();
+            let item_id = northstar_room_application::mix_service::mix_timestamp_item_id();
             let mutation = state
                 .mix_service()
                 .update_mix_info(
@@ -483,7 +483,7 @@ pub(super) async fn pubsub_publish(
             let max_events = field_first(fields, "max_events")
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(channel.max_events);
-            let item_id = crate::services::mix::mix_timestamp_item_id();
+            let item_id = northstar_room_application::mix_service::mix_timestamp_item_id();
             let mutation = state
                 .mix_service()
                 .update_mix_config(
@@ -563,7 +563,9 @@ pub(super) async fn pubsub_publish(
                 fields.is_empty(),
                 "MIX access items do not contain payloads"
             );
-            let pattern = crate::services::mix::canonical_mix_access_pattern(&item_ids[0])?;
+            let pattern = northstar_room_application::mix_service::canonical_mix_access_pattern(
+                &item_ids[0],
+            )?;
             let Some(outcome) = state
                 .mix_service()
                 .set_mix_access_entry(
@@ -668,7 +670,8 @@ pub(super) async fn pubsub_retract(
             "forbidden",
         ));
     }
-    let pattern = crate::services::mix::canonical_mix_access_pattern(&item_ids[0])?;
+    let pattern =
+        northstar_room_application::mix_service::canonical_mix_access_pattern(&item_ids[0])?;
     let Some(_) = state
         .mix_service()
         .set_mix_access_entry(

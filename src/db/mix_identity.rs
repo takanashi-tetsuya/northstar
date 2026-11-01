@@ -1093,7 +1093,7 @@ mod tests {
                 .unwrap();
         assert_eq!(expired, legacy_actor);
         canonicalize_mix_identity_storage(&pool).await.unwrap();
-        let payloads = crate::services::mix::MixPayloads;
+        let payloads = northstar_room_application::mix_service::MixPayloads;
         assert!(db::set_mix_access_entry(
             &pool,
             db::MixAccessEntryUpdate {

@@ -4,7 +4,7 @@ use std::{future::pending, io::Write, panic::AssertUnwindSafe, sync::Mutex, task
 
 #[tokio::test]
 async fn supplied_session_frame_keeps_registered_room_owners_through_actual_retirement() {
-    use crate::services::mix::foreground::fixture as mix_fixture;
+    use northstar_room_application::mix_service::foreground::fixture as mix_fixture;
     use northstar_room_application::muc_service::discussion::fixture as muc_fixture;
 
     for complete in [false, true] {
@@ -105,7 +105,7 @@ async fn supplied_session_frame_keeps_registered_room_owners_through_actual_reti
 
 #[tokio::test]
 async fn supplied_retired_session_frame_preserves_existing_authority_guards_and_slots() {
-    use crate::services::mix::foreground::fixture as mix_fixture;
+    use northstar_room_application::mix_service::foreground::fixture as mix_fixture;
     use northstar_room_application::muc_service::discussion::fixture as muc_fixture;
 
     for complete in [false, true] {
@@ -852,8 +852,9 @@ impl Drop for MixChildDropMarker {
 
 #[tokio::test(start_paused = true)]
 async fn mix_foreground_receipt_survives_actual_frame_boundaries_without_generic_finalize() {
-    use crate::services::mix::foreground::fixture::{self, Calls, Cut};
     use northstar_room_application::mix::{KnowledgeClass, ReturnClass, Wake};
+    use northstar_room_application::mix_service::foreground::fixture;
+    use northstar_room_application::mix_service::foreground::fixture::{Calls, Cut};
     for cut in 0..9 {
         let effect_cut = match cut {
             1 => Cut::BeforeCommit,
@@ -982,7 +983,7 @@ async fn mix_foreground_receipt_survives_actual_frame_boundaries_without_generic
 
 #[tokio::test]
 async fn mix_foreground_slot_rejects_conflicts_and_retirement_without_legacy_fallback() {
-    use crate::services::mix::foreground::fixture;
+    use northstar_room_application::mix_service::foreground::fixture;
     let prepared = fixture::prepared(false);
     let copied_input = fixture::prepared(false);
     let mut sessions = SessionExecutions::default();

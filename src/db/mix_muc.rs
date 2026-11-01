@@ -330,7 +330,7 @@ mod tests {
             .unwrap();
         assert!(created);
         let actor = format!("{username}@example.invalid");
-        let payloads = crate::services::mix::MixPayloads;
+        let payloads = northstar_room_application::mix_service::MixPayloads;
         let (created, _) = db::create_mix_channel(
             &pool,
             "mix.example.invalid",

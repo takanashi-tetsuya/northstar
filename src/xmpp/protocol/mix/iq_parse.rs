@@ -208,7 +208,7 @@ pub(super) fn parse_iq(raw: &str) -> Result<Option<OwnedIq>> {
                         && !nick[0].children().any(|node| node.is_element()),
                     "invalid MIX setnick"
                 );
-                IqOperation::SetNick(crate::services::mix::prepare_mix_nick(
+                IqOperation::SetNick(northstar_room_application::mix_service::prepare_mix_nick(
                     nick[0].text().unwrap_or_default(),
                 )?)
             }
@@ -266,7 +266,7 @@ pub(super) fn parse_iq(raw: &str) -> Result<Option<OwnedIq>> {
                             && nick.tag_name().namespace() == Some(MISC_NS)
                             && !nick.children().any(|node| node.is_element()) =>
                     {
-                        Some(crate::services::mix::prepare_mix_nick(
+                        Some(northstar_room_application::mix_service::prepare_mix_nick(
                             nick.text().unwrap_or_default(),
                         )?)
                     }
@@ -401,7 +401,7 @@ pub(super) fn parse_join(node: Node<'_, '_>) -> Result<JoinData> {
                     !child.children().any(|node| node.is_element()),
                     "invalid MIX nick payload"
                 );
-                nick = Some(crate::services::mix::prepare_mix_nick(
+                nick = Some(northstar_room_application::mix_service::prepare_mix_nick(
                     child.text().unwrap_or_default(),
                 )?);
             }
@@ -445,7 +445,7 @@ pub(super) fn parse_join(node: Node<'_, '_>) -> Result<JoinData> {
             _ => anyhow::bail!("unknown MIX join child"),
         }
     }
-    let nodes = crate::services::mix::valid_join_nodes(&nodes)?;
+    let nodes = northstar_room_application::mix_service::valid_join_nodes(&nodes)?;
     Ok(JoinData {
         nodes,
         nick,
@@ -476,8 +476,8 @@ pub(super) fn parse_subscription_changes(node: Node<'_, '_>) -> Result<(Vec<Stri
         );
     }
     Ok((
-        crate::services::mix::valid_join_nodes(&subscribe)?,
-        crate::services::mix::valid_join_nodes(&unsubscribe)?,
+        northstar_room_application::mix_service::valid_join_nodes(&subscribe)?,
+        northstar_room_application::mix_service::valid_join_nodes(&unsubscribe)?,
     ))
 }
 

@@ -112,7 +112,7 @@ pub(super) fn core_join_payload(
 /// the opaque ID in an RFC 7622 localpart does not change it under PRECIS.
 pub(super) fn encoded_participant_jid(channel_jid: &str, participant_id: &str) -> Result<String> {
     anyhow::ensure!(
-        crate::services::mix::valid_stable_participant_id(participant_id),
+        northstar_room_application::mix_service::valid_stable_participant_id(participant_id),
         "invalid MIX stable participant id"
     );
     let channel = northstar_xmpp_types::jid::CanonicalJid::parse_bare(channel_jid)?;
@@ -146,7 +146,7 @@ pub(super) fn decode_participant_jid(value: &str) -> Result<(String, String)> {
         .and_then(|localpart| localpart.split_once('#'))
         .context("encoded MIX participant JID is missing its channel")?;
     anyhow::ensure!(
-        crate::services::mix::valid_stable_participant_id(participant_id),
+        northstar_room_application::mix_service::valid_stable_participant_id(participant_id),
         "invalid MIX stable participant id"
     );
     let channel = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
@@ -281,7 +281,9 @@ pub(super) fn parse_remote_join_result(raw: &str, channel_jid: &str) -> Result<R
     let participant_id = match (join.attribute("id"), join.attribute("jid")) {
         (Some(participant_id), None) => {
             anyhow::ensure!(
-                crate::services::mix::valid_stable_participant_id(participant_id),
+                northstar_room_application::mix_service::valid_stable_participant_id(
+                    participant_id
+                ),
                 "invalid MIX stable participant id"
             );
             participant_id.to_owned()

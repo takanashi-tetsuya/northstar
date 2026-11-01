@@ -113,9 +113,10 @@ pub struct MucResolvedOccupancy {
 }
 
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
+use rand::rngs::OsRng;
 
 /// Node-local MUC lease maintenance has no room mutation or outbox authority.
 /// The snapshot contains only the exact target columns needed to fence renewals.

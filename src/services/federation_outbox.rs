@@ -5,6 +5,7 @@ use std::{collections::HashSet, future::Future, sync::Arc};
 use tokio::sync::mpsc;
 
 use northstar_federation_core::S2sOutboxPolicy;
+use northstar_room_application::mix_service::FederationOutboxAdmission;
 
 pub(crate) trait FederationOutboxRepository: Clone + Send + Sync {
     fn enqueue<'a>(
@@ -14,16 +15,6 @@ pub(crate) trait FederationOutboxRepository: Clone + Send + Sync {
         bounce_to: Option<&'a str>,
         policy: S2sOutboxPolicy,
     ) -> impl Future<Output = anyhow::Result<()>> + Send + 'a;
-}
-
-/// The one operation MIX needs while it owns its database admission permit.
-/// It cannot read the federation repository or wake a dispatcher prematurely.
-pub(crate) trait FederationOutboxAdmission: Send + Sync {
-    fn admit<'a>(
-        &'a self,
-        target_domain: &'a str,
-        stanza: String,
-    ) -> impl Future<Output = bool> + Send + 'a;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

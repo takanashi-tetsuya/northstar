@@ -1,5 +1,16 @@
 use super::*;
-use sqlx::postgres::PgPoolOptions;
+
+fn test_service(primary_pool_max_connections: u32) -> MixService<()> {
+    let generations = Arc::new(Vec::new());
+    MixService::new(
+        (),
+        MixMessageContentKeyring::new(Arc::clone(&generations)),
+        MixRetractionContentKeyring::new(generations),
+        primary_pool_max_connections,
+        "public".to_owned(),
+    )
+    .expect("test MIX service schema is valid")
+}
 
 #[test]
 fn outbox_background_budget_scales_with_the_configured_primary_pool() {
@@ -98,10 +109,7 @@ fn delivery_wake_generation_is_monotonic_under_concurrent_publishers() {
 
 #[tokio::test]
 async fn delivery_admission_gate_is_clone_shared_and_fifo() {
-    let pool = PgPoolOptions::new()
-        .connect_lazy("postgresql://localhost/northstar_gate_unit_test")
-        .expect("a lazy test pool does not connect");
-    let service = MixService::new_with_test_keyrings(pool);
+    let service = test_service(32);
     let first = service.clone();
     let second = service.clone();
     assert!(Arc::ptr_eq(
@@ -139,19 +147,9 @@ async fn delivery_admission_gate_is_clone_shared_and_fifo() {
 
 #[tokio::test]
 async fn outbox_db_admission_gate_is_clone_shared_and_fifo() {
-    let pool = PgPoolOptions::new()
-        .connect_lazy("postgresql://localhost/northstar_outbox_gate_unit_test")
-        .expect("a lazy test pool does not connect");
     // A two-connection primary pool leaves one foreground connection and
     // therefore gives this outbox gate exactly one FIFO permit.
-    let service = MixService::new(
-        crate::db::mix_repository::PostgresMixRepository::new(pool),
-        northstar_abuse_application::guard::test_mix_message_content_keyring(),
-        northstar_abuse_application::guard::test_mix_retraction_content_keyring(),
-        2,
-        "public".to_owned(),
-    )
-    .expect("test MIX service schema is valid");
+    let service = test_service(2);
     assert_eq!(service.outbox_background_budget(), 1);
     assert_eq!(service.outbox_db_admission.available_permits(), 1);
     let first = service.clone();
@@ -190,27 +188,14 @@ async fn outbox_db_admission_gate_is_clone_shared_and_fifo() {
 
 #[tokio::test]
 async fn outbox_db_admission_permits_match_the_service_budget() {
-    let pool = PgPoolOptions::new()
-        .connect_lazy("postgresql://localhost/northstar_outbox_gate_budget_unit_test")
-        .expect("a lazy test pool does not connect");
-    let service = MixService::new(
-        crate::db::mix_repository::PostgresMixRepository::new(pool),
-        northstar_abuse_application::guard::test_mix_message_content_keyring(),
-        northstar_abuse_application::guard::test_mix_retraction_content_keyring(),
-        3,
-        "public".to_owned(),
-    )
-    .expect("test MIX service schema is valid");
+    let service = test_service(3);
     assert_eq!(service.outbox_background_budget(), 2);
     assert_eq!(service.outbox_db_admission.available_permits(), 2);
 }
 
 #[tokio::test]
 async fn pam_capacity_admission_gate_is_clone_shared_and_fifo() {
-    let pool = PgPoolOptions::new()
-        .connect_lazy("postgresql://localhost/northstar_pam_gate_unit_test")
-        .expect("a lazy test pool does not connect");
-    let service = MixService::new_with_test_keyrings(pool);
+    let service = test_service(32);
     let first = service.clone();
     let second = service.clone();
     assert!(Arc::ptr_eq(

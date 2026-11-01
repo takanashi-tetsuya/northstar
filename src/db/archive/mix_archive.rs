@@ -187,7 +187,7 @@ pub(super) async fn commit_mix_archive(
             result,
         )
         .await
-        .map_err(crate::services::mix::outbox::commit_error)
+        .map_err(northstar_room_application::mix_service::outbox::commit_error)
     } else {
         transaction.commit().await.map_err(Into::into)
     }

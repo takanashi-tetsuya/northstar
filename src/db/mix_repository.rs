@@ -1,7 +1,8 @@
 //! PostgreSQL adapter for MIX membership, mutations and durable delivery.
-use crate::{db, services::mix::*};
+use crate::db;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use northstar_room_application::mix_service::*;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -15,45 +16,12 @@ impl PostgresMixRepository {
         Self { pool }
     }
 }
-#[cfg(test)]
-impl MixService<PostgresMixRepository> {
-    pub(crate) fn new_with_test_keyrings(pool: PgPool) -> Self {
-        Self::new(
-            PostgresMixRepository::new(pool),
-            northstar_abuse_application::guard::test_mix_message_content_keyring(),
-            northstar_abuse_application::guard::test_mix_retraction_content_keyring(),
-            32,
-            "public".to_owned(),
-        )
-        .expect("test MIX service schema is valid")
-    }
-}
 
 impl From<db::MixPresenceProbeTarget> for MixPresenceProbeTarget {
     fn from(target: db::MixPresenceProbeTarget) -> Self {
         Self {
             channel_jid: target.channel_jid,
             participant_jid: target.participant_jid,
-        }
-    }
-}
-impl From<db::MamArchiveQuery> for MamArchiveQuery {
-    fn from(query: db::MamArchiveQuery) -> Self {
-        Self {
-            with_jid: query.with_jid,
-            start: query.start,
-            end: query.end,
-            before_id: query.before_id,
-            after_id: query.after_id,
-            ids: query.ids,
-            page: match query.page {
-                db::MamRsmPage::First => MamRsmPage::First,
-                db::MamRsmPage::Last => MamRsmPage::Last,
-                db::MamRsmPage::Before(id) => MamRsmPage::Before(id),
-                db::MamRsmPage::After(id) => MamRsmPage::After(id),
-                db::MamRsmPage::Index(index) => MamRsmPage::Index(index),
-            },
-            max: query.max,
         }
     }
 }

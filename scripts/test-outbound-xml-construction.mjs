@@ -35,10 +35,10 @@ function fixture(run) {
     for (const entry of entries) write(entry, '');
     roleSplits([]);
     write('src/xmpp/protocol/mix/worker.rs', '');
-    write('src/services/mix.rs', 'pub(crate) mod foreground;\npub(crate) mod outbox;\n');
+    write('crates/contexts/room/northstar-room-application/src/mix_service.rs', 'pub mod foreground;\npub mod outbox;\n');
     for (const child of ['foreground', 'outbox']) {
-      write(`src/services/mix/${child}.rs`, `mod nested;\n${rawXml}`);
-      write(`src/services/mix/${child}/nested.rs`, rawXml);
+      write(`crates/contexts/room/northstar-room-application/src/mix_service/${child}.rs`, `mod nested;\n${rawXml}`);
+      write(`crates/contexts/room/northstar-room-application/src/mix_service/${child}/nested.rs`, rawXml);
     }
     run({
       write,
@@ -87,7 +87,7 @@ test('MIX keeps existing child modules and their descendants outside its zero bu
   fixture(({ check }) => {
     const result = check();
     passes(result);
-    assert.match(result.stdout, /src\/services\/mix\.rs: current=0, baseline=0, files=1/);
+    assert.match(result.stdout, /crates\/contexts\/room\/northstar-room-application\/src\/mix_service\.rs: current=0, baseline=0, files=1/);
   });
 });
 
@@ -116,7 +116,7 @@ for (const entry of [
   'src/xmpp/protocol/messaging.rs',
   'src/xmpp/protocol/pubsub.rs',
   'src/xmpp/protocol/pep.rs',
-  'src/services/mix.rs',
+  'crates/contexts/room/northstar-room-application/src/mix_service.rs',
   'src/s2s/components.rs',
   'src/s2s/inbound.rs',
   'src/s2s/outbound.rs',
@@ -133,8 +133,8 @@ for (const entry of [
 
 test('MIX excludes a cfg(test) bodyless child module', () => {
   fixture(({ write, append, check }) => {
-    append('src/services/mix.rs', '#[cfg(test)]\nmod zz_probe;\n');
-    write('src/services/mix/zz_probe.rs', rawXml);
+    append('crates/contexts/room/northstar-room-application/src/mix_service.rs', '#[cfg(test)]\nmod zz_probe;\n');
+    write('crates/contexts/room/northstar-room-application/src/mix_service/zz_probe.rs', rawXml);
     passes(check());
   });
 });

@@ -479,7 +479,7 @@
       "title": "MUC room authority and fan-out",
       "production_owner": {
         "path": "crates/contexts/room/northstar-room-application/src/muc_service.rs",
-        "anchor": "pub(crate) struct MucService<R> {"
+        "anchor": "pub struct MucService<R> {"
       },
       "runtime_identities": [
         {
@@ -509,7 +509,7 @@
         "contract": "Existing C2S frame budget applies to ingress; standalone room mutex intentionally spans admission/fan-out; clustered policy delivery has its own 5s attempt.",
         "source": {
           "path": "crates/contexts/room/northstar-room-application/src/muc_service.rs",
-          "anchor": "pub(crate) async fn lock_local_room_mutation("
+          "anchor": "pub async fn lock_local_room_mutation("
         }
       },
       "experiments": [
@@ -599,8 +599,8 @@
       "id": "mix",
       "title": "MIX channel admission and durable delivery",
       "production_owner": {
-        "path": "src/services/mix.rs",
-        "anchor": "pub(crate) struct MixService<R> {"
+        "path": "crates/contexts/room/northstar-room-application/src/mix_service.rs",
+        "anchor": "pub struct MixService<R> {"
       },
       "runtime_identities": [
         {

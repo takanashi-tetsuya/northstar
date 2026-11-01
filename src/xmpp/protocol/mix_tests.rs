@@ -1,5 +1,5 @@
 use super::*;
-use crate::services::mix::MamRsmPage;
+use northstar_room_application::mix_service::MamRsmPage;
 
 struct MixWorkerHolderProbe<T> {
     output: Option<T>,
@@ -38,8 +38,8 @@ impl<T> Drop for MixWorkerHolderProbe<T> {
 
 #[tokio::test]
 async fn mix_worker_claim_holder_retains_panics_and_destroys_child_before_retirement() {
-    use crate::services::mix::outbox::{core, fixture};
     use futures::FutureExt;
+    use northstar_room_application::mix_service::outbox::{core, fixture};
     use std::sync::atomic::{AtomicBool, Ordering};
     for cut in 0..5 {
         let dropped = Arc::new(AtomicBool::new(false));
@@ -110,8 +110,8 @@ async fn mix_worker_claim_holder_retains_panics_and_destroys_child_before_retire
 
 #[tokio::test]
 async fn mix_worker_attempt_holder_retains_panics_and_destroys_child_before_retirement() {
-    use crate::services::mix::outbox::{core, fixture};
     use futures::FutureExt;
+    use northstar_room_application::mix_service::outbox::{core, fixture};
     use std::sync::atomic::{AtomicBool, Ordering};
     for cut in 0..5 {
         let dropped = Arc::new(AtomicBool::new(false));
@@ -176,7 +176,7 @@ async fn mix_worker_attempt_holder_retains_panics_and_destroys_child_before_reti
 
 #[tokio::test]
 async fn mix_worker_observed_local_waiter_records_all_typed_transfers_before_return() {
-    use crate::services::mix::outbox::{core, fixture};
+    use northstar_room_application::mix_service::outbox::{core, fixture};
     for (completion, boundary) in [
         (
             crate::xmpp::outbound::MixTransportCompletion::SocketFenced {
@@ -248,7 +248,7 @@ async fn mix_worker_observed_local_waiter_records_all_typed_transfers_before_ret
 
 #[tokio::test]
 async fn mix_worker_cancelled_local_wait_keeps_uncertainty_and_exact_disconnect() {
-    use crate::services::mix::outbox::{core, fixture};
+    use northstar_room_application::mix_service::outbox::{core, fixture};
     let (owner, route) = fixture::route(false);
     let request = route.local_request("bob@local.test/phone".into()).unwrap();
     let (output, mut consumer) = tokio::sync::mpsc::channel(1);
@@ -277,7 +277,7 @@ async fn mix_worker_cancelled_local_wait_keeps_uncertainty_and_exact_disconnect(
 
 #[test]
 fn mix_worker_cluster_adapter_consumes_typed_handoff_but_never_a_delivered_boolean() {
-    use crate::services::mix::outbox::{core, fixture};
+    use northstar_room_application::mix_service::outbox::{core, fixture};
     for (boundary, expected) in [
         (
             crate::cluster::ClusterMixHandoff::SocketFenced,
@@ -342,7 +342,8 @@ fn mix_worker_cluster_adapter_consumes_typed_handoff_but_never_a_delivered_boole
 
 #[tokio::test]
 async fn mix_worker_unpolled_and_stopped_claims_do_not_invent_an_empty_database_receipt() {
-    use crate::services::mix::outbox::{self, core};
+    use northstar_room_application::mix_service::outbox;
+    use northstar_room_application::mix_service::outbox::core;
     use std::sync::atomic::{AtomicUsize, Ordering};
     for stopped in [false, true] {
         let turn = outbox::ClaimTurn::new(1, 8 * 1024 * 1024).unwrap();
@@ -395,7 +396,8 @@ async fn mix_worker_unpolled_and_stopped_claims_do_not_invent_an_empty_database_
 
 #[tokio::test]
 async fn mix_worker_claim_statement_cuts_keep_receipts_without_issuing_attempts_after_error() {
-    use crate::services::mix::outbox::{self, core, fixture};
+    use northstar_room_application::mix_service::outbox;
+    use northstar_room_application::mix_service::outbox::{core, fixture};
     use std::sync::atomic::{AtomicUsize, Ordering};
     for cut in 0..4 {
         let turn = outbox::ClaimTurn::new(1, 8 * 1024 * 1024).unwrap();
@@ -449,7 +451,8 @@ async fn mix_worker_claim_statement_cuts_keep_receipts_without_issuing_attempts_
 
 #[tokio::test]
 async fn mix_worker_archive_commit_cuts_preserve_stored_and_replay_knowledge() {
-    use crate::services::mix::outbox::{self, core, fixture};
+    use northstar_room_application::mix_service::outbox;
+    use northstar_room_application::mix_service::outbox::{core, fixture};
     use std::sync::atomic::{AtomicUsize, Ordering};
     for result in [
         core::ArchiveResult::Stored(Uuid::from_u128(97)),
@@ -518,7 +521,8 @@ async fn mix_worker_archive_commit_cuts_preserve_stored_and_replay_knowledge() {
 
 #[tokio::test]
 async fn mix_worker_settlement_commit_cuts_keep_no_match_not_moved_and_lease_lost_receipts() {
-    use crate::services::mix::outbox::{self, core, fixture};
+    use northstar_room_application::mix_service::outbox;
+    use northstar_room_application::mix_service::outbox::{core, fixture};
     use std::sync::atomic::{AtomicUsize, Ordering};
     for result in [
         core::SettlementResult::Ack(false),
@@ -584,7 +588,7 @@ async fn mix_worker_settlement_commit_cuts_keep_no_match_not_moved_and_lease_los
 
 #[tokio::test(start_paused = true)]
 async fn mix_worker_existing_renewal_loop_drops_pending_child_before_scope_closure() {
-    use crate::services::mix::outbox::{core, fixture};
+    use northstar_room_application::mix_service::outbox::{core, fixture};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     struct RenewalDrop {
         owner: core::Observation,
@@ -667,8 +671,8 @@ async fn mix_worker_existing_renewal_loop_drops_pending_child_before_scope_closu
 
 #[tokio::test]
 async fn mix_foreground_authenticated_replay_never_starts_membership_or_store_effects() {
-    use crate::services::mix::foreground::{fixture, Observation};
     use northstar_room_application::mix::{read_observed, Knowledge, ReadReturned, Rejected, Wake};
+    use northstar_room_application::mix_service::foreground::{fixture, Observation};
     use std::sync::atomic::Ordering;
     for replay in [
         MixBusinessReplay::Replay(Uuid::from_u128(70)),
@@ -715,10 +719,10 @@ async fn mix_foreground_authenticated_replay_never_starts_membership_or_store_ef
 
 #[tokio::test]
 async fn mix_foreground_raw_existing_survives_cancelled_rollback_without_authenticated_replay() {
-    use crate::services::mix::foreground::{fixture, Observation};
     use northstar_room_application::mix::{
         admit_observed, read_observed, Knowledge, Rejected, TerminalReason,
     };
+    use northstar_room_application::mix_service::foreground::{fixture, Observation};
     let owner = Observation::new(fixture::prepared(true));
     let read = owner.replay_request().unwrap().unwrap();
     read_observed(&read, "mix.local.test", async {
@@ -734,10 +738,12 @@ async fn mix_foreground_raw_existing_survives_cancelled_rollback_without_authent
         // Independent fake rollback completion gate, never resolved here.
         std::future::pending::<()>().await;
         request.authenticated(&raw, MixBusinessReplay::Replay(Uuid::from_u128(70)))?;
-        Ok::<_, anyhow::Error>(crate::services::mix::StoreMixMessageAdmission {
-            outcome: StoreEventOutcome::Replay(Uuid::from_u128(70)),
-            recipients: vec![],
-        })
+        Ok::<_, anyhow::Error>(
+            northstar_room_application::mix_service::StoreMixMessageAdmission {
+                outcome: StoreEventOutcome::Replay(Uuid::from_u128(70)),
+                recipients: vec![],
+            },
+        )
     }));
     assert!(futures::poll!(&mut effect).is_pending());
     drop(effect);
@@ -756,8 +762,8 @@ async fn mix_foreground_raw_existing_survives_cancelled_rollback_without_authent
 
 #[tokio::test]
 async fn mix_foreground_actual_projection_and_receipt_error_have_exclusive_wake_behavior() {
-    use crate::services::mix::foreground::{fixture, Observation};
     use northstar_room_application::mix::{Knowledge, Returned, Wake};
+    use northstar_room_application::mix_service::foreground::{fixture, Observation};
     use std::sync::atomic::Ordering;
     for audience in [false, true] {
         let owner = Observation::new(fixture::prepared(false));
@@ -813,8 +819,10 @@ async fn mix_foreground_actual_projection_and_receipt_error_have_exclusive_wake_
 
 #[tokio::test]
 async fn mix_foreground_receiving_configuration_rejects_self_consistent_claim_before_effect() {
-    use crate::services::mix::foreground::{fixture, Observation, PreparedIngress};
     use northstar_room_application::mix::{read_observed, EffectError, Rejected};
+    use northstar_room_application::mix_service::foreground::{
+        fixture, Observation, PreparedIngress,
+    };
     use std::sync::atomic::Ordering;
     let input = fixture::prepared(true);
     let mut forged = input.ingress().clone();
@@ -839,8 +847,8 @@ async fn mix_foreground_receiving_configuration_rejects_self_consistent_claim_be
 
 #[tokio::test]
 async fn mix_foreground_constructed_unpolled_commit_does_not_enter_message_commit() {
-    use crate::services::mix::foreground::{fixture, Observation};
     use northstar_room_application::mix::{admit_observed, commit_observed, Knowledge};
+    use northstar_room_application::mix_service::foreground::{fixture, Observation};
     use std::sync::atomic::Ordering;
     let owner = Observation::new(fixture::prepared(false));
     let request = owner.store_request(fixture::command(false)).unwrap();
@@ -985,7 +993,7 @@ async fn sm_and_bosh_mix_handoffs_preserve_typed_transport_owner() {
 
 #[tokio::test]
 async fn delivery_idle_scan_stays_bounded_and_retained_commits_bypass_backoff() {
-    let broker = crate::services::mix::MixDeliveryWakeBroker::for_test();
+    let broker = northstar_room_application::mix_service::MixDeliveryWakeBroker::for_test();
     let mut wake = Some(broker.subscribe());
     let mut now = tokio::time::Instant::now();
     let mut schedule = MixClaimSchedule::starting_at(MixOutboxQueue::Delivery, now);
@@ -2243,20 +2251,14 @@ fn mix_service_identity_is_bound_to_authenticated_s2s_domain() {
 
 #[test]
 fn remote_stable_participant_ids_are_opaque_but_delimiter_safe() {
-    assert!(crate::services::mix::valid_stable_participant_id(
-        "not-a-uuid"
-    ));
-    assert!(crate::services::mix::valid_stable_participant_id("αβγ"));
-    assert!(!crate::services::mix::valid_stable_participant_id(""));
-    assert!(!crate::services::mix::valid_stable_participant_id(
-        "id#channel"
-    ));
-    assert!(!crate::services::mix::valid_stable_participant_id(
-        "id@example.test"
-    ));
-    assert!(!crate::services::mix::valid_stable_participant_id(
-        "id/resource"
-    ));
+    assert!(northstar_room_application::mix_service::valid_stable_participant_id("not-a-uuid"));
+    assert!(northstar_room_application::mix_service::valid_stable_participant_id("αβγ"));
+    assert!(!northstar_room_application::mix_service::valid_stable_participant_id(""));
+    assert!(!northstar_room_application::mix_service::valid_stable_participant_id("id#channel"));
+    assert!(
+        !northstar_room_application::mix_service::valid_stable_participant_id("id@example.test")
+    );
+    assert!(!northstar_room_application::mix_service::valid_stable_participant_id("id/resource"));
     assert_eq!(
         decode_participant_jid("opaque#room@mix.remote.test").unwrap(),
         ("opaque".to_owned(), "room@mix.remote.test".to_owned())

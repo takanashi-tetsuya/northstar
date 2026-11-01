@@ -177,7 +177,7 @@ pub(super) fn validate_reflected_mix_identity(root: Node<'_, '_>) -> Result<()> 
         match (child.tag_name().name(), child.tag_name().namespace()) {
             ("nick", Some(CORE_NS)) => {
                 anyhow::ensure!(nick.is_none(), "duplicate reflected MIX nick");
-                nick = Some(crate::services::mix::prepare_mix_nick(
+                nick = Some(northstar_room_application::mix_service::prepare_mix_nick(
                     child.text().unwrap_or_default(),
                 )?);
             }
@@ -263,7 +263,7 @@ pub(super) fn validate_reflected_mix_presence_identity(root: Node<'_, '_>) -> Re
         match (child.tag_name().name(), child.tag_name().namespace()) {
             ("nick", Some(PRESENCE_NS)) => {
                 anyhow::ensure!(nick.is_none(), "duplicate reflected MIX presence nick");
-                nick = Some(crate::services::mix::prepare_mix_nick(
+                nick = Some(northstar_room_application::mix_service::prepare_mix_nick(
                     child.text().unwrap_or_default(),
                 )?);
             }
@@ -513,7 +513,7 @@ pub(super) async fn process_channel_message(
         if let Some(frames) = observation {
             frames.mix_foreground(|| {
                 state.mix_service().prepare_mix_foreground(
-                    crate::services::mix::foreground::Ingress {
+                    northstar_room_application::mix_service::foreground::Ingress {
                         channel_id: channel.id,
                         channel_jid: channel.jid(),
                         actor_bare: actor_bare.to_owned(),
@@ -553,7 +553,7 @@ pub(super) async fn process_channel_message(
         let replay = if let Some(owner) = &foreground {
             let request = owner
                 .replay_request()?
-                .ok_or(crate::services::mix::foreground::Rejected::Input)?;
+                .ok_or(northstar_room_application::mix_service::foreground::Rejected::Input)?;
             state
                 .mix_service()
                 .lookup_mix_message_replay_observed(&request)
@@ -620,8 +620,9 @@ pub(super) async fn process_channel_message(
             .finish();
         let tombstone = add_stanza_id(&tombstone, &channel.jid(), target_id);
         let archived_jid = (channel.jid_visibility == "visible").then_some(actor_bare);
-        let live_jid = crate::services::mix::participant_jid_visible(&channel, &preference)
-            .then_some(actor_bare);
+        let live_jid =
+            northstar_room_application::mix_service::participant_jid_visible(&channel, &preference)
+                .then_some(actor_bare);
         let archived_action = mix_retraction_action(
             &channel.jid(),
             None,
@@ -683,7 +684,8 @@ pub(super) async fn process_channel_message(
     let archive_id = Uuid::new_v4();
     let archived_jid = (channel.jid_visibility == "visible").then_some(actor_bare);
     let live_jid =
-        crate::services::mix::participant_jid_visible(&channel, &preference).then_some(actor_bare);
+        northstar_room_application::mix_service::participant_jid_visible(&channel, &preference)
+            .then_some(actor_bare);
     let archive = mix_channel_message(MixChannelMessage {
         from: &channel.jid(),
         to: None,
@@ -700,16 +702,18 @@ pub(super) async fn process_channel_message(
         observation.enter(Stage::MixAdmission);
     }
     let admission = if let Some(owner) = &foreground {
-        let request = owner.store_request(crate::services::mix::foreground::StoreCommand {
-            channel_id: channel.id,
-            actor: actor_bare.to_owned(),
-            item_id: archive_id,
-            payload: archive,
-            identity: message_replay_identity,
-            delivery_payload: children,
-            visible_jid: live_jid.map(str::to_owned),
-            encrypted: message_encrypted,
-        })?;
+        let request = owner.store_request(
+            northstar_room_application::mix_service::foreground::StoreCommand {
+                channel_id: channel.id,
+                actor: actor_bare.to_owned(),
+                item_id: archive_id,
+                payload: archive,
+                identity: message_replay_identity,
+                delivery_payload: children,
+                visible_jid: live_jid.map(str::to_owned),
+                encrypted: message_encrypted,
+            },
+        )?;
         state
             .mix_service()
             .store_mix_message_observed(&request)

@@ -42,7 +42,7 @@ const BASELINE = new Map([
   ['src/xmpp/protocol/federated_muc.rs', 0],
   ['src/xmpp/protocol/misc.rs', 0],
   ['src/xmpp/protocol/sm.rs', 0],
-  ['src/services/mix.rs', 0],
+  ['crates/contexts/room/northstar-room-application/src/mix_service.rs', 0],
   ['src/db/mix.rs', 0],
   ['src/s2s/components.rs', 0],
   ['src/cluster.rs', 0],
@@ -64,7 +64,7 @@ const FILE_SCOPED_ENTRIES = new Set(['src/xmpp/protocol.rs']);
 // baseline. Exclude their production subtrees, while covering the entry file
 // and any new children introduced by splitting it.
 const EXCLUDED_CHILD_MODULES = new Map([
-  ['src/services/mix.rs', ['src/services/mix/foreground.rs', 'src/services/mix/outbox.rs']],
+  ['crates/contexts/room/northstar-room-application/src/mix_service.rs', ['crates/contexts/room/northstar-room-application/src/mix_service/foreground.rs', 'crates/contexts/room/northstar-room-application/src/mix_service/outbox.rs']],
 ]);
 
 // Static protocol constants may be exempted only by an exact file, line and

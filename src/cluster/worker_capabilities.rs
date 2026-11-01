@@ -20,7 +20,7 @@ impl ClusterMixRouteLookup {
     }
 }
 
-impl crate::services::mix::MixClusterRouteLookup for ClusterMixRouteLookup {
+impl northstar_room_application::mix_service::MixClusterRouteLookup for ClusterMixRouteLookup {
     fn lookup_nodes<'a>(
         &'a self,
         jid: &'a str,

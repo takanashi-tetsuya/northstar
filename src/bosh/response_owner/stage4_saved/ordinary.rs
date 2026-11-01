@@ -1,6 +1,5 @@
 //! Ordinary controls for actual BOSH response ownership and captured facts.
 use super::*;
-use crate::services::mix::outbox::core as worker;
 use crate::xmpp::auth_publication::stage4_saved::{
     self as auth,
     ordinary::{self as input, fixed, list, text},
@@ -9,6 +8,7 @@ use crate::xmpp::protocol::mix::stage4_saved::{
     Bridge, ClaimSites, ForegroundSite, RouteHandle, RouteMap,
 };
 use northstar_auth_application::authentication::publication;
+use northstar_room_application::mix_service::outbox::core as worker;
 
 #[tokio::test]
 async fn actual_selection_of_p_u_keeps_genuine_b_queued_until_teardown() {

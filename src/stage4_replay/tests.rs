@@ -1882,7 +1882,7 @@ fn account_return_identity_is_captured_and_reused_as_actual_privacy_argument() {
     // Actual service-result data type, deliberately different from the
     // supplied account ID/name. This ordinary data control does not run
     // either service or infer a successful account lookup from the input.
-    let actual = crate::services::mix::MixAccount {
+    let actual = northstar_room_application::mix_service::MixAccount {
         id: Uuid::from_u128(901),
         username: "actual-name".to_owned(),
     };

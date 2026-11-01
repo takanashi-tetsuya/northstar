@@ -1,11 +1,11 @@
 //! Pending MIX transfer at the actual BOSH item/FIFO boundary. The existing
 //! actor owns request policy and timers; this helper owns no actor or service.
-use crate::{
-    services::mix::{MixRepository, MixService},
-    xmpp::outbound::{MixDelivery, MixTransportCompletion, OutboundItem, TransportOwnershipSource},
+use crate::xmpp::outbound::{
+    MixDelivery, MixTransportCompletion, OutboundItem, TransportOwnershipSource,
 };
 use anyhow::{Context, Result};
 use northstar_delivery_core::bosh_ownership::{Operation, Terminal, TransferRequest, Transferred};
+use northstar_room_application::mix_service::{MixRepository, MixService};
 use std::{
     collections::VecDeque,
     future::Future,

@@ -1,10 +1,10 @@
 //! Runtime bridge for a lazy frame-owned ordinary MIX message. Registration
 //! and retirement share a synchronous lock; absence is selected by the frame.
 
-pub(crate) use northstar_room_application::mix::{
+pub use crate::mix::{
     Observation, PreparedIngress, Rejected, ReplayRequest, StoreRequest, Summary, TerminalReason,
 };
-pub(crate) use northstar_room_core::mix::{Ingress, StoreCommand};
+pub use northstar_room_core::mix::{Ingress, StoreCommand};
 use std::sync::Mutex;
 
 #[derive(Default)]
@@ -14,10 +14,10 @@ struct SlotState {
 }
 
 #[derive(Default)]
-pub(crate) struct MixForegroundSlot(Mutex<SlotState>);
+pub struct MixForegroundSlot(Mutex<SlotState>);
 
 impl MixForegroundSlot {
-    pub(crate) fn register(&self, prepared: &PreparedIngress) -> Result<Observation, Rejected> {
+    pub fn register(&self, prepared: &PreparedIngress) -> Result<Observation, Rejected> {
         let mut slot = self.0.lock().unwrap_or_else(|error| error.into_inner());
         if slot.terminal.is_some() {
             return Err(Rejected::Retired);
@@ -36,7 +36,7 @@ impl MixForegroundSlot {
         Ok(observation)
     }
 
-    pub(crate) fn retire(&self, reason: TerminalReason) -> Option<Summary> {
+    pub fn retire(&self, reason: TerminalReason) -> Option<Summary> {
         let mut slot = self.0.lock().unwrap_or_else(|error| error.into_inner());
         let reason = *slot.terminal.get_or_insert(reason);
         slot.observation
@@ -45,21 +45,17 @@ impl MixForegroundSlot {
     }
 }
 
-pub(crate) fn effect_error(
-    error: northstar_room_application::mix::EffectError<anyhow::Error>,
-) -> anyhow::Error {
+pub fn effect_error(error: crate::mix::EffectError<anyhow::Error>) -> anyhow::Error {
     match error {
-        northstar_room_application::mix::EffectError::Observation(error) => error.into(),
-        northstar_room_application::mix::EffectError::Repository(error) => error,
+        crate::mix::EffectError::Observation(error) => error.into(),
+        crate::mix::EffectError::Repository(error) => error,
     }
 }
 
-#[cfg(test)]
-pub(crate) mod fixture {
+#[cfg(any(test, feature = "test-support"))]
+pub mod fixture {
     use super::*;
-    use northstar_room_application::mix::{
-        admit_observed, commit_observed, CommitError, Completion,
-    };
+    use crate::mix::{admit_observed, commit_observed, CommitError, Completion};
     use northstar_room_core::mix::{
         Admission, DeliveryProjection, Existing, Outcome, Participant, RecipientProjection,
         ReplayIdentity, Stored,
@@ -68,7 +64,7 @@ pub(crate) mod fixture {
     use uuid::Uuid;
 
     #[derive(Clone, Copy)]
-    pub(crate) enum Cut {
+    pub enum Cut {
         Return,
         BeforeCommit,
         DuringCommit,
@@ -78,14 +74,14 @@ pub(crate) mod fixture {
     }
 
     #[derive(Default)]
-    pub(crate) struct Calls {
-        pub(crate) repository: AtomicUsize,
-        pub(crate) commit: AtomicUsize,
-        pub(crate) membership: AtomicUsize,
-        pub(crate) wake: AtomicUsize,
+    pub struct Calls {
+        pub repository: AtomicUsize,
+        pub commit: AtomicUsize,
+        pub membership: AtomicUsize,
+        pub wake: AtomicUsize,
     }
 
-    pub(crate) fn prepared(identity: bool) -> PreparedIngress {
+    pub fn prepared(identity: bool) -> PreparedIngress {
         PreparedIngress::new(Ingress {
             channel_id: Uuid::from_u128(71),
             channel_jid: "room@mix.local.test".into(),
@@ -99,7 +95,7 @@ pub(crate) mod fixture {
             }),
         })
     }
-    pub(crate) fn command(identity: bool) -> StoreCommand {
+    pub fn command(identity: bool) -> StoreCommand {
         let prepared = prepared(identity);
         let input = prepared.ingress();
         StoreCommand {
@@ -114,14 +110,14 @@ pub(crate) mod fixture {
             encrypted: false,
         }
     }
-    pub(crate) fn participant() -> Participant {
+    pub fn participant() -> Participant {
         Participant {
             participant_id: Uuid::from_u128(73),
             jid: "bob@local.test".into(),
             nick: Some("Bob".into()),
         }
     }
-    pub(crate) fn stored(audience: bool) -> Stored {
+    pub fn stored(audience: bool) -> Stored {
         Stored {
             authoritative_id: Uuid::from_u128(72),
             storage_id: Uuid::from_u128(74),
@@ -144,7 +140,7 @@ pub(crate) mod fixture {
             }),
         }
     }
-    pub(crate) fn returned(audience: bool) -> Admission {
+    pub fn returned(audience: bool) -> Admission {
         Admission {
             outcome: Outcome::Stored(Uuid::from_u128(72)),
             recipients: if audience {
@@ -154,7 +150,7 @@ pub(crate) mod fixture {
             },
         }
     }
-    pub(crate) fn existing() -> Existing {
+    pub fn existing() -> Existing {
         Existing {
             authoritative_id: Uuid::from_u128(70),
             semantic_key_id: "fixture".into(),
@@ -162,7 +158,7 @@ pub(crate) mod fixture {
             target_id: None,
         }
     }
-    pub(crate) async fn admit(
+    pub async fn admit(
         request: &StoreRequest,
         cut: Cut,
         audience: bool,

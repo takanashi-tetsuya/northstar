@@ -134,7 +134,7 @@ pub(super) fn render_federated_mix_iq_result(
 }
 
 #[derive(Clone)]
-pub(crate) struct MixPayloads;
+pub struct MixPayloads;
 
 impl MixEventPayloadRenderer for MixPayloads {
     fn info_payload(&self, channel: &MixChannel) -> String {
@@ -251,7 +251,7 @@ impl MixEventPayloadRenderer for MixPayloads {
             identity.push_child(XmlElement::new("jid").text(jid));
         }
         stanza.push_child(identity);
-        Ok(crate::services::xml_util::add_stanza_id(
+        Ok(northstar_xep_0359::add_stanza_id(
             &stanza.finish(),
             &channel.jid(),
             authoritative_id,
@@ -562,7 +562,7 @@ pub(super) fn render_access_payload(pattern: &str) -> String {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum FederatedMixSuccess {
+pub enum FederatedMixSuccess {
     Create {
         channel: String,
     },
@@ -601,7 +601,7 @@ pub(crate) enum FederatedMixSuccess {
     },
 }
 
-pub(crate) struct MixPresenceDelivery<'a> {
+pub struct MixPresenceDelivery<'a> {
     pub channel: &'a MixChannel,
     pub participant: &'a MixParticipant,
     pub preference: &'a MixParticipantPreference,
@@ -612,7 +612,7 @@ pub(crate) struct MixPresenceDelivery<'a> {
     pub unavailable: bool,
 }
 
-pub(crate) struct PamJoinResult<'a> {
+pub struct PamJoinResult<'a> {
     pub client_request_id: &'a str,
     pub actor_bare: &'a str,
     pub requester_full_jid: &'a str,
@@ -622,7 +622,7 @@ pub(crate) struct PamJoinResult<'a> {
     pub nick: Option<&'a str>,
 }
 
-pub(crate) trait MixEventPayloadRenderer: Sync {
+pub trait MixEventPayloadRenderer: Sync {
     fn info_payload(&self, channel: &MixChannel) -> String;
     fn config_payload(
         &self,

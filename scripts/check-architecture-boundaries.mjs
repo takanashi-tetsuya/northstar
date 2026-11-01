@@ -1043,12 +1043,12 @@ const mixProducerMethods = mixProducerMappings.map(([serviceMethod]) => serviceM
 if (new Set(mixProducerMethods).size !== mixProducerMethods.length) {
   throw new Error('MIX service producer mapping contains duplicate service methods');
 }
-const mixServiceSource = readProductionModule('src/services/mix.rs', { root });
+const mixServiceSource = readProductionModule('crates/contexts/room/northstar-room-application/src/mix_service.rs', { root });
 const mixServiceProduction = productionWithoutCfgTestModules(
   mixServiceSource,
-  'src/services/mix.rs',
+  'crates/contexts/room/northstar-room-application/src/mix_service.rs',
 );
-const mixServiceDefinition = structBody(mixServiceProduction, 'pub(crate) struct MixService');
+const mixServiceDefinition = structBody(mixServiceProduction, 'pub struct MixService');
 if (
   !/^\s*outbox_background_budget\s*:\s*usize\s*,?\s*$/m.test(mixServiceDefinition) ||
   !/^\s*outbox_db_admission\s*:\s*northstar_runtime\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*,?\s*$/m.test(
@@ -1063,7 +1063,7 @@ if (
   );
 }
 if (
-  !/#\s*\[\s*derive\s*\(\s*Clone\s*\)\s*\]\s*pub\(crate\)\s+struct\s+MixService\b/.test(
+  !/#\s*\[\s*derive\s*\(\s*Clone\s*\)\s*\]\s*pub\s+struct\s+MixService\b/.test(
     mixServiceProduction,
   )
 ) {
@@ -1071,7 +1071,7 @@ if (
 }
 const mixServiceConstructor = structBody(
   mixServiceProduction,
-  'pub(crate) fn new_with_outbox_database_admission(',
+  'pub fn new_with_outbox_database_admission(',
 );
 if (
   !/let\s+outbox_background_budget\s*=\s*outbox_db_admission\s*\.\s*capacity\s*\(\s*\)\s*;/.test(
@@ -1084,7 +1084,7 @@ if (
   throw new Error('MixService must derive its outbox budget from the injected application admission');
 }
 if (
-  !/pub\s*\(crate\)\s+const\s+fn\s+outbox_background_budget\s*\(\s*&self\s*\)\s*->\s*usize/.test(
+  !/pub\s+const\s+fn\s+outbox_background_budget\s*\(\s*&self\s*\)\s*->\s*usize/.test(
     mixServiceProduction,
   )
 ) {
@@ -1212,7 +1212,7 @@ if (permitManifestNegativeFixture.missing.join(',') !== 'required_turn') {
   throw new Error('MIX outbox permit manifest self-test did not reject a missing reviewed owner');
 }
 
-const mixServiceFunctions = asyncFunctionSpans(mixServiceProduction, 'src/services/mix.rs');
+const mixServiceFunctions = asyncFunctionSpans(mixServiceProduction, 'crates/contexts/room/northstar-room-application/src/mix_service.rs');
 verifyNativeAckService(mixServiceSource);
 const mixOutboxDbPermitOwners = new Map();
 const mixOutboxDbPermitCallPattern = /self\s*\.\s*outbox_db_admission_guard\s*\(\s*\)\s*\.\s*await/g;
@@ -1222,7 +1222,7 @@ for (let match; (match = mixOutboxDbPermitCallPattern.exec(mixServiceProduction)
   );
   if (!owner) {
     let offset = match.index;
-    for (const part of readModuleParts('src/services/mix.rs', { root, includeTests: false })) {
+    for (const part of readModuleParts('crates/contexts/room/northstar-room-application/src/mix_service.rs', { root, includeTests: false })) {
       if (offset <= part.source.length) {
         const line = countMatches(part.source.slice(0, offset), /\n/g) + 1;
         throw new Error(`${part.path}:${line} acquires an outbox DB permit outside a service method`);
@@ -1368,7 +1368,7 @@ if (
 }
 const mixAdapterSource = readProductionModule('src/db/mix_repository.rs', { root });
 for (const [serviceMethod] of mixProducerMappings) {
-  const body = structBody(mixServiceSource, `pub(crate) async fn ${serviceMethod}(`);
+  const body = structBody(mixServiceSource, `pub async fn ${serviceMethod}(`);
   const gate = body.indexOf('self.delivery_admission_guard().await');
   const adapter = structBody(mixAdapterSource, `async fn ${serviceMethod}(`);
   if (!adapter.includes(`db::${serviceMethod}(`)) {
@@ -1612,7 +1612,7 @@ for (const entry of [
   'begin_remote_pam_leave',
   'prune_expired_pam_results',
 ]) {
-  const body = structBody(mixServiceSource, `pub(crate) async fn ${entry}(`);
+  const body = structBody(mixServiceSource, `pub async fn ${entry}(`);
   const gate = body.indexOf('self.pam_capacity_admission_guard().await');
   const repository = body.search(new RegExp(`self\\s*\\.\\s*repository\\s*\\.\\s*${entry}\\s*\\(`));
   if (gate < 0 || repository < 0 || gate > repository) {
@@ -2657,7 +2657,7 @@ if (!/muc_destroy_effects\.notify_committed\(operation\.id\)\.await/.test(operat
   throw new Error('operation worker must wake committed MUC effects through the typed post-commit port');
 }
 const mucServiceSource = readProductionModule('crates/contexts/room/northstar-room-application/src/muc_service.rs', { root });
-const mucServiceBody = structBody(mucServiceSource, 'pub(crate) struct MucService');
+const mucServiceBody = structBody(mucServiceSource, 'pub struct MucService');
 if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(mucServiceBody)) {
   throw new Error('MucService must receive its repository port');
 }
@@ -3782,9 +3782,9 @@ const sessionRoutePort = structBody(sessionRouteMaintenanceSource, 'pub(crate) t
 const sessionRouteService = structBody(sessionRouteMaintenanceSource, 'impl<P: SessionRouteRenewalPort> SessionRouteRenewalService<P>');
 const sessionRouteRedisAdapter = rustItemBody(clusterSource, 'impl crate::services::session_route_maintenance::SessionRouteRenewalPort');
 const sessionRouteRelease = rustItemBody(clusterSource, 'async fn release_session_authority(');
-const mucSoftStatePort = structBody(mucServiceSource, 'pub(crate) trait MucSoftStateProjectionPort');
+const mucSoftStatePort = structBody(mucServiceSource, 'pub trait MucSoftStateProjectionPort');
 const mucSoftStateService = structBody(mucServiceSource, 'impl<P: MucSoftStateProjectionPort> MucSoftStateProjectionService<P>');
-const mucRedisAdapter = rustItemBody(clusterSource, 'impl northstar_room_application::muc_service::MucSoftStateProjectionPort for &ClusterMaintenanceRedis');
+const mucRedisAdapter = rustItemBody(clusterSource, 'impl MucSoftStateProjectionPort for &ClusterMaintenanceRedis');
 if (/\bstate\.cluster\b/.test(clusterMaintenance)
     || /\b(?:signer|pubsub|publisher|delivery_route)\s*:/.test(clusterRedisMaintenance)
     || !sessionRoutePort.includes('fn renew_authority(')

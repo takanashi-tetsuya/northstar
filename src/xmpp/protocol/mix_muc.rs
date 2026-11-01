@@ -7,11 +7,9 @@
 //! not invent an unsafe message/presence relay that could loop or disclose a
 //! semi-anonymous MUC occupant's real JID.
 
-use crate::{
-    services::mix::{MixMucLinkOutcome, MixRepository, MixService},
-    xmpp::xml_builder::XmlElement,
-};
+use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
+use northstar_room_application::mix_service::{MixMucLinkOutcome, MixRepository, MixService};
 
 pub(crate) const MIRROR_NS: &str = "urn:xmpp:mix:muc:0";
 

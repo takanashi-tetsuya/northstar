@@ -567,7 +567,7 @@ impl AppState {
         // dedicated PostgreSQL listener attests below.  It never trusts a
         // notification as delivery authority; schema matching only prevents
         // a shared database's unrelated schema from creating local scan load.
-        let mix_service = crate::services::mix::MixService::new_with_outbox_database_admission(
+        let mix_service = northstar_room_application::mix_service::MixService::new_with_outbox_database_admission(
             db::mix_repository::PostgresMixRepository::new(pool.clone()),
             config.domain.clone(),
             mix_message_content_identity,

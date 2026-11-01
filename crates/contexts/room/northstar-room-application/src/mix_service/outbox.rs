@@ -1,11 +1,11 @@
 //! The runtime holders for one Delivery claim and each accepted worker
 //! attempt. Dropping a holder destroys its child before retiring its owner.
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::ClaimedMixDelivery;
 use anyhow::Result;
 use futures::future::BoxFuture;
-pub(crate) use northstar_delivery_core::mix_outbox as core;
+pub use northstar_delivery_core::mix_outbox as core;
 use std::{
     future::Future,
     pin::Pin,
@@ -13,8 +13,8 @@ use std::{
     task::{Context, Poll},
 };
 
-#[cfg(test)]
-pub(crate) fn rows(deliveries: Vec<ClaimedMixDelivery>) -> core::Rows {
+#[cfg(any(test, feature = "test-support"))]
+pub fn rows(deliveries: Vec<ClaimedMixDelivery>) -> core::Rows {
     deliveries
         .into_iter()
         .map(|delivery| {
@@ -41,7 +41,7 @@ pub(crate) fn rows(deliveries: Vec<ClaimedMixDelivery>) -> core::Rows {
         .into()
 }
 
-pub(crate) fn commit_error<E: Into<anyhow::Error>>(error: core::CommitError<E>) -> anyhow::Error {
+pub fn commit_error<E: Into<anyhow::Error>>(error: core::CommitError<E>) -> anyhow::Error {
     match error {
         core::CommitError::Observation(error) => error.into(),
         core::CommitError::Commit(error) => error.into(),
@@ -49,12 +49,12 @@ pub(crate) fn commit_error<E: Into<anyhow::Error>>(error: core::CommitError<E>) 
 }
 
 #[derive(Clone)]
-pub(crate) struct ClaimHandle {
-    pub(crate) observation: core::ClaimObservation,
+pub struct ClaimHandle {
+    pub observation: core::ClaimObservation,
     terminal: Arc<Mutex<Option<core::TerminalReason>>>,
 }
 impl ClaimHandle {
-    pub(crate) fn finish_as(&self, reason: core::TerminalReason) {
+    pub fn finish_as(&self, reason: core::TerminalReason) {
         self.terminal
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -80,16 +80,16 @@ impl ClaimHandle {
     }
 }
 
-pub(crate) struct ClaimTurn {
+pub struct ClaimTurn {
     request: core::ClaimRequest,
     handle: ClaimHandle,
 }
 impl ClaimTurn {
-    #[cfg(test)]
-    pub(crate) fn observation(&self) -> core::ClaimObservation {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn observation(&self) -> core::ClaimObservation {
         self.handle.observation.clone()
     }
-    pub(crate) fn new(limit: i64, max_bytes: i64) -> Result<Self> {
+    pub fn new(limit: i64, max_bytes: i64) -> Result<Self> {
         let observation = core::ClaimObservation::new(core::ClaimCommand { limit, max_bytes });
         let request = observation.request()?;
         Ok(Self {
@@ -100,7 +100,7 @@ impl ClaimTurn {
             },
         })
     }
-    pub(crate) fn run<F>(
+    pub fn run<F>(
         self,
         child: impl FnOnce(core::ClaimRequest, ClaimHandle) -> F + Send + 'static,
     ) -> ClaimRun
@@ -121,7 +121,7 @@ impl ClaimTurn {
     }
 }
 
-pub(crate) struct ClaimRun {
+pub struct ClaimRun {
     child: Option<BoxFuture<'static, Result<Vec<OwnedAttempt>>>>,
     retirement: ClaimRetirement,
 }
@@ -183,12 +183,12 @@ impl Drop for ClaimRun {
 }
 
 #[derive(Clone)]
-pub(crate) struct AttemptHandle {
-    pub(crate) observation: core::Observation,
+pub struct AttemptHandle {
+    pub observation: core::Observation,
     terminal: Arc<Mutex<Option<core::TerminalReason>>>,
 }
 impl AttemptHandle {
-    pub(crate) fn finish_as(&self, reason: core::TerminalReason) {
+    pub fn finish_as(&self, reason: core::TerminalReason) {
         self.terminal
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -218,12 +218,12 @@ impl AttemptHandle {
 
 /// The raw DTO does not construct this wrapper. Only accepted observed claim
 /// completion hands the runtime a consuming core attempt.
-pub(crate) struct OwnedAttempt {
+pub struct OwnedAttempt {
     attempt: Option<core::Attempt>,
     handle: AttemptHandle,
 }
 impl OwnedAttempt {
-    pub(crate) fn new(attempt: core::Attempt) -> Self {
+    pub fn new(attempt: core::Attempt) -> Self {
         let observation = attempt.observation();
         Self {
             attempt: Some(attempt),
@@ -233,11 +233,11 @@ impl OwnedAttempt {
             },
         }
     }
-    #[cfg(test)]
-    pub(crate) fn observation(&self) -> core::Observation {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn observation(&self) -> core::Observation {
         self.handle.observation.clone()
     }
-    pub(crate) fn run<F>(
+    pub fn run<F>(
         mut self,
         child: impl FnOnce(core::Attempt, AttemptHandle) -> F + Send + 'static,
     ) -> AttemptRun
@@ -267,7 +267,7 @@ impl Drop for OwnedAttempt {
         }
     }
 }
-pub(crate) struct AttemptRun {
+pub struct AttemptRun {
     child: Option<BoxFuture<'static, Result<()>>>,
     retirement: AttemptRetirement,
 }
@@ -328,18 +328,18 @@ impl Drop for AttemptRun {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod fixture {
+#[cfg(any(test, feature = "test-support"))]
+pub mod fixture {
     use super::*;
     use uuid::Uuid;
 
-    pub(crate) fn claimed_rows(archive: bool) -> core::Rows {
+    pub fn claimed_rows(archive: bool) -> core::Rows {
         rows(vec![ClaimedMixDelivery {
             delivery_id: Uuid::from_u128(91),
             event_id: Uuid::from_u128(92),
             channel_id: Uuid::from_u128(93),
             channel_jid: "room@mix.local.test".into(),
-            recipient: crate::services::mix::MixParticipant {
+            recipient: crate::mix_service::MixParticipant {
                 participant_id: Uuid::from_u128(94),
                 jid: "bob@local.test".into(),
                 nick: None,
@@ -353,7 +353,7 @@ pub(crate) mod fixture {
             route_wake_generation: 12,
         }])
     }
-    pub(crate) fn attempt(archive: bool) -> core::Attempt {
+    pub fn attempt(archive: bool) -> core::Attempt {
         let observation = core::ClaimObservation::new(core::ClaimCommand {
             limit: 1,
             max_bytes: 8 * 1024 * 1024,
@@ -365,7 +365,7 @@ pub(crate) mod fixture {
         request.received(entered, rows.clone()).unwrap();
         request.returned(rows).unwrap().pop().unwrap()
     }
-    pub(crate) fn route(archive: bool) -> (core::Observation, core::RouteRequest) {
+    pub fn route(archive: bool) -> (core::Observation, core::RouteRequest) {
         let attempt = attempt(archive);
         let observation = attempt.observation();
         let request = attempt
@@ -374,9 +374,7 @@ pub(crate) mod fixture {
         request.start().unwrap();
         (observation, request)
     }
-    pub(crate) fn settlement(
-        kind: core::SettlementKind,
-    ) -> (core::Observation, core::SettlementRequest) {
+    pub fn settlement(kind: core::SettlementKind) -> (core::Observation, core::SettlementRequest) {
         let (owner, request) = route(false);
         let (result, command) = match kind {
             core::SettlementKind::Ack => (
@@ -412,7 +410,7 @@ pub(crate) mod fixture {
     }
     /// Inject a destructor-bearing child into the actual holder. This is a
     /// finite lifetime control, not an alternate production claim adapter.
-    pub(crate) fn claim_probe(
+    pub fn claim_probe(
         child: impl FnOnce(&core::ClaimObservation) -> BoxFuture<'static, Result<Vec<OwnedAttempt>>>,
     ) -> (core::ClaimObservation, ClaimRun) {
         let turn = ClaimTurn::new(1, 8 * 1024 * 1024).unwrap();
@@ -428,7 +426,7 @@ pub(crate) mod fixture {
         };
         (observation, run)
     }
-    pub(crate) fn attempt_probe(
+    pub fn attempt_probe(
         child: impl FnOnce(&core::Observation) -> BoxFuture<'static, Result<()>>,
     ) -> (core::Observation, AttemptRun) {
         let mut owned = OwnedAttempt::new(attempt(false));

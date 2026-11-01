@@ -3403,7 +3403,31 @@
     ],
     [
       "northstar-room-application",
+      "northstar-abuse-policy"
+    ],
+    [
+      "northstar-room-application",
+      "northstar-archive-core"
+    ],
+    [
+      "northstar-room-application",
+      "northstar-delivery-core"
+    ],
+    [
+      "northstar-room-application",
+      "northstar-federation-core"
+    ],
+    [
+      "northstar-room-application",
       "northstar-room-core"
+    ],
+    [
+      "northstar-room-application",
+      "northstar-roster-core"
+    ],
+    [
+      "northstar-room-application",
+      "northstar-runtime"
     ],
     [
       "northstar-room-application",
@@ -3415,7 +3439,19 @@
     ],
     [
       "northstar-room-application",
+      "northstar-xml-builder"
+    ],
+    [
+      "northstar-room-application",
       "northstar-xmpp-types"
+    ],
+    [
+      "northstar-room-application",
+      "rand"
+    ],
+    [
+      "northstar-room-application",
+      "roxmltree"
     ],
     [
       "northstar-room-application",

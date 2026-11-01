@@ -11,7 +11,7 @@ use super::*;
 /// advances the same generation after reconnecting, forcing a fresh durable
 /// probe for notifications that may have been missed during that gap.
 #[derive(Debug)]
-pub(crate) struct MixDeliveryWakeBroker {
+pub struct MixDeliveryWakeBroker {
     pub(super) schema: String,
     pub(super) sender: watch::Sender<u64>,
 }
@@ -47,7 +47,7 @@ impl MixDeliveryWakeBroker {
     /// call has completed successfully.  The database trigger publishes the
     /// same committed fact to other processes; this direct edge avoids making
     /// the writer wait for its own listener under CPU pressure.
-    pub(crate) fn publish_local_commit(&self) {
+    pub fn publish_local_commit(&self) {
         self.advance();
     }
 
@@ -55,14 +55,14 @@ impl MixDeliveryWakeBroker {
     /// may have missed a PostgreSQL notification.  Wake every lane so it
     /// performs an authoritative claim; the periodic scan remains the final
     /// recovery path if PostgreSQL itself is unavailable.
-    pub(crate) fn publish_listener_transition(&self) {
+    pub fn publish_listener_transition(&self) {
         self.advance();
     }
 
     /// Accept the bounded, non-secret schema payload emitted by migration
     /// 0133.  An unexpected payload has no authority and must not generate
     /// unrelated cross-schema load.
-    pub(crate) fn accept_committed_notification(&self, schema: &str) -> bool {
+    pub fn accept_committed_notification(&self, schema: &str) -> bool {
         if schema != self.schema {
             return false;
         }
@@ -70,7 +70,7 @@ impl MixDeliveryWakeBroker {
         true
     }
 
-    pub(crate) fn subscribe(&self) -> MixDeliveryWakeSubscription {
+    pub fn subscribe(&self) -> MixDeliveryWakeSubscription {
         MixDeliveryWakeSubscription {
             receiver: self.sender.subscribe(),
         }
@@ -78,7 +78,7 @@ impl MixDeliveryWakeBroker {
 }
 
 /// One MIX outbox lane's lossless local wake receiver.
-pub(crate) struct MixDeliveryWakeSubscription {
+pub struct MixDeliveryWakeSubscription {
     pub(super) receiver: watch::Receiver<u64>,
 }
 
@@ -86,7 +86,7 @@ impl MixDeliveryWakeSubscription {
     /// `watch` retains an unseen value.  Therefore this resolves immediately
     /// for a notification that happened before a lane installed its next
     /// wait, rather than relying on an edge-triggered `Notify` permit.
-    pub(crate) async fn changed(&mut self) -> bool {
+    pub async fn changed(&mut self) -> bool {
         self.receiver.changed().await.is_ok()
     }
 }
@@ -95,7 +95,7 @@ impl<R: MixRepository> MixService<R> {
     /// Expose the broker only to the existing dedicated PostgreSQL listener.
     /// Protocol handlers receive subscriptions, never a raw notification
     /// sender, so they cannot turn uncommitted input into a wake fact.
-    pub(crate) fn delivery_wake_broker(&self) -> Arc<MixDeliveryWakeBroker> {
+    pub fn delivery_wake_broker(&self) -> Arc<MixDeliveryWakeBroker> {
         Arc::clone(&self.delivery_wake)
     }
 }

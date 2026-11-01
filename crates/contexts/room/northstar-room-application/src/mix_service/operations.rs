@@ -3,88 +3,88 @@
 use super::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MixEvent {
-    pub(crate) id: Uuid,
-    pub(crate) item_id: String,
-    pub(crate) payload: String,
-    pub(crate) created_at: DateTime<Utc>,
+pub struct MixEvent {
+    pub id: Uuid,
+    pub item_id: String,
+    pub payload: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MixEventPage {
-    pub(crate) events: Vec<MixEvent>,
+pub struct MixEventPage {
+    pub events: Vec<MixEvent>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum MixReadOutcome<T> {
+pub enum MixReadOutcome<T> {
     Found(T),
     Unauthorized,
     NotFound,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MixMamPage {
-    pub(crate) events: Vec<MixEvent>,
-    pub(crate) total: i64,
-    pub(crate) first_index: i64,
-    pub(crate) complete: bool,
+pub struct MixMamPage {
+    pub events: Vec<MixEvent>,
+    pub total: i64,
+    pub first_index: i64,
+    pub complete: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MixPresenceItem {
-    pub(crate) item_id: String,
-    pub(crate) payload: String,
-    pub(crate) source_full_jid: Option<String>,
+pub struct MixPresenceItem {
+    pub item_id: String,
+    pub payload: String,
+    pub source_full_jid: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MixPresenceProbeTarget {
-    pub(crate) channel_jid: String,
-    pub(crate) participant_jid: String,
+pub struct MixPresenceProbeTarget {
+    pub channel_jid: String,
+    pub participant_jid: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MixDiscoPage {
-    pub(crate) channels: Vec<MixChannel>,
-    pub(crate) total: i64,
-    pub(crate) first_index: i64,
+pub struct MixDiscoPage {
+    pub channels: Vec<MixChannel>,
+    pub total: i64,
+    pub first_index: i64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ArchiveBoundary {
-    pub(crate) id: Uuid,
-    pub(crate) created_at: chrono::DateTime<chrono::Utc>,
+pub struct ArchiveBoundary {
+    pub id: Uuid,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct VCardRecord {
-    pub(crate) payload_vcard_temp: Option<String>,
+pub struct VCardRecord {
+    pub payload_vcard_temp: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PepNodeConfig {
-    pub(crate) access_model: String,
-    pub(crate) max_items: i32,
-    pub(crate) persist_items: bool,
-    pub(crate) send_last_published_item: String,
-    pub(crate) deliver_notifications: bool,
-    pub(crate) roster_groups_allowed: Vec<String>,
-    pub(crate) access_whitelist: Vec<String>,
+pub struct PepNodeConfig {
+    pub access_model: String,
+    pub max_items: i32,
+    pub persist_items: bool,
+    pub send_last_published_item: String,
+    pub deliver_notifications: bool,
+    pub roster_groups_allowed: Vec<String>,
+    pub access_whitelist: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MixMucMirror {
-    pub(crate) mix_channel_id: Uuid,
-    pub(crate) muc_room_id: Uuid,
-    pub(crate) localpart: String,
-    pub(crate) mix_domain: String,
+pub struct MixMucMirror {
+    pub mix_channel_id: Uuid,
+    pub muc_room_id: Uuid,
+    pub localpart: String,
+    pub mix_domain: String,
 }
 
 /// MIX-owned XEP-0059 page selector. The MAM slice keeps its own vocabulary;
 /// MIX parses the same forms into this boundary type so the repository never
 /// receives a protocol-shaped query directly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MamRsmPage {
+pub enum MamRsmPage {
     First,
     Last,
     Before(Uuid),
@@ -98,20 +98,41 @@ pub(crate) enum MamRsmPage {
 
 /// MIX-owned archive query consumed by `mix_mam_page*`.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MamArchiveQuery {
-    pub(crate) with_jid: Option<String>,
-    pub(crate) start: Option<DateTime<Utc>>,
-    pub(crate) end: Option<DateTime<Utc>>,
-    pub(crate) before_id: Option<Uuid>,
-    pub(crate) after_id: Option<Uuid>,
-    pub(crate) ids: Vec<Uuid>,
-    pub(crate) page: MamRsmPage,
-    pub(crate) max: i64,
+pub struct MamArchiveQuery {
+    pub with_jid: Option<String>,
+    pub start: Option<DateTime<Utc>>,
+    pub end: Option<DateTime<Utc>>,
+    pub before_id: Option<Uuid>,
+    pub after_id: Option<Uuid>,
+    pub ids: Vec<Uuid>,
+    pub page: MamRsmPage,
+    pub max: i64,
+}
+
+impl From<northstar_archive_core::MamArchiveQuery> for MamArchiveQuery {
+    fn from(query: northstar_archive_core::MamArchiveQuery) -> Self {
+        Self {
+            with_jid: query.with_jid,
+            start: query.start,
+            end: query.end,
+            before_id: query.before_id,
+            after_id: query.after_id,
+            ids: query.ids,
+            page: match query.page {
+                northstar_archive_core::MamRsmPage::First => MamRsmPage::First,
+                northstar_archive_core::MamRsmPage::Last => MamRsmPage::Last,
+                northstar_archive_core::MamRsmPage::Before(id) => MamRsmPage::Before(id),
+                northstar_archive_core::MamRsmPage::After(id) => MamRsmPage::After(id),
+                northstar_archive_core::MamRsmPage::Index(index) => MamRsmPage::Index(index),
+            },
+            max: query.max,
+        }
+    }
 }
 
 /// Current cluster session-route ownership for a claimed durable MIX outbox row. The implementation reads
 /// authority outside the claimed outbox transaction; it receives no publication or session-mutation authority.
-pub(crate) trait MixClusterRouteLookup: Send + Sync {
+pub trait MixClusterRouteLookup: Send + Sync {
     fn lookup_nodes<'a>(
         &'a self,
         jid: &'a str,
@@ -123,7 +144,7 @@ impl<R: MixRepository> MixService<R> {
     /// repository proves that the authenticated bare JID still owns both.
     /// The protocol receives only a typed business outcome, never the pool or
     /// the repository's cross-table mutation primitive.
-    pub(crate) async fn link_local_muc_mirror(
+    pub async fn link_local_muc_mirror(
         &self,
         mix_domain: &str,
         localpart: &str,
@@ -135,7 +156,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn create_mix_channel(
+    pub async fn create_mix_channel(
         &self,
         service_domain: &str,
         requested_localpart: Option<&str>,
@@ -153,14 +174,14 @@ impl<R: MixRepository> MixService<R> {
             )
             .await
     }
-    pub(crate) async fn mix_channel(
+    pub async fn mix_channel(
         &self,
         service_domain: &str,
         localpart: &str,
     ) -> Result<Option<MixChannel>> {
         self.repository.mix_channel(service_domain, localpart).await
     }
-    pub(crate) async fn discoverable_mix_channel_page(
+    pub async fn discoverable_mix_channel_page(
         &self,
         service_domain: &str,
         requester: &str,
@@ -172,10 +193,10 @@ impl<R: MixRepository> MixService<R> {
             .discoverable_mix_channel_page(service_domain, requester, after, before, max)
             .await
     }
-    pub(crate) async fn mix_role(&self, channel_id: Uuid, jid: &str) -> Result<Option<String>> {
+    pub async fn mix_role(&self, channel_id: Uuid, jid: &str) -> Result<Option<String>> {
         self.repository.mix_role(channel_id, jid).await
     }
-    pub(crate) async fn mix_channel_discoverable_to(
+    pub async fn mix_channel_discoverable_to(
         &self,
         channel: &MixChannel,
         actor: &str,
@@ -185,14 +206,14 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn mix_participant(
+    pub async fn mix_participant(
         &self,
         channel_id: Uuid,
         jid: &str,
     ) -> Result<Option<MixParticipant>> {
         self.repository.mix_participant(channel_id, jid).await
     }
-    pub(crate) async fn mix_participant_by_id(
+    pub async fn mix_participant_by_id(
         &self,
         channel_id: Uuid,
         participant_id: Uuid,
@@ -201,7 +222,7 @@ impl<R: MixRepository> MixService<R> {
             .mix_participant_by_id(channel_id, participant_id)
             .await
     }
-    pub(crate) async fn mix_presence_source_jid(
+    pub async fn mix_presence_source_jid(
         &self,
         channel_id: Uuid,
         item_id: &str,
@@ -214,7 +235,7 @@ impl<R: MixRepository> MixService<R> {
     /// Consult the immutable replay commitment before any mutable participant
     /// or permission check. A miss never writes; first execution is still
     /// admitted only inside the channel transaction.
-    pub(crate) async fn lookup_mix_message_replay(
+    pub async fn lookup_mix_message_replay(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -228,7 +249,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn lookup_mix_retraction_replay(
+    pub async fn lookup_mix_retraction_replay(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -242,7 +263,7 @@ impl<R: MixRepository> MixService<R> {
             .lookup_mix_retraction_replay(channel_id, actor, target_id, identity, &authenticators)
             .await
     }
-    pub(crate) async fn authorized_mix_event_page(
+    pub async fn authorized_mix_event_page(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -255,7 +276,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn authorized_mix_mam_page(
+    pub async fn authorized_mix_mam_page(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -266,7 +287,7 @@ impl<R: MixRepository> MixService<R> {
             .authorized_mix_mam_page(channel_id, actor, viewer_id, query)
             .await
     }
-    pub(crate) async fn authorized_mix_mam_boundaries(
+    pub async fn authorized_mix_mam_boundaries(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -276,7 +297,7 @@ impl<R: MixRepository> MixService<R> {
             .authorized_mix_mam_boundaries(channel_id, actor, viewer_id)
             .await
     }
-    pub(crate) async fn authorized_mix_access_entries(
+    pub async fn authorized_mix_access_entries(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -288,7 +309,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn mix_participant_preference(
+    pub async fn mix_participant_preference(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -298,7 +319,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn authorized_mix_jid_map_entries(
+    pub async fn authorized_mix_jid_map_entries(
         &self,
         channel_id: Uuid,
         actor: &str,
@@ -308,7 +329,7 @@ impl<R: MixRepository> MixService<R> {
             .authorized_mix_jid_map_entries(channel_id, actor, limit)
             .await
     }
-    pub(crate) async fn issue_mix_invitation(
+    pub async fn issue_mix_invitation(
         &self,
         channel_id: Uuid,
         inviter: &str,
@@ -321,7 +342,7 @@ impl<R: MixRepository> MixService<R> {
             .issue_mix_invitation(channel_id, inviter, invitee, token, lifetime, federated)
             .await
     }
-    pub(crate) async fn mix_private_message_recipient(
+    pub async fn mix_private_message_recipient(
         &self,
         channel_id: Uuid,
         sender: &str,
@@ -332,7 +353,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn lookup_remote_pam_operation(
+    pub async fn lookup_remote_pam_operation(
         &self,
         user_id: Uuid,
         requester_full_jid: &str,
@@ -349,7 +370,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn complete_remote_pam_success(
+    pub async fn complete_remote_pam_success(
         &self,
         authenticated_domain: &str,
         channel_jid: &str,
@@ -371,7 +392,7 @@ impl<R: MixRepository> MixService<R> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn complete_remote_pam_error(
+    pub async fn complete_remote_pam_error(
         &self,
         authenticated_domain: &str,
         channel_jid: &str,
@@ -393,33 +414,30 @@ impl<R: MixRepository> MixService<R> {
             )
             .await
     }
-    pub(crate) async fn pam_memberships(&self, user_id: Uuid) -> Result<Vec<PamMembership>> {
+    pub async fn pam_memberships(&self, user_id: Uuid) -> Result<Vec<PamMembership>> {
         self.repository.pam_memberships(user_id).await
     }
-    pub(crate) async fn pam_membership(
+    pub async fn pam_membership(
         &self,
         user_id: Uuid,
         channel_jid: &str,
     ) -> Result<Option<PamMembership>> {
         self.repository.pam_membership(user_id, channel_jid).await
     }
-    pub(crate) async fn local_pam_users_for_channel(&self, channel_jid: &str) -> Result<Vec<Uuid>> {
+    pub async fn local_pam_users_for_channel(&self, channel_jid: &str) -> Result<Vec<Uuid>> {
         self.repository
             .local_pam_users_for_channel(channel_jid)
             .await
     }
 
-    pub(crate) async fn find_enabled_user(&self, username: &str) -> Result<Option<MixAccount>> {
+    pub async fn find_enabled_user(&self, username: &str) -> Result<Option<MixAccount>> {
         self.repository.find_enabled_user(username).await
     }
 
-    pub(crate) async fn find_enabled_user_by_id(
-        &self,
-        user_id: Uuid,
-    ) -> Result<Option<MixAccount>> {
+    pub async fn find_enabled_user_by_id(&self, user_id: Uuid) -> Result<Option<MixAccount>> {
         self.repository.find_enabled_user_by_id(user_id).await
     }
-    pub(crate) async fn is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool> {
+    pub async fn is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool> {
         self.repository.is_blocked(owner_id, candidate).await
     }
 
@@ -428,7 +446,7 @@ impl<R: MixRepository> MixService<R> {
     /// The route handle reads PostgreSQL's current session ownership outside
     /// the claimed outbox transaction. Do not retain a scarce outbox database
     /// admission permit while this separate authority read is pending.
-    pub(crate) async fn outbox_lookup_cluster_nodes(
+    pub async fn outbox_lookup_cluster_nodes(
         &self,
         routes: &impl MixClusterRouteLookup,
         jid: &str,
@@ -436,14 +454,10 @@ impl<R: MixRepository> MixService<R> {
         routes.lookup_nodes(jid).await
     }
 
-    pub(crate) async fn pep_node(
-        &self,
-        owner_id: Uuid,
-        node: &str,
-    ) -> Result<Option<PepNodeConfig>> {
+    pub async fn pep_node(&self, owner_id: Uuid, node: &str) -> Result<Option<PepNodeConfig>> {
         self.repository.pep_node(owner_id, node).await
     }
-    pub(crate) async fn pep_items(
+    pub async fn pep_items(
         &self,
         owner_id: Uuid,
         node: &str,
@@ -454,10 +468,10 @@ impl<R: MixRepository> MixService<R> {
             .pep_items(owner_id, node, item_id, limit)
             .await
     }
-    pub(crate) async fn get_vcard(&self, user_id: Uuid) -> Result<VCardRecord> {
+    pub async fn get_vcard(&self, user_id: Uuid) -> Result<VCardRecord> {
         self.repository.get_vcard(user_id).await
     }
-    pub(crate) async fn latest_roster_change_for_contact(
+    pub async fn latest_roster_change_for_contact(
         &self,
         user_id: Uuid,
         contact_jid: &str,
@@ -466,25 +480,22 @@ impl<R: MixRepository> MixService<R> {
             .latest_roster_change_for_contact(user_id, contact_jid)
             .await
     }
-    pub(crate) async fn mix_muc_mirror_for_mix(
+    pub async fn mix_muc_mirror_for_mix(
         &self,
         mix_channel_id: Uuid,
     ) -> Result<Option<MixMucMirror>> {
         self.repository.mix_muc_mirror_for_mix(mix_channel_id).await
     }
-    pub(crate) async fn mix_muc_mirror_for_muc(
-        &self,
-        muc_room_id: Uuid,
-    ) -> Result<Option<MixMucMirror>> {
+    pub async fn mix_muc_mirror_for_muc(&self, muc_room_id: Uuid) -> Result<Option<MixMucMirror>> {
         self.repository.mix_muc_mirror_for_muc(muc_room_id).await
     }
-    pub(crate) async fn mix_muc_mirror_service_complete(&self, mix_domain: &str) -> Result<bool> {
+    pub async fn mix_muc_mirror_service_complete(&self, mix_domain: &str) -> Result<bool> {
         self.repository
             .mix_muc_mirror_service_complete(mix_domain)
             .await
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn archive_mix_message_once(
+    pub async fn archive_mix_message_once(
         &self,
         personal_archive_id: Uuid,
         owner_id: Uuid,
@@ -510,7 +521,7 @@ impl<R: MixRepository> MixService<R> {
     /// Admit one ordered federation response stream atomically. A capacity or
     /// validation failure rolls the complete stream back, so the remote peer
     /// cannot observe a MAM prefix without its terminal result (or vice versa).
-    pub(crate) async fn enqueue_s2s_response_batch(
+    pub async fn enqueue_s2s_response_batch(
         &self,
         target_domain: &str,
         responses: &[String],
@@ -521,7 +532,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn federated_mix_iq_replay(
+    pub async fn federated_mix_iq_replay(
         &self,
         authenticated_domain: &str,
         actor_jid: &str,
@@ -533,7 +544,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub(crate) async fn admit_federated_mix_iq_result(
+    pub async fn admit_federated_mix_iq_result(
         &self,
         authenticated_domain: &str,
         actor_jid: &str,
@@ -555,17 +566,17 @@ impl<R: MixRepository> MixService<R> {
     }
 }
 
-pub(crate) fn valid_stable_participant_id(value: &str) -> bool {
+pub fn valid_stable_participant_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 1023
         && !value.contains('@')
         && !value.contains('/')
         && !value.contains('#')
 }
-pub(crate) fn mix_timestamp_item_id() -> String {
+pub fn mix_timestamp_item_id() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
 }
-pub(crate) fn valid_join_nodes(nodes: &[String]) -> Result<Vec<String>> {
+pub fn valid_join_nodes(nodes: &[String]) -> Result<Vec<String>> {
     let mut unique = std::collections::BTreeSet::new();
     anyhow::ensure!(
         nodes.len() <= SUBSCRIBABLE_NODES.len(),
@@ -580,13 +591,13 @@ pub(crate) fn valid_join_nodes(nodes: &[String]) -> Result<Vec<String>> {
     }
     Ok(unique.into_iter().collect())
 }
-pub(crate) fn prepare_mix_nick(nick: &str) -> Result<String> {
+pub fn prepare_mix_nick(nick: &str) -> Result<String> {
     northstar_xmpp_types::jid::prepare_resourcepart(nick)
 }
-pub(crate) fn canonical_mix_access_pattern(pattern: &str) -> Result<String> {
+pub fn canonical_mix_access_pattern(pattern: &str) -> Result<String> {
     northstar_xmpp_types::jid::CanonicalJid::parse_bare(pattern).map(|jid| jid.to_string())
 }
-pub(crate) fn participant_jid_visible(
+pub fn participant_jid_visible(
     channel: &MixChannel,
     preference: &MixParticipantPreference,
 ) -> bool {

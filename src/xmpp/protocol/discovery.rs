@@ -1,11 +1,11 @@
 use super::{Action, ProtocolSession};
-use crate::services::mix::{
-    CORE_NODES, NODE_ALLOWED, NODE_AVATAR_DATA, NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG,
-    NODE_JIDMAP,
-};
 use crate::services::xml_util::*;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
+use northstar_room_application::mix_service::{
+    CORE_NODES, NODE_ALLOWED, NODE_AVATAR_DATA, NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG,
+    NODE_JIDMAP,
+};
 
 const DISCO_INFO_NS: &str = "http://jabber.org/protocol/disco#info";
 const DISCO_ITEMS_NS: &str = "http://jabber.org/protocol/disco#items";

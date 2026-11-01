@@ -15,9 +15,10 @@
 
 use super::protocol::ClientTransport;
 use crate::services::message_admission::witness::DirectOperationHandle;
-use crate::services::mix::foreground::{self, MixForegroundSlot};
 use northstar_auth_application::authentication::publication;
 use northstar_message_application::direct_lifecycle::TerminalReason;
+use northstar_room_application::mix_service::foreground;
+use northstar_room_application::mix_service::foreground::MixForegroundSlot;
 use northstar_room_application::muc_service::discussion;
 use northstar_room_application::muc_service::discussion::MucDiscussionSlot;
 use std::{

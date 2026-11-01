@@ -1,6 +1,7 @@
 //! Scoped Redis maintenance authority: session leases, MUC soft-state projection and node projection cleanup.
 
 use super::*;
+use northstar_room_application::muc_service::MucSoftStateProjectionPort;
 
 /// PostgreSQL-fenced maintenance of disposable Redis projections. This handle
 /// has no signer, publication gate, PubSub client, or delivery route.
@@ -353,9 +354,7 @@ impl crate::services::session_route_maintenance::SessionRouteRenewalPort
     }
 }
 
-impl northstar_room_application::muc_service::MucSoftStateProjectionPort
-    for &ClusterMaintenanceRedis
-{
+impl MucSoftStateProjectionPort for &ClusterMaintenanceRedis {
     async fn join_room(&self, room_jid: &str) -> Result<()> {
         self.join_muc(room_jid).await
     }

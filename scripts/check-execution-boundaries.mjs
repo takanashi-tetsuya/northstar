@@ -33,12 +33,12 @@ const files = {
   mucDb: 'src/db/muc.rs',
   mucRepository: 'src/db/room.rs',
   mix: 'src/xmpp/protocol/mix.rs',
-  mixService: 'src/services/mix.rs',
+  mixService: 'crates/contexts/room/northstar-room-application/src/mix_service.rs',
   mixCore: 'crates/contexts/room/northstar-room-application/src/mix.rs',
   mixData: 'crates/contexts/room/northstar-room-core/src/mix.rs',
-  mixSlot: 'src/services/mix/foreground.rs',
+  mixSlot: 'crates/contexts/room/northstar-room-application/src/mix_service/foreground.rs',
   mixWorkerCore: 'crates/contexts/message/northstar-delivery-core/src/mix_outbox.rs',
-  mixWorkerOwner: 'src/services/mix/outbox.rs',
+  mixWorkerOwner: 'crates/contexts/room/northstar-room-application/src/mix_service/outbox.rs',
   mixWorker: 'src/xmpp/protocol/mix/worker.rs',
   mixArchive: 'src/db/archive.rs',
   state: 'src/state.rs',
@@ -212,10 +212,10 @@ export function readExecutionSources() {
 // This checks source wiring, not transaction success or exact-token SQL behavior.
 export function verifyNativeAckService(source) {
   const normalize = value => compact(value).replace(/,\)/g, ')');
-  const legacy = normalize(body(source, 'pub\\s*\\(crate\\)\\s+async\\s+fn\\s+acknowledge_mix_delivery\\b'));
+  const legacy = normalize(body(source, 'pub\\s+async\\s+fn\\s+acknowledge_mix_delivery\\b'));
   requireBoundary(legacy === 'self.acknowledge_mix_delivery_inner(delivery_id,lease_token,None).await',
     'legacy MIX acknowledgement must forward the exact delivery/token without an observation');
-  const observed = normalize(body(source, 'pub\\s*\\(crate\\)\\s+async\\s+fn\\s+acknowledge_mix_socket_write\\b'));
+  const observed = normalize(body(source, 'pub\\s+async\\s+fn\\s+acknowledge_mix_socket_write\\b'));
   requireBoundary(observed === 'letnorthstar_delivery_core::TransportOwnershipSource::Mix(source)=request.source()else{anyhow::bail!();};self.acknowledge_mix_delivery_inner(source.delivery_id,source.lease_token,Some(request)).await',
     'native MIX acknowledgement must extract its exact source and forward the same request');
   const shared = normalize(body(source, 'async\\s+fn\\s+acknowledge_mix_delivery_inner\\b'));
@@ -424,7 +424,7 @@ export function verifyBoshTransferBoundaries({ bosh, boshOwner, boshCore, mixSer
     'item.complete_mix_handoff(MixTransportCompletion::BoshPersisted{session_id:local.session_id(),});',
     'local.notification_attempted();', 'letaccepted=output.push(item);', 'local.queue_returned(accepted);'],
   'BOSH must retain exact source mutation, notification attempt and actual FIFO result independently');
-  const service = normalize(body(mixService, 'pub\\s*\\(crate\\)\\s+async\\s+fn\\s+transfer_mix_delivery_to_bosh\\b'));
+  const service = normalize(body(mixService, 'pub\\s+async\\s+fn\\s+transfer_mix_delivery_to_bosh\\b'));
   requireBoundary(service === 'let_admission=self.outbox_db_admission_guard().await;self.repository.transfer_mix_delivery_to_bosh(request).await',
     'BOSH MIX service must retain existing admission and forward the same closed request');
   const repository = normalize(body(mixRepository, 'async\\s+fn\\s+transfer_mix_delivery_to_bosh\\b'));
@@ -1475,16 +1475,16 @@ export function verifyMixForegroundBoundaries({ mix, mixCore, mixData, mixSlot, 
   requireBoundary(preparation === 'if!ingress.matches_receiving_domain(&self.configured_mix_domain){returnErr(foreground::Rejected::Input);}Ok(foreground::PreparedIngress::new(ingress))',
     'MIX ingress cannot supply its own receiving authority');
   for (const [method, runner] of [['store_mix_message_observed', 'admit_observed'], ['lookup_mix_message_replay_observed', 'read_observed']]) {
-    const service = dense(body(mixService, `pub\\(crate\\)\\s+async\\s+fn\\s+${method}\\b`));
-    requireBoundary(service.includes(`northstar_room_application::mix::${runner}(request,&self.configured_mix_domain,self.repository.${method}(`),
+    const service = dense(body(mixService, `pub\\s+async\\s+fn\\s+${method}\\b`));
+    requireBoundary(service.includes(`crate::mix::${runner}(request,&self.configured_mix_domain,self.repository.${method}(`),
       'MIX observed service must retain the receiving domain and bound repository request');
   }
-  const storeService = dense(body(mixService, 'pub\\(crate\\)\\s+async\\s+fn\\s+store_mix_message_observed\\b'));
-  const legacyService = dense(body(mixService, 'pub\\(crate\\)\\s+async\\s+fn\\s+store_mix_message\\b'));
+  const storeService = dense(body(mixService, 'pub\\s+async\\s+fn\\s+store_mix_message_observed\\b'));
+  const legacyService = dense(body(mixService, 'pub\\s+async\\s+fn\\s+store_mix_message\\b'));
   ordered(legacyService, ['self.delivery_admission_guard().await;', 'self.repository.store_mix_message(request,authenticators.as_ref()).await?'],
     'MIX compatibility service must preserve its existing fair admission guard');
   ordered(storeService, ['let_admission=self.delivery_admission_guard().await;',
-    'northstar_room_application::mix::admit_observed(', 'completion.into_wake(request.observation())?',
+    'crate::mix::admit_observed(', 'completion.into_wake(request.observation())?',
     'wake.invoke(||self.publish_delivery_local_commit())?', 'Ok(result)'],
     'MIX observed service must keep fair admission and consume its exact one-shot wake');
   requireBoundary(count(storeService, 'self.publish_delivery_local_commit()') === 1,
@@ -1569,17 +1569,17 @@ export function verifyMixForegroundBoundaries({ mix, mixCore, mixData, mixSlot, 
     'MIX retirement must remain in the frame terminal phase');
   const channel = dense(body(mix, 'async\\s+fn\\s+process_channel_message\\b'));
   const foregroundRegistration = 'letforeground=ifretraction_target.is_none(){ifletSome(frames)=observation{' +
-    'frames.mix_foreground(||{state.mix_service().prepare_mix_foreground(crate::services::mix::foreground::Ingress{' +
+    'frames.mix_foreground(||{state.mix_service().prepare_mix_foreground(northstar_room_application::mix_service::foreground::Ingress{' +
     'channel_id:channel.id,channel_jid:channel.jid(),actor_bare:actor_bare.to_owned(),actor_full:actor_full.to_owned(),' +
     'children:message_children.as_deref().unwrap_or_default().to_owned(),encrypted:message_encrypted,identity:message_replay_identity.clone()' +
     '})})?}else{None}}else{None};';
   const replaySelection = 'ifletSome(identity)=message_replay_identity.as_ref(){letreplay=ifletSome(owner)=&foreground{' +
-    'letrequest=owner.replay_request()?.ok_or(crate::services::mix::foreground::Rejected::Input)?;' +
+    'letrequest=owner.replay_request()?.ok_or(northstar_room_application::mix_service::foreground::Rejected::Input)?;' +
     'state.mix_service().lookup_mix_message_replay_observed(&request).await?' +
     '}else{state.mix_service().lookup_mix_message_replay(channel.id,actor_bare,identity).await?};matchreplay{';
   const storeSelection = 'ifletSome(observation)=observation{observation.enter(Stage::MixAdmission);}' +
     'letadmission=ifletSome(owner)=&foreground{' +
-    'letrequest=owner.store_request(crate::services::mix::foreground::StoreCommand{' +
+    'letrequest=owner.store_request(northstar_room_application::mix_service::foreground::StoreCommand{' +
     'channel_id:channel.id,actor:actor_bare.to_owned(),item_id:archive_id,payload:archive,identity:message_replay_identity,' +
     'delivery_payload:children,visible_jid:live_jid.map(str::to_owned),encrypted:message_encrypted})?;' +
     'state.mix_service().store_mix_message_observed(&request).await?' +
@@ -1689,7 +1689,7 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
       'MIX worker holder must retire through its field guard even when child destruction panics');
   }
   const claimWork = method(mixWorker, 'claim_mix_outbox_work');
-  requireBoundary(claimWork.includes('letturn=crate::services::mix::outbox::ClaimTurn::new(claim_limit,8*1024*1024).expect();letrun=turn.run(move|request,handle|asyncmove{letresult=drainable_mix_outbox_claim(&stop_claiming,&cancel,context.service().claim_mix_deliveries_observed(&request)).await;') &&
+  requireBoundary(claimWork.includes('letturn=northstar_room_application::mix_service::outbox::ClaimTurn::new(claim_limit,8*1024*1024).expect();letrun=turn.run(move|request,handle|asyncmove{letresult=drainable_mix_outbox_claim(&stop_claiming,&cancel,context.service().claim_mix_deliveries_observed(&request)).await;') &&
     claimWork.includes('Box::pin(asyncmove{Ok(run.await?.into_iter().map(MixOutboxWork::Delivery).collect())})'),
     'MIX claim holder must exist before polling the actual bounded observed claim');
   requireBoundary(method(mixWorker, 'process_mix_outbox_work').includes('MixOutboxWork::Delivery(delivery)=>{letrun=delivery.run(move|attempt,handle|{process_claimed_mix_delivery(context,attempt,handle,cancel)});Box::pin(asyncmove{(MixOutboxQueue::Delivery,run.await)})}'),
@@ -1701,7 +1701,7 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
     ['settle_mix_delivery_observed', 'settle_mix_delivery_observed'],
   ];
   for (const [name, repository] of serviceMethods) {
-    const service = dense(body(mixService, `pub\\(crate\\)\\s+async\\s+fn\\s+${name}\\b`));
+    const service = dense(body(mixService, `pub\\s+async\\s+fn\\s+${name}\\b`));
     const returned = name === 'claim_mix_deliveries_observed'
       ? 'Ok(rows)=>Ok(request.returned(rows)?.into_iter().map(outbox::OwnedAttempt::new).collect())'
       : name === 'settle_mix_delivery_observed' ? 'Ok(result)=>request.returned(result)?' : 'Ok(result)=>Ok(request.returned(result)?)';
@@ -1709,7 +1709,7 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
       service.includes(returned) && service.includes('request.failed()?;'),
       'MIX observed worker service must preserve fair admission and exact request/return ownership');
   }
-  requireBoundary(dense(body(mixService, 'pub\\(crate\\)\\s+async\\s+fn\\s+settle_mix_delivery_observed\\b')).includes('ifmatches!(result,SettlementResult::Ack(true)|SettlementResult::DeadLetter(true)|SettlementResult::Retry(RetryResult::RouteWokenAtAttemptLimit|RetryResult::DeadLettered)){self.publish_delivery_local_commit();}Ok(result)'),
+  requireBoundary(dense(body(mixService, 'pub\\s+async\\s+fn\\s+settle_mix_delivery_observed\\b')).includes('ifmatches!(result,SettlementResult::Ack(true)|SettlementResult::DeadLetter(true)|SettlementResult::Retry(RetryResult::RouteWokenAtAttemptLimit|RetryResult::DeadLettered)){self.publish_delivery_local_commit();}Ok(result)'),
     'MIX worker settlement wake must follow the matching actual result only');
   const repository = method(mixRepository, 'settle_mix_delivery_observed');
   for (const [kind, database] of [['Ack', 'acknowledge'], ['Defer', 'defer'], ['Retry', 'retry'], ['DeadLetter', 'dead_letter']]) {
@@ -1730,10 +1730,10 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
   requireBoundary(method(mixDb, 'claim_mix_deliveries_observed').includes('letcommand=request.command();matchclaim_mix_deliveries_inner(pool,command.limit,command.max_bytes,Some(request)).await?'),
     'MIX claim SQL must use the bound limits and same observation');
   const ack = method(mixDb, 'acknowledge_mix_delivery_worker_observed');
-  requireBoundary(ack.includes('letsource=request.source();letmuttransaction=pool.begin().await?;letremoved=remove_mix_delivery_tx(&muttransaction,source.delivery_id,source.lease_token).await?.is_some();northstar_delivery_core::mix_outbox::settlement_commit_observed(transaction.commit(),request,northstar_delivery_core::mix_outbox::SettlementResult::Ack(removed)).await.map_err(crate::services::mix::outbox::commit_error)?;') && ack.endsWith('Ok(removed)'),
+  requireBoundary(ack.includes('letsource=request.source();letmuttransaction=pool.begin().await?;letremoved=remove_mix_delivery_tx(&muttransaction,source.delivery_id,source.lease_token).await?.is_some();northstar_delivery_core::mix_outbox::settlement_commit_observed(transaction.commit(),request,northstar_delivery_core::mix_outbox::SettlementResult::Ack(removed)).await.map_err(northstar_room_application::mix_service::outbox::commit_error)?;') && ack.endsWith('Ok(removed)'),
     'MIX worker ACK must observe its actual COMMIT including false');
   const commit = method(mixDb, 'commit_mix_worker_settlement');
-  requireBoundary(commit === 'ifletSome(request)=observation{northstar_delivery_core::mix_outbox::settlement_commit_observed(transaction.commit(),request,result).await.map_err(crate::services::mix::outbox::commit_error)}else{transaction.commit().await.map_err(Into::into)}',
+  requireBoundary(commit === 'ifletSome(request)=observation{northstar_delivery_core::mix_outbox::settlement_commit_observed(transaction.commit(),request,result).await.map_err(northstar_room_application::mix_service::outbox::commit_error)}else{transaction.commit().await.map_err(Into::into)}',
     'MIX shared settlement helper must wrap the actual COMMIT');
   const deadLetter = method(mixDb, 'dead_letter_mix_delivery_inner');
   requireBoundary(deadLetter.includes('letmoved=move_mix_delivery_to_dead_letter_tx(&muttransaction,delivery_id,lease_token,terminal_reason,error).await?;commit_mix_worker_settlement(transaction,observation,northstar_delivery_core::mix_outbox::SettlementResult::DeadLetter(moved)).await?;') && deadLetter.endsWith('Ok(moved)'),
@@ -1764,7 +1764,7 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
     archiveDb.includes('anyhow::ensure!(exact_replay);letexisting_id:Uuid=row.get();commit_mix_archive(transaction,observation,SourceArchiveAdmission::Replay(existing_id)).await?;Ok(SourceArchiveAdmission::Replay(existing_id))'),
     'MIX personal archive Stored and authenticated original-ID Replay must each observe the actual COMMIT');
   requireBoundary(method(mixArchive, 'commit_mix_archive').includes('SourceArchiveAdmission::Stored(id)=>{northstar_delivery_core::mix_outbox::ArchiveResult::Stored(id)}SourceArchiveAdmission::Replay(id)=>{northstar_delivery_core::mix_outbox::ArchiveResult::Replay(id)}') &&
-    method(mixArchive, 'commit_mix_archive').includes('northstar_delivery_core::mix_outbox::archive_commit_observed(transaction.commit(),request,result).await.map_err(crate::services::mix::outbox::commit_error)'),
+    method(mixArchive, 'commit_mix_archive').includes('northstar_delivery_core::mix_outbox::archive_commit_observed(transaction.commit(),request,result).await.map_err(northstar_room_application::mix_service::outbox::commit_error)'),
     'MIX personal archive receipt must preserve its actual variant and ID');
   const route = method(mixProduction, 'deliver_claimed_channel_stanza');
   requireBoundary(route.startsWith('request.start()?;letrow=request.row();') && route.includes('delivery_id:Some(row.source.delivery_id),mix_source:Some(row.source),channel_jid:&row.channel_jid,recipient:&recipient,stanza:request.stanza().to_owned(),authoritative_stanza_id:row.authoritative_stanza_id,archive:row.archive,encrypted:row.encrypted,durable:true,database_lane:ChannelStanzaDatabaseLane::DurableOutbox},Some(request)).await'),

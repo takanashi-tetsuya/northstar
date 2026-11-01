@@ -60,7 +60,7 @@ impl MucHost for AppState {
         delivered: Option<&str>,
         forwarded: &str,
     ) {
-        crate::services::message_carbons::send_received_carbons(
+        northstar_message_application::message_carbons::send_received_carbons(
             self, recipient, delivered, forwarded,
         )
         .await;

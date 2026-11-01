@@ -700,7 +700,7 @@ pub(crate) async fn route_inbound_message(
             && !remote_muc_private_message
         {
             if let Some(delivered_key) = delivered_key.as_deref() {
-                crate::services::message_carbons::send_received_carbons(
+                northstar_message_application::message_carbons::send_received_carbons(
                     state,
                     &recipient_by,
                     Some(delivered_key),

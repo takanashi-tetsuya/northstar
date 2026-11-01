@@ -2330,7 +2330,7 @@ for (const [name, source] of [
   ['RetractionService', read('src/services/retractions.rs')],
   ['SmService', read('src/services/sm.rs')],
   ['MixService', mixServiceSource],
-  ['PushService', read('src/services/push.rs')],
+  ['PushService', read('crates/contexts/message/northstar-message-application/src/push.rs')],
   ['PrivateStorageService', read('crates/contexts/pubsub/northstar-pubsub-application/src/private_storage.rs')],
   ['RetentionContext', read('crates/contexts/operations/northstar-operations-application/src/retention_worker.rs')],
   ['SubscriptionCleanupContext', read('src/runtime/subscription_cleanup.rs')],

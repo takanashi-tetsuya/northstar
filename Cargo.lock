@@ -2075,10 +2075,19 @@ dependencies = [
 name = "northstar-message-application"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "chrono",
+ "futures",
  "northstar-abuse-policy",
  "northstar-delivery-core",
  "northstar-message-core",
+ "northstar-security",
+ "northstar-xep-0016",
+ "northstar-xep-0280",
+ "northstar-xmpp-types",
+ "roxmltree",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

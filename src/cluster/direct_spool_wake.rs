@@ -6,13 +6,12 @@ use super::recovery_replay_wake::RecoveryReplayStatus;
 use crate::{
     cluster::DirectPostCommitMode,
     db::direct_spool_wake_repository::PostgresDirectSpoolWakeRepository,
-    services::direct_spool_wake::{
-        ClaimedDirectSpoolWake, DirectSpoolWakeRoute, DirectSpoolWakeService,
-        DIRECT_SPOOL_WAKE_PAGE,
-    },
 };
 use anyhow::{ensure, Result};
 use chrono::{DateTime, Utc};
+use northstar_message_application::direct_spool_wake::{
+    ClaimedDirectSpoolWake, DirectSpoolWakeRoute, DirectSpoolWakeService, DIRECT_SPOOL_WAKE_PAGE,
+};
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use std::{
     collections::{HashMap, VecDeque},

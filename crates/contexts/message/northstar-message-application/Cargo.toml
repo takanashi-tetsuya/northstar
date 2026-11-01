@@ -8,10 +8,20 @@ description = "Capability-injected personal-message application service for Nort
 publish = false
 
 [dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
 northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
 northstar-delivery-core = { path = "../northstar-delivery-core" }
 northstar-message-core = { path = "../northstar-message-core" }
+northstar-security = { path = "../../../platform/northstar-security" }
+northstar-xep-0016 = { path = "../../../kernel/northstar-xep-0016" }
+northstar-xep-0280 = { path = "../../../kernel/northstar-xep-0280" }
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+tokio = { version = "1.43", features = ["time"] }
+tracing = "0.1"
 uuid = "1.12"
 
 [dev-dependencies]
-tokio = { version = "1.43", features = ["macros", "rt"] }
+roxmltree = "0.20"
+tokio = { version = "1.43", features = ["macros", "rt", "sync", "test-util", "time"] }

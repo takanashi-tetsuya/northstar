@@ -7,25 +7,25 @@ use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use std::{future::Future, time::Duration};
 use uuid::Uuid;
 
-pub(crate) const DIRECT_SPOOL_WAKE_PAGE: i32 = 256;
-pub(crate) const DIRECT_SPOOL_WAKE_MAX_DEFER: Duration = Duration::from_secs(300);
+pub const DIRECT_SPOOL_WAKE_PAGE: i32 = 256;
+pub const DIRECT_SPOOL_WAKE_MAX_DEFER: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ClaimedDirectSpoolWake {
-    pub(crate) recipient_id: Uuid,
-    pub(crate) revision: Uuid,
-    pub(crate) claim_token: Uuid,
+pub struct ClaimedDirectSpoolWake {
+    pub recipient_id: Uuid,
+    pub revision: Uuid,
+    pub claim_token: Uuid,
     /// PostgreSQL clock sampled after the committed wake became visible.
-    pub(crate) cutoff: DateTime<Utc>,
+    pub cutoff: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct DirectSpoolWakeRoute {
-    pub(crate) full_jid: String,
-    pub(crate) connection_id: Uuid,
+pub struct DirectSpoolWakeRoute {
+    pub full_jid: String,
+    pub connection_id: Uuid,
 }
 
-pub(crate) trait DirectSpoolWakeRepository: Send + Sync {
+pub trait DirectSpoolWakeRepository: Send + Sync {
     fn cleanup(&self, limit: i32) -> impl Future<Output = Result<i64>> + Send;
 
     fn claim(
@@ -64,16 +64,16 @@ pub(crate) trait DirectSpoolWakeRepository: Send + Sync {
     ) -> impl Future<Output = Result<bool>> + Send;
 }
 
-pub(crate) struct DirectSpoolWakeService<R> {
+pub struct DirectSpoolWakeService<R> {
     repository: R,
 }
 
 impl<R: DirectSpoolWakeRepository> DirectSpoolWakeService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn cleanup(&self, limit: i32) -> Result<i64> {
+    pub async fn cleanup(&self, limit: i32) -> Result<i64> {
         ensure!(
             (1..=DIRECT_SPOOL_WAKE_PAGE).contains(&limit),
             "invalid direct spool wake cleanup page"
@@ -81,7 +81,7 @@ impl<R: DirectSpoolWakeRepository> DirectSpoolWakeService<R> {
         self.repository.cleanup(limit).await
     }
 
-    pub(crate) async fn claim(
+    pub async fn claim(
         &self,
         authority: &ClusterReadinessAuthority,
         limit: i32,
@@ -93,7 +93,7 @@ impl<R: DirectSpoolWakeRepository> DirectSpoolWakeService<R> {
         self.repository.claim(authority, limit).await
     }
 
-    pub(crate) async fn routes_page(
+    pub async fn routes_page(
         &self,
         authority: &ClusterReadinessAuthority,
         recipient_id: Uuid,
@@ -109,7 +109,7 @@ impl<R: DirectSpoolWakeRepository> DirectSpoolWakeService<R> {
             .await
     }
 
-    pub(crate) async fn acknowledge_if_empty(
+    pub async fn acknowledge_if_empty(
         &self,
         authority: &ClusterReadinessAuthority,
         wake: &ClaimedDirectSpoolWake,
@@ -124,7 +124,7 @@ impl<R: DirectSpoolWakeRepository> DirectSpoolWakeService<R> {
             .await
     }
 
-    pub(crate) async fn defer(
+    pub async fn defer(
         &self,
         authority: &ClusterReadinessAuthority,
         wake: &ClaimedDirectSpoolWake,

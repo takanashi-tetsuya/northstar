@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use futures::{stream::FuturesUnordered, StreamExt};
-use northstar_roster_application::privacy::PrivacyStanzaKind;
+use northstar_xep_0016::PrivacyStanzaKind;
 use std::{future::Future, pin::Pin, time::Duration};
 
 const FANOUT_CONCURRENCY: usize = 8;
@@ -26,7 +26,7 @@ struct Summary {
 
 type AttemptFuture<'a> = Pin<Box<dyn Future<Output = Attempt> + Send + 'a>>;
 
-pub(crate) trait CarbonDeliveryPort {
+pub trait CarbonDeliveryPort {
     type Session: Send + Sync;
 
     fn enabled(&self) -> bool;
@@ -101,13 +101,13 @@ async fn bounded_fanout(
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Direction {
+pub enum Direction {
     Sent,
     Received,
 }
 
 impl Direction {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Sent => "sent",
             Self::Received => "received",
@@ -188,7 +188,7 @@ async fn local_fanout<P: CarbonDeliveryPort + Sync>(
     );
 }
 
-pub(crate) async fn send_sent_carbons<P: CarbonDeliveryPort + Sync>(
+pub async fn send_sent_carbons<P: CarbonDeliveryPort + Sync>(
     port: &P,
     from: &str,
     forwarded: &str,
@@ -220,7 +220,7 @@ pub(crate) async fn send_sent_carbons<P: CarbonDeliveryPort + Sync>(
         .await;
 }
 
-pub(crate) async fn send_received_carbons<P: CarbonDeliveryPort + Sync>(
+pub async fn send_received_carbons<P: CarbonDeliveryPort + Sync>(
     port: &P,
     recipient: &str,
     delivered: Option<&str>,

@@ -8,36 +8,36 @@ use std::future::Future;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PushEnableOutcome {
+pub enum PushEnableOutcome {
     Enabled,
     QuotaExceeded,
     RateLimited,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct PushDelivery {
-    pub(crate) request_id: Uuid,
-    pub(crate) service_jid: String,
-    pub(crate) node: String,
-    pub(crate) options: Option<String>,
+pub struct PushDelivery {
+    pub request_id: Uuid,
+    pub service_jid: String,
+    pub node: String,
+    pub options: Option<String>,
 }
 
 #[derive(Debug)]
-pub(crate) struct PushBatch {
-    pub(crate) message_count: i64,
-    pub(crate) pending_subscription_count: i64,
-    pub(crate) deliveries: Vec<PushDelivery>,
+pub struct PushBatch {
+    pub message_count: i64,
+    pub pending_subscription_count: i64,
+    pub deliveries: Vec<PushDelivery>,
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct PushNotificationCounts {
-    pub(crate) message_count: i64,
-    pub(crate) pending_subscription_count: i64,
+pub struct PushNotificationCounts {
+    pub message_count: i64,
+    pub pending_subscription_count: i64,
 }
 
 /// Transport-specific routing and telemetry for a claimed Push notification.
 /// The application service owns claim, settlement and per-item ordering.
-pub(crate) trait PushNotificationRouter: Send + Sync {
+pub trait PushNotificationRouter: Send + Sync {
     fn route(
         &self,
         delivery: &PushDelivery,
@@ -49,20 +49,20 @@ pub(crate) trait PushNotificationRouter: Send + Sync {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PushResponseKind {
+pub enum PushResponseKind {
     Success,
     PermanentError,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PushResponseOutcome {
+pub enum PushResponseOutcome {
     Completed,
     SubscriptionDisabled,
     SenderMismatch,
     Unknown,
 }
 
-pub(crate) trait PushRepository: Send + Sync {
+pub trait PushRepository: Send + Sync {
     fn enable(
         &self,
         user_id: Uuid,
@@ -98,14 +98,14 @@ pub(crate) trait PushRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
 }
 #[derive(Clone)]
-pub(crate) struct PushService<R> {
+pub struct PushService<R> {
     repository: R,
 }
 impl<R: PushRepository> PushService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
-    pub(crate) async fn enable(
+    pub async fn enable(
         &self,
         user_id: Uuid,
         service_jid: &str,
@@ -116,7 +116,7 @@ impl<R: PushRepository> PushService<R> {
             .enable(user_id, service_jid, node, options)
             .await
     }
-    pub(crate) async fn disable(
+    pub async fn disable(
         &self,
         user_id: Uuid,
         service_jid: &str,
@@ -127,7 +127,7 @@ impl<R: PushRepository> PushService<R> {
     /// Dispatch only after the originating message has been accepted. A route
     /// failure is settled before the next claimed subscription is attempted;
     /// persistence errors stop the batch just as they did in the wire adapter.
-    pub(crate) async fn dispatch_after_commit<T: PushNotificationRouter>(
+    pub async fn dispatch_after_commit<T: PushNotificationRouter>(
         &self,
         user_id: Uuid,
         router: &T,
@@ -153,7 +153,7 @@ impl<R: PushRepository> PushService<R> {
         }
         Ok(())
     }
-    pub(crate) async fn complete_response(
+    pub async fn complete_response(
         &self,
         request_id: Uuid,
         sender_bare: &str,
@@ -163,7 +163,7 @@ impl<R: PushRepository> PushService<R> {
             .complete_response(request_id, sender_bare, kind)
             .await
     }
-    pub(crate) async fn disable_from_service(
+    pub async fn disable_from_service(
         &self,
         target_username: &str,
         service_jid: &str,

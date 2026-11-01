@@ -515,7 +515,7 @@ impl ProtocolSession {
         delivered_self: Option<&str>,
         muc_scope: Option<(&str, &str)>,
     ) {
-        crate::services::message_carbons::send_sent_carbons(
+        northstar_message_application::message_carbons::send_sent_carbons(
             &*self.state,
             from,
             forwarded,
@@ -531,7 +531,7 @@ impl ProtocolSession {
         delivered: Option<&str>,
         forwarded: &str,
     ) {
-        crate::services::message_carbons::send_received_carbons(
+        northstar_message_application::message_carbons::send_received_carbons(
             &*self.state,
             recipient,
             delivered,

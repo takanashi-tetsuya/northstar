@@ -3,7 +3,7 @@ use super::{
     CarbonDeliveryPort, Direction,
 };
 use anyhow::Result;
-use northstar_roster_application::privacy::PrivacyStanzaKind;
+use northstar_xep_0016::PrivacyStanzaKind;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -14,7 +14,7 @@ struct Session {
     enabled: bool,
     room_nick: Option<(&'static str, &'static str)>,
     privacy: bool,
-    sender: crate::xmpp::outbound::OutboundSender,
+    sender: tokio::sync::mpsc::Sender<String>,
 }
 
 #[derive(Default)]
@@ -98,17 +98,14 @@ impl CarbonDeliveryPort for Port {
     }
 }
 
-fn session() -> (
-    Session,
-    tokio::sync::mpsc::Receiver<crate::xmpp::outbound::OutboundItem>,
-) {
+fn session() -> (Session, tokio::sync::mpsc::Receiver<String>) {
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     (
         Session {
             enabled: true,
             room_nick: None,
             privacy: true,
-            sender: crate::xmpp::outbound::OutboundSender::new(sender),
+            sender,
         },
         receiver,
     )
@@ -161,7 +158,7 @@ async fn sent_carbon_respects_exclusions_scope_and_privacy_before_remote_route()
     let carbon = eligible_rx
         .try_recv()
         .expect("eligible matching resource should receive a Carbon");
-    assert!(roxmltree::Document::parse(&carbon.stanza)
+    assert!(roxmltree::Document::parse(&carbon)
         .unwrap()
         .descendants()
         .any(|node| {
@@ -195,7 +192,7 @@ async fn received_carbon_uses_forwarded_sender_and_excludes_primary() {
     let carbon = other_rx
         .try_recv()
         .expect("secondary resource should receive a Carbon");
-    assert!(roxmltree::Document::parse(&carbon.stanza)
+    assert!(roxmltree::Document::parse(&carbon)
         .unwrap()
         .descendants()
         .any(|node| {
@@ -243,20 +240,14 @@ async fn timed_out_target_counts_failure_before_remote_fanout() {
 #[tokio::test]
 async fn one_slow_target_does_not_starve_healthy_resources() {
     let (slow_tx, _slow_rx) = tokio::sync::mpsc::channel(1);
-    let slow = crate::xmpp::outbound::OutboundSender::new(slow_tx);
+    let slow = slow_tx;
     slow.try_send("occupied".to_owned()).unwrap();
     let (fast_one_tx, mut fast_one_rx) = tokio::sync::mpsc::channel(1);
     let (fast_two_tx, mut fast_two_rx) = tokio::sync::mpsc::channel(1);
     let targets = vec![
         ("slow", slow),
-        (
-            "fast-one",
-            crate::xmpp::outbound::OutboundSender::new(fast_one_tx),
-        ),
-        (
-            "fast-two",
-            crate::xmpp::outbound::OutboundSender::new(fast_two_tx),
-        ),
+        ("fast-one", fast_one_tx),
+        ("fast-two", fast_two_tx),
     ];
     let attempts: Vec<(String, AttemptFuture<'_>)> = targets
         .into_iter()
@@ -283,8 +274,8 @@ async fn one_slow_target_does_not_starve_healthy_resources() {
     assert_eq!(summary.failed, 1);
     assert_eq!(summary.timed_out, 1);
     assert_eq!(summary.timed_out_targets, vec!["slow"]);
-    assert_eq!(fast_one_rx.recv().await.unwrap().stanza, "carbon-fast-one");
-    assert_eq!(fast_two_rx.recv().await.unwrap().stanza, "carbon-fast-two");
+    assert_eq!(fast_one_rx.recv().await.unwrap(), "carbon-fast-one");
+    assert_eq!(fast_two_rx.recv().await.unwrap(), "carbon-fast-two");
 }
 
 #[tokio::test]

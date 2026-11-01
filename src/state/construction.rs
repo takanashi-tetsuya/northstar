@@ -712,7 +712,7 @@ impl AppState {
             s2s_sm_outbox_service: crate::services::s2s_sm_outbox::SmOutboxService::new(
                 db::s2s_sm_outbox_repository::PostgresSmOutboxRepository::new(pool.clone()),
             ),
-            push_service: crate::services::push::PushService::new(
+            push_service: northstar_message_application::push::PushService::new(
                 db::push::PostgresPushRepository::new(pool.clone()),
             ),
             pool,

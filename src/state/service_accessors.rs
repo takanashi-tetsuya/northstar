@@ -245,7 +245,7 @@ impl AppState {
 
     pub(crate) fn push_service(
         &self,
-    ) -> &crate::services::push::PushService<db::push::PostgresPushRepository> {
+    ) -> &northstar_message_application::push::PushService<db::push::PostgresPushRepository> {
         &self.push_service
     }
 

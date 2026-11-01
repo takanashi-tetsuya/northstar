@@ -1,8 +1,5 @@
 use super::{Action, ProtocolSession};
-use crate::services::{
-    push::{PushEnableOutcome, PushResponseKind, PushResponseOutcome},
-    sm::{BindingFinalizationOutcome, BindingReservationOutcome},
-};
+use crate::services::sm::{BindingFinalizationOutcome, BindingReservationOutcome};
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use northstar_abuse_policy::stanza::strip_pow_element;
@@ -12,6 +9,9 @@ use northstar_auth_application::account::{
     RegistrationOutcome, RegistrationRequest,
 };
 use northstar_auth_core as auth;
+use northstar_message_application::push::{
+    PushEnableOutcome, PushResponseKind, PushResponseOutcome,
+};
 use northstar_xml_builder::rewrite::set_to;
 use northstar_xml_builder::stanza::{
     child_text, iq_error, iq_error_from, iq_result, iq_result_from, stanza_error, stanza_error_type,

@@ -1,8 +1,10 @@
 //! Push notification transport for the application-owned post-commit dispatch.
 
 use super::AppState;
-use crate::services::push::{PushDelivery, PushNotificationCounts, PushNotificationRouter};
 use anyhow::Result;
+use northstar_message_application::push::{
+    PushDelivery, PushNotificationCounts, PushNotificationRouter,
+};
 use std::sync::atomic::Ordering;
 
 impl AppState {

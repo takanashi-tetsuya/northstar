@@ -4,8 +4,8 @@ use super::AppState;
 use crate::{
     cluster::direct_spool_wake::DirectSpoolWakeConsumer,
     db::direct_spool_wake_repository::PostgresDirectSpoolWakeRepository,
-    services::direct_spool_wake::DirectSpoolWakeService,
 };
+use northstar_message_application::direct_spool_wake::DirectSpoolWakeService;
 
 impl AppState {
     pub(crate) fn direct_spool_wake_consumer(

@@ -7,6 +7,9 @@
 pub mod direct_commit;
 pub mod direct_handoff;
 pub mod direct_lifecycle;
+pub mod direct_spool_wake;
+pub mod message_carbons;
+pub mod push;
 
 use northstar_message_core::{
     IdentityAuthority, MessageCommit, PersonalMessageDestination, ValidatedPersonalMessage,

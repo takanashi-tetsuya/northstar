@@ -512,8 +512,9 @@ mod integration_tests {
 }
 
 mod application_repository {
-    use crate::{db, services::push::*};
+    use crate::db;
     use anyhow::Result;
+    use northstar_message_application::push::*;
     use sqlx::PgPool;
     use uuid::Uuid;
     #[derive(Clone)]

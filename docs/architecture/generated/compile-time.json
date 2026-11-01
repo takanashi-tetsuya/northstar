@@ -2942,6 +2942,18 @@
     ],
     [
       "northstar-message-application",
+      "anyhow"
+    ],
+    [
+      "northstar-message-application",
+      "chrono"
+    ],
+    [
+      "northstar-message-application",
+      "futures"
+    ],
+    [
+      "northstar-message-application",
       "northstar-abuse-policy"
     ],
     [
@@ -2954,7 +2966,31 @@
     ],
     [
       "northstar-message-application",
+      "northstar-security"
+    ],
+    [
+      "northstar-message-application",
+      "northstar-xep-0016"
+    ],
+    [
+      "northstar-message-application",
+      "northstar-xep-0280"
+    ],
+    [
+      "northstar-message-application",
+      "northstar-xmpp-types"
+    ],
+    [
+      "northstar-message-application",
+      "roxmltree"
+    ],
+    [
+      "northstar-message-application",
       "tokio"
+    ],
+    [
+      "northstar-message-application",
+      "tracing"
     ],
     [
       "northstar-message-application",

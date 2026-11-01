@@ -1,9 +1,9 @@
 use super::ProtocolSession;
-use crate::services::retractions::{
+use anyhow::Result;
+use northstar_message_application::retractions::{
     ArchiveWrite, DeliveryProjection, OutboundProjection, OwnerProjection, RetractionCommand,
     RetractionOutcome,
 };
-use anyhow::Result;
 use roxmltree::Node;
 use uuid::Uuid;
 
@@ -178,7 +178,9 @@ impl ProtocolSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::retractions::{retractable_message, tombstone_message, RetractionService};
+    use northstar_message_application::retractions::{
+        retractable_message, tombstone_message, RetractionService,
+    };
     use roxmltree::Document;
 
     async fn apply_personal_retraction_atomic(

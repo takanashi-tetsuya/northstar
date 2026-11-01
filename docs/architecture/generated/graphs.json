@@ -2491,11 +2491,19 @@
       ],
       [
         "northstar-message-application",
+        "northstar-abuse-application"
+      ],
+      [
+        "northstar-message-application",
         "northstar-abuse-policy"
       ],
       [
         "northstar-message-application",
         "northstar-delivery-core"
+      ],
+      [
+        "northstar-message-application",
+        "northstar-federation-core"
       ],
       [
         "northstar-message-application",
@@ -2515,11 +2523,19 @@
       ],
       [
         "northstar-message-application",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-message-application",
         "northstar-xmpp-types"
       ],
       [
         "northstar-message-application",
         "roxmltree"
+      ],
+      [
+        "northstar-message-application",
+        "sha2"
       ],
       [
         "northstar-message-application",

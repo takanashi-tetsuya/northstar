@@ -2,9 +2,9 @@
 use crate::{
     cluster::{ClusterAdmission, DirectSpoolEligibility},
     db,
-    services::retractions::*,
 };
 use anyhow::Result;
+use northstar_message_application::retractions::*;
 use roxmltree::Document;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;

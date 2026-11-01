@@ -11,6 +11,7 @@ pub mod direct_spool_wake;
 pub mod message_admission;
 pub mod message_carbons;
 pub mod push;
+pub mod retractions;
 
 use northstar_message_core::{
     IdentityAuthority, MessageCommit, PersonalMessageDestination, ValidatedPersonalMessage,

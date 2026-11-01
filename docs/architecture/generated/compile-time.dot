@@ -1082,14 +1082,18 @@ digraph compile_time {
   "northstar-message-application" -> "anyhow";
   "northstar-message-application" -> "chrono";
   "northstar-message-application" -> "futures";
+  "northstar-message-application" -> "northstar-abuse-application";
   "northstar-message-application" -> "northstar-abuse-policy";
   "northstar-message-application" -> "northstar-delivery-core";
+  "northstar-message-application" -> "northstar-federation-core";
   "northstar-message-application" -> "northstar-message-core";
   "northstar-message-application" -> "northstar-security";
   "northstar-message-application" -> "northstar-xep-0016";
   "northstar-message-application" -> "northstar-xep-0280";
+  "northstar-message-application" -> "northstar-xml-builder";
   "northstar-message-application" -> "northstar-xmpp-types";
   "northstar-message-application" -> "roxmltree";
+  "northstar-message-application" -> "sha2";
   "northstar-message-application" -> "thiserror";
   "northstar-message-application" -> "tokio";
   "northstar-message-application" -> "tracing";

@@ -8,7 +8,6 @@ pub(crate) use direct_route::{
 };
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 
-use super::retractions::FederationOutboxPolicy;
 use crate::xmpp::outbound::{OutboundItem, RouteEnqueue};
 use anyhow::Result;
 use northstar_abuse_policy::MessageDedupeIdentity;
@@ -17,6 +16,7 @@ use northstar_message_application::direct_commit::{
     CommitError as DirectCommitError, DirectCommitRepository,
 };
 use northstar_message_application::direct_handoff::HandoffHandle;
+use northstar_message_application::retractions::FederationOutboxPolicy;
 use northstar_message_application::{
     CommitError, MessageApplication, PersonalMessageCommitRepository,
 };

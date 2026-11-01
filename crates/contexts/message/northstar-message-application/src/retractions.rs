@@ -8,7 +8,7 @@
 use anyhow::{Context, Result};
 use northstar_abuse_policy::content_identity::PersonalRetractionContentKeyring;
 use northstar_abuse_policy::ContentIdentityAuthenticators;
-pub(crate) use northstar_message_core::ArchiveProjection as ArchiveWrite;
+pub use northstar_message_core::ArchiveProjection as ArchiveWrite;
 use northstar_xml_builder::XmlElement;
 
 use roxmltree::{Document, Node};
@@ -22,27 +22,27 @@ const NS_NORTHSTAR_POW: &str = "urn:northstar:pow:1";
 const RETRACTION_LOCK_DOMAIN: &[u8] = b"northstar/retraction-action-lock/v1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct OwnerProjection<'a> {
-    pub(crate) owner_id: Uuid,
-    pub(crate) peer_jid: &'a str,
+pub struct OwnerProjection<'a> {
+    pub owner_id: Uuid,
+    pub peer_jid: &'a str,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RetractionCommand<'a> {
-    pub(crate) target_id: &'a str,
-    pub(crate) action_id: &'a str,
+pub struct RetractionCommand<'a> {
+    pub target_id: &'a str,
+    pub action_id: &'a str,
     /// Exact accepted message element. The service canonicalizes semantic XML
     /// and excludes only transport metadata plus the consumed local PoW
     /// envelope.
-    pub(crate) semantic_payload: &'a str,
+    pub semantic_payload: &'a str,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FederationOutboxPolicy {
-    pub(crate) ttl_seconds: u64,
-    pub(crate) max_rows: i64,
-    pub(crate) max_bytes: i64,
-    pub(crate) max_per_domain: i64,
+pub struct FederationOutboxPolicy {
+    pub ttl_seconds: u64,
+    pub max_rows: i64,
+    pub max_bytes: i64,
+    pub max_per_domain: i64,
 }
 
 impl From<northstar_federation_core::S2sOutboxPolicy> for FederationOutboxPolicy {
@@ -68,44 +68,44 @@ impl From<FederationOutboxPolicy> for northstar_federation_core::S2sOutboxPolicy
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct OutboundProjection<'a> {
-    pub(crate) target_domain: &'a str,
-    pub(crate) stanza: &'a str,
-    pub(crate) bounce_to: Option<&'a str>,
-    pub(crate) policy: FederationOutboxPolicy,
+pub struct OutboundProjection<'a> {
+    pub target_domain: &'a str,
+    pub stanza: &'a str,
+    pub bounce_to: Option<&'a str>,
+    pub policy: FederationOutboxPolicy,
 }
 
 /// One recoverable local-delivery projection owned by the retraction
 /// transaction. The protocol may fan the committed row into an online queue,
 /// but the same row remains the offline fallback until a transport ACKs it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct DeliveryProjection<'a> {
-    pub(crate) id: Uuid,
-    pub(crate) recipient_id: Uuid,
+pub struct DeliveryProjection<'a> {
+    pub id: Uuid,
+    pub recipient_id: Uuid,
     /// Present for an authenticated local C2S actor and absent for S2S input.
-    pub(crate) local_actor_id: Option<Uuid>,
-    pub(crate) sender_jid: &'a str,
-    pub(crate) stanza: &'a str,
-    pub(crate) encrypted: bool,
-    pub(crate) max_messages: i64,
-    pub(crate) max_bytes: i64,
-    pub(crate) ttl_days: i64,
-    pub(crate) mam_backed: bool,
+    pub local_actor_id: Option<Uuid>,
+    pub sender_jid: &'a str,
+    pub stanza: &'a str,
+    pub encrypted: bool,
+    pub max_messages: i64,
+    pub max_bytes: i64,
+    pub ttl_days: i64,
+    pub mam_backed: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg(test)]
-pub(crate) struct PersonalRetractionInvocation<'a> {
-    pub(crate) owners: &'a [OwnerProjection<'a>],
-    pub(crate) sender_jid: &'a str,
-    pub(crate) command: RetractionCommand<'a>,
-    pub(crate) action_writes: &'a [ArchiveWrite<'a>],
-    pub(crate) delivery: Option<DeliveryProjection<'a>>,
-    pub(crate) outbound: Option<OutboundProjection<'a>>,
+pub struct PersonalRetractionInvocation<'a> {
+    pub owners: &'a [OwnerProjection<'a>],
+    pub sender_jid: &'a str,
+    pub command: RetractionCommand<'a>,
+    pub action_writes: &'a [ArchiveWrite<'a>],
+    pub delivery: Option<DeliveryProjection<'a>>,
+    pub outbound: Option<OutboundProjection<'a>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RetractionOutcome {
+pub enum RetractionOutcome {
     Applied {
         tombstones: usize,
         live_claim_id: Option<Uuid>,
@@ -119,29 +119,29 @@ pub(crate) enum RetractionOutcome {
 
 /// A bounded retraction whose identities, archive projections and commitments
 /// have been validated before persistence borrows a connection.
-pub(crate) struct PreparedRetraction<'a> {
-    pub(crate) command: &'a RetractionCommand<'a>,
-    pub(crate) command_encrypted: bool,
-    pub(crate) canonical_sender: String,
-    pub(crate) configured_domain: String,
-    pub(crate) canonical_semantics: Vec<u8>,
-    pub(crate) normalized_owners: Vec<NormalizedOwner>,
-    pub(crate) normalized_writes: Vec<NormalizedWrite<'a>>,
-    pub(crate) normalized_delivery: Option<NormalizedDelivery<'a>>,
-    pub(crate) normalized_outbound: Option<NormalizedOutbound<'a>>,
-    pub(crate) action_digest: [u8; 32],
-    pub(crate) semantic_sha256: Vec<u8>,
-    pub(crate) semantic_sha512: Vec<u8>,
-    pub(crate) semantic_length: i64,
-    pub(crate) semantic_authenticators: ContentIdentityAuthenticators,
-    pub(crate) owner_projection_sha256: Vec<u8>,
-    pub(crate) owner_projection_sha512: Vec<u8>,
-    pub(crate) owner_projection_length: i64,
-    pub(crate) owner_authenticators: ContentIdentityAuthenticators,
-    pub(crate) delivery_authenticators: Option<ContentIdentityAuthenticators>,
+pub struct PreparedRetraction<'a> {
+    pub command: &'a RetractionCommand<'a>,
+    pub command_encrypted: bool,
+    pub canonical_sender: String,
+    pub configured_domain: String,
+    pub canonical_semantics: Vec<u8>,
+    pub normalized_owners: Vec<NormalizedOwner>,
+    pub normalized_writes: Vec<NormalizedWrite<'a>>,
+    pub normalized_delivery: Option<NormalizedDelivery<'a>>,
+    pub normalized_outbound: Option<NormalizedOutbound<'a>>,
+    pub action_digest: [u8; 32],
+    pub semantic_sha256: Vec<u8>,
+    pub semantic_sha512: Vec<u8>,
+    pub semantic_length: i64,
+    pub semantic_authenticators: ContentIdentityAuthenticators,
+    pub owner_projection_sha256: Vec<u8>,
+    pub owner_projection_sha512: Vec<u8>,
+    pub owner_projection_length: i64,
+    pub owner_authenticators: ContentIdentityAuthenticators,
+    pub delivery_authenticators: Option<ContentIdentityAuthenticators>,
 }
 
-pub(crate) trait RetractionRepository: Send + Sync {
+pub trait RetractionRepository: Send + Sync {
     fn apply_prepared(
         &self,
         prepared: PreparedRetraction<'_>,
@@ -149,39 +149,39 @@ pub(crate) trait RetractionRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct RetractionService<R> {
+pub struct RetractionService<R> {
     repository: R,
     content_identity: PersonalRetractionContentKeyring,
     configured_domain: String,
 }
 
-pub(crate) struct NormalizedOwner {
-    pub(crate) owner_id: Uuid,
-    pub(crate) peer_bare_jid: String,
+pub struct NormalizedOwner {
+    pub owner_id: Uuid,
+    pub peer_bare_jid: String,
 }
 
-pub(crate) struct NormalizedWrite<'a> {
-    pub(crate) write: &'a ArchiveWrite<'a>,
-    pub(crate) peer_bare_jid: String,
-    pub(crate) peer_full_jid: String,
+pub struct NormalizedWrite<'a> {
+    pub write: &'a ArchiveWrite<'a>,
+    pub peer_bare_jid: String,
+    pub peer_full_jid: String,
 }
 
-pub(crate) struct NormalizedDelivery<'a> {
-    pub(crate) projection: &'a DeliveryProjection<'a>,
-    pub(crate) sender_full_jid: String,
-    pub(crate) sender_bare_jid: String,
-    pub(crate) recipient_bare_jid: String,
-    pub(crate) target_full_jid: Option<String>,
-    pub(crate) commitment: Vec<u8>,
+pub struct NormalizedDelivery<'a> {
+    pub projection: &'a DeliveryProjection<'a>,
+    pub sender_full_jid: String,
+    pub sender_bare_jid: String,
+    pub recipient_bare_jid: String,
+    pub target_full_jid: Option<String>,
+    pub commitment: Vec<u8>,
 }
 
-pub(crate) struct NormalizedOutbound<'a> {
-    pub(crate) projection: &'a OutboundProjection<'a>,
-    pub(crate) target_domain: String,
-    pub(crate) recipient_bare_jid: String,
+pub struct NormalizedOutbound<'a> {
+    pub projection: &'a OutboundProjection<'a>,
+    pub target_domain: String,
+    pub recipient_bare_jid: String,
 }
 
-pub(crate) enum TargetClassification {
+pub enum TargetClassification {
     OwnedOriginal(String),
     SameTombstone,
     ConflictingTombstone,
@@ -190,7 +190,12 @@ pub(crate) enum TargetClassification {
 }
 
 impl<R: RetractionRepository> RetractionService<R> {
-    pub(crate) fn new(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn content_identity(&self) -> &PersonalRetractionContentKeyring {
+        &self.content_identity
+    }
+
+    pub fn new(
         repository: R,
         content_identity: PersonalRetractionContentKeyring,
         configured_domain: impl Into<String>,
@@ -202,7 +207,7 @@ impl<R: RetractionRepository> RetractionService<R> {
         }
     }
 
-    pub(crate) async fn apply(
+    pub async fn apply(
         &self,
         owners: &[OwnerProjection<'_>],
         sender_jid: &str,
@@ -214,7 +219,7 @@ impl<R: RetractionRepository> RetractionService<R> {
             .await
     }
 
-    pub(crate) async fn apply_with_delivery(
+    pub async fn apply_with_delivery(
         &self,
         owners: &[OwnerProjection<'_>],
         sender_jid: &str,
@@ -577,7 +582,7 @@ fn normalize_outbound_projection<'a>(
     })
 }
 
-pub(crate) fn validate_owner_authority(
+pub fn validate_owner_authority(
     owners: &[NormalizedOwner],
     account_bares: &HashMap<Uuid, String>,
     canonical_sender: &str,
@@ -671,14 +676,14 @@ fn validate_stable_id(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn bounded_action_digest(action_id: &str) -> [u8; 32] {
+pub fn bounded_action_digest(action_id: &str) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"northstar/retraction-action-identity/v1\0");
     update_digest_component(&mut digest, action_id);
     digest.finalize().into()
 }
 
-pub(crate) fn retraction_lock_key(sender: &str, action_id: &str) -> i64 {
+pub fn retraction_lock_key(sender: &str, action_id: &str) -> i64 {
     let mut digest = Sha256::new();
     digest.update(RETRACTION_LOCK_DOMAIN);
     update_digest_component(&mut digest, sender);
@@ -689,7 +694,7 @@ pub(crate) fn retraction_lock_key(sender: &str, action_id: &str) -> i64 {
     i64::from_be_bytes(bytes)
 }
 
-fn canonical_owner_projection(owners: &[NormalizedOwner]) -> Vec<u8> {
+pub fn canonical_owner_projection(owners: &[NormalizedOwner]) -> Vec<u8> {
     let mut value = b"northstar/retraction-owner-projection/v1\0".to_vec();
     for owner in owners {
         append_bytes_component(&mut value, owner.owner_id.as_bytes());
@@ -698,7 +703,7 @@ fn canonical_owner_projection(owners: &[NormalizedOwner]) -> Vec<u8> {
     value
 }
 
-pub(crate) fn canonical_retraction_semantics(
+pub fn canonical_retraction_semantics(
     stanza: &str,
     sender: &str,
     expected_action_id: &str,
@@ -860,7 +865,7 @@ fn update_digest_component(digest: &mut Sha256, value: &str) {
     digest.update(value.as_bytes());
 }
 
-pub(crate) fn classify_target(
+pub fn classify_target(
     stanza: &str,
     sender: &str,
     action_id: &str,
@@ -900,7 +905,7 @@ pub(crate) fn classify_target(
     )))
 }
 
-pub(crate) fn retractable_message(root: Node<'_, '_>) -> bool {
+pub fn retractable_message(root: Node<'_, '_>) -> bool {
     if root.attribute("type") == Some("error")
         || root.children().any(|node| {
             node.is_element()
@@ -935,7 +940,7 @@ pub(crate) fn retractable_message(root: Node<'_, '_>) -> bool {
     })
 }
 
-pub(crate) fn tombstone_message(original: Node<'_, '_>, retraction_id: &str) -> String {
+pub fn tombstone_message(original: Node<'_, '_>, retraction_id: &str) -> String {
     let mut message = XmlElement::namespaced("message", "jabber:client");
     for attribute in ["from", "to", "type", "id"] {
         if let Some(value) = original.attribute(attribute) {

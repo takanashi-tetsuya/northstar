@@ -17,16 +17,20 @@ chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
 northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
 northstar-delivery-core = { path = "../northstar-delivery-core" }
+northstar-federation-core = { path = "../../federation/northstar-federation-core" }
 northstar-message-core = { path = "../northstar-message-core" }
 northstar-security = { path = "../../../platform/northstar-security" }
 northstar-xep-0016 = { path = "../../../kernel/northstar-xep-0016" }
+northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 thiserror = "2.0"
 northstar-xep-0280 = { path = "../../../kernel/northstar-xep-0280" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+roxmltree = "0.20"
+sha2 = "0.10"
 tokio = { version = "1.43", features = ["time"] }
 tracing = "0.1"
 uuid = "1.12"
 
 [dev-dependencies]
-roxmltree = "0.20"
+northstar-abuse-application = { path = "../../abuse/northstar-abuse-application", features = ["test-support"] }
 tokio = { version = "1.43", features = ["macros", "rt", "sync", "test-util", "time"] }

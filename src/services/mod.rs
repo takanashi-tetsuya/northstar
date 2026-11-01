@@ -9,7 +9,6 @@ pub(crate) mod federation_outbox;
 pub(crate) mod messaging;
 pub(crate) mod node_message_contract_verifier;
 pub(crate) mod replay;
-pub(crate) mod retractions;
 pub(crate) mod s2s_outbox_dispatch;
 pub(crate) mod s2s_sm_outbox;
 pub(crate) mod session_authority_sweep;

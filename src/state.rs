@@ -322,7 +322,7 @@ pub struct AppState {
     >,
     /// XEP-0424/XEP-0444 tombstone, action archive and federation admission
     /// transaction boundary.
-    retraction_service: crate::services::retractions::RetractionService<
+    retraction_service: northstar_message_application::retractions::RetractionService<
         db::retractions::PostgresRetractionRepository,
     >,
     mam_service: northstar_archive_application::MamService<db::mam::PostgresMamRepository>,

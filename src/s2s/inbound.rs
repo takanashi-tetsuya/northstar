@@ -3,23 +3,21 @@ use crate::state::s2s_direct_route::S2sDirectRoutePort;
 use crate::{
     cluster::{DirectPostCommitMode, DirectSpoolEligibility},
     db,
-    services::{
-        messaging::{
-            DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome, DirectRouteRejection,
-            DirectRouteRequest, DirectRouteTarget, DurableAdmissionOutcome, IdentityAuthority,
-            LocalDelivery, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
-            OfflineAdmissionOutcome, OfflineMessageAdmission, PersonalMessageDestination,
-            ValidatedPersonalMessage,
-        },
-        retractions::{
-            ArchiveWrite, DeliveryProjection, OwnerProjection, RetractionCommand, RetractionOutcome,
-        },
+    services::messaging::{
+        DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome, DirectRouteRejection,
+        DirectRouteRequest, DirectRouteTarget, DurableAdmissionOutcome, IdentityAuthority,
+        LocalDelivery, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
+        OfflineAdmissionOutcome, OfflineMessageAdmission, PersonalMessageDestination,
+        ValidatedPersonalMessage,
     },
     state::AppState,
     xmpp::xml_builder::XmlElement,
 };
 use anyhow::{Context, Result};
 use futures::FutureExt;
+use northstar_message_application::retractions::{
+    ArchiveWrite, DeliveryProjection, OwnerProjection, RetractionCommand, RetractionOutcome,
+};
 use northstar_message_core::validation::strip_untrusted_direct_delays;
 use northstar_xep_0280::should_copy as should_carbon;
 use northstar_xep_0359::{add_stanza_id, strip_stanza_ids_by_domain};

@@ -1,5 +1,5 @@
 use super::*;
-use crate::services::retractions::RetractionService;
+use northstar_message_application::retractions::RetractionService;
 
 #[test]
 fn degraded_inbound_spool_accepts_only_recoverable_bare_messages() {

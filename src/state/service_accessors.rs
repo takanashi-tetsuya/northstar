@@ -113,7 +113,7 @@ impl AppState {
 
     pub(crate) fn retraction_service(
         &self,
-    ) -> &crate::services::retractions::RetractionService<
+    ) -> &northstar_message_application::retractions::RetractionService<
         db::retractions::PostgresRetractionRepository,
     > {
         &self.retraction_service

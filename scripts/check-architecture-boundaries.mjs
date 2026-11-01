@@ -2327,7 +2327,7 @@ for (const [name, source] of [
   ['AccountService', accountServiceSource],
   ['AdminCommandService', read('crates/contexts/operations/northstar-operations-application/src/admin_commands.rs')],
   ['AuthenticationService', authenticationServiceSource],
-  ['RetractionService', read('src/services/retractions.rs')],
+  ['RetractionService', read('crates/contexts/message/northstar-message-application/src/retractions.rs')],
   ['SmService', read('src/services/sm.rs')],
   ['MixService', mixServiceSource],
   ['PushService', read('crates/contexts/message/northstar-message-application/src/push.rs')],
@@ -2889,10 +2889,10 @@ for (const [description, pattern] of [
 if (!/\.retraction_service\s*\(\s*\)/.test(retractionsProductionSource)) {
   throw new Error('retractions.rs no longer routes persistence through retraction_service()');
 }
-const retractionServiceSource = read('src/services/retractions.rs');
+const retractionServiceSource = read('crates/contexts/message/northstar-message-application/src/retractions.rs');
 const retractionServiceBody = structBody(
   retractionServiceSource,
-  'pub(crate) struct RetractionService',
+  'pub struct RetractionService',
 );
 if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(retractionServiceBody)) {
   throw new Error('RetractionService must receive its repository port');
@@ -2903,7 +2903,7 @@ if (!/^\s*pool\s*:\s*PgPool\s*,?\s*$/m.test(retractionRepositoryBody)) {
   throw new Error('Retraction repository PostgreSQL capability must remain private');
 }
 for (const signature of retractionServiceSource.matchAll(
-  /pub\(crate\)\s+(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/gs,
+  /pub\s+(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/gs,
 )) {
   if (signature[1] !== 'new' && /\b(?:sqlx\s*::\s*)?PgPool\b/.test(signature[2])) {
     throw new Error('RetractionService must not accept a raw PostgreSQL capability');

@@ -84,6 +84,8 @@ pub mod remaining_identity;
 pub mod replay;
 pub mod replay_repository;
 pub mod retention;
+#[cfg(test)]
+mod retraction_service_tests;
 pub mod retractions;
 pub(crate) mod room_effects;
 pub mod roster;

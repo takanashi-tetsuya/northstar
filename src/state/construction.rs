@@ -465,7 +465,7 @@ impl AppState {
             .with_cluster_admission(cluster.admission()),
             config.require_encrypted_archive,
         );
-        let retraction_service = crate::services::retractions::RetractionService::new(
+        let retraction_service = northstar_message_application::retractions::RetractionService::new(
             db::retractions::PostgresRetractionRepository::new(pool.clone())
                 .with_cluster_admission(cluster.admission()),
             retraction_content_identity,

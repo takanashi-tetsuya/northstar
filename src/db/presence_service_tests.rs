@@ -73,8 +73,8 @@ async fn insert_user(pool: &PgPool, prefix: &str) -> (Uuid, String, i64) {
     (id, username, generation)
 }
 
-fn policy() -> db::S2sOutboxPolicy {
-    db::S2sOutboxPolicy {
+fn policy() -> northstar_federation_core::S2sOutboxPolicy {
+    northstar_federation_core::S2sOutboxPolicy {
         ttl_seconds: 300,
         max_rows: 100,
         max_bytes: 1024 * 1024,

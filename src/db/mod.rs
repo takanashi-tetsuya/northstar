@@ -89,9 +89,10 @@ mod retraction_service_tests;
 pub mod retractions;
 pub(crate) mod room_effects;
 pub mod roster;
-pub mod s2s;
 pub(crate) mod s2s_outbox_dispatch_repository;
 pub(crate) mod s2s_sm_outbox_repository;
+#[cfg(test)]
+mod s2s_tests;
 pub mod schema;
 pub(crate) mod session_authority_sweep_repository;
 pub mod session_identity;
@@ -109,7 +110,6 @@ pub use privacy::*;
 pub use push::*;
 pub(crate) use retention::*;
 pub use roster::*;
-pub use s2s::*;
 pub use schema::*;
 pub use sm::*;
 #[cfg(test)]

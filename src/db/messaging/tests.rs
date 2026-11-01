@@ -629,7 +629,7 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
         encrypted: true,
         stanza_id: Some("remote-invite"),
     }];
-    let outbox_policy = db::S2sOutboxPolicy {
+    let outbox_policy = northstar_federation_core::S2sOutboxPolicy {
         ttl_seconds: 300,
         max_rows: 10_000,
         max_bytes: 64 * 1_048_576,

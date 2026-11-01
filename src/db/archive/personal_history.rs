@@ -44,7 +44,7 @@ pub struct PersonalS2sOutboxAdmission<'a> {
     pub target_domain: &'a str,
     pub stanza: &'a str,
     pub bounce_to: Option<&'a str>,
-    pub policy: super::super::S2sOutboxPolicy,
+    pub policy: northstar_federation_core::S2sOutboxPolicy,
 }
 
 /// One transient, database-backed C2S copy. It is intentionally separate
@@ -666,7 +666,7 @@ pub(crate) async fn admit_personal_history_in_transaction(
         .await?;
     }
     if let Some(outbox) = outbox {
-        super::super::enqueue_s2s_outbox_with_id_in_transaction(
+        northstar_federation_postgres::enqueue_s2s_outbox_with_id_in_transaction(
             transaction,
             s2s_outbox_id.expect("an outbound admission always allocates an outbox id"),
             outbox.target_domain,

@@ -1255,7 +1255,7 @@ async fn mix_source_dedupe_and_mam_visibility_share_one_snapshot_scope() {
         target_domain: "remote.test",
         stanza: "<message from='mamowner@local.test' to='remote@remote.test'/>",
         bounce_to: Some("mamowner@local.test/Phone"),
-        policy: super::super::S2sOutboxPolicy {
+        policy: northstar_federation_core::S2sOutboxPolicy {
             ttl_seconds: 300,
             max_rows: 0,
             max_bytes: 1_000_000,
@@ -1287,7 +1287,7 @@ async fn mix_source_dedupe_and_mam_visibility_share_one_snapshot_scope() {
         stanza_id: Some("atomic-outbox-success"),
     }];
     let accepting_outbox = PersonalS2sOutboxAdmission {
-        policy: super::super::S2sOutboxPolicy {
+        policy: northstar_federation_core::S2sOutboxPolicy {
             max_rows: 100,
             ..rejecting_outbox.policy
         },

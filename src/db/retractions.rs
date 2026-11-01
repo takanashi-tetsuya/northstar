@@ -631,7 +631,7 @@ impl RetractionRepository for PostgresRetractionRepository {
                 bound.rows_affected() == 1,
                 "retraction intent disappeared before outbox binding"
             );
-            db::s2s::enqueue_s2s_outbox_with_id_in_transaction(
+            northstar_federation_postgres::enqueue_s2s_outbox_with_id_in_transaction(
                 &mut transaction,
                 outbox_id,
                 &outbound.target_domain,

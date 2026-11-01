@@ -81,7 +81,7 @@ impl PostgresMessageRepository {
                     target_domain: destination.target_domain,
                     stanza: destination.stanza,
                     bounce_to: destination.bounce_to,
-                    policy: db::S2sOutboxPolicy {
+                    policy: northstar_federation_core::S2sOutboxPolicy {
                         ttl_seconds: destination.limits.ttl_seconds,
                         max_rows: destination.limits.max_rows,
                         max_bytes: destination.limits.max_bytes,

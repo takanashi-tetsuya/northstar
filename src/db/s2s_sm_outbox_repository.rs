@@ -16,11 +16,21 @@ impl PostgresSmOutboxRepository {
 
 impl SmOutboxRepository for PostgresSmOutboxRepository {
     async fn renew(&self, claim: SmOutboxClaim, lease_seconds: u64) -> Result<bool> {
-        crate::db::renew_s2s_outbox_lease(&self.pool, claim.id, claim.lock_token, lease_seconds)
-            .await
+        northstar_federation_postgres::renew_s2s_outbox_lease(
+            &self.pool,
+            claim.id,
+            claim.lock_token,
+            lease_seconds,
+        )
+        .await
     }
 
     async fn complete(&self, claim: SmOutboxClaim) -> Result<bool> {
-        crate::db::s2s::complete_s2s_outbox_for_sm(&self.pool, claim.id, claim.lock_token).await
+        northstar_federation_postgres::complete_s2s_outbox_for_sm(
+            &self.pool,
+            claim.id,
+            claim.lock_token,
+        )
+        .await
     }
 }

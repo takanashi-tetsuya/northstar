@@ -1,3 +1,5 @@
+//! The durable federation outbox: admission, claims, retries and route recovery.
+
 use anyhow::{Context, Result};
 use northstar_telemetry::delivery_counters::S2S_OUTBOX_CAPACITY_REJECTIONS_TOTAL;
 
@@ -8,7 +10,7 @@ use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
 const OUTBOX_ADVISORY_LOCK: i64 = 0x4e53_5332_534f_5554;
-pub use northstar_federation_core::{
+use northstar_federation_core::{
     ExpiredS2sOutboxItem, S2sOutboxItem, S2sOutboxPolicy, MAX_S2S_STANZA_BYTES,
 };
 
@@ -18,7 +20,7 @@ pub use northstar_federation_core::{
 /// could claim now. Successors hidden behind a per-domain head-of-line item do
 /// not make the queue look healthier than it is. Component rows remain part of
 /// the global totals and are also broken out separately.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct S2sOutboxSnapshot {
     pub pending_rows: i64,
@@ -29,7 +31,7 @@ pub struct S2sOutboxSnapshot {
     pub component_pending_rows: i64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn s2s_outbox_snapshot(
     pool: &PgPool,
     component_domains: &[String],
@@ -82,18 +84,18 @@ pub enum S2sFailureDisposition {
 /// route recovery hint. This is not a delivery lease or routing authority.
 /// Keep stanza contents out of Debug output; the caller must validate their
 /// exact source and target against the authenticated connection before waking.
-pub(crate) struct S2sRouteRecoveryHead {
-    pub(crate) id: Uuid,
-    pub(crate) target_domain: String,
-    pub(crate) stanza: String,
-    pub(crate) attempt_count: i32,
-    pub(crate) retry_due: bool,
-    pub(crate) claim_in_flight: bool,
+pub struct S2sRouteRecoveryHead {
+    pub id: Uuid,
+    pub target_domain: String,
+    pub stanza: String,
+    pub attempt_count: i32,
+    pub retry_due: bool,
+    pub claim_in_flight: bool,
 }
 
 /// Observe the oldest unexpired row even while it is leased or in backoff.
 /// Filtering either state would let a recovery hint bind to a successor.
-pub(crate) async fn s2s_route_recovery_head(
+pub async fn s2s_route_recovery_head(
     pool: &PgPool,
     canonical_target: &str,
 ) -> Result<Option<S2sRouteRecoveryHead>> {
@@ -127,7 +129,7 @@ pub(crate) async fn s2s_route_recovery_head(
 /// token creation, attempt accounting, FIFO, and every delivery decision.
 /// A lease, including an expired token not yet cleared by its owner, is never
 /// modified here. A later failure/claim cannot be mistaken for this attempt.
-pub(crate) async fn wake_s2s_route_recovery_head(
+pub async fn wake_s2s_route_recovery_head(
     pool: &PgPool,
     id: Uuid,
     target_domain: &str,
@@ -216,7 +218,7 @@ pub async fn enqueue_s2s_outbox_in_transaction(
 /// this variant so its XEP-0359 identity row can reference the exact durable
 /// federation projection before the deferred foreign key is checked at
 /// commit. All other callers should use `enqueue_s2s_outbox_in_transaction`.
-pub(crate) async fn enqueue_s2s_outbox_with_id_in_transaction(
+pub async fn enqueue_s2s_outbox_with_id_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     id: Uuid,
     target_domain: &str,
@@ -313,7 +315,7 @@ fn durable_federation_stanza(stanza: &str, outbox_id: Uuid) -> Result<String> {
     ))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn claim_due_s2s_outbox(
     pool: &PgPool,
     batch_size: i64,
@@ -430,11 +432,7 @@ pub async fn complete_s2s_outbox(pool: &PgPool, id: Uuid, lock_token: Uuid) -> R
 /// acknowledgement reaches us. That response is authoritative for this exact
 /// request, so its later transport acknowledgement can advance the stream.
 /// A live row still requires the original fenced token.
-pub(crate) async fn complete_s2s_outbox_for_sm(
-    pool: &PgPool,
-    id: Uuid,
-    lock_token: Uuid,
-) -> Result<bool> {
+pub async fn complete_s2s_outbox_for_sm(pool: &PgPool, id: Uuid, lock_token: Uuid) -> Result<bool> {
     if complete_s2s_outbox(pool, id, lock_token).await? {
         return Ok(true);
     }
@@ -571,7 +569,7 @@ pub async fn expire_s2s_outbox(pool: &PgPool, limit: i64) -> Result<Vec<ExpiredS
         .collect()
 }
 
-pub(crate) fn retry_delay_seconds(
+pub fn retry_delay_seconds(
     attempt_count: i32,
     base_seconds: u64,
     max_seconds: u64,

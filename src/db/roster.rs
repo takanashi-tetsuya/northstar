@@ -75,7 +75,7 @@ impl RosterTransactionEffects for RootRosterEffects {
         bounce_to: Option<&str>,
         policy: S2sOutboxPolicy,
     ) -> Result<()> {
-        super::enqueue_s2s_outbox_in_transaction(
+        northstar_federation_postgres::enqueue_s2s_outbox_in_transaction(
             transaction,
             target_domain,
             stanza,

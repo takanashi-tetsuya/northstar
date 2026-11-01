@@ -1,9 +1,6 @@
 //! PostgreSQL adapter for fenced outbound federation delivery.
-use crate::{
-    db,
-    services::s2s_outbox_dispatch::{
-        OutboxFailureDisposition, RouteRecoveryHead, S2sOutboxDispatchRepository,
-    },
+use crate::services::s2s_outbox_dispatch::{
+    OutboxFailureDisposition, RouteRecoveryHead, S2sOutboxDispatchRepository,
 };
 use anyhow::Result;
 use northstar_federation_core::{ExpiredS2sOutboxItem, S2sOutboxItem};
@@ -23,11 +20,12 @@ impl PostgresS2sOutboxDispatchRepository {
 
 impl S2sOutboxDispatchRepository for PostgresS2sOutboxDispatchRepository {
     async fn renew(&self, id: Uuid, token: Uuid, lease_seconds: u64) -> Result<bool> {
-        db::renew_s2s_outbox_lease(&self.pool, id, token, lease_seconds).await
+        northstar_federation_postgres::renew_s2s_outbox_lease(&self.pool, id, token, lease_seconds)
+            .await
     }
 
     async fn complete(&self, id: Uuid, token: Uuid) -> Result<bool> {
-        db::complete_s2s_outbox(&self.pool, id, token).await
+        northstar_federation_postgres::complete_s2s_outbox(&self.pool, id, token).await
     }
 
     async fn fail(
@@ -39,7 +37,7 @@ impl S2sOutboxDispatchRepository for PostgresS2sOutboxDispatchRepository {
         max_attempts: i32,
         permanent: bool,
     ) -> Result<OutboxFailureDisposition> {
-        let disposition = db::fail_s2s_outbox(
+        let disposition = northstar_federation_postgres::fail_s2s_outbox(
             &self.pool,
             item,
             error,
@@ -50,15 +48,23 @@ impl S2sOutboxDispatchRepository for PostgresS2sOutboxDispatchRepository {
         )
         .await?;
         Ok(match disposition {
-            db::S2sFailureDisposition::RetryScheduled => OutboxFailureDisposition::RetryScheduled,
-            db::S2sFailureDisposition::Expired => OutboxFailureDisposition::Expired,
-            db::S2sFailureDisposition::Dropped => OutboxFailureDisposition::Dropped,
-            db::S2sFailureDisposition::LeaseLost => OutboxFailureDisposition::LeaseLost,
+            northstar_federation_postgres::S2sFailureDisposition::RetryScheduled => {
+                OutboxFailureDisposition::RetryScheduled
+            }
+            northstar_federation_postgres::S2sFailureDisposition::Expired => {
+                OutboxFailureDisposition::Expired
+            }
+            northstar_federation_postgres::S2sFailureDisposition::Dropped => {
+                OutboxFailureDisposition::Dropped
+            }
+            northstar_federation_postgres::S2sFailureDisposition::LeaseLost => {
+                OutboxFailureDisposition::LeaseLost
+            }
         })
     }
 
     async fn expire(&self, limit: i64) -> Result<Vec<ExpiredS2sOutboxItem>> {
-        db::expire_s2s_outbox(&self.pool, limit).await
+        northstar_federation_postgres::expire_s2s_outbox(&self.pool, limit).await
     }
 
     async fn claim_excluding_domains(
@@ -67,7 +73,7 @@ impl S2sOutboxDispatchRepository for PostgresS2sOutboxDispatchRepository {
         lease_seconds: u64,
         excluded_domains: &[String],
     ) -> Result<Vec<S2sOutboxItem>> {
-        db::claim_due_s2s_outbox_excluding_domains(
+        northstar_federation_postgres::claim_due_s2s_outbox_excluding_domains(
             &self.pool,
             limit,
             lease_seconds,
@@ -82,23 +88,37 @@ impl S2sOutboxDispatchRepository for PostgresS2sOutboxDispatchRepository {
         lease_seconds: u64,
         domains: &[String],
     ) -> Result<Vec<S2sOutboxItem>> {
-        db::claim_due_s2s_outbox_for_domains(&self.pool, limit, lease_seconds, domains).await
+        northstar_federation_postgres::claim_due_s2s_outbox_for_domains(
+            &self.pool,
+            limit,
+            lease_seconds,
+            domains,
+        )
+        .await
     }
 
     async fn route_head(&self, domain: &str) -> Result<Option<RouteRecoveryHead>> {
-        Ok(db::s2s_route_recovery_head(&self.pool, domain)
-            .await?
-            .map(|head| RouteRecoveryHead {
-                id: head.id,
-                target_domain: head.target_domain,
-                stanza: head.stanza,
-                attempt_count: head.attempt_count,
-                retry_due: head.retry_due,
-                claim_in_flight: head.claim_in_flight,
-            }))
+        Ok(
+            northstar_federation_postgres::s2s_route_recovery_head(&self.pool, domain)
+                .await?
+                .map(|head| RouteRecoveryHead {
+                    id: head.id,
+                    target_domain: head.target_domain,
+                    stanza: head.stanza,
+                    attempt_count: head.attempt_count,
+                    retry_due: head.retry_due,
+                    claim_in_flight: head.claim_in_flight,
+                }),
+        )
     }
 
     async fn wake_route_head(&self, id: Uuid, domain: &str, attempt_count: i32) -> Result<bool> {
-        db::wake_s2s_route_recovery_head(&self.pool, id, domain, attempt_count).await
+        northstar_federation_postgres::wake_s2s_route_recovery_head(
+            &self.pool,
+            id,
+            domain,
+            attempt_count,
+        )
+        .await
     }
 }

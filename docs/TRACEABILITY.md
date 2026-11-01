@@ -25,7 +25,7 @@ checked only for an explicit archive banner.
 | DOC-001 | Implemented | [messaging.rs](../src/xmpp/protocol/messaging.rs) | [documentation gate](../scripts/check-documentation-consistency.mjs) | [known issues](KNOWN_ISSUES.md) |
 | DOC-002 | Implemented | [cluster.rs](../src/cluster.rs), [PubSub outbox](../crates/contexts/pubsub/northstar-pubsub-postgres/src/outbox.rs) | [documentation gate](../scripts/check-documentation-consistency.mjs) | [clustering](CLUSTERING.md) |
 | DOC-003 | Implemented | [pubsub.rs](../src/xmpp/protocol/pubsub.rs) | [PubSub wire harness](../scripts/pubsub-wire-wsl.sh) | [XEP matrix](XEP_MATRIX.md) |
-| DOC-004 | Implemented | [S2S outbox](../src/db/s2s.rs) | [S2S database harness](../scripts/s2s-db-wsl.sh) | [production operations](PRODUCTION_OPERATIONS.md) |
+| DOC-004 | Implemented | [S2S outbox](../crates/contexts/federation/northstar-federation-postgres/src/lib.rs) | [S2S database harness](../scripts/s2s-db-wsl.sh) | [production operations](PRODUCTION_OPERATIONS.md) |
 | DOC-005 | Implemented | [cluster runtime](../src/cluster.rs) | [cluster harness](../scripts/cluster-wsl.sh) | [clustering](CLUSTERING.md) |
 | DOC-006 | Implemented | [load harness](../scripts/load-1000-production-wsl.py) | [production-envelope runner](../scripts/load-1000-production-wsl.sh) | [README](../README.md) |
 | DOC-007 | Implemented | [abuse authority](../crates/contexts/abuse/northstar-abuse-postgres/src/keys.rs), [configuration](../crates/platform/northstar-config/src/lib.rs) | [key deployment harness](../scripts/abuse-key-deployment-db-wsl.sh) | [abuse audit](ABUSE_AND_MODERATION_PRODUCTION_AUDIT.md) |

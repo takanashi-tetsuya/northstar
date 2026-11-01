@@ -182,6 +182,7 @@ digraph compile_time {
   "northstar-delivery-core";
   "northstar-federation-application";
   "northstar-federation-core";
+  "northstar-federation-postgres";
   "northstar-message-application";
   "northstar-message-core";
   "northstar-mix-xmpp";
@@ -1079,6 +1080,15 @@ digraph compile_time {
   "northstar-federation-core" -> "serde";
   "northstar-federation-core" -> "sha2";
   "northstar-federation-core" -> "uuid";
+  "northstar-federation-postgres" -> "anyhow";
+  "northstar-federation-postgres" -> "northstar-federation-core";
+  "northstar-federation-postgres" -> "northstar-telemetry";
+  "northstar-federation-postgres" -> "northstar-xep-0359";
+  "northstar-federation-postgres" -> "northstar-xmpp-types";
+  "northstar-federation-postgres" -> "roxmltree";
+  "northstar-federation-postgres" -> "sha2";
+  "northstar-federation-postgres" -> "sqlx";
+  "northstar-federation-postgres" -> "uuid";
   "northstar-message-application" -> "anyhow";
   "northstar-message-application" -> "chrono";
   "northstar-message-application" -> "futures";
@@ -1897,6 +1907,7 @@ digraph compile_time {
   "rust-xmpp-server" -> "northstar-delivery-core";
   "rust-xmpp-server" -> "northstar-federation-application";
   "rust-xmpp-server" -> "northstar-federation-core";
+  "rust-xmpp-server" -> "northstar-federation-postgres";
   "rust-xmpp-server" -> "northstar-message-application";
   "rust-xmpp-server" -> "northstar-message-core";
   "rust-xmpp-server" -> "northstar-mix-xmpp";

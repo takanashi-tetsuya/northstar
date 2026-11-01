@@ -22,7 +22,7 @@ impl FederationOutboxRepository for PostgresFederationOutboxRepository {
         bounce_to: Option<&'a str>,
         policy: S2sOutboxPolicy,
     ) -> anyhow::Result<()> {
-        crate::db::enqueue_s2s_outbox(
+        northstar_federation_postgres::enqueue_s2s_outbox(
             &self.pool,
             target_domain,
             stanza,

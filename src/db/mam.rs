@@ -260,14 +260,14 @@ impl FederatedMamStreamWriter for PostgresMamRepository {
             guard.release().await;
             anyhow::bail!("federated MAM renderer omitted the terminal response");
         }
-        let policy = db::S2sOutboxPolicy {
+        let policy = northstar_federation_core::S2sOutboxPolicy {
             ttl_seconds: limits.ttl_seconds,
             max_rows: limits.max_rows,
             max_bytes: limits.max_bytes,
             max_per_domain: limits.max_per_domain,
         };
         for response in &responses {
-            if let Err(error) = db::enqueue_s2s_outbox_in_transaction(
+            if let Err(error) = northstar_federation_postgres::enqueue_s2s_outbox_in_transaction(
                 &mut transaction,
                 request.target_domain,
                 response,

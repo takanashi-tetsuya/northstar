@@ -9,7 +9,7 @@ use tokio::{
 };
 
 use crate::{
-    db, services::s2s_sm_outbox::SmOutboxClaim, state::AppState, xmpp::xml_builder::XmlElement,
+    services::s2s_sm_outbox::SmOutboxClaim, state::AppState, xmpp::xml_builder::XmlElement,
 };
 
 use super::{outbound::fail_envelope, write_xml, FederationEnvelope};
@@ -23,7 +23,7 @@ pub(crate) fn feature() -> String {
 }
 
 struct Pending {
-    durable: Option<db::S2sOutboxItem>,
+    durable: Option<northstar_federation_core::S2sOutboxItem>,
     deadline: Instant,
     replay: Option<String>,
     _bytes: Option<OwnedSemaphorePermit>,
@@ -193,16 +193,16 @@ impl StreamManagement {
             "S2S acknowledgement timed out"
         );
         // Volatile/no-store stanzas contribute to h but retain no payload.
-        let durable = envelope
-            .filter(|item| item.is_durable())
-            .map(|item| db::S2sOutboxItem {
+        let durable = envelope.filter(|item| item.is_durable()).map(|item| {
+            northstar_federation_core::S2sOutboxItem {
                 id: item.outbox_id,
                 lock_token: item.lock_token,
                 target_domain: item.target_domain.clone(),
                 bounce_to: item.bounce_to.clone(),
                 stanza: item.stanza.clone(),
                 attempt_count: item.attempt_count,
-            });
+            }
+        });
         let replayable = envelope.is_none_or(|item| item.is_durable())
             && !Document::parse(xml).is_ok_and(|doc| {
                 doc.root_element()

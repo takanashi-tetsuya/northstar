@@ -21,9 +21,11 @@ async fn enqueue_authenticated_recovery_test_row(
     target: &str,
     stanza: &str,
 ) -> uuid::Uuid {
-    db::enqueue_s2s_outbox(pool, target, stanza, None, 300, 100, 1_000_000, 100)
-        .await
-        .unwrap()
+    northstar_federation_postgres::enqueue_s2s_outbox(
+        pool, target, stanza, None, 300, 100, 1_000_000, 100,
+    )
+    .await
+    .unwrap()
 }
 
 fn publish_authenticated_recovery_test_route(
@@ -93,17 +95,26 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
         "<message from='sender@local.test' to='peer@recovered.remote.test' id='second'/>",
     )
     .await;
-    let mut claimed = db::claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
-        .await
-        .unwrap();
+    let mut claimed =
+        northstar_federation_postgres::claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
+            .await
+            .unwrap();
     assert_eq!(claimed.len(), 1);
     let first = claimed.remove(0);
     assert_eq!(first.id, head_id);
     assert_eq!(
-        db::fail_s2s_outbox(&pool, &first, "initial route outage", 60, 60, 200, false)
-            .await
-            .unwrap(),
-        db::S2sFailureDisposition::RetryScheduled
+        northstar_federation_postgres::fail_s2s_outbox(
+            &pool,
+            &first,
+            "initial route outage",
+            60,
+            60,
+            200,
+            false
+        )
+        .await
+        .unwrap(),
+        northstar_federation_postgres::S2sFailureDisposition::RetryScheduled
     );
     assert_eq!(
         recover_authenticated_route_heads(&dispatch, &registry, &[], |_| true, 4)
@@ -112,7 +123,7 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
         0
     );
     assert!(
-        !db::s2s_route_recovery_head(&pool, target)
+        !northstar_federation_postgres::s2s_route_recovery_head(&pool, target)
             .await
             .unwrap()
             .unwrap()
@@ -129,9 +140,10 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
             .unwrap(),
         1
     );
-    let mut claimed = db::claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
-        .await
-        .unwrap();
+    let mut claimed =
+        northstar_federation_postgres::claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
+            .await
+            .unwrap();
     assert_eq!(
         claimed.len(),
         1,
@@ -141,11 +153,13 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
     assert_eq!(recovered.id, head_id);
     assert_ne!(recovered.id, successor_id);
     assert_ne!(recovered.lock_token, first.lock_token);
-    assert!(!db::complete_s2s_outbox(&pool, first.id, first.lock_token)
-        .await
-        .unwrap());
+    assert!(
+        !northstar_federation_postgres::complete_s2s_outbox(&pool, first.id, first.lock_token)
+            .await
+            .unwrap()
+    );
     assert_eq!(
-        db::fail_s2s_outbox(
+        northstar_federation_postgres::fail_s2s_outbox(
             &pool,
             &recovered,
             "same stream failed again",
@@ -156,7 +170,7 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
         )
         .await
         .unwrap(),
-        db::S2sFailureDisposition::RetryScheduled
+        northstar_federation_postgres::S2sFailureDisposition::RetryScheduled
     );
     assert_eq!(
         recover_authenticated_route_heads(&dispatch, &registry, &[], |_| true, 4)
@@ -166,14 +180,14 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
         "the same authenticated stream must not repeatedly defeat backoff"
     );
     assert!(
-        !db::s2s_route_recovery_head(&pool, target)
+        !northstar_federation_postgres::s2s_route_recovery_head(&pool, target)
             .await
             .unwrap()
             .unwrap()
             .retry_due
     );
     assert!(
-        db::claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
+        northstar_federation_postgres::claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
             .await
             .unwrap()
             .is_empty()
@@ -187,9 +201,14 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
         "<message from='sender@local.test' to='peer@leased.remote.test' id='leased'/>",
     )
     .await;
-    let mut claimed = db::claim_due_s2s_outbox_for_domains(&pool, 10, 120, &leased_domains)
-        .await
-        .unwrap();
+    let mut claimed = northstar_federation_postgres::claim_due_s2s_outbox_for_domains(
+        &pool,
+        10,
+        120,
+        &leased_domains,
+    )
+    .await
+    .unwrap();
     assert_eq!(claimed.len(), 1);
     let leased = claimed.remove(0);
     let _leased_receiver = publish_authenticated_recovery_test_route(
@@ -208,7 +227,7 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
     let (started_tx, started_rx) = tokio::sync::oneshot::channel();
     let failing = tokio::spawn(async move {
         started_tx.send(()).unwrap();
-        db::fail_s2s_outbox(
+        northstar_federation_postgres::fail_s2s_outbox(
             &fail_pool,
             &failing_item,
             "old lease failure awaiting commit",
@@ -230,7 +249,7 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
     );
     assert_eq!(registry.pending_bidi_recoveries(4).len(), 1);
     assert!(
-        db::s2s_route_recovery_head(&pool, leased_target)
+        northstar_federation_postgres::s2s_route_recovery_head(&pool, leased_target)
             .await
             .unwrap()
             .unwrap()
@@ -244,7 +263,7 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
             .expect("released row lock must allow the real failure to commit")
             .unwrap()
             .unwrap(),
-        db::S2sFailureDisposition::RetryScheduled
+        northstar_federation_postgres::S2sFailureDisposition::RetryScheduled
     );
     assert_eq!(
         recover_authenticated_route_heads(&dispatch, &registry, &[], |_| true, 4)
@@ -252,24 +271,33 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
             .unwrap(),
         1
     );
-    let mut claimed = db::claim_due_s2s_outbox_for_domains(&pool, 10, 120, &leased_domains)
-        .await
-        .unwrap();
+    let mut claimed = northstar_federation_postgres::claim_due_s2s_outbox_for_domains(
+        &pool,
+        10,
+        120,
+        &leased_domains,
+    )
+    .await
+    .unwrap();
     assert_eq!(claimed.len(), 1);
     let after_commit = claimed.remove(0);
     assert_eq!(after_commit.id, leased_id);
     assert_eq!(after_commit.attempt_count, leased.attempt_count + 1);
     assert_ne!(after_commit.lock_token, leased.lock_token);
-    assert!(
-        !db::complete_s2s_outbox(&pool, leased.id, leased.lock_token)
-            .await
-            .unwrap()
-    );
-    assert!(
-        db::complete_s2s_outbox(&pool, after_commit.id, after_commit.lock_token)
-            .await
-            .unwrap()
-    );
+    assert!(!northstar_federation_postgres::complete_s2s_outbox(
+        &pool,
+        leased.id,
+        leased.lock_token
+    )
+    .await
+    .unwrap());
+    assert!(northstar_federation_postgres::complete_s2s_outbox(
+        &pool,
+        after_commit.id,
+        after_commit.lock_token
+    )
+    .await
+    .unwrap());
     assert!(registry.pending_bidi_recoveries(4).is_empty());
 
     for reason in ["direction", "component", "denied", "revoked"] {
@@ -317,7 +345,7 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
             "an ineligible route must not accelerate its head: {reason}"
         );
         assert!(
-            !db::s2s_route_recovery_head(&pool, &target)
+            !northstar_federation_postgres::s2s_route_recovery_head(&pool, &target)
                 .await
                 .unwrap()
                 .unwrap()

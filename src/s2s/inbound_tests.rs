@@ -710,7 +710,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
         .unwrap(),
         db::OfflineStoreOutcome::QuotaExceeded
     );
-    assert!(db::enqueue_s2s_outbox(
+    assert!(northstar_federation_postgres::enqueue_s2s_outbox(
         &pool,
         "remote.test",
         "<message from='alice@local.test' to='carol@remote.test'/>",
@@ -900,7 +900,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
         .unwrap();
     assert_eq!(accepted_offline_count, 1);
 
-    db::enqueue_s2s_outbox(
+    northstar_federation_postgres::enqueue_s2s_outbox(
         &pool,
         "remote.test",
         "<message from='alice@local.test' to='carol@remote.test'><retract xmlns='urn:xmpp:message-retract:1' id='outbound-original'/></message>",

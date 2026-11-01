@@ -36,8 +36,14 @@ impl RoomEffects for RootRoomEffects {
         bounce_to: Option<&str>,
         policy: S2sOutboxPolicy,
     ) -> Result<Uuid> {
-        db::enqueue_s2s_outbox_in_transaction(transaction, target_domain, stanza, bounce_to, policy)
-            .await
+        northstar_federation_postgres::enqueue_s2s_outbox_in_transaction(
+            transaction,
+            target_domain,
+            stanza,
+            bounce_to,
+            policy,
+        )
+        .await
     }
 
     async fn lock_direct_spool_instance_claims(
@@ -135,7 +141,7 @@ impl RoomEffects for RootRoomEffects {
         bounce_to: Option<&str>,
         policy: S2sOutboxPolicy,
     ) -> Result<()> {
-        db::enqueue_s2s_outbox_with_id_in_transaction(
+        northstar_federation_postgres::enqueue_s2s_outbox_with_id_in_transaction(
             transaction,
             id,
             target_domain,

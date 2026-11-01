@@ -671,7 +671,7 @@ async fn roster_removal_settles_local_mutual_pending_and_federated_state_atomica
     let unsubscribed = format!(
         "<presence xmlns='jabber:client' from='{owner_jid}' to='{remote}' type='unsubscribed'/>",
     );
-    let policy = super::super::S2sOutboxPolicy {
+    let policy = northstar_federation_core::S2sOutboxPolicy {
         ttl_seconds: 3600,
         max_rows: 100,
         max_bytes: 1024 * 1024,
@@ -1053,7 +1053,7 @@ async fn remote_transition_and_pending_consumption_are_atomic() {
     .execute(&pool)
     .await
     .unwrap();
-    let policy = super::super::S2sOutboxPolicy {
+    let policy = northstar_federation_core::S2sOutboxPolicy {
         ttl_seconds: 300,
         max_rows: 10_000,
         max_bytes: 64 * 1024 * 1024,

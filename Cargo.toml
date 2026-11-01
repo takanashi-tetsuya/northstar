@@ -77,6 +77,7 @@ members = [
     "crates/contexts/upload/northstar-upload-xmpp",
     "crates/contexts/session/northstar-session-application",
     "crates/contexts/federation/northstar-federation-core",
+    "crates/contexts/federation/northstar-federation-postgres",
     "crates/contexts/federation/northstar-federation-application",
     "crates/contexts/session/northstar-protocol-runtime",
     "crates/edges/northstar-stream",
@@ -225,6 +226,7 @@ northstar-upload-xmpp = { path = "crates/contexts/upload/northstar-upload-xmpp" 
 northstar-session-application = { path = "crates/contexts/session/northstar-session-application" }
 northstar-stream = { path = "crates/edges/northstar-stream" }
 northstar-federation-core = { path = "crates/contexts/federation/northstar-federation-core" }
+northstar-federation-postgres = { path = "crates/contexts/federation/northstar-federation-postgres" }
 northstar-federation-application = { path = "crates/contexts/federation/northstar-federation-application" }
 northstar-protocol-runtime = { path = "crates/contexts/session/northstar-protocol-runtime" }
 # Ceremony state is serialized only into the server-side PostgreSQL challenge table.
@@ -233,6 +235,7 @@ webauthn-rs = { version = "0.5.5", default-features = false, features = ["danger
 openssl = { version = "0.10.81", features = ["vendored"] }
 
 [dev-dependencies]
+northstar-federation-postgres = { path = "crates/contexts/federation/northstar-federation-postgres", features = ["test-support"] }
 northstar-operations-application = { path = "crates/contexts/operations/northstar-operations-application", features = ["test-support"] }
 northstar-room-application = { path = "crates/contexts/room/northstar-room-application", features = ["test-support"] }
 northstar-mix-xmpp = { path = "crates/contexts/room/northstar-mix-xmpp", features = ["test-support"] }

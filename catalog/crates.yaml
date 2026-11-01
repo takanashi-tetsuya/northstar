@@ -214,6 +214,16 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-federation-postgres
+    package: northstar-federation-postgres
+    path: crates/contexts/federation/northstar-federation-postgres
+    tier: context
+    context: federation
+    role: adapter
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-message-application
     package: northstar-message-application
     path: crates/contexts/message/northstar-message-application

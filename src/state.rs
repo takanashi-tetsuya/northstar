@@ -259,14 +259,14 @@ pub(crate) use self::runtime_control::*;
 use self::upload_module::*;
 use crate::xmpp::local_routes::{
     muc::{
-        LocalMucJoinPublication, LocalMucNicknameMove, MucOccupant, MucOccupantEndpoint,
-        RestoreLocalMucOccupantsRequest, SuspendedMucEndpoint, SuspendedMucPhase,
-        SuspendedMucRoute,
+        MucOccupant, MucOccupantEndpoint, RestoreLocalMucOccupantsRequest, SuspendedMucEndpoint,
+        SuspendedMucPhase, SuspendedMucRoute,
     },
     session::{AccountRevocationRoutes, OnlineSession, SmPresenceEpoch, SmStagedRouteClaim},
 };
 use crate::xmpp::local_routes::{muc_table::*, session_table::*, suspended_muc::*};
 use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
+use northstar_room_core::occupancy::{LocalMucJoinPublication, LocalMucNicknameMove};
 use northstar_xml_builder::escape::attr_escape;
 use northstar_xmpp_types::jid_text::*;
 

@@ -1,4 +1,5 @@
 use super::*;
+use northstar_room_core::occupancy::MucRegistration;
 use std::panic::AssertUnwindSafe;
 
 struct RoutingFixture {

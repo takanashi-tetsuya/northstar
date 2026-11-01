@@ -7,6 +7,7 @@ pub mod mix;
 pub mod mix_iq_relay;
 pub mod occupancy;
 pub mod stanza;
+pub mod telemetry;
 
 use northstar_xmpp_types::{prepare_domainpart, CanonicalJid};
 use uuid::Uuid;

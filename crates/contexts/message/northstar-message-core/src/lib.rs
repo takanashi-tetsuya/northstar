@@ -240,6 +240,22 @@ pub fn undelivered_disposition(
     UndeliveredDisposition::StoreOffline
 }
 
+pub fn live_reservation_valid(
+    clustered: bool,
+    message_id: uuid::Uuid,
+    claim_id: Option<uuid::Uuid>,
+) -> bool {
+    !clustered || claim_id == Some(message_id)
+}
+
+/// The per-account bounds of the offline queue.
+#[derive(Clone, Copy)]
+pub struct OfflineDeliveryLimits {
+    pub max_messages: i64,
+    pub max_bytes: i64,
+    pub ttl_days: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

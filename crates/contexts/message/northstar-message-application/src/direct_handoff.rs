@@ -48,14 +48,6 @@ pub fn health_decision(
     }
 }
 
-pub fn live_reservation_valid(
-    clustered: bool,
-    message_id: uuid::Uuid,
-    claim_id: Option<uuid::Uuid>,
-) -> bool {
-    !clustered || claim_id == Some(message_id)
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Refusal {
     Full,

@@ -1,14 +1,8 @@
 //! Runtime configuration views: policy value types and configuration accessors.
 
 use super::*;
+pub(crate) use northstar_message_core::OfflineDeliveryLimits;
 use northstar_upload_application::UploadSlotLimits;
-
-#[derive(Clone, Copy)]
-pub(crate) struct OfflineDeliveryLimits {
-    pub(crate) max_messages: i64,
-    pub(crate) max_bytes: i64,
-    pub(crate) ttl_days: i64,
-}
 
 #[derive(Clone, Copy)]
 pub(crate) struct SmBufferLimits {

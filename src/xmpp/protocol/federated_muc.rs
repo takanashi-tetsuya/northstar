@@ -439,7 +439,7 @@ enum FederatedIqPayload {
         node: Option<String>,
     },
     DiscoInfoError,
-    DiscoItems(super::discovery::DiscoItemsRequest),
+    DiscoItems(northstar_xml_builder::disco::DiscoItemsRequest),
     DiscoItemsError(&'static str),
     Unique,
     OwnerGet,
@@ -503,7 +503,7 @@ impl FederatedIqRequest {
                         }
                     }
                     ("query", "http://jabber.org/protocol/disco#items", "get") => {
-                        match super::discovery::parse_disco_items_query(child) {
+                        match northstar_xml_builder::disco::parse_disco_items_query(child) {
                             Ok(request) => FederatedIqPayload::DiscoItems(request),
                             Err(condition) => FederatedIqPayload::DiscoItemsError(condition),
                         }

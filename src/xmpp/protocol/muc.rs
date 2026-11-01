@@ -31,7 +31,6 @@ pub(super) use self::owner::muc_room_configuration_form;
 
 use super::{Action, ProtocolSession};
 use crate::services::xml_util::*;
-use crate::state::muc_cluster_effects::MucPresencePublication;
 use crate::xmpp::frame_execution::Stage;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
@@ -54,6 +53,7 @@ use northstar_room_application::muc_service::{
 #[cfg(test)]
 use northstar_room_application::PostCommitAdmissionError as MucPostCommitAdmissionError;
 use northstar_room_application::PostCommitPlan as MucPostCommitPlan;
+use northstar_room_core::occupancy::MucPresencePublication;
 use northstar_room_core::stanza::*;
 use northstar_room_core::MucJoinSnapshotError;
 use northstar_xmpp_types::jid::{canonical_bare_key, prepare_domainpart, CanonicalJid};

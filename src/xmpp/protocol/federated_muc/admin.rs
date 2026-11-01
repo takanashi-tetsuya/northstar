@@ -1037,8 +1037,8 @@ pub(super) async fn federated_muc_admin_set(
                         )
                         .await?
                     {
-                        crate::cluster::MucRoleChange::Changed(updated) => *updated,
-                        crate::cluster::MucRoleChange::Stale => continue,
+                        northstar_room_core::occupancy::MucRoleChange::Changed(updated) => *updated,
+                        northstar_room_core::occupancy::MucRoleChange::Stale => continue,
                     };
                     state
                         .federated_muc_publish_presence(
@@ -1148,8 +1148,8 @@ pub(super) async fn federated_muc_admin_set(
                         .federated_muc_change_occupant_role(&requester.room_jid, &target, role)
                         .await?
                     {
-                        crate::cluster::MucRoleChange::Changed(updated) => *updated,
-                        crate::cluster::MucRoleChange::Stale => {
+                        northstar_room_core::occupancy::MucRoleChange::Changed(updated) => *updated,
+                        northstar_room_core::occupancy::MucRoleChange::Stale => {
                             return Ok(federated_error(
                                 stanza,
                                 &stanza.from,

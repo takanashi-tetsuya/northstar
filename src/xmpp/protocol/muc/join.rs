@@ -716,8 +716,8 @@ impl ProtocolSession {
                 )
                 .await
             {
-                Ok(crate::cluster::MucRename::Renamed) => true,
-                Ok(crate::cluster::MucRename::Conflict) => {
+                Ok(northstar_room_core::occupancy::MucRename::Renamed) => true,
+                Ok(northstar_room_core::occupancy::MucRename::Conflict) => {
                     if cluster_operation.is_none() {
                         return Ok(Action::Send(muc_stanza_error(
                             root, &full_jid, "cancel", "conflict",
@@ -727,7 +727,7 @@ impl ProtocolSession {
                         "Redis MUC nickname cache conflicted after PostgreSQL committed; reconciliation will replace soft state");
                     false
                 }
-                Ok(crate::cluster::MucRename::Stale) => {
+                Ok(northstar_room_core::occupancy::MucRename::Stale) => {
                     if cluster_operation.is_none() {
                         return Ok(Action::Send(muc_stanza_error(
                             root,
@@ -758,17 +758,17 @@ impl ProtocolSession {
                 cluster_operation.is_some(),
             );
             match move_outcome {
-                crate::xmpp::local_routes::muc::LocalMucNicknameMove::Published
-                | crate::xmpp::local_routes::muc::LocalMucNicknameMove::AlreadyPublished => {}
-                crate::xmpp::local_routes::muc::LocalMucNicknameMove::DeferredToReconciliation
+                northstar_room_core::occupancy::LocalMucNicknameMove::Published
+                | northstar_room_core::occupancy::LocalMucNicknameMove::AlreadyPublished => {}
+                northstar_room_core::occupancy::LocalMucNicknameMove::DeferredToReconciliation
                     if cluster_operation.is_some() =>
                 {
                     tracing::warn!(room=%room_jid, %nick,
                         "PG-authoritative MUC rename found another local incarnation; reconciliation will repair the cache");
                 }
-                crate::xmpp::local_routes::muc::LocalMucNicknameMove::CollisionRestored
-                | crate::xmpp::local_routes::muc::LocalMucNicknameMove::CollisionRestoreFailed => {
-                    if move_outcome == crate::xmpp::local_routes::muc::LocalMucNicknameMove::CollisionRestoreFailed {
+                northstar_room_core::occupancy::LocalMucNicknameMove::CollisionRestored
+                | northstar_room_core::occupancy::LocalMucNicknameMove::CollisionRestoreFailed => {
+                    if move_outcome == northstar_room_core::occupancy::LocalMucNicknameMove::CollisionRestoreFailed {
                         tracing::error!(room=%room_jid, old_nick=%joined_nick,
                             "could not restore local MUC actor after nickname collision");
                     }
@@ -1267,9 +1267,9 @@ impl ProtocolSession {
                         "PostgreSQL committed MUC join; Redis occupancy cache refresh failed");
                 }
                 match cache.registration {
-                    Ok(crate::cluster::MucRegistration::Joined) => {}
-                    Ok(crate::cluster::MucRegistration::Conflict)
-                    | Ok(crate::cluster::MucRegistration::Full) => {
+                    Ok(northstar_room_core::occupancy::MucRegistration::Joined) => {}
+                    Ok(northstar_room_core::occupancy::MucRegistration::Conflict)
+                    | Ok(northstar_room_core::occupancy::MucRegistration::Full) => {
                         tracing::warn!(%room_jid, %nick,
                             "Redis MUC cache disagreed with committed PostgreSQL occupancy; cache will reconcile");
                     }
@@ -1282,13 +1282,13 @@ impl ProtocolSession {
         // The committed PostgreSQL event handles durable audience delivery.
         let local_existing = self.state.muc_occupants_for(&room_jid);
         let publication = self.state.publish_local_muc_join_if_vacant(&occupant);
-        if publication != crate::xmpp::local_routes::muc::LocalMucJoinPublication::Published {
+        if publication != northstar_room_core::occupancy::LocalMucJoinPublication::Published {
             if !self.state.muc_pg_authority_enabled() {
                 return Ok(Action::Send(muc_stanza_error(
                     root, &full_jid, "cancel", "conflict",
                 )));
             }
-            if publication == crate::xmpp::local_routes::muc::LocalMucJoinPublication::Occupied {
+            if publication == northstar_room_core::occupancy::LocalMucJoinPublication::Occupied {
                 tracing::error!(%room_jid, %nick,
                     "committed MUC join found another local incarnation; preserving it and compensating this claim");
                 drop(local_join_guard);

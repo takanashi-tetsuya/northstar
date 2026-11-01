@@ -972,8 +972,10 @@ impl ProtocolSession {
                             )
                             .await?
                         {
-                            crate::cluster::MucRoleChange::Changed(updated) => *updated,
-                            crate::cluster::MucRoleChange::Stale => continue,
+                            northstar_room_core::occupancy::MucRoleChange::Changed(updated) => {
+                                *updated
+                            }
+                            northstar_room_core::occupancy::MucRoleChange::Stale => continue,
                         };
                         for (_, other) in self.state.muc_occupants_for(room_jid) {
                             let presence = muc_presence_stanza(
@@ -1081,8 +1083,10 @@ impl ProtocolSession {
                             .change_cluster_muc_role_exact(room_jid, &remote, new_role)
                             .await?
                         {
-                            crate::cluster::MucRoleChange::Changed(updated) => *updated,
-                            crate::cluster::MucRoleChange::Stale => {
+                            northstar_room_core::occupancy::MucRoleChange::Changed(updated) => {
+                                *updated
+                            }
+                            northstar_room_core::occupancy::MucRoleChange::Stale => {
                                 return Ok(Action::Send(iq_error_from(
                                     id,
                                     room_jid,

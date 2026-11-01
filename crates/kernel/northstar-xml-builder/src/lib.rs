@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod disco;
 pub mod escape;
 pub mod rewrite;
 pub mod stanza;

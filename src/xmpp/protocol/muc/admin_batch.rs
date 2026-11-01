@@ -241,7 +241,7 @@ pub(super) fn is_exact_muc_removal_target(
     recipient: &crate::xmpp::local_routes::muc::MucOccupant,
     target: &crate::xmpp::local_routes::muc::MucOccupant,
 ) -> bool {
-    crate::xmpp::local_routes::muc::muc_departure_identity_matches(
+    northstar_room_core::occupancy::muc_departure_identity_matches(
         recipient,
         &target.full_jid,
         target.connection_id,

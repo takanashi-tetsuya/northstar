@@ -59,7 +59,6 @@ pub(crate) use self::listener_policy::{
     ClusterListenerMessagePolicy, ClusterMixCapability, SessionTerminationEffect,
 };
 pub(crate) use self::maintenance_redis::*;
-pub use self::muc_occupancy::*;
 use self::muc_outbox::*;
 pub(crate) use self::node_delivery::*;
 use self::publisher::*;

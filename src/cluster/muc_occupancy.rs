@@ -1,26 +1,7 @@
 //! Cluster MUC occupant registration, renames, role, affiliation and policy changes, resume and eviction.
 
 use super::*;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MucRegistration {
-    Joined,
-    Conflict,
-    Full,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MucRename {
-    Renamed,
-    Conflict,
-    Stale,
-}
-
-#[derive(Clone)]
-pub enum MucRoleChange {
-    Changed(Box<northstar_room_application::muc_service::SerializableMucOccupant>),
-    Stale,
-}
+use northstar_room_core::occupancy::{MucRegistration, MucRename, MucRoleChange};
 
 impl northstar_room_application::muc_service::MucWakePort for ClusterManager {
     async fn wake(&self, descriptor: &northstar_room_core::ClusterMucWakeDescriptor) -> Result<()> {

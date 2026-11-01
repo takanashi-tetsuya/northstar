@@ -1,15 +1,12 @@
 //! Cluster operations used by federated MUC handlers.
 
 use super::{AppState, SerializableMucOccupant};
-use crate::cluster::{MucRename, MucRoleChange};
 use crate::xmpp::outbound::DurableDelivery;
 use anyhow::Result;
 use northstar_delivery_core::node_delivery::NodeDeliveryReceipt;
+use northstar_room_core::occupancy::FederatedMucAccountRoute;
+use northstar_room_core::occupancy::{MucRename, MucRoleChange};
 use std::collections::HashMap;
-
-pub(crate) struct FederatedMucAccountRoute {
-    pub(crate) accepted_full_jid: Option<String>,
-}
 
 fn accepted_primary_route(receipt: NodeDeliveryReceipt) -> Option<FederatedMucAccountRoute> {
     (receipt.delivered && receipt.acknowledged).then_some(FederatedMucAccountRoute {

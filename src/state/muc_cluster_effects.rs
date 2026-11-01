@@ -1,21 +1,13 @@
 //! PostgreSQL occupancy mode and optional Redis routing for local MUC.
 
 use super::{AppState, SerializableMucOccupant};
-use crate::cluster::{ClusterOperation, MucRename, MucRoleChange};
+use crate::cluster::ClusterOperation;
 use crate::xmpp::outbound::DurableDelivery;
 use anyhow::Result;
 use northstar_delivery_core::node_delivery::NodeDeliveryReceipt;
+use northstar_room_core::occupancy::MucPresencePublication;
+use northstar_room_core::occupancy::{MucRename, MucRoleChange};
 use std::collections::HashMap;
-
-pub(crate) struct MucPresencePublication<'a> {
-    pub(crate) room: &'a str,
-    pub(crate) occupant: &'a SerializableMucOccupant,
-    pub(crate) unavailable: bool,
-    pub(crate) created: bool,
-    pub(crate) removal_status: Option<u16>,
-    pub(crate) actor_nick: Option<&'a str>,
-    pub(crate) reason: Option<&'a str>,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct MucRuntimeMode {

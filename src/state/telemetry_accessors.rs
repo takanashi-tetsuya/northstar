@@ -131,8 +131,8 @@ impl AppState {
         ))
     }
 
-    pub(crate) fn muc_telemetry(&self) -> crate::xmpp::capabilities::MucTelemetry<'_> {
-        crate::xmpp::capabilities::MucTelemetry::new(
+    pub(crate) fn muc_telemetry(&self) -> northstar_room_core::telemetry::MucTelemetry<'_> {
+        northstar_room_core::telemetry::MucTelemetry::new(
             &self.metrics.muc_post_commit_delivery_failures_total,
             &self.metrics.post_accept_side_effect_failures_total,
             &self.metrics.cluster_muc_authority_rejections_total,
@@ -306,8 +306,8 @@ impl AppState {
 
     pub(crate) fn federated_muc_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::FederatedMucTelemetry<'_> {
-        crate::xmpp::capabilities::FederatedMucTelemetry::new(
+    ) -> northstar_room_core::telemetry::FederatedMucTelemetry<'_> {
+        northstar_room_core::telemetry::FederatedMucTelemetry::new(
             &self.metrics.muc_post_commit_delivery_failures_total,
             &self.metrics.post_accept_side_effect_failures_total,
             &self.metrics.capacity_reservations_rejected_total,

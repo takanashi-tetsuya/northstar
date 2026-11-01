@@ -1,13 +1,8 @@
 //! Redis projection for committed MUC joins and exact departures.
 
 use super::{AppState, MucOccupant, SerializableMucOccupant};
-use crate::cluster::MucRegistration;
 use anyhow::Result;
-
-pub(crate) struct MucJoinCacheAttempt {
-    pub(crate) refresh: Result<()>,
-    pub(crate) registration: Result<MucRegistration>,
-}
+use northstar_room_core::occupancy::MucJoinCacheAttempt;
 
 impl AppState {
     /// PostgreSQL owns the join. Refresh and try to publish its disposable

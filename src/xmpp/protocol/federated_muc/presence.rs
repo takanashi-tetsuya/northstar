@@ -254,11 +254,11 @@ async fn federated_muc_presence_owned(
                     connection_id,
                 };
                 match state.publish_local_muc_join_if_vacant(&replacement) {
-                    crate::xmpp::local_routes::muc::LocalMucJoinPublication::Published
-                    | crate::xmpp::local_routes::muc::LocalMucJoinPublication::AlreadyPublished => {
+                    northstar_room_core::occupancy::LocalMucJoinPublication::Published
+                    | northstar_room_core::occupancy::LocalMucJoinPublication::AlreadyPublished => {
                         replacement
                     }
-                    crate::xmpp::local_routes::muc::LocalMucJoinPublication::Occupied => {
+                    northstar_room_core::occupancy::LocalMucJoinPublication::Occupied => {
                         tracing::warn!(room=%room_jid, %nick,
                             "committed federated MUC rebind found a different local projection");
                         return Ok(None);
@@ -395,11 +395,11 @@ async fn federated_muc_presence_owned(
                     )
                     .await?
                 {
-                    crate::cluster::MucRename::Renamed => {}
-                    crate::cluster::MucRename::Conflict => {
+                    northstar_room_core::occupancy::MucRename::Renamed => {}
+                    northstar_room_core::occupancy::MucRename::Conflict => {
                         return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
                     }
-                    crate::cluster::MucRename::Stale => {
+                    northstar_room_core::occupancy::MucRename::Stale => {
                         return Ok(federated_error(
                             &request.stanza,
                             from,
@@ -417,17 +417,17 @@ async fn federated_muc_presence_owned(
                 cluster_operation.is_some(),
             );
             match move_outcome {
-                crate::xmpp::local_routes::muc::LocalMucNicknameMove::Published
-                | crate::xmpp::local_routes::muc::LocalMucNicknameMove::AlreadyPublished => {}
-                crate::xmpp::local_routes::muc::LocalMucNicknameMove::DeferredToReconciliation
+                northstar_room_core::occupancy::LocalMucNicknameMove::Published
+                | northstar_room_core::occupancy::LocalMucNicknameMove::AlreadyPublished => {}
+                northstar_room_core::occupancy::LocalMucNicknameMove::DeferredToReconciliation
                     if cluster_operation.is_some() =>
                 {
                     tracing::warn!(room=%room_jid, %nick,
                         "PG-authoritative federated MUC rename found another local incarnation; reconciliation will repair the cache");
                 }
-                crate::xmpp::local_routes::muc::LocalMucNicknameMove::CollisionRestored
-                | crate::xmpp::local_routes::muc::LocalMucNicknameMove::CollisionRestoreFailed => {
-                    if move_outcome == crate::xmpp::local_routes::muc::LocalMucNicknameMove::CollisionRestoreFailed {
+                northstar_room_core::occupancy::LocalMucNicknameMove::CollisionRestored
+                | northstar_room_core::occupancy::LocalMucNicknameMove::CollisionRestoreFailed => {
+                    if move_outcome == northstar_room_core::occupancy::LocalMucNicknameMove::CollisionRestoreFailed {
                         tracing::error!(room=%room_jid, old_nick=%old_nick,
                             "could not restore federated MUC actor after nickname collision");
                     }
@@ -1069,9 +1069,9 @@ async fn federated_muc_presence_owned(
                     "PostgreSQL committed federated MUC join; Redis cache refresh failed");
             }
             match cache.registration {
-                Ok(crate::cluster::MucRegistration::Joined) => {}
-                Ok(crate::cluster::MucRegistration::Conflict)
-                | Ok(crate::cluster::MucRegistration::Full) => {
+                Ok(northstar_room_core::occupancy::MucRegistration::Joined) => {}
+                Ok(northstar_room_core::occupancy::MucRegistration::Conflict)
+                | Ok(northstar_room_core::occupancy::MucRegistration::Full) => {
                     tracing::warn!(%room_jid, %nick,
                         "Redis federated MUC cache disagreed with committed PostgreSQL occupancy");
                 }
@@ -1084,11 +1084,11 @@ async fn federated_muc_presence_owned(
     // PostgreSQL event handles durable audience delivery.
     let local_existing = state.muc_occupants_for(&room_jid);
     let publication = state.publish_local_muc_join_if_vacant(&occupant);
-    if publication != crate::xmpp::local_routes::muc::LocalMucJoinPublication::Published {
+    if publication != northstar_room_core::occupancy::LocalMucJoinPublication::Published {
         if !state.federated_muc_pg_authority_enabled() {
             return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
         }
-        if publication == crate::xmpp::local_routes::muc::LocalMucJoinPublication::Occupied {
+        if publication == northstar_room_core::occupancy::LocalMucJoinPublication::Occupied {
             tracing::error!(room=%room_jid, %nick,
                 "committed federated MUC join found another local incarnation; preserving it and compensating this claim");
             drop(local_join_guard);

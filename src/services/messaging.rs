@@ -69,9 +69,7 @@ pub(crate) fn committed_live_delivery_has_fence(
     message_id: Uuid,
     claim_id: Option<Uuid>,
 ) -> bool {
-    northstar_message_application::direct_handoff::live_reservation_valid(
-        clustered, message_id, claim_id,
-    )
+    northstar_message_core::live_reservation_valid(clustered, message_id, claim_id)
 }
 
 /// The first accepted online resource, if any. Cluster v1 receipts may be

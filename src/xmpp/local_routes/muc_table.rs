@@ -1,13 +1,13 @@
 //! Exact operations on the live MUC occupant table and on session MUC memberships. The composition root owns the
 //! tables themselves.
 
-use super::muc::{
-    muc_departure_identity_matches, LocalMucJoinPublication, LocalMucNicknameMove, MucOccupant,
-    MucOccupantEndpoint,
-};
+use super::muc::{MucOccupant, MucOccupantEndpoint};
 use super::session::OnlineSession;
 use dashmap::DashMap;
 use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
+use northstar_room_core::occupancy::{
+    muc_departure_identity_matches, LocalMucJoinPublication, LocalMucNicknameMove,
+};
 use std::sync::Arc;
 
 pub(crate) fn remove_local_muc_occupant_exact_from(

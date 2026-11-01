@@ -1,110 +1,11 @@
 //! Local MUC occupant records, their endpoints and suspended SM endpoint buffers.
 
-use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
-use std::{collections::VecDeque, sync::Arc};
+use crate::xmpp::outbound::OutboundSender;
+use northstar_room_core::occupancy;
+use std::collections::VecDeque;
 
-#[derive(Clone)]
-pub struct MucOccupant {
-    pub full_jid: String,
-    pub room_jid: String,
-    pub nick: String,
-    pub endpoint: MucOccupantEndpoint,
-    pub affiliation: String,
-    pub role: String,
-    pub room_non_anonymous: bool,
-    pub occupant_id: String,
-    /// Per-occupancy ABA guard used for atomic nickname changes in Redis.
-    /// This value is internal and is never exposed in XMPP stanzas.
-    pub cluster_epoch: uuid::Uuid,
-    /// Exact transport incarnation which owns this occupancy.  A resumed SM
-    /// stream updates this value while preserving the occupancy epoch; a
-    /// recreated post-crash occupancy receives a fresh epoch.
-    pub connection_id: uuid::Uuid,
-    /// Durable stream epoch owning this local occupant, when XEP-0198
-    /// resumption is enabled.
-    pub sm_session_id: Option<uuid::Uuid>,
-    pub payload: String,
-}
-
-impl<'a> From<&'a MucOccupant> for LocalMucOccupantIdentity<'a> {
-    fn from(occupant: &'a MucOccupant) -> Self {
-        Self {
-            room_jid: &occupant.room_jid,
-            nick: &occupant.nick,
-            full_jid: &occupant.full_jid,
-            connection_id: occupant.connection_id,
-            cluster_epoch: occupant.cluster_epoch,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LocalMucNicknameMove {
-    Published,
-    AlreadyPublished,
-    DeferredToReconciliation,
-    OldMissing,
-    CollisionRestored,
-    CollisionRestoreFailed,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LocalMucJoinPublication {
-    Published,
-    AlreadyPublished,
-    Occupied,
-}
-
-impl From<&MucOccupant> for SerializableMucOccupant {
-    fn from(occ: &MucOccupant) -> Self {
-        Self {
-            full_jid: occ.full_jid.clone(),
-            room_jid: occ.room_jid.clone(),
-            nick: occ.nick.clone(),
-            affiliation: occ.affiliation.clone(),
-            role: occ.role.clone(),
-            room_non_anonymous: occ.room_non_anonymous,
-            occupant_id: occ.occupant_id.clone(),
-            cluster_epoch: occ.cluster_epoch,
-            connection_id: occ.connection_id,
-            federated_domain: match &occ.endpoint {
-                MucOccupantEndpoint::Local(_) | MucOccupantEndpoint::Suspended(_) => None,
-                MucOccupantEndpoint::Federated {
-                    authenticated_domain,
-                    ..
-                } => Some(authenticated_domain.clone()),
-            },
-            sm_session_id: occ.sm_session_id,
-            payload: occ.payload.clone(),
-        }
-    }
-}
-
-pub(crate) fn muc_departure_identity_matches(
-    occupant: &MucOccupant,
-    full_jid: &str,
-    connection_id: uuid::Uuid,
-    cluster_epoch: uuid::Uuid,
-) -> bool {
-    !connection_id.is_nil()
-        && !cluster_epoch.is_nil()
-        && occupant.full_jid == full_jid
-        && occupant.connection_id == connection_id
-        && occupant.cluster_epoch == cluster_epoch
-}
-
-#[derive(Clone)]
-pub enum MucOccupantEndpoint {
-    Local(crate::xmpp::outbound::OutboundSender),
-    /// A local occupant whose transport disappeared while a durable XEP-0198
-    /// resume window is open.  Traffic is bounded and moved into PostgreSQL;
-    /// it is never sent into the dead transport channel.
-    Suspended(Arc<SuspendedMucEndpoint>),
-    Federated {
-        authenticated_domain: String,
-        connection_id: uuid::Uuid,
-    },
-}
+pub type MucOccupant = occupancy::MucOccupant<OutboundSender, SuspendedMucEndpoint>;
+pub type MucOccupantEndpoint = occupancy::MucOccupantEndpoint<OutboundSender, SuspendedMucEndpoint>;
 
 pub struct SuspendedMucEndpoint {
     pub sm_session_id: uuid::Uuid,

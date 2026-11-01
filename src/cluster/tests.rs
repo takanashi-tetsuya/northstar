@@ -1,4 +1,5 @@
 use super::*;
+use northstar_room_core::occupancy::{MucRegistration, MucRename, MucRoleChange};
 
 #[test]
 fn muc_disconnect_outbox_renders_status_333_on_every_attempt() {

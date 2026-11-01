@@ -169,7 +169,7 @@ async fn federated_muc_iq_owned(
                             .attr("name", room.title.as_deref().unwrap_or(&room.localpart)),
                     );
                 }
-                query.push_validated_fragment(&super::super::discovery::disco_rsm_result(
+                query.push_validated_fragment(&northstar_xml_builder::disco::disco_rsm_result(
                     page.rooms.first().map(|room| room.localpart.as_str()),
                     page.rooms.last().map(|room| room.localpart.as_str()),
                     page.first_index,
@@ -959,7 +959,7 @@ async fn federated_muc_iq_owned(
                     XmlElement::new("item").attr("jid", format!("{}/{}", room_jid, occupant.nick)),
                 );
             }
-            payload.push_validated_fragment(&super::super::discovery::disco_rsm_result(
+            payload.push_validated_fragment(&northstar_xml_builder::disco::disco_rsm_result(
                 page.first().map(|occupant| occupant.nick.as_str()),
                 page.last().map(|occupant| occupant.nick.as_str()),
                 first_index,

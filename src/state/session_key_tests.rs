@@ -18,10 +18,9 @@ use super::{
 use crate::api::contexts::omemo_poll::{
     admit_bounded_omemo_poll_ip, admit_omemo_poll_ip_window, OMEMO_POLL_IP_REQUESTS_PER_MINUTE,
 };
-use crate::xmpp::local_routes::muc::{
-    muc_departure_identity_matches, SuspendedMucBuffer, SuspendedMucStanza,
-};
+use crate::xmpp::local_routes::muc::{SuspendedMucBuffer, SuspendedMucStanza};
 use dashmap::DashMap;
+use northstar_room_core::occupancy::muc_departure_identity_matches;
 use northstar_session_application::RouteIncarnationSignal;
 use northstar_session_core::{
     staged_route_activation_allowed, StagedRouteActivationCheck, StagedRouteIdentity,

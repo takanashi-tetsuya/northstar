@@ -18,52 +18,11 @@ pub(super) fn derive_actor_key_secret(secret: &[u8]) -> Vec<u8> {
     northstar_abuse_policy::derive_actor_key_secret(secret).to_vec()
 }
 
-pub(super) struct ContentIdentityGeneration {
-    pub(super) key_id: String,
-    pub(super) key: Zeroizing<Vec<u8>>,
-}
-
 impl PersonalMessageContentKeyring {
     pub fn authenticators(&self, canonical_payload: &[u8]) -> ContentIdentityAuthenticators {
         content_identity_authenticators(
             &self.generations,
             ContentIdentityPurpose::PersonalMessage,
-            canonical_payload,
-        )
-    }
-}
-
-/// Least-authority capability for XEP-0369 channel message replay identities.
-/// It cannot produce personal-message or MIX-retraction commitments even
-/// though all generations originate from the same mounted deployment secret.
-#[derive(Clone)]
-pub struct MixMessageContentKeyring {
-    pub(super) generations: Arc<Vec<ContentIdentityGeneration>>,
-}
-
-impl MixMessageContentKeyring {
-    pub fn authenticators(&self, canonical_payload: &[u8]) -> ContentIdentityAuthenticators {
-        content_identity_authenticators(
-            &self.generations,
-            ContentIdentityPurpose::MixMessage,
-            canonical_payload,
-        )
-    }
-}
-
-/// Least-authority capability for XEP-0425 MIX retraction replay identities.
-/// Keeping it distinct from channel-message identity prevents a compromised
-/// service path from forging an authenticator for the other operation family.
-#[derive(Clone)]
-pub struct MixRetractionContentKeyring {
-    pub(super) generations: Arc<Vec<ContentIdentityGeneration>>,
-}
-
-impl MixRetractionContentKeyring {
-    pub fn authenticators(&self, canonical_payload: &[u8]) -> ContentIdentityAuthenticators {
-        content_identity_authenticators(
-            &self.generations,
-            ContentIdentityPurpose::MixRetraction,
             canonical_payload,
         )
     }
@@ -77,20 +36,6 @@ impl PersonalRetractionContentKeyring {
             canonical_payload,
         )
     }
-}
-
-pub(super) fn content_identity_authenticators(
-    generations: &[ContentIdentityGeneration],
-    purpose: ContentIdentityPurpose,
-    canonical_payload: &[u8],
-) -> ContentIdentityAuthenticators {
-    northstar_abuse_policy::compute_content_identity_authenticators(
-        generations
-            .iter()
-            .map(|generation| (generation.key_id.as_str(), generation.key.as_slice())),
-        purpose,
-        canonical_payload,
-    )
 }
 
 pub(super) fn derive_content_identity_key(
@@ -217,17 +162,17 @@ impl AbuseGuard {
     /// MIX channel-message admission receives a purpose-separated capability;
     /// it cannot authenticate personal messages or any retraction family.
     pub fn mix_message_content_keyring(&self) -> MixMessageContentKeyring {
-        MixMessageContentKeyring {
-            generations: self.content_identity_generations(ContentIdentityPurpose::MixMessage),
-        }
+        MixMessageContentKeyring::new(
+            self.content_identity_generations(ContentIdentityPurpose::MixMessage),
+        )
     }
 
     /// MIX retraction admission receives a separate capability from MIX
     /// messages so the two durable replay journals cannot forge each other.
     pub fn mix_retraction_content_keyring(&self) -> MixRetractionContentKeyring {
-        MixRetractionContentKeyring {
-            generations: self.content_identity_generations(ContentIdentityPurpose::MixRetraction),
-        }
+        MixRetractionContentKeyring::new(
+            self.content_identity_generations(ContentIdentityPurpose::MixRetraction),
+        )
     }
 
     /// The previous deployment key must remain available until every durable

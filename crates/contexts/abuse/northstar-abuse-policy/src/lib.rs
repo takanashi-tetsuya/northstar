@@ -5,6 +5,7 @@ pub mod admission;
 pub mod admission_execution;
 pub mod admission_transaction;
 pub mod config;
+pub mod content_identity;
 pub mod cooldown;
 pub mod escalation;
 pub mod model;

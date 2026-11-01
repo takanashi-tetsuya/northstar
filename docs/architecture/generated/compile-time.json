@@ -2418,6 +2418,10 @@
       "uuid"
     ],
     [
+      "northstar-abuse-policy",
+      "zeroize"
+    ],
+    [
       "northstar-abuse-postgres",
       "anyhow"
     ],

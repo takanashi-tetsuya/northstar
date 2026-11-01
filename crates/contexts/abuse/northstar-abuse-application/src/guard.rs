@@ -35,10 +35,13 @@ use self::challenges::{build_requirement, decayed_penalty, max_penalty_decay_hor
 use self::key_management::{actor_key_id, derive_actor_key_secret};
 use self::key_management::{
     derive_content_identity_key, opaque_actor_key, opaque_challenge_capacity_key, pow_prefix,
-    subject_hash, ContentIdentityGeneration,
+    subject_hash,
 };
-pub use self::key_management::{MixMessageContentKeyring, MixRetractionContentKeyring};
 use self::persistence::actor_state_keys;
+use northstar_abuse_policy::content_identity::{
+    content_identity_authenticators, ContentIdentityGeneration, MixMessageContentKeyring,
+    MixRetractionContentKeyring,
+};
 use northstar_abuse_policy::ContentIdentityAuthenticators;
 
 const POW_INTENT_VERSION: u16 = northstar_abuse_policy::POW_INTENT_VERSION;
@@ -138,16 +141,16 @@ pub fn test_personal_retraction_content_keyring() -> PersonalRetractionContentKe
 
 #[cfg(any(test, feature = "test-support"))]
 pub fn test_mix_message_content_keyring() -> MixMessageContentKeyring {
-    MixMessageContentKeyring {
-        generations: test_content_identity_generations(ContentIdentityPurpose::MixMessage),
-    }
+    MixMessageContentKeyring::new(test_content_identity_generations(
+        ContentIdentityPurpose::MixMessage,
+    ))
 }
 
 #[cfg(any(test, feature = "test-support"))]
 pub fn test_mix_retraction_content_keyring() -> MixRetractionContentKeyring {
-    MixRetractionContentKeyring {
-        generations: test_content_identity_generations(ContentIdentityPurpose::MixRetraction),
-    }
+    MixRetractionContentKeyring::new(test_content_identity_generations(
+        ContentIdentityPurpose::MixRetraction,
+    ))
 }
 
 fn message_admission_identity<'a>(

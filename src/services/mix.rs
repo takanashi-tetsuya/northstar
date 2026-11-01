@@ -5,7 +5,9 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use northstar_abuse_application::guard::{MixMessageContentKeyring, MixRetractionContentKeyring};
+use northstar_abuse_policy::content_identity::{
+    MixMessageContentKeyring, MixRetractionContentKeyring,
+};
 use northstar_xml_builder::XmlElement;
 use std::collections::BTreeSet;
 use std::sync::Arc;

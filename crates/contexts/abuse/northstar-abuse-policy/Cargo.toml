@@ -21,3 +21,4 @@ sha2 = "0.10"
 subtle = "2.6"
 thiserror = "2.0"
 uuid = { version = "1.12", default-features = false, features = ["serde"] }
+zeroize = "1.8"

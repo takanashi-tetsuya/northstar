@@ -946,6 +946,7 @@ digraph compile_time {
   "northstar-abuse-policy" -> "subtle";
   "northstar-abuse-policy" -> "thiserror";
   "northstar-abuse-policy" -> "uuid";
+  "northstar-abuse-policy" -> "zeroize";
   "northstar-abuse-postgres" -> "anyhow";
   "northstar-abuse-postgres" -> "chrono";
   "northstar-abuse-postgres" -> "northstar-abuse-application";

@@ -482,11 +482,11 @@ impl<'a> LocalDirectContinuation<'a> {
 }
 
 impl PreparedDirectHandoff<'_> {
-    pub(super) fn bind_route<S>(
+    pub(super) fn bind_route<S, I: northstar_message_application::route_item::RouteItem>(
         self,
         request: &super::DirectRouteRequest<'_, S>,
     ) -> anyhow::Result<(
-        crate::xmpp::outbound::OutboundItem,
+        I,
         northstar_message_application::direct_handoff::HandoffHandle,
     )> {
         let source = self.grant.source();
@@ -506,10 +506,7 @@ impl PreparedDirectHandoff<'_> {
             "direct handoff live binding mismatch"
         );
         let witness = self.owner.consume_route(self.grant, source)?;
-        Ok((
-            crate::xmpp::outbound::OutboundItem::durable(self.live.stanza.to_owned(), source),
-            witness,
-        ))
+        Ok((I::durable(self.live.stanza.to_owned(), source), witness))
     }
 }
 

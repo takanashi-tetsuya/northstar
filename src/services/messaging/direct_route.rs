@@ -199,7 +199,7 @@ impl DirectMessageRouter {
         port: &P,
         prepared: super::direct_workflow::PreparedDirectRecovery,
     ) {
-        let mut payload = RoutePayload::new("", Some(prepared.source));
+        let mut payload = RoutePayload::<P::Item>::new("", Some(prepared.source));
         payload.witness = Some(prepared.witness);
         let mut claim = UnroutedClaim {
             source: Some(prepared.source),
@@ -212,7 +212,7 @@ impl DirectMessageRouter {
     async fn route_owned<P: DirectMessageRoutePort>(
         port: &P,
         request: DirectRouteRequest<'_, P::Session>,
-        payload: &mut RoutePayload<'_>,
+        payload: &mut RoutePayload<'_, P::Item>,
     ) -> Result<DirectRouteOutcome, DirectRouteError> {
         let delivery = request.delivery.durable();
         let mut claim = UnroutedClaim {

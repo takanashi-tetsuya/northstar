@@ -12,6 +12,7 @@ pub mod message_admission;
 pub mod message_carbons;
 pub mod push;
 pub mod retractions;
+pub mod route_item;
 
 use northstar_message_core::{
     IdentityAuthority, MessageCommit, PersonalMessageDestination, ValidatedPersonalMessage,

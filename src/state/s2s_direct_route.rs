@@ -15,6 +15,7 @@ use anyhow::Result;
 pub(crate) struct S2sDirectRoutePort<'a>(pub(crate) &'a AppState);
 
 impl OnlineRoutePort for S2sDirectRoutePort<'_> {
+    type Item = crate::xmpp::outbound::OutboundItem;
     type Session = OnlineSession;
 
     fn try_local(

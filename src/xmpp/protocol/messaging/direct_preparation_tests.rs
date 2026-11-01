@@ -351,6 +351,7 @@ async fn exact_policy_projection_set_and_mam_flag_reject_missing_duplicate_or_ch
 
 struct PreparedQueue;
 impl crate::services::messaging::OnlineRoutePort for PreparedQueue {
+    type Item = crate::xmpp::outbound::OutboundItem;
     type Session = crate::xmpp::outbound::OutboundSender;
     fn try_local(
         &self,

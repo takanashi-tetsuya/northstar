@@ -15,6 +15,7 @@ use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
 impl OnlineRoutePort for AppState {
+    type Item = crate::xmpp::outbound::OutboundItem;
     type Session = OnlineSession;
 
     fn try_local(

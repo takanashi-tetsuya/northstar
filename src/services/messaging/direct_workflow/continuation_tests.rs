@@ -256,6 +256,7 @@ impl Port {
     }
 }
 impl OnlineRoutePort for Port {
+    type Item = crate::xmpp::outbound::OutboundItem;
     type Session = OutboundSender;
     fn try_local(&self, session: &Self::Session, item: RouteEnqueue) -> Result<(), RouteSendError> {
         self.events.lock().unwrap().push("enqueue");

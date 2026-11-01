@@ -67,6 +67,7 @@ impl RoutePort {
 }
 
 impl OnlineRoutePort for RoutePort {
+    type Item = crate::xmpp::outbound::OutboundItem;
     type Session = Target;
 
     fn try_local(

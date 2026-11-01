@@ -8,7 +8,6 @@ pub(crate) use direct_route::{
 };
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 
-use crate::xmpp::outbound::{OutboundItem, RouteEnqueue};
 use anyhow::Result;
 use northstar_abuse_policy::MessageDedupeIdentity;
 use northstar_delivery_core::DurableDelivery;
@@ -17,6 +16,7 @@ use northstar_message_application::direct_commit::{
 };
 use northstar_message_application::direct_handoff::HandoffHandle;
 use northstar_message_application::retractions::FederationOutboxPolicy;
+use northstar_message_application::route_item::{RouteEnqueue, RouteItem, RouteSendError};
 use northstar_message_application::{
     CommitError, MessageApplication, PersonalMessageCommitRepository,
 };
@@ -84,12 +84,13 @@ pub(crate) struct OnlineRouteResult {
 /// already privacy-filtered and ordered by the pre-admission protocol path.
 pub(crate) trait OnlineRoutePort: Sync {
     type Session: Send + Sync;
+    type Item: RouteItem;
 
     fn try_local(
         &self,
         session: &Self::Session,
-        enqueue: RouteEnqueue,
-    ) -> Result<(), crate::xmpp::outbound::RouteSendError>;
+        enqueue: RouteEnqueue<Self::Item>,
+    ) -> Result<(), RouteSendError<Self::Item>>;
     fn record_local_accept(&self, durable: bool);
     fn route_available_remote(
         &self,
@@ -146,14 +147,14 @@ enum FullJidFallbackPlan<S> {
 /// One durable item survives every refused primary/fallback local attempt.
 /// Volatile fanout deliberately creates distinct items. The queue never owns
 /// this operation handle; accepted items can outlive the sending frame.
-struct RoutePayload<'a> {
+struct RoutePayload<'a, I> {
     stanza: &'a str,
     delivery: Option<DurableDelivery>,
-    item: Option<OutboundItem>,
+    item: Option<I>,
     witness: Option<HandoffHandle>,
     binding_rejected: bool,
 }
-impl<'a> RoutePayload<'a> {
+impl<'a, I: RouteItem> RoutePayload<'a, I> {
     fn new(stanza: &'a str, delivery: Option<DurableDelivery>) -> Self {
         Self {
             stanza,
@@ -163,7 +164,7 @@ impl<'a> RoutePayload<'a> {
             binding_rejected: false,
         }
     }
-    fn prepared(stanza: &'a str, item: OutboundItem, witness: HandoffHandle) -> Self {
+    fn prepared(stanza: &'a str, item: I, witness: HandoffHandle) -> Self {
         Self {
             stanza,
             delivery: item.c2s_delivery(),
@@ -172,15 +173,15 @@ impl<'a> RoutePayload<'a> {
             binding_rejected: false,
         }
     }
-    fn enqueue<P: OnlineRoutePort>(&mut self, port: &P, session: &P::Session) -> bool {
+    fn enqueue<P: OnlineRoutePort<Item = I>>(&mut self, port: &P, session: &P::Session) -> bool {
         if self.binding_rejected {
             return false;
         }
         let item = self.item.take().unwrap_or_else(|| match self.delivery {
-            Some(delivery) => OutboundItem::durable(self.stanza.to_owned(), delivery),
-            None => OutboundItem::plain(self.stanza.to_owned()),
+            Some(delivery) => I::durable(self.stanza.to_owned(), delivery),
+            None => I::plain(self.stanza.to_owned()),
         });
-        if item.stanza != self.stanza
+        if item.stanza() != self.stanza
             || item.c2s_delivery() != self.delivery
             || !item.validate_durable_source_shape()
         {
@@ -208,15 +209,12 @@ impl<'a> RoutePayload<'a> {
         };
         match port.try_local(session, enqueue) {
             Ok(()) => true,
-            Err(crate::xmpp::outbound::RouteSendError::Binding(rejected)) => {
+            Err(RouteSendError::Binding(rejected)) => {
                 self.item = Some(rejected.0);
                 self.binding_rejected = true;
                 false
             }
-            Err(
-                crate::xmpp::outbound::RouteSendError::Full(item)
-                | crate::xmpp::outbound::RouteSendError::Closed(item),
-            ) => {
+            Err(RouteSendError::Full(item) | RouteSendError::Closed(item)) => {
                 self.item = Some(item);
                 false
             }
@@ -228,7 +226,7 @@ impl<'a> RoutePayload<'a> {
         }
     }
 }
-impl Drop for RoutePayload<'_> {
+impl<I> Drop for RoutePayload<'_, I> {
     fn drop(&mut self) {
         if let Some(witness) = &self.witness {
             witness.dropped();
@@ -257,7 +255,7 @@ impl OnlineMessageRouter {
     async fn dispatch_owned<P: OnlineRoutePort>(
         port: &P,
         jid: &str,
-        payload: &mut RoutePayload<'_>,
+        payload: &mut RoutePayload<'_, P::Item>,
         deliver_all: bool,
         approved_targets: &[(String, P::Session)],
     ) -> OnlineRouteResult {
@@ -267,7 +265,7 @@ impl OnlineMessageRouter {
 
     fn dispatch_local_owned<P: OnlineRoutePort>(
         port: &P,
-        payload: &mut RoutePayload<'_>,
+        payload: &mut RoutePayload<'_, P::Item>,
         deliver_all: bool,
         approved_targets: &[(String, P::Session)],
     ) -> OnlineRouteResult {
@@ -296,7 +294,7 @@ impl OnlineMessageRouter {
     async fn dispatch_remote_owned<P: OnlineRoutePort>(
         port: &P,
         jid: &str,
-        payload: &mut RoutePayload<'_>,
+        payload: &mut RoutePayload<'_, P::Item>,
         deliver_all: bool,
         mut result: OnlineRouteResult,
     ) -> OnlineRouteResult {
@@ -336,7 +334,7 @@ impl OnlineMessageRouter {
     async fn full_jid_fallback_owned<P: FullJidFallbackPort>(
         port: &P,
         request: FullJidFallback<'_>,
-        payload: &mut RoutePayload<'_>,
+        payload: &mut RoutePayload<'_, P::Item>,
     ) -> Result<FullJidFallbackResult> {
         let bare_target = request.bare_target;
         let allowed = match Self::prepare_full_jid_fallback(port, request).await? {

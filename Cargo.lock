@@ -2083,6 +2083,7 @@ dependencies = [
  "northstar-delivery-core",
  "northstar-federation-core",
  "northstar-message-core",
+ "northstar-room-core",
  "northstar-security",
  "northstar-xep-0016",
  "northstar-xep-0280",

@@ -350,7 +350,7 @@ async fn exact_policy_projection_set_and_mam_flag_reject_missing_duplicate_or_ch
 }
 
 struct PreparedQueue;
-impl crate::services::messaging::OnlineRoutePort for PreparedQueue {
+impl northstar_message_application::messaging::OnlineRoutePort for PreparedQueue {
     type Item = crate::xmpp::outbound::OutboundItem;
     type Session = crate::xmpp::outbound::OutboundSender;
     fn try_local(
@@ -374,11 +374,11 @@ impl crate::services::messaging::OnlineRoutePort for PreparedQueue {
         _: &str,
         _: &str,
         _: Option<crate::xmpp::outbound::DurableDelivery>,
-    ) -> crate::services::messaging::OnlineRouteResult {
+    ) -> northstar_message_application::messaging::OnlineRouteResult {
         panic!("valid prepared target is local")
     }
 }
-impl crate::services::messaging::FullJidFallbackPort for PreparedQueue {
+impl northstar_message_application::messaging::FullJidFallbackPort for PreparedQueue {
     fn fallback_sessions(&self, _: &str) -> Vec<(String, Self::Session)> {
         panic!("binding must reject changed fallback before routing")
     }
@@ -393,7 +393,7 @@ impl crate::services::messaging::FullJidFallbackPort for PreparedQueue {
     }
     fn post_accept_failed(&self) {}
 }
-impl crate::services::messaging::DirectMessageRoutePort for PreparedQueue {
+impl northstar_message_application::messaging::DirectMessageRoutePort for PreparedQueue {
     fn direct_route_mode(&self) -> DirectPostCommitMode {
         DirectPostCommitMode::Live
     }
@@ -465,7 +465,7 @@ async fn actual_original_to_router_preserves_live_payload_after_delayed_command_
                 prepared.received(transaction).unwrap();
                 prepared
                     .complete(Some(
-                        crate::services::messaging::DirectPersonalMessageAdmission {
+                        northstar_message_application::messaging::DirectPersonalMessageAdmission {
                             commit: DurableAdmissionOutcome::Stored {
                                 archive_written: false,
                                 post_commit: MessagePostCommit::RouteLocalDelivery {

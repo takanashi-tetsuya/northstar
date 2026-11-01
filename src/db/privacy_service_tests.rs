@@ -40,7 +40,7 @@ async fn privacy_service_boundary_preserves_stanza_kind_allow_deny_results() {
         .unwrap();
     crate::db::migrate(&pool).await.unwrap();
     let service = PrivacyService::new(db::privacy::PostgresPrivacyRepository::new(pool.clone()));
-    let messaging = crate::services::messaging::MessageService::new(
+    let messaging = northstar_message_application::messaging::MessageService::new(
         crate::db::messaging::PostgresMessageRepository::new(
             pool.clone(),
             northstar_abuse_application::guard::test_personal_message_content_keyring(),

@@ -2315,7 +2315,7 @@ for (const [name, source] of [
   ['RosterService', rosterServiceSource],
   ['UploadService', uploadServiceSource],
   ['PasskeyService', read('crates/contexts/auth/northstar-auth-application/src/passkeys.rs')],
-  ['MessageService', read('src/services/messaging.rs')],
+  ['MessageService', read('crates/contexts/message/northstar-message-application/src/messaging.rs')],
   ['MamService', mamServiceSource],
   ['MucService', readProductionModule('crates/contexts/room/northstar-room-application/src/muc_service.rs', { root })],
   ['ProfileService', read('crates/contexts/pubsub/northstar-pubsub-application/src/profile.rs')],
@@ -3218,8 +3218,8 @@ for (const forbidden of [
     throw new Error(`messaging.rs bypasses MessageService via db::${forbidden}`);
   }
 }
-const messageServiceSource = read('src/services/messaging.rs');
-const localRecipient = structBody(messageServiceSource, 'pub(crate) struct LocalRecipient');
+const messageServiceSource = read('crates/contexts/message/northstar-message-application/src/messaging.rs');
+const localRecipient = structBody(messageServiceSource, 'pub struct LocalRecipient');
 for (const credentialField of [
   'password_hash',
   'scram_iterations',

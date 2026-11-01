@@ -316,7 +316,7 @@ pub struct AppState {
     /// Personal-message authorization and durable admission boundary. The
     /// protocol layer must not compose its own archive/outbox/offline writes.
     message_service:
-        crate::services::messaging::MessageService<db::messaging::PostgresMessageRepository>,
+        northstar_message_application::messaging::MessageService<db::messaging::PostgresMessageRepository>,
     message_admission_service: northstar_message_application::message_admission::MessageAdmissionService<
         northstar_workflows::message_admission_port::AbuseMessageAdmissionPort,
     >,

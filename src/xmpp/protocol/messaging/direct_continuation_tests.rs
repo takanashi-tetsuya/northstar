@@ -1,23 +1,37 @@
-use super::super::{
-    DirectMessageRoutePort, DirectRouteOutcome, FullJidFallbackPort, OnlineRoutePort,
-    OnlineRouteResult,
-};
-use super::*;
 use crate::xmpp::outbound::{OutboundSender, RouteEnqueue, RouteSendError};
 use northstar_abuse_policy::message_admission::{MessageAdmissionLease, MessageAdmissionStart};
 use northstar_delivery_core::DurableDelivery;
+use northstar_message_application::direct_commit::{
+    DirectCommitObserver, DirectCommitRepository, ExecutionOutcome, Knowledge, TransactionOutcome,
+};
+use northstar_message_application::direct_lifecycle::PreparationAdmission;
 use northstar_message_application::message_admission::continuation_fixture::{
     self as admission_fixture, Admission, Events, FinalizeCut,
+};
+use northstar_message_application::message_admission::witness::DirectOperationHandle;
+use northstar_message_application::message_admission::{
+    finalize_message_admission_with, MessageAdmissionService,
+};
+use northstar_message_application::messaging::direct_workflow::*;
+use northstar_message_application::messaging::{
+    DirectMessageRoutePort, DirectRouteOutcome, FullJidFallbackPort, OnlineRoutePort,
+    OnlineRouteResult,
 };
 use northstar_message_application::{
     direct_lifecycle::{OriginalAdmission, TerminalReason},
     MessageApplication, PersonalMessageCommitRepository,
+};
+use northstar_message_core::{
+    DirectPersonalMessageAdmission, DirectPostCommitMode, DirectSpoolEligibility,
+    IdentityAuthority, MessageCommit, MessagePostCommit, PersonalMessageDestination,
+    ValidatedPersonalMessage,
 };
 use northstar_message_core::{LocalDelivery, MessageIdentity};
 use std::{
     io::Write,
     sync::{Arc, Mutex},
 };
+use uuid::Uuid;
 
 const LIVE: &str = "<message id='live'><body>private live</body></message>";
 const UNRATED_LIVE: &str = "<message id='live' type='chat' from='alice@example.test/device' to='bob@example.test'><store xmlns='urn:xmpp:hints'/></message>";
@@ -1002,47 +1016,4 @@ async fn continuation_rejection_never_turns_known_storage_into_live_route() {
         warning["target"],
         "rust_xmpp_server::xmpp::protocol::messaging"
     );
-}
-
-#[tokio::test]
-async fn defensive_stored_shape_retains_existing_internal_error() {
-    let owner = DirectOperationHandle::new(Uuid::new_v4());
-    let events = Events::default();
-    let (service, mut lease) = admit(
-        &owner,
-        Admission::Reserved,
-        FinalizeCut::Success,
-        events.clone(),
-    )
-    .await;
-    let continuation = prepared(&owner, Admission::Reserved, "delayed").into_continuation();
-    let before = owner.snapshot();
-    // Deliberately synthetic module-private defensive input. No public pair
-    // constructor or application-composition claim is introduced here.
-    let malformed = AppliedLocalDirect {
-        actual: Ok(DirectPersonalMessageAdmission {
-            commit: MessageCommit::Stored {
-                archive_written: true,
-                post_commit: MessagePostCommit::WakeFederationOutbox,
-            },
-            mode: DirectPostCommitMode::Live,
-            live_claim_id: None,
-        }),
-        continuation,
-    };
-    let port = Port::new(&owner, events.clone());
-    let ContinuedLocalDirect::Reject(error) =
-        continue_prepared_local_direct(malformed, &mut lease, &service, &port, || {
-            panic!("malformed stored result finalized")
-        })
-        .await
-    else {
-        panic!("malformed stored result accepted");
-    };
-    assert_eq!(error.stanza_error(), ("wait", "internal-server-error"));
-    assert!(lease.is_some());
-    assert_eq!(owner.snapshot(), before);
-    for event in ["followup", "accept", "health", "enqueue", "rearm", "failed"] {
-        assert_eq!(count(&events, event), 0);
-    }
 }

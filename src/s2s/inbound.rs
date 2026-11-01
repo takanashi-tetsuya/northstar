@@ -3,18 +3,18 @@ use crate::state::s2s_direct_route::S2sDirectRoutePort;
 use crate::{
     cluster::{DirectPostCommitMode, DirectSpoolEligibility},
     db,
-    services::messaging::{
-        DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome, DirectRouteRejection,
-        DirectRouteRequest, DirectRouteTarget, DurableAdmissionOutcome, IdentityAuthority,
-        LocalDelivery, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
-        OfflineAdmissionOutcome, OfflineMessageAdmission, PersonalMessageDestination,
-        ValidatedPersonalMessage,
-    },
     state::AppState,
     xmpp::xml_builder::XmlElement,
 };
 use anyhow::{Context, Result};
 use futures::FutureExt;
+use northstar_message_application::messaging::{
+    DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome, DirectRouteRejection,
+    DirectRouteRequest, DirectRouteTarget, DurableAdmissionOutcome, IdentityAuthority,
+    LocalDelivery, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
+    OfflineAdmissionOutcome, OfflineMessageAdmission, PersonalMessageDestination,
+    ValidatedPersonalMessage,
+};
 use northstar_message_application::retractions::{
     ArchiveWrite, DeliveryProjection, OwnerProjection, RetractionCommand, RetractionOutcome,
 };

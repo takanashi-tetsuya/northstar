@@ -3,14 +3,11 @@
 //! `s2s::inbound`.
 
 use super::AppState;
-use crate::{
-    services::messaging::{
-        DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
-    },
-    xmpp::local_routes::session::OnlineSession,
-    xmpp::outbound::DurableDelivery,
-};
+use crate::{xmpp::local_routes::session::OnlineSession, xmpp::outbound::DurableDelivery};
 use anyhow::Result;
+use northstar_message_application::messaging::{
+    DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
+};
 
 pub(crate) struct S2sDirectRoutePort<'a>(pub(crate) &'a AppState);
 

@@ -1,11 +1,11 @@
 //! Cluster routes for client IQs, personal messages, and their Carbons.
 
 use super::{AppState, OnlineSession};
-use crate::services::messaging::{
-    DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
-};
 use crate::xmpp::outbound::DurableDelivery;
 use anyhow::Result;
+use northstar_message_application::messaging::{
+    DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
+};
 use northstar_message_core::validation::carbon_message;
 use northstar_room_application::muc_service::{
     ClusterMucAffiliationSubject, ClusterMucInviteAuthority, ClusterMucPrincipal,

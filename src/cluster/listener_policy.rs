@@ -10,8 +10,9 @@ pub(crate) struct ClusterListenerMessagePolicy {
     pub(crate) presence: northstar_roster_application::presence::PresenceService<
         db::presence_repository::PostgresPresenceRepository,
     >,
-    pub(crate) message:
-        crate::services::messaging::MessageService<db::messaging::PostgresMessageRepository>,
+    pub(crate) message: northstar_message_application::messaging::MessageService<
+        db::messaging::PostgresMessageRepository,
+    >,
     pub(crate) mix: northstar_room_application::mix_service::MixService<
         crate::db::room_effects::PostgresMixRepository,
     >,

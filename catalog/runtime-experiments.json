@@ -157,8 +157,8 @@
       "id": "direct",
       "title": "Direct message admission and live routing",
       "production_owner": {
-        "path": "src/services/messaging/direct_route.rs",
-        "anchor": "pub(crate) struct DirectMessageRouter;"
+        "path": "crates/contexts/message/northstar-message-application/src/messaging/direct_route.rs",
+        "anchor": "pub struct DirectMessageRouter;"
       },
       "runtime_identities": [
         {
@@ -212,9 +212,9 @@
           "id": "direct-regression",
           "level": "deterministic_unit",
           "status": "declared",
-          "command": "cargo test --locked --bin rust-xmpp-server messaging::direct_route::tests",
+          "command": "cargo test --locked -p northstar-message-application messaging::direct_route::tests",
           "test": {
-            "path": "src/services/messaging/direct_route_tests.rs",
+            "path": "crates/contexts/message/northstar-message-application/src/messaging/direct_route_tests.rs",
             "anchor": "async fn exact_normal_route_failure_rejects_volatile_but_preserves_committed_admission() {"
           },
           "assertions": [
@@ -436,9 +436,9 @@
           "id": "federation-regression",
           "level": "deterministic_unit",
           "status": "declared",
-          "command": "cargo test --locked --bin rust-xmpp-server messaging::direct_route::tests::federation_",
+          "command": "cargo test --locked -p northstar-message-application messaging::direct_route::tests::federation_",
           "test": {
-            "path": "src/services/messaging/direct_route_tests.rs",
+            "path": "crates/contexts/message/northstar-message-application/src/messaging/direct_route_tests.rs",
             "anchor": "async fn federation_every_preaccept_health_checkpoint_stops_later_effects() {"
           },
           "assertions": [

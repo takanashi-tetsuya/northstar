@@ -2511,6 +2511,10 @@
       ],
       [
         "northstar-message-application",
+        "northstar-room-core"
+      ],
+      [
+        "northstar-message-application",
         "northstar-security"
       ],
       [

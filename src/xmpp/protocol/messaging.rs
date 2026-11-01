@@ -1,12 +1,18 @@
 use super::{Action, ProtocolSession};
 use crate::cluster::{DirectPostCommitMode, DirectSpoolEligibility};
+use crate::xmpp::frame_execution::Stage;
+use anyhow::Result;
+use northstar_abuse_policy::message_admission::{MessageAdmissionLease, MessageAdmissionStart};
+use northstar_abuse_policy::stanza::{abuse_stanza_error, strip_pow_element};
+use northstar_abuse_policy::{MessageAdmissionRequest, PowProof};
+use northstar_message_application::message_admission::witness::DirectOperationHandle;
 #[cfg(test)]
-use crate::services::messaging::direct_workflow::PreparedHandoffNext;
-use crate::services::messaging::direct_workflow::{
+use northstar_message_application::messaging::direct_workflow::PreparedHandoffNext;
+use northstar_message_application::messaging::direct_workflow::{
     continue_prepared_local_direct, preserved_transaction, ContinuedLocalDirect, LiveDirectBinding,
     LocalPreparation, PreparedLocalDirect,
 };
-use crate::services::messaging::{
+use northstar_message_application::messaging::{
     admit_offline_then_push, ArchiveWrite, DirectMessageRouter, DirectRouteDelivery,
     DirectRouteOutcome, DirectRouteRejection, DirectRouteRequest, DirectRouteTarget,
     DurableAdmissionOutcome, FederationDelivery, IdentityAuthority, LocalDelivery,
@@ -14,12 +20,6 @@ use crate::services::messaging::{
     OfflineAdmissionOutcome, OutboundPolicyDecision, PersonalMessageDestination,
     RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome, ValidatedPersonalMessage,
 };
-use crate::xmpp::frame_execution::Stage;
-use anyhow::Result;
-use northstar_abuse_policy::message_admission::{MessageAdmissionLease, MessageAdmissionStart};
-use northstar_abuse_policy::stanza::{abuse_stanza_error, strip_pow_element};
-use northstar_abuse_policy::{MessageAdmissionRequest, PowProof};
-use northstar_message_application::message_admission::witness::DirectOperationHandle;
 use northstar_message_application::retractions::{DeliveryProjection, RetractionOutcome};
 use northstar_message_application::{
     direct_commit::TransactionOutcome,
@@ -607,3 +607,8 @@ fn message_pow_intent_payload(client_raw: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod direct_continuation_tests;
+#[cfg(test)]
+mod direct_workflow_tests;

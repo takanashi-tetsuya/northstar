@@ -10,6 +10,7 @@ pub mod direct_lifecycle;
 pub mod direct_spool_wake;
 pub mod message_admission;
 pub mod message_carbons;
+pub mod messaging;
 pub mod push;
 pub mod retractions;
 pub mod route_item;

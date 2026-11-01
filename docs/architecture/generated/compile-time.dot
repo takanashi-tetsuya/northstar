@@ -1087,6 +1087,7 @@ digraph compile_time {
   "northstar-message-application" -> "northstar-delivery-core";
   "northstar-message-application" -> "northstar-federation-core";
   "northstar-message-application" -> "northstar-message-core";
+  "northstar-message-application" -> "northstar-room-core";
   "northstar-message-application" -> "northstar-security";
   "northstar-message-application" -> "northstar-xep-0016";
   "northstar-message-application" -> "northstar-xep-0280";

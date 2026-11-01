@@ -283,7 +283,7 @@ pub(super) async fn admit_personal_history_inner(
         }
         if let Some(observer) = observer {
             let fact = direct_transaction_outcome(&outcome, c2s_delivery, live_claim_id)?;
-            crate::services::messaging::direct_workflow::commit_observed(
+            northstar_message_application::messaging::direct_workflow::commit_observed(
                 transaction.commit(),
                 observer,
                 fact,
@@ -304,7 +304,7 @@ pub(super) async fn admit_personal_history_inner(
     } else {
         if let Some(observer) = observer {
             let fact = direct_transaction_outcome(&outcome, c2s_delivery, None)?;
-            crate::services::messaging::direct_workflow::commit_observed(
+            northstar_message_application::messaging::direct_workflow::commit_observed(
                 transaction.commit(),
                 observer,
                 fact,

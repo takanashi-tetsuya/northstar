@@ -16,8 +16,8 @@ const paths = {
   verification: 'crates/contexts/abuse/northstar-abuse-postgres/src/verification.rs',
   actor: 'crates/contexts/abuse/northstar-abuse-postgres/src/actor_state.rs',
   commit: 'crates/contexts/abuse/northstar-abuse-postgres/src/commit.rs',
-  directWorkflow: 'src/services/messaging/direct_workflow.rs',
-  messageService: 'src/services/messaging.rs',
+  directWorkflow: 'crates/contexts/message/northstar-message-application/src/messaging/direct_workflow.rs',
+  messageService: 'crates/contexts/message/northstar-message-application/src/messaging.rs',
 };
 function requireAdmission(value, message) {
   if (!value) throw new Error(`admission boundary: ${message}`);
@@ -113,7 +113,7 @@ function verifyDirectContinuation(sources) {
   const workflowCode = codeOnly(sources.directWorkflow);
   const testModule = /\n#\[cfg\(test\)\]\s*\nmod\s+\w+\b/.exec(workflowCode);
   const production = testModule ? workflowCode.slice(0, testModule.index) : workflowCode;
-  const pairDeclaration = /((?:#\[[^\]]*\]\s*)*)pub\(crate\)\s+struct\s+AppliedLocalDirect\b/.exec(production);
+  const pairDeclaration = /((?:#\[[^\]]*\]\s*)*)pub\s+struct\s+AppliedLocalDirect\b/.exec(production);
   requireAdmission(pairDeclaration && !/\b(?:Clone|Copy)\b/.test(pairDeclaration[1]) &&
     !/\bimpl\b[^{};]*\bAppliedLocalDirect\b/.test(production) &&
     [...production.matchAll(/\bAppliedLocalDirect\s*\{/g)].length === 2 &&

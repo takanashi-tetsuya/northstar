@@ -111,16 +111,16 @@ rejectsDirect('shared frame replaces the actual frame policy', 'frame',
   'policy: unrelated_policy()');
 rejectsDirect('publicly replaceable applied result', 'directWorkflow',
   /actual: anyhow::Result<DirectPersonalMessageAdmission>,/g,
-  'pub(crate) actual: anyhow::Result<DirectPersonalMessageAdmission>,');
+  'pub actual: anyhow::Result<DirectPersonalMessageAdmission>,');
 rejectsDirect('clonable applied result and continuation', 'directWorkflow',
-  /pub\(crate\) struct AppliedLocalDirect/g,
-  '#[derive(Clone)]\npub(crate) struct AppliedLocalDirect');
+  /pub struct AppliedLocalDirect/g,
+  '#[derive(Clone)]\npub struct AppliedLocalDirect');
 rejectsDirect('second unbound applied-pair constructor', 'directWorkflow',
-  /pub\(crate\) struct AppliedLocalDirect/g,
-  "pub(crate) fn raw_applied<'a>(actual: anyhow::Result<DirectPersonalMessageAdmission>, continuation: LocalDirectContinuation<'a>) -> AppliedLocalDirect<'a> { AppliedLocalDirect { actual, continuation } }\npub(crate) struct AppliedLocalDirect");
+  /pub struct AppliedLocalDirect/g,
+  "pub(crate) fn raw_applied<'a>(actual: anyhow::Result<DirectPersonalMessageAdmission>, continuation: LocalDirectContinuation<'a>) -> AppliedLocalDirect<'a> { AppliedLocalDirect { actual, continuation } }\npub struct AppliedLocalDirect");
 rejectsDirect('applied-pair decomposition API', 'directWorkflow',
-  /pub\(crate\) struct AppliedLocalDirect/g,
-  "impl<'a> AppliedLocalDirect<'a> { pub(crate) fn into_parts(self) -> (anyhow::Result<DirectPersonalMessageAdmission>, LocalDirectContinuation<'a>) { (self.actual, self.continuation) } }\npub(crate) struct AppliedLocalDirect");
+  /pub struct AppliedLocalDirect/g,
+  "impl<'a> AppliedLocalDirect<'a> { pub(crate) fn into_parts(self) -> (anyhow::Result<DirectPersonalMessageAdmission>, LocalDirectContinuation<'a>) { (self.actual, self.continuation) } }\npub struct AppliedLocalDirect");
 rejectsDirect('application bridge missing its actual observer', 'directWorkflow',
   /\.commit_direct\(\s*prepared\.command\(\),\s*prepared\.eligibility\(\),\s*Some\(&prepared\),?\s*\)/g,
   '.commit_direct(prepared.command(), prepared.eligibility(), None)');

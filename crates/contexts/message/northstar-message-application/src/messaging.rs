@@ -1,45 +1,41 @@
 //! Personal-message policy and atomic admission through a persistence port.
 
 mod direct_route;
-pub(crate) mod direct_workflow;
-pub(crate) use direct_route::{
+pub mod direct_workflow;
+pub use direct_route::{
     DirectMessageRoutePort, DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome,
     DirectRouteRejection, DirectRouteRequest, DirectRouteTarget,
 };
-use northstar_roster_application::privacy::PrivacyStanzaKind;
+use northstar_xep_0016::PrivacyStanzaKind;
 
+use crate::direct_commit::{CommitError as DirectCommitError, DirectCommitRepository};
+use crate::direct_handoff::HandoffHandle;
+use crate::retractions::FederationOutboxPolicy;
+use crate::route_item::{RouteEnqueue, RouteItem, RouteSendError};
+use crate::{CommitError, MessageApplication, PersonalMessageCommitRepository};
 use anyhow::Result;
 use northstar_abuse_policy::MessageDedupeIdentity;
 use northstar_delivery_core::DurableDelivery;
-use northstar_message_application::direct_commit::{
-    CommitError as DirectCommitError, DirectCommitRepository,
-};
-use northstar_message_application::direct_handoff::HandoffHandle;
-use northstar_message_application::retractions::FederationOutboxPolicy;
-use northstar_message_application::route_item::{RouteEnqueue, RouteItem, RouteSendError};
-use northstar_message_application::{
-    CommitError, MessageApplication, PersonalMessageCommitRepository,
-};
-pub(crate) use northstar_message_core::{
+pub use northstar_message_core::{
     ArchiveProjection as ArchiveWrite, DirectPersonalMessageAdmission, FederationDelivery,
     IdentityAuthority, LocalDelivery, MessageCommit as DurableAdmissionOutcome, MessageIdentity,
     MessagePostCommit, PersonalMessageDestination, ValidatedPersonalMessage,
 };
 use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
-use northstar_room_application::muc_service::{ClusterMucInviteAuthority, DurableMucInviteOutcome};
+use northstar_room_core::{ClusterMucInviteAuthority, DurableMucInviteOutcome};
 use std::future::Future;
 use uuid::Uuid;
 
 /// Communication policy retains distinct blocking and privacy denials.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OutboundPolicyDecision {
+pub enum OutboundPolicyDecision {
     Allowed,
     Blocked,
     PrivacyDenied,
 }
 
 #[derive(Debug)]
-pub(crate) enum LocalRecipientDecision {
+pub enum LocalRecipientDecision {
     Missing,
     Blocked,
     Deliver(LocalRecipient),
@@ -49,13 +45,13 @@ pub(crate) enum LocalRecipientDecision {
 /// password hashes and SCRAM verifiers from the persistence model never cross
 /// into stanza parsing or live routing code.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct LocalRecipient {
-    pub(crate) id: Uuid,
-    pub(crate) username: String,
+pub struct LocalRecipient {
+    pub id: Uuid,
+    pub username: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OfflineAdmissionOutcome {
+pub enum OfflineAdmissionOutcome {
     Stored,
     Replay,
     QuotaExceeded,
@@ -64,7 +60,7 @@ pub(crate) enum OfflineAdmissionOutcome {
 
 /// A clustered committed C2S row may enter a live queue only with the exact
 /// reservation committed beside it. Standalone delivery has no claim token.
-pub(crate) fn committed_live_delivery_has_fence(
+pub fn committed_live_delivery_has_fence(
     clustered: bool,
     message_id: Uuid,
     claim_id: Option<Uuid>,
@@ -75,14 +71,14 @@ pub(crate) fn committed_live_delivery_has_fence(
 /// The first accepted online resource, if any. Cluster v1 receipts may be
 /// accepted without naming an exact full JID, so the key remains optional.
 #[derive(Debug, Default, Eq, PartialEq)]
-pub(crate) struct OnlineRouteResult {
-    pub(crate) delivered: bool,
-    pub(crate) accepted_full_jid: Option<String>,
+pub struct OnlineRouteResult {
+    pub delivered: bool,
+    pub accepted_full_jid: Option<String>,
 }
 
 /// Live queues and cluster routes remain transport details. Targets arrive
 /// already privacy-filtered and ordered by the pre-admission protocol path.
-pub(crate) trait OnlineRoutePort: Sync {
+pub trait OnlineRoutePort: Sync {
     type Session: Send + Sync;
     type Item: RouteItem;
 
@@ -108,7 +104,7 @@ pub(crate) trait OnlineRoutePort: Sync {
 
 /// The exact-resource route is already gone. Fallback snapshots are separate
 /// because privacy failures after a durable commit cannot reject the stanza.
-pub(crate) trait FullJidFallbackPort: OnlineRoutePort {
+pub trait FullJidFallbackPort: OnlineRoutePort {
     fn fallback_sessions(&self, bare: &str) -> Vec<(String, Self::Session)>;
     fn available_priority(&self, session: &Self::Session) -> Option<i16>;
     fn priority(&self, session: &Self::Session) -> i16;
@@ -121,20 +117,20 @@ pub(crate) trait FullJidFallbackPort: OnlineRoutePort {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum FullJidFallbackResult {
+pub enum FullJidFallbackResult {
     Dropped,
     Rejected,
     Undelivered,
     Delivered(Option<String>),
 }
 
-pub(crate) struct FullJidFallback<'a> {
-    pub(crate) message_type: &'a str,
-    pub(crate) full_target: &'a str,
-    pub(crate) bare_target: &'a str,
-    pub(crate) sender: &'a str,
-    pub(crate) recipient_id: Uuid,
-    pub(crate) delivery: Option<DurableDelivery>,
+pub struct FullJidFallback<'a> {
+    pub message_type: &'a str,
+    pub full_target: &'a str,
+    pub bare_target: &'a str,
+    pub sender: &'a str,
+    pub recipient_id: Uuid,
+    pub delivery: Option<DurableDelivery>,
 }
 
 /// Policy/privacy preparation is separate from enqueue so protocol owners can
@@ -234,13 +230,13 @@ impl<I> Drop for RoutePayload<'_, I> {
     }
 }
 
-pub(crate) struct OnlineMessageRouter;
+pub struct OnlineMessageRouter;
 
 impl OnlineMessageRouter {
     /// Route an accepted stanza without touching its transaction owner. A
     /// durable delivery has one transport owner; headline fanout is volatile.
     #[cfg(test)]
-    pub(crate) async fn dispatch<P: OnlineRoutePort>(
+    pub async fn dispatch<P: OnlineRoutePort>(
         port: &P,
         jid: &str,
         stanza: &str,
@@ -421,14 +417,14 @@ impl OnlineMessageRouter {
     }
 }
 
-pub(crate) struct OfflinePostCommitPush {
-    pub(crate) admission: OfflineAdmissionOutcome,
-    pub(crate) push_error: Option<anyhow::Error>,
+pub struct OfflinePostCommitPush {
+    pub admission: OfflineAdmissionOutcome,
+    pub push_error: Option<anyhow::Error>,
 }
 
 /// An offline claim or its MAM recovery must commit before Push can call an
 /// external provider. A replay is already accepted but must not notify twice.
-pub(crate) async fn admit_offline_then_push<A, P>(
+pub async fn admit_offline_then_push<A, P>(
     admission: A,
     history_committed: bool,
     push: P,
@@ -447,21 +443,21 @@ where
     })
 }
 
-pub(crate) struct RemoteMucInviteAdmission<'a> {
-    pub(crate) local_actor_id: Uuid,
-    pub(crate) identity: Option<MessageIdentity<'a>>,
-    pub(crate) archives: &'a [ArchiveWrite<'a>],
-    pub(crate) room_id: Uuid,
-    pub(crate) invitee_bare_jid: &'a str,
-    pub(crate) target_domain: &'a str,
-    pub(crate) stanza: &'a str,
-    pub(crate) bounce_to: Option<&'a str>,
-    pub(crate) outbox_policy: FederationOutboxPolicy,
-    pub(crate) cluster_authority: Option<&'a ClusterMucInviteAuthority>,
+pub struct RemoteMucInviteAdmission<'a> {
+    pub local_actor_id: Uuid,
+    pub identity: Option<MessageIdentity<'a>>,
+    pub archives: &'a [ArchiveWrite<'a>],
+    pub room_id: Uuid,
+    pub invitee_bare_jid: &'a str,
+    pub target_domain: &'a str,
+    pub stanza: &'a str,
+    pub bounce_to: Option<&'a str>,
+    pub outbox_policy: FederationOutboxPolicy,
+    pub cluster_authority: Option<&'a ClusterMucInviteAuthority>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RemoteMucInviteAdmissionOutcome {
+pub enum RemoteMucInviteAdmissionOutcome {
     Stored,
     Replay,
     AccountUnavailable,
@@ -470,38 +466,38 @@ pub(crate) enum RemoteMucInviteAdmissionOutcome {
     Conflict,
 }
 
-pub(crate) struct OfflineMessageAdmission<'a> {
-    pub(crate) recipient_id: Uuid,
-    pub(crate) recipient_bare_jid: &'a str,
-    pub(crate) sender_jid: &'a str,
-    pub(crate) stanza: &'a str,
-    pub(crate) encrypted: bool,
-    pub(crate) mam_backed: bool,
-    pub(crate) identity: Option<&'a MessageDedupeIdentity>,
+pub struct OfflineMessageAdmission<'a> {
+    pub recipient_id: Uuid,
+    pub recipient_bare_jid: &'a str,
+    pub sender_jid: &'a str,
+    pub stanza: &'a str,
+    pub encrypted: bool,
+    pub mam_backed: bool,
+    pub identity: Option<&'a MessageDedupeIdentity>,
 }
 
 /// One application-level members-only direct invitation admission. The
 /// service owns the transaction spanning personal history, origin identity,
 /// recoverable C2S delivery and MUC affiliation authorization.
-pub(crate) struct LocalMucInviteAdmission<'a> {
-    pub(crate) local_actor_id: Uuid,
-    pub(crate) identity: Option<MessageIdentity<'a>>,
-    pub(crate) archives: &'a [ArchiveWrite<'a>],
-    pub(crate) delivery_id: Uuid,
-    pub(crate) recipient_id: Uuid,
-    pub(crate) recipient_bare_jid: &'a str,
-    pub(crate) sender_jid: &'a str,
-    pub(crate) stanza: &'a str,
-    pub(crate) encrypted: bool,
-    pub(crate) mam_backed: bool,
-    pub(crate) room_id: Uuid,
-    pub(crate) cluster_authority: Option<&'a ClusterMucInviteAuthority>,
+pub struct LocalMucInviteAdmission<'a> {
+    pub local_actor_id: Uuid,
+    pub identity: Option<MessageIdentity<'a>>,
+    pub archives: &'a [ArchiveWrite<'a>],
+    pub delivery_id: Uuid,
+    pub recipient_id: Uuid,
+    pub recipient_bare_jid: &'a str,
+    pub sender_jid: &'a str,
+    pub stanza: &'a str,
+    pub encrypted: bool,
+    pub mam_backed: bool,
+    pub room_id: Uuid,
+    pub cluster_authority: Option<&'a ClusterMucInviteAuthority>,
 }
 
 /// Each admission commits all requested history, delivery and affiliation
 /// changes atomically. An error after requesting COMMIT can leave its outcome
 /// unknown; it is not evidence that an atomic admission rolled back.
-pub(crate) trait MessageRepository:
+pub trait MessageRepository:
     PersonalMessageCommitRepository<Error = anyhow::Error>
     + DirectCommitRepository<Error = anyhow::Error>
     + Clone
@@ -564,14 +560,14 @@ pub(crate) trait MessageRepository:
 }
 
 #[derive(Clone)]
-pub(crate) struct MessageService<R> {
+pub struct MessageService<R> {
     personal: MessageApplication<R>,
     repository: R,
     require_encrypted_archive: bool,
 }
 
 impl<R: MessageRepository> MessageService<R> {
-    pub(crate) fn new(repository: R, require_encrypted_archive: bool) -> Self {
+    pub fn new(repository: R, require_encrypted_archive: bool) -> Self {
         Self {
             personal: MessageApplication::new(repository.clone()),
             repository,
@@ -579,15 +575,15 @@ impl<R: MessageRepository> MessageService<R> {
         }
     }
 
-    pub(crate) fn direct_mode(&self) -> DirectPostCommitMode {
+    pub fn direct_mode(&self) -> DirectPostCommitMode {
         self.repository.direct_mode()
     }
 
-    pub(crate) fn clustered_direct_admission_enabled(&self) -> bool {
+    pub fn clustered_direct_admission_enabled(&self) -> bool {
         self.repository.clustered_direct_admission_enabled()
     }
 
-    pub(crate) async fn admit_personal_message_with_mode(
+    pub async fn admit_personal_message_with_mode(
         &self,
         request: &ValidatedPersonalMessage<'_>,
         eligibility: DirectSpoolEligibility,
@@ -598,7 +594,7 @@ impl<R: MessageRepository> MessageService<R> {
             .map_err(direct_commit_error)
     }
 
-    pub(crate) async fn admit_prepared_personal_message_with_mode<'command, 'live>(
+    pub async fn admit_prepared_personal_message_with_mode<'command, 'live>(
         &self,
         prepared: direct_workflow::PreparedLocalDirect<'command, 'live>,
     ) -> direct_workflow::AppliedLocalDirect<'live> {
@@ -607,7 +603,7 @@ impl<R: MessageRepository> MessageService<R> {
 
     /// Rearm recovery only when the initial live reservation still owns the
     /// exact row. A transport that already fenced the row wins the CAS.
-    pub(crate) async fn release_live_direct_claim(
+    pub async fn release_live_direct_claim(
         &self,
         recipient_id: Uuid,
         message_id: Uuid,
@@ -621,7 +617,7 @@ impl<R: MessageRepository> MessageService<R> {
     /// A committed stanza has no known transport owner. Relinquish only its
     /// initial reservation, allowing the durable wake to retry promptly. A
     /// concurrent socket/SM/BOSH ownership transfer makes the CAS lose safely.
-    pub(crate) async fn rearm_unrouted_live_direct(
+    pub async fn rearm_unrouted_live_direct(
         &self,
         recipient_id: Uuid,
         message_id: Uuid,
@@ -641,7 +637,7 @@ impl<R: MessageRepository> MessageService<R> {
                 "could not promptly rearm unrouted committed direct delivery");
         }
     }
-    pub(crate) async fn authorize_outbound_message(
+    pub async fn authorize_outbound_message(
         &self,
         owner_id: Uuid,
         owner_bare_jid: &str,
@@ -653,7 +649,7 @@ impl<R: MessageRepository> MessageService<R> {
             .await
     }
 
-    pub(crate) async fn resolve_local_recipient(
+    pub async fn resolve_local_recipient(
         &self,
         username: &str,
         local_domain: &str,
@@ -664,7 +660,7 @@ impl<R: MessageRepository> MessageService<R> {
             .await
     }
 
-    pub(crate) async fn default_recipient_privacy_denies(
+    pub async fn default_recipient_privacy_denies(
         &self,
         recipient_id: Uuid,
         sender_jid: &str,
@@ -674,7 +670,7 @@ impl<R: MessageRepository> MessageService<R> {
             .await
     }
 
-    pub(crate) async fn privacy_allows_session(
+    pub async fn privacy_allows_session(
         &self,
         user_id: Uuid,
         connection_id: Uuid,
@@ -687,25 +683,25 @@ impl<R: MessageRepository> MessageService<R> {
             .await
     }
 
-    pub(crate) async fn admit_remote_muc_invite(
+    pub async fn admit_remote_muc_invite(
         &self,
         request: &RemoteMucInviteAdmission<'_>,
     ) -> Result<RemoteMucInviteAdmissionOutcome> {
         self.repository.admit_remote_muc_invite(request).await
     }
 
-    pub(crate) async fn admit_local_muc_invite(
+    pub async fn admit_local_muc_invite(
         &self,
         request: &LocalMucInviteAdmission<'_>,
     ) -> Result<DurableMucInviteOutcome> {
         self.repository.admit_local_muc_invite(request).await
     }
 
-    pub(crate) async fn admit_history(&self, writes: &[ArchiveWrite<'_>]) -> Result<()> {
+    pub async fn admit_history(&self, writes: &[ArchiveWrite<'_>]) -> Result<()> {
         self.repository.admit_history(writes).await
     }
 
-    pub(crate) async fn store_offline(
+    pub async fn store_offline(
         &self,
         admission: OfflineMessageAdmission<'_>,
     ) -> Result<OfflineAdmissionOutcome> {
@@ -715,7 +711,7 @@ impl<R: MessageRepository> MessageService<R> {
     /// Combine stanza storage semantics, deployment encryption policy and the
     /// account's MAM preference. Retractions are always history mutations and
     /// therefore bypass ordinary content-storage eligibility.
-    pub(crate) async fn archive_enabled(
+    pub async fn archive_enabled(
         &self,
         owner_id: Uuid,
         peer_jid: &str,
@@ -736,7 +732,7 @@ impl<R: MessageRepository> MessageService<R> {
     /// local-delivery or federation-outbox transaction. Protocol origin does
     /// not select a repository function; the typed destination and identity
     /// authority do, preventing C2S and S2S adapters from drifting apart.
-    pub(crate) async fn admit_personal_message(
+    pub async fn admit_personal_message(
         &self,
         request: &ValidatedPersonalMessage<'_>,
     ) -> Result<DurableAdmissionOutcome> {
@@ -761,6 +757,29 @@ fn direct_commit_error(error: DirectCommitError<anyhow::Error>) -> anyhow::Error
         DirectCommitError::Repository { error, outcome } => {
             direct_workflow::continuation_error(error, outcome)
         }
+    }
+}
+
+/// The retained route payload, for root tests that drive it over the real queue.
+#[cfg(any(test, feature = "test-support"))]
+pub struct RoutePayloadFixture<'a, I>(RoutePayload<'a, I>);
+#[cfg(any(test, feature = "test-support"))]
+impl<'a, I: RouteItem> RoutePayloadFixture<'a, I> {
+    pub fn prepared(stanza: &'a str, item: I, witness: HandoffHandle) -> Self {
+        Self(RoutePayload::prepared(stanza, item, witness))
+    }
+    pub fn enqueue<P: OnlineRoutePort<Item = I>>(
+        &mut self,
+        port: &P,
+        session: &P::Session,
+    ) -> bool {
+        self.0.enqueue(port, session)
+    }
+    pub fn item_mut(&mut self) -> Option<&mut I> {
+        self.0.item.as_mut()
+    }
+    pub fn binding_rejected(&self) -> bool {
+        self.0.binding_rejected
     }
 }
 

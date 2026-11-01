@@ -3,6 +3,7 @@ use super::{
     FullJidFallbackPort, FullJidFallbackResult, OfflineAdmissionOutcome, OnlineMessageRouter,
     OnlineRoutePort, OnlineRouteResult, RoutePayload,
 };
+use crate::route_item::test_queue::TestItem;
 use northstar_delivery_core::DurableDelivery;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -67,14 +68,14 @@ impl RoutePort {
 }
 
 impl OnlineRoutePort for RoutePort {
-    type Item = crate::xmpp::outbound::OutboundItem;
+    type Item = TestItem;
     type Session = Target;
 
     fn try_local(
         &self,
         session: &Self::Session,
-        enqueue: crate::xmpp::outbound::RouteEnqueue,
-    ) -> Result<(), crate::xmpp::outbound::RouteSendError> {
+        enqueue: crate::route_item::RouteEnqueue<TestItem>,
+    ) -> Result<(), crate::route_item::RouteSendError<TestItem>> {
         self.events
             .lock()
             .unwrap()

@@ -14,7 +14,7 @@ use northstar_message_core::{bare_message_route, BareMessageRoute};
 use std::future::Future;
 use uuid::Uuid;
 
-pub(crate) trait DirectMessageRoutePort: FullJidFallbackPort {
+pub trait DirectMessageRoutePort: FullJidFallbackPort {
     fn direct_route_mode(&self) -> DirectPostCommitMode;
     fn clustered_direct_routes(&self) -> bool;
     /// Relinquish only this initial exact claim. A later transport fence wins
@@ -23,7 +23,7 @@ pub(crate) trait DirectMessageRoutePort: FullJidFallbackPort {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DirectRouteDelivery {
+pub enum DirectRouteDelivery {
     Volatile,
     Committed(DurableDelivery),
 }
@@ -38,7 +38,7 @@ impl DirectRouteDelivery {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum DirectRouteTarget<'a> {
+pub enum DirectRouteTarget<'a> {
     Bare(&'a str),
     Full { jid: &'a str, bare: &'a str },
 }
@@ -51,20 +51,20 @@ impl<'a> DirectRouteTarget<'a> {
     }
 }
 
-pub(crate) struct DirectRouteRequest<'a, S> {
-    pub(crate) message_type: &'a str,
-    pub(crate) target: DirectRouteTarget<'a>,
-    pub(crate) sender: &'a str,
-    pub(crate) recipient_id: Uuid,
-    pub(crate) stanza: &'a str,
-    pub(crate) delivery: DirectRouteDelivery,
-    pub(crate) approved_targets: &'a [(String, S)],
+pub struct DirectRouteRequest<'a, S> {
+    pub message_type: &'a str,
+    pub target: DirectRouteTarget<'a>,
+    pub sender: &'a str,
+    pub recipient_id: Uuid,
+    pub stanza: &'a str,
+    pub delivery: DirectRouteDelivery,
+    pub approved_targets: &'a [(String, S)],
     /// Internal service addresses retain their existing non-direct behavior.
-    pub(crate) enforce_direct_health: bool,
+    pub enforce_direct_health: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DirectRouteStage {
+pub enum DirectRouteStage {
     LiveReservation,
     HandoffBinding,
     PrimaryRoute,
@@ -76,7 +76,7 @@ pub(crate) enum DirectRouteStage {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DirectRouteRecoveryReason {
+pub enum DirectRouteRecoveryReason {
     MissingLiveReservation,
     InvalidHandoff,
     HealthChanged,
@@ -85,13 +85,13 @@ pub(crate) enum DirectRouteRecoveryReason {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DirectRouteRejection {
+pub enum DirectRouteRejection {
     Unavailable,
     NoMatchingResource,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum DirectRouteOutcome {
+pub enum DirectRouteOutcome {
     /// An ordered queue accepted the item, not necessarily a socket write.
     Routed {
         accepted_full_jid: Option<String>,
@@ -111,8 +111,8 @@ pub(crate) enum DirectRouteOutcome {
 }
 
 #[derive(Debug)]
-pub(crate) struct DirectRouteError {
-    pub(crate) stage: DirectRouteStage,
+pub struct DirectRouteError {
+    pub stage: DirectRouteStage,
     source: anyhow::Error,
 }
 
@@ -136,7 +136,7 @@ impl std::error::Error for DirectRouteError {
 /// one route attempt. It never represents a transport acknowledgement.
 struct UnroutedClaim {
     source: Option<DurableDelivery>,
-    witness: Option<northstar_message_application::direct_handoff::HandoffHandle>,
+    witness: Option<crate::direct_handoff::HandoffHandle>,
 }
 
 impl UnroutedClaim {
@@ -161,10 +161,10 @@ impl UnroutedClaim {
     }
 }
 
-pub(crate) struct DirectMessageRouter;
+pub struct DirectMessageRouter;
 
 impl DirectMessageRouter {
-    pub(crate) async fn route<P: DirectMessageRoutePort>(
+    pub async fn route<P: DirectMessageRoutePort>(
         port: &P,
         request: DirectRouteRequest<'_, P::Session>,
     ) -> Result<DirectRouteOutcome, DirectRouteError> {
@@ -174,7 +174,7 @@ impl DirectMessageRouter {
         result
     }
 
-    pub(crate) async fn route_prepared<P: DirectMessageRoutePort>(
+    pub async fn route_prepared<P: DirectMessageRoutePort>(
         port: &P,
         request: DirectRouteRequest<'_, P::Session>,
         prepared: super::direct_workflow::PreparedDirectHandoff<'_>,
@@ -195,7 +195,7 @@ impl DirectMessageRouter {
         result
     }
 
-    pub(crate) async fn recover_prepared<P: DirectMessageRoutePort>(
+    pub async fn recover_prepared<P: DirectMessageRoutePort>(
         port: &P,
         prepared: super::direct_workflow::PreparedDirectRecovery,
     ) {
@@ -302,7 +302,7 @@ impl DirectMessageRouter {
     /// remote handoffs and after fallback privacy. An unrouted result returns
     /// to the protocol's headline/no-store/offline policy without a new final
     /// health read. C2S deliberately keeps its different checkpoint sequence.
-    pub(crate) async fn route_federated<P: DirectMessageRoutePort>(
+    pub async fn route_federated<P: DirectMessageRoutePort>(
         port: &P,
         request: DirectRouteRequest<'_, P::Session>,
         history_committed: bool,
@@ -552,7 +552,7 @@ impl DirectMessageRouter {
         queue_accepted: bool,
         history_committed: bool,
     ) -> Option<DirectRouteOutcome> {
-        use northstar_message_application::direct_handoff::{health_decision, HealthDecision};
+        use crate::direct_handoff::{health_decision, HealthDecision};
         // Keep the original disabled-health short circuit and each caller's
         // checkpoint; the shared decision owns no clock or health read.
         if !request.enforce_direct_health {

@@ -1,5 +1,7 @@
 use super::*;
-use crate::services::messaging::{OnlineRoutePort, OnlineRouteResult};
+use crate::messaging::{OnlineRoutePort, OnlineRouteResult};
+use crate::route_item::test_queue::TestItem;
+use crate::route_item::RouteItem as _;
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::Mutex,
@@ -88,14 +90,14 @@ impl Port {
 }
 
 impl OnlineRoutePort for Port {
-    type Item = crate::xmpp::outbound::OutboundItem;
+    type Item = TestItem;
     type Session = Target;
 
     fn try_local(
         &self,
         target: &Target,
-        enqueue: crate::xmpp::outbound::RouteEnqueue,
-    ) -> Result<(), crate::xmpp::outbound::RouteSendError> {
+        enqueue: crate::route_item::RouteEnqueue<TestItem>,
+    ) -> Result<(), crate::route_item::RouteSendError<TestItem>> {
         self.record("enqueue");
         self.record_route(
             RouteDestination::Local(target.jid),

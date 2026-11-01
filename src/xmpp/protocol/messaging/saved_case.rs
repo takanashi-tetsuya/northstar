@@ -4,9 +4,6 @@
 //! Full fixed-profile execution and qualification remain separately gated.
 use super::*;
 use crate::direct_replay as wire;
-use crate::services::messaging::{
-    DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
-};
 use crate::xmpp::outbound::{
     DurableDelivery, OutboundItem, OutboundSender, RouteEnqueue, RouteSendError,
     TransportOwnershipSource,
@@ -19,6 +16,9 @@ use northstar_message_application::message_admission;
 use northstar_message_application::message_admission::witness::AdmissionWitness;
 use northstar_message_application::message_admission::{
     witness, MessageAdmissionRepository, MessageAdmissionService,
+};
+use northstar_message_application::messaging::{
+    DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
 };
 use northstar_message_application::{
     direct_commit, direct_handoff, direct_lifecycle, MessageApplication,

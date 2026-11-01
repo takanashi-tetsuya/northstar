@@ -1313,7 +1313,7 @@ impl ProtocolSession {
                         );
                         let offline = admit_offline_then_push(
                             self.state.message_service().store_offline(
-                                crate::services::messaging::OfflineMessageAdmission {
+                                northstar_message_application::messaging::OfflineMessageAdmission {
                                     recipient_id: recipient.id,
                                     recipient_bare_jid: &recipient_by,
                                     sender_jid: from,

@@ -5,14 +5,12 @@ use crate::{
     cluster::ClusterUnavailableDelivery,
     db::{self, sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository},
     s2s::FederationRouter,
-    services::{
-        messaging::MessageService,
-        sm_teardown_presence::{SmTeardownPresenceService, UnavailablePolicy},
-    },
+    services::sm_teardown_presence::{SmTeardownPresenceService, UnavailablePolicy},
 };
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_config::ExternalRouteDomainPolicy;
+use northstar_message_application::messaging::MessageService;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;
 

@@ -2,11 +2,11 @@
 //! continuation through borrowed admission and routing capabilities.
 //! Buffers stay with the original protocol preparation; this module parses no
 //! XML and owns no AppState, clock, SQL, socket, task, or retry capability.
-use northstar_message_application::message_admission::witness::DirectOperationHandle;
-use northstar_message_application::message_admission::{
+use crate::message_admission::witness::DirectOperationHandle;
+use crate::message_admission::{
     finalize_message_admission_with, MessageAdmissionRepository, MessageAdmissionService,
 };
-use northstar_message_application::{direct_commit::*, direct_lifecycle::PreparationAdmission};
+use crate::{direct_commit::*, direct_lifecycle::PreparationAdmission};
 use northstar_message_core::{
     DirectPersonalMessageAdmission, DirectPostCommitMode, DirectSpoolEligibility,
     IdentityAuthority, MessageCommit, MessagePostCommit, PersonalMessageDestination,
@@ -22,7 +22,7 @@ struct DirectContinuationError {
     source: anyhow::Error,
 }
 
-pub(super) fn continuation_error(
+pub fn continuation_error(
     error: anyhow::Error,
     outcome: Option<ExecutionOutcome>,
 ) -> anyhow::Error {
@@ -36,7 +36,7 @@ pub(super) fn continuation_error(
     }
 }
 
-pub(crate) fn preserved_transaction(error: &anyhow::Error) -> Option<&TransactionOutcome> {
+pub fn preserved_transaction(error: &anyhow::Error) -> Option<&TransactionOutcome> {
     error
         .downcast_ref::<DirectContinuationError>()
         .map(|error| &error.receipt.prepared.outcome)
@@ -44,25 +44,25 @@ pub(crate) fn preserved_transaction(error: &anyhow::Error) -> Option<&Transactio
 
 /// The actual application result and its original continuation cannot be
 /// independently supplied or exchanged by the protocol or controlled caller.
-pub(crate) struct AppliedLocalDirect<'live> {
+pub struct AppliedLocalDirect<'live> {
     actual: anyhow::Result<DirectPersonalMessageAdmission>,
     continuation: LocalDirectContinuation<'live>,
 }
 
-pub(crate) enum ContinuedLocalDirect<'live> {
+pub enum ContinuedLocalDirect<'live> {
     Live(PreparedLiveDirect<'live>),
     Accepted,
     Reject(LocalDirectStanzaError),
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum LocalDirectStanzaError {
+pub enum LocalDirectStanzaError {
     InternalPostCommitShape,
     AccountUnavailable,
     Unconfirmed,
 }
 impl LocalDirectStanzaError {
-    pub(crate) fn stanza_error(self) -> (&'static str, &'static str) {
+    pub fn stanza_error(self) -> (&'static str, &'static str) {
         match self {
             Self::InternalPostCommitShape => ("wait", "internal-server-error"),
             Self::AccountUnavailable => ("cancel", "service-unavailable"),
@@ -71,21 +71,21 @@ impl LocalDirectStanzaError {
     }
 }
 
-pub(crate) struct PreparedLiveDirect<'live> {
+pub struct PreparedLiveDirect<'live> {
     archive_written: bool,
     // One allocation keeps the three-way disposition compact; the exact
     // grant and borrowed live view move together without a payload clone.
     handoff: Box<PreparedDirectHandoff<'live>>,
 }
 impl PreparedLiveDirect<'_> {
-    pub(crate) fn archive_written(&self) -> bool {
+    pub fn archive_written(&self) -> bool {
         self.archive_written
     }
-    pub(crate) fn source(&self) -> northstar_delivery_core::DurableDelivery {
+    pub fn source(&self) -> northstar_delivery_core::DurableDelivery {
         self.handoff.grant.source()
     }
 
-    pub(crate) async fn route_with<P: super::DirectMessageRoutePort>(
+    pub async fn route_with<P: super::DirectMessageRoutePort>(
         self,
         port: &P,
         approved_targets: &[(String, P::Session)],
@@ -112,8 +112,8 @@ impl PreparedLiveDirect<'_> {
     }
 }
 
-pub(crate) async fn commit_prepared_application<'command, 'live, R>(
-    app: &northstar_message_application::MessageApplication<R>,
+pub async fn commit_prepared_application<'command, 'live, R>(
+    app: &crate::MessageApplication<R>,
     prepared: PreparedLocalDirect<'command, 'live>,
 ) -> AppliedLocalDirect<'live>
 where
@@ -129,7 +129,7 @@ where
     }
 }
 
-pub(crate) async fn continue_prepared_local_direct<'live, A, P, F>(
+pub async fn continue_prepared_local_direct<'live, A, P, F>(
     applied: AppliedLocalDirect<'live>,
     lease: &mut Option<northstar_abuse_policy::message_admission::MessageAdmissionLease>,
     admission: &MessageAdmissionService<A>,
@@ -263,32 +263,32 @@ where
 
 /// Actual purpose-specific views derived by OriginalDirectMessage. These are
 /// private runtime inputs, never caller-supplied fingerprints or preparation IDs.
-pub(crate) struct LocalPreparation<'a> {
-    pub(crate) actor_id: Uuid,
-    pub(crate) sender_bare: &'a str,
-    pub(crate) sender_full: &'a str,
-    pub(crate) target_bare: &'a str,
-    pub(crate) target_full: &'a str,
-    pub(crate) message_type: &'a str,
-    pub(crate) live_stanza: &'a str,
-    pub(crate) origin_id: Option<&'a str>,
-    pub(crate) identity_payload: &'a str,
-    pub(crate) stored_stanza: &'a str,
-    pub(crate) admission: PreparationAdmission<'a>,
+pub struct LocalPreparation<'a> {
+    pub actor_id: Uuid,
+    pub sender_bare: &'a str,
+    pub sender_full: &'a str,
+    pub target_bare: &'a str,
+    pub target_full: &'a str,
+    pub message_type: &'a str,
+    pub live_stanza: &'a str,
+    pub origin_id: Option<&'a str>,
+    pub identity_payload: &'a str,
+    pub stored_stanza: &'a str,
+    pub admission: PreparationAdmission<'a>,
 }
 
 /// Borrowed live view of the same original that produced the stored command.
 /// Kept separately from the command lifetime so delayed/archive buffers can end.
-pub(crate) struct LiveDirectBinding<'a> {
-    pub(crate) sender: &'a str,
-    pub(crate) target: &'a str,
-    pub(crate) target_bare: &'a str,
-    pub(crate) message_type: &'a str,
-    pub(crate) stanza: &'a str,
-    pub(crate) recipient_id: Uuid,
+pub struct LiveDirectBinding<'a> {
+    pub sender: &'a str,
+    pub target: &'a str,
+    pub target_bare: &'a str,
+    pub message_type: &'a str,
+    pub stanza: &'a str,
+    pub recipient_id: Uuid,
 }
 
-pub(crate) struct PreparedLocalDirect<'a, 'live> {
+pub struct PreparedLocalDirect<'a, 'live> {
     owner: DirectOperationHandle,
     effect: DirectEffect,
     command: ValidatedPersonalMessage<'a>,
@@ -303,7 +303,7 @@ impl std::fmt::Debug for PreparedLocalDirect<'_, '_> {
 }
 
 impl<'a, 'live> PreparedLocalDirect<'a, 'live> {
-    pub(crate) fn bind(
+    pub fn bind(
         owner: DirectOperationHandle,
         original: LocalPreparation<'_>,
         command: ValidatedPersonalMessage<'a>,
@@ -377,17 +377,17 @@ impl<'a, 'live> PreparedLocalDirect<'a, 'live> {
         })
     }
 
-    pub(crate) fn into_continuation(self) -> LocalDirectContinuation<'live> {
+    pub fn into_continuation(self) -> LocalDirectContinuation<'live> {
         LocalDirectContinuation {
             owner: self.owner,
             live: self.live,
         }
     }
 
-    pub(crate) fn command(&self) -> &ValidatedPersonalMessage<'a> {
+    pub fn command(&self) -> &ValidatedPersonalMessage<'a> {
         &self.command
     }
-    pub(crate) fn eligibility(&self) -> DirectSpoolEligibility {
+    pub fn eligibility(&self) -> DirectSpoolEligibility {
         self.eligibility
     }
 }
@@ -430,35 +430,35 @@ impl DirectCommitObserver for PreparedLocalDirect<'_, '_> {
     }
 }
 
-pub(crate) struct LocalDirectContinuation<'a> {
+pub struct LocalDirectContinuation<'a> {
     owner: DirectOperationHandle,
     live: LiveDirectBinding<'a>,
 }
 
-pub(crate) enum PreparedHandoffNext<'a> {
+pub enum PreparedHandoffNext<'a> {
     Route(PreparedDirectHandoff<'a>),
     Recover(PreparedDirectRecovery),
 }
 
-pub(crate) struct PreparedDirectHandoff<'a> {
+pub struct PreparedDirectHandoff<'a> {
     owner: DirectOperationHandle,
-    grant: northstar_message_application::direct_handoff::RouteGrant,
+    grant: crate::direct_handoff::RouteGrant,
     live: LiveDirectBinding<'a>,
 }
 
-pub(crate) struct PreparedDirectRecovery {
-    pub(super) source: northstar_delivery_core::DurableDelivery,
-    pub(super) witness: northstar_message_application::direct_handoff::HandoffHandle,
+pub struct PreparedDirectRecovery {
+    pub source: northstar_delivery_core::DurableDelivery,
+    pub witness: crate::direct_handoff::HandoffHandle,
 }
 
 impl<'a> LocalDirectContinuation<'a> {
     /// The closure preserves the old short circuit: a returned spool mode or
     /// unknown continuation never performs the second health read.
-    pub(crate) fn after_finalize(
+    pub fn after_finalize(
         self,
         read_health: impl FnOnce() -> DirectPostCommitMode,
     ) -> anyhow::Result<PreparedHandoffNext<'a>> {
-        use northstar_message_application::direct_handoff::Next;
+        use crate::direct_handoff::Next;
         let next = match self.owner.begin_handoff()? {
             Next::CheckHealth(permit) => {
                 self.owner.observe_handoff_health(permit, read_health())?
@@ -482,13 +482,10 @@ impl<'a> LocalDirectContinuation<'a> {
 }
 
 impl PreparedDirectHandoff<'_> {
-    pub(super) fn bind_route<S, I: northstar_message_application::route_item::RouteItem>(
+    pub fn bind_route<S, I: crate::route_item::RouteItem>(
         self,
         request: &super::DirectRouteRequest<'_, S>,
-    ) -> anyhow::Result<(
-        I,
-        northstar_message_application::direct_handoff::HandoffHandle,
-    )> {
+    ) -> anyhow::Result<(I, crate::direct_handoff::HandoffHandle)> {
         let source = self.grant.source();
         anyhow::ensure!(
             request.sender == self.live.sender
@@ -512,7 +509,7 @@ impl PreparedDirectHandoff<'_> {
 
 /// The real archive caller supplies transaction.commit(); fake-port tests can
 /// choose each cut without executing SQL. A call boundary is not a DB receipt.
-pub(crate) async fn commit_observed<E>(
+pub async fn commit_observed<E>(
     commit: impl std::future::Future<Output = Result<(), E>>,
     observer: &dyn DirectCommitObserver,
     outcome: TransactionOutcome,
@@ -527,9 +524,6 @@ where
     observer.received(prepared)?;
     Ok(())
 }
-
-#[cfg(test)]
-mod continuation_tests;
 
 #[cfg(test)]
 mod tests;

@@ -453,7 +453,7 @@ impl AppState {
             northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
                 config.database_max_connections,
             );
-        let message_service = crate::services::messaging::MessageService::new(
+        let message_service = northstar_message_application::messaging::MessageService::new(
             db::messaging::PostgresMessageRepository::new(
                 pool.clone(),
                 message_content_identity,

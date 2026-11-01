@@ -89,7 +89,7 @@ Key ownership:
 - Protocol output uses `northstar-xml-builder` for escaping and validated
   fragments. Several XEP crates use it for generated payloads while keeping
   their existing parse and input-validation rules.
-- `src/services/messaging.rs` owns personal-message communication policy and
+- `crates/contexts/message/northstar-message-application/src/messaging.rs` owns personal-message communication policy and
   durable admission. The stanza handler still owns XML and live routing, but
   cannot directly query users/blocking/privacy or compose MAM, S2S outbox, C2S
   spool and offline writes. `src/db/messaging.rs` implements the injected

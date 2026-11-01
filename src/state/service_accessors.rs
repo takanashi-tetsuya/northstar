@@ -99,7 +99,9 @@ impl AppState {
 
     pub(crate) fn message_service(
         &self,
-    ) -> &crate::services::messaging::MessageService<db::messaging::PostgresMessageRepository> {
+    ) -> &northstar_message_application::messaging::MessageService<
+        db::messaging::PostgresMessageRepository,
+    > {
         &self.message_service
     }
 

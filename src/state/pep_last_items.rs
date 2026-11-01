@@ -8,11 +8,11 @@ use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
     db::{messaging::PostgresMessageRepository, pubsub_repository::PostgresPubSubRepository},
     s2s::FederationRouter,
-    services::messaging::MessageService,
 };
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_config::ExternalRouteDomainPolicy;
+use northstar_message_application::messaging::MessageService;
 use northstar_protocol_runtime::caps::{CapsObservationOwner, CapsResourceIndex, PendingCapsIndex};
 use northstar_pubsub_application::PubSubService;
 use northstar_roster_application::privacy::PrivacyStanzaKind;

@@ -1,6 +1,16 @@
-use super::*;
+use northstar_message_application::direct_commit::{
+    DirectCommitObserver, Knowledge, Rejected, TransactionOutcome,
+};
+use northstar_message_application::direct_lifecycle::PreparationAdmission;
 use northstar_message_application::direct_lifecycle::{DirectOutcomeClass, TerminalReason};
+use northstar_message_application::message_admission::witness::DirectOperationHandle;
+use northstar_message_application::messaging::direct_workflow::*;
 use northstar_message_core::LocalDelivery;
+use northstar_message_core::{
+    DirectPersonalMessageAdmission, DirectPostCommitMode, DirectSpoolEligibility,
+    PersonalMessageDestination, ValidatedPersonalMessage,
+};
+use uuid::Uuid;
 
 fn prepared() -> (DirectOperationHandle, PreparedLocalDirect<'static, 'static>) {
     let owner = DirectOperationHandle::new(Uuid::new_v4());
@@ -191,14 +201,18 @@ fn complete_stored(prepared: &PreparedLocalDirect<'_, '_>, mode: Option<DirectPo
         }))
         .unwrap();
 }
-fn route_request<S>(targets: &[(String, S)]) -> super::super::DirectRouteRequest<'_, S> {
-    super::super::DirectRouteRequest {
+fn route_request<S>(
+    targets: &[(String, S)],
+) -> northstar_message_application::messaging::DirectRouteRequest<'_, S> {
+    northstar_message_application::messaging::DirectRouteRequest {
         message_type: "chat",
-        target: super::super::DirectRouteTarget::Bare("bob@example.test"),
+        target: northstar_message_application::messaging::DirectRouteTarget::Bare(
+            "bob@example.test",
+        ),
         sender: "alice@example.test/device",
         recipient_id: Uuid::from_u128(3),
         stanza: "private-live-stanza",
-        delivery: super::super::DirectRouteDelivery::Committed(
+        delivery: northstar_message_application::messaging::DirectRouteDelivery::Committed(
             northstar_delivery_core::DurableDelivery {
                 recipient_id: Uuid::from_u128(3),
                 message_id: Uuid::from_u128(2),
@@ -260,15 +274,19 @@ fn actual_prepared_router_binding_rejects_changed_live_authority_before_consumpt
             0 => request.sender = "mallory@example.test/device",
             1 => request.recipient_id = Uuid::from_u128(99),
             2 => request.stanza = "changed live payload",
-            3 => request.target = super::super::DirectRouteTarget::Bare("mallory@example.test"),
+            3 => {
+                request.target = northstar_message_application::messaging::DirectRouteTarget::Bare(
+                    "mallory@example.test",
+                )
+            }
             4 => {
-                request.target = super::super::DirectRouteTarget::Full {
+                request.target = northstar_message_application::messaging::DirectRouteTarget::Full {
                     jid: "bob@example.test",
                     bare: "mallory@example.test",
                 }
             }
             5 => {
-                request.target = super::super::DirectRouteTarget::Full {
+                request.target = northstar_message_application::messaging::DirectRouteTarget::Full {
                     jid: "bob@example.test",
                     bare: "bob@example.test",
                 }
@@ -400,7 +418,7 @@ struct RealQueuePort {
     events: std::sync::Mutex<Vec<&'static str>>,
     pending_rearm: bool,
 }
-impl super::super::OnlineRoutePort for RealQueuePort {
+impl northstar_message_application::messaging::OnlineRoutePort for RealQueuePort {
     type Item = crate::xmpp::outbound::OutboundItem;
     type Session = crate::xmpp::outbound::OutboundSender;
     fn try_local(
@@ -428,12 +446,12 @@ impl super::super::OnlineRoutePort for RealQueuePort {
         _: &str,
         _: &str,
         _: Option<northstar_delivery_core::DurableDelivery>,
-    ) -> super::super::OnlineRouteResult {
+    ) -> northstar_message_application::messaging::OnlineRouteResult {
         self.events.lock().unwrap().push("remote");
-        super::super::OnlineRouteResult::default()
+        northstar_message_application::messaging::OnlineRouteResult::default()
     }
 }
-impl super::super::FullJidFallbackPort for RealQueuePort {
+impl northstar_message_application::messaging::FullJidFallbackPort for RealQueuePort {
     fn fallback_sessions(&self, _: &str) -> Vec<(String, Self::Session)> {
         vec![]
     }
@@ -450,7 +468,7 @@ impl super::super::FullJidFallbackPort for RealQueuePort {
         self.events.lock().unwrap().push("failed");
     }
 }
-impl super::super::DirectMessageRoutePort for RealQueuePort {
+impl northstar_message_application::messaging::DirectMessageRoutePort for RealQueuePort {
     fn direct_route_mode(&self) -> DirectPostCommitMode {
         self.events.lock().unwrap().push("health");
         DirectPostCommitMode::Live
@@ -480,16 +498,17 @@ async fn real_router_sender_queue_fact_survives_a_later_outer_continuation_cance
         crate::xmpp::outbound::OutboundSender::new(tx),
     )];
     let mut future = Box::pin(async {
-        let outcome = super::super::DirectMessageRouter::route_prepared(
-            &port,
-            route_request(&targets),
-            handoff,
-        )
-        .await
-        .unwrap();
+        let outcome =
+            northstar_message_application::messaging::DirectMessageRouter::route_prepared(
+                &port,
+                route_request(&targets),
+                handoff,
+            )
+            .await
+            .unwrap();
         assert!(matches!(
             outcome,
-            super::super::DirectRouteOutcome::Routed { .. }
+            northstar_message_application::messaging::DirectRouteOutcome::Routed { .. }
         ));
         // Controlled outer-followup suspension, after the real router has
         // returned; the local-success router itself need not suspend.
@@ -523,11 +542,13 @@ async fn real_router_rearm_entry_survives_cancellation_without_claiming_release(
         events: Default::default(),
         pending_rearm: true,
     };
-    let mut future = Box::pin(super::super::DirectMessageRouter::route_prepared(
-        &port,
-        route_request(&[]),
-        handoff,
-    ));
+    let mut future = Box::pin(
+        northstar_message_application::messaging::DirectMessageRouter::route_prepared(
+            &port,
+            route_request(&[]),
+            handoff,
+        ),
+    );
     assert!(futures::poll!(&mut future).is_pending());
     drop(future);
     let snapshot = owner.snapshot().handoff.unwrap();
@@ -555,8 +576,11 @@ fn refused_item_is_rechecked_against_the_original_live_projection_before_retry()
         events: Default::default(),
         pending_rearm: false,
     };
-    let mut payload =
-        super::super::RoutePayload::prepared("private-live-stanza", item, witness.clone());
+    let mut payload = northstar_message_application::messaging::RoutePayloadFixture::prepared(
+        "private-live-stanza",
+        item,
+        witness.clone(),
+    );
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let sender = crate::xmpp::outbound::OutboundSender::new(tx);
     rx.close();
@@ -564,11 +588,11 @@ fn refused_item_is_rechecked_against_the_original_live_projection_before_retry()
     let before = owner.snapshot();
     // Deliberately corrupt only the refused value in this controlled test;
     // production keeps this value private between attempts.
-    payload.item.as_mut().unwrap().stanza = "same IDs, substituted payload".into();
+    payload.item_mut().unwrap().stanza = "same IDs, substituted payload".into();
     let (tx, mut accepted_rx) = tokio::sync::mpsc::channel(1);
     let next = crate::xmpp::outbound::OutboundSender::new(tx);
     assert!(!payload.enqueue(&port, &next));
-    assert!(payload.binding_rejected);
+    assert!(payload.binding_rejected());
     assert_eq!(owner.snapshot(), before);
     assert!(accepted_rx.try_recv().is_err());
     assert_eq!(*port.events.lock().unwrap(), ["enqueue"]);

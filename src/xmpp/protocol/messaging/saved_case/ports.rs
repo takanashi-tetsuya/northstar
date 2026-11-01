@@ -161,7 +161,7 @@ impl direct_commit::DirectCommitRepository for DirectPort<'_> {
                 direct_commit::TransactionOutcome::AccountUnavailable
             }
         };
-        crate::services::messaging::direct_workflow::commit_observed(
+        northstar_message_application::messaging::direct_workflow::commit_observed(
             async {
                 self.log.prefix();
                 match self.plan.commit {

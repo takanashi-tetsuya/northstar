@@ -19,6 +19,7 @@ northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
 northstar-delivery-core = { path = "../northstar-delivery-core" }
 northstar-federation-core = { path = "../../federation/northstar-federation-core" }
 northstar-message-core = { path = "../northstar-message-core" }
+northstar-room-core = { path = "../../room/northstar-room-core" }
 northstar-security = { path = "../../../platform/northstar-security" }
 northstar-xep-0016 = { path = "../../../kernel/northstar-xep-0016" }
 northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }

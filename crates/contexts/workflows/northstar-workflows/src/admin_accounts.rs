@@ -11,7 +11,7 @@ pub use self::accounts::*;
 #[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
 pub async fn mutate_admin_accounts_authorized_with_failure_after<
-    E: crate::account_lifecycle::AccountDeletionEffects,
+    E: northstar_roster_postgres::RosterTransactionEffects,
 >(
     effects: &E,
     pool: &PgPool,
@@ -35,7 +35,7 @@ pub async fn mutate_admin_accounts_authorized_with_failure_after<
 
 #[allow(clippy::too_many_arguments)]
 async fn mutate_admin_accounts_authorized_inner<
-    E: crate::account_lifecycle::AccountDeletionEffects,
+    E: northstar_roster_postgres::RosterTransactionEffects,
 >(
     effects: &E,
     pool: &PgPool,

@@ -115,8 +115,8 @@ impl<E> PostgresAdminCommandRepository<E> {
         Ok(Some(count))
     }
 }
-impl<E: crate::account_lifecycle::AccountDeletionEffects + Clone + 'static> AdminCommandRepository
-    for PostgresAdminCommandRepository<E>
+impl<E: northstar_roster_postgres::RosterTransactionEffects + Clone + 'static>
+    AdminCommandRepository for PostgresAdminCommandRepository<E>
 {
     async fn current_admin(&self, cached: &AdminActor) -> Result<Option<AdminActor>> {
         let current = sqlx::query(

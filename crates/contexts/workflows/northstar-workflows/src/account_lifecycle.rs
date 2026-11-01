@@ -422,17 +422,6 @@ pub async fn operational_counts_in_tx(
     Ok((rooms, uploads, push_subscriptions))
 }
 
-/// The steps of an account deletion owned by contexts still in the root crate.
-pub trait AccountDeletionEffects: RosterTransactionEffects {
-    /// Fences every live room incarnation the account owns before its user row is erased.
-    fn revoke_room_account_in_tx(
-        &self,
-        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        user_id: Uuid,
-        account_bare_jid: &str,
-    ) -> impl std::future::Future<Output = Result<u64>> + Send;
-}
-
 pub type RemovedRosterItem = (String, Option<String>, String, Option<String>);
 
 #[derive(Debug)]
@@ -459,7 +448,7 @@ pub struct AdminDeletionFence<'a> {
 /// slipping in after the XEP-0077 cancellation snapshot. Account-owned state
 /// cascades; room ownership and audit actors deliberately become NULL.
 #[cfg(any(test, feature = "test-support"))]
-pub async fn delete_user_with_roster<E: AccountDeletionEffects>(
+pub async fn delete_user_with_roster<E: RosterTransactionEffects>(
     effects: &E,
     pool: &PgPool,
     user_id: Uuid,
@@ -471,7 +460,7 @@ pub async fn delete_user_with_roster<E: AccountDeletionEffects>(
 /// XEP-0077 account cancellation with an audit record committed by the same
 /// serializable transaction. If either the audit insert or deletion fails,
 /// neither side is allowed to survive independently.
-pub async fn delete_user_with_roster_audited<E: AccountDeletionEffects>(
+pub async fn delete_user_with_roster_audited<E: RosterTransactionEffects>(
     effects: &E,
     pool: &PgPool,
     user_id: Uuid,
@@ -488,7 +477,7 @@ pub async fn delete_user_with_roster_audited<E: AccountDeletionEffects>(
     .await
 }
 
-async fn delete_user_with_roster_inner<E: AccountDeletionEffects>(
+async fn delete_user_with_roster_inner<E: RosterTransactionEffects>(
     effects: &E,
     pool: &PgPool,
     user_id: Uuid,
@@ -579,7 +568,7 @@ async fn delete_user_with_roster_inner<E: AccountDeletionEffects>(
 /// reverse-roster peer. Keeping this unit transaction-agnostic lets an
 /// administrative multi-account command use one SERIALIZABLE transaction for
 /// the complete batch instead of committing a successful prefix.
-pub async fn delete_user_with_roster_locked_in_transaction<E: AccountDeletionEffects>(
+pub async fn delete_user_with_roster_locked_in_transaction<E: RosterTransactionEffects>(
     effects: &E,
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
@@ -751,9 +740,13 @@ pub async fn delete_user_with_roster_locked_in_transaction<E: AccountDeletionEff
             .execute(&mut **transaction)
             .await?;
     }
-    effects
-        .revoke_room_account_in_tx(transaction, user_id, &account)
-        .await?;
+    // Fences every live room incarnation the account owns before its user row is erased.
+    northstar_room_postgres::cluster_muc::revoke_cluster_muc_account_in_tx(
+        transaction,
+        user_id,
+        &account,
+    )
+    .await?;
     let deletion: Result<()> = if let Some(fence) = admin_fence {
         let outcome: String = sqlx::query_scalar(
             "SELECT northstar_admin_command_delete_user(

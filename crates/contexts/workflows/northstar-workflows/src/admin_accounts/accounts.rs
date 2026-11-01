@@ -208,7 +208,7 @@ pub async fn reset_admin_account_password_authorized(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn mutate_admin_accounts_authorized<
-    E: crate::account_lifecycle::AccountDeletionEffects,
+    E: northstar_roster_postgres::RosterTransactionEffects,
 >(
     effects: &E,
     pool: &PgPool,

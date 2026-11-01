@@ -1,5 +1,4 @@
 //! Atomic account registration, credential mutation and deletion persistence.
-use crate::account_lifecycle::AccountDeletionEffects;
 use anyhow::{Context, Result};
 use northstar_abuse_application::guard::AbuseGuard;
 use northstar_auth_application::account::*;
@@ -42,7 +41,9 @@ impl<E> PostgresAccountRepository<E> {
         northstar_operations_postgres::api_control::yield_idempotency_lease(&self.pool, lease).await
     }
 }
-impl<E: AccountDeletionEffects> AccountRepository for PostgresAccountRepository<E> {
+impl<E: northstar_roster_postgres::RosterTransactionEffects> AccountRepository
+    for PostgresAccountRepository<E>
+{
     async fn register_http(
         &self,
         request: HttpRegistrationRequest<'_>,

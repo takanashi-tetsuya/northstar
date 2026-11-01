@@ -31,22 +31,6 @@ pub(crate) type RootAdminCommandRepository =
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RootRosterEffects;
 
-impl northstar_workflows::account_lifecycle::AccountDeletionEffects for RootRosterEffects {
-    async fn revoke_room_account_in_tx(
-        &self,
-        transaction: &mut Transaction<'_, Postgres>,
-        user_id: Uuid,
-        account_bare_jid: &str,
-    ) -> Result<u64> {
-        northstar_room_postgres::cluster_muc::revoke_cluster_muc_account_in_tx(
-            transaction,
-            user_id,
-            account_bare_jid,
-        )
-        .await
-    }
-}
-
 impl RosterTransactionEffects for RootRosterEffects {
     async fn cancel_inaccessible_pep_subscriptions(
         &self,

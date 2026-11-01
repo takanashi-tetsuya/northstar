@@ -160,7 +160,7 @@ pub(super) fn delivery_carbon_muc_scope(
         (None, None) => Ok(None),
         (Some(room), Some(nick)) => Ok(Some((
             northstar_xmpp_types::jid::canonicalize_bare(room).map_err(|_| ())?,
-            crate::services::xml_util::prepare_muc_nick(nick).map_err(|_| ())?,
+            northstar_room_core::stanza::prepare_muc_nick(nick).map_err(|_| ())?,
         ))),
         _ => Err(()),
     }
@@ -508,7 +508,7 @@ impl ClusterNodeDelivery {
             .map(|(room, nick)| {
                 Ok::<_, anyhow::Error>((
                     northstar_xmpp_types::jid::canonicalize_bare(room)?,
-                    crate::services::xml_util::prepare_muc_nick(nick)?,
+                    northstar_room_core::stanza::prepare_muc_nick(nick)?,
                 ))
             })
             .transpose()?;

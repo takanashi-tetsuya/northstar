@@ -1,15 +1,18 @@
 use super::{
-    add_delay_from, add_muc_user_status, add_stanza_id, blocked_stanza_error, carbon_message,
-    child_text, failure, has_no_store_hint, iq_error, iq_error_to, iq_result, iq_result_to,
-    is_abuse_rated_message, mam_muc_stanza, mam_storage_eligible, message_storage_policy,
-    muc_occupant_id, muc_occupant_key, muc_presence_stanza_with_status, offline_storage_permitted,
-    prepare_muc_nick, reflect_iq_error_response, set_from, set_muc_occupant_id, set_to,
-    should_carbon, stanza_error, stanza_error_type, stream_error, stream_id,
-    strip_stanza_ids_by_domain, strip_untrusted_direct_delays, valid_bare_jid, valid_language_tag,
-    valid_muc_nick, validate_delivery_receipts, validate_modern_message_payloads,
-    validate_no_client_carbon, validate_routed_message, BASE64, MAX_OMEMO2_PAYLOAD_BYTES,
+    add_delay_from, add_stanza_id, blocked_stanza_error, carbon_message, child_text, failure,
+    has_no_store_hint, iq_error, iq_error_to, iq_result, iq_result_to, is_abuse_rated_message,
+    mam_storage_eligible, message_storage_policy, offline_storage_permitted,
+    reflect_iq_error_response, set_from, set_to, should_carbon, stanza_error, stanza_error_type,
+    stream_error, stream_id, strip_stanza_ids_by_domain, strip_untrusted_direct_delays,
+    valid_bare_jid, valid_language_tag, validate_delivery_receipts,
+    validate_modern_message_payloads, validate_no_client_carbon, validate_routed_message, BASE64,
+    MAX_OMEMO2_PAYLOAD_BYTES,
 };
 use base64::Engine;
+use northstar_room_core::stanza::{
+    add_muc_user_status, mam_muc_stanza, muc_occupant_id, muc_occupant_key,
+    muc_presence_stanza_with_status, prepare_muc_nick, set_muc_occupant_id, valid_muc_nick,
+};
 use roxmltree::Document;
 
 fn transient(xml: &str) -> bool {

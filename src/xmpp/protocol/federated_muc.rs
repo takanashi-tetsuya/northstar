@@ -19,6 +19,7 @@ use crate::xmpp::local_routes::muc::{MucOccupant, MucOccupantEndpoint};
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::{Context, Result};
 use northstar_archive_application::{FederatedMamMetadataCommand, MamMetadataResult};
+use northstar_room_core::stanza::*;
 use northstar_room_core::MucJoinSnapshotError;
 use northstar_xmpp_types::jid_text::{bare_jid, localpart};
 use roxmltree::Node;

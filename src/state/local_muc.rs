@@ -29,7 +29,7 @@ impl AppState {
         nick: &str,
     ) -> Option<MucOccupant> {
         let room_jid = northstar_xmpp_types::jid::canonicalize_bare(room_jid).ok()?;
-        let key = crate::services::xml_util::muc_occupant_key(&room_jid, nick);
+        let key = northstar_room_core::stanza::muc_occupant_key(&room_jid, nick);
         self.muc_occupants
             .get(&key)
             .filter(|occupant| occupant.room_jid == room_jid)
@@ -174,7 +174,7 @@ impl AppState {
             return None;
         }
         drop(session);
-        let key = crate::services::xml_util::muc_occupant_key(&room_jid, &membership.nick);
+        let key = northstar_room_core::stanza::muc_occupant_key(&room_jid, &membership.nick);
         self.muc_occupants
             .get(&key)
             .filter(|occupant| {
@@ -240,7 +240,7 @@ impl AppState {
             .collect::<Vec<_>>();
         count_shutdown_notification_completions(occupants.into_iter().map(|occupant| async move {
             let serialized = SerializableMucOccupant::from(&occupant);
-            let stanza = crate::services::xml_util::muc_presence_stanza_with_status(
+            let stanza = northstar_room_core::stanza::muc_presence_stanza_with_status(
                 &serialized,
                 &occupant.full_jid,
                 true,

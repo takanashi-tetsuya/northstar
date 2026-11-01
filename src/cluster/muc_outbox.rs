@@ -260,7 +260,7 @@ pub(super) fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<
         affiliation: snapshot.affiliation.clone(),
         role: snapshot.role.clone(),
         room_non_anonymous,
-        occupant_id: crate::services::xml_util::muc_occupant_id(
+        occupant_id: northstar_room_core::stanza::muc_occupant_id(
             &context.occupant_id_secret,
             &snapshot.bare_jid,
         ),
@@ -286,18 +286,20 @@ pub(super) fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<
             .as_u64()
             .and_then(|value| u16::try_from(value).ok())
             .or(Some(fallback));
-        stanzas.push(crate::services::xml_util::muc_presence_stanza_with_status(
-            &subject,
-            &recipient.full_jid,
-            true,
-            snapshot.full_jid == recipient.full_jid,
-            false,
-            Some(event_id),
-            room_non_anonymous || subject_is_recipient || recipient.role == "moderator",
-            status,
-            None,
-            change["reason"].as_str(),
-        ));
+        stanzas.push(
+            northstar_room_core::stanza::muc_presence_stanza_with_status(
+                &subject,
+                &recipient.full_jid,
+                true,
+                snapshot.full_jid == recipient.full_jid,
+                false,
+                Some(event_id),
+                room_non_anonymous || subject_is_recipient || recipient.role == "moderator",
+                status,
+                None,
+                change["reason"].as_str(),
+            ),
+        );
         // The target's own durable delivery performs cache revocation. If a
         // different audience row removed it first, the target row would no
         // longer be able to deliver its required self-unavailable stanza.
@@ -308,7 +310,7 @@ pub(super) fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<
         if subject_is_recipient {
             endpoints.apply_policy_projection_exact(&subject);
         }
-        stanzas.push(crate::services::xml_util::muc_presence_stanza(
+        stanzas.push(northstar_room_core::stanza::muc_presence_stanza(
             &subject,
             &recipient.full_jid,
             false,
@@ -343,18 +345,20 @@ pub(super) fn render_cluster_muc_departure_presence(
         None
     };
     let self_presence = target.full_jid == recipient.full_jid;
-    Ok(crate::services::xml_util::muc_presence_stanza_with_status(
-        target,
-        &recipient.full_jid,
-        true,
-        self_presence,
-        false,
-        Some(event_id),
-        room_non_anonymous || recipient.role == "moderator",
-        status,
-        None,
-        None,
-    ))
+    Ok(
+        northstar_room_core::stanza::muc_presence_stanza_with_status(
+            target,
+            &recipient.full_jid,
+            true,
+            self_presence,
+            false,
+            Some(event_id),
+            room_non_anonymous || recipient.role == "moderator",
+            status,
+            None,
+            None,
+        ),
+    )
 }
 
 pub(super) async fn deliver_cluster_muc_event(
@@ -442,7 +446,7 @@ pub(super) async fn deliver_cluster_muc_event(
                 &snapshot,
                 &room_jid,
                 room_non_anonymous,
-                crate::services::xml_util::muc_occupant_id(
+                northstar_room_core::stanza::muc_occupant_id(
                     &context.occupant_id_secret,
                     &snapshot.bare_jid,
                 ),
@@ -500,7 +504,7 @@ pub(super) async fn deliver_cluster_muc_event(
                 affiliation: target.affiliation.clone(),
                 role: target.role.clone(),
                 room_non_anonymous: context.room_non_anonymous,
-                occupant_id: crate::services::xml_util::muc_occupant_id(
+                occupant_id: northstar_room_core::stanza::muc_occupant_id(
                     &context.occupant_id_secret,
                     &target.bare_jid,
                 ),
@@ -520,7 +524,7 @@ pub(super) async fn deliver_cluster_muc_event(
                 endpoints.apply_role_projection_exact(&target);
             }
             let self_presence = target.full_jid == recipient.full_jid;
-            stanzas.push(crate::services::xml_util::muc_presence_stanza(
+            stanzas.push(northstar_room_core::stanza::muc_presence_stanza(
                 &target,
                 &recipient.full_jid,
                 false,
@@ -540,14 +544,14 @@ pub(super) async fn deliver_cluster_muc_event(
                 .context("MUC rename event has no new nickname")?;
             let mut old = target.clone();
             old.nick = old_nick.to_owned();
-            stanzas.push(crate::services::xml_util::muc_nickname_change_presence(
+            stanzas.push(northstar_room_core::stanza::muc_nickname_change_presence(
                 &old,
                 &recipient_serializable,
                 new_nick,
                 Some(&event_id),
             ));
             let self_presence = target.full_jid == recipient.full_jid;
-            stanzas.push(crate::services::xml_util::muc_presence_stanza(
+            stanzas.push(northstar_room_core::stanza::muc_presence_stanza(
                 &target,
                 &recipient.full_jid,
                 false,
@@ -592,18 +596,20 @@ pub(super) async fn deliver_cluster_muc_event(
                 .as_deref()
                 .and_then(|full| endpoints.actor_nick(&room_jid, full));
             let self_presence = target.full_jid == recipient.full_jid;
-            stanzas.push(crate::services::xml_util::muc_presence_stanza_with_status(
-                &target,
-                &recipient.full_jid,
-                true,
-                self_presence,
-                false,
-                Some(&event_id),
-                true,
-                status,
-                actor_nick.as_deref(),
-                reason,
-            ));
+            stanzas.push(
+                northstar_room_core::stanza::muc_presence_stanza_with_status(
+                    &target,
+                    &recipient.full_jid,
+                    true,
+                    self_presence,
+                    false,
+                    Some(&event_id),
+                    true,
+                    status,
+                    actor_nick.as_deref(),
+                    reason,
+                ),
+            );
             if self_presence {
                 endpoints.revoke_exact_recipient(&target);
             }
@@ -611,7 +617,7 @@ pub(super) async fn deliver_cluster_muc_event(
         "destroy" | "locked_expiry" => {
             let alternate = context.details["alternate_jid"].as_str();
             let reason = context.details["reason"].as_str();
-            let stanza = crate::services::xml_util::muc_destroy_presence(
+            let stanza = northstar_room_core::stanza::muc_destroy_presence(
                 &recipient_serializable,
                 alternate,
                 reason,

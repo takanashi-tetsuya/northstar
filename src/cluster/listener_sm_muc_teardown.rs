@@ -57,7 +57,7 @@ impl ClusterListenerSmMucTeardown {
             {
                 continue;
             }
-            let presence = crate::services::xml_util::muc_presence_stanza(
+            let presence = northstar_room_core::stanza::muc_presence_stanza(
                 occupant,
                 &target.full_jid,
                 true,

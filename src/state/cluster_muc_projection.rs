@@ -118,7 +118,7 @@ mod tests {
     fn policy_projection_requires_exact_authority_and_cannot_overwrite_rejoined_occupant() {
         let occupants = DashMap::new();
         let first = occupant(Uuid::new_v4(), Uuid::new_v4());
-        let key = crate::services::xml_util::muc_occupant_key(&first.room_jid, &first.nick);
+        let key = northstar_room_core::stanza::muc_occupant_key(&first.room_jid, &first.nick);
         occupants.insert(key.clone(), first.clone());
 
         let mut snapshot = SerializableMucOccupant::from(&first);
@@ -182,7 +182,7 @@ mod tests {
     fn role_projection_preserves_anonymity_and_rejects_late_old_connection() {
         let occupants = DashMap::new();
         let first = occupant(Uuid::new_v4(), Uuid::new_v4());
-        let key = crate::services::xml_util::muc_occupant_key(&first.room_jid, &first.nick);
+        let key = northstar_room_core::stanza::muc_occupant_key(&first.room_jid, &first.nick);
         occupants.insert(key.clone(), first.clone());
         let captured = local_cluster_muc_projection_snapshot_in(&occupants);
         assert_eq!(captured.len(), 1);
@@ -220,7 +220,7 @@ mod tests {
             authenticated_domain: "Remote.Example".to_owned(),
             connection_id: closing_connection,
         };
-        let key = crate::services::xml_util::muc_occupant_key(&first.room_jid, &first.nick);
+        let key = northstar_room_core::stanza::muc_occupant_key(&first.room_jid, &first.nick);
         occupants.insert(key.clone(), first.clone());
 
         let mut other_connection = occupant(Uuid::new_v4(), Uuid::new_v4());
@@ -230,7 +230,7 @@ mod tests {
             connection_id: other_connection.connection_id,
         };
         occupants.insert(
-            crate::services::xml_util::muc_occupant_key(
+            northstar_room_core::stanza::muc_occupant_key(
                 &other_connection.room_jid,
                 &other_connection.nick,
             ),

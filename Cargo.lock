@@ -2274,9 +2274,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "hmac",
  "northstar-federation-core",
+ "northstar-xep-0045",
+ "northstar-xml-builder",
  "northstar-xmpp-types",
+ "roxmltree",
  "serde",
+ "sha2",
+ "tracing",
  "uuid",
 ]
 

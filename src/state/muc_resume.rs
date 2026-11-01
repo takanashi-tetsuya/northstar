@@ -105,7 +105,7 @@ impl AppState {
         for membership in memberships {
             let (Ok(room_jid), Ok(nick)) = (
                 northstar_xmpp_types::jid::canonicalize_bare(&membership.room_jid),
-                crate::services::xml_util::prepare_muc_nick(&membership.nick),
+                northstar_room_core::stanza::prepare_muc_nick(&membership.nick),
             ) else {
                 failures.push(membership.clone());
                 continue;
@@ -122,7 +122,7 @@ impl AppState {
                 failures.push(membership.clone());
                 continue;
             };
-            let key = crate::services::xml_util::muc_occupant_key(&room_jid, &nick);
+            let key = northstar_room_core::stanza::muc_occupant_key(&room_jid, &nick);
             // Single-node join, rename and SM restore publish into the same
             // room-local map. Existing suspended actors already own a slot
             // and bypass the new-admission capacity check; a post-restart
@@ -421,7 +421,7 @@ impl AppState {
                 affiliation,
                 role,
                 room_non_anonymous: room.non_anonymous,
-                occupant_id: crate::services::xml_util::muc_occupant_id(
+                occupant_id: northstar_room_core::stanza::muc_occupant_id(
                     &room.occupant_id_secret,
                     bare_jid(&full_jid),
                 ),
@@ -519,7 +519,7 @@ impl AppState {
                     affiliation: authority.affiliation.clone(),
                     role: authority.role.clone(),
                     room_non_anonymous: room.non_anonymous,
-                    occupant_id: crate::services::xml_util::muc_occupant_id(
+                    occupant_id: northstar_room_core::stanza::muc_occupant_id(
                         &room.occupant_id_secret,
                         bare_jid(&authority.full_jid),
                     ),

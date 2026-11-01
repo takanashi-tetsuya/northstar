@@ -4,6 +4,8 @@
 #![forbid(unsafe_code)]
 
 pub mod mix;
+pub mod occupancy;
+pub mod stanza;
 
 use northstar_xmpp_types::{prepare_domainpart, CanonicalJid};
 use uuid::Uuid;

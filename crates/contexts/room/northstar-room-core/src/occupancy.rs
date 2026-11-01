@@ -3,7 +3,7 @@
 /// The process-local identity needed to remove one occupancy without touching
 /// a connection that later reused its room nickname.
 #[derive(Clone, Copy)]
-pub(crate) struct LocalMucOccupantIdentity<'a> {
+pub struct LocalMucOccupantIdentity<'a> {
     pub room_jid: &'a str,
     pub nick: &'a str,
     pub full_jid: &'a str,

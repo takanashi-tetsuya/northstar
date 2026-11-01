@@ -1191,9 +1191,15 @@ digraph compile_time {
   "northstar-room-application" -> "uuid";
   "northstar-room-core" -> "anyhow";
   "northstar-room-core" -> "chrono";
+  "northstar-room-core" -> "hmac";
   "northstar-room-core" -> "northstar-federation-core";
+  "northstar-room-core" -> "northstar-xep-0045";
+  "northstar-room-core" -> "northstar-xml-builder";
   "northstar-room-core" -> "northstar-xmpp-types";
+  "northstar-room-core" -> "roxmltree";
   "northstar-room-core" -> "serde";
+  "northstar-room-core" -> "sha2";
+  "northstar-room-core" -> "tracing";
   "northstar-room-core" -> "uuid";
   "northstar-roster-application" -> "anyhow";
   "northstar-roster-application" -> "chrono";

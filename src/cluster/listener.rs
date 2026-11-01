@@ -607,7 +607,7 @@ pub(super) async fn listen_once(
                         muc_endpoints.revoke_exact_recipient_returning_local(&occupant)
                     {
                         let self_presence =
-                            crate::services::xml_util::muc_presence_stanza_with_status(
+                            northstar_room_core::stanza::muc_presence_stanza_with_status(
                                 &occupant,
                                 &removed.full_jid,
                                 true,
@@ -662,7 +662,7 @@ pub(super) async fn listen_once(
                             let serializable =
                                 crate::services::muc::SerializableMucOccupant::from(&occupant);
                             muc_endpoints.remove_live_membership_exact(&serializable);
-                            let presence = crate::services::xml_util::muc_destroy_presence(
+                            let presence = northstar_room_core::stanza::muc_destroy_presence(
                                 &serializable,
                                 alternate.as_deref(),
                                 reason,
@@ -692,7 +692,7 @@ pub(super) async fn listen_once(
                     muc_endpoints.apply_policy_projection_exact(&occupant);
                     for session in muc_endpoints.room_occupants(target) {
                         let self_presence = session.full_jid == occupant.full_jid;
-                        let presence = crate::services::xml_util::muc_presence_stanza(
+                        let presence = northstar_room_core::stanza::muc_presence_stanza(
                             &occupant,
                             &session.full_jid,
                             false,
@@ -729,7 +729,7 @@ pub(super) async fn listen_once(
                 {
                     let id = json["id"].as_str();
                     for session in muc_endpoints.room_occupants(target) {
-                        let unavailable = crate::services::xml_util::muc_nickname_change_presence(
+                        let unavailable = northstar_room_core::stanza::muc_nickname_change_presence(
                             &old_occupant,
                             &crate::services::muc::SerializableMucOccupant::from(&session),
                             &new_occupant.nick,
@@ -740,7 +740,7 @@ pub(super) async fn listen_once(
                                 .deliver_to_muc_occupant(&session, unavailable)
                                 .await,
                         );
-                        let available = crate::services::xml_util::muc_presence_stanza(
+                        let available = northstar_room_core::stanza::muc_presence_stanza(
                             &new_occupant,
                             &session.full_jid,
                             false,
@@ -775,7 +775,7 @@ pub(super) async fn listen_once(
                 for session in muc_endpoints.room_occupants(target) {
                     let disclose = occupant.room_non_anonymous || session.role == "moderator";
                     let self_presence = session.full_jid == occupant.full_jid;
-                    let presence = crate::services::xml_util::muc_presence_stanza_with_status(
+                    let presence = northstar_room_core::stanza::muc_presence_stanza_with_status(
                         &occupant,
                         &session.full_jid,
                         unavailable,

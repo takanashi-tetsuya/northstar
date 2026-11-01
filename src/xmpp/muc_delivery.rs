@@ -91,7 +91,7 @@ impl MucDeliveryContext {
             return None;
         }
         drop(session);
-        let key = crate::services::xml_util::muc_occupant_key(&room_jid, &membership.nick);
+        let key = northstar_room_core::stanza::muc_occupant_key(&room_jid, &membership.nick);
         self.muc_occupants
             .get(&key)
             .filter(|occupant| {

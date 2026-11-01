@@ -54,6 +54,7 @@ use northstar_room_application::discussion as discussion_owner;
 #[cfg(test)]
 use northstar_room_application::PostCommitAdmissionError as MucPostCommitAdmissionError;
 use northstar_room_application::PostCommitPlan as MucPostCommitPlan;
+use northstar_room_core::stanza::*;
 use northstar_room_core::MucJoinSnapshotError;
 use northstar_xmpp_types::jid::{canonical_bare_key, prepare_domainpart, CanonicalJid};
 use northstar_xmpp_types::jid_text::{bare_jid, localpart};

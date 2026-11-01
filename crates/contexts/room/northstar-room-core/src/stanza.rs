@@ -1,25 +1,33 @@
 //! Provides MUC identity helpers, presence and error rendering, and MUC archive projections.
 
-use super::*;
+use hmac::{Hmac, Mac};
+use northstar_xml_builder::rewrite::{
+    append_element_child, append_root_element, remove_root_attribute,
+};
+use northstar_xml_builder::stanza::stanza_condition_element;
+use northstar_xml_builder::XmlElement;
+use northstar_xmpp_types::jid_text::bare_jid;
+use roxmltree::{Document, Node};
+use sha2::Sha256;
 
-pub(crate) fn valid_muc_room(value: &str) -> bool {
+pub fn valid_muc_room(value: &str) -> bool {
     northstar_xep_0045::is_valid_room_name(value)
 }
 
-pub(crate) fn valid_muc_nick(value: &str) -> bool {
+pub fn valid_muc_nick(value: &str) -> bool {
     northstar_xep_0045::is_valid_occupant_nick(value)
 }
 
 /// MUC occupants use the room JID resourcepart as their nickname. RFC 7622
 /// therefore requires the case-preserving PRECIS OpaqueString profile; a
 /// nickname must never pass through UsernameCaseMapped or ASCII lowercase.
-pub(crate) fn prepare_muc_nick(value: &str) -> anyhow::Result<String> {
+pub fn prepare_muc_nick(value: &str) -> anyhow::Result<String> {
     northstar_xep_0045::OccupantNick::parse(value)
         .map(|nick| nick.to_string())
         .map_err(anyhow::Error::from)
 }
 
-pub(crate) fn muc_occupant_key(room_jid: &str, nick: &str) -> String {
+pub fn muc_occupant_key(room_jid: &str, nick: &str) -> String {
     northstar_xep_0045::occupant_key(room_jid, nick).unwrap_or_else(|_| {
         let room_jid = northstar_xmpp_types::jid::canonicalize_bare(room_jid)
             .unwrap_or_else(|_| room_jid.to_owned());
@@ -28,8 +36,8 @@ pub(crate) fn muc_occupant_key(room_jid: &str, nick: &str) -> String {
     })
 }
 
-pub(crate) fn muc_presence_stanza(
-    occupant: &crate::services::muc::SerializableMucOccupant,
+pub fn muc_presence_stanza(
+    occupant: &crate::occupancy::SerializableMucOccupant,
     to: &str,
     unavailable: bool,
     self_presence: bool,
@@ -51,9 +59,9 @@ pub(crate) fn muc_presence_stanza(
     )
 }
 
-pub(crate) fn muc_nickname_change_presence(
-    occupant: &crate::services::muc::SerializableMucOccupant,
-    recipient: &crate::services::muc::SerializableMucOccupant,
+pub fn muc_nickname_change_presence(
+    occupant: &crate::occupancy::SerializableMucOccupant,
+    recipient: &crate::occupancy::SerializableMucOccupant,
     new_nick: &str,
     id: Option<&str>,
 ) -> String {
@@ -87,7 +95,7 @@ pub(crate) fn muc_nickname_change_presence(
         .finish()
 }
 
-pub(crate) fn add_muc_user_status(stanza: &str, code: u16) -> String {
+pub fn add_muc_user_status(stanza: &str, code: u16) -> String {
     let Ok(document) = Document::parse(stanza) else {
         return stanza.to_owned();
     };
@@ -110,8 +118,8 @@ pub(crate) fn add_muc_user_status(stanza: &str, code: u16) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn muc_presence_stanza_with_status(
-    occupant: &crate::services::muc::SerializableMucOccupant,
+pub fn muc_presence_stanza_with_status(
+    occupant: &crate::occupancy::SerializableMucOccupant,
     to: &str,
     unavailable: bool,
     self_presence: bool,
@@ -173,8 +181,8 @@ pub(crate) fn muc_presence_stanza_with_status(
     res
 }
 
-pub(crate) fn muc_destroy_presence(
-    occupant: &crate::services::muc::SerializableMucOccupant,
+pub fn muc_destroy_presence(
+    occupant: &crate::occupancy::SerializableMucOccupant,
     alternate: Option<&str>,
     reason: Option<&str>,
 ) -> String {
@@ -203,7 +211,7 @@ pub(crate) fn muc_destroy_presence(
 
 /// XEP-0421 pseudonym scoped to one room. HMAC-SHA-256 provides a stable,
 /// non-guessable value without correlating the same account across rooms.
-pub(crate) fn muc_occupant_id(room_secret: &[u8], user_bare_jid: &str) -> String {
+pub fn muc_occupant_id(room_secret: &[u8], user_bare_jid: &str) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(room_secret)
         .expect("HMAC accepts XEP-0421 room secrets of any length");
     let user_bare_jid = northstar_xmpp_types::jid::canonical_bare_key(user_bare_jid)
@@ -217,7 +225,7 @@ pub(crate) fn muc_occupant_id(room_secret: &[u8], user_bare_jid: &str) -> String
 }
 
 /// Replace any client-supplied occupant-id with the authoritative room value.
-pub(crate) fn set_muc_occupant_id(stanza: &str, occupant_id: &str) -> String {
+pub fn set_muc_occupant_id(stanza: &str, occupant_id: &str) -> String {
     let Ok(document) = Document::parse(stanza) else {
         return stanza.to_owned();
     };
@@ -243,7 +251,7 @@ pub(crate) fn set_muc_occupant_id(stanza: &str, occupant_id: &str) -> String {
     .unwrap_or(authoritative)
 }
 
-pub(crate) fn muc_stanza_error(
+pub fn muc_stanza_error(
     root: Node<'_, '_>,
     recipient: &str,
     error_type: &str,
@@ -278,7 +286,7 @@ pub(crate) fn muc_stanza_error(
         .finish()
 }
 
-pub(crate) fn add_muc_sender(stanza: &str, sender_jid: &str) -> String {
+pub fn add_muc_sender(stanza: &str, sender_jid: &str) -> String {
     append_root_element(
         stanza,
         &XmlElement::namespaced("x", "urn:northstar:muc:sender:0")
@@ -291,7 +299,7 @@ pub(crate) fn add_muc_sender(stanza: &str, sender_jid: &str) -> String {
 /// requires no `to`, requires the occupant JID in `from`, and forbids trusting
 /// a pre-existing MUC user extension. Real JIDs are added only when room
 /// anonymity policy permits the querying user to see them.
-pub(crate) fn mam_muc_stanza(stanza: &str, sender_jid: &str, reveal_real_jid: bool) -> String {
+pub fn mam_muc_stanza(stanza: &str, sender_jid: &str, reveal_real_jid: bool) -> String {
     let Ok(document) = Document::parse(stanza) else {
         return stanza.to_owned();
     };

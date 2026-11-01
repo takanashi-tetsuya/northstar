@@ -3399,7 +3399,19 @@
     ],
     [
       "northstar-room-core",
+      "hmac"
+    ],
+    [
+      "northstar-room-core",
       "northstar-federation-core"
+    ],
+    [
+      "northstar-room-core",
+      "northstar-xep-0045"
+    ],
+    [
+      "northstar-room-core",
+      "northstar-xml-builder"
     ],
     [
       "northstar-room-core",
@@ -3407,7 +3419,19 @@
     ],
     [
       "northstar-room-core",
+      "roxmltree"
+    ],
+    [
+      "northstar-room-core",
       "serde"
+    ],
+    [
+      "northstar-room-core",
+      "sha2"
+    ],
+    [
+      "northstar-room-core",
+      "tracing"
     ],
     [
       "northstar-room-core",

@@ -1,5 +1,4 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use hmac::{Hmac, Mac};
 use northstar_abuse_policy::WorkRequirement;
 use northstar_xml_builder::stanza::stanza_condition_element;
 pub(crate) use northstar_xml_builder::stanza::{
@@ -7,14 +6,11 @@ pub(crate) use northstar_xml_builder::stanza::{
     iq_result_from, iq_result_to, reflected_stanza_error, stanza_error, stanza_error_type,
 };
 use northstar_xml_builder::XmlElement;
-use northstar_xmpp_types::jid_text::bare_jid;
 pub(crate) use northstar_xmpp_types::text::valid_language_tag;
 use roxmltree::{Document, Node};
-use sha2::Sha256;
 use std::collections::HashSet;
 
 mod message_validation;
-mod muc;
 
 use self::message_validation::{
     validate_chat_states, validate_correction, validate_displayed_marker,
@@ -23,18 +19,11 @@ use self::message_validation::{
     validate_processing_hints, validate_reactions, validate_reply, validate_stanza_ids,
     validate_sticker, validate_trust_message,
 };
-pub(crate) use self::muc::{
-    add_muc_sender, add_muc_user_status, mam_muc_stanza, muc_destroy_presence,
-    muc_nickname_change_presence, muc_occupant_id, muc_occupant_key, muc_presence_stanza,
-    muc_presence_stanza_with_status, muc_stanza_error, prepare_muc_nick, set_muc_occupant_id,
-    valid_muc_nick, valid_muc_room,
-};
 pub(crate) use northstar_roster_xmpp::presence::inject_vcard_avatar_hash;
 pub(crate) use northstar_xep_0313::build_extended_form as mam_extended_form;
 pub(crate) use northstar_xep_0359::{add_stanza_id, strip_stanza_ids_by_domain};
 use northstar_xml_builder::rewrite::{
-    append_element_child, append_root_element, append_root_validated_fragment,
-    remove_root_attribute,
+    append_root_element, append_root_validated_fragment, remove_root_attribute,
 };
 pub(crate) use northstar_xml_builder::rewrite::{
     root_resets_default_namespace, set_client_namespace, set_from, set_root_attribute, set_to,

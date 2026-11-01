@@ -61,8 +61,11 @@ impl LockedMucExpiryContext {
                 let serializable = SerializableMucOccupant::from(&occupant);
                 self.local.remove_exact(&occupant, &serializable);
                 if !self.cluster_enabled {
-                    let unavailable =
-                        crate::services::xml_util::muc_destroy_presence(&serializable, None, None);
+                    let unavailable = northstar_room_core::stanza::muc_destroy_presence(
+                        &serializable,
+                        None,
+                        None,
+                    );
                     let _ = self
                         .delivery
                         .deliver_to_muc_occupant(&occupant, unavailable)
@@ -143,7 +146,7 @@ mod tests {
             uuid::Uuid::new_v4(),
             uuid::Uuid::new_v4(),
         );
-        let key = crate::services::xml_util::muc_occupant_key(&old.room_jid, &old.nick);
+        let key = northstar_room_core::stanza::muc_occupant_key(&old.room_jid, &old.nick);
         occupants.insert(key.clone(), old.clone());
         let snapshot = local.occupants_for(&old.room_jid);
         assert_eq!(snapshot.len(), 1);

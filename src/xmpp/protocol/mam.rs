@@ -1,9 +1,9 @@
 use super::{Action, ProtocolSession};
-use crate::services::xml_util::{mam_muc_stanza, muc_occupant_id, set_muc_occupant_id};
 use anyhow::Result;
 use northstar_archive_application::{
     ArchiveRow, MamPreferencesWriter, MamQueryRepository, MamRoomAccess, MamService,
 };
+use northstar_room_core::stanza::{mam_muc_stanza, muc_occupant_id, set_muc_occupant_id};
 use roxmltree::Node;
 
 pub(crate) use northstar_archive_xmpp::{parse_mam_query, ParsedMamQuery};

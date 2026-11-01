@@ -114,6 +114,7 @@ facade 移出根 crate（5.13），根 crate 只剩上面三層。
 | S23 abuse 上下文 | WP-250–255 | 根 crate 的重複合約型別併入 `northstar-abuse-policy`（WP-250）；提交觀察改經 core 的 `AdmissionCommitObserver`（WP-251）；guard、登入與挑戰服務成為 `northstar-abuse-application`（WP-252）；十個 repository 成為 `northstar-abuse-postgres`，碰到別人資料表的兩步抽成 `AbuseEffects`（WP-253）；`AppState` 以 `AbuseModule` 持有這些服務（WP-254）；記錄階段（WP-255）。盤點見 5.19 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯、本機 PostgreSQL 套件與完整 CI 通過。已完成：abuse 自有的應用與持久化不再在根 crate；與帳號交易共用的驗證呼叫、訊息准入 port 的去處見 5.19 |
 | S24 auth 上下文 | WP-256–264 | API 命令合約成為 `northstar-operations-core`，API 工作階段值併入 `northstar-auth-core`（WP-256）；憑證收據與結束值進入 core（WP-257）；認證服務成為 `northstar-auth-application`（WP-258），帳號與登入服務隨後加入（WP-259）；帳號、API 工作階段與撤銷 outbox 成為 `northstar-auth-postgres`（WP-260），FAST、憑證 repository 與 passkey 隨後加入（WP-261）；SASL2 與註冊的純解析及線路格式成為 `northstar-auth-xmpp`（WP-262）；`AppState` 以 `AuthModule` 持有九個服務（WP-263）；記錄階段（WP-264）。盤點見 5.20 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與本機 PostgreSQL 套件通過。未完成：與別的上下文同交易的帳號流程等 `northstar-workflows`，SASL 流程控制等 S29/S30，去處見 5.20 |
 | S25 operations 上下文 | WP-265–276 | 運維服務讀取的上傳死信值與濫用金鑰身分下放到 core，API 登出併入 auth（WP-265）；運維服務成為 `northstar-operations-application`（WP-266）；REST 命令儲存、操作日誌、檢舉與資料生命週期成為 `northstar-operations-postgres`（WP-267），管理命令會話與執行期控制隨後加入，角色證明進入 `northstar-postgres`（WP-268）；建立 `northstar-workflows`，驗證器加入 workflows 角色（WP-269）；帳號生命週期、管理命令、保存與分頁查詢進入 workflows，操作工作者的 repository 進入 `-postgres`（WP-270）；封存保存 worker 進入 application（WP-271）；管理命令成為 `northstar-operations-xmpp`（WP-272）；REST 查詢進入 workflows（WP-273）；`AppState` 以 `OperationsModule` 持有十五個服務（WP-274）；帳號 repository 進入 workflows（WP-275）；記錄階段（WP-276）。盤點見 5.21 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與本機 PostgreSQL 套件通過。未完成：房間資料表上的操作等 S26，就緒與容量等 S29，去處見 5.21 |
+| S26 room 上下文 | WP-280–299 | MUC 節文輔助進入 `northstar-room-core`（WP-280）；小型房間服務（WP-281）、MUC 服務（WP-282）與 MIX 服務（WP-284）進入 `northstar-room-application`，MIX 內容金鑰環先下放到 `northstar-abuse-policy`（WP-283）；MUC 持久化成為 `northstar-room-postgres`，碰到別人資料表的步驟抽成 `RoomEffects`（WP-285），跨上下文的 repository 進入 `northstar-workflows`（WP-286），MIX 持久化與房間 MAM 授權隨後加入（WP-287、WP-288）；MUC 叢集靜態合約改指新路徑（WP-289）；MIX 介面卡需要的值下放（WP-290–292），`northstar-mix-xmpp` 建立（WP-293）；房間記錄與訊息提示政策下放（WP-294、WP-295），`northstar-muc-xmpp` 建立（WP-296）；`AppState` 以 `RoomModule` 持有七個欄位（WP-297）；`AccountDeletionEffects` 退役（WP-298）；記錄階段（WP-299）。盤點見 5.22 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與本機 PostgreSQL 套件通過。未完成：MIX 封存與房間 MAM 分頁等 S27，房間的執行期路由與叢集投影等 S29，去處見 5.22 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -603,7 +604,7 @@ repository 型別（`impl MamQueryRepository + MamPreferencesWriter`）回傳，
 根 crate 中仍與 archive 有關的程式碼與去處：
 
 - `db/archive/mam_room.rs`（房間 MAM 授權）與 `db/archive/mix_archive.rs`（MIX 反射封存，由 MIX outbox 觀察提交
-  錯誤）：屬於 room，隨 S26 移出。
+  錯誤）：S26 移走了授權與房間鎖；其餘部分讀寫封存資料表，隨 S27 移動，見 5.22。
 - `db/archive/offline.rs` 與 `db/archive/personal_history.rs`：離線佇列與個人歷史准入屬於 message，隨 S27 移出。
 - `db/mam.rs` 的 `PostgresMamRepository`：在同一 PostgreSQL 交易中讀寫封存、房間政策與 S2S outbox，依 4.5 屬於
   `northstar-workflows`。
@@ -842,14 +843,78 @@ platform、任何 core、任何 application、任何 `-postgres`；不可依賴 
 根 crate 中仍與 operations 有關的程式碼與去處：
 
 - `db/operation_muc_destroy_repository.rs`、`db/operation_muc_wake_repository.rs`、`services/operation_muc_wake.rs`：
-  操作的是房間資料表，隨 S26 移動。
-- `db/roster.rs` 的別名與 `AccountDeletionEffects` 實作：等房間的那一步能直接呼叫 `northstar-room-postgres`，隨 S26 退役。
+  操作的是房間資料表，S26 已移動，見 5.22。
+- `AccountDeletionEffects`：S26 已退役，見 5.22。`db/roster.rs` 的別名還綁著 `RosterTransactionEffects` 的根 crate 實作，隨那些步驟的上下文移動。
 - `db/retention.rs` 剩下的 `PostgresMaintenanceRepository` 與 `purge_expired_retraction_intents`：屬於 message，隨 S27 移動。
 - `db/readiness_repository.rs`（讀叢集金鑰）、`db/capacity*`、`db/authentication_effects.rs`（呼叫 `capacity`）、
   `session_identity`：隨 S29 移動。
 - `xmpp/protocol/commands.rs` 的 `CommandSession` 綁定與 `api/*` 的 handler：隨 S30/S31 移動。
 
 根 crate 由 705 檔 325,446 行變為 653 檔 302,731 行。
+
+### 5.22 S26 盤點：room 上下文（`c21d5746`）
+
+| 原位置 | 去處 | 角色 |
+| --- | --- | --- |
+| `services/xml_util/muc.rs` | `northstar_room_core::stanza` | core |
+| 根 crate 的 MIX 合約值與 `services/muc/occupancy.rs` 的佔用者記錄 | `northstar_room_core` 的 `mix`、`mix_iq_relay`、`occupancy`、`telemetry` | core |
+| disco 請求值、訊息提示政策、xdata 布林解析 | `northstar-xml-builder` 的 `disco`、`message_policy`、`xdata` | kernel |
+| MIX 內容金鑰環 | `northstar_abuse_policy::content_identity` | core |
+| `services/{cluster_muc_delivery_item,cluster_muc_delivery_read,cluster_muc_outbox_claim,cluster_muc_outbox_housekeeping,cluster_muc_outbox_preclaim,cluster_muc_outbox_settlement,cluster_muc_receipt_claim,locked_muc_expiry,muc_delivery,operation_muc_wake,sm_teardown_muc}.rs` | `northstar-room-application` 的同名模組 | application |
+| `services/muc.rs`、`services/muc/*` | `northstar_room_application::muc_service` | application |
+| `services/mix.rs`、`services/mix/*` | `northstar_room_application::mix_service` | application |
+| `xmpp/protocol/mix_muc.rs` | `northstar_room_application::mix_muc` | application |
+| `db/{room,muc,cluster_muc}.rs` 與子模組、七個 `db/cluster_muc_*_repository.rs`、`db/{locked_muc_expiry,operation_muc_wake}_repository.rs` | `northstar-room-postgres` 的同名模組 | adapter |
+| `db/{mix,mix_identity,mix_muc,mix_repository}.rs` 與子模組 | `northstar-room-postgres` 的同名模組 | adapter |
+| `db/archive/mam_room.rs` 的房間快照、聯邦房間鎖與 occupant-id 密鑰修復 | `northstar_room_postgres::mam_authorization` | adapter |
+| `db/{operation_muc_destroy_repository,sm_teardown_muc_repository}.rs` | `northstar-workflows` 的同名模組 | workflows |
+| `xmpp/protocol/mix/*` | `northstar-mix-xmpp` | adapter |
+| `xmpp/protocol/{muc,federated_muc}/*` | `northstar-muc-xmpp` 的 `muc`、`federated_muc` | adapter |
+| `AppState` 的七個欄位 | `state/room_module.rs` 的 `RoomModule` | 組合根 |
+
+room 的五個 crate 共 60,524 行（core 1,681、application 11,073、postgres 24,174、mix-xmpp 8,314、muc-xmpp 15,282）。
+
+S25 留下的兩項已收尾：`operation_muc_destroy_repository` 進入 `northstar-workflows`，`operation_muc_wake` 的服務與
+repository 分別進入 application 與 `-postgres`；`AccountDeletionEffects` 退役，`northstar-workflows` 在同一交易的同一位置
+直接呼叫 `northstar_room_postgres::cluster_muc::revoke_cluster_muc_account_in_tx`。
+
+新決定：
+
+- `RoomEffects` 的方法名含 `sqlx::Transaction`，所以放在 `northstar-room-postgres`。根 crate 的 `RootRoomEffects` 是暫時
+  實作。需要在呼叫者交易內執行某一步的函式把 effects 當參數，步驟仍在原位置執行，也隨同一交易回滾。
+- `northstar-room-postgres` 以自己的 `accounts.rs` 讀取與鎖定 `users`，形式與 pubsub、roster 相同；寫入仍屬 auth。
+- 應用層模組命名為 `muc_service`、`mix_service`，因為 `mix`、`discussion` 已經是 port 模組。
+- `FederationOutboxAdmission` 成為 room application 的 port，MIX 是它唯一的使用者；根 crate 的聯邦服務實作它。
+- MIX 服務持有兩種內容金鑰環，application 可讀別的上下文的 core，不可讀它的 application，所以金鑰環下放到
+  `northstar-abuse-policy`。兩種用途仍是不同型別，guard 改經建構函式。
+- XEP-0408 鏡像輔助函式同時給 MIX 與 MUC 介面卡使用，介面卡不可依賴兄弟介面卡，所以進入 room application。
+- 協定處理器都是泛型自由函式。`MixHost` 與 `MucHost` 由 `AppState` 實作，`MixSession`、`MucSession` 由 `ProtocolSession`
+  實作，回覆是 `MixAction`、`MucAction`，由根 crate 轉成 `Action`。`MucHost` 的 repository、會話與 outbound 型別都是
+  關聯型別：它們要被其他 trait 綁定，RPITIT 回傳型別做不到。
+- 根 crate 的協定檔不可 `use crate::db::...`，所以 `impl MucHost for AppState` 放在 `state/muc_host.rs`。
+- `MucOccupant<L, S>` 對本機會話與 outbound 泛型，不用 `dyn`。佔用者表在 fan-out 路徑上，這個形狀讓根 crate 的值原樣留在
+  表中，也不必把 `OnlineSession` 搬進 core。
+- 解析函式的拒絕改用具名單元錯誤 `MalformedMucStanza`、`InvalidXdataBool`，公開函式不能回傳 `Result<_, ()>`。
+- `valid_avatar_data`、`valid_avatar_metadata` 目前是 host 方法，這是妥協：pubsub 的介面卡不能被 room 介面卡依賴。把
+  XEP-0084 的檢查放到 kernel 會更乾淨，留給之後的清理。
+- 測試留在根 crate 的條件和 S23 相同，另加一條：驅動真實 `ProtocolSession` 與 frame fixture 的協定測試留在 seam 旁
+  （`xmpp/protocol/{mix,muc}_tests.rs`、`mix/stage4_saved`）。
+
+根 crate 中仍與 room 有關的程式碼與去處：
+
+- `db/archive/mix_archive.rs`：寫入 `message_archive`，經 `RoomEffects` 到達，隨 S27 移動。
+- `db/archive/mam_room.rs` 剩下的分頁與邊界讀取：隨封存資料表於 S27 移動，之後成為 workflow。
+- `db/room_effects.rs`：`RootRoomEffects` 的步驟隨 message、federation 與 session 的移動逐步離開，S29 後退役。
+- `db/muc_delivery_repository.rs`：隨 S29 移動，之後進入 `northstar-workflows`。
+- `northstar_room_postgres::cluster_muc` 的 `ClusterSessionRouteClaimProof` 與 session 的 `SessionRouteClaimProof` 重複，
+  等 S29 才能合併。
+- `xmpp/muc_delivery.rs`、`xmpp/local_routes/{muc,muc_table,suspended_muc}.rs`、
+  `state/{local_muc,muc_cluster_effects,muc_cluster_routing,muc_delivery,muc_resume,federated_muc_cluster_effects}.rs`、
+  `state/cluster_muc_*.rs`、`cluster/muc_*.rs`：房間的執行期路由與叢集投影，依賴本機會話表與叢集，隨 S29 移動。
+- `OutboundSender`：留在根 crate，由 `MixDeliveryLanes`、`MucOutbound` 這些 port 包住，隨 S29/S30 移動。
+- `xmpp/protocol/{mix,muc,federated_muc}.rs` 與 `state/muc_host.rs`：`ProtocolSession` 與 `AppState` 的接縫，隨 S30、S31 退役。
+
+根 crate 由 653 檔 302,731 行變為 545 檔 248,281 行。
 
 ## 6. 委派與驗收協議
 
@@ -1046,6 +1111,15 @@ platform、任何 core、任何 application、任何 `-postgres`；不可依賴 
    - 名稱對應規則要等對應的 WP 存在才加，提早加入會讓驗證回報假的名稱差異（S25）。
    - 門禁以字串比對的片段會被 rustfmt 換行，或被 `pub(crate)` 改成 `pub` 弄斷。搬移後掃描 `scripts/` 要連同這兩種變化
      一起比對（S25）。
+   - 工作樹共用 `target` 時，cargo 以相對於 workspace 的路徑計算 path 依賴的雜湊，不同工作樹會共用產物，判斷新舊只看來源
+     mtime。症狀是 E0432 找不到確實存在的項目。cargo 腳本要先 `touch` 全部受追蹤檔案（S26）。
+   - 掃描原始碼的產生器要在 `git mv` 之前執行，否則只看得到留下的檔案（S26）。
+   - 試跑的基底必須是真實、格式化過的 commit。搬移腳本的精確字串錨點假設 rustfmt 過的內容，未格式化的試跑 commit 會讓
+     錨點失效（S26）。
+   - 本機門禁清單沒有涵蓋 CI 的每一步。MUC 叢集的靜態合約（WP-289）與 `scripts/test-room-db-experiments.py` 都只在 CI
+     失敗過。前者已加進本機門禁，後者要在推送前單獨執行（S26）。
+   - `&Arc<H>` 不會解參考轉型成 `&impl Trait`，呼叫端要 `.as_ref()`。`impl` 方法改成自由函式後縮排少一層，測試中帶縮排的
+     精確字串也要跟著改（S26）。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -1293,3 +1367,23 @@ Stage 證據仍綁定其原提交。
 | WP-274 | 完成：`AppState` 以 `OperationsModule` 持有十五個服務，能力清單的門禁改列模組 | 見 `git log --grep '\[WP-274\]'` |
 | WP-275 | 完成：`http_login_repository`、`password_change_repository`、`account_repository`、`account_deletion` 進入 workflows；`db/authentication_effects.rs` 因呼叫 `capacity` 留到 S29 | 見 `git log --grep '\[WP-275\]'` |
 | WP-276 | 完成：記錄 S25 的階段與盤點（5.21）、4.1 的 workflows 角色、4.2 與 4.5。WP-265–275 依序接到 WP-264 之上；fmt、clippy、workspace 測試、層級、模糊測試、本機 PostgreSQL 套件與全部門禁通過 | 見 `git log --grep '\[WP-276\]'` |
+| WP-280 | 完成：XEP-0045 與 XEP-0421 的節文輔助進入 `northstar_room_core::stanza` | 見 `git log --grep '\[WP-280\]'` |
+| WP-281 | 完成：叢集 MUC outbox 與投遞服務、鎖定房間到期、MUC 投遞與 SM 拆除服務進入 `northstar-room-application` | 見 `git log --grep '\[WP-281\]'` |
+| WP-282 | 完成：MUC 服務成為 `muc_service`；走 PostgreSQL 的測試留在根 crate 的 `db::muc_service_tests` | 見 `git log --grep '\[WP-282\]'` |
+| WP-283 | 完成：MIX 內容金鑰環進入 `northstar-abuse-policy`，guard 改經建構函式 | 見 `git log --grep '\[WP-283\]'` |
+| WP-284 | 完成：MIX 服務成為 `mix_service`，`FederationOutboxAdmission` 隨之移動；單獨建置時補上 `rand` 與 tokio 的 `test-util` | 見 `git log --grep '\[WP-284\]'` |
+| WP-285 | 完成：建立 `northstar-room-postgres`（`room`、`muc`、`cluster_muc` 與九個小 repository），`RoomEffects` 接上別人資料表的步驟 | 見 `git log --grep '\[WP-285\]'` |
+| WP-286 | 完成：`operation_muc_destroy_repository`、`sm_teardown_muc_repository` 進入 `northstar-workflows` | 見 `git log --grep '\[WP-286\]'` |
+| WP-287 | 完成：`mix`、`mix_identity`、`mix_muc`、`mix_repository` 進入 `northstar-room-postgres`，`RoomEffects` 加入 MIX 的步驟 | 見 `git log --grep '\[WP-287\]'` |
+| WP-288 | 完成：房間 MAM 授權與房間鎖進入 `northstar_room_postgres::mam_authorization`，分頁與邊界讀取留到 S27 | 見 `git log --grep '\[WP-288\]'` |
+| WP-289 | 完成：MUC 叢集靜態合約改指新路徑，這一步加進本機門禁 | 見 `git log --grep '\[WP-289\]'` |
+| WP-290 | 完成：MIX 的 IQ 關聯索引與命名空間進入 room-core，MAM 查詢解析進入 archive-core，節點投遞收據進入 delivery-core | 見 `git log --grep '\[WP-290\]'` |
+| WP-291 | 完成：XEP-0408 鏡像輔助函式進入 `northstar_room_application::mix_muc` | 見 `git log --grep '\[WP-291\]'` |
+| WP-292 | 完成：傳輸邊界的完成值進入 delivery-core，節文加密檢查進入 XML builder | 見 `git log --grep '\[WP-292\]'` |
+| WP-293 | 完成：建立 `northstar-mix-xmpp`（`MixHost`、`MixSession`、`MixAction`），根 crate 保留 seam 與驅動真實會話的測試 | 見 `git log --grep '\[WP-293\]'` |
+| WP-294 | 完成：`MucOccupant` 等房間記錄進入 room-core，disco 請求值進入 XML builder，離線限制進入 message-core | 見 `git log --grep '\[WP-294\]'` |
+| WP-295 | 完成：訊息提示政策與 xdata 布林解析進入 XML builder，聯邦 MAM 記錄進入 archive-core | 見 `git log --grep '\[WP-295\]'` |
+| WP-296 | 完成：建立 `northstar-muc-xmpp`（`MucHost`、`MucSession`、`MucAction`），`impl MucHost for AppState` 放在 `state/muc_host.rs` | 見 `git log --grep '\[WP-296\]'` |
+| WP-297 | 完成：`AppState` 以 `RoomModule` 持有七個欄位，能力清單的門禁改列模組 | 見 `git log --grep '\[WP-297\]'` |
+| WP-298 | 完成：`AccountDeletionEffects` 退役，`northstar-workflows` 直接呼叫 `northstar-room-postgres` | 見 `git log --grep '\[WP-298\]'` |
+| WP-299 | 完成：記錄 S26 的階段與盤點（5.22）、4.5。WP-280–298 依序接到 WP-276 之上；fmt、clippy、workspace 測試、層級、模糊測試、本機 PostgreSQL 套件與全部門禁通過 | 見 `git log --grep '\[WP-299\]'` |

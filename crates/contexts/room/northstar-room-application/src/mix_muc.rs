@@ -7,14 +7,14 @@
 //! not invent an unsafe message/presence relay that could loop or disclose a
 //! semi-anonymous MUC occupant's real JID.
 
-use crate::xmpp::xml_builder::XmlElement;
+use crate::mix_service::{MixMucLinkOutcome, MixRepository, MixService};
 use anyhow::Result;
-use northstar_room_application::mix_service::{MixMucLinkOutcome, MixRepository, MixService};
+use northstar_xml_builder::XmlElement;
 
-pub(crate) const MIRROR_NS: &str = "urn:xmpp:mix:muc:0";
+pub const MIRROR_NS: &str = "urn:xmpp:mix:muc:0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MirrorDirection {
+pub enum MirrorDirection {
     /// A MIX service/channel points clients at its MUC counterpart.
     Muc,
     /// A MUC service/room points clients at its MIX counterpart.
@@ -25,7 +25,7 @@ pub(crate) enum MirrorDirection {
 /// a `<feature/>`. Keeping this in one serializer makes it difficult to
 /// accidentally advertise the forbidden counterpart protocol feature on a
 /// separate-domain service.
-pub(crate) fn mirror_discovery_form(direction: MirrorDirection, service_jid: &str) -> String {
+pub fn mirror_discovery_form(direction: MirrorDirection, service_jid: &str) -> String {
     let (form_type, field, label) = match direction {
         MirrorDirection::Muc => (
             format!("{MIRROR_NS}#muc-mirror"),
@@ -56,7 +56,7 @@ pub(crate) fn mirror_discovery_form(direction: MirrorDirection, service_jid: &st
         .finish()
 }
 
-pub(crate) fn conditional_mirror_discovery_form(
+pub fn conditional_mirror_discovery_form(
     enabled: bool,
     linked: bool,
     direction: MirrorDirection,
@@ -73,7 +73,7 @@ pub(crate) fn conditional_mirror_discovery_form(
 /// same-localpart counterpart. Failure to prove common ownership is a normal,
 /// non-mutating outcome: an attacker cannot cause two other owners' entities
 /// to become associated merely by choosing the same address.
-pub(crate) async fn maybe_link_local_mirror<R: MixRepository>(
+pub async fn maybe_link_local_mirror<R: MixRepository>(
     mirror_enabled: bool,
     mix: &MixService<R>,
     local_domain: &str,

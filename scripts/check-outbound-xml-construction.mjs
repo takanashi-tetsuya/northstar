@@ -22,7 +22,7 @@ const BASELINE = new Map([
   ['src/services/jingle.rs', 0],
   ['src/xmpp/protocol/mam.rs', 0],
   ['crates/contexts/archive/northstar-archive-xmpp/src/lib.rs', 0],
-  ['src/xmpp/protocol/mix_muc.rs', 0],
+  ['crates/contexts/room/northstar-room-application/src/mix_muc.rs', 0],
   ['src/xmpp/protocol/private.rs', 0],
   ['src/xmpp/protocol/privacy.rs', 0],
   ['src/xmpp/protocol/presence.rs', 0],

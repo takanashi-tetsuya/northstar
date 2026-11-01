@@ -11,7 +11,6 @@ pub(crate) mod mam;
 pub(crate) mod messaging;
 pub(crate) mod misc;
 pub(crate) mod mix;
-pub(crate) mod mix_muc;
 pub(crate) mod muc;
 pub(crate) mod pep;
 pub(crate) mod presence;

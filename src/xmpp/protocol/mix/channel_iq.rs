@@ -52,7 +52,7 @@ pub(super) async fn handle_channel_iq(
                     .await?
                 {
                     (CreateChannelOutcome::Created(_), localpart) => {
-                        let _ = super::super::mix_muc::maybe_link_local_mirror(
+                        let _ = northstar_room_application::mix_muc::maybe_link_local_mirror(
                             state.mix_muc_mirror_enabled(),
                             state.mix_service(),
                             state.local_domain(),

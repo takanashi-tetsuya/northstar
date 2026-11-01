@@ -143,10 +143,10 @@ pub(super) async fn federated_mix_disco_info(
                 .mix_muc_mirror_for_mix(channel.id)
                 .await?
                 .is_some();
-        let mirror = super::super::mix_muc::conditional_mirror_discovery_form(
+        let mirror = northstar_room_application::mix_muc::conditional_mirror_discovery_form(
             state.mix_muc_mirror_enabled(),
             linked,
-            super::super::mix_muc::MirrorDirection::Muc,
+            northstar_room_application::mix_muc::MirrorDirection::Muc,
             &muc_domain,
         );
         mix_channel_disco_info_payload(
@@ -163,10 +163,10 @@ pub(super) async fn federated_mix_disco_info(
                 .mix_service()
                 .mix_muc_mirror_service_complete(target.domainpart())
                 .await?;
-        let mirror = super::super::mix_muc::conditional_mirror_discovery_form(
+        let mirror = northstar_room_application::mix_muc::conditional_mirror_discovery_form(
             state.mix_muc_mirror_enabled(),
             linked,
-            super::super::mix_muc::MirrorDirection::Muc,
+            northstar_room_application::mix_muc::MirrorDirection::Muc,
             &muc_domain,
         );
         mix_service_disco_info_payload(state.server_name(), &mirror)?

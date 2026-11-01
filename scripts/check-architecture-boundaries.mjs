@@ -2288,14 +2288,14 @@ for (const invariant of [
 }
 
 // mix_muc.rs receives the MIX service from its callers instead of AppState.
-for (const [name, accessor, forbiddenAuthority, route] of [
-  ['mix_muc.rs', 'MixService', 'link_mix_muc_by_localpart', /\bmix\s*:\s*&MixService<R>[^]*?\bmix\s*\.\s*link_local_muc_mirror\s*\(/],
+for (const [name, accessor, forbiddenAuthority, route, path] of [
+  ['mix_muc.rs', 'MixService', 'link_mix_muc_by_localpart', /\bmix\s*:\s*&MixService<R>[^]*?\bmix\s*\.\s*link_local_muc_mirror\s*\(/, 'crates/contexts/room/northstar-room-application/src/mix_muc.rs'],
   ['presence.rs', 'presence_service()', 'claim_admin_service_messages', /\.presence_service\s*\(\s*\)/],
   ['presence.rs', 'presence_service()', 'complete_admin_service_message_claim', /\.presence_service\s*\(\s*\)/],
   ['upload.rs', 'upload_service()', 'create_upload_slot_bounded', /\.upload_service\s*\(\s*\)/],
 ]) {
   const production = productionWithoutCfgTestModules(
-    readProtocolSource(name),
+    path ? read(path) : readProtocolSource(name),
     `${name} production`,
   );
   if (new RegExp(`\\b(?:db|northstar_upload_postgres)\\s*::\\s*${forbiddenAuthority}\\b`).test(production)) {

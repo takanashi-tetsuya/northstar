@@ -175,10 +175,10 @@ impl ProtocolSession {
                     .mix_service()
                     .mix_muc_mirror_service_complete(&mix_domain)
                     .await?;
-            let mirror = super::mix_muc::conditional_mirror_discovery_form(
+            let mirror = northstar_room_application::mix_muc::conditional_mirror_discovery_form(
                 mirror_enabled,
                 linked,
-                super::mix_muc::MirrorDirection::Muc,
+                northstar_room_application::mix_muc::MirrorDirection::Muc,
                 &muc_domain,
             );
             let query =
@@ -219,10 +219,10 @@ impl ProtocolSession {
                     .mix_muc_mirror_for_mix(channel.id)
                     .await?
                     .is_some();
-            let mirror = super::mix_muc::conditional_mirror_discovery_form(
+            let mirror = northstar_room_application::mix_muc::conditional_mirror_discovery_form(
                 mirror_enabled,
                 linked,
-                super::mix_muc::MirrorDirection::Muc,
+                northstar_room_application::mix_muc::MirrorDirection::Muc,
                 &muc_domain,
             );
             let query = super::mix::mix_channel_disco_info_payload(
@@ -316,10 +316,10 @@ impl ProtocolSession {
                     .mix_service()
                     .mix_muc_mirror_service_complete(&mix_domain)
                     .await?;
-            let mirror = super::mix_muc::conditional_mirror_discovery_form(
+            let mirror = northstar_room_application::mix_muc::conditional_mirror_discovery_form(
                 mirror_enabled,
                 linked,
-                super::mix_muc::MirrorDirection::Mix,
+                northstar_room_application::mix_muc::MirrorDirection::Mix,
                 &mix_domain,
             );
             let muc_name = format!("{} Group Chat", self.state.server_name());
@@ -465,12 +465,14 @@ impl ProtocolSession {
                     .mix_muc_mirror_for_muc(room.id)
                     .await?
                     .is_some();
-            query.push_validated_fragment(&super::mix_muc::conditional_mirror_discovery_form(
-                mirror_enabled,
-                linked,
-                super::mix_muc::MirrorDirection::Mix,
-                &mix_domain,
-            ))?;
+            query.push_validated_fragment(
+                &northstar_room_application::mix_muc::conditional_mirror_discovery_form(
+                    mirror_enabled,
+                    linked,
+                    northstar_room_application::mix_muc::MirrorDirection::Mix,
+                    &mix_domain,
+                ),
+            )?;
             return Ok(Action::Send(iq_result_from(id, from, &query.finish())));
         }
         let is_server = target.localpart().is_none()

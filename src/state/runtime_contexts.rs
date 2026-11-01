@@ -31,12 +31,17 @@ impl AppState {
 
     pub(crate) fn retention_context(
         &self,
-    ) -> crate::runtime::retention::RetentionContext<db::retention::PostgresMaintenanceRepository>
-    {
-        crate::runtime::retention::RetentionContext::new(
+    ) -> northstar_operations_application::retention_worker::RetentionContext<
+        db::retention::PostgresMaintenanceRepository,
+    > {
+        northstar_operations_application::retention_worker::RetentionContext::new(
             db::retention::PostgresMaintenanceRepository::new(self.pool.clone()),
-            crate::runtime::retention::RetentionPolicy::from_config(&self.config),
-            crate::runtime::retention::RetentionCounters::from_metrics(&self.metrics),
+            northstar_operations_application::retention_worker::RetentionPolicy::from_config(
+                &self.config,
+            ),
+            northstar_operations_application::retention_worker::RetentionCounters::from_metrics(
+                &self.metrics,
+            ),
         )
     }
 

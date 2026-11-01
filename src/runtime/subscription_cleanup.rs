@@ -4,8 +4,8 @@
 //! worker only removes durable garbage; it never uses delivery admission or
 //! receives protocol state, routing capabilities, or a separate database pool.
 
-use crate::runtime::retention::RetentionReadiness;
 use northstar_operations_application::maintenance_repositories::SubscriptionCleanupRepository;
+use northstar_operations_application::retention_worker::RetentionReadiness;
 use northstar_runtime::workers::WorkerHeartbeat;
 use northstar_telemetry::metrics::SubscriptionCleanupMetrics;
 use std::sync::{atomic::Ordering, Arc};

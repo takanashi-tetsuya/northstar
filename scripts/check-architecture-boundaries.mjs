@@ -2333,7 +2333,7 @@ for (const [name, source] of [
   ['MixService', mixServiceSource],
   ['PushService', read('src/services/push.rs')],
   ['PrivateStorageService', read('crates/contexts/pubsub/northstar-pubsub-application/src/private_storage.rs')],
-  ['RetentionContext', read('src/runtime/retention.rs')],
+  ['RetentionContext', read('crates/contexts/operations/northstar-operations-application/src/retention_worker.rs')],
   ['SubscriptionCleanupContext', read('src/runtime/subscription_cleanup.rs')],
   ['UploadMaintenanceContext', read('crates/contexts/upload/northstar-upload-application/src/worker.rs')],
   ['UploadMaintenanceRepository', read('crates/contexts/upload/northstar-upload-application/src/maintenance.rs')],
@@ -3965,7 +3965,7 @@ for (const protocol of ['pep.rs', 'pubsub.rs']) {
     throw new Error(`${protocol} must use a narrow telemetry capability`);
   }
 }
-const retentionContext = structBody(read('src/runtime/retention.rs'), 'pub(crate) struct RetentionContext');
+const retentionContext = structBody(read('crates/contexts/operations/northstar-operations-application/src/retention_worker.rs'), 'pub struct RetentionContext');
 if (!retentionContext.includes('counters: RetentionCounters')
     || retentionContext.includes('Arc<Metrics>')) {
   throw new Error('archive retention must carry only its operation counters');

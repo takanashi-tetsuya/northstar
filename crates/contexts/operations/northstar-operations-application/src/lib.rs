@@ -18,5 +18,6 @@ pub mod readiness;
 pub mod report_moderation;
 pub mod reports;
 pub mod retention_policy;
+pub mod retention_worker;
 pub mod runtime_control;
 pub mod upload_admin;

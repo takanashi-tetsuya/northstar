@@ -2,7 +2,6 @@
 
 pub(crate) mod capacity_maintenance;
 pub(crate) mod operation_runtime;
-pub(crate) mod retention;
 pub(crate) mod service_tasks;
 pub(crate) mod subscription_cleanup;
 pub(crate) mod subservers;

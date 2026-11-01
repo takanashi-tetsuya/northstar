@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readProductionModule } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const files = { main: 'src/main.rs', subservers: 'src/runtime/subservers.rs', maintenanceOwnership: 'src/db/maintenance_ownership.rs', retention: 'src/runtime/retention.rs',
+const files = { main: 'src/main.rs', subservers: 'src/runtime/subservers.rs', maintenanceOwnership: 'src/db/maintenance_ownership.rs', retention: 'crates/contexts/operations/northstar-operations-application/src/retention_worker.rs',
   subscriptionCleanup: 'src/runtime/subscription_cleanup.rs',
   pubsubProtocol: 'src/xmpp/protocol/pubsub.rs', pubsubAdapter: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/pubsub.rs',
   pubsubService: 'crates/contexts/pubsub/northstar-pubsub-application/src/service.rs',
@@ -162,7 +162,7 @@ export function verifySubserverBoundaries({ main, subservers, maintenanceOwnersh
   const guardedRegistrations = [...main.matchAll(/if process_role\.embeds_retention\(\)/g)]
     .map((match) => body(main.slice(match.index), 'if process_role.embeds_retention()'));
   requireBoundary(guardedRegistrations.filter((block) => block.includes('"archive-retention"') &&
-    block.includes('retention::serve_context(')).length === 1, 'standalone retention worker must have one explicit role guard');
+    block.includes('retention_worker::serve_context(')).length === 1, 'standalone retention worker must have one explicit role guard');
   requireBoundary(guardedRegistrations.filter((block) => block.includes('"pubsub-subscription-cleanup"') &&
     block.includes('subscription_cleanup::serve_context(')).length === 1 &&
     [...main.matchAll(/\.supervise\(\s*"pubsub-subscription-cleanup"/g)].length === 1,

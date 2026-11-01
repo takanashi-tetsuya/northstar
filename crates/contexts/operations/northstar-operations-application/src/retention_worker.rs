@@ -1,8 +1,6 @@
+use crate::maintenance_repositories::{RetentionRepository, RetentionStore};
 use chrono::Utc;
 use northstar_config::Config;
-use northstar_operations_application::maintenance_repositories::{
-    RetentionRepository, RetentionStore,
-};
 use northstar_telemetry::metrics::Metrics;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -14,17 +12,17 @@ use tokio_util::sync::CancellationToken;
 /// The complete retention policy. This value carries no listener, identity,
 /// cryptographic key or live-session authority.
 #[derive(Clone, Debug)]
-pub(crate) struct RetentionPolicy {
-    pub(crate) mam_retention_days: i64,
-    pub(crate) muc_mam_retention_days: i64,
-    pub(crate) offline_message_ttl_days: i64,
-    pub(crate) audit_log_retention_days: i64,
-    pub(crate) retention_cleanup_batch_size: i64,
-    pub(crate) retention_cleanup_interval_seconds: u64,
+pub struct RetentionPolicy {
+    pub mam_retention_days: i64,
+    pub muc_mam_retention_days: i64,
+    pub offline_message_ttl_days: i64,
+    pub audit_log_retention_days: i64,
+    pub retention_cleanup_batch_size: i64,
+    pub retention_cleanup_interval_seconds: u64,
 }
 
 impl RetentionPolicy {
-    pub(crate) fn from_config(config: &Config) -> Self {
+    pub fn from_config(config: &Config) -> Self {
         Self {
             mam_retention_days: config.mam_retention_days,
             muc_mam_retention_days: config.muc_mam_retention_days,
@@ -35,7 +33,7 @@ impl RetentionPolicy {
         }
     }
 
-    pub(crate) fn validate(&self) -> anyhow::Result<()> {
+    pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             (0..=3650).contains(&self.offline_message_ttl_days)
                 && (0..=36_500).contains(&self.mam_retention_days)
@@ -58,32 +56,32 @@ impl RetentionPolicy {
 /// Read-only process health, separate from database and cleanup authority.
 /// Readiness requires a completed successful pass, including after a retry.
 #[derive(Clone, Default)]
-pub(crate) struct RetentionReadiness {
+pub struct RetentionReadiness {
     ready: Arc<AtomicBool>,
 }
 
 impl RetentionReadiness {
-    pub(crate) fn is_ready(&self) -> bool {
+    pub fn is_ready(&self) -> bool {
         self.ready.load(Ordering::Acquire)
     }
 
-    pub(crate) fn begin_pass(&self) {
+    pub fn begin_pass(&self) {
         self.ready.store(false, Ordering::Release);
     }
 
-    pub(crate) fn complete_pass(&self) {
+    pub fn complete_pass(&self) {
         self.ready.store(true, Ordering::Release);
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test(ready: bool) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_test(ready: bool) -> Self {
         let health = Self::default();
         health.set_for_test(ready);
         health
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_for_test(&self, ready: bool) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_for_test(&self, ready: bool) {
         self.ready.store(ready, Ordering::Release);
     }
 }
@@ -91,7 +89,7 @@ impl RetentionReadiness {
 /// Only the counter cells needed by archive retention. Clones share the
 /// process metrics without granting the worker access to unrelated gauges.
 #[derive(Clone)]
-pub(crate) struct RetentionCounters {
+pub struct RetentionCounters {
     personal_mam_deleted: Arc<AtomicU64>,
     muc_mam_deleted: Arc<AtomicU64>,
     offline_messages_deleted: Arc<AtomicU64>,
@@ -105,7 +103,7 @@ pub(crate) struct RetentionCounters {
 }
 
 impl RetentionCounters {
-    pub(crate) fn from_metrics(metrics: &Metrics) -> Self {
+    pub fn from_metrics(metrics: &Metrics) -> Self {
         Self {
             personal_mam_deleted: Arc::clone(&metrics.retention_personal_mam_deleted_total),
             muc_mam_deleted: Arc::clone(&metrics.retention_muc_mam_deleted_total),
@@ -155,7 +153,7 @@ impl RetentionCounters {
 
 /// Shared by embedded and standalone retention workers. It carries no
 /// listener, routing or content-key capabilities.
-pub(crate) struct RetentionContext<R> {
+pub struct RetentionContext<R> {
     repository: R,
     policy: RetentionPolicy,
     counters: RetentionCounters,
@@ -163,7 +161,7 @@ pub(crate) struct RetentionContext<R> {
 }
 
 impl<R: RetentionRepository> RetentionContext<R> {
-    pub(crate) fn new(repository: R, policy: RetentionPolicy, counters: RetentionCounters) -> Self {
+    pub fn new(repository: R, policy: RetentionPolicy, counters: RetentionCounters) -> Self {
         Self {
             repository,
             policy,
@@ -172,12 +170,12 @@ impl<R: RetentionRepository> RetentionContext<R> {
         }
     }
 
-    pub(crate) fn readiness(&self) -> RetentionReadiness {
+    pub fn readiness(&self) -> RetentionReadiness {
         self.readiness.clone()
     }
 }
 
-pub(crate) async fn run_once_context<R: RetentionRepository>(
+pub async fn run_once_context<R: RetentionRepository>(
     context: &RetentionContext<R>,
 ) -> anyhow::Result<()> {
     context.policy.validate()?;
@@ -191,7 +189,7 @@ pub(crate) async fn run_once_context<R: RetentionRepository>(
     Ok(())
 }
 
-pub(crate) async fn serve_context<R: RetentionRepository>(
+pub async fn serve_context<R: RetentionRepository>(
     context: Arc<RetentionContext<R>>,
     cancel: CancellationToken,
     heartbeat: northstar_runtime::workers::WorkerHeartbeat,

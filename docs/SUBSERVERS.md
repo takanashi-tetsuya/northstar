@@ -31,7 +31,7 @@ Maintenance does not construct `AppState`, initialize protocol services, load
 TLS/signing keys, mount uploads, or read the core `.env` file.
 
 `src/runtime/subservers.rs` owns command selection, maintenance configuration, process
-lifecycle and private health. `src/runtime/retention.rs` receives only a retention
+lifecycle and private health. `crates/contexts/operations/northstar-operations-application/src/retention_worker.rs` receives only a retention
 policy, database pool and metrics. Retention SQL belongs to `crates/contexts/workflows/northstar-workflows/src/retention.rs`.
 `src/runtime/subscription_cleanup.rs` owns physical subscription cleanup with only the
 existing pool, narrow counters and independent readiness; its SQL remains in

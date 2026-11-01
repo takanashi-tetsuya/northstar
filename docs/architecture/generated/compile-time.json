@@ -2954,11 +2954,23 @@
     ],
     [
       "northstar-operations-application",
+      "northstar-config"
+    ],
+    [
+      "northstar-operations-application",
       "northstar-operations-core"
     ],
     [
       "northstar-operations-application",
+      "northstar-runtime"
+    ],
+    [
+      "northstar-operations-application",
       "northstar-security"
+    ],
+    [
+      "northstar-operations-application",
+      "northstar-telemetry"
     ],
     [
       "northstar-operations-application",
@@ -2983,6 +2995,14 @@
     [
       "northstar-operations-application",
       "tokio"
+    ],
+    [
+      "northstar-operations-application",
+      "tokio-util"
+    ],
+    [
+      "northstar-operations-application",
+      "tracing"
     ],
     [
       "northstar-operations-application",

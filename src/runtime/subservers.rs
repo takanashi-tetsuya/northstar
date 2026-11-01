@@ -4,11 +4,11 @@
 //! maintenance process receives only a retention policy, a bounded database
 //! pool and metrics; it never constructs AppState or loads protocol secrets.
 
-use crate::{
-    db,
-    runtime::retention::{RetentionContext, RetentionPolicy, RetentionReadiness},
-};
+use crate::db;
 use anyhow::{Context, Result};
+use northstar_operations_application::retention_worker::{
+    RetentionContext, RetentionPolicy, RetentionReadiness,
+};
 use northstar_runtime::workers::WorkerCriticality;
 use northstar_runtime::workers::WorkerMode;
 use northstar_runtime::workers::WorkerRegistry;
@@ -256,7 +256,9 @@ pub(crate) async fn run_maintenance() -> Result<()> {
     let retention = Arc::new(RetentionContext::new(
         db::retention::PostgresMaintenanceRepository::new(pool.clone()),
         policy,
-        crate::runtime::retention::RetentionCounters::from_metrics(&metrics),
+        northstar_operations_application::retention_worker::RetentionCounters::from_metrics(
+            &metrics,
+        ),
     ));
     let retention_readiness = retention.readiness();
     let worker_cancel = cancel.clone();
@@ -267,7 +269,7 @@ pub(crate) async fn run_maintenance() -> Result<()> {
         Some(silence),
         cancel.clone(),
         move |heartbeat| {
-            crate::runtime::retention::serve_context(
+            northstar_operations_application::retention_worker::serve_context(
                 Arc::clone(&retention),
                 worker_cancel.clone(),
                 heartbeat,

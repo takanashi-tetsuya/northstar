@@ -542,7 +542,12 @@ async fn run() -> Result<()> {
                 let context = Arc::clone(&retention_context);
                 let retention_cancel = retention_cancel.clone();
                 async move {
-                    runtime::retention::serve_context(context, retention_cancel, heartbeat).await
+                    northstar_operations_application::retention_worker::serve_context(
+                        context,
+                        retention_cancel,
+                        heartbeat,
+                    )
+                    .await
                 }
             },
         );

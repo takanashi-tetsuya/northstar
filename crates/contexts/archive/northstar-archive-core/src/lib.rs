@@ -513,6 +513,113 @@ pub fn validate_query_time_range(start: Option<DateTime<Utc>>, end: Option<DateT
     }
 }
 
+/// A federated metadata request carries the canonical actor derived from an
+/// authenticated S2S connection. Page reads still use atomic stream admission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FederatedMamMetadataCommand {
+    localpart: String,
+    viewer_bare_jid: String,
+    currently_joined: bool,
+}
+
+impl FederatedMamMetadataCommand {
+    /// `authenticated_domain` must come from the authenticated S2S connection;
+    /// this constructor checks the binding but cannot authenticate the caller.
+    pub fn from_authenticated_actor(
+        localpart: String,
+        authenticated_domain: &str,
+        actor_full_jid: &str,
+        currently_joined: bool,
+    ) -> Option<Self> {
+        let domain = northstar_xmpp_types::CanonicalJid::parse(authenticated_domain).ok()?;
+        let actor = northstar_xmpp_types::CanonicalJid::parse(actor_full_jid).ok()?;
+        if domain.localpart().is_some()
+            || domain.resourcepart().is_some()
+            || actor.localpart().is_none()
+            || actor.resourcepart().is_none()
+            || actor.domainpart() != domain.domainpart()
+        {
+            return None;
+        }
+        Some(Self {
+            localpart,
+            viewer_bare_jid: actor.bare(),
+            currently_joined,
+        })
+    }
+
+    pub fn localpart(&self) -> &str {
+        &self.localpart
+    }
+
+    pub fn viewer_bare_jid(&self) -> &str {
+        &self.viewer_bare_jid
+    }
+
+    pub fn currently_joined(&self) -> bool {
+        self.currently_joined
+    }
+}
+
+/// Outcome of executing a MAM metadata command.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MamMetadataResult {
+    Boundaries {
+        room: Option<MamRoomAccess>,
+        start: Option<ArchiveBoundary>,
+        end: Option<ArchiveBoundary>,
+    },
+    ItemNotFound,
+    Forbidden,
+}
+
+impl MamMetadataResult {
+    pub fn from_room_read(
+        outcome: MamRoomReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>,
+    ) -> Self {
+        match outcome {
+            MamRoomReadOutcome::Allowed {
+                access,
+                value: (start, end),
+            } => Self::Boundaries {
+                room: Some(access),
+                start,
+                end,
+            },
+            MamRoomReadOutcome::Missing => Self::ItemNotFound,
+            MamRoomReadOutcome::Forbidden => Self::Forbidden,
+        }
+    }
+}
+
+/// Authorization and paging context for one atomic federated room archive response.
+#[derive(Clone, Copy, Debug)]
+pub struct FederatedMamStreamRequest<'a> {
+    pub target_domain: &'a str,
+    pub localpart: &'a str,
+    pub viewer_bare_jid: &'a str,
+    pub currently_joined: bool,
+    pub query: &'a MamArchiveQuery,
+}
+
+impl<'a> FederatedMamStreamRequest<'a> {
+    pub fn new(
+        target_domain: &'a str,
+        localpart: &'a str,
+        viewer_bare_jid: &'a str,
+        currently_joined: bool,
+        query: &'a MamArchiveQuery,
+    ) -> Self {
+        Self {
+            target_domain,
+            localpart,
+            viewer_bare_jid,
+            currently_joined,
+            query,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

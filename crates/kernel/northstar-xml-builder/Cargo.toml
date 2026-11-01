@@ -9,5 +9,6 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
+chrono = "0.4"
 roxmltree = "0.20"
 tracing = "0.1"

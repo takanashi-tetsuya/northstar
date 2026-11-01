@@ -1,5 +1,11 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use northstar_abuse_policy::WorkRequirement;
+pub(crate) use northstar_xml_builder::message_policy::{
+    add_delay_from, encrypted_archive_stanza, encrypted_retraction_archive_stanza,
+    has_explicit_no_store_hint, has_no_store_hint, is_abuse_rated_message, mam_storage_eligible,
+    message_storage_policy, offline_storage_permitted, processing_hints_fragment,
+    MessageStoragePolicy,
+};
 #[cfg(test)]
 pub(crate) use northstar_xml_builder::stanza::iq_error_to;
 use northstar_xml_builder::stanza::stanza_condition_element;
@@ -7,6 +13,9 @@ pub(crate) use northstar_xml_builder::stanza::{
     blocked_stanza_error, child_text, iq_error, iq_error_from, iq_result, iq_result_from,
     iq_result_to, is_encrypted, is_encryption_node, reflected_stanza_error, stanza_error,
     stanza_error_type,
+};
+pub(crate) use northstar_xml_builder::xdata::{
+    bool_value, xdata_bool, xdata_field, xdata_value_field,
 };
 use northstar_xml_builder::XmlElement;
 pub(crate) use northstar_xmpp_types::text::valid_language_tag;
@@ -23,53 +32,13 @@ use self::message_validation::{
     validate_sticker, validate_trust_message,
 };
 pub(crate) use northstar_roster_xmpp::presence::inject_vcard_avatar_hash;
+pub(crate) use northstar_xep_0280::should_copy as should_carbon;
 pub(crate) use northstar_xep_0313::build_extended_form as mam_extended_form;
 pub(crate) use northstar_xep_0359::{add_stanza_id, strip_stanza_ids_by_domain};
-use northstar_xml_builder::rewrite::{
-    append_root_element, append_root_validated_fragment, remove_root_attribute,
-};
+use northstar_xml_builder::rewrite::remove_root_attribute;
 pub(crate) use northstar_xml_builder::rewrite::{
     root_resets_default_namespace, set_client_namespace, set_from, set_root_attribute, set_to,
 };
-
-pub(crate) fn xdata_field<'a, 'input>(form: Node<'a, 'input>, name: &str) -> Option<&'a str> {
-    form.children()
-        .find(|node| {
-            node.is_element()
-                && node.tag_name().name() == "field"
-                && node.tag_name().namespace() == Some("jabber:x:data")
-                && node.attribute("var") == Some(name)
-        })
-        .and_then(|node| child_text(node, "value"))
-}
-
-pub(crate) fn xdata_bool(form: Node<'_, '_>, name: &str) -> std::result::Result<Option<bool>, ()> {
-    match xdata_field(form, name) {
-        None => Ok(None),
-        Some("1" | "true") => Ok(Some(true)),
-        Some("0" | "false") => Ok(Some(false)),
-        Some(_) => Err(()),
-    }
-}
-
-pub(crate) fn xdata_value_field(
-    variable: &'static str,
-    kind: &'static str,
-    value: impl ToString,
-) -> XmlElement {
-    XmlElement::new("field")
-        .attr("var", variable)
-        .attr("type", kind)
-        .child(XmlElement::new("value").text(value.to_string()))
-}
-
-pub(crate) fn bool_value(value: bool) -> &'static str {
-    if value {
-        "1"
-    } else {
-        "0"
-    }
-}
 
 /// Reject a client-provided Carbon wrapper.  A server must be the only entity
 /// that can assert `<sent/>` or `<received/>`; forwarding such a wrapper would
@@ -129,10 +98,6 @@ fn validate_enabled_message_extensions(
     Ok(())
 }
 
-pub(crate) fn should_carbon(root: Node<'_, '_>) -> bool {
-    northstar_xep_0280::should_copy(root)
-}
-
 pub(crate) fn carbon_message(kind: &str, from: &str, to: &str, forwarded: &str) -> Option<String> {
     // The XEP-0280 wrapper name is protocol state, never caller-controlled
     // XML. Keep the legacy string-shaped API temporarily, but collapse it to
@@ -171,34 +136,6 @@ pub(crate) fn sm_failed(condition: &str) -> String {
 #[cfg(test)]
 pub(crate) fn valid_bare_jid(value: &str) -> bool {
     northstar_xmpp_types::jid::CanonicalJid::parse_bare(value).is_ok()
-}
-
-pub(crate) fn add_delay_from(
-    stanza: &str,
-    created_at: chrono::DateTime<chrono::Utc>,
-    from: Option<&str>,
-) -> String {
-    let mut delayed = stanza.to_owned();
-    if let Ok(document) = Document::parse(stanza) {
-        let mut ranges = document
-            .root_element()
-            .children()
-            .filter(|child| {
-                child.is_element()
-                    && child.tag_name().name() == "delay"
-                    && child.tag_name().namespace() == Some("urn:xmpp:delay")
-            })
-            .map(|child| child.range())
-            .collect::<Vec<_>>();
-        ranges.sort_by_key(|range| std::cmp::Reverse(range.start));
-        for range in ranges {
-            delayed.replace_range(range, "");
-        }
-    }
-    let delay = XmlElement::namespaced("delay", "urn:xmpp:delay")
-        .optional_attr("from", from)
-        .attr("stamp", created_at.format("%Y-%m-%dT%H:%M:%SZ"));
-    append_root_element(&delayed, &delay).unwrap_or_else(|| stanza.to_owned())
 }
 
 /// Remove direct XEP-0203 assertions that the current transport cannot
@@ -422,29 +359,6 @@ pub(crate) fn strip_pow_element(raw: &str) -> String {
     cleaned
 }
 
-pub(crate) fn is_abuse_rated_message(root: Node<'_, '_>) -> bool {
-    is_encrypted(root)
-        || root.children().any(|node| {
-            node.is_element()
-                && ((matches!(node.tag_name().name(), "body" | "subject")
-                    && matches!(node.tag_name().namespace(), None | Some("jabber:client")))
-                    || matches!(
-                        (node.tag_name().namespace(), node.tag_name().name()),
-                        (Some("urn:xmpp:reactions:0"), "reactions")
-                            | (Some("urn:xmpp:sfs:0"), "file-sharing")
-                            | (Some("urn:xmpp:chat-markers:0"), "markable" | "displayed")
-                            | (Some("http://jabber.org/protocol/chatstates"), _)
-                            | (Some("urn:xmpp:message-retract:1"), "retract")
-                            | (Some("urn:xmpp:message-correct:0"), "replace")
-                            | (Some("urn:xmpp:reply:0"), "reply")
-                            | (Some("urn:xmpp:eme:0"), "encryption")
-                            | (Some("urn:xmpp:stickers:0"), "sticker")
-                            | (Some("urn:xmpp:tm:1"), "trust-message")
-                            | (Some("urn:xmpp:jingle-message:0"), _)
-                    ))
-        })
-}
-
 /// Validate XEP-0184 wire invariants without generating a receipt on behalf of
 /// a client. A receipt is an end-to-end client assertion; the server only
 /// validates and routes it.
@@ -476,7 +390,7 @@ pub(crate) fn validate_modern_message_payloads(root: Node<'_, '_>) -> Result<(),
     Ok(())
 }
 
-const OMEMO2: &str = "urn:xmpp:omemo:2";
+const OMEMO2: &str = northstar_xml_builder::message_policy::OMEMO2;
 const SCE: &str = "urn:xmpp:sce:1";
 const MAX_OMEMO2_ENCRYPTED_BYTES: usize = 2 * 1024 * 1024;
 const MAX_OMEMO2_PAYLOAD_BYTES: usize = 1024 * 1024;
@@ -484,243 +398,6 @@ const MAX_OMEMO2_KEY_BYTES: usize = 64 * 1024;
 const MAX_OMEMO2_KEY_GROUPS: usize = 1024;
 const MAX_OMEMO2_KEYS_PER_GROUP: usize = 1024;
 const MAX_OMEMO2_TOTAL_KEYS: usize = 8192;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MessageStoragePolicy {
-    pub(crate) temporary: bool,
-    pub(crate) permanent: bool,
-}
-
-/// Preserve XEP-0334 hints when a service has to rebuild a routed message
-/// (for example, when a MUC service rewrites an invitation). Callers validate
-/// the original stanza before using this fragment.
-pub(crate) fn processing_hints_fragment(root: Node<'_, '_>, raw: &str) -> String {
-    root.children()
-        .filter(|node| node.is_element() && node.tag_name().namespace() == Some("urn:xmpp:hints"))
-        .map(|node| {
-            let range = node.range();
-            &raw[range.start..range.end]
-        })
-        .collect()
-}
-
-/// Parse XEP-0334 processing hints as a bounded, privacy-preserving policy.
-/// The server never treats extension-namespace lookalikes or payload-bearing
-/// hints as policy. XEP-0334 defines these elements as hints and does not make
-/// combinations a stanza error, so overlapping storage hints use a fixed
-/// order independent of child order: `no-store`, `no-permanent-store`, then
-/// `store`.
-pub(crate) fn message_storage_policy(
-    root: Node<'_, '_>,
-) -> Result<MessageStoragePolicy, &'static str> {
-    // XEP-0334 section 3 requires intermediaries to ignore processing hints
-    // attached to error messages. Error stanzas are never eligible for
-    // offline or permanent storage, so do not parse (or reject) hint-shaped
-    // children on this branch.
-    if root.attribute("type") == Some("error") {
-        return Ok(MessageStoragePolicy {
-            temporary: false,
-            permanent: false,
-        });
-    }
-    let mut store = false;
-    let mut no_store = false;
-    let mut no_permanent_store = false;
-    let mut seen = HashSet::new();
-    for hint in root
-        .children()
-        .filter(|node| node.is_element() && node.tag_name().namespace() == Some("urn:xmpp:hints"))
-    {
-        let name = hint.tag_name().name();
-        if !matches!(
-            name,
-            "store" | "no-store" | "no-permanent-store" | "no-copy"
-        ) {
-            // XEP-0334 explicitly permits future hints. Preserve them as
-            // opaque data, but apply a small structural bound below.
-            if hint.attributes().len() > 16
-                || hint.descendants().filter(|node| node.is_element()).count() > 64
-                || hint.range().len() > 65_536
-            {
-                return Err("resource-constraint");
-            }
-            continue;
-        }
-        if !seen.insert(name)
-            || hint.attributes().len() != 0
-            || hint.children().any(|child| child.is_element())
-            || hint.text().is_some_and(|text| !text.trim().is_empty())
-        {
-            return Err("bad-request");
-        }
-        match name {
-            "store" => store = true,
-            "no-store" => no_store = true,
-            "no-permanent-store" => no_permanent_store = true,
-            // XEP-0334 says senders MUST only place this hint on messages to
-            // full JIDs.  It also explicitly says the hint does not override
-            // RFC 6121 bare-JID fan-out.  An intermediary therefore validates
-            // the empty element but ignores its copy semantics unless `to`
-            // is a valid full JID; rejecting the whole message would turn a
-            // sender-side hint error into avoidable message loss.
-            "no-copy" => {}
-            _ => unreachable!(),
-        }
-    }
-    if no_store {
-        return Ok(MessageStoragePolicy {
-            temporary: false,
-            permanent: false,
-        });
-    }
-    if no_permanent_store {
-        return Ok(MessageStoragePolicy {
-            temporary: true,
-            permanent: false,
-        });
-    }
-    if store {
-        return Ok(MessageStoragePolicy {
-            temporary: true,
-            permanent: true,
-        });
-    }
-
-    // Pure chat states and delivery receipts are transient by default.
-    let mut found_signal = false;
-    for node in root.children().filter(|node| node.is_element()) {
-        let namespace = node.tag_name().namespace().unwrap_or_default();
-        let name = node.tag_name().name();
-        let is_signal = (namespace == "http://jabber.org/protocol/chatstates"
-            && matches!(
-                name,
-                "active" | "composing" | "paused" | "inactive" | "gone"
-            ))
-            || (namespace == "urn:xmpp:receipts" && name == "received")
-            || (namespace == "urn:xmpp:chat-markers:0" && matches!(name, "markable" | "displayed"));
-        let is_signal_metadata = namespace == "urn:xmpp:hints"
-            || (matches!(namespace, "" | "jabber:client") && name == "thread")
-            || namespace == "urn:xmpp:sid:0"
-            || (namespace == "urn:northstar:pow:1" && name == "pow");
-        if is_signal || is_signal_metadata {
-            found_signal |= is_signal;
-            continue;
-        }
-        return Ok(MessageStoragePolicy {
-            temporary: true,
-            permanent: true,
-        });
-    }
-    Ok(MessageStoragePolicy {
-        temporary: !found_signal,
-        permanent: !found_signal,
-    })
-}
-
-pub(crate) fn encrypted_archive_stanza(stanza: &str) -> String {
-    let Ok(document) = Document::parse(stanza) else {
-        return stanza.to_owned();
-    };
-    let mut ranges: Vec<_> = document
-        .root_element()
-        .children()
-        .filter(|node| {
-            node.is_element()
-                && !is_encryption_node(*node)
-                && !is_safe_encrypted_archive_metadata(*node)
-        })
-        .map(|node| node.range())
-        .collect();
-    ranges.sort_by_key(|range| std::cmp::Reverse(range.start));
-    let mut safe = stanza.to_owned();
-    for range in ranges {
-        safe.replace_range(range, "");
-    }
-    // XEP-0420 0.5.0 forbids a fallback body on SCE messages. Preserve the
-    // historical generic fallback only for older encryption formats.
-    if document.root_element().children().any(|node| {
-        node.is_element()
-            && node.tag_name().name() == "encrypted"
-            && node.tag_name().namespace() == Some(OMEMO2)
-    }) {
-        safe
-    } else {
-        append_root_element(
-            &safe,
-            &XmlElement::namespaced("body", "jabber:client")
-                .text("This message is end-to-end encrypted."),
-        )
-        .unwrap_or(safe)
-    }
-}
-
-/// Build the encrypted archive projection for a XEP-0424 retraction without
-/// exposing the generic root-fragment insertion primitive outside this
-/// serializer module. The runtime target is escaped by the typed builder and
-/// callers are expected to have applied the protocol length/control checks.
-pub(crate) fn encrypted_retraction_archive_stanza(stanza: &str, target_id: &str) -> String {
-    let safe = encrypted_archive_stanza(stanza);
-    let retract = XmlElement::namespaced("retract", "urn:xmpp:message-retract:1")
-        .attr("id", target_id)
-        .finish();
-    append_root_validated_fragment(&safe, &retract).unwrap_or(safe)
-}
-
-fn is_safe_encrypted_archive_metadata(node: Node<'_, '_>) -> bool {
-    matches!(
-        (node.tag_name().namespace(), node.tag_name().name()),
-        (
-            Some("urn:xmpp:sid:0"),
-            "origin-id" | "stanza-id" | "referenced-stanza"
-        ) | (Some("urn:xmpp:eme:0"), "encryption")
-            // OMEMO 2 payload messages require the explicit XEP-0334 store
-            // hint.  Preserve it in the encrypted projection so a MUC/MAM
-            // replay remains a valid stanza when it crosses an S2S boundary
-            // and is validated again by the recipient server.
-            | (Some("urn:xmpp:hints"), "store")
-            | (Some("urn:xmpp:message-correct:0"), "replace")
-            | (Some("urn:xmpp:reply:0"), "reply")
-            | (Some("urn:xmpp:chat-markers:0"), "markable")
-            | (Some("urn:xmpp:receipts"), "request")
-    )
-}
-
-pub(crate) fn has_no_store_hint(root: Node<'_, '_>) -> bool {
-    message_storage_policy(root)
-        .map(|policy| !policy.permanent)
-        .unwrap_or(true)
-}
-
-/// Return whether the sender explicitly requested XEP-0334 `no-store`.
-///
-/// This is intentionally different from [`has_no_store_hint`]: delivery
-/// receipts and chat-state notifications are transient *by default*, but
-/// that default must not be mistaken for an explicit prohibition on a
-/// volatile online delivery.
-pub(crate) fn has_explicit_no_store_hint(root: Node<'_, '_>) -> bool {
-    root.attribute("type") != Some("error")
-        && root.children().any(|node| {
-            node.is_element()
-                && node.tag_name().namespace() == Some("urn:xmpp:hints")
-                && node.tag_name().name() == "no-store"
-        })
-}
-
-pub(crate) fn offline_storage_permitted(root: Node<'_, '_>) -> bool {
-    message_storage_policy(root)
-        .map(|policy| policy.temporary)
-        .unwrap_or(false)
-}
-
-/// XEP-0313 archives accepted messages, never generated/rejected error
-/// stanzas. Processing hints on an error are ignored per XEP-0334, so a
-/// malicious `<store/>` cannot force a bounce into somebody's archive.
-pub(crate) fn mam_storage_eligible(root: Node<'_, '_>) -> bool {
-    root.attribute("type") != Some("error")
-        && message_storage_policy(root)
-            .map(|policy| policy.permanent)
-            .unwrap_or(false)
-}
 
 #[cfg(test)]
 #[path = "xml_util_tests.rs"]

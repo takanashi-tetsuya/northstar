@@ -2937,6 +2937,7 @@ name = "northstar-xml-builder"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "roxmltree",
  "tracing",
 ]

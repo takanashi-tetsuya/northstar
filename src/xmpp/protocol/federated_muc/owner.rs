@@ -162,7 +162,7 @@ pub(super) fn parse_federated_owner_action(
     let read_bool = |name, fallback| {
         xdata_bool(child, name)
             .map(|value| value.unwrap_or(fallback))
-            .map_err(|()| "bad-request")
+            .map_err(|_| "bad-request")
     };
     let persistent = read_bool("muc#roomconfig_persistentroom", room.persistent)?;
     let members_only = read_bool("muc#roomconfig_membersonly", room.members_only)?;

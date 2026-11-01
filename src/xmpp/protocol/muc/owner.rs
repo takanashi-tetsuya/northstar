@@ -405,19 +405,19 @@ impl ProtocolSession {
             }
             let persistent = match xdata_bool(form, "muc#roomconfig_persistentroom") {
                 Ok(value) => value.unwrap_or(room.persistent),
-                Err(()) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
+                Err(_) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
             };
             let members_only = match xdata_bool(form, "muc#roomconfig_membersonly") {
                 Ok(value) => value.unwrap_or(room.members_only),
-                Err(()) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
+                Err(_) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
             };
             let public = match xdata_bool(form, "muc#roomconfig_publicroom") {
                 Ok(value) => value.unwrap_or(room.public),
-                Err(()) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
+                Err(_) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
             };
             let moderated = match xdata_bool(form, "muc#roomconfig_moderatedroom") {
                 Ok(value) => value.unwrap_or(room.moderated),
-                Err(()) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
+                Err(_) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
             };
             let non_anonymous = match xdata_field(form, "muc#roomconfig_whois") {
                 None => room.non_anonymous,
@@ -435,15 +435,15 @@ impl ProtocolSession {
             let password_protected = match xdata_bool(form, "muc#roomconfig_passwordprotectedroom")
             {
                 Ok(value) => value.unwrap_or(room.password_hash.is_some()),
-                Err(()) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
+                Err(_) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
             };
             let allow_subject_change = match xdata_bool(form, "muc#roomconfig_changesubject") {
                 Ok(value) => value.unwrap_or(room.allow_subject_change),
-                Err(()) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
+                Err(_) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
             };
             let allow_invites = match xdata_bool(form, "muc#roomconfig_allowinvites") {
                 Ok(value) => value.unwrap_or(room.allow_invites),
-                Err(()) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
+                Err(_) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
             };
             let allow_private_messages = match xdata_field(form, "muc#roomconfig_allowpm") {
                 None => room.allow_private_messages,
@@ -453,11 +453,11 @@ impl ProtocolSession {
             };
             let logging_enabled = match xdata_bool(form, "muc#roomconfig_enablelogging") {
                 Ok(value) => value.unwrap_or(room.logging_enabled),
-                Err(()) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
+                Err(_) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
             };
             let allow_registration = match xdata_bool(form, "muc#roomconfig_allowregister") {
                 Ok(value) => value.unwrap_or(room.allow_registration),
-                Err(()) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
+                Err(_) => return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request"))),
             };
             let supplied_room_secret = xdata_field(form, "muc#roomconfig_roomsecret")
                 .map(str::trim)

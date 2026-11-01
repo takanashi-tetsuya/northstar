@@ -23,7 +23,7 @@ pub(super) fn muc_sender_is_blocked(
         .any(|sender| {
             patterns
                 .iter()
-                .any(|pattern| northstar_roster_application::blocking::matches(pattern, sender))
+                .any(|pattern| northstar_xmpp_types::jid_scope_matches(pattern, sender))
         })
 }
 

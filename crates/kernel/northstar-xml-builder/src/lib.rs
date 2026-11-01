@@ -4,6 +4,7 @@
 
 pub mod disco;
 pub mod escape;
+pub mod message_policy;
 pub mod rewrite;
 pub mod stanza;
 pub mod xdata;

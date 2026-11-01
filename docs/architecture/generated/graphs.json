@@ -4443,6 +4443,10 @@
       ],
       [
         "northstar-xml-builder",
+        "chrono"
+      ],
+      [
+        "northstar-xml-builder",
         "roxmltree"
       ],
       [

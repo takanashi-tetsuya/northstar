@@ -1,5 +1,6 @@
 //! Submitted XEP-0004 data forms as strict input.
 
+use crate::XmlElement;
 use roxmltree::Node;
 use std::collections::HashMap;
 
@@ -85,6 +86,52 @@ pub fn strict_xdata_submit(
         return Err(InvalidForm);
     }
     Ok(values)
+}
+
+pub fn xdata_field<'a, 'input>(form: Node<'a, 'input>, name: &str) -> Option<&'a str> {
+    form.children()
+        .find(|node| {
+            node.is_element()
+                && node.tag_name().name() == "field"
+                && node.tag_name().namespace() == Some("jabber:x:data")
+                && node.attribute("var") == Some(name)
+        })
+        .and_then(|node| crate::stanza::child_text(node, "value"))
+}
+
+/// An XEP-0004 boolean field holds neither `0`, `1`, `false` nor `true`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidXdataBool;
+
+pub fn xdata_bool(
+    form: Node<'_, '_>,
+    name: &str,
+) -> std::result::Result<Option<bool>, InvalidXdataBool> {
+    match xdata_field(form, name) {
+        None => Ok(None),
+        Some("1" | "true") => Ok(Some(true)),
+        Some("0" | "false") => Ok(Some(false)),
+        Some(_) => Err(InvalidXdataBool),
+    }
+}
+
+pub fn xdata_value_field(
+    variable: &'static str,
+    kind: &'static str,
+    value: impl ToString,
+) -> XmlElement {
+    XmlElement::new("field")
+        .attr("var", variable)
+        .attr("type", kind)
+        .child(XmlElement::new("value").text(value.to_string()))
+}
+
+pub fn bool_value(value: bool) -> &'static str {
+    if value {
+        "1"
+    } else {
+        "0"
+    }
 }
 
 #[cfg(test)]

@@ -55,8 +55,11 @@ Northstar 的部署形態維持現狀：一個二進位檔，以 core、maintena
 flowchart TB
   server[northstar-server<br/>組合根] --> edges
   server --> adapters
+  server --> workflows
   edges[edges：stream、c2s、bosh、s2s、http、cluster] --> app
-  adapters[上下文介面卡：-postgres、-xmpp、workflows] --> app
+  adapters[上下文介面卡：-postgres、-xmpp] --> app
+  workflows[workflows：跨上下文交易] --> app
+  workflows --> adapters
   app[上下文 application：用例與 port] --> core
   core[上下文 core：純領域規則] --> kernel
   adapters --> platform
@@ -68,10 +71,11 @@ flowchart TB
 | 層 | crate | 可以依賴 | 不可以依賴 |
 | --- | --- | --- | --- |
 | kernel | `northstar-xmpp-types`、`northstar-xml-builder`、`northstar-xml-framing`、`northstar-xep-core`、`northstar-xep-*`、`northstar-xep-catalog`（內建 XEP 的組裝與啟用） | kernel | 其他所有層；非同步執行期、SQL、網路 |
-| platform | `northstar-config`、`northstar-runtime`（worker 與監督、關機、連線 actor）、`northstar-telemetry`、`northstar-security`（TLS 素材、DANE、位址範圍、金鑰）、`northstar-postgres`（連線池、migration、交易輔助、outbox 原語、測試夾具） | kernel、platform | 任何上下文 |
+| platform | `northstar-config`、`northstar-runtime`（worker 與監督、關機、連線 actor）、`northstar-telemetry`、`northstar-security`（TLS 素材、DANE、位址範圍、金鑰）、`northstar-postgres`（連線池、migration、交易輔助、outbox 原語、角色證明、測試夾具） | kernel、platform | 任何上下文 |
 | context core | `northstar-<ctx>-core` | kernel、其他上下文的 core（無循環） | 非同步執行期、SQL、網路、platform 的 IO 實作 |
 | context application | `northstar-<ctx>-application` | 本上下文 core、kernel、其他上下文的 core、platform 的契約型別 | sqlx、axum、tokio 網路、任何介面卡與 edge |
-| context adapter | `northstar-<ctx>-postgres`、`northstar-<ctx>-xmpp`（必要時 `-http`；物件儲存為 `-storage`）、`northstar-workflows` | 本上下文 application 與 core、platform、kernel；`-xmpp` 另可依賴 `northstar-stream` | 其他上下文的介面卡；`-xmpp` 不可依賴 `-postgres` 與任何傳輸 |
+| context adapter | `northstar-<ctx>-postgres`、`northstar-<ctx>-xmpp`（必要時 `-http`；物件儲存為 `-storage`） | 本上下文 application、任何 core、platform、kernel；`-xmpp` 另可依賴 `northstar-stream` | 其他上下文的介面卡；`-xmpp` 不可依賴 `-postgres` 與任何傳輸 |
+| workflows | `northstar-workflows` | kernel、platform、任何 core、任何 application、任何 `-postgres` | `-xmpp`、`-http`、edge |
 | edge | `northstar-stream`（會話核心）、`northstar-c2s`、`northstar-bosh`、`northstar-s2s`、`northstar-http`、`northstar-cluster` | application、core、platform、kernel；`stream` 以外的 edge 可依賴 `northstar-stream` | 上下文的 `-postgres` |
 | composition | `northstar-server`（bin） | 全部 | — |
 | tooling | `tools/*`、測試支援 crate | 全部 | 不得成為執行期依賴 |
@@ -84,7 +88,7 @@ flowchart TB
 | 上下文 | 職責 | 主要來源 |
 | --- | --- | --- |
 | `auth` | 帳號、SASL／SASL2／FAST、passkey、legacy auth、帳號註冊、密碼變更、登入挑戰 | `services/{authentication,account,account_admin,passkeys,password_change,http_login,challenge_issuance}`、`db/{users,account_repository,authentication,session_identity,jid_identity,fast}`、`xmpp/protocol/{sasl2,legacy_auth,ibr}`、`xmpp/auth_publication`；既有 `auth-core` |
-| `session` | 即時會話、資源綁定、本節點路由表、SM、CSI、實體能力（caps）、會話清理、容量 | `xmpp/local_routes`、`state/{local_session,session_cleanup*}`、`services/{sm,sm_teardown,sm_capacity}`、`db/{sm,sm_repository}`、`xmpp/protocol/{sm,sm_owner,session_sm,session_transport,csi,caps}`；既有 `session-core`、`session-application`、`protocol-runtime` |
+| `session` | 即時會話、資源綁定、本節點路由表、SM、CSI、實體能力（caps）、會話清理、容量 | `xmpp/local_routes`、`state/{local_session,session_cleanup*}`、`services/{sm,sm_teardown,sm_capacity}`、`db/{sm,sm_repository,capacity}`、`xmpp/protocol/{sm,sm_owner,session_sm,session_transport,csi,caps}`；既有 `session-core`、`session-application`、`protocol-runtime` |
 | `roster` | 名冊、出席訂閱與廣播、隱私清單、封鎖 | `services/{presence,privacy,blocking}`、`db/{roster,privacy}`、`xmpp/protocol/{roster,presence,privacy,blocking}`；既有 `roster-core`、`roster-application`、`presence-core` |
 | `message` | 一對一訊息准入與遞送、Carbons、回執、離線佇列、撤回、Jingle 轉送、推播 | `services/{messaging,message_admission,message_carbons,retractions,jingle,direct_spool_wake}`、`db/{messaging,retractions,push}`、`xmpp/protocol/{messaging,retractions}`、`xmpp/{direct_delivery,outbound}`；既有 `message-core`、`message-application`、`delivery-core` |
 | `archive` | 個人 MAM 與其偏好 | `services/mam`、`db/archive`、`xmpp/protocol/mam`；既有 `archive-core`、`archive-application` |
@@ -93,7 +97,7 @@ flowchart TB
 | `upload` | HTTP 上傳槽、物件儲存、對帳與遷移 | `services/upload*`、`db/upload*`、`xmpp/protocol/upload`、`api/upload`、`storage`、`runtime/upload_worker`；既有 `upload-core`、`upload-application` |
 | `federation` | S2S 政策、聯邦 outbox、dialback 金鑰、端點探索、元件憑證 | `services/federation_outbox`、`db/s2s`、`s2s` 中非連線的部分；既有 `federation-core`、`federation-application` |
 | `abuse` | 濫用政策、速率與風險、濫用金鑰 | `services/{abuse,login_abuse}`、`db/{abuse_keys,abuse_persistence_repository}`；既有 `abuse-policy` |
-| `operations` | 管理命令、報告與審核、資料生命週期、保存政策與保存期限清理、治理、操作日誌、指標與就緒狀態 | `services/{admin_*,reports,report_moderation,retention_policy,operations,api_queries,api_mutations,readiness,metrics_snapshot}`、`db/{admin_commands,reports,data_lifecycle,retention,api_operations,api_control,capacity,role_attestation}`、`runtime/retention`、`xmpp/protocol/commands` |
+| `operations` | 管理命令、報告與審核、資料生命週期、保存政策與保存期限清理、治理、操作日誌、指標與就緒狀態 | `services/{admin_*,reports,report_moderation,retention_policy,operations,api_queries,api_mutations,readiness,metrics_snapshot}`、`db/{admin_commands,reports,data_lifecycle,retention,api_operations,api_control}`、`runtime/retention`、`xmpp/protocol/commands` |
 
 `services/xml_util` 依內容拆回各上下文；只剩純 XML 工具的部分併入 kernel。
 
@@ -126,7 +130,7 @@ port 綁定到提供方，註冊 stanza 處理器，再依程序角色（core、
 - 必須在同一交易中跨上下文完成的流程（例如帳號刪除與拆除、MUC／MIX 鏡像連結），
   放在 `northstar-workflows`：它取得一個交易，依序呼叫各上下文 `-postgres` 的 `*_in(&mut tx)` 函式（現有程式
   已普遍使用這個形式），鎖順序與原本相同。已知的例子是 MUC／MIX 鏡像連結：`link_mix_muc_by_localpart` 在同一
-  交易中確認同一擁有者後寫入兩邊的資料表。S20 與 S21 確認的例子還有：`PostgresMamRepository`（封存、房間政策與 S2S outbox），以及 `PostgresPubSubRepository`、`db/profile.rs`、`db/pep_roster.rs`（在 pubsub 交易中讀取名冊與隱私資料表）。S22 確認的例子：`RosterTransactionEffects`（名冊交易中取消 PEP 訂閱、寫入 S2S outbox、讀取 MIX 參與者），根 crate 的 `RootRosterEffects` 是它的暫時實作。S23 確認的例子：`AbuseEffects`（金鑰退役時計算其他上下文的引用、清理過期的離線准入），以及帳號、登入與檢舉交易中呼叫的 `northstar_abuse_postgres::transaction`。S24 確認的例子：`AuthenticationEffects`（憑證交易內發布登入 epoch、轉移存活會話、讀封存邊界）。完整清單在各上下文的階段中逐一確認，記錄在本節。
+  交易中確認同一擁有者後寫入兩邊的資料表。S20 與 S21 確認的例子還有：`PostgresMamRepository`（封存、房間政策與 S2S outbox），以及 `PostgresPubSubRepository`、`db/profile.rs`、`db/pep_roster.rs`（在 pubsub 交易中讀取名冊與隱私資料表）。S22 確認的例子：`RosterTransactionEffects`（名冊交易中取消 PEP 訂閱、寫入 S2S outbox、讀取 MIX 參與者），根 crate 的 `RootRosterEffects` 是它的暫時實作。S23 確認的例子：`AbuseEffects`（金鑰退役時計算其他上下文的引用、清理過期的離線准入），以及帳號、登入與檢舉交易中呼叫的 `northstar_abuse_postgres::transaction`。S24 確認的例子：`AuthenticationEffects`（憑證交易內發布登入 epoch、轉移存活會話、讀封存邊界）。S25 確認的例子：`northstar-workflows` 的帳號生命週期、管理命令、保存與 REST 查詢 repository，以及 `AccountDeletionEffects`（帳號刪除時撤銷房間帳號）。完整清單在各上下文的階段中逐一確認，記錄在本節。
 
 ### 4.6 測試
 
@@ -157,7 +161,7 @@ port 綁定到提供方，註冊 stanza 處理器，再依程序角色（core、
 | S16 地基 | 刪除 `services/*` 原型與只被它們使用的 crate、工具與 CI 步驟（逐項列表確認）；既有 crate 依 4.1 移入 `crates/{kernel,platform,contexts,edges}` 目錄（套件名稱不變）；建立 crate 依賴圖門禁與層級目錄；解除 Stage 4 釘選；記錄建置時間基準 | workspace 全綠；crate 圖門禁通過；根 crate 行數不變。已完成（WP-160–165，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.12） |
 | S17 平台 | `src/platform`、`src/security`、`jid`、`auth` facade 移為 platform 與 kernel crate；`src/storage` 只服務上傳，隨 S19 移入 upload 上下文 | 根 crate 不再含平台程式碼。已完成（WP-171–178，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.13） |
 | S18 會話核心介面 | 建立 `northstar-stream`：`StanzaHandler`、`SessionContext`、分派註冊表；根 crate 的分派改經註冊表，處理器暫時以轉接器包住；以 `session` 路由 port 切斷協定處理器對 `bosh`、`s2s` 的依賴 | 分派只經註冊表；協定處理器不再引用傳輸模組。已完成（WP-181–185，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.14）：IQ 只經路由表分派；會話能力由各上下文的 `-xmpp` crate 以窄 trait 定義，`StanzaHandler` 留到 S30 |
-| S19–S28 上下文 | 依序搬移：`upload` → `archive` → `pubsub` → `roster` → `abuse` → `auth` → `operations` → `room` → `message` → `federation`。每個上下文：先定義 port 與模組結構、以它取代對應的 `AppState` accessor，再把 `services`、`db`、`xmpp/protocol` 中的程式碼移入各 crate，最後更新門禁並在組合根綁定。`api` 的端點依 4.3 屬於 `northstar-http`，於 S30 移出；端點使用的應用層型別隨上下文移動 | 該上下文的應用、持久化與協定程式碼不再出現在根 crate；`AppState` 只持有組合根建構的上下文模組。S19 upload 已完成（WP-191–203，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.15）；S20 archive 已完成（WP-210–214，見 5.16）；S21 pubsub 已完成（WP-220–231，見 5.17）；S22 roster 已完成（WP-240–248，見 5.18）；S23 abuse 已完成（WP-250–255，見 5.19）；S24 auth 已完成（WP-256–264，見 5.20），同交易的帳號流程留待 `northstar-workflows` |
+| S19–S28 上下文 | 依序搬移：`upload` → `archive` → `pubsub` → `roster` → `abuse` → `auth` → `operations` → `room` → `message` → `federation`。每個上下文：先定義 port 與模組結構、以它取代對應的 `AppState` accessor，再把 `services`、`db`、`xmpp/protocol` 中的程式碼移入各 crate，最後更新門禁並在組合根綁定。`api` 的端點依 4.3 屬於 `northstar-http`，於 S30 移出；端點使用的應用層型別隨上下文移動 | 該上下文的應用、持久化與協定程式碼不再出現在根 crate；`AppState` 只持有組合根建構的上下文模組。S19 upload 已完成（WP-191–203，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.15）；S20 archive 已完成（WP-210–214，見 5.16）；S21 pubsub 已完成（WP-220–231，見 5.17）；S22 roster 已完成（WP-240–248，見 5.18）；S23 abuse 已完成（WP-250–255，見 5.19）；S24 auth 已完成（WP-256–264，見 5.20）；S25 operations 已完成（WP-265–276，見 5.21），同交易的帳號流程已進入 `northstar-workflows`，房間操作留待 S26 |
 | S29 會話與叢集 | `session` 上下文與 `northstar-cluster` | 路由表、SM、叢集監聽離開根 crate |
 | S30 傳輸 | `northstar-c2s`、`northstar-bosh`、`northstar-s2s`、`northstar-http`；`ProtocolSession` 拆解完畢 | 根 crate 只剩組合程式碼 |
 | S31 組合根 | 根 crate 更名為 `northstar-server`，`AppState` 刪除；R9 與其餘讀原始碼的邊界門禁退役；文件改寫 | `src/` 只有組合根；全部門禁與完整 CI 通過 |

@@ -113,6 +113,7 @@ facade 移出根 crate（5.13），根 crate 只剩上面三層。
 | S22 roster 上下文 | WP-240–248 | `services/{blocking,privacy,presence,s2s_roster_authorization,roster}` 移入 `northstar-roster-application`（WP-240）；名冊、封鎖、隱私與待處理訂閱的持久化成為 `northstar-roster-postgres`，跨上下文的交易步驟抽成 `RosterTransactionEffects`（WP-241）；`northstar-roster-xmpp` 建立（WP-242）並取得 XEP-0191（WP-243）、XEP-0016（WP-244）、RFC 6121 名冊（WP-245）與出席（WP-246）；`AppState` 以 `RosterModule` 持有五個服務（WP-247）；記錄階段（WP-248）。盤點見 5.18 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯、本機 PostgreSQL 套件與完整 CI 通過。已完成：roster 自有的應用、持久化與 XMPP 處理不再在根 crate；跨上下文的交易步驟、線上會話分送與出席組合的去處見 5.18 |
 | S23 abuse 上下文 | WP-250–255 | 根 crate 的重複合約型別併入 `northstar-abuse-policy`（WP-250）；提交觀察改經 core 的 `AdmissionCommitObserver`（WP-251）；guard、登入與挑戰服務成為 `northstar-abuse-application`（WP-252）；十個 repository 成為 `northstar-abuse-postgres`，碰到別人資料表的兩步抽成 `AbuseEffects`（WP-253）；`AppState` 以 `AbuseModule` 持有這些服務（WP-254）；記錄階段（WP-255）。盤點見 5.19 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯、本機 PostgreSQL 套件與完整 CI 通過。已完成：abuse 自有的應用與持久化不再在根 crate；與帳號交易共用的驗證呼叫、訊息准入 port 的去處見 5.19 |
 | S24 auth 上下文 | WP-256–264 | API 命令合約成為 `northstar-operations-core`，API 工作階段值併入 `northstar-auth-core`（WP-256）；憑證收據與結束值進入 core（WP-257）；認證服務成為 `northstar-auth-application`（WP-258），帳號與登入服務隨後加入（WP-259）；帳號、API 工作階段與撤銷 outbox 成為 `northstar-auth-postgres`（WP-260），FAST、憑證 repository 與 passkey 隨後加入（WP-261）；SASL2 與註冊的純解析及線路格式成為 `northstar-auth-xmpp`（WP-262）；`AppState` 以 `AuthModule` 持有九個服務（WP-263）；記錄階段（WP-264）。盤點見 5.20 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與本機 PostgreSQL 套件通過。未完成：與別的上下文同交易的帳號流程等 `northstar-workflows`，SASL 流程控制等 S29/S30，去處見 5.20 |
+| S25 operations 上下文 | WP-265–276 | 運維服務讀取的上傳死信值與濫用金鑰身分下放到 core，API 登出併入 auth（WP-265）；運維服務成為 `northstar-operations-application`（WP-266）；REST 命令儲存、操作日誌、檢舉與資料生命週期成為 `northstar-operations-postgres`（WP-267），管理命令會話與執行期控制隨後加入，角色證明進入 `northstar-postgres`（WP-268）；建立 `northstar-workflows`，驗證器加入 workflows 角色（WP-269）；帳號生命週期、管理命令、保存與分頁查詢進入 workflows，操作工作者的 repository 進入 `-postgres`（WP-270）；封存保存 worker 進入 application（WP-271）；管理命令成為 `northstar-operations-xmpp`（WP-272）；REST 查詢進入 workflows（WP-273）；`AppState` 以 `OperationsModule` 持有十五個服務（WP-274）；帳號 repository 進入 workflows（WP-275）；記錄階段（WP-276）。盤點見 5.21 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與本機 PostgreSQL 套件通過。未完成：房間資料表上的操作等 S26，就緒與容量等 S29，去處見 5.21 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -791,6 +792,65 @@ WP-255a 是 S23 推上 dev 後才補的：WP-253 改了 Stage 4 綁定的 `scrip
 
 根 crate 由 725 檔 335,699 行變為 705 檔 325,446 行。
 
+### 5.21 S25 盤點：operations 上下文與 `northstar-workflows`（`1a7cf9d4`）
+
+| 原位置 | 去處 | 角色 |
+| --- | --- | --- |
+| `northstar-upload-application` 的 `admin.rs` | `northstar-upload-core` | core |
+| 濫用金鑰身分 | `northstar-abuse-policy` | core |
+| `ServiceMessageDeliveryClaim` | `northstar-roster-core` | core |
+| `services/api_sessions.rs`、`db/api_session_repository.rs` | `northstar_auth_application`、`northstar_auth_postgres` 的同名模組 | application、adapter |
+| `services/{admin_commands,admin_dispatch,admin_session_cleanup_worker,api_queries,governance,maintenance_repositories,metrics_snapshot,operation_effect_fence,operation_journal_worker,operation_muc_destroy,operations,readiness,report_moderation,reports,retention_policy,runtime_control,upload_admin}.rs` | `northstar_operations_application` 的同名模組 | application |
+| `runtime/retention.rs` | `northstar_operations_application::retention_worker` | application |
+| `db/{api_control,api_mutations,api_operations,data_lifecycle,reports}.rs`、`db/api_operations/*` | `northstar-operations-postgres` 的同名模組 | adapter |
+| `db/admin_commands/{command_sessions,runtime_control}.rs`、`db/{admin_session_cleanup_worker,runtime_control,operation_effect_fence,operation_journal_worker}_repository.rs` | `northstar-operations-postgres` 的同名模組 | adapter |
+| `xmpp/protocol/commands/{execution,forms}.rs` 與 `commands.rs` 的處理器 | `northstar_operations_xmpp::commands` | adapter |
+| `db/role_attestation.rs`、`db/role_attestation/*` | `northstar_postgres::role_attestation` | platform |
+| `db/{admin_mutations,admin_dispatch_repository,governance_repository,invitation_admin_repository,operation_admin_repository,report_repository,report_moderation_repository,upload_admin_repository}.rs` | `northstar-workflows` 的同名模組 | workflows |
+| `db/users.rs` 的跨上下文項目 | `northstar_workflows::account_lifecycle` | workflows |
+| `db/admin_commands.rs`、`db/admin_commands/accounts.rs` | `northstar_workflows::admin_accounts` | workflows |
+| `db/{admin_command_repository,account_admin_repository,retention_policy_repository,metrics_snapshot_repository}.rs`、`db/{api_pages,api_queries}.rs`、`db/retention.rs` 的清除函式 | `northstar-workflows` 的同名模組 | workflows |
+| `db/{account_repository,account_deletion,http_login_repository,password_change_repository}.rs` | `northstar-workflows` 的同名模組 | workflows |
+| `AppState` 的十五個服務欄位 | `state/operations_module.rs` 的 `OperationsModule` | 組合根 |
+
+operations 的四個 crate 共 14,649 行（core 180、application 5,051、postgres 7,446、xmpp 1,972），`northstar-workflows` 7,502 行。
+
+`northstar-workflows` 是唯一可以同時依賴多個上下文 `-postgres` 的 crate。驗證器與 crate 目錄多了 workflows 角色：kernel、
+platform、任何 core、任何 application、任何 `-postgres`；不可依賴 `-xmpp`、`-http` 與 edge。舊的分層表把它列為 adapter，
+和 4.5 矛盾，這次改正。
+
+`PostgresAccountRepository<E>` 與 `PostgresAdminCommandRepository<E>` 的帳號刪除有一步碰到房間資料表，由
+`AccountDeletionEffects` 在同一交易內交給根 crate 的 `RootRosterEffects`。它繼承 `RosterTransactionEffects`，所以名冊的
+三步也走同一個實作。根 crate 以型別別名固定 `E`。
+
+新決定：
+
+- `AdminMutationStore` 嵌在許多 repository 中，不做成泛型。叢集健康經 `AdminMutationGate` 這個同步 port 傳入，
+  `ClusterAdmission` 實作，存成 `Arc<dyn>`。連線池准入之後的再次檢查不變。
+- `db/capacity` 不進 operations。它的函式全是 session 上下文的存活會話租約，4.2 的 session 列本來就列了容量，所以
+  operations 列改掉，檔案隨 S29 移動。
+- 角色證明檢查整個 schema，不屬於任何上下文，進入 `northstar-postgres`。
+- 封存保存 worker 只用 tokio 的計時，沒有網路，可以留在 application 層。
+- 稽核過的法律保留清單要通過 auth 的 bearer fence，交易在 workflows 的 governance repository；
+  `northstar-operations-postgres` 只保留界限檢查與交易內的查詢。步驟順序不變。
+- 管理命令的處理器對 `CommandSession` 泛型，回覆是 `Result<String>`；根 crate 為 `ProtocolSession` 實作這個 trait，並把回覆
+  轉成 `Action::Send`。形式與 `RosterSession` 相同。
+- `OperationRecord.idempotency_id` 在兩個 crate 中都會建構，cfg 限定的欄位做不到，改成無條件欄位。
+- 測試留在根 crate 的條件和 S23 相同。REST 操作、帳號刪除、註冊防護、密碼變更、管理命令與保存的資料庫測試都是這種情況，
+  留在 `src/db/*_tests.rs`；純測試隨程式碼移動。
+
+根 crate 中仍與 operations 有關的程式碼與去處：
+
+- `db/operation_muc_destroy_repository.rs`、`db/operation_muc_wake_repository.rs`、`services/operation_muc_wake.rs`：
+  操作的是房間資料表，隨 S26 移動。
+- `db/roster.rs` 的別名與 `AccountDeletionEffects` 實作：等房間的那一步能直接呼叫 `northstar-room-postgres`，隨 S26 退役。
+- `db/retention.rs` 剩下的 `PostgresMaintenanceRepository` 與 `purge_expired_retraction_intents`：屬於 message，隨 S27 移動。
+- `db/readiness_repository.rs`（讀叢集金鑰）、`db/capacity*`、`db/authentication_effects.rs`（呼叫 `capacity`）、
+  `session_identity`：隨 S29 移動。
+- `xmpp/protocol/commands.rs` 的 `CommandSession` 綁定與 `api/*` 的 handler：隨 S30/S31 移動。
+
+根 crate 由 705 檔 325,446 行變為 653 檔 302,731 行。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點）。
@@ -979,6 +1039,13 @@ WP-255a 是 S23 推上 dev 後才補的：WP-253 改了 Stage 4 綁定的 `scrip
      （S24）。
    - 官方資料庫腳本對 schema 前綴、角色與「一個測試一個 schema」都有要求。臨時執行時要照腳本設定，否則測試會拒絕執行或互相
      污染容量計數，看起來像程式碼失敗（S24）。
+   - 搬移腳本刪掉 `#[cfg]` 底下的 `use` 時，屬性會留給下一個項目。`test-support` 的 feature 統一會蓋住這個生產建置錯誤，
+     所以本機驗證現在會單獨跑一次不含測試的 `cargo check --workspace --lib --bins`（S25）。
+   - 在另一個 crate 建構的結構體不能有 cfg 限定的欄位，feature 統一後兩邊看到的形狀不同（S25）。
+   - `clippy -p` 只檢查列出的 package。改到的 crate 都要列上，否則 lint 錯誤要到完整驗證才出現（S25）。
+   - 名稱對應規則要等對應的 WP 存在才加，提早加入會讓驗證回報假的名稱差異（S25）。
+   - 門禁以字串比對的片段會被 rustfmt 換行，或被 `pub(crate)` 改成 `pub` 弄斷。搬移後掃描 `scripts/` 要連同這兩種變化
+     一起比對（S25）。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -1214,3 +1281,15 @@ Stage 證據仍綁定其原提交。
 | WP-262 | 完成：建立 `northstar-auth-xmpp`（`sasl2`、`ibr`）；`strict_xdata_submit` 進入 `northstar_xml_builder::xdata` 並回傳 `InvalidForm`；串流開頭解析與 `impl ProtocolSession` 留在根 crate | 見 `git log --grep '\[WP-262\]'` |
 | WP-263 | 完成：`AppState` 以 `AuthModule` 持有九個服務，組合根只保留可能失敗的啟動步驟，accessor 不變 | 見 `git log --grep '\[WP-263\]'` |
 | WP-264 | 完成：記錄 S24 的階段與盤點（5.20）與 4.5 的例子。WP-256–263 依序接到 WP-255a 之上；fmt、clippy、workspace 測試、層級、模糊測試、本機 PostgreSQL 套件與全部門禁通過 | 見 `git log --grep '\[WP-264\]'` |
+| WP-265 | 完成：上傳死信值進入 `northstar-upload-core`，濫用金鑰身分進入 `northstar-abuse-policy`，API 登出命令併入 auth 的 application 與 postgres | 見 `git log --grep '\[WP-265\]'` |
+| WP-266 | 完成：建立 `northstar-operations-application`；碰資料庫的服務測試留在根 crate 的 `db::admin_read_authorization_tests` | 見 `git log --grep '\[WP-266\]'` |
+| WP-267 | 完成：建立 `northstar-operations-postgres`（`api_control`、`api_mutations`、`api_operations`、`reports`、`data_lifecycle`）；法律保留清單的交易移到 governance repository | 見 `git log --grep '\[WP-267\]'` |
+| WP-268 | 完成：管理命令會話與執行期控制移入 `northstar-operations-postgres`；角色證明進入 `northstar-postgres`；`ServiceMessageDeliveryClaim` 進入 `northstar-roster-core` | 見 `git log --grep '\[WP-268\]'` |
+| WP-269 | 完成：建立 `northstar-workflows`（`AdminMutationStore` 與六個 repository），驗證器與 crate 目錄加入 workflows 角色；`AdminMutationGate` 接上叢集健康 | 見 `git log --grep '\[WP-269\]'` |
+| WP-270 | 完成：帳號生命週期、管理命令、保存政策、分頁與指標快照進入 workflows；操作工作者與圍欄 repository 進入 `northstar-operations-postgres`；`AccountDeletionEffects` 取出房間的一步 | 見 `git log --grep '\[WP-270\]'` |
+| WP-271 | 完成：封存保存 worker 進入 `northstar_operations_application::retention_worker` | 見 `git log --grep '\[WP-271\]'` |
+| WP-272 | 完成：建立 `northstar-operations-xmpp`；`CommandSession` 隔開處理器與 `ProtocolSession`，`AdminScramPolicy` 進入 application | 見 `git log --grep '\[WP-272\]'` |
+| WP-273 | 完成：REST 查詢 repository 進入 `northstar_workflows::api_queries` | 見 `git log --grep '\[WP-273\]'` |
+| WP-274 | 完成：`AppState` 以 `OperationsModule` 持有十五個服務，能力清單的門禁改列模組 | 見 `git log --grep '\[WP-274\]'` |
+| WP-275 | 完成：`http_login_repository`、`password_change_repository`、`account_repository`、`account_deletion` 進入 workflows；`db/authentication_effects.rs` 因呼叫 `capacity` 留到 S29 | 見 `git log --grep '\[WP-275\]'` |
+| WP-276 | 完成：記錄 S25 的階段與盤點（5.21）、4.1 的 workflows 角色、4.2 與 4.5。WP-265–275 依序接到 WP-264 之上；fmt、clippy、workspace 測試、層級、模糊測試、本機 PostgreSQL 套件與全部門禁通過 | 見 `git log --grep '\[WP-276\]'` |

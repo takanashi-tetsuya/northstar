@@ -103,7 +103,7 @@ pub(super) async fn deliver_claimed_channel_stanza(
 pub(super) async fn send_claimed_cluster_mix(
     context: &MixOutboxContext,
     request: &mix_worker::ClusterRequest,
-) -> Result<crate::cluster::NodeDeliveryReceipt> {
+) -> Result<northstar_delivery_core::node_delivery::NodeDeliveryReceipt> {
     request.start()?;
     let result = context
         .send_cluster_mix(
@@ -119,17 +119,17 @@ pub(super) async fn send_claimed_cluster_mix(
 
 pub(super) fn record_claimed_cluster_result(
     request: &mix_worker::ClusterRequest,
-    result: &Result<crate::cluster::NodeDeliveryReceipt>,
+    result: &Result<northstar_delivery_core::node_delivery::NodeDeliveryReceipt>,
 ) -> Result<()> {
     let handoff = match result {
         Ok(receipt) if receipt.acknowledged => receipt.mix_handoff.map(|handoff| match handoff {
-            crate::cluster::ClusterMixHandoff::SocketFenced => {
+            northstar_delivery_core::node_delivery::ClusterMixHandoff::SocketFenced => {
                 mix_worker::TransferBoundary::ClusterSocketFenced
             }
-            crate::cluster::ClusterMixHandoff::SmPersisted => {
+            northstar_delivery_core::node_delivery::ClusterMixHandoff::SmPersisted => {
                 mix_worker::TransferBoundary::ClusterSmPersisted
             }
-            crate::cluster::ClusterMixHandoff::BoshPersisted => {
+            northstar_delivery_core::node_delivery::ClusterMixHandoff::BoshPersisted => {
                 mix_worker::TransferBoundary::ClusterBoshPersisted
             }
         }),

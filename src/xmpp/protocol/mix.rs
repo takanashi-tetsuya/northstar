@@ -121,6 +121,9 @@ use northstar_room_application::mix_service::{
     NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG, NODE_INFO, NODE_JIDMAP, NODE_MESSAGES,
     NODE_PRESENCE,
 };
+pub(crate) use northstar_room_core::mix::{
+    MixSessionCapability, ADMIN_NS, ANON_NS, CORE_NS, MISC_NS, PAM_NS, PRESENCE_NS,
+};
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 pub(crate) use worker::start_mix_delivery_outbox;
 use worker::*;
@@ -130,7 +133,7 @@ use forms::{
     preference_template_form,
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, StreamExt};
-use northstar_protocol_runtime::mix::{MixIqRelayStage, PendingMixIqRelay};
+use northstar_room_core::mix_iq_relay::{MixIqRelayStage, PendingMixIqRelay};
 use roxmltree::{Document, Node};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -143,12 +146,6 @@ use crate::xmpp::local_routes::session_table::{
     mix_presence_epoch_is_current, mix_presence_fallback_is_suppressed,
 };
 
-pub(crate) const CORE_NS: &str = "urn:xmpp:mix:core:1";
-pub(crate) const PAM_NS: &str = "urn:xmpp:mix:pam:2";
-pub(crate) const ADMIN_NS: &str = "urn:xmpp:mix:admin:0";
-pub(crate) const PRESENCE_NS: &str = "urn:xmpp:mix:presence:0";
-pub(crate) const ANON_NS: &str = "urn:xmpp:mix:anon:0";
-pub(crate) const MISC_NS: &str = "urn:xmpp:mix:misc:0";
 const PUBSUB_NS: &str = "http://jabber.org/protocol/pubsub";
 const MAM_NS: &str = "urn:xmpp:mam:2";
 const MAX_CHANNELS_PER_OWNER: i64 = 100;
@@ -158,8 +155,8 @@ const MAX_ITEMS_PAGE: i64 = 200;
 /// drained by a single supervised worker; admission never creates one timer
 /// task per untrusted request.
 #[allow(unused_imports)]
-pub(crate) use northstar_protocol_runtime::mix::MixIqRelayIndex;
-pub(crate) use northstar_protocol_runtime::mix::MIX_IQ_RELAY_TTL;
+pub(crate) use northstar_room_core::mix_iq_relay::MixIqRelayIndex;
+pub(crate) use northstar_room_core::mix_iq_relay::MIX_IQ_RELAY_TTL;
 
 fn same_jid_domain(left: &str, right: &str) -> bool {
     matches!(
@@ -176,13 +173,6 @@ fn local_mix_domain(state: &AppState) -> String {
 fn local_muc_domain(state: &AppState) -> String {
     prepare_domainpart(&format!("conference.{}", state.local_domain()))
         .expect("configured XMPP domain must form a valid MUC service domain")
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MixSessionCapability {
-    Supported,
-    Unsupported,
-    Unknown,
 }
 
 pub(crate) fn session_mix_capability(state: &AppState, full_jid: &str) -> MixSessionCapability {

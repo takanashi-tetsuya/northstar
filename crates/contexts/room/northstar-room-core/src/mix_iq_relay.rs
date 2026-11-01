@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+//! The MIX IQ relay correlation index: one linearizable budget of pending relays.
 
 use dashmap::DashMap;
 use std::sync::Mutex;

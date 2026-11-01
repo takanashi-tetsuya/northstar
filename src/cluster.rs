@@ -53,7 +53,7 @@ mod workers;
 use listener::*;
 
 use self::authority::*;
-pub use self::delivery_contract::*;
+pub(crate) use self::delivery_contract::*;
 pub use self::health::*;
 pub(crate) use self::listener_policy::{
     ClusterListenerMessagePolicy, ClusterMixCapability, SessionTerminationEffect,

@@ -1,6 +1,20 @@
 //! Data-only facts for one ordinary MIX message. Read evidence is distinct
 //! from the fresh message transaction and from durable outbox delivery.
 
+pub const CORE_NS: &str = "urn:xmpp:mix:core:1";
+pub const PAM_NS: &str = "urn:xmpp:mix:pam:2";
+pub const ADMIN_NS: &str = "urn:xmpp:mix:admin:0";
+pub const PRESENCE_NS: &str = "urn:xmpp:mix:presence:0";
+pub const ANON_NS: &str = "urn:xmpp:mix:anon:0";
+pub const MISC_NS: &str = "urn:xmpp:mix:misc:0";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MixSessionCapability {
+    Supported,
+    Unsupported,
+    Unknown,
+}
+
 use northstar_xmpp_types::CanonicalJid;
 pub use uuid::Uuid as Id;
 

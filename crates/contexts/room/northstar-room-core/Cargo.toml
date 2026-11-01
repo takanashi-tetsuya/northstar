@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
+dashmap = "6.1"
 hmac = "0.12"
 northstar-xep-0045 = { path = "../../../kernel/northstar-xep-0045" }
 northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }

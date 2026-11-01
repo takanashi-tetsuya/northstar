@@ -1896,7 +1896,9 @@ name = "northstar-archive-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "northstar-xep-0313",
  "northstar-xmpp-types",
+ "roxmltree",
  "serde",
  "uuid",
 ]
@@ -1922,6 +1924,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "northstar-archive-application",
+ "northstar-archive-core",
  "northstar-xep-0313",
  "northstar-xep-0359",
  "northstar-xml-builder",
@@ -2038,6 +2041,7 @@ version = "0.1.0"
 dependencies = [
  "northstar-xmpp-types",
  "roxmltree",
+ "serde",
  "uuid",
 ]
 
@@ -2297,6 +2301,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "dashmap",
  "hmac",
  "northstar-federation-core",
  "northstar-xep-0045",

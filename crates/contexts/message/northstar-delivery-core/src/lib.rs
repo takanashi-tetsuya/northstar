@@ -5,6 +5,7 @@
 pub mod bosh_ownership;
 pub mod mix_outbox;
 pub mod native_write;
+pub mod node_delivery;
 pub mod sm_ownership;
 
 use std::{future::Future, pin::Pin};

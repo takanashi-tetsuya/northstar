@@ -11,6 +11,7 @@ publish = false
 anyhow = "1.0"
 chrono = "0.4"
 northstar-archive-application = { path = "../northstar-archive-application" }
+northstar-archive-core = { path = "../northstar-archive-core" }
 northstar-xep-0313 = { path = "../../../kernel/northstar-xep-0313" }
 northstar-xep-0359 = { path = "../../../kernel/northstar-xep-0359" }
 northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }

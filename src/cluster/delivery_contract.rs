@@ -1,6 +1,7 @@
 //! Peer protocol versions, node delivery contracts, presence authority and delivery acknowledgements.
 
 use super::*;
+pub(super) use northstar_delivery_core::node_delivery::{ClusterMixHandoff, NodeDeliveryReceipt};
 
 pub(super) fn requires_correlated_ack(peer_version: Option<&str>) -> bool {
     peer_version
@@ -108,17 +109,6 @@ pub(super) fn cluster_roster_push_version(stanza: &str) -> Option<i64> {
         return None;
     }
     query.attribute("ver")?.parse().ok()
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct NodeDeliveryReceipt {
-    pub delivered: bool,
-    pub accepted_full_jid: Option<String>,
-    pub acknowledged: bool,
-    pub mix_supported: usize,
-    pub mix_unsupported: usize,
-    pub mix_unknown: usize,
-    pub mix_handoff: Option<ClusterMixHandoff>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -275,17 +265,6 @@ pub(super) enum NodeDeliveryContract {
         delivery_id: uuid::Uuid,
         lease_token: uuid::Uuid,
     },
-}
-
-/// The durable local boundary reached by a remote node after it accepted one
-/// exact MIX source. The source node uses this only to decide that its old
-/// lease was transferred; database rows retain the actual new lease token.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ClusterMixHandoff {
-    SocketFenced,
-    SmPersisted,
-    BoshPersisted,
 }
 
 impl NodeDeliveryContract {

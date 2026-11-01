@@ -964,7 +964,9 @@ digraph compile_time {
   "northstar-archive-application" -> "tokio";
   "northstar-archive-application" -> "uuid";
   "northstar-archive-core" -> "chrono";
+  "northstar-archive-core" -> "northstar-xep-0313";
   "northstar-archive-core" -> "northstar-xmpp-types";
+  "northstar-archive-core" -> "roxmltree";
   "northstar-archive-core" -> "serde";
   "northstar-archive-core" -> "uuid";
   "northstar-archive-postgres" -> "anyhow";
@@ -978,6 +980,7 @@ digraph compile_time {
   "northstar-archive-xmpp" -> "anyhow";
   "northstar-archive-xmpp" -> "chrono";
   "northstar-archive-xmpp" -> "northstar-archive-application";
+  "northstar-archive-xmpp" -> "northstar-archive-core";
   "northstar-archive-xmpp" -> "northstar-xep-0313";
   "northstar-archive-xmpp" -> "northstar-xep-0359";
   "northstar-archive-xmpp" -> "northstar-xml-builder";
@@ -1058,6 +1061,7 @@ digraph compile_time {
   "northstar-config" -> "zeroize";
   "northstar-delivery-core" -> "northstar-xmpp-types";
   "northstar-delivery-core" -> "roxmltree";
+  "northstar-delivery-core" -> "serde";
   "northstar-delivery-core" -> "uuid";
   "northstar-federation-application" -> "northstar-federation-core";
   "northstar-federation-application" -> "northstar-xmpp-types";
@@ -1215,6 +1219,7 @@ digraph compile_time {
   "northstar-room-application" -> "uuid";
   "northstar-room-core" -> "anyhow";
   "northstar-room-core" -> "chrono";
+  "northstar-room-core" -> "dashmap";
   "northstar-room-core" -> "hmac";
   "northstar-room-core" -> "northstar-federation-core";
   "northstar-room-core" -> "northstar-xep-0045";

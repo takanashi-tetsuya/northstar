@@ -759,7 +759,7 @@ impl AppState {
             s2s_connection_registry: Arc::new(crate::s2s::S2sConnectionRegistry::default()),
             s2s_dns_resolver,
             s2s_dnssec_resolver,
-            pending_mix_iq: Arc::new(northstar_protocol_runtime::mix::MixIqRelayIndex::new()),
+            pending_mix_iq: Arc::new(northstar_room_core::mix_iq_relay::MixIqRelayIndex::new()),
             caps_cache: Arc::new(northstar_protocol_runtime::caps::CapsCacheIndex::new()),
             caps_by_jid: Arc::new(northstar_protocol_runtime::caps::CapsResourceIndex::new()),
             pending_caps: Arc::new(northstar_protocol_runtime::caps::PendingCapsIndex::new()),

@@ -6,19 +6,18 @@ use super::{
 };
 use crate::db::room_effects::PostgresMixRepository;
 use crate::{
-    cluster::{ClusterMixRouteLookup, ClusterNodeDelivery, NodeDeliveryReceipt},
+    cluster::{ClusterMixRouteLookup, ClusterNodeDelivery},
     s2s::FederationRouter,
+    xmpp::capabilities::MixPostCommitTelemetry,
     xmpp::outbound::MixDelivery,
-    xmpp::{
-        capabilities::MixPostCommitTelemetry,
-        protocol::mix::{MixSessionCapability, CORE_NS, PAM_NS},
-    },
 };
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_config::ExternalRouteDomainPolicy;
+use northstar_delivery_core::node_delivery::NodeDeliveryReceipt;
 use northstar_protocol_runtime::caps::{CapsObservationOwner, CapsResourceIndex, PendingCapsIndex};
 use northstar_room_application::mix_service::MixService;
+use northstar_room_core::mix::{MixSessionCapability, CORE_NS, PAM_NS};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,

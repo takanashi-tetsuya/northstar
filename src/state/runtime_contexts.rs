@@ -270,7 +270,7 @@ impl AppState {
         &self.caps_effect_dispatcher
     }
 
-    pub(crate) fn pending_mix_iq(&self) -> &northstar_protocol_runtime::mix::MixIqRelayIndex {
+    pub(crate) fn pending_mix_iq(&self) -> &northstar_room_core::mix_iq_relay::MixIqRelayIndex {
         self.pending_mix_iq.as_ref()
     }
 

@@ -101,7 +101,7 @@ pub(super) fn accepted_cluster_message_delivery(
     state: &AppState,
     node_id: &str,
     target: &str,
-    receipt: &crate::cluster::NodeDeliveryReceipt,
+    receipt: &northstar_delivery_core::node_delivery::NodeDeliveryReceipt,
 ) -> bool {
     if receipt.delivered && !receipt.acknowledged {
         state.personal_message_telemetry().cluster_legacy_accepted();

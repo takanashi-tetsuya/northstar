@@ -2027,7 +2027,15 @@
       ],
       [
         "northstar-archive-core",
+        "northstar-xep-0313"
+      ],
+      [
+        "northstar-archive-core",
         "northstar-xmpp-types"
+      ],
+      [
+        "northstar-archive-core",
+        "roxmltree"
       ],
       [
         "northstar-archive-core",
@@ -2080,6 +2088,10 @@
       [
         "northstar-archive-xmpp",
         "northstar-archive-application"
+      ],
+      [
+        "northstar-archive-xmpp",
+        "northstar-archive-core"
       ],
       [
         "northstar-archive-xmpp",
@@ -2400,6 +2412,10 @@
       [
         "northstar-delivery-core",
         "roxmltree"
+      ],
+      [
+        "northstar-delivery-core",
+        "serde"
       ],
       [
         "northstar-delivery-core",
@@ -3028,6 +3044,10 @@
       [
         "northstar-room-core",
         "chrono"
+      ],
+      [
+        "northstar-room-core",
+        "dashmap"
       ],
       [
         "northstar-room-core",

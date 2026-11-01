@@ -1,9 +1,10 @@
 //! Cluster operations used by federated MUC handlers.
 
 use super::{AppState, SerializableMucOccupant};
-use crate::cluster::{MucRename, MucRoleChange, NodeDeliveryReceipt};
+use crate::cluster::{MucRename, MucRoleChange};
 use crate::xmpp::outbound::DurableDelivery;
 use anyhow::Result;
+use northstar_delivery_core::node_delivery::NodeDeliveryReceipt;
 use std::collections::HashMap;
 
 pub(crate) struct FederatedMucAccountRoute {
@@ -272,7 +273,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::accepted_primary_route;
-    use crate::cluster::NodeDeliveryReceipt;
+    use northstar_delivery_core::node_delivery::NodeDeliveryReceipt;
 
     #[test]
     fn account_route_requires_delivery_and_acknowledgement() {

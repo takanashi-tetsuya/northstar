@@ -280,27 +280,29 @@ fn mix_worker_cluster_adapter_consumes_typed_handoff_but_never_a_delivered_boole
     use northstar_room_application::mix_service::outbox::{core, fixture};
     for (boundary, expected) in [
         (
-            crate::cluster::ClusterMixHandoff::SocketFenced,
+            northstar_delivery_core::node_delivery::ClusterMixHandoff::SocketFenced,
             core::TransferBoundary::ClusterSocketFenced,
         ),
         (
-            crate::cluster::ClusterMixHandoff::SmPersisted,
+            northstar_delivery_core::node_delivery::ClusterMixHandoff::SmPersisted,
             core::TransferBoundary::ClusterSmPersisted,
         ),
         (
-            crate::cluster::ClusterMixHandoff::BoshPersisted,
+            northstar_delivery_core::node_delivery::ClusterMixHandoff::BoshPersisted,
             core::TransferBoundary::ClusterBoshPersisted,
         ),
     ] {
         let (owner, route) = fixture::route(false);
         let request = route.cluster_request("node-b".into()).unwrap();
         request.start().unwrap();
-        let result = Ok(crate::cluster::NodeDeliveryReceipt {
-            acknowledged: true,
-            delivered: true,
-            mix_handoff: Some(boundary),
-            ..Default::default()
-        });
+        let result = Ok(
+            northstar_delivery_core::node_delivery::NodeDeliveryReceipt {
+                acknowledged: true,
+                delivered: true,
+                mix_handoff: Some(boundary),
+                ..Default::default()
+            },
+        );
         record_claimed_cluster_result(&request, &result).unwrap();
         assert_eq!(
             owner.snapshot().transfer,
@@ -317,17 +319,23 @@ fn mix_worker_cluster_adapter_consumes_typed_handoff_but_never_a_delivered_boole
         assert!(owner.snapshot().settlement.is_none());
     }
     for result in [
-        Ok(crate::cluster::NodeDeliveryReceipt {
-            acknowledged: true,
-            delivered: true,
-            ..Default::default()
-        }),
-        Ok(crate::cluster::NodeDeliveryReceipt {
-            acknowledged: false,
-            delivered: true,
-            mix_handoff: Some(crate::cluster::ClusterMixHandoff::SmPersisted),
-            ..Default::default()
-        }),
+        Ok(
+            northstar_delivery_core::node_delivery::NodeDeliveryReceipt {
+                acknowledged: true,
+                delivered: true,
+                ..Default::default()
+            },
+        ),
+        Ok(
+            northstar_delivery_core::node_delivery::NodeDeliveryReceipt {
+                acknowledged: false,
+                delivered: true,
+                mix_handoff: Some(
+                    northstar_delivery_core::node_delivery::ClusterMixHandoff::SmPersisted,
+                ),
+                ..Default::default()
+            },
+        ),
         Err(anyhow::anyhow!("cluster receipt error")),
     ] {
         let (owner, route) = fixture::route(false);

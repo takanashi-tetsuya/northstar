@@ -44,8 +44,8 @@ impl ClusterListenerMixCaps {
         }
         match observation.summary {
             Some(summary)
-                if summary.has_feature(crate::xmpp::protocol::mix::CORE_NS)
-                    || summary.has_feature(crate::xmpp::protocol::mix::PAM_NS) =>
+                if summary.has_feature(northstar_room_core::mix::CORE_NS)
+                    || summary.has_feature(northstar_room_core::mix::PAM_NS) =>
             {
                 ClusterMixCapability::Supported
             }

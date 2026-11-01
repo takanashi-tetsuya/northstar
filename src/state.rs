@@ -391,7 +391,7 @@ pub struct AppState {
     s2s_dnssec_resolver: Option<TokioResolver>,
     /// XEP-0403 IQ relay correlations. Keys are server-generated opaque IQ
     /// ids, never client-controlled ids; entries are bounded and short-lived.
-    pending_mix_iq: Arc<northstar_protocol_runtime::mix::MixIqRelayIndex>,
+    pending_mix_iq: Arc<northstar_room_core::mix_iq_relay::MixIqRelayIndex>,
     /// XEP-0115 entries are inserted only after the advertised verification
     /// string has been recomputed successfully. Unverified payloads never
     /// enter this shared cache.

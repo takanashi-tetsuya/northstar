@@ -4,7 +4,7 @@ use super::{session_entries_for_in, AppState, OnlineSession, RuntimeFederationPo
 use crate::s2s::FederationRouter;
 use dashmap::DashMap;
 use northstar_config::ExternalRouteDomainPolicy;
-use northstar_protocol_runtime::mix::{MixIqRelayIndex, PendingMixIqRelay};
+use northstar_room_core::mix_iq_relay::{MixIqRelayIndex, PendingMixIqRelay};
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 use std::{sync::Arc, time::Instant};
 

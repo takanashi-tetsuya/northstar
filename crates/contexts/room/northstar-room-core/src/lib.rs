@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod mix;
+pub mod mix_iq_relay;
 pub mod occupancy;
 pub mod stanza;
 

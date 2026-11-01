@@ -8,7 +8,9 @@ description = "Capability-free XEP-0313 MAM archive domain models, visibility pr
 publish = false
 
 [dependencies]
+northstar-xep-0313 = { path = "../../../kernel/northstar-xep-0313" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+roxmltree = "0.20"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 uuid = { version = "1.12", features = ["v4", "serde"] }

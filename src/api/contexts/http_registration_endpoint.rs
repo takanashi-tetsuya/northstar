@@ -1,6 +1,6 @@
 //! REST registration capability: account admission, proxy policy and outcome counters.
 
-use crate::db::account_repository::PostgresAccountRepository;
+use crate::db::roster::RootAccountRepository;
 use northstar_auth_application::account::{AccountService, HttpRegistrationAvailability};
 use std::{
     net::IpAddr,
@@ -12,7 +12,7 @@ use std::{
 
 #[derive(Clone)]
 pub(crate) struct HttpRegistrationEndpointContext {
-    pub(crate) service: AccountService<PostgresAccountRepository>,
+    pub(crate) service: AccountService<RootAccountRepository>,
     pub(crate) availability: HttpRegistrationAvailability,
     pub(crate) trusted_proxies: Vec<IpAddr>,
     pub(crate) registrations: Arc<AtomicU64>,
@@ -21,7 +21,7 @@ pub(crate) struct HttpRegistrationEndpointContext {
 }
 
 impl HttpRegistrationEndpointContext {
-    pub(crate) fn service(&self) -> &AccountService<PostgresAccountRepository> {
+    pub(crate) fn service(&self) -> &AccountService<RootAccountRepository> {
         &self.service
     }
 

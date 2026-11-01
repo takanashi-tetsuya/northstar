@@ -2557,6 +2557,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "thiserror 2.0.20",
+ "tracing",
  "uuid",
  "zeroize",
 ]

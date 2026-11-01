@@ -1,7 +1,5 @@
-pub(crate) mod http_login_repository;
 pub(crate) mod operation_muc_destroy_repository;
 pub(crate) mod operation_muc_wake_repository;
-pub(crate) mod password_change_repository;
 #[cfg(test)]
 pub(crate) mod test_support;
 use anyhow::{Context, Result};
@@ -16,8 +14,6 @@ pub(crate) mod abuse_effects;
 mod abuse_guard_tests;
 #[cfg(test)]
 mod abuse_keys_tests;
-pub mod account_deletion;
-pub mod account_repository;
 #[cfg(test)]
 mod account_revocations_tests;
 #[cfg(test)]
@@ -98,7 +94,6 @@ pub mod sm_repository;
 pub(crate) mod sm_teardown_muc_repository;
 pub(crate) mod sm_teardown_presence_repository;
 pub(crate) mod sm_teardown_repository;
-pub use account_deletion::*;
 pub use archive::*;
 pub use capacity::*;
 pub use cluster_keys::*;
@@ -218,6 +213,10 @@ pub(crate) mod omemo_recovery_repository;
 #[cfg(test)]
 mod account_admin_repository_tests;
 #[cfg(test)]
+mod account_deletion_tests;
+#[cfg(test)]
+mod account_repository_registration_guard_tests;
+#[cfg(test)]
 mod admin_command_sessions_tests;
 #[cfg(test)]
 mod admin_commands_boundary_tests;
@@ -239,6 +238,8 @@ mod governance_repository_tests;
 mod invitation_admin_repository_tests;
 #[cfg(test)]
 mod operation_journal_worker_repository_tests;
+#[cfg(test)]
+mod password_change_repository_tests;
 #[cfg(test)]
 mod report_moderation_repository_tests;
 #[cfg(test)]

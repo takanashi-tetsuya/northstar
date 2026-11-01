@@ -19,6 +19,9 @@ mod blocking_match_tests;
 /// The roster adapter with the root crate's transaction steps.
 pub(crate) type PostgresRosterRepository =
     northstar_roster_postgres::roster::PostgresRosterRepository<RootRosterEffects>;
+pub(crate) type RootAccountRepository =
+    northstar_workflows::account_repository::PostgresAccountRepository<RootRosterEffects>;
+
 pub(crate) type RootAdminCommandRepository =
     northstar_workflows::admin_command_repository::PostgresAdminCommandRepository<
         RootRosterEffects,

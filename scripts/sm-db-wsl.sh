@@ -39,7 +39,7 @@ run_exact_ignored \
 run_exact_ignored \
   db::sm::tests::account_deletion_quiesce_closes_all_sm_race_barriers
 run_exact_ignored \
-  db::account_deletion::tests::deletion_recovery_is_delayed_single_owner_and_cascading
+  db::account_deletion_tests::deletion_recovery_is_delayed_single_owner_and_cascading
 run_exact_ignored \
   services::sm::tests::binding_reservation_is_bounded_leased_and_rechecks_auth_generation
 run_exact_ignored \

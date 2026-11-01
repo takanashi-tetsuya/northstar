@@ -1,8 +1,8 @@
 //! REST login transport capability: credential use case, immutable proxy
 //! policy, and only the two counters this endpoint can increment.
 
-use crate::db::http_login_repository::PostgresHttpLoginRepository;
 use northstar_auth_application::http_login::HttpLoginService;
+use northstar_workflows::http_login_repository::PostgresHttpLoginRepository;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

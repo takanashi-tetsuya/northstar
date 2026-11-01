@@ -11,14 +11,14 @@ use northstar_auth_application::authentication::AuthenticationService;
 pub(super) struct AuthModule {
     pub(super) passkey_service: Arc<PasskeyService>,
     pub(super) account_service: northstar_auth_application::account::AccountService<
-        db::account_repository::PostgresAccountRepository,
+        crate::db::roster::RootAccountRepository,
     >,
     pub(super) login_service: northstar_auth_application::http_login::HttpLoginService<
-        db::http_login_repository::PostgresHttpLoginRepository,
+        northstar_workflows::http_login_repository::PostgresHttpLoginRepository,
     >,
     pub(super) password_change_service:
         northstar_auth_application::password_change::PasswordChangeService<
-            db::password_change_repository::PostgresPasswordChangeRepository,
+            northstar_workflows::password_change_repository::PostgresPasswordChangeRepository,
         >,
     /// Credential lookup, verification and XEP-0484 mutation authority. The
     /// protocol layer receives typed outcomes but neither PgPool nor the FAST
@@ -66,10 +66,11 @@ impl AuthModule {
             dummy_scram_iteration_profiles,
         } = parts;
         let account_service = northstar_auth_application::account::AccountService::new(
-            db::account_repository::PostgresAccountRepository::new(
+            crate::db::roster::RootAccountRepository::new(
                 pool.clone(),
                 config.domain.clone(),
                 Arc::clone(abuse),
+                crate::db::roster::RootRosterEffects,
             )
             .with_api_control(Arc::clone(api_control)),
             config.configured_registration_mode()
@@ -79,7 +80,7 @@ impl AuthModule {
             config.scram_sha1_enabled,
         );
         let login_service = northstar_auth_application::http_login::HttpLoginService::new(
-            db::http_login_repository::PostgresHttpLoginRepository::new(
+            northstar_workflows::http_login_repository::PostgresHttpLoginRepository::new(
                 pool.clone(),
                 Arc::clone(abuse),
                 Arc::clone(api_control),
@@ -95,7 +96,7 @@ impl AuthModule {
         );
         let password_change_service =
             northstar_auth_application::password_change::PasswordChangeService::new(
-                db::password_change_repository::PostgresPasswordChangeRepository::new(
+                northstar_workflows::password_change_repository::PostgresPasswordChangeRepository::new(
                     pool.clone(),
                     Arc::clone(api_control),
                     Arc::clone(abuse),

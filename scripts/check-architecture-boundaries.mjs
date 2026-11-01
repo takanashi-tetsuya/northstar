@@ -2726,7 +2726,7 @@ if (!/\.service\(\)[\s\S]+\.register_http\(HttpRegistrationRequest/.test(registr
 if (/(?:\bstate\s*\.\s*pool\b|\bdb::(?:acquire_idempotency_in_tx|prepare_registration|create_user_with_invitation_guarded_in_tx_v2)\b|\btransaction\b|\bPgPool\b)/.test(registrationHandler)) {
   throw new Error('HTTP registration regained SQL, transaction or password-work authority');
 }
-const accountRepositorySource = read('src/db/account_repository.rs');
+const accountRepositorySource = read('crates/contexts/workflows/northstar-workflows/src/account_repository.rs');
 const httpRegistrationRepository = accountRepositorySource.slice(
   accountRepositorySource.indexOf('async fn register_http('),
   accountRepositorySource.indexOf('async fn verify_registration_guard('),

@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
-    db::account_repository::PostgresAccountRepository,
+    db::roster::RootAccountRepository,
     s2s::FederationRouter,
     xmpp::xml_builder::XmlElement,
 };
@@ -114,7 +114,7 @@ impl AccountDeletionPresence {
 }
 
 pub(crate) struct AccountDeletionRecoveryContext {
-    accounts: AccountService<PostgresAccountRepository>,
+    accounts: AccountService<RootAccountRepository>,
     sm: SessionCleanupSmRevoker,
     roster: RosterPushDelivery,
     presence: AccountDeletionPresence,

@@ -209,7 +209,7 @@ impl AppState {
     pub(crate) fn account_service(
         &self,
     ) -> &northstar_auth_application::account::AccountService<
-        db::account_repository::PostgresAccountRepository,
+        crate::db::roster::RootAccountRepository,
     > {
         &self.auth.account_service
     }

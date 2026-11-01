@@ -4099,6 +4099,10 @@
     ],
     [
       "northstar-workflows",
+      "tracing"
+    ],
+    [
+      "northstar-workflows",
       "uuid"
     ],
     [

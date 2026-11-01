@@ -14,7 +14,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use zeroize::Zeroize;
 
 #[derive(Clone)]
-pub(crate) struct PostgresHttpLoginRepository {
+pub struct PostgresHttpLoginRepository {
     pool: PgPool,
     abuse: Arc<AbuseGuard>,
     api_control: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
@@ -23,7 +23,7 @@ pub(crate) struct PostgresHttpLoginRepository {
 }
 
 impl PostgresHttpLoginRepository {
-    pub(crate) fn new(
+    pub fn new(
         pool: PgPool,
         abuse: Arc<AbuseGuard>,
         api_control: Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,

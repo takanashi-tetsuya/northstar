@@ -1366,6 +1366,7 @@ digraph compile_time {
   "northstar-workflows" -> "serde_json";
   "northstar-workflows" -> "sqlx";
   "northstar-workflows" -> "thiserror";
+  "northstar-workflows" -> "tracing";
   "northstar-workflows" -> "uuid";
   "northstar-workflows" -> "zeroize";
   "northstar-xep-0016" -> "northstar-xep-core";

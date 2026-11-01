@@ -46,20 +46,13 @@ impl RoomEffects for RootRoomEffects {
         .await
     }
 
-    async fn lock_direct_spool_instance_claims(
-        &self,
-        transaction: &mut Transaction<'_, Postgres>,
-    ) -> Result<()> {
-        db::cluster_keys::lock_direct_spool_instance_claims_in_transaction(transaction).await
-    }
-
     async fn reserve_cluster_live_delivery(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
         recipient_id: Uuid,
         message_id: Uuid,
     ) -> Result<()> {
-        db::archive::reserve_cluster_live_delivery_in_transaction(
+        northstar_message_postgres::personal_history::reserve_cluster_live_delivery_in_transaction(
             transaction,
             recipient_id,
             message_id,
@@ -73,7 +66,7 @@ impl RoomEffects for RootRoomEffects {
         domain: &str,
         recipient_id: Uuid,
     ) -> Result<()> {
-        db::direct_spool_wake_repository::record_direct_spool_wake_in_transaction(
+        northstar_message_postgres::direct_spool_wake::record_direct_spool_wake_in_transaction(
             transaction,
             domain,
             recipient_id,
@@ -106,14 +99,14 @@ impl RoomEffects for RootRoomEffects {
         policy: OfflineStorePolicy,
     ) -> Result<OfflineStoreOutcome> {
         Ok(
-            match db::store_offline_for_recipient(
+            match northstar_message_postgres::offline::store_offline_for_recipient(
                 pool,
                 recipient_id,
                 recipient_bare_jid,
                 sender_jid,
                 stanza,
                 encrypted,
-                db::OfflineStorePolicy {
+                northstar_message_postgres::offline::OfflineStorePolicy {
                     max_messages: policy.max_messages,
                     max_bytes: policy.max_bytes,
                     ttl_days: policy.ttl_days,
@@ -122,10 +115,16 @@ impl RoomEffects for RootRoomEffects {
             )
             .await?
             {
-                db::OfflineStoreOutcome::Stored => OfflineStoreOutcome::Stored,
-                db::OfflineStoreOutcome::Replay => OfflineStoreOutcome::Replay,
-                db::OfflineStoreOutcome::QuotaExceeded => OfflineStoreOutcome::QuotaExceeded,
-                db::OfflineStoreOutcome::RecipientUnavailable => {
+                northstar_message_postgres::offline::OfflineStoreOutcome::Stored => {
+                    OfflineStoreOutcome::Stored
+                }
+                northstar_message_postgres::offline::OfflineStoreOutcome::Replay => {
+                    OfflineStoreOutcome::Replay
+                }
+                northstar_message_postgres::offline::OfflineStoreOutcome::QuotaExceeded => {
+                    OfflineStoreOutcome::QuotaExceeded
+                }
+                northstar_message_postgres::offline::OfflineStoreOutcome::RecipientUnavailable => {
                     OfflineStoreOutcome::RecipientUnavailable
                 }
             },

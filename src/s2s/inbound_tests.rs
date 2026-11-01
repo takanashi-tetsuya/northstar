@@ -693,13 +693,13 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
         .await
         .unwrap();
     assert_eq!(
-        db::store_offline(
+        northstar_message_postgres::offline::store_offline(
             &pool,
             recipient_id,
             "alice@remote.test/Phone",
             "<message><retract xmlns='urn:xmpp:message-retract:1' id='remote-original'/></message>",
             false,
-            db::OfflineStorePolicy {
+            northstar_message_postgres::offline::OfflineStorePolicy {
                 max_messages: 1,
                 max_bytes: 1_000_000,
                 ttl_days: 30,
@@ -708,7 +708,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
         )
         .await
         .unwrap(),
-        db::OfflineStoreOutcome::QuotaExceeded
+        northstar_message_postgres::offline::OfflineStoreOutcome::QuotaExceeded
     );
     assert!(northstar_federation_postgres::enqueue_s2s_outbox(
         &pool,

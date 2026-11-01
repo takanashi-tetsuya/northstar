@@ -436,9 +436,10 @@ pub async fn admit_local_muc_invite(
         // The node-instance claim takes this lock exclusively. Acquire its
         // shared side before user and room locks, as for personal direct
         // admission, so a new instance cannot miss this late wake fanout.
-        effects
-            .lock_direct_spool_instance_claims(&mut transaction)
-            .await?;
+        northstar_postgres::cluster_lock::lock_direct_spool_instance_claims_in_transaction(
+            &mut transaction,
+        )
+        .await?;
     }
     if !crate::accounts::lock_enabled_users_in_transaction(&mut transaction, &[recipient_id])
         .await?

@@ -244,6 +244,16 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-message-postgres
+    package: northstar-message-postgres
+    path: crates/contexts/message/northstar-message-postgres
+    tier: context
+    context: message
+    role: adapter
+    owner_team: messaging
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-mix-xmpp
     package: northstar-mix-xmpp
     path: crates/contexts/room/northstar-mix-xmpp

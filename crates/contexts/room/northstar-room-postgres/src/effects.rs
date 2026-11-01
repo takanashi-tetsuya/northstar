@@ -24,12 +24,6 @@ pub trait RoomEffects: Clone + Default + Send + Sync + 'static {
         policy: S2sOutboxPolicy,
     ) -> impl Future<Output = Result<Uuid>> + Send;
 
-    /// Takes the shared side of the lock a node-instance claim holds exclusively.
-    fn lock_direct_spool_instance_claims(
-        &self,
-        transaction: &mut Transaction<'_, Postgres>,
-    ) -> impl Future<Output = Result<()>> + Send;
-
     /// Claims a stored offline message for the cluster's live delivery attempt.
     fn reserve_cluster_live_delivery(
         &self,

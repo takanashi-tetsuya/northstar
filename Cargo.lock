@@ -2136,6 +2136,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-message-postgres"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "futures",
+ "northstar-abuse-policy",
+ "northstar-federation-core",
+ "northstar-message-application",
+ "northstar-message-core",
+ "northstar-postgres",
+ "northstar-security",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "sha2",
+ "sqlx",
+ "subtle",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
 name = "northstar-mix-xmpp"
 version = "0.1.0"
 dependencies = [
@@ -3825,6 +3847,7 @@ dependencies = [
  "northstar-federation-postgres",
  "northstar-message-application",
  "northstar-message-core",
+ "northstar-message-postgres",
  "northstar-mix-xmpp",
  "northstar-muc-xmpp",
  "northstar-operations-application",

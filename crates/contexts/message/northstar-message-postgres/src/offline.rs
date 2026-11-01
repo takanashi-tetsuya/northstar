@@ -1,6 +1,15 @@
 //! Offline message storage, deduplication capacity and delivery.
 
-use super::*;
+use crate::accounts::lock_enabled_users_in_transaction;
+use crate::direct_cluster::DirectCommitCluster;
+use crate::direct_spool_wake::record_direct_spool_wake_in_transaction;
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use northstar_message_core::DirectSpoolEligibility;
+use northstar_postgres::cluster_lock::lock_direct_spool_instance_claims_in_transaction;
+use sqlx::{PgPool, Row};
+use subtle::ConstantTimeEq;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OfflineStoreOutcome {
@@ -21,12 +30,12 @@ pub struct OfflineStorePolicy {
     pub mam_backed: bool,
 }
 
-pub(super) const OFFLINE_DEDUPE_CAPACITY_SHARDS: u8 = 64;
-pub(super) const MAX_OFFLINE_DEDUPE_PER_SHARD: i32 = 32_768;
-pub(super) const MAX_OFFLINE_DEDUPE_PER_RECIPIENT: i64 = 4_096;
-pub(super) const OFFLINE_DEDUPE_FOREGROUND_CLEANUP: i64 = 128;
+pub const OFFLINE_DEDUPE_CAPACITY_SHARDS: u8 = 64;
+pub const MAX_OFFLINE_DEDUPE_PER_SHARD: i32 = 32_768;
+pub const MAX_OFFLINE_DEDUPE_PER_RECIPIENT: i64 = 4_096;
+pub const OFFLINE_DEDUPE_FOREGROUND_CLEANUP: i64 = 128;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn store_offline(
     pool: &PgPool,
     recipient_id: Uuid,
@@ -82,7 +91,7 @@ pub async fn store_offline_for_recipient(
 /// stanza. Rotating-key HMAC candidates authenticate the payload; an unknown
 /// old key or any content mismatch fails closed instead of creating a second
 /// queue entry.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn store_offline_idempotent(
     pool: &PgPool,
     recipient_id: Uuid,
@@ -136,7 +145,7 @@ pub async fn store_offline_idempotent_for_recipient(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn store_offline_idempotent_for_recipient_with_direct_fence(
+pub async fn store_offline_idempotent_for_recipient_with_direct_fence(
     pool: &PgPool,
     recipient_id: Uuid,
     recipient_bare_jid: &str,
@@ -145,7 +154,7 @@ pub(crate) async fn store_offline_idempotent_for_recipient_with_direct_fence(
     encrypted: bool,
     policy: OfflineStorePolicy,
     identity: Option<&northstar_abuse_policy::MessageDedupeIdentity>,
-    cluster: Option<&crate::cluster::ClusterAdmission>,
+    cluster: Option<&dyn DirectCommitCluster>,
 ) -> Result<OfflineStoreOutcome> {
     let Some(cluster) = cluster else {
         return store_offline_idempotent_for_recipient(
@@ -175,7 +184,7 @@ pub(crate) async fn store_offline_idempotent_for_recipient_with_direct_fence(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn store_offline_idempotent_inner(
+pub async fn store_offline_idempotent_inner(
     pool: &PgPool,
     recipient_id: Uuid,
     recipient_bare_jid: Option<&str>,
@@ -184,7 +193,7 @@ pub(super) async fn store_offline_idempotent_inner(
     encrypted: bool,
     policy: OfflineStorePolicy,
     identity: Option<&northstar_abuse_policy::MessageDedupeIdentity>,
-    cluster: Option<&crate::cluster::ClusterAdmission>,
+    cluster: Option<&dyn DirectCommitCluster>,
 ) -> Result<OfflineStoreOutcome> {
     let (recipient_authority, target_resource) =
         normalized_offline_target_resource(stanza, recipient_bare_jid)?;
@@ -204,30 +213,18 @@ pub(super) async fn store_offline_idempotent_inner(
     }
     let mut transaction = pool.begin().await?;
     if let Some(cluster) = cluster {
-        super::super::cluster_keys::lock_direct_spool_instance_claims_in_transaction(
-            &mut transaction,
-        )
-        .await?;
+        lock_direct_spool_instance_claims_in_transaction(&mut transaction).await?;
         if let Some(authority) =
-            cluster.check_direct_eligibility(crate::cluster::DirectSpoolEligibility::LiveOnly)?
+            cluster.check_direct_eligibility(DirectSpoolEligibility::LiveOnly)?
         {
-            super::super::fence_direct_message_authority_in_transaction(
-                &mut transaction,
-                authority,
-            )
-            .await?;
+            cluster.fence_authority(&mut transaction, authority).await?;
         }
     }
     // Linearize durable delivery against account disable/delete.  The
     // administrator's FOR UPDATE cannot pass this shared row lock until the
     // queue projection commits, while a disable that won first is observed as
     // unavailable before any admission/tombstone row is created.
-    if !northstar_auth_postgres::users::lock_enabled_users_in_transaction(
-        &mut transaction,
-        &[recipient_id],
-    )
-    .await?
-    {
+    if !lock_enabled_users_in_transaction(&mut transaction, &[recipient_id]).await? {
         transaction.rollback().await?;
         return Ok(OfflineStoreOutcome::RecipientUnavailable);
     }
@@ -432,22 +429,18 @@ pub(super) async fn store_offline_idempotent_inner(
     Ok(OfflineStoreOutcome::Stored)
 }
 
-pub(super) async fn commit_live_direct_offline_transaction(
+pub async fn commit_live_direct_offline_transaction(
     mut transaction: sqlx::Transaction<'_, sqlx::Postgres>,
-    cluster: Option<&crate::cluster::ClusterAdmission>,
+    cluster: Option<&dyn DirectCommitCluster>,
     wake_recipient: Option<Uuid>,
 ) -> Result<()> {
     if let Some(cluster) = cluster {
         let (turn, authority) =
-            cluster.begin_direct_commit_turn(crate::cluster::DirectSpoolEligibility::LiveOnly)?;
+            cluster.begin_direct_commit_turn(DirectSpoolEligibility::LiveOnly)?;
         if let Some(authority) = authority {
-            super::super::fence_direct_message_authority_in_transaction(
-                &mut transaction,
-                authority,
-            )
-            .await?;
+            cluster.fence_authority(&mut transaction, authority).await?;
             if let Some(recipient_id) = wake_recipient {
-                super::super::direct_spool_wake_repository::record_direct_spool_wake_in_transaction(
+                record_direct_spool_wake_in_transaction(
                     &mut transaction,
                     &authority.key_identity.xmpp_domain,
                     recipient_id,
@@ -465,7 +458,7 @@ pub(super) async fn commit_live_direct_offline_transaction(
     Ok(())
 }
 
-pub(super) fn normalized_offline_target_resource(
+pub fn normalized_offline_target_resource(
     stanza: &str,
     recipient_bare_jid: Option<&str>,
 ) -> Result<(Option<String>, Option<String>)> {
@@ -511,76 +504,52 @@ pub(super) fn normalized_offline_target_resource(
     Ok((recipient_authority, target_resource))
 }
 
-/// Deliver queued offline messages without deleting a stanza until it has
-/// been accepted by the connection's outbound queue. The per-recipient
-/// advisory lock prevents two resources that announce presence concurrently
-/// from claiming the same rows. If the connection closes or remains
-/// backpressured, the unsent suffix stays durable for the next availability
-/// transition.
-#[cfg(test)]
-pub async fn deliver_offline(
-    pool: &PgPool,
-    recipient_id: Uuid,
-    ttl_days: i64,
-    outbound: &crate::xmpp::outbound::OutboundSender,
-    active_privacy_list: Option<&str>,
-) -> Result<usize> {
-    deliver_offline_mode(
-        pool,
-        recipient_id,
-        ttl_days,
-        outbound,
-        false,
-        active_privacy_list,
-    )
-    .await
-}
-
-/// Bind 2 MAM catch-up consumes permanently archived queue duplicates but
-/// still delivers temporary-only XEP-0334 no-permanent-store messages.
-#[cfg(test)]
-pub async fn deliver_bind2_offline(
-    pool: &PgPool,
-    recipient_id: Uuid,
-    ttl_days: i64,
-    outbound: &crate::xmpp::outbound::OutboundSender,
-    active_privacy_list: Option<&str>,
-) -> Result<usize> {
-    deliver_offline_mode(
-        pool,
-        recipient_id,
-        ttl_days,
-        outbound,
-        true,
-        active_privacy_list,
-    )
-    .await
-}
-
-#[cfg(test)]
-pub(super) async fn deliver_offline_mode(
-    pool: &PgPool,
-    recipient_id: Uuid,
-    ttl_days: i64,
-    outbound: &crate::xmpp::outbound::OutboundSender,
-    bind2_mam_catchup: bool,
-    active_privacy_list: Option<&str>,
-) -> Result<usize> {
-    super::super::replay::deliver_offline_leased(
-        pool,
-        recipient_id,
-        ttl_days,
-        outbound,
-        bind2_mam_catchup,
-        active_privacy_list,
-    )
-    .await
-}
-
 pub async fn offline_message_count(pool: &PgPool, recipient_id: Uuid) -> Result<i64> {
     sqlx::query_scalar("SELECT COUNT(*) FROM offline_messages WHERE recipient_id = $1")
         .bind(recipient_id)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offline_resource_affinity_is_derived_from_authoritative_message_routing() {
+        assert_eq!(
+            normalized_offline_target_resource(
+                "<message to='alice@example.test/Phone'/>",
+                Some("alice@example.test")
+            )
+            .unwrap(),
+            (
+                Some("alice@example.test".to_owned()),
+                Some("Phone".to_owned())
+            )
+        );
+        for stanza in [
+            "<message to='alice@example.test'/>",
+            "<message type='chat' to='alice@example.test/Phone'/>",
+            "<message/>",
+        ] {
+            assert_eq!(
+                normalized_offline_target_resource(stanza, Some("alice@example.test"))
+                    .unwrap()
+                    .1,
+                None
+            );
+        }
+        assert!(normalized_offline_target_resource(
+            "<message to='alice@example.test/Phone'/>",
+            None
+        )
+        .is_err());
+        assert!(normalized_offline_target_resource(
+            "<message to='alice@evil.test/Phone'/>",
+            Some("alice@example.test")
+        )
+        .is_err());
+    }
 }

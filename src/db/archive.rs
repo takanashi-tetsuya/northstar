@@ -3,63 +3,25 @@
 //! northstar-archive-postgres, re-exported here.
 
 use anyhow::Result;
+#[cfg(test)]
 use chrono::{DateTime, Utc};
-use northstar_abuse_policy::ContentIdentityAuthenticators;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::HashSet;
 #[cfg(test)]
 use std::time::Duration;
-use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 mod mam_room;
 mod mix_archive;
-mod offline;
 mod personal_history;
 
 pub use self::mam_room::*;
 pub use self::mix_archive::*;
-pub use self::offline::*;
 pub use self::personal_history::*;
 pub use northstar_archive_postgres::*;
-
 #[cfg(test)]
-#[test]
-fn offline_resource_affinity_is_derived_from_authoritative_message_routing() {
-    assert_eq!(
-        normalized_offline_target_resource(
-            "<message to='alice@example.test/Phone'/>",
-            Some("alice@example.test")
-        )
-        .unwrap(),
-        (
-            Some("alice@example.test".to_owned()),
-            Some("Phone".to_owned())
-        )
-    );
-    for stanza in [
-        "<message to='alice@example.test'/>",
-        "<message type='chat' to='alice@example.test/Phone'/>",
-        "<message/>",
-    ] {
-        assert_eq!(
-            normalized_offline_target_resource(stanza, Some("alice@example.test"))
-                .unwrap()
-                .1,
-            None
-        );
-    }
-    assert!(
-        normalized_offline_target_resource("<message to='alice@example.test/Phone'/>", None)
-            .is_err()
-    );
-    assert!(normalized_offline_target_resource(
-        "<message to='alice@evil.test/Phone'/>",
-        Some("alice@example.test")
-    )
-    .is_err());
-}
+use northstar_message_postgres::{offline::*, personal_history::*};
 
 /// Production source of this module: the file itself followed by each
 /// production child module file, so source-contract tests keep reading the
@@ -77,17 +39,7 @@ const MODULE_SOURCE: &[(&str, &str)] = &[
     ),
     ("mix_archive", include_str!("archive/mix_archive.rs")),
     ("mam_room", include_str!("archive/mam_room.rs")),
-    ("offline", include_str!("archive/offline.rs")),
 ];
-
-#[cfg(test)]
-fn module_source() -> String {
-    MODULE_SOURCE
-        .iter()
-        .map(|(_, text)| *text)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
 
 #[cfg(test)]
 mod offline_queue_tests;
@@ -99,3 +51,69 @@ mod source_contract_tests;
 use northstar_room_postgres::mam_authorization::*;
 #[cfg(test)]
 mod history_identity_pg_tests;
+
+/// Deliver queued offline messages without deleting a stanza until it has
+/// been accepted by the connection's outbound queue. The per-recipient
+/// advisory lock prevents two resources that announce presence concurrently
+/// from claiming the same rows. If the connection closes or remains
+/// backpressured, the unsent suffix stays durable for the next availability
+/// transition.
+#[cfg(test)]
+pub async fn deliver_offline(
+    pool: &PgPool,
+    recipient_id: Uuid,
+    ttl_days: i64,
+    outbound: &crate::xmpp::outbound::OutboundSender,
+    active_privacy_list: Option<&str>,
+) -> Result<usize> {
+    deliver_offline_mode(
+        pool,
+        recipient_id,
+        ttl_days,
+        outbound,
+        false,
+        active_privacy_list,
+    )
+    .await
+}
+
+/// Bind 2 MAM catch-up consumes permanently archived queue duplicates but
+/// still delivers temporary-only XEP-0334 no-permanent-store messages.
+#[cfg(test)]
+pub async fn deliver_bind2_offline(
+    pool: &PgPool,
+    recipient_id: Uuid,
+    ttl_days: i64,
+    outbound: &crate::xmpp::outbound::OutboundSender,
+    active_privacy_list: Option<&str>,
+) -> Result<usize> {
+    deliver_offline_mode(
+        pool,
+        recipient_id,
+        ttl_days,
+        outbound,
+        true,
+        active_privacy_list,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(super) async fn deliver_offline_mode(
+    pool: &PgPool,
+    recipient_id: Uuid,
+    ttl_days: i64,
+    outbound: &crate::xmpp::outbound::OutboundSender,
+    bind2_mam_catchup: bool,
+    active_privacy_list: Option<&str>,
+) -> Result<usize> {
+    super::replay::deliver_offline_leased(
+        pool,
+        recipient_id,
+        ttl_days,
+        outbound,
+        bind2_mam_catchup,
+        active_privacy_list,
+    )
+    .await
+}

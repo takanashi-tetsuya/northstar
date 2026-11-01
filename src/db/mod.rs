@@ -34,7 +34,9 @@ pub mod cluster_keys;
 mod cluster_muc_tests;
 pub(crate) mod cluster_replay_maintenance_repository;
 pub(crate) mod cluster_session_route_maintenance_repository;
-pub(crate) mod direct_spool_wake_repository;
+pub(crate) mod direct_commit_cluster;
+#[cfg(test)]
+mod direct_spool_wake_repository_tests;
 #[cfg(test)]
 mod fast_tests;
 pub(crate) mod federation_outbox_repository;
@@ -77,8 +79,10 @@ pub mod privacy;
 mod privacy_service_tests;
 pub mod profile;
 pub mod profile_identity;
-pub mod push;
 pub mod push_identity;
+pub(crate) mod push_repository;
+#[cfg(test)]
+mod push_tests;
 pub(crate) mod readiness_repository;
 pub mod remaining_identity;
 pub mod replay;
@@ -107,7 +111,6 @@ pub use cluster_keys::*;
 pub use omemo_recovery::*;
 pub use pep_roster::*;
 pub use privacy::*;
-pub use push::*;
 pub(crate) use retention::*;
 pub use roster::*;
 pub use schema::*;

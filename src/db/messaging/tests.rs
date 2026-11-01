@@ -32,7 +32,9 @@ async fn assert_personal_evidence_is_keyed(pool: &PgPool, identity_value: &str) 
 fn durable_results_do_not_expose_repository_row_ids() {
     assert_eq!(
         map_history_outcome(
-            db::PersonalHistoryAdmission::Stored(vec![Uuid::new_v4()]),
+            northstar_message_postgres::personal_history::PersonalHistoryAdmission::Stored(vec![
+                Uuid::new_v4()
+            ]),
             true,
             MessagePostCommit::WakeFederationOutbox,
         )
@@ -44,7 +46,7 @@ fn durable_results_do_not_expose_repository_row_ids() {
     );
     assert_eq!(
         map_history_outcome(
-            db::PersonalHistoryAdmission::Replay(vec![]),
+            northstar_message_postgres::personal_history::PersonalHistoryAdmission::Replay(vec![]),
             false,
             MessagePostCommit::WakeFederationOutbox,
         )

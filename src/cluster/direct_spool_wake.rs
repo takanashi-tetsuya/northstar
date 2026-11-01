@@ -3,15 +3,13 @@
 //! route sweep between short, compare-and-swap deferred claims.
 
 use super::recovery_replay_wake::RecoveryReplayStatus;
-use crate::{
-    cluster::DirectPostCommitMode,
-    db::direct_spool_wake_repository::PostgresDirectSpoolWakeRepository,
-};
+use crate::cluster::DirectPostCommitMode;
 use anyhow::{ensure, Result};
 use chrono::{DateTime, Utc};
 use northstar_message_application::direct_spool_wake::{
     ClaimedDirectSpoolWake, DirectSpoolWakeRoute, DirectSpoolWakeService, DIRECT_SPOOL_WAKE_PAGE,
 };
+use northstar_message_postgres::direct_spool_wake::PostgresDirectSpoolWakeRepository;
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use std::{
     collections::{HashMap, VecDeque},

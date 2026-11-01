@@ -10,8 +10,10 @@ use std::sync::Arc;
 use tokio::sync::Barrier;
 use uuid::Uuid;
 
-fn personal_identity<'a>(payload: &str) -> db::PersonalHistoryIdentity<'a> {
-    db::PersonalHistoryIdentity {
+fn personal_identity<'a>(
+    payload: &str,
+) -> northstar_message_postgres::personal_history::PersonalHistoryIdentity<'a> {
+    northstar_message_postgres::personal_history::PersonalHistoryIdentity {
         kind: "local-origin",
         actor_scope_raw: "sender@example.test",
         actor_scope: "sender@example.test",
@@ -334,7 +336,7 @@ async fn asymmetric_mam_retention_preserves_admission_until_the_last_projection_
     let stanza = "<message id='retention-identity'><origin-id xmlns='urn:xmpp:sid:0' id='retention-origin'/></message>";
     let identity = personal_identity(stanza);
     let writes = [
-        db::PersonalArchiveWrite {
+        northstar_message_postgres::personal_history::PersonalArchiveWrite {
             id: sender_archive_id,
             owner_id: sender,
             peer_jid: "recipient@example.test/phone",
@@ -342,7 +344,7 @@ async fn asymmetric_mam_retention_preserves_admission_until_the_last_projection_
             encrypted: true,
             stanza_id: Some("retention-origin"),
         },
-        db::PersonalArchiveWrite {
+        northstar_message_postgres::personal_history::PersonalArchiveWrite {
             id: recipient_archive_id,
             owner_id: recipient,
             peer_jid: "sender@example.test/laptop",
@@ -355,7 +357,10 @@ async fn asymmetric_mam_retention_preserves_admission_until_the_last_projection_
         db::admit_personal_history(&pool, Some(&identity), &writes)
             .await
             .unwrap(),
-        db::PersonalHistoryAdmission::Stored(vec![sender_archive_id, recipient_archive_id])
+        northstar_message_postgres::personal_history::PersonalHistoryAdmission::Stored(vec![
+            sender_archive_id,
+            recipient_archive_id
+        ])
     );
     sqlx::query(
         "UPDATE message_archive
@@ -409,11 +414,11 @@ async fn asymmetric_mam_retention_preserves_admission_until_the_last_projection_
     assert!(first_projection_state.4.is_some());
 
     let replay_writes = [
-        db::PersonalArchiveWrite {
+        northstar_message_postgres::personal_history::PersonalArchiveWrite {
             id: Uuid::new_v4(),
             ..writes[0].clone()
         },
-        db::PersonalArchiveWrite {
+        northstar_message_postgres::personal_history::PersonalArchiveWrite {
             id: Uuid::new_v4(),
             ..writes[1].clone()
         },
@@ -422,7 +427,9 @@ async fn asymmetric_mam_retention_preserves_admission_until_the_last_projection_
         db::admit_personal_history(&pool, Some(&identity), &replay_writes)
             .await
             .unwrap(),
-        db::PersonalHistoryAdmission::Replay(vec![recipient_archive_id]),
+        northstar_message_postgres::personal_history::PersonalHistoryAdmission::Replay(vec![
+            recipient_archive_id
+        ]),
         "the surviving recipient projection must keep exact replay suppression alive"
     );
     let changed_identity = personal_identity("<message id='changed-retention-payload'/>");
@@ -501,7 +508,7 @@ async fn asymmetric_mam_retention_preserves_admission_until_the_last_projection_
         db::admit_personal_history(&pool, Some(&identity), &replay_writes)
             .await
             .unwrap(),
-        db::PersonalHistoryAdmission::Replay(Vec::new())
+        northstar_message_postgres::personal_history::PersonalHistoryAdmission::Replay(Vec::new())
     );
 
     // Simulate the fixed 30-day worker horizon and prove that the keyed
@@ -530,7 +537,9 @@ async fn asymmetric_mam_retention_preserves_admission_until_the_last_projection_
         db::admit_personal_history(&pool, Some(&identity), &replay_writes)
             .await
             .unwrap(),
-        db::PersonalHistoryAdmission::Stored(replay_writes.iter().map(|write| write.id).collect()),
+        northstar_message_postgres::personal_history::PersonalHistoryAdmission::Stored(
+            replay_writes.iter().map(|write| write.id).collect()
+        ),
         "once the bounded tombstone expires, the identity may be admitted again"
     );
 
@@ -664,13 +673,13 @@ async fn offline_retention_and_admin_clear_respect_sm_and_bosh_owners() {
     // Admission's foreground TTL cleanup is also a capacity operation;
     // it must count, rather than destroy, transport-owned old rows.
     assert_eq!(
-        crate::db::store_offline(
+        northstar_message_postgres::offline::store_offline(
             &pool,
             user,
             "sender@example.test",
             "<message id='new-capacity-probe'/>",
             false,
-            crate::db::OfflineStorePolicy {
+            northstar_message_postgres::offline::OfflineStorePolicy {
                 max_messages: 100,
                 max_bytes: 1_000_000,
                 ttl_days: 30,
@@ -679,7 +688,7 @@ async fn offline_retention_and_admin_clear_respect_sm_and_bosh_owners() {
         )
         .await
         .unwrap(),
-        crate::db::OfflineStoreOutcome::Stored
+        northstar_message_postgres::offline::OfflineStoreOutcome::Stored
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(

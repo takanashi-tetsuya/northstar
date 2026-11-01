@@ -185,6 +185,7 @@ digraph compile_time {
   "northstar-federation-postgres";
   "northstar-message-application";
   "northstar-message-core";
+  "northstar-message-postgres";
   "northstar-mix-xmpp";
   "northstar-muc-xmpp";
   "northstar-operations-application";
@@ -1126,6 +1127,22 @@ digraph compile_time {
   "northstar-message-core" -> "northstar-xmpp-types";
   "northstar-message-core" -> "roxmltree";
   "northstar-message-core" -> "uuid";
+  "northstar-message-postgres" -> "anyhow";
+  "northstar-message-postgres" -> "chrono";
+  "northstar-message-postgres" -> "futures";
+  "northstar-message-postgres" -> "northstar-abuse-policy";
+  "northstar-message-postgres" -> "northstar-federation-core";
+  "northstar-message-postgres" -> "northstar-message-application";
+  "northstar-message-postgres" -> "northstar-message-core";
+  "northstar-message-postgres" -> "northstar-postgres";
+  "northstar-message-postgres" -> "northstar-security";
+  "northstar-message-postgres" -> "northstar-xmpp-types";
+  "northstar-message-postgres" -> "roxmltree";
+  "northstar-message-postgres" -> "sha2";
+  "northstar-message-postgres" -> "sqlx";
+  "northstar-message-postgres" -> "subtle";
+  "northstar-message-postgres" -> "thiserror";
+  "northstar-message-postgres" -> "uuid";
   "northstar-mix-xmpp" -> "anyhow";
   "northstar-mix-xmpp" -> "chrono";
   "northstar-mix-xmpp" -> "dashmap";
@@ -1910,6 +1927,7 @@ digraph compile_time {
   "rust-xmpp-server" -> "northstar-federation-postgres";
   "rust-xmpp-server" -> "northstar-message-application";
   "rust-xmpp-server" -> "northstar-message-core";
+  "rust-xmpp-server" -> "northstar-message-postgres";
   "rust-xmpp-server" -> "northstar-mix-xmpp";
   "rust-xmpp-server" -> "northstar-muc-xmpp";
   "rust-xmpp-server" -> "northstar-operations-application";

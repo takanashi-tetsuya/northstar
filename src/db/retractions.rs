@@ -1,20 +1,19 @@
 //! Atomic retraction intents, archive tombstones and delivery projections.
-use crate::{
-    cluster::{ClusterAdmission, DirectSpoolEligibility},
-    db,
-};
+use crate::cluster::DirectSpoolEligibility;
 use anyhow::Result;
 use northstar_message_application::retractions::*;
+use northstar_message_postgres::direct_cluster::DirectCommitCluster;
 use roxmltree::Document;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
+use std::sync::Arc;
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 #[derive(Clone)]
 pub(crate) struct PostgresRetractionRepository {
     pool: PgPool,
-    cluster: Option<ClusterAdmission>,
+    cluster: Option<Arc<dyn DirectCommitCluster>>,
 }
 impl PostgresRetractionRepository {
     pub(crate) fn new(pool: PgPool) -> Self {
@@ -24,8 +23,11 @@ impl PostgresRetractionRepository {
         }
     }
 
-    pub(crate) fn with_cluster_admission(mut self, cluster: ClusterAdmission) -> Self {
-        self.cluster = Some(cluster);
+    pub(crate) fn with_cluster_admission(
+        mut self,
+        cluster: impl DirectCommitCluster + 'static,
+    ) -> Self {
+        self.cluster = Some(Arc::new(cluster));
         self
     }
 
@@ -33,11 +35,11 @@ impl PostgresRetractionRepository {
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     ) -> Result<()> {
-        if let Some(cluster) = self.cluster.as_ref() {
+        if let Some(cluster) = self.cluster.as_deref() {
             if let Some(authority) =
                 cluster.check_direct_eligibility(DirectSpoolEligibility::LiveOnly)?
             {
-                db::fence_direct_message_authority_in_transaction(tx, authority).await?;
+                cluster.fence_authority(tx, authority).await?;
             }
         }
         Ok(())
@@ -50,21 +52,21 @@ impl PostgresRetractionRepository {
         mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
         wake_delivery: Option<(Uuid, Uuid)>,
     ) -> Result<Option<Uuid>> {
-        if let Some(cluster) = self.cluster.as_ref() {
+        if let Some(cluster) = self.cluster.as_deref() {
             let (turn, authority) =
                 cluster.begin_direct_commit_turn(DirectSpoolEligibility::LiveOnly)?;
             let mut live_claim_id = None;
             if let Some(authority) = authority {
-                db::fence_direct_message_authority_in_transaction(&mut tx, authority).await?;
+                cluster.fence_authority(&mut tx, authority).await?;
                 if let Some((recipient_id, message_id)) = wake_delivery {
-                    db::archive::reserve_cluster_live_delivery_in_transaction(
+                    northstar_message_postgres::personal_history::reserve_cluster_live_delivery_in_transaction(
                         &mut tx,
                         recipient_id,
                         message_id,
                     )
                     .await?;
                     live_claim_id = Some(message_id);
-                    db::direct_spool_wake_repository::record_direct_spool_wake_in_transaction(
+                    northstar_message_postgres::direct_spool_wake::record_direct_spool_wake_in_transaction(
                         &mut tx,
                         &authority.key_identity.xmpp_domain,
                         recipient_id,
@@ -106,8 +108,10 @@ impl RetractionRepository for PostgresRetractionRepository {
         } = prepared;
         let mut transaction = self.pool.begin().await?;
         if self.cluster.is_some() {
-            db::cluster_keys::lock_direct_spool_instance_claims_in_transaction(&mut transaction)
-                .await?;
+            northstar_postgres::cluster_lock::lock_direct_spool_instance_claims_in_transaction(
+                &mut transaction,
+            )
+            .await?;
         }
         self.fence_live_retraction(&mut transaction).await?;
         let mut required_accounts = normalized_owners
@@ -582,31 +586,33 @@ impl RetractionRepository for PostgresRetractionRepository {
                 bound.rows_affected() == 1,
                 "retraction intent disappeared before C2S delivery binding"
             );
-            let db_delivery = db::PersonalC2sDeliveryAdmission {
-                id: projection.id,
-                recipient_id: projection.recipient_id,
-                recipient_bare_jid: &delivery.recipient_bare_jid,
-                local_actor_id: projection.local_actor_id,
-                sender_jid: &delivery.sender_full_jid,
-                stanza: projection.stanza,
-                target_full_jid: delivery.target_full_jid.as_deref(),
-                encrypted: projection.encrypted,
-                policy: db::OfflineStorePolicy {
-                    max_messages: projection.max_messages,
-                    max_bytes: projection.max_bytes,
-                    ttl_days: projection.ttl_days,
-                    mam_backed: projection.mam_backed,
-                },
-            };
-            if let Err(error) = db::archive::insert_c2s_delivery_in_transaction(
-                &mut transaction,
-                &db_delivery,
-                &delivery.sender_full_jid,
-            )
-            .await
+            let db_delivery =
+                northstar_message_postgres::personal_history::PersonalC2sDeliveryAdmission {
+                    id: projection.id,
+                    recipient_id: projection.recipient_id,
+                    recipient_bare_jid: &delivery.recipient_bare_jid,
+                    local_actor_id: projection.local_actor_id,
+                    sender_jid: &delivery.sender_full_jid,
+                    stanza: projection.stanza,
+                    target_full_jid: delivery.target_full_jid.as_deref(),
+                    encrypted: projection.encrypted,
+                    policy: northstar_message_postgres::offline::OfflineStorePolicy {
+                        max_messages: projection.max_messages,
+                        max_bytes: projection.max_bytes,
+                        ttl_days: projection.ttl_days,
+                        mam_backed: projection.mam_backed,
+                    },
+                };
+            if let Err(error) =
+                northstar_message_postgres::personal_history::insert_c2s_delivery_in_transaction(
+                    &mut transaction,
+                    &db_delivery,
+                    &delivery.sender_full_jid,
+                )
+                .await
             {
                 if error
-                    .downcast_ref::<db::archive::C2sDeliveryCapacityExceeded>()
+                    .downcast_ref::<northstar_message_postgres::personal_history::C2sDeliveryCapacityExceeded>()
                     .is_some()
                 {
                     transaction.rollback().await?;

@@ -50,6 +50,7 @@ members = [
     "crates/platform/northstar-web-surface",
     "crates/contexts/message/northstar-message-core",
     "crates/contexts/message/northstar-message-application",
+    "crates/contexts/message/northstar-message-postgres",
     "crates/contexts/session/northstar-session-core",
     "crates/contexts/message/northstar-delivery-core",
     "crates/contexts/roster/northstar-presence-core",
@@ -198,6 +199,7 @@ northstar-telemetry = { path = "crates/platform/northstar-telemetry" }
 northstar-web-surface = { path = "crates/platform/northstar-web-surface" }
 northstar-message-core = { path = "crates/contexts/message/northstar-message-core" }
 northstar-message-application = { path = "crates/contexts/message/northstar-message-application" }
+northstar-message-postgres = { path = "crates/contexts/message/northstar-message-postgres" }
 northstar-session-core = { path = "crates/contexts/session/northstar-session-core" }
 northstar-delivery-core = { path = "crates/contexts/message/northstar-delivery-core" }
 northstar-presence-core = { path = "crates/contexts/roster/northstar-presence-core" }
@@ -235,6 +237,7 @@ webauthn-rs = { version = "0.5.5", default-features = false, features = ["danger
 openssl = { version = "0.10.81", features = ["vendored"] }
 
 [dev-dependencies]
+northstar-message-postgres = { path = "crates/contexts/message/northstar-message-postgres", features = ["test-support"] }
 northstar-federation-postgres = { path = "crates/contexts/federation/northstar-federation-postgres", features = ["test-support"] }
 northstar-operations-application = { path = "crates/contexts/operations/northstar-operations-application", features = ["test-support"] }
 northstar-room-application = { path = "crates/contexts/room/northstar-room-application", features = ["test-support"] }

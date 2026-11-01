@@ -373,7 +373,7 @@ mod tests {
         assert_eq!(transformed, 2);
         canonicalize_push_identity_storage(&pool).await.unwrap();
 
-        assert!(db::enable_push_subscription(
+        assert!(northstar_message_postgres::push::enable_push_subscription(
             &pool,
             user.id,
             "push.example.test/Phone",

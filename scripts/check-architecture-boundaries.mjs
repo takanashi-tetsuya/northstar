@@ -3015,7 +3015,7 @@ for (const upgradeEvidence of [
   }
 }
 // reads the whole module including test-only child files
-const archiveRepositorySource = readModule('src/db/archive.rs', { root });
+const archiveRepositorySource = `${readModule('src/db/archive.rs', { root })}\n${readModule('crates/contexts/message/northstar-message-postgres/src/personal_history.rs', { root })}`;
 if (/\bpayload_value\b/.test(archiveRepositorySource)) {
   throw new Error('archive repository must not read, bind, or persist plaintext admission payload_value');
 }
@@ -3214,7 +3214,7 @@ for (const forbidden of [
   'privacy_denies',
   'find_user',
 ]) {
-  if (new RegExp(`\\b(?:db|northstar_archive_postgres)::${forbidden}\\b`).test(messagingSource)) {
+  if (new RegExp(`\\b(?:db|northstar_archive_postgres|northstar_message_postgres::\\w+|northstar_workflows::\\w+)::${forbidden}\\b`).test(messagingSource)) {
     throw new Error(`messaging.rs bypasses MessageService via db::${forbidden}`);
   }
 }
@@ -3244,7 +3244,7 @@ const capsProtocolSource =
   read('crates/contexts/session/northstar-protocol-runtime/src/caps.rs') +
   read('src/xmpp/protocol/caps.rs');
 const s2sInboundSource = readProductionModule('src/s2s/inbound.rs', { root });
-if (/db::(?:store_offline_for_recipient|admit_personal_history)\s*\(/.test(s2sInboundSource)
+if (/(?:db|northstar_message_postgres::\w+|northstar_workflows::\w+)::(?:store_offline_for_recipient|admit_personal_history)\s*\(/.test(s2sInboundSource)
     || !s2sInboundSource.includes('.store_offline(OfflineMessageAdmission {')
     || !s2sInboundSource.includes('.admit_history(&writes)')) {
   throw new Error('inbound S2S personal storage must use the message service');

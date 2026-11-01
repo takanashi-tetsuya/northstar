@@ -336,7 +336,7 @@ pub struct AppState {
         db::s2s_sm_outbox_repository::PostgresSmOutboxRepository,
     >,
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
-    push_service: northstar_message_application::push::PushService<db::push::PostgresPushRepository>,
+    push_service: northstar_message_application::push::PushService<db::push_repository::PostgresPushRepository>,
     cluster: crate::cluster::ClusterManager,
     account_revocation_consumer_service:
         northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService<

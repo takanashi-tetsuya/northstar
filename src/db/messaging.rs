@@ -1,7 +1,7 @@
 //! PostgreSQL transactions for personal messages and members-only invitations.
 
 use crate::{
-    cluster::{ClusterAdmission, DirectPostCommitMode, DirectSpoolEligibility},
+    cluster::{DirectPostCommitMode, DirectSpoolEligibility},
     db,
 };
 use anyhow::Result;
@@ -9,10 +9,12 @@ use northstar_abuse_policy::content_identity::PersonalMessageContentKeyring;
 use northstar_message_application::direct_commit::{DirectCommitObserver, DirectCommitRepository};
 use northstar_message_application::messaging::*;
 use northstar_message_application::PersonalMessageCommitRepository;
+use northstar_message_postgres::direct_cluster::DirectCommitCluster;
 use northstar_room_application::muc_service::DurableMucInviteOutcome;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone, Copy)]
@@ -28,7 +30,7 @@ pub(crate) struct PostgresMessageRepository {
     content_identity: PersonalMessageContentKeyring,
     configured_domain: String,
     offline: OfflineLimits,
-    cluster: Option<ClusterAdmission>,
+    cluster: Option<Arc<dyn DirectCommitCluster>>,
 }
 
 impl PersonalMessageCommitRepository for PostgresMessageRepository {
@@ -76,18 +78,19 @@ impl PostgresMessageRepository {
                     observer.is_none(),
                     "local direct observer cannot witness federation"
                 );
-                let outbox = db::PersonalS2sOutboxAdmission {
-                    local_actor_id: destination.local_actor_id,
-                    target_domain: destination.target_domain,
-                    stanza: destination.stanza,
-                    bounce_to: destination.bounce_to,
-                    policy: northstar_federation_core::S2sOutboxPolicy {
-                        ttl_seconds: destination.limits.ttl_seconds,
-                        max_rows: destination.limits.max_rows,
-                        max_bytes: destination.limits.max_bytes,
-                        max_per_domain: destination.limits.max_per_domain,
-                    },
-                };
+                let outbox =
+                    northstar_message_postgres::personal_history::PersonalS2sOutboxAdmission {
+                        local_actor_id: destination.local_actor_id,
+                        target_domain: destination.target_domain,
+                        stanza: destination.stanza,
+                        bounce_to: destination.bounce_to,
+                        policy: northstar_federation_core::S2sOutboxPolicy {
+                            ttl_seconds: destination.limits.ttl_seconds,
+                            max_rows: destination.limits.max_rows,
+                            max_bytes: destination.limits.max_bytes,
+                            max_per_domain: destination.limits.max_per_domain,
+                        },
+                    };
                 let (outcome, mode, live_claim_id) = self
                     .admit_direct_history(
                         &self.pool,
@@ -111,17 +114,18 @@ impl PostgresMessageRepository {
                     &self.configured_domain,
                 )?;
                 let target_full_jid = durable_target_full_jid(destination.stanza)?;
-                let delivery = db::PersonalC2sDeliveryAdmission {
-                    id: destination.delivery_id,
-                    recipient_id: destination.recipient_id,
-                    recipient_bare_jid: destination.recipient_bare_jid,
-                    local_actor_id: request.local_actor_id,
-                    sender_jid: destination.sender_jid,
-                    stanza: destination.stanza,
-                    target_full_jid: target_full_jid.as_deref(),
-                    encrypted: destination.encrypted,
-                    policy: offline_store_policy(self.offline, destination.mam_backed),
-                };
+                let delivery =
+                    northstar_message_postgres::personal_history::PersonalC2sDeliveryAdmission {
+                        id: destination.delivery_id,
+                        recipient_id: destination.recipient_id,
+                        recipient_bare_jid: destination.recipient_bare_jid,
+                        local_actor_id: request.local_actor_id,
+                        sender_jid: destination.sender_jid,
+                        stanza: destination.stanza,
+                        target_full_jid: target_full_jid.as_deref(),
+                        encrypted: destination.encrypted,
+                        policy: offline_store_policy(self.offline, destination.mam_backed),
+                    };
                 let (outcome, mode, live_claim_id) = self
                     .admit_direct_history(
                         &self.pool,
@@ -153,13 +157,19 @@ impl PostgresMessageRepository {
     async fn admit_direct_history(
         &self,
         pool: &PgPool,
-        identity: Option<&db::PersonalHistoryIdentity<'_>>,
-        archives: &[db::PersonalArchiveWrite<'_>],
-        outbox: Option<&db::PersonalS2sOutboxAdmission<'_>>,
-        delivery: Option<&db::PersonalC2sDeliveryAdmission<'_>>,
+        identity: Option<
+            &northstar_message_postgres::personal_history::PersonalHistoryIdentity<'_>,
+        >,
+        archives: &[northstar_message_postgres::personal_history::PersonalArchiveWrite<'_>],
+        outbox: Option<
+            &northstar_message_postgres::personal_history::PersonalS2sOutboxAdmission<'_>,
+        >,
+        delivery: Option<
+            &northstar_message_postgres::personal_history::PersonalC2sDeliveryAdmission<'_>,
+        >,
         admission: (DirectSpoolEligibility, Option<&dyn DirectCommitObserver>),
     ) -> Result<(
-        db::PersonalHistoryAdmission,
+        northstar_message_postgres::personal_history::PersonalHistoryAdmission,
         DirectPostCommitMode,
         Option<Uuid>,
     )> {
@@ -176,13 +186,13 @@ impl PostgresMessageRepository {
                 identity,
                 archives,
                 delivery,
-                self.cluster.as_ref(),
+                self.cluster.as_deref(),
                 eligibility,
                 observer,
             )
             .await;
         }
-        let Some(cluster) = self.cluster.as_ref() else {
+        let Some(cluster) = self.cluster.as_deref() else {
             // Standalone repository fixtures and single-node operation retain
             // the existing transaction behavior without a cluster fence.
             let outcome = match (outbox, delivery) {
@@ -213,11 +223,11 @@ impl PostgresMessageRepository {
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     ) -> Result<()> {
-        if let Some(cluster) = self.cluster.as_ref() {
+        if let Some(cluster) = self.cluster.as_deref() {
             if let Some(authority) =
                 cluster.check_direct_eligibility(DirectSpoolEligibility::LiveOnly)?
             {
-                db::fence_direct_message_authority_in_transaction(tx, authority).await?;
+                cluster.fence_authority(tx, authority).await?;
             }
         }
         Ok(())
@@ -231,21 +241,21 @@ impl PostgresMessageRepository {
         mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
         wake_delivery: Option<(Uuid, Uuid)>,
     ) -> Result<Option<Uuid>> {
-        if let Some(cluster) = self.cluster.as_ref() {
+        if let Some(cluster) = self.cluster.as_deref() {
             let (turn, authority) =
                 cluster.begin_direct_commit_turn(DirectSpoolEligibility::LiveOnly)?;
             let mut live_claim_id = None;
             if let Some(authority) = authority {
-                db::fence_direct_message_authority_in_transaction(&mut tx, authority).await?;
+                cluster.fence_authority(&mut tx, authority).await?;
                 if let Some((recipient_id, message_id)) = wake_delivery {
-                    db::archive::reserve_cluster_live_delivery_in_transaction(
+                    northstar_message_postgres::personal_history::reserve_cluster_live_delivery_in_transaction(
                         &mut tx,
                         recipient_id,
                         message_id,
                     )
                     .await?;
                     live_claim_id = Some(message_id);
-                    db::direct_spool_wake_repository::record_direct_spool_wake_in_transaction(
+                    northstar_message_postgres::direct_spool_wake::record_direct_spool_wake_in_transaction(
                         &mut tx,
                         &authority.key_identity.xmpp_domain,
                         recipient_id,
@@ -283,8 +293,11 @@ impl PostgresMessageRepository {
         }
     }
 
-    pub(crate) fn with_cluster_admission(mut self, cluster: ClusterAdmission) -> Self {
-        self.cluster = Some(cluster);
+    pub(crate) fn with_cluster_admission(
+        mut self,
+        cluster: impl DirectCommitCluster + 'static,
+    ) -> Self {
+        self.cluster = Some(Arc::new(cluster));
         self
     }
 }
@@ -293,13 +306,13 @@ impl MessageRepository for PostgresMessageRepository {
     fn direct_mode(&self) -> DirectPostCommitMode {
         self.cluster
             .as_ref()
-            .map_or(DirectPostCommitMode::Live, ClusterAdmission::direct_mode)
+            .map_or(DirectPostCommitMode::Live, |cluster| cluster.direct_mode())
     }
 
     fn clustered_direct_admission_enabled(&self) -> bool {
         self.cluster
             .as_ref()
-            .is_some_and(ClusterAdmission::is_enabled)
+            .is_some_and(|cluster| cluster.is_enabled())
     }
 
     async fn release_live_direct_claim(
@@ -308,7 +321,7 @@ impl MessageRepository for PostgresMessageRepository {
         message_id: Uuid,
         claim_id: Uuid,
     ) -> Result<bool> {
-        db::archive::release_cluster_live_delivery_reservation_and_rearm(
+        northstar_message_postgres::personal_history::release_cluster_live_delivery_reservation_and_rearm(
             &self.pool,
             &self.configured_domain,
             recipient_id,
@@ -420,7 +433,7 @@ impl MessageRepository for PostgresMessageRepository {
             .map(|identity| self.db_identity(identity))
             .transpose()?;
         let archives = persistence_archive_writes(request.archives);
-        let outbox = db::PersonalS2sOutboxAdmission {
+        let outbox = northstar_message_postgres::personal_history::PersonalS2sOutboxAdmission {
             local_actor_id: request.local_actor_id,
             target_domain: request.target_domain,
             stanza: request.stanza,
@@ -441,7 +454,7 @@ impl MessageRepository for PostgresMessageRepository {
             Ok(history) => history,
             Err(error)
                 if error
-                    .downcast_ref::<db::PersonalHistoryIdentityConflict>()
+                    .downcast_ref::<northstar_message_postgres::personal_history::PersonalHistoryIdentityConflict>()
                     .is_some() =>
             {
                 transaction.rollback().await?;
@@ -452,11 +465,14 @@ impl MessageRepository for PostgresMessageRepository {
                 return Err(error);
             }
         };
-        if matches!(history, db::PersonalHistoryAdmission::AccountUnavailable) {
+        if matches!(history, northstar_message_postgres::personal_history::PersonalHistoryAdmission::AccountUnavailable) {
             transaction.rollback().await?;
             return Ok(RemoteMucInviteAdmissionOutcome::AccountUnavailable);
         }
-        if matches!(history, db::PersonalHistoryAdmission::Replay(_)) {
+        if matches!(
+            history,
+            northstar_message_postgres::personal_history::PersonalHistoryAdmission::Replay(_)
+        ) {
             // No room mutation has happened yet. Commit so a migration-0104
             // legacy digest upgrade performed by the history repository is
             // durable; a keyed replay commits only read locks.
@@ -518,7 +534,7 @@ impl MessageRepository for PostgresMessageRepository {
             .transpose()?;
         let archives = persistence_archive_writes(request.archives);
         let target_full_jid = durable_target_full_jid(request.stanza)?;
-        let delivery = db::PersonalC2sDeliveryAdmission {
+        let delivery = northstar_message_postgres::personal_history::PersonalC2sDeliveryAdmission {
             id: request.delivery_id,
             recipient_id: request.recipient_id,
             recipient_bare_jid: request.recipient_bare_jid,
@@ -531,8 +547,10 @@ impl MessageRepository for PostgresMessageRepository {
         };
         let mut transaction = self.pool.begin().await?;
         if self.cluster.is_some() {
-            db::cluster_keys::lock_direct_spool_instance_claims_in_transaction(&mut transaction)
-                .await?;
+            northstar_postgres::cluster_lock::lock_direct_spool_instance_claims_in_transaction(
+                &mut transaction,
+            )
+            .await?;
         }
         self.fence_live_invite(&mut transaction).await?;
         let history = match db::admit_personal_history_in_transaction(
@@ -547,7 +565,7 @@ impl MessageRepository for PostgresMessageRepository {
             Ok(history) => history,
             Err(error)
                 if error
-                    .downcast_ref::<db::C2sDeliveryCapacityExceeded>()
+                    .downcast_ref::<northstar_message_postgres::personal_history::C2sDeliveryCapacityExceeded>()
                     .is_some() =>
             {
                 transaction.rollback().await?;
@@ -558,7 +576,10 @@ impl MessageRepository for PostgresMessageRepository {
                 return Err(error);
             }
         };
-        if matches!(history, db::PersonalHistoryAdmission::Replay(_)) {
+        if matches!(
+            history,
+            northstar_message_postgres::personal_history::PersonalHistoryAdmission::Replay(_)
+        ) {
             // The affiliation path has not run, so the only possible write is
             // a safe legacy-content-evidence upgrade.
             self.commit_live_invite(transaction, None).await?;
@@ -621,7 +642,7 @@ impl MessageRepository for PostgresMessageRepository {
             return Ok(());
         }
         let writes = persistence_archive_writes(writes);
-        if let Some(cluster) = self.cluster.as_ref() {
+        if let Some(cluster) = self.cluster.as_deref() {
             db::admit_personal_history_with_direct_fence(
                 &self.pool,
                 None,
@@ -654,7 +675,7 @@ impl MessageRepository for PostgresMessageRepository {
             identity,
         } = admission;
         self.validate_local_recipient_authority(recipient_bare_jid)?;
-        match db::store_offline_idempotent_for_recipient_with_direct_fence(
+        match northstar_message_postgres::offline::store_offline_idempotent_for_recipient_with_direct_fence(
             &self.pool,
             recipient_id,
             recipient_bare_jid,
@@ -663,14 +684,14 @@ impl MessageRepository for PostgresMessageRepository {
             encrypted,
             self.offline_policy(mam_backed),
             identity,
-            self.cluster.as_ref(),
+            self.cluster.as_deref(),
         )
         .await?
         {
-            db::OfflineStoreOutcome::Stored => Ok(OfflineAdmissionOutcome::Stored),
-            db::OfflineStoreOutcome::Replay => Ok(OfflineAdmissionOutcome::Replay),
-            db::OfflineStoreOutcome::QuotaExceeded => Ok(OfflineAdmissionOutcome::QuotaExceeded),
-            db::OfflineStoreOutcome::RecipientUnavailable => {
+            northstar_message_postgres::offline::OfflineStoreOutcome::Stored => Ok(OfflineAdmissionOutcome::Stored),
+            northstar_message_postgres::offline::OfflineStoreOutcome::Replay => Ok(OfflineAdmissionOutcome::Replay),
+            northstar_message_postgres::offline::OfflineStoreOutcome::QuotaExceeded => Ok(OfflineAdmissionOutcome::QuotaExceeded),
+            northstar_message_postgres::offline::OfflineStoreOutcome::RecipientUnavailable => {
                 Ok(OfflineAdmissionOutcome::RecipientUnavailable)
             }
         }
@@ -687,20 +708,26 @@ impl PostgresMessageRepository {
         validate_local_recipient_authority_for_domain(recipient_bare_jid, &self.configured_domain)
     }
 
-    fn offline_policy(&self, mam_backed: bool) -> db::OfflineStorePolicy {
+    fn offline_policy(
+        &self,
+        mam_backed: bool,
+    ) -> northstar_message_postgres::offline::OfflineStorePolicy {
         offline_store_policy(self.offline, mam_backed)
     }
 
     fn db_identity<'a>(
         &self,
         identity: &'a MessageIdentity<'a>,
-    ) -> Result<db::PersonalHistoryIdentity<'a>> {
+    ) -> Result<northstar_message_postgres::personal_history::PersonalHistoryIdentity<'a>> {
         db_history_identity(&self.content_identity, identity)
     }
 }
 
-fn offline_store_policy(limits: OfflineLimits, mam_backed: bool) -> db::OfflineStorePolicy {
-    db::OfflineStorePolicy {
+fn offline_store_policy(
+    limits: OfflineLimits,
+    mam_backed: bool,
+) -> northstar_message_postgres::offline::OfflineStorePolicy {
+    northstar_message_postgres::offline::OfflineStorePolicy {
         max_messages: limits.max_messages,
         max_bytes: limits.max_bytes,
         ttl_days: limits.ttl_days,
@@ -711,22 +738,24 @@ fn offline_store_policy(limits: OfflineLimits, mam_backed: bool) -> db::OfflineS
 fn db_history_identity<'a>(
     content_identity: &PersonalMessageContentKeyring,
     identity: &'a MessageIdentity<'a>,
-) -> Result<db::PersonalHistoryIdentity<'a>> {
+) -> Result<northstar_message_postgres::personal_history::PersonalHistoryIdentity<'a>> {
     anyhow::ensure!(
         !identity.payload.is_empty() && identity.payload.len() <= 1_048_576,
         "personal history payload must contain 1 byte to 1 MiB"
     );
     let kind = identity.authority.persistence_kind();
     let commitment = personal_message_commitment(kind, identity);
-    Ok(db::PersonalHistoryIdentity {
-        kind,
-        actor_scope_raw: identity.actor_scope_raw,
-        actor_scope: identity.actor_scope,
-        target_scope: identity.target_scope,
-        identity_value: identity.value,
-        payload_authenticators: content_identity.authenticators(&commitment),
-        legacy_payload_digest: Sha256::digest(identity.payload.as_bytes()).into(),
-    })
+    Ok(
+        northstar_message_postgres::personal_history::PersonalHistoryIdentity {
+            kind,
+            actor_scope_raw: identity.actor_scope_raw,
+            actor_scope: identity.actor_scope,
+            target_scope: identity.target_scope,
+            identity_value: identity.value,
+            payload_authenticators: content_identity.authenticators(&commitment),
+            legacy_payload_digest: Sha256::digest(identity.payload.as_bytes()).into(),
+        },
+    )
 }
 
 fn validate_local_recipient_authority_for_domain(
@@ -748,17 +777,19 @@ fn validate_local_recipient_authority_for_domain(
 
 fn persistence_archive_writes<'a>(
     writes: &[ArchiveWrite<'a>],
-) -> Vec<db::PersonalArchiveWrite<'a>> {
+) -> Vec<northstar_message_postgres::personal_history::PersonalArchiveWrite<'a>> {
     writes
         .iter()
-        .map(|write| db::PersonalArchiveWrite {
-            id: write.id,
-            owner_id: write.owner_id,
-            peer_jid: write.peer_jid,
-            stanza: write.stanza,
-            encrypted: write.encrypted,
-            stanza_id: write.stanza_id,
-        })
+        .map(
+            |write| northstar_message_postgres::personal_history::PersonalArchiveWrite {
+                id: write.id,
+                owner_id: write.owner_id,
+                peer_jid: write.peer_jid,
+                stanza: write.stanza,
+                encrypted: write.encrypted,
+                stanza_id: write.stanza_id,
+            },
+        )
         .collect()
 }
 
@@ -802,17 +833,17 @@ fn personal_message_commitment(kind: &str, identity: &MessageIdentity<'_>) -> Ve
 }
 
 fn map_history_outcome(
-    outcome: db::PersonalHistoryAdmission,
+    outcome: northstar_message_postgres::personal_history::PersonalHistoryAdmission,
     archive_written: bool,
     post_commit: MessagePostCommit,
 ) -> Result<DurableAdmissionOutcome> {
     Ok(match outcome {
-        db::PersonalHistoryAdmission::Stored(_) => DurableAdmissionOutcome::Stored {
+        northstar_message_postgres::personal_history::PersonalHistoryAdmission::Stored(_) => DurableAdmissionOutcome::Stored {
             archive_written,
             post_commit,
         },
-        db::PersonalHistoryAdmission::Replay(_) => DurableAdmissionOutcome::Replay,
-        db::PersonalHistoryAdmission::AccountUnavailable => {
+        northstar_message_postgres::personal_history::PersonalHistoryAdmission::Replay(_) => DurableAdmissionOutcome::Replay,
+        northstar_message_postgres::personal_history::PersonalHistoryAdmission::AccountUnavailable => {
             DurableAdmissionOutcome::AccountUnavailable
         }
     })

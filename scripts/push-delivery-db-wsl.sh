@@ -52,7 +52,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
 fi
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$database?options=-csearch_path%3D$schema"
 
-test_name="db::push::integration_tests::quota_upsert_and_durable_claim_are_atomic"
+test_name="db::push_tests::quota_upsert_and_durable_claim_are_atomic"
 output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture --test-threads=1 2>&1)" || {
   printf '%s\n' "$output"
   exit 1

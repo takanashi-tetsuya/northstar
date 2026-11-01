@@ -100,6 +100,7 @@ impl AppState {
         let mut failures = Vec::new();
         let mut actors = Vec::new();
         let mut resume_gate = self
+            .room
             .suspended_muc_sessions
             .get(&sm_session_id)
             .map(|endpoint| Arc::clone(&endpoint));
@@ -194,7 +195,7 @@ impl AppState {
                 failures.push(membership.clone());
                 continue;
             };
-            if let Some(occupant) = self.muc_occupants.get(&key) {
+            if let Some(occupant) = self.room.muc_occupants.get(&key) {
                 let previous = SerializableMucOccupant::from(&*occupant);
                 let endpoint = match &occupant.endpoint {
                     MucOccupantEndpoint::Suspended(endpoint)
@@ -212,7 +213,7 @@ impl AppState {
                 let endpoint = endpoint.expect("checked above");
                 drop(occupant);
                 let canonical_endpoint = canonical_suspended_muc_endpoint(
-                    &self.suspended_muc_sessions,
+                    &self.room.suspended_muc_sessions,
                     sm_session_id,
                     Arc::clone(&endpoint),
                 );
@@ -287,7 +288,7 @@ impl AppState {
                 } else {
                     None
                 };
-                let Some(mut occupant) = self.muc_occupants.get_mut(&key) else {
+                let Some(mut occupant) = self.room.muc_occupants.get_mut(&key) else {
                     if let Some(target) = &resumed_cluster_target {
                         self.compensate_resumed_muc_target(target, sm_session_id)
                             .await;
@@ -327,7 +328,7 @@ impl AppState {
                 {
                     Ok(true) => {}
                     Ok(false) | Err(_) if !self.cluster.is_enabled() => {
-                        self.muc_occupants.remove_if(&key, |_, current| {
+                        self.room.muc_occupants.remove_if(&key, |_, current| {
                             current.full_jid == full_jid
                                 && current.cluster_epoch == serializable.cluster_epoch
                                 && current.connection_id == connection_id
@@ -402,7 +403,7 @@ impl AppState {
                 ))
             });
             let created_endpoint = canonical_suspended_muc_endpoint(
-                &self.suspended_muc_sessions,
+                &self.room.suspended_muc_sessions,
                 sm_session_id,
                 proposed_endpoint,
             );
@@ -441,7 +442,7 @@ impl AppState {
             let serializable = SerializableMucOccupant::from(&occupant);
             // A concurrent join or a winning resume may have created the same
             // (room, nick) occupancy while the restore awaited PostgreSQL.
-            if !insert_restored_muc_occupant(&self.muc_occupants, key.clone(), occupant) {
+            if !insert_restored_muc_occupant(&self.room.muc_occupants, key.clone(), occupant) {
                 failures.push(membership.clone());
                 continue;
             }
@@ -451,7 +452,7 @@ impl AppState {
                     authority,
                 );
                 let Some(next_epoch) = target.connection_epoch.checked_add(1) else {
-                    self.muc_occupants.remove_if(&key, |_, occupant| {
+                    self.room.muc_occupants.remove_if(&key, |_, occupant| {
                         suspended_occupant_is_created(occupant, &created_endpoint)
                             && occupant.full_jid == full_jid
                             && occupant.connection_id == connection_id
@@ -495,7 +496,7 @@ impl AppState {
                     Ok(outcome) => {
                         tracing::warn!(?outcome, room=%room_jid, nick=%nick,
                             "PG MUC restart resume rejected the reserved local actor");
-                        self.muc_occupants.remove_if(&key, |_, occupant| {
+                        self.room.muc_occupants.remove_if(&key, |_, occupant| {
                             suspended_occupant_is_created(occupant, &created_endpoint)
                                 && occupant.full_jid == full_jid
                                 && occupant.connection_id == connection_id
@@ -506,7 +507,7 @@ impl AppState {
                     Err(error) => {
                         tracing::warn!(?error, room=%room_jid, nick=%nick,
                             "PG MUC restart resume failed after local reservation");
-                        self.muc_occupants.remove_if(&key, |_, occupant| {
+                        self.room.muc_occupants.remove_if(&key, |_, occupant| {
                             suspended_occupant_is_created(occupant, &created_endpoint)
                                 && occupant.full_jid == full_jid
                                 && occupant.connection_id == connection_id
@@ -568,7 +569,7 @@ impl AppState {
                             self.compensate_resumed_muc_target(target, actor.sm_session_id)
                                 .await;
                         }
-                        self.muc_occupants.remove_if(&actor.key, |_, current| {
+                        self.room.muc_occupants.remove_if(&actor.key, |_, current| {
                             current.full_jid == actor.full_jid
                                 && current.connection_id == actor.connection_id
                                 && current.cluster_epoch == actor.cluster_epoch
@@ -701,7 +702,8 @@ impl AppState {
             {
                 for actor in actors {
                     let activated =
-                        self.muc_occupants
+                        self.room
+                            .muc_occupants
                             .get_mut(&actor.key)
                             .is_some_and(|mut current| {
                                 if suspended_muc_resume_actor_matches(
@@ -733,6 +735,7 @@ impl AppState {
                 }
 
                 stale_suspended = self
+                    .room
                     .muc_occupants
                     .iter()
                     .filter_map(|current| match &current.endpoint {
@@ -748,7 +751,7 @@ impl AppState {
                     })
                     .collect();
                 for (key, expected) in &stale_suspended {
-                    self.muc_occupants.remove_if(key, |_, current| {
+                    self.room.muc_occupants.remove_if(key, |_, current| {
                         muc_suspended_teardown_identity_matches(
                             current,
                             endpoint.sm_session_id,
@@ -861,7 +864,7 @@ impl AppState {
                 self.compensate_resumed_muc_target(target, actor.sm_session_id)
                     .await;
             }
-            let suspended = self.muc_occupants.get(&actor.key).and_then(|current| {
+            let suspended = self.room.muc_occupants.get(&actor.key).and_then(|current| {
                 suspended_muc_resume_actor_matches(
                     &current,
                     &actor.endpoint,

@@ -8,7 +8,7 @@ impl AppState {
     pub(crate) fn cluster_muc_delivery_endpoints(&self) -> ClusterMucDeliveryEndpoints {
         ClusterMucDeliveryEndpoints {
             sessions: Arc::clone(&self.sessions),
-            occupants: Arc::clone(&self.muc_occupants),
+            occupants: Arc::clone(&self.room.muc_occupants),
         }
     }
 }

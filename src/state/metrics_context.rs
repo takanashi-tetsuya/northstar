@@ -61,7 +61,7 @@ pub(super) fn metrics_context(state: &AppState) -> MetricsContext {
         tls: state.tls_context.metrics_probe(),
         cluster: state.cluster.metrics_probe(),
         muc_occupant_count: MucOccupancyCountProbe::new(
-            Arc::clone(&state.muc_occupants) as Arc<dyn OccupancyCount>
+            Arc::clone(&state.room.muc_occupants) as Arc<dyn OccupancyCount>
         ),
         s2s_outbound_count: state.s2s_connection_registry.outbound_count_probe(),
         sm: Arc::new(SmRecoveryMetricsProbe {

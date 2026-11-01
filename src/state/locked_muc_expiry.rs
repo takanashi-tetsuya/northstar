@@ -30,10 +30,10 @@ struct LockedMucExpiryLocal {
 impl LockedMucExpiryContext {
     pub(crate) fn from_state(state: &AppState) -> Self {
         Self {
-            service: state.locked_muc_expiry_service.clone(),
+            service: state.room.locked_muc_expiry_service.clone(),
             local: LockedMucExpiryLocal {
                 sessions: Arc::clone(&state.sessions),
-                occupants: Arc::clone(&state.muc_occupants),
+                occupants: Arc::clone(&state.room.muc_occupants),
             },
             delivery: state.muc_delivery_context(),
             domain: state.config.domain.clone(),

@@ -22,7 +22,7 @@ pub(crate) struct SessionCleanupMix {
 impl AppState {
     pub(crate) fn session_cleanup_mix(&self) -> SessionCleanupMix {
         SessionCleanupMix {
-            service: self.mix_service.clone(),
+            service: self.room.mix_service.clone(),
             federation: self.federation_outbox.clone(),
             domains: self.config.external_route_domain_policy(),
             runtime_policy: Arc::clone(&self.federation_runtime_policy),

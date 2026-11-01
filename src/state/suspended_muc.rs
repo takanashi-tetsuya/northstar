@@ -25,12 +25,15 @@ impl AppState {
             return;
         };
         let proposed = Arc::new(SuspendedMucEndpoint::new_live(sm_session_id, live_sender));
-        let _endpoint =
-            canonical_suspended_muc_endpoint(&self.suspended_muc_sessions, sm_session_id, proposed);
+        let _endpoint = canonical_suspended_muc_endpoint(
+            &self.room.suspended_muc_sessions,
+            sm_session_id,
+            proposed,
+        );
         for (room_jid, membership) in local_muc_membership_snapshots(memberships) {
             let key = northstar_room_core::stanza::muc_occupant_key(&room_jid, &membership.nick);
             let serializable = {
-                let Some(mut occupant) = self.muc_occupants.get_mut(&key) else {
+                let Some(mut occupant) = self.room.muc_occupants.get_mut(&key) else {
                     continue;
                 };
                 if !muc_actor_identity_matches(
@@ -110,6 +113,7 @@ impl AppState {
         sm_session_id: uuid::Uuid,
     ) -> Vec<Arc<SuspendedMucEndpoint>> {
         let mut endpoints = self
+            .room
             .muc_occupants
             .iter()
             .filter_map(|occupant| match &occupant.endpoint {
@@ -121,13 +125,13 @@ impl AppState {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        if let Some(endpoint) = self.suspended_muc_sessions.get(&sm_session_id) {
+        if let Some(endpoint) = self.room.suspended_muc_sessions.get(&sm_session_id) {
             endpoints.push(Arc::clone(&endpoint));
         }
         let mut seen = HashSet::new();
         endpoints.retain(|endpoint| seen.insert(Arc::as_ptr(endpoint) as usize));
         if let Some(endpoint) = endpoints.first() {
-            match self.suspended_muc_sessions.entry(sm_session_id) {
+            match self.room.suspended_muc_sessions.entry(sm_session_id) {
                 dashmap::mapref::entry::Entry::Vacant(slot) => {
                     slot.insert(Arc::clone(endpoint));
                 }

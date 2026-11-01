@@ -35,7 +35,7 @@ impl AppState {
 
     pub(crate) fn mix_iq_relay_expiry_context(&self) -> MixIqRelayExpiryContext {
         MixIqRelayExpiryContext {
-            pending: Arc::clone(&self.pending_mix_iq),
+            pending: Arc::clone(&self.room.pending_mix_iq),
             route: self.mix_iq_relay_route(),
         }
     }

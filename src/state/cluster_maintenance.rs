@@ -20,7 +20,7 @@ impl AppState {
     pub(crate) fn cluster_maintenance_locals(&self) -> ClusterMaintenanceLocals {
         ClusterMaintenanceLocals {
             sessions: Arc::clone(&self.sessions),
-            occupants: Arc::clone(&self.muc_occupants),
+            occupants: Arc::clone(&self.room.muc_occupants),
             metrics: Arc::clone(&self.metrics),
         }
     }

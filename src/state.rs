@@ -235,6 +235,7 @@ mod muc_resume;
 mod omemo_poll_admission;
 mod operations_module;
 mod pubsub_module;
+mod room_module;
 mod roster_module;
 mod runtime_config;
 mod runtime_contexts;
@@ -254,6 +255,7 @@ use self::federation_policy::*;
 pub(crate) use self::local_muc::count_shutdown_notification_completions;
 use self::operations_module::*;
 use self::pubsub_module::*;
+use self::room_module::*;
 use self::roster_module::*;
 pub(crate) use self::runtime_config::*;
 pub(crate) use self::runtime_control::*;
@@ -303,15 +305,14 @@ pub struct AppState {
     upload: UploadModule,
     /// The pubsub context; see [`PubSubModule`].
     pubsub: PubSubModule,
+    /// The room context; see [`RoomModule`].
+    room: RoomModule,
     /// The roster context; see [`RosterModule`].
     roster: RosterModule,
     public_discovery_context: PublicDiscoveryContext,
     /// XEP-0215 TURN credential authority. Long-lived key material and its
     /// bounded rate windows never cross into protocol or public state.
     extdisco_service: crate::services::extdisco::ExtDiscoService,
-    /// PostgreSQL-authoritative MUC application service. Redis capabilities
-    /// deliberately do not cross this boundary.
-    muc_service: northstar_room_application::muc_service::MucService<crate::db::room_effects::PostgresMucRepository>,
     /// Personal-message authorization and durable admission boundary. The
     /// protocol layer must not compose its own archive/outbox/offline writes.
     message_service:
@@ -325,7 +326,6 @@ pub struct AppState {
         db::retractions::PostgresRetractionRepository,
     >,
     mam_service: northstar_archive_application::MamService<db::mam::PostgresMamRepository>,
-    mix_service: northstar_room_application::mix_service::MixService<crate::db::room_effects::PostgresMixRepository>,
     sm_service: crate::services::sm::SmService<db::sm_repository::PostgresSmRepository>,
     replay_service:
         crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>,
@@ -344,11 +344,6 @@ pub struct AppState {
         >,
     bosh: Option<crate::bosh::BoshManager>,
     sessions: Arc<DashMap<String, OnlineSession>>,
-    muc_occupants: Arc<DashMap<String, MucOccupant>>,
-    /// Exactly one process-local suspension/resume FIFO per durable SM
-    /// session.  Every room occupancy for the same client points at this Arc,
-    /// preserving cross-room arrival order and enforcing one shared budget.
-    suspended_muc_sessions: Arc<DashMap<uuid::Uuid, Arc<SuspendedMucEndpoint>>>,
     /// Supervised retry ownership for an exact SM suspension whose database
     /// outcome was an error or timeout. The corresponding MUC FIFO remains
     /// sealed until this queue proves a durable handoff.
@@ -373,10 +368,6 @@ pub struct AppState {
     /// reserve without giving protocol handlers raw pool access.
     durable_outbox_database_admission:
         northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
-    locked_muc_expiry_service: northstar_room_application::locked_muc_expiry::LockedMucExpiryService<
-        northstar_room_postgres::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
-    >,
-    locked_muc_expiry_context: std::sync::OnceLock<Arc<locked_muc_expiry::LockedMucExpiryContext>>,
     federation_outbox: FederationRouter,
     /// Full XEP-0114/XEP-0225 authentication records. `config.components`
     /// retains only redacted routing/discovery metadata after construction.
@@ -390,9 +381,6 @@ pub struct AppState {
     /// that an ordinary resolver answer can never be mistaken for secure
     /// TLSA material.
     s2s_dnssec_resolver: Option<TokioResolver>,
-    /// XEP-0403 IQ relay correlations. Keys are server-generated opaque IQ
-    /// ids, never client-controlled ids; entries are bounded and short-lived.
-    pending_mix_iq: Arc<northstar_room_core::mix_iq_relay::MixIqRelayIndex>,
     /// XEP-0115 entries are inserted only after the advertised verification
     /// string has been recomputed successfully. Unverified payloads never
     /// enter this shared cache.
@@ -443,6 +431,7 @@ impl AppState {
     fn start_locked_muc_expiry(state: Arc<Self>, cancel: CancellationToken) {
         let weak = Arc::downgrade(
             state
+                .room
                 .locked_muc_expiry_context
                 .get()
                 .expect("locked MUC expiry context is initialized"),

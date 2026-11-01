@@ -241,7 +241,7 @@ impl AppState {
                 max_stanzas: self.config.sm_max_unacked_stanzas,
                 max_bytes: self.config.sm_max_unacked_bytes,
             },
-            Arc::clone(&self.muc_occupants),
+            Arc::clone(&self.room.muc_occupants),
             self.cluster.sm_suspension(),
         )
     }
@@ -271,7 +271,7 @@ impl AppState {
     }
 
     pub(crate) fn pending_mix_iq(&self) -> &northstar_room_core::mix_iq_relay::MixIqRelayIndex {
-        self.pending_mix_iq.as_ref()
+        self.room.pending_mix_iq.as_ref()
     }
 
     pub(crate) fn caps_cache(&self) -> &northstar_protocol_runtime::caps::CapsCacheIndex {

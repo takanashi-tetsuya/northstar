@@ -568,30 +568,21 @@ impl AppState {
             ),
             sm_authority_schema.clone(),
         )?;
-        // The MIX wake broker validates the same schema identity that the
-        // dedicated PostgreSQL listener attests below.  It never trusts a
-        // notification as delivery authority; schema matching only prevents
-        // a shared database's unrelated schema from creating local scan load.
-        let mix_service = northstar_room_application::mix_service::MixService::new_with_outbox_database_admission(
-            crate::db::room_effects::PostgresMixRepository::new(pool.clone()),
-            config.domain.clone(),
+        let room = RoomModule::new(RoomModuleParts {
+            config: &config,
+            pool: &pool,
             mix_message_content_identity,
             mix_retraction_content_identity,
-            durable_outbox_database_admission.clone(),
+            durable_outbox_database_admission: &durable_outbox_database_admission,
             sm_authority_schema,
-        )?;
+        })?;
         config.raw.database_url.zeroize();
         config.raw.database_url.clear();
         config.raw.admin_command_database_url.zeroize();
         config.raw.admin_command_database_url.clear();
         config.raw.storage_database_url.zeroize();
         config.raw.storage_database_url.clear();
-        let muc_service = northstar_room_application::muc_service::MucService::new(
-            crate::db::room_effects::PostgresMucRepository::new(pool.clone()),
-            config.domain.clone(),
-        );
         let sessions = Arc::new(DashMap::new());
-        let muc_occupants = Arc::new(DashMap::new());
         let started_at = Instant::now();
         let api_cursor = Arc::new(api_cursor);
         let federation_write_policy = Arc::new(FederationWritePolicy::new(island_mode));
@@ -644,12 +635,6 @@ impl AppState {
             Arc::clone(&api_control),
             cluster.admission(),
         );
-        let locked_muc_expiry_service =
-            northstar_room_application::locked_muc_expiry::LockedMucExpiryService::new(
-                northstar_room_postgres::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository::new(
-                    pool.clone(),
-                ),
-            );
         let s2s_outbox_dispatch_service =
             crate::services::s2s_outbox_dispatch::S2sOutboxDispatchService::new(
                 db::s2s_outbox_dispatch_repository::PostgresS2sOutboxDispatchRepository::new(
@@ -691,7 +676,7 @@ impl AppState {
             registration_closed: &registration_closed,
             federation_write_policy: &federation_write_policy,
             sessions: &sessions,
-            muc_occupants: &muc_occupants,
+            muc_occupants: &room.muc_occupants,
             started_at,
         });
         let message_admission_service =
@@ -714,14 +699,13 @@ impl AppState {
                 db::omemo_recovery_repository::PostgresOmemoRecoveryRepository::new(pool.clone()),
             ),
             pubsub,
+            room,
             roster,
             extdisco_service,
-            muc_service,
             message_service,
             message_admission_service,
             retraction_service,
             mam_service,
-            mix_service,
             sm_service,
             replay_service,
             s2s_outbox_dispatch_service,
@@ -736,8 +720,6 @@ impl AppState {
             account_revocation_consumer_service,
             bosh,
             sessions,
-            muc_occupants,
-            suspended_muc_sessions: Arc::new(DashMap::new()),
             sm_suspension_recovery: crate::state::session_cleanup::SmSuspensionRecoveryQueue::new(
                 sm_recovery_max_jobs,
                 sm_recovery_max_bytes,
@@ -750,8 +732,6 @@ impl AppState {
             web_admin_gateway_token,
             omemo_recovery_poll_context,
             durable_outbox_database_admission,
-            locked_muc_expiry_service,
-            locked_muc_expiry_context: std::sync::OnceLock::new(),
             upload,
             federation_outbox: federation,
             component_credentials,
@@ -759,7 +739,6 @@ impl AppState {
             s2s_connection_registry: Arc::new(crate::s2s::S2sConnectionRegistry::default()),
             s2s_dns_resolver,
             s2s_dnssec_resolver,
-            pending_mix_iq: Arc::new(northstar_room_core::mix_iq_relay::MixIqRelayIndex::new()),
             caps_cache: Arc::new(northstar_protocol_runtime::caps::CapsCacheIndex::new()),
             caps_by_jid: Arc::new(northstar_protocol_runtime::caps::CapsResourceIndex::new()),
             pending_caps: Arc::new(northstar_protocol_runtime::caps::PendingCapsIndex::new()),
@@ -855,6 +834,7 @@ impl AppState {
             worker_cancel.clone(),
         );
         assert!(state
+            .room
             .locked_muc_expiry_context
             .set(Arc::new(
                 locked_muc_expiry::LockedMucExpiryContext::from_state(&state)

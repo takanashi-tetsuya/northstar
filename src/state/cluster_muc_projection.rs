@@ -18,7 +18,7 @@ impl AppState {
         connection_id: uuid::Uuid,
     ) -> Vec<MucOccupant> {
         federated_muc_occupants_for_closed_connection_in(
-            &self.muc_occupants,
+            &self.room.muc_occupants,
             authenticated_domain,
             connection_id,
         )

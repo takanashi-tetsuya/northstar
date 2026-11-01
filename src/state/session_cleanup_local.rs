@@ -27,8 +27,8 @@ impl AppState {
     pub(crate) fn session_cleanup_local(&self) -> SessionCleanupLocal {
         SessionCleanupLocal {
             sessions: Arc::clone(&self.sessions),
-            occupants: Arc::clone(&self.muc_occupants),
-            suspended_muc_sessions: Arc::clone(&self.suspended_muc_sessions),
+            occupants: Arc::clone(&self.room.muc_occupants),
+            suspended_muc_sessions: Arc::clone(&self.room.suspended_muc_sessions),
             caps_effect_dispatcher: Arc::clone(&self.caps_effect_dispatcher),
             caps_by_jid: Arc::clone(&self.caps_by_jid),
             pending_caps: Arc::clone(&self.pending_caps),

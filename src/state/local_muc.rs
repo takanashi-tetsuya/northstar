@@ -30,7 +30,8 @@ impl AppState {
     ) -> Option<MucOccupant> {
         let room_jid = northstar_xmpp_types::jid::canonicalize_bare(room_jid).ok()?;
         let key = northstar_room_core::stanza::muc_occupant_key(&room_jid, nick);
-        self.muc_occupants
+        self.room
+            .muc_occupants
             .get(&key)
             .filter(|occupant| occupant.room_jid == room_jid)
             .map(|occupant| occupant.value().clone())
@@ -40,7 +41,9 @@ impl AppState {
         &self,
         identity: LocalMucOccupantIdentity<'_>,
     ) -> Option<MucOccupant> {
-        with_local_muc_occupant_exact(&self.muc_occupants, identity, |current| current.clone())
+        with_local_muc_occupant_exact(&self.room.muc_occupants, identity, |current| {
+            current.clone()
+        })
     }
 
     /// Refresh presence fields only while this exact transport still owns the
@@ -50,7 +53,7 @@ impl AppState {
         prepared: &MucOccupant,
         apply_policy: bool,
     ) -> Option<MucOccupant> {
-        refresh_local_muc_presence_exact_in(&self.muc_occupants, prepared, apply_policy)
+        refresh_local_muc_presence_exact_in(&self.room.muc_occupants, prepared, apply_policy)
     }
 
     /// Update only the exact old federated actor after PostgreSQL commits a
@@ -60,7 +63,11 @@ impl AppState {
         old: &MucOccupant,
         new_connection_id: uuid::Uuid,
     ) -> Option<MucOccupant> {
-        rebind_local_federated_muc_occupant_exact_in(&self.muc_occupants, old, new_connection_id)
+        rebind_local_federated_muc_occupant_exact_in(
+            &self.room.muc_occupants,
+            old,
+            new_connection_id,
+        )
     }
 
     /// Move a nickname after the caller's room gate or PG transition. A local
@@ -72,7 +79,7 @@ impl AppState {
         renamed: &MucOccupant,
         cluster_committed: bool,
     ) -> LocalMucNicknameMove {
-        move_local_muc_nickname_exact_in(&self.muc_occupants, old, renamed, cluster_committed)
+        move_local_muc_nickname_exact_in(&self.room.muc_occupants, old, renamed, cluster_committed)
     }
 
     /// Publish a join under one map shard lock without replacing a later
@@ -81,7 +88,7 @@ impl AppState {
         &self,
         joining: &MucOccupant,
     ) -> LocalMucJoinPublication {
-        publish_local_muc_join_if_vacant_in(&self.muc_occupants, joining)
+        publish_local_muc_join_if_vacant_in(&self.room.muc_occupants, joining)
     }
 
     /// Compare and remove under one map shard lock. Callers retain the removed
@@ -90,7 +97,7 @@ impl AppState {
         &self,
         identity: LocalMucOccupantIdentity<'_>,
     ) -> Option<MucOccupant> {
-        remove_local_muc_occupant_exact_from(&self.muc_occupants, identity)
+        remove_local_muc_occupant_exact_from(&self.room.muc_occupants, identity)
     }
 
     /// Apply a registration or admin affiliation change to the same live
@@ -104,7 +111,7 @@ impl AppState {
         expected_affiliation: Option<&str>,
     ) -> Option<MucOccupant> {
         set_local_muc_affiliation_exact_in(
-            &self.muc_occupants,
+            &self.room.muc_occupants,
             identity,
             affiliation,
             moderated,
@@ -122,7 +129,7 @@ impl AppState {
         non_anonymous: Option<bool>,
     ) -> Option<MucOccupant> {
         set_local_muc_role_exact_in(
-            &self.muc_occupants,
+            &self.room.muc_occupants,
             identity,
             expected_role,
             role,
@@ -138,7 +145,12 @@ impl AppState {
         moderated: Option<bool>,
         non_anonymous: Option<bool>,
     ) -> Option<(MucOccupant, bool)> {
-        refresh_local_muc_policy_exact_in(&self.muc_occupants, identity, moderated, non_anonymous)
+        refresh_local_muc_policy_exact_in(
+            &self.room.muc_occupants,
+            identity,
+            moderated,
+            non_anonymous,
+        )
     }
 
     /// Revoke the exact live protocol actor membership represented by an
@@ -175,7 +187,8 @@ impl AppState {
         }
         drop(session);
         let key = northstar_room_core::stanza::muc_occupant_key(&room_jid, &membership.nick);
-        self.muc_occupants
+        self.room
+            .muc_occupants
             .get(&key)
             .filter(|occupant| {
                 muc_actor_identity_matches(
@@ -233,6 +246,7 @@ impl AppState {
     /// root supervises the whole loop under one bounded, cancellable window.
     pub async fn notify_muc_system_shutdown(&self) -> usize {
         let occupants = self
+            .room
             .muc_occupants
             .iter()
             .filter(|entry| matches!(&entry.value().endpoint, MucOccupantEndpoint::Local(_)))

@@ -12,7 +12,7 @@ pub(crate) struct SessionCleanupRooms {
 impl AppState {
     pub(crate) fn session_cleanup_rooms(&self) -> SessionCleanupRooms {
         SessionCleanupRooms {
-            rooms: self.muc_service.clone(),
+            rooms: self.room.muc_service.clone(),
         }
     }
 }

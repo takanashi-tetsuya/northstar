@@ -89,7 +89,7 @@ pub(crate) fn session_mix_capability_in(
 impl AppState {
     pub(crate) fn mix_outbox_context(&self) -> MixOutboxContext {
         MixOutboxContext {
-            service: self.mix_service.clone(),
+            service: self.room.mix_service.clone(),
             sessions: Arc::clone(&self.sessions),
             caps_by_jid: Arc::clone(&self.caps_by_jid),
             pending_caps: Arc::clone(&self.pending_caps),

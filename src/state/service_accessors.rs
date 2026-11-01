@@ -82,7 +82,7 @@ impl AppState {
     ) -> &northstar_room_application::mix_service::MixService<
         crate::db::room_effects::PostgresMixRepository,
     > {
-        &self.mix_service
+        &self.room.mix_service
     }
 
     pub(crate) fn extdisco_service(&self) -> &crate::services::extdisco::ExtDiscoService {
@@ -94,7 +94,7 @@ impl AppState {
     ) -> &northstar_room_application::muc_service::MucService<
         crate::db::room_effects::PostgresMucRepository,
     > {
-        &self.muc_service
+        &self.room.muc_service
     }
 
     pub(crate) fn message_service(

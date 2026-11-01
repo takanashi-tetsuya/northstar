@@ -35,7 +35,7 @@ impl AppState {
             )),
             publisher: self.cluster.muc_operation_wake(),
             audience: LocalMucDestroyAudience {
-                occupants: Arc::clone(&self.muc_occupants),
+                occupants: Arc::clone(&self.room.muc_occupants),
             },
         }
     }

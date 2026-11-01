@@ -10,7 +10,7 @@ impl AppState {
             local_domain: self.config.domain.clone(),
             presence: self.roster.presence_service.clone(),
             message: self.message_service.clone(),
-            mix: self.mix_service.clone(),
+            mix: self.room.mix_service.clone(),
             verifier: self.node_message_contract_verifier(),
             metrics: Arc::clone(&self.metrics),
         }

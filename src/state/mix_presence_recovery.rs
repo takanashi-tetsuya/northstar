@@ -34,7 +34,7 @@ impl AppState {
     pub(crate) fn mix_presence_recovery_context(&self) -> MixPresenceRecoveryContext {
         MixPresenceRecoveryContext {
             routes: MixPresenceRecoveryRoutes::new(Arc::clone(&self.sessions)),
-            service: self.mix_service.clone(),
+            service: self.room.mix_service.clone(),
             local_domain: self.config.domain.clone(),
             static_policy: self.config.external_route_domain_policy(),
             runtime_policy: Arc::clone(&self.federation_runtime_policy),

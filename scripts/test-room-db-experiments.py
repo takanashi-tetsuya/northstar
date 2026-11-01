@@ -416,7 +416,7 @@ class TestEvidenceTests(unittest.TestCase):
             result = self.validate(self.log(name), name)
             self.assertTrue(result['complete'])
             self.assertEqual(result['passed_exact_tests'], len(DB.EXPECTED_TESTS[name]))
-        self.assertEqual(sum(len(tests) for tests in DB.EXPECTED_TESTS.values()), 27)
+        self.assertEqual(sum(len(tests) for tests in DB.EXPECTED_TESTS.values()), 30)
 
     def test_current_scripts_match_the_fixed_selector_manifest(self):
         for name, script in DB.SUITES:
@@ -427,7 +427,7 @@ class TestEvidenceTests(unittest.TestCase):
     def test_zero_test_success_does_not_establish_suite_success(self):
         result = self.validate('test result: ok. 0 passed; 0 failed; 0 ignored\n')
         self.assertFalse(result['complete'])
-        self.assertEqual(len(result['missing_tests']), 6)
+        self.assertEqual(len(result['missing_tests']), 8)
 
     def test_missing_duplicate_ignored_failed_and_unknown_tests_are_rejected(self):
         good = self.log('muc')

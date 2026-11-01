@@ -43,6 +43,8 @@ EXPECTED_TESTS = {
         'db::cluster_muc_tests::postgres_outbox_maintenance_is_atomic_and_snapshot_is_complete',
         'db::cluster_muc_tests::postgres_admin_batch_is_atomic_under_replay_and_failure',
         'db::cluster_muc_tests::federated_rebind_is_atomic_and_fences_the_old_connection',
+        'db::cluster_muc_tests::postgres_failure_fixture_covers_cluster_muc_authority',
+        'db::operation_muc_destroy_repository_tests::missing_exact_destroy_intent_rolls_back_without_audit_or_room_mutation',
     ),
     'mix': (
         'db::mix_pam_durability_tests::pam_restart_and_result_claims_preserve_authority_and_token_fencing',
@@ -51,6 +53,7 @@ EXPECTED_TESTS = {
         'db::mix_sequence_retention_tests::empty_delivery_claim_avoids_the_event_lock_and_recovers_after_insert',
         'db::mix_sequence_retention_tests::empty_delivery_claim_preserves_database_authority_errors',
         'db::mix_delivery_route_wake_tests::an_expired_unowned_head_blocks_until_terminalized',
+        'db::mix_muc_tests::mirror_link_is_common_owner_only_one_to_one_and_idempotent',
         'db::mix_mam_tests::mix_anon_misc_permissions_are_atomic_and_private',
         'db::mix_delivery_capacity_tests::delivery_ack_is_independent_of_the_producer_fence_and_release_is_atomic',
         'db::mix_delivery_route_wake_tests::leased_route_wake_defeats_defer_and_retry_but_not_unrelated_backoff',

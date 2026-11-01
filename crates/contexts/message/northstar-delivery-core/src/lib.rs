@@ -76,6 +76,21 @@ pub struct MixDelivery {
     pub lease_token: Uuid,
 }
 
+/// The durable boundary reached by a MIX recipient source.
+///
+/// A direct stream writer first rotates the worker lease into a short-lived
+/// socket fence, then reports [`Self::SocketFenced`]. The claiming worker
+/// must stop using its old token at that point; the writer either deletes the
+/// new token after bytes are accepted or lets its bounded fence expire for a
+/// later claim. This prevents a late queue item from writing after a retry
+/// has made the original worker lease stale.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MixTransportCompletion {
+    SocketFenced { connection_id: Uuid },
+    SmPersisted { session_id: Uuid },
+    BoshPersisted { session_id: Uuid },
+}
+
 /// One recoverable source for an outbound stanza.
 ///
 /// Keeping this as an enum makes C2S and MIX ownership mutually exclusive at

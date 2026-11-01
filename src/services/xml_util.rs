@@ -3,7 +3,8 @@ use northstar_abuse_policy::WorkRequirement;
 use northstar_xml_builder::stanza::stanza_condition_element;
 pub(crate) use northstar_xml_builder::stanza::{
     blocked_stanza_error, child_text, iq_error, iq_error_from, iq_error_to, iq_result,
-    iq_result_from, iq_result_to, reflected_stanza_error, stanza_error, stanza_error_type,
+    iq_result_from, iq_result_to, is_encrypted, is_encryption_node, reflected_stanza_error,
+    stanza_error, stanza_error_type,
 };
 use northstar_xml_builder::XmlElement;
 pub(crate) use northstar_xmpp_types::text::valid_language_tag;
@@ -612,24 +613,6 @@ pub(crate) fn message_storage_policy(
         temporary: !found_signal,
         permanent: !found_signal,
     })
-}
-
-pub(crate) fn is_encrypted(root: Node<'_, '_>) -> bool {
-    root.children().any(is_encryption_node)
-}
-
-pub(crate) fn is_encryption_node(node: Node<'_, '_>) -> bool {
-    node.is_element()
-        && matches!(
-            node.tag_name().namespace(),
-            Some(
-                "eu.siacs.conversations.axolotl"
-                    | "urn:xmpp:omemo:1"
-                    | "urn:xmpp:omemo:2"
-                    | "urn:xmpp:openpgp:0"
-                    | "jabber:x:encrypted"
-            )
-        )
 }
 
 pub(crate) fn encrypted_archive_stanza(stanza: &str) -> String {

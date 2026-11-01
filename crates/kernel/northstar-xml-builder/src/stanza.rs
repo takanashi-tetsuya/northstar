@@ -6,6 +6,24 @@ use crate::rewrite::{append_root_validated_fragment, remove_root_attribute, set_
 use crate::XmlElement;
 use roxmltree::Node;
 
+pub fn is_encrypted(root: Node<'_, '_>) -> bool {
+    root.children().any(is_encryption_node)
+}
+
+pub fn is_encryption_node(node: Node<'_, '_>) -> bool {
+    node.is_element()
+        && matches!(
+            node.tag_name().namespace(),
+            Some(
+                "eu.siacs.conversations.axolotl"
+                    | "urn:xmpp:omemo:1"
+                    | "urn:xmpp:omemo:2"
+                    | "urn:xmpp:openpgp:0"
+                    | "jabber:x:encrypted"
+            )
+        )
+}
+
 pub fn iq_result(id: &str, payload: &str) -> String {
     let result = XmlElement::namespaced("iq", "jabber:client")
         .attr("type", "result")

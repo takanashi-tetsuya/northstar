@@ -4252,6 +4252,14 @@
     ],
     [
       "northstar-workflows",
+      "northstar-room-application"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-room-postgres"
+    ],
+    [
+      "northstar-workflows",
       "northstar-roster-core"
     ],
     [

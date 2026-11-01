@@ -22,7 +22,7 @@ pub(super) struct OperationsModule {
     pub(super) operation_admin_service: OperationAdminContext,
     pub(super) operation_muc_destroy_service: Arc<
         northstar_operations_application::operation_muc_destroy::MucDestroyService<
-            db::operation_muc_destroy_repository::PostgresMucDestroyRepository,
+            northstar_workflows::operation_muc_destroy_repository::PostgresMucDestroyRepository,
         >,
     >,
     pub(super) operation_effect_fence_service:
@@ -111,7 +111,7 @@ impl OperationsModule {
             );
         let operation_muc_destroy_service = Arc::new(
             northstar_operations_application::operation_muc_destroy::MucDestroyService::new(
-                db::operation_muc_destroy_repository::PostgresMucDestroyRepository::new(
+                northstar_workflows::operation_muc_destroy_repository::PostgresMucDestroyRepository::new(
                     pool.clone(),
                 ),
                 config.domain.clone(),

@@ -3,10 +3,7 @@
 use super::{
     remove_local_muc_occupant_exact_from, AppState, LocalMucOccupantIdentity, MucOccupant,
 };
-use crate::{
-    cluster::ClusterMucOperationWake,
-    db::operation_muc_destroy_repository::PostgresMucDestroyRepository,
-};
+use crate::cluster::ClusterMucOperationWake;
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_operations_application::operation_muc_destroy::{
@@ -14,6 +11,7 @@ use northstar_operations_application::operation_muc_destroy::{
 };
 use northstar_room_application::operation_muc_wake::CommittedMucWakeService;
 use northstar_room_postgres::operation_muc_wake_repository::PostgresCommittedMucWakeRepository;
+use northstar_workflows::operation_muc_destroy_repository::PostgresMucDestroyRepository;
 use std::sync::Arc;
 use uuid::Uuid;
 

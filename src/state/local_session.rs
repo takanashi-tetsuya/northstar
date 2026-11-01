@@ -473,10 +473,12 @@ impl AppState {
     pub(super) fn sm_teardown_muc_service(
         &self,
     ) -> northstar_room_application::sm_teardown_muc::SmTeardownMucService<
-        db::sm_teardown_muc_repository::PostgresSmTeardownMucRepository,
+        northstar_workflows::sm_teardown_muc_repository::PostgresSmTeardownMucRepository,
     > {
         northstar_room_application::sm_teardown_muc::SmTeardownMucService::new(
-            db::sm_teardown_muc_repository::PostgresSmTeardownMucRepository::new(self.pool.clone()),
+            northstar_workflows::sm_teardown_muc_repository::PostgresSmTeardownMucRepository::new(
+                self.pool.clone(),
+            ),
         )
     }
 }

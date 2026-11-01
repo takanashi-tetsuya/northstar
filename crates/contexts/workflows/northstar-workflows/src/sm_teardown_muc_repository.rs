@@ -1,6 +1,5 @@
 //! PostgreSQL adapter for SM-owned MUC teardown projections and exact cleanup.
 
-use crate::db;
 use anyhow::Result;
 use northstar_room_application::sm_teardown_muc::*;
 use sqlx::PgPool;
@@ -8,12 +7,12 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresSmTeardownMucRepository {
+pub struct PostgresSmTeardownMucRepository {
     pool: PgPool,
 }
 
 impl PostgresSmTeardownMucRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -43,7 +42,7 @@ impl SmTeardownMucRepository for PostgresSmTeardownMucRepository {
         occupant_jids: &[String],
         stanza_senders: &[String],
     ) -> Result<HashSet<String>> {
-        db::blocked_local_accounts_for_candidates(
+        northstar_roster_postgres::roster::blocked_local_accounts_for_candidates(
             &self.pool,
             local_domain,
             occupant_jids,

@@ -1,4 +1,5 @@
-pub(crate) mod operation_muc_destroy_repository;
+#[cfg(test)]
+mod operation_muc_destroy_repository_tests;
 #[cfg(test)]
 pub(crate) mod test_support;
 use anyhow::{Context, Result};
@@ -86,7 +87,6 @@ pub mod session_identity;
 pub(crate) mod session_termination_authority_repository;
 pub mod sm;
 pub mod sm_repository;
-pub(crate) mod sm_teardown_muc_repository;
 pub(crate) mod sm_teardown_presence_repository;
 pub(crate) mod sm_teardown_repository;
 pub use archive::*;

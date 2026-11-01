@@ -2238,8 +2238,8 @@ if (!/if matches!\(outcome, FederatedMamAdmissionOutcome::Queued\)\s*\{[\s\S]*?s
   throw new Error('MamService must wake delivery only after a successful outbox commit');
 }
 // whole production module (the file and its non-test child files)
-const archiveSource = readProductionModule('src/db/archive.rs', { root });
-const roomGuardAcquire = structBody(archiveSource, 'pub(crate) async fn acquire(');
+const mamAuthorizationSource = readProductionModule('crates/contexts/room/northstar-room-postgres/src/mam_authorization.rs', { root });
+const roomGuardAcquire = structBody(mamAuthorizationSource, 'pub async fn acquire(');
 const lockSteps = [
   'pool.acquire().await?',
   'SELECT id FROM muc_rooms WHERE localpart=$1 AND destroyed_at IS NULL',
@@ -2255,18 +2255,18 @@ for (const step of lockSteps) {
   }
   previousLockStep = position;
 }
-const roomGuardSnapshot = structBody(archiveSource, 'pub(crate) async fn begin_snapshot(');
+const roomGuardSnapshot = structBody(mamAuthorizationSource, 'pub async fn begin_snapshot(');
 if (!/self\.connection\.begin\(\)\.await\?[\s\S]*SET TRANSACTION ISOLATION LEVEL REPEATABLE READ/.test(roomGuardSnapshot)) {
   throw new Error('federated MAM opens its repeatable-read snapshot before the room lock');
 }
 const roomAuthorization = structBody(
-  archiveSource, 'async fn authorize_federated_mam_room_in_transaction(',
+  mamAuthorizationSource, 'async fn authorize_federated_mam_room_in_transaction(',
 );
 if (!/WHERE localpart=\$1 AND id=\$2 AND destroyed_at IS NULL\s+FOR SHARE/.test(roomAuthorization)
   || !roomAuthorization.includes('muc_external_affiliations\n          WHERE room_id=$1 AND jid=$2 FOR SHARE')) {
   throw new Error('federated MAM lost its exact-room and affiliation checks inside the snapshot');
 }
-const roomGuardDrop = structBody(archiveSource, 'impl Drop for FederatedMamRoomGuard');
+const roomGuardDrop = structBody(mamAuthorizationSource, 'impl Drop for FederatedMamRoomGuard');
 if (!/if self\.maybe_held[\s\S]*self\.connection\.close_on_drop\(\)/.test(roomGuardDrop)) {
   throw new Error('cancelled federated MAM reads can return a locked connection to the pool');
 }

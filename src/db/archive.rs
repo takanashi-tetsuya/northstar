@@ -5,10 +5,8 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_abuse_policy::ContentIdentityAuthenticators;
-use northstar_archive_core::{decide_mam_room_read, MamRoomReadDecision};
-use rand::RngCore;
 use sha2::{Digest, Sha256};
-use sqlx::{pool::PoolConnection, Acquire, PgPool, Postgres, Row, Transaction};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::HashSet;
 #[cfg(test)]
 use std::time::Duration;
@@ -97,5 +95,7 @@ mod offline_queue_tests;
 #[cfg(test)]
 mod source_contract_tests;
 
+#[cfg(test)]
+use northstar_room_postgres::mam_authorization::*;
 #[cfg(test)]
 mod history_identity_pg_tests;

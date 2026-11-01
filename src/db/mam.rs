@@ -3,6 +3,7 @@
 use crate::db;
 use anyhow::Result;
 use northstar_archive_application::*;
+use northstar_room_postgres::mam_authorization::FederatedMamRoomGuard;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -143,7 +144,13 @@ impl MamQueryRepository for PostgresMamRepository {
         currently_joined: bool,
     ) -> Result<MamRoomAccessOutcome> {
         Ok(
-            match db::authorize_mam_room(&self.pool, localpart, viewer_id, currently_joined).await?
+            match northstar_room_postgres::mam_authorization::authorize_mam_room(
+                &self.pool,
+                localpart,
+                viewer_id,
+                currently_joined,
+            )
+            .await?
             {
                 db::MamRoomReadOutcome::Allowed { access, .. } => {
                     MamRoomAccessOutcome::Allowed(map_room_access(access))
@@ -161,7 +168,7 @@ impl MamQueryRepository for PostgresMamRepository {
         currently_joined: bool,
     ) -> Result<MamRoomAccessOutcome> {
         Ok(
-            match db::authorize_federated_mam_room(
+            match northstar_room_postgres::mam_authorization::authorize_federated_mam_room(
                 &self.pool,
                 localpart,
                 viewer_bare_jid,
@@ -203,8 +210,7 @@ impl FederatedMamStreamWriter for PostgresMamRepository {
     where
         F: FnOnce(&FederatedMamStreamPage) -> Result<Vec<String>> + Send,
     {
-        let Some(mut guard) =
-            db::FederatedMamRoomGuard::acquire(&self.pool, request.localpart).await?
+        let Some(mut guard) = FederatedMamRoomGuard::acquire(&self.pool, request.localpart).await?
         else {
             return Ok(FederatedMamAdmissionOutcome::Missing);
         };

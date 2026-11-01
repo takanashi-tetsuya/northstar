@@ -14,6 +14,7 @@ pub mod cluster_muc_outbox_settlement_repository;
 pub mod cluster_muc_receipt_claim_repository;
 pub mod effects;
 pub mod locked_muc_expiry_repository;
+pub mod mam_authorization;
 pub mod mix;
 pub mod mix_identity;
 pub mod mix_muc;

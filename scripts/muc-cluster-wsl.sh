@@ -192,6 +192,9 @@ cargo test --locked --offline -p northstar-room-postgres cluster_muc::tests:: --
 cargo test --locked --offline \
   cluster::tests::redis_muc_nickname_and_voice_mutations_reject_conflicts_and_aba \
   -- --ignored --nocapture
+cargo test --locked --offline \
+  cluster::tests::redis_ten_thousand_temporary_muc_rooms_leave_no_soft_state_keys \
+  -- --ignored --nocapture
 cargo test --locked --offline cluster::muc_routing_tests:: -- --ignored --nocapture
 
 echo "CLU-MUC static fences and pure state models passed; run scripts/cluster-wsl.sh for the disposable PostgreSQL/two-node Redis outage matrix"

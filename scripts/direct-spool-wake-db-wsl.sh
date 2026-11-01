@@ -87,3 +87,5 @@ run_race_test() {
 
 run_race_test db::replay::tests::replay_claim_wins_queued_live_socket_and_bosh_fences_without_stealing
 run_race_test db::sm::tests::sm_transfer_yields_to_exact_replay_or_bosh_owner_without_clearing_it
+# This fixture does not migrate: it needs the schema the races above migrated.
+run_race_test db::cluster_keys::tests::postgres_fixture_fences_duplicate_rotation_release_and_stale_instance

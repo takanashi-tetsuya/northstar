@@ -74,6 +74,8 @@ run_exact_ignored \
   db::admin_commands_boundary_tests::admin_cleanup_effects_survive_delete_and_do_not_retarget_rebinds
 run_exact_ignored \
   db::admin_commands_boundary_tests::service_control_poll_isolates_traffic_exhaustion_and_fails_closed_on_lock
+run_exact_ignored \
+  db::admin_commands_boundary_tests::admin_command_same_request_retry_replays_one_terminal_result
 
 cleanup
 created=0

@@ -25,11 +25,11 @@ cleanup() {
   trap - EXIT INT TERM
   local inner_schema
   while IFS= read -r inner_schema; do
-    [[ "$inner_schema" =~ ^(retraction_service_test|message_acceptance_test)_[a-f0-9]{32}$ ]] || continue
+    [[ "$inner_schema" =~ ^(retraction_service_test|modern_retraction_test|message_acceptance_test)_[a-f0-9]{32}$ ]] || continue
     PGPASSWORD=xmpp-test-password psql "${database_args[@]}" \
       --set ON_ERROR_STOP=1 \
       --command "DROP SCHEMA IF EXISTS \"$inner_schema\" CASCADE" >/dev/null || status=1
-  done < <(sed -En 's/^isolated_schema=((retraction_service_test|message_acceptance_test)_[a-f0-9]{32})$/\1/p' "$test_log" | sort -u)
+  done < <(sed -En 's/^isolated_schema=((retraction_service_test|modern_retraction_test|message_acceptance_test)_[a-f0-9]{32})$/\1/p' "$test_log" | sort -u)
   if [[ "$created" == "1" ]]; then
     PGPASSWORD=xmpp-test-password psql "${database_args[@]}" \
       --set ON_ERROR_STOP=1 \
@@ -104,3 +104,5 @@ run_exact_ignored() {
 run_exact_ignored services::retractions::tests::c2s_projection_is_atomic_idempotent_and_retains_replay_intent
 run_exact_ignored services::retractions::tests::exact_replay_conflict_and_outbox_failure_are_atomic
 run_exact_ignored s2s::inbound::tests::message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts
+run_exact_ignored xmpp::protocol::retractions::tests::personal_retraction_is_author_scoped_unambiguous_and_atomic
+run_exact_ignored db::archive::offline_queue_tests::concurrent_writers_reject_new_message_instead_of_evicting_old_history

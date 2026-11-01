@@ -93,7 +93,10 @@ if ! grep -Eq 'test result: ok\. 12 passed; 0 failed' <<<"$test_output"; then
   exit 1
 fi
 
+# The journal worker claims the oldest operation of the whole journal, so it
+# runs before the repository tests leave theirs pending.
 for port_test in \
+  db::operation_journal_worker_repository_tests::claim_and_target_plan_commit_or_roll_back_together \
   db::governance_repository_tests::governance_ports_replay_before_cursor_validation_and_bound_exports_before_commit \
   db::account_admin_repository_tests::account_disable_commits_exact_old_generation_and_rolls_back_failed_cleanup_enqueue \
   db::account_admin_repository_tests::registration_command_repository_commits_200_and_replays_without_reapplying_policy \

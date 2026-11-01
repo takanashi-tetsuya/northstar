@@ -209,11 +209,11 @@ PY
 fi
 
 TEST_OCSP_FIXTURE_DIR="$fixture_dir" \
-  cargo test --manifest-path "$project_dir/Cargo.toml" --bin rust-xmpp-server \
+  cargo test --manifest-path "$project_dir/Cargo.toml" -p northstar-security \
     --locked --offline generated_responses_require_exact_good_fresh_authorized_status \
     -- --ignored --nocapture
 TEST_OCSP_FIXTURE_DIR="$fixture_dir" \
-  cargo test --manifest-path "$project_dir/Cargo.toml" --bin rust-xmpp-server \
+  cargo test --manifest-path "$project_dir/Cargo.toml" -p northstar-security \
     --locked --offline ocsp_staple_survives_tls12_tls13_and_rejects_bad_reload \
     -- --ignored --nocapture
 TEST_OCSP_FIXTURE_DIR="$fixture_dir" \

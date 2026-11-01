@@ -49,6 +49,18 @@ cargo test --locked --offline \
   db::roster::blocking_match_tests::roster_removal_settles_local_mutual_pending_and_federated_state_atomically \
   -- --ignored --exact --nocapture --test-threads=1
 cargo test --locked --offline \
+  db::roster::blocking_match_tests::blocking_is_atomic_bounded_and_indexed_in_postgresql \
+  -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --offline \
+  db::roster::blocking_match_tests::local_presence_transitions_are_atomic_and_preserve_pending_stanzas \
+  -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --offline \
+  db::roster::blocking_match_tests::remote_transition_and_pending_consumption_are_atomic \
+  -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --offline \
+  db::roster::blocking_match_tests::roster_versions_and_committed_snapshots_survive_concurrent_writes \
+  -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --offline \
   db::presence_service_tests:: \
   -- --ignored --nocapture --test-threads=1
 

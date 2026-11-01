@@ -276,6 +276,8 @@ run_exact_ignored \
   vcard::tests::avatar_conversion_is_atomic_across_pep_and_vcard northstar-pubsub-postgres
 run_exact_ignored \
   vcard::tests::converted_avatar_uses_the_exact_locked_pep_subscription_snapshot northstar-pubsub-postgres
+run_exact_ignored \
+  private::tests::private_xml_batch_and_account_quota_are_atomic northstar-pubsub-postgres
 
 run_exact_ignored \
   db::profile::tests::profile_publish_uses_exact_subscribe_and_block_snapshot

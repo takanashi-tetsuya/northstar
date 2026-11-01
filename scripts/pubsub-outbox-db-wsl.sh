@@ -10,14 +10,17 @@ cd "$project_dir"
 northstar_use_test_toolchain "$project_dir"
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema"
 
-output="$(cargo test --locked --offline -p northstar-pubsub-postgres \
+for test_name in \
   outbox::tests::commit_claim_lease_takeover_payload_binding_and_ack_are_fenced \
-  -- --ignored --exact --nocapture 2>&1)" || {
+  outbox::tests::pep_subject_foreign_keys_cascade_locally_and_allow_only_remote_null_recipient; do
+  output="$(cargo test --locked --offline -p northstar-pubsub-postgres "$test_name" \
+    -- --ignored --exact --nocapture 2>&1)" || {
+    printf '%s\n' "$output"
+    exit 1
+  }
   printf '%s\n' "$output"
-  exit 1
-}
-printf '%s\n' "$output"
-grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$output" || {
-  echo "expected exactly one ignored PubSub outbox test to execute" >&2
-  exit 1
-}
+  grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$output" || {
+    echo "expected exactly one ignored PubSub outbox test to execute: $test_name" >&2
+    exit 1
+  }
+done

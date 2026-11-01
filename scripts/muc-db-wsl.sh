@@ -203,3 +203,9 @@ cargo test --locked --offline \
 cargo test --locked --offline \
   db::cluster_muc_tests::federated_rebind_is_atomic_and_fences_the_old_connection \
   -- --ignored --exact --nocapture
+cargo test --locked --offline \
+  db::cluster_muc_tests::postgres_failure_fixture_covers_cluster_muc_authority \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline \
+  db::operation_muc_destroy_repository_tests::missing_exact_destroy_intent_rolls_back_without_audit_or_room_mutation \
+  -- --ignored --exact --nocapture

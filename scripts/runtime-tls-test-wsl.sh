@@ -128,4 +128,34 @@ run_crl_case valid-server.pem unknown-issuer-crl.pem server false
 run_crl_case valid-server.pem crl.pem client false
 run_crl_case valid-client.pem crl.pem server false
 
+# Parse each RFC 6120 peer identity form from a real OpenSSL-issued certificate.
+run_xmpp_identity_case() {
+  local kind="$1"
+  local san="$2"
+  local output
+  make_client_leaf "peer-$kind" peer-cn-only "$san"
+  output="$(
+    TEST_XMPP_IDENTITY_CERT_PATH="$test_dir/peer-$kind.crt" \
+    TEST_XMPP_IDENTITY_DOMAIN=peer.northstar.internal \
+    TEST_XMPP_IDENTITY_KIND="$kind" \
+      cargo test --locked --bin rust-xmpp-server \
+      s2s::tls::tests::parses_a_real_x509_xmpp_identity_certificate \
+      -- --ignored --exact --nocapture 2>&1
+  )" || {
+    printf '%s\n' "$output"
+    return 1
+  }
+  printf '%s\n' "$output"
+  if ! grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$output"; then
+    echo "expected exactly one XMPP identity test for $kind" >&2
+    return 1
+  fi
+}
+
+run_xmpp_identity_case dns 'DNS:peer.northstar.internal'
+run_xmpp_identity_case srv \
+  'otherName:1.3.6.1.5.5.7.8.7;IA5STRING:_xmpp-server.peer.northstar.internal'
+run_xmpp_identity_case xmpp \
+  'otherName:1.3.6.1.5.5.7.8.5;UTF8:peer.northstar.internal'
+
 bash scripts/test-ocsp-stapling.sh

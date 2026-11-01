@@ -64,6 +64,17 @@ run_exact_ignored() {
     return 1
   fi
 }
+# These two read the whole schema, so they run before any test leaves state: the
+# last-administrator refusal needs no other enabled administrator, and the login
+# penalty sums every abuse actor state.
+if [[ "$scope" == "all" || "$scope" == "users" ]]; then
+  run_exact_ignored \
+    db::users_tests::api_session_cap_and_disable_revocation_are_atomic
+fi
+if [[ "$scope" == "all" || "$scope" == "api-control" ]]; then
+  run_exact_ignored \
+    db::api_control_tests::failed_login_penalty_and_replay_are_one_transaction
+fi
 if [[ "$scope" == "all" || "$scope" == "users" ]]; then
   run_exact_ignored \
     db::users_tests::concurrent_registration_cannot_exceed_the_global_hourly_limit
@@ -73,10 +84,20 @@ if [[ "$scope" == "all" || "$scope" == "users" ]]; then
     db::users_tests::scram_families_hide_unknown_and_disabled_accounts_but_surface_corruption
   run_exact_ignored \
     db::users_tests::rest_password_cas_and_admin_authorization_are_atomic
+  run_exact_ignored \
+    db::users_tests::login_publication_preserves_each_scram_family_across_rolling_configuration
+  run_exact_ignored \
+    db::account_repository_registration_guard_tests::http_registration_overload_preserves_committed_proof_marker_for_exact_retry
+  run_exact_ignored \
+    db::account_repository_registration_guard_tests::http_registration_replays_exact_created_and_rejected_responses_after_policy_closure
+  run_exact_ignored \
+    db::account_repository_registration_guard_tests::registration_guard_consumes_v2_proof_with_marker_and_fences_old_worker
 fi
 if [[ "$scope" == "all" || "$scope" == "password-api" ]]; then
   run_exact_ignored \
     db::users_tests::rest_password_idempotency_logout_and_lock_order_are_atomic
+  run_exact_ignored \
+    db::password_change_repository_tests::password_change_replays_committed_response_after_bearer_revocation
 fi
 if [[ "$scope" == "all" || "$scope" == "api-control" ]]; then
   run_exact_ignored \

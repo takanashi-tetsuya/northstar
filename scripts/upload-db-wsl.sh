@@ -8,13 +8,15 @@ test_schema="northstar_upload_it_$random_suffix"
 fixture_schema="${test_schema}_upgrade"
 recovery_schema="${test_schema}_recovery"
 admin_schema="northstar_upload_admin_it_$random_suffix"
+migration_schema="northstar_upload_migrate_it_$random_suffix"
 
 if [[ ! "$test_schema" =~ ^northstar_upload_it_[a-f0-9]{32}$ ]] ||
    [[ ! "$fixture_schema" =~ ^northstar_upload_it_[a-f0-9]{32}_upgrade$ ]] ||
    [[ ! "$recovery_schema" =~ ^northstar_upload_it_[a-f0-9]{32}_recovery$ ]] ||
    [[ ! "$admin_schema" =~ ^northstar_upload_admin_it_[a-f0-9]{32}$ ]] ||
+   [[ ! "$migration_schema" =~ ^northstar_upload_migrate_it_[a-f0-9]{32}$ ]] ||
    (( ${#test_schema} > 63 || ${#fixture_schema} > 63 || ${#recovery_schema} > 63 ||
-      ${#admin_schema} > 63 )); then
+      ${#admin_schema} > 63 || ${#migration_schema} > 63 )); then
   echo "refusing an unsafe upload test schema name" >&2
   exit 2
 fi
@@ -27,6 +29,7 @@ created_schema=false
 created_fixture_schema=false
 created_recovery_schema=false
 created_admin_schema=false
+created_migration_schema=false
 cleanup() {
   local cleanup_failed=0
   if [[ "$created_schema" == "true" ]]; then
@@ -65,6 +68,15 @@ cleanup() {
       cleanup_failed=1
     fi
   fi
+  if [[ "$created_migration_schema" == "true" ]]; then
+    if ! PGPASSWORD=xmpp-test-password psql \
+      --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
+      --set ON_ERROR_STOP=1 \
+      --command "DROP SCHEMA IF EXISTS \"$migration_schema\" CASCADE" >/dev/null; then
+      echo "failed to remove upload migration schema: $migration_schema" >&2
+      cleanup_failed=1
+    fi
+  fi
   return "$cleanup_failed"
 }
 trap cleanup EXIT
@@ -99,6 +111,13 @@ if [[ "$(PGPASSWORD=xmpp-test-password psql \
   echo "refusing to reuse existing PostgreSQL schema: $admin_schema" >&2
   exit 2
 fi
+if [[ "$(PGPASSWORD=xmpp-test-password psql \
+  --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
+  --tuples-only --no-align \
+  --command "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='$migration_schema')")" == "t" ]]; then
+  echo "refusing to reuse existing PostgreSQL schema: $migration_schema" >&2
+  exit 2
+fi
 created_schema=true
 PGPASSWORD=xmpp-test-password psql \
   --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
@@ -115,6 +134,10 @@ created_admin_schema=true
 PGPASSWORD=xmpp-test-password psql \
   --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
   --set ON_ERROR_STOP=1 --command "CREATE SCHEMA \"$admin_schema\"" >/dev/null
+created_migration_schema=true
+PGPASSWORD=xmpp-test-password psql \
+  --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
+  --set ON_ERROR_STOP=1 --command "CREATE SCHEMA \"$migration_schema\"" >/dev/null
 
 PGPASSWORD=xmpp-test-password psql \
   --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
@@ -149,16 +172,23 @@ export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PG
 cargo test --locked --offline \
   db::users_tests::account_deletion_atomically_cancels_local_reverse_rosters \
   -- --ignored --nocapture --test-threads=1
+# The cutover journal test asserts its own random schema, so the `tests::` run
+# above skips it.
+export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$migration_schema"
+TEST_DATABASE_SCHEMA="$migration_schema" cargo test --locked --offline -p northstar-upload-postgres \
+  migration::tests::postgres_upload_migration_journal_fences_replay_and_cutover \
+  -- --ignored --exact --nocapture --test-threads=1
 
 cleanup
 created_schema=false
 created_fixture_schema=false
 created_recovery_schema=false
 created_admin_schema=false
+created_migration_schema=false
 remaining="$(PGPASSWORD=xmpp-test-password psql \
   --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
   --tuples-only --no-align \
-  --command "SELECT COUNT(*) FROM pg_namespace WHERE nspname IN ('$test_schema','$fixture_schema','$recovery_schema','$admin_schema')")"
+  --command "SELECT COUNT(*) FROM pg_namespace WHERE nspname IN ('$test_schema','$fixture_schema','$recovery_schema','$admin_schema','$migration_schema')")"
 if [[ "$remaining" != "0" ]]; then
   echo "isolated upload schemas were not removed" >&2
   exit 1

@@ -42,6 +42,9 @@ run_exact_ignored \
 run_exact_ignored \
   db::mix_delivery_route_wake_tests::an_expired_unowned_head_blocks_until_terminalized
 
+run_exact_ignored \
+  db::mix_muc_tests::mirror_link_is_common_owner_only_one_to_one_and_idempotent
+
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline \
   db::mix_mam_tests::mix_anon_misc_permissions_are_atomic_and_private \

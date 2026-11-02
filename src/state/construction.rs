@@ -48,7 +48,7 @@ impl AppState {
     pub async fn new(
         mut config: Config,
         pool: PgPool,
-        federation: FederationRouter,
+        federation_outbox: FederationRouter,
         components: northstar_federation_application::components::ComponentRegistry,
         runtime_control_connection: PoolConnection<Postgres>,
         worker_cancel: CancellationToken,
@@ -275,9 +275,6 @@ impl AppState {
             "FAST and dummy SCRAM master keys must be independent"
         );
         let client_connections = Arc::new(Semaphore::new(config.max_client_connections));
-        let s2s_connections = Arc::new(Semaphore::new(config.max_s2s_connections));
-        let s2s_connection_attempts = Arc::new(Semaphore::new(config.max_s2s_connections));
-        let component_connections = Arc::new(Semaphore::new(config.max_component_connections));
         let connection_actors =
             northstar_runtime::connection_actors::ConnectionActorRegistry::for_transport_limits(
                 config.max_client_connections,
@@ -294,45 +291,6 @@ impl AppState {
             config.sm_max_snapshot_bytes,
             Arc::clone(&sm_capacity_metrics),
         )?;
-        let (resolver_config, mut resolver_options) =
-            read_system_conf().context("failed to read the system DNS resolver configuration")?;
-        resolver_options.try_tcp_on_error = true;
-        resolver_options.server_ordering_strategy = ServerOrderingStrategy::RoundRobin;
-        resolver_options.cache_size = 1024;
-        let mut dnssec_options = resolver_options.clone();
-        dnssec_options.validate = true;
-        dnssec_options.use_hosts_file = ResolveHosts::Never;
-        dnssec_options.preserve_intermediates = true;
-        dnssec_options.positive_max_ttl = Some(Duration::from_secs(24 * 60 * 60));
-        dnssec_options.negative_max_ttl = Some(Duration::from_secs(5 * 60));
-        let s2s_dns_resolver = TokioResolver::builder_with_config(
-            resolver_config.clone(),
-            TokioRuntimeProvider::default(),
-        )
-        .with_options(resolver_options)
-        .build()
-        .context("failed to initialize the asynchronous DNS resolver")?;
-        let lab_dnssec_anchor = config
-            .federation_dnssec_lab_trust_anchor_path
-            .as_deref()
-            .map(northstar_security::lab_dnssec::load_anchor)
-            .transpose()?;
-        let s2s_dnssec_resolver = (config.federation_dane_mode
-            != northstar_security::dane::DaneMode::Off)
-            .then(|| {
-                let mut builder = TokioResolver::builder_with_config(
-                    resolver_config,
-                    TokioRuntimeProvider::default(),
-                )
-                .with_options(dnssec_options);
-                if let Some(anchor) = lab_dnssec_anchor {
-                    builder = builder.with_trust_anchor(Arc::new(anchor));
-                }
-                builder
-                    .build()
-                    .context("failed to initialize the locally validating DNSSEC resolver")
-            })
-            .transpose()?;
 
         // Transfer the Redis endpoint and signing capability out of the
         // broadly shared Config before constructing AppState.  ClusterManager
@@ -475,7 +433,7 @@ impl AppState {
                 max_bytes: config.s2s_outbox_max_bytes,
                 max_per_domain: config.s2s_outbox_max_per_domain,
             },
-            federation.outbox_wakeup(),
+            federation_outbox.outbox_wakeup(),
         );
         let replay_service = crate::services::replay::ReplayService::new(
             db::replay_repository::PostgresReplayRepository::new(pool.clone()),
@@ -572,7 +530,17 @@ impl AppState {
         let sessions = Arc::new(DashMap::new());
         let started_at = Instant::now();
         let api_cursor = Arc::new(api_cursor);
-        let federation_write_policy = Arc::new(FederationWritePolicy::new(island_mode));
+        let federation = FederationModule::new(FederationModuleParts {
+            config: &config,
+            pool: &pool,
+            federation_outbox,
+            component_credentials,
+            components,
+            dialback_secret,
+            island_mode,
+            runtime_blacklist,
+            runtime_whitelist,
+        })?;
         let public_discovery_context = PublicDiscoveryContext::new(
             http_policy::PublicDiscoveryPolicy {
                 domain: config.domain.clone(),
@@ -605,7 +573,7 @@ impl AppState {
                 s2s_tls_port: config.s2s_tls_bind.port(),
             },
             Arc::clone(&registration_closed),
-            federation_write_policy.island_flag(),
+            federation.federation_write_policy.island_flag(),
         );
         let omemo_recovery_poll_context = omemo_poll::OmemoRecoveryPollContext::new(
             crate::services::omemo_recovery::OmemoRecoveryPollService::new(
@@ -622,19 +590,6 @@ impl AppState {
             Arc::clone(&api_control),
             cluster.admission(),
         );
-        let s2s_outbox_dispatch_service =
-            northstar_federation_application::dispatch::S2sOutboxDispatchService::new(
-                northstar_federation_postgres::dispatch_repository::PostgresS2sOutboxDispatchRepository::new(
-                    pool.clone(),
-                ),
-                northstar_federation_application::dispatch::S2sOutboxDispatchPolicy {
-                    claim_batch: config.s2s_outbox_claim_batch,
-                    lease_seconds: config.s2s_outbox_lease_seconds,
-                    retry_base_seconds: config.s2s_outbox_retry_base_seconds,
-                    retry_max_seconds: config.s2s_outbox_retry_max_seconds,
-                    max_attempts: config.s2s_outbox_max_attempts,
-                },
-            );
         let auth = AuthModule::new(AuthModuleParts {
             config: &config,
             pool: &pool,
@@ -661,7 +616,7 @@ impl AppState {
             cluster: &cluster,
             metrics: &metrics,
             registration_closed: &registration_closed,
-            federation_write_policy: &federation_write_policy,
+            federation_write_policy: &federation.federation_write_policy,
             sessions: &sessions,
             muc_occupants: &room.muc_occupants,
             started_at,
@@ -682,13 +637,10 @@ impl AppState {
             room,
             roster,
             message,
+            federation,
             mam_service,
             sm_service,
             replay_service,
-            s2s_outbox_dispatch_service,
-            s2s_sm_outbox_service: northstar_federation_application::sm_outbox::SmOutboxService::new(
-                northstar_federation_postgres::sm_outbox_repository::PostgresSmOutboxRepository::new(pool.clone()),
-            ),
             pool,
             cluster,
             account_revocation_consumer_service,
@@ -707,13 +659,6 @@ impl AppState {
             omemo_recovery_poll_context,
             durable_outbox_database_admission,
             upload,
-            federation_outbox: federation,
-            component_credentials,
-            components,
-            s2s_connection_registry: Arc::new(S2sConnectionRegistry::default()),
-            s2s_resumption: crate::s2s::resume::Registry::default(),
-            s2s_dns_resolver,
-            s2s_dnssec_resolver,
             caps_cache: Arc::new(northstar_protocol_runtime::caps::CapsCacheIndex::new()),
             caps_by_jid: Arc::new(northstar_protocol_runtime::caps::CapsResourceIndex::new()),
             pending_caps: Arc::new(northstar_protocol_runtime::caps::PendingCapsIndex::new()),
@@ -721,14 +666,9 @@ impl AppState {
                 northstar_protocol_runtime::caps::FederatedCapsGateIndex::new(),
             ),
             caps_effect_dispatcher: northstar_protocol_runtime::caps::CapsEffectDispatcher::new(),
-            dialback_secret,
-            dialback_verifications: Arc::new(Semaphore::new(64)),
             http_body_admission: Arc::new(http_body_admission::HttpBodyAdmission::default()),
             client_connections,
             client_connections_by_ip: DashMap::new(),
-            s2s_connections,
-            s2s_connection_attempts,
-            component_connections,
             connection_actors,
             auth,
             operations,
@@ -736,14 +676,7 @@ impl AppState {
             started_at,
             process_started_at,
             tls_context: northstar_security::tls::TlsContext::new(tls),
-            federation_write_policy,
             registration_closed,
-            federation_runtime_policy: Arc::new(arc_swap::ArcSwap::from_pointee(
-                RuntimeFederationPolicy {
-                    blacklist: runtime_blacklist.into_iter().collect(),
-                    whitelist: runtime_whitelist.into_iter().collect(),
-                },
-            )),
             service_shutdown: Arc::new(std::sync::OnceLock::new()),
             runtime_control_liveness: Arc::new(()),
             workers: northstar_runtime::workers::WorkerRegistry::new(),

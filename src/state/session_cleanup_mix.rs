@@ -23,9 +23,9 @@ impl AppState {
     pub(crate) fn session_cleanup_mix(&self) -> SessionCleanupMix {
         SessionCleanupMix {
             service: self.room.mix_service.clone(),
-            federation: self.federation_outbox.clone(),
+            federation: self.federation.federation_outbox.clone(),
             domains: self.config.external_route_domain_policy(),
-            runtime_policy: Arc::clone(&self.federation_runtime_policy),
+            runtime_policy: Arc::clone(&self.federation.federation_runtime_policy),
             local_mix_domain: prepare_domainpart(&format!("mix.{}", self.config.domain))
                 .expect("configured XMPP domain must form a valid MIX service domain"),
         }

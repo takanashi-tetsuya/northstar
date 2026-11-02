@@ -38,11 +38,14 @@ impl RuntimeControlRefreshContext {
             connection: Arc::new(Mutex::new(Some(PostgresRuntimeControlRepository::new(
                 connection,
             )))),
-            federation_writes: Arc::clone(&state.federation_write_policy),
+            federation_writes: Arc::clone(&state.federation.federation_write_policy),
             registration_closed: Arc::clone(&state.registration_closed),
             registration_dependency_locked: state.config.registration_dependency_locked(),
-            federation_rules: Arc::clone(&state.federation_runtime_policy),
-            s2s_connections: state.s2s_connection_registry.outbound_clearance(),
+            federation_rules: Arc::clone(&state.federation.federation_runtime_policy),
+            s2s_connections: state
+                .federation
+                .s2s_connection_registry
+                .outbound_clearance(),
             service_control_enabled: state.config.enable_xmpp_service_control,
             service_shutdown: Arc::clone(&state.service_shutdown),
             process_started_at: state.process_started_at,

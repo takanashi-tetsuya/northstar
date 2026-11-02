@@ -38,9 +38,9 @@ impl AppState {
             sessions: Arc::clone(&self.sessions),
             remote_routes: self.cluster.listener_presence_routes(),
             remote_sender: self.cluster.node_delivery(),
-            federation: self.federation_outbox.clone(),
+            federation: self.federation.federation_outbox.clone(),
             static_policy: self.config.external_route_domain_policy(),
-            runtime_policy: Arc::clone(&self.federation_runtime_policy),
+            runtime_policy: Arc::clone(&self.federation.federation_runtime_policy),
             local_domain: self.config.domain.clone(),
         }
     }

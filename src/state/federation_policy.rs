@@ -16,7 +16,7 @@ impl AppState {
         let Ok(domain) = northstar_xmpp_types::jid::prepare_domainpart(domain) else {
             return false;
         };
-        let policy = self.federation_runtime_policy.load();
+        let policy = self.federation.federation_runtime_policy.load();
         self.config.federation_domain_allowed(&domain) && policy.allows_domain(&domain)
     }
 
@@ -30,11 +30,15 @@ impl AppState {
         if !self.config.federation_domain_allowed(entity.domainpart()) {
             return false;
         }
-        self.federation_runtime_policy.load().allows_entity(&entity)
+        self.federation
+            .federation_runtime_policy
+            .load()
+            .allows_entity(&entity)
     }
 
     pub fn replace_runtime_federation_cache(&self, blacklist: Vec<String>, whitelist: Vec<String>) {
-        self.federation_runtime_policy
+        self.federation
+            .federation_runtime_policy
             .store(Arc::new(RuntimeFederationPolicy {
                 blacklist: blacklist.into_iter().collect(),
                 whitelist: whitelist.into_iter().collect(),

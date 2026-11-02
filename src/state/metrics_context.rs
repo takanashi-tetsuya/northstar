@@ -63,7 +63,10 @@ pub(super) fn metrics_context(state: &AppState) -> MetricsContext {
         muc_occupant_count: MucOccupancyCountProbe::new(
             Arc::clone(&state.room.muc_occupants) as Arc<dyn OccupancyCount>
         ),
-        s2s_outbound_count: state.s2s_connection_registry.outbound_count_probe(),
+        s2s_outbound_count: state
+            .federation
+            .s2s_connection_registry
+            .outbound_count_probe(),
         sm: Arc::new(SmRecoveryMetricsProbe {
             governor: Arc::clone(&state.sm_memory_governor),
             recovery: Arc::clone(&state.sm_suspension_recovery),

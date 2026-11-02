@@ -338,23 +338,13 @@ for (const field of [
   'auth',
   'operations',
   'message',
+  'federation',
   'mam_service',
   'replay_service',
-  'component_credentials',
-  'components',
   'bosh',
-  's2s_dns_resolver',
-  's2s_dnssec_resolver',
-  'dialback_verifications',
-  's2s_connections',
-  's2s_connection_attempts',
-  'component_connections',
   'started_at',
   'registration_closed',
-  'federation_write_policy',
   'tls_context',
-  'federation_outbox',
-  's2s_connection_registry',
 ]) {
   if (!new RegExp(`^\\s*${field}\\s*:`, 'm').test(appState)) {
     throw new Error(`AppState capability ${field} is no longer private or is missing`);
@@ -363,8 +353,8 @@ for (const field of [
     throw new Error(`AppState capability ${field} became publicly accessible`);
   }
 }
-if (!/^\s*dialback_secret\s*:\s*Zeroizing<Vec<u8>>\s*,/m.test(appState)) {
-  throw new Error('AppState dialback_secret must remain private and Zeroizing');
+if (!/^\s*pub\(super\)\s+dialback_secret\s*:\s*Zeroizing<Vec<u8>>\s*,/m.test(read('src/state/federation_module.rs'))) {
+  throw new Error('FederationModule dialback_secret must remain inside state and Zeroizing');
 }
 if (/^\s*(?:pub(?:\(crate\))?\s+)?fast_token_secret\s*:/m.test(appState)) {
   throw new Error('AppState must not retain the FAST derivation key after adapter construction');

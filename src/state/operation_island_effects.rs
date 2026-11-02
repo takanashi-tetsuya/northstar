@@ -12,8 +12,8 @@ pub(crate) struct OperationIslandEffects {
 impl AppState {
     pub(crate) fn operation_island_effects(&self) -> OperationIslandEffects {
         OperationIslandEffects {
-            policy: Arc::clone(&self.federation_write_policy),
-            outbound: self.s2s_connection_registry.outbound_clearance(),
+            policy: Arc::clone(&self.federation.federation_write_policy),
+            outbound: self.federation.s2s_connection_registry.outbound_clearance(),
         }
     }
 }

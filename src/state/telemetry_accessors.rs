@@ -44,7 +44,7 @@ impl AppState {
     }
 
     pub(crate) fn federation_outbox(&self) -> &FederationRouter {
-        &self.federation_outbox
+        &self.federation.federation_outbox
     }
 
     pub(crate) fn cluster_authority_service(

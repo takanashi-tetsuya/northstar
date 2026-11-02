@@ -70,7 +70,7 @@ pub(crate) struct S2sOutboxDispatchContext {
 impl AppState {
     pub(crate) fn s2s_outbox_failure_effects(&self) -> S2sOutboxFailureEffects {
         S2sOutboxFailureEffects {
-            service: self.s2s_outbox_dispatch_service.clone(),
+            service: self.federation.s2s_outbox_dispatch_service.clone(),
             sessions: Arc::clone(&self.sessions),
             connection_failure: Arc::clone(&self.metrics.federation_failures_total),
             lease_lost: Arc::clone(&self.metrics.s2s_outbox_lease_lost_total),
@@ -84,10 +84,10 @@ impl AppState {
     pub(crate) fn s2s_outbox_dispatch_context(&self) -> S2sOutboxDispatchContext {
         S2sOutboxDispatchContext {
             failure: self.s2s_outbox_failure_effects(),
-            registry: Arc::clone(&self.s2s_connection_registry),
-            island: Arc::clone(&self.federation_write_policy),
+            registry: Arc::clone(&self.federation.s2s_connection_registry),
+            island: Arc::clone(&self.federation.federation_write_policy),
             static_policy: self.config.external_route_domain_policy(),
-            runtime_policy: Arc::clone(&self.federation_runtime_policy),
+            runtime_policy: Arc::clone(&self.federation.federation_runtime_policy),
             component_domains: self.configured_component_domains(),
             local_domain: self.config.domain.clone(),
         }

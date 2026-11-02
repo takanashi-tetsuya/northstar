@@ -11,7 +11,7 @@ impl AppState {
             remote_routes: self.cluster.listener_presence_routes(),
             local_domain: self.config.domain.clone(),
             external_routes: self.config.external_route_domain_policy(),
-            federation: self.federation_outbox.clone(),
+            federation: self.federation.federation_outbox.clone(),
         }
     }
 }

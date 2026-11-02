@@ -37,8 +37,8 @@ impl AppState {
             service: self.room.mix_service.clone(),
             local_domain: self.config.domain.clone(),
             static_policy: self.config.external_route_domain_policy(),
-            runtime_policy: Arc::clone(&self.federation_runtime_policy),
-            federation: self.federation_outbox.clone(),
+            runtime_policy: Arc::clone(&self.federation.federation_runtime_policy),
+            federation: self.federation.federation_outbox.clone(),
         }
     }
 }

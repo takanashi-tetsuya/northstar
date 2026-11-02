@@ -32,7 +32,7 @@ impl AppState {
             recipients: Arc::clone(&self.sessions),
             message_service: self.message.message_service.clone(),
             remote: self.cluster.unavailable_delivery(),
-            federation: self.federation_outbox.clone(),
+            federation: self.federation.federation_outbox.clone(),
             domains: self.config.external_route_domain_policy(),
             local_domain: self.config.domain.clone(),
         }

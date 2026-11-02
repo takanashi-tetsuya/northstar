@@ -228,6 +228,7 @@ mod admission_guards;
 mod auth_module;
 mod construction;
 mod federation_dns;
+mod federation_module;
 mod federation_policy;
 mod local_muc;
 mod local_session;
@@ -251,6 +252,7 @@ pub use self::admission_guards::*;
 use self::auth_module::*;
 #[cfg(test)]
 use self::construction::*;
+use self::federation_module::*;
 use self::federation_policy::*;
 #[cfg(test)]
 pub(crate) use self::local_muc::count_shutdown_notification_completions;
@@ -316,6 +318,8 @@ pub struct AppState {
     roster: RosterModule,
     /// The message context; see [`MessageModule`].
     message: MessageModule,
+    /// The federation context; see [`FederationModule`].
+    federation: FederationModule,
     public_discovery_context: PublicDiscoveryContext,
     /// XEP-0215 TURN credential authority. Long-lived key material and its
     /// bounded rate windows never cross into protocol or public state.
@@ -323,12 +327,6 @@ pub struct AppState {
     sm_service: crate::services::sm::SmService<db::sm_repository::PostgresSmRepository>,
     replay_service:
         crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>,
-    s2s_outbox_dispatch_service: northstar_federation_application::dispatch::S2sOutboxDispatchService<
-        northstar_federation_postgres::dispatch_repository::PostgresS2sOutboxDispatchRepository,
-    >,
-    s2s_sm_outbox_service: northstar_federation_application::sm_outbox::SmOutboxService<
-        northstar_federation_postgres::sm_outbox_repository::PostgresSmOutboxRepository,
-    >,
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
     cluster: crate::cluster::ClusterManager,
     account_revocation_consumer_service:
@@ -361,20 +359,6 @@ pub struct AppState {
     /// reserve without giving protocol handlers raw pool access.
     durable_outbox_database_admission:
         northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
-    federation_outbox: FederationRouter,
-    /// Full XEP-0114/XEP-0225 authentication records. `config.components`
-    /// retains only redacted routing/discovery metadata after construction.
-    component_credentials: Arc<[northstar_config::ComponentCredential]>,
-    components: northstar_federation_application::components::ComponentRegistry,
-    s2s_connection_registry: Arc<S2sConnectionRegistry>,
-    s2s_resumption: crate::s2s::resume::Registry,
-    /// Shared TTL-aware resolver for SRV, CNAME, A and AAAA federation lookups.
-    s2s_dns_resolver: TokioResolver,
-    /// Separate locally validating DNSSEC resolver for RFC 7712. It never
-    /// consults the hosts file and is absent when DANE is disabled, ensuring
-    /// that an ordinary resolver answer can never be mistaken for secure
-    /// TLSA material.
-    s2s_dnssec_resolver: Option<TokioResolver>,
     /// XEP-0115 entries are inserted only after the advertised verification
     /// string has been recomputed successfully. Unverified payloads never
     /// enter this shared cache.
@@ -388,16 +372,8 @@ pub struct AppState {
     /// Bounded, per-full-JID single-flight boundary for XEP-0115-triggered
     /// PEP last-item delivery and verified MIX presence publication.
     caps_effect_dispatcher: Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher>,
-    dialback_secret: Zeroizing<Vec<u8>>,
-    dialback_verifications: Arc<Semaphore>,
     client_connections: Arc<Semaphore>,
     client_connections_by_ip: DashMap<std::net::IpAddr, usize>,
-    /// The unauthenticated OMEMO source completion capability is bounded
-    /// independently from the general API and database pool. Keys are trusted-
-    /// proxy-resolved IP addresses and expire from the one-minute window.
-    s2s_connections: Arc<Semaphore>,
-    s2s_connection_attempts: Arc<Semaphore>,
-    component_connections: Arc<Semaphore>,
     connection_actors: northstar_runtime::connection_actors::ConnectionActorRegistry,
     /// The auth context; see [`AuthModule`].
     auth: AuthModule,
@@ -408,14 +384,7 @@ pub struct AppState {
     started_at: Instant,
     process_started_at: chrono::DateTime<chrono::Utc>,
     tls_context: northstar_security::tls::TlsContext,
-    /// Linearization gate for the federation kill switch. Application
-    /// stanza writes hold a read guard only across the socket write; island
-    /// mode transitions take the exclusive guard.
-    federation_write_policy: Arc<FederationWritePolicy>,
     registration_closed: Arc<AtomicBool>,
-    /// Durable XEP-0133 federation policy overlay. Static environment policy
-    /// remains the outer ceiling; runtime rules may only restrict it further.
-    federation_runtime_policy: Arc<arc_swap::ArcSwap<RuntimeFederationPolicy>>,
     service_shutdown: Arc<std::sync::OnceLock<CancellationToken>>,
     runtime_control_liveness: Arc<()>,
     workers: Arc<northstar_runtime::workers::WorkerRegistry>,

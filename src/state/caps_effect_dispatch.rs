@@ -57,7 +57,7 @@ impl AppState {
             },
             federated_gates: Arc::clone(&self.federated_caps_gates),
             sessions: Arc::clone(&self.sessions),
-            federation_outbox: self.federation_outbox.clone(),
+            federation_outbox: self.federation.federation_outbox.clone(),
             local_domain: self.config.domain.clone(),
             pep: self.pep_last_items_context(),
             mix: self.mix_presence_recovery_context(),

@@ -95,10 +95,10 @@ impl AppState {
             pending_caps: Arc::clone(&self.pending_caps),
             cluster_routes: self.cluster.mix_route_lookup(),
             cluster_delivery: self.cluster.node_delivery(),
-            federation: self.federation_outbox.clone(),
+            federation: self.federation.federation_outbox.clone(),
             local_domain: self.config.domain.clone(),
             static_policy: self.config.external_route_domain_policy(),
-            runtime_policy: Arc::clone(&self.federation_runtime_policy),
+            runtime_policy: Arc::clone(&self.federation.federation_runtime_policy),
             delivery_failures: Arc::clone(&self.metrics.mix_post_commit_delivery_failures_total),
             post_accept_failures: Arc::clone(&self.metrics.post_accept_side_effect_failures_total),
         }

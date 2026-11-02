@@ -125,12 +125,12 @@ impl AppState {
     /// layer. Keeping it private prevents unrelated code from bypassing the
     /// S2S endpoint-validation path.
     pub(crate) fn s2s_dns_resolver(&self) -> &TokioResolver {
-        &self.s2s_dns_resolver
+        &self.federation.s2s_dns_resolver
     }
 
     /// Locally validating resolver dedicated to DANE policy construction.
     pub(crate) fn s2s_dnssec_resolver(&self) -> Option<&TokioResolver> {
-        self.s2s_dnssec_resolver.as_ref()
+        self.federation.s2s_dnssec_resolver.as_ref()
     }
 
     /// Admit one bounded authoritative dialback verification without exposing
@@ -138,7 +138,7 @@ impl AppState {
     pub(crate) fn try_acquire_dialback_verification(
         &self,
     ) -> std::result::Result<OwnedSemaphorePermit, tokio::sync::TryAcquireError> {
-        Arc::clone(&self.dialback_verifications).try_acquire_owned()
+        Arc::clone(&self.federation.dialback_verifications).try_acquire_owned()
     }
 
     /// Admit one process-local federation connection while keeping the global
@@ -146,7 +146,7 @@ impl AppState {
     pub(crate) fn try_acquire_s2s_connection(
         &self,
     ) -> std::result::Result<OwnedSemaphorePermit, tokio::sync::TryAcquireError> {
-        Arc::clone(&self.s2s_connections).try_acquire_owned()
+        Arc::clone(&self.federation.s2s_connections).try_acquire_owned()
     }
 
     /// Wait for one bounded outbound federation dial attempt. Returning the
@@ -155,7 +155,7 @@ impl AppState {
     pub(crate) async fn acquire_s2s_connection_attempt(
         &self,
     ) -> std::result::Result<OwnedSemaphorePermit, tokio::sync::AcquireError> {
-        Arc::clone(&self.s2s_connection_attempts)
+        Arc::clone(&self.federation.s2s_connection_attempts)
             .acquire_owned()
             .await
     }
@@ -163,13 +163,13 @@ impl AppState {
     /// Owner-fenced process-local S2S route registry. Its API returns cloned
     /// senders and value snapshots only; callers cannot obtain DashMap guards.
     pub(crate) fn s2s_connection_registry(&self) -> &S2sConnectionRegistry {
-        &self.s2s_connection_registry
+        &self.federation.s2s_connection_registry
     }
 
     /// Suspended S2S streams. These hold live TLS transports, so they stay out
     /// of the route registry above.
     pub(crate) fn s2s_resumption(&self) -> &crate::s2s::resume::Registry {
-        &self.s2s_resumption
+        &self.federation.s2s_resumption
     }
 
     /// Admit an inbound component socket without exposing the semaphore as a
@@ -177,7 +177,7 @@ impl AppState {
     pub(crate) fn try_acquire_component_connection(
         &self,
     ) -> std::result::Result<OwnedSemaphorePermit, tokio::sync::TryAcquireError> {
-        Arc::clone(&self.component_connections).try_acquire_owned()
+        Arc::clone(&self.federation.component_connections).try_acquire_owned()
     }
 
     /// Wait for a component slot while preserving cancellation through the
@@ -185,7 +185,7 @@ impl AppState {
     pub(crate) async fn acquire_component_connection(
         &self,
     ) -> std::result::Result<OwnedSemaphorePermit, tokio::sync::AcquireError> {
-        Arc::clone(&self.component_connections)
+        Arc::clone(&self.federation.component_connections)
             .acquire_owned()
             .await
     }
@@ -193,7 +193,7 @@ impl AppState {
     /// Read the federation kill switch with acquire ordering so a caller that
     /// observes an applied value also observes the preceding policy update.
     pub(crate) fn island_mode_enabled(&self) -> bool {
-        self.federation_write_policy.enabled()
+        self.federation.federation_write_policy.enabled()
     }
 
     /// Acquire the application-stanza write boundary and revalidate island
@@ -202,7 +202,7 @@ impl AppState {
     pub(crate) async fn federation_delivery_permit(
         &self,
     ) -> Option<tokio::sync::RwLockReadGuard<'_, ()>> {
-        self.federation_write_policy.permit().await
+        self.federation.federation_write_policy.permit().await
     }
 
     /// Read the public-registration kill switch with acquire ordering.
@@ -324,7 +324,7 @@ impl AppState {
     }
 
     pub(crate) fn has_component_credentials(&self) -> bool {
-        !self.component_credentials.is_empty()
+        !self.federation.component_credentials.is_empty()
     }
 
     pub(crate) fn component_runtime_policy(&self) -> ComponentRuntimePolicy {
@@ -342,7 +342,7 @@ impl AppState {
     pub(crate) fn component_registry(
         &self,
     ) -> &northstar_federation_application::components::ComponentRegistry {
-        &self.components
+        &self.federation.components
     }
 
     /// Redacted configured routing domains used by observability and the S2S
@@ -359,7 +359,8 @@ impl AppState {
     pub(crate) fn component_connect_credentials(
         &self,
     ) -> Vec<northstar_config::ComponentCredential> {
-        self.component_credentials
+        self.federation
+            .component_credentials
             .iter()
             .filter(|credential| {
                 credential.connection == northstar_config::ComponentConnectionMode::Connect
@@ -369,9 +370,12 @@ impl AppState {
     }
 
     pub(crate) fn accepts_component_connections(&self) -> bool {
-        self.component_credentials.iter().any(|credential| {
-            credential.connection == northstar_config::ComponentConnectionMode::Accept
-        })
+        self.federation
+            .component_credentials
+            .iter()
+            .any(|credential| {
+                credential.connection == northstar_config::ComponentConnectionMode::Accept
+            })
     }
 
     pub(crate) fn component_authentication_credential(
@@ -379,7 +383,8 @@ impl AppState {
         domain: &str,
     ) -> Option<northstar_config::ComponentCredential> {
         let domain = northstar_xmpp_types::jid::prepare_domainpart(domain).ok()?;
-        self.component_credentials
+        self.federation
+            .component_credentials
             .iter()
             .find(|credential| {
                 credential

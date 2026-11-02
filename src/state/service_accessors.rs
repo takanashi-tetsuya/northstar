@@ -189,7 +189,7 @@ impl AppState {
     ) -> &northstar_federation_application::dispatch::S2sOutboxDispatchService<
         northstar_federation_postgres::dispatch_repository::PostgresS2sOutboxDispatchRepository,
     > {
-        &self.s2s_outbox_dispatch_service
+        &self.federation.s2s_outbox_dispatch_service
     }
 
     pub(crate) fn s2s_sm_outbox_service(
@@ -197,7 +197,7 @@ impl AppState {
     ) -> &northstar_federation_application::sm_outbox::SmOutboxService<
         northstar_federation_postgres::sm_outbox_repository::PostgresSmOutboxRepository,
     > {
-        &self.s2s_sm_outbox_service
+        &self.federation.s2s_sm_outbox_service
     }
 
     pub(crate) fn privacy_service(
@@ -264,7 +264,7 @@ impl AppState {
         stream_id: &str,
     ) -> String {
         northstar_federation_core::compute_dialback_key(
-            self.dialback_secret.as_slice(),
+            self.federation.dialback_secret.as_slice(),
             receiving_domain,
             originating_domain,
             stream_id,

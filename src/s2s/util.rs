@@ -1,5 +1,5 @@
-use crate::xmpp::framing::XmlEntityFramer;
 use anyhow::{Context, Result};
+use northstar_xml_framing::XmlEntityFramer;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -56,7 +56,7 @@ pub(crate) fn s2s_read_stream_error_condition(error: &anyhow::Error) -> Option<&
         Some(S2sReadError::InvalidUtf8) => Some("unsupported-encoding"),
         Some(S2sReadError::NegotiationTimedOut) => Some("connection-timeout"),
         None if error.downcast_ref::<std::io::Error>().is_some() => None,
-        None => Some(crate::xmpp::framing::stream_error_condition(error)),
+        None => Some(northstar_xml_framing::stream_error_condition(error)),
     }
 }
 
@@ -416,7 +416,7 @@ mod stream_open_tests {
             .await
             .unwrap_err();
         assert_eq!(
-            crate::xmpp::framing::stream_error_condition(&error),
+            northstar_xml_framing::stream_error_condition(&error),
             "not-well-formed"
         );
     }

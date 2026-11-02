@@ -31,9 +31,9 @@ pub(crate) fn parse_bosh_frame(
         return Err("bad-request");
     }
     let mut frame_buffer = raw.to_owned();
-    let frame = crate::xmpp::framing::take_frame(&mut frame_buffer)
+    let frame = northstar_xml_framing::take_frame(&mut frame_buffer)
         .map_err(
-            |error| match crate::xmpp::framing::stream_error_condition(&error) {
+            |error| match northstar_xml_framing::stream_error_condition(&error) {
                 "policy-violation" => "policy-violation",
                 _ => "bad-request",
             },
@@ -41,7 +41,7 @@ pub(crate) fn parse_bosh_frame(
         .ok_or("bad-request")?;
     if !frame_buffer
         .chars()
-        .all(crate::xmpp::framing::is_xml_whitespace)
+        .all(northstar_xml_framing::is_xml_whitespace)
     {
         return Err("bad-request");
     }
@@ -60,7 +60,7 @@ pub(crate) fn parse_bosh_frame(
                     .text()
                     .unwrap_or_default()
                     .chars()
-                    .all(crate::xmpp::framing::is_xml_whitespace)
+                    .all(northstar_xml_framing::is_xml_whitespace)
         })
     {
         return Err("bad-request");
@@ -92,7 +92,7 @@ pub(crate) fn websocket_frame_starts_with_markup(value: &str) -> bool {
 /// partial stanza or leading/trailing XML stream whitespace.
 pub(crate) fn take_websocket_frame(
     value: &str,
-    framer: &mut crate::xmpp::framing::XmlEntityFramer,
+    framer: &mut northstar_xml_framing::XmlEntityFramer,
     max_frame_bytes: usize,
 ) -> Result<String> {
     // RFC 7395 forbids carrying an incomplete XML frame into a later text
@@ -102,7 +102,7 @@ pub(crate) fn take_websocket_frame(
     framer.reset_pending_frame();
     let result = (|| {
         if value.len() > max_frame_bytes {
-            return Err(crate::xmpp::framing::resource_limit(
+            return Err(northstar_xml_framing::resource_limit(
                 "WebSocket frame bytes",
             ));
         }
@@ -187,14 +187,14 @@ mod tests {
 
     #[test]
     fn websocket_parser_enforces_one_markup_frame_and_framing_namespace_helpers() {
-        let mut framer = crate::xmpp::framing::XmlEntityFramer::default();
+        let mut framer = northstar_xml_framing::XmlEntityFramer::default();
         assert_eq!(
             take_websocket_frame("<message xmlns='jabber:client'/>", &mut framer, 1024).unwrap(),
             "<message xmlns='jabber:client'/>"
         );
         assert!(take_websocket_frame(
             "<message xmlns='jabber:client'/><presence xmlns='jabber:client'/>",
-            &mut crate::xmpp::framing::XmlEntityFramer::default(),
+            &mut northstar_xml_framing::XmlEntityFramer::default(),
             1024,
         )
         .is_err());
@@ -208,19 +208,19 @@ mod tests {
         let oversized = format!("<message>{}</message>", "x".repeat(1_025));
         let error = take_websocket_frame(
             &oversized,
-            &mut crate::xmpp::framing::XmlEntityFramer::default(),
+            &mut northstar_xml_framing::XmlEntityFramer::default(),
             1_024,
         )
         .unwrap_err();
         assert_eq!(
-            crate::xmpp::framing::stream_error_condition(&error),
+            northstar_xml_framing::stream_error_condition(&error),
             "policy-violation"
         );
     }
 
     #[test]
     fn rejected_partial_websocket_message_cannot_poison_the_next_utf8_message() {
-        let mut framer = crate::xmpp::framing::XmlEntityFramer::default();
+        let mut framer = northstar_xml_framing::XmlEntityFramer::default();
         assert!(take_websocket_frame("<xy", &mut framer, 1_024).is_err());
 
         // The stale cursor from `<xy` was byte 3, which is inside the two-byte

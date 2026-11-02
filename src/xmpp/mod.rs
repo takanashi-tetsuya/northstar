@@ -2,7 +2,6 @@ pub(crate) mod auth_publication;
 pub(crate) mod capabilities;
 mod direct_delivery;
 pub(crate) mod frame_execution;
-pub(crate) mod framing;
 pub(crate) mod muc_delivery;
 pub(crate) mod protocol;
 #[cfg(test)]
@@ -22,9 +21,9 @@ use crate::xmpp::transport_parsing::{
 use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket};
 use frame_execution::FrameFailure;
-use framing::XmlEntityFramer;
 use futures::FutureExt;
 use northstar_telemetry::metrics::C2sBackpressureTelemetry;
+use northstar_xml_framing::XmlEntityFramer;
 use protocol::{ProtocolSession, SessionTerminationSignals};
 use std::{future::Future, net::SocketAddr, panic::AssertUnwindSafe, sync::Arc, time::Duration};
 use tokio::{
@@ -584,7 +583,7 @@ where
                         Err(error) => {
                             tracing::debug!(?error, peer_ip = %session.peer_ip, "invalid XMPP framing");
                             session.forbid_sm_resume();
-                            let condition = framing::stream_error_condition(&error);
+                            let condition = northstar_xml_framing::stream_error_condition(&error);
                             let opening = !session.is_stream_open();
                             tcp_fatal_error(
                                 &mut io,
@@ -1121,7 +1120,7 @@ pub async fn websocket_connection(
                             Err(error) => {
                                 tracing::debug!(?error, "invalid WebSocket XMPP framing");
                                 session.forbid_sm_resume();
-                                let condition = framing::stream_error_condition(&error);
+                                let condition = northstar_xml_framing::stream_error_condition(&error);
                                 let opening = !session.is_stream_open();
                                 let domain = session.local_domain().to_owned();
                                 websocket_fatal_error(

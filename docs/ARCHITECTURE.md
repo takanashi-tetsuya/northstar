@@ -81,7 +81,7 @@ flowchart TB
 
 Key ownership:
 
-- `src/xmpp/framing.rs` incrementally frames XML with byte/depth/time limits.
+- `northstar-xml-framing` incrementally frames XML with byte/depth/time limits.
 - `src/xmpp/protocol/` owns negotiated wire behavior and error mapping. The
   protocol tree no longer imports database authority/domain symbols, accesses
   a pool, or uses SQLx directly; persistence is reached only through the

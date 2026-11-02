@@ -1019,7 +1019,7 @@ async fn real_sm_record_composes_with_native_lease_without_native_fence_or_ack()
         );
     }
 }
-impl crate::bosh::BoshRecordPort for NativeSm<'_> {
+impl northstar_bosh::RecordPort for NativeSm<'_> {
     async fn record(&mut self, item: &OutboundItem) -> Result<bool> {
         <Self as northstar_c2s::direct_delivery::DirectWritePort>::record(self, item).await
     }
@@ -1048,7 +1048,8 @@ async fn actual_sm_record_clears_bosh_source_before_fifo_and_preserves_prior_sm_
                 native_calls: AtomicU64::new(0),
             };
             let (accepted, items, bytes, bosh) =
-                crate::bosh::sm_record_composition(&mut record, item, full).await;
+                northstar_bosh::stage4_support::sm_record_composition(&mut record, item, full)
+                    .await;
             assert_eq!(accepted, !full);
             assert_eq!(record.turn.sm.unacked.len(), 1);
             assert_eq!(record.turn.sm.outbound_h, 11);

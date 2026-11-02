@@ -14,20 +14,20 @@ use std::{net::IpAddr, sync::Arc};
 
 /// The configured BOSH limits, read once per session or request.
 #[derive(Clone, Copy)]
-pub(crate) struct BoshPolicy {
-    pub(crate) max_wait_seconds: u64,
-    pub(crate) inactivity_seconds: u64,
-    pub(crate) polling_seconds: u64,
-    pub(crate) max_pause_seconds: u64,
-    pub(crate) body_read_timeout_seconds: u64,
-    pub(crate) max_request_bytes: usize,
-    pub(crate) max_response_bytes: usize,
-    pub(crate) max_stanzas_per_request: usize,
-    pub(crate) max_output_stanzas: usize,
-    pub(crate) max_output_bytes: usize,
+pub struct BoshPolicy {
+    pub max_wait_seconds: u64,
+    pub inactivity_seconds: u64,
+    pub polling_seconds: u64,
+    pub max_pause_seconds: u64,
+    pub body_read_timeout_seconds: u64,
+    pub max_request_bytes: usize,
+    pub max_response_bytes: usize,
+    pub max_stanzas_per_request: usize,
+    pub max_output_stanzas: usize,
+    pub max_output_bytes: usize,
 }
 
-pub(crate) trait BoshHost: TransportHost<Session: RecordPort> {
+pub trait BoshHost: TransportHost<Session: RecordPort> {
     /// The repository behind a BOSH session's offline replay.
     type ReplayStore: ReplayRepository + Clone + 'static;
 

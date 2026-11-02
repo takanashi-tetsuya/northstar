@@ -1,11 +1,11 @@
 //! Test-only bridge over the actor's actual item, response and cache helpers.
 //! Request admission/HTTP/auth policy is outside this fixed controlled profile.
-use super::{
-    ownership, response_owner, BoshHttpResponse, BoshRequest, CachedResponse,
-    BOSH_BACKEND_OPERATION_TIMEOUT,
-};
 use crate::direct_replay as wire;
 use anyhow::{Context, Result};
+use northstar_bosh::stage4_support::{
+    ownership, parse_body, response_owner, BoshHttpResponse, BoshRequest, CachedResponse,
+    BOSH_BACKEND_OPERATION_TIMEOUT,
+};
 use northstar_delivery_core::bosh_ownership::{self as core, response as response_core};
 use northstar_session_application::sm_capacity::SmMemoryGovernor;
 use northstar_stream::outbound::{
@@ -805,7 +805,7 @@ pub(crate) async fn run<R: ownership::RecordPort>(
         owner_index += 1;
     }
     let request =
-        super::parse_body(request_xml, *max_output_stanzas as usize).map_err(anyhow::Error::msg)?;
+        parse_body(request_xml, *max_output_stanzas as usize).map_err(anyhow::Error::msg)?;
     let log = OwnerLog::new(
         session_id.0,
         *ttl_seconds,
@@ -863,7 +863,7 @@ pub(crate) async fn run<R: ownership::RecordPort>(
     if !dropped {
         if let Some(reply) = cached_replay.get() {
             owner_index += 1;
-            let request = super::parse_body(&reply.request_xml, *max_output_stanzas as usize)
+            let request = parse_body(&reply.request_xml, *max_output_stanzas as usize)
                 .map_err(anyhow::Error::msg)?;
             let log = OwnerLog::new(
                 session_id.0,
@@ -911,7 +911,7 @@ pub(crate) async fn run<R: ownership::RecordPort>(
         }
         if let Some(reply) = fresh_ack.get() {
             owner_index += 1;
-            let request = super::parse_body(&reply.request_xml, *max_output_stanzas as usize)
+            let request = parse_body(&reply.request_xml, *max_output_stanzas as usize)
                 .map_err(anyhow::Error::msg)?;
             let log = OwnerLog::new(
                 session_id.0,
@@ -977,8 +977,8 @@ fn profile_request(
     if xml.len() > 4096 {
         return Err(wire::Rejection::Limit);
     }
-    let request = super::parse_body(xml, max_stanzas as usize)
-        .map_err(|_| wire::Rejection::IdentityBinding)?;
+    let request =
+        parse_body(xml, max_stanzas as usize).map_err(|_| wire::Rejection::IdentityBinding)?;
     if request.rid != rid
         || request.ack != ack
         || request.sid.as_deref() != Some("case-session")

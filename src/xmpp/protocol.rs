@@ -48,6 +48,7 @@ use std::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+mod bosh_record;
 mod direct_write;
 mod legacy_auth;
 mod session_sm;

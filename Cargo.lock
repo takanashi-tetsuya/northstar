@@ -2021,6 +2021,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-bosh"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "dashmap",
+ "futures",
+ "hmac",
+ "northstar-auth-application",
+ "northstar-delivery-core",
+ "northstar-room-application",
+ "northstar-runtime",
+ "northstar-session-application",
+ "northstar-stream",
+ "northstar-xml-builder",
+ "northstar-xmpp-types",
+ "rand 0.8.7",
+ "roxmltree",
+ "sha1",
+ "sha2",
+ "subtle",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "northstar-c2s"
 version = "0.1.0"
 dependencies = [
@@ -4120,6 +4149,7 @@ dependencies = [
  "northstar-auth-core",
  "northstar-auth-postgres",
  "northstar-auth-xmpp",
+ "northstar-bosh",
  "northstar-c2s",
  "northstar-cluster",
  "northstar-config",

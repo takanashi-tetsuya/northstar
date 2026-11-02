@@ -176,6 +176,14 @@ crates:
     api_stability: internal
     publish_policy: never
 
+  - crate_id: northstar-bosh
+    package: northstar-bosh
+    path: crates/edges/northstar-bosh
+    tier: edge
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-c2s
     package: northstar-c2s
     path: crates/edges/northstar-c2s

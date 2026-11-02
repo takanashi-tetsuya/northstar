@@ -435,7 +435,7 @@ async fn run_case(case: &wire::Case, input: &[u8]) -> Result<wire::Envelope> {
                         ),
                     )?,
                 };
-                let (evidence, dropped) = crate::bosh::run_saved_case(
+                let (evidence, dropped) = crate::direct_replay::bosh_case::run(
                     case,
                     target,
                     &mut recorder,

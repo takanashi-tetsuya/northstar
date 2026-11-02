@@ -10,6 +10,7 @@ use std::{
 use uuid::Uuid;
 
 // Driving is a separate test-only helper; no dispatcher/entry is defined here.
+pub(crate) mod bosh;
 #[cfg(test)]
 mod compact;
 pub(crate) mod driver;
@@ -2899,7 +2900,6 @@ mod tests;
 // Process-level execution uses the separate bounded ignored entry below.
 mod saved_dispatcher {
     use super::*;
-    use crate::bosh::stage4_saved as bosh;
     use crate::xmpp::protocol::mix::stage4_saved as mix;
     use crate::xmpp::stage4_auth_publication as auth;
     use crate::xmpp::stage4_native as native;

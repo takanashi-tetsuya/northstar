@@ -397,7 +397,7 @@ impl AppState {
         }
 
         let bosh = config.bosh_enabled.then(|| {
-            crate::bosh::BoshManager::new(
+            northstar_bosh::BoshManager::new(
                 config.bosh_max_sessions,
                 config.bosh_max_concurrent_body_reads,
             )

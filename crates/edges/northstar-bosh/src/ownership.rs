@@ -13,18 +13,18 @@ use std::{
     task::{Context as TaskContext, Poll},
 };
 
-pub(super) struct Output<'a> {
-    pub(super) items: &'a mut VecDeque<OutboundItem>,
-    pub(super) bytes: &'a mut usize,
-    pub(super) max_stanzas: usize,
-    pub(super) max_bytes: usize,
+pub struct Output<'a> {
+    pub items: &'a mut VecDeque<OutboundItem>,
+    pub bytes: &'a mut usize,
+    pub max_stanzas: usize,
+    pub max_bytes: usize,
 }
 impl Output<'_> {
-    pub(super) fn can_push(&self, item: &OutboundItem) -> bool {
+    pub fn can_push(&self, item: &OutboundItem) -> bool {
         let next_bytes = self.bytes.saturating_add(item.stanza.len());
         self.items.len() < self.max_stanzas && next_bytes <= self.max_bytes
     }
-    pub(super) fn push(&mut self, item: OutboundItem) -> bool {
+    pub fn push(&mut self, item: OutboundItem) -> bool {
         if !self.can_push(&item) {
             return false;
         }
@@ -89,21 +89,21 @@ impl TransferredItem {
         Ok(accepted)
     }
 }
-pub(super) trait TransferPort {
+pub trait TransferPort {
     fn transfer(
         &self,
         request: &TransferRequest,
     ) -> impl Future<Output = Result<MixDelivery>> + Send;
 }
-pub(super) struct ServiceTransfer<'a, R> {
-    pub(super) service: &'a MixService<R>,
+pub struct ServiceTransfer<'a, R> {
+    pub service: &'a MixService<R>,
 }
 impl<R: MixRepository> TransferPort for ServiceTransfer<'_, R> {
     async fn transfer(&self, request: &TransferRequest) -> Result<MixDelivery> {
         self.service.transfer_mix_delivery_to_bosh(request).await
     }
 }
-pub(super) async fn transfer_and_push<P: TransferPort>(
+pub async fn transfer_and_push<P: TransferPort>(
     output: &mut Output<'_>,
     item: OutboundItem,
     operation: &Operation,
@@ -117,15 +117,10 @@ pub(super) async fn transfer_and_push<P: TransferPort>(
     prepared.returned(returned)?.push(output)
 }
 
-pub(crate) trait RecordPort {
+pub trait RecordPort {
     fn record(&mut self, item: &OutboundItem) -> impl Future<Output = Result<bool>> + Send;
 }
-impl RecordPort for crate::xmpp::protocol::ProtocolSession {
-    async fn record(&mut self, item: &OutboundItem) -> Result<bool> {
-        self.record_outbound_item(item).await
-    }
-}
-pub(super) enum RecordPushError {
+pub enum RecordPushError {
     Record(anyhow::Error),
     Transfer {
         source: MixDelivery,
@@ -140,7 +135,7 @@ impl std::fmt::Debug for RecordPushError {
         })
     }
 }
-pub(super) async fn record_and_push<R: RecordPort, P: TransferPort>(
+pub async fn record_and_push<R: RecordPort, P: TransferPort>(
     output: &mut Output<'_>,
     mut item: OutboundItem,
     operation: &Operation,
@@ -195,13 +190,13 @@ impl Drop for ObservationGuard {
 }
 /// The actor creates this owner outside its existing timeout. Destruction of
 /// the timed child precedes retirement, including caught poll/drop panics.
-pub(super) struct OperationRunner<F> {
+pub struct OperationRunner<F> {
     child: Option<Pin<Box<F>>>,
     observation: ObservationGuard,
     poll_in_progress: bool,
 }
 impl<F: Future> OperationRunner<F> {
-    pub(super) fn new(operation: Operation, child: F) -> Self {
+    pub fn new(operation: Operation, child: F) -> Self {
         Self {
             child: Some(Box::pin(child)),
             observation: ObservationGuard {
@@ -254,8 +249,8 @@ impl<F> Drop for OperationRunner<F> {
 
 /// Test-only composition entry. It uses the production record/clear/transfer/
 /// FIFO algorithm and actual owners without constructing a synthetic actor.
-#[cfg(test)]
-pub(crate) async fn sm_record_composition<R: RecordPort>(
+#[cfg(any(test, feature = "test-support"))]
+pub async fn sm_record_composition<R: RecordPort>(
     record: &mut R,
     item: OutboundItem,
     full: bool,

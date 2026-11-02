@@ -9,8 +9,6 @@
     "src/stage4_replay/compact.rs": 3431
   },
   "root_rust_files": [
-    "src/bosh.rs",
-    "crates/edges/northstar-cluster/src/lib.rs",
     "src/direct_replay.rs",
     "src/main.rs",
     "src/stage4_replay.rs",

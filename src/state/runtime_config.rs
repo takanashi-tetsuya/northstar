@@ -1,7 +1,7 @@
 //! Runtime configuration views: policy value types and configuration accessors.
 
 use super::*;
-use crate::bosh::host::BoshPolicy;
+use northstar_bosh::host::BoshPolicy;
 pub(crate) use northstar_message_core::OfflineDeliveryLimits;
 use northstar_upload_application::UploadSlotLimits;
 

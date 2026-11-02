@@ -2014,8 +2014,8 @@ for (const [name, source] of [
     throw new Error(`${name} reads SM safety configuration through global state after construction`);
   }
 }
-for (const transport of ['src/bosh.rs', 'crates/edges/northstar-c2s/src/lib.rs', 'crates/edges/northstar-c2s/src/tcp_action.rs', 'crates/edges/northstar-c2s/src/websocket_action.rs']) {
-  if (/\b(?:session|protocol)\s*\.\s*state\b/.test(transport === 'src/bosh.rs' ? readRoleSplitFile(transport, { root }) : read(transport))) {
+for (const transport of ['crates/edges/northstar-bosh/src/lib.rs', 'crates/edges/northstar-c2s/src/lib.rs', 'crates/edges/northstar-c2s/src/tcp_action.rs', 'crates/edges/northstar-c2s/src/websocket_action.rs']) {
+  if (/\b(?:session|protocol)\s*\.\s*state\b/.test(transport === 'crates/edges/northstar-bosh/src/lib.rs' ? readRoleSplitFile(transport, { root }) : read(transport))) {
     throw new Error(`${transport} traverses ProtocolSession into global state`);
   }
 }

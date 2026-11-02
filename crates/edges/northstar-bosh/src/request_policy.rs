@@ -53,7 +53,7 @@ pub(super) fn classify_rid(next_rid: u64, rid: u64) -> RidDisposition {
     }
 }
 
-pub(super) fn valid_client_response_ack(
+pub fn valid_client_response_ack(
     acknowledgements_announced: bool,
     highest_responded: u64,
     request_rid: u64,
@@ -180,7 +180,7 @@ pub(super) fn highest_contiguous_buffered_rid(
     Some(contiguous)
 }
 
-pub(super) fn parse_body(raw: &str, max_stanzas: usize) -> Result<BoshRequest, &'static str> {
+pub fn parse_body(raw: &str, max_stanzas: usize) -> Result<BoshRequest, &'static str> {
     let frame = parse_bosh_frame(
         raw,
         max_stanzas,

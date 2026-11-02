@@ -197,37 +197,37 @@ rejects('BOSH cache cannot retain auth selection membership', 'bosh',
   'struct CachedResponse {\n    auth_control_selected: bool,', /cache and replay/);
 for (const owner of ['BoundResponse', 'ExposedResponse', 'PublicationReadyResponse']) {
   rejects(`BOSH ${owner} cannot derive Clone`, 'boshResponse',
-    `pub(super) struct ${owner} {`,
-    `#[derive(Clone)]\npub(super) struct ${owner} {`, /cannot derive or manually implement Clone or Copy/);
+    `pub struct ${owner} {`,
+    `#[derive(Clone)]\npub struct ${owner} {`, /cannot derive or manually implement Clone or Copy/);
   rejects(`BOSH ${owner} cannot manually implement Clone`, 'boshResponse',
     `impl ${owner} {`,
     `impl Clone for ${owner} { fn clone(&self) -> Self { panic!("unreviewed clone") } }\nimpl ${owner} {`,
     /cannot derive or manually implement Clone or Copy/);
 }
 rejects('BOSH ready owner cannot derive Copy', 'boshResponse',
-  'pub(super) struct PublicationReadyResponse {',
-  '#[derive(Copy)]\npub(super) struct PublicationReadyResponse {', /cannot derive or manually implement Clone or Copy/);
+  'pub struct PublicationReadyResponse {',
+  '#[derive(Copy)]\npub struct PublicationReadyResponse {', /cannot derive or manually implement Clone or Copy/);
 rejects('BOSH exposed owner cannot manually implement Copy', 'boshResponse',
   'impl ExposedResponse {',
   'impl Copy for ExposedResponse {}\nimpl ExposedResponse {', /cannot derive or manually implement Clone or Copy/);
 rejects('BOSH bound exposure must consume its owner', 'boshResponse',
-  'pub(super) fn expose(mut self, responders: Vec<Responder>)',
-  'pub(super) fn expose(&self, responders: Vec<Responder>)', /named consuming declaration heads/);
+  'pub fn expose(mut self, responders: Vec<Responder>)',
+  'pub fn expose(&self, responders: Vec<Responder>)', /named consuming declaration heads/);
 rejects('BOSH publication cannot borrow its exposed owner', 'boshResponse',
-  'pub(super) async fn publish_authentication<F: Future<Output = bool>>(\n        mut self,',
-  'pub(super) async fn publish_authentication<F: Future<Output = bool>>(\n        &self,', /named consuming declaration heads/);
+  'pub async fn publish_authentication<F: Future<Output = bool>>(\n        mut self,',
+  'pub async fn publish_authentication<F: Future<Output = bool>>(\n        &self,', /named consuming declaration heads/);
 rejects('BOSH ready bookkeeping must consume its owner', 'boshResponse',
-  'impl PublicationReadyResponse {\n    pub(super) fn finish(\n        self,',
-  'impl PublicationReadyResponse {\n    pub(super) fn finish(\n        &self,', /named consuming declaration heads/);
+  'impl PublicationReadyResponse {\n    pub fn finish(\n        self,',
+  'impl PublicationReadyResponse {\n    pub fn finish(\n        &self,', /named consuming declaration heads/);
 rejects('BOSH bound owner cannot expose mutable selected membership', 'boshResponse',
   '    bound: response::BoundResponse,\n    auth_control_selected: bool,',
-  '    bound: response::BoundResponse,\n    pub(super) auth_control_selected: bool,', /exact private field shape/);
+  '    bound: response::BoundResponse,\n    pub auth_control_selected: bool,', /exact private field shape/);
 rejects('BOSH ready owner cannot expose its inner continuation', 'boshResponse',
-  'pub(super) struct PublicationReadyResponse {\n    exposed: ExposedResponse',
-  'pub(super) struct PublicationReadyResponse {\n    pub(super) exposed: ExposedResponse', /exact private field shape/);
+  'pub struct PublicationReadyResponse {\n    exposed: ExposedResponse',
+  'pub struct PublicationReadyResponse {\n    pub exposed: ExposedResponse', /exact private field shape/);
 rejects('BOSH ready owner cannot add an into_exposed escape', 'boshResponse',
   'impl PublicationReadyResponse {',
-  'impl PublicationReadyResponse {\n    pub(super) fn into_exposed(self) -> Result<ExposedResponse> { Ok(self.exposed) }',
+  'impl PublicationReadyResponse {\n    pub fn into_exposed(self) -> Result<ExposedResponse> { Ok(self.exposed) }',
   /closed inherent-method inventory/);
 rejects('BOSH readiness cannot be constructed by an extra free function', 'boshResponse',
   'impl PublicationReadyResponse {',
@@ -237,11 +237,11 @@ rejects('BOSH ready owner cannot hide a Self constructor inside finish', 'boshRe
   '        let ExposedResponse {',
   '        let _extra = |exposed| Self { exposed };\n        let ExposedResponse {', /cannot add Self-brace construction/);
 rejects('BOSH acceptance accessor must remain test-only', 'boshResponse',
-  '#[cfg(test)]\n    pub(super) fn any_accepted(&self)',
-  'pub(super) fn any_accepted(&self)', /test-only compatibility methods/);
+  `${CROSS_CRATE_TEST_ONLY}\n    pub fn any_accepted(&self)`,
+  'pub fn any_accepted(&self)', /test-only compatibility methods/);
 rejects('BOSH plain compatibility finish must remain test-only', 'boshResponse',
-  '#[cfg(test)]\n    pub(super) fn finish(',
-  'pub(super) fn finish(', /test-only compatibility methods/);
+  `${CROSS_CRATE_TEST_ONLY}\n    pub fn finish(`,
+  'pub fn finish(', /test-only compatibility methods/);
 
 // Finite auth owner/adapter negatives reuse the same exact token-span helper.
 rejects('auth receipt identity cannot become public substitution authority', 'authCredential',
@@ -1272,22 +1272,22 @@ function rejectsSelection(name, before, after, expected) {
 }
 for (const [name, declaration] of [
   ['capacity', 'const MAX_SELECTED_FACTS: usize = 4;'],
-  ['status', '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(super) enum SelectionReadStatus'],
-  ['item snapshot', '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(super) struct SelectedItemSnapshot'],
-  ['response snapshot', '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(super) struct SelectionSnapshot'],
+  ['status', '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub enum SelectionReadStatus'],
+  ['item snapshot', '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub struct SelectedItemSnapshot'],
+  ['response snapshot', '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub struct SelectionSnapshot'],
   ['retained item', 'struct SelectedItemRead'],
   ['retained state', 'struct SelectionState'],
-  ['handle', '#[derive(Clone)] pub(super) struct SelectionObservation'],
+  ['handle', '#[derive(Clone)] pub struct SelectionObservation'],
   ['implementation', 'impl SelectionObservation'],
 ]) {
   rejectsSelection(`BOSH selection ${name} cannot escape test configuration`,
-    `#[cfg(test)] ${declaration}`, declaration, /exact test-only declaration/);
+    `${CROSS_CRATE_TEST_ONLY} ${declaration}`, declaration, /exact test-only declaration/);
 }
 rejectsSelection('BOSH selection observation capacity cannot grow',
   'const MAX_SELECTED_FACTS: usize = 4;', 'const MAX_SELECTED_FACTS: usize = 5;', /exact test-only declaration/);
 rejectsSelection('BOSH selection snapshot cannot retain an unbounded collection',
-  'pub(super) items: [Option<SelectedItemSnapshot>; MAX_SELECTED_FACTS]',
-  'pub(super) items: Vec<SelectedItemSnapshot>', /capacity|fact-only field shape/);
+  'pub items: [Option<SelectedItemSnapshot>; MAX_SELECTED_FACTS]',
+  'pub items: Vec<SelectedItemSnapshot>', /capacity|fact-only field shape/);
 rejectsSelection('BOSH selection retained state cannot retain an unbounded collection',
   'status: SelectionReadStatus, items: [Option<SelectedItemRead>; MAX_SELECTED_FACTS]',
   'status: SelectionReadStatus, items: Vec<SelectedItemRead>', /capacity|fact-only field shape/);
@@ -1311,45 +1311,45 @@ for (const [name, field] of [
     'struct SelectedItemRead {', `struct SelectedItemRead { retained: ${field},`, /fact-only field shape/);
 }
 rejectsSelection('BOSH selection handle cannot retain actual holders',
-  'pub(super) struct SelectionObservation(Arc<std::sync::Mutex<SelectionState>>);',
-  'pub(super) struct SelectionObservation(Arc<Vec<northstar_stream::auth_publication::AuthControlHolder>>);', /exact test-only declaration/);
+  'pub struct SelectionObservation(Arc<std::sync::Mutex<SelectionState>>);',
+  'pub struct SelectionObservation(Arc<Vec<northstar_stream::auth_publication::AuthControlHolder>>);', /exact test-only declaration/);
 rejectsSelection('BOSH selection handle tuple field cannot become public',
-  'pub(super) struct SelectionObservation(Arc<std::sync::Mutex<SelectionState>>);',
-  'pub(super) struct SelectionObservation(pub(super) Arc<std::sync::Mutex<SelectionState>>);', /exact test-only declaration/);
+  'pub struct SelectionObservation(Arc<std::sync::Mutex<SelectionState>>);',
+  'pub struct SelectionObservation(pub Arc<std::sync::Mutex<SelectionState>>);', /exact test-only declaration/);
 rejectsSelection('BOSH selection state cannot expose mutable facts',
   'struct SelectionState { session: uuid::Uuid,',
-  'struct SelectionState { pub(super) session: uuid::Uuid,', /fact-only field shape/);
+  'struct SelectionState { pub session: uuid::Uuid,', /fact-only field shape/);
 rejectsSelection('BOSH selection snapshot cannot silently lose its digest field',
-  'pub(super) sha256: [u8; 32],', '', /fact-only field shape/);
+  'pub sha256: [u8; 32],', '', /fact-only field shape/);
 rejectsSelection('BOSH selection snapshot cannot acquire unreviewed derives',
-  '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(super) struct SelectionSnapshot',
-  '#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)] pub(super) struct SelectionSnapshot', /exact test-only declaration/);
+  '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub struct SelectionSnapshot',
+  '#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)] pub struct SelectionSnapshot', /exact test-only declaration/);
 rejectsSelection('BOSH selection cannot add a mutable reset API',
   'impl SelectionObservation {',
-  'impl SelectionObservation { pub(super) fn reset(&self) { self.0.lock().unwrap().status = SelectionReadStatus::Complete; }', /closed capture/);
+  'impl SelectionObservation { pub fn reset(&self) { self.0.lock().unwrap().status = SelectionReadStatus::Complete; }', /closed capture/);
 rejectsSelection('BOSH selection snapshots cannot acquire an authority conversion',
   'impl SelectionObservation {',
   'impl SelectionSnapshot { fn into_owner(self) -> OwnedPublication { panic!() } } impl SelectionObservation {', /exact test-only declaration|closed capture/);
 rejectsSelection('BOSH selection capture cannot become a public constructor',
   'fn capture(selected: &VecDeque<OutboundItem>, operation: &Operation, metadata: Metadata) -> Self',
-  'pub(super) fn capture(selected: &VecDeque<OutboundItem>, operation: &Operation, metadata: Metadata) -> Self', /immutable fact-only snapshot declarations/);
+  'pub fn capture(selected: &VecDeque<OutboundItem>, operation: &Operation, metadata: Metadata) -> Self', /immutable fact-only snapshot declarations/);
 rejectsSelection('BOSH selection capture cannot retain a borrowed queue lifetime',
   'fn capture(selected: &VecDeque<OutboundItem>, operation: &Operation, metadata: Metadata) -> Self',
   "fn capture<'a>(selected: &'a VecDeque<OutboundItem>, operation: &Operation, metadata: Metadata) -> Self", /immutable fact-only snapshot declarations/);
 rejectsSelection('BOSH selection snapshot getter cannot return mutable state',
-  'pub(super) fn snapshot(&self) -> SelectionSnapshot',
-  'pub(super) fn snapshot(&mut self) -> &mut SelectionState', /immutable fact-only snapshot declarations/);
+  'pub fn snapshot(&self) -> SelectionSnapshot',
+  'pub fn snapshot(&mut self) -> &mut SelectionState', /immutable fact-only snapshot declarations/);
 rejectsSelection('BOSH selection owner getter cannot escape test configuration',
-  '#[cfg(test)] pub(super) fn selection_observation(&self) -> SelectionObservation',
-  'pub(super) fn selection_observation(&self) -> SelectionObservation', /test-only and clone only/);
+  `${CROSS_CRATE_TEST_ONLY} pub fn selection_observation(&self) -> SelectionObservation`,
+  'pub fn selection_observation(&self) -> SelectionObservation', /test-only and clone only/);
 rejectsSelection('BOSH selection owner field cannot escape test configuration',
-  '#[cfg(test)] selection: SelectionObservation', 'selection: SelectionObservation', /private test-only fact handle/);
+  `${CROSS_CRATE_TEST_ONLY} selection: SelectionObservation`, 'selection: SelectionObservation', /private test-only fact handle/);
 rejectsSelection('BOSH selection owner getter cannot mutate its stored facts',
-  'pub(super) fn selection_observation(&self) -> SelectionObservation { self.selection.clone() }',
-  'pub(super) fn selection_observation(&self) -> SelectionObservation { self.selection.0.lock().unwrap().status = SelectionReadStatus::Complete; self.selection.clone() }', /test-only and clone only/);
+  'pub fn selection_observation(&self) -> SelectionObservation { self.selection.clone() }',
+  'pub fn selection_observation(&self) -> SelectionObservation { self.selection.0.lock().unwrap().status = SelectionReadStatus::Complete; self.selection.clone() }', /test-only and clone only/);
 rejectsSelection('BOSH selection owner getter cannot leak selected controls',
-  'pub(super) fn selection_observation(&self) -> SelectionObservation { self.selection.clone() }',
-  'pub(super) fn selection_observation(&self) -> &SelectedControls { &self.auth_controls }', /test-only and clone only/);
+  'pub fn selection_observation(&self) -> SelectionObservation { self.selection.clone() }',
+  'pub fn selection_observation(&self) -> &SelectedControls { &self.auth_controls }', /test-only and clone only/);
 for (const [name, before, after] of [
   ['original selected FIFO', 'selected.get(ordinal).map(|item|', 'selected.get(selected.len() - 1 - ordinal).map(|item|'],
   ['actual source', 'source: item.durable_source,', 'source: expected_source,'],
@@ -1395,19 +1395,19 @@ rejectsSelection('BOSH selection final capture cannot substitute metadata identi
   'SelectionObservation::capture(&selected, operation, metadata)',
   'SelectionObservation::capture(&selected, operation, other_metadata)', /final successful bind/);
 rejectsSelection('BOSH selection final capture cannot escape test configuration',
-  '#[cfg(test)] let selection = SelectionObservation::capture(&selected, operation, metadata);',
+  `${CROSS_CRATE_TEST_ONLY} let selection = SelectionObservation::capture(&selected, operation, metadata);`,
   'let selection = SelectionObservation::capture(&selected, operation, metadata);', /final successful bind/);
 rejectsSelection('BOSH selection constructor field cannot escape test configuration',
-  'auth_connection: None, #[cfg(test)] selection', 'auth_connection: None, selection', /final successful bind/);
+  `auth_connection: None, ${CROSS_CRATE_TEST_ONLY} selection`, 'auth_connection: None, selection', /final successful bind/);
 rejectsSelection('BOSH selection capture cannot be duplicated before binding',
   'let bound = request.returned(ownership).map_err(|error|',
-  '#[cfg(test)] let early_selection = SelectionObservation::capture(&selected, operation, metadata); let bound = request.returned(ownership).map_err(|error|', /final successful bind/);
+  `${CROSS_CRATE_TEST_ONLY} let early_selection = SelectionObservation::capture(&selected, operation, metadata); let bound = request.returned(ownership).map_err(|error|`, /final successful bind/);
 rejectsSelection('BOSH selection capture cannot depend on a publication callback',
-  '#[cfg(test)] let selection = SelectionObservation::capture(&selected, operation, metadata);',
-  '#[cfg(test)] let selection = { publish(owners).await; SelectionObservation::capture(&selected, operation, metadata) };', /final successful bind/);
+  `${CROSS_CRATE_TEST_ONLY} let selection = SelectionObservation::capture(&selected, operation, metadata);`,
+  `${CROSS_CRATE_TEST_ONLY} let selection = { publish(owners).await; SelectionObservation::capture(&selected, operation, metadata) };`, /final successful bind/);
 rejectsSelection('BOSH selection callback cannot mint another selection observation',
   'let owners = selected.take_all()?;',
-  'let owners = selected.take_all()?; #[cfg(test)] let later_selection = SelectionObservation::capture(&supplied_selection, operation, metadata);', /final successful bind/);
+  `let owners = selected.take_all()?; ${CROSS_CRATE_TEST_ONLY} let later_selection = SelectionObservation::capture(&supplied_selection, operation, metadata);`, /final successful bind/);
 rejectsSelection('BOSH selection success cannot add a suspension before capture',
   'let auth_control_selected = !auth_controls.is_empty();',
   'let auth_control_selected = !auth_controls.is_empty(); tokio::task::yield_now().await;', /final successful bind/);
@@ -1415,7 +1415,7 @@ for (const [name, before, after] of [
   ['connection assignment before validation', 'self.auth_controls.validate_connection(connection)?; self.auth_connection = Some(connection);', 'self.auth_connection = Some(connection); self.auth_controls.validate_connection(connection)?;'],
   ['observer connection before validation', 'self.auth_controls.validate_connection(connection)?; self.auth_connection = Some(connection);', 'self.selection.0.lock().unwrap().validated_connection = Some(connection); self.auth_controls.validate_connection(connection)?; self.auth_connection = Some(connection);'],
   ['ignored validation error', 'self.auth_controls.validate_connection(connection)?; self.auth_connection = Some(connection);', 'let _ = self.auth_controls.validate_connection(connection); self.auth_connection = Some(connection);'],
-  ['connection capture outside test configuration', '#[cfg(test)] { let mut selection = self.selection.0.lock().unwrap();', '{ let mut selection = self.selection.0.lock().unwrap();'],
+  ['connection capture outside test configuration', `${CROSS_CRATE_TEST_ONLY} { let mut selection = self.selection.0.lock().unwrap();`, '{ let mut selection = self.selection.0.lock().unwrap();'],
   ['first binding overwritten by rebinding', 'selection.validated_connection = Some(connection);', 'selection.first_validated_connection = Some(connection); selection.validated_connection = Some(connection);'],
   ['latest binding lost on successful rebind', 'selection.validated_connection = Some(connection);', 'selection.validated_connection = selection.first_validated_connection;'],
   ['return to first connection clearing loss', 'if previous != connection {', 'if selection.first_validated_connection != Some(connection) {'],

@@ -248,7 +248,7 @@ Key ownership:
   every caller is scoped.
 - `src/s2s/` owns discovery, DANE, TLS, EXTERNAL/Dialback and durable delivery.
 - `src/s2s/components.rs` isolates component domain authority and outbox handling.
-- `src/bosh.rs` and the WebSocket path adapt HTTP framing to the same
+- `crates/edges/northstar-bosh/src/lib.rs` and the WebSocket path adapt HTTP framing to the same
   `ProtocolSession` state machine.
 - `northstar-delivery-core::OrderedOutboundSink` separates session ordering
   from the Tokio queue adapter. A rejected or stale item is returned to its

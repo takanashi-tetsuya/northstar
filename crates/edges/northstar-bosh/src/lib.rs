@@ -5,22 +5,21 @@
 //! and await a one-shot response. This preserves RID order even when two HTTP
 //! requests arrive concurrently and prevents transport-specific protocol
 //! behavior from drifting away from TCP/WebSocket behavior.
+//!
+//! The node is reached only through [`host::BoshHost`] and each session only through `northstar_stream`'s
+//! `StreamSession` and [`RecordPort`]; the composition root implements both.
+
+#![forbid(unsafe_code)]
 
 mod action;
-pub(crate) mod host;
+pub mod host;
 mod ownership;
 mod response_owner;
-#[cfg(test)]
-pub(crate) use response_owner::stage4_saved;
-#[cfg(test)]
-mod saved_case;
-#[cfg(test)]
-pub(crate) use ownership::{sm_record_composition, RecordPort as BoshRecordPort};
-#[cfg(test)]
-pub(crate) use saved_case::{run as run_saved_case, validate as validate_saved_case};
+pub use ownership::RecordPort;
+#[cfg(any(test, feature = "test-support"))]
+pub mod stage4_support;
 
 use self::host::BoshHost;
-use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Context;
 use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, State};
@@ -36,6 +35,7 @@ use northstar_stream::resume::ResumeTransportParts;
 use northstar_stream::session::StreamSession;
 use northstar_stream::transport::ClientTransport;
 use northstar_stream::transport_parsing::parse_bosh_frame;
+use northstar_xml_builder::XmlElement;
 use rand::{rngs::OsRng, RngCore};
 use roxmltree::Document;
 use sha1::Sha1;
@@ -74,7 +74,7 @@ const RESPONSE_CACHE_SIZE: usize = 2;
 const MAX_UNACKNOWLEDGED_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_RESPONSE_ACK_AGE: Duration = Duration::from_secs(300);
 const MAX_RESPONSE_REPLAYS: u8 = 2;
-const BOSH_BACKEND_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
+pub const BOSH_BACKEND_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub struct BoshManager {
@@ -119,38 +119,38 @@ async fn next_bosh_command(
 }
 
 #[derive(Clone, Debug)]
-struct BoshRequest {
-    rid: u64,
-    sid: Option<String>,
-    to: Option<String>,
-    from: Option<String>,
-    wait: Option<u64>,
-    hold: Option<u8>,
-    ver: Option<String>,
-    content: Option<String>,
-    ack: Option<u64>,
-    key: Option<String>,
-    newkey: Option<String>,
-    pause: Option<u64>,
-    terminate: bool,
-    restart: bool,
-    xmpp_version: Option<String>,
-    language: Option<String>,
-    payloads: Vec<String>,
-    fingerprint: [u8; 32],
+pub struct BoshRequest {
+    pub rid: u64,
+    pub sid: Option<String>,
+    pub to: Option<String>,
+    pub from: Option<String>,
+    pub wait: Option<u64>,
+    pub hold: Option<u8>,
+    pub ver: Option<String>,
+    pub content: Option<String>,
+    pub ack: Option<u64>,
+    pub key: Option<String>,
+    pub newkey: Option<String>,
+    pub pause: Option<u64>,
+    pub terminate: bool,
+    pub restart: bool,
+    pub xmpp_version: Option<String>,
+    pub language: Option<String>,
+    pub payloads: Vec<String>,
+    pub fingerprint: [u8; 32],
     /// Captured immediately after the bounded HTTP body is parsed. Keeping
     /// arrival time on the request prevents slow stanza/database processing
     /// from making an overactive client appear compliant with `polling`.
-    received_at: Instant,
+    pub received_at: Instant,
 }
 
 #[derive(Clone, Debug)]
-struct BoshHttpResponse {
+pub struct BoshHttpResponse {
     // RID replay, duplicate HTTP waiters and Hyper share one ref-counted byte
     // allocation. Cloning a response must never allocate another multi-
     // megabyte SM replay buffer outside the governor.
-    body: Bytes,
-    content_type: String,
+    pub body: Bytes,
+    pub content_type: String,
 }
 
 struct PendingRequest {
@@ -159,15 +159,15 @@ struct PendingRequest {
 }
 
 #[derive(Clone)]
-struct CachedResponse {
-    rid: u64,
-    fingerprint: [u8; 32],
-    response: BoshHttpResponse,
-    durable_ownership: Arc<northstar_stream::outbound::BoshResponseOwnership>,
-    transport_receipts: Vec<mpsc::UnboundedSender<()>>,
-    owned_at: Instant,
-    response_bytes: usize,
-    replays: u8,
+pub struct CachedResponse {
+    pub rid: u64,
+    pub fingerprint: [u8; 32],
+    pub response: BoshHttpResponse,
+    pub durable_ownership: Arc<northstar_stream::outbound::BoshResponseOwnership>,
+    pub transport_receipts: Vec<mpsc::UnboundedSender<()>>,
+    pub owned_at: Instant,
+    pub response_bytes: usize,
+    pub replays: u8,
 }
 
 struct HeldRequest {

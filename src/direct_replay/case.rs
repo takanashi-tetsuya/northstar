@@ -415,9 +415,7 @@ impl Case {
                     return Err(Rejection::IdentityBinding);
                 }
             }
-            RecipientOwner::Bosh { .. } => {
-                crate::bosh::validate_saved_case(self, items, xml_bytes)?
-            }
+            RecipientOwner::Bosh { .. } => super::bosh_case::validate(self, items, xml_bytes)?,
         }
         if (!matches!(self.recipient_owner, RecipientOwner::Bosh { .. })
             && self.identities.bosh_session_id.get().is_some())

@@ -1,18 +1,24 @@
 //! Test-only BOSH ownership over finite IO/repository replies.
 #![cfg(test)]
-use super::*;
-use crate::bosh::ownership::{
-    self, OperationRunner, Output, RecordPort, ServiceTransfer, TransferPort,
-};
 use crate::stage4_replay as wire;
 use crate::xmpp::stage4_auth_publication::{facts as observed, AuthRead, Capture, Publisher};
 use anyhow::{ensure, Result};
+use northstar_bosh::stage4_support::ownership::{
+    self, OperationRunner, Output, RecordPort, ServiceTransfer, TransferPort,
+};
+use northstar_bosh::stage4_support::response_owner::*;
+use northstar_bosh::stage4_support::{BoshHttpResponse, BoshRequest, CachedResponse};
+use northstar_delivery_core::bosh_ownership::Operation;
 use northstar_delivery_core::bosh_ownership::{OperationKind, Scope};
 use northstar_room_application::mix_service::{MixRepository, MixService};
 use northstar_session_application::replay::ReplayService;
 use northstar_session_application::sm_capacity::SmCapacityMetrics;
+use northstar_session_application::sm_capacity::SmMemoryGovernor;
 use northstar_stream::auth_publication::OutboundAuthPublication;
+use northstar_stream::outbound::{BoshResponseOwnership, OutboundItem};
 use std::task::Poll;
+use std::{collections::VecDeque, sync::Arc, time::Instant};
+use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 mod facts;
 #[cfg(test)]
@@ -271,24 +277,27 @@ impl Session {
             let mut returned = None;
             let mut call = Box::pin(OperationRunner::new(
                 operation.clone(),
-                tokio::time::timeout(crate::bosh::BOSH_BACKEND_OPERATION_TIMEOUT, async {
-                    let result = ownership::record_and_push(
-                        &mut output,
-                        item,
-                        &operation,
-                        &mut unmanaged,
-                        &ObservedTransfer {
-                            service,
-                            recorder: transfer_recorder,
-                            ordinal: owner_ordinal,
-                        },
-                    )
-                    .await
-                    .map_err(|_| anyhow::anyhow!("actual BOSH item transfer failed"));
-                    let accepted = result.as_ref().is_ok_and(|accepted| *accepted);
-                    returned = Some(result);
-                    accepted
-                }),
+                tokio::time::timeout(
+                    northstar_bosh::stage4_support::BOSH_BACKEND_OPERATION_TIMEOUT,
+                    async {
+                        let result = ownership::record_and_push(
+                            &mut output,
+                            item,
+                            &operation,
+                            &mut unmanaged,
+                            &ObservedTransfer {
+                                service,
+                                recorder: transfer_recorder,
+                                ordinal: owner_ordinal,
+                            },
+                        )
+                        .await
+                        .map_err(|_| anyhow::anyhow!("actual BOSH item transfer failed"));
+                        let accepted = result.as_ref().is_ok_and(|accepted| *accepted);
+                        returned = Some(result);
+                        accepted
+                    },
+                ),
             ));
             let result = std::future::poll_fn(|cx| {
                 match wire::driver::poll_once(&driver_recorder, site.0, call.as_mut(), cx) {
@@ -490,10 +499,11 @@ impl Session {
         }
         self.used_response = true;
         let input = self.input.response.clone();
-        let request = match crate::bosh::parse_body(input.request_xml.as_str(), 4) {
-            Ok(request) => request,
-            Err(e) => return Ok(Err(anyhow::anyhow!("BOSH request parse: {e}"))),
-        };
+        let request =
+            match northstar_bosh::stage4_support::parse_body(input.request_xml.as_str(), 4) {
+                Ok(request) => request,
+                Err(e) => return Ok(Err(anyhow::anyhow!("BOSH request parse: {e}"))),
+            };
         let association = observed::project(&self.recorder, || {
             self.request_association(&input, &request)
         });
@@ -527,92 +537,95 @@ impl Session {
         let association_child = association.clone();
         let mut call = Box::pin(OperationRunner::new(
             operation.clone(),
-            tokio::time::timeout(crate::bosh::BOSH_BACKEND_OPERATION_TIMEOUT, async {
-                let result: Result<bool> = async {
-                    let mut fields = Fields {
-                        output: &mut self.output,
-                        output_bytes: &mut self.output_bytes,
-                        replay: &mut self.replay,
-                        governor: &self.governor,
-                        max_response_bytes: self.input.max_response_bytes as usize,
-                        max_output_stanzas: 4,
-                        content_type: input.content_type.as_str(),
-                        received_rid: Some(request.rid),
-                    };
-                    let bound = prepare(
-                        &mut fields,
-                        Metadata {
-                            rid: request.rid,
-                            fingerprint: request.fingerprint,
-                            cache: true,
-                        },
-                        None,
-                        &operation_child,
-                        &ServiceReplay { service: &service },
-                    )
-                    .await
-                    .map_err(|f| f.error)?;
-                    let selection = bound.selection_observation();
-                    self.last_selection = Some(selection.clone());
-                    let bound = bound.for_connection(self.connection_id())?;
-                    observed::observe(&self.recorder, || {
-                        facts::selection(selection.snapshot(), wire::Cut::BeforePublish)
-                    });
-                    let (responders, mut receivers) = Self::responders(&input);
-                    let exposed = bound.expose(responders)?;
-                    self.capture_receivers(&mut receivers, owner_ordinal, request.rid);
-                    self.capture(wire::Cut::BeforePublish);
-                    self.capture_operation(
-                        &operation_child,
-                        owner_ordinal,
-                        &association_child,
-                        wire::Cut::BeforePublish,
-                    );
-                    let session_id = self.session_id();
-                    let recorder = self.recorder.clone();
-                    let ready = exposed
-                        .publish_authentication(|owners| {
-                            self.publisher.publish(
-                                owners,
-                                Some(session_id),
-                                Some(request.rid),
-                                &recorder,
-                            )
-                        })
-                        .await;
-                    // This capture is outside the callback. In the exact later
-                    // bypass mutant it records selected B still NotStarted.
-                    observed::observe(&self.recorder, || {
-                        facts::selection(selection.snapshot(), wire::Cut::BeforeFinish)
-                    });
-                    self.capture(wire::Cut::BeforeFinish);
-                    self.capture_operation(
-                        &operation_child,
-                        owner_ordinal,
-                        &association_child,
-                        wire::Cut::BeforeFinish,
-                    );
-                    let Ok(ready) = ready else { return Ok(false) };
-                    ready.finish(
-                        &mut self.last_response,
-                        &mut self.highest_responded,
-                        &mut self.replay,
-                    )?;
-                    self.capture(wire::Cut::AfterFinish);
-                    self.capture_operation(
-                        &operation_child,
-                        owner_ordinal,
-                        &association_child,
-                        wire::Cut::AfterFinish,
-                    );
-                    Ok(true)
-                }
-                .await;
-                if result.is_err() {
-                    observed::lost(&self.recorder);
-                }
-                result.unwrap_or(false)
-            }),
+            tokio::time::timeout(
+                northstar_bosh::stage4_support::BOSH_BACKEND_OPERATION_TIMEOUT,
+                async {
+                    let result: Result<bool> = async {
+                        let mut fields = Fields {
+                            output: &mut self.output,
+                            output_bytes: &mut self.output_bytes,
+                            replay: &mut self.replay,
+                            governor: &self.governor,
+                            max_response_bytes: self.input.max_response_bytes as usize,
+                            max_output_stanzas: 4,
+                            content_type: input.content_type.as_str(),
+                            received_rid: Some(request.rid),
+                        };
+                        let bound = prepare(
+                            &mut fields,
+                            Metadata {
+                                rid: request.rid,
+                                fingerprint: request.fingerprint,
+                                cache: true,
+                            },
+                            None,
+                            &operation_child,
+                            &ServiceReplay { service: &service },
+                        )
+                        .await
+                        .map_err(|f| f.error)?;
+                        let selection = bound.selection_observation();
+                        self.last_selection = Some(selection.clone());
+                        let bound = bound.for_connection(self.connection_id())?;
+                        observed::observe(&self.recorder, || {
+                            facts::selection(selection.snapshot(), wire::Cut::BeforePublish)
+                        });
+                        let (responders, mut receivers) = Self::responders(&input);
+                        let exposed = bound.expose(responders)?;
+                        self.capture_receivers(&mut receivers, owner_ordinal, request.rid);
+                        self.capture(wire::Cut::BeforePublish);
+                        self.capture_operation(
+                            &operation_child,
+                            owner_ordinal,
+                            &association_child,
+                            wire::Cut::BeforePublish,
+                        );
+                        let session_id = self.session_id();
+                        let recorder = self.recorder.clone();
+                        let ready = exposed
+                            .publish_authentication(|owners| {
+                                self.publisher.publish(
+                                    owners,
+                                    Some(session_id),
+                                    Some(request.rid),
+                                    &recorder,
+                                )
+                            })
+                            .await;
+                        // This capture is outside the callback. In the exact later
+                        // bypass mutant it records selected B still NotStarted.
+                        observed::observe(&self.recorder, || {
+                            facts::selection(selection.snapshot(), wire::Cut::BeforeFinish)
+                        });
+                        self.capture(wire::Cut::BeforeFinish);
+                        self.capture_operation(
+                            &operation_child,
+                            owner_ordinal,
+                            &association_child,
+                            wire::Cut::BeforeFinish,
+                        );
+                        let Ok(ready) = ready else { return Ok(false) };
+                        ready.finish(
+                            &mut self.last_response,
+                            &mut self.highest_responded,
+                            &mut self.replay,
+                        )?;
+                        self.capture(wire::Cut::AfterFinish);
+                        self.capture_operation(
+                            &operation_child,
+                            owner_ordinal,
+                            &association_child,
+                            wire::Cut::AfterFinish,
+                        );
+                        Ok(true)
+                    }
+                    .await;
+                    if result.is_err() {
+                        observed::lost(&self.recorder);
+                    }
+                    result.unwrap_or(false)
+                },
+            ),
         ));
         let polled = std::future::poll_fn(|cx| match wire::driver::poll_once(&recorder, site.0, call.as_mut(), cx) {
             Err(stop) => Poll::Ready(Err(stop)),
@@ -685,14 +698,16 @@ impl Session {
             )));
         }
         self.used_ack = true;
-        let request = match crate::bosh::parse_body(input.request.request_xml.as_str(), 4) {
-            Ok(request) => request,
-            Err(e) => return Ok(Err(anyhow::anyhow!("BOSH ACK parse: {e}"))),
-        };
+        let request =
+            match northstar_bosh::stage4_support::parse_body(input.request.request_xml.as_str(), 4)
+            {
+                Ok(request) => request,
+                Err(e) => return Ok(Err(anyhow::anyhow!("BOSH ACK parse: {e}"))),
+            };
         if request.ack != Some(input.acknowledged_rid) {
             return Ok(Err(anyhow::anyhow!("actual ACK field mismatch")));
         }
-        if !crate::bosh::valid_client_response_ack(
+        if !northstar_bosh::stage4_support::valid_client_response_ack(
             true,
             self.highest_responded,
             request.rid,
@@ -732,86 +747,89 @@ impl Session {
         let recorder = self.recorder.clone();
         let mut call = Box::pin(OperationRunner::new(
             operation.clone(),
-            tokio::time::timeout(crate::bosh::BOSH_BACKEND_OPERATION_TIMEOUT, async {
-                let result: Result<()> = async {
-                    renew_and_acknowledge(
-                        &mut self.replay,
-                        request.ack,
-                        &operation,
-                        &ServiceReplay { service: &service },
-                    )
-                    .await?;
-                    // Normal empty response helper path, with no pause substitute.
-                    // Immediate response is a supplied helper environment (the
-                    // actor's hold=0/no prior empty-poll violation corresponds);
-                    // this does not execute actor admission/holding policy.
-                    let mut fields = Fields {
-                        output: &mut self.output,
-                        output_bytes: &mut self.output_bytes,
-                        replay: &mut self.replay,
-                        governor: &self.governor,
-                        max_response_bytes: self.input.max_response_bytes as usize,
-                        max_output_stanzas: 2,
-                        content_type: input.request.content_type.as_str(),
-                        received_rid: Some(request.rid),
-                    };
-                    let bound = prepare(
-                        &mut fields,
-                        Metadata {
-                            rid: request.rid,
-                            fingerprint: request.fingerprint,
-                            cache: true,
-                        },
-                        None,
-                        &operation,
-                        &ServiceReplay { service: &service },
-                    )
-                    .await
-                    .map_err(|f| f.error)?;
-                    let selection = bound.selection_observation();
-                    self.last_selection = Some(selection.clone());
-                    let bound = bound.for_connection(self.connection_id())?;
-                    observed::observe(&self.recorder, || {
-                        facts::selection(selection.snapshot(), wire::Cut::BeforePublish)
-                    });
-                    let (responders, mut receivers) = Self::responders(&input.request);
-                    let exposed = bound.expose(responders)?;
-                    self.capture_receivers(&mut receivers, owner_ordinal, request.rid);
-                    let session_id = self.session_id();
-                    let recorder = self.recorder.clone();
-                    let ready = exposed
-                        .publish_authentication(|owners| {
-                            self.publisher.publish(
-                                owners,
-                                Some(session_id),
-                                Some(request.rid),
-                                &recorder,
-                            )
-                        })
+            tokio::time::timeout(
+                northstar_bosh::stage4_support::BOSH_BACKEND_OPERATION_TIMEOUT,
+                async {
+                    let result: Result<()> = async {
+                        renew_and_acknowledge(
+                            &mut self.replay,
+                            request.ack,
+                            &operation,
+                            &ServiceReplay { service: &service },
+                        )
                         .await?;
-                    observed::observe(&self.recorder, || {
-                        facts::selection(selection.snapshot(), wire::Cut::BeforeFinish)
-                    });
-                    self.capture_operation(
-                        &operation,
-                        owner_ordinal,
-                        &association,
-                        wire::Cut::BeforeFinish,
-                    );
-                    self.capture(wire::Cut::BeforeFinish);
-                    ready.finish(
-                        &mut self.last_response,
-                        &mut self.highest_responded,
-                        &mut self.replay,
-                    )?;
-                    self.capture(wire::Cut::AfterFinish);
-                    Ok(())
-                }
-                .await;
-                let ok = result.is_ok();
-                returned = Some(result);
-                ok
-            }),
+                        // Normal empty response helper path, with no pause substitute.
+                        // Immediate response is a supplied helper environment (the
+                        // actor's hold=0/no prior empty-poll violation corresponds);
+                        // this does not execute actor admission/holding policy.
+                        let mut fields = Fields {
+                            output: &mut self.output,
+                            output_bytes: &mut self.output_bytes,
+                            replay: &mut self.replay,
+                            governor: &self.governor,
+                            max_response_bytes: self.input.max_response_bytes as usize,
+                            max_output_stanzas: 2,
+                            content_type: input.request.content_type.as_str(),
+                            received_rid: Some(request.rid),
+                        };
+                        let bound = prepare(
+                            &mut fields,
+                            Metadata {
+                                rid: request.rid,
+                                fingerprint: request.fingerprint,
+                                cache: true,
+                            },
+                            None,
+                            &operation,
+                            &ServiceReplay { service: &service },
+                        )
+                        .await
+                        .map_err(|f| f.error)?;
+                        let selection = bound.selection_observation();
+                        self.last_selection = Some(selection.clone());
+                        let bound = bound.for_connection(self.connection_id())?;
+                        observed::observe(&self.recorder, || {
+                            facts::selection(selection.snapshot(), wire::Cut::BeforePublish)
+                        });
+                        let (responders, mut receivers) = Self::responders(&input.request);
+                        let exposed = bound.expose(responders)?;
+                        self.capture_receivers(&mut receivers, owner_ordinal, request.rid);
+                        let session_id = self.session_id();
+                        let recorder = self.recorder.clone();
+                        let ready = exposed
+                            .publish_authentication(|owners| {
+                                self.publisher.publish(
+                                    owners,
+                                    Some(session_id),
+                                    Some(request.rid),
+                                    &recorder,
+                                )
+                            })
+                            .await?;
+                        observed::observe(&self.recorder, || {
+                            facts::selection(selection.snapshot(), wire::Cut::BeforeFinish)
+                        });
+                        self.capture_operation(
+                            &operation,
+                            owner_ordinal,
+                            &association,
+                            wire::Cut::BeforeFinish,
+                        );
+                        self.capture(wire::Cut::BeforeFinish);
+                        ready.finish(
+                            &mut self.last_response,
+                            &mut self.highest_responded,
+                            &mut self.replay,
+                        )?;
+                        self.capture(wire::Cut::AfterFinish);
+                        Ok(())
+                    }
+                    .await;
+                    let ok = result.is_ok();
+                    returned = Some(result);
+                    ok
+                },
+            ),
         ));
         let result = std::future::poll_fn(|cx| {
             match wire::driver::poll_once(&recorder, site.0, call.as_mut(), cx) {

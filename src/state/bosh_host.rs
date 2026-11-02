@@ -1,9 +1,9 @@
 //! The node's capabilities as BOSH sees them.
 
 use super::AppState;
-use crate::bosh::host::{BoshHost, BoshPolicy};
-use crate::bosh::BoshManager;
 use axum::http::HeaderMap;
+use northstar_bosh::host::{BoshHost, BoshPolicy};
+use northstar_bosh::BoshManager;
 use northstar_room_application::mix_service::MixService;
 use northstar_session_application::replay::ReplayService;
 use northstar_session_application::sm_capacity::SmMemoryGovernor;

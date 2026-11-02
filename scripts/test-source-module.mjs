@@ -138,7 +138,7 @@ test('readModule joins parts with \\n; readModuleParts preserves order', () => {
   }
 });
 
-test('role-split reads preserve declaration order and exclude independent siblings for both parent styles', () => {
+test('role-split reads preserve declaration order and exclude independent siblings for every parent style', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'source-module-'));
   try {
     fs.mkdirSync(path.join(root, 'src/a/b'), { recursive: true });
@@ -149,7 +149,12 @@ test('role-split reads preserve declaration order and exclude independent siblin
     fs.writeFileSync(path.join(root, 'src/a/b/independent.rs'), 'excluded');
     fs.writeFileSync(path.join(root, 'src/a/mod.rs'), 'pub mod leaf;');
     fs.writeFileSync(path.join(root, 'src/a/leaf.rs'), 'leaf');
+    fs.mkdirSync(path.join(root, 'crates/edge/src'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'crates/edge/src/lib.rs'), 'mod role;\nmod independent;');
+    fs.writeFileSync(path.join(root, 'crates/edge/src/role.rs'), 'role');
+    fs.writeFileSync(path.join(root, 'crates/edge/src/independent.rs'), 'excluded');
     writeRoleCatalog(root, {
+      'crates/edge/src/lib.rs': ['role'],
       'src/a/b.rs': ['z_first', 'a_second'],
       'src/a/mod.rs': ['leaf']
     });
@@ -159,6 +164,7 @@ test('role-split reads preserve declaration order and exclude independent siblin
     assert.equal(readRoleSplitFile('src/a/b.rs', { root }), parent + '\nfirst\nsecond');
     assert.deepEqual(roleSplitFiles('src/a/mod.rs', { root }), ['src/a/mod.rs', 'src/a/leaf.rs']);
     assert.equal(readRoleSplitFile('src/a/mod.rs', { root }), 'pub mod leaf;\nleaf');
+    assert.deepEqual(roleSplitFiles('crates/edge/src/lib.rs', { root }), ['crates/edge/src/lib.rs', 'crates/edge/src/role.rs']);
     assert.deepEqual(validateRoleSplits({ root }), []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -191,6 +197,8 @@ test('role-split catalog rules 1-3 reject the whole catalog before any read', ()
     fs.mkdirSync(path.join(root, 'src/a'), { recursive: true });
     fs.writeFileSync(path.join(root, 'src/a/b.rs'), '');
     fs.writeFileSync(path.join(root, 'src/a/c.rs'), '');
+    fs.mkdirSync(path.join(root, 'crates/x'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'crates/x/lib.rs'), '');
     writeRoleCatalog(root, { 'src/a/b.rs': [] });
     const catalogPath = path.join(root, 'catalog/source-role-splits.json');
     const schema = 'northstar-source-role-splits-v1';
@@ -205,7 +213,7 @@ test('role-split catalog rules 1-3 reject the whole catalog before any read', ()
       { schema, files: [] },
       { schema, files: null },
       { schema, files: { 'src/a/c.rs': [], 'src/a/b.rs': [] } },
-      ...['/src/a/b.rs', 'src/../a.rs', 'outside.rs', 'src/a/b.txt', 'src/missing.rs', 'src/a.rs']
+      ...['/src/a/b.rs', 'src/../a.rs', 'outside.rs', 'crates/x/lib.rs', 'src/a/b.txt', 'src/missing.rs', 'src/a.rs']
         .map(file => ({ schema, files: { 'src/a/b.rs': [], [file]: [] } })),
       ...[null, 'leaf', ['leaf', 'leaf'], [1], ['Bad'], ['a/b'], ['mod'], ['tests']]
         .map(children => ({ schema, files: { 'src/a/b.rs': [], 'src/a/c.rs': children } }))

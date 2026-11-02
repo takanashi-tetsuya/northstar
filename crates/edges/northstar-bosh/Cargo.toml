@@ -1,0 +1,44 @@
+[package]
+name = "northstar-bosh"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "BOSH (XEP-0124 / XEP-0206) connection manager of Northstar"
+publish = false
+
+[features]
+# The response owner and replay surface the root crate's Stage 4 harnesses drive.
+test-support = []
+
+[dependencies]
+anyhow = "1.0"
+axum = { version = "0.8", features = ["ws", "multipart"] }
+base64 = "0.22"
+dashmap = "6.1"
+futures = "0.3"
+hmac = "0.12"
+northstar-delivery-core = { path = "../../contexts/message/northstar-delivery-core" }
+northstar-room-application = { path = "../../contexts/room/northstar-room-application" }
+northstar-runtime = { path = "../../platform/northstar-runtime" }
+northstar-session-application = { path = "../../contexts/session/northstar-session-application" }
+northstar-stream = { path = "../../edges/northstar-stream" }
+northstar-xml-builder = { path = "../../kernel/northstar-xml-builder" }
+northstar-xmpp-types = { path = "../../kernel/northstar-xmpp-types" }
+rand = "0.8"
+roxmltree = "0.20"
+sha1 = "0.10"
+sha2 = "0.10"
+subtle = "2.6"
+tokio = { version = "1.43", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt", "io"] }
+tracing = "0.1"
+uuid = { version = "1.12", features = ["v4", "serde"] }
+
+[dev-dependencies]
+northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application", features = ["test-support"] }
+northstar-room-application = { path = "../../contexts/room/northstar-room-application", features = ["test-support"] }
+northstar-runtime = { path = "../../platform/northstar-runtime", features = ["test-support"] }
+northstar-session-application = { path = "../../contexts/session/northstar-session-application", features = ["test-support"] }
+northstar-stream = { path = "../../edges/northstar-stream", features = ["test-support"] }
+tokio = { version = "1.43", features = ["test-util"] }

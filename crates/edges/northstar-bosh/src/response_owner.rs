@@ -1,8 +1,6 @@
 //! Actual response selection, binding and cache continuations over the actor's
 //! existing fields. The selected auth control gates the actor's existing
 //! publication callback after accepted exposure and before cache bookkeeping.
-#[cfg(test)]
-pub(crate) mod stage4_saved;
 
 use super::{
     bosh_body_element, bosh_response_bytes, bosh_unacknowledged_limit_exceeded,
@@ -24,9 +22,9 @@ use northstar_stream::auth_publication::{
 use northstar_stream::outbound::{BoshResponseOwnership, OutboundItem};
 use std::{collections::VecDeque, future::Future, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
-type Responder = oneshot::Sender<BoshHttpResponse>;
+pub type Responder = oneshot::Sender<BoshHttpResponse>;
 
-pub(super) trait ReplayPort {
+pub trait ReplayPort {
     fn bind(
         &self,
         request: &BindRequest,
@@ -35,8 +33,8 @@ pub(super) trait ReplayPort {
     fn acknowledge(&self, request: &AckRequest) -> impl Future<Output = Result<()>> + Send;
     fn release(&self, session_id: uuid::Uuid) -> impl Future<Output = Result<()>> + Send;
 }
-pub(super) struct ServiceReplay<'a, R> {
-    pub(super) service: &'a ReplayService<R>,
+pub struct ServiceReplay<'a, R> {
+    pub service: &'a ReplayService<R>,
 }
 impl<R: ReplayRepository> ReplayPort for ServiceReplay<'_, R> {
     async fn bind(&self, request: &BindRequest) -> Result<BoshResponseOwnership> {
@@ -52,21 +50,21 @@ impl<R: ReplayRepository> ReplayPort for ServiceReplay<'_, R> {
         self.service.release_bosh_fences(session_id).await
     }
 }
-pub(super) struct Fields<'a> {
-    pub(super) output: &'a mut VecDeque<OutboundItem>,
-    pub(super) output_bytes: &'a mut usize,
-    pub(super) replay: &'a mut VecDeque<CachedResponse>,
-    pub(super) governor: &'a Arc<SmMemoryGovernor>,
-    pub(super) max_response_bytes: usize,
-    pub(super) max_output_stanzas: usize,
-    pub(super) content_type: &'a str,
-    pub(super) received_rid: Option<u64>,
+pub struct Fields<'a> {
+    pub output: &'a mut VecDeque<OutboundItem>,
+    pub output_bytes: &'a mut usize,
+    pub replay: &'a mut VecDeque<CachedResponse>,
+    pub governor: &'a Arc<SmMemoryGovernor>,
+    pub max_response_bytes: usize,
+    pub max_output_stanzas: usize,
+    pub content_type: &'a str,
+    pub received_rid: Option<u64>,
 }
 #[derive(Clone, Copy)]
-pub(super) struct Metadata {
-    pub(super) rid: u64,
-    pub(super) fingerprint: [u8; 32],
-    pub(super) cache: bool,
+pub struct Metadata {
+    pub rid: u64,
+    pub fingerprint: [u8; 32],
+    pub cache: bool,
 }
 impl Fields<'_> {
     fn body(
@@ -103,15 +101,15 @@ impl Fields<'_> {
     }
 }
 #[derive(Clone, Copy)]
-pub(super) enum FailureStage {
+pub enum FailureStage {
     Construction,
     Limit,
     Binding,
 }
-pub(super) struct PreparationFailure {
-    pub(super) stage: FailureStage,
-    pub(super) condition: &'static str,
-    pub(super) error: anyhow::Error,
+pub struct PreparationFailure {
+    pub stage: FailureStage,
+    pub condition: &'static str,
+    pub error: anyhow::Error,
     control: Option<response::ControlObservation>,
 }
 impl std::fmt::Debug for PreparationFailure {
@@ -135,7 +133,7 @@ impl PreparationFailure {
             control: build.map(ResponseBuild::terminal_control),
         }
     }
-    pub(super) fn send(self, responders: Vec<Responder>, content_type: &str) {
+    pub fn send(self, responders: Vec<Responder>, content_type: &str) {
         let response = terminal_response_with_content(self.condition, content_type);
         for responder in responders {
             send_one(
@@ -157,11 +155,11 @@ impl PreparationFailure {
 }
 // The closed Stage 4 profile needs at most four selected items per response.
 // This is a test-observation bound, never a limit on production selection.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 const MAX_SELECTED_FACTS: usize = 4;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum SelectionReadStatus {
+pub enum SelectionReadStatus {
     Complete,
     Incomplete {
         omitted_items: usize,
@@ -169,36 +167,36 @@ pub(super) enum SelectionReadStatus {
         connection_changed: bool,
     },
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct SelectedItemSnapshot {
+pub struct SelectedItemSnapshot {
     // Ordinal in the actual final selection, not an inferred input queue index.
-    pub(super) ordinal: usize,
-    pub(super) source: Option<northstar_stream::outbound::TransportOwnershipSource>,
-    pub(super) utf8_length: usize,
-    pub(super) sha256: [u8; 32],
-    pub(super) auth_marker: bool,
-    pub(super) sealed_association: Option<northstar_stream::auth_publication::ControlAssociation>,
-    pub(super) holder_joins: Option<northstar_stream::auth_publication::ControlJoins>,
+    pub ordinal: usize,
+    pub source: Option<northstar_stream::outbound::TransportOwnershipSource>,
+    pub utf8_length: usize,
+    pub sha256: [u8; 32],
+    pub auth_marker: bool,
+    pub sealed_association: Option<northstar_stream::auth_publication::ControlAssociation>,
+    pub holder_joins: Option<northstar_stream::auth_publication::ControlJoins>,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct SelectionSnapshot {
-    pub(super) session: uuid::Uuid,
-    pub(super) rid: u64,
-    pub(super) fingerprint: [u8; 32],
-    pub(super) first_validated_connection: Option<uuid::Uuid>,
-    pub(super) validated_connection: Option<uuid::Uuid>,
-    pub(super) selected_count: usize,
-    pub(super) status: SelectionReadStatus,
-    pub(super) items: [Option<SelectedItemSnapshot>; MAX_SELECTED_FACTS],
+pub struct SelectionSnapshot {
+    pub session: uuid::Uuid,
+    pub rid: u64,
+    pub fingerprint: [u8; 32],
+    pub first_validated_connection: Option<uuid::Uuid>,
+    pub validated_connection: Option<uuid::Uuid>,
+    pub selected_count: usize,
+    pub status: SelectionReadStatus,
+    pub items: [Option<SelectedItemSnapshot>; MAX_SELECTED_FACTS],
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct SelectedItemRead {
     at_selection: SelectedItemSnapshot,
     joins: Option<northstar_stream::auth_publication::ControlJoinObservation>,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct SelectionState {
     session: uuid::Uuid,
     rid: u64,
@@ -212,10 +210,10 @@ struct SelectionState {
 // Retains only bounded facts and the existing read-only join cells. No holder,
 // receipt, response bytes, publication Observation or consuming continuation is
 // retained or exposed. Keeping this handle cannot delay holder abandonment.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone)]
-pub(super) struct SelectionObservation(Arc<std::sync::Mutex<SelectionState>>);
-#[cfg(test)]
+pub struct SelectionObservation(Arc<std::sync::Mutex<SelectionState>>);
+#[cfg(any(test, feature = "test-support"))]
 impl SelectionObservation {
     fn capture(
         selected: &VecDeque<OutboundItem>,
@@ -271,7 +269,7 @@ impl SelectionObservation {
             items,
         })))
     }
-    pub(super) fn snapshot(&self) -> SelectionSnapshot {
+    pub fn snapshot(&self) -> SelectionSnapshot {
         let state = self.0.lock().unwrap();
         SelectionSnapshot {
             session: state.session,
@@ -293,7 +291,7 @@ impl SelectionObservation {
 }
 
 /// Only this owning continuation may expose the selected response bytes.
-pub(super) struct BoundResponse {
+pub struct BoundResponse {
     metadata: Metadata,
     response: BoshHttpResponse,
     receipts: Vec<mpsc::UnboundedSender<()>>,
@@ -302,7 +300,7 @@ pub(super) struct BoundResponse {
     auth_control_selected: bool,
     auth_controls: SelectedControls,
     auth_connection: Option<uuid::Uuid>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     selection: SelectionObservation,
 }
 impl std::fmt::Debug for BoundResponse {
@@ -310,7 +308,7 @@ impl std::fmt::Debug for BoundResponse {
         f.write_str("BoundBoshResponse { body and binding: [redacted] }")
     }
 }
-pub(super) struct ExposedResponse {
+pub struct ExposedResponse {
     metadata: Metadata,
     response: BoshHttpResponse,
     receipts: Vec<mpsc::UnboundedSender<()>>,
@@ -322,19 +320,19 @@ pub(super) struct ExposedResponse {
 }
 /// A consuming local continuation, not proof of SQL credential publication.
 /// Only successful publication (or no selected auth control) creates it.
-pub(super) struct PublicationReadyResponse {
+pub struct PublicationReadyResponse {
     exposed: ExposedResponse,
 }
 impl BoundResponse {
     /// Retain before expose/publish; later snapshots do not need the callback.
-    #[cfg(test)]
-    pub(super) fn selection_observation(&self) -> SelectionObservation {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn selection_observation(&self) -> SelectionObservation {
         self.selection.clone()
     }
-    pub(super) fn for_connection(mut self, connection: uuid::Uuid) -> Result<Self> {
+    pub fn for_connection(mut self, connection: uuid::Uuid) -> Result<Self> {
         self.auth_controls.validate_connection(connection)?;
         self.auth_connection = Some(connection);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             let mut selection = self.selection.0.lock().unwrap();
             if let Some(previous) = selection.validated_connection {
@@ -360,7 +358,7 @@ impl BoundResponse {
         }
         Ok(self)
     }
-    pub(super) fn expose(mut self, responders: Vec<Responder>) -> Result<ExposedResponse> {
+    pub fn expose(mut self, responders: Vec<Responder>) -> Result<ExposedResponse> {
         anyhow::ensure!(
             self.auth_controls.is_empty() || self.auth_connection.is_some(),
             "auth response has no bound connection"
@@ -393,11 +391,11 @@ impl BoundResponse {
     }
 }
 impl ExposedResponse {
-    #[cfg(test)]
-    pub(super) fn any_accepted(&self) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn any_accepted(&self) -> bool {
         self.accepted
     }
-    pub(super) async fn publish_authentication<F: Future<Output = bool>>(
+    pub async fn publish_authentication<F: Future<Output = bool>>(
         mut self,
         publish: impl FnOnce(Vec<OwnedPublication>) -> F,
     ) -> Result<PublicationReadyResponse> {
@@ -422,8 +420,8 @@ impl ExposedResponse {
 
     /// Plain-response compatibility for the existing controlled delivery lane.
     /// A selected auth control cannot bypass the production publication gate.
-    #[cfg(test)]
-    pub(super) fn finish(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn finish(
         self,
         last_response: &mut Instant,
         highest_responded: &mut u64,
@@ -437,7 +435,7 @@ impl ExposedResponse {
     }
 }
 impl PublicationReadyResponse {
-    pub(super) fn finish(
+    pub fn finish(
         self,
         last_response: &mut Instant,
         highest_responded: &mut u64,
@@ -471,7 +469,7 @@ impl PublicationReadyResponse {
         Ok(())
     }
 }
-pub(super) async fn prepare<P: ReplayPort>(
+pub async fn prepare<P: ReplayPort>(
     fields: &mut Fields<'_>,
     metadata: Metadata,
     condition: Option<&str>,
@@ -614,7 +612,7 @@ pub(super) async fn prepare<P: ReplayPort>(
                     )
                 })?;
                 let auth_control_selected = !auth_controls.is_empty();
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 let selection = SelectionObservation::capture(&selected, operation, metadata);
                 return Ok(BoundResponse {
                     metadata,
@@ -625,7 +623,7 @@ pub(super) async fn prepare<P: ReplayPort>(
                     auth_control_selected,
                     auth_controls,
                     auth_connection: None,
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-support"))]
                     selection,
                 });
             }
@@ -685,7 +683,7 @@ fn update_response_position(last_response: &mut Instant, highest_responded: &mut
     *last_response = Instant::now();
     *highest_responded = (*highest_responded).max(rid);
 }
-pub(super) fn finish_empty_control(
+pub fn finish_empty_control(
     rid: u64,
     responders: Vec<Responder>,
     content_type: &str,
@@ -710,7 +708,7 @@ pub(super) fn finish_empty_control(
     control.updated();
 }
 
-pub(super) enum ReplayOutcome {
+pub enum ReplayOutcome {
     Miss(Responder),
     Sent {
         terminate: bool,
@@ -720,7 +718,7 @@ pub(super) enum ReplayOutcome {
         error: anyhow::Error,
     },
 }
-pub(super) async fn replay_cached<P: ReplayPort>(
+pub async fn replay_cached<P: ReplayPort>(
     replay: &mut VecDeque<CachedResponse>,
     request: &BoshRequest,
     responder: Responder,
@@ -777,7 +775,7 @@ pub(super) async fn replay_cached<P: ReplayPort>(
     exposure.updated();
     ReplayOutcome::Sent { terminate: false }
 }
-pub(super) async fn renew_and_acknowledge<P: ReplayPort>(
+pub async fn renew_and_acknowledge<P: ReplayPort>(
     replay: &mut VecDeque<CachedResponse>,
     ack: Option<u64>,
     operation: &Operation,

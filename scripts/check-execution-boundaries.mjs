@@ -21,8 +21,8 @@ const files = {
   transport: 'crates/edges/northstar-c2s/src/lib.rs',
   tcp: 'crates/edges/northstar-c2s/src/tcp_action.rs',
   websocket: 'crates/edges/northstar-c2s/src/websocket_action.rs',
-  bosh: 'src/bosh.rs',
-  boshAction: 'src/bosh/action.rs',
+  bosh: 'crates/edges/northstar-bosh/src/lib.rs',
+  boshAction: 'crates/edges/northstar-bosh/src/action.rs',
   outbound: 'crates/edges/northstar-stream/src/outbound.rs',
   muc: 'crates/contexts/room/northstar-muc-xmpp/src/muc.rs',
   mucFanout: 'crates/contexts/room/northstar-room-application/src/muc_service/fanout.rs',
@@ -53,10 +53,10 @@ const files = {
   smCore: 'crates/contexts/message/northstar-delivery-core/src/sm_ownership.rs',
   smPrepared: 'crates/contexts/session/northstar-session-application/src/sm/ownership.rs',
   smDb: 'crates/contexts/workflows/northstar-workflows/src/sm.rs',
-  boshOwner: 'src/bosh/ownership.rs',
+  boshOwner: 'crates/edges/northstar-bosh/src/ownership.rs',
   boshCore: 'crates/contexts/message/northstar-delivery-core/src/bosh_ownership.rs',
   mixRepository: 'crates/contexts/room/northstar-room-postgres/src/mix_repository.rs',
-  boshResponse: 'src/bosh/response_owner.rs',
+  boshResponse: 'crates/edges/northstar-bosh/src/response_owner.rs',
   boshResponseCore: 'crates/contexts/message/northstar-delivery-core/src/bosh_ownership/response.rs',
   replayService: 'crates/contexts/session/northstar-session-application/src/replay.rs',
   replayRepository: 'crates/contexts/session/northstar-session-postgres/src/replay_repository.rs',
@@ -459,7 +459,7 @@ export function verifyBoshTransferBoundaries({ bosh, boshOwner, boshCore, mixSer
 // Wiring checks for the response seam. The pure owner/helper tests establish
 // behavior; these lexical checks keep production on those exact shared paths.
 export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseCore, replayService, replayRepository, replayDb }) {
-  boshResponse = productionModule(boshResponse);
+  boshResponse = productionModule(boshResponse).replaceAll(CROSS_CRATE_TEST_ONLY, '#[cfg(test)]');
   boshResponseCore = productionModule(boshResponseCore);
   const normalize = value => compact(value).replace(/,\)/g, ')');
   const finish = normalize(body(bosh, 'async\\s+fn\\s+finish_pending\\b'));
@@ -1003,7 +1003,7 @@ export function verifyAuthPublicationBoundaries(sources) {
 // Closed lexical pins for the bounded, fact-only cfg(test) selection observer.
 // These inspect source wiring; they are not the Stage 4 oracle or runtime proof.
 export function verifyBoshSelectionObservations({ boshResponse }) {
-  const source = productionModule(boshResponse);
+  const source = productionModule(boshResponse).replaceAll(CROSS_CRATE_TEST_ONLY, '#[cfg(test)]');
   const code = codeOnly(source);
   const normalize = value => compact(value).replace(/,([)}])/g, '$1').replace(/,$/, '');
   const exactDeclaration = (declaration, expected, label) => {
@@ -1016,32 +1016,32 @@ export function verifyBoshSelectionObservations({ boshResponse }) {
   requireBoundary([...code.matchAll(/\bMAX_SELECTED_FACTS\b/g)].length === 5,
     'BOSH selection capacity must remain the fixed four-slot observation bound');
   for (const [name, kind, visibility, derives, fields] of [
-    ['SelectionReadStatus', 'enum', 'pub(super)', 'Clone,Copy,Debug,Eq,PartialEq',
+    ['SelectionReadStatus', 'enum', 'pub', 'Clone,Copy,Debug,Eq,PartialEq',
       'Complete,Incomplete{omitted_items:usize,missing_auth_associations:usize,connection_changed:bool}'],
-    ['SelectedItemSnapshot', 'struct', 'pub(super)', 'Clone,Copy,Debug,Eq,PartialEq',
-      'pub(super)ordinal:usize,pub(super)source:Option<northstar_stream::outbound::TransportOwnershipSource>,pub(super)utf8_length:usize,pub(super)sha256:[u8;32],pub(super)auth_marker:bool,pub(super)sealed_association:Option<northstar_stream::auth_publication::ControlAssociation>,pub(super)holder_joins:Option<northstar_stream::auth_publication::ControlJoins>'],
-    ['SelectionSnapshot', 'struct', 'pub(super)', 'Clone,Copy,Debug,Eq,PartialEq',
-      'pub(super)session:uuid::Uuid,pub(super)rid:u64,pub(super)fingerprint:[u8;32],pub(super)first_validated_connection:Option<uuid::Uuid>,pub(super)validated_connection:Option<uuid::Uuid>,pub(super)selected_count:usize,pub(super)status:SelectionReadStatus,pub(super)items:[Option<SelectedItemSnapshot>;MAX_SELECTED_FACTS]'],
+    ['SelectedItemSnapshot', 'struct', 'pub', 'Clone,Copy,Debug,Eq,PartialEq',
+      'pubordinal:usize,pubsource:Option<northstar_stream::outbound::TransportOwnershipSource>,pubutf8_length:usize,pubsha256:[u8;32],pubauth_marker:bool,pubsealed_association:Option<northstar_stream::auth_publication::ControlAssociation>,pubholder_joins:Option<northstar_stream::auth_publication::ControlJoins>'],
+    ['SelectionSnapshot', 'struct', 'pub', 'Clone,Copy,Debug,Eq,PartialEq',
+      'pubsession:uuid::Uuid,pubrid:u64,pubfingerprint:[u8;32],pubfirst_validated_connection:Option<uuid::Uuid>,pubvalidated_connection:Option<uuid::Uuid>,pubselected_count:usize,pubstatus:SelectionReadStatus,pubitems:[Option<SelectedItemSnapshot>;MAX_SELECTED_FACTS]'],
     ['SelectedItemRead', 'struct', '', '',
       'at_selection:SelectedItemSnapshot,joins:Option<northstar_stream::auth_publication::ControlJoinObservation>'],
     ['SelectionState', 'struct', '', '',
       'session:uuid::Uuid,rid:u64,fingerprint:[u8;32],first_validated_connection:Option<uuid::Uuid>,validated_connection:Option<uuid::Uuid>,selected_count:usize,status:SelectionReadStatus,items:[Option<SelectedItemRead>;MAX_SELECTED_FACTS]'],
   ]) {
-    const declaration = (visibility ? 'pub\\(super\\)\\s+' : '') + kind + '\\s+' + name + '\\b';
+    const declaration = (visibility ? 'pub\\s+' : '') + kind + '\\s+' + name + '\\b';
     exactDeclaration(declaration,
       '#[cfg(test)]' + (derives ? `#[derive(${derives})]` : '') + visibility + kind + name, name);
     requireBoundary(normalize(body(source, declaration)) === fields,
       `BOSH selection ${name} must retain its exact fact-only field shape`);
   }
-  exactDeclaration('pub\\(super\\)\\s+struct\\s+SelectionObservation\\s*\\(\\s*Arc\\s*<\\s*std\\s*::\\s*sync\\s*::\\s*Mutex\\s*<\\s*SelectionState\\s*>\\s*>\\s*\\)\\s*;',
-    '#[cfg(test)]#[derive(Clone)]pub(super)structSelectionObservation(Arc<std::sync::Mutex<SelectionState>>);', 'handle');
+  exactDeclaration('pub\\s+struct\\s+SelectionObservation\\s*\\(\\s*Arc\\s*<\\s*std\\s*::\\s*sync\\s*::\\s*Mutex\\s*<\\s*SelectionState\\s*>\\s*>\\s*\\)\\s*;',
+    '#[cfg(test)]#[derive(Clone)]pubstructSelectionObservation(Arc<std::sync::Mutex<SelectionState>>);', 'handle');
   exactDeclaration('impl\\s+SelectionObservation\\b', '#[cfg(test)]implSelectionObservation', 'implementation');
   const implementation = body(source, 'impl\\s+SelectionObservation\\b');
   requireBoundary([...implementation.matchAll(/\bfn\s+(\w+)\b/g)].map(match => match[1]).join(',') === 'capture,snapshot' &&
     [...code.matchAll(/\bimpl\b[^{};]*\b(?:SelectionReadStatus|SelectedItemSnapshot|SelectionSnapshot|SelectedItemRead|SelectionState|SelectionObservation)\b[^{};]*\{/g)].length === 1,
     'BOSH selection must retain its closed capture and read-only snapshot inventory');
   requireBoundary(normalize(implementation).startsWith('fncapture(selected:&VecDeque<OutboundItem>,operation:&Operation,metadata:Metadata)->Self{') &&
-    normalize(implementation).includes('pub(super)fnsnapshot(&self)->SelectionSnapshot{'),
+    normalize(implementation).includes('pubfnsnapshot(&self)->SelectionSnapshot{'),
     'BOSH selection methods must retain private capture and immutable fact-only snapshot declarations');
   requireBoundary(normalize(body(implementation, 'fn\\s+capture\\b')) ===
     'usesha2::{Digest,Sha256};letmutmissing_auth_associations=0;letitems:[Option<SelectedItemRead>;MAX_SELECTED_FACTS]=std::array::from_fn(|ordinal|{selected.get(ordinal).map(|item|{letjoins=item.auth_publication().map(|holder|holder.join_observation());letholder_joins=joins.as_ref().map(|joins|joins.snapshot());letassociation=holder_joins.and_then(|joins|joins.introduced);letauth_marker=item.is_bosh_auth_control();ifauth_marker&&association.is_none(){missing_auth_associations+=1;}SelectedItemRead{at_selection:SelectedItemSnapshot{ordinal,source:item.durable_source,utf8_length:item.stanza.len(),sha256:Sha256::digest(item.stanza.as_bytes()).into(),auth_marker,sealed_association:association,holder_joins},joins}})});letomitted_items=selected.len().saturating_sub(MAX_SELECTED_FACTS);letstatus=ifomitted_items==0&&missing_auth_associations==0{SelectionReadStatus::Complete}else{SelectionReadStatus::Incomplete{omitted_items,missing_auth_associations,connection_changed:false}};Self(Arc::new(std::sync::Mutex::new(SelectionState{session:operation.session_id(),rid:metadata.rid,fingerprint:metadata.fingerprint,first_validated_connection:None,validated_connection:None,selected_count:selected.len(),status,items})))',
@@ -1050,10 +1050,10 @@ export function verifyBoshSelectionObservations({ boshResponse }) {
     'letstate=self.0.lock().unwrap();SelectionSnapshot{session:state.session,rid:state.rid,fingerprint:state.fingerprint,first_validated_connection:state.first_validated_connection,validated_connection:state.validated_connection,selected_count:state.selected_count,status:state.status,items:std::array::from_fn(|ordinal|{state.items[ordinal].as_ref().map(|item|{letmutsnapshot=item.at_selection;snapshot.holder_joins=item.joins.as_ref().map(|joins|joins.snapshot());snapshot})})}',
     'BOSH selection snapshot must preserve sealed facts and read only the live fact-only holder joins');
   const bound = body(source, 'impl\\s+BoundResponse\\b');
-  requireBoundary(normalize(bound).includes('#[cfg(test)]pub(super)fnselection_observation(&self)->SelectionObservation{self.selection.clone()}') &&
+  requireBoundary(normalize(bound).includes('#[cfg(test)]pubfnselection_observation(&self)->SelectionObservation{self.selection.clone()}') &&
     normalize(body(bound, 'fn\\s+selection_observation\\b')) === 'self.selection.clone()',
     'BOSH selection getter must remain test-only and clone only its fact handle');
-  requireBoundary(normalize(body(source, 'pub\\(super\\)\\s+struct\\s+BoundResponse\\b')).endsWith('auth_connection:Option<uuid::Uuid>,#[cfg(test)]selection:SelectionObservation'),
+  requireBoundary(normalize(body(source, 'pub\\s+struct\\s+BoundResponse\\b')).endsWith('auth_connection:Option<uuid::Uuid>,#[cfg(test)]selection:SelectionObservation'),
     'BOSH selection owner field must remain a private test-only fact handle');
   requireBoundary(normalize(body(bound, 'fn\\s+for_connection\\b')) ===
     'self.auth_controls.validate_connection(connection)?;self.auth_connection=Some(connection);#[cfg(test)]{letmutselection=self.selection.0.lock().unwrap();ifletSome(previous)=selection.validated_connection{ifprevious!=connection{let(omitted_items,missing_auth_associations)=matchselection.status{SelectionReadStatus::Complete=>(0,0),SelectionReadStatus::Incomplete{omitted_items,missing_auth_associations,..}=>(omitted_items,missing_auth_associations)};selection.status=SelectionReadStatus::Incomplete{omitted_items,missing_auth_associations,connection_changed:true};}}else{selection.first_validated_connection=Some(connection);}selection.validated_connection=Some(connection);}Ok(self)',
@@ -1145,7 +1145,7 @@ export function verifyRouteHelperBoundaries({ state, sessionTable, mixOutboxStat
 export function verifyExecutionBoundaries(sources) {
   let { frame, protocol, transport, tcp, websocket, bosh, boshAction, boshResponse, outbound } = sources;
   const normalize = value => compact(value).replace(/,([)}])/g, '$1');
-  boshResponse = productionModule(boshResponse);
+  boshResponse = productionModule(boshResponse).replaceAll(CROSS_CRATE_TEST_ONLY, '#[cfg(test)]');
   for (const name of ['drive_io', 'websocket_connection']) {
     const ingress = compact(body(transport, `async\\s+fn\\s+${name}\\b`));
     requireBoundary(ingress.includes('session.process_frame(&frame).await') && !ingress.includes('session.handle('),
@@ -1263,22 +1263,22 @@ export function verifyExecutionBoundaries(sources) {
   // parser or a proof over alternate syntax, macro expansion or other files.
   const responseCode = codeOnly(boshResponse);
   const commonFields = 'metadata:Metadata,response:BoshHttpResponse,receipts:Vec<mpsc::UnboundedSender<()>>,ownership:Arc<BoshResponseOwnership>,';
-  const finishHead = 'pub(super)fnfinish(self,last_response:&mutInstant,highest_responded:&mutu64,replay:&mutVecDeque<CachedResponse>,)->Result<()>{';
+  const finishHead = 'pubfnfinish(self,last_response:&mutInstant,highest_responded:&mutu64,replay:&mutVecDeque<CachedResponse>,)->Result<()>{';
   const ownerShapes = [
     ['BoundResponse', commonFields + 'bound:response::BoundResponse,auth_control_selected:bool,auth_controls:SelectedControls,auth_connection:Option<uuid::Uuid>,#[cfg(test)]selection:SelectionObservation,',
-      ['selection_observation', 'for_connection', 'expose'], ['#[cfg(test)]pub(super)fnselection_observation(&self)->SelectionObservation{', 'pub(super)fnfor_connection(mutself,connection:uuid::Uuid)->Result<Self>{', 'pub(super)fnexpose(mutself,responders:Vec<Responder>)->Result<ExposedResponse>{']],
+      ['selection_observation', 'for_connection', 'expose'], ['#[cfg(test)]pubfnselection_observation(&self)->SelectionObservation{', 'pubfnfor_connection(mutself,connection:uuid::Uuid)->Result<Self>{', 'pubfnexpose(mutself,responders:Vec<Responder>)->Result<ExposedResponse>{']],
     ['ExposedResponse', commonFields + 'exposure:response::Exposure,accepted:bool,auth_control_selected:bool,auth_controls:SelectedControls,',
       ['any_accepted', 'publish_authentication', 'finish'], [
-        '#[cfg(test)]pub(super)fnany_accepted(&self)->bool{',
-        'pub(super)asyncfnpublish_authentication<F:Future<Output=bool>>(mutself,publish:implFnOnce(Vec<OwnedPublication>)->F,)->Result<PublicationReadyResponse>{',
+        '#[cfg(test)]pubfnany_accepted(&self)->bool{',
+        'pubasyncfnpublish_authentication<F:Future<Output=bool>>(mutself,publish:implFnOnce(Vec<OwnedPublication>)->F,)->Result<PublicationReadyResponse>{',
         '#[cfg(test)]' + finishHead,
       ]],
     ['PublicationReadyResponse', 'exposed:ExposedResponse,', ['finish'], [finishHead]],
   ];
   for (const [name, fields, methods, heads] of ownerShapes) {
-    requireBoundary(compact(body(boshResponse, `pub\\(super\\)\\s+struct\\s+${name}\\b`)) === fields,
+    requireBoundary(compact(body(boshResponse, `pub\\s+struct\\s+${name}\\b`)) === fields,
       `BOSH ${name} must retain its exact private field shape`);
-    const declaration = responseCode.match(new RegExp(`((?:#\\[[^\\]]*\\]\\s*)*)pub\\(super\\)\\s+struct\\s+${name}\\b`));
+    const declaration = responseCode.match(new RegExp(`((?:#\\[[^\\]]*\\]\\s*)*)pub\\s+struct\\s+${name}\\b`));
     const manualCopy = new RegExp(`\\bimpl\\b[^{};]*\\b(?:Clone|Copy)\\s+for\\s+(?:\\w+\\s*::\\s*)*${name}\\b`);
     requireBoundary(declaration && !/\bderive\s*\([^)]*\b(?:Clone|Copy)\b/.test(declaration[1]) && !manualCopy.test(responseCode),
       `BOSH ${name} cannot derive or manually implement Clone or Copy`);

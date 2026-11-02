@@ -490,7 +490,7 @@ impl Recorder {
         self.replies.lock().unwrap().is_empty()
     }
 }
-impl crate::bosh::BoshRecordPort for Recorder {
+impl northstar_bosh::RecordPort for Recorder {
     async fn record(&mut self, item: &OutboundItem) -> Result<bool> {
         Recorder::record(self, item).await
     }

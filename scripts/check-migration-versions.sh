@@ -1350,8 +1350,8 @@ if grep -Fq 'SECURITY DEFINER' "$mix_transport_handoff_migration"; then
     echo "migration 0135 must not add a broad database capability for transport ownership" >&2
     exit 1
 fi
-bosh_role_split_files=$(node scripts/lib/source-module.mjs files --role-split src/bosh.rs) || {
-    echo "cannot read Rust role-split files: src/bosh.rs" >&2
+bosh_role_split_files=$(node scripts/lib/source-module.mjs files --role-split crates/edges/northstar-bosh/src/lib.rs) || {
+    echo "cannot read Rust role-split files: crates/edges/northstar-bosh/src/lib.rs" >&2
     exit 1
 }
 for required_source_fragment in \

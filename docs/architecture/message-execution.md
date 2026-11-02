@@ -7,7 +7,7 @@ Existing domain transactions and transport-specific actions remain separate.
 
 ## Read the path in this order
 
-1. `crates/edges/northstar-c2s/src/lib.rs` (TCP/WebSocket) or `src/bosh.rs` owns framing, ordered reads,
+1. `crates/edges/northstar-c2s/src/lib.rs` (TCP/WebSocket) or `crates/edges/northstar-bosh/src/lib.rs` owns framing, ordered reads,
    transport cancellation, terminal wire responses, and the finalizer
 2. `ProtocolSession::process_frame` is the production ingress into
    `crates/edges/northstar-stream/src/frame_execution.rs`: one policy table, typed backend/timeout result,

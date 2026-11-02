@@ -2370,6 +2370,98 @@
         "zeroize"
       ],
       [
+        "northstar-bosh",
+        "anyhow"
+      ],
+      [
+        "northstar-bosh",
+        "axum"
+      ],
+      [
+        "northstar-bosh",
+        "base64"
+      ],
+      [
+        "northstar-bosh",
+        "dashmap"
+      ],
+      [
+        "northstar-bosh",
+        "futures"
+      ],
+      [
+        "northstar-bosh",
+        "hmac"
+      ],
+      [
+        "northstar-bosh",
+        "northstar-auth-application"
+      ],
+      [
+        "northstar-bosh",
+        "northstar-delivery-core"
+      ],
+      [
+        "northstar-bosh",
+        "northstar-room-application"
+      ],
+      [
+        "northstar-bosh",
+        "northstar-runtime"
+      ],
+      [
+        "northstar-bosh",
+        "northstar-session-application"
+      ],
+      [
+        "northstar-bosh",
+        "northstar-stream"
+      ],
+      [
+        "northstar-bosh",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-bosh",
+        "northstar-xmpp-types"
+      ],
+      [
+        "northstar-bosh",
+        "rand"
+      ],
+      [
+        "northstar-bosh",
+        "roxmltree"
+      ],
+      [
+        "northstar-bosh",
+        "sha1"
+      ],
+      [
+        "northstar-bosh",
+        "sha2"
+      ],
+      [
+        "northstar-bosh",
+        "subtle"
+      ],
+      [
+        "northstar-bosh",
+        "tokio"
+      ],
+      [
+        "northstar-bosh",
+        "tokio-util"
+      ],
+      [
+        "northstar-bosh",
+        "tracing"
+      ],
+      [
+        "northstar-bosh",
+        "uuid"
+      ],
+      [
         "northstar-c2s",
         "anyhow"
       ],
@@ -6811,6 +6903,10 @@
       ],
       [
         "rust-xmpp-server",
+        "northstar-bosh"
+      ],
+      [
+        "rust-xmpp-server",
         "northstar-c2s"
       ],
       [
@@ -9387,6 +9483,7 @@
       "northstar-auth-core",
       "northstar-auth-postgres",
       "northstar-auth-xmpp",
+      "northstar-bosh",
       "northstar-c2s",
       "northstar-cluster",
       "northstar-config",

@@ -333,7 +333,7 @@ pub struct AppState {
         northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService<
             northstar_auth_postgres::account_revocation_repository::PostgresAccountRevocationRepository,
         >,
-    bosh: Option<crate::bosh::BoshManager>,
+    bosh: Option<northstar_bosh::BoshManager>,
     sessions: Arc<DashMap<String, OnlineSession>>,
     metrics: Arc<Metrics>,
     /// Optional credential for the dedicated observability listener. Callers

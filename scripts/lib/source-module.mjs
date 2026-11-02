@@ -70,7 +70,9 @@ function readRoleSplitCatalog(root) {
   for (const [filePath, children] of Object.entries(files)) {
     try {
       const { normalizedModulePath } = modulePaths(filePath);
-      if (!normalizedModulePath.startsWith('src/')) throw new Error('must be under src/');
+      if (!/^(?:crates\/(?:[a-z0-9_-]+\/)+)?src\//.test(normalizedModulePath)) {
+        throw new Error('must be under src/ or a workspace crate\'s src/');
+      }
       const absoluteFilePath = path.join(root, normalizedModulePath);
       if (!fs.existsSync(absoluteFilePath) || !fs.statSync(absoluteFilePath).isFile()) {
         throw new Error('parent file does not exist or is not a regular file');

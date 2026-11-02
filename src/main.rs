@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 mod api;
-mod bosh;
 use northstar_cluster as cluster;
 mod db;
 #[cfg(test)]

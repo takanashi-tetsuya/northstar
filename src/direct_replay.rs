@@ -7,6 +7,7 @@ use std::{
 };
 use uuid::Uuid;
 
+pub(crate) mod bosh_case;
 mod case;
 mod delivery_evidence;
 mod evidence;

@@ -1,10 +1,12 @@
 //! Apply protocol actions to the bounded BOSH response FIFO.
 
+use super::host::BoshHost;
 use super::{queue_bosh_resume_payload, BoshActor};
 use northstar_stream::resume::ResumeTransportParts;
+use northstar_stream::session::StreamSession;
 use northstar_stream::transport::Action;
 
-impl BoshActor {
+impl<H: BoshHost> BoshActor<H> {
     pub(super) async fn apply_action(
         &mut self,
         action: Action,
@@ -43,7 +45,7 @@ impl BoshActor {
                     if index == 0 {
                         let holder = holder.as_ref().expect("first auth control");
                         if holder
-                            .validate_connection(self.protocol.connection_id)
+                            .validate_connection(self.protocol.connection_id())
                             .and_then(|_| holder.validate_control(&reply))
                             .and_then(|_| holder.recording())
                             .is_err()
@@ -94,7 +96,7 @@ impl BoshActor {
                 }
                 if let Some(holder) = &auth_publication {
                     if holder
-                        .validate_connection(self.protocol.connection_id)
+                        .validate_connection(self.protocol.connection_id())
                         .and_then(|_| holder.validate_control(&control))
                         .and_then(|_| holder.recording())
                         .is_err()

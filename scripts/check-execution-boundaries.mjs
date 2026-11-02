@@ -787,7 +787,7 @@ export function verifyAuthPublicationBoundaries(sources) {
   requireBoundary(method(websocket, 'write_auth_control') === 'holder.write(control,|control|asyncmove{ifwebsocket_send_live(socket,Message::Text(control.into()),cancellation).await{Ok(())}else{anyhow::bail!()}}).await.ok()',
     'auth WebSocket adapter must retain actual live-write cancellation');
   const finish = method(bosh, 'finish_pending');
-  ordered(finish, ['bound.for_connection(self.protocol.connection_id)', 'bound.expose(pending.responders)',
+  ordered(finish, ['bound.for_connection(self.protocol.connection_id())', 'bound.expose(pending.responders)',
     '.publish_authentication(|owners|async{forownerinowners{if!self.protocol.publish_committed_authentication_and_route(owner).await{returnfalse;}}true})',
     'ready.finish('], 'auth BOSH continuation must preserve selected FIFO, early failure and exact connection');
   const expose = method(body(boshResponse, 'impl\\s+BoundResponse\\b'), 'expose');
@@ -1323,7 +1323,7 @@ export function verifyExecutionBoundaries(sources) {
   requireBoundary(!compact(boshApply).includes('publish_committed_authentication'),
     'BOSH FIFO admission must defer authentication publication until response exposure');
   const boshActivate = normalize(body(boshApply, 'Action::SendManyThenActivate\\([^)]*\\)\\s*=>'));
-  ordered(boshActivate, ['ifindex==0{', 'holder.validate_connection(self.protocol.connection_id)',
+  ordered(boshActivate, ['ifindex==0{', 'holder.validate_connection(self.protocol.connection_id())',
     '.and_then(|_|holder.validate_control(&reply))', '.and_then(|_|holder.recording()).is_err(){returnfalse;}',
     'ifself.protocol.record_outbound(&reply).await.is_err(){returnfalse;}',
     'letitem=northstar_stream::outbound::OutboundItem::plain(reply);letitem=ifindex==0{',
@@ -1331,7 +1331,7 @@ export function verifyExecutionBoundaries(sources) {
     'BOSH activation must validate before recording then enqueue the exact first control holder');
   const boshResume = normalize(body(boshApply, 'Action::Resume\\([^)]*\\)\\s*=>'));
   ordered(boshResume, ['ifactivate_route!=auth_publication.is_some(){returnfalse;}',
-    'ifletSome(holder)=&auth_publication{', 'holder.validate_connection(self.protocol.connection_id)',
+    'ifletSome(holder)=&auth_publication{', 'holder.validate_connection(self.protocol.connection_id())',
     '.and_then(|_|holder.validate_control(&control))', '.and_then(|_|holder.recording()).is_err(){returnfalse;}',
     'ifself.protocol.record_outbound(&control).await.is_err(){returnfalse;}',
     'ResumeTransportParts{control,post_control,replay,activate_route,auth_publication,transient_capacity}'],

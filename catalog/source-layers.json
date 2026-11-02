@@ -44,9 +44,6 @@
     "src/api/mod.rs": [
       "state"
     ],
-    "src/bosh.rs": [
-      "state"
-    ],
     "src/s2s/components.rs": [
       "state"
     ],

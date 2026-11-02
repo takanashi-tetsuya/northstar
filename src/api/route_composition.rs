@@ -574,9 +574,9 @@ pub(super) fn xmpp_transport_routes(
     }
     if bosh_enabled {
         router = router
-            .route("/http-bind", post(crate::bosh::http_bind))
+            .route("/http-bind", post(crate::bosh::http_bind::<AppState>))
             .route("/http-bind", options(crate::bosh::http_bind_options))
-            .route("/bosh", post(crate::bosh::http_bind))
+            .route("/bosh", post(crate::bosh::http_bind::<AppState>))
             .route("/bosh", options(crate::bosh::http_bind_options));
     }
     router.with_state(state)

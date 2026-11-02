@@ -1,6 +1,7 @@
 //! Runtime configuration views: policy value types and configuration accessors.
 
 use super::*;
+use crate::bosh::host::BoshPolicy;
 pub(crate) use northstar_message_core::OfflineDeliveryLimits;
 use northstar_upload_application::UploadSlotLimits;
 
@@ -19,20 +20,6 @@ pub(crate) struct SmSessionPolicy {
     pub(crate) claim_lease_seconds: u64,
     pub(crate) max_per_account: usize,
     pub(crate) max_global: usize,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct BoshPolicy {
-    pub(crate) max_wait_seconds: u64,
-    pub(crate) inactivity_seconds: u64,
-    pub(crate) polling_seconds: u64,
-    pub(crate) max_pause_seconds: u64,
-    pub(crate) body_read_timeout_seconds: u64,
-    pub(crate) max_request_bytes: usize,
-    pub(crate) max_response_bytes: usize,
-    pub(crate) max_stanzas_per_request: usize,
-    pub(crate) max_output_stanzas: usize,
-    pub(crate) max_output_bytes: usize,
 }
 
 #[derive(Clone, Copy)]

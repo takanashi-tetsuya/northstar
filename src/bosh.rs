@@ -1,12 +1,13 @@
 //! Production-bounded XEP-0124 / XEP-0206 connection manager.
 //!
-//! Each BOSH session owns one actor and one `ProtocolSession`. HTTP handlers
+//! Each BOSH session owns one actor and one protocol session. HTTP handlers
 //! never lock or mutate protocol state directly: they submit bounded commands
 //! and await a one-shot response. This preserves RID order even when two HTTP
 //! requests arrive concurrently and prevents transport-specific protocol
 //! behavior from drifting away from TCP/WebSocket behavior.
 
 mod action;
+pub(crate) mod host;
 mod ownership;
 mod response_owner;
 #[cfg(test)]
@@ -18,8 +19,7 @@ pub(crate) use ownership::{sm_record_composition, RecordPort as BoshRecordPort};
 #[cfg(test)]
 pub(crate) use saved_case::{run as run_saved_case, validate as validate_saved_case};
 
-use crate::state::{AppState, ClientConnectionGuard};
-use crate::xmpp::protocol::ProtocolSession;
+use self::host::BoshHost;
 use crate::xmpp::transport_parsing::parse_bosh_frame;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Context;
@@ -34,6 +34,7 @@ use futures::FutureExt;
 use hmac::{Hmac, Mac};
 use northstar_stream::frame_execution::FrameFailure;
 use northstar_stream::resume::ResumeTransportParts;
+use northstar_stream::session::StreamSession;
 use northstar_stream::transport::ClientTransport;
 use rand::{rngs::OsRng, RngCore};
 use roxmltree::Document;
@@ -182,12 +183,12 @@ enum RidDisposition {
     OutsideWindow,
 }
 
-struct BoshActor {
+struct BoshActor<H: BoshHost> {
     manager: BoshManager,
     session_key: [u8; 32],
-    protocol: ProtocolSession,
-    replay_service: crate::state::BoshReplayService,
-    mix_service: crate::state::BoshMixService,
+    protocol: H::Session,
+    replay_service: northstar_session_application::replay::ReplayService<H::ReplayStore>,
+    mix_service: northstar_room_application::mix_service::MixService<H::MixStore>,
     sm_memory_governor: Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
     commands: mpsc::Receiver<BoshCommand>,
     outbound: mpsc::Receiver<northstar_stream::outbound::OutboundItem>,
@@ -219,7 +220,7 @@ struct BoshActor {
     ownership_operation: Option<northstar_delivery_core::bosh_ownership::Operation>,
     actor_shutdown: CancellationToken,
     overactivity: CancellationToken,
-    _connection_guard: ClientConnectionGuard,
+    _connection_guard: H::ConnectionGuard,
     _session_slot: OwnedSemaphorePermit,
 }
 
@@ -250,12 +251,12 @@ impl BoshManager {
             .ok()
     }
 
-    async fn create(
+    async fn create<H: BoshHost>(
         &self,
-        state: Arc<AppState>,
+        host: Arc<H>,
         request: BoshRequest,
         peer_ip: IpAddr,
-        connection_guard: ClientConnectionGuard,
+        connection_guard: H::ConnectionGuard,
     ) -> Result<BoshHttpResponse, &'static str> {
         let session_slot = Arc::clone(&self.inner.session_slots)
             .try_acquire_owned()
@@ -264,7 +265,7 @@ impl BoshManager {
         if northstar_xmpp_types::jid::prepare_domainpart(to)
             .ok()
             .as_deref()
-            != Some(state.local_domain())
+            != Some(host.local_domain())
         {
             return Err("host-unknown");
         }
@@ -286,7 +287,7 @@ impl BoshManager {
             return Err("bad-request");
         }
 
-        let policy = state.bosh_policy();
+        let policy = host.bosh_policy();
         let wait_seconds = negotiated_wait(request.wait, policy.max_wait_seconds);
         let requested_hold = negotiated_hold(request.hold, wait_seconds);
         let requests = usize::from(requested_hold) + 1;
@@ -296,8 +297,7 @@ impl BoshManager {
             .unwrap_or_else(|| "text/xml; charset=utf-8".to_owned());
 
         let (outbound_tx, outbound_rx) = mpsc::channel(policy.max_output_stanzas);
-        let mut protocol = ProtocolSession::new(
-            state.clone(),
+        let mut protocol = Arc::clone(&host).open_session(
             northstar_stream::outbound::OutboundSender::new(outbound_tx),
             true,
             ClientTransport::Bosh,
@@ -335,14 +335,14 @@ impl BoshManager {
             }
         };
 
-        let actors = state.connection_actors().clone();
+        let actors = host.connection_actors().clone();
         let actor_shutdown = actors.shutdown_token().child_token();
-        let actor = BoshActor {
+        let actor = BoshActor::<H> {
             manager: self.clone(),
             session_key,
-            replay_service: state.replay_service().clone(),
-            mix_service: state.mix_service().clone(),
-            sm_memory_governor: Arc::clone(state.sm_memory_governor()),
+            replay_service: host.replay_service().clone(),
+            mix_service: host.mix_service().clone(),
+            sm_memory_governor: Arc::clone(host.sm_memory_governor()),
             protocol,
             commands: command_rx,
             outbound: outbound_rx,
@@ -393,7 +393,7 @@ impl BoshManager {
             tracing::debug!(%peer_ip, ?error, "rejected BOSH connection actor admission");
             return Err("resource-constraint");
         }
-        state.record_bosh_session_opened();
+        host.record_bosh_session_opened();
 
         let version = negotiated_bosh_version(request.ver.as_deref());
         let body = XmlElement::new("body")
@@ -407,7 +407,7 @@ impl BoshManager {
             .attr("polling", policy.polling_seconds)
             .attr("maxpause", policy.max_pause_seconds)
             .attr("ver", version)
-            .attr("from", state.local_domain())
+            .attr("from", host.local_domain())
             .attr("ack", request.rid)
             .attr("xmpp:version", "1.0")
             .attr("xmpp:restartlogic", "true")
@@ -474,7 +474,7 @@ impl BoshManager {
     }
 }
 
-impl BoshActor {
+impl<H: BoshHost> BoshActor<H> {
     async fn run(mut self) {
         let actor = AssertUnwindSafe(self.run_loop()).catch_unwind().await;
         let cleanup = AssertUnwindSafe(self.finish()).catch_unwind().await;
@@ -554,7 +554,7 @@ impl BoshActor {
                     break;
                 }
                 _ = signals.backpressured() => {
-                    tracing::warn!(peer_ip = %self.protocol.peer_ip, "closed slow BOSH XMPP client after an ordered outbound delivery could not be queued; recoverable messages remain available for replay and committed state will resynchronize after reconnect");
+                    tracing::warn!(peer_ip = %self.protocol.peer_ip(), "closed slow BOSH XMPP client after an ordered outbound delivery could not be queued; recoverable messages remain available for replay and committed state will resynchronize after reconnect");
                     self.terminate_waiters("policy-violation");
                     break;
                 }
@@ -1218,7 +1218,7 @@ impl BoshActor {
                 return false;
             }
         };
-        let bound = match bound.for_connection(self.protocol.connection_id) {
+        let bound = match bound.for_connection(self.protocol.connection_id()) {
             Ok(bound) => bound,
             Err(_) => return false,
         };
@@ -1307,22 +1307,22 @@ type BoshResponsePayload = (
     VecDeque<northstar_stream::outbound::OutboundItem>,
 );
 
-pub async fn http_bind(
-    State(state): State<Arc<AppState>>,
+pub async fn http_bind<H: BoshHost>(
+    State(host): State<Arc<H>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: axum::extract::Request,
 ) -> Response {
     let headers = request.headers().clone();
-    if !secure_proxy_request(peer.ip(), &headers, state.trusted_proxy_ips()) {
+    if !secure_proxy_request(peer.ip(), &headers, host.trusted_proxy_ips()) {
         return cors_response(StatusCode::OK, terminal_response("policy-violation"));
     }
     if !supported_request_headers(&headers) {
         return cors_response(StatusCode::OK, terminal_response("bad-request"));
     }
-    let Some(body_read_slot) = state.bosh_manager().try_body_read() else {
+    let Some(body_read_slot) = host.bosh_manager().try_body_read() else {
         return cors_response(StatusCode::OK, terminal_response("policy-violation"));
     };
-    let policy = state.bosh_policy();
+    let policy = host.bosh_policy();
     let body = match tokio::time::timeout(
         Duration::from_secs(policy.body_read_timeout_seconds),
         axum::body::to_bytes(request.into_body(), policy.max_request_bytes),
@@ -1346,13 +1346,13 @@ pub async fn http_bind(
     drop(body);
     drop(body_read_slot);
     let response = match parsed {
-        Ok(request) if request.sid.is_some() => state.bosh_manager().request(request).await,
+        Ok(request) if request.sid.is_some() => host.bosh_manager().request(request).await,
         Ok(request) => {
-            let peer_ip = crate::api::client_ip(peer.ip(), &headers, &state);
-            match state.acquire_client_connection(peer_ip) {
-                Some(guard) => match state
+            let peer_ip = host.client_ip(peer.ip(), &headers);
+            match host.acquire_client_connection(peer_ip) {
+                Some(guard) => match host
                     .bosh_manager()
-                    .create(Arc::clone(&state), request, peer_ip, guard)
+                    .create(Arc::clone(&host), request, peer_ip, guard)
                     .await
                 {
                     Ok(response) => response,

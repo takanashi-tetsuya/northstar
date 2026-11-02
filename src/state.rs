@@ -1,11 +1,4 @@
 pub(crate) mod account_admin;
-// The composition root binds transport service handles to concrete adapters.
-pub(crate) type BoshReplayService = northstar_session_application::replay::ReplayService<
-    northstar_session_postgres::replay_repository::PostgresReplayRepository,
->;
-pub(crate) type BoshMixService = northstar_room_application::mix_service::MixService<
-    northstar_workflows::room_effects::PostgresMixRepository,
->;
 
 impl axum::extract::FromRef<Arc<AppState>> for AccountAdminContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
@@ -99,6 +92,7 @@ pub(crate) use account_deletion_recovery::AccountDeletionRecoveryContext;
 pub(crate) mod account_teardown_runtime;
 mod admin_session_cleanup;
 pub(crate) mod background_maintenance;
+mod bosh_host;
 mod c2s_host;
 pub(crate) mod caps_effect_dispatch;
 pub(crate) mod pep_last_items;
@@ -252,7 +246,6 @@ mod telemetry_accessors;
 mod upload_module;
 
 use self::abuse_module::*;
-pub use self::admission_guards::*;
 use self::auth_module::*;
 #[cfg(test)]
 use self::construction::*;

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.97"
 license = "AGPL-3.0-only"
-description = "Offline operator data tools of Northstar: XEP-0227 PIE import and export"
+description = "Offline operator data tools of Northstar: XEP-0227 PIE import and export, and the identity audit"
 publish = false
 
 [features]
@@ -22,7 +22,9 @@ northstar-postgres = { path = "../../../platform/northstar-postgres" }
 northstar-security = { path = "../../../platform/northstar-security" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 roxmltree = "0.20"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid", "json", "macros"] }
 uuid = { version = "1.12", features = ["v4", "serde"] }
 zeroize = "1.8"

@@ -41,7 +41,7 @@ pub(crate) struct AuditOptions {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AuditOutcome {
+pub enum AuditOutcome {
     Clean,
     Dirty,
     Help,
@@ -284,7 +284,7 @@ impl SchemaMap {
 
 /// Handle the maintenance command before normal configuration, logging, TLS,
 /// bootstrap writes or migrations are initialized.
-pub(crate) async fn maybe_run(arguments: &[String]) -> Result<Option<AuditOutcome>> {
+pub async fn maybe_run(arguments: &[String]) -> Result<Option<AuditOutcome>> {
     if arguments.first().map(String::as_str) != Some(COMMAND) {
         return Ok(None);
     }

@@ -158,12 +158,7 @@ async fn postgres_audit_reports_all_rows_and_leaves_the_database_unchanged() {
         .connect(&url)
         .await
         .unwrap();
-    sqlx::migrate::Migrator::new(std::path::Path::new("migrations"))
-        .await
-        .unwrap()
-        .run(&setup)
-        .await
-        .unwrap();
+    northstar_postgres::MIGRATOR.run(&setup).await.unwrap();
     let first_domain = format!("xn--bcher-kva.audit-{}.example", Uuid::new_v4().simple());
     let canonical = northstar_xmpp_types::jid::prepare_domainpart(&first_domain).unwrap();
     sqlx::query(

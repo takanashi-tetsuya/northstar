@@ -2931,7 +2931,15 @@
     ],
     [
       "northstar-data-tools",
+      "serde"
+    ],
+    [
+      "northstar-data-tools",
       "serde_json"
+    ],
+    [
+      "northstar-data-tools",
+      "sha2"
     ],
     [
       "northstar-data-tools",

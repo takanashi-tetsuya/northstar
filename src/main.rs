@@ -210,10 +210,10 @@ async fn run() -> Result<()> {
     {
         northstar_config::load_dotenv()?;
     }
-    if let Some(outcome) = tools::identity_audit::maybe_run(&arguments).await? {
+    if let Some(outcome) = northstar_data_tools::identity_audit::maybe_run(&arguments).await? {
         return match outcome {
-            tools::identity_audit::AuditOutcome::Clean | tools::identity_audit::AuditOutcome::Help => Ok(()),
-            tools::identity_audit::AuditOutcome::Dirty => anyhow::bail!(
+            northstar_data_tools::identity_audit::AuditOutcome::Clean | northstar_data_tools::identity_audit::AuditOutcome::Help => Ok(()),
+            northstar_data_tools::identity_audit::AuditOutcome::Dirty => anyhow::bail!(
                 "identity audit found issues requiring operator review; the complete JSON report was written to stdout and the database was not modified"
             ),
         };

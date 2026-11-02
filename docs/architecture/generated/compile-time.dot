@@ -1080,7 +1080,9 @@ digraph compile_time {
   "northstar-data-tools" -> "northstar-workflows";
   "northstar-data-tools" -> "northstar-xmpp-types";
   "northstar-data-tools" -> "roxmltree";
+  "northstar-data-tools" -> "serde";
   "northstar-data-tools" -> "serde_json";
+  "northstar-data-tools" -> "sha2";
   "northstar-data-tools" -> "sqlx";
   "northstar-data-tools" -> "tokio";
   "northstar-data-tools" -> "uuid";

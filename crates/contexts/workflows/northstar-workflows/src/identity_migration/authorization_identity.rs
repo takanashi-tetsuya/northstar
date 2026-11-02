@@ -6,7 +6,7 @@
 //! writing, and commits the rewrites and completion marker atomically.
 
 use anyhow::{Context, Result};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use sqlx::PgPool;
 use sqlx::{Postgres, Row, Transaction};
 use std::collections::BTreeMap;
@@ -73,7 +73,7 @@ fn ensure_no_collisions(table: &str, rows: &[ScopedIdentity]) -> Result<()> {
 /// The completion marker is in the same transaction as every rewrite.  Any
 /// invalid identity, canonical collision, lock timeout, or update error rolls
 /// the whole batch back and leaves the marker absent.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn canonicalize_authorization_identity_storage(pool: &PgPool) -> Result<()> {
     let mut transaction = pool.begin().await?;
     canonicalize_authorization_identity_storage_in_transaction(&mut transaction).await?;
@@ -372,7 +372,9 @@ mod tests {
             .connect(&url)
             .await
             .unwrap();
-        crate::db::migrate(&pool).await.unwrap();
+        crate::identity_migration::migrate_for_tests(&pool)
+            .await
+            .unwrap();
         sqlx::query("DELETE FROM jid_identity_migrations WHERE migration=$1")
             .bind(MIGRATION)
             .execute(&pool)

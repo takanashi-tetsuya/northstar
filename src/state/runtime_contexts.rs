@@ -32,10 +32,12 @@ impl AppState {
     pub(crate) fn retention_context(
         &self,
     ) -> northstar_operations_application::retention_worker::RetentionContext<
-        db::retention::PostgresMaintenanceRepository,
+        northstar_workflows::maintenance_repository::PostgresMaintenanceRepository,
     > {
         northstar_operations_application::retention_worker::RetentionContext::new(
-            db::retention::PostgresMaintenanceRepository::new(self.pool.clone()),
+            northstar_workflows::maintenance_repository::PostgresMaintenanceRepository::new(
+                self.pool.clone(),
+            ),
             northstar_operations_application::retention_worker::RetentionPolicy::from_config(
                 &self.config,
             ),
@@ -57,10 +59,12 @@ impl AppState {
     pub(crate) fn subscription_cleanup_context(
         &self,
     ) -> crate::runtime::subscription_cleanup::SubscriptionCleanupContext<
-        db::retention::PostgresMaintenanceRepository,
+        northstar_workflows::maintenance_repository::PostgresMaintenanceRepository,
     > {
         crate::runtime::subscription_cleanup::SubscriptionCleanupContext::new(
-            db::retention::PostgresMaintenanceRepository::new(self.pool.clone()),
+            northstar_workflows::maintenance_repository::PostgresMaintenanceRepository::new(
+                self.pool.clone(),
+            ),
             Arc::clone(&self.metrics.subscription_cleanup),
         )
     }

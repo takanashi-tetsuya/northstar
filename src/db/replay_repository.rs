@@ -245,7 +245,7 @@ impl ReplayService<PostgresReplayRepository> {
     pub(crate) async fn busy_retry_test_fixture(
         database_url: &str,
     ) -> Result<(Self, Uuid, String, Uuid)> {
-        let pool = sqlx::postgres::PgPoolOptions::new()
+        let pool = northstar_postgres::pool::options()
             .max_connections(4)
             .acquire_timeout(std::time::Duration::from_secs(2))
             .connect(database_url)

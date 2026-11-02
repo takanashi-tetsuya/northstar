@@ -37,5 +37,6 @@ pub fn is_capacity_sqlx_error(error: &sqlx::Error) -> bool {
 
 pub mod cluster_lock;
 pub mod migration_preflight;
+pub mod pool;
 pub mod role_attestation;
 pub mod schema;

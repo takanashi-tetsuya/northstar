@@ -14,10 +14,7 @@ use northstar_runtime::workers::WorkerMode;
 use northstar_runtime::workers::WorkerRegistry;
 use northstar_telemetry::metrics::Metrics;
 use serde::Deserialize;
-use sqlx::{
-    postgres::{PgConnectOptions, PgPoolOptions},
-    PgPool,
-};
+use sqlx::{postgres::PgConnectOptions, PgPool};
 use std::{net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -209,7 +206,7 @@ pub(crate) async fn run_maintenance() -> Result<()> {
 
     // This budget includes the dedicated ownership/health connection. No
     // migrator, administrator-command or runtime-control pool is constructed.
-    let options = PgPoolOptions::new()
+    let options = northstar_postgres::pool::options()
         .max_connections(MAINTENANCE_POOL_MAX_CONNECTIONS)
         .min_connections(0)
         .acquire_timeout(Duration::from_secs(5));

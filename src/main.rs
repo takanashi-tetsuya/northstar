@@ -22,7 +22,7 @@ use runtime::service_tasks::{
     await_shutdown_notifications, drain_service_tasks, spawn_service_task,
     unexpected_service_task_exit, SERVICE_TASK_ABORT_DRAIN_TIMEOUT, SERVICE_TASK_DRAIN_TIMEOUT,
 };
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::PgPool;
 use state::AppState;
 use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::task::JoinSet;
@@ -103,7 +103,9 @@ fn migration_environment() -> Result<MigrationEnvironment> {
 }
 
 async fn connect_migrator_pool(environment: &MigrationEnvironment) -> Result<PgPool> {
-    let pool_options = PgPoolOptions::new().max_connections(2).min_connections(0);
+    let pool_options = northstar_postgres::pool::options()
+        .max_connections(2)
+        .min_connections(0);
     let pool_options = if environment.allow_unsafe_role_for_development {
         pool_options
     } else {
@@ -284,7 +286,7 @@ async fn run() -> Result<()> {
     startup_phase.complete();
     let startup_phase =
         northstar_telemetry::logging::StartupPhase::begin("primary_pool_and_role_attestation");
-    let pool_options = PgPoolOptions::new()
+    let pool_options = northstar_postgres::pool::options()
         .max_connections(config.database_max_connections)
         .min_connections(config.database_min_connections);
     let pool_options = if config.database_allow_unsafe_role_for_development {

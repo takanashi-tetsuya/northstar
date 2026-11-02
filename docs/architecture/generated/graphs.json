@@ -3458,6 +3458,14 @@
         "sqlx"
       ],
       [
+        "northstar-postgres",
+        "tokio"
+      ],
+      [
+        "northstar-postgres",
+        "tracing"
+      ],
+      [
         "northstar-presence-core",
         "northstar-xmpp-types"
       ],

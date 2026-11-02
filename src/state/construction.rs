@@ -450,7 +450,7 @@ impl AppState {
             AdminCommandPoolMode::SharedUnsafeDevelopment => pool.clone(),
             AdminCommandPoolMode::DedicatedProductionRole => {
                 let command_pool_options = role_attestation::pin_public_application_schema(
-                    PgPoolOptions::new()
+                    northstar_postgres::pool::options()
                         .max_connections(4)
                         .min_connections(0)
                         .acquire_timeout(AUXILIARY_POOL_ACQUIRE_TIMEOUT),
@@ -475,7 +475,7 @@ impl AppState {
                 command_pool
             }
         };
-        let omemo_recovery_pool_options = PgPoolOptions::new()
+        let omemo_recovery_pool_options = northstar_postgres::pool::options()
             .max_connections(OMEMO_RECOVERY_POOL_MAX_CONNECTIONS)
             .min_connections(0)
             .acquire_timeout(AUXILIARY_POOL_ACQUIRE_TIMEOUT);

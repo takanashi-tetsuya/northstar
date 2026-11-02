@@ -65,6 +65,7 @@ case "$shard" in
       'pubsub|PubSub database|600|pubsub-db-wsl.sh'
       'pubsub-outbox|PubSub outbox database|600|pubsub-outbox-db-wsl.sh'
       'pubsub-wire|PubSub wire integration|600|pubsub-wire-wsl.sh'
+      'postgres-pool|PostgreSQL pool database|480|postgres-pool-db-wsl.sh'
     )
     ;;
   *)

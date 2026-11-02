@@ -21,7 +21,7 @@ pub(super) fn runtime_control_pool_options(
     config: &Config,
     attempt_budget: Duration,
 ) -> PgPoolOptions {
-    let options = PgPoolOptions::new()
+    let options = northstar_postgres::pool::options()
         .max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)
         .min_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)
         .acquire_timeout(attempt_budget);

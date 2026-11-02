@@ -40,7 +40,7 @@ impl UploadModule {
             StoragePoolMode::DedicatedProductionRole => {
                 let deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;
                 let options = northstar_postgres::role_attestation::pin_public_application_schema(
-                    PgPoolOptions::new()
+                    northstar_postgres::pool::options()
                         .max_connections(STORAGE_POOL_MAX_CONNECTIONS)
                         .min_connections(0)
                         .acquire_timeout(AUXILIARY_POOL_ACQUIRE_TIMEOUT),

@@ -153,7 +153,7 @@ fn scan_inventory_is_unique_and_never_selects_content_or_secret_columns() {
 async fn postgres_audit_reports_all_rows_and_leaves_the_database_unchanged() {
     let url = std::env::var("TEST_DATABASE_URL")
         .expect("set TEST_DATABASE_URL to an isolated PostgreSQL schema");
-    let setup = PgPoolOptions::new()
+    let setup = sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
         .connect(&url)
         .await
@@ -196,7 +196,7 @@ async fn postgres_audit_reports_all_rows_and_leaves_the_database_unchanged() {
         .any(|finding| finding.code == "idna_alabel_ulabel_collision"));
     audit_pool.close().await;
 
-    let verify = PgPoolOptions::new()
+    let verify = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
         .connect(&url)
         .await

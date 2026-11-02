@@ -11,3 +11,7 @@ publish = false
 anyhow = "1.0"
 chrono = "0.4"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "migrate", "macros"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1.43", features = ["macros", "rt"] }

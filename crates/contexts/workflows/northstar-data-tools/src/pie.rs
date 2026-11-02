@@ -125,7 +125,7 @@ pub async fn run(config: &Config, arguments: &[String]) -> Result<()> {
     } else {
         zeroize::Zeroizing::new(config.database_url.clone())
     };
-    let pool_options = sqlx::postgres::PgPoolOptions::new()
+    let pool_options = northstar_postgres::pool::options()
         .max_connections(config.database_max_connections.clamp(1, 8));
     let pool_options = if config.database_allow_unsafe_role_for_development {
         pool_options

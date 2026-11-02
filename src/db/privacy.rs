@@ -28,6 +28,7 @@ pub async fn communication_denied(
     privacy_denies(pool, owner_id, active_list, candidate, kind).await
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 

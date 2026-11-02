@@ -489,7 +489,7 @@ if (shutdownFence < 0 || publicationTimeout < shutdownFence || releaseInstance <
   throw new Error('cluster node-instance release must remain inside the signed-publication fence');
 }
 const mainRuntimeControlReservation = runtimeMain.indexOf('state::reserve_runtime_control_connection(&config).await?');
-const mainPrimaryPoolConstruction = runtimeMain.indexOf('let pool_options = PgPoolOptions::new()');
+const mainPrimaryPoolConstruction = runtimeMain.indexOf('let pool_options = northstar_postgres::pool::options()');
 if (mainRuntimeControlReservation < 0 || mainPrimaryPoolConstruction < 0
     || mainRuntimeControlReservation > mainPrimaryPoolConstruction) {
   throw new Error('main must reserve runtime-control authority before constructing the traffic pool');
@@ -4086,6 +4086,25 @@ console.log(
 
 // The experiment index consumes the exact production inventory already checked
 // above, never a second handwritten list of runtime authorities.
+// SQLx 0.8 can return a connection to its pool inside the transaction of a
+// cancelled BEGIN. Every server and tool pool starts from the options that
+// close such a connection on release.
+const poolOptionsSource = read('crates/platform/northstar-postgres/src/pool.rs');
+const unguardedPools = productionRustSources
+  .filter(({ relative }) => /^(?:src\/|crates\/(?:contexts|edges)\/|crates\/platform\/northstar-)/.test(relative))
+  .filter(({ relative }) => relative !== 'crates/platform/northstar-postgres/src/pool.rs')
+  // Modules compiled only for tests may build plain pools.
+  .filter(({ relative }) => !/(?:^|\/)(?:test_support|\w+_test)\.rs$/.test(relative))
+  .filter(({ source }) => /\bPgPoolOptions::new\(\)/.test(source))
+  .map(({ relative }) => relative);
+if (unguardedPools.length > 0
+    || !poolOptionsSource.includes('PgPoolOptions::new().after_release(')
+    || !poolOptionsSource.includes('"SELECT pg_catalog.statement_timestamp() = pg_catalog.transaction_timestamp()"')
+    || !poolOptionsSource.includes('sqlx::raw_sql(')
+    || !poolOptionsSource.includes('Ok(reusable)')) {
+  throw new Error(`database pools must start from northstar_postgres::pool::options(): ${unguardedPools.join(', ')}`);
+}
+
 export const verifiedRuntimeInventory = [
   ...productionRustSources.flatMap(({ relative, source }) =>
     [...source.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g)].map((match) => ({

@@ -2392,6 +2392,8 @@ dependencies = [
  "anyhow",
  "chrono",
  "sqlx",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

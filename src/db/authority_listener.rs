@@ -5,7 +5,7 @@ use northstar_config::SM_AUTHORITY_LISTENER_MAX_CONNECTIONS;
 use northstar_room_application::mix_service::{
     MixDeliveryWakeBroker, MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL,
 };
-use sqlx::postgres::{PgConnectOptions, PgListener, PgPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgListener};
 use std::{sync::Arc, time::Duration};
 const SM_AUTHORITY_NOTIFICATION_CHANNEL: &str = "northstar_sm_authority_v1";
 
@@ -29,7 +29,7 @@ async fn run_database_authority_listener(
     // its socket after a PostgreSQL failover. It is deliberately unrelated to
     // the application PgPool, so a blocked LISTEN cannot consume one of the
     // request/transaction connections.
-    let listener_pool = PgPoolOptions::new()
+    let listener_pool = northstar_postgres::pool::options()
         .min_connections(0)
         .max_connections(SM_AUTHORITY_LISTENER_MAX_CONNECTIONS)
         .max_lifetime(None)

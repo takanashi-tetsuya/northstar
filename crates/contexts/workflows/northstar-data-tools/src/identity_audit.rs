@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Row, Transaction};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -365,7 +365,7 @@ fn database_url_from_env() -> Result<Zeroizing<String>> {
 }
 
 async fn read_only_pool(database_url: &str) -> Result<PgPool> {
-    PgPoolOptions::new()
+    northstar_postgres::pool::options()
         .max_connections(1)
         .min_connections(0)
         .acquire_timeout(Duration::from_secs(10))

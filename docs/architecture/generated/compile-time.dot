@@ -1329,6 +1329,8 @@ digraph compile_time {
   "northstar-postgres" -> "anyhow";
   "northstar-postgres" -> "chrono";
   "northstar-postgres" -> "sqlx";
+  "northstar-postgres" -> "tokio";
+  "northstar-postgres" -> "tracing";
   "northstar-presence-core" -> "northstar-xmpp-types";
   "northstar-protocol-runtime" -> "dashmap";
   "northstar-protocol-runtime" -> "northstar-session-core";

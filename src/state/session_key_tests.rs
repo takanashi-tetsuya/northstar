@@ -1,18 +1,17 @@
 use super::{
     api_keyrings, append_suspended_muc_suffix_to_snapshot, begin_suspended_muc_route_transition,
     canonical_suspended_muc_endpoint, complete_snapshot_owned_handoff, encode_api_control_entropy,
-    ephemeral_api_control_secret, federation_rule_matches, insert_restored_muc_occupant,
-    move_local_muc_nickname_exact_in, muc_actor_identity_matches,
-    muc_suspended_teardown_identity_matches, promote_suspended_muc_buffer,
-    publish_local_muc_join_if_vacant_in, rebind_local_federated_muc_occupant_exact_in,
-    refresh_local_muc_policy_exact_in, refresh_local_muc_presence_exact_in,
-    remove_local_muc_occupant_exact_from, runtime_control_startup_retry_delay,
-    seal_suspended_muc_buffer, service_control_applies, session_lookup,
-    set_local_muc_affiliation_exact_in, set_local_muc_role_exact_in,
+    ephemeral_api_control_secret, insert_restored_muc_occupant, move_local_muc_nickname_exact_in,
+    muc_actor_identity_matches, muc_suspended_teardown_identity_matches,
+    promote_suspended_muc_buffer, publish_local_muc_join_if_vacant_in,
+    rebind_local_federated_muc_occupant_exact_in, refresh_local_muc_policy_exact_in,
+    refresh_local_muc_presence_exact_in, remove_local_muc_occupant_exact_from,
+    runtime_control_startup_retry_delay, seal_suspended_muc_buffer, service_control_applies,
+    session_lookup, set_local_muc_affiliation_exact_in, set_local_muc_role_exact_in,
     snapshot_suspended_muc_buffer_for_resume, suspended_muc_resume_actor_matches,
-    suspended_occupant_is_created, transfer_muc_suffix_to_checkpoint, FederationWritePolicy,
-    JoinedMucMembership, LocalMucJoinPublication, LocalMucNicknameMove, LocalMucOccupantIdentity,
-    MucOccupant, MucOccupantEndpoint, SerializableMucOccupant, SessionLookup, SuspendedMucEndpoint,
+    suspended_occupant_is_created, transfer_muc_suffix_to_checkpoint, JoinedMucMembership,
+    LocalMucJoinPublication, LocalMucNicknameMove, LocalMucOccupantIdentity, MucOccupant,
+    MucOccupantEndpoint, SerializableMucOccupant, SessionLookup, SuspendedMucEndpoint,
     SuspendedMucPhase, SuspendedMucRoute,
 };
 use crate::api::contexts::omemo_poll::{
@@ -117,123 +116,6 @@ fn route_removal_signal_retains_the_exact_terminal_state_for_late_subscribers() 
         *late.borrow(),
         "subscribing after compare-and-remove must not lose the terminal event"
     );
-}
-
-#[tokio::test]
-async fn unchanged_island_refresh_does_not_wait_for_held_read_guard() {
-    use std::future::Future;
-    use std::task::{Context, Poll, Waker};
-
-    for enabled in [false, true] {
-        let policy = FederationWritePolicy::new(enabled);
-        let held_read = if enabled {
-            // A raw reader also proves the true no-op does not acquire
-            // the exclusive gate; delivery itself is already forbidden.
-            policy.gate.read().await
-        } else {
-            policy.permit().await.expect("federation starts enabled")
-        };
-        let mut refresh = std::pin::pin!(policy.refresh(enabled));
-        let mut context = Context::from_waker(Waker::noop());
-        assert_eq!(refresh.as_mut().poll(&mut context), Poll::Ready(enabled));
-        assert_eq!(policy.enabled(), enabled);
-        drop(held_read);
-    }
-}
-
-#[tokio::test]
-async fn island_refresh_transition_fences_queued_delivery_despite_concurrent_noop() {
-    use std::future::Future;
-    use std::task::{Context, Poll, Waker};
-
-    let policy = FederationWritePolicy::new(false);
-    let held_read = policy.permit().await.expect("federation starts enabled");
-    let mut transition = std::pin::pin!(policy.refresh(true));
-    let mut queued_delivery = std::pin::pin!(policy.permit());
-    let mut context = Context::from_waker(Waker::noop());
-    assert_eq!(transition.as_mut().poll(&mut context), Poll::Pending);
-    assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
-
-    let mut unchanged = std::pin::pin!(policy.refresh(false));
-    assert_eq!(unchanged.as_mut().poll(&mut context), Poll::Ready(false));
-    assert!(!policy.enabled());
-    assert_eq!(transition.as_mut().poll(&mut context), Poll::Pending);
-    assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
-
-    drop(held_read);
-    assert_eq!(transition.as_mut().poll(&mut context), Poll::Ready(false));
-    assert!(policy.enabled());
-    assert!(matches!(
-        queued_delivery.as_mut().poll(&mut context),
-        Poll::Ready(None)
-    ));
-}
-
-#[tokio::test]
-async fn island_refresh_reopening_waits_for_gate_and_returns_locked_previous_value() {
-    use std::future::Future;
-    use std::task::{Context, Poll, Waker};
-
-    for concurrent_apply in [false, true] {
-        let policy = FederationWritePolicy::new(true);
-        let held_read = policy.gate.read().await;
-        let mut earlier_apply = std::pin::pin!(policy.apply(false));
-        let mut context = Context::from_waker(Waker::noop());
-        if concurrent_apply {
-            assert_eq!(earlier_apply.as_mut().poll(&mut context), Poll::Pending);
-        }
-        let mut transition = std::pin::pin!(policy.refresh(false));
-        let mut queued_delivery = std::pin::pin!(policy.permit());
-        assert_eq!(transition.as_mut().poll(&mut context), Poll::Pending);
-        assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
-        assert!(policy.enabled());
-
-        drop(held_read);
-        if concurrent_apply {
-            assert_eq!(earlier_apply.as_mut().poll(&mut context), Poll::Ready(()));
-            assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
-        }
-        // The slow path returns the swap's value after the exclusive
-        // wait, including when an earlier apply changed the initial read.
-        assert_eq!(
-            transition.as_mut().poll(&mut context),
-            Poll::Ready(!concurrent_apply)
-        );
-        assert!(!policy.enabled());
-        assert!(matches!(
-            queued_delivery.as_mut().poll(&mut context),
-            Poll::Ready(Some(_))
-        ));
-    }
-}
-
-#[tokio::test]
-async fn island_mode_transition_waits_for_and_fences_federation_writes() {
-    let policy = Arc::new(FederationWritePolicy::new(false));
-    let permit = policy.permit().await.expect("federation starts enabled");
-    let transition_policy = Arc::clone(&policy);
-    let transition = tokio::spawn(async move {
-        transition_policy.apply(true).await;
-    });
-
-    tokio::task::yield_now().await;
-    assert!(
-        !transition.is_finished(),
-        "the kill switch must wait for an in-flight socket-write boundary"
-    );
-    drop(permit);
-    tokio::time::timeout(Duration::from_secs(1), transition)
-        .await
-        .expect("island transition completes after the write boundary")
-        .expect("island transition task succeeds");
-    assert!(policy.enabled());
-    assert!(
-        policy.permit().await.is_none(),
-        "queued writers must observe island mode after the transition"
-    );
-
-    policy.apply(false).await;
-    assert!(policy.permit().await.is_some());
 }
 
 #[test]
@@ -1391,27 +1273,6 @@ fn cluster_muc_epoch_is_backward_compatible_and_exact() {
     let round_trip: SerializableMucOccupant =
         serde_json::from_str(&serde_json::to_string(&current).unwrap()).unwrap();
     assert_eq!(round_trip.sm_session_id, Some(id));
-}
-
-#[test]
-fn federation_entity_rules_follow_domain_bare_and_full_jid_specificity() {
-    let phone =
-        northstar_xmpp_types::jid::CanonicalJid::parse("alice@remote.example/Phone").unwrap();
-    let laptop =
-        northstar_xmpp_types::jid::CanonicalJid::parse("alice@remote.example/Laptop").unwrap();
-    let bob = northstar_xmpp_types::jid::CanonicalJid::parse("bob@remote.example/Phone").unwrap();
-    assert!(federation_rule_matches("remote.example", &phone));
-    assert!(federation_rule_matches("alice@remote.example", &phone));
-    assert!(federation_rule_matches(
-        "alice@remote.example/Phone",
-        &phone
-    ));
-    assert!(!federation_rule_matches(
-        "alice@remote.example/Phone",
-        &laptop
-    ));
-    assert!(!federation_rule_matches("alice@remote.example", &bob));
-    assert!(!federation_rule_matches("other.example", &phone));
 }
 
 #[test]

@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+pub mod policy;
+
 pub const DIALBACK_NS: &str = "jabber:server:dialback";
 pub const STREAM_LIMITS_NS: &str = "urn:xmpp:stream-limits:0";
 pub const MAX_S2S_STANZA_BYTES: usize = 1024 * 1024;

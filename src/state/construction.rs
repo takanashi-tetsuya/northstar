@@ -605,7 +605,7 @@ impl AppState {
                 s2s_tls_port: config.s2s_tls_bind.port(),
             },
             Arc::clone(&registration_closed),
-            Arc::clone(&federation_write_policy.island_mode),
+            federation_write_policy.island_flag(),
         );
         let omemo_recovery_poll_context = omemo_poll::OmemoRecoveryPollContext::new(
             crate::services::omemo_recovery::OmemoRecoveryPollService::new(

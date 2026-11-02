@@ -219,7 +219,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::OwnedSemaphorePermit;
-use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use zeroize::{Zeroize, Zeroizing};
@@ -271,6 +270,8 @@ use crate::xmpp::local_routes::{
     session::{AccountRevocationRoutes, OnlineSession, SmPresenceEpoch, SmStagedRouteClaim},
 };
 use crate::xmpp::local_routes::{muc_table::*, session_table::*, suspended_muc::*};
+use northstar_federation_application::write_policy::FederationWritePolicy;
+use northstar_federation_core::policy::RuntimeFederationPolicy;
 use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
 use northstar_room_core::occupancy::{LocalMucJoinPublication, LocalMucNicknameMove};
 use northstar_xml_builder::escape::attr_escape;

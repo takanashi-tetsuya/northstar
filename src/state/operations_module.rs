@@ -94,7 +94,7 @@ impl OperationsModule {
                 configured_registration_mode: config.configured_registration_mode(),
                 registration_dependency_locked: config.registration_dependency_locked(),
                 registration_closed: Arc::clone(registration_closed),
-                island_mode: Arc::clone(&federation_write_policy.island_mode),
+                island_mode: federation_write_policy.island_flag(),
                 presence: Arc::new(api_query_presence::LocalApiQueryPresence {
                     sessions: Arc::clone(sessions),
                     occupants: Arc::clone(muc_occupants),

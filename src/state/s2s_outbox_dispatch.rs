@@ -1,8 +1,7 @@
 //! Durable federation outbox claims, policy, retry and local bounce effects.
 
 use super::{
-    federation_rule_matches, session_entries_for_in, AppState, FederationWritePolicy,
-    OnlineSession, RuntimeFederationPolicy,
+    session_entries_for_in, AppState, FederationWritePolicy, OnlineSession, RuntimeFederationPolicy,
 };
 use crate::s2s::{BidiRouteSnapshot, FederationEnvelope, S2sConnectionRegistry};
 use dashmap::DashMap;
@@ -137,10 +136,7 @@ impl S2sOutboxDispatchContext {
         {
             return false;
         }
-        let policy = self.runtime_policy.load();
-        let matches = |rule: &str| federation_rule_matches(rule, &entity);
-        !policy.blacklist.iter().any(|entry| matches(entry))
-            && (policy.whitelist.is_empty() || policy.whitelist.iter().any(|entry| matches(entry)))
+        self.runtime_policy.load().allows_entity(&entity)
     }
 
     pub(crate) fn component_domain_configured(&self, domain: &str) -> bool {

@@ -7,6 +7,7 @@ pub mod dispatch;
 pub mod outbox;
 pub mod sm_outbox;
 pub mod telemetry;
+pub mod write_policy;
 use uuid::Uuid;
 
 /// In-flight federation transport envelope.

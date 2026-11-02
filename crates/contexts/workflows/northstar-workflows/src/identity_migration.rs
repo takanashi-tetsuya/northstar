@@ -8,6 +8,13 @@
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 
+pub mod authorization_identity;
+pub mod jid_identity;
+pub mod profile_identity;
+pub mod push_identity;
+pub mod remaining_identity;
+pub mod session_identity;
+
 pub async fn canonicalize_all_identity_storage(pool: &PgPool, domain: &str) -> Result<()> {
     let mut transaction = pool
         .begin()
@@ -22,15 +29,15 @@ pub async fn canonicalize_all_identity_storage(pool: &PgPool, domain: &str) -> R
         .await
         .context("could not acquire the atomic RFC 7622 identity migration gate")?;
 
-    super::jid_identity::canonicalize_identity_storage_in_transaction(&mut transaction)
+    jid_identity::canonicalize_identity_storage_in_transaction(&mut transaction)
         .await
         .context("PubSub/PEP identity migration failed")?;
-    super::authorization_identity::canonicalize_authorization_identity_storage_in_transaction(
+    authorization_identity::canonicalize_authorization_identity_storage_in_transaction(
         &mut transaction,
     )
     .await
     .context("authorization identity migration failed")?;
-    super::push_identity::canonicalize_push_identity_storage_in_transaction(&mut transaction)
+    push_identity::canonicalize_push_identity_storage_in_transaction(&mut transaction)
         .await
         .context("push identity migration failed")?;
     northstar_room_postgres::mix_identity::canonicalize_mix_identity_storage_in_transaction(
@@ -38,15 +45,13 @@ pub async fn canonicalize_all_identity_storage(pool: &PgPool, domain: &str) -> R
     )
     .await
     .context("MIX identity migration failed")?;
-    super::profile_identity::canonicalize_profile_identity_storage_in_transaction(&mut transaction)
+    profile_identity::canonicalize_profile_identity_storage_in_transaction(&mut transaction)
         .await
         .context("profile PEP identity migration failed")?;
-    super::remaining_identity::canonicalize_remaining_identity_storage_in_transaction(
-        &mut transaction,
-    )
-    .await
-    .context("remaining durable identity metadata migration failed")?;
-    super::session_identity::canonicalize_session_authorization_storage_in_transaction(
+    remaining_identity::canonicalize_remaining_identity_storage_in_transaction(&mut transaction)
+        .await
+        .context("remaining durable identity metadata migration failed")?;
+    session_identity::canonicalize_session_authorization_storage_in_transaction(
         &mut transaction,
         domain,
     )
@@ -58,6 +63,29 @@ pub async fn canonicalize_all_identity_storage(pool: &PgPool, domain: &str) -> R
         .await
         .context("could not commit atomic RFC 7622 identity migration")?;
     Ok(())
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub async fn migrate_for_tests(pool: &PgPool) -> Result<()> {
+    northstar_postgres::MIGRATOR
+        .run(pool)
+        .await
+        .context("database migration failed")?;
+    jid_identity::canonicalize_identity_storage(pool)
+        .await
+        .context("RFC 7622 PubSub/PEP identity migration failed")?;
+    authorization_identity::canonicalize_authorization_identity_storage(pool)
+        .await
+        .context("RFC 7622 authorization JID identity migration failed")?;
+    push_identity::canonicalize_push_identity_storage(pool)
+        .await
+        .context("RFC 7622 push service JID identity migration failed")?;
+    northstar_room_postgres::mix_identity::canonicalize_mix_identity_storage(pool)
+        .await
+        .context("RFC 7622 MIX JID identity migration failed")?;
+    profile_identity::canonicalize_profile_identity_storage(pool)
+        .await
+        .context("RFC 7622 profile PEP ItemID migration failed")
 }
 
 #[cfg(test)]
@@ -79,7 +107,7 @@ mod tests {
             .connect(&url)
             .await
             .unwrap();
-        crate::db::migrate(&pool).await.unwrap();
+        migrate_for_tests(&pool).await.unwrap();
 
         // Re-run two independently keyed subsystems as one global migration.
         // A late outbox collision must roll back the earlier PubSub rewrite and

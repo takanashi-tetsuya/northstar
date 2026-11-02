@@ -15,6 +15,7 @@ pub mod api_pages;
 pub mod api_queries;
 pub mod governance_repository;
 pub mod http_login_repository;
+pub mod identity_migration;
 pub mod invitation_admin_repository;
 pub mod mam_repository;
 pub mod mam_room;

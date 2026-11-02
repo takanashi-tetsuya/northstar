@@ -54,8 +54,8 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
 fi
 export TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")"
 
-test_name="db::identity_migration::tests::global_ulabel_migration_rolls_back_every_subsystem_then_retries_idempotently"
-if ! output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture --test-threads=1 2>&1)"; then
+test_name="identity_migration::tests::global_ulabel_migration_rolls_back_every_subsystem_then_retries_idempotently"
+if ! output="$(cargo test --locked --offline -p northstar-workflows "$test_name" -- --ignored --exact --nocapture --test-threads=1 2>&1)"; then
   printf '%s\n' "$output"
   exit 1
 fi

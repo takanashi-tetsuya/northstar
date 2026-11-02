@@ -4415,6 +4415,10 @@
       ],
       [
         "northstar-workflows",
+        "northstar-pubsub-core"
+      ],
+      [
+        "northstar-workflows",
         "northstar-room-application"
       ],
       [
@@ -4432,6 +4436,10 @@
       [
         "northstar-workflows",
         "northstar-security"
+      ],
+      [
+        "northstar-workflows",
+        "northstar-session-core"
       ],
       [
         "northstar-workflows",
@@ -4476,6 +4484,10 @@
       [
         "northstar-workflows",
         "thiserror"
+      ],
+      [
+        "northstar-workflows",
+        "tokio"
       ],
       [
         "northstar-workflows",

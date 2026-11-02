@@ -1567,11 +1567,13 @@ digraph compile_time {
   "northstar-workflows" -> "northstar-operations-core";
   "northstar-workflows" -> "northstar-operations-postgres";
   "northstar-workflows" -> "northstar-postgres";
+  "northstar-workflows" -> "northstar-pubsub-core";
   "northstar-workflows" -> "northstar-room-application";
   "northstar-workflows" -> "northstar-room-postgres";
   "northstar-workflows" -> "northstar-roster-core";
   "northstar-workflows" -> "northstar-roster-postgres";
   "northstar-workflows" -> "northstar-security";
+  "northstar-workflows" -> "northstar-session-core";
   "northstar-workflows" -> "northstar-upload-postgres";
   "northstar-workflows" -> "northstar-xep-0016";
   "northstar-workflows" -> "northstar-xml-builder";
@@ -1583,6 +1585,7 @@ digraph compile_time {
   "northstar-workflows" -> "sqlx";
   "northstar-workflows" -> "subtle";
   "northstar-workflows" -> "thiserror";
+  "northstar-workflows" -> "tokio";
   "northstar-workflows" -> "tracing";
   "northstar-workflows" -> "uuid";
   "northstar-workflows" -> "zeroize";

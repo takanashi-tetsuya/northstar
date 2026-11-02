@@ -6,7 +6,7 @@
 //! primary key and the stored `<item id>` are changed in the same transaction.
 
 use anyhow::{Context, Result};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use sqlx::PgPool;
 use sqlx::{Postgres, Row, Transaction};
 use std::collections::BTreeMap;
@@ -27,7 +27,7 @@ struct ProfileItemIdentity {
 
 pub(crate) use northstar_pubsub_core::canonical_profile_item_id;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn canonicalize_profile_identity_storage(pool: &PgPool) -> Result<()> {
     let mut transaction = pool.begin().await?;
     canonicalize_profile_identity_storage_in_transaction(&mut transaction).await?;
@@ -173,7 +173,6 @@ fn ensure_no_collisions(rows: &[ProfileItemIdentity]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
 
     async fn user(pool: &PgPool, prefix: &str) -> Uuid {
         let id = Uuid::new_v4();
@@ -230,7 +229,9 @@ mod tests {
             .connect(&url)
             .await
             .unwrap();
-        db::migrate(&pool).await.unwrap();
+        crate::identity_migration::migrate_for_tests(&pool)
+            .await
+            .unwrap();
         reset_marker(&pool).await;
 
         let exact_owner = user(&pool, "profileexact").await;

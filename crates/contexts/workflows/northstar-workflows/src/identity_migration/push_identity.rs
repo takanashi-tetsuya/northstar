@@ -6,7 +6,7 @@
 //! validated and all canonical collisions are rejected before the first write.
 
 use anyhow::{Context, Result};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use sqlx::PgPool;
 use sqlx::{Postgres, Row, Transaction};
 use std::collections::{BTreeMap, BTreeSet};
@@ -41,7 +41,7 @@ fn canonical_service(table: &str, row_key: &str, value: &str) -> Result<String> 
 }
 
 /// Canonicalize the subscription/delivery parent-child graph exactly once.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn canonicalize_push_identity_storage(pool: &PgPool) -> Result<()> {
     let mut transaction = pool.begin().await?;
     canonicalize_push_identity_storage_in_transaction(&mut transaction).await?;
@@ -284,7 +284,6 @@ fn ensure_children_match_parents(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
 
     #[tokio::test]
     #[ignore = "requires a random isolated TEST_DATABASE_URL PostgreSQL schema"]
@@ -296,7 +295,9 @@ mod tests {
             .connect(&url)
             .await
             .unwrap();
-        db::migrate(&pool).await.unwrap();
+        crate::identity_migration::migrate_for_tests(&pool)
+            .await
+            .unwrap();
         let user = northstar_auth_postgres::users::create_user(
             &pool,
             &format!("pushid{}", &Uuid::new_v4().simple().to_string()[..12]),

@@ -22,7 +22,6 @@ pub(crate) mod authentication_effects;
 #[cfg(test)]
 mod authentication_tests;
 pub mod authority_listener;
-pub mod authorization_identity;
 pub(crate) mod background_housekeeping_repository;
 pub mod capacity;
 pub(crate) mod capacity_maintenance_repository;
@@ -39,8 +38,6 @@ mod direct_spool_wake_repository_tests;
 #[cfg(test)]
 mod fast_tests;
 pub(crate) mod federation_outbox_repository;
-pub mod identity_migration;
-pub mod jid_identity;
 pub(crate) mod maintenance_ownership;
 #[cfg(test)]
 mod message_repository_tests;
@@ -77,12 +74,9 @@ pub mod privacy;
 #[cfg(test)]
 mod privacy_service_tests;
 pub mod profile;
-pub mod profile_identity;
-pub mod push_identity;
 #[cfg(test)]
 mod push_tests;
 pub(crate) mod readiness_repository;
-pub mod remaining_identity;
 pub mod replay;
 pub mod replay_repository;
 pub mod retention;
@@ -95,7 +89,6 @@ pub(crate) mod s2s_sm_outbox_repository;
 #[cfg(test)]
 mod s2s_tests;
 pub(crate) mod session_authority_sweep_repository;
-pub mod session_identity;
 pub(crate) mod session_termination_authority_repository;
 pub mod sm;
 pub mod sm_repository;
@@ -117,25 +110,7 @@ pub use northstar_pubsub_postgres::*;
 
 #[cfg(test)]
 pub async fn migrate(pool: &PgPool) -> Result<()> {
-    MIGRATOR
-        .run(pool)
-        .await
-        .context("database migration failed")?;
-    jid_identity::canonicalize_identity_storage(pool)
-        .await
-        .context("RFC 7622 PubSub/PEP identity migration failed")?;
-    authorization_identity::canonicalize_authorization_identity_storage(pool)
-        .await
-        .context("RFC 7622 authorization JID identity migration failed")?;
-    push_identity::canonicalize_push_identity_storage(pool)
-        .await
-        .context("RFC 7622 push service JID identity migration failed")?;
-    northstar_room_postgres::mix_identity::canonicalize_mix_identity_storage(pool)
-        .await
-        .context("RFC 7622 MIX JID identity migration failed")?;
-    profile_identity::canonicalize_profile_identity_storage(pool)
-        .await
-        .context("RFC 7622 profile PEP ItemID migration failed")
+    northstar_workflows::identity_migration::migrate_for_tests(pool).await
 }
 
 pub async fn migrate_for_domain(pool: &PgPool, domain: &str) -> Result<()> {
@@ -173,7 +148,7 @@ pub async fn migrate_for_domain(pool: &PgPool, domain: &str) -> Result<()> {
                 .await
                 .context("database migration failed")?;
         }
-        identity_migration::canonicalize_all_identity_storage(pool, domain)
+        northstar_workflows::identity_migration::canonicalize_all_identity_storage(pool, domain)
             .await
             .context("atomic RFC 7622 A-label to U-label identity migration failed")
     }

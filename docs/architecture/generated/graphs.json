@@ -2471,6 +2471,10 @@
       ],
       [
         "northstar-federation-core",
+        "base64"
+      ],
+      [
+        "northstar-federation-core",
         "chrono"
       ],
       [

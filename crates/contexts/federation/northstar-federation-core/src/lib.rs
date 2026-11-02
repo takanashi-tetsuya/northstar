@@ -12,6 +12,7 @@ use uuid::Uuid;
 pub mod dialback;
 pub mod policy;
 pub mod sm;
+pub mod wire;
 
 pub const DIALBACK_NS: &str = "jabber:server:dialback";
 pub const STREAM_LIMITS_NS: &str = "urn:xmpp:stream-limits:0";

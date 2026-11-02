@@ -1081,6 +1081,7 @@ digraph compile_time {
   "northstar-federation-application" -> "tracing";
   "northstar-federation-application" -> "uuid";
   "northstar-federation-core" -> "anyhow";
+  "northstar-federation-core" -> "base64";
   "northstar-federation-core" -> "chrono";
   "northstar-federation-core" -> "hmac";
   "northstar-federation-core" -> "northstar-xml-builder";

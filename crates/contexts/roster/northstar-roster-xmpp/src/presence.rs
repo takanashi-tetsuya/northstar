@@ -21,11 +21,10 @@ use crate::privacy::PrivacySession;
 use crate::roster::RosterSession;
 
 mod availability;
-mod avatar_update;
 mod subscriptions;
 
 pub use self::availability::{full_jid_probe_available_response, presence_probe_status_response};
-pub use self::avatar_update::inject_vcard_avatar_hash;
+pub use northstar_xmpp_avatar::vcard_update::inject_vcard_avatar_hash;
 
 use self::availability::{
     answer_directed_presence_probe, broadcast_directed_unavailable, commit_directed_presence,
@@ -744,6 +743,3 @@ fn should_probe_contact_on_presence(first_available: bool, subscription: &str) -
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod vcard_presence_tests;

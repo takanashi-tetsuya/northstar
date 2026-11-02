@@ -443,7 +443,7 @@ pub(super) async fn listen_once<A: ClusterAdapters>(
                                     .and_then(|hash| {
                                         let document =
                                             roxmltree::Document::parse(&presence).ok()?;
-                                        Some(northstar_roster_xmpp::presence::inject_vcard_avatar_hash(
+                                        Some(northstar_xmpp_avatar::vcard_update::inject_vcard_avatar_hash(
                                             &presence,
                                             document.root_element(),
                                             hash.as_deref(),

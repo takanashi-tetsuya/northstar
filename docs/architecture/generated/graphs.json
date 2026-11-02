@@ -4063,6 +4063,10 @@
       ],
       [
         "northstar-roster-xmpp",
+        "northstar-xmpp-avatar"
+      ],
+      [
+        "northstar-roster-xmpp",
         "northstar-xmpp-types"
       ],
       [
@@ -5003,6 +5007,10 @@
       ],
       [
         "northstar-xep-0045",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-xep-0045",
         "northstar-xmpp-types"
       ],
       [
@@ -5480,6 +5488,10 @@
       [
         "northstar-xmpp-avatar",
         "base64"
+      ],
+      [
+        "northstar-xmpp-avatar",
+        "northstar-xml-builder"
       ],
       [
         "northstar-xmpp-avatar",

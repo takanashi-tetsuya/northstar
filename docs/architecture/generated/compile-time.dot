@@ -1481,6 +1481,7 @@ digraph compile_time {
   "northstar-roster-xmpp" -> "northstar-xep-0016";
   "northstar-roster-xmpp" -> "northstar-xep-0191";
   "northstar-roster-xmpp" -> "northstar-xml-builder";
+  "northstar-roster-xmpp" -> "northstar-xmpp-avatar";
   "northstar-roster-xmpp" -> "northstar-xmpp-types";
   "northstar-roster-xmpp" -> "roxmltree";
   "northstar-roster-xmpp" -> "tracing";
@@ -1716,6 +1717,7 @@ digraph compile_time {
   "northstar-xep-0016" -> "northstar-xep-core";
   "northstar-xep-0016" -> "northstar-xmpp-types";
   "northstar-xep-0045" -> "northstar-xep-core";
+  "northstar-xep-0045" -> "northstar-xml-builder";
   "northstar-xep-0045" -> "northstar-xmpp-types";
   "northstar-xep-0045" -> "roxmltree";
   "northstar-xep-0045" -> "thiserror";
@@ -1836,6 +1838,7 @@ digraph compile_time {
   "northstar-xml-framing" -> "anyhow";
   "northstar-xml-framing" -> "thiserror";
   "northstar-xmpp-avatar" -> "base64";
+  "northstar-xmpp-avatar" -> "northstar-xml-builder";
   "northstar-xmpp-avatar" -> "roxmltree";
   "northstar-xmpp-avatar" -> "sha1";
   "northstar-xmpp-types" -> "anyhow";

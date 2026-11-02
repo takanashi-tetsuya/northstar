@@ -424,28 +424,6 @@ pub fn should_broadcast_offline_affiliation_change(
     )
 }
 
-pub fn muc_offline_affiliation_change_notice(
-    room_jid: &str,
-    target_bare_jid: &str,
-    affiliation: &str,
-    nick: Option<&str>,
-    reason: Option<&str>,
-) -> String {
-    let mut item = XmlElement::new("item")
-        .attr("affiliation", affiliation)
-        .attr("jid", target_bare_jid)
-        .attr("role", "none")
-        .optional_attr("nick", nick);
-    if let Some(reason) = reason {
-        item.push_child(XmlElement::new("reason").text(reason.to_owned()));
-    }
-    XmlElement::namespaced("message", "jabber:client")
-        .attr("from", room_jid)
-        .attr("type", "normal")
-        .child(XmlElement::namespaced("x", "http://jabber.org/protocol/muc#user").child(item))
-        .finish()
-}
-
 pub async fn deliver_muc_offline_affiliation_change_notice(
     state: &impl MucHost,
     room_jid: &str,
@@ -454,8 +432,13 @@ pub async fn deliver_muc_offline_affiliation_change_notice(
     nick: Option<&str>,
     reason: Option<&str>,
 ) {
-    let notice =
-        muc_offline_affiliation_change_notice(room_jid, target_bare_jid, affiliation, nick, reason);
+    let notice = northstar_xep_0045::notice::offline_affiliation_change_notice(
+        room_jid,
+        target_bare_jid,
+        affiliation,
+        nick,
+        reason,
+    );
     for (_, recipient) in state.muc_occupants_for(room_jid) {
         let delivery = set_to(&notice, &recipient.full_jid);
         if !state.deliver_to_muc_occupant(&recipient, delivery).await {

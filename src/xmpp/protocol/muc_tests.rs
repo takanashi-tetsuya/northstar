@@ -1,14 +1,13 @@
 use super::{
     apply_muc_history_bounds, can_retrieve_muc_affiliation_list, canonical_local_muc_room,
     classify_muc_admin_items, is_exact_muc_removal_target, muc_admin_batch_error,
-    muc_offline_affiliation_change_notice, muc_presence_payload, muc_sender_is_blocked,
-    muc_voice_request, parse_moderation_request, parse_muc_admin_batch, parse_muc_admin_raw_items,
-    parse_muc_author_retraction, parse_muc_history_request, parse_muc_invitation_decline,
-    parse_muc_origin_id, parse_muc_subject_command, parse_muc_voice_form,
-    should_broadcast_offline_affiliation_change, MalformedMucStanza, ModerationRequest,
-    MucAdminBatchChange, MucAdminBatchOutcome, MucAdminChange, MucAdminMutationKind,
-    MucAdminParseError, MucAdminRawItem, MucHistoryRequest, MucPostCommitAdmissionError,
-    MucPostCommitPlan, MucVoiceForm,
+    muc_presence_payload, muc_sender_is_blocked, muc_voice_request, parse_moderation_request,
+    parse_muc_admin_batch, parse_muc_admin_raw_items, parse_muc_author_retraction,
+    parse_muc_history_request, parse_muc_invitation_decline, parse_muc_origin_id,
+    parse_muc_subject_command, parse_muc_voice_form, should_broadcast_offline_affiliation_change,
+    MalformedMucStanza, ModerationRequest, MucAdminBatchChange, MucAdminBatchOutcome,
+    MucAdminChange, MucAdminMutationKind, MucAdminParseError, MucAdminRawItem, MucHistoryRequest,
+    MucPostCommitAdmissionError, MucPostCommitPlan, MucVoiceForm,
 };
 
 #[test]
@@ -537,7 +536,7 @@ fn offline_affiliation_notices_are_identity_safe_and_structurally_exact() {
         true, false, "member", "member"
     ));
 
-    let xml = muc_offline_affiliation_change_notice(
+    let xml = northstar_xep_0045::notice::offline_affiliation_change_notice(
         "room@conference.example.test",
         "new.member@example.test",
         "member",

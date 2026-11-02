@@ -2621,6 +2621,7 @@ dependencies = [
  "northstar-xep-0016",
  "northstar-xep-0191",
  "northstar-xml-builder",
+ "northstar-xmpp-avatar",
  "northstar-xmpp-types",
  "roxmltree",
  "tracing",
@@ -2958,6 +2959,7 @@ name = "northstar-xep-0045"
 version = "0.1.0"
 dependencies = [
  "northstar-xep-core",
+ "northstar-xml-builder",
  "northstar-xmpp-types",
  "roxmltree",
  "serde",
@@ -3245,6 +3247,7 @@ name = "northstar-xmpp-avatar"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "northstar-xml-builder",
  "roxmltree",
  "sha1",
 ]

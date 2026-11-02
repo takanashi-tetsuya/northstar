@@ -11,6 +11,7 @@ pub mod admin;
 pub mod affiliation;
 pub mod form;
 pub mod message;
+pub mod notice;
 pub mod permissions;
 pub mod presence;
 pub mod role;

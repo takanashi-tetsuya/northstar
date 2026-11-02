@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.97"
 license = "AGPL-3.0-only"
-description = "Capability-free XEP-0084 avatar namespaces, payload checks and image validation for Northstar"
+description = "Capability-free XEP-0084 avatar namespaces, payload checks, image validation and XEP-0153 presence updates for Northstar"
 publish = false
 
 [dependencies]
 base64 = "0.22"
+northstar-xml-builder = { path = "../northstar-xml-builder" }
 roxmltree = "0.20"
 sha1 = "0.10"

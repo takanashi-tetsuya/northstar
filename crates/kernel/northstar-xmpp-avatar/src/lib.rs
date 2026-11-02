@@ -1,5 +1,8 @@
 //! XEP-0084 User Avatar: the data and metadata namespaces, the payload checks of both nodes and
-//! the image checks the vCard-temp avatar projection shares with them.
+//! the image checks the vCard-temp avatar projection shares with them. `vcard_update` holds the
+//! XEP-0153 presence update.
+
+pub mod vcard_update;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use roxmltree::Node;

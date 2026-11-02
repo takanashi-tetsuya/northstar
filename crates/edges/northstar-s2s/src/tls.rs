@@ -28,7 +28,7 @@ const ID_ON_DNS_SRV: &str = "1.3.6.1.5.5.7.8.7";
 const XMPP_SERVER_SERVICE: &str = "_xmpp-server";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum XmppCertificateIdentity {
+pub enum XmppCertificateIdentity {
     DnsId,
     SrvId,
     XmppAddr,
@@ -184,7 +184,7 @@ fn pin_fallback_permitted(revocation_policy_configured: bool) -> bool {
     !revocation_policy_configured
 }
 
-pub(crate) fn s2s_client_config(
+pub fn s2s_client_config(
     tls: &TlsContext,
     ocsp_staple_required: bool,
     direct_tls: bool,
@@ -232,7 +232,7 @@ fn pinned_certificate_valid(
         .any(|expected| bool::from(expected.ct_eq(pin.as_slice())))
 }
 
-pub(crate) fn peer_public_key_pin(certificate: &CertificateDer<'_>) -> Result<[u8; 32]> {
+pub fn peer_public_key_pin(certificate: &CertificateDer<'_>) -> Result<[u8; 32]> {
     let (remaining, parsed) = parse_x509_certificate(certificate.as_ref())
         .map_err(|_| anyhow::anyhow!("could not parse federation end-entity certificate"))?;
     if !remaining.is_empty() {
@@ -241,7 +241,7 @@ pub(crate) fn peer_public_key_pin(certificate: &CertificateDer<'_>) -> Result<[u
     Ok(Sha256::digest(parsed.public_key().raw).into())
 }
 
-pub(crate) fn s2s_server_config(
+pub fn s2s_server_config(
     tls: &TlsContext,
     direct_tls: bool,
 ) -> Result<(Arc<tokio_rustls::rustls::ServerConfig>, u64)> {
@@ -257,7 +257,7 @@ pub(crate) fn s2s_server_config(
 /// A privacy-minimized HTTPS client for XEP-0487 discovery. Unlike an S2S
 /// TLS connection it does not present Northstar's server certificate. Normal
 /// WebPKI hostname verification authenticates every origin and redirect.
-pub(crate) fn host_meta_https_client_config(
+pub fn host_meta_https_client_config(
     tls: &TlsContext,
 ) -> Result<Arc<tokio_rustls::rustls::ClientConfig>> {
     let material = tls.federation_snapshot();
@@ -286,7 +286,7 @@ pub(crate) fn host_meta_https_client_config(
 /// Validate only the certification path and client-auth usage. This is kept
 /// separate from XMPP identity matching so callers cannot accidentally treat
 /// an SRV target hostname as the authenticated XMPP domain.
-pub(crate) fn verify_peer_certificate_chain(
+pub fn verify_peer_certificate_chain(
     tls: &TlsContext,
     certificates: &[CertificateDer<'static>],
 ) -> Result<bool> {
@@ -326,7 +326,7 @@ pub(crate) fn verify_peer_certificate_chain(
 /// the identity types required/encouraged by RFC 6120 section 13.7:
 /// DNS-ID, `_xmpp-server` SRV-ID, and id-on-xmppAddr. CN fallback is
 /// intentionally not used.
-pub(crate) fn verify_peer_xmpp_identity(
+pub fn verify_peer_xmpp_identity(
     certificate: &CertificateDer<'_>,
     domain: &str,
 ) -> Result<Option<XmppCertificateIdentity>> {
@@ -368,7 +368,7 @@ pub(crate) fn verify_peer_xmpp_identity(
     Ok(None)
 }
 
-pub(crate) fn verify_peer_domain(
+pub fn verify_peer_domain(
     tls: &TlsContext,
     certificates: &[CertificateDer<'static>],
     domain: &str,

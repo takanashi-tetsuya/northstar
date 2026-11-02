@@ -173,7 +173,7 @@ impl AppState {
 
     /// Suspended S2S streams. These hold live TLS transports, so they stay out
     /// of the route registry above.
-    pub(crate) fn s2s_resumption(&self) -> &crate::s2s::resume::Registry {
+    pub(crate) fn s2s_resumption(&self) -> &northstar_s2s::resume::Registry {
         &self.federation.s2s_resumption
     }
 

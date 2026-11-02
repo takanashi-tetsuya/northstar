@@ -81,7 +81,7 @@ The framing logic extracted into this crate is consumed by all XMPP transport me
    - Handles RFC 6120 stream resets on `<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>` and `<authenticate xmlns='urn:ietf:params:xml:ns:xmpp-sasl'/>` via `framer.reset_entity()`.
    - Dispatches framing errors to RFC 6120 stream error conditions (`restricted-xml`, `policy-violation`, `not-well-formed`, `unsupported-encoding`) via `stream_error_condition(&error)`.
 
-2. **S2S Inbound/Outbound Transport (`src/s2s/inbound.rs`, `src/s2s/util.rs`)**:
+2. **S2S Inbound/Outbound Transport (`src/s2s/inbound.rs`, `crates/edges/northstar-s2s/src/util.rs`)**:
    - Frames inbound server-to-server streams and dialback connections.
    - Enforces structural limits (`MAX_XML_DEPTH`, `MAX_XML_ELEMENTS`, `MAX_XML_ATTRIBUTES_PER_ELEMENT`) before stanza parsing.
    - Maps framing errors directly to S2S stream error closures.
@@ -94,7 +94,7 @@ The framing logic extracted into this crate is consumed by all XMPP transport me
 4. **BOSH / HTTP Binding (`crates/edges/northstar-stream/src/transport_parsing.rs`)**:
    - Validates XML entity framing and ensures request bodies contain well-formed `<body/>` wrapper frames without exceeding resource ceilings.
 
-5. **HTTP Upload & S2S DNS Framing Verification (`src/api/upload.rs`, `src/s2s/dns.rs`)**:
+5. **HTTP Upload & S2S DNS Framing Verification (`src/api/upload.rs`, `crates/edges/northstar-s2s/src/dns.rs`)**:
    - Verifies transport-level framing headers and enforces structural payload constraints.
 
 ---

@@ -2744,6 +2744,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-s2s"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dashmap",
+ "hickory-resolver",
+ "northstar-federation-application",
+ "northstar-federation-core",
+ "northstar-security",
+ "northstar-xml-builder",
+ "northstar-xml-framing",
+ "northstar-xmpp-types",
+ "openssl",
+ "rustls-webpki",
+ "sha2",
+ "subtle",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "x509-parser 0.18.1",
+]
+
+[[package]]
 name = "northstar-security"
 version = "0.1.0"
 dependencies = [
@@ -4183,6 +4209,7 @@ dependencies = [
  "northstar-roster-postgres",
  "northstar-roster-xmpp",
  "northstar-runtime",
+ "northstar-s2s",
  "northstar-security",
  "northstar-session-application",
  "northstar-session-core",

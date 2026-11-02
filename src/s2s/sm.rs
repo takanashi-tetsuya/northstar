@@ -105,7 +105,7 @@ impl StreamManagement {
             Duration::from_secs(5),
             state
                 .s2s_sm_outbox_service()
-                .renew_pending(&claims, super::resume::WINDOW.as_secs() + 30),
+                .renew_pending(&claims, northstar_s2s::resume::WINDOW.as_secs() + 30),
         )
         .await
         .context("S2S replay lease renewal timed out")?

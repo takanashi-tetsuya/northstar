@@ -9,36 +9,36 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::util::S2sInputState;
+use crate::util::S2sInputState;
 use northstar_federation_core::AdvertisedStreamLimits;
 use northstar_security::tls::CertificateSessionGuard;
 
-pub(crate) const WINDOW: Duration = Duration::from_secs(60);
+pub const WINDOW: Duration = Duration::from_secs(60);
 const MAX_SESSIONS: usize = 128;
 const REPLAY_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) struct Scope {
-    pub(crate) local: String,
-    pub(crate) remote: String,
-    pub(crate) external: bool,
-    pub(crate) bidi: bool,
+pub struct Scope {
+    pub local: String,
+    pub remote: String,
+    pub external: bool,
+    pub bidi: bool,
 }
 
-pub(crate) struct Transport {
-    pub(crate) stream: tokio_rustls::server::TlsStream<TcpStream>,
-    pub(crate) input: S2sInputState,
-    pub(crate) limits: AdvertisedStreamLimits,
-    pub(crate) disconnect: CancellationToken,
-    pub(crate) _certificate: Option<CertificateSessionGuard>,
+pub struct Transport {
+    pub stream: tokio_rustls::server::TlsStream<TcpStream>,
+    pub input: S2sInputState,
+    pub limits: AdvertisedStreamLimits,
+    pub disconnect: CancellationToken,
+    pub _certificate: Option<CertificateSessionGuard>,
 }
 
-pub(crate) struct Request {
-    pub(crate) transport: Transport,
-    pub(crate) h: u32,
-    pub(crate) epoch: Uuid,
+pub struct Request {
+    pub transport: Transport,
+    pub h: u32,
+    pub epoch: Uuid,
     // Rejection returns the new transport so normal negotiation can continue.
-    pub(crate) result: oneshot::Sender<Result<(), Box<Transport>>>,
+    pub result: oneshot::Sender<Result<(), Box<Transport>>>,
 }
 
 #[derive(Clone)]
@@ -49,10 +49,10 @@ struct Entry {
     expires_at: Option<Instant>,
 }
 
-pub(crate) struct Registry {
+pub struct Registry {
     entries: Arc<DashMap<String, Entry>>,
     slots: Arc<Semaphore>,
-    pub(crate) replay_bytes: Arc<Semaphore>,
+    pub replay_bytes: Arc<Semaphore>,
 }
 
 impl Default for Registry {
@@ -65,28 +65,28 @@ impl Default for Registry {
     }
 }
 
-pub(crate) struct Registration {
-    pub(crate) id: String,
-    pub(crate) epoch: Uuid,
+pub struct Registration {
+    pub id: String,
+    pub epoch: Uuid,
     expires_at: Option<Instant>,
     entries: Arc<DashMap<String, Entry>>,
     _slot: OwnedSemaphorePermit,
 }
 
 impl Registration {
-    pub(crate) fn suspend(&mut self, deadline: Instant) {
+    pub fn suspend(&mut self, deadline: Instant) {
         self.expires_at = Some(deadline);
         if let Some(mut entry) = self.entries.get_mut(&self.id) {
             entry.expires_at = Some(deadline);
         }
     }
 
-    pub(crate) fn expired(&self) -> bool {
+    pub fn expired(&self) -> bool {
         self.expires_at
             .is_some_and(|deadline| deadline <= Instant::now())
     }
 
-    pub(crate) fn advance(&mut self) {
+    pub fn advance(&mut self) {
         self.epoch = Uuid::new_v4();
         self.expires_at = None;
         if let Some(mut entry) = self.entries.get_mut(&self.id) {
@@ -103,7 +103,7 @@ impl Drop for Registration {
 }
 
 impl Registry {
-    pub(crate) fn has_suspended_scope(&self, scope: &Scope) -> bool {
+    pub fn has_suspended_scope(&self, scope: &Scope) -> bool {
         let now = Instant::now();
         self.entries.iter().any(|entry| {
             entry.scope == *scope
@@ -112,11 +112,7 @@ impl Registry {
         })
     }
 
-    pub(crate) fn register(
-        &self,
-        scope: Scope,
-        sender: mpsc::Sender<Request>,
-    ) -> Option<Registration> {
+    pub fn register(&self, scope: Scope, sender: mpsc::Sender<Request>) -> Option<Registration> {
         let slot = self.slots.clone().try_acquire_owned().ok()?;
         let id = Uuid::new_v4().to_string();
         let epoch = Uuid::new_v4();
@@ -138,7 +134,7 @@ impl Registry {
         })
     }
 
-    pub(crate) fn lookup(&self, id: &str, scope: &Scope) -> Option<(Uuid, mpsc::Sender<Request>)> {
+    pub fn lookup(&self, id: &str, scope: &Scope) -> Option<(Uuid, mpsc::Sender<Request>)> {
         let entry = self.entries.get(id)?;
         (entry.scope == *scope
             && !entry.sender.is_closed()

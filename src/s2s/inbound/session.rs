@@ -235,13 +235,13 @@ pub(super) async fn drive_authenticated_inbound(
         prepare_domainpart(&local_domain).context("local S2S stream domain became invalid")?;
     let route_key = bidi_connection_key(&local_domain, &domain)
         .context("bidirectional S2S route domains became invalid")?;
-    let scope = super::super::resume::Scope {
+    let scope = northstar_s2s::resume::Scope {
         local: local_domain.clone(),
         remote: domain,
         external: via_external,
         bidi: bidi_enabled,
     };
-    let transport = super::super::resume::Transport {
+    let transport = northstar_s2s::resume::Transport {
         stream: secure,
         input,
         limits: peer_limits,
@@ -307,7 +307,7 @@ pub(super) async fn drive_authenticated_inbound(
 
 pub(super) fn publish_inbound_route(
     state: &AppState,
-    scope: &super::super::resume::Scope,
+    scope: &northstar_s2s::resume::Scope,
     connection_id: uuid::Uuid,
     sender: &mpsc::Sender<FederationEnvelope>,
     disconnect: &tokio_util::sync::CancellationToken,
@@ -346,7 +346,7 @@ pub(super) fn initial_bidi_route_admissible(
 }
 
 pub(super) async fn reject_resume(
-    mut request: super::super::resume::Request,
+    mut request: northstar_s2s::resume::Request,
     condition: &'static str,
     reason: &'static str,
 ) {
@@ -360,10 +360,10 @@ pub(super) async fn reject_resume(
 pub(super) async fn accept_resume(
     state: &AppState,
     sm: &mut super::super::sm::StreamManagement,
-    registration: &mut super::super::resume::Registration,
-    scope: &super::super::resume::Scope,
-    mut request: super::super::resume::Request,
-) -> Result<Option<super::super::resume::Transport>> {
+    registration: &mut northstar_s2s::resume::Registration,
+    scope: &northstar_s2s::resume::Scope,
+    mut request: northstar_s2s::resume::Request,
+) -> Result<Option<northstar_s2s::resume::Transport>> {
     if request.result.is_closed() {
         return Ok(None);
     }
@@ -423,9 +423,9 @@ pub(super) async fn accept_resume(
 }
 
 pub(super) async fn drive_authenticated_inbound_inner(
-    transport: super::super::resume::Transport,
+    transport: northstar_s2s::resume::Transport,
     state: Arc<AppState>,
-    scope: super::super::resume::Scope,
+    scope: northstar_s2s::resume::Scope,
     connection_id: uuid::Uuid,
     sender: mpsc::Sender<FederationEnvelope>,
     mut outgoing: mpsc::Receiver<FederationEnvelope>,
@@ -436,11 +436,11 @@ pub(super) async fn drive_authenticated_inbound_inner(
     let mut sm = super::super::sm::StreamManagement::with_budget(
         state.s2s_resumption().replay_bytes.clone(),
     );
-    let (resume_sender, mut resumes) = mpsc::channel::<super::super::resume::Request>(1);
-    let mut registration: Option<super::super::resume::Registration> = None;
+    let (resume_sender, mut resumes) = mpsc::channel::<northstar_s2s::resume::Request>(1);
+    let mut registration: Option<northstar_s2s::resume::Registration> = None;
     let mut used = false;
     let mut suspended_until = None;
-    let mut resume_window = super::super::resume::WINDOW;
+    let mut resume_window = northstar_s2s::resume::WINDOW;
     let result = async {
     loop {
         if state.island_mode_enabled() || !state.federation_domain_allowed(&scope.remote) {
@@ -482,7 +482,7 @@ pub(super) async fn drive_authenticated_inbound_inner(
         keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // A successful handoff restarts this loop with a freshly authenticated transport.
         let mut restart = false;
-        let active_result: Result<Option<super::super::resume::Request>> = async {
+        let active_result: Result<Option<northstar_s2s::resume::Request>> = async {
         loop {
             let current = transport.as_mut().expect("active S2S transport");
             tokio::select! {
@@ -535,7 +535,7 @@ pub(super) async fn drive_authenticated_inbound_inner(
                                 fail_envelope(&state, &envelope, &anyhow::anyhow!("S2S route moved to resumed stream"), false).await;
                             }
                             let (reply, response) = tokio::sync::oneshot::channel();
-                            let request = super::super::resume::Request { transport: transport.take().expect("active transport"), h, epoch, result: reply };
+                            let request = northstar_s2s::resume::Request { transport: transport.take().expect("active transport"), h, epoch, result: reply };
                             owner.try_send(request).map_err(|_| anyhow::anyhow!("S2S resume owner is busy or gone"))?;
                             match tokio::time::timeout(std::time::Duration::from_secs(15), response).await.context("S2S resume handoff timed out")?? {
                                 Ok(()) => return Ok(None),
@@ -612,7 +612,7 @@ pub(super) async fn drive_authenticated_inbound_inner(
             Ok(None) if restart => continue,
             Ok(None) => return Ok(()),
             Err(error) => {
-                if registration.is_none() || !super::super::util::transport_lost(&error)
+                if registration.is_none() || !northstar_s2s::util::transport_lost(&error)
                     || transport.as_ref().is_some_and(|current| current.disconnect.is_cancelled()) { return Err(error); }
                 let deadline = tokio::time::Instant::now() + resume_window;
                 registration.as_mut().expect("registered resume owner").suspend(deadline);

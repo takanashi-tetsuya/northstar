@@ -134,7 +134,7 @@ if (!releaseCompose.includes('build: !reset null')) {
 if (!read('.github/SECURITY.md').includes(`\`${packageVersion.split('.').slice(0, 2).join('.')}.x\``)) {
   throw new Error('SECURITY.md does not identify the supported release line');
 }
-if (read('src/s2s/dns.rs').includes('User-Agent: Northstar-XMPP/1.1')) {
+if (read('crates/edges/northstar-s2s/src/dns.rs').includes('User-Agent: Northstar-XMPP/1.1')) {
   throw new Error('XEP-0487 HTTP identity retains a stale hard-coded release version');
 }
 if (read('src/xmpp/protocol/dispatch.rs').includes('<os>Linux</os>')) {

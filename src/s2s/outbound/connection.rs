@@ -424,7 +424,7 @@ pub(super) async fn connect_and_multiplex_inner(
     authenticated.store(false, Ordering::Release);
     let error = match active_result { Ok(()) => return Ok(()), Err(error) => error };
     let Some((id, window)) = &resume else { return Err(error); };
-    if first || !super::super::util::transport_lost(&error) || disconnect.is_cancelled() { return Err(error); }
+    if first || !northstar_s2s::util::transport_lost(&error) || disconnect.is_cancelled() { return Err(error); }
     sm.renew(state).await?;
     drop(secure);
     drop(certificate_session);
@@ -448,7 +448,7 @@ pub(super) async fn connect_and_multiplex_inner(
             }.await;
             match attempt {
                 Ok(next) => return Ok(next),
-                Err(error) if super::super::util::transport_lost(&error) => {
+                Err(error) if northstar_s2s::util::transport_lost(&error) => {
                     tokio::time::sleep(backoff).await;
                     backoff = (backoff * 2).min(Duration::from_secs(2));
                 }

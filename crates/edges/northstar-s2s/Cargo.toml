@@ -1,0 +1,34 @@
+[package]
+name = "northstar-s2s"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Server-to-server endpoint discovery, TLS identity, stream IO and resumption of Northstar"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+dashmap = "6.1"
+hickory-resolver = { version = "0.26.1", default-features = false, features = ["dnssec-aws-lc-rs", "system-config", "tokio"] }
+northstar-federation-application = { path = "../../contexts/federation/northstar-federation-application" }
+northstar-federation-core = { path = "../../contexts/federation/northstar-federation-core" }
+northstar-security = { path = "../../platform/northstar-security" }
+northstar-xml-builder = { path = "../../kernel/northstar-xml-builder" }
+northstar-xml-framing = { path = "../../kernel/northstar-xml-framing" }
+northstar-xmpp-types = { path = "../../kernel/northstar-xmpp-types" }
+rustls-webpki = "0.103"
+sha2 = "0.10"
+subtle = "2.6"
+thiserror = "2.0"
+tokio = { version = "1.43", features = ["full"] }
+tokio-rustls = "0.26"
+tokio-util = { version = "0.7", features = ["rt", "io"] }
+tracing = "0.1"
+uuid = { version = "1.12", features = ["v4", "serde"] }
+x509-parser = { version = "0.18.1", default-features = false }
+
+[dev-dependencies]
+northstar-security = { path = "../../platform/northstar-security", features = ["test-support"] }
+openssl = { version = "0.10.81", features = ["vendored"] }
+tokio = { version = "1.43", features = ["test-util"] }

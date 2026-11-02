@@ -1,7 +1,7 @@
-//! Builds federation endpoint discovery's view of the composition root (`s2s::dns`).
+//! Builds federation endpoint discovery's view of the composition root (`northstar_s2s::dns`).
 
 use super::AppState;
-use crate::s2s::dns::FederationDnsContext;
+use northstar_s2s::dns::FederationDnsContext;
 
 impl AppState {
     pub(crate) fn federation_dns_context(&self) -> FederationDnsContext<'_> {

@@ -4,8 +4,8 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use super::*;
 use northstar_federation_core::wire::stream_error_element;
+use northstar_federation_core::{IO_TIMEOUT, MAX_S2S_STANZA_BYTES};
 
 // A peer can write at the advertised boundary while TLS or socket readiness
 // needs another scheduler turn. Do not extend the activity clock; only allow
@@ -20,7 +20,7 @@ const S2S_IDLE_READ_GRACE: Duration = Duration::from_secs(1);
 /// of a new entity. The same state also preserves coalesced frames which were
 /// read together with stream features or an authentication response.
 #[derive(Debug, Default)]
-pub(crate) struct S2sInputState {
+pub struct S2sInputState {
     buffer: String,
     pending_utf8: Vec<u8>,
     framer: XmlEntityFramer,
@@ -30,7 +30,7 @@ impl S2sInputState {
     /// Start a genuinely new XML entity after TLS or successful legacy SASL.
     /// Bytes from the previous negotiation entity cannot be reinterpreted in
     /// the new security context.
-    pub(crate) fn reset_entity(&mut self) {
+    pub fn reset_entity(&mut self) {
         self.buffer.clear();
         self.pending_utf8.clear();
         self.framer.reset_entity();
@@ -49,7 +49,7 @@ enum S2sReadError {
     NegotiationTimedOut,
 }
 
-pub(crate) fn s2s_read_stream_error_condition(error: &anyhow::Error) -> Option<&'static str> {
+pub fn s2s_read_stream_error_condition(error: &anyhow::Error) -> Option<&'static str> {
     match error.downcast_ref::<S2sReadError>() {
         Some(S2sReadError::Ended) => None,
         Some(S2sReadError::FrameTooLarge) => Some("policy-violation"),
@@ -60,7 +60,7 @@ pub(crate) fn s2s_read_stream_error_condition(error: &anyhow::Error) -> Option<&
     }
 }
 
-pub(crate) async fn timed_read_frame<S: AsyncRead + Unpin>(
+pub async fn timed_read_frame<S: AsyncRead + Unpin>(
     stream: &mut S,
     input: &mut S2sInputState,
 ) -> Result<String> {
@@ -96,7 +96,7 @@ async fn read_frame_until_deadline<S: AsyncRead + Unpin>(
     }
 }
 
-pub(crate) async fn read_entity_frame<S: AsyncRead + Unpin>(
+pub async fn read_entity_frame<S: AsyncRead + Unpin>(
     stream: &mut S,
     input: &mut S2sInputState,
 ) -> Result<String> {
@@ -118,7 +118,7 @@ pub(crate) async fn read_entity_frame<S: AsyncRead + Unpin>(
 /// matches XEP-0478's `idle-seconds` definition instead of timing the total
 /// wall-clock duration required to assemble a stanza.
 #[cfg(test)]
-pub(crate) async fn read_frame_until_idle<S: AsyncRead + Unpin>(
+pub async fn read_frame_until_idle<S: AsyncRead + Unpin>(
     stream: &mut S,
     input: &mut S2sInputState,
     idle_timeout: Duration,
@@ -131,7 +131,7 @@ pub(crate) async fn read_frame_until_idle<S: AsyncRead + Unpin>(
 /// owns the deadline, so a local write/queue event that cancels this future
 /// cannot accidentally grant the peer a fresh idle window. Only bytes read
 /// from the peer advance the deadline.
-pub(crate) async fn read_frame_until_idle_deadline<S: AsyncRead + Unpin>(
+pub async fn read_frame_until_idle_deadline<S: AsyncRead + Unpin>(
     stream: &mut S,
     input: &mut S2sInputState,
     idle_timeout: Duration,
@@ -180,7 +180,7 @@ fn append_s2s_input(buffer: &mut String, pending_utf8: &mut Vec<u8>, bytes: &[u8
     Ok(())
 }
 
-pub(crate) async fn write_xml<S: AsyncWrite + Unpin>(stream: &mut S, xml: &str) -> Result<()> {
+pub async fn write_xml<S: AsyncWrite + Unpin>(stream: &mut S, xml: &str) -> Result<()> {
     tokio::time::timeout(IO_TIMEOUT, async {
         stream.write_all(xml.as_bytes()).await?;
         stream.flush().await
@@ -190,7 +190,7 @@ pub(crate) async fn write_xml<S: AsyncWrite + Unpin>(stream: &mut S, xml: &str) 
     Ok(())
 }
 
-pub(crate) fn transport_lost(error: &anyhow::Error) -> bool {
+pub fn transport_lost(error: &anyhow::Error) -> bool {
     matches!(
         error.downcast_ref::<S2sReadError>(),
         Some(S2sReadError::Ended)
@@ -208,21 +208,21 @@ pub(crate) fn transport_lost(error: &anyhow::Error) -> bool {
     })
 }
 
-pub(crate) async fn send_stream_error<S: AsyncWrite + Unpin>(
+pub async fn send_stream_error<S: AsyncWrite + Unpin>(
     stream: &mut S,
     condition: &str,
 ) -> Result<()> {
     let condition = stream_error_element(condition);
-    let error = crate::xmpp::xml_builder::XmlElement::new("stream:error")
+    let error = northstar_xml_builder::XmlElement::new("stream:error")
         .child(
-            crate::xmpp::xml_builder::XmlElement::new(condition)
+            northstar_xml_builder::XmlElement::new(condition)
                 .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-streams"),
         )
         .finish();
     write_xml(stream, &(error + "</stream:stream>")).await
 }
 
-pub(crate) async fn send_initial_stream_error<S: AsyncWrite + Unpin>(
+pub async fn send_initial_stream_error<S: AsyncWrite + Unpin>(
     stream: &mut S,
     local_domain: &str,
     remote_domain: Option<&str>,
@@ -230,7 +230,7 @@ pub(crate) async fn send_initial_stream_error<S: AsyncWrite + Unpin>(
 ) -> Result<()> {
     write_xml(
         stream,
-        &crate::xmpp::xml_builder::XmlElement::new("stream:stream")
+        &northstar_xml_builder::XmlElement::new("stream:stream")
             .attr("xmlns", "jabber:server")
             .attr("xmlns:stream", "http://etherx.jabber.org/streams")
             .attr("from", local_domain)

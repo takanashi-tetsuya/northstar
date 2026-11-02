@@ -138,8 +138,8 @@ run_xmpp_identity_case() {
     TEST_XMPP_IDENTITY_CERT_PATH="$test_dir/peer-$kind.crt" \
     TEST_XMPP_IDENTITY_DOMAIN=peer.northstar.internal \
     TEST_XMPP_IDENTITY_KIND="$kind" \
-      cargo test --locked --bin rust-xmpp-server \
-      s2s::tls::tests::parses_a_real_x509_xmpp_identity_certificate \
+      cargo test --locked -p northstar-s2s --lib \
+      tls::tests::parses_a_real_x509_xmpp_identity_certificate \
       -- --ignored --exact --nocapture 2>&1
   )" || {
     printf '%s\n' "$output"

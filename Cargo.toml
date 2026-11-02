@@ -88,6 +88,7 @@ members = [
     "crates/edges/northstar-bosh",
     "crates/edges/northstar-c2s",
     "crates/edges/northstar-cluster",
+    "crates/edges/northstar-s2s",
     "crates/edges/northstar-stream",
     "crates/platform/foundation-postgres",
     "crates/platform/foundation-db-test",
@@ -240,6 +241,7 @@ northstar-session-postgres = { path = "crates/contexts/session/northstar-session
 northstar-bosh = { path = "crates/edges/northstar-bosh" }
 northstar-c2s = { path = "crates/edges/northstar-c2s" }
 northstar-cluster = { path = "crates/edges/northstar-cluster" }
+northstar-s2s = { path = "crates/edges/northstar-s2s" }
 northstar-stream = { path = "crates/edges/northstar-stream" }
 northstar-federation-core = { path = "crates/contexts/federation/northstar-federation-core" }
 northstar-federation-postgres = { path = "crates/contexts/federation/northstar-federation-postgres" }

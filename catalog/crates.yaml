@@ -504,6 +504,14 @@ crates:
     api_stability: internal
     publish_policy: never
 
+  - crate_id: northstar-s2s
+    package: northstar-s2s
+    path: crates/edges/northstar-s2s
+    tier: edge
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-security
     package: northstar-security
     path: crates/platform/northstar-security

@@ -20,12 +20,12 @@ use tokio_rustls::{rustls::pki_types::ServerName, TlsConnector};
 /// S2S resolver, the configured DNS overrides, the DANE and private-address
 /// policies and the federation TLS material for XEP-0487 HTTPS lookups.
 #[derive(Clone, Copy)]
-pub(crate) struct FederationDnsContext<'a> {
-    pub(crate) resolver: &'a TokioResolver,
-    pub(crate) overrides: &'a [(String, SocketAddr, bool)],
-    pub(crate) dane_required: bool,
-    pub(crate) private_addresses_allowed: bool,
-    pub(crate) tls: &'a TlsContext,
+pub struct FederationDnsContext<'a> {
+    pub resolver: &'a TokioResolver,
+    pub overrides: &'a [(String, SocketAddr, bool)],
+    pub dane_required: bool,
+    pub private_addresses_allowed: bool,
+    pub tls: &'a TlsContext,
 }
 
 impl FederationDnsContext<'_> {
@@ -75,7 +75,7 @@ fn host_meta_negative_cache() -> &'static dashmap::DashMap<String, Instant> {
 /// Resolve every usable endpoint in RFC 2782 order. Hickory owns the positive
 /// and negative caches, honors record TTLs, follows CNAMEs, tries all system
 /// name servers, and falls back to TCP for truncated/failed UDP responses.
-pub(crate) async fn resolve_federation_endpoints(
+pub async fn resolve_federation_endpoints(
     dns: FederationDnsContext<'_>,
     domain: &str,
 ) -> Result<Vec<FederationEndpoint>> {
@@ -405,7 +405,7 @@ async fn fetch_https_address(
     stream.set_nodelay(true)?;
     let server_name =
         ServerName::try_from(location.host.clone()).context("XEP-0487 HTTPS SNI is invalid")?;
-    let connector = TlsConnector::from(crate::s2s::tls::host_meta_https_client_config(dns.tls)?);
+    let connector = TlsConnector::from(crate::tls::host_meta_https_client_config(dns.tls)?);
     let mut secure =
         tokio::time::timeout(HOST_META_IO_TIMEOUT, connector.connect(server_name, stream))
             .await
@@ -538,6 +538,6 @@ fn no_records(error: &NetError) -> bool {
     )
 }
 
-pub(crate) fn validate_endpoint(dns: FederationDnsContext<'_>, address: SocketAddr) -> Result<()> {
+pub fn validate_endpoint(dns: FederationDnsContext<'_>, address: SocketAddr) -> Result<()> {
     validate_address_policy(dns.private_addresses_allowed, address)
 }

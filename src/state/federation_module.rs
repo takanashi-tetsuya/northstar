@@ -19,7 +19,7 @@ pub(super) struct FederationModule {
     pub(super) component_credentials: Arc<[northstar_config::ComponentCredential]>,
     pub(super) components: northstar_federation_application::components::ComponentRegistry,
     pub(super) s2s_connection_registry: Arc<S2sConnectionRegistry>,
-    pub(super) s2s_resumption: crate::s2s::resume::Registry,
+    pub(super) s2s_resumption: northstar_s2s::resume::Registry,
     /// Shared TTL-aware resolver for SRV, CNAME, A and AAAA federation lookups.
     pub(super) s2s_dns_resolver: TokioResolver,
     /// Separate locally validating DNSSEC resolver for RFC 7712. It never
@@ -133,7 +133,7 @@ impl FederationModule {
             component_credentials,
             components,
             s2s_connection_registry: Arc::new(S2sConnectionRegistry::default()),
-            s2s_resumption: crate::s2s::resume::Registry::default(),
+            s2s_resumption: northstar_s2s::resume::Registry::default(),
             s2s_dns_resolver,
             s2s_dnssec_resolver,
             dialback_secret,

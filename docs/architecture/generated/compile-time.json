@@ -214,6 +214,7 @@
     "northstar-roster-postgres",
     "northstar-roster-xmpp",
     "northstar-runtime",
+    "northstar-s2s",
     "northstar-security",
     "northstar-session-application",
     "northstar-session-core",
@@ -4918,6 +4919,86 @@
       "uuid"
     ],
     [
+      "northstar-s2s",
+      "anyhow"
+    ],
+    [
+      "northstar-s2s",
+      "dashmap"
+    ],
+    [
+      "northstar-s2s",
+      "hickory-resolver"
+    ],
+    [
+      "northstar-s2s",
+      "northstar-federation-application"
+    ],
+    [
+      "northstar-s2s",
+      "northstar-federation-core"
+    ],
+    [
+      "northstar-s2s",
+      "northstar-security"
+    ],
+    [
+      "northstar-s2s",
+      "northstar-xml-builder"
+    ],
+    [
+      "northstar-s2s",
+      "northstar-xml-framing"
+    ],
+    [
+      "northstar-s2s",
+      "northstar-xmpp-types"
+    ],
+    [
+      "northstar-s2s",
+      "openssl"
+    ],
+    [
+      "northstar-s2s",
+      "rustls-webpki"
+    ],
+    [
+      "northstar-s2s",
+      "sha2"
+    ],
+    [
+      "northstar-s2s",
+      "subtle"
+    ],
+    [
+      "northstar-s2s",
+      "thiserror"
+    ],
+    [
+      "northstar-s2s",
+      "tokio"
+    ],
+    [
+      "northstar-s2s",
+      "tokio-rustls"
+    ],
+    [
+      "northstar-s2s",
+      "tokio-util"
+    ],
+    [
+      "northstar-s2s",
+      "tracing"
+    ],
+    [
+      "northstar-s2s",
+      "uuid"
+    ],
+    [
+      "northstar-s2s",
+      "x509-parser"
+    ],
+    [
       "northstar-security",
       "anyhow"
     ],
@@ -7508,6 +7589,10 @@
     [
       "rust-xmpp-server",
       "northstar-runtime"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-s2s"
     ],
     [
       "rust-xmpp-server",

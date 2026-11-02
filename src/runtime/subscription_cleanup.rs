@@ -387,7 +387,9 @@ mod tests {
                  ORDER BY expire,node_id,jid LIMIT 1;"
         ).execute(&pool).await.unwrap();
         let context = SubscriptionCleanupContext::new(
-            crate::db::retention::PostgresMaintenanceRepository::new(pool.clone()),
+            northstar_workflows::maintenance_repository::PostgresMaintenanceRepository::new(
+                pool.clone(),
+            ),
             Arc::new(SubscriptionCleanupMetrics::default()),
         );
         let readiness = context.readiness();

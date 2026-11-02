@@ -254,7 +254,9 @@ pub(crate) async fn run_maintenance() -> Result<()> {
             .saturating_add(60),
     );
     let retention = Arc::new(RetentionContext::new(
-        db::retention::PostgresMaintenanceRepository::new(pool.clone()),
+        northstar_workflows::maintenance_repository::PostgresMaintenanceRepository::new(
+            pool.clone(),
+        ),
         policy,
         northstar_operations_application::retention_worker::RetentionCounters::from_metrics(
             &metrics,
@@ -278,7 +280,9 @@ pub(crate) async fn run_maintenance() -> Result<()> {
     );
     let subscriptions = Arc::new(
         crate::runtime::subscription_cleanup::SubscriptionCleanupContext::new(
-            db::retention::PostgresMaintenanceRepository::new(pool.clone()),
+            northstar_workflows::maintenance_repository::PostgresMaintenanceRepository::new(
+                pool.clone(),
+            ),
             Arc::clone(&metrics.subscription_cleanup),
         ),
     );

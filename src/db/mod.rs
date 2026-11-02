@@ -71,7 +71,6 @@ mod push_tests;
 pub(crate) mod readiness_repository;
 pub mod replay;
 pub mod replay_repository;
-pub mod retention;
 #[cfg(test)]
 mod retraction_service_tests;
 pub(crate) mod room_effects;

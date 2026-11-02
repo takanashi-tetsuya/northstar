@@ -901,7 +901,7 @@ mod tests {
             let shutdown = CancellationToken::new();
             let revoke = CancellationToken::new();
             let backpressure = CancellationToken::new();
-            let signals = super::super::protocol::SessionTerminationSignals::from_test_tokens(
+            let signals = northstar_stream::transport::SessionTerminationSignals::new(
                 revoke.clone(),
                 backpressure.clone(),
             );

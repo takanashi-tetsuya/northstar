@@ -46,40 +46,6 @@ pub enum Action {
     None,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ClientTransport {
-    Tcp,
-    WebSocket,
-    Bosh,
-}
-
-/// Limits the owning transport can actually enforce on a native XML stream.
-/// HTTP binding leaves this absent because its request and inactivity limits
-/// are negotiated independently by XEP-0124.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct StreamLimits {
-    pub max_bytes: usize,
-    pub negotiation_idle: std::time::Duration,
-    pub authenticated_idle: std::time::Duration,
-}
-
-impl StreamLimits {
-    pub(crate) fn idle_timeout(self, authenticated: bool) -> std::time::Duration {
-        if authenticated {
-            self.authenticated_idle
-        } else {
-            self.negotiation_idle
-        }
-    }
-}
-
-pub(crate) struct TlsSessionEvidence {
-    pub channel_bindings: Option<northstar_auth_core::ChannelBindings>,
-    pub client_certificate_identities: Vec<String>,
-    pub client_certificate_chain: Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>,
-    pub generation: u64,
-}
-
 pub(super) fn client_stream_limits_feature(
     limits: Option<StreamLimits>,
     authenticated: bool,
@@ -94,24 +60,6 @@ pub(super) fn client_stream_limits_feature(
                 .text(limits.idle_timeout(authenticated).as_secs().to_string()),
         )
         .finish()
-}
-
-impl SessionTerminationSignals {
-    pub(crate) async fn revoked(&self) {
-        self.policy_revoke.cancelled().await;
-    }
-
-    pub(crate) async fn backpressured(&self) {
-        self.backpressure.cancelled().await;
-    }
-
-    pub(crate) fn is_revoked(&self) -> bool {
-        self.policy_revoke.is_cancelled()
-    }
-
-    pub(crate) fn is_backpressured(&self) -> bool {
-        self.backpressure.is_cancelled()
-    }
 }
 
 impl ProtocolSession {
@@ -159,10 +107,10 @@ impl ProtocolSession {
     }
 
     pub(crate) fn termination_signals(&self) -> SessionTerminationSignals {
-        SessionTerminationSignals {
-            policy_revoke: self.disconnect.clone(),
-            backpressure: self.outbound.backpressure_disconnect(),
-        }
+        SessionTerminationSignals::new(
+            self.disconnect.clone(),
+            self.outbound.backpressure_disconnect(),
+        )
     }
 
     /// The authentication clock belongs to the session. Transports keep

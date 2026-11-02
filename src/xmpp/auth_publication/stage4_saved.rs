@@ -3,13 +3,14 @@
 #![cfg(test)]
 use super::*;
 use crate::stage4_replay as wire;
-use crate::xmpp::protocol::{mix::stage4_saved::RouteHandle, ClientTransport};
+use crate::xmpp::protocol::mix::stage4_saved::RouteHandle;
 use northstar_auth_application::authentication::publication::{
     CredentialKind, CredentialObservation,
 };
 use northstar_auth_application::authentication::{AuthenticationService, FastCommitPlan};
 use northstar_session_application::sm::{BindingFinalizationOutcome, SmService};
 use northstar_stream::outbound::OutboundItem;
+use northstar_stream::transport::ClientTransport;
 use std::collections::BTreeMap;
 
 pub(crate) mod facts;

@@ -979,8 +979,8 @@ fn stored_input(v: &wire::Stored<wire::Id>) -> room::Stored {
 fn frame(input: &wire::Frame) -> FrameExecution {
     FrameExecution::for_saved_case(
         match input.transport {
-            wire::TransportKind::Tcp => crate::xmpp::protocol::ClientTransport::Tcp,
-            wire::TransportKind::Bosh => crate::xmpp::protocol::ClientTransport::Bosh,
+            wire::TransportKind::Tcp => northstar_stream::transport::ClientTransport::Tcp,
+            wire::TransportKind::Bosh => northstar_stream::transport::ClientTransport::Bosh,
         },
         input.input.as_str(),
         input.frame_id.0,

@@ -5045,6 +5045,10 @@
     ],
     [
       "northstar-stream",
+      "northstar-auth-core"
+    ],
+    [
+      "northstar-stream",
       "northstar-delivery-core"
     ],
     [
@@ -5102,6 +5106,10 @@
     [
       "northstar-stream",
       "tokio"
+    ],
+    [
+      "northstar-stream",
+      "tokio-rustls"
     ],
     [
       "northstar-stream",

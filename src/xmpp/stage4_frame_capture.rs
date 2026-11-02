@@ -84,7 +84,7 @@ pub(super) fn capture_frame(
 mod tests {
     use super::*;
     use crate::xmpp::frame_execution::{PublicationResult, Stage};
-    use crate::xmpp::protocol::ClientTransport;
+    use northstar_stream::transport::ClientTransport;
 
     #[test]
     fn every_actual_stage_discriminant_has_its_exact_closed_projection() {

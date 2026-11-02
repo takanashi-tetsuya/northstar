@@ -150,7 +150,7 @@ impl ProtocolSession {
         F: Future<Output = Result<T>>,
     {
         let execution = crate::xmpp::frame_execution::FrameExecution::new(
-            super::ClientTransport::Tcp,
+            northstar_stream::transport::ClientTransport::Tcp,
             direct_preparation_tests::FRAME_MESSAGE,
         );
         let operation = execution.direct_operation();

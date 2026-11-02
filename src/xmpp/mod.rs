@@ -22,9 +22,12 @@ use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket};
 use frame_execution::FrameFailure;
 use futures::FutureExt;
+use northstar_stream::transport::{
+    ClientTransport, SessionTerminationSignals, StreamLimits, TlsSessionEvidence,
+};
 use northstar_telemetry::metrics::C2sBackpressureTelemetry;
 use northstar_xml_framing::XmlEntityFramer;
-use protocol::{ProtocolSession, SessionTerminationSignals};
+use protocol::ProtocolSession;
 use std::{future::Future, net::SocketAddr, panic::AssertUnwindSafe, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -40,8 +43,8 @@ const WEBSOCKET_TERMINAL_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const C2S_NEGOTIATION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 pub(crate) const C2S_AUTHENTICATED_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
-fn native_stream_limits() -> protocol::StreamLimits {
-    protocol::StreamLimits {
+fn native_stream_limits() -> StreamLimits {
+    StreamLimits {
         max_bytes: MAX_XMPP_FRAME_BYTES,
         negotiation_idle: C2S_NEGOTIATION_IDLE_TIMEOUT,
         authenticated_idle: C2S_AUTHENTICATED_IDLE_TIMEOUT,
@@ -50,13 +53,13 @@ fn native_stream_limits() -> protocol::StreamLimits {
 
 #[derive(Debug)]
 struct PeerIdleTracker {
-    limits: protocol::StreamLimits,
+    limits: StreamLimits,
     authenticated: bool,
     deadline: tokio::time::Instant,
 }
 
 impl PeerIdleTracker {
-    fn new(limits: protocol::StreamLimits, authenticated: bool, now: tokio::time::Instant) -> Self {
+    fn new(limits: StreamLimits, authenticated: bool, now: tokio::time::Instant) -> Self {
         Self {
             limits,
             authenticated,
@@ -222,7 +225,7 @@ async fn xmpps_tcp_connection(
         state,
         northstar_stream::outbound::OutboundSender::new(tx),
         false,
-        protocol::ClientTransport::Tcp,
+        ClientTransport::Tcp,
         Some(stream_limits),
         peer.ip(),
     );
@@ -260,7 +263,7 @@ async fn tcp_connection(
         state,
         northstar_stream::outbound::OutboundSender::new(tx),
         false,
-        protocol::ClientTransport::Tcp,
+        ClientTransport::Tcp,
         Some(stream_limits),
         peer.ip(),
     );
@@ -337,7 +340,7 @@ fn tls_session_evidence(
     tls_server_end_point: Option<Vec<u8>>,
     generation: u64,
     domain: &str,
-) -> Result<protocol::TlsSessionEvidence> {
+) -> Result<TlsSessionEvidence> {
     let connection = secure.get_ref().1;
     let channel_bindings = channel_bindings(secure, tls_server_end_point)?;
     let client_certificate_identities = connection
@@ -351,7 +354,7 @@ fn tls_session_evidence(
         .peer_certificates()
         .map(<[_]>::to_vec)
         .unwrap_or_default();
-    Ok(protocol::TlsSessionEvidence {
+    Ok(TlsSessionEvidence {
         channel_bindings,
         client_certificate_identities,
         client_certificate_chain,
@@ -426,7 +429,7 @@ async fn drive_io<S>(
     session: &mut ProtocolSession,
     rx: &mut mpsc::Receiver<northstar_stream::outbound::OutboundItem>,
     actor_shutdown: &tokio_util::sync::CancellationToken,
-    stream_limits: protocol::StreamLimits,
+    stream_limits: StreamLimits,
 ) -> Result<DriveOutcome<S>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -992,7 +995,7 @@ pub async fn websocket_connection(
         state,
         northstar_stream::outbound::OutboundSender::new(tx),
         true,
-        protocol::ClientTransport::WebSocket,
+        ClientTransport::WebSocket,
         Some(stream_limits),
         peer_ip,
     );

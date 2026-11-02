@@ -15,6 +15,7 @@ test-support = []
 anyhow = "1.0"
 chrono = "0.4"
 dashmap = "6.1"
+northstar-auth-core = { path = "../../contexts/auth/northstar-auth-core" }
 northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application" }
 northstar-delivery-core = { path = "../../contexts/message/northstar-delivery-core" }
 northstar-federation-core = { path = "../../contexts/federation/northstar-federation-core" }
@@ -30,6 +31,7 @@ northstar-xmpp-types = { path = "../../kernel/northstar-xmpp-types" }
 rand = "0.8"
 roxmltree = "0.20"
 tokio = { version = "1.43", features = ["macros", "sync", "time"] }
+tokio-rustls = "0.26"
 tokio-util = "0.7"
 tracing = "0.1"
 uuid = { version = "1.12", features = ["v4"] }

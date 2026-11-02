@@ -30,6 +30,9 @@ use crate::state::{AppState, SmBufferLimits, SmSessionPolicy};
 use anyhow::{Context, Result};
 use dashmap::DashSet;
 use northstar_session_application::post_actions::PostActionHandle;
+use northstar_stream::transport::{
+    ClientTransport, SessionTerminationSignals, StreamLimits, TlsSessionEvidence,
+};
 use northstar_xml_builder::stream::{failure, is_counted_stanza, stream_error, stream_id};
 
 use roxmltree::Node;
@@ -56,7 +59,6 @@ pub use self::session_transport::Action;
 use self::session_transport::{
     client_stream_limits_feature, resource_bind_deadline_for, unauthenticated_timed_out_for,
 };
-pub(crate) use self::session_transport::{ClientTransport, StreamLimits, TlsSessionEvidence};
 #[cfg(test)]
 use northstar_auth_xmpp::sasl2::{legacy_sasl_auth, legacy_sasl_payload};
 
@@ -115,15 +117,6 @@ struct PresenceSubstate {
     availability_generation: Arc<AtomicU64>,
 }
 
-/// Read-only transport observation of the two independent session exit
-/// signals. The transport owns process shutdown separately; only protocol and
-/// application authority may cancel a session or its outbound queue.
-#[derive(Clone)]
-pub(crate) struct SessionTerminationSignals {
-    policy_revoke: tokio_util::sync::CancellationToken,
-    backpressure: tokio_util::sync::CancellationToken,
-}
-
 /// Fixed SM admission and replay limits for this connection. AppState owns
 /// immutable configuration; durable ownership still belongs to the SM service.
 struct SmRuntimePolicy {
@@ -138,19 +131,6 @@ impl SmRuntimePolicy {
             session: state.sm_session_policy(),
             buffer: state.sm_buffer_limits(),
             ip_binding: state.sm_ip_binding().to_owned(),
-        }
-    }
-}
-
-impl SessionTerminationSignals {
-    #[cfg(test)]
-    pub(super) fn from_test_tokens(
-        policy_revoke: tokio_util::sync::CancellationToken,
-        backpressure: tokio_util::sync::CancellationToken,
-    ) -> Self {
-        Self {
-            policy_revoke,
-            backpressure,
         }
     }
 }

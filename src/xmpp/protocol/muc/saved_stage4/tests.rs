@@ -499,7 +499,7 @@ fn observed_fixture(
     let requested = prepared.requested_class();
     let prepared = PreparedMucDiscussion::new(prepared, &room, room_jid, command.stanza).unwrap();
     let frame = FrameExecution::for_saved_case(
-        crate::xmpp::protocol::ClientTransport::Tcp,
+        northstar_stream::transport::ClientTransport::Tcp,
         i.frame.input.as_str(),
         i.frame.frame_id.0,
     );

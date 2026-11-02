@@ -80,7 +80,7 @@ fn peer_idle_deadline_changes_only_for_peer_traffic_or_authentication() {
 
 #[test]
 fn peer_idle_deadline_uses_transport_supplied_limits() {
-    let limits = protocol::StreamLimits {
+    let limits = northstar_stream::transport::StreamLimits {
         max_bytes: 128,
         negotiation_idle: Duration::from_secs(2),
         authenticated_idle: Duration::from_secs(7),

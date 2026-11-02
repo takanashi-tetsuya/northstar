@@ -13,7 +13,6 @@
 //! operation identity. It has no new deadline: introducing one would change
 //! authentication recovery after bytes have already reached the client.
 
-use super::protocol::ClientTransport;
 use northstar_auth_application::authentication::publication;
 use northstar_message_application::direct_lifecycle::TerminalReason;
 use northstar_message_application::message_admission::witness::DirectOperationHandle;
@@ -21,6 +20,7 @@ use northstar_room_application::mix_service::foreground;
 use northstar_room_application::mix_service::foreground::MixForegroundSlot;
 use northstar_room_application::muc_service::discussion;
 use northstar_room_application::muc_service::discussion::MucDiscussionSlot;
+use northstar_stream::transport::ClientTransport;
 use std::{
     future::Future,
     pin::Pin,

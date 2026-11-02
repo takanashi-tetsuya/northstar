@@ -1279,7 +1279,7 @@ async fn run_inner(
     let prepared =
         PreparedMucDiscussion::new(prepared, &room, room_jid.clone(), command.stanza.clone())?;
     let frame = FrameExecution::for_saved_case(
-        crate::xmpp::protocol::ClientTransport::Tcp,
+        northstar_stream::transport::ClientTransport::Tcp,
         input.frame.input.as_str(),
         input.frame.frame_id.0,
     );

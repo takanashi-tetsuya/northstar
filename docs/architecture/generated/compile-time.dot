@@ -1610,6 +1610,7 @@ digraph compile_time {
   "northstar-stream" -> "dashmap";
   "northstar-stream" -> "futures";
   "northstar-stream" -> "northstar-auth-application";
+  "northstar-stream" -> "northstar-auth-core";
   "northstar-stream" -> "northstar-delivery-core";
   "northstar-stream" -> "northstar-federation-core";
   "northstar-stream" -> "northstar-message-core";
@@ -1625,6 +1626,7 @@ digraph compile_time {
   "northstar-stream" -> "rand";
   "northstar-stream" -> "roxmltree";
   "northstar-stream" -> "tokio";
+  "northstar-stream" -> "tokio-rustls";
   "northstar-stream" -> "tokio-util";
   "northstar-stream" -> "tracing";
   "northstar-stream" -> "uuid";

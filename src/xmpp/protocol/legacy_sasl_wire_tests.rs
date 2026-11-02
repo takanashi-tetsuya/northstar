@@ -2,7 +2,7 @@ use super::{
     begin_owned_session_cleanup, claim_session_cleanup, client_stream_limits_feature,
     drop_requires_local_quiesce, durable_delivery_managed_by_sm, legacy_sasl_auth,
     legacy_sasl_payload, resource_bind_deadline_for, unauthenticated_timed_out_for, Action,
-    ResumePayload, SessionCleanupOwnership, SessionTerminationSignals, StreamLimits,
+    ResumePayload, SessionCleanupOwnership, StreamLimits,
 };
 use roxmltree::Document;
 
@@ -113,28 +113,6 @@ fn external_disconnect_revokes_sm_resume_but_transport_loss_preserves_it() {
         claim_session_cleanup(&superseded),
         SessionCleanupOwnership::SupersededBySm
     );
-}
-
-#[tokio::test]
-async fn termination_signals_keep_revocation_and_backpressure_distinct() {
-    let policy_revoke = tokio_util::sync::CancellationToken::new();
-    let backpressure = tokio_util::sync::CancellationToken::new();
-    let signals = SessionTerminationSignals {
-        policy_revoke: policy_revoke.clone(),
-        backpressure: backpressure.clone(),
-    };
-    assert!(!signals.is_revoked());
-    assert!(!signals.is_backpressured());
-
-    backpressure.cancel();
-    signals.backpressured().await;
-    assert!(signals.is_backpressured());
-    assert!(!signals.is_revoked());
-
-    policy_revoke.cancel();
-    signals.revoked().await;
-    assert!(signals.is_revoked());
-    assert!(signals.is_backpressured());
 }
 
 #[test]

@@ -20,7 +20,7 @@ pub(crate) use saved_case::{run as run_saved_case, validate as validate_saved_ca
 
 use crate::state::{AppState, ClientConnectionGuard};
 use crate::xmpp::frame_execution::FrameFailure;
-use crate::xmpp::protocol::{ClientTransport, ProtocolSession, ResumeTransportParts};
+use crate::xmpp::protocol::{ProtocolSession, ResumeTransportParts};
 use crate::xmpp::transport_parsing::parse_bosh_frame;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Context;
@@ -33,6 +33,7 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use futures::FutureExt;
 use hmac::{Hmac, Mac};
+use northstar_stream::transport::ClientTransport;
 use rand::{rngs::OsRng, RngCore};
 use roxmltree::Document;
 use sha1::Sha1;

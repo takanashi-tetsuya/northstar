@@ -56,7 +56,7 @@ async fn unknown_resume_and_successful_fallback_keep_distinct_original_frame_att
             CredentialCall, CredentialKind, CredentialReturned,
         };
         let frame = FrameExecution::for_saved_case(
-            super::super::protocol::ClientTransport::Bosh,
+            northstar_stream::transport::ClientTransport::Bosh,
             "<authenticate/>",
             Uuid::from_u128(700),
         );
@@ -125,7 +125,7 @@ async fn unknown_resume_and_successful_fallback_keep_distinct_original_frame_att
         CredentialReturned, PreparationResult,
     };
     let frame = FrameExecution::for_saved_case(
-        super::super::protocol::ClientTransport::Bosh,
+        northstar_stream::transport::ClientTransport::Bosh,
         "<authenticate/>",
         Uuid::from_u128(701),
     );
@@ -458,9 +458,9 @@ async fn observed_control_joins_anchor_actual_bytes_and_native_or_bosh_transfer(
         let frame_id = Uuid::from_u128(720);
         let frame = FrameExecution::for_saved_case(
             if native {
-                super::super::protocol::ClientTransport::Tcp
+                northstar_stream::transport::ClientTransport::Tcp
             } else {
-                super::super::protocol::ClientTransport::Bosh
+                northstar_stream::transport::ClientTransport::Bosh
             },
             "<authenticate/>",
             frame_id,
@@ -567,7 +567,7 @@ fn control_join_read_handle_does_not_retain_authority_or_invent_credential_histo
 async fn control_joins_expose_reassigned_receipts_after_sealed_introduction() {
     let connection = Uuid::from_u128(302);
     let frame = FrameExecution::for_saved_case(
-        super::super::protocol::ClientTransport::Bosh,
+        northstar_stream::transport::ClientTransport::Bosh,
         "<authenticate/>",
         Uuid::from_u128(730),
     );
@@ -583,7 +583,7 @@ async fn control_joins_expose_reassigned_receipts_after_sealed_introduction() {
         )
         .unwrap();
     let second_frame = FrameExecution::for_saved_case(
-        super::super::protocol::ClientTransport::Bosh,
+        northstar_stream::transport::ClientTransport::Bosh,
         "<authenticate/>",
         Uuid::from_u128(731),
     );
@@ -749,7 +749,7 @@ async fn unbound_selected_control_does_not_take_queued_bind_owner() {
     };
     let connection = Uuid::from_u128(302);
     let unbound_frame = FrameExecution::for_saved_case(
-        super::super::protocol::ClientTransport::Bosh,
+        northstar_stream::transport::ClientTransport::Bosh,
         "<authenticate/>",
         Uuid::from_u128(710),
     );
@@ -766,7 +766,7 @@ async fn unbound_selected_control_does_not_take_queued_bind_owner() {
         )
         .unwrap();
     let bound_frame = FrameExecution::for_saved_case(
-        super::super::protocol::ClientTransport::Bosh,
+        northstar_stream::transport::ClientTransport::Bosh,
         "<iq/>",
         Uuid::from_u128(711),
     );
@@ -1035,7 +1035,7 @@ fn commit_or_caps_cancel_keeps_transport_and_prior_publication_facts() {
 #[tokio::test]
 async fn completed_handler_transfers_publication_lifetime_to_its_control() {
     let execution = FrameExecution::for_saved_case(
-        super::super::protocol::ClientTransport::Bosh,
+        northstar_stream::transport::ClientTransport::Bosh,
         "<authenticate/>",
         Uuid::from_u128(350),
     );
@@ -1045,7 +1045,7 @@ async fn completed_handler_transfers_publication_lifetime_to_its_control() {
     assert!(credential.snapshot().transferred);
 
     let wrong = FrameExecution::for_saved_case(
-        super::super::protocol::ClientTransport::Bosh,
+        northstar_stream::transport::ClientTransport::Bosh,
         "<iq/>",
         Uuid::from_u128(351),
     );
@@ -1225,10 +1225,8 @@ async fn actual_websocket_live_write_gate_preserves_success_and_cancellation() {
             3 => backpressure.cancel(),
             _ => {}
         }
-        let signals = super::super::protocol::SessionTerminationSignals::from_test_tokens(
-            revoke,
-            backpressure,
-        );
+        let signals =
+            northstar_stream::transport::SessionTerminationSignals::new(revoke, backpressure);
         let cancellation = super::super::WebSocketSendCancellation {
             actor_shutdown: &shutdown,
             signals: &signals,

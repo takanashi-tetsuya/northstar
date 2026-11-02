@@ -59,9 +59,6 @@
     "src/s2s/sm.rs": [
       "state"
     ],
-    "src/xmpp/mod.rs": [
-      "state"
-    ],
     "src/xmpp/protocol.rs": [
       "state"
     ],

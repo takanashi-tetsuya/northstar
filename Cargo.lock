@@ -2801,6 +2801,7 @@ dependencies = [
  "northstar-room-application",
  "northstar-room-core",
  "northstar-roster-core",
+ "northstar-runtime",
  "northstar-session-application",
  "northstar-session-core",
  "northstar-session-postgres",

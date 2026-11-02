@@ -1620,6 +1620,7 @@ digraph compile_time {
   "northstar-stream" -> "northstar-room-application";
   "northstar-stream" -> "northstar-room-core";
   "northstar-stream" -> "northstar-roster-core";
+  "northstar-stream" -> "northstar-runtime";
   "northstar-stream" -> "northstar-session-application";
   "northstar-stream" -> "northstar-session-core";
   "northstar-stream" -> "northstar-session-postgres";

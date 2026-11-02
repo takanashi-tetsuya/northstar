@@ -2046,11 +2046,12 @@ for (const connection of [
   'pub async fn websocket_connection',
 ]) {
   const body = structBody(nativeTransportSource, connection);
-  const sessionCreated = body.indexOf('let mut session = ProtocolSession::new(');
+  const opening = 'let mut session = host.open_session(';
+  const sessionCreated = body.indexOf(opening);
   if (sessionCreated < 0
-      || !/let mut session = ProtocolSession::new\(\s*state\s*,/.test(body)
-      || /\bstate\s*\./.test(body.slice(sessionCreated))) {
-    throw new Error(`${connection} retains global state after ProtocolSession construction`);
+      || /\bAppState\b/.test(body)
+      || /\bhost\s*\./.test(body.slice(sessionCreated + opening.length))) {
+    throw new Error(`${connection} retains its host after opening the protocol session`);
   }
 }
 if (/\bself\s*\.\s*state\b/.test(read('src/xmpp/direct_delivery.rs'))) {

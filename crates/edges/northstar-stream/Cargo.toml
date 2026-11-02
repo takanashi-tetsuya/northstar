@@ -24,6 +24,7 @@ northstar-message-core = { path = "../../contexts/message/northstar-message-core
 northstar-room-application = { path = "../../contexts/room/northstar-room-application" }
 northstar-room-core = { path = "../../contexts/room/northstar-room-core" }
 northstar-roster-core = { path = "../../contexts/roster/northstar-roster-core" }
+northstar-runtime = { path = "../../platform/northstar-runtime" }
 northstar-session-application = { path = "../../contexts/session/northstar-session-application" }
 northstar-session-core = { path = "../../contexts/session/northstar-session-core" }
 northstar-xep-0016 = { path = "../../kernel/northstar-xep-0016" }

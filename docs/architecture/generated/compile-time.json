@@ -5085,6 +5085,10 @@
     ],
     [
       "northstar-stream",
+      "northstar-runtime"
+    ],
+    [
+      "northstar-stream",
       "northstar-session-application"
     ],
     [

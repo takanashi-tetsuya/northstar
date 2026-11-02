@@ -99,6 +99,7 @@ pub(crate) use account_deletion_recovery::AccountDeletionRecoveryContext;
 pub(crate) mod account_teardown_runtime;
 mod admin_session_cleanup;
 pub(crate) mod background_maintenance;
+mod c2s_host;
 pub(crate) mod caps_effect_dispatch;
 pub(crate) mod pep_last_items;
 pub(crate) use admin_session_cleanup::AdminSessionCleanupContext;

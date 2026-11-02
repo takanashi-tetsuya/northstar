@@ -2,6 +2,7 @@
 mod auth_publication_write_tests;
 pub(crate) mod capabilities;
 mod direct_delivery;
+pub(crate) mod host;
 pub(crate) mod muc_delivery;
 pub(crate) mod protocol;
 #[cfg(test)]
@@ -15,7 +16,6 @@ pub(crate) mod transport_parsing;
 mod websocket_action;
 pub(crate) mod xml_builder;
 
-use crate::state::AppState;
 use crate::xmpp::transport_parsing::{
     take_websocket_frame, websocket_close_has_content,
     websocket_has_invalid_stream_header_namespace, WEBSOCKET_FRAMING_NS,
@@ -23,6 +23,7 @@ use crate::xmpp::transport_parsing::{
 use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket};
 use futures::FutureExt;
+use host::C2sHost;
 use northstar_stream::frame_execution::FrameFailure;
 use northstar_stream::session::StreamSession;
 use northstar_stream::transport::{
@@ -30,7 +31,6 @@ use northstar_stream::transport::{
 };
 use northstar_telemetry::metrics::C2sBackpressureTelemetry;
 use northstar_xml_framing::XmlEntityFramer;
-use protocol::ProtocolSession;
 use std::{future::Future, net::SocketAddr, panic::AssertUnwindSafe, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -83,8 +83,8 @@ impl PeerIdleTracker {
     }
 }
 
-pub async fn serve_tcp(
-    state: Arc<AppState>,
+pub async fn serve_tcp<H: C2sHost>(
+    host: Arc<H>,
     cancel: tokio_util::sync::CancellationToken,
     listener: TcpListener,
 ) -> Result<()> {
@@ -97,12 +97,12 @@ pub async fn serve_tcp(
             _ = cancel.cancelled() => return Ok(()),
             accepted = listener.accept() => accepted?,
         };
-        let state = state.clone();
-        let Some(connection_guard) = state.acquire_client_connection(peer.ip()) else {
+        let host = host.clone();
+        let Some(connection_guard) = host.acquire_client_connection(peer.ip()) else {
             tracing::debug!(%peer, "rejected XMPP connection at the configured capacity limit");
             continue;
         };
-        let actors = state.connection_actors().clone();
+        let actors = host.connection_actors().clone();
         let actor_shutdown = actors.shutdown_token().child_token();
         let peer_label = peer.to_string();
         let result = actors.try_spawn(
@@ -110,13 +110,13 @@ pub async fn serve_tcp(
             Some(peer_label),
             async move {
                 let _connection_guard = connection_guard;
-                state.record_c2s_tcp_connection();
-                let material = state.tls_context().c2s_snapshot(false);
+                host.record_c2s_tcp_connection();
+                let material = host.tls_context().c2s_snapshot(false);
                 let tls = TlsAcceptor::from(material.server_config.clone());
                 if let Err(error) = tcp_connection(
                     stream,
                     peer,
-                    state,
+                    host,
                     tls,
                     material.tls_server_end_point.clone(),
                     material.generation,
@@ -134,8 +134,8 @@ pub async fn serve_tcp(
     }
 }
 
-pub async fn serve_xmpps_tcp(
-    state: Arc<AppState>,
+pub async fn serve_xmpps_tcp<H: C2sHost>(
+    host: Arc<H>,
     cancel: tokio_util::sync::CancellationToken,
     listener: TcpListener,
 ) -> Result<()> {
@@ -148,12 +148,12 @@ pub async fn serve_xmpps_tcp(
             _ = cancel.cancelled() => return Ok(()),
             accepted = listener.accept() => accepted?,
         };
-        let state = state.clone();
-        let Some(connection_guard) = state.acquire_client_connection(peer.ip()) else {
+        let host = host.clone();
+        let Some(connection_guard) = host.acquire_client_connection(peer.ip()) else {
             tracing::debug!(%peer, "rejected XMPPS connection at the configured capacity limit");
             continue;
         };
-        let actors = state.connection_actors().clone();
+        let actors = host.connection_actors().clone();
         let actor_shutdown = actors.shutdown_token().child_token();
         let peer_label = peer.to_string();
         let result = actors.try_spawn(
@@ -161,13 +161,13 @@ pub async fn serve_xmpps_tcp(
             Some(peer_label),
             async move {
                 let _connection_guard = connection_guard;
-                state.record_c2s_tcp_connection();
-                let material = state.tls_context().c2s_snapshot(true);
+                host.record_c2s_tcp_connection();
+                let material = host.tls_context().c2s_snapshot(true);
                 let tls = TlsAcceptor::from(material.server_config.clone());
                 if let Err(error) = xmpps_tcp_connection(
                     stream,
                     peer,
-                    state,
+                    host,
                     tls,
                     material.tls_server_end_point.clone(),
                     material.generation,
@@ -185,10 +185,10 @@ pub async fn serve_xmpps_tcp(
     }
 }
 
-async fn xmpps_tcp_connection(
+async fn xmpps_tcp_connection<H: C2sHost>(
     stream: TcpStream,
     peer: SocketAddr,
-    state: Arc<AppState>,
+    host: Arc<H>,
     tls: TlsAcceptor,
     tls_server_end_point: Option<Vec<u8>>,
     tls_generation: u64,
@@ -203,7 +203,7 @@ async fn xmpps_tcp_connection(
     };
     if !northstar_security::tls::direct_tls_sni_matches(
         secure.get_ref().1.server_name(),
-        state.local_domain(),
+        host.local_domain(),
     ) {
         anyhow::bail!("client Direct TLS SNI does not match the XMPP domain");
     }
@@ -217,15 +217,14 @@ async fn xmpps_tcp_connection(
     }
     let (tx, mut rx) = mpsc::channel(512);
     let stream_limits = native_stream_limits();
-    let transport_policy = NativeTransportPolicy::from_state(&state);
+    let transport_policy = NativeTransportPolicy::from_host(&*host);
     let evidence = tls_session_evidence(
         &secure,
         tls_server_end_point,
         tls_generation,
-        state.local_domain(),
+        host.local_domain(),
     )?;
-    let mut session = ProtocolSession::new(
-        state,
+    let mut session = host.open_session(
         northstar_stream::outbound::OutboundSender::new(tx),
         false,
         ClientTransport::Tcp,
@@ -249,10 +248,10 @@ async fn xmpps_tcp_connection(
         .map(|_| ())
 }
 
-async fn tcp_connection(
+async fn tcp_connection<H: C2sHost>(
     stream: TcpStream,
     peer: SocketAddr,
-    state: Arc<AppState>,
+    host: Arc<H>,
     tls: TlsAcceptor,
     tls_server_end_point: Option<Vec<u8>>,
     tls_generation: u64,
@@ -261,9 +260,8 @@ async fn tcp_connection(
     stream.set_nodelay(true)?;
     let (tx, mut rx) = mpsc::channel(512);
     let stream_limits = native_stream_limits();
-    let transport_policy = NativeTransportPolicy::from_state(&state);
-    let mut session = ProtocolSession::new(
-        state,
+    let transport_policy = NativeTransportPolicy::from_host(&*host);
+    let mut session = host.open_session(
         northstar_stream::outbound::OutboundSender::new(tx),
         false,
         ClientTransport::Tcp,
@@ -381,12 +379,10 @@ struct NativeTransportPolicy {
 }
 
 impl NativeTransportPolicy {
-    fn from_state(state: &AppState) -> Self {
+    fn from_host(host: &impl C2sHost) -> Self {
         Self {
-            sm_lease_poll_interval: sm_lease_poll_interval(
-                state.sm_session_policy().live_lease_seconds,
-            ),
-            backpressure_telemetry: state.c2s_backpressure_telemetry(),
+            sm_lease_poll_interval: sm_lease_poll_interval(host.sm_live_lease_seconds()),
+            backpressure_telemetry: host.c2s_backpressure_telemetry(),
         }
     }
 }
@@ -988,18 +984,17 @@ async fn tcp_internal_backend_error<S: AsyncWrite + Unpin, P: StreamSession>(
     .await;
 }
 
-pub async fn websocket_connection(
+pub async fn websocket_connection<H: C2sHost>(
     mut socket: WebSocket,
-    state: Arc<AppState>,
+    host: Arc<H>,
     peer_ip: std::net::IpAddr,
     actor_shutdown: tokio_util::sync::CancellationToken,
 ) {
-    state.record_c2s_websocket_connection();
+    host.record_c2s_websocket_connection();
     let (tx, mut rx) = mpsc::channel(512);
     let stream_limits = native_stream_limits();
-    let transport_policy = NativeTransportPolicy::from_state(&state);
-    let mut session = ProtocolSession::new(
-        state,
+    let transport_policy = NativeTransportPolicy::from_host(&*host);
+    let mut session = host.open_session(
         northstar_stream::outbound::OutboundSender::new(tx),
         true,
         ClientTransport::WebSocket,

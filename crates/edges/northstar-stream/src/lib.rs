@@ -8,6 +8,7 @@
 pub mod auth_publication;
 pub mod frame_execution;
 pub mod handler;
+pub mod host;
 pub mod iq;
 pub mod local_routes;
 pub mod muc_delivery;

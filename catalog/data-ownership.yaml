@@ -123,6 +123,57 @@ ownership:
         backup_rpo_hours: 24
         backup_rto_minutes: 120
         restore_order: 100
+      - name: omemo_recovery_counters
+        data_class: operational
+        retention_class: account-lifecycle
+        legal_hold: false
+        delete_owner: identity
+        export_owner: identity
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: omemo_recovery_transfers
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: identity
+        export_owner: identity
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: omemo_recovery_poll_capabilities
+        data_class: credential-secret
+        retention_class: account-lifecycle
+        legal_hold: false
+        delete_owner: identity
+        export_owner: identity
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: true
+        encryption_key_class: credential-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
 
   # ==========================================
   # Service: session-directory (northstar_session)

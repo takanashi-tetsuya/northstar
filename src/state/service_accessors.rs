@@ -165,7 +165,7 @@ impl AppState {
     pub(crate) fn replay_service(
         &self,
     ) -> &northstar_session_application::replay::ReplayService<
-        db::replay_repository::PostgresReplayRepository,
+        northstar_session_postgres::replay_repository::PostgresReplayRepository,
     > {
         &self.replay_service
     }

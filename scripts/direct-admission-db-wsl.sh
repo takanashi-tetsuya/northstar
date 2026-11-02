@@ -34,8 +34,8 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
 fi
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$database"
 
-if cargo test --locked --offline --bin rust-xmpp-server \
-  db::cluster_keys::tests::direct_message_fence_locks_exact_key_and_instance_through_commit \
+if cargo test --locked --offline -p northstar-session-postgres \
+  cluster_keys::tests::direct_message_fence_locks_exact_key_and_instance_through_commit \
   -- --ignored --exact --nocapture --test-threads=1 >"$test_log" 2>&1; then
   cat "$test_log"
 else

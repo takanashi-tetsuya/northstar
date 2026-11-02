@@ -228,7 +228,7 @@ pub async fn create_sm_session_with_ownership_resolution(
     // callers reserve it here as an idempotent safety net. Deployment-wide and
     // per-account SM state are admitted by the INSERT trigger below; neither
     // path scans or serializes the complete session table.
-    match super::reserve_live_session_in_transaction(
+    match northstar_session_postgres::capacity::reserve_live_session_in_transaction(
         &mut transaction,
         connection_id,
         user_id,
@@ -238,12 +238,12 @@ pub async fn create_sm_session_with_ownership_resolution(
     )
     .await?
     {
-        super::LiveSessionReservation::Reserved => {}
-        super::LiveSessionReservation::CapacityExhausted => {
+        northstar_session_postgres::capacity::LiveSessionReservation::Reserved => {}
+        northstar_session_postgres::capacity::LiveSessionReservation::CapacityExhausted => {
             anyhow::bail!("deployment live-session capacity exhausted")
         }
-        super::LiveSessionReservation::Conflict
-        | super::LiveSessionReservation::ReplacedResumable => {
+        northstar_session_postgres::capacity::LiveSessionReservation::Conflict
+        | northstar_session_postgres::capacity::LiveSessionReservation::ReplacedResumable => {
             anyhow::bail!("durable SM live-session reservation conflicts")
         }
     }
@@ -484,7 +484,7 @@ pub async fn suspend_sm_session(
         return Ok(false);
     }
     anyhow::ensure!(
-        super::extend_live_session_lease_in_transaction(
+        northstar_session_postgres::capacity::extend_live_session_lease_in_transaction(
             &mut transaction,
             connection_id,
             ttl_seconds,
@@ -543,7 +543,7 @@ pub async fn suspend_activated_sm_resume_exact(
         "exact activated SM owner disappeared during compensation"
     );
     anyhow::ensure!(
-        super::extend_live_session_lease_in_transaction(
+        northstar_session_postgres::capacity::extend_live_session_lease_in_transaction(
             &mut transaction,
             connection_id,
             ttl_seconds,
@@ -625,7 +625,7 @@ pub async fn activate_claimed_sm_session_in_transaction(
     let user_id: Uuid = authorized.try_get("user_id")?;
     let full_jid: String = authorized.try_get("full_jid")?;
     if matches!(
-        super::transfer_claimed_sm_live_session_in_transaction(
+        northstar_session_postgres::capacity::transfer_claimed_sm_live_session_in_transaction(
             transaction,
             session_id,
             claim_token,
@@ -636,7 +636,8 @@ pub async fn activate_claimed_sm_session_in_transaction(
             live_lease_seconds,
         )
         .await?,
-        super::LiveSessionReservation::Conflict | super::LiveSessionReservation::CapacityExhausted
+        northstar_session_postgres::capacity::LiveSessionReservation::Conflict
+            | northstar_session_postgres::capacity::LiveSessionReservation::CapacityExhausted
     ) {
         return Ok(None);
     }

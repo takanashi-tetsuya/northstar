@@ -29,7 +29,7 @@ fn replay_validation_classifier_requires_exact_sqlstate_and_text() {
 
 #[test]
 fn replay_fence_binds_both_process_instances_and_has_bounded_cleanup() {
-    let migration = include_str!("../../../migrations/0095_cluster_replay_fence.sql");
+    let migration = include_str!("../../../../../../migrations/0095_cluster_replay_fence.sql");
     for required in [
         "source_instance_uuid",
         "source_key_epoch",

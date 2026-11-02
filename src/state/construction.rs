@@ -315,26 +315,30 @@ impl AppState {
         }
         cluster.configure_authority_pool(&pool)?;
         if let Some(identity) = cluster.key_authority_identity() {
-            db::reconcile_cluster_key_deployment_before_instance_claim(&pool, &identity)
+            northstar_session_postgres::cluster_keys::reconcile_cluster_key_deployment_before_instance_claim(&pool, &identity)
                 .await
                 .context("cluster signing-key authority preparation failed")?;
             for peer in cluster.peer_key_authority_identities() {
-                db::reconcile_cluster_peer_key_deployment(&pool, &peer)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "configured cluster peer {} key authority is inconsistent",
-                            peer.node_id
-                        )
-                    })?;
+                northstar_session_postgres::cluster_keys::reconcile_cluster_peer_key_deployment(
+                    &pool, &peer,
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "configured cluster peer {} key authority is inconsistent",
+                        peer.node_id
+                    )
+                })?;
             }
             cluster
                 .claim_instance_authority(&pool)
                 .await
                 .context("cluster node ID is already owned by another live process")?;
-            db::reconcile_cluster_key_deployment(&pool, &identity)
-                .await
-                .context("cluster signing-key authority finalization failed")?;
+            northstar_session_postgres::cluster_keys::reconcile_cluster_key_deployment(
+                &pool, &identity,
+            )
+            .await
+            .context("cluster signing-key authority finalization failed")?;
             cluster
                 .refresh_instance_authority(&pool)
                 .await
@@ -436,7 +440,9 @@ impl AppState {
             federation_outbox.outbox_wakeup(),
         );
         let replay_service = northstar_session_application::replay::ReplayService::new(
-            db::replay_repository::PostgresReplayRepository::new(pool.clone()),
+            northstar_session_postgres::replay_repository::PostgresReplayRepository::new(
+                pool.clone(),
+            ),
             &config.domain,
             config.offline_message_ttl_days,
         );

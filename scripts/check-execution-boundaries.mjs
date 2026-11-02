@@ -46,7 +46,7 @@ const files = {
   mixOutboxState: 'src/state/mix_outbox.rs',
   nativeWrite: 'src/xmpp/direct_delivery.rs',
   nativeCore: 'crates/contexts/message/northstar-delivery-core/src/native_write.rs',
-  replayDb: 'src/db/replay.rs',
+  replayDb: 'crates/contexts/session/northstar-session-postgres/src/replay.rs',
   mixDb: 'crates/contexts/room/northstar-room-postgres/src/mix.rs',
   smProtocol: 'src/xmpp/protocol/sm.rs',
   smOwner: 'src/xmpp/protocol/sm_owner.rs',
@@ -59,7 +59,7 @@ const files = {
   boshResponse: 'src/bosh/response_owner.rs',
   boshResponseCore: 'crates/contexts/message/northstar-delivery-core/src/bosh_ownership/response.rs',
   replayService: 'crates/contexts/session/northstar-session-application/src/replay.rs',
-  replayRepository: 'src/db/replay_repository.rs',
+  replayRepository: 'crates/contexts/session/northstar-session-postgres/src/replay_repository.rs',
 };
 
 // Sources read as whole production modules (the file plus its non-test
@@ -538,7 +538,7 @@ export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseC
     const service = normalize(body(replayService, `pub\\s+async\\s+fn\\s+${name}\\b`));
     requireBoundary(service === `self.repository.${name}(request).await`, 'BOSH service must forward the same closed response request');
     const repository = normalize(body(replayRepository, `async\\s+fn\\s+${name}\\b`));
-    requireBoundary(repository.includes(`db::replay::${sql}(&self.pool,request).await`),
+    requireBoundary(repository.includes(`crate::replay::${sql}(&self.pool,request).await`),
       'BOSH repository must forward the same closed response request');
   }
   const bindSql = normalize(body(replayDb, 'async\\s+fn\\s+bind_bosh_transport_response_observed\\b'));

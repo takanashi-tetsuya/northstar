@@ -562,9 +562,15 @@ async fn durable_delivery_fence_survives_checkpoint_resume_and_revocation() {
     .unwrap();
     assert_eq!(stored, (None, 1));
     assert!(
-        crate::db::replay::bind_bosh_delivery_response(&pool, Uuid::new_v4(), 1, &[first], 60,)
-            .await
-            .is_err()
+        northstar_session_postgres::replay::bind_bosh_delivery_response(
+            &pool,
+            Uuid::new_v4(),
+            1,
+            &[first],
+            60,
+        )
+        .await
+        .is_err()
     );
     let mut acknowledged_snapshot = first_snapshot.clone();
     acknowledged_snapshot.acked_h = 1;

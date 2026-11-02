@@ -257,7 +257,7 @@ Key ownership:
 - `src/cluster.rs` owns optional Redis leases/PubSub, the node/delivery-contract
   protocol v13 and its explicit degraded state machine;
   `crates/platform/northstar-security/src/cluster_bus.rs` independently owns the signed Ed25519 envelope
-  format v8, node ACLs and replay binding; `src/db/cluster_keys.rs` owns
+  format v8, node ACLs and replay binding; `crates/contexts/session/northstar-session-postgres/src/cluster_keys.rs` owns
   non-secret key generations and key-bound process-instance leases. Redis
   locates live sockets and carries authenticated cross-node commands but is
   never authoritative.

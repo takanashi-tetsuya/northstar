@@ -7,12 +7,12 @@ use northstar_session_application::node_message_contract_verifier::{
 use sqlx::PgPool;
 use uuid::Uuid;
 
-pub(crate) struct PostgresNodeMessageProjectionRepository {
+pub struct PostgresNodeMessageProjectionRepository {
     pool: PgPool,
 }
 
 impl PostgresNodeMessageProjectionRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }

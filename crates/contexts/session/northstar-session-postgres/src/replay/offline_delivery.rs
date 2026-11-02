@@ -128,18 +128,18 @@ pub async fn release_offline_replay_lease(
 /// Keep the exact account incarnation authorized until a recovery replay
 /// claim or bounded transport enqueue has crossed its boundary. Credential
 /// revocation updates the same users row and therefore waits for this guard.
-pub(crate) struct RecoveryReplayAuthorizationGuard {
+pub struct RecoveryReplayAuthorizationGuard {
     pub(super) transaction: Transaction<'static, Postgres>,
 }
 
 impl RecoveryReplayAuthorizationGuard {
-    pub(crate) async fn release(self) -> Result<()> {
+    pub async fn release(self) -> Result<()> {
         self.transaction.rollback().await?;
         Ok(())
     }
 }
 
-pub(crate) async fn lock_recovery_replay_authorization(
+pub async fn lock_recovery_replay_authorization(
     pool: &PgPool,
     user_id: Uuid,
     expected_auth_generation: i64,
@@ -507,7 +507,7 @@ pub(super) async fn claim_offline_replay_page_once(
         let denied = replay_policy_denies(
             &owner_bare_jid,
             &row.message.sender_jid,
-            super::super::PrivacyStanzaKind::Message,
+            northstar_xep_0016::PrivacyStanzaKind::Message,
             &blocked_patterns,
             &privacy,
             &roster,
@@ -670,7 +670,7 @@ pub async fn acknowledge_durable_deliveries(
     acknowledge_durable_deliveries_observed(pool, deliveries, None).await
 }
 
-pub(crate) async fn acknowledge_durable_deliveries_observed(
+pub async fn acknowledge_durable_deliveries_observed(
     pool: &PgPool,
     deliveries: &[northstar_stream::outbound::DurableDelivery],
     observation: Option<&northstar_delivery_core::native_write::AckRequest>,

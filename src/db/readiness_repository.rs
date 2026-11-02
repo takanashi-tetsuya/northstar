@@ -1,6 +1,5 @@
 //! PostgreSQL adapter for the private readiness persistence probe.
 
-use crate::db;
 use anyhow::{ensure, Result};
 use northstar_abuse_policy::model::AbuseKeyDeploymentIdentity;
 use northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupSnapshot;
@@ -27,11 +26,14 @@ impl ReadinessRepository for PostgresReadinessRepository {
     }
 
     async fn validate_cluster_key(&self, identity: &ClusterKeyDeploymentIdentity) -> Result<()> {
-        db::validate_cluster_key_deployment(&self.pool, identity).await
+        northstar_session_postgres::cluster_keys::validate_cluster_key_deployment(
+            &self.pool, identity,
+        )
+        .await
     }
 
     async fn validate_cluster_instance(&self, authority: &ClusterReadinessAuthority) -> Result<()> {
-        let instances = db::active_cluster_node_instances(
+        let instances = northstar_session_postgres::cluster_keys::active_cluster_node_instances(
             &self.pool,
             &authority.key_identity.xmpp_domain,
             std::slice::from_ref(&authority.instance_node_id),

@@ -1867,7 +1867,7 @@ if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(replayServiceBody)) {
   throw new Error('ReplayService must receive its repository port');
 }
 const replayAdapterBody = structBody(
-  read('src/db/replay_repository.rs'), 'pub(crate) struct PostgresReplayRepository',
+  read('crates/contexts/session/northstar-session-postgres/src/replay_repository.rs'), 'pub struct PostgresReplayRepository',
 );
 if (!/^\s*pool\s*:\s*PgPool\s*,?\s*$/m.test(replayAdapterBody)) {
   throw new Error('Replay repository PostgreSQL capability must remain private');
@@ -1900,7 +1900,7 @@ for (const invariant of [
     throw new Error(`resource-scoped replay migration lost invariant: ${invariant}`);
   }
 }
-const replayDbSource = readProductionModule('src/db/replay.rs', { root }).replace(/\s+/g, ' ');
+const replayDbSource = readProductionModule('crates/contexts/session/northstar-session-postgres/src/replay.rs', { root }).replace(/\s+/g, ' ');
 for (const invariant of [
   'ON CONFLICT(recipient_id,resource)',
   'SET owner_token=EXCLUDED.owner_token',

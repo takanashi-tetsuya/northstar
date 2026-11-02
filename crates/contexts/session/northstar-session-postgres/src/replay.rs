@@ -19,7 +19,7 @@ pub use self::bosh_transport::{
 };
 #[cfg(test)]
 use self::offline_delivery::{acknowledge_durable_deliveries, claim_offline_replay_page_retrying};
-pub(crate) use self::offline_delivery::{
+pub use self::offline_delivery::{
     acknowledge_durable_deliveries_observed, lock_recovery_replay_authorization,
     RecoveryReplayAuthorizationGuard,
 };
@@ -40,7 +40,7 @@ const BOSH_FENCE_MAX_AGE_SECONDS: i64 = 300;
 // claiming a page, takeover cannot occur until those row claims are already
 // eligible in the same pass; otherwise the replacement would observe an
 // apparently empty queue and messages would wait for another login.
-pub(crate) use northstar_session_application::replay::OWNER_LEASE_SECONDS as REPLAY_OWNER_LEASE_SECONDS;
+pub use northstar_session_application::replay::OWNER_LEASE_SECONDS as REPLAY_OWNER_LEASE_SECONDS;
 
 pub use northstar_session_application::replay::{
     OfflineReplayBusyUntil, OfflineReplayLease, OfflineReplayLeaseAcquire, PendingPresenceCursor,
@@ -162,7 +162,7 @@ async fn claim_offline_replay_page_with_test_hook(
 
 /// Test-only compatibility drain used by repository regression fixtures. The
 /// production protocol owns all network awaits through ReplayService.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn deliver_offline_leased(
     pool: &PgPool,
     recipient_id: Uuid,
@@ -188,7 +188,7 @@ pub async fn deliver_offline_leased(
 /// Replay only rows that existed at the semantic availability transition.
 /// Callers which perform other awaited work before starting the replay pass a
 /// database-clock cutoff captured at that transition.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn deliver_offline_leased_before(
     pool: &PgPool,
     recipient_id: Uuid,
@@ -234,7 +234,7 @@ pub async fn deliver_offline_leased_before(
     result
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 async fn deliver_offline_pages_for_test(
     pool: &PgPool,
     lease: &OfflineReplayLease,
@@ -347,7 +347,7 @@ pub async fn bind_bosh_transport_response(
         .await
 }
 
-pub(crate) async fn bind_bosh_transport_response_observed(
+pub async fn bind_bosh_transport_response_observed(
     pool: &PgPool,
     request: &northstar_delivery_core::bosh_ownership::response::BindRequest,
 ) -> Result<northstar_stream::outbound::BoshResponseOwnership> {
@@ -369,7 +369,7 @@ pub(crate) async fn bind_bosh_transport_response_observed(
 /// The production BOSH coordinator uses the typed transport variant below so
 /// one response can own both C2S and MIX rows.  This C2S-only surface remains
 /// a test fixture for independently exercising legacy response semantics.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn bind_bosh_delivery_response(
     pool: &PgPool,
     session_id: Uuid,
@@ -676,7 +676,7 @@ pub async fn acknowledge_bosh_delivery_responses(
 }
 
 /// C2S-only test fixture; runtime release uses `release_bosh_transport_fences`.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn release_bosh_delivery_fences(pool: &PgPool, session_id: Uuid) -> Result<()> {
     sqlx::query("DELETE FROM bosh_delivery_fences WHERE session_id=$1")
         .bind(session_id)
@@ -716,7 +716,6 @@ fn module_source() -> String {
 mod bosh_ack_bound_schema_tests;
 
 #[cfg(test)]
-#[path = "replay_tests.rs"]
 mod tests;
 
 #[cfg(test)]

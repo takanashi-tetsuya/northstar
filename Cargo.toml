@@ -80,6 +80,7 @@ members = [
     "crates/contexts/upload/northstar-upload-postgres",
     "crates/contexts/upload/northstar-upload-xmpp",
     "crates/contexts/session/northstar-session-application",
+    "crates/contexts/session/northstar-session-postgres",
     "crates/contexts/federation/northstar-federation-core",
     "crates/contexts/federation/northstar-federation-postgres",
     "crates/contexts/federation/northstar-federation-application",
@@ -232,6 +233,7 @@ northstar-upload-storage = { path = "crates/contexts/upload/northstar-upload-sto
 northstar-upload-postgres = { path = "crates/contexts/upload/northstar-upload-postgres" }
 northstar-upload-xmpp = { path = "crates/contexts/upload/northstar-upload-xmpp" }
 northstar-session-application = { path = "crates/contexts/session/northstar-session-application" }
+northstar-session-postgres = { path = "crates/contexts/session/northstar-session-postgres" }
 northstar-stream = { path = "crates/edges/northstar-stream" }
 northstar-federation-core = { path = "crates/contexts/federation/northstar-federation-core" }
 northstar-federation-postgres = { path = "crates/contexts/federation/northstar-federation-postgres" }
@@ -265,6 +267,7 @@ northstar-pubsub-postgres = { path = "crates/contexts/pubsub/northstar-pubsub-po
 northstar-roster-postgres = { path = "crates/contexts/roster/northstar-roster-postgres", features = ["test-support"] }
 northstar-security = { path = "crates/platform/northstar-security", features = ["test-support"] }
 northstar-session-application = { path = "crates/contexts/session/northstar-session-application", features = ["test-support"] }
+northstar-session-postgres = { path = "crates/contexts/session/northstar-session-postgres", features = ["test-support"] }
 northstar-stream = { path = "crates/edges/northstar-stream", features = ["test-support"] }
 northstar-upload-postgres = { path = "crates/contexts/upload/northstar-upload-postgres", features = ["test-support"] }
 northstar-archive-postgres = { path = "crates/contexts/archive/northstar-archive-postgres", features = ["test-support"] }

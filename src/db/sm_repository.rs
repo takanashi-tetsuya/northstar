@@ -60,14 +60,15 @@ impl PostgresSmRepository {
         if let Some(observation) = observation {
             observation.preparation_entered(CredentialPreparation::Binding);
         }
-        let binding_result = db::finalize_binding_live_session_in_transaction(
-            &mut tx,
-            connection_id,
-            user_id,
-            full_jid,
-            lease_seconds,
-        )
-        .await;
+        let binding_result =
+            northstar_session_postgres::capacity::finalize_binding_live_session_in_transaction(
+                &mut tx,
+                connection_id,
+                user_id,
+                full_jid,
+                lease_seconds,
+            )
+            .await;
         if let Some(observation) = observation {
             observation.preparation_returned(
                 CredentialPreparation::Binding,
@@ -552,7 +553,7 @@ impl SmRepository for PostgresSmRepository {
         else {
             return Ok(BindingReservationOutcome::CredentialsExpired);
         };
-        let reserved = db::reserve_live_session_in_transaction(
+        let reserved = northstar_session_postgres::capacity::reserve_live_session_in_transaction(
             &mut tx,
             connection_id,
             user_id,
@@ -562,16 +563,16 @@ impl SmRepository for PostgresSmRepository {
         )
         .await?;
         match reserved {
-            db::LiveSessionReservation::Reserved
-            | db::LiveSessionReservation::ReplacedResumable => {
+            northstar_session_postgres::capacity::LiveSessionReservation::Reserved
+            | northstar_session_postgres::capacity::LiveSessionReservation::ReplacedResumable => {
                 tx.commit().await?;
                 Ok(BindingReservationOutcome::Reserved)
             }
-            db::LiveSessionReservation::Conflict => {
+            northstar_session_postgres::capacity::LiveSessionReservation::Conflict => {
                 tx.rollback().await?;
                 Ok(BindingReservationOutcome::Conflict)
             }
-            db::LiveSessionReservation::CapacityExhausted => {
+            northstar_session_postgres::capacity::LiveSessionReservation::CapacityExhausted => {
                 tx.rollback().await?;
                 Ok(BindingReservationOutcome::CapacityExhausted)
             }
@@ -641,7 +642,7 @@ impl SmRepository for PostgresSmRepository {
         crate::db::release_sm_claim(&self.pool, session_id, claim_token).await
     }
     async fn release_live_session(&self, connection_id: Uuid) -> Result<bool> {
-        db::release_live_session(&self.pool, connection_id).await
+        northstar_session_postgres::capacity::release_live_session(&self.pool, connection_id).await
     }
     #[allow(clippy::too_many_arguments)]
     async fn suspend_exact_session(

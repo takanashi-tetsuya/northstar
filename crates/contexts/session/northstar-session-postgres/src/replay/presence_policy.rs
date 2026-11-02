@@ -178,7 +178,7 @@ pub(super) async fn replay_policy_snapshot(
 pub(super) fn replay_policy_denies(
     owner_bare_jid: &str,
     candidate: &str,
-    kind: super::super::PrivacyStanzaKind,
+    kind: northstar_xep_0016::PrivacyStanzaKind,
     blocked_patterns: &[String],
     privacy: &ReplayPrivacyPolicy,
     roster: &HashMap<String, ReplayRosterPolicy>,
@@ -189,7 +189,7 @@ pub(super) fn replay_policy_denies(
     if !same_account
         && blocked_patterns
             .iter()
-            .any(|pattern| super::super::blocked_jid_matches(pattern, &candidate.to_string()))
+            .any(|pattern| northstar_xmpp_types::jid_scope_matches(pattern, &candidate.to_string()))
     {
         return Ok(true);
     }
@@ -204,10 +204,10 @@ pub(super) fn replay_policy_denies(
             true
         } else {
             match kind {
-                super::super::PrivacyStanzaKind::Message => rule.message,
-                super::super::PrivacyStanzaKind::Iq => rule.iq,
-                super::super::PrivacyStanzaKind::PresenceIn => rule.presence_in,
-                super::super::PrivacyStanzaKind::PresenceOut => rule.presence_out,
+                northstar_xep_0016::PrivacyStanzaKind::Message => rule.message,
+                northstar_xep_0016::PrivacyStanzaKind::Iq => rule.iq,
+                northstar_xep_0016::PrivacyStanzaKind::PresenceIn => rule.presence_in,
+                northstar_xep_0016::PrivacyStanzaKind::PresenceOut => rule.presence_out,
             }
         };
         if !stanza_matches {
@@ -216,7 +216,7 @@ pub(super) fn replay_policy_denies(
         let entity_matches = match (rule.match_type.as_deref(), rule.match_value.as_deref()) {
             (None, None) => true,
             (Some("jid"), Some(value)) => {
-                super::super::blocked_jid_matches(value, &candidate.to_string())
+                northstar_xmpp_types::jid_scope_matches(value, &candidate.to_string())
             }
             (Some("group"), Some(value)) => {
                 roster.is_some_and(|entry| entry.groups.iter().any(|group| group == value))
@@ -276,7 +276,7 @@ pub async fn pending_presence_replay_page_filtered(
         if !replay_policy_denies(
             &owner_bare_jid,
             &row.requester,
-            super::super::PrivacyStanzaKind::PresenceIn,
+            northstar_xep_0016::PrivacyStanzaKind::PresenceIn,
             &blocked_patterns,
             &privacy,
             &roster,

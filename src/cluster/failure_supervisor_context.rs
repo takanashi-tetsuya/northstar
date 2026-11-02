@@ -7,7 +7,7 @@ use crate::{cluster::ClusterFailureSupervisorAuthority, db};
 pub(crate) struct ClusterFailureSupervisorContext {
     pub(crate) authority: ClusterFailureSupervisorAuthority,
     pub(crate) authority_service: northstar_session_application::cluster_authority::ClusterAuthorityService<
-        db::cluster_authority_repository::PostgresClusterAuthorityRepository,
+        northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository,
     >,
     pub(crate) replay_maintenance: northstar_session_application::cluster_replay_maintenance::ClusterReplayMaintenanceService<
         db::cluster_replay_maintenance_repository::PostgresClusterReplayMaintenanceRepository,

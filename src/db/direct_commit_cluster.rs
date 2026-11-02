@@ -1,8 +1,7 @@
 //! The cluster half of a direct commit, until the session context owns the cluster tables.
 
-use crate::{
-    cluster::{ClusterAdmission, DirectCommitTurn, DirectPostCommitMode, DirectSpoolEligibility},
-    db,
+use crate::cluster::{
+    ClusterAdmission, DirectCommitTurn, DirectPostCommitMode, DirectSpoolEligibility,
 };
 use anyhow::Result;
 use futures::{future::BoxFuture, FutureExt};
@@ -52,6 +51,10 @@ impl DirectCommitCluster for ClusterAdmission {
         transaction: &'a mut Transaction<'_, Postgres>,
         authority: &'a ClusterReadinessAuthority,
     ) -> BoxFuture<'a, Result<()>> {
-        db::fence_direct_message_authority_in_transaction(transaction, authority).boxed()
+        northstar_session_postgres::cluster_keys::fence_direct_message_authority_in_transaction(
+            transaction,
+            authority,
+        )
+        .boxed()
     }
 }

@@ -2709,6 +2709,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-session-postgres"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "northstar-config",
+ "northstar-delivery-core",
+ "northstar-postgres",
+ "northstar-roster-postgres",
+ "northstar-security",
+ "northstar-session-application",
+ "northstar-stream",
+ "northstar-xep-0016",
+ "northstar-xmpp-types",
+ "rand 0.8.7",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "northstar-stream"
 version = "0.1.0"
 dependencies = [
@@ -4029,6 +4053,7 @@ dependencies = [
  "northstar-security",
  "northstar-session-application",
  "northstar-session-core",
+ "northstar-session-postgres",
  "northstar-stream",
  "northstar-telemetry",
  "northstar-upload-application",

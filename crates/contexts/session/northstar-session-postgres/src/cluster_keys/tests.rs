@@ -166,7 +166,7 @@ async fn direct_message_fence_locks_exact_key_and_instance_through_commit() {
         .connect(&database_url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let suffix = Uuid::new_v4().simple().to_string();
     let domain = format!("direct-{suffix}.test");
     let node_id = format!("node-{suffix}");

@@ -1,9 +1,10 @@
 //! Database tests of the SM service over the root SM repository.
-use crate::db::{self, DeploymentCapacityConfiguration, SmClaimStatus, SmSessionSnapshot};
+use crate::db::{self, SmClaimStatus, SmSessionSnapshot};
 use northstar_session_application::sm::{
     BindingFinalizationOutcome, BindingReservationOutcome, SmResumeFinalizationOutcome,
     SmResumeFinalizationRequest, SmService,
 };
+use northstar_session_postgres::capacity::DeploymentCapacityConfiguration;
 use sqlx::postgres::PgPoolOptions;
 use std::{net::IpAddr, str::FromStr, sync::Arc, time::Duration};
 use uuid::Uuid;
@@ -24,7 +25,7 @@ async fn migrated_pool(max_connections: u32) -> sqlx::PgPool {
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn binding_reservation_is_bounded_leased_and_rechecks_auth_generation() {
     let pool = migrated_pool(4).await;
-    db::reconcile_deployment_capacity(
+    northstar_session_postgres::capacity::reconcile_deployment_capacity(
         &pool,
         DeploymentCapacityConfiguration {
             epoch: 1,
@@ -459,7 +460,7 @@ async fn sm_activation_and_privacy_selection_commit_or_roll_back_together() {
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn resumable_binding_lease_transfers_only_after_transport_publication() {
     let pool = migrated_pool(4).await;
-    db::reconcile_deployment_capacity(
+    northstar_session_postgres::capacity::reconcile_deployment_capacity(
         &pool,
         DeploymentCapacityConfiguration {
             epoch: 1,

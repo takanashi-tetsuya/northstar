@@ -107,7 +107,7 @@ impl AppState {
     pub(crate) fn capacity_lease_renewal_context(&self) -> CapacityLeaseRenewalContext {
         capacity_maintenance::CapacityLeaseRenewalContext::new(
             northstar_session_application::capacity_maintenance::CapacityMaintenanceService::new(
-                db::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository::new(
+                northstar_session_postgres::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository::new(
                     self.pool.clone(),
                 ),
             ),

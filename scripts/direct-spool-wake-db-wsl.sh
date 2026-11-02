@@ -72,7 +72,10 @@ export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PG
 
 run_race_test() {
   local test_name="$1"
-  if cargo test --locked --offline --bin rust-xmpp-server "$test_name" \
+  # The session SQL races live in the session PostgreSQL crate.
+  local target=(--bin rust-xmpp-server)
+  [[ "$test_name" == db::* ]] || target=(-p northstar-session-postgres)
+  if cargo test --locked --offline "${target[@]}" "$test_name" \
     -- --ignored --exact --nocapture --test-threads=1 >"$race_log" 2>&1; then
     cat "$race_log"
   else
@@ -85,7 +88,7 @@ run_race_test() {
   fi
 }
 
-run_race_test db::replay::tests::replay_claim_wins_queued_live_socket_and_bosh_fences_without_stealing
+run_race_test replay::tests::replay_claim_wins_queued_live_socket_and_bosh_fences_without_stealing
 run_race_test db::sm::tests::sm_transfer_yields_to_exact_replay_or_bosh_owner_without_clearing_it
 # This fixture does not migrate: it needs the schema the races above migrated.
-run_race_test db::cluster_keys::tests::postgres_fixture_fences_duplicate_rotation_release_and_stale_instance
+run_race_test cluster_keys::tests::postgres_fixture_fences_duplicate_rotation_release_and_stale_instance

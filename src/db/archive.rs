@@ -66,7 +66,7 @@ pub(super) async fn deliver_offline_mode(
     bind2_mam_catchup: bool,
     active_privacy_list: Option<&str>,
 ) -> Result<usize> {
-    super::replay::deliver_offline_leased(
+    northstar_session_postgres::replay::deliver_offline_leased(
         pool,
         recipient_id,
         ttl_days,

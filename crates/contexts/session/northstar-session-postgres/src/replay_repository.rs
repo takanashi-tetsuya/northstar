@@ -1,5 +1,4 @@
 //! PostgreSQL ownership and claim transitions for offline and BOSH replay.
-use crate::db;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_session_application::replay::*;
@@ -7,21 +6,21 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresReplayRepository {
+pub struct PostgresReplayRepository {
     pool: PgPool,
 }
 
 /// A recovery-only account fence. Protocol code may hold the returned opaque
 /// guard across a bounded queue enqueue without issuing SQL itself.
 #[derive(Clone)]
-pub(crate) struct RecoveryReplayAuthority {
+pub struct RecoveryReplayAuthority {
     pool: PgPool,
     user_id: Uuid,
     auth_generation: i64,
 }
 
 impl RecoveryReplayAuthority {
-    pub(crate) fn new(pool: PgPool, user_id: Uuid, auth_generation: i64) -> Self {
+    pub fn new(pool: PgPool, user_id: Uuid, auth_generation: i64) -> Self {
         Self {
             pool,
             user_id,
@@ -29,10 +28,8 @@ impl RecoveryReplayAuthority {
         }
     }
 
-    pub(crate) async fn lock(
-        &self,
-    ) -> Result<Option<db::replay::RecoveryReplayAuthorizationGuard>> {
-        db::replay::lock_recovery_replay_authorization(
+    pub async fn lock(&self) -> Result<Option<crate::replay::RecoveryReplayAuthorizationGuard>> {
+        crate::replay::lock_recovery_replay_authorization(
             &self.pool,
             self.user_id,
             self.auth_generation,
@@ -51,14 +48,16 @@ impl RecoveryReplayAuthorizationPort for RecoveryReplayAuthority {
     }
 }
 
-impl RecoveryReplayGuardPort for db::replay::RecoveryReplayAuthorizationGuard {
+impl RecoveryReplayGuardPort for crate::replay::RecoveryReplayAuthorizationGuard {
     fn release(self: Box<Self>) -> RecoveryGuardReleaseFuture {
-        Box::pin(async move { db::replay::RecoveryReplayAuthorizationGuard::release(*self).await })
+        Box::pin(
+            async move { crate::replay::RecoveryReplayAuthorizationGuard::release(*self).await },
+        )
     }
 }
 
 impl PostgresReplayRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -78,7 +77,7 @@ impl ReplayLeaseRepository for PostgresReplayRepository {
         cutoff: Option<DateTime<Utc>>,
         lease_seconds: i64,
     ) -> Result<OfflineReplayLeaseAcquire> {
-        db::replay::acquire_offline_replay_lease(
+        crate::replay::acquire_offline_replay_lease(
             &self.pool,
             recipient_id,
             resource,
@@ -99,7 +98,7 @@ impl ReplayRepository for PostgresReplayRepository {
         offline_ttl_days: i64,
     ) -> Result<ReplayPageOutcome> {
         Ok(
-            match db::replay::claim_offline_replay_page(
+            match crate::replay::claim_offline_replay_page(
                 &self.pool,
                 session.lease(),
                 offline_ttl_days,
@@ -107,11 +106,11 @@ impl ReplayRepository for PostgresReplayRepository {
                 session.owner_full_jid(),
                 active_privacy_list,
                 bind2_mam_catchup,
-                db::replay::REPLAY_OWNER_LEASE_SECONDS,
+                crate::replay::REPLAY_OWNER_LEASE_SECONDS,
             )
             .await?
             {
-                db::replay::OfflineReplayPageOutcome::Claimed(page) => {
+                crate::replay::OfflineReplayPageOutcome::Claimed(page) => {
                     ReplayPageOutcome::Claimed(ReplayPage {
                         claim_token: page.claim_token,
                         messages: page
@@ -124,11 +123,11 @@ impl ReplayRepository for PostgresReplayRepository {
                             .collect(),
                     })
                 }
-                db::replay::OfflineReplayPageOutcome::Empty => ReplayPageOutcome::Empty,
-                db::replay::OfflineReplayPageOutcome::PendingClaims => {
+                crate::replay::OfflineReplayPageOutcome::Empty => ReplayPageOutcome::Empty,
+                crate::replay::OfflineReplayPageOutcome::PendingClaims => {
                     ReplayPageOutcome::PendingClaims
                 }
-                db::replay::OfflineReplayPageOutcome::LeaseLost => ReplayPageOutcome::LeaseLost,
+                crate::replay::OfflineReplayPageOutcome::LeaseLost => ReplayPageOutcome::LeaseLost,
             },
         )
     }
@@ -139,12 +138,12 @@ impl ReplayRepository for PostgresReplayRepository {
         page_claim_token: Uuid,
         pending_ids: &[Uuid],
     ) -> Result<bool> {
-        db::replay::renew_offline_replay_before_send(
+        crate::replay::renew_offline_replay_before_send(
             &self.pool,
             session.lease(),
             page_claim_token,
             pending_ids,
-            db::replay::REPLAY_OWNER_LEASE_SECONDS,
+            crate::replay::REPLAY_OWNER_LEASE_SECONDS,
         )
         .await
     }
@@ -155,7 +154,7 @@ impl ReplayRepository for PostgresReplayRepository {
         page_claim_token: Uuid,
         message_ids: &[Uuid],
     ) -> Result<u64> {
-        db::replay::release_untransferred_offline_claims(
+        crate::replay::release_untransferred_offline_claims(
             &self.pool,
             session.recipient_id(),
             page_claim_token,
@@ -165,7 +164,7 @@ impl ReplayRepository for PostgresReplayRepository {
     }
 
     async fn finish(&self, session: &ReplaySession) -> Result<bool> {
-        db::replay::release_offline_replay_lease(&self.pool, session.lease()).await
+        crate::replay::release_offline_replay_lease(&self.pool, session.lease()).await
     }
 
     async fn pending_presence_page(
@@ -176,7 +175,7 @@ impl ReplayRepository for PostgresReplayRepository {
         after: Option<&PendingPresenceCursor>,
         domain: &str,
     ) -> Result<PendingPresencePage> {
-        db::replay::pending_presence_replay_page_filtered(
+        crate::replay::pending_presence_replay_page_filtered(
             &self.pool,
             recipient_id,
             owner_bare_jid,
@@ -191,7 +190,7 @@ impl ReplayRepository for PostgresReplayRepository {
         &self,
         delivery: northstar_stream::outbound::DurableDelivery,
     ) -> Result<northstar_stream::outbound::DurableDelivery> {
-        db::replay::fence_durable_socket_write(&self.pool, delivery).await
+        crate::replay::fence_durable_socket_write(&self.pool, delivery).await
     }
 
     async fn acknowledge_socket_write(
@@ -201,14 +200,14 @@ impl ReplayRepository for PostgresReplayRepository {
     ) -> Result<()> {
         match observation {
             Some(observation) => {
-                db::replay::acknowledge_durable_deliveries_observed(
+                crate::replay::acknowledge_durable_deliveries_observed(
                     &self.pool,
                     std::slice::from_ref(&delivery),
                     Some(observation),
                 )
                 .await
             }
-            None => db::replay::acknowledge_durable_delivery(&self.pool, delivery).await,
+            None => crate::replay::acknowledge_durable_delivery(&self.pool, delivery).await,
         }
     }
 
@@ -216,7 +215,7 @@ impl ReplayRepository for PostgresReplayRepository {
         &self,
         request: &northstar_delivery_core::bosh_ownership::response::RenewRequest,
     ) -> Result<()> {
-        db::replay::renew_bosh_transport_fences(&self.pool, request).await
+        crate::replay::renew_bosh_transport_fences(&self.pool, request).await
     }
 
     async fn acknowledge_bosh_responses(
@@ -224,7 +223,7 @@ impl ReplayRepository for PostgresReplayRepository {
         request: &northstar_delivery_core::bosh_ownership::response::AckRequest,
     ) -> Result<()> {
         let acknowledged =
-            db::replay::acknowledge_bosh_transport_responses(&self.pool, request).await?;
+            crate::replay::acknowledge_bosh_transport_responses(&self.pool, request).await?;
         tracing::debug!(session_id = %request.session_id(), acknowledged_rid = request.rid(), acknowledged, "acknowledged durable BOSH transport sources");
         Ok(())
     }
@@ -233,21 +232,22 @@ impl ReplayRepository for PostgresReplayRepository {
         &self,
         request: &northstar_delivery_core::bosh_ownership::response::BindRequest,
     ) -> Result<northstar_stream::outbound::BoshResponseOwnership> {
-        db::replay::bind_bosh_transport_response_observed(&self.pool, request).await
+        crate::replay::bind_bosh_transport_response_observed(&self.pool, request).await
     }
 
     async fn release_bosh_fences(&self, session_id: Uuid) -> Result<()> {
-        db::replay::release_bosh_transport_fences(&self.pool, session_id).await
+        crate::replay::release_bosh_transport_fences(&self.pool, session_id).await
     }
 }
 
-#[cfg(test)]
-pub(crate) trait ReplayServiceTestFixture: Sized {
+#[cfg(any(test, feature = "test-support"))]
+#[allow(async_fn_in_trait)]
+pub trait ReplayServiceTestFixture: Sized {
     async fn busy_retry_test_fixture(database_url: &str) -> Result<(Self, Uuid, String, Uuid)>;
     async fn remove_test_recipient(&self, recipient_id: Uuid) -> Result<()>;
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ReplayServiceTestFixture for ReplayService<PostgresReplayRepository> {
     async fn busy_retry_test_fixture(database_url: &str) -> Result<(Self, Uuid, String, Uuid)> {
         let pool = northstar_postgres::pool::options()
@@ -255,7 +255,7 @@ impl ReplayServiceTestFixture for ReplayService<PostgresReplayRepository> {
             .acquire_timeout(std::time::Duration::from_secs(2))
             .connect(database_url)
             .await?;
-        crate::db::migrate(&pool).await?;
+        northstar_postgres::MIGRATOR.run(&pool).await?;
         let recipient = Uuid::new_v4();
         let username = format!("busyretry{}", &recipient.simple().to_string()[..12]);
         let full_jid = format!("{username}@example.test/Phone");

@@ -91,7 +91,11 @@ async fn unowned_or_suspended_cleanup_never_polls_the_exact_database_release() {
                 CleanupRecovery::LeaseOrEpoch,
                 async {
                     polled.set(true);
-                    crate::db::release_live_session(&pool, Uuid::new_v4()).await
+                    northstar_session_postgres::capacity::release_live_session(
+                        &pool,
+                        Uuid::new_v4(),
+                    )
+                    .await
                 },
                 &mut report,
             )
@@ -116,7 +120,8 @@ async fn unowned_or_suspended_cleanup_never_polls_the_exact_database_release() {
             CleanupRecovery::LeaseOrEpoch,
             async {
                 polled.set(true);
-                crate::db::release_live_session(&pool, Uuid::new_v4()).await
+                northstar_session_postgres::capacity::release_live_session(&pool, Uuid::new_v4())
+                    .await
             },
             &mut owned,
         )

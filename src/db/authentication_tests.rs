@@ -1,4 +1,3 @@
-use crate::db;
 use northstar_archive_core::ArchiveBoundary;
 use northstar_auth_application::authentication::*;
 use northstar_auth_core as auth;
@@ -388,7 +387,7 @@ async fn reserve_test_live_session(
             .unwrap()
             .unwrap();
     assert_eq!(
-        db::reserve_live_session_in_transaction(
+        northstar_session_postgres::capacity::reserve_live_session_in_transaction(
             &mut tx,
             connection_id,
             user_id,
@@ -398,7 +397,7 @@ async fn reserve_test_live_session(
         )
         .await
         .unwrap(),
-        db::LiveSessionReservation::Reserved
+        northstar_session_postgres::capacity::LiveSessionReservation::Reserved
     );
     tx.commit().await.unwrap();
 }
@@ -867,9 +866,9 @@ async fn bind2_resets_active_pooled_transaction_before_preflight() {
 #[ignore = "requires TEST_DATABASE_URL; creates and removes a random isolated schema"]
 async fn login_epoch_publication_is_fenced_invisible_and_atomic_with_binding() {
     let pool = isolated_pool().await;
-    db::reconcile_deployment_capacity(
+    northstar_session_postgres::capacity::reconcile_deployment_capacity(
         &pool,
-        db::DeploymentCapacityConfiguration {
+        northstar_session_postgres::capacity::DeploymentCapacityConfiguration {
             epoch: 1,
             accounts: 8,
             muc_rooms: 8,
@@ -904,7 +903,7 @@ async fn login_epoch_publication_is_fenced_invisible_and_atomic_with_binding() {
             .unwrap()
             .unwrap();
     assert_eq!(
-        db::reserve_live_session_in_transaction(
+        northstar_session_postgres::capacity::reserve_live_session_in_transaction(
             &mut tx,
             connection_id,
             user_id,
@@ -914,7 +913,7 @@ async fn login_epoch_publication_is_fenced_invisible_and_atomic_with_binding() {
         )
         .await
         .unwrap(),
-        db::LiveSessionReservation::Reserved
+        northstar_session_postgres::capacity::LiveSessionReservation::Reserved
     );
     let staged = stage_login_epoch_in_transaction(
         &mut tx,
@@ -993,9 +992,11 @@ async fn login_epoch_publication_is_fenced_invisible_and_atomic_with_binding() {
         .unwrap(),
         1
     );
-    assert!(db::release_live_session(&pool, connection_id)
-        .await
-        .unwrap());
+    assert!(
+        northstar_session_postgres::capacity::release_live_session(&pool, connection_id)
+            .await
+            .unwrap()
+    );
 
     // Make the stage provisionally eligible with a durable replacement
     // claim whose old SM stream does not exist. Epoch SQL executes first,
@@ -1087,18 +1088,20 @@ async fn login_epoch_publication_is_fenced_invisible_and_atomic_with_binding() {
             .unwrap(),
         1
     );
-    assert!(db::release_live_session(&pool, failed_connection)
-        .await
-        .unwrap());
+    assert!(
+        northstar_session_postgres::capacity::release_live_session(&pool, failed_connection)
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires TEST_DATABASE_URL; creates and removes a random isolated schema"]
 async fn publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup() {
     let pool = isolated_pool().await;
-    db::reconcile_deployment_capacity(
+    northstar_session_postgres::capacity::reconcile_deployment_capacity(
         &pool,
-        db::DeploymentCapacityConfiguration {
+        northstar_session_postgres::capacity::DeploymentCapacityConfiguration {
             epoch: 1,
             accounts: 8,
             muc_rooms: 8,
@@ -1125,15 +1128,17 @@ async fn publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
             .await
             .unwrap()
             .unwrap();
-    assert!(db::publish_binding_live_session_in_transaction(
-        &mut publication,
-        first_connection,
-        user_id,
-        &full_jid,
-        120,
-    )
-    .await
-    .unwrap());
+    assert!(
+        northstar_session_postgres::capacity::publish_binding_live_session_in_transaction(
+            &mut publication,
+            first_connection,
+            user_id,
+            &full_jid,
+            120,
+        )
+        .await
+        .unwrap()
+    );
     let reserve_pool = pool.clone();
     let reserve_jid = full_jid.clone();
     let competing_connection = Uuid::new_v4();
@@ -1141,7 +1146,7 @@ async fn publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
     let reserve_task = tokio::spawn(async move {
         let mut tx = reserve_pool.begin().await.unwrap();
         let _ = reserve_started_tx.send(());
-        let outcome = db::reserve_live_session_in_transaction(
+        let outcome = northstar_session_postgres::capacity::reserve_live_session_in_transaction(
             &mut tx,
             competing_connection,
             user_id,
@@ -1166,7 +1171,7 @@ async fn publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
             .expect("same-JID reservation remained deadlocked after publication commit")
             .unwrap()
             .unwrap(),
-        db::LiveSessionReservation::Conflict
+        northstar_session_postgres::capacity::LiveSessionReservation::Conflict
     );
 
     // An exact release must likewise wait for the row lock. This is the
@@ -1177,20 +1182,23 @@ async fn publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
             .await
             .unwrap()
             .unwrap();
-    assert!(db::publish_binding_live_session_in_transaction(
-        &mut publication,
-        first_connection,
-        user_id,
-        &full_jid,
-        120,
-    )
-    .await
-    .unwrap());
+    assert!(
+        northstar_session_postgres::capacity::publish_binding_live_session_in_transaction(
+            &mut publication,
+            first_connection,
+            user_id,
+            &full_jid,
+            120,
+        )
+        .await
+        .unwrap()
+    );
     let release_pool = pool.clone();
     let (release_started_tx, release_started_rx) = tokio::sync::oneshot::channel();
     let release_task = tokio::spawn(async move {
         let _ = release_started_tx.send(());
-        db::release_live_session(&release_pool, first_connection).await
+        northstar_session_postgres::capacity::release_live_session(&release_pool, first_connection)
+            .await
     });
     release_started_rx.await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1231,20 +1239,26 @@ async fn publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
             .await
             .unwrap()
             .unwrap();
-    assert!(!db::publish_binding_live_session_in_transaction(
-        &mut publication,
-        expired_connection,
-        user_id,
-        &full_jid,
-        120,
-    )
-    .await
-    .unwrap());
+    assert!(
+        !northstar_session_postgres::capacity::publish_binding_live_session_in_transaction(
+            &mut publication,
+            expired_connection,
+            user_id,
+            &full_jid,
+            120,
+        )
+        .await
+        .unwrap()
+    );
     let cleanup_pool = pool.clone();
     let (cleanup_started_tx, cleanup_started_rx) = tokio::sync::oneshot::channel();
     let cleanup_task = tokio::spawn(async move {
         let _ = cleanup_started_tx.send(());
-        db::try_cleanup_expired_live_session_leases(&cleanup_pool, 10).await
+        northstar_session_postgres::capacity::try_cleanup_expired_live_session_leases(
+            &cleanup_pool,
+            10,
+        )
+        .await
     });
     cleanup_started_rx.await.unwrap();
     assert_eq!(
@@ -1270,7 +1284,7 @@ async fn publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
     );
     publication.rollback().await.unwrap();
     assert!(
-        db::try_cleanup_expired_live_session_leases(&pool, 10)
+        northstar_session_postgres::capacity::try_cleanup_expired_live_session_leases(&pool, 10)
             .await
             .unwrap()
             .expect("an isolated fixture must acquire the reaper role")

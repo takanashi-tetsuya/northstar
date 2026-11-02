@@ -18,11 +18,6 @@ pub(crate) mod authentication_effects;
 mod authentication_tests;
 pub mod authority_listener;
 pub(crate) mod background_housekeeping_repository;
-pub mod capacity;
-pub(crate) mod capacity_maintenance_repository;
-pub(crate) mod cluster_authority_repository;
-pub(crate) mod cluster_instance_release_repository;
-pub mod cluster_keys;
 #[cfg(test)]
 mod cluster_muc_tests;
 pub(crate) mod cluster_replay_maintenance_repository;
@@ -53,7 +48,6 @@ mod mix_sequence_retention_tests;
 mod muc_service_tests;
 #[cfg(test)]
 mod muc_tests;
-pub(crate) mod node_message_projection_repository;
 #[cfg(test)]
 mod passkeys_tests;
 // src/cluster/listener_policy.rs (S29) still names the presence repository through db::.
@@ -69,8 +63,6 @@ mod privacy_service_tests;
 #[cfg(test)]
 mod push_tests;
 pub(crate) mod readiness_repository;
-pub mod replay;
-pub mod replay_repository;
 #[cfg(test)]
 mod retraction_service_tests;
 pub(crate) mod room_effects;
@@ -82,21 +74,15 @@ pub(crate) mod sm_teardown_presence_repository;
 pub(crate) mod sm_teardown_repository;
 #[cfg(test)]
 pub use archive::*;
-pub use capacity::*;
-pub use cluster_keys::*;
-// Roster and privacy names that paths owned by the mainline (src/s2s, src/cluster, src/db/sm*,
-// src/db/replay*) still reach through db::. Every other consumer imports the owning crate.
+// Roster and privacy names that paths owned by the mainline (src/s2s, src/cluster, src/db/sm*)
+// still reach through db::. Every other consumer imports the owning crate.
 pub(crate) use northstar_roster_postgres::privacy::{
     privacy_denies, set_active_privacy_list_in_transaction,
 };
 #[cfg(test)]
 pub(crate) use northstar_roster_postgres::roster::add_federated_presence_pending_with_stanza;
-pub(crate) use northstar_roster_postgres::roster::{
-    blocked_jid_matches, is_blocked_for_account, roster,
-};
+pub(crate) use northstar_roster_postgres::roster::{is_blocked_for_account, roster};
 pub(crate) use northstar_xep_0016::PrivacyStanzaKind;
-#[cfg(test)]
-pub(crate) use northstar_xep_0016::{PrivacyAction, PrivacyItem, PrivacyList, PrivacyMatchType};
 pub use sm::*;
 #[cfg(test)]
 mod pubsub_integration_tests;

@@ -189,9 +189,12 @@ async fn offline_dedupe_rotation_grace_capacity_and_cleanup_are_bounded() {
     );
     drop(tx);
     let delivered = rx.recv().await.unwrap();
-    crate::db::replay::acknowledge_durable_delivery(&pool, delivered.c2s_delivery().unwrap())
-        .await
-        .unwrap();
+    northstar_session_postgres::replay::acknowledge_durable_delivery(
+        &pool,
+        delivered.c2s_delivery().unwrap(),
+    )
+    .await
+    .unwrap();
     assert_eq!(delivered.stanza, "<message id='dedupe-one'/>");
     assert!(rx.recv().await.is_none());
     assert_eq!(offline_message_count(&pool, user_id).await.unwrap(), 0);

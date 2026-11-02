@@ -420,7 +420,7 @@ class TestEvidenceTests(unittest.TestCase):
 
     def test_current_scripts_match_the_fixed_selector_manifest(self):
         for name, script in DB.SUITES:
-            declared = DB.re.findall(r'^\s*((?:db|services)::[A-Za-z0-9_:]+)\s*\\?\s*$',
+            declared = DB.re.findall(r'^\s*((?:db|services|capacity)::[A-Za-z0-9_:]+)\s*\\?\s*$',
                                      (ROOT / script).read_text(), DB.re.MULTILINE)
             self.assertEqual(tuple(declared), DB.EXPECTED_TESTS[name])
 

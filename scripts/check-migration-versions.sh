@@ -796,7 +796,7 @@ mix_db_module_source=$(module_source crates/contexts/room/northstar-room-postgre
 mix_protocol_production_source=$(module_source --production crates/contexts/room/northstar-mix-xmpp/src/lib.rs) || exit 1
 mix_service_production_source=$(module_source --production crates/contexts/room/northstar-room-application/src/mix_service.rs) || exit 1
 mix_repository_production_source=$(module_source --production crates/contexts/room/northstar-room-postgres/src/mix_repository.rs) || exit 1
-replay_db_production_source=$(module_source --production src/db/replay.rs) || exit 1
+replay_db_production_source=$(module_source --production crates/contexts/session/northstar-session-postgres/src/replay.rs) || exit 1
 sm_db_production_source=$(module_source --production src/db/sm.rs) || exit 1
 mix_ack_source=$(module_item crates/contexts/room/northstar-room-postgres/src/mix.rs 'async fn remove_mix_delivery_tx(') || exit 1
 for forbidden_fragment in \

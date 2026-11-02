@@ -1779,9 +1779,12 @@ async fn mix_source_dedupe_and_mam_visibility_share_one_snapshot_scope() {
     );
     drop(offline_tx);
     let delivered = offline_rx.recv().await.unwrap();
-    crate::db::replay::acknowledge_durable_delivery(&pool, delivered.c2s_delivery().unwrap())
-        .await
-        .unwrap();
+    northstar_session_postgres::replay::acknowledge_durable_delivery(
+        &pool,
+        delivered.c2s_delivery().unwrap(),
+    )
+    .await
+    .unwrap();
     assert_eq!(delivered.stanza, "<message id='visible-offline'/>");
     assert!(offline_rx.recv().await.is_none());
     assert_eq!(offline_message_count(&pool, owner_id).await.unwrap(), 0);
@@ -1819,9 +1822,12 @@ async fn mix_source_dedupe_and_mam_visibility_share_one_snapshot_scope() {
     );
     drop(bind2_tx);
     let delivered = bind2_rx.recv().await.unwrap();
-    crate::db::replay::acknowledge_durable_delivery(&pool, delivered.c2s_delivery().unwrap())
-        .await
-        .unwrap();
+    northstar_session_postgres::replay::acknowledge_durable_delivery(
+        &pool,
+        delivered.c2s_delivery().unwrap(),
+    )
+    .await
+    .unwrap();
     assert_eq!(delivered.stanza, "<message id='bind2-temporary-only'/>");
     assert!(bind2_rx.recv().await.is_none());
     assert_eq!(

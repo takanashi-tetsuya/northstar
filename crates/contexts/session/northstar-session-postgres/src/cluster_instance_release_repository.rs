@@ -6,19 +6,19 @@ use northstar_session_application::cluster_instance_release::{
 };
 use sqlx::PgPool;
 
-pub(crate) struct PostgresClusterInstanceReleaseRepository {
+pub struct PostgresClusterInstanceReleaseRepository {
     pool: PgPool,
 }
 
 impl PostgresClusterInstanceReleaseRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
 
 impl ClusterInstanceReleaseRepository for PostgresClusterInstanceReleaseRepository {
     async fn release(&self, identity: &ClusterInstanceReleaseIdentity) -> Result<bool> {
-        crate::db::release_cluster_node_instance(
+        crate::cluster_keys::release_cluster_node_instance(
             &self.pool,
             &identity.xmpp_domain,
             &identity.node_id,

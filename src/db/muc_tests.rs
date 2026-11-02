@@ -607,7 +607,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
             .unwrap(),
         1
     );
-    crate::db::replay::acknowledge_durable_delivery(&pool, local_delivery)
+    northstar_session_postgres::replay::acknowledge_durable_delivery(&pool, local_delivery)
         .await
         .unwrap();
     let repeated_invite_id = Uuid::new_v4();
@@ -663,7 +663,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
             .unwrap(),
         1
     );
-    crate::db::replay::acknowledge_durable_delivery(&pool, federated_delivery)
+    northstar_session_postgres::replay::acknowledge_durable_delivery(&pool, federated_delivery)
         .await
         .unwrap();
     set_muc_affiliation(&pool, room_id, "invitee", "outcast")

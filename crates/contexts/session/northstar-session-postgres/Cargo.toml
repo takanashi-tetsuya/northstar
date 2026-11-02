@@ -1,0 +1,36 @@
+[package]
+name = "northstar-session-postgres"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "PostgreSQL persistence of Northstar's live-session capacity, cluster node keys and offline replay."
+publish = false
+
+[features]
+# Test-only fixtures the root crate's database tests use.
+test-support = ["northstar-session-application/test-support", "northstar-stream/test-support"]
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+northstar-config = { path = "../../../platform/northstar-config" }
+northstar-delivery-core = { path = "../../message/northstar-delivery-core" }
+northstar-postgres = { path = "../../../platform/northstar-postgres" }
+northstar-security = { path = "../../../platform/northstar-security" }
+northstar-session-application = { path = "../northstar-session-application" }
+northstar-stream = { path = "../../../edges/northstar-stream" }
+northstar-xep-0016 = { path = "../../../kernel/northstar-xep-0016" }
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+rand = "0.8"
+serde_json = "1.0"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid", "json", "migrate"] }
+tokio = { version = "1.43", features = ["sync", "time"] }
+tracing = "0.1"
+uuid = { version = "1.12", features = ["v4", "serde"] }
+
+[dev-dependencies]
+northstar-roster-postgres = { path = "../../roster/northstar-roster-postgres" }
+northstar-stream = { path = "../../../edges/northstar-stream", features = ["test-support"] }
+tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "sync", "time"] }

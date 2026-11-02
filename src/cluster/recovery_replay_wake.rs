@@ -4,7 +4,6 @@
 
 use crate::{
     cluster::{ClusterAdmission, DirectPostCommitMode},
-    db,
     xmpp::protocol::replay,
 };
 use chrono::{DateTime, Utc};
@@ -31,7 +30,8 @@ const MAX_RECOVERY_ROUTE_PAGE: usize = 256;
 #[derive(Clone)]
 pub(crate) struct ClusterRecoveryReplayWake {
     pub(crate) sessions: Arc<DashMap<String, OnlineSession>>,
-    pub(crate) replay: ReplayService<db::replay_repository::PostgresReplayRepository>,
+    pub(crate) replay:
+        ReplayService<northstar_session_postgres::replay_repository::PostgresReplayRepository>,
     pub(crate) admission: ClusterAdmission,
     pub(crate) pool: PgPool,
     pub(crate) metrics: Arc<Metrics>,
@@ -260,7 +260,9 @@ impl ClusterRecoveryReplayWake {
     ) -> anyhow::Result<DateTime<Utc>> {
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            db::recovery_replay_cutoff_after_direct_commits(&self.pool, authority),
+            northstar_session_postgres::cluster_keys::recovery_replay_cutoff_after_direct_commits(
+                &self.pool, authority,
+            ),
         )
         .await
         .map_err(|_| anyhow::anyhow!("cluster recovery replay cutoff barrier timed out"))?
@@ -374,12 +376,13 @@ impl ClusterRecoveryReplayWake {
         let completed_epoch = Arc::clone(&session.recovery_replay_completed_epoch);
         let replay_service = self.replay.clone();
         let replay_session = session.clone();
-        let recovery_authority =
-            RecoveryReplayAuthority::new(db::replay_repository::RecoveryReplayAuthority::new(
+        let recovery_authority = RecoveryReplayAuthority::new(
+            northstar_session_postgres::replay_repository::RecoveryReplayAuthority::new(
                 self.pool.clone(),
                 session.user_id,
                 session.auth_generation,
-            ));
+            ),
+        );
         let result = session.post_actions.defer_recovery(
             "cluster-recovered-offline-replay",
             async move {
@@ -633,7 +636,9 @@ mod tests {
         let wake = ClusterRecoveryReplayWake {
             sessions,
             replay: ReplayService::new(
-                db::replay_repository::PostgresReplayRepository::new(pool.clone()),
+                northstar_session_postgres::replay_repository::PostgresReplayRepository::new(
+                    pool.clone(),
+                ),
                 "example.test",
                 30,
             ),

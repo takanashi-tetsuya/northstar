@@ -11,7 +11,7 @@ async fn replay_claim_wins_queued_live_socket_and_bosh_fences_without_stealing()
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let recipient_id = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
         .bind(recipient_id)
@@ -226,10 +226,11 @@ fn resource_owner_lease_strictly_outlives_page_claim_and_jitter() {
     const {
         assert!(REPLAY_OWNER_LEASE_SECONDS >= CLAIM_LEASE_SECONDS + 15);
     }
-    let migration = include_str!("../../migrations/0103_offline_replay_leases.sql");
+    let migration = include_str!("../../../../../../migrations/0103_offline_replay_leases.sql");
     assert!(migration.contains("expires_at >= renewed_at + INTERVAL '75 seconds'"));
     assert!(!migration.to_ascii_lowercase().contains("public."));
-    let migration_0122 = include_str!("../../migrations/0122_offline_replay_resource_leases.sql");
+    let migration_0122 =
+        include_str!("../../../../../../migrations/0122_offline_replay_resource_leases.sql");
     assert!(migration_0122.contains("PRIMARY KEY (recipient_id, resource)"));
     assert!(!migration_0122.to_ascii_lowercase().contains("public."));
 }
@@ -244,7 +245,7 @@ async fn recovery_replay_authorization_serializes_with_account_disable() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let user_id = Uuid::new_v4();
     let username = format!("recoveryauth{}", &user_id.simple().to_string()[..12]);
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
@@ -310,7 +311,7 @@ async fn recovery_replay_does_not_complete_while_cutoff_row_has_another_claim() 
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let recipient = Uuid::new_v4();
     let username = format!("recoveryclaim{}", &recipient.simple().to_string()[..12]);
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
@@ -425,7 +426,7 @@ async fn replay_enforces_resource_affinity_and_immutable_ownership() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let recipient = Uuid::new_v4();
     let other_recipient = Uuid::new_v4();
     let recipient_text = recipient.simple().to_string();
@@ -551,7 +552,7 @@ async fn logical_owner_is_exclusive_crash_recoverable_and_does_not_hold_the_pool
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let recipient = Uuid::new_v4();
     let username = format!("lease{}", &recipient.simple().to_string()[..12]);
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
@@ -824,7 +825,7 @@ async fn replay_policy_snapshot_is_consistent_and_missing_policy_rolls_back() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let recipient = Uuid::new_v4();
     let username = format!("policy{}", &recipient.simple().to_string()[..12]);
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
@@ -878,11 +879,11 @@ async fn replay_policy_snapshot_is_consistent_and_missing_policy_rolls_back() {
         None
     );
 
-    let allow = crate::db::PrivacyList {
+    let allow = northstar_xep_0016::PrivacyList {
         name: "snapshot".to_owned(),
-        items: vec![crate::db::PrivacyItem {
+        items: vec![northstar_xep_0016::PrivacyItem {
             order: 1,
-            action: crate::db::PrivacyAction::Allow,
+            action: northstar_xep_0016::PrivacyAction::Allow,
             match_type: None,
             match_value: None,
             message: false,
@@ -907,17 +908,17 @@ async fn replay_policy_snapshot_is_consistent_and_missing_policy_rolls_back() {
     assert!(!replay_policy_denies(
         &format!("{username}@example.test"),
         &candidates[0],
-        crate::db::PrivacyStanzaKind::Message,
+        northstar_xep_0016::PrivacyStanzaKind::Message,
         &blocked,
         &privacy,
         &roster,
     )
     .unwrap());
-    let deny = crate::db::PrivacyList {
+    let deny = northstar_xep_0016::PrivacyList {
         name: "snapshot".to_owned(),
-        items: vec![crate::db::PrivacyItem {
+        items: vec![northstar_xep_0016::PrivacyItem {
             order: 1,
-            action: crate::db::PrivacyAction::Deny,
+            action: northstar_xep_0016::PrivacyAction::Deny,
             match_type: None,
             match_value: None,
             message: false,
@@ -936,7 +937,7 @@ async fn replay_policy_snapshot_is_consistent_and_missing_policy_rolls_back() {
     assert!(!replay_policy_denies(
         &format!("{username}@example.test"),
         &candidates[0],
-        crate::db::PrivacyStanzaKind::Message,
+        northstar_xep_0016::PrivacyStanzaKind::Message,
         &blocked_again,
         &privacy_again,
         &roster_again,
@@ -955,7 +956,7 @@ async fn replay_policy_snapshot_is_consistent_and_missing_policy_rolls_back() {
     assert!(replay_policy_denies(
         &format!("{username}@example.test"),
         &candidates[0],
-        crate::db::PrivacyStanzaKind::Message,
+        northstar_xep_0016::PrivacyStanzaKind::Message,
         &fresh_blocked,
         &fresh_privacy,
         &fresh_roster,
@@ -980,7 +981,7 @@ async fn durable_ack_batch_validates_every_fence_before_deleting_any_row() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let recipient = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
         .bind(recipient)
@@ -1062,7 +1063,7 @@ async fn replay_high_water_excludes_rows_inserted_after_replay_started() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let recipient = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
         .bind(recipient)
@@ -1146,7 +1147,7 @@ async fn replay_is_paged_exclusive_and_retryable() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let recipient = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
         .bind(recipient)
@@ -1252,22 +1253,22 @@ async fn replay_is_paged_exclusive_and_retryable() {
         .execute(&pool)
         .await
         .unwrap();
-    let privacy = crate::db::PrivacyList {
+    let privacy = northstar_xep_0016::PrivacyList {
         name: "offline-replay".to_owned(),
         items: vec![
-            crate::db::PrivacyItem {
+            northstar_xep_0016::PrivacyItem {
                 order: 1,
-                action: crate::db::PrivacyAction::Deny,
-                match_type: Some(crate::db::PrivacyMatchType::Jid),
+                action: northstar_xep_0016::PrivacyAction::Deny,
+                match_type: Some(northstar_xep_0016::PrivacyMatchType::Jid),
                 match_value: Some("private@example.test".to_owned()),
                 message: true,
                 iq: false,
                 presence_in: false,
                 presence_out: false,
             },
-            crate::db::PrivacyItem {
+            northstar_xep_0016::PrivacyItem {
                 order: 2,
-                action: crate::db::PrivacyAction::Allow,
+                action: northstar_xep_0016::PrivacyAction::Allow,
                 match_type: None,
                 match_value: None,
                 message: false,
@@ -1429,7 +1430,7 @@ async fn bosh_delivery_is_owned_by_response_rid_until_a_live_client_ack() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let recipient = Uuid::new_v4();
     let username = format!("boshfence{}", &recipient.simple().to_string()[..10]);
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
@@ -1722,7 +1723,7 @@ async fn concurrent_resources_replay_without_starvation_and_fence_wrong_claims()
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let recipient = Uuid::new_v4();
     let username = format!("concur{}", &recipient.simple().to_string()[..12]);
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
@@ -1954,7 +1955,7 @@ async fn repeatable_read_account_claim_serialization_retries_with_fresh_snapshot
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let recipient = Uuid::new_v4();
     let username = format!("rrretry{}", &recipient.simple().to_string()[..12]);
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")

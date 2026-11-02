@@ -615,7 +615,7 @@ async fn offline_retention_and_admin_clear_respect_sm_and_bosh_owners() {
     let bosh_message = old_message(&pool, user, "bosh-owned").await;
     let sm_message = old_message(&pool, user, "sm-owned").await;
     let bosh_session = Uuid::new_v4();
-    crate::db::replay::bind_bosh_delivery_response(
+    northstar_session_postgres::replay::bind_bosh_delivery_response(
         &pool,
         bosh_session,
         41,
@@ -731,7 +731,7 @@ async fn offline_retention_and_admin_clear_respect_sm_and_bosh_owners() {
         .is_some());
     clear.rollback().await.unwrap();
 
-    crate::db::replay::release_bosh_delivery_fences(&pool, bosh_session)
+    northstar_session_postgres::replay::release_bosh_delivery_fences(&pool, bosh_session)
         .await
         .unwrap();
     crate::db::revoke_sm_session(&pool, sm_session)

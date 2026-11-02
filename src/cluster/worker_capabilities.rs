@@ -201,38 +201,41 @@ impl ClusterListenerSecurity {
             .authority_pool
             .get()
             .context("cluster replay authority pool is unavailable")?;
-        let admitted = match crate::db::admit_cluster_envelope_replay(
-            pool,
-            &self.publisher.namespace,
-            &envelope,
-        )
-        .await
-        {
-            Ok(admitted) => admitted,
-            Err(error) => {
-                if crate::db::cluster_replay_validation_rejection(&error) {
-                    // A changed event identity, stale source lease or elapsed
-                    // validity window is a source-side validation rejection,
-                    // not a lost local PostgreSQL authority connection.
-                    self.publisher
-                        .health
-                        .replay_rejections
-                        .fetch_add(1, Ordering::Relaxed);
+        let admitted =
+            match northstar_session_postgres::cluster_keys::admit_cluster_envelope_replay(
+                pool,
+                &self.publisher.namespace,
+                &envelope,
+            )
+            .await
+            {
+                Ok(admitted) => admitted,
+                Err(error) => {
+                    if northstar_session_postgres::cluster_keys::cluster_replay_validation_rejection(
+                        &error,
+                    ) {
+                        // A changed event identity, stale source lease or elapsed
+                        // validity window is a source-side validation rejection,
+                        // not a lost local PostgreSQL authority connection.
+                        self.publisher
+                            .health
+                            .replay_rejections
+                            .fetch_add(1, Ordering::Relaxed);
+                        return Err(error);
+                    }
+                    // Other PostgreSQL replay failures may mean that authority is
+                    // unavailable or internally inconsistent; fail closed.
+                    record_cluster_failure(
+                        &self.publisher.health,
+                        &self.publisher.listener_rotation,
+                        self.publisher.is_enabled(),
+                        self.publisher.failure_policy,
+                        ClusterFailureClass::PostgreSqlAuthority,
+                        &error,
+                    );
                     return Err(error);
                 }
-                // Other PostgreSQL replay failures may mean that authority is
-                // unavailable or internally inconsistent; fail closed.
-                record_cluster_failure(
-                    &self.publisher.health,
-                    &self.publisher.listener_rotation,
-                    self.publisher.is_enabled(),
-                    self.publisher.failure_policy,
-                    ClusterFailureClass::PostgreSqlAuthority,
-                    &error,
-                );
-                return Err(error);
-            }
-        };
+            };
         if !admitted {
             self.publisher
                 .health

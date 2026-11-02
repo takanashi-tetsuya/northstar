@@ -1192,7 +1192,7 @@ pub async fn finalize_binding_live_session_in_transaction(
 
 /// Transactional form used by authentication publication. The binding lease
 /// transfer and staged login epoch can therefore become visible in one commit.
-pub(crate) async fn publish_binding_live_session_in_transaction(
+pub async fn publish_binding_live_session_in_transaction(
     tx: &mut Transaction<'_, Postgres>,
     connection_id: Uuid,
     user_id: Uuid,

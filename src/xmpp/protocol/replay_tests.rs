@@ -1,6 +1,6 @@
 use super::*;
-use crate::db::replay_repository::ReplayServiceTestFixture;
 use chrono::Utc;
+use northstar_session_postgres::replay_repository::ReplayServiceTestFixture;
 use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 

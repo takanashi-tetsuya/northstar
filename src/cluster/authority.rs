@@ -194,7 +194,7 @@ impl ClusterManager {
             .security
             .as_ref()
             .context("cluster signing identity is missing")?;
-        let instance = crate::db::claim_cluster_node_instance(
+        let instance = northstar_session_postgres::cluster_keys::claim_cluster_node_instance(
             pool,
             &self.namespace,
             &self.node_id,
@@ -224,7 +224,7 @@ impl ClusterManager {
         // Bootstrap still owns its local pool before AppState is constructed.
         // Runtime workers use the AppState-owned typed authority service.
         let service = ClusterAuthorityService::new(
-            crate::db::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
+            northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
                 pool.clone(),
             ),
         );

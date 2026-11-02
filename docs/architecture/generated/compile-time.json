@@ -214,6 +214,7 @@
     "northstar-security",
     "northstar-session-application",
     "northstar-session-core",
+    "northstar-session-postgres",
     "northstar-stream",
     "northstar-telemetry",
     "northstar-test-harness",
@@ -4774,6 +4775,78 @@
       "uuid"
     ],
     [
+      "northstar-session-postgres",
+      "anyhow"
+    ],
+    [
+      "northstar-session-postgres",
+      "chrono"
+    ],
+    [
+      "northstar-session-postgres",
+      "northstar-config"
+    ],
+    [
+      "northstar-session-postgres",
+      "northstar-delivery-core"
+    ],
+    [
+      "northstar-session-postgres",
+      "northstar-postgres"
+    ],
+    [
+      "northstar-session-postgres",
+      "northstar-roster-postgres"
+    ],
+    [
+      "northstar-session-postgres",
+      "northstar-security"
+    ],
+    [
+      "northstar-session-postgres",
+      "northstar-session-application"
+    ],
+    [
+      "northstar-session-postgres",
+      "northstar-stream"
+    ],
+    [
+      "northstar-session-postgres",
+      "northstar-xep-0016"
+    ],
+    [
+      "northstar-session-postgres",
+      "northstar-xmpp-types"
+    ],
+    [
+      "northstar-session-postgres",
+      "rand"
+    ],
+    [
+      "northstar-session-postgres",
+      "serde_json"
+    ],
+    [
+      "northstar-session-postgres",
+      "sha2"
+    ],
+    [
+      "northstar-session-postgres",
+      "sqlx"
+    ],
+    [
+      "northstar-session-postgres",
+      "tokio"
+    ],
+    [
+      "northstar-session-postgres",
+      "tracing"
+    ],
+    [
+      "northstar-session-postgres",
+      "uuid"
+    ],
+    [
       "northstar-stream",
       "anyhow"
     ],
@@ -6984,6 +7057,10 @@
     [
       "rust-xmpp-server",
       "northstar-session-core"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-session-postgres"
     ],
     [
       "rust-xmpp-server",

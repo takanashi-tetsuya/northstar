@@ -1,6 +1,6 @@
 //! PostgreSQL adapter for cluster signing-key and node-instance authority.
 
-use crate::db::{self, ClusterNodeHeartbeat};
+use crate::cluster_keys::{self, ClusterNodeHeartbeat};
 use anyhow::Result;
 use northstar_security::cluster_keys::ClusterKeyDeploymentIdentity;
 use northstar_security::cluster_keys::ClusterNodeInstance;
@@ -11,19 +11,19 @@ use northstar_session_application::cluster_authority::ClusterAuthorityRepository
 use sqlx::PgPool;
 use std::time::Duration;
 
-pub(crate) struct PostgresClusterAuthorityRepository {
+pub struct PostgresClusterAuthorityRepository {
     pool: PgPool,
 }
 
 impl PostgresClusterAuthorityRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
 
 impl ClusterAuthorityRepository for PostgresClusterAuthorityRepository {
     async fn validate_cluster_key(&self, identity: &ClusterKeyDeploymentIdentity) -> Result<()> {
-        db::validate_cluster_key_deployment(&self.pool, identity).await
+        cluster_keys::validate_cluster_key_deployment(&self.pool, identity).await
     }
 
     async fn validate_peer_keys(
@@ -31,7 +31,7 @@ impl ClusterAuthorityRepository for PostgresClusterAuthorityRepository {
         domain: &str,
         expected: &[ExpectedClusterPeerKey],
     ) -> Result<()> {
-        db::validate_cluster_peer_key_deployments(&self.pool, domain, expected).await
+        cluster_keys::validate_cluster_peer_key_deployments(&self.pool, domain, expected).await
     }
 
     async fn peer_keys(
@@ -39,7 +39,7 @@ impl ClusterAuthorityRepository for PostgresClusterAuthorityRepository {
         domain: &str,
         nodes: &[String],
     ) -> Result<Vec<ClusterPeerKeyAuthority>> {
-        db::cluster_peer_key_authorities(&self.pool, domain, nodes).await
+        cluster_keys::cluster_peer_key_authorities(&self.pool, domain, nodes).await
     }
 
     async fn active_instances(
@@ -47,7 +47,7 @@ impl ClusterAuthorityRepository for PostgresClusterAuthorityRepository {
         domain: &str,
         nodes: &[String],
     ) -> Result<Vec<ClusterNodeInstance>> {
-        db::active_cluster_node_instances(&self.pool, domain, nodes).await
+        cluster_keys::active_cluster_node_instances(&self.pool, domain, nodes).await
     }
 
     async fn heartbeat_instance(
@@ -55,7 +55,7 @@ impl ClusterAuthorityRepository for PostgresClusterAuthorityRepository {
         authority: &ClusterReadinessAuthority,
         lease: Duration,
     ) -> Result<()> {
-        db::heartbeat_cluster_node_instance(
+        cluster_keys::heartbeat_cluster_node_instance(
             &self.pool,
             ClusterNodeHeartbeat {
                 xmpp_domain: &authority.key_identity.xmpp_domain,

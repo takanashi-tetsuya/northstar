@@ -86,11 +86,14 @@ fi
 run_exact_ignored() {
   local test_name="$1"
   local output
+  # The capacity ledger tests live in the session PostgreSQL crate.
+  local package=()
+  [[ "$test_name" != capacity::* ]] || package=(-p northstar-session-postgres)
   # Each exact test gets a fresh migration ledger and capacity authority. In
   # particular, accounts created by one test must not be reinterpreted under a
   # later test's deliberately small 64-shard capacity fixture.
   create_active_schema
-  output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture --test-threads=1 2>&1)" || {
+  output="$(cargo test --locked --offline "${package[@]}" "$test_name" -- --ignored --exact --nocapture --test-threads=1 2>&1)" || {
     printf '%s\n' "$output"
     exit 1
   }
@@ -115,9 +118,9 @@ run_exact_ignored \
 run_exact_ignored \
   db::fast_tests::fast_derivation_integrity_failures_are_side_effect_free
 run_exact_ignored \
-  db::capacity::tests::postgres_capacity_audit_compares_complete_entity_and_counter_sets
+  capacity::tests::postgres_capacity_audit_compares_complete_entity_and_counter_sets
 run_exact_ignored \
-  db::capacity::tests::postgres_capacity_fixture_is_atomic_leased_and_idempotent
+  capacity::tests::postgres_capacity_fixture_is_atomic_leased_and_idempotent
 run_exact_ignored \
   db::account_revocations_tests::committed_revocations_survive_lost_wakes_and_stale_acknowledgements
 run_exact_ignored \

@@ -1,7 +1,7 @@
 pub(crate) mod account_admin;
 // The composition root binds transport service handles to concrete adapters.
 pub(crate) type BoshReplayService = northstar_session_application::replay::ReplayService<
-    db::replay_repository::PostgresReplayRepository,
+    northstar_session_postgres::replay_repository::PostgresReplayRepository,
 >;
 pub(crate) type BoshMixService = northstar_room_application::mix_service::MixService<
     crate::db::room_effects::PostgresMixRepository,
@@ -36,10 +36,10 @@ impl axum::extract::FromRef<Arc<AppState>> for PublicDiscoveryContext {
 
 pub(crate) mod capacity_maintenance;
 pub(crate) type CapacityLeaseRenewalContext = capacity_maintenance::CapacityLeaseRenewalContext<
-    db::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository,
+    northstar_session_postgres::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository,
 >;
 pub(crate) type CapacityLeaseReaperContext = capacity_maintenance::CapacityLeaseReaperContext<
-    db::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository,
+    northstar_session_postgres::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository,
 >;
 
 impl axum::extract::FromRef<Arc<AppState>> for InvitationAdminContext {
@@ -329,7 +329,7 @@ pub struct AppState {
     mam_service: northstar_archive_application::MamService<northstar_workflows::mam_repository::PostgresMamRepository>,
     sm_service: northstar_session_application::sm::SmService<db::sm_repository::PostgresSmRepository>,
     replay_service:
-        northstar_session_application::replay::ReplayService<db::replay_repository::PostgresReplayRepository>,
+        northstar_session_application::replay::ReplayService<northstar_session_postgres::replay_repository::PostgresReplayRepository>,
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
     cluster: crate::cluster::ClusterManager,
     account_revocation_consumer_service:

@@ -45,7 +45,7 @@ impl AuthenticationEffects for RootAuthenticationEffects {
         full_jid: &str,
         lease_seconds: u64,
     ) -> Result<bool> {
-        super::capacity::publish_binding_live_session_in_transaction(
+        northstar_session_postgres::capacity::publish_binding_live_session_in_transaction(
             transaction,
             connection_id,
             user_id,

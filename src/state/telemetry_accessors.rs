@@ -50,10 +50,10 @@ impl AppState {
     pub(crate) fn cluster_authority_service(
         &self,
     ) -> northstar_session_application::cluster_authority::ClusterAuthorityService<
-        db::cluster_authority_repository::PostgresClusterAuthorityRepository,
-    > {
+        northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository,
+    >{
         northstar_session_application::cluster_authority::ClusterAuthorityService::new(
-            db::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
+            northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
                 self.pool.clone(),
             ),
         )
@@ -74,10 +74,10 @@ impl AppState {
     pub(crate) fn node_message_contract_verifier(
         &self,
     ) -> northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier<
-        db::node_message_projection_repository::PostgresNodeMessageProjectionRepository,
+        northstar_session_postgres::node_message_projection_repository::PostgresNodeMessageProjectionRepository,
     >{
         northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier::new(
-            db::node_message_projection_repository::PostgresNodeMessageProjectionRepository::new(
+            northstar_session_postgres::node_message_projection_repository::PostgresNodeMessageProjectionRepository::new(
                 self.pool.clone(),
             ),
         )
@@ -86,10 +86,10 @@ impl AppState {
     pub(crate) fn cluster_instance_release_service(
         &self,
     ) -> northstar_session_application::cluster_instance_release::ClusterInstanceReleaseService<
-        db::cluster_instance_release_repository::PostgresClusterInstanceReleaseRepository,
-    > {
+        northstar_session_postgres::cluster_instance_release_repository::PostgresClusterInstanceReleaseRepository,
+    >{
         northstar_session_application::cluster_instance_release::ClusterInstanceReleaseService::new(
-            db::cluster_instance_release_repository::PostgresClusterInstanceReleaseRepository::new(
+            northstar_session_postgres::cluster_instance_release_repository::PostgresClusterInstanceReleaseRepository::new(
                 self.pool.clone(),
             ),
         )

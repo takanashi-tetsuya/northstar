@@ -303,7 +303,8 @@ fn capacity_error_classification_is_narrow_and_stable() {
 
 #[test]
 fn destroyed_muc_rooms_release_capacity_once_and_are_not_backfilled() {
-    let migration = include_str!("../../../migrations/0090_deployment_capacity_ledger.sql");
+    let migration =
+        include_str!("../../../../../../migrations/0090_deployment_capacity_ledger.sql");
     assert!(migration.contains("northstar_muc_capacity_destroy_update"));
     assert!(migration.contains("OLD.destroyed_at IS NULL AND NEW.destroyed_at IS NOT NULL"));
     assert!(migration.contains("Do not transfer/release that owner a second time"));
@@ -314,8 +315,10 @@ fn destroyed_muc_rooms_release_capacity_once_and_are_not_backfilled() {
 
 #[test]
 fn session_authorities_are_capability_only_and_secret_columns_stay_private() {
-    let migration = include_str!("../../../migrations/0114_session_authority_capabilities.sql");
-    let grants = include_str!("../../../deploy/postgres-init/lib/apply-northstar-grants.sql");
+    let migration =
+        include_str!("../../../../../../migrations/0114_session_authority_capabilities.sql");
+    let grants =
+        include_str!("../../../../../../deploy/postgres-init/lib/apply-northstar-grants.sql");
     assert!(!migration.contains("public."));
     for required in [
         "northstar_session_reserve_live",
@@ -592,10 +595,10 @@ async fn postgres_capacity_fixture_is_atomic_leased_and_idempotent() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let maintenance =
         northstar_session_application::capacity_maintenance::CapacityMaintenanceService::new(
-            crate::db::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository::new(
+            crate::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository::new(
                 pool.clone(),
             ),
         );

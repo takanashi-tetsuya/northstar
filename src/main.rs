@@ -320,9 +320,11 @@ async fn run() -> Result<()> {
     // released automatically if its owner dies.
     let startup_phase =
         northstar_telemetry::logging::StartupPhase::begin("deployment_capacity_reconciliation");
-    db::reconcile_deployment_capacity(
+    northstar_session_postgres::capacity::reconcile_deployment_capacity(
         &pool,
-        db::DeploymentCapacityConfiguration::from_config(&config)?,
+        northstar_session_postgres::capacity::DeploymentCapacityConfiguration::from_config(
+            &config,
+        )?,
     )
     .await
     .context("could not establish deployment-wide capacity authority")?;

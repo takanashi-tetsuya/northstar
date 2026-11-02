@@ -1,12 +1,12 @@
-use crate::db::cluster_keys::{
-    claim_cluster_node_instance, reconcile_cluster_key_deployment_before_instance_claim,
-    release_cluster_node_instance,
-};
 use northstar_message_application::direct_spool_wake::DirectSpoolWakeRepository;
 use northstar_message_postgres::direct_spool_wake::*;
 use northstar_postgres::cluster_lock::CLUSTER_KEY_AUTHORITY_LOCK;
 use northstar_security::cluster_keys::ClusterKeyDeploymentIdentity;
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
+use northstar_session_postgres::cluster_keys::{
+    claim_cluster_node_instance, reconcile_cluster_key_deployment_before_instance_claim,
+    release_cluster_node_instance,
+};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -185,9 +185,10 @@ async fn direct_spool_wake_commit_ack_takeover_and_cleanup_are_fenced() {
         message_id: raced_message,
         claim_id: None,
     };
-    let loser = crate::db::replay::fence_durable_socket_write(&pool, live_delivery)
-        .await
-        .unwrap_err();
+    let loser =
+        northstar_session_postgres::replay::fence_durable_socket_write(&pool, live_delivery)
+            .await
+            .unwrap_err();
     assert_eq!(
         loser.downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>(),
         Some(&northstar_stream::outbound::DurableDeliverySuperseded {
@@ -201,7 +202,7 @@ async fn direct_spool_wake_commit_ack_takeover_and_cleanup_are_fenced() {
             .await
             .unwrap();
     assert_eq!(persisted_claim, Some(replay_claim));
-    let winner = crate::db::replay::fence_durable_socket_write(
+    let winner = northstar_session_postgres::replay::fence_durable_socket_write(
         &pool,
         northstar_stream::outbound::DurableDelivery {
             claim_id: Some(replay_claim),
@@ -210,7 +211,7 @@ async fn direct_spool_wake_commit_ack_takeover_and_cleanup_are_fenced() {
     )
     .await
     .unwrap();
-    crate::db::replay::acknowledge_durable_delivery(&pool, winner)
+    northstar_session_postgres::replay::acknowledge_durable_delivery(&pool, winner)
         .await
         .unwrap();
     assert!(repository
@@ -265,7 +266,7 @@ async fn direct_spool_wake_commit_ack_takeover_and_cleanup_are_fenced() {
             .await
             .unwrap();
     assert_eq!(initial_claim, Some(reserved_message));
-    let fenced = crate::db::replay::fence_durable_socket_write(
+    let fenced = northstar_session_postgres::replay::fence_durable_socket_write(
         &pool,
         northstar_stream::outbound::DurableDelivery {
             recipient_id: reserved_recipient,
@@ -294,7 +295,7 @@ async fn direct_spool_wake_commit_ack_takeover_and_cleanup_are_fenced() {
             .await
             .unwrap();
     assert_eq!(persisted_fenced_claim, fenced.claim_id);
-    crate::db::replay::acknowledge_durable_delivery(&pool, fenced)
+    northstar_session_postgres::replay::acknowledge_durable_delivery(&pool, fenced)
         .await
         .unwrap();
 

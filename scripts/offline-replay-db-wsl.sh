@@ -41,41 +41,41 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$database?options=-csearch_path%3D$schema"
-cargo test --locked --offline \
-  db::replay::tests::recovery_replay_authorization_serializes_with_account_disable \
+cargo test --locked --offline -p northstar-session-postgres \
+  replay::tests::recovery_replay_authorization_serializes_with_account_disable \
   -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked --offline \
-  db::replay::tests::recovery_replay_does_not_complete_while_cutoff_row_has_another_claim \
+cargo test --locked --offline -p northstar-session-postgres \
+  replay::tests::recovery_replay_does_not_complete_while_cutoff_row_has_another_claim \
   -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked --offline \
-  db::replay::tests::durable_ack_batch_validates_every_fence_before_deleting_any_row \
+cargo test --locked --offline -p northstar-session-postgres \
+  replay::tests::durable_ack_batch_validates_every_fence_before_deleting_any_row \
   -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked --offline \
-  db::replay::tests::logical_owner_is_exclusive_crash_recoverable_and_does_not_hold_the_pool \
+cargo test --locked --offline -p northstar-session-postgres \
+  replay::tests::logical_owner_is_exclusive_crash_recoverable_and_does_not_hold_the_pool \
   -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked --offline \
-  db::replay::tests::replay_enforces_resource_affinity_and_immutable_ownership \
+cargo test --locked --offline -p northstar-session-postgres \
+  replay::tests::replay_enforces_resource_affinity_and_immutable_ownership \
   -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked --offline \
-  db::replay::tests::concurrent_resources_replay_without_starvation_and_fence_wrong_claims \
+cargo test --locked --offline -p northstar-session-postgres \
+  replay::tests::concurrent_resources_replay_without_starvation_and_fence_wrong_claims \
   -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked --offline \
-  db::replay::tests::repeatable_read_account_claim_serialization_retries_with_fresh_snapshot \
+cargo test --locked --offline -p northstar-session-postgres \
+  replay::tests::repeatable_read_account_claim_serialization_retries_with_fresh_snapshot \
   -- --ignored --exact --nocapture --test-threads=1
 cargo test --locked --offline \
   xmpp::protocol::replay::tests::busy_resource_lease_retries_without_second_availability_transition \
   -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked --offline \
-  db::replay::tests::replay_policy_snapshot_is_consistent_and_missing_policy_rolls_back \
+cargo test --locked --offline -p northstar-session-postgres \
+  replay::tests::replay_policy_snapshot_is_consistent_and_missing_policy_rolls_back \
   -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked --offline \
-  db::replay::tests::replay_high_water_excludes_rows_inserted_after_replay_started \
+cargo test --locked --offline -p northstar-session-postgres \
+  replay::tests::replay_high_water_excludes_rows_inserted_after_replay_started \
   -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked --offline \
-  db::replay::tests::replay_is_paged_exclusive_and_retryable \
+cargo test --locked --offline -p northstar-session-postgres \
+  replay::tests::replay_is_paged_exclusive_and_retryable \
   -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked --offline \
-  db::replay::tests::bosh_delivery_is_owned_by_response_rid_until_a_live_client_ack \
+cargo test --locked --offline -p northstar-session-postgres \
+  replay::tests::bosh_delivery_is_owned_by_response_rid_until_a_live_client_ack \
   -- --ignored --exact --nocapture --test-threads=1
 
 cleanup

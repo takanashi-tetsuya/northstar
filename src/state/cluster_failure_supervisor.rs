@@ -8,7 +8,7 @@ impl AppState {
         ClusterFailureSupervisorContext {
             authority: self.cluster.failure_supervisor_authority(),
             authority_service: northstar_session_application::cluster_authority::ClusterAuthorityService::new(
-                db::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
+                northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
                     self.pool.clone(),
                 ),
             ),

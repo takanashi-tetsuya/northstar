@@ -13,7 +13,7 @@ use uuid::Uuid;
 /// The replay function uses PostgreSQL's default PL/pgSQL exception code for
 /// both ordinary validation rejections and authority failures. Only the exact
 /// source-side validation texts may bypass terminal authority handling.
-pub(crate) fn cluster_replay_validation_rejection(error: &anyhow::Error) -> bool {
+pub fn cluster_replay_validation_rejection(error: &anyhow::Error) -> bool {
     error
         .downcast_ref::<sqlx::Error>()
         .and_then(sqlx::Error::as_database_error)
@@ -37,7 +37,7 @@ fn replay_validation_rejection_fields(code: Option<&str>, message: &str) -> bool
 /// serializing key rotation, instance replacement and clean release with the
 /// durable message write. PostgreSQL's clock, rather than a cached peer lease,
 /// decides whether this process still owns the instance.
-pub(crate) async fn fence_direct_message_authority_in_transaction(
+pub async fn fence_direct_message_authority_in_transaction(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     authority: &northstar_security::cluster_keys::ClusterReadinessAuthority,
 ) -> Result<()> {
@@ -85,7 +85,7 @@ pub(crate) async fn fence_direct_message_authority_in_transaction(
 /// Wait behind every direct admission currently holding this process's exact
 /// key and instance shared locks. The returned PostgreSQL timestamp is a
 /// cutoff for one bounded recovery replay pass, never a claim on live routes.
-pub(crate) async fn recovery_replay_cutoff_after_direct_commits(
+pub async fn recovery_replay_cutoff_after_direct_commits(
     pool: &PgPool,
     authority: &northstar_security::cluster_keys::ClusterReadinessAuthority,
 ) -> Result<DateTime<Utc>> {

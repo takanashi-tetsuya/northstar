@@ -1,6 +1,6 @@
 #[test]
 fn renewal_is_bounded_by_immutable_ack_age() {
-    let migration = include_str!("../../../migrations/0096_bosh_ack_ownership_bounds.sql");
+    let migration = include_str!("../../../../../../migrations/0096_bosh_ack_ownership_bounds.sql");
     let source = super::module_source();
     for required in [
         "first_owned_at TIMESTAMPTZ NOT NULL",

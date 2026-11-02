@@ -16,7 +16,10 @@ impl PostgresClusterReplayMaintenanceRepository {
 
 impl ClusterReplayMaintenanceRepository for PostgresClusterReplayMaintenanceRepository {
     async fn cleanup_replays(&self, limit: i32) -> Result<u64> {
-        super::cleanup_cluster_envelope_replays(&self.pool, limit).await
+        northstar_session_postgres::cluster_keys::cleanup_cluster_envelope_replays(
+            &self.pool, limit,
+        )
+        .await
     }
 
     async fn validate_capacity_authority(&self) -> Result<()> {

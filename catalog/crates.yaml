@@ -508,6 +508,16 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-session-postgres
+    package: northstar-session-postgres
+    path: crates/contexts/session/northstar-session-postgres
+    tier: context
+    context: session
+    role: adapter
+    owner_team: identity-session
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-stream
     package: northstar-stream
     path: crates/edges/northstar-stream

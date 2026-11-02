@@ -8,7 +8,7 @@ use sqlx::PgConnection;
 /// while the separate database policy lock is held. This is deliberately
 /// read-only: bootstrap, migration history and runtime ACL attestation retain
 /// their distinct responsibilities.
-pub(super) async fn attest_schema_owner(connection: &mut PgConnection) -> Result<()> {
+pub async fn attest_schema_owner(connection: &mut PgConnection) -> Result<()> {
     let (schema, directly_owned): (Option<String>, bool) = sqlx::query_as(
         "SELECT pg_catalog.current_schema()::text,
                 EXISTS (

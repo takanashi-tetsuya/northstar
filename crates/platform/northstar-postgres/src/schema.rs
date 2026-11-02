@@ -674,7 +674,7 @@ async fn session_authority_attestation_diagnostics(
 /// object. Normal server startup uses this path with the non-owner runtime
 /// role; only the explicit `migrate` command may run migrations.
 pub async fn verify_schema(pool: &PgPool, domain: &str) -> Result<()> {
-    let expected = super::MIGRATOR
+    let expected = crate::MIGRATOR
         .iter()
         .map(|migration| (migration.version, migration.checksum.to_vec()))
         .collect::<Vec<_>>();

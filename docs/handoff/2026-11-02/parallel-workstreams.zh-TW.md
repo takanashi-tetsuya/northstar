@@ -29,6 +29,25 @@ A、B1、C、D 之間可依任意順序進行，建議由 A1 開始熟悉流程�
 
 箭頭左邊完成後才能開始右邊。第一行的工作流彼此沒有先後要求。
 
+## 主線回覆（第二輪）
+
+A1–C3 已在 dev。D（`cloud/d-r2`，`ca46c694`）由主線連同 WP-329–333 一起落地。dev CI 41393345312 的 passkeys 失敗不是偶發。sqlx 0.8.6 的 BEGIN 若在完成前被取消，連線會帶著未結束的交易回到池裡，下一個借用者的 `SET TRANSACTION ISOLATION LEVEL` 就會失敗。WP-329 加了 `northstar_postgres::pool::options()`，在連線歸還時檢查交易狀態，正式程式的連線池都改用它。gate 禁止正式程式直接寫 `PgPoolOptions::new()`，測試檔不受限；放在 `test-support` feature 後面的共用程式碼不算測試檔，要用 `pool::options()`。
+
+| 回報項目 | 決定 |
+| --- | --- |
+| E1 的 `authentication_tests` | 留在 root。主線在 S29 把它與 `db/authentication_effects.rs` 一起移，E1 只移其他三個檔 |
+| E4 的 `api_operations_idle_tests` | 移出 E4。它由 `api_operations_tests` 以 `include!` 載入，後者用到 `crate::cluster::ClusterManager`；`northstar-cluster` 建好後由主線兩檔一起移 |
+| `RootAccountRepository`、`RootAdminCommandRepository` | WP-332 已改名為 `northstar_workflows::account_repository::WorkflowAccountRepository` 與 `northstar_workflows::admin_command_repository::WorkflowAdminCommandRepository`，移測試時用新名稱 |
+| root `db/mod.rs` 與 message-postgres 的過渡匯出 | 保留。主線移動 `src/s2s`、`src/cluster`、`db/sm*`、`db/replay*` 時一併刪除 |
+| OMEMO 三張表的分類 | 接受。poll capability 與 `fast_tokens` 一樣，是會過期的 credential-secret |
+| retention 驗收指令 | 已在工作流 D 更正為兩條 |
+| PostgreSQL 16 | 本地用 16 除錯可以，結果以 CI 的 17 為準 |
+| toolkit 的 node 測試 | `gates.sh` 已改為 `node --test --test-reporter=spec`，不必再設 `NODE_OPTIONS` |
+| `docs/ARCHITECTURE.md` 的舊段落與 MixHost 條目 | 主線在 S29 的紀錄中處理 |
+| 已被取代的 `cloud/*` 分支 | 保留，S31 之後由主線清理 |
+
+下一步：E1（三個檔）、E2、E3、E4（四個檔）可以開始，E5 等 D 落地。開始前照「推送流程」第 3 步同步 dev 並重跑 `newbase.sh`。
+
 ## 開始之前
 
 執行者在雲端環境工作，手上只有 GitHub repo `takanashi-tetsuya/northstar` 的 clone。主線機器上的檔案、腳本與編譯快取都拿不到，程式由執行者直接修改。工具包隨 repo 提供，在 `docs/handoff/2026-11-02/toolkit/`，下文以 `$TK` 代表。下列指令都從 repo 根目錄執行。
@@ -357,7 +376,8 @@ OMEMO 恢復歸屬 auth 上下文，移動後 `src/db/retention.rs` 就能整個
 - `src/services/omemo_recovery.rs`、`src/db/omemo_recovery*.rs`、`src/db/retention.rs` 都已消失。
 - `AppState` 不再有這兩個直接欄位。
 - `PKG=northstar-auth-postgres PREFIX=omemo FILTER='omemo_recovery' bash $TK/db.sh` 全部通過。
-- `PKG=rust-xmpp-server PREFIX=retention OPS=1 FILTER='^db::retention' bash $TK/db.sh` 全部通過。
+- `PKG=rust-xmpp-server PREFIX=retention FILTER='^db::retention_tests' bash $TK/db.sh` 的 3 個測試全部通過。
+- `PKG=rust-xmpp-server PREFIX=retention OPS=1 FILTER='^db::retention_policy_repository_tests' bash $TK/db.sh` 的 2 個測試全部通過。
 
 ## 工作流 E：DB 測試遷出 root
 
@@ -365,13 +385,13 @@ OMEMO 恢復歸屬 auth 上下文，移動後 `src/db/retention.rs` 就能整個
 
 | 批次 | WP | 測試檔（`src/db/` 下） | 目的地 | 前置 |
 | --- | --- | --- | --- | --- |
-| E1 帳號與 auth | WP-440–444 | `users_tests`、`authentication_tests`、`fast_tests`、`account_repository_registration_guard_tests` | `northstar-auth-postgres`，涉及 workflows 的進 workflows | 無 |
+| E1 帳號與 auth | WP-440–444 | `users_tests`、`fast_tests`、`account_repository_registration_guard_tests`（`authentication_tests` 由主線移） | `northstar-auth-postgres`，涉及 workflows 的進 workflows | 無 |
 | E2 abuse | WP-445–449 | `abuse_guard_tests`、`abuse_keys_tests` | `northstar-workflows` | C1 |
 | E3 pubsub | WP-450–454 | `pubsub_integration_tests/*` | `northstar-workflows` | C3 |
-| E4 operations | WP-455–459 | `api_control_tests`、`api_operations_idle_tests`、`api_pages_tests`、`admin_commands_boundary_tests`、`admin_command_sessions_tests` | `northstar-workflows` | 無 |
+| E4 operations | WP-455–459 | `api_control_tests`、`api_pages_tests`、`admin_commands_boundary_tests`、`admin_command_sessions_tests` | `northstar-workflows` | 無 |
 | E5 治理與保存 | WP-460–469 | `reports_tests`、`data_lifecycle_tests`、`retention_policy_repository_tests`、`upload_admin_tests` | `northstar-workflows` | D |
 
-不要移動這些：`sm_tests`、`replay_tests`、`s2s_tests`、`capacity/tests`、`cluster_keys/tests`、MUC 與 MIX 相關測試。它們依賴主線正在改的模組。
+不要移動這些：`authentication_tests`、`api_operations_tests` 與它 `include!` 的 `api_operations_idle_tests`、`sm_tests`、`replay_tests`、`s2s_tests`、`capacity/tests`、`cluster_keys/tests`、MUC 與 MIX 相關測試。它們依賴主線正在改的模組。
 
 **移動規則**
 

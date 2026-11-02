@@ -148,7 +148,7 @@ impl AppState {
     pub(crate) fn presence_service(
         &self,
     ) -> &northstar_roster_application::presence::PresenceService<
-        db::presence_repository::PostgresPresenceRepository,
+        northstar_workflows::presence_repository::PostgresPresenceRepository,
     > {
         &self.roster.presence_service
     }

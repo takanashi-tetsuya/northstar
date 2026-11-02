@@ -1,6 +1,5 @@
 //! PostgreSQL-backed tests of the presence service over the root-wired repository.
 
-use crate::db;
 use northstar_roster_application::presence::*;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -89,7 +88,9 @@ async fn password_change_and_disable_win_the_client_subscription_fence() {
     let (actor_id, actor_name, generation) = insert_user(&database.pool, "actor").await;
     let (_, target_name, _) = insert_user(&database.pool, "target").await;
     let service = Arc::new(PresenceService::new(
-        db::presence_repository::PostgresPresenceRepository::new(database.pool.clone()),
+        northstar_workflows::presence_repository::PostgresPresenceRepository::new(
+            database.pool.clone(),
+        ),
     ));
 
     let mut password_change = database.pool.begin().await.unwrap();
@@ -279,9 +280,11 @@ async fn inverse_local_requests_share_uuid_lock_order_and_commit_both() {
     let database = IsolatedDatabase::create("inverse").await;
     let (alice_id, alice, alice_generation) = insert_user(&database.pool, "alice").await;
     let (bob_id, bob, bob_generation) = insert_user(&database.pool, "bob").await;
-    let service = PresenceService::new(db::presence_repository::PostgresPresenceRepository::new(
-        database.pool.clone(),
-    ));
+    let service = PresenceService::new(
+        northstar_workflows::presence_repository::PostgresPresenceRepository::new(
+            database.pool.clone(),
+        ),
+    );
     let alice_request = format!(
         "<presence xmlns='jabber:client' from='{alice}@example.test' to='{bob}@example.test' type='subscribe'/>"
     );
@@ -351,9 +354,11 @@ async fn remote_outbox_failure_rolls_back_the_roster_transition() {
     .execute(&database.pool)
     .await
     .unwrap();
-    let service = PresenceService::new(db::presence_repository::PostgresPresenceRepository::new(
-        database.pool.clone(),
-    ));
+    let service = PresenceService::new(
+        northstar_workflows::presence_repository::PostgresPresenceRepository::new(
+            database.pool.clone(),
+        ),
+    );
     let stanza = format!(
         "<presence xmlns='jabber:client' from='{actor}@example.test' to='peer@remote.test' type='subscribe'/>"
     );
@@ -395,9 +400,11 @@ async fn duplicate_local_subscribe_is_a_true_state_noop() {
     let database = IsolatedDatabase::create("duplicate").await;
     let (actor_id, actor, generation) = insert_user(&database.pool, "actor").await;
     let (_, target, _) = insert_user(&database.pool, "target").await;
-    let service = PresenceService::new(db::presence_repository::PostgresPresenceRepository::new(
-        database.pool.clone(),
-    ));
+    let service = PresenceService::new(
+        northstar_workflows::presence_repository::PostgresPresenceRepository::new(
+            database.pool.clone(),
+        ),
+    );
     let stanza = format!(
         "<presence xmlns='jabber:client' from='{actor}@example.test' to='{target}@example.test' type='subscribe'/>"
     );
@@ -535,7 +542,9 @@ async fn exact_connection_privacy_and_default_change_fence_subscription_mutation
         "<presence xmlns='jabber:client' from='{actor}@example.test' to='{target}@example.test' type='subscribe'/>"
     );
     let service = Arc::new(PresenceService::new(
-        db::presence_repository::PostgresPresenceRepository::new(database.pool.clone()),
+        northstar_workflows::presence_repository::PostgresPresenceRepository::new(
+            database.pool.clone(),
+        ),
     ));
     assert!(matches!(
         service
@@ -608,7 +617,9 @@ async fn block_commit_and_inbound_default_policy_win_subscription_races() {
     let (actor_id, actor, generation) = insert_user(&database.pool, "actor").await;
     let (target_id, target, _) = insert_user(&database.pool, "target").await;
     let service = Arc::new(PresenceService::new(
-        db::presence_repository::PostgresPresenceRepository::new(database.pool.clone()),
+        northstar_workflows::presence_repository::PostgresPresenceRepository::new(
+            database.pool.clone(),
+        ),
     ));
     let mut blocker = database.pool.begin().await.unwrap();
     // Production block/unblock takes the exact enabled owner row before
@@ -722,9 +733,11 @@ async fn cluster_presence_authority_rejects_generation_change_and_same_name_recr
     let (owner_id, owner, owner_generation) = insert_user(&database.pool, "owner").await;
     let (recipient_id, recipient, recipient_generation) =
         insert_user(&database.pool, "recipient").await;
-    let service = PresenceService::new(db::presence_repository::PostgresPresenceRepository::new(
-        database.pool.clone(),
-    ));
+    let service = PresenceService::new(
+        northstar_workflows::presence_repository::PostgresPresenceRepository::new(
+            database.pool.clone(),
+        ),
+    );
     let owner_jid = format!("{owner}@example.test/Phone");
     let recipient_jid = format!("{recipient}@example.test");
     assert!(service

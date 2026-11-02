@@ -1,5 +1,4 @@
 //! PostgreSQL presence policy snapshots and complete subscription mutations.
-use crate::db;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_roster_application::presence::*;
@@ -7,11 +6,11 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresPresenceRepository {
+pub struct PostgresPresenceRepository {
     pool: PgPool,
 }
 impl PostgresPresenceRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -59,7 +58,9 @@ impl PresenceRepository for PostgresPresenceRepository {
     }
 
     async fn avatar_hash(&self, user_id: Uuid) -> Result<Option<String>> {
-        Ok(db::get_vcard(&self.pool, user_id).await?.avatar_hash)
+        Ok(northstar_pubsub_postgres::get_vcard(&self.pool, user_id)
+            .await?
+            .avatar_hash)
     }
 
     async fn find_enabled_user(&self, username: &str) -> Result<Option<PresenceAccount>> {
@@ -127,20 +128,21 @@ impl PresenceRepository for PostgresPresenceRepository {
         bounce_to: Option<&str>,
         policy: northstar_federation_core::S2sOutboxPolicy,
     ) -> Result<PresenceMutation<RemoteSubscriptionTransition>> {
-        let outcome = northstar_workflows::roster::transition_remote_presence_subscription_with_outbox_authorized(
-            &self.pool,
-            actor_id,
-            expected_auth_generation,
-            connection_id,
-            local_domain,
-            contact,
-            kind,
-            target_domain,
-            stanza,
-            bounce_to,
-            policy,
-        )
-        .await?;
+        let outcome =
+            crate::roster::transition_remote_presence_subscription_with_outbox_authorized(
+                &self.pool,
+                actor_id,
+                expected_auth_generation,
+                connection_id,
+                local_domain,
+                contact,
+                kind,
+                target_domain,
+                stanza,
+                bounce_to,
+                policy,
+            )
+            .await?;
         Ok(map_remote_transition(outcome))
     }
 
@@ -153,17 +155,16 @@ impl PresenceRepository for PostgresPresenceRepository {
         contact: &str,
         kind: &str,
     ) -> Result<PresenceMutation<RemoteSubscriptionTransition>> {
-        let outcome =
-            northstar_workflows::roster::transition_remote_presence_subscription_authorized(
-                &self.pool,
-                actor_id,
-                expected_auth_generation,
-                connection_id,
-                local_domain,
-                contact,
-                kind,
-            )
-            .await?;
+        let outcome = crate::roster::transition_remote_presence_subscription_authorized(
+            &self.pool,
+            actor_id,
+            expected_auth_generation,
+            connection_id,
+            local_domain,
+            contact,
+            kind,
+        )
+        .await?;
         Ok(map_remote_transition(outcome))
     }
 
@@ -180,18 +181,17 @@ impl PresenceRepository for PostgresPresenceRepository {
             kind,
             stanza,
         } = request;
-        let outcome =
-            northstar_workflows::roster::transition_local_presence_subscription_authorized(
-                &self.pool,
-                actor_id,
-                expected_auth_generation,
-                connection_id,
-                local_domain,
-                target_username,
-                kind,
-                stanza,
-            )
-            .await?;
+        let outcome = crate::roster::transition_local_presence_subscription_authorized(
+            &self.pool,
+            actor_id,
+            expected_auth_generation,
+            connection_id,
+            local_domain,
+            target_username,
+            kind,
+            stanza,
+        )
+        .await?;
         Ok(match outcome {
             northstar_roster_core::AuthorizedLocalPresenceTransition::Unauthorized => {
                 PresenceMutation::Unauthorized
@@ -229,7 +229,7 @@ impl PresenceRepository for PostgresPresenceRepository {
         stanza: &str,
     ) -> Result<PresenceMutation<InboundSubscriptionTransition>> {
         Ok(
-            match northstar_workflows::roster::transition_inbound_remote_presence_subscription(
+            match crate::roster::transition_inbound_remote_presence_subscription(
                 &self.pool,
                 recipient_id,
                 local_domain,

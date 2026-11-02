@@ -32,6 +32,7 @@ northstar-operations-application = { path = "../../operations/northstar-operatio
 northstar-operations-core = { path = "../../operations/northstar-operations-core" }
 northstar-operations-postgres = { path = "../../operations/northstar-operations-postgres" }
 northstar-postgres = { path = "../../../platform/northstar-postgres" }
+northstar-pubsub-postgres = { path = "../../pubsub/northstar-pubsub-postgres" }
 northstar-pubsub-core = { path = "../../pubsub/northstar-pubsub-core" }
 northstar-room-application = { path = "../../room/northstar-room-application" }
 northstar-room-postgres = { path = "../../room/northstar-room-postgres" }

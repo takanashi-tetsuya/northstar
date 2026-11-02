@@ -58,7 +58,10 @@ pub mod omemo_recovery;
 #[cfg(test)]
 mod passkeys_tests;
 pub mod pep_roster;
-pub mod presence_repository;
+// src/cluster/listener_policy.rs (S29) still names the presence repository through db::.
+pub(crate) mod presence_repository {
+    pub(crate) use northstar_workflows::presence_repository::PostgresPresenceRepository;
+}
 #[cfg(test)]
 mod presence_service_tests;
 #[cfg(test)]

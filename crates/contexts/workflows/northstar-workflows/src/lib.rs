@@ -28,6 +28,7 @@ pub mod operation_admin_repository;
 pub mod operation_muc_destroy_repository;
 pub mod password_change_repository;
 pub mod personal_history;
+pub mod presence_repository;
 pub mod privacy;
 pub mod push_repository;
 pub mod report_moderation_repository;

@@ -9,7 +9,7 @@ pub(super) struct RosterModule {
         northstar_roster_postgres::roster::PostgresBlockingRepository,
     >,
     pub(super) presence_service: northstar_roster_application::presence::PresenceService<
-        db::presence_repository::PostgresPresenceRepository,
+        northstar_workflows::presence_repository::PostgresPresenceRepository,
     >,
     pub(super) roster_service: RosterService,
     pub(super) s2s_roster_authorization_service:
@@ -29,7 +29,7 @@ impl RosterModule {
                 northstar_roster_postgres::roster::PostgresBlockingRepository::new(pool.clone()),
             ),
             presence_service: northstar_roster_application::presence::PresenceService::new(
-                db::presence_repository::PostgresPresenceRepository::new(pool.clone()),
+                northstar_workflows::presence_repository::PostgresPresenceRepository::new(pool.clone()),
             ),
             roster_service: RosterService::new(northstar_workflows::roster::PostgresRosterRepository::new(
                 pool.clone(),

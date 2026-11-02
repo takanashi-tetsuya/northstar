@@ -4587,6 +4587,10 @@
       ],
       [
         "northstar-workflows",
+        "northstar-pubsub-postgres"
+      ],
+      [
+        "northstar-workflows",
         "northstar-room-application"
       ],
       [

@@ -210,7 +210,7 @@ pub(super) async fn write_component_outbox_with_lease<S: AsyncWrite + Unpin + Se
     let renewal_period =
         component_lease_renewal_period(state.s2s_outbox_dispatch_service().lease_seconds());
     let renewal_timeout = renewal_period.min(Duration::from_secs(5));
-    let dispatch: crate::services::s2s_outbox_dispatch::S2sOutboxDispatchService<_> =
+    let dispatch: northstar_federation_application::dispatch::S2sOutboxDispatchService<_> =
         state.s2s_outbox_dispatch_service().clone();
     let result = write_component_outbox_with_renewal(
         io,

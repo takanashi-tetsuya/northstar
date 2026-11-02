@@ -66,6 +66,7 @@ use self::relay::{
 };
 use self::session::push_mix_roster_update;
 use anyhow::{Context, Result};
+use northstar_federation_core::FederationRoute;
 use northstar_room_application::mix_service::outbox;
 use northstar_room_application::mix_service::outbox::core as mix_worker;
 use northstar_room_application::mix_service::{

@@ -5,7 +5,7 @@ use northstar_federation_core::{ExpiredS2sOutboxItem, S2sOutboxItem};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OutboxFailureDisposition {
+pub enum OutboxFailureDisposition {
     RetryScheduled,
     Expired,
     Dropped,
@@ -14,16 +14,16 @@ pub(crate) enum OutboxFailureDisposition {
 
 /// A non-authoritative observation. The caller still validates the live route
 /// and exact attempt before issuing the conditional wake operation.
-pub(crate) struct RouteRecoveryHead {
-    pub(crate) id: Uuid,
-    pub(crate) target_domain: String,
-    pub(crate) stanza: String,
-    pub(crate) attempt_count: i32,
-    pub(crate) retry_due: bool,
-    pub(crate) claim_in_flight: bool,
+pub struct RouteRecoveryHead {
+    pub id: Uuid,
+    pub target_domain: String,
+    pub stanza: String,
+    pub attempt_count: i32,
+    pub retry_due: bool,
+    pub claim_in_flight: bool,
 }
 
-pub(crate) trait S2sOutboxDispatchRepository: Send + Sync {
+pub trait S2sOutboxDispatchRepository: Send + Sync {
     fn renew(
         &self,
         id: Uuid,
@@ -73,45 +73,45 @@ pub(crate) trait S2sOutboxDispatchRepository: Send + Sync {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct S2sOutboxDispatchPolicy {
-    pub(crate) claim_batch: i64,
-    pub(crate) lease_seconds: u64,
-    pub(crate) retry_base_seconds: u64,
-    pub(crate) retry_max_seconds: u64,
-    pub(crate) max_attempts: i32,
+pub struct S2sOutboxDispatchPolicy {
+    pub claim_batch: i64,
+    pub lease_seconds: u64,
+    pub retry_base_seconds: u64,
+    pub retry_max_seconds: u64,
+    pub max_attempts: i32,
 }
 
 #[derive(Clone)]
-pub(crate) struct S2sOutboxDispatchService<R> {
+pub struct S2sOutboxDispatchService<R> {
     repository: R,
     policy: S2sOutboxDispatchPolicy,
 }
 
 impl<R: S2sOutboxDispatchRepository> S2sOutboxDispatchService<R> {
-    pub(crate) fn new(repository: R, policy: S2sOutboxDispatchPolicy) -> Self {
+    pub fn new(repository: R, policy: S2sOutboxDispatchPolicy) -> Self {
         Self { repository, policy }
     }
 
-    pub(crate) fn lease_seconds(&self) -> u64 {
+    pub fn lease_seconds(&self) -> u64 {
         self.policy.lease_seconds
     }
 
-    pub(crate) fn recovery_batch_limit(&self) -> Result<usize> {
+    pub fn recovery_batch_limit(&self) -> Result<usize> {
         usize::try_from(self.policy.claim_batch)
             .context("S2S outbox recovery batch must be nonnegative")
     }
 
-    pub(crate) async fn renew(&self, id: Uuid, token: Uuid) -> Result<bool> {
+    pub async fn renew(&self, id: Uuid, token: Uuid) -> Result<bool> {
         self.repository
             .renew(id, token, self.policy.lease_seconds)
             .await
     }
 
-    pub(crate) async fn complete(&self, id: Uuid, token: Uuid) -> Result<bool> {
+    pub async fn complete(&self, id: Uuid, token: Uuid) -> Result<bool> {
         self.repository.complete(id, token).await
     }
 
-    pub(crate) async fn fail(
+    pub async fn fail(
         &self,
         item: &S2sOutboxItem,
         error: &str,
@@ -129,11 +129,11 @@ impl<R: S2sOutboxDispatchRepository> S2sOutboxDispatchService<R> {
             .await
     }
 
-    pub(crate) async fn expire(&self) -> Result<Vec<ExpiredS2sOutboxItem>> {
+    pub async fn expire(&self) -> Result<Vec<ExpiredS2sOutboxItem>> {
         self.repository.expire(self.policy.claim_batch).await
     }
 
-    pub(crate) async fn claim_excluding_domains(
+    pub async fn claim_excluding_domains(
         &self,
         excluded_domains: &[String],
     ) -> Result<Vec<S2sOutboxItem>> {
@@ -148,7 +148,7 @@ impl<R: S2sOutboxDispatchRepository> S2sOutboxDispatchService<R> {
 
     /// Components claim one row at a time only when their socket is ready;
     /// the caller supplies that explicit batch size rather than dispatcher policy.
-    pub(crate) async fn claim_for_domains(
+    pub async fn claim_for_domains(
         &self,
         limit: i64,
         domains: &[String],
@@ -158,11 +158,11 @@ impl<R: S2sOutboxDispatchRepository> S2sOutboxDispatchService<R> {
             .await
     }
 
-    pub(crate) async fn route_head(&self, domain: &str) -> Result<Option<RouteRecoveryHead>> {
+    pub async fn route_head(&self, domain: &str) -> Result<Option<RouteRecoveryHead>> {
         self.repository.route_head(domain).await
     }
 
-    pub(crate) async fn wake_route_head(
+    pub async fn wake_route_head(
         &self,
         id: Uuid,
         domain: &str,

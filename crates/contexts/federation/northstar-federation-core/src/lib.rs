@@ -13,6 +13,32 @@ pub const DIALBACK_NS: &str = "jabber:server:dialback";
 pub const STREAM_LIMITS_NS: &str = "urn:xmpp:stream-limits:0";
 pub const MAX_S2S_STANZA_BYTES: usize = 1024 * 1024;
 
+/// The one operation MIX needs while it owns its database admission permit.
+/// It cannot read the federation repository or wake a dispatcher prematurely.
+pub trait FederationOutboxAdmission: Send + Sync {
+    fn admit<'a>(
+        &'a self,
+        target_domain: &'a str,
+        stanza: String,
+    ) -> impl std::future::Future<Output = bool> + Send + 'a;
+}
+
+/// The durable outbox and the direct federation route, as other contexts
+/// see them.
+pub trait FederationRoute: FederationOutboxAdmission + 'static {
+    fn outbox_policy(&self) -> S2sOutboxPolicy;
+
+    /// Call only after a caller-owned outbox transaction commits.
+    fn wake_outbox(&self);
+
+    fn send(
+        &self,
+        target_domain: &str,
+        stanza: String,
+        bounce_to: Option<String>,
+    ) -> impl std::future::Future<Output = bool> + Send;
+}
+
 /// Capacity and lifetime policy applied whenever a stanza crosses the durable
 /// federation-admission boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -112,15 +112,7 @@ impl MixDeliveryWakeBroker {
     }
 }
 
-/// The one operation MIX needs while it owns its database admission permit.
-/// It cannot read the federation repository or wake a dispatcher prematurely.
-pub trait FederationOutboxAdmission: Send + Sync {
-    fn admit<'a>(
-        &'a self,
-        target_domain: &'a str,
-        stanza: String,
-    ) -> impl std::future::Future<Output = bool> + Send + 'a;
-}
+pub use northstar_federation_core::FederationOutboxAdmission;
 
 #[derive(Clone)]
 pub struct MixService<R> {

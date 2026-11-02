@@ -60,9 +60,11 @@ use super::*;
 #[cfg(test)]
 use crate::db;
 
-use crate::services::s2s_outbox_dispatch::{OutboxFailureDisposition, S2sOutboxDispatchService};
+use northstar_federation_application::dispatch::{
+    OutboxFailureDisposition, S2sOutboxDispatchService,
+};
 type DispatchService = S2sOutboxDispatchService<
-    crate::db::s2s_outbox_dispatch_repository::PostgresS2sOutboxDispatchRepository,
+    northstar_federation_postgres::dispatch_repository::PostgresS2sOutboxDispatchRepository,
 >;
 
 use tokio::sync::mpsc;

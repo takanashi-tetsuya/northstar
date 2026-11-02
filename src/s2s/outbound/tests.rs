@@ -1,9 +1,9 @@
 use super::*;
 
 fn test_dispatch(pool: &sqlx::PgPool) -> DispatchService {
-    use crate::services::s2s_outbox_dispatch::S2sOutboxDispatchPolicy;
+    use northstar_federation_application::dispatch::S2sOutboxDispatchPolicy;
     S2sOutboxDispatchService::new(
-        crate::db::s2s_outbox_dispatch_repository::PostgresS2sOutboxDispatchRepository::new(
+        northstar_federation_postgres::dispatch_repository::PostgresS2sOutboxDispatchRepository::new(
             pool.clone(),
         ),
         S2sOutboxDispatchPolicy {

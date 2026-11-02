@@ -10,10 +10,9 @@ use dashmap::DashSet;
 use northstar_delivery_core::{
     node_delivery::NodeDeliveryReceipt, MixDelivery, MixTransportCompletion,
 };
-use northstar_federation_core::S2sOutboxPolicy;
+use northstar_federation_core::FederationRoute;
 use northstar_room_application::mix_service::{
-    foreground, FederationOutboxAdmission, MixAccount, MixChannel, MixRepository, MixService,
-    PamMembership, PresenceOutcome,
+    foreground, MixAccount, MixChannel, MixRepository, MixService, PamMembership, PresenceOutcome,
 };
 use northstar_room_core::mix::MixSessionCapability;
 use northstar_room_core::mix_iq_relay::{MixIqRelayIndex, PendingMixIqRelay};
@@ -88,21 +87,6 @@ pub trait MixLocalSession: Clone + Send + Sync + 'static {
     fn is_available(&self) -> bool;
 }
 
-/// The private federation outbox and the direct federation route.
-pub trait MixFederationPort: FederationOutboxAdmission + 'static {
-    fn outbox_policy(&self) -> S2sOutboxPolicy;
-
-    /// Call only after a caller-owned outbox transaction commits.
-    fn wake_outbox(&self);
-
-    fn send(
-        &self,
-        target_domain: &str,
-        stanza: String,
-        bounce_to: Option<String>,
-    ) -> impl Future<Output = bool> + Send;
-}
-
 /// Delivery of one relayed MIX IQ response to a local or federated JID.
 pub trait MixIqRelayRoutePort: Send + Sync + 'static {
     fn deliver(&self, recipient: &str, stanza: String) -> impl Future<Output = ()> + Send;
@@ -120,7 +104,7 @@ pub trait MixIqRelayExpiryPort: Send + Sync + 'static {
 pub trait MixOutboxPort: Send + Sync + 'static {
     type Repository: MixRepository + 'static;
     type Session: MixLocalSession;
-    type Federation: MixFederationPort;
+    type Federation: FederationRoute;
 
     fn service(&self) -> &MixService<Self::Repository>;
     fn local_domain(&self) -> &str;
@@ -208,7 +192,7 @@ pub trait MixPresenceRecoveryPort: Send + Sync + 'static {
 pub trait MixHost: Send + Sync + 'static {
     type Repository: MixRepository + 'static;
     type Session: MixLocalSession;
-    type Federation: MixFederationPort;
+    type Federation: FederationRoute;
     type IqRelayRoute: MixIqRelayRoutePort;
     type OutboxContext: MixOutboxPort;
 

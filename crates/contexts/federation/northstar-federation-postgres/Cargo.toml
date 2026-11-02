@@ -13,6 +13,7 @@ test-support = []
 
 [dependencies]
 anyhow = "1.0"
+northstar-federation-application = { path = "../northstar-federation-application" }
 northstar-federation-core = { path = "../northstar-federation-core" }
 northstar-telemetry = { path = "../../../platform/northstar-telemetry" }
 northstar-xep-0359 = { path = "../../../kernel/northstar-xep-0359" }

@@ -4,16 +4,14 @@ use super::{
     federation_rule_matches, session_entries_for_in, AppState, FederationWritePolicy,
     OnlineSession, RuntimeFederationPolicy,
 };
-use crate::{
-    db::s2s_outbox_dispatch_repository::PostgresS2sOutboxDispatchRepository,
-    s2s::{
-        telemetry::OutboundDispositionTelemetry, BidiRouteSnapshot, FederationEnvelope,
-        S2sConnectionRegistry,
-    },
-    services::s2s_outbox_dispatch::S2sOutboxDispatchService,
+use crate::s2s::{
+    telemetry::OutboundDispositionTelemetry, BidiRouteSnapshot, FederationEnvelope,
+    S2sConnectionRegistry,
 };
 use dashmap::DashMap;
 use northstar_config::ExternalRouteDomainPolicy;
+use northstar_federation_application::dispatch::S2sOutboxDispatchService;
+use northstar_federation_postgres::dispatch_repository::PostgresS2sOutboxDispatchRepository;
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 use std::sync::{atomic::AtomicU64, Arc};
 

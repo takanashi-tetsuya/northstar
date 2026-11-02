@@ -2052,10 +2052,12 @@ dependencies = [
 name = "northstar-federation-application"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "northstar-federation-core",
  "northstar-xmpp-types",
  "serde",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -2076,6 +2078,7 @@ name = "northstar-federation-postgres"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "northstar-federation-application",
  "northstar-federation-core",
  "northstar-telemetry",
  "northstar-xep-0359",

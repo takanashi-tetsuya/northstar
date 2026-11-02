@@ -2902,6 +2902,10 @@
     ],
     [
       "northstar-federation-application",
+      "anyhow"
+    ],
+    [
+      "northstar-federation-application",
       "northstar-federation-core"
     ],
     [
@@ -2915,6 +2919,10 @@
     [
       "northstar-federation-application",
       "tokio"
+    ],
+    [
+      "northstar-federation-application",
+      "tracing"
     ],
     [
       "northstar-federation-application",
@@ -2947,6 +2955,10 @@
     [
       "northstar-federation-postgres",
       "anyhow"
+    ],
+    [
+      "northstar-federation-postgres",
+      "northstar-federation-application"
     ],
     [
       "northstar-federation-postgres",

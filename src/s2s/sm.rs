@@ -8,9 +8,8 @@ use tokio::{
     time::Instant,
 };
 
-use crate::{
-    services::s2s_sm_outbox::SmOutboxClaim, state::AppState, xmpp::xml_builder::XmlElement,
-};
+use crate::{state::AppState, xmpp::xml_builder::XmlElement};
+use northstar_federation_application::sm_outbox::SmOutboxClaim;
 
 use super::{outbound::fail_envelope, write_xml, FederationEnvelope};
 

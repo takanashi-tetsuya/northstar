@@ -14,10 +14,9 @@ use crate::xmpp::local_routes::session::OnlineSession;
 use crate::xmpp::outbound::{MixDelivery, MixTransportCompletion, OutboundSender};
 use anyhow::Result;
 use dashmap::DashSet;
-use northstar_federation_core::S2sOutboxPolicy;
 use northstar_mix_xmpp::ports::{
-    MixAction, MixFederationPort, MixFrameObserver, MixFrameStage, MixHost, MixLocalSession,
-    MixOutbound, MixOutboxPort, MixSession, MixSessionUser,
+    MixAction, MixFrameObserver, MixFrameStage, MixHost, MixLocalSession, MixOutbound,
+    MixOutboxPort, MixSession, MixSessionUser,
 };
 use northstar_room_application::mix_service::{foreground, MixService};
 use northstar_room_core::mix::{MixSessionCapability, CORE_NS, PAM_NS};
@@ -78,20 +77,6 @@ impl MixLocalSession for OnlineSession {
 
     fn is_available(&self) -> bool {
         self.available.load(Ordering::Relaxed)
-    }
-}
-
-impl MixFederationPort for FederationRouter {
-    fn outbox_policy(&self) -> S2sOutboxPolicy {
-        FederationRouter::outbox_policy(self)
-    }
-
-    fn wake_outbox(&self) {
-        FederationRouter::wake_outbox(self);
-    }
-
-    async fn send(&self, target_domain: &str, stanza: String, bounce_to: Option<String>) -> bool {
-        FederationRouter::send(self, target_domain, stanza, bounce_to).await
     }
 }
 

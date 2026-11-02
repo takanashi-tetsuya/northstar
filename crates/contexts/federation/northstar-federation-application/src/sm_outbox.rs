@@ -6,32 +6,35 @@ use anyhow::{ensure, Result};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SmOutboxClaim {
-    pub(crate) id: Uuid,
-    pub(crate) lock_token: Uuid,
+pub struct SmOutboxClaim {
+    pub id: Uuid,
+    pub lock_token: Uuid,
 }
 
-pub(crate) trait SmOutboxRepository: Send + Sync {
-    async fn renew(&self, claim: SmOutboxClaim, lease_seconds: u64) -> Result<bool>;
-    async fn complete(&self, claim: SmOutboxClaim) -> Result<bool>;
+pub trait SmOutboxRepository: Send + Sync {
+    fn renew(
+        &self,
+        claim: SmOutboxClaim,
+        lease_seconds: u64,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn complete(
+        &self,
+        claim: SmOutboxClaim,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
 }
 
-pub(crate) struct SmOutboxService<R> {
+pub struct SmOutboxService<R> {
     repository: R,
 }
 
 impl<R: SmOutboxRepository> SmOutboxService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
     /// Renew in stream order, failing at the first lost lease. The caller's
     /// existing deadline bounds the complete batch, not each individual row.
-    pub(crate) async fn renew_pending(
-        &self,
-        claims: &[SmOutboxClaim],
-        lease_seconds: u64,
-    ) -> Result<()> {
+    pub async fn renew_pending(&self, claims: &[SmOutboxClaim], lease_seconds: u64) -> Result<()> {
         for &claim in claims {
             ensure!(
                 self.repository.renew(claim, lease_seconds).await?,
@@ -43,7 +46,7 @@ impl<R: SmOutboxRepository> SmOutboxService<R> {
 
     /// A successful fenced delete permits exactly one pending queue item to
     /// advance; failure leaves it in place for the existing retry path.
-    pub(crate) async fn complete_acknowledged(&self, claim: SmOutboxClaim) -> Result<()> {
+    pub async fn complete_acknowledged(&self, claim: SmOutboxClaim) -> Result<()> {
         ensure!(
             self.repository.complete(claim).await?,
             "S2S outbox lease was lost before acknowledgement"

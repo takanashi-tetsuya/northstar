@@ -321,11 +321,11 @@ pub struct AppState {
     sm_service: crate::services::sm::SmService<db::sm_repository::PostgresSmRepository>,
     replay_service:
         crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>,
-    s2s_outbox_dispatch_service: crate::services::s2s_outbox_dispatch::S2sOutboxDispatchService<
-        db::s2s_outbox_dispatch_repository::PostgresS2sOutboxDispatchRepository,
+    s2s_outbox_dispatch_service: northstar_federation_application::dispatch::S2sOutboxDispatchService<
+        northstar_federation_postgres::dispatch_repository::PostgresS2sOutboxDispatchRepository,
     >,
-    s2s_sm_outbox_service: crate::services::s2s_sm_outbox::SmOutboxService<
-        db::s2s_sm_outbox_repository::PostgresSmOutboxRepository,
+    s2s_sm_outbox_service: northstar_federation_application::sm_outbox::SmOutboxService<
+        northstar_federation_postgres::sm_outbox_repository::PostgresSmOutboxRepository,
     >,
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
     cluster: crate::cluster::ClusterManager,

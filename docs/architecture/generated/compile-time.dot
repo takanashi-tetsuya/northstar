@@ -1072,10 +1072,12 @@ digraph compile_time {
   "northstar-delivery-core" -> "roxmltree";
   "northstar-delivery-core" -> "serde";
   "northstar-delivery-core" -> "uuid";
+  "northstar-federation-application" -> "anyhow";
   "northstar-federation-application" -> "northstar-federation-core";
   "northstar-federation-application" -> "northstar-xmpp-types";
   "northstar-federation-application" -> "serde";
   "northstar-federation-application" -> "tokio";
+  "northstar-federation-application" -> "tracing";
   "northstar-federation-application" -> "uuid";
   "northstar-federation-core" -> "chrono";
   "northstar-federation-core" -> "hmac";
@@ -1084,6 +1086,7 @@ digraph compile_time {
   "northstar-federation-core" -> "sha2";
   "northstar-federation-core" -> "uuid";
   "northstar-federation-postgres" -> "anyhow";
+  "northstar-federation-postgres" -> "northstar-federation-application";
   "northstar-federation-postgres" -> "northstar-federation-core";
   "northstar-federation-postgres" -> "northstar-telemetry";
   "northstar-federation-postgres" -> "northstar-xep-0359";

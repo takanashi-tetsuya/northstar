@@ -2350,7 +2350,7 @@ for (const [name, source] of [
   ['GovernanceService', read('crates/contexts/operations/northstar-operations-application/src/governance.rs')],
   ['GovernanceContext', read('src/api/contexts/governance.rs')],
   ['MetricsSnapshotService', read('crates/contexts/operations/northstar-operations-application/src/metrics_snapshot.rs')],
-  ['FederationOutboxService', read('src/services/federation_outbox.rs')],
+  ['FederationOutboxService', read('crates/contexts/federation/northstar-federation-application/src/outbox.rs')],
   ['TlsContext', readProductionModule('crates/platform/northstar-security/src/tls.rs', { root })],
   ['UploadAdminService', read('crates/contexts/operations/northstar-operations-application/src/upload_admin.rs')],
   ['ReportModerationService', read('crates/contexts/operations/northstar-operations-application/src/report_moderation.rs')],

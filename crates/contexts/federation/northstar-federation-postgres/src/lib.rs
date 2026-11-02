@@ -1,5 +1,9 @@
 //! The durable federation outbox: admission, claims, retries and route recovery.
 
+pub mod dispatch_repository;
+pub mod outbox_repository;
+pub mod sm_outbox_repository;
+
 use anyhow::{Context, Result};
 use northstar_telemetry::delivery_counters::S2S_OUTBOX_CAPACITY_REJECTIONS_TOTAL;
 

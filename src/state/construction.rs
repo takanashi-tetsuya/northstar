@@ -623,11 +623,11 @@ impl AppState {
             cluster.admission(),
         );
         let s2s_outbox_dispatch_service =
-            crate::services::s2s_outbox_dispatch::S2sOutboxDispatchService::new(
-                db::s2s_outbox_dispatch_repository::PostgresS2sOutboxDispatchRepository::new(
+            northstar_federation_application::dispatch::S2sOutboxDispatchService::new(
+                northstar_federation_postgres::dispatch_repository::PostgresS2sOutboxDispatchRepository::new(
                     pool.clone(),
                 ),
-                crate::services::s2s_outbox_dispatch::S2sOutboxDispatchPolicy {
+                northstar_federation_application::dispatch::S2sOutboxDispatchPolicy {
                     claim_batch: config.s2s_outbox_claim_batch,
                     lease_seconds: config.s2s_outbox_lease_seconds,
                     retry_base_seconds: config.s2s_outbox_retry_base_seconds,
@@ -686,8 +686,8 @@ impl AppState {
             sm_service,
             replay_service,
             s2s_outbox_dispatch_service,
-            s2s_sm_outbox_service: crate::services::s2s_sm_outbox::SmOutboxService::new(
-                db::s2s_sm_outbox_repository::PostgresSmOutboxRepository::new(pool.clone()),
+            s2s_sm_outbox_service: northstar_federation_application::sm_outbox::SmOutboxService::new(
+                northstar_federation_postgres::sm_outbox_repository::PostgresSmOutboxRepository::new(pool.clone()),
             ),
             pool,
             cluster,

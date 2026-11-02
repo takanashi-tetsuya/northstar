@@ -74,9 +74,10 @@ impl BidiS2sSession {
 pub use northstar_federation_application::{FederationDeliveryMode, FederationEnvelope};
 
 /// Application service backing the private federation outbox capability.
-pub(crate) type FederationRouter = crate::services::federation_outbox::FederationOutboxService<
-    crate::db::federation_outbox_repository::PostgresFederationOutboxRepository,
->;
+pub(crate) type FederationRouter =
+    northstar_federation_application::outbox::FederationOutboxService<
+        northstar_federation_postgres::outbox_repository::PostgresFederationOutboxRepository,
+    >;
 
 pub const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 

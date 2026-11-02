@@ -4,10 +4,9 @@ use std::{collections::HashSet, future::Future, sync::Arc};
 
 use tokio::sync::mpsc;
 
-use northstar_federation_core::S2sOutboxPolicy;
-use northstar_room_application::mix_service::FederationOutboxAdmission;
+use northstar_federation_core::{FederationOutboxAdmission, FederationRoute, S2sOutboxPolicy};
 
-pub(crate) trait FederationOutboxRepository: Clone + Send + Sync {
+pub trait FederationOutboxRepository: Clone + Send + Sync {
     fn enqueue<'a>(
         &'a self,
         target_domain: &'a str,
@@ -18,7 +17,7 @@ pub(crate) trait FederationOutboxRepository: Clone + Send + Sync {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ComponentRoute {
+pub enum ComponentRoute {
     NotConfigured,
     Delivered,
     Unavailable,
@@ -26,7 +25,7 @@ pub(crate) enum ComponentRoute {
 
 /// Wakes the current socket owner of a configured component domain after a durable enqueue commits.
 /// The owner claims its own rows; `NotConfigured` leaves delivery to the generic federation dispatcher.
-pub(crate) trait ComponentWake: Send + Sync {
+pub trait ComponentWake: Send + Sync {
     fn wake_route(&self, configured_domains: &HashSet<String>, target: &str) -> ComponentRoute;
 }
 
@@ -40,7 +39,7 @@ pub struct FederationOutboxService<R> {
 }
 
 impl<R: FederationOutboxRepository> FederationOutboxService<R> {
-    pub(crate) fn channel(
+    pub fn channel(
         repository: R,
         policy: S2sOutboxPolicy,
         components: Arc<dyn ComponentWake>,
@@ -60,7 +59,7 @@ impl<R: FederationOutboxRepository> FederationOutboxService<R> {
         )
     }
 
-    pub(crate) async fn send(
+    pub async fn send(
         &self,
         target_domain: &str,
         stanza: String,
@@ -90,17 +89,17 @@ impl<R: FederationOutboxRepository> FederationOutboxService<R> {
     }
 
     /// Snapshot for callers that enqueue within their own transaction.
-    pub(crate) fn outbox_policy(&self) -> S2sOutboxPolicy {
+    pub fn outbox_policy(&self) -> S2sOutboxPolicy {
         self.policy
     }
 
     /// Call only after a caller-owned outbox transaction commits.
-    pub(crate) fn wake_outbox(&self) {
+    pub fn wake_outbox(&self) {
         let _ = self.wake.try_send(());
     }
 
     /// The MAM service needs only a clone of this edge-triggered sender.
-    pub(crate) fn outbox_wakeup(&self) -> mpsc::Sender<()> {
+    pub fn outbox_wakeup(&self) -> mpsc::Sender<()> {
         self.wake.clone()
     }
 }
@@ -115,11 +114,33 @@ impl<R: FederationOutboxRepository> FederationOutboxAdmission for FederationOutb
     }
 }
 
+impl<R: FederationOutboxRepository + 'static> FederationRoute for FederationOutboxService<R> {
+    fn outbox_policy(&self) -> S2sOutboxPolicy {
+        FederationOutboxService::outbox_policy(self)
+    }
+
+    fn wake_outbox(&self) {
+        FederationOutboxService::wake_outbox(self);
+    }
+
+    async fn send(&self, target_domain: &str, stanza: String, bounce_to: Option<String>) -> bool {
+        FederationOutboxService::send(self, target_domain, stanza, bounce_to).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Mutex;
     use tokio::sync::{oneshot, Notify};
+
+    struct NoComponents;
+
+    impl ComponentWake for NoComponents {
+        fn wake_route(&self, _domains: &HashSet<String>, _target: &str) -> ComponentRoute {
+            ComponentRoute::NotConfigured
+        }
+    }
 
     #[derive(Clone)]
     struct GatedRepository {
@@ -156,7 +177,7 @@ mod tests {
         let (service, wake) = FederationOutboxService::channel(
             repository,
             S2sOutboxPolicy::new(300, 100, 1_000_000, 100),
-            Arc::new(crate::s2s::components::registry()),
+            Arc::new(NoComponents),
             HashSet::new(),
         );
         (service, wake, entered, send)

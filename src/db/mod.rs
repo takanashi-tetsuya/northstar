@@ -40,7 +40,6 @@ pub(crate) mod direct_commit_cluster;
 mod direct_spool_wake_repository_tests;
 #[cfg(test)]
 mod fast_tests;
-pub(crate) mod federation_outbox_repository;
 pub mod identity_migration;
 pub mod jid_identity;
 pub(crate) mod maintenance_ownership;
@@ -92,8 +91,6 @@ pub mod retention;
 mod retraction_service_tests;
 pub(crate) mod room_effects;
 pub mod roster;
-pub(crate) mod s2s_outbox_dispatch_repository;
-pub(crate) mod s2s_sm_outbox_repository;
 #[cfg(test)]
 mod s2s_tests;
 pub mod schema;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::services::federation_outbox::ComponentRoute;
+use northstar_federation_application::outbox::ComponentRoute;
 use std::{
     pin::Pin,
     sync::atomic::{AtomicBool, AtomicUsize},

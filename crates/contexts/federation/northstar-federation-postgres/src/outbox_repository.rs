@@ -1,5 +1,5 @@
 //! PostgreSQL implementation of durable federation admission.
-use crate::services::federation_outbox::FederationOutboxRepository;
+use northstar_federation_application::outbox::FederationOutboxRepository;
 use northstar_federation_core::S2sOutboxPolicy;
 use sqlx::PgPool;
 
@@ -9,7 +9,7 @@ pub struct PostgresFederationOutboxRepository {
 }
 
 impl PostgresFederationOutboxRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -22,7 +22,7 @@ impl FederationOutboxRepository for PostgresFederationOutboxRepository {
         bounce_to: Option<&'a str>,
         policy: S2sOutboxPolicy,
     ) -> anyhow::Result<()> {
-        northstar_federation_postgres::enqueue_s2s_outbox(
+        crate::enqueue_s2s_outbox(
             &self.pool,
             target_domain,
             stanza,

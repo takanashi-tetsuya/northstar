@@ -4975,6 +4975,10 @@
     ],
     [
       "northstar-workflows",
+      "base64"
+    ],
+    [
+      "northstar-workflows",
       "chrono"
     ],
     [
@@ -5051,6 +5055,10 @@
     ],
     [
       "northstar-workflows",
+      "northstar-pubsub-application"
+    ],
+    [
+      "northstar-workflows",
       "northstar-pubsub-core"
     ],
     [
@@ -5096,6 +5104,10 @@
     [
       "northstar-workflows",
       "northstar-xml-builder"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-xmpp-avatar"
     ],
     [
       "northstar-workflows",

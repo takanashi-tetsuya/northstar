@@ -64,8 +64,11 @@ impl PepNodeQueryRepository for PostgresPubSubRepository {
         jid: &str,
         groups: &[String],
     ) -> Result<bool> {
-        let outcome: Result<_> =
-            async { db::roster_group_allowed(&self.pool, owner_id, jid, groups).await }.await;
+        let outcome: Result<_> = async {
+            northstar_workflows::pep_roster::roster_group_allowed(&self.pool, owner_id, jid, groups)
+                .await
+        }
+        .await;
         outcome.map_err(map_database_busy)
     }
 }
@@ -591,7 +594,11 @@ impl PepSubscriptionQueryRepository for PostgresPubSubRepository {
         subscriber_bare: &str,
     ) -> Result<Vec<String>> {
         let outcome: Result<_> = async {
-            db::pep_owner_usernames_for_presence_subscriber(&self.pool, subscriber_bare).await
+            northstar_workflows::pep_roster::pep_owner_usernames_for_presence_subscriber(
+                &self.pool,
+                subscriber_bare,
+            )
+            .await
         }
         .await;
         outcome.map_err(map_database_busy)

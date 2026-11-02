@@ -72,7 +72,7 @@ impl AppState {
     pub(crate) fn profile_service(
         &self,
     ) -> &northstar_pubsub_application::profile::ProfileService<
-        db::profile::PostgresProfileRepository,
+        northstar_workflows::profile::PostgresProfileRepository,
     > {
         &self.pubsub.profile_service
     }

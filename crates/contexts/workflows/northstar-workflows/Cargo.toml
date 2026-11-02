@@ -13,6 +13,7 @@ test-support = ["northstar-room-postgres/test-support", "northstar-roster-postgr
 
 [dependencies]
 anyhow = "1.0"
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 northstar-abuse-application = { path = "../../abuse/northstar-abuse-application" }
 northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
@@ -32,6 +33,7 @@ northstar-operations-application = { path = "../../operations/northstar-operatio
 northstar-operations-core = { path = "../../operations/northstar-operations-core" }
 northstar-operations-postgres = { path = "../../operations/northstar-operations-postgres" }
 northstar-postgres = { path = "../../../platform/northstar-postgres" }
+northstar-pubsub-application = { path = "../../pubsub/northstar-pubsub-application" }
 northstar-pubsub-postgres = { path = "../../pubsub/northstar-pubsub-postgres" }
 northstar-pubsub-core = { path = "../../pubsub/northstar-pubsub-core" }
 northstar-room-application = { path = "../../room/northstar-room-application" }
@@ -44,6 +46,7 @@ northstar-session-core = { path = "../../session/northstar-session-core" }
 northstar-upload-postgres = { path = "../../upload/northstar-upload-postgres" }
 northstar-xep-0016 = { path = "../../../kernel/northstar-xep-0016" }
 northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
+northstar-xmpp-avatar = { path = "../../../kernel/northstar-xmpp-avatar" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 roxmltree = "0.20"
 serde = { version = "1.0", features = ["derive"] }
@@ -58,6 +61,7 @@ uuid = { version = "1.12", features = ["v4", "serde"] }
 
 [dev-dependencies]
 northstar-auth-postgres = { path = "../../auth/northstar-auth-postgres", features = ["test-support"] }
+northstar-pubsub-postgres = { path = "../../pubsub/northstar-pubsub-postgres", features = ["test-support"] }
 northstar-room-postgres = { path = "../../room/northstar-room-postgres", features = ["test-support"] }
 northstar-roster-postgres = { path = "../../roster/northstar-roster-postgres", features = ["test-support"] }
 tokio = { version = "1.43", features = ["macros", "rt"] }

@@ -15,7 +15,7 @@ pub(super) struct PubSubModule {
     /// boundary. Profile transactions and authorization never cross into the
     /// XMPP protocol layer.
     pub(super) profile_service: northstar_pubsub_application::profile::ProfileService<
-        db::profile::PostgresProfileRepository,
+        northstar_workflows::profile::PostgresProfileRepository,
     >,
     /// XEP-0049 private XML storage within the account's PEP quotas.
     pub(super) private_storage_service:
@@ -41,7 +41,10 @@ impl PubSubModule {
             );
         let profile_service =
             northstar_pubsub_application::profile::ProfileService::with_mutation_admission(
-                db::profile::PostgresProfileRepository::new(pool.clone(), config.domain.clone()),
+                northstar_workflows::profile::PostgresProfileRepository::new(
+                    pool.clone(),
+                    config.domain.clone(),
+                ),
                 pubsub_service.mutation_admission(),
             );
         let private_storage_service =

@@ -1525,6 +1525,8 @@ digraph compile_time {
   "northstar-session-application" -> "tokio-util";
   "northstar-session-application" -> "tracing";
   "northstar-session-application" -> "uuid";
+  "northstar-session-core" -> "anyhow";
+  "northstar-session-core" -> "futures";
   "northstar-session-core" -> "northstar-auth-core";
   "northstar-session-core" -> "northstar-delivery-core";
   "northstar-session-core" -> "northstar-xmpp-types";

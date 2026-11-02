@@ -7,9 +7,17 @@ license = "AGPL-3.0-only"
 description = "Capability-free XMPP stream negotiation and session routing domain models for Northstar"
 publish = false
 
+[features]
+# Test-only observation hooks of the credential publication facts.
+test-support = []
+
 [dependencies]
+anyhow = "1.0"
 northstar-auth-core = { path = "../../auth/northstar-auth-core" }
 northstar-delivery-core = { path = "../../message/northstar-delivery-core" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 serde = { version = "1.0", features = ["derive"] }
 uuid = { version = "1.12", features = ["v4", "serde"] }
+
+[dev-dependencies]
+futures = "0.3"

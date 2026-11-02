@@ -2690,6 +2690,8 @@ dependencies = [
 name = "northstar-session-core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "futures",
  "northstar-auth-core",
  "northstar-delivery-core",
  "northstar-xmpp-types",

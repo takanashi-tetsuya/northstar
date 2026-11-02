@@ -4,13 +4,13 @@
 //! PostgreSQL capability or the FAST derivation secret. Every successful
 //! identity is fenced to an exact account UUID and credential generation.
 
-pub mod publication;
+pub use northstar_session_core::publication;
 
 pub use northstar_archive_core::ArchiveBoundary;
 use northstar_auth_core as auth;
 pub use northstar_auth_core::credential::{
-    BindingPublication, CredentialCommitReceipt, FastCommitPlan, FastTokenIssue, IssuedFastToken,
-    StagedLoginEpoch,
+    AuthenticationResult, BindingPublication, CredentialCommitReceipt, FastCommitPlan,
+    FastTokenIssue, IssuedFastToken, StagedLoginEpoch,
 };
 use std::sync::Arc;
 use uuid::Uuid;
@@ -35,18 +35,6 @@ pub struct AuthenticatedAccount {
 pub struct LoadedAccount {
     pub account: AuthenticatedAccount,
     pub is_disabled: bool,
-}
-
-#[derive(Debug)]
-pub enum AuthenticationResult<T> {
-    Authenticated(T),
-    UnknownCredentials,
-    Disabled,
-    StaleGeneration,
-    ExpiredCredentials,
-    ReplayedCredentials,
-    IntegrityFailure,
-    BackendFailure(anyhow::Error),
 }
 
 /// SCRAM verifier material exists only between the bounded database read and

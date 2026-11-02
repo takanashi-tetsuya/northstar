@@ -132,3 +132,15 @@ pub struct FastCommitPlan {
     pub invalidate: bool,
     pub issue: Option<FastTokenIssue>,
 }
+
+#[derive(Debug)]
+pub enum AuthenticationResult<T> {
+    Authenticated(T),
+    UnknownCredentials,
+    Disabled,
+    StaleGeneration,
+    ExpiredCredentials,
+    ReplayedCredentials,
+    IntegrityFailure,
+    BackendFailure(anyhow::Error),
+}

@@ -6,7 +6,7 @@ import { readProductionModule, readRoleSplitFile } from './lib/source-module.mjs
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = {
   frame: 'src/xmpp/frame_execution.rs',
-  authFacts: 'crates/contexts/auth/northstar-auth-application/src/authentication/publication.rs',
+  authFacts: 'crates/contexts/session/northstar-session-core/src/publication.rs',
   authOwner: 'src/xmpp/auth_publication.rs',
   authService: 'crates/contexts/auth/northstar-auth-application/src/authentication.rs',
   authCredential: 'crates/contexts/auth/northstar-auth-core/src/credential.rs',

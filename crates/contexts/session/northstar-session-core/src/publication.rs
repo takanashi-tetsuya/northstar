@@ -1,10 +1,10 @@
 //! Auth publication facts beginning at an actual returned credential receipt.
 //! These observations neither recreate that receipt nor authorize SQL or I/O.
-use super::{
+use anyhow::{ensure, Result};
+use northstar_auth_core::credential::{
     AuthenticationResult, BindingPublication, CredentialCommitReceipt, FastCommitPlan,
     StagedLoginEpoch,
 };
-use anyhow::{ensure, Result};
 use std::{
     future::Future,
     sync::{Arc, Mutex},
@@ -290,9 +290,7 @@ impl CredentialRequest {
             resume: None,
         }
     }
-    fn resume(
-        request: &northstar_session_core::finalization::SmResumeFinalizationRequest<'_>,
-    ) -> Self {
+    fn resume(request: &crate::finalization::SmResumeFinalizationRequest<'_>) -> Self {
         Self {
             user: request.user_id,
             generation: request.expected_auth_generation,
@@ -460,7 +458,7 @@ impl PreparedCredential {
     }
     pub fn resume(
         &self,
-        request: &northstar_session_core::finalization::SmResumeFinalizationRequest<'_>,
+        request: &crate::finalization::SmResumeFinalizationRequest<'_>,
     ) -> Result<CredentialInvocation<'_>> {
         self.bind(CredentialKind::Resume, CredentialRequest::resume(request))
     }
@@ -596,7 +594,7 @@ impl CredentialInvocation<'_> {
     }
     pub fn enter_resume(
         &self,
-        request: &northstar_session_core::finalization::SmResumeFinalizationRequest<'_>,
+        request: &crate::finalization::SmResumeFinalizationRequest<'_>,
     ) -> Result<()> {
         self.enter_repository(CredentialRequest::resume(request))
     }
@@ -926,9 +924,9 @@ impl CredentialInvocation<'_> {
     }
     pub fn binding_returned(
         &self,
-        result: &Result<northstar_session_core::finalization::BindingFinalizationOutcome>,
+        result: &Result<crate::finalization::BindingFinalizationOutcome>,
     ) {
-        use northstar_session_core::finalization::BindingFinalizationOutcome as Outcome;
+        use crate::finalization::BindingFinalizationOutcome as Outcome;
         let (returned, receipt) = match result {
             Ok(Outcome::Committed { receipt }) => {
                 (CredentialReturned::BindingCommitted, Some(receipt))
@@ -943,9 +941,9 @@ impl CredentialInvocation<'_> {
     }
     pub fn resume_returned(
         &self,
-        result: &Result<northstar_session_core::finalization::SmResumeFinalizationOutcome>,
+        result: &Result<crate::finalization::SmResumeFinalizationOutcome>,
     ) {
-        use northstar_session_core::finalization::SmResumeFinalizationOutcome as Outcome;
+        use crate::finalization::SmResumeFinalizationOutcome as Outcome;
         let (returned, receipt) = match result {
             Ok(Outcome::Committed(commit)) => {
                 (CredentialReturned::ResumeCommitted, Some(&commit.receipt))

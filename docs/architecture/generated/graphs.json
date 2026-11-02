@@ -4243,6 +4243,14 @@
       ],
       [
         "northstar-session-core",
+        "anyhow"
+      ],
+      [
+        "northstar-session-core",
+        "futures"
+      ],
+      [
+        "northstar-session-core",
         "northstar-auth-core"
       ],
       [

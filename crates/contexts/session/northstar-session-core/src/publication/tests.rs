@@ -66,93 +66,29 @@ async fn prepare_empty_fast_result(invocation: &CredentialInvocation<'_>, prepar
         },
     );
 }
-#[tokio::test]
-async fn credential_joins_preserve_actual_construction_return_and_transfer_cuts() {
-    let prepared = PreparedCredential::new(
-        Uuid::from_u128(1),
-        Uuid::from_u128(3),
-        0,
-        CredentialKind::UnboundFast,
-    );
-    let observation = prepared.observation();
-    let before = observation.snapshot();
-    let introduced = observation.joins();
-    assert_eq!(introduced.owner.attempt, before.attempt);
-    assert_eq!(introduced.owner.frame, Uuid::from_u128(1));
-    assert_eq!(introduced.owner.connection, Uuid::from_u128(3));
-    assert_eq!(introduced.owner.ordinal, 0);
-    assert_eq!(introduced.owner.kind, CredentialKind::UnboundFast);
-    assert_eq!(introduced.constructed_receipt, None);
-    assert_eq!(introduced.returned_receipt, None);
-    assert_eq!(introduced.transferred_receipt, None);
-    assert_eq!(observation.snapshot(), before);
-
-    let invocation = prepared
-        .fast(
-            Uuid::from_u128(2),
-            7,
-            &FastCommitPlan::default(),
-            None,
-            Uuid::from_u128(3),
-        )
-        .unwrap();
-    prepare_empty_fast(&invocation).await;
-    CredentialInvocation::commit(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
-        .await
-        .unwrap();
-    assert_eq!(observation.joins(), introduced);
-    let receipt = CredentialCommitReceipt::new(None, None, None);
-    let id = receipt.publication_identity();
-    invocation.constructed(&receipt);
-    let constructed = observation.joins();
-    assert_eq!(constructed.owner, introduced.owner);
-    assert_eq!(constructed.constructed_receipt, Some(id));
-    assert_eq!(constructed.returned_receipt, None);
-    assert_eq!(constructed.transferred_receipt, None);
-    let result = AuthenticationResult::Authenticated(receipt);
-    invocation.fast_returned(&result);
-    drop(invocation);
-    let AuthenticationResult::Authenticated(receipt) = result else {
-        unreachable!()
-    };
-    let returned = observation.joins();
-    assert_eq!(returned.constructed_receipt, Some(id));
-    assert_eq!(returned.returned_receipt, Some(id));
-    assert_eq!(returned.transferred_receipt, None);
-    let before = observation.snapshot();
-    assert_eq!(observation.joins(), returned);
-    assert_eq!(observation.snapshot(), before);
-
-    prepared
-        .transfer(&receipt, Uuid::from_u128(1), Uuid::from_u128(3))
-        .unwrap();
-    let transferred = observation.joins();
-    assert_eq!(transferred.owner, introduced.owner);
-    assert_eq!(transferred.transferred_receipt, Some(id));
-    assert!(prepared
-        .transfer(&receipt, Uuid::from_u128(1), Uuid::from_u128(3))
-        .is_err());
-    assert_eq!(observation.joins(), transferred);
-}
-
-#[tokio::test]
-async fn credential_joins_expose_swapped_raw_returns_after_anchored_construction() {
-    let prepared = [
-        PreparedCredential::new(
+#[test]
+fn credential_joins_preserve_actual_construction_return_and_transfer_cuts() {
+    futures::executor::block_on(async {
+        let prepared = PreparedCredential::new(
             Uuid::from_u128(1),
             Uuid::from_u128(3),
             0,
             CredentialKind::UnboundFast,
-        ),
-        PreparedCredential::new(
-            Uuid::from_u128(1),
-            Uuid::from_u128(3),
-            1,
-            CredentialKind::UnboundFast,
-        ),
-    ];
-    let invocations = prepared.each_ref().map(|prepared| {
-        prepared
+        );
+        let observation = prepared.observation();
+        let before = observation.snapshot();
+        let introduced = observation.joins();
+        assert_eq!(introduced.owner.attempt, before.attempt);
+        assert_eq!(introduced.owner.frame, Uuid::from_u128(1));
+        assert_eq!(introduced.owner.connection, Uuid::from_u128(3));
+        assert_eq!(introduced.owner.ordinal, 0);
+        assert_eq!(introduced.owner.kind, CredentialKind::UnboundFast);
+        assert_eq!(introduced.constructed_receipt, None);
+        assert_eq!(introduced.returned_receipt, None);
+        assert_eq!(introduced.transferred_receipt, None);
+        assert_eq!(observation.snapshot(), before);
+
+        let invocation = prepared
             .fast(
                 Uuid::from_u128(2),
                 7,
@@ -160,65 +96,133 @@ async fn credential_joins_expose_swapped_raw_returns_after_anchored_construction
                 None,
                 Uuid::from_u128(3),
             )
-            .unwrap()
-    });
-    for invocation in &invocations {
-        prepare_empty_fast(invocation).await;
-        CredentialInvocation::commit(Some(invocation), std::future::ready(Ok::<(), ()>(())))
+            .unwrap();
+        prepare_empty_fast(&invocation).await;
+        CredentialInvocation::commit(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
             .await
             .unwrap();
-    }
-    let first = CredentialCommitReceipt::new(None, None, None);
-    let second = CredentialCommitReceipt::new(None, None, None);
-    invocations[0].constructed(&first);
-    invocations[1].constructed(&second);
-    let introduced = prepared
-        .each_ref()
-        .map(|prepared| prepared.observation().joins());
-    assert_ne!(introduced[0].owner.attempt, introduced[1].owner.attempt);
-    assert_ne!(
-        introduced[0].constructed_receipt,
-        introduced[1].constructed_receipt,
-    );
-    assert_eq!(introduced[0].owner.ordinal, 0);
-    assert_eq!(introduced[1].owner.ordinal, 1);
-
-    // Both receipts are real and previously introduced. Reassign only the
-    // returned association, leaving each original attempt and witness intact.
-    let results = [
-        AuthenticationResult::Authenticated(second),
-        AuthenticationResult::Authenticated(first),
-    ];
-    for (invocation, result) in invocations.iter().zip(&results) {
-        invocation.fast_returned(result);
-    }
-    drop(invocations);
-    for (index, (prepared, result)) in prepared.iter().zip(&results).enumerate() {
+        assert_eq!(observation.joins(), introduced);
+        let receipt = CredentialCommitReceipt::new(None, None, None);
+        let id = receipt.publication_identity();
+        invocation.constructed(&receipt);
+        let constructed = observation.joins();
+        assert_eq!(constructed.owner, introduced.owner);
+        assert_eq!(constructed.constructed_receipt, Some(id));
+        assert_eq!(constructed.returned_receipt, None);
+        assert_eq!(constructed.transferred_receipt, None);
+        let result = AuthenticationResult::Authenticated(receipt);
+        invocation.fast_returned(&result);
+        drop(invocation);
         let AuthenticationResult::Authenticated(receipt) = result else {
             unreachable!()
         };
-        let observation = prepared.observation();
-        let actual = observation.joins();
-        assert_eq!(actual.owner, introduced[index].owner);
-        assert_eq!(
-            actual.constructed_receipt,
-            introduced[index].constructed_receipt,
-        );
-        assert_eq!(
-            actual.returned_receipt,
-            introduced[1 - index].constructed_receipt,
-        );
-        assert_eq!(
-            actual.returned_receipt,
-            Some(receipt.publication_identity())
-        );
-        assert!(!observation.snapshot().return_matches);
+        let returned = observation.joins();
+        assert_eq!(returned.constructed_receipt, Some(id));
+        assert_eq!(returned.returned_receipt, Some(id));
+        assert_eq!(returned.transferred_receipt, None);
+        let before = observation.snapshot();
+        assert_eq!(observation.joins(), returned);
+        assert_eq!(observation.snapshot(), before);
+
+        prepared
+            .transfer(&receipt, Uuid::from_u128(1), Uuid::from_u128(3))
+            .unwrap();
+        let transferred = observation.joins();
+        assert_eq!(transferred.owner, introduced.owner);
+        assert_eq!(transferred.transferred_receipt, Some(id));
         assert!(prepared
-            .transfer(receipt, Uuid::from_u128(1), Uuid::from_u128(3))
+            .transfer(&receipt, Uuid::from_u128(1), Uuid::from_u128(3))
             .is_err());
-        assert_eq!(observation.joins(), actual);
-        assert_eq!(actual.transferred_receipt, None);
-    }
+        assert_eq!(observation.joins(), transferred);
+    });
+}
+
+#[test]
+fn credential_joins_expose_swapped_raw_returns_after_anchored_construction() {
+    futures::executor::block_on(async {
+        let prepared = [
+            PreparedCredential::new(
+                Uuid::from_u128(1),
+                Uuid::from_u128(3),
+                0,
+                CredentialKind::UnboundFast,
+            ),
+            PreparedCredential::new(
+                Uuid::from_u128(1),
+                Uuid::from_u128(3),
+                1,
+                CredentialKind::UnboundFast,
+            ),
+        ];
+        let invocations = prepared.each_ref().map(|prepared| {
+            prepared
+                .fast(
+                    Uuid::from_u128(2),
+                    7,
+                    &FastCommitPlan::default(),
+                    None,
+                    Uuid::from_u128(3),
+                )
+                .unwrap()
+        });
+        for invocation in &invocations {
+            prepare_empty_fast(invocation).await;
+            CredentialInvocation::commit(Some(invocation), std::future::ready(Ok::<(), ()>(())))
+                .await
+                .unwrap();
+        }
+        let first = CredentialCommitReceipt::new(None, None, None);
+        let second = CredentialCommitReceipt::new(None, None, None);
+        invocations[0].constructed(&first);
+        invocations[1].constructed(&second);
+        let introduced = prepared
+            .each_ref()
+            .map(|prepared| prepared.observation().joins());
+        assert_ne!(introduced[0].owner.attempt, introduced[1].owner.attempt);
+        assert_ne!(
+            introduced[0].constructed_receipt,
+            introduced[1].constructed_receipt,
+        );
+        assert_eq!(introduced[0].owner.ordinal, 0);
+        assert_eq!(introduced[1].owner.ordinal, 1);
+
+        // Both receipts are real and previously introduced. Reassign only the
+        // returned association, leaving each original attempt and witness intact.
+        let results = [
+            AuthenticationResult::Authenticated(second),
+            AuthenticationResult::Authenticated(first),
+        ];
+        for (invocation, result) in invocations.iter().zip(&results) {
+            invocation.fast_returned(result);
+        }
+        drop(invocations);
+        for (index, (prepared, result)) in prepared.iter().zip(&results).enumerate() {
+            let AuthenticationResult::Authenticated(receipt) = result else {
+                unreachable!()
+            };
+            let observation = prepared.observation();
+            let actual = observation.joins();
+            assert_eq!(actual.owner, introduced[index].owner);
+            assert_eq!(
+                actual.constructed_receipt,
+                introduced[index].constructed_receipt,
+            );
+            assert_eq!(
+                actual.returned_receipt,
+                introduced[1 - index].constructed_receipt,
+            );
+            assert_eq!(
+                actual.returned_receipt,
+                Some(receipt.publication_identity())
+            );
+            assert!(!observation.snapshot().return_matches);
+            assert!(prepared
+                .transfer(receipt, Uuid::from_u128(1), Uuid::from_u128(3))
+                .is_err());
+            assert_eq!(observation.joins(), actual);
+            assert_eq!(actual.transferred_receipt, None);
+        }
+    });
 }
 
 #[test]
@@ -246,54 +250,56 @@ fn publication_joins_project_actual_sealed_effect_intent_without_fixture_inferen
     }
 }
 
-#[tokio::test]
-async fn credential_transfer_remains_distinct_from_publication_begin_after_bosh_exposure() {
-    let frame = Uuid::from_u128(1);
-    let connection = Uuid::from_u128(3);
-    let prepared = PreparedCredential::new(frame, connection, 0, CredentialKind::UnboundFast);
-    let invocation = prepared
-        .fast(
-            Uuid::from_u128(2),
-            7,
-            &FastCommitPlan::default(),
-            None,
-            connection,
-        )
-        .unwrap();
-    prepare_empty_fast(&invocation).await;
-    CredentialInvocation::commit(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
-        .await
-        .unwrap();
-    let receipt = CredentialCommitReceipt::new(None, None, None);
-    invocation.constructed(&receipt);
-    let result = AuthenticationResult::Authenticated(receipt);
-    invocation.fast_returned(&result);
-    drop(invocation);
-    let AuthenticationResult::Authenticated(receipt) = result else {
-        unreachable!()
-    };
-    let credential = prepared.transfer(&receipt, frame, connection).unwrap();
-    let transferred = credential.joins();
-    let id = receipt.publication_identity();
-    assert_eq!(transferred.constructed_receipt, Some(id));
-    assert_eq!(transferred.returned_receipt, Some(id));
-    assert_eq!(transferred.transferred_receipt, Some(id));
-    let publication = Observation::observed_receipt(&receipt, frame, credential.clone());
-    publication.sealed(false, false).unwrap();
-    publication
-        .transport(Transport::BoshExposureEntered { rid: 48 })
-        .unwrap();
-    publication
-        .transport(Transport::BoshAccepted { rid: 48 })
-        .unwrap();
-    let joins = publication.joins();
-    assert_eq!(joins.credential, Some(transferred.owner));
-    assert_eq!(joins.receipt, id);
-    assert_eq!(joins.begun_receipt, None);
-    assert_eq!(publication.snapshot().publication, Knowledge::NotStarted);
-    assert_eq!(credential.joins(), transferred);
-    // This checks only the existing observation cuts. It constructs no
-    // holder or response and claims no selected-owner transfer or cache.
+#[test]
+fn credential_transfer_remains_distinct_from_publication_begin_after_bosh_exposure() {
+    futures::executor::block_on(async {
+        let frame = Uuid::from_u128(1);
+        let connection = Uuid::from_u128(3);
+        let prepared = PreparedCredential::new(frame, connection, 0, CredentialKind::UnboundFast);
+        let invocation = prepared
+            .fast(
+                Uuid::from_u128(2),
+                7,
+                &FastCommitPlan::default(),
+                None,
+                connection,
+            )
+            .unwrap();
+        prepare_empty_fast(&invocation).await;
+        CredentialInvocation::commit(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
+            .await
+            .unwrap();
+        let receipt = CredentialCommitReceipt::new(None, None, None);
+        invocation.constructed(&receipt);
+        let result = AuthenticationResult::Authenticated(receipt);
+        invocation.fast_returned(&result);
+        drop(invocation);
+        let AuthenticationResult::Authenticated(receipt) = result else {
+            unreachable!()
+        };
+        let credential = prepared.transfer(&receipt, frame, connection).unwrap();
+        let transferred = credential.joins();
+        let id = receipt.publication_identity();
+        assert_eq!(transferred.constructed_receipt, Some(id));
+        assert_eq!(transferred.returned_receipt, Some(id));
+        assert_eq!(transferred.transferred_receipt, Some(id));
+        let publication = Observation::observed_receipt(&receipt, frame, credential.clone());
+        publication.sealed(false, false).unwrap();
+        publication
+            .transport(Transport::BoshExposureEntered { rid: 48 })
+            .unwrap();
+        publication
+            .transport(Transport::BoshAccepted { rid: 48 })
+            .unwrap();
+        let joins = publication.joins();
+        assert_eq!(joins.credential, Some(transferred.owner));
+        assert_eq!(joins.receipt, id);
+        assert_eq!(joins.begun_receipt, None);
+        assert_eq!(publication.snapshot().publication, Knowledge::NotStarted);
+        assert_eq!(credential.joins(), transferred);
+        // This checks only the existing observation cuts. It constructs no
+        // holder or response and claims no selected-owner transfer or cache.
+    });
 }
 
 #[test]
@@ -325,13 +331,61 @@ fn publication_joins_keep_return_only_origin_and_actual_begin_distinct() {
     assert_eq!(observation.joins(), begun);
 }
 
-#[tokio::test]
-async fn credential_acknowledgement_and_receipt_instance_are_independent_authority() {
-    for acknowledgement in [false, true] {
+#[test]
+fn credential_acknowledgement_and_receipt_instance_are_independent_authority() {
+    futures::executor::block_on(async {
+        for acknowledgement in [false, true] {
+            let prepared = PreparedCredential::new(
+                Uuid::from_u128(1),
+                Uuid::from_u128(3),
+                0,
+                CredentialKind::UnboundFast,
+            );
+            let invocation = prepared
+                .fast(
+                    Uuid::from_u128(2),
+                    7,
+                    &FastCommitPlan::default(),
+                    None,
+                    Uuid::from_u128(3),
+                )
+                .unwrap();
+            prepare_empty_fast(&invocation).await;
+            if acknowledgement {
+                CredentialInvocation::commit(
+                    Some(&invocation),
+                    std::future::ready(Ok::<(), ()>(())),
+                )
+                .await
+                .unwrap();
+            }
+            let receipt = CredentialCommitReceipt::new(None, None, None);
+            let equal_fields = CredentialCommitReceipt::new(None, None, None);
+            invocation.constructed(&receipt);
+            invocation.fast_returned(&AuthenticationResult::Authenticated(receipt));
+            let snapshot = prepared.observation().snapshot();
+            assert_eq!(snapshot.returned, Some(CredentialReturned::Authenticated));
+            assert_eq!(snapshot.return_matches, acknowledgement);
+            assert!(prepared
+                .transfer(&equal_fields, Uuid::from_u128(1), Uuid::from_u128(3))
+                .is_err());
+            assert!(!prepared.observation().snapshot().transferred);
+        }
+    });
+}
+#[test]
+fn credential_matching_receipt_transfers_only_its_original_attempt() {
+    futures::executor::block_on(async {
         let prepared = PreparedCredential::new(
             Uuid::from_u128(1),
             Uuid::from_u128(3),
             0,
+            CredentialKind::UnboundFast,
+        );
+        let wrong = PreparedCredential::new(
+            Uuid::from_u128(1),
+            Uuid::from_u128(3),
+            1,
             CredentialKind::UnboundFast,
         );
         let invocation = prepared
@@ -344,71 +398,30 @@ async fn credential_acknowledgement_and_receipt_instance_are_independent_authori
             )
             .unwrap();
         prepare_empty_fast(&invocation).await;
-        if acknowledgement {
-            CredentialInvocation::commit(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
-                .await
-                .unwrap();
-        }
+        CredentialInvocation::commit(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
+            .await
+            .unwrap();
         let receipt = CredentialCommitReceipt::new(None, None, None);
-        let equal_fields = CredentialCommitReceipt::new(None, None, None);
         invocation.constructed(&receipt);
-        invocation.fast_returned(&AuthenticationResult::Authenticated(receipt));
-        let snapshot = prepared.observation().snapshot();
-        assert_eq!(snapshot.returned, Some(CredentialReturned::Authenticated));
-        assert_eq!(snapshot.return_matches, acknowledgement);
-        assert!(prepared
-            .transfer(&equal_fields, Uuid::from_u128(1), Uuid::from_u128(3))
+        let result = AuthenticationResult::Authenticated(receipt);
+        invocation.fast_returned(&result);
+        let AuthenticationResult::Authenticated(receipt) = result else {
+            unreachable!()
+        };
+        assert!(wrong
+            .transfer(&receipt, Uuid::from_u128(1), Uuid::from_u128(3))
             .is_err());
-        assert!(!prepared.observation().snapshot().transferred);
-    }
-}
-#[tokio::test]
-async fn credential_matching_receipt_transfers_only_its_original_attempt() {
-    let prepared = PreparedCredential::new(
-        Uuid::from_u128(1),
-        Uuid::from_u128(3),
-        0,
-        CredentialKind::UnboundFast,
-    );
-    let wrong = PreparedCredential::new(
-        Uuid::from_u128(1),
-        Uuid::from_u128(3),
-        1,
-        CredentialKind::UnboundFast,
-    );
-    let invocation = prepared
-        .fast(
-            Uuid::from_u128(2),
-            7,
-            &FastCommitPlan::default(),
-            None,
-            Uuid::from_u128(3),
-        )
-        .unwrap();
-    prepare_empty_fast(&invocation).await;
-    CredentialInvocation::commit(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
-        .await
-        .unwrap();
-    let receipt = CredentialCommitReceipt::new(None, None, None);
-    invocation.constructed(&receipt);
-    let result = AuthenticationResult::Authenticated(receipt);
-    invocation.fast_returned(&result);
-    let AuthenticationResult::Authenticated(receipt) = result else {
-        unreachable!()
-    };
-    assert!(wrong
-        .transfer(&receipt, Uuid::from_u128(1), Uuid::from_u128(3))
-        .is_err());
-    assert!(prepared
-        .transfer(&receipt, Uuid::from_u128(4), Uuid::from_u128(3))
-        .is_err());
-    let retained = prepared
-        .transfer(&receipt, Uuid::from_u128(1), Uuid::from_u128(3))
-        .unwrap();
-    assert!(retained.snapshot().transferred);
-    assert!(prepared
-        .transfer(&receipt, Uuid::from_u128(1), Uuid::from_u128(3))
-        .is_err());
+        assert!(prepared
+            .transfer(&receipt, Uuid::from_u128(4), Uuid::from_u128(3))
+            .is_err());
+        let retained = prepared
+            .transfer(&receipt, Uuid::from_u128(1), Uuid::from_u128(3))
+            .unwrap();
+        assert!(retained.snapshot().transferred);
+        assert!(prepared
+            .transfer(&receipt, Uuid::from_u128(1), Uuid::from_u128(3))
+            .is_err());
+    });
 }
 
 #[test]
@@ -580,9 +593,89 @@ fn credential_begin_and_query_error_or_pending_do_not_invent_rollback() {
     }
 }
 
-#[tokio::test]
-async fn credential_duplicate_and_late_operations_never_poll_or_replace_first_facts() {
-    for duplicate in [0, 1, 2, 3] {
+#[test]
+fn credential_duplicate_and_late_operations_never_poll_or_replace_first_facts() {
+    futures::executor::block_on(async {
+        for duplicate in [0, 1, 2, 3] {
+            let prepared = PreparedCredential::new(
+                Uuid::from_u128(1),
+                Uuid::from_u128(3),
+                0,
+                CredentialKind::UnboundFast,
+            );
+            let invocation = prepared
+                .fast(
+                    Uuid::from_u128(2),
+                    7,
+                    &FastCommitPlan::default(),
+                    None,
+                    Uuid::from_u128(3),
+                )
+                .unwrap();
+            prepare_empty_fast_result(&invocation, duplicate != 2).await;
+            if duplicate == 2 {
+                CredentialInvocation::rollback(
+                    Some(&invocation),
+                    CredentialRollbackSite::FastExpired,
+                    std::future::ready(Ok::<(), ()>(())),
+                )
+                .await
+                .unwrap();
+            }
+            if duplicate == 3 {
+                CredentialInvocation::commit(
+                    Some(&invocation),
+                    std::future::ready(Ok::<(), ()>(())),
+                )
+                .await
+                .unwrap();
+            }
+            let before = prepared.observation().snapshot();
+            let calls = Cell::new(0);
+            let rejected = match duplicate {
+                0 => CredentialInvocation::begin(Some(&invocation), async {
+                    calls.set(1);
+                    Ok::<(), ()>(())
+                })
+                .await
+                .is_err(),
+                1 => CredentialInvocation::eligibility(Some(&invocation), async {
+                    calls.set(1);
+                    Ok::<_, ()>(Some(false))
+                })
+                .await
+                .is_err(),
+                2 => CredentialInvocation::rollback(
+                    Some(&invocation),
+                    CredentialRollbackSite::GenerationRefused,
+                    async {
+                        calls.set(1);
+                        Ok::<(), ()>(())
+                    },
+                )
+                .await
+                .is_err(),
+                _ => CredentialInvocation::commit(Some(&invocation), async {
+                    calls.set(1);
+                    Ok::<(), ()>(())
+                })
+                .await
+                .is_err(),
+            };
+            assert!(rejected);
+            assert_eq!(calls.get(), 0);
+            let after = prepared.observation().snapshot();
+            assert_eq!(
+                (after.begin, after.eligibility, after.rollback, after.commit),
+                (
+                    before.begin,
+                    before.eligibility,
+                    before.rollback,
+                    before.commit
+                )
+            );
+            assert!(after.integrity_failure);
+        }
         let prepared = PreparedCredential::new(
             Uuid::from_u128(1),
             Uuid::from_u128(3),
@@ -598,100 +691,13 @@ async fn credential_duplicate_and_late_operations_never_poll_or_replace_first_fa
                 Uuid::from_u128(3),
             )
             .unwrap();
-        prepare_empty_fast_result(&invocation, duplicate != 2).await;
-        if duplicate == 2 {
-            CredentialInvocation::rollback(
-                Some(&invocation),
-                CredentialRollbackSite::FastExpired,
-                std::future::ready(Ok::<(), ()>(())),
-            )
+        prepare_empty_fast(&invocation).await;
+        CredentialInvocation::commit(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
             .await
             .unwrap();
-        }
-        if duplicate == 3 {
-            CredentialInvocation::commit(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
-                .await
-                .unwrap();
-        }
-        let before = prepared.observation().snapshot();
-        let calls = Cell::new(0);
-        let rejected = match duplicate {
-            0 => CredentialInvocation::begin(Some(&invocation), async {
-                calls.set(1);
-                Ok::<(), ()>(())
-            })
-            .await
-            .is_err(),
-            1 => CredentialInvocation::eligibility(Some(&invocation), async {
-                calls.set(1);
-                Ok::<_, ()>(Some(false))
-            })
-            .await
-            .is_err(),
-            2 => CredentialInvocation::rollback(
-                Some(&invocation),
-                CredentialRollbackSite::GenerationRefused,
-                async {
-                    calls.set(1);
-                    Ok::<(), ()>(())
-                },
-            )
-            .await
-            .is_err(),
-            _ => CredentialInvocation::commit(Some(&invocation), async {
-                calls.set(1);
-                Ok::<(), ()>(())
-            })
-            .await
-            .is_err(),
-        };
-        assert!(rejected);
-        assert_eq!(calls.get(), 0);
-        let after = prepared.observation().snapshot();
-        assert_eq!(
-            (after.begin, after.eligibility, after.rollback, after.commit),
-            (
-                before.begin,
-                before.eligibility,
-                before.rollback,
-                before.commit
-            )
-        );
-        assert!(after.integrity_failure);
-    }
-    let prepared = PreparedCredential::new(
-        Uuid::from_u128(1),
-        Uuid::from_u128(3),
-        0,
-        CredentialKind::UnboundFast,
-    );
-    let invocation = prepared
-        .fast(
-            Uuid::from_u128(2),
-            7,
-            &FastCommitPlan::default(),
-            None,
-            Uuid::from_u128(3),
-        )
-        .unwrap();
-    prepare_empty_fast(&invocation).await;
-    CredentialInvocation::commit(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
-        .await
-        .unwrap();
-    let receipt = CredentialCommitReceipt::new(None, None, None);
-    invocation.constructed(&receipt);
-    let original_id = prepared
-        .observation
-        .0
-        .lock()
-        .unwrap()
-        .constructed
-        .as_ref()
-        .unwrap()
-        .0;
-    invocation.constructed(&CredentialCommitReceipt::new(None, None, None));
-    assert_eq!(
-        prepared
+        let receipt = CredentialCommitReceipt::new(None, None, None);
+        invocation.constructed(&receipt);
+        let original_id = prepared
             .observation
             .0
             .lock()
@@ -699,155 +705,171 @@ async fn credential_duplicate_and_late_operations_never_poll_or_replace_first_fa
             .constructed
             .as_ref()
             .unwrap()
-            .0,
-        original_id
-    );
-    invocation.fast_returned(&AuthenticationResult::Authenticated(receipt));
-    invocation.fast_returned(&AuthenticationResult::ExpiredCredentials);
-    assert_eq!(
-        prepared.observation().snapshot().returned,
-        Some(CredentialReturned::Authenticated)
-    );
-    prepared
-        .observation()
-        .handler_returned(HandlerReturn::Completed);
-    let calls = Cell::new(0);
-    assert!(CredentialInvocation::commit(Some(&invocation), async {
-        calls.set(1);
-        Ok::<(), ()>(())
-    })
-    .await
-    .is_err());
-    assert_eq!(calls.get(), 0);
-    assert_eq!(prepared.observation().snapshot().commit, CredentialCall::Ok);
+            .0;
+        invocation.constructed(&CredentialCommitReceipt::new(None, None, None));
+        assert_eq!(
+            prepared
+                .observation
+                .0
+                .lock()
+                .unwrap()
+                .constructed
+                .as_ref()
+                .unwrap()
+                .0,
+            original_id
+        );
+        invocation.fast_returned(&AuthenticationResult::Authenticated(receipt));
+        invocation.fast_returned(&AuthenticationResult::ExpiredCredentials);
+        assert_eq!(
+            prepared.observation().snapshot().returned,
+            Some(CredentialReturned::Authenticated)
+        );
+        prepared
+            .observation()
+            .handler_returned(HandlerReturn::Completed);
+        let calls = Cell::new(0);
+        assert!(CredentialInvocation::commit(Some(&invocation), async {
+            calls.set(1);
+            Ok::<(), ()>(())
+        })
+        .await
+        .is_err());
+        assert_eq!(calls.get(), 0);
+        assert_eq!(prepared.observation().snapshot().commit, CredentialCall::Ok);
+    });
 }
 
-#[tokio::test]
-async fn credential_commit_entry_freezes_preparation_and_stage_identity() {
-    let prepared = PreparedCredential::new(
-        Uuid::from_u128(1),
-        Uuid::from_u128(3),
-        0,
-        CredentialKind::UnboundFast,
-    );
-    let invocation = prepared
-        .fast(
-            Uuid::from_u128(2),
-            7,
-            &FastCommitPlan::default(),
-            None,
+#[test]
+fn credential_commit_entry_freezes_preparation_and_stage_identity() {
+    futures::executor::block_on(async {
+        let prepared = PreparedCredential::new(
+            Uuid::from_u128(1),
             Uuid::from_u128(3),
-        )
-        .unwrap();
-    prepare_empty_fast(&invocation).await;
-    let mut commit = Box::pin(CredentialInvocation::commit(
-        Some(&invocation),
-        std::future::pending::<std::result::Result<(), ()>>(),
-    ));
-    assert!(poll_once(commit.as_mut()).is_pending());
-    invocation.stage_id(Uuid::from_u128(88));
-    invocation.stage_returned(&Ok(Some(StagedLoginEpoch {
-        operation_id: Uuid::from_u128(88),
-        connection_id: Uuid::from_u128(3),
-        user_id: Uuid::from_u128(2),
-        device_id: Uuid::from_u128(4),
-        auth_generation: 7,
-        epoch: 9,
-    })));
-    let state = prepared.observation.0.lock().unwrap();
-    assert!(state.prospective.as_ref().unwrap().receipt.stage.is_none());
-    assert!(state.snapshot.stage_id.is_none());
-    assert!(state.stage.is_none());
-    assert!(!state.integrity);
-    drop(state);
-    drop(commit);
-    assert_eq!(
-        prepared.observation().snapshot().commit,
-        CredentialCall::Entered
-    );
+            0,
+            CredentialKind::UnboundFast,
+        );
+        let invocation = prepared
+            .fast(
+                Uuid::from_u128(2),
+                7,
+                &FastCommitPlan::default(),
+                None,
+                Uuid::from_u128(3),
+            )
+            .unwrap();
+        prepare_empty_fast(&invocation).await;
+        let mut commit = Box::pin(CredentialInvocation::commit(
+            Some(&invocation),
+            std::future::pending::<std::result::Result<(), ()>>(),
+        ));
+        assert!(poll_once(commit.as_mut()).is_pending());
+        invocation.stage_id(Uuid::from_u128(88));
+        invocation.stage_returned(&Ok(Some(StagedLoginEpoch {
+            operation_id: Uuid::from_u128(88),
+            connection_id: Uuid::from_u128(3),
+            user_id: Uuid::from_u128(2),
+            device_id: Uuid::from_u128(4),
+            auth_generation: 7,
+            epoch: 9,
+        })));
+        let state = prepared.observation.0.lock().unwrap();
+        assert!(state.prospective.as_ref().unwrap().receipt.stage.is_none());
+        assert!(state.snapshot.stage_id.is_none());
+        assert!(state.stage.is_none());
+        assert!(!state.integrity);
+        drop(state);
+        drop(commit);
+        assert_eq!(
+            prepared.observation().snapshot().commit,
+            CredentialCall::Entered
+        );
+    });
 }
 
-#[tokio::test]
-async fn credential_stage_error_keeps_original_sql_operation_and_device_roles() {
-    let plan = FastCommitPlan {
-        issue: Some(super::super::FastTokenIssue {
-            device_id: Uuid::from_u128(9),
-            mechanism: "HT-SHA-256-NONE".to_owned(),
-            ttl_days: 7,
-            strong_reauth_max_days: 30,
-            inherited_chain: None,
-        }),
-        ..FastCommitPlan::default()
-    };
-    let prepared = PreparedCredential::new(
-        Uuid::from_u128(1),
-        Uuid::from_u128(3),
-        0,
-        CredentialKind::UnboundFast,
-    );
-    let invocation = prepared
-        .fast(
-            Uuid::from_u128(2),
-            7,
-            &plan,
-            Some(Uuid::from_u128(4)),
+#[test]
+fn credential_stage_error_keeps_original_sql_operation_and_device_roles() {
+    futures::executor::block_on(async {
+        let plan = FastCommitPlan {
+            issue: Some(northstar_auth_core::credential::FastTokenIssue {
+                device_id: Uuid::from_u128(9),
+                mechanism: "HT-SHA-256-NONE".to_owned(),
+                ttl_days: 7,
+                strong_reauth_max_days: 30,
+                inherited_chain: None,
+            }),
+            ..FastCommitPlan::default()
+        };
+        let prepared = PreparedCredential::new(
+            Uuid::from_u128(1),
             Uuid::from_u128(3),
+            0,
+            CredentialKind::UnboundFast,
+        );
+        let invocation = prepared
+            .fast(
+                Uuid::from_u128(2),
+                7,
+                &plan,
+                Some(Uuid::from_u128(4)),
+                Uuid::from_u128(3),
+            )
+            .unwrap();
+        invocation
+            .enter_fast(
+                Uuid::from_u128(2),
+                7,
+                &plan,
+                Some(Uuid::from_u128(4)),
+                Uuid::from_u128(3),
+            )
+            .unwrap();
+        CredentialInvocation::begin(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
+            .await
+            .unwrap();
+        CredentialInvocation::eligibility(
+            Some(&invocation),
+            std::future::ready(Ok::<_, ()>(Some(true))),
         )
-        .unwrap();
-    invocation
-        .enter_fast(
-            Uuid::from_u128(2),
-            7,
-            &plan,
-            Some(Uuid::from_u128(4)),
-            Uuid::from_u128(3),
-        )
-        .unwrap();
-    CredentialInvocation::begin(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
         .await
         .unwrap();
-    CredentialInvocation::eligibility(
-        Some(&invocation),
-        std::future::ready(Ok::<_, ()>(Some(true))),
-    )
-    .await
-    .unwrap();
-    invocation.transaction_returned();
-    invocation.preparation_entered(CredentialPreparation::Stage);
-    invocation.stage_id(Uuid::from_u128(5));
-    assert_eq!(
-        prepared.observation().snapshot().stage_id,
-        Some(Uuid::from_u128(5))
-    );
-    invocation.stage_id(Uuid::from_u128(6));
-    invocation.stage_returned(&Err(anyhow::anyhow!("synthetic SQL stage error")));
-    let state = prepared.observation.0.lock().unwrap();
-    assert_eq!(state.snapshot.stage_id, Some(Uuid::from_u128(5)));
-    assert_eq!(
-        state.request.as_ref().unwrap().device,
-        Some(Uuid::from_u128(4))
-    );
-    assert_eq!(
-        state
-            .request
-            .as_ref()
-            .unwrap()
-            .fast
-            .as_ref()
-            .unwrap()
-            .issue
-            .as_ref()
-            .unwrap()
-            .device_id,
-        Uuid::from_u128(9)
-    );
-    assert_eq!(state.snapshot.commit, CredentialCall::NotEntered);
-    assert!(state.stage.is_none());
+        invocation.transaction_returned();
+        invocation.preparation_entered(CredentialPreparation::Stage);
+        invocation.stage_id(Uuid::from_u128(5));
+        assert_eq!(
+            prepared.observation().snapshot().stage_id,
+            Some(Uuid::from_u128(5))
+        );
+        invocation.stage_id(Uuid::from_u128(6));
+        invocation.stage_returned(&Err(anyhow::anyhow!("synthetic SQL stage error")));
+        let state = prepared.observation.0.lock().unwrap();
+        assert_eq!(state.snapshot.stage_id, Some(Uuid::from_u128(5)));
+        assert_eq!(
+            state.request.as_ref().unwrap().device,
+            Some(Uuid::from_u128(4))
+        );
+        assert_eq!(
+            state
+                .request
+                .as_ref()
+                .unwrap()
+                .fast
+                .as_ref()
+                .unwrap()
+                .issue
+                .as_ref()
+                .unwrap()
+                .device_id,
+            Uuid::from_u128(9)
+        );
+        assert_eq!(state.snapshot.commit, CredentialCall::NotEntered);
+        assert!(state.stage.is_none());
+    });
 }
 
 #[test]
 fn credential_refusal_sites_preserve_rollback_propagation_and_never_authorize_commit() {
-    use northstar_session_core::finalization::{
+    use crate::finalization::{
         BindingFinalizationOutcome, SmResumeFinalizationOutcome, SmResumeFinalizationRequest,
     };
     let sites = [
@@ -1079,69 +1101,70 @@ fn credential_refusal_sites_preserve_rollback_propagation_and_never_authorize_co
         }
     }
 }
-#[tokio::test]
-async fn credential_incomplete_preparation_rejects_commit_without_polling_and_keeps_error_identity()
-{
-    let prepared = PreparedCredential::new(
-        Uuid::from_u128(1),
-        Uuid::from_u128(3),
-        0,
-        CredentialKind::UnboundFast,
-    );
-    let invocation = prepared
-        .fast(
-            Uuid::from_u128(2),
-            7,
-            &FastCommitPlan::default(),
-            None,
+#[test]
+fn credential_incomplete_preparation_rejects_commit_without_polling_and_keeps_error_identity() {
+    futures::executor::block_on(async {
+        let prepared = PreparedCredential::new(
+            Uuid::from_u128(1),
             Uuid::from_u128(3),
+            0,
+            CredentialKind::UnboundFast,
+        );
+        let invocation = prepared
+            .fast(
+                Uuid::from_u128(2),
+                7,
+                &FastCommitPlan::default(),
+                None,
+                Uuid::from_u128(3),
+            )
+            .unwrap();
+        invocation
+            .enter_fast(
+                Uuid::from_u128(2),
+                7,
+                &FastCommitPlan::default(),
+                None,
+                Uuid::from_u128(3),
+            )
+            .unwrap();
+        CredentialInvocation::begin(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
+            .await
+            .unwrap();
+        CredentialInvocation::eligibility(
+            Some(&invocation),
+            std::future::ready(Ok::<_, ()>(Some(true))),
         )
-        .unwrap();
-    invocation
-        .enter_fast(
-            Uuid::from_u128(2),
-            7,
-            &FastCommitPlan::default(),
-            None,
-            Uuid::from_u128(3),
-        )
-        .unwrap();
-    CredentialInvocation::begin(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
         .await
         .unwrap();
-    CredentialInvocation::eligibility(
-        Some(&invocation),
-        std::future::ready(Ok::<_, ()>(Some(true))),
-    )
-    .await
-    .unwrap();
-    invocation.transaction_returned();
-    let calls = Cell::new(0);
-    assert!(matches!(
-        CredentialInvocation::commit(Some(&invocation), async {
-            calls.set(1);
-            Ok::<(), ()>(())
-        })
-        .await,
-        Err(CommitError::Observation(_))
-    ));
-    assert_eq!(calls.get(), 0);
-    assert_eq!(
-        prepared.observation().snapshot().commit,
-        CredentialCall::NotEntered
-    );
-    let result = CredentialInvocation::begin(
-        None,
-        std::future::ready(Err::<(), _>(std::io::Error::from(
-            std::io::ErrorKind::ConnectionReset,
-        ))),
-    )
-    .await;
-    let error = credential_error(result.unwrap_err());
-    assert_eq!(
-        error.downcast_ref::<std::io::Error>().unwrap().kind(),
-        std::io::ErrorKind::ConnectionReset
-    );
+        invocation.transaction_returned();
+        let calls = Cell::new(0);
+        assert!(matches!(
+            CredentialInvocation::commit(Some(&invocation), async {
+                calls.set(1);
+                Ok::<(), ()>(())
+            })
+            .await,
+            Err(CommitError::Observation(_))
+        ));
+        assert_eq!(calls.get(), 0);
+        assert_eq!(
+            prepared.observation().snapshot().commit,
+            CredentialCall::NotEntered
+        );
+        let result = CredentialInvocation::begin(
+            None,
+            std::future::ready(Err::<(), _>(std::io::Error::from(
+                std::io::ErrorKind::ConnectionReset,
+            ))),
+        )
+        .await;
+        let error = credential_error(result.unwrap_err());
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::ConnectionReset
+        );
+    });
 }
 
 #[test]
@@ -1220,97 +1243,105 @@ fn publication_commit_pending_error_and_duplicate_keep_exact_knowledge() {
     }
 }
 
-#[tokio::test]
-async fn publication_receipt_and_return_use_stored_epoch_not_hint() {
-    let receipt = receipt();
-    let observation = written(&receipt, true);
-    let invocation = observation.begin(&receipt).unwrap();
-    invocation.enter_service().unwrap();
-    invocation.enter_repository().unwrap();
-    invocation
-        .commit(std::future::ready(Ok::<(), std::io::Error>(())), Some(7))
-        .await
-        .unwrap();
-    assert_eq!(receipt.staged_login_epoch().unwrap().epoch, 999);
-    assert_eq!(
-        observation.snapshot().publication,
-        Knowledge::ReceiptKnown(Some(7))
-    );
-    assert!(!invocation.returned(&AuthenticationResult::Authenticated(Some(999))));
-    assert_eq!(
-        observation.snapshot().returned,
-        Some(Returned::Authenticated(Some(999)))
-    );
-    assert!(!observation.authenticated_return(Some(7)));
-    assert!(!invocation.returned(&AuthenticationResult::Authenticated(Some(7))));
-}
-
-#[tokio::test]
-async fn successful_return_alone_cannot_authorize_downstream_effects() {
-    let receipt = receipt();
-    let observation = written(&receipt, true);
-    let invocation = observation.begin(&receipt).unwrap();
-    invocation.enter_service().unwrap();
-    invocation.enter_repository().unwrap();
-    assert!(!invocation.returned(&AuthenticationResult::Authenticated(Some(7))));
-    assert!(!observation.authenticated_return(Some(7)));
-    assert!(!observation.successful_completion(false));
-    assert_eq!(observation.snapshot().publication, Knowledge::BeforeCommit);
-}
-
-#[tokio::test]
-async fn rollback_failure_and_cancel_do_not_claim_a_rollback_receipt() {
-    for pending in [false, true] {
+#[test]
+fn publication_receipt_and_return_use_stored_epoch_not_hint() {
+    futures::executor::block_on(async {
         let receipt = receipt();
         let observation = written(&receipt, true);
         let invocation = observation.begin(&receipt).unwrap();
         invocation.enter_service().unwrap();
         invocation.enter_repository().unwrap();
-        let mut rollback = Box::pin(invocation.rollback(async {
-            if pending {
-                std::future::pending::<()>().await;
-            }
-            Err::<(), _>(std::io::Error::other("rollback reply lost"))
-        }));
-        assert_eq!(poll_once(rollback.as_mut()).is_pending(), pending);
-        drop(rollback);
+        invocation
+            .commit(std::future::ready(Ok::<(), std::io::Error>(())), Some(7))
+            .await
+            .unwrap();
+        assert_eq!(receipt.staged_login_epoch().unwrap().epoch, 999);
         assert_eq!(
-            observation.snapshot().rollback,
-            if pending {
-                Rollback::CallEntered
-            } else {
-                Rollback::Failed
-            }
+            observation.snapshot().publication,
+            Knowledge::ReceiptKnown(Some(7))
         );
-        assert_eq!(observation.snapshot().publication, Knowledge::BeforeCommit);
-        assert!(invocation.returned(&AuthenticationResult::ExpiredCredentials));
-        assert!(!observation.successful_completion(false));
-    }
+        assert!(!invocation.returned(&AuthenticationResult::Authenticated(Some(999))));
+        assert_eq!(
+            observation.snapshot().returned,
+            Some(Returned::Authenticated(Some(999)))
+        );
+        assert!(!observation.authenticated_return(Some(7)));
+        assert!(!invocation.returned(&AuthenticationResult::Authenticated(Some(7))));
+    });
 }
 
-#[tokio::test]
-async fn positive_completion_requires_publication_and_captured_effect_results() {
-    let receipt = receipt();
-    let observation = written(&receipt, true);
-    let invocation = observation.begin(&receipt).unwrap();
-    invocation.enter_service().unwrap();
-    invocation.enter_repository().unwrap();
-    invocation
-        .commit(std::future::ready(Ok::<(), std::io::Error>(())), Some(7))
-        .await
-        .unwrap();
-    assert!(invocation.returned(&AuthenticationResult::Authenticated(Some(7))));
-    assert!(!observation.successful_completion(false));
-    observation.effects(|effects| {
-        effects.epoch_applied = true;
-        effects.route_mapping = Some(true);
-        effects.route_activation = Some(true);
-        effects.caps_entered = true;
+#[test]
+fn successful_return_alone_cannot_authorize_downstream_effects() {
+    futures::executor::block_on(async {
+        let receipt = receipt();
+        let observation = written(&receipt, true);
+        let invocation = observation.begin(&receipt).unwrap();
+        invocation.enter_service().unwrap();
+        invocation.enter_repository().unwrap();
+        assert!(!invocation.returned(&AuthenticationResult::Authenticated(Some(7))));
+        assert!(!observation.authenticated_return(Some(7)));
+        assert!(!observation.successful_completion(false));
+        assert_eq!(observation.snapshot().publication, Knowledge::BeforeCommit);
     });
-    assert!(!observation.successful_completion(false));
-    observation.effects(|effects| effects.caps_returned = true);
-    assert!(observation.successful_completion(false));
-    assert!(!observation.successful_completion(true));
+}
+
+#[test]
+fn rollback_failure_and_cancel_do_not_claim_a_rollback_receipt() {
+    futures::executor::block_on(async {
+        for pending in [false, true] {
+            let receipt = receipt();
+            let observation = written(&receipt, true);
+            let invocation = observation.begin(&receipt).unwrap();
+            invocation.enter_service().unwrap();
+            invocation.enter_repository().unwrap();
+            let mut rollback = Box::pin(invocation.rollback(async {
+                if pending {
+                    std::future::pending::<()>().await;
+                }
+                Err::<(), _>(std::io::Error::other("rollback reply lost"))
+            }));
+            assert_eq!(poll_once(rollback.as_mut()).is_pending(), pending);
+            drop(rollback);
+            assert_eq!(
+                observation.snapshot().rollback,
+                if pending {
+                    Rollback::CallEntered
+                } else {
+                    Rollback::Failed
+                }
+            );
+            assert_eq!(observation.snapshot().publication, Knowledge::BeforeCommit);
+            assert!(invocation.returned(&AuthenticationResult::ExpiredCredentials));
+            assert!(!observation.successful_completion(false));
+        }
+    });
+}
+
+#[test]
+fn positive_completion_requires_publication_and_captured_effect_results() {
+    futures::executor::block_on(async {
+        let receipt = receipt();
+        let observation = written(&receipt, true);
+        let invocation = observation.begin(&receipt).unwrap();
+        invocation.enter_service().unwrap();
+        invocation.enter_repository().unwrap();
+        invocation
+            .commit(std::future::ready(Ok::<(), std::io::Error>(())), Some(7))
+            .await
+            .unwrap();
+        assert!(invocation.returned(&AuthenticationResult::Authenticated(Some(7))));
+        assert!(!observation.successful_completion(false));
+        observation.effects(|effects| {
+            effects.epoch_applied = true;
+            effects.route_mapping = Some(true);
+            effects.route_activation = Some(true);
+            effects.caps_entered = true;
+        });
+        assert!(!observation.successful_completion(false));
+        observation.effects(|effects| effects.caps_returned = true);
+        assert!(observation.successful_completion(false));
+        assert!(!observation.successful_completion(true));
+    });
 }
 
 #[test]

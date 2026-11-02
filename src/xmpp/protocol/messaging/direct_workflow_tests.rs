@@ -336,7 +336,7 @@ fn real_enqueue_gate_refuses_wrong_source_and_same_ids_changed_payload_without_s
         assert!(!witness.snapshot().local_accepted);
         assert_eq!(
             witness.snapshot().local_call,
-            northstar_message_application::direct_handoff::LocalKnowledge::NotRequested
+            northstar_message_core::direct_handoff::LocalKnowledge::NotRequested
         );
         assert!(witness.local_permit(source).is_ok());
         assert!(rx.try_recv().is_err());
@@ -347,7 +347,7 @@ fn real_enqueue_gate_refuses_wrong_source_and_same_ids_changed_payload_without_s
 #[test]
 fn actual_full_and_closed_refusals_preserve_item_channels_and_disconnect_order() {
     use crate::xmpp::outbound::{OutboundSender, RouteEnqueue};
-    use northstar_message_application::direct_handoff::Refusal;
+    use northstar_message_core::direct_handoff::Refusal;
     for closed in [false, true] {
         let (_, handoff) = handoff();
         let (mut item, witness) = handoff
@@ -520,7 +520,7 @@ async fn real_router_sender_queue_fact_survives_a_later_outer_continuation_cance
     assert!(summary.handoff.unwrap().local_accepted);
     assert_eq!(
         summary.handoff.unwrap().route_end,
-        northstar_message_application::direct_handoff::RouteEnd::Returned
+        northstar_message_core::direct_handoff::RouteEnd::Returned
     );
     let item = rx.try_recv().unwrap();
     assert_eq!(item.stanza, "private-live-stanza");
@@ -554,11 +554,11 @@ async fn real_router_rearm_entry_survives_cancellation_without_claiming_release(
     let snapshot = owner.snapshot().handoff.unwrap();
     assert_eq!(
         snapshot.rearm,
-        northstar_message_application::direct_handoff::RearmKnowledge::CallEntered
+        northstar_message_core::direct_handoff::RearmKnowledge::CallEntered
     );
     assert_eq!(
         snapshot.route_end,
-        northstar_message_application::direct_handoff::RouteEnd::Dropped
+        northstar_message_core::direct_handoff::RouteEnd::Dropped
     );
     assert!(snapshot.prior_remote_uncertain);
     assert!(!snapshot.local_accepted);

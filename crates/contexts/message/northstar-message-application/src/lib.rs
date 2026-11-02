@@ -5,7 +5,6 @@
 //! sockets, XML, global server state or post-commit providers.
 
 pub mod direct_commit;
-pub mod direct_handoff;
 pub mod direct_lifecycle;
 pub mod direct_spool_wake;
 pub mod extdisco;
@@ -14,8 +13,9 @@ pub mod message_carbons;
 pub mod messaging;
 pub mod push;
 pub mod retractions;
-pub mod route_item;
 pub mod telemetry;
+#[cfg(test)]
+mod test_queue;
 
 use northstar_message_core::{
     IdentityAuthority, MessageCommit, PersonalMessageDestination, ValidatedPersonalMessage,

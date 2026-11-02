@@ -21,9 +21,9 @@ use northstar_message_application::messaging::{
     DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
 };
 use northstar_message_application::{
-    direct_commit, direct_handoff, direct_lifecycle, MessageApplication,
-    PersonalMessageCommitRepository,
+    direct_commit, direct_lifecycle, MessageApplication, PersonalMessageCommitRepository,
 };
+use northstar_message_core::direct_handoff;
 use std::{
     collections::VecDeque,
     sync::{

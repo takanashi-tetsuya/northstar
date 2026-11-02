@@ -67,12 +67,10 @@ pub struct OutboundItem {
         Option<std::sync::Arc<Vec<crate::services::sm_capacity::SmCapacityLease>>>,
 }
 
-pub(crate) type RouteEnqueue =
-    northstar_message_application::route_item::RouteEnqueue<OutboundItem>;
-pub(crate) type RouteSendError =
-    northstar_message_application::route_item::RouteSendError<OutboundItem>;
+pub(crate) type RouteEnqueue = northstar_message_core::route_item::RouteEnqueue<OutboundItem>;
+pub(crate) type RouteSendError = northstar_message_core::route_item::RouteSendError<OutboundItem>;
 
-impl northstar_message_application::route_item::RouteItem for OutboundItem {
+impl northstar_message_core::route_item::RouteItem for OutboundItem {
     fn plain(stanza: String) -> Self {
         Self::plain(stanza)
     }
@@ -352,7 +350,7 @@ impl OutboundSender {
         reason = "A refused route returns the same item and ownership by value for recovery."
     )]
     pub(crate) fn try_send_route_item(&self, enqueue: RouteEnqueue) -> Result<(), RouteSendError> {
-        use northstar_message_application::route_item::QueueRefusal;
+        use northstar_message_core::route_item::QueueRefusal;
         enqueue.send_with(|item| {
             let durable = item.c2s_delivery().is_some();
             self.try_send_item(item).map_err(|error| match error {

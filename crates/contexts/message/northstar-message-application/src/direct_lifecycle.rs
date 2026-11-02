@@ -4,7 +4,7 @@
 //! does not infer a durable message commit, route, or scheduled recovery from
 //! either admission transaction. No I/O, clock, entropy, or async Drop lives here.
 
-use crate::{direct_commit, direct_handoff};
+use crate::direct_commit;
 use northstar_abuse_policy::{
     admission_execution::{
         BeginRequest, BeginResult, Command, CommitFact, CommitWitness, Completion,
@@ -13,6 +13,7 @@ use northstar_abuse_policy::{
     },
     admission_transaction::AdmissionFence,
 };
+use northstar_message_core::direct_handoff;
 use northstar_message_core::DirectPersonalMessageAdmission;
 use uuid::Uuid;
 

@@ -2178,6 +2178,8 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "northstar-abuse-policy",
+ "northstar-delivery-core",
  "northstar-federation-core",
  "northstar-xep-0085",
  "northstar-xep-0184",

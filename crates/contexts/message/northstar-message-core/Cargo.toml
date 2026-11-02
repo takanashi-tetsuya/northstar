@@ -7,9 +7,15 @@ license = "AGPL-3.0-only"
 description = "Capability-free personal-message commands and commit results for Northstar"
 publish = false
 
+[features]
+# Test-only entry points of the route enqueue contract.
+test-support = []
+
 [dependencies]
 base64 = "0.22"
 chrono = "0.4"
+northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
+northstar-delivery-core = { path = "../northstar-delivery-core" }
 northstar-xep-0085 = { path = "../../../kernel/northstar-xep-0085" }
 northstar-xep-0184 = { path = "../../../kernel/northstar-xep-0184" }
 northstar-xep-0280 = { path = "../../../kernel/northstar-xep-0280" }

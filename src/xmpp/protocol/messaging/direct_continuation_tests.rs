@@ -536,9 +536,9 @@ async fn spooled_and_degraded_modes_keep_distinct_health_and_rearm_short_circuit
         assert_eq!(
             snapshot.handoff.unwrap().rearm,
             if case == 0 {
-                northstar_message_application::direct_handoff::RearmKnowledge::NotRequested
+                northstar_message_core::direct_handoff::RearmKnowledge::NotRequested
             } else {
-                northstar_message_application::direct_handoff::RearmKnowledge::CallReturned
+                northstar_message_core::direct_handoff::RearmKnowledge::CallReturned
             }
         );
     }

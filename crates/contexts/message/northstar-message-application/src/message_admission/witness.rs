@@ -4,11 +4,12 @@ use crate::direct_lifecycle::OperationSnapshot;
 use crate::direct_lifecycle::{
     AdmissionEffectHandle, AdmissionGrant, DirectLifecycle, OperationSummary, TerminalReason,
 };
-use crate::{direct_commit, direct_handoff, direct_lifecycle::PreparationAdmission};
+use crate::{direct_commit, direct_lifecycle::PreparationAdmission};
 use northstar_abuse_policy::admission_execution::{
     AdmissionCommitObserver, Command, CommitFact, CommitWitness, Effect, EffectResult,
     ExecutionOutcome, PreparedCommit, Receipt, TransactionScope,
 };
+use northstar_message_core::direct_handoff;
 use northstar_message_core::DirectPersonalMessageAdmission;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;

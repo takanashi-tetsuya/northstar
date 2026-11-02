@@ -136,7 +136,7 @@ impl std::error::Error for DirectRouteError {
 /// one route attempt. It never represents a transport acknowledgement.
 struct UnroutedClaim {
     source: Option<DurableDelivery>,
-    witness: Option<crate::direct_handoff::HandoffHandle>,
+    witness: Option<northstar_message_core::direct_handoff::HandoffHandle>,
 }
 
 impl UnroutedClaim {
@@ -552,7 +552,7 @@ impl DirectMessageRouter {
         queue_accepted: bool,
         history_committed: bool,
     ) -> Option<DirectRouteOutcome> {
-        use crate::direct_handoff::{health_decision, HealthDecision};
+        use northstar_message_core::direct_handoff::{health_decision, HealthDecision};
         // Keep the original disabled-health short circuit and each caller's
         // checkpoint; the shared decision owns no clock or health read.
         if !request.enforce_direct_health {

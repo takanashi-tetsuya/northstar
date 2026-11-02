@@ -442,13 +442,13 @@ pub enum PreparedHandoffNext<'a> {
 
 pub struct PreparedDirectHandoff<'a> {
     owner: DirectOperationHandle,
-    grant: crate::direct_handoff::RouteGrant,
+    grant: northstar_message_core::direct_handoff::RouteGrant,
     live: LiveDirectBinding<'a>,
 }
 
 pub struct PreparedDirectRecovery {
     pub source: northstar_delivery_core::DurableDelivery,
-    pub witness: crate::direct_handoff::HandoffHandle,
+    pub witness: northstar_message_core::direct_handoff::HandoffHandle,
 }
 
 impl<'a> LocalDirectContinuation<'a> {
@@ -458,7 +458,7 @@ impl<'a> LocalDirectContinuation<'a> {
         self,
         read_health: impl FnOnce() -> DirectPostCommitMode,
     ) -> anyhow::Result<PreparedHandoffNext<'a>> {
-        use crate::direct_handoff::Next;
+        use northstar_message_core::direct_handoff::Next;
         let next = match self.owner.begin_handoff()? {
             Next::CheckHealth(permit) => {
                 self.owner.observe_handoff_health(permit, read_health())?
@@ -482,10 +482,10 @@ impl<'a> LocalDirectContinuation<'a> {
 }
 
 impl PreparedDirectHandoff<'_> {
-    pub fn bind_route<S, I: crate::route_item::RouteItem>(
+    pub fn bind_route<S, I: northstar_message_core::route_item::RouteItem>(
         self,
         request: &super::DirectRouteRequest<'_, S>,
-    ) -> anyhow::Result<(I, crate::direct_handoff::HandoffHandle)> {
+    ) -> anyhow::Result<(I, northstar_message_core::direct_handoff::HandoffHandle)> {
         let source = self.grant.source();
         anyhow::ensure!(
             request.sender == self.live.sender

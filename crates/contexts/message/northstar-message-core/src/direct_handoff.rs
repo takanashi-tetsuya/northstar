@@ -1,8 +1,8 @@
 //! Closed handoff authority and operation-local queue knowledge. Queue facts
 //! never imply a socket write, peer acknowledgement, or durable settlement.
+use crate::DirectPostCommitMode;
 use northstar_abuse_policy::admission_execution::Correlation;
 use northstar_delivery_core::DurableDelivery;
-use northstar_message_core::DirectPostCommitMode;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -142,7 +142,7 @@ impl HandoffHandle {
         witness.queue_allowed = queue_allowed;
         witness.snapshot.route_end = RouteEnd::Running;
     }
-    pub(crate) fn retire(&self) {
+    pub fn retire(&self) {
         self.0
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -357,14 +357,14 @@ enum Phase {
     RecoveryIssued,
     Consumed,
 }
-pub(crate) struct Control {
+pub struct Control {
     correlation: Correlation,
     source: DurableDelivery,
     phase: Phase,
     witness: HandoffHandle,
 }
 impl Control {
-    pub(crate) fn new(
+    pub fn new(
         correlation: Correlation,
         source: DurableDelivery,
         needs_health: bool,
@@ -392,7 +392,7 @@ impl Control {
         };
         (control, next)
     }
-    pub(crate) fn observed_health(
+    pub fn observed_health(
         &mut self,
         permit: HealthPermit,
         mode: DirectPostCommitMode,
@@ -417,7 +417,7 @@ impl Control {
             })
         })
     }
-    pub(crate) fn consume_route(
+    pub fn consume_route(
         &mut self,
         grant: RouteGrant,
         source: DurableDelivery,
@@ -435,10 +435,7 @@ impl Control {
         self.witness.start(true);
         Ok(self.witness.clone())
     }
-    pub(crate) fn consume_recovery(
-        &mut self,
-        grant: RecoveryGrant,
-    ) -> Result<HandoffHandle, Rejected> {
+    pub fn consume_recovery(&mut self, grant: RecoveryGrant) -> Result<HandoffHandle, Rejected> {
         if self.phase != Phase::RecoveryIssued {
             return Err(Rejected::State);
         }
@@ -449,10 +446,10 @@ impl Control {
         self.witness.start(false);
         Ok(self.witness.clone())
     }
-    pub(crate) fn snapshot(&self) -> Snapshot {
+    pub fn snapshot(&self) -> Snapshot {
         self.witness.snapshot()
     }
-    pub(crate) fn retire(&self) {
+    pub fn retire(&self) {
         self.witness.retire();
     }
 }

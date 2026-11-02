@@ -1169,6 +1169,8 @@ digraph compile_time {
   "northstar-message-application" -> "zeroize";
   "northstar-message-core" -> "base64";
   "northstar-message-core" -> "chrono";
+  "northstar-message-core" -> "northstar-abuse-policy";
+  "northstar-message-core" -> "northstar-delivery-core";
   "northstar-message-core" -> "northstar-federation-core";
   "northstar-message-core" -> "northstar-xep-0085";
   "northstar-message-core" -> "northstar-xep-0184";

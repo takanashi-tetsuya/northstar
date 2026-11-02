@@ -9,13 +9,13 @@ pub use direct_route::{
 use northstar_xep_0016::PrivacyStanzaKind;
 
 use crate::direct_commit::{CommitError as DirectCommitError, DirectCommitRepository};
-use crate::direct_handoff::HandoffHandle;
 use crate::retractions::FederationOutboxPolicy;
-use crate::route_item::{RouteEnqueue, RouteItem, RouteSendError};
 use crate::{CommitError, MessageApplication, PersonalMessageCommitRepository};
 use anyhow::Result;
 use northstar_abuse_policy::MessageDedupeIdentity;
 use northstar_delivery_core::DurableDelivery;
+use northstar_message_core::direct_handoff::HandoffHandle;
+use northstar_message_core::route_item::{RouteEnqueue, RouteItem, RouteSendError};
 pub use northstar_message_core::{
     ArchiveProjection as ArchiveWrite, DirectPersonalMessageAdmission, FederationDelivery,
     IdentityAuthority, LocalDelivery, MessageCommit as DurableAdmissionOutcome, MessageIdentity,

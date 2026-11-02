@@ -8,10 +8,10 @@ use crate::message_admission::continuation_fixture::{
 use crate::messaging::{
     DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
 };
-use crate::route_item::test_queue::TestItem;
-use crate::route_item::{RouteEnqueue, RouteSendError};
+use crate::test_queue::TestItem;
 use northstar_abuse_policy::message_admission::MessageAdmissionStart;
 use northstar_delivery_core::DurableDelivery;
+use northstar_message_core::route_item::{RouteEnqueue, RouteSendError};
 use northstar_message_core::{LocalDelivery, MessageIdentity};
 
 const LIVE: &str = "<message id='live'><body>private live</body></message>";

@@ -1,7 +1,7 @@
 use super::*;
 use crate::messaging::{OnlineRoutePort, OnlineRouteResult};
-use crate::route_item::test_queue::TestItem;
-use crate::route_item::RouteItem as _;
+use crate::test_queue::TestItem;
+use northstar_message_core::route_item::RouteItem as _;
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::Mutex,
@@ -96,8 +96,8 @@ impl OnlineRoutePort for Port {
     fn try_local(
         &self,
         target: &Target,
-        enqueue: crate::route_item::RouteEnqueue<TestItem>,
-    ) -> Result<(), crate::route_item::RouteSendError<TestItem>> {
+        enqueue: northstar_message_core::route_item::RouteEnqueue<TestItem>,
+    ) -> Result<(), northstar_message_core::route_item::RouteSendError<TestItem>> {
         self.record("enqueue");
         self.record_route(
             RouteDestination::Local(target.jid),

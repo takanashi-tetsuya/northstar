@@ -3287,6 +3287,14 @@
     ],
     [
       "northstar-message-core",
+      "northstar-abuse-policy"
+    ],
+    [
+      "northstar-message-core",
+      "northstar-delivery-core"
+    ],
+    [
+      "northstar-message-core",
       "northstar-federation-core"
     ],
     [

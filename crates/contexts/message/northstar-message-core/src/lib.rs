@@ -5,8 +5,10 @@
 //! server application service commits it through the matching repository
 //! transaction.
 
+pub mod direct_handoff;
 pub mod jingle;
 pub mod retraction;
+pub mod route_item;
 pub mod validation;
 
 use uuid::Uuid;

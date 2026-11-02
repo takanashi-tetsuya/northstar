@@ -3,7 +3,7 @@ use super::{
     FullJidFallbackPort, FullJidFallbackResult, OfflineAdmissionOutcome, OnlineMessageRouter,
     OnlineRoutePort, OnlineRouteResult, RoutePayload,
 };
-use crate::route_item::test_queue::TestItem;
+use crate::test_queue::TestItem;
 use northstar_delivery_core::DurableDelivery;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -74,8 +74,8 @@ impl OnlineRoutePort for RoutePort {
     fn try_local(
         &self,
         session: &Self::Session,
-        enqueue: crate::route_item::RouteEnqueue<TestItem>,
-    ) -> Result<(), crate::route_item::RouteSendError<TestItem>> {
+        enqueue: northstar_message_core::route_item::RouteEnqueue<TestItem>,
+    ) -> Result<(), northstar_message_core::route_item::RouteSendError<TestItem>> {
         self.events
             .lock()
             .unwrap()

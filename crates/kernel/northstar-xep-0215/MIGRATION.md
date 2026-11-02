@@ -14,7 +14,7 @@ secret values, extended data forms and deterministic selection plans.
 | `src/xmpp/protocol/extdisco.rs::external_services` | `parse_iq`, `select_services` and `build_services_result` |
 | `src/xmpp/protocol/extdisco.rs::parse_credential_requests` | canonical `CredentialsRequest` parsing and bounds |
 | `src/xmpp/protocol/extdisco.rs::service_element` | safe public, push and credential response builders |
-| `src/services/extdisco.rs` | remains the provider adapter for rate limits, time and TURN credential derivation |
+| `src/services/extdisco.rs` | moved to `northstar_message_application::extdisco`, the provider adapter for rate limits, time and TURN credential derivation |
 | `src/platform/config.rs` STUN/TURN records | application adapter converts validated configuration to `PublicService` |
 
 ## Authority boundary

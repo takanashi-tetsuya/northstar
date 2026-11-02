@@ -4,7 +4,6 @@ pub(crate) mod cluster_authority;
 pub(crate) mod cluster_instance_release;
 pub(crate) mod cluster_replay_maintenance;
 pub(crate) mod cluster_session_route_maintenance;
-pub(crate) mod extdisco;
 pub(crate) mod federation_outbox;
 pub(crate) mod node_message_contract_verifier;
 pub(crate) mod replay;

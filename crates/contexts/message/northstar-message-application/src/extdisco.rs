@@ -22,21 +22,21 @@ const RATE_WINDOW_SWEEP_INTERVAL: u64 = 256;
 const MAX_ACTIVE_RATE_KEYS: usize = 65_536;
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct TurnCredentials {
-    pub(crate) username: String,
-    pub(crate) password: Zeroizing<String>,
-    pub(crate) expires: String,
+pub struct TurnCredentials {
+    pub username: String,
+    pub password: Zeroizing<String>,
+    pub expires: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CredentialIssueError {
+pub enum CredentialIssueError {
     NotConfigured,
     RateLimited,
     TimestampOverflow,
 }
 
 #[derive(Clone)]
-pub(crate) struct ExtDiscoService {
+pub struct ExtDiscoService {
     inner: Arc<ExtDiscoInner>,
 }
 
@@ -57,7 +57,7 @@ struct ExtDiscoInner {
 }
 
 impl ExtDiscoService {
-    pub(crate) fn new(
+    pub fn new(
         domain: String,
         stun_service: Option<(String, u16)>,
         turn_service: Option<(String, u16)>,
@@ -106,11 +106,11 @@ impl ExtDiscoService {
         }
     }
 
-    pub(crate) fn domain(&self) -> &str {
+    pub fn domain(&self) -> &str {
         &self.inner.domain
     }
 
-    pub(crate) fn target_allowed(&self, target: Option<&str>) -> bool {
+    pub fn target_allowed(&self, target: Option<&str>) -> bool {
         target.is_none_or(|target| {
             northstar_xmpp_types::jid::CanonicalJid::parse_bare(target).is_ok_and(|jid| {
                 jid.localpart().is_none()
@@ -120,7 +120,7 @@ impl ExtDiscoService {
         })
     }
 
-    pub(crate) fn request_authorized(
+    pub fn request_authorized(
         &self,
         username: Option<&str>,
         full_jid: Option<&str>,
@@ -137,7 +137,7 @@ impl ExtDiscoService {
         })
     }
 
-    pub(crate) fn public_services(&self) -> AnyhowResult<Vec<PublicService>> {
+    pub fn public_services(&self) -> AnyhowResult<Vec<PublicService>> {
         let mut services = Vec::with_capacity(3);
         if let Some((host, port)) = &self.inner.stun_service {
             services.push(public_service(
@@ -165,11 +165,11 @@ impl ExtDiscoService {
         Ok(services)
     }
 
-    pub(crate) fn turn_is_restricted(&self) -> bool {
+    pub fn turn_is_restricted(&self) -> bool {
         self.inner.turn_shared_secret.is_some()
     }
 
-    pub(crate) fn issue_turn_credentials(
+    pub fn issue_turn_credentials(
         &self,
         bare_jid: &str,
         peer_ip: IpAddr,

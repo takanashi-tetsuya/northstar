@@ -1,6 +1,5 @@
 //! Drives RetractionService over the real repository and schema.
 
-use crate::db;
 use northstar_message_application::retractions::*;
 use northstar_message_core::retraction::PersonalRetractionCommand;
 use sha2::{Digest, Sha256, Sha512};
@@ -415,7 +414,7 @@ async fn c2s_projection_is_atomic_idempotent_and_retains_replay_intent() {
     .await
     .unwrap();
     assert_eq!(
-        db::purge_expired_retraction_intents(&pool, 10)
+        northstar_message_postgres::retraction_intents::purge_expired_retraction_intents(&pool, 10)
             .await
             .unwrap(),
         0
@@ -434,7 +433,7 @@ async fn c2s_projection_is_atomic_idempotent_and_retains_replay_intent() {
     .unwrap();
     assert_eq!(cleared, (true, None));
     assert_eq!(
-        db::purge_expired_retraction_intents(&pool, 10)
+        northstar_message_postgres::retraction_intents::purge_expired_retraction_intents(&pool, 10)
             .await
             .unwrap(),
         1
@@ -1156,7 +1155,7 @@ async fn exact_replay_conflict_and_outbox_failure_are_atomic() {
     .await
     .unwrap();
     assert_eq!(
-        db::purge_expired_retraction_intents(&pool, 10)
+        northstar_message_postgres::retraction_intents::purge_expired_retraction_intents(&pool, 10)
             .await
             .unwrap(),
         1

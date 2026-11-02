@@ -340,7 +340,6 @@ for (const field of [
   'message',
   'mam_service',
   'replay_service',
-  'extdisco_service',
   'component_credentials',
   'components',
   'bosh',
@@ -3181,11 +3180,11 @@ for (const field of [
   }
 }
 
-const extdiscoProtocol = read('src/xmpp/protocol/extdisco.rs');
+const extdiscoProtocol = read('crates/contexts/message/northstar-message-xmpp/src/extdisco.rs');
 if (!/\.extdisco_service\s*\(\s*\)/.test(extdiscoProtocol)) {
   throw new Error('extdisco.rs no longer delegates TURN credential authority to ExtDiscoService');
 }
-const extdiscoService = read('src/services/extdisco.rs');
+const extdiscoService = read('crates/contexts/message/northstar-message-application/src/extdisco.rs');
 const extdiscoInner = structBody(extdiscoService, 'struct ExtDiscoInner');
 if (!/^\s*turn_shared_secret\s*:\s*Option<Zeroizing<Vec<u8>>>\s*,/m.test(extdiscoInner)) {
   throw new Error('ExtDiscoService TURN key must remain a private Zeroizing byte buffer');

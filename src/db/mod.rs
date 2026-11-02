@@ -111,7 +111,6 @@ pub use cluster_keys::*;
 pub use omemo_recovery::*;
 pub use pep_roster::*;
 pub use privacy::*;
-pub(crate) use retention::*;
 pub use roster::*;
 pub use schema::*;
 pub use sm::*;

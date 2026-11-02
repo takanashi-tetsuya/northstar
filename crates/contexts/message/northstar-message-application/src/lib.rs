@@ -8,6 +8,7 @@ pub mod direct_commit;
 pub mod direct_handoff;
 pub mod direct_lifecycle;
 pub mod direct_spool_wake;
+pub mod extdisco;
 pub mod message_admission;
 pub mod message_carbons;
 pub mod messaging;

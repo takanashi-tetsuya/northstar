@@ -2519,11 +2519,23 @@
       ],
       [
         "northstar-message-application",
+        "base64"
+      ],
+      [
+        "northstar-message-application",
         "chrono"
       ],
       [
         "northstar-message-application",
+        "dashmap"
+      ],
+      [
+        "northstar-message-application",
         "futures"
+      ],
+      [
+        "northstar-message-application",
+        "hmac"
       ],
       [
         "northstar-message-application",
@@ -2563,6 +2575,10 @@
       ],
       [
         "northstar-message-application",
+        "northstar-xep-0215"
+      ],
+      [
+        "northstar-message-application",
         "northstar-xep-0280"
       ],
       [
@@ -2575,7 +2591,15 @@
       ],
       [
         "northstar-message-application",
+        "ring"
+      ],
+      [
+        "northstar-message-application",
         "roxmltree"
+      ],
+      [
+        "northstar-message-application",
+        "sha1"
       ],
       [
         "northstar-message-application",
@@ -2596,6 +2620,10 @@
       [
         "northstar-message-application",
         "uuid"
+      ],
+      [
+        "northstar-message-application",
+        "zeroize"
       ],
       [
         "northstar-message-core",
@@ -2760,6 +2788,10 @@
       [
         "northstar-message-xmpp",
         "northstar-room-core"
+      ],
+      [
+        "northstar-message-xmpp",
+        "northstar-xep-0215"
       ],
       [
         "northstar-message-xmpp",

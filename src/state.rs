@@ -317,7 +317,6 @@ pub struct AppState {
     public_discovery_context: PublicDiscoveryContext,
     /// XEP-0215 TURN credential authority. Long-lived key material and its
     /// bounded rate windows never cross into protocol or public state.
-    extdisco_service: crate::services::extdisco::ExtDiscoService,
     mam_service: northstar_archive_application::MamService<northstar_workflows::mam_repository::PostgresMamRepository>,
     sm_service: crate::services::sm::SmService<db::sm_repository::PostgresSmRepository>,
     replay_service:

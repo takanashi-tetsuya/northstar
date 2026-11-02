@@ -85,8 +85,10 @@ impl AppState {
         &self.room.mix_service
     }
 
-    pub(crate) fn extdisco_service(&self) -> &crate::services::extdisco::ExtDiscoService {
-        &self.extdisco_service
+    pub(crate) fn extdisco_service(
+        &self,
+    ) -> &northstar_message_application::extdisco::ExtDiscoService {
+        &self.message.extdisco_service
     }
 
     pub(crate) fn muc_service(

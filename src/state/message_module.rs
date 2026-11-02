@@ -1,5 +1,6 @@
 //! The message context as the composition root builds it: the personal-message, admission,
-//! retraction and push services over their PostgreSQL repositories.
+//! retraction and push services over their PostgreSQL repositories, and external service
+//! discovery.
 
 use super::*;
 
@@ -22,6 +23,7 @@ pub(super) struct MessageModule {
     pub(super) push_service: northstar_message_application::push::PushService<
         northstar_workflows::push_repository::PostgresPushRepository,
     >,
+    pub(super) extdisco_service: northstar_message_application::extdisco::ExtDiscoService,
 }
 
 /// What the message context's services are built from.
@@ -30,6 +32,8 @@ pub(super) struct MessageModuleParts<'a> {
     pub(super) pool: &'a PgPool,
     pub(super) abuse: &'a Arc<AbuseGuard>,
     pub(super) cluster: &'a crate::cluster::ClusterManager,
+    /// Built by `AppState::new`, which consumes the TURN secret from `Config`.
+    pub(super) extdisco_service: northstar_message_application::extdisco::ExtDiscoService,
 }
 
 impl MessageModule {
@@ -40,6 +44,7 @@ impl MessageModule {
             pool,
             abuse,
             cluster,
+            extdisco_service,
         } = parts;
         Self {
             message_service: northstar_message_application::messaging::MessageService::new(
@@ -74,6 +79,7 @@ impl MessageModule {
             push_service: northstar_message_application::push::PushService::new(
                 northstar_workflows::push_repository::PostgresPushRepository::new(pool.clone()),
             ),
+            extdisco_service,
         }
     }
 }

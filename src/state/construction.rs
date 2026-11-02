@@ -123,7 +123,7 @@ impl AppState {
             .context("MIX-PAM operation capacity authority failed startup audit")?;
         startup_phase.complete();
         let upload = UploadModule::start(&config, &pool).await?;
-        let extdisco_service = crate::services::extdisco::ExtDiscoService::new(
+        let extdisco_service = northstar_message_application::extdisco::ExtDiscoService::new(
             config.domain.clone(),
             config.stun_service.clone(),
             config.turn_service.clone(),
@@ -456,6 +456,7 @@ impl AppState {
             pool: &pool,
             abuse: &abuse,
             cluster: &cluster,
+            extdisco_service,
         });
         let metrics = Arc::new(Metrics::default());
         let dummy_scram_iteration_profiles =
@@ -680,7 +681,6 @@ impl AppState {
             pubsub,
             room,
             roster,
-            extdisco_service,
             message,
             mam_service,
             sm_service,

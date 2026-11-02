@@ -2091,8 +2091,11 @@ name = "northstar-message-application"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
+ "dashmap",
  "futures",
+ "hmac",
  "northstar-abuse-application",
  "northstar-abuse-policy",
  "northstar-delivery-core",
@@ -2102,15 +2105,19 @@ dependencies = [
  "northstar-security",
  "northstar-telemetry",
  "northstar-xep-0016",
+ "northstar-xep-0215",
  "northstar-xep-0280",
  "northstar-xml-builder",
  "northstar-xmpp-types",
+ "ring",
  "roxmltree",
+ "sha1",
  "sha2",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -2170,6 +2177,7 @@ dependencies = [
  "northstar-message-application",
  "northstar-message-core",
  "northstar-room-core",
+ "northstar-xep-0215",
  "northstar-xep-0280",
  "northstar-xep-0359",
  "northstar-xml-builder",

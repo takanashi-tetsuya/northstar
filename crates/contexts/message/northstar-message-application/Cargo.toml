@@ -13,8 +13,11 @@ test-support = []
 
 [dependencies]
 anyhow = "1.0"
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
+dashmap = "6.1"
 futures = "0.3"
+hmac = "0.12"
 northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
 northstar-delivery-core = { path = "../northstar-delivery-core" }
 northstar-federation-core = { path = "../../federation/northstar-federation-core" }
@@ -25,14 +28,18 @@ northstar-telemetry = { path = "../../../platform/northstar-telemetry" }
 northstar-xep-0016 = { path = "../../../kernel/northstar-xep-0016" }
 northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 thiserror = "2.0"
+northstar-xep-0215 = { path = "../../../kernel/northstar-xep-0215" }
 northstar-xep-0280 = { path = "../../../kernel/northstar-xep-0280" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 roxmltree = "0.20"
+sha1 = "0.10"
 sha2 = "0.10"
 tokio = { version = "1.43", features = ["time"] }
 tracing = "0.1"
 uuid = "1.12"
+zeroize = "1.8"
 
 [dev-dependencies]
+ring = "0.17.14"
 northstar-abuse-application = { path = "../../abuse/northstar-abuse-application", features = ["test-support"] }
 tokio = { version = "1.43", features = ["macros", "rt", "sync", "test-util", "time"] }

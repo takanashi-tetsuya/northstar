@@ -117,6 +117,7 @@ facade 移出根 crate（5.13），根 crate 只剩上面三層。
 | S26 room 上下文 | WP-280–299 | MUC 節文輔助進入 `northstar-room-core`（WP-280）；小型房間服務（WP-281）、MUC 服務（WP-282）與 MIX 服務（WP-284）進入 `northstar-room-application`，MIX 內容金鑰環先下放到 `northstar-abuse-policy`（WP-283）；MUC 持久化成為 `northstar-room-postgres`，碰到別人資料表的步驟抽成 `RoomEffects`（WP-285），跨上下文的 repository 進入 `northstar-workflows`（WP-286），MIX 持久化與房間 MAM 授權隨後加入（WP-287、WP-288）；MUC 叢集靜態合約改指新路徑（WP-289）；MIX 介面卡需要的值下放（WP-290–292），`northstar-mix-xmpp` 建立（WP-293）；房間記錄與訊息提示政策下放（WP-294、WP-295），`northstar-muc-xmpp` 建立（WP-296）；`AppState` 以 `RoomModule` 持有七個欄位（WP-297）；`AccountDeletionEffects` 退役（WP-298）；記錄階段（WP-299）。盤點見 5.22 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與本機 PostgreSQL 套件通過。未完成：MIX 封存與房間 MAM 分頁等 S27，房間的執行期路由與叢集投影等 S29，去處見 5.22 |
 | S27 message 上下文 | WP-300–315 | Jingle 與節文檢查下放（WP-300）；`services/xml_util` 退役（WP-301）；准入合約進入 `northstar-abuse-policy`（WP-302）；Carbons、推播與直接 spool 喚醒（WP-303）、訊息准入（WP-304）、撤回服務（WP-305）與訊息服務（WP-307）進入 `northstar-message-application`，線上路由合約改為對項目泛型（WP-306）；S2S outbox 模組提前成為 `northstar-federation-postgres`（WP-308）；`northstar-message-postgres` 建立（WP-309）；跨上下文的訊息交易（WP-310）與 MAM、MIX 封存流程（WP-311）進入 `northstar-workflows`；`northstar-message-xmpp` 建立（WP-312）；`AppState` 以 `MessageModule` 持有上下文（WP-313）；extdisco 與撤回意圖到期歸入 message（WP-314）；記錄階段（WP-315）。盤點見 5.23 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與本機 PostgreSQL 套件通過。未完成：重放、`xmpp/direct_delivery.rs` 與 outbound 等 S29/S30，去處見 5.23 |
 | S28 federation 上下文 | WP-317–328 | outbox 服務與 repository 進入上下文 crate，`FederationRoute` 取代 `MixFederationPort`（WP-317）；outbox 資料庫測試搬到介面卡旁（WP-318）；S2S 遙測格（WP-319）與兩項政策（WP-320）離開根 crate；S2S SM、dialback 與串流限制、純 wire 形式進入 `northstar-federation-core`（WP-321–323）；路由表（WP-324）、元件路由與 wire（WP-325）、端點探索的純邏輯（WP-326）進入 `northstar-federation-application`；`AppState` 以 `FederationModule` 持有上下文（WP-327）；記錄階段（WP-328）。盤點見 5.24 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與本機 PostgreSQL 套件通過。未完成：入站節處理等 S29 後進入 `northstar-federation-xmpp`，連線、TLS、DNS 與 HTTPS I/O 等 S30，去處見 5.24 |
+| S29 會話與叢集 | WP-329–356 | 連線池關閉在交易中被釋放的連線（WP-329）；直接交接與路由項目合約進入 `northstar-message-core`（WP-330）；會話維護服務進入 `northstar-session-application`（WP-331）；workflows 的帳號介面卡別名依擁有者改名（WP-332）；回覆第二輪雲端報告（WP-333）；憑證發佈事實進入 `northstar-session-core`（WP-334）；SM、暫停與重放服務進入 session-application，`src/services` 不再存在（WP-335）；outbound 佇列進入 `northstar-stream`（WP-336）；post-action 監督進入 session-application（WP-337）；名冊同步閘門進入 `northstar-roster-core`（WP-338）；本機路由表進入 `northstar-stream`（WP-339）；`northstar-session-postgres` 建立（WP-340）；SM 儲存進入 `northstar-workflows`（WP-341）；叢集會話路由（WP-342）與六個跨上下文介面卡（WP-343）離開根 crate；叢集 MUC 快照值進入 `northstar-room-core`（WP-344）；session-postgres 的測試自帶 test-support（WP-345）；叢集經 `ClusterSessionStore` port 到達 PostgreSQL 權威（WP-346），context 對 `ClusterAdapters` 泛型（WP-347），直接命名 XML 與 frame 值的擁有 crate（WP-348）；離線重播驅動（WP-349）與 MUC 端點遞送（WP-350）進入 `northstar-stream`；叢集用到的兩個節建構函式進入 kernel（WP-351）；`src/cluster` 成為 edge crate `northstar-cluster`（WP-352），叢集測試夾具跟著讀新路徑（WP-355）；根 crate 剩下的會話時期資料庫程式碼移出（WP-353）；`AppState` 以 `SessionModule` 持有上下文（WP-354）；記錄階段（WP-356）。盤點見 5.25 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與搬移過的 PostgreSQL 套件通過。未完成：`ProtocolSession` 與建立在它上面的 caps、直接遞送、認證發佈等 S30，`state` 中把叢集與會話清理綁到 `AppState` 的接縫等 S31，去處見 5.25 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -647,11 +648,11 @@ kernel 與通用函式庫，不依賴 `-postgres`、其他上下文與根 crate�
   中讀取名冊與隱私資料表（`db/profile.rs` 還用 `db::roster::blocked_jid_matches`），依 4.5 屬於
   `northstar-workflows`。`db::pubsub_integration_tests` 與 `db/pubsub_repository/service_tests.rs` 驗證根 crate
   綁定的服務，隨它們移動。
-- `xmpp/protocol/caps.rs`：實體能力與叢集、S2S、`AppState`、MIX 緊密耦合，驅動會話路由，屬於 session（4.2 已改），
-  隨 S29 移出。
+- `xmpp/protocol/caps.rs`：實體能力與叢集、S2S、`AppState`、MIX 緊密耦合，驅動會話路由，屬於 session（4.2 已改）。
+  它建立在 `ProtocolSession` 上，S29 沒有移出，隨 S30 處理，見 5.25。
 - `xmpp/capabilities.rs`：多個上下文共用的窄遙測，隨各使用者移出，不屬於 pubsub（4.2 已改）。
 - `state/{pubsub_digest_worker,pubsub_event_outbox_worker,pubsub_notification_delivery,pep_last_items,caps_effect_dispatch}`
-  與根 `pubsub.rs` 的投遞函式：經叢集與聯邦路由投遞，隨 S29、S30 移出。
+  與根 `pubsub.rs` 的投遞函式：經叢集與聯邦路由投遞，持有 `AppState`，S29 後仍在根 crate，隨 S30、S31 移出，見 5.25。
 - 根 `xmpp/protocol/{pubsub,pep,private,vcard}.rs` 的 `ProtocolSession` 入口與 trait 實作：S30 拆解
   `ProtocolSession` 時處理。
 - `services/xml_util/avatar_update.rs`（XEP-0153）：出席路徑也使用，S22 移入 `northstar_roster_xmpp::presence`。
@@ -688,9 +689,9 @@ kernel 與通用函式庫，不依賴 `-postgres`、其他上下文與根 crate�
   舊簽章的轉接函式，隨呼叫者（`db/users.rs`、MIX）移出。
 - `db/presence_repository.rs`：`PresenceRepository` 同時呼叫 auth、pubsub 的 vCard、operations 的服務訊息與 session
   的叢集權威，屬於組合，隨這些上下文移動時拆開。
-- `db/privacy.rs` 的 `privacy_denies_for_sm_session`：讀 session 的資料表，隨 S29 移出。
+- `db/privacy.rs` 的 `privacy_denies_for_sm_session`：讀 session 的資料表，雲端 WP-425 已移入 `northstar-workflows`。
 - 根 `xmpp/protocol/{blocking,privacy,roster,presence}.rs`：`ProtocolSession` 入口與 trait 實作。線上會話分送
-  （`OnlineSession` 的 `sender`、`available`、`directed_presence`）與目前可用性重播依賴 session，隨 S29 移出；
+  （`OnlineSession` 的 `sender`、`available`、`directed_presence`）與目前可用性重播依賴 session，`OnlineSession` S29 已進入 `northstar_stream::local_routes`，見 5.25；
   入口隨 S30 拆解 `ProtocolSession` 處理。
 - `ProtocolSession::presence` 的 MIX、PubSub、MUC 分派與 MIX 閘門下的可用性轉換：跨上下文組合與會話狀態，隨 S29、
   S30 處理。
@@ -831,7 +832,7 @@ platform、任何 core、任何 application、任何 `-postgres`；不可依賴 
 - `AdminMutationStore` 嵌在許多 repository 中，不做成泛型。叢集健康經 `AdminMutationGate` 這個同步 port 傳入，
   `ClusterAdmission` 實作，存成 `Arc<dyn>`。連線池准入之後的再次檢查不變。
 - `db/capacity` 不進 operations。它的函式全是 session 上下文的存活會話租約，4.2 的 session 列本來就列了容量，所以
-  operations 列改掉，檔案隨 S29 移動。
+  operations 列改掉，檔案 S29 已進入 `northstar_session_postgres::capacity`，見 5.25。
 - 角色證明檢查整個 schema，不屬於任何上下文，進入 `northstar-postgres`。
 - 封存保存 worker 只用 tokio 的計時，沒有網路，可以留在 application 層。
 - 稽核過的法律保留清單要通過 auth 的 bearer fence，交易在 workflows 的 governance repository；
@@ -848,8 +849,8 @@ platform、任何 core、任何 application、任何 `-postgres`；不可依賴 
   操作的是房間資料表，S26 已移動，見 5.22。
 - `AccountDeletionEffects`：S26 已退役，見 5.22。`db/roster.rs` 的別名還綁著 `RosterTransactionEffects` 的根 crate 實作，隨那些步驟的上下文移動。
 - `db/retention.rs` 剩下的 `PostgresMaintenanceRepository` 與 `purge_expired_retraction_intents`：後者 S27 已移動，前者等 OMEMO 恢復移走，見 5.23。
-- `db/readiness_repository.rs`（讀叢集金鑰）、`db/capacity*`、`db/authentication_effects.rs`（呼叫 `capacity`）、
-  `session_identity`：隨 S29 移動。
+- `db/readiness_repository.rs`（讀叢集金鑰）、`db/capacity*`、`db/authentication_effects.rs`（呼叫 `capacity`）：
+  S29 已移動，見 5.25。`session_identity` 由雲端 WP-411 移入 workflows 的身分 migration。
 - `xmpp/protocol/commands.rs` 的 `CommandSession` 綁定與 `api/*` 的 handler：隨 S30/S31 移動。
 
 根 crate 由 705 檔 325,446 行變為 653 檔 302,731 行。
@@ -906,14 +907,17 @@ repository 分別進入 application 與 `-postgres`；`AccountDeletionEffects` �
 
 - `db/archive/mix_archive.rs`：寫入 `message_archive`，經 `RoomEffects` 到達，S27 已移動，見 5.23。
 - `db/archive/mam_room.rs` 剩下的分頁與邊界讀取：S27 已進入 `northstar-workflows`，見 5.23。
-- `db/room_effects.rs`：`RootRoomEffects` 的步驟隨 message、federation 與 session 的移動逐步離開，S29 後退役。
-- `db/muc_delivery_repository.rs`：隨 S29 移動，之後進入 `northstar-workflows`。
+- `db/room_effects.rs`：S29 成為 `northstar-workflows` 的 `WorkflowRoomEffects`，見 5.25。
+- `db/muc_delivery_repository.rs`：S29 已進入 `northstar-workflows`，見 5.25。
 - `northstar_room_postgres::cluster_muc` 的 `ClusterSessionRouteClaimProof` 與 session 的 `SessionRouteClaimProof` 重複，
-  等 S29 才能合併。
+  S29 已隨會話路由進入 `northstar_session_postgres::cluster_session_route`，以 `From` 由 core 的值轉換；那裡可以
+  直接命名 session-core，兩者可以合併。
 - `xmpp/muc_delivery.rs`、`xmpp/local_routes/{muc,muc_table,suspended_muc}.rs`、
   `state/{local_muc,muc_cluster_effects,muc_cluster_routing,muc_delivery,muc_resume,federated_muc_cluster_effects}.rs`、
-  `state/cluster_muc_*.rs`、`cluster/muc_*.rs`：房間的執行期路由與叢集投影，依賴本機會話表與叢集，隨 S29 移動。
-- `OutboundSender`：留在根 crate，由 `MixDeliveryLanes`、`MucOutbound` 這些 port 包住，隨 S29/S30 移動。
+  `state/cluster_muc_*.rs`、`cluster/muc_*.rs`：房間的執行期路由與叢集投影，依賴本機會話表與叢集。S29 已移出 `xmpp` 與 `cluster` 中的部分
+  （`northstar_stream::{muc_delivery,local_routes}`、`northstar-cluster`），`state` 中的接縫隨 S31 處理，見 5.25。
+- `OutboundSender`：S29 已進入 `northstar_stream::outbound`，`MixDeliveryLanes`、`MucOutbound` 的實作移入兩個房間
+  `-xmpp` crate，見 5.25。
 - `xmpp/protocol/{mix,muc,federated_muc}.rs` 與 `state/muc_host.rs`：`ProtocolSession` 與 `AppState` 的接縫，隨 S30、S31 退役。
 
 根 crate 由 653 檔 302,731 行變為 545 檔 248,281 行。
@@ -971,12 +975,13 @@ S26 留下的兩項已收尾：`db/archive/mix_archive.rs` 與 `db/archive/mam_r
 
 - `db/federation_outbox_repository.rs`、`db/s2s_outbox_dispatch_repository.rs`、`db/s2s_sm_outbox_repository.rs`：S28 已移動，見 5.24。
 - `services/replay.rs`、`db/replay.rs` 與子模組、`db/replay_repository.rs`、`xmpp/protocol/replay.rs`、
-  `cluster/recovery_replay_wake.rs`：`db/replay.rs` 命名根 crate 的 `OutboundSender` 與 `BoshResponseOwnership`，要等
-  `xmpp/outbound` 在 S29/S30 移動。
+  `cluster/recovery_replay_wake.rs`：S29 已移動，服務進入 session-application，資料表 SQL 進入 session-postgres，
+  驅動進入 `northstar_stream::replay`，喚醒進入 `northstar-cluster`，見 5.25。
 - `xmpp/direct_delivery.rs`：建立在 `ProtocolSession` 與 `OutboundItem` 上，屬於會話一側，隨 S30 移動。`OutboundItem`、
-  `OutboundSender` 同樣留到 S29/S30。4.2 的 message 列已改。
-- `db/direct_commit_cluster.rs`：`DirectCommitCluster` 的根 crate 實作，隨 S29 移動。
-- `services/node_message_contract_verifier.rs`、`db/node_message_projection_repository.rs`：隨 S29 與叢集一起移動。
+  `OutboundSender` S29 已進入 `northstar_stream::outbound`。4.2 的 message 列已改。
+- `db/direct_commit_cluster.rs`：S29 成為組合根 `state/cluster_direct_commit.rs` 的 newtype，見 5.25。
+- `services/node_message_contract_verifier.rs`、`db/node_message_projection_repository.rs`：S29 已分別進入
+  session-application 與 session-postgres，見 5.25。
 - `db/retention.rs` 的 `PostgresMaintenanceRepository`：實作 operations 的 port 並轉發到各上下文，還要呼叫根 crate 的
   OMEMO 清理，等 OMEMO 恢復移走後進入 `northstar-workflows`。
 - `services/omemo_recovery.rs`、`db/omemo_recovery*.rs`、`api/omemo_recovery.rs`：不屬於 message。`omemo_recovery_*` 三張
@@ -1033,6 +1038,74 @@ federation 的三個 crate 共 7,642 行（core 1,751、application 4,202、post
   根 crate 的 seam，隨 S29 到 S31 退役。
 
 根 crate 由 515 檔 228,309 行變為 505 檔 221,910 行。
+
+### 5.25 S29 盤點：session 上下文與叢集 edge（`4627e5de`）
+
+S28 之後，雲端工作流 WP-405–434（見 `docs/handoff/2026-11-02/`）先把根 crate 由 505 檔 221,910 行降到 463 檔 200,870 行。
+S29 接在其上。
+
+| 原位置 | 去處 | 角色 |
+| --- | --- | --- |
+| message-application 的 `direct_handoff`、`route_item` | `northstar_message_core` | core |
+| `services/` 的會話維護服務 | `northstar-session-application` 的同名模組 | application |
+| `services/background_housekeeping.rs` | `northstar-operations-application` | application |
+| auth-application 的憑證發佈事實 | `northstar_session_core::publication`；`AuthenticationResult` 進入 auth-core | core |
+| `services/{sm,sm_suspension,replay}.rs` | `northstar_session_application::{sm,sm_suspension,replay}` | application |
+| `xmpp/outbound.rs` 的 `OutboundItem`、`OutboundSender` | `northstar_stream::outbound` | edge |
+| `xmpp/protocol.rs`、`xmpp/capabilities.rs` 的 post-action 監督與遙測 | `northstar_session_application::post_actions` | application |
+| roster-application 的 `RosterSyncGate` | `northstar_roster_core::roster_sync` | core |
+| `xmpp/local_routes` | `northstar_stream::local_routes` | edge |
+| `db/capacity*`、叢集節點金鑰、實例與信封重放柵欄、`db/replay*`、`db/node_message_projection_repository.rs` | `northstar-session-postgres` | adapter |
+| `db/sm*` 的 XEP-0198 儲存與 SM、暫停、拆除 repository | `northstar_workflows::sm` 與同族模組 | workflows |
+| room-postgres `cluster_muc` 中的會話路由，與重放、路由維護、會話終止權威 | `northstar_session_postgres::cluster_session_route` 與同族模組 | adapter |
+| `db/{room_effects,authentication_effects,muc_delivery_repository,readiness_repository}.rs`、背景清理、會話權威清掃 | `northstar-workflows`（`Root*Effects` 改名 `Workflow*Effects`） | workflows |
+| room-postgres 的叢集 MUC 快照值 | `northstar_room_core::cluster_muc` | core |
+| 叢集持有的權威 `PgPool` | session-application 的 `ClusterSessionStore`、`RecoveryReplayStore` port，session-postgres 實作 | port |
+| 叢集 context 直接命名的 PostgreSQL repository | `ClusterAdapters` 介面卡家族，組合根在 `state/cluster_adapters.rs` 綁定 | 組合根 |
+| `MAX_XMPP_FRAME_BYTES` | `northstar-stream` 的 crate 根 | edge |
+| `xmpp/protocol/replay.rs` | `northstar_stream::replay` | edge |
+| `xmpp/muc_delivery.rs` 的 `MucDeliveryContext` | `northstar_stream::muc_delivery`，對 repository、回條認領與 `FederationRoute` 泛型；根 crate 留別名 | edge |
+| roster-xmpp 的 XEP-0153 頭像雜湊改寫、muc-xmpp 的離線從屬變更通知 | `northstar_xmpp_avatar::vcard_update`、`northstar_xep_0045::notice` | kernel |
+| `src/cluster` | `crates/edges/northstar-cluster` | edge |
+| `db/direct_commit_cluster.rs` | `state/cluster_direct_commit.rs` 的 newtype | 組合根 |
+| `db/{api_operations_tests,api_operations_idle_tests,authentication_tests}.rs` | `northstar_workflows::{api_operations_tests,authentication_tests}` | workflows 測試 |
+| `db/authority_listener.rs` | `northstar_workflows::authority_listener` | workflows |
+| `db/maintenance_ownership.rs` | `northstar_operations_postgres::maintenance_ownership` | adapter |
+| `AppState` 的 `sm_service`、`replay_service`、`sm_suspension_recovery`、`sm_memory_governor` | `state/session_module.rs` 的 `SessionModule` | 組合根 |
+
+各 crate 的行數：`session-core` 3,154、`session-application` 6,411、`session-postgres` 9,253、`northstar-stream` 4,175、`northstar-cluster` 16,135。`src/state` 還有 19,302 行。
+
+新決定：
+
+- edge 不可依賴 `-xmpp` 介面卡，所以 transport 與叢集共用的會話執行期（outbound 佇列、本機路由表、離線重播驅動、MUC 端點
+  遞送）放在 `northstar-stream`，叢集需要的純節建構函式放在 kernel 的協定 crate，roster-xmpp 轉出頭像雜湊改寫。
+- 叢集的 worker、監聽器與復原 context 對 `ClusterAdapters` 泛型，關聯型別是它們用到的 repository；組合根只命名一次
+  PostgreSQL 這一族。叢集以 trait 物件持有 `ClusterSessionStore`，所以它的 future 是 boxed。
+- 架構驗證器讓 edge 以 redis 作跨節點傳輸（`EDGE_TRANSPORT_STORES`），sqlx 與上下文的 `-postgres` 仍然禁止。
+- 一條 SQL 或一個交易碰到別的上下文資料表的 repository 進入 `northstar-workflows`；只碰 session 資料表的進入
+  `northstar-session-postgres`。需要完整 migration 的跨上下文資料庫測試也在 workflows，測試以 `SingleNodeAdminMutationGate`
+  取代 `ClusterManager`：未啟用的叢集准入本來就全部放行。
+- sqlx 0.8 在 BEGIN 得到回應前丟棄 future 時，連線會帶著交易回到池中。所有伺服器與工具的池改由
+  `northstar_postgres::pool::options()` 建立，釋放時以一個 simple query 檢查並關閉仍在交易中的連線，門禁禁止生產程式碼
+  直接 `PgPoolOptions::new()`。
+- 明寫 `target: "rust_xmpp_server::cluster"` 的叢集日誌保留原 target；其餘事件的預設 target 變成 `northstar_cluster::*`，
+  `scripts/cluster-wsl.sh` 的 `RUST_LOG` 已加上。
+
+根 crate 中仍與 session、叢集有關的程式碼與去處：
+
+- `xmpp/protocol.rs` 與 `xmpp/protocol/*`、`xmpp/{framing,frame_execution,tcp_action,websocket_action,transport_parsing}.rs`、
+  `bosh`：`ProtocolSession` 與傳輸，S30 拆解。建立在它上面的 `xmpp/protocol/caps.rs`、`xmpp/direct_delivery.rs`、
+  `xmpp/auth_publication` 隨之移動。
+- `state/cluster_*.rs` 與 `state/{local_muc,muc_cluster_effects,muc_cluster_routing,muc_delivery,muc_resume,message_cluster_routing,presence_cluster_routing,s2s_cluster_routing}.rs`：
+  以 `AppState` 建構叢集 context 並實作路由 port 的接縫，S31 組合根收斂時處理。
+- `state/{session_cleanup*,sm_teardown_*,suspension,sm_expiry,local_session,suspended_muc,session_cluster_route}.rs`：會話結束與
+  SM 暫停的流程跨多個上下文模組，由 `AppState` 驅動，S31 處理。`SessionModule` 持有的 `SmSuspensionRecoveryQueue` 因此
+  仍定義在 `state/session_cleanup.rs`。
+- `xmpp/muc_delivery.rs`：`MucDeliveryContext` 的根 crate 別名，S31 退役。
+- `db/*_tests.rs`：驅動根 crate 服務綁定或 `AppState` 的資料庫測試，隨各自綁定的程式碼移動。`db/privacy.rs` 的
+  `communication_denied` 只有它旁邊的測試使用。
+
+根 crate 由 463 檔 200,870 行變為 363 檔 157,352 行。
 
 ## 6. 委派與驗收協議
 
@@ -1250,6 +1323,15 @@ federation 的三個 crate 共 7,642 行（core 1,751、application 4,202、post
    - `catalog/runtime-experiments.json` 的預算錨點釘住常數的完整宣告；常數換了 crate，`pub(crate)` 與型別路徑都要跟著改（S28）。
    - CI 只跑測試，不檢查測試名稱守恆，也不檢查 `--bin rust-xmpp-server` 的篩選器是否還選得到測試。測試搬進 crate 後，這類
      篩選器跑 0 個測試仍回傳 0，要用 `selectors.py` 檢查（S28）。
+   - CI 的資料庫腳本以 `cargo test -p <crate>` 單獨編譯一個套件，沒有 workspace 的 feature 統一。測試用到別的 crate 的
+     `test-support` 時，該 crate 要在自己的 dev-dependencies 啟用它；workspace 測試會把缺口藏起來（S29）。
+   - 門禁以完整宣告文字定位（`pub(crate) struct X`、`async fn x<A: ClusterAdapters>(`）。搬移改了可見性或泛型參數，門禁字串
+     要一起改；只在搬入的 crate 以 `pub` 形式存在的字串可以機械改寫（S29）。
+   - 以 `git grep` 改寫路徑時要排除 `recovery/`（帶雜湊的歷史快照）與 `scripts/fixtures`（S29）。
+   - `wp48/gates.sh` 只跑 node 門禁。`scripts/cluster-wsl.py` 以 `Path` 拼出 `src/cluster.rs`，`git grep` 的路徑改寫找不到，
+     它和它的故障觀測測試在 dev 上才失敗；`scripts/test-*.py` 也要在推送前跑（S29）。
+   - 根 crate 以 `use northstar_cluster as cluster` 保留舊路徑時，`use crate::cluster::{self, ..}` 不再合法，要在搬移前改寫
+     （S29）。
 
 WP 規格固定包含：目標、允許修改的檔案、不得改變的語義（SQL、migration、鎖、交易、wire、
 錯誤訊息、門禁強度）、不得觸碰的證據檔、退出檢查。
@@ -1546,3 +1628,31 @@ Stage 證據仍綁定其原提交。
 | WP-326 | 完成：端點型別、XEP-0487 解析與排序進入 `northstar_federation_application::endpoint`，解析器與 HTTPS 留到 S30 | 見 `git log --grep '\[WP-326\]'` |
 | WP-327 | 完成：`AppState` 以 `FederationModule` 持有十六個聯邦欄位，門禁改檢查模組 | 見 `git log --grep '\[WP-327\]'` |
 | WP-328 | 完成：記錄 S28 的階段與盤點（5.24）、4.2。WP-317–327 依序接到 WP-316 之上；fmt、clippy、workspace 測試、層級、模糊測試、本機 PostgreSQL 套件與全部門禁通過 | 見 `git log --grep '\[WP-328\]'` |
+| WP-329 | 完成：`northstar_postgres::pool::options()` 關閉在交易中被釋放的連線，門禁禁止生產程式碼直接建立池 | 見 `git log --grep '\[WP-329\]'` |
+| WP-330 | 完成：`direct_handoff` 與 `route_item` 由 message-application 進入 `northstar-message-core` | 見 `git log --grep '\[WP-330\]'` |
+| WP-331 | 完成：會話維護服務進入 session-application，背景清理進入 operations-application | 見 `git log --grep '\[WP-331\]'` |
+| WP-332 | 完成：`RootAccountRepository`、`RootAdminCommandRepository` 改名為 `Workflow*`，定義在各自的介面卡旁 | 見 `git log --grep '\[WP-332\]'` |
+| WP-333 | 完成：第二輪雲端報告的回覆記入交接計劃書 | 見 `git log --grep '\[WP-333\]'` |
+| WP-334 | 完成：憑證發佈事實進入 session-core，`AuthenticationResult` 進入 auth-core | 見 `git log --grep '\[WP-334\]'` |
+| WP-335 | 完成：SM、暫停與重放服務進入 session-application，`src/services` 不再存在 | 見 `git log --grep '\[WP-335\]'` |
+| WP-336 | 完成：`OutboundItem`、`OutboundSender` 進入 `northstar_stream::outbound`，房間的 port 實作移入 `-xmpp` crate | 見 `git log --grep '\[WP-336\]'` |
+| WP-337 | 完成：post-action 監督與遙測進入 `northstar_session_application::post_actions` | 見 `git log --grep '\[WP-337\]'` |
+| WP-338 | 完成：`RosterSyncGate` 進入 `northstar_roster_core::roster_sync` | 見 `git log --grep '\[WP-338\]'` |
+| WP-339 | 完成：本機路由表與 `OnlineSession` 進入 `northstar_stream::local_routes` | 見 `git log --grep '\[WP-339\]'` |
+| WP-340 | 完成：`northstar-session-postgres` 建立，取得只碰 session 資料表的 SQL | 見 `git log --grep '\[WP-340\]'` |
+| WP-341 | 完成：XEP-0198 儲存與 SM、暫停、拆除 repository 進入 `northstar_workflows::sm` | 見 `git log --grep '\[WP-341\]'` |
+| WP-342 | 完成：叢集會話路由與三個只讀路由或重放帳本的 repository 進入 session-postgres | 見 `git log --grep '\[WP-342\]'` |
+| WP-343 | 完成：六個跨上下文介面卡進入 workflows，`Root*Effects` 改名 `Workflow*Effects` | 見 `git log --grep '\[WP-343\]'` |
+| WP-344 | 完成：叢集 MUC 快照值進入 `northstar_room_core::cluster_muc`，room-postgres 的重複目標型別刪除 | 見 `git log --grep '\[WP-344\]'` |
+| WP-345 | 完成：session-postgres 以 dev-dependency 為自己的測試啟用 session-application 的 test-support | 見 `git log --grep '\[WP-345\]'` |
+| WP-346 | 完成：叢集經 session-application 的 `ClusterSessionStore` port 到達 PostgreSQL 權威，不再持有 `PgPool` | 見 `git log --grep '\[WP-346\]'` |
+| WP-347 | 完成：叢集 context 對 `ClusterAdapters` 泛型，復原喚醒經 `RecoveryReplayStore` port | 見 `git log --grep '\[WP-347\]'` |
+| WP-348 | 完成：叢集直接命名 xml-builder 與 xep-0016，`MAX_XMPP_FRAME_BYTES` 進入 `northstar-stream` | 見 `git log --grep '\[WP-348\]'` |
+| WP-349 | 完成：離線重播驅動進入 `northstar_stream::replay` | 見 `git log --grep '\[WP-349\]'` |
+| WP-350 | 完成：`MucDeliveryContext` 進入 `northstar_stream::muc_delivery`，對三個 port 泛型 | 見 `git log --grep '\[WP-350\]'` |
+| WP-351 | 完成：頭像雜湊改寫與離線從屬變更通知進入 kernel 的 `northstar-xmpp-avatar`、`northstar-xep-0045` | 見 `git log --grep '\[WP-351\]'` |
+| WP-352 | 完成：`src/cluster` 成為 `crates/edges/northstar-cluster`，驗證器允許 edge 使用 redis | 見 `git log --grep '\[WP-352\]'` |
+| WP-353 | 完成：API 操作與認證資料庫測試、權威 LISTEN 迴圈進入 workflows，維護鎖進入 operations-postgres | 見 `git log --grep '\[WP-353\]'` |
+| WP-354 | 完成：`AppState` 以 `SessionModule` 持有四個會話欄位 | 見 `git log --grep '\[WP-354\]'` |
+| WP-355 | 完成：`scripts/cluster-wsl.py` 由 `northstar-cluster` 的 crate 根讀取叢集協定版本 | 見 `git log --grep '\[WP-355\]'` |
+| WP-356 | 完成：記錄 S29 的階段與盤點（5.25）、4.2、4.3。WP-329–355 依序接到 WP-328 與雲端 WP-434 之上；fmt、clippy、workspace 測試、層級、模糊測試、搬移過的 PostgreSQL 套件、全部門禁與 Python 腳本測試通過 | 見 `git log --grep '\[WP-356\]'` |

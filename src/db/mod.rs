@@ -5,8 +5,6 @@ pub(crate) mod test_support;
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 
-mod migration_preflight;
-
 pub(crate) use northstar_postgres::MIGRATOR;
 
 pub(crate) mod abuse_effects;
@@ -96,7 +94,6 @@ pub(crate) mod s2s_outbox_dispatch_repository;
 pub(crate) mod s2s_sm_outbox_repository;
 #[cfg(test)]
 mod s2s_tests;
-pub mod schema;
 pub(crate) mod session_authority_sweep_repository;
 pub mod session_identity;
 pub(crate) mod session_termination_authority_repository;
@@ -112,7 +109,6 @@ pub use omemo_recovery::*;
 pub use pep_roster::*;
 pub use privacy::*;
 pub use roster::*;
-pub use schema::*;
 pub use sm::*;
 #[cfg(test)]
 mod pubsub_integration_tests;
@@ -170,7 +166,8 @@ pub async fn migrate_for_domain(pool: &PgPool, domain: &str) -> Result<()> {
                 .acquire()
                 .await
                 .context("could not acquire the database migration connection")?;
-            migration_preflight::attest_schema_owner(&mut migration_connection).await?;
+            northstar_postgres::migration_preflight::attest_schema_owner(&mut migration_connection)
+                .await?;
             MIGRATOR
                 .run(&mut *migration_connection)
                 .await

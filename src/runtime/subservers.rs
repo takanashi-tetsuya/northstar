@@ -236,7 +236,7 @@ pub(crate) async fn run_maintenance() -> Result<()> {
     } else {
         northstar_postgres::role_attestation::attest_runtime_role(&pool).await?;
     }
-    db::verify_schema(&pool, &config.xmpp_domain)
+    northstar_postgres::schema::verify_schema(&pool, &config.xmpp_domain)
         .await
         .context("maintenance schema verification failed")?;
     let mut ownership = claim_maintenance(&pool).await?;

@@ -307,7 +307,7 @@ async fn run() -> Result<()> {
     }
     startup_phase.complete();
     let startup_phase = northstar_telemetry::logging::StartupPhase::begin("schema_verification");
-    db::verify_schema(&pool, &config.domain)
+    northstar_postgres::schema::verify_schema(&pool, &config.domain)
         .await
         .context("database schema verification failed")?;
     startup_phase.complete();

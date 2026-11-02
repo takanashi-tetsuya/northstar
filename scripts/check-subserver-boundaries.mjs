@@ -118,7 +118,7 @@ export function verifySubserverBoundaries({ main, subservers, maintenanceOwnersh
   requireBoundary(!health.includes('error.to_string()'), 'private health cannot return internal failure details');
   const run = body(subservers, 'async fn run_maintenance(');
   for (const marker of ['config.validate()?', 'northstar_postgres::role_attestation::attest_runtime_role(&pool)',
-    'northstar_postgres::role_attestation::attest_development_database_is_loopback(&pool)', 'db::verify_schema(&pool',
+    'northstar_postgres::role_attestation::attest_development_database_is_loopback(&pool)', 'northstar_postgres::schema::verify_schema(&pool',
     'claim_maintenance(&pool)', '.max_connections(MAINTENANCE_POOL_MAX_CONNECTIONS)',
     '.min_connections(0)', 'ownership.close().await', 'pool.close().await',
     'workers.shutdown_and_join(', 'cancel.cancel()']) {

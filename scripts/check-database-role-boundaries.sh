@@ -500,7 +500,7 @@ require_literal "$main_source" 'northstar_postgres::role_attestation::attest_mig
   || fail 'database DDL must have exactly one main-process call site: the explicit migrator command'
 [[ "$(grep -Fc 'return run_migrations().await;' "$main_source")" == 1 ]] \
   || fail 'only the explicit xmpp-server migrate subcommand may dispatch database DDL'
-require_literal "$main_source" 'db::verify_schema(&pool, &config.domain)' \
+require_literal "$main_source" 'northstar_postgres::schema::verify_schema(&pool, &config.domain)' \
   'normal server startup must retain read-only schema verification'
 require_literal "$db_module" "pg_advisory_lock(" \
   'migration command does not serialize against ACL reconciliation'

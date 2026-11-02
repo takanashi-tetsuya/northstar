@@ -537,7 +537,7 @@ impl AppState {
             },
         )
         .await?;
-        let sm_authority_schema = db::current_application_schema(&pool)
+        let sm_authority_schema = northstar_postgres::schema::current_application_schema(&pool)
             .await
             .context("could not determine the SM authority schema")?;
         let mut sm_authority_connect_options = config

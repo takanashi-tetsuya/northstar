@@ -65,7 +65,7 @@ pub(crate) fn features(policy: S2sFeaturePolicy, external_available: bool) -> St
         );
     }
     features
-        .validated_fragment(&super::sm::feature())
+        .validated_fragment(&northstar_federation_core::sm::feature())
         .expect("static stream management feature is valid XML")
         .validated_fragment(&negotiation_stream_limits_feature())
         .expect("server-generated stream limits must be valid XML")

@@ -523,7 +523,7 @@ pub(super) async fn authenticate_secure_inbound(
         )
         .await?;
         let features = crate::xmpp::xml_builder::XmlElement::new("stream:features")
-            .validated_fragment(&super::super::sm::feature())?
+            .validated_fragment(&northstar_federation_core::sm::feature())?
             .validated_fragment(&stream_limits_feature())?
             .finish();
         write_xml(secure, &features).await?;

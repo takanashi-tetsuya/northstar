@@ -244,12 +244,12 @@ pub(super) async fn connect_and_multiplex_inner(
             .clone(),
     );
     let mut resume = None;
-    if super::super::sm::advertised(&features) {
+    if northstar_federation_core::sm::advertised(&features) {
         sm.enable();
         write_xml(
             &mut secure,
             &XmlElement::new("enable")
-                .attr("xmlns", super::super::sm::NS)
+                .attr("xmlns", northstar_federation_core::sm::NS)
                 .attr("resume", "true")
                 .attr("max", "60")
                 .finish(),
@@ -258,15 +258,15 @@ pub(super) async fn connect_and_multiplex_inner(
         tokio::time::timeout(IO_TIMEOUT, async {
             loop {
                 let response = timed_read_frame(&mut secure, &mut input).await?;
-                if super::super::sm::accepted(&response) {
-                    resume = super::super::sm::enabled_resume(&response)?;
+                if northstar_federation_core::sm::accepted(&response) {
+                    resume = northstar_federation_core::sm::enabled_resume(&response)?;
                     return Ok::<_, anyhow::Error>(());
                 }
                 // A BIDI route can emit stanzas before it reads our enable.
                 // Incoming counting starts at enabled; our outgoing count
                 // has already started at enable, including any reply here.
                 anyhow::ensure!(
-                    bidi_enabled && super::super::sm::is_stanza(&response),
+                    bidi_enabled && northstar_federation_core::sm::is_stanza(&response),
                     "remote rejected S2S stream management"
                 );
                 match route_inbound_for_connection(
@@ -438,12 +438,12 @@ pub(super) async fn connect_and_multiplex_inner(
         loop {
             let attempt = async {
                 let mut next = authenticate_transport(state, source_domain, target_domain, &disconnect).await?;
-                anyhow::ensure!(next.external == external && next.bidi == bidi_enabled && super::super::sm::advertised(&next.features),
+                anyhow::ensure!(next.external == external && next.bidi == bidi_enabled && northstar_federation_core::sm::advertised(&next.features),
                     "S2S resume authentication or stream features changed");
-                write_xml(&mut next.stream, &XmlElement::new("resume").attr("xmlns", super::super::sm::NS)
+                write_xml(&mut next.stream, &XmlElement::new("resume").attr("xmlns", northstar_federation_core::sm::NS)
                     .attr("previd", id).attr("h", sm.received().to_string()).finish()).await?;
                 let response = timed_read_frame(&mut next.stream, &mut next.input).await?;
-                let h = super::super::sm::resumed(&response, id)?;
+                let h = northstar_federation_core::sm::resumed(&response, id)?;
                 sm.validate_resume(h, next.limits.max_bytes)?;
                 sm.renew(state).await?;
                 sm.acknowledge(state, h).await?;

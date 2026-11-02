@@ -8,9 +8,12 @@ description = "Capability-free XMPP S2S federation and outbox domain models and 
 publish = false
 
 [dependencies]
+anyhow = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 hmac = "0.12"
+northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+roxmltree = "0.20"
 serde = { version = "1.0", features = ["derive"] }
 sha2 = "0.10"
 uuid = { version = "1.12", features = ["v4", "serde"] }

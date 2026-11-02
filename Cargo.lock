@@ -2066,9 +2066,12 @@ dependencies = [
 name = "northstar-federation-core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "hmac",
+ "northstar-xml-builder",
  "northstar-xmpp-types",
+ "roxmltree",
  "serde",
  "sha2",
  "uuid",

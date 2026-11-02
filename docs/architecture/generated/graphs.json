@@ -2467,6 +2467,10 @@
       ],
       [
         "northstar-federation-core",
+        "anyhow"
+      ],
+      [
+        "northstar-federation-core",
         "chrono"
       ],
       [
@@ -2475,7 +2479,15 @@
       ],
       [
         "northstar-federation-core",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-federation-core",
         "northstar-xmpp-types"
+      ],
+      [
+        "northstar-federation-core",
+        "roxmltree"
       ],
       [
         "northstar-federation-core",

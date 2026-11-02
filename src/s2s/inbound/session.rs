@@ -412,7 +412,7 @@ pub(super) async fn accept_resume(
     write_xml(
         &mut request.transport.stream,
         &XmlElement::new("resumed")
-            .attr("xmlns", super::super::sm::NS)
+            .attr("xmlns", northstar_federation_core::sm::NS)
             .attr("previd", &registration.id)
             .attr("h", sm.received().to_string())
             .finish(),
@@ -527,8 +527,8 @@ pub(super) async fn drive_authenticated_inbound_inner(
                         let _ = write_xml(&mut current.stream, &XmlElement::new("stream:stream").close()).await;
                         return Ok(None);
                     }
-                    match super::super::sm::parse_control(&frame)? {
-                        Some(super::super::sm::Control::Resume { id, h }) if !sm.is_enabled() && !used => {
+                    match northstar_federation_core::sm::parse_control(&frame)? {
+                        Some(northstar_federation_core::sm::Control::Resume { id, h }) if !sm.is_enabled() && !used => {
                             let Some((epoch, owner)) = state.s2s_connection_registry().resumption.lookup(&id, &scope) else {
                                 tracing::debug!(condition = "item-not-found", reason = "no-matching-resume-owner", "rejected inbound S2S resumption");
                                 super::super::sm::failed(&mut current.stream, "item-not-found").await?;
@@ -546,9 +546,9 @@ pub(super) async fn drive_authenticated_inbound_inner(
                                 Err(returned) => { transport = Some(*returned); restart = true; return Ok(None); }
                             }
                         }
-                        Some(super::super::sm::Control::Enable { resume, max }) if !sm.is_enabled() => {
+                        Some(northstar_federation_core::sm::Control::Enable { resume, max }) if !sm.is_enabled() => {
                             sm.enable();
-                            let mut enabled = XmlElement::new("enabled").attr("xmlns", super::super::sm::NS);
+                            let mut enabled = XmlElement::new("enabled").attr("xmlns", northstar_federation_core::sm::NS);
                             if resume && max != Some(0) {
                                 resume_window = std::time::Duration::from_secs(u64::from(max.unwrap_or(60).min(60)));
                                 registration = state.s2s_connection_registry().resumption.register(scope.clone(), resume_sender.clone());

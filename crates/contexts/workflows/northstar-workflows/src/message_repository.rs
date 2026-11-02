@@ -712,10 +712,10 @@ impl MessageRepository for PostgresMessageRepository {
         )
         .await?
         {
-            northstar_message_postgres::offline::OfflineStoreOutcome::Stored => Ok(OfflineAdmissionOutcome::Stored),
-            northstar_message_postgres::offline::OfflineStoreOutcome::Replay => Ok(OfflineAdmissionOutcome::Replay),
-            northstar_message_postgres::offline::OfflineStoreOutcome::QuotaExceeded => Ok(OfflineAdmissionOutcome::QuotaExceeded),
-            northstar_message_postgres::offline::OfflineStoreOutcome::RecipientUnavailable => {
+            northstar_message_core::OfflineStoreOutcome::Stored => Ok(OfflineAdmissionOutcome::Stored),
+            northstar_message_core::OfflineStoreOutcome::Replay => Ok(OfflineAdmissionOutcome::Replay),
+            northstar_message_core::OfflineStoreOutcome::QuotaExceeded => Ok(OfflineAdmissionOutcome::QuotaExceeded),
+            northstar_message_core::OfflineStoreOutcome::RecipientUnavailable => {
                 Ok(OfflineAdmissionOutcome::RecipientUnavailable)
             }
         }
@@ -732,10 +732,7 @@ impl PostgresMessageRepository {
         validate_local_recipient_authority_for_domain(recipient_bare_jid, &self.configured_domain)
     }
 
-    fn offline_policy(
-        &self,
-        mam_backed: bool,
-    ) -> northstar_message_postgres::offline::OfflineStorePolicy {
+    fn offline_policy(&self, mam_backed: bool) -> northstar_message_core::OfflineStorePolicy {
         offline_store_policy(self.offline, mam_backed)
     }
 
@@ -750,8 +747,8 @@ impl PostgresMessageRepository {
 fn offline_store_policy(
     limits: OfflineLimits,
     mam_backed: bool,
-) -> northstar_message_postgres::offline::OfflineStorePolicy {
-    northstar_message_postgres::offline::OfflineStorePolicy {
+) -> northstar_message_core::OfflineStorePolicy {
+    northstar_message_core::OfflineStorePolicy {
         max_messages: limits.max_messages,
         max_bytes: limits.max_bytes,
         ttl_days: limits.ttl_days,

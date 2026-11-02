@@ -2494,6 +2494,7 @@ dependencies = [
  "dashmap",
  "hmac",
  "northstar-federation-core",
+ "northstar-message-core",
  "northstar-xep-0045",
  "northstar-xml-builder",
  "northstar-xmpp-types",

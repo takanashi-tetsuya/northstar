@@ -149,6 +149,25 @@ pub struct DirectPersonalMessageAdmission {
     pub live_claim_id: Option<Uuid>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OfflineStoreOutcome {
+    Stored,
+    Replay,
+    QuotaExceeded,
+    RecipientUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OfflineStorePolicy {
+    pub max_messages: i64,
+    pub max_bytes: i64,
+    pub ttl_days: i64,
+    /// True only when the exact stanza is already recoverable from personal
+    /// MAM. Bind 2 may discard this duplicate but must retain temporary-only
+    /// XEP-0334 no-permanent-store rows.
+    pub mam_backed: bool,
+}
+
 /// RFC 6121 routing behavior for a message addressed to a bare local JID.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BareMessageRoute {

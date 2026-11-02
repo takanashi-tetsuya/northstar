@@ -571,7 +571,7 @@ async fn offline_clear_preserves_transport_owned_queue_and_retries_the_rolled_ba
             "sender@accounts.test",
             "<message><body>retained</body></message>",
             false,
-            northstar_message_postgres::offline::OfflineStorePolicy {
+            northstar_message_core::OfflineStorePolicy {
                 max_messages: 100,
                 max_bytes: 1_000_000,
                 ttl_days: 30,
@@ -580,7 +580,7 @@ async fn offline_clear_preserves_transport_owned_queue_and_retries_the_rolled_ba
         )
         .await
         .unwrap(),
-        northstar_message_postgres::offline::OfflineStoreOutcome::Stored
+        northstar_message_core::OfflineStoreOutcome::Stored
     );
     sqlx::query("UPDATE offline_messages SET delivery_claim_id=$1,delivery_claim_expires_at=NOW()+INTERVAL '10 minutes' WHERE recipient_id=$2")
         .bind(Uuid::new_v4()).bind(recipient).execute(&pool).await.unwrap();
@@ -633,7 +633,7 @@ async fn offline_clear_preserves_transport_owned_queue_and_retries_the_rolled_ba
         "sender@accounts.test",
         "<message><body>later</body></message>",
         false,
-        northstar_message_postgres::offline::OfflineStorePolicy {
+        northstar_message_core::OfflineStorePolicy {
             max_messages: 100,
             max_bytes: 1_000_000,
             ttl_days: 30,

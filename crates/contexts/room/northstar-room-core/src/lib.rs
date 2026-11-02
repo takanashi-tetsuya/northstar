@@ -222,21 +222,7 @@ pub struct MucDiscoPage {
     pub first_index: i64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OfflineStoreOutcome {
-    Stored,
-    Replay,
-    QuotaExceeded,
-    RecipientUnavailable,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct OfflineStorePolicy {
-    pub max_messages: i64,
-    pub max_bytes: i64,
-    pub ttl_days: i64,
-    pub mam_backed: bool,
-}
+pub use northstar_message_core::{OfflineStoreOutcome, OfflineStorePolicy};
 
 pub use northstar_federation_core::S2sOutboxPolicy as FederatedInvitePolicy;
 

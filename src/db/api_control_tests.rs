@@ -2128,7 +2128,7 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
             "sender@example.test",
             "<message><body>before</body></message>",
             false,
-            northstar_message_postgres::offline::OfflineStorePolicy {
+            northstar_message_core::OfflineStorePolicy {
                 max_messages: 100,
                 max_bytes: 1_000_000,
                 ttl_days: 30,
@@ -2137,7 +2137,7 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
         )
         .await
         .unwrap(),
-        northstar_message_postgres::offline::OfflineStoreOutcome::Stored
+        northstar_message_core::OfflineStoreOutcome::Stored
     );
     let clear_request = admin_request(
         &admin_id,
@@ -2179,7 +2179,7 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
             "sender@example.test",
             "<message><body>after</body></message>",
             false,
-            northstar_message_postgres::offline::OfflineStorePolicy {
+            northstar_message_core::OfflineStorePolicy {
                 max_messages: 100,
                 max_bytes: 1_000_000,
                 ttl_days: 30,
@@ -2203,7 +2203,7 @@ async fn admin_sync_mutations_are_authorized_atomic_replay_safe_and_queue_serial
     clear_tx.commit().await.unwrap();
     assert_eq!(
         enqueue.await.unwrap().unwrap(),
-        northstar_message_postgres::offline::OfflineStoreOutcome::Stored
+        northstar_message_core::OfflineStoreOutcome::Stored
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM offline_messages")

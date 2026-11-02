@@ -3,6 +3,7 @@
 use super::*;
 use crate::db;
 use northstar_abuse_policy::{AbuseConfig, MessageDedupeCandidate, MessageDedupeIdentity};
+use northstar_message_core::{OfflineStoreOutcome, OfflineStorePolicy};
 use std::sync::Arc;
 use tokio::sync::Barrier;
 

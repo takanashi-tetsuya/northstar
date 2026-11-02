@@ -433,7 +433,7 @@ async fn direct_spool_wake_commit_ack_takeover_and_cleanup_are_fenced() {
         &muc_authority.actor_full_jid,
         &room_invite,
         false,
-        northstar_room_core::OfflineStorePolicy {
+        northstar_message_core::OfflineStorePolicy {
             max_messages: 100,
             max_bytes: 1_000_000,
             ttl_days: 30,

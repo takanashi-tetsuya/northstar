@@ -1388,6 +1388,7 @@ digraph compile_time {
   "northstar-room-core" -> "dashmap";
   "northstar-room-core" -> "hmac";
   "northstar-room-core" -> "northstar-federation-core";
+  "northstar-room-core" -> "northstar-message-core";
   "northstar-room-core" -> "northstar-xep-0045";
   "northstar-room-core" -> "northstar-xml-builder";
   "northstar-room-core" -> "northstar-xmpp-types";

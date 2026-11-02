@@ -15,7 +15,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn migration_0132_current() -> sqlx::migrate::Migration {
-    super::MIGRATOR
+    northstar_postgres::MIGRATOR
         .iter()
         .find(|migration| migration.version == 132)
         .cloned()
@@ -34,7 +34,7 @@ fn migration_0132_only(migration: sqlx::migrate::Migration) -> sqlx::migrate::Mi
 fn migrator_through(version: i64) -> sqlx::migrate::Migrator {
     sqlx::migrate::Migrator {
         migrations: Cow::Owned(
-            super::MIGRATOR
+            northstar_postgres::MIGRATOR
                 .iter()
                 .filter(|migration| migration.version <= version)
                 .cloned()
@@ -186,7 +186,7 @@ async fn install_0132_predecessor(pool: &sqlx::PgPool) {
     .await
     .unwrap();
 
-    let predecessor = super::MIGRATOR
+    let predecessor = northstar_postgres::MIGRATOR
         .iter()
         .find(|migration| migration.version == 129)
         .expect("the embedded migration chain must contain 0129");

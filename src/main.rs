@@ -128,7 +128,7 @@ async fn connect_migrator_pool(environment: &MigrationEnvironment) -> Result<PgP
 async fn run_migrations() -> Result<()> {
     let environment = migration_environment()?;
     let pool = connect_migrator_pool(&environment).await?;
-    db::migrate_for_domain(&pool, &environment.domain).await?;
+    northstar_workflows::identity_migration::migrate_for_domain(&pool, &environment.domain).await?;
     pool.close().await;
     Ok(())
 }

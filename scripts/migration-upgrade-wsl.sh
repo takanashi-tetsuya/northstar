@@ -310,7 +310,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$project_dir/target-wsl}"
 fi
 export TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")"
-test_name="db::migration_upgrade_test::baseline_0013_upgrades_through_the_real_domain_migrator"
+test_name="identity_migration::migration_upgrade_test::baseline_0013_upgrades_through_the_real_domain_migrator"
 
 run_migrator() {
   local requested_test_name="$1"
@@ -321,7 +321,7 @@ run_migrator() {
   migrator_output_files+=("$output_file")
   printf 'migration-upgrade phase=rust-test-start test=%s\n' "$requested_test_name" >&2
   set +e
-  cargo test --locked --offline "$requested_test_name" -- --ignored --exact --nocapture 2>&1 \
+  cargo test --locked --offline -p northstar-workflows "$requested_test_name" -- --ignored --exact --nocapture 2>&1 \
     | tee "$output_file"
   cargo_status=${PIPESTATUS[0]}
   set -e
@@ -394,7 +394,7 @@ if [[ "$(psql_named_schema "$pre_fix_schema" --tuples-only --no-align --command 
   exit 1
 fi
 export TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$pre_fix_schema")"
-run_migrator "db::migration_upgrade_test::migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksum_is_enforced"
+run_migrator "identity_migration::migration_upgrade_test::migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksum_is_enforced"
 drop_pre_fix_schema
 pre_fix_created=0
 export TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")"
@@ -404,7 +404,7 @@ psql_schema --command \
   "UPDATE _sqlx_migrations SET checksum=set_byte(checksum,0,(get_byte(checksum,0)+1)%256) WHERE version=1" \
   >/dev/null
 set +e
-checksum_failure_output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture 2>&1)"
+checksum_failure_output="$(cargo test --locked --offline -p northstar-workflows "$test_name" -- --ignored --exact --nocapture 2>&1)"
 checksum_failure_status=$?
 set -e
 if [[ "$checksum_failure_status" == "0" ]]; then

@@ -19,7 +19,7 @@ postgres_runner="$project_dir/scripts/run-postgres.py"
 role_attestation="$project_dir/crates/platform/northstar-postgres/src/role_attestation.rs"
 registration_repository="$project_dir/crates/contexts/workflows/northstar-workflows/src/account_admin_repository.rs"
 admin_dispatch_repository="$project_dir/crates/contexts/workflows/northstar-workflows/src/admin_dispatch_repository.rs"
-db_module="$project_dir/src/db/mod.rs"
+identity_migration_module="$project_dir/crates/contexts/workflows/northstar-workflows/src/identity_migration.rs"
 main_source="$project_dir/src/main.rs"
 state_source="$project_dir/src/state.rs"
 pie_source="$project_dir/src/tools/pie.rs"
@@ -106,7 +106,7 @@ for file in "$compose" "$init_script" "$grant_policy" "$grant_boundary" "$grant_
   "$migration_ledger_generator" "$capability_manifest_check" \
   "$grant_runner" "$grant_image" "$backup_image" "$backup_runner" "$postgres_runner" \
   "$role_attestation" "$registration_repository" "$admin_dispatch_repository" \
-  "$db_module" "$main_source" "$state_source" "$pie_source" \
+  "$identity_migration_module" "$main_source" "$state_source" "$pie_source" \
   "$users_source" "$admin_commands_source" "$roster_source" "$mix_source" \
   "$muc_source" "$muc_test_source" "$muc_protocol_source" \
   "$muc_protocol_test_source" "$omemo_recovery_source" \
@@ -496,15 +496,15 @@ require_literal "$init_script" 'CONNECTION LIMIT 8' \
   'fresh init does not bound XEP-0133 command database connections'
 require_literal "$main_source" 'northstar_postgres::role_attestation::attest_migrator_role(&pool)' \
   'migrator command does not attest its database owner identity'
-[[ "$(grep -Fc 'db::migrate_for_domain(&pool, &environment.domain).await?;' "$main_source")" == 1 ]] \
+[[ "$(grep -Fc 'northstar_workflows::identity_migration::migrate_for_domain(&pool, &environment.domain).await?;' "$main_source")" == 1 ]] \
   || fail 'database DDL must have exactly one main-process call site: the explicit migrator command'
 [[ "$(grep -Fc 'return run_migrations().await;' "$main_source")" == 1 ]] \
   || fail 'only the explicit xmpp-server migrate subcommand may dispatch database DDL'
 require_literal "$main_source" 'northstar_postgres::schema::verify_schema(&pool, &config.domain)' \
   'normal server startup must retain read-only schema verification'
-require_literal "$db_module" "pg_advisory_lock(" \
+require_literal "$identity_migration_module" "pg_advisory_lock(" \
   'migration command does not serialize against ACL reconciliation'
-require_literal "$db_module" "northstar-database-role-policy-v1" \
+require_literal "$identity_migration_module" "northstar-database-role-policy-v1" \
   'migration command uses a different database policy lock key'
 require_literal "$grant_policy" "northstar-database-role-policy-v1" \
   'ACL reconciliation uses a different database policy lock key'

@@ -7,6 +7,7 @@
 
 pub mod handler;
 pub mod iq;
+pub mod local_routes;
 pub mod outbound;
 
 pub use handler::{HandlerFuture, IqHandler};

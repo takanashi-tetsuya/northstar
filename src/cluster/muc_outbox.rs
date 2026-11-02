@@ -115,7 +115,7 @@ pub(super) struct ClusterMucPolicyRender<'a> {
     pub(super) endpoints: &'a super::muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
     pub(super) context: &'a northstar_room_postgres::cluster_muc::ClusterMucEventContext,
     pub(super) room_jid: &'a str,
-    pub(super) recipient: &'a crate::xmpp::local_routes::muc::MucOccupant,
+    pub(super) recipient: &'a northstar_stream::local_routes::muc::MucOccupant,
     pub(super) event_id: &'a str,
     pub(super) change: &'a serde_json::Value,
     pub(super) configuration_change: bool,

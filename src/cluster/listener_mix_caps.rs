@@ -1,11 +1,10 @@
 //! Live, verified MIX capability admission for the cluster listener.
 
 use crate::cluster::ClusterMixCapability;
-use crate::xmpp::local_routes::{
-    session::OnlineSession, session_table::local_caps_route_epoch_matches,
-};
 use dashmap::DashMap;
 use northstar_protocol_runtime::caps::{CapsObservationOwner, CapsResourceIndex, PendingCapsIndex};
+use northstar_stream::local_routes::session::OnlineSession;
+use northstar_stream::local_routes::session_table::local_caps_route_epoch_matches;
 use std::sync::{atomic::Ordering, Arc};
 
 pub(crate) struct ClusterListenerMixCaps {

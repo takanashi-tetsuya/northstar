@@ -645,7 +645,7 @@ pub(crate) struct AccountRevocationWorkerContext<R> {
         northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService<
             R,
         >,
-    pub(super) routes: crate::xmpp::local_routes::session::AccountRevocationRoutes,
+    pub(super) routes: northstar_stream::local_routes::session::AccountRevocationRoutes,
     pub(super) authority: ClusterRevocationAuthority,
 }
 
@@ -654,7 +654,7 @@ impl<R: northstar_auth_application::account_revocation_consumer::AccountRevocati
 {
     pub(crate) fn new(
         service: northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService<R>,
-        routes: crate::xmpp::local_routes::session::AccountRevocationRoutes,
+        routes: northstar_stream::local_routes::session::AccountRevocationRoutes,
         authority: ClusterRevocationAuthority,
     ) -> Self {
         Self {

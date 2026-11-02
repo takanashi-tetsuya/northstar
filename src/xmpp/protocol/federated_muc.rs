@@ -2,8 +2,6 @@
 //! their fault-injection tests.
 
 #[cfg(test)]
-use crate::xmpp::local_routes::muc::{MucOccupant, MucOccupantEndpoint};
-#[cfg(test)]
 use anyhow::Result;
 #[cfg(test)]
 use northstar_message_core::validation::validate_routed_message;
@@ -11,6 +9,8 @@ use northstar_message_core::validation::validate_routed_message;
 use northstar_muc_xmpp::federated_muc::*;
 #[cfg(test)]
 use northstar_room_application::muc_service::{MucRoom, SerializableMucOccupant};
+#[cfg(test)]
+use northstar_stream::local_routes::muc::{MucOccupant, MucOccupantEndpoint};
 
 #[cfg(test)]
 mod tests;

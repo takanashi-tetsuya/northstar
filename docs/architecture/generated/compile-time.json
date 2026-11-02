@@ -4779,7 +4779,15 @@
     ],
     [
       "northstar-stream",
+      "dashmap"
+    ],
+    [
+      "northstar-stream",
       "futures"
+    ],
+    [
+      "northstar-stream",
+      "northstar-auth-application"
     ],
     [
       "northstar-stream",
@@ -4791,7 +4799,27 @@
     ],
     [
       "northstar-stream",
+      "northstar-room-application"
+    ],
+    [
+      "northstar-stream",
+      "northstar-room-core"
+    ],
+    [
+      "northstar-stream",
+      "northstar-roster-core"
+    ],
+    [
+      "northstar-stream",
       "northstar-session-application"
+    ],
+    [
+      "northstar-stream",
+      "northstar-session-core"
+    ],
+    [
+      "northstar-stream",
+      "northstar-xmpp-types"
     ],
     [
       "northstar-stream",

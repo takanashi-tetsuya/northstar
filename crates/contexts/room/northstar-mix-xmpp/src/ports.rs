@@ -17,6 +17,7 @@ use northstar_room_application::mix_service::{
 use northstar_room_core::mix::MixSessionCapability;
 use northstar_room_core::mix_iq_relay::{MixIqRelayIndex, PendingMixIqRelay};
 use northstar_roster_core::RosterChange;
+use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::outbound::OutboundSender;
 use northstar_xep_core::XepId;
 use roxmltree::Node;
@@ -270,5 +271,25 @@ impl MixOutbound for OutboundSender {
 
     fn disconnect_backpressured_transport(&self) {
         OutboundSender::disconnect_backpressured_transport(self);
+    }
+}
+
+impl MixLocalSession for OnlineSession {
+    type Outbound = OutboundSender;
+
+    fn sender(&self) -> &OutboundSender {
+        &self.sender
+    }
+
+    fn disconnect(&self) -> &CancellationToken {
+        &self.disconnect
+    }
+
+    fn user_id(&self) -> Uuid {
+        self.user_id
+    }
+
+    fn is_available(&self) -> bool {
+        self.available.load(std::sync::atomic::Ordering::Relaxed)
     }
 }

@@ -264,19 +264,21 @@ use self::roster_module::*;
 pub(crate) use self::runtime_config::*;
 pub(crate) use self::runtime_control::*;
 use self::upload_module::*;
-use crate::xmpp::local_routes::{
-    muc::{
-        MucOccupant, MucOccupantEndpoint, RestoreLocalMucOccupantsRequest, SuspendedMucEndpoint,
-        SuspendedMucPhase, SuspendedMucRoute,
-    },
-    session::{AccountRevocationRoutes, OnlineSession, SmPresenceEpoch, SmStagedRouteClaim},
-};
-use crate::xmpp::local_routes::{muc_table::*, session_table::*, suspended_muc::*};
 use northstar_federation_application::registry::S2sConnectionRegistry;
 use northstar_federation_application::write_policy::FederationWritePolicy;
 use northstar_federation_core::policy::RuntimeFederationPolicy;
 use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
 use northstar_room_core::occupancy::{LocalMucJoinPublication, LocalMucNicknameMove};
+use northstar_stream::local_routes::muc::{
+    MucOccupant, MucOccupantEndpoint, RestoreLocalMucOccupantsRequest, SuspendedMucEndpoint,
+    SuspendedMucPhase, SuspendedMucRoute,
+};
+use northstar_stream::local_routes::muc_table::*;
+use northstar_stream::local_routes::session::{
+    AccountRevocationRoutes, OnlineSession, SmPresenceEpoch, SmStagedRouteClaim,
+};
+use northstar_stream::local_routes::session_table::*;
+use northstar_stream::local_routes::suspended_muc::*;
 use northstar_xml_builder::escape::attr_escape;
 use northstar_xmpp_types::jid_text::*;
 

@@ -1,21 +1,19 @@
 //! Process-local projections needed by the cluster maintenance pass.
 //! No database pool, Redis client, or signing authority crosses this boundary.
 
-use crate::xmpp::local_routes::{
-    muc::MucOccupant,
-    muc_table::{
-        local_cluster_muc_projection_snapshot_in, remove_live_muc_membership_in,
-        remove_local_muc_occupant_exact_from,
-    },
-    session::OnlineSession,
-    session_table::{
-        local_session_authority_snapshots_in, local_session_lease_snapshots_in,
-        LocalSessionAuthoritySnapshot, LocalSessionLeaseSnapshot,
-    },
-};
 use dashmap::DashMap;
 use northstar_room_application::muc_service::SerializableMucOccupant;
 use northstar_session_core::JoinedMucMembership;
+use northstar_stream::local_routes::muc::MucOccupant;
+use northstar_stream::local_routes::muc_table::{
+    local_cluster_muc_projection_snapshot_in, remove_live_muc_membership_in,
+    remove_local_muc_occupant_exact_from,
+};
+use northstar_stream::local_routes::session::OnlineSession;
+use northstar_stream::local_routes::session_table::{
+    local_session_authority_snapshots_in, local_session_lease_snapshots_in,
+    LocalSessionAuthoritySnapshot, LocalSessionLeaseSnapshot,
+};
 use northstar_telemetry::metrics::DurationTimer;
 use northstar_telemetry::metrics::Metrics;
 use std::sync::{atomic::Ordering, Arc};
@@ -108,8 +106,8 @@ impl ClusterMaintenanceLocals {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::xmpp::local_routes::muc::MucOccupantEndpoint;
     use northstar_session_application::RouteIncarnationSignal;
+    use northstar_stream::local_routes::muc::MucOccupantEndpoint;
     use std::{sync::atomic::AtomicBool, time::Instant};
 
     fn session(connection_id: uuid::Uuid) -> OnlineSession {

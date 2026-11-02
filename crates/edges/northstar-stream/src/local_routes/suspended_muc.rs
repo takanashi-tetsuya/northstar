@@ -12,7 +12,7 @@ use northstar_session_core::JoinedMucMembership;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-pub(crate) fn muc_actor_identity_matches(
+pub fn muc_actor_identity_matches(
     occupant: &MucOccupant,
     full_jid: &str,
     connection_id: uuid::Uuid,
@@ -23,7 +23,7 @@ pub(crate) fn muc_actor_identity_matches(
         && matches!(occupant.endpoint, MucOccupantEndpoint::Local(_))
 }
 
-pub(crate) fn muc_actor_epoch_matches(
+pub fn muc_actor_epoch_matches(
     occupant: &MucOccupant,
     full_jid: &str,
     connection_id: uuid::Uuid,
@@ -42,7 +42,7 @@ pub(crate) fn muc_actor_epoch_matches(
 /// Exact-identity removal guard for a suspended occupancy created by the
 /// calling restore: a failure path may only ever remove the endpoint it just
 /// created, never a concurrent joiner's or a winning resume's occupant.
-pub(crate) fn suspended_occupant_is_created(
+pub fn suspended_occupant_is_created(
     occupant: &MucOccupant,
     created: &Arc<SuspendedMucEndpoint>,
 ) -> bool {
@@ -52,7 +52,7 @@ pub(crate) fn suspended_occupant_is_created(
     )
 }
 
-pub(crate) fn suspended_muc_resume_actor_matches(
+pub fn suspended_muc_resume_actor_matches(
     current: &MucOccupant,
     endpoint: &Arc<SuspendedMucEndpoint>,
     full_jid: &str,
@@ -74,7 +74,7 @@ pub(crate) fn suspended_muc_resume_actor_matches(
         )
 }
 
-pub(crate) fn muc_suspended_teardown_identity_matches(
+pub fn muc_suspended_teardown_identity_matches(
     current: &MucOccupant,
     sm_session_id: uuid::Uuid,
     expected: &SerializableMucOccupant,
@@ -99,7 +99,7 @@ pub(crate) fn muc_suspended_teardown_identity_matches(
 /// a concurrently arriving stanza can neither overtake this prefix nor race a
 /// resume claim. A failed append leaves that exact stanza and every successor
 /// in the buffer; only successfully committed rows are removed.
-pub(crate) async fn promote_suspended_muc_buffer<F, Fut>(
+pub async fn promote_suspended_muc_buffer<F, Fut>(
     buffer: &mut SuspendedMucBuffer,
     mut append: F,
 ) -> bool
@@ -125,7 +125,7 @@ where
 /// SM checkpoint.  Ownership is deliberately not transferred here: if the
 /// checkpoint or capacity validation fails, the original endpoint still owns
 /// every byte and cleanup can promote it durably.
-pub(crate) async fn snapshot_suspended_muc_buffer_for_resume(
+pub async fn snapshot_suspended_muc_buffer_for_resume(
     endpoint: &SuspendedMucEndpoint,
 ) -> Option<Vec<String>> {
     let mut buffer = endpoint.buffer.lock().await;
@@ -147,7 +147,7 @@ pub(crate) async fn snapshot_suspended_muc_buffer_for_resume(
     })
 }
 
-pub(crate) async fn seal_suspended_muc_buffer(endpoint: &SuspendedMucEndpoint) {
+pub async fn seal_suspended_muc_buffer(endpoint: &SuspendedMucEndpoint) {
     let mut buffer = endpoint.buffer.lock().await;
     if !matches!(&buffer.phase, SuspendedMucPhase::Dormant) {
         buffer.phase = SuspendedMucPhase::Sealed;
@@ -157,7 +157,7 @@ pub(crate) async fn seal_suspended_muc_buffer(endpoint: &SuspendedMucEndpoint) {
     endpoint.changed.notify_waiters();
 }
 
-pub(crate) fn finalize_suspended_muc_route_transition(endpoint: &SuspendedMucEndpoint) {
+pub fn finalize_suspended_muc_route_transition(endpoint: &SuspendedMucEndpoint) {
     let mut route = endpoint
         .route
         .lock()
@@ -167,7 +167,7 @@ pub(crate) fn finalize_suspended_muc_route_transition(endpoint: &SuspendedMucEnd
     }
 }
 
-pub(crate) fn begin_suspended_muc_route_transition(
+pub fn begin_suspended_muc_route_transition(
     endpoint: &SuspendedMucEndpoint,
     base_stanzas: usize,
     base_bytes: usize,
@@ -204,7 +204,7 @@ pub(crate) fn begin_suspended_muc_route_transition(
     }
 }
 
-pub(crate) fn transfer_muc_suffix_to_checkpoint(buffer: &mut SuspendedMucBuffer) -> bool {
+pub fn transfer_muc_suffix_to_checkpoint(buffer: &mut SuspendedMucBuffer) -> bool {
     if !matches!(&buffer.phase, SuspendedMucPhase::Committing) {
         return false;
     }
@@ -217,7 +217,7 @@ pub(crate) fn transfer_muc_suffix_to_checkpoint(buffer: &mut SuspendedMucBuffer)
     true
 }
 
-pub(crate) fn complete_snapshot_owned_handoff(buffer: &mut SuspendedMucBuffer) -> bool {
+pub fn complete_snapshot_owned_handoff(buffer: &mut SuspendedMucBuffer) -> bool {
     if !buffer.snapshot_owned {
         return false;
     }
@@ -234,7 +234,7 @@ pub(crate) fn complete_snapshot_owned_handoff(buffer: &mut SuspendedMucBuffer) -
 /// committed by the same suspension transaction.  Validation is completed
 /// before either counter or queue is mutated, so an invariant failure leaves
 /// the caller's original snapshot intact and the endpoint remains its owner.
-pub(crate) fn append_suspended_muc_suffix_to_snapshot(
+pub fn append_suspended_muc_suffix_to_snapshot(
     snapshot: &mut northstar_session_application::sm::SmSessionSnapshot,
     suffix: &VecDeque<SuspendedMucStanza>,
     max_stanzas: usize,
@@ -264,7 +264,7 @@ pub(crate) fn append_suspended_muc_suffix_to_snapshot(
         snapshot.outbound_h = snapshot.outbound_h.wrapping_add(1);
         snapshot
             .unacked
-            .push(northstar_stream::outbound::SmUnackedStanza::with_delivery(
+            .push(crate::outbound::SmUnackedStanza::with_delivery(
                 stanza.xml.clone(),
                 None,
             ));
@@ -276,7 +276,7 @@ pub(crate) fn append_suspended_muc_suffix_to_snapshot(
 /// Callers may have observed a miss before asynchronous database work; the
 /// entry operation is the only publication point and can never replace a gate
 /// installed by a concurrent join, disconnect, or winning resume.
-pub(crate) fn canonical_suspended_muc_endpoint(
+pub fn canonical_suspended_muc_endpoint(
     registry: &DashMap<uuid::Uuid, Arc<SuspendedMucEndpoint>>,
     sm_session_id: uuid::Uuid,
     proposed: Arc<SuspendedMucEndpoint>,
@@ -292,7 +292,7 @@ pub(crate) fn canonical_suspended_muc_endpoint(
 
 /// Restore publication is insert-only. A joiner or another exact resume that
 /// won while this task awaited PostgreSQL remains authoritative.
-pub(crate) fn insert_restored_muc_occupant(
+pub fn insert_restored_muc_occupant(
     occupants: &DashMap<String, MucOccupant>,
     key: String,
     occupant: MucOccupant,
@@ -309,7 +309,7 @@ pub(crate) fn insert_restored_muc_occupant(
 /// Own the membership identities before any asynchronous association work.
 /// Even an iterator whose yielded item has been cloned can retain its current
 /// DashMap shard guard. No live map iterator may cross the backend await.
-pub(crate) fn local_muc_membership_snapshots(
+pub fn local_muc_membership_snapshots(
     memberships: &DashMap<String, JoinedMucMembership>,
 ) -> Vec<(String, JoinedMucMembership)> {
     memberships

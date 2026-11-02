@@ -26,7 +26,7 @@ pub struct OnlineSession {
     /// Terminal, exact-incarnation route-removal notification. Every local
     /// compare-and-remove publishes through `AppState`, including rollback,
     /// cleanup and synchronous Drop paths.
-    pub(crate) route_incarnation: Arc<RouteIncarnationSignal>,
+    pub route_incarnation: Arc<RouteIncarnationSignal>,
     /// Shared with the owning protocol session. A successful SM takeover sets
     /// this before removing the old route so the old connection's Drop cannot
     /// suspend/revoke the replacement stream or remove its MUC/caps state.
@@ -38,20 +38,20 @@ pub struct OnlineSession {
     /// Pending routes may reserve a cluster key, but no stanza delivery path
     /// may expose the transport before the authoritative database commit.
     pub routable: Arc<AtomicBool>,
-    pub sender: northstar_stream::outbound::OutboundSender,
+    pub sender: crate::outbound::OutboundSender,
     pub available: Arc<AtomicBool>,
     /// The protocol actor's exact available/unavailable epoch. Recovery
     /// replay must reject an unavailable/available ABA on this same route.
-    pub(crate) availability_generation: Arc<AtomicU64>,
+    pub availability_generation: Arc<AtomicU64>,
     /// External replay requests join the owning actor's transport-ordered,
     /// bounded post-action supervisor rather than spawning detached work.
-    pub(crate) post_actions: northstar_session_application::post_actions::PostActionHandle,
+    pub post_actions: northstar_session_application::post_actions::PostActionHandle,
     /// One recovery replay per exact route at a time; zero means idle.
-    pub(crate) recovery_replay_inflight_epoch: Arc<AtomicU64>,
+    pub recovery_replay_inflight_epoch: Arc<AtomicU64>,
     /// A completed PG claim pass is coalesced only for its own recovery epoch.
-    pub(crate) recovery_replay_completed_epoch: Arc<AtomicU64>,
+    pub recovery_replay_completed_epoch: Arc<AtomicU64>,
     /// Bind 2 MAM catch-up suppresses MAM-backed offline projections.
-    pub(crate) bind2_mam_catchup: bool,
+    pub bind2_mam_catchup: bool,
     /// Per-account/resource linearization boundary for MIX presence. Explicit
     /// presence, verified-caps fallback, transport cleanup and an exact SM
     /// replacement all share this gate, so a delayed side effect cannot
@@ -110,15 +110,15 @@ pub struct OnlineSession {
 }
 
 /// Only the state needed to transfer a live SM resource's presence epoch.
-pub(crate) struct SmPresenceEpoch {
-    pub(crate) gate: Arc<tokio::sync::Mutex<()>>,
-    pub(crate) fallback_suppressed: Arc<DashSet<String>>,
-    pub(crate) caps_generation: Arc<AtomicU64>,
+pub struct SmPresenceEpoch {
+    pub gate: Arc<tokio::sync::Mutex<()>>,
+    pub fallback_suppressed: Arc<DashSet<String>>,
+    pub caps_generation: Arc<AtomicU64>,
 }
 
 /// Result of one atomic local SM route-table inspection. Every value is owned
 /// before the caller can wait on a gate, durable claim or route-removal signal.
-pub(crate) enum SmStagedRouteClaim {
+pub enum SmStagedRouteClaim {
     Inserted,
     Conflict,
     AdoptPresenceEpoch(SmPresenceEpoch),
@@ -133,16 +133,16 @@ pub(crate) enum SmStagedRouteClaim {
 /// The revocation worker can only fence local routes. It cannot admit,
 /// replace, remove, or deliver through a session.
 #[derive(Clone)]
-pub(crate) struct AccountRevocationRoutes {
-    pub(crate) sessions: Arc<DashMap<String, OnlineSession>>,
+pub struct AccountRevocationRoutes {
+    pub sessions: Arc<DashMap<String, OnlineSession>>,
 }
 
 impl AccountRevocationRoutes {
-    pub(crate) fn new(sessions: Arc<DashMap<String, OnlineSession>>) -> Self {
+    pub fn new(sessions: Arc<DashMap<String, OnlineSession>>) -> Self {
         Self { sessions }
     }
 
-    pub(crate) fn revoke_in(
+    pub fn revoke_in(
         sessions: &DashMap<String, OnlineSession>,
         user_id: uuid::Uuid,
         bare_account_jid: &str,
@@ -167,7 +167,7 @@ impl AccountRevocationRoutes {
         revoked
     }
 
-    pub(crate) fn revoke(
+    pub fn revoke(
         &self,
         user_id: uuid::Uuid,
         bare_account_jid: &str,
@@ -181,7 +181,7 @@ impl AccountRevocationRoutes {
         )
     }
 
-    pub(crate) fn fence_all(&self) {
+    pub fn fence_all(&self) {
         for session in self.sessions.iter_mut() {
             session.routable.store(false, Ordering::Release);
             session.disconnect.cancel();

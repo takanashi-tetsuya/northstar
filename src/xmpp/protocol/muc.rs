@@ -6,39 +6,19 @@
 use super::{Action, ProtocolSession};
 use crate::state::AppState;
 use crate::xmpp::frame_execution::Stage;
-use crate::xmpp::local_routes::muc::MucOccupant;
-use crate::xmpp::local_routes::session::OnlineSession;
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_muc_xmpp::muc as handlers;
-use northstar_muc_xmpp::ports::{
-    MucAction, MucFrameStage, MucLocalSession, MucSession, MucSessionUser,
-};
+use northstar_muc_xmpp::ports::{MucAction, MucFrameStage, MucSession, MucSessionUser};
 use northstar_room_application::discussion;
 use northstar_session_core::JoinedMucMembership;
+use northstar_stream::local_routes::muc::MucOccupant;
 use northstar_stream::outbound::OutboundSender;
 use roxmltree::Node;
-use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
 #[cfg(test)]
 pub(crate) mod saved_stage4;
-
-impl MucLocalSession for OnlineSession {
-    type Outbound = OutboundSender;
-
-    fn sender(&self) -> &OutboundSender {
-        &self.sender
-    }
-
-    fn priority(&self) -> i16 {
-        self.priority.load(Ordering::Relaxed)
-    }
-
-    fn is_available(&self) -> bool {
-        self.available.load(Ordering::Relaxed)
-    }
-}
 
 impl MucSession for ProtocolSession {
     type Host = AppState;

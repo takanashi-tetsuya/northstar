@@ -10,46 +10,23 @@ use crate::state::mix_iq_relay::MixIqRelayRoute;
 use crate::state::mix_outbox::MixOutboxContext;
 use crate::state::AppState;
 use crate::xmpp::frame_execution::{SessionExecutions, Stage};
-use crate::xmpp::local_routes::session::OnlineSession;
 use anyhow::Result;
 use dashmap::DashSet;
 use northstar_mix_xmpp::ports::{
-    MixAction, MixFrameObserver, MixFrameStage, MixHost, MixLocalSession, MixOutboxPort,
-    MixSession, MixSessionUser,
+    MixAction, MixFrameObserver, MixFrameStage, MixHost, MixOutboxPort, MixSession, MixSessionUser,
 };
 use northstar_room_application::mix_service::{foreground, MixService};
 use northstar_room_core::mix::{MixSessionCapability, CORE_NS, PAM_NS};
 use northstar_room_core::mix_iq_relay::MixIqRelayIndex;
 use northstar_roster_core::RosterChange;
-use northstar_stream::outbound::OutboundSender;
+use northstar_stream::local_routes::session::OnlineSession;
 use roxmltree::Node;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[cfg(test)]
 pub(crate) mod stage4_saved;
-
-impl MixLocalSession for OnlineSession {
-    type Outbound = OutboundSender;
-
-    fn sender(&self) -> &OutboundSender {
-        &self.sender
-    }
-
-    fn disconnect(&self) -> &CancellationToken {
-        &self.disconnect
-    }
-
-    fn user_id(&self) -> Uuid {
-        self.user_id
-    }
-
-    fn is_available(&self) -> bool {
-        self.available.load(Ordering::Relaxed)
-    }
-}
 
 impl MixFrameObserver for SessionExecutions {
     fn enter(&self, stage: MixFrameStage) {
@@ -256,10 +233,6 @@ impl ProtocolSession {
 }
 
 #[cfg(test)]
-use crate::xmpp::local_routes::session_table::{
-    mix_presence_epoch_is_current, mix_presence_fallback_is_suppressed,
-};
-#[cfg(test)]
 use futures::{future::BoxFuture, stream::FuturesUnordered};
 #[cfg(test)]
 use northstar_mix_xmpp::{
@@ -277,6 +250,10 @@ use northstar_room_application::mix_service::{
 };
 #[cfg(test)]
 use northstar_room_core::mix_iq_relay::MixIqRelayStage;
+#[cfg(test)]
+use northstar_stream::local_routes::session_table::{
+    mix_presence_epoch_is_current, mix_presence_fallback_is_suppressed,
+};
 #[cfg(test)]
 use northstar_xmpp_types::jid::CanonicalJid;
 #[cfg(test)]

@@ -36,7 +36,7 @@ pub(crate) struct ClusterMucDeparture {
 impl ClusterMucDeparture {
     pub(crate) async fn publish_local_departure(
         &self,
-        departed: &crate::xmpp::local_routes::muc::MucOccupant,
+        departed: &northstar_stream::local_routes::muc::MucOccupant,
         was_last: bool,
     ) -> Result<()> {
         self.projection

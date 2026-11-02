@@ -633,7 +633,7 @@ impl ProtocolSession {
         let available = Arc::new(AtomicBool::new(false));
         let locally_reserved = self.state.try_stage_bound_session(
             key.clone(),
-            crate::xmpp::local_routes::session::OnlineSession {
+            northstar_stream::local_routes::session::OnlineSession {
                 user_id: user.id,
                 auth_generation: user.auth_generation,
                 user_agent_epoch: None,

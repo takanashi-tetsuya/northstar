@@ -9,17 +9,17 @@ use northstar_room_application::muc_service::SerializableMucOccupant;
 use std::sync::Arc;
 use uuid::Uuid;
 
-pub(crate) struct SmTeardownLocalEffects {
-    pub(crate) occupants: Arc<DashMap<String, MucOccupant>>,
-    pub(crate) suspended_muc_sessions: Arc<DashMap<Uuid, Arc<SuspendedMucEndpoint>>>,
+pub struct SmTeardownLocalEffects {
+    pub occupants: Arc<DashMap<String, MucOccupant>>,
+    pub suspended_muc_sessions: Arc<DashMap<Uuid, Arc<SuspendedMucEndpoint>>>,
 }
 
 impl SmTeardownLocalEffects {
-    pub(crate) fn finish_suspended_session(&self, sm_session_id: Uuid) {
+    pub fn finish_suspended_session(&self, sm_session_id: Uuid) {
         self.suspended_muc_sessions.remove(&sm_session_id);
     }
 
-    pub(crate) fn remove_exact_suspended_occupant(
+    pub fn remove_exact_suspended_occupant(
         &self,
         sm_session_id: Uuid,
         occupant: &SerializableMucOccupant,
@@ -32,7 +32,7 @@ impl SmTeardownLocalEffects {
             .is_some()
     }
 
-    pub(crate) fn room_occupants(&self, room_jid: &str) -> Vec<(String, MucOccupant)> {
+    pub fn room_occupants(&self, room_jid: &str) -> Vec<(String, MucOccupant)> {
         let Ok(room_jid) = northstar_xmpp_types::jid::canonicalize_bare(room_jid) else {
             return Vec::new();
         };

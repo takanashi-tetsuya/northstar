@@ -22,6 +22,7 @@ use northstar_room_core::occupancy::{
     MucRoleChange, SerializableMucOccupant,
 };
 use northstar_session_core::JoinedMucMembership;
+use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::outbound::OutboundSender;
 use std::{collections::HashMap, future::Future};
 use tokio::sync::mpsc::error::TrySendError;
@@ -453,5 +454,21 @@ impl MucOutbound for OutboundSender {
         delivery: DurableDelivery,
     ) -> Result<(), TrySendError<String>> {
         OutboundSender::try_send_durable(self, stanza, delivery)
+    }
+}
+
+impl MucLocalSession for OnlineSession {
+    type Outbound = OutboundSender;
+
+    fn sender(&self) -> &OutboundSender {
+        &self.sender
+    }
+
+    fn priority(&self) -> i16 {
+        self.priority.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn is_available(&self) -> bool {
+        self.available.load(std::sync::atomic::Ordering::Relaxed)
     }
 }

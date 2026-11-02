@@ -1,9 +1,9 @@
 //! Exact suspended-MUC teardown after durable session authority is established.
 
 use crate::cluster::ClusterSmMucTeardownProjection;
-use crate::xmpp::local_routes::sm_teardown::SmTeardownLocalEffects;
 use northstar_room_application::muc_service::SerializableMucOccupant;
 use northstar_room_application::sm_teardown_muc::SmTeardownMucService;
+use northstar_stream::local_routes::sm_teardown::SmTeardownLocalEffects;
 use northstar_workflows::sm_teardown_muc_repository::PostgresSmTeardownMucRepository;
 use northstar_xmpp_types::jid_text::localpart;
 

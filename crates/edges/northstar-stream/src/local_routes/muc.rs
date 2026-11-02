@@ -1,7 +1,7 @@
 //! Local MUC occupant records, their endpoints and suspended SM endpoint buffers.
 
+use crate::outbound::OutboundSender;
 use northstar_room_core::occupancy;
-use northstar_stream::outbound::OutboundSender;
 use std::collections::VecDeque;
 
 pub type MucOccupant = occupancy::MucOccupant<OutboundSender, SuspendedMucEndpoint>;
@@ -14,48 +14,48 @@ pub struct SuspendedMucEndpoint {
     /// this mutex through `try_send`, while disconnect changes Live to
     /// Transitioning under the same mutex.  Consequently no sender can observe
     /// the old transport after suspension has begun.
-    pub(crate) route: std::sync::Mutex<SuspendedMucRoute>,
-    pub(crate) buffer: tokio::sync::Mutex<SuspendedMucBuffer>,
-    pub(crate) changed: tokio::sync::Notify,
+    pub route: std::sync::Mutex<SuspendedMucRoute>,
+    pub buffer: tokio::sync::Mutex<SuspendedMucBuffer>,
+    pub changed: tokio::sync::Notify,
     /// Shared actual-byte lease for the durable stream plus its process-local
     /// MUC suffix. Clones across room occupants reference one reservation.
-    pub(crate) sm_capacity:
+    pub sm_capacity:
         std::sync::Mutex<Option<northstar_session_application::sm_capacity::SmCapacityLease>>,
 }
 
 #[derive(Clone)]
-pub(crate) enum SuspendedMucRoute {
-    Live(northstar_stream::outbound::OutboundSender),
+pub enum SuspendedMucRoute {
+    Live(crate::outbound::OutboundSender),
     /// A short synchronous hand-off. Deliveries wait rather than falling back
     /// to a stale occupant-local sender.
     Transitioning,
     Suspended,
 }
 
-pub(crate) struct SuspendedMucBuffer {
-    pub(crate) phase: SuspendedMucPhase,
+pub struct SuspendedMucBuffer {
+    pub phase: SuspendedMucPhase,
     /// True only when the exact snapshot used by a committed-or-ambiguous SM
     /// transaction already contains this buffer's suffix. Keeping ownership
     /// separate from the delivery phase preserves it across Sealed->Waiting
     /// resume races without making an error state writable.
-    pub(crate) snapshot_owned: bool,
+    pub snapshot_owned: bool,
     /// Already-sequenced SM traffic consumes the same stanza and byte budget
     /// as this volatile suffix.  Charging it here prevents a disconnect with
     /// a nearly-full unacked queue from opening a second independent queue.
-    pub(crate) base_stanzas: usize,
-    pub(crate) base_bytes: usize,
-    pub(crate) bytes: usize,
-    pub(crate) stanzas: VecDeque<SuspendedMucStanza>,
+    pub base_stanzas: usize,
+    pub base_bytes: usize,
+    pub bytes: usize,
+    pub stanzas: VecDeque<SuspendedMucStanza>,
 }
 
 #[derive(Clone)]
-pub(crate) struct SuspendedMucStanza {
-    pub(crate) source_id: uuid::Uuid,
-    pub(crate) xml: String,
+pub struct SuspendedMucStanza {
+    pub source_id: uuid::Uuid,
+    pub xml: String,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum SuspendedMucPhase {
+pub enum SuspendedMucPhase {
     /// The route mutex owns the live sender; the suspended queue is empty.
     Dormant,
     /// Short synchronous hand-off from the old live route to the durable SM
@@ -84,7 +84,7 @@ pub(crate) enum SuspendedMucPhase {
 }
 
 impl SuspendedMucBuffer {
-    pub(crate) fn enqueue_volatile(
+    pub fn enqueue_volatile(
         &mut self,
         stanza: String,
         max_stanzas: usize,
@@ -119,7 +119,7 @@ impl SuspendedMucBuffer {
     /// Remove only a stanza whose next owner has already accepted it.  Using
     /// the actual front length (rather than clearing/saturating the counter)
     /// keeps the byte bound exact after a first or mid-drain failure.
-    pub(crate) fn commit_front(&mut self) {
+    pub fn commit_front(&mut self) {
         let stanza = self
             .stanzas
             .pop_front()
@@ -132,7 +132,7 @@ impl SuspendedMucBuffer {
 }
 
 impl SuspendedMucEndpoint {
-    pub(crate) fn try_send_live_write_notification(
+    pub fn try_send_live_write_notification(
         &self,
         stanza: String,
         receipt: tokio::sync::mpsc::UnboundedSender<()>,
@@ -155,15 +155,12 @@ impl SuspendedMucEndpoint {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new(sm_session_id: uuid::Uuid) -> Self {
         Self::new_collecting(sm_session_id, 0, 0)
     }
 
-    pub(crate) fn new_live(
-        sm_session_id: uuid::Uuid,
-        sender: northstar_stream::outbound::OutboundSender,
-    ) -> Self {
+    pub fn new_live(sm_session_id: uuid::Uuid, sender: crate::outbound::OutboundSender) -> Self {
         Self {
             sm_session_id,
             route: std::sync::Mutex::new(SuspendedMucRoute::Live(sender)),
@@ -180,7 +177,7 @@ impl SuspendedMucEndpoint {
         }
     }
 
-    pub(crate) fn new_collecting(
+    pub fn new_collecting(
         sm_session_id: uuid::Uuid,
         base_stanzas: usize,
         base_bytes: usize,
@@ -201,11 +198,7 @@ impl SuspendedMucEndpoint {
         }
     }
 
-    pub(crate) fn new_reserved(
-        sm_session_id: uuid::Uuid,
-        base_stanzas: usize,
-        base_bytes: usize,
-    ) -> Self {
+    pub fn new_reserved(sm_session_id: uuid::Uuid, base_stanzas: usize, base_bytes: usize) -> Self {
         Self {
             sm_session_id,
             route: std::sync::Mutex::new(SuspendedMucRoute::Suspended),
@@ -222,7 +215,7 @@ impl SuspendedMucEndpoint {
         }
     }
 
-    pub(crate) fn new_durable(sm_session_id: uuid::Uuid) -> Self {
+    pub fn new_durable(sm_session_id: uuid::Uuid) -> Self {
         Self {
             sm_session_id,
             route: std::sync::Mutex::new(SuspendedMucRoute::Suspended),
@@ -240,12 +233,12 @@ impl SuspendedMucEndpoint {
     }
 }
 
-pub(crate) struct RestoreLocalMucOccupantsRequest<'a> {
-    pub(crate) user: &'a northstar_auth_application::authentication::AuthenticatedAccount,
-    pub(crate) full_jid: &'a str,
-    pub(crate) connection_id: uuid::Uuid,
-    pub(crate) sm_session_id: uuid::Uuid,
-    pub(crate) memberships: &'a [northstar_session_application::sm::SmMucMembership],
-    pub(crate) base_stanzas: usize,
-    pub(crate) base_bytes: usize,
+pub struct RestoreLocalMucOccupantsRequest<'a> {
+    pub user: &'a northstar_auth_application::authentication::AuthenticatedAccount,
+    pub full_jid: &'a str,
+    pub connection_id: uuid::Uuid,
+    pub sm_session_id: uuid::Uuid,
+    pub memberships: &'a [northstar_session_application::sm::SmMucMembership],
+    pub base_stanzas: usize,
+    pub base_bytes: usize,
 }

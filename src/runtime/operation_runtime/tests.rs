@@ -1,9 +1,9 @@
 //! Unit tests for the durable operation worker runtime.
 
 use super::*;
-use crate::xmpp::local_routes::muc::{MucOccupant, MucOccupantEndpoint};
-use crate::xmpp::local_routes::muc_table::remove_local_muc_occupant_exact_from;
 use northstar_operations_application::operation_muc_destroy::MucDestroyAudience;
+use northstar_stream::local_routes::muc::{MucOccupant, MucOccupantEndpoint};
+use northstar_stream::local_routes::muc_table::remove_local_muc_occupant_exact_from;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::sync::Notify;
@@ -13,8 +13,8 @@ fn session(
     generation: i64,
     connection_id: Uuid,
     sender: tokio::sync::mpsc::Sender<northstar_stream::outbound::OutboundItem>,
-) -> crate::xmpp::local_routes::session::OnlineSession {
-    crate::xmpp::local_routes::session::OnlineSession {
+) -> northstar_stream::local_routes::session::OnlineSession {
+    northstar_stream::local_routes::session::OnlineSession {
         user_id,
         auth_generation: generation,
         user_agent_epoch: None,

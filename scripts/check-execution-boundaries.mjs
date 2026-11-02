@@ -42,7 +42,7 @@ const files = {
   mixWorker: 'crates/contexts/room/northstar-mix-xmpp/src/worker.rs',
   mixArchive: 'crates/contexts/workflows/northstar-workflows/src/mix_archive.rs',
   state: 'src/state.rs',
-  sessionTable: 'src/xmpp/local_routes/session_table.rs',
+  sessionTable: 'crates/edges/northstar-stream/src/local_routes/session_table.rs',
   mixOutboxState: 'src/state/mix_outbox.rs',
   nativeWrite: 'src/xmpp/direct_delivery.rs',
   nativeCore: 'crates/contexts/message/northstar-delivery-core/src/native_write.rs',
@@ -1113,10 +1113,10 @@ export function verifyRouteHelperBoundaries({ state, sessionTable, mixOutboxStat
       `route helper ${name} must retain its unconditioned production signature`);
     return normalize(code.slice(opening + 1, closing(code, opening)));
   }
-  requireBoundary(item(sessionTableCode, "publish_user_agent_epoch_if_current_in", "pub(crate)fnpublish_user_agent_epoch_if_current_in(sessions:&DashMap<String,OnlineSession>,key:&str,connection_id:uuid::Uuid,user_id:uuid::Uuid,auth_generation:i64,lifecycle:&Arc<AtomicU8>,user_agent_epoch:Option<i64>)->bool", "") ===
+  requireBoundary(item(sessionTableCode, "publish_user_agent_epoch_if_current_in", "pubfnpublish_user_agent_epoch_if_current_in(sessions:&DashMap<String,OnlineSession>,key:&str,connection_id:uuid::Uuid,user_id:uuid::Uuid,auth_generation:i64,lifecycle:&Arc<AtomicU8>,user_agent_epoch:Option<i64>)->bool", "") ===
     "letSome(mutsession)=sessions.get_mut(key)else{returnfalse;};ifsession.connection_id!=connection_id||session.user_id!=user_id||session.auth_generation!=auth_generation||!Arc::ptr_eq(&session.lifecycle,lifecycle)||session.disconnect.is_cancelled()||session.lifecycle.load(Ordering::Acquire)!=0{returnfalse;}session.user_agent_epoch=user_agent_epoch;true",
     "route helper publish_user_agent_epoch_if_current_in must preserve exact-key write guard, identity/pointer/lifecycle rejection and actual Option assignment");
-  requireBoundary(item(sessionTableCode, "activate_session_if_current_in", "pub(crate)fnactivate_session_if_current_in(sessions:&DashMap<String,OnlineSession>,full_jid:&str,connection_id:uuid::Uuid,user_id:uuid::Uuid,auth_generation:i64,lifecycle:&Arc<AtomicU8>,disconnect:&CancellationToken)->bool", "") ===
+  requireBoundary(item(sessionTableCode, "activate_session_if_current_in", "pubfnactivate_session_if_current_in(sessions:&DashMap<String,OnlineSession>,full_jid:&str,connection_id:uuid::Uuid,user_id:uuid::Uuid,auth_generation:i64,lifecycle:&Arc<AtomicU8>,disconnect:&CancellationToken)->bool", "") ===
     "letSome(session)=sessions.get_mut(full_jid)else{returnfalse;};if!staged_route_activation_allowed(StagedRouteActivationCheck{session:StagedRouteIdentity{connection_id:session.connection_id,user_id:session.user_id,auth_generation:session.auth_generation},expected:StagedRouteIdentity{connection_id,user_id,auth_generation},same_lifecycle:Arc::ptr_eq(&session.lifecycle,lifecycle),lifecycle_state:session.lifecycle.load(Ordering::Acquire),session_cancelled:session.disconnect.is_cancelled(),owner_cancelled:disconnect.is_cancelled()}){returnfalse;}session.routable.store(true,Ordering::Release);ifsession.lifecycle.load(Ordering::Acquire)!=0||session.disconnect.is_cancelled()||disconnect.is_cancelled(){session.routable.store(false,Ordering::Release);returnfalse;}true",
     "route helper activate_session_if_current_in must preserve write guard, real predicate inputs, release true-store and post-store recheck/rollback");
   requireBoundary(item(capsCode, "session_mix_capability_in", "pub(crate)fnsession_mix_capability_in(sessions:&DashMap<String,OnlineSession>,caps_by_jid:&CapsResourceIndex,pending_caps:&PendingCapsIndex,full_jid:&str)->MixSessionCapability", "") ===

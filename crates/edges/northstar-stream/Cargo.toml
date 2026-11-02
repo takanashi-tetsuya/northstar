@@ -13,9 +13,16 @@ test-support = []
 
 [dependencies]
 anyhow = "1.0"
+dashmap = "6.1"
+northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application" }
 northstar-delivery-core = { path = "../../contexts/message/northstar-delivery-core" }
 northstar-message-core = { path = "../../contexts/message/northstar-message-core" }
+northstar-room-application = { path = "../../contexts/room/northstar-room-application" }
+northstar-room-core = { path = "../../contexts/room/northstar-room-core" }
+northstar-roster-core = { path = "../../contexts/roster/northstar-roster-core" }
 northstar-session-application = { path = "../../contexts/session/northstar-session-application" }
+northstar-session-core = { path = "../../contexts/session/northstar-session-core" }
+northstar-xmpp-types = { path = "../../kernel/northstar-xmpp-types" }
 roxmltree = "0.20"
 tokio = { version = "1.43", features = ["sync"] }
 tokio-util = "0.7"

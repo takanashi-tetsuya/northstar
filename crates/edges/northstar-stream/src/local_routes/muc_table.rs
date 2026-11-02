@@ -10,7 +10,7 @@ use northstar_room_core::occupancy::{
 };
 use std::sync::Arc;
 
-pub(crate) fn remove_local_muc_occupant_exact_from(
+pub fn remove_local_muc_occupant_exact_from(
     occupants: &DashMap<String, MucOccupant>,
     identity: LocalMucOccupantIdentity<'_>,
 ) -> Option<MucOccupant> {
@@ -32,7 +32,7 @@ pub(crate) fn remove_local_muc_occupant_exact_from(
         .map(|(_, occupant)| occupant)
 }
 
-pub(crate) fn with_local_muc_occupant_exact<R>(
+pub fn with_local_muc_occupant_exact<R>(
     occupants: &DashMap<String, MucOccupant>,
     identity: LocalMucOccupantIdentity<'_>,
     update: impl FnOnce(&mut MucOccupant) -> R,
@@ -56,7 +56,7 @@ pub(crate) fn with_local_muc_occupant_exact<R>(
     Some(update(&mut occupant))
 }
 
-pub(crate) fn set_local_muc_affiliation_exact_in(
+pub fn set_local_muc_affiliation_exact_in(
     occupants: &DashMap<String, MucOccupant>,
     identity: LocalMucOccupantIdentity<'_>,
     affiliation: &str,
@@ -84,7 +84,7 @@ pub(crate) fn set_local_muc_affiliation_exact_in(
     .flatten()
 }
 
-pub(crate) fn set_local_muc_role_exact_in(
+pub fn set_local_muc_role_exact_in(
     occupants: &DashMap<String, MucOccupant>,
     identity: LocalMucOccupantIdentity<'_>,
     expected_role: &str,
@@ -104,7 +104,7 @@ pub(crate) fn set_local_muc_role_exact_in(
     .flatten()
 }
 
-pub(crate) fn refresh_local_muc_policy_exact_in(
+pub fn refresh_local_muc_policy_exact_in(
     occupants: &DashMap<String, MucOccupant>,
     identity: LocalMucOccupantIdentity<'_>,
     moderated: Option<bool>,
@@ -132,7 +132,7 @@ pub(crate) fn refresh_local_muc_policy_exact_in(
     })
 }
 
-pub(crate) fn muc_presence_endpoint_matches(current: &MucOccupant, prepared: &MucOccupant) -> bool {
+pub fn muc_presence_endpoint_matches(current: &MucOccupant, prepared: &MucOccupant) -> bool {
     match (&current.endpoint, &prepared.endpoint) {
         (MucOccupantEndpoint::Local(_), MucOccupantEndpoint::Local(_)) => true,
         (
@@ -152,7 +152,7 @@ pub(crate) fn muc_presence_endpoint_matches(current: &MucOccupant, prepared: &Mu
     }
 }
 
-pub(crate) fn refresh_local_muc_presence_exact_in(
+pub fn refresh_local_muc_presence_exact_in(
     occupants: &DashMap<String, MucOccupant>,
     prepared: &MucOccupant,
     apply_policy: bool,
@@ -172,7 +172,7 @@ pub(crate) fn refresh_local_muc_presence_exact_in(
     .flatten()
 }
 
-pub(crate) fn rebind_local_federated_muc_occupant_exact_in(
+pub fn rebind_local_federated_muc_occupant_exact_in(
     occupants: &DashMap<String, MucOccupant>,
     old: &MucOccupant,
     new_connection_id: uuid::Uuid,
@@ -201,7 +201,7 @@ pub(crate) fn rebind_local_federated_muc_occupant_exact_in(
     .flatten()
 }
 
-pub(crate) fn publish_local_muc_join_if_vacant_in(
+pub fn publish_local_muc_join_if_vacant_in(
     occupants: &DashMap<String, MucOccupant>,
     joining: &MucOccupant,
 ) -> LocalMucJoinPublication {
@@ -234,7 +234,7 @@ pub(crate) fn publish_local_muc_join_if_vacant_in(
     }
 }
 
-pub(crate) fn move_local_muc_nickname_exact_in(
+pub fn move_local_muc_nickname_exact_in(
     occupants: &DashMap<String, MucOccupant>,
     old: LocalMucOccupantIdentity<'_>,
     renamed: &MucOccupant,
@@ -296,7 +296,7 @@ pub(crate) fn move_local_muc_nickname_exact_in(
     }
 }
 
-pub(crate) fn remove_live_muc_membership_in(
+pub fn remove_live_muc_membership_in(
     sessions: &DashMap<String, OnlineSession>,
     occupant: &SerializableMucOccupant,
 ) -> bool {
@@ -319,7 +319,7 @@ pub(crate) fn remove_live_muc_membership_in(
         .is_some()
 }
 
-pub(crate) fn local_cluster_muc_projection_snapshot_in(
+pub fn local_cluster_muc_projection_snapshot_in(
     occupants: &DashMap<String, MucOccupant>,
 ) -> Vec<MucOccupant> {
     occupants

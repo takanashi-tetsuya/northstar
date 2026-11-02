@@ -17,23 +17,22 @@ use tokio_util::sync::CancellationToken;
 /// A detached view of a local route for PostgreSQL credential maintenance.
 /// Pending bind and resume routes are included so they can be cancelled before
 /// their final activation check; no map guard survives the database read.
-pub(crate) struct LocalSessionAuthoritySnapshot {
-    pub(crate) full_jid: String,
-    pub(crate) authority:
-        northstar_session_application::session_authority_sweep::SessionAuthoritySnapshot,
-    pub(crate) disconnect: CancellationToken,
+pub struct LocalSessionAuthoritySnapshot {
+    pub full_jid: String,
+    pub authority: northstar_session_application::session_authority_sweep::SessionAuthoritySnapshot,
+    pub disconnect: CancellationToken,
 }
 
 /// Captured only after instance authority is refreshed, immediately before
 /// Redis route leases are renewed. This is deliberately a second snapshot.
-pub(crate) struct LocalSessionLeaseSnapshot {
-    pub(crate) full_jid: String,
-    pub(crate) activity_age_seconds: u64,
-    pub(crate) connection_id: uuid::Uuid,
-    pub(crate) disconnect: CancellationToken,
+pub struct LocalSessionLeaseSnapshot {
+    pub full_jid: String,
+    pub activity_age_seconds: u64,
+    pub connection_id: uuid::Uuid,
+    pub disconnect: CancellationToken,
 }
 
-pub(crate) fn local_session_authority_snapshots_in(
+pub fn local_session_authority_snapshots_in(
     sessions: &DashMap<String, OnlineSession>,
 ) -> Vec<LocalSessionAuthoritySnapshot> {
     sessions
@@ -52,7 +51,7 @@ pub(crate) fn local_session_authority_snapshots_in(
         .collect()
 }
 
-pub(crate) fn local_session_lease_snapshots_in(
+pub fn local_session_lease_snapshots_in(
     sessions: &DashMap<String, OnlineSession>,
 ) -> Vec<LocalSessionLeaseSnapshot> {
     sessions
@@ -74,7 +73,7 @@ pub(crate) fn local_session_lease_snapshots_in(
         .collect()
 }
 
-pub(crate) fn try_stage_bound_session_in(
+pub fn try_stage_bound_session_in(
     sessions: &DashMap<String, OnlineSession>,
     key: String,
     session: OnlineSession,
@@ -89,7 +88,7 @@ pub(crate) fn try_stage_bound_session_in(
     }
 }
 
-pub(crate) fn publish_user_agent_epoch_if_current_in(
+pub fn publish_user_agent_epoch_if_current_in(
     sessions: &DashMap<String, OnlineSession>,
     key: &str,
     connection_id: uuid::Uuid,
@@ -114,7 +113,7 @@ pub(crate) fn publish_user_agent_epoch_if_current_in(
     true
 }
 
-pub(crate) fn activate_session_if_current_in(
+pub fn activate_session_if_current_in(
     sessions: &DashMap<String, OnlineSession>,
     full_jid: &str,
     connection_id: uuid::Uuid,
@@ -155,7 +154,7 @@ pub(crate) fn activate_session_if_current_in(
     true
 }
 
-pub(crate) fn stage_sm_resumed_session_in(
+pub fn stage_sm_resumed_session_in(
     sessions: &DashMap<String, OnlineSession>,
     key: String,
     candidate: OnlineSession,
@@ -200,7 +199,7 @@ pub(crate) fn stage_sm_resumed_session_in(
     }
 }
 
-pub(crate) enum LocalSessionFence {
+pub enum LocalSessionFence {
     Instance(uuid::Uuid),
     Sm(uuid::Uuid),
     Admin {
@@ -210,7 +209,7 @@ pub(crate) enum LocalSessionFence {
     },
 }
 
-pub(crate) fn local_caps_route_epoch_matches(
+pub fn local_caps_route_epoch_matches(
     current_connection_id: uuid::Uuid,
     current_generation: u64,
     routable: bool,
@@ -227,7 +226,7 @@ pub(crate) fn local_caps_route_epoch_matches(
         && same_gate
 }
 
-pub(crate) fn mix_presence_epoch_is_current(
+pub fn mix_presence_epoch_is_current(
     current_connection_id: uuid::Uuid,
     expected_connection_id: uuid::Uuid,
     current_caps_generation: u64,
@@ -243,14 +242,14 @@ pub(crate) fn mix_presence_epoch_is_current(
         && same_gate
 }
 
-pub(crate) fn mix_presence_fallback_is_suppressed(
+pub fn mix_presence_fallback_is_suppressed(
     suppressed: &DashSet<String>,
     channel_jid: &str,
 ) -> bool {
     suppressed.contains("*") || suppressed.contains(channel_jid)
 }
 
-pub(crate) fn matching_sm_route(
+pub fn matching_sm_route(
     existing_user: uuid::Uuid,
     existing_sm_id: Option<uuid::Uuid>,
     claimant_user: uuid::Uuid,
@@ -259,7 +258,7 @@ pub(crate) fn matching_sm_route(
     existing_user == claimant_user && existing_sm_id == Some(claimed_sm_id)
 }
 
-pub(crate) fn fence_local_session_in(
+pub fn fence_local_session_in(
     sessions: &DashMap<String, OnlineSession>,
     full_jid: &str,
     fence: LocalSessionFence,
@@ -287,7 +286,7 @@ pub(crate) fn fence_local_session_in(
     })
 }
 
-pub(crate) fn fence_local_session_if(
+pub fn fence_local_session_if(
     sessions: &DashMap<String, OnlineSession>,
     full_jid: &str,
     matches: impl FnOnce(&OnlineSession) -> bool,
@@ -304,8 +303,8 @@ pub(crate) fn fence_local_session_if(
     true
 }
 
-#[cfg(test)]
-pub(crate) fn cancel_local_session_if_connection_in(
+#[cfg(any(test, feature = "test-support"))]
+pub fn cancel_local_session_if_connection_in(
     sessions: &DashMap<String, OnlineSession>,
     full_jid: &str,
     connection_id: uuid::Uuid,
@@ -321,12 +320,12 @@ pub(crate) fn cancel_local_session_if_connection_in(
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum SessionLookup {
+pub enum SessionLookup {
     Bare(String),
     Full(String),
 }
 
-pub(crate) fn session_lookup(jid: &str) -> Option<SessionLookup> {
+pub fn session_lookup(jid: &str) -> Option<SessionLookup> {
     let jid = northstar_xmpp_types::jid::CanonicalJid::parse(jid).ok()?;
     Some(if jid.resourcepart().is_some() {
         SessionLookup::Full(jid.to_string())
@@ -335,7 +334,7 @@ pub(crate) fn session_lookup(jid: &str) -> Option<SessionLookup> {
     })
 }
 
-pub(crate) fn session_entries_for_in(
+pub fn session_entries_for_in(
     sessions: &DashMap<String, OnlineSession>,
     jid: &str,
 ) -> Vec<(String, OnlineSession)> {

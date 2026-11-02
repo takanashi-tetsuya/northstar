@@ -3,7 +3,6 @@ pub(crate) mod capabilities;
 mod direct_delivery;
 pub(crate) mod frame_execution;
 pub(crate) mod framing;
-pub(crate) mod local_routes;
 pub(crate) mod muc_delivery;
 pub(crate) mod protocol;
 #[cfg(test)]

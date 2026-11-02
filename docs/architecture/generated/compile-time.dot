@@ -1542,10 +1542,17 @@ digraph compile_time {
   "northstar-session-core" -> "serde";
   "northstar-session-core" -> "uuid";
   "northstar-stream" -> "anyhow";
+  "northstar-stream" -> "dashmap";
   "northstar-stream" -> "futures";
+  "northstar-stream" -> "northstar-auth-application";
   "northstar-stream" -> "northstar-delivery-core";
   "northstar-stream" -> "northstar-message-core";
+  "northstar-stream" -> "northstar-room-application";
+  "northstar-stream" -> "northstar-room-core";
+  "northstar-stream" -> "northstar-roster-core";
   "northstar-stream" -> "northstar-session-application";
+  "northstar-stream" -> "northstar-session-core";
+  "northstar-stream" -> "northstar-xmpp-types";
   "northstar-stream" -> "roxmltree";
   "northstar-stream" -> "tokio";
   "northstar-stream" -> "tokio-util";

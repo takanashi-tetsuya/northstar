@@ -7,8 +7,8 @@ use super::{
     sm_teardown_session::SmTeardownSessionEffects, AppState,
 };
 use crate::cluster::listener_sm_muc_teardown::ClusterListenerSmMucTeardown;
-use crate::xmpp::local_routes::sm_teardown::SmTeardownLocalEffects;
 use crate::{cluster::ClusterSmMucTeardown, db};
+use northstar_stream::local_routes::sm_teardown::SmTeardownLocalEffects;
 use std::collections::HashSet;
 
 pub(crate) struct SmTeardownRuntime {

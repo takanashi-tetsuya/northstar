@@ -2713,10 +2713,17 @@ name = "northstar-stream"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dashmap",
  "futures",
+ "northstar-auth-application",
  "northstar-delivery-core",
  "northstar-message-core",
+ "northstar-room-application",
+ "northstar-room-core",
+ "northstar-roster-core",
  "northstar-session-application",
+ "northstar-session-core",
+ "northstar-xmpp-types",
  "roxmltree",
  "tokio",
  "tokio-util",

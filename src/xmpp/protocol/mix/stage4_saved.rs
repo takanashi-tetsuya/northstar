@@ -134,7 +134,7 @@ impl WorkerCapture {
     fn issue_local(
         &self,
         local: &mix_worker::LocalRequest,
-        session: &crate::xmpp::local_routes::session::OnlineSession,
+        session: &northstar_stream::local_routes::session::OnlineSession,
     ) {
         let result = (|| {
             let mut state = self.dequeue.lock().unwrap_or_else(|e| e.into_inner());
@@ -158,7 +158,7 @@ impl WorkerCapture {
     fn handoff_ordinal(
         &self,
         local: &mix_worker::LocalRequest,
-        session: &crate::xmpp::local_routes::session::OnlineSession,
+        session: &northstar_stream::local_routes::session::OnlineSession,
     ) -> Option<u8> {
         let result = (|| {
             let mut state = self.dequeue.lock().unwrap_or_else(|e| e.into_inner());

@@ -1,7 +1,7 @@
 //! Builds the process-local SM teardown effects (`xmpp::local_routes::sm_teardown`).
 
 use super::AppState;
-use crate::xmpp::local_routes::sm_teardown::SmTeardownLocalEffects;
+use northstar_stream::local_routes::sm_teardown::SmTeardownLocalEffects;
 use std::sync::Arc;
 
 impl AppState {

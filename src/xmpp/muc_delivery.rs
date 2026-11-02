@@ -1,19 +1,17 @@
 //! Purpose-limited MUC delivery: privacy, SM handoff, federation, and exact endpoints.
 
-use crate::xmpp::local_routes::{
-    muc::{
-        MucOccupant, MucOccupantEndpoint, SuspendedMucEndpoint, SuspendedMucPhase,
-        SuspendedMucRoute, SuspendedMucStanza,
-    },
-    session::OnlineSession,
-    session_table::session_entries_for_in,
-    suspended_muc::muc_actor_identity_matches,
-};
 use crate::{db::muc_delivery_repository::PostgresMucDeliveryRepository, s2s::FederationRouter};
 use dashmap::DashMap;
 use northstar_room_application::cluster_muc_receipt_claim::ClusterMucReceiptClaimService;
 use northstar_room_application::muc_delivery::MucDeliveryRepository;
 use northstar_session_core::JoinedMucMembership;
+use northstar_stream::local_routes::muc::{
+    MucOccupant, MucOccupantEndpoint, SuspendedMucEndpoint, SuspendedMucPhase, SuspendedMucRoute,
+    SuspendedMucStanza,
+};
+use northstar_stream::local_routes::session::OnlineSession;
+use northstar_stream::local_routes::session_table::session_entries_for_in;
+use northstar_stream::local_routes::suspended_muc::muc_actor_identity_matches;
 use std::{sync::Arc, time::Duration};
 
 pub(crate) struct MucDeliveryContext {

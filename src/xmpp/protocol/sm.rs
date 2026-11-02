@@ -21,7 +21,7 @@ use std::{
 use zeroize::Zeroizing;
 
 #[cfg(test)]
-use crate::xmpp::local_routes::session_table::matching_sm_route;
+use northstar_stream::local_routes::session_table::matching_sm_route;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SmRouteTakeover {
@@ -638,7 +638,7 @@ impl ProtocolSession {
         loop {
             match self.state.stage_sm_resumed_session(
                 key.clone(),
-                crate::xmpp::local_routes::session::OnlineSession {
+                northstar_stream::local_routes::session::OnlineSession {
                     user_id: current_user.id,
                     auth_generation: current_user.auth_generation,
                     route_incarnation: northstar_session_application::RouteIncarnationSignal::new(
@@ -683,18 +683,18 @@ impl ProtocolSession {
                 claim.session_id,
                 &mix_presence_gate,
             ) {
-                crate::xmpp::local_routes::session::SmStagedRouteClaim::Inserted => {
+                northstar_stream::local_routes::session::SmStagedRouteClaim::Inserted => {
                     self.state.sm_session_telemetry().staged_route_installed();
                     break;
                 }
-                crate::xmpp::local_routes::session::SmStagedRouteClaim::Conflict => {
+                northstar_stream::local_routes::session::SmStagedRouteClaim::Conflict => {
                     self.state
                         .sm_service()
                         .release_claim(claim.session_id, claim.claim_token)
                         .await?;
                     return Ok((Action::Send(sm_failed("conflict")), None));
                 }
-                crate::xmpp::local_routes::session::SmStagedRouteClaim::AdoptPresenceEpoch(
+                northstar_stream::local_routes::session::SmStagedRouteClaim::AdoptPresenceEpoch(
                     epoch,
                 ) => {
                     drop(mix_presence_epoch);
@@ -725,7 +725,7 @@ impl ProtocolSession {
                     };
                     continue;
                 }
-                crate::xmpp::local_routes::session::SmStagedRouteClaim::Replace {
+                northstar_stream::local_routes::session::SmStagedRouteClaim::Replace {
                     connection_id: old_connection_id,
                     lifecycle: old_lifecycle,
                     disconnect: old_disconnect,
@@ -1111,7 +1111,7 @@ impl ProtocolSession {
         let restored_muc = self
             .state
             .restore_local_muc_occupants(
-                crate::xmpp::local_routes::muc::RestoreLocalMucOccupantsRequest {
+                northstar_stream::local_routes::muc::RestoreLocalMucOccupantsRequest {
                     user: &current_user,
                     full_jid: &key,
                     connection_id: self.connection_id,

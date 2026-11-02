@@ -1,16 +1,15 @@
 //! Test-only construction of the exact map/queue objects shared by auth and MIX.
 //! No AppState, SQL, workers, discovery or transport is constructed here.
 use super::{driver, map, observed, Recorder};
-use crate::{
-    stage4_replay as wire, state, xmpp::local_routes::session::OnlineSession,
-    xmpp::local_routes::session_table,
-};
+use crate::{stage4_replay as wire, state};
 use anyhow::{ensure, Result};
 use dashmap::DashMap;
 use northstar_protocol_runtime::caps::{
     CapsKey, CapsResourceIndex, PendingCapsIndex, VerifiedCapsSummary,
 };
 use northstar_session_core::LocalCapsEpoch;
+use northstar_stream::local_routes::session::OnlineSession;
+use northstar_stream::local_routes::session_table;
 use northstar_stream::outbound::{OutboundItem, OutboundSender};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},

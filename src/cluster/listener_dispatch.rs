@@ -1,9 +1,5 @@
 //! Local effects permitted after a cluster listener authenticates a command.
 
-use crate::xmpp::local_routes::{
-    session::{AccountRevocationRoutes, OnlineSession},
-    session_table::{fence_local_session_in, session_entries_for_in, LocalSessionFence},
-};
 use crate::{
     cluster::{
         ClusterListenerMucProjection, ClusterListenerPresenceRoutes, ClusterMucOutboxSignal,
@@ -13,6 +9,10 @@ use crate::{
 };
 use northstar_session_application::session_termination_authority::{
     SessionTerminationAuthority, SessionTerminationAuthorityService,
+};
+use northstar_stream::local_routes::session::{AccountRevocationRoutes, OnlineSession};
+use northstar_stream::local_routes::session_table::{
+    fence_local_session_in, session_entries_for_in, LocalSessionFence,
 };
 use uuid::Uuid;
 

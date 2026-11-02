@@ -575,16 +575,10 @@ impl AppState {
             Arc::clone(&registration_closed),
             federation.federation_write_policy.island_flag(),
         );
-        let omemo_recovery_poll_context = omemo_poll::OmemoRecoveryPollContext::new(
-            northstar_auth_application::omemo_recovery::OmemoRecoveryPollService::new(
-                northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository::new(
-                    omemo_recovery_poll_pool,
-                ),
-            ),
-            config.domain.clone(),
-            config.trusted_proxy_ips.clone(),
-            omemo_poll::OmemoRecoveryPollCounters::from_metrics(&metrics),
-        );
+        let omemo_recovery_poll_repository =
+            northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository::new(
+                omemo_recovery_poll_pool,
+            );
         let admin_mutations = northstar_workflows::admin_mutations::AdminMutationStore::new(
             pool.clone(),
             Arc::clone(&api_control),
@@ -604,6 +598,7 @@ impl AppState {
             fast_token_secret: &fast_token_secret,
             dummy_scram_secret,
             dummy_scram_iteration_profiles,
+            omemo_recovery_poll_repository,
         });
         let operations = OperationsModule::new(OperationsModuleParts {
             config: &config,
@@ -630,12 +625,6 @@ impl AppState {
         let state = Arc::new(Self {
             config,
             public_discovery_context,
-            omemo_recovery_service:
-                northstar_auth_application::omemo_recovery::OmemoRecoveryService::new(
-                    northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryRepository::new(
-                        pool.clone(),
-                    ),
-                ),
             pubsub,
             room,
             roster,
@@ -659,7 +648,6 @@ impl AppState {
             metrics,
             metrics_bearer_token,
             web_admin_gateway_token,
-            omemo_recovery_poll_context,
             durable_outbox_database_admission,
             upload,
             caps_cache: Arc::new(northstar_protocol_runtime::caps::CapsCacheIndex::new()),

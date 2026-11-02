@@ -28,6 +28,14 @@ pub(super) struct AuthModule {
     pub(super) registration_admin_service: RegistrationAdminContext,
     pub(super) session_admin_service: SessionAdminContext,
     pub(super) invitation_admin_service: InvitationAdminContext,
+    /// The authenticated OMEMO recovery transfer lifecycle.
+    pub(super) omemo_recovery_service:
+        northstar_auth_application::omemo_recovery::OmemoRecoveryService<
+            northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryRepository,
+        >,
+    /// The unauthenticated OMEMO recovery poll. Its repository holds a fail-closed,
+    /// read-only-sized pool, so a capability flood cannot consume the primary pool.
+    pub(super) omemo_recovery_poll_context: OmemoRecoveryPollContext,
 }
 
 /// What the auth context's services are built from.
@@ -45,6 +53,9 @@ pub(super) struct AuthModuleParts<'a> {
     pub(super) fast_token_secret: &'a Arc<Zeroizing<Vec<u8>>>,
     pub(super) dummy_scram_secret: Arc<Zeroizing<Vec<u8>>>,
     pub(super) dummy_scram_iteration_profiles: Vec<u32>,
+    /// The poll repository over the dedicated pool the composition root connects.
+    pub(super) omemo_recovery_poll_repository:
+        northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository,
 }
 
 impl AuthModule {
@@ -64,6 +75,7 @@ impl AuthModule {
             fast_token_secret,
             dummy_scram_secret,
             dummy_scram_iteration_profiles,
+            omemo_recovery_poll_repository,
         } = parts;
         let account_service = northstar_auth_application::account::AccountService::new(
             northstar_workflows::roster::RootAccountRepository::new(
@@ -167,6 +179,20 @@ impl AuthModule {
                     admin_mutations.clone(),
                 ),
             );
+        let omemo_recovery_service =
+            northstar_auth_application::omemo_recovery::OmemoRecoveryService::new(
+                northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryRepository::new(
+                    pool.clone(),
+                ),
+            );
+        let omemo_recovery_poll_context = omemo_poll::OmemoRecoveryPollContext::new(
+            northstar_auth_application::omemo_recovery::OmemoRecoveryPollService::new(
+                omemo_recovery_poll_repository,
+            ),
+            config.domain.clone(),
+            config.trusted_proxy_ips.clone(),
+            omemo_poll::OmemoRecoveryPollCounters::from_metrics(metrics),
+        );
         Self {
             passkey_service,
             account_service,
@@ -181,6 +207,8 @@ impl AuthModule {
             invitation_admin_service: crate::api::contexts::ServiceContext(
                 invitation_admin_service,
             ),
+            omemo_recovery_service,
+            omemo_recovery_poll_context,
         }
     }
 }

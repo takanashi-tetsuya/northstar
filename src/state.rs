@@ -234,7 +234,6 @@ mod local_muc;
 mod local_session;
 mod message_module;
 mod muc_resume;
-mod omemo_poll_admission;
 mod operations_module;
 mod pubsub_module;
 mod room_module;
@@ -348,13 +347,6 @@ pub struct AppState {
     /// Reverse-proxy credential for the isolated administration origin. The
     /// API can ask for a constant-time decision but cannot read key bytes.
     web_admin_gateway_token: Option<Arc<Zeroizing<String>>>,
-    /// A fail-closed, read-only-sized pool for the unauthenticated poll
-    /// capability. It cannot consume the primary 32-connection application
-    /// pool during a capability flood.
-    omemo_recovery_poll_context: OmemoRecoveryPollContext,
-    omemo_recovery_service: northstar_auth_application::omemo_recovery::OmemoRecoveryService<
-        northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryRepository,
-    >,
     /// Clone-shared permission for short MIX, PubSub and clustered-MUC
     /// durable-outbox database turns. It preserves a primary-pool foreground
     /// reserve without giving protocol handlers raw pool access.

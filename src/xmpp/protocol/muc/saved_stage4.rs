@@ -5,7 +5,6 @@
 //! No SQL, AppState, spawned tasks, new timers, Stage3 adapter, or verdicts.
 use super::{MucDiscussionLive, PreparedMucDiscussion};
 use crate::stage4_replay::{self as wire, driver};
-use crate::xmpp::direct_delivery::{DirectWriteLease, DirectWritePort, NativeWriteRunner};
 use crate::xmpp::stage4_frame_capture::capture_frame;
 use anyhow::{Context as _, Result};
 use northstar_abuse_policy::message_admission::{
@@ -16,6 +15,7 @@ use northstar_abuse_policy::{
     admission_transaction::{AdmissionFence, FinalizeDecision},
 };
 use northstar_abuse_policy::{MessageAdmissionRequest, MessageDedupeIdentity, WorkRequirement};
+use northstar_c2s::direct_delivery::{DirectWriteLease, DirectWritePort, NativeWriteRunner};
 use northstar_delivery_core::native_write as native;
 use northstar_message_application::direct_lifecycle;
 use northstar_message_application::message_admission;
@@ -1195,7 +1195,7 @@ async fn native_item(
         let lease = DirectWriteLease::prepare(&mut port, &item, &observation).await?;
         snapshots.capture(wire::Cut::PortReturn);
         let written = lease
-            .write(|stanza| crate::xmpp::send(&mut writer, stanza))
+            .write(|stanza| northstar_c2s::send(&mut writer, stanza))
             .await?;
         written.settle(&port).await;
         Ok::<_, anyhow::Error>(())

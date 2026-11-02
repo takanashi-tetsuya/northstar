@@ -20,7 +20,6 @@ pub(crate) use ownership::{sm_record_composition, RecordPort as BoshRecordPort};
 pub(crate) use saved_case::{run as run_saved_case, validate as validate_saved_case};
 
 use self::host::BoshHost;
-use crate::xmpp::transport_parsing::parse_bosh_frame;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Context;
 use axum::body::{Body, Bytes};
@@ -36,6 +35,7 @@ use northstar_stream::frame_execution::FrameFailure;
 use northstar_stream::resume::ResumeTransportParts;
 use northstar_stream::session::StreamSession;
 use northstar_stream::transport::ClientTransport;
+use northstar_stream::transport_parsing::parse_bosh_frame;
 use rand::{rngs::OsRng, RngCore};
 use roxmltree::Document;
 use sha1::Sha1;

@@ -19,7 +19,6 @@ use tokio::sync::{Mutex, Semaphore};
 
 use crate::api::contexts::{MetricsContext, ReadinessContext};
 use crate::api::error::{AppError, Result};
-use crate::xmpp;
 
 use northstar_operations_application::metrics_snapshot::DatabaseMetricsSnapshot;
 #[cfg(test)]
@@ -581,7 +580,8 @@ pub async fn websocket(
                 Some(peer_ip.to_string()),
                 async move {
                     let _connection_guard = connection_guard;
-                    xmpp::websocket_connection(socket, state, peer_ip, actor_shutdown).await;
+                    northstar_c2s::websocket_connection(socket, state, peer_ip, actor_shutdown)
+                        .await;
                 },
             );
             if let Err(error) = result {

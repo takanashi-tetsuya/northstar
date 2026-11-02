@@ -918,7 +918,7 @@ struct NativeSm<'a> {
     turn: SmTransportTurn<'a, FakePort>,
     native_calls: AtomicU64,
 }
-impl crate::xmpp::direct_delivery::DirectWritePort for NativeSm<'_> {
+impl northstar_c2s::direct_delivery::DirectWritePort for NativeSm<'_> {
     async fn record(&mut self, item: &OutboundItem) -> Result<bool> {
         let observation = self.turn.start(Purpose::Record);
         SmTurnRunner::new(
@@ -976,7 +976,7 @@ async fn real_sm_record_composes_with_native_lease_without_native_fence_or_ack()
             native_calls: AtomicU64::new(0),
         };
         let lease =
-            crate::xmpp::direct_delivery::DirectWriteLease::prepare(&mut port, &item, &native)
+            northstar_c2s::direct_delivery::DirectWriteLease::prepare(&mut port, &item, &native)
                 .await
                 .unwrap();
         assert!(
@@ -1021,7 +1021,7 @@ async fn real_sm_record_composes_with_native_lease_without_native_fence_or_ack()
 }
 impl crate::bosh::BoshRecordPort for NativeSm<'_> {
     async fn record(&mut self, item: &OutboundItem) -> Result<bool> {
-        <Self as crate::xmpp::direct_delivery::DirectWritePort>::record(self, item).await
+        <Self as northstar_c2s::direct_delivery::DirectWritePort>::record(self, item).await
     }
 }
 #[tokio::test]

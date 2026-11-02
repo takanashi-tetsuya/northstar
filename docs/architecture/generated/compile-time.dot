@@ -178,6 +178,7 @@ digraph compile_time {
   "northstar-auth-core";
   "northstar-auth-postgres";
   "northstar-auth-xmpp";
+  "northstar-c2s";
   "northstar-cluster";
   "northstar-config";
   "northstar-data-tools";
@@ -1059,6 +1060,24 @@ digraph compile_time {
   "northstar-auth-xmpp" -> "roxmltree";
   "northstar-auth-xmpp" -> "uuid";
   "northstar-auth-xmpp" -> "zeroize";
+  "northstar-c2s" -> "anyhow";
+  "northstar-c2s" -> "axum";
+  "northstar-c2s" -> "futures";
+  "northstar-c2s" -> "northstar-auth-application";
+  "northstar-c2s" -> "northstar-auth-core";
+  "northstar-c2s" -> "northstar-delivery-core";
+  "northstar-c2s" -> "northstar-runtime";
+  "northstar-c2s" -> "northstar-security";
+  "northstar-c2s" -> "northstar-stream";
+  "northstar-c2s" -> "northstar-telemetry";
+  "northstar-c2s" -> "northstar-xml-builder";
+  "northstar-c2s" -> "northstar-xml-framing";
+  "northstar-c2s" -> "roxmltree";
+  "northstar-c2s" -> "tokio";
+  "northstar-c2s" -> "tokio-rustls";
+  "northstar-c2s" -> "tokio-util";
+  "northstar-c2s" -> "tracing";
+  "northstar-c2s" -> "uuid";
   "northstar-cluster" -> "anyhow";
   "northstar-cluster" -> "bb8";
   "northstar-cluster" -> "chrono";
@@ -1626,6 +1645,7 @@ digraph compile_time {
   "northstar-stream" -> "northstar-session-postgres";
   "northstar-stream" -> "northstar-xep-0016";
   "northstar-stream" -> "northstar-xml-builder";
+  "northstar-stream" -> "northstar-xml-framing";
   "northstar-stream" -> "northstar-xmpp-types";
   "northstar-stream" -> "rand";
   "northstar-stream" -> "roxmltree";
@@ -2150,6 +2170,7 @@ digraph compile_time {
   "rust-xmpp-server" -> "northstar-auth-core";
   "rust-xmpp-server" -> "northstar-auth-postgres";
   "rust-xmpp-server" -> "northstar-auth-xmpp";
+  "rust-xmpp-server" -> "northstar-c2s";
   "rust-xmpp-server" -> "northstar-cluster";
   "rust-xmpp-server" -> "northstar-config";
   "rust-xmpp-server" -> "northstar-data-tools";

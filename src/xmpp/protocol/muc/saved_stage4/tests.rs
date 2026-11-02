@@ -455,7 +455,7 @@ async fn native_backstop(
     let child = async {
         let lease = DirectWriteLease::prepare(&mut port, &item, &observation).await?;
         let written = lease
-            .write(|stanza| crate::xmpp::send(&mut writer, stanza))
+            .write(|stanza| northstar_c2s::send(&mut writer, stanza))
             .await?;
         written.settle(&port).await;
         Ok::<_, anyhow::Error>(())
@@ -810,7 +810,7 @@ async fn second_flush_is_resource_pending_without_a_scripted_io_error() {
         let lease = DirectWriteLease::prepare(&mut port, &item, &observation).await?;
         let written = lease
             .write(|stanza| async {
-                crate::xmpp::send(&mut writer, stanza).await?;
+                northstar_c2s::send(&mut writer, stanza).await?;
                 writer.flush().await?;
                 Ok::<_, anyhow::Error>(())
             })
@@ -883,7 +883,7 @@ async fn nested_native_backstop_drops_children_before_frame_without_backend_fail
             let _native_child_drop = NativeChildDrop(snapshots.clone());
             let lease = DirectWriteLease::prepare(&mut port, &item, &observation).await?;
             let written = lease
-                .write(|stanza| crate::xmpp::send(&mut writer, stanza))
+                .write(|stanza| northstar_c2s::send(&mut writer, stanza))
                 .await?;
             written.settle(&port).await;
             Ok::<_, anyhow::Error>(())

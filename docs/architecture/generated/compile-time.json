@@ -180,6 +180,7 @@
     "northstar-auth-core",
     "northstar-auth-postgres",
     "northstar-auth-xmpp",
+    "northstar-c2s",
     "northstar-cluster",
     "northstar-config",
     "northstar-data-tools",
@@ -2840,6 +2841,78 @@
       "zeroize"
     ],
     [
+      "northstar-c2s",
+      "anyhow"
+    ],
+    [
+      "northstar-c2s",
+      "axum"
+    ],
+    [
+      "northstar-c2s",
+      "futures"
+    ],
+    [
+      "northstar-c2s",
+      "northstar-auth-application"
+    ],
+    [
+      "northstar-c2s",
+      "northstar-auth-core"
+    ],
+    [
+      "northstar-c2s",
+      "northstar-delivery-core"
+    ],
+    [
+      "northstar-c2s",
+      "northstar-runtime"
+    ],
+    [
+      "northstar-c2s",
+      "northstar-security"
+    ],
+    [
+      "northstar-c2s",
+      "northstar-stream"
+    ],
+    [
+      "northstar-c2s",
+      "northstar-telemetry"
+    ],
+    [
+      "northstar-c2s",
+      "northstar-xml-builder"
+    ],
+    [
+      "northstar-c2s",
+      "northstar-xml-framing"
+    ],
+    [
+      "northstar-c2s",
+      "roxmltree"
+    ],
+    [
+      "northstar-c2s",
+      "tokio"
+    ],
+    [
+      "northstar-c2s",
+      "tokio-rustls"
+    ],
+    [
+      "northstar-c2s",
+      "tokio-util"
+    ],
+    [
+      "northstar-c2s",
+      "tracing"
+    ],
+    [
+      "northstar-c2s",
+      "uuid"
+    ],
+    [
       "northstar-cluster",
       "anyhow"
     ],
@@ -5109,6 +5182,10 @@
     ],
     [
       "northstar-stream",
+      "northstar-xml-framing"
+    ],
+    [
+      "northstar-stream",
       "northstar-xmpp-types"
     ],
     [
@@ -7202,6 +7279,10 @@
     [
       "rust-xmpp-server",
       "northstar-auth-xmpp"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-c2s"
     ],
     [
       "rust-xmpp-server",

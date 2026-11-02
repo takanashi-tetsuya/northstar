@@ -76,7 +76,7 @@ northstar-xml-framing = { path = "crates/kernel/northstar-xml-framing" }
 
 The framing logic extracted into this crate is consumed by all XMPP transport mechanisms in Northstar:
 
-1. **C2S TCP/TLS Transport (`src/xmpp/mod.rs`)**:
+1. **C2S TCP/TLS Transport (`crates/edges/northstar-c2s/src/lib.rs`)**:
    - Manages incremental reads from client TCP streams into persistent session buffers.
    - Handles RFC 6120 stream resets on `<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>` and `<authenticate xmlns='urn:ietf:params:xml:ns:xmpp-sasl'/>` via `framer.reset_entity()`.
    - Dispatches framing errors to RFC 6120 stream error conditions (`restricted-xml`, `policy-violation`, `not-well-formed`, `unsupported-encoding`) via `stream_error_condition(&error)`.
@@ -86,12 +86,12 @@ The framing logic extracted into this crate is consumed by all XMPP transport me
    - Enforces structural limits (`MAX_XML_DEPTH`, `MAX_XML_ELEMENTS`, `MAX_XML_ATTRIBUTES_PER_ELEMENT`) before stanza parsing.
    - Maps framing errors directly to S2S stream error closures.
 
-3. **RFC 7395 WebSocket Transport (`src/xmpp/transport_parsing.rs`, `src/xmpp/mod.rs`)**:
+3. **RFC 7395 WebSocket Transport (`crates/edges/northstar-stream/src/transport_parsing.rs`, `crates/edges/northstar-c2s/src/lib.rs`)**:
    - Parses RFC 7395 text frames containing `<open/>`, `<close/>`, and standalone stanzas.
    - Uses `framer.reset_pending_frame()` between distinct WebSocket text frames to prevent scan state bleed-through if a malformed message is encountered, while preserving XML declaration entity history.
    - Validates single-frame boundaries and whitespace padding using `is_xml_whitespace`.
 
-4. **BOSH / HTTP Binding (`src/xmpp/transport_parsing.rs`)**:
+4. **BOSH / HTTP Binding (`crates/edges/northstar-stream/src/transport_parsing.rs`)**:
    - Validates XML entity framing and ensures request bodies contain well-formed `<body/>` wrapper frames without exceeding resource ceilings.
 
 5. **HTTP Upload & S2S DNS Framing Verification (`src/api/upload.rs`, `src/s2s/dns.rs`)**:

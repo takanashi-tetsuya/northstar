@@ -29,6 +29,7 @@ northstar-session-application = { path = "../../contexts/session/northstar-sessi
 northstar-session-core = { path = "../../contexts/session/northstar-session-core" }
 northstar-xep-0016 = { path = "../../kernel/northstar-xep-0016" }
 northstar-xml-builder = { path = "../../kernel/northstar-xml-builder" }
+northstar-xml-framing = { path = "../../kernel/northstar-xml-framing" }
 northstar-xmpp-types = { path = "../../kernel/northstar-xmpp-types" }
 rand = "0.8"
 roxmltree = "0.20"

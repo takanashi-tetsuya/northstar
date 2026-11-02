@@ -8,7 +8,7 @@ mod xmpp {
     pub use crate::framing;
 }
 
-#[path = "../../src/xmpp/transport_parsing.rs"]
+#[path = "../../crates/edges/northstar-stream/src/transport_parsing.rs"]
 mod transport_parsing;
 
 const HTTP_BIND_NS: &str = "http://jabber.org/protocol/httpbind";

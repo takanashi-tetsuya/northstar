@@ -8,7 +8,7 @@ pub(super) async fn run_native(
     receivers: &mut ItemReceivers,
     mix_handoffs: &mut Vec<wire::MixHandoff>,
 ) -> Result<(wire::NativeEvidence, bool, bool)> {
-    use crate::xmpp::direct_delivery::{DirectWriteLease, NativeWriteRunner};
+    use northstar_c2s::direct_delivery::{DirectWriteLease, NativeWriteRunner};
     let NativeInput {
         case,
         frame_id,
@@ -48,7 +48,7 @@ pub(super) async fn run_native(
         log.prefix();
         receivers.observe_mix(&sequence, mix_handoffs);
         let written = lease
-            .write(|stanza| crate::xmpp::send(&mut writer, stanza))
+            .write(|stanza| northstar_c2s::send(&mut writer, stanza))
             .await?;
         written.settle(&port).await;
         Ok::<_, anyhow::Error>(())

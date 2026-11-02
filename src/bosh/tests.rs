@@ -103,7 +103,7 @@ fn request_and_stanza_limits_are_enforced() {
     assert_eq!(parse_body(body, 1).unwrap_err(), "policy-violation");
     let oversized_stanza = format!(
         "<body xmlns='http://jabber.org/protocol/httpbind' rid='2' sid='s'><message><body>{}</body></message></body>",
-        "x".repeat(crate::xmpp::MAX_XMPP_FRAME_BYTES)
+        "x".repeat(northstar_stream::MAX_XMPP_FRAME_BYTES)
     );
     assert_eq!(
         parse_body(&oversized_stanza, 64).unwrap_err(),

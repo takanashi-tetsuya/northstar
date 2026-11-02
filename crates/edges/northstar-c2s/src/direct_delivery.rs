@@ -2,7 +2,6 @@
 //! Native ownership is per invocation and independent of the retired sender
 //! frame. BOSH and persisted SM retain their own acknowledgement boundaries.
 
-use super::{protocol::ProtocolSession, C2S_BACKEND_OPERATION_TIMEOUT};
 use anyhow::{Context, Result};
 use northstar_delivery_core::native_write::{
     self, AckRequest, Observation, Terminal, WriterResult,
@@ -19,7 +18,7 @@ use uuid::Uuid;
 
 /// Existing persistence authority; the closed ACK request carries the exact
 /// fenced source and the observation for this invocation together.
-pub(crate) trait DirectWritePort {
+pub trait DirectWritePort {
     fn record(&mut self, item: &OutboundItem) -> impl Future<Output = Result<bool>> + Send;
     fn fence_c2s(
         &self,
@@ -29,46 +28,6 @@ pub(crate) trait DirectWritePort {
     fn acknowledge_c2s(&self, request: &AckRequest) -> impl Future<Output = Result<()>> + Send;
     fn acknowledge_mix(&self, request: &AckRequest) -> impl Future<Output = Result<bool>> + Send;
     fn connection_id(&self) -> Uuid;
-}
-impl DirectWritePort for ProtocolSession {
-    async fn record(&mut self, item: &OutboundItem) -> Result<bool> {
-        self.record_outbound_item(item).await
-    }
-    async fn fence_c2s(&self, delivery: DurableDelivery) -> Result<DurableDelivery> {
-        tokio::time::timeout(
-            C2S_BACKEND_OPERATION_TIMEOUT,
-            self.fence_c2s_socket_write(delivery),
-        )
-        .await
-        .context("C2S socket-write fence timed out")?
-    }
-    async fn fence_mix(&self, delivery: MixDelivery) -> Result<MixDelivery> {
-        tokio::time::timeout(
-            C2S_BACKEND_OPERATION_TIMEOUT,
-            self.fence_mix_socket_write(delivery),
-        )
-        .await
-        .context("MIX socket-write fence timed out")?
-    }
-    async fn acknowledge_c2s(&self, request: &AckRequest) -> Result<()> {
-        tokio::time::timeout(
-            C2S_BACKEND_OPERATION_TIMEOUT,
-            self.acknowledge_c2s_socket_write(request),
-        )
-        .await
-        .context("C2S socket-write acknowledgement timed out")?
-    }
-    async fn acknowledge_mix(&self, request: &AckRequest) -> Result<bool> {
-        tokio::time::timeout(
-            C2S_BACKEND_OPERATION_TIMEOUT,
-            self.acknowledge_mix_socket_write(request),
-        )
-        .await
-        .context("MIX socket-write acknowledgement timed out")?
-    }
-    fn connection_id(&self) -> Uuid {
-        self.route_connection_id()
-    }
 }
 
 struct ObservationGuard {
@@ -97,13 +56,13 @@ impl Drop for ObservationGuard {
 /// Constructed after the enclosing transport callback is polled, before its
 /// child first poll. An entirely unpolled callback has no such observation.
 /// Explicit child destruction keeps its final facts ahead of the summary.
-pub(super) struct NativeWriteRunner<F> {
+pub struct NativeWriteRunner<F> {
     child: Option<Pin<Box<F>>>,
     observation: ObservationGuard,
     poll_in_progress: bool,
 }
 impl<F: Future> NativeWriteRunner<F> {
-    pub(super) fn new(observation: Observation, child: F) -> Self {
+    pub fn new(observation: Observation, child: F) -> Self {
         Self {
             child: Some(Box::pin(child)),
             observation: ObservationGuard {
@@ -149,18 +108,18 @@ impl<F> Drop for NativeWriteRunner<F> {
 
 /// The prepared/written values borrow the same item, including its receipt
 /// channels. Callers cannot replace it when confirming or settling a write.
-pub(super) struct DirectWriteLease<'a> {
+pub struct DirectWriteLease<'a> {
     item: &'a OutboundItem,
     observation: Observation,
     managed_by_sm: bool,
 }
-pub(super) struct WrittenDirectLease<'a> {
+pub struct WrittenDirectLease<'a> {
     item: &'a OutboundItem,
     written: native_write::Written,
     managed_by_sm: bool,
 }
 impl<'a> DirectWriteLease<'a> {
-    pub(super) async fn prepare<P: DirectWritePort>(
+    pub async fn prepare<P: DirectWritePort>(
         port: &mut P,
         item: &'a OutboundItem,
         observation: &Observation,
@@ -202,7 +161,7 @@ impl<'a> DirectWriteLease<'a> {
             managed_by_sm,
         })
     }
-    pub(super) async fn write<F, W>(self, writer: F) -> Result<WrittenDirectLease<'a>>
+    pub async fn write<F, W>(self, writer: F) -> Result<WrittenDirectLease<'a>>
     where
         F: FnOnce(&'a str) -> W,
         W: Future<Output = Result<()>>,
@@ -226,7 +185,7 @@ impl<'a> DirectWriteLease<'a> {
     }
 }
 impl WrittenDirectLease<'_> {
-    pub(super) async fn settle<P: DirectWritePort>(self, port: &P) {
+    pub async fn settle<P: DirectWritePort>(self, port: &P) {
         // Full local write was retained by the writer helper before either
         // notification and before this first settlement await.
         self.item.confirm_transport_write();

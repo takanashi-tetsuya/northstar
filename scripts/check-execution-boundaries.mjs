@@ -18,9 +18,9 @@ const files = {
   sasl2: 'src/xmpp/protocol/sasl2.rs',
   authMisc: 'src/xmpp/protocol/misc.rs',
   protocol: 'src/xmpp/protocol.rs',
-  transport: 'src/xmpp/mod.rs',
-  tcp: 'src/xmpp/tcp_action.rs',
-  websocket: 'src/xmpp/websocket_action.rs',
+  transport: 'crates/edges/northstar-c2s/src/lib.rs',
+  tcp: 'crates/edges/northstar-c2s/src/tcp_action.rs',
+  websocket: 'crates/edges/northstar-c2s/src/websocket_action.rs',
   bosh: 'src/bosh.rs',
   boshAction: 'src/bosh/action.rs',
   outbound: 'crates/edges/northstar-stream/src/outbound.rs',
@@ -44,7 +44,7 @@ const files = {
   state: 'src/state.rs',
   sessionTable: 'crates/edges/northstar-stream/src/local_routes/session_table.rs',
   mixOutboxState: 'src/state/mix_outbox.rs',
-  nativeWrite: 'src/xmpp/direct_delivery.rs',
+  nativeWrite: 'crates/edges/northstar-c2s/src/direct_delivery.rs',
   nativeCore: 'crates/contexts/message/northstar-delivery-core/src/native_write.rs',
   replayDb: 'crates/contexts/session/northstar-session-postgres/src/replay.rs',
   mixDb: 'crates/contexts/room/northstar-room-postgres/src/mix.rs',
@@ -246,10 +246,10 @@ export function verifyNativeWriteBoundaries({ transport, nativeWrite, nativeCore
   const wsBounded = normalize(body(transport, 'async\\s+fn\\s+bounded_websocket_live_write\\b'));
   requireBoundary(wsBounded === 'tokio::select!{biased;_=cancellation.actor_shutdown.cancelled()=>false,_=cancellation.signals.revoked()=>false,_=cancellation.signals.backpressured()=>false,result=tokio::time::timeout(XMPP_WRITE_TIMEOUT,write)=>{matches!(result,Ok(Ok(())))}}',
     'WebSocket live selection must preserve cancellation priority and the existing timeout');
-  const write = normalize(body(nativeWrite, 'pub\\s*\\(super\\)\\s+async\\s+fn\\s+write\\b'));
+  const write = normalize(body(nativeWrite, 'pub\\s+async\\s+fn\\s+write\\b'));
   ordered(write, ['self.observation.begin_write()?;', 'letactual=writer(&self.item.stanza).await;', 'lettruth=ifactual.is_ok(){WriterResult::FullWrite}else{WriterResult::Failed};', 'letwritten=self.observation.writer_completed(truth)?;', 'actual?;', 'Ok(WrittenDirectLease{item:self.item,written,managed_by_sm:self.managed_by_sm,})'],
     'native lease must retain actual writer truth before issuing the consuming written continuation');
-  const settle = normalize(body(nativeWrite, 'pub\\s*\\(super\\)\\s+async\\s+fn\\s+settle\\b'));
+  const settle = normalize(body(nativeWrite, 'pub\\s+async\\s+fn\\s+settle\\b'));
   ordered(settle, ['self.item.confirm_transport_write();', 'if!self.managed_by_sm{self.item.confirm_transport_ownership();}', 'self.written.begin_ack()', 'request.source()'],
     'native settlement must preserve full-write notification and require the consuming ACK request');
   for (const kind of ['c2s', 'mix']) {

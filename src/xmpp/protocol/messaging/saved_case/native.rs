@@ -261,7 +261,7 @@ pub(super) struct NativePort<'a> {
     pub(super) recorder: &'a mut sm::Recorder,
     pub(super) replacement: Option<Arc<ReplacementControl>>,
 }
-impl crate::xmpp::direct_delivery::DirectWritePort for NativePort<'_> {
+impl northstar_c2s::direct_delivery::DirectWritePort for NativePort<'_> {
     async fn record(&mut self, item: &OutboundItem) -> Result<bool> {
         self.log.prefix();
         self.recorder.record(item).await

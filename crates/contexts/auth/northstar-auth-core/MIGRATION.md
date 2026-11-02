@@ -55,7 +55,7 @@ These callers in `src/` used the former `crate::auth` facade; since S17 (WP-171)
 | `src/tools/pie.rs` | `normalize_username`, `hash_password` | Account import/export handling. |
 | `src/services/sm.rs` | `new_session_token` | Stream management resumption token generation. |
 | `src/state.rs` | `DEFAULT_SCRAM_ITERATIONS`, `MIN_SCRAM_ITERATIONS`, `MAX_SCRAM_ITERATIONS` | Server runtime state configuration defaults. |
-| `src/xmpp/mod.rs` | `ChannelBindings`, `SaslMechanism`, `PlainMechanism`, `ExternalMechanism`, `ScramSha256Mechanism`, `SaslStep` | C2S TLS handshake and SASL mechanism initialization. |
+| `crates/edges/northstar-c2s/src/lib.rs` | `ChannelBindings`, `SaslMechanism`, `PlainMechanism`, `ExternalMechanism`, `ScramSha256Mechanism`, `SaslStep` | C2S TLS handshake and SASL mechanism initialization. |
 | `src/xmpp/protocol.rs` | `ChannelBindings`, `SaslMechanism`, `PlainMechanism`, `ExternalMechanism`, `ScramSha256Mechanism` | XMPP stream feature negotiation and SASL stanzas. |
 | `src/xmpp/protocol/commands.rs` | `normalize_username`, `hash_password`, `validate_password` | Ad-hoc commands password changes. |
 | `src/xmpp/protocol/ibr.rs` | `normalize_username`, `hash_password`, `validate_password` | In-Band Registration (XEP-0077) validation and hashing. |

@@ -184,7 +184,7 @@ pub(super) fn parse_body(raw: &str, max_stanzas: usize) -> Result<BoshRequest, &
     let frame = parse_bosh_frame(
         raw,
         max_stanzas,
-        crate::xmpp::MAX_XMPP_FRAME_BYTES,
+        northstar_stream::MAX_XMPP_FRAME_BYTES,
         HTTP_BIND_NS,
     )?;
     let document = Document::parse(&frame).map_err(|_| "bad-request")?;

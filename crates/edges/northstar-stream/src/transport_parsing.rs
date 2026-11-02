@@ -1,14 +1,14 @@
 //! Bounded, dependency-light parsing at HTTP/WebSocket transport boundaries.
 //!
 //! Keeping these checks outside of the transport actors makes the exact parser
-//! available to the fuzz harness without constructing an `AppState`, socket,
-//! or database connection. This module deliberately stops before protocol
+//! available to the fuzz harness without constructing the node, a socket,
+//! or a database connection. This module deliberately stops before protocol
 //! dispatch: it only establishes that one bounded XML transport unit exists.
 
 use anyhow::Result;
 use roxmltree::Document;
 
-pub(crate) const WEBSOCKET_FRAMING_NS: &str = "urn:ietf:params:xml:ns:xmpp-framing";
+pub const WEBSOCKET_FRAMING_NS: &str = "urn:ietf:params:xml:ns:xmpp-framing";
 
 const MAX_BOSH_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 const MAX_BODY_ATTRIBUTES: usize = 24;
@@ -21,7 +21,7 @@ const MAX_ATTRIBUTE_BYTES: usize = 2_048;
 /// `bosh::parse_body`, where creation versus established-session semantics are
 /// known. Keeping the expensive document/frame work here prevents that policy
 /// layer from becoming a second, divergent transport parser.
-pub(crate) fn parse_bosh_frame(
+pub fn parse_bosh_frame(
     raw: &str,
     max_stanzas: usize,
     max_stanza_bytes: usize,
@@ -83,14 +83,14 @@ pub(crate) fn parse_bosh_frame(
     Ok(frame)
 }
 
-pub(crate) fn websocket_frame_starts_with_markup(value: &str) -> bool {
+pub fn websocket_frame_starts_with_markup(value: &str) -> bool {
     value.as_bytes().first() == Some(&b'<')
 }
 
 /// Enforce RFC 7395's one-text-message/one-XML-frame invariant using the
 /// production XML entity framer. WebSocket messages cannot legally carry a
 /// partial stanza or leading/trailing XML stream whitespace.
-pub(crate) fn take_websocket_frame(
+pub fn take_websocket_frame(
     value: &str,
     framer: &mut northstar_xml_framing::XmlEntityFramer,
     max_frame_bytes: usize,
@@ -124,7 +124,7 @@ pub(crate) fn take_websocket_frame(
     result
 }
 
-pub(crate) fn websocket_has_invalid_stream_header_namespace(frame: &str) -> bool {
+pub fn websocket_has_invalid_stream_header_namespace(frame: &str) -> bool {
     let Ok(document) = Document::parse(frame) else {
         return false;
     };
@@ -133,7 +133,7 @@ pub(crate) fn websocket_has_invalid_stream_header_namespace(frame: &str) -> bool
         && root.tag_name().namespace() != Some(WEBSOCKET_FRAMING_NS)
 }
 
-pub(crate) fn websocket_close_has_content(frame: &str) -> bool {
+pub fn websocket_close_has_content(frame: &str) -> bool {
     let Ok(document) = Document::parse(frame) else {
         return false;
     };

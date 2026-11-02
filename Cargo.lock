@@ -2021,6 +2021,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-c2s"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "futures",
+ "northstar-auth-application",
+ "northstar-auth-core",
+ "northstar-delivery-core",
+ "northstar-runtime",
+ "northstar-security",
+ "northstar-stream",
+ "northstar-telemetry",
+ "northstar-xml-builder",
+ "northstar-xml-framing",
+ "roxmltree",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "northstar-cluster"
 version = "0.1.0"
 dependencies = [
@@ -2807,6 +2831,7 @@ dependencies = [
  "northstar-session-postgres",
  "northstar-xep-0016",
  "northstar-xml-builder",
+ "northstar-xml-framing",
  "northstar-xmpp-types",
  "rand 0.8.7",
  "roxmltree",
@@ -4095,6 +4120,7 @@ dependencies = [
  "northstar-auth-core",
  "northstar-auth-postgres",
  "northstar-auth-xmpp",
+ "northstar-c2s",
  "northstar-cluster",
  "northstar-config",
  "northstar-data-tools",

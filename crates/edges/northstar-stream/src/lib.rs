@@ -17,6 +17,7 @@ pub mod replay;
 pub mod resume;
 pub mod session;
 pub mod transport;
+pub mod transport_parsing;
 
 /// The largest XMPP frame any transport accepts and any cluster node forwards.
 pub const MAX_XMPP_FRAME_BYTES: usize = 1024 * 1024;

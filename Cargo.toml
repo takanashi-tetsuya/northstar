@@ -85,6 +85,7 @@ members = [
     "crates/contexts/federation/northstar-federation-postgres",
     "crates/contexts/federation/northstar-federation-application",
     "crates/contexts/session/northstar-protocol-runtime",
+    "crates/edges/northstar-c2s",
     "crates/edges/northstar-cluster",
     "crates/edges/northstar-stream",
     "crates/platform/foundation-postgres",
@@ -235,6 +236,7 @@ northstar-upload-postgres = { path = "crates/contexts/upload/northstar-upload-po
 northstar-upload-xmpp = { path = "crates/contexts/upload/northstar-upload-xmpp" }
 northstar-session-application = { path = "crates/contexts/session/northstar-session-application" }
 northstar-session-postgres = { path = "crates/contexts/session/northstar-session-postgres" }
+northstar-c2s = { path = "crates/edges/northstar-c2s" }
 northstar-cluster = { path = "crates/edges/northstar-cluster" }
 northstar-stream = { path = "crates/edges/northstar-stream" }
 northstar-federation-core = { path = "crates/contexts/federation/northstar-federation-core" }

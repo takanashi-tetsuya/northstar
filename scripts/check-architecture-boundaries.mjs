@@ -2014,12 +2014,12 @@ for (const [name, source] of [
     throw new Error(`${name} reads SM safety configuration through global state after construction`);
   }
 }
-for (const transport of ['src/bosh.rs', 'src/xmpp/mod.rs', 'src/xmpp/tcp_action.rs', 'src/xmpp/websocket_action.rs']) {
+for (const transport of ['src/bosh.rs', 'crates/edges/northstar-c2s/src/lib.rs', 'crates/edges/northstar-c2s/src/tcp_action.rs', 'crates/edges/northstar-c2s/src/websocket_action.rs']) {
   if (/\b(?:session|protocol)\s*\.\s*state\b/.test(transport === 'src/bosh.rs' ? readRoleSplitFile(transport, { root }) : read(transport))) {
     throw new Error(`${transport} traverses ProtocolSession into global state`);
   }
 }
-const nativeTransportSource = read('src/xmpp/mod.rs');
+const nativeTransportSource = read('crates/edges/northstar-c2s/src/lib.rs');
 const backpressureGuard = structBody(nativeTransportSource, 'struct BackpressureDisconnectMetric');
 if (/\bAppState\b/.test(backpressureGuard)
     || !/\btelemetry\s*:\s*C2sBackpressureTelemetry\b/.test(backpressureGuard)) {
@@ -2054,8 +2054,8 @@ for (const connection of [
     throw new Error(`${connection} retains its host after opening the protocol session`);
   }
 }
-if (/\bself\s*\.\s*state\b/.test(read('src/xmpp/direct_delivery.rs'))) {
-  throw new Error('direct delivery traverses ProtocolSession into global state');
+if (/\bself\s*\.\s*state\b/.test(read('src/xmpp/protocol/direct_write.rs'))) {
+  throw new Error('the session\'s direct write port traverses ProtocolSession into global state');
 }
 if (!/authenticated\s*:\s*\r?\n?\s*Option<northstar_auth_application::authentication::AuthenticatedAccount>/.test(legacyAuthProtocolSource)) {
   throw new Error('ProtocolSession must retain only the least-authority AuthenticatedAccount DTO');

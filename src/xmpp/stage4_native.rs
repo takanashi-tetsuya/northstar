@@ -1,10 +1,10 @@
 //! Test-only actual send/write_all/flush and direct lease ownership.
 #![cfg(test)]
-use super::direct_delivery::{DirectWriteLease, DirectWritePort, NativeWriteRunner};
 use super::stage4_auth_publication::{facts, Capture};
 use crate::stage4_replay as wire;
 use crate::xmpp::protocol::mix::stage4_saved::Service;
 use anyhow::{ensure, Result};
+use northstar_c2s::direct_delivery::{DirectWriteLease, DirectWritePort, NativeWriteRunner};
 use northstar_delivery_core::native_write as actual;
 use northstar_stream::auth_publication::OutboundAuthPublication;
 use northstar_stream::auth_publication::OwnedPublication;
@@ -260,7 +260,7 @@ async fn write_auth_inner(
     let mut io = MemoryWrite::new(script, site, recorder);
     let result = holder
         .write(item.stanza.clone(), |control| async move {
-            super::send(&mut io, &control).await
+            northstar_c2s::send(&mut io, &control).await
         })
         .await;
     drop(item); // Drop the original item's holder alias before publication cut.
@@ -414,7 +414,9 @@ async fn write_item_inner(
     let mut io = MemoryWrite::new(script, site, recorder.clone());
     let result = NativeWriteRunner::new(observation.clone(), async {
         let lease = DirectWriteLease::prepare(&mut port, &item, &observation).await?;
-        let written = lease.write(|stanza| super::send(&mut io, stanza)).await?;
+        let written = lease
+            .write(|stanza| northstar_c2s::send(&mut io, stanza))
+            .await?;
         written.settle(&port).await;
         Ok(())
     })

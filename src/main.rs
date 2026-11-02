@@ -612,12 +612,12 @@ async fn run() -> Result<()> {
     spawn_service_task(
         &mut service_tasks,
         "XMPP",
-        xmpp::serve_tcp(state.clone(), cancel.clone(), xmpp_listener),
+        northstar_c2s::serve_tcp(state.clone(), cancel.clone(), xmpp_listener),
     );
     spawn_service_task(
         &mut service_tasks,
         "XMPPS",
-        xmpp::serve_xmpps_tcp(state.clone(), cancel.clone(), xmpps_listener),
+        northstar_c2s::serve_xmpps_tcp(state.clone(), cancel.clone(), xmpps_listener),
     );
     spawn_service_task(
         &mut service_tasks,

@@ -1,0 +1,34 @@
+[package]
+name = "northstar-c2s"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Native client-to-server transports of Northstar: TCP with STARTTLS, direct TLS and WebSocket"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+axum = { version = "0.8", features = ["ws", "multipart"] }
+futures = "0.3"
+northstar-auth-core = { path = "../../contexts/auth/northstar-auth-core" }
+northstar-delivery-core = { path = "../../contexts/message/northstar-delivery-core" }
+northstar-runtime = { path = "../../platform/northstar-runtime" }
+northstar-security = { path = "../../platform/northstar-security" }
+northstar-stream = { path = "../../edges/northstar-stream" }
+northstar-telemetry = { path = "../../platform/northstar-telemetry" }
+northstar-xml-builder = { path = "../../kernel/northstar-xml-builder" }
+northstar-xml-framing = { path = "../../kernel/northstar-xml-framing" }
+tokio = { version = "1.43", features = ["full"] }
+tokio-rustls = "0.26"
+tokio-util = { version = "0.7", features = ["rt", "io"] }
+tracing = "0.1"
+uuid = { version = "1.12", features = ["v4", "serde"] }
+
+[dev-dependencies]
+northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application", features = ["test-support"] }
+northstar-runtime = { path = "../../platform/northstar-runtime", features = ["test-support"] }
+northstar-security = { path = "../../platform/northstar-security", features = ["test-support"] }
+northstar-stream = { path = "../../edges/northstar-stream", features = ["test-support"] }
+roxmltree = "0.20"
+tokio = { version = "1.43", features = ["test-util"] }

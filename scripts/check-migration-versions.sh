@@ -1440,7 +1440,7 @@ for required_source_fragment in \
     'SocketFenced'
 do
     if ! printf '%s\n' "$mix_db_production_source" "$mix_protocol_production_source" "$cluster_production_source" "$sm_db_production_source" "$mix_service_production_source" | grep -F "$required_source_fragment" >/dev/null \
-       && ! grep -Fq "$required_source_fragment" src/xmpp/mod.rs; then
+       && ! grep -Fq "$required_source_fragment" crates/edges/northstar-c2s/src/lib.rs; then
         echo "MIX cluster ownership source invariant is missing: $required_source_fragment" >&2
         exit 1
     fi

@@ -2,8 +2,8 @@
 
 use super::admission_guards::ClientConnectionGuard;
 use super::AppState;
-use crate::xmpp::host::C2sHost;
 use crate::xmpp::protocol::ProtocolSession;
+use northstar_c2s::host::C2sHost;
 use northstar_runtime::connection_actors::ConnectionActorRegistry;
 use northstar_stream::host::TransportHost;
 use northstar_stream::outbound::OutboundSender;

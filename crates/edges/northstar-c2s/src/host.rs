@@ -7,7 +7,7 @@ use super::direct_delivery::DirectWritePort;
 use northstar_stream::host::TransportHost;
 use northstar_telemetry::metrics::C2sBackpressureTelemetry;
 
-pub(crate) trait C2sHost: TransportHost<Session: DirectWritePort> {
+pub trait C2sHost: TransportHost<Session: DirectWritePort> {
     /// The current client TLS configuration; each connection takes one snapshot of it.
     fn tls_context(&self) -> &northstar_security::tls::TlsContext;
 

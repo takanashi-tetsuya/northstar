@@ -117,9 +117,9 @@ for (const entry of [
   'src/xmpp/protocol/pubsub.rs',
   'src/xmpp/protocol/pep.rs',
   'crates/contexts/room/northstar-room-application/src/mix_service.rs',
-  'src/s2s/components.rs',
+  'crates/edges/northstar-s2s/src/components.rs',
   'src/s2s/inbound.rs',
-  'src/s2s/outbound.rs',
+  'crates/edges/northstar-s2s/src/outbound.rs',
 ]) {
   test(`${entry} rejects raw XML in a new production child`, () => {
     fixture(({ write, append, check }) => {

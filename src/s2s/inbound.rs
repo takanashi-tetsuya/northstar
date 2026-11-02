@@ -7,7 +7,6 @@ use crate::{
     xmpp::xml_builder::XmlElement,
 };
 use anyhow::{Context, Result};
-use futures::FutureExt;
 use northstar_message_application::messaging::{
     DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome, DirectRouteRejection,
     DirectRouteRequest, DirectRouteTarget, DurableAdmissionOutcome, IdentityAuthority,
@@ -26,39 +25,24 @@ use northstar_xml_builder::message_policy::{
 };
 use northstar_xml_builder::rewrite::{set_from, set_to};
 use northstar_xml_builder::stanza::{is_encrypted, stanza_error_type};
-use northstar_xml_builder::stream::stream_id;
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 use roxmltree::Document;
-use std::borrow::Cow;
-use std::panic::AssertUnwindSafe;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::{TcpListener, TcpStream},
-    sync::mpsc,
-};
-use tokio_rustls::TlsAcceptor;
 
 use super::*;
 
 mod dispatch;
 mod iq;
-mod negotiation;
 mod presence;
-mod session;
 
 use self::iq::route_inbound_iq;
-use self::negotiation::{
-    authenticated_s2s_sender, inbound_connection, inbound_xmpps_connection,
-    locally_hosted_identity_domain, same_s2s_domain,
-};
 use self::presence::route_inbound_presence;
-use self::session::drive_authenticated_inbound;
+use northstar_s2s::inbound::{
+    authenticated_s2s_sender, locally_hosted_identity_domain, same_s2s_domain,
+};
 
 pub(crate) use self::dispatch::{route_inbound_component, route_inbound_for_connection};
-pub(crate) use self::session::reply_within_peer_limit;
-pub use self::session::{serve, serve_s2s_tls};
 pub(crate) use northstar_s2s::host::InboundFederationRoute;
 
 #[cfg(test)]
@@ -69,15 +53,7 @@ use self::dispatch::{
 #[cfg(test)]
 use self::iq::{bare_account_iq_may_route_to_service_resource, is_xep0357_notification_publish};
 #[cfg(test)]
-use self::negotiation::{
-    hosted_s2s_domain, is_certificate_downgrade, parse_bidi_request,
-    restore_inherited_dialback_namespace, valid_external_auth_shape, valid_starttls_request,
-    BidiRequest,
-};
-#[cfg(test)]
 use self::presence::{canonical_subscription_stanza, presence_probe_status_response};
-#[cfg(test)]
-use self::session::{initial_bidi_route_admissible, wait_for_federation_shutdown};
 
 /// A degraded node can accept only an account-scoped, recoverable direct
 /// message. Resource-affine and transient stanzas require a live route.
@@ -923,8 +899,6 @@ fn is_remote_muc_private_message(
 #[cfg(test)]
 const MODULE_SOURCE: &[(&str, &str)] = &[
     ("inbound", include_str!("inbound.rs")),
-    ("negotiation", include_str!("inbound/negotiation.rs")),
-    ("session", include_str!("inbound/session.rs")),
     ("dispatch", include_str!("inbound/dispatch.rs")),
     ("presence", include_str!("inbound/presence.rs")),
     ("iq", include_str!("inbound/iq.rs")),

@@ -21,7 +21,7 @@ stress_database_a="${NORTHSTAR_LISTENER_STRESS_DATABASE_A:-}"
 stress_database_b="${NORTHSTAR_LISTENER_STRESS_DATABASE_B:-}"
 stress_database_host="${NORTHSTAR_LISTENER_STRESS_DATABASE_HOST:-127.0.0.1}"
 stress_database_port="${NORTHSTAR_LISTENER_STRESS_DATABASE_PORT:-5432}"
-fixture_rust_log="${NORTHSTAR_MIX_FEDERATION_RUST_LOG:-rust_xmpp_server=info,rust_xmpp_server::s2s::inbound=debug,northstar_s2s=info}"
+fixture_rust_log="${NORTHSTAR_MIX_FEDERATION_RUST_LOG:-rust_xmpp_server=info,rust_xmpp_server::s2s::inbound=debug,northstar_s2s=info,northstar_s2s::inbound=debug}"
 [[ -n "$fixture_rust_log" ]] || {
   echo "NORTHSTAR_MIX_FEDERATION_RUST_LOG must not be empty" >&2
   exit 2

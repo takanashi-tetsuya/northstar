@@ -1,11 +1,11 @@
 //! Manage outbound connection lifecycle, initial delivery leases, multiplexing, cleanup and stream resumption.
 
-use northstar_s2s::host::S2sHost;
+use crate::host::S2sHost;
 use northstar_xml_builder::XmlElement;
 
 use super::*;
 
-pub(super) async fn run_outbound_connection<H: S2sHost>(
+pub async fn run_outbound_connection<H: S2sHost>(
     state: Arc<H>,
     source_domain: String,
     target_domain: String,
@@ -89,7 +89,7 @@ pub(super) async fn run_outbound_connection<H: S2sHost>(
     result
 }
 
-pub(super) async fn renew_first_envelope_lease<R: S2sOutboxDispatchRepository + Clone + 'static>(
+pub async fn renew_first_envelope_lease<R: S2sOutboxDispatchRepository + Clone + 'static>(
     service: S2sOutboxDispatchService<R>,
     outbox_id: uuid::Uuid,
     lock_token: uuid::Uuid,
@@ -141,15 +141,15 @@ pub(super) async fn renew_first_envelope_lease<R: S2sOutboxDispatchRepository + 
     }
 }
 
-pub(super) struct InitialDelivery<'a> {
-    pub(super) envelope: &'a mut FederationEnvelope,
-    pub(super) delivered: &'a mut bool,
-    pub(super) lease_valid: &'a AtomicBool,
-    pub(super) lease_cancel: &'a tokio_util::sync::CancellationToken,
+pub struct InitialDelivery<'a> {
+    pub envelope: &'a mut FederationEnvelope,
+    pub delivered: &'a mut bool,
+    pub lease_valid: &'a AtomicBool,
+    pub lease_cancel: &'a tokio_util::sync::CancellationToken,
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn connect_and_multiplex<H: S2sHost>(
+pub async fn connect_and_multiplex<H: S2sHost>(
     state: &Arc<H>,
     source_domain: &str,
     target_domain: &str,
@@ -211,7 +211,7 @@ pub(super) async fn connect_and_multiplex<H: S2sHost>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn connect_and_multiplex_inner<H: S2sHost>(
+pub async fn connect_and_multiplex_inner<H: S2sHost>(
     state: &Arc<H>,
     source_domain: &str,
     target_domain: &str,
@@ -234,9 +234,8 @@ pub(super) async fn connect_and_multiplex_inner<H: S2sHost>(
         certificate: mut certificate_session,
     } = authenticate_transport(state, source_domain, target_domain, &disconnect).await?;
 
-    let mut sm = super::super::sm::StreamManagement::with_budget(
-        state.s2s_resumption().replay_bytes.clone(),
-    );
+    let mut sm =
+        crate::sm::StreamManagement::with_budget(state.s2s_resumption().replay_bytes.clone());
     let mut resume = None;
     if northstar_federation_core::sm::advertised(&features) {
         sm.enable();
@@ -273,7 +272,7 @@ pub(super) async fn connect_and_multiplex_inner<H: S2sHost>(
                 .await?
                 {
                     InboundFederationRoute::Reply(Some(reply)) => {
-                        if let Some(reply) = super::super::inbound::reply_within_peer_limit(
+                        if let Some(reply) = crate::inbound::reply_within_peer_limit(
                             &reply,
                             &response,
                             peer_limits.max_bytes,
@@ -397,7 +396,7 @@ pub(super) async fn connect_and_multiplex_inner<H: S2sHost>(
                 sm.handled(&frame);
                 match routed {
                     InboundFederationRoute::Reply(Some(reply)) => {
-                        if let Some(reply) = super::super::inbound::reply_within_peer_limit(
+                        if let Some(reply) = crate::inbound::reply_within_peer_limit(
                             &reply,
                             &frame,
                             peer_limits.max_bytes,
@@ -426,7 +425,7 @@ pub(super) async fn connect_and_multiplex_inner<H: S2sHost>(
     authenticated.store(false, Ordering::Release);
     let error = match active_result { Ok(()) => return Ok(()), Err(error) => error };
     let Some((id, window)) = &resume else { return Err(error); };
-    if first || !northstar_s2s::util::transport_lost(&error) || disconnect.is_cancelled() { return Err(error); }
+    if first || !crate::util::transport_lost(&error) || disconnect.is_cancelled() { return Err(error); }
     sm.renew(state.as_ref()).await?;
     drop(secure);
     drop(certificate_session);
@@ -450,7 +449,7 @@ pub(super) async fn connect_and_multiplex_inner<H: S2sHost>(
             }.await;
             match attempt {
                 Ok(next) => return Ok(next),
-                Err(error) if northstar_s2s::util::transport_lost(&error) => {
+                Err(error) if crate::util::transport_lost(&error) => {
                     tokio::time::sleep(backoff).await;
                     backoff = (backoff * 2).min(Duration::from_secs(2));
                 }

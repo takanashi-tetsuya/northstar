@@ -4928,7 +4928,15 @@
     ],
     [
       "northstar-s2s",
+      "base64"
+    ],
+    [
+      "northstar-s2s",
       "dashmap"
+    ],
+    [
+      "northstar-s2s",
+      "futures"
     ],
     [
       "northstar-s2s",
@@ -4948,11 +4956,19 @@
     ],
     [
       "northstar-s2s",
+      "northstar-federation-postgres"
+    ],
+    [
+      "northstar-s2s",
       "northstar-runtime"
     ],
     [
       "northstar-s2s",
       "northstar-security"
+    ],
+    [
+      "northstar-s2s",
+      "northstar-workflows"
     ],
     [
       "northstar-s2s",
@@ -4972,6 +4988,10 @@
     ],
     [
       "northstar-s2s",
+      "rand"
+    ],
+    [
+      "northstar-s2s",
       "roxmltree"
     ],
     [
@@ -4980,7 +5000,15 @@
     ],
     [
       "northstar-s2s",
+      "sha1"
+    ],
+    [
+      "northstar-s2s",
       "sha2"
+    ],
+    [
+      "northstar-s2s",
+      "sqlx"
     ],
     [
       "northstar-s2s",

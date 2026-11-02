@@ -1,12 +1,12 @@
 //! Drive authenticated component sessions, durable outbox delivery, hostname binding, routing and cleanup.
 
-use northstar_s2s::host::ComponentHost;
+use crate::host::ComponentHost;
 use northstar_xml_builder::XmlElement;
 
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn drive_component<S, H>(
+pub async fn drive_component<S, H>(
     mut io: S,
     state: Arc<H>,
     credential: ComponentCredential,
@@ -15,7 +15,7 @@ pub(super) async fn drive_component<S, H>(
     session_sender: mpsc::Sender<()>,
     mut bound_domains: HashSet<String>,
     mut outgoing: mpsc::Receiver<()>,
-    mut input: s2s::S2sInputState,
+    mut input: crate::util::S2sInputState,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()>
 where
@@ -33,18 +33,18 @@ where
     tokio::pin!(cancellation);
     loop {
         tokio::select! {
-            frame = s2s::read_entity_frame(&mut io, &mut input) => {
+            frame = crate::util::read_entity_frame(&mut io, &mut input) => {
                 let frame = match frame {
                     Ok(frame) => frame,
                     Err(error) => {
                         if let Some(condition) = component_read_error_condition(&error) {
-                            let _ = s2s::send_stream_error(&mut io, condition).await;
+                            let _ = crate::util::send_stream_error(&mut io, condition).await;
                         }
                         return Err(error);
                     }
                 };
                 if frame.starts_with("</stream:stream") {
-                    s2s::write_xml(&mut io, &XmlElement::new("stream:stream").close()).await?;
+                    crate::util::write_xml(&mut io, &XmlElement::new("stream:stream").close()).await?;
                     return Ok(());
                 }
                 if protocol == ComponentProtocol::Modern0225 {
@@ -58,7 +58,7 @@ where
                     )
                     .await?
                     {
-                        s2s::write_xml(&mut io, &reply).await?;
+                        crate::util::write_xml(&mut io, &reply).await?;
                         initial_binding_complete |= !bound_domains.is_empty();
                         continue;
                     }
@@ -67,7 +67,7 @@ where
                     anyhow::bail!("external component reported a stream error");
                 }
                 if let Some(condition) = component_frame_stream_error(&frame) {
-                    s2s::send_stream_error(&mut io, condition).await?;
+                    crate::util::send_stream_error(&mut io, condition).await?;
                     anyhow::bail!("component sent a fatal {condition} frame");
                 }
                 let canonical = component_to_client(&frame, protocol);
@@ -79,7 +79,7 @@ where
                     canonical,
                 ).await?;
                 if let Some(reply) = reply {
-                    s2s::write_xml(&mut io, &client_to_component(&reply, protocol)).await?;
+                    crate::util::write_xml(&mut io, &client_to_component(&reply, protocol)).await?;
                 }
             }
             wake = outgoing.recv() => {
@@ -104,18 +104,18 @@ where
                 .await?;
             }
             _ = &mut initial_binding_deadline, if !initial_binding_complete => {
-                s2s::send_stream_error(&mut io, "policy-violation").await?;
+                crate::util::send_stream_error(&mut io, "policy-violation").await?;
                 anyhow::bail!("XEP-0225 component did not bind a hostname before the deadline");
             }
             _ = &mut cancellation => {
-                let _ = s2s::write_xml(&mut io, &XmlElement::new("stream:stream").close()).await;
+                let _ = crate::util::write_xml(&mut io, &XmlElement::new("stream:stream").close()).await;
                 return Ok(());
             }
         }
     }
 }
 
-pub(super) async fn deliver_component_outbox<S, H>(
+pub async fn deliver_component_outbox<S, H>(
     io: &mut S,
     state: Arc<H>,
     protocol: ComponentProtocol,
@@ -145,7 +145,7 @@ where
             break;
         };
         let _delivery_timer = state.component_telemetry().outbox_delivery_timer();
-        let envelope = s2s::FederationEnvelope::from(item);
+        let envelope = northstar_federation_application::FederationEnvelope::from(item);
         let serialized = client_to_component(&envelope.stanza, protocol);
         match write_component_outbox_with_lease(
             io,
@@ -159,7 +159,7 @@ where
         {
             Ok(()) => {}
             Err(ComponentOutboxWriteError::Socket(error)) => {
-                s2s::fail_envelope(state.as_ref(), &envelope, &error, false).await;
+                crate::outbound::fail_envelope(state.as_ref(), &envelope, &error, false).await;
                 return Err(error);
             }
             Err(ComponentOutboxWriteError::Lease(error)) => {
@@ -198,16 +198,16 @@ where
 }
 
 #[derive(Debug)]
-pub(super) enum ComponentOutboxWriteError {
+pub enum ComponentOutboxWriteError {
     Socket(anyhow::Error),
     Lease(anyhow::Error),
 }
 
-pub(super) fn component_lease_renewal_period(lease_seconds: u64) -> Duration {
+pub fn component_lease_renewal_period(lease_seconds: u64) -> Duration {
     Duration::from_secs((lease_seconds / 3).max(1))
 }
 
-pub(super) async fn write_component_outbox_with_lease<S, H>(
+pub async fn write_component_outbox_with_lease<S, H>(
     io: &mut S,
     state: Arc<H>,
     outbox_id: Uuid,
@@ -248,7 +248,7 @@ where
     }
 }
 
-pub(super) async fn write_component_outbox_with_renewal<S, Renew, RenewalFuture>(
+pub async fn write_component_outbox_with_renewal<S, Renew, RenewalFuture>(
     io: &mut S,
     serialized: String,
     renewal_period: Duration,
@@ -261,7 +261,7 @@ where
     Renew: FnMut() -> RenewalFuture + Send,
     RenewalFuture: Future<Output = Result<bool>> + Send,
 {
-    let write = s2s::write_xml(io, &serialized);
+    let write = crate::util::write_xml(io, &serialized);
     tokio::pin!(write);
     let renewal = tokio::time::sleep(renewal_period);
     tokio::pin!(renewal);
@@ -323,7 +323,7 @@ where
     }
 }
 
-pub(super) async fn handle_hostname_binding<H: ComponentHost>(
+pub async fn handle_hostname_binding<H: ComponentHost>(
     state: Arc<H>,
     credential: ComponentCredential,
     connection_id: Uuid,
@@ -451,7 +451,7 @@ pub(super) async fn handle_hostname_binding<H: ComponentHost>(
     ))
 }
 
-pub(super) async fn route_component_stanza<H: ComponentHost>(
+pub async fn route_component_stanza<H: ComponentHost>(
     state: Arc<H>,
     connection_id: Uuid,
     relay_grant: ComponentRelayGrant,
@@ -492,7 +492,11 @@ pub(super) async fn route_component_stanza<H: ComponentHost>(
         return Ok(component_stanza_error(root, "remote-server-not-found"));
     }
     if route_target == ComponentRouteTarget::LocalService {
-        let server_raw = s2s::stanza_namespace(&raw, "jabber:client", "jabber:server");
+        let server_raw = northstar_federation_core::wire::stanza_namespace(
+            &raw,
+            "jabber:client",
+            "jabber:server",
+        );
         // Do not retain a parser node or frame-local `&str` across the
         // application await.  The owned bridge also gives the actor registry
         // a concrete `Send + 'static` future boundary.
@@ -505,7 +509,13 @@ pub(super) async fn route_component_stanza<H: ComponentHost>(
         )
         .await
         .map(|reply| {
-            reply.map(|reply| s2s::stanza_namespace(&reply, "jabber:server", "jabber:client"))
+            reply.map(|reply| {
+                northstar_federation_core::wire::stanza_namespace(
+                    &reply,
+                    "jabber:server",
+                    "jabber:client",
+                )
+            })
         });
     }
 
@@ -536,7 +546,7 @@ pub(super) async fn route_component_stanza<H: ComponentHost>(
     }
 }
 
-pub(super) async fn cleanup_component_muc<H: ComponentHost>(
+pub async fn cleanup_component_muc<H: ComponentHost>(
     state: Arc<H>,
     domains: Vec<String>,
     connection_id: Uuid,

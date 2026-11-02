@@ -1,20 +1,20 @@
 //! Establish inbound secure connections and validate stream identities and peer authentication.
 
-use northstar_s2s::host::S2sHost;
+use crate::host::S2sHost;
 use northstar_xml_builder::XmlElement;
 
 use super::*;
 
-pub(super) fn hosted_s2s_domain(local_domain: &str, target: &str) -> bool {
+pub fn hosted_s2s_domain(local_domain: &str, target: &str) -> bool {
     northstar_federation_core::classify_hosted_domain(local_domain, target)
         .is_some_and(northstar_federation_core::HostedDomain::accepts_s2s_stream_target)
 }
 
-pub(super) fn locally_hosted_identity_domain(configured_domain: &str, candidate: &str) -> bool {
+pub fn locally_hosted_identity_domain(configured_domain: &str, candidate: &str) -> bool {
     northstar_federation_core::classify_hosted_domain(configured_domain, candidate).is_some()
 }
 
-pub(super) fn authenticated_s2s_sender(asserted: &str, authenticated_domain: &str) -> bool {
+pub fn authenticated_s2s_sender(asserted: &str, authenticated_domain: &str) -> bool {
     let (Ok(asserted), Ok(authenticated_domain)) = (
         CanonicalJid::parse(asserted),
         prepare_domainpart(authenticated_domain),
@@ -24,14 +24,14 @@ pub(super) fn authenticated_s2s_sender(asserted: &str, authenticated_domain: &st
     asserted.domainpart() == authenticated_domain
 }
 
-pub(super) fn same_s2s_domain(left: &str, right: &str) -> bool {
+pub fn same_s2s_domain(left: &str, right: &str) -> bool {
     matches!(
         (prepare_domainpart(left), prepare_domainpart(right)),
         (Ok(left), Ok(right)) if left == right
     )
 }
 
-pub(super) fn valid_starttls_request(raw: &str) -> bool {
+pub fn valid_starttls_request(raw: &str) -> bool {
     let Ok(document) = Document::parse(raw) else {
         return false;
     };
@@ -43,27 +43,24 @@ pub(super) fn valid_starttls_request(raw: &str) -> bool {
         && root.text().is_none_or(|text| text.trim().is_empty())
 }
 
-pub(super) fn element_then_stream_close(element: XmlElement) -> String {
+pub fn element_then_stream_close(element: XmlElement) -> String {
     let mut xml = element.finish();
     xml.push_str(&XmlElement::new("stream:stream").close());
     xml
 }
 
-pub(super) fn sasl_failure_then_stream_close(condition: &'static str) -> String {
+pub fn sasl_failure_then_stream_close(condition: &'static str) -> String {
     element_then_stream_close(
         XmlElement::namespaced("failure", "urn:ietf:params:xml:ns:xmpp-sasl")
             .child(XmlElement::new(condition)),
     )
 }
 
-pub(super) fn is_certificate_downgrade(
-    element_name: &str,
-    certificate_requires_external: bool,
-) -> bool {
+pub fn is_certificate_downgrade(element_name: &str, certificate_requires_external: bool) -> bool {
     certificate_requires_external && element_name == "result"
 }
 
-pub(super) fn restore_inherited_dialback_namespace(raw: &str) -> Cow<'_, str> {
+pub fn restore_inherited_dialback_namespace(raw: &str) -> Cow<'_, str> {
     let trimmed = raw.trim_start();
     let Some(name) = ["result", "verify"]
         .into_iter()
@@ -82,7 +79,7 @@ pub(super) fn restore_inherited_dialback_namespace(raw: &str) -> Cow<'_, str> {
     ))
 }
 
-pub(super) fn pre_tls_features<H: S2sHost>(state: &H) -> String {
+pub fn pre_tls_features<H: S2sHost>(state: &H) -> String {
     let mut features = XmlElement::new("stream:features").child(
         XmlElement::new("starttls")
             .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-tls")
@@ -97,7 +94,7 @@ pub(super) fn pre_tls_features<H: S2sHost>(state: &H) -> String {
         .finish()
 }
 
-pub(super) async fn read_s2s_opening<S: AsyncRead + AsyncWrite + Unpin + Send>(
+pub async fn read_s2s_opening<S: AsyncRead + AsyncWrite + Unpin + Send>(
     stream: &mut S,
     local_domain: &str,
     input: &mut S2sInputState,
@@ -124,7 +121,7 @@ pub(super) async fn read_s2s_opening<S: AsyncRead + AsyncWrite + Unpin + Send>(
     }
 }
 
-pub(super) async fn read_s2s_negotiation_frame<S: AsyncRead + AsyncWrite + Unpin + Send>(
+pub async fn read_s2s_negotiation_frame<S: AsyncRead + AsyncWrite + Unpin + Send>(
     stream: &mut S,
     input: &mut S2sInputState,
 ) -> Result<String> {
@@ -139,7 +136,7 @@ pub(super) async fn read_s2s_negotiation_frame<S: AsyncRead + AsyncWrite + Unpin
     }
 }
 
-pub(crate) async fn inbound_xmpps_connection<H: S2sHost>(
+pub async fn inbound_xmpps_connection<H: S2sHost>(
     stream: TcpStream,
     state: Arc<H>,
     acceptor: TlsAcceptor,
@@ -242,7 +239,7 @@ pub(crate) async fn inbound_xmpps_connection<H: S2sHost>(
     .await
 }
 
-pub(crate) async fn inbound_connection<H: S2sHost>(
+pub async fn inbound_connection<H: S2sHost>(
     mut stream: TcpStream,
     state: Arc<H>,
     acceptor: TlsAcceptor,
@@ -380,15 +377,15 @@ pub(crate) async fn inbound_connection<H: S2sHost>(
     .await
 }
 
-pub(super) struct InboundAuthentication {
-    pub(super) domain: String,
-    pub(super) bidi_enabled: bool,
-    pub(super) peer_limits: AdvertisedStreamLimits,
-    pub(super) via_external: bool,
+pub struct InboundAuthentication {
+    pub domain: String,
+    pub bidi_enabled: bool,
+    pub peer_limits: AdvertisedStreamLimits,
+    pub via_external: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn authenticate_secure_inbound<H: S2sHost>(
+pub async fn authenticate_secure_inbound<H: S2sHost>(
     secure: &mut tokio_rustls::server::TlsStream<TcpStream>,
     state: Arc<H>,
     asserted_domain: String,
@@ -665,7 +662,7 @@ pub(super) async fn authenticate_secure_inbound<H: S2sHost>(
     }
 }
 
-pub(super) async fn verify_remote_owned<H: S2sHost>(
+pub async fn verify_remote_owned<H: S2sHost>(
     state: Arc<H>,
     originating_domain: String,
     receiving_domain: String,
@@ -682,7 +679,7 @@ pub(super) async fn verify_remote_owned<H: S2sHost>(
     .await
 }
 
-pub(super) fn valid_external_auth_shape(element: roxmltree::Node<'_, '_>) -> bool {
+pub fn valid_external_auth_shape(element: roxmltree::Node<'_, '_>) -> bool {
     element.tag_name().name() == "auth"
         && element.tag_name().namespace() == Some("urn:ietf:params:xml:ns:xmpp-sasl")
         && element.attributes().len() == 1
@@ -696,11 +693,11 @@ pub(super) fn valid_external_auth_shape(element: roxmltree::Node<'_, '_>) -> boo
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct BidiRequest {
-    pub(super) peer_limits: AdvertisedStreamLimits,
+pub struct BidiRequest {
+    pub peer_limits: AdvertisedStreamLimits,
 }
 
-pub(super) fn parse_bidi_request(raw: &str) -> Option<BidiRequest> {
+pub fn parse_bidi_request(raw: &str) -> Option<BidiRequest> {
     let document = Document::parse(raw).ok()?;
     let root = document.root_element();
     if root.tag_name().name() != "bidi"

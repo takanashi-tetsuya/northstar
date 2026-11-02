@@ -247,7 +247,7 @@ Key ownership:
   still need narrower runtime authority; zero public state fields do not prove
   every caller is scoped.
 - `src/s2s/` owns discovery, DANE, TLS, EXTERNAL/Dialback and durable delivery.
-- `src/s2s/components.rs` isolates component domain authority and outbox handling.
+- `crates/edges/northstar-s2s/src/components.rs` isolates component domain authority and outbox handling.
 - `crates/edges/northstar-bosh/src/lib.rs` and the WebSocket path adapt HTTP framing to the same
   `ProtocolSession` state machine.
 - `northstar-delivery-core::OrderedOutboundSink` separates session ordering

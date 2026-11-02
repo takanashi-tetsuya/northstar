@@ -3230,14 +3230,15 @@ if (/Deliver\s*\(\s*(?:db|northstar_auth_postgres::users)::User\s*\)/.test(messa
 const capsProtocolSource =
   read('crates/contexts/session/northstar-protocol-runtime/src/caps.rs') +
   read('src/xmpp/protocol/caps.rs');
-const s2sInboundSource = readProductionModule('src/s2s/inbound.rs', { root });
+const s2sInboundSource = readProductionModule('src/s2s/inbound.rs', { root })
+  + readProductionModule('crates/edges/northstar-s2s/src/inbound.rs', { root });
 if (/(?:db|northstar_message_postgres::\w+|northstar_workflows::\w+)::(?:store_offline_for_recipient|admit_personal_history)\s*\(/.test(s2sInboundSource)
     || !s2sInboundSource.includes('.store_offline(OfflineMessageAdmission {')
     || !s2sInboundSource.includes('.admit_history(&writes)')) {
   throw new Error('inbound S2S personal storage must use the message service');
 }
-const s2sOutboundSource = readProductionModule('src/s2s/outbound.rs', { root });
-const componentsSource = readProductionModule('src/s2s/components.rs', { root });
+const s2sOutboundSource = readProductionModule('crates/edges/northstar-s2s/src/outbound.rs', { root });
+const componentsSource = readProductionModule('crates/edges/northstar-s2s/src/components.rs', { root });
 const federationCoreSource = read('crates/contexts/federation/northstar-federation-core/src/lib.rs');
 const federationComponents = read('crates/contexts/federation/northstar-federation-application/src/components.rs');
 if (!federationCoreSource.includes('pub fn classify_hosted_domain(')
@@ -3933,7 +3934,7 @@ if (!read('crates/contexts/session/northstar-session-application/src/post_action
     || /(?:self\.)?state\.metrics\b/.test(federatedMucSource)) {
   throw new Error('C2S post-action supervision must use narrow telemetry without broad state or registry authority');
 }
-const componentTransport = readProductionModule('src/s2s/components.rs', { root });
+const componentTransport = readProductionModule('crates/edges/northstar-s2s/src/components.rs', { root });
 if (!federationComponents.includes('struct ComponentTelemetry')
     || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(componentTransport)
     || !componentTransport.includes('component_telemetry().connection_failed()')
@@ -3945,8 +3946,8 @@ if (!s2sTelemetry.includes('struct OnlineQueueAcceptanceTelemetry')
     || !s2sTelemetry.includes('struct InboundConnectionTelemetry')
     || !s2sTelemetry.includes('struct OutboundDispositionTelemetry')
     || /\b(?:AppState|Metrics|PgPool)\b/.test(s2sTelemetry)
-    || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(readProductionModule('src/s2s/inbound.rs', { root }))
-    || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(readProductionModule('src/s2s/outbound.rs', { root }))) {
+    || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(s2sInboundSource)
+    || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(readProductionModule('crates/edges/northstar-s2s/src/outbound.rs', { root }))) {
   throw new Error('S2S ingress and egress must use narrow telemetry cells');
 }
 for (const protocol of ['pep.rs', 'pubsub.rs']) {

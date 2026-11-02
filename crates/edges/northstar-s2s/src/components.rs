@@ -1,8 +1,7 @@
-use crate::s2s;
+use crate::host::ComponentHost;
 use anyhow::{Context, Result};
 use northstar_config::{ComponentConnectionMode, ComponentCredential};
 use northstar_federation_application::components::*;
-use northstar_s2s::host::ComponentHost;
 use rand::{rngs::OsRng, RngCore};
 use roxmltree::Document;
 use sha1::Sha1;

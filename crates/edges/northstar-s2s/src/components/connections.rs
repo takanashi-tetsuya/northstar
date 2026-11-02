@@ -1,11 +1,11 @@
 //! Establish inbound and outbound component connections and negotiate legacy and modern authentication.
 
-use northstar_s2s::host::ComponentHost;
+use crate::host::ComponentHost;
 use northstar_xml_builder::XmlElement;
 
 use super::*;
 
-pub(super) async fn outbound_component_connection<H: ComponentHost>(
+pub async fn outbound_component_connection<H: ComponentHost>(
     state: Arc<H>,
     credential: ComponentCredential,
     domain: String,
@@ -20,7 +20,7 @@ pub(super) async fn outbound_component_connection<H: ComponentHost>(
     let mut stream = connect_component_endpoint(Arc::clone(&state), credential.clone()).await?;
     stream.set_nodelay(true)?;
     write_legacy_connect_open(&mut stream, &domain).await?;
-    let mut input = s2s::S2sInputState::default();
+    let mut input = crate::util::S2sInputState::default();
     let opening = read_handshake_frame(handshake_timeout, &mut stream, &mut input).await?;
     let receiving_stream_id = validate_legacy_connect_opening(&opening, &domain)?;
     let secret = verified_secret(&credential)?;
@@ -32,7 +32,7 @@ pub(super) async fn outbound_component_connection<H: ComponentHost>(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    s2s::write_xml(
+    crate::util::write_xml(
         &mut stream,
         &northstar_xml_builder::XmlElement::new("handshake")
             .attr("xmlns", COMPONENT_CONNECT_NS)
@@ -76,7 +76,7 @@ pub(super) async fn outbound_component_connection<H: ComponentHost>(
     result
 }
 
-pub(super) async fn connect_component_endpoint<H: ComponentHost>(
+pub async fn connect_component_endpoint<H: ComponentHost>(
     state: Arc<H>,
     credential: ComponentCredential,
 ) -> Result<TcpStream> {
@@ -119,7 +119,7 @@ pub(super) async fn connect_component_endpoint<H: ComponentHost>(
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("component endpoint was unreachable")))
 }
 
-pub(super) fn component_connect_address_allowed(address: IpAddr, allow_public: bool) -> bool {
+pub fn component_connect_address_allowed(address: IpAddr, allow_public: bool) -> bool {
     let safe_destination = match address {
         IpAddr::V4(address) => {
             !address.is_unspecified()
@@ -143,7 +143,7 @@ pub(super) fn component_connect_address_allowed(address: IpAddr, allow_public: b
     }
 }
 
-pub(super) async fn component_connection<H: ComponentHost>(
+pub async fn component_connection<H: ComponentHost>(
     mut stream: TcpStream,
     peer: SocketAddr,
     state: Arc<H>,
@@ -152,13 +152,13 @@ pub(super) async fn component_connection<H: ComponentHost>(
 ) -> Result<()> {
     stream.set_nodelay(true)?;
     let handshake_timeout = state.component_runtime_policy().handshake_timeout;
-    let mut input = s2s::S2sInputState::default();
+    let mut input = crate::util::S2sInputState::default();
     let opening = match read_handshake_frame(handshake_timeout, &mut stream, &mut input).await {
         Ok(opening) => opening,
         Err(error) => {
             if let Some(condition) = component_read_error_condition(&error) {
                 write_legacy_stream_open(&mut stream, state.local_domain(), &stream_id()).await?;
-                s2s::send_stream_error(&mut stream, condition).await?;
+                crate::util::send_stream_error(&mut stream, condition).await?;
             }
             return Err(error);
         }
@@ -167,7 +167,7 @@ pub(super) async fn component_connection<H: ComponentHost>(
         Ok(namespace) => namespace,
         Err(condition) => {
             write_legacy_stream_open(&mut stream, state.local_domain(), &stream_id()).await?;
-            s2s::send_stream_error(&mut stream, condition).await?;
+            crate::util::send_stream_error(&mut stream, condition).await?;
             anyhow::bail!("component sent an invalid initial stream: {condition}");
         }
     };
@@ -178,15 +178,15 @@ pub(super) async fn component_connection<H: ComponentHost>(
         return modern_connection(stream, state, opening, input, cancel).await;
     }
     write_legacy_stream_open(&mut stream, state.local_domain(), &stream_id()).await?;
-    s2s::send_stream_error(&mut stream, "invalid-namespace").await?;
+    crate::util::send_stream_error(&mut stream, "invalid-namespace").await?;
     anyhow::bail!("component used an unsupported stream namespace from {peer}")
 }
 
-pub(super) async fn legacy_connection<H: ComponentHost>(
+pub async fn legacy_connection<H: ComponentHost>(
     mut stream: TcpStream,
     state: Arc<H>,
     opening: String,
-    mut input: s2s::S2sInputState,
+    mut input: crate::util::S2sInputState,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     let handshake_timeout = state.component_runtime_policy().handshake_timeout;
@@ -197,7 +197,7 @@ pub(super) async fn legacy_connection<H: ComponentHost>(
             Some(domain) => domain,
             None => {
                 write_legacy_stream_open(&mut stream, state.local_domain(), &stream_id()).await?;
-                s2s::send_stream_error(&mut stream, "improper-addressing").await?;
+                crate::util::send_stream_error(&mut stream, "improper-addressing").await?;
                 anyhow::bail!("XEP-0114 component stream omitted a valid domain-only to address");
             }
         };
@@ -208,7 +208,7 @@ pub(super) async fn legacy_connection<H: ComponentHost>(
         });
     let Some(credential) = credential else {
         write_legacy_stream_open(&mut stream, &component_domain, &stream_id()).await?;
-        s2s::send_stream_error(&mut stream, "host-unknown").await?;
+        crate::util::send_stream_error(&mut stream, "host-unknown").await?;
         anyhow::bail!("unknown or disabled XEP-0114 component domain");
     };
     if state
@@ -216,7 +216,7 @@ pub(super) async fn legacy_connection<H: ComponentHost>(
         .contains_connected_domain(&component_domain)
     {
         write_legacy_stream_open(&mut stream, &component_domain, &stream_id()).await?;
-        s2s::send_stream_error(&mut stream, "conflict").await?;
+        crate::util::send_stream_error(&mut stream, "conflict").await?;
         anyhow::bail!("component domain is already connected");
     }
 
@@ -225,19 +225,19 @@ pub(super) async fn legacy_connection<H: ComponentHost>(
     let handshake =
         read_handshake_frame_after_open(handshake_timeout, &mut stream, &mut input).await?;
     if Document::parse(&handshake).is_err() {
-        s2s::send_stream_error(&mut stream, "not-well-formed").await?;
+        crate::util::send_stream_error(&mut stream, "not-well-formed").await?;
         anyhow::bail!("XEP-0114 component sent malformed handshake XML");
     }
     let verified = match verify_legacy_handshake(&credential, &receiving_stream_id, &handshake) {
         Ok(verified) => verified,
         Err(error) => {
             tracing::error!(domain = %component_domain, ?error, "could not read XEP-0114 component credential");
-            s2s::send_stream_error(&mut stream, "internal-server-error").await?;
+            crate::util::send_stream_error(&mut stream, "internal-server-error").await?;
             return Err(error);
         }
     };
     if !verified {
-        s2s::send_stream_error(&mut stream, "not-authorized").await?;
+        crate::util::send_stream_error(&mut stream, "not-authorized").await?;
         anyhow::bail!("XEP-0114 component authentication failed");
     }
 
@@ -248,10 +248,12 @@ pub(super) async fn legacy_connection<H: ComponentHost>(
         .register_domain(&component_domain, connection_id, sender.clone())
         .is_err()
     {
-        s2s::send_stream_error(&mut stream, "conflict").await?;
+        crate::util::send_stream_error(&mut stream, "conflict").await?;
         anyhow::bail!("component domain became occupied during authentication");
     }
-    if let Err(error) = s2s::write_xml(&mut stream, &XmlElement::new("handshake").finish()).await {
+    if let Err(error) =
+        crate::util::write_xml(&mut stream, &XmlElement::new("handshake").finish()).await
+    {
         state.component_registry().remove_connection(connection_id);
         return Err(error);
     }
@@ -283,11 +285,11 @@ pub(super) async fn legacy_connection<H: ComponentHost>(
     result
 }
 
-pub(super) async fn modern_connection<H: ComponentHost>(
+pub async fn modern_connection<H: ComponentHost>(
     mut stream: TcpStream,
     state: Arc<H>,
     opening: String,
-    mut input: s2s::S2sInputState,
+    mut input: crate::util::S2sInputState,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     let handshake_timeout = state.component_runtime_policy().handshake_timeout;
@@ -295,7 +297,7 @@ pub(super) async fn modern_connection<H: ComponentHost>(
         != Some("1.0")
     {
         write_component_stream_open(&mut stream, state.local_domain(), "", &stream_id()).await?;
-        s2s::send_stream_error(&mut stream, "unsupported-version").await?;
+        crate::util::send_stream_error(&mut stream, "unsupported-version").await?;
         anyhow::bail!("XEP-0225 component did not open a version 1.0 stream");
     }
     let asserted_domain = match component_stream_attribute(&opening, "from", "jabber:client", true)
@@ -305,7 +307,7 @@ pub(super) async fn modern_connection<H: ComponentHost>(
         None => {
             write_component_stream_open(&mut stream, state.local_domain(), "", &stream_id())
                 .await?;
-            s2s::send_stream_error(&mut stream, "invalid-from").await?;
+            crate::util::send_stream_error(&mut stream, "invalid-from").await?;
             anyhow::bail!("XEP-0225 component stream omitted a valid domain-only from address");
         }
     };
@@ -321,7 +323,7 @@ pub(super) async fn modern_connection<H: ComponentHost>(
                 &stream_id(),
             )
             .await?;
-            s2s::send_stream_error(&mut stream, "improper-addressing").await?;
+            crate::util::send_stream_error(&mut stream, "improper-addressing").await?;
             anyhow::bail!("XEP-0225 component stream omitted a valid domain-only to address");
         }
     };
@@ -340,7 +342,7 @@ pub(super) async fn modern_connection<H: ComponentHost>(
             &stream_id(),
         )
         .await?;
-        s2s::send_stream_error(&mut stream, "host-unknown").await?;
+        crate::util::send_stream_error(&mut stream, "host-unknown").await?;
         anyhow::bail!("unknown or disabled XEP-0225 component identity");
     }
     let credential = credential.expect("checked above");
@@ -352,7 +354,7 @@ pub(super) async fn modern_connection<H: ComponentHost>(
         &stream_id(),
     )
     .await?;
-    s2s::write_xml(
+    crate::util::write_xml(
         &mut stream,
         &XmlElement::new("stream:features")
             .child(
@@ -365,10 +367,10 @@ pub(super) async fn modern_connection<H: ComponentHost>(
     let starttls =
         read_handshake_frame_after_open(handshake_timeout, &mut stream, &mut input).await?;
     if !is_empty_element(&starttls, "starttls", "urn:ietf:params:xml:ns:xmpp-tls") {
-        s2s::send_stream_error(&mut stream, "policy-violation").await?;
+        crate::util::send_stream_error(&mut stream, "policy-violation").await?;
         anyhow::bail!("XEP-0225 component did not negotiate mandatory STARTTLS");
     }
-    s2s::write_xml(
+    crate::util::write_xml(
         &mut stream,
         &XmlElement::namespaced("proceed", "urn:ietf:params:xml:ns:xmpp-tls").finish(),
     )
@@ -387,7 +389,7 @@ pub(super) async fn modern_connection<H: ComponentHost>(
     let opening =
         read_handshake_frame_after_open(handshake_timeout, &mut secure, &mut input).await?;
     if let Err(condition) = validate_modern_opening(state.local_domain(), &credential, &opening) {
-        s2s::send_stream_error(&mut secure, condition).await?;
+        crate::util::send_stream_error(&mut secure, condition).await?;
         anyhow::bail!("component stream identity changed during XEP-0225 negotiation: {condition}");
     }
     write_component_stream_open(
@@ -397,7 +399,7 @@ pub(super) async fn modern_connection<H: ComponentHost>(
         &stream_id(),
     )
     .await?;
-    s2s::write_xml(
+    crate::util::write_xml(
         &mut secure,
         &XmlElement::new("stream:features")
             .child(
@@ -455,7 +457,7 @@ pub(super) async fn modern_connection<H: ComponentHost>(
             "not-authorized" => "not-authorized",
             _ => "temporary-auth-failure",
         };
-        s2s::write_xml(
+        crate::util::write_xml(
             &mut secure,
             &northstar_xml_builder::XmlElement::new("failure")
                 .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-sasl")
@@ -465,10 +467,10 @@ pub(super) async fn modern_connection<H: ComponentHost>(
         .await?;
     }
     if !authenticated {
-        s2s::send_stream_error(&mut secure, "policy-violation").await?;
+        crate::util::send_stream_error(&mut secure, "policy-violation").await?;
         anyhow::bail!("XEP-0225 SASL authentication attempt limit exceeded");
     }
-    s2s::write_xml(
+    crate::util::write_xml(
         &mut secure,
         &XmlElement::namespaced("success", "urn:ietf:params:xml:ns:xmpp-sasl").finish(),
     )
@@ -478,7 +480,7 @@ pub(super) async fn modern_connection<H: ComponentHost>(
     let opening =
         read_handshake_frame_after_open(handshake_timeout, &mut secure, &mut input).await?;
     if let Err(condition) = validate_modern_opening(state.local_domain(), &credential, &opening) {
-        s2s::send_stream_error(&mut secure, condition).await?;
+        crate::util::send_stream_error(&mut secure, condition).await?;
         anyhow::bail!("component stream identity changed during XEP-0225 negotiation: {condition}");
     }
     write_component_stream_open(
@@ -488,7 +490,7 @@ pub(super) async fn modern_connection<H: ComponentHost>(
         &stream_id(),
     )
     .await?;
-    s2s::write_xml(
+    crate::util::write_xml(
         &mut secure,
         &XmlElement::new("stream:features")
             .child(

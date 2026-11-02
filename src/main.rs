@@ -621,17 +621,17 @@ async fn run() -> Result<()> {
     spawn_service_task(
         &mut service_tasks,
         "S2S",
-        s2s::serve(state.clone(), federation_rx, cancel.clone(), s2s_listener),
+        northstar_s2s::inbound::serve(state.clone(), federation_rx, cancel.clone(), s2s_listener),
     );
     spawn_service_task(
         &mut service_tasks,
         "S2S TLS",
-        s2s::serve_s2s_tls(state.clone(), cancel.clone(), s2s_tls_listener),
+        northstar_s2s::inbound::serve_s2s_tls(state.clone(), cancel.clone(), s2s_tls_listener),
     );
     spawn_service_task(
         &mut service_tasks,
         "external component",
-        s2s::components::serve(state.clone(), cancel.clone(), component_listener),
+        northstar_s2s::components::serve(state.clone(), cancel.clone(), component_listener),
     );
     let operation_worker_runtime =
         runtime::operation_runtime::OperationWorkerRuntime::from_state(&state);

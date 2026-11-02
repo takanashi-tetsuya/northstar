@@ -1,10 +1,10 @@
 //! Asks the authoritative server to verify a peer's dialback key (XEP-0220 section 2.3).
 
-use northstar_s2s::host::S2sHost;
+use crate::host::S2sHost;
 
 use super::*;
 
-pub(crate) async fn verify_remote<H: S2sHost>(
+pub async fn verify_remote<H: S2sHost>(
     state: Arc<H>,
     originating_domain: &str,
     receiving_domain: &str,
@@ -25,7 +25,7 @@ pub(crate) async fn verify_remote<H: S2sHost>(
         .try_acquire_s2s_connection()
         .context("S2S connection capacity is exhausted during dialback verification")?;
     let (mut stream, opening, _features, mut input, _peer_certificates, _tls_generation) =
-        crate::s2s::outbound::connect_secure_stream_from(
+        crate::outbound::connect_secure_stream_from(
             state.as_ref(),
             &receiving_domain,
             &originating_domain,

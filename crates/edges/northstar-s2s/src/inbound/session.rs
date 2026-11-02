@@ -1,11 +1,11 @@
 //! Run inbound listeners and connection actors with authenticated stream management and resumption.
 
-use northstar_s2s::host::S2sHost;
+use crate::host::S2sHost;
 use northstar_xml_builder::XmlElement;
 
 use super::*;
 
-pub(super) async fn wait_for_federation_shutdown(cancel: &tokio_util::sync::CancellationToken) {
+pub async fn wait_for_federation_shutdown(cancel: &tokio_util::sync::CancellationToken) {
     cancel.cancelled().await;
 }
 
@@ -134,7 +134,7 @@ pub async fn serve<H: S2sHost>(
     }
 }
 
-pub(super) async fn inbound_xmpps_actor<H: S2sHost>(
+pub async fn inbound_xmpps_actor<H: S2sHost>(
     stream: TcpStream,
     peer: std::net::SocketAddr,
     state: Arc<H>,
@@ -168,7 +168,7 @@ pub(super) async fn inbound_xmpps_actor<H: S2sHost>(
     }
 }
 
-pub(super) async fn inbound_starttls_actor<H: S2sHost>(
+pub async fn inbound_starttls_actor<H: S2sHost>(
     stream: TcpStream,
     peer: std::net::SocketAddr,
     state: Arc<H>,
@@ -203,7 +203,7 @@ pub(super) async fn inbound_starttls_actor<H: S2sHost>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn drive_authenticated_inbound<H: S2sHost>(
+pub async fn drive_authenticated_inbound<H: S2sHost>(
     secure: tokio_rustls::server::TlsStream<TcpStream>,
     state: Arc<H>,
     authenticated_domain: String,
@@ -238,13 +238,13 @@ pub(super) async fn drive_authenticated_inbound<H: S2sHost>(
         prepare_domainpart(&local_domain).context("local S2S stream domain became invalid")?;
     let route_key = bidi_connection_key(&local_domain, &domain)
         .context("bidirectional S2S route domains became invalid")?;
-    let scope = northstar_s2s::resume::Scope {
+    let scope = crate::resume::Scope {
         local: local_domain.clone(),
         remote: domain,
         external: via_external,
         bidi: bidi_enabled,
     };
-    let transport = northstar_s2s::resume::Transport {
+    let transport = crate::resume::Transport {
         stream: secure,
         input,
         limits: peer_limits,
@@ -304,9 +304,9 @@ pub(super) async fn drive_authenticated_inbound<H: S2sHost>(
     }
 }
 
-pub(super) fn publish_inbound_route<H: S2sHost>(
+pub fn publish_inbound_route<H: S2sHost>(
     state: &H,
-    scope: &northstar_s2s::resume::Scope,
+    scope: &crate::resume::Scope,
     connection_id: uuid::Uuid,
     sender: &mpsc::Sender<FederationEnvelope>,
     disconnect: &tokio_util::sync::CancellationToken,
@@ -333,7 +333,7 @@ pub(super) fn publish_inbound_route<H: S2sHost>(
     registered
 }
 
-pub(super) fn initial_bidi_route_admissible(
+pub fn initial_bidi_route_admissible(
     sm_enabled: bool,
     application_stanza_seen: bool,
     negotiation_deadline_elapsed: bool,
@@ -344,25 +344,25 @@ pub(super) fn initial_bidi_route_admissible(
         || (negotiation_deadline_elapsed && !suspended_owner_exists)
 }
 
-pub(super) async fn reject_resume(
-    mut request: northstar_s2s::resume::Request,
+pub async fn reject_resume(
+    mut request: crate::resume::Request,
     condition: &'static str,
     reason: &'static str,
 ) {
     // Keep this diagnostic independent of the resume ID, peer counter and
     // stanza contents: fixture logs are retained after a failed stress run.
     tracing::debug!(condition, reason, "rejected inbound S2S resumption");
-    let _ = super::super::sm::failed(&mut request.transport.stream, condition).await;
+    let _ = crate::sm::failed(&mut request.transport.stream, condition).await;
     let _ = request.result.send(Err(Box::new(request.transport)));
 }
 
-pub(super) async fn accept_resume<H: S2sHost>(
+pub async fn accept_resume<H: S2sHost>(
     state: &H,
-    sm: &mut super::super::sm::StreamManagement,
-    registration: &mut northstar_s2s::resume::Registration,
-    scope: &northstar_s2s::resume::Scope,
-    mut request: northstar_s2s::resume::Request,
-) -> Result<Option<northstar_s2s::resume::Transport>> {
+    sm: &mut crate::sm::StreamManagement,
+    registration: &mut crate::resume::Registration,
+    scope: &crate::resume::Scope,
+    mut request: crate::resume::Request,
+) -> Result<Option<crate::resume::Transport>> {
     if request.result.is_closed() {
         return Ok(None);
     }
@@ -421,10 +421,10 @@ pub(super) async fn accept_resume<H: S2sHost>(
     Ok(Some(request.transport))
 }
 
-pub(super) async fn drive_authenticated_inbound_inner<H: S2sHost>(
-    transport: northstar_s2s::resume::Transport,
+pub async fn drive_authenticated_inbound_inner<H: S2sHost>(
+    transport: crate::resume::Transport,
     state: Arc<H>,
-    scope: northstar_s2s::resume::Scope,
+    scope: crate::resume::Scope,
     connection_id: uuid::Uuid,
     sender: mpsc::Sender<FederationEnvelope>,
     mut outgoing: mpsc::Receiver<FederationEnvelope>,
@@ -432,14 +432,13 @@ pub(super) async fn drive_authenticated_inbound_inner<H: S2sHost>(
     let route_key =
         bidi_connection_key(&scope.local, &scope.remote).expect("prepared stream domains");
     let mut transport = Some(transport);
-    let mut sm = super::super::sm::StreamManagement::with_budget(
-        state.s2s_resumption().replay_bytes.clone(),
-    );
-    let (resume_sender, mut resumes) = mpsc::channel::<northstar_s2s::resume::Request>(1);
-    let mut registration: Option<northstar_s2s::resume::Registration> = None;
+    let mut sm =
+        crate::sm::StreamManagement::with_budget(state.s2s_resumption().replay_bytes.clone());
+    let (resume_sender, mut resumes) = mpsc::channel::<crate::resume::Request>(1);
+    let mut registration: Option<crate::resume::Registration> = None;
     let mut used = false;
     let mut suspended_until = None;
-    let mut resume_window = northstar_s2s::resume::WINDOW;
+    let mut resume_window = crate::resume::WINDOW;
     let result = async {
     loop {
         if state.island_mode_enabled() || !state.federation_domain_allowed(&scope.remote) {
@@ -473,7 +472,7 @@ pub(super) async fn drive_authenticated_inbound_inner<H: S2sHost>(
             false
         };
         let mut initial_negotiation_complete = sm.is_enabled() || used;
-        let mut initial_negotiation_deadline = tokio::time::Instant::now() + super::super::IO_TIMEOUT;
+        let mut initial_negotiation_deadline = tokio::time::Instant::now() + northstar_federation_core::IO_TIMEOUT;
         let peer_limits = current.limits;
         let mut incoming_idle_deadline = tokio::time::Instant::now() + S2S_AUTHENTICATED_IDLE_TIMEOUT;
         let keepalive_period = keepalive_interval_for_peer(peer_limits);
@@ -481,7 +480,7 @@ pub(super) async fn drive_authenticated_inbound_inner<H: S2sHost>(
         keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // A successful handoff restarts this loop with a freshly authenticated transport.
         let mut restart = false;
-        let active_result: Result<Option<northstar_s2s::resume::Request>> = async {
+        let active_result: Result<Option<crate::resume::Request>> = async {
         loop {
             let current = transport.as_mut().expect("active S2S transport");
             tokio::select! {
@@ -526,7 +525,7 @@ pub(super) async fn drive_authenticated_inbound_inner<H: S2sHost>(
                         Some(northstar_federation_core::sm::Control::Resume { id, h }) if !sm.is_enabled() && !used => {
                             let Some((epoch, owner)) = state.s2s_resumption().lookup(&id, &scope) else {
                                 tracing::debug!(condition = "item-not-found", reason = "no-matching-resume-owner", "rejected inbound S2S resumption");
-                                super::super::sm::failed(&mut current.stream, "item-not-found").await?;
+                                crate::sm::failed(&mut current.stream, "item-not-found").await?;
                                 continue;
                             };
                             state.s2s_connection_registry().remove_bidirectional_if_connection(&route_key, connection_id);
@@ -534,7 +533,7 @@ pub(super) async fn drive_authenticated_inbound_inner<H: S2sHost>(
                                 fail_envelope(state.as_ref(), &envelope, &anyhow::anyhow!("S2S route moved to resumed stream"), false).await;
                             }
                             let (reply, response) = tokio::sync::oneshot::channel();
-                            let request = northstar_s2s::resume::Request { transport: transport.take().expect("active transport"), h, epoch, result: reply };
+                            let request = crate::resume::Request { transport: transport.take().expect("active transport"), h, epoch, result: reply };
                             owner.try_send(request).map_err(|_| anyhow::anyhow!("S2S resume owner is busy or gone"))?;
                             match tokio::time::timeout(std::time::Duration::from_secs(15), response).await.context("S2S resume handoff timed out")?? {
                                 Ok(()) => return Ok(None),
@@ -611,7 +610,7 @@ pub(super) async fn drive_authenticated_inbound_inner<H: S2sHost>(
             Ok(None) if restart => continue,
             Ok(None) => return Ok(()),
             Err(error) => {
-                if registration.is_none() || !northstar_s2s::util::transport_lost(&error)
+                if registration.is_none() || !crate::util::transport_lost(&error)
                     || transport.as_ref().is_some_and(|current| current.disconnect.is_cancelled()) { return Err(error); }
                 let deadline = tokio::time::Instant::now() + resume_window;
                 registration.as_mut().expect("registered resume owner").suspend(deadline);
@@ -641,14 +640,14 @@ pub(super) async fn drive_authenticated_inbound_inner<H: S2sHost>(
 /// `policy-violation` stanza error. A peer can advertise a limit so small
 /// that even the error cannot fit (including zero); in that case emitting no
 /// stanza is the only way to honor the advertised receive limit.
-pub(crate) fn reply_within_peer_limit(
+pub fn reply_within_peer_limit(
     reply: &str,
     request: &str,
     peer_max_bytes: Option<usize>,
 ) -> Result<Option<String>> {
-    match super::super::outbound::serialize_for_peer(reply, peer_max_bytes) {
+    match crate::outbound::serialize_for_peer(reply, peer_max_bytes) {
         Ok(reply) => Ok(Some(reply)),
-        Err(error) if super::super::outbound::is_peer_stanza_limit_error(&error) => {
+        Err(error) if crate::outbound::is_peer_stanza_limit_error(&error) => {
             let error_reply = Document::parse(request).ok().and_then(|document| {
                 let root = document.root_element();
                 (root.attribute("type") != Some("error")
@@ -658,11 +657,9 @@ pub(crate) fn reply_within_peer_limit(
             let Some(error_reply) = error_reply else {
                 return Ok(None);
             };
-            match super::super::outbound::serialize_for_peer(&error_reply, peer_max_bytes) {
+            match crate::outbound::serialize_for_peer(&error_reply, peer_max_bytes) {
                 Ok(error_reply) => Ok(Some(error_reply)),
-                Err(error) if super::super::outbound::is_peer_stanza_limit_error(&error) => {
-                    Ok(None)
-                }
+                Err(error) if crate::outbound::is_peer_stanza_limit_error(&error) => Ok(None),
                 Err(error) => Err(error),
             }
         }

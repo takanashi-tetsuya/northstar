@@ -8,12 +8,13 @@ use tokio::{
     time::Instant,
 };
 
+use crate::host::S2sHost;
 use northstar_federation_application::sm_outbox::SmOutboxClaim;
 use northstar_federation_core::sm::{is_stanza, parse_control, Control, NS};
-use northstar_s2s::host::S2sHost;
 use northstar_xml_builder::XmlElement;
 
-use super::{outbound::fail_envelope, write_xml, FederationEnvelope};
+use crate::{outbound::fail_envelope, util::write_xml};
+use northstar_federation_application::FederationEnvelope;
 
 const ACK_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_PENDING: usize = 256;
@@ -27,7 +28,7 @@ struct Pending {
 
 /// Counters and replay bytes belong to the logical stream, across transports.
 #[derive(Default)]
-pub(crate) struct StreamManagement {
+pub struct StreamManagement {
     enabled: bool,
     received: u32,
     acknowledged: u32,
@@ -38,28 +39,28 @@ pub(crate) struct StreamManagement {
 
 impl StreamManagement {
     #[cfg(test)]
-    pub(crate) fn enabled() -> Self {
+    pub fn enabled() -> Self {
         Self {
             enabled: true,
             ..Self::default()
         }
     }
 
-    pub(crate) fn with_budget(budget: Arc<Semaphore>) -> Self {
+    pub fn with_budget(budget: Arc<Semaphore>) -> Self {
         Self {
             budget: Some(budget),
             ..Self::default()
         }
     }
 
-    pub(crate) fn enable(&mut self) {
+    pub fn enable(&mut self) {
         self.enabled = true;
     }
-    pub(crate) fn received(&self) -> u32 {
+    pub fn received(&self) -> u32 {
         self.received
     }
 
-    pub(crate) fn owns(&self, envelope: &FederationEnvelope) -> bool {
+    pub fn owns(&self, envelope: &FederationEnvelope) -> bool {
         self.pending.iter().any(|pending| {
             pending.durable.as_ref().is_some_and(|item| {
                 item.id == envelope.outbox_id && item.lock_token == envelope.lock_token
@@ -72,7 +73,7 @@ impl StreamManagement {
         self.pending.iter().all(|item| item.replay.is_some())
     }
 
-    pub(crate) fn validate_resume(&self, h: u32, max_bytes: Option<usize>) -> Result<()> {
+    pub fn validate_resume(&self, h: u32, max_bytes: Option<usize>) -> Result<()> {
         let count = self.ack_count(h)?;
         ensure!(
             self.pending
@@ -91,7 +92,7 @@ impl StreamManagement {
         Ok(())
     }
 
-    pub(crate) async fn renew<H: S2sHost>(&self, state: &H) -> Result<()> {
+    pub async fn renew<H: S2sHost>(&self, state: &H) -> Result<()> {
         // Never revive an expired claim: a different process may already own it.
         let claims: Vec<_> = self
             .pending
@@ -106,13 +107,13 @@ impl StreamManagement {
             Duration::from_secs(5),
             state
                 .s2s_sm_outbox_service()
-                .renew_pending(&claims, northstar_s2s::resume::WINDOW.as_secs() + 30),
+                .renew_pending(&claims, crate::resume::WINDOW.as_secs() + 30),
         )
         .await
         .context("S2S replay lease renewal timed out")?
     }
 
-    pub(crate) async fn acknowledge<H: S2sHost>(&mut self, state: &H, h: u32) -> Result<()> {
+    pub async fn acknowledge<H: S2sHost>(&mut self, state: &H, h: u32) -> Result<()> {
         let count = self.ack_count(h)?;
         tokio::time::timeout(Duration::from_secs(5), async {
             for _ in 0..count {
@@ -138,7 +139,7 @@ impl StreamManagement {
         .context("S2S acknowledgement database deadline elapsed")?
     }
 
-    pub(crate) async fn replay<H: S2sHost, S: AsyncWrite + Unpin>(
+    pub async fn replay<H: S2sHost, S: AsyncWrite + Unpin>(
         &mut self,
         state: &H,
         stream: &mut S,
@@ -165,18 +166,18 @@ impl StreamManagement {
         .context("S2S replay write deadline elapsed")?
     }
 
-    pub(crate) fn is_enabled(&self) -> bool {
+    pub fn is_enabled(&self) -> bool {
         self.enabled
     }
 
-    pub(crate) fn deadline(&self) -> Instant {
+    pub fn deadline(&self) -> Instant {
         self.pending.front().map_or_else(
             || Instant::now() + Duration::from_secs(86400),
             |item| item.deadline,
         )
     }
 
-    pub(crate) fn track(&mut self, envelope: Option<&FederationEnvelope>, xml: &str) -> Result<()> {
+    pub fn track(&mut self, envelope: Option<&FederationEnvelope>, xml: &str) -> Result<()> {
         if !self.enabled {
             return Ok(());
         }
@@ -234,14 +235,14 @@ impl StreamManagement {
         Ok(())
     }
 
-    pub(crate) async fn request<S: AsyncWrite + Unpin>(&self, stream: &mut S) -> Result<()> {
+    pub async fn request<S: AsyncWrite + Unpin>(&self, stream: &mut S) -> Result<()> {
         if self.enabled {
             write_xml(stream, &XmlElement::new("r").attr("xmlns", NS).finish()).await?;
         }
         Ok(())
     }
 
-    pub(crate) fn handled(&mut self, frame: &str) {
+    pub fn handled(&mut self, frame: &str) {
         if self.enabled && is_stanza(frame) {
             self.received = self.received.wrapping_add(1);
         }
@@ -256,7 +257,7 @@ impl StreamManagement {
         Ok(count)
     }
 
-    pub(crate) async fn control<H: S2sHost, S: AsyncWrite + Unpin>(
+    pub async fn control<H: S2sHost, S: AsyncWrite + Unpin>(
         &mut self,
         state: &H,
         stream: &mut S,
@@ -327,14 +328,14 @@ impl StreamManagement {
                 self.acknowledge(state, h).await?;
             }
             _ => {
-                super::send_stream_error(stream, "unexpected-request").await?;
+                crate::util::send_stream_error(stream, "unexpected-request").await?;
                 bail!("unexpected S2S stream management command");
             }
         }
         Ok(true)
     }
 
-    pub(crate) async fn retry_unacknowledged<H: S2sHost>(&mut self, state: &H) {
+    pub async fn retry_unacknowledged<H: S2sHost>(&mut self, state: &H) {
         let error = anyhow::anyhow!("S2S stream closed before acknowledgement");
         self.bytes = 0;
         while let Some(item) = self.pending.pop_front() {
@@ -345,10 +346,7 @@ impl StreamManagement {
     }
 }
 
-pub(crate) async fn failed<S: AsyncWrite + Unpin>(
-    stream: &mut S,
-    condition: &'static str,
-) -> Result<()> {
+pub async fn failed<S: AsyncWrite + Unpin>(stream: &mut S, condition: &'static str) -> Result<()> {
     write_xml(
         stream,
         &XmlElement::new("failed")

@@ -10,7 +10,12 @@ impl RemoteRoutePort for AppState {
         target_domain: &str,
         stanza: String,
     ) -> bool {
-        crate::s2s::send_volatile_on_authenticated_route(self, source_domain, target_domain, stanza)
-            .await
+        northstar_s2s::outbound::send_volatile_on_authenticated_route(
+            self,
+            source_domain,
+            target_domain,
+            stanza,
+        )
+        .await
     }
 }

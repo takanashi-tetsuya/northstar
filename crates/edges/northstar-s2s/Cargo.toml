@@ -4,13 +4,15 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.97"
 license = "AGPL-3.0-only"
-description = "Server-to-server endpoint discovery, TLS identity, stream IO and resumption of Northstar"
+description = "Server-to-server transport of Northstar: discovery, TLS identity, connection actors, stream management and external components"
 publish = false
 
 [dependencies]
 anyhow = "1.0"
 arc-swap = "1"
+base64 = "0.22"
 dashmap = "6.1"
+futures = "0.3"
 hickory-resolver = { version = "0.26.1", default-features = false, features = ["dnssec-aws-lc-rs", "system-config", "tokio"] }
 northstar-config = { path = "../../platform/northstar-config" }
 northstar-federation-application = { path = "../../contexts/federation/northstar-federation-application" }
@@ -20,8 +22,10 @@ northstar-security = { path = "../../platform/northstar-security" }
 northstar-xml-builder = { path = "../../kernel/northstar-xml-builder" }
 northstar-xml-framing = { path = "../../kernel/northstar-xml-framing" }
 northstar-xmpp-types = { path = "../../kernel/northstar-xmpp-types" }
+rand = "0.8"
 roxmltree = "0.20"
 rustls-webpki = "0.103"
+sha1 = "0.10"
 sha2 = "0.10"
 subtle = "2.6"
 thiserror = "2.0"
@@ -33,6 +37,9 @@ uuid = { version = "1.12", features = ["v4", "serde"] }
 x509-parser = { version = "0.18.1", default-features = false }
 
 [dev-dependencies]
+northstar-federation-postgres = { path = "../../contexts/federation/northstar-federation-postgres", features = ["test-support"] }
 northstar-security = { path = "../../platform/northstar-security", features = ["test-support"] }
+northstar-workflows = { path = "../../contexts/workflows/northstar-workflows", features = ["test-support"] }
 openssl = { version = "0.10.81", features = ["vendored"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
 tokio = { version = "1.43", features = ["test-util"] }

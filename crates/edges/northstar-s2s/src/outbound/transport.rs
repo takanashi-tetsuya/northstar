@@ -1,25 +1,25 @@
 //! Select secure endpoints and negotiate TLS, stream identity, SASL EXTERNAL, dialback and bidirectional transport.
 
-use northstar_s2s::host::S2sHost;
+use crate::host::S2sHost;
 use northstar_xml_builder::XmlElement;
 
 use super::*;
 
-pub(super) fn happy_eyeballs_delay(candidate_index: usize) -> Duration {
+pub fn happy_eyeballs_delay(candidate_index: usize) -> Duration {
     HAPPY_EYEBALLS_DELAY.saturating_mul(candidate_index.min(u32::MAX as usize) as u32)
 }
 
-pub(super) struct AuthenticatedTransport {
-    pub(super) stream: tokio_rustls::client::TlsStream<TcpStream>,
-    pub(super) input: S2sInputState,
-    pub(super) features: String,
-    pub(super) limits: AdvertisedStreamLimits,
-    pub(super) external: bool,
-    pub(super) bidi: bool,
-    pub(super) certificate: Option<northstar_security::tls::CertificateSessionGuard>,
+pub struct AuthenticatedTransport {
+    pub stream: tokio_rustls::client::TlsStream<TcpStream>,
+    pub input: S2sInputState,
+    pub features: String,
+    pub limits: AdvertisedStreamLimits,
+    pub external: bool,
+    pub bidi: bool,
+    pub certificate: Option<northstar_security::tls::CertificateSessionGuard>,
 }
 
-pub(super) async fn authenticate_transport<H: S2sHost>(
+pub async fn authenticate_transport<H: S2sHost>(
     state: &Arc<H>,
     source_domain: &str,
     target_domain: &str,
@@ -105,7 +105,7 @@ pub(super) async fn authenticate_transport<H: S2sHost>(
     })
 }
 
-pub(super) async fn connect_secure_endpoint_group<H: S2sHost>(
+pub async fn connect_secure_endpoint_group<H: S2sHost>(
     state: &H,
     source_domain: &str,
     target_domain: &str,
@@ -127,7 +127,7 @@ pub(super) async fn connect_secure_endpoint_group<H: S2sHost>(
     .await
 }
 
-pub(super) async fn race_happy_eyeballs<T, Attempt, AttemptFuture>(
+pub async fn race_happy_eyeballs<T, Attempt, AttemptFuture>(
     endpoints: &[FederationEndpoint],
     attempt: Attempt,
 ) -> Result<T>
@@ -169,9 +169,7 @@ where
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("empty federation endpoint group")))
 }
 
-pub(super) fn happy_eyeballs_endpoint_order(
-    endpoints: &[FederationEndpoint],
-) -> Vec<FederationEndpoint> {
+pub fn happy_eyeballs_endpoint_order(endpoints: &[FederationEndpoint]) -> Vec<FederationEndpoint> {
     let mut v4 = endpoints
         .iter()
         .filter(|endpoint| endpoint.address.is_ipv4())
@@ -203,7 +201,7 @@ pub(super) fn happy_eyeballs_endpoint_order(
     ordered
 }
 
-pub(super) async fn connect_secure_endpoint<H: S2sHost>(
+pub async fn connect_secure_endpoint<H: S2sHost>(
     state: &H,
     source_domain: &str,
     target_domain: &str,
@@ -346,7 +344,7 @@ pub(super) async fn connect_secure_endpoint<H: S2sHost>(
     ))
 }
 
-pub(super) fn validate_stream_identity(
+pub fn validate_stream_identity(
     source_domain: &str,
     target_domain: &str,
     opening: &str,
@@ -361,7 +359,7 @@ pub(super) fn validate_stream_identity(
     Ok(())
 }
 
-pub(super) fn parseable_stream_features(feature_xml: &str) -> std::borrow::Cow<'_, str> {
+pub fn parseable_stream_features(feature_xml: &str) -> std::borrow::Cow<'_, str> {
     // Parser-only normalization: an extracted stream child inherits the
     // `stream` prefix from its opening stream. Restore that binding solely so
     // the already received frame can be parsed; this string is never emitted.
@@ -378,7 +376,7 @@ pub(super) fn parseable_stream_features(feature_xml: &str) -> std::borrow::Cow<'
     }
 }
 
-pub(super) fn stream_feature_advertised(feature_xml: &str, name: &str, namespace: &str) -> bool {
+pub fn stream_feature_advertised(feature_xml: &str, name: &str, namespace: &str) -> bool {
     let parseable = parseable_stream_features(feature_xml);
     Document::parse(parseable.as_ref()).is_ok_and(|document| {
         let root = document.root_element();
@@ -392,7 +390,7 @@ pub(super) fn stream_feature_advertised(feature_xml: &str, name: &str, namespace
     })
 }
 
-pub(super) fn sasl_external_advertised(feature_xml: &str) -> bool {
+pub fn sasl_external_advertised(feature_xml: &str) -> bool {
     let parseable = parseable_stream_features(feature_xml);
     Document::parse(parseable.as_ref()).is_ok_and(|document| {
         let root = document.root_element();
@@ -413,7 +411,7 @@ pub(super) fn sasl_external_advertised(feature_xml: &str) -> bool {
     })
 }
 
-pub(super) fn valid_empty_negotiation_element(raw: &str, name: &str, namespace: &str) -> bool {
+pub fn valid_empty_negotiation_element(raw: &str, name: &str, namespace: &str) -> bool {
     Document::parse(raw).is_ok_and(|document| {
         let root = document.root_element();
         root.tag_name().name() == name
@@ -424,7 +422,7 @@ pub(super) fn valid_empty_negotiation_element(raw: &str, name: &str, namespace: 
     })
 }
 
-pub(super) async fn authenticate_dialback_outbound<H: S2sHost>(
+pub async fn authenticate_dialback_outbound<H: S2sHost>(
     state: &H,
     source_domain: &str,
     target_domain: &str,
@@ -456,7 +454,7 @@ pub(super) async fn authenticate_dialback_outbound<H: S2sHost>(
     }
 }
 
-pub(super) async fn request_bidi_if_advertised<S: AsyncWrite + Unpin>(
+pub async fn request_bidi_if_advertised<S: AsyncWrite + Unpin>(
     stream: &mut S,
     features: &str,
 ) -> Result<bool> {

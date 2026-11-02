@@ -12,7 +12,7 @@ mod dialback_verify;
 mod transport;
 
 use self::connection::run_outbound_connection;
-pub(crate) use self::dialback_verify::verify_remote;
+pub use self::dialback_verify::verify_remote;
 use self::transport::{
     authenticate_transport, connect_secure_endpoint_group, AuthenticatedTransport,
 };
@@ -31,7 +31,7 @@ const AUTHENTICATED_ROUTE_RECOVERY_DEADLINE: Duration = Duration::from_secs(5);
 const HAPPY_EYEBALLS_DELAY: Duration = Duration::from_millis(250);
 const HAPPY_EYEBALLS_MAX_IN_FLIGHT: usize = 4;
 
-pub(crate) type SecureS2sConnection = (
+pub type SecureS2sConnection = (
     tokio_rustls::client::TlsStream<TcpStream>,
     String,
     String,
@@ -40,9 +40,9 @@ pub(crate) type SecureS2sConnection = (
     u64,
 );
 
+use crate::host::S2sHost;
+use crate::outbox::{S2sOutboxDispatchContext, S2sOutboxFailureEffects};
 use anyhow::{Context, Result};
-use northstar_s2s::host::S2sHost;
-use northstar_s2s::outbox::{S2sOutboxDispatchContext, S2sOutboxFailureEffects};
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 use roxmltree::Document;
 use std::{future::Future, sync::Arc, time::Duration};
@@ -51,11 +51,20 @@ use tokio::{
     net::TcpStream,
 };
 
-use super::*;
+use crate::dns::*;
+use crate::host::InboundFederationRoute;
 #[cfg(test)]
-use crate::db;
-#[cfg(test)]
-use northstar_s2s::outbox::delivery_failure_stanza;
+use crate::outbox::delivery_failure_stanza;
+use crate::tls::*;
+use crate::util::*;
+use northstar_federation_application::endpoint::FederationEndpoint;
+use northstar_federation_application::registry::*;
+use northstar_federation_application::{FederationDeliveryMode, FederationEnvelope};
+use northstar_federation_core::dialback::*;
+use northstar_federation_core::wire::*;
+use northstar_federation_core::{
+    same_dialback_domain, AdvertisedStreamLimits, DialbackOutcome, S2S_AUTHENTICATED_IDLE_TIMEOUT,
+};
 
 use northstar_federation_application::dispatch::{
     OutboxFailureDisposition, S2sOutboxDispatchRepository, S2sOutboxDispatchService,
@@ -117,7 +126,7 @@ impl std::fmt::Display for DialbackAuthorizationFailure {
 
 impl std::error::Error for DialbackAuthorizationFailure {}
 
-pub(crate) fn is_peer_stanza_limit_error(error: &anyhow::Error) -> bool {
+pub fn is_peer_stanza_limit_error(error: &anyhow::Error) -> bool {
     error.downcast_ref::<PeerStanzaLimitExceeded>().is_some()
 }
 
@@ -142,7 +151,7 @@ fn outbound_cancellation_error<H: S2sHost>(state: &H, phase: &str) -> anyhow::Er
     ))
 }
 
-pub(crate) fn get_or_create_outbound<H: S2sHost>(
+pub fn get_or_create_outbound<H: S2sHost>(
     state: &Arc<H>,
     source_domain: &str,
     target_domain: &str,
@@ -250,7 +259,7 @@ pub(crate) fn get_or_create_outbound<H: S2sHost>(
 /// creates a new connection. It is used for XEP-0334 `no-store` messages:
 /// callers receive `false` when no live route accepts the stanza, when the
 /// bounded queue is saturated, or when the socket write does not complete.
-pub(crate) async fn send_volatile_on_authenticated_route<H: S2sHost>(
+pub async fn send_volatile_on_authenticated_route<H: S2sHost>(
     state: &H,
     source_domain: &str,
     target_domain: &str,
@@ -334,12 +343,12 @@ async fn send_volatile_with_context<R: S2sOutboxDispatchRepository>(
     )
 }
 
-pub(crate) async fn deliver_managed_envelope<H: S2sHost, S: AsyncWrite + Unpin>(
+pub async fn deliver_managed_envelope<H: S2sHost, S: AsyncWrite + Unpin>(
     state: &H,
     secure: &mut S,
     envelope: &mut FederationEnvelope,
     peer_max_bytes: Option<usize>,
-    sm: &mut super::sm::StreamManagement,
+    sm: &mut crate::sm::StreamManagement,
 ) -> Result<()> {
     deliver_envelope_inner(state, secure, envelope, peer_max_bytes, Some(sm)).await
 }
@@ -349,7 +358,7 @@ async fn deliver_envelope_inner<H: S2sHost, S: AsyncWrite + Unpin>(
     secure: &mut S,
     envelope: &mut FederationEnvelope,
     peer_max_bytes: Option<usize>,
-    mut sm: Option<&mut super::sm::StreamManagement>,
+    mut sm: Option<&mut crate::sm::StreamManagement>,
 ) -> Result<()> {
     let _delivery_timer = envelope
         .is_durable()
@@ -426,7 +435,7 @@ async fn deliver_envelope_inner<H: S2sHost, S: AsyncWrite + Unpin>(
     Ok(())
 }
 
-pub(crate) fn serialize_for_peer(stanza: &str, peer_max_bytes: Option<usize>) -> Result<String> {
+pub fn serialize_for_peer(stanza: &str, peer_max_bytes: Option<usize>) -> Result<String> {
     let serialized = server_namespace(stanza);
     if let Some(peer_max_bytes) = peer_max_bytes {
         if serialized.len() > peer_max_bytes {
@@ -440,7 +449,7 @@ pub(crate) fn serialize_for_peer(stanza: &str, peer_max_bytes: Option<usize>) ->
     Ok(serialized)
 }
 
-pub(crate) async fn fail_envelope<H: S2sHost>(
+pub async fn fail_envelope<H: S2sHost>(
     state: &H,
     envelope: &FederationEnvelope,
     error: &anyhow::Error,
@@ -509,7 +518,7 @@ async fn fail_envelope_with<R: S2sOutboxDispatchRepository>(
     }
 }
 
-pub(crate) async fn connect_secure_stream_from<H: S2sHost>(
+pub async fn connect_secure_stream_from<H: S2sHost>(
     state: &H,
     source_domain: &str,
     target_domain: &str,
@@ -625,7 +634,7 @@ async fn recover_authenticated_route_heads<R: S2sOutboxDispatchRepository>(
     Ok(recovered)
 }
 
-pub(crate) async fn dispatch_due_outbox<H: S2sHost>(
+pub async fn dispatch_due_outbox<H: S2sHost>(
     context: &S2sOutboxDispatchContext<H::DispatchStore>,
     actor_state: &Arc<H>,
 ) -> Result<()> {

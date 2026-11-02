@@ -81,7 +81,9 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
         .connect(&url)
         .await
         .unwrap();
-    db::migrate(&pool).await.unwrap();
+    northstar_workflows::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
     let dispatch = test_dispatch(&pool);
 
     let registry = S2sConnectionRegistry::default();

@@ -77,7 +77,7 @@ pub struct OnlineSession {
     pub roster_requested: Arc<AtomicBool>,
     /// Per-resource initial roster synchronization fence. Committed pushes
     /// are version-buffered until the initial IQ result owns the transport.
-    pub roster_sync: Arc<northstar_roster_application::RosterSyncGate>,
+    pub roster_sync: Arc<northstar_roster_core::RosterSyncGate>,
     /// Per-resource XEP-0405 roster annotation preference. It is deliberately
     /// not an account-wide flag: a roster get without `<annotate/>` resets it
     /// only for the requesting client.

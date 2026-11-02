@@ -212,7 +212,7 @@ impl ProtocolSession {
             show: Arc::new(AtomicU8::new(0)),
             blocklist_requested: Arc::new(AtomicBool::new(false)),
             roster_requested: Arc::new(AtomicBool::new(false)),
-            roster_sync: Arc::new(northstar_roster_application::RosterSyncGate::default()),
+            roster_sync: Arc::new(northstar_roster_core::RosterSyncGate::default()),
             mix_roster_annotations: Arc::new(AtomicBool::new(false)),
             privacy_active: Arc::new(std::sync::RwLock::new(None)),
             privacy_requested: Arc::new(AtomicBool::new(false)),

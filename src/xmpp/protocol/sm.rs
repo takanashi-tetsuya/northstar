@@ -620,7 +620,7 @@ impl ProtocolSession {
             claim.blocklist_requested,
         ));
         let roster_requested = Arc::new(std::sync::atomic::AtomicBool::new(claim.roster_requested));
-        let roster_sync = Arc::new(northstar_roster_application::RosterSyncGate::default());
+        let roster_sync = Arc::new(northstar_roster_core::RosterSyncGate::default());
         let privacy_active = Arc::new(std::sync::RwLock::new(claim.active_privacy_list.clone()));
         let privacy_requested =
             Arc::new(std::sync::atomic::AtomicBool::new(claim.privacy_requested));

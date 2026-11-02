@@ -1,7 +1,10 @@
 //! Capability-free RFC 6121 roster domain entities, subscription state machines,
-//! and snapshot models.
+//! snapshot models and the push synchronization fence.
 
 #![forbid(unsafe_code)]
+
+pub mod roster_sync;
+pub use roster_sync::*;
 
 use std::collections::HashMap;
 use uuid::Uuid;

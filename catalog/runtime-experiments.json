@@ -737,7 +737,7 @@
           "command": "cargo test --locked -p northstar-roster-application service::",
           "test": {
             "path": "crates/contexts/roster/northstar-roster-application/src/service.rs",
-            "anchor": "fn represented_versions_are_not_replayed_and_overflow_fails_closed() {"
+            "anchor": "fn repository_denials_and_failures_preserve_authority() {"
           },
           "assertions": [
             "Roster service tests snapshot/version gates, overflow, repository policy outcomes and per-resource rendering."

@@ -185,7 +185,7 @@ pub struct ProtocolSession {
     pub(crate) show: Arc<AtomicU8>,
     pub(crate) blocklist_requested: Arc<AtomicBool>,
     pub(crate) roster_requested: Arc<AtomicBool>,
-    pub(crate) roster_sync: Arc<northstar_roster_application::RosterSyncGate>,
+    pub(crate) roster_sync: Arc<northstar_roster_core::RosterSyncGate>,
     pub(crate) mix_roster_annotations: Arc<AtomicBool>,
     /// XEP-0016 active list is scoped to this resource/session. `None` means
     /// the account default applies. Sharing it with `OnlineSession` lets

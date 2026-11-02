@@ -1308,13 +1308,9 @@ pub(super) async fn listen_once(
                             delivery.clone(),
                             annotated,
                         ) {
-                            northstar_roster_application::RosterPushDisposition::NotInterested => {
-                                false
-                            }
-                            northstar_roster_application::RosterPushDisposition::Buffered => true,
-                            northstar_roster_application::RosterPushDisposition::Deliver(
-                                stanza,
-                            ) => {
+                            northstar_roster_core::RosterPushDisposition::NotInterested => false,
+                            northstar_roster_core::RosterPushDisposition::Buffered => true,
+                            northstar_roster_core::RosterPushDisposition::Deliver(stanza) => {
                                 if session.sender.try_send(stanza).is_ok() {
                                     true
                                 } else {
@@ -1323,7 +1319,7 @@ pub(super) async fn listen_once(
                                     false
                                 }
                             }
-                            northstar_roster_application::RosterPushDisposition::Overflow => {
+                            northstar_roster_core::RosterPushDisposition::Overflow => {
                                 session.sender.disconnect_backpressured_transport();
                                 session.disconnect.cancel();
                                 false

@@ -67,7 +67,7 @@ def repository_cluster_protocol_version() -> str:
     source contract before any mutation, so a stale binary also fails closed.
     """
 
-    source = ROOT.parent / "src" / "cluster.rs"
+    source = ROOT.parent / "crates" / "edges" / "northstar-cluster" / "src" / "lib.rs"
     try:
         text = source.read_text(encoding="utf-8")
     except OSError as error:

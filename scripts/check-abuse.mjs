@@ -23,7 +23,7 @@ const [abuseSources, abuseTransaction, abuseVerification, config, envExample, ap
   readProductionModule('crates/platform/northstar-config/src/lib.rs'), read('.env.example'),
   readRoleSplitFile('src/api/mod.rs'), read('src/api/auth_routes.rs'),
   read('src/api/reports.rs'), readRoleSplitFile('src/xmpp/protocol.rs'), read('src/xmpp/protocol/dispatch.rs'),
-  readProductionModule('src/xmpp/protocol/messaging.rs'), read('src/xmpp/protocol/misc.rs'), read('src/xmpp/protocol/ibr.rs'), read('crates/contexts/auth/northstar-auth-application/src/account.rs'), read('crates/contexts/workflows/northstar-workflows/src/account_repository.rs'), read('src/state/account_recovery.rs'), readProductionModule('crates/contexts/workflows/northstar-workflows/src/account_lifecycle.rs') + '\n' + readProductionModule('crates/contexts/auth/northstar-auth-postgres/src/users.rs'), read('crates/contexts/operations/northstar-operations-postgres/src/api_control.rs'), read('src/api/error.rs'),
+  readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs'), read('src/xmpp/protocol/misc.rs'), read('src/xmpp/protocol/ibr.rs'), read('crates/contexts/auth/northstar-auth-application/src/account.rs'), read('crates/contexts/workflows/northstar-workflows/src/account_repository.rs'), read('src/state/account_recovery.rs'), readProductionModule('crates/contexts/workflows/northstar-workflows/src/account_lifecycle.rs') + '\n' + readProductionModule('crates/contexts/auth/northstar-auth-postgres/src/users.rs'), read('crates/contexts/operations/northstar-operations-postgres/src/api_control.rs'), read('src/api/error.rs'),
   read('migrations/0009_abuse_reports.sql'), read('migrations/0078_message_pow_admissions.sql'),
   read('migrations/0084_pow_intent_v2.sql'), read('migrations/0100_parallel_pow_challenges.sql'), read('migrations/0101_durable_account_deletion_recovery.sql'), read('src/main.rs'), read('web/client.js'), read('web/pow.js'), read('web/client.html'),
   read('web/app.js'), read('web/index.html'), read('web/pow-worker.js'),
@@ -84,7 +84,7 @@ assert.match(protocol, /is_abuse_rated_message/, 'XMPP messages must pass throug
 assert.match(protocol, /strip_pow_element/, 'PoW data must be removed before routing and archiving');
 assert.match(messaging, /begin_message_admission/, 'rated messages must use durable PoW admission');
 assert.match(messaging, /finalize_message_admission/, 'accepted routes must finalize their fenced admission');
-assert.match(messaging, /pub\(crate\) async fn message\([\s\S]*client_raw:\s*&str/,
+assert.match(messaging, /pub async fn message<S: MessageSession>\([\s\S]*client_raw:\s*&str/,
   'message admission must receive the original client frame separately from the authoritative routed stanza');
 assert.match(messaging, /let pow_intent_payload = message_pow_intent_payload\(client_raw\);/,
   'message PoW must reconstruct its commitment from the original client-controlled frame');

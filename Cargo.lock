@@ -2100,6 +2100,7 @@ dependencies = [
  "northstar-message-core",
  "northstar-room-core",
  "northstar-security",
+ "northstar-telemetry",
  "northstar-xep-0016",
  "northstar-xep-0280",
  "northstar-xml-builder",
@@ -2154,6 +2155,28 @@ dependencies = [
  "sqlx",
  "subtle",
  "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-message-xmpp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "northstar-abuse-policy",
+ "northstar-delivery-core",
+ "northstar-federation-core",
+ "northstar-message-application",
+ "northstar-message-core",
+ "northstar-room-core",
+ "northstar-xep-0280",
+ "northstar-xep-0359",
+ "northstar-xml-builder",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -3859,6 +3882,7 @@ dependencies = [
  "northstar-message-application",
  "northstar-message-core",
  "northstar-message-postgres",
+ "northstar-message-xmpp",
  "northstar-mix-xmpp",
  "northstar-muc-xmpp",
  "northstar-operations-application",

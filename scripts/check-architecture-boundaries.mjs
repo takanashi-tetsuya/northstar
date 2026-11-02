@@ -2862,7 +2862,7 @@ if (!adminReadBoundary.includes('replace_federation_runtime_rules_command')) {
 // Test fixtures below `#[cfg(test)]` may create isolated rows directly; the
 // production handler must never regain a PostgreSQL capability or hide one
 // behind an imported/aliased database function.
-const retractionsSource = read('src/xmpp/protocol/retractions.rs');
+const retractionsSource = read('crates/contexts/message/northstar-message-xmpp/src/retractions.rs');
 const retractionsProductionSource = productionWithoutCfgTestModules(
   retractionsSource,
   'retractions.rs production',
@@ -3200,7 +3200,7 @@ if (/^\s*pub(?:\(crate\))?\s+turn_shared_secret\s*:/m.test(extdiscoInner)) {
 // import domain value types, but all PostgreSQL authority must pass through
 // the private MessageService capability. This is a semantic boundary rather
 // than only a repository-wide count budget.
-const messagingSource = readProductionModule('src/xmpp/protocol/messaging.rs', { root });
+const messagingSource = readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs', { root });
 if (/state\s*\.\s*pool/.test(messagingSource)) {
   throw new Error('messaging.rs regained direct AppState PostgreSQL authority');
 }
@@ -3925,7 +3925,7 @@ if (!c2sTelemetry.includes('struct PostActionTelemetry')
     || !c2sTelemetry.includes('struct C2sAuthenticationTelemetry')
     || !c2sTelemetry.includes('struct OutboundStanzaTelemetry')
     || !c2sTelemetry.includes('struct SessionDropFallbackTelemetry')
-    || !c2sTelemetry.includes('struct PersonalMessageTelemetry')
+    || !read('crates/contexts/message/northstar-message-application/src/telemetry.rs').includes('struct PersonalMessageTelemetry')
     || !read('crates/contexts/room/northstar-room-core/src/telemetry.rs').includes('struct FederatedMucTelemetry')
     || /\b(?:AppState|Metrics|PgPool|C2sRuntimePorts)\b/.test(c2sTelemetry)
     || !c2sProtocol.includes('c2s_post_action_telemetry()')
@@ -3939,7 +3939,7 @@ if (!c2sTelemetry.includes('struct PostActionTelemetry')
     || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/sm.rs'))
     || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(readProductionModule('src/xmpp/protocol/sasl2.rs', { root }))
     || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(c2sProtocol)
-    || /(?:self\.)?state\.metrics\b/.test(readProductionModule('src/xmpp/protocol/messaging.rs', { root }))
+    || /(?:self\.)?state\.metrics\b/.test(readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs', { root }))
     || /(?:self\.)?state\.metrics\b/.test(federatedMucSource)) {
   throw new Error('C2S post-action supervision must use narrow telemetry without broad state or registry authority');
 }

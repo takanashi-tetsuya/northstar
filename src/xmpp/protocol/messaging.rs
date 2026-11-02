@@ -1,416 +1,138 @@
+//! Binds the message handlers of `northstar-message-xmpp` to the client session.
+
 use super::{Action, ProtocolSession};
-use crate::cluster::{DirectPostCommitMode, DirectSpoolEligibility};
+use crate::state::AppState;
 use crate::xmpp::frame_execution::Stage;
 use anyhow::Result;
-use northstar_abuse_policy::message_admission::{MessageAdmissionLease, MessageAdmissionStart};
-use northstar_abuse_policy::stanza::{abuse_stanza_error, strip_pow_element};
-use northstar_abuse_policy::{MessageAdmissionRequest, PowProof};
+#[cfg(test)]
+use northstar_abuse_policy::message_admission::MessageAdmissionStart;
+#[cfg(test)]
+use northstar_abuse_policy::MessageAdmissionRequest;
+#[cfg(test)]
+use northstar_message_application::direct_commit::TransactionOutcome;
 use northstar_message_application::message_admission::witness::DirectOperationHandle;
 #[cfg(test)]
-use northstar_message_application::messaging::direct_workflow::PreparedHandoffNext;
 use northstar_message_application::messaging::direct_workflow::{
-    continue_prepared_local_direct, preserved_transaction, ContinuedLocalDirect, LiveDirectBinding,
-    LocalPreparation, PreparedLocalDirect,
+    continue_prepared_local_direct, ContinuedLocalDirect, PreparedHandoffNext,
 };
+#[cfg(test)]
 use northstar_message_application::messaging::{
-    admit_offline_then_push, ArchiveWrite, DirectMessageRouter, DirectRouteDelivery,
-    DirectRouteOutcome, DirectRouteRejection, DirectRouteRequest, DirectRouteTarget,
-    DurableAdmissionOutcome, FederationDelivery, IdentityAuthority, LocalDelivery,
-    LocalMucInviteAdmission, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
-    OfflineAdmissionOutcome, OutboundPolicyDecision, PersonalMessageDestination,
-    RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome, ValidatedPersonalMessage,
+    ArchiveWrite, DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome, DirectRouteRequest,
+    DirectRouteTarget, DurableAdmissionOutcome, IdentityAuthority, LocalDelivery, MessageIdentity,
+    MessagePostCommit, PersonalMessageDestination, ValidatedPersonalMessage,
 };
-use northstar_message_application::retractions::{DeliveryProjection, RetractionOutcome};
-use northstar_message_application::{
-    direct_commit::TransactionOutcome,
-    direct_lifecycle::{OriginalAdmission, PreparationAdmission},
-};
-use northstar_message_core::validation::strip_untrusted_direct_delays;
-pub(crate) use northstar_message_core::{
-    bare_message_route, durable_direct_delivery_allowed, full_no_match_route,
-    missing_user_message_should_error, undelivered_disposition, BareMessageRoute,
-    DirectDeliveryMode, FullNoMatchRoute, UndeliveredDisposition,
-};
-use northstar_room_application::muc_service::{
-    ClusterMucAffiliationSubject, DurableMucInviteOutcome,
-};
-use northstar_roster_application::privacy::PrivacyStanzaKind;
-use northstar_xep_0280::should_copy as should_carbon;
-use northstar_xep_0359::{add_stanza_id, strip_stanza_ids_by_domain};
-use northstar_xml_builder::message_policy::{
-    add_delay_from, encrypted_archive_stanza, has_explicit_no_store_hint, is_abuse_rated_message,
-    mam_storage_eligible, offline_storage_permitted,
-};
-use northstar_xml_builder::rewrite::{set_from, set_root_attribute};
-use northstar_xml_builder::stanza::{
-    blocked_stanza_error, is_encrypted, stanza_error, stanza_error_type,
-};
+#[cfg(test)]
+use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
+use northstar_message_xmpp::messaging as handlers;
+#[cfg(test)]
+use northstar_message_xmpp::messaging::preparation_fixture::*;
+use northstar_message_xmpp::ports::{MessageFrameStage, MessageOutcome, MessageSession};
+#[cfg(test)]
 use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::Node;
-use std::{future::Future, sync::atomic::Ordering};
-
-mod message_delivery;
+#[cfg(test)]
+use std::future::Future;
+use uuid::Uuid;
 
 #[cfg(test)]
 mod saved_case;
 
-/// One validated original. Rating is selected here by the existing predicate;
-/// callers cannot manufacture a no-admission branch by supplying a boolean.
-struct OriginalDirectMessage<'a> {
-    actor_id: uuid::Uuid,
-    sender: &'a str,
-    target: &'a str,
-    message_type: &'a str,
-    routed_raw: &'a str,
-    origin_id: Option<String>,
-    stanza_id: Option<&'a str>,
-    admission: OriginalAdmissionKind,
+impl MessageOutcome for Action {
+    fn none() -> Self {
+        Action::None
+    }
+
+    fn send(stanza: String) -> Self {
+        Action::Send(stanza)
+    }
+
+    fn is_none(&self) -> bool {
+        matches!(self, Action::None)
+    }
 }
 
-enum OriginalAdmissionKind {
-    Rated(String),
-    NoAdmissionRequired,
-}
+impl MessageSession for ProtocolSession {
+    type Host = AppState;
+    type Action = Action;
 
-impl<'a> OriginalDirectMessage<'a> {
-    fn capture(
-        root: Node<'a, '_>,
-        actor_id: uuid::Uuid,
-        sender: &'a str,
-        target: &'a str,
-        routed_raw: &'a str,
-    ) -> Self {
-        let admission = if is_abuse_rated_message(root) {
-            OriginalAdmissionKind::Rated(set_root_attribute(
-                &set_from(routed_raw, bare_jid(sender)),
-                "to",
-                target,
-            ))
-        } else {
-            OriginalAdmissionKind::NoAdmissionRequired
-        };
-        Self {
-            actor_id,
-            sender,
-            target,
-            message_type: root.attribute("type").unwrap_or("normal"),
-            routed_raw,
-            origin_id: direct_origin_id(root),
-            stanza_id: root.attribute("id"),
-            admission,
-        }
+    fn host(&self) -> &AppState {
+        &self.state
     }
-    fn rated_payload(&self) -> Option<&str> {
-        match &self.admission {
-            OriginalAdmissionKind::Rated(payload) => Some(payload),
-            OriginalAdmissionKind::NoAdmissionRequired => None,
-        }
+
+    fn enter_frame_stage(&self, stage: MessageFrameStage) {
+        self.enter_frame_stage(match stage {
+            MessageFrameStage::Handler => Stage::Handler,
+            MessageFrameStage::Policy => Stage::MessagePolicy,
+            MessageFrameStage::Admission => Stage::MessageAdmission,
+            MessageFrameStage::Routing => Stage::MessageRouting,
+            MessageFrameStage::Followup => Stage::MessageFollowup,
+        });
     }
-    fn project_local<'b>(
-        &'b self,
-        authority: LocalProjectionAuthority<'b>,
-        encrypted: bool,
-        retraction: Option<&str>,
-    ) -> LocalOriginalProjection<'a, 'b> {
-        // These transformations stay at their original local preparation point,
-        // after generated stanza IDs and before the original policy awaits.
-        let rewritten = set_from(self.routed_raw, self.sender);
-        let routed = strip_stanza_ids_by_domain(&rewritten, authority.domain);
-        let sender_archive = add_stanza_id(
-            &rewritten,
-            bare_jid(self.sender),
-            authority.sender_stable_id,
-        );
-        let recipient_delivery = if authority.recipient_id == self.actor_id {
-            sender_archive.clone()
-        } else {
-            add_stanza_id(
-                &routed,
-                authority.recipient_bare,
-                authority.recipient_stable_id,
-            )
-        };
-        let archive = |stanza: &str| {
-            if encrypted {
-                if let Some(target) = retraction {
-                    super::retractions::encrypted_retraction_archive(stanza, target)
-                } else {
-                    encrypted_archive_stanza(stanza)
-                }
-            } else {
-                stanza.to_owned()
+
+    fn account_id(&self) -> Option<Uuid> {
+        self.authenticated.as_ref().map(|user| user.id)
+    }
+
+    fn full_jid(&self) -> Option<&str> {
+        self.full_jid.as_deref()
+    }
+
+    fn peer_ip(&self) -> std::net::IpAddr {
+        self.peer_ip
+    }
+
+    fn muc_domain(&self) -> String {
+        ProtocolSession::muc_domain(self)
+    }
+
+    fn upload_domain(&self) -> String {
+        ProtocolSession::upload_domain(self)
+    }
+
+    fn pubsub_domain(&self) -> String {
+        ProtocolSession::pubsub_domain(self)
+    }
+
+    fn message_operation(&self) -> Option<DirectOperationHandle> {
+        ProtocolSession::message_operation(self)
+    }
+
+    fn active_privacy(&self) -> Option<String> {
+        self.privacy_active
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn joined_room_nick(&self, room_jid: &str) -> Option<String> {
+        self.joined_rooms
+            .get(room_jid)
+            .map(|membership| membership.nick.clone())
+    }
+
+    async fn pubsub_authorization_response(&self, root: Node<'_, '_>) -> Result<bool> {
+        match ProtocolSession::pubsub_authorization_response(self, root).await {
+            Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
+                tracing::warn!(
+                    "dropping PubSub authorization form while mutation capacity is exhausted"
+                );
+                Ok(true)
             }
-        };
-        let sender_archive_stanza = archive(&sender_archive);
-        let recipient_archive_stanza = archive(&recipient_delivery);
-        LocalOriginalProjection {
-            source: self,
-            authority,
-            encrypted,
-            rewritten,
-            sender_archive,
-            recipient_delivery,
-            sender_archive_stanza,
-            recipient_archive_stanza,
+            result => result,
         }
     }
-}
 
-struct LocalProjectionAuthority<'a> {
-    recipient_id: uuid::Uuid,
-    recipient_bare: &'a str,
-    sender_stable_id: uuid::Uuid,
-    recipient_stable_id: uuid::Uuid,
-    domain: &'a str,
-}
-
-struct LocalOriginalProjection<'source, 'a> {
-    source: &'a OriginalDirectMessage<'source>,
-    authority: LocalProjectionAuthority<'a>,
-    encrypted: bool,
-    rewritten: String,
-    sender_archive: String,
-    recipient_delivery: String,
-    sender_archive_stanza: String,
-    recipient_archive_stanza: String,
-}
-
-struct DelayedLocalProjection<'source, 'local, 'a> {
-    local: &'a LocalOriginalProjection<'source, 'local>,
-    stanza: String,
-    archive_policy: LocalArchivePolicy,
-}
-
-#[derive(Clone, Copy, Default)]
-struct LocalArchivePolicy {
-    sender_enabled: bool,
-    recipient_enabled: bool,
-}
-
-#[cfg(test)]
-mod direct_preparation_tests;
-
-impl<'source, 'local> LocalOriginalProjection<'source, 'local> {
-    fn delayed(
-        &self,
-        at: chrono::DateTime<chrono::Utc>,
-        archive_policy: LocalArchivePolicy,
-    ) -> DelayedLocalProjection<'source, 'local, '_> {
-        DelayedLocalProjection {
-            local: self,
-            stanza: add_delay_from(&self.recipient_delivery, at, Some(self.authority.domain)),
-            archive_policy,
-        }
+    async fn push_disable_message(&self, root: Node<'_, '_>, from: &str, to: &str) -> Result<bool> {
+        ProtocolSession::push_disable_message(self, root, from, to).await
     }
-}
 
-impl<'source, 'local, 'live> DelayedLocalProjection<'source, 'local, 'live> {
-    fn bind<'a>(
-        &self,
-        owner: DirectOperationHandle,
-        command: ValidatedPersonalMessage<'a>,
-        eligibility: DirectSpoolEligibility,
-    ) -> Result<PreparedLocalDirect<'a, 'live>> {
-        let source = self.local.source;
-        let authority = &self.local.authority;
-        let PersonalMessageDestination::Local(destination) = command.destination else {
-            anyhow::bail!("prepared direct is not local");
-        };
-        anyhow::ensure!(
-            destination.recipient_id == authority.recipient_id
-                && destination.delivery_id == authority.recipient_stable_id
-                && destination.encrypted == self.local.encrypted
-                && destination.mam_backed == self.archive_policy.recipient_enabled,
-            "prepared direct destination mismatch"
-        );
-        let expected_owners = [
-            self.archive_policy
-                .sender_enabled
-                .then_some(source.actor_id),
-            (self.archive_policy.recipient_enabled && authority.recipient_id != source.actor_id)
-                .then_some(authority.recipient_id),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-        anyhow::ensure!(
-            command.archives.len() == expected_owners.len(),
-            "prepared direct archive set mismatch"
-        );
-        for (projection, expected_owner) in command.archives.iter().zip(expected_owners) {
-            anyhow::ensure!(
-                projection.owner_id == expected_owner,
-                "prepared direct archive order/owner mismatch"
-            );
-            let (id, peer, stanza) = if projection.owner_id == source.actor_id {
-                (
-                    authority.sender_stable_id,
-                    source.target,
-                    self.local.sender_archive_stanza.as_str(),
-                )
-            } else if projection.owner_id == authority.recipient_id {
-                (
-                    authority.recipient_stable_id,
-                    source.sender,
-                    self.local.recipient_archive_stanza.as_str(),
-                )
-            } else {
-                anyhow::bail!("prepared direct archive owner mismatch");
-            };
-            anyhow::ensure!(
-                projection.id == id
-                    && projection.peer_jid == peer
-                    && projection.stanza == stanza
-                    && projection.encrypted == self.local.encrypted
-                    && projection.stanza_id == source.stanza_id,
-                "prepared direct archive projection mismatch"
-            );
-        }
-        let admission = match &source.admission {
-            OriginalAdmissionKind::Rated(payload) => {
-                PreparationAdmission::Rated(OriginalAdmission {
-                    actor_id: source.actor_id,
-                    account_bare: bare_jid(source.sender),
-                    normalized_target: source.target,
-                    origin_id: source.origin_id.as_deref(),
-                    normalized_payload: payload,
-                })
-            }
-            OriginalAdmissionKind::NoAdmissionRequired => PreparationAdmission::NoAdmissionRequired,
-        };
-        PreparedLocalDirect::bind(
-            owner,
-            LocalPreparation {
-                actor_id: source.actor_id,
-                sender_bare: bare_jid(source.sender),
-                sender_full: source.sender,
-                target_bare: bare_jid(source.target),
-                target_full: source.target,
-                message_type: source.message_type,
-                live_stanza: &self.local.recipient_delivery,
-                origin_id: source.origin_id.as_deref(),
-                identity_payload: &self.local.rewritten,
-                stored_stanza: &self.stanza,
-                admission,
-            },
-            command,
-            eligibility,
-            LiveDirectBinding {
-                sender: source.sender,
-                target: source.target,
-                target_bare: bare_jid(source.target),
-                message_type: source.message_type,
-                stanza: &self.local.recipient_delivery,
-                recipient_id: authority.recipient_id,
-            },
-        )
+    async fn try_mix_message(&self, root: Node<'_, '_>, raw: &str) -> Result<Option<Action>> {
+        ProtocolSession::try_mix_message(self, root, raw).await
     }
-}
 
-fn mixes_personal_retraction_and_direct_invite(root: Node<'_, '_>) -> bool {
-    let has_retraction = root.children().any(|node| {
-        node.is_element()
-            && node.tag_name().name() == "retract"
-            && node.tag_name().namespace() == Some("urn:xmpp:message-retract:1")
-    });
-    has_retraction
-        && root.children().any(|node| {
-            node.is_element()
-                && node.tag_name().name() == "x"
-                && node.tag_name().namespace() == Some("jabber:x:conference")
-        })
-}
-
-/// A degraded cluster can only accept a durable bare-account direct message.
-/// The recipient spool is account scoped; an exact resource or an invitation
-/// cannot be represented by that authority while Redis is unavailable.
-fn degraded_local_direct_eligible(
-    root: Node<'_, '_>,
-    bare_target: bool,
-    personal_retraction: bool,
-    archive_requires_encryption: bool,
-) -> bool {
-    bare_target
-        && matches!(
-            root.attribute("type").unwrap_or("normal"),
-            "normal" | "chat"
-        )
-        && !personal_retraction
-        && !root.children().any(|node| {
-            node.is_element()
-                && ((node.tag_name().name() == "x"
-                    && node.tag_name().namespace() == Some("jabber:x:conference"))
-                    || (node.tag_name().name() == "pubsub"
-                        && node.tag_name().namespace()
-                            == Some("http://jabber.org/protocol/pubsub")))
-        })
-        && !signal_only_direct_message(root)
-        && direct_delivery_mode(root) == DirectDeliveryMode::Durable
-        && (!archive_requires_encryption || is_encrypted(root))
-}
-
-/// An explicit store hint does not turn a receipt/chat-state signal into
-/// ordinary direct content for degraded admission.
-fn signal_only_direct_message(root: Node<'_, '_>) -> bool {
-    let mut signal = false;
-    for node in root.children().filter(|node| node.is_element()) {
-        let namespace = node.tag_name().namespace().unwrap_or_default();
-        let name = node.tag_name().name();
-        let is_signal = (namespace == "http://jabber.org/protocol/chatstates"
-            && matches!(
-                name,
-                "active" | "composing" | "paused" | "inactive" | "gone"
-            ))
-            || (namespace == "urn:xmpp:receipts" && name == "received")
-            || (namespace == "urn:xmpp:chat-markers:0" && matches!(name, "markable" | "displayed"));
-        if is_signal {
-            signal = true;
-            continue;
-        }
-        if namespace == "urn:xmpp:hints"
-            || (matches!(namespace, "" | "jabber:client") && name == "thread")
-            || namespace == "urn:xmpp:sid:0"
-            || (namespace == "urn:northstar:pow:1" && name == "pow")
-        {
-            continue;
-        }
-        return false;
+    async fn muc_message(&self, root: Node<'_, '_>, raw: &str) -> Result<Action> {
+        ProtocolSession::muc_message(self, root, raw).await
     }
-    signal
-}
-
-fn direct_spool_eligibility(
-    stanza_eligible: bool,
-    account_default_privacy_permits: bool,
-) -> DirectSpoolEligibility {
-    if stanza_eligible && account_default_privacy_permits {
-        DirectSpoolEligibility::Eligible
-    } else {
-        DirectSpoolEligibility::LiveOnly
-    }
-}
-
-/// An outbox wake is only a hint to process a row that has already committed.
-/// A failed or replayed admission must never send a new wake to the worker.
-async fn wake_federation_outbox_after_commit<F, W>(
-    commit: F,
-    wake: W,
-) -> Result<DurableAdmissionOutcome>
-where
-    F: Future<Output = Result<DurableAdmissionOutcome>>,
-    W: FnOnce(),
-{
-    let outcome = commit.await?;
-    if matches!(
-        outcome,
-        DurableAdmissionOutcome::Stored {
-            post_commit: MessagePostCommit::WakeFederationOutbox,
-            ..
-        }
-    ) {
-        wake();
-    }
-    Ok(outcome)
 }
 
 impl ProtocolSession {
@@ -436,177 +158,18 @@ impl ProtocolSession {
         (operation, execution.run(future))
     }
 
-    async fn finalize_message_admission(
-        &self,
-        lease: &mut Option<MessageAdmissionLease>,
-        route: &'static str,
-    ) {
-        northstar_message_application::message_admission::finalize_message_admission_with(
-            self.state.message_admission_service(),
-            lease,
-            route,
-            || self.message_operation(),
-            || self.enter_frame_stage(Stage::MessageFollowup),
-            || self.state.personal_message_telemetry().post_accept_failed(),
-        )
-        .await;
-    }
-
-    async fn direct_invite_admission(
+    pub(crate) async fn message(
         &self,
         root: Node<'_, '_>,
-        inviter_id: uuid::Uuid,
-    ) -> Result<DirectInviteAdmission> {
-        let Some(room_jid) = root
-            .children()
-            .find(|node| {
-                node.is_element()
-                    && node.tag_name().name() == "x"
-                    && node.tag_name().namespace() == Some("jabber:x:conference")
-            })
-            .and_then(|node| node.attribute("jid"))
-            .and_then(|jid| northstar_xmpp_types::jid::CanonicalJid::parse_bare(jid).ok())
-            .filter(|jid| jid.domainpart() == self.muc_domain() && jid.localpart().is_some())
-        else {
-            return Ok(DirectInviteAdmission::None);
-        };
-        let Some(room) = self
-            .state
-            .muc_service()
-            .room(
-                room_jid
-                    .localpart()
-                    .expect("validated MUC room has a localpart"),
-            )
-            .await?
-        else {
-            return Ok(DirectInviteAdmission::None);
-        };
-        if !room.members_only {
-            return Ok(DirectInviteAdmission::None);
-        }
-        let affiliation = self
-            .state
-            .muc_service()
-            .local_affiliation(room.id, inviter_id)
-            .await?;
-        Ok(
-            if affiliation
-                .as_deref()
-                .is_some_and(|value| matches!(value, "owner" | "admin" | "member"))
-            {
-                DirectInviteAdmission::MembersOnly {
-                    room_id: room.id,
-                    room_epoch: room.room_epoch,
-                    config_version: room.config_version,
-                }
-            } else {
-                DirectInviteAdmission::Forbidden
-            },
-        )
-    }
-
-    pub(crate) async fn send_sent_carbons(
-        &self,
-        from: &str,
-        forwarded: &str,
-        delivered_self: Option<&str>,
-        muc_scope: Option<(&str, &str)>,
-    ) {
-        northstar_message_application::message_carbons::send_sent_carbons(
-            &*self.state,
-            from,
-            forwarded,
-            delivered_self,
-            muc_scope,
-        )
-        .await;
-    }
-
-    pub(crate) async fn send_received_carbons(
-        &self,
-        recipient: &str,
-        delivered: Option<&str>,
-        forwarded: &str,
-    ) {
-        northstar_message_application::message_carbons::send_received_carbons(
-            &*self.state,
-            recipient,
-            delivered,
-            forwarded,
-        )
-        .await;
-    }
-}
-
-fn direct_origin_id(root: Node<'_, '_>) -> Option<String> {
-    root.children()
-        .find(|node| {
-            node.is_element()
-                && node.tag_name().name() == "origin-id"
-                && node.tag_name().namespace() == Some("urn:xmpp:sid:0")
-        })
-        .and_then(|node| node.attribute("id"))
-        .map(str::to_owned)
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DirectInviteAdmission {
-    None,
-    MembersOnly {
-        room_id: uuid::Uuid,
-        room_epoch: uuid::Uuid,
-        config_version: i64,
-    },
-    Forbidden,
-}
-
-/// RFC 6120 forbids generating a stanza error in response to a stanza that
-/// is already of type `error`. Keep that invariant at every rejection point
-/// in the message pipeline, including policy and federation failures.
-fn message_error(root: Node<'_, '_>, error_type: &str, condition: &str) -> Action {
-    if root.attribute("type") == Some("error") {
-        Action::None
-    } else {
-        Action::Send(stanza_error(root, error_type, condition))
-    }
-}
-
-fn message_blocked_error(root: Node<'_, '_>) -> Action {
-    if root.attribute("type") == Some("error") {
-        Action::None
-    } else {
-        Action::Send(blocked_stanza_error(root))
+        raw: &str,
+        client_raw: &str,
+    ) -> Result<Action> {
+        handlers::message(self, root, raw, client_raw).await
     }
 }
 
 #[cfg(test)]
-fn offline_storage_eligible(root: Node<'_, '_>) -> bool {
-    matches!(
-        root.attribute("type").unwrap_or("normal"),
-        "normal" | "chat"
-    )
-}
-
-/// Classify direct messages without conflating an explicit XEP-0334 privacy
-/// request with the protocol defaults for ephemeral signal-only messages.
-pub(crate) fn direct_delivery_mode(root: Node<'_, '_>) -> DirectDeliveryMode {
-    northstar_message_core::classify_direct_delivery(
-        has_explicit_no_store_hint(root),
-        offline_storage_permitted(root),
-    )
-}
-
-/// Return the exact client-controlled commitment used by PoW v2. Routing uses
-/// a separate server-authoritative stanza whose `from` and inherited
-/// `xml:lang` may have been materialized at dispatch. Those assertions must
-/// never become bytes the client is required to predict.
-fn message_pow_intent_payload(client_raw: &str) -> String {
-    strip_untrusted_direct_delays(&strip_pow_element(client_raw), None)
-}
-
-#[cfg(test)]
-mod tests;
+mod direct_preparation_tests;
 
 #[cfg(test)]
 mod direct_continuation_tests;

@@ -11,7 +11,7 @@ const paths = {
   service: 'crates/contexts/message/northstar-message-application/src/message_admission.rs',
   witness: 'crates/contexts/message/northstar-message-application/src/message_admission/witness.rs',
   frame: 'src/xmpp/frame_execution.rs',
-  messaging: 'src/xmpp/protocol/messaging.rs',
+  messaging: 'crates/contexts/message/northstar-message-xmpp/src/messaging.rs',
   repository: 'crates/contexts/abuse/northstar-abuse-postgres/src/message_admission.rs',
   verification: 'crates/contexts/abuse/northstar-abuse-postgres/src/verification.rs',
   actor: 'crates/contexts/abuse/northstar-abuse-postgres/src/actor_state.rs',
@@ -139,21 +139,21 @@ function verifyDirectContinuation(sources) {
     finalize.split('.await').length === 3,
   'shared finalization must preserve retained, failed-construction and no-owner behavior without retry');
   const finalizeWrapper = normalize(body(sources.messaging, 'async\\s+fn\\s+finalize_message_admission\\b'));
-  requireAdmission(finalizeWrapper === 'northstar_message_application::message_admission::finalize_message_admission_with(self.state.message_admission_service(),lease,route,||self.message_operation(),||self.enter_frame_stage(Stage::MessageFollowup),||self.state.personal_message_telemetry().post_accept_failed()).await;',
+  requireAdmission(finalizeWrapper === 'letstate=session.host();northstar_message_application::message_admission::finalize_message_admission_with(state.message_admission_service(),lease,route,||session.message_operation(),||session.enter_frame_stage(MessageFrameStage::Followup),||state.personal_message_telemetry().post_accept_failed()).await;',
     'protocol finalization must forward its exact lease and lazy originating owner to the shared body');
 
   const message = normalize(body(sources.messaging, 'async\\s+fn\\s+message\\b'));
   ordered(message, ['delayed_projection.bind(operation,admission,eligibility)',
     'letapplied=service.admit_prepared_personal_message_with_mode(prepared).await;',
-    'matchcontinue_prepared_local_direct(applied,&mutmessage_admission_lease,self.state.message_admission_service(),&*self.state,||self.enter_frame_stage(Stage::MessageFollowup)).await{'],
+    'matchcontinue_prepared_local_direct(applied,&mutmessage_admission_lease,state.message_admission_service(),state,||session.enter_frame_stage(MessageFrameStage::Followup)).await{'],
   'actual protocol application-to-continuation wiring');
-  requireAdmission(message.includes('ContinuedLocalDirect::Accepted=>returnOk(Action::None)') &&
+  requireAdmission(message.includes('ContinuedLocalDirect::Accepted=>returnOk(S::Action::none())') &&
     message.includes('ContinuedLocalDirect::Reject(error)=>{let(kind,condition)=error.stanza_error();returnOk(message_error(root,kind,condition));}') &&
     message.includes('history_committed=live.archive_written();letsource=live.source();durable_c2s_delivery=Some(source.message_id);live_claim_id=source.claim_id;prepared_live=Some(live);'),
   'protocol must consume the shared disposition without reconstructing result or delivery authority');
-  requireAdmission(message.includes('self.enter_frame_stage(Stage::MessageRouting);letoutcome=ifletSome(live)=prepared_live{live.route_with(&*self.state,&targets).await?}else{') &&
+  requireAdmission(message.includes('session.enter_frame_stage(MessageFrameStage::Routing);letoutcome=ifletSome(live)=prepared_live{live.route_with(state,&targets).await?}else{') &&
     message.includes('service.admit_personal_message_with_mode(&admission,eligibility).await') &&
-    message.includes('DirectMessageRouter::route(&*self.state,route_request).await?'),
+    message.includes('DirectMessageRouter::route(state,route_request).await?'),
   'retained routing must stay at MessageRouting and preserve the no-owner route path');
 
   const continuation = normalize(body(sources.directWorkflow, 'async\\s+fn\\s+continue_prepared_local_direct\\b'));

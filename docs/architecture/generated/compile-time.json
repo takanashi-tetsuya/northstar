@@ -188,6 +188,7 @@
     "northstar-message-application",
     "northstar-message-core",
     "northstar-message-postgres",
+    "northstar-message-xmpp",
     "northstar-mix-xmpp",
     "northstar-muc-xmpp",
     "northstar-operations-application",
@@ -3020,6 +3021,10 @@
     ],
     [
       "northstar-message-application",
+      "northstar-telemetry"
+    ],
+    [
+      "northstar-message-application",
       "northstar-xep-0016"
     ],
     [
@@ -3188,6 +3193,70 @@
     ],
     [
       "northstar-message-postgres",
+      "uuid"
+    ],
+    [
+      "northstar-message-xmpp",
+      "anyhow"
+    ],
+    [
+      "northstar-message-xmpp",
+      "chrono"
+    ],
+    [
+      "northstar-message-xmpp",
+      "northstar-abuse-policy"
+    ],
+    [
+      "northstar-message-xmpp",
+      "northstar-delivery-core"
+    ],
+    [
+      "northstar-message-xmpp",
+      "northstar-federation-core"
+    ],
+    [
+      "northstar-message-xmpp",
+      "northstar-message-application"
+    ],
+    [
+      "northstar-message-xmpp",
+      "northstar-message-core"
+    ],
+    [
+      "northstar-message-xmpp",
+      "northstar-room-core"
+    ],
+    [
+      "northstar-message-xmpp",
+      "northstar-xep-0280"
+    ],
+    [
+      "northstar-message-xmpp",
+      "northstar-xep-0359"
+    ],
+    [
+      "northstar-message-xmpp",
+      "northstar-xml-builder"
+    ],
+    [
+      "northstar-message-xmpp",
+      "northstar-xmpp-types"
+    ],
+    [
+      "northstar-message-xmpp",
+      "roxmltree"
+    ],
+    [
+      "northstar-message-xmpp",
+      "tokio"
+    ],
+    [
+      "northstar-message-xmpp",
+      "tracing"
+    ],
+    [
+      "northstar-message-xmpp",
       "uuid"
     ],
     [
@@ -6373,6 +6442,10 @@
     [
       "rust-xmpp-server",
       "northstar-message-postgres"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-message-xmpp"
     ],
     [
       "rust-xmpp-server",

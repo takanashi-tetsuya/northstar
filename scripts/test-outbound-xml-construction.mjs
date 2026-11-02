@@ -113,7 +113,7 @@ for (const entry of [
   'crates/contexts/operations/northstar-operations-xmpp/src/commands.rs',
   'src/xmpp/protocol/presence.rs',
   'src/xmpp/protocol/sasl2.rs',
-  'src/xmpp/protocol/messaging.rs',
+  'crates/contexts/message/northstar-message-xmpp/src/messaging.rs',
   'src/xmpp/protocol/pubsub.rs',
   'src/xmpp/protocol/pep.rs',
   'crates/contexts/room/northstar-room-application/src/mix_service.rs',

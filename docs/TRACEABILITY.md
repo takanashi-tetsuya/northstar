@@ -22,7 +22,7 @@ checked only for an explicit archive banner.
 
 | Issue | State | Implementation / schema | Automated evidence | Authoritative documentation |
 | --- | --- | --- | --- | --- |
-| DOC-001 | Implemented | [messaging.rs](../src/xmpp/protocol/messaging.rs) | [documentation gate](../scripts/check-documentation-consistency.mjs) | [known issues](KNOWN_ISSUES.md) |
+| DOC-001 | Implemented | [messaging.rs](../crates/contexts/message/northstar-message-xmpp/src/messaging.rs) | [documentation gate](../scripts/check-documentation-consistency.mjs) | [known issues](KNOWN_ISSUES.md) |
 | DOC-002 | Implemented | [cluster.rs](../src/cluster.rs), [PubSub outbox](../crates/contexts/pubsub/northstar-pubsub-postgres/src/outbox.rs) | [documentation gate](../scripts/check-documentation-consistency.mjs) | [clustering](CLUSTERING.md) |
 | DOC-003 | Implemented | [pubsub.rs](../src/xmpp/protocol/pubsub.rs) | [PubSub wire harness](../scripts/pubsub-wire-wsl.sh) | [XEP matrix](XEP_MATRIX.md) |
 | DOC-004 | Implemented | [S2S outbox](../crates/contexts/federation/northstar-federation-postgres/src/lib.rs) | [S2S database harness](../scripts/s2s-db-wsl.sh) | [production operations](PRODUCTION_OPERATIONS.md) |

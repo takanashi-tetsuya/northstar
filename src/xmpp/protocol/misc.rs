@@ -973,10 +973,6 @@ impl ProtocolSession {
         Ok(Action::Send(iq_result_from(id, &own_bare, "")))
     }
 
-    pub(crate) async fn notify_push(&self, recipient_id: uuid::Uuid) -> Result<()> {
-        self.state.dispatch_push_notification(recipient_id).await
-    }
-
     pub(crate) async fn handle_push_response(
         &self,
         id: &str,

@@ -287,9 +287,9 @@ impl AppState {
 
     pub(crate) fn personal_message_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::PersonalMessageTelemetry<'_> {
-        crate::xmpp::capabilities::PersonalMessageTelemetry::new(
-            crate::xmpp::capabilities::PersonalMessageTelemetryCells {
+    ) -> northstar_message_application::telemetry::PersonalMessageTelemetry<'_> {
+        northstar_message_application::telemetry::PersonalMessageTelemetry::new(
+            northstar_message_application::telemetry::PersonalMessageTelemetryCells {
                 routing_duration: &self.metrics.routing_duration_seconds,
                 rate_limited: &self.metrics.rate_limited_total,
                 abuse_backend_failures: &self.metrics.anti_abuse_backend_failures_total,

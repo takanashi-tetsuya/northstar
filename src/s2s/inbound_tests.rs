@@ -668,7 +668,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
     .await
     .unwrap();
 
-    use crate::xmpp::protocol::messaging::{undelivered_disposition, UndeliveredDisposition};
+    use northstar_message_core::{undelivered_disposition, UndeliveredDisposition};
     assert_eq!(
         undelivered_disposition("headline", true, true),
         UndeliveredDisposition::Drop
@@ -760,7 +760,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
         "local.test",
     );
     let online_action = "<message from='alice@remote.test/Phone' to='bob@local.test' id='online-retraction'><retract xmlns='urn:xmpp:message-retract:1' id='remote-original'/></message>";
-    let online_command = crate::xmpp::protocol::retractions::personal_retraction_command(
+    let online_command = northstar_message_core::retraction::personal_retraction_command(
         online_retraction.root_element(),
     )
     .unwrap()
@@ -836,7 +836,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
         .unwrap();
     let offline_retraction_xml = "<message from='alice@remote.test/Phone' to='bob@local.test' id='offline-retraction'><retract xmlns='urn:xmpp:message-retract:1' id='offline-original'/></message>";
     let offline_retraction = Document::parse(offline_retraction_xml).unwrap();
-    let offline_command = crate::xmpp::protocol::retractions::personal_retraction_command(
+    let offline_command = northstar_message_core::retraction::personal_retraction_command(
         offline_retraction.root_element(),
     )
     .unwrap()
@@ -925,7 +925,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
         encrypted: false,
         stanza_id: Some("outbound-retraction"),
     }];
-    let outbound_command = crate::xmpp::protocol::retractions::personal_retraction_command(
+    let outbound_command = northstar_message_core::retraction::personal_retraction_command(
         outbound_retraction.root_element(),
     )
     .unwrap()
@@ -977,7 +977,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
         encrypted: false,
         stanza_id: Some("rollback-action"),
     }];
-    let rollback_command = crate::xmpp::protocol::retractions::personal_retraction_command(
+    let rollback_command = northstar_message_core::retraction::personal_retraction_command(
         rollback_retraction.root_element(),
     )
     .unwrap()

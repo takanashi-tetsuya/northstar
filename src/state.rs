@@ -123,6 +123,7 @@ pub(crate) mod federated_muc_cluster_effects;
 mod locked_muc_expiry;
 mod message_carbon_delivery;
 mod message_cluster_routing;
+mod message_host;
 pub(crate) mod mix_iq_relay;
 pub(crate) mod mix_outbox;
 pub(crate) mod mix_presence_recovery;

@@ -130,14 +130,14 @@ rejectsDirect('message service passes another preparation', 'messageService',
   /commit_prepared_application\(\s*&self\.personal,\s*prepared,?\s*\)/g,
   'commit_prepared_application(&self.personal, other_prepared)');
 rejectsDirect('protocol finalizer loses the originating owner', 'messaging',
-  /\|\| self\.message_operation\(\),/g, '|| None,');
+  /\|\| session\.message_operation\(\),/g, '|| None,');
 rejectsDirect('shared finalizer consumes lease before retaining its handle', 'service',
   /(let retained = operation\(\)\.map\(\|operation\| operation\.finalize\(retained_lease\)\);)\s*(let lease = lease\.take\(\)\.expect\("lease checked above"\);)/g,
   '$2 $1');
 rejectsDirect('protocol swaps the sealed application value', 'messaging',
   /(match continue_prepared_local_direct\(\s*)applied,/g, '$1other_applied,');
 rejectsDirect('retained route bypasses the shared live continuation', 'messaging',
-  /live\.route_with\(&\*self\.state, &targets\)/g, 'legacy_route(&*self.state, &targets)');
+  /live\.route_with\(state, &targets\)/g, 'legacy_route(state, &targets)');
 rejectsDirect('eager health read in shared continuation', 'directWorkflow',
   /(let AppliedLocalDirect\s*\{\s*actual,\s*continuation,?\s*\}\s*=\s*applied;)/g,
   '$1 let _ = route.direct_route_mode();');

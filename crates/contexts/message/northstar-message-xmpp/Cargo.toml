@@ -1,0 +1,32 @@
+[package]
+name = "northstar-message-xmpp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Personal message stanza pipeline of Northstar: admission, archiving, delivery and retraction."
+publish = false
+
+[features]
+# Lets the root crate's real-queue tests prepare an original.
+test-support = []
+
+[dependencies]
+anyhow = "1.0"
+chrono = "0.4"
+northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
+northstar-delivery-core = { path = "../northstar-delivery-core" }
+northstar-federation-core = { path = "../../federation/northstar-federation-core" }
+northstar-message-application = { path = "../northstar-message-application" }
+northstar-message-core = { path = "../northstar-message-core" }
+northstar-room-core = { path = "../../room/northstar-room-core" }
+northstar-xep-0280 = { path = "../../../kernel/northstar-xep-0280" }
+northstar-xep-0359 = { path = "../../../kernel/northstar-xep-0359" }
+northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
+northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
+roxmltree = "0.20"
+tracing = "0.1"
+uuid = "1.12"
+
+[dev-dependencies]
+tokio = { version = "1.43", features = ["macros", "rt", "sync"] }

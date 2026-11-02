@@ -14,6 +14,7 @@ pub mod messaging;
 pub mod push;
 pub mod retractions;
 pub mod route_item;
+pub mod telemetry;
 
 use northstar_message_core::{
     IdentityAuthority, MessageCommit, PersonalMessageDestination, ValidatedPersonalMessage,

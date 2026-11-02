@@ -6,6 +6,7 @@
 //! transaction.
 
 pub mod jingle;
+pub mod retraction;
 pub mod validation;
 
 use uuid::Uuid;
@@ -257,6 +258,15 @@ pub struct OfflineDeliveryLimits {
     pub max_messages: i64,
     pub max_bytes: i64,
     pub ttl_days: i64,
+}
+
+/// Classify direct messages without conflating an explicit XEP-0334 privacy
+/// request with the protocol defaults for ephemeral signal-only messages.
+pub fn direct_delivery_mode(root: roxmltree::Node<'_, '_>) -> DirectDeliveryMode {
+    classify_direct_delivery(
+        northstar_xml_builder::message_policy::has_explicit_no_store_hint(root),
+        northstar_xml_builder::message_policy::offline_storage_permitted(root),
+    )
 }
 
 #[cfg(test)]

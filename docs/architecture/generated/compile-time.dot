@@ -186,6 +186,7 @@ digraph compile_time {
   "northstar-message-application";
   "northstar-message-core";
   "northstar-message-postgres";
+  "northstar-message-xmpp";
   "northstar-mix-xmpp";
   "northstar-muc-xmpp";
   "northstar-operations-application";
@@ -1100,6 +1101,7 @@ digraph compile_time {
   "northstar-message-application" -> "northstar-message-core";
   "northstar-message-application" -> "northstar-room-core";
   "northstar-message-application" -> "northstar-security";
+  "northstar-message-application" -> "northstar-telemetry";
   "northstar-message-application" -> "northstar-xep-0016";
   "northstar-message-application" -> "northstar-xep-0280";
   "northstar-message-application" -> "northstar-xml-builder";
@@ -1143,6 +1145,22 @@ digraph compile_time {
   "northstar-message-postgres" -> "subtle";
   "northstar-message-postgres" -> "thiserror";
   "northstar-message-postgres" -> "uuid";
+  "northstar-message-xmpp" -> "anyhow";
+  "northstar-message-xmpp" -> "chrono";
+  "northstar-message-xmpp" -> "northstar-abuse-policy";
+  "northstar-message-xmpp" -> "northstar-delivery-core";
+  "northstar-message-xmpp" -> "northstar-federation-core";
+  "northstar-message-xmpp" -> "northstar-message-application";
+  "northstar-message-xmpp" -> "northstar-message-core";
+  "northstar-message-xmpp" -> "northstar-room-core";
+  "northstar-message-xmpp" -> "northstar-xep-0280";
+  "northstar-message-xmpp" -> "northstar-xep-0359";
+  "northstar-message-xmpp" -> "northstar-xml-builder";
+  "northstar-message-xmpp" -> "northstar-xmpp-types";
+  "northstar-message-xmpp" -> "roxmltree";
+  "northstar-message-xmpp" -> "tokio";
+  "northstar-message-xmpp" -> "tracing";
+  "northstar-message-xmpp" -> "uuid";
   "northstar-mix-xmpp" -> "anyhow";
   "northstar-mix-xmpp" -> "chrono";
   "northstar-mix-xmpp" -> "dashmap";
@@ -1939,6 +1957,7 @@ digraph compile_time {
   "rust-xmpp-server" -> "northstar-message-application";
   "rust-xmpp-server" -> "northstar-message-core";
   "rust-xmpp-server" -> "northstar-message-postgres";
+  "rust-xmpp-server" -> "northstar-message-xmpp";
   "rust-xmpp-server" -> "northstar-mix-xmpp";
   "rust-xmpp-server" -> "northstar-muc-xmpp";
   "rust-xmpp-server" -> "northstar-operations-application";

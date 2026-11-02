@@ -2,6 +2,7 @@
 
 use crate::db;
 use northstar_message_application::retractions::*;
+use northstar_message_core::retraction::PersonalRetractionCommand;
 use sha2::{Digest, Sha256, Sha512};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -1372,6 +1373,322 @@ async fn exact_replay_conflict_and_outbox_failure_are_atomic() {
         (0, 1, 0),
         "failed transaction must preserve the original and roll back intent/action/outbox projections"
     );
+
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
+async fn apply_personal_retraction_atomic(
+    pool: &sqlx::PgPool,
+    owners: &[(Uuid, &str)],
+    sender_jid: &str,
+    command: &PersonalRetractionCommand,
+    action_writes: &[ArchiveWrite<'_>],
+    outbox: Option<&OutboundProjection<'_>>,
+) -> anyhow::Result<RetractionOutcome> {
+    let owners = owners
+        .iter()
+        .map(|(owner_id, peer_jid)| OwnerProjection {
+            owner_id: *owner_id,
+            peer_jid,
+        })
+        .collect::<Vec<_>>();
+    RetractionService::new(
+        northstar_workflows::retraction_repository::PostgresRetractionRepository::new(pool.clone()),
+        northstar_abuse_application::guard::test_personal_retraction_content_keyring(),
+        "local.test",
+    )
+    .apply(
+        &owners,
+        sender_jid,
+        &RetractionCommand {
+            target_id: &command.target_id,
+            action_id: &command.action_id,
+            semantic_payload: &command.semantic_payload,
+        },
+        action_writes,
+        outbox,
+    )
+    .await
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
+async fn personal_retraction_is_author_scoped_unambiguous_and_atomic() {
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("set TEST_DATABASE_URL to the xmpp_test PostgreSQL database");
+    let admin = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(60))
+        .connect(&url)
+        .await
+        .unwrap();
+    let schema = format!("modern_retraction_test_{}", Uuid::new_v4().simple());
+    eprintln!("isolated_schema={schema}");
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let connection_schema = schema.clone();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(4)
+        .acquire_timeout(std::time::Duration::from_secs(60))
+        .after_connect(move |connection, _| {
+            let statement = format!("SET search_path TO {connection_schema}");
+            Box::pin(async move {
+                sqlx::query(&statement).execute(connection).await?;
+                Ok(())
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    crate::db::migrate(&pool).await.unwrap();
+
+    let sender_id = Uuid::new_v4();
+    let recipient_id = Uuid::new_v4();
+    for (id, username) in [(sender_id, "alice"), (recipient_id, "bob")] {
+        sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
+            .bind(id)
+            .bind(username)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    let sender_original_id = Uuid::new_v4();
+    let recipient_original_id = Uuid::new_v4();
+    for (id, owner_id, peer_jid, peer_full_jid) in [
+        (
+            sender_original_id,
+            sender_id,
+            "bob@local.test",
+            "bob@local.test/Phone",
+        ),
+        (
+            recipient_original_id,
+            recipient_id,
+            "alice@local.test",
+            "alice@local.test/Laptop",
+        ),
+    ] {
+        sqlx::query(
+                "INSERT INTO message_archive
+                 (id,owner_id,peer_jid,peer_full_jid,stanza,encrypted,stanza_id)
+                 VALUES($1,$2,$3,$4,$5,FALSE,'target-1')",
+            )
+            .bind(id)
+            .bind(owner_id)
+            .bind(peer_jid)
+            .bind(peer_full_jid)
+            .bind("<message from='alice@local.test/Laptop' to='bob@local.test/Phone' id='target-1'><body>remove me</body></message>")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let wrong_peer_id = Uuid::new_v4();
+    sqlx::query(
+            "INSERT INTO message_archive
+             (id,owner_id,peer_jid,peer_full_jid,stanza,encrypted,stanza_id)
+             VALUES($1,$2,'carol@local.test','carol@local.test/Phone',$3,FALSE,'target-1')",
+        )
+        .bind(wrong_peer_id)
+        .bind(sender_id)
+        .bind("<message from='alice@local.test/Laptop' to='carol@local.test/Phone' id='target-1'><body>other conversation</body></message>")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let action_sender_id = Uuid::new_v4();
+    let action_recipient_id = Uuid::new_v4();
+    let action_stanza = "<message from='alice@local.test/Laptop' to='bob@local.test/Phone' id='action-1'><retract xmlns='urn:xmpp:message-retract:1' id='target-1'/></message>";
+    let writes = [
+        ArchiveWrite {
+            id: action_sender_id,
+            owner_id: sender_id,
+            peer_jid: "bob@local.test/Phone",
+            stanza: action_stanza,
+            encrypted: false,
+            stanza_id: Some("action-1"),
+        },
+        ArchiveWrite {
+            id: action_recipient_id,
+            owner_id: recipient_id,
+            peer_jid: "alice@local.test/Laptop",
+            stanza: action_stanza,
+            encrypted: false,
+            stanza_id: Some("action-1"),
+        },
+    ];
+    apply_personal_retraction_atomic(
+        &pool,
+        &[
+            (sender_id, "bob@local.test/Phone"),
+            (recipient_id, "alice@local.test/Laptop"),
+        ],
+        "alice@local.test/Laptop",
+        &PersonalRetractionCommand {
+            target_id: "target-1".to_owned(),
+            action_id: "action-1".to_owned(),
+            semantic_payload: action_stanza.to_owned(),
+        },
+        &writes,
+        None,
+    )
+    .await
+    .unwrap();
+    for id in [sender_original_id, recipient_original_id] {
+        let stanza: String = sqlx::query_scalar("SELECT stanza FROM message_archive WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(stanza.contains("<retracted "), "{stanza}");
+        assert!(!stanza.contains("remove me"), "{stanza}");
+    }
+    let wrong_peer: String = sqlx::query_scalar("SELECT stanza FROM message_archive WHERE id=$1")
+        .bind(wrong_peer_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(wrong_peer.contains("other conversation"));
+
+    let wrong_author_id = Uuid::new_v4();
+    sqlx::query(
+            "INSERT INTO message_archive
+             (id,owner_id,peer_jid,peer_full_jid,stanza,encrypted,stanza_id)
+             VALUES($1,$2,'bob@local.test','bob@local.test/Phone',$3,FALSE,'wrong-author')",
+        )
+        .bind(wrong_author_id)
+        .bind(sender_id)
+        .bind("<message from='mallory@local.test/Device' id='wrong-author'><body>not yours</body></message>")
+        .execute(&pool)
+        .await
+        .unwrap();
+    apply_personal_retraction_atomic(
+            &pool,
+            &[(sender_id, "bob@local.test")],
+            "alice@local.test/Laptop",
+            &PersonalRetractionCommand {
+                target_id: "wrong-author".to_owned(),
+                action_id: "ignored-action".to_owned(),
+                semantic_payload: "<message from='alice@local.test/Laptop' id='ignored-action'><retract xmlns='urn:xmpp:message-retract:1' id='wrong-author'/></message>".to_owned(),
+            },
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
+    let wrong_author: String = sqlx::query_scalar("SELECT stanza FROM message_archive WHERE id=$1")
+        .bind(wrong_author_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(wrong_author.contains("not yours"));
+
+    let ambiguous_ids = [Uuid::new_v4(), Uuid::new_v4()];
+    for id in ambiguous_ids {
+        sqlx::query(
+            "INSERT INTO message_archive
+                 (id,owner_id,peer_jid,peer_full_jid,stanza,encrypted,stanza_id)
+                 VALUES($1,$2,'bob@local.test','bob@local.test/Phone',$3,FALSE,'ambiguous')",
+        )
+        .bind(id)
+        .bind(sender_id)
+        .bind(format!(
+            "<message from='alice@local.test/Laptop' id='ambiguous'><body>{id}</body></message>"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    apply_personal_retraction_atomic(
+            &pool,
+            &[(sender_id, "bob@local.test")],
+            "alice@local.test/Laptop",
+            &PersonalRetractionCommand {
+                target_id: "ambiguous".to_owned(),
+                action_id: "ambiguous-action".to_owned(),
+                semantic_payload: "<message from='alice@local.test/Laptop' id='ambiguous-action'><retract xmlns='urn:xmpp:message-retract:1' id='ambiguous'/></message>".to_owned(),
+            },
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
+    let still_visible: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM message_archive
+             WHERE owner_id=$1 AND stanza_id='ambiguous' AND stanza LIKE '%<body>%'",
+    )
+    .bind(sender_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(still_visible, 2);
+
+    let rollback_target_id = Uuid::new_v4();
+    sqlx::query(
+            "INSERT INTO message_archive
+             (id,owner_id,peer_jid,peer_full_jid,stanza,encrypted,stanza_id)
+             VALUES($1,$2,'bob@local.test','bob@local.test/Phone',$3,FALSE,'rollback-target')",
+        )
+        .bind(rollback_target_id)
+        .bind(sender_id)
+        .bind("<message from='alice@local.test/Laptop' id='rollback-target'><body>must survive</body></message>")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let duplicate_action_id = Uuid::new_v4();
+    let rollback_stanza = "<message from='alice@local.test/Laptop' id='rollback-action'><retract xmlns='urn:xmpp:message-retract:1' id='rollback-target'/></message>";
+    let failing_writes = [
+        ArchiveWrite {
+            id: duplicate_action_id,
+            owner_id: sender_id,
+            peer_jid: "bob@local.test",
+            stanza: rollback_stanza,
+            encrypted: false,
+            stanza_id: Some("rollback-action"),
+        },
+        ArchiveWrite {
+            id: duplicate_action_id,
+            owner_id: recipient_id,
+            peer_jid: "alice@local.test",
+            stanza: rollback_stanza,
+            encrypted: false,
+            stanza_id: Some("rollback-action"),
+        },
+    ];
+    assert!(apply_personal_retraction_atomic(
+        &pool,
+        &[(sender_id, "bob@local.test")],
+        "alice@local.test/Laptop",
+        &PersonalRetractionCommand {
+            target_id: "rollback-target".to_owned(),
+            action_id: "rollback-action".to_owned(),
+            semantic_payload: rollback_stanza.to_owned(),
+        },
+        &failing_writes,
+        None,
+    )
+    .await
+    .is_err());
+    let rollback_target: String =
+        sqlx::query_scalar("SELECT stanza FROM message_archive WHERE id=$1")
+            .bind(rollback_target_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(rollback_target.contains("must survive"));
+    let leaked_action: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM message_archive WHERE id=$1")
+        .bind(duplicate_action_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(leaked_action, 0);
 
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))

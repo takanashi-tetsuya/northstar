@@ -104,8 +104,8 @@ fn degraded_inbound_direct_eligible(
                             == Some("http://jabber.org/protocol/pubsub")))
         })
         && !signal_only_inbound_direct_message(root)
-        && crate::xmpp::protocol::messaging::direct_delivery_mode(root)
-            == crate::xmpp::protocol::messaging::DirectDeliveryMode::Durable
+        && northstar_message_core::direct_delivery_mode(root)
+            == northstar_message_core::DirectDeliveryMode::Durable
         && (!archive_requires_encryption || is_encrypted(root))
 }
 
@@ -196,9 +196,9 @@ pub(crate) async fn route_inbound_message(
         ));
     }
     let personal_retraction_command =
-        match crate::xmpp::protocol::retractions::personal_retraction_command(root) {
+        match northstar_message_core::retraction::personal_retraction_command(root) {
             Ok(command) => command,
-            Err(()) => return Ok(inbound_message_error(root, "modify", "bad-request")),
+            Err(_) => return Ok(inbound_message_error(root, "modify", "bad-request")),
         };
     let personal_retraction = personal_retraction_command.is_some();
     let from_jid = match CanonicalJid::parse(from) {
@@ -239,7 +239,7 @@ pub(crate) async fn route_inbound_message(
     {
         LocalRecipientDecision::Missing => {
             return Ok(
-                if crate::xmpp::protocol::messaging::missing_user_message_should_error(
+                if northstar_message_core::missing_user_message_should_error(
                     root.attribute("type").unwrap_or("normal"),
                 ) {
                     inbound_message_error(root, "cancel", "service-unavailable")
@@ -259,13 +259,13 @@ pub(crate) async fn route_inbound_message(
         return Ok(inbound_message_error(root, "modify", "bad-request"));
     }
     if bare_target {
-        match crate::xmpp::protocol::messaging::bare_message_route(message_type) {
-            crate::xmpp::protocol::messaging::BareMessageRoute::Reject => {
+        match northstar_message_core::bare_message_route(message_type) {
+            northstar_message_core::BareMessageRoute::Reject => {
                 return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
             }
-            crate::xmpp::protocol::messaging::BareMessageRoute::Ignore => return Ok(None),
-            crate::xmpp::protocol::messaging::BareMessageRoute::Primary
-            | crate::xmpp::protocol::messaging::BareMessageRoute::All => {}
+            northstar_message_core::BareMessageRoute::Ignore => return Ok(None),
+            northstar_message_core::BareMessageRoute::Primary
+            | northstar_message_core::BareMessageRoute::All => {}
         }
     }
     // Resolve local per-resource privacy policy before any archive or delivery
@@ -335,12 +335,12 @@ pub(crate) async fn route_inbound_message(
     // condition can only be a routing race and must be recovered from the
     // resource-affine outbox without returning an error.
     if !bare_target && unfiltered_privacy_candidates == 0 && !remote_route_exists {
-        match crate::xmpp::protocol::messaging::full_no_match_route(message_type) {
-            crate::xmpp::protocol::messaging::FullNoMatchRoute::Ignore => return Ok(None),
-            crate::xmpp::protocol::messaging::FullNoMatchRoute::Reject => {
+        match northstar_message_core::full_no_match_route(message_type) {
+            northstar_message_core::FullNoMatchRoute::Ignore => return Ok(None),
+            northstar_message_core::FullNoMatchRoute::Reject => {
                 return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
             }
-            crate::xmpp::protocol::messaging::FullNoMatchRoute::FallbackChat => {}
+            northstar_message_core::FullNoMatchRoute::FallbackChat => {}
         }
     }
     let stable_id = uuid::Uuid::new_v4();
@@ -355,7 +355,7 @@ pub(crate) async fn route_inbound_message(
     let persistence_allowed = personal_retraction || offline_storage_permitted(root);
     let archive = if encrypted {
         if let Some(command) = personal_retraction_command.as_ref() {
-            crate::xmpp::protocol::retractions::encrypted_retraction_archive(
+            northstar_xml_builder::message_policy::encrypted_retraction_archive_stanza(
                 &annotated,
                 &command.target_id,
             )
@@ -381,10 +381,10 @@ pub(crate) async fn route_inbound_message(
     let mut history_committed = false;
     let mut durable_c2s_delivery = None;
     let mut live_claim_id = None;
-    let direct_delivery_mode = crate::xmpp::protocol::messaging::direct_delivery_mode(root);
+    let direct_delivery_mode = northstar_message_core::direct_delivery_mode(root);
     if !personal_retraction
         && matches!(message_type, "normal" | "chat")
-        && crate::xmpp::protocol::messaging::durable_direct_delivery_allowed(
+        && northstar_message_core::durable_direct_delivery_allowed(
             direct_delivery_mode,
             durable_content_allowed,
         )
@@ -540,12 +540,12 @@ pub(crate) async fn route_inbound_message(
         // before creating a durable projection. Chat fallback remains valid;
         // a bare target may recover through the offline outbox.
         if !bare_target && targets.is_empty() && !remote_route_exists {
-            match crate::xmpp::protocol::messaging::full_no_match_route(message_type) {
-                crate::xmpp::protocol::messaging::FullNoMatchRoute::Ignore => return Ok(None),
-                crate::xmpp::protocol::messaging::FullNoMatchRoute::Reject => {
+            match northstar_message_core::full_no_match_route(message_type) {
+                northstar_message_core::FullNoMatchRoute::Ignore => return Ok(None),
+                northstar_message_core::FullNoMatchRoute::Reject => {
                     return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
                 }
-                crate::xmpp::protocol::messaging::FullNoMatchRoute::FallbackChat => {}
+                northstar_message_core::FullNoMatchRoute::FallbackChat => {}
             }
         }
         let writes = archive_allowed
@@ -719,9 +719,7 @@ pub(crate) async fn route_inbound_message(
         }
         return Ok(None);
     }
-    if direct_delivery_mode
-        == crate::xmpp::protocol::messaging::DirectDeliveryMode::VolatileExplicitNoStore
-    {
+    if direct_delivery_mode == northstar_message_core::DirectDeliveryMode::VolatileExplicitNoStore {
         return Ok(inbound_message_error(root, "wait", "service-unavailable"));
     }
     if !persistence_allowed {
@@ -838,7 +836,7 @@ async fn finalize_accepted_inbound_history(
         .into_iter()
         .collect::<Vec<_>>();
     debug_assert!(
-        crate::xmpp::protocol::retractions::personal_retraction_command(root)
+        northstar_message_core::retraction::personal_retraction_command(root)
             .ok()
             .flatten()
             .is_none(),

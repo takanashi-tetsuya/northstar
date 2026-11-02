@@ -434,11 +434,7 @@ pub(super) async fn drive_authenticated_inbound_inner(
         bidi_connection_key(&scope.local, &scope.remote).expect("prepared stream domains");
     let mut transport = Some(transport);
     let mut sm = super::super::sm::StreamManagement::with_budget(
-        state
-            .s2s_connection_registry()
-            .resumption
-            .replay_bytes
-            .clone(),
+        state.s2s_resumption().replay_bytes.clone(),
     );
     let (resume_sender, mut resumes) = mpsc::channel::<super::super::resume::Request>(1);
     let mut registration: Option<super::super::resume::Registration> = None;
@@ -503,7 +499,7 @@ pub(super) async fn drive_authenticated_inbound_inner(
                         sm.is_enabled(),
                         used,
                         true,
-                        state.s2s_connection_registry().resumption.has_suspended_scope(&scope),
+                        state.s2s_resumption().has_suspended_scope(&scope),
                     ) {
                         initial_negotiation_complete = true;
                         registered = publish_inbound_route(&state, &scope, connection_id, &sender, &current.disconnect);
@@ -529,7 +525,7 @@ pub(super) async fn drive_authenticated_inbound_inner(
                     }
                     match northstar_federation_core::sm::parse_control(&frame)? {
                         Some(northstar_federation_core::sm::Control::Resume { id, h }) if !sm.is_enabled() && !used => {
-                            let Some((epoch, owner)) = state.s2s_connection_registry().resumption.lookup(&id, &scope) else {
+                            let Some((epoch, owner)) = state.s2s_resumption().lookup(&id, &scope) else {
                                 tracing::debug!(condition = "item-not-found", reason = "no-matching-resume-owner", "rejected inbound S2S resumption");
                                 super::super::sm::failed(&mut current.stream, "item-not-found").await?;
                                 continue;
@@ -551,7 +547,7 @@ pub(super) async fn drive_authenticated_inbound_inner(
                             let mut enabled = XmlElement::new("enabled").attr("xmlns", northstar_federation_core::sm::NS);
                             if resume && max != Some(0) {
                                 resume_window = std::time::Duration::from_secs(u64::from(max.unwrap_or(60).min(60)));
-                                registration = state.s2s_connection_registry().resumption.register(scope.clone(), resume_sender.clone());
+                                registration = state.s2s_resumption().register(scope.clone(), resume_sender.clone());
                                 if let Some(owner) = &registration {
                                     enabled = enabled.attr("resume", "true").attr("id", &owner.id).attr("max", resume_window.as_secs().to_string());
                                 }

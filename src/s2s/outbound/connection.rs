@@ -237,11 +237,7 @@ pub(super) async fn connect_and_multiplex_inner(
     } = authenticate_transport(state, source_domain, target_domain, &disconnect).await?;
 
     let mut sm = super::super::sm::StreamManagement::with_budget(
-        state
-            .s2s_connection_registry()
-            .resumption
-            .replay_bytes
-            .clone(),
+        state.s2s_resumption().replay_bytes.clone(),
     );
     let mut resume = None;
     if northstar_federation_core::sm::advertised(&features) {

@@ -5,6 +5,7 @@
 pub use northstar_federation_core::*;
 pub mod dispatch;
 pub mod outbox;
+pub mod registry;
 pub mod sm_outbox;
 pub mod telemetry;
 pub mod write_policy;

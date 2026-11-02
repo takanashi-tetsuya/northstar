@@ -162,8 +162,14 @@ impl AppState {
 
     /// Owner-fenced process-local S2S route registry. Its API returns cloned
     /// senders and value snapshots only; callers cannot obtain DashMap guards.
-    pub(crate) fn s2s_connection_registry(&self) -> &crate::s2s::S2sConnectionRegistry {
+    pub(crate) fn s2s_connection_registry(&self) -> &S2sConnectionRegistry {
         &self.s2s_connection_registry
+    }
+
+    /// Suspended S2S streams. These hold live TLS transports, so they stay out
+    /// of the route registry above.
+    pub(crate) fn s2s_resumption(&self) -> &crate::s2s::resume::Registry {
+        &self.s2s_resumption
     }
 
     /// Admit an inbound component socket without exposing the semaphore as a

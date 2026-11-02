@@ -3,8 +3,8 @@
 //! cluster control authority, or a raw PostgreSQL pool.
 
 use crate::cluster::ClusterMetricsProbe;
-use crate::s2s::S2sOutboundCountProbe;
 use dashmap::DashMap;
+use northstar_federation_application::registry::S2sOutboundCountProbe;
 use northstar_operations_application::metrics_snapshot::{
     DatabaseMetricsSnapshot, DatabasePoolStatus, MetricsSnapshotService, ProcessGaugeSnapshot,
     SmRecoveryGaugeSnapshot,

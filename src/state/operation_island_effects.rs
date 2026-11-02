@@ -1,7 +1,7 @@
 //! Federation policy transition for a committed administrator operation.
 
 use super::{AppState, FederationWritePolicy};
-use crate::s2s::S2sOutboundClearance;
+use northstar_federation_application::registry::S2sOutboundClearance;
 use std::sync::Arc;
 
 pub(crate) struct OperationIslandEffects {

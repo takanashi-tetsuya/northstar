@@ -2,14 +2,14 @@ pub(crate) mod components;
 pub mod dns;
 pub mod inbound;
 pub mod outbound;
-mod registry;
-mod resume;
+pub(crate) mod resume;
 mod sm;
 pub mod tls;
 pub mod util;
 
 pub(crate) use dns::*;
 pub use inbound::*;
+use northstar_federation_application::registry::*;
 use northstar_federation_core::dialback::*;
 use northstar_federation_core::wire::*;
 use northstar_federation_core::{
@@ -17,62 +17,8 @@ use northstar_federation_core::{
     MAX_S2S_STANZA_BYTES, S2S_AUTHENTICATED_IDLE_TIMEOUT, STREAM_LIMITS_NS,
 };
 pub(crate) use outbound::*;
-pub(crate) use registry::*;
 pub(crate) use tls::*;
 pub(crate) use util::*;
-
-use tokio::sync::mpsc;
-
-#[derive(Clone)]
-pub(crate) struct OutboundS2sSession {
-    sender: mpsc::Sender<FederationEnvelope>,
-    authenticated: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl OutboundS2sSession {
-    pub(crate) fn new(sender: mpsc::Sender<FederationEnvelope>) -> Self {
-        Self {
-            sender,
-            authenticated: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        }
-    }
-
-    pub(crate) fn authenticated_flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
-        std::sync::Arc::clone(&self.authenticated)
-    }
-
-    pub(crate) fn is_authenticated(&self) -> bool {
-        self.authenticated
-            .load(std::sync::atomic::Ordering::Acquire)
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct BidiS2sSession {
-    connection_id: uuid::Uuid,
-    /// The receiving domain named by the authenticated XML stream. Reverse
-    /// traffic must be hosted by this domain; TLS/SASL for one stream never
-    /// grants a generic relay capability.
-    local_domain: String,
-    sender: mpsc::Sender<FederationEnvelope>,
-    disconnect: tokio_util::sync::CancellationToken,
-}
-
-impl BidiS2sSession {
-    pub(crate) fn new(
-        connection_id: uuid::Uuid,
-        local_domain: String,
-        sender: mpsc::Sender<FederationEnvelope>,
-        disconnect: tokio_util::sync::CancellationToken,
-    ) -> Self {
-        Self {
-            connection_id,
-            local_domain,
-            sender,
-            disconnect,
-        }
-    }
-}
 
 pub use northstar_federation_application::{FederationDeliveryMode, FederationEnvelope};
 
@@ -81,49 +27,3 @@ pub(crate) type FederationRouter =
     northstar_federation_application::outbox::FederationOutboxService<
         northstar_federation_postgres::outbox_repository::PostgresFederationOutboxRepository,
     >;
-
-pub(crate) fn bidi_connection_key(local_domain: &str, remote_domain: &str) -> Option<String> {
-    let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain).ok()?;
-    let remote_domain = northstar_xmpp_types::jid::prepare_domainpart(remote_domain).ok()?;
-    Some(format!("{local_domain}\0{remote_domain}"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{bidi_connection_key, FederationEnvelope};
-
-    #[test]
-    fn bidi_routes_are_scoped_to_an_exact_canonical_domain_pair() {
-        assert_eq!(
-            bidi_connection_key("Conference.Example.", "REMOTE.example"),
-            Some("conference.example\0remote.example".to_owned())
-        );
-        assert_ne!(
-            bidi_connection_key("example", "remote.example"),
-            bidi_connection_key("conference.example", "remote.example")
-        );
-        assert!(bidi_connection_key("alice@example", "remote.example").is_none());
-    }
-
-    #[tokio::test]
-    async fn volatile_envelopes_have_no_outbox_fence_and_ack_only_after_write() {
-        let (mut envelope, completion) = FederationEnvelope::volatile(
-            "remote.example".to_owned(),
-            "<message from='alice@example' to='bob@remote.example'/>".to_owned(),
-            tokio::time::Instant::now() + std::time::Duration::from_secs(1),
-        );
-        assert!(!envelope.is_durable());
-        assert!(envelope.outbox_id.is_nil());
-        assert!(envelope.lock_token.is_nil());
-        envelope.complete_volatile_delivery();
-        assert!(completion.await.is_ok());
-
-        let (dropped, completion) = FederationEnvelope::volatile(
-            "remote.example".to_owned(),
-            "<message from='alice@example' to='bob@remote.example'/>".to_owned(),
-            tokio::time::Instant::now() + std::time::Duration::from_secs(1),
-        );
-        drop(dropped);
-        assert!(completion.await.is_err());
-    }
-}

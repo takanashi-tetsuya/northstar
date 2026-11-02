@@ -1,4 +1,4 @@
-use super::{BidiS2sSession, FederationEnvelope, OutboundS2sSession};
+use crate::FederationEnvelope;
 use dashmap::{mapref::entry::Entry, DashMap};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -8,21 +8,78 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+#[derive(Clone)]
+pub struct OutboundS2sSession {
+    sender: mpsc::Sender<FederationEnvelope>,
+    authenticated: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl OutboundS2sSession {
+    pub fn new(sender: mpsc::Sender<FederationEnvelope>) -> Self {
+        Self {
+            sender,
+            authenticated: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub fn authenticated_flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        std::sync::Arc::clone(&self.authenticated)
+    }
+
+    pub fn is_authenticated(&self) -> bool {
+        self.authenticated
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+#[derive(Clone)]
+pub struct BidiS2sSession {
+    connection_id: uuid::Uuid,
+    /// The receiving domain named by the authenticated XML stream. Reverse
+    /// traffic must be hosted by this domain; TLS/SASL for one stream never
+    /// grants a generic relay capability.
+    local_domain: String,
+    sender: mpsc::Sender<FederationEnvelope>,
+    disconnect: tokio_util::sync::CancellationToken,
+}
+
+impl BidiS2sSession {
+    pub fn new(
+        connection_id: uuid::Uuid,
+        local_domain: String,
+        sender: mpsc::Sender<FederationEnvelope>,
+        disconnect: tokio_util::sync::CancellationToken,
+    ) -> Self {
+        Self {
+            connection_id,
+            local_domain,
+            sender,
+            disconnect,
+        }
+    }
+}
+
+pub fn bidi_connection_key(local_domain: &str, remote_domain: &str) -> Option<String> {
+    let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain).ok()?;
+    let remote_domain = northstar_xmpp_types::jid::prepare_domainpart(remote_domain).ok()?;
+    Some(format!("{local_domain}\0{remote_domain}"))
+}
+
 /// Result of atomically publishing a newly-created outbound connection.
 /// A live incumbent always wins; a closed incumbent is replaced in-place.
-pub(crate) enum OutboundRegistration {
+pub enum OutboundRegistration {
     Inserted,
     Existing(mpsc::Sender<FederationEnvelope>),
 }
 
 /// A count-only view; metrics never receives a route or registry handle.
 #[derive(Clone)]
-pub(crate) struct S2sOutboundCountProbe {
+pub struct S2sOutboundCountProbe {
     count: Arc<AtomicUsize>,
 }
 
 impl S2sOutboundCountProbe {
-    pub(crate) fn count(&self) -> usize {
+    pub fn count(&self) -> usize {
         self.count.load(Ordering::Relaxed)
     }
 }
@@ -30,14 +87,14 @@ impl S2sOutboundCountProbe {
 /// Only the outbound routes and their count can be cleared on an island
 /// transition. The same lock serializes this with registration and removal.
 #[derive(Clone)]
-pub(crate) struct S2sOutboundClearance {
+pub struct S2sOutboundClearance {
     outbound: Arc<DashMap<String, OutboundS2sSession>>,
     count: Arc<AtomicUsize>,
     count_gate: Arc<Mutex<()>>,
 }
 
 impl S2sOutboundClearance {
-    pub(crate) fn clear_for_island_mode(&self) {
+    pub fn clear_for_island_mode(&self) {
         let _count_gate = self
             .count_gate
             .lock()
@@ -49,20 +106,20 @@ impl S2sOutboundClearance {
 
 /// Guard-free snapshot of one bidirectional route. No DashMap guard crosses
 /// the registry boundary or survives queue admission.
-pub(crate) struct BidiRouteSnapshot {
-    pub(crate) local_domain: String,
-    pub(crate) sender: mpsc::Sender<FederationEnvelope>,
+pub struct BidiRouteSnapshot {
+    pub local_domain: String,
+    pub sender: mpsc::Sender<FederationEnvelope>,
 }
 
 /// A hint belongs to one published, authenticated stream incarnation. The
 /// private identity also fences a remove/reinsert which happens to reuse a UUID.
 #[derive(Clone)]
-pub(crate) struct BidiRecoverySnapshot {
-    pub(crate) connection_id: Uuid,
-    pub(crate) local_domain: String,
-    pub(crate) remote_domain: String,
-    pub(crate) sender: mpsc::Sender<FederationEnvelope>,
-    pub(crate) disconnect: CancellationToken,
+pub struct BidiRecoverySnapshot {
+    pub connection_id: Uuid,
+    pub local_domain: String,
+    pub remote_domain: String,
+    pub sender: mpsc::Sender<FederationEnvelope>,
+    pub disconnect: CancellationToken,
     key: String,
     identity: Arc<()>,
 }
@@ -70,16 +127,16 @@ pub(crate) struct BidiRecoverySnapshot {
 /// Facts observed from the real domain head. A leased head has a lock token,
 /// including an expired lease: normal claiming must rotate that token.
 #[derive(Clone, Copy)]
-pub(crate) struct BidiRecoveryHead {
-    pub(crate) id: Uuid,
-    pub(crate) attempt_count: i32,
-    pub(crate) leased: bool,
-    pub(crate) due: bool,
-    pub(crate) direction_matches: bool,
+pub struct BidiRecoveryHead {
+    pub id: Uuid,
+    pub attempt_count: i32,
+    pub leased: bool,
+    pub due: bool,
+    pub direction_matches: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum BidiRecoveryAction {
+pub enum BidiRecoveryAction {
     Retain,
     Consumed,
     /// The hint is already consumed. Only now may the caller prepare/poll its
@@ -168,8 +225,7 @@ impl RegisteredBidi {
 /// connection UUID. Callers receive cloned senders/snapshots only and can
 /// never retain a shard lock or mutate the underlying maps directly.
 #[derive(Default)]
-pub(crate) struct S2sConnectionRegistry {
-    pub(crate) resumption: super::resume::Registry,
+pub struct S2sConnectionRegistry {
     outbound: Arc<DashMap<String, OutboundS2sSession>>,
     outbound_count: Arc<AtomicUsize>,
     outbound_count_gate: Arc<Mutex<()>>,
@@ -178,16 +234,13 @@ pub(crate) struct S2sConnectionRegistry {
 }
 
 impl S2sConnectionRegistry {
-    pub(crate) fn live_outbound_sender(
-        &self,
-        key: &str,
-    ) -> Option<mpsc::Sender<FederationEnvelope>> {
+    pub fn live_outbound_sender(&self, key: &str) -> Option<mpsc::Sender<FederationEnvelope>> {
         self.outbound
             .get(key)
             .and_then(|session| (!session.sender.is_closed()).then(|| session.sender.clone()))
     }
 
-    pub(crate) fn register_outbound(
+    pub fn register_outbound(
         &self,
         key: String,
         session: OutboundS2sSession,
@@ -212,7 +265,7 @@ impl S2sConnectionRegistry {
         }
     }
 
-    pub(crate) fn remove_outbound_if_sender(
+    pub fn remove_outbound_if_sender(
         &self,
         key: &str,
         owner: &mpsc::Sender<FederationEnvelope>,
@@ -231,7 +284,7 @@ impl S2sConnectionRegistry {
         removed
     }
 
-    pub(crate) fn authenticated_outbound_sender(
+    pub fn authenticated_outbound_sender(
         &self,
         key: &str,
     ) -> Option<mpsc::Sender<FederationEnvelope>> {
@@ -241,7 +294,7 @@ impl S2sConnectionRegistry {
         })
     }
 
-    pub(crate) fn register_bidirectional_if_vacant(
+    pub fn register_bidirectional_if_vacant(
         &self,
         key: String,
         mut session: BidiS2sSession,
@@ -255,7 +308,7 @@ impl S2sConnectionRegistry {
             return Err(session);
         };
         if canonical_local != local
-            || super::bidi_connection_key(local, remote).as_deref() != Some(key.as_str())
+            || bidi_connection_key(local, remote).as_deref() != Some(key.as_str())
             || session.disconnect.is_cancelled()
             || session.sender.is_closed()
         {
@@ -282,7 +335,7 @@ impl S2sConnectionRegistry {
     /// batch includes every peer: a shared deadline may stop after its first
     /// database operation. Temporary keys and all persistent hint
     /// state are bounded by the existing live connection registry.
-    pub(crate) fn pending_bidi_recoveries(&self, limit: usize) -> Vec<BidiRecoverySnapshot> {
+    pub fn pending_bidi_recoveries(&self, limit: usize) -> Vec<BidiRecoverySnapshot> {
         if limit == 0 {
             return Vec::new();
         }
@@ -320,7 +373,7 @@ impl S2sConnectionRegistry {
             .collect()
     }
 
-    pub(crate) fn bidi_recovery_is_current(&self, snapshot: &BidiRecoverySnapshot) -> bool {
+    pub fn bidi_recovery_is_current(&self, snapshot: &BidiRecoverySnapshot) -> bool {
         self.bidirectional
             .get(&snapshot.key)
             .is_some_and(|entry| entry.matches(snapshot))
@@ -329,7 +382,7 @@ impl S2sConnectionRegistry {
     /// Validates the exact published incarnation and consumes the one-shot
     /// permission synchronously before returning RetryHead. No guard survives
     /// this method or can be held across the caller's database await.
-    pub(crate) fn observe_bidi_recovery(
+    pub fn observe_bidi_recovery(
         &self,
         snapshot: &BidiRecoverySnapshot,
         head: Option<BidiRecoveryHead>,
@@ -343,7 +396,7 @@ impl S2sConnectionRegistry {
         entry.recovery.observe(head)
     }
 
-    pub(crate) fn bidirectional_route(&self, key: &str) -> Option<BidiRouteSnapshot> {
+    pub fn bidirectional_route(&self, key: &str) -> Option<BidiRouteSnapshot> {
         self.bidirectional
             .get(key)
             .map(|session| BidiRouteSnapshot {
@@ -352,11 +405,7 @@ impl S2sConnectionRegistry {
             })
     }
 
-    pub(crate) fn remove_bidirectional_if_connection(
-        &self,
-        key: &str,
-        connection_id: Uuid,
-    ) -> bool {
+    pub fn remove_bidirectional_if_connection(&self, key: &str, connection_id: Uuid) -> bool {
         self.bidirectional
             .remove_if(key, |_, session| {
                 session.session.connection_id == connection_id
@@ -366,7 +415,7 @@ impl S2sConnectionRegistry {
 
     /// Island mode drains client-initiated outbound routes only. Established
     /// inbound streams remain registered; routing policy rejects their traffic.
-    pub(crate) fn outbound_clearance(&self) -> S2sOutboundClearance {
+    pub fn outbound_clearance(&self) -> S2sOutboundClearance {
         S2sOutboundClearance {
             outbound: Arc::clone(&self.outbound),
             count: Arc::clone(&self.outbound_count),
@@ -374,7 +423,7 @@ impl S2sConnectionRegistry {
         }
     }
 
-    pub(crate) fn outbound_count_probe(&self) -> S2sOutboundCountProbe {
+    pub fn outbound_count_probe(&self) -> S2sOutboundCountProbe {
         S2sOutboundCountProbe {
             count: Arc::clone(&self.outbound_count),
         }
@@ -429,7 +478,7 @@ mod recovery_tests {
     ) -> (BidiRecoverySnapshot, mpsc::Receiver<FederationEnvelope>) {
         let (sender, receiver) = mpsc::channel(1);
         let connection_id = Uuid::new_v4();
-        let key = super::super::bidi_connection_key(local, remote).unwrap();
+        let key = bidi_connection_key(local, remote).unwrap();
         assert!(registry
             .register_bidirectional_if_vacant(
                 key,
@@ -765,7 +814,7 @@ mod recovery_tests {
             let key = if invalid == 0 {
                 "wrong.example\0remote.example".to_owned()
             } else {
-                super::super::bidi_connection_key("local.example", "remote.example").unwrap()
+                bidi_connection_key("local.example", "remote.example").unwrap()
             };
             if invalid == 1 {
                 disconnect.cancel();
@@ -912,5 +961,45 @@ mod recovery_tests {
             registry.observe_bidi_recovery(&snapshot, Some(head)),
             BidiRecoveryAction::Consumed
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bidi_connection_key, FederationEnvelope};
+
+    #[test]
+    fn bidi_routes_are_scoped_to_an_exact_canonical_domain_pair() {
+        assert_eq!(
+            bidi_connection_key("Conference.Example.", "REMOTE.example"),
+            Some("conference.example\0remote.example".to_owned())
+        );
+        assert_ne!(
+            bidi_connection_key("example", "remote.example"),
+            bidi_connection_key("conference.example", "remote.example")
+        );
+        assert!(bidi_connection_key("alice@example", "remote.example").is_none());
+    }
+
+    #[tokio::test]
+    async fn volatile_envelopes_have_no_outbox_fence_and_ack_only_after_write() {
+        let (mut envelope, completion) = FederationEnvelope::volatile(
+            "remote.example".to_owned(),
+            "<message from='alice@example' to='bob@remote.example'/>".to_owned(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+        );
+        assert!(!envelope.is_durable());
+        assert!(envelope.outbox_id.is_nil());
+        assert!(envelope.lock_token.is_nil());
+        envelope.complete_volatile_delivery();
+        assert!(completion.await.is_ok());
+
+        let (dropped, completion) = FederationEnvelope::volatile(
+            "remote.example".to_owned(),
+            "<message from='alice@example' to='bob@remote.example'/>".to_owned(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+        );
+        drop(dropped);
+        assert!(completion.await.is_err());
     }
 }

@@ -2053,11 +2053,13 @@ name = "northstar-federation-application"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dashmap",
  "northstar-federation-core",
  "northstar-telemetry",
  "northstar-xmpp-types",
  "serde",
  "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]

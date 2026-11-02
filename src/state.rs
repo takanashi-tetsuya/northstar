@@ -270,6 +270,7 @@ use crate::xmpp::local_routes::{
     session::{AccountRevocationRoutes, OnlineSession, SmPresenceEpoch, SmStagedRouteClaim},
 };
 use crate::xmpp::local_routes::{muc_table::*, session_table::*, suspended_muc::*};
+use northstar_federation_application::registry::S2sConnectionRegistry;
 use northstar_federation_application::write_policy::FederationWritePolicy;
 use northstar_federation_core::policy::RuntimeFederationPolicy;
 use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
@@ -365,7 +366,8 @@ pub struct AppState {
     /// retains only redacted routing/discovery metadata after construction.
     component_credentials: Arc<[northstar_config::ComponentCredential]>,
     components: crate::s2s::components::ComponentRegistry,
-    s2s_connection_registry: Arc<crate::s2s::S2sConnectionRegistry>,
+    s2s_connection_registry: Arc<S2sConnectionRegistry>,
+    s2s_resumption: crate::s2s::resume::Registry,
     /// Shared TTL-aware resolver for SRV, CNAME, A and AAAA federation lookups.
     s2s_dns_resolver: TokioResolver,
     /// Separate locally validating DNSSEC resolver for RFC 7712. It never

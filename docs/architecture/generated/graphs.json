@@ -2439,6 +2439,10 @@
       ],
       [
         "northstar-federation-application",
+        "dashmap"
+      ],
+      [
+        "northstar-federation-application",
         "northstar-federation-core"
       ],
       [
@@ -2456,6 +2460,10 @@
       [
         "northstar-federation-application",
         "tokio"
+      ],
+      [
+        "northstar-federation-application",
+        "tokio-util"
       ],
       [
         "northstar-federation-application",

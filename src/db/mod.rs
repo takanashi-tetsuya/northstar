@@ -2,10 +2,6 @@
 mod operation_muc_destroy_repository_tests;
 #[cfg(test)]
 pub(crate) mod test_support;
-use anyhow::{Context, Result};
-use sqlx::PgPool;
-
-pub(crate) use northstar_postgres::MIGRATOR;
 
 pub(crate) mod abuse_effects;
 #[cfg(test)]
@@ -41,8 +37,6 @@ pub(crate) mod federation_outbox_repository;
 pub(crate) mod maintenance_ownership;
 #[cfg(test)]
 mod message_repository_tests;
-#[cfg(test)]
-mod migration_upgrade_test;
 #[cfg(test)]
 mod mix_delivery_capacity_tests;
 #[cfg(test)]
@@ -109,71 +103,8 @@ pub mod pubsub_repository;
 pub use northstar_pubsub_postgres::*;
 
 #[cfg(test)]
-pub async fn migrate(pool: &PgPool) -> Result<()> {
+pub async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     northstar_workflows::identity_migration::migrate_for_tests(pool).await
-}
-
-pub async fn migrate_for_domain(pool: &PgPool, domain: &str) -> Result<()> {
-    // Serialize DDL/identity migration with privilege reconciliation. The
-    // dedicated pooled connection holds this session lock while SQLx uses the
-    // remaining migrator connection; the production migrator pool is bounded
-    // to two connections and the role itself to four.
-    let mut policy_lock = pool
-        .acquire()
-        .await
-        .context("could not acquire the database policy migration lock connection")?;
-    sqlx::query(
-        "SELECT pg_catalog.pg_advisory_lock(
-           pg_catalog.hashtextextended('northstar-database-role-policy-v1',0)
-         )",
-    )
-    .execute(&mut *policy_lock)
-    .await
-    .context("could not acquire the database policy migration lock")?;
-
-    let migration_result = async {
-        // Keep admission and SQLx on the same session: a pool connection's
-        // search_path or CURRENT_USER must not differ between the check and
-        // its DDL. Release this second connection before canonicalization,
-        // which also uses the bounded migrator pool.
-        {
-            let mut migration_connection = pool
-                .acquire()
-                .await
-                .context("could not acquire the database migration connection")?;
-            northstar_postgres::migration_preflight::attest_schema_owner(&mut migration_connection)
-                .await?;
-            MIGRATOR
-                .run(&mut *migration_connection)
-                .await
-                .context("database migration failed")?;
-        }
-        northstar_workflows::identity_migration::canonicalize_all_identity_storage(pool, domain)
-            .await
-            .context("atomic RFC 7622 A-label to U-label identity migration failed")
-    }
-    .await;
-    let unlock_result = sqlx::query_scalar::<_, bool>(
-        "SELECT pg_catalog.pg_advisory_unlock(
-           pg_catalog.hashtextextended('northstar-database-role-policy-v1',0)
-         )",
-    )
-    .fetch_one(&mut *policy_lock)
-    .await
-    .context("could not release the database policy migration lock")
-    .and_then(|unlocked| {
-        anyhow::ensure!(
-            unlocked,
-            "database policy migration lock ownership was lost"
-        );
-        Ok(())
-    });
-
-    match (migration_result, unlock_result) {
-        (Err(error), _) => Err(error),
-        (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
-    }
 }
 
 pub(crate) mod muc_delivery_repository;

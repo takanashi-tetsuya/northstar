@@ -57,22 +57,6 @@ fn cluster_transition_mapping_keeps_stale_and_unauthorized_separate() {
 }
 
 #[test]
-fn occupancy_target_conversion_preserves_all_fencing_fields() {
-    let target = ClusterMucOccupancyTarget {
-        room_id: Uuid::new_v4(),
-        room_epoch: Uuid::new_v4(),
-        occupant_incarnation: Uuid::new_v4(),
-        occupancy_epoch: 37,
-        full_jid: "alice@example.test/desktop".to_owned(),
-        nick: "Alice".to_owned(),
-        connection_uuid: Uuid::new_v4(),
-        connection_epoch: 19,
-    };
-    let repository: crate::cluster_muc::ClusterMucOccupancyTarget = (&target).into();
-    assert_eq!(occupancy_target_from_db(repository), target);
-}
-
-#[test]
 fn federated_authority_conversion_preserves_domain_and_outbox_limits() {
     let principal = ClusterMucPrincipal::Federated {
         bare_jid: "alice@remote.test".to_owned(),

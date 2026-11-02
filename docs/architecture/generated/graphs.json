@@ -3835,6 +3835,10 @@
       ],
       [
         "northstar-room-core",
+        "serde_json"
+      ],
+      [
+        "northstar-room-core",
         "sha2"
       ],
       [

@@ -23,8 +23,7 @@ pub(super) struct RestoredMucActor {
     pub(super) sm_session_id: uuid::Uuid,
     pub(super) endpoint: Arc<SuspendedMucEndpoint>,
     pub(super) membership: northstar_session_application::sm::SmMucMembership,
-    pub(super) resumed_cluster_target:
-        Option<northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget>,
+    pub(super) resumed_cluster_target: Option<northstar_room_core::ClusterMucOccupancyTarget>,
 }
 
 impl RestoredLocalMucOccupants {
@@ -453,9 +452,7 @@ impl AppState {
             }
 
             let resumed_cluster_target = if let Some(authority) = cluster_authority.as_ref() {
-                let target = northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget::from(
-                    authority,
-                );
+                let target = northstar_room_core::ClusterMucOccupancyTarget::from(authority);
                 let Some(next_epoch) = target.connection_epoch.checked_add(1) else {
                     self.room.muc_occupants.remove_if(&key, |_, occupant| {
                         suspended_occupant_is_created(occupant, &created_endpoint)
@@ -604,7 +601,7 @@ impl AppState {
 
     pub(super) async fn compensate_resumed_muc_target(
         &self,
-        target: &northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget,
+        target: &northstar_room_core::ClusterMucOccupancyTarget,
         sm_session_id: uuid::Uuid,
     ) {
         if !self.cluster.is_enabled() {

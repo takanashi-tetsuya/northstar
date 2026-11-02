@@ -13,7 +13,7 @@ mod occupancy;
 
 use self::conversions::{
     actor_authority_to_db, cluster_join_into_db, config_update_into_db, map_admin_snapshot,
-    occupancy_target_from_db, retraction_mutation_as_db, subject_mutation_into_db,
+    retraction_mutation_as_db, subject_mutation_into_db,
 };
 
 #[derive(Clone)]
@@ -873,14 +873,13 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
         occupant_incarnation: Uuid,
         connection_uuid: Uuid,
     ) -> Result<Option<ClusterMucOccupancyTarget>> {
-        Ok(crate::cluster_muc::cluster_muc_occupancy_target(
+        crate::cluster_muc::cluster_muc_occupancy_target(
             &self.pool,
             room_id,
             occupant_incarnation,
             connection_uuid,
         )
-        .await?
-        .map(occupancy_target_from_db))
+        .await
     }
 
     async fn local_cluster_occupancy_target_by_nick(
@@ -889,14 +888,13 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
         expected_room_epoch: Uuid,
         nick: &str,
     ) -> Result<Option<ClusterMucOccupancyTarget>> {
-        Ok(crate::cluster_muc::cluster_muc_occupancy_target_by_nick(
+        crate::cluster_muc::cluster_muc_occupancy_target_by_nick(
             &self.pool,
             room_id,
             expected_room_epoch,
             nick,
         )
-        .await?
-        .map(occupancy_target_from_db))
+        .await
     }
 
     async fn exact_local_cluster_occupancy_snapshot(

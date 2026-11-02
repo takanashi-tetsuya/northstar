@@ -1722,7 +1722,7 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
     .execute(&pool)
     .await
     .unwrap();
-    let cluster_target = northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget {
+    let cluster_target = northstar_room_core::ClusterMucOccupancyTarget {
         room_id,
         room_epoch,
         occupant_incarnation: cluster_incarnation,
@@ -1824,17 +1824,16 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
     .execute(&pool)
     .await
     .unwrap();
-    let federated_cluster_target =
-        northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget {
-            room_id,
-            room_epoch,
-            occupant_incarnation: federated_cluster_incarnation,
-            occupancy_epoch: 9002,
-            full_jid: "cluster@remote.test/Phone".to_owned(),
-            nick: "ClusterRemote".to_owned(),
-            connection_uuid: federated_cluster_connection,
-            connection_epoch: 1,
-        };
+    let federated_cluster_target = northstar_room_core::ClusterMucOccupancyTarget {
+        room_id,
+        room_epoch,
+        occupant_incarnation: federated_cluster_incarnation,
+        occupancy_epoch: 9002,
+        full_jid: "cluster@remote.test/Phone".to_owned(),
+        nick: "ClusterRemote".to_owned(),
+        connection_uuid: federated_cluster_connection,
+        connection_epoch: 1,
+    };
     let federated_cluster_race_id = Uuid::new_v4();
     let (entered, resume) = install_muc_authorization_test_pause("discussion");
     let federated_cluster_race = {

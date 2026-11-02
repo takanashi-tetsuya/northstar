@@ -3,16 +3,19 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cluster_muc;
 pub mod mix;
 pub mod mix_iq_relay;
 pub mod occupancy;
 pub mod stanza;
 pub mod telemetry;
 
+pub use cluster_muc::*;
+
 use northstar_xmpp_types::{prepare_domainpart, CanonicalJid};
 use uuid::Uuid;
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ClusterMucOccupancyTarget {
     pub room_id: Uuid,
     pub room_epoch: Uuid,
@@ -22,6 +25,13 @@ pub struct ClusterMucOccupancyTarget {
     pub nick: String,
     pub connection_uuid: Uuid,
     pub connection_epoch: i64,
+}
+
+/// Adapters take a borrowed target where their queries need an owned one.
+impl From<&ClusterMucOccupancyTarget> for ClusterMucOccupancyTarget {
+    fn from(target: &ClusterMucOccupancyTarget) -> Self {
+        target.clone()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]

@@ -2,7 +2,7 @@
 
 use dashmap::DashMap;
 use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
-use northstar_room_postgres::cluster_muc::ClusterMucAudienceSnapshot;
+use northstar_room_core::ClusterMucAudienceSnapshot;
 use northstar_stream::local_routes::muc::{MucOccupant, MucOccupantEndpoint, SuspendedMucEndpoint};
 use northstar_stream::local_routes::muc_table::{
     remove_local_muc_occupant_exact_from, with_local_muc_occupant_exact,

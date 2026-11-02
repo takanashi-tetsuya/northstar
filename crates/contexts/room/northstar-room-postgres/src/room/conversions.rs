@@ -84,36 +84,6 @@ impl From<&ClusterMucAffiliationSubject> for crate::cluster_muc::ClusterMucAffil
     }
 }
 
-pub fn occupancy_target_from_db(
-    target: crate::cluster_muc::ClusterMucOccupancyTarget,
-) -> ClusterMucOccupancyTarget {
-    ClusterMucOccupancyTarget {
-        room_id: target.room_id,
-        room_epoch: target.room_epoch,
-        occupant_incarnation: target.occupant_incarnation,
-        occupancy_epoch: target.occupancy_epoch,
-        full_jid: target.full_jid,
-        nick: target.nick,
-        connection_uuid: target.connection_uuid,
-        connection_epoch: target.connection_epoch,
-    }
-}
-
-impl From<&ClusterMucOccupancyTarget> for crate::cluster_muc::ClusterMucOccupancyTarget {
-    fn from(target: &ClusterMucOccupancyTarget) -> Self {
-        Self {
-            room_id: target.room_id,
-            room_epoch: target.room_epoch,
-            occupant_incarnation: target.occupant_incarnation,
-            occupancy_epoch: target.occupancy_epoch,
-            full_jid: target.full_jid.clone(),
-            nick: target.nick.clone(),
-            connection_uuid: target.connection_uuid,
-            connection_epoch: target.connection_epoch,
-        }
-    }
-}
-
 pub fn actor_principal_to_db(principal: &MucActorPrincipal) -> crate::muc::MucActorPrincipal<'_> {
     match principal {
         MucActorPrincipal::Local {

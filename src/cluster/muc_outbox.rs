@@ -113,7 +113,7 @@ pub(super) async fn run_muc_outbox_delivery(
 
 pub(super) struct ClusterMucPolicyRender<'a> {
     pub(super) endpoints: &'a super::muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
-    pub(super) context: &'a northstar_room_postgres::cluster_muc::ClusterMucEventContext,
+    pub(super) context: &'a northstar_room_core::ClusterMucEventContext,
     pub(super) room_jid: &'a str,
     pub(super) recipient: &'a northstar_stream::local_routes::muc::MucOccupant,
     pub(super) event_id: &'a str,
@@ -125,13 +125,13 @@ pub(super) struct ClusterMucPolicyRender<'a> {
 pub(super) fn cluster_muc_policy_result(
     change: &serde_json::Value,
 ) -> Result<(
-    northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget,
-    northstar_room_postgres::cluster_muc::ClusterMucPolicySnapshot,
+    northstar_room_core::ClusterMucOccupancyTarget,
+    northstar_room_core::ClusterMucPolicySnapshot,
 )> {
-    let target: northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget =
+    let target: northstar_room_core::ClusterMucOccupancyTarget =
         serde_json::from_value(change["target"].clone())
             .context("cluster MUC policy target tuple is invalid")?;
-    let snapshot: northstar_room_postgres::cluster_muc::ClusterMucPolicySnapshot =
+    let snapshot: northstar_room_core::ClusterMucPolicySnapshot =
         serde_json::from_value(change["snapshot"].clone())
             .context("cluster MUC policy result snapshot is invalid")?;
     anyhow::ensure!(
@@ -363,7 +363,7 @@ pub(super) fn render_cluster_muc_departure_presence(
 
 pub(super) async fn deliver_cluster_muc_event(
     worker: &super::muc_outbox_worker::ClusterMucOutboxWorkerContext,
-    delivery: &northstar_room_postgres::cluster_muc::ClusterMucOutboxDelivery,
+    delivery: &northstar_room_core::ClusterMucOutboxDelivery,
 ) -> Result<()> {
     let endpoints = &worker.endpoints;
     anyhow::ensure!(
@@ -457,8 +457,10 @@ pub(super) async fn deliver_cluster_muc_event(
         // A later role change or SM handoff may alter the live endpoint, but
         // neither may change the visibility rules of this committed event.
         let original = if let Some(snapshot) = payload.get("original_audience") {
-            serde_json::from_value::<northstar_room_postgres::cluster_muc::ClusterMucAudienceSnapshot>(snapshot.clone())
-                .context("cluster MUC batch payload original audience is malformed")?
+            serde_json::from_value::<northstar_room_core::ClusterMucAudienceSnapshot>(
+                snapshot.clone(),
+            )
+            .context("cluster MUC batch payload original audience is malformed")?
         } else {
             let _database_turn = worker.database_turn().await;
             worker

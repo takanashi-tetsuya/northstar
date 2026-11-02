@@ -115,7 +115,7 @@ impl MucDeliveryContext {
         &self,
         occupant: &MucOccupant,
         stanza: String,
-        delivery: &northstar_room_postgres::cluster_muc::ClusterMucOutboxDelivery,
+        delivery: &northstar_room_core::ClusterMucOutboxDelivery,
     ) -> anyhow::Result<bool> {
         let (receipt, mut received) = tokio::sync::mpsc::unbounded_channel();
         let accepted = self

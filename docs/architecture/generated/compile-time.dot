@@ -1424,6 +1424,7 @@ digraph compile_time {
   "northstar-room-core" -> "northstar-xmpp-types";
   "northstar-room-core" -> "roxmltree";
   "northstar-room-core" -> "serde";
+  "northstar-room-core" -> "serde_json";
   "northstar-room-core" -> "sha2";
   "northstar-room-core" -> "tracing";
   "northstar-room-core" -> "uuid";

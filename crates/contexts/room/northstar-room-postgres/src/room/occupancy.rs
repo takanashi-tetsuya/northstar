@@ -13,19 +13,16 @@ impl ClusterMucOccupancyDepartureRepository for PostgresClusterMucOccupancyDepar
         connection_uuid: Uuid,
         owner_node_id: &str,
     ) -> Result<Option<ClusterMucOccupancyTarget>> {
-        Ok(
-            crate::cluster_muc::cluster_muc_occupancy_target_for_disconnect(
-                &self.pool,
-                room_localpart,
-                full_jid,
-                nick,
-                occupant_incarnation,
-                connection_uuid,
-                owner_node_id,
-            )
-            .await?
-            .map(occupancy_target_from_db),
+        crate::cluster_muc::cluster_muc_occupancy_target_for_disconnect(
+            &self.pool,
+            room_localpart,
+            full_jid,
+            nick,
+            occupant_incarnation,
+            connection_uuid,
+            owner_node_id,
         )
+        .await
     }
 
     async fn leave_exact(
@@ -60,7 +57,7 @@ impl ClusterMucOccupancyMaintenanceRepository for PostgresClusterMucOccupancyMai
             crate::cluster_muc::authoritative_cluster_muc_occupancies_for_node(&self.pool, node_id)
                 .await?
                 .into_iter()
-                .map(|occupancy| occupancy_target_from_db((&occupancy).into()))
+                .map(|occupancy| (&occupancy).into())
                 .collect(),
         )
     }
@@ -89,7 +86,7 @@ impl ClusterMucOccupancyMaintenanceRepository for PostgresClusterMucOccupancyMai
         .into_iter()
         .map(|resolved| MucResolvedOccupancy {
             room_localpart: resolved.room_localpart,
-            target: occupancy_target_from_db(resolved.target),
+            target: resolved.target,
         })
         .collect())
     }
@@ -146,15 +143,12 @@ impl ClusterMucOccupancyMaintenanceRepository for PostgresClusterMucOccupancyMai
         lease: Duration,
     ) -> Result<Vec<ClusterMucOccupancyTarget>> {
         let targets = targets.iter().map(Into::into).collect::<Vec<_>>();
-        Ok(crate::cluster_muc::renew_cluster_muc_occupancies_batch(
+        crate::cluster_muc::renew_cluster_muc_occupancies_batch(
             &self.pool,
             &targets,
             owner_node_id,
             lease,
         )
-        .await?
-        .into_iter()
-        .map(occupancy_target_from_db)
-        .collect())
+        .await
     }
 }

@@ -104,7 +104,7 @@ pub(crate) type ApiQueryContext =
     api_queries::ApiQueryContext<northstar_workflows::api_queries::PostgresApiQueryRepository>;
 
 pub(crate) type OmemoRecoveryPollContext = omemo_poll::OmemoRecoveryPollContext<
-    crate::db::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository,
+    northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository,
 >;
 
 pub(crate) type PasskeyService = northstar_auth_application::passkeys::PasskeyService<

@@ -8,5 +8,7 @@ pub mod api_session_repository;
 pub mod authentication;
 pub mod effects;
 pub mod fast;
+pub mod omemo_recovery;
+pub mod omemo_recovery_repository;
 pub mod passkeys;
 pub mod users;

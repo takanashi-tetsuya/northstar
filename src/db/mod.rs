@@ -54,7 +54,6 @@ mod muc_service_tests;
 #[cfg(test)]
 mod muc_tests;
 pub(crate) mod node_message_projection_repository;
-pub mod omemo_recovery;
 #[cfg(test)]
 mod passkeys_tests;
 // src/cluster/listener_policy.rs (S29) still names the presence repository through db::.
@@ -86,7 +85,6 @@ pub(crate) mod sm_teardown_repository;
 pub use archive::*;
 pub use capacity::*;
 pub use cluster_keys::*;
-pub use omemo_recovery::*;
 // Roster and privacy names that paths owned by the mainline (src/s2s, src/cluster, src/db/sm*,
 // src/db/replay*) still reach through db::. Every other consumer imports the owning crate.
 pub(crate) use northstar_roster_postgres::privacy::{
@@ -117,8 +115,6 @@ mod upload_account_tests;
 mod upload_admin_tests;
 
 pub(crate) mod sm_suspension;
-
-pub(crate) mod omemo_recovery_repository;
 
 #[cfg(test)]
 mod account_admin_repository_tests;

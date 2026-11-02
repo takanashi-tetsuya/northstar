@@ -2751,6 +2751,10 @@
     ],
     [
       "northstar-auth-postgres",
+      "northstar-postgres"
+    ],
+    [
+      "northstar-auth-postgres",
       "northstar-security"
     ],
     [
@@ -2767,11 +2771,23 @@
     ],
     [
       "northstar-auth-postgres",
+      "sha2"
+    ],
+    [
+      "northstar-auth-postgres",
       "sqlx"
     ],
     [
       "northstar-auth-postgres",
+      "subtle"
+    ],
+    [
+      "northstar-auth-postgres",
       "thiserror"
+    ],
+    [
+      "northstar-auth-postgres",
+      "tokio"
     ],
     [
       "northstar-auth-postgres",

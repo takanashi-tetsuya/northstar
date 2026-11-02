@@ -869,7 +869,7 @@ mod tests {
 
     #[test]
     fn migration_keeps_secrets_out_and_fences_terminal_rows() {
-        let migration = include_str!("../../migrations/0093_omemo_recovery_transfer.sql");
+        let migration = include_str!("../../../../../migrations/0093_omemo_recovery_transfer.sql");
         assert!(migration.contains("package_sha256 BYTEA"));
         assert!(migration.contains("terminal OMEMO recovery transfer is immutable"));
         assert!(migration.contains("CREATE UNIQUE INDEX omemo_recovery_transfers_one_active_idx"));
@@ -896,9 +896,9 @@ mod tests {
             return;
         };
         let pool = PgPool::connect(&url).await.unwrap();
-        crate::db::migrate(&pool).await.unwrap();
+        northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
         let username = format!("omemo-recovery-{}", Uuid::new_v4().simple());
-        let user = northstar_auth_postgres::users::create_user(
+        let user = crate::users::create_user(
             &pool,
             &username,
             "test password 123",
@@ -909,7 +909,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let token = northstar_auth_postgres::users::create_api_session(&pool, user.id, 1)
+        let token = crate::users::create_api_session(&pool, user.id, 1)
             .await
             .unwrap();
         let first_id = Uuid::new_v4();
@@ -987,12 +987,12 @@ mod tests {
             .unwrap(),
             ConsumeOmemoRecovery::Consumed(_)
         ));
-        let rotated = northstar_auth_postgres::users::find_user_by_id(&pool, user.id)
+        let rotated = crate::users::find_user_by_id(&pool, user.id)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(rotated.auth_generation, user.auth_generation + 1);
-        let replay_token = northstar_auth_postgres::users::create_api_session(&pool, user.id, 1)
+        let replay_token = crate::users::create_api_session(&pool, user.id, 1)
             .await
             .unwrap();
         assert!(matches!(

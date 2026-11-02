@@ -353,7 +353,7 @@ pub struct AppState {
     /// pool during a capability flood.
     omemo_recovery_poll_context: OmemoRecoveryPollContext,
     omemo_recovery_service: northstar_auth_application::omemo_recovery::OmemoRecoveryService<
-        db::omemo_recovery_repository::PostgresOmemoRecoveryRepository,
+        northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryRepository,
     >,
     /// Clone-shared permission for short MIX, PubSub and clustered-MUC
     /// durable-outbox database turns. It preserves a primary-pool foreground

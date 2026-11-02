@@ -577,7 +577,7 @@ impl AppState {
         );
         let omemo_recovery_poll_context = omemo_poll::OmemoRecoveryPollContext::new(
             northstar_auth_application::omemo_recovery::OmemoRecoveryPollService::new(
-                db::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository::new(
+                northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository::new(
                     omemo_recovery_poll_pool,
                 ),
             ),
@@ -632,7 +632,7 @@ impl AppState {
             public_discovery_context,
             omemo_recovery_service:
                 northstar_auth_application::omemo_recovery::OmemoRecoveryService::new(
-                    db::omemo_recovery_repository::PostgresOmemoRecoveryRepository::new(
+                    northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryRepository::new(
                         pool.clone(),
                     ),
                 ),

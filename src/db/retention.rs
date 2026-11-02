@@ -52,7 +52,10 @@ impl northstar_operations_application::maintenance_repositories::RetentionReposi
         .await
     }
     async fn cleanup_omemo_recovery_transfers(&self, batch_size: i64) -> Result<u64> {
-        crate::db::cleanup_omemo_recovery_transfers(&self.pool, batch_size).await
+        northstar_auth_postgres::omemo_recovery::cleanup_omemo_recovery_transfers(
+            &self.pool, batch_size,
+        )
+        .await
     }
     async fn purge_expired_retraction_intents(&self, batch_size: i64) -> Result<u64> {
         northstar_message_postgres::retraction_intents::purge_expired_retraction_intents(

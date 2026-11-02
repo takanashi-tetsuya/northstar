@@ -367,7 +367,7 @@ start_a() {
     FEDERATION_ENABLED=true FEDERATION_ALLOW_PRIVATE_IPS=true S2S_SASL_EXTERNAL_ENABLED="${S2S_SASL_EXTERNAL_ENABLED:-true}" DIALBACK_ENABLED=true \
     DIALBACK_SECRET_FILE= DIALBACK_SECRET= \
     FEDERATION_DNS_OVERRIDES="remote.localhost=xmpps://127.0.0.1:$relay_b_s2s_tls_port,pubsub.remote.localhost=xmpps://127.0.0.1:$relay_b_s2s_tls_port" \
-    FEDERATION_EXTRA_ROOT_CERT_PATH="$cert_dir/federation-ca.crt" LOG_FORMAT=json RUST_LOG=rust_xmpp_server=info,rust_xmpp_server::s2s::inbound=debug \
+    FEDERATION_EXTRA_ROOT_CERT_PATH="$cert_dir/federation-ca.crt" LOG_FORMAT=json RUST_LOG=rust_xmpp_server=info,rust_xmpp_server::s2s::inbound=debug,northstar_s2s=info \
     "$binary" >"$log_a" 2>&1 &
   pid_a=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_a" "$startup_deadline" || return 1
@@ -402,7 +402,7 @@ start_b() {
     FEDERATION_ENABLED=true FEDERATION_ALLOW_PRIVATE_IPS=true S2S_SASL_EXTERNAL_ENABLED="${S2S_SASL_EXTERNAL_ENABLED:-true}" DIALBACK_ENABLED=true \
     DIALBACK_SECRET_FILE= DIALBACK_SECRET= \
     FEDERATION_DNS_OVERRIDES="localhost=127.0.0.1:$relay_a_s2s_port,conference.localhost=127.0.0.1:$relay_a_s2s_port,pubsub.localhost=127.0.0.1:$relay_a_s2s_port" \
-    FEDERATION_EXTRA_ROOT_CERT_PATH="$cert_dir/federation-ca.crt" LOG_FORMAT=json RUST_LOG=rust_xmpp_server=info,rust_xmpp_server::s2s::inbound=debug \
+    FEDERATION_EXTRA_ROOT_CERT_PATH="$cert_dir/federation-ca.crt" LOG_FORMAT=json RUST_LOG=rust_xmpp_server=info,rust_xmpp_server::s2s::inbound=debug,northstar_s2s=info \
     "$binary" >"$log_b" 2>&1 &
   pid_b=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_b" "$startup_deadline" || return 1

@@ -232,7 +232,7 @@ common_env=(
   DIALBACK_ENABLED=true
   FEDERATION_EXTRA_ROOT_CERT_PATH="$runtime_dir/certs/ca.crt"
   LOG_FORMAT=json
-  RUST_LOG=rust_xmpp_server=debug
+  RUST_LOG=rust_xmpp_server=debug,northstar_s2s=debug
 )
 
 start_a() {

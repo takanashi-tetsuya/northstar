@@ -176,7 +176,7 @@ start_server() {
     ABUSE_STATE_ALLOW_EPHEMERAL=true \
     FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token.secret" \
     DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram.secret" \
-    LOG_FORMAT=json RUST_LOG=rust_xmpp_server=debug \
+    LOG_FORMAT=json RUST_LOG=rust_xmpp_server=debug,northstar_s2s=debug \
     "$binary" >"$runtime_dir/server.log" 2>&1 &
   pid=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid" || return 1

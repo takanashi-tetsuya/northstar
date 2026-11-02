@@ -90,7 +90,7 @@ async fn password_change_replays_committed_response_after_bearer_revocation() {
         )
         .unwrap(),
     );
-    let guard = Arc::new(crate::db::abuse_effects::persistent_guard(
+    let guard = Arc::new(northstar_workflows::abuse_effects::persistent_guard(
         AbuseConfig {
             base_work_factor: 2,
             max_work_factor: 64,

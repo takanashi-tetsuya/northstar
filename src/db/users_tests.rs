@@ -460,7 +460,7 @@ async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_a
     .await
     .unwrap();
 
-    let guard = std::sync::Arc::new(crate::db::abuse_effects::persistent_guard(
+    let guard = std::sync::Arc::new(northstar_workflows::abuse_effects::persistent_guard(
         AbuseConfig {
             base_work_factor: 2,
             max_work_factor: 64,
@@ -964,7 +964,7 @@ async fn rest_password_idempotency_logout_and_lock_order_are_atomic() {
         )
         .unwrap(),
     );
-    let guard = crate::db::abuse_effects::persistent_guard(
+    let guard = northstar_workflows::abuse_effects::persistent_guard(
         AbuseConfig {
             base_work_factor: 2,
             max_work_factor: 1024,

@@ -179,7 +179,7 @@ impl AppState {
             Arc::new(
                 northstar_abuse_postgres::persistence::PostgresAbusePersistence::new(
                     pool.clone(),
-                    crate::db::abuse_effects::RootAbuseEffects,
+                    northstar_workflows::abuse_effects::WorkflowAbuseEffects,
                 ),
             ),
             abuse_state_hmac_key
@@ -385,7 +385,7 @@ impl AppState {
             northstar_abuse_postgres::keys::reconcile_abuse_key_deployment(
                 &pool,
                 identity,
-                &crate::db::abuse_effects::RootAbuseEffects,
+                &northstar_workflows::abuse_effects::WorkflowAbuseEffects,
             )
             .await
             .context("anti-abuse HMAC deployment consistency check failed")?;

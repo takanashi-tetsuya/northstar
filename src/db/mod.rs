@@ -3,7 +3,6 @@ mod operation_muc_destroy_repository_tests;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub(crate) mod abuse_effects;
 #[cfg(test)]
 mod abuse_guard_tests;
 #[cfg(test)]

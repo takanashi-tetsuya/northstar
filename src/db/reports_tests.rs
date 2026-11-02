@@ -308,7 +308,7 @@ async fn report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized
         )
         .unwrap(),
     );
-    let guard = crate::db::abuse_effects::persistent_guard(
+    let guard = northstar_workflows::abuse_effects::persistent_guard(
         AbuseConfig {
             base_work_factor: 2,
             max_work_factor: 1024,

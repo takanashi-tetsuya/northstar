@@ -386,7 +386,7 @@ async fn offline_dedupe_rotation_grace_capacity_and_cleanup_are_bounded() {
         .await
         .unwrap();
     cleanup_tx.commit().await.unwrap();
-    let guard = crate::db::abuse_effects::persistent_guard(
+    let guard = northstar_workflows::abuse_effects::persistent_guard(
         AbuseConfig {
             base_work_factor: 2,
             max_work_factor: 4_096,

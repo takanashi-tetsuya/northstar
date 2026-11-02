@@ -5,9 +5,9 @@ use chrono::{DateTime, Utc};
 use northstar_abuse_postgres::effects::{AbuseEffects, ForeignKeyReferences};
 use sqlx::{PgPool, Postgres, Transaction};
 
-pub(crate) struct RootAbuseEffects;
+pub struct WorkflowAbuseEffects;
 
-impl AbuseEffects for RootAbuseEffects {
+impl AbuseEffects for WorkflowAbuseEffects {
     async fn foreign_key_references(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
@@ -66,8 +66,8 @@ impl AbuseEffects for RootAbuseEffects {
 }
 
 /// A guard over the adapter for tests, keeping every durable artifact on the current key.
-#[cfg(test)]
-pub(crate) fn persistent_guard(
+#[cfg(any(test, feature = "test-support"))]
+pub fn persistent_guard(
     config: northstar_abuse_policy::AbuseConfig,
     pool: PgPool,
     shared_secret: Option<&[u8]>,
@@ -78,7 +78,7 @@ pub(crate) fn persistent_guard(
         std::sync::Arc::new(
             northstar_abuse_postgres::persistence::PostgresAbusePersistence::new(
                 pool,
-                RootAbuseEffects,
+                WorkflowAbuseEffects,
             ),
         ),
         shared_secret,

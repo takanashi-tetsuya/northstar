@@ -107,7 +107,7 @@ async fn http_registration_replays_exact_created_and_rejected_responses_after_po
     )
     .await
     .unwrap();
-    let guard = Arc::new(crate::db::abuse_effects::persistent_guard(
+    let guard = Arc::new(northstar_workflows::abuse_effects::persistent_guard(
         AbuseConfig {
             base_work_factor: 2,
             max_work_factor: 64,
@@ -254,7 +254,7 @@ async fn http_registration_overload_preserves_committed_proof_marker_for_exact_r
     )
     .await
     .unwrap();
-    let guard = Arc::new(crate::db::abuse_effects::persistent_guard(
+    let guard = Arc::new(northstar_workflows::abuse_effects::persistent_guard(
         AbuseConfig {
             base_work_factor: 2,
             max_work_factor: 64,
@@ -384,7 +384,7 @@ async fn registration_guard_consumes_v2_proof_with_marker_and_fences_old_worker(
     .unwrap();
     let abuse_key = test_key();
     let api_key = test_key();
-    let guard = Arc::new(crate::db::abuse_effects::persistent_guard(
+    let guard = Arc::new(northstar_workflows::abuse_effects::persistent_guard(
         AbuseConfig {
             base_work_factor: 2,
             max_work_factor: 64,

@@ -1,5 +1,4 @@
 //! The guard over its PostgreSQL adapter, and the tests that need root's other tables.
-use crate::db::abuse_effects::persistent_guard;
 use northstar_abuse_application::guard::test_support::{
     actor_state_keys, message_admission_identity, message_admission_identity_digest,
     message_admission_material, opaque_actor_key,
@@ -15,6 +14,7 @@ use northstar_abuse_policy::message_admission::{
 use northstar_abuse_policy::*;
 use northstar_abuse_postgres::message_admission::accept_observed;
 use northstar_message_application::message_admission::{begin_command, operation};
+use northstar_workflows::abuse_effects::persistent_guard;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::{
@@ -278,7 +278,7 @@ async fn postgres_v2_intent_mismatch_consumes_but_rollback_restores_proof() {
         Arc::new(
             northstar_abuse_postgres::persistence::PostgresAbusePersistence::new(
                 pool.clone(),
-                crate::db::abuse_effects::RootAbuseEffects,
+                northstar_workflows::abuse_effects::WorkflowAbuseEffects,
             ),
         ),
         Some(b"postgres-v2-rotated-test-key-at-least-32-bytes"),
@@ -527,7 +527,7 @@ async fn postgres_challenges_are_one_use_restart_safe_and_deidentified() {
         Arc::new(
             northstar_abuse_postgres::persistence::PostgresAbusePersistence::new(
                 pool.clone(),
-                crate::db::abuse_effects::RootAbuseEffects,
+                northstar_workflows::abuse_effects::WorkflowAbuseEffects,
             ),
         ),
         Some(new_secret),
@@ -623,7 +623,7 @@ async fn postgres_challenges_are_one_use_restart_safe_and_deidentified() {
         Arc::new(
             northstar_abuse_postgres::persistence::PostgresAbusePersistence::new(
                 pool.clone(),
-                crate::db::abuse_effects::RootAbuseEffects,
+                northstar_workflows::abuse_effects::WorkflowAbuseEffects,
             ),
         ),
         Some(new_secret),
@@ -1345,7 +1345,7 @@ async fn postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe() {
         Arc::new(
             northstar_abuse_postgres::persistence::PostgresAbusePersistence::new(
                 pool.clone(),
-                crate::db::abuse_effects::RootAbuseEffects,
+                northstar_workflows::abuse_effects::WorkflowAbuseEffects,
             ),
         ),
         Some(new_secret),

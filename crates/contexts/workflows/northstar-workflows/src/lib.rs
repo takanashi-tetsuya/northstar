@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod abuse_effects;
 pub mod account_admin_repository;
 pub mod account_deletion;
 pub mod account_lifecycle;

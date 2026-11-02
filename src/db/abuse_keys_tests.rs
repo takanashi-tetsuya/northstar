@@ -1,8 +1,8 @@
 //! The key deployment authority over its PostgreSQL adapter and the tables of the other contexts.
-use crate::db::abuse_effects::RootAbuseEffects;
 use anyhow::Result;
 use northstar_abuse_policy::model::AbuseKeyDeploymentIdentity;
 use northstar_abuse_postgres::keys::validate_abuse_key_deployment;
+use northstar_workflows::abuse_effects::WorkflowAbuseEffects;
 use sqlx::PgPool;
 use std::time::Duration;
 
@@ -28,7 +28,7 @@ async fn reconcile_abuse_key_deployment(
     northstar_abuse_postgres::keys::reconcile_abuse_key_deployment(
         pool,
         identity,
-        &RootAbuseEffects,
+        &WorkflowAbuseEffects,
     )
     .await
 }

@@ -965,7 +965,7 @@ for required_broker_fragment in \
     'Arc::ptr_eq(entry.get(), slot)' \
     'WorkerCriticality::Restartable'
 do
-    if ! grep -Fq "$required_broker_fragment" src/services/sm.rs src/db/authority_listener.rs; then
+    if ! grep -Fq "$required_broker_fragment" crates/contexts/session/northstar-session-application/src/sm.rs src/db/authority_listener.rs; then
         echo "SM authority broker/listener is missing lifecycle invariant: $required_broker_fragment" >&2
         exit 1
     fi
@@ -1362,7 +1362,7 @@ for required_source_fragment in \
     'BoshResponseOwnership'
 do
     if ! printf '%s\n' "$mix_db_production_source" "$replay_db_production_source" "$sm_db_production_source" "$mix_service_production_source" | grep -F "$required_source_fragment" >/dev/null \
-       && ! grep -Fq "$required_source_fragment" src/services/replay.rs src/services/sm.rs $bosh_role_split_files; then
+       && ! grep -Fq "$required_source_fragment" crates/contexts/session/northstar-session-application/src/replay.rs crates/contexts/session/northstar-session-application/src/sm.rs $bosh_role_split_files; then
         echo "MIX transport ownership source invariant is missing: $required_source_fragment" >&2
         exit 1
     fi

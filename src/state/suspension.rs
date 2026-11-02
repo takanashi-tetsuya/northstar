@@ -5,11 +5,11 @@ use super::{
     seal_suspended_muc_buffer, MucOccupant, MucOccupantEndpoint, SerializableMucOccupant,
     SuspendedMucEndpoint, SuspendedMucPhase, SuspendedMucRoute,
 };
-use crate::services::sm_suspension::{
-    MucSuspensionRequest, SmSuspensionLimits, SmSuspensionRepository, SmSuspensionRequest,
-};
 use anyhow::Result;
 use dashmap::DashMap;
+use northstar_session_application::sm_suspension::{
+    MucSuspensionRequest, SmSuspensionLimits, SmSuspensionRepository, SmSuspensionRequest,
+};
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 pub(crate) struct SmSuspensionContext<R> {
@@ -213,7 +213,7 @@ impl<R: SmSuspensionRepository> SmSuspensionContext<R> {
     pub(crate) async fn snapshot_suspended_muc_for_disconnect(
         &self,
         endpoints: &[Arc<SuspendedMucEndpoint>],
-        snapshot: &mut crate::services::sm::SmSessionSnapshot,
+        snapshot: &mut northstar_session_application::sm::SmSessionSnapshot,
     ) -> anyhow::Result<()> {
         let mut unique = Vec::new();
         let mut seen = HashSet::new();
@@ -278,7 +278,19 @@ mod tests {
         attempts: Mutex<Vec<Uuid>>,
     }
 
-    impl SmSuspensionRepository for Arc<LostAppendResponse> {
+    /// The recreated contexts share one repository, as they share one pool.
+    #[derive(Clone, Default)]
+    struct SharedLostAppend(Arc<LostAppendResponse>);
+
+    impl std::ops::Deref for SharedLostAppend {
+        type Target = LostAppendResponse;
+
+        fn deref(&self) -> &LostAppendResponse {
+            &self.0
+        }
+    }
+
+    impl SmSuspensionRepository for SharedLostAppend {
         async fn suspend_exact_session(
             &self,
             _: SmSuspensionRequest<'_>,
@@ -320,7 +332,7 @@ mod tests {
 
     #[tokio::test]
     async fn lost_append_response_retains_the_exact_suffix_across_context_recreation() {
-        let repository = Arc::new(LostAppendResponse::default());
+        let repository = SharedLostAppend::default();
         let occupants = Arc::new(DashMap::new());
         let suspended = Arc::new(DashMap::new());
         let cluster =
@@ -329,7 +341,7 @@ mod tests {
                 .unwrap();
         let context = || {
             SmSuspensionContext::new(
-                Arc::clone(&repository),
+                repository.clone(),
                 SmSuspensionLimits {
                     max_stanzas: 8,
                     max_bytes: 4096,

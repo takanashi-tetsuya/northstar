@@ -39,7 +39,7 @@ const protocol = readRoleSplitFile("src/xmpp/protocol.rs");
 const protocolTests = read("src/xmpp/protocol/legacy_sasl_wire_tests.rs");
 const transport = read("src/xmpp/mod.rs");
 const bosh = readRoleSplitFile("src/bosh.rs");
-const replay = read("src/services/replay.rs");
+const replay = read("crates/contexts/session/northstar-session-application/src/replay.rs");
 const sasl2 = readProductionModule("src/xmpp/protocol/sasl2.rs");
 const state = readProductionModule("src/state.rs"); // whole production module
 

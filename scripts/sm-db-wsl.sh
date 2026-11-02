@@ -41,8 +41,8 @@ run_exact_ignored \
 run_exact_ignored \
   db::account_deletion_tests::deletion_recovery_is_delayed_single_owner_and_cascading
 run_exact_ignored \
-  services::sm::tests::binding_reservation_is_bounded_leased_and_rechecks_auth_generation
+  db::sm_service_tests::binding_reservation_is_bounded_leased_and_rechecks_auth_generation
 run_exact_ignored \
-  services::sm::tests::sm_activation_and_privacy_selection_commit_or_roll_back_together
+  db::sm_service_tests::sm_activation_and_privacy_selection_commit_or_roll_back_together
 run_exact_ignored \
-  services::sm::tests::resumable_binding_lease_transfers_only_after_transport_publication
+  db::sm_service_tests::resumable_binding_lease_transfers_only_after_transport_publication

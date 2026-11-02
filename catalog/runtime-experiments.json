@@ -276,8 +276,8 @@
       "id": "session",
       "title": "Session, stream management and recovery",
       "production_owner": {
-        "path": "src/services/sm.rs",
-        "anchor": "pub(crate) struct SmService<R> {"
+        "path": "crates/contexts/session/northstar-session-application/src/sm.rs",
+        "anchor": "pub struct SmService<R> {"
       },
       "runtime_identities": [
         {
@@ -310,8 +310,8 @@
       "budgets": {
         "contract": "Session-specific lease and admission limits; exact transport deadlines remain adapter-owned.",
         "source": {
-          "path": "src/services/sm.rs",
-          "anchor": "pub(crate) struct SmResumeClaimRequest<"
+          "path": "crates/contexts/session/northstar-session-application/src/sm.rs",
+          "anchor": "pub struct SmResumeClaimRequest<"
         }
       },
       "experiments": [
@@ -319,9 +319,9 @@
           "id": "session-regression",
           "level": "deterministic_unit",
           "status": "declared",
-          "command": "cargo test --locked --bin rust-xmpp-server resume_policy_releases_only_the_exact_mismatched_claim",
+          "command": "cargo test --locked -p northstar-session-application resume_policy_releases_only_the_exact_mismatched_claim",
           "test": {
-            "path": "src/services/sm/tests.rs",
+            "path": "crates/contexts/session/northstar-session-application/src/sm/tests.rs",
             "anchor": "async fn resume_policy_releases_only_the_exact_mismatched_claim() {"
           },
           "assertions": [

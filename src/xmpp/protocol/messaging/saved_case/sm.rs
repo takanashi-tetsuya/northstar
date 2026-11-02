@@ -2,10 +2,6 @@
 //! same real substate/governor/turn; only existing persistence ports are fake.
 use super::{next, wire, Sequence, SmMetadata, TransportOwnershipSource};
 use crate::{
-    services::sm::{
-        ownership::{PreparedBatch, PreparedCheckpoint, SnapshotProjection},
-        SmCheckpointOutcome, SmQueueOwnershipResolution,
-    },
     xmpp::outbound::OutboundItem,
     xmpp::protocol::{
         sm_owner::{SmOwnerPort, SmTransportTurn, SmTurnRunner},
@@ -14,6 +10,10 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use northstar_delivery_core::sm_ownership as core;
+use northstar_session_application::sm::ownership::{
+    PreparedBatch, PreparedCheckpoint, SnapshotProjection,
+};
+use northstar_session_application::sm::{SmCheckpointOutcome, SmQueueOwnershipResolution};
 use northstar_session_application::sm_capacity::{
     SmCapacityLease, SmCapacityMetrics, SmMemoryGovernor,
 };
@@ -267,10 +267,12 @@ impl SmOwnerPort for Port {
             ownership: SmQueueOwnershipResolution {
                 mix_rotations: rotations
                     .into_iter()
-                    .map(|rotation| crate::services::sm::SmMixLeaseRotation {
-                        previous: rotation.previous,
-                        current: rotation.current,
-                    })
+                    .map(
+                        |rotation| northstar_session_application::sm::SmMixLeaseRotation {
+                            previous: rotation.previous,
+                            current: rotation.current,
+                        },
+                    )
                     .collect(),
             },
         })

@@ -2,7 +2,6 @@
 //! Actual credential/service/holder/publication owners over finite replies.
 #![cfg(test)]
 use super::*;
-use crate::services::sm::{BindingFinalizationOutcome, SmService};
 use crate::stage4_replay as wire;
 use crate::xmpp::outbound::OutboundItem;
 use crate::xmpp::protocol::{mix::stage4_saved::RouteHandle, ClientTransport};
@@ -10,6 +9,7 @@ use northstar_auth_application::authentication::publication::{
     CredentialKind, CredentialObservation,
 };
 use northstar_auth_application::authentication::{AuthenticationService, FastCommitPlan};
+use northstar_session_application::sm::{BindingFinalizationOutcome, SmService};
 use std::collections::BTreeMap;
 
 pub(crate) mod facts;

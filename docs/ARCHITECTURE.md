@@ -106,7 +106,7 @@ Key ownership:
   authority, repository injection and bounded ordered post-commit plans.
   PostgreSQL remains the final room-policy authority under its existing locks;
   the remaining room mutations are tracked convergence work.
-- `src/services/replay.rs` owns XEP-0160 account leases, bounded page claims
+- `crates/contexts/session/northstar-session-application/src/replay.rs` owns XEP-0160 account leases, bounded page claims
   and the single-snapshot blocking/privacy decision. Protocol replay code owns
   only ordered transport backpressure. A slow socket never retains a primary
   PostgreSQL connection, and an exact unsent suffix can be released without

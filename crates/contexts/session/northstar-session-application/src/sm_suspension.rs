@@ -1,38 +1,36 @@
 //! Durable operations needed to recover an exact SM suspension.
-use crate::services::sm::SmSessionSnapshot;
+use crate::sm::SmSessionSnapshot;
 use anyhow::Result;
-use northstar_room_application::muc_service::{
-    ClusterMucTransitionOutcome, ClusterMucWakeDescriptor,
-};
+use northstar_room_core::{ClusterMucTransitionOutcome, ClusterMucWakeDescriptor};
 use std::time::Duration;
 use uuid::Uuid;
 
 #[derive(Clone, Copy)]
-pub(crate) struct SmSuspensionLimits {
-    pub(crate) max_stanzas: usize,
-    pub(crate) max_bytes: usize,
+pub struct SmSuspensionLimits {
+    pub max_stanzas: usize,
+    pub max_bytes: usize,
 }
 
-pub(crate) struct SmSuspensionRequest<'a> {
-    pub(crate) session_id: Uuid,
-    pub(crate) connection_id: Uuid,
-    pub(crate) user_id: Uuid,
-    pub(crate) auth_generation: i64,
-    pub(crate) snapshot: &'a SmSessionSnapshot,
-    pub(crate) ttl_seconds: u64,
+pub struct SmSuspensionRequest<'a> {
+    pub session_id: Uuid,
+    pub connection_id: Uuid,
+    pub user_id: Uuid,
+    pub auth_generation: i64,
+    pub snapshot: &'a SmSessionSnapshot,
+    pub ttl_seconds: u64,
 }
 
-pub(crate) struct MucSuspensionRequest<'a> {
-    pub(crate) operation_id: Uuid,
-    pub(crate) room_localpart: &'a str,
-    pub(crate) occupant_incarnation: Uuid,
-    pub(crate) connection_id: Uuid,
-    pub(crate) sm_session_id: Uuid,
-    pub(crate) node_id: &'a str,
-    pub(crate) lease: Duration,
+pub struct MucSuspensionRequest<'a> {
+    pub operation_id: Uuid,
+    pub room_localpart: &'a str,
+    pub occupant_incarnation: Uuid,
+    pub connection_id: Uuid,
+    pub sm_session_id: Uuid,
+    pub node_id: &'a str,
+    pub lease: Duration,
 }
 
-pub(crate) trait SmSuspensionRepository: Send + Sync {
+pub trait SmSuspensionRepository: Send + Sync {
     fn suspend_exact_session(
         &self,
         request: SmSuspensionRequest<'_>,

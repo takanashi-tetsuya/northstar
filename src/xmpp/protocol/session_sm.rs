@@ -269,21 +269,23 @@ impl ProtocolSession {
         }
     }
 
-    pub(crate) fn sm_snapshot(&self) -> crate::services::sm::SmSessionSnapshot {
+    pub(crate) fn sm_snapshot(&self) -> northstar_session_application::sm::SmSessionSnapshot {
         self.sm_snapshot_with_unacked(self.sm.unacked.iter().cloned().collect())
     }
 
     pub(super) fn sm_snapshot_with_unacked(
         &self,
         unacked: Vec<crate::xmpp::outbound::SmUnackedStanza>,
-    ) -> crate::services::sm::SmSessionSnapshot {
+    ) -> northstar_session_application::sm::SmSessionSnapshot {
         self.sm_snapshot_view().snapshot(&self.sm, unacked)
     }
 
     /// Transfer the large replay FIFO into cleanup ownership. Finalization
     /// must not clone a full per-stream snapshot while the live actor still
     /// owns the same bytes; all remaining metadata is independently bounded.
-    pub(super) fn take_sm_snapshot(&mut self) -> crate::services::sm::SmSessionSnapshot {
+    pub(super) fn take_sm_snapshot(
+        &mut self,
+    ) -> northstar_session_application::sm::SmSessionSnapshot {
         let unacked = std::mem::take(&mut self.sm.unacked).into();
         self.sm_snapshot_with_unacked(unacked)
     }
@@ -297,14 +299,14 @@ impl ProtocolSession {
 
     pub(crate) fn apply_sm_ownership_resolution(
         &mut self,
-        resolution: &crate::services::sm::SmQueueOwnershipResolution,
+        resolution: &northstar_session_application::sm::SmQueueOwnershipResolution,
     ) {
         Self::apply_sm_ownership_resolution_to_unacked(&mut self.sm.unacked, resolution);
     }
 
     pub(crate) fn apply_sm_ownership_resolution_to_unacked(
         stanzas: &mut VecDeque<crate::xmpp::outbound::SmUnackedStanza>,
-        resolution: &crate::services::sm::SmQueueOwnershipResolution,
+        resolution: &northstar_session_application::sm::SmQueueOwnershipResolution,
     ) {
         for stanza in stanzas {
             stanza.source = resolution.resolve_source(stanza.source);

@@ -4667,11 +4667,31 @@
     ],
     [
       "northstar-session-application",
+      "dashmap"
+    ],
+    [
+      "northstar-session-application",
+      "futures"
+    ],
+    [
+      "northstar-session-application",
+      "northstar-auth-core"
+    ],
+    [
+      "northstar-session-application",
+      "northstar-config"
+    ],
+    [
+      "northstar-session-application",
       "northstar-delivery-core"
     ],
     [
       "northstar-session-application",
       "northstar-message-core"
+    ],
+    [
+      "northstar-session-application",
+      "northstar-room-core"
     ],
     [
       "northstar-session-application",
@@ -4692,6 +4712,10 @@
     [
       "northstar-session-application",
       "serde"
+    ],
+    [
+      "northstar-session-application",
+      "serde_json"
     ],
     [
       "northstar-session-application",

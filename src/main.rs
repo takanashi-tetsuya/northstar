@@ -8,7 +8,6 @@ mod db;
 mod direct_replay;
 mod runtime;
 mod s2s;
-mod services;
 #[cfg(test)]
 mod stage4_replay;
 mod state;

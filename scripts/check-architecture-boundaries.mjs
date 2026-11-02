@@ -1861,8 +1861,8 @@ for (const [description, pattern] of [
 if (!/\bReplayService\s*</.test(replayProtocolSource) || /\bAppState\b/.test(replayProtocolSource)) {
   throw new Error('replay.rs must use its narrow ReplayService handle');
 }
-const replayServiceSource = read('src/services/replay.rs');
-const replayServiceBody = structBody(replayServiceSource, 'pub(crate) struct ReplayService');
+const replayServiceSource = read('crates/contexts/session/northstar-session-application/src/replay.rs');
+const replayServiceBody = structBody(replayServiceSource, 'pub struct ReplayService');
 if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(replayServiceBody)) {
   throw new Error('ReplayService must receive its repository port');
 }
@@ -2309,12 +2309,12 @@ for (const [name, source] of [
   ['BlockingService', read('crates/contexts/roster/northstar-roster-application/src/blocking.rs')],
   ['PrivacyService', read('crates/contexts/roster/northstar-roster-application/src/privacy.rs')],
   ['PresenceService', read('crates/contexts/roster/northstar-roster-application/src/presence.rs')],
-  ['ReplayService', read('src/services/replay.rs')],
+  ['ReplayService', read('crates/contexts/session/northstar-session-application/src/replay.rs')],
   ['AccountService', accountServiceSource],
   ['AdminCommandService', read('crates/contexts/operations/northstar-operations-application/src/admin_commands.rs')],
   ['AuthenticationService', authenticationServiceSource],
   ['RetractionService', read('crates/contexts/message/northstar-message-application/src/retractions.rs')],
-  ['SmService', read('src/services/sm.rs')],
+  ['SmService', read('crates/contexts/session/northstar-session-application/src/sm.rs')],
   ['MixService', mixServiceSource],
   ['PushService', read('crates/contexts/message/northstar-message-application/src/push.rs')],
   ['PrivateStorageService', read('crates/contexts/pubsub/northstar-pubsub-application/src/private_storage.rs')],
@@ -2326,7 +2326,7 @@ for (const [name, source] of [
   ['CapacityMaintenanceContexts', read('src/state/capacity_maintenance.rs')],
   ['CapacityMaintenanceWorkers', read('src/runtime/capacity_maintenance.rs')],
   ['SmSuspensionContext', read('src/state/suspension.rs')],
-  ['SmSuspensionRepository', read('src/services/sm_suspension.rs')],
+  ['SmSuspensionRepository', read('crates/contexts/session/northstar-session-application/src/sm_suspension.rs')],
   ['ApiQueryService', read('crates/contexts/operations/northstar-operations-application/src/api_queries.rs')],
   ['ApiQueryContext', read('src/api/contexts/api_queries.rs')],
   ['HTTP entry and public discovery policies', read('src/api/contexts/http_policy.rs')],
@@ -3062,7 +3062,7 @@ if (/\bapi_control\b|ApiControlKeyring/.test(contentGenerationBody)) {
 }
 // The abuse context owns the purpose selector; its callers must not name it.
 const sourceFilesNamingContentPurpose = [];
-for (const directory of ['src/services', 'src/xmpp/protocol', 'src/db', 'crates/contexts']) {
+for (const directory of ['src/xmpp/protocol', 'src/db', 'crates/contexts']) {
   const pending = [path.join(root, directory)];
   while (pending.length > 0) {
     const current = pending.pop();

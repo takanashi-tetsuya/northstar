@@ -8,7 +8,7 @@ use super::*;
 /// after `<resumed/>` and the durable unacked replay so suspended-room
 /// traffic never overtakes older sequenced stanzas.
 pub struct RestoredLocalMucOccupants {
-    pub failures: Vec<crate::services::sm::SmMucMembership>,
+    pub failures: Vec<northstar_session_application::sm::SmMucMembership>,
     pub replay_suffix: Vec<String>,
     pub(super) resume_gate: Option<Arc<SuspendedMucEndpoint>>,
     pub(super) actors: Vec<RestoredMucActor>,
@@ -22,13 +22,15 @@ pub(super) struct RestoredMucActor {
     pub(super) cluster_epoch: uuid::Uuid,
     pub(super) sm_session_id: uuid::Uuid,
     pub(super) endpoint: Arc<SuspendedMucEndpoint>,
-    pub(super) membership: crate::services::sm::SmMucMembership,
+    pub(super) membership: northstar_session_application::sm::SmMucMembership,
     pub(super) resumed_cluster_target:
         Option<northstar_room_postgres::cluster_muc::ClusterMucOccupancyTarget>,
 }
 
 impl RestoredLocalMucOccupants {
-    pub(crate) fn planned_memberships(&self) -> Vec<crate::services::sm::SmMucMembership> {
+    pub(crate) fn planned_memberships(
+        &self,
+    ) -> Vec<northstar_session_application::sm::SmMucMembership> {
         self.actors
             .iter()
             .map(|actor| actor.membership.clone())
@@ -53,7 +55,7 @@ impl RestoredLocalMucOccupants {
 
 pub(crate) struct CommittedLocalMucResume {
     pub(crate) joined_rooms: Vec<(String, JoinedMucMembership)>,
-    pub(crate) failures: Vec<crate::services::sm::SmMucMembership>,
+    pub(crate) failures: Vec<northstar_session_application::sm::SmMucMembership>,
 }
 
 impl AppState {
@@ -357,7 +359,10 @@ impl AppState {
                     cluster_epoch: serializable.cluster_epoch,
                     sm_session_id,
                     endpoint,
-                    membership: crate::services::sm::SmMucMembership { room_jid, nick },
+                    membership: northstar_session_application::sm::SmMucMembership {
+                        room_jid,
+                        nick,
+                    },
                     resumed_cluster_target,
                 });
                 continue;
@@ -555,7 +560,7 @@ impl AppState {
                 cluster_epoch: serializable.cluster_epoch,
                 sm_session_id,
                 endpoint: created_endpoint,
-                membership: crate::services::sm::SmMucMembership { room_jid, nick },
+                membership: northstar_session_application::sm::SmMucMembership { room_jid, nick },
                 resumed_cluster_target,
             });
         }

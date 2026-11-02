@@ -1,11 +1,11 @@
 //! Actual ReplayService delegation over finite supplied repository receipts.
 use super::*;
-use crate::services::replay::*;
 use crate::xmpp::outbound::DurableDelivery;
 use chrono::{DateTime, Utc};
 use northstar_delivery_core::bosh_ownership::response::{
     self as response, AckRequest, BindRequest, DeletedSource, RenewRequest,
 };
+use northstar_session_application::replay::*;
 use std::sync::Mutex;
 #[derive(Clone)]
 pub(super) struct Repository {

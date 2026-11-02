@@ -40,15 +40,21 @@ const BOSH_FENCE_MAX_AGE_SECONDS: i64 = 300;
 // claiming a page, takeover cannot occur until those row claims are already
 // eligible in the same pass; otherwise the replacement would observe an
 // apparently empty queue and messages would wait for another login.
-pub(crate) use crate::services::replay::OWNER_LEASE_SECONDS as REPLAY_OWNER_LEASE_SECONDS;
+pub(crate) use northstar_session_application::replay::OWNER_LEASE_SECONDS as REPLAY_OWNER_LEASE_SECONDS;
 
-pub use crate::services::replay::{
+pub use northstar_session_application::replay::{
     OfflineReplayBusyUntil, OfflineReplayLease, OfflineReplayLeaseAcquire, PendingPresenceCursor,
     PendingPresenceReplay, PendingPresenceReplayPage,
 };
 
 #[cfg(test)]
-impl OfflineReplayLeaseAcquire {
+trait LeaseAcquireForTests {
+    fn into_acquired(self) -> Option<OfflineReplayLease>;
+    fn is_acquired(&self) -> bool;
+}
+
+#[cfg(test)]
+impl LeaseAcquireForTests for OfflineReplayLeaseAcquire {
     fn into_acquired(self) -> Option<OfflineReplayLease> {
         match self {
             Self::Acquired(lease) => Some(lease),

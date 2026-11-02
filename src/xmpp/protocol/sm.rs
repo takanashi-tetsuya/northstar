@@ -1,12 +1,12 @@
 use super::{Action, ProtocolSession};
-use crate::services::sm::{
+use crate::xmpp::xml_builder::XmlElement;
+use anyhow::{Context, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use northstar_session_application::sm::{
     SmResumeClaimOutcome, SmResumeClaimRequest, SmResumeFinalizationOutcome,
     SmResumeFinalizationRequest, SmSessionCreationOutcome, SmSessionCreationRequest,
     SmSessionSnapshot,
 };
-use crate::xmpp::xml_builder::XmlElement;
-use anyhow::{Context, Result};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use northstar_xep_0198::build_failed_str as sm_failed;
 use northstar_xep_0198::{
     acknowledgement_delta, resumability_allowed, resumed_offline_replay_eligible,
@@ -60,7 +60,7 @@ async fn wait_for_route_removed(mut removed: tokio::sync::watch::Receiver<bool>)
 }
 
 async fn wait_for_pending_authority(
-    subscription: &mut crate::services::sm::SmAuthoritySubscription,
+    subscription: &mut northstar_session_application::sm::SmAuthoritySubscription,
     route_removed: Option<tokio::sync::watch::Receiver<bool>>,
     disconnect: &tokio_util::sync::CancellationToken,
     retry_at: tokio::time::Instant,
@@ -411,7 +411,7 @@ impl ProtocolSession {
         let token_hash = sm_resume_token_hash(previd.as_str());
         let mut pending_subscription: Option<(
             uuid::Uuid,
-            crate::services::sm::SmAuthoritySubscription,
+            northstar_session_application::sm::SmAuthoritySubscription,
         )> = None;
         // The first database-owned retry boundary is also this attempt's
         // terminal ownership horizon. A healthy old stream may extend its
@@ -503,8 +503,8 @@ impl ProtocolSession {
                         pending.session_id,
                         matches!(
                             pending.reason,
-                            crate::services::sm::SmPendingReason::Live
-                                | crate::services::sm::SmPendingReason::LiveAndClaim
+                            northstar_session_application::sm::SmPendingReason::Live
+                                | northstar_session_application::sm::SmPendingReason::LiveAndClaim
                         ),
                     );
                     let retry_at =
@@ -1265,7 +1265,7 @@ impl ProtocolSession {
                 .joined_rooms
                 .iter()
                 .map(
-                    |(room_jid, membership)| crate::services::sm::SmMucMembership {
+                    |(room_jid, membership)| northstar_session_application::sm::SmMucMembership {
                         room_jid: room_jid.clone(),
                         nick: membership.nick.clone(),
                     },
@@ -1435,7 +1435,7 @@ fn stage_muc_replay_suffix(
 
 fn muc_resume_failure_stanza(
     full_jid: &str,
-    membership: &crate::services::sm::SmMucMembership,
+    membership: &northstar_session_application::sm::SmMucMembership,
 ) -> String {
     XmlElement::namespaced("presence", "jabber:client")
         .attr(

@@ -12,7 +12,7 @@ const files = {
   authCredential: 'crates/contexts/auth/northstar-auth-core/src/credential.rs',
   authDb: 'crates/contexts/auth/northstar-auth-postgres/src/authentication.rs',
   authUsers: 'crates/contexts/auth/northstar-auth-postgres/src/users.rs',
-  credentialSmService: 'src/services/sm.rs',
+  credentialSmService: 'crates/contexts/session/northstar-session-application/src/sm.rs',
   credentialSmDb: 'src/db/sm_repository.rs',
   authCaps: 'src/xmpp/protocol/caps.rs',
   sasl2: 'src/xmpp/protocol/sasl2.rs',
@@ -51,14 +51,14 @@ const files = {
   smProtocol: 'src/xmpp/protocol/sm.rs',
   smOwner: 'src/xmpp/protocol/sm_owner.rs',
   smCore: 'crates/contexts/message/northstar-delivery-core/src/sm_ownership.rs',
-  smPrepared: 'src/services/sm/ownership.rs',
+  smPrepared: 'crates/contexts/session/northstar-session-application/src/sm/ownership.rs',
   smDb: 'src/db/sm.rs',
   boshOwner: 'src/bosh/ownership.rs',
   boshCore: 'crates/contexts/message/northstar-delivery-core/src/bosh_ownership.rs',
   mixRepository: 'crates/contexts/room/northstar-room-postgres/src/mix_repository.rs',
   boshResponse: 'src/bosh/response_owner.rs',
   boshResponseCore: 'crates/contexts/message/northstar-delivery-core/src/bosh_ownership/response.rs',
-  replayService: 'src/services/replay.rs',
+  replayService: 'crates/contexts/session/northstar-session-application/src/replay.rs',
   replayRepository: 'src/db/replay_repository.rs',
 };
 
@@ -535,7 +535,7 @@ export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseC
   'BOSH fresh ACK must renew first and preserve exact committed return, cache eviction and actual receipt sends');
   for (const [name, sql] of [['bind_bosh_response_sources', 'bind_bosh_transport_response_observed'],
     ['renew_bosh_fences', 'renew_bosh_transport_fences'], ['acknowledge_bosh_responses', 'acknowledge_bosh_transport_responses']]) {
-    const service = normalize(body(replayService, `pub\\(crate\\)\\s+async\\s+fn\\s+${name}\\b`));
+    const service = normalize(body(replayService, `pub\\s+async\\s+fn\\s+${name}\\b`));
     requireBoundary(service === `self.repository.${name}(request).await`, 'BOSH service must forward the same closed response request');
     const repository = normalize(body(replayRepository, `async\\s+fn\\s+${name}\\b`));
     requireBoundary(repository.includes(`db::replay::${sql}(&self.pool,request).await`),

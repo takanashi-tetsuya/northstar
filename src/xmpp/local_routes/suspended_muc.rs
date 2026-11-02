@@ -235,7 +235,7 @@ pub(crate) fn complete_snapshot_owned_handoff(buffer: &mut SuspendedMucBuffer) -
 /// before either counter or queue is mutated, so an invariant failure leaves
 /// the caller's original snapshot intact and the endpoint remains its owner.
 pub(crate) fn append_suspended_muc_suffix_to_snapshot(
-    snapshot: &mut crate::services::sm::SmSessionSnapshot,
+    snapshot: &mut northstar_session_application::sm::SmSessionSnapshot,
     suffix: &VecDeque<SuspendedMucStanza>,
     max_stanzas: usize,
     max_bytes: usize,

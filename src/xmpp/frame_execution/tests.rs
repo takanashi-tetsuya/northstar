@@ -1561,12 +1561,12 @@ async fn publication_is_observed_without_introducing_a_deadline() {
 }
 #[tokio::test]
 async fn credential_trace_retains_bounded_facts_without_private_request_receipt_or_error_data() {
-    use crate::services::sm::{
-        ActivatedSmSession, BindingFinalizationOutcome, SmResumeFinalizationCommit,
-        SmResumeFinalizationOutcome, SmResumeFinalizationRequest,
-    };
     use northstar_auth_application::authentication::{
         CredentialCommitReceipt, FastCommitPlan, IssuedFastToken,
+    };
+    use northstar_session_application::sm::{
+        ActivatedSmSession, BindingFinalizationOutcome, SmResumeFinalizationCommit,
+        SmResumeFinalizationOutcome, SmResumeFinalizationRequest,
     };
     let (capture, _subscriber) =
         TraceCapture::install_with_filter("off,rust_xmpp_server::xmpp::auth_credential=debug");

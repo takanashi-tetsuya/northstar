@@ -176,8 +176,11 @@ fn queued(buffer: &SuspendedMucBuffer) -> Vec<&str> {
         .collect()
 }
 
-fn sm_snapshot(outbound_h: u32, unacked: &[&str]) -> crate::services::sm::SmSessionSnapshot {
-    crate::services::sm::SmSessionSnapshot {
+fn sm_snapshot(
+    outbound_h: u32,
+    unacked: &[&str],
+) -> northstar_session_application::sm::SmSessionSnapshot {
+    northstar_session_application::sm::SmSessionSnapshot {
         inbound_h: 0,
         outbound_h,
         acked_h: 0,

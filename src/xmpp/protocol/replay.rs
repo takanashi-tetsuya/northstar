@@ -1,8 +1,8 @@
-use crate::services::replay::{
+use anyhow::{Context, Result};
+use northstar_session_application::replay::{
     RecoveryReplayAuthority, RecoveryReplayAuthorizationGuard, ReplayBusyUntil, ReplayPageOutcome,
     ReplayRepository, ReplayService, ReplaySession, ReplayStartOutcome,
 };
-use anyhow::{Context, Result};
 use northstar_xml_builder::escape::attr_escape;
 use rand::Rng;
 use std::{
@@ -132,7 +132,7 @@ async fn wait_for_replay_retry(
 
 #[allow(clippy::too_many_arguments)]
 async fn acquire_replay_session(
-    service: &ReplayService<impl crate::services::replay::ReplayRepository>,
+    service: &ReplayService<impl northstar_session_application::replay::ReplayRepository>,
     outbound: &crate::xmpp::outbound::OutboundSender,
     recipient_id: Uuid,
     current_full_jid: &str,
@@ -174,7 +174,7 @@ async fn acquire_replay_session(
 }
 
 async fn release_unsent_suffix(
-    service: &ReplayService<impl crate::services::replay::ReplayRepository>,
+    service: &ReplayService<impl northstar_session_application::replay::ReplayRepository>,
     session: &ReplaySession,
     page_claim_token: Uuid,
     ids: &[Uuid],
@@ -278,7 +278,7 @@ async fn drain_offline(
     reason = "the owned replay loop must carry both lease deadlines and the exact policy/availability fences"
 )]
 async fn drain_owned_offline(
-    service: &ReplayService<impl crate::services::replay::ReplayRepository>,
+    service: &ReplayService<impl northstar_session_application::replay::ReplayRepository>,
     session: &ReplaySession,
     outbound: &crate::xmpp::outbound::OutboundSender,
     active_privacy_list: Option<&str>,

@@ -154,4 +154,6 @@ mod retention_policy_repository_tests;
 #[cfg(test)]
 mod retention_tests;
 #[cfg(test)]
+mod sm_service_tests;
+#[cfg(test)]
 mod users_tests;

@@ -63,7 +63,7 @@ async fn unknown_resume_and_successful_fallback_keep_distinct_original_frame_att
         let prepared = frame
             .prepare_credential(CredentialKind::Resume, Uuid::from_u128(302))
             .unwrap();
-        let request = crate::services::sm::SmResumeFinalizationRequest {
+        let request = northstar_session_application::sm::SmResumeFinalizationRequest {
             session_id: Uuid::from_u128(21),
             claim_token: Uuid::from_u128(22),
             connection_id: Uuid::from_u128(302),
@@ -84,18 +84,22 @@ async fn unknown_resume_and_successful_fallback_keep_distinct_original_frame_att
         invocation.enter_resume(&request).unwrap();
         let receipt = CredentialCommitReceipt::new(None, None, None);
         invocation.constructed(&receipt);
-        let result = Ok(crate::services::sm::SmResumeFinalizationOutcome::Committed(
-            Box::new(crate::services::sm::SmResumeFinalizationCommit {
-                activated: crate::services::sm::ActivatedSmSession {
-                    outbound_h: 1,
-                    unacked: Vec::new(),
+        let result = Ok(
+            northstar_session_application::sm::SmResumeFinalizationOutcome::Committed(Box::new(
+                northstar_session_application::sm::SmResumeFinalizationCommit {
+                    activated: northstar_session_application::sm::ActivatedSmSession {
+                        outbound_h: 1,
+                        unacked: Vec::new(),
+                    },
+                    receipt,
                 },
-                receipt,
-            }),
-        ));
+            )),
+        );
         invocation.resume_returned(&result);
         drop(invocation);
-        let Ok(crate::services::sm::SmResumeFinalizationOutcome::Committed(commit)) = result else {
+        let Ok(northstar_session_application::sm::SmResumeFinalizationOutcome::Committed(commit)) =
+            result
+        else {
             unreachable!()
         };
         let error = KnownCredentialOwner::from_observed(
@@ -129,7 +133,7 @@ async fn unknown_resume_and_successful_fallback_keep_distinct_original_frame_att
         .prepare_credential(CredentialKind::Resume, Uuid::from_u128(302))
         .unwrap();
     let resume = prepared.observation();
-    let request = crate::services::sm::SmResumeFinalizationRequest {
+    let request = northstar_session_application::sm::SmResumeFinalizationRequest {
         session_id: Uuid::from_u128(21),
         claim_token: Uuid::from_u128(22),
         connection_id: Uuid::from_u128(302),
@@ -828,10 +832,13 @@ async fn unbound_selected_control_does_not_take_queued_bind_owner() {
         }),
     );
     invocation.constructed(&receipt);
-    let result = Ok(crate::services::sm::BindingFinalizationOutcome::Committed { receipt });
+    let result =
+        Ok(northstar_session_application::sm::BindingFinalizationOutcome::Committed { receipt });
     invocation.binding_returned(&result);
     drop(invocation);
-    let Ok(crate::services::sm::BindingFinalizationOutcome::Committed { receipt }) = result else {
+    let Ok(northstar_session_application::sm::BindingFinalizationOutcome::Committed { receipt }) =
+        result
+    else {
         unreachable!()
     };
     let owner =

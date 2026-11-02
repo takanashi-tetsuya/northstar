@@ -1,15 +1,15 @@
 //! The existing SM record/checkpoint/ACK operations over the real session
 //! substate. Only the current persistence/capacity capabilities are injected.
 use super::{ProtocolSession, SmRuntimePolicy, SmSubstate};
-use crate::{
-    services::sm::{
-        ownership::{CheckpointPolicy, PreparedBatch, PreparedCheckpoint},
-        SmCheckpointOutcome, SmRepository, SmService, SmSessionSnapshot,
-    },
-    xmpp::outbound::{OutboundItem, SmUnackedStanza, TransportOwnershipSource},
-};
+use crate::xmpp::outbound::{OutboundItem, SmUnackedStanza, TransportOwnershipSource};
 use anyhow::{Context, Result};
 use northstar_delivery_core::sm_ownership::{self, Observation, Purpose, Scope, Terminal};
+use northstar_session_application::sm::ownership::{
+    CheckpointPolicy, PreparedBatch, PreparedCheckpoint,
+};
+use northstar_session_application::sm::{
+    SmCheckpointOutcome, SmRepository, SmService, SmSessionSnapshot,
+};
 use northstar_session_application::sm_capacity::{SmCapacityLease, SmMemoryGovernor};
 use northstar_session_core::JoinedMucMembership;
 use std::{
@@ -45,7 +45,7 @@ impl SmSnapshotView<'_> {
         sm: &SmSubstate,
         unacked: Vec<SmUnackedStanza>,
     ) -> SmSessionSnapshot {
-        crate::services::sm::SmSessionSnapshot {
+        northstar_session_application::sm::SmSessionSnapshot {
             inbound_h: sm.inbound_h,
             outbound_h: sm.outbound_h,
             acked_h: sm.acked_h,
@@ -68,10 +68,12 @@ impl SmSnapshotView<'_> {
             joined_rooms: self
                 .joined_rooms
                 .iter()
-                .map(|membership| crate::services::sm::SmMucMembership {
-                    room_jid: membership.key().clone(),
-                    nick: membership.nick.clone(),
-                })
+                .map(
+                    |membership| northstar_session_application::sm::SmMucMembership {
+                        room_jid: membership.key().clone(),
+                        nick: membership.nick.clone(),
+                    },
+                )
                 .collect(),
             directed_presence: self
                 .directed_presence
@@ -87,7 +89,7 @@ impl SmSnapshotView<'_> {
         }
     }
     pub(super) fn resident_bytes(&self, sm: &SmSubstate) -> Option<usize> {
-        let mut bytes = std::mem::size_of::<crate::services::sm::SmSessionSnapshot>();
+        let mut bytes = std::mem::size_of::<northstar_session_application::sm::SmSessionSnapshot>();
         let mut add = |value: usize| {
             bytes = bytes.checked_add(value)?;
             Some(())
@@ -108,10 +110,9 @@ impl SmSnapshotView<'_> {
         {
             add(value.len())?;
         }
-        add(self
-            .joined_rooms
-            .len()
-            .checked_mul(std::mem::size_of::<crate::services::sm::SmMucMembership>())?)?;
+        add(self.joined_rooms.len().checked_mul(std::mem::size_of::<
+            northstar_session_application::sm::SmMucMembership,
+        >())?)?;
         for membership in self.joined_rooms.iter() {
             add(membership.key().len())?;
             add(membership.nick.len())?;

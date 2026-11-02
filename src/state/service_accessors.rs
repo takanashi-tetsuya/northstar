@@ -141,7 +141,8 @@ impl AppState {
 
     pub(crate) fn sm_service(
         &self,
-    ) -> &crate::services::sm::SmService<db::sm_repository::PostgresSmRepository> {
+    ) -> &northstar_session_application::sm::SmService<db::sm_repository::PostgresSmRepository>
+    {
         &self.sm_service
     }
 
@@ -163,8 +164,9 @@ impl AppState {
 
     pub(crate) fn replay_service(
         &self,
-    ) -> &crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>
-    {
+    ) -> &northstar_session_application::replay::ReplayService<
+        db::replay_repository::PostgresReplayRepository,
+    > {
         &self.replay_service
     }
 

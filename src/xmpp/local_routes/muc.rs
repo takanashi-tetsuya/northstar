@@ -245,7 +245,7 @@ pub(crate) struct RestoreLocalMucOccupantsRequest<'a> {
     pub(crate) full_jid: &'a str,
     pub(crate) connection_id: uuid::Uuid,
     pub(crate) sm_session_id: uuid::Uuid,
-    pub(crate) memberships: &'a [crate::services::sm::SmMucMembership],
+    pub(crate) memberships: &'a [northstar_session_application::sm::SmMucMembership],
     pub(crate) base_stanzas: usize,
     pub(crate) base_bytes: usize,
 }

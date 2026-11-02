@@ -1,11 +1,9 @@
 use super::*;
-use crate::{
-    services::sm::{SmMixLeaseRotation, SmQueueOwnershipResolution},
-    xmpp::outbound::{DurableDelivery, MixDelivery},
-};
+use crate::xmpp::outbound::{DurableDelivery, MixDelivery};
 use northstar_delivery_core::sm_ownership::{
     CommitFact, HDecision, Knowledge, KnowledgeClass, MixRotation,
 };
+use northstar_session_application::sm::{SmMixLeaseRotation, SmQueueOwnershipResolution};
 use northstar_session_application::sm_capacity::SmCapacityMetrics;
 use std::{
     sync::{atomic::AtomicU64, Mutex},
@@ -118,7 +116,9 @@ impl SmOwnerPort for FakePort {
         prepared.validate_projection(
             prepared.session_id(),
             prepared.connection_id(),
-            crate::services::sm::ownership::SnapshotProjection::from(prepared.snapshot()),
+            northstar_session_application::sm::ownership::SnapshotProjection::from(
+                prepared.snapshot(),
+            ),
             prepared.acknowledged(),
             prepared.policy(),
         )?;
@@ -802,7 +802,7 @@ fn private_preparation_rejects_changed_epoch_whole_cut_payload_and_projection() 
             .validate_projection(
                 session,
                 connection,
-                crate::services::sm::ownership::SnapshotProjection::from(&altered),
+                northstar_session_application::sm::ownership::SnapshotProjection::from(&altered),
                 &acknowledged,
                 policy
             )

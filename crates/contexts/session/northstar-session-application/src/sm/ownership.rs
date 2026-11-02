@@ -8,31 +8,31 @@ use std::{collections::VecDeque, net::IpAddr};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CheckpointPolicy {
-    pub(crate) ttl_seconds: u64,
-    pub(crate) live_lease_seconds: u64,
-    pub(crate) max_stanzas: usize,
-    pub(crate) max_bytes: usize,
+pub struct CheckpointPolicy {
+    pub ttl_seconds: u64,
+    pub live_lease_seconds: u64,
+    pub max_stanzas: usize,
+    pub max_bytes: usize,
 }
 
 #[derive(Eq, PartialEq)]
-pub(crate) struct SnapshotProjection<'a> {
-    pub(crate) inbound_h: u32,
-    pub(crate) outbound_h: u32,
-    pub(crate) acked_h: u32,
-    pub(crate) available: bool,
-    pub(crate) carbons: bool,
-    pub(crate) priority: i16,
-    pub(crate) blocklist_requested: bool,
-    pub(crate) roster_requested: bool,
-    pub(crate) active_privacy_list: &'a Option<String>,
-    pub(crate) privacy_requested: bool,
-    pub(crate) peer_ip: IpAddr,
-    pub(crate) user_agent_id: Option<Uuid>,
-    pub(crate) joined_rooms: &'a [SmMucMembership],
-    pub(crate) directed_presence: &'a [String],
-    pub(crate) last_presence: &'a Option<String>,
-    pub(crate) unacked: &'a [SmUnackedStanza],
+pub struct SnapshotProjection<'a> {
+    pub inbound_h: u32,
+    pub outbound_h: u32,
+    pub acked_h: u32,
+    pub available: bool,
+    pub carbons: bool,
+    pub priority: i16,
+    pub blocklist_requested: bool,
+    pub roster_requested: bool,
+    pub active_privacy_list: &'a Option<String>,
+    pub privacy_requested: bool,
+    pub peer_ip: IpAddr,
+    pub user_agent_id: Option<Uuid>,
+    pub joined_rooms: &'a [SmMucMembership],
+    pub directed_presence: &'a [String],
+    pub last_presence: &'a Option<String>,
+    pub unacked: &'a [SmUnackedStanza],
 }
 impl<'a> From<&'a SmSessionSnapshot> for SnapshotProjection<'a> {
     fn from(snapshot: &'a SmSessionSnapshot) -> Self {
@@ -75,7 +75,7 @@ impl<'a> From<&'a SmSessionSnapshot> for SnapshotProjection<'a> {
     }
 }
 
-pub(crate) struct PreparedCheckpoint<'a> {
+pub struct PreparedCheckpoint<'a> {
     request: Request,
     snapshot: &'a SmSessionSnapshot,
     acknowledged: &'a [SmUnackedStanza],
@@ -87,7 +87,7 @@ impl std::fmt::Debug for PreparedCheckpoint<'_> {
     }
 }
 impl<'a> PreparedCheckpoint<'a> {
-    pub(crate) fn bind(
+    pub fn bind(
         observation: &Observation,
         session_id: Uuid,
         connection_id: Uuid,
@@ -119,28 +119,28 @@ impl<'a> PreparedCheckpoint<'a> {
             policy,
         })
     }
-    pub(crate) fn request(&self) -> &Request {
+    pub fn request(&self) -> &Request {
         &self.request
     }
-    pub(crate) fn snapshot(&self) -> &SmSessionSnapshot {
+    pub fn snapshot(&self) -> &SmSessionSnapshot {
         self.snapshot
     }
-    pub(crate) fn acknowledged(&self) -> &[SmUnackedStanza] {
+    pub fn acknowledged(&self) -> &[SmUnackedStanza] {
         self.acknowledged
     }
-    pub(crate) fn policy(&self) -> CheckpointPolicy {
+    pub fn policy(&self) -> CheckpointPolicy {
         self.policy
     }
-    pub(crate) fn session_id(&self) -> Uuid {
+    pub fn session_id(&self) -> Uuid {
         self.request
             .binding()
             .session_id
             .expect("prepared persisted SM checkpoint")
     }
-    pub(crate) fn connection_id(&self) -> Uuid {
+    pub fn connection_id(&self) -> Uuid {
         self.request.binding().connection_id
     }
-    pub(crate) fn validate_projection(
+    pub fn validate_projection(
         &self,
         session_id: Uuid,
         connection_id: Uuid,
@@ -161,7 +161,7 @@ impl<'a> PreparedCheckpoint<'a> {
     }
 }
 
-pub(crate) struct PreparedBatch<'a> {
+pub struct PreparedBatch<'a> {
     request: Request,
     sources: &'a [TransportOwnershipSource],
 }
@@ -171,7 +171,7 @@ impl std::fmt::Debug for PreparedBatch<'_> {
     }
 }
 impl<'a> PreparedBatch<'a> {
-    pub(crate) fn bind(
+    pub fn bind(
         observation: &Observation,
         binding: Binding,
         whole: &VecDeque<SmUnackedStanza>,
@@ -207,16 +207,13 @@ impl<'a> PreparedBatch<'a> {
             sources,
         })
     }
-    pub(crate) fn request(&self) -> &Request {
+    pub fn request(&self) -> &Request {
         &self.request
     }
-    pub(crate) fn sources(&self) -> &[TransportOwnershipSource] {
+    pub fn sources(&self) -> &[TransportOwnershipSource] {
         self.sources
     }
-    pub(crate) fn validate_sources(
-        &self,
-        sources: &[TransportOwnershipSource],
-    ) -> anyhow::Result<()> {
+    pub fn validate_sources(&self, sources: &[TransportOwnershipSource]) -> anyhow::Result<()> {
         anyhow::ensure!(
             sources == self.sources,
             "SM unpersisted acknowledgement sources changed"

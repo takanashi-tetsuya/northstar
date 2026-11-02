@@ -435,7 +435,7 @@ impl AppState {
             },
             federation_outbox.outbox_wakeup(),
         );
-        let replay_service = crate::services::replay::ReplayService::new(
+        let replay_service = northstar_session_application::replay::ReplayService::new(
             db::replay_repository::PostgresReplayRepository::new(pool.clone()),
             &config.domain,
             config.offline_message_ttl_days,
@@ -506,7 +506,7 @@ impl AppState {
             sm_authority_connect_options =
                 sm_authority_connect_options.options([("search_path", "public")]);
         }
-        let sm_service = crate::services::sm::SmService::new(
+        let sm_service = northstar_session_application::sm::SmService::new(
             db::sm_repository::PostgresSmRepository::new(
                 pool.clone(),
                 Arc::clone(&fast_token_secret),

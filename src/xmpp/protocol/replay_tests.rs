@@ -1,4 +1,5 @@
 use super::*;
+use crate::db::replay_repository::ReplayServiceTestFixture;
 use chrono::Utc;
 use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;

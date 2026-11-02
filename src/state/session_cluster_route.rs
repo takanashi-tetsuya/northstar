@@ -12,7 +12,7 @@ impl AppState {
             .try_register_session(
                 full_jid,
                 connection_id,
-                crate::services::sm::SessionRouteClaimProof::Binding,
+                northstar_session_application::sm::SessionRouteClaimProof::Binding,
             )
             .await
     }
@@ -37,7 +37,7 @@ impl AppState {
             .try_register_session(
                 full_jid,
                 connection_id,
-                crate::services::sm::SessionRouteClaimProof::SmResume {
+                northstar_session_application::sm::SessionRouteClaimProof::SmResume {
                     session_id,
                     claim_token,
                 },

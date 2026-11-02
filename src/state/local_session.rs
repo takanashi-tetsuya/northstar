@@ -43,7 +43,7 @@ impl AppState {
         observation: Option<
             &northstar_auth_application::authentication::publication::PreparedCredential,
         >,
-    ) -> anyhow::Result<crate::services::sm::BindingFinalizationOutcome> {
+    ) -> anyhow::Result<northstar_session_application::sm::BindingFinalizationOutcome> {
         self.sm_service
             .finalize_binding_observed(
                 connection_id,
@@ -60,11 +60,11 @@ impl AppState {
 
     pub(crate) async fn finalize_sm_resume(
         &self,
-        request: crate::services::sm::SmResumeFinalizationRequest<'_>,
+        request: northstar_session_application::sm::SmResumeFinalizationRequest<'_>,
         observation: Option<
             &northstar_auth_application::authentication::publication::PreparedCredential,
         >,
-    ) -> anyhow::Result<crate::services::sm::SmResumeFinalizationOutcome> {
+    ) -> anyhow::Result<northstar_session_application::sm::SmResumeFinalizationOutcome> {
         self.sm_service
             .finalize_resume_observed(request, observation)
             .await

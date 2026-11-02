@@ -151,7 +151,7 @@ fn queue() -> Arc<SmSuspensionRecoveryQueue> {
 
 fn capacity(
     queue: &SmSuspensionRecoveryQueue,
-    snapshot: &crate::services::sm::SmSessionSnapshot,
+    snapshot: &northstar_session_application::sm::SmSessionSnapshot,
 ) -> northstar_session_application::sm_capacity::SmCapacityLease {
     queue
         .governor
@@ -159,8 +159,8 @@ fn capacity(
         .unwrap()
 }
 
-fn snapshot() -> crate::services::sm::SmSessionSnapshot {
-    crate::services::sm::SmSessionSnapshot {
+fn snapshot() -> northstar_session_application::sm::SmSessionSnapshot {
+    northstar_session_application::sm::SmSessionSnapshot {
         inbound_h: 0,
         outbound_h: 1,
         acked_h: 0,

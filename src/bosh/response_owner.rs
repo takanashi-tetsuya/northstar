@@ -11,16 +11,14 @@ use super::{
     BoshResponseBody, CachedResponse, RESPONSE_CACHE_SIZE,
 };
 use crate::xmpp::auth_publication::{OwnedPublication, SelectedControls};
-use crate::{
-    services::replay::{ReplayRepository, ReplayService},
-    xmpp::outbound::{BoshResponseOwnership, OutboundItem},
-};
+use crate::xmpp::outbound::{BoshResponseOwnership, OutboundItem};
 use anyhow::Result;
 use axum::body::Bytes;
 use northstar_delivery_core::bosh_ownership::{
     response::{self, AckRequest, BindRequest, RenewRequest, ResponseBuild, ResponseKind},
     Operation,
 };
+use northstar_session_application::replay::{ReplayRepository, ReplayService};
 use northstar_session_application::sm_capacity::SmMemoryGovernor;
 use std::{collections::VecDeque, future::Future, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};

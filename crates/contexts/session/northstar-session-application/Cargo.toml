@@ -9,17 +9,23 @@ publish = false
 
 [features]
 # Test-only observers the root crate's route tests use.
-test-support = []
+test-support = ["northstar-session-core/test-support"]
 
 [dependencies]
 anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+dashmap = "6.1"
+northstar-auth-core = { path = "../../auth/northstar-auth-core" }
+northstar-config = { path = "../../../platform/northstar-config" }
 northstar-delivery-core = { path = "../../message/northstar-delivery-core" }
 northstar-message-core = { path = "../../message/northstar-message-core" }
+northstar-room-core = { path = "../../room/northstar-room-core" }
 northstar-security = { path = "../../../platform/northstar-security" }
 northstar-session-core = { path = "../northstar-session-core" }
 northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 tokio = { version = "1.43", features = ["sync", "time"] }
 tokio-util = "0.7"
 tracing = "0.1"
@@ -27,4 +33,5 @@ uuid = { version = "1.12", features = ["v4", "serde"] }
 
 [dev-dependencies]
 chrono = "0.4"
+futures = "0.3"
 tokio = { version = "1.43", features = ["macros", "rt", "sync", "test-util", "time"] }

@@ -11,7 +11,7 @@ impl ClusterManager {
         &self,
         full_jid: &str,
         connection_id: uuid::Uuid,
-        proof: crate::services::sm::SessionRouteClaimProof,
+        proof: northstar_session_application::sm::SessionRouteClaimProof,
     ) -> Result<bool> {
         self.admit(ClusterOperation::NewBinding)?;
         let (full_jid, bare) = session_route_keys(full_jid)?;

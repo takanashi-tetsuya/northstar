@@ -1,7 +1,8 @@
 //! PostgreSQL ownership and claim transitions for offline and BOSH replay.
-use crate::{db, services::replay::*};
+use crate::db;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use northstar_session_application::replay::*;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -241,10 +242,14 @@ impl ReplayRepository for PostgresReplayRepository {
 }
 
 #[cfg(test)]
-impl ReplayService<PostgresReplayRepository> {
-    pub(crate) async fn busy_retry_test_fixture(
-        database_url: &str,
-    ) -> Result<(Self, Uuid, String, Uuid)> {
+pub(crate) trait ReplayServiceTestFixture: Sized {
+    async fn busy_retry_test_fixture(database_url: &str) -> Result<(Self, Uuid, String, Uuid)>;
+    async fn remove_test_recipient(&self, recipient_id: Uuid) -> Result<()>;
+}
+
+#[cfg(test)]
+impl ReplayServiceTestFixture for ReplayService<PostgresReplayRepository> {
+    async fn busy_retry_test_fixture(database_url: &str) -> Result<(Self, Uuid, String, Uuid)> {
         let pool = northstar_postgres::pool::options()
             .max_connections(4)
             .acquire_timeout(std::time::Duration::from_secs(2))
@@ -277,7 +282,7 @@ impl ReplayService<PostgresReplayRepository> {
             message_id,
         ))
     }
-    pub(crate) async fn remove_test_recipient(&self, recipient_id: Uuid) -> Result<()> {
+    async fn remove_test_recipient(&self, recipient_id: Uuid) -> Result<()> {
         sqlx::query("DELETE FROM users WHERE id=$1")
             .bind(recipient_id)
             .execute(&self.repository_for_tests().pool)

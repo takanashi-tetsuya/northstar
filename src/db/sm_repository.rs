@@ -1,11 +1,12 @@
 //! Atomic SM ownership, transport acknowledgements and binding persistence.
-use crate::{db, services::sm::*};
+use crate::db;
 use anyhow::Result;
 use northstar_auth_application::authentication::publication::{
     credential_error, CredentialInvocation, CredentialPreparation, CredentialRollbackSite,
     PreparationResult,
 };
 use northstar_config::SmIpPolicy;
+use northstar_session_application::sm::*;
 use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;

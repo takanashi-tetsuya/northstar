@@ -9,38 +9,38 @@ use chrono::{DateTime, Utc};
 use std::{future::Future, pin::Pin, sync::Arc};
 use uuid::Uuid;
 
-pub(crate) const OWNER_LEASE_SECONDS: i64 = 90;
+pub const OWNER_LEASE_SECONDS: i64 = 90;
 
-pub(crate) type PendingPresencePage = PendingPresenceReplayPage;
+pub type PendingPresencePage = PendingPresenceReplayPage;
 
 /// The repository supplies a recovery-only authorization fence without
 /// exposing its transaction or pool to replay orchestration.
-pub(crate) type RecoveryAuthorizationFuture<'a> =
+pub type RecoveryAuthorizationFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<Box<dyn RecoveryReplayGuardPort>>>> + Send + 'a>>;
-pub(crate) type RecoveryGuardReleaseFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+pub type RecoveryGuardReleaseFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 
-pub(crate) trait RecoveryReplayAuthorizationPort: Send + Sync {
+pub trait RecoveryReplayAuthorizationPort: Send + Sync {
     fn lock(&self) -> RecoveryAuthorizationFuture<'_>;
 }
 
-pub(crate) trait RecoveryReplayGuardPort: Send {
+pub trait RecoveryReplayGuardPort: Send {
     fn release(self: Box<Self>) -> RecoveryGuardReleaseFuture;
 }
 
 /// Opaque recovery-only account authority exposed to the protocol layer.
 #[derive(Clone)]
-pub(crate) struct RecoveryReplayAuthority {
+pub struct RecoveryReplayAuthority {
     port: Arc<dyn RecoveryReplayAuthorizationPort>,
 }
 
 impl RecoveryReplayAuthority {
-    pub(crate) fn new(port: impl RecoveryReplayAuthorizationPort + 'static) -> Self {
+    pub fn new(port: impl RecoveryReplayAuthorizationPort + 'static) -> Self {
         Self {
             port: Arc::new(port),
         }
     }
 
-    pub(crate) async fn lock(&self) -> Result<Option<RecoveryReplayAuthorizationGuard>> {
+    pub async fn lock(&self) -> Result<Option<RecoveryReplayAuthorizationGuard>> {
         self.port
             .lock()
             .await
@@ -50,65 +50,65 @@ impl RecoveryReplayAuthority {
 
 /// Holding this value serializes credential revocation with one bounded
 /// replay claim or enqueue. Dropping it rolls back the read-only transaction.
-pub(crate) struct RecoveryReplayAuthorizationGuard {
+pub struct RecoveryReplayAuthorizationGuard {
     inner: Box<dyn RecoveryReplayGuardPort>,
 }
 
 impl RecoveryReplayAuthorizationGuard {
-    pub(crate) async fn release(self) -> Result<()> {
+    pub async fn release(self) -> Result<()> {
         self.inner.release().await
     }
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ReplaySession {
+pub struct ReplaySession {
     lease: OfflineReplayLease,
     owner_bare_jid: String,
     owner_full_jid: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ReplayBusyUntil {
-    pub(crate) expires_at: DateTime<Utc>,
-    pub(crate) retry_after: std::time::Duration,
+pub struct ReplayBusyUntil {
+    pub expires_at: DateTime<Utc>,
+    pub retry_after: std::time::Duration,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum ReplayStartOutcome {
+pub enum ReplayStartOutcome {
     Acquired(ReplaySession),
     BusyUntil(ReplayBusyUntil),
 }
 
 impl ReplaySession {
-    pub(crate) fn lease(&self) -> &OfflineReplayLease {
+    pub fn lease(&self) -> &OfflineReplayLease {
         &self.lease
     }
-    pub(crate) fn owner_bare_jid(&self) -> &str {
+    pub fn owner_bare_jid(&self) -> &str {
         &self.owner_bare_jid
     }
-    pub(crate) fn owner_full_jid(&self) -> &str {
+    pub fn owner_full_jid(&self) -> &str {
         &self.owner_full_jid
     }
 
-    pub(crate) fn recipient_id(&self) -> Uuid {
+    pub fn recipient_id(&self) -> Uuid {
         self.lease.recipient_id
     }
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ReplayMessage {
-    pub(crate) id: Uuid,
-    pub(crate) stanza: String,
+pub struct ReplayMessage {
+    pub id: Uuid,
+    pub stanza: String,
 }
 
 #[derive(Debug)]
-pub(crate) struct ReplayPage {
-    pub(crate) claim_token: Uuid,
-    pub(crate) messages: Vec<ReplayMessage>,
+pub struct ReplayPage {
+    pub claim_token: Uuid,
+    pub messages: Vec<ReplayMessage>,
 }
 
 #[derive(Debug)]
-pub(crate) enum ReplayPageOutcome {
+pub enum ReplayPageOutcome {
     Claimed(ReplayPage),
     Empty,
     PendingClaims,
@@ -117,9 +117,9 @@ pub(crate) enum ReplayPageOutcome {
 
 #[derive(Clone, Debug)]
 pub struct PendingPresenceCursor {
-    pub(crate) created_at: DateTime<Utc>,
-    pub(crate) source: i16,
-    pub(crate) key: String,
+    pub created_at: DateTime<Utc>,
+    pub source: i16,
+    pub key: String,
 }
 
 #[derive(Clone, Debug)]
@@ -159,7 +159,7 @@ pub enum OfflineReplayLeaseAcquire {
     BusyUntil(OfflineReplayBusyUntil),
 }
 
-pub(crate) trait ReplayLeaseRepository: Send + Sync {
+pub trait ReplayLeaseRepository: Send + Sync {
     fn username(
         &self,
         recipient_id: Uuid,
@@ -174,7 +174,7 @@ pub(crate) trait ReplayLeaseRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<OfflineReplayLeaseAcquire>> + Send;
 }
 
-pub(crate) trait ReplayRepository: ReplayLeaseRepository {
+pub trait ReplayRepository: ReplayLeaseRepository {
     fn claim_page(
         &self,
         session: &ReplaySession,
@@ -236,24 +236,24 @@ pub(crate) trait ReplayRepository: ReplayLeaseRepository {
 }
 
 #[derive(Clone)]
-pub(crate) struct ReplayService<R> {
+pub struct ReplayService<R> {
     repository: R,
     domain: String,
     offline_ttl_days: i64,
 }
 impl<R: ReplayLeaseRepository> ReplayService<R> {
-    pub(crate) fn new(repository: R, domain: &str, offline_ttl_days: i64) -> Self {
+    pub fn new(repository: R, domain: &str, offline_ttl_days: i64) -> Self {
         Self {
             repository,
             domain: domain.to_owned(),
             offline_ttl_days,
         }
     }
-    #[cfg(test)]
-    pub(crate) fn repository_for_tests(&self) -> &R {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn repository_for_tests(&self) -> &R {
         &self.repository
     }
-    pub(crate) async fn start(
+    pub async fn start(
         &self,
         recipient_id: Uuid,
         current_full_jid: &str,
@@ -311,7 +311,7 @@ impl<R: ReplayLeaseRepository> ReplayService<R> {
 }
 
 impl<R: ReplayRepository> ReplayService<R> {
-    pub(crate) async fn claim_page(
+    pub async fn claim_page(
         &self,
         session: &ReplaySession,
         active_privacy_list: Option<&str>,
@@ -327,7 +327,7 @@ impl<R: ReplayRepository> ReplayService<R> {
             .await
     }
 
-    pub(crate) async fn renew_before_send(
+    pub async fn renew_before_send(
         &self,
         session: &ReplaySession,
         page_claim_token: Uuid,
@@ -338,7 +338,7 @@ impl<R: ReplayRepository> ReplayService<R> {
             .await
     }
 
-    pub(crate) async fn release_unsent(
+    pub async fn release_unsent(
         &self,
         session: &ReplaySession,
         page_claim_token: Uuid,
@@ -349,11 +349,11 @@ impl<R: ReplayRepository> ReplayService<R> {
             .await
     }
 
-    pub(crate) async fn finish(&self, session: &ReplaySession) -> Result<bool> {
+    pub async fn finish(&self, session: &ReplaySession) -> Result<bool> {
         self.repository.finish(session).await
     }
 
-    pub(crate) async fn pending_presence_page(
+    pub async fn pending_presence_page(
         &self,
         recipient_id: Uuid,
         owner_bare_jid: &str,
@@ -371,14 +371,14 @@ impl<R: ReplayRepository> ReplayService<R> {
             .await
     }
 
-    pub(crate) async fn fence_socket_write(
+    pub async fn fence_socket_write(
         &self,
         delivery: northstar_delivery_core::DurableDelivery,
     ) -> Result<northstar_delivery_core::DurableDelivery> {
         self.repository.fence_socket_write(delivery).await
     }
 
-    pub(crate) async fn acknowledge_socket_write(
+    pub async fn acknowledge_socket_write(
         &self,
         delivery: northstar_delivery_core::DurableDelivery,
     ) -> Result<()> {
@@ -387,7 +387,7 @@ impl<R: ReplayRepository> ReplayService<R> {
             .await
     }
 
-    pub(crate) async fn acknowledge_socket_write_observed(
+    pub async fn acknowledge_socket_write_observed(
         &self,
         delivery: northstar_delivery_core::DurableDelivery,
         observation: Option<&northstar_delivery_core::native_write::AckRequest>,
@@ -402,28 +402,28 @@ impl<R: ReplayRepository> ReplayService<R> {
         }
     }
 
-    pub(crate) async fn renew_bosh_fences(
+    pub async fn renew_bosh_fences(
         &self,
         request: &northstar_delivery_core::bosh_ownership::response::RenewRequest,
     ) -> Result<()> {
         self.repository.renew_bosh_fences(request).await
     }
 
-    pub(crate) async fn acknowledge_bosh_responses(
+    pub async fn acknowledge_bosh_responses(
         &self,
         request: &northstar_delivery_core::bosh_ownership::response::AckRequest,
     ) -> Result<()> {
         self.repository.acknowledge_bosh_responses(request).await
     }
 
-    pub(crate) async fn bind_bosh_response_sources(
+    pub async fn bind_bosh_response_sources(
         &self,
         request: &northstar_delivery_core::bosh_ownership::response::BindRequest,
     ) -> Result<northstar_delivery_core::bosh_ownership::BoshResponseOwnership> {
         self.repository.bind_bosh_response_sources(request).await
     }
 
-    pub(crate) async fn release_bosh_fences(&self, session_id: Uuid) -> Result<()> {
+    pub async fn release_bosh_fences(&self, session_id: Uuid) -> Result<()> {
         self.repository.release_bosh_fences(session_id).await
     }
 }

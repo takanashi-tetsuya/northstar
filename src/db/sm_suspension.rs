@@ -1,6 +1,7 @@
 //! PostgreSQL authority for the SM suspension recovery worker.
-use crate::{db, services::sm_suspension::*};
+use crate::db;
 use anyhow::{Context, Result};
+use northstar_session_application::sm_suspension::*;
 use sqlx::PgPool;
 use uuid::Uuid;
 

@@ -148,7 +148,7 @@ fn resumed_muc_suffix_cannot_open_a_second_sm_budget() {
 
 #[test]
 fn resume_failure_presence_332_consumes_the_same_global_budget() {
-    let membership = crate::services::sm::SmMucMembership {
+    let membership = northstar_session_application::sm::SmMucMembership {
         room_jid: "room@conference.example.test".to_owned(),
         nick: "alice".to_owned(),
     };

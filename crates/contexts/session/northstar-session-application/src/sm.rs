@@ -1,17 +1,15 @@
 //! Application boundary for durable resource binding and XEP-0198 ownership.
 
-pub(crate) mod ownership;
+pub mod ownership;
 
 use anyhow::Result;
 use dashmap::mapref::entry::Entry;
-use northstar_auth_application::authentication::publication::{
-    CredentialInvocation, PreparedCredential,
-};
 use northstar_config::SmIpPolicy;
-pub(crate) use northstar_session_core::finalization::{
+pub use northstar_session_core::finalization::{
     ActivatedSmSession, BindingFinalizationOutcome, SmResumeFinalizationCommit,
     SmResumeFinalizationOutcome, SmResumeFinalizationRequest,
 };
+use northstar_session_core::publication::{CredentialInvocation, PreparedCredential};
 use std::{
     net::IpAddr,
     sync::{
@@ -24,33 +22,33 @@ use uuid::Uuid;
 
 /// Application-layer proof that one already-authorized C2S lifecycle may
 /// claim a cluster route. Protocol code never receives a database DTO.
-pub(crate) use northstar_session_core::{SessionRouteClaimProof, SmMucMembership};
+pub use northstar_session_core::{SessionRouteClaimProof, SmMucMembership};
 
 #[derive(Clone, Debug)]
-pub(crate) struct SmSessionSnapshot {
-    pub(crate) inbound_h: u32,
-    pub(crate) outbound_h: u32,
-    pub(crate) acked_h: u32,
-    pub(crate) available: bool,
-    pub(crate) carbons: bool,
-    pub(crate) priority: i16,
-    pub(crate) blocklist_requested: bool,
-    pub(crate) roster_requested: bool,
-    pub(crate) active_privacy_list: Option<String>,
-    pub(crate) privacy_requested: bool,
-    pub(crate) peer_ip: IpAddr,
-    pub(crate) user_agent_id: Option<Uuid>,
-    pub(crate) joined_rooms: Vec<SmMucMembership>,
-    pub(crate) directed_presence: Vec<String>,
-    pub(crate) last_presence: Option<String>,
-    pub(crate) unacked: Vec<northstar_delivery_core::SmUnackedStanza>,
+pub struct SmSessionSnapshot {
+    pub inbound_h: u32,
+    pub outbound_h: u32,
+    pub acked_h: u32,
+    pub available: bool,
+    pub carbons: bool,
+    pub priority: i16,
+    pub blocklist_requested: bool,
+    pub roster_requested: bool,
+    pub active_privacy_list: Option<String>,
+    pub privacy_requested: bool,
+    pub peer_ip: IpAddr,
+    pub user_agent_id: Option<Uuid>,
+    pub joined_rooms: Vec<SmMucMembership>,
+    pub directed_presence: Vec<String>,
+    pub last_presence: Option<String>,
+    pub unacked: Vec<northstar_delivery_core::SmUnackedStanza>,
 }
 
 impl SmSessionSnapshot {
     /// Conservative logical resident size used by the process-local SM
     /// capacity authority. Count structural entries as well as UTF-8 payload
     /// bytes so thousands of short JIDs cannot bypass a byte-only limit.
-    pub(crate) fn resident_bytes(&self) -> Option<usize> {
+    pub fn resident_bytes(&self) -> Option<usize> {
         let mut bytes = std::mem::size_of::<Self>();
         let mut add = |value: usize| {
             bytes = bytes.checked_add(value)?;
@@ -89,34 +87,34 @@ impl SmSessionSnapshot {
 }
 
 #[derive(Debug)]
-pub(crate) struct SmResumeClaim {
-    pub(crate) session_id: Uuid,
-    pub(crate) claim_token: Uuid,
-    pub(crate) claim_deadline: std::time::Instant,
-    pub(crate) full_jid: String,
-    pub(crate) resource: String,
-    pub(crate) resume_timeout_seconds: u64,
-    pub(crate) inbound_h: u32,
-    pub(crate) acked_h: u32,
-    pub(crate) available: bool,
-    pub(crate) carbons: bool,
-    pub(crate) priority: i16,
-    pub(crate) blocklist_requested: bool,
-    pub(crate) roster_requested: bool,
-    pub(crate) active_privacy_list: Option<String>,
-    pub(crate) privacy_requested: bool,
-    pub(crate) user_agent_id: Option<Uuid>,
-    pub(crate) joined_rooms: Vec<SmMucMembership>,
-    pub(crate) directed_presence: Vec<String>,
-    pub(crate) last_presence: Option<String>,
-    pub(crate) unacked: Vec<northstar_delivery_core::SmUnackedStanza>,
+pub struct SmResumeClaim {
+    pub session_id: Uuid,
+    pub claim_token: Uuid,
+    pub claim_deadline: std::time::Instant,
+    pub full_jid: String,
+    pub resource: String,
+    pub resume_timeout_seconds: u64,
+    pub inbound_h: u32,
+    pub acked_h: u32,
+    pub available: bool,
+    pub carbons: bool,
+    pub priority: i16,
+    pub blocklist_requested: bool,
+    pub roster_requested: bool,
+    pub active_privacy_list: Option<String>,
+    pub privacy_requested: bool,
+    pub user_agent_id: Option<Uuid>,
+    pub joined_rooms: Vec<SmMucMembership>,
+    pub directed_presence: Vec<String>,
+    pub last_presence: Option<String>,
+    pub unacked: Vec<northstar_delivery_core::SmUnackedStanza>,
 }
 
 impl SmResumeClaim {
     /// Exact process-resident charge for the materialized database claim.
     /// The pre-claim maximum reservation is shrunk to this value before any
     /// route is installed, so a concurrent resume cannot overcommit memory.
-    pub(crate) fn resident_bytes(&self) -> Option<usize> {
+    pub fn resident_bytes(&self) -> Option<usize> {
         let mut bytes = std::mem::size_of::<Self>();
         let mut add = |value: usize| {
             bytes = bytes.checked_add(value)?;
@@ -156,7 +154,7 @@ impl SmResumeClaim {
     }
 }
 
-pub(crate) struct SmSessionCreationRequest<'a> {
+pub struct SmSessionCreationRequest<'a> {
     pub token_hash: &'a [u8; 32],
     pub user_id: Uuid,
     pub auth_generation: i64,
@@ -175,18 +173,18 @@ pub(crate) struct SmSessionCreationRequest<'a> {
 /// in-memory XEP-0198 FIFO before a later checkpoint or client acknowledgement.
 /// C2S identities remain stable; only MIX hand-offs rotate their lease token.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SmMixLeaseRotation {
-    pub(crate) previous: northstar_delivery_core::MixDelivery,
-    pub(crate) current: northstar_delivery_core::MixDelivery,
+pub struct SmMixLeaseRotation {
+    pub previous: northstar_delivery_core::MixDelivery,
+    pub current: northstar_delivery_core::MixDelivery,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct SmQueueOwnershipResolution {
-    pub(crate) mix_rotations: Vec<SmMixLeaseRotation>,
+pub struct SmQueueOwnershipResolution {
+    pub mix_rotations: Vec<SmMixLeaseRotation>,
 }
 
 impl SmQueueOwnershipResolution {
-    pub(crate) fn resolve_source(
+    pub fn resolve_source(
         &self,
         source: Option<northstar_delivery_core::TransportOwnershipSource>,
     ) -> Option<northstar_delivery_core::TransportOwnershipSource> {
@@ -207,7 +205,7 @@ impl SmQueueOwnershipResolution {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum SmSessionCreationOutcome {
+pub enum SmSessionCreationOutcome {
     Created {
         id: Uuid,
         ownership: SmQueueOwnershipResolution,
@@ -216,12 +214,12 @@ pub(crate) enum SmSessionCreationOutcome {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct SmCheckpointOutcome {
-    pub(crate) updated: bool,
-    pub(crate) ownership: SmQueueOwnershipResolution,
+pub struct SmCheckpointOutcome {
+    pub updated: bool,
+    pub ownership: SmQueueOwnershipResolution,
 }
 
-pub(crate) struct SmResumeClaimRequest<'a> {
+pub struct SmResumeClaimRequest<'a> {
     pub token_hash: &'a [u8; 32],
     pub user_id: Uuid,
     pub peer_ip: IpAddr,
@@ -232,14 +230,14 @@ pub(crate) struct SmResumeClaimRequest<'a> {
 }
 
 #[derive(Debug)]
-pub(crate) enum SmResumeClaimOutcome {
+pub enum SmResumeClaimOutcome {
     Claimed(Box<SmResumeClaim>),
     Pending(SmResumePending),
     Rejected,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SmPendingReason {
+pub enum SmPendingReason {
     Live,
     Claim,
     LiveAndClaim,
@@ -249,17 +247,17 @@ pub(crate) enum SmPendingReason {
 /// XEP-0198 resume epoch. These values are produced under the same row lock as
 /// the claim decision; protocol code never guesses a retry interval.
 #[derive(Clone, Debug)]
-pub(crate) struct SmResumePending {
-    pub(crate) session_id: Uuid,
-    pub(crate) old_connection_id: Uuid,
-    pub(crate) full_jid: String,
-    pub(crate) state_version: i64,
-    pub(crate) reason: SmPendingReason,
-    pub(crate) retry_at: std::time::Instant,
+pub struct SmResumePending {
+    pub session_id: Uuid,
+    pub old_connection_id: Uuid,
+    pub full_jid: String,
+    pub state_version: i64,
+    pub reason: SmPendingReason,
+    pub retry_at: std::time::Instant,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct SmAuthorityStamp {
+pub struct SmAuthorityStamp {
     state_version: i64,
     listener_generation: u64,
     /// Process-local edge counter for accepted notification hints. Unlike the
@@ -272,7 +270,7 @@ pub(crate) struct SmAuthorityStamp {
 /// One session-scoped notification receiver. A reconnect changes the same
 /// stamp as a durable row transition, so a waiter has one lossless wake source
 /// and always follows it with an authoritative claim probe.
-pub(crate) struct SmAuthoritySubscription {
+pub struct SmAuthoritySubscription {
     receiver: watch::Receiver<SmAuthorityStamp>,
     session_id: Uuid,
     slot: Arc<SmAuthoritySlot>,
@@ -280,7 +278,7 @@ pub(crate) struct SmAuthoritySubscription {
 }
 
 impl SmAuthoritySubscription {
-    pub(crate) fn probe_stamp(&self) -> SmAuthorityStamp {
+    pub fn probe_stamp(&self) -> SmAuthorityStamp {
         *self.receiver.borrow()
     }
 
@@ -290,7 +288,7 @@ impl SmAuthoritySubscription {
     /// identifies that exact notification. A retained or forged high version
     /// cannot spin the caller forever. `borrow_and_update` also makes
     /// `changed()` wait for a genuinely later edge.
-    pub(crate) fn acknowledge_probe(
+    pub fn acknowledge_probe(
         &mut self,
         pending_state_version: i64,
         before_probe: SmAuthorityStamp,
@@ -315,7 +313,7 @@ impl SmAuthoritySubscription {
         listener_changed || (notification_changed && !exact_notification_observed)
     }
 
-    pub(crate) async fn changed(&mut self) {
+    pub async fn changed(&mut self) {
         // A closed sender is also an authority-boundary transition: the
         // owning service is shutting down or being rebuilt, and the caller's
         // connection cancellation branch will decide whether it may continue.
@@ -382,7 +380,7 @@ struct SmAuthoritySlot {
 }
 
 #[derive(Debug)]
-pub(crate) struct SmAuthorityBroker {
+pub struct SmAuthorityBroker {
     schema: String,
     listener_generation: AtomicU64,
     notification_sequence: AtomicU64,
@@ -390,10 +388,10 @@ pub(crate) struct SmAuthorityBroker {
 }
 
 impl SmAuthorityBroker {
-    pub(crate) fn schema(&self) -> &str {
+    pub fn schema(&self) -> &str {
         &self.schema
     }
-    pub(crate) fn accept_notification(&self, payload: &str) -> bool {
+    pub fn accept_notification(&self, payload: &str) -> bool {
         if payload.len() > 256 {
             return false;
         }
@@ -502,7 +500,7 @@ impl SmAuthorityBroker {
     /// A listener start, transparent reconnect, or terminal receive error may
     /// have lost notifications. Advance a process-global generation and wake
     /// every actual waiter; the waiter immediately re-reads PostgreSQL.
-    pub(crate) fn publish_listener_transition(&self) {
+    pub fn publish_listener_transition(&self) {
         let generation = self
             .listener_generation
             .fetch_add(1, Ordering::AcqRel)
@@ -547,7 +545,7 @@ fn same_device_binding_matches(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BindingReservationOutcome {
+pub enum BindingReservationOutcome {
     Reserved,
     CredentialsExpired,
     Conflict,
@@ -555,12 +553,12 @@ pub(crate) enum BindingReservationOutcome {
 }
 
 #[derive(Clone)]
-pub(crate) struct SmService<R> {
+pub struct SmService<R> {
     repository: R,
     authority: Arc<SmAuthorityBroker>,
 }
 
-pub(crate) trait SmRepository: Send + Sync {
+pub trait SmRepository: Send + Sync {
     fn revoke_session(
         &self,
         session_id: Uuid,
@@ -627,7 +625,7 @@ pub(crate) trait SmRepository: Send + Sync {
         full_jid: &str,
         lease_seconds: u64,
         device_id: Option<Uuid>,
-        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
+        fast_plan: Option<&northstar_auth_core::credential::FastCommitPlan>,
     ) -> impl std::future::Future<Output = Result<BindingFinalizationOutcome>> + Send;
     fn finalize_resume(
         &self,
@@ -642,7 +640,7 @@ pub(crate) trait SmRepository: Send + Sync {
         full_jid: &str,
         lease_seconds: u64,
         device_id: Option<Uuid>,
-        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
+        fast_plan: Option<&northstar_auth_core::credential::FastCommitPlan>,
         invocation: &CredentialInvocation<'_>,
     ) -> impl std::future::Future<Output = Result<BindingFinalizationOutcome>> + Send;
     fn finalize_resume_observed(
@@ -674,29 +672,29 @@ pub(crate) trait SmRepository: Send + Sync {
 }
 
 impl<R: SmRepository> SmService<R> {
-    pub(crate) async fn revoke_session(&self, session_id: Uuid) -> Result<()> {
+    pub async fn revoke_session(&self, session_id: Uuid) -> Result<()> {
         self.repository.revoke_session(session_id).await
     }
 
-    pub(crate) fn new(repository: R, schema: String) -> Result<Self> {
+    pub fn new(repository: R, schema: String) -> Result<Self> {
         Ok(Self {
             repository,
             authority: SmAuthorityBroker::new(schema)?,
         })
     }
-    pub(crate) fn authority_broker(&self) -> Arc<SmAuthorityBroker> {
+    pub fn authority_broker(&self) -> Arc<SmAuthorityBroker> {
         Arc::clone(&self.authority)
     }
-    pub(crate) fn subscribe_authority(&self, session_id: Uuid) -> SmAuthoritySubscription {
+    pub fn subscribe_authority(&self, session_id: Uuid) -> SmAuthoritySubscription {
         self.authority.subscribe(session_id)
     }
-    pub(crate) async fn create_session(
+    pub async fn create_session(
         &self,
         request: SmSessionCreationRequest<'_>,
     ) -> Result<SmSessionCreationOutcome> {
         self.repository.create_session(request).await
     }
-    pub(crate) async fn claim_resume(
+    pub async fn claim_resume(
         &self,
         request: SmResumeClaimRequest<'_>,
     ) -> Result<SmResumeClaimOutcome> {
@@ -720,7 +718,7 @@ impl<R: SmRepository> SmService<R> {
         Ok(outcome)
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn checkpoint_session(
+    pub async fn checkpoint_session(
         &self,
         session_id: Uuid,
         connection_id: Uuid,
@@ -744,7 +742,7 @@ impl<R: SmRepository> SmService<R> {
             )
             .await
     }
-    pub(crate) async fn remove_live_muc_memberships(
+    pub async fn remove_live_muc_memberships(
         &self,
         session_id: Uuid,
         connection_id: Uuid,
@@ -755,7 +753,7 @@ impl<R: SmRepository> SmService<R> {
             .await
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn checkpoint_and_acknowledge(
+    pub async fn checkpoint_and_acknowledge(
         &self,
         session_id: Uuid,
         connection_id: Uuid,
@@ -781,7 +779,7 @@ impl<R: SmRepository> SmService<R> {
             )
             .await
     }
-    pub(crate) async fn acknowledge_delivery_batch(
+    pub async fn acknowledge_delivery_batch(
         &self,
         sources: &[northstar_delivery_core::TransportOwnershipSource],
         observation: Option<&ownership::PreparedBatch<'_>>,
@@ -790,7 +788,7 @@ impl<R: SmRepository> SmService<R> {
             .acknowledge_delivery_batch(sources, observation)
             .await
     }
-    pub(crate) async fn reserve_binding(
+    pub async fn reserve_binding(
         &self,
         connection_id: Uuid,
         user_id: Uuid,
@@ -809,7 +807,7 @@ impl<R: SmRepository> SmService<R> {
             .await
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn finalize_binding(
+    pub async fn finalize_binding(
         &self,
         connection_id: Uuid,
         user_id: Uuid,
@@ -817,7 +815,7 @@ impl<R: SmRepository> SmService<R> {
         full_jid: &str,
         lease_seconds: u64,
         device_id: Option<Uuid>,
-        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
+        fast_plan: Option<&northstar_auth_core::credential::FastCommitPlan>,
     ) -> Result<BindingFinalizationOutcome> {
         self.repository
             .finalize_binding(
@@ -831,14 +829,14 @@ impl<R: SmRepository> SmService<R> {
             )
             .await
     }
-    pub(crate) async fn finalize_resume(
+    pub async fn finalize_resume(
         &self,
         request: SmResumeFinalizationRequest<'_>,
     ) -> Result<SmResumeFinalizationOutcome> {
         self.repository.finalize_resume(request).await
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn finalize_binding_observed(
+    pub async fn finalize_binding_observed(
         &self,
         connection_id: Uuid,
         user_id: Uuid,
@@ -846,7 +844,7 @@ impl<R: SmRepository> SmService<R> {
         full_jid: &str,
         lease_seconds: u64,
         device_id: Option<Uuid>,
-        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
+        fast_plan: Option<&northstar_auth_core::credential::FastCommitPlan>,
         prepared: Option<&PreparedCredential>,
     ) -> Result<BindingFinalizationOutcome> {
         let Some(prepared) = prepared else {
@@ -887,7 +885,7 @@ impl<R: SmRepository> SmService<R> {
         invocation.binding_returned(&result);
         result
     }
-    pub(crate) async fn finalize_resume_observed(
+    pub async fn finalize_resume_observed(
         &self,
         request: SmResumeFinalizationRequest<'_>,
         prepared: Option<&PreparedCredential>,
@@ -903,14 +901,14 @@ impl<R: SmRepository> SmService<R> {
         invocation.resume_returned(&result);
         result
     }
-    pub(crate) async fn release_claim(&self, session_id: Uuid, claim_token: Uuid) -> Result<()> {
+    pub async fn release_claim(&self, session_id: Uuid, claim_token: Uuid) -> Result<()> {
         self.repository.release_claim(session_id, claim_token).await
     }
-    pub(crate) async fn release_live_session(&self, connection_id: Uuid) -> Result<bool> {
+    pub async fn release_live_session(&self, connection_id: Uuid) -> Result<bool> {
         self.repository.release_live_session(connection_id).await
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn suspend_exact_session(
+    pub async fn suspend_exact_session(
         &self,
         session_id: Uuid,
         connection_id: Uuid,

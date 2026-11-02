@@ -8,7 +8,6 @@
 //! cleanup can therefore never remove a replacement session.
 
 use crate::cluster::{ClusterMucDeparture, ClusterSessionRouteRelease};
-use crate::services::sm_suspension;
 use crate::state::AppState;
 use crate::state::{
     session_cleanup_bookkeeping::SessionCleanupBookkeeping,
@@ -22,6 +21,7 @@ use crate::xmpp::muc_delivery::MucDeliveryContext;
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_room_application::muc_service::ClusterMucTransitionOutcome;
+use northstar_session_application::sm_suspension;
 use std::{
     collections::HashMap,
     sync::{
@@ -43,7 +43,7 @@ pub(crate) use northstar_session_application::SessionCleanupAccount;
 pub(crate) enum SessionSmCleanup {
     Suspend {
         session_id: Uuid,
-        snapshot: crate::services::sm::SmSessionSnapshot,
+        snapshot: northstar_session_application::sm::SmSessionSnapshot,
         ttl_seconds: u64,
         capacity: northstar_session_application::sm_capacity::SmCapacityLease,
     },
@@ -75,7 +75,7 @@ struct MucDeparture {
 
 struct DurableSuspension {
     session_id: Uuid,
-    snapshot: crate::services::sm::SmSessionSnapshot,
+    snapshot: northstar_session_application::sm::SmSessionSnapshot,
     ttl_seconds: u64,
     endpoints: Vec<Arc<crate::xmpp::local_routes::muc::SuspendedMucEndpoint>>,
     capacity: northstar_session_application::sm_capacity::SmCapacityLease,
@@ -83,7 +83,7 @@ struct DurableSuspension {
 
 struct SuspensionRecoveryPayload {
     account: SessionCleanupAccount,
-    snapshot: crate::services::sm::SmSessionSnapshot,
+    snapshot: northstar_session_application::sm::SmSessionSnapshot,
     ttl_seconds: u64,
 }
 
@@ -209,7 +209,7 @@ impl SmSuspensionRecoveryQueue {
         account: SessionCleanupAccount,
         connection_id: Uuid,
         session_id: Uuid,
-        snapshot: crate::services::sm::SmSessionSnapshot,
+        snapshot: northstar_session_application::sm::SmSessionSnapshot,
         ttl_seconds: u64,
         endpoints: Vec<Arc<crate::xmpp::local_routes::muc::SuspendedMucEndpoint>>,
         capacity: northstar_session_application::sm_capacity::SmCapacityLease,

@@ -1,7 +1,8 @@
 pub(crate) mod account_admin;
 // The composition root binds transport service handles to concrete adapters.
-pub(crate) type BoshReplayService =
-    crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>;
+pub(crate) type BoshReplayService = northstar_session_application::replay::ReplayService<
+    db::replay_repository::PostgresReplayRepository,
+>;
 pub(crate) type BoshMixService = northstar_room_application::mix_service::MixService<
     crate::db::room_effects::PostgresMixRepository,
 >;
@@ -324,9 +325,9 @@ pub struct AppState {
     /// XEP-0215 TURN credential authority. Long-lived key material and its
     /// bounded rate windows never cross into protocol or public state.
     mam_service: northstar_archive_application::MamService<northstar_workflows::mam_repository::PostgresMamRepository>,
-    sm_service: crate::services::sm::SmService<db::sm_repository::PostgresSmRepository>,
+    sm_service: northstar_session_application::sm::SmService<db::sm_repository::PostgresSmRepository>,
     replay_service:
-        crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>,
+        northstar_session_application::replay::ReplayService<db::replay_repository::PostgresReplayRepository>,
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
     cluster: crate::cluster::ClusterManager,
     account_revocation_consumer_service:

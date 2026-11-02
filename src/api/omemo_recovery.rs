@@ -13,17 +13,15 @@ use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::api::error::AppError;
-use crate::{
-    api::{
-        contexts::{
-            account_teardown::AccountGenerationTeardownContext,
-            omemo_recovery_http::OmemoRecoveryHttpContext,
-        },
-        ApiJson, ApiPath, OmemoRecoveryConsumeRequest, OmemoRecoveryPollRequest,
-        OmemoRecoveryPrepareRequest, OmemoRecoverySealRequest,
+use crate::api::{
+    contexts::{
+        account_teardown::AccountGenerationTeardownContext,
+        omemo_recovery_http::OmemoRecoveryHttpContext,
     },
-    services::omemo_recovery::*,
+    ApiJson, ApiPath, OmemoRecoveryConsumeRequest, OmemoRecoveryPollRequest,
+    OmemoRecoveryPrepareRequest, OmemoRecoverySealRequest,
 };
+use northstar_auth_application::omemo_recovery::*;
 
 fn parse_sha256(value: &str) -> Result<[u8; 32], AppError> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {

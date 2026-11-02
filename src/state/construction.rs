@@ -576,7 +576,7 @@ impl AppState {
             federation.federation_write_policy.island_flag(),
         );
         let omemo_recovery_poll_context = omemo_poll::OmemoRecoveryPollContext::new(
-            crate::services::omemo_recovery::OmemoRecoveryPollService::new(
+            northstar_auth_application::omemo_recovery::OmemoRecoveryPollService::new(
                 db::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository::new(
                     omemo_recovery_poll_pool,
                 ),
@@ -630,9 +630,12 @@ impl AppState {
         let state = Arc::new(Self {
             config,
             public_discovery_context,
-            omemo_recovery_service: crate::services::omemo_recovery::OmemoRecoveryService::new(
-                db::omemo_recovery_repository::PostgresOmemoRecoveryRepository::new(pool.clone()),
-            ),
+            omemo_recovery_service:
+                northstar_auth_application::omemo_recovery::OmemoRecoveryService::new(
+                    db::omemo_recovery_repository::PostgresOmemoRecoveryRepository::new(
+                        pool.clone(),
+                    ),
+                ),
             pubsub,
             room,
             roster,

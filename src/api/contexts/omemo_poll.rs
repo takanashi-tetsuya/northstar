@@ -1,8 +1,8 @@
 //! Bounded public completion polling, independent of account session authority.
-use crate::services::omemo_recovery::{
+use dashmap::DashMap;
+use northstar_auth_application::omemo_recovery::{
     OmemoRecoveryPollRepository, OmemoRecoveryPollService, OmemoRecoveryPollStatus,
 };
-use dashmap::DashMap;
 use northstar_telemetry::metrics::Metrics;
 use std::{
     collections::VecDeque,

@@ -9,5 +9,6 @@ pub mod api_sessions;
 pub mod authentication;
 pub mod http_login;
 pub mod invitation_admin;
+pub mod omemo_recovery;
 pub mod passkeys;
 pub mod password_change;

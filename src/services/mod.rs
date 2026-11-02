@@ -15,5 +15,3 @@ pub(crate) mod sm_teardown;
 pub(crate) mod sm_teardown_presence;
 
 pub(crate) mod sm_suspension;
-
-pub(crate) mod omemo_recovery;

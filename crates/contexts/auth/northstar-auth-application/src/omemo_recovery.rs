@@ -92,18 +92,18 @@ pub struct ConsumeOmemoRecoveryRequest<'a> {
     pub package_sha256: &'a [u8; 32],
 }
 
-pub(crate) struct OmemoRecoveryActor<'a> {
-    pub(crate) user_id: Uuid,
-    pub(crate) auth_generation: i64,
-    pub(crate) session_token: &'a str,
+pub struct OmemoRecoveryActor<'a> {
+    pub user_id: Uuid,
+    pub auth_generation: i64,
+    pub session_token: &'a str,
 }
 
-pub(crate) enum OmemoRecoveryRead<T> {
+pub enum OmemoRecoveryRead<T> {
     Authorized(T),
     Unauthorized,
 }
 
-pub(crate) trait OmemoRecoveryRepository: Send + Sync {
+pub trait OmemoRecoveryRepository: Send + Sync {
     fn prepare(
         &self,
         request: PrepareOmemoRecoveryRequest<'_>,
@@ -135,20 +135,20 @@ pub(crate) trait OmemoRecoveryRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct OmemoRecoveryService<R> {
+pub struct OmemoRecoveryService<R> {
     repository: R,
 }
 impl<R: OmemoRecoveryRepository> OmemoRecoveryService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
-    pub(crate) async fn prepare(
+    pub async fn prepare(
         &self,
         request: PrepareOmemoRecoveryRequest<'_>,
     ) -> Result<PrepareOmemoRecovery> {
         self.repository.prepare(request).await
     }
-    pub(crate) async fn seal(
+    pub async fn seal(
         &self,
         actor: OmemoRecoveryActor<'_>,
         transfer_id: Uuid,
@@ -156,27 +156,27 @@ impl<R: OmemoRecoveryRepository> OmemoRecoveryService<R> {
     ) -> Result<SealOmemoRecovery> {
         self.repository.seal(actor, transfer_id, digest).await
     }
-    pub(crate) async fn consume(
+    pub async fn consume(
         &self,
         request: ConsumeOmemoRecoveryRequest<'_>,
     ) -> Result<ConsumeOmemoRecovery> {
         self.repository.consume(request).await
     }
-    pub(crate) async fn revoke(
+    pub async fn revoke(
         &self,
         actor: OmemoRecoveryActor<'_>,
         transfer_id: Uuid,
     ) -> Result<RevokeOmemoRecovery> {
         self.repository.revoke(actor, transfer_id).await
     }
-    pub(crate) async fn transfer(
+    pub async fn transfer(
         &self,
         actor: OmemoRecoveryActor<'_>,
         transfer_id: Uuid,
     ) -> Result<OmemoRecoveryRead<Option<OmemoRecoveryTransfer>>> {
         self.repository.transfer(actor, transfer_id).await
     }
-    pub(crate) async fn authority(
+    pub async fn authority(
         &self,
         actor: OmemoRecoveryActor<'_>,
     ) -> Result<OmemoRecoveryRead<OmemoRecoveryAuthority>> {
@@ -184,7 +184,7 @@ impl<R: OmemoRecoveryRepository> OmemoRecoveryService<R> {
     }
 }
 
-pub(crate) trait OmemoRecoveryPollRepository: Send + Sync {
+pub trait OmemoRecoveryPollRepository: Send + Sync {
     fn poll(
         &self,
         domain: &str,
@@ -193,14 +193,14 @@ pub(crate) trait OmemoRecoveryPollRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<Option<OmemoRecoveryPollStatus>>> + Send;
 }
 #[derive(Clone)]
-pub(crate) struct OmemoRecoveryPollService<R> {
+pub struct OmemoRecoveryPollService<R> {
     repository: R,
 }
 impl<R: OmemoRecoveryPollRepository> OmemoRecoveryPollService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
-    pub(crate) async fn poll(
+    pub async fn poll(
         &self,
         domain: &str,
         transfer_id: Uuid,

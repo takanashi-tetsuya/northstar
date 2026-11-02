@@ -2347,7 +2347,7 @@ for (const [name, source] of [
   ['InvitationAdminService', read('crates/contexts/auth/northstar-auth-application/src/invitation_admin.rs')],
   ['RetentionPolicyService', read('crates/contexts/operations/northstar-operations-application/src/retention_policy.rs')],
   ['RetentionPolicyContext', read('src/api/contexts/retention_policy.rs')],
-  ['OmemoRecoveryService', read('src/services/omemo_recovery.rs')],
+  ['OmemoRecoveryService', read('crates/contexts/auth/northstar-auth-application/src/omemo_recovery.rs')],
   ['OmemoRecoveryPollContext', read('src/api/contexts/omemo_poll.rs')],
 ]) {
   const production = productionWithoutCfgTestModules(source, name);

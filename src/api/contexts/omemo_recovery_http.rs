@@ -1,12 +1,9 @@
 //! Bearer identity and recovery transfer authority for authenticated REST routes.
 
 use crate::api::error::AppError;
-use crate::{
-    api::bearer_token,
-    db::omemo_recovery_repository::PostgresOmemoRecoveryRepository,
-    services::omemo_recovery::{OmemoRecoveryActor, OmemoRecoveryService},
-};
+use crate::{api::bearer_token, db::omemo_recovery_repository::PostgresOmemoRecoveryRepository};
 use axum::http::HeaderMap;
+use northstar_auth_application::omemo_recovery::{OmemoRecoveryActor, OmemoRecoveryService};
 use northstar_operations_application::api_queries::ApiQueryService;
 use northstar_telemetry::metrics::Metrics;
 use northstar_workflows::api_queries::PostgresApiQueryRepository;

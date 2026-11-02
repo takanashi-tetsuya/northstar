@@ -1,6 +1,7 @@
 //! PostgreSQL adapters for account recovery and its isolated poll reader.
-use crate::{db, services::omemo_recovery::*};
+use crate::db;
 use anyhow::Result;
+use northstar_auth_application::omemo_recovery::*;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 

@@ -1,4 +1,4 @@
-pub use crate::services::omemo_recovery::{
+pub use northstar_auth_application::omemo_recovery::{
     ConsumeOmemoRecovery, ConsumeOmemoRecoveryRequest, OmemoRecoveryAuthority,
     OmemoRecoveryPollStatus, OmemoRecoveryTransfer, PrepareOmemoRecovery,
     PrepareOmemoRecoveryRequest, RevokeOmemoRecovery, SealOmemoRecovery,

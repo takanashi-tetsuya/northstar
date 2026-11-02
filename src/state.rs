@@ -352,7 +352,7 @@ pub struct AppState {
     /// capability. It cannot consume the primary 32-connection application
     /// pool during a capability flood.
     omemo_recovery_poll_context: OmemoRecoveryPollContext,
-    omemo_recovery_service: crate::services::omemo_recovery::OmemoRecoveryService<
+    omemo_recovery_service: northstar_auth_application::omemo_recovery::OmemoRecoveryService<
         db::omemo_recovery_repository::PostgresOmemoRecoveryRepository,
     >,
     /// Clone-shared permission for short MIX, PubSub and clustered-MUC

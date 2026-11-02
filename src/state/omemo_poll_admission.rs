@@ -5,7 +5,7 @@ use super::*;
 impl AppState {
     pub(crate) fn omemo_recovery_service(
         &self,
-    ) -> &crate::services::omemo_recovery::OmemoRecoveryService<
+    ) -> &northstar_auth_application::omemo_recovery::OmemoRecoveryService<
         db::omemo_recovery_repository::PostgresOmemoRecoveryRepository,
     > {
         &self.omemo_recovery_service

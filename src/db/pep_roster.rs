@@ -133,12 +133,24 @@ mod integration_tests {
         .is_none());
 
         let subscriber_bare = northstar_xmpp_types::jid_text::bare_jid(&subscriber).to_owned();
-        db::update_subscription(&pool, first_owner, &subscriber_bare, "from", None)
-            .await
-            .unwrap();
-        db::update_subscription(&pool, first_owner, &subscriber_bare, "none", None)
-            .await
-            .unwrap();
+        northstar_workflows::roster::update_subscription(
+            &pool,
+            first_owner,
+            &subscriber_bare,
+            "from",
+            None,
+        )
+        .await
+        .unwrap();
+        northstar_workflows::roster::update_subscription(
+            &pool,
+            first_owner,
+            &subscriber_bare,
+            "none",
+            None,
+        )
+        .await
+        .unwrap();
         assert!(pep_subscribers(&pool, first_owner, first_node)
             .await
             .unwrap()
@@ -152,10 +164,16 @@ mod integration_tests {
                 .await
                 .unwrap()
         );
-        db::update_subscription(&pool, second_owner, &subscriber_bare, "from", None)
-            .await
-            .unwrap();
-        db::upsert_roster(
+        northstar_workflows::roster::update_subscription(
+            &pool,
+            second_owner,
+            &subscriber_bare,
+            "from",
+            None,
+        )
+        .await
+        .unwrap();
+        northstar_workflows::roster::upsert_roster(
             &pool,
             second_owner,
             &subscriber_bare,
@@ -170,7 +188,7 @@ mod integration_tests {
                 .unwrap()
                 .is_some()
         );
-        db::upsert_roster(
+        northstar_workflows::roster::upsert_roster(
             &pool,
             second_owner,
             &subscriber_bare,
@@ -184,16 +202,22 @@ mod integration_tests {
             .unwrap()
             .is_empty());
 
-        db::update_subscription(&pool, first_owner, &subscriber_bare, "from", None)
-            .await
-            .unwrap();
+        northstar_workflows::roster::update_subscription(
+            &pool,
+            first_owner,
+            &subscriber_bare,
+            "from",
+            None,
+        )
+        .await
+        .unwrap();
         assert!(
             subscribe_pep_node(&pool, first_owner, first_node, &subscriber, 1)
                 .await
                 .unwrap()
                 .is_some()
         );
-        db::delete_roster(&pool, first_owner, &subscriber_bare)
+        northstar_workflows::roster::delete_roster(&pool, first_owner, &subscriber_bare)
             .await
             .unwrap();
         assert!(pep_subscribers(&pool, first_owner, first_node)

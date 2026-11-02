@@ -471,14 +471,18 @@ async fn paused_pep_delivery_rechecks_block_privacy_disable_and_sensitive_acl() 
         PepOutboxAuthorizationOutcome::Deliver
     );
 
-    db::block_jids(&pool, sender_id, std::slice::from_ref(&recipient_bare))
-        .await
-        .unwrap();
+    northstar_roster_postgres::roster::block_jids(
+        &pool,
+        sender_id,
+        std::slice::from_ref(&recipient_bare),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         service.authorize_pep_outbox_delivery(&item).await.unwrap(),
         PepOutboxAuthorizationOutcome::Drop(PepOutboxDropReason::Blocked)
     );
-    db::unblock_jids(
+    northstar_roster_postgres::roster::unblock_jids(
         &pool,
         sender_id,
         Some(std::slice::from_ref(&recipient_bare)),
@@ -599,7 +603,7 @@ async fn pep_publish_audience_is_linearizable_with_every_revocation_input() {
         .await
         .unwrap()
         .unwrap();
-    db::update_subscription(&pool, owner_id, &roster, "from", None)
+    northstar_workflows::roster::update_subscription(&pool, owner_id, &roster, "from", None)
         .await
         .unwrap();
 
@@ -676,12 +680,14 @@ async fn pep_publish_audience_is_linearizable_with_every_revocation_input() {
     });
     let block_pool = pool.clone();
     let blocked_jid = blocked.clone();
-    let mut block =
-        tokio::spawn(async move { db::block_jids(&block_pool, owner_id, &[blocked_jid]).await });
+    let mut block = tokio::spawn(async move {
+        northstar_roster_postgres::roster::block_jids(&block_pool, owner_id, &[blocked_jid]).await
+    });
     let roster_pool = pool.clone();
     let roster_jid = roster.clone();
-    let mut roster_removal =
-        tokio::spawn(async move { db::delete_roster(&roster_pool, owner_id, &roster_jid).await });
+    let mut roster_removal = tokio::spawn(async move {
+        northstar_workflows::roster::delete_roster(&roster_pool, owner_id, &roster_jid).await
+    });
     let config_pool = pool.clone();
     let config_node = node.clone();
     let mut restricted_config = config.clone();
@@ -725,7 +731,7 @@ async fn pep_publish_audience_is_linearizable_with_every_revocation_input() {
     unsubscribe.await.unwrap().unwrap().unwrap();
     assert!(matches!(
         block.await.unwrap().unwrap(),
-        db::BlockJidsUpdate::Changed(_)
+        northstar_roster_postgres::roster::BlockJidsUpdate::Changed(_)
     ));
     roster_removal.await.unwrap().unwrap().unwrap();
     assert!(access_change.await.unwrap().unwrap());
@@ -832,7 +838,7 @@ async fn pep_subscription_admission_is_linearizable_and_principal_scoped() {
             .unwrap(),
         db::PepCreateOutcome::Created
     );
-    db::upsert_roster(
+    northstar_workflows::roster::upsert_roster(
         &pool,
         owner_id,
         &subscriber_bare,
@@ -841,9 +847,15 @@ async fn pep_subscription_admission_is_linearizable_and_principal_scoped() {
     )
     .await
     .unwrap();
-    db::update_subscription(&pool, owner_id, &subscriber_bare, "from", None)
-        .await
-        .unwrap();
+    northstar_workflows::roster::update_subscription(
+        &pool,
+        owner_id,
+        &subscriber_bare,
+        "from",
+        None,
+    )
+    .await
+    .unwrap();
 
     let gate = Arc::new((Mutex::new(false), Condvar::new()));
     let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
@@ -887,12 +899,13 @@ async fn pep_subscription_admission_is_linearizable_and_principal_scoped() {
 
     let block_pool = pool.clone();
     let block_jid = subscriber_bare.clone();
-    let mut block =
-        tokio::spawn(async move { db::block_jids(&block_pool, owner_id, &[block_jid]).await });
+    let mut block = tokio::spawn(async move {
+        northstar_roster_postgres::roster::block_jids(&block_pool, owner_id, &[block_jid]).await
+    });
     let roster_pool = pool.clone();
     let roster_jid = subscriber_bare.clone();
     let mut roster_revoke = tokio::spawn(async move {
-        db::upsert_roster_authorized(
+        northstar_workflows::roster::upsert_roster_authorized(
             &roster_pool,
             owner_id,
             owner_generation,
@@ -955,7 +968,7 @@ async fn pep_subscription_admission_is_linearizable_and_principal_scoped() {
     ));
     assert!(matches!(
         block.await.unwrap().unwrap(),
-        db::BlockJidsUpdate::Changed(_)
+        northstar_roster_postgres::roster::BlockJidsUpdate::Changed(_)
     ));
     roster_revoke.await.unwrap().unwrap().unwrap();
     let _ = access_revoke.await.unwrap().unwrap();
@@ -1004,7 +1017,7 @@ async fn pep_subscription_admission_is_linearizable_and_principal_scoped() {
             .outcome,
         PepSubscribeOutcome::NotAuthorized(_)
     ));
-    db::unblock_jids(
+    northstar_roster_postgres::roster::unblock_jids(
         &pool,
         owner_id,
         Some(std::slice::from_ref(&subscriber_bare)),
@@ -1076,9 +1089,15 @@ async fn pep_subscription_admission_is_linearizable_and_principal_scoped() {
         PepSubscribeOutcome::NotAuthorized(_)
     ));
 
-    db::update_subscription(&pool, owner_id, &subscriber_bare, "none", None)
-        .await
-        .unwrap();
+    northstar_workflows::roster::update_subscription(
+        &pool,
+        owner_id,
+        &subscriber_bare,
+        "none",
+        None,
+    )
+    .await
+    .unwrap();
     let presence_node = format!("urn:test:pep:presence-deny:{}", Uuid::new_v4().simple());
     let mut presence_config = db::default_pep_node_config(&presence_node);
     presence_config.access_model = "presence".to_owned();
@@ -1318,10 +1337,10 @@ async fn pep_subscription_admission_is_linearizable_and_principal_scoped() {
     let local_jid = format!("{local_username}@example.test/phone");
     let owner_bare = format!("{owner_username}@example.test");
     assert!(matches!(
-        db::block_jids(&pool, local_id, &[owner_bare])
+        northstar_roster_postgres::roster::block_jids(&pool, local_id, &[owner_bare])
             .await
             .unwrap(),
-        db::BlockJidsUpdate::Changed(_)
+        northstar_roster_postgres::roster::BlockJidsUpdate::Changed(_)
     ));
     let reciprocal_subid = Uuid::new_v4().to_string();
     assert!(matches!(

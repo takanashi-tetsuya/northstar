@@ -1613,6 +1613,7 @@ digraph compile_time {
   "northstar-workflows" -> "northstar-pubsub-core";
   "northstar-workflows" -> "northstar-room-application";
   "northstar-workflows" -> "northstar-room-postgres";
+  "northstar-workflows" -> "northstar-roster-application";
   "northstar-workflows" -> "northstar-roster-core";
   "northstar-workflows" -> "northstar-roster-postgres";
   "northstar-workflows" -> "northstar-security";

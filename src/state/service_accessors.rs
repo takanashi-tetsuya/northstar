@@ -140,7 +140,7 @@ impl AppState {
     pub(crate) fn blocking_service(
         &self,
     ) -> &northstar_roster_application::blocking::BlockingService<
-        db::roster::PostgresBlockingRepository,
+        northstar_roster_postgres::roster::PostgresBlockingRepository,
     > {
         &self.roster.blocking_service
     }
@@ -219,7 +219,7 @@ impl AppState {
     pub(crate) fn account_service(
         &self,
     ) -> &northstar_auth_application::account::AccountService<
-        crate::db::roster::RootAccountRepository,
+        northstar_workflows::roster::RootAccountRepository,
     > {
         &self.auth.account_service
     }
@@ -244,7 +244,7 @@ impl AppState {
     pub(crate) fn admin_command_service(
         &self,
     ) -> &northstar_operations_application::admin_commands::AdminCommandService<
-        crate::db::roster::RootAdminCommandRepository,
+        northstar_workflows::roster::RootAdminCommandRepository,
     > {
         &self.operations.admin_command_service
     }

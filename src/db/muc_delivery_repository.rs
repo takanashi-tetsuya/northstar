@@ -25,7 +25,7 @@ impl MucDeliveryRepository for PostgresMucDeliveryRepository {
         occupant_jids: &[String],
         stanza_senders: &[String],
     ) -> Result<HashSet<String>> {
-        db::blocked_local_accounts_for_candidates(
+        northstar_roster_postgres::roster::blocked_local_accounts_for_candidates(
             &self.pool,
             local_domain,
             occupant_jids,

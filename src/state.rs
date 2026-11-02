@@ -298,8 +298,9 @@ pub use northstar_session_core::JoinedMucMembership;
 #[cfg(test)]
 mod muc_membership_snapshot_tests;
 
-type RosterService =
-    northstar_roster_application::RosterService<db::roster::PostgresRosterRepository>;
+type RosterService = northstar_roster_application::RosterService<
+    northstar_workflows::roster::PostgresRosterRepository,
+>;
 
 #[cfg(test)]
 #[path = "state/account_revocation_route_tests.rs"]

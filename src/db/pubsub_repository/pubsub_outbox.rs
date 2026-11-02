@@ -36,7 +36,7 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
             else {
                 return Ok(false);
             };
-            db::is_blocked(&self.pool, user.id, service).await
+            northstar_roster_postgres::roster::is_blocked(&self.pool, user.id, service).await
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -49,7 +49,9 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
         service: &str,
     ) -> Result<bool> {
         let outcome: Result<_> = async {
-            if db::is_blocked(&self.pool, recipient_id, service).await? {
+            if northstar_roster_postgres::roster::is_blocked(&self.pool, recipient_id, service)
+                .await?
+            {
                 return Ok(true);
             }
             if active_privacy_list.is_some() {
@@ -235,14 +237,20 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
                     .get(&subject.sender_account_id)
                     .is_some_and(|patterns| {
                         patterns.iter().any(|pattern| {
-                            db::roster::blocked_jid_matches(pattern, &item.recipient_jid)
+                            northstar_roster_postgres::roster::blocked_jid_matches(
+                                pattern,
+                                &item.recipient_jid,
+                            )
                         })
                     });
             let recipient_blocks_sender = !same_account
                 && subject.recipient_account_id.is_some_and(|recipient_id| {
                     blocks.get(&recipient_id).is_some_and(|patterns| {
                         patterns.iter().any(|pattern| {
-                            db::roster::blocked_jid_matches(pattern, &subject.sender_bare_jid)
+                            northstar_roster_postgres::roster::blocked_jid_matches(
+                                pattern,
+                                &subject.sender_bare_jid,
+                            )
                         })
                     })
                 });

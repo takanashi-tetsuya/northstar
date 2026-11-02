@@ -36,10 +36,10 @@ async fn admin_read_snapshot_blocks_post_authorization_demotion_until_commit() {
     let suffix = Uuid::new_v4().simple().to_string();
     let actor_id = Uuid::new_v4();
     let actor = insert_admin(&pool, actor_id, &format!("read-lock-{}", &suffix[..12])).await;
-    let repository = crate::db::roster::RootAdminCommandRepository::new(
+    let repository = northstar_workflows::roster::RootAdminCommandRepository::new(
         pool.clone(),
         pool.clone(),
-        crate::db::roster::RootRosterEffects,
+        northstar_workflows::roster::WorkflowRosterEffects,
     );
     let (authorized_tx, authorized_rx) = tokio::sync::oneshot::channel();
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
@@ -95,11 +95,13 @@ async fn admin_reads_reject_demotion_and_rotation_that_win_the_authorization_rac
     let actor_id = Uuid::new_v4();
     let username = format!("read-fence-{}", &suffix[..12]);
     let actor = insert_admin(&pool, actor_id, &username).await;
-    let service = AdminCommandService::new(crate::db::roster::RootAdminCommandRepository::new(
-        pool.clone(),
-        pool.clone(),
-        crate::db::roster::RootRosterEffects,
-    ));
+    let service = AdminCommandService::new(
+        northstar_workflows::roster::RootAdminCommandRepository::new(
+            pool.clone(),
+            pool.clone(),
+            northstar_workflows::roster::WorkflowRosterEffects,
+        ),
+    );
 
     let mut blocker = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")

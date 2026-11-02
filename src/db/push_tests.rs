@@ -162,7 +162,7 @@ async fn quota_upsert_and_durable_claim_are_atomic() {
         .iter()
         .all(|target| target.service_jid == "push.example.test" && !target.node.is_empty()));
     northstar_workflows::account_lifecycle::delete_user_with_roster(
-        &crate::db::roster::RootRosterEffects,
+        &northstar_workflows::roster::WorkflowRosterEffects,
         &pool,
         user.id,
         "example.test",

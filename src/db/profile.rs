@@ -930,7 +930,7 @@ fn profile_access_allowed(
 fn blocked_by_any(patterns: &[String], candidate: &str) -> bool {
     patterns
         .iter()
-        .any(|pattern| db::roster::blocked_jid_matches(pattern, candidate))
+        .any(|pattern| northstar_roster_postgres::roster::blocked_jid_matches(pattern, candidate))
 }
 
 fn privacy_denies_message(
@@ -945,7 +945,9 @@ fn privacy_denies_message(
         }
         let entity_matches = match (item.match_type.as_deref(), item.match_value.as_deref()) {
             (None, None) => true,
-            (Some("jid"), Some(value)) => db::roster::blocked_jid_matches(value, candidate),
+            (Some("jid"), Some(value)) => {
+                northstar_roster_postgres::roster::blocked_jid_matches(value, candidate)
+            }
             (Some("group"), Some(value)) => {
                 roster.is_some_and(|entry| entry.groups.iter().any(|group| group == value))
             }

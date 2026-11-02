@@ -6,7 +6,7 @@ use super::*;
 /// The roster context's services, built once at startup.
 pub(super) struct RosterModule {
     pub(super) blocking_service: northstar_roster_application::blocking::BlockingService<
-        db::roster::PostgresBlockingRepository,
+        northstar_roster_postgres::roster::PostgresBlockingRepository,
     >,
     pub(super) presence_service: northstar_roster_application::presence::PresenceService<
         db::presence_repository::PostgresPresenceRepository,
@@ -26,14 +26,14 @@ impl RosterModule {
     pub(super) fn new(pool: &PgPool) -> Self {
         Self {
             blocking_service: northstar_roster_application::blocking::BlockingService::new(
-                db::roster::PostgresBlockingRepository::new(pool.clone()),
+                northstar_roster_postgres::roster::PostgresBlockingRepository::new(pool.clone()),
             ),
             presence_service: northstar_roster_application::presence::PresenceService::new(
                 db::presence_repository::PostgresPresenceRepository::new(pool.clone()),
             ),
-            roster_service: RosterService::new(db::roster::PostgresRosterRepository::new(
+            roster_service: RosterService::new(northstar_workflows::roster::PostgresRosterRepository::new(
                 pool.clone(),
-                db::roster::RootRosterEffects,
+                northstar_workflows::roster::WorkflowRosterEffects,
             )),
             s2s_roster_authorization_service:
                 northstar_roster_application::s2s_roster_authorization::FederatedRosterAuthorizationService::new(

@@ -216,7 +216,7 @@ async fn target_delete_recreate_does_not_inherit_an_inflight_subscription() {
     let pool = database.pool.clone();
     let target_for_task = target_name.clone();
     let waiting = tokio::spawn(async move {
-        db::roster::transition_local_presence_subscription_authorized_test_hook(
+        northstar_workflows::roster::transition_local_presence_subscription_authorized_test_hook(
             &pool,
             actor_id,
             generation,
@@ -257,7 +257,7 @@ async fn target_delete_recreate_does_not_inherit_an_inflight_subscription() {
             .expect("target incarnation subscription task timed out")
             .unwrap()
             .unwrap(),
-        db::AuthorizedLocalPresenceTransition::Missing
+        northstar_roster_core::AuthorizedLocalPresenceTransition::Missing
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(

@@ -4595,6 +4595,10 @@
       ],
       [
         "northstar-workflows",
+        "northstar-roster-application"
+      ],
+      [
+        "northstar-workflows",
         "northstar-roster-core"
       ],
       [

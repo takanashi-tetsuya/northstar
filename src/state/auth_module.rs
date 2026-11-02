@@ -11,7 +11,7 @@ use northstar_auth_application::authentication::AuthenticationService;
 pub(super) struct AuthModule {
     pub(super) passkey_service: Arc<PasskeyService>,
     pub(super) account_service: northstar_auth_application::account::AccountService<
-        crate::db::roster::RootAccountRepository,
+        northstar_workflows::roster::RootAccountRepository,
     >,
     pub(super) login_service: northstar_auth_application::http_login::HttpLoginService<
         northstar_workflows::http_login_repository::PostgresHttpLoginRepository,
@@ -66,11 +66,11 @@ impl AuthModule {
             dummy_scram_iteration_profiles,
         } = parts;
         let account_service = northstar_auth_application::account::AccountService::new(
-            crate::db::roster::RootAccountRepository::new(
+            northstar_workflows::roster::RootAccountRepository::new(
                 pool.clone(),
                 config.domain.clone(),
                 Arc::clone(abuse),
-                crate::db::roster::RootRosterEffects,
+                northstar_workflows::roster::WorkflowRosterEffects,
             )
             .with_api_control(Arc::clone(api_control)),
             config.configured_registration_mode()

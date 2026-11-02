@@ -519,7 +519,7 @@ async fn account_delete_and_upload_mutations_share_retryable_ledger_first_order(
         .await
         .unwrap();
     let delete_error = northstar_workflows::account_lifecycle::delete_user_with_roster(
-        &crate::db::roster::RootRosterEffects,
+        &northstar_workflows::roster::WorkflowRosterEffects,
         &pool,
         user_id,
         "example.test",
@@ -538,7 +538,7 @@ async fn account_delete_and_upload_mutations_share_retryable_ledger_first_order(
         .unwrap();
     assert!(
         northstar_workflows::account_lifecycle::delete_user_with_roster(
-            &crate::db::roster::RootRosterEffects,
+            &northstar_workflows::roster::WorkflowRosterEffects,
             &pool,
             user_id,
             "example.test",

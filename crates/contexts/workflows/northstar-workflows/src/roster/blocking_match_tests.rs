@@ -291,7 +291,9 @@ async fn local_presence_transitions_are_atomic_and_preserve_pending_stanzas() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    crate::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
     let suffix = Uuid::new_v4().simple().to_string();
     let actor_id = Uuid::new_v4();
     let target_id = Uuid::new_v4();
@@ -528,7 +530,9 @@ async fn roster_removal_settles_local_mutual_pending_and_federated_state_atomica
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    crate::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
     let owner_id = Uuid::new_v4();
     let contact_id = Uuid::new_v4();
     let suffix = &Uuid::new_v4().simple().to_string()[..12];
@@ -801,7 +805,9 @@ async fn roster_versions_and_committed_snapshots_survive_concurrent_writes() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    crate::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
     let owner_id = Uuid::new_v4();
     let username = format!("version-{}", &Uuid::new_v4().simple().to_string()[..12]);
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
@@ -951,7 +957,9 @@ async fn remote_transition_and_pending_consumption_are_atomic() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    crate::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
     let owner_id = Uuid::new_v4();
     let username = format!("remote-{}", &Uuid::new_v4().simple().to_string()[..12]);
     let remote = "sender@remote.example";
@@ -1258,7 +1266,9 @@ async fn roster_service_snapshot_authorization_and_account_identity_are_fenced()
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    crate::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
 
     let suffix = &Uuid::new_v4().simple().to_string()[..12];
     let owner_id = Uuid::new_v4();

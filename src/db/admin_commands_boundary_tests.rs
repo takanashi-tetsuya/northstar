@@ -160,7 +160,7 @@ async fn admin_cleanup_effects_are_atomic_lease_fenced_and_compacted() {
     }];
 
     let failed = mutate_admin_accounts_authorized_with_failure_after(
-        &crate::db::roster::RootRosterEffects,
+        &northstar_workflows::roster::WorkflowRosterEffects,
         &pool,
         AdminCommandFence {
             claim_token: claim.token.as_str(),
@@ -201,7 +201,7 @@ async fn admin_cleanup_effects_are_atomic_lease_fenced_and_compacted() {
     );
 
     let foreign_domain = mutate_admin_accounts_authorized(
-        &crate::db::roster::RootRosterEffects,
+        &northstar_workflows::roster::WorkflowRosterEffects,
         &pool,
         AdminCommandFence {
             claim_token: claim.token.as_str(),
@@ -243,7 +243,7 @@ async fn admin_cleanup_effects_are_atomic_lease_fenced_and_compacted() {
 
     assert!(matches!(
         mutate_admin_accounts_authorized(
-            &crate::db::roster::RootRosterEffects,
+            &northstar_workflows::roster::WorkflowRosterEffects,
             &pool,
             AdminCommandFence {
                 claim_token: claim.token.as_str(),
@@ -456,7 +456,7 @@ async fn admin_cleanup_effects_survive_delete_and_do_not_retarget_rebinds() {
     let (_bearer, exact_claim, exact_digest) =
         begin_test_execution(&pool, actor_id, &actor_name, exact_node, "cleanup-exact").await;
     let exact_outcome = mutate_admin_accounts_authorized(
-        &crate::db::roster::RootRosterEffects,
+        &northstar_workflows::roster::WorkflowRosterEffects,
         &pool,
         AdminCommandFence {
             claim_token: exact_claim.token.as_str(),
@@ -587,7 +587,7 @@ async fn admin_batch_rejects_concurrent_demotion_and_password_rotation() {
     let task_actor = actor_name.clone();
     let task = tokio::spawn(async move {
         mutate_admin_accounts_authorized(
-            &crate::db::roster::RootRosterEffects,
+            &northstar_workflows::roster::WorkflowRosterEffects,
             &task_pool,
             actor_id,
             &task_actor,
@@ -633,7 +633,7 @@ async fn admin_batch_rejects_concurrent_demotion_and_password_rotation() {
     let task_targets = targets.clone();
     let task = tokio::spawn(async move {
         mutate_admin_accounts_authorized(
-            &crate::db::roster::RootRosterEffects,
+            &northstar_workflows::roster::WorkflowRosterEffects,
             &task_pool,
             actor_id,
             &actor_name,
@@ -694,7 +694,7 @@ async fn admin_batch_fences_target_delete_recreate_incarnation() {
     let task_username = username.clone();
     let task = tokio::spawn(async move {
         mutate_admin_accounts_authorized(
-            &crate::db::roster::RootRosterEffects,
+            &northstar_workflows::roster::WorkflowRosterEffects,
             &task_pool,
             actor_id,
             &task_actor,
@@ -750,7 +750,7 @@ async fn admin_batch_mid_request_failure_rolls_back_every_target_and_audit() {
         });
     }
     assert!(mutate_admin_accounts_authorized_with_failure_after(
-        &crate::db::roster::RootRosterEffects,
+        &northstar_workflows::roster::WorkflowRosterEffects,
         &pool,
         actor_id,
         &actor_name,

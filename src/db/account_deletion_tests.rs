@@ -102,7 +102,7 @@ async fn deletion_recovery_is_delayed_single_owner_and_cascading() {
     );
 
     northstar_workflows::account_lifecycle::delete_user_with_roster_audited(
-        &crate::db::roster::RootRosterEffects,
+        &northstar_workflows::roster::WorkflowRosterEffects,
         &pool,
         user.id,
         "example.test",

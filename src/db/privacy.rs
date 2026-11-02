@@ -37,7 +37,14 @@ pub async fn communication_denied(
     candidate: &str,
     kind: PrivacyStanzaKind,
 ) -> Result<bool> {
-    if super::roster::is_blocked_for_account(pool, owner_id, owner_bare_jid, candidate).await? {
+    if northstar_roster_postgres::roster::is_blocked_for_account(
+        pool,
+        owner_id,
+        owner_bare_jid,
+        candidate,
+    )
+    .await?
+    {
         return Ok(true);
     }
     privacy_denies(pool, owner_id, active_list, candidate, kind).await

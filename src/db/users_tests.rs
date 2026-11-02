@@ -568,11 +568,11 @@ async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_a
     .unwrap());
 
     let service = northstar_auth_application::account::AccountService::new(
-        crate::db::roster::RootAccountRepository::new(
+        northstar_workflows::roster::RootAccountRepository::new(
             pool.clone(),
             "example.test".to_owned(),
             std::sync::Arc::clone(&guard),
-            crate::db::roster::RootRosterEffects,
+            northstar_workflows::roster::WorkflowRosterEffects,
         ),
         true,
         1_000_000,
@@ -1746,7 +1746,7 @@ async fn account_deletion_atomically_cancels_local_reverse_rosters() {
     // Invalid historical group data makes journal materialization fail.
     // The reverse subscription update and user delete must both roll back.
     assert!(delete_user_with_roster(
-        &crate::db::roster::RootRosterEffects,
+        &northstar_workflows::roster::WorkflowRosterEffects,
         &pool,
         removed_id,
         "example.test"
@@ -1803,7 +1803,7 @@ async fn account_deletion_atomically_cancels_local_reverse_rosters() {
         .await
         .unwrap();
     let removed = delete_user_with_roster(
-        &crate::db::roster::RootRosterEffects,
+        &northstar_workflows::roster::WorkflowRosterEffects,
         &pool,
         removed_id,
         "example.test",

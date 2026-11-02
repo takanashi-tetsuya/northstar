@@ -199,10 +199,10 @@ async fn profile_publish_uses_exact_subscribe_and_block_snapshot() {
     });
     let block_pool = database.pool.clone();
     let blocked_for_task = blocked.clone();
-    let mut block =
-        tokio::spawn(
-            async move { db::block_jids(&block_pool, owner_id, &[blocked_for_task]).await },
-        );
+    let mut block = tokio::spawn(async move {
+        northstar_roster_postgres::roster::block_jids(&block_pool, owner_id, &[blocked_for_task])
+            .await
+    });
     assert!(
         tokio::time::timeout(Duration::from_millis(200), &mut unsubscribe)
             .await
@@ -227,7 +227,7 @@ async fn profile_publish_uses_exact_subscribe_and_block_snapshot() {
     unsubscribe.await.unwrap().unwrap().unwrap();
     assert!(matches!(
         block.await.unwrap().unwrap(),
-        db::BlockJidsUpdate::Changed(_)
+        northstar_roster_postgres::roster::BlockJidsUpdate::Changed(_)
     ));
 
     let second_payload = vcard4_item("profile", "two");

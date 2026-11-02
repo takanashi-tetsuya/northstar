@@ -9,7 +9,7 @@ publish = false
 
 [features]
 # Test-only entry points the root crate's cross-context tests use.
-test-support = ["northstar-room-postgres/test-support"]
+test-support = ["northstar-room-postgres/test-support", "northstar-roster-postgres/test-support"]
 
 [dependencies]
 anyhow = "1.0"
@@ -35,6 +35,7 @@ northstar-postgres = { path = "../../../platform/northstar-postgres" }
 northstar-pubsub-core = { path = "../../pubsub/northstar-pubsub-core" }
 northstar-room-application = { path = "../../room/northstar-room-application" }
 northstar-room-postgres = { path = "../../room/northstar-room-postgres" }
+northstar-roster-application = { path = "../../roster/northstar-roster-application" }
 northstar-roster-core = { path = "../../roster/northstar-roster-core" }
 northstar-roster-postgres = { path = "../../roster/northstar-roster-postgres" }
 northstar-security = { path = "../../../platform/northstar-security" }
@@ -57,4 +58,5 @@ uuid = { version = "1.12", features = ["v4", "serde"] }
 [dev-dependencies]
 northstar-auth-postgres = { path = "../../auth/northstar-auth-postgres", features = ["test-support"] }
 northstar-room-postgres = { path = "../../room/northstar-room-postgres", features = ["test-support"] }
+northstar-roster-postgres = { path = "../../roster/northstar-roster-postgres", features = ["test-support"] }
 tokio = { version = "1.43", features = ["macros", "rt"] }

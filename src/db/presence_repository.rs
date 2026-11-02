@@ -17,11 +17,13 @@ impl PostgresPresenceRepository {
 }
 impl PresenceRepository for PostgresPresenceRepository {
     async fn roster_subscriptions(&self, owner_id: Uuid) -> Result<Vec<(String, String)>> {
-        Ok(db::roster(&self.pool, owner_id)
-            .await?
-            .into_iter()
-            .map(|(jid, _, subscription, _)| (jid, subscription))
-            .collect())
+        Ok(
+            northstar_roster_postgres::roster::roster(&self.pool, owner_id)
+                .await?
+                .into_iter()
+                .map(|(jid, _, subscription, _)| (jid, subscription))
+                .collect(),
+        )
     }
 
     async fn is_blocked_for_account(
@@ -30,7 +32,13 @@ impl PresenceRepository for PostgresPresenceRepository {
         owner_bare_jid: &str,
         candidate: &str,
     ) -> Result<bool> {
-        db::is_blocked_for_account(&self.pool, owner_id, owner_bare_jid, candidate).await
+        northstar_roster_postgres::roster::is_blocked_for_account(
+            &self.pool,
+            owner_id,
+            owner_bare_jid,
+            candidate,
+        )
+        .await
     }
 
     async fn privacy_denies(
@@ -60,9 +68,11 @@ impl PresenceRepository for PostgresPresenceRepository {
     }
 
     async fn roster_subscription(&self, owner_id: Uuid, contact: &str) -> Result<Option<String>> {
-        Ok(db::roster_item(&self.pool, owner_id, contact)
-            .await?
-            .map(|item| item.2))
+        Ok(
+            northstar_roster_postgres::roster::roster_item(&self.pool, owner_id, contact)
+                .await?
+                .map(|item| item.2),
+        )
     }
 
     async fn replay_cutoff(&self) -> Result<DateTime<Utc>> {
@@ -110,7 +120,7 @@ impl PresenceRepository for PostgresPresenceRepository {
         bounce_to: Option<&str>,
         policy: northstar_federation_core::S2sOutboxPolicy,
     ) -> Result<PresenceMutation<RemoteSubscriptionTransition>> {
-        let outcome = db::transition_remote_presence_subscription_with_outbox_authorized(
+        let outcome = northstar_workflows::roster::transition_remote_presence_subscription_with_outbox_authorized(
             &self.pool,
             actor_id,
             expected_auth_generation,
@@ -136,16 +146,17 @@ impl PresenceRepository for PostgresPresenceRepository {
         contact: &str,
         kind: &str,
     ) -> Result<PresenceMutation<RemoteSubscriptionTransition>> {
-        let outcome = db::transition_remote_presence_subscription_authorized(
-            &self.pool,
-            actor_id,
-            expected_auth_generation,
-            connection_id,
-            local_domain,
-            contact,
-            kind,
-        )
-        .await?;
+        let outcome =
+            northstar_workflows::roster::transition_remote_presence_subscription_authorized(
+                &self.pool,
+                actor_id,
+                expected_auth_generation,
+                connection_id,
+                local_domain,
+                contact,
+                kind,
+            )
+            .await?;
         Ok(map_remote_transition(outcome))
     }
 
@@ -162,25 +173,30 @@ impl PresenceRepository for PostgresPresenceRepository {
             kind,
             stanza,
         } = request;
-        let outcome = db::transition_local_presence_subscription_authorized(
-            &self.pool,
-            actor_id,
-            expected_auth_generation,
-            connection_id,
-            local_domain,
-            target_username,
-            kind,
-            stanza,
-        )
-        .await?;
+        let outcome =
+            northstar_workflows::roster::transition_local_presence_subscription_authorized(
+                &self.pool,
+                actor_id,
+                expected_auth_generation,
+                connection_id,
+                local_domain,
+                target_username,
+                kind,
+                stanza,
+            )
+            .await?;
         Ok(match outcome {
-            db::AuthorizedLocalPresenceTransition::Unauthorized => PresenceMutation::Unauthorized,
-            db::AuthorizedLocalPresenceTransition::PolicyDenied(reason) => {
+            northstar_roster_core::AuthorizedLocalPresenceTransition::Unauthorized => {
+                PresenceMutation::Unauthorized
+            }
+            northstar_roster_core::AuthorizedLocalPresenceTransition::PolicyDenied(reason) => {
                 PresenceMutation::PolicyDenied(reason)
             }
-            db::AuthorizedLocalPresenceTransition::Missing => PresenceMutation::Missing,
-            db::AuthorizedLocalPresenceTransition::Transition(authorized) => {
-                let db::AuthorizedLocalPresence {
+            northstar_roster_core::AuthorizedLocalPresenceTransition::Missing => {
+                PresenceMutation::Missing
+            }
+            northstar_roster_core::AuthorizedLocalPresenceTransition::Transition(authorized) => {
+                let northstar_roster_core::AuthorizedLocalPresence {
                     actor,
                     target,
                     transition,
@@ -206,7 +222,7 @@ impl PresenceRepository for PostgresPresenceRepository {
         stanza: &str,
     ) -> Result<PresenceMutation<InboundSubscriptionTransition>> {
         Ok(
-            match db::transition_inbound_remote_presence_subscription(
+            match northstar_workflows::roster::transition_inbound_remote_presence_subscription(
                 &self.pool,
                 recipient_id,
                 local_domain,
@@ -216,12 +232,12 @@ impl PresenceRepository for PostgresPresenceRepository {
             )
             .await?
             {
-                db::AuthorizedInboundRemotePresenceTransition::Missing => PresenceMutation::Missing,
-                db::AuthorizedInboundRemotePresenceTransition::PolicyDenied(reason) => {
+                northstar_roster_postgres::roster::AuthorizedInboundRemotePresenceTransition::Missing => PresenceMutation::Missing,
+                northstar_roster_postgres::roster::AuthorizedInboundRemotePresenceTransition::PolicyDenied(reason) => {
                     PresenceMutation::PolicyDenied(reason)
                 }
-                db::AuthorizedInboundRemotePresenceTransition::Transition(authorized) => {
-                    let db::AuthorizedInboundRemotePresence {
+                northstar_roster_postgres::roster::AuthorizedInboundRemotePresenceTransition::Transition(authorized) => {
+                    let northstar_roster_postgres::roster::AuthorizedInboundRemotePresence {
                         recipient,
                         transition,
                     } = *authorized;
@@ -283,15 +299,20 @@ impl PresenceRepository for PostgresPresenceRepository {
 }
 
 fn map_remote_transition(
-    outcome: db::AuthorizedRemotePresenceTransition,
+    outcome: northstar_roster_postgres::roster::AuthorizedRemotePresenceTransition,
 ) -> PresenceMutation<RemoteSubscriptionTransition> {
     match outcome {
-        db::AuthorizedRemotePresenceTransition::Unauthorized => PresenceMutation::Unauthorized,
-        db::AuthorizedRemotePresenceTransition::PolicyDenied(reason) => {
-            PresenceMutation::PolicyDenied(reason)
+        northstar_roster_postgres::roster::AuthorizedRemotePresenceTransition::Unauthorized => {
+            PresenceMutation::Unauthorized
         }
-        db::AuthorizedRemotePresenceTransition::Transition(authorized) => {
-            let db::AuthorizedRemotePresence { actor, transition } = *authorized;
+        northstar_roster_postgres::roster::AuthorizedRemotePresenceTransition::PolicyDenied(
+            reason,
+        ) => PresenceMutation::PolicyDenied(reason),
+        northstar_roster_postgres::roster::AuthorizedRemotePresenceTransition::Transition(
+            authorized,
+        ) => {
+            let northstar_roster_postgres::roster::AuthorizedRemotePresence { actor, transition } =
+                *authorized;
             PresenceMutation::Transition(RemoteSubscriptionTransition {
                 actor,
                 subscription: transition.subscription,

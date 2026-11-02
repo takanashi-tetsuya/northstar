@@ -1,11 +1,11 @@
-//! The roster context's persistence as the root crate binds it: the steps of a roster transaction that touch other
+//! The roster context's persistence as the workflows bind it: the steps of a roster transaction that touch other
 //! contexts' tables, and the adapter's functions with those steps bound.
 
 use anyhow::Result;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use northstar_roster_application::RosterRemovalRoute;
 use northstar_roster_application::S2sOutboxPolicy;
-pub use northstar_roster_postgres::roster::*;
+use northstar_roster_postgres::roster::*;
 use northstar_roster_postgres::RosterTransactionEffects;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::HashMap;
@@ -16,22 +16,20 @@ use uuid::Uuid;
 #[cfg(test)]
 mod blocking_match_tests;
 
-/// The roster adapter with the root crate's transaction steps.
-pub(crate) type PostgresRosterRepository =
-    northstar_roster_postgres::roster::PostgresRosterRepository<RootRosterEffects>;
-pub(crate) type RootAccountRepository =
-    northstar_workflows::account_repository::PostgresAccountRepository<RootRosterEffects>;
+/// The roster adapter with the workflows' transaction steps.
+pub type PostgresRosterRepository =
+    northstar_roster_postgres::roster::PostgresRosterRepository<WorkflowRosterEffects>;
+pub type RootAccountRepository =
+    crate::account_repository::PostgresAccountRepository<WorkflowRosterEffects>;
 
-pub(crate) type RootAdminCommandRepository =
-    northstar_workflows::admin_command_repository::PostgresAdminCommandRepository<
-        RootRosterEffects,
-    >;
+pub type RootAdminCommandRepository =
+    crate::admin_command_repository::PostgresAdminCommandRepository<WorkflowRosterEffects>;
 
-/// Runs the roster transaction steps over the tables of the contexts still in the root crate.
+/// Runs the roster transaction steps over the tables of the other contexts.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct RootRosterEffects;
+pub struct WorkflowRosterEffects;
 
-impl RosterTransactionEffects for RootRosterEffects {
+impl RosterTransactionEffects for WorkflowRosterEffects {
     async fn cancel_inaccessible_pep_subscriptions(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
@@ -112,16 +110,17 @@ impl RosterTransactionEffects for RootRosterEffects {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn delete_roster(
     pool: &PgPool,
     owner_id: Uuid,
     jid: &str,
 ) -> Result<Option<RosterChange>> {
-    northstar_roster_postgres::roster::delete_roster(&RootRosterEffects, pool, owner_id, jid).await
+    northstar_roster_postgres::roster::delete_roster(&WorkflowRosterEffects, pool, owner_id, jid)
+        .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn remove_roster_item(
     pool: &PgPool,
     owner_id: Uuid,
@@ -129,7 +128,7 @@ pub async fn remove_roster_item(
     route: RosterRemovalRoute<'_>,
 ) -> Result<Option<RosterRemovalTransition>> {
     northstar_roster_postgres::roster::remove_roster_item(
-        &RootRosterEffects,
+        &WorkflowRosterEffects,
         pool,
         owner_id,
         jid,
@@ -138,7 +137,7 @@ pub async fn remove_roster_item(
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn remove_roster_item_authorized(
     pool: &PgPool,
     owner_id: Uuid,
@@ -147,7 +146,7 @@ pub async fn remove_roster_item_authorized(
     route: RosterRemovalRoute<'_>,
 ) -> Result<AuthorizedRosterRemoval> {
     northstar_roster_postgres::roster::remove_roster_item_authorized(
-        &RootRosterEffects,
+        &WorkflowRosterEffects,
         pool,
         owner_id,
         expected_auth_generation,
@@ -157,7 +156,7 @@ pub async fn remove_roster_item_authorized(
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn roster_read_snapshot(
     pool: &PgPool,
     owner_id: Uuid,
@@ -166,7 +165,7 @@ pub async fn roster_read_snapshot(
     annotations_requested: bool,
 ) -> Result<Option<RosterReadSnapshot>> {
     northstar_roster_postgres::roster::roster_read_snapshot(
-        &RootRosterEffects,
+        &WorkflowRosterEffects,
         pool,
         owner_id,
         expected_auth_generation,
@@ -185,7 +184,7 @@ pub async fn transition_inbound_remote_presence_subscription(
     stamped_stanza: &str,
 ) -> Result<AuthorizedInboundRemotePresenceTransition> {
     northstar_roster_postgres::roster::transition_inbound_remote_presence_subscription(
-        &RootRosterEffects,
+        &WorkflowRosterEffects,
         pool,
         recipient_id,
         recipient_domain,
@@ -196,7 +195,7 @@ pub async fn transition_inbound_remote_presence_subscription(
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
 pub async fn transition_local_presence_subscription(
     pool: &PgPool,
@@ -208,7 +207,7 @@ pub async fn transition_local_presence_subscription(
     stamped_stanza: &str,
 ) -> Result<Option<LocalPresenceTransition>> {
     northstar_roster_postgres::roster::transition_local_presence_subscription(
-        &RootRosterEffects,
+        &WorkflowRosterEffects,
         pool,
         actor_id,
         actor_jid,
@@ -232,7 +231,7 @@ pub async fn transition_local_presence_subscription_authorized(
     stamped_stanza: &str,
 ) -> Result<AuthorizedLocalPresenceTransition> {
     northstar_roster_postgres::roster::transition_local_presence_subscription_authorized(
-        &RootRosterEffects,
+        &WorkflowRosterEffects,
         pool,
         actor_id,
         expected_auth_generation,
@@ -245,9 +244,9 @@ pub async fn transition_local_presence_subscription_authorized(
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn transition_local_presence_subscription_authorized_test_hook<F, Fut>(
+pub async fn transition_local_presence_subscription_authorized_test_hook<F, Fut>(
     pool: &PgPool,
     actor_id: Uuid,
     expected_auth_generation: i64,
@@ -263,7 +262,7 @@ where
     Fut: std::future::Future<Output = ()>,
 {
     northstar_roster_postgres::roster::transition_local_presence_subscription_authorized_test_hook(
-        &RootRosterEffects,
+        &WorkflowRosterEffects,
         pool,
         actor_id,
         expected_auth_generation,
@@ -277,7 +276,7 @@ where
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn transition_remote_presence_subscription(
     pool: &PgPool,
     recipient_id: Uuid,
@@ -285,7 +284,7 @@ pub async fn transition_remote_presence_subscription(
     kind: &str,
 ) -> Result<Option<RemotePresenceTransition>> {
     northstar_roster_postgres::roster::transition_remote_presence_subscription(
-        &RootRosterEffects,
+        &WorkflowRosterEffects,
         pool,
         recipient_id,
         from_jid,
@@ -305,7 +304,7 @@ pub async fn transition_remote_presence_subscription_authorized(
     kind: &str,
 ) -> Result<AuthorizedRemotePresenceTransition> {
     northstar_roster_postgres::roster::transition_remote_presence_subscription_authorized(
-        &RootRosterEffects,
+        &WorkflowRosterEffects,
         pool,
         actor_id,
         expected_auth_generation,
@@ -317,7 +316,7 @@ pub async fn transition_remote_presence_subscription_authorized(
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
 pub async fn transition_remote_presence_subscription_with_outbox(
     pool: &PgPool,
@@ -330,7 +329,7 @@ pub async fn transition_remote_presence_subscription_with_outbox(
     policy: S2sOutboxPolicy,
 ) -> Result<Option<RemotePresenceTransition>> {
     northstar_roster_postgres::roster::transition_remote_presence_subscription_with_outbox(
-        &RootRosterEffects,
+        &WorkflowRosterEffects,
         pool,
         recipient_id,
         from_jid,
@@ -357,10 +356,10 @@ pub async fn transition_remote_presence_subscription_with_outbox_authorized(
     bounce_to: Option<&str>,
     policy: S2sOutboxPolicy,
 ) -> Result<AuthorizedRemotePresenceTransition> {
-    northstar_roster_postgres::roster::transition_remote_presence_subscription_with_outbox_authorized(&RootRosterEffects, pool, actor_id, expected_auth_generation, connection_id, actor_domain, contact, kind, target_domain, stanza, bounce_to, policy).await
+    northstar_roster_postgres::roster::transition_remote_presence_subscription_with_outbox_authorized(&WorkflowRosterEffects, pool, actor_id, expected_auth_generation, connection_id, actor_domain, contact, kind, target_domain, stanza, bounce_to, policy).await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn update_subscription(
     pool: &PgPool,
     owner_id: Uuid,
@@ -369,7 +368,7 @@ pub async fn update_subscription(
     ask: Option<&str>,
 ) -> Result<RosterChange> {
     northstar_roster_postgres::roster::update_subscription(
-        &RootRosterEffects,
+        &WorkflowRosterEffects,
         pool,
         owner_id,
         jid,
@@ -379,7 +378,7 @@ pub async fn update_subscription(
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn update_subscription_with_approval(
     pool: &PgPool,
     owner_id: Uuid,
@@ -389,7 +388,7 @@ pub async fn update_subscription_with_approval(
     approved: Option<bool>,
 ) -> Result<RosterChange> {
     northstar_roster_postgres::roster::update_subscription_with_approval(
-        &RootRosterEffects,
+        &WorkflowRosterEffects,
         pool,
         owner_id,
         jid,
@@ -400,7 +399,7 @@ pub async fn update_subscription_with_approval(
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn upsert_roster(
     pool: &PgPool,
     owner_id: Uuid,
@@ -409,7 +408,7 @@ pub async fn upsert_roster(
     groups: &[String],
 ) -> Result<RosterChange> {
     northstar_roster_postgres::roster::upsert_roster(
-        &RootRosterEffects,
+        &WorkflowRosterEffects,
         pool,
         owner_id,
         jid,
@@ -419,7 +418,7 @@ pub async fn upsert_roster(
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn upsert_roster_authorized(
     pool: &PgPool,
     owner_id: Uuid,
@@ -429,7 +428,7 @@ pub async fn upsert_roster_authorized(
     groups: &[String],
 ) -> Result<Option<RosterChange>> {
     northstar_roster_postgres::roster::upsert_roster_authorized(
-        &RootRosterEffects,
+        &WorkflowRosterEffects,
         pool,
         owner_id,
         expected_auth_generation,

@@ -2838,6 +2838,7 @@ dependencies = [
  "northstar-pubsub-core",
  "northstar-room-application",
  "northstar-room-postgres",
+ "northstar-roster-application",
  "northstar-roster-core",
  "northstar-roster-postgres",
  "northstar-security",

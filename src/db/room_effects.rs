@@ -87,11 +87,17 @@ impl RoomEffects for RootRoomEffects {
         owner_bare_jid: &str,
         candidate: &str,
     ) -> Result<bool> {
-        db::is_blocked_for_account(pool, owner_id, owner_bare_jid, candidate).await
+        northstar_roster_postgres::roster::is_blocked_for_account(
+            pool,
+            owner_id,
+            owner_bare_jid,
+            candidate,
+        )
+        .await
     }
 
     async fn blocked_jids(&self, pool: &PgPool, user_id: Uuid) -> Result<Vec<String>> {
-        db::blocked_jids(pool, user_id).await
+        northstar_roster_postgres::roster::blocked_jids(pool, user_id).await
     }
 
     async fn store_offline_for_recipient(
@@ -155,7 +161,7 @@ impl RoomEffects for RootRoomEffects {
     }
 
     async fn is_blocked(&self, pool: &PgPool, owner_id: Uuid, candidate: &str) -> Result<bool> {
-        db::is_blocked(pool, owner_id, candidate).await
+        northstar_roster_postgres::roster::is_blocked(pool, owner_id, candidate).await
     }
 
     async fn pep_node(
@@ -201,7 +207,12 @@ impl RoomEffects for RootRoomEffects {
         user_id: Uuid,
         contact_jid: &str,
     ) -> Result<Option<RosterChange>> {
-        db::latest_roster_change_for_contact(pool, user_id, contact_jid).await
+        northstar_roster_postgres::roster::latest_roster_change_for_contact(
+            pool,
+            user_id,
+            contact_jid,
+        )
+        .await
     }
 
     async fn archive_mix_message_once(

@@ -447,17 +447,20 @@ impl PostgresPubSubRepository {
                 return Ok(false);
             }
             if blocks.get(&owner_id).is_some_and(|patterns| {
-                patterns
-                    .iter()
-                    .any(|pattern| db::roster::blocked_jid_matches(pattern, jid))
+                patterns.iter().any(|pattern| {
+                    northstar_roster_postgres::roster::blocked_jid_matches(pattern, jid)
+                })
             }) {
                 return Ok(false);
             }
             if let Some(recipient_id) = local_accounts.get(&bare) {
                 if blocks.get(recipient_id).is_some_and(|patterns| {
-                    patterns
-                        .iter()
-                        .any(|pattern| db::roster::blocked_jid_matches(pattern, &owner_bare_jid))
+                    patterns.iter().any(|pattern| {
+                        northstar_roster_postgres::roster::blocked_jid_matches(
+                            pattern,
+                            &owner_bare_jid,
+                        )
+                    })
                 }) {
                     return Ok(false);
                 }

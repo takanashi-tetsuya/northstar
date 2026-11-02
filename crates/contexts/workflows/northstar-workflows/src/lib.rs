@@ -34,5 +34,6 @@ pub mod report_repository;
 pub mod retention;
 pub mod retention_policy_repository;
 pub mod retraction_repository;
+pub mod roster;
 pub mod sm_teardown_muc_repository;
 pub mod upload_admin_repository;

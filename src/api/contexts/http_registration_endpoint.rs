@@ -1,7 +1,7 @@
 //! REST registration capability: account admission, proxy policy and outcome counters.
 
-use crate::db::roster::RootAccountRepository;
 use northstar_auth_application::account::{AccountService, HttpRegistrationAvailability};
+use northstar_workflows::roster::RootAccountRepository;
 use std::{
     net::IpAddr,
     sync::{

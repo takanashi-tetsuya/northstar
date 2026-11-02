@@ -8,7 +8,10 @@ impl PepNodeQueryRepository for PostgresPubSubRepository {
         owner_id: Uuid,
         jid: &str,
     ) -> Result<Option<(String, Option<String>, String, Option<String>)>> {
-        let outcome: Result<_> = async { db::roster_item(&self.pool, owner_id, jid).await }.await;
+        let outcome: Result<_> = async {
+            northstar_roster_postgres::roster::roster_item(&self.pool, owner_id, jid).await
+        }
+        .await;
         outcome.map_err(map_database_busy)
     }
 
@@ -44,12 +47,15 @@ impl PepNodeQueryRepository for PostgresPubSubRepository {
         &self,
         owner_id: Uuid,
     ) -> Result<Vec<(String, Option<String>, String, Option<String>)>> {
-        let outcome: Result<_> = async { db::roster(&self.pool, owner_id).await }.await;
+        let outcome: Result<_> =
+            async { northstar_roster_postgres::roster::roster(&self.pool, owner_id).await }.await;
         outcome.map_err(map_database_busy)
     }
     async fn is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool> {
-        let outcome: Result<_> =
-            async { db::is_blocked(&self.pool, owner_id, candidate).await }.await;
+        let outcome: Result<_> = async {
+            northstar_roster_postgres::roster::is_blocked(&self.pool, owner_id, candidate).await
+        }
+        .await;
         outcome.map_err(map_database_busy)
     }
     async fn roster_group_allowed(
@@ -668,13 +674,13 @@ impl PepSubscriptionMutationRepository for PostgresPubSubRepository {
         let owner_blocks_subscriber = blocks.get(&write.owner.id).is_some_and(|patterns| {
             patterns
                 .iter()
-                .any(|pattern| db::roster::blocked_jid_matches(pattern, &principal.subscriber_jid))
+                .any(|pattern| northstar_roster_postgres::roster::blocked_jid_matches(pattern, &principal.subscriber_jid))
         });
         let subscriber_blocks_owner = principal.local_subscriber_id.is_some_and(|subscriber_id| {
             blocks.get(&subscriber_id).is_some_and(|patterns| {
                 patterns
                     .iter()
-                    .any(|pattern| db::roster::blocked_jid_matches(pattern, &principal.owner_bare))
+                    .any(|pattern| northstar_roster_postgres::roster::blocked_jid_matches(pattern, &principal.owner_bare))
             })
         });
 

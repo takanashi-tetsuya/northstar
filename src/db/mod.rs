@@ -74,7 +74,6 @@ pub mod retention;
 #[cfg(test)]
 mod retraction_service_tests;
 pub(crate) mod room_effects;
-pub mod roster;
 pub(crate) mod session_authority_sweep_repository;
 pub(crate) mod session_termination_authority_repository;
 pub mod sm;
@@ -88,7 +87,13 @@ pub use cluster_keys::*;
 pub use omemo_recovery::*;
 pub use pep_roster::*;
 pub use privacy::*;
-pub use roster::*;
+// Roster and privacy names that paths owned by the mainline (src/s2s, src/cluster, src/db/sm*,
+// src/db/replay*) still reach through db::. Every other consumer imports the owning crate.
+#[cfg(test)]
+pub(crate) use northstar_roster_postgres::roster::add_federated_presence_pending_with_stanza;
+pub(crate) use northstar_roster_postgres::roster::{
+    blocked_jid_matches, is_blocked_for_account, roster,
+};
 pub use sm::*;
 #[cfg(test)]
 mod pubsub_integration_tests;

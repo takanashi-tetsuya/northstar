@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use sqlx::PgPool;
 use sqlx::{Postgres, Row, Transaction};
 use std::collections::BTreeMap;
@@ -60,7 +60,7 @@ fn canonical_owned_full(
     Ok(full)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn canonicalize_session_authorization_storage(
     pool: &PgPool,
     configured_domain: &str,
@@ -232,8 +232,9 @@ async fn load_sm(transaction: &mut Transaction<'_, Postgres>, domain: &str) -> R
 }
 
 fn canonicalize_joined_rooms(id: Uuid, value: &Value) -> Result<Value> {
-    let memberships = serde_json::from_value::<Vec<super::sm::SmMucMembership>>(value.clone())
-        .with_context(|| format!("invalid joined_rooms JSON in SM row {id}"))?;
+    let memberships =
+        serde_json::from_value::<Vec<northstar_session_core::SmMucMembership>>(value.clone())
+            .with_context(|| format!("invalid joined_rooms JSON in SM row {id}"))?;
     let mut unique = BTreeMap::new();
     let mut canonical = Vec::with_capacity(memberships.len());
     for mut membership in memberships {
@@ -403,7 +404,6 @@ fn ensure_intents_unique(rows: &[IntentRow]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
     use serde_json::json;
 
     async fn insert_sm(
@@ -447,7 +447,9 @@ mod tests {
             .connect(&url)
             .await
             .unwrap();
-        db::migrate(&pool).await.unwrap();
+        crate::identity_migration::migrate_for_tests(&pool)
+            .await
+            .unwrap();
         let user = northstar_auth_postgres::users::create_user(
             &pool,
             "alice",

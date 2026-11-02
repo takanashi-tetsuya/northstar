@@ -179,6 +179,7 @@ digraph compile_time {
   "northstar-auth-postgres";
   "northstar-auth-xmpp";
   "northstar-config";
+  "northstar-data-tools";
   "northstar-delivery-core";
   "northstar-federation-application";
   "northstar-federation-core";
@@ -1068,6 +1069,22 @@ digraph compile_time {
   "northstar-config" -> "subtle";
   "northstar-config" -> "uuid";
   "northstar-config" -> "zeroize";
+  "northstar-data-tools" -> "anyhow";
+  "northstar-data-tools" -> "base64";
+  "northstar-data-tools" -> "chrono";
+  "northstar-data-tools" -> "northstar-auth-core";
+  "northstar-data-tools" -> "northstar-auth-postgres";
+  "northstar-data-tools" -> "northstar-config";
+  "northstar-data-tools" -> "northstar-postgres";
+  "northstar-data-tools" -> "northstar-security";
+  "northstar-data-tools" -> "northstar-workflows";
+  "northstar-data-tools" -> "northstar-xmpp-types";
+  "northstar-data-tools" -> "roxmltree";
+  "northstar-data-tools" -> "serde_json";
+  "northstar-data-tools" -> "sqlx";
+  "northstar-data-tools" -> "tokio";
+  "northstar-data-tools" -> "uuid";
+  "northstar-data-tools" -> "zeroize";
   "northstar-delivery-core" -> "northstar-xmpp-types";
   "northstar-delivery-core" -> "roxmltree";
   "northstar-delivery-core" -> "serde";
@@ -1994,6 +2011,7 @@ digraph compile_time {
   "rust-xmpp-server" -> "northstar-auth-postgres";
   "rust-xmpp-server" -> "northstar-auth-xmpp";
   "rust-xmpp-server" -> "northstar-config";
+  "rust-xmpp-server" -> "northstar-data-tools";
   "rust-xmpp-server" -> "northstar-delivery-core";
   "rust-xmpp-server" -> "northstar-federation-application";
   "rust-xmpp-server" -> "northstar-federation-core";

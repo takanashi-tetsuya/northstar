@@ -10,8 +10,8 @@ cd "$project_dir"
 northstar_use_test_toolchain "$project_dir"
 export TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")"
 
-test_name="tools::pie::tests::portable_data_roundtrip_conflicts_and_rollback_are_atomic"
-test_output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture 2>&1)" || {
+test_name="pie::tests::portable_data_roundtrip_conflicts_and_rollback_are_atomic"
+test_output="$(cargo test --locked --offline -p northstar-data-tools "$test_name" -- --ignored --exact --nocapture 2>&1)" || {
   printf '%s\n' "$test_output"
   exit 1
 }

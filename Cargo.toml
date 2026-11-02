@@ -17,6 +17,7 @@ members = [
     "crates/contexts/operations/northstar-operations-core",
     "crates/contexts/operations/northstar-operations-postgres",
     "crates/contexts/workflows/northstar-workflows",
+    "crates/contexts/workflows/northstar-data-tools",
     "crates/kernel/northstar-xmpp-types",
     "crates/kernel/northstar-xmpp-avatar",
     "crates/kernel/northstar-xml-framing",
@@ -178,6 +179,7 @@ northstar-operations-xmpp = { path = "crates/contexts/operations/northstar-opera
 northstar-operations-core = { path = "crates/contexts/operations/northstar-operations-core" }
 northstar-operations-postgres = { path = "crates/contexts/operations/northstar-operations-postgres" }
 northstar-workflows = { path = "crates/contexts/workflows/northstar-workflows" }
+northstar-data-tools = { path = "crates/contexts/workflows/northstar-data-tools" }
 northstar-xmpp-types = { path = "crates/kernel/northstar-xmpp-types" }
 northstar-xmpp-avatar = { path = "crates/kernel/northstar-xmpp-avatar" }
 northstar-xml-framing = { path = "crates/kernel/northstar-xml-framing" }
@@ -250,6 +252,7 @@ northstar-mix-xmpp = { path = "crates/contexts/room/northstar-mix-xmpp", feature
 northstar-muc-xmpp = { path = "crates/contexts/room/northstar-muc-xmpp", features = ["test-support"] }
 northstar-room-postgres = { path = "crates/contexts/room/northstar-room-postgres", features = ["test-support"] }
 northstar-workflows = { path = "crates/contexts/workflows/northstar-workflows", features = ["test-support"] }
+northstar-data-tools = { path = "crates/contexts/workflows/northstar-data-tools", features = ["test-support"] }
 northstar-operations-postgres = { path = "crates/contexts/operations/northstar-operations-postgres", features = ["test-support"] }
 northstar-auth-postgres = { path = "crates/contexts/auth/northstar-auth-postgres", features = ["test-support"] }
 northstar-auth-xmpp = { path = "crates/contexts/auth/northstar-auth-xmpp", features = ["test-support"] }

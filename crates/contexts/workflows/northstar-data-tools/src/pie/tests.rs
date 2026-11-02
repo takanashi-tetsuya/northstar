@@ -365,7 +365,9 @@ async fn portable_data_roundtrip_conflicts_and_rollback_are_atomic() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_workflows::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
     let alice = northstar_auth_postgres::users::create_user(
         &pool,
         "alice",

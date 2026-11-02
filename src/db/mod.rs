@@ -59,7 +59,6 @@ pub mod omemo_recovery;
 #[cfg(test)]
 mod passkeys_tests;
 pub mod pep_roster;
-pub(crate) mod pie;
 pub mod presence_repository;
 #[cfg(test)]
 mod presence_service_tests;

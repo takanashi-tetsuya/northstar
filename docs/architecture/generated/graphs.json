@@ -2418,6 +2418,70 @@
         "zeroize"
       ],
       [
+        "northstar-data-tools",
+        "anyhow"
+      ],
+      [
+        "northstar-data-tools",
+        "base64"
+      ],
+      [
+        "northstar-data-tools",
+        "chrono"
+      ],
+      [
+        "northstar-data-tools",
+        "northstar-auth-core"
+      ],
+      [
+        "northstar-data-tools",
+        "northstar-auth-postgres"
+      ],
+      [
+        "northstar-data-tools",
+        "northstar-config"
+      ],
+      [
+        "northstar-data-tools",
+        "northstar-postgres"
+      ],
+      [
+        "northstar-data-tools",
+        "northstar-security"
+      ],
+      [
+        "northstar-data-tools",
+        "northstar-workflows"
+      ],
+      [
+        "northstar-data-tools",
+        "northstar-xmpp-types"
+      ],
+      [
+        "northstar-data-tools",
+        "roxmltree"
+      ],
+      [
+        "northstar-data-tools",
+        "serde_json"
+      ],
+      [
+        "northstar-data-tools",
+        "sqlx"
+      ],
+      [
+        "northstar-data-tools",
+        "tokio"
+      ],
+      [
+        "northstar-data-tools",
+        "uuid"
+      ],
+      [
+        "northstar-data-tools",
+        "zeroize"
+      ],
+      [
         "northstar-delivery-core",
         "northstar-xmpp-types"
       ],
@@ -6123,6 +6187,10 @@
       ],
       [
         "rust-xmpp-server",
+        "northstar-data-tools"
+      ],
+      [
+        "rust-xmpp-server",
         "northstar-delivery-core"
       ],
       [
@@ -8680,6 +8748,7 @@
       "northstar-auth-postgres",
       "northstar-auth-xmpp",
       "northstar-config",
+      "northstar-data-tools",
       "northstar-delivery-core",
       "northstar-federation-application",
       "northstar-federation-core",

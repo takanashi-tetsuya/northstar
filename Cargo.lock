@@ -2039,6 +2039,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-data-tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "northstar-auth-core",
+ "northstar-auth-postgres",
+ "northstar-config",
+ "northstar-postgres",
+ "northstar-security",
+ "northstar-workflows",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "northstar-delivery-core"
 version = "0.1.0"
 dependencies = [
@@ -3924,6 +3946,7 @@ dependencies = [
  "northstar-auth-postgres",
  "northstar-auth-xmpp",
  "northstar-config",
+ "northstar-data-tools",
  "northstar-delivery-core",
  "northstar-federation-application",
  "northstar-federation-core",

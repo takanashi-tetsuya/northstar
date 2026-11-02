@@ -22,7 +22,7 @@ admin_dispatch_repository="$project_dir/crates/contexts/workflows/northstar-work
 identity_migration_module="$project_dir/crates/contexts/workflows/northstar-workflows/src/identity_migration.rs"
 main_source="$project_dir/src/main.rs"
 state_source="$project_dir/src/state.rs"
-pie_source="$project_dir/src/tools/pie.rs"
+pie_source="$project_dir/crates/contexts/workflows/northstar-data-tools/src/pie.rs"
 users_source="$project_dir/crates/contexts/auth/northstar-auth-postgres/src/users.rs"
 admin_commands_source="$project_dir/crates/contexts/workflows/northstar-workflows/src/admin_accounts.rs"
 roster_source="$project_dir/crates/contexts/roster/northstar-roster-postgres/src/roster.rs"
@@ -517,7 +517,7 @@ require_literal "$main_source" 'northstar_postgres::role_attestation::pin_public
 require_module_literal src/state.rs \
   'role_attestation::pin_public_application_schema(omemo_recovery_pool_options)' \
   'isolated OMEMO recovery pool does not inherit the production schema pin'
-require_module_literal src/tools/pie.rs 'northstar_postgres::role_attestation::pin_public_application_schema(pool_options)' \
+require_module_literal crates/contexts/workflows/northstar-data-tools/src/pie.rs 'northstar_postgres::role_attestation::pin_public_application_schema(pool_options)' \
   'PIE worker pool does not override DSN search_path options'
 require_module_literal crates/platform/northstar-postgres/src/role_attestation.rs \
   "set_config('search_path','public',FALSE)" \
@@ -757,7 +757,7 @@ require_module_literal crates/contexts/room/northstar-room-postgres/src/mix.rs '
   'MIX roster mutation still writes users directly'
 require_literal "$omemo_recovery_source" 'SELECT northstar_user_consume_recovery_generation($1,$2,$3)' \
   'OMEMO recovery does not use the exact bearer/generation capability'
-require_module_literal src/tools/pie.rs 'production PIE import requires MIGRATOR_DATABASE_URL_FILE' \
+require_module_literal crates/contexts/workflows/northstar-data-tools/src/pie.rs 'production PIE import requires MIGRATOR_DATABASE_URL_FILE' \
   'offline PIE import was not moved behind the stopped migrator boundary'
 require_literal "$grant_apply" \
   'cluster_muc_delivery_handoffs' \

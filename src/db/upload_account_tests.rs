@@ -147,8 +147,8 @@ fn upload_cascade_capacity_requires_explicit_immutable_provenance() {
         include_str!(
             "../../crates/contexts/workflows/northstar-workflows/src/account_lifecycle.rs"
         ),
-        crate::tools::pie::module_source().as_str(),
-        include_str!("pie.rs"),
+        northstar_data_tools::pie::module_source().as_str(),
+        include_str!("../../crates/contexts/workflows/northstar-data-tools/src/pie_repository.rs"),
     ] {
         assert!(!source.contains("INSERT INTO upload_cleanup_queue"));
     }
@@ -173,7 +173,8 @@ fn upload_cascade_capacity_requires_explicit_immutable_provenance() {
                 && capacity_lock < mutation_timeout,
             "account deletion must use SQL-native NOWAIT capacity admission before its normal mutation bound"
         );
-    let pie = include_str!("pie.rs");
+    let pie =
+        include_str!("../../crates/contexts/workflows/northstar-data-tools/src/pie_repository.rs");
     let capacity_lock = pie
         .find("SELECT northstar_upload_capacity_lock()")
         .expect("PIE replacement capacity lock");

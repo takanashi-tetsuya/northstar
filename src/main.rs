@@ -265,7 +265,7 @@ async fn run() -> Result<()> {
         );
     }
     if arguments.first().map(String::as_str) == Some("pie") {
-        return tools::pie::run(&config, &arguments[1..]).await;
+        return northstar_data_tools::pie::run(&config, &arguments[1..]).await;
     }
     // This reservation deliberately precedes primary-pool construction and
     // every startup database operation.  Runtime policy and service-control

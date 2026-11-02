@@ -5,8 +5,7 @@
 //! passwords.  Import is one serializable transaction, including its audit
 //! record; `--dry-run` executes the same database writes and then rolls back.
 
-use crate::db;
-use crate::db::pie::model::{
+use crate::pie_repository::model::{
     ArchiveItem, ConflictPolicy, OfflineMessage, PendingPresence, PepItem, PepNode,
     PepSubscription, PieUser, PreparedUser, PrivateXml, RosterItem, ScramCredential,
 };
@@ -616,7 +615,7 @@ fn write_secret_file(path: &Path, contents: &[u8]) -> Result<()> {
 /// contracts split the source on a marker that occurs in more than one child.
 /// `module_source_lists_every_child_module` keeps this list in step with the
 /// non-test `mod` declarations above.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) const MODULE_SOURCE: &[(&str, &str)] = &[
     ("pie", include_str!("pie.rs")),
     ("export_data", include_str!("pie/export_data.rs")),
@@ -624,8 +623,8 @@ pub(crate) const MODULE_SOURCE: &[(&str, &str)] = &[
     ("import_payloads", include_str!("pie/import_payloads.rs")),
 ];
 
-#[cfg(test)]
-pub(crate) fn module_source() -> String {
+#[cfg(any(test, feature = "test-support"))]
+pub fn module_source() -> String {
     MODULE_SOURCE
         .iter()
         .map(|(_, text)| *text)

@@ -45,7 +45,7 @@ pub(super) async fn import(
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("[non-utf8]");
-    let (imported, skipped) = db::pie::persist_import(
+    let (imported, skipped) = crate::pie_repository::persist_import(
         pool,
         &domain,
         source,

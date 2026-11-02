@@ -184,6 +184,16 @@ crates:
     api_stability: internal
     publish_policy: never
 
+  - crate_id: northstar-data-tools
+    package: northstar-data-tools
+    path: crates/contexts/workflows/northstar-data-tools
+    tier: context
+    context: workflows
+    role: workflows
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-delivery-core
     package: northstar-delivery-core
     path: crates/contexts/message/northstar-delivery-core

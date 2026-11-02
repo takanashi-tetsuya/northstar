@@ -1,5 +1,6 @@
 //! The single-node MUC maintenance context, and the constructors of both maintenance contexts.
 
+use super::cluster_adapters::PostgresClusterAdapters;
 use super::AppState;
 use crate::cluster::{
     maintenance_context::ClusterMaintenanceContext, maintenance_locals::ClusterMaintenanceLocals,
@@ -35,7 +36,9 @@ impl AppState {
         }
     }
 
-    pub(crate) fn cluster_maintenance_context(&self) -> ClusterMaintenanceContext {
+    pub(crate) fn cluster_maintenance_context(
+        &self,
+    ) -> ClusterMaintenanceContext<PostgresClusterAdapters> {
         let (control, redis) = self.cluster_maintenance_handles();
         let replay_wake = self.cluster_recovery_replay_wake();
         ClusterMaintenanceContext {

@@ -48,6 +48,38 @@ impl RecoveryReplayAuthorizationPort for RecoveryReplayAuthority {
     }
 }
 
+/// The recovery wake's PostgreSQL store.
+#[derive(Clone)]
+pub struct PostgresRecoveryReplayStore {
+    pool: PgPool,
+}
+
+impl PostgresRecoveryReplayStore {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+impl RecoveryReplayStore for PostgresRecoveryReplayStore {
+    fn recovery_authority(
+        &self,
+        user_id: Uuid,
+        auth_generation: i64,
+    ) -> northstar_session_application::replay::RecoveryReplayAuthority {
+        northstar_session_application::replay::RecoveryReplayAuthority::new(
+            RecoveryReplayAuthority::new(self.pool.clone(), user_id, auth_generation),
+        )
+    }
+
+    async fn cutoff_after_direct_commits(
+        &self,
+        authority: &northstar_security::cluster_keys::ClusterReadinessAuthority,
+    ) -> Result<DateTime<Utc>> {
+        crate::cluster_keys::recovery_replay_cutoff_after_direct_commits(&self.pool, authority)
+            .await
+    }
+}
+
 impl RecoveryReplayGuardPort for crate::replay::RecoveryReplayAuthorizationGuard {
     fn release(self: Box<Self>) -> RecoveryGuardReleaseFuture {
         Box::pin(

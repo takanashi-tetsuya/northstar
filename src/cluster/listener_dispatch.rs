@@ -1,30 +1,28 @@
 //! Local effects permitted after a cluster listener authenticates a command.
 
 use crate::cluster::{
-    ClusterListenerMucProjection, ClusterListenerPresenceRoutes, ClusterMucOutboxSignal,
-    ClusterSessionTerminationIdentity, SessionTerminationEffect,
+    ClusterAdapters, ClusterListenerMucProjection, ClusterListenerPresenceRoutes,
+    ClusterMucOutboxSignal, ClusterSessionTerminationIdentity, SessionTerminationEffect,
 };
 use northstar_session_application::session_termination_authority::{
     SessionTerminationAuthority, SessionTerminationAuthorityService,
 };
-use northstar_session_postgres::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository;
 use northstar_stream::local_routes::session::{AccountRevocationRoutes, OnlineSession};
 use northstar_stream::local_routes::session_table::{
     fence_local_session_in, session_entries_for_in, LocalSessionFence,
 };
 use uuid::Uuid;
 
-pub(crate) struct ClusterListenerDispatch {
+pub(crate) struct ClusterListenerDispatch<A: ClusterAdapters> {
     pub(crate) muc_outbox: ClusterMucOutboxSignal,
     pub(crate) muc_projection: ClusterListenerMucProjection,
     pub(crate) presence_routes: ClusterListenerPresenceRoutes,
     pub(crate) account_routes: AccountRevocationRoutes,
     pub(crate) session_identity: ClusterSessionTerminationIdentity,
-    pub(crate) session_authority:
-        SessionTerminationAuthorityService<PostgresSessionTerminationAuthorityRepository>,
+    pub(crate) session_authority: SessionTerminationAuthorityService<A::SessionTermination>,
 }
 
-impl ClusterListenerDispatch {
+impl<A: ClusterAdapters> ClusterListenerDispatch<A> {
     pub(crate) fn node_id(&self) -> &str {
         self.presence_routes.node_id()
     }

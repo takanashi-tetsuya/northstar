@@ -1,29 +1,24 @@
 //! Typed message policy and command outcomes the cluster listener receives from the composition root.
 
+use crate::cluster::ClusterAdapters;
 use crate::db;
 use northstar_telemetry::metrics::Metrics;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;
 
-pub(crate) struct ClusterListenerMessagePolicy {
+pub(crate) struct ClusterListenerMessagePolicy<A: ClusterAdapters> {
     pub(crate) local_domain: String,
-    pub(crate) presence: northstar_roster_application::presence::PresenceService<
-        db::presence_repository::PostgresPresenceRepository,
-    >,
-    pub(crate) message: northstar_message_application::messaging::MessageService<
-        northstar_workflows::message_repository::PostgresMessageRepository,
-    >,
-    pub(crate) mix: northstar_room_application::mix_service::MixService<
-        northstar_workflows::room_effects::PostgresMixRepository,
-    >,
+    pub(crate) presence: northstar_roster_application::presence::PresenceService<A::Presence>,
+    pub(crate) message: northstar_message_application::messaging::MessageService<A::Message>,
+    pub(crate) mix: northstar_room_application::mix_service::MixService<A::Mix>,
     pub(crate) verifier:
         northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier<
-            northstar_session_postgres::node_message_projection_repository::PostgresNodeMessageProjectionRepository,
+            A::NodeMessageProjection,
         >,
     pub(crate) metrics: Arc<Metrics>,
 }
 
-impl ClusterListenerMessagePolicy {
+impl<A: ClusterAdapters> ClusterListenerMessagePolicy<A> {
     pub(crate) fn start_redis_setup_timer(
         &self,
     ) -> northstar_telemetry::metrics::DurationTimer<'_> {
@@ -75,7 +70,7 @@ impl ClusterListenerMessagePolicy {
     pub(crate) fn verifier(
         &self,
     ) -> &northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier<
-        northstar_session_postgres::node_message_projection_repository::PostgresNodeMessageProjectionRepository,
+        A::NodeMessageProjection,
     >{
         &self.verifier
     }

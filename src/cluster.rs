@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
+mod adapters;
 mod authority;
 mod delivery_contract;
 pub(crate) mod direct_spool_wake;
@@ -72,6 +73,7 @@ use self::recovery_replay::*;
 pub(crate) use self::teardown::*;
 pub(crate) use self::worker_capabilities::*;
 pub use self::workers::*;
+pub use adapters::ClusterAdapters;
 
 use pool::{
     cluster_pool_builder, open_pubsub, publish_listener_probe, subscribe_pubsub,
@@ -561,9 +563,9 @@ impl ClusterManager {
     }
 }
 
-pub fn start_muc_outbox_delivery(
+pub fn start_muc_outbox_delivery<A: ClusterAdapters>(
     worker_registry: Arc<northstar_runtime::workers::WorkerRegistry>,
-    context: Arc<muc_outbox_worker::ClusterMucOutboxWorkerContext>,
+    context: Arc<muc_outbox_worker::ClusterMucOutboxWorkerContext<A>>,
     cancel: CancellationToken,
 ) {
     // The PostgreSQL maintenance half also runs in supported single-node

@@ -2,7 +2,8 @@
 //! after this renderer has completed every required post-commit effect.
 
 use super::{
-    attr_escape, session_cleanup_unavailable::SessionCleanupUnavailable,
+    attr_escape, cluster_adapters::PostgresClusterAdapters,
+    session_cleanup_unavailable::SessionCleanupUnavailable,
     sm_teardown_muc_projection::SmTeardownMucProjection,
     sm_teardown_session::SmTeardownSessionEffects, AppState,
 };
@@ -17,7 +18,7 @@ pub(crate) struct SmTeardownRuntime {
     local: SmTeardownLocalEffects,
     muc_projection: SmTeardownMucProjection,
     muc_cluster: ClusterSmMucTeardown,
-    muc_local: ClusterListenerSmMucTeardown,
+    muc_local: ClusterListenerSmMucTeardown<PostgresClusterAdapters>,
 }
 
 impl AppState {

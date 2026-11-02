@@ -111,15 +111,15 @@ pub(super) async fn publish_listener_ack(
         .await
 }
 
-pub(super) struct ListenerResponseContext {
+pub(super) struct ListenerResponseContext<A: ClusterAdapters> {
     pub(super) admission: Arc<ClusterListenerAdmission>,
     pub(super) security: Arc<ClusterListenerSecurity>,
-    pub(super) message_policy: Arc<ClusterListenerMessagePolicy>,
+    pub(super) message_policy: Arc<ClusterListenerMessagePolicy<A>>,
     pub(super) sender: Arc<ClusterNodeDelivery>,
 }
 
-pub(super) async fn complete_listener_responses(
-    context: ListenerResponseContext,
+pub(super) async fn complete_listener_responses<A: ClusterAdapters>(
+    context: ListenerResponseContext<A>,
     authority: ListenerCommandAuthority,
     responses: ListenerResponses,
     source_node: String,

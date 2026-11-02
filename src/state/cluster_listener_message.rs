@@ -1,11 +1,14 @@
 //! Typed policy and durable hand-off effects for authenticated node delivery.
 
+use super::cluster_adapters::PostgresClusterAdapters;
 use super::AppState;
 use crate::cluster::ClusterListenerMessagePolicy;
 use std::sync::Arc;
 
 impl AppState {
-    pub(crate) fn cluster_listener_message_policy(&self) -> ClusterListenerMessagePolicy {
+    pub(crate) fn cluster_listener_message_policy(
+        &self,
+    ) -> ClusterListenerMessagePolicy<PostgresClusterAdapters> {
         ClusterListenerMessagePolicy {
             local_domain: self.config.domain.clone(),
             presence: self.roster.presence_service.clone(),

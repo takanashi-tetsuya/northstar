@@ -3545,7 +3545,7 @@ if (
 ) {
   throw new Error('cluster MUC PostgreSQL maintenance must remain unconditionally composed');
 }
-const clusterMucOutboxWorker = rustItemBody(cluster, 'async fn run_muc_outbox_delivery(');
+const clusterMucOutboxWorker = rustItemBody(cluster, 'async fn run_muc_outbox_delivery<A: ClusterAdapters>(');
 const clusterMucOutboxContextSource = read('src/cluster/muc_outbox_worker.rs');
 const clusterMucOutboxContext = structBody(
   clusterMucOutboxContextSource,
@@ -3580,7 +3580,7 @@ if ([mucClaimTurn, mucPreclaim, mucClaim, mucClaimDatabaseTurn, mucClaimCall, mu
   throw new Error('cluster MUC preclaim maintenance and claim must complete under the bounded database turn before delivery');
 }
 const clusterMucOutboxSettlementService = read('crates/contexts/room/northstar-room-application/src/cluster_muc_outbox_settlement.rs');
-const clusterMucDelivery = rustItemBody(cluster, 'async fn deliver_cluster_muc_event(');
+const clusterMucDelivery = rustItemBody(cluster, 'async fn deliver_cluster_muc_event<A: ClusterAdapters>(');
 const mucContextTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;');
 const mucContextRead = clusterMucDelivery.indexOf('.event_context(delivery.operation_id)', mucContextTurn);
 const mucCacheBranch = clusterMucDelivery.search(/let (?:mut )?recipient = if exact_cached/);
@@ -3763,7 +3763,7 @@ if (!readinessEndpoint.includes('context: ReadinessContext')
   throw new Error('readiness listeners must receive only a narrow read-only runtime context');
 }
 const clusterSource = cluster;
-const clusterMaintenance = rustItemBody(clusterSource, 'async fn maintenance_once(');
+const clusterMaintenance = rustItemBody(clusterSource, 'async fn maintenance_once<A: ClusterAdapters>(');
 const clusterRedisMaintenance = rustItemBody(clusterSource, 'struct ClusterMaintenanceRedis');
 const sessionRouteMaintenanceSource = read('crates/contexts/session/northstar-session-application/src/session_route_maintenance.rs');
 const sessionRoutePort = structBody(sessionRouteMaintenanceSource, 'pub trait SessionRouteRenewalPort');
@@ -3808,9 +3808,9 @@ if (!clusterMaintenance.includes('let occupancy_maintenance = &context.muc_occup
     || /(?:crate::db|northstar_room_postgres::cluster_muc)::(?:authoritative_cluster_muc_occupancies_for_node|renew_cluster_muc_occupancy)\s*\(/.test(clusterMaintenance)) {
   throw new Error('cluster MUC reconciliation must snapshot and renew exact authority through its narrow port');
 }
-const clusterListener = rustItemBody(readProductionModule('src/cluster/listener.rs', { root }), 'async fn listen_once(');
+const clusterListener = rustItemBody(readProductionModule('src/cluster/listener.rs', { root }), 'async fn listen_once<A: ClusterAdapters>(');
 const clusterListenerTransport = rustItemBody(cluster, 'pub(crate) struct ClusterPubsubListenerTransport');
-const clusterListenerSupervisor = rustItemBody(cluster, 'pub(crate) async fn run_pubsub_listener(');
+const clusterListenerSupervisor = rustItemBody(cluster, 'pub(crate) async fn run_pubsub_listener<A: ClusterAdapters>(');
 if (/\b(?:AppState|ClusterManager|signer|pending_acks|replay)\s*:/.test(clusterListenerTransport)
     || /\bstate\.cluster\b/.test(clusterListenerSupervisor)
     || !clusterListener.includes('transport.confirm_generation(')
@@ -3850,7 +3850,7 @@ if (!/renewal\s*\.await/.test(structuredCleanupRenewal)) {
 }
 const clusterFailureSupervisor = rustItemBody(
   cluster,
-  'pub async fn run_failure_supervisor(',
+  'pub async fn run_failure_supervisor<A: ClusterAdapters>(',
 );
 const clusterFailureContext = structBody(
   read('src/cluster/failure_supervisor_context.rs'),

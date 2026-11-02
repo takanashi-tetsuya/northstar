@@ -26,10 +26,10 @@ pub(super) fn validate_listener_generation(
     validate_listener_generation_health(&cluster.health, generation, rotation_epoch)
 }
 
-pub(super) async fn listen_once(
+pub(super) async fn listen_once<A: ClusterAdapters>(
     transport: Arc<ClusterPubsubListenerTransport>,
     admission: Arc<ClusterListenerAdmission>,
-    runtime: ClusterListenerRuntime,
+    runtime: ClusterListenerRuntime<A>,
     cancel: CancellationToken,
     heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> Result<()> {

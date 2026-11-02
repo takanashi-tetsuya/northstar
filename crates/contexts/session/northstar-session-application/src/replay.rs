@@ -48,6 +48,19 @@ impl RecoveryReplayAuthority {
     }
 }
 
+/// Where the cluster's recovery wake gets an account's recovery fence and the cutoff of one recovery pass.
+pub trait RecoveryReplayStore: Send + Sync {
+    /// The recovery-only fence of one account at one authentication generation.
+    fn recovery_authority(&self, user_id: Uuid, auth_generation: i64) -> RecoveryReplayAuthority;
+
+    /// A cutoff for one bounded recovery pass, taken only after every direct admission that holds this process's
+    /// exact key and instance rows has committed.
+    fn cutoff_after_direct_commits(
+        &self,
+        authority: &northstar_security::cluster_keys::ClusterReadinessAuthority,
+    ) -> impl Future<Output = Result<DateTime<Utc>>> + Send;
+}
+
 /// Holding this value serializes credential revocation with one bounded
 /// replay claim or enqueue. Dropping it rolls back the read-only transaction.
 pub struct RecoveryReplayAuthorizationGuard {

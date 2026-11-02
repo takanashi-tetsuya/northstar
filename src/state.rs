@@ -103,6 +103,7 @@ pub(crate) mod caps_effect_dispatch;
 pub(crate) mod pep_last_items;
 pub(crate) use admin_session_cleanup::AdminSessionCleanupContext;
 mod admin_cluster_queries;
+pub(crate) mod cluster_adapters;
 pub(crate) mod cluster_failure_supervisor;
 mod cluster_listener;
 pub(crate) mod cluster_listener_blocking;

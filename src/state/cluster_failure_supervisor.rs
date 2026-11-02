@@ -1,10 +1,13 @@
 //! Builds the cluster failure supervisor's context (`cluster::failure_supervisor_context`).
 
+use super::cluster_adapters::PostgresClusterAdapters;
 use super::AppState;
 use crate::cluster::failure_supervisor_context::ClusterFailureSupervisorContext;
 
 impl AppState {
-    pub(crate) fn cluster_failure_supervisor_context(&self) -> ClusterFailureSupervisorContext {
+    pub(crate) fn cluster_failure_supervisor_context(
+        &self,
+    ) -> ClusterFailureSupervisorContext<PostgresClusterAdapters> {
         ClusterFailureSupervisorContext {
             authority: self.cluster.failure_supervisor_authority(),
             authority_service: northstar_session_application::cluster_authority::ClusterAuthorityService::new(

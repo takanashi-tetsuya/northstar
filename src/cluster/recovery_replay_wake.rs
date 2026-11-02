@@ -3,17 +3,16 @@
 //! when that work can start relative to its current transport action.
 
 use crate::{
-    cluster::{ClusterAdmission, DirectPostCommitMode},
+    cluster::{ClusterAdapters, ClusterAdmission, DirectPostCommitMode},
     xmpp::protocol::replay,
 };
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use northstar_session_application::post_actions::PostActionTelemetry;
-use northstar_session_application::replay::{RecoveryReplayAuthority, ReplayService};
+use northstar_session_application::replay::{RecoveryReplayStore, ReplayService};
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_telemetry::metrics::Metrics;
-use sqlx::PgPool;
 use std::{
     collections::BinaryHeap,
     sync::{
@@ -27,15 +26,26 @@ use uuid::Uuid;
 pub(crate) const MAX_CONCURRENT_RECOVERY_REPLAYS: usize = 8;
 const MAX_RECOVERY_ROUTE_PAGE: usize = 256;
 
-#[derive(Clone)]
-pub(crate) struct ClusterRecoveryReplayWake {
+pub(crate) struct ClusterRecoveryReplayWake<A: ClusterAdapters> {
     pub(crate) sessions: Arc<DashMap<String, OnlineSession>>,
-    pub(crate) replay:
-        ReplayService<northstar_session_postgres::replay_repository::PostgresReplayRepository>,
+    pub(crate) replay: ReplayService<A::Replay>,
     pub(crate) admission: ClusterAdmission,
-    pub(crate) pool: PgPool,
+    pub(crate) store: A::RecoveryReplay,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) permits: Arc<Semaphore>,
+}
+
+impl<A: ClusterAdapters> Clone for ClusterRecoveryReplayWake<A> {
+    fn clone(&self) -> Self {
+        Self {
+            sessions: Arc::clone(&self.sessions),
+            replay: self.replay.clone(),
+            admission: self.admission.clone(),
+            store: self.store.clone(),
+            metrics: Arc::clone(&self.metrics),
+            permits: Arc::clone(&self.permits),
+        }
+    }
 }
 
 struct PendingRecoveryReplay {
@@ -156,7 +166,7 @@ fn recovery_route_page_after(
     page
 }
 
-impl ClusterRecoveryReplayWake {
+impl<A: ClusterAdapters> ClusterRecoveryReplayWake<A> {
     pub(crate) fn direct_mode(&self) -> DirectPostCommitMode {
         self.admission.direct_mode()
     }
@@ -260,9 +270,7 @@ impl ClusterRecoveryReplayWake {
     ) -> anyhow::Result<DateTime<Utc>> {
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            northstar_session_postgres::cluster_keys::recovery_replay_cutoff_after_direct_commits(
-                &self.pool, authority,
-            ),
+            self.store.cutoff_after_direct_commits(authority),
         )
         .await
         .map_err(|_| anyhow::anyhow!("cluster recovery replay cutoff barrier timed out"))?
@@ -376,13 +384,9 @@ impl ClusterRecoveryReplayWake {
         let completed_epoch = Arc::clone(&session.recovery_replay_completed_epoch);
         let replay_service = self.replay.clone();
         let replay_session = session.clone();
-        let recovery_authority = RecoveryReplayAuthority::new(
-            northstar_session_postgres::replay_repository::RecoveryReplayAuthority::new(
-                self.pool.clone(),
-                session.user_id,
-                session.auth_generation,
-            ),
-        );
+        let recovery_authority = self
+            .store
+            .recovery_authority(session.user_id, session.auth_generation);
         let result = session.post_actions.defer_recovery(
             "cluster-recovered-offline-replay",
             async move {
@@ -633,7 +637,9 @@ mod tests {
         let full_jid = "alice@example.test/Phone";
         let route = session(Uuid::new_v4());
         sessions.insert(full_jid.to_owned(), route.clone());
-        let wake = ClusterRecoveryReplayWake {
+        let wake = ClusterRecoveryReplayWake::<
+            crate::state::cluster_adapters::PostgresClusterAdapters,
+        > {
             sessions,
             replay: ReplayService::new(
                 northstar_session_postgres::replay_repository::PostgresReplayRepository::new(
@@ -643,7 +649,9 @@ mod tests {
                 30,
             ),
             admission: cluster.admission(),
-            pool,
+            store: northstar_session_postgres::replay_repository::PostgresRecoveryReplayStore::new(
+                pool.clone(),
+            ),
             metrics: Arc::default(),
             permits: Arc::new(Semaphore::new(0)),
         };

@@ -1,5 +1,6 @@
 //! Narrow capabilities composed for the cluster listener.
 
+use super::cluster_adapters::PostgresClusterAdapters;
 use super::AppState;
 use std::sync::Arc;
 
@@ -16,7 +17,9 @@ impl AppState {
         self.cluster.node_delivery()
     }
 
-    pub(crate) fn cluster_listener_runtime(&self) -> crate::cluster::ClusterListenerRuntime {
+    pub(crate) fn cluster_listener_runtime(
+        &self,
+    ) -> crate::cluster::ClusterListenerRuntime<PostgresClusterAdapters> {
         crate::cluster::ClusterListenerRuntime {
             message_policy: Arc::new(self.cluster_listener_message_policy()),
             dispatch: self.cluster_listener_dispatch(),

@@ -2,8 +2,8 @@
 
 use super::*;
 
-pub(super) async fn run_muc_outbox_delivery(
-    context: Arc<super::muc_outbox_worker::ClusterMucOutboxWorkerContext>,
+pub(super) async fn run_muc_outbox_delivery<A: ClusterAdapters>(
+    context: Arc<super::muc_outbox_worker::ClusterMucOutboxWorkerContext<A>>,
     cancel: CancellationToken,
     heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> Result<()> {
@@ -361,8 +361,8 @@ pub(super) fn render_cluster_muc_departure_presence(
     )
 }
 
-pub(super) async fn deliver_cluster_muc_event(
-    worker: &super::muc_outbox_worker::ClusterMucOutboxWorkerContext,
+pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
+    worker: &super::muc_outbox_worker::ClusterMucOutboxWorkerContext<A>,
     delivery: &northstar_room_core::ClusterMucOutboxDelivery,
 ) -> Result<()> {
     let endpoints = &worker.endpoints;

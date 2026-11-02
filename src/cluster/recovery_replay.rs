@@ -130,8 +130,8 @@ pub(super) fn recovery_retry_delay(attempts: u8) -> Duration {
     )
 }
 
-pub(super) async fn drive_recovery_replay_plan(
-    context: &super::maintenance_context::ClusterMaintenanceContext,
+pub(super) async fn drive_recovery_replay_plan<A: ClusterAdapters>(
+    context: &super::maintenance_context::ClusterMaintenanceContext<A>,
 ) {
     let control = &context.control;
     let Some(mut plan) = control

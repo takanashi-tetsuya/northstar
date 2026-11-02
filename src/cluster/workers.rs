@@ -69,8 +69,8 @@ pub(crate) async fn run_account_revocations<
     }
 }
 
-pub(crate) async fn run_maintenance(
-    context: Arc<super::maintenance_context::ClusterMaintenanceContext>,
+pub(crate) async fn run_maintenance<A: ClusterAdapters>(
+    context: Arc<super::maintenance_context::ClusterMaintenanceContext<A>>,
     cancel: CancellationToken,
     heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> Result<()> {
@@ -83,8 +83,8 @@ pub(crate) async fn run_maintenance(
     Ok(())
 }
 
-pub(super) async fn run_direct_spool_wake_loop(
-    context: Arc<super::maintenance_context::ClusterMaintenanceContext>,
+pub(super) async fn run_direct_spool_wake_loop<A: ClusterAdapters>(
+    context: Arc<super::maintenance_context::ClusterMaintenanceContext<A>>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -143,8 +143,8 @@ pub(super) async fn run_direct_spool_wake_loop(
     }
 }
 
-pub(super) async fn run_maintenance_passes(
-    context: Arc<super::maintenance_context::ClusterMaintenanceContext>,
+pub(super) async fn run_maintenance_passes<A: ClusterAdapters>(
+    context: Arc<super::maintenance_context::ClusterMaintenanceContext<A>>,
     cancel: CancellationToken,
     heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> Result<()> {
@@ -178,8 +178,8 @@ pub(super) async fn run_maintenance_passes(
     }
 }
 
-pub(super) async fn maintenance_once(
-    context: &super::maintenance_context::ClusterMaintenanceContext,
+pub(super) async fn maintenance_once<A: ClusterAdapters>(
+    context: &super::maintenance_context::ClusterMaintenanceContext<A>,
 ) -> Result<()> {
     let control = &context.control;
     let redis = &context.redis;
@@ -421,22 +421,22 @@ pub(super) async fn maintenance_once(
 
 /// Listener capabilities are assembled once; the receive loop never retains
 /// the application state or a general cluster manager.
-pub(crate) struct ClusterListenerRuntime {
-    pub(crate) message_policy: Arc<ClusterListenerMessagePolicy>,
-    pub(crate) dispatch: super::listener_dispatch::ClusterListenerDispatch,
+pub(crate) struct ClusterListenerRuntime<A: ClusterAdapters> {
+    pub(crate) message_policy: Arc<ClusterListenerMessagePolicy<A>>,
+    pub(crate) dispatch: super::listener_dispatch::ClusterListenerDispatch<A>,
     pub(crate) muc_endpoints: super::muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
     pub(crate) muc_delivery: crate::xmpp::muc_delivery::MucDeliveryContext,
     pub(crate) mix_caps: super::listener_mix_caps::ClusterListenerMixCaps,
     pub(crate) blocking: super::listener_blocking::ClusterListenerBlocking,
-    pub(crate) sm_muc_teardown: super::listener_sm_muc_teardown::ClusterListenerSmMucTeardown,
+    pub(crate) sm_muc_teardown: super::listener_sm_muc_teardown::ClusterListenerSmMucTeardown<A>,
     pub(crate) presence_sender: Arc<ClusterNodeDelivery>,
     pub(crate) security: Arc<ClusterListenerSecurity>,
 }
 
-pub(crate) async fn run_pubsub_listener(
+pub(crate) async fn run_pubsub_listener<A: ClusterAdapters>(
     transport: Arc<ClusterPubsubListenerTransport>,
     admission: Arc<ClusterListenerAdmission>,
-    runtime: ClusterListenerRuntime,
+    runtime: ClusterListenerRuntime<A>,
     cancel: CancellationToken,
     heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> Result<()> {
@@ -467,8 +467,8 @@ pub(crate) async fn run_pubsub_listener(
 /// Supervise the PostgreSQL half of cluster identity fencing and the bounded
 /// degraded-mode shutdown deadline. This worker never makes Redis healthy;
 /// only full lease/occupant/listener reconciliation in maintenance can do so.
-pub async fn run_failure_supervisor(
-    context: Arc<super::failure_supervisor_context::ClusterFailureSupervisorContext>,
+pub async fn run_failure_supervisor<A: ClusterAdapters>(
+    context: Arc<super::failure_supervisor_context::ClusterFailureSupervisorContext<A>>,
     cancel: CancellationToken,
     heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> Result<()> {

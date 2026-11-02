@@ -1,11 +1,14 @@
 //! Builds the cluster MUC outbox worker context (`cluster::muc_outbox_worker`) from the composition root.
 
+use super::cluster_adapters::PostgresClusterAdapters;
 use super::AppState;
 use crate::cluster::muc_outbox_worker::ClusterMucOutboxWorkerContext;
 use std::sync::Arc;
 
 impl AppState {
-    pub(crate) fn cluster_muc_outbox_worker_context(&self) -> ClusterMucOutboxWorkerContext {
+    pub(crate) fn cluster_muc_outbox_worker_context(
+        &self,
+    ) -> ClusterMucOutboxWorkerContext<PostgresClusterAdapters> {
         ClusterMucOutboxWorkerContext {
             signal: self.cluster.muc_outbox_signal(),
             domain: self.local_domain().to_owned(),

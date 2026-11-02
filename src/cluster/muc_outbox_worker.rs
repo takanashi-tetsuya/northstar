@@ -3,40 +3,40 @@
 //! sign messages or issue Redis commands.
 
 use super::muc_delivery_endpoints::ClusterMucDeliveryEndpoints;
-use crate::cluster::ClusterMucOutboxSignal;
+use crate::cluster::{ClusterAdapters, ClusterMucOutboxSignal};
 use crate::xmpp::muc_delivery::MucDeliveryContext;
 use northstar_telemetry::metrics::Metrics;
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::OwnedSemaphorePermit;
 
-pub(crate) struct ClusterMucOutboxWorkerContext {
+pub(crate) struct ClusterMucOutboxWorkerContext<A: ClusterAdapters> {
     pub(crate) signal: ClusterMucOutboxSignal,
     pub(crate) domain: String,
     pub(crate) endpoints: ClusterMucDeliveryEndpoints,
     pub(crate) delivery: MucDeliveryContext,
     pub(crate) preclaim: northstar_room_application::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService<
-        northstar_room_postgres::cluster_muc_outbox_preclaim_repository::PostgresClusterMucOutboxPreclaimRepository,
+        A::MucOutboxPreclaim,
     >,
     pub(crate) claim: northstar_room_application::cluster_muc_outbox_claim::ClusterMucOutboxClaimService<
-        northstar_room_postgres::cluster_muc_outbox_claim_repository::PostgresClusterMucOutboxClaimRepository,
+        A::MucOutboxClaim,
     >,
     pub(crate) settlement: northstar_room_application::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService<
-        northstar_room_postgres::cluster_muc_outbox_settlement_repository::PostgresClusterMucOutboxSettlementRepository,
+        A::MucOutboxSettlement,
     >,
     pub(crate) housekeeping: northstar_room_application::cluster_muc_outbox_housekeeping::ClusterMucOutboxHousekeepingService<
-        northstar_room_postgres::cluster_muc_outbox_housekeeping_repository::PostgresClusterMucOutboxHousekeepingRepository,
+        A::MucOutboxHousekeeping,
     >,
     pub(crate) delivery_read: northstar_room_application::cluster_muc_delivery_read::ClusterMucDeliveryReadService<
-        northstar_room_postgres::cluster_muc_delivery_read_repository::PostgresClusterMucDeliveryReadRepository,
+        A::MucDeliveryRead,
     >,
     pub(crate) delivery_item: northstar_room_application::cluster_muc_delivery_item::ClusterMucDeliveryItemService<
-        northstar_room_postgres::cluster_muc_delivery_item_repository::PostgresClusterMucDeliveryItemRepository,
+        A::MucDeliveryItem,
     >,
     pub(crate) admission: northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
     pub(crate) metrics: Arc<Metrics>,
 }
 
-impl ClusterMucOutboxWorkerContext {
+impl<A: ClusterAdapters> ClusterMucOutboxWorkerContext<A> {
     pub(crate) async fn database_turn(&self) -> OwnedSemaphorePermit {
         self.admission.acquire().await
     }

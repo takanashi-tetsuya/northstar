@@ -3,13 +3,12 @@
 //! route sweep between short, compare-and-swap deferred claims.
 
 use super::recovery_replay_wake::RecoveryReplayStatus;
-use crate::cluster::DirectPostCommitMode;
+use crate::cluster::{ClusterAdapters, DirectPostCommitMode};
 use anyhow::{ensure, Result};
 use chrono::{DateTime, Utc};
 use northstar_message_application::direct_spool_wake::{
     ClaimedDirectSpoolWake, DirectSpoolWakeRoute, DirectSpoolWakeService, DIRECT_SPOOL_WAKE_PAGE,
 };
-use northstar_message_postgres::direct_spool_wake::PostgresDirectSpoolWakeRepository;
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use std::{
     collections::{HashMap, VecDeque},
@@ -74,16 +73,16 @@ fn take_plan(
         })
 }
 
-pub(crate) struct DirectSpoolWakeConsumer {
-    service: DirectSpoolWakeService<PostgresDirectSpoolWakeRepository>,
-    replay: super::recovery_replay_wake::ClusterRecoveryReplayWake,
+pub(crate) struct DirectSpoolWakeConsumer<A: ClusterAdapters> {
+    service: DirectSpoolWakeService<A::DirectSpoolWake>,
+    replay: super::recovery_replay_wake::ClusterRecoveryReplayWake<A>,
     plans: Mutex<HashMap<(Uuid, Uuid), RecipientPlan>>,
 }
 
-impl DirectSpoolWakeConsumer {
+impl<A: ClusterAdapters> DirectSpoolWakeConsumer<A> {
     pub(crate) fn new(
-        service: DirectSpoolWakeService<PostgresDirectSpoolWakeRepository>,
-        replay: super::recovery_replay_wake::ClusterRecoveryReplayWake,
+        service: DirectSpoolWakeService<A::DirectSpoolWake>,
+        replay: super::recovery_replay_wake::ClusterRecoveryReplayWake<A>,
     ) -> Self {
         Self {
             service,

@@ -9,12 +9,17 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+pub mod dialback;
 pub mod policy;
 pub mod sm;
 
 pub const DIALBACK_NS: &str = "jabber:server:dialback";
 pub const STREAM_LIMITS_NS: &str = "urn:xmpp:stream-limits:0";
+/// The hard stanza-size boundary enforced by every S2S reader.  Keep the
+/// XEP-0478 advertisement and the actual framing limit tied to one constant.
 pub const MAX_S2S_STANZA_BYTES: usize = 1024 * 1024;
+pub const S2S_AUTHENTICATED_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+pub const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// The one operation MIX needs while it owns its database admission permit.
 /// It cannot read the federation repository or wake a dispatcher prematurely.

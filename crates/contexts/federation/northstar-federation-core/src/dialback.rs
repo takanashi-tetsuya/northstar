@@ -1,78 +1,70 @@
-use super::*;
+use crate::sm;
+use crate::{
+    same_dialback_domain, AdvertisedStreamLimits, DialbackOutcome, DIALBACK_NS, IO_TIMEOUT,
+    MAX_S2S_STANZA_BYTES, S2S_AUTHENTICATED_IDLE_TIMEOUT, STREAM_LIMITS_NS,
+};
 use anyhow::{Context, Result};
+use northstar_xml_builder::XmlElement;
 use roxmltree::Document;
 use std::time::Duration;
 
-pub(crate) use northstar_federation_core::{
-    same_dialback_domain, AdvertisedStreamLimits, DialbackOutcome, DIALBACK_NS, STREAM_LIMITS_NS,
-};
-
-pub(crate) fn stream_limits_feature() -> String {
+pub fn stream_limits_feature() -> String {
     stream_limits_feature_for_idle(S2S_AUTHENTICATED_IDLE_TIMEOUT)
 }
 
-pub(crate) fn negotiation_stream_limits_feature() -> String {
+pub fn negotiation_stream_limits_feature() -> String {
     stream_limits_feature_for_idle(IO_TIMEOUT)
 }
 
 fn stream_limits_feature_for_idle(idle_timeout: Duration) -> String {
-    crate::xmpp::xml_builder::XmlElement::new("limits")
+    XmlElement::new("limits")
         .attr("xmlns", STREAM_LIMITS_NS)
-        .child(
-            crate::xmpp::xml_builder::XmlElement::new("max-bytes")
-                .text(S2S_MAX_STANZA_BYTES.to_string()),
-        )
-        .child(
-            crate::xmpp::xml_builder::XmlElement::new("idle-seconds")
-                .text(idle_timeout.as_secs().to_string()),
-        )
+        .child(XmlElement::new("max-bytes").text(MAX_S2S_STANZA_BYTES.to_string()))
+        .child(XmlElement::new("idle-seconds").text(idle_timeout.as_secs().to_string()))
         .finish()
 }
 
 /// The configured S2S stream features: SASL EXTERNAL, dialback and
 /// bidirectional streams (XEP-0288, offered whenever federation is enabled).
 #[derive(Clone, Copy)]
-pub(crate) struct S2sFeaturePolicy {
-    pub(crate) sasl_external: bool,
-    pub(crate) dialback: bool,
-    pub(crate) bidi: bool,
+pub struct S2sFeaturePolicy {
+    pub sasl_external: bool,
+    pub dialback: bool,
+    pub bidi: bool,
 }
 
-pub(crate) fn features(policy: S2sFeaturePolicy, external_available: bool) -> String {
+pub fn features(policy: S2sFeaturePolicy, external_available: bool) -> String {
     // RFC 6120 section 6.3.4 ties an EXTERNAL offer to a certificate which
     // can actually authorize the asserted peer identity.  Advertising it to
     // every TLS peer makes a legitimate Dialback-only peer select a
     // mechanism that this server must then reject.
-    let mut features = crate::xmpp::xml_builder::XmlElement::new("stream:features");
+    let mut features = XmlElement::new("stream:features");
     if policy.sasl_external && external_available {
         features = features.child(
-            crate::xmpp::xml_builder::XmlElement::new("mechanisms")
+            XmlElement::new("mechanisms")
                 .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-sasl")
-                .child(crate::xmpp::xml_builder::XmlElement::new("mechanism").text("EXTERNAL")),
+                .child(XmlElement::new("mechanism").text("EXTERNAL")),
         );
     }
     if policy.dialback {
         features = features.child(
-            crate::xmpp::xml_builder::XmlElement::new("dialback")
+            XmlElement::new("dialback")
                 .attr("xmlns", "urn:xmpp:features:dialback")
-                .child(crate::xmpp::xml_builder::XmlElement::new("errors")),
+                .child(XmlElement::new("errors")),
         );
     }
     if policy.bidi {
-        features = features.child(
-            crate::xmpp::xml_builder::XmlElement::new("bidi")
-                .attr("xmlns", "urn:xmpp:features:bidi"),
-        );
+        features = features.child(XmlElement::new("bidi").attr("xmlns", "urn:xmpp:features:bidi"));
     }
     features
-        .validated_fragment(&northstar_federation_core::sm::feature())
+        .validated_fragment(&sm::feature())
         .expect("static stream management feature is valid XML")
         .validated_fragment(&negotiation_stream_limits_feature())
         .expect("server-generated stream limits must be valid XML")
         .finish()
 }
 
-pub(crate) fn parse_stream_limits_element(
+pub fn parse_stream_limits_element(
     limits: roxmltree::Node<'_, '_>,
 ) -> Option<AdvertisedStreamLimits> {
     if limits.tag_name().name() != "limits"
@@ -113,7 +105,7 @@ pub(crate) fn parse_stream_limits_element(
 /// Returns the peer's advertised limits only when the XEP-0478 element is
 /// structurally unambiguous. Invalid or absent limits are ignored for
 /// compatibility; our own inbound hard limits remain enforced independently.
-pub(crate) fn advertised_stream_limits(feature_xml: &str) -> Option<AdvertisedStreamLimits> {
+pub fn advertised_stream_limits(feature_xml: &str) -> Option<AdvertisedStreamLimits> {
     let repaired;
     let parseable =
         if feature_xml.starts_with("<stream:features") && !feature_xml.contains("xmlns:stream=") {
@@ -147,7 +139,7 @@ pub(crate) fn advertised_stream_limits(feature_xml: &str) -> Option<AdvertisedSt
     parse_stream_limits_element(limits)
 }
 
-pub(crate) fn keepalive_interval_for_peer(limits: AdvertisedStreamLimits) -> Duration {
+pub fn keepalive_interval_for_peer(limits: AdvertisedStreamLimits) -> Duration {
     let peer_half = limits
         .idle_seconds
         .map(|seconds| Duration::from_secs(u64::from(seconds).max(2) / 2))
@@ -155,7 +147,7 @@ pub(crate) fn keepalive_interval_for_peer(limits: AdvertisedStreamLimits) -> Dur
     peer_half.min(Duration::from_secs(45))
 }
 
-pub(crate) fn bidi_advertised(feature_xml: &str) -> bool {
+pub fn bidi_advertised(feature_xml: &str) -> bool {
     let repaired;
     let parseable =
         if feature_xml.starts_with("<stream:features") && !feature_xml.contains("xmlns:stream=") {
@@ -180,7 +172,7 @@ pub(crate) fn bidi_advertised(feature_xml: &str) -> bool {
     })
 }
 
-pub(crate) fn advertised(feature_xml: &str) -> bool {
+pub fn advertised(feature_xml: &str) -> bool {
     let repaired;
     let parseable =
         if feature_xml.starts_with("<stream:features") && !feature_xml.contains("xmlns:stream=") {
@@ -205,30 +197,8 @@ pub(crate) fn advertised(feature_xml: &str) -> bool {
     })
 }
 
-pub(crate) fn key(
-    secret: &[u8],
-    receiving_domain: &str,
-    originating_domain: &str,
-    stream_id: &str,
-) -> String {
-    northstar_federation_core::compute_dialback_key(
-        secret,
-        receiving_domain,
-        originating_domain,
-        stream_id,
-    )
-}
-
-pub(crate) fn valid_key(value: &str) -> bool {
-    northstar_federation_core::is_valid_dialback_key(value)
-}
-
-pub(crate) fn matches_key(expected: &str, supplied: &str) -> bool {
-    northstar_federation_core::matches_dialback_key(expected, supplied)
-}
-
-pub(crate) fn result_request(from: &str, to: &str, value: &str) -> String {
-    crate::xmpp::xml_builder::XmlElement::new("db:result")
+pub fn result_request(from: &str, to: &str, value: &str) -> String {
+    XmlElement::new("db:result")
         .attr("xmlns:db", DIALBACK_NS)
         .attr("from", from)
         .attr("to", to)
@@ -236,8 +206,8 @@ pub(crate) fn result_request(from: &str, to: &str, value: &str) -> String {
         .finish()
 }
 
-pub(crate) fn result_response(from: &str, to: &str, valid: bool) -> String {
-    crate::xmpp::xml_builder::XmlElement::new("db:result")
+pub fn result_response(from: &str, to: &str, valid: bool) -> String {
+    XmlElement::new("db:result")
         .attr("xmlns:db", DIALBACK_NS)
         .attr("from", from)
         .attr("to", to)
@@ -245,12 +215,12 @@ pub(crate) fn result_response(from: &str, to: &str, valid: bool) -> String {
         .finish()
 }
 
-pub(crate) fn result_error(from: &str, to: &str, condition: &'static str) -> String {
+pub fn result_error(from: &str, to: &str, condition: &'static str) -> String {
     dialback_error_element("result", from, to, None, condition)
 }
 
-pub(crate) fn verify_request(from: &str, to: &str, id: &str, value: &str) -> String {
-    crate::xmpp::xml_builder::XmlElement::new("db:verify")
+pub fn verify_request(from: &str, to: &str, id: &str, value: &str) -> String {
+    XmlElement::new("db:verify")
         .attr("xmlns:db", DIALBACK_NS)
         .attr("from", from)
         .attr("to", to)
@@ -259,8 +229,8 @@ pub(crate) fn verify_request(from: &str, to: &str, id: &str, value: &str) -> Str
         .finish()
 }
 
-pub(crate) fn verify_response(from: &str, to: &str, id: &str, valid: bool) -> String {
-    crate::xmpp::xml_builder::XmlElement::new("db:verify")
+pub fn verify_response(from: &str, to: &str, id: &str, valid: bool) -> String {
+    XmlElement::new("db:verify")
         .attr("xmlns:db", DIALBACK_NS)
         .attr("from", from)
         .attr("to", to)
@@ -269,7 +239,7 @@ pub(crate) fn verify_response(from: &str, to: &str, id: &str, valid: bool) -> St
         .finish()
 }
 
-pub(crate) fn verify_error(from: &str, to: &str, id: &str, condition: &'static str) -> String {
+pub fn verify_error(from: &str, to: &str, id: &str, condition: &'static str) -> String {
     dialback_error_element("verify", from, to, Some(id), condition)
 }
 
@@ -282,7 +252,7 @@ fn dialback_error_element(
 ) -> String {
     debug_assert!(matches!(name, "result" | "verify"));
     debug_assert!(is_stanza_error_condition(condition));
-    crate::xmpp::xml_builder::XmlElement::new(match name {
+    XmlElement::new(match name {
         "result" => "db:result",
         _ => "db:verify",
     })
@@ -292,18 +262,15 @@ fn dialback_error_element(
     .optional_attr("id", id)
     .attr("type", "error")
     .child(
-        crate::xmpp::xml_builder::XmlElement::new("error")
+        XmlElement::new("error")
             .attr("xmlns", "jabber:server")
             .attr("type", stanza_error_type(condition))
-            .child(
-                crate::xmpp::xml_builder::XmlElement::new(condition)
-                    .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-stanzas"),
-            ),
+            .child(XmlElement::new(condition).attr("xmlns", "urn:ietf:params:xml:ns:xmpp-stanzas")),
     )
     .finish()
 }
 
-pub(crate) fn parse_result_response(
+pub fn parse_result_response(
     raw: &str,
     expected_from: &str,
     expected_to: &str,
@@ -311,7 +278,7 @@ pub(crate) fn parse_result_response(
     parse_dialback_response(raw, "result", expected_from, expected_to, None)
 }
 
-pub(crate) fn parse_verify_response(
+pub fn parse_verify_response(
     raw: &str,
     expected_from: &str,
     expected_to: &str,
@@ -420,29 +387,30 @@ fn stanza_error_type(condition: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{compute_dialback_key, is_valid_dialback_key, matches_dialback_key};
 
     #[test]
     fn xep_0185_key_is_stable_and_compared_in_constant_time() {
-        let first = key(
+        let first = compute_dialback_key(
             b"correct horse battery staple",
             "example.org",
             "example.net",
             "abc",
         );
-        let second = key(
+        let second = compute_dialback_key(
             b"correct horse battery staple",
             "example.org",
             "example.net",
             "abc",
         );
         assert_eq!(first.len(), 64);
-        assert!(matches_key(&first, &second));
-        assert!(!matches_key(&first, &"0".repeat(64)));
-        assert!(!valid_key("not-a-key"));
+        assert!(matches_dialback_key(&first, &second));
+        assert!(!matches_dialback_key(&first, &"0".repeat(64)));
+        assert!(!is_valid_dialback_key("not-a-key"));
 
         // Published XEP-0185 section 3 test vector.
         assert_eq!(
-            key(
+            compute_dialback_key(
                 b"s3cr3tf0rd14lb4ck",
                 "xmpp.example.com",
                 "example.org",
@@ -489,14 +457,14 @@ mod tests {
         assert_eq!(
             advertised_stream_limits(&feature),
             Some(AdvertisedStreamLimits {
-                max_bytes: Some(S2S_MAX_STANZA_BYTES),
+                max_bytes: Some(MAX_S2S_STANZA_BYTES),
                 idle_seconds: Some(300),
             })
         );
         assert_eq!(
             advertised_stream_limits(&negotiation_stream_limits_feature()),
             Some(AdvertisedStreamLimits {
-                max_bytes: Some(S2S_MAX_STANZA_BYTES),
+                max_bytes: Some(MAX_S2S_STANZA_BYTES),
                 idle_seconds: Some(IO_TIMEOUT.as_secs() as u32),
             })
         );

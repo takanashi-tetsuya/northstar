@@ -9,7 +9,7 @@ pub(crate) async fn verify_remote(
     stream_id: &str,
     supplied_key: &str,
 ) -> Result<DialbackOutcome> {
-    if !valid_key(supplied_key) {
+    if !northstar_federation_core::is_valid_dialback_key(supplied_key) {
         return Ok(DialbackOutcome::Invalid);
     }
     let originating_domain =

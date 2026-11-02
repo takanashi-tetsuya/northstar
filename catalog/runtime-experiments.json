@@ -427,8 +427,8 @@
       "budgets": {
         "contract": "15s S2S I/O; idle/SM budgets are separate; application-handler await has no enclosing C2S frame timeout.",
         "source": {
-          "path": "src/s2s/util.rs",
-          "anchor": "pub(crate) const S2S_AUTHENTICATED_IDLE_TIMEOUT: Duration = Duration::from_secs(300);"
+          "path": "crates/contexts/federation/northstar-federation-core/src/lib.rs",
+          "anchor": "pub const S2S_AUTHENTICATED_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);"
         }
       },
       "experiments": [

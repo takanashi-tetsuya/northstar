@@ -122,8 +122,10 @@ impl AppState {
         self.config.dialback_enabled
     }
 
-    pub(crate) fn s2s_feature_policy(&self) -> crate::s2s::dialback::S2sFeaturePolicy {
-        crate::s2s::dialback::S2sFeaturePolicy {
+    pub(crate) fn s2s_feature_policy(
+        &self,
+    ) -> northstar_federation_core::dialback::S2sFeaturePolicy {
+        northstar_federation_core::dialback::S2sFeaturePolicy {
             sasl_external: self.s2s_sasl_external_enabled(),
             dialback: self.s2s_dialback_enabled(),
             bidi: self.s2s_federation_enabled(),

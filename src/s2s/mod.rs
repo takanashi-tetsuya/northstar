@@ -1,5 +1,4 @@
 pub(crate) mod components;
-pub mod dialback;
 pub mod dns;
 pub mod inbound;
 pub mod outbound;
@@ -9,9 +8,13 @@ mod sm;
 pub mod tls;
 pub mod util;
 
-pub(crate) use dialback::*;
 pub(crate) use dns::*;
 pub use inbound::*;
+use northstar_federation_core::dialback::*;
+use northstar_federation_core::{
+    same_dialback_domain, AdvertisedStreamLimits, DialbackOutcome, DIALBACK_NS, IO_TIMEOUT,
+    MAX_S2S_STANZA_BYTES, S2S_AUTHENTICATED_IDLE_TIMEOUT, STREAM_LIMITS_NS,
+};
 pub(crate) use outbound::*;
 pub(crate) use registry::*;
 pub(crate) use tls::*;
@@ -77,8 +80,6 @@ pub(crate) type FederationRouter =
     northstar_federation_application::outbox::FederationOutboxService<
         northstar_federation_postgres::outbox_repository::PostgresFederationOutboxRepository,
     >;
-
-pub const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 pub(crate) fn bidi_connection_key(local_domain: &str, remote_domain: &str) -> Option<String> {
     let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain).ok()?;

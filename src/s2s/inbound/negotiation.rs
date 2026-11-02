@@ -575,8 +575,8 @@ pub(super) async fn authenticate_secure_inbound(
                 .await?;
                 return Ok(None);
             }
-            let valid = valid_key(&supplied_key)
-                && matches_key(
+            let valid = northstar_federation_core::is_valid_dialback_key(&supplied_key)
+                && northstar_federation_core::matches_dialback_key(
                     &state.derive_dialback_key(&asserted_domain, &target, id),
                     &supplied_key,
                 );
@@ -600,7 +600,7 @@ pub(super) async fn authenticate_secure_inbound(
                     "peer presented a valid XMPP certificate but attempted to downgrade to Dialback"
                 );
             }
-            if !valid_key(&supplied_key) {
+            if !northstar_federation_core::is_valid_dialback_key(&supplied_key) {
                 write_xml(secure, &result_response(&target, &asserted_domain, false)).await?;
                 return Ok(None);
             }

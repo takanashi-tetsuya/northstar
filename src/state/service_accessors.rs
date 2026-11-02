@@ -263,7 +263,7 @@ impl AppState {
         originating_domain: &str,
         stream_id: &str,
     ) -> String {
-        crate::s2s::dialback::key(
+        northstar_federation_core::compute_dialback_key(
             self.dialback_secret.as_slice(),
             receiving_domain,
             originating_domain,

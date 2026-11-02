@@ -8,10 +8,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::*;
 
-/// The hard stanza-size boundary enforced by every S2S reader.  Keep the
-/// XEP-0478 advertisement and the actual framing limit tied to one constant.
-pub(crate) const S2S_MAX_STANZA_BYTES: usize = 1024 * 1024;
-pub(crate) const S2S_AUTHENTICATED_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 // A peer can write at the advertised boundary while TLS or socket readiness
 // needs another scheduler turn. Do not extend the activity clock; only allow
 // one bounded final read before declaring the stream idle.
@@ -179,7 +175,7 @@ fn append_s2s_input(buffer: &mut String, pending_utf8: &mut Vec<u8>, bytes: &[u8
         }
         Err(_) => return Err(S2sReadError::InvalidUtf8.into()),
     }
-    if buffer.len() + pending_utf8.len() > S2S_MAX_STANZA_BYTES {
+    if buffer.len() + pending_utf8.len() > MAX_S2S_STANZA_BYTES {
         return Err(S2sReadError::FrameTooLarge.into());
     }
     Ok(())

@@ -61,11 +61,11 @@ EXPECTED_TESTS = {
         'db::mix_delivery_route_wake_tests::dead_letter_requeue_uses_tail_and_preserves_current_head_wake',
     ),
     'authentication': (
-        'db::authentication_tests::authentication_service_fences_all_credential_and_inline_state_transitions',
-        'db::authentication_tests::bind2_recovers_failed_pooled_transaction_before_preflight',
-        'db::authentication_tests::bind2_resets_active_pooled_transaction_before_preflight',
-        'db::authentication_tests::login_epoch_publication_is_fenced_invisible_and_atomic_with_binding',
-        'db::authentication_tests::publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup',
+        'authentication_tests::authentication_service_fences_all_credential_and_inline_state_transitions',
+        'authentication_tests::bind2_recovers_failed_pooled_transaction_before_preflight',
+        'authentication_tests::bind2_resets_active_pooled_transaction_before_preflight',
+        'authentication_tests::login_epoch_publication_is_fenced_invisible_and_atomic_with_binding',
+        'authentication_tests::publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup',
         'db::fast_tests::fast_derivation_integrity_failures_are_side_effect_free',
         'capacity::tests::postgres_capacity_audit_compares_complete_entity_and_counter_sets',
         'capacity::tests::postgres_capacity_fixture_is_atomic_leased_and_idempotent',
@@ -380,7 +380,7 @@ class OwnedRoomDatabase:
         raise TimeoutError('owned PostgreSQL startup exceeded 30 seconds')
 
     def run_suite(self, name, script, record):
-        declared = re.findall(r'^\s*((?:db|services|capacity)::[A-Za-z0-9_:]+)\s*\\?\s*$',
+        declared = re.findall(r'^\s*((?:db|services|capacity|authentication_tests)::[A-Za-z0-9_:]+)\s*\\?\s*$',
                               (SOURCE / script).read_text(), re.MULTILINE)
         if tuple(declared) != EXPECTED_TESTS[name]:
             raise RuntimeError('suite selectors differ from the reviewed experiment manifest')

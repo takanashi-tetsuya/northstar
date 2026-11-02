@@ -1704,6 +1704,7 @@ digraph compile_time {
   "northstar-workflows" -> "anyhow";
   "northstar-workflows" -> "base64";
   "northstar-workflows" -> "chrono";
+  "northstar-workflows" -> "futures";
   "northstar-workflows" -> "northstar-abuse-application";
   "northstar-workflows" -> "northstar-abuse-policy";
   "northstar-workflows" -> "northstar-abuse-postgres";
@@ -1753,6 +1754,7 @@ digraph compile_time {
   "northstar-workflows" -> "subtle";
   "northstar-workflows" -> "thiserror";
   "northstar-workflows" -> "tokio";
+  "northstar-workflows" -> "tokio-util";
   "northstar-workflows" -> "tracing";
   "northstar-workflows" -> "uuid";
   "northstar-workflows" -> "zeroize";

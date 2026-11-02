@@ -8,7 +8,7 @@ description = "Application services of Northstar authentication and accounts."
 publish = false
 
 [features]
-# Test-only entry points the root crate's cross-context auth tests use.
+# Test-only entry points the cross-context auth tests use.
 test-support = ["northstar-session-core/test-support"]
 
 [dependencies]

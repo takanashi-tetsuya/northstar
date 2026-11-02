@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readProductionModule } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const files = { main: 'src/main.rs', subservers: 'src/runtime/subservers.rs', maintenanceOwnership: 'src/db/maintenance_ownership.rs', retention: 'crates/contexts/operations/northstar-operations-application/src/retention_worker.rs',
+const files = { main: 'src/main.rs', subservers: 'src/runtime/subservers.rs', maintenanceOwnership: 'crates/contexts/operations/northstar-operations-postgres/src/maintenance_ownership.rs', retention: 'crates/contexts/operations/northstar-operations-application/src/retention_worker.rs',
   subscriptionCleanup: 'src/runtime/subscription_cleanup.rs',
   pubsubProtocol: 'src/xmpp/protocol/pubsub.rs', pubsubAdapter: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/pubsub.rs',
   pubsubService: 'crates/contexts/pubsub/northstar-pubsub-application/src/service.rs',
@@ -129,11 +129,11 @@ export function verifySubserverBoundaries({ main, subservers, maintenanceOwnersh
   const claim = body(subservers, 'async fn claim_maintenance_on_connection(');
   const claimExact = body(maintenanceOwnership, 'async fn claim_exact(');
   const probeExact = body(maintenanceOwnership, 'async fn probe_exact(');
-  requireBoundary(claim.includes('db::maintenance_ownership::claim_exact(connection).await') &&
+  requireBoundary(claim.includes('maintenance_ownership::claim_exact(connection).await') &&
     claimExact.includes('connection.close_on_drop()') && claimExact.includes('pg_try_advisory_lock(') &&
     claimExact.includes('current_database()') && claimExact.includes('current_schema()') &&
     claimExact.includes('.fetch_one(&mut **connection)') && claimExact.includes('ensure!(') &&
-    run.includes('db::maintenance_ownership::probe_exact(&mut ownership)') &&
+    run.includes('maintenance_ownership::probe_exact(&mut ownership)') &&
     probeExact.includes('SELECT 1') && probeExact.includes('.execute(&mut **connection)'),
   'all retention modes must claim the same schema-scoped physical session and close it on drop');
 
@@ -181,7 +181,7 @@ export function verifySubserverBoundaries({ main, subservers, maintenanceOwnersh
   requireBoundary(/\.register_observer\("maintenance-ownership",\s*WorkerCriticality::Critical\)/.test(run),
     'maintenance ownership observer must remain critical');
   for (const marker of ['Duration::from_secs(5)', 'Duration::from_secs(3)',
-    'db::maintenance_ownership::probe_exact(&mut ownership)', 'if !matches!(probe, Ok(Ok(())))',
+    'maintenance_ownership::probe_exact(&mut ownership)', 'if !matches!(probe, Ok(Ok(())))',
     'break Err(anyhow::anyhow!("maintenance database ownership connection failed"))']) {
     requireBoundary(run.replace(/\s+/g, '').includes(marker.replace(/\s+/g, '')),
       `maintenance exact-session loss detection changed: ${marker}`);

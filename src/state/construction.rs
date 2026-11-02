@@ -692,7 +692,7 @@ impl AppState {
             "session-cleanup",
             northstar_runtime::workers::WorkerCriticality::Restartable,
         );
-        db::authority_listener::start_database_authority_listener(
+        northstar_workflows::authority_listener::start_database_authority_listener(
             state.sm_service().authority_broker(),
             state.mix_service().delivery_wake_broker(),
             state.cluster.account_revocation_notify(),

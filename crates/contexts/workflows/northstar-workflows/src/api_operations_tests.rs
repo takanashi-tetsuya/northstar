@@ -9,6 +9,18 @@ use uuid::Uuid;
 
 include!("api_operations_idle_tests.rs");
 
+/// A single-node deployment's admin mutation gate, which a disabled cluster's admission also is: every
+/// mutation is admitted.
+struct SingleNodeAdminMutationGate;
+
+impl northstar_operations_application::operations::AdminMutationGate
+    for SingleNodeAdminMutationGate
+{
+    fn admit_admin_mutation(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
 fn test_pool_options() -> sqlx::postgres::PgPoolOptions {
     let role = std::env::var("TEST_DATABASE_ROLE").ok();
     let expected_schema = std::env::var("TEST_DATABASE_SCHEMA")
@@ -50,7 +62,9 @@ async fn test_pool() -> PgPool {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    crate::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
     // Cases share one isolated schema. Keep audit history immutable under
     // migration 0087; fresh request/operation IDs isolate each assertion.
     sqlx::query("DELETE FROM api_operation_journal")
@@ -179,14 +193,10 @@ async fn command_port_rolls_back_without_response_and_reauthorizes_replays() {
             lease_seconds: 30,
         },
     };
-    let cluster =
-        crate::cluster::ClusterManager::new(None, "operation-ports.test", None, None, None, None)
-            .await
-            .unwrap();
     let key_material = Uuid::new_v4().simple().to_string();
     let service = OperationAdminService::new(
-        northstar_workflows::operation_admin_repository::PostgresOperationAdminRepository::new(
-            northstar_workflows::admin_mutations::AdminMutationStore::new(
+        crate::operation_admin_repository::PostgresOperationAdminRepository::new(
+            crate::admin_mutations::AdminMutationStore::new(
                 pool.clone(),
                 Arc::new(
                     northstar_operations_postgres::api_control::ApiControlKeyring::new(
@@ -195,7 +205,7 @@ async fn command_port_rolls_back_without_response_and_reauthorizes_replays() {
                     )
                     .unwrap(),
                 ),
-                cluster.admission(),
+                SingleNodeAdminMutationGate,
             ),
         ),
     );
@@ -337,9 +347,9 @@ async fn query_ports_preserve_target_scope_and_authorization_denials() {
     .unwrap();
     setup.commit().await.unwrap();
 
-    let service = ApiQueryService::new(
-        northstar_workflows::api_queries::PostgresApiQueryRepository::new(pool.clone()),
-    );
+    let service = ApiQueryService::new(crate::api_queries::PostgresApiQueryRepository::new(
+        pool.clone(),
+    ));
     let page = service
         .operations(actor(), Some("running"), Some("admin.broadcast"), None, 25)
         .await

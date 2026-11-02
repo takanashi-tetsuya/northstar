@@ -14,15 +14,11 @@ mod admin_read_authorization_tests;
 #[cfg(test)]
 mod archive;
 #[cfg(test)]
-mod authentication_tests;
-pub mod authority_listener;
-#[cfg(test)]
 mod cluster_muc_tests;
 #[cfg(test)]
 mod direct_spool_wake_repository_tests;
 #[cfg(test)]
 mod fast_tests;
-pub(crate) mod maintenance_ownership;
 #[cfg(test)]
 mod message_repository_tests;
 #[cfg(test)]
@@ -90,8 +86,6 @@ mod admin_commands_boundary_tests;
 mod admin_dispatch_repository_tests;
 #[cfg(test)]
 mod api_control_tests;
-#[cfg(test)]
-mod api_operations_tests;
 #[cfg(test)]
 mod api_pages_tests;
 #[cfg(test)]

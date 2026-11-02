@@ -155,7 +155,7 @@ async fn run_database_authority_listener(
 /// independent SM and MIX service brokers.  The listener is a wake transport,
 /// not a source of protocol authority; each recipient/session path still
 /// reads its fenced PostgreSQL record before acting.
-pub(crate) fn start_database_authority_listener(
+pub fn start_database_authority_listener(
     authority: Arc<SmAuthorityBroker>,
     mix_delivery_wake: Arc<MixDeliveryWakeBroker>,
     account_revocations: Arc<tokio::sync::Notify>,

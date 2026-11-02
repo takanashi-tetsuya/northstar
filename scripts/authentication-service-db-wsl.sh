@@ -89,6 +89,8 @@ run_exact_ignored() {
   # The capacity ledger tests live in the session PostgreSQL crate.
   local package=()
   [[ "$test_name" != capacity::* ]] || package=(-p northstar-session-postgres)
+  # The authentication service tests run beside the full migration in northstar-workflows.
+  [[ "$test_name" != authentication_tests::* ]] || package=(-p northstar-workflows)
   # Each exact test gets a fresh migration ledger and capacity authority. In
   # particular, accounts created by one test must not be reinterpreted under a
   # later test's deliberately small 64-shard capacity fixture.
@@ -106,15 +108,15 @@ run_exact_ignored() {
 }
 
 run_exact_ignored \
-  db::authentication_tests::authentication_service_fences_all_credential_and_inline_state_transitions
+  authentication_tests::authentication_service_fences_all_credential_and_inline_state_transitions
 run_exact_ignored \
-  db::authentication_tests::bind2_recovers_failed_pooled_transaction_before_preflight
+  authentication_tests::bind2_recovers_failed_pooled_transaction_before_preflight
 run_exact_ignored \
-  db::authentication_tests::bind2_resets_active_pooled_transaction_before_preflight
+  authentication_tests::bind2_resets_active_pooled_transaction_before_preflight
 run_exact_ignored \
-  db::authentication_tests::login_epoch_publication_is_fenced_invisible_and_atomic_with_binding
+  authentication_tests::login_epoch_publication_is_fenced_invisible_and_atomic_with_binding
 run_exact_ignored \
-  db::authentication_tests::publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
+  authentication_tests::publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
 run_exact_ignored \
   db::fast_tests::fast_derivation_integrity_failures_are_side_effect_free
 run_exact_ignored \

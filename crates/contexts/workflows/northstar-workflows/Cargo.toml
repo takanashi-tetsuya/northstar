@@ -62,13 +62,18 @@ serde_json = "1.0"
 sha2 = "0.10"
 subtle = "2.6"
 thiserror = "2.0"
+tokio = { version = "1.43", features = ["macros", "rt", "sync", "time"] }
+tokio-util = "0.7"
 tracing = "0.1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid", "json", "macros"] }
 zeroize = "1.8"
 uuid = { version = "1.12", features = ["v4", "serde"] }
 
 [dev-dependencies]
+futures = "0.3"
+northstar-auth-application = { path = "../../auth/northstar-auth-application", features = ["test-support"] }
 northstar-auth-postgres = { path = "../../auth/northstar-auth-postgres", features = ["test-support"] }
+northstar-operations-postgres = { path = "../../operations/northstar-operations-postgres", features = ["test-support"] }
 northstar-pubsub-postgres = { path = "../../pubsub/northstar-pubsub-postgres", features = ["test-support"] }
 northstar-room-postgres = { path = "../../room/northstar-room-postgres", features = ["test-support"] }
 northstar-roster-postgres = { path = "../../roster/northstar-roster-postgres", features = ["test-support"] }

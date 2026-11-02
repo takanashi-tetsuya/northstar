@@ -15,6 +15,7 @@ pub mod admin_mutations;
 pub mod api_pages;
 pub mod api_queries;
 pub mod authentication_effects;
+pub mod authority_listener;
 pub mod background_housekeeping_repository;
 pub mod governance_repository;
 pub mod http_login_repository;
@@ -54,3 +55,8 @@ pub mod sm_teardown_muc_repository;
 pub mod sm_teardown_presence_repository;
 pub mod sm_teardown_repository;
 pub mod upload_admin_repository;
+
+#[cfg(test)]
+mod api_operations_tests;
+#[cfg(test)]
+mod authentication_tests;

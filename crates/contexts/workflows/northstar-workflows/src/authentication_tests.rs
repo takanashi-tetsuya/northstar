@@ -314,10 +314,10 @@ async fn dummy_scram_identity_is_independent_from_fast_key_rotation() {
         .unwrap();
     let make_service = |fast_byte, dummy_byte| {
         AuthenticationService::new(
-            northstar_workflows::authentication_effects::PostgresAuthenticationRepository::new(
+            crate::authentication_effects::PostgresAuthenticationRepository::new(
                 pool.clone(),
                 Arc::new(Zeroizing::new(vec![fast_byte; 32])),
-                northstar_workflows::authentication_effects::WorkflowAuthenticationEffects,
+                crate::authentication_effects::WorkflowAuthenticationEffects,
             ),
             Arc::new(Zeroizing::new(vec![dummy_byte; 32])),
             auth::MIN_SCRAM_ITERATIONS,
@@ -352,7 +352,9 @@ async fn isolated_pool() -> PgPool {
         "authentication DB test refuses non-isolated schema {schema}"
     );
     eprintln!("isolated_schema={schema}");
-    crate::db::migrate(&pool).await.unwrap();
+    crate::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
     pool
 }
 
@@ -408,10 +410,10 @@ async fn authentication_service_fences_all_credential_and_inline_state_transitio
     let pool = isolated_pool().await;
     let fast_secret = Arc::new(Zeroizing::new(vec![0x5a; 32]));
     let service = AuthenticationService::new(
-        northstar_workflows::authentication_effects::PostgresAuthenticationRepository::new(
+        crate::authentication_effects::PostgresAuthenticationRepository::new(
             pool.clone(),
             Arc::clone(&fast_secret),
-            northstar_workflows::authentication_effects::WorkflowAuthenticationEffects,
+            crate::authentication_effects::WorkflowAuthenticationEffects,
         ),
         Arc::new(Zeroizing::new(vec![0xa5; 32])),
         auth::MIN_SCRAM_ITERATIONS,
@@ -800,12 +802,11 @@ async fn bind2_recovers_failed_pooled_transaction_before_preflight() {
         Some("25001")
     );
 
-    let repository =
-        northstar_workflows::authentication_effects::PostgresAuthenticationRepository::new(
-            pool.clone(),
-            Arc::new(Zeroizing::new(vec![0x5a; 32])),
-            northstar_workflows::authentication_effects::WorkflowAuthenticationEffects,
-        );
+    let repository = crate::authentication_effects::PostgresAuthenticationRepository::new(
+        pool.clone(),
+        Arc::new(Zeroizing::new(vec![0x5a; 32])),
+        crate::authentication_effects::WorkflowAuthenticationEffects,
+    );
     assert!(matches!(
         repository
             .bind2_archive_boundaries_with_hook(user_id, generation, |_| async {})
@@ -845,12 +846,11 @@ async fn bind2_resets_active_pooled_transaction_before_preflight() {
         .unwrap();
     assert_eq!(isolation, "read committed");
 
-    let repository =
-        northstar_workflows::authentication_effects::PostgresAuthenticationRepository::new(
-            pool.clone(),
-            Arc::new(Zeroizing::new(vec![0x5a; 32])),
-            northstar_workflows::authentication_effects::WorkflowAuthenticationEffects,
-        );
+    let repository = crate::authentication_effects::PostgresAuthenticationRepository::new(
+        pool.clone(),
+        Arc::new(Zeroizing::new(vec![0x5a; 32])),
+        crate::authentication_effects::WorkflowAuthenticationEffects,
+    );
     assert!(matches!(
         repository
             .bind2_archive_boundaries_with_hook(user_id, generation, |_| async {})
@@ -886,10 +886,10 @@ async fn login_epoch_publication_is_fenced_invisible_and_atomic_with_binding() {
     let (user_id, auth_generation) =
         create_account(&pool, &username, "epoch correct horse battery").await;
     let service = AuthenticationService::new(
-        northstar_workflows::authentication_effects::PostgresAuthenticationRepository::new(
+        crate::authentication_effects::PostgresAuthenticationRepository::new(
             pool.clone(),
             Arc::new(Zeroizing::new(vec![0x61; 32])),
-            northstar_workflows::authentication_effects::WorkflowAuthenticationEffects,
+            crate::authentication_effects::WorkflowAuthenticationEffects,
         ),
         Arc::new(Zeroizing::new(vec![0xa6; 32])),
         auth::MIN_SCRAM_ITERATIONS,

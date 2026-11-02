@@ -1243,7 +1243,7 @@
         },
         {
           "id": "worker:sm-authority-listener",
-          "owner": "src/db/authority_listener.rs",
+          "owner": "crates/contexts/workflows/northstar-workflows/src/authority_listener.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },

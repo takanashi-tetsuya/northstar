@@ -4,11 +4,11 @@
 //! maintenance process receives only a retention policy, a bounded database
 //! pool and metrics; it never constructs AppState or loads protocol secrets.
 
-use crate::db;
 use anyhow::{Context, Result};
 use northstar_operations_application::retention_worker::{
     RetentionContext, RetentionPolicy, RetentionReadiness,
 };
+use northstar_operations_postgres::maintenance_ownership;
 use northstar_runtime::workers::WorkerCriticality;
 use northstar_runtime::workers::WorkerMode;
 use northstar_runtime::workers::WorkerRegistry;
@@ -170,7 +170,7 @@ pub(crate) async fn claim_maintenance(
 pub(crate) async fn claim_maintenance_on_connection(
     connection: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
 ) -> Result<()> {
-    db::maintenance_ownership::claim_exact(connection).await
+    maintenance_ownership::claim_exact(connection).await
 }
 
 pub(crate) async fn run_maintenance() -> Result<()> {
@@ -329,7 +329,7 @@ pub(crate) async fn run_maintenance() -> Result<()> {
                 // connection would conceal loss of exclusive ownership.
                 let probe = tokio::time::timeout(
                     Duration::from_secs(3),
-                    db::maintenance_ownership::probe_exact(&mut ownership),
+                    maintenance_ownership::probe_exact(&mut ownership),
                 ).await;
                 if !matches!(probe, Ok(Ok(()))) {
                     workers.observer_error("maintenance-ownership", "database ownership connection failed");

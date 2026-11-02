@@ -3415,7 +3415,7 @@ const workerResponsibilityEvidence = {
   'cluster-muc-outbox': ['crates/edges/northstar-cluster/src/lib.rs', 'unconditionally registered', '30 s'],
   'locked-muc-expiry': ['src/state.rs', '`AppState` MUC startup', '20 s'],
   'runtime-control-refresh': ['src/state.rs', 'process startup reserves the connection', '5 s'],
-  'sm-authority-listener': ['src/db/authority_listener.rs', 'AppState database listener startup', '15 s'],
+  'sm-authority-listener': ['crates/contexts/workflows/northstar-workflows/src/authority_listener.rs', 'AppState database listener startup', '15 s'],
   'sm-suspension-recovery': ['src/state/session_cleanup.rs', 'session-cleanup service startup', '30 s'],
   'caps-side-effects': ['src/xmpp/protocol/caps.rs', 'Caps subsystem startup', '60 s'],
   'mix-iq-relay-expiry': ['crates/contexts/room/northstar-mix-xmpp/src/lib.rs', 'MIX protocol capability startup', '10 s'],

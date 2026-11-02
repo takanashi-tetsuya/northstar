@@ -188,7 +188,7 @@ use crate::api::contexts::{
     RegistrationAdminContext, ReportContext, ReportModerationContext, RetentionPolicyContext,
     SessionAdminContext, UploadAdminContext, UploadService,
 };
-use crate::{db, s2s::FederationRouter};
+use crate::s2s::FederationRouter;
 use anyhow::Context;
 use dashmap::DashMap;
 use hickory_resolver::{

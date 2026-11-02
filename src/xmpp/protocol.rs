@@ -30,8 +30,9 @@ use crate::state::{AppState, SmBufferLimits, SmSessionPolicy};
 use anyhow::{Context, Result};
 use dashmap::DashSet;
 use northstar_session_application::post_actions::PostActionHandle;
+use northstar_stream::resume::ResumePayload;
 use northstar_stream::transport::{
-    ClientTransport, SessionTerminationSignals, StreamLimits, TlsSessionEvidence,
+    Action, ClientTransport, SessionTerminationSignals, StreamLimits, TlsSessionEvidence,
 };
 use northstar_xml_builder::stream::{failure, is_counted_stanza, stream_error, stream_id};
 
@@ -52,9 +53,6 @@ mod session_sm;
 mod session_transport;
 
 use self::session_sm::durable_delivery_managed_by_sm;
-pub use self::session_sm::ResumePayload;
-pub(crate) use self::session_sm::ResumeTransportParts;
-pub use self::session_transport::Action;
 #[cfg(test)]
 use self::session_transport::{
     client_stream_limits_feature, resource_bind_deadline_for, unauthenticated_timed_out_for,

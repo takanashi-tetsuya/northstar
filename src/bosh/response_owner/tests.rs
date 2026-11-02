@@ -1973,7 +1973,7 @@ async fn real_resume_governor_holds_follow_shared_response_bytes_until_last_drop
     let source = VecDeque::from([northstar_stream::outbound::SmUnackedStanza::plain(
         "<message><body>".to_owned() + &"x".repeat(4096) + "</body></message>",
     )]);
-    let action = crate::xmpp::protocol::ResumePayload::from_sm_unacked(
+    let action = northstar_stream::resume::ResumePayload::from_sm_unacked(
         &governor,
         "<resumed xmlns='urn:xmpp:sm:3' h='0' previd='fixture'/>".to_owned(),
         vec![],

@@ -3,6 +3,31 @@
 
 use tokio_util::sync::CancellationToken;
 
+/// What a protocol session asks its transport to do with one processed frame.
+pub enum Action {
+    Send(String),
+    SendMany(Vec<String>),
+    /// Ordered outbound items deferred by CSI. Unlike ordinary protocol
+    /// replies these may carry a durable-delivery fence which the transport
+    /// must complete only at its negotiated recovery boundary (SM h, BOSH
+    /// response ack, or the explicit non-SM socket-write fallback).
+    SendManyItems(Vec<crate::outbound::OutboundItem>),
+    /// The first frame is the terminal authentication success. Publish the
+    /// staged login epoch and already-committed route only after that frame
+    /// reaches the transport.
+    SendManyThenActivate(crate::auth_publication::AuthReplies),
+    /// Send each terminal payload in order and then close the XML stream.
+    /// Unlike ordinary outbound stanzas these frames are not added to an SM
+    /// resume queue: the operation producing them has already revoked the
+    /// authenticated session and resumption must be impossible.
+    SendManyAndClose(Vec<String>),
+    Resume(crate::resume::ResumePayload),
+    StartTls,
+    CloseWith(String),
+    Close,
+    None,
+}
+
 /// The transport carrying a client stream.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClientTransport {

@@ -12,7 +12,7 @@ use crate::state::AppState;
 use anyhow::Result;
 use dashmap::DashSet;
 use northstar_mix_xmpp::ports::{
-    MixAction, MixFrameObserver, MixHost, MixOutboxPort, MixSession, MixSessionUser,
+    MixFrameObserver, MixHost, MixOutboxPort, MixSession, MixSessionUser,
 };
 use northstar_room_application::mix_service::MixService;
 use northstar_room_core::mix::{MixSessionCapability, CORE_NS, PAM_NS};
@@ -153,16 +153,6 @@ impl MixSession for ProtocolSession {
 
     fn frame_observer(&self) -> &dyn MixFrameObserver {
         &self.frame_executions
-    }
-}
-
-impl From<MixAction> for Action {
-    fn from(action: MixAction) -> Self {
-        match action {
-            MixAction::Send(stanza) => Action::Send(stanza),
-            MixAction::SendMany(stanzas) => Action::SendMany(stanzas),
-            MixAction::None => Action::None,
-        }
     }
 }
 

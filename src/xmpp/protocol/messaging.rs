@@ -25,7 +25,7 @@ use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
 use northstar_message_xmpp::messaging as handlers;
 #[cfg(test)]
 use northstar_message_xmpp::messaging::preparation_fixture::*;
-use northstar_message_xmpp::ports::{MessageFrameStage, MessageOutcome, MessageSession};
+use northstar_message_xmpp::ports::{MessageFrameStage, MessageSession};
 use northstar_stream::frame_execution::Stage;
 #[cfg(test)]
 use northstar_xmpp_types::jid_text::bare_jid;
@@ -36,20 +36,6 @@ use uuid::Uuid;
 
 #[cfg(test)]
 mod saved_case;
-
-impl MessageOutcome for Action {
-    fn none() -> Self {
-        Action::None
-    }
-
-    fn send(stanza: String) -> Self {
-        Action::Send(stanza)
-    }
-
-    fn is_none(&self) -> bool {
-        matches!(self, Action::None)
-    }
-}
 
 impl MessageSession for ProtocolSession {
     type Host = AppState;

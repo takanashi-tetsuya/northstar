@@ -2278,6 +2278,7 @@ dependencies = [
  "northstar-message-application",
  "northstar-message-core",
  "northstar-room-core",
+ "northstar-stream",
  "northstar-xep-0215",
  "northstar-xep-0280",
  "northstar-xep-0359",

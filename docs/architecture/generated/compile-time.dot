@@ -1253,6 +1253,7 @@ digraph compile_time {
   "northstar-message-xmpp" -> "northstar-message-application";
   "northstar-message-xmpp" -> "northstar-message-core";
   "northstar-message-xmpp" -> "northstar-room-core";
+  "northstar-message-xmpp" -> "northstar-stream";
   "northstar-message-xmpp" -> "northstar-xep-0215";
   "northstar-message-xmpp" -> "northstar-xep-0280";
   "northstar-message-xmpp" -> "northstar-xep-0359";

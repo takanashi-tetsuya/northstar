@@ -24,6 +24,7 @@ use northstar_room_core::occupancy::{
 use northstar_session_core::JoinedMucMembership;
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::outbound::OutboundSender;
+use northstar_stream::transport::Action;
 use std::{collections::HashMap, future::Future};
 use tokio::sync::mpsc::error::TrySendError;
 use uuid::Uuid;
@@ -34,6 +35,16 @@ pub enum MucAction {
     Send(String),
     SendMany(Vec<String>),
     None,
+}
+
+impl From<MucAction> for Action {
+    fn from(action: MucAction) -> Self {
+        match action {
+            MucAction::Send(stanza) => Action::Send(stanza),
+            MucAction::SendMany(stanzas) => Action::SendMany(stanzas),
+            MucAction::None => Action::None,
+        }
+    }
 }
 
 /// The stages of a frame execution that MUC reports.

@@ -19,7 +19,7 @@ pub(crate) use ownership::{sm_record_composition, RecordPort as BoshRecordPort};
 pub(crate) use saved_case::{run as run_saved_case, validate as validate_saved_case};
 
 use crate::state::{AppState, ClientConnectionGuard};
-use crate::xmpp::protocol::{ProtocolSession, ResumeTransportParts};
+use crate::xmpp::protocol::ProtocolSession;
 use crate::xmpp::transport_parsing::parse_bosh_frame;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Context;
@@ -33,6 +33,7 @@ use dashmap::DashMap;
 use futures::FutureExt;
 use hmac::{Hmac, Mac};
 use northstar_stream::frame_execution::FrameFailure;
+use northstar_stream::resume::ResumeTransportParts;
 use northstar_stream::transport::ClientTransport;
 use rand::{rngs::OsRng, RngCore};
 use roxmltree::Document;

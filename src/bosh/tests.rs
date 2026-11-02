@@ -817,7 +817,7 @@ fn bosh_response_and_transport_drop_retain_then_release_resume_capacity() {
     let source = VecDeque::from([northstar_stream::outbound::SmUnackedStanza::plain(
         "<message id='resume'><body>".to_owned() + &"x".repeat(4_096) + "</body></message>",
     )]);
-    let action = crate::xmpp::protocol::ResumePayload::from_sm_unacked(
+    let action = northstar_stream::resume::ResumePayload::from_sm_unacked(
         &governor,
         "<resumed xmlns='urn:xmpp:sm:3' h='0' previd='session'/>".to_owned(),
         Vec::new(),

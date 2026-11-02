@@ -13,6 +13,7 @@ pub mod local_routes;
 pub mod muc_delivery;
 pub mod outbound;
 pub mod replay;
+pub mod resume;
 pub mod transport;
 
 /// The largest XMPP frame any transport accepts and any cluster node forwards.

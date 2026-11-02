@@ -20,6 +20,7 @@ use northstar_roster_core::RosterChange;
 use northstar_stream::frame_execution::{SessionExecutions, Stage};
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::outbound::OutboundSender;
+use northstar_stream::transport::Action;
 use northstar_xep_core::XepId;
 use roxmltree::Node;
 use std::{future::Future, sync::Arc, time::Instant};
@@ -36,6 +37,16 @@ pub enum MixAction {
     Send(String),
     SendMany(Vec<String>),
     None,
+}
+
+impl From<MixAction> for Action {
+    fn from(action: MixAction) -> Self {
+        match action {
+            MixAction::Send(stanza) => Action::Send(stanza),
+            MixAction::SendMany(stanzas) => Action::SendMany(stanzas),
+            MixAction::None => Action::None,
+        }
+    }
 }
 
 /// The stages of a frame execution that MIX reports.

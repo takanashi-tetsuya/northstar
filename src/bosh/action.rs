@@ -1,7 +1,8 @@
 //! Apply protocol actions to the bounded BOSH response FIFO.
 
 use super::{queue_bosh_resume_payload, BoshActor};
-use crate::xmpp::protocol::{Action, ResumeTransportParts};
+use northstar_stream::resume::ResumeTransportParts;
+use northstar_stream::transport::Action;
 
 impl BoshActor {
     pub(super) async fn apply_action(

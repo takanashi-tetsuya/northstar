@@ -5,9 +5,10 @@ use super::{
     websocket_send_live, websocket_send_many_and_close, WebSocketSendCancellation,
     WebSocketTerminalSequence,
 };
-use crate::xmpp::protocol::{Action, ProtocolSession};
+use crate::xmpp::protocol::ProtocolSession;
 use anyhow::Result;
 use axum::extract::ws::{Message, WebSocket};
+use northstar_stream::transport::Action;
 
 pub(super) async fn apply(
     socket: &mut WebSocket,
@@ -126,7 +127,7 @@ pub(super) async fn apply(
             return false;
         }
         Ok(Action::Resume(payload)) => {
-            let crate::xmpp::protocol::ResumeTransportParts {
+            let northstar_stream::resume::ResumeTransportParts {
                 control,
                 post_control,
                 replay,

@@ -14,6 +14,7 @@ use northstar_message_application::retractions::{RetractionRepository, Retractio
 use northstar_message_application::telemetry::PersonalMessageTelemetry;
 use northstar_message_core::OfflineDeliveryLimits;
 use northstar_room_core::{ClusterMucAffiliationSubject, ClusterMucInviteAuthority};
+use northstar_stream::transport::Action;
 use roxmltree::Node;
 use std::future::Future;
 use std::net::IpAddr;
@@ -35,6 +36,20 @@ pub trait MessageOutcome: Send {
     fn none() -> Self;
     fn send(stanza: String) -> Self;
     fn is_none(&self) -> bool;
+}
+
+impl MessageOutcome for Action {
+    fn none() -> Self {
+        Action::None
+    }
+
+    fn send(stanza: String) -> Self {
+        Action::Send(stanza)
+    }
+
+    fn is_none(&self) -> bool {
+        matches!(self, Action::None)
+    }
 }
 
 /// The facts of a local room that a direct invitation needs.

@@ -3,8 +3,10 @@
 use super::{
     send, tcp_fatal_error, tcp_record_and_send, tcp_record_and_send_auth, tcp_record_and_send_item,
 };
-use crate::xmpp::protocol::{Action, ProtocolSession, ResumeTransportParts};
+use crate::xmpp::protocol::ProtocolSession;
 use anyhow::Result;
+use northstar_stream::resume::ResumeTransportParts;
+use northstar_stream::transport::Action;
 use tokio::io::AsyncWrite;
 
 pub(super) enum TcpActionDisposition {

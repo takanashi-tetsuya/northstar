@@ -8,7 +8,7 @@ use crate::state::AppState;
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_muc_xmpp::muc as handlers;
-use northstar_muc_xmpp::ports::{MucAction, MucFrameStage, MucSession, MucSessionUser};
+use northstar_muc_xmpp::ports::{MucFrameStage, MucSession, MucSessionUser};
 use northstar_room_application::discussion;
 use northstar_session_core::JoinedMucMembership;
 use northstar_stream::frame_execution::Stage;
@@ -73,16 +73,6 @@ impl MucSession for ProtocolSession {
         prepared: &discussion::PreparedDiscussion,
     ) -> Result<Option<discussion::Observation>, discussion::Rejected> {
         ProtocolSession::muc_discussion_operation(self, prepared)
-    }
-}
-
-impl From<MucAction> for Action {
-    fn from(action: MucAction) -> Self {
-        match action {
-            MucAction::Send(stanza) => Action::Send(stanza),
-            MucAction::SendMany(stanzas) => Action::SendMany(stanzas),
-            MucAction::None => Action::None,
-        }
     }
 }
 

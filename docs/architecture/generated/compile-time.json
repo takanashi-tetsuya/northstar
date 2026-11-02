@@ -3617,6 +3617,10 @@
     ],
     [
       "northstar-message-xmpp",
+      "northstar-stream"
+    ],
+    [
+      "northstar-message-xmpp",
       "northstar-xep-0215"
     ],
     [

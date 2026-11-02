@@ -1,9 +1,9 @@
 //! Temporary-room cleanup after an exact local occupant departure.
 
 use super::AppState;
-use crate::db::room_effects::PostgresMucRepository;
 use anyhow::Result;
 use northstar_room_application::muc_service::MucService;
+use northstar_workflows::room_effects::PostgresMucRepository;
 
 pub(crate) struct SessionCleanupRooms {
     rooms: MucService<PostgresMucRepository>,

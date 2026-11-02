@@ -4,7 +4,6 @@ use super::{
     local_caps_route_epoch_matches, session_entries_for_in, AppState, OnlineSession,
     RuntimeFederationPolicy,
 };
-use crate::db::room_effects::PostgresMixRepository;
 use crate::{
     cluster::{ClusterMixRouteLookup, ClusterNodeDelivery},
     s2s::FederationRouter,
@@ -19,6 +18,7 @@ use northstar_protocol_runtime::caps::{CapsObservationOwner, CapsResourceIndex, 
 use northstar_room_application::mix_service::MixService;
 use northstar_room_core::mix::{MixSessionCapability, CORE_NS, PAM_NS};
 use northstar_stream::outbound::MixDelivery;
+use northstar_workflows::room_effects::PostgresMixRepository;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,

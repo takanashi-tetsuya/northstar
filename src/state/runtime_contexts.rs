@@ -18,10 +18,10 @@ impl AppState {
         &self,
         counters: northstar_operations_application::background_housekeeping::BackgroundHousekeepingCounters,
     ) -> northstar_operations_application::background_housekeeping::BackgroundHousekeepingContext<
-        db::background_housekeeping_repository::PostgresBackgroundHousekeepingRepository,
+        northstar_workflows::background_housekeeping_repository::PostgresBackgroundHousekeepingRepository,
     >{
         northstar_operations_application::background_housekeeping::BackgroundHousekeepingContext::new(
-            db::background_housekeeping_repository::PostgresBackgroundHousekeepingRepository::new(
+            northstar_workflows::background_housekeeping_repository::PostgresBackgroundHousekeepingRepository::new(
                 self.pool.clone(),
             ),
             self.config.moderation_retention_days,
@@ -73,7 +73,7 @@ impl AppState {
     pub(crate) fn abuse_key_authority_probe(
         &self,
     ) -> northstar_operations_application::readiness::AbuseKeyAuthorityProbe<
-        db::readiness_repository::PostgresReadinessRepository,
+        northstar_workflows::readiness_repository::PostgresReadinessRepository,
     > {
         self.operations
             .readiness_service

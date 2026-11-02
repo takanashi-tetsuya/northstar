@@ -1,6 +1,6 @@
-use crate::db::room_effects::PostgresMucRepository;
 use anyhow::Result;
 use northstar_room_application::muc_service::*;
+use northstar_workflows::room_effects::PostgresMucRepository;
 use std::time::Duration;
 use uuid::Uuid;
 

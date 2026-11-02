@@ -1,6 +1,6 @@
 //! Authority, Redis projection and local snapshots for one cluster maintenance pass. The composition root builds it.
 
-use crate::{cluster, db};
+use crate::cluster;
 
 pub(crate) struct ClusterMaintenanceContext {
     pub(crate) control: cluster::ClusterMaintenanceControl,
@@ -14,7 +14,7 @@ pub(crate) struct ClusterMaintenanceContext {
     pub(crate) direct_spool_wake: super::direct_spool_wake::DirectSpoolWakeConsumer,
     pub(crate) session_authority:
         northstar_session_application::session_authority_sweep::SessionAuthoritySweepService<
-            db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
+            northstar_workflows::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
         >,
     pub(crate) cluster_authority:
         northstar_session_application::cluster_authority::ClusterAuthorityService<

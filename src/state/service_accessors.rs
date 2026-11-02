@@ -88,7 +88,7 @@ impl AppState {
     pub(crate) fn mix_service(
         &self,
     ) -> &northstar_room_application::mix_service::MixService<
-        crate::db::room_effects::PostgresMixRepository,
+        northstar_workflows::room_effects::PostgresMixRepository,
     > {
         &self.room.mix_service
     }
@@ -102,7 +102,7 @@ impl AppState {
     pub(crate) fn muc_service(
         &self,
     ) -> &northstar_room_application::muc_service::MucService<
-        crate::db::room_effects::PostgresMucRepository,
+        northstar_workflows::room_effects::PostgresMucRepository,
     > {
         &self.room.muc_service
     }
@@ -247,7 +247,7 @@ impl AppState {
     pub(crate) fn authentication_service(
         &self,
     ) -> &northstar_auth_application::authentication::AuthenticationService<
-        crate::db::authentication_effects::PostgresAuthenticationRepository,
+        northstar_workflows::authentication_effects::PostgresAuthenticationRepository,
     > {
         &self.auth.authentication_service
     }

@@ -425,7 +425,7 @@ async fn direct_spool_wake_commit_ack_takeover_and_cleanup_are_fenced() {
     let room_invite =
         format!("<message from='room@conference.{domain}' to='{invitee_bare}' type='normal'/>");
     let room_outcome = northstar_room_postgres::muc::admit_local_muc_invite(
-        &crate::db::room_effects::RootRoomEffects,
+        &northstar_workflows::room_effects::WorkflowRoomEffects,
         &pool,
         room_invite_id,
         room.id,

@@ -13,11 +13,9 @@ mod account_revocations_tests;
 mod admin_read_authorization_tests;
 #[cfg(test)]
 mod archive;
-pub(crate) mod authentication_effects;
 #[cfg(test)]
 mod authentication_tests;
 pub mod authority_listener;
-pub(crate) mod background_housekeeping_repository;
 #[cfg(test)]
 mod cluster_muc_tests;
 pub(crate) mod direct_commit_cluster;
@@ -60,11 +58,8 @@ mod privacy;
 mod privacy_service_tests;
 #[cfg(test)]
 mod push_tests;
-pub(crate) mod readiness_repository;
 #[cfg(test)]
 mod retraction_service_tests;
-pub(crate) mod room_effects;
-pub(crate) mod session_authority_sweep_repository;
 #[cfg(test)]
 pub use archive::*;
 // The privacy stanza kind that paths owned by the mainline (src/s2s, src/cluster) still reach
@@ -81,7 +76,6 @@ pub async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     northstar_workflows::identity_migration::migrate_for_tests(pool).await
 }
 
-pub(crate) mod muc_delivery_repository;
 #[cfg(test)]
 mod upload_account_tests;
 #[cfg(test)]

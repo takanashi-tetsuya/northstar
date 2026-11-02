@@ -2,10 +2,10 @@
 //! and the administrative services over accounts, registration, sessions and invitations.
 
 use super::*;
-use crate::db::authentication_effects::{
-    PostgresAuthenticationRepository, RootAuthenticationEffects,
-};
 use northstar_auth_application::authentication::AuthenticationService;
+use northstar_workflows::authentication_effects::{
+    PostgresAuthenticationRepository, WorkflowAuthenticationEffects,
+};
 
 /// The auth context's services, built once at startup.
 pub(super) struct AuthModule {
@@ -120,7 +120,7 @@ impl AuthModule {
             PostgresAuthenticationRepository::new(
                 pool.clone(),
                 Arc::clone(fast_token_secret),
-                RootAuthenticationEffects,
+                WorkflowAuthenticationEffects,
             ),
             dummy_scram_secret,
             config.scram_iterations,

@@ -4,12 +4,12 @@ use anyhow::Result;
 use northstar_operations_application::background_housekeeping::BackgroundHousekeepingRepository;
 use sqlx::PgPool;
 
-pub(crate) struct PostgresBackgroundHousekeepingRepository {
+pub struct PostgresBackgroundHousekeepingRepository {
     pool: PgPool,
 }
 
 impl PostgresBackgroundHousekeepingRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }

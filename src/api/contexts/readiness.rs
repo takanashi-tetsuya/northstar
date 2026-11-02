@@ -12,7 +12,7 @@ pub(crate) struct ReadinessContext {
     pub(crate) abuse_key_deployment:
         Option<northstar_abuse_policy::model::AbuseKeyDeploymentIdentity>,
     pub(crate) persistence: northstar_operations_application::readiness::ReadinessService<
-        crate::db::readiness_repository::PostgresReadinessRepository,
+        northstar_workflows::readiness_repository::PostgresReadinessRepository,
     >,
 }
 

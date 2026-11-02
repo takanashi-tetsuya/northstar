@@ -14,7 +14,7 @@ pub(crate) struct ClusterListenerMessagePolicy {
         northstar_workflows::message_repository::PostgresMessageRepository,
     >,
     pub(crate) mix: northstar_room_application::mix_service::MixService<
-        crate::db::room_effects::PostgresMixRepository,
+        northstar_workflows::room_effects::PostgresMixRepository,
     >,
     pub(crate) verifier:
         northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier<

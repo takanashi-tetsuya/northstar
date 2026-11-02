@@ -1469,7 +1469,7 @@ export function verifyMixForegroundBoundaries({ mix, mixCore, mixData, mixSlot, 
   requireBoundary(serviceConstructor.includes('letconfigured_mix_domain=northstar_xmpp_types::prepare_domainpart(&format!())?;') &&
     serviceConstructor.includes('repository,configured_mix_domain,message_identity,'),
     'MIX receiving domain must come from the configured service constructor');
-  requireBoundary(dense(codeOnly(state)).includes('MixService::new_with_outbox_database_admission(crate::db::room_effects::PostgresMixRepository::new(pool.clone()),config.domain.clone(),'),
+  requireBoundary(dense(codeOnly(state)).includes('MixService::new_with_outbox_database_admission(northstar_workflows::room_effects::PostgresMixRepository::new(pool.clone()),config.domain.clone(),'),
     'MIX AppState construction must supply actual runtime configuration');
   const preparation = dense(body(mixService, 'fn\\s+prepare_mix_foreground\\b'));
   requireBoundary(preparation === 'if!ingress.matches_receiving_domain(&self.configured_mix_domain){returnErr(foreground::Rejected::Input);}Ok(foreground::PreparedIngress::new(ingress))',

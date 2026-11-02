@@ -58,7 +58,7 @@ async fn mirror_link_is_common_owner_only_one_to_one_and_idempotent() {
     let actor = format!("{username}@example.invalid");
     let payloads = northstar_room_application::mix_service::MixPayloads;
     let (created, _) = northstar_room_postgres::mix::create_mix_channel(
-        &crate::db::room_effects::RootRoomEffects,
+        &northstar_workflows::room_effects::WorkflowRoomEffects,
         &pool,
         "mix.example.invalid",
         Some(&localpart),

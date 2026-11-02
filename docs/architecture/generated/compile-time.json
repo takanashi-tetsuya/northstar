@@ -5236,6 +5236,10 @@
     ],
     [
       "northstar-workflows",
+      "northstar-archive-core"
+    ],
+    [
+      "northstar-workflows",
       "northstar-archive-postgres"
     ],
     [

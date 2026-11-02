@@ -12,8 +12,8 @@ use northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission;
 pub(super) struct RoomModule {
     /// PostgreSQL-authoritative MUC application service. Redis capabilities
     /// deliberately do not cross this boundary.
-    pub(super) muc_service: northstar_room_application::muc_service::MucService<crate::db::room_effects::PostgresMucRepository>,
-    pub(super) mix_service: northstar_room_application::mix_service::MixService<crate::db::room_effects::PostgresMixRepository>,
+    pub(super) muc_service: northstar_room_application::muc_service::MucService<northstar_workflows::room_effects::PostgresMucRepository>,
+    pub(super) mix_service: northstar_room_application::mix_service::MixService<northstar_workflows::room_effects::PostgresMixRepository>,
     pub(super) muc_occupants: Arc<DashMap<String, MucOccupant>>,
     /// Exactly one process-local suspension/resume FIFO per durable SM
     /// session.  Every room occupancy for the same client points at this Arc,
@@ -51,7 +51,7 @@ impl RoomModule {
         } = parts;
         Ok(Self {
             muc_service: northstar_room_application::muc_service::MucService::new(
-                crate::db::room_effects::PostgresMucRepository::new(pool.clone()),
+                northstar_workflows::room_effects::PostgresMucRepository::new(pool.clone()),
                 config.domain.clone(),
             ),
             // The MIX wake broker validates the same schema identity that the
@@ -60,7 +60,7 @@ impl RoomModule {
             // a shared database's unrelated schema from creating local scan load.
             mix_service:
                 northstar_room_application::mix_service::MixService::new_with_outbox_database_admission(
-                    crate::db::room_effects::PostgresMixRepository::new(pool.clone()),
+                    northstar_workflows::room_effects::PostgresMixRepository::new(pool.clone()),
                     config.domain.clone(),
                     mix_message_content_identity,
                     mix_retraction_content_identity,

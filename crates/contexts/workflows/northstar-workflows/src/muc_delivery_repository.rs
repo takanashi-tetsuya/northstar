@@ -1,6 +1,5 @@
 //! PostgreSQL adapter for MUC blocklists and suspended SM delivery.
 
-use crate::db;
 use anyhow::Result;
 use northstar_room_application::muc_delivery::MucDeliveryRepository;
 use sqlx::PgPool;
@@ -8,12 +7,12 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresMucDeliveryRepository {
+pub struct PostgresMucDeliveryRepository {
     pool: PgPool,
 }
 
 impl PostgresMucDeliveryRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -40,10 +39,7 @@ impl MucDeliveryRepository for PostgresMucDeliveryRepository {
         candidate: &str,
         kind: northstar_xep_0016::PrivacyStanzaKind,
     ) -> Result<Option<bool>> {
-        northstar_workflows::privacy::privacy_denies_for_sm_session(
-            &self.pool, session_id, candidate, kind,
-        )
-        .await
+        crate::privacy::privacy_denies_for_sm_session(&self.pool, session_id, candidate, kind).await
     }
 
     async fn append_suspended_stanza(
@@ -54,7 +50,7 @@ impl MucDeliveryRepository for PostgresMucDeliveryRepository {
         max_stanzas: usize,
         max_bytes: usize,
     ) -> Result<bool> {
-        northstar_workflows::sm::append_suspended_sm_stanza(
+        crate::sm::append_suspended_sm_stanza(
             &self.pool,
             session_id,
             volatile_source_id,

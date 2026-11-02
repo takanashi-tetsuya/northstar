@@ -1,11 +1,9 @@
 //! Builds the purpose-limited MUC delivery context (`xmpp::muc_delivery`) from the composition root.
 
 use super::AppState;
-use crate::{
-    db::muc_delivery_repository::PostgresMucDeliveryRepository,
-    xmpp::muc_delivery::MucDeliveryContext,
-};
+use crate::xmpp::muc_delivery::MucDeliveryContext;
 use northstar_room_application::cluster_muc_receipt_claim::ClusterMucReceiptClaimService;
+use northstar_workflows::muc_delivery_repository::PostgresMucDeliveryRepository;
 use std::sync::Arc;
 
 impl AppState {

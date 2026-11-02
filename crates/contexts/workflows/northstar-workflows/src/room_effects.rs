@@ -1,6 +1,5 @@
-//! Room persistence's steps in contexts that have not left the root crate yet.
+//! Room persistence's steps over the message, federation, roster, pubsub and session tables.
 
-use crate::db;
 use anyhow::Result;
 use northstar_delivery_core::mix_outbox::ArchiveRequest;
 use northstar_federation_core::S2sOutboxPolicy;
@@ -12,28 +11,28 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Default)]
-pub struct RootRoomEffects;
+pub struct WorkflowRoomEffects;
 
-pub(crate) type PostgresMucRepository =
-    northstar_room_postgres::room::PostgresMucRepository<RootRoomEffects>;
+pub type PostgresMucRepository =
+    northstar_room_postgres::room::PostgresMucRepository<WorkflowRoomEffects>;
 
-pub(crate) type PostgresMixRepository =
-    northstar_room_postgres::mix_repository::PostgresMixRepository<RootRoomEffects>;
+pub type PostgresMixRepository =
+    northstar_room_postgres::mix_repository::PostgresMixRepository<WorkflowRoomEffects>;
 
 fn source_admission(
-    admission: northstar_workflows::mix_archive::SourceArchiveAdmission,
+    admission: crate::mix_archive::SourceArchiveAdmission,
 ) -> SourceArchiveAdmission {
     match admission {
-        northstar_workflows::mix_archive::SourceArchiveAdmission::Stored(id) => {
+        crate::mix_archive::SourceArchiveAdmission::Stored(id) => {
             SourceArchiveAdmission::Stored(id)
         }
-        northstar_workflows::mix_archive::SourceArchiveAdmission::Replay(id) => {
+        crate::mix_archive::SourceArchiveAdmission::Replay(id) => {
             SourceArchiveAdmission::Replay(id)
         }
     }
 }
 
-impl RoomEffects for RootRoomEffects {
+impl RoomEffects for WorkflowRoomEffects {
     async fn enqueue_federated_stanza(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
@@ -170,7 +169,7 @@ impl RoomEffects for RootRoomEffects {
         owner_id: Uuid,
         node: &str,
     ) -> Result<Option<PepNodeConfig>> {
-        Ok(db::pep_node(pool, owner_id, node)
+        Ok(northstar_pubsub_postgres::pep_node(pool, owner_id, node)
             .await?
             .map(|config| PepNodeConfig {
                 access_model: config.access_model,
@@ -191,11 +190,11 @@ impl RoomEffects for RootRoomEffects {
         item_id: Option<&str>,
         limit: i64,
     ) -> Result<Vec<(String, String)>> {
-        db::pep_items(pool, owner_id, node, item_id, limit).await
+        northstar_pubsub_postgres::pep_items(pool, owner_id, node, item_id, limit).await
     }
 
     async fn get_vcard(&self, pool: &PgPool, user_id: Uuid) -> Result<VCardRecord> {
-        let record = db::get_vcard(pool, user_id).await?;
+        let record = northstar_pubsub_postgres::get_vcard(pool, user_id).await?;
         Ok(VCardRecord {
             payload_vcard_temp: record.payload_vcard_temp,
         })
@@ -226,7 +225,7 @@ impl RoomEffects for RootRoomEffects {
         encrypted: bool,
         client_stanza_id: Option<&str>,
     ) -> Result<SourceArchiveAdmission> {
-        northstar_workflows::mix_archive::archive_mix_message_once(
+        crate::mix_archive::archive_mix_message_once(
             pool,
             personal_archive_id,
             owner_id,
@@ -245,7 +244,7 @@ impl RoomEffects for RootRoomEffects {
         pool: &PgPool,
         request: &ArchiveRequest,
     ) -> Result<SourceArchiveAdmission> {
-        northstar_workflows::mix_archive::archive_mix_message_once_observed(pool, request)
+        crate::mix_archive::archive_mix_message_once_observed(pool, request)
             .await
             .map(source_admission)
     }

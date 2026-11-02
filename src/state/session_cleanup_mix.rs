@@ -1,11 +1,11 @@
 //! MIX presence withdrawal for a fenced client resource.
 
 use super::{AppState, RuntimeFederationPolicy};
-use crate::db::room_effects::PostgresMixRepository;
 use crate::s2s::FederationRouter;
 use anyhow::Result;
 use northstar_config::ExternalRouteDomainPolicy;
 use northstar_room_application::mix_service::{MixService, NODE_PRESENCE};
+use northstar_workflows::room_effects::PostgresMixRepository;
 use northstar_xml_builder::XmlElement;
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 use std::sync::Arc;

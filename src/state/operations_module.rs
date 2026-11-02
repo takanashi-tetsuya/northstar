@@ -10,7 +10,7 @@ pub(super) struct OperationsModule {
         northstar_workflows::metrics_snapshot_repository::PostgresMetricsSnapshotRepository,
     >,
     pub(super) readiness_service: northstar_operations_application::readiness::ReadinessService<
-        db::readiness_repository::PostgresReadinessRepository,
+        northstar_workflows::readiness_repository::PostgresReadinessRepository,
     >,
     /// XEP-0050/XEP-0133 session and execution authority. Protocol handlers
     /// never receive the backing PostgreSQL pool through this capability.
@@ -199,7 +199,7 @@ impl OperationsModule {
                     ),
                 ),
             readiness_service: northstar_operations_application::readiness::ReadinessService::new(
-                db::readiness_repository::PostgresReadinessRepository::new(pool.clone()),
+                northstar_workflows::readiness_repository::PostgresReadinessRepository::new(pool.clone()),
             ),
             admin_command_service:
                 northstar_operations_application::admin_commands::AdminCommandService::new(

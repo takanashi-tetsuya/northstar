@@ -2887,6 +2887,7 @@ dependencies = [
  "northstar-abuse-policy",
  "northstar-abuse-postgres",
  "northstar-archive-application",
+ "northstar-archive-core",
  "northstar-archive-postgres",
  "northstar-auth-application",
  "northstar-auth-core",

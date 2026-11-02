@@ -828,7 +828,7 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
             tokio::join!(
                 service.admit_remote_muc_invite(&concurrent_remote),
                 northstar_room_postgres::muc::admit_federated_muc_invite(
-                    &crate::db::room_effects::RootRoomEffects,
+                    &northstar_workflows::room_effects::WorkflowRoomEffects,
                     &pool,
                     room.id,
                     &remote_target,

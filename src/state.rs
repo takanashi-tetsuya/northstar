@@ -4,7 +4,7 @@ pub(crate) type BoshReplayService = northstar_session_application::replay::Repla
     northstar_session_postgres::replay_repository::PostgresReplayRepository,
 >;
 pub(crate) type BoshMixService = northstar_room_application::mix_service::MixService<
-    crate::db::room_effects::PostgresMixRepository,
+    northstar_workflows::room_effects::PostgresMixRepository,
 >;
 
 impl axum::extract::FromRef<Arc<AppState>> for AccountAdminContext {

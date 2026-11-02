@@ -1,4 +1,3 @@
-use crate::db::room_effects::RootRoomEffects;
 use northstar_federation_core::S2sOutboxPolicy;
 use northstar_message_core::OfflineStorePolicy;
 use northstar_room_postgres::muc::{
@@ -15,6 +14,7 @@ use northstar_room_postgres::muc::{
     MucDiscussion, MucDiscussionAdmission, MucRegistrationOutcome, MucRetractionKind,
     MucRetractionMutation, MucRetractionOutcome, MucSubjectMutation, MucSubjectOutcome,
 };
+use northstar_workflows::room_effects::WorkflowRoomEffects;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::Arc;
@@ -515,7 +515,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         .await
         .unwrap();
     assert!(admit_local_muc_invite(
-        &RootRoomEffects,
+        &WorkflowRoomEffects,
         &pool,
         Uuid::new_v4(),
         room_id,
@@ -546,7 +546,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         "<message from='room@conference.local.test' to='invitee@local.test' type='normal'><stanza-id xmlns='urn:xmpp:sid:0' by='invitee@local.test' id='{offline_id}'/></message>"
     );
     let admitted_offline_id = match admit_local_muc_invite(
-        &RootRoomEffects,
+        &WorkflowRoomEffects,
         &pool,
         offline_id,
         room_id,
@@ -615,7 +615,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         "<message from='room@conference.local.test' to='invitee@local.test' type='normal'><x xmlns='http://jabber.org/protocol/muc#user'><invite from='alice@remote.test/device'/></x><stanza-id xmlns='urn:xmpp:sid:0' by='invitee@local.test' id='{repeated_invite_id}'/></message>"
     );
     let admitted_repeated_invite_id = match admit_local_muc_invite(
-        &RootRoomEffects,
+        &WorkflowRoomEffects,
         &pool,
         repeated_invite_id,
         room_id,
@@ -671,7 +671,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         .unwrap();
     assert_eq!(
         admit_local_muc_invite(
-            &RootRoomEffects,
+            &WorkflowRoomEffects,
             &pool,
             Uuid::new_v4(),
             room_id,
@@ -699,7 +699,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         .await
         .unwrap();
     let injected_outbox_error = admit_federated_muc_invite(
-        &RootRoomEffects,
+        &WorkflowRoomEffects,
         &pool,
         room_id,
         "guest@remote.test",
@@ -728,7 +728,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         .await
         .unwrap();
     assert!(admit_federated_muc_invite(
-        &RootRoomEffects,
+        &WorkflowRoomEffects,
         &pool,
         room_id,
         "guest@remote.test",
@@ -751,7 +751,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         .await
         .unwrap();
     assert!(!admit_federated_muc_invite(
-        &RootRoomEffects,
+        &WorkflowRoomEffects,
         &pool,
         room_id,
         "banned@remote.test",

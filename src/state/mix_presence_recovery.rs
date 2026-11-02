@@ -4,7 +4,6 @@ use super::{
     mix_presence_epoch_is_current, mix_presence_fallback_is_suppressed, session_entries_for_in,
     AppState, OnlineSession, RuntimeFederationPolicy,
 };
-use crate::db::room_effects::PostgresMixRepository;
 use crate::s2s::FederationRouter;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -14,6 +13,7 @@ use northstar_mix_xmpp::ports::{MixPresenceRecoveryPort, MixPresenceRoutes};
 use northstar_room_application::mix_service::{
     MixAccount, MixChannel, MixService, PamMembership, PresenceOutcome,
 };
+use northstar_workflows::room_effects::PostgresMixRepository;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;
 

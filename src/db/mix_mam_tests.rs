@@ -38,7 +38,7 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     let owner = format!("owner-{suffix}@example.test");
     let localpart = format!("mam-{}", &suffix[..16]);
     let (outcome, _) = create_mix_channel(
-        &crate::db::room_effects::RootRoomEffects,
+        &northstar_workflows::room_effects::WorkflowRoomEffects,
         &pool,
         "mix.example.test",
         Some(&localpart),
@@ -351,7 +351,7 @@ async fn authorized_mix_mam_peer_filter_uses_current_visibility_snapshot() {
     let owner = format!("owner-{suffix}@example.test");
     let localpart = format!("mam-policy-{}", &suffix[..16]);
     let (created, _) = create_mix_channel(
-        &crate::db::room_effects::RootRoomEffects,
+        &northstar_workflows::room_effects::WorkflowRoomEffects,
         &pool,
         "mix.example.test",
         Some(&localpart),
@@ -440,7 +440,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
     let guest = format!("guest-{suffix}@example.test");
     let localpart = format!("family-{}", &suffix[..16]);
     let (created, _) = create_mix_channel(
-        &crate::db::room_effects::RootRoomEffects,
+        &northstar_workflows::room_effects::WorkflowRoomEffects,
         &pool,
         "mix.example.test",
         Some(&localpart),
@@ -470,7 +470,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
         ..MixParticipantPreference::default()
     };
     let owner_join = join_mix_channel(
-        &crate::db::room_effects::RootRoomEffects,
+        &northstar_workflows::room_effects::WorkflowRoomEffects,
         &pool,
         channel_id,
         JoinMixRequest {
@@ -499,7 +499,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
         ..MixParticipantPreference::default()
     };
     let guest_join = join_mix_channel(
-        &crate::db::room_effects::RootRoomEffects,
+        &northstar_workflows::room_effects::WorkflowRoomEffects,
         &pool,
         channel_id,
         JoinMixRequest {
@@ -524,7 +524,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
         panic!("guest did not join")
     };
     let registration = register_mix_nick(
-        &crate::db::room_effects::RootRoomEffects,
+        &northstar_workflows::room_effects::WorkflowRoomEffects,
         &pool,
         "mix.example.test",
         &owner,
@@ -602,7 +602,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
     let mut allowed_guest = guest_preference;
     allowed_guest.private_messages = "allow".to_owned();
     update_mix_participant_preference(
-        &crate::db::room_effects::RootRoomEffects,
+        &northstar_workflows::room_effects::WorkflowRoomEffects,
         &pool,
         channel_id,
         &guest,
@@ -635,7 +635,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
         .unwrap()
         .is_none());
     assert!(publish_mix_avatar(
-        &crate::db::room_effects::RootRoomEffects,
+        &northstar_workflows::room_effects::WorkflowRoomEffects,
         &pool,
         channel_id,
         &owner,
@@ -648,7 +648,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
     .await
     .unwrap());
     assert!(!publish_mix_avatar(
-        &crate::db::room_effects::RootRoomEffects,
+        &northstar_workflows::room_effects::WorkflowRoomEffects,
         &pool,
         channel_id,
         &guest,
@@ -762,7 +762,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
     let mut concurrent_unsubscribe = tokio::spawn(async move {
         let _ = started_tx.send(());
         update_mix_subscriptions(
-            &crate::db::room_effects::RootRoomEffects,
+            &northstar_workflows::room_effects::WorkflowRoomEffects,
             &concurrent_pool,
             channel_id,
             &concurrent_guest,
@@ -872,7 +872,7 @@ async fn federated_mutation_result_and_outbox_share_the_authority_transaction() 
     };
 
     assert!(create_mix_channel(
-        &crate::db::room_effects::RootRoomEffects,
+        &northstar_workflows::room_effects::WorkflowRoomEffects,
         &pool,
         "mix.example.test",
         Some(&localpart),
@@ -903,7 +903,7 @@ async fn federated_mutation_result_and_outbox_share_the_authority_transaction() 
 
     context.policy.max_rows = 100_000;
     let (created, _) = create_mix_channel(
-        &crate::db::room_effects::RootRoomEffects,
+        &northstar_workflows::room_effects::WorkflowRoomEffects,
         &pool,
         "mix.example.test",
         Some(&localpart),
@@ -937,7 +937,7 @@ async fn federated_mutation_result_and_outbox_share_the_authority_transaction() 
     assert_eq!(create.attribute("channel"), Some(localpart.as_str()));
     assert!(
         create_mix_channel(
-            &crate::db::room_effects::RootRoomEffects,
+            &northstar_workflows::room_effects::WorkflowRoomEffects,
             &pool,
             "mix.example.test",
             Some(&localpart),

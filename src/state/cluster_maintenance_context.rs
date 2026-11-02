@@ -4,7 +4,6 @@ use super::AppState;
 use crate::cluster::{
     maintenance_context::ClusterMaintenanceContext, maintenance_locals::ClusterMaintenanceLocals,
 };
-use crate::db;
 use std::{sync::Mutex, time::Instant};
 
 /// PostgreSQL occupancy renewal in the single-node runtime has no Redis
@@ -48,7 +47,7 @@ impl AppState {
             direct_spool_wake: self.direct_spool_wake_consumer(replay_wake.clone()),
             replay_wake,
             session_authority: northstar_session_application::session_authority_sweep::SessionAuthoritySweepService::new(
-                db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository::new(
+                northstar_workflows::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository::new(
                     self.pool.clone(),
                 ),
             ),

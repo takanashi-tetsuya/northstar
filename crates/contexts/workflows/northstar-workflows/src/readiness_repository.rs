@@ -10,12 +10,12 @@ use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use sqlx::PgPool;
 
 #[derive(Clone)]
-pub(crate) struct PostgresReadinessRepository {
+pub struct PostgresReadinessRepository {
     pool: PgPool,
 }
 
 impl PostgresReadinessRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }

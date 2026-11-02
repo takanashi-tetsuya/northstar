@@ -7,14 +7,14 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 #[derive(Clone, Copy)]
-pub(crate) struct RootAuthenticationEffects;
+pub struct WorkflowAuthenticationEffects;
 
-pub(crate) type PostgresAuthenticationRepository =
+pub type PostgresAuthenticationRepository =
     northstar_auth_postgres::authentication::PostgresAuthenticationRepository<
-        RootAuthenticationEffects,
+        WorkflowAuthenticationEffects,
     >;
 
-impl AuthenticationEffects for RootAuthenticationEffects {
+impl AuthenticationEffects for WorkflowAuthenticationEffects {
     async fn publish_user_agent_login_epoch(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
@@ -25,7 +25,7 @@ impl AuthenticationEffects for RootAuthenticationEffects {
         expected_auth_generation: i64,
         allow_binding_claim: bool,
     ) -> Result<Option<i64>> {
-        northstar_workflows::account_lifecycle::publish_user_agent_login_epoch_in_transaction(
+        crate::account_lifecycle::publish_user_agent_login_epoch_in_transaction(
             transaction,
             operation_id,
             connection_id,

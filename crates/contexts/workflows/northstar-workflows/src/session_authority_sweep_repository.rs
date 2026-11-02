@@ -8,12 +8,12 @@ use sqlx::PgPool;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-pub(crate) struct PostgresSessionAuthoritySweepRepository {
+pub struct PostgresSessionAuthoritySweepRepository {
     pool: PgPool,
 }
 
 impl PostgresSessionAuthoritySweepRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }

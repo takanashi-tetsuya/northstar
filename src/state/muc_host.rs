@@ -1,7 +1,6 @@
 //! The node's capabilities as the MUC handlers see them.
 
 use super::*;
-use crate::db::room_effects::{PostgresMixRepository, PostgresMucRepository};
 use anyhow::Result;
 use northstar_archive_core::{
     FederatedMamAdmissionOutcome, FederatedMamMetadataCommand, FederatedMamStreamPage,
@@ -18,6 +17,7 @@ use northstar_room_core::occupancy::{
     MucPresencePublication, MucRename, MucRoleChange,
 };
 use northstar_stream::outbound::{DurableDelivery, OutboundSender};
+use northstar_workflows::room_effects::{PostgresMixRepository, PostgresMucRepository};
 use std::collections::HashMap;
 
 impl MucHost for AppState {

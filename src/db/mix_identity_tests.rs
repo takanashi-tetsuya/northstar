@@ -252,7 +252,7 @@ async fn postgres_mix_graph_is_atomic_fk_safe_resource_exact_and_idempotent() {
     canonicalize_mix_identity_storage(&pool).await.unwrap();
     let payloads = northstar_room_application::mix_service::MixPayloads;
     assert!(northstar_room_postgres::mix::set_mix_access_entry(
-        &crate::db::room_effects::RootRoomEffects,
+        &northstar_workflows::room_effects::WorkflowRoomEffects,
         &pool,
         northstar_room_postgres::mix::MixAccessEntryUpdate {
             channel_id,

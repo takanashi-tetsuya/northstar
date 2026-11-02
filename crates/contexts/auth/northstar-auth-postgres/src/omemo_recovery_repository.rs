@@ -1,16 +1,15 @@
 //! PostgreSQL adapters for account recovery and its isolated poll reader.
-use crate::db;
 use anyhow::Result;
 use northstar_auth_application::omemo_recovery::*;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresOmemoRecoveryRepository {
+pub struct PostgresOmemoRecoveryRepository {
     pool: PgPool,
 }
 impl PostgresOmemoRecoveryRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
     async fn begin_read(
@@ -21,7 +20,7 @@ impl PostgresOmemoRecoveryRepository {
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             .execute(&mut *tx)
             .await?;
-        if !northstar_auth_postgres::users::authorize_user_in_tx(
+        if !crate::users::authorize_user_in_tx(
             &mut tx,
             actor.user_id,
             actor.auth_generation,
@@ -40,7 +39,7 @@ impl OmemoRecoveryRepository for PostgresOmemoRecoveryRepository {
         &self,
         request: PrepareOmemoRecoveryRequest<'_>,
     ) -> Result<PrepareOmemoRecovery> {
-        db::prepare_omemo_recovery_transfer(&self.pool, request).await
+        crate::omemo_recovery::prepare_omemo_recovery_transfer(&self.pool, request).await
     }
     async fn seal(
         &self,
@@ -48,7 +47,7 @@ impl OmemoRecoveryRepository for PostgresOmemoRecoveryRepository {
         transfer_id: Uuid,
         digest: &[u8; 32],
     ) -> Result<SealOmemoRecovery> {
-        db::seal_omemo_recovery_transfer(
+        crate::omemo_recovery::seal_omemo_recovery_transfer(
             &self.pool,
             actor.user_id,
             actor.auth_generation,
@@ -62,14 +61,14 @@ impl OmemoRecoveryRepository for PostgresOmemoRecoveryRepository {
         &self,
         request: ConsumeOmemoRecoveryRequest<'_>,
     ) -> Result<ConsumeOmemoRecovery> {
-        db::consume_omemo_recovery_transfer(&self.pool, request).await
+        crate::omemo_recovery::consume_omemo_recovery_transfer(&self.pool, request).await
     }
     async fn revoke(
         &self,
         actor: OmemoRecoveryActor<'_>,
         transfer_id: Uuid,
     ) -> Result<RevokeOmemoRecovery> {
-        db::revoke_omemo_recovery_transfer(
+        crate::omemo_recovery::revoke_omemo_recovery_transfer(
             &self.pool,
             actor.user_id,
             actor.auth_generation,
@@ -87,7 +86,9 @@ impl OmemoRecoveryRepository for PostgresOmemoRecoveryRepository {
         let Some(mut tx) = self.begin_read(actor).await? else {
             return Ok(OmemoRecoveryRead::Unauthorized);
         };
-        let value = db::omemo_recovery_transfer_in_tx(&mut tx, user_id, transfer_id).await?;
+        let value =
+            crate::omemo_recovery::omemo_recovery_transfer_in_tx(&mut tx, user_id, transfer_id)
+                .await?;
         tx.commit().await?;
         Ok(OmemoRecoveryRead::Authorized(value))
     }
@@ -99,18 +100,18 @@ impl OmemoRecoveryRepository for PostgresOmemoRecoveryRepository {
         let Some(mut tx) = self.begin_read(actor).await? else {
             return Ok(OmemoRecoveryRead::Unauthorized);
         };
-        let value = db::omemo_recovery_authority_in_tx(&mut tx, user_id).await?;
+        let value = crate::omemo_recovery::omemo_recovery_authority_in_tx(&mut tx, user_id).await?;
         tx.commit().await?;
         Ok(OmemoRecoveryRead::Authorized(value))
     }
 }
 
 #[derive(Clone)]
-pub(crate) struct PostgresOmemoRecoveryPollRepository {
+pub struct PostgresOmemoRecoveryPollRepository {
     pool: PgPool,
 }
 impl PostgresOmemoRecoveryPollRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -121,7 +122,13 @@ impl OmemoRecoveryPollRepository for PostgresOmemoRecoveryPollRepository {
         transfer_id: Uuid,
         poll_secret: &[u8; 32],
     ) -> Result<Option<OmemoRecoveryPollStatus>> {
-        db::poll_omemo_recovery_transfer(&self.pool, domain, transfer_id, poll_secret).await
+        crate::omemo_recovery::poll_omemo_recovery_transfer(
+            &self.pool,
+            domain,
+            transfer_id,
+            poll_secret,
+        )
+        .await
     }
 }
 
@@ -134,7 +141,7 @@ mod tests {
     async fn recovery_reads_recheck_owner_generation_and_exact_bearer() {
         let url = std::env::var("TEST_DATABASE_URL").expect("isolated PostgreSQL URL");
         let pool = PgPool::connect(&url).await.unwrap();
-        db::migrate(&pool).await.unwrap();
+        northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
         let owner = Uuid::new_v4();
         let other = Uuid::new_v4();
         for id in [owner, other] {
@@ -145,13 +152,13 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let token = northstar_auth_postgres::users::create_api_session(&pool, owner, 1)
+        let token = crate::users::create_api_session(&pool, owner, 1)
             .await
             .unwrap();
-        let other_token = northstar_auth_postgres::users::create_api_session(&pool, other, 1)
+        let other_token = crate::users::create_api_session(&pool, other, 1)
             .await
             .unwrap();
-        let principal = northstar_auth_postgres::users::user_for_token(&pool, &token)
+        let principal = crate::users::user_for_token(&pool, &token)
             .await
             .unwrap()
             .unwrap();

@@ -97,7 +97,7 @@ env \
   MIGRATOR_DATABASE_URL="$database_url" \
   "$binary" migrate
 
-TEST_DATABASE_URL="$database_url" cargo test --bin rust-xmpp-server "${cargo_args[@]}" \
+TEST_DATABASE_URL="$database_url" cargo test -p northstar-auth-postgres "${cargo_args[@]}" \
   omemo_recovery -- --ignored --test-threads=1 | tee "$runtime_dir/recovery-db-tests.log"
 if ! grep -q '^test result: ok\. 2 passed;' "$runtime_dir/recovery-db-tests.log"; then
   echo "expected both OMEMO recovery database tests to run" >&2

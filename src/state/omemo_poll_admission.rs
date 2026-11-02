@@ -6,7 +6,7 @@ impl AppState {
     pub(crate) fn omemo_recovery_service(
         &self,
     ) -> &northstar_auth_application::omemo_recovery::OmemoRecoveryService<
-        db::omemo_recovery_repository::PostgresOmemoRecoveryRepository,
+        northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryRepository,
     > {
         &self.omemo_recovery_service
     }

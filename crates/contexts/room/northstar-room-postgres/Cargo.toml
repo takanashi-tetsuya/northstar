@@ -26,6 +26,7 @@ northstar-roster-core = { path = "../../roster/northstar-roster-core" }
 northstar-session-core = { path = "../../session/northstar-session-core" }
 northstar-telemetry = { path = "../../../platform/northstar-telemetry" }
 northstar-xep-0313 = { path = "../../../kernel/northstar-xep-0313" }
+northstar-xmpp-avatar = { path = "../../../kernel/northstar-xmpp-avatar" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 rand = "0.8"
 roxmltree = "0.20"

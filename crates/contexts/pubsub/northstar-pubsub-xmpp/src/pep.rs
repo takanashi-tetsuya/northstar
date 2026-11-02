@@ -27,6 +27,9 @@ use northstar_xml_builder::stanza::{
     child_text, iq_error, iq_error_from, iq_result, iq_result_from,
 };
 use northstar_xml_builder::XmlElement;
+#[cfg(test)]
+use northstar_xmpp_avatar::valid_png_image;
+use northstar_xmpp_avatar::{AVATAR_DATA, AVATAR_METADATA};
 use roxmltree::Node;
 #[cfg(test)]
 use sha1::{Digest, Sha1};
@@ -55,9 +58,6 @@ pub use self::notifications::{
     profile_audience_messages,
 };
 pub use self::publishing::{bookmarks2_items_event, pep_publish};
-#[cfg(test)]
-use crate::payload::valid_png_image;
-pub use crate::payload::{valid_avatar_data, valid_avatar_metadata};
 
 /// What the server provides to PEP event fan-out: its local domain and the routing hints of its
 /// sessions.
@@ -131,8 +131,6 @@ const NS_XDATA: &str = "jabber:x:data";
 const OMEMO_DEVICES: &str = "urn:xmpp:omemo:2:devices";
 const OMEMO_BUNDLES: &str = "urn:xmpp:omemo:2:bundles";
 const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
-const AVATAR_DATA: &str = "urn:xmpp:avatar:data";
-const AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
 const VCARD4: &str = "urn:xmpp:vcard4";
 const CONTACTS: &str = "urn:xmpp:contacts";
 

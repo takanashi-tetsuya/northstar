@@ -240,8 +240,6 @@ pub trait MixHost: Send + Sync + 'static {
         change: &RosterChange,
         participant_id: Option<&str>,
     ) -> impl Future<Output = Result<()>> + Send;
-    fn valid_avatar_data(&self, item_id: &str, payload: Node<'_, '_>) -> bool;
-    fn valid_avatar_metadata(&self, item_id: &str, payload: Node<'_, '_>) -> bool;
 }
 
 /// The authenticated account of a client session.

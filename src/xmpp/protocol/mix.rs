@@ -208,14 +208,6 @@ impl MixHost for AppState {
     ) -> Result<()> {
         super::roster::deliver_roster_change(self, owner_id, owner, change, participant_id).await
     }
-
-    fn valid_avatar_data(&self, item_id: &str, payload: Node<'_, '_>) -> bool {
-        super::pep::valid_avatar_data(item_id, payload)
-    }
-
-    fn valid_avatar_metadata(&self, item_id: &str, payload: Node<'_, '_>) -> bool {
-        super::pep::valid_avatar_metadata(item_id, payload)
-    }
 }
 
 impl MixSession for ProtocolSession {

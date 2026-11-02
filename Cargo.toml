@@ -18,6 +18,7 @@ members = [
     "crates/contexts/operations/northstar-operations-postgres",
     "crates/contexts/workflows/northstar-workflows",
     "crates/kernel/northstar-xmpp-types",
+    "crates/kernel/northstar-xmpp-avatar",
     "crates/kernel/northstar-xml-framing",
     "crates/kernel/northstar-xml-builder",
     "crates/kernel/northstar-xep-0059",
@@ -178,6 +179,7 @@ northstar-operations-core = { path = "crates/contexts/operations/northstar-opera
 northstar-operations-postgres = { path = "crates/contexts/operations/northstar-operations-postgres" }
 northstar-workflows = { path = "crates/contexts/workflows/northstar-workflows" }
 northstar-xmpp-types = { path = "crates/kernel/northstar-xmpp-types" }
+northstar-xmpp-avatar = { path = "crates/kernel/northstar-xmpp-avatar" }
 northstar-xml-framing = { path = "crates/kernel/northstar-xml-framing" }
 northstar-xml-builder = { path = "crates/kernel/northstar-xml-builder" }
 northstar-xep-0059 = { path = "crates/kernel/northstar-xep-0059" }

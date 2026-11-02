@@ -251,6 +251,7 @@
     "northstar-xep-core",
     "northstar-xml-builder",
     "northstar-xml-framing",
+    "northstar-xmpp-avatar",
     "northstar-xmpp-types",
     "nu-ansi-term",
     "num-bigint",
@@ -3357,6 +3358,10 @@
     ],
     [
       "northstar-mix-xmpp",
+      "northstar-xmpp-avatar"
+    ],
+    [
+      "northstar-mix-xmpp",
       "northstar-xmpp-types"
     ],
     [
@@ -3789,15 +3794,15 @@
     ],
     [
       "northstar-pubsub-application",
+      "northstar-xmpp-avatar"
+    ],
+    [
+      "northstar-pubsub-application",
       "northstar-xmpp-types"
     ],
     [
       "northstar-pubsub-application",
       "roxmltree"
-    ],
-    [
-      "northstar-pubsub-application",
-      "sha1"
     ],
     [
       "northstar-pubsub-application",
@@ -3921,6 +3926,10 @@
     ],
     [
       "northstar-pubsub-xmpp",
+      "northstar-xmpp-avatar"
+    ],
+    [
+      "northstar-pubsub-xmpp",
       "northstar-xmpp-types"
     ],
     [
@@ -3994,6 +4003,10 @@
     [
       "northstar-room-application",
       "northstar-xml-builder"
+    ],
+    [
+      "northstar-room-application",
+      "northstar-xmpp-avatar"
     ],
     [
       "northstar-room-application",
@@ -4142,6 +4155,10 @@
     [
       "northstar-room-postgres",
       "northstar-xep-0313"
+    ],
+    [
+      "northstar-room-postgres",
+      "northstar-xmpp-avatar"
     ],
     [
       "northstar-room-postgres",
@@ -5422,6 +5439,18 @@
     [
       "northstar-xml-framing",
       "thiserror"
+    ],
+    [
+      "northstar-xmpp-avatar",
+      "base64"
+    ],
+    [
+      "northstar-xmpp-avatar",
+      "roxmltree"
+    ],
+    [
+      "northstar-xmpp-avatar",
+      "sha1"
     ],
     [
       "northstar-xmpp-types",
@@ -6722,6 +6751,10 @@
     [
       "rust-xmpp-server",
       "northstar-xml-framing"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-xmpp-avatar"
     ],
     [
       "rust-xmpp-server",

@@ -27,6 +27,7 @@ northstar-xep-0313 = { path = "../../../kernel/northstar-xep-0313" }
 northstar-xep-0359 = { path = "../../../kernel/northstar-xep-0359" }
 northstar-xep-core = { path = "../../../kernel/northstar-xep-core" }
 northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
+northstar-xmpp-avatar = { path = "../../../kernel/northstar-xmpp-avatar" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 roxmltree = "0.20"
 sha2 = "0.10"

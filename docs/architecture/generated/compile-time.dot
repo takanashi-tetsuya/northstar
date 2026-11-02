@@ -249,6 +249,7 @@ digraph compile_time {
   "northstar-xep-core";
   "northstar-xml-builder";
   "northstar-xml-framing";
+  "northstar-xmpp-avatar";
   "northstar-xmpp-types";
   "nu-ansi-term";
   "num-bigint";
@@ -1185,6 +1186,7 @@ digraph compile_time {
   "northstar-mix-xmpp" -> "northstar-xep-0359";
   "northstar-mix-xmpp" -> "northstar-xep-core";
   "northstar-mix-xmpp" -> "northstar-xml-builder";
+  "northstar-mix-xmpp" -> "northstar-xmpp-avatar";
   "northstar-mix-xmpp" -> "northstar-xmpp-types";
   "northstar-mix-xmpp" -> "roxmltree";
   "northstar-mix-xmpp" -> "sha2";
@@ -1293,9 +1295,9 @@ digraph compile_time {
   "northstar-pubsub-application" -> "northstar-telemetry";
   "northstar-pubsub-application" -> "northstar-xep-0060";
   "northstar-pubsub-application" -> "northstar-xml-builder";
+  "northstar-pubsub-application" -> "northstar-xmpp-avatar";
   "northstar-pubsub-application" -> "northstar-xmpp-types";
   "northstar-pubsub-application" -> "roxmltree";
-  "northstar-pubsub-application" -> "sha1";
   "northstar-pubsub-application" -> "tokio";
   "northstar-pubsub-application" -> "uuid";
   "northstar-pubsub-core" -> "anyhow";
@@ -1326,6 +1328,7 @@ digraph compile_time {
   "northstar-pubsub-xmpp" -> "northstar-pubsub-core";
   "northstar-pubsub-xmpp" -> "northstar-xep-0060";
   "northstar-pubsub-xmpp" -> "northstar-xml-builder";
+  "northstar-pubsub-xmpp" -> "northstar-xmpp-avatar";
   "northstar-pubsub-xmpp" -> "northstar-xmpp-types";
   "northstar-pubsub-xmpp" -> "roxmltree";
   "northstar-pubsub-xmpp" -> "sha1";
@@ -1345,6 +1348,7 @@ digraph compile_time {
   "northstar-room-application" -> "northstar-xep-0016";
   "northstar-room-application" -> "northstar-xep-0359";
   "northstar-room-application" -> "northstar-xml-builder";
+  "northstar-room-application" -> "northstar-xmpp-avatar";
   "northstar-room-application" -> "northstar-xmpp-types";
   "northstar-room-application" -> "rand";
   "northstar-room-application" -> "roxmltree";
@@ -1382,6 +1386,7 @@ digraph compile_time {
   "northstar-room-postgres" -> "northstar-session-core";
   "northstar-room-postgres" -> "northstar-telemetry";
   "northstar-room-postgres" -> "northstar-xep-0313";
+  "northstar-room-postgres" -> "northstar-xmpp-avatar";
   "northstar-room-postgres" -> "northstar-xmpp-types";
   "northstar-room-postgres" -> "rand";
   "northstar-room-postgres" -> "roxmltree";
@@ -1702,6 +1707,9 @@ digraph compile_time {
   "northstar-xml-builder" -> "uuid";
   "northstar-xml-framing" -> "anyhow";
   "northstar-xml-framing" -> "thiserror";
+  "northstar-xmpp-avatar" -> "base64";
+  "northstar-xmpp-avatar" -> "roxmltree";
+  "northstar-xmpp-avatar" -> "sha1";
   "northstar-xmpp-types" -> "anyhow";
   "northstar-xmpp-types" -> "idna";
   "northstar-xmpp-types" -> "precis-profiles";
@@ -2027,6 +2035,7 @@ digraph compile_time {
   "rust-xmpp-server" -> "northstar-xep-core";
   "rust-xmpp-server" -> "northstar-xml-builder";
   "rust-xmpp-server" -> "northstar-xml-framing";
+  "rust-xmpp-server" -> "northstar-xmpp-avatar";
   "rust-xmpp-server" -> "northstar-xmpp-types";
   "rust-xmpp-server" -> "openssl";
   "rust-xmpp-server" -> "pbkdf2";

@@ -7,7 +7,6 @@ use northstar_pubsub_application::PubSubService;
 use northstar_pubsub_core::{PepQuotas, PubSubAccount};
 use roxmltree::Node;
 
-pub(crate) use northstar_pubsub_xmpp::payload::{valid_avatar_data, valid_avatar_metadata};
 #[cfg(test)]
 pub(crate) use northstar_pubsub_xmpp::pep::bookmarks2_items_event;
 pub(crate) use northstar_pubsub_xmpp::pep::{

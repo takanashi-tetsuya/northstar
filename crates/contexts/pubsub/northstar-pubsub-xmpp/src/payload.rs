@@ -1,19 +1,17 @@
 //! Validate PEP payloads and their profile, avatar, bookmark, and OMEMO representations.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use northstar_pubsub_application::profile::detected_media_type as detected_avatar_media_type;
-pub use northstar_pubsub_application::profile::valid_png_image;
+use northstar_xmpp_avatar::{
+    valid_avatar_data, valid_avatar_metadata, AVATAR_DATA, AVATAR_METADATA,
+};
 use northstar_xmpp_types::text::contains_unsafe_bidi_controls;
 use roxmltree::Node;
-use sha1::{Digest, Sha1};
 use std::collections::HashSet;
 
 const NS_OMEMO2: &str = "urn:xmpp:omemo:2";
 const OMEMO_DEVICES: &str = "urn:xmpp:omemo:2:devices";
 const OMEMO_BUNDLES: &str = "urn:xmpp:omemo:2:bundles";
 const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
-const AVATAR_DATA: &str = "urn:xmpp:avatar:data";
-const AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
 const VCARD4: &str = "urn:xmpp:vcard4";
 const CONTACTS: &str = "urn:xmpp:contacts";
 
@@ -165,216 +163,6 @@ fn valid_vcard4(payload: Node<'_, '_>) -> bool {
                         && text.tag_name().name() == "text"
             )
         })
-}
-
-/// Whether `payload` is XEP-0084 avatar data: base64 of a supported image of at most 256 KiB, a PNG
-/// being well formed, whose SHA-1 is `item_id`.
-pub fn valid_avatar_data(item_id: &str, payload: Node<'_, '_>) -> bool {
-    decode_avatar_data(payload)
-        .is_some_and(|bytes| valid_png_image(&bytes) && sha1_matches(item_id, &bytes))
-}
-
-fn decode_avatar_data(payload: Node<'_, '_>) -> Option<Vec<u8>> {
-    if payload.tag_name().name() != "data"
-        || payload.tag_name().namespace() != Some(AVATAR_DATA)
-        || payload.attributes().len() != 0
-        || payload.children().any(|child| child.is_element())
-    {
-        return None;
-    }
-    let encoded = payload
-        .children()
-        .filter_map(|child| child.text())
-        .collect::<String>()
-        .replace(|character: char| character.is_whitespace(), "");
-    let bytes = BASE64.decode(encoded).ok()?;
-    (!bytes.is_empty() && bytes.len() <= 256 * 1024 && detected_avatar_media_type(&bytes).is_some())
-        .then_some(bytes)
-}
-
-/// Whether `payload` is valid XEP-0084 avatar metadata for the item `item_id`.
-pub fn valid_avatar_metadata(item_id: &str, payload: Node<'_, '_>) -> bool {
-    if payload.tag_name().name() != "metadata"
-        || payload.tag_name().namespace() != Some(AVATAR_METADATA)
-        || payload.attributes().len() != 0
-        || payload.children().any(|child| {
-            child.is_text() && child.text().is_some_and(|text| !text.trim().is_empty())
-        })
-    {
-        return false;
-    }
-    let children = payload
-        .children()
-        .filter(|child| child.is_element())
-        .collect::<Vec<_>>();
-    if children.is_empty() {
-        return true;
-    }
-
-    let mut saw_pointer = false;
-    let mut png_matches_item = false;
-    let mut has_png_representation = false;
-    let mut info_count = 0usize;
-    for child in children {
-        if child.tag_name().namespace() != Some(AVATAR_METADATA) {
-            return false;
-        }
-        match child.tag_name().name() {
-            "info" if !saw_pointer => {
-                info_count += 1;
-                if child.children().any(|nested| nested.is_element())
-                    || child.text().is_some_and(|text| !text.trim().is_empty())
-                    || child.attributes().any(|attribute| {
-                        !matches!(
-                            attribute.name(),
-                            "bytes" | "height" | "id" | "type" | "url" | "width"
-                        )
-                    })
-                {
-                    return false;
-                }
-                let Some(bytes) = child
-                    .attribute("bytes")
-                    .and_then(|value| value.parse::<usize>().ok())
-                else {
-                    return false;
-                };
-                let Some(hash) = child.attribute("id").filter(|hash| valid_sha1(hash)) else {
-                    return false;
-                };
-                let Some(media_type) = child.attribute("type") else {
-                    return false;
-                };
-                let has_url = child.attribute("url").is_some();
-                if !valid_avatar_media_type(media_type, has_url) {
-                    return false;
-                }
-                if bytes > 256 * 1024
-                    || child
-                        .attribute("height")
-                        .is_some_and(|value| value.parse::<u16>().is_err())
-                    || child
-                        .attribute("width")
-                        .is_some_and(|value| value.parse::<u16>().is_err())
-                    || child
-                        .attribute("url")
-                        .is_some_and(|url| !valid_http_url(url))
-                {
-                    return false;
-                }
-                if media_type.eq_ignore_ascii_case("image/png") {
-                    has_png_representation = true;
-                    if hash.eq_ignore_ascii_case(item_id) {
-                        png_matches_item = true;
-                    }
-                }
-            }
-            "pointer" if info_count > 0 => {
-                saw_pointer = true;
-                if child.attributes().any(|attribute| {
-                    !matches!(
-                        attribute.name(),
-                        "bytes" | "height" | "id" | "type" | "width"
-                    )
-                }) || child
-                    .attribute("bytes")
-                    .is_some_and(|value| value.parse::<usize>().is_err())
-                    || child
-                        .attribute("height")
-                        .is_some_and(|value| value.parse::<u32>().is_err())
-                    || child
-                        .attribute("width")
-                        .is_some_and(|value| value.parse::<u32>().is_err())
-                    || child
-                        .attribute("id")
-                        .is_some_and(|value| !valid_sha1(value))
-                    || child
-                        .attribute("type")
-                        .is_some_and(|value| !valid_avatar_media_type(value, true))
-                    || child.children().any(|nested| {
-                        nested.is_text()
-                            && nested.text().is_some_and(|text| !text.trim().is_empty())
-                    })
-                {
-                    return false;
-                }
-                let nested = child
-                    .children()
-                    .filter(|nested| nested.is_element())
-                    .collect::<Vec<_>>();
-                if nested.len() != 1
-                    || nested[0].tag_name().namespace().is_none_or(str::is_empty)
-                    || nested[0].tag_name().namespace() == Some(AVATAR_METADATA)
-                {
-                    return false;
-                }
-            }
-            _ => return false,
-        }
-    }
-    // XEP-0084 binds the metadata ItemID to the mandatory PNG
-    // representation. The PNG itself may be hosted at an HTTP URL; that is a
-    // valid XEP-0084 publication even though it cannot be projected into
-    // vCard-temp without the service becoming an HTTP fetcher.
-    info_count > 0 && has_png_representation && png_matches_item
-}
-
-fn valid_sha1(value: &str) -> bool {
-    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn valid_avatar_media_type(value: &str, allow_video: bool) -> bool {
-    let Some((top_level, subtype)) = value.split_once('/') else {
-        return false;
-    };
-    value.len() <= 127
-        && (top_level.eq_ignore_ascii_case("image")
-            || allow_video && top_level.eq_ignore_ascii_case("video"))
-        && !subtype.is_empty()
-        && !subtype.contains('/')
-        && subtype.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric()
-                || matches!(
-                    byte,
-                    b'!' | b'#' | b'$' | b'&' | b'^' | b'_' | b'.' | b'+' | b'-'
-                )
-        })
-}
-
-fn valid_http_url(value: &str) -> bool {
-    if value
-        .chars()
-        .any(|character| character.is_control() || character.is_whitespace())
-    {
-        return false;
-    }
-    let Some((scheme, remainder)) = value.split_once("://") else {
-        return false;
-    };
-    if !(scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")) {
-        return false;
-    }
-    !remainder
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .is_empty()
-}
-
-/// Validate the PNG container before accepting it as an XEP-0084 image.
-///
-/// A magic-byte check is not sufficient: it permits arbitrary content to be
-/// published under the mandatory `image/png` representation. This parser is
-/// bounded by the avatar payload quota and verifies chunk bounds and CRCs, the
-/// required chunk state machine, IHDR fields, critical-chunk names, and the
-/// absence of trailing data. Image decompression remains the client's task.
-fn sha1_matches(expected: &str, bytes: &[u8]) -> bool {
-    let digest = Sha1::digest(bytes);
-    let actual = digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    actual.eq_ignore_ascii_case(expected)
 }
 
 fn valid_bookmark(item_id: &str, conference: Node<'_, '_>) -> bool {

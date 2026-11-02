@@ -1421,7 +1421,7 @@ async fn postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe() {
             .unwrap();
     assert_eq!(stored_admission_key_id, restarted.actor_key_id());
 
-    let offline_policy = northstar_message_postgres::offline::OfflineStorePolicy {
+    let offline_policy = northstar_message_core::OfflineStorePolicy {
         max_messages: 100,
         max_bytes: 1_048_576,
         ttl_days: 30,
@@ -1439,7 +1439,7 @@ async fn postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe() {
         )
         .await
         .unwrap(),
-        northstar_message_postgres::offline::OfflineStoreOutcome::Stored
+        northstar_message_core::OfflineStoreOutcome::Stored
     );
     let stored_offline_key_id: String = sqlx::query_scalar(
         "SELECT payload_key_id FROM offline_message_admissions WHERE identity_digest=$1",
@@ -1480,7 +1480,7 @@ async fn postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe() {
         )
         .await
         .unwrap(),
-        northstar_message_postgres::offline::OfflineStoreOutcome::Replay
+        northstar_message_core::OfflineStoreOutcome::Replay
     );
     accept_message_admission(&pool, &rotation_lease.acceptance())
         .await

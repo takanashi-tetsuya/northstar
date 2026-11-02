@@ -5,6 +5,7 @@ use northstar_archive_application::{
     FederatedMamMetadataCommand, MamMetadataCommand, MamMetadataResult, MamQueryCommand,
     MamQueryRepository, MamQueryResult, MamQueryScope,
 };
+use northstar_message_core::{OfflineStoreOutcome, OfflineStorePolicy};
 use std::sync::Arc;
 use tokio::sync::Barrier;
 

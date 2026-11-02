@@ -6,29 +6,12 @@ use crate::direct_spool_wake::record_direct_spool_wake_in_transaction;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_message_core::DirectSpoolEligibility;
+// Still named through this module by `src/s2s/inbound_tests.rs` (S28 federation path).
+pub use northstar_message_core::{OfflineStoreOutcome, OfflineStorePolicy};
 use northstar_postgres::cluster_lock::lock_direct_spool_instance_claims_in_transaction;
 use sqlx::{PgPool, Row};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OfflineStoreOutcome {
-    Stored,
-    Replay,
-    QuotaExceeded,
-    RecipientUnavailable,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct OfflineStorePolicy {
-    pub max_messages: i64,
-    pub max_bytes: i64,
-    pub ttl_days: i64,
-    /// True only when the exact stanza is already recoverable from personal
-    /// MAM. Bind 2 may discard this duplicate but must retain temporary-only
-    /// XEP-0334 no-permanent-store rows.
-    pub mam_backed: bool,
-}
 
 pub const OFFLINE_DEDUPE_CAPACITY_SHARDS: u8 = 64;
 pub const MAX_OFFLINE_DEDUPE_PER_SHARD: i32 = 32_768;

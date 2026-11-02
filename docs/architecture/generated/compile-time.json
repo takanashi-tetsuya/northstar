@@ -4070,6 +4070,10 @@
     ],
     [
       "northstar-room-core",
+      "northstar-message-core"
+    ],
+    [
+      "northstar-room-core",
       "northstar-xep-0045"
     ],
     [

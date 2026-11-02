@@ -104,37 +104,16 @@ impl RoomEffects for RootRoomEffects {
         encrypted: bool,
         policy: OfflineStorePolicy,
     ) -> Result<OfflineStoreOutcome> {
-        Ok(
-            match northstar_message_postgres::offline::store_offline_for_recipient(
-                pool,
-                recipient_id,
-                recipient_bare_jid,
-                sender_jid,
-                stanza,
-                encrypted,
-                northstar_message_postgres::offline::OfflineStorePolicy {
-                    max_messages: policy.max_messages,
-                    max_bytes: policy.max_bytes,
-                    ttl_days: policy.ttl_days,
-                    mam_backed: policy.mam_backed,
-                },
-            )
-            .await?
-            {
-                northstar_message_postgres::offline::OfflineStoreOutcome::Stored => {
-                    OfflineStoreOutcome::Stored
-                }
-                northstar_message_postgres::offline::OfflineStoreOutcome::Replay => {
-                    OfflineStoreOutcome::Replay
-                }
-                northstar_message_postgres::offline::OfflineStoreOutcome::QuotaExceeded => {
-                    OfflineStoreOutcome::QuotaExceeded
-                }
-                northstar_message_postgres::offline::OfflineStoreOutcome::RecipientUnavailable => {
-                    OfflineStoreOutcome::RecipientUnavailable
-                }
-            },
+        northstar_message_postgres::offline::store_offline_for_recipient(
+            pool,
+            recipient_id,
+            recipient_bare_jid,
+            sender_jid,
+            stanza,
+            encrypted,
+            policy,
         )
+        .await
     }
 
     async fn enqueue_federated_stanza_with_id(

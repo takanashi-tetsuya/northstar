@@ -593,7 +593,7 @@ impl RetractionRepository for PostgresRetractionRepository {
                     stanza: projection.stanza,
                     target_full_jid: delivery.target_full_jid.as_deref(),
                     encrypted: projection.encrypted,
-                    policy: northstar_message_postgres::offline::OfflineStorePolicy {
+                    policy: northstar_message_core::OfflineStorePolicy {
                         max_messages: projection.max_messages,
                         max_bytes: projection.max_bytes,
                         ttl_days: projection.ttl_days,

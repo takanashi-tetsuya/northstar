@@ -1,6 +1,6 @@
 use crate::db::room_effects::RootRoomEffects;
 use northstar_federation_core::S2sOutboxPolicy;
-use northstar_room_core::OfflineStorePolicy;
+use northstar_message_core::OfflineStorePolicy;
 use northstar_room_postgres::muc::{
     admit_federated_muc_invite, admit_local_muc_invite, admit_muc_discussion,
     authorized_muc_admin_affiliation_list, authorized_muc_admin_role_list, cancel_locked_muc_room,

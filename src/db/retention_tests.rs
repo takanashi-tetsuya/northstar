@@ -699,7 +699,7 @@ async fn offline_retention_and_admin_clear_respect_sm_and_bosh_owners() {
             "sender@example.test",
             "<message id='new-capacity-probe'/>",
             false,
-            northstar_message_postgres::offline::OfflineStorePolicy {
+            northstar_message_core::OfflineStorePolicy {
                 max_messages: 100,
                 max_bytes: 1_000_000,
                 ttl_days: 30,
@@ -708,7 +708,7 @@ async fn offline_retention_and_admin_clear_respect_sm_and_bosh_owners() {
         )
         .await
         .unwrap(),
-        northstar_message_postgres::offline::OfflineStoreOutcome::Stored
+        northstar_message_core::OfflineStoreOutcome::Stored
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(

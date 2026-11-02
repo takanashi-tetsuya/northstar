@@ -1,9 +1,9 @@
 //! Personal admission records, the transient C2S delivery row and its live reservation.
 
 use crate::direct_spool_wake::record_direct_spool_wake_in_transaction;
-use crate::offline::OfflineStorePolicy;
 use anyhow::Result;
 use northstar_abuse_policy::ContentIdentityAuthenticators;
+use northstar_message_core::OfflineStorePolicy;
 use northstar_postgres::cluster_lock::lock_direct_spool_instance_claims_in_transaction;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use subtle::ConstantTimeEq;

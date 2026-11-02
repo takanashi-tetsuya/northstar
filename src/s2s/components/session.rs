@@ -1,11 +1,14 @@
 //! Drive authenticated component sessions, durable outbox delivery, hostname binding, routing and cleanup.
 
+use northstar_s2s::host::ComponentHost;
+use northstar_xml_builder::XmlElement;
+
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn drive_component<S>(
+pub(super) async fn drive_component<S, H>(
     mut io: S,
-    state: Arc<AppState>,
+    state: Arc<H>,
     credential: ComponentCredential,
     connection_id: Uuid,
     protocol: ComponentProtocol,
@@ -17,6 +20,7 @@ pub(super) async fn drive_component<S>(
 ) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
+    H: ComponentHost,
 {
     let mut durable_poll = tokio::time::interval(Duration::from_millis(250));
     durable_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -111,13 +115,17 @@ where
     }
 }
 
-pub(super) async fn deliver_component_outbox<S: AsyncWrite + Unpin + Send>(
+pub(super) async fn deliver_component_outbox<S, H>(
     io: &mut S,
-    state: Arc<AppState>,
+    state: Arc<H>,
     protocol: ComponentProtocol,
     bound_domains: HashSet<String>,
     cancel: tokio_util::sync::CancellationToken,
-) -> Result<()> {
+) -> Result<()>
+where
+    S: AsyncWrite + Unpin + Send,
+    H: ComponentHost,
+{
     if bound_domains.is_empty() {
         return Ok(());
     }
@@ -199,14 +207,18 @@ pub(super) fn component_lease_renewal_period(lease_seconds: u64) -> Duration {
     Duration::from_secs((lease_seconds / 3).max(1))
 }
 
-pub(super) async fn write_component_outbox_with_lease<S: AsyncWrite + Unpin + Send>(
+pub(super) async fn write_component_outbox_with_lease<S, H>(
     io: &mut S,
-    state: Arc<AppState>,
+    state: Arc<H>,
     outbox_id: Uuid,
     lock_token: Uuid,
     serialized: String,
     cancel: tokio_util::sync::CancellationToken,
-) -> std::result::Result<(), ComponentOutboxWriteError> {
+) -> std::result::Result<(), ComponentOutboxWriteError>
+where
+    S: AsyncWrite + Unpin + Send,
+    H: ComponentHost,
+{
     let renewal_period =
         component_lease_renewal_period(state.s2s_outbox_dispatch_service().lease_seconds());
     let renewal_timeout = renewal_period.min(Duration::from_secs(5));
@@ -311,8 +323,8 @@ where
     }
 }
 
-pub(super) async fn handle_hostname_binding(
-    state: Arc<AppState>,
+pub(super) async fn handle_hostname_binding<H: ComponentHost>(
+    state: Arc<H>,
     credential: ComponentCredential,
     connection_id: Uuid,
     session_sender: mpsc::Sender<()>,
@@ -389,15 +401,15 @@ pub(super) async fn handle_hostname_binding(
         }
         bound_domains.insert(hostname.clone());
         return Ok(Some(
-            crate::xmpp::xml_builder::XmlElement::new("iq")
+            northstar_xml_builder::XmlElement::new("iq")
                 .attr("xmlns", "jabber:client")
                 .attr("type", "result")
                 .attr("id", &id)
                 .child(
-                    crate::xmpp::xml_builder::XmlElement::new("bind")
+                    northstar_xml_builder::XmlElement::new("bind")
                         .attr("xmlns", COMPONENT_BIND_NS)
                         .child(
-                            crate::xmpp::xml_builder::XmlElement::new("hostname")
+                            northstar_xml_builder::XmlElement::new("hostname")
                                 .text(hostname.clone()),
                         ),
                 )
@@ -414,12 +426,9 @@ pub(super) async fn handle_hostname_binding(
     // Everything derived from the stanza parser is now owned (`id` and
     // `hostname`); release the document before the asynchronous MUC cleanup.
     drop(document);
-    if let Err(error) = northstar_muc_xmpp::federated_muc::federated_muc_connection_closed(
-        state.as_ref(),
-        &hostname,
-        connection_id,
-    )
-    .await
+    if let Err(error) = state
+        .federated_muc_connection_closed(&hostname, connection_id)
+        .await
     {
         tracing::warn!(
             component_domain = %hostname,
@@ -434,7 +443,7 @@ pub(super) async fn handle_hostname_binding(
         .remove_domain_if_owner(&hostname, connection_id);
     bound_domains.remove(&hostname);
     Ok(Some(
-        crate::xmpp::xml_builder::XmlElement::new("iq")
+        northstar_xml_builder::XmlElement::new("iq")
             .attr("xmlns", "jabber:client")
             .attr("type", "result")
             .attr("id", &id)
@@ -442,8 +451,8 @@ pub(super) async fn handle_hostname_binding(
     ))
 }
 
-pub(super) async fn route_component_stanza(
-    state: Arc<AppState>,
+pub(super) async fn route_component_stanza<H: ComponentHost>(
+    state: Arc<H>,
     connection_id: Uuid,
     relay_grant: ComponentRelayGrant,
     bound_domains: HashSet<String>,
@@ -488,7 +497,7 @@ pub(super) async fn route_component_stanza(
         // application await.  The owned bridge also gives the actor registry
         // a concrete `Send + 'static` future boundary.
         drop(document);
-        return s2s::route_inbound_component_owned(
+        return ComponentHost::route_inbound_component_stanza(
             Arc::clone(&state),
             from_domain,
             connection_id,
@@ -527,18 +536,15 @@ pub(super) async fn route_component_stanza(
     }
 }
 
-pub(super) async fn cleanup_component_muc(
-    state: Arc<AppState>,
+pub(super) async fn cleanup_component_muc<H: ComponentHost>(
+    state: Arc<H>,
     domains: Vec<String>,
     connection_id: Uuid,
 ) {
     for domain in domains {
-        if let Err(error) = northstar_muc_xmpp::federated_muc::federated_muc_connection_closed(
-            state.as_ref(),
-            &domain,
-            connection_id,
-        )
-        .await
+        if let Err(error) = state
+            .federated_muc_connection_closed(&domain, connection_id)
+            .await
         {
             tracing::warn!(
                 component_domain = %domain,

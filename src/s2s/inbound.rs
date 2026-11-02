@@ -56,7 +56,7 @@ use self::negotiation::{
 use self::presence::route_inbound_presence;
 use self::session::drive_authenticated_inbound;
 
-pub(crate) use self::dispatch::{route_inbound_component_owned, route_inbound_for_connection};
+pub(crate) use self::dispatch::{route_inbound_component, route_inbound_for_connection};
 pub(crate) use self::session::reply_within_peer_limit;
 pub use self::session::{serve, serve_s2s_tls};
 pub(crate) use northstar_s2s::host::InboundFederationRoute;

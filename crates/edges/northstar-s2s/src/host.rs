@@ -4,12 +4,15 @@
 //! dispatch, the federation metrics, and the three ways a connection reaches back into the node:
 //! routing a peer's stanza and cleaning up what a closed connection left in the entity
 //! capabilities cache and in federated rooms. The node implements this once; the inbound and
-//! outbound connection actors stay generic over it, so they never name the node's state.
+//! outbound connection actors stay generic over it, so they never name the node's state. External
+//! components (XEP-0114 and XEP-0225) need [`ComponentHost`] on top of it.
 
 use crate::dns::FederationDnsContext;
 use crate::outbox::{S2sOutboxDispatchContext, S2sOutboxFailureEffects};
 use crate::resume;
 use hickory_resolver::TokioResolver;
+use northstar_config::ComponentCredential;
+use northstar_federation_application::components::{ComponentRegistry, ComponentTelemetry};
 use northstar_federation_application::dispatch::{
     S2sOutboxDispatchRepository, S2sOutboxDispatchService,
 };
@@ -25,7 +28,7 @@ use northstar_federation_core::dialback::S2sFeaturePolicy;
 use northstar_runtime::connection_actors::ConnectionActorRegistry;
 use northstar_security::dane::DaneMode;
 use northstar_security::tls::TlsContext;
-use std::{future::Future, sync::Arc};
+use std::{future::Future, sync::Arc, time::Duration};
 use tokio::sync::{AcquireError, OwnedSemaphorePermit, RwLockReadGuard, TryAcquireError};
 use uuid::Uuid;
 
@@ -150,4 +153,56 @@ pub trait S2sHost: Send + Sync + 'static {
         peer_domain: &str,
         connection_id: Uuid,
     ) -> impl Future<Output = anyhow::Result<()>> + Send;
+}
+
+/// The configured limits of external component connections.
+#[derive(Clone, Copy)]
+pub struct ComponentRuntimePolicy {
+    pub enabled: bool,
+    pub max_connections: usize,
+    pub handshake_timeout: Duration,
+    pub queue_capacity: usize,
+}
+
+/// What external component connections need from the node beyond [`S2sHost`]: their limits and
+/// credentials, admission, the registry of the domains each connection has bound, their metrics,
+/// and routing a component's stanza into the node.
+pub trait ComponentHost: S2sHost {
+    fn component_runtime_policy(&self) -> ComponentRuntimePolicy;
+
+    /// Which connection owns each bound component domain.
+    fn component_registry(&self) -> &ComponentRegistry;
+
+    fn component_telemetry(&self) -> ComponentTelemetry<'_>;
+
+    fn has_component_credentials(&self) -> bool;
+
+    /// Whether any credential lets a component connect to the node.
+    fn accepts_component_connections(&self) -> bool;
+
+    /// The credentials of the components the node connects to itself.
+    fn component_connect_credentials(&self) -> Vec<ComponentCredential>;
+
+    /// The credential a component authenticating as `domain` must present.
+    fn component_authentication_credential(&self, domain: &str) -> Option<ComponentCredential>;
+
+    fn xmpp_component_domain_configured(&self, domain: &str) -> bool;
+
+    /// Admits one more component connection, or refuses it at the configured capacity.
+    fn try_acquire_component_connection(&self) -> Result<OwnedSemaphorePermit, TryAcquireError>;
+
+    /// Waits for a component connection slot.
+    fn acquire_component_connection(
+        &self,
+    ) -> impl Future<Output = Result<OwnedSemaphorePermit, AcquireError>> + Send;
+
+    /// Routes a stanza the component authenticated as `authenticated_domain` sent over
+    /// connection `connection_id`. Everything is owned, so no parser borrow outlives the
+    /// component actor's await.
+    fn route_inbound_component_stanza(
+        self: Arc<Self>,
+        authenticated_domain: String,
+        connection_id: Uuid,
+        raw: String,
+    ) -> impl Future<Output = anyhow::Result<Option<String>>> + Send;
 }

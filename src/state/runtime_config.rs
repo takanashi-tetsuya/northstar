@@ -3,6 +3,7 @@
 use super::*;
 use northstar_bosh::host::BoshPolicy;
 pub(crate) use northstar_message_core::OfflineDeliveryLimits;
+pub(crate) use northstar_s2s::host::ComponentRuntimePolicy;
 use northstar_upload_application::UploadSlotLimits;
 
 #[derive(Clone, Copy)]
@@ -20,14 +21,6 @@ pub(crate) struct SmSessionPolicy {
     pub(crate) claim_lease_seconds: u64,
     pub(crate) max_per_account: usize,
     pub(crate) max_global: usize,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct ComponentRuntimePolicy {
-    pub(crate) enabled: bool,
-    pub(crate) max_connections: usize,
-    pub(crate) handshake_timeout: Duration,
-    pub(crate) queue_capacity: usize,
 }
 
 #[derive(Clone, Copy)]

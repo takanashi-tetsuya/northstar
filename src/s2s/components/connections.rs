@@ -1,9 +1,12 @@
 //! Establish inbound and outbound component connections and negotiate legacy and modern authentication.
 
+use northstar_s2s::host::ComponentHost;
+use northstar_xml_builder::XmlElement;
+
 use super::*;
 
-pub(super) async fn outbound_component_connection(
-    state: Arc<AppState>,
+pub(super) async fn outbound_component_connection<H: ComponentHost>(
+    state: Arc<H>,
     credential: ComponentCredential,
     domain: String,
     _permit: OwnedSemaphorePermit,
@@ -31,7 +34,7 @@ pub(super) async fn outbound_component_connection(
         .collect::<String>();
     s2s::write_xml(
         &mut stream,
-        &crate::xmpp::xml_builder::XmlElement::new("handshake")
+        &northstar_xml_builder::XmlElement::new("handshake")
             .attr("xmlns", COMPONENT_CONNECT_NS)
             .text(proof)
             .finish(),
@@ -63,7 +66,7 @@ pub(super) async fn outbound_component_connection(
     )
     .await;
     state.component_registry().remove_connection(connection_id);
-    crate::xmpp::protocol::caps::federated_caps_connection_closed(&state, connection_id).await;
+    state.federated_caps_connection_closed(connection_id).await;
     cleanup_component_muc(
         Arc::clone(&state),
         credential.allowed_domains.clone(),
@@ -73,8 +76,8 @@ pub(super) async fn outbound_component_connection(
     result
 }
 
-pub(super) async fn connect_component_endpoint(
-    state: Arc<AppState>,
+pub(super) async fn connect_component_endpoint<H: ComponentHost>(
+    state: Arc<H>,
     credential: ComponentCredential,
 ) -> Result<TcpStream> {
     let endpoint = credential
@@ -140,10 +143,10 @@ pub(super) fn component_connect_address_allowed(address: IpAddr, allow_public: b
     }
 }
 
-pub(super) async fn component_connection(
+pub(super) async fn component_connection<H: ComponentHost>(
     mut stream: TcpStream,
     peer: SocketAddr,
-    state: Arc<AppState>,
+    state: Arc<H>,
     _permit: OwnedSemaphorePermit,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
@@ -179,9 +182,9 @@ pub(super) async fn component_connection(
     anyhow::bail!("component used an unsupported stream namespace from {peer}")
 }
 
-pub(super) async fn legacy_connection(
+pub(super) async fn legacy_connection<H: ComponentHost>(
     mut stream: TcpStream,
-    state: Arc<AppState>,
+    state: Arc<H>,
     opening: String,
     mut input: s2s::S2sInputState,
     cancel: tokio_util::sync::CancellationToken,
@@ -270,7 +273,7 @@ pub(super) async fn legacy_connection(
     )
     .await;
     state.component_registry().remove_connection(connection_id);
-    crate::xmpp::protocol::caps::federated_caps_connection_closed(&state, connection_id).await;
+    state.federated_caps_connection_closed(connection_id).await;
     cleanup_component_muc(
         Arc::clone(&state),
         credential.allowed_domains.clone(),
@@ -280,9 +283,9 @@ pub(super) async fn legacy_connection(
     result
 }
 
-pub(super) async fn modern_connection(
+pub(super) async fn modern_connection<H: ComponentHost>(
     mut stream: TcpStream,
-    state: Arc<AppState>,
+    state: Arc<H>,
     opening: String,
     mut input: s2s::S2sInputState,
     cancel: tokio_util::sync::CancellationToken,
@@ -454,9 +457,9 @@ pub(super) async fn modern_connection(
         };
         s2s::write_xml(
             &mut secure,
-            &crate::xmpp::xml_builder::XmlElement::new("failure")
+            &northstar_xml_builder::XmlElement::new("failure")
                 .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-sasl")
-                .child(crate::xmpp::xml_builder::XmlElement::new(condition))
+                .child(northstar_xml_builder::XmlElement::new(condition))
                 .finish(),
         )
         .await?;
@@ -514,7 +517,7 @@ pub(super) async fn modern_connection(
     )
     .await;
     state.component_registry().remove_connection(connection_id);
-    crate::xmpp::protocol::caps::federated_caps_connection_closed(&state, connection_id).await;
+    state.federated_caps_connection_closed(connection_id).await;
     cleanup_component_muc(
         Arc::clone(&state),
         credential.allowed_domains.clone(),

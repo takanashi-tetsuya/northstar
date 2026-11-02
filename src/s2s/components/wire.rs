@@ -46,7 +46,7 @@ pub(super) async fn write_legacy_stream_open<S: AsyncWrite + Unpin + Send>(
 ) -> Result<()> {
     s2s::write_xml(
         stream,
-        &crate::xmpp::xml_builder::XmlElement::new("stream:stream")
+        &northstar_xml_builder::XmlElement::new("stream:stream")
             .attr("xmlns", COMPONENT_ACCEPT_NS)
             .attr("xmlns:stream", STREAMS_NS)
             .attr("from", component)
@@ -65,7 +65,7 @@ pub(super) async fn write_legacy_connect_open<S: AsyncWrite + Unpin + Send>(
     // `to`; an optional response `from` is accepted only when it is identical.
     s2s::write_xml(
         stream,
-        &crate::xmpp::xml_builder::XmlElement::new("stream:stream")
+        &northstar_xml_builder::XmlElement::new("stream:stream")
             .attr("xmlns", COMPONENT_CONNECT_NS)
             .attr("xmlns:stream", STREAMS_NS)
             .attr("from", component)
@@ -82,7 +82,7 @@ pub(super) async fn write_component_stream_open<S: AsyncWrite + Unpin + Send>(
 ) -> Result<()> {
     s2s::write_xml(
         stream,
-        &crate::xmpp::xml_builder::XmlElement::new("stream:stream")
+        &northstar_xml_builder::XmlElement::new("stream:stream")
             .attr("xmlns", "jabber:client")
             .attr("xmlns:stream", STREAMS_NS)
             .attr("from", from)

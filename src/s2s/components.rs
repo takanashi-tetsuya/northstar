@@ -1,7 +1,8 @@
-use crate::{s2s, state::AppState, xmpp::xml_builder::XmlElement};
+use crate::s2s;
 use anyhow::{Context, Result};
 use northstar_config::{ComponentConnectionMode, ComponentCredential};
 use northstar_federation_application::components::*;
+use northstar_s2s::host::ComponentHost;
 use rand::{rngs::OsRng, RngCore};
 use roxmltree::Document;
 use sha1::Sha1;
@@ -52,8 +53,8 @@ async fn wait_for_component_shutdown(cancel: &tokio_util::sync::CancellationToke
     cancel.cancelled().await;
 }
 
-pub async fn serve(
-    state: Arc<AppState>,
+pub async fn serve<H: ComponentHost>(
+    state: Arc<H>,
     cancel: tokio_util::sync::CancellationToken,
     listener: Option<TcpListener>,
 ) -> Result<()> {
@@ -158,8 +159,8 @@ fn component_supervisor_completion(
     }
 }
 
-async fn outbound_component_supervisor(
-    state: Arc<AppState>,
+async fn outbound_component_supervisor<H: ComponentHost>(
+    state: Arc<H>,
     credential: ComponentCredential,
     domain: String,
     cancel: tokio_util::sync::CancellationToken,
@@ -223,10 +224,10 @@ async fn outbound_component_supervisor(
     }
 }
 
-async fn component_accept_actor(
+async fn component_accept_actor<H: ComponentHost>(
     stream: TcpStream,
     peer: SocketAddr,
-    state: Arc<AppState>,
+    state: Arc<H>,
     connection_permit: OwnedSemaphorePermit,
     connection_cancel: tokio_util::sync::CancellationToken,
 ) {
@@ -244,8 +245,8 @@ async fn component_accept_actor(
     }
 }
 
-async fn component_connect_actor(
-    state: Arc<AppState>,
+async fn component_connect_actor<H: ComponentHost>(
+    state: Arc<H>,
     credential: ComponentCredential,
     domain: String,
     connection_permit: OwnedSemaphorePermit,

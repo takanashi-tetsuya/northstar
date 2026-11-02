@@ -1,7 +1,9 @@
-//! The node's capabilities as the server-to-server transport sees them.
+//! The node's capabilities as the server-to-server transport and external components see them.
 
 use super::AppState;
 use hickory_resolver::TokioResolver;
+use northstar_config::ComponentCredential;
+use northstar_federation_application::components::{ComponentRegistry, ComponentTelemetry};
 use northstar_federation_application::dispatch::S2sOutboxDispatchService;
 use northstar_federation_application::outbox::FederationOutboxService;
 use northstar_federation_application::registry::S2sConnectionRegistry;
@@ -15,7 +17,7 @@ use northstar_federation_postgres::outbox_repository::PostgresFederationOutboxRe
 use northstar_federation_postgres::sm_outbox_repository::PostgresSmOutboxRepository;
 use northstar_runtime::connection_actors::ConnectionActorRegistry;
 use northstar_s2s::dns::FederationDnsContext;
-use northstar_s2s::host::{InboundFederationRoute, S2sHost};
+use northstar_s2s::host::{ComponentHost, ComponentRuntimePolicy, InboundFederationRoute, S2sHost};
 use northstar_s2s::outbox::{S2sOutboxDispatchContext, S2sOutboxFailureEffects};
 use northstar_s2s::resume;
 use northstar_security::dane::DaneMode;
@@ -184,5 +186,56 @@ impl S2sHost for AppState {
             connection_id,
         )
         .await
+    }
+}
+
+impl ComponentHost for AppState {
+    fn component_runtime_policy(&self) -> ComponentRuntimePolicy {
+        AppState::component_runtime_policy(self)
+    }
+
+    fn component_registry(&self) -> &ComponentRegistry {
+        AppState::component_registry(self)
+    }
+
+    fn component_telemetry(&self) -> ComponentTelemetry<'_> {
+        AppState::component_telemetry(self)
+    }
+
+    fn has_component_credentials(&self) -> bool {
+        AppState::has_component_credentials(self)
+    }
+
+    fn accepts_component_connections(&self) -> bool {
+        AppState::accepts_component_connections(self)
+    }
+
+    fn component_connect_credentials(&self) -> Vec<ComponentCredential> {
+        AppState::component_connect_credentials(self)
+    }
+
+    fn component_authentication_credential(&self, domain: &str) -> Option<ComponentCredential> {
+        AppState::component_authentication_credential(self, domain)
+    }
+
+    fn xmpp_component_domain_configured(&self, domain: &str) -> bool {
+        AppState::xmpp_component_domain_configured(self, domain)
+    }
+
+    fn try_acquire_component_connection(&self) -> Result<OwnedSemaphorePermit, TryAcquireError> {
+        AppState::try_acquire_component_connection(self)
+    }
+
+    async fn acquire_component_connection(&self) -> Result<OwnedSemaphorePermit, AcquireError> {
+        AppState::acquire_component_connection(self).await
+    }
+
+    async fn route_inbound_component_stanza(
+        self: Arc<Self>,
+        authenticated_domain: String,
+        connection_id: Uuid,
+        raw: String,
+    ) -> anyhow::Result<Option<String>> {
+        crate::s2s::route_inbound_component(&self, &authenticated_domain, connection_id, &raw).await
     }
 }

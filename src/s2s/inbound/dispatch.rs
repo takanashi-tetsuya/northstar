@@ -26,19 +26,6 @@ pub(crate) async fn route_inbound_component(
     .await
 }
 
-/// Owned actor boundary for external-component routing.  Component sockets
-/// are supervised as `Send + 'static` actors; keeping the state and both XML
-/// identities owned here prevents parser/frame borrows from leaking into that
-/// task's opaque future while preserving the same authorization path below.
-pub(crate) async fn route_inbound_component_owned(
-    state: Arc<AppState>,
-    authenticated_domain: String,
-    connection_id: uuid::Uuid,
-    raw: String,
-) -> Result<Option<String>> {
-    route_inbound_component(&state, &authenticated_domain, connection_id, &raw).await
-}
-
 pub(crate) async fn route_inbound_for_connection(
     state: &Arc<AppState>,
     authenticated_domain: &str,

@@ -19,7 +19,8 @@ impl AppState {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
-        self.message_service
+        self.message
+            .message_service
             .privacy_allows_session(
                 session.user_id,
                 session.connection_id,

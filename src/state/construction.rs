@@ -441,8 +441,6 @@ impl AppState {
         });
         let sm_recovery_max_jobs = config.sm_recovery_max_jobs;
         let sm_recovery_max_bytes = config.sm_recovery_max_bytes;
-        let message_content_identity = abuse.personal_message_content_keyring();
-        let retraction_content_identity = abuse.personal_retraction_content_keyring();
         let mix_message_content_identity = abuse.mix_message_content_keyring();
         let mix_retraction_content_identity = abuse.mix_retraction_content_keyring();
         // Durable outbox workers share one application-owned admission
@@ -453,26 +451,12 @@ impl AppState {
             northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
                 config.database_max_connections,
             );
-        let message_service = northstar_message_application::messaging::MessageService::new(
-            northstar_workflows::message_repository::PostgresMessageRepository::new(
-                pool.clone(),
-                message_content_identity,
-                config.domain.clone(),
-                config.offline_max_messages_per_account,
-                config.offline_max_bytes_per_account,
-                config.offline_message_ttl_days,
-            )
-            .with_cluster_admission(cluster.admission()),
-            config.require_encrypted_archive,
-        );
-        let retraction_service = northstar_message_application::retractions::RetractionService::new(
-            northstar_workflows::retraction_repository::PostgresRetractionRepository::new(
-                pool.clone(),
-            )
-            .with_cluster_admission(cluster.admission()),
-            retraction_content_identity,
-            config.domain.clone(),
-        );
+        let message = MessageModule::new(MessageModuleParts {
+            config: &config,
+            pool: &pool,
+            abuse: &abuse,
+            cluster: &cluster,
+        });
         let metrics = Arc::new(Metrics::default());
         let dummy_scram_iteration_profiles =
             northstar_auth_postgres::users::scram_iteration_profiles(
@@ -681,10 +665,6 @@ impl AppState {
             muc_occupants: &room.muc_occupants,
             started_at,
         });
-        let message_admission_service =
-            northstar_message_application::message_admission::MessageAdmissionService::new(northstar_workflows::message_admission_port::AbuseMessageAdmissionPort::new(northstar_abuse_postgres::message_admission::PostgresMessageAdmissionRepository::new(Arc::clone(&abuse),
-                    pool.clone())),
-            );
         let account_revocation_consumer_service =
             northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService::new(
                 northstar_auth_postgres::account_revocation_repository::PostgresAccountRevocationRepository::new(
@@ -701,18 +681,13 @@ impl AppState {
             room,
             roster,
             extdisco_service,
-            message_service,
-            message_admission_service,
-            retraction_service,
+            message,
             mam_service,
             sm_service,
             replay_service,
             s2s_outbox_dispatch_service,
             s2s_sm_outbox_service: crate::services::s2s_sm_outbox::SmOutboxService::new(
                 db::s2s_sm_outbox_repository::PostgresSmOutboxRepository::new(pool.clone()),
-            ),
-            push_service: northstar_message_application::push::PushService::new(
-                northstar_workflows::push_repository::PostgresPushRepository::new(pool.clone()),
             ),
             pool,
             cluster,

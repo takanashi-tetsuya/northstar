@@ -102,7 +102,7 @@ impl AppState {
     ) -> &northstar_message_application::messaging::MessageService<
         northstar_workflows::message_repository::PostgresMessageRepository,
     > {
-        &self.message_service
+        &self.message.message_service
     }
 
     pub(crate) fn message_admission_service(
@@ -110,7 +110,7 @@ impl AppState {
     ) -> &northstar_message_application::message_admission::MessageAdmissionService<
         northstar_workflows::message_admission_port::AbuseMessageAdmissionPort,
     > {
-        &self.message_admission_service
+        &self.message.message_admission_service
     }
 
     pub(crate) fn retraction_service(
@@ -118,7 +118,7 @@ impl AppState {
     ) -> &northstar_message_application::retractions::RetractionService<
         northstar_workflows::retraction_repository::PostgresRetractionRepository,
     > {
-        &self.retraction_service
+        &self.message.retraction_service
     }
 
     pub(crate) fn mam_service(
@@ -252,7 +252,7 @@ impl AppState {
     ) -> &northstar_message_application::push::PushService<
         northstar_workflows::push_repository::PostgresPushRepository,
     > {
-        &self.push_service
+        &self.message.push_service
     }
 
     pub(crate) fn derive_dialback_key(

@@ -39,7 +39,7 @@ impl AppState {
     pub(crate) fn pep_last_items_context(&self) -> PepLastItemsContext {
         PepLastItemsContext {
             pubsub: self.pubsub.pubsub_service.clone(),
-            privacy: self.message_service.clone(),
+            privacy: self.message.message_service.clone(),
             sessions: Arc::clone(&self.sessions),
             observations: Arc::clone(&self.caps_by_jid),
             pending_caps: Arc::clone(&self.pending_caps),

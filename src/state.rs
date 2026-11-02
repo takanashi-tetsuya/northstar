@@ -232,6 +232,7 @@ mod federation_dns;
 mod federation_policy;
 mod local_muc;
 mod local_session;
+mod message_module;
 mod muc_resume;
 mod omemo_poll_admission;
 mod operations_module;
@@ -254,6 +255,7 @@ use self::construction::*;
 use self::federation_policy::*;
 #[cfg(test)]
 pub(crate) use self::local_muc::count_shutdown_notification_completions;
+use self::message_module::*;
 use self::operations_module::*;
 use self::pubsub_module::*;
 use self::room_module::*;
@@ -310,22 +312,12 @@ pub struct AppState {
     room: RoomModule,
     /// The roster context; see [`RosterModule`].
     roster: RosterModule,
+    /// The message context; see [`MessageModule`].
+    message: MessageModule,
     public_discovery_context: PublicDiscoveryContext,
     /// XEP-0215 TURN credential authority. Long-lived key material and its
     /// bounded rate windows never cross into protocol or public state.
     extdisco_service: crate::services::extdisco::ExtDiscoService,
-    /// Personal-message authorization and durable admission boundary. The
-    /// protocol layer must not compose its own archive/outbox/offline writes.
-    message_service:
-        northstar_message_application::messaging::MessageService<northstar_workflows::message_repository::PostgresMessageRepository>,
-    message_admission_service: northstar_message_application::message_admission::MessageAdmissionService<
-        northstar_workflows::message_admission_port::AbuseMessageAdmissionPort,
-    >,
-    /// XEP-0424/XEP-0444 tombstone, action archive and federation admission
-    /// transaction boundary.
-    retraction_service: northstar_message_application::retractions::RetractionService<
-        northstar_workflows::retraction_repository::PostgresRetractionRepository,
-    >,
     mam_service: northstar_archive_application::MamService<northstar_workflows::mam_repository::PostgresMamRepository>,
     sm_service: crate::services::sm::SmService<db::sm_repository::PostgresSmRepository>,
     replay_service:
@@ -337,7 +329,6 @@ pub struct AppState {
         db::s2s_sm_outbox_repository::PostgresSmOutboxRepository,
     >,
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
-    push_service: northstar_message_application::push::PushService<northstar_workflows::push_repository::PostgresPushRepository>,
     cluster: crate::cluster::ClusterManager,
     account_revocation_consumer_service:
         northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService<

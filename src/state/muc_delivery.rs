@@ -25,7 +25,7 @@ impl AppState {
             sm_max_unacked_stanzas: self.config.sm_max_unacked_stanzas,
             sm_max_unacked_bytes: self.config.sm_max_unacked_bytes,
             federation_outbox: self.federation_outbox.clone(),
-            message_service: self.message_service.clone(),
+            message_service: self.message.message_service.clone(),
         }
     }
 }

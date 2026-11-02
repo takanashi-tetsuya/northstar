@@ -365,7 +365,7 @@ pub struct AppState {
     /// Full XEP-0114/XEP-0225 authentication records. `config.components`
     /// retains only redacted routing/discovery metadata after construction.
     component_credentials: Arc<[northstar_config::ComponentCredential]>,
-    components: crate::s2s::components::ComponentRegistry,
+    components: northstar_federation_application::components::ComponentRegistry,
     s2s_connection_registry: Arc<S2sConnectionRegistry>,
     s2s_resumption: crate::s2s::resume::Registry,
     /// Shared TTL-aware resolver for SRV, CNAME, A and AAAA federation lookups.

@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub use northstar_federation_core::*;
+pub mod components;
 pub mod dispatch;
 pub mod outbox;
 pub mod registry;

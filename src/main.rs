@@ -335,7 +335,7 @@ async fn run() -> Result<()> {
     }
     northstar_auth_postgres::users::ensure_bootstrap_admin(&pool, &config).await?;
     startup_phase.complete();
-    let components = s2s::components::registry();
+    let components = northstar_federation_application::components::ComponentRegistry::default();
     let (federation, federation_rx) = northstar_federation_application::outbox::FederationOutboxService::channel(
         northstar_federation_postgres::outbox_repository::PostgresFederationOutboxRepository::new(pool.clone()),
         northstar_federation_core::S2sOutboxPolicy::new(

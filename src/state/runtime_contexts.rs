@@ -339,7 +339,9 @@ impl AppState {
     /// Authenticated external-component ownership and wake-up authority.
     /// The registry exposes only owner-fenced operations; its concurrent map
     /// remains encapsulated inside the component subsystem.
-    pub(crate) fn component_registry(&self) -> &crate::s2s::components::ComponentRegistry {
+    pub(crate) fn component_registry(
+        &self,
+    ) -> &northstar_federation_application::components::ComponentRegistry {
         &self.components
     }
 

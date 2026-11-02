@@ -2053,15 +2053,23 @@ name = "northstar-federation-application"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "dashmap",
+ "northstar-config",
  "northstar-federation-core",
  "northstar-telemetry",
+ "northstar-xml-builder",
  "northstar-xmpp-types",
+ "roxmltree",
  "serde",
+ "sha1",
+ "sha2",
+ "subtle",
  "tokio",
  "tokio-util",
  "tracing",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

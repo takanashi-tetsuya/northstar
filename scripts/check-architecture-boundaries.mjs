@@ -3248,9 +3248,10 @@ if (/(?:db|northstar_message_postgres::\w+|northstar_workflows::\w+)::(?:store_o
 const s2sOutboundSource = readProductionModule('src/s2s/outbound.rs', { root });
 const componentsSource = readProductionModule('src/s2s/components.rs', { root });
 const federationCoreSource = read('crates/contexts/federation/northstar-federation-core/src/lib.rs');
+const federationComponents = read('crates/contexts/federation/northstar-federation-application/src/components.rs');
 if (!federationCoreSource.includes('pub fn classify_hosted_domain(')
     || !federationCoreSource.includes('pub const fn accepts_s2s_stream_target(')
-    || !componentsSource.includes('classify_hosted_domain(local_domain, target)')
+    || !federationComponents.includes('classify_hosted_domain(local_domain, target)')
     || !s2sInboundSource.includes('classify_hosted_domain(local_domain, target)')
     || !s2sInboundSource.includes('classify_hosted_domain(configured_domain, candidate)')
     || !s2sInboundSource.includes('HostedDomain::accepts_s2s_stream_target')) {
@@ -3941,7 +3942,7 @@ if (!c2sTelemetry.includes('struct PostActionTelemetry')
   throw new Error('C2S post-action supervision must use narrow telemetry without broad state or registry authority');
 }
 const componentTransport = readProductionModule('src/s2s/components.rs', { root });
-if (!componentTransport.includes('struct ComponentTelemetry')
+if (!federationComponents.includes('struct ComponentTelemetry')
     || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(componentTransport)
     || !componentTransport.includes('component_telemetry().connection_failed()')
     || !componentTransport.includes('component_telemetry().outbox_written()')) {

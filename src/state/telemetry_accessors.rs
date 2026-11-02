@@ -325,8 +325,10 @@ impl AppState {
         )
     }
 
-    pub(crate) fn component_telemetry(&self) -> crate::s2s::components::ComponentTelemetry<'_> {
-        crate::s2s::components::ComponentTelemetry::new(
+    pub(crate) fn component_telemetry(
+        &self,
+    ) -> northstar_federation_application::components::ComponentTelemetry<'_> {
+        northstar_federation_application::components::ComponentTelemetry::new(
             &self.metrics.component_connections_active,
             &self.metrics.outbox_delivery_duration_seconds,
             &self.metrics.component_failures_total,

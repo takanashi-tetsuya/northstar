@@ -49,7 +49,7 @@ impl AppState {
         mut config: Config,
         pool: PgPool,
         federation: FederationRouter,
-        components: crate::s2s::components::ComponentRegistry,
+        components: northstar_federation_application::components::ComponentRegistry,
         runtime_control_connection: PoolConnection<Postgres>,
         worker_cancel: CancellationToken,
     ) -> anyhow::Result<Arc<Self>> {

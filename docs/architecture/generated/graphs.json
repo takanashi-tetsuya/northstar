@@ -2439,7 +2439,15 @@
       ],
       [
         "northstar-federation-application",
+        "base64"
+      ],
+      [
+        "northstar-federation-application",
         "dashmap"
+      ],
+      [
+        "northstar-federation-application",
+        "northstar-config"
       ],
       [
         "northstar-federation-application",
@@ -2451,11 +2459,31 @@
       ],
       [
         "northstar-federation-application",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-federation-application",
         "northstar-xmpp-types"
       ],
       [
         "northstar-federation-application",
+        "roxmltree"
+      ],
+      [
+        "northstar-federation-application",
         "serde"
+      ],
+      [
+        "northstar-federation-application",
+        "sha1"
+      ],
+      [
+        "northstar-federation-application",
+        "sha2"
+      ],
+      [
+        "northstar-federation-application",
+        "subtle"
       ],
       [
         "northstar-federation-application",
@@ -2472,6 +2500,10 @@
       [
         "northstar-federation-application",
         "uuid"
+      ],
+      [
+        "northstar-federation-application",
+        "zeroize"
       ],
       [
         "northstar-federation-core",

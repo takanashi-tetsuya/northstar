@@ -527,56 +527,6 @@ pub(super) async fn route_component_stanza(
     }
 }
 
-pub(super) fn invalid_component_stanza(root: Node<'_, '_>) -> Option<&'static str> {
-    match root.tag_name().name() {
-        "message" => {
-            if root.attribute("type").is_some_and(|kind| {
-                !matches!(kind, "normal" | "chat" | "groupchat" | "headline" | "error")
-            }) {
-                return Some("bad-request");
-            }
-        }
-        "presence" => {
-            if root.attribute("type").is_some_and(|kind| {
-                !matches!(
-                    kind,
-                    "unavailable"
-                        | "subscribe"
-                        | "subscribed"
-                        | "unsubscribe"
-                        | "unsubscribed"
-                        | "probe"
-                        | "error"
-                )
-            }) {
-                return Some("bad-request");
-            }
-        }
-        "iq" => {
-            let Some(kind) = root.attribute("type") else {
-                return Some("bad-request");
-            };
-            if !matches!(kind, "get" | "set" | "result" | "error")
-                || root.attribute("id").is_none_or(str::is_empty)
-            {
-                return Some("bad-request");
-            }
-            let payloads = root
-                .children()
-                .filter(|node| node.is_element() && node.tag_name().name() != "error")
-                .count();
-            if matches!(kind, "get" | "set") && payloads != 1 {
-                return Some("bad-request");
-            }
-            if matches!(kind, "result" | "error") && payloads > 1 {
-                return Some("bad-request");
-            }
-        }
-        _ => return Some("unsupported-stanza-type"),
-    }
-    None
-}
-
 pub(super) async fn cleanup_component_muc(
     state: Arc<AppState>,
     domains: Vec<String>,

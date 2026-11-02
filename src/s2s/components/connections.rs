@@ -383,7 +383,7 @@ pub(super) async fn modern_connection(
 
     let opening =
         read_handshake_frame_after_open(handshake_timeout, &mut secure, &mut input).await?;
-    if let Err(condition) = validate_modern_opening(&state, &credential, &opening) {
+    if let Err(condition) = validate_modern_opening(state.local_domain(), &credential, &opening) {
         s2s::send_stream_error(&mut secure, condition).await?;
         anyhow::bail!("component stream identity changed during XEP-0225 negotiation: {condition}");
     }
@@ -474,7 +474,7 @@ pub(super) async fn modern_connection(
 
     let opening =
         read_handshake_frame_after_open(handshake_timeout, &mut secure, &mut input).await?;
-    if let Err(condition) = validate_modern_opening(&state, &credential, &opening) {
+    if let Err(condition) = validate_modern_opening(state.local_domain(), &credential, &opening) {
         s2s::send_stream_error(&mut secure, condition).await?;
         anyhow::bail!("component stream identity changed during XEP-0225 negotiation: {condition}");
     }

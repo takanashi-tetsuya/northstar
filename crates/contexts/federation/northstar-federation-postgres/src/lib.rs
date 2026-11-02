@@ -605,4 +605,6 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
 }
 
 #[cfg(test)]
+mod db_tests;
+#[cfg(test)]
 mod tests;

@@ -2080,12 +2080,14 @@ dependencies = [
  "anyhow",
  "northstar-federation-application",
  "northstar-federation-core",
+ "northstar-postgres",
  "northstar-telemetry",
  "northstar-xep-0359",
  "northstar-xmpp-types",
  "roxmltree",
  "sha2",
  "sqlx",
+ "tokio",
  "uuid",
 ]
 

@@ -22,3 +22,7 @@ roxmltree = "0.20"
 sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid"] }
 uuid = { version = "1.12", features = ["v4", "serde"] }
+
+[dev-dependencies]
+northstar-postgres = { path = "../../../platform/northstar-postgres" }
+tokio = { version = "1.43", features = ["macros", "rt", "sync", "time"] }

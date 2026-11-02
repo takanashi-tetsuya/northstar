@@ -70,9 +70,10 @@ fi
 export TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")"
 
 run_exact_ignored() {
-  local test_name="$1"
+  local package="$1"
+  local test_name="$2"
   local test_output
-  if ! test_output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture 2>&1)"; then
+  if ! test_output="$(cargo test --locked --offline -p "$package" "$test_name" -- --ignored --exact --nocapture 2>&1)"; then
     printf '%s\n' "$test_output" | tee -a "$test_log"
     return 1
   fi
@@ -83,9 +84,9 @@ run_exact_ignored() {
   fi
 }
 
-run_exact_ignored db::s2s_tests::claim_preserves_mam_results_before_fin
-run_exact_ignored db::s2s_tests::scoped_claims_are_cross_worker_ordered_and_component_safe
-run_exact_ignored db::s2s_tests::sm_ack_accepts_terminal_pam_cleanup_without_losing_other_claim_fences
-run_exact_ignored db::s2s_tests::route_recovery_wakes_only_the_observed_fifo_head_and_attempt
-run_exact_ignored db::s2s_tests::route_recovery_waits_for_lease_failure_commit_and_preserves_fencing
-run_exact_ignored s2s::outbound::tests::authenticated_route_recovery_integrates_with_fifo_and_leased_failure_commit
+run_exact_ignored northstar-federation-postgres db_tests::claim_preserves_mam_results_before_fin
+run_exact_ignored northstar-federation-postgres db_tests::scoped_claims_are_cross_worker_ordered_and_component_safe
+run_exact_ignored northstar-federation-postgres db_tests::sm_ack_accepts_terminal_pam_cleanup_without_losing_other_claim_fences
+run_exact_ignored northstar-federation-postgres db_tests::route_recovery_wakes_only_the_observed_fifo_head_and_attempt
+run_exact_ignored northstar-federation-postgres db_tests::route_recovery_waits_for_lease_failure_commit_and_preserves_fencing
+run_exact_ignored rust-xmpp-server s2s::outbound::tests::authenticated_route_recovery_integrates_with_fifo_and_leased_failure_commit

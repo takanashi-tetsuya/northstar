@@ -1,5 +1,5 @@
+use crate::*;
 use northstar_federation_core::S2sOutboxPolicy;
-use northstar_federation_postgres::*;
 use northstar_telemetry::delivery_counters::s2s_outbox_capacity_rejections_total;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -31,7 +31,7 @@ async fn route_recovery_test_pool() -> (PgPool, PgPool, String) {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     (admin, pool, schema)
 }
 
@@ -518,7 +518,7 @@ async fn claim_preserves_mam_results_before_fin() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let domain = format!("ordering-{}.invalid", Uuid::new_v4());
     let admitted = [
         "<message from='archive@local.test' id='mam-result-1'/>",
@@ -583,7 +583,7 @@ async fn scoped_claims_are_cross_worker_ordered_and_component_safe() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let policy = S2sOutboxPolicy {
         ttl_seconds: 300,
         max_rows: 100,

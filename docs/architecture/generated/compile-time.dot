@@ -1088,12 +1088,14 @@ digraph compile_time {
   "northstar-federation-postgres" -> "anyhow";
   "northstar-federation-postgres" -> "northstar-federation-application";
   "northstar-federation-postgres" -> "northstar-federation-core";
+  "northstar-federation-postgres" -> "northstar-postgres";
   "northstar-federation-postgres" -> "northstar-telemetry";
   "northstar-federation-postgres" -> "northstar-xep-0359";
   "northstar-federation-postgres" -> "northstar-xmpp-types";
   "northstar-federation-postgres" -> "roxmltree";
   "northstar-federation-postgres" -> "sha2";
   "northstar-federation-postgres" -> "sqlx";
+  "northstar-federation-postgres" -> "tokio";
   "northstar-federation-postgres" -> "uuid";
   "northstar-message-application" -> "anyhow";
   "northstar-message-application" -> "base64";

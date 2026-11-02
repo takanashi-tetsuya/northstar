@@ -91,8 +91,6 @@ pub mod retention;
 mod retraction_service_tests;
 pub(crate) mod room_effects;
 pub mod roster;
-#[cfg(test)]
-mod s2s_tests;
 pub mod schema;
 pub(crate) mod session_authority_sweep_repository;
 pub mod session_identity;

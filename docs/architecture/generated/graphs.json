@@ -2499,6 +2499,10 @@
       ],
       [
         "northstar-federation-postgres",
+        "northstar-postgres"
+      ],
+      [
+        "northstar-federation-postgres",
         "northstar-telemetry"
       ],
       [
@@ -2520,6 +2524,10 @@
       [
         "northstar-federation-postgres",
         "sqlx"
+      ],
+      [
+        "northstar-federation-postgres",
+        "tokio"
       ],
       [
         "northstar-federation-postgres",

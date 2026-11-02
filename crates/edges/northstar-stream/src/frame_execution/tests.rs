@@ -734,6 +734,18 @@ impl TraceCapture {
     }
 
     fn install_with_filter(filter: &str) -> (Self, tracing::subscriber::DefaultGuard) {
+        // While only one subscriber is registered, a callsite takes its interest from the
+        // subscriber of whichever thread hits it first: a test thread without one caches
+        // `never`, and this capture then misses the callsite's events. A global no-op
+        // subscriber keeps a second one registered, so a callsite's interest combines every
+        // live subscriber.
+        static GLOBAL_NO_OP: std::sync::Once = std::sync::Once::new();
+        GLOBAL_NO_OP.call_once(|| {
+            // Any other global subscriber would serve as well.
+            let _ = tracing::subscriber::set_global_default(
+                tracing::subscriber::NoSubscriber::default(),
+            );
+        });
         let capture = Self::default();
         let writer = capture.clone();
         let subscriber = tracing_subscriber::fmt()

@@ -4,7 +4,7 @@ use northstar_auth_application::account::*;
 use northstar_operations_core::api_mutations::{
     api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest,
 };
-use northstar_workflows::roster::RootAccountRepository;
+use northstar_workflows::account_repository::WorkflowAccountRepository;
 use ring::rand::{SecureRandom, SystemRandom};
 use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,7 +37,7 @@ fn solve_pow(challenge: &PowChallenge) -> PowProof {
 }
 
 async fn register_http_once(
-    service: &AccountService<RootAccountRepository>,
+    service: &AccountService<WorkflowAccountRepository>,
     availability: &HttpRegistrationAvailability,
     username: &str,
     key: &str,
@@ -129,7 +129,7 @@ async fn http_registration_replays_exact_created_and_rejected_responses_after_po
         .unwrap(),
     );
     let service = AccountService::new(
-        RootAccountRepository::new(
+        WorkflowAccountRepository::new(
             pool.clone(),
             "example.test".into(),
             guard,
@@ -276,7 +276,7 @@ async fn http_registration_overload_preserves_committed_proof_marker_for_exact_r
         .unwrap(),
     );
     let service = AccountService::new(
-        RootAccountRepository::new(
+        WorkflowAccountRepository::new(
             pool.clone(),
             "example.test".into(),
             Arc::clone(&guard),
@@ -398,7 +398,7 @@ async fn registration_guard_consumes_v2_proof_with_marker_and_fences_old_worker(
         Some(abuse_key.as_bytes()),
         None,
     ));
-    let repository = RootAccountRepository::new(
+    let repository = WorkflowAccountRepository::new(
         pool.clone(),
         "example.test".into(),
         Arc::clone(&guard),

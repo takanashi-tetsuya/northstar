@@ -7,6 +7,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
+/// The account adapter with the workflows' roster transaction steps.
+pub type WorkflowAccountRepository =
+    PostgresAccountRepository<crate::roster::WorkflowRosterEffects>;
+
 #[derive(Clone)]
 pub struct PostgresAccountRepository<E> {
     pool: PgPool,

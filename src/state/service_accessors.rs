@@ -227,7 +227,7 @@ impl AppState {
     pub(crate) fn account_service(
         &self,
     ) -> &northstar_auth_application::account::AccountService<
-        northstar_workflows::roster::RootAccountRepository,
+        northstar_workflows::account_repository::WorkflowAccountRepository,
     > {
         &self.auth.account_service
     }
@@ -252,7 +252,7 @@ impl AppState {
     pub(crate) fn admin_command_service(
         &self,
     ) -> &northstar_operations_application::admin_commands::AdminCommandService<
-        northstar_workflows::roster::RootAdminCommandRepository,
+        northstar_workflows::admin_command_repository::WorkflowAdminCommandRepository,
     > {
         &self.operations.admin_command_service
     }

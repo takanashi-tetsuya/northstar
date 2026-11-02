@@ -4,6 +4,10 @@ use anyhow::Result;
 use northstar_operations_application::admin_commands::*;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
+/// The admin command adapter with the workflows' roster transaction steps.
+pub type WorkflowAdminCommandRepository =
+    PostgresAdminCommandRepository<crate::roster::WorkflowRosterEffects>;
+
 #[derive(Clone)]
 pub struct PostgresAdminCommandRepository<E> {
     pool: PgPool,

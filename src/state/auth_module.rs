@@ -11,7 +11,7 @@ use northstar_auth_application::authentication::AuthenticationService;
 pub(super) struct AuthModule {
     pub(super) passkey_service: Arc<PasskeyService>,
     pub(super) account_service: northstar_auth_application::account::AccountService<
-        northstar_workflows::roster::RootAccountRepository,
+        northstar_workflows::account_repository::WorkflowAccountRepository,
     >,
     pub(super) login_service: northstar_auth_application::http_login::HttpLoginService<
         northstar_workflows::http_login_repository::PostgresHttpLoginRepository,
@@ -78,7 +78,7 @@ impl AuthModule {
             omemo_recovery_poll_repository,
         } = parts;
         let account_service = northstar_auth_application::account::AccountService::new(
-            northstar_workflows::roster::RootAccountRepository::new(
+            northstar_workflows::account_repository::WorkflowAccountRepository::new(
                 pool.clone(),
                 config.domain.clone(),
                 Arc::clone(abuse),

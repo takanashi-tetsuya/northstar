@@ -15,7 +15,7 @@ pub(super) struct OperationsModule {
     /// XEP-0050/XEP-0133 session and execution authority. Protocol handlers
     /// never receive the backing PostgreSQL pool through this capability.
     pub(super) admin_command_service: northstar_operations_application::admin_commands::AdminCommandService<
-        northstar_workflows::roster::RootAdminCommandRepository,
+        northstar_workflows::admin_command_repository::WorkflowAdminCommandRepository,
     >,
     pub(super) report_service:
         northstar_operations_application::reports::ReportService<northstar_workflows::report_repository::PostgresReportRepository>,
@@ -203,7 +203,7 @@ impl OperationsModule {
             ),
             admin_command_service:
                 northstar_operations_application::admin_commands::AdminCommandService::new(
-                    northstar_workflows::roster::RootAdminCommandRepository::new(
+                    northstar_workflows::admin_command_repository::WorkflowAdminCommandRepository::new(
                         pool.clone(),
                         command_pool.clone(),
                         northstar_workflows::roster::WorkflowRosterEffects,

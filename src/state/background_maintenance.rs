@@ -9,14 +9,14 @@ use northstar_operations_application::background_housekeeping::{
     BackgroundHousekeepingContext, BackgroundHousekeepingCounters,
 };
 use northstar_runtime::workers::WorkerHeartbeat;
-use northstar_workflows::roster::RootAdminCommandRepository;
+use northstar_workflows::admin_command_repository::WorkflowAdminCommandRepository;
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct BackgroundMaintenanceContext {
     challenge: ChallengeCleanupService<PostgresChallengeRepository>,
     database: BackgroundHousekeepingContext<PostgresBackgroundHousekeepingRepository>,
-    admin: AdminCommandService<RootAdminCommandRepository>,
+    admin: AdminCommandService<WorkflowAdminCommandRepository>,
     sm_expiry: SmExpiryContext,
     caps_cache: Arc<northstar_protocol_runtime::caps::CapsCacheIndex>,
     counters: BackgroundHousekeepingCounters,

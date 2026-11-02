@@ -15,7 +15,7 @@ use anyhow::Result;
 use dashmap::DashMap;
 use northstar_auth_application::account::{AccountService, DeletionRecoveryJob, RemovedAccount};
 use northstar_config::ExternalRouteDomainPolicy;
-use northstar_workflows::roster::RootAccountRepository;
+use northstar_workflows::account_repository::WorkflowAccountRepository;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -114,7 +114,7 @@ impl AccountDeletionPresence {
 }
 
 pub(crate) struct AccountDeletionRecoveryContext {
-    accounts: AccountService<RootAccountRepository>,
+    accounts: AccountService<WorkflowAccountRepository>,
     sm: SessionCleanupSmRevoker,
     roster: RosterPushDelivery,
     presence: AccountDeletionPresence,

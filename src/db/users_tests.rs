@@ -568,7 +568,7 @@ async fn guarded_registration_rolls_back_and_replays_proof_invitation_user_and_a
     .unwrap());
 
     let service = northstar_auth_application::account::AccountService::new(
-        northstar_workflows::roster::RootAccountRepository::new(
+        northstar_workflows::account_repository::WorkflowAccountRepository::new(
             pool.clone(),
             "example.test".to_owned(),
             std::sync::Arc::clone(&guard),

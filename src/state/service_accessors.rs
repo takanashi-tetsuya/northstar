@@ -3,6 +3,13 @@
 use super::*;
 
 impl AppState {
+    pub(crate) fn omemo_recovery_service(
+        &self,
+    ) -> &northstar_auth_application::omemo_recovery::OmemoRecoveryService<
+        northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryRepository,
+    > {
+        &self.auth.omemo_recovery_service
+    }
     pub(crate) fn upload_service(&self) -> &UploadService {
         self.upload
             .service

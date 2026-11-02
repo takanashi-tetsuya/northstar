@@ -115,7 +115,7 @@ impl axum::extract::FromRef<Arc<AppState>> for PasskeyLoginFinishContext {
 
 impl axum::extract::FromRef<Arc<AppState>> for OmemoRecoveryPollContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
-        state.omemo_recovery_poll_context()
+        state.auth.omemo_recovery_poll_context.clone()
     }
 }
 

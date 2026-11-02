@@ -13,7 +13,7 @@ use std::{
 
 const CLEANUP_BATCH_SIZE: i64 = 1_000;
 
-pub(crate) trait BackgroundHousekeepingRepository: Send + Sync {
+pub trait BackgroundHousekeepingRepository: Send + Sync {
     fn purge_resolved_moderation(
         &self,
         retention_days: i64,
@@ -32,24 +32,24 @@ pub(crate) trait BackgroundHousekeepingRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct BackgroundHousekeepingCounters {
+pub struct BackgroundHousekeepingCounters {
     moderation_deleted: Arc<AtomicU64>,
     failures: Arc<AtomicU64>,
 }
 
 impl BackgroundHousekeepingCounters {
-    pub(crate) fn new(moderation_deleted: Arc<AtomicU64>, failures: Arc<AtomicU64>) -> Self {
+    pub fn new(moderation_deleted: Arc<AtomicU64>, failures: Arc<AtomicU64>) -> Self {
         Self {
             moderation_deleted,
             failures,
         }
     }
 
-    pub(crate) fn failures_total(&self) -> u64 {
+    pub fn failures_total(&self) -> u64 {
         self.failures.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn record_failure(&self) {
+    pub fn record_failure(&self) {
         self.failures.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -58,7 +58,7 @@ impl BackgroundHousekeepingCounters {
     }
 }
 
-pub(crate) struct BackgroundHousekeepingContext<R> {
+pub struct BackgroundHousekeepingContext<R> {
     repository: R,
     moderation_retention_days: i64,
     moderation_batch_size: i64,
@@ -66,7 +66,7 @@ pub(crate) struct BackgroundHousekeepingContext<R> {
 }
 
 impl<R: BackgroundHousekeepingRepository> BackgroundHousekeepingContext<R> {
-    pub(crate) fn new(
+    pub fn new(
         repository: R,
         moderation_retention_days: i64,
         moderation_batch_size: i64,
@@ -80,7 +80,7 @@ impl<R: BackgroundHousekeepingRepository> BackgroundHousekeepingContext<R> {
         }
     }
 
-    pub(crate) async fn sweep_database(&self) {
+    pub async fn sweep_database(&self) {
         match self
             .repository
             .purge_resolved_moderation(self.moderation_retention_days, self.moderation_batch_size)

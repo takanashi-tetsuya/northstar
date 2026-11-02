@@ -205,7 +205,7 @@ impl<R: SmSuspensionRepository> SmSuspensionContext<R> {
     pub(crate) fn retain_suspended_sm_capacity(
         &self,
         endpoints: &[Arc<SuspendedMucEndpoint>],
-        capacity: crate::services::sm_capacity::SmCapacityLease,
+        capacity: northstar_session_application::sm_capacity::SmCapacityLease,
     ) {
         super::session_cleanup_local::retain_suspended_sm_capacity_in(endpoints, capacity);
     }

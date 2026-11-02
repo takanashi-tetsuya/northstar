@@ -1512,10 +1512,18 @@ digraph compile_time {
   "northstar-security" -> "webpki-roots";
   "northstar-security" -> "x509-parser";
   "northstar-security" -> "zeroize";
+  "northstar-session-application" -> "anyhow";
+  "northstar-session-application" -> "chrono";
+  "northstar-session-application" -> "northstar-delivery-core";
+  "northstar-session-application" -> "northstar-message-core";
+  "northstar-session-application" -> "northstar-security";
   "northstar-session-application" -> "northstar-session-core";
+  "northstar-session-application" -> "northstar-xml-builder";
   "northstar-session-application" -> "northstar-xmpp-types";
   "northstar-session-application" -> "serde";
   "northstar-session-application" -> "tokio";
+  "northstar-session-application" -> "tokio-util";
+  "northstar-session-application" -> "tracing";
   "northstar-session-application" -> "uuid";
   "northstar-session-core" -> "northstar-auth-core";
   "northstar-session-core" -> "northstar-delivery-core";

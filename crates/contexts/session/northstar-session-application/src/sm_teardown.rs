@@ -6,21 +6,21 @@ use std::{future::Future, time::Duration};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SmTeardownLease {
-    pub(crate) session_id: Uuid,
-    pub(crate) token: Uuid,
+pub struct SmTeardownLease {
+    pub session_id: Uuid,
+    pub token: Uuid,
 }
 
-pub(crate) trait SmTeardownClaim: Send {
+pub trait SmTeardownClaim: Send {
     fn teardown_lease(&self) -> SmTeardownLease;
 }
 
-pub(crate) struct SmTeardownBatch<S> {
-    pub(crate) snapshots: Vec<S>,
-    pub(crate) pending: usize,
+pub struct SmTeardownBatch<S> {
+    pub snapshots: Vec<S>,
+    pub pending: usize,
 }
 
-pub(crate) trait SmTeardownRepository: Send + Sync {
+pub trait SmTeardownRepository: Send + Sync {
     type Snapshot: SmTeardownClaim;
 
     fn take_exact(
@@ -66,20 +66,20 @@ pub(crate) trait SmTeardownRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct SmTeardownService<R> {
+pub struct SmTeardownService<R> {
     repository: R,
     lease_seconds: u64,
 }
 
 impl<R: SmTeardownRepository> SmTeardownService<R> {
-    pub(crate) fn new(repository: R, lease_seconds: u64) -> Self {
+    pub fn new(repository: R, lease_seconds: u64) -> Self {
         Self {
             repository,
             lease_seconds: lease_seconds.max(1),
         }
     }
 
-    pub(crate) async fn finish<Render, RenderFuture>(
+    pub async fn finish<Render, RenderFuture>(
         &self,
         snapshot: R::Snapshot,
         render: Render,
@@ -97,7 +97,7 @@ impl<R: SmTeardownRepository> SmTeardownService<R> {
         Ok(())
     }
 
-    pub(crate) async fn revoke_exact<Render, RenderFuture>(
+    pub async fn revoke_exact<Render, RenderFuture>(
         &self,
         session_id: Uuid,
         render: Render,
@@ -118,10 +118,7 @@ impl<R: SmTeardownRepository> SmTeardownService<R> {
 
     /// Finish every expired claim before reporting an effect failure. A failed
     /// effect leaves its leased row for the next maintenance pass.
-    pub(crate) async fn cleanup_expired<Render, RenderFuture>(
-        &self,
-        mut render: Render,
-    ) -> Result<usize>
+    pub async fn cleanup_expired<Render, RenderFuture>(&self, mut render: Render) -> Result<usize>
     where
         Render: FnMut(R::Snapshot) -> RenderFuture + Send,
         RenderFuture: Future<Output = Result<()>> + Send,
@@ -152,7 +149,7 @@ impl<R: SmTeardownRepository> SmTeardownService<R> {
         Ok(total)
     }
 
-    pub(crate) async fn revoke_before_generation<Render, RenderFuture>(
+    pub async fn revoke_before_generation<Render, RenderFuture>(
         &self,
         user_id: Uuid,
         generation_exclusive: i64,
@@ -195,7 +192,7 @@ impl<R: SmTeardownRepository> SmTeardownService<R> {
         }
     }
 
-    pub(crate) async fn revoke_all<Render, RenderFuture>(&self, mut render: Render) -> Result<usize>
+    pub async fn revoke_all<Render, RenderFuture>(&self, mut render: Render) -> Result<usize>
     where
         Render: FnMut(R::Snapshot) -> RenderFuture + Send,
         RenderFuture: Future<Output = Result<()>> + Send,
@@ -220,7 +217,7 @@ impl<R: SmTeardownRepository> SmTeardownService<R> {
         }
     }
 
-    pub(crate) async fn revoke_user<Render, RenderFuture>(
+    pub async fn revoke_user<Render, RenderFuture>(
         &self,
         user_id: Uuid,
         mut render: Render,

@@ -424,12 +424,15 @@ async fn run_case(case: &wire::Case, input: &[u8]) -> Result<wire::Envelope> {
                 // real SM charge alive while BOSH uses this very same governor.
                 let governor = match recorder.governor() {
                     Some(governor) => governor,
-                    None => crate::services::sm_capacity::SmMemoryGovernor::new(
+                    None => northstar_session_application::sm_capacity::SmMemoryGovernor::new(
                         governor.max_bytes as usize,
                         governor.max_recovery_bytes as usize,
                         governor.max_recovery_jobs as usize,
                         governor.max_snapshot_bytes as usize,
-                        Arc::new(crate::services::sm_capacity::SmCapacityMetrics::default()),
+                        Arc::new(
+                            northstar_session_application::sm_capacity::SmCapacityMetrics::default(
+                            ),
+                        ),
                     )?,
                 };
                 let (evidence, dropped) = crate::bosh::run_saved_case(

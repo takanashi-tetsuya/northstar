@@ -11,7 +11,7 @@ use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use northstar_security::cluster_keys::ExpectedClusterPeerKey;
 use std::{future::Future, time::Duration};
 
-pub(crate) trait ClusterAuthorityRepository: Send + Sync {
+pub trait ClusterAuthorityRepository: Send + Sync {
     fn validate_cluster_key(
         &self,
         identity: &ClusterKeyDeploymentIdentity,
@@ -42,23 +42,23 @@ pub(crate) trait ClusterAuthorityRepository: Send + Sync {
     ) -> impl Future<Output = Result<()>> + Send;
 }
 
-pub(crate) struct ClusterAuthorityService<R> {
+pub struct ClusterAuthorityService<R> {
     repository: R,
 }
 
 impl<R: ClusterAuthorityRepository> ClusterAuthorityService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn validate_cluster_key(
+    pub async fn validate_cluster_key(
         &self,
         identity: &ClusterKeyDeploymentIdentity,
     ) -> Result<()> {
         self.repository.validate_cluster_key(identity).await
     }
 
-    pub(crate) async fn validate_local_instance(
+    pub async fn validate_local_instance(
         &self,
         authority: &ClusterReadinessAuthority,
     ) -> Result<()> {
@@ -83,7 +83,7 @@ impl<R: ClusterAuthorityRepository> ClusterAuthorityService<R> {
         Ok(())
     }
 
-    pub(crate) async fn heartbeat_local_instance(
+    pub async fn heartbeat_local_instance(
         &self,
         authority: &ClusterReadinessAuthority,
         lease: Duration,
@@ -93,7 +93,7 @@ impl<R: ClusterAuthorityRepository> ClusterAuthorityService<R> {
 
     /// Preserve the original two-stage cache update. Each query is independently
     /// committed; neither cache callback runs before its corresponding read.
-    pub(crate) async fn refresh_peers<InstallKeys, InstallInstances>(
+    pub async fn refresh_peers<InstallKeys, InstallInstances>(
         &self,
         domain: &str,
         expected: &[ExpectedClusterPeerKey],

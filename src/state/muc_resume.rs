@@ -664,7 +664,7 @@ impl AppState {
         &self,
         restored: RestoredLocalMucOccupants,
         sender: &crate::xmpp::outbound::OutboundSender,
-        capacity: crate::services::sm_capacity::SmCapacityLease,
+        capacity: northstar_session_application::sm_capacity::SmCapacityLease,
     ) -> CommittedLocalMucResume {
         let RestoredLocalMucOccupants {
             mut failures,

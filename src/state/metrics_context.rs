@@ -13,7 +13,7 @@ use std::sync::Arc;
 /// authority is exposed through MetricsContext's interface.
 #[derive(Clone)]
 struct SmRecoveryMetricsProbe {
-    governor: Arc<crate::services::sm_capacity::SmMemoryGovernor>,
+    governor: Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
     recovery: Arc<crate::state::session_cleanup::SmSuspensionRecoveryQueue>,
 }
 

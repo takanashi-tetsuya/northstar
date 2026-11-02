@@ -64,7 +64,7 @@ pub struct OutboundItem {
     /// HTTP response body is completed or discarded. Ordinary routed stanzas
     /// never set this field.
     pub(crate) transient_sm_capacity:
-        Option<std::sync::Arc<Vec<crate::services::sm_capacity::SmCapacityLease>>>,
+        Option<std::sync::Arc<Vec<northstar_session_application::sm_capacity::SmCapacityLease>>>,
 }
 
 pub(crate) type RouteEnqueue = northstar_message_core::route_item::RouteEnqueue<OutboundItem>;
@@ -185,7 +185,7 @@ impl OutboundItem {
 
     pub(crate) fn resume_fragment(
         stanza: String,
-        capacity: std::sync::Arc<Vec<crate::services::sm_capacity::SmCapacityLease>>,
+        capacity: std::sync::Arc<Vec<northstar_session_application::sm_capacity::SmCapacityLease>>,
     ) -> Self {
         Self {
             stanza,

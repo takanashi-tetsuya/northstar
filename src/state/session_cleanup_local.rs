@@ -62,7 +62,7 @@ impl SessionCleanupLocal {
     pub(crate) fn retain_suspended_sm_capacity(
         &self,
         endpoints: &[Arc<SuspendedMucEndpoint>],
-        capacity: crate::services::sm_capacity::SmCapacityLease,
+        capacity: northstar_session_application::sm_capacity::SmCapacityLease,
     ) {
         retain_suspended_sm_capacity_in(endpoints, capacity);
     }
@@ -159,7 +159,7 @@ pub(super) fn suspend_local_muc_occupants_in(
 
 pub(super) fn retain_suspended_sm_capacity_in(
     endpoints: &[Arc<SuspendedMucEndpoint>],
-    capacity: crate::services::sm_capacity::SmCapacityLease,
+    capacity: northstar_session_application::sm_capacity::SmCapacityLease,
 ) {
     for endpoint in endpoints {
         *endpoint

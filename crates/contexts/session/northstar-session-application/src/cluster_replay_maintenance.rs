@@ -3,21 +3,21 @@
 use anyhow::Result;
 use std::future::Future;
 
-pub(crate) trait ClusterReplayMaintenanceRepository: Send + Sync {
+pub trait ClusterReplayMaintenanceRepository: Send + Sync {
     fn cleanup_replays(&self, limit: i32) -> impl Future<Output = Result<u64>> + Send;
     fn validate_capacity_authority(&self) -> impl Future<Output = Result<()>> + Send;
 }
 
-pub(crate) struct ClusterReplayMaintenanceService<R> {
+pub struct ClusterReplayMaintenanceService<R> {
     repository: R,
 }
 
 impl<R: ClusterReplayMaintenanceRepository> ClusterReplayMaintenanceService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn cleanup_and_validate(&self, limit: i32) -> Result<u64> {
+    pub async fn cleanup_and_validate(&self, limit: i32) -> Result<u64> {
         let removed = self.repository.cleanup_replays(limit).await?;
         self.repository.validate_capacity_authority().await?;
         Ok(removed)

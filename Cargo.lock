@@ -2671,10 +2671,18 @@ dependencies = [
 name = "northstar-session-application"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "chrono",
+ "northstar-delivery-core",
+ "northstar-message-core",
+ "northstar-security",
  "northstar-session-core",
+ "northstar-xml-builder",
  "northstar-xmpp-types",
  "serde",
  "tokio",
+ "tokio-util",
+ "tracing",
  "uuid",
 ]
 

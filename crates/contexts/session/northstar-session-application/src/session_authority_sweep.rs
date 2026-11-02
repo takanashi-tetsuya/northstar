@@ -7,20 +7,20 @@ use std::{collections::HashMap, future::Future};
 use uuid::Uuid;
 
 #[derive(Clone, Copy)]
-pub(crate) struct SessionAuthoritySnapshot {
-    pub(crate) user_id: Uuid,
-    pub(crate) auth_generation: i64,
-    pub(crate) device_id: Option<Uuid>,
-    pub(crate) device_epoch: Option<i64>,
+pub struct SessionAuthoritySnapshot {
+    pub user_id: Uuid,
+    pub auth_generation: i64,
+    pub device_id: Option<Uuid>,
+    pub device_epoch: Option<i64>,
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct AccountAuthState {
-    pub(crate) auth_generation: i64,
-    pub(crate) is_disabled: bool,
+pub struct AccountAuthState {
+    pub auth_generation: i64,
+    pub is_disabled: bool,
 }
 
-pub(crate) trait SessionAuthoritySweepRepository: Send + Sync {
+pub trait SessionAuthoritySweepRepository: Send + Sync {
     fn auth_states_for_users(
         &self,
         user_ids: &[Uuid],
@@ -32,18 +32,18 @@ pub(crate) trait SessionAuthoritySweepRepository: Send + Sync {
     ) -> impl Future<Output = Result<HashMap<(Uuid, Uuid), i64>>> + Send;
 }
 
-pub(crate) struct SessionAuthoritySweepService<R> {
+pub struct SessionAuthoritySweepService<R> {
     repository: R,
 }
 
 impl<R: SessionAuthoritySweepRepository> SessionAuthoritySweepService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
     /// A missing or disabled account, or any generation mismatch, revokes the
     /// local route. Preserve the input order so callers can fence exact routes.
-    pub(crate) async fn stale_generations(
+    pub async fn stale_generations(
         &self,
         sessions: &[SessionAuthoritySnapshot],
     ) -> Result<Vec<bool>> {
@@ -66,7 +66,7 @@ impl<R: SessionAuthoritySweepRepository> SessionAuthoritySweepService<R> {
 
     /// Only sessions carrying both a device ID and an epoch are checked. A
     /// missing durable epoch revokes the route; a newer local epoch is valid.
-    pub(crate) async fn stale_device_epochs(
+    pub async fn stale_device_epochs(
         &self,
         sessions: &[SessionAuthoritySnapshot],
     ) -> Result<Vec<bool>> {

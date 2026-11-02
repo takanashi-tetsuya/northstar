@@ -4,12 +4,10 @@ use super::{suspension::SmSuspensionContext, AppState, SmBufferLimits, Suspended
 use crate::db::{
     sm_repository::PostgresSmRepository, sm_suspension::PostgresSmSuspensionRepository,
 };
-use crate::services::{
-    sm::{SmService, SmSessionSnapshot},
-    sm_capacity::{SmCapacityLease, SmMemoryGovernor},
-};
+use crate::services::sm::{SmService, SmSessionSnapshot};
 use crate::state::session_cleanup::{SessionCleanupAccount, SmSuspensionRecoveryQueue};
 use anyhow::Result;
+use northstar_session_application::sm_capacity::{SmCapacityLease, SmMemoryGovernor};
 use std::sync::Arc;
 use uuid::Uuid;
 

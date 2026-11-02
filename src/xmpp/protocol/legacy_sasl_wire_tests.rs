@@ -270,11 +270,13 @@ fn stream_limits_use_transport_supplied_policy() {
 fn resume_test_governor(
     max_bytes: usize,
 ) -> (
-    std::sync::Arc<crate::services::sm_capacity::SmMemoryGovernor>,
-    std::sync::Arc<crate::services::sm_capacity::SmCapacityMetrics>,
+    std::sync::Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
+    std::sync::Arc<northstar_session_application::sm_capacity::SmCapacityMetrics>,
 ) {
-    let metrics = std::sync::Arc::new(crate::services::sm_capacity::SmCapacityMetrics::default());
-    let governor = crate::services::sm_capacity::SmMemoryGovernor::new(
+    let metrics = std::sync::Arc::new(
+        northstar_session_application::sm_capacity::SmCapacityMetrics::default(),
+    );
+    let governor = northstar_session_application::sm_capacity::SmMemoryGovernor::new(
         max_bytes,
         600,
         8,
@@ -294,7 +296,7 @@ fn replay_source(
 }
 
 fn resume_payload(
-    governor: &std::sync::Arc<crate::services::sm_capacity::SmMemoryGovernor>,
+    governor: &std::sync::Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
     source: &std::collections::VecDeque<crate::xmpp::outbound::SmUnackedStanza>,
 ) -> anyhow::Result<ResumePayload> {
     let mut control = String::with_capacity(64);

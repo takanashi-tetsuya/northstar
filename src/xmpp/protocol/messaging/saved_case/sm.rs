@@ -2,12 +2,9 @@
 //! same real substate/governor/turn; only existing persistence ports are fake.
 use super::{next, wire, Sequence, SmMetadata, TransportOwnershipSource};
 use crate::{
-    services::{
-        sm::{
-            ownership::{PreparedBatch, PreparedCheckpoint, SnapshotProjection},
-            SmCheckpointOutcome, SmQueueOwnershipResolution,
-        },
-        sm_capacity::{SmCapacityLease, SmCapacityMetrics, SmMemoryGovernor},
+    services::sm::{
+        ownership::{PreparedBatch, PreparedCheckpoint, SnapshotProjection},
+        SmCheckpointOutcome, SmQueueOwnershipResolution,
     },
     xmpp::outbound::OutboundItem,
     xmpp::protocol::{
@@ -17,6 +14,9 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use northstar_delivery_core::sm_ownership as core;
+use northstar_session_application::sm_capacity::{
+    SmCapacityLease, SmCapacityMetrics, SmMemoryGovernor,
+};
 use std::{
     collections::VecDeque,
     sync::{

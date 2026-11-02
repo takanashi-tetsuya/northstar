@@ -1,10 +1,8 @@
 //! Expired durable stream claims and their post-claim teardown effects.
 
 use super::{sm_teardown_runtime::SmTeardownRuntime, AppState};
-use crate::{
-    db::sm_teardown_repository::PostgresSmTeardownRepository,
-    services::sm_teardown::SmTeardownService,
-};
+use crate::db::sm_teardown_repository::PostgresSmTeardownRepository;
+use northstar_session_application::sm_teardown::SmTeardownService;
 
 pub(crate) struct SmExpiryContext {
     service: SmTeardownService<PostgresSmTeardownRepository>,

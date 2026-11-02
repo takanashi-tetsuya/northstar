@@ -6,8 +6,9 @@ use crate::api::contexts::ReadinessContext;
 impl AppState {
     pub(crate) fn background_housekeeping_counters(
         &self,
-    ) -> crate::services::background_housekeeping::BackgroundHousekeepingCounters {
-        crate::services::background_housekeeping::BackgroundHousekeepingCounters::new(
+    ) -> northstar_operations_application::background_housekeeping::BackgroundHousekeepingCounters
+    {
+        northstar_operations_application::background_housekeeping::BackgroundHousekeepingCounters::new(
             Arc::clone(&self.metrics.retention_moderation_cases_deleted_total),
             Arc::clone(&self.metrics.background_maintenance_failures_total),
         )
@@ -15,11 +16,11 @@ impl AppState {
 
     pub(crate) fn background_housekeeping_context(
         &self,
-        counters: crate::services::background_housekeeping::BackgroundHousekeepingCounters,
-    ) -> crate::services::background_housekeeping::BackgroundHousekeepingContext<
+        counters: northstar_operations_application::background_housekeeping::BackgroundHousekeepingCounters,
+    ) -> northstar_operations_application::background_housekeeping::BackgroundHousekeepingContext<
         db::background_housekeeping_repository::PostgresBackgroundHousekeepingRepository,
-    > {
-        crate::services::background_housekeeping::BackgroundHousekeepingContext::new(
+    >{
+        northstar_operations_application::background_housekeeping::BackgroundHousekeepingContext::new(
             db::background_housekeeping_repository::PostgresBackgroundHousekeepingRepository::new(
                 self.pool.clone(),
             ),
@@ -105,7 +106,7 @@ impl AppState {
 
     pub(crate) fn capacity_lease_renewal_context(&self) -> CapacityLeaseRenewalContext {
         capacity_maintenance::CapacityLeaseRenewalContext::new(
-            crate::services::capacity_maintenance::CapacityMaintenanceService::new(
+            northstar_session_application::capacity_maintenance::CapacityMaintenanceService::new(
                 db::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository::new(
                     self.pool.clone(),
                 ),
@@ -264,7 +265,7 @@ impl AppState {
 
     pub(crate) fn sm_memory_governor(
         &self,
-    ) -> &Arc<crate::services::sm_capacity::SmMemoryGovernor> {
+    ) -> &Arc<northstar_session_application::sm_capacity::SmMemoryGovernor> {
         &self.sm_memory_governor
     }
 

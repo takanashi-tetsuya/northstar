@@ -7,33 +7,33 @@ use std::future::Future;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ClusterInstanceReleaseIdentity {
-    pub(crate) xmpp_domain: String,
-    pub(crate) node_id: String,
-    pub(crate) instance_uuid: Uuid,
-    pub(crate) instance_epoch: i64,
-    pub(crate) signing_key_id: String,
-    pub(crate) signing_key_epoch: i64,
+pub struct ClusterInstanceReleaseIdentity {
+    pub xmpp_domain: String,
+    pub node_id: String,
+    pub instance_uuid: Uuid,
+    pub instance_epoch: i64,
+    pub signing_key_id: String,
+    pub signing_key_epoch: i64,
 }
 
-pub(crate) trait ClusterInstanceReleaseRepository: Send + Sync {
+pub trait ClusterInstanceReleaseRepository: Send + Sync {
     fn release(
         &self,
         identity: &ClusterInstanceReleaseIdentity,
     ) -> impl Future<Output = Result<bool>> + Send;
 }
 
-pub(crate) struct ClusterInstanceReleaseService<R> {
+pub struct ClusterInstanceReleaseService<R> {
     repository: R,
 }
 
 impl<R: ClusterInstanceReleaseRepository> ClusterInstanceReleaseService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
     /// Preserve the repository's exact committed / absent / error outcome.
-    pub(crate) async fn release(&self, identity: &ClusterInstanceReleaseIdentity) -> Result<bool> {
+    pub async fn release(&self, identity: &ClusterInstanceReleaseIdentity) -> Result<bool> {
         self.repository.release(identity).await
     }
 }

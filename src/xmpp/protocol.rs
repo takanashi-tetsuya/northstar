@@ -296,7 +296,7 @@ struct SmSubstate {
     acked_h: u32,
     unacked: VecDeque<crate::xmpp::outbound::SmUnackedStanza>,
     /// Process-local bytes retained for a resumable XEP-0198 epoch.
-    capacity: Option<crate::services::sm_capacity::SmCapacityLease>,
+    capacity: Option<northstar_session_application::sm_capacity::SmCapacityLease>,
     /// One replaceable observation; retained old handles keep their own facts.
     current_operation: Option<northstar_delivery_core::sm_ownership::Observation>,
 }

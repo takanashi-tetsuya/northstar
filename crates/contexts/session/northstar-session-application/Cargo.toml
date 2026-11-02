@@ -7,9 +7,24 @@ license = "AGPL-3.0-only"
 description = "Typed commands, lifecycle signals, and application boundaries for XMPP sessions"
 publish = false
 
+[features]
+# Test-only observers the root crate's route tests use.
+test-support = []
+
 [dependencies]
+anyhow = "1.0"
+northstar-delivery-core = { path = "../../message/northstar-delivery-core" }
+northstar-message-core = { path = "../../message/northstar-message-core" }
+northstar-security = { path = "../../../platform/northstar-security" }
 northstar-session-core = { path = "../northstar-session-core" }
+northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1.43", features = ["sync"] }
+tokio = { version = "1.43", features = ["sync", "time"] }
+tokio-util = "0.7"
+tracing = "0.1"
 uuid = { version = "1.12", features = ["v4", "serde"] }
+
+[dev-dependencies]
+chrono = "0.4"
+tokio = { version = "1.43", features = ["macros", "rt", "sync", "test-util", "time"] }

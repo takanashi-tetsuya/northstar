@@ -2378,18 +2378,18 @@ fn durable_contract_is_bound_to_the_exact_spooled_payload() {
         Some("example.test"),
     );
     assert!(
-        crate::services::node_message_contract_verifier::durable_projection_matches(
+        northstar_session_application::node_message_contract_verifier::durable_projection_matches(
             &stored, routed
         )
     );
     assert!(
-            !crate::services::node_message_contract_verifier::durable_projection_matches(
+            !northstar_session_application::node_message_contract_verifier::durable_projection_matches(
                 &stored,
                 "<message from='alice@example.test/Phone' to='bob@example.test' type='chat' id='m1'><body>changed</body></message>"
             )
         );
     assert!(
-            !crate::services::node_message_contract_verifier::durable_projection_matches(
+            !northstar_session_application::node_message_contract_verifier::durable_projection_matches(
                 &stored,
                 "<message from='alice@example.test/Phone' to='mallory@example.test' type='chat' id='m1'><body>hello</body></message>"
             )

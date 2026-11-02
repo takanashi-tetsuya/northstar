@@ -1,7 +1,7 @@
 //! PostgreSQL adapter for the cluster session-route maintenance sequence.
 
-use crate::services::cluster_session_route_maintenance::ClusterSessionRouteMaintenanceRepository;
 use anyhow::Result;
+use northstar_session_application::cluster_session_route_maintenance::ClusterSessionRouteMaintenanceRepository;
 use sqlx::PgPool;
 
 pub(crate) struct PostgresClusterSessionRouteMaintenanceRepository {

@@ -19,7 +19,8 @@ use tokio_util::sync::CancellationToken;
 /// their final activation check; no map guard survives the database read.
 pub(crate) struct LocalSessionAuthoritySnapshot {
     pub(crate) full_jid: String,
-    pub(crate) authority: crate::services::session_authority_sweep::SessionAuthoritySnapshot,
+    pub(crate) authority:
+        northstar_session_application::session_authority_sweep::SessionAuthoritySnapshot,
     pub(crate) disconnect: CancellationToken,
 }
 
@@ -39,12 +40,13 @@ pub(crate) fn local_session_authority_snapshots_in(
         .iter()
         .map(|entry| LocalSessionAuthoritySnapshot {
             full_jid: entry.key().clone(),
-            authority: crate::services::session_authority_sweep::SessionAuthoritySnapshot {
-                user_id: entry.user_id,
-                auth_generation: entry.auth_generation,
-                device_id: entry.user_agent_id,
-                device_epoch: entry.user_agent_epoch,
-            },
+            authority:
+                northstar_session_application::session_authority_sweep::SessionAuthoritySnapshot {
+                    user_id: entry.user_id,
+                    auth_generation: entry.auth_generation,
+                    device_id: entry.user_agent_id,
+                    device_epoch: entry.user_agent_epoch,
+                },
             disconnect: entry.disconnect.clone(),
         })
         .collect()

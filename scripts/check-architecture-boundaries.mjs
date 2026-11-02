@@ -2322,7 +2322,7 @@ for (const [name, source] of [
   ['SubscriptionCleanupContext', read('src/runtime/subscription_cleanup.rs')],
   ['UploadMaintenanceContext', read('crates/contexts/upload/northstar-upload-application/src/worker.rs')],
   ['UploadMaintenanceRepository', read('crates/contexts/upload/northstar-upload-application/src/maintenance.rs')],
-  ['CapacityMaintenanceService', read('src/services/capacity_maintenance.rs')],
+  ['CapacityMaintenanceService', read('crates/contexts/session/northstar-session-application/src/capacity_maintenance.rs')],
   ['CapacityMaintenanceContexts', read('src/state/capacity_maintenance.rs')],
   ['CapacityMaintenanceWorkers', read('src/runtime/capacity_maintenance.rs')],
   ['SmSuspensionContext', read('src/state/suspension.rs')],
@@ -2527,7 +2527,7 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(teardownSequence)
     || /State<Arc<AppState>>/.test(passkeyApiSource + recoveryApiSource + read('src/api/users.rs'))) {
   throw new Error('post-commit account teardown must use scoped HTTP contexts and ordered effects');
 }
-const smTeardownService = read('src/services/sm_teardown.rs');
+const smTeardownService = read('crates/contexts/session/northstar-session-application/src/sm_teardown.rs');
 if (/\b(?:sqlx|PgPool|AppState|ClusterManager)\b/.test(smTeardownService.split('#[cfg(test)]')[0])
     || !smTeardownService.includes('render(snapshot).await?;')
     || !smTeardownService.includes('self.repository.finalize(lease).await?')
@@ -3765,10 +3765,10 @@ if (!readinessEndpoint.includes('context: ReadinessContext')
 const clusterSource = cluster;
 const clusterMaintenance = rustItemBody(clusterSource, 'async fn maintenance_once(');
 const clusterRedisMaintenance = rustItemBody(clusterSource, 'struct ClusterMaintenanceRedis');
-const sessionRouteMaintenanceSource = read('src/services/session_route_maintenance.rs');
-const sessionRoutePort = structBody(sessionRouteMaintenanceSource, 'pub(crate) trait SessionRouteRenewalPort');
+const sessionRouteMaintenanceSource = read('crates/contexts/session/northstar-session-application/src/session_route_maintenance.rs');
+const sessionRoutePort = structBody(sessionRouteMaintenanceSource, 'pub trait SessionRouteRenewalPort');
 const sessionRouteService = structBody(sessionRouteMaintenanceSource, 'impl<P: SessionRouteRenewalPort> SessionRouteRenewalService<P>');
-const sessionRouteRedisAdapter = rustItemBody(clusterSource, 'impl crate::services::session_route_maintenance::SessionRouteRenewalPort');
+const sessionRouteRedisAdapter = rustItemBody(clusterSource, 'impl northstar_session_application::session_route_maintenance::SessionRouteRenewalPort');
 const sessionRouteRelease = rustItemBody(clusterSource, 'async fn release_session_authority(');
 const mucSoftStatePort = structBody(mucServiceSource, 'pub trait MucSoftStateProjectionPort');
 const mucSoftStateService = structBody(mucServiceSource, 'impl<P: MucSoftStateProjectionPort> MucSoftStateProjectionService<P>');
@@ -3957,7 +3957,7 @@ if (!retentionContext.includes('counters: RetentionCounters')
     || retentionContext.includes('Arc<Metrics>')) {
   throw new Error('archive retention must carry only its operation counters');
 }
-const housekeepingContext = structBody(read('src/services/background_housekeeping.rs'), 'pub(crate) struct BackgroundHousekeepingContext');
+const housekeepingContext = structBody(read('crates/contexts/operations/northstar-operations-application/src/background_housekeeping.rs'), 'pub struct BackgroundHousekeepingContext');
 if (!housekeepingContext.includes('counters: BackgroundHousekeepingCounters')
     || housekeepingContext.includes('Arc<Metrics>')
     || /bg_state\.metrics\b/.test(mainSource)) {

@@ -25,7 +25,7 @@ pub(crate) struct MucDeliveryContext {
     pub(crate) sessions: Arc<DashMap<String, OnlineSession>>,
     pub(crate) muc_occupants: Arc<DashMap<String, MucOccupant>>,
     pub(crate) suspended_muc_sessions: Arc<DashMap<uuid::Uuid, Arc<SuspendedMucEndpoint>>>,
-    pub(crate) sm_memory_governor: Arc<crate::services::sm_capacity::SmMemoryGovernor>,
+    pub(crate) sm_memory_governor: Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
     pub(crate) sm_max_unacked_stanzas: usize,
     pub(crate) sm_max_unacked_bytes: usize,
     pub(crate) federation_outbox: FederationRouter,

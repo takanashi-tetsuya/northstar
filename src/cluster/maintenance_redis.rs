@@ -322,7 +322,7 @@ impl ClusterMaintenanceRedis {
     }
 }
 
-impl crate::services::session_route_maintenance::SessionRouteRenewalPort
+impl northstar_session_application::session_route_maintenance::SessionRouteRenewalPort
     for ClusterMaintenanceRedis
 {
     async fn renew_authority(

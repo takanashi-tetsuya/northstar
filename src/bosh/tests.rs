@@ -5,13 +5,13 @@ fn response_body_text(response: &BoshHttpResponse) -> &str {
         .expect("BOSH responses are built from server-owned UTF-8 XML")
 }
 
-fn response_test_governor() -> Arc<crate::services::sm_capacity::SmMemoryGovernor> {
-    crate::services::sm_capacity::SmMemoryGovernor::new(
+fn response_test_governor() -> Arc<northstar_session_application::sm_capacity::SmMemoryGovernor> {
+    northstar_session_application::sm_capacity::SmMemoryGovernor::new(
         1024 * 1024,
         256 * 1024,
         16,
         256 * 1024,
-        Arc::new(crate::services::sm_capacity::SmCapacityMetrics::default()),
+        Arc::new(northstar_session_application::sm_capacity::SmCapacityMetrics::default()),
     )
     .unwrap()
 }
@@ -798,8 +798,9 @@ fn resume_auth_control_marker_is_atomic_and_control_only() {
 
 #[test]
 fn bosh_response_and_transport_drop_retain_then_release_resume_capacity() {
-    let metrics = Arc::new(crate::services::sm_capacity::SmCapacityMetrics::default());
-    let governor = crate::services::sm_capacity::SmMemoryGovernor::new(
+    let metrics =
+        Arc::new(northstar_session_application::sm_capacity::SmCapacityMetrics::default());
+    let governor = northstar_session_application::sm_capacity::SmMemoryGovernor::new(
         1024 * 1024,
         256 * 1024,
         16,

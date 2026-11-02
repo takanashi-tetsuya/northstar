@@ -5,7 +5,7 @@ use std::future::Future;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RequestedNodeMessageProjection {
+pub enum RequestedNodeMessageProjection {
     Volatile,
     DurableC2s {
         recipient_id: Uuid,
@@ -19,20 +19,20 @@ pub(crate) enum RequestedNodeMessageProjection {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum VerifiedNodeMessageProjection {
+pub enum VerifiedNodeMessageProjection {
     Volatile,
     Durable(northstar_delivery_core::DurableDelivery),
     Mix(northstar_delivery_core::MixDelivery),
 }
 
-pub(crate) struct MixDeliveryProjection {
-    pub(crate) recipient_jid: String,
-    pub(crate) stanza_template: String,
-    pub(crate) lease_active: bool,
-    pub(crate) event_active: bool,
+pub struct MixDeliveryProjection {
+    pub recipient_jid: String,
+    pub stanza_template: String,
+    pub lease_active: bool,
+    pub event_active: bool,
 }
 
-pub(crate) trait NodeMessageProjectionRepository: Send + Sync {
+pub trait NodeMessageProjectionRepository: Send + Sync {
     fn durable_c2s_stanza(
         &self,
         recipient_id: Uuid,
@@ -51,16 +51,16 @@ pub(crate) trait NodeMessageProjectionRepository: Send + Sync {
     ) -> impl Future<Output = Result<Option<(Uuid, String)>>> + Send;
 }
 
-pub(crate) struct NodeMessageContractVerifier<R> {
+pub struct NodeMessageContractVerifier<R> {
     repository: R,
 }
 
 impl<R: NodeMessageProjectionRepository> NodeMessageContractVerifier<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn resolve(
+    pub async fn resolve(
         &self,
         request: RequestedNodeMessageProjection,
         stanza: &str,
@@ -168,7 +168,7 @@ impl<R: NodeMessageProjectionRepository> NodeMessageContractVerifier<R> {
     }
 }
 
-pub(crate) fn durable_projection_matches(stored_stanza: &str, routed_stanza: &str) -> bool {
+pub fn durable_projection_matches(stored_stanza: &str, routed_stanza: &str) -> bool {
     // Durable rows add a direct server delay marker before routing. Only
     // direct delays may differ; the remaining XML bytes must match exactly.
     northstar_message_core::validation::strip_untrusted_direct_delays(stored_stanza, None)

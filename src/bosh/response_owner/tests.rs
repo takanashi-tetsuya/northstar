@@ -296,7 +296,7 @@ impl Harness {
                 256 * 1024,
                 16,
                 256 * 1024,
-                Arc::new(crate::services::sm_capacity::SmCapacityMetrics::default()),
+                Arc::new(northstar_session_application::sm_capacity::SmCapacityMetrics::default()),
             )
             .unwrap(),
             max_bytes: 64 * 1024,
@@ -1962,7 +1962,8 @@ async fn ack_or_renewal_unknown_mismatch_and_postreceipt_drop_preserve_cache() {
 async fn real_resume_governor_holds_follow_shared_response_bytes_until_last_drop() {
     let operation = operation();
     let port = FakeReplay::default();
-    let metrics = Arc::new(crate::services::sm_capacity::SmCapacityMetrics::default());
+    let metrics =
+        Arc::new(northstar_session_application::sm_capacity::SmCapacityMetrics::default());
     let governor =
         SmMemoryGovernor::new(1024 * 1024, 256 * 1024, 16, 256 * 1024, metrics.clone()).unwrap();
     let source = VecDeque::from([crate::xmpp::outbound::SmUnackedStanza::plain(
@@ -2030,7 +2031,8 @@ async fn real_resume_governor_holds_follow_shared_response_bytes_until_last_drop
 async fn real_governor_rejection_preserves_fifo_before_response_buffer_allocation() {
     let operation = operation();
     let port = FakeReplay::default();
-    let metrics = Arc::new(crate::services::sm_capacity::SmCapacityMetrics::default());
+    let metrics =
+        Arc::new(northstar_session_application::sm_capacity::SmCapacityMetrics::default());
     let governor =
         SmMemoryGovernor::new(1024 * 1024, 256 * 1024, 16, 256 * 1024, metrics.clone()).unwrap();
     let hold = Arc::new(governor.try_reserve_transient(512).unwrap());

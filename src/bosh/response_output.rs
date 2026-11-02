@@ -10,7 +10,7 @@ pub(super) fn superseded_bosh_message_id(error: &anyhow::Error) -> Option<uuid::
 
 pub(super) struct BoshCapacityBody {
     pub(super) body: String,
-    pub(super) _holds: Vec<Arc<Vec<crate::services::sm_capacity::SmCapacityLease>>>,
+    pub(super) _holds: Vec<Arc<Vec<northstar_session_application::sm_capacity::SmCapacityLease>>>,
 }
 
 impl AsRef<[u8]> for BoshCapacityBody {
@@ -21,7 +21,7 @@ impl AsRef<[u8]> for BoshCapacityBody {
 
 pub(super) fn bosh_response_bytes(
     body: String,
-    holds: Vec<Arc<Vec<crate::services::sm_capacity::SmCapacityLease>>>,
+    holds: Vec<Arc<Vec<northstar_session_application::sm_capacity::SmCapacityLease>>>,
 ) -> Bytes {
     if holds.is_empty() {
         Bytes::from(body)
@@ -145,7 +145,7 @@ pub(super) fn take_response_payload(
     output: &mut VecDeque<crate::xmpp::outbound::OutboundItem>,
     output_bytes: &mut usize,
     max_response_bytes: usize,
-    governor: &Arc<crate::services::sm_capacity::SmMemoryGovernor>,
+    governor: &Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
 ) -> anyhow::Result<BoshResponsePayload> {
     const WRAPPER_RESERVE: usize = 256;
     let mut selected = 0usize;

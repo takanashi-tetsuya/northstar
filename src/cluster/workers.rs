@@ -247,14 +247,14 @@ pub(super) async fn maintenance_once(
     let sessions = locals
         .session_lease_snapshots()
         .into_iter()
-        .map(
-            |snapshot| crate::services::session_route_maintenance::SessionRouteLease {
+        .map(|snapshot| {
+            northstar_session_application::session_route_maintenance::SessionRouteLease {
                 full_jid: snapshot.full_jid,
                 activity_age_seconds: snapshot.activity_age_seconds,
                 connection_id: snapshot.connection_id,
                 disconnect: snapshot.disconnect,
-            },
-        )
+            }
+        })
         .collect();
     context.session_routes.renew_all(sessions).await?;
     // PostgreSQL, not Redis, owns clustered MUC occupancy. Refresh the

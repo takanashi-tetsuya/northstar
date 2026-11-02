@@ -12,10 +12,7 @@ use super::{
 };
 use crate::xmpp::auth_publication::{OwnedPublication, SelectedControls};
 use crate::{
-    services::{
-        replay::{ReplayRepository, ReplayService},
-        sm_capacity::SmMemoryGovernor,
-    },
+    services::replay::{ReplayRepository, ReplayService},
     xmpp::outbound::{BoshResponseOwnership, OutboundItem},
 };
 use anyhow::Result;
@@ -24,6 +21,7 @@ use northstar_delivery_core::bosh_ownership::{
     response::{self, AckRequest, BindRequest, RenewRequest, ResponseBuild, ResponseKind},
     Operation,
 };
+use northstar_session_application::sm_capacity::SmMemoryGovernor;
 use std::{collections::VecDeque, future::Future, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 type Responder = oneshot::Sender<BoshHttpResponse>;

@@ -1,7 +1,8 @@
 //! PostgreSQL reads for durable SM unavailable presence authorization.
 
-use crate::{db, services::sm_teardown_presence::*};
+use crate::db;
 use anyhow::Result;
+use northstar_session_application::sm_teardown_presence::*;
 use sqlx::PgPool;
 use uuid::Uuid;
 

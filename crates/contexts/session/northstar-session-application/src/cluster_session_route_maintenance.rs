@@ -3,23 +3,23 @@
 use anyhow::Result;
 use std::future::Future;
 
-pub(crate) trait ClusterSessionRouteMaintenanceRepository: Send + Sync {
+pub trait ClusterSessionRouteMaintenanceRepository: Send + Sync {
     fn cleanup_routes(&self, limit: i32) -> impl Future<Output = Result<u64>> + Send;
     fn validate_authority(&self) -> impl Future<Output = Result<()>> + Send;
 }
 
-pub(crate) struct ClusterSessionRouteMaintenanceService<R> {
+pub struct ClusterSessionRouteMaintenanceService<R> {
     repository: R,
 }
 
 impl<R: ClusterSessionRouteMaintenanceRepository> ClusterSessionRouteMaintenanceService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
     /// Validate after cleanup, so malformed or unauthorized surviving routes
     /// still fail the cluster authority check before instance refresh.
-    pub(crate) async fn cleanup_and_validate(&self, limit: i32) -> Result<u64> {
+    pub async fn cleanup_and_validate(&self, limit: i32) -> Result<u64> {
         let removed = self.repository.cleanup_routes(limit).await?;
         self.repository.validate_authority().await?;
         Ok(removed)

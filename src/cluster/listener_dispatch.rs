@@ -10,9 +10,9 @@ use crate::{
         ClusterSessionTerminationIdentity, SessionTerminationEffect,
     },
     db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository,
-    services::session_termination_authority::{
-        SessionTerminationAuthority, SessionTerminationAuthorityService,
-    },
+};
+use northstar_session_application::session_termination_authority::{
+    SessionTerminationAuthority, SessionTerminationAuthorityService,
 };
 use uuid::Uuid;
 

@@ -1,6 +1,6 @@
 //! PostgreSQL owns lease renewal and the reaper's advisory-lock transaction.
-use crate::services::capacity_maintenance::CapacityMaintenanceRepository;
 use anyhow::Result;
+use northstar_session_application::capacity_maintenance::CapacityMaintenanceRepository;
 use sqlx::PgPool;
 use std::collections::HashSet;
 use uuid::Uuid;

@@ -15,7 +15,7 @@ pub struct ResumePayload {
     pub(super) replay: Vec<String>,
     pub(super) activate_route: bool,
     pub(super) auth_publication: Option<super::super::auth_publication::AuthControlHolder>,
-    pub(super) transient_capacity: Vec<crate::services::sm_capacity::SmCapacityLease>,
+    pub(super) transient_capacity: Vec<northstar_session_application::sm_capacity::SmCapacityLease>,
 }
 
 pub(crate) struct ResumeTransportParts {
@@ -24,12 +24,12 @@ pub(crate) struct ResumeTransportParts {
     pub(crate) replay: Vec<String>,
     pub(crate) activate_route: bool,
     pub(crate) auth_publication: Option<super::super::auth_publication::AuthControlHolder>,
-    pub(crate) transient_capacity: Vec<crate::services::sm_capacity::SmCapacityLease>,
+    pub(crate) transient_capacity: Vec<northstar_session_application::sm_capacity::SmCapacityLease>,
 }
 
 impl ResumePayload {
     pub(crate) fn from_sm_unacked(
-        governor: &Arc<crate::services::sm_capacity::SmMemoryGovernor>,
+        governor: &Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
         control: String,
         post_control: Vec<String>,
         replay_source: &VecDeque<crate::xmpp::outbound::SmUnackedStanza>,
@@ -80,7 +80,7 @@ impl ResumePayload {
         control: String,
         post_control: Vec<String>,
         reserved_bytes: usize,
-        mut capacity: Vec<crate::services::sm_capacity::SmCapacityLease>,
+        mut capacity: Vec<northstar_session_application::sm_capacity::SmCapacityLease>,
     ) -> Result<()> {
         anyhow::ensure!(
             self.auth_publication.is_none(),

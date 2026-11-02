@@ -3,7 +3,7 @@ use anyhow::Result;
 use std::collections::HashSet;
 use uuid::Uuid;
 
-pub(crate) trait CapacityMaintenanceRepository: Send + Sync {
+pub trait CapacityMaintenanceRepository: Send + Sync {
     fn renew_live_connections(
         &self,
         connection_ids: &[Uuid],
@@ -17,16 +17,16 @@ pub(crate) trait CapacityMaintenanceRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct CapacityMaintenanceService<R> {
+pub struct CapacityMaintenanceService<R> {
     repository: R,
 }
 
 impl<R: CapacityMaintenanceRepository> CapacityMaintenanceService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn renew_live_connections(
+    pub async fn renew_live_connections(
         &self,
         connection_ids: &[Uuid],
         lease_seconds: u64,
@@ -36,7 +36,7 @@ impl<R: CapacityMaintenanceRepository> CapacityMaintenanceService<R> {
             .await
     }
 
-    pub(crate) async fn try_reap_expired(&self, limit: i64) -> Result<Option<u64>> {
+    pub async fn try_reap_expired(&self, limit: i64) -> Result<Option<u64>> {
         self.repository.try_reap_expired(limit).await
     }
 }

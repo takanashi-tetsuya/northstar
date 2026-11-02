@@ -1,7 +1,8 @@
 //! PostgreSQL adapter for generation-fenced durable SM teardown.
 
-use crate::{db, services::sm_teardown::*};
+use crate::db;
 use anyhow::Result;
+use northstar_session_application::sm_teardown::*;
 use sqlx::PgPool;
 use uuid::Uuid;
 

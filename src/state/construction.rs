@@ -283,8 +283,8 @@ impl AppState {
             )
             .context("configured connection actor capacity is invalid")?;
         let sm_capacity_metrics =
-            Arc::new(crate::services::sm_capacity::SmCapacityMetrics::default());
-        let sm_memory_governor = crate::services::sm_capacity::SmMemoryGovernor::new(
+            Arc::new(northstar_session_application::sm_capacity::SmCapacityMetrics::default());
+        let sm_memory_governor = northstar_session_application::sm_capacity::SmMemoryGovernor::new(
             config.sm_memory_budget_bytes,
             config.sm_recovery_max_bytes,
             config.sm_recovery_max_jobs,

@@ -1,9 +1,9 @@
 //! PostgreSQL projections used to verify an inbound cluster delivery contract.
 
-use crate::services::node_message_contract_verifier::{
+use anyhow::Result;
+use northstar_session_application::node_message_contract_verifier::{
     MixDeliveryProjection, NodeMessageProjectionRepository,
 };
-use anyhow::Result;
 use sqlx::PgPool;
 use uuid::Uuid;
 

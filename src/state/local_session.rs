@@ -449,7 +449,7 @@ impl AppState {
         snapshot: db::SmTeardownSnapshot,
     ) -> anyhow::Result<()> {
         let runtime = self.sm_teardown_runtime();
-        crate::services::sm_teardown::SmTeardownService::new(
+        northstar_session_application::sm_teardown::SmTeardownService::new(
             db::sm_teardown_repository::PostgresSmTeardownRepository::new(self.pool.clone()),
             self.config.sm_claim_lease_seconds,
         )
@@ -461,10 +461,10 @@ impl AppState {
 
     pub(super) fn sm_teardown_presence_service(
         &self,
-    ) -> crate::services::sm_teardown_presence::SmTeardownPresenceService<
+    ) -> northstar_session_application::sm_teardown_presence::SmTeardownPresenceService<
         db::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository,
     > {
-        crate::services::sm_teardown_presence::SmTeardownPresenceService::new(
+        northstar_session_application::sm_teardown_presence::SmTeardownPresenceService::new(
             db::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository::new(
                 self.pool.clone(),
             ),

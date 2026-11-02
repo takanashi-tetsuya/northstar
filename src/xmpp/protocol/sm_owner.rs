@@ -2,17 +2,15 @@
 //! substate. Only the current persistence/capacity capabilities are injected.
 use super::{ProtocolSession, SmRuntimePolicy, SmSubstate};
 use crate::{
-    services::{
-        sm::{
-            ownership::{CheckpointPolicy, PreparedBatch, PreparedCheckpoint},
-            SmCheckpointOutcome, SmRepository, SmService, SmSessionSnapshot,
-        },
-        sm_capacity::{SmCapacityLease, SmMemoryGovernor},
+    services::sm::{
+        ownership::{CheckpointPolicy, PreparedBatch, PreparedCheckpoint},
+        SmCheckpointOutcome, SmRepository, SmService, SmSessionSnapshot,
     },
     xmpp::outbound::{OutboundItem, SmUnackedStanza, TransportOwnershipSource},
 };
 use anyhow::{Context, Result};
 use northstar_delivery_core::sm_ownership::{self, Observation, Purpose, Scope, Terminal};
+use northstar_session_application::sm_capacity::{SmCapacityLease, SmMemoryGovernor};
 use northstar_session_core::JoinedMucMembership;
 use std::{
     collections::VecDeque,

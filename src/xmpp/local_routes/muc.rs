@@ -19,7 +19,8 @@ pub struct SuspendedMucEndpoint {
     pub(crate) changed: tokio::sync::Notify,
     /// Shared actual-byte lease for the durable stream plus its process-local
     /// MUC suffix. Clones across room occupants reference one reservation.
-    pub(crate) sm_capacity: std::sync::Mutex<Option<crate::services::sm_capacity::SmCapacityLease>>,
+    pub(crate) sm_capacity:
+        std::sync::Mutex<Option<northstar_session_application::sm_capacity::SmCapacityLease>>,
 }
 
 #[derive(Clone)]

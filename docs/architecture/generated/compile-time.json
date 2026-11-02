@@ -4659,7 +4659,31 @@
     ],
     [
       "northstar-session-application",
+      "anyhow"
+    ],
+    [
+      "northstar-session-application",
+      "chrono"
+    ],
+    [
+      "northstar-session-application",
+      "northstar-delivery-core"
+    ],
+    [
+      "northstar-session-application",
+      "northstar-message-core"
+    ],
+    [
+      "northstar-session-application",
+      "northstar-security"
+    ],
+    [
+      "northstar-session-application",
       "northstar-session-core"
+    ],
+    [
+      "northstar-session-application",
+      "northstar-xml-builder"
     ],
     [
       "northstar-session-application",
@@ -4672,6 +4696,14 @@
     [
       "northstar-session-application",
       "tokio"
+    ],
+    [
+      "northstar-session-application",
+      "tokio-util"
+    ],
+    [
+      "northstar-session-application",
+      "tracing"
     ],
     [
       "northstar-session-application",

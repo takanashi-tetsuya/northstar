@@ -49,10 +49,10 @@ impl AppState {
 
     pub(crate) fn cluster_authority_service(
         &self,
-    ) -> crate::services::cluster_authority::ClusterAuthorityService<
+    ) -> northstar_session_application::cluster_authority::ClusterAuthorityService<
         db::cluster_authority_repository::PostgresClusterAuthorityRepository,
     > {
-        crate::services::cluster_authority::ClusterAuthorityService::new(
+        northstar_session_application::cluster_authority::ClusterAuthorityService::new(
             db::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
                 self.pool.clone(),
             ),
@@ -73,10 +73,10 @@ impl AppState {
 
     pub(crate) fn node_message_contract_verifier(
         &self,
-    ) -> crate::services::node_message_contract_verifier::NodeMessageContractVerifier<
+    ) -> northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier<
         db::node_message_projection_repository::PostgresNodeMessageProjectionRepository,
-    > {
-        crate::services::node_message_contract_verifier::NodeMessageContractVerifier::new(
+    >{
+        northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier::new(
             db::node_message_projection_repository::PostgresNodeMessageProjectionRepository::new(
                 self.pool.clone(),
             ),
@@ -85,10 +85,10 @@ impl AppState {
 
     pub(crate) fn cluster_instance_release_service(
         &self,
-    ) -> crate::services::cluster_instance_release::ClusterInstanceReleaseService<
+    ) -> northstar_session_application::cluster_instance_release::ClusterInstanceReleaseService<
         db::cluster_instance_release_repository::PostgresClusterInstanceReleaseRepository,
     > {
-        crate::services::cluster_instance_release::ClusterInstanceReleaseService::new(
+        northstar_session_application::cluster_instance_release::ClusterInstanceReleaseService::new(
             db::cluster_instance_release_repository::PostgresClusterInstanceReleaseRepository::new(
                 self.pool.clone(),
             ),

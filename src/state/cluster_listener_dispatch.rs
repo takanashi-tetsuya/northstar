@@ -3,8 +3,8 @@
 use super::AppState;
 use crate::cluster::listener_dispatch::ClusterListenerDispatch;
 use crate::db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository;
-use crate::services::session_termination_authority::SessionTerminationAuthorityService;
 use crate::xmpp::local_routes::session::AccountRevocationRoutes;
+use northstar_session_application::session_termination_authority::SessionTerminationAuthorityService;
 use std::sync::Arc;
 
 impl AppState {

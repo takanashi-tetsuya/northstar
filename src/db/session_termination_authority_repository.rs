@@ -1,9 +1,9 @@
 //! PostgreSQL adapter for an exact cluster session-route authority read.
 
-use crate::services::session_termination_authority::{
+use anyhow::Result;
+use northstar_session_application::session_termination_authority::{
     SessionRouteAuthority, SessionTerminationAuthorityRepository,
 };
-use anyhow::Result;
 use sqlx::PgPool;
 
 pub(crate) struct PostgresSessionTerminationAuthorityRepository {

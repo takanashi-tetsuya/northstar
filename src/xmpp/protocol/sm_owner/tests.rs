@@ -1,12 +1,12 @@
 use super::*;
 use crate::{
     services::sm::{SmMixLeaseRotation, SmQueueOwnershipResolution},
-    services::sm_capacity::SmCapacityMetrics,
     xmpp::outbound::{DurableDelivery, MixDelivery},
 };
 use northstar_delivery_core::sm_ownership::{
     CommitFact, HDecision, Knowledge, KnowledgeClass, MixRotation,
 };
+use northstar_session_application::sm_capacity::SmCapacityMetrics;
 use std::{
     sync::{atomic::AtomicU64, Mutex},
     task::Waker,

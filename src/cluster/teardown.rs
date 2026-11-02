@@ -548,8 +548,8 @@ impl ClusterSessionTerminationIdentity {
 
     pub(crate) fn local_instance(
         &self,
-    ) -> crate::services::session_termination_authority::LocalClusterInstance {
-        crate::services::session_termination_authority::LocalClusterInstance {
+    ) -> northstar_session_application::session_termination_authority::LocalClusterInstance {
+        northstar_session_application::session_termination_authority::LocalClusterInstance {
             node_id: self.node_id.clone(),
             instance_uuid: self.instance_uuid,
             instance_epoch: self.instance_epoch.load(Ordering::Acquire),

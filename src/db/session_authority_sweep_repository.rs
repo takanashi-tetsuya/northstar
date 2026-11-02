@@ -1,7 +1,9 @@
 //! Read-only PostgreSQL adapter for live-session credential maintenance.
 
-use crate::services::session_authority_sweep::{AccountAuthState, SessionAuthoritySweepRepository};
 use anyhow::Result;
+use northstar_session_application::session_authority_sweep::{
+    AccountAuthState, SessionAuthoritySweepRepository,
+};
 use sqlx::PgPool;
 use std::collections::HashMap;
 use uuid::Uuid;

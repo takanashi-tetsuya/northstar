@@ -1,10 +1,10 @@
 //! Exact local connection snapshots for capacity renewal; no routing authority escapes.
 use super::OnlineSession;
-use crate::services::capacity_maintenance::{
-    CapacityMaintenanceRepository, CapacityMaintenanceService,
-};
 use anyhow::{Context, Result};
 use dashmap::DashMap;
+use northstar_session_application::capacity_maintenance::{
+    CapacityMaintenanceRepository, CapacityMaintenanceService,
+};
 use northstar_telemetry::metrics::Metrics;
 use std::{
     sync::{atomic::Ordering, Arc},

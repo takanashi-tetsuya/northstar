@@ -186,7 +186,7 @@ struct BoshActor {
     protocol: ProtocolSession,
     replay_service: crate::state::BoshReplayService,
     mix_service: crate::state::BoshMixService,
-    sm_memory_governor: Arc<crate::services::sm_capacity::SmMemoryGovernor>,
+    sm_memory_governor: Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
     commands: mpsc::Receiver<BoshCommand>,
     outbound: mpsc::Receiver<crate::xmpp::outbound::OutboundItem>,
     next_rid: u64,
@@ -1301,7 +1301,7 @@ type BoshResponsePayload = (
     String,
     Vec<crate::xmpp::outbound::TransportOwnershipSource>,
     Vec<mpsc::UnboundedSender<()>>,
-    Vec<Arc<Vec<crate::services::sm_capacity::SmCapacityLease>>>,
+    Vec<Arc<Vec<northstar_session_application::sm_capacity::SmCapacityLease>>>,
     VecDeque<crate::xmpp::outbound::OutboundItem>,
 );
 

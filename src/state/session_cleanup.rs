@@ -45,7 +45,7 @@ pub(crate) enum SessionSmCleanup {
         session_id: Uuid,
         snapshot: crate::services::sm::SmSessionSnapshot,
         ttl_seconds: u64,
-        capacity: crate::services::sm_capacity::SmCapacityLease,
+        capacity: northstar_session_application::sm_capacity::SmCapacityLease,
     },
     Revoke {
         session_id: Uuid,
@@ -78,7 +78,7 @@ struct DurableSuspension {
     snapshot: crate::services::sm::SmSessionSnapshot,
     ttl_seconds: u64,
     endpoints: Vec<Arc<crate::xmpp::local_routes::muc::SuspendedMucEndpoint>>,
-    capacity: crate::services::sm_capacity::SmCapacityLease,
+    capacity: northstar_session_application::sm_capacity::SmCapacityLease,
 }
 
 struct SuspensionRecoveryPayload {
@@ -97,8 +97,8 @@ struct PendingSuspensionRecovery {
     session_id: Uuid,
     endpoints: Vec<Arc<crate::xmpp::local_routes::muc::SuspendedMucEndpoint>>,
     work: SuspensionRecoveryWork,
-    capacity: crate::services::sm_capacity::SmCapacityLease,
-    _recovery: crate::services::sm_capacity::SmRecoveryLease,
+    capacity: northstar_session_application::sm_capacity::SmCapacityLease,
+    _recovery: northstar_session_application::sm_capacity::SmRecoveryLease,
     sequence: u64,
     first_enqueued_at: std::time::Instant,
 }
@@ -182,16 +182,16 @@ pub(crate) struct SmSuspensionRecoveryQueue {
     wake: Notify,
     max_jobs: usize,
     max_bytes: usize,
-    metrics: Arc<crate::services::sm_capacity::SmCapacityMetrics>,
-    governor: Arc<crate::services::sm_capacity::SmMemoryGovernor>,
+    metrics: Arc<northstar_session_application::sm_capacity::SmCapacityMetrics>,
+    governor: Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
 }
 
 impl SmSuspensionRecoveryQueue {
     pub(crate) fn new(
         max_jobs: usize,
         max_bytes: usize,
-        metrics: Arc<crate::services::sm_capacity::SmCapacityMetrics>,
-        governor: Arc<crate::services::sm_capacity::SmMemoryGovernor>,
+        metrics: Arc<northstar_session_application::sm_capacity::SmCapacityMetrics>,
+        governor: Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
     ) -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new(RecoveryQueueState::default()),
@@ -212,7 +212,7 @@ impl SmSuspensionRecoveryQueue {
         snapshot: crate::services::sm::SmSessionSnapshot,
         ttl_seconds: u64,
         endpoints: Vec<Arc<crate::xmpp::local_routes::muc::SuspendedMucEndpoint>>,
-        capacity: crate::services::sm_capacity::SmCapacityLease,
+        capacity: northstar_session_application::sm_capacity::SmCapacityLease,
     ) -> bool {
         let charged_bytes = snapshot.resident_bytes().unwrap_or(usize::MAX);
         let Ok(recovery) = self.governor.try_reserve_recovery(charged_bytes) else {
@@ -239,7 +239,7 @@ impl SmSuspensionRecoveryQueue {
         connection_id: Uuid,
         session_id: Uuid,
         endpoints: Vec<Arc<crate::xmpp::local_routes::muc::SuspendedMucEndpoint>>,
-        capacity: crate::services::sm_capacity::SmCapacityLease,
+        capacity: northstar_session_application::sm_capacity::SmCapacityLease,
     ) -> bool {
         let charged_bytes = capacity.reserved_bytes();
         let Ok(recovery) = self.governor.try_reserve_recovery(charged_bytes) else {
@@ -396,18 +396,20 @@ impl SmSuspensionRecoveryQueue {
             .chain(state.in_flight.values().map(|job| job.first_enqueued_at))
             .min();
         self.metrics.recovery_queue_oldest_age_seconds.store(
-            crate::services::sm_capacity::oldest_age_seconds(oldest),
+            northstar_session_application::sm_capacity::oldest_age_seconds(oldest),
             Ordering::Release,
         );
     }
 
-    pub(crate) fn snapshot(&self) -> crate::services::sm_capacity::SmRecoveryQueueSnapshot {
+    pub(crate) fn snapshot(
+        &self,
+    ) -> northstar_session_application::sm_capacity::SmRecoveryQueueSnapshot {
         let state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.refresh_oldest(&state);
-        crate::services::sm_capacity::SmRecoveryQueueSnapshot {
+        northstar_session_application::sm_capacity::SmRecoveryQueueSnapshot {
             jobs: self.metrics.recovery_queue_jobs.load(Ordering::Acquire) as usize,
             bytes: self.metrics.recovery_queue_bytes.load(Ordering::Acquire) as usize,
             oldest_age_seconds: self

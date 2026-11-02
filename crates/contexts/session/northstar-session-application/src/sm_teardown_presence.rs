@@ -4,21 +4,21 @@ use anyhow::{bail, Result};
 use std::future::Future;
 use uuid::Uuid;
 
-pub(crate) struct RosterPresenceContact {
-    pub(crate) jid: String,
-    pub(crate) subscription: String,
+pub struct RosterPresenceContact {
+    pub jid: String,
+    pub subscription: String,
 }
 
-pub(crate) struct UnavailablePolicy<'a> {
-    pub(crate) owner_id: Uuid,
-    pub(crate) owner_bare_jid: &'a str,
-    pub(crate) active_privacy_list: Option<&'a str>,
-    pub(crate) from: &'a str,
-    pub(crate) target: &'a str,
-    pub(crate) local_domain: &'a str,
+pub struct UnavailablePolicy<'a> {
+    pub owner_id: Uuid,
+    pub owner_bare_jid: &'a str,
+    pub active_privacy_list: Option<&'a str>,
+    pub from: &'a str,
+    pub target: &'a str,
+    pub local_domain: &'a str,
 }
 
-pub(crate) trait SmTeardownPresenceRepository: Send + Sync {
+pub trait SmTeardownPresenceRepository: Send + Sync {
     fn roster_contacts(
         &self,
         owner_id: Uuid,
@@ -42,16 +42,16 @@ pub(crate) trait SmTeardownPresenceRepository: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct SmTeardownPresenceService<R> {
+pub struct SmTeardownPresenceService<R> {
     repository: R,
 }
 
 impl<R: SmTeardownPresenceRepository> SmTeardownPresenceService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
-    pub(crate) async fn roster_subscribers(&self, owner_id: Uuid) -> Result<Vec<String>> {
+    pub async fn roster_subscribers(&self, owner_id: Uuid) -> Result<Vec<String>> {
         Ok(self
             .repository
             .roster_contacts(owner_id)
@@ -62,7 +62,7 @@ impl<R: SmTeardownPresenceRepository> SmTeardownPresenceService<R> {
             .collect())
     }
 
-    pub(crate) async fn allows_unavailable(&self, policy: UnavailablePolicy<'_>) -> Result<bool> {
+    pub async fn allows_unavailable(&self, policy: UnavailablePolicy<'_>) -> Result<bool> {
         if self
             .repository
             .is_blocked(policy.owner_id, policy.owner_bare_jid, policy.target)

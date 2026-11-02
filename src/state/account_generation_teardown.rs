@@ -6,9 +6,9 @@ use crate::api::contexts::account_teardown::{
 };
 use crate::cluster::ClusterAccountTeardownNotifier;
 use crate::db::sm_teardown_repository::PostgresSmTeardownRepository;
-use crate::services::sm_teardown::SmTeardownService;
 use axum::extract::FromRef;
 use futures::future::BoxFuture;
+use northstar_session_application::sm_teardown::SmTeardownService;
 use std::future::Future;
 use std::sync::Arc;
 use uuid::Uuid;

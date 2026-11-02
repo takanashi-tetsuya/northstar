@@ -5,7 +5,7 @@
 /// cluster, worker, connection, upload, or SM owner.
 pub(crate) struct ReadinessContext {
     pub(crate) connection: northstar_runtime::connection_actors::ConnectionAdmissionReadiness,
-    pub(crate) sm: crate::services::sm_capacity::SmMemoryReadiness,
+    pub(crate) sm: northstar_session_application::sm_capacity::SmMemoryReadiness,
     pub(crate) upload: northstar_upload_application::safety::UploadSafetyReadiness,
     pub(crate) cluster: crate::cluster::ClusterReadinessProbe,
     pub(crate) workers: northstar_runtime::workers::WorkerReadinessProbe,

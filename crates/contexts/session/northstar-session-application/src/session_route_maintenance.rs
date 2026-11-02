@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 /// PostgreSQL owns the route. Redis holds only its disposable projection.
 /// All methods must use the same full JID and connection UUID fence.
-pub(crate) trait SessionRouteRenewalPort: Send + Sync {
+pub trait SessionRouteRenewalPort: Send + Sync {
     fn renew_authority(
         &self,
         full_jid: &str,
@@ -29,24 +29,24 @@ pub(crate) trait SessionRouteRenewalPort: Send + Sync {
 /// The exact PostgreSQL instance epoch captured before renewal. Compensation
 /// must reuse it even if the process epoch changes before the Redis result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SessionRouteAuthorityToken {
+pub enum SessionRouteAuthorityToken {
     NoCluster,
     Exact { owner_instance_epoch: i64 },
 }
 
-pub(crate) struct SessionRouteLease {
-    pub(crate) full_jid: String,
-    pub(crate) activity_age_seconds: u64,
-    pub(crate) connection_id: Uuid,
-    pub(crate) disconnect: CancellationToken,
+pub struct SessionRouteLease {
+    pub full_jid: String,
+    pub activity_age_seconds: u64,
+    pub connection_id: Uuid,
+    pub disconnect: CancellationToken,
 }
 
-pub(crate) struct SessionRouteRenewalService<P> {
+pub struct SessionRouteRenewalService<P> {
     port: P,
 }
 
 impl<P: SessionRouteRenewalPort> SessionRouteRenewalService<P> {
-    pub(crate) fn new(port: P) -> Self {
+    pub fn new(port: P) -> Self {
         Self { port }
     }
 
@@ -54,7 +54,7 @@ impl<P: SessionRouteRenewalPort> SessionRouteRenewalService<P> {
     /// the exact authority claim; an unavailable projection does the same best-
     /// effort compensation and stops the pass for the supervisor to fence
     /// readiness. A lost exact route cancels only its local stream.
-    pub(crate) async fn renew_all(&self, leases: Vec<SessionRouteLease>) -> Result<()> {
+    pub async fn renew_all(&self, leases: Vec<SessionRouteLease>) -> Result<()> {
         for lease in leases {
             let Some(authority_token) = self
                 .port

@@ -17,7 +17,7 @@ pub(crate) struct ClusterListenerMessagePolicy {
         crate::db::room_effects::PostgresMixRepository,
     >,
     pub(crate) verifier:
-        crate::services::node_message_contract_verifier::NodeMessageContractVerifier<
+        northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier<
             db::node_message_projection_repository::PostgresNodeMessageProjectionRepository,
         >,
     pub(crate) metrics: Arc<Metrics>,
@@ -74,9 +74,9 @@ impl ClusterListenerMessagePolicy {
 
     pub(crate) fn verifier(
         &self,
-    ) -> &crate::services::node_message_contract_verifier::NodeMessageContractVerifier<
+    ) -> &northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier<
         db::node_message_projection_repository::PostgresNodeMessageProjectionRepository,
-    > {
+    >{
         &self.verifier
     }
 

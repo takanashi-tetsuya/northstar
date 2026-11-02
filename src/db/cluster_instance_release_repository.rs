@@ -1,9 +1,9 @@
 //! PostgreSQL adapter for the final exact cluster node-instance lease release.
 
-use crate::services::cluster_instance_release::{
+use anyhow::Result;
+use northstar_session_application::cluster_instance_release::{
     ClusterInstanceReleaseIdentity, ClusterInstanceReleaseRepository,
 };
-use anyhow::Result;
 use sqlx::PgPool;
 
 pub(crate) struct PostgresClusterInstanceReleaseRepository {

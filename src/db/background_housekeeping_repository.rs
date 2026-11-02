@@ -1,7 +1,7 @@
 //! PostgreSQL adapter for the five independent background cleanup commands.
 
-use crate::services::background_housekeeping::BackgroundHousekeepingRepository;
 use anyhow::Result;
+use northstar_operations_application::background_housekeeping::BackgroundHousekeepingRepository;
 use sqlx::PgPool;
 
 pub(crate) struct PostgresBackgroundHousekeepingRepository {

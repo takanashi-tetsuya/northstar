@@ -1,15 +1,13 @@
 //! Ordered once-per-minute maintenance with only its cleanup capabilities.
 
 use super::{sm_expiry::SmExpiryContext, AppState};
-use crate::{
-    db::background_housekeeping_repository::PostgresBackgroundHousekeepingRepository,
-    services::background_housekeeping::{
-        BackgroundHousekeepingContext, BackgroundHousekeepingCounters,
-    },
-};
+use crate::db::background_housekeeping_repository::PostgresBackgroundHousekeepingRepository;
 use northstar_abuse_application::challenge::ChallengeCleanupService;
 use northstar_abuse_postgres::challenge::PostgresChallengeRepository;
 use northstar_operations_application::admin_commands::AdminCommandService;
+use northstar_operations_application::background_housekeeping::{
+    BackgroundHousekeepingContext, BackgroundHousekeepingCounters,
+};
 use northstar_runtime::workers::WorkerHeartbeat;
 use northstar_workflows::roster::RootAdminCommandRepository;
 use std::{sync::Arc, time::Duration};

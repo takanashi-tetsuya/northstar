@@ -136,8 +136,9 @@ async fn unowned_or_suspended_cleanup_never_polls_the_exact_database_release() {
 }
 
 fn queue() -> Arc<SmSuspensionRecoveryQueue> {
-    let metrics = Arc::new(crate::services::sm_capacity::SmCapacityMetrics::default());
-    let governor = crate::services::sm_capacity::SmMemoryGovernor::new(
+    let metrics =
+        Arc::new(northstar_session_application::sm_capacity::SmCapacityMetrics::default());
+    let governor = northstar_session_application::sm_capacity::SmMemoryGovernor::new(
         1024 * 1024,
         512 * 1024,
         16,
@@ -151,7 +152,7 @@ fn queue() -> Arc<SmSuspensionRecoveryQueue> {
 fn capacity(
     queue: &SmSuspensionRecoveryQueue,
     snapshot: &crate::services::sm::SmSessionSnapshot,
-) -> crate::services::sm_capacity::SmCapacityLease {
+) -> northstar_session_application::sm_capacity::SmCapacityLease {
     queue
         .governor
         .try_reserve_live(snapshot.resident_bytes().unwrap())

@@ -593,11 +593,12 @@ async fn postgres_capacity_fixture_is_atomic_leased_and_idempotent() {
         .await
         .unwrap();
     crate::db::migrate(&pool).await.unwrap();
-    let maintenance = crate::services::capacity_maintenance::CapacityMaintenanceService::new(
-        crate::db::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository::new(
-            pool.clone(),
-        ),
-    );
+    let maintenance =
+        northstar_session_application::capacity_maintenance::CapacityMaintenanceService::new(
+            crate::db::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository::new(
+                pool.clone(),
+            ),
+        );
     let authority = DeploymentCapacityConfiguration {
         epoch: 1,
         accounts: 1,

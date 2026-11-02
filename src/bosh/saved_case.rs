@@ -6,7 +6,6 @@ use super::{
 };
 use crate::{
     direct_replay as wire,
-    services::sm_capacity::SmMemoryGovernor,
     xmpp::outbound::{
         BoshResponseOwnership, MixDelivery, MixTransportCompletion, OutboundItem,
         TransportOwnershipSource as Source,
@@ -14,6 +13,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use northstar_delivery_core::bosh_ownership::{self as core, response as response_core};
+use northstar_session_application::sm_capacity::SmMemoryGovernor;
 use std::{
     collections::VecDeque,
     future::Future,
@@ -1263,7 +1263,7 @@ mod tests {
             32_768,
             4,
             32_768,
-            Arc::new(crate::services::sm_capacity::SmCapacityMetrics::default()),
+            Arc::new(northstar_session_application::sm_capacity::SmCapacityMetrics::default()),
         )
         .unwrap()
     }

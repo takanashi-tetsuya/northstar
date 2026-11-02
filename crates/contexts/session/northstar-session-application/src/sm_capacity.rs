@@ -14,7 +14,7 @@ use std::sync::{
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SmCapacityError {
+pub enum SmCapacityError {
     JobsExhausted,
     BytesExhausted,
     InvalidReservation,
@@ -33,17 +33,17 @@ impl std::fmt::Display for SmCapacityError {
 impl std::error::Error for SmCapacityError {}
 
 #[derive(Default)]
-pub(crate) struct SmCapacityMetrics {
-    pub(crate) reserved_bytes: AtomicU64,
-    pub(crate) peak_reserved_bytes: AtomicU64,
-    pub(crate) admission_rejections_total: AtomicU64,
-    pub(crate) invariant_failures_total: AtomicU64,
-    pub(crate) recovery_queue_jobs: AtomicU64,
-    pub(crate) recovery_queue_bytes: AtomicU64,
-    pub(crate) recovery_queue_oldest_age_seconds: AtomicU64,
+pub struct SmCapacityMetrics {
+    pub reserved_bytes: AtomicU64,
+    pub peak_reserved_bytes: AtomicU64,
+    pub admission_rejections_total: AtomicU64,
+    pub invariant_failures_total: AtomicU64,
+    pub recovery_queue_jobs: AtomicU64,
+    pub recovery_queue_bytes: AtomicU64,
+    pub recovery_queue_oldest_age_seconds: AtomicU64,
 }
 
-pub(crate) struct SmMemoryGovernor {
+pub struct SmMemoryGovernor {
     bytes: Arc<Semaphore>,
     recovery_bytes: Arc<Semaphore>,
     recovery_jobs: Arc<Semaphore>,
@@ -57,7 +57,7 @@ pub(crate) struct SmMemoryGovernor {
 
 /// Only the live capacity verdict, without reservation or failure mutation.
 #[derive(Clone)]
-pub(crate) struct SmMemoryReadiness {
+pub struct SmMemoryReadiness {
     unhealthy: Arc<AtomicBool>,
     metrics: Arc<SmCapacityMetrics>,
     max_bytes: usize,
@@ -66,7 +66,7 @@ pub(crate) struct SmMemoryReadiness {
 }
 
 impl SmMemoryReadiness {
-    pub(crate) fn is_ready(&self) -> bool {
+    pub fn is_ready(&self) -> bool {
         sm_memory_is_ready(
             &self.unhealthy,
             &self.metrics,
@@ -78,7 +78,7 @@ impl SmMemoryReadiness {
 }
 
 #[derive(Clone)]
-pub(crate) struct SmCapacityLease {
+pub struct SmCapacityLease {
     inner: Arc<SmCapacityLeaseInner>,
 }
 
@@ -92,7 +92,7 @@ struct LeaseState {
     bytes: usize,
 }
 
-pub(crate) struct SmRecoveryLease {
+pub struct SmRecoveryLease {
     governor: Arc<SmMemoryGovernor>,
     _bytes: Vec<OwnedSemaphorePermit>,
     _job: OwnedSemaphorePermit,
@@ -109,7 +109,7 @@ impl std::fmt::Debug for SmCapacityLease {
 }
 
 impl SmMemoryGovernor {
-    pub(crate) fn new(
+    pub fn new(
         max_bytes: usize,
         max_recovery_bytes: usize,
         max_recovery_jobs: usize,
@@ -147,7 +147,7 @@ impl SmMemoryGovernor {
         }))
     }
 
-    pub(crate) fn try_reserve_live(
+    pub fn try_reserve_live(
         self: &Arc<Self>,
         bytes: usize,
     ) -> Result<SmCapacityLease, SmCapacityError> {
@@ -165,7 +165,7 @@ impl SmMemoryGovernor {
         })
     }
 
-    pub(crate) fn try_reserve_claim(self: &Arc<Self>) -> Result<SmCapacityLease, SmCapacityError> {
+    pub fn try_reserve_claim(self: &Arc<Self>) -> Result<SmCapacityLease, SmCapacityError> {
         self.try_reserve_live(self.max_snapshot_bytes)
     }
 
@@ -174,7 +174,7 @@ impl SmMemoryGovernor {
     /// can temporarily own multiple copies of one response). Each individual
     /// lease remains within the per-snapshot invariant; failure drops every
     /// already acquired chunk before returning.
-    pub(crate) fn try_reserve_transient(
+    pub fn try_reserve_transient(
         self: &Arc<Self>,
         bytes: usize,
     ) -> Result<Vec<SmCapacityLease>, SmCapacityError> {
@@ -191,7 +191,7 @@ impl SmMemoryGovernor {
         Ok(leases)
     }
 
-    pub(crate) fn try_reserve_recovery(
+    pub fn try_reserve_recovery(
         self: &Arc<Self>,
         bytes: usize,
     ) -> Result<SmRecoveryLease, SmCapacityError> {
@@ -238,15 +238,15 @@ impl SmMemoryGovernor {
         update_peak(&self.metrics.peak_reserved_bytes, current);
     }
 
-    pub(crate) fn mark_invariant_failure(&self) {
+    pub fn mark_invariant_failure(&self) {
         self.unhealthy.store(true, Ordering::Release);
         self.metrics
             .invariant_failures_total
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    #[cfg(test)]
-    pub(crate) fn is_ready(&self) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn is_ready(&self) -> bool {
         sm_memory_is_ready(
             &self.unhealthy,
             &self.metrics,
@@ -256,7 +256,7 @@ impl SmMemoryGovernor {
         )
     }
 
-    pub(crate) fn readiness_probe(&self) -> SmMemoryReadiness {
+    pub fn readiness_probe(&self) -> SmMemoryReadiness {
         SmMemoryReadiness {
             unhealthy: Arc::clone(&self.unhealthy),
             metrics: Arc::clone(&self.metrics),
@@ -266,16 +266,16 @@ impl SmMemoryGovernor {
         }
     }
 
-    pub(crate) fn max_bytes(&self) -> usize {
+    pub fn max_bytes(&self) -> usize {
         self.max_bytes
     }
-    pub(crate) fn max_recovery_bytes(&self) -> usize {
+    pub fn max_recovery_bytes(&self) -> usize {
         self.max_recovery_bytes
     }
-    pub(crate) fn max_recovery_jobs(&self) -> usize {
+    pub fn max_recovery_jobs(&self) -> usize {
         self.max_recovery_jobs
     }
-    pub(crate) fn metrics(&self) -> &Arc<SmCapacityMetrics> {
+    pub fn metrics(&self) -> &Arc<SmCapacityMetrics> {
         &self.metrics
     }
 }
@@ -299,7 +299,7 @@ fn sm_memory_is_ready(
 }
 
 impl SmCapacityLease {
-    pub(crate) fn reserved_bytes(&self) -> usize {
+    pub fn reserved_bytes(&self) -> usize {
         self.inner
             .state
             .lock()
@@ -307,14 +307,14 @@ impl SmCapacityLease {
             .bytes
     }
 
-    pub(crate) fn try_grow_to(&self, bytes: usize) -> Result<(), SmCapacityError> {
+    pub fn try_grow_to(&self, bytes: usize) -> Result<(), SmCapacityError> {
         self.resize_to(bytes, false)
     }
 
     /// Atomically add a logical resident-byte delta to a clone-shared lease.
     /// Computing `reserved_bytes() + delta` outside this lock would lose one
     /// of two concurrent MUC suffix admissions that start from the same size.
-    pub(crate) fn try_grow_by(&self, delta: usize) -> Result<(), SmCapacityError> {
+    pub fn try_grow_by(&self, delta: usize) -> Result<(), SmCapacityError> {
         if delta == 0 {
             return Ok(());
         }
@@ -340,7 +340,7 @@ impl SmCapacityLease {
         Ok(())
     }
 
-    pub(crate) fn shrink_to(&self, bytes: usize) -> Result<(), SmCapacityError> {
+    pub fn shrink_to(&self, bytes: usize) -> Result<(), SmCapacityError> {
         self.resize_to(bytes, true)
     }
 
@@ -444,17 +444,17 @@ fn update_peak(peak: &AtomicU64, value: u64) {
     });
 }
 
-pub(crate) fn oldest_age_seconds(oldest: Option<std::time::Instant>) -> u64 {
+pub fn oldest_age_seconds(oldest: Option<std::time::Instant>) -> u64 {
     oldest
         .map(|instant| instant.elapsed().as_secs())
         .unwrap_or(0)
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct SmRecoveryQueueSnapshot {
-    pub(crate) jobs: usize,
-    pub(crate) bytes: usize,
-    pub(crate) oldest_age_seconds: u64,
+pub struct SmRecoveryQueueSnapshot {
+    pub jobs: usize,
+    pub bytes: usize,
+    pub oldest_age_seconds: u64,
 }
 
 #[cfg(test)]

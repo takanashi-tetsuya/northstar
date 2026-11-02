@@ -4,7 +4,7 @@ use super::AppState;
 use crate::cluster::{
     maintenance_context::ClusterMaintenanceContext, maintenance_locals::ClusterMaintenanceLocals,
 };
-use crate::{db, services};
+use crate::db;
 use std::{sync::Mutex, time::Instant};
 
 /// PostgreSQL occupancy renewal in the single-node runtime has no Redis
@@ -42,12 +42,12 @@ impl AppState {
         ClusterMaintenanceContext {
             control,
             session_routes:
-                services::session_route_maintenance::SessionRouteRenewalService::new(redis.clone()),
+                northstar_session_application::session_route_maintenance::SessionRouteRenewalService::new(redis.clone()),
             redis,
             locals: self.cluster_maintenance_locals(),
             direct_spool_wake: self.direct_spool_wake_consumer(replay_wake.clone()),
             replay_wake,
-            session_authority: services::session_authority_sweep::SessionAuthoritySweepService::new(
+            session_authority: northstar_session_application::session_authority_sweep::SessionAuthoritySweepService::new(
                 db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository::new(
                     self.pool.clone(),
                 ),

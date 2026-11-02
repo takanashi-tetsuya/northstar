@@ -339,7 +339,7 @@ pub struct AppState {
     /// outcome was an error or timeout. The corresponding MUC FIFO remains
     /// sealed until this queue proves a durable handoff.
     sm_suspension_recovery: Arc<crate::state::session_cleanup::SmSuspensionRecoveryQueue>,
-    sm_memory_governor: Arc<crate::services::sm_capacity::SmMemoryGovernor>,
+    sm_memory_governor: Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
     metrics: Arc<Metrics>,
     /// Optional credential for the dedicated observability listener. Callers
     /// can ask for an authorization decision but cannot read the token.

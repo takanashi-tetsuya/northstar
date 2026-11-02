@@ -6,27 +6,27 @@ use std::future::Future;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SessionRouteAuthority {
-    pub(crate) owner_node_id: String,
-    pub(crate) owner_instance_uuid: Uuid,
-    pub(crate) owner_instance_epoch: i64,
-    pub(crate) connection_uuid: Uuid,
+pub struct SessionRouteAuthority {
+    pub owner_node_id: String,
+    pub owner_instance_uuid: Uuid,
+    pub owner_instance_epoch: i64,
+    pub connection_uuid: Uuid,
 }
 
-pub(crate) struct LocalClusterInstance {
-    pub(crate) node_id: String,
-    pub(crate) instance_uuid: Uuid,
-    pub(crate) instance_epoch: i64,
+pub struct LocalClusterInstance {
+    pub node_id: String,
+    pub instance_uuid: Uuid,
+    pub instance_epoch: i64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SessionTerminationAuthority {
+pub enum SessionTerminationAuthority {
     Absent,
     WrongOwner,
     Authorized,
 }
 
-pub(crate) trait SessionTerminationAuthorityRepository: Send + Sync {
+pub trait SessionTerminationAuthorityRepository: Send + Sync {
     fn route_authority(
         &self,
         namespace: &str,
@@ -34,19 +34,19 @@ pub(crate) trait SessionTerminationAuthorityRepository: Send + Sync {
     ) -> impl Future<Output = Result<Option<SessionRouteAuthority>>> + Send;
 }
 
-pub(crate) struct SessionTerminationAuthorityService<R> {
+pub struct SessionTerminationAuthorityService<R> {
     repository: R,
 }
 
 impl<R: SessionTerminationAuthorityRepository> SessionTerminationAuthorityService<R> {
-    pub(crate) fn new(repository: R) -> Self {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 
     /// Read the durable route first, then snapshot the local owner. The owner
     /// snapshot runs after the database await, matching the listener's former
     /// ordering if a process instance changes while the read is pending.
-    pub(crate) async fn authorize(
+    pub async fn authorize(
         &self,
         namespace: &str,
         full_jid: &str,

@@ -1,7 +1,7 @@
 //! PostgreSQL adapter for the existing cluster replay maintenance routines.
 
-use crate::services::cluster_replay_maintenance::ClusterReplayMaintenanceRepository;
 use anyhow::Result;
+use northstar_session_application::cluster_replay_maintenance::ClusterReplayMaintenanceRepository;
 use sqlx::PgPool;
 
 pub(crate) struct PostgresClusterReplayMaintenanceRepository {

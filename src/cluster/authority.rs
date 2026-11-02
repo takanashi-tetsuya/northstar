@@ -186,7 +186,7 @@ impl ClusterManager {
         Ok(())
     }
 
-    pub async fn claim_instance_authority(&self, pool: &sqlx::PgPool) -> Result<()> {
+    pub async fn claim_instance_authority(&self) -> Result<()> {
         if !self.is_enabled() {
             return Ok(());
         }
@@ -194,16 +194,20 @@ impl ClusterManager {
             .security
             .as_ref()
             .context("cluster signing identity is missing")?;
-        let instance = northstar_session_postgres::cluster_keys::claim_cluster_node_instance(
-            pool,
-            &self.namespace,
-            &self.node_id,
-            self.connection_uuid,
-            &security.current_key_id,
-            security.key_epoch,
-            Duration::from_secs(NODE_TTL_SECONDS),
-        )
-        .await?;
+        let store = self
+            .session_store
+            .get()
+            .context("cluster session authority pool is unavailable")?;
+        let instance = store
+            .claim_node_instance(
+                &self.namespace,
+                &self.node_id,
+                self.connection_uuid,
+                &security.current_key_id,
+                security.key_epoch,
+                Duration::from_secs(NODE_TTL_SECONDS),
+            )
+            .await?;
         self.install_instance_epoch(instance.instance_epoch)
     }
 
@@ -220,18 +224,7 @@ impl ClusterManager {
         Ok(())
     }
 
-    pub async fn refresh_instance_authority(&self, pool: &sqlx::PgPool) -> Result<()> {
-        // Bootstrap still owns its local pool before AppState is constructed.
-        // Runtime workers use the AppState-owned typed authority service.
-        let service = ClusterAuthorityService::new(
-            northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
-                pool.clone(),
-            ),
-        );
-        self.refresh_instance_authority_with(&service).await
-    }
-
-    pub(crate) async fn refresh_instance_authority_with<R: ClusterAuthorityRepository>(
+    pub async fn refresh_instance_authority_with<R: ClusterAuthorityRepository>(
         &self,
         service: &ClusterAuthorityService<R>,
     ) -> Result<()> {

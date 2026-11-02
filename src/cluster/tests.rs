@@ -440,7 +440,7 @@ pub(super) fn verification_manager(
         replay_cache_gate: Arc::new(Mutex::new(())),
         replay_cache_next_expiry: Arc::new(AtomicI64::new(i64::MAX)),
         replay_cache_sweeps: Arc::new(AtomicU64::new(0)),
-        authority_pool: Arc::new(std::sync::OnceLock::new()),
+        session_store: Arc::new(std::sync::OnceLock::new()),
         health: Arc::new(ClusterHealth::disabled()),
         publication_gate: Arc::new(tokio::sync::RwLock::new(())),
         muc_outbox_notify: Arc::new(tokio::sync::Notify::new()),

@@ -123,17 +123,13 @@ impl ClusterAccountTeardownNotifier {
         if !self.sender.publisher.is_enabled() {
             return Ok(false);
         }
-        let authority_pool = self
+        let store = self
             .routes
-            .authority_pool
+            .session_store
             .get()
             .context("cluster session authority pool is unavailable")?;
-        let Some(route) =
-            northstar_session_postgres::cluster_session_route::cluster_session_route_authority(
-                authority_pool,
-                &self.routes.namespace,
-                &full_jid,
-            )
+        let Some(route) = store
+            .session_route_authority(&self.routes.namespace, &full_jid)
             .await?
         else {
             return Ok(false);
@@ -479,7 +475,7 @@ pub(crate) struct ClusterSessionTerminationIdentity {
 #[derive(Clone)]
 pub(crate) struct ClusterSessionRouteRelease {
     pub(super) pool: Option<Pool<RedisConnectionManager>>,
-    pub(super) authority_pool: Arc<std::sync::OnceLock<sqlx::PgPool>>,
+    pub(super) session_store: Arc<std::sync::OnceLock<Arc<dyn ClusterSessionStore>>>,
     pub(super) namespace: String,
     pub(super) key_prefix: String,
     pub(super) node_id: String,
@@ -497,20 +493,20 @@ impl ClusterSessionRouteRelease {
         let Some(pool) = &self.pool else {
             return Ok(());
         };
-        let authority_pool = self
-            .authority_pool
+        let store = self
+            .session_store
             .get()
             .context("cluster session authority pool is unavailable")?;
-        let _ = northstar_session_postgres::cluster_session_route::release_cluster_session_route(
-            authority_pool,
-            &self.namespace,
-            &full_jid,
-            &self.node_id,
-            self.connection_uuid,
-            self.instance_epoch.load(Ordering::Acquire),
-            connection_id,
-        )
-        .await?;
+        let _ = store
+            .release_session_route(ClusterSessionRouteOwner {
+                namespace: &self.namespace,
+                full_jid: &full_jid,
+                owner_node_id: &self.node_id,
+                owner_instance_uuid: self.connection_uuid,
+                owner_instance_epoch: self.instance_epoch.load(Ordering::Acquire),
+                connection_uuid: connection_id,
+            })
+            .await?;
         let mut conn = pool.get().await?;
         let full_key = format!("{}:session:{full_jid}", self.key_prefix);
         let bare_key = format!("{}:user_sessions:{bare}", self.key_prefix);

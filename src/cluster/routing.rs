@@ -18,24 +18,27 @@ impl ClusterManager {
         let Some(pool) = &self.pool else {
             return Ok(true);
         };
-        let authority_pool = self
-            .authority_pool
+        let store = self
+            .session_store
             .get()
             .context("cluster session authority pool is unavailable")?;
         let owner_instance_epoch = self.instance_epoch.load(Ordering::Acquire);
-        if !northstar_session_postgres::cluster_session_route::claim_cluster_session_route(
-            authority_pool,
-            &self.namespace,
-            &full_jid,
-            &bare,
-            &self.node_id,
-            self.connection_uuid,
+        let owner = ClusterSessionRouteOwner {
+            namespace: &self.namespace,
+            full_jid: &full_jid,
+            owner_node_id: &self.node_id,
+            owner_instance_uuid: self.connection_uuid,
             owner_instance_epoch,
-            connection_id,
-            proof.into(),
-            Duration::from_secs(SESSION_TTL_SECONDS),
-        )
-        .await?
+            connection_uuid: connection_id,
+        };
+        if !store
+            .claim_session_route(
+                owner,
+                &bare,
+                proof,
+                Duration::from_secs(SESSION_TTL_SECONDS),
+            )
+            .await?
         {
             return Ok(false);
         }
@@ -77,29 +80,11 @@ impl ClusterManager {
         match reserved {
             Ok(1) => Ok(true),
             Ok(_) => {
-                let _ = northstar_session_postgres::cluster_session_route::release_cluster_session_route(
-                    authority_pool,
-                    &self.namespace,
-                    &full_jid,
-                    &self.node_id,
-                    self.connection_uuid,
-                    owner_instance_epoch,
-                    connection_id,
-                )
-                .await;
+                let _ = store.release_session_route(owner).await;
                 Ok(false)
             }
             Err(error) => {
-                let _ = northstar_session_postgres::cluster_session_route::release_cluster_session_route(
-                    authority_pool,
-                    &self.namespace,
-                    &full_jid,
-                    &self.node_id,
-                    self.connection_uuid,
-                    owner_instance_epoch,
-                    connection_id,
-                )
-                .await;
+                let _ = store.release_session_route(owner).await;
                 Err(error.into())
             }
         }

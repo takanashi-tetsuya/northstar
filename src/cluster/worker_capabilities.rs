@@ -197,45 +197,39 @@ impl ClusterListenerSecurity {
                 "cluster acknowledgement payload is oversized"
             );
         }
-        let pool = self
-            .authority_pool
+        let store = self
+            .session_store
             .get()
             .context("cluster replay authority pool is unavailable")?;
-        let admitted =
-            match northstar_session_postgres::cluster_keys::admit_cluster_envelope_replay(
-                pool,
-                &self.publisher.namespace,
-                &envelope,
-            )
+        let admitted = match store
+            .admit_envelope_replay(&self.publisher.namespace, &envelope)
             .await
-            {
-                Ok(admitted) => admitted,
-                Err(error) => {
-                    if northstar_session_postgres::cluster_keys::cluster_replay_validation_rejection(
-                        &error,
-                    ) {
-                        // A changed event identity, stale source lease or elapsed
-                        // validity window is a source-side validation rejection,
-                        // not a lost local PostgreSQL authority connection.
-                        self.publisher
-                            .health
-                            .replay_rejections
-                            .fetch_add(1, Ordering::Relaxed);
-                        return Err(error);
-                    }
-                    // Other PostgreSQL replay failures may mean that authority is
-                    // unavailable or internally inconsistent; fail closed.
-                    record_cluster_failure(
-                        &self.publisher.health,
-                        &self.publisher.listener_rotation,
-                        self.publisher.is_enabled(),
-                        self.publisher.failure_policy,
-                        ClusterFailureClass::PostgreSqlAuthority,
-                        &error,
-                    );
+        {
+            Ok(admitted) => admitted,
+            Err(error) => {
+                if store.is_replay_validation_rejection(&error) {
+                    // A changed event identity, stale source lease or elapsed
+                    // validity window is a source-side validation rejection,
+                    // not a lost local PostgreSQL authority connection.
+                    self.publisher
+                        .health
+                        .replay_rejections
+                        .fetch_add(1, Ordering::Relaxed);
                     return Err(error);
                 }
-            };
+                // Other PostgreSQL replay failures may mean that authority is
+                // unavailable or internally inconsistent; fail closed.
+                record_cluster_failure(
+                    &self.publisher.health,
+                    &self.publisher.listener_rotation,
+                    self.publisher.is_enabled(),
+                    self.publisher.failure_policy,
+                    ClusterFailureClass::PostgreSqlAuthority,
+                    &error,
+                );
+                return Err(error);
+            }
+        };
         if !admitted {
             self.publisher
                 .health
@@ -275,7 +269,7 @@ impl ClusterListenerSecurity {
 pub(crate) struct ClusterListenerSecurity {
     pub(super) publisher: ClusterSignedPublisher,
     pub(super) authorized_peer_keys: Arc<dashmap::DashMap<String, AuthorizedPeerKeys>>,
-    pub(super) authority_pool: Arc<std::sync::OnceLock<sqlx::PgPool>>,
+    pub(super) session_store: Arc<std::sync::OnceLock<Arc<dyn ClusterSessionStore>>>,
 }
 
 /// Read-only health and exact identity view. This has no Redis, signing,
@@ -347,7 +341,7 @@ pub(crate) struct ClusterMucOutboxSignal {
 /// only the command transport; it is not the authority for session ownership.
 #[derive(Clone)]
 pub(crate) struct ClusterListenerPresenceRoutes {
-    pub(super) authority_pool: Arc<std::sync::OnceLock<sqlx::PgPool>>,
+    pub(super) session_store: Arc<std::sync::OnceLock<Arc<dyn ClusterSessionStore>>>,
     pub(super) namespace: String,
     pub(super) node_id: String,
     pub(super) enabled: bool,
@@ -359,27 +353,21 @@ impl ClusterListenerPresenceRoutes {
         if !self.enabled {
             return Ok(Vec::new());
         }
-        let authority_pool = self
-            .authority_pool
+        let store = self
+            .session_store
             .get()
             .context("cluster session authority pool is unavailable")?;
         let nodes = if jid.resourcepart().is_some() {
-            northstar_session_postgres::cluster_session_route::cluster_session_route_authority(
-                authority_pool,
-                &self.namespace,
-                &jid.to_string(),
-            )
-            .await?
-            .map(|authority| authority.owner_node_id)
-            .into_iter()
-            .collect()
+            store
+                .session_route_authority(&self.namespace, &jid.to_string())
+                .await?
+                .map(|authority| authority.owner_node_id)
+                .into_iter()
+                .collect()
         } else {
-            northstar_session_postgres::cluster_session_route::cluster_session_nodes_for_bare(
-                authority_pool,
-                &self.namespace,
-                &jid.bare(),
-            )
-            .await?
+            store
+                .session_nodes_for_bare(&self.namespace, &jid.bare())
+                .await?
         };
         Ok(nodes)
     }

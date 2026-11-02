@@ -11,6 +11,7 @@ pub mod cluster_keys;
 pub mod cluster_replay_maintenance_repository;
 pub mod cluster_session_route;
 pub mod cluster_session_route_maintenance_repository;
+pub mod cluster_session_store;
 pub mod node_message_projection_repository;
 pub mod replay;
 pub mod replay_repository;

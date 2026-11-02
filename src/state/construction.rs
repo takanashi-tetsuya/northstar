@@ -313,7 +313,11 @@ impl AppState {
             redis_url.zeroize();
             redis_url.clear();
         }
-        cluster.configure_authority_pool(&pool)?;
+        cluster.configure_session_store(Arc::new(
+            northstar_session_postgres::cluster_session_store::PostgresClusterSessionStore::new(
+                pool.clone(),
+            ),
+        ))?;
         if let Some(identity) = cluster.key_authority_identity() {
             northstar_session_postgres::cluster_keys::reconcile_cluster_key_deployment_before_instance_claim(&pool, &identity)
                 .await
@@ -331,7 +335,7 @@ impl AppState {
                 })?;
             }
             cluster
-                .claim_instance_authority(&pool)
+                .claim_instance_authority()
                 .await
                 .context("cluster node ID is already owned by another live process")?;
             northstar_session_postgres::cluster_keys::reconcile_cluster_key_deployment(
@@ -340,7 +344,13 @@ impl AppState {
             .await
             .context("cluster signing-key authority finalization failed")?;
             cluster
-                .refresh_instance_authority(&pool)
+                .refresh_instance_authority_with(
+                    &northstar_session_application::cluster_authority::ClusterAuthorityService::new(
+                        northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
+                            pool.clone(),
+                        ),
+                    ),
+                )
                 .await
                 .context("could not load peer cluster instance authority")?;
         }

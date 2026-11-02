@@ -8,7 +8,7 @@ use northstar_room_application::muc_service::MucSoftStateProjectionPort;
 #[derive(Clone)]
 pub(crate) struct ClusterMaintenanceRedis {
     pub(super) pool: Option<Pool<RedisConnectionManager>>,
-    pub(super) authority_pool: Arc<std::sync::OnceLock<sqlx::PgPool>>,
+    pub(super) session_store: Arc<std::sync::OnceLock<Arc<dyn ClusterSessionStore>>>,
     pub(super) namespace: String,
     pub(super) key_prefix: String,
     pub(super) node_id: String,
@@ -96,20 +96,21 @@ impl ClusterMaintenanceRedis {
         if self.pool.is_none() {
             return Ok(Some(SessionRouteAuthorityToken::NoCluster));
         }
-        let authority_pool = self
-            .authority_pool
+        let store = self
+            .session_store
             .get()
             .context("cluster session authority pool is unavailable")?;
         let owner_instance_epoch = self.instance_epoch.load(Ordering::Acquire);
-        let renewed =
-            northstar_session_postgres::cluster_session_route::refresh_cluster_session_route(
-                authority_pool,
-                &self.namespace,
-                &full_jid,
-                &self.node_id,
-                self.connection_uuid,
-                owner_instance_epoch,
-                connection_id,
+        let renewed = store
+            .refresh_session_route(
+                ClusterSessionRouteOwner {
+                    namespace: &self.namespace,
+                    full_jid: &full_jid,
+                    owner_node_id: &self.node_id,
+                    owner_instance_uuid: self.connection_uuid,
+                    owner_instance_epoch,
+                    connection_uuid: connection_id,
+                },
                 Duration::from_secs(SESSION_TTL_SECONDS),
             )
             .await?;
@@ -182,20 +183,20 @@ impl ClusterMaintenanceRedis {
         else {
             anyhow::bail!("cluster session-route release lacks the original instance epoch");
         };
-        let authority_pool = self
-            .authority_pool
+        let store = self
+            .session_store
             .get()
             .context("cluster session authority pool is unavailable")?;
-        northstar_session_postgres::cluster_session_route::release_cluster_session_route(
-            authority_pool,
-            &self.namespace,
-            &full_jid,
-            &self.node_id,
-            self.connection_uuid,
-            owner_instance_epoch,
-            connection_id,
-        )
-        .await?;
+        store
+            .release_session_route(ClusterSessionRouteOwner {
+                namespace: &self.namespace,
+                full_jid: &full_jid,
+                owner_node_id: &self.node_id,
+                owner_instance_uuid: self.connection_uuid,
+                owner_instance_epoch,
+                connection_uuid: connection_id,
+            })
+            .await?;
         Ok(())
     }
 

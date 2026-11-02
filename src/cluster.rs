@@ -9,6 +9,9 @@ use northstar_session_application::cluster_authority::{
 use northstar_session_application::cluster_instance_release::{
     ClusterInstanceReleaseIdentity, ClusterInstanceReleaseRepository, ClusterInstanceReleaseService,
 };
+use northstar_session_application::cluster_session_store::{
+    ClusterSessionRouteOwner, ClusterSessionStore,
+};
 use northstar_session_application::node_message_contract_verifier::{
     NodeMessageContractVerifier, NodeMessageProjectionRepository, RequestedNodeMessageProjection,
     VerifiedNodeMessageProjection,
@@ -150,7 +153,7 @@ pub struct ClusterManager {
     replay_cache_next_expiry: Arc<AtomicI64>,
     #[cfg(test)]
     replay_cache_sweeps: Arc<AtomicU64>,
-    authority_pool: Arc<std::sync::OnceLock<sqlx::PgPool>>,
+    session_store: Arc<std::sync::OnceLock<Arc<dyn ClusterSessionStore>>>,
     health: Arc<ClusterHealth>,
     publication_gate: Arc<tokio::sync::RwLock<()>>,
     muc_outbox_notify: Arc<tokio::sync::Notify>,
@@ -199,7 +202,7 @@ impl ClusterManager {
                 replay_cache_next_expiry: Arc::new(AtomicI64::new(i64::MAX)),
                 #[cfg(test)]
                 replay_cache_sweeps: Arc::new(AtomicU64::new(0)),
-                authority_pool: Arc::new(std::sync::OnceLock::new()),
+                session_store: Arc::new(std::sync::OnceLock::new()),
                 health: Arc::new(ClusterHealth::disabled()),
                 publication_gate: Arc::new(tokio::sync::RwLock::new(())),
                 muc_outbox_notify: Arc::new(tokio::sync::Notify::new()),
@@ -281,7 +284,7 @@ impl ClusterManager {
             replay_cache_next_expiry: Arc::new(AtomicI64::new(i64::MAX)),
             #[cfg(test)]
             replay_cache_sweeps: Arc::new(AtomicU64::new(0)),
-            authority_pool: Arc::new(std::sync::OnceLock::new()),
+            session_store: Arc::new(std::sync::OnceLock::new()),
             health: Arc::new(ClusterHealth::enabled()),
             publication_gate: Arc::new(tokio::sync::RwLock::new(())),
             muc_outbox_notify: Arc::new(tokio::sync::Notify::new()),
@@ -358,7 +361,7 @@ impl ClusterManager {
     pub(crate) fn maintenance_redis(&self) -> ClusterMaintenanceRedis {
         ClusterMaintenanceRedis {
             pool: self.pool.clone(),
-            authority_pool: Arc::clone(&self.authority_pool),
+            session_store: Arc::clone(&self.session_store),
             namespace: self.namespace.clone(),
             key_prefix: self.key_prefix.clone(),
             node_id: self.node_id.clone(),
@@ -459,7 +462,7 @@ impl ClusterManager {
 
     pub(crate) fn listener_presence_routes(&self) -> ClusterListenerPresenceRoutes {
         ClusterListenerPresenceRoutes {
-            authority_pool: Arc::clone(&self.authority_pool),
+            session_store: Arc::clone(&self.session_store),
             namespace: self.namespace.clone(),
             node_id: self.node_id.clone(),
             enabled: self.pool.is_some(),
@@ -509,7 +512,7 @@ impl ClusterManager {
     pub(crate) fn session_route_release(&self) -> ClusterSessionRouteRelease {
         ClusterSessionRouteRelease {
             pool: self.pool.clone(),
-            authority_pool: Arc::clone(&self.authority_pool),
+            session_store: Arc::clone(&self.session_store),
             namespace: self.namespace.clone(),
             key_prefix: self.key_prefix.clone(),
             node_id: self.node_id.clone(),
@@ -543,7 +546,7 @@ impl ClusterManager {
         ClusterListenerSecurity {
             publisher: self.signed_publisher(),
             authorized_peer_keys: Arc::clone(&self.authorized_peer_keys),
-            authority_pool: Arc::clone(&self.authority_pool),
+            session_store: Arc::clone(&self.session_store),
         }
     }
 
@@ -551,10 +554,10 @@ impl ClusterManager {
         self.pool.is_some()
     }
 
-    pub fn configure_authority_pool(&self, pool: &sqlx::PgPool) -> Result<()> {
-        self.authority_pool
-            .set(pool.clone())
-            .map_err(|_| anyhow::anyhow!("cluster PostgreSQL authority pool was configured twice"))
+    pub fn configure_session_store(&self, store: Arc<dyn ClusterSessionStore>) -> Result<()> {
+        self.session_store
+            .set(store)
+            .map_err(|_| anyhow::anyhow!("cluster session store was configured twice"))
     }
 }
 

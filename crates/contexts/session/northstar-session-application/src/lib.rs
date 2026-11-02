@@ -8,6 +8,7 @@ pub mod cluster_authority;
 pub mod cluster_instance_release;
 pub mod cluster_replay_maintenance;
 pub mod cluster_session_route_maintenance;
+pub mod cluster_session_store;
 pub mod node_message_contract_verifier;
 pub mod post_actions;
 pub mod repository;

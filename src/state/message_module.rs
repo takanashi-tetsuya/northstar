@@ -56,7 +56,7 @@ impl MessageModule {
                     config.offline_max_bytes_per_account,
                     config.offline_message_ttl_days,
                 )
-                .with_cluster_admission(cluster.admission()),
+                .with_cluster_admission(super::cluster_direct_commit::ClusterDirectCommit(cluster.admission())),
                 config.require_encrypted_archive,
             ),
             message_admission_service:
@@ -72,7 +72,7 @@ impl MessageModule {
                 northstar_workflows::retraction_repository::PostgresRetractionRepository::new(
                     pool.clone(),
                 )
-                .with_cluster_admission(cluster.admission()),
+                .with_cluster_admission(super::cluster_direct_commit::ClusterDirectCommit(cluster.admission())),
                 abuse.personal_retraction_content_keyring(),
                 config.domain.clone(),
             ),

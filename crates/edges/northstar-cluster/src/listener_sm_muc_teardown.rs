@@ -1,21 +1,21 @@
 //! Exact suspended-MUC teardown after durable session authority is established.
 
-use crate::cluster::{ClusterAdapters, ClusterSmMucTeardownProjection};
+use crate::{ClusterAdapters, ClusterSmMucTeardownProjection};
 use northstar_room_application::muc_service::SerializableMucOccupant;
 use northstar_room_application::sm_teardown_muc::SmTeardownMucService;
 use northstar_stream::local_routes::sm_teardown::SmTeardownLocalEffects;
 use northstar_xmpp_types::jid_text::localpart;
 
-pub(crate) struct ClusterListenerSmMucTeardown<A: ClusterAdapters> {
-    pub(crate) local: SmTeardownLocalEffects,
-    pub(crate) redis: ClusterSmMucTeardownProjection,
-    pub(crate) rooms: SmTeardownMucService<A::SmTeardownMuc>,
-    pub(crate) delivery: super::ClusterMucDelivery<A>,
-    pub(crate) local_domain: String,
+pub struct ClusterListenerSmMucTeardown<A: ClusterAdapters> {
+    pub local: SmTeardownLocalEffects,
+    pub redis: ClusterSmMucTeardownProjection,
+    pub rooms: SmTeardownMucService<A::SmTeardownMuc>,
+    pub delivery: super::ClusterMucDelivery<A>,
+    pub local_domain: String,
 }
 
 impl<A: ClusterAdapters> ClusterListenerSmMucTeardown<A> {
-    pub(crate) async fn teardown_exact(
+    pub async fn teardown_exact(
         &self,
         sm_session_id: uuid::Uuid,
         occupant: &SerializableMucOccupant,

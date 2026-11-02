@@ -1,4 +1,5 @@
-//! The cluster half of a direct commit, until the session context owns the cluster tables.
+//! Binds the cluster's direct-commit admission to the message adapters' port. The composition root holds the
+//! binding because the admission belongs to the cluster edge and the PostgreSQL fence to the session adapter.
 
 use crate::cluster::{
     ClusterAdmission, DirectCommitTurn, DirectPostCommitMode, DirectSpoolEligibility,
@@ -9,30 +10,36 @@ use northstar_message_postgres::direct_cluster::{DirectCommitCluster, DirectComm
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use sqlx::{Postgres, Transaction};
 
-impl DirectCommitPermit for DirectCommitTurn {
+/// The cluster's admission as the message adapters' direct-commit port.
+pub(crate) struct ClusterDirectCommit(pub(crate) ClusterAdmission);
+
+struct ClusterDirectCommitTurn(DirectCommitTurn);
+
+impl DirectCommitPermit for ClusterDirectCommitTurn {
     fn admitted_mode(&self) -> DirectPostCommitMode {
-        DirectCommitTurn::admitted_mode(self)
+        self.0.admitted_mode()
     }
 
     fn finish(self: Box<Self>) -> DirectPostCommitMode {
-        DirectCommitTurn::finish(*self)
+        let Self(turn) = *self;
+        turn.finish()
     }
 }
 
-impl DirectCommitCluster for ClusterAdmission {
+impl DirectCommitCluster for ClusterDirectCommit {
     fn is_enabled(&self) -> bool {
-        ClusterAdmission::is_enabled(self)
+        self.0.is_enabled()
     }
 
     fn direct_mode(&self) -> DirectPostCommitMode {
-        ClusterAdmission::direct_mode(self)
+        self.0.direct_mode()
     }
 
     fn check_direct_eligibility(
         &self,
         eligibility: DirectSpoolEligibility,
     ) -> Result<Option<&ClusterReadinessAuthority>> {
-        ClusterAdmission::check_direct_eligibility(self, eligibility)
+        self.0.check_direct_eligibility(eligibility)
     }
 
     fn begin_direct_commit_turn(
@@ -42,8 +49,8 @@ impl DirectCommitCluster for ClusterAdmission {
         Box<dyn DirectCommitPermit>,
         Option<&ClusterReadinessAuthority>,
     )> {
-        let (turn, authority) = ClusterAdmission::begin_direct_commit_turn(self, eligibility)?;
-        Ok((Box::new(turn), authority))
+        let (turn, authority) = self.0.begin_direct_commit_turn(eligibility)?;
+        Ok((Box::new(ClusterDirectCommitTurn(turn)), authority))
     }
 
     fn fence_authority<'a>(

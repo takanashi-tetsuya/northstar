@@ -411,6 +411,10 @@ const SQL: &[&str] = &[
     "deadpool-postgres",
 ];
 
+/// Stores an edge may use as its transport: the cluster edge's cross-node bus is Redis pub/sub, the way axum
+/// is the HTTP edge's.
+const EDGE_TRANSPORT_STORES: &[&str] = &["redis"];
+
 const NETWORK: &[&str] = &[
     "axum",
     "hyper",
@@ -563,7 +567,7 @@ fn external_allowed(from: &CrateRecord, to: &str) -> bool {
             Some("adapter") | Some("workflows") => true,
             _ => false,
         },
-        "edge" => !in_sql,
+        "edge" => !in_sql || EDGE_TRANSPORT_STORES.contains(&to),
         "composition" => true,
         "tooling" => true,
         _ => false,
@@ -777,6 +781,28 @@ mod tests {
         let mut errors = Vec::new();
         check_tiers(&records, &packages, &workspace_members, &mut errors);
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn edge_may_use_redis_as_its_transport_but_not_sqlx() {
+        let edge = record("northstar-cluster", "crates/edges/northstar-cluster");
+        let records = vec![edge.clone()];
+        let workspace_members = vec![edge.package.clone()];
+        let package = |dependency: &str| {
+            vec![Package {
+                id: edge.package.clone(),
+                name: edge.package.clone(),
+                dependencies: vec![PackageDependency {
+                    name: dependency.to_string(),
+                    kind: None,
+                }],
+            }]
+        };
+        let mut errors = Vec::new();
+        check_tiers(&records, &package("redis"), &workspace_members, &mut errors);
+        assert!(errors.is_empty());
+        check_tiers(&records, &package("sqlx"), &workspace_members, &mut errors);
+        assert_eq!(errors.len(), 1);
     }
 
     #[test]

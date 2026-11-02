@@ -1,36 +1,34 @@
 //! Typed message policy and command outcomes the cluster listener receives from the composition root.
 
-use crate::cluster::ClusterAdapters;
+use crate::ClusterAdapters;
 use northstar_telemetry::metrics::Metrics;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;
 
-pub(crate) struct ClusterListenerMessagePolicy<A: ClusterAdapters> {
-    pub(crate) local_domain: String,
-    pub(crate) presence: northstar_roster_application::presence::PresenceService<A::Presence>,
-    pub(crate) message: northstar_message_application::messaging::MessageService<A::Message>,
-    pub(crate) mix: northstar_room_application::mix_service::MixService<A::Mix>,
-    pub(crate) verifier:
+pub struct ClusterListenerMessagePolicy<A: ClusterAdapters> {
+    pub local_domain: String,
+    pub presence: northstar_roster_application::presence::PresenceService<A::Presence>,
+    pub message: northstar_message_application::messaging::MessageService<A::Message>,
+    pub mix: northstar_room_application::mix_service::MixService<A::Mix>,
+    pub verifier:
         northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier<
             A::NodeMessageProjection,
         >,
-    pub(crate) metrics: Arc<Metrics>,
+    pub metrics: Arc<Metrics>,
 }
 
 impl<A: ClusterAdapters> ClusterListenerMessagePolicy<A> {
-    pub(crate) fn start_redis_setup_timer(
-        &self,
-    ) -> northstar_telemetry::metrics::DurationTimer<'_> {
+    pub fn start_redis_setup_timer(&self) -> northstar_telemetry::metrics::DurationTimer<'_> {
         self.metrics.redis_operation_duration_seconds.start_timer()
     }
 
-    pub(crate) fn presence_probe_failed(&self) {
+    pub fn presence_probe_failed(&self) {
         self.metrics
             .cluster_presence_probe_failures_total
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn record_online_queue_acceptance(&self, durable: bool) {
+    pub fn record_online_queue_acceptance(&self, durable: bool) {
         let counter = if durable {
             &self.metrics.online_queue_durable_acceptances_total
         } else {
@@ -39,7 +37,7 @@ impl<A: ClusterAdapters> ClusterListenerMessagePolicy<A> {
         counter.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) async fn presence_authority_is_current(
+    pub async fn presence_authority_is_current(
         &self,
         owner: &str,
         owner_id: Uuid,
@@ -62,11 +60,11 @@ impl<A: ClusterAdapters> ClusterListenerMessagePolicy<A> {
             .unwrap_or(false)
     }
 
-    pub(crate) async fn owner_avatar_hash(&self, user_id: Uuid) -> anyhow::Result<Option<String>> {
+    pub async fn owner_avatar_hash(&self, user_id: Uuid) -> anyhow::Result<Option<String>> {
         self.presence.avatar_hash(user_id).await
     }
 
-    pub(crate) fn verifier(
+    pub fn verifier(
         &self,
     ) -> &northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier<
         A::NodeMessageProjection,
@@ -74,7 +72,7 @@ impl<A: ClusterAdapters> ClusterListenerMessagePolicy<A> {
         &self.verifier
     }
 
-    pub(crate) async fn privacy_allows_session(
+    pub async fn privacy_allows_session(
         &self,
         user_id: Uuid,
         connection_id: Uuid,
@@ -87,7 +85,7 @@ impl<A: ClusterAdapters> ClusterListenerMessagePolicy<A> {
             .await
     }
 
-    pub(crate) async fn transfer_mix_delivery(
+    pub async fn transfer_mix_delivery(
         &self,
         source: northstar_stream::outbound::MixDelivery,
         node_id: &str,
@@ -99,7 +97,7 @@ impl<A: ClusterAdapters> ClusterListenerMessagePolicy<A> {
             .await
     }
 
-    pub(crate) async fn release_mix_delivery(
+    pub async fn release_mix_delivery(
         &self,
         source: northstar_stream::outbound::MixDelivery,
         node_id: &str,
@@ -111,13 +109,13 @@ impl<A: ClusterAdapters> ClusterListenerMessagePolicy<A> {
     }
 }
 
-pub(crate) enum SessionTerminationEffect {
+pub enum SessionTerminationEffect {
     Absent,
     WrongOwner,
     Matched,
 }
 
-pub(crate) enum ClusterMixCapability {
+pub enum ClusterMixCapability {
     Supported,
     Unsupported,
     Unknown,

@@ -2370,6 +2370,170 @@
         "zeroize"
       ],
       [
+        "northstar-cluster",
+        "anyhow"
+      ],
+      [
+        "northstar-cluster",
+        "bb8"
+      ],
+      [
+        "northstar-cluster",
+        "chrono"
+      ],
+      [
+        "northstar-cluster",
+        "dashmap"
+      ],
+      [
+        "northstar-cluster",
+        "futures"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-auth-application"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-config"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-delivery-core"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-federation-core"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-message-application"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-message-core"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-operations-application"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-protocol-runtime"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-room-application"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-room-core"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-roster-application"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-roster-core"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-runtime"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-security"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-session-application"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-session-core"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-session-postgres"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-stream"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-telemetry"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-xep-0016"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-xep-0045"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-xep-0191"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-xep-0359"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-xmpp-avatar"
+      ],
+      [
+        "northstar-cluster",
+        "northstar-xmpp-types"
+      ],
+      [
+        "northstar-cluster",
+        "redis"
+      ],
+      [
+        "northstar-cluster",
+        "roxmltree"
+      ],
+      [
+        "northstar-cluster",
+        "serde"
+      ],
+      [
+        "northstar-cluster",
+        "serde_json"
+      ],
+      [
+        "northstar-cluster",
+        "sha2"
+      ],
+      [
+        "northstar-cluster",
+        "sqlx"
+      ],
+      [
+        "northstar-cluster",
+        "tokio"
+      ],
+      [
+        "northstar-cluster",
+        "tokio-util"
+      ],
+      [
+        "northstar-cluster",
+        "tracing"
+      ],
+      [
+        "northstar-cluster",
+        "uuid"
+      ],
+      [
         "northstar-config",
         "anyhow"
       ],
@@ -6523,6 +6687,10 @@
       ],
       [
         "rust-xmpp-server",
+        "northstar-cluster"
+      ],
+      [
+        "rust-xmpp-server",
         "northstar-config"
       ],
       [
@@ -9091,6 +9259,7 @@
       "northstar-auth-core",
       "northstar-auth-postgres",
       "northstar-auth-xmpp",
+      "northstar-cluster",
       "northstar-config",
       "northstar-data-tools",
       "northstar-delivery-core",

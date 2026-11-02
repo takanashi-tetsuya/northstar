@@ -1159,7 +1159,7 @@
         },
         {
           "id": "worker:cluster-muc-outbox",
-          "owner": "src/cluster.rs",
+          "owner": "crates/edges/northstar-cluster/src/lib.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },

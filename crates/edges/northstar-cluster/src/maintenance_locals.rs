@@ -38,26 +38,26 @@ fn fence_stale_muc_membership_exact(
 }
 
 #[derive(Clone)]
-pub(crate) struct ClusterMaintenanceLocals {
-    pub(crate) sessions: Arc<DashMap<String, OnlineSession>>,
-    pub(crate) occupants: Arc<DashMap<String, MucOccupant>>,
-    pub(crate) metrics: Arc<Metrics>,
+pub struct ClusterMaintenanceLocals {
+    pub sessions: Arc<DashMap<String, OnlineSession>>,
+    pub occupants: Arc<DashMap<String, MucOccupant>>,
+    pub metrics: Arc<Metrics>,
 }
 
 impl ClusterMaintenanceLocals {
-    pub(crate) fn session_authority_snapshots(&self) -> Vec<LocalSessionAuthoritySnapshot> {
+    pub fn session_authority_snapshots(&self) -> Vec<LocalSessionAuthoritySnapshot> {
         local_session_authority_snapshots_in(&self.sessions)
     }
 
-    pub(crate) fn session_lease_snapshots(&self) -> Vec<LocalSessionLeaseSnapshot> {
+    pub fn session_lease_snapshots(&self) -> Vec<LocalSessionLeaseSnapshot> {
         local_session_lease_snapshots_in(&self.sessions)
     }
 
-    pub(crate) fn muc_occupant_snapshots(&self) -> Vec<MucOccupant> {
+    pub fn muc_occupant_snapshots(&self) -> Vec<MucOccupant> {
         local_cluster_muc_projection_snapshot_in(&self.occupants)
     }
 
-    pub(crate) fn remove_stale_muc_actor(&self, occupant: &MucOccupant) {
+    pub fn remove_stale_muc_actor(&self, occupant: &MucOccupant) {
         if let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(&occupant.full_jid) {
             if let Some(session) = self.sessions.get(&full_jid) {
                 if !occupant.connection_id.is_nil()
@@ -76,7 +76,7 @@ impl ClusterMaintenanceLocals {
 
     /// A committed room transition has already removed this membership's
     /// authority. It must not revoke the unrelated C2S route.
-    pub(crate) fn remove_committed_terminal_muc_actor(&self, occupant: &MucOccupant) {
+    pub fn remove_committed_terminal_muc_actor(&self, occupant: &MucOccupant) {
         self.remove_muc_actor_projection(occupant);
     }
 
@@ -86,19 +86,19 @@ impl ClusterMaintenanceLocals {
         remove_local_muc_occupant_exact_from(&self.occupants, occupant.into());
     }
 
-    pub(crate) fn record_background_failure(&self) {
+    pub fn record_background_failure(&self) {
         self.metrics
             .background_maintenance_failures_total
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn record_muc_reconciliation(&self) {
+    pub fn record_muc_reconciliation(&self) {
         self.metrics
             .cluster_muc_pg_reconciliations_total
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn redis_operation_timer(&self) -> DurationTimer<'_> {
+    pub fn redis_operation_timer(&self) -> DurationTimer<'_> {
         self.metrics.redis_operation_duration_seconds.start_timer()
     }
 }

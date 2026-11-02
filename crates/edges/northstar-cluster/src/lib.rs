@@ -1,3 +1,9 @@
+//! Cross-node edge of Northstar: the Redis cluster bus, its listener and maintenance workers, peer authority,
+//! cluster MUC delivery and recovery replay. Its PostgreSQL work runs through the application ports of one
+//! `ClusterAdapters` family, which the composition root names.
+
+#![forbid(unsafe_code)]
+
 use anyhow::{Context, Result};
 use bb8::Pool;
 use futures::{future::BoxFuture, FutureExt, StreamExt};
@@ -30,28 +36,28 @@ use tokio_util::sync::CancellationToken;
 mod adapters;
 mod authority;
 mod delivery_contract;
-pub(crate) mod direct_spool_wake;
-pub(crate) mod failure_supervisor_context;
+pub mod direct_spool_wake;
+pub mod failure_supervisor_context;
 mod health;
 mod listener;
-pub(crate) mod listener_blocking;
-pub(crate) mod listener_dispatch;
-pub(crate) mod listener_mix_caps;
+pub mod listener_blocking;
+pub mod listener_dispatch;
+pub mod listener_mix_caps;
 mod listener_policy;
-pub(crate) mod listener_sm_muc_teardown;
-pub(crate) mod maintenance_context;
-pub(crate) mod maintenance_locals;
+pub mod listener_sm_muc_teardown;
+pub mod maintenance_context;
+pub mod maintenance_locals;
 mod maintenance_redis;
-pub(crate) mod muc_delivery_endpoints;
+pub mod muc_delivery_endpoints;
 mod muc_fanout;
 mod muc_occupancy;
 mod muc_outbox;
-pub(crate) mod muc_outbox_worker;
+pub mod muc_outbox_worker;
 mod node_delivery;
 mod pool;
 mod publisher;
 mod recovery_replay;
-pub(crate) mod recovery_replay_wake;
+pub mod recovery_replay_wake;
 mod routing;
 mod teardown;
 mod worker_capabilities;
@@ -60,18 +66,18 @@ mod workers;
 use listener::*;
 
 use self::authority::*;
-pub(crate) use self::delivery_contract::*;
+pub use self::delivery_contract::*;
 pub use self::health::*;
-pub(crate) use self::listener_policy::{
+pub use self::listener_policy::{
     ClusterListenerMessagePolicy, ClusterMixCapability, SessionTerminationEffect,
 };
-pub(crate) use self::maintenance_redis::*;
+pub use self::maintenance_redis::*;
 use self::muc_outbox::*;
-pub(crate) use self::node_delivery::*;
+pub use self::node_delivery::*;
 use self::publisher::*;
 use self::recovery_replay::*;
-pub(crate) use self::teardown::*;
-pub(crate) use self::worker_capabilities::*;
+pub use self::teardown::*;
+pub use self::worker_capabilities::*;
 pub use self::workers::*;
 pub use adapters::{ClusterAdapters, ClusterMucDelivery};
 
@@ -133,7 +139,7 @@ const LEGACY_DELIVERY_PROTOCOL_MAX: u16 = 7;
 #[cfg(test)]
 const MAX_REPLAY_ENTRIES: usize = 65_536;
 
-pub(crate) use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
+pub use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
 
 #[derive(Clone)]
 pub struct ClusterManager {
@@ -300,15 +306,15 @@ impl ClusterManager {
         Ok(cluster)
     }
 
-    pub(crate) fn account_revocation_notify(&self) -> Arc<tokio::sync::Notify> {
+    pub fn account_revocation_notify(&self) -> Arc<tokio::sync::Notify> {
         Arc::clone(&self.account_revocation_notify)
     }
 
-    pub(crate) fn direct_spool_notify(&self) -> Arc<tokio::sync::Notify> {
+    pub fn direct_spool_notify(&self) -> Arc<tokio::sync::Notify> {
         Arc::clone(&self.direct_spool_notify)
     }
 
-    pub(crate) fn account_revocation_authority(&self) -> ClusterRevocationAuthority {
+    pub fn account_revocation_authority(&self) -> ClusterRevocationAuthority {
         ClusterRevocationAuthority {
             domain: self.namespace.clone(),
             node_id: self.node_id.clone(),
@@ -322,7 +328,7 @@ impl ClusterManager {
         }
     }
 
-    pub(crate) fn failure_supervisor_authority(&self) -> ClusterFailureSupervisorAuthority {
+    pub fn failure_supervisor_authority(&self) -> ClusterFailureSupervisorAuthority {
         ClusterFailureSupervisorAuthority {
             enabled: self.is_enabled(),
             readiness: self.readiness_authority_snapshot(),
@@ -348,7 +354,7 @@ impl ClusterManager {
         }
     }
 
-    pub(crate) fn maintenance_control(&self) -> ClusterMaintenanceControl {
+    pub fn maintenance_control(&self) -> ClusterMaintenanceControl {
         ClusterMaintenanceControl {
             node_id: self.node_id.clone(),
             enabled: self.is_enabled(),
@@ -360,7 +366,7 @@ impl ClusterManager {
         }
     }
 
-    pub(crate) fn maintenance_redis(&self) -> ClusterMaintenanceRedis {
+    pub fn maintenance_redis(&self) -> ClusterMaintenanceRedis {
         ClusterMaintenanceRedis {
             pool: self.pool.clone(),
             session_store: Arc::clone(&self.session_store),
@@ -377,7 +383,7 @@ impl ClusterManager {
         }
     }
 
-    pub(crate) fn muc_outbox_signal(&self) -> ClusterMucOutboxSignal {
+    pub fn muc_outbox_signal(&self) -> ClusterMucOutboxSignal {
         ClusterMucOutboxSignal {
             node_id: self.node_id.clone(),
             wake: Arc::clone(&self.muc_outbox_notify),
@@ -410,7 +416,7 @@ impl ClusterManager {
         }
     }
 
-    pub(crate) fn node_delivery(&self) -> ClusterNodeDelivery {
+    pub fn node_delivery(&self) -> ClusterNodeDelivery {
         ClusterNodeDelivery {
             publisher: self.signed_publisher(),
             pool: self.pool.clone(),
@@ -421,48 +427,48 @@ impl ClusterManager {
         }
     }
 
-    pub(crate) fn unavailable_delivery(&self) -> ClusterUnavailableDelivery {
+    pub fn unavailable_delivery(&self) -> ClusterUnavailableDelivery {
         ClusterUnavailableDelivery {
             routes: self.listener_presence_routes(),
             sender: self.node_delivery(),
         }
     }
 
-    pub(crate) fn account_teardown_notifier(&self) -> ClusterAccountTeardownNotifier {
+    pub fn account_teardown_notifier(&self) -> ClusterAccountTeardownNotifier {
         ClusterAccountTeardownNotifier {
             routes: self.listener_presence_routes(),
             sender: self.correlated_control_sender(),
         }
     }
 
-    pub(crate) fn sm_session_teardown_notifier(&self) -> ClusterSmSessionTeardownNotifier {
+    pub fn sm_session_teardown_notifier(&self) -> ClusterSmSessionTeardownNotifier {
         ClusterSmSessionTeardownNotifier {
             routes: self.listener_presence_routes(),
             sender: self.correlated_control_sender(),
         }
     }
 
-    pub(crate) fn sm_muc_teardown(&self) -> ClusterSmMucTeardown {
+    pub fn sm_muc_teardown(&self) -> ClusterSmMucTeardown {
         ClusterSmMucTeardown {
             sender: self.correlated_control_sender(),
         }
     }
 
-    pub(crate) fn sm_suspension(&self) -> ClusterSmSuspension {
+    pub fn sm_suspension(&self) -> ClusterSmSuspension {
         ClusterSmSuspension {
             publisher: self.signed_publisher(),
             muc_outbox_notify: Arc::clone(&self.muc_outbox_notify),
         }
     }
 
-    pub(crate) fn muc_operation_wake(&self) -> ClusterMucOperationWake {
+    pub fn muc_operation_wake(&self) -> ClusterMucOperationWake {
         ClusterMucOperationWake {
             publisher: self.signed_publisher(),
             muc_outbox_notify: Arc::clone(&self.muc_outbox_notify),
         }
     }
 
-    pub(crate) fn listener_presence_routes(&self) -> ClusterListenerPresenceRoutes {
+    pub fn listener_presence_routes(&self) -> ClusterListenerPresenceRoutes {
         ClusterListenerPresenceRoutes {
             session_store: Arc::clone(&self.session_store),
             namespace: self.namespace.clone(),
@@ -471,13 +477,13 @@ impl ClusterManager {
         }
     }
 
-    pub(crate) fn mix_route_lookup(&self) -> ClusterMixRouteLookup {
+    pub fn mix_route_lookup(&self) -> ClusterMixRouteLookup {
         ClusterMixRouteLookup {
             routes: self.listener_presence_routes(),
         }
     }
 
-    pub(crate) fn listener_muc_projection(&self) -> ClusterListenerMucProjection {
+    pub fn listener_muc_projection(&self) -> ClusterListenerMucProjection {
         ClusterListenerMucProjection {
             pool: self.pool.clone(),
             key_prefix: self.key_prefix.clone(),
@@ -485,7 +491,7 @@ impl ClusterManager {
         }
     }
 
-    pub(crate) fn sm_muc_teardown_projection(&self) -> ClusterSmMucTeardownProjection {
+    pub fn sm_muc_teardown_projection(&self) -> ClusterSmMucTeardownProjection {
         ClusterSmMucTeardownProjection {
             pool: self.pool.clone(),
             key_prefix: self.key_prefix.clone(),
@@ -495,14 +501,14 @@ impl ClusterManager {
         }
     }
 
-    pub(crate) fn muc_departure(&self) -> ClusterMucDeparture {
+    pub fn muc_departure(&self) -> ClusterMucDeparture {
         ClusterMucDeparture {
             projection: self.sm_muc_teardown_projection(),
             publisher: self.signed_publisher(),
         }
     }
 
-    pub(crate) fn session_termination_identity(&self) -> ClusterSessionTerminationIdentity {
+    pub fn session_termination_identity(&self) -> ClusterSessionTerminationIdentity {
         ClusterSessionTerminationIdentity {
             namespace: self.namespace.clone(),
             node_id: self.node_id.clone(),
@@ -511,7 +517,7 @@ impl ClusterManager {
         }
     }
 
-    pub(crate) fn session_route_release(&self) -> ClusterSessionRouteRelease {
+    pub fn session_route_release(&self) -> ClusterSessionRouteRelease {
         ClusterSessionRouteRelease {
             pool: self.pool.clone(),
             session_store: Arc::clone(&self.session_store),
@@ -523,7 +529,7 @@ impl ClusterManager {
         }
     }
 
-    pub(crate) fn pubsub_listener_transport(&self) -> ClusterPubsubListenerTransport {
+    pub fn pubsub_listener_transport(&self) -> ClusterPubsubListenerTransport {
         ClusterPubsubListenerTransport {
             client: self.client.clone(),
             pool: self.pool.clone(),
@@ -537,14 +543,14 @@ impl ClusterManager {
         }
     }
 
-    pub(crate) fn listener_admission(&self) -> ClusterListenerAdmission {
+    pub fn listener_admission(&self) -> ClusterListenerAdmission {
         ClusterListenerAdmission {
             health: Arc::clone(&self.health),
             pending_acks: Arc::clone(&self.pending_acks),
         }
     }
 
-    pub(crate) fn listener_security(&self) -> ClusterListenerSecurity {
+    pub fn listener_security(&self) -> ClusterListenerSecurity {
         ClusterListenerSecurity {
             publisher: self.signed_publisher(),
             authorized_peer_keys: Arc::clone(&self.authorized_peer_keys),

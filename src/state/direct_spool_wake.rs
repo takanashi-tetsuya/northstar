@@ -10,7 +10,8 @@ impl AppState {
     pub(crate) fn direct_spool_wake_consumer(
         &self,
         replay: crate::cluster::recovery_replay_wake::ClusterRecoveryReplayWake<
-            PostgresClusterAdapters,
+            northstar_session_postgres::replay_repository::PostgresReplayRepository,
+            northstar_session_postgres::replay_repository::PostgresRecoveryReplayStore,
         >,
     ) -> DirectSpoolWakeConsumer<PostgresClusterAdapters> {
         DirectSpoolWakeConsumer::new(

@@ -18,7 +18,6 @@ mod authentication_tests;
 pub mod authority_listener;
 #[cfg(test)]
 mod cluster_muc_tests;
-pub(crate) mod direct_commit_cluster;
 #[cfg(test)]
 mod direct_spool_wake_repository_tests;
 #[cfg(test)]
@@ -46,10 +45,6 @@ mod muc_service_tests;
 mod muc_tests;
 #[cfg(test)]
 mod passkeys_tests;
-// src/cluster/listener_policy.rs (S29) still names the presence repository through db::.
-pub(crate) mod presence_repository {
-    pub(crate) use northstar_workflows::presence_repository::PostgresPresenceRepository;
-}
 #[cfg(test)]
 mod presence_service_tests;
 #[cfg(test)]
@@ -62,7 +57,7 @@ mod push_tests;
 mod retraction_service_tests;
 #[cfg(test)]
 pub use archive::*;
-// The privacy stanza kind that paths owned by the mainline (src/s2s, src/cluster) still reach
+// The privacy stanza kind that paths owned by the mainline (src/s2s) still reach
 // through db::. Every other consumer imports the owning crate.
 #[cfg(test)]
 pub(crate) use northstar_roster_postgres::roster::add_federated_presence_pending_with_stanza;

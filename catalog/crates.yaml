@@ -176,6 +176,14 @@ crates:
     api_stability: internal
     publish_policy: never
 
+  - crate_id: northstar-cluster
+    package: northstar-cluster
+    path: crates/edges/northstar-cluster
+    tier: edge
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-config
     package: northstar-config
     path: crates/platform/northstar-config

@@ -5,7 +5,7 @@ use super::*;
 /// Post-commit revocation controls can discover only PostgreSQL-owned routes
 /// and send exact, signed, acknowledged account/session teardowns.
 #[derive(Clone)]
-pub(crate) struct ClusterAccountTeardownNotifier {
+pub struct ClusterAccountTeardownNotifier {
     pub(super) routes: ClusterListenerPresenceRoutes,
     pub(super) sender: ClusterCorrelatedControlSender,
 }
@@ -13,7 +13,7 @@ pub(crate) struct ClusterAccountTeardownNotifier {
 /// Exact durable SM session teardown control, without route mutation or
 /// general cluster publication authority.
 #[derive(Clone)]
-pub(crate) struct ClusterSmSessionTeardownNotifier {
+pub struct ClusterSmSessionTeardownNotifier {
     pub(super) routes: ClusterListenerPresenceRoutes,
     pub(super) sender: ClusterCorrelatedControlSender,
 }
@@ -21,20 +21,20 @@ pub(crate) struct ClusterSmSessionTeardownNotifier {
 /// Exact clustered SM MUC teardown with correlated ACKs and a fenced Redis
 /// tombstone. It cannot publish arbitrary stanzas or change other occupancies.
 #[derive(Clone)]
-pub(crate) struct ClusterSmMucTeardown {
+pub struct ClusterSmMucTeardown {
     pub(super) sender: ClusterCorrelatedControlSender,
 }
 
 /// Exact local occupant withdrawal followed by its signed room presence.
 /// This handle cannot join a room or mutate another occupant's role.
 #[derive(Clone)]
-pub(crate) struct ClusterMucDeparture {
+pub struct ClusterMucDeparture {
     pub(super) projection: ClusterSmMucTeardownProjection,
     pub(super) publisher: ClusterSignedPublisher,
 }
 
 impl ClusterMucDeparture {
-    pub(crate) async fn publish_local_departure(
+    pub async fn publish_local_departure(
         &self,
         departed: &northstar_stream::local_routes::muc::MucOccupant,
         was_last: bool,
@@ -68,7 +68,7 @@ impl ClusterMucDeparture {
 /// Exact SM/MUC suspension projection and committed-operation wake. It can
 /// neither consume listener replay authority nor access PostgreSQL directly.
 #[derive(Clone)]
-pub(crate) struct ClusterSmSuspension {
+pub struct ClusterSmSuspension {
     pub(super) publisher: ClusterSignedPublisher,
     pub(super) muc_outbox_notify: Arc<tokio::sync::Notify>,
 }
@@ -76,13 +76,13 @@ pub(crate) struct ClusterSmSuspension {
 /// Publish only a committed MUC operation wake using the shared signed
 /// cluster transport; no SM suspension or route mutation authority is exposed.
 #[derive(Clone)]
-pub(crate) struct ClusterMucOperationWake {
+pub struct ClusterMucOperationWake {
     pub(super) publisher: ClusterSignedPublisher,
     pub(super) muc_outbox_notify: Arc<tokio::sync::Notify>,
 }
 
 impl ClusterAccountTeardownNotifier {
-    pub(crate) async fn send_account_generation_teardown(
+    pub async fn send_account_generation_teardown(
         &self,
         bare_jid: &str,
         user_id: uuid::Uuid,
@@ -110,7 +110,7 @@ impl ClusterAccountTeardownNotifier {
         Ok(())
     }
 
-    pub(crate) async fn send_session_instance_termination(
+    pub async fn send_session_instance_termination(
         &self,
         full_jid: &str,
         expected_connection_id: uuid::Uuid,
@@ -162,7 +162,7 @@ impl ClusterAccountTeardownNotifier {
 }
 
 impl ClusterSmSessionTeardownNotifier {
-    pub(crate) async fn send_sm_session_teardown(
+    pub async fn send_sm_session_teardown(
         &self,
         full_jid: &str,
         sm_session_id: uuid::Uuid,
@@ -198,7 +198,7 @@ impl ClusterSmSessionTeardownNotifier {
 impl ClusterSmMucTeardown {
     /// Acknowledge every current room node before writing the exact SM
     /// tombstone and removing matching Redis occupancy indexes.
-    pub(crate) async fn send_sm_muc_teardown(
+    pub async fn send_sm_muc_teardown(
         &self,
         room_jid: &str,
         sm_session_id: uuid::Uuid,
@@ -305,17 +305,17 @@ impl ClusterSmMucTeardown {
 }
 
 impl ClusterSmSuspension {
-    pub(crate) fn is_enabled(&self) -> bool {
+    pub fn is_enabled(&self) -> bool {
         self.publisher.is_enabled()
     }
 
-    pub(crate) fn node_id(&self) -> &str {
+    pub fn node_id(&self) -> &str {
         &self.publisher.node_id
     }
 
     /// Refresh only the exact occupancy/SM epoch. A teardown tombstone wins
     /// over a delayed disconnect task and prevents a ghost from reappearing.
-    pub(crate) async fn register_suspended_muc_occupant(
+    pub async fn register_suspended_muc_occupant(
         &self,
         room_jid: &str,
         nick: &str,
@@ -463,7 +463,7 @@ impl northstar_room_application::muc_service::MucWakePort for ClusterMucOperatio
 /// the PostgreSQL route. The epoch is read after the authority query, so a
 /// listener never uses a stale process-instance snapshot.
 #[derive(Clone)]
-pub(crate) struct ClusterSessionTerminationIdentity {
+pub struct ClusterSessionTerminationIdentity {
     pub(super) namespace: String,
     pub(super) node_id: String,
     pub(super) instance_uuid: uuid::Uuid,
@@ -473,7 +473,7 @@ pub(crate) struct ClusterSessionTerminationIdentity {
 /// Exact local route release after a connection has been removed from the
 /// process-local map. This handle cannot register routes or publish commands.
 #[derive(Clone)]
-pub(crate) struct ClusterSessionRouteRelease {
+pub struct ClusterSessionRouteRelease {
     pub(super) pool: Option<Pool<RedisConnectionManager>>,
     pub(super) session_store: Arc<std::sync::OnceLock<Arc<dyn ClusterSessionStore>>>,
     pub(super) namespace: String,
@@ -484,7 +484,7 @@ pub(crate) struct ClusterSessionRouteRelease {
 }
 
 impl ClusterSessionRouteRelease {
-    pub(crate) async fn release_exact_local_session_route(
+    pub async fn release_exact_local_session_route(
         &self,
         full_jid: &str,
         connection_id: uuid::Uuid,
@@ -539,11 +539,11 @@ impl ClusterSessionRouteRelease {
 }
 
 impl ClusterSessionTerminationIdentity {
-    pub(crate) fn namespace(&self) -> &str {
+    pub fn namespace(&self) -> &str {
         &self.namespace
     }
 
-    pub(crate) fn local_instance(
+    pub fn local_instance(
         &self,
     ) -> northstar_session_application::session_termination_authority::LocalClusterInstance {
         northstar_session_application::session_termination_authority::LocalClusterInstance {

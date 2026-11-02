@@ -169,7 +169,7 @@ pub(super) fn delivery_carbon_muc_scope(
 /// Signed, acknowledged stanza delivery. This projection can neither mutate
 /// session routes nor consume listener replay authority.
 #[derive(Clone)]
-pub(crate) struct ClusterNodeDelivery {
+pub struct ClusterNodeDelivery {
     pub(super) publisher: ClusterSignedPublisher,
     pub(super) pool: Option<Pool<RedisConnectionManager>>,
     pub(super) client: Option<redis::Client>,
@@ -179,7 +179,7 @@ pub(crate) struct ClusterNodeDelivery {
 }
 
 #[derive(Clone)]
-pub(crate) struct ClusterUnavailableDelivery {
+pub struct ClusterUnavailableDelivery {
     pub(super) routes: ClusterListenerPresenceRoutes,
     pub(super) sender: ClusterNodeDelivery,
 }
@@ -187,7 +187,7 @@ pub(crate) struct ClusterUnavailableDelivery {
 impl ClusterUnavailableDelivery {
     /// Preserve PostgreSQL route order and require the signed delivery ACK
     /// before considering a cleanup unavailable notification complete.
-    pub(crate) async fn send_unavailable_to_remote_nodes(
+    pub async fn send_unavailable_to_remote_nodes(
         &self,
         target_jid: &str,
         stanza: &str,
@@ -222,7 +222,7 @@ impl ClusterUnavailableDelivery {
 }
 
 impl ClusterNodeDelivery {
-    pub(crate) async fn send_mix(
+    pub async fn send_mix(
         &self,
         node_id: &str,
         target_jid: &str,
@@ -243,7 +243,7 @@ impl ClusterNodeDelivery {
         .await
     }
 
-    pub(crate) async fn send_mix_exact_account(
+    pub async fn send_mix_exact_account(
         &self,
         node_id: &str,
         target_full_jid: &str,
@@ -291,7 +291,7 @@ impl ClusterNodeDelivery {
         Ok(receipt.delivered)
     }
 
-    pub(crate) async fn send_pubsub_notification(
+    pub async fn send_pubsub_notification(
         &self,
         node_id: &str,
         target_jid: &str,
@@ -303,7 +303,7 @@ impl ClusterNodeDelivery {
             .delivered)
     }
 
-    pub(crate) async fn send_roster_push(
+    pub async fn send_roster_push(
         &self,
         node_id: &str,
         target_jid: &str,
@@ -329,7 +329,7 @@ impl ClusterNodeDelivery {
             .delivered)
     }
 
-    pub(crate) async fn send_account_removal_presence(
+    pub async fn send_account_removal_presence(
         &self,
         node_id: &str,
         target_jid: &str,
@@ -341,7 +341,7 @@ impl ClusterNodeDelivery {
             .delivered)
     }
 
-    pub(crate) async fn send_available_presence(
+    pub async fn send_available_presence(
         &self,
         node_id: &str,
         target_jid: &str,
@@ -361,7 +361,7 @@ impl ClusterNodeDelivery {
             .delivered)
     }
 
-    pub(crate) async fn send_current_presence_replay(
+    pub async fn send_current_presence_replay(
         &self,
         node_id: &str,
         target_jid: &str,

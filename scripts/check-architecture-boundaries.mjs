@@ -254,9 +254,9 @@ function classifyDbDependencies(source, moduleName) {
 // whole production module (the file and its non-test child files); items are
 // read by their unique declaration, so they keep being found after a split
 const state = readProductionModule('src/state.rs', { root });
-// src/cluster.rs is read as its whole production module too (listener.rs,
+// crates/edges/northstar-cluster/src/lib.rs is read as its whole production module too (listener.rs,
 // pool.rs and the files a split adds), with items read by unique declaration
-const cluster = readProductionModule('src/cluster.rs', { root });
+const cluster = readProductionModule('crates/edges/northstar-cluster/src/lib.rs', { root });
 // crates/platform/northstar-config/src/lib.rs and its non-test sibling modules (the whole production module)
 const configSource = readProductionModule('crates/platform/northstar-config/src/lib.rs', { root });
 const mainSource = read('src/main.rs');
@@ -310,7 +310,7 @@ if (!state.includes('fn local_domain(&self) -> &str')
 const clusterMessageResolver = rustItemBody(cluster, 'async fn resolve_node_message_delivery<');
 if (!clusterMessageResolver.includes('verifier.resolve(request, stanza, target_jid).await?')
     || /sqlx::|\.fetch_(?:one|optional|all)\(/.test(clusterMessageResolver)
-    || !readProductionModule('src/cluster/listener.rs', { root }).includes('message_policy.verifier()')
+    || !readProductionModule('crates/edges/northstar-cluster/src/listener.rs', { root }).includes('message_policy.verifier()')
     || !read('src/state/cluster_listener_message.rs').includes('verifier: self.node_message_contract_verifier()')) {
   throw new Error('inbound cluster message contracts must use the PostgreSQL projection verifier port');
 }
@@ -3412,7 +3412,7 @@ const workerResponsibilityEvidence = {
   'cluster-maintenance': ['src/main.rs', '`main`, cluster only', '90 s'],
   'standalone-muc-occupancy': ['src/main.rs', '`main`, standalone PostgreSQL MUC only', '45 s'],
   'cluster-failure-policy': ['src/main.rs', '`main`, cluster only', '15 s'],
-  'cluster-muc-outbox': ['src/cluster.rs', 'unconditionally registered', '30 s'],
+  'cluster-muc-outbox': ['crates/edges/northstar-cluster/src/lib.rs', 'unconditionally registered', '30 s'],
   'locked-muc-expiry': ['src/state.rs', '`AppState` MUC startup', '20 s'],
   'runtime-control-refresh': ['src/state.rs', 'process startup reserves the connection', '5 s'],
   'sm-authority-listener': ['src/db/authority_listener.rs', 'AppState database listener startup', '15 s'],
@@ -3546,10 +3546,10 @@ if (
   throw new Error('cluster MUC PostgreSQL maintenance must remain unconditionally composed');
 }
 const clusterMucOutboxWorker = rustItemBody(cluster, 'async fn run_muc_outbox_delivery<A: ClusterAdapters>(');
-const clusterMucOutboxContextSource = read('src/cluster/muc_outbox_worker.rs');
+const clusterMucOutboxContextSource = read('crates/edges/northstar-cluster/src/muc_outbox_worker.rs');
 const clusterMucOutboxContext = structBody(
   clusterMucOutboxContextSource,
-  'pub(crate) struct ClusterMucOutboxWorkerContext',
+  'pub struct ClusterMucOutboxWorkerContext',
 );
 if (!clusterMucOutboxWorker.includes('let housekeeping = &context.housekeeping;')
     || !state.includes('state.cluster_muc_outbox_worker_context()')
@@ -3808,16 +3808,16 @@ if (!clusterMaintenance.includes('let occupancy_maintenance = &context.muc_occup
     || /(?:crate::db|northstar_room_postgres::cluster_muc)::(?:authoritative_cluster_muc_occupancies_for_node|renew_cluster_muc_occupancy)\s*\(/.test(clusterMaintenance)) {
   throw new Error('cluster MUC reconciliation must snapshot and renew exact authority through its narrow port');
 }
-const clusterListener = rustItemBody(readProductionModule('src/cluster/listener.rs', { root }), 'async fn listen_once<A: ClusterAdapters>(');
-const clusterListenerTransport = rustItemBody(cluster, 'pub(crate) struct ClusterPubsubListenerTransport');
-const clusterListenerSupervisor = rustItemBody(cluster, 'pub(crate) async fn run_pubsub_listener<A: ClusterAdapters>(');
+const clusterListener = rustItemBody(readProductionModule('crates/edges/northstar-cluster/src/listener.rs', { root }), 'async fn listen_once<A: ClusterAdapters>(');
+const clusterListenerTransport = rustItemBody(cluster, 'pub struct ClusterPubsubListenerTransport');
+const clusterListenerSupervisor = rustItemBody(cluster, 'pub async fn run_pubsub_listener<A: ClusterAdapters>(');
 if (/\b(?:AppState|ClusterManager|signer|pending_acks|replay)\s*:/.test(clusterListenerTransport)
     || /\bstate\.cluster\b/.test(clusterListenerSupervisor)
     || !clusterListener.includes('transport.confirm_generation(')
     || !clusterListener.includes('publish_listener_probe(&transport,')) {
   throw new Error('PubSub listener setup and generation must use scoped transport authority');
 }
-const listenerDispatch = read('src/cluster/listener_dispatch.rs');
+const listenerDispatch = read('crates/edges/northstar-cluster/src/listener_dispatch.rs');
 const listenerDispatchConstructor = read('src/state/cluster_listener_dispatch.rs');
 if (clusterListener.includes('db::cluster_session_route_authority(')
     || !clusterListener.includes('dispatch.terminate_exact_session(')
@@ -3853,12 +3853,12 @@ const clusterFailureSupervisor = rustItemBody(
   'pub async fn run_failure_supervisor<A: ClusterAdapters>(',
 );
 const clusterFailureContext = structBody(
-  read('src/cluster/failure_supervisor_context.rs'),
-  'pub(crate) struct ClusterFailureSupervisorContext',
+  read('crates/edges/northstar-cluster/src/failure_supervisor_context.rs'),
+  'pub struct ClusterFailureSupervisorContext',
 );
 const clusterFailureAuthority = rustItemBody(
   cluster,
-  'pub(crate) struct ClusterFailureSupervisorAuthority',
+  'pub struct ClusterFailureSupervisorAuthority',
 );
 if (!clusterFailureSupervisor.includes('context.replay_maintenance')
     || !clusterFailureSupervisor.includes('context.route_maintenance')
@@ -3888,7 +3888,7 @@ for (const invariant of ['authority.require_shutdown()', 'anyhow::bail!']) {
 }
 const accountRevocationWorker = rustItemBody(
   cluster,
-  'pub(crate) async fn run_account_revocations<',
+  'pub async fn run_account_revocations<',
 );
 if (!mainSource.includes('state.account_revocation_worker_context()')
     || /Arc<AppState>|\bstate\./.test(accountRevocationWorker)

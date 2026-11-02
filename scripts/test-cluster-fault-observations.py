@@ -268,7 +268,7 @@ class RejectionObservationTests(unittest.TestCase):
 
     def test_observed_events_keep_the_cluster_target_in_source(self):
         # The fixture matches the exact event target. Code moved out of
-        # src/cluster.rs logs under its own module path unless the call pins the
+        # northstar-cluster logs under its own module path unless the call pins the
         # cluster target, which only the multi-node CI job would notice.
         root = Path(__file__).resolve().parents[1]
         fixture_source = (root / "scripts" / "cluster-wsl.py").read_text()
@@ -276,14 +276,14 @@ class RejectionObservationTests(unittest.TestCase):
         self.assertEqual(len(messages), 2)
         for message in messages:
             calls = []
-            for path in sorted((root / "src").rglob("*.rs")):
+            for path in sorted([*(root / "src").rglob("*.rs"), *(root / "crates").rglob("*.rs")]):
                 text = path.read_text()
                 for match in re.finditer(re.escape(f'"{message}"'), text):
                     calls.append((path, text[text.rfind("tracing::", 0, match.start()):match.start()]))
             self.assertEqual(len(calls), 1, message)
             path, call = calls[0]
             self.assertTrue(
-                path == root / "src" / "cluster.rs" or 'target: "rust_xmpp_server::cluster"' in call,
+                path == root / "crates/edges/northstar-cluster" / "src" / "lib.rs" or 'target: "rust_xmpp_server::cluster"' in call,
                 f"{path.relative_to(root)} logs {message!r} outside the cluster target",
             )
 

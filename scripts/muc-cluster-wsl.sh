@@ -78,10 +78,10 @@ require_literal "$project_dir/migrations/0095_cluster_replay_fence.sql" \
 require_module_literal "crates/contexts/room/northstar-room-postgres/src/muc.rs" \
   "ON CONFLICT (localpart) WHERE destroyed_at IS NULL DO NOTHING" "live-room create idempotency" \
   "$project_dir/crates/contexts/room/northstar-room-postgres/src/muc.rs"
-require_module_literal "src/cluster/listener.rs" \
+require_module_literal "crates/edges/northstar-cluster/src/listener.rs" \
   "executable MUC control rejected" "untrusted executable MUC control rejection" \
-  "$project_dir/src/cluster/listener.rs"
-require_module_literal "src/cluster.rs" \
+  "$project_dir/crates/edges/northstar-cluster/src/listener.rs"
+require_module_literal "crates/edges/northstar-cluster/src/lib.rs" \
   "worker.delivery_read.recipient_snapshot(delivery).await" "recipient snapshot service boundary"
 require_literal "$project_dir/crates/contexts/room/northstar-room-application/src/cluster_muc_delivery_read.rs" \
   "self.repository.recipient_snapshot(delivery).await" "recipient snapshot repository delegation"
@@ -91,7 +91,7 @@ require_module_literal "crates/contexts/room/northstar-room-postgres/src/cluster
   "mutate_cluster_muc_registration" "membership mutation authority"
 require_module_literal "crates/contexts/room/northstar-room-postgres/src/cluster_muc.rs" \
   "grant_cluster_muc_invitation_in_tx" "invitation mutation authority"
-require_module_literal "src/cluster.rs" \
+require_module_literal "crates/edges/northstar-cluster/src/lib.rs" \
   '"offline_affiliation"' "offline affiliation projection"
 
 redis_dir="$(mktemp -d -t northstar-muc-redis-XXXXXX)"
@@ -189,12 +189,12 @@ fi
 # Config's local Unix-socket transport validation.
 export TEST_REDIS_URL="redis+unix://$redis_socket"
 cargo test --locked --offline -p northstar-room-postgres cluster_muc::tests:: -- --nocapture
-cargo test --locked --offline \
-  cluster::tests::redis_muc_nickname_and_voice_mutations_reject_conflicts_and_aba \
+cargo test --locked --offline -p northstar-cluster \
+  tests::redis_muc_nickname_and_voice_mutations_reject_conflicts_and_aba \
   -- --ignored --nocapture
-cargo test --locked --offline \
-  cluster::tests::redis_ten_thousand_temporary_muc_rooms_leave_no_soft_state_keys \
+cargo test --locked --offline -p northstar-cluster \
+  tests::redis_ten_thousand_temporary_muc_rooms_leave_no_soft_state_keys \
   -- --ignored --nocapture
-cargo test --locked --offline cluster::muc_routing_tests:: -- --ignored --nocapture
+cargo test --locked --offline -p northstar-cluster muc_routing_tests:: -- --ignored --nocapture
 
 echo "CLU-MUC static fences and pure state models passed; run scripts/cluster-wsl.sh for the disposable PostgreSQL/two-node Redis outage matrix"

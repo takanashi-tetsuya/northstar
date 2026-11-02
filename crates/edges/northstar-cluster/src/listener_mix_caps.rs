@@ -1,20 +1,20 @@
 //! Live, verified MIX capability admission for the cluster listener.
 
-use crate::cluster::ClusterMixCapability;
+use crate::ClusterMixCapability;
 use dashmap::DashMap;
 use northstar_protocol_runtime::caps::{CapsObservationOwner, CapsResourceIndex, PendingCapsIndex};
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::local_routes::session_table::local_caps_route_epoch_matches;
 use std::sync::{atomic::Ordering, Arc};
 
-pub(crate) struct ClusterListenerMixCaps {
-    pub(crate) sessions: Arc<DashMap<String, OnlineSession>>,
-    pub(crate) verified: Arc<CapsResourceIndex>,
-    pub(crate) pending: Arc<PendingCapsIndex>,
+pub struct ClusterListenerMixCaps {
+    pub sessions: Arc<DashMap<String, OnlineSession>>,
+    pub verified: Arc<CapsResourceIndex>,
+    pub pending: Arc<PendingCapsIndex>,
 }
 
 impl ClusterListenerMixCaps {
-    pub(crate) fn capability(&self, full_jid: &str) -> ClusterMixCapability {
+    pub fn capability(&self, full_jid: &str) -> ClusterMixCapability {
         let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(full_jid) else {
             return ClusterMixCapability::Unknown;
         };

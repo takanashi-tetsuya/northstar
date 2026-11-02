@@ -128,7 +128,7 @@ impl ClusterManager {
         )
     }
 
-    pub(crate) fn readiness_authority_snapshot(&self) -> Option<ClusterReadinessAuthority> {
+    pub fn readiness_authority_snapshot(&self) -> Option<ClusterReadinessAuthority> {
         let security = self.security.as_ref()?;
         Some(ClusterReadinessAuthority {
             key_identity: self.key_authority_identity()?,
@@ -140,7 +140,7 @@ impl ClusterManager {
         })
     }
 
-    pub(crate) fn readiness_probe(&self) -> ClusterReadinessProbe {
+    pub fn readiness_probe(&self) -> ClusterReadinessProbe {
         ClusterReadinessProbe {
             health: Arc::clone(&self.health),
             authority: self.readiness_authority_snapshot(),
@@ -244,7 +244,7 @@ impl ClusterManager {
         .await
     }
 
-    pub(crate) async fn release_instance_authority_with<R: ClusterInstanceReleaseRepository>(
+    pub async fn release_instance_authority_with<R: ClusterInstanceReleaseRepository>(
         &self,
         service: &ClusterInstanceReleaseService<R>,
     ) -> Result<bool> {

@@ -2021,6 +2021,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-cluster"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bb8",
+ "chrono",
+ "dashmap",
+ "futures",
+ "northstar-auth-application",
+ "northstar-config",
+ "northstar-delivery-core",
+ "northstar-federation-core",
+ "northstar-message-application",
+ "northstar-message-core",
+ "northstar-operations-application",
+ "northstar-protocol-runtime",
+ "northstar-room-application",
+ "northstar-room-core",
+ "northstar-roster-application",
+ "northstar-roster-core",
+ "northstar-runtime",
+ "northstar-security",
+ "northstar-session-application",
+ "northstar-session-core",
+ "northstar-session-postgres",
+ "northstar-stream",
+ "northstar-telemetry",
+ "northstar-xep-0016",
+ "northstar-xep-0045",
+ "northstar-xep-0191",
+ "northstar-xep-0359",
+ "northstar-xml-builder",
+ "northstar-xmpp-avatar",
+ "northstar-xmpp-types",
+ "redis",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "northstar-config"
 version = "0.1.0"
 dependencies = [
@@ -4036,6 +4083,7 @@ dependencies = [
  "northstar-auth-core",
  "northstar-auth-postgres",
  "northstar-auth-xmpp",
+ "northstar-cluster",
  "northstar-config",
  "northstar-data-tools",
  "northstar-delivery-core",

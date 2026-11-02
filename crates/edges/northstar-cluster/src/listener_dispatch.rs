@@ -1,6 +1,6 @@
 //! Local effects permitted after a cluster listener authenticates a command.
 
-use crate::cluster::{
+use crate::{
     ClusterAdapters, ClusterListenerMucProjection, ClusterListenerPresenceRoutes,
     ClusterMucOutboxSignal, ClusterSessionTerminationIdentity, SessionTerminationEffect,
 };
@@ -13,36 +13,33 @@ use northstar_stream::local_routes::session_table::{
 };
 use uuid::Uuid;
 
-pub(crate) struct ClusterListenerDispatch<A: ClusterAdapters> {
-    pub(crate) muc_outbox: ClusterMucOutboxSignal,
-    pub(crate) muc_projection: ClusterListenerMucProjection,
-    pub(crate) presence_routes: ClusterListenerPresenceRoutes,
-    pub(crate) account_routes: AccountRevocationRoutes,
-    pub(crate) session_identity: ClusterSessionTerminationIdentity,
-    pub(crate) session_authority: SessionTerminationAuthorityService<A::SessionTermination>,
+pub struct ClusterListenerDispatch<A: ClusterAdapters> {
+    pub muc_outbox: ClusterMucOutboxSignal,
+    pub muc_projection: ClusterListenerMucProjection,
+    pub presence_routes: ClusterListenerPresenceRoutes,
+    pub account_routes: AccountRevocationRoutes,
+    pub session_identity: ClusterSessionTerminationIdentity,
+    pub session_authority: SessionTerminationAuthorityService<A::SessionTermination>,
 }
 
 impl<A: ClusterAdapters> ClusterListenerDispatch<A> {
-    pub(crate) fn node_id(&self) -> &str {
+    pub fn node_id(&self) -> &str {
         self.presence_routes.node_id()
     }
 
-    pub(crate) async fn remote_presence_nodes(
-        &self,
-        recipient: &str,
-    ) -> anyhow::Result<Vec<String>> {
+    pub async fn remote_presence_nodes(&self, recipient: &str) -> anyhow::Result<Vec<String>> {
         self.presence_routes.remote_nodes(recipient).await
     }
 
-    pub(crate) async fn leave_empty_muc_room(&self, room_jid: &str) -> anyhow::Result<()> {
+    pub async fn leave_empty_muc_room(&self, room_jid: &str) -> anyhow::Result<()> {
         self.muc_projection.leave_empty_room(room_jid).await
     }
 
-    pub(crate) fn wake_muc_outbox(&self) {
+    pub fn wake_muc_outbox(&self) {
         self.muc_outbox.notify();
     }
 
-    pub(crate) fn revoke_account_before_generation(
+    pub fn revoke_account_before_generation(
         &self,
         user_id: Uuid,
         bare_jid: &str,
@@ -53,11 +50,11 @@ impl<A: ClusterAdapters> ClusterListenerDispatch<A> {
     }
 
     /// Return cloned routable routes; no DashMap guard crosses listener I/O.
-    pub(crate) fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
+    pub fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
         session_entries_for_in(&self.account_routes.sessions, jid)
     }
 
-    pub(crate) fn fence_sm_session(&self, full_jid: &str, sm_session_id: Uuid) -> bool {
+    pub fn fence_sm_session(&self, full_jid: &str, sm_session_id: Uuid) -> bool {
         fence_local_session_in(
             &self.account_routes.sessions,
             full_jid,
@@ -65,7 +62,7 @@ impl<A: ClusterAdapters> ClusterListenerDispatch<A> {
         )
     }
 
-    pub(crate) async fn terminate_exact_session(
+    pub async fn terminate_exact_session(
         &self,
         full_jid: &str,
         connection_id: Uuid,

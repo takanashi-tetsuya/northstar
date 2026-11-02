@@ -6,7 +6,7 @@ use northstar_room_application::muc_service::MucSoftStateProjectionPort;
 /// PostgreSQL-fenced maintenance of disposable Redis projections. This handle
 /// has no signer, publication gate, PubSub client, or delivery route.
 #[derive(Clone)]
-pub(crate) struct ClusterMaintenanceRedis {
+pub struct ClusterMaintenanceRedis {
     pub(super) pool: Option<Pool<RedisConnectionManager>>,
     pub(super) session_store: Arc<std::sync::OnceLock<Arc<dyn ClusterSessionStore>>>,
     pub(super) namespace: String,

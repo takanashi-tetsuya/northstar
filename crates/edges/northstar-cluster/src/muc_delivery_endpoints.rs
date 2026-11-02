@@ -10,13 +10,13 @@ use northstar_stream::local_routes::muc_table::{
 use northstar_stream::local_routes::session::OnlineSession;
 use std::sync::Arc;
 
-pub(crate) struct ClusterMucDeliveryEndpoints {
-    pub(crate) sessions: Arc<DashMap<String, OnlineSession>>,
-    pub(crate) occupants: Arc<DashMap<String, MucOccupant>>,
+pub struct ClusterMucDeliveryEndpoints {
+    pub sessions: Arc<DashMap<String, OnlineSession>>,
+    pub occupants: Arc<DashMap<String, MucOccupant>>,
 }
 
 impl ClusterMucDeliveryEndpoints {
-    pub(crate) fn room_occupants(&self, room_jid: &str) -> Vec<MucOccupant> {
+    pub fn room_occupants(&self, room_jid: &str) -> Vec<MucOccupant> {
         let Ok(room_jid) = northstar_xmpp_types::jid::canonicalize_bare(room_jid) else {
             return Vec::new();
         };
@@ -27,7 +27,7 @@ impl ClusterMucDeliveryEndpoints {
             .collect()
     }
 
-    pub(crate) fn cached_recipient(&self, room_jid: &str, nick: &str) -> Option<MucOccupant> {
+    pub fn cached_recipient(&self, room_jid: &str, nick: &str) -> Option<MucOccupant> {
         let room_jid = northstar_xmpp_types::jid::canonicalize_bare(room_jid).ok()?;
         let key = northstar_room_core::stanza::muc_occupant_key(&room_jid, nick);
         self.occupants
@@ -38,7 +38,7 @@ impl ClusterMucDeliveryEndpoints {
 
     /// A terminal event may outlive the live occupancy. Reconstruct only its
     /// endpoint from the immutable audience; this never restores membership.
-    pub(crate) fn recipient_from_snapshot(
+    pub fn recipient_from_snapshot(
         &self,
         snapshot: &ClusterMucAudienceSnapshot,
         room_jid: &str,
@@ -89,7 +89,7 @@ impl ClusterMucDeliveryEndpoints {
         })
     }
 
-    pub(crate) fn actor_nick(&self, room_jid: &str, actor_full_jid: &str) -> Option<String> {
+    pub fn actor_nick(&self, room_jid: &str, actor_full_jid: &str) -> Option<String> {
         let room_jid = northstar_xmpp_types::jid::canonicalize_bare(room_jid).ok()?;
         self.occupants.iter().find_map(|entry| {
             let actor = entry.value();
@@ -98,11 +98,11 @@ impl ClusterMucDeliveryEndpoints {
         })
     }
 
-    pub(crate) fn apply_role_projection_exact(&self, snapshot: &SerializableMucOccupant) -> bool {
+    pub fn apply_role_projection_exact(&self, snapshot: &SerializableMucOccupant) -> bool {
         self.apply_projection_exact(snapshot, false)
     }
 
-    pub(crate) fn apply_policy_projection_exact(&self, snapshot: &SerializableMucOccupant) -> bool {
+    pub fn apply_policy_projection_exact(&self, snapshot: &SerializableMucOccupant) -> bool {
         self.apply_projection_exact(snapshot, true)
     }
 
@@ -127,13 +127,13 @@ impl ClusterMucDeliveryEndpoints {
 
     /// The protocol membership and cached occupant share the same exact
     /// incarnation fence; a later nickname or transport owner is untouched.
-    pub(crate) fn revoke_exact_recipient(&self, occupant: &SerializableMucOccupant) {
+    pub fn revoke_exact_recipient(&self, occupant: &SerializableMucOccupant) {
         self.revoke_exact_recipient_returning_local(occupant);
     }
 
     /// Listener eviction needs the removed endpoint for its self-presence.
     /// Keep live-membership removal ahead of the local occupancy removal.
-    pub(crate) fn revoke_exact_recipient_returning_local(
+    pub fn revoke_exact_recipient_returning_local(
         &self,
         occupant: &SerializableMucOccupant,
     ) -> Option<MucOccupant> {
@@ -141,14 +141,14 @@ impl ClusterMucDeliveryEndpoints {
         self.remove_local_exact(LocalMucOccupantIdentity::from(occupant))
     }
 
-    pub(crate) fn remove_local_exact(
+    pub fn remove_local_exact(
         &self,
         identity: LocalMucOccupantIdentity<'_>,
     ) -> Option<MucOccupant> {
         remove_local_muc_occupant_exact_from(&self.occupants, identity)
     }
 
-    pub(crate) fn remove_live_membership_exact(&self, occupant: &SerializableMucOccupant) -> bool {
+    pub fn remove_live_membership_exact(&self, occupant: &SerializableMucOccupant) -> bool {
         let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(&occupant.full_jid)
         else {
             return false;

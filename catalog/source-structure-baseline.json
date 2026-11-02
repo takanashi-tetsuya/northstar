@@ -10,7 +10,7 @@
   },
   "root_rust_files": [
     "src/bosh.rs",
-    "src/cluster.rs",
+    "crates/edges/northstar-cluster/src/lib.rs",
     "src/direct_replay.rs",
     "src/main.rs",
     "src/stage4_replay.rs",

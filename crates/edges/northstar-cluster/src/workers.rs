@@ -4,7 +4,7 @@ use super::*;
 
 /// Read committed account fences independently of Redis and cluster maintenance.
 /// Notifications reduce latency; polling recovers missed notifications.
-pub(crate) async fn run_account_revocations<
+pub async fn run_account_revocations<
     R: northstar_auth_application::account_revocation_consumer::AccountRevocationRepository,
 >(
     context: Arc<AccountRevocationWorkerContext<R>>,
@@ -69,7 +69,7 @@ pub(crate) async fn run_account_revocations<
     }
 }
 
-pub(crate) async fn run_maintenance<A: ClusterAdapters>(
+pub async fn run_maintenance<A: ClusterAdapters>(
     context: Arc<super::maintenance_context::ClusterMaintenanceContext<A>>,
     cancel: CancellationToken,
     heartbeat: northstar_runtime::workers::WorkerHeartbeat,
@@ -421,19 +421,19 @@ pub(super) async fn maintenance_once<A: ClusterAdapters>(
 
 /// Listener capabilities are assembled once; the receive loop never retains
 /// the application state or a general cluster manager.
-pub(crate) struct ClusterListenerRuntime<A: ClusterAdapters> {
-    pub(crate) message_policy: Arc<ClusterListenerMessagePolicy<A>>,
-    pub(crate) dispatch: super::listener_dispatch::ClusterListenerDispatch<A>,
-    pub(crate) muc_endpoints: super::muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
-    pub(crate) muc_delivery: super::ClusterMucDelivery<A>,
-    pub(crate) mix_caps: super::listener_mix_caps::ClusterListenerMixCaps,
-    pub(crate) blocking: super::listener_blocking::ClusterListenerBlocking<A>,
-    pub(crate) sm_muc_teardown: super::listener_sm_muc_teardown::ClusterListenerSmMucTeardown<A>,
-    pub(crate) presence_sender: Arc<ClusterNodeDelivery>,
-    pub(crate) security: Arc<ClusterListenerSecurity>,
+pub struct ClusterListenerRuntime<A: ClusterAdapters> {
+    pub message_policy: Arc<ClusterListenerMessagePolicy<A>>,
+    pub dispatch: super::listener_dispatch::ClusterListenerDispatch<A>,
+    pub muc_endpoints: super::muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
+    pub muc_delivery: super::ClusterMucDelivery<A>,
+    pub mix_caps: super::listener_mix_caps::ClusterListenerMixCaps,
+    pub blocking: super::listener_blocking::ClusterListenerBlocking<A>,
+    pub sm_muc_teardown: super::listener_sm_muc_teardown::ClusterListenerSmMucTeardown<A>,
+    pub presence_sender: Arc<ClusterNodeDelivery>,
+    pub security: Arc<ClusterListenerSecurity>,
 }
 
-pub(crate) async fn run_pubsub_listener<A: ClusterAdapters>(
+pub async fn run_pubsub_listener<A: ClusterAdapters>(
     transport: Arc<ClusterPubsubListenerTransport>,
     admission: Arc<ClusterListenerAdmission>,
     runtime: ClusterListenerRuntime<A>,

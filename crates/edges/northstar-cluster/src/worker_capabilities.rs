@@ -6,16 +6,16 @@ use northstar_security::cluster_keys::ClusterReadinessAuthority;
 /// MIX route discovery reads current PostgreSQL session ownership without
 /// receiving publication, Redis, or session-mutation authority.
 #[derive(Clone)]
-pub(crate) struct ClusterMixRouteLookup {
+pub struct ClusterMixRouteLookup {
     pub(super) routes: ClusterListenerPresenceRoutes,
 }
 
 impl ClusterMixRouteLookup {
-    pub(crate) async fn lookup_nodes(&self, jid: &str) -> Result<Vec<String>> {
+    pub async fn lookup_nodes(&self, jid: &str) -> Result<Vec<String>> {
         self.routes.lookup_nodes(jid).await
     }
 
-    pub(crate) fn node_id(&self) -> &str {
+    pub fn node_id(&self) -> &str {
         self.routes.node_id()
     }
 }
@@ -32,7 +32,7 @@ impl northstar_room_application::mix_service::MixClusterRouteLookup for ClusterM
 /// The PubSub reader's connection, self-loop and generation fence. This handle
 /// cannot sign a command, consume replay authority or dispatch an ACK.
 #[derive(Clone)]
-pub(crate) struct ClusterPubsubListenerTransport {
+pub struct ClusterPubsubListenerTransport {
     pub(super) client: Option<redis::Client>,
     pub(super) pool: Option<Pool<RedisConnectionManager>>,
     pub(super) key_prefix: String,
@@ -81,7 +81,7 @@ impl ClusterPubsubListenerTransport {
 /// verification. This can check the current generation and match a pending
 /// ACK, but cannot sign, publish or admit an envelope into PostgreSQL.
 #[derive(Clone)]
-pub(crate) struct ClusterListenerAdmission {
+pub struct ClusterListenerAdmission {
     pub(super) health: Arc<ClusterHealth>,
     pub(super) pending_acks: Arc<dashmap::DashMap<String, PendingClusterAck>>,
 }
@@ -266,7 +266,7 @@ impl ClusterListenerSecurity {
 /// correlated acknowledgements. This has no command routing or Redis mutation
 /// authority beyond the signed ACK channel.
 #[derive(Clone)]
-pub(crate) struct ClusterListenerSecurity {
+pub struct ClusterListenerSecurity {
     pub(super) publisher: ClusterSignedPublisher,
     pub(super) authorized_peer_keys: Arc<dashmap::DashMap<String, AuthorizedPeerKeys>>,
     pub(super) session_store: Arc<std::sync::OnceLock<Arc<dyn ClusterSessionStore>>>,
@@ -275,7 +275,7 @@ pub(crate) struct ClusterListenerSecurity {
 /// Read-only health and exact identity view. This has no Redis, signing,
 /// publication, or instance-claim authority.
 #[derive(Clone)]
-pub(crate) struct ClusterReadinessProbe {
+pub struct ClusterReadinessProbe {
     pub(super) health: Arc<ClusterHealth>,
     pub(super) authority: Option<ClusterReadinessAuthority>,
     pub(super) instance_epoch: Arc<AtomicI64>,
@@ -285,7 +285,7 @@ pub(crate) struct ClusterReadinessProbe {
 /// needed by the committed account-revocation consumer. No Redis client,
 /// publication key, or broader cluster control plane crosses this boundary.
 #[derive(Clone)]
-pub(crate) struct ClusterRevocationAuthority {
+pub struct ClusterRevocationAuthority {
     pub(super) domain: String,
     pub(super) node_id: String,
     pub(super) instance_uuid: uuid::Uuid,
@@ -301,7 +301,7 @@ pub(crate) struct ClusterRevocationAuthority {
 /// caches and fence cluster admission. It cannot publish, sign or issue Redis
 /// commands.
 #[derive(Clone)]
-pub(crate) struct ClusterFailureSupervisorAuthority {
+pub struct ClusterFailureSupervisorAuthority {
     pub(super) enabled: bool,
     pub(super) readiness: Option<ClusterReadinessAuthority>,
     pub(super) instance_epoch: Arc<AtomicI64>,
@@ -319,7 +319,7 @@ pub(crate) struct ClusterFailureSupervisorAuthority {
 /// The maintenance worker may observe readiness and record a failed Redis
 /// projection without receiving signing or publication authority.
 #[derive(Clone)]
-pub(crate) struct ClusterMaintenanceControl {
+pub struct ClusterMaintenanceControl {
     pub(super) node_id: String,
     pub(super) enabled: bool,
     pub(super) peer_authority: ClusterFailureSupervisorAuthority,
@@ -332,7 +332,7 @@ pub(crate) struct ClusterMaintenanceControl {
 /// A MUC outbox worker needs only its node identity and committed wake signal
 /// from the cluster control plane. Neither capability can publish a packet.
 #[derive(Clone)]
-pub(crate) struct ClusterMucOutboxSignal {
+pub struct ClusterMucOutboxSignal {
     pub(super) node_id: String,
     pub(super) wake: Arc<tokio::sync::Notify>,
 }
@@ -340,7 +340,7 @@ pub(crate) struct ClusterMucOutboxSignal {
 /// PostgreSQL session-route discovery for listener presence probes. Redis is
 /// only the command transport; it is not the authority for session ownership.
 #[derive(Clone)]
-pub(crate) struct ClusterListenerPresenceRoutes {
+pub struct ClusterListenerPresenceRoutes {
     pub(super) session_store: Arc<std::sync::OnceLock<Arc<dyn ClusterSessionStore>>>,
     pub(super) namespace: String,
     pub(super) node_id: String,
@@ -372,7 +372,7 @@ impl ClusterListenerPresenceRoutes {
         Ok(nodes)
     }
 
-    pub(crate) async fn remote_nodes(&self, jid: &str) -> Result<Vec<String>> {
+    pub async fn remote_nodes(&self, jid: &str) -> Result<Vec<String>> {
         Ok(self
             .lookup_nodes(jid)
             .await?
@@ -381,7 +381,7 @@ impl ClusterListenerPresenceRoutes {
             .collect())
     }
 
-    pub(crate) fn node_id(&self) -> &str {
+    pub fn node_id(&self) -> &str {
         &self.node_id
     }
 }
@@ -389,14 +389,14 @@ impl ClusterListenerPresenceRoutes {
 /// Disposable Redis room-membership projection used after an exact local
 /// removal. The script keeps a node subscribed while any occupancy remains.
 #[derive(Clone)]
-pub(crate) struct ClusterListenerMucProjection {
+pub struct ClusterListenerMucProjection {
     pub(super) pool: Option<Pool<RedisConnectionManager>>,
     pub(super) key_prefix: String,
     pub(super) node_id: String,
 }
 
 impl ClusterListenerMucProjection {
-    pub(crate) async fn leave_empty_room(&self, room_jid: &str) -> Result<()> {
+    pub async fn leave_empty_room(&self, room_jid: &str) -> Result<()> {
         leave_muc_node_projection(
             self.pool.as_ref(),
             &self.key_prefix,
@@ -410,7 +410,7 @@ impl ClusterListenerMucProjection {
 /// Exact local SM-owned occupancy removal and reconciled room emptiness.
 /// It cannot publish node commands or mutate PostgreSQL authority.
 #[derive(Clone)]
-pub(crate) struct ClusterSmMucTeardownProjection {
+pub struct ClusterSmMucTeardownProjection {
     pub(super) pool: Option<Pool<RedisConnectionManager>>,
     pub(super) key_prefix: String,
     pub(super) node_id: String,
@@ -429,7 +429,7 @@ impl ClusterSmMucTeardownProjection {
         Ok(format!("{}.{}", self.connection_uuid.simple(), epoch))
     }
 
-    pub(crate) async fn unregister_muc_occupant_epoch(
+    pub async fn unregister_muc_occupant_epoch(
         &self,
         room_jid: &str,
         nick: &str,
@@ -498,10 +498,7 @@ impl ClusterSmMucTeardownProjection {
         Ok(removed == 1)
     }
 
-    pub(crate) async fn get_muc_occupants(
-        &self,
-        room_jid: &str,
-    ) -> Result<HashMap<String, String>> {
+    pub async fn get_muc_occupants(&self, room_jid: &str) -> Result<HashMap<String, String>> {
         let Some(pool) = &self.pool else {
             return Ok(HashMap::new());
         };
@@ -512,7 +509,7 @@ impl ClusterSmMucTeardownProjection {
         Ok(conn.hgetall(&occupants_key).await?)
     }
 
-    pub(crate) async fn leave_muc(&self, room_jid: &str) -> Result<()> {
+    pub async fn leave_muc(&self, room_jid: &str) -> Result<()> {
         leave_muc_node_projection(
             self.pool.as_ref(),
             &self.key_prefix,
@@ -522,7 +519,7 @@ impl ClusterSmMucTeardownProjection {
         .await
     }
 
-    pub(crate) async fn room_is_empty(&self, room_jid: &str) -> Result<bool> {
+    pub async fn room_is_empty(&self, room_jid: &str) -> Result<bool> {
         Ok(self.get_muc_occupants(room_jid).await?.is_empty())
     }
 }
@@ -532,17 +529,17 @@ impl ClusterMucOutboxSignal {
         self.wake.notified().await;
     }
 
-    pub(crate) fn notify(&self) {
+    pub fn notify(&self) {
         self.wake.notify_one();
     }
 }
 
 impl ClusterFailureSupervisorAuthority {
-    pub(crate) fn is_enabled(&self) -> bool {
+    pub fn is_enabled(&self) -> bool {
         self.enabled
     }
 
-    pub(crate) fn key_identity(
+    pub fn key_identity(
         &self,
     ) -> Option<&northstar_security::cluster_keys::ClusterKeyDeploymentIdentity> {
         self.readiness
@@ -550,13 +547,13 @@ impl ClusterFailureSupervisorAuthority {
             .map(|readiness| &readiness.key_identity)
     }
 
-    pub(crate) fn readiness_snapshot(&self) -> Option<ClusterReadinessAuthority> {
+    pub fn readiness_snapshot(&self) -> Option<ClusterReadinessAuthority> {
         let mut readiness = self.readiness.clone()?;
         readiness.instance_epoch = self.instance_epoch.load(Ordering::Acquire);
         Some(readiness)
     }
 
-    pub(crate) async fn refresh_peers_with<R: ClusterAuthorityRepository>(
+    pub async fn refresh_peers_with<R: ClusterAuthorityRepository>(
         &self,
         service: &ClusterAuthorityService<R>,
     ) -> Result<()> {
@@ -574,7 +571,7 @@ impl ClusterFailureSupervisorAuthority {
         .await
     }
 
-    pub(crate) fn record_authority_failure(&self, error: &anyhow::Error) {
+    pub fn record_authority_failure(&self, error: &anyhow::Error) {
         record_cluster_failure(
             &self.health,
             &self.listener_rotation,
@@ -585,12 +582,12 @@ impl ClusterFailureSupervisorAuthority {
         );
     }
 
-    pub(crate) fn failure_policy(&self) -> northstar_security::cluster_bus::ClusterFailurePolicy {
+    pub fn failure_policy(&self) -> northstar_security::cluster_bus::ClusterFailurePolicy {
         self.failure_policy
             .unwrap_or(northstar_security::cluster_bus::ClusterFailurePolicy::FailClosed)
     }
 
-    pub(crate) fn safety_lease_expired(&self) -> bool {
+    pub fn safety_lease_expired(&self) -> bool {
         let Some(seconds) = self.safety_lease_seconds else {
             return false;
         };
@@ -601,7 +598,7 @@ impl ClusterFailureSupervisorAuthority {
             .is_some_and(|since| since.elapsed() >= Duration::from_secs(seconds))
     }
 
-    pub(crate) fn require_shutdown(&self) {
+    pub fn require_shutdown(&self) {
         require_cluster_shutdown(&self.health, self.enabled);
     }
 }
@@ -631,7 +628,7 @@ impl ClusterRevocationAuthority {
     }
 }
 
-pub(crate) struct AccountRevocationWorkerContext<R> {
+pub struct AccountRevocationWorkerContext<R> {
     pub(super) service:
         northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService<
             R,
@@ -643,7 +640,7 @@ pub(crate) struct AccountRevocationWorkerContext<R> {
 impl<R: northstar_auth_application::account_revocation_consumer::AccountRevocationRepository>
     AccountRevocationWorkerContext<R>
 {
-    pub(crate) fn new(
+    pub fn new(
         service: northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService<R>,
         routes: northstar_stream::local_routes::session::AccountRevocationRoutes,
         authority: ClusterRevocationAuthority,
@@ -657,11 +654,11 @@ impl<R: northstar_auth_application::account_revocation_consumer::AccountRevocati
 }
 
 impl ClusterReadinessProbe {
-    pub(crate) fn readiness_error(&self) -> Option<String> {
+    pub fn readiness_error(&self) -> Option<String> {
         cluster_readiness_error(&self.health)
     }
 
-    pub(crate) fn authority_snapshot(&self) -> Option<ClusterReadinessAuthority> {
+    pub fn authority_snapshot(&self) -> Option<ClusterReadinessAuthority> {
         self.authority.clone().map(|mut authority| {
             authority.instance_epoch = self.instance_epoch.load(Ordering::Acquire);
             authority

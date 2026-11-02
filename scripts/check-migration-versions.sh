@@ -1429,8 +1429,8 @@ if grep -Eq 'SECURITY DEFINER|public\.' "$mix_cluster_handoff_migration"; then
     echo "migration 0137 must not use public schema or a broad database capability" >&2
     exit 1
 fi
-# src/cluster.rs may be split into child module files: read its production module.
-cluster_production_source=$(module_source --production src/cluster.rs) || exit 1
+# crates/edges/northstar-cluster/src/lib.rs may be split into child module files: read its production module.
+cluster_production_source=$(module_source --production crates/edges/northstar-cluster/src/lib.rs) || exit 1
 for required_source_fragment in \
     'NodeDeliveryContract::DurableMix' \
     'ClusterMixHandoff' \

@@ -2,12 +2,12 @@
 //! Maintenance may request work, but the owning protocol session controls
 //! when that work can start relative to its current transport action.
 
-use crate::cluster::{ClusterAdapters, ClusterAdmission, DirectPostCommitMode};
+use crate::{ClusterAdmission, DirectPostCommitMode};
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use northstar_session_application::post_actions::PostActionTelemetry;
-use northstar_session_application::replay::{RecoveryReplayStore, ReplayService};
+use northstar_session_application::replay::{RecoveryReplayStore, ReplayRepository, ReplayService};
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::replay;
 use northstar_telemetry::metrics::Metrics;
@@ -21,19 +21,19 @@ use std::{
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
-pub(crate) const MAX_CONCURRENT_RECOVERY_REPLAYS: usize = 8;
+pub const MAX_CONCURRENT_RECOVERY_REPLAYS: usize = 8;
 const MAX_RECOVERY_ROUTE_PAGE: usize = 256;
 
-pub(crate) struct ClusterRecoveryReplayWake<A: ClusterAdapters> {
-    pub(crate) sessions: Arc<DashMap<String, OnlineSession>>,
-    pub(crate) replay: ReplayService<A::Replay>,
-    pub(crate) admission: ClusterAdmission,
-    pub(crate) store: A::RecoveryReplay,
-    pub(crate) metrics: Arc<Metrics>,
-    pub(crate) permits: Arc<Semaphore>,
+pub struct ClusterRecoveryReplayWake<R, S> {
+    pub sessions: Arc<DashMap<String, OnlineSession>>,
+    pub replay: ReplayService<R>,
+    pub admission: ClusterAdmission,
+    pub store: S,
+    pub metrics: Arc<Metrics>,
+    pub permits: Arc<Semaphore>,
 }
 
-impl<A: ClusterAdapters> Clone for ClusterRecoveryReplayWake<A> {
+impl<R: Clone, S: Clone> Clone for ClusterRecoveryReplayWake<R, S> {
     fn clone(&self) -> Self {
         Self {
             sessions: Arc::clone(&self.sessions),
@@ -68,7 +68,7 @@ impl Drop for PendingRecoveryReplay {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RecoveryReplayStatus {
+pub enum RecoveryReplayStatus {
     Complete,
     InFlight,
     Retryable,
@@ -164,14 +164,18 @@ fn recovery_route_page_after(
     page
 }
 
-impl<A: ClusterAdapters> ClusterRecoveryReplayWake<A> {
-    pub(crate) fn direct_mode(&self) -> DirectPostCommitMode {
+impl<R, S> ClusterRecoveryReplayWake<R, S>
+where
+    R: ReplayRepository + Clone + 'static,
+    S: RecoveryReplayStore + Clone + 'static,
+{
+    pub fn direct_mode(&self) -> DirectPostCommitMode {
         self.admission.direct_mode()
     }
 
     /// A database route candidate is not itself a delivery capability. Match
     /// its recipient to the exact local session before interpreting an epoch.
-    pub(crate) fn recipient_completion_state(
+    pub fn recipient_completion_state(
         &self,
         recipient_id: Uuid,
         full_jid: &str,
@@ -181,7 +185,7 @@ impl<A: ClusterAdapters> ClusterRecoveryReplayWake<A> {
         self.completion_state_checked(full_jid, connection_id, recovery_epoch, Some(recipient_id))
     }
 
-    pub(crate) fn request_for_recipient(
+    pub fn request_for_recipient(
         &self,
         recipient_id: Uuid,
         full_jid: &str,
@@ -202,7 +206,7 @@ impl<A: ClusterAdapters> ClusterRecoveryReplayWake<A> {
     /// InFlight/Retryable entries. An exact unavailable/negative-priority
     /// Bind2 route awaits a bounded future sweep; other such routes use their
     /// ordinary future presence replay.
-    pub(crate) fn completion_state(
+    pub fn completion_state(
         &self,
         full_jid: &str,
         connection_id: Uuid,
@@ -251,18 +255,14 @@ impl<A: ClusterAdapters> ClusterRecoveryReplayWake<A> {
     /// Return at most 256 exact local route identities in lexical key order.
     /// The caller advances `cursor` only after retaining this bounded page;
     /// a replacement under an earlier key has its own bind/presence replay.
-    pub(crate) fn routes_page_after(
-        &self,
-        cursor: Option<&str>,
-        limit: usize,
-    ) -> Vec<(String, Uuid)> {
+    pub fn routes_page_after(&self, cursor: Option<&str>, limit: usize) -> Vec<(String, Uuid)> {
         recovery_route_page_after(&self.sessions, cursor, limit)
     }
 
     /// Capture one PostgreSQL-clock high-water mark only after all direct
     /// admission transactions holding the exact key/instance rows have
     /// committed. A timeout leaves recovery wake retryable by maintenance.
-    pub(crate) async fn barrier(
+    pub async fn barrier(
         &self,
         authority: &ClusterReadinessAuthority,
     ) -> anyhow::Result<DateTime<Utc>> {
@@ -288,7 +288,7 @@ impl<A: ClusterAdapters> ClusterRecoveryReplayWake<A> {
     /// ineligible, or bounded capacity is busy; maintenance may retry on a
     /// later healthy pass. `true` means one task was admitted, or the same
     /// recovery epoch already has an exact task pending for this resource.
-    pub(crate) fn request(
+    pub fn request(
         &self,
         full_jid: &str,
         connection_id: Uuid,
@@ -627,16 +627,16 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
             .unwrap();
-        let cluster =
-            crate::cluster::ClusterManager::new(None, "example.test", None, None, None, None)
-                .await
-                .unwrap();
+        let cluster = crate::ClusterManager::new(None, "example.test", None, None, None, None)
+            .await
+            .unwrap();
         let sessions = Arc::new(DashMap::new());
         let full_jid = "alice@example.test/Phone";
         let route = session(Uuid::new_v4());
         sessions.insert(full_jid.to_owned(), route.clone());
         let wake = ClusterRecoveryReplayWake::<
-            crate::state::cluster_adapters::PostgresClusterAdapters,
+            northstar_session_postgres::replay_repository::PostgresReplayRepository,
+            northstar_session_postgres::replay_repository::PostgresRecoveryReplayStore,
         > {
             sessions,
             replay: ReplayService::new(

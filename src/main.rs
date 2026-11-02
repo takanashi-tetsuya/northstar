@@ -2,7 +2,7 @@
 
 mod api;
 mod bosh;
-mod cluster;
+use northstar_cluster as cluster;
 mod db;
 #[cfg(test)]
 mod direct_replay;

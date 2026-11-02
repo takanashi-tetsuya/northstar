@@ -161,11 +161,11 @@ pub(super) struct NodeDeliveryOptions<'a> {
 /// incarnation named by a JID; the receiver therefore revalidates all four
 /// fields against PostgreSQL before touching a live route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ClusterPresenceAuthority {
-    pub(crate) owner_id: uuid::Uuid,
-    pub(crate) owner_auth_generation: i64,
-    pub(crate) recipient_id: uuid::Uuid,
-    pub(crate) recipient_auth_generation: i64,
+pub struct ClusterPresenceAuthority {
+    pub owner_id: uuid::Uuid,
+    pub owner_auth_generation: i64,
+    pub recipient_id: uuid::Uuid,
+    pub recipient_auth_generation: i64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -3,56 +3,56 @@
 //! sign messages or issue Redis commands.
 
 use super::muc_delivery_endpoints::ClusterMucDeliveryEndpoints;
-use crate::cluster::{ClusterAdapters, ClusterMucOutboxSignal};
+use crate::{ClusterAdapters, ClusterMucOutboxSignal};
 use northstar_telemetry::metrics::Metrics;
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::OwnedSemaphorePermit;
 
-pub(crate) struct ClusterMucOutboxWorkerContext<A: ClusterAdapters> {
-    pub(crate) signal: ClusterMucOutboxSignal,
-    pub(crate) domain: String,
-    pub(crate) endpoints: ClusterMucDeliveryEndpoints,
-    pub(crate) delivery: super::ClusterMucDelivery<A>,
-    pub(crate) preclaim: northstar_room_application::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService<
+pub struct ClusterMucOutboxWorkerContext<A: ClusterAdapters> {
+    pub signal: ClusterMucOutboxSignal,
+    pub domain: String,
+    pub endpoints: ClusterMucDeliveryEndpoints,
+    pub delivery: super::ClusterMucDelivery<A>,
+    pub preclaim: northstar_room_application::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService<
         A::MucOutboxPreclaim,
     >,
-    pub(crate) claim: northstar_room_application::cluster_muc_outbox_claim::ClusterMucOutboxClaimService<
+    pub claim: northstar_room_application::cluster_muc_outbox_claim::ClusterMucOutboxClaimService<
         A::MucOutboxClaim,
     >,
-    pub(crate) settlement: northstar_room_application::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService<
+    pub settlement: northstar_room_application::cluster_muc_outbox_settlement::ClusterMucOutboxSettlementService<
         A::MucOutboxSettlement,
     >,
-    pub(crate) housekeeping: northstar_room_application::cluster_muc_outbox_housekeeping::ClusterMucOutboxHousekeepingService<
+    pub housekeeping: northstar_room_application::cluster_muc_outbox_housekeeping::ClusterMucOutboxHousekeepingService<
         A::MucOutboxHousekeeping,
     >,
-    pub(crate) delivery_read: northstar_room_application::cluster_muc_delivery_read::ClusterMucDeliveryReadService<
+    pub delivery_read: northstar_room_application::cluster_muc_delivery_read::ClusterMucDeliveryReadService<
         A::MucDeliveryRead,
     >,
-    pub(crate) delivery_item: northstar_room_application::cluster_muc_delivery_item::ClusterMucDeliveryItemService<
+    pub delivery_item: northstar_room_application::cluster_muc_delivery_item::ClusterMucDeliveryItemService<
         A::MucDeliveryItem,
     >,
-    pub(crate) admission: northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
-    pub(crate) metrics: Arc<Metrics>,
+    pub admission: northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
+    pub metrics: Arc<Metrics>,
 }
 
 impl<A: ClusterAdapters> ClusterMucOutboxWorkerContext<A> {
-    pub(crate) async fn database_turn(&self) -> OwnedSemaphorePermit {
+    pub async fn database_turn(&self) -> OwnedSemaphorePermit {
         self.admission.acquire().await
     }
 
-    pub(crate) fn record_delivery(&self) {
+    pub fn record_delivery(&self) {
         self.metrics
             .cluster_muc_outbox_deliveries_total
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn record_retry(&self) {
+    pub fn record_retry(&self) {
         self.metrics
             .cluster_muc_outbox_retries_total
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn record_gauges(
+    pub fn record_gauges(
         &self,
         snapshot: northstar_room_application::cluster_muc_outbox_housekeeping::ClusterMucOutboxGaugeSnapshot,
     ) {

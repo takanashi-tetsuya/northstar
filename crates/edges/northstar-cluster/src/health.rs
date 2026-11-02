@@ -5,20 +5,20 @@ use northstar_operations_application::metrics_snapshot::ClusterMetricsSnapshot;
 
 /// Admission decisions share the live health state without Redis or publication authority.
 #[derive(Clone)]
-pub(crate) struct ClusterAdmission {
+pub struct ClusterAdmission {
     pub(super) health: Arc<ClusterHealth>,
     pub(super) direct_authority: Option<ClusterReadinessAuthority>,
 }
 impl ClusterAdmission {
-    pub(crate) fn is_enabled(&self) -> bool {
+    pub fn is_enabled(&self) -> bool {
         self.direct_authority.is_some()
     }
 
-    pub(crate) fn admit(&self, operation: ClusterOperation) -> Result<()> {
+    pub fn admit(&self, operation: ClusterOperation) -> Result<()> {
         admit_health(&self.health, operation)
     }
 
-    pub(crate) fn direct_mode(&self) -> DirectPostCommitMode {
+    pub fn direct_mode(&self) -> DirectPostCommitMode {
         match self.health.effective_state() {
             CLUSTER_DISABLED | CLUSTER_HEALTHY => DirectPostCommitMode::Live,
             CLUSTER_DURABLE_DIRECT_ONLY => DirectPostCommitMode::SpoolOnly,
@@ -28,7 +28,7 @@ impl ClusterAdmission {
 
     /// The identity comes from this process's signing configuration and claimed
     /// instance, never from the peer cache or a previous readiness observation.
-    pub(crate) fn durable_direct_authority(&self) -> Result<Option<&ClusterReadinessAuthority>> {
+    pub fn durable_direct_authority(&self) -> Result<Option<&ClusterReadinessAuthority>> {
         self.admit(ClusterOperation::DurableDirect)?;
         if self.health.effective_state() == CLUSTER_DISABLED {
             return Ok(None);
@@ -44,7 +44,7 @@ impl ClusterAdmission {
         Ok(Some(authority))
     }
 
-    pub(crate) fn check_direct_eligibility(
+    pub fn check_direct_eligibility(
         &self,
         eligibility: DirectSpoolEligibility,
     ) -> Result<Option<&ClusterReadinessAuthority>> {
@@ -64,7 +64,7 @@ impl ClusterAdmission {
 
     /// Keep the final health decision ordered with the acknowledged database
     /// commit. The returned turn never covers routing or other live effects.
-    pub(crate) fn begin_direct_commit_turn(
+    pub fn begin_direct_commit_turn(
         &self,
         eligibility: DirectSpoolEligibility,
     ) -> Result<(DirectCommitTurn, Option<&ClusterReadinessAuthority>)> {
@@ -115,7 +115,7 @@ impl ClusterAdmission {
     }
 }
 
-pub(crate) struct DirectCommitTurn {
+pub struct DirectCommitTurn {
     pub(super) health: Arc<ClusterHealth>,
     pub(super) admitted_mode: DirectPostCommitMode,
     pub(super) transition_epoch: u64,
@@ -123,13 +123,13 @@ pub(crate) struct DirectCommitTurn {
 }
 
 impl DirectCommitTurn {
-    pub(crate) fn admitted_mode(&self) -> DirectPostCommitMode {
+    pub fn admitted_mode(&self) -> DirectPostCommitMode {
         self.admitted_mode
     }
 
     /// A successful commit can only lose live effects; it cannot become a
     /// postcommit rejection. Capture the decision under the transition gate.
-    pub(crate) fn finish(mut self) -> DirectPostCommitMode {
+    pub fn finish(mut self) -> DirectPostCommitMode {
         let mut gate = self
             .health
             .direct_commit_gate
@@ -599,12 +599,12 @@ pub enum ClusterOperation {
 
 /// Read-only process gauges without Redis, signing, or authority mutation.
 #[derive(Clone)]
-pub(crate) struct ClusterMetricsProbe {
+pub struct ClusterMetricsProbe {
     pub(super) health: Arc<ClusterHealth>,
 }
 
 impl ClusterMetricsProbe {
-    pub(crate) fn snapshot(&self) -> ClusterMetricsSnapshot {
+    pub fn snapshot(&self) -> ClusterMetricsSnapshot {
         cluster_metrics_snapshot(&self.health)
     }
 }
@@ -653,7 +653,7 @@ impl ClusterManager {
             .map(|security| security.failure_policy)
     }
 
-    pub(crate) fn admission(&self) -> ClusterAdmission {
+    pub fn admission(&self) -> ClusterAdmission {
         ClusterAdmission {
             health: Arc::clone(&self.health),
             direct_authority: self.readiness_authority_snapshot(),
@@ -669,7 +669,7 @@ impl ClusterManager {
         cluster_readiness_error(&self.health)
     }
 
-    pub(crate) fn metrics_probe(&self) -> ClusterMetricsProbe {
+    pub fn metrics_probe(&self) -> ClusterMetricsProbe {
         ClusterMetricsProbe {
             health: Arc::clone(&self.health),
         }

@@ -3,12 +3,12 @@
 use super::*;
 
 #[derive(Default)]
-pub(in crate::cluster) struct ListenerContinuations {
-    pub(in crate::cluster) pending: VecDeque<BoxFuture<'static, Result<()>>>,
+pub(crate) struct ListenerContinuations {
+    pub(crate) pending: VecDeque<BoxFuture<'static, Result<()>>>,
 }
 
 impl ListenerContinuations {
-    pub(in crate::cluster) fn push(
+    pub(crate) fn push(
         &mut self,
         work: impl std::future::Future<Output = Result<()>> + Send + 'static,
     ) -> Result<()> {
@@ -20,7 +20,7 @@ impl ListenerContinuations {
         Ok(())
     }
 
-    pub(in crate::cluster) async fn next(&mut self) -> Option<Result<()>> {
+    pub(crate) async fn next(&mut self) -> Option<Result<()>> {
         // Poll only the first response batch, preserving remote presence
         // transition order. Cancelling this wait leaves that batch in place.
         let result = self.pending.front_mut()?.await;
@@ -29,21 +29,21 @@ impl ListenerContinuations {
     }
 }
 
-pub(in crate::cluster) struct ListenerResponse {
-    pub(in crate::cluster) node_id: String,
-    pub(in crate::cluster) recipient: String,
-    pub(in crate::cluster) stanza: String,
-    pub(in crate::cluster) presence_authority: Option<ClusterPresenceAuthority>,
+pub(crate) struct ListenerResponse {
+    pub(crate) node_id: String,
+    pub(crate) recipient: String,
+    pub(crate) stanza: String,
+    pub(crate) presence_authority: Option<ClusterPresenceAuthority>,
 }
 
 #[derive(Default)]
-pub(in crate::cluster) struct ListenerResponses {
-    pub(in crate::cluster) items: Vec<ListenerResponse>,
-    pub(in crate::cluster) bytes: usize,
+pub(crate) struct ListenerResponses {
+    pub(crate) items: Vec<ListenerResponse>,
+    pub(crate) bytes: usize,
 }
 
 impl ListenerResponses {
-    pub(in crate::cluster) fn push(&mut self, response: ListenerResponse) -> Result<()> {
+    pub(crate) fn push(&mut self, response: ListenerResponse) -> Result<()> {
         let bytes = self
             .bytes
             .saturating_add(response.node_id.len())
@@ -59,14 +59,14 @@ impl ListenerResponses {
     }
 }
 
-pub(in crate::cluster) struct ListenerCommandAuthority {
-    pub(in crate::cluster) generation: u64,
-    pub(in crate::cluster) rotation_epoch: u64,
-    pub(in crate::cluster) envelope: northstar_security::cluster_bus::SignedClusterEnvelope,
+pub(crate) struct ListenerCommandAuthority {
+    pub(crate) generation: u64,
+    pub(crate) rotation_epoch: u64,
+    pub(crate) envelope: northstar_security::cluster_bus::SignedClusterEnvelope,
 }
 
 impl ListenerCommandAuthority {
-    pub(in crate::cluster) fn validate(
+    pub(crate) fn validate(
         &self,
         admission: &ClusterListenerAdmission,
         security: &ClusterListenerSecurity,
@@ -79,7 +79,7 @@ impl ListenerCommandAuthority {
     }
 }
 
-pub(in crate::cluster) fn validate_listener_generation_health(
+pub(crate) fn validate_listener_generation_health(
     health: &ClusterHealth,
     generation: u64,
     rotation_epoch: u64,

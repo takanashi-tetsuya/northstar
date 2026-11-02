@@ -3,7 +3,7 @@
 //! route sweep between short, compare-and-swap deferred claims.
 
 use super::recovery_replay_wake::RecoveryReplayStatus;
-use crate::cluster::{ClusterAdapters, DirectPostCommitMode};
+use crate::{ClusterAdapters, DirectPostCommitMode};
 use anyhow::{ensure, Result};
 use chrono::{DateTime, Utc};
 use northstar_message_application::direct_spool_wake::{
@@ -73,16 +73,19 @@ fn take_plan(
         })
 }
 
-pub(crate) struct DirectSpoolWakeConsumer<A: ClusterAdapters> {
+pub struct DirectSpoolWakeConsumer<A: ClusterAdapters> {
     service: DirectSpoolWakeService<A::DirectSpoolWake>,
-    replay: super::recovery_replay_wake::ClusterRecoveryReplayWake<A>,
+    replay: super::recovery_replay_wake::ClusterRecoveryReplayWake<A::Replay, A::RecoveryReplay>,
     plans: Mutex<HashMap<(Uuid, Uuid), RecipientPlan>>,
 }
 
 impl<A: ClusterAdapters> DirectSpoolWakeConsumer<A> {
-    pub(crate) fn new(
+    pub fn new(
         service: DirectSpoolWakeService<A::DirectSpoolWake>,
-        replay: super::recovery_replay_wake::ClusterRecoveryReplayWake<A>,
+        replay: super::recovery_replay_wake::ClusterRecoveryReplayWake<
+            A::Replay,
+            A::RecoveryReplay,
+        >,
     ) -> Self {
         Self {
             service,
@@ -91,11 +94,11 @@ impl<A: ClusterAdapters> DirectSpoolWakeConsumer<A> {
         }
     }
 
-    pub(crate) async fn cleanup(&self) -> Result<i64> {
+    pub async fn cleanup(&self) -> Result<i64> {
         self.service.cleanup(DIRECT_SPOOL_WAKE_PAGE).await
     }
 
-    pub(crate) async fn drive_once(
+    pub async fn drive_once(
         &self,
         authority: &ClusterReadinessAuthority,
         mut next_epoch: impl FnMut() -> u64,

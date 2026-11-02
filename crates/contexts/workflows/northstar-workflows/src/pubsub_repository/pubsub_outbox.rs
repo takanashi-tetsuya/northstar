@@ -4,14 +4,18 @@ use super::*;
 
 impl PubSubOutboxRepository for PostgresPubSubRepository {
     async fn cleanup_idle_pubsub_event_streams(&self, limit: i64) -> Result<u64> {
-        let outcome: Result<_> =
-            async { db::cleanup_idle_pubsub_event_streams(&self.pool, limit).await }.await;
+        let outcome: Result<_> = async {
+            northstar_pubsub_postgres::cleanup_idle_pubsub_event_streams(&self.pool, limit).await
+        }
+        .await;
         outcome.map_err(map_database_busy)
     }
 
     async fn cleanup_pubsub_dead_letters(&self, limit: i64) -> Result<u64> {
-        let outcome: Result<_> =
-            async { db::cleanup_pubsub_dead_letters(&self.pool, limit).await }.await;
+        let outcome: Result<_> = async {
+            northstar_pubsub_postgres::cleanup_pubsub_dead_letters(&self.pool, limit).await
+        }
+        .await;
         outcome.map_err(map_database_busy)
     }
 
@@ -21,9 +25,11 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
         jid: &str,
     ) -> Result<Option<PubSubSubscription>> {
         let outcome: Result<_> = async {
-            Ok(db::get_subscription(&self.pool, node_id, jid)
-                .await?
-                .map(Into::into))
+            Ok(
+                northstar_pubsub_postgres::get_subscription(&self.pool, node_id, jid)
+                    .await?
+                    .map(Into::into),
+            )
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -101,7 +107,8 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
                     .is_some_and(|recipient_id| recipient_id.is_nil())
                 || (subject.event_kind.requires_causal_authorization()
                     && subject.authorization_mode != PepOutboxAuthorizationMode::CausalAudience)
-                || item.security_sensitive != db::security_sensitive_pep_node(&item.source_node)
+                || item.security_sensitive
+                    != northstar_pubsub_postgres::security_sensitive_pep_node(&item.source_node)
                 || (item.security_sensitive
                     && matches!(
                         subject.event_kind,
@@ -386,7 +393,8 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
         outcome.map_err(map_database_busy)
     }
     async fn claim_pubsub_outbox(&self, limit: i64) -> Result<Vec<ClaimedPubSubOutboxDelivery>> {
-        let outcome: Result<_> = async { db::claim_pubsub_outbox(&self.pool, limit).await }.await;
+        let outcome: Result<_> =
+            async { northstar_pubsub_postgres::claim_pubsub_outbox(&self.pool, limit).await }.await;
         outcome.map_err(map_database_busy)
     }
     async fn acknowledge_pubsub_outbox(
@@ -394,9 +402,15 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
         delivery_id: Uuid,
         lease_token: Uuid,
     ) -> Result<bool> {
-        let outcome: Result<_> =
-            async { db::acknowledge_pubsub_outbox(&self.pool, delivery_id, lease_token).await }
-                .await;
+        let outcome: Result<_> = async {
+            northstar_pubsub_postgres::acknowledge_pubsub_outbox(
+                &self.pool,
+                delivery_id,
+                lease_token,
+            )
+            .await
+        }
+        .await;
         outcome.map_err(map_database_busy)
     }
     async fn renew_pubsub_outbox_lease(
@@ -404,9 +418,15 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
         delivery_id: Uuid,
         lease_token: Uuid,
     ) -> Result<bool> {
-        let outcome: Result<_> =
-            async { db::renew_pubsub_outbox_lease(&self.pool, delivery_id, lease_token).await }
-                .await;
+        let outcome: Result<_> = async {
+            northstar_pubsub_postgres::renew_pubsub_outbox_lease(
+                &self.pool,
+                delivery_id,
+                lease_token,
+            )
+            .await
+        }
+        .await;
         outcome.map_err(map_database_busy)
     }
     async fn retry_pubsub_outbox(
@@ -415,7 +435,8 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
         error: &str,
     ) -> Result<PubSubOutboxFailureDisposition> {
         let outcome: Result<_> =
-            async { db::retry_pubsub_outbox(&self.pool, item, error).await }.await;
+            async { northstar_pubsub_postgres::retry_pubsub_outbox(&self.pool, item, error).await }
+                .await;
         outcome.map_err(map_database_busy)
     }
     async fn dead_letter_pubsub_outbox(
@@ -426,17 +447,27 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
         error: &str,
     ) -> Result<PubSubOutboxFailureDisposition> {
         let outcome: Result<_> = async {
-            db::dead_letter_pubsub_outbox(&self.pool, delivery_id, lease_token, reason, error).await
+            northstar_pubsub_postgres::dead_letter_pubsub_outbox(
+                &self.pool,
+                delivery_id,
+                lease_token,
+                reason,
+                error,
+            )
+            .await
         }
         .await;
         outcome.map_err(map_database_busy)
     }
     async fn expire_pubsub_outbox(&self, limit: i64) -> Result<u64> {
-        let outcome: Result<_> = async { db::expire_pubsub_outbox(&self.pool, limit).await }.await;
+        let outcome: Result<_> =
+            async { northstar_pubsub_postgres::expire_pubsub_outbox(&self.pool, limit).await }
+                .await;
         outcome.map_err(map_database_busy)
     }
     async fn pubsub_outbox_snapshot(&self) -> Result<PubSubOutboxSnapshot> {
-        let outcome: Result<_> = async { db::pubsub_outbox_snapshot(&self.pool).await }.await;
+        let outcome: Result<_> =
+            async { northstar_pubsub_postgres::pubsub_outbox_snapshot(&self.pool).await }.await;
         outcome.map_err(map_database_busy)
     }
     async fn enqueue_pubsub_digest_snapshot(
@@ -453,7 +484,7 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
             // client mutation. It must not occupy the foreground PubSub mutation
             // admission while delivery workers recover under a small pool.
 
-            db::enqueue_pubsub_digest_snapshot(
+            northstar_pubsub_postgres::enqueue_pubsub_digest_snapshot(
                 &self.pool,
                 source_delivery_id,
                 node_id,
@@ -475,30 +506,41 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
         frequency_ms: i32,
     ) -> Result<bool> {
         let outcome: Result<_> = async {
-            db::enqueue_pubsub_digest(&self.pool, node_id, subscriber_jid, event_xml, frequency_ms)
-                .await
+            northstar_pubsub_postgres::enqueue_pubsub_digest(
+                &self.pool,
+                node_id,
+                subscriber_jid,
+                event_xml,
+                frequency_ms,
+            )
+            .await
         }
         .await;
         outcome.map_err(map_database_busy)
     }
     async fn claim_due_pubsub_digests(&self, limit: i64) -> Result<Vec<DuePubSubDigest>> {
         let outcome: Result<_> = async {
-            Ok(db::claim_due_pubsub_digests(&self.pool, limit)
-                .await?
-                .into_iter()
-                .map(Into::into)
-                .collect())
+            Ok(
+                northstar_pubsub_postgres::claim_due_pubsub_digests(&self.pool, limit)
+                    .await?
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            )
         }
         .await;
         outcome.map_err(map_database_busy)
     }
     async fn release_pubsub_digests(&self, ids: &[Uuid]) -> Result<()> {
-        let outcome: Result<_> = async { db::release_pubsub_digests(&self.pool, ids).await }.await;
+        let outcome: Result<_> =
+            async { northstar_pubsub_postgres::release_pubsub_digests(&self.pool, ids).await }
+                .await;
         outcome.map_err(map_database_busy)
     }
     async fn acknowledge_pubsub_digests(&self, ids: &[Uuid]) -> Result<()> {
         let outcome: Result<_> =
-            async { db::acknowledge_pubsub_digests(&self.pool, ids).await }.await;
+            async { northstar_pubsub_postgres::acknowledge_pubsub_digests(&self.pool, ids).await }
+                .await;
         outcome.map_err(map_database_busy)
     }
 }

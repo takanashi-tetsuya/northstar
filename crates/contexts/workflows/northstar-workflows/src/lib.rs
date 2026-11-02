@@ -32,6 +32,7 @@ pub mod personal_history;
 pub mod presence_repository;
 pub mod privacy;
 pub mod profile;
+pub mod pubsub_repository;
 pub mod push_repository;
 pub mod report_moderation_repository;
 pub mod report_repository;

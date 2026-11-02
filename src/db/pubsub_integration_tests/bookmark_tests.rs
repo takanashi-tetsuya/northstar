@@ -127,8 +127,10 @@ async fn bookmarks2_outbox_uses_locked_item_diff_after_lock_wait() {
         .unwrap();
     let application = format!("ps-bookmarks-{}", &owner_id.simple().to_string()[..8]);
     let publish_pool = named_single_connection_pool(&url, &application).await;
-    let publish_service =
-        crate::db::pubsub_repository::test_pubsub_service(publish_pool.clone(), "example.test");
+    let publish_service = northstar_workflows::pubsub_repository::test_pubsub_service(
+        publish_pool.clone(),
+        "example.test",
+    );
     let requested_config = northstar_pubsub_core::PepNodeConfig::from(config);
     let publish = tokio::spawn({
         let username = username.clone();
@@ -197,29 +199,30 @@ async fn bookmarks2_outbox_uses_locked_item_diff_after_lock_wait() {
         (first_id, unchanged.as_str()),
         (second_id, committed.as_str()),
     ];
-    let replay = crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test")
-        .publish_pep_items(
-            northstar_pubsub_application::PepPublishItemsCommand::new(
-                northstar_pubsub_core::PepPublishWrite {
-                    user_id: owner_id,
-                    username: &username,
-                    auth_generation,
-                    connection_id: Uuid::new_v4(),
-                    node: NODE,
-                    requested: &requested_config,
-                    enforce_preconditions: false,
-                    items: &items,
-                    quotas: northstar_pubsub_core::PepQuotas {
-                        max_nodes: 10,
-                        max_storage_bytes: 1_000_000,
+    let replay =
+        northstar_workflows::pubsub_repository::test_pubsub_service(pool.clone(), "example.test")
+            .publish_pep_items(
+                northstar_pubsub_application::PepPublishItemsCommand::new(
+                    northstar_pubsub_core::PepPublishWrite {
+                        user_id: owner_id,
+                        username: &username,
+                        auth_generation,
+                        connection_id: Uuid::new_v4(),
+                        node: NODE,
+                        requested: &requested_config,
+                        enforce_preconditions: false,
+                        items: &items,
+                        quotas: northstar_pubsub_core::PepQuotas {
+                            max_nodes: 10,
+                            max_storage_bytes: 1_000_000,
+                        },
                     },
-                },
-                true,
-            ),
-            &LockedBookmarksOutbox,
-        )
-        .await
-        .unwrap();
+                    true,
+                ),
+                &LockedBookmarksOutbox,
+            )
+            .await
+            .unwrap();
     assert!(!replay.content_changed);
     let after_replay: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM pubsub_event_outbox WHERE source_node=$1")
@@ -324,8 +327,10 @@ async fn legacy_bookmark_commit_conflict_is_atomic_and_success_uses_locked_diff(
         let unchanged = unchanged.clone();
         let new_changed = new_changed.clone();
         async move {
-            let service =
-                crate::db::pubsub_repository::test_pubsub_service(retry_pool, "example.test");
+            let service = northstar_workflows::pubsub_repository::test_pubsub_service(
+                retry_pool,
+                "example.test",
+            );
             let mut items = [
                 (unchanged_id.to_owned(), unchanged),
                 (changed_id.to_owned(), new_changed),
@@ -389,24 +394,25 @@ async fn legacy_bookmark_commit_conflict_is_atomic_and_success_uses_locked_diff(
         (unchanged_id.to_owned(), unchanged),
         (changed_id.to_owned(), new_changed),
     ];
-    let result = crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test")
-        .commit_legacy_bookmarks(
-            northstar_pubsub_application::PepCommitLegacyBookmarksCommand {
-                owner: &owner,
-                connection_id: Uuid::new_v4(),
-                private_xml: new_private,
-                items: &mut items,
-                expected_previous_items: &after_conflict,
-                max_private_bytes: 1_000_000,
-                quotas: northstar_pubsub_core::PepQuotas {
-                    max_nodes: 10,
-                    max_storage_bytes: 1_000_000,
+    let result =
+        northstar_workflows::pubsub_repository::test_pubsub_service(pool.clone(), "example.test")
+            .commit_legacy_bookmarks(
+                northstar_pubsub_application::PepCommitLegacyBookmarksCommand {
+                    owner: &owner,
+                    connection_id: Uuid::new_v4(),
+                    private_xml: new_private,
+                    items: &mut items,
+                    expected_previous_items: &after_conflict,
+                    max_private_bytes: 1_000_000,
+                    quotas: northstar_pubsub_core::PepQuotas {
+                        max_nodes: 10,
+                        max_storage_bytes: 1_000_000,
+                    },
                 },
-            },
-            &LockedBookmarkReplacementOutbox,
-        )
-        .await
-        .unwrap();
+                &LockedBookmarkReplacementOutbox,
+            )
+            .await
+            .unwrap();
     assert_eq!(
         result.outcome,
         northstar_pubsub_core::PepBookmarkMutationOutcome::Stored

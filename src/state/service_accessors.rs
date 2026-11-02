@@ -64,8 +64,9 @@ impl AppState {
 
     pub(crate) fn pubsub_service(
         &self,
-    ) -> &northstar_pubsub_application::PubSubService<db::pubsub_repository::PostgresPubSubRepository>
-    {
+    ) -> &northstar_pubsub_application::PubSubService<
+        northstar_workflows::pubsub_repository::PostgresPubSubRepository,
+    > {
         &self.pubsub.pubsub_service
     }
 

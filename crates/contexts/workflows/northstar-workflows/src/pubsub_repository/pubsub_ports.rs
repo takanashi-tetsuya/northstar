@@ -10,15 +10,17 @@ impl PubSubNodeMutationRepository for PostgresPubSubRepository {
         redirect: Option<&str>,
     ) -> Result<OwnerMutationOutcome> {
         let outcome: Result<_> = async {
-            Ok(db::delete_node_as_owner_with_redirect_and_outbox(
-                &self.pool,
-                node_id,
-                requester,
-                redirect,
-                &self.renderer,
+            Ok(
+                northstar_pubsub_postgres::delete_node_as_owner_with_redirect_and_outbox(
+                    &self.pool,
+                    node_id,
+                    requester,
+                    redirect,
+                    &self.renderer,
+                )
+                .await?
+                .into(),
             )
-            .await?
-            .into())
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -32,16 +34,18 @@ impl PubSubNodeMutationRepository for PostgresPubSubRepository {
         config: &PubSubNodeConfig,
     ) -> Result<PubSubConfigOutcome> {
         let outcome: Result<_> = async {
-            Ok(db::update_node_config_and_graph_with_outbox(
-                &self.pool,
-                node,
-                requester,
-                expected,
-                config,
-                &self.renderer,
+            Ok(
+                northstar_pubsub_postgres::update_node_config_and_graph_with_outbox(
+                    &self.pool,
+                    node,
+                    requester,
+                    expected,
+                    config,
+                    &self.renderer,
+                )
+                .await?
+                .into(),
             )
-            .await?
-            .into())
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -55,7 +59,7 @@ impl PubSubNodeMutationRepository for PostgresPubSubRepository {
         max_nodes_per_owner: i64,
     ) -> Result<CreateNodeOutcome> {
         let outcome: Result<_> = async {
-            Ok(db::create_node_with_renderer(
+            Ok(northstar_pubsub_postgres::create_node_with_renderer(
                 &self.pool,
                 node,
                 creator_jid,
@@ -76,15 +80,17 @@ impl PubSubNodeMutationRepository for PostgresPubSubRepository {
         requester: &str,
     ) -> Result<CollectionUpdateOutcome> {
         let outcome: Result<_> = async {
-            Ok(db::associate_collection_child_with_renderer(
-                &self.pool,
-                collection,
-                child,
-                requester,
-                &self.renderer,
+            Ok(
+                northstar_pubsub_postgres::associate_collection_child_with_renderer(
+                    &self.pool,
+                    collection,
+                    child,
+                    requester,
+                    &self.renderer,
+                )
+                .await?
+                .into(),
             )
-            .await?
-            .into())
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -96,15 +102,17 @@ impl PubSubNodeMutationRepository for PostgresPubSubRepository {
         requester: &str,
     ) -> Result<CollectionUpdateOutcome> {
         let outcome: Result<_> = async {
-            Ok(db::dissociate_collection_child_with_renderer(
-                &self.pool,
-                collection,
-                child,
-                requester,
-                &self.renderer,
+            Ok(
+                northstar_pubsub_postgres::dissociate_collection_child_with_renderer(
+                    &self.pool,
+                    collection,
+                    child,
+                    requester,
+                    &self.renderer,
+                )
+                .await?
+                .into(),
             )
-            .await?
-            .into())
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -123,36 +131,39 @@ impl PubSubNodeQueryRepository for PostgresPubSubRepository {
     }
 
     async fn get_node(&self, node: &str) -> Result<Option<PubSubNode>> {
-        db::get_node(&self.pool, node)
+        northstar_pubsub_postgres::get_node(&self.pool, node)
             .await
             .map_err(map_database_busy)
     }
     async fn node_redirect(&self, node: &str) -> Result<Option<String>> {
-        let outcome: Result<_> = async { db::node_redirect(&self.pool, node).await }.await;
+        let outcome: Result<_> =
+            async { northstar_pubsub_postgres::node_redirect(&self.pool, node).await }.await;
         outcome.map_err(map_database_busy)
     }
     async fn collection_parents(&self, child_id: Uuid) -> Result<Vec<PubSubNode>> {
-        db::collection_parents(&self.pool, child_id)
+        northstar_pubsub_postgres::collection_parents(&self.pool, child_id)
             .await
             .map_err(map_database_busy)
     }
     async fn collection_children(&self, collection_id: Uuid) -> Result<Vec<PubSubNode>> {
-        db::collection_children(&self.pool, collection_id)
+        northstar_pubsub_postgres::collection_children(&self.pool, collection_id)
             .await
             .map_err(map_database_busy)
     }
     async fn is_owner(&self, node_id: Uuid, requester: &str) -> Result<bool> {
         let outcome: Result<_> = async {
-            Ok(db::get_node_affiliation(&self.pool, node_id, requester)
-                .await?
-                .as_deref()
-                == Some("owner"))
+            Ok(
+                northstar_pubsub_postgres::get_node_affiliation(&self.pool, node_id, requester)
+                    .await?
+                    .as_deref()
+                    == Some("owner"),
+            )
         }
         .await;
         outcome.map_err(map_database_busy)
     }
     async fn node_metadata(&self, node_id: Uuid) -> Result<PubSubNodeMetadata> {
-        db::node_metadata(&self.pool, node_id)
+        northstar_pubsub_postgres::node_metadata(&self.pool, node_id)
             .await
             .map_err(map_database_busy)
     }
@@ -165,7 +176,7 @@ impl PubSubRootDiscoveryQueryRepository for PostgresPubSubRepository {
         backwards: bool,
         limit: i64,
     ) -> Result<PubSubRootDiscoPage> {
-        db::root_disco_page(&self.pool, requester, cursor, backwards, limit)
+        northstar_pubsub_postgres::root_disco_page(&self.pool, requester, cursor, backwards, limit)
             .await
             .map_err(map_database_busy)
     }
@@ -176,7 +187,7 @@ impl PubSubItemQueryRepository for PostgresPubSubRepository {
         node: &str,
         requester: &str,
     ) -> Result<Option<PubSubLeafDiscoSnapshot>> {
-        let snapshot = db::leaf_disco_snapshot(&self.pool, node, requester)
+        let snapshot = northstar_pubsub_postgres::leaf_disco_snapshot(&self.pool, node, requester)
             .await
             .map_err(map_database_busy)?;
         Ok(snapshot.map(|snapshot| PubSubLeafDiscoSnapshot {
@@ -192,9 +203,10 @@ impl PubSubItemQueryRepository for PostgresPubSubRepository {
         node: &str,
         requester: &str,
     ) -> Result<Option<PubSubCollectionDiscoSnapshot>> {
-        let snapshot = db::collection_disco_snapshot(&self.pool, node, requester)
-            .await
-            .map_err(map_database_busy)?;
+        let snapshot =
+            northstar_pubsub_postgres::collection_disco_snapshot(&self.pool, node, requester)
+                .await
+                .map_err(map_database_busy)?;
         Ok(snapshot.map(|snapshot| PubSubCollectionDiscoSnapshot {
             node_type: snapshot.node_type,
             access_model: snapshot.access_model,
@@ -217,11 +229,13 @@ impl PubSubItemQueryRepository for PostgresPubSubRepository {
         limit: i64,
     ) -> Result<Vec<PubSubItem>> {
         let outcome: Result<_> = async {
-            Ok(db::get_items(&self.pool, node_id, item_ids, limit)
-                .await?
-                .into_iter()
-                .map(Into::into)
-                .collect())
+            Ok(
+                northstar_pubsub_postgres::get_items(&self.pool, node_id, item_ids, limit)
+                    .await?
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            )
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -234,7 +248,7 @@ impl PubSubItemQueryRepository for PostgresPubSubRepository {
         xml_byte_limit: i64,
     ) -> Result<Vec<CollectionVisibleItem>> {
         let outcome: Result<_> = async {
-            Ok(db::collection_visible_items(
+            Ok(northstar_pubsub_postgres::collection_visible_items(
                 &self.pool,
                 collection_id,
                 requester,
@@ -252,7 +266,8 @@ impl PubSubItemQueryRepository for PostgresPubSubRepository {
     async fn can_publish(&self, node: &PubSubNode, requester: &str) -> Result<bool> {
         let outcome: Result<_> = async {
             let (affiliation, subscribed) =
-                db::node_authorization_facts(&self.pool, node.id, requester).await?;
+                northstar_pubsub_postgres::node_authorization_facts(&self.pool, node.id, requester)
+                    .await?;
             let affiliation = affiliation
                 .as_deref()
                 .map(str::parse::<northstar_xep_0060::Affiliation>)
@@ -284,11 +299,14 @@ impl PubSubItemMutationRepository for PostgresPubSubRepository {
         requester: &str,
     ) -> Result<OwnerMutationOutcome> {
         let outcome: Result<_> = async {
-            Ok(
-                db::purge_node_as_owner_with_outbox(&self.pool, node_id, requester, &self.renderer)
-                    .await?
-                    .into(),
+            Ok(northstar_pubsub_postgres::purge_node_as_owner_with_outbox(
+                &self.pool,
+                node_id,
+                requester,
+                &self.renderer,
             )
+            .await?
+            .into())
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -301,7 +319,7 @@ impl PubSubItemMutationRepository for PostgresPubSubRepository {
         max_storage_bytes_per_owner: i64,
     ) -> Result<PublishItemsOutcome> {
         let outcome: Result<_> = async {
-            Ok(db::publish_items_with_renderer(
+            Ok(northstar_pubsub_postgres::publish_items_with_renderer(
                 &self.pool,
                 node,
                 publisher_jid,
@@ -324,7 +342,7 @@ impl PubSubItemMutationRepository for PostgresPubSubRepository {
         force_notification: bool,
     ) -> Result<RetractItemsOutcome> {
         let outcome: Result<_> = async {
-            Ok(db::retract_items_with_renderer(
+            Ok(northstar_pubsub_postgres::retract_items_with_renderer(
                 &self.pool,
                 node_id,
                 item_ids,
@@ -341,7 +359,9 @@ impl PubSubItemMutationRepository for PostgresPubSubRepository {
 }
 impl PubSubSubscriptionQueryRepository for PostgresPubSubRepository {
     async fn is_subscribed(&self, node_id: Uuid, jid: &str) -> Result<bool> {
-        let outcome: Result<_> = async { db::is_subscribed(&self.pool, node_id, jid).await }.await;
+        let outcome: Result<_> =
+            async { northstar_pubsub_postgres::is_subscribed(&self.pool, node_id, jid).await }
+                .await;
         outcome.map_err(map_database_busy)
     }
     async fn subscriptions_for_jid(
@@ -350,11 +370,13 @@ impl PubSubSubscriptionQueryRepository for PostgresPubSubRepository {
         node: Option<&str>,
     ) -> Result<Vec<PubSubSubscription>> {
         let outcome: Result<_> = async {
-            Ok(db::subscriptions_for_jid(&self.pool, jid, node)
-                .await?
-                .into_iter()
-                .map(Into::into)
-                .collect())
+            Ok(
+                northstar_pubsub_postgres::subscriptions_for_jid(&self.pool, jid, node)
+                    .await?
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            )
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -367,11 +389,13 @@ impl PubSubSubscriptionQueryRepository for PostgresPubSubRepository {
     ) -> Result<Vec<PubSubSubscription>> {
         let outcome: Result<_> = async {
             Ok(
-                db::subscriptions_addressing_jid_page(&self.pool, jid, after, limit)
-                    .await?
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
+                northstar_pubsub_postgres::subscriptions_addressing_jid_page(
+                    &self.pool, jid, after, limit,
+                )
+                .await?
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             )
         }
         .await;
@@ -383,9 +407,11 @@ impl PubSubSubscriptionQueryRepository for PostgresPubSubRepository {
         jid: &str,
     ) -> Result<Option<PubSubSubscription>> {
         let outcome: Result<_> = async {
-            Ok(db::get_subscription(&self.pool, node_id, jid)
-                .await?
-                .map(Into::into))
+            Ok(
+                northstar_pubsub_postgres::get_subscription(&self.pool, node_id, jid)
+                    .await?
+                    .map(Into::into),
+            )
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -405,18 +431,20 @@ impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
         options: &PubSubSubscriptionOptions,
     ) -> Result<SubscriptionOptionsOutcome> {
         let outcome: Result<_> = async {
-            let options = db::PubSubSubscriptionOptions::from(options);
-            Ok(db::update_subscription_options_checked(
-                &self.pool,
-                &self.domain,
-                node_id,
-                requester,
-                subscriber_jid,
-                expected_subid,
-                &options,
+            let options = northstar_pubsub_postgres::PubSubSubscriptionOptions::from(options);
+            Ok(
+                northstar_pubsub_postgres::update_subscription_options_checked(
+                    &self.pool,
+                    &self.domain,
+                    node_id,
+                    requester,
+                    subscriber_jid,
+                    expected_subid,
+                    &options,
+                )
+                .await?
+                .into(),
             )
-            .await?
-            .into())
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -435,23 +463,25 @@ impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
         requested_subid: &str,
     ) -> Result<SubscribeOutcome> {
         let outcome: Result<_> = async {
-            let options = options.map(db::PubSubSubscriptionOptions::from);
-            Ok(db::set_subscription_limited_with_options_and_renderer(
-                &self.pool,
-                &self.domain,
-                node_id,
-                requester,
-                jid,
-                state,
-                expected_node_type,
-                expected_access_model,
-                max_subscriptions,
-                options.as_ref(),
-                requested_subid,
-                &self.renderer,
+            let options = options.map(northstar_pubsub_postgres::PubSubSubscriptionOptions::from);
+            Ok(
+                northstar_pubsub_postgres::set_subscription_limited_with_options_and_renderer(
+                    &self.pool,
+                    &self.domain,
+                    node_id,
+                    requester,
+                    jid,
+                    state,
+                    expected_node_type,
+                    expected_access_model,
+                    max_subscriptions,
+                    options.as_ref(),
+                    requested_subid,
+                    &self.renderer,
+                )
+                .await?
+                .into(),
             )
-            .await?
-            .into())
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -464,16 +494,18 @@ impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
         expected_subid: &str,
     ) -> Result<UnsubscribeOutcome> {
         let outcome: Result<_> = async {
-            Ok(db::unsubscribe_checked_with_renderer(
-                &self.pool,
-                node_id,
-                requester,
-                subscriber_jid,
-                expected_subid,
-                &self.renderer,
+            Ok(
+                northstar_pubsub_postgres::unsubscribe_checked_with_renderer(
+                    &self.pool,
+                    node_id,
+                    requester,
+                    subscriber_jid,
+                    expected_subid,
+                    &self.renderer,
+                )
+                .await?
+                .into(),
             )
-            .await?
-            .into())
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -485,7 +517,7 @@ impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
         changes: &[(String, String, Option<String>)],
     ) -> Result<SetSubscriptionsOutcome> {
         let outcome: Result<_> = async {
-            Ok(db::set_subscriptions_with_renderer(
+            Ok(northstar_pubsub_postgres::set_subscriptions_with_renderer(
                 &self.pool,
                 node_id,
                 requester,
@@ -508,17 +540,19 @@ impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
         allow: bool,
     ) -> Result<SubscriptionAuthorizationOutcome> {
         let outcome: Result<_> = async {
-            Ok(db::resolve_pending_subscription_with_renderer(
-                &self.pool,
-                node_id,
-                requester,
-                subscriber_jid,
-                expected_subid,
-                allow,
-                &self.renderer,
+            Ok(
+                northstar_pubsub_postgres::resolve_pending_subscription_with_renderer(
+                    &self.pool,
+                    node_id,
+                    requester,
+                    subscriber_jid,
+                    expected_subid,
+                    allow,
+                    &self.renderer,
+                )
+                .await?
+                .into(),
             )
-            .await?
-            .into())
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -530,14 +564,16 @@ impl PubSubAffiliationQueryRepository for PostgresPubSubRepository {
         node_id: Uuid,
         jid: &str,
     ) -> Result<(Option<String>, bool)> {
-        db::node_authorization_facts(&self.pool, node_id, jid)
+        northstar_pubsub_postgres::node_authorization_facts(&self.pool, node_id, jid)
             .await
             .map_err(map_database_busy)
     }
 
     async fn get_node_affiliation(&self, node_id: Uuid, jid: &str) -> Result<Option<String>> {
-        let outcome: Result<_> =
-            async { db::get_node_affiliation(&self.pool, node_id, jid).await }.await;
+        let outcome: Result<_> = async {
+            northstar_pubsub_postgres::get_node_affiliation(&self.pool, node_id, jid).await
+        }
+        .await;
         outcome.map_err(map_database_busy)
     }
     async fn affiliations_for_jid(
@@ -546,11 +582,13 @@ impl PubSubAffiliationQueryRepository for PostgresPubSubRepository {
         node: Option<&str>,
     ) -> Result<Vec<PubSubAffiliation>> {
         let outcome: Result<_> = async {
-            Ok(db::affiliations_for_jid(&self.pool, jid, node)
-                .await?
-                .into_iter()
-                .map(Into::into)
-                .collect())
+            Ok(
+                northstar_pubsub_postgres::affiliations_for_jid(&self.pool, jid, node)
+                    .await?
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            )
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -564,7 +602,7 @@ impl PubSubAffiliationMutationRepository for PostgresPubSubRepository {
         changes: &[(String, String)],
     ) -> Result<SetAffiliationsOutcome> {
         let outcome: Result<_> = async {
-            Ok(db::set_affiliations_with_renderer(
+            Ok(northstar_pubsub_postgres::set_affiliations_with_renderer(
                 &self.pool,
                 node_id,
                 requester,

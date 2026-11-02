@@ -235,7 +235,7 @@ async fn publish_rechecks_access_model_after_concurrent_config_change() {
         .unwrap();
     assert!(tokio::time::timeout(
         Duration::from_secs(5),
-        crate::db::pubsub_repository::test_pubsub_service(pool.clone(), "example.test")
+        northstar_workflows::pubsub_repository::test_pubsub_service(pool.clone(), "example.test")
             .can_publish(&open_node, &outsider)
     )
     .await

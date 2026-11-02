@@ -6,7 +6,6 @@ use super::{
 };
 use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
-    db::pubsub_repository::PostgresPubSubRepository,
     s2s::FederationRouter,
 };
 use anyhow::Result;
@@ -18,6 +17,7 @@ use northstar_pubsub_application::PubSubService;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_session_core::LocalCapsEpoch;
 use northstar_workflows::message_repository::PostgresMessageRepository;
+use northstar_workflows::pubsub_repository::PostgresPubSubRepository;
 use northstar_xmpp_types::jid::CanonicalJid;
 use std::sync::{atomic::Ordering, Arc};
 

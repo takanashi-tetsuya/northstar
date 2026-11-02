@@ -601,7 +601,7 @@ impl ProtocolSession {
             let outbound = self.outbound.clone();
             let replay_full_jid = jid.clone();
             self.defer_after_transport("bind2-offline-replay", async move {
-                super::replay::replay_bind2_offline(
+                northstar_stream::replay::replay_bind2_offline(
                     replay_service,
                     outbound,
                     user_id,

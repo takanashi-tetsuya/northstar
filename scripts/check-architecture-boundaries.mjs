@@ -1787,7 +1787,7 @@ for (const [name, serviceAccessor, source] of [
   ['mam.rs', 'mam_service', readProductionModule('src/xmpp/protocol/mam.rs', { root })],
   ['privacy.rs', 'privacy_service', readProductionModule('src/xmpp/protocol/privacy.rs', { root })],
   ['private.rs', 'private_storage_service', readProductionModule('src/xmpp/protocol/private.rs', { root })],
-  ['replay.rs', 'replay_service', readProductionModule('src/xmpp/protocol/replay.rs', { root })],
+  ['replay.rs', 'replay_service', readProductionModule('crates/edges/northstar-stream/src/replay.rs', { root })],
   ['roster.rs', 'roster_service', readProductionModule('src/xmpp/protocol/roster.rs', { root })],
   ['vcard.rs', 'profile_service', readProductionModule('src/xmpp/protocol/vcard.rs', { root })],
 ]) {
@@ -1844,7 +1844,7 @@ for (const invariant of ['expected_user_id', 'roster_version', 'roster_annotated
 // allowed in protocol code. PostgreSQL account/page leases, policy snapshots
 // and claim cleanup run through ReplayService. Bind 2 uses the same
 // service path and may not resurrect the former pool-owning repository drain.
-const replayProtocolSource = read('src/xmpp/protocol/replay.rs');
+const replayProtocolSource = read('crates/edges/northstar-stream/src/replay.rs');
 const replayDependencies = classifyDbDependencies(replayProtocolSource, 'replay.rs');
 if (replayDependencies.authorityReferences !== 0) {
   throw new Error('replay.rs must have exactly zero direct db authority references');
@@ -1943,7 +1943,7 @@ for (const forbidden of [
     throw new Error(`sasl2.rs bypasses ReplayService via ${forbidden}`);
   }
 }
-if (!/super\s*::\s*replay\s*::\s*replay_bind2_offline\s*\(/.test(sasl2Source)) {
+if (!/northstar_stream\s*::\s*replay\s*::\s*replay_bind2_offline\s*\(/.test(sasl2Source)) {
   throw new Error('SASL2 Bind 2 no longer delegates offline reconciliation to ReplayService');
 }
 

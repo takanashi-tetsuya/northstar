@@ -156,7 +156,7 @@ impl ProtocolSession {
             let bind2_mam_catchup = self.bind2_mam_catchup;
             let include_offline = priority >= 0 && !bind2_mam_catchup;
             self.defer_after_transport("available-offline-replay", async move {
-                super::replay::replay_newly_available_resource(
+                northstar_stream::replay::replay_newly_available_resource(
                     replay_service,
                     outbound,
                     recipient_id,
@@ -197,7 +197,7 @@ impl ProtocolSession {
             let offline_replay_cutoff = offline_replay_cutoff
                 .expect("newly eligible legacy replay captured a database cutoff");
             self.defer_after_transport("nonnegative-offline-replay", async move {
-                super::replay::replay_newly_nonnegative_resource(
+                northstar_stream::replay::replay_newly_nonnegative_resource(
                     replay_service,
                     outbound,
                     recipient_id,

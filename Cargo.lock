@@ -2739,6 +2739,7 @@ name = "northstar-stream"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "dashmap",
  "futures",
  "northstar-auth-application",
@@ -2749,10 +2750,14 @@ dependencies = [
  "northstar-roster-core",
  "northstar-session-application",
  "northstar-session-core",
+ "northstar-session-postgres",
+ "northstar-xml-builder",
  "northstar-xmpp-types",
+ "rand 0.8.7",
  "roxmltree",
  "tokio",
  "tokio-util",
+ "tracing",
  "uuid",
 ]
 

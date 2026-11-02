@@ -1563,6 +1563,7 @@ digraph compile_time {
   "northstar-session-postgres" -> "tracing";
   "northstar-session-postgres" -> "uuid";
   "northstar-stream" -> "anyhow";
+  "northstar-stream" -> "chrono";
   "northstar-stream" -> "dashmap";
   "northstar-stream" -> "futures";
   "northstar-stream" -> "northstar-auth-application";
@@ -1573,10 +1574,14 @@ digraph compile_time {
   "northstar-stream" -> "northstar-roster-core";
   "northstar-stream" -> "northstar-session-application";
   "northstar-stream" -> "northstar-session-core";
+  "northstar-stream" -> "northstar-session-postgres";
+  "northstar-stream" -> "northstar-xml-builder";
   "northstar-stream" -> "northstar-xmpp-types";
+  "northstar-stream" -> "rand";
   "northstar-stream" -> "roxmltree";
   "northstar-stream" -> "tokio";
   "northstar-stream" -> "tokio-util";
+  "northstar-stream" -> "tracing";
   "northstar-stream" -> "uuid";
   "northstar-telemetry" -> "anyhow";
   "northstar-telemetry" -> "serde_json";

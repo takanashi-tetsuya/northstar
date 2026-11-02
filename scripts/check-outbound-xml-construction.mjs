@@ -60,7 +60,7 @@ const BASELINE = new Map([
 
 // This entry's directory holds independently owned modules, so it checks
 // the file and its role-split children listed in catalog/source-role-splits.json.
-// Other modules (protocol/dispatch.rs, protocol/replay.rs) are not yet migrated
+// Other modules (protocol/dispatch.rs, northstar-stream's replay.rs) are not yet migrated
 // off raw XML and stay outside this entry until they get their own entries.
 const FILE_SCOPED_ENTRIES = new Set(['src/xmpp/protocol.rs']);
 

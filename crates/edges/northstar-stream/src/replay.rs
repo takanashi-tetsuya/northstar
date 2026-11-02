@@ -1,3 +1,6 @@
+//! XEP-0160 offline replay and pending subscription replay onto one stream's
+//! outbound queue, fenced by that resource's availability generation.
+
 use anyhow::{Context, Result};
 use northstar_session_application::replay::{
     RecoveryReplayAuthority, RecoveryReplayAuthorizationGuard, ReplayBusyUntil, ReplayPageOutcome,
@@ -89,7 +92,7 @@ fn jittered_busy_retry_delay(retry_after: Duration) -> Duration {
 
 async fn wait_for_replay_retry(
     busy: &ReplayBusyUntil,
-    outbound: &northstar_stream::outbound::OutboundSender,
+    outbound: &crate::outbound::OutboundSender,
     availability: Option<&AvailabilityFence>,
     recovery_deadline: tokio::time::Instant,
 ) -> bool {
@@ -133,7 +136,7 @@ async fn wait_for_replay_retry(
 #[allow(clippy::too_many_arguments)]
 async fn acquire_replay_session(
     service: &ReplayService<impl northstar_session_application::replay::ReplayRepository>,
-    outbound: &northstar_stream::outbound::OutboundSender,
+    outbound: &crate::outbound::OutboundSender,
     recipient_id: Uuid,
     current_full_jid: &str,
     explicit_cutoff: Option<chrono::DateTime<chrono::Utc>>,
@@ -214,7 +217,7 @@ async fn release_unsent_suffix(
 )]
 async fn drain_offline(
     service: &ReplayService<impl ReplayRepository>,
-    outbound: &northstar_stream::outbound::OutboundSender,
+    outbound: &crate::outbound::OutboundSender,
     recipient_id: Uuid,
     current_full_jid: &str,
     active_privacy_list: Option<&str>,
@@ -280,7 +283,7 @@ async fn drain_offline(
 async fn drain_owned_offline(
     service: &ReplayService<impl northstar_session_application::replay::ReplayRepository>,
     session: &ReplaySession,
-    outbound: &northstar_stream::outbound::OutboundSender,
+    outbound: &crate::outbound::OutboundSender,
     active_privacy_list: Option<&str>,
     bind2_mam_catchup: bool,
     availability: Option<&AvailabilityFence>,
@@ -444,7 +447,7 @@ async fn drain_owned_offline(
                 send_deadline,
                 outbound.send_durable_if_current(
                     message.stanza.clone(),
-                    northstar_stream::outbound::DurableDelivery {
+                    crate::outbound::DurableDelivery {
                         recipient_id: session.recipient_id(),
                         message_id: message.id,
                         claim_id: Some(page.claim_token),
@@ -509,9 +512,9 @@ async fn drain_owned_offline(
     clippy::too_many_arguments,
     reason = "the post-presence replay task captures one immutable availability generation and its complete policy snapshot"
 )]
-pub(crate) async fn replay_newly_available_resource(
+pub async fn replay_newly_available_resource(
     service: ReplayService<impl ReplayRepository>,
-    outbound: northstar_stream::outbound::OutboundSender,
+    outbound: crate::outbound::OutboundSender,
     recipient_id: Uuid,
     account: String,
     full_jid: String,
@@ -601,9 +604,9 @@ pub(crate) async fn replay_newly_available_resource(
     }
 }
 
-pub(crate) async fn replay_bind2_offline(
+pub async fn replay_bind2_offline(
     service: ReplayService<impl ReplayRepository>,
-    outbound: northstar_stream::outbound::OutboundSender,
+    outbound: crate::outbound::OutboundSender,
     recipient_id: Uuid,
     full_jid: String,
 ) {
@@ -627,9 +630,9 @@ pub(crate) async fn replay_bind2_offline(
     clippy::too_many_arguments,
     reason = "the resumed replay task carries one immutable availability generation and privacy snapshot"
 )]
-pub(crate) async fn replay_resumed_offline(
+pub async fn replay_resumed_offline(
     service: ReplayService<impl ReplayRepository>,
-    outbound: northstar_stream::outbound::OutboundSender,
+    outbound: crate::outbound::OutboundSender,
     recipient_id: Uuid,
     full_jid: String,
     active_privacy_list: Option<String>,
@@ -667,9 +670,9 @@ pub(crate) async fn replay_resumed_offline(
     clippy::too_many_arguments,
     reason = "the priority-transition replay task carries one immutable availability generation and cutoff"
 )]
-pub(crate) async fn replay_newly_nonnegative_resource(
+pub async fn replay_newly_nonnegative_resource(
     service: ReplayService<impl ReplayRepository>,
-    outbound: northstar_stream::outbound::OutboundSender,
+    outbound: crate::outbound::OutboundSender,
     recipient_id: Uuid,
     full_jid: String,
     active_privacy_list: Option<String>,
@@ -713,9 +716,9 @@ pub(crate) async fn replay_newly_nonnegative_resource(
     clippy::too_many_arguments,
     reason = "recovery carries the exact route, availability epoch, privacy selection, and PG cutoff"
 )]
-pub(crate) async fn replay_after_cluster_reconciliation(
+pub async fn replay_after_cluster_reconciliation(
     service: ReplayService<impl ReplayRepository>,
-    outbound: northstar_stream::outbound::OutboundSender,
+    outbound: crate::outbound::OutboundSender,
     recipient_id: Uuid,
     full_jid: String,
     active_privacy_list: Arc<std::sync::RwLock<Option<String>>>,

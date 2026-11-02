@@ -12,7 +12,7 @@ fn recovery_account_lock_is_shorter_than_revocation_budget() {
 #[tokio::test]
 async fn elapsed_recovery_deadline_never_schedules_another_retry() {
     let (sender, _receiver) = mpsc::channel(1);
-    let outbound = northstar_stream::outbound::OutboundSender::new(sender);
+    let outbound = crate::outbound::OutboundSender::new(sender);
     let busy = ReplayBusyUntil {
         expires_at: Utc::now() + chrono::Duration::seconds(30),
         retry_after: Duration::from_secs(30),
@@ -27,7 +27,7 @@ async fn elapsed_recovery_deadline_never_schedules_another_retry() {
 #[tokio::test]
 async fn already_invalid_availability_fence_cancels_without_waiting() {
     let (sender, _receiver) = mpsc::channel(1);
-    let outbound = northstar_stream::outbound::OutboundSender::new(sender);
+    let outbound = crate::outbound::OutboundSender::new(sender);
     let available = Arc::new(AtomicBool::new(true));
     let generation = Arc::new(AtomicU64::new(12));
     let availability = AvailabilityFence {
@@ -56,7 +56,7 @@ async fn already_invalid_availability_fence_cancels_without_waiting() {
 #[tokio::test]
 async fn availability_generation_change_cancels_busy_wait() {
     let (sender, _receiver) = mpsc::channel(1);
-    let outbound = northstar_stream::outbound::OutboundSender::new(sender);
+    let outbound = crate::outbound::OutboundSender::new(sender);
     let available = Arc::new(AtomicBool::new(true));
     let generation = Arc::new(AtomicU64::new(7));
     let availability = AvailabilityFence {
@@ -102,7 +102,7 @@ async fn busy_resource_lease_retries_without_second_availability_transition() {
         ReplayStartOutcome::BusyUntil(_) => panic!("initial replay lease must be available"),
     };
     let (sender, _receiver) = mpsc::channel(1);
-    let outbound = northstar_stream::outbound::OutboundSender::new(sender);
+    let outbound = crate::outbound::OutboundSender::new(sender);
     let available = Arc::new(AtomicBool::new(true));
     let generation = Arc::new(AtomicU64::new(11));
     let availability = AvailabilityFence {

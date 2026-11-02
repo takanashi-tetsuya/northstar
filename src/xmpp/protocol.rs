@@ -17,7 +17,6 @@ pub(crate) mod presence;
 pub(crate) mod privacy;
 pub(crate) mod private;
 pub(crate) mod pubsub;
-pub(crate) mod replay;
 pub(crate) mod roster;
 mod roster_identity;
 pub(crate) mod sasl2;

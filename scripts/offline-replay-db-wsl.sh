@@ -62,8 +62,8 @@ cargo test --locked --offline -p northstar-session-postgres \
 cargo test --locked --offline -p northstar-session-postgres \
   replay::tests::repeatable_read_account_claim_serialization_retries_with_fresh_snapshot \
   -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked --offline \
-  xmpp::protocol::replay::tests::busy_resource_lease_retries_without_second_availability_transition \
+cargo test --locked --offline -p northstar-stream \
+  replay::tests::busy_resource_lease_retries_without_second_availability_transition \
   -- --ignored --exact --nocapture --test-threads=1
 cargo test --locked --offline -p northstar-session-postgres \
   replay::tests::replay_policy_snapshot_is_consistent_and_missing_policy_rolls_back \

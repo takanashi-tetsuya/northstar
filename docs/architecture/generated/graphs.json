@@ -4391,6 +4391,10 @@
       ],
       [
         "northstar-stream",
+        "chrono"
+      ],
+      [
+        "northstar-stream",
         "dashmap"
       ],
       [
@@ -4431,7 +4435,19 @@
       ],
       [
         "northstar-stream",
+        "northstar-session-postgres"
+      ],
+      [
+        "northstar-stream",
+        "northstar-xml-builder"
+      ],
+      [
+        "northstar-stream",
         "northstar-xmpp-types"
+      ],
+      [
+        "northstar-stream",
+        "rand"
       ],
       [
         "northstar-stream",
@@ -4444,6 +4460,10 @@
       [
         "northstar-stream",
         "tokio-util"
+      ],
+      [
+        "northstar-stream",
+        "tracing"
       ],
       [
         "northstar-stream",

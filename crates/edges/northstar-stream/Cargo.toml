@@ -13,6 +13,7 @@ test-support = []
 
 [dependencies]
 anyhow = "1.0"
+chrono = "0.4"
 dashmap = "6.1"
 northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application" }
 northstar-delivery-core = { path = "../../contexts/message/northstar-delivery-core" }
@@ -22,12 +23,16 @@ northstar-room-core = { path = "../../contexts/room/northstar-room-core" }
 northstar-roster-core = { path = "../../contexts/roster/northstar-roster-core" }
 northstar-session-application = { path = "../../contexts/session/northstar-session-application" }
 northstar-session-core = { path = "../../contexts/session/northstar-session-core" }
+northstar-xml-builder = { path = "../../kernel/northstar-xml-builder" }
 northstar-xmpp-types = { path = "../../kernel/northstar-xmpp-types" }
+rand = "0.8"
 roxmltree = "0.20"
-tokio = { version = "1.43", features = ["sync"] }
+tokio = { version = "1.43", features = ["macros", "sync", "time"] }
 tokio-util = "0.7"
+tracing = "0.1"
 uuid = { version = "1.12", features = ["v4"] }
 
 [dev-dependencies]
 futures = "0.3"
-tokio = { version = "1.43", features = ["macros", "rt", "sync"] }
+northstar-session-postgres = { path = "../../contexts/session/northstar-session-postgres", features = ["test-support"] }
+tokio = { version = "1.43", features = ["macros", "rt", "sync", "time"] }

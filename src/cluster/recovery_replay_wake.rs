@@ -2,16 +2,14 @@
 //! Maintenance may request work, but the owning protocol session controls
 //! when that work can start relative to its current transport action.
 
-use crate::{
-    cluster::{ClusterAdapters, ClusterAdmission, DirectPostCommitMode},
-    xmpp::protocol::replay,
-};
+use crate::cluster::{ClusterAdapters, ClusterAdmission, DirectPostCommitMode};
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use northstar_session_application::post_actions::PostActionTelemetry;
 use northstar_session_application::replay::{RecoveryReplayStore, ReplayService};
 use northstar_stream::local_routes::session::OnlineSession;
+use northstar_stream::replay;
 use northstar_telemetry::metrics::Metrics;
 use std::{
     collections::BinaryHeap,

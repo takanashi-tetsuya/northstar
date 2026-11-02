@@ -1352,7 +1352,7 @@ impl ProtocolSession {
             let replay_availability_generation = self.presence.availability_generation.clone();
             let replay_expected_generation = replay_availability_generation.load(Ordering::Acquire);
             self.defer_after_transport("resumed-offline-replay", async move {
-                super::replay::replay_resumed_offline(
+                northstar_stream::replay::replay_resumed_offline(
                     replay_service,
                     replay_outbound,
                     replay_user_id,

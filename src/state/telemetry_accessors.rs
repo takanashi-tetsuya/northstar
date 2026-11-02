@@ -337,8 +337,8 @@ impl AppState {
 
     pub(crate) fn s2s_online_queue_telemetry(
         &self,
-    ) -> crate::s2s::telemetry::OnlineQueueAcceptanceTelemetry<'_> {
-        crate::s2s::telemetry::OnlineQueueAcceptanceTelemetry::new(
+    ) -> northstar_federation_application::telemetry::OnlineQueueAcceptanceTelemetry<'_> {
+        northstar_federation_application::telemetry::OnlineQueueAcceptanceTelemetry::new(
             &self.metrics.online_queue_durable_acceptances_total,
             &self.metrics.online_queue_volatile_acceptances_total,
         )
@@ -346,24 +346,24 @@ impl AppState {
 
     pub(crate) fn s2s_accepted_history_telemetry(
         &self,
-    ) -> crate::s2s::telemetry::AcceptedHistoryTelemetry<'_> {
-        crate::s2s::telemetry::AcceptedHistoryTelemetry::new(
+    ) -> northstar_federation_application::telemetry::AcceptedHistoryTelemetry<'_> {
+        northstar_federation_application::telemetry::AcceptedHistoryTelemetry::new(
             &self.metrics.post_accept_side_effect_failures_total,
         )
     }
 
     pub(crate) fn s2s_outbox_delivery_telemetry(
         &self,
-    ) -> crate::s2s::telemetry::OutboxDeliveryTelemetry<'_> {
-        crate::s2s::telemetry::OutboxDeliveryTelemetry::new(
+    ) -> northstar_federation_application::telemetry::OutboxDeliveryTelemetry<'_> {
+        northstar_federation_application::telemetry::OutboxDeliveryTelemetry::new(
             &self.metrics.outbox_delivery_duration_seconds,
         )
     }
 
     pub(crate) fn s2s_inbound_connection_telemetry(
         &self,
-    ) -> crate::s2s::telemetry::InboundConnectionTelemetry<'_> {
-        crate::s2s::telemetry::InboundConnectionTelemetry::new(
+    ) -> northstar_federation_application::telemetry::InboundConnectionTelemetry<'_> {
+        northstar_federation_application::telemetry::InboundConnectionTelemetry::new(
             &self.metrics.federation_inbound_connections_total,
             &self.metrics.federation_inbound_active,
         )
@@ -371,8 +371,8 @@ impl AppState {
 
     pub(crate) fn s2s_inbound_delivery_telemetry(
         &self,
-    ) -> crate::s2s::telemetry::InboundDeliveryTelemetry<'_> {
-        crate::s2s::telemetry::InboundDeliveryTelemetry::new(
+    ) -> northstar_federation_application::telemetry::InboundDeliveryTelemetry<'_> {
+        northstar_federation_application::telemetry::InboundDeliveryTelemetry::new(
             &self.metrics.post_accept_side_effect_failures_total,
             &self.metrics.messages_routed_total,
         )
@@ -380,8 +380,8 @@ impl AppState {
 
     pub(crate) fn s2s_outbound_disposition_telemetry(
         &self,
-    ) -> crate::s2s::telemetry::OutboundDispositionTelemetry<'_> {
-        crate::s2s::telemetry::OutboundDispositionTelemetry::new(
+    ) -> northstar_federation_application::telemetry::OutboundDispositionTelemetry<'_> {
+        northstar_federation_application::telemetry::OutboundDispositionTelemetry::new(
             &self.metrics.federation_failures_total,
             &self.metrics.s2s_outbox_lease_lost_total,
             &self.metrics.federation_outbound_deliveries_total,

@@ -799,7 +799,7 @@ pub(crate) async fn route_inbound_message(
 /// Personal retractions are deliberately excluded: their authorization,
 /// tombstones, action MAM, and delivery outbox commit before fanout.
 struct AcceptedInboundHistory<'a> {
-    telemetry: super::telemetry::AcceptedHistoryTelemetry<'a>,
+    telemetry: northstar_federation_application::telemetry::AcceptedHistoryTelemetry<'a>,
     recipient_id: uuid::Uuid,
     canonical_from: &'a str,
     stable_id: uuid::Uuid,

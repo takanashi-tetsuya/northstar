@@ -2443,6 +2443,10 @@
       ],
       [
         "northstar-federation-application",
+        "northstar-telemetry"
+      ],
+      [
+        "northstar-federation-application",
         "northstar-xmpp-types"
       ],
       [

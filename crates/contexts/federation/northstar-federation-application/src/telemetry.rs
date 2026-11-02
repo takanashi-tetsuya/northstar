@@ -6,98 +6,98 @@ use northstar_telemetry::metrics::DurationTimer;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Copy)]
-pub(crate) struct OnlineQueueAcceptanceTelemetry<'a> {
+pub struct OnlineQueueAcceptanceTelemetry<'a> {
     durable: &'a AtomicU64,
     volatile: &'a AtomicU64,
 }
 
 impl<'a> OnlineQueueAcceptanceTelemetry<'a> {
-    pub(crate) fn new(durable: &'a AtomicU64, volatile: &'a AtomicU64) -> Self {
+    pub fn new(durable: &'a AtomicU64, volatile: &'a AtomicU64) -> Self {
         Self { durable, volatile }
     }
 
-    pub(crate) fn accepted(self, durable: bool) {
+    pub fn accepted(self, durable: bool) {
         let counter = if durable { self.durable } else { self.volatile };
         counter.fetch_add(1, Ordering::Relaxed);
     }
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct AcceptedHistoryTelemetry<'a> {
+pub struct AcceptedHistoryTelemetry<'a> {
     failure: &'a AtomicU64,
 }
 
 impl<'a> AcceptedHistoryTelemetry<'a> {
-    pub(crate) fn new(failure: &'a AtomicU64) -> Self {
+    pub fn new(failure: &'a AtomicU64) -> Self {
         Self { failure }
     }
 
-    pub(crate) fn failed(self) {
+    pub fn failed(self) {
         self.failure.fetch_add(1, Ordering::Relaxed);
     }
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct OutboxDeliveryTelemetry<'a> {
+pub struct OutboxDeliveryTelemetry<'a> {
     duration: &'a DurationHistogram,
 }
 
 impl<'a> OutboxDeliveryTelemetry<'a> {
-    pub(crate) fn new(duration: &'a DurationHistogram) -> Self {
+    pub fn new(duration: &'a DurationHistogram) -> Self {
         Self { duration }
     }
 
-    pub(crate) fn start_timer(self) -> DurationTimer<'a> {
+    pub fn start_timer(self) -> DurationTimer<'a> {
         self.duration.start_timer()
     }
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct InboundConnectionTelemetry<'a> {
+pub struct InboundConnectionTelemetry<'a> {
     total: &'a AtomicU64,
     active: &'a AtomicU64,
 }
 
 impl<'a> InboundConnectionTelemetry<'a> {
-    pub(crate) fn new(total: &'a AtomicU64, active: &'a AtomicU64) -> Self {
+    pub fn new(total: &'a AtomicU64, active: &'a AtomicU64) -> Self {
         Self { total, active }
     }
 
-    pub(crate) fn started(self) {
+    pub fn started(self) {
         self.total.fetch_add(1, Ordering::Relaxed);
         self.active.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn finished(self) {
+    pub fn finished(self) {
         self.active.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct InboundDeliveryTelemetry<'a> {
+pub struct InboundDeliveryTelemetry<'a> {
     post_accept_failure: &'a AtomicU64,
     routed: &'a AtomicU64,
 }
 
 impl<'a> InboundDeliveryTelemetry<'a> {
-    pub(crate) fn new(post_accept_failure: &'a AtomicU64, routed: &'a AtomicU64) -> Self {
+    pub fn new(post_accept_failure: &'a AtomicU64, routed: &'a AtomicU64) -> Self {
         Self {
             post_accept_failure,
             routed,
         }
     }
 
-    pub(crate) fn post_accept_failed(self) {
+    pub fn post_accept_failed(self) {
         self.post_accept_failure.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn routed(self) {
+    pub fn routed(self) {
         self.routed.fetch_add(1, Ordering::Relaxed);
     }
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct OutboundDispositionTelemetry<'a> {
+pub struct OutboundDispositionTelemetry<'a> {
     connection_failure: &'a AtomicU64,
     lease_lost: &'a AtomicU64,
     delivered: &'a AtomicU64,
@@ -107,7 +107,7 @@ pub(crate) struct OutboundDispositionTelemetry<'a> {
 }
 
 impl<'a> OutboundDispositionTelemetry<'a> {
-    pub(crate) fn new(
+    pub fn new(
         connection_failure: &'a AtomicU64,
         lease_lost: &'a AtomicU64,
         delivered: &'a AtomicU64,
@@ -125,22 +125,22 @@ impl<'a> OutboundDispositionTelemetry<'a> {
         }
     }
 
-    pub(crate) fn connection_failed(self) {
+    pub fn connection_failed(self) {
         self.connection_failure.fetch_add(1, Ordering::Relaxed);
     }
-    pub(crate) fn lease_lost(self) {
+    pub fn lease_lost(self) {
         self.lease_lost.fetch_add(1, Ordering::Relaxed);
     }
-    pub(crate) fn delivered(self) {
+    pub fn delivered(self) {
         self.delivered.fetch_add(1, Ordering::Relaxed);
     }
-    pub(crate) fn permanent_failure(self) {
+    pub fn permanent_failure(self) {
         self.permanent_failure.fetch_add(1, Ordering::Relaxed);
     }
-    pub(crate) fn expired(self) {
+    pub fn expired(self) {
         self.expired.fetch_add(1, Ordering::Relaxed);
     }
-    pub(crate) fn retry(self) {
+    pub fn retry(self) {
         self.retry.fetch_add(1, Ordering::Relaxed);
     }
 }

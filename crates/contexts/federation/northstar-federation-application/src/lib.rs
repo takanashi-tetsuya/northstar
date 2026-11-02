@@ -6,6 +6,7 @@ pub use northstar_federation_core::*;
 pub mod dispatch;
 pub mod outbox;
 pub mod sm_outbox;
+pub mod telemetry;
 use uuid::Uuid;
 
 /// In-flight federation transport envelope.

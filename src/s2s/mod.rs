@@ -6,7 +6,6 @@ pub mod outbound;
 mod registry;
 mod resume;
 mod sm;
-pub(crate) mod telemetry;
 pub mod tls;
 pub mod util;
 

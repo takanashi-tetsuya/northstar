@@ -3947,7 +3947,7 @@ if (!componentTransport.includes('struct ComponentTelemetry')
     || !componentTransport.includes('component_telemetry().outbox_written()')) {
   throw new Error('component transport must use only its typed connection and delivery telemetry');
 }
-const s2sTelemetry = read('src/s2s/telemetry.rs');
+const s2sTelemetry = read('crates/contexts/federation/northstar-federation-application/src/telemetry.rs');
 if (!s2sTelemetry.includes('struct OnlineQueueAcceptanceTelemetry')
     || !s2sTelemetry.includes('struct InboundConnectionTelemetry')
     || !s2sTelemetry.includes('struct OutboundDispositionTelemetry')

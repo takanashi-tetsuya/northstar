@@ -1074,6 +1074,7 @@ digraph compile_time {
   "northstar-delivery-core" -> "uuid";
   "northstar-federation-application" -> "anyhow";
   "northstar-federation-application" -> "northstar-federation-core";
+  "northstar-federation-application" -> "northstar-telemetry";
   "northstar-federation-application" -> "northstar-xmpp-types";
   "northstar-federation-application" -> "serde";
   "northstar-federation-application" -> "tokio";

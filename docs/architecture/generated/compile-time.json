@@ -2922,6 +2922,10 @@
     ],
     [
       "northstar-federation-application",
+      "northstar-security"
+    ],
+    [
+      "northstar-federation-application",
       "northstar-telemetry"
     ],
     [
@@ -2934,11 +2938,19 @@
     ],
     [
       "northstar-federation-application",
+      "rand"
+    ],
+    [
+      "northstar-federation-application",
       "roxmltree"
     ],
     [
       "northstar-federation-application",
       "serde"
+    ],
+    [
+      "northstar-federation-application",
+      "serde_json"
     ],
     [
       "northstar-federation-application",
@@ -2951,6 +2963,10 @@
     [
       "northstar-federation-application",
       "subtle"
+    ],
+    [
+      "northstar-federation-application",
+      "thiserror"
     ],
     [
       "northstar-federation-application",

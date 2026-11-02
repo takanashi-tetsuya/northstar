@@ -1077,14 +1077,18 @@ digraph compile_time {
   "northstar-federation-application" -> "dashmap";
   "northstar-federation-application" -> "northstar-config";
   "northstar-federation-application" -> "northstar-federation-core";
+  "northstar-federation-application" -> "northstar-security";
   "northstar-federation-application" -> "northstar-telemetry";
   "northstar-federation-application" -> "northstar-xml-builder";
   "northstar-federation-application" -> "northstar-xmpp-types";
+  "northstar-federation-application" -> "rand";
   "northstar-federation-application" -> "roxmltree";
   "northstar-federation-application" -> "serde";
+  "northstar-federation-application" -> "serde_json";
   "northstar-federation-application" -> "sha1";
   "northstar-federation-application" -> "sha2";
   "northstar-federation-application" -> "subtle";
+  "northstar-federation-application" -> "thiserror";
   "northstar-federation-application" -> "tokio";
   "northstar-federation-application" -> "tokio-util";
   "northstar-federation-application" -> "tracing";

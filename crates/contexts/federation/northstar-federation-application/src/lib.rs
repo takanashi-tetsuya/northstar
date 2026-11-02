@@ -5,6 +5,7 @@
 pub use northstar_federation_core::*;
 pub mod components;
 pub mod dispatch;
+pub mod endpoint;
 pub mod outbox;
 pub mod registry;
 pub mod sm_outbox;

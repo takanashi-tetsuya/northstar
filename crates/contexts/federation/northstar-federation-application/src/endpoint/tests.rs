@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Duration;
 
 fn record(priority: u16, weight: u16, target: &str) -> SrvRecord {
     SrvRecord {

@@ -9,6 +9,7 @@ pub mod util;
 
 pub(crate) use dns::*;
 pub use inbound::*;
+use northstar_federation_application::endpoint::FederationEndpoint;
 use northstar_federation_application::registry::*;
 use northstar_federation_core::dialback::*;
 use northstar_federation_core::wire::*;

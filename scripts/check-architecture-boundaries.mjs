@@ -340,7 +340,7 @@ for (const field of [
   'message',
   'federation',
   'mam_service',
-  'replay_service',
+  'session',
   'bosh',
   'started_at',
   'registration_closed',

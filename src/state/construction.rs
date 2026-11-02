@@ -282,15 +282,6 @@ impl AppState {
                 config.max_component_connections,
             )
             .context("configured connection actor capacity is invalid")?;
-        let sm_capacity_metrics =
-            Arc::new(northstar_session_application::sm_capacity::SmCapacityMetrics::default());
-        let sm_memory_governor = northstar_session_application::sm_capacity::SmMemoryGovernor::new(
-            config.sm_memory_budget_bytes,
-            config.sm_recovery_max_bytes,
-            config.sm_recovery_max_jobs,
-            config.sm_max_snapshot_bytes,
-            Arc::clone(&sm_capacity_metrics),
-        )?;
 
         // Transfer the Redis endpoint and signing capability out of the
         // broadly shared Config before constructing AppState.  ClusterManager
@@ -411,8 +402,6 @@ impl AppState {
                 config.bosh_max_concurrent_body_reads,
             )
         });
-        let sm_recovery_max_jobs = config.sm_recovery_max_jobs;
-        let sm_recovery_max_bytes = config.sm_recovery_max_bytes;
         let mix_message_content_identity = abuse.mix_message_content_keyring();
         let mix_retraction_content_identity = abuse.mix_retraction_content_keyring();
         // Durable outbox workers share one application-owned admission
@@ -448,13 +437,6 @@ impl AppState {
                 max_per_domain: config.s2s_outbox_max_per_domain,
             },
             federation_outbox.outbox_wakeup(),
-        );
-        let replay_service = northstar_session_application::replay::ReplayService::new(
-            northstar_session_postgres::replay_repository::PostgresReplayRepository::new(
-                pool.clone(),
-            ),
-            &config.domain,
-            config.offline_message_ttl_days,
         );
         let roster = RosterModule::new(&pool);
         let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;
@@ -522,13 +504,12 @@ impl AppState {
             sm_authority_connect_options =
                 sm_authority_connect_options.options([("search_path", "public")]);
         }
-        let sm_service = northstar_session_application::sm::SmService::new(
-            northstar_workflows::sm_repository::PostgresSmRepository::new(
-                pool.clone(),
-                Arc::clone(&fast_token_secret),
-            ),
-            sm_authority_schema.clone(),
-        )?;
+        let session = SessionModule::new(SessionModuleParts {
+            config: &config,
+            pool: &pool,
+            fast_token_secret: &fast_token_secret,
+            sm_authority_schema: sm_authority_schema.clone(),
+        })?;
         let room = RoomModule::new(RoomModuleParts {
             config: &config,
             pool: &pool,
@@ -646,21 +627,13 @@ impl AppState {
             roster,
             message,
             federation,
+            session,
             mam_service,
-            sm_service,
-            replay_service,
             pool,
             cluster,
             account_revocation_consumer_service,
             bosh,
             sessions,
-            sm_suspension_recovery: crate::state::session_cleanup::SmSuspensionRecoveryQueue::new(
-                sm_recovery_max_jobs,
-                sm_recovery_max_bytes,
-                Arc::clone(&sm_capacity_metrics),
-                Arc::clone(&sm_memory_governor),
-            ),
-            sm_memory_governor,
             metrics,
             metrics_bearer_token,
             web_admin_gateway_token,
@@ -715,7 +688,7 @@ impl AppState {
         crate::state::session_cleanup::start_sm_suspension_recovery(
             Arc::new(state.sm_suspension_context()),
             Arc::clone(state.worker_registry()),
-            Arc::clone(&state.sm_suspension_recovery),
+            Arc::clone(&state.session.sm_suspension_recovery),
             worker_cancel.clone(),
         );
         northstar_mix_xmpp::start_mix_presence_recovery(

@@ -22,9 +22,9 @@ impl AppState {
     pub(crate) fn session_cleanup_sm(&self) -> SessionCleanupSm {
         SessionCleanupSm {
             suspension: self.sm_suspension_context(),
-            sessions: self.sm_service.clone(),
-            recovery: Arc::clone(&self.sm_suspension_recovery),
-            memory: Arc::clone(&self.sm_memory_governor),
+            sessions: self.session.sm_service.clone(),
+            recovery: Arc::clone(&self.session.sm_suspension_recovery),
+            memory: Arc::clone(&self.session.sm_memory_governor),
             limits: self.sm_buffer_limits(),
         }
     }

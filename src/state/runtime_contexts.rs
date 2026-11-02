@@ -83,7 +83,7 @@ impl AppState {
     pub(crate) fn readiness_context(&self) -> ReadinessContext {
         ReadinessContext {
             connection: self.connection_actors.readiness_probe(),
-            sm: self.sm_memory_governor.readiness_probe(),
+            sm: self.session.sm_memory_governor.readiness_probe(),
             upload: self.upload.safety_gate.readiness_probe(),
             cluster: self.cluster.readiness_probe(),
             workers: self.workers.readiness_probe(),
@@ -264,13 +264,13 @@ impl AppState {
     pub(crate) fn sm_suspension_recovery_queue(
         &self,
     ) -> &Arc<crate::state::session_cleanup::SmSuspensionRecoveryQueue> {
-        &self.sm_suspension_recovery
+        &self.session.sm_suspension_recovery
     }
 
     pub(crate) fn sm_memory_governor(
         &self,
     ) -> &Arc<northstar_session_application::sm_capacity::SmMemoryGovernor> {
-        &self.sm_memory_governor
+        &self.session.sm_memory_governor
     }
 
     pub(crate) fn connection_actors(

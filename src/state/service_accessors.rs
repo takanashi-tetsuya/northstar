@@ -144,7 +144,7 @@ impl AppState {
     ) -> &northstar_session_application::sm::SmService<
         northstar_workflows::sm_repository::PostgresSmRepository,
     > {
-        &self.sm_service
+        &self.session.sm_service
     }
 
     pub(crate) fn blocking_service(
@@ -168,7 +168,7 @@ impl AppState {
     ) -> &northstar_session_application::replay::ReplayService<
         northstar_session_postgres::replay_repository::PostgresReplayRepository,
     > {
-        &self.replay_service
+        &self.session.replay_service
     }
 
     pub(crate) fn roster_service(&self) -> &RosterService {

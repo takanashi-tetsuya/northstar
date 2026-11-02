@@ -460,8 +460,8 @@ for (const [file, site] of [['authDb', 'FastExpired'], ['credentialSmDb', 'Bindi
     'tx.rollback().await', /exact COMMIT and rollback inventory|ignored versus propagated rollback errors/);
 }
 rejects('credential binding state must retain configured lease policy', 'state',
-  'self.sm_service.finalize_binding_observed(connection_id, user_id, expected_auth_generation, full_jid, self.config.capacity_session_lease_seconds, device_id, fast_plan, observation).await',
-  'self.sm_service.finalize_binding_observed(connection_id, user_id, expected_auth_generation, full_jid, 99, device_id, fast_plan, observation).await', /actual lease and exact resume request/);
+  'self.session.sm_service.finalize_binding_observed(connection_id, user_id, expected_auth_generation, full_jid, self.config.capacity_session_lease_seconds, device_id, fast_plan, observation).await',
+  'self.session.sm_service.finalize_binding_observed(connection_id, user_id, expected_auth_generation, full_jid, 99, device_id, fast_plan, observation).await', /actual lease and exact resume request/);
 rejects('credential fixed history cannot replace an earlier attempt', 'frame',
   'attempts.slots[kind.index()].is_none()', 'true', /original fixed-kind attempts/);
 rejects('credential registration cannot reopen after retirement snapshot', 'frame',

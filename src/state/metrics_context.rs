@@ -68,8 +68,8 @@ pub(super) fn metrics_context(state: &AppState) -> MetricsContext {
             .s2s_connection_registry
             .outbound_count_probe(),
         sm: Arc::new(SmRecoveryMetricsProbe {
-            governor: Arc::clone(&state.sm_memory_governor),
-            recovery: Arc::clone(&state.sm_suspension_recovery),
+            governor: Arc::clone(&state.session.sm_memory_governor),
+            recovery: Arc::clone(&state.session.sm_suspension_recovery),
         }),
         started_at: state.started_at,
         bind_fallback: state.config.metrics_bind,

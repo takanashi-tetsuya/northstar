@@ -916,8 +916,8 @@ export function verifyAuthPublicationBoundaries(sources) {
     `credential ${kind} service must retain the exact raw repository return`);
   // state is a whole module: drop each test module instead of cutting at the first
   const stateProduction = withoutTestModules(state);
-  requireBoundary(method(stateProduction, 'finalize_resource_binding') === 'self.sm_service.finalize_binding_observed(connection_id,user_id,expected_auth_generation,full_jid,self.config.capacity_session_lease_seconds,device_id,fast_plan,observation).await' &&
-    method(stateProduction, 'finalize_sm_resume') === 'self.sm_service.finalize_resume_observed(request,observation).await',
+  requireBoundary(method(stateProduction, 'finalize_resource_binding') === 'self.session.sm_service.finalize_binding_observed(connection_id,user_id,expected_auth_generation,full_jid,self.config.capacity_session_lease_seconds,device_id,fast_plan,observation).await' &&
+    method(stateProduction, 'finalize_sm_resume') === 'self.session.sm_service.finalize_resume_observed(request,observation).await',
     'credential state forwarding must preserve the actual lease and exact resume request');
   const registerCredential = method(frame, 'prepare_credential');
   ordered(registerCredential, ['letmutattempts=self.0.credential_attempts.lock().unwrap();', 'anyhow::ensure!(!attempts.closed)',

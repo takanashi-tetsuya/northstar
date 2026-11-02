@@ -19,7 +19,7 @@ impl AppState {
             sessions: Arc::clone(&self.sessions),
             muc_occupants: Arc::clone(&self.room.muc_occupants),
             suspended_muc_sessions: Arc::clone(&self.room.suspended_muc_sessions),
-            sm_memory_governor: Arc::clone(&self.sm_memory_governor),
+            sm_memory_governor: Arc::clone(&self.session.sm_memory_governor),
             sm_max_unacked_stanzas: self.config.sm_max_unacked_stanzas,
             sm_max_unacked_bytes: self.config.sm_max_unacked_bytes,
             federation_outbox: self.federation.federation_outbox.clone(),

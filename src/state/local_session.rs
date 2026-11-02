@@ -44,7 +44,8 @@ impl AppState {
             &northstar_auth_application::authentication::publication::PreparedCredential,
         >,
     ) -> anyhow::Result<northstar_session_application::sm::BindingFinalizationOutcome> {
-        self.sm_service
+        self.session
+            .sm_service
             .finalize_binding_observed(
                 connection_id,
                 user_id,
@@ -65,7 +66,8 @@ impl AppState {
             &northstar_auth_application::authentication::publication::PreparedCredential,
         >,
     ) -> anyhow::Result<northstar_session_application::sm::SmResumeFinalizationOutcome> {
-        self.sm_service
+        self.session
+            .sm_service
             .finalize_resume_observed(request, observation)
             .await
     }

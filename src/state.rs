@@ -245,6 +245,7 @@ mod runtime_config;
 mod runtime_contexts;
 mod runtime_control;
 mod service_accessors;
+mod session_module;
 mod suspended_muc;
 mod telemetry_accessors;
 mod upload_module;
@@ -265,6 +266,7 @@ use self::room_module::*;
 use self::roster_module::*;
 pub(crate) use self::runtime_config::*;
 pub(crate) use self::runtime_control::*;
+use self::session_module::*;
 use self::upload_module::*;
 use northstar_federation_application::registry::S2sConnectionRegistry;
 use northstar_federation_application::write_policy::FederationWritePolicy;
@@ -325,13 +327,12 @@ pub struct AppState {
     message: MessageModule,
     /// The federation context; see [`FederationModule`].
     federation: FederationModule,
+    /// The session context; see [`SessionModule`].
+    session: SessionModule,
     public_discovery_context: PublicDiscoveryContext,
     /// XEP-0215 TURN credential authority. Long-lived key material and its
     /// bounded rate windows never cross into protocol or public state.
     mam_service: northstar_archive_application::MamService<northstar_workflows::mam_repository::PostgresMamRepository>,
-    sm_service: northstar_session_application::sm::SmService<northstar_workflows::sm_repository::PostgresSmRepository>,
-    replay_service:
-        northstar_session_application::replay::ReplayService<northstar_session_postgres::replay_repository::PostgresReplayRepository>,
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
     cluster: crate::cluster::ClusterManager,
     account_revocation_consumer_service:
@@ -340,11 +341,6 @@ pub struct AppState {
         >,
     bosh: Option<crate::bosh::BoshManager>,
     sessions: Arc<DashMap<String, OnlineSession>>,
-    /// Supervised retry ownership for an exact SM suspension whose database
-    /// outcome was an error or timeout. The corresponding MUC FIFO remains
-    /// sealed until this queue proves a durable handoff.
-    sm_suspension_recovery: Arc<crate::state::session_cleanup::SmSuspensionRecoveryQueue>,
-    sm_memory_governor: Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
     metrics: Arc<Metrics>,
     /// Optional credential for the dedicated observability listener. Callers
     /// can ask for an authorization decision but cannot read the token.

@@ -9,9 +9,7 @@ use crate::xmpp::local_routes::{
     session_table::session_entries_for_in,
     suspended_muc::muc_actor_identity_matches,
 };
-use crate::{
-    db, db::muc_delivery_repository::PostgresMucDeliveryRepository, s2s::FederationRouter,
-};
+use crate::{db::muc_delivery_repository::PostgresMucDeliveryRepository, s2s::FederationRouter};
 use dashmap::DashMap;
 use northstar_room_application::cluster_muc_receipt_claim::ClusterMucReceiptClaimService;
 use northstar_room_application::muc_delivery::MucDeliveryRepository;
@@ -47,7 +45,7 @@ impl MucDeliveryContext {
         &self,
         session: &OnlineSession,
         peer: &str,
-        kind: db::PrivacyStanzaKind,
+        kind: northstar_xep_0016::PrivacyStanzaKind,
     ) -> anyhow::Result<bool> {
         let active = session
             .privacy_active
@@ -292,9 +290,9 @@ impl MucDeliveryContext {
             .and_then(|document| {
                 let root = document.root_element();
                 let kind = match root.tag_name().name() {
-                    "message" => db::PrivacyStanzaKind::Message,
-                    "iq" => db::PrivacyStanzaKind::Iq,
-                    "presence" => db::PrivacyStanzaKind::PresenceIn,
+                    "message" => northstar_xep_0016::PrivacyStanzaKind::Message,
+                    "iq" => northstar_xep_0016::PrivacyStanzaKind::Iq,
+                    "presence" => northstar_xep_0016::PrivacyStanzaKind::PresenceIn,
                     _ => return None,
                 };
                 let peer = root

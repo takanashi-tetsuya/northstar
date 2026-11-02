@@ -1,34 +1,12 @@
-//! The privacy context's persistence as the root crate binds it, and the privacy check of a session the session
-//! context's tables identify.
+//! The privacy-list database test that drives SM sessions, and the account communication policy it checks.
 
 use anyhow::Result;
-pub use northstar_roster_postgres::privacy::*;
-use sqlx::{PgPool, Row};
+use northstar_roster_postgres::privacy::*;
+use sqlx::PgPool;
 use uuid::Uuid;
-
-pub async fn privacy_denies_for_sm_session(
-    pool: &PgPool,
-    session_id: Uuid,
-    candidate: &str,
-    kind: PrivacyStanzaKind,
-) -> Result<Option<bool>> {
-    let row = sqlx::query("SELECT * FROM northstar_sm_privacy_state($1)")
-        .bind(session_id)
-        .fetch_optional(pool)
-        .await?;
-    let Some(row) = row else {
-        return Ok(None);
-    };
-    let user_id: Uuid = row.get("user_id");
-    let active: Option<String> = row.get("active_privacy_list");
-    privacy_denies(pool, user_id, active.as_deref(), candidate, kind)
-        .await
-        .map(Some)
-}
 
 /// Account communication policy with the non-overridable XEP-0191 rule
 /// evaluated first.  A privacy-list `allow` can never bypass a block.
-#[cfg(test)]
 pub async fn communication_denied(
     pool: &PgPool,
     owner_id: Uuid,
@@ -50,8 +28,6 @@ pub async fn communication_denied(
     privacy_denies(pool, owner_id, active_list, candidate, kind).await
 }
 
-#[cfg(test)]
-#[cfg(test)]
 mod tests {
     use super::*;
 

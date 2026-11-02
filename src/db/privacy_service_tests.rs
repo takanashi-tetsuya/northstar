@@ -1,21 +1,26 @@
 //! PostgreSQL-backed tests of the privacy service over the root-wired repository.
 
-use crate::db;
 use northstar_roster_application::privacy::*;
 use uuid::Uuid;
 
 #[test]
 fn stanza_kind_conversions_preserve_every_stanza_classification() {
     let mappings = [
-        (PrivacyStanzaKind::Message, db::PrivacyStanzaKind::Message),
-        (PrivacyStanzaKind::Iq, db::PrivacyStanzaKind::Iq),
+        (
+            PrivacyStanzaKind::Message,
+            northstar_xep_0016::PrivacyStanzaKind::Message,
+        ),
+        (
+            PrivacyStanzaKind::Iq,
+            northstar_xep_0016::PrivacyStanzaKind::Iq,
+        ),
         (
             PrivacyStanzaKind::PresenceIn,
-            db::PrivacyStanzaKind::PresenceIn,
+            northstar_xep_0016::PrivacyStanzaKind::PresenceIn,
         ),
         (
             PrivacyStanzaKind::PresenceOut,
-            db::PrivacyStanzaKind::PresenceOut,
+            northstar_xep_0016::PrivacyStanzaKind::PresenceOut,
         ),
     ];
     for (kind, storage) in mappings {
@@ -39,7 +44,9 @@ async fn privacy_service_boundary_preserves_stanza_kind_allow_deny_results() {
         .await
         .unwrap();
     crate::db::migrate(&pool).await.unwrap();
-    let service = PrivacyService::new(db::privacy::PostgresPrivacyRepository::new(pool.clone()));
+    let service = PrivacyService::new(
+        northstar_roster_postgres::privacy::PostgresPrivacyRepository::new(pool.clone()),
+    );
     let messaging = northstar_message_application::messaging::MessageService::new(
         northstar_workflows::message_repository::PostgresMessageRepository::new(
             pool.clone(),

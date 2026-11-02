@@ -17,7 +17,7 @@ pub(super) struct RosterModule {
             northstar_roster_postgres::federated_roster::PostgresFederatedRosterRepository,
         >,
     pub(super) privacy_service: northstar_roster_application::privacy::PrivacyService<
-        db::privacy::PostgresPrivacyRepository,
+        northstar_roster_postgres::privacy::PostgresPrivacyRepository,
     >,
 }
 
@@ -42,7 +42,7 @@ impl RosterModule {
                     ),
                 ),
             privacy_service: northstar_roster_application::privacy::PrivacyService::new(
-                db::privacy::PostgresPrivacyRepository::new(pool.clone()),
+                northstar_roster_postgres::privacy::PostgresPrivacyRepository::new(pool.clone()),
             ),
         }
     }

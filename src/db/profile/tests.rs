@@ -294,22 +294,22 @@ async fn first_profile_publish_snapshots_roster_privacy_and_rolls_back_atomicall
         .await
         .unwrap();
     }
-    let privacy = db::PrivacyList {
+    let privacy = northstar_xep_0016::PrivacyList {
         name: "profile-policy".to_owned(),
         items: vec![
-            db::PrivacyItem {
+            northstar_xep_0016::PrivacyItem {
                 order: 1,
-                action: db::PrivacyAction::Deny,
-                match_type: Some(db::PrivacyMatchType::Jid),
+                action: northstar_xep_0016::PrivacyAction::Deny,
+                match_type: Some(northstar_xep_0016::PrivacyMatchType::Jid),
                 match_value: Some(denied.clone()),
                 message: true,
                 iq: false,
                 presence_in: false,
                 presence_out: false,
             },
-            db::PrivacyItem {
+            northstar_xep_0016::PrivacyItem {
                 order: 2,
-                action: db::PrivacyAction::Allow,
+                action: northstar_xep_0016::PrivacyAction::Allow,
                 match_type: None,
                 match_value: None,
                 message: false,
@@ -320,15 +320,23 @@ async fn first_profile_publish_snapshots_roster_privacy_and_rolls_back_atomicall
         ],
     };
     assert_eq!(
-        db::replace_privacy_list(&database.pool, owner_id, &privacy)
-            .await
-            .unwrap(),
-        db::ReplacePrivacyListOutcome::Stored
+        northstar_roster_postgres::privacy::replace_privacy_list(
+            &database.pool,
+            owner_id,
+            &privacy
+        )
+        .await
+        .unwrap(),
+        northstar_roster_postgres::privacy::ReplacePrivacyListOutcome::Stored
     );
     assert!(
-        db::set_default_privacy_list(&database.pool, owner_id, Some(&privacy.name))
-            .await
-            .unwrap()
+        northstar_roster_postgres::privacy::set_default_privacy_list(
+            &database.pool,
+            owner_id,
+            Some(&privacy.name)
+        )
+        .await
+        .unwrap()
     );
     sqlx::query(
         "CREATE FUNCTION fail_profile_outbox() RETURNS trigger

@@ -61,7 +61,8 @@ pub mod pep_roster;
 pub mod presence_repository;
 #[cfg(test)]
 mod presence_service_tests;
-pub mod privacy;
+#[cfg(test)]
+mod privacy;
 #[cfg(test)]
 mod privacy_service_tests;
 pub mod profile;
@@ -86,14 +87,19 @@ pub use capacity::*;
 pub use cluster_keys::*;
 pub use omemo_recovery::*;
 pub use pep_roster::*;
-pub use privacy::*;
 // Roster and privacy names that paths owned by the mainline (src/s2s, src/cluster, src/db/sm*,
 // src/db/replay*) still reach through db::. Every other consumer imports the owning crate.
+pub(crate) use northstar_roster_postgres::privacy::{
+    privacy_denies, set_active_privacy_list_in_transaction,
+};
 #[cfg(test)]
 pub(crate) use northstar_roster_postgres::roster::add_federated_presence_pending_with_stanza;
 pub(crate) use northstar_roster_postgres::roster::{
     blocked_jid_matches, is_blocked_for_account, roster,
 };
+pub(crate) use northstar_xep_0016::PrivacyStanzaKind;
+#[cfg(test)]
+pub(crate) use northstar_xep_0016::{PrivacyAction, PrivacyItem, PrivacyList, PrivacyMatchType};
 pub use sm::*;
 #[cfg(test)]
 mod pubsub_integration_tests;

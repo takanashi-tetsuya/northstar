@@ -3,7 +3,7 @@
 use super::{bare_jid, session_entries_for_in, AppState, OnlineSession};
 use crate::{
     cluster::ClusterUnavailableDelivery,
-    db::{self, sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository},
+    db::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository,
     s2s::FederationRouter,
     services::sm_teardown_presence::{SmTeardownPresenceService, UnavailablePolicy},
 };
@@ -112,7 +112,7 @@ impl SessionCleanupUnavailable {
                             recipient.connection_id,
                             active.as_deref(),
                             from,
-                            db::PrivacyStanzaKind::PresenceIn,
+                            northstar_xep_0016::PrivacyStanzaKind::PresenceIn,
                         )
                         .await?
                     {

@@ -55,14 +55,19 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
                 return Ok(true);
             }
             if active_privacy_list.is_some() {
-                db::refresh_active_privacy_session(&self.pool, recipient_id, connection_id).await?;
+                northstar_roster_postgres::privacy::refresh_active_privacy_session(
+                    &self.pool,
+                    recipient_id,
+                    connection_id,
+                )
+                .await?;
             }
-            db::privacy_denies(
+            northstar_roster_postgres::privacy::privacy_denies(
                 &self.pool,
                 recipient_id,
                 active_privacy_list,
                 service,
-                db::PrivacyStanzaKind::Message,
+                northstar_xep_0016::PrivacyStanzaKind::Message,
             )
             .await
         }
@@ -262,12 +267,12 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
             }
 
             if !same_account
-                && db::privacy::privacy_denies_in_transaction(
+                && northstar_roster_postgres::privacy::privacy_denies_in_transaction(
                     &mut transaction,
                     subject.sender_account_id,
                     subject.sender_connection_id,
                     &item.recipient_jid,
-                    db::PrivacyStanzaKind::Message,
+                    northstar_xep_0016::PrivacyStanzaKind::Message,
                 )
                 .await?
             {
@@ -278,12 +283,12 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
             }
             if !same_account {
                 if let Some(recipient_id) = subject.recipient_account_id {
-                    if db::privacy::privacy_denies_in_transaction(
+                    if northstar_roster_postgres::privacy::privacy_denies_in_transaction(
                         &mut transaction,
                         recipient_id,
                         None,
                         &subject.sender_bare_jid,
-                        db::PrivacyStanzaKind::Message,
+                        northstar_xep_0016::PrivacyStanzaKind::Message,
                     )
                     .await?
                     {

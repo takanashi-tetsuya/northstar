@@ -465,10 +465,13 @@ async fn duplicate_local_subscribe_is_a_true_state_noop() {
     database.finish().await;
 }
 
-fn privacy_list(name: &str, action: db::PrivacyAction) -> db::PrivacyList {
-    db::PrivacyList {
+fn privacy_list(
+    name: &str,
+    action: northstar_xep_0016::PrivacyAction,
+) -> northstar_xep_0016::PrivacyList {
+    northstar_xep_0016::PrivacyList {
         name: name.to_owned(),
-        items: vec![db::PrivacyItem {
+        items: vec![northstar_xep_0016::PrivacyItem {
             order: 1,
             action,
             match_type: None,
@@ -489,35 +492,45 @@ async fn exact_connection_privacy_and_default_change_fence_subscription_mutation
     let (_, target, _) = insert_user(&database.pool, "target").await;
     let deny_connection = Uuid::new_v4();
     let allow_connection = Uuid::new_v4();
-    db::replace_privacy_list(
+    northstar_roster_postgres::privacy::replace_privacy_list(
         &database.pool,
         actor_id,
-        &privacy_list("deny", db::PrivacyAction::Deny),
+        &privacy_list("deny", northstar_xep_0016::PrivacyAction::Deny),
     )
     .await
     .unwrap();
-    db::replace_privacy_list(
+    northstar_roster_postgres::privacy::replace_privacy_list(
         &database.pool,
         actor_id,
-        &privacy_list("allow", db::PrivacyAction::Allow),
+        &privacy_list("allow", northstar_xep_0016::PrivacyAction::Allow),
     )
     .await
     .unwrap();
     assert!(
-        db::set_default_privacy_list(&database.pool, actor_id, Some("allow"))
-            .await
-            .unwrap()
+        northstar_roster_postgres::privacy::set_default_privacy_list(
+            &database.pool,
+            actor_id,
+            Some("allow")
+        )
+        .await
+        .unwrap()
     );
-    assert!(
-        db::set_active_privacy_list(&database.pool, actor_id, deny_connection, Some("deny"),)
-            .await
-            .unwrap()
-    );
-    assert!(
-        db::set_active_privacy_list(&database.pool, actor_id, allow_connection, Some("allow"),)
-            .await
-            .unwrap()
-    );
+    assert!(northstar_roster_postgres::privacy::set_active_privacy_list(
+        &database.pool,
+        actor_id,
+        deny_connection,
+        Some("deny"),
+    )
+    .await
+    .unwrap());
+    assert!(northstar_roster_postgres::privacy::set_active_privacy_list(
+        &database.pool,
+        actor_id,
+        allow_connection,
+        Some("allow"),
+    )
+    .await
+    .unwrap());
     let stanza = format!(
         "<presence xmlns='jabber:client' from='{actor}@example.test' to='{target}@example.test' type='subscribe'/>"
     );
@@ -654,17 +667,21 @@ async fn block_commit_and_inbound_default_policy_win_subscription_races() {
         PresenceMutation::PolicyDenied(PresencePolicyDenial::Blocking)
     ));
 
-    db::replace_privacy_list(
+    northstar_roster_postgres::privacy::replace_privacy_list(
         &database.pool,
         target_id,
-        &privacy_list("inbound-deny", db::PrivacyAction::Deny),
+        &privacy_list("inbound-deny", northstar_xep_0016::PrivacyAction::Deny),
     )
     .await
     .unwrap();
     assert!(
-        db::set_default_privacy_list(&database.pool, target_id, Some("inbound-deny"),)
-            .await
-            .unwrap()
+        northstar_roster_postgres::privacy::set_default_privacy_list(
+            &database.pool,
+            target_id,
+            Some("inbound-deny"),
+        )
+        .await
+        .unwrap()
     );
     assert!(matches!(
         service

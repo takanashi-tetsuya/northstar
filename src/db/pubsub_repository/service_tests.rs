@@ -490,11 +490,11 @@ async fn paused_pep_delivery_rechecks_block_privacy_disable_and_sensitive_acl() 
     .await
     .unwrap();
 
-    let privacy = db::PrivacyList {
+    let privacy = northstar_xep_0016::PrivacyList {
         name: "deny-pep".to_owned(),
-        items: vec![db::PrivacyItem {
+        items: vec![northstar_xep_0016::PrivacyItem {
             order: 1,
-            action: db::PrivacyAction::Deny,
+            action: northstar_xep_0016::PrivacyAction::Deny,
             match_type: None,
             match_value: None,
             message: true,
@@ -503,21 +503,27 @@ async fn paused_pep_delivery_rechecks_block_privacy_disable_and_sensitive_acl() 
             presence_out: false,
         }],
     };
-    db::replace_privacy_list(&pool, sender_id, &privacy)
+    northstar_roster_postgres::privacy::replace_privacy_list(&pool, sender_id, &privacy)
         .await
         .unwrap();
     assert!(
-        db::set_default_privacy_list(&pool, sender_id, Some(&privacy.name))
-            .await
-            .unwrap()
+        northstar_roster_postgres::privacy::set_default_privacy_list(
+            &pool,
+            sender_id,
+            Some(&privacy.name)
+        )
+        .await
+        .unwrap()
     );
     assert_eq!(
         service.authorize_pep_outbox_delivery(&item).await.unwrap(),
         PepOutboxAuthorizationOutcome::Drop(PepOutboxDropReason::PrivacyDenied)
     );
-    assert!(db::set_default_privacy_list(&pool, sender_id, None)
-        .await
-        .unwrap());
+    assert!(
+        northstar_roster_postgres::privacy::set_default_privacy_list(&pool, sender_id, None)
+            .await
+            .unwrap()
+    );
 
     sqlx::query("UPDATE users SET is_disabled=TRUE WHERE id=$1")
         .bind(recipient_id)

@@ -889,7 +889,7 @@ async fn replay_policy_snapshot_is_consistent_and_missing_policy_rolls_back() {
             presence_out: false,
         }],
     };
-    crate::db::replace_privacy_list(&pool, recipient, &allow)
+    northstar_roster_postgres::privacy::replace_privacy_list(&pool, recipient, &allow)
         .await
         .unwrap();
     let mut snapshot = pool.begin().await.unwrap();
@@ -924,7 +924,7 @@ async fn replay_policy_snapshot_is_consistent_and_missing_policy_rolls_back() {
             presence_out: false,
         }],
     };
-    crate::db::replace_privacy_list(&pool, recipient, &deny)
+    northstar_roster_postgres::privacy::replace_privacy_list(&pool, recipient, &deny)
         .await
         .unwrap();
     let (blocked_again, privacy_again, roster_again) =
@@ -1275,7 +1275,7 @@ async fn replay_is_paged_exclusive_and_retryable() {
             },
         ],
     };
-    crate::db::replace_privacy_list(&pool, recipient, &privacy)
+    northstar_roster_postgres::privacy::replace_privacy_list(&pool, recipient, &privacy)
         .await
         .unwrap();
     for (sender, id) in [

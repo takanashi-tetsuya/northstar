@@ -203,7 +203,7 @@ impl AppState {
     pub(crate) fn privacy_service(
         &self,
     ) -> &northstar_roster_application::privacy::PrivacyService<
-        db::privacy::PostgresPrivacyRepository,
+        northstar_roster_postgres::privacy::PostgresPrivacyRepository,
     > {
         &self.roster.privacy_service
     }

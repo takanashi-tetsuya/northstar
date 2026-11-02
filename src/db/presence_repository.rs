@@ -48,7 +48,14 @@ impl PresenceRepository for PostgresPresenceRepository {
         candidate: &str,
         kind: northstar_xep_0016::PrivacyStanzaKind,
     ) -> Result<bool> {
-        db::privacy_denies(&self.pool, owner_id, active_list, candidate, kind).await
+        northstar_roster_postgres::privacy::privacy_denies(
+            &self.pool,
+            owner_id,
+            active_list,
+            candidate,
+            kind,
+        )
+        .await
     }
 
     async fn avatar_hash(&self, user_id: Uuid) -> Result<Option<String>> {

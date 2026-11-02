@@ -38,9 +38,12 @@ impl MucDeliveryRepository for PostgresMucDeliveryRepository {
         &self,
         session_id: Uuid,
         candidate: &str,
-        kind: db::PrivacyStanzaKind,
+        kind: northstar_xep_0016::PrivacyStanzaKind,
     ) -> Result<Option<bool>> {
-        db::privacy_denies_for_sm_session(&self.pool, session_id, candidate, kind).await
+        northstar_workflows::privacy::privacy_denies_for_sm_session(
+            &self.pool, session_id, candidate, kind,
+        )
+        .await
     }
 
     async fn append_suspended_stanza(

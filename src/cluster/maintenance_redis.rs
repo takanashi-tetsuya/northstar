@@ -101,17 +101,18 @@ impl ClusterMaintenanceRedis {
             .get()
             .context("cluster session authority pool is unavailable")?;
         let owner_instance_epoch = self.instance_epoch.load(Ordering::Acquire);
-        let renewed = northstar_room_postgres::cluster_muc::refresh_cluster_session_route(
-            authority_pool,
-            &self.namespace,
-            &full_jid,
-            &self.node_id,
-            self.connection_uuid,
-            owner_instance_epoch,
-            connection_id,
-            Duration::from_secs(SESSION_TTL_SECONDS),
-        )
-        .await?;
+        let renewed =
+            northstar_session_postgres::cluster_session_route::refresh_cluster_session_route(
+                authority_pool,
+                &self.namespace,
+                &full_jid,
+                &self.node_id,
+                self.connection_uuid,
+                owner_instance_epoch,
+                connection_id,
+                Duration::from_secs(SESSION_TTL_SECONDS),
+            )
+            .await?;
         Ok(renewed.then_some(SessionRouteAuthorityToken::Exact {
             owner_instance_epoch,
         }))
@@ -185,7 +186,7 @@ impl ClusterMaintenanceRedis {
             .authority_pool
             .get()
             .context("cluster session authority pool is unavailable")?;
-        northstar_room_postgres::cluster_muc::release_cluster_session_route(
+        northstar_session_postgres::cluster_session_route::release_cluster_session_route(
             authority_pool,
             &self.namespace,
             &full_jid,

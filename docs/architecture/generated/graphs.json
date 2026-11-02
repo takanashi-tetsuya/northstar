@@ -4339,6 +4339,10 @@
       ],
       [
         "northstar-session-postgres",
+        "northstar-session-core"
+      ],
+      [
+        "northstar-session-postgres",
         "northstar-stream"
       ],
       [

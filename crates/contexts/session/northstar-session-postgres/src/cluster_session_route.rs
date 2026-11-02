@@ -1,6 +1,9 @@
 //! Cluster session route authority and its startup validation.
 
-use super::*;
+use anyhow::{Context, Result};
+use sqlx::PgPool;
+use std::time::Duration;
+use uuid::Uuid;
 
 /// Verify the durable replay-capacity ledger and its trigger authority.  A
 /// mismatch is a deterministic safety violation (for example a disabled
@@ -213,4 +216,16 @@ impl From<northstar_session_core::SessionRouteClaimProof> for ClusterSessionRout
             },
         }
     }
+}
+
+fn validate_node_id(node_id: &str) -> Result<()> {
+    anyhow::ensure!(
+        !node_id.is_empty()
+            && node_id.len() <= 128
+            && node_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')),
+        "cluster MUC node ID is invalid"
+    );
+    Ok(())
 }

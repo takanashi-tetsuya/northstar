@@ -1550,6 +1550,7 @@ digraph compile_time {
   "northstar-session-postgres" -> "northstar-roster-postgres";
   "northstar-session-postgres" -> "northstar-security";
   "northstar-session-postgres" -> "northstar-session-application";
+  "northstar-session-postgres" -> "northstar-session-core";
   "northstar-session-postgres" -> "northstar-stream";
   "northstar-session-postgres" -> "northstar-xep-0016";
   "northstar-session-postgres" -> "northstar-xmpp-types";

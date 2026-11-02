@@ -6,12 +6,12 @@ use northstar_session_application::session_termination_authority::{
 };
 use sqlx::PgPool;
 
-pub(crate) struct PostgresSessionTerminationAuthorityRepository {
+pub struct PostgresSessionTerminationAuthorityRepository {
     pool: PgPool,
 }
 
 impl PostgresSessionTerminationAuthorityRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -23,7 +23,7 @@ impl SessionTerminationAuthorityRepository for PostgresSessionTerminationAuthori
         full_jid: &str,
     ) -> Result<Option<SessionRouteAuthority>> {
         Ok(
-            northstar_room_postgres::cluster_muc::cluster_session_route_authority(
+            crate::cluster_session_route::cluster_session_route_authority(
                 &self.pool, namespace, full_jid,
             )
             .await?

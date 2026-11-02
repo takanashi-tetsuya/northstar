@@ -21,7 +21,6 @@ mod occupancy;
 mod outbox;
 mod query;
 mod room;
-mod session_route;
 #[cfg(test)]
 mod tests;
 
@@ -32,7 +31,6 @@ pub use self::occupancy::*;
 pub use self::outbox::*;
 pub use self::query::*;
 pub use self::room::*;
-pub use self::session_route::*;
 
 const MAX_NICK_BYTES: usize = 128;
 const MAX_PAYLOAD_BYTES: usize = 1_048_576;
@@ -1014,10 +1012,6 @@ pub const MODULE_SOURCE: &[(&str, &str)] = &[
     ("outbox", include_str!("cluster_muc/outbox.rs")),
     ("query", include_str!("cluster_muc/query.rs")),
     ("room", include_str!("cluster_muc/room.rs")),
-    (
-        "session_route",
-        include_str!("cluster_muc/session_route.rs"),
-    ),
 ];
 
 #[cfg(any(test, feature = "test-support"))]

@@ -4,24 +4,22 @@ use anyhow::Result;
 use northstar_session_application::cluster_session_route_maintenance::ClusterSessionRouteMaintenanceRepository;
 use sqlx::PgPool;
 
-pub(crate) struct PostgresClusterSessionRouteMaintenanceRepository {
+pub struct PostgresClusterSessionRouteMaintenanceRepository {
     pool: PgPool,
 }
 
 impl PostgresClusterSessionRouteMaintenanceRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
 
 impl ClusterSessionRouteMaintenanceRepository for PostgresClusterSessionRouteMaintenanceRepository {
     async fn cleanup_routes(&self, limit: i32) -> Result<u64> {
-        northstar_room_postgres::cluster_muc::cleanup_cluster_session_routes(&self.pool, limit)
-            .await
+        crate::cluster_session_route::cleanup_cluster_session_routes(&self.pool, limit).await
     }
 
     async fn validate_authority(&self) -> Result<()> {
-        northstar_room_postgres::cluster_muc::validate_cluster_session_route_authority(&self.pool)
-            .await
+        crate::cluster_session_route::validate_cluster_session_route_authority(&self.pool).await
     }
 }

@@ -4,26 +4,22 @@ use anyhow::Result;
 use northstar_session_application::cluster_replay_maintenance::ClusterReplayMaintenanceRepository;
 use sqlx::PgPool;
 
-pub(crate) struct PostgresClusterReplayMaintenanceRepository {
+pub struct PostgresClusterReplayMaintenanceRepository {
     pool: PgPool,
 }
 
 impl PostgresClusterReplayMaintenanceRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
 
 impl ClusterReplayMaintenanceRepository for PostgresClusterReplayMaintenanceRepository {
     async fn cleanup_replays(&self, limit: i32) -> Result<u64> {
-        northstar_session_postgres::cluster_keys::cleanup_cluster_envelope_replays(
-            &self.pool, limit,
-        )
-        .await
+        crate::cluster_keys::cleanup_cluster_envelope_replays(&self.pool, limit).await
     }
 
     async fn validate_capacity_authority(&self) -> Result<()> {
-        northstar_room_postgres::cluster_muc::validate_cluster_replay_capacity_authority(&self.pool)
-            .await
+        crate::cluster_session_route::validate_cluster_replay_capacity_authority(&self.pool).await
     }
 }

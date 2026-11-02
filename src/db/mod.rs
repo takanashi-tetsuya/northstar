@@ -20,8 +20,6 @@ pub mod authority_listener;
 pub(crate) mod background_housekeeping_repository;
 #[cfg(test)]
 mod cluster_muc_tests;
-pub(crate) mod cluster_replay_maintenance_repository;
-pub(crate) mod cluster_session_route_maintenance_repository;
 pub(crate) mod direct_commit_cluster;
 #[cfg(test)]
 mod direct_spool_wake_repository_tests;
@@ -67,7 +65,6 @@ pub(crate) mod readiness_repository;
 mod retraction_service_tests;
 pub(crate) mod room_effects;
 pub(crate) mod session_authority_sweep_repository;
-pub(crate) mod session_termination_authority_repository;
 #[cfg(test)]
 pub use archive::*;
 // The privacy stanza kind that paths owned by the mainline (src/s2s, src/cluster) still reach

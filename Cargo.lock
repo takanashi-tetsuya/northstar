@@ -2720,6 +2720,7 @@ dependencies = [
  "northstar-roster-postgres",
  "northstar-security",
  "northstar-session-application",
+ "northstar-session-core",
  "northstar-stream",
  "northstar-xep-0016",
  "northstar-xmpp-types",

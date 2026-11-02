@@ -128,12 +128,13 @@ impl ClusterAccountTeardownNotifier {
             .authority_pool
             .get()
             .context("cluster session authority pool is unavailable")?;
-        let Some(route) = northstar_room_postgres::cluster_muc::cluster_session_route_authority(
-            authority_pool,
-            &self.routes.namespace,
-            &full_jid,
-        )
-        .await?
+        let Some(route) =
+            northstar_session_postgres::cluster_session_route::cluster_session_route_authority(
+                authority_pool,
+                &self.routes.namespace,
+                &full_jid,
+            )
+            .await?
         else {
             return Ok(false);
         };
@@ -500,7 +501,7 @@ impl ClusterSessionRouteRelease {
             .authority_pool
             .get()
             .context("cluster session authority pool is unavailable")?;
-        let _ = northstar_room_postgres::cluster_muc::release_cluster_session_route(
+        let _ = northstar_session_postgres::cluster_session_route::release_cluster_session_route(
             authority_pool,
             &self.namespace,
             &full_jid,

@@ -23,7 +23,7 @@ impl ClusterManager {
             .get()
             .context("cluster session authority pool is unavailable")?;
         let owner_instance_epoch = self.instance_epoch.load(Ordering::Acquire);
-        if !northstar_room_postgres::cluster_muc::claim_cluster_session_route(
+        if !northstar_session_postgres::cluster_session_route::claim_cluster_session_route(
             authority_pool,
             &self.namespace,
             &full_jid,
@@ -77,7 +77,7 @@ impl ClusterManager {
         match reserved {
             Ok(1) => Ok(true),
             Ok(_) => {
-                let _ = northstar_room_postgres::cluster_muc::release_cluster_session_route(
+                let _ = northstar_session_postgres::cluster_session_route::release_cluster_session_route(
                     authority_pool,
                     &self.namespace,
                     &full_jid,
@@ -90,7 +90,7 @@ impl ClusterManager {
                 Ok(false)
             }
             Err(error) => {
-                let _ = northstar_room_postgres::cluster_muc::release_cluster_session_route(
+                let _ = northstar_session_postgres::cluster_session_route::release_cluster_session_route(
                     authority_pool,
                     &self.namespace,
                     &full_jid,

@@ -1,15 +1,13 @@
 //! Local effects permitted after a cluster listener authenticates a command.
 
-use crate::{
-    cluster::{
-        ClusterListenerMucProjection, ClusterListenerPresenceRoutes, ClusterMucOutboxSignal,
-        ClusterSessionTerminationIdentity, SessionTerminationEffect,
-    },
-    db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository,
+use crate::cluster::{
+    ClusterListenerMucProjection, ClusterListenerPresenceRoutes, ClusterMucOutboxSignal,
+    ClusterSessionTerminationIdentity, SessionTerminationEffect,
 };
 use northstar_session_application::session_termination_authority::{
     SessionTerminationAuthority, SessionTerminationAuthorityService,
 };
+use northstar_session_postgres::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository;
 use northstar_stream::local_routes::session::{AccountRevocationRoutes, OnlineSession};
 use northstar_stream::local_routes::session_table::{
     fence_local_session_in, session_entries_for_in, LocalSessionFence,

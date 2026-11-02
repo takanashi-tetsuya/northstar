@@ -33,5 +33,6 @@ uuid = { version = "1.12", features = ["v4", "serde"] }
 
 [dev-dependencies]
 northstar-roster-postgres = { path = "../../roster/northstar-roster-postgres" }
+northstar-session-application = { path = "../northstar-session-application", features = ["test-support"] }
 northstar-stream = { path = "../../../edges/northstar-stream", features = ["test-support"] }
 tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "sync", "time"] }

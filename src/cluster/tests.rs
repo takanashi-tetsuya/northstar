@@ -1425,7 +1425,7 @@ fn carbon_privacy_uses_the_forwarded_conversation_peer() {
         delivery_privacy_peer(&received, true),
         Some((
             "blocked@example.net/Phone".to_owned(),
-            crate::db::PrivacyStanzaKind::Message,
+            northstar_xep_0016::PrivacyStanzaKind::Message,
         ))
     );
 
@@ -1437,7 +1437,7 @@ fn carbon_privacy_uses_the_forwarded_conversation_peer() {
         delivery_privacy_peer(&sent, true),
         Some((
             "bob@example.net".to_owned(),
-            crate::db::PrivacyStanzaKind::Message,
+            northstar_xep_0016::PrivacyStanzaKind::Message,
         ))
     );
 

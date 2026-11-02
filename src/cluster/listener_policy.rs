@@ -1,7 +1,6 @@
 //! Typed message policy and command outcomes the cluster listener receives from the composition root.
 
 use crate::cluster::ClusterAdapters;
-use crate::db;
 use northstar_telemetry::metrics::Metrics;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;
@@ -81,7 +80,7 @@ impl<A: ClusterAdapters> ClusterListenerMessagePolicy<A> {
         connection_id: Uuid,
         active_privacy_list: Option<&str>,
         peer: &str,
-        kind: db::PrivacyStanzaKind,
+        kind: northstar_xep_0016::PrivacyStanzaKind,
     ) -> anyhow::Result<bool> {
         self.message
             .privacy_allows_session(user_id, connection_id, active_privacy_list, peer, kind)

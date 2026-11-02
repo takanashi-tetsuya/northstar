@@ -401,7 +401,7 @@ pub(super) async fn listen_once<A: ClusterAdapters>(
                                 session.connection_id,
                                 active_privacy_list(&session.privacy_active).as_deref(),
                                 &recipient,
-                                crate::db::PrivacyStanzaKind::PresenceOut,
+                                northstar_xep_0016::PrivacyStanzaKind::PresenceOut,
                             )
                             .await
                             .unwrap_or(false)
@@ -426,14 +426,11 @@ pub(super) async fn listen_once<A: ClusterAdapters>(
                                     })
                                     .map(str::to_owned)
                             });
-                        crate::xmpp::xml_builder::XmlElement::namespaced(
-                            "presence",
-                            "jabber:client",
-                        )
-                        .attr("from", &owner_full)
-                        .attr("to", &recipient)
-                        .optional_attr("id", original_id.as_deref())
-                        .finish()
+                        northstar_xml_builder::XmlElement::namespaced("presence", "jabber:client")
+                            .attr("from", &owner_full)
+                            .attr("to", &recipient)
+                            .optional_attr("id", original_id.as_deref())
+                            .finish()
                     } else {
                         session
                             .last_presence
@@ -456,7 +453,7 @@ pub(super) async fn listen_once<A: ClusterAdapters>(
                                 set_to(&presence, &recipient)
                             })
                             .unwrap_or_else(|| {
-                                crate::xmpp::xml_builder::XmlElement::namespaced(
+                                northstar_xml_builder::XmlElement::namespaced(
                                     "presence",
                                     "jabber:client",
                                 )
@@ -485,7 +482,7 @@ pub(super) async fn listen_once<A: ClusterAdapters>(
                                 recipient_session.connection_id,
                                 active_privacy_list(&recipient_session.privacy_active).as_deref(),
                                 &owner,
-                                crate::db::PrivacyStanzaKind::PresenceIn,
+                                northstar_xep_0016::PrivacyStanzaKind::PresenceIn,
                             )
                             .await
                             .unwrap_or(false)
@@ -1027,7 +1024,7 @@ pub(super) async fn listen_once<A: ClusterAdapters>(
                 let roster_annotated_stanza = match json.get("roster_annotated_stanza") {
                     None | Some(serde_json::Value::Null) => None,
                     Some(serde_json::Value::String(value))
-                        if value.len() <= crate::xmpp::MAX_XMPP_FRAME_BYTES
+                        if value.len() <= northstar_stream::MAX_XMPP_FRAME_BYTES
                             && roxmltree::Document::parse(value).is_ok() =>
                     {
                         Some(value.as_str())

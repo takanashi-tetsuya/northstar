@@ -691,13 +691,13 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
                 }
             }
             if configuration_change {
-                let extension = crate::xmpp::xml_builder::XmlElement::namespaced(
+                let extension = northstar_xml_builder::XmlElement::namespaced(
                     "x",
                     "http://jabber.org/protocol/muc#user",
                 )
-                .child(crate::xmpp::xml_builder::XmlElement::new("status").attr("code", "104"));
+                .child(northstar_xml_builder::XmlElement::new("status").attr("code", "104"));
                 stanzas.push(
-                    crate::xmpp::xml_builder::XmlElement::namespaced("message", "jabber:client")
+                    northstar_xml_builder::XmlElement::namespaced("message", "jabber:client")
                         .attr("from", &room_jid)
                         .attr("to", &recipient.full_jid)
                         .attr("type", "groupchat")

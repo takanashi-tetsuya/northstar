@@ -34,7 +34,7 @@ use tokio::{
 };
 use tokio_rustls::TlsAcceptor;
 
-pub(crate) const MAX_XMPP_FRAME_BYTES: usize = 1024 * 1024;
+pub(crate) use northstar_stream::MAX_XMPP_FRAME_BYTES;
 const XMPP_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const C2S_BACKEND_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const WEBSOCKET_TERMINAL_WRITE_TIMEOUT: Duration = Duration::from_secs(2);

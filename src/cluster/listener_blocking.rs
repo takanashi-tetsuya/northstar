@@ -1,13 +1,12 @@
 //! Blocking-presence fanout after an authenticated cluster command.
 
-use crate::{
-    cluster::ClusterListenerPresenceRoutes, s2s::FederationRouter, xmpp::xml_builder::XmlElement,
-};
+use crate::{cluster::ClusterListenerPresenceRoutes, s2s::FederationRouter};
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_config::ExternalRouteDomainPolicy;
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::local_routes::session_table::session_entries_for_in;
+use northstar_xml_builder::XmlElement;
 use std::{
     collections::HashSet,
     sync::{atomic::Ordering, Arc},

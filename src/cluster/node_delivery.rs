@@ -77,12 +77,12 @@ pub(super) async fn try_send_cluster_mix_transport(
 pub(super) fn delivery_privacy_peer(
     document: &roxmltree::Document<'_>,
     carbons_only: bool,
-) -> Option<(String, crate::db::PrivacyStanzaKind)> {
+) -> Option<(String, northstar_xep_0016::PrivacyStanzaKind)> {
     let root = document.root_element();
     let kind = match root.tag_name().name() {
-        "message" => crate::db::PrivacyStanzaKind::Message,
-        "iq" => crate::db::PrivacyStanzaKind::Iq,
-        "presence" => crate::db::PrivacyStanzaKind::PresenceIn,
+        "message" => northstar_xep_0016::PrivacyStanzaKind::Message,
+        "iq" => northstar_xep_0016::PrivacyStanzaKind::Iq,
+        "presence" => northstar_xep_0016::PrivacyStanzaKind::PresenceIn,
         _ => return None,
     };
     let peer = if carbons_only {
@@ -465,7 +465,7 @@ impl ClusterNodeDelivery {
         }
         if let Some(annotated) = options.roster_annotated_stanza {
             anyhow::ensure!(
-                annotated.len() <= crate::xmpp::MAX_XMPP_FRAME_BYTES,
+                annotated.len() <= northstar_stream::MAX_XMPP_FRAME_BYTES,
                 "annotated roster payload exceeds the stanza limit"
             );
             anyhow::ensure!(

@@ -289,10 +289,10 @@ run_exact_ignored \
   profile::tests::deleted_account_incarnation_and_corrupt_vcard_fail_closed northstar-workflows
 
 run_exact_ignored \
-  db::pubsub_repository::service_tests::same_owner_advisory_contention_does_not_exhaust_the_shared_pool
+  pubsub_repository::service_tests::same_owner_advisory_contention_does_not_exhaust_the_shared_pool northstar-workflows
 run_exact_ignored \
-  db::pubsub_repository::service_tests::paused_pep_delivery_rechecks_block_privacy_disable_and_sensitive_acl
+  pubsub_repository::service_tests::paused_pep_delivery_rechecks_block_privacy_disable_and_sensitive_acl northstar-workflows
 run_exact_ignored \
-  db::pubsub_repository::service_tests::pep_publish_audience_is_linearizable_with_every_revocation_input
+  pubsub_repository::service_tests::pep_publish_audience_is_linearizable_with_every_revocation_input northstar-workflows
 run_exact_ignored \
-  db::pubsub_repository::service_tests::pep_subscription_admission_is_linearizable_and_principal_scoped
+  pubsub_repository::service_tests::pep_subscription_admission_is_linearizable_and_principal_scoped northstar-workflows

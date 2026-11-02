@@ -9,7 +9,7 @@ pub(super) struct PubSubModule {
     /// Narrow persistence/orchestration capability for XEP-0060 and PEP.
     /// Protocol handlers receive this service rather than database authority.
     pub(super) pubsub_service: northstar_pubsub_application::PubSubService<
-        db::pubsub_repository::PostgresPubSubRepository,
+        northstar_workflows::pubsub_repository::PostgresPubSubRepository,
     >,
     /// Account-scoped vCard/vCard4/avatar mutation and public-profile read
     /// boundary. Profile transactions and authorization never cross into the
@@ -35,7 +35,10 @@ impl PubSubModule {
     ) -> Self {
         let pubsub_service =
             northstar_pubsub_application::PubSubService::new_with_durable_outbox_database_admission(
-                db::pubsub_repository::PostgresPubSubRepository::new(pool.clone(), &config.domain),
+                northstar_workflows::pubsub_repository::PostgresPubSubRepository::new(
+                    pool.clone(),
+                    &config.domain,
+                ),
                 pool.options().get_max_connections(),
                 durable_outbox_database_admission.clone(),
             );

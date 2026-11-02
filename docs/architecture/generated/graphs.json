@@ -4619,6 +4619,10 @@
       ],
       [
         "northstar-workflows",
+        "northstar-runtime"
+      ],
+      [
+        "northstar-workflows",
         "northstar-security"
       ],
       [
@@ -4627,11 +4631,19 @@
       ],
       [
         "northstar-workflows",
+        "northstar-telemetry"
+      ],
+      [
+        "northstar-workflows",
         "northstar-upload-postgres"
       ],
       [
         "northstar-workflows",
         "northstar-xep-0016"
+      ],
+      [
+        "northstar-workflows",
+        "northstar-xep-0060"
       ],
       [
         "northstar-workflows",

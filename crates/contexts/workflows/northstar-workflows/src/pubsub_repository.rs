@@ -1,7 +1,6 @@
 //! Complete PostgreSQL PubSub/PEP operations and locked audience snapshots.
-use crate::db;
 use anyhow::{Context, Result};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use northstar_pubsub_application::PubSubService;
 use northstar_pubsub_application::{
     service::PubSubEventRenderer, PepAffiliationRepository, PepCommitLegacyBookmarksCommand,
@@ -56,13 +55,13 @@ impl PepOutboxFactory for PepBookmarkReplacementOutbox<'_> {
 }
 
 #[derive(Clone)]
-pub(crate) struct PostgresPubSubRepository {
+pub struct PostgresPubSubRepository {
     pool: PgPool,
     domain: String,
     renderer: PubSubEventRenderer,
 }
 impl PostgresPubSubRepository {
-    pub(crate) fn new(pool: PgPool, domain: &str) -> Self {
+    pub fn new(pool: PgPool, domain: &str) -> Self {
         Self {
             pool,
             domain: domain.to_owned(),
@@ -167,7 +166,7 @@ impl PostgresPubSubRepository {
         event_kind: PepOutboxEventKind,
         snapshot: &PepDirectStateSnapshot,
         factory: &dyn PepDirectOutboxFactory,
-    ) -> Result<Vec<db::PubSubOutboxInsert>> {
+    ) -> Result<Vec<northstar_pubsub_postgres::PubSubOutboxInsert>> {
         let authorized = snapshot
             .transitions
             .iter()
@@ -232,20 +231,22 @@ impl PostgresPubSubRepository {
                 // lock snapshot. There is no valid local delivery subject.
                 continue;
             }
-            outbox.push(db::PubSubOutboxInsert::new_pep_stanza(
-                event_id,
-                owner_id,
-                &snapshot.owner_bare_jid,
-                sender_connection_id,
-                recipient,
-                recipient_account_id,
-                event_kind,
-                PepOutboxAuthorizationMode::CausalAudience,
-                payload,
-                &snapshot.node,
-                &self.domain,
-                created_at,
-            )?);
+            outbox.push(
+                northstar_pubsub_postgres::PubSubOutboxInsert::new_pep_stanza(
+                    event_id,
+                    owner_id,
+                    &snapshot.owner_bare_jid,
+                    sender_connection_id,
+                    recipient,
+                    recipient_account_id,
+                    event_kind,
+                    PepOutboxAuthorizationMode::CausalAudience,
+                    payload,
+                    &snapshot.node,
+                    &self.domain,
+                    created_at,
+                )?,
+            );
         }
         Ok(outbox)
     }
@@ -313,7 +314,7 @@ impl PostgresPubSubRepository {
         authorization_mode: PepOutboxAuthorizationMode,
         factory: &dyn PepOutboxFactory,
         published_items: Option<&[(&str, &str)]>,
-    ) -> Result<Vec<db::PubSubOutboxInsert>> {
+    ) -> Result<Vec<northstar_pubsub_postgres::PubSubOutboxInsert>> {
         let owner_bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
             "{owner_username}@{}",
             self.domain
@@ -527,7 +528,7 @@ impl PostgresPubSubRepository {
                 } else {
                     local_accounts.get(&recipient_bare).copied()
                 };
-                db::PubSubOutboxInsert::new_pep_stanza(
+                northstar_pubsub_postgres::PubSubOutboxInsert::new_pep_stanza(
                     event_id,
                     owner_id,
                     &owner_bare_jid,
@@ -658,7 +659,9 @@ pub(crate) fn pep_outbox_authorization_lock_plan(
     }
 }
 
-pub(crate) fn db_outbox(entries: &[PubSubOutboxInsert]) -> Vec<db::PubSubOutboxInsert> {
+pub(crate) fn db_outbox(
+    entries: &[PubSubOutboxInsert],
+) -> Vec<northstar_pubsub_postgres::PubSubOutboxInsert> {
     entries.to_vec()
 }
 fn map_database_busy(error: anyhow::Error) -> anyhow::Error {
@@ -681,11 +684,8 @@ fn map_database_busy(error: anyhow::Error) -> anyhow::Error {
         error
     }
 }
-#[cfg(test)]
-pub(crate) fn test_pubsub_service(
-    pool: PgPool,
-    domain: &str,
-) -> PubSubService<PostgresPubSubRepository> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_pubsub_service(pool: PgPool, domain: &str) -> PubSubService<PostgresPubSubRepository> {
     let capacity = pool.options().get_max_connections();
     PubSubService::new_with_durable_outbox_database_admission(
         PostgresPubSubRepository::new(pool, domain),

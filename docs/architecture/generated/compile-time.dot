@@ -1619,10 +1619,13 @@ digraph compile_time {
   "northstar-workflows" -> "northstar-roster-application";
   "northstar-workflows" -> "northstar-roster-core";
   "northstar-workflows" -> "northstar-roster-postgres";
+  "northstar-workflows" -> "northstar-runtime";
   "northstar-workflows" -> "northstar-security";
   "northstar-workflows" -> "northstar-session-core";
+  "northstar-workflows" -> "northstar-telemetry";
   "northstar-workflows" -> "northstar-upload-postgres";
   "northstar-workflows" -> "northstar-xep-0016";
+  "northstar-workflows" -> "northstar-xep-0060";
   "northstar-workflows" -> "northstar-xml-builder";
   "northstar-workflows" -> "northstar-xmpp-avatar";
   "northstar-workflows" -> "northstar-xmpp-types";

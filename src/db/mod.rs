@@ -103,7 +103,6 @@ pub(crate) use northstar_xep_0016::{PrivacyAction, PrivacyItem, PrivacyList, Pri
 pub use sm::*;
 #[cfg(test)]
 mod pubsub_integration_tests;
-pub mod pubsub_repository;
 pub use northstar_pubsub_postgres::*;
 
 #[cfg(test)]

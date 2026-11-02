@@ -17,15 +17,18 @@ impl PepNodeQueryRepository for PostgresPubSubRepository {
 
     async fn pep_node(&self, owner_id: Uuid, node: &str) -> Result<Option<PepNodeConfig>> {
         let outcome: Result<_> = async {
-            Ok(db::pep_node(&self.pool, owner_id, node)
-                .await?
-                .map(Into::into))
+            Ok(
+                northstar_pubsub_postgres::pep_node(&self.pool, owner_id, node)
+                    .await?
+                    .map(Into::into),
+            )
         }
         .await;
         outcome.map_err(map_database_busy)
     }
     async fn pep_nodes(&self, owner_id: Uuid) -> Result<Vec<String>> {
-        let outcome: Result<_> = async { db::pep_nodes(&self.pool, owner_id).await }.await;
+        let outcome: Result<_> =
+            async { northstar_pubsub_postgres::pep_nodes(&self.pool, owner_id).await }.await;
         outcome.map_err(map_database_busy)
     }
     async fn find_enabled_user(&self, username: &str) -> Result<Option<PubSubAccount>> {
@@ -65,8 +68,7 @@ impl PepNodeQueryRepository for PostgresPubSubRepository {
         groups: &[String],
     ) -> Result<bool> {
         let outcome: Result<_> = async {
-            northstar_workflows::pep_roster::roster_group_allowed(&self.pool, owner_id, jid, groups)
-                .await
+            crate::pep_roster::roster_group_allowed(&self.pool, owner_id, jid, groups).await
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -81,12 +83,12 @@ impl PepNodeMutationRepository for PostgresPubSubRepository {
         max_nodes: i64,
     ) -> Result<PepCreateOutcome> {
         let outcome: Result<_> = async {
-            let config = db::PepNodeConfig::from(config);
-            Ok(
-                db::create_pep_node(&self.pool, owner_id, node, &config, max_nodes)
-                    .await?
-                    .into(),
+            let config = northstar_pubsub_postgres::PepNodeConfig::from(config);
+            Ok(northstar_pubsub_postgres::create_pep_node(
+                &self.pool, owner_id, node, &config, max_nodes,
             )
+            .await?
+            .into())
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -131,7 +133,11 @@ impl PepNodeMutationRepository for PostgresPubSubRepository {
                 )
                 .await?;
             Self::store_pep_node_config(&mut transaction, owner.id, node, config).await?;
-            db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
+            northstar_pubsub_postgres::enqueue_pubsub_outbox_in_transaction(
+                &mut transaction,
+                &outbox,
+            )
+            .await?;
             transaction.commit().await?;
             Ok(PepOwnerMutationOutcome::Applied(0))
         }
@@ -177,7 +183,11 @@ impl PepNodeMutationRepository for PostgresPubSubRepository {
                 .bind(node)
                 .execute(&mut *transaction)
                 .await?;
-            db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
+            northstar_pubsub_postgres::enqueue_pubsub_outbox_in_transaction(
+                &mut transaction,
+                &outbox,
+            )
+            .await?;
             transaction.commit().await?;
             Ok(PepOwnerMutationOutcome::Applied(0))
         }
@@ -223,7 +233,11 @@ impl PepNodeMutationRepository for PostgresPubSubRepository {
                 .bind(node)
                 .execute(&mut *transaction)
                 .await?;
-            db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
+            northstar_pubsub_postgres::enqueue_pubsub_outbox_in_transaction(
+                &mut transaction,
+                &outbox,
+            )
+            .await?;
             transaction.commit().await?;
             Ok(PepOwnerMutationOutcome::Applied(0))
         }
@@ -239,8 +253,10 @@ impl PepItemQueryRepository for PostgresPubSubRepository {
         item_id: Option<&str>,
         limit: i64,
     ) -> Result<Vec<(String, String)>> {
-        let outcome: Result<_> =
-            async { db::pep_items(&self.pool, owner_id, node, item_id, limit).await }.await;
+        let outcome: Result<_> = async {
+            northstar_pubsub_postgres::pep_items(&self.pool, owner_id, node, item_id, limit).await
+        }
+        .await;
         outcome.map_err(map_database_busy)
     }
     async fn pep_items_by_ids(
@@ -250,8 +266,11 @@ impl PepItemQueryRepository for PostgresPubSubRepository {
         item_ids: &[&str],
         limit: i64,
     ) -> Result<Vec<(String, String)>> {
-        let outcome: Result<_> =
-            async { db::pep_items_by_ids(&self.pool, owner_id, node, item_ids, limit).await }.await;
+        let outcome: Result<_> = async {
+            northstar_pubsub_postgres::pep_items_by_ids(&self.pool, owner_id, node, item_ids, limit)
+                .await
+        }
+        .await;
         outcome.map_err(map_database_busy)
     }
     async fn pep_items_with_timestamp(
@@ -261,13 +280,13 @@ impl PepItemQueryRepository for PostgresPubSubRepository {
         limit: i64,
     ) -> Result<Vec<PepItem>> {
         let outcome: Result<_> = async {
-            Ok(
-                db::pep_items_with_timestamp(&self.pool, owner_id, node, limit)
-                    .await?
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
+            Ok(northstar_pubsub_postgres::pep_items_with_timestamp(
+                &self.pool, owner_id, node, limit,
             )
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect())
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -335,7 +354,11 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
             .execute(&mut *transaction)
             .await?
             .rows_affected();
-            db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
+            northstar_pubsub_postgres::enqueue_pubsub_outbox_in_transaction(
+                &mut transaction,
+                &outbox,
+            )
+            .await?;
             transaction.commit().await?;
             Ok(PepOwnerMutationOutcome::Applied(removed))
         }
@@ -386,7 +409,7 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
                 .iter()
                 .map(|(item_id, payload)| (item_id.as_str(), payload.as_str()))
                 .collect::<Vec<_>>();
-            let config = db::default_pep_node_config(BOOKMARKS2);
+            let config = northstar_pubsub_postgres::default_pep_node_config(BOOKMARKS2);
             let pep_outcome = northstar_pubsub_postgres::replace_pep_items_in_transaction(
                 &mut transaction,
                 owner.id,
@@ -396,14 +419,14 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
                 quotas.into(),
             )
             .await?;
-            if pep_outcome != db::PepPublishOutcome::Published {
+            if pep_outcome != northstar_pubsub_postgres::PepPublishOutcome::Published {
                 transaction.rollback().await?;
                 return Ok(PepBookmarkMutationOutcome::ResourceConstraint);
             }
             let private_outcome = northstar_pubsub_postgres::set_private_xml_batch_in_transaction(
                 &mut transaction,
                 owner.id,
-                &[db::PrivateXmlEntry {
+                &[northstar_pubsub_postgres::PrivateXmlEntry {
                     element_name: "storage",
                     element_ns: LEGACY_BOOKMARKS,
                     xml_data: private_xml,
@@ -411,7 +434,7 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
                 max_private_bytes,
             )
             .await?;
-            if private_outcome != db::PrivateXmlWriteOutcome::Stored {
+            if private_outcome != northstar_pubsub_postgres::PrivateXmlWriteOutcome::Stored {
                 transaction.rollback().await?;
                 return Ok(PepBookmarkMutationOutcome::ResourceConstraint);
             }
@@ -439,7 +462,11 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
                     None,
                 )
                 .await?;
-            db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
+            northstar_pubsub_postgres::enqueue_pubsub_outbox_in_transaction(
+                &mut transaction,
+                &outbox,
+            )
+            .await?;
             transaction.commit().await?;
             Ok(PepBookmarkMutationOutcome::Stored)
         }
@@ -517,7 +544,7 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
             } else {
                 Vec::new()
             };
-            let requested = db::PepNodeConfig::from(write.requested);
+            let requested = northstar_pubsub_postgres::PepNodeConfig::from(write.requested);
             let outcome = northstar_pubsub_postgres::publish_pep_items_in_transaction(
                 &mut transaction,
                 write.user_id,
@@ -528,7 +555,7 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
                 write.quotas.into(),
             )
             .await?;
-            if outcome != db::PepPublishOutcome::Published {
+            if outcome != northstar_pubsub_postgres::PepPublishOutcome::Published {
                 transaction.rollback().await?;
                 return Ok(PepPublishItemsResult {
                     outcome: PepPublishItemsOutcome::from(PepPublishOutcome::from(outcome)),
@@ -549,7 +576,11 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
                         (write.node == BOOKMARKS2).then_some(changed_items.as_slice()),
                     )
                     .await?;
-                db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
+                northstar_pubsub_postgres::enqueue_pubsub_outbox_in_transaction(
+                    &mut transaction,
+                    &outbox,
+                )
+                .await?;
             }
             transaction.commit().await?;
             Ok(PepPublishItemsResult {
@@ -564,11 +595,13 @@ impl PepItemMutationRepository for PostgresPubSubRepository {
 impl PepSubscriptionQueryRepository for PostgresPubSubRepository {
     async fn pep_subscribers(&self, owner_id: Uuid, node: &str) -> Result<Vec<PepSubscription>> {
         let outcome: Result<_> = async {
-            Ok(db::pep_subscribers(&self.pool, owner_id, node)
-                .await?
-                .into_iter()
-                .map(Into::into)
-                .collect())
+            Ok(
+                northstar_pubsub_postgres::pep_subscribers(&self.pool, owner_id, node)
+                    .await?
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            )
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -579,11 +612,14 @@ impl PepSubscriptionQueryRepository for PostgresPubSubRepository {
     ) -> Result<Vec<PepPresenceSubscription>> {
         let outcome: Result<_> = async {
             Ok(
-                db::pep_subscriptions_for_available_resource(&self.pool, subscriber_jid)
-                    .await?
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
+                northstar_pubsub_postgres::pep_subscriptions_for_available_resource(
+                    &self.pool,
+                    subscriber_jid,
+                )
+                .await?
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             )
         }
         .await;
@@ -594,7 +630,7 @@ impl PepSubscriptionQueryRepository for PostgresPubSubRepository {
         subscriber_bare: &str,
     ) -> Result<Vec<String>> {
         let outcome: Result<_> = async {
-            northstar_workflows::pep_roster::pep_owner_usernames_for_presence_subscriber(
+            crate::pep_roster::pep_owner_usernames_for_presence_subscriber(
                 &self.pool,
                 subscriber_bare,
             )
@@ -774,7 +810,7 @@ impl PepSubscriptionMutationRepository for PostgresPubSubRepository {
         .await?;
         if write.max_subscriptions <= 0
             || subscriber_count >= write.max_subscriptions
-            || node_count >= db::PEP_MAX_SUBSCRIBERS_PER_NODE
+            || node_count >= northstar_pubsub_postgres::PEP_MAX_SUBSCRIBERS_PER_NODE
         {
             transaction.rollback().await?;
             return Ok(PepSubscribeResult::from(PepSubscribeOutcome::LimitExceeded));
@@ -826,14 +862,14 @@ impl PepSubscriptionMutationRepository for PostgresPubSubRepository {
         let outbox = db_outbox(&factory.build(&snapshot)?);
         anyhow::ensure!(
             outbox.iter().all(|entry| {
-                entry.source == db::PubSubOutboxSource::Pep
-                    && entry.delivery_kind == db::PubSubOutboxDeliveryKind::PepStanza
+                entry.source == northstar_pubsub_postgres::PubSubOutboxSource::Pep
+                    && entry.delivery_kind == northstar_pubsub_postgres::PubSubOutboxDeliveryKind::PepStanza
                     && entry.source_node == write.node
                     && entry.recipient_jid == principal.subscriber_jid
             }),
             "PEP subscription renderer escaped the transaction-owned recipient"
         );
-        db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
+        northstar_pubsub_postgres::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
         transaction.commit().await?;
         Ok(PepSubscribeResult::from(PepSubscribeOutcome::Subscribed(
             PepSubscription {
@@ -1010,7 +1046,11 @@ impl PepSubscriptionMutationRepository for PostgresPubSubRepository {
                 .execute(&mut *transaction)
                 .await?;
             }
-            db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
+            northstar_pubsub_postgres::enqueue_pubsub_outbox_in_transaction(
+                &mut transaction,
+                &outbox,
+            )
+            .await?;
             transaction.commit().await?;
             Ok(PepOwnerMutationOutcome::Applied(u64::try_from(
                 canonical.len(),
@@ -1095,7 +1135,11 @@ impl PepAffiliationRepository for PostgresPubSubRepository {
                 )
                 .await?;
             Self::store_pep_node_config(&mut transaction, owner.id, node, &current).await?;
-            db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
+            northstar_pubsub_postgres::enqueue_pubsub_outbox_in_transaction(
+                &mut transaction,
+                &outbox,
+            )
+            .await?;
             transaction.commit().await?;
             Ok(PepOwnerMutationOutcome::Applied(0))
         }

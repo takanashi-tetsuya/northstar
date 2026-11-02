@@ -4,9 +4,7 @@ use super::{
     pep_last_items::PepLastItemsContext, pubsub_notification_delivery::PubSubNotificationDelivery,
     AppState,
 };
-use crate::{
-    db::pubsub_repository::PostgresPubSubRepository, xmpp::capabilities::PubSubOutboxTelemetry,
-};
+use crate::xmpp::capabilities::PubSubOutboxTelemetry;
 use anyhow::Result;
 use northstar_pubsub_application::PubSubService;
 use northstar_pubsub_core::{
@@ -14,6 +12,7 @@ use northstar_pubsub_core::{
 };
 use northstar_telemetry::metrics::DurationHistogram;
 use northstar_telemetry::metrics::DurationTimer;
+use northstar_workflows::pubsub_repository::PostgresPubSubRepository;
 use std::sync::{atomic::AtomicU64, Arc};
 
 pub(crate) struct PubSubEventOutboxWorkerContext {

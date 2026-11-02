@@ -57,7 +57,6 @@ pub(crate) mod node_message_projection_repository;
 pub mod omemo_recovery;
 #[cfg(test)]
 mod passkeys_tests;
-pub mod pep_roster;
 // src/cluster/listener_policy.rs (S29) still names the presence repository through db::.
 pub(crate) mod presence_repository {
     pub(crate) use northstar_workflows::presence_repository::PostgresPresenceRepository;
@@ -68,7 +67,6 @@ mod presence_service_tests;
 mod privacy;
 #[cfg(test)]
 mod privacy_service_tests;
-pub mod profile;
 #[cfg(test)]
 mod push_tests;
 pub(crate) mod readiness_repository;
@@ -89,7 +87,6 @@ pub use archive::*;
 pub use capacity::*;
 pub use cluster_keys::*;
 pub use omemo_recovery::*;
-pub use pep_roster::*;
 // Roster and privacy names that paths owned by the mainline (src/s2s, src/cluster, src/db/sm*,
 // src/db/replay*) still reach through db::. Every other consumer imports the owning crate.
 pub(crate) use northstar_roster_postgres::privacy::{

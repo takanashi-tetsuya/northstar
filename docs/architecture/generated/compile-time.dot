@@ -1591,6 +1591,7 @@ digraph compile_time {
   "northstar-upload-xmpp" -> "uuid";
   "northstar-web-surface" -> "serde";
   "northstar-workflows" -> "anyhow";
+  "northstar-workflows" -> "base64";
   "northstar-workflows" -> "chrono";
   "northstar-workflows" -> "northstar-abuse-application";
   "northstar-workflows" -> "northstar-abuse-policy";
@@ -1610,6 +1611,7 @@ digraph compile_time {
   "northstar-workflows" -> "northstar-operations-core";
   "northstar-workflows" -> "northstar-operations-postgres";
   "northstar-workflows" -> "northstar-postgres";
+  "northstar-workflows" -> "northstar-pubsub-application";
   "northstar-workflows" -> "northstar-pubsub-core";
   "northstar-workflows" -> "northstar-pubsub-postgres";
   "northstar-workflows" -> "northstar-room-application";
@@ -1622,6 +1624,7 @@ digraph compile_time {
   "northstar-workflows" -> "northstar-upload-postgres";
   "northstar-workflows" -> "northstar-xep-0016";
   "northstar-workflows" -> "northstar-xml-builder";
+  "northstar-workflows" -> "northstar-xmpp-avatar";
   "northstar-workflows" -> "northstar-xmpp-types";
   "northstar-workflows" -> "roxmltree";
   "northstar-workflows" -> "serde";

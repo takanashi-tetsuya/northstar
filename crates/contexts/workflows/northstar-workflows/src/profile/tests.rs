@@ -44,7 +44,9 @@ impl IsolatedDatabase {
             .connect(&url)
             .await
             .unwrap();
-        crate::db::migrate(&pool).await.unwrap();
+        crate::identity_migration::migrate_for_tests(&pool)
+            .await
+            .unwrap();
         Self {
             admin,
             pool,
@@ -115,21 +117,26 @@ fn vcard_photo_projection_preserves_non_photo_profile_fields() {
 async fn profile_publish_uses_exact_subscribe_and_block_snapshot() {
     let database = IsolatedDatabase::create("audience").await;
     let (owner_id, _, auth_generation) = insert_user(&database.pool, "owner").await;
-    let config = db::default_pep_node_config(VCARD4);
+    let config = northstar_pubsub_postgres::default_pep_node_config(VCARD4);
     assert!(matches!(
-        db::create_pep_node(&database.pool, owner_id, VCARD4, &config, 10)
+        northstar_pubsub_postgres::create_pep_node(&database.pool, owner_id, VCARD4, &config, 10)
             .await
             .unwrap(),
-        db::PepCreateOutcome::Created
+        northstar_pubsub_postgres::PepCreateOutcome::Created
     ));
     let unsubscribed = format!("unsub{}@remote.test/phone", Uuid::new_v4().simple());
     let blocked = format!("blocked{}@remote.test/tablet", Uuid::new_v4().simple());
-    let unsubscribed_record =
-        db::subscribe_pep_node(&database.pool, owner_id, VCARD4, &unsubscribed, 100)
-            .await
-            .unwrap()
-            .unwrap();
-    db::subscribe_pep_node(&database.pool, owner_id, VCARD4, &blocked, 100)
+    let unsubscribed_record = northstar_pubsub_postgres::subscribe_pep_node(
+        &database.pool,
+        owner_id,
+        VCARD4,
+        &unsubscribed,
+        100,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    northstar_pubsub_postgres::subscribe_pep_node(&database.pool, owner_id, VCARD4, &blocked, 100)
         .await
         .unwrap()
         .unwrap();
@@ -143,7 +150,7 @@ async fn profile_publish_uses_exact_subscribe_and_block_snapshot() {
     let (snapshot_tx, mut snapshot_rx) = tokio::sync::mpsc::unbounded_channel();
     let publish_service = Arc::clone(&service);
     let publish = tokio::spawn(async move {
-        let config = db::default_pep_node_config(VCARD4);
+        let config = northstar_pubsub_postgres::default_pep_node_config(VCARD4);
         let payload = vcard4_item("profile", "one");
         let items = [("profile", payload.as_str())];
         let factory = move |audience: &ProfileAudienceSnapshot| {
@@ -188,7 +195,7 @@ async fn profile_publish_uses_exact_subscribe_and_block_snapshot() {
     let unsubscribe_jid = unsubscribed.clone();
     let unsubscribe_subid = unsubscribed_record.subid.clone();
     let mut unsubscribe = tokio::spawn(async move {
-        db::unsubscribe_pep_node(
+        northstar_pubsub_postgres::unsubscribe_pep_node(
             &unsubscribe_pool,
             owner_id,
             VCARD4,
@@ -354,7 +361,7 @@ async fn first_profile_publish_snapshots_roster_privacy_and_rolls_back_atomicall
     .unwrap();
 
     let service = profile_service(database.pool.clone(), "example.test".to_owned());
-    let config = db::default_pep_node_config(VCARD4);
+    let config = northstar_pubsub_postgres::default_pep_node_config(VCARD4);
     let payload = vcard4_item("profile", "atomic");
     let items = [("profile", payload.as_str())];
     let (audience_tx, mut audience_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -506,7 +513,7 @@ async fn legacy_and_metadata_race_never_restores_a_stale_vcard_baseline() {
     let metadata_xml = metadata_item.clone();
     let metadata = tokio::spawn(async move {
         metadata_barrier.wait().await;
-        let config = db::default_pep_node_config(AVATAR_METADATA);
+        let config = northstar_pubsub_postgres::default_pep_node_config(AVATAR_METADATA);
         let items = [(metadata_hash.as_str(), metadata_xml.as_str())];
         metadata_service
             .publish_avatar_metadata(
@@ -534,7 +541,9 @@ async fn legacy_and_metadata_race_never_restores_a_stale_vcard_baseline() {
         metadata.await.unwrap().unwrap().status,
         ProfilePublishStatus::Published
     );
-    let record = db::get_vcard(&database.pool, owner_id).await.unwrap();
+    let record = northstar_pubsub_postgres::get_vcard(&database.pool, owner_id)
+        .await
+        .unwrap();
     let payload = record.payload_vcard_temp.unwrap();
     assert!(payload.contains("<FN>Legacy Latest</FN>"));
     if record.avatar_hash.is_some() {
@@ -558,7 +567,7 @@ async fn deleted_account_incarnation_and_corrupt_vcard_fail_closed() {
     ));
     let stale_service = Arc::clone(&service);
     let stale = tokio::spawn(async move {
-        let config = db::default_pep_node_config(VCARD4);
+        let config = northstar_pubsub_postgres::default_pep_node_config(VCARD4);
         let payload = vcard4_item("stale", "stale");
         let items = [("stale", payload.as_str())];
         stale_service
@@ -642,9 +651,11 @@ async fn deleted_account_incarnation_and_corrupt_vcard_fail_closed() {
         .execute(&database.pool)
         .await
         .unwrap();
-    assert!(db::get_vcard(&database.pool, new_id).await.is_err());
+    assert!(northstar_pubsub_postgres::get_vcard(&database.pool, new_id)
+        .await
+        .is_err());
     assert!(service.public_vcard(&username).await.is_err());
-    let config = db::default_pep_node_config(AVATAR_METADATA).into();
+    let config = northstar_pubsub_postgres::default_pep_node_config(AVATAR_METADATA).into();
     let items = [(
         "current",
         "<item id='current'><metadata xmlns='urn:xmpp:avatar:metadata'/></item>",

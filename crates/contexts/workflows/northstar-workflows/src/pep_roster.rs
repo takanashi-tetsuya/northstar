@@ -1,5 +1,5 @@
 //! PEP's reads of the roster context's tables: roster-group access and the owners whose roster grants a
-//! subscriber presence. They stay in the root crate until the roster context provides them through a port.
+//! subscriber presence. They stay in the workflows until the roster context provides them through a port.
 
 use anyhow::Result;
 use sqlx::{PgPool, Row};
@@ -39,7 +39,6 @@ pub async fn pep_owner_usernames_for_presence_subscriber(
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use crate::db;
     use northstar_pubsub_postgres::*;
 
     #[tokio::test]
@@ -52,7 +51,9 @@ mod integration_tests {
             .connect(&url)
             .await
             .unwrap();
-        db::migrate(&pool).await.unwrap();
+        crate::identity_migration::migrate_for_tests(&pool)
+            .await
+            .unwrap();
         let suffix = Uuid::new_v4().simple().to_string();
         let first_owner = Uuid::new_v4();
         let second_owner = Uuid::new_v4();
@@ -133,24 +134,12 @@ mod integration_tests {
         .is_none());
 
         let subscriber_bare = northstar_xmpp_types::jid_text::bare_jid(&subscriber).to_owned();
-        northstar_workflows::roster::update_subscription(
-            &pool,
-            first_owner,
-            &subscriber_bare,
-            "from",
-            None,
-        )
-        .await
-        .unwrap();
-        northstar_workflows::roster::update_subscription(
-            &pool,
-            first_owner,
-            &subscriber_bare,
-            "none",
-            None,
-        )
-        .await
-        .unwrap();
+        crate::roster::update_subscription(&pool, first_owner, &subscriber_bare, "from", None)
+            .await
+            .unwrap();
+        crate::roster::update_subscription(&pool, first_owner, &subscriber_bare, "none", None)
+            .await
+            .unwrap();
         assert!(pep_subscribers(&pool, first_owner, first_node)
             .await
             .unwrap()
@@ -164,16 +153,10 @@ mod integration_tests {
                 .await
                 .unwrap()
         );
-        northstar_workflows::roster::update_subscription(
-            &pool,
-            second_owner,
-            &subscriber_bare,
-            "from",
-            None,
-        )
-        .await
-        .unwrap();
-        northstar_workflows::roster::upsert_roster(
+        crate::roster::update_subscription(&pool, second_owner, &subscriber_bare, "from", None)
+            .await
+            .unwrap();
+        crate::roster::upsert_roster(
             &pool,
             second_owner,
             &subscriber_bare,
@@ -188,7 +171,7 @@ mod integration_tests {
                 .unwrap()
                 .is_some()
         );
-        northstar_workflows::roster::upsert_roster(
+        crate::roster::upsert_roster(
             &pool,
             second_owner,
             &subscriber_bare,
@@ -202,22 +185,16 @@ mod integration_tests {
             .unwrap()
             .is_empty());
 
-        northstar_workflows::roster::update_subscription(
-            &pool,
-            first_owner,
-            &subscriber_bare,
-            "from",
-            None,
-        )
-        .await
-        .unwrap();
+        crate::roster::update_subscription(&pool, first_owner, &subscriber_bare, "from", None)
+            .await
+            .unwrap();
         assert!(
             subscribe_pep_node(&pool, first_owner, first_node, &subscriber, 1)
                 .await
                 .unwrap()
                 .is_some()
         );
-        northstar_workflows::roster::delete_roster(&pool, first_owner, &subscriber_bare)
+        crate::roster::delete_roster(&pool, first_owner, &subscriber_bare)
             .await
             .unwrap();
         assert!(pep_subscribers(&pool, first_owner, first_node)

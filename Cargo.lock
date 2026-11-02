@@ -2816,6 +2816,7 @@ name = "northstar-workflows"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "northstar-abuse-application",
  "northstar-abuse-policy",
@@ -2835,6 +2836,7 @@ dependencies = [
  "northstar-operations-core",
  "northstar-operations-postgres",
  "northstar-postgres",
+ "northstar-pubsub-application",
  "northstar-pubsub-core",
  "northstar-pubsub-postgres",
  "northstar-room-application",
@@ -2847,6 +2849,7 @@ dependencies = [
  "northstar-upload-postgres",
  "northstar-xep-0016",
  "northstar-xml-builder",
+ "northstar-xmpp-avatar",
  "northstar-xmpp-types",
  "roxmltree",
  "serde",

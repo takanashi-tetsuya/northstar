@@ -1,6 +1,5 @@
 //! PostgreSQL profile snapshots, avatar projection and durable publication.
 
-use crate::{db, xmpp::xml_builder::XmlElement};
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use northstar_pubsub_application::profile::{
@@ -8,6 +7,7 @@ use northstar_pubsub_application::profile::{
     ProfileOutboxFactory, ProfilePepWrite, ProfilePublishResult, ProfilePublishStatus,
     ProfileRepository, PublicVCard,
 };
+use northstar_xml_builder::XmlElement;
 use northstar_xmpp_avatar::{
     detected_media_type, sha1_hex, valid_png_image, AVATAR_DATA, AVATAR_METADATA,
 };
@@ -15,12 +15,12 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-pub(crate) struct PostgresProfileRepository {
+pub struct PostgresProfileRepository {
     pool: PgPool,
     domain: String,
 }
 impl PostgresProfileRepository {
-    pub(crate) fn new(pool: PgPool, domain: String) -> Self {
+    pub fn new(pool: PgPool, domain: String) -> Self {
         Self { pool, domain }
     }
     async fn exact_profile_outbox(
@@ -31,7 +31,7 @@ impl PostgresProfileRepository {
         connection_id: Uuid,
         node: &str,
         factory: &dyn ProfileOutboxFactory,
-    ) -> Result<Vec<db::PubSubOutboxInsert>> {
+    ) -> Result<Vec<northstar_pubsub_postgres::PubSubOutboxInsert>> {
         let owner_bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
             "{owner_username}@{}",
             self.domain
@@ -316,12 +316,12 @@ impl ProfileRepository for PostgresProfileRepository {
                 ProfilePublishStatus::PreconditionFailed,
             ));
         }
-        let quotas = db::PepQuotas {
+        let quotas = northstar_pubsub_postgres::PepQuotas {
             max_nodes: write.max_nodes,
             max_storage_bytes: write.max_storage_bytes,
         };
         if let Some(data_item) = write.data_item {
-            let data_config = db::default_pep_node_config(AVATAR_DATA);
+            let data_config = northstar_pubsub_postgres::default_pep_node_config(AVATAR_DATA);
             let outcome = northstar_pubsub_postgres::publish_pep_items_in_transaction(
                 &mut transaction,
                 write.user_id,
@@ -332,12 +332,12 @@ impl ProfileRepository for PostgresProfileRepository {
                 quotas,
             )
             .await?;
-            if outcome != db::PepPublishOutcome::Published {
+            if outcome != northstar_pubsub_postgres::PepPublishOutcome::Published {
                 transaction.rollback().await?;
                 return Ok(ProfilePublishResult::rejected(outcome.into()));
             }
         }
-        let metadata_config = db::default_pep_node_config(AVATAR_METADATA);
+        let metadata_config = northstar_pubsub_postgres::default_pep_node_config(AVATAR_METADATA);
         let outcome = northstar_pubsub_postgres::publish_pep_items_in_transaction(
             &mut transaction,
             write.user_id,
@@ -348,7 +348,7 @@ impl ProfileRepository for PostgresProfileRepository {
             quotas,
         )
         .await?;
-        if outcome != db::PepPublishOutcome::Published {
+        if outcome != northstar_pubsub_postgres::PepPublishOutcome::Published {
             transaction.rollback().await?;
             return Ok(ProfilePublishResult::rejected(outcome.into()));
         }
@@ -372,7 +372,11 @@ impl ProfileRepository for PostgresProfileRepository {
                     explicit_factory,
                 )
                 .await?;
-            db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
+            northstar_pubsub_postgres::enqueue_pubsub_outbox_in_transaction(
+                &mut transaction,
+                &outbox,
+            )
+            .await?;
         }
         transaction.commit().await?;
         Ok(ProfilePublishResult {
@@ -413,16 +417,16 @@ impl ProfileRepository for PostgresProfileRepository {
             &mut transaction,
             write.user_id,
             write.node,
-            &db::PepNodeConfig::from(write.requested),
+            &northstar_pubsub_postgres::PepNodeConfig::from(write.requested),
             write.enforce_preconditions,
             write.items,
-            db::PepQuotas {
+            northstar_pubsub_postgres::PepQuotas {
                 max_nodes: write.max_nodes,
                 max_storage_bytes: write.max_storage_bytes,
             },
         )
         .await?;
-        if outcome != db::PepPublishOutcome::Published {
+        if outcome != northstar_pubsub_postgres::PepPublishOutcome::Published {
             transaction.rollback().await?;
             return Ok(ProfilePublishResult::rejected(outcome.into()));
         }
@@ -440,7 +444,11 @@ impl ProfileRepository for PostgresProfileRepository {
                     explicit_factory,
                 )
                 .await?;
-            db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
+            northstar_pubsub_postgres::enqueue_pubsub_outbox_in_transaction(
+                &mut transaction,
+                &outbox,
+            )
+            .await?;
         }
         transaction.commit().await?;
         Ok(ProfilePublishResult {
@@ -503,16 +511,16 @@ impl ProfileRepository for PostgresProfileRepository {
             &mut transaction,
             write.user_id,
             AVATAR_METADATA,
-            &db::PepNodeConfig::from(write.requested),
+            &northstar_pubsub_postgres::PepNodeConfig::from(write.requested),
             write.enforce_preconditions,
             write.items,
-            db::PepQuotas {
+            northstar_pubsub_postgres::PepQuotas {
                 max_nodes: write.max_nodes,
                 max_storage_bytes: write.max_storage_bytes,
             },
         )
         .await?;
-        if outcome != db::PepPublishOutcome::Published {
+        if outcome != northstar_pubsub_postgres::PepPublishOutcome::Published {
             transaction.rollback().await?;
             return Ok(ProfilePublishResult::rejected(outcome.into()));
         }
@@ -546,7 +554,11 @@ impl ProfileRepository for PostgresProfileRepository {
                     explicit_factory,
                 )
                 .await?;
-            db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
+            northstar_pubsub_postgres::enqueue_pubsub_outbox_in_transaction(
+                &mut transaction,
+                &outbox,
+            )
+            .await?;
         }
         transaction.commit().await?;
         Ok(ProfilePublishResult {
@@ -971,7 +983,7 @@ fn profile_outbox(
     local_domain: &str,
     local_accounts: &HashMap<String, Uuid>,
     deliveries: &[(String, String)],
-) -> Result<Vec<db::PubSubOutboxInsert>> {
+) -> Result<Vec<northstar_pubsub_postgres::PubSubOutboxInsert>> {
     let event_id = Uuid::new_v4();
     let created_at = chrono::Utc::now();
     deliveries
@@ -983,15 +995,15 @@ fn profile_outbox(
             } else {
                 local_accounts.get(&recipient_bare).copied()
             };
-            db::PubSubOutboxInsert::new_pep_stanza(
+            northstar_pubsub_postgres::PubSubOutboxInsert::new_pep_stanza(
                 event_id,
                 user_id,
                 owner_bare_jid,
                 sender_connection_id,
                 recipient.clone(),
                 recipient_account_id,
-                db::PepOutboxEventKind::Publish,
-                db::PepOutboxAuthorizationMode::CausalAudience,
+                northstar_pubsub_postgres::PepOutboxEventKind::Publish,
+                northstar_pubsub_postgres::PepOutboxAuthorizationMode::CausalAudience,
                 message.clone(),
                 node,
                 local_domain,

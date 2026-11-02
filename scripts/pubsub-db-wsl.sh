@@ -271,7 +271,7 @@ run_exact_ignored \
 run_exact_ignored \
   db::pubsub_integration_tests::bookmarks::legacy_bookmark_commit_conflict_is_atomic_and_success_uses_locked_diff
 run_exact_ignored \
-  db::pep_roster::integration_tests::pep_node_subscription_and_item_transitions_are_atomic
+  pep_roster::integration_tests::pep_node_subscription_and_item_transitions_are_atomic northstar-workflows
 run_exact_ignored \
   vcard::tests::avatar_conversion_is_atomic_across_pep_and_vcard northstar-pubsub-postgres
 run_exact_ignored \
@@ -280,13 +280,13 @@ run_exact_ignored \
   private::tests::private_xml_batch_and_account_quota_are_atomic northstar-pubsub-postgres
 
 run_exact_ignored \
-  db::profile::tests::profile_publish_uses_exact_subscribe_and_block_snapshot
+  profile::tests::profile_publish_uses_exact_subscribe_and_block_snapshot northstar-workflows
 run_exact_ignored \
-  db::profile::tests::first_profile_publish_snapshots_roster_privacy_and_rolls_back_atomically
+  profile::tests::first_profile_publish_snapshots_roster_privacy_and_rolls_back_atomically northstar-workflows
 run_exact_ignored \
-  db::profile::tests::legacy_and_metadata_race_never_restores_a_stale_vcard_baseline
+  profile::tests::legacy_and_metadata_race_never_restores_a_stale_vcard_baseline northstar-workflows
 run_exact_ignored \
-  db::profile::tests::deleted_account_incarnation_and_corrupt_vcard_fail_closed
+  profile::tests::deleted_account_incarnation_and_corrupt_vcard_fail_closed northstar-workflows
 
 run_exact_ignored \
   db::pubsub_repository::service_tests::same_owner_advisory_contention_does_not_exhaust_the_shared_pool

@@ -26,7 +26,7 @@ northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.43", features = ["sync", "time"] }
+tokio = { version = "1.43", features = ["rt", "sync", "time"] }
 tokio-util = "0.7"
 tracing = "0.1"
 uuid = { version = "1.12", features = ["v4", "serde"] }
@@ -34,4 +34,5 @@ uuid = { version = "1.12", features = ["v4", "serde"] }
 [dev-dependencies]
 chrono = "0.4"
 futures = "0.3"
+northstar-telemetry = { path = "../../../platform/northstar-telemetry" }
 tokio = { version = "1.43", features = ["macros", "rt", "sync", "test-util", "time"] }

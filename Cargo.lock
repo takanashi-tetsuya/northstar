@@ -2684,6 +2684,7 @@ dependencies = [
  "northstar-room-core",
  "northstar-security",
  "northstar-session-core",
+ "northstar-telemetry",
  "northstar-xml-builder",
  "northstar-xmpp-types",
  "serde",

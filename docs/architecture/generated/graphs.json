@@ -4243,6 +4243,10 @@
       ],
       [
         "northstar-session-application",
+        "northstar-telemetry"
+      ],
+      [
+        "northstar-session-application",
         "northstar-xml-builder"
       ],
       [

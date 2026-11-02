@@ -275,8 +275,8 @@ impl AppState {
 
     pub(crate) fn c2s_post_action_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::PostActionTelemetry<'_> {
-        crate::xmpp::capabilities::PostActionTelemetry::new(
+    ) -> northstar_session_application::post_actions::PostActionTelemetry<'_> {
+        northstar_session_application::post_actions::PostActionTelemetry::new(
             &self.metrics.post_action_tasks_started_total,
             &self.metrics.post_action_tasks_completed_total,
             &self.metrics.post_action_tasks_panicked_total,

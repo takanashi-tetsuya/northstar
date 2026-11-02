@@ -3900,7 +3900,8 @@ if (!mainSource.includes('state.account_revocation_worker_context()')
 const c2sTelemetry = read('src/xmpp/capabilities.rs');
 const c2sProtocol = readRoleSplitFile('src/xmpp/protocol.rs', { root });
 const c2sDispatch = read('src/xmpp/protocol/dispatch.rs');
-if (!c2sTelemetry.includes('struct PostActionTelemetry')
+if (!read('crates/contexts/session/northstar-session-application/src/post_actions.rs')
+      .includes('struct PostActionTelemetry')
     || !c2sTelemetry.includes('struct InboundStanzaTelemetry')
     || !c2sTelemetry.includes('struct PostAcceptFailureTelemetry')
     || !c2sTelemetry.includes('struct PushSubscriptionTelemetry')

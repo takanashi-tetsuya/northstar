@@ -45,7 +45,7 @@ pub struct OnlineSession {
     pub(crate) availability_generation: Arc<AtomicU64>,
     /// External replay requests join the owning actor's transport-ordered,
     /// bounded post-action supervisor rather than spawning detached work.
-    pub(crate) post_actions: crate::xmpp::protocol::PostActionHandle,
+    pub(crate) post_actions: northstar_session_application::post_actions::PostActionHandle,
     /// One recovery replay per exact route at a time; zero means idle.
     pub(crate) recovery_replay_inflight_epoch: Arc<AtomicU64>,
     /// A completed PG claim pass is coalesced only for its own recovery epoch.

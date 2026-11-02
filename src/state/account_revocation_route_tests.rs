@@ -18,7 +18,7 @@ fn session(user_id: uuid::Uuid, generation: i64, routable: bool) -> OnlineSessio
         sender: northstar_stream::outbound::OutboundSender::new(sender),
         available: Arc::default(),
         availability_generation: Arc::default(),
-        post_actions: crate::xmpp::protocol::PostActionHandle::default(),
+        post_actions: northstar_session_application::post_actions::PostActionHandle::default(),
         recovery_replay_inflight_epoch: Arc::default(),
         recovery_replay_completed_epoch: Arc::default(),
         bind2_mam_catchup: false,

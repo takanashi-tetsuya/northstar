@@ -1525,6 +1525,7 @@ digraph compile_time {
   "northstar-session-application" -> "northstar-room-core";
   "northstar-session-application" -> "northstar-security";
   "northstar-session-application" -> "northstar-session-core";
+  "northstar-session-application" -> "northstar-telemetry";
   "northstar-session-application" -> "northstar-xml-builder";
   "northstar-session-application" -> "northstar-xmpp-types";
   "northstar-session-application" -> "serde";

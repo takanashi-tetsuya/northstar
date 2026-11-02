@@ -6,11 +6,12 @@ use crate::xmpp::local_routes::session::OnlineSession;
 use crate::{
     cluster::{ClusterAdmission, DirectPostCommitMode},
     db,
-    xmpp::{capabilities::PostActionTelemetry, protocol::replay},
+    xmpp::protocol::replay,
 };
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
+use northstar_session_application::post_actions::PostActionTelemetry;
 use northstar_session_application::replay::{RecoveryReplayAuthority, ReplayService};
 use northstar_telemetry::metrics::Metrics;
 use sqlx::PgPool;
@@ -441,7 +442,7 @@ mod tests {
             sender: northstar_stream::outbound::OutboundSender::new(sender),
             available: Arc::new(AtomicBool::new(true)),
             availability_generation: Arc::new(AtomicU64::new(3)),
-            post_actions: crate::xmpp::protocol::PostActionHandle::default(),
+            post_actions: northstar_session_application::post_actions::PostActionHandle::default(),
             recovery_replay_inflight_epoch: Arc::default(),
             recovery_replay_completed_epoch: Arc::default(),
             bind2_mam_catchup: false,

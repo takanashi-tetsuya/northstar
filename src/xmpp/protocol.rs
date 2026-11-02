@@ -26,11 +26,11 @@ mod sm_owner;
 pub(crate) mod upload;
 pub(crate) mod vcard;
 
-use super::capabilities::PostActionTelemetry;
 use super::xml_builder::XmlElement;
 use crate::state::{AppState, SmBufferLimits, SmSessionPolicy};
 use anyhow::{Context, Result};
 use dashmap::DashSet;
+use northstar_session_application::post_actions::PostActionHandle;
 use northstar_xml_builder::stream::{failure, is_counted_stanza, stream_error, stream_id};
 
 use roxmltree::Node;
@@ -38,7 +38,6 @@ use std::{
     collections::VecDeque,
     future::Future,
     net::IpAddr,
-    pin::Pin,
     sync::{
         atomic::AtomicBool, atomic::AtomicI16, atomic::AtomicU64, atomic::AtomicU8,
         atomic::Ordering, Arc,
@@ -63,207 +62,6 @@ pub(crate) use self::session_transport::{ClientTransport, StreamLimits, TlsSessi
 use northstar_auth_xmpp::sasl2::{legacy_sasl_auth, legacy_sasl_payload};
 
 const MAX_SASL_ATTEMPTS_PER_STREAM: u8 = 5;
-const MAX_POST_ACTION_TASKS_PER_SESSION: usize = 16;
-const POST_ACTION_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
-
-type PostActionFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
-
-struct PendingPostAction {
-    name: &'static str,
-    future: PostActionFuture,
-}
-
-struct PostActionSupervisor {
-    pending: VecDeque<PendingPostAction>,
-    running: tokio::task::JoinSet<&'static str>,
-    transport_ready: bool,
-    closed: bool,
-}
-
-impl Default for PostActionSupervisor {
-    fn default() -> Self {
-        Self {
-            pending: VecDeque::new(),
-            running: tokio::task::JoinSet::new(),
-            transport_ready: true,
-            closed: false,
-        }
-    }
-}
-
-impl PostActionSupervisor {
-    fn defer<F>(
-        &mut self,
-        name: &'static str,
-        task: F,
-        telemetry: &PostActionTelemetry<'_>,
-    ) -> Result<()>
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        anyhow::ensure!(!self.closed, "session post-action supervisor is closed");
-        self.reap(telemetry);
-        if self.pending.len().saturating_add(self.running.len())
-            >= MAX_POST_ACTION_TASKS_PER_SESSION
-        {
-            telemetry.capacity_rejected();
-            anyhow::bail!("per-session post-action task capacity was exhausted");
-        }
-        self.pending.push_back(PendingPostAction {
-            name,
-            future: Box::pin(task),
-        });
-        Ok(())
-    }
-
-    fn start(&mut self, telemetry: &PostActionTelemetry<'_>) {
-        if self.closed {
-            return;
-        }
-        self.transport_ready = true;
-        self.reap(telemetry);
-        while let Some(task) = self.pending.pop_front() {
-            telemetry.started();
-            self.running.spawn(async move {
-                task.future.await;
-                task.name
-            });
-        }
-    }
-
-    fn reap(&mut self, telemetry: &PostActionTelemetry<'_>) {
-        while let Some(result) = self.running.try_join_next() {
-            observe_post_action_join(result, telemetry);
-        }
-    }
-
-    async fn abort_and_drain(&mut self, telemetry: &PostActionTelemetry<'_>) {
-        self.reap(telemetry);
-        let aborted = self.pending.len().saturating_add(self.running.len());
-        self.pending.clear();
-        self.running.abort_all();
-        telemetry.aborted(aborted);
-        let drain = async {
-            while let Some(result) = self.running.join_next().await {
-                observe_post_action_join(result, telemetry);
-            }
-        };
-        if tokio::time::timeout(POST_ACTION_DRAIN_TIMEOUT, drain)
-            .await
-            .is_err()
-        {
-            tracing::error!(
-                remaining = self.running.len(),
-                "aborted post-action tasks did not drain within the shutdown budget"
-            );
-        }
-    }
-
-    fn abort_now(&mut self, telemetry: &PostActionTelemetry<'_>) {
-        self.reap(telemetry);
-        let aborted = self.pending.len().saturating_add(self.running.len());
-        self.pending.clear();
-        self.running.abort_all();
-        telemetry.aborted(aborted);
-    }
-}
-
-/// Shared with the exact local route so cluster recovery can request a
-/// bounded offline replay without racing an in-progress presence action.
-/// The transport opens the gate only after its current action reaches the
-/// socket or BOSH response FIFO.
-#[derive(Clone, Default)]
-pub(crate) struct PostActionHandle(Arc<std::sync::Mutex<PostActionSupervisor>>);
-
-impl PostActionHandle {
-    fn begin_action(&self) {
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .transport_ready = false;
-    }
-
-    fn defer<F>(
-        &self,
-        name: &'static str,
-        task: F,
-        telemetry: &PostActionTelemetry<'_>,
-    ) -> Result<()>
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .defer(name, task, telemetry)
-    }
-
-    pub(crate) fn defer_recovery<F>(
-        &self,
-        name: &'static str,
-        task: F,
-        telemetry: &PostActionTelemetry<'_>,
-    ) -> Result<()>
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        let mut supervisor = self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        supervisor.defer(name, task, telemetry)?;
-        if supervisor.transport_ready {
-            supervisor.start(telemetry);
-        }
-        Ok(())
-    }
-
-    fn start(&self, telemetry: &PostActionTelemetry<'_>) {
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .start(telemetry);
-    }
-
-    fn take_for_shutdown(&self) -> PostActionSupervisor {
-        let mut supervisor = self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        supervisor.closed = true;
-        let mut owned = std::mem::take(&mut *supervisor);
-        supervisor.closed = true;
-        owned.closed = true;
-        owned
-    }
-
-    fn abort_now(&self, telemetry: &PostActionTelemetry<'_>) {
-        let mut supervisor = self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        supervisor.closed = true;
-        supervisor.abort_now(telemetry);
-    }
-}
-
-fn observe_post_action_join(
-    result: std::result::Result<&'static str, tokio::task::JoinError>,
-    telemetry: &PostActionTelemetry<'_>,
-) {
-    match result {
-        Ok(name) => {
-            telemetry.completed();
-            tracing::trace!(task = name, "C2S post-action task completed");
-        }
-        Err(error) if error.is_cancelled() => {}
-        Err(error) => {
-            telemetry.panicked();
-            tracing::error!(?error, "C2S post-action task panicked");
-        }
-    }
-}
-
 /// Ownership evidence survives a failed or cancelled database reply.
 #[derive(Default)]
 struct LiveSessionOwnership {

@@ -77,7 +77,7 @@ requireMatch(
   "local ownership must be quiesced without an await before finalizer cancellation becomes safe",
 );
 requireMatch(
-  protocol,
+  read("crates/contexts/session/northstar-session-application/src/post_actions.rs"),
   /JoinSet<&'static str>[\s\S]*MAX_POST_ACTION_TASKS_PER_SESSION[\s\S]*abort_all\(\)[\s\S]*join_next\(\)/,
   "post-transport work must remain bounded, owned, aborted and drained",
 );

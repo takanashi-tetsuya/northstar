@@ -453,11 +453,11 @@ async fn native_backstop(
         stopped: false,
     };
     let child = async {
-        let lease = DirectWriteLease::prepare_with(&mut port, &item, &observation).await?;
+        let lease = DirectWriteLease::prepare(&mut port, &item, &observation).await?;
         let written = lease
             .write(|stanza| crate::xmpp::send(&mut writer, stanza))
             .await?;
-        written.settle_with(&port).await;
+        written.settle(&port).await;
         Ok::<_, anyhow::Error>(())
     };
     let mut runner = Box::pin(NativeWriteRunner::new(observation.clone(), child));
@@ -807,7 +807,7 @@ async fn second_flush_is_resource_pending_without_a_scripted_io_error() {
         stopped: false,
     };
     let child = async {
-        let lease = DirectWriteLease::prepare_with(&mut port, &item, &observation).await?;
+        let lease = DirectWriteLease::prepare(&mut port, &item, &observation).await?;
         let written = lease
             .write(|stanza| async {
                 crate::xmpp::send(&mut writer, stanza).await?;
@@ -815,7 +815,7 @@ async fn second_flush_is_resource_pending_without_a_scripted_io_error() {
                 Ok::<_, anyhow::Error>(())
             })
             .await?;
-        written.settle_with(&port).await;
+        written.settle(&port).await;
         Ok::<_, anyhow::Error>(())
     };
     let mut runner = Box::pin(NativeWriteRunner::new(observation.clone(), child));
@@ -881,11 +881,11 @@ async fn nested_native_backstop_drops_children_before_frame_without_backend_fail
         let _accepted = bound.finish(completion)?.unwrap();
         let native_child = async {
             let _native_child_drop = NativeChildDrop(snapshots.clone());
-            let lease = DirectWriteLease::prepare_with(&mut port, &item, &observation).await?;
+            let lease = DirectWriteLease::prepare(&mut port, &item, &observation).await?;
             let written = lease
                 .write(|stanza| crate::xmpp::send(&mut writer, stanza))
                 .await?;
-            written.settle_with(&port).await;
+            written.settle(&port).await;
             Ok::<_, anyhow::Error>(())
         };
         let terminal = NativeAfterRunnerDrop(snapshots.clone());

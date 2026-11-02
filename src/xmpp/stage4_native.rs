@@ -413,9 +413,9 @@ async fn write_item_inner(
     };
     let mut io = MemoryWrite::new(script, site, recorder.clone());
     let result = NativeWriteRunner::new(observation.clone(), async {
-        let lease = DirectWriteLease::prepare_with(&mut port, &item, &observation).await?;
+        let lease = DirectWriteLease::prepare(&mut port, &item, &observation).await?;
         let written = lease.write(|stanza| super::send(&mut io, stanza)).await?;
-        written.settle_with(&port).await;
+        written.settle(&port).await;
         Ok(())
     })
     .await;

@@ -51,6 +51,7 @@ use zeroize::{Zeroize, Zeroizing};
 mod legacy_auth;
 mod session_sm;
 mod session_transport;
+mod stream_session;
 
 use self::session_sm::durable_delivery_managed_by_sm;
 #[cfg(test)]

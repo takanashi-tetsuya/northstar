@@ -1192,12 +1192,12 @@ async fn native_item(
     let child_drop = NativeChildDrop(snapshots.clone());
     let child = async {
         let _child_drop = child_drop;
-        let lease = DirectWriteLease::prepare_with(&mut port, &item, &observation).await?;
+        let lease = DirectWriteLease::prepare(&mut port, &item, &observation).await?;
         snapshots.capture(wire::Cut::PortReturn);
         let written = lease
             .write(|stanza| crate::xmpp::send(&mut writer, stanza))
             .await?;
-        written.settle_with(&port).await;
+        written.settle(&port).await;
         Ok::<_, anyhow::Error>(())
     };
     // Reverse local drop order is intentional: the native runner is destroyed

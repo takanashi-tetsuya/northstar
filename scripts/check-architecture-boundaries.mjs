@@ -2032,12 +2032,12 @@ if (/\b(?:AppState|Arc)\b/.test(nativeTransportPolicy)
   throw new Error('TCP/WebSocket transport policy must contain only immutable cadence and typed telemetry');
 }
 const driveIoDeclaration = nativeTransportSource.slice(
-  nativeTransportSource.indexOf('async fn drive_io<S>'),
-  nativeTransportSource.indexOf('async fn drive_io<S>') + 400,
+  nativeTransportSource.indexOf('async fn drive_io<S, P>'),
+  nativeTransportSource.indexOf('async fn drive_io<S, P>') + 400,
 );
 if (!/transport_policy\s*:\s*&NativeTransportPolicy/.test(driveIoDeclaration)
     || /\bstate\s*:|\bAppState\b/.test(driveIoDeclaration)
-    || /\bstate\s*\./.test(structBody(nativeTransportSource, 'async fn drive_io<S>'))) {
+    || /\bstate\s*\./.test(structBody(nativeTransportSource, 'async fn drive_io<S, P>'))) {
   throw new Error('TCP transport loop must use NativeTransportPolicy, not global state');
 }
 for (const connection of [

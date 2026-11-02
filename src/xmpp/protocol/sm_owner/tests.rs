@@ -976,7 +976,7 @@ async fn real_sm_record_composes_with_native_lease_without_native_fence_or_ack()
             native_calls: AtomicU64::new(0),
         };
         let lease =
-            crate::xmpp::direct_delivery::DirectWriteLease::prepare_with(&mut port, &item, &native)
+            crate::xmpp::direct_delivery::DirectWriteLease::prepare(&mut port, &item, &native)
                 .await
                 .unwrap();
         assert!(
@@ -1008,7 +1008,7 @@ async fn real_sm_record_composes_with_native_lease_without_native_fence_or_ack()
             })
             .await
             .unwrap();
-        written.settle_with(&port).await;
+        written.settle(&port).await;
         write_rx.try_recv().unwrap();
         assert_eq!(port.native_calls.load(Ordering::Relaxed), 0);
         assert!(ownership_rx.try_recv().is_err());

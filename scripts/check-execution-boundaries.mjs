@@ -249,7 +249,7 @@ export function verifyNativeWriteBoundaries({ transport, nativeWrite, nativeCore
   const write = normalize(body(nativeWrite, 'pub\\s*\\(super\\)\\s+async\\s+fn\\s+write\\b'));
   ordered(write, ['self.observation.begin_write()?;', 'letactual=writer(&self.item.stanza).await;', 'lettruth=ifactual.is_ok(){WriterResult::FullWrite}else{WriterResult::Failed};', 'letwritten=self.observation.writer_completed(truth)?;', 'actual?;', 'Ok(WrittenDirectLease{item:self.item,written,managed_by_sm:self.managed_by_sm,})'],
     'native lease must retain actual writer truth before issuing the consuming written continuation');
-  const settle = normalize(body(nativeWrite, 'async\\s+fn\\s+settle_with\\b'));
+  const settle = normalize(body(nativeWrite, 'pub\\s*\\(super\\)\\s+async\\s+fn\\s+settle\\b'));
   ordered(settle, ['self.item.confirm_transport_write();', 'if!self.managed_by_sm{self.item.confirm_transport_ownership();}', 'self.written.begin_ack()', 'request.source()'],
     'native settlement must preserve full-write notification and require the consuming ACK request');
   for (const kind of ['c2s', 'mix']) {
@@ -780,7 +780,7 @@ export function verifyAuthPublicationBoundaries(sources) {
     normalize(body(owner, 'struct\\s+PublicationRunner<F>')) === 'child:Option<Pin<Box<F>>>,retirement:PublicationRetirement',
     'auth retirement field guard must survive child destructor and caught poll panics');
   const tcp = method(transport, 'tcp_record_and_send_auth');
-  ordered(tcp, ['holder.validate_connection(session.connection_id)?;', 'holder.validate_control(&stanza)?;',
+  ordered(tcp, ['holder.validate_connection(session.connection_id())?;', 'holder.validate_control(&stanza)?;',
     'holder.recording()?;', 'session.record_outbound(&stanza).await',
     'holder.write(stanza,|stanza|asyncmove{send(io,&stanza).await}).await?', 'Ok(Some(owner))'],
     'auth TCP adapter must validate before recording and use the actual send helper');

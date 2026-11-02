@@ -1,11 +1,12 @@
 //! Execute protocol actions on the ordered TCP stream shared by plain and TLS C2S.
 
+use super::direct_delivery::DirectWritePort;
 use super::{
     send, tcp_fatal_error, tcp_record_and_send, tcp_record_and_send_auth, tcp_record_and_send_item,
 };
-use crate::xmpp::protocol::ProtocolSession;
 use anyhow::Result;
 use northstar_stream::resume::ResumeTransportParts;
+use northstar_stream::session::StreamSession;
 use northstar_stream::transport::Action;
 use tokio::io::AsyncWrite;
 
@@ -15,9 +16,9 @@ pub(super) enum TcpActionDisposition {
     Upgrade,
 }
 
-pub(super) async fn apply<S: AsyncWrite + Unpin>(
+pub(super) async fn apply<S: AsyncWrite + Unpin, P: StreamSession + DirectWritePort>(
     io: &mut S,
-    session: &mut ProtocolSession,
+    session: &mut P,
     action: Action,
     opening: bool,
 ) -> Result<TcpActionDisposition> {

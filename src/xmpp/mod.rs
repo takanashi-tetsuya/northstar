@@ -24,6 +24,7 @@ use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket};
 use futures::FutureExt;
 use northstar_stream::frame_execution::FrameFailure;
+use northstar_stream::session::StreamSession;
 use northstar_stream::transport::{
     ClientTransport, SessionTerminationSignals, StreamLimits, TlsSessionEvidence,
 };
@@ -394,8 +395,8 @@ fn sm_lease_poll_interval(live_lease_seconds: u64) -> Duration {
     Duration::from_secs((live_lease_seconds / 3).max(1))
 }
 
-async fn finish_protocol_session<T>(
-    session: &mut ProtocolSession,
+async fn finish_protocol_session<T, P: StreamSession>(
+    session: &mut P,
     transport: std::thread::Result<T>,
 ) -> T {
     let finalized = AssertUnwindSafe(session.finalize()).catch_unwind().await;
@@ -408,7 +409,7 @@ async fn finish_protocol_session<T>(
             match finalized {
                 Ok(_) => {}
                 Err(_) => tracing::error!(
-                    peer_ip = %session.peer_ip,
+                    peer_ip = %session.peer_ip(),
                     "XMPP session finalizer also panicked while unwinding a transport panic"
                 ),
             }
@@ -425,16 +426,17 @@ impl Drop for BackpressureDisconnectMetric {
     }
 }
 
-async fn drive_io<S>(
+async fn drive_io<S, P>(
     mut io: S,
     transport_policy: &NativeTransportPolicy,
-    session: &mut ProtocolSession,
+    session: &mut P,
     rx: &mut mpsc::Receiver<northstar_stream::outbound::OutboundItem>,
     actor_shutdown: &tokio_util::sync::CancellationToken,
     stream_limits: StreamLimits,
 ) -> Result<DriveOutcome<S>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
+    P: StreamSession + direct_delivery::DirectWritePort,
 {
     let signals = session.termination_signals();
     let _backpressure_metric = BackpressureDisconnectMetric {
@@ -466,7 +468,7 @@ where
                 return Ok(DriveOutcome::Done);
             }
             _ = signals.backpressured() => {
-                tracing::warn!(peer_ip = %session.peer_ip, "closed slow XMPP client after an ordered outbound delivery could not be queued; recoverable messages remain available for replay and committed state will resynchronize after reconnect");
+                tracing::warn!(peer_ip = %session.peer_ip(), "closed slow XMPP client after an ordered outbound delivery could not be queued; recoverable messages remain available for replay and committed state will resynchronize after reconnect");
                 return Ok(DriveOutcome::Done);
             }
             _ = signals.revoked() => {
@@ -475,7 +477,7 @@ where
             }
             _ = tokio::time::sleep_until(peer_idle.deadline) => {
                 session.forbid_sm_resume();
-                tracing::debug!(peer_ip = %session.peer_ip, authenticated = session.is_authenticated(), "closed byte-idle XMPP connection at the advertised XEP-0478 limit");
+                tracing::debug!(peer_ip = %session.peer_ip(), authenticated = session.is_authenticated(), "closed byte-idle XMPP connection at the advertised XEP-0478 limit");
                 let opening = !session.is_stream_open();
                 let domain = session.local_domain().to_owned();
                 let _ = tcp_fatal_error(
@@ -488,7 +490,7 @@ where
             }
             _ = authentication_watch.tick(), if !session.is_authenticated() => {
                 if session.unauthenticated_timed_out(std::time::Instant::now()) {
-                    tracing::debug!(peer_ip = %session.peer_ip, "closed unauthenticated XMPP connection after deadline");
+                    tracing::debug!(peer_ip = %session.peer_ip(), "closed unauthenticated XMPP connection after deadline");
                     return Ok(DriveOutcome::Done);
                 }
             }
@@ -527,7 +529,7 @@ where
                 );
                 pending_utf8.extend_from_slice(&bytes[..count]);
                 if let Err(error) = append_utf8(&mut pending_utf8, &mut buffer) {
-                    tracing::debug!(?error, peer_ip = %session.peer_ip, "invalid UTF-8 in XMPP stream");
+                    tracing::debug!(?error, peer_ip = %session.peer_ip(), "invalid UTF-8 in XMPP stream");
                     session.forbid_sm_resume();
                     let opening = !session.is_stream_open();
                     tcp_fatal_error(
@@ -545,14 +547,14 @@ where
                     // `take_frame` normally consumes leading XML whitespace, so
                     // enforce this at the transport boundary before framing can
                     // discard it (including between coalesced TCP frames).
-                    if session.sasl2_state.is_some() && starts_with_xml_whitespace(&buffer) {
-                        tracing::debug!(peer_ip = %session.peer_ip, "closed connection after whitespace during SASL2 negotiation");
+                    if session.sasl2_in_progress() && starts_with_xml_whitespace(&buffer) {
+                        tracing::debug!(peer_ip = %session.peer_ip(), "closed connection after whitespace during SASL2 negotiation");
                         return Ok(DriveOutcome::Done);
                     }
                     let frame = match framer.take_frame(&mut buffer) {
                         Ok(Some(frame)) => {
                             if frame.len() > MAX_XMPP_FRAME_BYTES {
-                                tracing::debug!(peer_ip = %session.peer_ip, "XMPP frame exceeded 1 MiB");
+                                tracing::debug!(peer_ip = %session.peer_ip(), "XMPP frame exceeded 1 MiB");
                                 session.forbid_sm_resume();
                                 let opening = !session.is_stream_open();
                                 tcp_fatal_error(
@@ -571,7 +573,7 @@ where
                             // Several coalesced, individually valid stanzas
                             // must not be rejected as one oversized stanza.
                             if buffer.len() + pending_utf8.len() > MAX_XMPP_FRAME_BYTES {
-                                tracing::debug!(peer_ip = %session.peer_ip, "incomplete XMPP frame exceeded 1 MiB");
+                                tracing::debug!(peer_ip = %session.peer_ip(), "incomplete XMPP frame exceeded 1 MiB");
                                 session.forbid_sm_resume();
                                 let opening = !session.is_stream_open();
                                 tcp_fatal_error(
@@ -586,7 +588,7 @@ where
                             break;
                         }
                         Err(error) => {
-                            tracing::debug!(?error, peer_ip = %session.peer_ip, "invalid XMPP framing");
+                            tracing::debug!(?error, peer_ip = %session.peer_ip(), "invalid XMPP framing");
                             session.forbid_sm_resume();
                             let condition = northstar_xml_framing::stream_error_condition(&error);
                             let opening = !session.is_stream_open();
@@ -605,7 +607,7 @@ where
                     let action = match session.process_frame(&frame).await {
                         Ok(action) => action,
                         Err(FrameFailure::Backend(error)) => {
-                            tracing::error!(?error, peer_ip = %session.peer_ip, "XMPP protocol/backend failure");
+                            tracing::error!(?error, peer_ip = %session.peer_ip(), "XMPP protocol/backend failure");
                             session.forbid_sm_resume();
                             tcp_fatal_error(
                                 &mut io,
@@ -888,9 +890,9 @@ async fn tcp_fatal_error<S: AsyncWrite + Unpin>(
     send(io, "</stream:stream>").await
 }
 
-async fn tcp_record_and_send<S: AsyncWrite + Unpin>(
+async fn tcp_record_and_send<S: AsyncWrite + Unpin, P: StreamSession>(
     io: &mut S,
-    session: &mut ProtocolSession,
+    session: &mut P,
     stanza: &str,
     opening: bool,
 ) -> Result<bool> {
@@ -902,14 +904,14 @@ async fn tcp_record_and_send<S: AsyncWrite + Unpin>(
     Ok(true)
 }
 
-async fn tcp_record_and_send_auth<S: AsyncWrite + Unpin>(
+async fn tcp_record_and_send_auth<S: AsyncWrite + Unpin, P: StreamSession>(
     io: &mut S,
-    session: &mut ProtocolSession,
+    session: &mut P,
     stanza: String,
     holder: northstar_stream::auth_publication::AuthControlHolder,
     opening: bool,
 ) -> Result<Option<northstar_stream::auth_publication::OwnedPublication>> {
-    holder.validate_connection(session.connection_id)?;
+    holder.validate_connection(session.connection_id())?;
     holder.validate_control(&stanza)?;
     holder.recording()?;
     if let Err(error) = session.record_outbound(&stanza).await {
@@ -922,9 +924,12 @@ async fn tcp_record_and_send_auth<S: AsyncWrite + Unpin>(
     Ok(Some(owner))
 }
 
-async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
+async fn tcp_record_and_send_item<
+    S: AsyncWrite + Unpin,
+    P: StreamSession + direct_delivery::DirectWritePort,
+>(
     io: &mut S,
-    session: &mut ProtocolSession,
+    session: &mut P,
     item: &northstar_stream::outbound::OutboundItem,
     opening: bool,
 ) -> Result<bool> {
@@ -962,14 +967,14 @@ async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
     })
     .await
 }
-async fn tcp_internal_backend_error<S: AsyncWrite + Unpin>(
+async fn tcp_internal_backend_error<S: AsyncWrite + Unpin, P: StreamSession>(
     io: &mut S,
-    session: &mut ProtocolSession,
+    session: &mut P,
     opening: bool,
     operation: &'static str,
     error: &anyhow::Error,
 ) {
-    tracing::error!(?error, operation, peer_ip = %session.peer_ip, "XMPP transport/backend failure");
+    tracing::error!(?error, operation, peer_ip = %session.peer_ip(), "XMPP transport/backend failure");
     session.forbid_sm_resume();
     let domain = session.local_domain().to_owned();
     // The original backend error is authoritative; a broken or stalled peer
@@ -1276,9 +1281,9 @@ pub async fn websocket_connection(
     finish_protocol_session(&mut session, transport).await;
 }
 
-async fn websocket_record_and_send_item(
+async fn websocket_record_and_send_item<P: StreamSession + direct_delivery::DirectWritePort>(
     socket: &mut WebSocket,
-    session: &mut ProtocolSession,
+    session: &mut P,
     item: &northstar_stream::outbound::OutboundItem,
     opening: bool,
     terminal: &mut WebSocketTerminalSequence,

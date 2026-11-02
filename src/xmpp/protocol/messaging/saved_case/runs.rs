@@ -44,13 +44,13 @@ pub(super) async fn run_native(
         log: log.clone(),
     };
     let child = async {
-        let lease = DirectWriteLease::prepare_with(&mut port, &item, &observation).await?;
+        let lease = DirectWriteLease::prepare(&mut port, &item, &observation).await?;
         log.prefix();
         receivers.observe_mix(&sequence, mix_handoffs);
         let written = lease
             .write(|stanza| crate::xmpp::send(&mut writer, stanza))
             .await?;
-        written.settle_with(&port).await;
+        written.settle(&port).await;
         Ok::<_, anyhow::Error>(())
     };
     let mut runner = Box::pin(NativeWriteRunner::new(observation.clone(), child));

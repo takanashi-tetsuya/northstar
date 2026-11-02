@@ -1,18 +1,19 @@
 //! Execute XMPP protocol actions over RFC 7395 WebSocket framing.
 
+use super::direct_delivery::DirectWritePort;
 use super::{
     websocket_fatal_error, websocket_orderly_close, websocket_record_and_send_item,
     websocket_send_live, websocket_send_many_and_close, WebSocketSendCancellation,
     WebSocketTerminalSequence,
 };
-use crate::xmpp::protocol::ProtocolSession;
 use anyhow::Result;
 use axum::extract::ws::{Message, WebSocket};
+use northstar_stream::session::StreamSession;
 use northstar_stream::transport::Action;
 
-pub(super) async fn apply(
+pub(super) async fn apply<P: StreamSession + DirectWritePort>(
     socket: &mut WebSocket,
-    session: &mut ProtocolSession,
+    session: &mut P,
     action: Result<Action>,
     opening: bool,
     terminal_sequence: &mut WebSocketTerminalSequence,
@@ -82,7 +83,7 @@ pub(super) async fn apply(
             for reply in replies {
                 if let Some(holder) = &holder {
                     if holder
-                        .validate_connection(session.connection_id)
+                        .validate_connection(<P as StreamSession>::connection_id(session))
                         .and_then(|_| holder.validate_control(&reply))
                         .is_err()
                     {
@@ -145,7 +146,7 @@ pub(super) async fn apply(
                     return false;
                 };
                 if holder
-                    .validate_connection(session.connection_id)
+                    .validate_connection(<P as StreamSession>::connection_id(session))
                     .and_then(|_| holder.validate_control(&control))
                     .is_err()
                 {

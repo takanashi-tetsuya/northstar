@@ -1,6 +1,7 @@
 //! Parse and validate BOSH requests and apply request sequencing, timing and negotiation rules.
 
 use super::*;
+use northstar_stream::session::StreamSession;
 
 pub(super) fn secure_proxy_request(
     peer_ip: IpAddr,
@@ -387,8 +388,8 @@ pub(super) fn parse_bosh_version(value: &str) -> Option<(u16, u16)> {
     Some((major.parse().ok()?, minor.parse().ok()?))
 }
 
-pub(super) fn capture_bosh_stream(
-    protocol: &mut ProtocolSession,
+pub(super) fn capture_bosh_stream<P: StreamSession>(
+    protocol: &mut P,
     to: Option<&str>,
     from: Option<&str>,
     language: Option<&str>,

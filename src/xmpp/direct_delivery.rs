@@ -160,14 +160,7 @@ pub(super) struct WrittenDirectLease<'a> {
     managed_by_sm: bool,
 }
 impl<'a> DirectWriteLease<'a> {
-    pub(super) async fn prepare(
-        session: &mut ProtocolSession,
-        item: &'a OutboundItem,
-        observation: &Observation,
-    ) -> Result<Self> {
-        Self::prepare_with(session, item, observation).await
-    }
-    pub(super) async fn prepare_with<P: DirectWritePort>(
+    pub(super) async fn prepare<P: DirectWritePort>(
         port: &mut P,
         item: &'a OutboundItem,
         observation: &Observation,
@@ -233,10 +226,7 @@ impl<'a> DirectWriteLease<'a> {
     }
 }
 impl WrittenDirectLease<'_> {
-    pub(super) async fn settle(self, session: &ProtocolSession) {
-        self.settle_with(session).await;
-    }
-    pub(super) async fn settle_with<P: DirectWritePort>(self, port: &P) {
+    pub(super) async fn settle<P: DirectWritePort>(self, port: &P) {
         // Full local write was retained by the writer helper before either
         // notification and before this first settlement await.
         self.item.confirm_transport_write();
@@ -451,14 +441,14 @@ mod tests {
         port: &mut FakePort,
         item: &'a OutboundItem,
     ) -> Result<DirectWriteLease<'a>> {
-        DirectWriteLease::prepare_with(port, item, &Observation::new(item.durable_source)).await
+        DirectWriteLease::prepare(port, item, &Observation::new(item.durable_source)).await
     }
     async fn write_and_settle(lease: DirectWriteLease<'_>, port: &FakePort) {
         lease
             .write(|_| async { port.event("write") })
             .await
             .unwrap()
-            .settle_with(port)
+            .settle(port)
             .await;
     }
 
@@ -644,11 +634,11 @@ mod tests {
             let observation = Observation::new(item.durable_source);
             let mut io = ScriptedWrite::new(cut);
             let mut future = Box::pin(NativeWriteRunner::new(observation.clone(), async {
-                let lease = DirectWriteLease::prepare_with(&mut port, &item, &observation).await?;
+                let lease = DirectWriteLease::prepare(&mut port, &item, &observation).await?;
                 let written = lease
                     .write(|stanza| super::super::send(&mut io, stanza))
                     .await?;
-                written.settle_with(&port).await;
+                written.settle(&port).await;
                 Ok::<(), anyhow::Error>(())
             }));
             let polled = futures::poll!(&mut future);
@@ -696,11 +686,11 @@ mod tests {
         let observation = Observation::new(item.durable_source);
         let mut io = ScriptedWrite::new(IoCut::FlushPending);
         let mut future = Box::pin(NativeWriteRunner::new(observation.clone(), async {
-            let lease = DirectWriteLease::prepare_with(&mut port, &item, &observation).await?;
+            let lease = DirectWriteLease::prepare(&mut port, &item, &observation).await?;
             lease
                 .write(|stanza| super::super::send(&mut io, stanza))
                 .await?
-                .settle_with(&port)
+                .settle(&port)
                 .await;
             Ok::<(), anyhow::Error>(())
         }));
@@ -740,7 +730,7 @@ mod tests {
             item.transport_write_receipt = Some(write_receipt);
             let observation = Observation::new(item.durable_source);
             let mut future = Box::pin(NativeWriteRunner::new(observation.clone(), async {
-                let lease = DirectWriteLease::prepare_with(&mut port, &item, &observation)
+                let lease = DirectWriteLease::prepare(&mut port, &item, &observation)
                     .await
                     .unwrap();
                 lease
@@ -750,7 +740,7 @@ mod tests {
                     })
                     .await
                     .unwrap()
-                    .settle_with(&port)
+                    .settle(&port)
                     .await;
                 true // Existing outward write success survives ACK errors.
             }));
@@ -798,14 +788,14 @@ mod tests {
             let observation = Observation::new(item.durable_source);
             let polled = std::cell::Cell::new(false);
             let mut future = Box::pin(NativeWriteRunner::new(observation.clone(), async {
-                let lease = DirectWriteLease::prepare_with(&mut port, &item, &observation).await?;
+                let lease = DirectWriteLease::prepare(&mut port, &item, &observation).await?;
                 lease
                     .write(|_| async {
                         polled.set(true);
                         Ok(())
                     })
                     .await?
-                    .settle_with(&port)
+                    .settle(&port)
                     .await;
                 Ok::<(), anyhow::Error>(())
             }));
@@ -838,13 +828,13 @@ mod tests {
                 ..Default::default()
             };
             let observation = Observation::new(item.durable_source);
-            DirectWriteLease::prepare_with(&mut port, &item, &observation)
+            DirectWriteLease::prepare(&mut port, &item, &observation)
                 .await
                 .unwrap()
                 .write(|_| async { Ok(()) })
                 .await
                 .unwrap()
-                .settle_with(&port)
+                .settle(&port)
                 .await;
             assert_eq!(
                 observation.snapshot().returned_fence,
@@ -871,13 +861,13 @@ mod tests {
             },
         );
         let observation = Observation::new(item.durable_source);
-        DirectWriteLease::prepare_with(&mut port, &item, &observation)
+        DirectWriteLease::prepare(&mut port, &item, &observation)
             .await
             .unwrap()
             .write(|_| async { Ok(()) })
             .await
             .unwrap()
-            .settle_with(&port)
+            .settle(&port)
             .await;
         assert!(matches!(
             handoff.await.unwrap(),
@@ -923,7 +913,7 @@ mod tests {
             let observation = Observation::new(item.durable_source);
             let polled = std::cell::Cell::new(false);
             let mut future = Box::pin(NativeWriteRunner::new(observation.clone(), async {
-                let lease = DirectWriteLease::prepare_with(&mut port, &item, &observation).await?;
+                let lease = DirectWriteLease::prepare(&mut port, &item, &observation).await?;
                 let written = lease
                     .write(|stanza| {
                         let polled = &polled;
@@ -949,7 +939,7 @@ mod tests {
                         }
                     })
                     .await?;
-                written.settle_with(&port).await;
+                written.settle(&port).await;
                 Ok::<(), anyhow::Error>(())
             }));
             let first = futures::poll!(&mut future);

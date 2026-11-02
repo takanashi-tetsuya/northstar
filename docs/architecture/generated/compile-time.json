@@ -4880,6 +4880,10 @@
     ],
     [
       "northstar-stream",
+      "northstar-federation-core"
+    ],
+    [
+      "northstar-stream",
       "northstar-message-core"
     ],
     [
@@ -4905,6 +4909,10 @@
     [
       "northstar-stream",
       "northstar-session-postgres"
+    ],
+    [
+      "northstar-stream",
+      "northstar-xep-0016"
     ],
     [
       "northstar-stream",

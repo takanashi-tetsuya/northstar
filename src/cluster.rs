@@ -73,7 +73,7 @@ use self::recovery_replay::*;
 pub(crate) use self::teardown::*;
 pub(crate) use self::worker_capabilities::*;
 pub use self::workers::*;
-pub use adapters::ClusterAdapters;
+pub use adapters::{ClusterAdapters, ClusterMucDelivery};
 
 use pool::{
     cluster_pool_builder, open_pubsub, publish_listener_probe, subscribe_pubsub,

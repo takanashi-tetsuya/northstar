@@ -1,9 +1,10 @@
 //! Blocking-presence fanout after an authenticated cluster command.
 
-use crate::{cluster::ClusterListenerPresenceRoutes, s2s::FederationRouter};
+use crate::cluster::{ClusterAdapters, ClusterListenerPresenceRoutes};
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_config::ExternalRouteDomainPolicy;
+use northstar_federation_core::FederationRoute;
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::local_routes::session_table::session_entries_for_in;
 use northstar_xml_builder::XmlElement;
@@ -12,15 +13,15 @@ use std::{
     sync::{atomic::Ordering, Arc},
 };
 
-pub(crate) struct ClusterListenerBlocking {
+pub(crate) struct ClusterListenerBlocking<A: ClusterAdapters> {
     pub(crate) sessions: Arc<DashMap<String, OnlineSession>>,
     pub(crate) remote_routes: ClusterListenerPresenceRoutes,
     pub(crate) local_domain: String,
     pub(crate) external_routes: ExternalRouteDomainPolicy,
-    pub(crate) federation: FederationRouter,
+    pub(crate) federation: A::Federation,
 }
 
-impl ClusterListenerBlocking {
+impl<A: ClusterAdapters> ClusterListenerBlocking<A> {
     pub(crate) async fn deliver_presence_change(
         &self,
         owner: &str,

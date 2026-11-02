@@ -8,6 +8,7 @@
 pub mod handler;
 pub mod iq;
 pub mod local_routes;
+pub mod muc_delivery;
 pub mod outbound;
 pub mod replay;
 

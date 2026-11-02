@@ -33,6 +33,32 @@ impl MucDeliveryRepository for PostgresMucDeliveryRepository {
         .await
     }
 
+    async fn privacy_allows_session(
+        &self,
+        user_id: Uuid,
+        connection_id: Uuid,
+        active_privacy_list: Option<&str>,
+        peer: &str,
+        kind: northstar_xep_0016::PrivacyStanzaKind,
+    ) -> Result<bool> {
+        if active_privacy_list.is_some() {
+            northstar_roster_postgres::privacy::refresh_active_privacy_session(
+                &self.pool,
+                user_id,
+                connection_id,
+            )
+            .await?;
+        }
+        Ok(!northstar_roster_postgres::privacy::privacy_denies(
+            &self.pool,
+            user_id,
+            active_privacy_list,
+            peer,
+            kind,
+        )
+        .await?)
+    }
+
     async fn suspended_privacy_denies(
         &self,
         session_id: Uuid,

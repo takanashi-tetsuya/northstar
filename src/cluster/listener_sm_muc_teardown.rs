@@ -10,7 +10,7 @@ pub(crate) struct ClusterListenerSmMucTeardown<A: ClusterAdapters> {
     pub(crate) local: SmTeardownLocalEffects,
     pub(crate) redis: ClusterSmMucTeardownProjection,
     pub(crate) rooms: SmTeardownMucService<A::SmTeardownMuc>,
-    pub(crate) delivery: crate::xmpp::muc_delivery::MucDeliveryContext,
+    pub(crate) delivery: super::ClusterMucDelivery<A>,
     pub(crate) local_domain: String,
 }
 

@@ -32,6 +32,9 @@ impl crate::cluster::ClusterAdapters for PostgresClusterAdapters {
         northstar_room_postgres::cluster_muc_delivery_read_repository::PostgresClusterMucDeliveryReadRepository;
     type MucDeliveryItem =
         northstar_room_postgres::cluster_muc_delivery_item_repository::PostgresClusterMucDeliveryItemRepository;
+    type MucDelivery = northstar_workflows::muc_delivery_repository::PostgresMucDeliveryRepository;
+    type MucReceiptClaim =
+        northstar_room_postgres::cluster_muc_receipt_claim_repository::PostgresClusterMucReceiptClaimRepository;
     type Mix = northstar_workflows::room_effects::PostgresMixRepository;
     type SmTeardownMuc =
         northstar_workflows::sm_teardown_muc_repository::PostgresSmTeardownMucRepository;
@@ -39,4 +42,5 @@ impl crate::cluster::ClusterAdapters for PostgresClusterAdapters {
     type DirectSpoolWake =
         northstar_message_postgres::direct_spool_wake::PostgresDirectSpoolWakeRepository;
     type Presence = crate::db::presence_repository::PostgresPresenceRepository;
+    type Federation = crate::s2s::FederationRouter;
 }

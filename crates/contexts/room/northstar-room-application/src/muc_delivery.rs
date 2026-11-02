@@ -13,6 +13,17 @@ pub trait MucDeliveryRepository: Send + Sync {
         stanza_senders: &[String],
     ) -> impl Future<Output = Result<HashSet<String>>> + Send;
 
+    /// Whether one session's privacy lists let `peer` reach it with a stanza of `kind`. With an active list the
+    /// session's active-list lease is refreshed first.
+    fn privacy_allows_session(
+        &self,
+        user_id: Uuid,
+        connection_id: Uuid,
+        active_privacy_list: Option<&str>,
+        peer: &str,
+        kind: PrivacyStanzaKind,
+    ) -> impl Future<Output = Result<bool>> + Send;
+
     fn suspended_privacy_denies(
         &self,
         session_id: Uuid,

@@ -1,6 +1,7 @@
 //! The repositories the cluster's workers and listener run on, as one family of types. The
 //! composition root names the PostgreSQL family; the cluster code sees only the application ports.
 
+use northstar_federation_core::FederationRoute;
 use northstar_message_application::{
     direct_spool_wake::DirectSpoolWakeRepository, messaging::MessageRepository,
 };
@@ -11,7 +12,8 @@ use northstar_room_application::{
     cluster_muc_outbox_housekeeping::ClusterMucOutboxHousekeepingRepository,
     cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimRepository,
     cluster_muc_outbox_settlement::ClusterMucOutboxSettlementRepository,
-    mix_service::MixRepository, muc_service::ClusterMucOccupancyMaintenanceRepository,
+    cluster_muc_receipt_claim::ClusterMucReceiptClaimRepository, mix_service::MixRepository,
+    muc_delivery::MucDeliveryRepository, muc_service::ClusterMucOccupancyMaintenanceRepository,
     sm_teardown_muc::SmTeardownMucRepository,
 };
 use northstar_room_core::{
@@ -51,9 +53,20 @@ pub trait ClusterAdapters: Send + Sync + 'static {
         > + 'static;
     type MucDeliveryItem: ClusterMucDeliveryItemRepository<Delivery = ClusterMucOutboxDelivery>
         + 'static;
+    type MucDelivery: MucDeliveryRepository + 'static;
+    type MucReceiptClaim: ClusterMucReceiptClaimRepository<Delivery = ClusterMucOutboxDelivery>
+        + 'static;
     type Mix: MixRepository + 'static;
     type SmTeardownMuc: SmTeardownMucRepository + 'static;
     type Message: MessageRepository + 'static;
     type DirectSpoolWake: DirectSpoolWakeRepository + 'static;
     type Presence: PresenceRepository + 'static;
+    type Federation: FederationRoute + Clone;
 }
+
+/// The MUC endpoint delivery context over one adapter family.
+pub type ClusterMucDelivery<A> = northstar_stream::muc_delivery::MucDeliveryContext<
+    <A as ClusterAdapters>::MucDelivery,
+    <A as ClusterAdapters>::MucReceiptClaim,
+    <A as ClusterAdapters>::Federation,
+>;

@@ -4,7 +4,6 @@
 
 use super::muc_delivery_endpoints::ClusterMucDeliveryEndpoints;
 use crate::cluster::{ClusterAdapters, ClusterMucOutboxSignal};
-use crate::xmpp::muc_delivery::MucDeliveryContext;
 use northstar_telemetry::metrics::Metrics;
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::OwnedSemaphorePermit;
@@ -13,7 +12,7 @@ pub(crate) struct ClusterMucOutboxWorkerContext<A: ClusterAdapters> {
     pub(crate) signal: ClusterMucOutboxSignal,
     pub(crate) domain: String,
     pub(crate) endpoints: ClusterMucDeliveryEndpoints,
-    pub(crate) delivery: MucDeliveryContext,
+    pub(crate) delivery: super::ClusterMucDelivery<A>,
     pub(crate) preclaim: northstar_room_application::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService<
         A::MucOutboxPreclaim,
     >,

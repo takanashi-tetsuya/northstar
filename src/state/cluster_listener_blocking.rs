@@ -5,7 +5,9 @@ use crate::cluster::listener_blocking::ClusterListenerBlocking;
 use std::sync::Arc;
 
 impl AppState {
-    pub(crate) fn cluster_listener_blocking(&self) -> ClusterListenerBlocking {
+    pub(crate) fn cluster_listener_blocking(
+        &self,
+    ) -> ClusterListenerBlocking<super::cluster_adapters::PostgresClusterAdapters> {
         ClusterListenerBlocking {
             sessions: Arc::clone(&self.sessions),
             remote_routes: self.cluster.listener_presence_routes(),

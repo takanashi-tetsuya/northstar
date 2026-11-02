@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use northstar_stream::outbound;
 use sqlx::{PgPool, Row};
 use std::{
     collections::{HashMap, HashSet},
@@ -34,7 +33,7 @@ pub struct SmSessionSnapshot {
     pub joined_rooms: Vec<SmMucMembership>,
     pub directed_presence: Vec<String>,
     pub last_presence: Option<String>,
-    pub unacked: Vec<outbound::SmUnackedStanza>,
+    pub unacked: Vec<northstar_delivery_core::SmUnackedStanza>,
 }
 
 #[derive(Clone, Debug)]
@@ -62,7 +61,7 @@ pub struct SmResumeClaim {
     pub joined_rooms: Vec<SmMucMembership>,
     pub directed_presence: Vec<String>,
     pub last_presence: Option<String>,
-    pub unacked: Vec<outbound::SmUnackedStanza>,
+    pub unacked: Vec<northstar_delivery_core::SmUnackedStanza>,
 }
 
 #[derive(Debug)]
@@ -98,7 +97,7 @@ pub struct SmResumePending {
 #[derive(Clone, Debug)]
 pub struct ActivatedSmSession {
     pub outbound_h: u32,
-    pub unacked: Vec<outbound::SmUnackedStanza>,
+    pub unacked: Vec<northstar_delivery_core::SmUnackedStanza>,
 }
 
 /// One MIX lease capability rotated while it crosses into durable XEP-0198
@@ -108,8 +107,8 @@ pub struct ActivatedSmSession {
 /// only after the transaction commits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SmMixLeaseRotation {
-    pub previous: outbound::MixDelivery,
-    pub current: outbound::MixDelivery,
+    pub previous: northstar_delivery_core::MixDelivery,
+    pub current: northstar_delivery_core::MixDelivery,
 }
 
 /// Exact source rewrites committed by one SM queue replacement.
@@ -157,7 +156,7 @@ pub fn peer_ip_matches(policy: SmIpPolicy, expected: IpAddr, actual: IpAddr) -> 
 
 /// Result-only fixture API. Runtime callers require ownership rotations and
 /// therefore use `create_sm_session_with_ownership_resolution` directly.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
 pub async fn create_sm_session(
     pool: &PgPool,
@@ -341,7 +340,7 @@ pub async fn checkpoint_sm_session_and_acknowledge(
     id: Uuid,
     connection_id: Uuid,
     snapshot: &SmSessionSnapshot,
-    acknowledged: &[outbound::SmUnackedStanza],
+    acknowledged: &[northstar_delivery_core::SmUnackedStanza],
     ttl_seconds: u64,
     live_lease_seconds: u64,
     max_stanzas: usize,
@@ -365,12 +364,12 @@ pub async fn checkpoint_sm_session_and_acknowledge(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn checkpoint_sm_session_and_acknowledge_observed(
+pub async fn checkpoint_sm_session_and_acknowledge_observed(
     pool: &PgPool,
     id: Uuid,
     connection_id: Uuid,
     snapshot: &SmSessionSnapshot,
-    acknowledged: &[outbound::SmUnackedStanza],
+    acknowledged: &[northstar_delivery_core::SmUnackedStanza],
     ttl_seconds: u64,
     live_lease_seconds: u64,
     max_stanzas: usize,
@@ -464,7 +463,7 @@ pub(crate) async fn checkpoint_sm_session_and_acknowledge_observed(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn suspend_sm_session(
     pool: &PgPool,
     id: Uuid,
@@ -702,8 +701,8 @@ pub async fn take_sm_sessions_for_full_jid_teardown(
 /// BOSH hand-off path, so neither transport can form a reverse lock cycle.
 async fn rotate_new_mix_source_for_sm_transfer(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    previous: outbound::MixDelivery,
-) -> Result<outbound::MixDelivery> {
+    previous: northstar_delivery_core::MixDelivery,
+) -> Result<northstar_delivery_core::MixDelivery> {
     let row = sqlx::query(
         "SELECT lease_token,lease_until>clock_timestamp() AS active
            FROM mix_delivery_recipients
@@ -743,7 +742,7 @@ async fn rotate_new_mix_source_for_sm_transfer(
     // node which later exits cannot release a source now owned by XEP-0198.
     northstar_room_postgres::mix::consume_mix_cluster_delivery_fence_tx(transaction, previous)
         .await?;
-    let current = outbound::MixDelivery {
+    let current = northstar_delivery_core::MixDelivery {
         delivery_id: previous.delivery_id,
         lease_token: Uuid::new_v4(),
     };
@@ -765,9 +764,9 @@ async fn rotate_new_mix_source_for_sm_transfer(
     Ok(current)
 }
 
-pub(crate) async fn acknowledge_transport_sources_observed(
+pub async fn acknowledge_transport_sources_observed(
     pool: &PgPool,
-    sources: &[outbound::TransportOwnershipSource],
+    sources: &[northstar_delivery_core::TransportOwnershipSource],
     observation: Option<&northstar_delivery_core::sm_ownership::Request>,
 ) -> Result<()> {
     if let Some(request) = observation {
@@ -920,7 +919,9 @@ pub(crate) async fn acknowledge_transport_sources_observed(
             "durable C2S delivery disappeared during acknowledgement"
         );
         if let Some(deleted) = deleted.as_mut() {
-            deleted.push(outbound::TransportOwnershipSource::C2s(*delivery));
+            deleted.push(northstar_delivery_core::TransportOwnershipSource::C2s(
+                *delivery,
+            ));
         }
     }
     for delivery in &mix {
@@ -938,7 +939,9 @@ pub(crate) async fn acknowledge_transport_sources_observed(
             "MIX delivery lease changed during acknowledgement"
         );
         if let Some(deleted) = deleted.as_mut() {
-            deleted.push(outbound::TransportOwnershipSource::Mix(*delivery));
+            deleted.push(northstar_delivery_core::TransportOwnershipSource::Mix(
+                *delivery,
+            ));
         }
     }
     if let Some(request) = observation {
@@ -973,5 +976,4 @@ fn seconds_i64(seconds: u64, name: &str) -> Result<i64> {
 }
 
 #[cfg(test)]
-#[path = "sm_tests.rs"]
 mod tests;

@@ -13,7 +13,10 @@ export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PG
 run_exact_ignored() {
   local test_name="$1"
   local output
-  output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture 2>&1)" || {
+  # The store's own tests live in the workflows crate.
+  local package=()
+  [[ "$test_name" != sm::* ]] || package=(-p northstar-workflows)
+  output="$(cargo test --locked --offline "${package[@]}" "$test_name" -- --ignored --exact --nocapture 2>&1)" || {
     printf '%s\n' "$output"
     exit 1
   }
@@ -25,19 +28,19 @@ run_exact_ignored() {
 }
 
 run_exact_ignored \
-  db::sm::tests::owner_only_session_catalog_is_strict_and_development_safe
+  sm::tests::owner_only_session_catalog_is_strict_and_development_safe
 run_exact_ignored \
-  db::sm::tests::strict_same_device_claim_rejects_legacy_and_null_claimant
+  sm::tests::strict_same_device_claim_rejects_legacy_and_null_claimant
 run_exact_ignored \
-  db::sm::tests::durable_claim_is_single_consumer_and_revocable
+  sm::tests::durable_claim_is_single_consumer_and_revocable
 run_exact_ignored \
-  db::sm::tests::durable_delivery_fence_survives_checkpoint_resume_and_revocation
+  sm::tests::durable_delivery_fence_survives_checkpoint_resume_and_revocation
 run_exact_ignored \
-  db::sm::tests::authorization_mutations_retain_sm_presence_and_muc_teardown_state
+  sm::tests::authorization_mutations_retain_sm_presence_and_muc_teardown_state
 run_exact_ignored \
-  db::sm::tests::every_teardown_scope_preserves_the_active_privacy_list
+  sm::tests::every_teardown_scope_preserves_the_active_privacy_list
 run_exact_ignored \
-  db::sm::tests::account_deletion_quiesce_closes_all_sm_race_barriers
+  sm::tests::account_deletion_quiesce_closes_all_sm_race_barriers
 run_exact_ignored \
   db::account_deletion_tests::deletion_recovery_is_delayed_single_owner_and_cascading
 run_exact_ignored \

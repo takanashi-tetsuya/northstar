@@ -1660,6 +1660,7 @@ digraph compile_time {
   "northstar-workflows" -> "northstar-auth-application";
   "northstar-workflows" -> "northstar-auth-core";
   "northstar-workflows" -> "northstar-auth-postgres";
+  "northstar-workflows" -> "northstar-config";
   "northstar-workflows" -> "northstar-delivery-core";
   "northstar-workflows" -> "northstar-federation-core";
   "northstar-workflows" -> "northstar-federation-postgres";
@@ -1674,13 +1675,16 @@ digraph compile_time {
   "northstar-workflows" -> "northstar-pubsub-core";
   "northstar-workflows" -> "northstar-pubsub-postgres";
   "northstar-workflows" -> "northstar-room-application";
+  "northstar-workflows" -> "northstar-room-core";
   "northstar-workflows" -> "northstar-room-postgres";
   "northstar-workflows" -> "northstar-roster-application";
   "northstar-workflows" -> "northstar-roster-core";
   "northstar-workflows" -> "northstar-roster-postgres";
   "northstar-workflows" -> "northstar-runtime";
   "northstar-workflows" -> "northstar-security";
+  "northstar-workflows" -> "northstar-session-application";
   "northstar-workflows" -> "northstar-session-core";
+  "northstar-workflows" -> "northstar-session-postgres";
   "northstar-workflows" -> "northstar-telemetry";
   "northstar-workflows" -> "northstar-upload-postgres";
   "northstar-workflows" -> "northstar-xep-0016";

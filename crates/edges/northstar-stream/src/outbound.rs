@@ -1,33 +1,12 @@
 pub use northstar_delivery_core::{
-    recipient_delivery_identity, DurableDelivery, MixDelivery, MixTransportCompletion,
-    RecipientDeliveryIdentity, SmUnackedStanza, TransportOwnershipSource,
+    recipient_delivery_identity, DurableDelivery, DurableDeliverySuperseded, MixDelivery,
+    MixTransportCompletion, RecipientDeliveryIdentity, SmUnackedStanza, TransportOwnershipSource,
 };
 use northstar_delivery_core::{
     GuardedEnqueue, OrderedOutboundSink, OutboundFuture, OutboundQueueError,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
-
-/// The durable row was deleted or another exact replay/transport claim won
-/// before this queued item acquired its PostgreSQL write fence. The caller
-/// must drop this item without exposing bytes or acknowledging its row.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DurableDeliverySuperseded {
-    pub message_id: Uuid,
-}
-
-impl std::fmt::Display for DurableDeliverySuperseded {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "durable delivery {} was superseded before transport ownership",
-            self.message_id
-        )
-    }
-}
-
-impl std::error::Error for DurableDeliverySuperseded {}
 
 /// The transport's sealed authentication control. The session layer only
 /// checks that the queued bytes are the sealed control; the transport reads
@@ -585,6 +564,7 @@ fn map_try_send_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     #[test]
     fn recovers_only_the_recipient_authoritative_identity() {

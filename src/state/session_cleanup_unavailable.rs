@@ -1,11 +1,7 @@
 //! Policy-checked unavailable delivery after a local route has been fenced.
 
 use super::{bare_jid, session_entries_for_in, AppState, OnlineSession};
-use crate::{
-    cluster::ClusterUnavailableDelivery,
-    db::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository,
-    s2s::FederationRouter,
-};
+use crate::{cluster::ClusterUnavailableDelivery, s2s::FederationRouter};
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_config::ExternalRouteDomainPolicy;
@@ -13,6 +9,7 @@ use northstar_message_application::messaging::MessageService;
 use northstar_session_application::sm_teardown_presence::{
     SmTeardownPresenceService, UnavailablePolicy,
 };
+use northstar_workflows::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;
 

@@ -1,16 +1,15 @@
 //! PostgreSQL authority for the SM suspension recovery worker.
-use crate::db;
 use anyhow::{Context, Result};
 use northstar_session_application::sm_suspension::*;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-pub(crate) struct PostgresSmSuspensionRepository {
+pub struct PostgresSmSuspensionRepository {
     pool: PgPool,
 }
 
 impl PostgresSmSuspensionRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -21,8 +20,8 @@ impl SmSuspensionRepository for PostgresSmSuspensionRepository {
         request: SmSuspensionRequest<'_>,
         limits: SmSuspensionLimits,
     ) -> Result<bool> {
-        let snapshot = db::SmSessionSnapshot::from(request.snapshot);
-        db::suspend_activated_sm_resume_exact(
+        let snapshot = crate::sm::SmSessionSnapshot::from(request.snapshot);
+        crate::sm::suspend_activated_sm_resume_exact(
             &self.pool,
             request.session_id,
             request.connection_id,
@@ -44,7 +43,7 @@ impl SmSuspensionRepository for PostgresSmSuspensionRepository {
         max_stanzas: usize,
         max_bytes: usize,
     ) -> Result<bool> {
-        db::append_suspended_sm_stanza(
+        crate::sm::append_suspended_sm_stanza(
             &self.pool,
             session_id,
             source_id,

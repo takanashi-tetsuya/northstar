@@ -5,10 +5,10 @@ use crate::api::contexts::account_teardown::{
     AccountGenerationTeardown, AccountGenerationTeardownContext,
 };
 use crate::cluster::ClusterAccountTeardownNotifier;
-use crate::db::sm_teardown_repository::PostgresSmTeardownRepository;
 use axum::extract::FromRef;
 use futures::future::BoxFuture;
 use northstar_session_application::sm_teardown::SmTeardownService;
+use northstar_workflows::sm_teardown_repository::PostgresSmTeardownRepository;
 use std::future::Future;
 use std::sync::Arc;
 use uuid::Uuid;

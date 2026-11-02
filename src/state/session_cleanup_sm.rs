@@ -1,13 +1,12 @@
 //! SM persistence, suspended MUC handoff, and bounded recovery for cleanup.
 
 use super::{suspension::SmSuspensionContext, AppState, SmBufferLimits, SuspendedMucEndpoint};
-use crate::db::{
-    sm_repository::PostgresSmRepository, sm_suspension::PostgresSmSuspensionRepository,
-};
 use crate::state::session_cleanup::{SessionCleanupAccount, SmSuspensionRecoveryQueue};
 use anyhow::Result;
 use northstar_session_application::sm::{SmService, SmSessionSnapshot};
 use northstar_session_application::sm_capacity::{SmCapacityLease, SmMemoryGovernor};
+use northstar_workflows::sm_repository::PostgresSmRepository;
+use northstar_workflows::sm_suspension::PostgresSmSuspensionRepository;
 use std::sync::Arc;
 use uuid::Uuid;
 

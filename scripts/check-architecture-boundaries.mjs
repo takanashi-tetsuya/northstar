@@ -359,7 +359,7 @@ if (!/^\s*pub\(super\)\s+dialback_secret\s*:\s*Zeroizing<Vec<u8>>\s*,/m.test(rea
 if (/^\s*(?:pub(?:\(crate\))?\s+)?fast_token_secret\s*:/m.test(appState)) {
   throw new Error('AppState must not retain the FAST derivation key after adapter construction');
 }
-const smAdapterBody = structBody(read('src/db/sm_repository.rs'), 'pub(crate) struct PostgresSmRepository');
+const smAdapterBody = structBody(read('crates/contexts/workflows/northstar-workflows/src/sm_repository.rs'), 'pub struct PostgresSmRepository');
 if (!/^\s*fast_token_secret\s*:\s*Arc<Zeroizing<Vec<u8>>>\s*,/m.test(smAdapterBody)) {
   throw new Error('SM repository FAST key must remain private Arc<Zeroizing<Vec<u8>>>');
 }

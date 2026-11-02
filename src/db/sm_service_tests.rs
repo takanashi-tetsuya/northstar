@@ -1,10 +1,11 @@
 //! Database tests of the SM service over the root SM repository.
-use crate::db::{self, SmClaimStatus, SmSessionSnapshot};
+use crate::db::{self};
 use northstar_session_application::sm::{
     BindingFinalizationOutcome, BindingReservationOutcome, SmResumeFinalizationOutcome,
     SmResumeFinalizationRequest, SmService,
 };
 use northstar_session_postgres::capacity::DeploymentCapacityConfiguration;
+use northstar_workflows::sm::{SmClaimStatus, SmSessionSnapshot};
 use sqlx::postgres::PgPoolOptions;
 use std::{net::IpAddr, str::FromStr, sync::Arc, time::Duration};
 use uuid::Uuid;
@@ -54,7 +55,7 @@ async fn binding_reservation_is_bounded_leased_and_rechecks_auth_generation() {
         .await
         .unwrap();
     let service = SmService::new(
-        crate::db::sm_repository::PostgresSmRepository::new(
+        northstar_workflows::sm_repository::PostgresSmRepository::new(
             pool.clone(),
             Arc::new(zeroize::Zeroizing::new(vec![7_u8; 32])),
         ),
@@ -183,7 +184,7 @@ async fn sm_activation_and_privacy_selection_commit_or_roll_back_together() {
     };
     let service_snapshot = northstar_session_application::sm::SmSessionSnapshot::from(&snapshot);
     let token_hash = [19_u8; 32];
-    let session_id = db::create_sm_session(
+    let session_id = northstar_workflows::sm::create_sm_session(
         &pool,
         &token_hash,
         user_id,
@@ -200,7 +201,7 @@ async fn sm_activation_and_privacy_selection_commit_or_roll_back_together() {
     )
     .await
     .unwrap();
-    assert!(db::suspend_sm_session(
+    assert!(northstar_workflows::sm::suspend_sm_session(
         &pool,
         session_id,
         old_connection,
@@ -211,13 +212,13 @@ async fn sm_activation_and_privacy_selection_commit_or_roll_back_together() {
     )
     .await
     .unwrap());
-    let claim = match db::claim_sm_session_status(
+    let claim = match northstar_workflows::sm::claim_sm_session_status(
         &pool,
         &token_hash,
         user_id,
         peer_ip,
         None,
-        db::SmIpPolicy::Exact,
+        northstar_workflows::sm::SmIpPolicy::Exact,
         false,
         30,
     )
@@ -248,7 +249,7 @@ async fn sm_activation_and_privacy_selection_commit_or_roll_back_together() {
         .await
         .unwrap();
     let service = SmService::new(
-        crate::db::sm_repository::PostgresSmRepository::new(
+        northstar_workflows::sm_repository::PostgresSmRepository::new(
             pool.clone(),
             Arc::new(zeroize::Zeroizing::new(vec![9_u8; 32])),
         ),
@@ -426,7 +427,7 @@ async fn sm_activation_and_privacy_selection_commit_or_roll_back_together() {
     .await
     .unwrap();
     for _ in 0..2 {
-        assert!(db::append_suspended_sm_stanza(
+        assert!(northstar_workflows::sm::append_suspended_sm_stanza(
             &pool,
             session_id,
             volatile_source_id,
@@ -448,7 +449,9 @@ async fn sm_activation_and_privacy_selection_commit_or_roll_back_together() {
     .await
     .unwrap();
     assert_eq!(after, (before.0 + 1, before.1 + 1));
-    db::revoke_sm_session(&pool, session_id).await.unwrap();
+    northstar_workflows::sm::revoke_sm_session(&pool, session_id)
+        .await
+        .unwrap();
     sqlx::query("DELETE FROM users WHERE id=$1")
         .bind(user_id)
         .execute(&pool)
@@ -508,7 +511,7 @@ async fn resumable_binding_lease_transfers_only_after_transport_publication() {
         last_presence: None,
         unacked: Vec::new(),
     };
-    let sm_session_id = db::create_sm_session(
+    let sm_session_id = northstar_workflows::sm::create_sm_session(
         &pool,
         &[0x45; 32],
         user_id,
@@ -525,7 +528,7 @@ async fn resumable_binding_lease_transfers_only_after_transport_publication() {
     )
     .await
     .unwrap();
-    assert!(db::suspend_sm_session(
+    assert!(northstar_workflows::sm::suspend_sm_session(
         &pool,
         sm_session_id,
         old_connection,
@@ -542,7 +545,7 @@ async fn resumable_binding_lease_transfers_only_after_transport_publication() {
         .await
         .unwrap();
     let sm = SmService::new(
-        crate::db::sm_repository::PostgresSmRepository::new(
+        northstar_workflows::sm_repository::PostgresSmRepository::new(
             pool.clone(),
             Arc::new(zeroize::Zeroizing::new(vec![0x56; 32])),
         ),

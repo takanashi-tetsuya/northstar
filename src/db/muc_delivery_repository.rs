@@ -54,7 +54,7 @@ impl MucDeliveryRepository for PostgresMucDeliveryRepository {
         max_stanzas: usize,
         max_bytes: usize,
     ) -> Result<bool> {
-        db::append_suspended_sm_stanza(
+        northstar_workflows::sm::append_suspended_sm_stanza(
             &self.pool,
             session_id,
             volatile_source_id,

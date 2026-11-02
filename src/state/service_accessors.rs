@@ -141,8 +141,9 @@ impl AppState {
 
     pub(crate) fn sm_service(
         &self,
-    ) -> &northstar_session_application::sm::SmService<db::sm_repository::PostgresSmRepository>
-    {
+    ) -> &northstar_session_application::sm::SmService<
+        northstar_workflows::sm_repository::PostgresSmRepository,
+    > {
         &self.sm_service
     }
 

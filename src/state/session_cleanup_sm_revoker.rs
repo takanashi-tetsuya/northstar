@@ -1,9 +1,9 @@
 //! Exact durable SM revocation after a client cleanup fallback.
 
 use super::{sm_teardown_runtime::SmTeardownRuntime, AppState};
-use crate::db::sm_teardown_repository::PostgresSmTeardownRepository;
 use anyhow::Result;
 use northstar_session_application::sm_teardown::SmTeardownService;
+use northstar_workflows::sm_teardown_repository::PostgresSmTeardownRepository;
 use uuid::Uuid;
 
 pub(crate) struct SessionCleanupSmRevoker {

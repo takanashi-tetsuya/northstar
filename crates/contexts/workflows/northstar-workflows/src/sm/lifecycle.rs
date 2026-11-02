@@ -337,7 +337,7 @@ pub(super) async fn take_sm_teardown_scope(
     })
 }
 
-pub(crate) fn sm_teardown_snapshot(row: &sqlx::postgres::PgRow) -> Result<SmTeardownSnapshot> {
+pub fn sm_teardown_snapshot(row: &sqlx::postgres::PgRow) -> Result<SmTeardownSnapshot> {
     Ok(SmTeardownSnapshot {
         session_id: row.try_get("id")?,
         teardown_token: row.try_get("teardown_token")?,

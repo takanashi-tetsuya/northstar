@@ -513,7 +513,7 @@ impl AppState {
                 sm_authority_connect_options.options([("search_path", "public")]);
         }
         let sm_service = northstar_session_application::sm::SmService::new(
-            db::sm_repository::PostgresSmRepository::new(
+            northstar_workflows::sm_repository::PostgresSmRepository::new(
                 pool.clone(),
                 Arc::clone(&fast_token_secret),
             ),

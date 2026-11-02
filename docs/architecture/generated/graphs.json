@@ -4779,6 +4779,10 @@
       ],
       [
         "northstar-workflows",
+        "northstar-config"
+      ],
+      [
+        "northstar-workflows",
         "northstar-delivery-core"
       ],
       [
@@ -4835,6 +4839,10 @@
       ],
       [
         "northstar-workflows",
+        "northstar-room-core"
+      ],
+      [
+        "northstar-workflows",
         "northstar-room-postgres"
       ],
       [
@@ -4859,7 +4867,15 @@
       ],
       [
         "northstar-workflows",
+        "northstar-session-application"
+      ],
+      [
+        "northstar-workflows",
         "northstar-session-core"
+      ],
+      [
+        "northstar-workflows",
+        "northstar-session-postgres"
       ],
       [
         "northstar-workflows",

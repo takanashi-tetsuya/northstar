@@ -1,23 +1,22 @@
 //! PostgreSQL adapter for generation-fenced durable SM teardown.
 
-use crate::db;
 use anyhow::Result;
 use northstar_session_application::sm_teardown::*;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct PostgresSmTeardownRepository {
+pub struct PostgresSmTeardownRepository {
     pool: PgPool,
 }
 
 impl PostgresSmTeardownRepository {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
 
-impl SmTeardownClaim for db::SmTeardownSnapshot {
+impl SmTeardownClaim for crate::sm::SmTeardownSnapshot {
     fn teardown_lease(&self) -> SmTeardownLease {
         SmTeardownLease {
             session_id: self.session_id,
@@ -27,18 +26,18 @@ impl SmTeardownClaim for db::SmTeardownSnapshot {
 }
 
 impl SmTeardownRepository for PostgresSmTeardownRepository {
-    type Snapshot = db::SmTeardownSnapshot;
+    type Snapshot = crate::sm::SmTeardownSnapshot;
 
     async fn take_exact(
         &self,
         session_id: Uuid,
         lease_seconds: u64,
     ) -> Result<Option<Self::Snapshot>> {
-        db::take_sm_session_for_teardown(&self.pool, session_id, lease_seconds).await
+        crate::sm::take_sm_session_for_teardown(&self.pool, session_id, lease_seconds).await
     }
 
     async fn take_expired(&self, lease_seconds: u64) -> Result<Vec<Self::Snapshot>> {
-        db::cleanup_expired_sm_sessions(&self.pool, lease_seconds).await
+        crate::sm::cleanup_expired_sm_sessions(&self.pool, lease_seconds).await
     }
 
     async fn take_before_generation(
@@ -47,7 +46,7 @@ impl SmTeardownRepository for PostgresSmTeardownRepository {
         generation_exclusive: i64,
         lease_seconds: u64,
     ) -> Result<SmTeardownBatch<Self::Snapshot>> {
-        let batch = db::take_user_sm_sessions_before_auth_generation_for_teardown(
+        let batch = crate::sm::take_user_sm_sessions_before_auth_generation_for_teardown(
             &self.pool,
             user_id,
             generation_exclusive,
@@ -61,7 +60,7 @@ impl SmTeardownRepository for PostgresSmTeardownRepository {
     }
 
     async fn take_all(&self, lease_seconds: u64) -> Result<SmTeardownBatch<Self::Snapshot>> {
-        let batch = db::take_all_sm_sessions_for_teardown(&self.pool, lease_seconds).await?;
+        let batch = crate::sm::take_all_sm_sessions_for_teardown(&self.pool, lease_seconds).await?;
         Ok(SmTeardownBatch {
             snapshots: batch.snapshots,
             pending: batch.pending,
@@ -69,7 +68,7 @@ impl SmTeardownRepository for PostgresSmTeardownRepository {
     }
 
     async fn count_all(&self) -> Result<i64> {
-        db::count_all_sm_rows(&self.pool).await
+        crate::sm::count_all_sm_rows(&self.pool).await
     }
 
     async fn take_user(
@@ -78,7 +77,8 @@ impl SmTeardownRepository for PostgresSmTeardownRepository {
         lease_seconds: u64,
     ) -> Result<SmTeardownBatch<Self::Snapshot>> {
         let batch =
-            db::take_user_sm_sessions_for_teardown(&self.pool, user_id, lease_seconds).await?;
+            crate::sm::take_user_sm_sessions_for_teardown(&self.pool, user_id, lease_seconds)
+                .await?;
         Ok(SmTeardownBatch {
             snapshots: batch.snapshots,
             pending: batch.pending,
@@ -86,7 +86,7 @@ impl SmTeardownRepository for PostgresSmTeardownRepository {
     }
 
     async fn count_user(&self, user_id: Uuid) -> Result<i64> {
-        db::count_user_sm_rows(&self.pool, user_id).await
+        crate::sm::count_user_sm_rows(&self.pool, user_id).await
     }
 
     async fn count_before_generation(
@@ -94,11 +94,15 @@ impl SmTeardownRepository for PostgresSmTeardownRepository {
         user_id: Uuid,
         generation_exclusive: i64,
     ) -> Result<i64> {
-        db::count_user_sm_rows_before_auth_generation(&self.pool, user_id, generation_exclusive)
-            .await
+        crate::sm::count_user_sm_rows_before_auth_generation(
+            &self.pool,
+            user_id,
+            generation_exclusive,
+        )
+        .await
     }
 
     async fn finalize(&self, lease: SmTeardownLease) -> Result<bool> {
-        db::finalize_sm_teardown(&self.pool, lease.session_id, lease.token).await
+        crate::sm::finalize_sm_teardown(&self.pool, lease.session_id, lease.token).await
     }
 }

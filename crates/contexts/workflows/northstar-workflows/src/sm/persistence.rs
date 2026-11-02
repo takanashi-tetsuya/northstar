@@ -45,7 +45,7 @@ pub async fn checkpoint_sm_session_and_acknowledge_with_ownership_resolution(
     id: Uuid,
     connection_id: Uuid,
     snapshot: &SmSessionSnapshot,
-    acknowledged: &[outbound::SmUnackedStanza],
+    acknowledged: &[northstar_delivery_core::SmUnackedStanza],
     ttl_seconds: u64,
     live_lease_seconds: u64,
     max_stanzas: usize,
@@ -192,12 +192,14 @@ pub(super) enum SmDurableSourceKey {
     Mix(Uuid),
 }
 
-pub(super) fn durable_source_key(source: outbound::TransportOwnershipSource) -> SmDurableSourceKey {
+pub(super) fn durable_source_key(
+    source: northstar_delivery_core::TransportOwnershipSource,
+) -> SmDurableSourceKey {
     match source {
-        outbound::TransportOwnershipSource::C2s(delivery) => {
+        northstar_delivery_core::TransportOwnershipSource::C2s(delivery) => {
             SmDurableSourceKey::C2s(delivery.message_id)
         }
-        outbound::TransportOwnershipSource::Mix(delivery) => {
+        northstar_delivery_core::TransportOwnershipSource::Mix(delivery) => {
             SmDurableSourceKey::Mix(delivery.delivery_id)
         }
     }
@@ -209,33 +211,37 @@ pub(super) fn durable_source_from_columns(
     claim_id: Option<Uuid>,
     mix_delivery_id: Option<Uuid>,
     mix_delivery_lease_token: Option<Uuid>,
-) -> Result<Option<outbound::TransportOwnershipSource>> {
+) -> Result<Option<northstar_delivery_core::TransportOwnershipSource>> {
     match (
         (recipient_id, message_id, claim_id),
         (mix_delivery_id, mix_delivery_lease_token),
     ) {
         ((None, None, None), (None, None)) => Ok(None),
         ((Some(recipient_id), Some(message_id), claim_id), (None, None)) => Ok(Some(
-            outbound::TransportOwnershipSource::C2s(outbound::DurableDelivery {
-                recipient_id,
-                message_id,
-                claim_id,
-            }),
+            northstar_delivery_core::TransportOwnershipSource::C2s(
+                northstar_delivery_core::DurableDelivery {
+                    recipient_id,
+                    message_id,
+                    claim_id,
+                },
+            ),
         )),
         ((None, None, None), (Some(delivery_id), Some(lease_token))) => Ok(Some(
-            outbound::TransportOwnershipSource::Mix(outbound::MixDelivery {
-                delivery_id,
-                lease_token,
-            }),
+            northstar_delivery_core::TransportOwnershipSource::Mix(
+                northstar_delivery_core::MixDelivery {
+                    delivery_id,
+                    lease_token,
+                },
+            ),
         )),
         _ => anyhow::bail!("invalid mutually-exclusive durable source shape in SM queue"),
     }
 }
 
 pub(super) fn source_map(
-    entries: &[outbound::SmUnackedStanza],
+    entries: &[northstar_delivery_core::SmUnackedStanza],
     context: &str,
-) -> Result<HashMap<SmDurableSourceKey, outbound::TransportOwnershipSource>> {
+) -> Result<HashMap<SmDurableSourceKey, northstar_delivery_core::TransportOwnershipSource>> {
     let mut sources = HashMap::new();
     for entry in entries {
         let Some(source) = entry.source else {
@@ -251,7 +257,7 @@ pub(super) fn source_map(
 
 pub(super) async fn lock_new_c2s_source_for_sm_transfer(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    delivery: outbound::DurableDelivery,
+    delivery: northstar_delivery_core::DurableDelivery,
 ) -> Result<()> {
     let row = sqlx::query(
         "SELECT delivery_claim_id FROM offline_messages
@@ -262,14 +268,14 @@ pub(super) async fn lock_new_c2s_source_for_sm_transfer(
     .fetch_optional(&mut **transaction)
     .await?;
     let Some(row) = row else {
-        return Err(outbound::DurableDeliverySuperseded {
+        return Err(northstar_delivery_core::DurableDeliverySuperseded {
             message_id: delivery.message_id,
         }
         .into());
     };
     let stored_claim: Option<Uuid> = row.try_get("delivery_claim_id")?;
     if stored_claim != delivery.claim_id {
-        return Err(outbound::DurableDeliverySuperseded {
+        return Err(northstar_delivery_core::DurableDeliverySuperseded {
             message_id: delivery.message_id,
         }
         .into());
@@ -283,7 +289,7 @@ pub(super) async fn lock_new_c2s_source_for_sm_transfer(
     .fetch_one(&mut **transaction)
     .await?;
     if bosh_owned {
-        return Err(outbound::DurableDeliverySuperseded {
+        return Err(northstar_delivery_core::DurableDeliverySuperseded {
             message_id: delivery.message_id,
         }
         .into());
@@ -297,7 +303,7 @@ pub(super) async fn lock_new_c2s_source_for_sm_transfer(
     .fetch_one(&mut **transaction)
     .await?;
     if sm_owned {
-        return Err(outbound::DurableDeliverySuperseded {
+        return Err(northstar_delivery_core::DurableDeliverySuperseded {
             message_id: delivery.message_id,
         }
         .into());
@@ -353,7 +359,7 @@ pub(super) async fn lock_mix_bosh_fence_for_sm_transfer(
 
 pub(super) async fn delete_completed_mix_source_from_sm(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    delivery: outbound::MixDelivery,
+    delivery: northstar_delivery_core::MixDelivery,
 ) -> Result<()> {
     let row = sqlx::query(
         "SELECT lease_token FROM mix_delivery_recipients
@@ -409,7 +415,7 @@ pub(super) async fn delete_completed_mix_source_from_sm(
 /// lease cannot partially consume an earlier C2S prefix.
 pub async fn acknowledge_transport_sources(
     pool: &PgPool,
-    sources: &[outbound::TransportOwnershipSource],
+    sources: &[northstar_delivery_core::TransportOwnershipSource],
 ) -> Result<()> {
     acknowledge_transport_sources_observed(pool, sources, None).await
 }
@@ -417,8 +423,8 @@ pub async fn acknowledge_transport_sources(
 pub(super) async fn replace_queue(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     id: Uuid,
-    queue: &[outbound::SmUnackedStanza],
-    acknowledged: &[outbound::SmUnackedStanza],
+    queue: &[northstar_delivery_core::SmUnackedStanza],
+    acknowledged: &[northstar_delivery_core::SmUnackedStanza],
 ) -> Result<SmQueueOwnershipResolution> {
     replace_queue_inner(transaction, id, queue, acknowledged, None).await
 }
@@ -426,9 +432,9 @@ pub(super) async fn replace_queue(
 pub(super) async fn replace_queue_inner(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     id: Uuid,
-    queue: &[outbound::SmUnackedStanza],
-    acknowledged: &[outbound::SmUnackedStanza],
-    mut settled: Option<&mut Vec<outbound::TransportOwnershipSource>>,
+    queue: &[northstar_delivery_core::SmUnackedStanza],
+    acknowledged: &[northstar_delivery_core::SmUnackedStanza],
+    mut settled: Option<&mut Vec<northstar_delivery_core::TransportOwnershipSource>>,
 ) -> Result<SmQueueOwnershipResolution> {
     // First lock the current SM queue.  All later source locks are ordered
     // C2S offline rows, then MIX recipient rows, then their BOSH fence rows.
@@ -490,7 +496,7 @@ pub(super) async fn replace_queue_inner(
     let mut new_c2s = next
         .values()
         .filter_map(|source| match *source {
-            outbound::TransportOwnershipSource::C2s(delivery)
+            northstar_delivery_core::TransportOwnershipSource::C2s(delivery)
                 if !existing.contains_key(&durable_source_key(*source)) =>
             {
                 Some(delivery)
@@ -506,7 +512,7 @@ pub(super) async fn replace_queue_inner(
     let mut new_mix = next
         .values()
         .filter_map(|source| match *source {
-            outbound::TransportOwnershipSource::Mix(delivery)
+            northstar_delivery_core::TransportOwnershipSource::Mix(delivery)
                 if !existing.contains_key(&durable_source_key(*source)) =>
             {
                 Some(delivery)
@@ -518,10 +524,18 @@ pub(super) async fn replace_queue_inner(
     let mut ownership = SmQueueOwnershipResolution::default();
     for previous in new_mix {
         let current = rotate_new_mix_source_for_sm_transfer(transaction, previous).await?;
-        let key = durable_source_key(outbound::TransportOwnershipSource::Mix(previous));
-        let replaced = next.insert(key, outbound::TransportOwnershipSource::Mix(current));
+        let key = durable_source_key(northstar_delivery_core::TransportOwnershipSource::Mix(
+            previous,
+        ));
+        let replaced = next.insert(
+            key,
+            northstar_delivery_core::TransportOwnershipSource::Mix(current),
+        );
         anyhow::ensure!(
-            replaced == Some(outbound::TransportOwnershipSource::Mix(previous)),
+            replaced
+                == Some(northstar_delivery_core::TransportOwnershipSource::Mix(
+                    previous
+                )),
             "MIX source changed while rotating into SM ownership"
         );
         ownership
@@ -542,8 +556,8 @@ pub(super) async fn replace_queue_inner(
                     .context("SM snapshot source disappeared during replacement")
             })
             .transpose()?;
-        let c2s = source.and_then(outbound::TransportOwnershipSource::c2s);
-        let mix = source.and_then(outbound::TransportOwnershipSource::mix);
+        let c2s = source.and_then(northstar_delivery_core::TransportOwnershipSource::c2s);
+        let mix = source.and_then(northstar_delivery_core::TransportOwnershipSource::mix);
         sqlx::query(
             "INSERT INTO sm_resume_stanzas(
                 session_id,position,stanza,delivery_recipient_id,
@@ -579,7 +593,9 @@ pub(super) async fn replace_queue_inner(
             "SM acknowledged durable delivery row was not present"
         );
         if let Some(settled) = settled.as_deref_mut() {
-            settled.push(outbound::TransportOwnershipSource::C2s(delivery));
+            settled.push(northstar_delivery_core::TransportOwnershipSource::C2s(
+                delivery,
+            ));
         }
     }
     let mut completed_mix = completed
@@ -590,7 +606,9 @@ pub(super) async fn replace_queue_inner(
     for delivery in completed_mix {
         delete_completed_mix_source_from_sm(transaction, delivery).await?;
         if let Some(settled) = settled.as_deref_mut() {
-            settled.push(outbound::TransportOwnershipSource::Mix(delivery));
+            settled.push(northstar_delivery_core::TransportOwnershipSource::Mix(
+                delivery,
+            ));
         }
     }
     Ok(ownership)
@@ -599,7 +617,7 @@ pub(super) async fn replace_queue_inner(
 pub(super) async fn fetch_queue(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     id: Uuid,
-) -> Result<Vec<outbound::SmUnackedStanza>> {
+) -> Result<Vec<northstar_delivery_core::SmUnackedStanza>> {
     sqlx::query(
         "SELECT stanza,delivery_recipient_id,delivery_message_id,delivery_claim_id,
                 mix_delivery_id,mix_delivery_lease_token
@@ -618,7 +636,9 @@ pub(super) async fn fetch_queue(
             row.try_get("mix_delivery_id")?,
             row.try_get("mix_delivery_lease_token")?,
         )?;
-        Ok(outbound::SmUnackedStanza::with_source(stanza, source))
+        Ok(northstar_delivery_core::SmUnackedStanza::with_source(
+            stanza, source,
+        ))
     })
     .collect()
 }
@@ -693,7 +713,7 @@ pub(super) fn canonical_snapshot_identities(
 }
 
 pub(super) fn validate_queue(
-    queue: &[outbound::SmUnackedStanza],
+    queue: &[northstar_delivery_core::SmUnackedStanza],
     max_stanzas: usize,
     max_bytes: usize,
 ) -> Result<()> {

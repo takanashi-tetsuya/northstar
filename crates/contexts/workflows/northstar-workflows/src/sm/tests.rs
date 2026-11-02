@@ -12,7 +12,9 @@ async fn sm_transfer_yields_to_exact_replay_or_bosh_owner_without_clearing_it() 
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    crate::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
     let recipient_id = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
         .bind(recipient_id)
@@ -30,7 +32,7 @@ async fn sm_transfer_yields_to_exact_replay_or_bosh_owner_without_clearing_it() 
         .execute(&pool)
         .await
         .unwrap();
-    let live = northstar_stream::outbound::DurableDelivery {
+    let live = northstar_delivery_core::DurableDelivery {
         recipient_id,
         message_id,
         claim_id: None,
@@ -56,8 +58,8 @@ async fn sm_transfer_yields_to_exact_replay_or_bosh_owner_without_clearing_it() 
     winner.commit().await.unwrap();
     let error = loser.await.unwrap().unwrap_err();
     assert_eq!(
-        error.downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>(),
-        Some(&northstar_stream::outbound::DurableDeliverySuperseded { message_id })
+        error.downcast_ref::<northstar_delivery_core::DurableDeliverySuperseded>(),
+        Some(&northstar_delivery_core::DurableDeliverySuperseded { message_id })
     );
     let stored_claim: Option<Uuid> =
         sqlx::query_scalar("SELECT delivery_claim_id FROM offline_messages WHERE id=$1")
@@ -84,8 +86,8 @@ async fn sm_transfer_yields_to_exact_replay_or_bosh_owner_without_clearing_it() 
         .await
         .unwrap_err();
     assert_eq!(
-        bosh_error.downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>(),
-        Some(&northstar_stream::outbound::DurableDeliverySuperseded { message_id })
+        bosh_error.downcast_ref::<northstar_delivery_core::DurableDeliverySuperseded>(),
+        Some(&northstar_delivery_core::DurableDeliverySuperseded { message_id })
     );
     transaction.rollback().await.unwrap();
     let still_bosh_owned: bool =
@@ -117,7 +119,9 @@ async fn owner_only_session_catalog_is_strict_and_development_safe() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    crate::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
 
     assert!(session_capability_catalog_healthy(&pool).await);
 
@@ -188,7 +192,7 @@ async fn install_authorization_test_sm(
         }],
         directed_presence: vec!["friend@example.net".to_owned()],
         last_presence: Some("<presence xmlns='jabber:client'/>".to_owned()),
-        unacked: vec![northstar_stream::outbound::SmUnackedStanza::plain(format!(
+        unacked: vec![northstar_delivery_core::SmUnackedStanza::plain(format!(
             "<message id='queued-{marker}'/>"
         ))],
     };
@@ -277,26 +281,22 @@ fn subnet_binding_uses_v4_24_and_v6_64() {
 #[test]
 fn queue_limits_are_enforced() {
     assert!(validate_queue(
-        &[northstar_stream::outbound::SmUnackedStanza::plain(
-            "x".into()
-        )],
+        &[northstar_delivery_core::SmUnackedStanza::plain("x".into())],
         1,
         1
     )
     .is_ok());
     assert!(validate_queue(
         &[
-            northstar_stream::outbound::SmUnackedStanza::plain("x".into()),
-            northstar_stream::outbound::SmUnackedStanza::plain("y".into())
+            northstar_delivery_core::SmUnackedStanza::plain("x".into()),
+            northstar_delivery_core::SmUnackedStanza::plain("y".into())
         ],
         1,
         2
     )
     .is_err());
     assert!(validate_queue(
-        &[northstar_stream::outbound::SmUnackedStanza::plain(
-            "xy".into()
-        )],
+        &[northstar_delivery_core::SmUnackedStanza::plain("xy".into())],
         1,
         1
     )
@@ -359,7 +359,9 @@ async fn authorization_mutations_retain_sm_presence_and_muc_teardown_state() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    crate::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
     let actor_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO users(id,username,password_hash,is_admin)
@@ -409,15 +411,9 @@ async fn authorization_mutations_retain_sm_presence_and_muc_teardown_state() {
         .unwrap();
     let (hash, id, snapshot) =
         install_authorization_test_sm(&pool, disabled_user, &disabled_name, 22).await;
-    northstar_workflows::account_lifecycle::set_user_status(
-        &pool,
-        actor_id,
-        disabled_user,
-        Some(true),
-        None,
-    )
-    .await
-    .unwrap();
+    crate::account_lifecycle::set_user_status(&pool, actor_id, disabled_user, Some(true), None)
+        .await
+        .unwrap();
     assert_authorization_revocation_is_durably_teardownable(
         &pool,
         disabled_user,
@@ -438,7 +434,7 @@ async fn authorization_mutations_retain_sm_presence_and_muc_teardown_state() {
     let (hash, id, snapshot) =
         install_authorization_test_sm(&pool, ended_user, &ended_name, 23).await;
     assert!(
-        northstar_workflows::account_lifecycle::end_user_sessions(&pool, actor_id, ended_user)
+        crate::account_lifecycle::end_user_sessions(&pool, actor_id, ended_user)
             .await
             .unwrap()
     );
@@ -464,7 +460,9 @@ async fn durable_delivery_fence_survives_checkpoint_resume_and_revocation() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    crate::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
     let user_id = Uuid::new_v4();
     let username = format!("smfence{}", &user_id.simple().to_string()[..10]);
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test-only')")
@@ -478,7 +476,7 @@ async fn durable_delivery_fence_survives_checkpoint_resume_and_revocation() {
     async fn insert_delivery(
         pool: &PgPool,
         user_id: Uuid,
-    ) -> northstar_stream::outbound::DurableDelivery {
+    ) -> northstar_delivery_core::DurableDelivery {
         let message_id = Uuid::new_v4();
         let claim_id = Uuid::new_v4();
         sqlx::query(
@@ -494,7 +492,7 @@ async fn durable_delivery_fence_survives_checkpoint_resume_and_revocation() {
         .execute(pool)
         .await
         .unwrap();
-        northstar_stream::outbound::DurableDelivery {
+        northstar_delivery_core::DurableDelivery {
             recipient_id: user_id,
             message_id,
             claim_id: Some(claim_id),
@@ -503,7 +501,7 @@ async fn durable_delivery_fence_survives_checkpoint_resume_and_revocation() {
 
     fn snapshot(
         peer_ip: IpAddr,
-        delivery: northstar_stream::outbound::DurableDelivery,
+        delivery: northstar_delivery_core::DurableDelivery,
     ) -> SmSessionSnapshot {
         SmSessionSnapshot {
             inbound_h: 0,
@@ -521,7 +519,7 @@ async fn durable_delivery_fence_survives_checkpoint_resume_and_revocation() {
             joined_rooms: vec![],
             directed_presence: vec![],
             last_presence: Some("<presence xmlns='jabber:client'/>".to_owned()),
-            unacked: vec![northstar_stream::outbound::SmUnackedStanza::with_delivery(
+            unacked: vec![northstar_delivery_core::SmUnackedStanza::with_delivery(
                 "<message id='sm'/>".to_owned(),
                 Some(delivery),
             )],
@@ -722,7 +720,9 @@ async fn strict_same_device_claim_rejects_legacy_and_null_claimant() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    crate::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
     let user_id = Uuid::new_v4();
     let username = format!("smdevice{}", user_id.simple());
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test-only')")
@@ -913,7 +913,9 @@ async fn durable_claim_is_single_consumer_and_revocable() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    crate::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
     let user_id = Uuid::new_v4();
     let username = format!("smtest{}", user_id.simple());
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test-only')")
@@ -941,8 +943,8 @@ async fn durable_claim_is_single_consumer_and_revocable() {
         directed_presence: vec![],
         last_presence: Some("<presence xmlns='jabber:client'/>".to_owned()),
         unacked: vec![
-            northstar_stream::outbound::SmUnackedStanza::plain("<message id='one'/>".into()),
-            northstar_stream::outbound::SmUnackedStanza::plain("<message id='two'/>".into()),
+            northstar_delivery_core::SmUnackedStanza::plain("<message id='one'/>".into()),
+            northstar_delivery_core::SmUnackedStanza::plain("<message id='two'/>".into()),
         ],
     };
     let connection_id = Uuid::new_v4();
@@ -1395,7 +1397,9 @@ async fn every_teardown_scope_preserves_the_active_privacy_list() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    crate::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
 
     let user_id = Uuid::new_v4();
     let username = format!("sm-privacy-{}", &user_id.simple().to_string()[..10]);
@@ -1513,7 +1517,9 @@ async fn account_deletion_quiesce_closes_all_sm_race_barriers() {
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    crate::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
     let user_id = Uuid::new_v4();
     let username = format!("sm-delete-{}", &user_id.simple().to_string()[..10]);
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test-only')")
@@ -1569,7 +1575,7 @@ async fn account_deletion_quiesce_closes_all_sm_race_barriers() {
     assert_eq!(persisted_token, Some(claim.claim_token));
 
     assert!(
-        northstar_workflows::account_lifecycle::begin_account_deletion_quiesce(&pool, user_id)
+        crate::account_lifecycle::begin_account_deletion_quiesce(&pool, user_id)
             .await
             .unwrap()
     );

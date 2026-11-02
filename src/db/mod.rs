@@ -68,22 +68,13 @@ mod retraction_service_tests;
 pub(crate) mod room_effects;
 pub(crate) mod session_authority_sweep_repository;
 pub(crate) mod session_termination_authority_repository;
-pub mod sm;
-pub mod sm_repository;
-pub(crate) mod sm_teardown_presence_repository;
-pub(crate) mod sm_teardown_repository;
 #[cfg(test)]
 pub use archive::*;
-// Roster and privacy names that paths owned by the mainline (src/s2s, src/cluster, src/db/sm*)
-// still reach through db::. Every other consumer imports the owning crate.
-pub(crate) use northstar_roster_postgres::privacy::{
-    privacy_denies, set_active_privacy_list_in_transaction,
-};
+// The privacy stanza kind that paths owned by the mainline (src/s2s, src/cluster) still reach
+// through db::. Every other consumer imports the owning crate.
 #[cfg(test)]
 pub(crate) use northstar_roster_postgres::roster::add_federated_presence_pending_with_stanza;
-pub(crate) use northstar_roster_postgres::roster::{is_blocked_for_account, roster};
 pub(crate) use northstar_xep_0016::PrivacyStanzaKind;
-pub use sm::*;
 #[cfg(test)]
 mod pubsub_integration_tests;
 pub use northstar_pubsub_postgres::*;
@@ -98,8 +89,6 @@ pub(crate) mod muc_delivery_repository;
 mod upload_account_tests;
 #[cfg(test)]
 mod upload_admin_tests;
-
-pub(crate) mod sm_suspension;
 
 #[cfg(test)]
 mod account_admin_repository_tests;

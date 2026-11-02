@@ -235,7 +235,7 @@ mod tests {
         clear_active_privacy_session(&pool, owner_id, active_connection)
             .await
             .unwrap();
-        let sm_snapshot = crate::db::SmSessionSnapshot {
+        let sm_snapshot = northstar_workflows::sm::SmSessionSnapshot {
             inbound_h: 0,
             outbound_h: 0,
             acked_h: 0,
@@ -253,7 +253,7 @@ mod tests {
             last_presence: None,
             unacked: vec![],
         };
-        crate::db::create_sm_session(
+        northstar_workflows::sm::create_sm_session(
             &pool,
             &[7_u8; 32],
             owner_id,

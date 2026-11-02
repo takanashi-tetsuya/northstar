@@ -245,9 +245,13 @@ impl AppState {
 
     pub(crate) fn sm_suspension_context(
         &self,
-    ) -> suspension::SmSuspensionContext<db::sm_suspension::PostgresSmSuspensionRepository> {
+    ) -> suspension::SmSuspensionContext<
+        northstar_workflows::sm_suspension::PostgresSmSuspensionRepository,
+    > {
         suspension::SmSuspensionContext::new(
-            db::sm_suspension::PostgresSmSuspensionRepository::new(self.pool.clone()),
+            northstar_workflows::sm_suspension::PostgresSmSuspensionRepository::new(
+                self.pool.clone(),
+            ),
             northstar_session_application::sm_suspension::SmSuspensionLimits {
                 max_stanzas: self.config.sm_max_unacked_stanzas,
                 max_bytes: self.config.sm_max_unacked_bytes,

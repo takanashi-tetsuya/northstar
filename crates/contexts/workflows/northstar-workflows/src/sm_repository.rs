@@ -1,5 +1,4 @@
 //! Atomic SM ownership, transport acknowledgements and binding persistence.
-use crate::db;
 use anyhow::Result;
 use northstar_auth_application::authentication::publication::{
     credential_error, CredentialInvocation, CredentialPreparation, CredentialRollbackSite,
@@ -13,12 +12,12 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 #[derive(Clone)]
-pub(crate) struct PostgresSmRepository {
+pub struct PostgresSmRepository {
     pool: PgPool,
     fast_token_secret: Arc<Zeroizing<Vec<u8>>>,
 }
 impl PostgresSmRepository {
-    pub(crate) fn new(pool: PgPool, fast_token_secret: Arc<Zeroizing<Vec<u8>>>) -> Self {
+    pub fn new(pool: PgPool, fast_token_secret: Arc<Zeroizing<Vec<u8>>>) -> Self {
         Self {
             pool,
             fast_token_secret,
@@ -215,7 +214,7 @@ impl PostgresSmRepository {
         if let Some(observation) = observation {
             observation.preparation_entered(CredentialPreparation::Activation);
         }
-        let activation_result = db::activate_claimed_sm_session_in_transaction(
+        let activation_result = crate::sm::activate_claimed_sm_session_in_transaction(
             &mut tx,
             request.session_id,
             request.claim_token,
@@ -298,13 +297,14 @@ impl PostgresSmRepository {
         if let Some(observation) = observation {
             observation.preparation_entered(CredentialPreparation::Privacy);
         }
-        let privacy_result = db::set_active_privacy_list_in_transaction(
-            &mut tx,
-            request.user_id,
-            request.connection_id,
-            request.active_privacy_list,
-        )
-        .await;
+        let privacy_result =
+            northstar_roster_postgres::privacy::set_active_privacy_list_in_transaction(
+                &mut tx,
+                request.user_id,
+                request.connection_id,
+                request.active_privacy_list,
+            )
+            .await;
         if let Some(observation) = observation {
             observation.preparation_returned(
                 CredentialPreparation::Privacy,
@@ -346,15 +346,15 @@ impl PostgresSmRepository {
 }
 impl SmRepository for PostgresSmRepository {
     async fn revoke_session(&self, session_id: Uuid) -> Result<()> {
-        db::revoke_sm_session(&self.pool, session_id).await
+        crate::sm::revoke_sm_session(&self.pool, session_id).await
     }
 
     async fn create_session(
         &self,
         request: SmSessionCreationRequest<'_>,
     ) -> Result<SmSessionCreationOutcome> {
-        let snapshot = db::SmSessionSnapshot::from(request.snapshot);
-        match db::create_sm_session_with_ownership_resolution(
+        let snapshot = crate::sm::SmSessionSnapshot::from(request.snapshot);
+        match crate::sm::create_sm_session_with_ownership_resolution(
             &self.pool,
             request.token_hash,
             request.user_id,
@@ -387,7 +387,7 @@ impl SmRepository for PostgresSmRepository {
         ip_policy: SmIpPolicy,
     ) -> Result<SmResumeClaimOutcome> {
         Ok(
-            match db::claim_sm_session_status(
+            match crate::sm::claim_sm_session_status(
                 &self.pool,
                 request.token_hash,
                 request.user_id,
@@ -399,13 +399,13 @@ impl SmRepository for PostgresSmRepository {
             )
             .await?
             {
-                db::SmClaimStatus::Claimed(claim) => {
+                crate::sm::SmClaimStatus::Claimed(claim) => {
                     SmResumeClaimOutcome::Claimed(Box::new((*claim).into()))
                 }
-                db::SmClaimStatus::Pending(pending) => {
+                crate::sm::SmClaimStatus::Pending(pending) => {
                     SmResumeClaimOutcome::Pending(pending.into())
                 }
-                db::SmClaimStatus::Rejected => SmResumeClaimOutcome::Rejected,
+                crate::sm::SmClaimStatus::Rejected => SmResumeClaimOutcome::Rejected,
             },
         )
     }
@@ -421,7 +421,7 @@ impl SmRepository for PostgresSmRepository {
         max_bytes: usize,
         observation: Option<&ownership::PreparedCheckpoint<'_>>,
     ) -> Result<SmCheckpointOutcome> {
-        let snapshot = db::SmSessionSnapshot::from(snapshot);
+        let snapshot = crate::sm::SmSessionSnapshot::from(snapshot);
         if let Some(prepared) = observation {
             prepared.validate_projection(
                 session_id,
@@ -437,7 +437,7 @@ impl SmRepository for PostgresSmRepository {
             )?;
         }
         if observation.is_none() {
-            return Ok(db::checkpoint_sm_session_with_ownership_resolution(
+            return Ok(crate::sm::checkpoint_sm_session_with_ownership_resolution(
                 &self.pool,
                 session_id,
                 connection_id,
@@ -450,7 +450,7 @@ impl SmRepository for PostgresSmRepository {
             .await?
             .into());
         }
-        Ok(db::sm::checkpoint_sm_session_and_acknowledge_observed(
+        Ok(crate::sm::checkpoint_sm_session_and_acknowledge_observed(
             &self.pool,
             session_id,
             connection_id,
@@ -471,7 +471,13 @@ impl SmRepository for PostgresSmRepository {
         connection_id: Uuid,
         memberships: &[SmMucMembership],
     ) -> Result<bool> {
-        db::remove_live_sm_muc_memberships(&self.pool, session_id, connection_id, memberships).await
+        crate::sm::remove_live_sm_muc_memberships(
+            &self.pool,
+            session_id,
+            connection_id,
+            memberships,
+        )
+        .await
     }
     #[allow(clippy::too_many_arguments)]
     async fn checkpoint_and_acknowledge(
@@ -479,14 +485,14 @@ impl SmRepository for PostgresSmRepository {
         session_id: Uuid,
         connection_id: Uuid,
         snapshot: &SmSessionSnapshot,
-        acknowledged: &[northstar_stream::outbound::SmUnackedStanza],
+        acknowledged: &[northstar_delivery_core::SmUnackedStanza],
         ttl_seconds: u64,
         live_lease_seconds: u64,
         max_stanzas: usize,
         max_bytes: usize,
         observation: Option<&ownership::PreparedCheckpoint<'_>>,
     ) -> Result<SmCheckpointOutcome> {
-        let snapshot = db::SmSessionSnapshot::from(snapshot);
+        let snapshot = crate::sm::SmSessionSnapshot::from(snapshot);
         if let Some(prepared) = observation {
             prepared.validate_projection(
                 session_id,
@@ -501,7 +507,7 @@ impl SmRepository for PostgresSmRepository {
                 },
             )?;
         }
-        Ok(db::sm::checkpoint_sm_session_and_acknowledge_observed(
+        Ok(crate::sm::checkpoint_sm_session_and_acknowledge_observed(
             &self.pool,
             session_id,
             connection_id,
@@ -518,7 +524,7 @@ impl SmRepository for PostgresSmRepository {
     }
     async fn acknowledge_delivery_batch(
         &self,
-        sources: &[northstar_stream::outbound::TransportOwnershipSource],
+        sources: &[northstar_delivery_core::TransportOwnershipSource],
         observation: Option<&ownership::PreparedBatch<'_>>,
     ) -> Result<()> {
         if let Some(prepared) = observation {
@@ -526,14 +532,14 @@ impl SmRepository for PostgresSmRepository {
         }
         match observation {
             Some(prepared) => {
-                db::sm::acknowledge_transport_sources_observed(
+                crate::sm::acknowledge_transport_sources_observed(
                     &self.pool,
                     sources,
                     Some(prepared.request()),
                 )
                 .await
             }
-            None => db::acknowledge_transport_sources(&self.pool, sources).await,
+            None => crate::sm::acknowledge_transport_sources(&self.pool, sources).await,
         }
     }
     async fn reserve_binding(
@@ -639,7 +645,7 @@ impl SmRepository for PostgresSmRepository {
         self.finalize_resume_inner(request, Some(invocation)).await
     }
     async fn release_claim(&self, session_id: Uuid, claim_token: Uuid) -> Result<()> {
-        crate::db::release_sm_claim(&self.pool, session_id, claim_token).await
+        crate::sm::release_sm_claim(&self.pool, session_id, claim_token).await
     }
     async fn release_live_session(&self, connection_id: Uuid) -> Result<bool> {
         northstar_session_postgres::capacity::release_live_session(&self.pool, connection_id).await
@@ -656,8 +662,8 @@ impl SmRepository for PostgresSmRepository {
         max_stanzas: usize,
         max_bytes: usize,
     ) -> Result<bool> {
-        let snapshot = db::SmSessionSnapshot::from(snapshot);
-        db::suspend_activated_sm_resume_exact(
+        let snapshot = crate::sm::SmSessionSnapshot::from(snapshot);
+        crate::sm::suspend_activated_sm_resume_exact(
             &self.pool,
             session_id,
             connection_id,
@@ -672,8 +678,8 @@ impl SmRepository for PostgresSmRepository {
     }
 }
 
-impl From<&db::SmSessionSnapshot> for SmSessionSnapshot {
-    fn from(value: &db::SmSessionSnapshot) -> Self {
+impl From<&crate::sm::SmSessionSnapshot> for SmSessionSnapshot {
+    fn from(value: &crate::sm::SmSessionSnapshot) -> Self {
         Self {
             inbound_h: value.inbound_h,
             outbound_h: value.outbound_h,
@@ -694,7 +700,7 @@ impl From<&db::SmSessionSnapshot> for SmSessionSnapshot {
         }
     }
 }
-impl From<&SmSessionSnapshot> for db::SmSessionSnapshot {
+impl From<&SmSessionSnapshot> for crate::sm::SmSessionSnapshot {
     fn from(value: &SmSessionSnapshot) -> Self {
         Self {
             inbound_h: value.inbound_h,
@@ -716,8 +722,8 @@ impl From<&SmSessionSnapshot> for db::SmSessionSnapshot {
         }
     }
 }
-impl From<db::SmResumeClaim> for SmResumeClaim {
-    fn from(value: db::SmResumeClaim) -> Self {
+impl From<crate::sm::SmResumeClaim> for SmResumeClaim {
+    fn from(value: crate::sm::SmResumeClaim) -> Self {
         Self {
             session_id: value.session_id,
             claim_token: value.claim_token,
@@ -742,16 +748,16 @@ impl From<db::SmResumeClaim> for SmResumeClaim {
         }
     }
 }
-impl From<db::ActivatedSmSession> for ActivatedSmSession {
-    fn from(value: db::ActivatedSmSession) -> Self {
+impl From<crate::sm::ActivatedSmSession> for ActivatedSmSession {
+    fn from(value: crate::sm::ActivatedSmSession) -> Self {
         Self {
             outbound_h: value.outbound_h,
             unacked: value.unacked,
         }
     }
 }
-impl From<db::SmQueueOwnershipResolution> for SmQueueOwnershipResolution {
-    fn from(value: db::SmQueueOwnershipResolution) -> Self {
+impl From<crate::sm::SmQueueOwnershipResolution> for SmQueueOwnershipResolution {
+    fn from(value: crate::sm::SmQueueOwnershipResolution) -> Self {
         Self {
             mix_rotations: value
                 .mix_rotations
@@ -764,25 +770,25 @@ impl From<db::SmQueueOwnershipResolution> for SmQueueOwnershipResolution {
         }
     }
 }
-impl From<db::SmCheckpointOutcome> for SmCheckpointOutcome {
-    fn from(value: db::SmCheckpointOutcome) -> Self {
+impl From<crate::sm::SmCheckpointOutcome> for SmCheckpointOutcome {
+    fn from(value: crate::sm::SmCheckpointOutcome) -> Self {
         Self {
             updated: value.updated,
             ownership: value.ownership.into(),
         }
     }
 }
-impl From<db::SmPendingReason> for SmPendingReason {
-    fn from(value: db::SmPendingReason) -> Self {
+impl From<crate::sm::SmPendingReason> for SmPendingReason {
+    fn from(value: crate::sm::SmPendingReason) -> Self {
         match value {
-            db::SmPendingReason::Live => Self::Live,
-            db::SmPendingReason::Claim => Self::Claim,
-            db::SmPendingReason::LiveAndClaim => Self::LiveAndClaim,
+            crate::sm::SmPendingReason::Live => Self::Live,
+            crate::sm::SmPendingReason::Claim => Self::Claim,
+            crate::sm::SmPendingReason::LiveAndClaim => Self::LiveAndClaim,
         }
     }
 }
-impl From<db::SmResumePending> for SmResumePending {
-    fn from(value: db::SmResumePending) -> Self {
+impl From<crate::sm::SmResumePending> for SmResumePending {
+    fn from(value: crate::sm::SmResumePending) -> Self {
         Self {
             session_id: value.session_id,
             old_connection_id: value.old_connection_id,
@@ -794,8 +800,10 @@ impl From<db::SmResumePending> for SmResumePending {
     }
 }
 
-fn database_projection(snapshot: &db::SmSessionSnapshot) -> ownership::SnapshotProjection<'_> {
-    let db::SmSessionSnapshot {
+fn database_projection(
+    snapshot: &crate::sm::SmSessionSnapshot,
+) -> ownership::SnapshotProjection<'_> {
+    let crate::sm::SmSessionSnapshot {
         inbound_h,
         outbound_h,
         acked_h,
@@ -837,7 +845,7 @@ fn database_projection(snapshot: &db::SmSessionSnapshot) -> ownership::SnapshotP
 mod sm_owner_tests {
     use super::*;
     use northstar_delivery_core::sm_ownership::{Observation, Purpose, Scope};
-    use northstar_stream::outbound::SmUnackedStanza;
+    use northstar_delivery_core::SmUnackedStanza;
     #[test]
     fn converted_checkpoint_projection_binds_all_snapshot_fields_without_io() {
         let session_id = Uuid::from_u128(801);
@@ -891,7 +899,7 @@ mod sm_owner_tests {
             policy,
         )
         .unwrap();
-        let converted = db::SmSessionSnapshot::from(&snapshot);
+        let converted = crate::sm::SmSessionSnapshot::from(&snapshot);
         prepared
             .validate_projection(
                 session_id,
@@ -903,7 +911,7 @@ mod sm_owner_tests {
             .unwrap();
         let before = observation.snapshot();
         for field in 0..16 {
-            let mut changed = db::SmSessionSnapshot::from(&snapshot);
+            let mut changed = crate::sm::SmSessionSnapshot::from(&snapshot);
             match field {
                 0 => changed.inbound_h += 1,
                 1 => changed.outbound_h += 1,

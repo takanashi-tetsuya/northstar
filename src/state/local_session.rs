@@ -432,7 +432,7 @@ impl AppState {
     }
 
     pub async fn revoke_sm_session_with_teardown(&self, id: uuid::Uuid) -> anyhow::Result<()> {
-        if let Some(snapshot) = db::take_sm_session_for_teardown(
+        if let Some(snapshot) = northstar_workflows::sm::take_sm_session_for_teardown(
             &self.pool,
             id,
             self.config.sm_claim_lease_seconds.max(1),
@@ -446,11 +446,13 @@ impl AppState {
 
     pub(super) async fn perform_and_finalize_sm_teardown(
         &self,
-        snapshot: db::SmTeardownSnapshot,
+        snapshot: northstar_workflows::sm::SmTeardownSnapshot,
     ) -> anyhow::Result<()> {
         let runtime = self.sm_teardown_runtime();
         northstar_session_application::sm_teardown::SmTeardownService::new(
-            db::sm_teardown_repository::PostgresSmTeardownRepository::new(self.pool.clone()),
+            northstar_workflows::sm_teardown_repository::PostgresSmTeardownRepository::new(
+                self.pool.clone(),
+            ),
             self.config.sm_claim_lease_seconds,
         )
         .finish(snapshot, |snapshot| async move {
@@ -462,10 +464,10 @@ impl AppState {
     pub(super) fn sm_teardown_presence_service(
         &self,
     ) -> northstar_session_application::sm_teardown_presence::SmTeardownPresenceService<
-        db::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository,
+        northstar_workflows::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository,
     > {
         northstar_session_application::sm_teardown_presence::SmTeardownPresenceService::new(
-            db::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository::new(
+            northstar_workflows::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository::new(
                 self.pool.clone(),
             ),
         )

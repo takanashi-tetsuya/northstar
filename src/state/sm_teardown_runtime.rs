@@ -7,7 +7,7 @@ use super::{
     sm_teardown_session::SmTeardownSessionEffects, AppState,
 };
 use crate::cluster::listener_sm_muc_teardown::ClusterListenerSmMucTeardown;
-use crate::{cluster::ClusterSmMucTeardown, db};
+use crate::cluster::ClusterSmMucTeardown;
 use northstar_stream::local_routes::sm_teardown::SmTeardownLocalEffects;
 use std::collections::HashSet;
 
@@ -36,7 +36,7 @@ impl AppState {
 impl SmTeardownRuntime {
     pub(crate) async fn teardown_snapshot(
         &self,
-        snapshot: &db::SmTeardownSnapshot,
+        snapshot: &northstar_workflows::sm::SmTeardownSnapshot,
     ) -> anyhow::Result<()> {
         let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(&snapshot.full_jid)
         else {

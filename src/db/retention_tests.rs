@@ -630,7 +630,7 @@ async fn offline_retention_and_admin_clear_respect_sm_and_bosh_owners() {
     .unwrap();
 
     let sm_connection = Uuid::new_v4();
-    let sm_snapshot = crate::db::SmSessionSnapshot {
+    let sm_snapshot = northstar_workflows::sm::SmSessionSnapshot {
         inbound_h: 0,
         outbound_h: 1,
         acked_h: 0,
@@ -655,7 +655,7 @@ async fn offline_retention_and_admin_clear_respect_sm_and_bosh_owners() {
             }),
         )],
     };
-    let sm_session = crate::db::create_sm_session(
+    let sm_session = northstar_workflows::sm::create_sm_session(
         &pool,
         &[81_u8; 32],
         user,
@@ -734,7 +734,7 @@ async fn offline_retention_and_admin_clear_respect_sm_and_bosh_owners() {
     northstar_session_postgres::replay::release_bosh_delivery_fences(&pool, bosh_session)
         .await
         .unwrap();
-    crate::db::revoke_sm_session(&pool, sm_session)
+    northstar_workflows::sm::revoke_sm_session(&pool, sm_session)
         .await
         .unwrap();
     assert_eq!(

@@ -327,7 +327,7 @@ pub struct AppState {
     /// XEP-0215 TURN credential authority. Long-lived key material and its
     /// bounded rate windows never cross into protocol or public state.
     mam_service: northstar_archive_application::MamService<northstar_workflows::mam_repository::PostgresMamRepository>,
-    sm_service: northstar_session_application::sm::SmService<db::sm_repository::PostgresSmRepository>,
+    sm_service: northstar_session_application::sm::SmService<northstar_workflows::sm_repository::PostgresSmRepository>,
     replay_service:
         northstar_session_application::replay::ReplayService<northstar_session_postgres::replay_repository::PostgresReplayRepository>,
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,

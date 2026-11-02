@@ -1,5 +1,8 @@
 //! Select secure endpoints and negotiate TLS, stream identity, SASL EXTERNAL, dialback and bidirectional transport.
 
+use northstar_s2s::host::S2sHost;
+use northstar_xml_builder::XmlElement;
+
 use super::*;
 
 pub(super) fn happy_eyeballs_delay(candidate_index: usize) -> Duration {
@@ -16,8 +19,8 @@ pub(super) struct AuthenticatedTransport {
     pub(super) certificate: Option<northstar_security::tls::CertificateSessionGuard>,
 }
 
-pub(super) async fn authenticate_transport(
-    state: &Arc<AppState>,
+pub(super) async fn authenticate_transport<H: S2sHost>(
+    state: &Arc<H>,
     source_domain: &str,
     target_domain: &str,
     disconnect: &tokio_util::sync::CancellationToken,
@@ -27,7 +30,7 @@ pub(super) async fn authenticate_transport(
         "target domain is denied by federation policy"
     );
     let (mut secure, mut opening, mut features, mut input, peer_certificates, tls_generation) =
-        connect_secure_stream_from(state, source_domain, target_domain).await?;
+        connect_secure_stream_from(state.as_ref(), source_domain, target_domain).await?;
     let mut peer_limits = advertised_stream_limits(&features).unwrap_or_default();
     let external = state.s2s_sasl_external_enabled() && sasl_external_advertised(&features);
     let bidi_enabled;
@@ -36,7 +39,7 @@ pub(super) async fn authenticate_transport(
         let authorization = STANDARD.encode(source_domain.as_bytes());
         write_xml(
             &mut secure,
-            &crate::xmpp::xml_builder::XmlElement::new("auth")
+            &XmlElement::new("auth")
                 .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-sasl")
                 .attr("mechanism", "EXTERNAL")
                 .text(authorization)
@@ -62,7 +65,7 @@ pub(super) async fn authenticate_transport(
     } else {
         bidi_enabled = request_bidi_if_advertised(&mut secure, &features).await?;
         authenticate_dialback_outbound(
-            state,
+            state.as_ref(),
             source_domain,
             target_domain,
             &mut secure,
@@ -85,7 +88,10 @@ pub(super) async fn authenticate_transport(
         None
     };
     if disconnect.is_cancelled() {
-        return Err(outbound_cancellation_error(state, " before delivery"));
+        return Err(outbound_cancellation_error(
+            state.as_ref(),
+            " before delivery",
+        ));
     }
 
     Ok(AuthenticatedTransport {
@@ -99,8 +105,8 @@ pub(super) async fn authenticate_transport(
     })
 }
 
-pub(super) async fn connect_secure_endpoint_group(
-    state: &AppState,
+pub(super) async fn connect_secure_endpoint_group<H: S2sHost>(
+    state: &H,
     source_domain: &str,
     target_domain: &str,
     endpoints: &[FederationEndpoint],
@@ -197,8 +203,8 @@ pub(super) fn happy_eyeballs_endpoint_order(
     ordered
 }
 
-pub(super) async fn connect_secure_endpoint(
-    state: &AppState,
+pub(super) async fn connect_secure_endpoint<H: S2sHost>(
+    state: &H,
     source_domain: &str,
     target_domain: &str,
     endpoint: &FederationEndpoint,
@@ -418,8 +424,8 @@ pub(super) fn valid_empty_negotiation_element(raw: &str, name: &str, namespace: 
     })
 }
 
-pub(super) async fn authenticate_dialback_outbound(
-    state: &AppState,
+pub(super) async fn authenticate_dialback_outbound<H: S2sHost>(
+    state: &H,
     source_domain: &str,
     target_domain: &str,
     secure: &mut tokio_rustls::client::TlsStream<TcpStream>,
@@ -457,7 +463,7 @@ pub(super) async fn request_bidi_if_advertised<S: AsyncWrite + Unpin>(
     if !bidi_advertised(features) {
         return Ok(false);
     }
-    let request = crate::xmpp::xml_builder::XmlElement::new("bidi")
+    let request = XmlElement::new("bidi")
         .attr("xmlns", "urn:xmpp:bidi")
         .validated_fragment(&stream_limits_feature())?
         .finish();

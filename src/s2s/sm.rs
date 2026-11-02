@@ -8,9 +8,10 @@ use tokio::{
     time::Instant,
 };
 
-use crate::{state::AppState, xmpp::xml_builder::XmlElement};
 use northstar_federation_application::sm_outbox::SmOutboxClaim;
 use northstar_federation_core::sm::{is_stanza, parse_control, Control, NS};
+use northstar_s2s::host::S2sHost;
+use northstar_xml_builder::XmlElement;
 
 use super::{outbound::fail_envelope, write_xml, FederationEnvelope};
 
@@ -90,7 +91,7 @@ impl StreamManagement {
         Ok(())
     }
 
-    pub(crate) async fn renew(&self, state: &AppState) -> Result<()> {
+    pub(crate) async fn renew<H: S2sHost>(&self, state: &H) -> Result<()> {
         // Never revive an expired claim: a different process may already own it.
         let claims: Vec<_> = self
             .pending
@@ -111,7 +112,7 @@ impl StreamManagement {
         .context("S2S replay lease renewal timed out")?
     }
 
-    pub(crate) async fn acknowledge(&mut self, state: &AppState, h: u32) -> Result<()> {
+    pub(crate) async fn acknowledge<H: S2sHost>(&mut self, state: &H, h: u32) -> Result<()> {
         let count = self.ack_count(h)?;
         tokio::time::timeout(Duration::from_secs(5), async {
             for _ in 0..count {
@@ -137,9 +138,9 @@ impl StreamManagement {
         .context("S2S acknowledgement database deadline elapsed")?
     }
 
-    pub(crate) async fn replay<S: AsyncWrite + Unpin>(
+    pub(crate) async fn replay<H: S2sHost, S: AsyncWrite + Unpin>(
         &mut self,
-        state: &AppState,
+        state: &H,
         stream: &mut S,
     ) -> Result<()> {
         self.renew(state).await?;
@@ -255,9 +256,9 @@ impl StreamManagement {
         Ok(count)
     }
 
-    pub(crate) async fn control<S: AsyncWrite + Unpin>(
+    pub(crate) async fn control<H: S2sHost, S: AsyncWrite + Unpin>(
         &mut self,
-        state: &AppState,
+        state: &H,
         stream: &mut S,
         frame: &str,
         allow_enable: bool,
@@ -333,7 +334,7 @@ impl StreamManagement {
         Ok(true)
     }
 
-    pub(crate) async fn retry_unacknowledged(&mut self, state: &AppState) {
+    pub(crate) async fn retry_unacknowledged<H: S2sHost>(&mut self, state: &H) {
         let error = anyhow::anyhow!("S2S stream closed before acknowledgement");
         self.bytes = 0;
         while let Some(item) = self.pending.pop_front() {

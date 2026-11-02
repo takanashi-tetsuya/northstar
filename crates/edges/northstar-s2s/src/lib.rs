@@ -6,6 +6,8 @@
 #![forbid(unsafe_code)]
 
 pub mod dns;
+pub mod host;
+pub mod outbox;
 pub mod resume;
 pub mod tls;
 pub mod util;

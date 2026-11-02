@@ -75,29 +75,6 @@ pub(crate) async fn route_inbound_for_connection(
     ))
 }
 
-pub(super) async fn route_inbound_for_connection_owned(
-    state: Arc<AppState>,
-    authenticated_domain: String,
-    local_domain: String,
-    connection_id: uuid::Uuid,
-    raw: String,
-) -> Result<InboundFederationRoute> {
-    route_inbound_for_connection(
-        &state,
-        &authenticated_domain,
-        &local_domain,
-        connection_id,
-        &raw,
-    )
-    .await
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum InboundFederationRoute {
-    Reply(Option<String>),
-    StreamError(&'static str),
-}
-
 /// Enforce the hop-by-hop S2S address authorization rules before any stanza
 /// reaches an application handler. RFC 6120 sections 8.1.1.2 and 8.1.2.2
 /// require these failures to terminate the stream, rather than being reflected

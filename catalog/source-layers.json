@@ -50,12 +50,6 @@
     "src/s2s/inbound.rs": [
       "state"
     ],
-    "src/s2s/outbound.rs": [
-      "state"
-    ],
-    "src/s2s/sm.rs": [
-      "state"
-    ],
     "src/xmpp/protocol.rs": [
       "state"
     ],

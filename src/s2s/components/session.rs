@@ -151,7 +151,7 @@ pub(super) async fn deliver_component_outbox<S: AsyncWrite + Unpin + Send>(
         {
             Ok(()) => {}
             Err(ComponentOutboxWriteError::Socket(error)) => {
-                s2s::fail_envelope(&state, &envelope, &error, false).await;
+                s2s::fail_envelope(state.as_ref(), &envelope, &error, false).await;
                 return Err(error);
             }
             Err(ComponentOutboxWriteError::Lease(error)) => {

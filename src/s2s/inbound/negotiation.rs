@@ -1,5 +1,8 @@
 //! Establish inbound secure connections and validate stream identities and peer authentication.
 
+use northstar_s2s::host::S2sHost;
+use northstar_xml_builder::XmlElement;
+
 use super::*;
 
 pub(super) fn hosted_s2s_domain(local_domain: &str, target: &str) -> bool {
@@ -79,17 +82,14 @@ pub(super) fn restore_inherited_dialback_namespace(raw: &str) -> Cow<'_, str> {
     ))
 }
 
-pub(super) fn pre_tls_features(state: &AppState) -> String {
-    let mut features = crate::xmpp::xml_builder::XmlElement::new("stream:features").child(
-        crate::xmpp::xml_builder::XmlElement::new("starttls")
+pub(super) fn pre_tls_features<H: S2sHost>(state: &H) -> String {
+    let mut features = XmlElement::new("stream:features").child(
+        XmlElement::new("starttls")
             .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-tls")
-            .child(crate::xmpp::xml_builder::XmlElement::new("required")),
+            .child(XmlElement::new("required")),
     );
     if state.s2s_federation_enabled() {
-        features = features.child(
-            crate::xmpp::xml_builder::XmlElement::new("bidi")
-                .attr("xmlns", "urn:xmpp:features:bidi"),
-        );
+        features = features.child(XmlElement::new("bidi").attr("xmlns", "urn:xmpp:features:bidi"));
     }
     features
         .validated_fragment(&negotiation_stream_limits_feature())
@@ -139,9 +139,9 @@ pub(super) async fn read_s2s_negotiation_frame<S: AsyncRead + AsyncWrite + Unpin
     }
 }
 
-pub(crate) async fn inbound_xmpps_connection(
+pub(crate) async fn inbound_xmpps_connection<H: S2sHost>(
     stream: TcpStream,
-    state: Arc<AppState>,
+    state: Arc<H>,
     acceptor: TlsAcceptor,
     tls_generation: u64,
 ) -> Result<()> {
@@ -242,9 +242,9 @@ pub(crate) async fn inbound_xmpps_connection(
     .await
 }
 
-pub(crate) async fn inbound_connection(
+pub(crate) async fn inbound_connection<H: S2sHost>(
     mut stream: TcpStream,
-    state: Arc<AppState>,
+    state: Arc<H>,
     acceptor: TlsAcceptor,
     tls_generation: u64,
 ) -> Result<()> {
@@ -284,7 +284,7 @@ pub(crate) async fn inbound_connection(
         &server_open(&target, &claimed_domain, &stream_id().to_string()),
     )
     .await?;
-    write_xml(&mut stream, &pre_tls_features(&state)).await?;
+    write_xml(&mut stream, &pre_tls_features(state.as_ref())).await?;
     let starttls = read_s2s_negotiation_frame(&mut stream, &mut input).await?;
     if !valid_starttls_request(&starttls) {
         write_xml(
@@ -388,9 +388,9 @@ pub(super) struct InboundAuthentication {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn authenticate_secure_inbound(
+pub(super) async fn authenticate_secure_inbound<H: S2sHost>(
     secure: &mut tokio_rustls::server::TlsStream<TcpStream>,
-    state: Arc<AppState>,
+    state: Arc<H>,
     asserted_domain: String,
     target: String,
     receiving_stream_id: String,
@@ -522,7 +522,7 @@ pub(super) async fn authenticate_secure_inbound(
             &server_open(&target, &authenticated_domain, &stream_id().to_string()),
         )
         .await?;
-        let features = crate::xmpp::xml_builder::XmlElement::new("stream:features")
+        let features = XmlElement::new("stream:features")
             .validated_fragment(&northstar_federation_core::sm::feature())?
             .validated_fragment(&stream_limits_feature())?
             .finish();
@@ -665,8 +665,8 @@ pub(super) async fn authenticate_secure_inbound(
     }
 }
 
-pub(super) async fn verify_remote_owned(
-    state: Arc<AppState>,
+pub(super) async fn verify_remote_owned<H: S2sHost>(
+    state: Arc<H>,
     originating_domain: String,
     receiving_domain: String,
     stream_id: String,

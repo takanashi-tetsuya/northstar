@@ -1,13 +1,16 @@
 //! Run inbound listeners and connection actors with authenticated stream management and resumption.
 
+use northstar_s2s::host::S2sHost;
+use northstar_xml_builder::XmlElement;
+
 use super::*;
 
 pub(super) async fn wait_for_federation_shutdown(cancel: &tokio_util::sync::CancellationToken) {
     cancel.cancelled().await;
 }
 
-pub async fn serve_s2s_tls(
-    state: Arc<AppState>,
+pub async fn serve_s2s_tls<H: S2sHost>(
+    state: Arc<H>,
     cancel: tokio_util::sync::CancellationToken,
     listener: Option<TcpListener>,
 ) -> Result<()> {
@@ -56,8 +59,8 @@ pub async fn serve_s2s_tls(
     }
 }
 
-pub async fn serve(
-    state: Arc<AppState>,
+pub async fn serve<H: S2sHost>(
+    state: Arc<H>,
     mut outbound_wake: mpsc::Receiver<()>,
     cancel: tokio_util::sync::CancellationToken,
     listener: Option<TcpListener>,
@@ -131,10 +134,10 @@ pub async fn serve(
     }
 }
 
-pub(super) async fn inbound_xmpps_actor(
+pub(super) async fn inbound_xmpps_actor<H: S2sHost>(
     stream: TcpStream,
     peer: std::net::SocketAddr,
-    state: Arc<AppState>,
+    state: Arc<H>,
     acceptor: TlsAcceptor,
     tls_generation: u64,
     connection_permit: tokio::sync::OwnedSemaphorePermit,
@@ -165,10 +168,10 @@ pub(super) async fn inbound_xmpps_actor(
     }
 }
 
-pub(super) async fn inbound_starttls_actor(
+pub(super) async fn inbound_starttls_actor<H: S2sHost>(
     stream: TcpStream,
     peer: std::net::SocketAddr,
-    state: Arc<AppState>,
+    state: Arc<H>,
     acceptor: TlsAcceptor,
     tls_generation: u64,
     connection_permit: tokio::sync::OwnedSemaphorePermit,
@@ -200,9 +203,9 @@ pub(super) async fn inbound_starttls_actor(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn drive_authenticated_inbound(
+pub(super) async fn drive_authenticated_inbound<H: S2sHost>(
     secure: tokio_rustls::server::TlsStream<TcpStream>,
-    state: Arc<AppState>,
+    state: Arc<H>,
     authenticated_domain: String,
     local_domain: String,
     bidi_enabled: bool,
@@ -261,13 +264,9 @@ pub(super) async fn drive_authenticated_inbound(
     state
         .s2s_connection_registry()
         .remove_bidirectional_if_connection(&route_key, connection_id);
-    crate::xmpp::protocol::caps::federated_caps_connection_closed(&state, connection_id).await;
+    state.federated_caps_connection_closed(connection_id).await;
     let cleanup = AssertUnwindSafe(
-        northstar_muc_xmpp::federated_muc::federated_muc_connection_closed(
-            state.as_ref(),
-            &authenticated_domain,
-            connection_id,
-        ),
+        state.federated_muc_connection_closed(&authenticated_domain, connection_id),
     )
     .catch_unwind()
     .await;
@@ -305,8 +304,8 @@ pub(super) async fn drive_authenticated_inbound(
     }
 }
 
-pub(super) fn publish_inbound_route(
-    state: &AppState,
+pub(super) fn publish_inbound_route<H: S2sHost>(
+    state: &H,
     scope: &northstar_s2s::resume::Scope,
     connection_id: uuid::Uuid,
     sender: &mpsc::Sender<FederationEnvelope>,
@@ -357,8 +356,8 @@ pub(super) async fn reject_resume(
     let _ = request.result.send(Err(Box::new(request.transport)));
 }
 
-pub(super) async fn accept_resume(
-    state: &AppState,
+pub(super) async fn accept_resume<H: S2sHost>(
+    state: &H,
     sm: &mut super::super::sm::StreamManagement,
     registration: &mut northstar_s2s::resume::Registration,
     scope: &northstar_s2s::resume::Scope,
@@ -422,9 +421,9 @@ pub(super) async fn accept_resume(
     Ok(Some(request.transport))
 }
 
-pub(super) async fn drive_authenticated_inbound_inner(
+pub(super) async fn drive_authenticated_inbound_inner<H: S2sHost>(
     transport: northstar_s2s::resume::Transport,
-    state: Arc<AppState>,
+    state: Arc<H>,
     scope: northstar_s2s::resume::Scope,
     connection_id: uuid::Uuid,
     sender: mpsc::Sender<FederationEnvelope>,
@@ -453,7 +452,7 @@ pub(super) async fn drive_authenticated_inbound_inner(
                     _ = tokio::time::sleep_until(deadline) => anyhow::bail!("S2S resume window expired"),
                     request = resumes.recv() => {
                         let request = request.context("S2S resume owner closed")?;
-                        if let Some(resumed) = tokio::time::timeout_at(deadline, accept_resume(&state, &mut sm, registration.as_mut().expect("registered resume owner"), &scope, request)).await.context("S2S resume window expired")?? {
+                        if let Some(resumed) = tokio::time::timeout_at(deadline, accept_resume(state.as_ref(), &mut sm, registration.as_mut().expect("registered resume owner"), &scope, request)).await.context("S2S resume window expired")?? {
                             transport = Some(resumed);
                             suspended_until = None;
                             break;
@@ -469,7 +468,7 @@ pub(super) async fn drive_authenticated_inbound_inner(
         // which makes the peer reject an otherwise valid resumption. Wait for
         // the first SM command or application stanza before routing on it.
         let mut registered = if initial_bidi_route_admissible(sm.is_enabled(), used, false, false) {
-            publish_inbound_route(&state, &scope, connection_id, &sender, &current.disconnect)
+            publish_inbound_route(state.as_ref(), &scope, connection_id, &sender, &current.disconnect)
         } else {
             false
         };
@@ -502,7 +501,7 @@ pub(super) async fn drive_authenticated_inbound_inner(
                         state.s2s_resumption().has_suspended_scope(&scope),
                     ) {
                         initial_negotiation_complete = true;
-                        registered = publish_inbound_route(&state, &scope, connection_id, &sender, &current.disconnect);
+                        registered = publish_inbound_route(state.as_ref(), &scope, connection_id, &sender, &current.disconnect);
                     } else {
                         initial_negotiation_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
                     }
@@ -532,7 +531,7 @@ pub(super) async fn drive_authenticated_inbound_inner(
                             };
                             state.s2s_connection_registry().remove_bidirectional_if_connection(&route_key, connection_id);
                             while let Ok(envelope) = outgoing.try_recv() {
-                                fail_envelope(&state, &envelope, &anyhow::anyhow!("S2S route moved to resumed stream"), false).await;
+                                fail_envelope(state.as_ref(), &envelope, &anyhow::anyhow!("S2S route moved to resumed stream"), false).await;
                             }
                             let (reply, response) = tokio::sync::oneshot::channel();
                             let request = northstar_s2s::resume::Request { transport: transport.take().expect("active transport"), h, epoch, result: reply };
@@ -554,18 +553,18 @@ pub(super) async fn drive_authenticated_inbound_inner(
                             }
                             write_xml(&mut current.stream, &enabled.finish()).await?;
                             initial_negotiation_complete = true;
-                            registered = publish_inbound_route(&state, &scope, connection_id, &sender, &current.disconnect);
+                            registered = publish_inbound_route(state.as_ref(), &scope, connection_id, &sender, &current.disconnect);
                             continue;
                         }
                         _ => {}
                     }
-                    if sm.control(&state, &mut current.stream, &frame, false).await? { continue; }
+                    if sm.control(state.as_ref(), &mut current.stream, &frame, false).await? { continue; }
                     used = true;
                     if !initial_negotiation_complete {
                         initial_negotiation_complete = true;
-                        registered = publish_inbound_route(&state, &scope, connection_id, &sender, &current.disconnect);
+                        registered = publish_inbound_route(state.as_ref(), &scope, connection_id, &sender, &current.disconnect);
                     }
-                    let routed = route_inbound_for_connection_owned(Arc::clone(&state), scope.remote.clone(), scope.local.clone(), connection_id, frame.clone()).await?;
+                    let routed = S2sHost::route_inbound_stanza(Arc::clone(&state), scope.remote.clone(), scope.local.clone(), connection_id, frame.clone()).await?;
                     sm.handled(&frame);
                     match routed {
                         InboundFederationRoute::Reply(Some(reply)) => {
@@ -586,9 +585,9 @@ pub(super) async fn drive_authenticated_inbound_inner(
                 envelope = outgoing.recv(), if registered => {
                     let Some(mut envelope) = envelope else { return Ok(None); };
                     used = true;
-                    if let Err(error) = deliver_managed_envelope(&state, &mut current.stream, &mut envelope, peer_limits.max_bytes, &mut sm).await {
+                    if let Err(error) = deliver_managed_envelope(state.as_ref(), &mut current.stream, &mut envelope, peer_limits.max_bytes, &mut sm).await {
                         let permanent = is_peer_stanza_limit_error(&error);
-                        if !sm.owns(&envelope) { fail_envelope(&state, &envelope, &error, permanent).await; }
+                        if !sm.owns(&envelope) { fail_envelope(state.as_ref(), &envelope, &error, permanent).await; }
                         if permanent { continue; }
                         return Err(error);
                     }
@@ -601,7 +600,7 @@ pub(super) async fn drive_authenticated_inbound_inner(
         state.s2s_connection_registry().remove_bidirectional_if_connection(&route_key, connection_id);
         match active_result {
             Ok(Some(request)) => {
-                if let Some(resumed) = accept_resume(&state, &mut sm, registration.as_mut().expect("registered resume owner"), &scope, request).await? {
+                if let Some(resumed) = accept_resume(state.as_ref(), &mut sm, registration.as_mut().expect("registered resume owner"), &scope, request).await? {
                     if let Some(mut old) = transport.take() {
                         // Dropping the previous socket fences its writer before this loop resumes.
                         let _ = tokio::time::timeout(std::time::Duration::from_millis(100), send_stream_error(&mut old.stream, "conflict")).await;
@@ -616,7 +615,7 @@ pub(super) async fn drive_authenticated_inbound_inner(
                     || transport.as_ref().is_some_and(|current| current.disconnect.is_cancelled()) { return Err(error); }
                 let deadline = tokio::time::Instant::now() + resume_window;
                 registration.as_mut().expect("registered resume owner").suspend(deadline);
-                sm.renew(&state).await?;
+                sm.renew(state.as_ref()).await?;
                 transport.take();
                 suspended_until = Some(deadline);
             }
@@ -624,10 +623,10 @@ pub(super) async fn drive_authenticated_inbound_inner(
     }
     }.await;
     drop(registration);
-    sm.retry_unacknowledged(&state).await;
+    sm.retry_unacknowledged(state.as_ref()).await;
     while let Ok(envelope) = outgoing.try_recv() {
         fail_envelope(
-            &state,
+            state.as_ref(),
             &envelope,
             &anyhow::anyhow!("S2S connection closed"),
             false,

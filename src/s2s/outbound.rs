@@ -40,14 +40,9 @@ pub(crate) type SecureS2sConnection = (
     u64,
 );
 
-use crate::{
-    state::{
-        s2s_outbox_dispatch::{S2sOutboxDispatchContext, S2sOutboxFailureEffects},
-        AppState,
-    },
-    xmpp::xml_builder::XmlElement,
-};
 use anyhow::{Context, Result};
+use northstar_s2s::host::S2sHost;
+use northstar_s2s::outbox::{S2sOutboxDispatchContext, S2sOutboxFailureEffects};
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 use roxmltree::Document;
 use std::{future::Future, sync::Arc, time::Duration};
@@ -59,13 +54,12 @@ use tokio::{
 use super::*;
 #[cfg(test)]
 use crate::db;
+#[cfg(test)]
+use northstar_s2s::outbox::delivery_failure_stanza;
 
 use northstar_federation_application::dispatch::{
-    OutboxFailureDisposition, S2sOutboxDispatchService,
+    OutboxFailureDisposition, S2sOutboxDispatchRepository, S2sOutboxDispatchService,
 };
-type DispatchService = S2sOutboxDispatchService<
-    northstar_federation_postgres::dispatch_repository::PostgresS2sOutboxDispatchRepository,
->;
 
 use tokio::sync::mpsc;
 
@@ -141,15 +135,15 @@ fn outbound_cancellation_message(server_shutting_down: bool, phase: &str) -> Str
     }
 }
 
-fn outbound_cancellation_error(state: &AppState, phase: &str) -> anyhow::Error {
+fn outbound_cancellation_error<H: S2sHost>(state: &H, phase: &str) -> anyhow::Error {
     anyhow::anyhow!(outbound_cancellation_message(
         state.connection_actors().shutdown_token().is_cancelled(),
         phase,
     ))
 }
 
-pub(crate) fn get_or_create_outbound(
-    state: &Arc<AppState>,
+pub(crate) fn get_or_create_outbound<H: S2sHost>(
+    state: &Arc<H>,
     source_domain: &str,
     target_domain: &str,
 ) -> Option<mpsc::Sender<FederationEnvelope>> {
@@ -256,8 +250,8 @@ pub(crate) fn get_or_create_outbound(
 /// creates a new connection. It is used for XEP-0334 `no-store` messages:
 /// callers receive `false` when no live route accepts the stanza, when the
 /// bounded queue is saturated, or when the socket write does not complete.
-pub(crate) async fn send_volatile_on_authenticated_route(
-    state: &AppState,
+pub(crate) async fn send_volatile_on_authenticated_route<H: S2sHost>(
+    state: &H,
     source_domain: &str,
     target_domain: &str,
     stanza: String,
@@ -271,8 +265,8 @@ pub(crate) async fn send_volatile_on_authenticated_route(
     .await
 }
 
-async fn send_volatile_with_context(
-    context: &S2sOutboxDispatchContext,
+async fn send_volatile_with_context<R: S2sOutboxDispatchRepository>(
+    context: &S2sOutboxDispatchContext<R>,
     source_domain: &str,
     target_domain: &str,
     stanza: String,
@@ -340,8 +334,8 @@ async fn send_volatile_with_context(
     )
 }
 
-pub(crate) async fn deliver_managed_envelope<S: AsyncWrite + Unpin>(
-    state: &AppState,
+pub(crate) async fn deliver_managed_envelope<H: S2sHost, S: AsyncWrite + Unpin>(
+    state: &H,
     secure: &mut S,
     envelope: &mut FederationEnvelope,
     peer_max_bytes: Option<usize>,
@@ -350,8 +344,8 @@ pub(crate) async fn deliver_managed_envelope<S: AsyncWrite + Unpin>(
     deliver_envelope_inner(state, secure, envelope, peer_max_bytes, Some(sm)).await
 }
 
-async fn deliver_envelope_inner<S: AsyncWrite + Unpin>(
-    state: &AppState,
+async fn deliver_envelope_inner<H: S2sHost, S: AsyncWrite + Unpin>(
+    state: &H,
     secure: &mut S,
     envelope: &mut FederationEnvelope,
     peer_max_bytes: Option<usize>,
@@ -446,8 +440,8 @@ pub(crate) fn serialize_for_peer(stanza: &str, peer_max_bytes: Option<usize>) ->
     Ok(serialized)
 }
 
-pub(crate) async fn fail_envelope(
-    state: &AppState,
+pub(crate) async fn fail_envelope<H: S2sHost>(
+    state: &H,
     envelope: &FederationEnvelope,
     error: &anyhow::Error,
     permanent: bool,
@@ -461,8 +455,8 @@ pub(crate) async fn fail_envelope(
     .await;
 }
 
-async fn fail_envelope_with(
-    effects: &S2sOutboxFailureEffects,
+async fn fail_envelope_with<R: S2sOutboxDispatchRepository>(
+    effects: &S2sOutboxFailureEffects<R>,
     envelope: &FederationEnvelope,
     error: &anyhow::Error,
     permanent: bool,
@@ -515,8 +509,8 @@ async fn fail_envelope_with(
     }
 }
 
-pub(crate) async fn connect_secure_stream_from(
-    state: &AppState,
+pub(crate) async fn connect_secure_stream_from<H: S2sHost>(
+    state: &H,
     source_domain: &str,
     target_domain: &str,
 ) -> Result<SecureS2sConnection> {
@@ -563,8 +557,8 @@ pub(crate) async fn connect_secure_stream_from(
 /// head from an obsolete connection-failure backoff. The registry consumes the
 /// hint before a mutating query is polled; an unknown database result therefore
 /// falls back to normal durable retry instead of replaying the acceleration.
-async fn recover_authenticated_route_heads(
-    service: &DispatchService,
+async fn recover_authenticated_route_heads<R: S2sOutboxDispatchRepository>(
+    service: &S2sOutboxDispatchService<R>,
     registry: &S2sConnectionRegistry,
     excluded_domains: &[String],
     domain_allowed: impl Fn(&str) -> bool,
@@ -631,9 +625,9 @@ async fn recover_authenticated_route_heads(
     Ok(recovered)
 }
 
-pub(crate) async fn dispatch_due_outbox(
-    context: &S2sOutboxDispatchContext,
-    actor_state: &Arc<AppState>,
+pub(crate) async fn dispatch_due_outbox<H: S2sHost>(
+    context: &S2sOutboxDispatchContext<H::DispatchStore>,
+    actor_state: &Arc<H>,
 ) -> Result<()> {
     for expired in context.service().expire().await? {
         context.failure().telemetry().expired();
@@ -738,8 +732,8 @@ pub(crate) async fn dispatch_due_outbox(
     Ok(())
 }
 
-fn envelope_source_domain(
-    context: &S2sOutboxDispatchContext,
+fn envelope_source_domain<R: S2sOutboxDispatchRepository>(
+    context: &S2sOutboxDispatchContext<R>,
     envelope: &FederationEnvelope,
 ) -> String {
     let parsed = Document::parse(&envelope.stanza).ok();
@@ -787,34 +781,6 @@ fn bidi_stanza_authorized(stanza: &str, local_stream_domain: &str, target_domain
         && to
             .as_deref()
             .is_some_and(|domain| same_s2s_domain(domain, target_domain))
-}
-
-pub(crate) fn delivery_failure_stanza(stanza: &str, condition: &str) -> Option<String> {
-    // Restrict element names to the conditions emitted by this outbox. This
-    // keeps the generic reflector from ever receiving an attacker-controlled
-    // XML name if a future caller passes through a remote diagnostic string.
-    if !matches!(
-        condition,
-        "internal-server-error"
-            | "policy-violation"
-            | "remote-server-not-found"
-            | "remote-server-timeout"
-    ) {
-        return None;
-    }
-    let client_stanza = client_namespace(stanza);
-    let document = Document::parse(&client_stanza).ok()?;
-    let root = document.root_element();
-    if root.attribute("type") == Some("error") {
-        // RFC 6120 section 8.3.1 forbids responding to a stanza error with
-        // another stanza error.
-        return None;
-    }
-    Some(northstar_xml_builder::stanza::stanza_error(
-        root,
-        northstar_xml_builder::stanza::stanza_error_type(condition),
-        condition,
-    ))
 }
 
 #[cfg(test)]

@@ -1,9 +1,12 @@
 //! Manage outbound connection lifecycle, initial delivery leases, multiplexing, cleanup and stream resumption.
 
+use northstar_s2s::host::S2sHost;
+use northstar_xml_builder::XmlElement;
+
 use super::*;
 
-pub(super) async fn run_outbound_connection(
-    state: Arc<AppState>,
+pub(super) async fn run_outbound_connection<H: S2sHost>(
+    state: Arc<H>,
     source_domain: String,
     target_domain: String,
     mut rx: mpsc::Receiver<FederationEnvelope>,
@@ -77,17 +80,17 @@ pub(super) async fn run_outbound_connection(
             || is_peer_stanza_limit_error(error)
             || is_dialback_authorization_error(error);
         if !first_delivered {
-            fail_envelope(&state, &first, error, permanent).await;
+            fail_envelope(state.as_ref(), &first, error, permanent).await;
         }
         while let Ok(envelope) = rx.try_recv() {
-            fail_envelope(&state, &envelope, error, permanent).await;
+            fail_envelope(state.as_ref(), &envelope, error, permanent).await;
         }
     }
     result
 }
 
-pub(super) async fn renew_first_envelope_lease(
-    service: DispatchService,
+pub(super) async fn renew_first_envelope_lease<R: S2sOutboxDispatchRepository + Clone + 'static>(
+    service: S2sOutboxDispatchService<R>,
     outbox_id: uuid::Uuid,
     lock_token: uuid::Uuid,
     lease_valid: Arc<AtomicBool>,
@@ -146,8 +149,8 @@ pub(super) struct InitialDelivery<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn connect_and_multiplex(
-    state: &Arc<AppState>,
+pub(super) async fn connect_and_multiplex<H: S2sHost>(
+    state: &Arc<H>,
     source_domain: &str,
     target_domain: &str,
     rx: &mut mpsc::Receiver<FederationEnvelope>,
@@ -168,16 +171,11 @@ pub(super) async fn connect_and_multiplex(
     ))
     .catch_unwind()
     .await;
-    crate::xmpp::protocol::caps::federated_caps_connection_closed(state, connection_id).await;
-    let cleanup = AssertUnwindSafe(
-        northstar_muc_xmpp::federated_muc::federated_muc_connection_closed(
-            state.as_ref(),
-            target_domain,
-            connection_id,
-        ),
-    )
-    .catch_unwind()
-    .await;
+    state.federated_caps_connection_closed(connection_id).await;
+    let cleanup =
+        AssertUnwindSafe(state.federated_muc_connection_closed(target_domain, connection_id))
+            .catch_unwind()
+            .await;
     match result {
         Ok(result) => match cleanup {
             Ok(Ok(())) => result,
@@ -213,8 +211,8 @@ pub(super) async fn connect_and_multiplex(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn connect_and_multiplex_inner(
-    state: &Arc<AppState>,
+pub(super) async fn connect_and_multiplex_inner<H: S2sHost>(
+    state: &Arc<H>,
     source_domain: &str,
     target_domain: &str,
     connection_id: uuid::Uuid,
@@ -265,12 +263,12 @@ pub(super) async fn connect_and_multiplex_inner(
                     bidi_enabled && northstar_federation_core::sm::is_stanza(&response),
                     "remote rejected S2S stream management"
                 );
-                match route_inbound_for_connection(
-                    state,
-                    target_domain,
-                    source_domain,
+                match S2sHost::route_inbound_stanza(
+                    Arc::clone(state),
+                    target_domain.to_owned(),
+                    source_domain.to_owned(),
                     connection_id,
-                    &response,
+                    response.clone(),
                 )
                 .await?
                 {
@@ -319,8 +317,8 @@ pub(super) async fn connect_and_multiplex_inner(
         }
         let delivery = tokio::select! {
             biased;
-            _ = disconnect.cancelled() => return Err(outbound_cancellation_error(state, " before first delivery")),
-            result = deliver_managed_envelope(state, &mut secure, initial.envelope, peer_limits.max_bytes, &mut sm) => result,
+            _ = disconnect.cancelled() => return Err(outbound_cancellation_error(state.as_ref(), " before first delivery")),
+            result = deliver_managed_envelope(state.as_ref(), &mut secure, initial.envelope, peer_limits.max_bytes, &mut sm) => result,
         };
         if delivery.is_ok() || sm.owns(initial.envelope) {
             *initial.delivered = true;
@@ -338,7 +336,7 @@ pub(super) async fn connect_and_multiplex_inner(
             }
             _ = disconnect.cancelled() => {
                 let _ = send_stream_error(&mut secure, "not-authorized").await;
-                return Err(outbound_cancellation_error(state, ""));
+                return Err(outbound_cancellation_error(state.as_ref(), ""));
             }
             _ = keepalive_interval.tick() => {
                 if let Err(e) = write_xml(&mut secure, " ").await {
@@ -347,9 +345,9 @@ pub(super) async fn connect_and_multiplex_inner(
             }
             envelope = rx.recv() => {
                 let Some(mut envelope) = envelope else { break };
-                if let Err(error) = deliver_managed_envelope(state, &mut secure, &mut envelope, peer_limits.max_bytes, &mut sm).await {
+                if let Err(error) = deliver_managed_envelope(state.as_ref(), &mut secure, &mut envelope, peer_limits.max_bytes, &mut sm).await {
                     let permanent = is_peer_stanza_limit_error(&error);
-                    if !sm.owns(&envelope) { fail_envelope(state, &envelope, &error, permanent).await; }
+                    if !sm.owns(&envelope) { fail_envelope(state.as_ref(), &envelope, &error, permanent).await; }
                     if permanent {
                         continue;
                     }
@@ -382,15 +380,19 @@ pub(super) async fn connect_and_multiplex_inner(
                 if let Some(condition) = peer_stream_error_condition(&frame) {
                     anyhow::bail!("remote S2S stream error: {condition}");
                 }
-                if sm.control(state, &mut secure, &frame, false).await? {
+                if sm.control(state.as_ref(), &mut secure, &frame, false).await? {
                     continue;
                 }
                 if !bidi_enabled {
                     send_stream_error(&mut secure, "unexpected-request").await?;
                     anyhow::bail!("remote sent a stanza on a unidirectional S2S connection");
                 }
-                let routed = route_inbound_for_connection(
-                    state, target_domain, source_domain, connection_id, &frame,
+                let routed = S2sHost::route_inbound_stanza(
+                    Arc::clone(state),
+                    target_domain.to_owned(),
+                    source_domain.to_owned(),
+                    connection_id,
+                    frame.clone(),
                 ).await?;
                 sm.handled(&frame);
                 match routed {
@@ -425,7 +427,7 @@ pub(super) async fn connect_and_multiplex_inner(
     let error = match active_result { Ok(()) => return Ok(()), Err(error) => error };
     let Some((id, window)) = &resume else { return Err(error); };
     if first || !northstar_s2s::util::transport_lost(&error) || disconnect.is_cancelled() { return Err(error); }
-    sm.renew(state).await?;
+    sm.renew(state.as_ref()).await?;
     drop(secure);
     drop(certificate_session);
     let deadline = tokio::time::Instant::now() + *window;
@@ -441,9 +443,9 @@ pub(super) async fn connect_and_multiplex_inner(
                 let response = timed_read_frame(&mut next.stream, &mut next.input).await?;
                 let h = northstar_federation_core::sm::resumed(&response, id)?;
                 sm.validate_resume(h, next.limits.max_bytes)?;
-                sm.renew(state).await?;
-                sm.acknowledge(state, h).await?;
-                sm.replay(state, &mut next.stream).await?;
+                sm.renew(state.as_ref()).await?;
+                sm.acknowledge(state.as_ref(), h).await?;
+                sm.replay(state.as_ref(), &mut next.stream).await?;
                 Ok::<_, anyhow::Error>(next)
             }.await;
             match attempt {
@@ -458,7 +460,7 @@ pub(super) async fn connect_and_multiplex_inner(
     });
     let next = tokio::select! {
         biased;
-        _ = disconnect.cancelled() => return Err(outbound_cancellation_error(state, " during resumption")),
+        _ = disconnect.cancelled() => return Err(outbound_cancellation_error(state.as_ref(), " during resumption")),
         result = reconnected => result.context("S2S resume window expired")??,
     };
     secure = next.stream;
@@ -474,6 +476,6 @@ pub(super) async fn connect_and_multiplex_inner(
     }
     }.await;
     authenticated.store(false, Ordering::Release);
-    sm.retry_unacknowledged(state).await;
+    sm.retry_unacknowledged(state.as_ref()).await;
     result
 }

@@ -9,14 +9,18 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
+arc-swap = "1"
 dashmap = "6.1"
 hickory-resolver = { version = "0.26.1", default-features = false, features = ["dnssec-aws-lc-rs", "system-config", "tokio"] }
+northstar-config = { path = "../../platform/northstar-config" }
 northstar-federation-application = { path = "../../contexts/federation/northstar-federation-application" }
 northstar-federation-core = { path = "../../contexts/federation/northstar-federation-core" }
+northstar-runtime = { path = "../../platform/northstar-runtime" }
 northstar-security = { path = "../../platform/northstar-security" }
 northstar-xml-builder = { path = "../../kernel/northstar-xml-builder" }
 northstar-xml-framing = { path = "../../kernel/northstar-xml-framing" }
 northstar-xmpp-types = { path = "../../kernel/northstar-xmpp-types" }
+roxmltree = "0.20"
 rustls-webpki = "0.103"
 sha2 = "0.10"
 subtle = "2.6"

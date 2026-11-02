@@ -1,5 +1,9 @@
 use super::*;
 
+type DispatchService = S2sOutboxDispatchService<
+    northstar_federation_postgres::dispatch_repository::PostgresS2sOutboxDispatchRepository,
+>;
+
 fn test_dispatch(pool: &sqlx::PgPool) -> DispatchService {
     use northstar_federation_application::dispatch::S2sOutboxDispatchPolicy;
     S2sOutboxDispatchService::new(

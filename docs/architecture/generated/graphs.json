@@ -4451,6 +4451,10 @@
       ],
       [
         "northstar-s2s",
+        "arc-swap"
+      ],
+      [
+        "northstar-s2s",
         "dashmap"
       ],
       [
@@ -4459,11 +4463,19 @@
       ],
       [
         "northstar-s2s",
+        "northstar-config"
+      ],
+      [
+        "northstar-s2s",
         "northstar-federation-application"
       ],
       [
         "northstar-s2s",
         "northstar-federation-core"
+      ],
+      [
+        "northstar-s2s",
+        "northstar-runtime"
       ],
       [
         "northstar-s2s",
@@ -4484,6 +4496,10 @@
       [
         "northstar-s2s",
         "openssl"
+      ],
+      [
+        "northstar-s2s",
+        "roxmltree"
       ],
       [
         "northstar-s2s",

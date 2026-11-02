@@ -61,8 +61,8 @@ pub const NODE_CONFIG: &str = "urn:xmpp:mix:nodes:config";
 pub const NODE_ALLOWED: &str = "urn:xmpp:mix:nodes:allowed";
 pub const NODE_BANNED: &str = "urn:xmpp:mix:nodes:banned";
 pub const NODE_JIDMAP: &str = "urn:xmpp:mix:nodes:jidmap";
-pub const NODE_AVATAR_DATA: &str = "urn:xmpp:avatar:data";
-pub const NODE_AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
+pub const NODE_AVATAR_DATA: &str = northstar_xmpp_avatar::AVATAR_DATA;
+pub const NODE_AVATAR_METADATA: &str = northstar_xmpp_avatar::AVATAR_METADATA;
 
 pub const ALL_NODES: [&str; 10] = [
     NODE_MESSAGES,

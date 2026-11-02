@@ -3,12 +3,15 @@
 use crate::payload::xml_subtree_contains_unsafe_bidi_controls;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use northstar_pubsub_application::profile::{
-    detected_media_type, sha1_hex, AvatarPresenceUpdate, LegacyVCardWrite, ProfileAudienceSnapshot,
-    ProfilePublishStatus, ProfileRepository, ProfileService, PublicVCard,
+    AvatarPresenceUpdate, LegacyVCardWrite, ProfileAudienceSnapshot, ProfilePublishStatus,
+    ProfileRepository, ProfileService, PublicVCard,
 };
 use northstar_pubsub_core::{PepQuotas, PubSubAccount};
 use northstar_xml_builder::stanza::{iq_error, iq_error_from, iq_result, iq_result_from};
 use northstar_xml_builder::XmlElement;
+use northstar_xmpp_avatar::{
+    detected_media_type, sha1_hex, valid_png_image, AVATAR_DATA, AVATAR_METADATA,
+};
 use roxmltree::Node;
 
 /// What a client session provides to the XEP-0054 handlers.
@@ -38,9 +41,6 @@ pub trait VCardSession: Sync {
     /// `owner_bare`.
     fn vcard_refresh_avatar_presence(&self, owner_bare: &str, hash: Option<&str>);
 }
-
-const AVATAR_DATA: &str = "urn:xmpp:avatar:data";
-const AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
 
 struct ConvertedAvatarItems {
     data: Option<(String, String)>,
@@ -150,7 +150,7 @@ fn decoded_vcard_avatar(vcard: Node<'_, '_>) -> std::result::Result<Option<(Stri
     if !declared_media_type.eq_ignore_ascii_case(actual_media_type) {
         return Err(());
     }
-    if actual_media_type == "image/png" && !crate::payload::valid_png_image(&bytes) {
+    if actual_media_type == "image/png" && !valid_png_image(&bytes) {
         return Err(());
     }
     Ok(Some((actual_media_type.to_owned(), bytes)))

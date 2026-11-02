@@ -4,10 +4,12 @@ use crate::{db, xmpp::xml_builder::XmlElement};
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use northstar_pubsub_application::profile::{
-    detected_media_type, replace_vcard_temp_photo, sha1_hex, valid_png_image, AvatarPresenceUpdate,
-    LegacyVCardWrite, ProfileAudienceSnapshot, ProfileOutboxFactory, ProfilePepWrite,
-    ProfilePublishResult, ProfilePublishStatus, ProfileRepository, PublicVCard, AVATAR_DATA,
-    AVATAR_METADATA,
+    replace_vcard_temp_photo, AvatarPresenceUpdate, LegacyVCardWrite, ProfileAudienceSnapshot,
+    ProfileOutboxFactory, ProfilePepWrite, ProfilePublishResult, ProfilePublishStatus,
+    ProfileRepository, PublicVCard,
+};
+use northstar_xmpp_avatar::{
+    detected_media_type, sha1_hex, valid_png_image, AVATAR_DATA, AVATAR_METADATA,
 };
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{HashMap, HashSet};

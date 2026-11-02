@@ -2208,6 +2208,7 @@ dependencies = [
  "northstar-xep-0359",
  "northstar-xep-core",
  "northstar-xml-builder",
+ "northstar-xmpp-avatar",
  "northstar-xmpp-types",
  "roxmltree",
  "sha2",
@@ -2370,9 +2371,9 @@ dependencies = [
  "northstar-telemetry",
  "northstar-xep-0060",
  "northstar-xml-builder",
+ "northstar-xmpp-avatar",
  "northstar-xmpp-types",
  "roxmltree",
- "sha1",
  "tokio",
  "uuid",
 ]
@@ -2421,6 +2422,7 @@ dependencies = [
  "northstar-pubsub-core",
  "northstar-xep-0060",
  "northstar-xml-builder",
+ "northstar-xmpp-avatar",
  "northstar-xmpp-types",
  "roxmltree",
  "sha1",
@@ -2446,6 +2448,7 @@ dependencies = [
  "northstar-xep-0016",
  "northstar-xep-0359",
  "northstar-xml-builder",
+ "northstar-xmpp-avatar",
  "northstar-xmpp-types",
  "rand 0.8.7",
  "roxmltree",
@@ -2495,6 +2498,7 @@ dependencies = [
  "northstar-session-core",
  "northstar-telemetry",
  "northstar-xep-0313",
+ "northstar-xmpp-avatar",
  "northstar-xmpp-types",
  "rand 0.8.7",
  "roxmltree",
@@ -3096,6 +3100,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "northstar-xmpp-avatar"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "roxmltree",
+ "sha1",
 ]
 
 [[package]]
@@ -3952,6 +3965,7 @@ dependencies = [
  "northstar-xep-core",
  "northstar-xml-builder",
  "northstar-xml-framing",
+ "northstar-xmpp-avatar",
  "northstar-xmpp-types",
  "openssl",
  "pbkdf2",

@@ -22,6 +22,7 @@ northstar-roster-core = { path = "../../roster/northstar-roster-core" }
 northstar-runtime = { path = "../../../platform/northstar-runtime" }
 northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 northstar-xep-0359 = { path = "../../../kernel/northstar-xep-0359" }
+northstar-xmpp-avatar = { path = "../../../kernel/northstar-xmpp-avatar" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 rand = "0.8"
 serde = { version = "1.0", features = ["derive"] }

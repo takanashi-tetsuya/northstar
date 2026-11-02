@@ -814,6 +814,14 @@ crates:
     api_stability: internal-stable
     publish_policy: never
 
+  - crate_id: northstar-xmpp-avatar
+    package: northstar-xmpp-avatar
+    path: crates/kernel/northstar-xmpp-avatar
+    tier: kernel
+    owner_team: platform
+    api_stability: internal-stable
+    publish_policy: never
+
   - crate_id: northstar-xmpp-types
     package: northstar-xmpp-types
     path: crates/kernel/northstar-xmpp-types

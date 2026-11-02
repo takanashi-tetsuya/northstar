@@ -263,9 +263,9 @@ pub async fn pubsub_publish(
                 Document::parse(&payloads[0]).context("malformed MIX avatar payload")?;
             let payload = payload_document.root_element();
             let valid = if node == NODE_AVATAR_DATA {
-                state.valid_avatar_data(&item_ids[0], payload)
+                northstar_xmpp_avatar::valid_avatar_data(&item_ids[0], payload)
             } else {
-                state.valid_avatar_metadata(&item_ids[0], payload)
+                northstar_xmpp_avatar::valid_avatar_metadata(&item_ids[0], payload)
             };
             anyhow::ensure!(valid, "invalid MIX avatar payload");
             if !state

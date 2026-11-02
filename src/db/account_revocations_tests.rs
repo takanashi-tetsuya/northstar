@@ -23,7 +23,7 @@ async fn committed_revocations_survive_lost_wakes_and_stale_acknowledgements() {
         .connect_with(options.options([("search_path", schema.as_str())]))
         .await
         .unwrap();
-    crate::db::MIGRATOR.run(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
 
     let instance = Uuid::new_v4();
     for node in ["one", "two"] {

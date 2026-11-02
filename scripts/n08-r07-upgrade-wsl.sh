@@ -184,7 +184,7 @@ historical_output="$(TEST_DATABASE_URL="$(<"$NORTHSTAR_PRIVATE_PG_MIGRATOR_DATAB
   NORTHSTAR_N08_HISTORICAL_0137_FIXTURE=true \
   CARGO_TARGET_DIR="$target_dir" \
   cargo test --locked --offline \
-    'db::migration_upgrade_test::historical_0137_baseline_is_built_from_the_embedded_migration_chain' \
+    -p northstar-workflows 'identity_migration::migration_upgrade_test::historical_0137_baseline_is_built_from_the_embedded_migration_chain' \
     -- --ignored --exact --nocapture 2>&1)"
 historical_status=$?
 set -e

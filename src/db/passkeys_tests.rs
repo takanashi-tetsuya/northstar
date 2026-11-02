@@ -25,7 +25,7 @@ async fn ceremonies_are_single_use_and_key_removal_fences_sessions() {
         .connect_with(options.options([("search_path", schema.as_str())]))
         .await
         .unwrap();
-    crate::db::MIGRATOR.run(&pool).await.unwrap();
+    northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
     let user = Uuid::new_v4();
     let generation: i64 = sqlx::query_scalar(
         "INSERT INTO users(id,username,password_hash)

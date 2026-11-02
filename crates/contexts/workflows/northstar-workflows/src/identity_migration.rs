@@ -10,10 +10,75 @@ use sqlx::PgPool;
 
 pub mod authorization_identity;
 pub mod jid_identity;
+#[cfg(test)]
+mod migration_upgrade_test;
 pub mod profile_identity;
 pub mod push_identity;
 pub mod remaining_identity;
 pub mod session_identity;
+
+pub async fn migrate_for_domain(pool: &PgPool, domain: &str) -> Result<()> {
+    // Serialize DDL/identity migration with privilege reconciliation. The
+    // dedicated pooled connection holds this session lock while SQLx uses the
+    // remaining migrator connection; the production migrator pool is bounded
+    // to two connections and the role itself to four.
+    let mut policy_lock = pool
+        .acquire()
+        .await
+        .context("could not acquire the database policy migration lock connection")?;
+    sqlx::query(
+        "SELECT pg_catalog.pg_advisory_lock(
+           pg_catalog.hashtextextended('northstar-database-role-policy-v1',0)
+         )",
+    )
+    .execute(&mut *policy_lock)
+    .await
+    .context("could not acquire the database policy migration lock")?;
+
+    let migration_result = async {
+        // Keep admission and SQLx on the same session: a pool connection's
+        // search_path or CURRENT_USER must not differ between the check and
+        // its DDL. Release this second connection before canonicalization,
+        // which also uses the bounded migrator pool.
+        {
+            let mut migration_connection = pool
+                .acquire()
+                .await
+                .context("could not acquire the database migration connection")?;
+            northstar_postgres::migration_preflight::attest_schema_owner(&mut migration_connection)
+                .await?;
+            northstar_postgres::MIGRATOR
+                .run(&mut *migration_connection)
+                .await
+                .context("database migration failed")?;
+        }
+        canonicalize_all_identity_storage(pool, domain)
+            .await
+            .context("atomic RFC 7622 A-label to U-label identity migration failed")
+    }
+    .await;
+    let unlock_result = sqlx::query_scalar::<_, bool>(
+        "SELECT pg_catalog.pg_advisory_unlock(
+           pg_catalog.hashtextextended('northstar-database-role-policy-v1',0)
+         )",
+    )
+    .fetch_one(&mut *policy_lock)
+    .await
+    .context("could not release the database policy migration lock")
+    .and_then(|unlocked| {
+        anyhow::ensure!(
+            unlocked,
+            "database policy migration lock ownership was lost"
+        );
+        Ok(())
+    });
+
+    match (migration_result, unlock_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
 
 pub async fn canonicalize_all_identity_storage(pool: &PgPool, domain: &str) -> Result<()> {
     let mut transaction = pool

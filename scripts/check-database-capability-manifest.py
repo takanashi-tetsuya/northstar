@@ -25,7 +25,10 @@ GRANT_WRAPPER = ROOT / "deploy/postgres-init/lib/reconcile-northstar-grants.sql"
 ROLE_ATTESTATION = ROOT / "crates/platform/northstar-postgres/src/role_attestation.rs"
 ROLE_RECONCILER = ROOT / "scripts/reconcile-database-roles.sh"
 DATABASE_CI = ROOT / "scripts/database-role-boundary-db-ci.sh"
-MIGRATION_UPGRADE_TEST = ROOT / "src/db/migration_upgrade_test.rs"
+MIGRATION_UPGRADE_TEST = (
+    ROOT
+    / "crates/contexts/workflows/northstar-workflows/src/identity_migration/migration_upgrade_test.rs"
+)
 MIGRATION_LEDGER = (
     ROOT / "deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql"
 )

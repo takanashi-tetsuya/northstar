@@ -1,8 +1,8 @@
 //! Test-only projection of the actual, caller-quiescent frame observation.
 //! No owner, task, clock, sequence, or authority is retained by this module.
 #![cfg(test)]
-use super::frame_execution::FrameExecution;
 use crate::stage4_replay as wire;
+use northstar_stream::frame_execution::FrameExecution;
 pub(super) type Capture = wire::driver::Capture;
 
 fn nullable<T>(value: Option<T>) -> wire::Nullable<T> {
@@ -83,7 +83,7 @@ pub(super) fn capture_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::xmpp::frame_execution::{PublicationResult, Stage};
+    use northstar_stream::frame_execution::{PublicationResult, Stage};
     use northstar_stream::transport::ClientTransport;
 
     #[test]

@@ -10,7 +10,7 @@ Existing domain transactions and transport-specific actions remain separate.
 1. `src/xmpp/mod.rs` (TCP/WebSocket) or `src/bosh.rs` owns framing, ordered reads,
    transport cancellation, terminal wire responses, and the finalizer
 2. `ProtocolSession::process_frame` is the production ingress into
-   `src/xmpp/frame_execution.rs`: one policy table, typed backend/timeout result,
+   `crates/edges/northstar-stream/src/frame_execution.rs`: one policy table, typed backend/timeout result,
    and an owned observation whose Drop records cancellation or unwind
 3. `src/xmpp/protocol/dispatch.rs` owns validation, negotiation, authoritative
    sender/language materialization, extension dispatch, and the inbound SM
@@ -141,7 +141,7 @@ evidence, never proof of deadlock or evidence of success.
 Fast deterministic checks, with no database or network:
 
 ```sh
-cargo test --locked --bin rust-xmpp-server frame_execution::tests
+cargo test --locked -p northstar-stream frame_execution::tests
 cargo test --locked --bin rust-xmpp-server messaging::direct_route::tests
 python3 scripts/test-frame-trace.py
 python3 scripts/test-mixed-traffic-soak.py

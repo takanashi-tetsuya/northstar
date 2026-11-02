@@ -1609,10 +1609,12 @@ digraph compile_time {
   "northstar-stream" -> "chrono";
   "northstar-stream" -> "dashmap";
   "northstar-stream" -> "futures";
+  "northstar-stream" -> "northstar-abuse-policy";
   "northstar-stream" -> "northstar-auth-application";
   "northstar-stream" -> "northstar-auth-core";
   "northstar-stream" -> "northstar-delivery-core";
   "northstar-stream" -> "northstar-federation-core";
+  "northstar-stream" -> "northstar-message-application";
   "northstar-stream" -> "northstar-message-core";
   "northstar-stream" -> "northstar-room-application";
   "northstar-stream" -> "northstar-room-core";
@@ -1625,11 +1627,15 @@ digraph compile_time {
   "northstar-stream" -> "northstar-xmpp-types";
   "northstar-stream" -> "rand";
   "northstar-stream" -> "roxmltree";
+  "northstar-stream" -> "serde_json";
+  "northstar-stream" -> "sha2";
   "northstar-stream" -> "tokio";
   "northstar-stream" -> "tokio-rustls";
   "northstar-stream" -> "tokio-util";
   "northstar-stream" -> "tracing";
+  "northstar-stream" -> "tracing-subscriber";
   "northstar-stream" -> "uuid";
+  "northstar-stream" -> "zeroize";
   "northstar-telemetry" -> "anyhow";
   "northstar-telemetry" -> "serde_json";
   "northstar-telemetry" -> "tokio";

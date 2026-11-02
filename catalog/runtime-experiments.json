@@ -124,7 +124,7 @@
       "budgets": {
         "contract": "TCP/BOSH frame 5s; WS inline auth 8s; native publication has no added deadline; BOSH outer budget still applies.",
         "source": {
-          "path": "src/xmpp/frame_execution.rs",
+          "path": "crates/edges/northstar-stream/src/frame_execution.rs",
           "anchor": "const FRAME_BUDGET: Duration = Duration::from_secs(5);"
         }
       },
@@ -133,9 +133,9 @@
           "id": "c2s-regression",
           "level": "deterministic_unit",
           "status": "declared",
-          "command": "cargo test --locked --bin rust-xmpp-server frame_execution::tests",
+          "command": "cargo test --locked -p northstar-stream frame_execution::tests",
           "test": {
-            "path": "src/xmpp/frame_execution.rs",
+            "path": "crates/edges/northstar-stream/src/frame_execution.rs",
             "anchor": "mod tests;"
           },
           "assertions": [
@@ -203,7 +203,7 @@
       "budgets": {
         "contract": "Ingress frame budget belongs to C2S; route and transport preserve existing service bounds.",
         "source": {
-          "path": "src/xmpp/frame_execution.rs",
+          "path": "crates/edges/northstar-stream/src/frame_execution.rs",
           "anchor": "const FRAME_BUDGET: Duration = Duration::from_secs(5);"
         }
       },

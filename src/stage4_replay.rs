@@ -2900,8 +2900,8 @@ mod tests;
 mod saved_dispatcher {
     use super::*;
     use crate::bosh::stage4_saved as bosh;
-    use crate::xmpp::auth_publication::stage4_saved as auth;
     use crate::xmpp::protocol::mix::stage4_saved as mix;
+    use crate::xmpp::stage4_auth_publication as auth;
     use crate::xmpp::stage4_native as native;
     use anyhow::{anyhow, bail, ensure, Context, Result};
     use northstar_stream::outbound::{OutboundItem, RouteEnqueue};
@@ -3671,7 +3671,7 @@ mod saved_dispatcher {
     #[cfg(test)]
     mod dispatcher_controls {
         use super::*;
-        use crate::xmpp::auth_publication::stage4_saved::ordinary as fixtures;
+        use crate::xmpp::stage4_auth_publication::ordinary as fixtures;
 
         // Bounded ordinary programmatic inputs using actual public builders in
         // the peer ordinary fixture. These are not frozen saved literal bytes,

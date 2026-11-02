@@ -1,10 +1,10 @@
+use super::fixture::*;
 use super::*;
 use northstar_auth_application::authentication::publication::{HandlerReturn, Knowledge, Returned};
 use northstar_auth_application::authentication::{BindingPublication, StagedLoginEpoch};
 use std::{
     panic::AssertUnwindSafe,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
-    task::Waker,
 };
 
 async fn observed_unbound_owner(frame: &FrameExecution, connection: Uuid) -> KnownCredentialOwner {
@@ -56,7 +56,7 @@ async fn unknown_resume_and_successful_fallback_keep_distinct_original_frame_att
             CredentialCall, CredentialKind, CredentialReturned,
         };
         let frame = FrameExecution::for_saved_case(
-            northstar_stream::transport::ClientTransport::Bosh,
+            crate::transport::ClientTransport::Bosh,
             "<authenticate/>",
             Uuid::from_u128(700),
         );
@@ -125,7 +125,7 @@ async fn unknown_resume_and_successful_fallback_keep_distinct_original_frame_att
         CredentialReturned, PreparationResult,
     };
     let frame = FrameExecution::for_saved_case(
-        northstar_stream::transport::ClientTransport::Bosh,
+        crate::transport::ClientTransport::Bosh,
         "<authenticate/>",
         Uuid::from_u128(701),
     );
@@ -212,230 +212,6 @@ async fn unknown_resume_and_successful_fallback_keep_distinct_original_frame_att
     assert_eq!(resume.snapshot().commit, CredentialCall::Err);
 }
 
-pub(crate) fn fixture_control(control: &str, connection: Uuid) -> (AuthControlHolder, Observation) {
-    let owner = KnownCredentialOwner::from_returned(
-        CredentialCommitReceipt::new(None, None, None),
-        None,
-        connection,
-    );
-    let observation = owner.observation().clone();
-    let holder = owner
-        .seal(
-            control,
-            CapturedEffects {
-                route: RouteIntent::Unbound,
-                caps: None,
-                notification: None,
-            },
-        )
-        .unwrap();
-    (holder, observation)
-}
-pub(crate) fn fixture_bound_control(
-    control: &str,
-    connection: Uuid,
-    notify: bool,
-) -> (AuthControlHolder, Observation) {
-    let user = Uuid::from_u128(303);
-    let device = Uuid::from_u128(304);
-    let receipt = CredentialCommitReceipt::new(
-        None,
-        Some(StagedLoginEpoch {
-            operation_id: Uuid::from_u128(301),
-            connection_id: connection,
-            user_id: user,
-            device_id: device,
-            auth_generation: 2,
-            epoch: 999,
-        }),
-        Some(BindingPublication {
-            connection_id: connection,
-            user_id: user,
-            full_jid: "fixture@example.test/captured".to_owned(),
-            lease_seconds: 120,
-        }),
-    );
-    let owner = KnownCredentialOwner::from_returned(receipt, None, connection);
-    let observation = owner.observation().clone();
-    let holder = owner
-        .seal(control, fixture_bound_effects(connection, notify))
-        .unwrap();
-    (holder, observation)
-}
-fn fixture_bound_effects(connection: Uuid, notify: bool) -> CapturedEffects {
-    let user = Uuid::from_u128(303);
-    let device = Uuid::from_u128(304);
-    let route = BoundRoute {
-        key: "fixture@example.test/captured".to_owned(),
-        user,
-        generation: 2,
-        connection,
-        lifecycle: Arc::new(AtomicU8::new(0)),
-        disconnect: CancellationToken::new(),
-    };
-    let caps = CapsIntent {
-        presence: "<presence/>".to_owned(),
-        key: route.key.clone(),
-        connection,
-        gate: Arc::new(tokio::sync::Mutex::new(())),
-        generation: Arc::new(AtomicU64::new(9)),
-    };
-    let notification = notify.then(|| NotificationIntent {
-        account: "fixture@example.test".to_owned(),
-        user,
-        device,
-        excluded_key: route.key.clone(),
-    });
-    CapturedEffects {
-        route: RouteIntent::Bound(route),
-        caps: Some(caps),
-        notification,
-    }
-}
-#[derive(Clone, Copy, Default)]
-enum Cut {
-    #[default]
-    Success,
-    BeforeCommit,
-    CommitPending,
-    CommitError,
-    BareSuccess,
-    WrongReturn,
-    RouteRejected,
-    CapsPending,
-    NotifyError,
-}
-struct FakePort {
-    connection: Uuid,
-    cut: Cut,
-    events: Vec<&'static str>,
-    routes: Vec<String>,
-    caps_generation: Option<u64>,
-    notification: Option<(String, Uuid, Uuid, String, i64)>,
-}
-impl FakePort {
-    fn new(connection: Uuid, cut: Cut) -> Self {
-        Self {
-            connection,
-            cut,
-            events: Vec::new(),
-            routes: Vec::new(),
-            caps_generation: None,
-            notification: None,
-        }
-    }
-}
-impl PublicationPort for FakePort {
-    fn connection(&self) -> Uuid {
-        self.connection
-    }
-    async fn publish(&mut self, invocation: &Invocation<'_>) -> AuthenticationResult<Option<i64>> {
-        self.events.push("service");
-        invocation.enter_service().unwrap();
-        let result = if matches!(self.cut, Cut::BeforeCommit) {
-            AuthenticationResult::BackendFailure(anyhow::anyhow!("controlled pre-COMMIT failure"))
-        } else if invocation.receipt().staged_login_epoch().is_none()
-            && invocation.receipt().binding_publication().is_none()
-        {
-            invocation.not_required().unwrap();
-            AuthenticationResult::Authenticated(None)
-        } else {
-            invocation.enter_repository().unwrap();
-            self.events.push("repository");
-            if matches!(self.cut, Cut::BareSuccess) {
-                AuthenticationResult::Authenticated(Some(7))
-            } else {
-                let cut = self.cut;
-                let committed = invocation
-                    .commit(
-                        async {
-                            if matches!(cut, Cut::CommitPending) {
-                                std::future::pending::<()>().await;
-                            }
-                            if matches!(cut, Cut::CommitError) {
-                                return Err(std::io::Error::other("controlled COMMIT reply loss"));
-                            }
-                            Ok(())
-                        },
-                        Some(7),
-                    )
-                    .await;
-                match committed {
-                    Ok(()) => AuthenticationResult::Authenticated(Some(
-                        if matches!(cut, Cut::WrongReturn) {
-                            8
-                        } else {
-                            7
-                        },
-                    )),
-                    Err(error) => AuthenticationResult::BackendFailure(error.into()),
-                }
-            }
-        };
-        // Preserve the actual fake adapter return even when it mismatches;
-        // the shared production sequence must reject it before effects.
-        let _ = invocation.returned(&result);
-        result
-    }
-    fn epoch_and_mapping(&mut self, route: &BoundRoute, epoch: Option<i64>) -> bool {
-        self.events.push("route");
-        self.routes.push(route.key.clone());
-        assert_eq!(route.connection, self.connection);
-        assert_eq!(route.user, Uuid::from_u128(303));
-        assert_eq!(route.generation, 2);
-        assert_eq!(epoch, Some(7));
-        !matches!(self.cut, Cut::RouteRejected)
-    }
-    fn activate(&mut self, route: &BoundRoute) -> bool {
-        self.events.push("activate");
-        assert_eq!(route.key, "fixture@example.test/captured");
-        true
-    }
-    async fn caps(&mut self, intent: Option<CapsIntent>) {
-        self.events.push("caps");
-        let caps = intent.expect("captured resume caps intent");
-        assert_eq!(caps.key, "fixture@example.test/captured");
-        assert_eq!(caps.connection, self.connection);
-        assert_eq!(caps.presence, "<presence/>");
-        self.caps_generation = Some(caps.generation.load(Ordering::Acquire));
-        if matches!(self.cut, Cut::CapsPending) {
-            std::future::pending::<()>().await;
-        }
-    }
-    fn notify_local(&mut self, intent: &NotificationIntent, epoch: i64) {
-        self.events.push("local_notification");
-        self.notification = Some((
-            intent.account.clone(),
-            intent.user,
-            intent.device,
-            intent.excluded_key.clone(),
-            epoch,
-        ));
-    }
-    async fn notify_remote(&mut self, _: &NotificationIntent, _: i64) -> Result<()> {
-        self.events.push("remote_notification");
-        if matches!(self.cut, Cut::NotifyError) {
-            anyhow::bail!("controlled notification failure");
-        }
-        Ok(())
-    }
-    fn rejected(&mut self, _: PublicationResult, _: Option<&anyhow::Error>) {
-        self.events.push("rejected");
-    }
-    fn notification_deferred(&mut self, _: &anyhow::Error) {
-        self.events.push("deferred");
-    }
-}
-pub(crate) async fn publish_unbound_fixture(owners: Vec<OwnedPublication>) -> bool {
-    for owner in owners {
-        let mut port = FakePort::new(owner.connection(), Cut::Success);
-        if !owner.publish(&mut port).await.transport_succeeded() {
-            return false;
-        }
-        assert_eq!(port.events, ["service"]);
-    }
-    true
-}
 fn selected(holders: &[(&str, &AuthControlHolder)], rid: u64) -> SelectedControls {
     let mut selected = SelectedControls::new(
         holders
@@ -447,9 +223,6 @@ fn selected(holders: &[(&str, &AuthControlHolder)], rid: u64) -> SelectedControl
     selected.exposure(rid, true).unwrap();
     selected
 }
-fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
-    future.poll(&mut Context::from_waker(Waker::noop()))
-}
 
 #[tokio::test]
 async fn observed_control_joins_anchor_actual_bytes_and_native_or_bosh_transfer() {
@@ -458,9 +231,9 @@ async fn observed_control_joins_anchor_actual_bytes_and_native_or_bosh_transfer(
         let frame_id = Uuid::from_u128(720);
         let frame = FrameExecution::for_saved_case(
             if native {
-                northstar_stream::transport::ClientTransport::Tcp
+                crate::transport::ClientTransport::Tcp
             } else {
-                northstar_stream::transport::ClientTransport::Bosh
+                crate::transport::ClientTransport::Bosh
             },
             "<authenticate/>",
             frame_id,
@@ -567,7 +340,7 @@ fn control_join_read_handle_does_not_retain_authority_or_invent_credential_histo
 async fn control_joins_expose_reassigned_receipts_after_sealed_introduction() {
     let connection = Uuid::from_u128(302);
     let frame = FrameExecution::for_saved_case(
-        northstar_stream::transport::ClientTransport::Bosh,
+        crate::transport::ClientTransport::Bosh,
         "<authenticate/>",
         Uuid::from_u128(730),
     );
@@ -583,7 +356,7 @@ async fn control_joins_expose_reassigned_receipts_after_sealed_introduction() {
         )
         .unwrap();
     let second_frame = FrameExecution::for_saved_case(
-        northstar_stream::transport::ClientTransport::Bosh,
+        crate::transport::ClientTransport::Bosh,
         "<authenticate/>",
         Uuid::from_u128(731),
     );
@@ -749,7 +522,7 @@ async fn unbound_selected_control_does_not_take_queued_bind_owner() {
     };
     let connection = Uuid::from_u128(302);
     let unbound_frame = FrameExecution::for_saved_case(
-        northstar_stream::transport::ClientTransport::Bosh,
+        crate::transport::ClientTransport::Bosh,
         "<authenticate/>",
         Uuid::from_u128(710),
     );
@@ -766,7 +539,7 @@ async fn unbound_selected_control_does_not_take_queued_bind_owner() {
         )
         .unwrap();
     let bound_frame = FrameExecution::for_saved_case(
-        northstar_stream::transport::ClientTransport::Bosh,
+        crate::transport::ClientTransport::Bosh,
         "<iq/>",
         Uuid::from_u128(711),
     );
@@ -1035,7 +808,7 @@ fn commit_or_caps_cancel_keeps_transport_and_prior_publication_facts() {
 #[tokio::test]
 async fn completed_handler_transfers_publication_lifetime_to_its_control() {
     let execution = FrameExecution::for_saved_case(
-        northstar_stream::transport::ClientTransport::Bosh,
+        crate::transport::ClientTransport::Bosh,
         "<authenticate/>",
         Uuid::from_u128(350),
     );
@@ -1045,7 +818,7 @@ async fn completed_handler_transfers_publication_lifetime_to_its_control() {
     assert!(credential.snapshot().transferred);
 
     let wrong = FrameExecution::for_saved_case(
-        northstar_stream::transport::ClientTransport::Bosh,
+        crate::transport::ClientTransport::Bosh,
         "<iq/>",
         Uuid::from_u128(351),
     );
@@ -1093,170 +866,6 @@ async fn completed_handler_transfers_publication_lifetime_to_its_control() {
         Some(HandlerReturn::Completed)
     );
     assert_eq!(observation.snapshot().terminal, Some(Terminal::Completed));
-}
-
-#[derive(Default)]
-struct MemoryWrite {
-    bytes: Vec<u8>,
-    fail_at: Option<usize>,
-    fail_flush: bool,
-    flushes: usize,
-}
-impl tokio::io::AsyncWrite for MemoryWrite {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        _: &mut Context<'_>,
-        bytes: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        let this = self.get_mut();
-        if this.fail_at.is_some_and(|limit| this.bytes.len() >= limit) {
-            return Poll::Ready(Err(std::io::Error::other("controlled partial write")));
-        }
-        let count = bytes.len().min(3).min(
-            this.fail_at
-                .map_or(usize::MAX, |limit| limit - this.bytes.len()),
-        );
-        this.bytes.extend_from_slice(&bytes[..count]);
-        Poll::Ready(Ok(count))
-    }
-    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        let this = self.get_mut();
-        this.flushes += 1;
-        if this.fail_flush {
-            Poll::Ready(Err(std::io::Error::other("controlled flush failure")))
-        } else {
-            Poll::Ready(Ok(()))
-        }
-    }
-    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Poll::Ready(Ok(()))
-    }
-}
-
-#[tokio::test]
-async fn actual_tcp_send_partial_and_flush_failure_never_publish_authentication() {
-    for flush_failure in [false, true] {
-        let connection = Uuid::from_u128(302);
-        let (holder, observation) = fixture_bound_control("<success/>", connection, false);
-        holder.recording().unwrap();
-        let mut io = MemoryWrite {
-            fail_at: (!flush_failure).then_some(1),
-            fail_flush: flush_failure,
-            ..MemoryWrite::default()
-        };
-        let writer = &mut io;
-        let result = holder
-            .write("<success/>".to_owned(), |control| async move {
-                super::super::send(writer, &control).await
-            })
-            .await;
-        assert!(result.is_err());
-        assert_eq!(
-            io.bytes.len(),
-            if flush_failure { "<success/>".len() } else { 1 }
-        );
-        assert_eq!(io.flushes, usize::from(flush_failure));
-        assert_eq!(observation.snapshot().transport, Transport::WriteEntered);
-        assert_eq!(observation.snapshot().publication, Knowledge::NotStarted);
-    }
-}
-
-#[tokio::test]
-async fn actual_tcp_write_survives_publication_failure_and_caps_cancellation() {
-    for cut in [Cut::BeforeCommit, Cut::CommitPending, Cut::CapsPending] {
-        let connection = Uuid::from_u128(302);
-        let (holder, observation) = fixture_bound_control("<success/>", connection, false);
-        holder.recording().unwrap();
-        let mut io = MemoryWrite::default();
-        let writer = &mut io;
-        let owner = holder
-            .write("<success/>".to_owned(), |control| async move {
-                super::super::send(writer, &control).await
-            })
-            .await
-            .unwrap();
-        assert_eq!(io.bytes, b"<success/>");
-        assert_eq!(io.flushes, 1);
-        let mut port = FakePort::new(connection, cut);
-        let mut future = Box::pin(owner.publish(&mut port));
-        let polled = poll_once(future.as_mut());
-        if matches!(cut, Cut::BeforeCommit) {
-            assert!(matches!(
-                polled,
-                Poll::Ready(PublicationResult::BackendFailure)
-            ));
-        } else {
-            assert!(polled.is_pending());
-        }
-        drop(future);
-        let snapshot = observation.snapshot();
-        assert_eq!(snapshot.transport, Transport::Written);
-        assert_eq!(
-            snapshot.publication,
-            match cut {
-                Cut::BeforeCommit => Knowledge::BeforeCommit,
-                Cut::CommitPending => Knowledge::CommitCallEntered,
-                _ => Knowledge::ReceiptKnown(Some(7)),
-            }
-        );
-        assert_eq!(
-            snapshot.terminal,
-            Some(if matches!(cut, Cut::BeforeCommit) {
-                Terminal::Failed
-            } else {
-                Terminal::Cancelled
-            })
-        );
-    }
-}
-
-#[tokio::test]
-async fn actual_websocket_live_write_gate_preserves_success_and_cancellation() {
-    for cancel in [0, 1, 2, 3] {
-        let connection = Uuid::from_u128(302);
-        let (holder, observation) = fixture_control("<success/>", connection);
-        holder.recording().unwrap();
-        let shutdown = CancellationToken::new();
-        let revoke = CancellationToken::new();
-        let backpressure = CancellationToken::new();
-        match cancel {
-            1 => shutdown.cancel(),
-            2 => revoke.cancel(),
-            3 => backpressure.cancel(),
-            _ => {}
-        }
-        let signals =
-            northstar_stream::transport::SessionTerminationSignals::new(revoke, backpressure);
-        let cancellation = super::super::WebSocketSendCancellation {
-            actor_shutdown: &shutdown,
-            signals: &signals,
-        };
-        let polls = Arc::new(AtomicUsize::new(0));
-        let write_polls = polls.clone();
-        let result = holder
-            .write("<success/>".to_owned(), |control| async move {
-                assert_eq!(control, "<success/>");
-                let sent = super::super::bounded_websocket_live_write(
-                    async move {
-                        write_polls.fetch_add(1, Ordering::Relaxed);
-                        Ok::<(), std::io::Error>(())
-                    },
-                    &cancellation,
-                )
-                .await;
-                ensure!(sent, "controlled WS cancellation");
-                Ok(())
-            })
-            .await;
-        assert_eq!(polls.load(Ordering::Relaxed), usize::from(cancel == 0));
-        if cancel == 0 {
-            assert!(publish_unbound_fixture(vec![result.unwrap()]).await);
-            assert_eq!(observation.snapshot().transport, Transport::Written);
-        } else {
-            assert!(result.is_err());
-            assert_eq!(observation.snapshot().publication, Knowledge::NotStarted);
-        }
-    }
 }
 
 struct PanicChild {

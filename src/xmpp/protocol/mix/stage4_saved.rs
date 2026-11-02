@@ -7,12 +7,12 @@ mod routes;
 mod tests;
 use super::*;
 use crate::stage4_replay as wire;
-use crate::xmpp::auth_publication::OutboundAuthPublication;
-use crate::xmpp::frame_execution::{FrameExecution, SessionExecutions};
 use anyhow::{ensure, Context, Result};
 use northstar_room_application::mix as fg;
 use northstar_room_application::mix_service::MixService;
 use northstar_room_core::mix as room;
+use northstar_stream::auth_publication::OutboundAuthPublication;
+use northstar_stream::frame_execution::{FrameExecution, SessionExecutions, Stage};
 pub(crate) use repository::ControlledRepository;
 pub(crate) use routes::{RouteHandle, RouteMap};
 use std::{

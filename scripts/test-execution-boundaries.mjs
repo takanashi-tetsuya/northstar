@@ -119,7 +119,7 @@ rejects('frame runner cannot apply inline budget to every transport', 'frame',
   'let budget = self.0.policy.budget;',
   'let budget = INLINE_AUTH_BUDGET;', /transport-specific policy budget/);
 rejects('frame observation must exist before child polling', 'frame',
-  'pub(super) fn run<T>(', 'pub(super) async fn run<T>(', /production body/);
+  'pub fn run<T>(', 'pub async fn run<T>(', /production body/);
 rejects('frame timer cannot start in the synchronous constructor', 'frame',
   'child: Some(Box::pin(async move {\n                tokio::time::timeout(budget, future).await\n            })),',
   'child: Some(Box::pin(tokio::time::timeout(budget, future))),', /first-poll timer/);
@@ -335,7 +335,7 @@ rejects('auth CredentialCommitReceipt cannot derive Clone', 'authCredential',
 for (const [file, owner] of [['authOwner', 'KnownCredentialOwner'],
   ['authOwner', 'OwnedPublication'], ['authOwner', 'SelectedControls']]) {
   rejects(`auth ${owner} cannot derive Clone`, file,
-    `pub(crate) struct ${owner}`, `#[derive(Clone)] pub(crate) struct ${owner}`, /cannot derive or implement Clone or Copy/);
+    `pub struct ${owner}`, `#[derive(Clone)] pub struct ${owner}`, /cannot derive or implement Clone or Copy/);
 }
 rejects('auth owner cannot publish its mutable receipt field', 'authOwner',
   'struct PendingPublication {\n    receipt: CredentialCommitReceipt,',
@@ -346,11 +346,11 @@ rejects('auth holder cannot add a factory that takes before write', 'authOwner',
   /closed inherent-method inventory/);
 
 rejects('auth holder join observation cannot become a production accessor', 'authOwner',
-  '#[cfg(test)] pub(crate) fn join_observation(&self) -> ControlJoinObservation',
-  'pub(crate) fn join_observation(&self) -> ControlJoinObservation', /test-only read-only clone/);
+  `${CROSS_CRATE_TEST_ONLY} pub fn join_observation(&self) -> ControlJoinObservation { self.0.joins.clone() }`,
+  'pub fn join_observation(&self) -> ControlJoinObservation { self.0.joins.clone() }', /test-only read-only clone/);
 rejects('auth holder join observation cannot substitute unrelated joins', 'authOwner',
-  'pub(crate) fn join_observation(&self) -> ControlJoinObservation { self.0.joins.clone() }',
-  'pub(crate) fn join_observation(&self) -> ControlJoinObservation { other_joins.clone() }', /test-only read-only clone/);
+  'pub fn join_observation(&self) -> ControlJoinObservation { self.0.joins.clone() }',
+  'pub fn join_observation(&self) -> ControlJoinObservation { other_joins.clone() }', /test-only read-only clone/);
 
 for (const [file, name, derive] of [
   ['authFacts', 'CredentialAttemptJoin', 'Clone, Copy, Debug, Eq, PartialEq'],
@@ -359,10 +359,9 @@ for (const [file, name, derive] of [
   ['authOwner', 'ControlAssociation', 'Clone, Copy, Debug, Eq, PartialEq'],
   ['authOwner', 'ControlJoins', 'Clone, Copy, Debug, Default, Eq, PartialEq'],
 ]) {
-  const [attribute, visibility] = file === 'authFacts' ? [CROSS_CRATE_TEST_ONLY, 'pub'] : ['#[cfg(test)]', 'pub(crate)'];
   rejects(`auth ${name} facts cannot escape test configuration`, file,
-    `${attribute} #[derive(${derive})] ${visibility} struct ${name}`,
-    `#[derive(${derive})] ${visibility} struct ${name}`, /test-only association facts/);
+    `${CROSS_CRATE_TEST_ONLY} #[derive(${derive})] pub struct ${name}`,
+    `#[derive(${derive})] pub struct ${name}`, /test-only association facts/);
 }
 for (const [file, field, expected] of [
   ['authFacts', 'transferred_receipt: Option<Uuid>', /test-only and follow actual checked transfer/],
@@ -370,7 +369,7 @@ for (const [file, field, expected] of [
   ['authOwner', 'joins: ControlJoinObservation,', /test-only handoff cut/],
 ]) {
   rejects(`auth private ${field} cannot escape test configuration`, file,
-    `${file === 'authFacts' ? CROSS_CRATE_TEST_ONLY : '#[cfg(test)]'} ${field}`, field, expected);
+    `${CROSS_CRATE_TEST_ONLY} ${field}`, field, expected);
 }
 rejects('auth credential joins cannot replace raw returned identity with constructed identity', 'authFacts',
   'returned_receipt: state.returned.as_ref().map(|(id, _)| *id)',
@@ -385,8 +384,8 @@ rejects('auth publication joins cannot erase their actual credential anchor', 'a
   'credential: state.credential.as_ref().map(|credential| credential.joins().owner)',
   'credential: None', /only an observed credential anchor/);
 rejects('auth retained join reader cannot keep a holder alive', 'authOwner',
-  'pub(crate) struct ControlJoinObservation(Arc<Mutex<ControlJoins>>);',
-  'pub(crate) struct ControlJoinObservation(Arc<Holder>);', /retain only test facts/);
+  'pub struct ControlJoinObservation(Arc<Mutex<ControlJoins>>);',
+  'pub struct ControlJoinObservation(Arc<Holder>);', /retain only test facts/);
 rejects('auth control joins cannot copy introduction into the transferred association', 'authOwner',
   'holder.0.joins.0.lock().unwrap().transferred = Some(control_association(&holder.0, &owner.pending));',
   'holder.0.joins.0.lock().unwrap().transferred = holder.0.joins.0.lock().unwrap().introduced;', /test-only handoff cut/);
@@ -469,7 +468,7 @@ rejects('credential registration cannot reopen after retirement snapshot', 'fram
 rejects('credential frame history cannot retain only the latest attempt', 'frame',
   'attempts.slots.clone()', 'latest_credential_only()', /close registration and copy handles atomically/);
 rejects('credential contradictory returned success cannot fall through as ordinary Unknown', 'sasl2',
-  '|| crate::xmpp::auth_publication::credential_handoff_failed(&error)', '', /contradictory returned success must close/);
+  '|| northstar_stream::auth_publication::credential_handoff_failed(&error)', '', /contradictory returned success must close/);
 rejects('credential resume Unknown cannot prohibit the existing fallback', 'sasl2',
   'if bind_plan.is_none() && !unbound_state_committed {',
   'if bind_plan.is_none() && !unbound_state_committed && !resume_was_unknown {', /existing separate fallback attempt/);
@@ -1302,10 +1301,10 @@ rejectsSelection('BOSH selection status cannot lose its sticky connection-change
   'Incomplete { omitted_items: usize, missing_auth_associations: usize, connection_changed: bool, }',
   'Incomplete { omitted_items: usize, missing_auth_associations: usize, }', /fact-only field shape/);
 for (const [name, field] of [
-  ['holder', 'Option<crate::xmpp::auth_publication::AuthControlHolder>'],
+  ['holder', 'Option<northstar_stream::auth_publication::AuthControlHolder>'],
   ['receipt', 'Option<northstar_auth_application::authentication::CredentialCommitReceipt>'],
   ['publication observation', 'Option<northstar_auth_application::authentication::publication::Observation>'],
-  ['consuming owner', 'Option<crate::xmpp::auth_publication::OwnedPublication>'],
+  ['consuming owner', 'Option<northstar_stream::auth_publication::OwnedPublication>'],
   ['response bytes', 'Option<BoshHttpResponse>'],
 ]) {
   rejectsSelection(`BOSH selection retained item cannot extend ${name} lifetime`,
@@ -1313,7 +1312,7 @@ for (const [name, field] of [
 }
 rejectsSelection('BOSH selection handle cannot retain actual holders',
   'pub(super) struct SelectionObservation(Arc<std::sync::Mutex<SelectionState>>);',
-  'pub(super) struct SelectionObservation(Arc<Vec<crate::xmpp::auth_publication::AuthControlHolder>>);', /exact test-only declaration/);
+  'pub(super) struct SelectionObservation(Arc<Vec<northstar_stream::auth_publication::AuthControlHolder>>);', /exact test-only declaration/);
 rejectsSelection('BOSH selection handle tuple field cannot become public',
   'pub(super) struct SelectionObservation(Arc<std::sync::Mutex<SelectionState>>);',
   'pub(super) struct SelectionObservation(pub(super) Arc<std::sync::Mutex<SelectionState>>);', /exact test-only declaration/);

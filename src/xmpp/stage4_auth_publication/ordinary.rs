@@ -642,7 +642,7 @@ async fn missing_native_introduction_projection_does_not_prevent_actual_write() 
     .unwrap()
     .split();
     // Only the cfg(test) read cell is damaged, never holder/receipt authority.
-    read.joins.0.lock().unwrap().introduced = None;
+    read.joins.edit(|joins| joins.introduced = None);
     let owner = crate::xmpp::stage4_native::write_auth(
         item,
         route.connection_id(),
@@ -704,7 +704,7 @@ async fn missing_callback_transfer_projection_does_not_replace_publication_with_
     .await
     .unwrap()
     .unwrap();
-    read.joins.0.lock().unwrap().transferred = None;
+    read.joins.edit(|joins| joins.transferred = None);
     assert_eq!(
         publish_native(
             owner,

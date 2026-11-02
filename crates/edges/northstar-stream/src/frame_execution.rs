@@ -13,6 +13,7 @@
 //! operation identity. It has no new deadline: introducing one would change
 //! authentication recovery after bytes have already reached the client.
 
+use crate::transport::ClientTransport;
 use northstar_auth_application::authentication::publication;
 use northstar_message_application::direct_lifecycle::TerminalReason;
 use northstar_message_application::message_admission::witness::DirectOperationHandle;
@@ -20,7 +21,6 @@ use northstar_room_application::mix_service::foreground;
 use northstar_room_application::mix_service::foreground::MixForegroundSlot;
 use northstar_room_application::muc_service::discussion;
 use northstar_room_application::muc_service::discussion::MucDiscussionSlot;
-use northstar_stream::transport::ClientTransport;
 use std::{
     future::Future,
     pin::Pin,
@@ -39,7 +39,7 @@ static NEXT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
-pub(super) enum Stage {
+pub enum Stage {
     Validation,
     Handler,
     SmCheckpoint,
@@ -145,7 +145,7 @@ impl Outcome {
 /// left for maintenance does not turn already-published authentication into a
 /// failed login. Rejections contain no credentials, route identity or errors.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PublicationResult {
+pub enum PublicationResult {
     Completed,
     BackendFailure,
     IntegrityRejected,
@@ -155,7 +155,7 @@ pub(super) enum PublicationResult {
 }
 
 impl PublicationResult {
-    pub(super) const fn transport_succeeded(self) -> bool {
+    pub const fn transport_succeeded(self) -> bool {
         matches!(
             self,
             Self::Completed | Self::CompletedWithDeferredNotification
@@ -219,7 +219,7 @@ fn is_inline_auth(frame: &str) -> bool {
     };
     let root = document.root_element();
     root.tag_name().name() == "authenticate"
-        && root.tag_name().namespace() == Some(northstar_auth_xmpp::sasl2::SASL2_NS)
+        && root.tag_name().namespace() == Some("urn:xmpp:sasl:2")
         && root.children().any(|child| {
             child.is_element()
                 && matches!(
@@ -250,40 +250,40 @@ struct Progress {
 }
 
 #[derive(Clone)]
-pub(super) struct FrameExecution(Arc<Progress>);
+pub struct FrameExecution(Arc<Progress>);
 
 /// Copied raw facts only; this value retains no frame owner or mutation authority.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct FrameObservation {
-    pub(super) operation_id: Uuid,
-    pub(super) stage_raw: u8,
-    pub(super) outcome_raw: u8,
+pub struct FrameObservation {
+    pub operation_id: Uuid,
+    pub stage_raw: u8,
+    pub outcome_raw: u8,
 }
 
 /// Observation ownership only. A BOSH response can defer publication while
 /// later payloads replace the current frame; the originating context survives.
 #[derive(Default)]
-pub(super) struct SessionExecutions {
+pub struct SessionExecutions {
     current: Option<FrameExecution>,
 }
 
 impl SessionExecutions {
     /// Retains exactly the supplied frame and its existing lifecycle state.
-    #[cfg(test)]
-    pub(super) fn for_saved_frame(frame: FrameExecution) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_saved_frame(frame: FrameExecution) -> Self {
         Self {
             current: Some(frame),
         }
     }
 
-    pub(super) fn begin(&mut self, transport: ClientTransport, frame: &str) -> FrameExecution {
+    pub fn begin(&mut self, transport: ClientTransport, frame: &str) -> FrameExecution {
         let execution = FrameExecution::new(transport, frame);
         self.current = Some(execution.clone());
         execution
     }
 
-    pub(super) fn auth_origin(&self) -> Option<FrameExecution> {
+    pub fn auth_origin(&self) -> Option<FrameExecution> {
         self.current
             .as_ref()
             .filter(|execution| {
@@ -292,13 +292,13 @@ impl SessionExecutions {
             .cloned()
     }
 
-    pub(super) fn enter(&self, stage: Stage) {
+    pub fn enter(&self, stage: Stage) {
         if let Some(execution) = &self.current {
             execution.enter(stage);
         }
     }
 
-    pub(super) fn direct_operation(&self) -> Option<DirectOperationHandle> {
+    pub fn direct_operation(&self) -> Option<DirectOperationHandle> {
         self.current
             .as_ref()
             .filter(|execution| {
@@ -307,7 +307,7 @@ impl SessionExecutions {
             .map(FrameExecution::direct_operation)
     }
 
-    pub(super) fn muc_discussion(
+    pub fn muc_discussion(
         &self,
         prepared: &discussion::PreparedDiscussion,
     ) -> Result<Option<discussion::Observation>, discussion::Rejected> {
@@ -320,7 +320,7 @@ impl SessionExecutions {
         execution.0.muc_discussion.register(prepared).map(Some)
     }
 
-    pub(super) fn mix_foreground(
+    pub fn mix_foreground(
         &self,
         prepare: impl FnOnce() -> Result<foreground::PreparedIngress, foreground::Rejected>,
     ) -> Result<Option<foreground::Observation>, foreground::Rejected> {
@@ -336,13 +336,13 @@ impl SessionExecutions {
 }
 
 #[derive(Debug)]
-pub(crate) enum FrameFailure {
+pub enum FrameFailure {
     Backend(anyhow::Error),
     TimedOut,
 }
 
 impl FrameExecution {
-    pub(super) fn new(transport: ClientTransport, frame: &str) -> Self {
+    pub fn new(transport: ClientTransport, frame: &str) -> Self {
         Self::initialize(transport, frame, Uuid::new_v4())
     }
 
@@ -362,12 +362,8 @@ impl FrameExecution {
         }))
     }
 
-    #[cfg(test)]
-    pub(super) fn for_saved_case(
-        transport: ClientTransport,
-        frame: &str,
-        operation_id: Uuid,
-    ) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_saved_case(transport: ClientTransport, frame: &str, operation_id: Uuid) -> Self {
         Self::initialize(transport, frame, operation_id)
     }
 
@@ -379,8 +375,8 @@ impl FrameExecution {
     /// from a manual poll or completing synchronous destruction alone does not
     /// prove that other retained owners are quiescent. Without that proof the
     /// adapter must report missing facts and observation loss, not infer them.
-    #[cfg(test)]
-    pub(super) fn observation_for_saved_case(&self) -> FrameObservation {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn observation_for_saved_case(&self) -> FrameObservation {
         FrameObservation {
             operation_id: self.0.operation_id,
             stage_raw: self.0.stage.load(Ordering::Relaxed),
@@ -388,15 +384,15 @@ impl FrameExecution {
         }
     }
 
-    pub(super) fn direct_operation(&self) -> DirectOperationHandle {
+    pub fn direct_operation(&self) -> DirectOperationHandle {
         self.0.direct_operation.clone()
     }
 
-    pub(super) fn operation_id(&self) -> Uuid {
+    pub fn operation_id(&self) -> Uuid {
         self.0.operation_id
     }
 
-    pub(super) fn prepare_credential(
+    pub fn prepare_credential(
         &self,
         kind: publication::CredentialKind,
         connection: Uuid,
@@ -416,10 +412,7 @@ impl FrameExecution {
         Ok(prepared)
     }
 
-    pub(super) fn retain_auth_receipt(
-        &self,
-        observation: publication::Observation,
-    ) -> anyhow::Result<()> {
+    pub fn retain_auth_receipt(&self, observation: publication::Observation) -> anyhow::Result<()> {
         anyhow::ensure!(
             observation.snapshot().frame == Some(self.0.operation_id),
             "auth receipt belongs to another frame"
@@ -433,7 +426,7 @@ impl FrameExecution {
         Ok(())
     }
 
-    pub(super) fn enter(&self, stage: Stage) {
+    pub fn enter(&self, stage: Stage) {
         let previous = self.0.stage.swap(stage as u8, Ordering::Relaxed);
         if previous == stage as u8 {
             return;
@@ -458,7 +451,7 @@ impl FrameExecution {
         );
     }
 
-    pub(super) fn run<T>(
+    pub fn run<T>(
         &self,
         future: impl Future<Output = anyhow::Result<T>>,
     ) -> impl Future<Output = Result<T, FrameFailure>> {
@@ -475,7 +468,7 @@ impl FrameExecution {
         }
     }
 
-    pub(super) async fn observe_publication(
+    pub async fn observe_publication(
         &self,
         future: impl Future<Output = PublicationResult>,
     ) -> bool {

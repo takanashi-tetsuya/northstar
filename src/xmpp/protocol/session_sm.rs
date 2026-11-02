@@ -14,7 +14,7 @@ pub struct ResumePayload {
     pub(super) post_control: Vec<String>,
     pub(super) replay: Vec<String>,
     pub(super) activate_route: bool,
-    pub(super) auth_publication: Option<super::super::auth_publication::AuthControlHolder>,
+    pub(super) auth_publication: Option<northstar_stream::auth_publication::AuthControlHolder>,
     pub(super) transient_capacity: Vec<northstar_session_application::sm_capacity::SmCapacityLease>,
 }
 
@@ -23,7 +23,7 @@ pub(crate) struct ResumeTransportParts {
     pub(crate) post_control: Vec<String>,
     pub(crate) replay: Vec<String>,
     pub(crate) activate_route: bool,
-    pub(crate) auth_publication: Option<super::super::auth_publication::AuthControlHolder>,
+    pub(crate) auth_publication: Option<northstar_stream::auth_publication::AuthControlHolder>,
     pub(crate) transient_capacity: Vec<northstar_session_application::sm_capacity::SmCapacityLease>,
 }
 

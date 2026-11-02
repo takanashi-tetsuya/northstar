@@ -1,6 +1,6 @@
 use super::*;
-use crate::xmpp::auth_publication::OutboundAuthPublication;
-use crate::xmpp::auth_publication::{fixture_control, publish_unbound_fixture};
+use northstar_stream::auth_publication::fixture::{fixture_control, publish_unbound_fixture};
+use northstar_stream::auth_publication::OutboundAuthPublication;
 const AUTH_CONNECTION: Uuid = Uuid::from_u128(701);
 use northstar_delivery_core::bosh_ownership::{OperationKind, Scope, Terminal};
 use northstar_stream::outbound::{
@@ -374,8 +374,11 @@ async fn actual_bounded_selection_publishes_unbound_u_without_taking_queued_bind
     let u_bytes = "<success xmlns='urn:xmpp:sasl:2'/>";
     let b_bytes = "<iq type='result' id='B'><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'/></iq>";
     let (u_holder, u) = fixture_control(u_bytes, AUTH_CONNECTION);
-    let (b_holder, b) =
-        crate::xmpp::auth_publication::fixture_bound_control(b_bytes, AUTH_CONNECTION, false);
+    let (b_holder, b) = northstar_stream::auth_publication::fixture::fixture_bound_control(
+        b_bytes,
+        AUTH_CONNECTION,
+        false,
+    );
     u_holder.recording().unwrap();
     b_holder.recording().unwrap();
     let prior_b = b.snapshot();

@@ -1,6 +1,6 @@
 //! Ordinary controls for bounded native write and flush operations.
 use super::*;
-use crate::xmpp::auth_publication::stage4_saved::ordinary::{drain, recorder as capture};
+use crate::xmpp::stage4_auth_publication::ordinary::{drain, recorder as capture};
 use std::task::Waker;
 
 fn script(fail_after: Option<u32>) -> wire::WriteScript {

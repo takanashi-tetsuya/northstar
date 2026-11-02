@@ -10,7 +10,7 @@ const paths = {
   lifecycle: 'crates/contexts/message/northstar-message-application/src/direct_lifecycle.rs',
   service: 'crates/contexts/message/northstar-message-application/src/message_admission.rs',
   witness: 'crates/contexts/message/northstar-message-application/src/message_admission/witness.rs',
-  frame: 'src/xmpp/frame_execution.rs',
+  frame: 'crates/edges/northstar-stream/src/frame_execution.rs',
   messaging: 'crates/contexts/message/northstar-message-xmpp/src/messaging.rs',
   repository: 'crates/contexts/abuse/northstar-abuse-postgres/src/message_admission.rs',
   verification: 'crates/contexts/abuse/northstar-abuse-postgres/src/verification.rs',
@@ -19,6 +19,9 @@ const paths = {
   directWorkflow: 'crates/contexts/message/northstar-message-application/src/messaging/direct_workflow.rs',
   messageService: 'crates/contexts/message/northstar-message-application/src/messaging.rs',
 };
+// The frame owner lives in northstar-stream; root saved cases reach its test-only items through test-support.
+const CROSS_CRATE_TEST_ONLY = '#[cfg(any(test, feature = "test-support"))]';
+
 function requireAdmission(value, message) {
   if (!value) throw new Error(`admission boundary: ${message}`);
 }
@@ -262,7 +265,7 @@ export function verifyAdmissionBoundaries(sources) {
     && grant.includes('BeginResult::Reserved(')
     && grant.includes('BeginResult::GuardOnly(GuardDecision::Allowed)'),
     'admission grant must follow the real successful coordinator completion');
-  const newFrame = compact(body(sources.frame, 'pub\\(super\\)\\s+fn\\s+new\\b'));
+  const newFrame = compact(body(sources.frame, 'pub\\s+fn\\s+new\\b'));
   requireAdmission(newFrame === 'Self::initialize(transport,frame,Uuid::new_v4())',
     'production frames must preserve fresh identity through the shared initializer');
   const initializeFrame = compact(body(sources.frame, 'fn\\s+initialize\\b'));
@@ -276,11 +279,11 @@ export function verifyAdmissionBoundaries(sources) {
     'policy:Policy::for_frame(transport,frame),stage:AtomicU8::new(Stage::Validationasu8),' +
     'started:tokio::time::Instant::now(),outcome:AtomicU8::new(Outcome::Pendingasu8),}))',
   'the shared initializer must retain the exact owner, sequence, policy and initial observation');
-  const savedFrame = compact(body(sources.frame, 'pub\\(super\\)\\s+fn\\s+for_saved_case\\b'));
+  const savedFrame = compact(body(sources.frame, 'pub\\s+fn\\s+for_saved_case\\b'));
   requireAdmission(savedFrame === 'Self::initialize(transport,frame,operation_id)' &&
-    /#\[cfg\(test\)\]\s*pub\(super\)\s+fn\s+for_saved_case\b/.test(codeOnly(sources.frame)),
+    /#\[cfg\(test\)\]\s*pub\s+fn\s+for_saved_case\b/.test(codeOnly(sources.frame.replaceAll(CROSS_CRATE_TEST_ONLY, '#[cfg(test)]'))),
   'the test-only frame constructor must use the same initializer and supplied identity');
-  const runFrame = compact(body(sources.frame, 'pub\\(super\\)\\s+fn\\s+run\\b'));
+  const runFrame = compact(body(sources.frame, 'pub\\s+fn\\s+run\\b'));
   ordered(runFrame, ['letobservation=Observation::new(', 'FrameRunner{',
     'child:Some(Box::pin(asyncmove{tokio::time::timeout(budget,future).await}))'],
   'frame observation and unchanged first-poll deadline');

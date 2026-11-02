@@ -4571,6 +4571,10 @@
       ],
       [
         "northstar-stream",
+        "northstar-abuse-policy"
+      ],
+      [
+        "northstar-stream",
         "northstar-auth-application"
       ],
       [
@@ -4584,6 +4588,10 @@
       [
         "northstar-stream",
         "northstar-federation-core"
+      ],
+      [
+        "northstar-stream",
+        "northstar-message-application"
       ],
       [
         "northstar-stream",
@@ -4635,6 +4643,14 @@
       ],
       [
         "northstar-stream",
+        "serde_json"
+      ],
+      [
+        "northstar-stream",
+        "sha2"
+      ],
+      [
+        "northstar-stream",
         "tokio"
       ],
       [
@@ -4651,7 +4667,15 @@
       ],
       [
         "northstar-stream",
+        "tracing-subscriber"
+      ],
+      [
+        "northstar-stream",
         "uuid"
+      ],
+      [
+        "northstar-stream",
+        "zeroize"
       ],
       [
         "northstar-telemetry",

@@ -228,8 +228,8 @@ pub(super) async fn run_original(
     index: usize,
     sequence: Sequence,
 ) -> Result<OriginalRun> {
-    use crate::xmpp::frame_execution::FrameExecution;
     use northstar_message_application::messaging::direct_workflow::commit_prepared_application;
+    use northstar_stream::frame_execution::FrameExecution;
     use northstar_stream::transport::ClientTransport;
     let original = &case.originals[index];
     let ids = &case.identities.originals[index];

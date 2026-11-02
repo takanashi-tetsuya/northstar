@@ -17,6 +17,7 @@ use northstar_room_application::mix_service::{
 use northstar_room_core::mix::MixSessionCapability;
 use northstar_room_core::mix_iq_relay::{MixIqRelayIndex, PendingMixIqRelay};
 use northstar_roster_core::RosterChange;
+use northstar_stream::frame_execution::{SessionExecutions, Stage};
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::outbound::OutboundSender;
 use northstar_xep_core::XepId;
@@ -56,6 +57,28 @@ pub trait MixFrameObserver: Sync {
             dyn FnOnce() -> Result<foreground::PreparedIngress, foreground::Rejected> + '_,
         >,
     ) -> Result<Option<foreground::Observation>, foreground::Rejected>;
+}
+
+/// A session's frame executions record the MIX stages and own the foreground of the current frame.
+impl MixFrameObserver for SessionExecutions {
+    fn enter(&self, stage: MixFrameStage) {
+        SessionExecutions::enter(
+            self,
+            match stage {
+                MixFrameStage::Policy => Stage::MixPolicy,
+                MixFrameStage::Admission => Stage::MixAdmission,
+            },
+        );
+    }
+
+    fn mix_foreground(
+        &self,
+        prepare: Box<
+            dyn FnOnce() -> Result<foreground::PreparedIngress, foreground::Rejected> + '_,
+        >,
+    ) -> Result<Option<foreground::Observation>, foreground::Rejected> {
+        SessionExecutions::mix_foreground(self, prepare)
+    }
 }
 
 /// The ordered output queue of one local stream.

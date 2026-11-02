@@ -1,7 +1,7 @@
 //! Factual projections copy observed values, never expected input.
 use super::*;
-use crate::xmpp::auth_publication::OutboundAuthPublication;
 use northstar_auth_application::authentication::publication as actual;
+use northstar_stream::auth_publication::OutboundAuthPublication;
 use northstar_stream::outbound::TransportOwnershipSource;
 use wire::EvidenceId as Id;
 

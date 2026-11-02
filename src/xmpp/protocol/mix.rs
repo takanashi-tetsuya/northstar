@@ -9,13 +9,12 @@ use crate::s2s::FederationRouter;
 use crate::state::mix_iq_relay::MixIqRelayRoute;
 use crate::state::mix_outbox::MixOutboxContext;
 use crate::state::AppState;
-use crate::xmpp::frame_execution::{SessionExecutions, Stage};
 use anyhow::Result;
 use dashmap::DashSet;
 use northstar_mix_xmpp::ports::{
-    MixAction, MixFrameObserver, MixFrameStage, MixHost, MixOutboxPort, MixSession, MixSessionUser,
+    MixAction, MixFrameObserver, MixHost, MixOutboxPort, MixSession, MixSessionUser,
 };
-use northstar_room_application::mix_service::{foreground, MixService};
+use northstar_room_application::mix_service::MixService;
 use northstar_room_core::mix::{MixSessionCapability, CORE_NS, PAM_NS};
 use northstar_room_core::mix_iq_relay::MixIqRelayIndex;
 use northstar_roster_core::RosterChange;
@@ -27,27 +26,6 @@ use uuid::Uuid;
 
 #[cfg(test)]
 pub(crate) mod stage4_saved;
-
-impl MixFrameObserver for SessionExecutions {
-    fn enter(&self, stage: MixFrameStage) {
-        SessionExecutions::enter(
-            self,
-            match stage {
-                MixFrameStage::Policy => Stage::MixPolicy,
-                MixFrameStage::Admission => Stage::MixAdmission,
-            },
-        );
-    }
-
-    fn mix_foreground(
-        &self,
-        prepare: Box<
-            dyn FnOnce() -> Result<foreground::PreparedIngress, foreground::Rejected> + '_,
-        >,
-    ) -> Result<Option<foreground::Observation>, foreground::Rejected> {
-        SessionExecutions::mix_foreground(self, prepare)
-    }
-}
 
 impl MixHost for AppState {
     type Repository = <MixOutboxContext as MixOutboxPort>::Repository;

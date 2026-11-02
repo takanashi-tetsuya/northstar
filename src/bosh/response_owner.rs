@@ -10,7 +10,6 @@ use super::{
     take_response_payload, terminal_response_with_content, BoshHttpResponse, BoshRequest,
     BoshResponseBody, CachedResponse, RESPONSE_CACHE_SIZE,
 };
-use crate::xmpp::auth_publication::{OutboundAuthPublication, OwnedPublication, SelectedControls};
 use anyhow::Result;
 use axum::body::Bytes;
 use northstar_delivery_core::bosh_ownership::{
@@ -19,6 +18,9 @@ use northstar_delivery_core::bosh_ownership::{
 };
 use northstar_session_application::replay::{ReplayRepository, ReplayService};
 use northstar_session_application::sm_capacity::SmMemoryGovernor;
+use northstar_stream::auth_publication::{
+    OutboundAuthPublication, OwnedPublication, SelectedControls,
+};
 use northstar_stream::outbound::{BoshResponseOwnership, OutboundItem};
 use std::{collections::VecDeque, future::Future, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -176,8 +178,8 @@ pub(super) struct SelectedItemSnapshot {
     pub(super) utf8_length: usize,
     pub(super) sha256: [u8; 32],
     pub(super) auth_marker: bool,
-    pub(super) sealed_association: Option<crate::xmpp::auth_publication::ControlAssociation>,
-    pub(super) holder_joins: Option<crate::xmpp::auth_publication::ControlJoins>,
+    pub(super) sealed_association: Option<northstar_stream::auth_publication::ControlAssociation>,
+    pub(super) holder_joins: Option<northstar_stream::auth_publication::ControlJoins>,
 }
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -194,7 +196,7 @@ pub(super) struct SelectionSnapshot {
 #[cfg(test)]
 struct SelectedItemRead {
     at_selection: SelectedItemSnapshot,
-    joins: Option<crate::xmpp::auth_publication::ControlJoinObservation>,
+    joins: Option<northstar_stream::auth_publication::ControlJoinObservation>,
 }
 #[cfg(test)]
 struct SelectionState {

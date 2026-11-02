@@ -1,7 +1,7 @@
-use crate::xmpp::frame_execution::Stage;
 use crate::xmpp::protocol::{Action, ProtocolSession};
 use anyhow::Result;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
+use northstar_stream::frame_execution::Stage;
 use northstar_xml_builder::rewrite::{
     root_resets_default_namespace, set_from, set_root_attribute, set_to,
 };

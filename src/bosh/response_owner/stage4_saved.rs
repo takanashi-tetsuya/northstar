@@ -5,15 +5,13 @@ use crate::bosh::ownership::{
     self, OperationRunner, Output, RecordPort, ServiceTransfer, TransferPort,
 };
 use crate::stage4_replay as wire;
-use crate::xmpp::auth_publication::stage4_saved::{
-    facts as observed, AuthRead, Capture, Publisher,
-};
-use crate::xmpp::auth_publication::OutboundAuthPublication;
+use crate::xmpp::stage4_auth_publication::{facts as observed, AuthRead, Capture, Publisher};
 use anyhow::{ensure, Result};
 use northstar_delivery_core::bosh_ownership::{OperationKind, Scope};
 use northstar_room_application::mix_service::{MixRepository, MixService};
 use northstar_session_application::replay::ReplayService;
 use northstar_session_application::sm_capacity::SmCapacityMetrics;
+use northstar_stream::auth_publication::OutboundAuthPublication;
 use std::task::Poll;
 use uuid::Uuid;
 mod facts;

@@ -1,17 +1,27 @@
 //! Test-only credential and publication composition adapter.
 //! Actual credential/service/holder/publication owners over finite replies.
-#![cfg(test)]
-use super::*;
 use crate::stage4_replay as wire;
 use crate::xmpp::protocol::mix::stage4_saved::RouteHandle;
+use anyhow::{ensure, Result};
 use northstar_auth_application::authentication::publication::{
     CredentialKind, CredentialObservation,
 };
+use northstar_auth_application::authentication::publication::{Invocation, Observation};
+use northstar_auth_application::authentication::{AuthenticationResult, CredentialCommitReceipt};
 use northstar_auth_application::authentication::{AuthenticationService, FastCommitPlan};
 use northstar_session_application::sm::{BindingFinalizationOutcome, SmService};
+use northstar_stream::auth_publication::*;
+use northstar_stream::frame_execution::{FrameExecution, PublicationResult};
 use northstar_stream::outbound::OutboundItem;
 use northstar_stream::transport::ClientTransport;
 use std::collections::BTreeMap;
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+    task::{Context, Poll},
+};
+use uuid::Uuid;
 
 pub(crate) mod facts;
 #[cfg(test)]
@@ -142,7 +152,6 @@ impl Publisher {
             for owner in &owners {
                 connection = Some(owner.connection());
                 let join = owner
-                    .holder
                     .join_observation()
                     .snapshot()
                     .transferred
@@ -168,7 +177,8 @@ impl Publisher {
         // This is an actual finite effect-scope check, independent of every
         // observer result. Never consume an intended effect as a silent no-op.
         if owners.iter().any(|owner| {
-            owner.pending.effects.caps.is_some() || owner.pending.effects.notification.is_some()
+            owner.captured_effects().caps.is_some()
+                || owner.captured_effects().notification.is_some()
         }) {
             facts::lost(recorder);
             if let Some(mut callback) = callback {

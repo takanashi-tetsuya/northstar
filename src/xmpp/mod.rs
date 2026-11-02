@@ -1,9 +1,11 @@
-pub(crate) mod auth_publication;
+#[cfg(test)]
+mod auth_publication_write_tests;
 pub(crate) mod capabilities;
 mod direct_delivery;
-pub(crate) mod frame_execution;
 pub(crate) mod muc_delivery;
 pub(crate) mod protocol;
+#[cfg(test)]
+pub(crate) mod stage4_auth_publication;
 #[cfg(test)]
 mod stage4_frame_capture;
 #[cfg(test)]
@@ -20,8 +22,8 @@ use crate::xmpp::transport_parsing::{
 };
 use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket};
-use frame_execution::FrameFailure;
 use futures::FutureExt;
+use northstar_stream::frame_execution::FrameFailure;
 use northstar_stream::transport::{
     ClientTransport, SessionTerminationSignals, StreamLimits, TlsSessionEvidence,
 };
@@ -904,9 +906,9 @@ async fn tcp_record_and_send_auth<S: AsyncWrite + Unpin>(
     io: &mut S,
     session: &mut ProtocolSession,
     stanza: String,
-    holder: auth_publication::AuthControlHolder,
+    holder: northstar_stream::auth_publication::AuthControlHolder,
     opening: bool,
-) -> Result<Option<auth_publication::OwnedPublication>> {
+) -> Result<Option<northstar_stream::auth_publication::OwnedPublication>> {
     holder.validate_connection(session.connection_id)?;
     holder.validate_control(&stanza)?;
     holder.recording()?;

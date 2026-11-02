@@ -10,7 +10,7 @@ impl ProtocolSession {
             .context("auth action has no terminal control")?;
         let holder = self.seal_auth_control(control, false)?;
         Ok(Action::SendManyThenActivate(
-            super::super::auth_publication::AuthReplies { replies, holder },
+            northstar_stream::auth_publication::AuthReplies { replies, holder },
         ))
     }
 

@@ -33,7 +33,7 @@ pub enum Action {
     /// The first frame is the terminal authentication success. Publish the
     /// staged login epoch and already-committed route only after that frame
     /// reaches the transport.
-    SendManyThenActivate(super::super::auth_publication::AuthReplies),
+    SendManyThenActivate(northstar_stream::auth_publication::AuthReplies),
     /// Send each terminal payload in order and then close the XML stream.
     /// Unlike ordinary outbound stanzas these frames are not added to an SM
     /// resume queue: the operation producing them has already revoked the
@@ -63,7 +63,10 @@ pub(super) fn client_stream_limits_feature(
 }
 
 impl ProtocolSession {
-    pub(in crate::xmpp) fn enter_frame_stage(&self, stage: super::super::frame_execution::Stage) {
+    pub(in crate::xmpp) fn enter_frame_stage(
+        &self,
+        stage: northstar_stream::frame_execution::Stage,
+    ) {
         self.frame_executions.enter(stage);
     }
 
@@ -143,7 +146,7 @@ impl ProtocolSession {
             outbound,
             secure_transport,
             transport,
-            frame_executions: super::super::frame_execution::SessionExecutions::default(),
+            frame_executions: northstar_stream::frame_execution::SessionExecutions::default(),
             stream_limits,
             peer_ip,
             connected_at: std::time::Instant::now(),

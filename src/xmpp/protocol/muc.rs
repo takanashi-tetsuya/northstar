@@ -5,13 +5,13 @@
 
 use super::{Action, ProtocolSession};
 use crate::state::AppState;
-use crate::xmpp::frame_execution::Stage;
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_muc_xmpp::muc as handlers;
 use northstar_muc_xmpp::ports::{MucAction, MucFrameStage, MucSession, MucSessionUser};
 use northstar_room_application::discussion;
 use northstar_session_core::JoinedMucMembership;
+use northstar_stream::frame_execution::Stage;
 use northstar_stream::local_routes::muc::MucOccupant;
 use northstar_stream::outbound::OutboundSender;
 use roxmltree::Node;

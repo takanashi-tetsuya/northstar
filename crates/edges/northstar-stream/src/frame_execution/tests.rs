@@ -544,7 +544,7 @@ async fn credential_attempts_survive_actual_frame_pending_timeout_and_unwind_cut
             let AuthenticationResult::Authenticated(receipt) = result else {
                 unreachable!()
             };
-            let owner = super::super::auth_publication::KnownCredentialOwner::from_observed(
+            let owner = crate::auth_publication::KnownCredentialOwner::from_observed(
                 receipt,
                 origin.clone(),
                 Uuid::from_u128(3),

@@ -1,9 +1,6 @@
 //! Per-control auth ownership. The FIFO marker is metadata; only the private
 //! holder can transfer its actual credential receipt into publication.
-#[cfg(test)]
-pub(crate) mod stage4_saved;
-
-use super::frame_execution::{FrameExecution, PublicationResult};
+use crate::frame_execution::{FrameExecution, PublicationResult};
 use anyhow::{ensure, Result};
 use northstar_auth_application::authentication::publication::{
     Invocation, Observation, Terminal, Transport,
@@ -22,35 +19,35 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-pub(super) struct BoundRoute {
-    pub(super) key: String,
-    pub(super) user: Uuid,
-    pub(super) generation: i64,
-    pub(super) connection: Uuid,
-    pub(super) lifecycle: Arc<AtomicU8>,
-    pub(super) disconnect: CancellationToken,
+pub struct BoundRoute {
+    pub key: String,
+    pub user: Uuid,
+    pub generation: i64,
+    pub connection: Uuid,
+    pub lifecycle: Arc<AtomicU8>,
+    pub disconnect: CancellationToken,
 }
-pub(super) enum RouteIntent {
+pub enum RouteIntent {
     Unbound,
     Bound(BoundRoute),
 }
-pub(crate) struct CapsIntent {
-    pub(super) presence: String,
-    pub(super) key: String,
-    pub(super) connection: Uuid,
-    pub(super) gate: Arc<tokio::sync::Mutex<()>>,
-    pub(super) generation: Arc<AtomicU64>,
+pub struct CapsIntent {
+    pub presence: String,
+    pub key: String,
+    pub connection: Uuid,
+    pub gate: Arc<tokio::sync::Mutex<()>>,
+    pub generation: Arc<AtomicU64>,
 }
-pub(super) struct NotificationIntent {
-    pub(super) account: String,
-    pub(super) user: Uuid,
-    pub(super) device: Uuid,
-    pub(super) excluded_key: String,
+pub struct NotificationIntent {
+    pub account: String,
+    pub user: Uuid,
+    pub device: Uuid,
+    pub excluded_key: String,
 }
-pub(super) struct CapturedEffects {
-    pub(super) route: RouteIntent,
-    pub(super) caps: Option<CapsIntent>,
-    pub(super) notification: Option<NotificationIntent>,
+pub struct CapturedEffects {
+    pub route: RouteIntent,
+    pub caps: Option<CapsIntent>,
+    pub notification: Option<NotificationIntent>,
 }
 impl CapturedEffects {
     fn validate(&self, receipt: &CredentialCommitReceipt, connection: Uuid) -> Result<()> {
@@ -115,19 +112,19 @@ impl std::fmt::Display for CredentialHandoffIntegrity {
     }
 }
 impl std::error::Error for CredentialHandoffIntegrity {}
-pub(super) fn credential_handoff_failed(error: &anyhow::Error) -> bool {
+pub fn credential_handoff_failed(error: &anyhow::Error) -> bool {
     error.is::<CredentialHandoffIntegrity>()
 }
 
 // The mode and original frame are captured before the credential service is
 // polled. Missing evidence after an observed call can never choose compatibility.
-pub(super) struct CredentialAttempt {
+pub struct CredentialAttempt {
     origin: Option<FrameExecution>,
     prepared: Option<northstar_auth_application::authentication::publication::PreparedCredential>,
     connection: Uuid,
 }
 impl CredentialAttempt {
-    pub(super) fn new(
+    pub fn new(
         origin: Option<FrameExecution>,
         connection: Uuid,
         kind: northstar_auth_application::authentication::publication::CredentialKind,
@@ -142,15 +139,12 @@ impl CredentialAttempt {
             connection,
         })
     }
-    pub(super) fn prepared(
+    pub fn prepared(
         &self,
     ) -> Option<&northstar_auth_application::authentication::publication::PreparedCredential> {
         self.prepared.as_ref()
     }
-    pub(super) fn into_owner(
-        self,
-        receipt: CredentialCommitReceipt,
-    ) -> Result<KnownCredentialOwner> {
+    pub fn into_owner(self, receipt: CredentialCommitReceipt) -> Result<KnownCredentialOwner> {
         match (self.origin, self.prepared) {
             (Some(origin), Some(prepared)) => {
                 KnownCredentialOwner::from_observed(receipt, origin, self.connection, &prepared)
@@ -165,14 +159,14 @@ impl CredentialAttempt {
     }
 }
 
-pub(crate) struct KnownCredentialOwner {
+pub struct KnownCredentialOwner {
     receipt: Option<CredentialCommitReceipt>,
     origin: Option<FrameExecution>,
     connection: Uuid,
     observation: Observation,
 }
 impl KnownCredentialOwner {
-    pub(super) fn from_returned(
+    pub fn from_returned(
         receipt: CredentialCommitReceipt,
         origin: Option<FrameExecution>,
         connection: Uuid,
@@ -188,7 +182,7 @@ impl KnownCredentialOwner {
             observation,
         }
     }
-    pub(super) fn from_observed(
+    pub fn from_observed(
         receipt: CredentialCommitReceipt,
         origin: FrameExecution,
         connection: Uuid,
@@ -206,17 +200,13 @@ impl KnownCredentialOwner {
             observation,
         })
     }
-    pub(super) fn origin(&self) -> Option<&FrameExecution> {
+    pub fn origin(&self) -> Option<&FrameExecution> {
         self.origin.as_ref()
     }
-    pub(super) fn observation(&self) -> &Observation {
+    pub fn observation(&self) -> &Observation {
         &self.observation
     }
-    pub(super) fn seal(
-        mut self,
-        control: &str,
-        effects: CapturedEffects,
-    ) -> Result<AuthControlHolder> {
+    pub fn seal(mut self, control: &str, effects: CapturedEffects) -> Result<AuthControlHolder> {
         let receipt = self
             .receipt
             .as_ref()
@@ -233,7 +223,7 @@ impl KnownCredentialOwner {
             length: control.len(),
             digest: Sha256::digest(control.as_bytes()).into(),
             observation: self.observation.clone(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             joins: ControlJoinObservation(Arc::new(Mutex::new(ControlJoins::default()))),
             pending: Mutex::new(HolderState {
                 pending: Some(PendingPublication {
@@ -244,7 +234,7 @@ impl KnownCredentialOwner {
                 phase: HolderPhase::Queued,
             }),
         }));
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             let pending = holder.0.pending.lock().unwrap();
             holder.0.joins.0.lock().unwrap().introduced = Some(control_association(
@@ -284,34 +274,38 @@ struct HolderState {
 }
 // A read handle retains only fixed-size facts, never a holder or receipt.
 // In particular, retaining it cannot delay abandonment of a queued owner.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ControlAssociation {
-    pub(crate) control: Uuid,
-    pub(crate) connection: Uuid,
-    pub(crate) frame: Option<Uuid>,
-    pub(crate) receipt: Uuid,
-    pub(crate) length: usize,
-    pub(crate) digest: [u8; 32],
-    pub(crate) publication:
-        northstar_auth_application::authentication::publication::PublicationJoins,
+pub struct ControlAssociation {
+    pub control: Uuid,
+    pub connection: Uuid,
+    pub frame: Option<Uuid>,
+    pub receipt: Uuid,
+    pub length: usize,
+    pub digest: [u8; 32],
+    pub publication: northstar_auth_application::authentication::publication::PublicationJoins,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ControlJoins {
-    pub(crate) introduced: Option<ControlAssociation>,
-    pub(crate) transferred: Option<ControlAssociation>,
+pub struct ControlJoins {
+    pub introduced: Option<ControlAssociation>,
+    pub transferred: Option<ControlAssociation>,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone)]
-pub(crate) struct ControlJoinObservation(Arc<Mutex<ControlJoins>>);
-#[cfg(test)]
+pub struct ControlJoinObservation(Arc<Mutex<ControlJoins>>);
+#[cfg(any(test, feature = "test-support"))]
 impl ControlJoinObservation {
-    pub(crate) fn snapshot(&self) -> ControlJoins {
+    pub fn snapshot(&self) -> ControlJoins {
         *self.0.lock().unwrap()
     }
+
+    /// Lets a saved case damage this read cell; holder and receipt authority are untouched.
+    pub fn edit(&self, edit: impl FnOnce(&mut ControlJoins)) {
+        edit(&mut self.0.lock().unwrap());
+    }
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn control_association(holder: &Holder, pending: &PendingPublication) -> ControlAssociation {
     ControlAssociation {
         control: holder.id,
@@ -329,7 +323,7 @@ struct Holder {
     length: usize,
     digest: [u8; 32],
     observation: Observation,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     joins: ControlJoinObservation,
     pending: Mutex<HolderState>,
 }
@@ -341,14 +335,14 @@ impl Drop for Holder {
     }
 }
 #[derive(Clone)]
-pub(crate) struct AuthControlHolder(Arc<Holder>);
+pub struct AuthControlHolder(Arc<Holder>);
 impl std::fmt::Debug for AuthControlHolder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("AuthControlHolder { control and receipt: [redacted] }")
     }
 }
 impl AuthControlHolder {
-    pub(crate) fn validate_connection(&self, connection: Uuid) -> Result<()> {
+    pub fn validate_connection(&self, connection: Uuid) -> Result<()> {
         ensure!(
             self.0.connection == connection,
             "auth control belongs to another connection"
@@ -359,7 +353,7 @@ impl AuthControlHolder {
         self.0.length == control.len()
             && self.0.digest == <[u8; 32]>::from(Sha256::digest(control.as_bytes()))
     }
-    pub(crate) fn validate_control(&self, control: &str) -> Result<()> {
+    pub fn validate_control(&self, control: &str) -> Result<()> {
         ensure!(
             self.0.id == self.0.observation.snapshot().control,
             "auth control identity mismatch"
@@ -367,7 +361,7 @@ impl AuthControlHolder {
         ensure!(self.validates(control), "sealed auth control bytes changed");
         Ok(())
     }
-    pub(crate) fn recording(&self) -> Result<()> {
+    pub fn recording(&self) -> Result<()> {
         let mut state = self.0.pending.lock().unwrap();
         ensure!(
             state.pending.is_some() && state.phase == HolderPhase::Queued,
@@ -377,7 +371,7 @@ impl AuthControlHolder {
         state.phase = HolderPhase::Recording;
         Ok(())
     }
-    pub(crate) async fn write<F: Future<Output = Result<()>>>(
+    pub async fn write<F: Future<Output = Result<()>>>(
         self,
         control: String,
         write: impl FnOnce(String) -> F,
@@ -410,24 +404,24 @@ impl AuthControlHolder {
         let mut owned = selected.take_all()?;
         Ok(owned.pop().expect("one validated native auth control"))
     }
-    #[cfg(test)]
-    pub(crate) fn join_observation(&self) -> ControlJoinObservation {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn join_observation(&self) -> ControlJoinObservation {
         self.0.joins.clone()
     }
 }
 
-impl northstar_stream::outbound::AuthControl for AuthControlHolder {
+impl crate::outbound::AuthControl for AuthControlHolder {
     fn validate_control(&self, control: &str) -> Result<()> {
         AuthControlHolder::validate_control(self, control)
     }
 }
 
 /// Reads this transport's holder back from a session outbound item.
-pub(crate) trait OutboundAuthPublication {
+pub trait OutboundAuthPublication {
     fn auth_publication(&self) -> Option<&AuthControlHolder>;
 }
 
-impl OutboundAuthPublication for northstar_stream::outbound::OutboundItem {
+impl OutboundAuthPublication for crate::outbound::OutboundItem {
     fn auth_publication(&self) -> Option<&AuthControlHolder> {
         let control: &dyn std::any::Any = self.auth_control()?;
         control.downcast_ref()
@@ -441,20 +435,20 @@ enum TakeProof {
     NativeWritten,
     BoshAccepted(u64),
 }
-pub(crate) struct SelectedControls {
+pub struct SelectedControls {
     holders: Vec<AuthControlHolder>,
     exposed: bool,
     proof: Option<TakeProof>,
 }
 impl SelectedControls {
-    pub(crate) fn empty() -> Self {
+    pub fn empty() -> Self {
         Self {
             holders: Vec::new(),
             exposed: false,
             proof: None,
         }
     }
-    pub(crate) fn new<'a>(
+    pub fn new<'a>(
         items: impl IntoIterator<Item = (&'a str, Option<&'a AuthControlHolder>)>,
     ) -> Result<Self> {
         let mut holders = Vec::new();
@@ -483,22 +477,22 @@ impl SelectedControls {
             proof: None,
         })
     }
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.holders.is_empty()
     }
-    pub(crate) fn observations(&self) -> Vec<Observation> {
+    pub fn observations(&self) -> Vec<Observation> {
         self.holders
             .iter()
             .map(|holder| holder.0.observation.clone())
             .collect()
     }
-    pub(crate) fn validate_connection(&self, connection: Uuid) -> Result<()> {
+    pub fn validate_connection(&self, connection: Uuid) -> Result<()> {
         for holder in &self.holders {
             holder.validate_connection(connection)?;
         }
         Ok(())
     }
-    pub(crate) fn begin_exposure(&mut self, rid: u64) -> Result<()> {
+    pub fn begin_exposure(&mut self, rid: u64) -> Result<()> {
         ensure!(
             !self.exposed && self.proof.is_none(),
             "auth selection exposure already started"
@@ -530,7 +524,7 @@ impl SelectedControls {
         self.exposed = true;
         Ok(())
     }
-    pub(crate) fn exposure(&mut self, rid: u64, accepted: bool) -> Result<()> {
+    pub fn exposure(&mut self, rid: u64, accepted: bool) -> Result<()> {
         ensure!(
             self.exposed && self.proof.is_none(),
             "auth selection exposure continuation is late"
@@ -557,7 +551,7 @@ impl SelectedControls {
         }
         Ok(())
     }
-    pub(crate) fn take_all(mut self) -> Result<Vec<OwnedPublication>> {
+    pub fn take_all(mut self) -> Result<Vec<OwnedPublication>> {
         let proof = self
             .proof
             .ok_or_else(|| anyhow::anyhow!("auth selection has no transport continuation"))?;
@@ -608,7 +602,7 @@ impl SelectedControls {
                     managed: false,
                 },
             ));
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             {
                 let owner = &owned.last().expect("transferred auth owner").1;
                 holder.0.joins.0.lock().unwrap().transferred =
@@ -632,32 +626,44 @@ impl Drop for SelectedControls {
     }
 }
 
-pub(crate) struct OwnedPublication {
+pub struct OwnedPublication {
     pending: PendingPublication,
     holder: AuthControlHolder,
     managed: bool,
 }
 impl OwnedPublication {
-    pub(super) fn receipt(&self) -> &CredentialCommitReceipt {
+    /// The control's join observation, for saved cases that project it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn join_observation(&self) -> ControlJoinObservation {
+        self.holder.join_observation()
+    }
+
+    /// The captured effects, read without taking them.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn captured_effects(&self) -> &CapturedEffects {
+        &self.pending.effects
+    }
+
+    pub fn receipt(&self) -> &CredentialCommitReceipt {
         &self.pending.receipt
     }
-    pub(super) fn observation(&self) -> &Observation {
+    pub fn observation(&self) -> &Observation {
         &self.holder.0.observation
     }
-    pub(super) fn effects(&mut self) -> &mut CapturedEffects {
+    pub fn effects(&mut self) -> &mut CapturedEffects {
         &mut self.pending.effects
     }
-    pub(super) fn origin(&self) -> Option<FrameExecution> {
+    pub fn origin(&self) -> Option<FrameExecution> {
         self.pending.origin.clone()
     }
-    pub(super) fn connection(&self) -> Uuid {
+    pub fn connection(&self) -> Uuid {
         self.holder.0.connection
     }
-    pub(super) async fn publish<P: PublicationPort>(self, port: &mut P) -> PublicationResult {
+    pub async fn publish<P: PublicationPort>(self, port: &mut P) -> PublicationResult {
         self.run(|mut owner| async move { publish_owned(&mut owner, port).await })
             .await
     }
-    pub(super) fn run<F: Future<Output = PublicationResult>>(
+    pub fn run<F: Future<Output = PublicationResult>>(
         mut self,
         run: impl FnOnce(Self) -> F,
     ) -> impl Future<Output = PublicationResult> {
@@ -676,7 +682,7 @@ impl OwnedPublication {
 
 /// Narrow auth effects only. The production adapter supplies actual service,
 /// exact-route, caps and notification operations; fakes drive this same order.
-pub(super) trait PublicationPort: Send {
+pub trait PublicationPort: Send {
     fn connection(&self) -> Uuid;
     fn publish(
         &mut self,
@@ -754,7 +760,7 @@ async fn publish_owned<P: PublicationPort>(
         return PublicationResult::RouteRejected;
     }
     if let Some(origin) = &origin {
-        origin.enter(super::frame_execution::Stage::CapsPublication);
+        origin.enter(crate::frame_execution::Stage::CapsPublication);
     }
     observation.effects(|facts| facts.caps_entered = true);
     port.caps(effects.caps.take()).await;
@@ -762,7 +768,7 @@ async fn publish_owned<P: PublicationPort>(
     if let (Some(intent), Some(epoch)) = (&effects.notification, epoch) {
         port.notify_local(intent, epoch);
         if let Some(origin) = &origin {
-            origin.enter(super::frame_execution::Stage::ReplacementNotification);
+            origin.enter(crate::frame_execution::Stage::ReplacementNotification);
         }
         observation.effects(|facts| facts.notification_entered = true);
         let result = port.notify_remote(intent, epoch).await;
@@ -854,17 +860,17 @@ impl<F> Drop for PublicationRunner<F> {
 }
 
 pub struct AuthReplies {
-    pub(super) replies: Vec<String>,
-    pub(super) holder: AuthControlHolder,
+    pub replies: Vec<String>,
+    pub holder: AuthControlHolder,
 }
 impl AuthReplies {
-    pub(crate) fn into_parts(self) -> (Vec<String>, AuthControlHolder) {
+    pub fn into_parts(self) -> (Vec<String>, AuthControlHolder) {
         (self.replies, self.holder)
     }
 }
 
-#[cfg(test)]
-pub(crate) use tests::{fixture_bound_control, fixture_control, publish_unbound_fixture};
+#[cfg(any(test, feature = "test-support"))]
+pub mod fixture;
 
 #[cfg(test)]
 mod tests;

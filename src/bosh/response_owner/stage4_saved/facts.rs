@@ -1,6 +1,6 @@
 //! Exact bounded projections of actual BOSH owner and selected-holder reads.
 use super::*;
-use crate::xmpp::auth_publication::stage4_saved::facts::{
+use crate::xmpp::stage4_auth_publication::facts::{
     association, control_joins, count, id, mix, nullable, source,
 };
 use northstar_delivery_core::bosh_ownership as actual;

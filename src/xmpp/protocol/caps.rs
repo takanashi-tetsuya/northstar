@@ -482,7 +482,7 @@ impl ProtocolSession {
     /// the replacement transport.
     pub(crate) async fn rebind_captured_caps_observation(
         &self,
-        intent: Option<crate::xmpp::auth_publication::CapsIntent>,
+        intent: Option<northstar_stream::auth_publication::CapsIntent>,
     ) {
         let Some(intent) = intent else {
             return;

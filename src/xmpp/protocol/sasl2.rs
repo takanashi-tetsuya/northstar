@@ -466,7 +466,9 @@ impl ProtocolSession {
                 Ok(_) => resume_xml = northstar_xep_0198::build_failed_str("undefined-condition"),
                 Err(error)
                     if self.pending_credential_commit.is_some()
-                        || crate::xmpp::auth_publication::credential_handoff_failed(&error) =>
+                        || northstar_stream::auth_publication::credential_handoff_failed(
+                            &error,
+                        ) =>
                 {
                     // An actual receipt was retained or its same-attempt
                     // ownership handoff failed. Neither that contradiction nor
@@ -651,7 +653,7 @@ impl ProtocolSession {
             (
                 String,
                 northstar_auth_application::authentication::CredentialCommitReceipt,
-                crate::xmpp::auth_publication::CredentialAttempt,
+                northstar_stream::auth_publication::CredentialAttempt,
             ),
             &'static str,
         >,

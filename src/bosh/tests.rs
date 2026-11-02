@@ -737,7 +737,7 @@ fn resume_auth_control_marker_is_atomic_and_control_only() {
             replay: vec!["<message id='replay'/>".to_owned()],
             activate_route,
             auth_publication: activate_route.then(|| {
-                crate::xmpp::auth_publication::fixture_control(
+                northstar_stream::auth_publication::fixture::fixture_control(
                     "<resumed xmlns='urn:xmpp:sm:3'/>",
                     uuid::Uuid::from_u128(701),
                 )

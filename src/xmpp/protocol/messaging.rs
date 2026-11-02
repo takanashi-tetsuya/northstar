@@ -2,7 +2,6 @@
 
 use super::{Action, ProtocolSession};
 use crate::state::AppState;
-use crate::xmpp::frame_execution::Stage;
 use anyhow::Result;
 #[cfg(test)]
 use northstar_abuse_policy::message_admission::MessageAdmissionStart;
@@ -27,6 +26,7 @@ use northstar_message_xmpp::messaging as handlers;
 #[cfg(test)]
 use northstar_message_xmpp::messaging::preparation_fixture::*;
 use northstar_message_xmpp::ports::{MessageFrameStage, MessageOutcome, MessageSession};
+use northstar_stream::frame_execution::Stage;
 #[cfg(test)]
 use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::Node;
@@ -143,13 +143,13 @@ impl ProtocolSession {
         child: C,
     ) -> (
         DirectOperationHandle,
-        impl Future<Output = std::result::Result<T, crate::xmpp::frame_execution::FrameFailure>>,
+        impl Future<Output = std::result::Result<T, northstar_stream::frame_execution::FrameFailure>>,
     )
     where
         C: FnOnce(DirectOperationHandle) -> F,
         F: Future<Output = Result<T>>,
     {
-        let execution = crate::xmpp::frame_execution::FrameExecution::new(
+        let execution = northstar_stream::frame_execution::FrameExecution::new(
             northstar_stream::transport::ClientTransport::Tcp,
             direct_preparation_tests::FRAME_MESSAGE,
         );

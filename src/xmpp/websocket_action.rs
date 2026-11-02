@@ -249,9 +249,9 @@ pub(super) async fn apply(
 async fn write_auth_control(
     socket: &mut WebSocket,
     control: String,
-    holder: super::auth_publication::AuthControlHolder,
+    holder: northstar_stream::auth_publication::AuthControlHolder,
     cancellation: &WebSocketSendCancellation<'_>,
-) -> Option<super::auth_publication::OwnedPublication> {
+) -> Option<northstar_stream::auth_publication::OwnedPublication> {
     holder
         .write(control, |control| async move {
             if websocket_send_live(socket, Message::Text(control.into()), cancellation).await {

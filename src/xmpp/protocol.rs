@@ -144,7 +144,7 @@ pub struct ProtocolSession {
     /// never used as an authentication bypass.
     secure_transport: bool,
     transport: ClientTransport,
-    frame_executions: super::frame_execution::SessionExecutions,
+    frame_executions: northstar_stream::frame_execution::SessionExecutions,
     stream_limits: Option<StreamLimits>,
     pub(crate) peer_ip: IpAddr,
     connected_at: std::time::Instant,
@@ -201,7 +201,8 @@ pub struct ProtocolSession {
     /// until the transport confirms the first terminal success/resumed frame;
     /// failure paths must close rather than manufacture a contradictory SASL
     /// failure or execute the commit a second time.
-    pub(crate) pending_credential_commit: Option<super::auth_publication::KnownCredentialOwner>,
+    pub(crate) pending_credential_commit:
+        Option<northstar_stream::auth_publication::KnownCredentialOwner>,
     channel_bindings: Option<northstar_auth_core::ChannelBindings>,
     /// Bare JIDs authenticated by the optional C2S client-certificate PKIX
     /// verifier and id-on-xmppAddr SAN parser for this exact TLS connection.
@@ -242,7 +243,7 @@ pub struct ProtocolSession {
 struct SessionAuthPublication<'a> {
     session: &'a mut ProtocolSession,
 }
-impl super::auth_publication::PublicationPort for SessionAuthPublication<'_> {
+impl northstar_stream::auth_publication::PublicationPort for SessionAuthPublication<'_> {
     fn connection(&self) -> uuid::Uuid {
         self.session.connection_id
     }
@@ -258,7 +259,7 @@ impl super::auth_publication::PublicationPort for SessionAuthPublication<'_> {
     }
     fn epoch_and_mapping(
         &mut self,
-        route: &super::auth_publication::BoundRoute,
+        route: &northstar_stream::auth_publication::BoundRoute,
         epoch: Option<i64>,
     ) -> bool {
         if self.session.registered_key.as_deref() != Some(route.key.as_str())
@@ -282,7 +283,7 @@ impl super::auth_publication::PublicationPort for SessionAuthPublication<'_> {
         }
         current
     }
-    fn activate(&mut self, route: &super::auth_publication::BoundRoute) -> bool {
+    fn activate(&mut self, route: &northstar_stream::auth_publication::BoundRoute) -> bool {
         self.session.state.activate_session_if_current(
             &route.key,
             route.connection,
@@ -292,10 +293,14 @@ impl super::auth_publication::PublicationPort for SessionAuthPublication<'_> {
             &route.disconnect,
         )
     }
-    async fn caps(&mut self, intent: Option<super::auth_publication::CapsIntent>) {
+    async fn caps(&mut self, intent: Option<northstar_stream::auth_publication::CapsIntent>) {
         self.session.rebind_captured_caps_observation(intent).await;
     }
-    fn notify_local(&mut self, intent: &super::auth_publication::NotificationIntent, epoch: i64) {
+    fn notify_local(
+        &mut self,
+        intent: &northstar_stream::auth_publication::NotificationIntent,
+        epoch: i64,
+    ) {
         for (other_key, session) in self.session.state.session_entries_for(&intent.account) {
             if other_key != intent.excluded_key
                 && session.user_id == intent.user
@@ -308,7 +313,7 @@ impl super::auth_publication::PublicationPort for SessionAuthPublication<'_> {
     }
     async fn notify_remote(
         &mut self,
-        intent: &super::auth_publication::NotificationIntent,
+        intent: &northstar_stream::auth_publication::NotificationIntent,
         epoch: i64,
     ) -> Result<()> {
         self.session
@@ -323,10 +328,10 @@ impl super::auth_publication::PublicationPort for SessionAuthPublication<'_> {
     }
     fn rejected(
         &mut self,
-        result: super::frame_execution::PublicationResult,
+        result: northstar_stream::frame_execution::PublicationResult,
         error: Option<&anyhow::Error>,
     ) {
-        use super::frame_execution::PublicationResult;
+        use northstar_stream::frame_execution::PublicationResult;
         match result {
             PublicationResult::BackendFailure => {
                 self.session
@@ -363,7 +368,7 @@ impl ProtocolSession {
     pub(crate) async fn process_frame(
         &mut self,
         frame: &str,
-    ) -> std::result::Result<Action, super::frame_execution::FrameFailure> {
+    ) -> std::result::Result<Action, northstar_stream::frame_execution::FrameFailure> {
         let execution = self.frame_executions.begin(self.transport, frame);
         execution.run(self.handle(frame)).await
     }
@@ -394,8 +399,8 @@ impl ProtocolSession {
     pub(super) fn prepare_credential_attempt(
         &self,
         kind: northstar_auth_application::authentication::publication::CredentialKind,
-    ) -> Result<super::auth_publication::CredentialAttempt> {
-        super::auth_publication::CredentialAttempt::new(
+    ) -> Result<northstar_stream::auth_publication::CredentialAttempt> {
+        northstar_stream::auth_publication::CredentialAttempt::new(
             self.frame_executions.auth_origin(),
             self.connection_id,
             kind,
@@ -405,7 +410,7 @@ impl ProtocolSession {
     pub(super) fn retain_credential_commit(
         &mut self,
         receipt: northstar_auth_application::authentication::CredentialCommitReceipt,
-        attempt: super::auth_publication::CredentialAttempt,
+        attempt: northstar_stream::auth_publication::CredentialAttempt,
     ) -> Result<()> {
         let owner = attempt.into_owner(receipt)?;
         anyhow::ensure!(
@@ -423,8 +428,8 @@ impl ProtocolSession {
         &mut self,
         control: &str,
         resumed: bool,
-    ) -> Result<super::auth_publication::AuthControlHolder> {
-        use super::auth_publication::{
+    ) -> Result<northstar_stream::auth_publication::AuthControlHolder> {
+        use northstar_stream::auth_publication::{
             BoundRoute, CapsIntent, CapturedEffects, NotificationIntent, RouteIntent,
         };
         let (route, caps, notification) = if let Some(key) = self.registered_key.clone() {
@@ -482,7 +487,7 @@ impl ProtocolSession {
     /// session receipt/frame slot is consulted after successful transport.
     pub(crate) async fn publish_committed_authentication_and_route(
         &mut self,
-        owner: super::auth_publication::OwnedPublication,
+        owner: northstar_stream::auth_publication::OwnedPublication,
     ) -> bool {
         let origin = owner.origin();
         let mut port = SessionAuthPublication { session: self };

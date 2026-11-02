@@ -45,7 +45,7 @@ const mutations = [
   ['frame auth slot replaced', 'frame', source => source.replace('auth_receipt: std::sync::Mutex::new(None)', 'auth_receipt: unrelated_slot()')],
   ['frame credential history omitted', 'frame', source => source.replace('credential_attempts: std::sync::Mutex::new(CredentialAttempts::default()),', '')],
   ['frame credential history replaced', 'frame', source => source.replace('credential_attempts: std::sync::Mutex::new(CredentialAttempts::default())', 'credential_attempts: unrelated_slot()')],
-  ['async frame observation starts too late', 'frame', source => source.replace('pub(super) fn run<T>', 'pub(super) async fn run<T>')],
+  ['async frame observation starts too late', 'frame', source => source.replace('pub fn run<T>', 'pub async fn run<T>')],
   ['child not destroyed before terminal', 'frame', source => source.replace('drop(self.child.take());', '')],
   ['protocol retained begin removed', 'messaging', source => source.replace('.begin_message_admission_retained(&request, &retained)', '.legacy_begin(&request, &retained)')],
   ['shared retained finalization removed', 'service', source => source.replace('.accept_message_admission_retained(&lease, &retained)', '.legacy_finalize(&lease, &retained)')],
@@ -101,8 +101,8 @@ rejectsDirect('saved frame replaces its supplied identity', 'frame',
   /Self::initialize\(transport, frame, operation_id\)/g,
   'Self::initialize(transport, frame, Uuid::nil())');
 rejectsDirect('saved frame constructor becomes production code', 'frame',
-  /#\[cfg\(test\)\]\s+pub\(super\) fn for_saved_case/g,
-  'pub(super) fn for_saved_case');
+  /#\[cfg\(any\(test, feature = "test-support"\)\)\]\s+pub fn for_saved_case/g,
+  'pub fn for_saved_case');
 rejectsDirect('shared frame replaces the runtime sequence', 'frame',
   /sequence: NEXT_SEQUENCE\.fetch_add\(1, Ordering::Relaxed\)/g,
   'sequence: 1');

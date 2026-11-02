@@ -5,9 +5,9 @@ import { readProductionModule, readRoleSplitFile } from './lib/source-module.mjs
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = {
-  frame: 'src/xmpp/frame_execution.rs',
+  frame: 'crates/edges/northstar-stream/src/frame_execution.rs',
   authFacts: 'crates/contexts/session/northstar-session-core/src/publication.rs',
-  authOwner: 'src/xmpp/auth_publication.rs',
+  authOwner: 'crates/edges/northstar-stream/src/auth_publication.rs',
   authService: 'crates/contexts/auth/northstar-auth-application/src/authentication.rs',
   authCredential: 'crates/contexts/auth/northstar-auth-core/src/credential.rs',
   authDb: 'crates/contexts/auth/northstar-auth-postgres/src/authentication.rs',
@@ -576,7 +576,7 @@ export function verifyAuthPublicationBoundaries(sources) {
   const normalize = value => compact(value).replace(/,([)}])/g, '$1').replace(/,$/, '');
   const method = (source, name) => normalize(body(productionModule(source), `(?:async\\s+)?fn\\s+${name}\\b`));
   const facts = productionModule(authFacts).replaceAll(CROSS_CRATE_TEST_ONLY, '#[cfg(test)]');
-  const owner = productionModule(authOwner);
+  const owner = productionModule(authOwner).replaceAll(CROSS_CRATE_TEST_ONLY, '#[cfg(test)]');
   const observation = body(facts, 'impl\\s+Observation\\b');
   const invocation = body(facts, "impl\\s+Invocation<'_>");
   const receipt = normalize(body(authCredential, 'pub\\s+struct\\s+CredentialCommitReceipt\\b'));
@@ -594,7 +594,7 @@ export function verifyAuthPublicationBoundaries(sources) {
       !new RegExp(`\\bimpl\\b[^{};]*\\b(?:Clone|Copy)\\s+for\\s+${name}\\b`).test(code),
     `auth ${name} cannot derive or implement Clone or Copy`);
   }
-  requireBoundary(normalize(body(owner, 'pub\\(crate\\)\\s+struct\\s+OwnedPublication\\b')) ===
+  requireBoundary(normalize(body(owner, 'pub\\s+struct\\s+OwnedPublication\\b')) ===
     'pending:PendingPublication,holder:AuthControlHolder,managed:bool' &&
     normalize(body(owner, 'struct\\s+PendingPublication\\b')) ===
     'receipt:CredentialCommitReceipt,origin:Option<FrameExecution>,effects:CapturedEffects',
@@ -605,7 +605,7 @@ export function verifyAuthPublicationBoundaries(sources) {
     [owner, 'AuthControlHolder', 'impl\\s+AuthControlHolder\\b',
       ['validate_connection', 'validates', 'validate_control', 'recording', 'write', 'join_observation'], /\bAuthControlHolder\s*\(/g, 2, 0],
     [owner, 'OwnedPublication', 'impl\\s+OwnedPublication\\b',
-      ['receipt', 'observation', 'effects', 'origin', 'connection', 'publish', 'run'], /\bOwnedPublication\s*\{/g, 4, 0],
+      ['join_observation', 'captured_effects', 'receipt', 'observation', 'effects', 'origin', 'connection', 'publish', 'run'], /\bOwnedPublication\s*\{/g, 4, 0],
     // Three Self-plus-brace tokens: empty's bare-Self return head and the
     // two constructors, whose exact method locations are pinned below.
     [owner, 'SelectedControls', 'impl\\s+SelectedControls\\b',
@@ -681,7 +681,7 @@ export function verifyAuthPublicationBoundaries(sources) {
     transportFacts.includes('ifprevious==rid'),
     'auth transport observations must remain monotone and phase checked');
   const retain = method(protocol, 'retain_credential_commit');
-  requireBoundary(method(protocol, 'prepare_credential_attempt') === 'super::auth_publication::CredentialAttempt::new(self.frame_executions.auth_origin(),self.connection_id,kind)',
+  requireBoundary(method(protocol, 'prepare_credential_attempt') === 'northstar_stream::auth_publication::CredentialAttempt::new(self.frame_executions.auth_origin(),self.connection_id,kind)',
     'auth originating frame must be captured before credential service polling');
   ordered(retain, ['letowner=attempt.into_owner(receipt)?;',
     'self.pending_credential_commit.is_none()', 'ifletSome(origin)=owner.origin()',
@@ -705,7 +705,7 @@ export function verifyAuthPublicationBoundaries(sources) {
     'PendingPublication{receipt,origin:self.origin.take(),effects}'],
     'auth final control seal must consume its exact receipt with private length and SHA-256 binding');
   const holder = body(owner, 'impl\\s+AuthControlHolder\\b');
-  requireBoundary(/#\[cfg\(test\)\]\s*pub\(crate\)\s+fn\s+join_observation\s*\(\s*&self\s*\)\s*->\s*ControlJoinObservation\s*\{/.test(holder) &&
+  requireBoundary(/#\[cfg\(test\)\]\s*pub\s+fn\s+join_observation\s*\(\s*&self\s*\)\s*->\s*ControlJoinObservation\s*\{/.test(holder) &&
     method(holder, 'join_observation') === 'self.0.joins.clone()',
     'auth holder join observation must remain a test-only read-only clone of its actual captured joins');
   requireBoundary(method(holder, 'validates') === 'self.0.length==control.len()&&self.0.digest==<[u8;32]>::from(Sha256::digest(control.as_bytes()))',
@@ -749,7 +749,7 @@ export function verifyAuthPublicationBoundaries(sources) {
   ]) requireBoundary(sequence.includes(fragment), `auth ${result} publication classification must remain distinct`);
   requireBoundary(sequence.includes('port.notification_deferred(&error);returnPublicationResult::CompletedWithDeferredNotification;') &&
     !/timeout|spawn|select!/.test(sequence), 'auth notification must stay visibly deferred without a new publication deadline');
-  const adapter = body(protocol, "impl\\s+super::auth_publication::PublicationPort\\s+for\\s+SessionAuthPublication<'_>");
+  const adapter = body(protocol, "impl\\s+northstar_stream::auth_publication::PublicationPort\\s+for\\s+SessionAuthPublication<'_>");
   requireBoundary(method(adapter, 'publish') === 'self.session.state.authentication_service().publish_credential_commit_observed(invocation).await',
     'auth production port must invoke the actual observed service');
   const mapping = method(adapter, 'epoch_and_mapping');
@@ -935,7 +935,7 @@ export function verifyAuthPublicationBoundaries(sources) {
       `credential ${kind} ingress must capture its original attempt before service polling`);
   }
   requireBoundary(method(owner, 'credential_handoff_failed') === 'error.is::<CredentialHandoffIntegrity>()' &&
-    inline.includes('Err(error)ifself.pending_credential_commit.is_some()||crate::xmpp::auth_publication::credential_handoff_failed(&error)=>{'),
+    inline.includes('Err(error)ifself.pending_credential_commit.is_some()||northstar_stream::auth_publication::credential_handoff_failed(&error)=>{'),
     'credential contradictory returned success must close through the existing internal error branch');
   requireBoundary(inline.includes('ifbind_plan.is_none()&&!unbound_state_committed{') &&
     count(inline, '.commit_sasl2_unbound_state(&fast_plan,&user,expected_auth_generation).await?') === 2 &&
@@ -949,10 +949,10 @@ export function verifyAuthPublicationBoundaries(sources) {
     [facts, 'CredentialAttemptJoin', 'pubattempt:Uuid,pubframe:Uuid,pubconnection:Uuid,pubordinal:u8,pubkind:CredentialKind'],
     [facts, 'CredentialJoins', 'pubowner:CredentialAttemptJoin,pubconstructed_receipt:Option<Uuid>,pubreturned_receipt:Option<Uuid>,pubtransferred_receipt:Option<Uuid>'],
     [facts, 'PublicationJoins', 'pubcontrol:Uuid,pubframe:Option<Uuid>,pubreceipt:Uuid,pubcredential:Option<CredentialAttemptJoin>,pubbegun_receipt:Option<Uuid>,pubbound_effects:bool,pubnotification_expected:bool'],
-    [owner, 'ControlAssociation', 'pub(crate)control:Uuid,pub(crate)connection:Uuid,pub(crate)frame:Option<Uuid>,pub(crate)receipt:Uuid,pub(crate)length:usize,pub(crate)digest:[u8;32],pub(crate)publication:northstar_auth_application::authentication::publication::PublicationJoins'],
-    [owner, 'ControlJoins', 'pub(crate)introduced:Option<ControlAssociation>,pub(crate)transferred:Option<ControlAssociation>'],
+    [owner, 'ControlAssociation', 'pubcontrol:Uuid,pubconnection:Uuid,pubframe:Option<Uuid>,pubreceipt:Uuid,publength:usize,pubdigest:[u8;32],pubpublication:northstar_auth_application::authentication::publication::PublicationJoins'],
+    [owner, 'ControlJoins', 'pubintroduced:Option<ControlAssociation>,pubtransferred:Option<ControlAssociation>'],
   ]) {
-    const declaration = (source === facts ? 'pub' : 'pub\\(crate\\)') + '\\s+struct\\s+' + name + '\\b';
+    const declaration = 'pub\\s+struct\\s+' + name + '\\b';
     requireBoundary(testOnlyItem(source, declaration) && normalize(body(source, declaration)) === fields,
       `auth ${name} must remain test-only association facts without retained authority`);
   }
@@ -982,11 +982,12 @@ export function verifyAuthPublicationBoundaries(sources) {
     method(observation, 'returned_receipt').includes('#[cfg(test)]begun_receipt:None') &&
     begin.includes('state.snapshot.publication=Knowledge::BeforeCommit;#[cfg(test)]{state.begun_receipt=Some(receipt.publication_identity());}Ok(Invocation{observation:self,receipt})'),
     'auth begun receipt observation must remain test-only and follow actual publication acceptance');
-  requireBoundary(testOnlyItem(owner, 'pub\\(crate\\)\\s+struct\\s+ControlJoinObservation\\(Arc<Mutex<ControlJoins>>\\);') &&
+  requireBoundary(testOnlyItem(owner, 'pub\\s+struct\\s+ControlJoinObservation\\(Arc<Mutex<ControlJoins>>\\);') &&
     testOnlyItem(owner, 'impl\\s+ControlJoinObservation\\b') &&
     normalize(body(owner, 'impl\\s+ControlJoinObservation\\b')) ===
-      'pub(crate)fnsnapshot(&self)->ControlJoins{*self.0.lock().unwrap()}',
-    'auth control join reader must retain only test facts and a read-only snapshot');
+      'pubfnsnapshot(&self)->ControlJoins{*self.0.lock().unwrap()}' +
+      'pubfnedit(&self,edit:implFnOnce(&mutControlJoins)){edit(&mutself.0.lock().unwrap());}',
+    'auth control join reader must retain only test facts, a snapshot and the saved-case damage hook');
   requireBoundary(testOnlyItem(owner, 'fn\\s+control_association\\b') &&
     method(owner, 'control_association') ===
       'ControlAssociation{control:holder.id,connection:holder.connection,frame:pending.origin.as_ref().map(FrameExecution::operation_id),receipt:pending.receipt.publication_identity(),length:holder.length,digest:holder.digest,publication:holder.observation.joins()}',
@@ -1018,11 +1019,11 @@ export function verifyBoshSelectionObservations({ boshResponse }) {
     ['SelectionReadStatus', 'enum', 'pub(super)', 'Clone,Copy,Debug,Eq,PartialEq',
       'Complete,Incomplete{omitted_items:usize,missing_auth_associations:usize,connection_changed:bool}'],
     ['SelectedItemSnapshot', 'struct', 'pub(super)', 'Clone,Copy,Debug,Eq,PartialEq',
-      'pub(super)ordinal:usize,pub(super)source:Option<northstar_stream::outbound::TransportOwnershipSource>,pub(super)utf8_length:usize,pub(super)sha256:[u8;32],pub(super)auth_marker:bool,pub(super)sealed_association:Option<crate::xmpp::auth_publication::ControlAssociation>,pub(super)holder_joins:Option<crate::xmpp::auth_publication::ControlJoins>'],
+      'pub(super)ordinal:usize,pub(super)source:Option<northstar_stream::outbound::TransportOwnershipSource>,pub(super)utf8_length:usize,pub(super)sha256:[u8;32],pub(super)auth_marker:bool,pub(super)sealed_association:Option<northstar_stream::auth_publication::ControlAssociation>,pub(super)holder_joins:Option<northstar_stream::auth_publication::ControlJoins>'],
     ['SelectionSnapshot', 'struct', 'pub(super)', 'Clone,Copy,Debug,Eq,PartialEq',
       'pub(super)session:uuid::Uuid,pub(super)rid:u64,pub(super)fingerprint:[u8;32],pub(super)first_validated_connection:Option<uuid::Uuid>,pub(super)validated_connection:Option<uuid::Uuid>,pub(super)selected_count:usize,pub(super)status:SelectionReadStatus,pub(super)items:[Option<SelectedItemSnapshot>;MAX_SELECTED_FACTS]'],
     ['SelectedItemRead', 'struct', '', '',
-      'at_selection:SelectedItemSnapshot,joins:Option<crate::xmpp::auth_publication::ControlJoinObservation>'],
+      'at_selection:SelectedItemSnapshot,joins:Option<northstar_stream::auth_publication::ControlJoinObservation>'],
     ['SelectionState', 'struct', '', '',
       'session:uuid::Uuid,rid:u64,fingerprint:[u8;32],first_validated_connection:Option<uuid::Uuid>,validated_connection:Option<uuid::Uuid>,selected_count:usize,status:SelectionReadStatus,items:[Option<SelectedItemRead>;MAX_SELECTED_FACTS]'],
   ]) {
@@ -1172,7 +1173,7 @@ export function verifyExecutionBoundaries(sources) {
   // the inner async wrapper still starts the existing timer on its first poll.
   // Result and destruction checks follow the actual runner, not an unused
   // legacy async body. These remain lexical drift checks, not execution proof.
-  const run = compact(body(frame, 'pub\\(super\\)\\s+fn\\s+run\\b'));
+  const run = compact(body(frame, 'pub\\s+fn\\s+run\\b'));
   ordered(run, ['letobservation=Observation::new(',
     'letbudget=self.0.policy.budget;', 'FrameRunner{',
     'child:Some(Box::pin(asyncmove{tokio::time::timeout(budget,future).await}))'],

@@ -2790,10 +2790,12 @@ dependencies = [
  "chrono",
  "dashmap",
  "futures",
+ "northstar-abuse-policy",
  "northstar-auth-application",
  "northstar-auth-core",
  "northstar-delivery-core",
  "northstar-federation-core",
+ "northstar-message-application",
  "northstar-message-core",
  "northstar-room-application",
  "northstar-room-core",
@@ -2806,11 +2808,15 @@ dependencies = [
  "northstar-xmpp-types",
  "rand 0.8.7",
  "roxmltree",
+ "serde_json",
+ "sha2",
  "tokio",
  "tokio-rustls",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

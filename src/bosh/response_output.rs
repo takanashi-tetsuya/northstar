@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) fn superseded_bosh_message_id(error: &anyhow::Error) -> Option<uuid::Uuid> {
     error
-        .downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>()
+        .downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>()
         .map(|superseded| superseded.message_id)
 }
 
@@ -37,7 +37,7 @@ pub(super) fn bosh_response_bytes(
 }
 
 pub(super) fn queue_bosh_resume_payload(
-    output: &mut VecDeque<crate::xmpp::outbound::OutboundItem>,
+    output: &mut VecDeque<northstar_stream::outbound::OutboundItem>,
     output_bytes: &mut usize,
     max_output_stanzas: usize,
     max_output_bytes: usize,
@@ -78,7 +78,8 @@ pub(super) fn queue_bosh_resume_payload(
     }
 
     let hold = Arc::new(transient_capacity);
-    let control = crate::xmpp::outbound::OutboundItem::resume_fragment(control, Arc::clone(&hold));
+    let control =
+        northstar_stream::outbound::OutboundItem::resume_fragment(control, Arc::clone(&hold));
     let control = if activate_route {
         let Some(holder) = auth_publication else {
             return false;
@@ -95,7 +96,7 @@ pub(super) fn queue_bosh_resume_payload(
     };
     output.push_back(control);
     for stanza in post_control.into_iter().chain(replay) {
-        output.push_back(crate::xmpp::outbound::OutboundItem::resume_fragment(
+        output.push_back(northstar_stream::outbound::OutboundItem::resume_fragment(
             stanza,
             Arc::clone(&hold),
         ));
@@ -108,18 +109,18 @@ pub(super) fn queue_bosh_resume_payload(
 /// superseded C2S item is the only one discarded; every other stanza and its
 /// receipt keep their original relative order for response reconstruction.
 pub(super) fn restore_response_items(
-    output: &mut VecDeque<crate::xmpp::outbound::OutboundItem>,
+    output: &mut VecDeque<northstar_stream::outbound::OutboundItem>,
     output_bytes: &mut usize,
-    selected: VecDeque<crate::xmpp::outbound::OutboundItem>,
+    selected: VecDeque<northstar_stream::outbound::OutboundItem>,
     superseded: Option<uuid::Uuid>,
 ) -> bool {
     restore_response_items_observed(output, output_bytes, selected, superseded, |_| {})
 }
 
 pub(super) fn restore_response_items_observed(
-    output: &mut VecDeque<crate::xmpp::outbound::OutboundItem>,
+    output: &mut VecDeque<northstar_stream::outbound::OutboundItem>,
     output_bytes: &mut usize,
-    selected: VecDeque<crate::xmpp::outbound::OutboundItem>,
+    selected: VecDeque<northstar_stream::outbound::OutboundItem>,
     superseded: Option<uuid::Uuid>,
     mut on_removed: impl FnMut(usize),
 ) -> bool {
@@ -142,7 +143,7 @@ pub(super) fn restore_response_items_observed(
 }
 
 pub(super) fn take_response_payload(
-    output: &mut VecDeque<crate::xmpp::outbound::OutboundItem>,
+    output: &mut VecDeque<northstar_stream::outbound::OutboundItem>,
     output_bytes: &mut usize,
     max_response_bytes: usize,
     governor: &Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
@@ -231,21 +232,21 @@ pub(super) fn replay_response(
 ) -> Option<(
     BoshHttpResponse,
     bool,
-    Arc<crate::xmpp::outbound::BoshResponseOwnership>,
+    Arc<northstar_stream::outbound::BoshResponseOwnership>,
 )> {
     let cached = replay.iter_mut().find(|cached| cached.rid == request.rid)?;
     if cached.fingerprint != request.fingerprint {
         return Some((
             terminal_response("bad-request"),
             true,
-            Arc::new(crate::xmpp::outbound::BoshResponseOwnership::default()),
+            Arc::new(northstar_stream::outbound::BoshResponseOwnership::default()),
         ));
     }
     if cached.replays >= MAX_RESPONSE_REPLAYS {
         return Some((
             terminal_response("policy-violation"),
             true,
-            Arc::new(crate::xmpp::outbound::BoshResponseOwnership::default()),
+            Arc::new(northstar_stream::outbound::BoshResponseOwnership::default()),
         ));
     }
     cached.replays += 1;

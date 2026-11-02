@@ -295,13 +295,13 @@ fn actual_prepared_router_binding_rejects_changed_live_authority_before_consumpt
             _ => request.message_type = "headline",
         }
         assert!(handoff
-            .bind_route::<_, crate::xmpp::outbound::OutboundItem>(&request)
+            .bind_route::<_, northstar_stream::outbound::OutboundItem>(&request)
             .is_err());
         assert_eq!(owner.snapshot(), before);
     }
     let (owner, handoff) = handoff();
     let (item, witness) = handoff
-        .bind_route::<_, crate::xmpp::outbound::OutboundItem>(&route_request::<()>(&[]))
+        .bind_route::<_, northstar_stream::outbound::OutboundItem>(&route_request::<()>(&[]))
         .unwrap();
     assert_eq!(item.stanza, "private-live-stanza");
     assert!(owner.snapshot().reservation.is_none());
@@ -310,11 +310,11 @@ fn actual_prepared_router_binding_rejects_changed_live_authority_before_consumpt
 
 #[test]
 fn real_enqueue_gate_refuses_wrong_source_and_same_ids_changed_payload_without_sending() {
-    use crate::xmpp::outbound::{OutboundItem, OutboundSender, RouteEnqueue};
+    use northstar_stream::outbound::{OutboundItem, OutboundSender, RouteEnqueue};
     for changed_source in [true, false] {
         let (_, handoff) = handoff();
         let (mut item, witness) = handoff
-            .bind_route::<_, crate::xmpp::outbound::OutboundItem>(&route_request::<()>(&[]))
+            .bind_route::<_, northstar_stream::outbound::OutboundItem>(&route_request::<()>(&[]))
             .unwrap();
         let source = item.c2s_delivery().unwrap();
         let permit = witness.local_permit(source).unwrap();
@@ -346,12 +346,12 @@ fn real_enqueue_gate_refuses_wrong_source_and_same_ids_changed_payload_without_s
 
 #[test]
 fn actual_full_and_closed_refusals_preserve_item_channels_and_disconnect_order() {
-    use crate::xmpp::outbound::{OutboundSender, RouteEnqueue};
     use northstar_message_core::direct_handoff::Refusal;
+    use northstar_stream::outbound::{OutboundSender, RouteEnqueue};
     for closed in [false, true] {
         let (_, handoff) = handoff();
         let (mut item, witness) = handoff
-            .bind_route::<_, crate::xmpp::outbound::OutboundItem>(&route_request::<()>(&[]))
+            .bind_route::<_, northstar_stream::outbound::OutboundItem>(&route_request::<()>(&[]))
             .unwrap();
         let source = item.c2s_delivery().unwrap();
         let (receipt, mut receipt_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -372,16 +372,16 @@ fn actual_full_and_closed_refusals_preserve_item_channels_and_disconnect_order()
         .unwrap();
         let refused = sender.try_send_route_item(enqueue).unwrap_err();
         let item = match refused {
-            crate::xmpp::outbound::RouteSendError::Full(item) => {
+            northstar_stream::outbound::RouteSendError::Full(item) => {
                 assert!(!closed);
                 assert!(sender.backpressure_disconnect().is_cancelled());
                 item
             }
-            crate::xmpp::outbound::RouteSendError::Closed(item) => {
+            northstar_stream::outbound::RouteSendError::Closed(item) => {
                 assert!(closed);
                 item
             }
-            crate::xmpp::outbound::RouteSendError::Binding(_) => panic!("valid item rejected"),
+            northstar_stream::outbound::RouteSendError::Binding(_) => panic!("valid item rejected"),
         };
         assert_eq!(item.stanza.as_ptr(), address);
         assert_eq!(item.c2s_delivery(), Some(source));
@@ -419,13 +419,13 @@ struct RealQueuePort {
     pending_rearm: bool,
 }
 impl northstar_message_application::messaging::OnlineRoutePort for RealQueuePort {
-    type Item = crate::xmpp::outbound::OutboundItem;
-    type Session = crate::xmpp::outbound::OutboundSender;
+    type Item = northstar_stream::outbound::OutboundItem;
+    type Session = northstar_stream::outbound::OutboundSender;
     fn try_local(
         &self,
         session: &Self::Session,
-        enqueue: crate::xmpp::outbound::RouteEnqueue,
-    ) -> Result<(), crate::xmpp::outbound::RouteSendError> {
+        enqueue: northstar_stream::outbound::RouteEnqueue,
+    ) -> Result<(), northstar_stream::outbound::RouteSendError> {
         self.events.lock().unwrap().push("enqueue");
         session.try_send_route_item(enqueue)
     }
@@ -495,7 +495,7 @@ async fn real_router_sender_queue_fact_survives_a_later_outer_continuation_cance
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let targets = [(
         "bob@example.test/device".into(),
-        crate::xmpp::outbound::OutboundSender::new(tx),
+        northstar_stream::outbound::OutboundSender::new(tx),
     )];
     let mut future = Box::pin(async {
         let outcome =
@@ -569,7 +569,7 @@ async fn real_router_rearm_entry_survives_cancellation_without_claiming_release(
 fn refused_item_is_rechecked_against_the_original_live_projection_before_retry() {
     let (owner, handoff) = handoff();
     let (item, witness) = handoff
-        .bind_route::<_, crate::xmpp::outbound::OutboundItem>(&route_request::<()>(&[]))
+        .bind_route::<_, northstar_stream::outbound::OutboundItem>(&route_request::<()>(&[]))
         .unwrap();
     let port = RealQueuePort {
         owner: owner.clone(),
@@ -582,7 +582,7 @@ fn refused_item_is_rechecked_against_the_original_live_projection_before_retry()
         witness.clone(),
     );
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let sender = crate::xmpp::outbound::OutboundSender::new(tx);
+    let sender = northstar_stream::outbound::OutboundSender::new(tx);
     rx.close();
     assert!(!payload.enqueue(&port, &sender));
     let before = owner.snapshot();
@@ -590,7 +590,7 @@ fn refused_item_is_rechecked_against_the_original_live_projection_before_retry()
     // production keeps this value private between attempts.
     payload.item_mut().unwrap().stanza = "same IDs, substituted payload".into();
     let (tx, mut accepted_rx) = tokio::sync::mpsc::channel(1);
-    let next = crate::xmpp::outbound::OutboundSender::new(tx);
+    let next = northstar_stream::outbound::OutboundSender::new(tx);
     assert!(!payload.enqueue(&port, &next));
     assert!(payload.binding_rejected());
     assert_eq!(owner.snapshot(), before);
@@ -645,10 +645,10 @@ fn live_preparation_comparison_rejects_substituted_projection_before_direct_effe
 
 #[test]
 fn held_enqueue_permit_cannot_start_after_frame_retirement() {
-    use crate::xmpp::outbound::{OutboundSender, RouteEnqueue, RouteSendError};
+    use northstar_stream::outbound::{OutboundSender, RouteEnqueue, RouteSendError};
     let (owner, handoff) = handoff();
     let (item, witness) = handoff
-        .bind_route::<_, crate::xmpp::outbound::OutboundItem>(&route_request::<()>(&[]))
+        .bind_route::<_, northstar_stream::outbound::OutboundItem>(&route_request::<()>(&[]))
         .unwrap();
     let permit = witness.local_permit(item.c2s_delivery().unwrap()).unwrap();
     let enqueue = RouteEnqueue::bind(item, Some(permit), "private-live-stanza").unwrap();

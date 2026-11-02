@@ -2248,8 +2248,8 @@ fn rolling_delivery_contract_never_turns_volatile_into_legacy_durable() {
     let recipient_id = uuid::Uuid::from_u128(12);
     let stanza_id = uuid::Uuid::from_u128(13);
     let other_row = uuid::Uuid::from_u128(14);
-    let exact = crate::xmpp::outbound::RecipientDeliveryIdentity::Exact(stanza_id);
-    let missing = crate::xmpp::outbound::RecipientDeliveryIdentity::Missing;
+    let exact = northstar_stream::outbound::RecipientDeliveryIdentity::Exact(stanza_id);
+    let missing = northstar_stream::outbound::RecipientDeliveryIdentity::Missing;
 
     assert!(delivery_contract_compatible_with_peer(
         Some("8"),
@@ -2334,7 +2334,7 @@ fn durable_contract_carries_the_real_row_fence_not_the_stanza_id() {
         outbound_delivery_contract(
             &stanza,
             "bob@example.test",
-            Some(crate::xmpp::outbound::DurableDelivery {
+            Some(northstar_stream::outbound::DurableDelivery {
                 recipient_id,
                 message_id: offline_row_id,
                 claim_id: None,
@@ -2351,7 +2351,7 @@ fn durable_contract_carries_the_real_row_fence_not_the_stanza_id() {
 
 #[test]
 fn mix_contract_carries_only_the_exact_recipient_lease() {
-    let source = crate::xmpp::outbound::MixDelivery {
+    let source = northstar_stream::outbound::MixDelivery {
         delivery_id: uuid::Uuid::from_u128(41),
         lease_token: uuid::Uuid::from_u128(42),
     };
@@ -2683,7 +2683,7 @@ fn transport_receipt_ack_requires_one_exact_resource_or_none() {
 
 #[test]
 fn mix_transport_receipt_ack_requires_confirmed_capable_resource() {
-    let source = crate::xmpp::outbound::MixDelivery {
+    let source = northstar_stream::outbound::MixDelivery {
         delivery_id: uuid::Uuid::from_u128(11),
         lease_token: uuid::Uuid::from_u128(12),
     };
@@ -2750,12 +2750,12 @@ fn mix_transport_receipt_ack_requires_confirmed_capable_resource() {
 async fn mix_transport_receipt_waits_for_typed_ownership_and_fails_closed() {
     // A queued stanza is not yet delivered. The peer must explicitly
     // signal the output boundary before the remote node reports success.
-    let source = crate::xmpp::outbound::MixDelivery {
+    let source = northstar_stream::outbound::MixDelivery {
         delivery_id: uuid::Uuid::from_u128(21),
         lease_token: uuid::Uuid::from_u128(22),
     };
     let (output, mut consumer) = tokio::sync::mpsc::channel(1);
-    let sender = crate::xmpp::outbound::OutboundSender::new(output);
+    let sender = northstar_stream::outbound::OutboundSender::new(output);
     let disconnect = CancellationToken::new();
     let waiter = {
         let sender = sender.clone();
@@ -2766,19 +2766,19 @@ async fn mix_transport_receipt_waits_for_typed_ownership_and_fails_closed() {
     };
     let item = consumer.recv().await.expect("MIX item was queued");
     item.complete_mix_handoff(
-        crate::xmpp::outbound::MixTransportCompletion::SocketFenced {
+        northstar_stream::outbound::MixTransportCompletion::SocketFenced {
             connection_id: uuid::Uuid::from_u128(23),
         },
     );
     assert!(matches!(
         waiter.await.unwrap(),
-        Ok(crate::xmpp::outbound::MixTransportCompletion::SocketFenced { .. })
+        Ok(northstar_stream::outbound::MixTransportCompletion::SocketFenced { .. })
     ));
     assert!(!disconnect.is_cancelled());
 
     // A full bounded queue must not become a successful remote receipt.
     let (output, _consumer) = tokio::sync::mpsc::channel(1);
-    let sender = crate::xmpp::outbound::OutboundSender::new(output);
+    let sender = northstar_stream::outbound::OutboundSender::new(output);
     let disconnect = CancellationToken::new();
     sender.try_send("older".to_owned()).unwrap();
     assert!(
@@ -2792,7 +2792,7 @@ async fn mix_transport_receipt_waits_for_typed_ownership_and_fails_closed() {
     // row, even though the caller has a live session object.
     let (output, consumer) = tokio::sync::mpsc::channel(1);
     drop(consumer);
-    let sender = crate::xmpp::outbound::OutboundSender::new(output);
+    let sender = northstar_stream::outbound::OutboundSender::new(output);
     let disconnect = CancellationToken::new();
     assert!(
         try_send_cluster_mix_transport(&sender, &disconnect, "closed".to_owned(), source)
@@ -2805,7 +2805,7 @@ async fn mix_transport_receipt_waits_for_typed_ownership_and_fails_closed() {
     // boundary closes the one-shot and is rejected without inventing a
     // timer-based delivery decision.
     let (output, mut consumer) = tokio::sync::mpsc::channel(1);
-    let sender = crate::xmpp::outbound::OutboundSender::new(output);
+    let sender = northstar_stream::outbound::OutboundSender::new(output);
     let disconnect = CancellationToken::new();
     let waiter = {
         let sender = sender.clone();

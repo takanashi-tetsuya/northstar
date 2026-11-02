@@ -417,7 +417,7 @@ async fn transport_actual_item(
     bridge: &Bridge,
     route: &RouteHandle,
     ordinal: u8,
-    item: crate::xmpp::outbound::OutboundItem,
+    item: northstar_stream::outbound::OutboundItem,
     capture: Recorder,
 ) {
     let site = crate::xmpp::stage4_native::NativeSite::new(ordinal).unwrap();
@@ -640,8 +640,9 @@ async fn mismatched_source_stanza_or_route_cannot_introduce_the_handoff_ordinal(
                 let mut changed = item.clone();
                 let mut source = changed.mix_delivery().unwrap();
                 source.lease_token = Uuid::from_u128(99);
-                changed.durable_source =
-                    Some(crate::xmpp::outbound::TransportOwnershipSource::Mix(source));
+                changed.durable_source = Some(
+                    northstar_stream::outbound::TransportOwnershipSource::Mix(source),
+                );
                 run.record_dequeued(&route, 1, &changed);
                 assert!(run.capture.dequeue.lock().unwrap().rejected);
                 drop(changed);

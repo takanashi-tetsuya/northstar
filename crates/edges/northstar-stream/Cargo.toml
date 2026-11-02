@@ -7,9 +7,20 @@ license = "AGPL-3.0-only"
 description = "Session core for Northstar XMPP streams: transport-neutral stanza dispatch"
 publish = false
 
+[features]
+# Test-only queue helpers the root crate's tests use.
+test-support = []
+
 [dependencies]
 anyhow = "1.0"
+northstar-delivery-core = { path = "../../contexts/message/northstar-delivery-core" }
+northstar-message-core = { path = "../../contexts/message/northstar-message-core" }
+northstar-session-application = { path = "../../contexts/session/northstar-session-application" }
 roxmltree = "0.20"
+tokio = { version = "1.43", features = ["sync"] }
+tokio-util = "0.7"
+uuid = { version = "1.12", features = ["v4"] }
 
 [dev-dependencies]
 futures = "0.3"
+tokio = { version = "1.43", features = ["macros", "rt", "sync"] }

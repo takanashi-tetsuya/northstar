@@ -106,8 +106,8 @@ async fn route_removal_wait_is_bounded_only_by_cancellation_or_the_claim_lease()
 #[test]
 fn resumed_muc_replay_suffix_is_tracked_after_the_unacked_prefix() {
     let unacked = std::collections::VecDeque::from([
-        crate::xmpp::outbound::SmUnackedStanza::plain("<queued-1/>".to_owned()),
-        crate::xmpp::outbound::SmUnackedStanza::plain("<queued-2/>".to_owned()),
+        northstar_stream::outbound::SmUnackedStanza::plain("<queued-1/>".to_owned()),
+        northstar_stream::outbound::SmUnackedStanza::plain("<queued-2/>".to_owned()),
     ]);
     let (unacked, outbound_h) = stage_muc_replay_suffix(
         &unacked,
@@ -139,8 +139,8 @@ fn resumed_muc_replay_suffix_is_tracked_after_the_unacked_prefix() {
 #[test]
 fn resumed_muc_suffix_cannot_open_a_second_sm_budget() {
     let unacked = std::collections::VecDeque::from([
-        crate::xmpp::outbound::SmUnackedStanza::plain("1234".to_owned()),
-        crate::xmpp::outbound::SmUnackedStanza::plain("5678".to_owned()),
+        northstar_stream::outbound::SmUnackedStanza::plain("1234".to_owned()),
+        northstar_stream::outbound::SmUnackedStanza::plain("5678".to_owned()),
     ]);
     assert!(stage_muc_replay_suffix(&unacked, 2, vec!["x".to_owned()], 2, 9,).is_none());
     assert!(stage_muc_replay_suffix(&unacked, 2, vec!["xx".to_owned()], 3, 9,).is_none());
@@ -160,7 +160,7 @@ fn resume_failure_presence_332_consumes_the_same_global_budget() {
             && node.attribute("code") == Some("332")
     }));
     let unacked =
-        std::collections::VecDeque::from([crate::xmpp::outbound::SmUnackedStanza::plain(
+        std::collections::VecDeque::from([northstar_stream::outbound::SmUnackedStanza::plain(
             "old".to_owned(),
         )]);
     let exact_bytes = "old".len() + failure.len();

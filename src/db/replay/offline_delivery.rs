@@ -654,7 +654,7 @@ pub async fn release_untransferred_offline_claims(
 /// worker lost its fence and must be reported.
 pub async fn acknowledge_durable_delivery(
     pool: &PgPool,
-    delivery: crate::xmpp::outbound::DurableDelivery,
+    delivery: northstar_stream::outbound::DurableDelivery,
 ) -> Result<()> {
     acknowledge_durable_deliveries(pool, std::slice::from_ref(&delivery)).await
 }
@@ -665,14 +665,14 @@ pub async fn acknowledge_durable_delivery(
 /// a returned error alone does not prove that the prefix was retained.
 pub async fn acknowledge_durable_deliveries(
     pool: &PgPool,
-    deliveries: &[crate::xmpp::outbound::DurableDelivery],
+    deliveries: &[northstar_stream::outbound::DurableDelivery],
 ) -> Result<()> {
     acknowledge_durable_deliveries_observed(pool, deliveries, None).await
 }
 
 pub(crate) async fn acknowledge_durable_deliveries_observed(
     pool: &PgPool,
-    deliveries: &[crate::xmpp::outbound::DurableDelivery],
+    deliveries: &[northstar_stream::outbound::DurableDelivery],
     observation: Option<&northstar_delivery_core::native_write::AckRequest>,
 ) -> Result<()> {
     use northstar_delivery_core::native_write::{commit_observed, AckDisposition};
@@ -681,7 +681,7 @@ pub(crate) async fn acknowledge_durable_deliveries_observed(
             deliveries.len() == 1,
             "native ACK observation requires its one exact source"
         );
-        observation.validate_source(crate::xmpp::outbound::TransportOwnershipSource::C2s(
+        observation.validate_source(northstar_stream::outbound::TransportOwnershipSource::C2s(
             deliveries[0],
         ))?;
     }
@@ -793,8 +793,8 @@ pub(crate) async fn acknowledge_durable_deliveries_observed(
 /// lease expires after a crash/timeout.
 pub async fn fence_durable_socket_write(
     pool: &PgPool,
-    delivery: crate::xmpp::outbound::DurableDelivery,
-) -> Result<crate::xmpp::outbound::DurableDelivery> {
+    delivery: northstar_stream::outbound::DurableDelivery,
+) -> Result<northstar_stream::outbound::DurableDelivery> {
     // A newly committed clustered live row is reserved with its message UUID
     // until the primary route reaches a transport. Rotate that initial token
     // under the exact row lock: a concurrent no-route/degradation cleanup may
@@ -819,14 +819,14 @@ pub async fn fence_durable_socket_write(
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(row) = row else {
-        return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
+        return Err(northstar_stream::outbound::DurableDeliverySuperseded {
             message_id: delivery.message_id,
         }
         .into());
     };
     let stored_claim: Option<Uuid> = row.try_get("delivery_claim_id")?;
     if stored_claim != delivery.claim_id {
-        return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
+        return Err(northstar_stream::outbound::DurableDeliverySuperseded {
             message_id: delivery.message_id,
         }
         .into());
@@ -842,7 +842,7 @@ pub async fn fence_durable_socket_write(
     .fetch_one(&mut *transaction)
     .await?;
     if transport_owned {
-        return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
+        return Err(northstar_stream::outbound::DurableDeliverySuperseded {
             message_id: delivery.message_id,
         }
         .into());
@@ -865,7 +865,7 @@ pub async fn fence_durable_socket_write(
         "durable delivery disappeared during socket write fencing"
     );
     transaction.commit().await?;
-    Ok(crate::xmpp::outbound::DurableDelivery {
+    Ok(northstar_stream::outbound::DurableDelivery {
         claim_id: Some(claim_id),
         ..delivery
     })

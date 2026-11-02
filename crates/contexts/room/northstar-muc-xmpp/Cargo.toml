@@ -23,6 +23,7 @@ northstar-room-application = { path = "../northstar-room-application" }
 northstar-room-core = { path = "../northstar-room-core" }
 northstar-security = { path = "../../../platform/northstar-security" }
 northstar-session-core = { path = "../../session/northstar-session-core" }
+northstar-stream = { path = "../../../edges/northstar-stream" }
 northstar-xep-0045 = { path = "../../../kernel/northstar-xep-0045" }
 northstar-xep-0199 = { path = "../../../kernel/northstar-xep-0199" }
 northstar-xep-0280 = { path = "../../../kernel/northstar-xep-0280" }

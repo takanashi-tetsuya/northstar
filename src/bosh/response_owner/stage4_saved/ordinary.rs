@@ -4,6 +4,7 @@ use crate::xmpp::auth_publication::stage4_saved::{
     self as auth,
     ordinary::{self as input, fixed, list, text},
 };
+use crate::xmpp::auth_publication::OutboundAuthPublication;
 use crate::xmpp::protocol::mix::stage4_saved::{
     Bridge, ClaimSites, ForegroundSite, RouteHandle, RouteMap,
 };
@@ -635,7 +636,8 @@ async fn auth_activates_the_same_prestaged_queue_before_fresh_mix_projection_and
     .split();
     let actual_control_bytes = auth_item.stanza.clone();
     let enqueue =
-        crate::xmpp::outbound::RouteEnqueue::bind(auth_item, None, &actual_control_bytes).unwrap();
+        northstar_stream::outbound::RouteEnqueue::bind(auth_item, None, &actual_control_bytes)
+            .unwrap();
     route.sender().try_send_route_item(enqueue).unwrap();
     let same_auth_item = queue.try_recv().unwrap();
     let owner = crate::xmpp::stage4_native::write_auth(

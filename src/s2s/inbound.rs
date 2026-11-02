@@ -618,7 +618,7 @@ pub(crate) async fn route_inbound_message(
         }
     }
     let delivery = durable_c2s_delivery.map_or(DirectRouteDelivery::Volatile, |message_id| {
-        DirectRouteDelivery::Committed(crate::xmpp::outbound::DurableDelivery {
+        DirectRouteDelivery::Committed(northstar_stream::outbound::DurableDelivery {
             recipient_id: recipient.id,
             message_id,
             claim_id: live_claim_id,

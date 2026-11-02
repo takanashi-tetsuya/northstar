@@ -237,7 +237,7 @@ pub(super) struct RoutePort<'a> {
     pub(super) remote: Mutex<VecDeque<bool>>,
 }
 impl OnlineRoutePort for RoutePort<'_> {
-    type Item = crate::xmpp::outbound::OutboundItem;
+    type Item = northstar_stream::outbound::OutboundItem;
     type Session = OutboundSender;
     fn try_local(
         &self,

@@ -112,7 +112,8 @@ pub(crate) async fn run_locked_muc_expiry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{state::MucOccupantEndpoint, xmpp::outbound::OutboundSender};
+    use crate::state::MucOccupantEndpoint;
+    use northstar_stream::outbound::OutboundSender;
 
     fn occupant(full_jid: &str, connection_id: uuid::Uuid, epoch: uuid::Uuid) -> MucOccupant {
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);

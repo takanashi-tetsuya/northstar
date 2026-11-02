@@ -1230,6 +1230,7 @@ digraph compile_time {
   "northstar-mix-xmpp" -> "northstar-room-core";
   "northstar-mix-xmpp" -> "northstar-roster-core";
   "northstar-mix-xmpp" -> "northstar-runtime";
+  "northstar-mix-xmpp" -> "northstar-stream";
   "northstar-mix-xmpp" -> "northstar-xep-0199";
   "northstar-mix-xmpp" -> "northstar-xep-0313";
   "northstar-mix-xmpp" -> "northstar-xep-0359";
@@ -1255,6 +1256,7 @@ digraph compile_time {
   "northstar-muc-xmpp" -> "northstar-room-core";
   "northstar-muc-xmpp" -> "northstar-security";
   "northstar-muc-xmpp" -> "northstar-session-core";
+  "northstar-muc-xmpp" -> "northstar-stream";
   "northstar-muc-xmpp" -> "northstar-xep-0045";
   "northstar-muc-xmpp" -> "northstar-xep-0199";
   "northstar-muc-xmpp" -> "northstar-xep-0280";
@@ -1540,7 +1542,13 @@ digraph compile_time {
   "northstar-session-core" -> "uuid";
   "northstar-stream" -> "anyhow";
   "northstar-stream" -> "futures";
+  "northstar-stream" -> "northstar-delivery-core";
+  "northstar-stream" -> "northstar-message-core";
+  "northstar-stream" -> "northstar-session-application";
   "northstar-stream" -> "roxmltree";
+  "northstar-stream" -> "tokio";
+  "northstar-stream" -> "tokio-util";
+  "northstar-stream" -> "uuid";
   "northstar-telemetry" -> "anyhow";
   "northstar-telemetry" -> "serde_json";
   "northstar-telemetry" -> "tokio";

@@ -2,11 +2,11 @@
 
 use super::{AppState, SerializableMucOccupant};
 use crate::cluster::ClusterOperation;
-use crate::xmpp::outbound::DurableDelivery;
 use anyhow::Result;
 use northstar_delivery_core::node_delivery::NodeDeliveryReceipt;
 use northstar_room_core::occupancy::MucPresencePublication;
 use northstar_room_core::occupancy::{MucRename, MucRoleChange};
+use northstar_stream::outbound::DurableDelivery;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

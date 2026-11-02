@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::db::room_effects::{PostgresMixRepository, PostgresMucRepository};
-use crate::xmpp::outbound::{DurableDelivery, OutboundSender};
 use anyhow::Result;
 use northstar_archive_core::{
     FederatedMamAdmissionOutcome, FederatedMamMetadataCommand, FederatedMamStreamPage,
@@ -18,6 +17,7 @@ use northstar_room_core::occupancy::{
     FederatedMucAccountRoute, LocalMucJoinPublication, LocalMucNicknameMove, MucJoinCacheAttempt,
     MucPresencePublication, MucRename, MucRoleChange,
 };
+use northstar_stream::outbound::{DurableDelivery, OutboundSender};
 use std::collections::HashMap;
 
 impl MucHost for AppState {

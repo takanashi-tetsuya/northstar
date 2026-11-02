@@ -95,11 +95,11 @@ impl ClusterListenerMessagePolicy {
 
     pub(crate) async fn transfer_mix_delivery(
         &self,
-        source: crate::xmpp::outbound::MixDelivery,
+        source: northstar_stream::outbound::MixDelivery,
         node_id: &str,
         request_id: Uuid,
         ttl_seconds: u64,
-    ) -> anyhow::Result<crate::xmpp::outbound::MixDelivery> {
+    ) -> anyhow::Result<northstar_stream::outbound::MixDelivery> {
         self.mix
             .transfer_mix_delivery_to_cluster(source, node_id, request_id, ttl_seconds)
             .await
@@ -107,7 +107,7 @@ impl ClusterListenerMessagePolicy {
 
     pub(crate) async fn release_mix_delivery(
         &self,
-        source: crate::xmpp::outbound::MixDelivery,
+        source: northstar_stream::outbound::MixDelivery,
         node_id: &str,
         request_id: Uuid,
     ) -> anyhow::Result<bool> {

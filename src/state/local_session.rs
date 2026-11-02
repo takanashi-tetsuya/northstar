@@ -290,7 +290,7 @@ impl AppState {
         expected: &OnlineSession,
         user_id: uuid::Uuid,
         auth_generation: i64,
-        recipient: &crate::xmpp::outbound::OutboundSender,
+        recipient: &northstar_stream::outbound::OutboundSender,
         presence: &str,
     ) -> bool {
         let Some(current) = self.sessions.get(key) else {

@@ -8,6 +8,7 @@ use crate::stage4_replay as wire;
 use crate::xmpp::auth_publication::stage4_saved::{
     facts as observed, AuthRead, Capture, Publisher,
 };
+use crate::xmpp::auth_publication::OutboundAuthPublication;
 use anyhow::{ensure, Result};
 use northstar_delivery_core::bosh_ownership::{OperationKind, Scope};
 use northstar_room_application::mix_service::{MixRepository, MixService};
@@ -41,7 +42,7 @@ pub(crate) struct Session {
     observed_items: Vec<(
         u8,
         String,
-        Option<crate::xmpp::outbound::TransportOwnershipSource>,
+        Option<northstar_stream::outbound::TransportOwnershipSource>,
         Option<Uuid>,
     )>,
     observed_items_valid: bool,
@@ -96,7 +97,7 @@ impl Session {
         item: &OutboundItem,
     ) -> (
         String,
-        Option<crate::xmpp::outbound::TransportOwnershipSource>,
+        Option<northstar_stream::outbound::TransportOwnershipSource>,
         Option<Uuid>,
     ) {
         (
@@ -111,7 +112,7 @@ impl Session {
         &mut self,
         (xml, source, control): (
             String,
-            Option<crate::xmpp::outbound::TransportOwnershipSource>,
+            Option<northstar_stream::outbound::TransportOwnershipSource>,
             Option<Uuid>,
         ),
         ordinal: u8,
@@ -236,7 +237,7 @@ impl Session {
             async fn transfer(
                 &self,
                 request: &northstar_delivery_core::bosh_ownership::TransferRequest,
-            ) -> Result<crate::xmpp::outbound::MixDelivery> {
+            ) -> Result<northstar_stream::outbound::MixDelivery> {
                 let capture = |returned_source| {
                     observed::emit(
                         &self.recorder,

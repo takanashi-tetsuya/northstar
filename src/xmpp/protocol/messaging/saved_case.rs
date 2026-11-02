@@ -4,10 +4,6 @@
 //! Full fixed-profile execution and qualification remain separately gated.
 use super::*;
 use crate::direct_replay as wire;
-use crate::xmpp::outbound::{
-    DurableDelivery, OutboundItem, OutboundSender, RouteEnqueue, RouteSendError,
-    TransportOwnershipSource,
-};
 use anyhow::Context;
 use northstar_abuse_policy::{
     admission_execution as admission, admission_transaction::FinalizeDecision,
@@ -24,6 +20,10 @@ use northstar_message_application::{
     direct_commit, direct_lifecycle, MessageApplication, PersonalMessageCommitRepository,
 };
 use northstar_message_core::direct_handoff;
+use northstar_stream::outbound::{
+    DurableDelivery, OutboundItem, OutboundSender, RouteEnqueue, RouteSendError,
+    TransportOwnershipSource,
+};
 use std::{
     collections::VecDeque,
     sync::{

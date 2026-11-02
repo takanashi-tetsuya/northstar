@@ -7,6 +7,7 @@
 
 pub mod handler;
 pub mod iq;
+pub mod outbound;
 
 pub use handler::{HandlerFuture, IqHandler};
 pub use iq::{DuplicateIqRoute, IqKind, IqRequest, IqRoute, IqRouter};

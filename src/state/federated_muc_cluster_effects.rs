@@ -1,11 +1,11 @@
 //! Cluster operations used by federated MUC handlers.
 
 use super::{AppState, SerializableMucOccupant};
-use crate::xmpp::outbound::DurableDelivery;
 use anyhow::Result;
 use northstar_delivery_core::node_delivery::NodeDeliveryReceipt;
 use northstar_room_core::occupancy::FederatedMucAccountRoute;
 use northstar_room_core::occupancy::{MucRename, MucRoleChange};
+use northstar_stream::outbound::DurableDelivery;
 use std::collections::HashMap;
 
 fn accepted_primary_route(receipt: NodeDeliveryReceipt) -> Option<FederatedMucAccountRoute> {

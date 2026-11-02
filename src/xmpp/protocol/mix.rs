@@ -11,54 +11,25 @@ use crate::state::mix_outbox::MixOutboxContext;
 use crate::state::AppState;
 use crate::xmpp::frame_execution::{SessionExecutions, Stage};
 use crate::xmpp::local_routes::session::OnlineSession;
-use crate::xmpp::outbound::{MixDelivery, MixTransportCompletion, OutboundSender};
 use anyhow::Result;
 use dashmap::DashSet;
 use northstar_mix_xmpp::ports::{
-    MixAction, MixFrameObserver, MixFrameStage, MixHost, MixLocalSession, MixOutbound,
-    MixOutboxPort, MixSession, MixSessionUser,
+    MixAction, MixFrameObserver, MixFrameStage, MixHost, MixLocalSession, MixOutboxPort,
+    MixSession, MixSessionUser,
 };
 use northstar_room_application::mix_service::{foreground, MixService};
 use northstar_room_core::mix::{MixSessionCapability, CORE_NS, PAM_NS};
 use northstar_room_core::mix_iq_relay::MixIqRelayIndex;
 use northstar_roster_core::RosterChange;
+use northstar_stream::outbound::OutboundSender;
 use roxmltree::Node;
 use std::sync::{atomic::Ordering, Arc};
-use tokio::sync::{
-    mpsc::{self, error::TrySendError},
-    oneshot, Mutex,
-};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[cfg(test)]
 pub(crate) mod stage4_saved;
-
-impl MixOutbound for OutboundSender {
-    fn try_send(&self, stanza: String) -> Result<(), TrySendError<String>> {
-        OutboundSender::try_send(self, stanza)
-    }
-
-    fn try_send_with_transport_receipt(
-        &self,
-        stanza: String,
-        receipt: mpsc::UnboundedSender<()>,
-    ) -> Result<(), TrySendError<String>> {
-        OutboundSender::try_send_with_transport_receipt(self, stanza, receipt)
-    }
-
-    fn try_send_durable_mix(
-        &self,
-        stanza: String,
-        delivery: MixDelivery,
-    ) -> Result<oneshot::Receiver<MixTransportCompletion>, TrySendError<String>> {
-        OutboundSender::try_send_durable_mix(self, stanza, delivery)
-    }
-
-    fn disconnect_backpressured_transport(&self) {
-        OutboundSender::disconnect_backpressured_transport(self);
-    }
-}
 
 impl MixLocalSession for OnlineSession {
     type Outbound = OutboundSender;

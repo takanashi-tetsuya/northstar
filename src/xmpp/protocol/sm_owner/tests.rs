@@ -1,10 +1,10 @@
 use super::*;
-use crate::xmpp::outbound::{DurableDelivery, MixDelivery};
 use northstar_delivery_core::sm_ownership::{
     CommitFact, HDecision, Knowledge, KnowledgeClass, MixRotation,
 };
 use northstar_session_application::sm::{SmMixLeaseRotation, SmQueueOwnershipResolution};
 use northstar_session_application::sm_capacity::SmCapacityMetrics;
+use northstar_stream::outbound::{DurableDelivery, MixDelivery};
 use std::{
     sync::{atomic::AtomicU64, Mutex},
     task::Waker,
@@ -53,7 +53,7 @@ impl FakePort {
             .find_map(|source| source.c2s())
             .unwrap()
             .message_id;
-        crate::xmpp::outbound::DurableDeliverySuperseded { message_id }.into()
+        northstar_stream::outbound::DurableDeliverySuperseded { message_id }.into()
     }
     async fn commit(&self, request: &sm_ownership::Request, fact: CommitFact) -> Result<()> {
         self.event("commit");
@@ -130,7 +130,9 @@ impl SmOwnerPort for FakePort {
                 .find_map(|entry| entry.source.and_then(TransportOwnershipSource::c2s))
                 .unwrap()
                 .message_id;
-            return Err(crate::xmpp::outbound::DurableDeliverySuperseded { message_id }.into());
+            return Err(
+                northstar_stream::outbound::DurableDeliverySuperseded { message_id }.into(),
+            );
         }
         if self.cut == Cut::BeforeCommit {
             anyhow::bail!("injected pre-COMMIT failure");
@@ -553,7 +555,7 @@ async fn record_rotations_precede_actual_mix_notification_and_wrong_return_is_re
         } else {
             assert_eq!(
                 receipt.try_recv().unwrap(),
-                crate::xmpp::outbound::MixTransportCompletion::SmPersisted {
+                northstar_stream::outbound::MixTransportCompletion::SmPersisted {
                     session_id: fixture.sm.db_id.unwrap()
                 }
             );
@@ -989,7 +991,7 @@ async fn real_sm_record_composes_with_native_lease_without_native_fence_or_ack()
         if let Some(receipt) = mix_receipt.as_mut() {
             assert_eq!(
                 receipt.try_recv().unwrap(),
-                crate::xmpp::outbound::MixTransportCompletion::SmPersisted {
+                northstar_stream::outbound::MixTransportCompletion::SmPersisted {
                     session_id: port.turn.sm.db_id.unwrap()
                 }
             );
@@ -1071,7 +1073,7 @@ async fn actual_sm_record_clears_bosh_source_before_fifo_and_preserves_prior_sm_
                 );
                 assert_eq!(
                     receipt.try_recv().unwrap(),
-                    crate::xmpp::outbound::MixTransportCompletion::SmPersisted {
+                    northstar_stream::outbound::MixTransportCompletion::SmPersisted {
                         session_id: record.turn.sm.db_id.unwrap()
                     }
                 );
@@ -1115,7 +1117,7 @@ async fn mislabeled_typed_supersession_after_commit_keeps_fifo_h_and_original_er
         let error = fixture.record(&c2s_item()).await.unwrap_err();
         assert_eq!(
             error
-                .downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>()
+                .downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>()
                 .unwrap()
                 .message_id,
             c2s().message_id

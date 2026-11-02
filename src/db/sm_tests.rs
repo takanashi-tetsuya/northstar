@@ -30,7 +30,7 @@ async fn sm_transfer_yields_to_exact_replay_or_bosh_owner_without_clearing_it() 
         .execute(&pool)
         .await
         .unwrap();
-    let live = crate::xmpp::outbound::DurableDelivery {
+    let live = northstar_stream::outbound::DurableDelivery {
         recipient_id,
         message_id,
         claim_id: None,
@@ -56,8 +56,8 @@ async fn sm_transfer_yields_to_exact_replay_or_bosh_owner_without_clearing_it() 
     winner.commit().await.unwrap();
     let error = loser.await.unwrap().unwrap_err();
     assert_eq!(
-        error.downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>(),
-        Some(&crate::xmpp::outbound::DurableDeliverySuperseded { message_id })
+        error.downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>(),
+        Some(&northstar_stream::outbound::DurableDeliverySuperseded { message_id })
     );
     let stored_claim: Option<Uuid> =
         sqlx::query_scalar("SELECT delivery_claim_id FROM offline_messages WHERE id=$1")
@@ -84,8 +84,8 @@ async fn sm_transfer_yields_to_exact_replay_or_bosh_owner_without_clearing_it() 
         .await
         .unwrap_err();
     assert_eq!(
-        bosh_error.downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>(),
-        Some(&crate::xmpp::outbound::DurableDeliverySuperseded { message_id })
+        bosh_error.downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>(),
+        Some(&northstar_stream::outbound::DurableDeliverySuperseded { message_id })
     );
     transaction.rollback().await.unwrap();
     let still_bosh_owned: bool =
@@ -188,7 +188,7 @@ async fn install_authorization_test_sm(
         }],
         directed_presence: vec!["friend@example.net".to_owned()],
         last_presence: Some("<presence xmlns='jabber:client'/>".to_owned()),
-        unacked: vec![crate::xmpp::outbound::SmUnackedStanza::plain(format!(
+        unacked: vec![northstar_stream::outbound::SmUnackedStanza::plain(format!(
             "<message id='queued-{marker}'/>"
         ))],
     };
@@ -277,22 +277,26 @@ fn subnet_binding_uses_v4_24_and_v6_64() {
 #[test]
 fn queue_limits_are_enforced() {
     assert!(validate_queue(
-        &[crate::xmpp::outbound::SmUnackedStanza::plain("x".into())],
+        &[northstar_stream::outbound::SmUnackedStanza::plain(
+            "x".into()
+        )],
         1,
         1
     )
     .is_ok());
     assert!(validate_queue(
         &[
-            crate::xmpp::outbound::SmUnackedStanza::plain("x".into()),
-            crate::xmpp::outbound::SmUnackedStanza::plain("y".into())
+            northstar_stream::outbound::SmUnackedStanza::plain("x".into()),
+            northstar_stream::outbound::SmUnackedStanza::plain("y".into())
         ],
         1,
         2
     )
     .is_err());
     assert!(validate_queue(
-        &[crate::xmpp::outbound::SmUnackedStanza::plain("xy".into())],
+        &[northstar_stream::outbound::SmUnackedStanza::plain(
+            "xy".into()
+        )],
         1,
         1
     )
@@ -474,7 +478,7 @@ async fn durable_delivery_fence_survives_checkpoint_resume_and_revocation() {
     async fn insert_delivery(
         pool: &PgPool,
         user_id: Uuid,
-    ) -> crate::xmpp::outbound::DurableDelivery {
+    ) -> northstar_stream::outbound::DurableDelivery {
         let message_id = Uuid::new_v4();
         let claim_id = Uuid::new_v4();
         sqlx::query(
@@ -490,7 +494,7 @@ async fn durable_delivery_fence_survives_checkpoint_resume_and_revocation() {
         .execute(pool)
         .await
         .unwrap();
-        crate::xmpp::outbound::DurableDelivery {
+        northstar_stream::outbound::DurableDelivery {
             recipient_id: user_id,
             message_id,
             claim_id: Some(claim_id),
@@ -499,7 +503,7 @@ async fn durable_delivery_fence_survives_checkpoint_resume_and_revocation() {
 
     fn snapshot(
         peer_ip: IpAddr,
-        delivery: crate::xmpp::outbound::DurableDelivery,
+        delivery: northstar_stream::outbound::DurableDelivery,
     ) -> SmSessionSnapshot {
         SmSessionSnapshot {
             inbound_h: 0,
@@ -517,7 +521,7 @@ async fn durable_delivery_fence_survives_checkpoint_resume_and_revocation() {
             joined_rooms: vec![],
             directed_presence: vec![],
             last_presence: Some("<presence xmlns='jabber:client'/>".to_owned()),
-            unacked: vec![crate::xmpp::outbound::SmUnackedStanza::with_delivery(
+            unacked: vec![northstar_stream::outbound::SmUnackedStanza::with_delivery(
                 "<message id='sm'/>".to_owned(),
                 Some(delivery),
             )],
@@ -931,8 +935,8 @@ async fn durable_claim_is_single_consumer_and_revocable() {
         directed_presence: vec![],
         last_presence: Some("<presence xmlns='jabber:client'/>".to_owned()),
         unacked: vec![
-            crate::xmpp::outbound::SmUnackedStanza::plain("<message id='one'/>".into()),
-            crate::xmpp::outbound::SmUnackedStanza::plain("<message id='two'/>".into()),
+            northstar_stream::outbound::SmUnackedStanza::plain("<message id='one'/>".into()),
+            northstar_stream::outbound::SmUnackedStanza::plain("<message id='two'/>".into()),
         ],
     };
     let connection_id = Uuid::new_v4();

@@ -348,7 +348,7 @@ pub(crate) fn start_pubsub_event_outbox_delivery(
 
 async fn deliver_last_items_on_presence(
     state: Arc<AppState>,
-    outbound: crate::xmpp::outbound::OutboundSender,
+    outbound: northstar_stream::outbound::OutboundSender,
     recipient_id: uuid::Uuid,
     active_privacy_list: Option<String>,
     connection_id: uuid::Uuid,

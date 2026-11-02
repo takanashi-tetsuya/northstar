@@ -3,12 +3,12 @@
 //! frame. BOSH and persisted SM retain their own acknowledgement boundaries.
 
 use super::{protocol::ProtocolSession, C2S_BACKEND_OPERATION_TIMEOUT};
-use crate::xmpp::outbound::{
-    DurableDelivery, MixDelivery, MixTransportCompletion, OutboundItem, TransportOwnershipSource,
-};
 use anyhow::{Context, Result};
 use northstar_delivery_core::native_write::{
     self, AckRequest, Observation, Terminal, WriterResult,
+};
+use northstar_stream::outbound::{
+    DurableDelivery, MixDelivery, MixTransportCompletion, OutboundItem, TransportOwnershipSource,
 };
 use std::{
     future::Future,
@@ -177,7 +177,7 @@ impl<'a> DirectWriteLease<'a> {
         if let Err(error) = &result {
             observation.preparation_failed(
                 error
-                    .downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>()
+                    .downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>()
                     .is_some(),
             );
         }
@@ -357,7 +357,7 @@ mod tests {
     impl DirectWritePort for FakePort {
         async fn record(&mut self, item: &OutboundItem) -> Result<bool> {
             if self.fail_at == Some("superseded_record") {
-                return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
+                return Err(northstar_stream::outbound::DurableDeliverySuperseded {
                     message_id: item.c2s_delivery().unwrap().message_id,
                 }
                 .into());
@@ -368,7 +368,7 @@ mod tests {
 
         async fn fence_c2s(&self, delivery: DurableDelivery) -> Result<DurableDelivery> {
             if self.fail_at == Some("superseded") {
-                return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
+                return Err(northstar_stream::outbound::DurableDeliverySuperseded {
                     message_id: delivery.message_id,
                 }
                 .into());
@@ -532,7 +532,7 @@ mod tests {
             };
             assert_eq!(
                 error
-                    .downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>()
+                    .downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>()
                     .map(|superseded| superseded.message_id),
                 item.c2s_delivery().map(|delivery| delivery.message_id)
             );

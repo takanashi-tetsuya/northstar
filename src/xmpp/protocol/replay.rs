@@ -89,7 +89,7 @@ fn jittered_busy_retry_delay(retry_after: Duration) -> Duration {
 
 async fn wait_for_replay_retry(
     busy: &ReplayBusyUntil,
-    outbound: &crate::xmpp::outbound::OutboundSender,
+    outbound: &northstar_stream::outbound::OutboundSender,
     availability: Option<&AvailabilityFence>,
     recovery_deadline: tokio::time::Instant,
 ) -> bool {
@@ -133,7 +133,7 @@ async fn wait_for_replay_retry(
 #[allow(clippy::too_many_arguments)]
 async fn acquire_replay_session(
     service: &ReplayService<impl northstar_session_application::replay::ReplayRepository>,
-    outbound: &crate::xmpp::outbound::OutboundSender,
+    outbound: &northstar_stream::outbound::OutboundSender,
     recipient_id: Uuid,
     current_full_jid: &str,
     explicit_cutoff: Option<chrono::DateTime<chrono::Utc>>,
@@ -214,7 +214,7 @@ async fn release_unsent_suffix(
 )]
 async fn drain_offline(
     service: &ReplayService<impl ReplayRepository>,
-    outbound: &crate::xmpp::outbound::OutboundSender,
+    outbound: &northstar_stream::outbound::OutboundSender,
     recipient_id: Uuid,
     current_full_jid: &str,
     active_privacy_list: Option<&str>,
@@ -280,7 +280,7 @@ async fn drain_offline(
 async fn drain_owned_offline(
     service: &ReplayService<impl northstar_session_application::replay::ReplayRepository>,
     session: &ReplaySession,
-    outbound: &crate::xmpp::outbound::OutboundSender,
+    outbound: &northstar_stream::outbound::OutboundSender,
     active_privacy_list: Option<&str>,
     bind2_mam_catchup: bool,
     availability: Option<&AvailabilityFence>,
@@ -444,7 +444,7 @@ async fn drain_owned_offline(
                 send_deadline,
                 outbound.send_durable_if_current(
                     message.stanza.clone(),
-                    crate::xmpp::outbound::DurableDelivery {
+                    northstar_stream::outbound::DurableDelivery {
                         recipient_id: session.recipient_id(),
                         message_id: message.id,
                         claim_id: Some(page.claim_token),
@@ -511,7 +511,7 @@ async fn drain_owned_offline(
 )]
 pub(crate) async fn replay_newly_available_resource(
     service: ReplayService<impl ReplayRepository>,
-    outbound: crate::xmpp::outbound::OutboundSender,
+    outbound: northstar_stream::outbound::OutboundSender,
     recipient_id: Uuid,
     account: String,
     full_jid: String,
@@ -603,7 +603,7 @@ pub(crate) async fn replay_newly_available_resource(
 
 pub(crate) async fn replay_bind2_offline(
     service: ReplayService<impl ReplayRepository>,
-    outbound: crate::xmpp::outbound::OutboundSender,
+    outbound: northstar_stream::outbound::OutboundSender,
     recipient_id: Uuid,
     full_jid: String,
 ) {
@@ -629,7 +629,7 @@ pub(crate) async fn replay_bind2_offline(
 )]
 pub(crate) async fn replay_resumed_offline(
     service: ReplayService<impl ReplayRepository>,
-    outbound: crate::xmpp::outbound::OutboundSender,
+    outbound: northstar_stream::outbound::OutboundSender,
     recipient_id: Uuid,
     full_jid: String,
     active_privacy_list: Option<String>,
@@ -669,7 +669,7 @@ pub(crate) async fn replay_resumed_offline(
 )]
 pub(crate) async fn replay_newly_nonnegative_resource(
     service: ReplayService<impl ReplayRepository>,
-    outbound: crate::xmpp::outbound::OutboundSender,
+    outbound: northstar_stream::outbound::OutboundSender,
     recipient_id: Uuid,
     full_jid: String,
     active_privacy_list: Option<String>,
@@ -715,7 +715,7 @@ pub(crate) async fn replay_newly_nonnegative_resource(
 )]
 pub(crate) async fn replay_after_cluster_reconciliation(
     service: ReplayService<impl ReplayRepository>,
-    outbound: crate::xmpp::outbound::OutboundSender,
+    outbound: northstar_stream::outbound::OutboundSender,
     recipient_id: Uuid,
     full_jid: String,
     active_privacy_list: Arc<std::sync::RwLock<Option<String>>>,

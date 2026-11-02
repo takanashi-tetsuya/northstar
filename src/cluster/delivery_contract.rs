@@ -38,7 +38,7 @@ pub(super) fn supports_legacy_delivery_inference(peer_version: Option<&str>) -> 
 pub(super) fn delivery_contract_compatible_with_peer(
     peer_version: Option<&str>,
     contract: NodeDeliveryContract,
-    identity: crate::xmpp::outbound::RecipientDeliveryIdentity,
+    identity: northstar_stream::outbound::RecipientDeliveryIdentity,
 ) -> bool {
     if supports_delivery_contract(peer_version) {
         return true;
@@ -49,11 +49,11 @@ pub(super) fn delivery_contract_compatible_with_peer(
     match (contract, identity) {
         (
             NodeDeliveryContract::DurableC2s { message_id, .. },
-            crate::xmpp::outbound::RecipientDeliveryIdentity::Exact(stanza_id),
+            northstar_stream::outbound::RecipientDeliveryIdentity::Exact(stanza_id),
         ) => message_id == stanza_id,
         (
             NodeDeliveryContract::Volatile {},
-            crate::xmpp::outbound::RecipientDeliveryIdentity::Missing,
+            northstar_stream::outbound::RecipientDeliveryIdentity::Missing,
         ) => true,
         _ => false,
     }
@@ -147,11 +147,11 @@ pub(super) struct NodeDeliveryOptions<'a> {
     /// Exact PostgreSQL row whose lifetime fences this C2S delivery. `None`
     /// means the message is deliberately volatile; it must never be inferred
     /// as durable merely because it contains an XEP-0359 stanza-id.
-    pub(super) durable_delivery: Option<crate::xmpp::outbound::DurableDelivery>,
+    pub(super) durable_delivery: Option<northstar_stream::outbound::DurableDelivery>,
     /// Exact leased MIX recipient source. Unlike C2S, this source is first
     /// transferred to a remote-node fence and then to socket/SM/BOSH
     /// ownership; it is never inferred from a stanza-id.
-    pub(super) mix_delivery: Option<crate::xmpp::outbound::MixDelivery>,
+    pub(super) mix_delivery: Option<northstar_stream::outbound::MixDelivery>,
     pub(super) presence_authority: Option<ClusterPresenceAuthority>,
     pub(super) presence_delivery: Option<ClusterPresenceDelivery>,
 }
@@ -268,7 +268,9 @@ pub(super) enum NodeDeliveryContract {
 }
 
 impl NodeDeliveryContract {
-    pub(super) fn from_durable(delivery: crate::xmpp::outbound::DurableDelivery) -> Result<Self> {
+    pub(super) fn from_durable(
+        delivery: northstar_stream::outbound::DurableDelivery,
+    ) -> Result<Self> {
         anyhow::ensure!(
             delivery.claim_id.is_none(),
             "cluster live delivery cannot carry an offline replay claim"
@@ -323,8 +325,8 @@ pub(super) enum RequestedNodeMessageDelivery {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ResolvedNodeMessageDelivery {
     Volatile,
-    Durable(crate::xmpp::outbound::DurableDelivery),
-    Mix(crate::xmpp::outbound::MixDelivery),
+    Durable(northstar_stream::outbound::DurableDelivery),
+    Mix(northstar_stream::outbound::MixDelivery),
 }
 
 impl ResolvedNodeMessageDelivery {
@@ -432,8 +434,8 @@ pub(super) async fn resolve_node_message_delivery<R: NodeMessageProjectionReposi
 pub(super) fn outbound_delivery_contract(
     stanza: &str,
     target_jid: &str,
-    durable_delivery: Option<crate::xmpp::outbound::DurableDelivery>,
-    mix_delivery: Option<crate::xmpp::outbound::MixDelivery>,
+    durable_delivery: Option<northstar_stream::outbound::DurableDelivery>,
+    mix_delivery: Option<northstar_stream::outbound::MixDelivery>,
 ) -> Result<Option<NodeDeliveryContract>> {
     let document = roxmltree::Document::parse(stanza).context("cluster stanza is invalid XML")?;
     let is_message = document.root_element().tag_name().name() == "message";
@@ -451,8 +453,8 @@ pub(super) fn outbound_delivery_contract(
     if let Some(delivery) = durable_delivery {
         anyhow::ensure!(
             matches!(
-                crate::xmpp::outbound::recipient_delivery_identity(stanza, target_jid),
-                crate::xmpp::outbound::RecipientDeliveryIdentity::Exact(_)
+                northstar_stream::outbound::recipient_delivery_identity(stanza, target_jid),
+                northstar_stream::outbound::RecipientDeliveryIdentity::Exact(_)
             ),
             "durable cluster message lacks an unambiguous recipient stanza-id"
         );

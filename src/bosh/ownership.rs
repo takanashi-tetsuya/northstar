@@ -1,11 +1,11 @@
 //! Pending MIX transfer at the actual BOSH item/FIFO boundary. The existing
 //! actor owns request policy and timers; this helper owns no actor or service.
-use crate::xmpp::outbound::{
-    MixDelivery, MixTransportCompletion, OutboundItem, TransportOwnershipSource,
-};
 use anyhow::{Context, Result};
 use northstar_delivery_core::bosh_ownership::{Operation, Terminal, TransferRequest, Transferred};
 use northstar_room_application::mix_service::{MixRepository, MixService};
+use northstar_stream::outbound::{
+    MixDelivery, MixTransportCompletion, OutboundItem, TransportOwnershipSource,
+};
 use std::{
     collections::VecDeque,
     future::Future,
@@ -420,7 +420,7 @@ mod tests {
                 anyhow::bail!("injected post-receipt error");
             }
             if self.cut == Cut::TypedAfterReceipt {
-                return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
+                return Err(northstar_stream::outbound::DurableDeliverySuperseded {
                     message_id: old().delivery_id,
                 }
                 .into());
@@ -454,10 +454,12 @@ mod tests {
             match self.mode {
                 RecordMode::Unmanaged => Ok(false),
                 RecordMode::Error => anyhow::bail!("injected record error"),
-                RecordMode::Superseded => Err(crate::xmpp::outbound::DurableDeliverySuperseded {
-                    message_id: Uuid::from_u128(99),
+                RecordMode::Superseded => {
+                    Err(northstar_stream::outbound::DurableDeliverySuperseded {
+                        message_id: Uuid::from_u128(99),
+                    }
+                    .into())
                 }
-                .into()),
             }
         }
     }

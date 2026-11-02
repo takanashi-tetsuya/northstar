@@ -1,7 +1,6 @@
 //! The existing SM record/checkpoint/ACK operations over the real session
 //! substate. Only the current persistence/capacity capabilities are injected.
 use super::{ProtocolSession, SmRuntimePolicy, SmSubstate};
-use crate::xmpp::outbound::{OutboundItem, SmUnackedStanza, TransportOwnershipSource};
 use anyhow::{Context, Result};
 use northstar_delivery_core::sm_ownership::{self, Observation, Purpose, Scope, Terminal};
 use northstar_session_application::sm::ownership::{
@@ -12,6 +11,7 @@ use northstar_session_application::sm::{
 };
 use northstar_session_application::sm_capacity::{SmCapacityLease, SmMemoryGovernor};
 use northstar_session_core::JoinedMucMembership;
+use northstar_stream::outbound::{OutboundItem, SmUnackedStanza, TransportOwnershipSource};
 use std::{
     collections::VecDeque,
     future::Future,
@@ -124,10 +124,9 @@ impl SmSnapshotView<'_> {
         for jid in self.directed_presence.iter() {
             add(jid.key().len())?;
         }
-        add(sm
-            .unacked
-            .len()
-            .checked_mul(std::mem::size_of::<crate::xmpp::outbound::SmUnackedStanza>())?)?;
+        add(sm.unacked.len().checked_mul(std::mem::size_of::<
+            northstar_stream::outbound::SmUnackedStanza,
+        >())?)?;
         for stanza in &sm.unacked {
             add(stanza.stanza.len())?;
         }
@@ -330,7 +329,7 @@ impl<P: SmOwnerPort> SmTransportTurn<'_, P> {
                     .db_id
                     .context("XEP-0198 MIX ownership was not persisted")?;
                 item.complete_mix_handoff(
-                    crate::xmpp::outbound::MixTransportCompletion::SmPersisted { session_id },
+                    northstar_stream::outbound::MixTransportCompletion::SmPersisted { session_id },
                 );
             } else {
                 item.confirm_transport_ownership();
@@ -386,7 +385,7 @@ impl<P: SmOwnerPort> SmTransportTurn<'_, P> {
             observation.appended();
             if let Err(error) = self.checkpoint_in_turn(observation).await {
                 if error
-                    .downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>()
+                    .downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>()
                     .is_some()
                     && observation.may_restore_superseded()
                 {

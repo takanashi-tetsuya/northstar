@@ -286,8 +286,8 @@ impl crate::xmpp::direct_delivery::DirectWritePort for NativePort<'_> {
     }
     async fn fence_mix(
         &self,
-        _: crate::xmpp::outbound::MixDelivery,
-    ) -> Result<crate::xmpp::outbound::MixDelivery> {
+        _: northstar_stream::outbound::MixDelivery,
+    ) -> Result<northstar_stream::outbound::MixDelivery> {
         anyhow::bail!("unexpected native MIX fence")
     }
     async fn acknowledge_c2s(
@@ -463,7 +463,7 @@ pub(super) struct NativePlan<'a> {
 pub(super) struct ItemReceivers {
     pub(super) mix: Option<(
         Uuid,
-        tokio::sync::oneshot::Receiver<crate::xmpp::outbound::MixTransportCompletion>,
+        tokio::sync::oneshot::Receiver<northstar_stream::outbound::MixTransportCompletion>,
     )>,
     pub(super) ownership: Option<tokio::sync::mpsc::UnboundedReceiver<()>>,
 }
@@ -472,7 +472,7 @@ impl ItemReceivers {
         let Some((delivery_id, mut receiver)) = self.mix.take() else {
             return;
         };
-        use crate::xmpp::outbound::MixTransportCompletion as Completion;
+        use northstar_stream::outbound::MixTransportCompletion as Completion;
         let result = match receiver.try_recv() {
             Ok(Completion::SmPersisted { session_id }) => wire::MixHandoffResult::SmPersisted {
                 session_id: wire::Id(session_id),

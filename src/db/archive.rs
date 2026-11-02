@@ -24,7 +24,7 @@ pub async fn deliver_offline(
     pool: &PgPool,
     recipient_id: Uuid,
     ttl_days: i64,
-    outbound: &crate::xmpp::outbound::OutboundSender,
+    outbound: &northstar_stream::outbound::OutboundSender,
     active_privacy_list: Option<&str>,
 ) -> Result<usize> {
     deliver_offline_mode(
@@ -44,7 +44,7 @@ pub async fn deliver_bind2_offline(
     pool: &PgPool,
     recipient_id: Uuid,
     ttl_days: i64,
-    outbound: &crate::xmpp::outbound::OutboundSender,
+    outbound: &northstar_stream::outbound::OutboundSender,
     active_privacy_list: Option<&str>,
 ) -> Result<usize> {
     deliver_offline_mode(
@@ -62,7 +62,7 @@ pub(super) async fn deliver_offline_mode(
     pool: &PgPool,
     recipient_id: Uuid,
     ttl_days: i64,
-    outbound: &crate::xmpp::outbound::OutboundSender,
+    outbound: &northstar_stream::outbound::OutboundSender,
     bind2_mam_catchup: bool,
     active_privacy_list: Option<&str>,
 ) -> Result<usize> {

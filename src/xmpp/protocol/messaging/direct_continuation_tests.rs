@@ -1,4 +1,3 @@
-use crate::xmpp::outbound::{OutboundSender, RouteEnqueue, RouteSendError};
 use northstar_abuse_policy::message_admission::{MessageAdmissionLease, MessageAdmissionStart};
 use northstar_delivery_core::DurableDelivery;
 use northstar_message_application::direct_commit::{
@@ -27,6 +26,7 @@ use northstar_message_core::{
     ValidatedPersonalMessage,
 };
 use northstar_message_core::{LocalDelivery, MessageIdentity};
+use northstar_stream::outbound::{OutboundSender, RouteEnqueue, RouteSendError};
 use std::{
     io::Write,
     sync::{Arc, Mutex},
@@ -270,7 +270,7 @@ impl Port {
     }
 }
 impl OnlineRoutePort for Port {
-    type Item = crate::xmpp::outbound::OutboundItem;
+    type Item = northstar_stream::outbound::OutboundItem;
     type Session = OutboundSender;
     fn try_local(&self, session: &Self::Session, item: RouteEnqueue) -> Result<(), RouteSendError> {
         self.events.lock().unwrap().push("enqueue");

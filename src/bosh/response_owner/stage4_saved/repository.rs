@@ -1,11 +1,11 @@
 //! Actual ReplayService delegation over finite supplied repository receipts.
 use super::*;
-use crate::xmpp::outbound::DurableDelivery;
 use chrono::{DateTime, Utc};
 use northstar_delivery_core::bosh_ownership::response::{
     self as response, AckRequest, BindRequest, DeletedSource, RenewRequest,
 };
 use northstar_session_application::replay::*;
+use northstar_stream::outbound::DurableDelivery;
 use std::sync::Mutex;
 #[derive(Clone)]
 pub(super) struct Repository {
@@ -122,7 +122,7 @@ impl ReplayRepository for Repository {
             )
         };
         emit(None);
-        let deleted = crate::xmpp::outbound::MixDelivery {
+        let deleted = northstar_stream::outbound::MixDelivery {
             delivery_id: ack.deleted.delivery_id.0,
             lease_token: ack.deleted.lease_token.0,
         };

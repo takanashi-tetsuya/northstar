@@ -491,7 +491,7 @@ fn duplicate_rid_replays_only_an_identical_request() {
         rid: request.rid,
         fingerprint: request.fingerprint,
         response: response.clone(),
-        durable_ownership: Arc::new(crate::xmpp::outbound::BoshResponseOwnership {
+        durable_ownership: Arc::new(northstar_stream::outbound::BoshResponseOwnership {
             c2s_message_ids: vec![uuid::Uuid::from_u128(7)],
             mix_delivery_ids: Vec::new(),
         }),
@@ -523,7 +523,7 @@ fn duplicate_rid_replays_only_an_identical_request() {
         rid: request.rid,
         fingerprint: request.fingerprint,
         response,
-        durable_ownership: Arc::new(crate::xmpp::outbound::BoshResponseOwnership::default()),
+        durable_ownership: Arc::new(northstar_stream::outbound::BoshResponseOwnership::default()),
         transport_receipts: Vec::new(),
         owned_at: Instant::now(),
         response_bytes: 64,
@@ -550,16 +550,16 @@ fn duplicate_rid_replays_only_an_identical_request() {
 
 #[test]
 fn response_payload_preserves_durable_fences_until_rid_binding() {
-    let delivery = crate::xmpp::outbound::DurableDelivery {
+    let delivery = northstar_stream::outbound::DurableDelivery {
         recipient_id: uuid::Uuid::from_u128(1),
         message_id: uuid::Uuid::from_u128(2),
         claim_id: Some(uuid::Uuid::from_u128(3)),
     };
-    let first = crate::xmpp::outbound::OutboundItem::durable(
+    let first = northstar_stream::outbound::OutboundItem::durable(
         "<message id='durable'/>".to_owned(),
         delivery,
     );
-    let second = crate::xmpp::outbound::OutboundItem::plain("<presence/>".to_owned());
+    let second = northstar_stream::outbound::OutboundItem::plain("<presence/>".to_owned());
     let mut bytes = first.stanza.len() + second.stanza.len();
     let mut output = VecDeque::from([first.clone(), second.clone()]);
     let governor = response_test_governor();
@@ -568,7 +568,7 @@ fn response_payload_preserves_durable_fences_until_rid_binding() {
     assert_eq!(payload, format!("{}{}", first.stanza, second.stanza));
     assert_eq!(
         sources,
-        vec![crate::xmpp::outbound::TransportOwnershipSource::C2s(
+        vec![northstar_stream::outbound::TransportOwnershipSource::C2s(
             delivery
         )]
     );
@@ -578,7 +578,8 @@ fn response_payload_preserves_durable_fences_until_rid_binding() {
     assert_eq!(bytes, 0);
     assert!(output.is_empty());
 
-    let oversized = crate::xmpp::outbound::OutboundItem::durable("<message/>".repeat(32), delivery);
+    let oversized =
+        northstar_stream::outbound::OutboundItem::durable("<message/>".repeat(32), delivery);
     let mut bytes = oversized.stanza.len();
     let mut output = VecDeque::from([oversized.clone()]);
     assert!(take_response_payload(&mut output, &mut bytes, 256, &governor).is_err());
@@ -591,27 +592,30 @@ fn response_payload_preserves_durable_fences_until_rid_binding() {
 
 #[test]
 fn superseded_bosh_source_is_removed_without_losing_other_response_items() {
-    let stale = crate::xmpp::outbound::DurableDelivery {
+    let stale = northstar_stream::outbound::DurableDelivery {
         recipient_id: uuid::Uuid::from_u128(1),
         message_id: uuid::Uuid::from_u128(2),
         claim_id: Some(uuid::Uuid::from_u128(3)),
     };
-    let survivor = crate::xmpp::outbound::DurableDelivery {
+    let survivor = northstar_stream::outbound::DurableDelivery {
         message_id: uuid::Uuid::from_u128(4),
         ..stale
     };
     let (receipt, mut received) = mpsc::unbounded_channel();
     let mut output = VecDeque::from([
-        crate::xmpp::outbound::OutboundItem::with_transport_receipt(
+        northstar_stream::outbound::OutboundItem::with_transport_receipt(
             "<presence id='before'/>".to_owned(),
             receipt,
         ),
-        crate::xmpp::outbound::OutboundItem::durable("<message id='stale'/>".to_owned(), stale),
-        crate::xmpp::outbound::OutboundItem::durable(
+        northstar_stream::outbound::OutboundItem::durable(
+            "<message id='stale'/>".to_owned(),
+            stale,
+        ),
+        northstar_stream::outbound::OutboundItem::durable(
             "<message id='survivor'/>".to_owned(),
             survivor,
         ),
-        crate::xmpp::outbound::OutboundItem::plain("<presence id='after'/>".to_owned()),
+        northstar_stream::outbound::OutboundItem::plain("<presence id='after'/>".to_owned()),
     ]);
     let mut bytes = output.iter().map(|item| item.stanza.len()).sum();
     let (_, _, abandoned_receipts, _, selected) =
@@ -636,7 +640,7 @@ fn superseded_bosh_source_is_removed_without_losing_other_response_items() {
     );
     assert_eq!(
         sources,
-        vec![crate::xmpp::outbound::TransportOwnershipSource::C2s(
+        vec![northstar_stream::outbound::TransportOwnershipSource::C2s(
             survivor
         )]
     );
@@ -650,7 +654,7 @@ fn superseded_bosh_source_is_removed_without_losing_other_response_items() {
 fn only_exact_typed_supersession_allows_bosh_response_rebuild() {
     let message_id = uuid::Uuid::from_u128(42);
     let superseded =
-        anyhow::Error::new(crate::xmpp::outbound::DurableDeliverySuperseded { message_id })
+        anyhow::Error::new(northstar_stream::outbound::DurableDeliverySuperseded { message_id })
             .context("bind BOSH response");
     assert_eq!(superseded_bosh_message_id(&superseded), Some(message_id));
     for error in [
@@ -663,19 +667,21 @@ fn only_exact_typed_supersession_allows_bosh_response_rebuild() {
 
 #[test]
 fn response_payload_keeps_typed_mix_source_until_durable_rid_binding() {
-    let c2s = crate::xmpp::outbound::DurableDelivery {
+    let c2s = northstar_stream::outbound::DurableDelivery {
         recipient_id: uuid::Uuid::from_u128(11),
         message_id: uuid::Uuid::from_u128(12),
         claim_id: Some(uuid::Uuid::from_u128(13)),
     };
-    let mix = crate::xmpp::outbound::MixDelivery {
+    let mix = northstar_stream::outbound::MixDelivery {
         delivery_id: uuid::Uuid::from_u128(21),
         lease_token: uuid::Uuid::from_u128(22),
     };
     let c2s_item =
-        crate::xmpp::outbound::OutboundItem::durable("<message id='c2s'/>".to_owned(), c2s);
-    let (mix_item, _handoff) =
-        crate::xmpp::outbound::OutboundItem::durable_mix("<message id='mix'/>".to_owned(), mix);
+        northstar_stream::outbound::OutboundItem::durable("<message id='c2s'/>".to_owned(), c2s);
+    let (mix_item, _handoff) = northstar_stream::outbound::OutboundItem::durable_mix(
+        "<message id='mix'/>".to_owned(),
+        mix,
+    );
     let mut output = VecDeque::from([c2s_item.clone(), mix_item.clone()]);
     let mut bytes = output.iter().map(|item| item.stanza.len()).sum();
 
@@ -686,8 +692,8 @@ fn response_payload_keeps_typed_mix_source_until_durable_rid_binding() {
     assert_eq!(
         sources,
         vec![
-            crate::xmpp::outbound::TransportOwnershipSource::C2s(c2s),
-            crate::xmpp::outbound::TransportOwnershipSource::Mix(mix),
+            northstar_stream::outbound::TransportOwnershipSource::C2s(c2s),
+            northstar_stream::outbound::TransportOwnershipSource::Mix(mix),
         ]
     );
     assert!(receipts.is_empty());
@@ -703,13 +709,13 @@ fn response_payload_keeps_resume_control_and_replay_before_late_suffix() {
     // post-transport route-publication task. A stanza accepted by that
     // task is therefore necessarily appended behind the complete replay,
     // even if the task runs before this HTTP response is assembled.
-    let control = crate::xmpp::outbound::OutboundItem::plain(
+    let control = northstar_stream::outbound::OutboundItem::plain(
         "<resumed xmlns='urn:xmpp:sm:3' h='0' previd='session'/>".to_owned(),
     );
-    let replay = crate::xmpp::outbound::OutboundItem::plain(
+    let replay = northstar_stream::outbound::OutboundItem::plain(
         "<message id='durable-replay'><body>old</body></message>".to_owned(),
     );
-    let suffix = crate::xmpp::outbound::OutboundItem::plain(
+    let suffix = northstar_stream::outbound::OutboundItem::plain(
         "<message id='volatile-suffix'><body>new</body></message>".to_owned(),
     );
     let mut output = VecDeque::from([control.clone(), replay.clone(), suffix.clone()]);
@@ -741,7 +747,7 @@ fn resume_auth_control_marker_is_atomic_and_control_only() {
         };
         let prefix = "<presence/>";
         for (max_stanzas, max_bytes) in [(3, 4096), (4, prefix.len())] {
-            let mut output = VecDeque::from([crate::xmpp::outbound::OutboundItem::plain(
+            let mut output = VecDeque::from([northstar_stream::outbound::OutboundItem::plain(
                 prefix.to_owned(),
             )]);
             let mut bytes = prefix.len();
@@ -759,7 +765,7 @@ fn resume_auth_control_marker_is_atomic_and_control_only() {
             assert!(!output[0].is_bosh_auth_control());
         }
 
-        let mut output = VecDeque::from([crate::xmpp::outbound::OutboundItem::plain(
+        let mut output = VecDeque::from([northstar_stream::outbound::OutboundItem::plain(
             prefix.to_owned(),
         )]);
         let mut bytes = prefix.len();
@@ -785,7 +791,7 @@ fn resume_auth_control_marker_is_atomic_and_control_only() {
         assert_eq!(
             output
                 .iter()
-                .map(crate::xmpp::outbound::OutboundItem::is_bosh_auth_control)
+                .map(northstar_stream::outbound::OutboundItem::is_bosh_auth_control)
                 .collect::<Vec<_>>(),
             [false, activate_route, false, false]
         );
@@ -808,7 +814,7 @@ fn bosh_response_and_transport_drop_retain_then_release_resume_capacity() {
         Arc::clone(&metrics),
     )
     .unwrap();
-    let source = VecDeque::from([crate::xmpp::outbound::SmUnackedStanza::plain(
+    let source = VecDeque::from([northstar_stream::outbound::SmUnackedStanza::plain(
         "<message id='resume'><body>".to_owned() + &"x".repeat(4_096) + "</body></message>",
     )]);
     let action = crate::xmpp::protocol::ResumePayload::from_sm_unacked(

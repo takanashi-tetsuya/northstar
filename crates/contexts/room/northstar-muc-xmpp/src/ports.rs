@@ -22,6 +22,7 @@ use northstar_room_core::occupancy::{
     MucRoleChange, SerializableMucOccupant,
 };
 use northstar_session_core::JoinedMucMembership;
+use northstar_stream::outbound::OutboundSender;
 use std::{collections::HashMap, future::Future};
 use tokio::sync::mpsc::error::TrySendError;
 use uuid::Uuid;
@@ -439,4 +440,18 @@ pub trait MucSession: Send + Sync {
         &self,
         prepared: &discussion::PreparedDiscussion,
     ) -> Result<Option<discussion::Observation>, discussion::Rejected>;
+}
+
+impl MucOutbound for OutboundSender {
+    fn try_send(&self, stanza: String) -> Result<(), TrySendError<String>> {
+        OutboundSender::try_send(self, stanza)
+    }
+
+    fn try_send_durable(
+        &self,
+        stanza: String,
+        delivery: DurableDelivery,
+    ) -> Result<(), TrySendError<String>> {
+        OutboundSender::try_send_durable(self, stanza, delivery)
+    }
 }

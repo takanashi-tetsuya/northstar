@@ -1,7 +1,7 @@
 //! Local MUC occupant records, their endpoints and suspended SM endpoint buffers.
 
-use crate::xmpp::outbound::OutboundSender;
 use northstar_room_core::occupancy;
+use northstar_stream::outbound::OutboundSender;
 use std::collections::VecDeque;
 
 pub type MucOccupant = occupancy::MucOccupant<OutboundSender, SuspendedMucEndpoint>;
@@ -25,7 +25,7 @@ pub struct SuspendedMucEndpoint {
 
 #[derive(Clone)]
 pub(crate) enum SuspendedMucRoute {
-    Live(crate::xmpp::outbound::OutboundSender),
+    Live(northstar_stream::outbound::OutboundSender),
     /// A short synchronous hand-off. Deliveries wait rather than falling back
     /// to a stale occupant-local sender.
     Transitioning,
@@ -162,7 +162,7 @@ impl SuspendedMucEndpoint {
 
     pub(crate) fn new_live(
         sm_session_id: uuid::Uuid,
-        sender: crate::xmpp::outbound::OutboundSender,
+        sender: northstar_stream::outbound::OutboundSender,
     ) -> Self {
         Self {
             sm_session_id,

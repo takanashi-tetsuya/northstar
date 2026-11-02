@@ -5,10 +5,7 @@
 //! No SQL, AppState, spawned tasks, new timers, Stage3 adapter, or verdicts.
 use super::{MucDiscussionLive, PreparedMucDiscussion};
 use crate::stage4_replay::{self as wire, driver};
-use crate::xmpp::outbound::{
-    DurableDelivery, MixDelivery, OutboundItem, OutboundSender, RouteEnqueue,
-    TransportOwnershipSource,
-};
+use crate::xmpp::auth_publication::OutboundAuthPublication;
 use crate::xmpp::stage4_frame_capture::capture_frame;
 use crate::xmpp::{
     direct_delivery::{DirectWriteLease, DirectWritePort, NativeWriteRunner},
@@ -41,6 +38,10 @@ use northstar_room_application::{
 use northstar_room_core::{
     ClusterMucOccupancyTarget, MucActorAuthority, MucActorPrincipal, MucDiscussion,
     MucDiscussionAdmission, MucRoom,
+};
+use northstar_stream::outbound::{
+    DurableDelivery, MixDelivery, OutboundItem, OutboundSender, RouteEnqueue,
+    TransportOwnershipSource,
 };
 use sha2::{Digest, Sha256};
 use std::{

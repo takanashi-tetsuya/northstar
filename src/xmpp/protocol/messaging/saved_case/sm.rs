@@ -1,12 +1,9 @@
 //! The saved entry's single SM recorder. Native and BOSH recording borrow the
 //! same real substate/governor/turn; only existing persistence ports are fake.
 use super::{next, wire, Sequence, SmMetadata, TransportOwnershipSource};
-use crate::{
-    xmpp::outbound::OutboundItem,
-    xmpp::protocol::{
-        sm_owner::{SmOwnerPort, SmTransportTurn, SmTurnRunner},
-        SmRuntimePolicy, SmSubstate,
-    },
+use crate::xmpp::protocol::{
+    sm_owner::{SmOwnerPort, SmTransportTurn, SmTurnRunner},
+    SmRuntimePolicy, SmSubstate,
 };
 use anyhow::{Context, Result};
 use northstar_delivery_core::sm_ownership as core;
@@ -17,6 +14,7 @@ use northstar_session_application::sm::{SmCheckpointOutcome, SmQueueOwnershipRes
 use northstar_session_application::sm_capacity::{
     SmCapacityLease, SmCapacityMetrics, SmMemoryGovernor,
 };
+use northstar_stream::outbound::OutboundItem;
 use std::{
     collections::VecDeque,
     sync::{

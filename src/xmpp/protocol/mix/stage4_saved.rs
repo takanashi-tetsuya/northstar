@@ -7,6 +7,7 @@ mod routes;
 mod tests;
 use super::*;
 use crate::stage4_replay as wire;
+use crate::xmpp::auth_publication::OutboundAuthPublication;
 use crate::xmpp::frame_execution::{FrameExecution, SessionExecutions};
 use anyhow::{ensure, Context, Result};
 use northstar_room_application::mix as fg;
@@ -65,8 +66,8 @@ async fn supplied_commit(cut: wire::CommitCut) -> Result<()> {
         wire::CommitCut::Error => anyhow::bail!("supplied repository failure"),
     }
 }
-fn source_input(v: &wire::MixSource<wire::Id>) -> crate::xmpp::outbound::MixDelivery {
-    crate::xmpp::outbound::MixDelivery {
+fn source_input(v: &wire::MixSource<wire::Id>) -> northstar_stream::outbound::MixDelivery {
+    northstar_stream::outbound::MixDelivery {
         delivery_id: v.delivery_id.0,
         lease_token: v.lease_token.0,
     }
@@ -111,7 +112,7 @@ struct IssuedLocal {
     target: String,
     connection: Uuid,
     lifecycle: Arc<std::sync::atomic::AtomicU8>,
-    source: crate::xmpp::outbound::MixDelivery,
+    source: northstar_stream::outbound::MixDelivery,
     stanza: String,
 }
 #[derive(Clone)]
@@ -119,7 +120,7 @@ struct ObservedDequeue {
     item_ordinal: u8,
     target: String,
     connection: Uuid,
-    source: crate::xmpp::outbound::MixDelivery,
+    source: northstar_stream::outbound::MixDelivery,
     stanza: String,
 }
 #[derive(Default)]
@@ -501,7 +502,7 @@ impl WorkerRun {
         &self,
         route: &RouteHandle,
         item_ordinal: u8,
-        item: &crate::xmpp::outbound::OutboundItem,
+        item: &northstar_stream::outbound::OutboundItem,
     ) {
         let result = (|| {
             let snap = self.capture.owner.snapshot();
@@ -777,21 +778,21 @@ impl ClaimedMixDeliveryPort for Port {
                 try_send_local_durable_mix_observed(&session.sender, &session.disconnect, &local)
                     .await;
             let received = match &result {
-                Ok(crate::xmpp::outbound::MixTransportCompletion::SocketFenced {
+                Ok(northstar_stream::outbound::MixTransportCompletion::SocketFenced {
                     connection_id,
                 }) => wire::HandoffResult::Received(map::boundary(
                     mix_worker::TransferBoundary::SocketFenced(*connection_id),
                 )),
-                Ok(crate::xmpp::outbound::MixTransportCompletion::SmPersisted { session_id }) => {
-                    wire::HandoffResult::Received(map::boundary(
-                        mix_worker::TransferBoundary::SmPersisted(*session_id),
-                    ))
-                }
-                Ok(crate::xmpp::outbound::MixTransportCompletion::BoshPersisted { session_id }) => {
-                    wire::HandoffResult::Received(map::boundary(
-                        mix_worker::TransferBoundary::BoshPersisted(*session_id),
-                    ))
-                }
+                Ok(northstar_stream::outbound::MixTransportCompletion::SmPersisted {
+                    session_id,
+                }) => wire::HandoffResult::Received(map::boundary(
+                    mix_worker::TransferBoundary::SmPersisted(*session_id),
+                )),
+                Ok(northstar_stream::outbound::MixTransportCompletion::BoshPersisted {
+                    session_id,
+                }) => wire::HandoffResult::Received(map::boundary(
+                    mix_worker::TransferBoundary::BoshPersisted(*session_id),
+                )),
                 Err(MixLocalTransportFailure::HandoffClosed) => {
                     wire::HandoffResult::Closed(wire::Empty {})
                 }
@@ -876,7 +877,7 @@ impl ClaimedMixDeliveryPort for Port {
 }
 
 pub(crate) fn queue_item(
-    item: &crate::xmpp::outbound::OutboundItem,
+    item: &northstar_stream::outbound::OutboundItem,
     ordinal: u8,
     connection: Uuid,
 ) -> Result<wire::QueueItem<wire::EvidenceId>> {
@@ -889,10 +890,10 @@ pub(crate) fn queue_item(
         item_ordinal: ordinal,
         connection_id: map::id(connection),
         source: map::optional(item.durable_source.map(|s| match s {
-            crate::xmpp::outbound::TransportOwnershipSource::Mix(s) => {
+            northstar_stream::outbound::TransportOwnershipSource::Mix(s) => {
                 wire::Source::Mix(map::source(s))
             }
-            crate::xmpp::outbound::TransportOwnershipSource::C2s(s) => {
+            northstar_stream::outbound::TransportOwnershipSource::C2s(s) => {
                 wire::Source::C2s(wire::C2sSource {
                     recipient_id: map::id(s.recipient_id),
                     message_id: map::id(s.message_id),
@@ -1144,7 +1145,7 @@ impl Bridge {
                 .get(usize::from(origin.recipient_ordinal))
                 .context("accepted projection recipient missing")?;
             let row = Arc::new(mix_worker::Row {
-                source: crate::xmpp::outbound::MixDelivery {
+                source: northstar_stream::outbound::MixDelivery {
                     delivery_id: recipient.delivery_id,
                     lease_token: claim.lease_token.0,
                 },

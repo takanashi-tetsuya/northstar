@@ -30,7 +30,7 @@ impl AppState {
         &self,
         jid: &str,
         stanza: &str,
-        delivery: Option<crate::xmpp::outbound::DurableDelivery>,
+        delivery: Option<northstar_stream::outbound::DurableDelivery>,
     ) -> bool {
         let mut delivered = false;
         if let Ok(nodes) = self.cluster.lookup_nodes(jid).await {
@@ -64,7 +64,7 @@ impl AppState {
         &self,
         jid: &str,
         stanza: &str,
-        delivery: Option<crate::xmpp::outbound::DurableDelivery>,
+        delivery: Option<northstar_stream::outbound::DurableDelivery>,
     ) -> S2sRemotePrimaryDelivery {
         if let Ok(nodes) = self.cluster.lookup_nodes(jid).await {
             for node_id in nodes {

@@ -289,15 +289,15 @@ fn resume_test_governor(
 
 fn replay_source(
     bytes: usize,
-) -> std::collections::VecDeque<crate::xmpp::outbound::SmUnackedStanza> {
-    std::collections::VecDeque::from([crate::xmpp::outbound::SmUnackedStanza::plain(
+) -> std::collections::VecDeque<northstar_stream::outbound::SmUnackedStanza> {
+    std::collections::VecDeque::from([northstar_stream::outbound::SmUnackedStanza::plain(
         "x".repeat(bytes),
     )])
 }
 
 fn resume_payload(
     governor: &std::sync::Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
-    source: &std::collections::VecDeque<crate::xmpp::outbound::SmUnackedStanza>,
+    source: &std::collections::VecDeque<northstar_stream::outbound::SmUnackedStanza>,
 ) -> anyhow::Result<ResumePayload> {
     let mut control = String::with_capacity(64);
     control.push_str("<resumed xmlns='urn:xmpp:sm:3'/>");

@@ -5,13 +5,12 @@ use super::auth_publication::{
     OwnedPublication,
 };
 use super::direct_delivery::{DirectWriteLease, DirectWritePort, NativeWriteRunner};
+use crate::stage4_replay as wire;
+use crate::xmpp::auth_publication::OutboundAuthPublication;
 use crate::xmpp::protocol::mix::stage4_saved::Service;
-use crate::{
-    stage4_replay as wire,
-    xmpp::outbound::{DurableDelivery, MixDelivery, OutboundItem},
-};
 use anyhow::{ensure, Result};
 use northstar_delivery_core::native_write as actual;
+use northstar_stream::outbound::{DurableDelivery, MixDelivery, OutboundItem};
 use sha2::{Digest, Sha256};
 use std::{
     pin::Pin,

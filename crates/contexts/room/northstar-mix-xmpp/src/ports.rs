@@ -17,6 +17,7 @@ use northstar_room_application::mix_service::{
 use northstar_room_core::mix::MixSessionCapability;
 use northstar_room_core::mix_iq_relay::{MixIqRelayIndex, PendingMixIqRelay};
 use northstar_roster_core::RosterChange;
+use northstar_stream::outbound::OutboundSender;
 use northstar_xep_core::XepId;
 use roxmltree::Node;
 use std::{future::Future, sync::Arc, time::Instant};
@@ -244,4 +245,30 @@ pub trait MixSession: Send + Sync {
     fn mix_presence_gate(&self) -> &Arc<Mutex<()>>;
     fn mix_presence_fallback_suppressed(&self) -> &DashSet<String>;
     fn frame_observer(&self) -> &dyn MixFrameObserver;
+}
+
+impl MixOutbound for OutboundSender {
+    fn try_send(&self, stanza: String) -> Result<(), TrySendError<String>> {
+        OutboundSender::try_send(self, stanza)
+    }
+
+    fn try_send_with_transport_receipt(
+        &self,
+        stanza: String,
+        receipt: mpsc::UnboundedSender<()>,
+    ) -> Result<(), TrySendError<String>> {
+        OutboundSender::try_send_with_transport_receipt(self, stanza, receipt)
+    }
+
+    fn try_send_durable_mix(
+        &self,
+        stanza: String,
+        delivery: MixDelivery,
+    ) -> Result<oneshot::Receiver<MixTransportCompletion>, TrySendError<String>> {
+        OutboundSender::try_send_durable_mix(self, stanza, delivery)
+    }
+
+    fn disconnect_backpressured_transport(&self) {
+        OutboundSender::disconnect_backpressured_transport(self);
+    }
 }

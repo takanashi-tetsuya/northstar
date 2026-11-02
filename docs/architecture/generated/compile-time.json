@@ -3531,6 +3531,10 @@
     ],
     [
       "northstar-mix-xmpp",
+      "northstar-stream"
+    ],
+    [
+      "northstar-mix-xmpp",
       "northstar-xep-0199"
     ],
     [
@@ -3628,6 +3632,10 @@
     [
       "northstar-muc-xmpp",
       "northstar-session-core"
+    ],
+    [
+      "northstar-muc-xmpp",
+      "northstar-stream"
     ],
     [
       "northstar-muc-xmpp",
@@ -4771,7 +4779,31 @@
     ],
     [
       "northstar-stream",
+      "northstar-delivery-core"
+    ],
+    [
+      "northstar-stream",
+      "northstar-message-core"
+    ],
+    [
+      "northstar-stream",
+      "northstar-session-application"
+    ],
+    [
+      "northstar-stream",
       "roxmltree"
+    ],
+    [
+      "northstar-stream",
+      "tokio"
+    ],
+    [
+      "northstar-stream",
+      "tokio-util"
+    ],
+    [
+      "northstar-stream",
+      "uuid"
     ],
     [
       "northstar-telemetry",

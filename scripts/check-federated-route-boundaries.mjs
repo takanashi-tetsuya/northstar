@@ -111,7 +111,7 @@ export function verifyFederatedRouteBoundaries(sources) {
   }
   const localStart = localEntries[0].index;
   const localSignature = adapter.slice(localStart, adapter.indexOf('{', localStart)).replace(/\s+/g, '');
-  if (localSignature !== 'fntry_local(&self,session:&Self::Session,enqueue:crate::xmpp::outbound::RouteEnqueue,)->Result<(),crate::xmpp::outbound::RouteSendError>') {
+  if (localSignature !== 'fntry_local(&self,session:&Self::Session,enqueue:northstar_stream::outbound::RouteEnqueue,)->Result<(),northstar_stream::outbound::RouteSendError>') {
     throw new Error('S2S adapter must accept an owned local enqueue and preserve its refusal type');
   }
   if (compactBody('try_local') !== 'OnlineRoutePort::try_local(self.0,session,enqueue)') {

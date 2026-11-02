@@ -295,7 +295,7 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     // Bind 2 receives the recipient projection from MAM. The transient
     // queue row is acknowledged without sending a second wire copy.
     let (outbound, mut receiver) = tokio::sync::mpsc::channel(1);
-    let outbound = crate::xmpp::outbound::OutboundSender::new(outbound);
+    let outbound = northstar_stream::outbound::OutboundSender::new(outbound);
     assert_eq!(
         crate::db::deliver_bind2_offline(&pool, recipient_id, 30, &outbound, None)
             .await

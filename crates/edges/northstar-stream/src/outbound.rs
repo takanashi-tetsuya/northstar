@@ -29,6 +29,13 @@ impl std::fmt::Display for DurableDeliverySuperseded {
 
 impl std::error::Error for DurableDeliverySuperseded {}
 
+/// The transport's sealed authentication control. The session layer only
+/// checks that the queued bytes are the sealed control; the transport reads
+/// its own holder back through `OutboundItem::auth_control`.
+pub trait AuthControl: std::any::Any + std::fmt::Debug + Send + Sync {
+    fn validate_control(&self, control: &str) -> anyhow::Result<()>;
+}
+
 /// A database-backed C2S delivery which must not be acknowledged merely
 /// because it entered an in-memory channel. The transport removes the exact
 /// durable row only after the transport's recoverable acknowledgement
@@ -42,7 +49,7 @@ pub struct OutboundItem {
     /// alone grants no publication authority. Neither field is persisted in SM
     /// or the BOSH response cache.
     bosh_auth_control: bool,
-    auth_publication: Option<crate::xmpp::auth_publication::AuthControlHolder>,
+    auth_publication: Option<std::sync::Arc<dyn AuthControl>>,
     /// The one authoritative durable source, if this stanza is recoverable.
     /// C2S offline messages and MIX recipient leases are deliberately a tagged
     /// union: a transport can transfer or acknowledge exactly one source.
@@ -58,17 +65,17 @@ pub struct OutboundItem {
     /// Process-local shutdown notification completion. TCP/WS confirm only
     /// after their write succeeds; BOSH waits for the client's response ACK.
     /// SM persistence alone never confirms this signal or stores it for replay.
-    pub(crate) transport_write_receipt: Option<mpsc::UnboundedSender<()>>,
+    pub transport_write_receipt: Option<mpsc::UnboundedSender<()>>,
     /// Process-wide transient SM replay reservation. BOSH attaches the same
     /// shared hold to every control/replay fragment until the corresponding
     /// HTTP response body is completed or discarded. Ordinary routed stanzas
     /// never set this field.
-    pub(crate) transient_sm_capacity:
+    pub transient_sm_capacity:
         Option<std::sync::Arc<Vec<northstar_session_application::sm_capacity::SmCapacityLease>>>,
 }
 
-pub(crate) type RouteEnqueue = northstar_message_core::route_item::RouteEnqueue<OutboundItem>;
-pub(crate) type RouteSendError = northstar_message_core::route_item::RouteSendError<OutboundItem>;
+pub type RouteEnqueue = northstar_message_core::route_item::RouteEnqueue<OutboundItem>;
+pub type RouteSendError = northstar_message_core::route_item::RouteSendError<OutboundItem>;
 
 impl northstar_message_core::route_item::RouteItem for OutboundItem {
     fn plain(stanza: String) -> Self {
@@ -173,7 +180,7 @@ impl OutboundItem {
         }
     }
 
-    pub(crate) fn with_transport_write_receipt(
+    pub fn with_transport_write_receipt(
         stanza: String,
         receipt: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -183,7 +190,7 @@ impl OutboundItem {
         }
     }
 
-    pub(crate) fn resume_fragment(
+    pub fn resume_fragment(
         stanza: String,
         capacity: std::sync::Arc<Vec<northstar_session_application::sm_capacity::SmCapacityLease>>,
     ) -> Self {
@@ -199,24 +206,19 @@ impl OutboundItem {
         }
     }
 
-    pub(crate) fn is_bosh_auth_control(&self) -> bool {
+    pub fn is_bosh_auth_control(&self) -> bool {
         self.bosh_auth_control
     }
 
-    pub(crate) fn with_auth_publication(
-        mut self,
-        holder: crate::xmpp::auth_publication::AuthControlHolder,
-    ) -> anyhow::Result<Self> {
+    pub fn with_auth_publication(mut self, holder: impl AuthControl) -> anyhow::Result<Self> {
         holder.validate_control(&self.stanza)?;
         self.bosh_auth_control = true;
-        self.auth_publication = Some(holder);
+        self.auth_publication = Some(std::sync::Arc::new(holder));
         Ok(self)
     }
 
-    pub(crate) fn auth_publication(
-        &self,
-    ) -> Option<&crate::xmpp::auth_publication::AuthControlHolder> {
-        self.auth_publication.as_ref()
+    pub fn auth_control(&self) -> Option<&dyn AuthControl> {
+        self.auth_publication.as_deref()
     }
 
     pub fn confirm_transport_ownership(&self) {
@@ -225,7 +227,7 @@ impl OutboundItem {
         }
     }
 
-    pub(crate) fn confirm_transport_write(&self) {
+    pub fn confirm_transport_write(&self) {
         if let Some(receipt) = &self.transport_write_receipt {
             let _ = receipt.send(());
         }
@@ -349,7 +351,7 @@ impl OutboundSender {
         clippy::result_large_err,
         reason = "A refused route returns the same item and ownership by value for recovery."
     )]
-    pub(crate) fn try_send_route_item(&self, enqueue: RouteEnqueue) -> Result<(), RouteSendError> {
+    pub fn try_send_route_item(&self, enqueue: RouteEnqueue) -> Result<(), RouteSendError> {
         use northstar_message_core::route_item::QueueRefusal;
         enqueue.send_with(|item| {
             let durable = item.c2s_delivery().is_some();
@@ -393,7 +395,7 @@ impl OutboundSender {
             .map_err(|error| mpsc::error::SendError(error.0.stanza))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn send_durable(
         &self,
         stanza: String,
@@ -434,7 +436,7 @@ impl OutboundSender {
         self.try_send_receipted_item(OutboundItem::with_transport_receipt(stanza, receipt))
     }
 
-    pub(crate) fn try_send_with_transport_write_receipt(
+    pub fn try_send_with_transport_write_receipt(
         &self,
         stanza: String,
         receipt: mpsc::UnboundedSender<()>,

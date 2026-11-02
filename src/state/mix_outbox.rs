@@ -9,7 +9,6 @@ use crate::{
     cluster::{ClusterMixRouteLookup, ClusterNodeDelivery},
     s2s::FederationRouter,
     xmpp::capabilities::MixPostCommitTelemetry,
-    xmpp::outbound::MixDelivery,
 };
 use anyhow::Result;
 use dashmap::DashMap;
@@ -19,6 +18,7 @@ use northstar_mix_xmpp::ports::MixOutboxPort;
 use northstar_protocol_runtime::caps::{CapsObservationOwner, CapsResourceIndex, PendingCapsIndex};
 use northstar_room_application::mix_service::MixService;
 use northstar_room_core::mix::{MixSessionCapability, CORE_NS, PAM_NS};
+use northstar_stream::outbound::MixDelivery;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,

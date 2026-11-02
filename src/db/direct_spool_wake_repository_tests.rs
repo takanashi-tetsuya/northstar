@@ -180,7 +180,7 @@ async fn direct_spool_wake_commit_ack_takeover_and_cleanup_are_fenced() {
         .execute(&pool)
         .await
         .unwrap();
-    let live_delivery = crate::xmpp::outbound::DurableDelivery {
+    let live_delivery = northstar_stream::outbound::DurableDelivery {
         recipient_id: raced_recipient,
         message_id: raced_message,
         claim_id: None,
@@ -189,8 +189,8 @@ async fn direct_spool_wake_commit_ack_takeover_and_cleanup_are_fenced() {
         .await
         .unwrap_err();
     assert_eq!(
-        loser.downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>(),
-        Some(&crate::xmpp::outbound::DurableDeliverySuperseded {
+        loser.downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>(),
+        Some(&northstar_stream::outbound::DurableDeliverySuperseded {
             message_id: raced_message,
         })
     );
@@ -203,7 +203,7 @@ async fn direct_spool_wake_commit_ack_takeover_and_cleanup_are_fenced() {
     assert_eq!(persisted_claim, Some(replay_claim));
     let winner = crate::db::replay::fence_durable_socket_write(
         &pool,
-        crate::xmpp::outbound::DurableDelivery {
+        northstar_stream::outbound::DurableDelivery {
             claim_id: Some(replay_claim),
             ..live_delivery
         },
@@ -267,7 +267,7 @@ async fn direct_spool_wake_commit_ack_takeover_and_cleanup_are_fenced() {
     assert_eq!(initial_claim, Some(reserved_message));
     let fenced = crate::db::replay::fence_durable_socket_write(
         &pool,
-        crate::xmpp::outbound::DurableDelivery {
+        northstar_stream::outbound::DurableDelivery {
             recipient_id: reserved_recipient,
             message_id: reserved_message,
             claim_id: initial_claim,

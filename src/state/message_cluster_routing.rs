@@ -1,7 +1,6 @@
 //! Cluster routes for client IQs, personal messages, and their Carbons.
 
 use super::{AppState, OnlineSession};
-use crate::xmpp::outbound::DurableDelivery;
 use anyhow::Result;
 use northstar_message_application::messaging::{
     DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
@@ -11,18 +10,19 @@ use northstar_room_application::muc_service::{
     ClusterMucAffiliationSubject, ClusterMucInviteAuthority, ClusterMucPrincipal,
 };
 use northstar_roster_application::privacy::PrivacyStanzaKind;
+use northstar_stream::outbound::DurableDelivery;
 use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
 impl OnlineRoutePort for AppState {
-    type Item = crate::xmpp::outbound::OutboundItem;
+    type Item = northstar_stream::outbound::OutboundItem;
     type Session = OnlineSession;
 
     fn try_local(
         &self,
         session: &Self::Session,
-        enqueue: crate::xmpp::outbound::RouteEnqueue,
-    ) -> Result<(), crate::xmpp::outbound::RouteSendError> {
+        enqueue: northstar_stream::outbound::RouteEnqueue,
+    ) -> Result<(), northstar_stream::outbound::RouteSendError> {
         session.sender.try_send_route_item(enqueue)
     }
 
@@ -147,7 +147,7 @@ impl AppState {
         &self,
         jid: &str,
         stanza: &str,
-        delivery: Option<crate::xmpp::outbound::DurableDelivery>,
+        delivery: Option<northstar_stream::outbound::DurableDelivery>,
     ) -> bool {
         let mut delivered = false;
         if let Ok(nodes) = self.cluster.lookup_nodes(jid).await {
@@ -180,7 +180,7 @@ impl AppState {
         &self,
         jid: &str,
         stanza: &str,
-        delivery: Option<crate::xmpp::outbound::DurableDelivery>,
+        delivery: Option<northstar_stream::outbound::DurableDelivery>,
     ) -> OnlineRouteResult {
         if let Ok(nodes) = self.cluster.lookup_nodes(jid).await {
             for node_id in nodes {

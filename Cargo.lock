@@ -2257,6 +2257,7 @@ dependencies = [
  "northstar-room-core",
  "northstar-roster-core",
  "northstar-runtime",
+ "northstar-stream",
  "northstar-xep-0199",
  "northstar-xep-0313",
  "northstar-xep-0359",
@@ -2288,6 +2289,7 @@ dependencies = [
  "northstar-room-core",
  "northstar-security",
  "northstar-session-core",
+ "northstar-stream",
  "northstar-xep-0045",
  "northstar-xep-0199",
  "northstar-xep-0280",
@@ -2711,7 +2713,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures",
+ "northstar-delivery-core",
+ "northstar-message-core",
+ "northstar-session-application",
  "roxmltree",
+ "tokio",
+ "tokio-util",
+ "uuid",
 ]
 
 [[package]]

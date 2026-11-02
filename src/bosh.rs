@@ -160,7 +160,7 @@ struct CachedResponse {
     rid: u64,
     fingerprint: [u8; 32],
     response: BoshHttpResponse,
-    durable_ownership: Arc<crate::xmpp::outbound::BoshResponseOwnership>,
+    durable_ownership: Arc<northstar_stream::outbound::BoshResponseOwnership>,
     transport_receipts: Vec<mpsc::UnboundedSender<()>>,
     owned_at: Instant,
     response_bytes: usize,
@@ -188,14 +188,14 @@ struct BoshActor {
     mix_service: crate::state::BoshMixService,
     sm_memory_governor: Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
     commands: mpsc::Receiver<BoshCommand>,
-    outbound: mpsc::Receiver<crate::xmpp::outbound::OutboundItem>,
+    outbound: mpsc::Receiver<northstar_stream::outbound::OutboundItem>,
     next_rid: u64,
     highest_received: u64,
     highest_responded: u64,
     buffered: BTreeMap<u64, PendingRequest>,
     held: Option<HeldRequest>,
     replay: VecDeque<CachedResponse>,
-    output: VecDeque<crate::xmpp::outbound::OutboundItem>,
+    output: VecDeque<northstar_stream::outbound::OutboundItem>,
     output_bytes: usize,
     wait: Duration,
     hold: u8,
@@ -296,7 +296,7 @@ impl BoshManager {
         let (outbound_tx, outbound_rx) = mpsc::channel(policy.max_output_stanzas);
         let mut protocol = ProtocolSession::new(
             state.clone(),
-            crate::xmpp::outbound::OutboundSender::new(outbound_tx),
+            northstar_stream::outbound::OutboundSender::new(outbound_tx),
             true,
             ClientTransport::Bosh,
             None,
@@ -1055,7 +1055,7 @@ impl BoshActor {
 
     async fn record_and_push_item(
         &mut self,
-        item: crate::xmpp::outbound::OutboundItem,
+        item: northstar_stream::outbound::OutboundItem,
         operation: &northstar_delivery_core::bosh_ownership::Operation,
     ) -> bool {
         let mut output = ownership::Output {
@@ -1096,7 +1096,7 @@ impl BoshActor {
 
     async fn queue_outbound(
         &mut self,
-        item: crate::xmpp::outbound::OutboundItem,
+        item: northstar_stream::outbound::OutboundItem,
         operation: &northstar_delivery_core::bosh_ownership::Operation,
     ) -> bool {
         // BOSH cannot prove an individual stanza reached the peer without
@@ -1109,10 +1109,10 @@ impl BoshActor {
     }
 
     fn push_output(&mut self, stanza: String) -> bool {
-        self.push_output_item(crate::xmpp::outbound::OutboundItem::plain(stanza))
+        self.push_output_item(northstar_stream::outbound::OutboundItem::plain(stanza))
     }
 
-    fn push_output_item(&mut self, item: crate::xmpp::outbound::OutboundItem) -> bool {
+    fn push_output_item(&mut self, item: northstar_stream::outbound::OutboundItem) -> bool {
         ownership::Output {
             items: &mut self.output,
             bytes: &mut self.output_bytes,
@@ -1292,17 +1292,17 @@ impl BoshActor {
 
 type BoshResponseBody = (
     BoshHttpResponse,
-    Vec<crate::xmpp::outbound::TransportOwnershipSource>,
+    Vec<northstar_stream::outbound::TransportOwnershipSource>,
     Vec<mpsc::UnboundedSender<()>>,
-    VecDeque<crate::xmpp::outbound::OutboundItem>,
+    VecDeque<northstar_stream::outbound::OutboundItem>,
 );
 
 type BoshResponsePayload = (
     String,
-    Vec<crate::xmpp::outbound::TransportOwnershipSource>,
+    Vec<northstar_stream::outbound::TransportOwnershipSource>,
     Vec<mpsc::UnboundedSender<()>>,
     Vec<Arc<Vec<northstar_session_application::sm_capacity::SmCapacityLease>>>,
-    VecDeque<crate::xmpp::outbound::OutboundItem>,
+    VecDeque<northstar_stream::outbound::OutboundItem>,
 );
 
 pub async fn http_bind(

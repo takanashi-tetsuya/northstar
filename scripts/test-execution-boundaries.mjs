@@ -190,8 +190,8 @@ rejects('BOSH item marker cannot become public mutable authority', 'outbound',
   '    bosh_auth_control: bool,',
   '    pub(crate) bosh_auth_control: bool,', /private item selection metadata/);
 rejects('BOSH marker accessor cannot synthesize selected membership', 'outbound',
-  'pub(crate) fn is_bosh_auth_control(&self) -> bool { self.bosh_auth_control }',
-  'pub(crate) fn is_bosh_auth_control(&self) -> bool { true }', /private item selection metadata/);
+  'pub fn is_bosh_auth_control(&self) -> bool { self.bosh_auth_control }',
+  'pub fn is_bosh_auth_control(&self) -> bool { true }', /private item selection metadata/);
 rejects('BOSH cache cannot retain auth selection membership', 'bosh',
   'struct CachedResponse {',
   'struct CachedResponse {\n    auth_control_selected: bool,', /cache and replay/);
@@ -885,7 +885,7 @@ rejectsSm('SM item cannot substitute its body before recording', 'smOwner', 'rec
 rejectsSm('SM item cannot discard its checkpoint failure', 'smOwner', 'record_item', /\.await\?;/g, '.await.ok();', /real item/);
 rejectsSm('SM item cannot omit the ownership notification attempt', 'smOwner', 'record_item', /observation\.notification_attempted\(\);/g, '', /ownership notification/);
 rejectsSm('SM record cannot stop advancing h', 'smOwner', 'record_source', /self\.sm\.outbound_h\.wrapping_add\(1\)/g, 'self.sm.outbound_h', /append before checkpoint/);
-rejectsSm('SM record cannot restore after every checkpoint error', 'smOwner', 'record_source', /error\s*\.downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>\(\)\s*\.is_some\(\)/g, 'true', /typed supersession/);
+rejectsSm('SM record cannot restore after every checkpoint error', 'smOwner', 'record_source', /error\s*\.downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>\(\)\s*\.is_some\(\)/g, 'true', /typed supersession/);
 rejectsSm('SM record cannot omit its retained append fact', 'smOwner', 'record_source', /observation\.appended\(\);/g, '', /append before checkpoint/);
 rejectsSm('SM record cannot omit typed restoration', 'smOwner', 'record_source', /self\.sm\.unacked\.pop_back\(\);/g, '', /typed supersession/);
 rejectsSm('SM checkpoint cannot skip transient reservation', 'smOwner', 'checkpoint_in_turn', /self\s*\.port\s*\.reserve_snapshot\(live_bytes\)/g, 'unobserved_reservation()', /bind its snapshot/);

@@ -167,7 +167,7 @@ pub async fn deliver_offline_leased(
     pool: &PgPool,
     recipient_id: Uuid,
     ttl_days: i64,
-    outbound: &crate::xmpp::outbound::OutboundSender,
+    outbound: &northstar_stream::outbound::OutboundSender,
     bind2_mam_catchup: bool,
     active_privacy_list: Option<&str>,
 ) -> Result<usize> {
@@ -193,7 +193,7 @@ pub async fn deliver_offline_leased_before(
     pool: &PgPool,
     recipient_id: Uuid,
     ttl_days: i64,
-    outbound: &crate::xmpp::outbound::OutboundSender,
+    outbound: &northstar_stream::outbound::OutboundSender,
     bind2_mam_catchup: bool,
     active_privacy_list: Option<&str>,
     replay_started_at: DateTime<Utc>,
@@ -239,7 +239,7 @@ async fn deliver_offline_pages_for_test(
     pool: &PgPool,
     lease: &OfflineReplayLease,
     ttl_days: i64,
-    outbound: &crate::xmpp::outbound::OutboundSender,
+    outbound: &northstar_stream::outbound::OutboundSender,
     bind2_mam_catchup: bool,
     active_privacy_list: Option<&str>,
     owner_bare_jid: &str,
@@ -288,7 +288,7 @@ async fn deliver_offline_pages_for_test(
                 std::time::Duration::from_secs(5),
                 outbound.send_durable(
                     row.stanza.clone(),
-                    crate::xmpp::outbound::DurableDelivery {
+                    northstar_stream::outbound::DurableDelivery {
                         recipient_id: lease.recipient_id,
                         message_id: row.id,
                         claim_id: Some(page.claim_token),
@@ -340,9 +340,9 @@ pub async fn bind_bosh_transport_response(
     pool: &PgPool,
     session_id: Uuid,
     response_rid: u64,
-    sources: &[crate::xmpp::outbound::TransportOwnershipSource],
+    sources: &[northstar_stream::outbound::TransportOwnershipSource],
     ttl_seconds: u64,
-) -> Result<crate::xmpp::outbound::BoshResponseOwnership> {
+) -> Result<northstar_stream::outbound::BoshResponseOwnership> {
     bind_bosh_transport_response_inner(pool, session_id, response_rid, sources, ttl_seconds, None)
         .await
 }
@@ -350,7 +350,7 @@ pub async fn bind_bosh_transport_response(
 pub(crate) async fn bind_bosh_transport_response_observed(
     pool: &PgPool,
     request: &northstar_delivery_core::bosh_ownership::response::BindRequest,
-) -> Result<crate::xmpp::outbound::BoshResponseOwnership> {
+) -> Result<northstar_stream::outbound::BoshResponseOwnership> {
     request.validate_for_io()?;
     bind_bosh_transport_response_inner(
         pool,
@@ -374,7 +374,7 @@ pub async fn bind_bosh_delivery_response(
     pool: &PgPool,
     session_id: Uuid,
     response_rid: u64,
-    deliveries: &[crate::xmpp::outbound::DurableDelivery],
+    deliveries: &[northstar_stream::outbound::DurableDelivery],
     ttl_seconds: u64,
 ) -> Result<()> {
     let response_rid = i64::try_from(response_rid).context("BOSH RID exceeds bigint")?;
@@ -427,7 +427,7 @@ pub async fn bind_bosh_delivery_response(
         .fetch_optional(&mut *transaction)
         .await?;
         let Some(offline) = offline else {
-            return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
+            return Err(northstar_stream::outbound::DurableDeliverySuperseded {
                 message_id: delivery.message_id,
             }
             .into());
@@ -441,7 +441,7 @@ pub async fn bind_bosh_delivery_response(
         .fetch_one(&mut *transaction)
         .await?;
         if sm_owned {
-            return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
+            return Err(northstar_stream::outbound::DurableDeliverySuperseded {
                 message_id: delivery.message_id,
             }
             .into());
@@ -461,7 +461,7 @@ pub async fn bind_bosh_delivery_response(
                     .try_get::<Option<Uuid>, _>("delivery_claim_id")?
                     .is_some()
                 {
-                    return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
+                    return Err(northstar_stream::outbound::DurableDeliverySuperseded {
                         message_id: delivery.message_id,
                     }
                     .into());
@@ -484,7 +484,7 @@ pub async fn bind_bosh_delivery_response(
                 continue;
             }
             if existing.try_get::<bool, _>("active")? {
-                return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
+                return Err(northstar_stream::outbound::DurableDeliverySuperseded {
                     message_id: delivery.message_id,
                 }
                 .into());
@@ -496,7 +496,7 @@ pub async fn bind_bosh_delivery_response(
         }
         let stored_claim: Option<Uuid> = offline.try_get("delivery_claim_id")?;
         if stored_claim != delivery.claim_id {
-            return Err(crate::xmpp::outbound::DurableDeliverySuperseded {
+            return Err(northstar_stream::outbound::DurableDeliverySuperseded {
                 message_id: delivery.message_id,
             }
             .into());

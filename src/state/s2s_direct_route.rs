@@ -3,23 +3,24 @@
 //! `s2s::inbound`.
 
 use super::AppState;
-use crate::{xmpp::local_routes::session::OnlineSession, xmpp::outbound::DurableDelivery};
+use crate::xmpp::local_routes::session::OnlineSession;
 use anyhow::Result;
 use northstar_message_application::messaging::{
     DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
 };
+use northstar_stream::outbound::DurableDelivery;
 
 pub(crate) struct S2sDirectRoutePort<'a>(pub(crate) &'a AppState);
 
 impl OnlineRoutePort for S2sDirectRoutePort<'_> {
-    type Item = crate::xmpp::outbound::OutboundItem;
+    type Item = northstar_stream::outbound::OutboundItem;
     type Session = OnlineSession;
 
     fn try_local(
         &self,
         session: &Self::Session,
-        enqueue: crate::xmpp::outbound::RouteEnqueue,
-    ) -> Result<(), crate::xmpp::outbound::RouteSendError> {
+        enqueue: northstar_stream::outbound::RouteEnqueue,
+    ) -> Result<(), northstar_stream::outbound::RouteSendError> {
         OnlineRoutePort::try_local(self.0, session, enqueue)
     }
 

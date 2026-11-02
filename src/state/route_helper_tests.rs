@@ -12,7 +12,7 @@ pub(super) fn session(
     routable: bool,
 ) -> (
     OnlineSession,
-    tokio::sync::mpsc::Receiver<crate::xmpp::outbound::OutboundItem>,
+    tokio::sync::mpsc::Receiver<northstar_stream::outbound::OutboundItem>,
 ) {
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     let now = Instant::now();
@@ -26,7 +26,7 @@ pub(super) fn session(
             lifecycle: Arc::default(),
             metrics_counted: Arc::default(),
             routable: Arc::new(AtomicBool::new(routable)),
-            sender: crate::xmpp::outbound::OutboundSender::new(sender),
+            sender: northstar_stream::outbound::OutboundSender::new(sender),
             available: Arc::default(),
             availability_generation: Arc::default(),
             post_actions: crate::xmpp::protocol::PostActionHandle::default(),

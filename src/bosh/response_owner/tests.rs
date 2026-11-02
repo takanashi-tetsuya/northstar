@@ -1,10 +1,11 @@
 use super::*;
+use crate::xmpp::auth_publication::OutboundAuthPublication;
 use crate::xmpp::auth_publication::{fixture_control, publish_unbound_fixture};
 const AUTH_CONNECTION: Uuid = Uuid::from_u128(701);
-use crate::xmpp::outbound::{
+use northstar_delivery_core::bosh_ownership::{OperationKind, Scope, Terminal};
+use northstar_stream::outbound::{
     DurableDelivery, DurableDeliverySuperseded, MixDelivery, TransportOwnershipSource as Source,
 };
-use northstar_delivery_core::bosh_ownership::{OperationKind, Scope, Terminal};
 use std::{
     collections::BTreeSet,
     pin::Pin,
@@ -1966,7 +1967,7 @@ async fn real_resume_governor_holds_follow_shared_response_bytes_until_last_drop
         Arc::new(northstar_session_application::sm_capacity::SmCapacityMetrics::default());
     let governor =
         SmMemoryGovernor::new(1024 * 1024, 256 * 1024, 16, 256 * 1024, metrics.clone()).unwrap();
-    let source = VecDeque::from([crate::xmpp::outbound::SmUnackedStanza::plain(
+    let source = VecDeque::from([northstar_stream::outbound::SmUnackedStanza::plain(
         "<message><body>".to_owned() + &"x".repeat(4096) + "</body></message>",
     )]);
     let action = crate::xmpp::protocol::ResumePayload::from_sm_unacked(

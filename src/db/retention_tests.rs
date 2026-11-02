@@ -619,7 +619,7 @@ async fn offline_retention_and_admin_clear_respect_sm_and_bosh_owners() {
         &pool,
         bosh_session,
         41,
-        &[crate::xmpp::outbound::DurableDelivery {
+        &[northstar_stream::outbound::DurableDelivery {
             recipient_id: user,
             message_id: bosh_message,
             claim_id: None,
@@ -646,9 +646,9 @@ async fn offline_retention_and_admin_clear_respect_sm_and_bosh_owners() {
         joined_rooms: vec![],
         directed_presence: vec![],
         last_presence: Some("<presence xmlns='jabber:client'/>".to_owned()),
-        unacked: vec![crate::xmpp::outbound::SmUnackedStanza::with_delivery(
+        unacked: vec![northstar_stream::outbound::SmUnackedStanza::with_delivery(
             "<message id='sm-owned'/>".to_owned(),
-            Some(crate::xmpp::outbound::DurableDelivery {
+            Some(northstar_stream::outbound::DurableDelivery {
                 recipient_id: user,
                 message_id: sm_message,
                 claim_id: None,

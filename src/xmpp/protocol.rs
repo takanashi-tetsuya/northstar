@@ -294,7 +294,7 @@ struct SmSubstate {
     inbound_h: u32,
     outbound_h: u32,
     acked_h: u32,
-    unacked: VecDeque<crate::xmpp::outbound::SmUnackedStanza>,
+    unacked: VecDeque<northstar_stream::outbound::SmUnackedStanza>,
     /// Process-local bytes retained for a resumable XEP-0198 epoch.
     capacity: Option<northstar_session_application::sm_capacity::SmCapacityLease>,
     /// One replaceable observation; retained old handles keep their own facts.
@@ -361,7 +361,7 @@ impl SessionTerminationSignals {
 pub struct ProtocolSession {
     state: Arc<AppState>,
     sm_runtime_policy: SmRuntimePolicy,
-    outbound: crate::xmpp::outbound::OutboundSender,
+    outbound: northstar_stream::outbound::OutboundSender,
     /// Authoritative transport-security decision. Native TLS and trusted
     /// HTTPS-proxied WebSocket/BOSH transports set this flag; framing type is
     /// never used as an authentication bypass.
@@ -725,7 +725,7 @@ impl ProtocolSession {
     /// row after `write()`.
     pub(crate) async fn record_outbound_item(
         &mut self,
-        item: &crate::xmpp::outbound::OutboundItem,
+        item: &northstar_stream::outbound::OutboundItem,
     ) -> Result<bool> {
         let mut turn = self.sm_transport_turn();
         let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Record);
@@ -742,7 +742,7 @@ impl ProtocolSession {
     async fn record_outbound_with_source(
         &mut self,
         stanza: &str,
-        durable_source: Option<crate::xmpp::outbound::TransportOwnershipSource>,
+        durable_source: Option<northstar_stream::outbound::TransportOwnershipSource>,
     ) -> Result<()> {
         let mut turn = self.sm_transport_turn();
         let observation = turn.start(northstar_delivery_core::sm_ownership::Purpose::Record);

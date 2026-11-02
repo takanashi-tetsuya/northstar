@@ -38,7 +38,7 @@ pub struct OnlineSession {
     /// Pending routes may reserve a cluster key, but no stanza delivery path
     /// may expose the transport before the authoritative database commit.
     pub routable: Arc<AtomicBool>,
-    pub sender: crate::xmpp::outbound::OutboundSender,
+    pub sender: northstar_stream::outbound::OutboundSender,
     pub available: Arc<AtomicBool>,
     /// The protocol actor's exact available/unavailable epoch. Recovery
     /// replay must reject an unavailable/available ABA on this same route.

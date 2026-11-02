@@ -23,7 +23,7 @@ const files = {
   websocket: 'src/xmpp/websocket_action.rs',
   bosh: 'src/bosh.rs',
   boshAction: 'src/bosh/action.rs',
-  outbound: 'src/xmpp/outbound.rs',
+  outbound: 'crates/edges/northstar-stream/src/outbound.rs',
   muc: 'crates/contexts/room/northstar-muc-xmpp/src/muc.rs',
   mucFanout: 'crates/contexts/room/northstar-room-application/src/muc_service/fanout.rs',
   mucCore: 'crates/contexts/room/northstar-room-application/src/discussion.rs',
@@ -308,7 +308,7 @@ export function verifySmOwnershipBoundaries({ protocol, smProtocol, smOwner, smC
     'self.sm.outbound_h=self.sm.outbound_h.wrapping_add(1);',
     'self.sm.unacked.push_back(SmUnackedStanza::with_source(stanza.to_owned(),source));',
     'observation.appended();', 'self.checkpoint_in_turn(observation).await',
-    'iferror.downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>().is_some()&&observation.may_restore_superseded(){',
+    'iferror.downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>().is_some()&&observation.may_restore_superseded(){',
     'self.sm.unacked.pop_back();', 'self.sm.outbound_h=self.sm.outbound_h.wrapping_sub(1);', 'observation.restored();'],
   'SM recording must append before checkpoint and restore only typed supersession');
   requireBoundary(count(record, 'pop_back(') === 1 && count(record, '.await') === 1,
@@ -545,7 +545,7 @@ export function verifyBoshResponseBoundaries({ bosh, boshResponse, boshResponseC
   requireBoundary(bindSql === 'request.validate_for_io()?;bind_bosh_transport_response_inner(pool,request.session_id(),request.rid(),request.sources(),request.ttl_seconds(),Some(request)).await',
     'BOSH bind SQL must use validated closed inputs and retain its request');
   const bindInner = normalize(body(replayDb, 'async\\s+fn\\s+bind_bosh_transport_response_inner\\b'));
-  ordered(bindInner, ['letownership=crate::xmpp::outbound::BoshResponseOwnership{', 'letreceipt=ownership.clone();',
+  ordered(bindInner, ['letownership=northstar_stream::outbound::BoshResponseOwnership{', 'letreceipt=ownership.clone();',
     'response::bind_commit_observed(transaction.commit(),request,receipt).await?;', 'Ok(ownership)'],
   'BOSH bind must prepare its independent membership receipt before actual COMMIT and return');
   const renewSql = normalize(body(replayDb, 'async\\s+fn\\s+renew_bosh_transport_fences\\b'));
@@ -1018,7 +1018,7 @@ export function verifyBoshSelectionObservations({ boshResponse }) {
     ['SelectionReadStatus', 'enum', 'pub(super)', 'Clone,Copy,Debug,Eq,PartialEq',
       'Complete,Incomplete{omitted_items:usize,missing_auth_associations:usize,connection_changed:bool}'],
     ['SelectedItemSnapshot', 'struct', 'pub(super)', 'Clone,Copy,Debug,Eq,PartialEq',
-      'pub(super)ordinal:usize,pub(super)source:Option<crate::xmpp::outbound::TransportOwnershipSource>,pub(super)utf8_length:usize,pub(super)sha256:[u8;32],pub(super)auth_marker:bool,pub(super)sealed_association:Option<crate::xmpp::auth_publication::ControlAssociation>,pub(super)holder_joins:Option<crate::xmpp::auth_publication::ControlJoins>'],
+      'pub(super)ordinal:usize,pub(super)source:Option<northstar_stream::outbound::TransportOwnershipSource>,pub(super)utf8_length:usize,pub(super)sha256:[u8;32],pub(super)auth_marker:bool,pub(super)sealed_association:Option<crate::xmpp::auth_publication::ControlAssociation>,pub(super)holder_joins:Option<crate::xmpp::auth_publication::ControlJoins>'],
     ['SelectionSnapshot', 'struct', 'pub(super)', 'Clone,Copy,Debug,Eq,PartialEq',
       'pub(super)session:uuid::Uuid,pub(super)rid:u64,pub(super)fingerprint:[u8;32],pub(super)first_validated_connection:Option<uuid::Uuid>,pub(super)validated_connection:Option<uuid::Uuid>,pub(super)selected_count:usize,pub(super)status:SelectionReadStatus,pub(super)items:[Option<SelectedItemSnapshot>;MAX_SELECTED_FACTS]'],
     ['SelectedItemRead', 'struct', '', '',
@@ -1313,9 +1313,9 @@ export function verifyExecutionBoundaries(sources) {
     'BOSH cache and replay cannot recreate auth publication membership or authority');
   const item = compact(body(outbound, 'pub\\s+struct\\s+OutboundItem\\b'));
   requireBoundary(item.includes('bosh_auth_control:bool,') && !/pub(?:\([^)]*\))?bosh_auth_control/.test(item) &&
-    item.includes('auth_publication:Option<crate::xmpp::auth_publication::AuthControlHolder>,') &&
+    item.includes('auth_publication:Option<std::sync::Arc<dynAuthControl>>,') &&
     !/pub(?:\([^)]*\))?auth_publication:/.test(item) &&
-    compact(body(outbound, 'fn\\s+with_auth_publication\\b')) === 'holder.validate_control(&self.stanza)?;self.bosh_auth_control=true;self.auth_publication=Some(holder);Ok(self)' &&
+    compact(body(outbound, 'fn\\s+with_auth_publication\\b')) === 'holder.validate_control(&self.stanza)?;self.bosh_auth_control=true;self.auth_publication=Some(std::sync::Arc::new(holder));Ok(self)' &&
     compact(body(outbound, 'fn\\s+is_bosh_auth_control\\b')) === 'self.bosh_auth_control',
     'BOSH auth control must remain private item selection metadata with an exact marker accessor');
   const boshApply = body(boshAction, 'async\\s+fn\\s+apply_action\\b');
@@ -1325,7 +1325,7 @@ export function verifyExecutionBoundaries(sources) {
   ordered(boshActivate, ['ifindex==0{', 'holder.validate_connection(self.protocol.connection_id)',
     '.and_then(|_|holder.validate_control(&reply))', '.and_then(|_|holder.recording()).is_err(){returnfalse;}',
     'ifself.protocol.record_outbound(&reply).await.is_err(){returnfalse;}',
-    'letitem=crate::xmpp::outbound::OutboundItem::plain(reply);letitem=ifindex==0{',
+    'letitem=northstar_stream::outbound::OutboundItem::plain(reply);letitem=ifindex==0{',
     'item.with_auth_publication(holder.take().expect())', 'if!self.push_output_item(item){returnfalse;}'],
     'BOSH activation must validate before recording then enqueue the exact first control holder');
   const boshResume = normalize(body(boshApply, 'Action::Resume\\([^)]*\\)\\s*=>'));

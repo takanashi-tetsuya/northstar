@@ -179,19 +179,19 @@ async fn mix_worker_observed_local_waiter_records_all_typed_transfers_before_ret
     use northstar_room_application::mix_service::outbox::{core, fixture};
     for (completion, boundary) in [
         (
-            crate::xmpp::outbound::MixTransportCompletion::SocketFenced {
+            northstar_stream::outbound::MixTransportCompletion::SocketFenced {
                 connection_id: Uuid::from_u128(101),
             },
             core::TransferBoundary::SocketFenced(Uuid::from_u128(101)),
         ),
         (
-            crate::xmpp::outbound::MixTransportCompletion::SmPersisted {
+            northstar_stream::outbound::MixTransportCompletion::SmPersisted {
                 session_id: Uuid::from_u128(102),
             },
             core::TransferBoundary::SmPersisted(Uuid::from_u128(102)),
         ),
         (
-            crate::xmpp::outbound::MixTransportCompletion::BoshPersisted {
+            northstar_stream::outbound::MixTransportCompletion::BoshPersisted {
                 session_id: Uuid::from_u128(103),
             },
             core::TransferBoundary::BoshPersisted(Uuid::from_u128(103)),
@@ -200,7 +200,7 @@ async fn mix_worker_observed_local_waiter_records_all_typed_transfers_before_ret
         let (owner, route) = fixture::route(false);
         let request = route.local_request("bob@local.test/phone".into()).unwrap();
         let (output, mut consumer) = tokio::sync::mpsc::channel(1);
-        let sender = crate::xmpp::outbound::OutboundSender::new(output);
+        let sender = northstar_stream::outbound::OutboundSender::new(output);
         let disconnect = tokio_util::sync::CancellationToken::new();
         let mut waiting = Box::pin(try_send_local_durable_mix_observed(
             &sender,
@@ -213,7 +213,7 @@ async fn mix_worker_observed_local_waiter_records_all_typed_transfers_before_ret
             .expect("one exact item was actually queued");
         assert_eq!(
             item.mix_delivery(),
-            Some(crate::xmpp::outbound::MixDelivery {
+            Some(northstar_stream::outbound::MixDelivery {
                 delivery_id: Uuid::from_u128(91),
                 lease_token: Uuid::from_u128(96)
             })
@@ -252,7 +252,7 @@ async fn mix_worker_cancelled_local_wait_keeps_uncertainty_and_exact_disconnect(
     let (owner, route) = fixture::route(false);
     let request = route.local_request("bob@local.test/phone".into()).unwrap();
     let (output, mut consumer) = tokio::sync::mpsc::channel(1);
-    let sender = crate::xmpp::outbound::OutboundSender::new(output);
+    let sender = northstar_stream::outbound::OutboundSender::new(output);
     let disconnect = tokio_util::sync::CancellationToken::new();
     let mut waiting = Box::pin(try_send_local_durable_mix_observed(
         &sender,
@@ -967,19 +967,19 @@ async fn pending_mix_acknowledgement_obeys_cancellation_without_retry() {
 #[tokio::test]
 async fn sm_and_bosh_mix_handoffs_preserve_typed_transport_owner() {
     for completion in [
-        crate::xmpp::outbound::MixTransportCompletion::SmPersisted {
+        northstar_stream::outbound::MixTransportCompletion::SmPersisted {
             session_id: Uuid::from_u128(41),
         },
-        crate::xmpp::outbound::MixTransportCompletion::BoshPersisted {
+        northstar_stream::outbound::MixTransportCompletion::BoshPersisted {
             session_id: Uuid::from_u128(43),
         },
     ] {
-        let source = crate::xmpp::outbound::MixDelivery {
+        let source = northstar_stream::outbound::MixDelivery {
             delivery_id: Uuid::from_u128(47),
             lease_token: Uuid::from_u128(53),
         };
         let (output, mut consumer) = tokio::sync::mpsc::channel(1);
-        let sender = crate::xmpp::outbound::OutboundSender::new(output);
+        let sender = northstar_stream::outbound::OutboundSender::new(output);
         let disconnect = tokio_util::sync::CancellationToken::new();
         let mut waiting = Box::pin(try_send_local_durable_mix(
             &sender,
@@ -1059,7 +1059,7 @@ fn pam_without_a_commit_wake_keeps_its_original_scan_latency() {
 
 #[tokio::test]
 async fn durable_local_mix_delivery_requires_transport_ownership_and_closes_failed_routes() {
-    let source = crate::xmpp::outbound::MixDelivery {
+    let source = northstar_stream::outbound::MixDelivery {
         delivery_id: Uuid::from_u128(1),
         lease_token: Uuid::from_u128(2),
     };
@@ -1068,7 +1068,7 @@ async fn durable_local_mix_delivery_requires_transport_ownership_and_closes_fail
     // C2S transport must establish its socket fence or persist a typed
     // hand-off. A direct writer cannot report an unfenced write.
     let (output, mut consumer) = tokio::sync::mpsc::channel(1);
-    let sender = crate::xmpp::outbound::OutboundSender::new(output);
+    let sender = northstar_stream::outbound::OutboundSender::new(output);
     let disconnect = tokio_util::sync::CancellationToken::new();
     let waiter = {
         let sender = sender.clone();
@@ -1079,7 +1079,7 @@ async fn durable_local_mix_delivery_requires_transport_ownership_and_closes_fail
     };
     let item = consumer.recv().await.expect("durable MIX item was queued");
     assert_eq!(item.mix_delivery(), Some(source));
-    let socket_fence = crate::xmpp::outbound::MixTransportCompletion::SocketFenced {
+    let socket_fence = northstar_stream::outbound::MixTransportCompletion::SocketFenced {
         connection_id: Uuid::from_u128(3),
     };
     item.complete_mix_handoff(socket_fence);
@@ -1095,7 +1095,7 @@ async fn durable_local_mix_delivery_requires_transport_ownership_and_closes_fail
     // A full bounded queue must close this transport before another
     // durable retry could overtake its unconfirmed predecessor.
     let (output, _consumer) = tokio::sync::mpsc::channel(1);
-    let sender = crate::xmpp::outbound::OutboundSender::new(output);
+    let sender = northstar_stream::outbound::OutboundSender::new(output);
     let disconnect = tokio_util::sync::CancellationToken::new();
     sender
         .try_send("older".to_owned())
@@ -1110,7 +1110,7 @@ async fn durable_local_mix_delivery_requires_transport_ownership_and_closes_fail
     // durable row either.
     let (output, consumer) = tokio::sync::mpsc::channel(1);
     drop(consumer);
-    let sender = crate::xmpp::outbound::OutboundSender::new(output);
+    let sender = northstar_stream::outbound::OutboundSender::new(output);
     let disconnect = tokio_util::sync::CancellationToken::new();
     assert_eq!(
         try_send_local_durable_mix(&sender, &disconnect, "closed".to_owned(), source).await,
@@ -1121,7 +1121,7 @@ async fn durable_local_mix_delivery_requires_transport_ownership_and_closes_fail
     // If an output item disappears before it establishes ownership, the
     // one-shot hand-off closes and the exact transport is rejected.
     let (output, mut consumer) = tokio::sync::mpsc::channel(1);
-    let sender = crate::xmpp::outbound::OutboundSender::new(output);
+    let sender = northstar_stream::outbound::OutboundSender::new(output);
     let disconnect = tokio_util::sync::CancellationToken::new();
     let waiter = {
         let sender = sender.clone();
@@ -1147,7 +1147,7 @@ async fn durable_local_mix_delivery_requires_transport_ownership_and_closes_fail
     // transport. This is what makes the outbox deadline/cancellation safe
     // without relying on a synthetic short receipt timeout.
     let (output, mut consumer) = tokio::sync::mpsc::channel(1);
-    let sender = crate::xmpp::outbound::OutboundSender::new(output);
+    let sender = northstar_stream::outbound::OutboundSender::new(output);
     let disconnect = tokio_util::sync::CancellationToken::new();
     let waiter = {
         let sender = sender.clone();

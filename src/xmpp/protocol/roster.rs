@@ -150,7 +150,7 @@ impl northstar_roster_xmpp::roster::RosterSession for ProtocolSession {
 
 struct RosterSyncFlush {
     failure_telemetry: crate::xmpp::capabilities::PostAcceptFailureTelemetry,
-    outbound: crate::xmpp::outbound::OutboundSender,
+    outbound: northstar_stream::outbound::OutboundSender,
     gate: Arc<RosterSyncGate>,
     disconnect: tokio_util::sync::CancellationToken,
     permit: RosterSyncPermit,
@@ -170,7 +170,10 @@ async fn flush_roster_sync(request: RosterSyncFlush) {
         initial_delta,
         target,
     } = request;
-    async fn enqueue(outbound: &crate::xmpp::outbound::OutboundSender, stanza: String) -> bool {
+    async fn enqueue(
+        outbound: &northstar_stream::outbound::OutboundSender,
+        stanza: String,
+    ) -> bool {
         matches!(
             tokio::time::timeout(Duration::from_secs(5), outbound.send(stanza)).await,
             Ok(Ok(()))

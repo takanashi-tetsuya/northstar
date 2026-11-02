@@ -264,7 +264,7 @@ pub(crate) fn append_suspended_muc_suffix_to_snapshot(
         snapshot.outbound_h = snapshot.outbound_h.wrapping_add(1);
         snapshot
             .unacked
-            .push(crate::xmpp::outbound::SmUnackedStanza::with_delivery(
+            .push(northstar_stream::outbound::SmUnackedStanza::with_delivery(
                 stanza.xml.clone(),
                 None,
             ));

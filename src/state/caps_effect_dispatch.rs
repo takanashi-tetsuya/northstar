@@ -4,15 +4,14 @@ use super::{
     local_caps_route_epoch_matches, mix_presence_recovery::MixPresenceRecoveryContext,
     pep_last_items::PepLastItemsContext, AppState, OnlineSession,
 };
-use crate::{
-    s2s::FederationRouter, xmpp::capabilities::CapsEffectTelemetry, xmpp::outbound::OutboundSender,
-};
+use crate::{s2s::FederationRouter, xmpp::capabilities::CapsEffectTelemetry};
 use dashmap::DashMap;
 use northstar_protocol_runtime::caps::{
     CapsCacheIndex, CapsEffectDispatcher, CapsResourceIndex, FederatedCapsGateIndex,
     FederatedCapsGuard, PendingCapsIndex,
 };
 use northstar_session_core::LocalCapsEpoch;
+use northstar_stream::outbound::OutboundSender;
 use northstar_telemetry::metrics::DurationHistogram;
 use std::sync::{
     atomic::{AtomicU64, Ordering},

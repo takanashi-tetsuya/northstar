@@ -416,6 +416,24 @@ impl AuthControlHolder {
     }
 }
 
+impl northstar_stream::outbound::AuthControl for AuthControlHolder {
+    fn validate_control(&self, control: &str) -> Result<()> {
+        AuthControlHolder::validate_control(self, control)
+    }
+}
+
+/// Reads this transport's holder back from a session outbound item.
+pub(crate) trait OutboundAuthPublication {
+    fn auth_publication(&self) -> Option<&AuthControlHolder>;
+}
+
+impl OutboundAuthPublication for northstar_stream::outbound::OutboundItem {
+    fn auth_publication(&self) -> Option<&AuthControlHolder> {
+        let control: &dyn std::any::Any = self.auth_control()?;
+        control.downcast_ref()
+    }
+}
+
 /// Metadata extracted from the actual final selected items. It owns aliases
 /// only until successful exposure allows an all-or-none consuming transfer.
 #[derive(Clone, Copy)]

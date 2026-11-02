@@ -29,7 +29,7 @@ pub enum Action {
     /// replies these may carry a durable-delivery fence which the transport
     /// must complete only at its negotiated recovery boundary (SM h, BOSH
     /// response ack, or the explicit non-SM socket-write fallback).
-    SendManyItems(Vec<crate::xmpp::outbound::OutboundItem>),
+    SendManyItems(Vec<northstar_stream::outbound::OutboundItem>),
     /// The first frame is the terminal authentication success. Publish the
     /// staged login epoch and already-committed route only after that frame
     /// reaches the transport.
@@ -182,7 +182,7 @@ impl ProtocolSession {
 
     pub fn new(
         state: Arc<AppState>,
-        outbound: crate::xmpp::outbound::OutboundSender,
+        outbound: northstar_stream::outbound::OutboundSender,
         secure_transport: bool,
         transport: ClientTransport,
         stream_limits: Option<StreamLimits>,

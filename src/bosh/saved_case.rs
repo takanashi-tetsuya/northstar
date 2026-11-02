@@ -4,16 +4,14 @@ use super::{
     ownership, response_owner, BoshHttpResponse, BoshRequest, CachedResponse,
     BOSH_BACKEND_OPERATION_TIMEOUT,
 };
-use crate::{
-    direct_replay as wire,
-    xmpp::outbound::{
-        BoshResponseOwnership, MixDelivery, MixTransportCompletion, OutboundItem,
-        TransportOwnershipSource as Source,
-    },
-};
+use crate::direct_replay as wire;
 use anyhow::{Context, Result};
 use northstar_delivery_core::bosh_ownership::{self as core, response as response_core};
 use northstar_session_application::sm_capacity::SmMemoryGovernor;
+use northstar_stream::outbound::{
+    BoshResponseOwnership, MixDelivery, MixTransportCompletion, OutboundItem,
+    TransportOwnershipSource as Source,
+};
 use std::{
     collections::VecDeque,
     future::Future,
@@ -1411,7 +1409,7 @@ mod tests {
             sequence,
         );
         let request = profile_request(REQUEST, 4, 100, None).unwrap();
-        let delivery = crate::xmpp::outbound::DurableDelivery {
+        let delivery = northstar_stream::outbound::DurableDelivery {
             recipient_id: uuid::Uuid::from_u128(2),
             message_id: uuid::Uuid::from_u128(13),
             claim_id: Some(uuid::Uuid::from_u128(13)),

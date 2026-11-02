@@ -123,7 +123,7 @@ mod tests {
             lifecycle: Arc::default(),
             metrics_counted: Arc::default(),
             routable: Arc::new(AtomicBool::new(true)),
-            sender: crate::xmpp::outbound::OutboundSender::new(sender),
+            sender: northstar_stream::outbound::OutboundSender::new(sender),
             available: Arc::default(),
             availability_generation: Arc::default(),
             post_actions: crate::xmpp::protocol::PostActionHandle::default(),
@@ -161,7 +161,7 @@ mod tests {
             full_jid: "alice@example.test/Phone".to_owned(),
             room_jid: "room@conference.example.test".to_owned(),
             nick: "Alice".to_owned(),
-            endpoint: MucOccupantEndpoint::Local(crate::xmpp::outbound::OutboundSender::new(
+            endpoint: MucOccupantEndpoint::Local(northstar_stream::outbound::OutboundSender::new(
                 sender,
             )),
             affiliation: "member".to_owned(),

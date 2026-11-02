@@ -1,5 +1,5 @@
 use super::*;
-use crate::xmpp::outbound;
+use northstar_stream::outbound;
 
 mod responses;
 

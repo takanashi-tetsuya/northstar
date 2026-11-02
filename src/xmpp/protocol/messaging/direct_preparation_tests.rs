@@ -351,13 +351,13 @@ async fn exact_policy_projection_set_and_mam_flag_reject_missing_duplicate_or_ch
 
 struct PreparedQueue;
 impl northstar_message_application::messaging::OnlineRoutePort for PreparedQueue {
-    type Item = crate::xmpp::outbound::OutboundItem;
-    type Session = crate::xmpp::outbound::OutboundSender;
+    type Item = northstar_stream::outbound::OutboundItem;
+    type Session = northstar_stream::outbound::OutboundSender;
     fn try_local(
         &self,
         session: &Self::Session,
-        item: crate::xmpp::outbound::RouteEnqueue,
-    ) -> std::result::Result<(), crate::xmpp::outbound::RouteSendError> {
+        item: northstar_stream::outbound::RouteEnqueue,
+    ) -> std::result::Result<(), northstar_stream::outbound::RouteSendError> {
         session.try_send_route_item(item)
     }
     fn record_local_accept(&self, _: bool) {}
@@ -365,7 +365,7 @@ impl northstar_message_application::messaging::OnlineRoutePort for PreparedQueue
         &self,
         _: &str,
         _: &str,
-        _: Option<crate::xmpp::outbound::DurableDelivery>,
+        _: Option<northstar_stream::outbound::DurableDelivery>,
     ) -> bool {
         panic!("valid prepared target is local")
     }
@@ -373,7 +373,7 @@ impl northstar_message_application::messaging::OnlineRoutePort for PreparedQueue
         &self,
         _: &str,
         _: &str,
-        _: Option<crate::xmpp::outbound::DurableDelivery>,
+        _: Option<northstar_stream::outbound::DurableDelivery>,
     ) -> northstar_message_application::messaging::OnlineRouteResult {
         panic!("valid prepared target is local")
     }
@@ -400,7 +400,7 @@ impl northstar_message_application::messaging::DirectMessageRoutePort for Prepar
     fn clustered_direct_routes(&self) -> bool {
         true
     }
-    async fn rearm_direct_route(&self, _: crate::xmpp::outbound::DurableDelivery) {
+    async fn rearm_direct_route(&self, _: northstar_stream::outbound::DurableDelivery) {
         panic!("accepted queue is never rearmed")
     }
 }
@@ -491,7 +491,7 @@ async fn actual_original_to_router_preserves_live_payload_after_delayed_command_
             let (tx, mut rx) = tokio::sync::mpsc::channel(1);
             let targets = [(
                 target.to_owned(),
-                crate::xmpp::outbound::OutboundSender::new(tx),
+                northstar_stream::outbound::OutboundSender::new(tx),
             )];
             let mut request = DirectRouteRequest {
                 message_type: original.message_type,
@@ -506,11 +506,13 @@ async fn actual_original_to_router_preserves_live_payload_after_delayed_command_
                 sender: original.sender,
                 recipient_id: local.authority.recipient_id,
                 stanza: &local.recipient_delivery,
-                delivery: DirectRouteDelivery::Committed(crate::xmpp::outbound::DurableDelivery {
-                    recipient_id: local.authority.recipient_id,
-                    message_id: local.authority.recipient_stable_id,
-                    claim_id: Some(local.authority.recipient_stable_id),
-                }),
+                delivery: DirectRouteDelivery::Committed(
+                    northstar_stream::outbound::DurableDelivery {
+                        recipient_id: local.authority.recipient_id,
+                        message_id: local.authority.recipient_stable_id,
+                        claim_id: Some(local.authority.recipient_stable_id),
+                    },
+                ),
                 approved_targets: &targets,
                 enforce_direct_health: true,
             };

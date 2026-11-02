@@ -19,7 +19,7 @@ pub(super) struct Supplied {
     pub(super) privacy: Option<bool>,
     pub(super) settlement: Option<(wire::CommitCut, bool)>,
     pub(super) native: Option<wire::DurableNative>,
-    pub(super) native_ack: Option<(wire::CommitCut, crate::xmpp::outbound::MixDelivery)>,
+    pub(super) native_ack: Option<(wire::CommitCut, northstar_stream::outbound::MixDelivery)>,
     pub(super) transfer: Option<wire::BoshTransferReply>,
     pub(super) fresh: Option<(room::Stored, wire::CommitCut)>,
     pub(super) replay: Option<Option<room::Existing>>,
@@ -581,16 +581,17 @@ impl MixRepository for ControlledRepository {
     }
     fn transfer_mix_delivery_to_cluster(
         &self,
-        source: crate::xmpp::outbound::MixDelivery,
+        source: northstar_stream::outbound::MixDelivery,
         node_id: &str,
         request_id: Uuid,
         ttl_seconds: u64,
-    ) -> impl std::future::Future<Output = Result<crate::xmpp::outbound::MixDelivery>> + Send {
+    ) -> impl std::future::Future<Output = Result<northstar_stream::outbound::MixDelivery>> + Send
+    {
         std::future::ready(Err(self.unused("transfer_mix_delivery_to_cluster")))
     }
     fn release_mix_cluster_delivery(
         &self,
-        source: crate::xmpp::outbound::MixDelivery,
+        source: northstar_stream::outbound::MixDelivery,
         node_id: &str,
         request_id: Uuid,
     ) -> impl std::future::Future<Output = Result<bool>> + Send {
@@ -874,8 +875,8 @@ impl MixRepository for ControlledRepository {
     }
     async fn fence_mix_socket_write(
         &self,
-        source: crate::xmpp::outbound::MixDelivery,
-    ) -> Result<crate::xmpp::outbound::MixDelivery> {
+        source: northstar_stream::outbound::MixDelivery,
+    ) -> Result<northstar_stream::outbound::MixDelivery> {
         let reply = self
             .0
             .lock()
@@ -911,8 +912,9 @@ impl MixRepository for ControlledRepository {
             "native ACK source mismatch"
         );
         let observation = observation.context("unobserved native ACK rejected")?;
-        observation
-            .validate_source(crate::xmpp::outbound::TransportOwnershipSource::Mix(source))?;
+        observation.validate_source(northstar_stream::outbound::TransportOwnershipSource::Mix(
+            source,
+        ))?;
         native_write::commit_observed(supplied_commit(cut), observation, AckDisposition::Deleted)
             .await
             .map_err(|e| match e {
@@ -924,7 +926,7 @@ impl MixRepository for ControlledRepository {
     async fn transfer_mix_delivery_to_bosh(
         &self,
         request: &northstar_delivery_core::bosh_ownership::TransferRequest,
-    ) -> Result<crate::xmpp::outbound::MixDelivery> {
+    ) -> Result<northstar_stream::outbound::MixDelivery> {
         use northstar_delivery_core::bosh_ownership::{self, CompletionError};
         let reply = self
             .0

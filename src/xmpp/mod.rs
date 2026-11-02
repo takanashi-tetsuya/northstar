@@ -5,7 +5,6 @@ pub(crate) mod frame_execution;
 pub(crate) mod framing;
 pub(crate) mod local_routes;
 pub(crate) mod muc_delivery;
-pub(crate) mod outbound;
 pub(crate) mod protocol;
 #[cfg(test)]
 mod stage4_frame_capture;
@@ -223,7 +222,7 @@ async fn xmpps_tcp_connection(
     )?;
     let mut session = ProtocolSession::new(
         state,
-        crate::xmpp::outbound::OutboundSender::new(tx),
+        northstar_stream::outbound::OutboundSender::new(tx),
         false,
         protocol::ClientTransport::Tcp,
         Some(stream_limits),
@@ -261,7 +260,7 @@ async fn tcp_connection(
     let transport_policy = NativeTransportPolicy::from_state(&state);
     let mut session = ProtocolSession::new(
         state,
-        crate::xmpp::outbound::OutboundSender::new(tx),
+        northstar_stream::outbound::OutboundSender::new(tx),
         false,
         protocol::ClientTransport::Tcp,
         Some(stream_limits),
@@ -427,7 +426,7 @@ async fn drive_io<S>(
     mut io: S,
     transport_policy: &NativeTransportPolicy,
     session: &mut ProtocolSession,
-    rx: &mut mpsc::Receiver<crate::xmpp::outbound::OutboundItem>,
+    rx: &mut mpsc::Receiver<northstar_stream::outbound::OutboundItem>,
     actor_shutdown: &tokio_util::sync::CancellationToken,
     stream_limits: protocol::StreamLimits,
 ) -> Result<DriveOutcome<S>>
@@ -923,7 +922,7 @@ async fn tcp_record_and_send_auth<S: AsyncWrite + Unpin>(
 async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
     io: &mut S,
     session: &mut ProtocolSession,
-    item: &crate::xmpp::outbound::OutboundItem,
+    item: &northstar_stream::outbound::OutboundItem,
     opening: bool,
 ) -> Result<bool> {
     let observation = northstar_delivery_core::native_write::Observation::new(item.durable_source);
@@ -933,7 +932,7 @@ async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
                 Ok(lease) => lease,
                 Err(error)
                     if error
-                        .downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>()
+                        .downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>()
                         .is_some() =>
                 {
                     tracing::debug!(
@@ -993,7 +992,7 @@ pub async fn websocket_connection(
     let transport_policy = NativeTransportPolicy::from_state(&state);
     let mut session = ProtocolSession::new(
         state,
-        crate::xmpp::outbound::OutboundSender::new(tx),
+        northstar_stream::outbound::OutboundSender::new(tx),
         true,
         protocol::ClientTransport::WebSocket,
         Some(stream_limits),
@@ -1277,7 +1276,7 @@ pub async fn websocket_connection(
 async fn websocket_record_and_send_item(
     socket: &mut WebSocket,
     session: &mut ProtocolSession,
-    item: &crate::xmpp::outbound::OutboundItem,
+    item: &northstar_stream::outbound::OutboundItem,
     opening: bool,
     terminal: &mut WebSocketTerminalSequence,
     cancellation: &WebSocketSendCancellation<'_>,
@@ -1289,7 +1288,7 @@ async fn websocket_record_and_send_item(
                 Ok(lease) => lease,
                 Err(error)
                     if error
-                        .downcast_ref::<crate::xmpp::outbound::DurableDeliverySuperseded>()
+                        .downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>()
                         .is_some() =>
                 {
                     tracing::debug!(

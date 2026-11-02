@@ -10,8 +10,7 @@ use super::{
     take_response_payload, terminal_response_with_content, BoshHttpResponse, BoshRequest,
     BoshResponseBody, CachedResponse, RESPONSE_CACHE_SIZE,
 };
-use crate::xmpp::auth_publication::{OwnedPublication, SelectedControls};
-use crate::xmpp::outbound::{BoshResponseOwnership, OutboundItem};
+use crate::xmpp::auth_publication::{OutboundAuthPublication, OwnedPublication, SelectedControls};
 use anyhow::Result;
 use axum::body::Bytes;
 use northstar_delivery_core::bosh_ownership::{
@@ -20,6 +19,7 @@ use northstar_delivery_core::bosh_ownership::{
 };
 use northstar_session_application::replay::{ReplayRepository, ReplayService};
 use northstar_session_application::sm_capacity::SmMemoryGovernor;
+use northstar_stream::outbound::{BoshResponseOwnership, OutboundItem};
 use std::{collections::VecDeque, future::Future, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 type Responder = oneshot::Sender<BoshHttpResponse>;
@@ -172,7 +172,7 @@ pub(super) enum SelectionReadStatus {
 pub(super) struct SelectedItemSnapshot {
     // Ordinal in the actual final selection, not an inferred input queue index.
     pub(super) ordinal: usize,
-    pub(super) source: Option<crate::xmpp::outbound::TransportOwnershipSource>,
+    pub(super) source: Option<northstar_stream::outbound::TransportOwnershipSource>,
     pub(super) utf8_length: usize,
     pub(super) sha256: [u8; 32],
     pub(super) auth_marker: bool,

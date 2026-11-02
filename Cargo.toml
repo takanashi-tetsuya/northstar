@@ -265,6 +265,7 @@ northstar-pubsub-postgres = { path = "crates/contexts/pubsub/northstar-pubsub-po
 northstar-roster-postgres = { path = "crates/contexts/roster/northstar-roster-postgres", features = ["test-support"] }
 northstar-security = { path = "crates/platform/northstar-security", features = ["test-support"] }
 northstar-session-application = { path = "crates/contexts/session/northstar-session-application", features = ["test-support"] }
+northstar-stream = { path = "crates/edges/northstar-stream", features = ["test-support"] }
 northstar-upload-postgres = { path = "crates/contexts/upload/northstar-upload-postgres", features = ["test-support"] }
 northstar-archive-postgres = { path = "crates/contexts/archive/northstar-archive-postgres", features = ["test-support"] }
 # Deterministic cancellation/deadline experiments run on a paused test clock.

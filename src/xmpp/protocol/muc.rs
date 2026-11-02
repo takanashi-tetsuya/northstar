@@ -8,36 +8,21 @@ use crate::state::AppState;
 use crate::xmpp::frame_execution::Stage;
 use crate::xmpp::local_routes::muc::MucOccupant;
 use crate::xmpp::local_routes::session::OnlineSession;
-use crate::xmpp::outbound::{DurableDelivery, OutboundSender};
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_muc_xmpp::muc as handlers;
 use northstar_muc_xmpp::ports::{
-    MucAction, MucFrameStage, MucLocalSession, MucOutbound, MucSession, MucSessionUser,
+    MucAction, MucFrameStage, MucLocalSession, MucSession, MucSessionUser,
 };
 use northstar_room_application::discussion;
 use northstar_session_core::JoinedMucMembership;
+use northstar_stream::outbound::OutboundSender;
 use roxmltree::Node;
 use std::sync::atomic::Ordering;
-use tokio::sync::mpsc::error::TrySendError;
 use uuid::Uuid;
 
 #[cfg(test)]
 pub(crate) mod saved_stage4;
-
-impl MucOutbound for OutboundSender {
-    fn try_send(&self, stanza: String) -> Result<(), TrySendError<String>> {
-        OutboundSender::try_send(self, stanza)
-    }
-
-    fn try_send_durable(
-        &self,
-        stanza: String,
-        delivery: DurableDelivery,
-    ) -> Result<(), TrySendError<String>> {
-        OutboundSender::try_send_durable(self, stanza, delivery)
-    }
-}
 
 impl MucLocalSession for OnlineSession {
     type Outbound = OutboundSender;

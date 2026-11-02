@@ -1,5 +1,5 @@
-use crate::xmpp::outbound;
 use anyhow::{Context, Result};
+use northstar_stream::outbound;
 use sqlx::{PgPool, Row};
 use std::{
     collections::{HashMap, HashSet},

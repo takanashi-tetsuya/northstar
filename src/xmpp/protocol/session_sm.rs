@@ -32,7 +32,7 @@ impl ResumePayload {
         governor: &Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
         control: String,
         post_control: Vec<String>,
-        replay_source: &VecDeque<crate::xmpp::outbound::SmUnackedStanza>,
+        replay_source: &VecDeque<northstar_stream::outbound::SmUnackedStanza>,
         activate_route: bool,
     ) -> Result<Self> {
         let requested_bytes = resume_payload_requested_bytes(
@@ -167,8 +167,8 @@ pub(super) fn resume_payload_actual_bytes(
 impl ProtocolSession {
     pub(in crate::xmpp) async fn fence_c2s_socket_write(
         &self,
-        delivery: crate::xmpp::outbound::DurableDelivery,
-    ) -> Result<crate::xmpp::outbound::DurableDelivery> {
+        delivery: northstar_stream::outbound::DurableDelivery,
+    ) -> Result<northstar_stream::outbound::DurableDelivery> {
         self.state
             .replay_service()
             .fence_socket_write(delivery)
@@ -177,8 +177,8 @@ impl ProtocolSession {
 
     pub(in crate::xmpp) async fn fence_mix_socket_write(
         &self,
-        delivery: crate::xmpp::outbound::MixDelivery,
-    ) -> Result<crate::xmpp::outbound::MixDelivery> {
+        delivery: northstar_stream::outbound::MixDelivery,
+    ) -> Result<northstar_stream::outbound::MixDelivery> {
         self.state
             .mix_service()
             .fence_mix_socket_write(delivery)
@@ -189,7 +189,7 @@ impl ProtocolSession {
         &self,
         request: &northstar_delivery_core::native_write::AckRequest,
     ) -> Result<()> {
-        let crate::xmpp::outbound::TransportOwnershipSource::C2s(delivery) = request.source()
+        let northstar_stream::outbound::TransportOwnershipSource::C2s(delivery) = request.source()
         else {
             anyhow::bail!("native C2S acknowledgement source mismatch");
         };
@@ -275,7 +275,7 @@ impl ProtocolSession {
 
     pub(super) fn sm_snapshot_with_unacked(
         &self,
-        unacked: Vec<crate::xmpp::outbound::SmUnackedStanza>,
+        unacked: Vec<northstar_stream::outbound::SmUnackedStanza>,
     ) -> northstar_session_application::sm::SmSessionSnapshot {
         self.sm_snapshot_view().snapshot(&self.sm, unacked)
     }
@@ -305,7 +305,7 @@ impl ProtocolSession {
     }
 
     pub(crate) fn apply_sm_ownership_resolution_to_unacked(
-        stanzas: &mut VecDeque<crate::xmpp::outbound::SmUnackedStanza>,
+        stanzas: &mut VecDeque<northstar_stream::outbound::SmUnackedStanza>,
         resolution: &northstar_session_application::sm::SmQueueOwnershipResolution,
     ) {
         for stanza in stanzas {

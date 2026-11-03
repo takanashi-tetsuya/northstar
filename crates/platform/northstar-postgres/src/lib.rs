@@ -35,8 +35,47 @@ pub fn is_capacity_sqlx_error(error: &sqlx::Error) -> bool {
     })
 }
 
+/// Whether an error is a transaction scheduling outcome rather than a fault, however many contexts
+/// wrap it: a serialization failure, a deadlock or a bounded lock wait. The caller may retry it.
+pub fn is_retryable_contention(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<sqlx::Error>()
+            .is_some_and(is_retryable_contention_sqlx_error)
+    })
+}
+
+/// The SQLSTATE test of [`is_retryable_contention`] for one sqlx error.
+pub fn is_retryable_contention_sqlx_error(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .and_then(|database| database.code())
+        .is_some_and(|code| retryable_contention_sqlstate(code.as_ref()))
+}
+
+/// A serialization failure, deadlock, or bounded lock-acquisition failure is a transaction
+/// scheduling outcome, not an application fault. PostgreSQL reports NOWAIT/lock_timeout
+/// contention as 55P03 (lock_not_available).
+pub fn retryable_contention_sqlstate(code: &str) -> bool {
+    matches!(code, "40001" | "40P01" | "55P03")
+}
+
 pub mod cluster_lock;
 pub mod migration_preflight;
 pub mod pool;
 pub mod role_attestation;
 pub mod schema;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn database_scheduling_conflicts_are_the_only_retryable_sqlstates() {
+        assert!(retryable_contention_sqlstate("40001"));
+        assert!(retryable_contention_sqlstate("40P01"));
+        assert!(retryable_contention_sqlstate("55P03"));
+        assert!(!retryable_contention_sqlstate("23505"));
+        assert!(!retryable_contention_sqlstate("42501"));
+    }
+}

@@ -171,37 +171,13 @@ impl IntoResponse for AppError {
     }
 }
 
-fn retryable_database_sqlstate(code: &str) -> bool {
-    // A serialization failure, deadlock, or bounded lock-acquisition failure
-    // is a transaction scheduling outcome, not an application fault.
-    // Returning the sanitized 503 below tells HTTP callers to retry and
-    // avoids exposing PostgreSQL diagnostics.  In particular, PostgreSQL
-    // reports NOWAIT/lock_timeout contention as 55P03 (lock_not_available).
-    matches!(code, "40001" | "40P01" | "55P03")
-}
-
-fn retryable_sqlx_error(error: &sqlx::Error) -> bool {
-    error
-        .as_database_error()
-        .and_then(|error| error.code())
-        .is_some_and(|code| retryable_database_sqlstate(code.as_ref()))
-}
-
-/// Inspect the complete anyhow causal chain.  Database helpers may need to
-/// roll back before returning a bounded lock failure and add operation context
-/// while doing so; the original sqlx error remains the source of truth for the
-/// HTTP retry classification.
-fn retryable_database_error(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<sqlx::Error>()
-            .is_some_and(retryable_sqlx_error)
-    })
-}
-
 impl AppError {
+    /// Database helpers may need to roll back before returning a bounded lock
+    /// failure and add operation context while doing so; the platform reads
+    /// the complete causal chain. Returning the sanitized 503 tells HTTP
+    /// callers to retry and avoids exposing PostgreSQL diagnostics.
     pub(crate) fn from_internal(error: anyhow::Error) -> Self {
-        if retryable_database_error(&error) {
+        if northstar_postgres::is_retryable_contention(&error) {
             return Self::Unavailable(
                 "database operation is temporarily busy; retry the request".into(),
             );
@@ -213,17 +189,6 @@ impl AppError {
 impl From<anyhow::Error> for AppError {
     fn from(value: anyhow::Error) -> Self {
         Self::from_internal(value)
-    }
-}
-
-impl From<sqlx::Error> for AppError {
-    fn from(value: sqlx::Error) -> Self {
-        if retryable_sqlx_error(&value) {
-            return Self::Unavailable(
-                "database operation is temporarily busy; retry the request".into(),
-            );
-        }
-        Self::Internal(value.into())
     }
 }
 
@@ -356,15 +321,6 @@ mod tests {
             pow_limited.headers().get(header::RETRY_AFTER),
             Some(&HeaderValue::from_static("15"))
         );
-    }
-
-    #[test]
-    fn database_scheduling_conflicts_are_the_only_retryable_sqlstates() {
-        assert!(retryable_database_sqlstate("40001"));
-        assert!(retryable_database_sqlstate("40P01"));
-        assert!(retryable_database_sqlstate("55P03"));
-        assert!(!retryable_database_sqlstate("23505"));
-        assert!(!retryable_database_sqlstate("42501"));
     }
 
     #[test]

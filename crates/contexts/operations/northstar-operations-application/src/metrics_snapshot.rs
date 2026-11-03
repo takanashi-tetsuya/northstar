@@ -75,6 +75,12 @@ pub struct ClusterMetricsSnapshot {
     pub incompatible_peer_versions: u64,
 }
 
+/// The cluster health gauges the metrics listener renders. The cluster edge implements it over its
+/// live health.
+pub trait ClusterMetrics: Send + Sync {
+    fn snapshot(&self) -> ClusterMetricsSnapshot;
+}
+
 /// Copy-only process gauges. Neither the HTTP adapter nor this renderer owns
 /// the live config, cluster, MUC map, metrics registry, or SM governor.
 pub struct ProcessGaugeSnapshot {

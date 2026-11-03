@@ -603,8 +603,8 @@ pub struct ClusterMetricsProbe {
     pub(super) health: Arc<ClusterHealth>,
 }
 
-impl ClusterMetricsProbe {
-    pub fn snapshot(&self) -> ClusterMetricsSnapshot {
+impl ClusterMetrics for ClusterMetricsProbe {
+    fn snapshot(&self) -> ClusterMetricsSnapshot {
         cluster_metrics_snapshot(&self.health)
     }
 }

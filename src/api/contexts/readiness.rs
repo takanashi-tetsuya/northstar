@@ -7,7 +7,8 @@ pub(crate) struct ReadinessContext {
     pub(crate) connection: northstar_runtime::connection_actors::ConnectionAdmissionReadiness,
     pub(crate) sm: northstar_session_application::sm_capacity::SmMemoryReadiness,
     pub(crate) upload: northstar_upload_application::safety::UploadSafetyReadiness,
-    pub(crate) cluster: crate::cluster::ClusterReadinessProbe,
+    pub(crate) cluster:
+        std::sync::Arc<dyn northstar_operations_application::readiness::ClusterReadiness>,
     pub(crate) workers: northstar_runtime::workers::WorkerReadinessProbe,
     pub(crate) abuse_key_deployment:
         Option<northstar_abuse_policy::model::AbuseKeyDeploymentIdentity>,

@@ -653,12 +653,12 @@ impl<R: northstar_auth_application::account_revocation_consumer::AccountRevocati
     }
 }
 
-impl ClusterReadinessProbe {
-    pub fn readiness_error(&self) -> Option<String> {
+impl ClusterReadiness for ClusterReadinessProbe {
+    fn readiness_error(&self) -> Option<String> {
         cluster_readiness_error(&self.health)
     }
 
-    pub fn authority_snapshot(&self) -> Option<ClusterReadinessAuthority> {
+    fn authority_snapshot(&self) -> Option<ClusterReadinessAuthority> {
         self.authority.clone().map(|mut authority| {
             authority.instance_epoch = self.instance_epoch.load(Ordering::Acquire);
             authority

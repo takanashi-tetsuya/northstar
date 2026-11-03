@@ -59,7 +59,7 @@ pub(super) fn metrics_context(state: &AppState) -> MetricsContext {
             s2s_outbox_max_per_domain: state.config.s2s_outbox_max_per_domain,
         },
         tls: state.tls_context.metrics_probe(),
-        cluster: state.cluster.metrics_probe(),
+        cluster: Arc::new(state.cluster.metrics_probe()),
         muc_occupant_count: MucOccupancyCountProbe::new(
             Arc::clone(&state.room.muc_occupants) as Arc<dyn OccupancyCount>
         ),

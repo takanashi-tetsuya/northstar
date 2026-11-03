@@ -35,6 +35,13 @@ pub trait ReadinessRepository: Send + Sync {
     ) -> impl Future<Output = Result<AdminSessionCleanupSnapshot>> + Send;
 }
 
+/// The cluster's part of readiness: why the node is not ready, and the authority the persistence
+/// check verifies. The cluster edge implements it over its live health.
+pub trait ClusterReadiness: Send + Sync {
+    fn readiness_error(&self) -> Option<String>;
+    fn authority_snapshot(&self) -> Option<ClusterReadinessAuthority>;
+}
+
 #[derive(Clone)]
 pub struct ReadinessService<R> {
     repository: R,

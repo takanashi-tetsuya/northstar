@@ -3748,7 +3748,7 @@ const metricsServe = structBody(readRoleSplitFile('src/api/mod.rs', { root }), '
 if (!metricsEndpoint.includes('context: MetricsContext')
     || /Arc<AppState>/.test(metricsEndpoint)
     || /\b(?:AppState|ClusterManager|TlsContext)\b|Arc<dyn Fn/.test(metricsContext)
-    || !metricsContext.includes('cluster: ClusterMetricsProbe')
+    || !metricsContext.includes('cluster: Arc<dyn ClusterMetrics>')
     || !metricsContext.includes('tls: TlsMetricsProbe')
     || !metricsContext.includes('muc_occupant_count: MucOccupancyCountProbe')
     || !metricsContext.includes('sm: Arc<dyn SmRecoveryGauges>')

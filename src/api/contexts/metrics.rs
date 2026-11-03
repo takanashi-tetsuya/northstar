@@ -2,12 +2,11 @@
 //! The HTTP endpoint never receives application state, route mutation handles,
 //! cluster control authority, or a raw PostgreSQL pool.
 
-use crate::cluster::ClusterMetricsProbe;
 use dashmap::DashMap;
 use northstar_federation_application::registry::S2sOutboundCountProbe;
 use northstar_operations_application::metrics_snapshot::{
-    DatabaseMetricsSnapshot, DatabasePoolStatus, MetricsSnapshotService, ProcessGaugeSnapshot,
-    SmRecoveryGaugeSnapshot,
+    ClusterMetrics, DatabaseMetricsSnapshot, DatabasePoolStatus, MetricsSnapshotService,
+    ProcessGaugeSnapshot, SmRecoveryGaugeSnapshot,
 };
 use northstar_security::tls::TlsMetricsProbe;
 use northstar_workflows::metrics_snapshot_repository::PostgresMetricsSnapshotRepository;
@@ -25,7 +24,7 @@ pub(crate) struct MetricsContext {
     pub(crate) component_domains: Vec<String>,
     pub(crate) limits: MetricsLimits,
     pub(crate) tls: TlsMetricsProbe,
-    pub(crate) cluster: ClusterMetricsProbe,
+    pub(crate) cluster: Arc<dyn ClusterMetrics>,
     pub(crate) muc_occupant_count: MucOccupancyCountProbe,
     pub(crate) s2s_outbound_count: S2sOutboundCountProbe,
     pub(crate) sm: Arc<dyn SmRecoveryGauges>,

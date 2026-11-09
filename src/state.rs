@@ -1,32 +1,5 @@
 pub(crate) mod account_admin;
 
-impl axum::extract::FromRef<Arc<AppState>> for AccountAdminContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        state.auth.account_admin_service.clone()
-    }
-}
-impl axum::extract::FromRef<Arc<AppState>> for RegistrationAdminContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        state.auth.registration_admin_service.clone()
-    }
-}
-impl axum::extract::FromRef<Arc<AppState>> for SessionAdminContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        state.auth.session_admin_service.clone()
-    }
-}
-
-impl axum::extract::FromRef<Arc<AppState>> for AdminDispatchContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        state.operations.admin_dispatch_service.clone()
-    }
-}
-impl axum::extract::FromRef<Arc<AppState>> for PublicDiscoveryContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        state.public_discovery_context.clone()
-    }
-}
-
 pub(crate) mod capacity_maintenance;
 pub(crate) type CapacityLeaseRenewalContext = capacity_maintenance::CapacityLeaseRenewalContext<
     northstar_session_postgres::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository,
@@ -35,59 +8,13 @@ pub(crate) type CapacityLeaseReaperContext = capacity_maintenance::CapacityLease
     northstar_session_postgres::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository,
 >;
 
-impl axum::extract::FromRef<Arc<AppState>> for InvitationAdminContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        state.auth.invitation_admin_service.clone()
-    }
-}
-
-impl axum::extract::FromRef<Arc<AppState>> for GovernanceContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        state.operations.governance_context.clone()
-    }
-}
-
-impl axum::extract::FromRef<Arc<AppState>> for RetentionPolicyContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        state.operations.retention_policy_context.clone()
-    }
-}
-
-impl axum::extract::FromRef<Arc<AppState>> for ReportModerationContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        state.operations.report_moderation_service.clone()
-    }
-}
-
-impl axum::extract::FromRef<Arc<AppState>> for UploadAdminContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        state.operations.upload_admin_service.clone()
-    }
-}
-
-impl axum::extract::FromRef<Arc<AppState>> for OperationAdminContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        state.operations.operation_admin_service.clone()
-    }
-}
-
-impl axum::extract::FromRef<Arc<AppState>> for ReportContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        reports::ReportContext::new(
-            state.report_service().clone(),
-            state.api_query_service().clone(),
-            Arc::clone(&state.metrics),
-            state.config.trusted_proxy_ips.clone(),
-        )
-    }
-}
 pub(crate) mod account_deletion_recovery;
 pub(crate) mod account_generation_teardown;
 pub(crate) mod account_recovery;
 mod api_query_presence;
+pub(crate) mod http_host;
 mod metrics_context;
 mod push_notification_delivery;
-mod rest_endpoint_contexts;
 pub(crate) use account_deletion_recovery::AccountDeletionRecoveryContext;
 pub(crate) mod account_teardown_runtime;
 mod admin_session_cleanup;
@@ -170,19 +97,13 @@ mod sm_teardown_session;
 pub(crate) mod standalone_muc_maintenance;
 pub(crate) mod suspension;
 
-impl axum::extract::FromRef<Arc<AppState>> for ApiQueryContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        state.api_query_context()
-    }
-}
-
 use crate::api::contexts::{
-    api_queries, governance, http_body_admission, http_policy, omemo_poll, reports,
-    retention_policy, AccountAdminContext, AdminDispatchContext, AdminGatewayVerifier,
-    ApiQueryContext, GovernanceContext, HttpTransportPolicy, InvitationAdminContext,
-    OmemoRecoveryPollContext, OperationAdminContext, PasskeyService, PublicDiscoveryContext,
-    RegistrationAdminContext, ReportContext, ReportModerationContext, RetentionPolicyContext,
-    SessionAdminContext, UploadAdminContext, UploadService,
+    api_queries, governance, http_body_admission, http_policy, omemo_poll, retention_policy,
+    AccountAdminContext, AdminDispatchContext, AdminGatewayVerifier, ApiQueryContext,
+    GovernanceContext, HttpTransportPolicy, InvitationAdminContext, OmemoRecoveryPollContext,
+    OperationAdminContext, PasskeyService, PublicDiscoveryContext, RegistrationAdminContext,
+    ReportModerationContext, RetentionPolicyContext, SessionAdminContext, UploadAdminContext,
+    UploadService,
 };
 use crate::s2s::FederationRouter;
 use anyhow::Context;

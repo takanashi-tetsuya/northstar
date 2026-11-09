@@ -3687,7 +3687,7 @@ if (!uploadSource.includes('State(state): State<UploadHttpReadContext<R>>')
     || !uploadGet.includes('let download_guard = state.acquire_download(client_ip)')
     || !uploadGet.includes('let _download_guard = download_guard;')
     || /\b(?:AppState|Metrics|PgPool)\b/.test(uploadReadContext)
-    || !read('src/state/rest_endpoint_contexts.rs').includes('admission: state.upload.runtime.download_admission().cloned()')) {
+    || !read('src/state/http_host.rs').includes('admission: self.upload.runtime.download_admission().cloned()')) {
   throw new Error('public upload GET must retain shared download admission and guarded read authority');
 }
 const capsEffectSource = read('src/xmpp/protocol/caps.rs');
@@ -3744,7 +3744,7 @@ const metricsEndpoint = structBody(readinessEndpointSource, 'pub struct MetricsE
 const metricsContextSource = read('src/api/contexts/metrics.rs');
 const metricsContextProduction = productionWithoutCfgTestModules(metricsContextSource, 'metrics context production');
 const metricsContext = structBody(metricsContextSource, 'pub(crate) struct MetricsContext');
-const metricsServe = structBody(readRoleSplitFile('src/api/mod.rs', { root }), 'pub async fn serve_metrics(');
+const metricsServe = structBody(readRoleSplitFile('src/api/mod.rs', { root }), 'pub async fn serve_metrics<');
 if (!metricsEndpoint.includes('context: MetricsContext')
     || /Arc<AppState>/.test(metricsEndpoint)
     || /\b(?:AppState|ClusterManager|TlsContext)\b|Arc<dyn Fn/.test(metricsContext)

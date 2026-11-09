@@ -14,14 +14,10 @@ use std::sync::Arc;
 
 use self::error::{AppError, Result};
 use crate::api::contexts::{
-    api_session_http::ApiSessionHttpContext,
-    http_registration_endpoint::HttpRegistrationEndpointContext,
     omemo_recovery_http::OmemoRecoveryHttpContext, passkey_http::PasskeyStartHttpContext,
-    AdminGatewayVerifier, ApiQueryContext, HttpLoginEndpointContext, HttpTransportPolicy,
-    MetricsContext, OmemoRecoveryPollContext, PasskeyLoginFinishContext, PublicDiscoveryContext,
-    RetentionPolicyContext, UploadHttpReadContext,
+    AdminGatewayVerifier, ApiQueryContext, HttpTransportPolicy, MetricsContext,
+    PublicDiscoveryContext,
 };
-use crate::state::AppState;
 use northstar_abuse_policy::AbuseAction;
 use northstar_auth_core as auth;
 use northstar_operations_core::api_mutations::{
@@ -30,7 +26,7 @@ use northstar_operations_core::api_mutations::{
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::header::{HeaderMap, HeaderName, HeaderValue};
-use axum::routing::{delete, options, patch};
+use axum::routing::{delete, patch};
 use northstar_abuse_policy::GuardError;
 use std::net::IpAddr;
 use std::ops::Deref;
@@ -42,20 +38,22 @@ use axum::http::request::Parts;
 
 mod route_composition;
 
-use self::postgres_repositories::PostgresHttpRepositories;
+use self::host::HttpHost;
+use self::repositories::HttpRepositories;
 
 use self::route_composition::{
     administrator_command_routes, administrator_query_routes, administrator_static_routes,
     authentication_routes, discovery_routes, omemo_recovery_routes, personal_credential_routes,
     personal_policy_routes, public_authorized_routes, public_capability_routes,
     public_query_routes, public_rest_routes, public_upload_read_routes, upload_http_routes,
-    web_client_static_routes, xmpp_transport_routes,
+    web_client_static_routes,
 };
 
 mod body_limits;
 pub(crate) mod contexts;
 pub mod extract;
 pub(crate) mod governance_cursor;
+pub(crate) mod host;
 pub(crate) mod postgres_repositories;
 pub(crate) mod repositories;
 pub use extract::{ApiPath, ApiQuery};
@@ -387,19 +385,21 @@ fn host_meta_route_contributions(websocket: bool, bosh: bool, xep_0487: bool) ->
     (websocket || bosh, websocket || bosh || xep_0487)
 }
 
-pub fn public_router(state: Arc<AppState>) -> Router {
+pub fn public_router<H: HttpHost>(state: Arc<H>, xmpp_transports: Router) -> Router {
     let readiness = ReadyEndpointState::new(state.readiness_context());
     let discovery = state.public_discovery_context().clone();
     let policy = discovery.policy();
     let mut router = Router::new().route("/healthz", get(health)).route(
         "/readyz",
-        get(ready::<PostgresHttpRepositories>).with_state(readiness),
+        get(ready::<H::Repositories>).with_state(readiness),
     );
     if policy.rest_api_enabled {
         router = router
             .merge(public_rest_routes())
             .merge(authentication_routes(&state, true))
-            .merge(public_query_routes(state.api_query_context()))
+            .merge(public_query_routes::<H::Repositories>(
+                state.api_query_context(),
+            ))
             .merge(public_authorized_routes(&state))
             .merge(personal_credential_routes(&state))
             .merge(public_capability_routes(&state))
@@ -428,18 +428,14 @@ pub fn public_router(state: Arc<AppState>) -> Router {
             serve_host_meta_xml,
             serve_host_meta_json,
         ))
-        .merge(xmpp_transport_routes(
-            Arc::clone(&state),
-            policy.websocket_enabled,
-            policy.bosh_enabled,
-        ));
+        .merge(xmpp_transports);
     if policy.web_client_enabled {
         router = router.merge(web_client_static_routes());
     }
     common_http_layers(router, state.http_transport_policy(), true)
 }
 
-pub fn administrator_router(state: Arc<AppState>) -> Router {
+pub fn administrator_router<H: HttpHost>(state: Arc<H>) -> Router {
     let readiness = ReadyEndpointState::new(state.readiness_context());
     let discovery = state.public_discovery_context().clone();
     let policy = discovery.policy();
@@ -447,14 +443,14 @@ pub fn administrator_router(state: Arc<AppState>) -> Router {
         .route("/healthz", get(health))
         .route(
             "/readyz",
-            get(ready::<PostgresHttpRepositories>).with_state(readiness),
+            get(ready::<H::Repositories>).with_state(readiness),
         )
         .merge(administrator_command_routes(
             &state,
             policy.upload_mode.keeps_storage_runtime(),
             policy.web_client_enabled,
         ))
-        .merge(administrator_query_routes(
+        .merge(administrator_query_routes::<H::Repositories>(
             state.api_query_context(),
             policy.upload_mode.keeps_storage_runtime(),
         ))
@@ -693,8 +689,7 @@ pub fn ip_actor(ip: IpAddr) -> String {
     format!("ip:{ip}")
 }
 
-pub fn client_ip(peer_ip: IpAddr, headers: &HeaderMap, state: &AppState) -> IpAddr {
-    let transport = state.http_transport_policy();
+pub fn client_ip(peer_ip: IpAddr, headers: &HeaderMap, transport: &HttpTransportPolicy) -> IpAddr {
     client_ip_with_trusted_proxies(peer_ip, headers, transport.trusted_proxies())
 }
 
@@ -871,16 +866,29 @@ impl Deref for ApiAdmin {
     }
 }
 
-impl<S> FromRequestParts<S> for ApiAdmin
+/// A route state that authenticates its bearer through the API query service.
+pub(crate) trait ApiQueryRoute: Send + Sync {
+    type Queries: northstar_operations_application::api_queries::ApiQueryRepository;
+
+    fn api_queries(&self) -> &crate::api::contexts::api_queries::ApiQueryContext<Self::Queries>;
+}
+
+impl<Q> ApiQueryRoute for crate::api::contexts::api_queries::ApiQueryContext<Q>
 where
-    S: Send + Sync,
-    crate::api::contexts::ApiQueryContext: axum::extract::FromRef<S>,
+    Q: northstar_operations_application::api_queries::ApiQueryRepository,
 {
+    type Queries = Q;
+
+    fn api_queries(&self) -> &Self {
+        self
+    }
+}
+
+impl<S: ApiQueryRoute> FromRequestParts<S> for ApiAdmin {
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let state =
-            <crate::api::contexts::ApiQueryContext as axum::extract::FromRef<S>>::from_ref(state);
+        let state = state.api_queries();
         let token = bearer_token(&parts.headers)?;
         let user = state
             .api_query_service()
@@ -899,8 +907,9 @@ where
     }
 }
 
-pub async fn serve(
-    state: Arc<AppState>,
+pub async fn serve<H: HttpHost>(
+    state: Arc<H>,
+    xmpp_transports: Router,
     cancel: tokio_util::sync::CancellationToken,
     listener: tokio::net::TcpListener,
 ) -> anyhow::Result<()> {
@@ -910,15 +919,15 @@ pub async fn serve(
     tracing::info!(address = %address, "public HTTP capability listener ready");
     axum::serve(
         listener,
-        public_router(state).into_make_service_with_connect_info::<SocketAddr>(),
+        public_router(state, xmpp_transports).into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(cancel.cancelled_owned())
     .await?;
     Ok(())
 }
 
-pub async fn serve_administration(
-    state: Arc<AppState>,
+pub async fn serve_administration<H: HttpHost>(
+    state: Arc<H>,
     cancel: tokio_util::sync::CancellationToken,
     listener: tokio::net::TcpListener,
 ) -> anyhow::Result<()> {
@@ -939,8 +948,8 @@ pub async fn serve_administration(
     Ok(())
 }
 
-pub async fn serve_metrics(
-    context: MetricsContext,
+pub async fn serve_metrics<R: HttpRepositories>(
+    context: MetricsContext<R>,
     cancel: tokio_util::sync::CancellationToken,
     listener: tokio::net::TcpListener,
 ) -> anyhow::Result<()> {
@@ -948,7 +957,7 @@ pub async fn serve_metrics(
     let endpoint = MetricsEndpointState::new(context);
     tracing::info!(address = %address, "private metrics listener ready");
     let router = Router::new()
-        .route("/metrics", get(metrics::<PostgresHttpRepositories>))
+        .route("/metrics", get(metrics::<R>))
         .with_state(endpoint);
     axum::serve(
         listener,

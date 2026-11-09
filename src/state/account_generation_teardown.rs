@@ -1,11 +1,8 @@
 //! Ordered post-commit account revocation.
 
 use super::{sm_teardown_runtime::SmTeardownRuntime, AccountRevocationRoutes, AppState};
-use crate::api::contexts::account_teardown::{
-    AccountGenerationTeardown, AccountGenerationTeardownContext,
-};
+use crate::api::contexts::account_teardown::AccountGenerationTeardown;
 use crate::cluster::ClusterAccountTeardownNotifier;
-use axum::extract::FromRef;
 use futures::future::BoxFuture;
 use northstar_session_application::sm_teardown::SmTeardownService;
 use northstar_workflows::sm_teardown_repository::PostgresSmTeardownRepository;
@@ -19,14 +16,6 @@ pub(crate) struct AccountGenerationTeardownSequence {
     sm: SmTeardownService<PostgresSmTeardownRepository>,
     sm_effects: Arc<SmTeardownRuntime>,
     notifier: ClusterAccountTeardownNotifier,
-}
-
-impl FromRef<Arc<AppState>> for AccountGenerationTeardownContext {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        AccountGenerationTeardownContext::new(Arc::new(
-            state.account_generation_teardown_sequence(),
-        ))
-    }
 }
 
 impl AccountGenerationTeardown for AccountGenerationTeardownSequence {

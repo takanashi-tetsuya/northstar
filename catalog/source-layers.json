@@ -41,9 +41,6 @@
     }
   },
   "baseline": {
-    "src/api/mod.rs": [
-      "state"
-    ],
     "src/s2s/inbound.rs": [
       "state"
     ],

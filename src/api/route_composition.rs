@@ -1,6 +1,8 @@
 //! Compose HTTP route families using narrow route-state adapters.
 
 use super::*;
+use crate::api::host::HttpHost;
+use crate::api::repositories::HttpRepositories;
 
 pub(super) fn public_rest_routes() -> Router {
     Router::new()
@@ -16,8 +18,8 @@ pub(super) fn public_rest_routes() -> Router {
         )
 }
 
-pub(super) fn upload_http_routes(
-    state: &Arc<AppState>,
+pub(super) fn upload_http_routes<H: HttpHost>(
+    state: &Arc<H>,
     upload_limit: usize,
     admission_enabled: bool,
 ) -> Router {
@@ -25,8 +27,8 @@ pub(super) fn upload_http_routes(
         Router::new()
             .route(
                 "/api/v1/upload/{id}",
-                put(upload_put::<PostgresHttpRepositories>)
-                    .delete(upload_delete::<PostgresHttpRepositories>)
+                put(upload_put::<H::Repositories>)
+                    .delete(upload_delete::<H::Repositories>)
                     // The storage reader deliberately consumes one byte beyond
                     // the reserved size to distinguish an oversized stream from
                     // an exact upload without buffering it.
@@ -34,24 +36,22 @@ pub(super) fn upload_http_routes(
             )
             .with_state(UploadEnabledRoute {
                 queries: state.api_query_context(),
-                write: FromRef::from_ref(state),
-                replay: FromRef::from_ref(state),
-                delete: FromRef::from_ref(state),
+                write: state.upload_http_write_context(),
+                replay: state.upload_http_replay_read_context(),
+                delete: state.upload_http_delete_context(),
             })
     } else {
         Router::new()
             .route(
                 "/api/v1/upload/{id}",
-                delete(upload_delete::<PostgresHttpRepositories>),
+                delete(upload_delete::<H::Repositories>),
             )
-            .with_state(authorized_route_state::<
-                crate::api::contexts::upload_http_delete::UploadHttpDeleteContext,
-            >(state))
+            .with_state(authorized_route(state, state.upload_http_delete_context()))
     }
 }
 
-pub(super) fn administrator_command_routes(
-    state: &Arc<AppState>,
+pub(super) fn administrator_command_routes<H: HttpHost>(
+    state: &Arc<H>,
     upload_runtime_enabled: bool,
     invitation_enabled: bool,
 ) -> Router {
@@ -66,128 +66,112 @@ pub(super) fn administrator_command_routes(
             Router::new()
                 .route(
                     "/api/v1/admin/users/{id}",
-                    patch(admin_update_user::<PostgresHttpRepositories>),
+                    patch(admin_update_user::<H::Repositories>),
                 )
                 .route(
                     "/api/v1/admin/offline_messages",
-                    get(admin_offline_messages_stats::<PostgresHttpRepositories>)
-                        .delete(admin_clear_offline_messages::<PostgresHttpRepositories>),
+                    get(admin_offline_messages_stats::<H::Repositories>)
+                        .delete(admin_clear_offline_messages::<H::Repositories>),
                 )
-                .with_state(authorized_route_state::<
-                    crate::api::contexts::AccountAdminContext,
-                >(state)),
+                .with_state(authorized_route(state, state.account_admin_context())),
         )
         .merge(
             Router::new()
                 .route(
                     "/api/v1/admin/panic_disconnect",
-                    post(admin_panic_disconnect::<PostgresHttpRepositories>),
+                    post(admin_panic_disconnect::<H::Repositories>),
                 )
                 .route(
                     "/api/v1/admin/island_mode",
-                    post(admin_toggle_island_mode::<PostgresHttpRepositories>),
+                    post(admin_toggle_island_mode::<H::Repositories>),
                 )
                 .route(
                     "/api/v1/admin/muc_rooms/{localpart}",
-                    delete(admin_destroy_muc_room::<PostgresHttpRepositories>),
+                    delete(admin_destroy_muc_room::<H::Repositories>),
                 )
                 .route(
                     "/api/v1/admin/broadcast",
-                    post(admin_broadcast::<PostgresHttpRepositories>),
+                    post(admin_broadcast::<H::Repositories>),
                 )
                 .route(
                     "/api/v1/admin/tls/reload",
-                    post(admin_tls_reload::<PostgresHttpRepositories>),
+                    post(admin_tls_reload::<H::Repositories>),
                 )
-                .with_state(authorized_route_state::<
-                    crate::api::contexts::AdminDispatchContext,
-                >(state)),
+                .with_state(authorized_route(state, state.admin_dispatch_context())),
         )
         .merge(
             Router::new()
                 .route(
                     "/api/v1/admin/registration",
-                    post(admin_toggle_registration::<PostgresHttpRepositories>),
+                    post(admin_toggle_registration::<H::Repositories>),
                 )
-                .with_state(authorized_route_state::<
-                    crate::api::contexts::RegistrationAdminContext,
-                >(state)),
+                .with_state(authorized_route(state, state.registration_admin_context())),
         )
         .merge(
             Router::new()
                 .route(
                     "/api/v1/admin/sessions/{connection_id}",
-                    delete(admin_kick_session::<PostgresHttpRepositories>),
+                    delete(admin_kick_session::<H::Repositories>),
                 )
-                .with_state(authorized_route_state::<
-                    crate::api::contexts::SessionAdminContext,
-                >(state)),
+                .with_state(authorized_route(state, state.session_admin_context())),
         )
         .merge(
             Router::new()
                 .route(
                     "/api/v1/admin/reports/{id}",
-                    patch(admin_update_report::<PostgresHttpRepositories>),
+                    patch(admin_update_report::<H::Repositories>),
                 )
                 .route(
                     "/api/v1/admin/appeals/{id}",
-                    patch(admin_update_appeal::<PostgresHttpRepositories>),
+                    patch(admin_update_appeal::<H::Repositories>),
                 )
-                .with_state(authorized_route_state::<
-                    crate::api::contexts::ReportModerationContext,
-                >(state)),
+                .with_state(authorized_route(state, state.report_moderation_context())),
         )
         .merge(
             Router::new()
                 .route(
                     "/api/v1/admin/operations/{id}/cancel",
-                    post(cancel_operation::<PostgresHttpRepositories>),
+                    post(cancel_operation::<H::Repositories>),
                 )
                 .route(
                     "/api/v1/admin/operations/{id}/reconcile",
-                    post(reconcile_operation::<PostgresHttpRepositories>),
+                    post(reconcile_operation::<H::Repositories>),
                 )
                 .route(
                     "/api/v1/admin/operations/{operation_id}/targets/{target_id}/reconcile",
-                    post(reconcile_target::<PostgresHttpRepositories>),
+                    post(reconcile_target::<H::Repositories>),
                 )
-                .with_state(authorized_route_state::<
-                    crate::api::contexts::OperationAdminContext,
-                >(state)),
+                .with_state(authorized_route(state, state.operation_admin_context())),
         )
         .merge(
             Router::new()
                 .route(
                     "/api/v1/admin/legal-holds",
-                    get(list_legal_holds::<PostgresHttpRepositories>)
-                        .post(create_legal_hold::<PostgresHttpRepositories>),
+                    get(list_legal_holds::<H::Repositories>)
+                        .post(create_legal_hold::<H::Repositories>),
                 )
                 .route(
                     "/api/v1/admin/legal-holds/{id}/release",
-                    post(release_legal_hold::<PostgresHttpRepositories>),
+                    post(release_legal_hold::<H::Repositories>),
                 )
                 .route(
                     "/api/v1/admin/legal-holds/{id}/export",
-                    post(export_legal_hold::<PostgresHttpRepositories>),
+                    post(export_legal_hold::<H::Repositories>),
                 )
                 .route(
                     "/api/v1/admin/audit/export",
-                    post(export_audit::<PostgresHttpRepositories>),
+                    post(export_audit::<H::Repositories>),
                 )
-                .with_state(authorized_route_state::<
-                    crate::api::contexts::GovernanceContext,
-                >(state)),
+                .with_state(authorized_route(state, state.governance_context())),
         );
     if upload_runtime_enabled {
         router = router.merge(
             Router::new()
                 .route(
                     "/api/v1/admin/upload-dead-letters/{kind}/{id}/retry",
-                    post(admin_retry_upload_dead_letter::<PostgresHttpRepositories>),
+                    post(admin_retry_upload_dead_letter::<H::Repositories>),
                 )
-                .with_state(authorized_route_state::<
-                    crate::api::contexts::UploadAdminContext,
-                >(state)),
+                .with_state(authorized_route(state, state.upload_admin_context())),
         );
     }
     if invitation_enabled {
@@ -195,16 +179,14 @@ pub(super) fn administrator_command_routes(
             Router::new()
                 .route(
                     "/api/v1/admin/invitations",
-                    get(admin_invitations::<PostgresHttpRepositories>)
-                        .post(admin_create_invitation::<PostgresHttpRepositories>),
+                    get(admin_invitations::<H::Repositories>)
+                        .post(admin_create_invitation::<H::Repositories>),
                 )
                 .route(
                     "/api/v1/admin/invitations/{id}",
-                    delete(admin_revoke_invitation::<PostgresHttpRepositories>),
+                    delete(admin_revoke_invitation::<H::Repositories>),
                 )
-                .with_state(authorized_route_state::<
-                    crate::api::contexts::InvitationAdminContext,
-                >(state)),
+                .with_state(authorized_route(state, state.invitation_admin_context())),
         );
     }
     router
@@ -231,25 +213,22 @@ pub(super) fn administrator_static_routes() -> Router {
     router
 }
 
-pub(super) fn authentication_routes(state: &Arc<AppState>, registration_enabled: bool) -> Router {
+pub(super) fn authentication_routes<H: HttpHost>(
+    state: &Arc<H>,
+    registration_enabled: bool,
+) -> Router {
     let login = Router::new()
-        .route("/api/v1/login", post(login::<PostgresHttpRepositories>))
-        .with_state(<HttpLoginEndpointContext>::from_ref(state));
+        .route("/api/v1/login", post(login::<H::Repositories>))
+        .with_state(state.http_login_endpoint_context());
     let logout = Router::new()
-        .route(
-            "/api/v1/session",
-            delete(logout::<PostgresHttpRepositories>),
-        )
-        .with_state(<ApiSessionHttpContext>::from_ref(state));
+        .route("/api/v1/session", delete(logout::<H::Repositories>))
+        .with_state(state.api_session_http_context());
     let mut router = login.merge(logout);
     if registration_enabled {
         router = router.merge(
             Router::new()
-                .route(
-                    "/api/v1/register",
-                    post(register::<PostgresHttpRepositories>),
-                )
-                .with_state(<HttpRegistrationEndpointContext>::from_ref(state)),
+                .route("/api/v1/register", post(register::<H::Repositories>))
+                .with_state(state.http_registration_endpoint_context()),
         );
     }
     router
@@ -259,21 +238,29 @@ pub(super) fn authentication_routes(state: &Arc<AppState>, registration_enabled:
 // capability. Keep those two handles on that route instead of retaining the
 // application state in the entire REST router.
 #[derive(Clone)]
-pub(super) struct AuthorizedRoute<C> {
-    pub(super) queries: ApiQueryContext,
+pub(super) struct AuthorizedRoute<R: HttpRepositories, C> {
+    pub(super) queries: ApiQueryContext<R>,
     pub(super) command: C,
 }
 
-impl<C: Clone> FromRef<AuthorizedRoute<C>> for ApiQueryContext {
-    fn from_ref(state: &AuthorizedRoute<C>) -> Self {
+impl<R: HttpRepositories, C: Clone> FromRef<AuthorizedRoute<R, C>> for ApiQueryContext<R> {
+    fn from_ref(state: &AuthorizedRoute<R, C>) -> Self {
         state.queries.clone()
+    }
+}
+
+impl<R: HttpRepositories, C: Send + Sync> ApiQueryRoute for AuthorizedRoute<R, C> {
+    type Queries = <R as HttpRepositories>::ApiQueries;
+
+    fn api_queries(&self) -> &ApiQueryContext<R> {
+        &self.queries
     }
 }
 
 macro_rules! authorized_command_context {
     ($($context:ty),+ $(,)?) => {
-        $(impl FromRef<AuthorizedRoute<$context>> for $context {
-            fn from_ref(state: &AuthorizedRoute<$context>) -> Self {
+        $(impl<R: HttpRepositories> FromRef<AuthorizedRoute<R, $context>> for $context {
+            fn from_ref(state: &AuthorizedRoute<R, $context>) -> Self {
                 state.command.clone()
             }
         })+
@@ -281,29 +268,29 @@ macro_rules! authorized_command_context {
 }
 
 authorized_command_context!(
-    crate::api::contexts::AccountAdminContext,
-    crate::api::contexts::AdminDispatchContext,
-    crate::api::contexts::GovernanceContext,
-    crate::api::contexts::http_challenge_endpoint::HttpChallengeEndpointContext,
-    crate::api::contexts::InvitationAdminContext,
-    crate::api::contexts::OperationAdminContext,
-    crate::api::contexts::passkey_http::PasskeyAccountHttpContext,
-    crate::api::contexts::passkey_http::PasskeyStartHttpContext,
-    crate::api::contexts::RegistrationAdminContext,
-    crate::api::contexts::ReportContext,
-    crate::api::contexts::ReportModerationContext,
-    crate::api::contexts::SessionAdminContext,
-    crate::api::contexts::UploadAdminContext,
-    crate::api::contexts::upload_http_delete::UploadHttpDeleteContext,
+    crate::api::contexts::AccountAdminContext<R>,
+    crate::api::contexts::AdminDispatchContext<R>,
+    crate::api::contexts::GovernanceContext<R>,
+    crate::api::contexts::http_challenge_endpoint::HttpChallengeEndpointContext<R>,
+    crate::api::contexts::InvitationAdminContext<R>,
+    crate::api::contexts::OperationAdminContext<R>,
+    crate::api::contexts::passkey_http::PasskeyAccountHttpContext<R>,
+    crate::api::contexts::passkey_http::PasskeyStartHttpContext<R>,
+    crate::api::contexts::RegistrationAdminContext<R>,
+    crate::api::contexts::ReportContext<R>,
+    crate::api::contexts::ReportModerationContext<R>,
+    crate::api::contexts::SessionAdminContext<R>,
+    crate::api::contexts::UploadAdminContext<R>,
+    crate::api::contexts::upload_http_delete::UploadHttpDeleteContext<R>,
 );
 
-pub(super) fn authorized_route_state<C>(state: &Arc<AppState>) -> AuthorizedRoute<C>
-where
-    C: FromRef<Arc<AppState>>,
-{
+pub(super) fn authorized_route<H: HttpHost, C>(
+    state: &Arc<H>,
+    command: C,
+) -> AuthorizedRoute<H::Repositories, C> {
     AuthorizedRoute {
         queries: state.api_query_context(),
-        command: C::from_ref(state),
+        command,
     }
 }
 
@@ -315,13 +302,13 @@ pub(super) struct RoutePair<A, B> {
 
 macro_rules! route_pair_contexts {
     ($first:ty, $second:ty) => {
-        impl FromRef<RoutePair<$first, $second>> for $first {
+        impl<R: HttpRepositories> FromRef<RoutePair<$first, $second>> for $first {
             fn from_ref(state: &RoutePair<$first, $second>) -> Self {
                 state.first.clone()
             }
         }
 
-        impl FromRef<RoutePair<$first, $second>> for $second {
+        impl<R: HttpRepositories> FromRef<RoutePair<$first, $second>> for $second {
             fn from_ref(state: &RoutePair<$first, $second>) -> Self {
                 state.second.clone()
             }
@@ -330,294 +317,274 @@ macro_rules! route_pair_contexts {
 }
 
 route_pair_contexts!(
-    crate::api::contexts::password_change_http::PasswordChangeHttpContext,
+    crate::api::contexts::password_change_http::PasswordChangeHttpContext<R>,
     crate::api::contexts::account_teardown::AccountTeardownContext
 );
 route_pair_contexts!(
-    OmemoRecoveryHttpContext,
+    OmemoRecoveryHttpContext<R>,
     crate::api::contexts::account_teardown::AccountGenerationTeardownContext
 );
 
 #[derive(Clone)]
-pub(super) struct PasskeyRemovalRoute {
-    pub(super) queries: ApiQueryContext,
-    pub(super) account: crate::api::contexts::passkey_http::PasskeyAccountHttpContext,
-    pub(super) start: PasskeyStartHttpContext,
+pub(super) struct PasskeyRemovalRoute<R: HttpRepositories> {
+    pub(super) queries: ApiQueryContext<R>,
+    pub(super) account: crate::api::contexts::passkey_http::PasskeyAccountHttpContext<R>,
+    pub(super) start: PasskeyStartHttpContext<R>,
     pub(super) teardown: crate::api::contexts::account_teardown::AccountGenerationTeardownContext,
 }
 
-impl FromRef<PasskeyRemovalRoute> for ApiQueryContext {
-    fn from_ref(state: &PasskeyRemovalRoute) -> Self {
+impl<R: HttpRepositories> FromRef<PasskeyRemovalRoute<R>> for ApiQueryContext<R> {
+    fn from_ref(state: &PasskeyRemovalRoute<R>) -> Self {
         state.queries.clone()
     }
 }
 
-impl FromRef<PasskeyRemovalRoute>
-    for crate::api::contexts::passkey_http::PasskeyAccountHttpContext
+impl<R: HttpRepositories> FromRef<PasskeyRemovalRoute<R>>
+    for crate::api::contexts::passkey_http::PasskeyAccountHttpContext<R>
 {
-    fn from_ref(state: &PasskeyRemovalRoute) -> Self {
+    fn from_ref(state: &PasskeyRemovalRoute<R>) -> Self {
         state.account.clone()
     }
 }
 
-impl FromRef<PasskeyRemovalRoute> for PasskeyStartHttpContext {
-    fn from_ref(state: &PasskeyRemovalRoute) -> Self {
+impl<R: HttpRepositories> FromRef<PasskeyRemovalRoute<R>> for PasskeyStartHttpContext<R> {
+    fn from_ref(state: &PasskeyRemovalRoute<R>) -> Self {
         state.start.clone()
     }
 }
 
-impl FromRef<PasskeyRemovalRoute>
+impl<R: HttpRepositories> FromRef<PasskeyRemovalRoute<R>>
     for crate::api::contexts::account_teardown::AccountGenerationTeardownContext
 {
-    fn from_ref(state: &PasskeyRemovalRoute) -> Self {
+    fn from_ref(state: &PasskeyRemovalRoute<R>) -> Self {
         state.teardown.clone()
     }
 }
 
 #[derive(Clone)]
-pub(super) struct UploadEnabledRoute {
-    pub(super) queries: ApiQueryContext,
-    pub(super) write: crate::api::contexts::upload_http_write::UploadHttpWriteContext,
+pub(super) struct UploadEnabledRoute<R: HttpRepositories> {
+    pub(super) queries: ApiQueryContext<R>,
+    pub(super) write: crate::api::contexts::upload_http_write::UploadHttpWriteContext<R>,
     pub(super) replay: crate::api::contexts::UploadHttpReplayReadContext,
-    pub(super) delete: crate::api::contexts::upload_http_delete::UploadHttpDeleteContext,
+    pub(super) delete: crate::api::contexts::upload_http_delete::UploadHttpDeleteContext<R>,
 }
 
-impl FromRef<UploadEnabledRoute> for ApiQueryContext {
-    fn from_ref(state: &UploadEnabledRoute) -> Self {
+impl<R: HttpRepositories> FromRef<UploadEnabledRoute<R>> for ApiQueryContext<R> {
+    fn from_ref(state: &UploadEnabledRoute<R>) -> Self {
         state.queries.clone()
     }
 }
 
-impl FromRef<UploadEnabledRoute>
-    for crate::api::contexts::upload_http_write::UploadHttpWriteContext
+impl<R: HttpRepositories> FromRef<UploadEnabledRoute<R>>
+    for crate::api::contexts::upload_http_write::UploadHttpWriteContext<R>
 {
-    fn from_ref(state: &UploadEnabledRoute) -> Self {
+    fn from_ref(state: &UploadEnabledRoute<R>) -> Self {
         state.write.clone()
     }
 }
 
-impl FromRef<UploadEnabledRoute> for crate::api::contexts::UploadHttpReplayReadContext {
-    fn from_ref(state: &UploadEnabledRoute) -> Self {
+impl<R: HttpRepositories> FromRef<UploadEnabledRoute<R>>
+    for crate::api::contexts::UploadHttpReplayReadContext
+{
+    fn from_ref(state: &UploadEnabledRoute<R>) -> Self {
         state.replay.clone()
     }
 }
 
-impl FromRef<UploadEnabledRoute>
-    for crate::api::contexts::upload_http_delete::UploadHttpDeleteContext
+impl<R: HttpRepositories> FromRef<UploadEnabledRoute<R>>
+    for crate::api::contexts::upload_http_delete::UploadHttpDeleteContext<R>
 {
-    fn from_ref(state: &UploadEnabledRoute) -> Self {
+    fn from_ref(state: &UploadEnabledRoute<R>) -> Self {
         state.delete.clone()
     }
 }
 
-pub(super) fn public_query_routes(queries: ApiQueryContext) -> Router {
+pub(super) fn public_query_routes<R: HttpRepositories>(queries: ApiQueryContext<R>) -> Router {
     Router::new()
-        .route("/api/v1/me", get(me::<PostgresHttpRepositories>))
-        .route("/api/v1/history", get(history::<PostgresHttpRepositories>))
+        .route("/api/v1/me", get(me::<R>))
+        .route("/api/v1/history", get(history::<R>))
         .with_state(queries)
 }
 
-pub(super) fn public_authorized_routes(state: &Arc<AppState>) -> Router {
+pub(super) fn public_authorized_routes<H: HttpHost>(state: &Arc<H>) -> Router {
     Router::new()
         .merge(
             Router::new()
                 .route(
                     "/api/v1/anti-abuse/challenge",
-                    post(anti_abuse_challenge::<PostgresHttpRepositories>),
+                    post(anti_abuse_challenge::<H::Repositories>),
                 )
-                .with_state(authorized_route_state::<
-                    crate::api::contexts::http_challenge_endpoint::HttpChallengeEndpointContext,
-                >(state)),
+                .with_state(authorized_route(
+                    state,
+                    state.http_challenge_endpoint_context(),
+                )),
         )
         .merge(
             Router::new()
                 .route(
                     "/api/v1/me/passkeys",
-                    get(passkeys::list::<PostgresHttpRepositories>),
+                    get(passkeys::list::<H::Repositories>),
                 )
                 .route(
                     "/api/v1/me/passkeys/register/finish",
-                    post(passkeys::register_finish::<PostgresHttpRepositories>),
+                    post(passkeys::register_finish::<H::Repositories>),
                 )
-                .with_state(authorized_route_state::<
-                    crate::api::contexts::passkey_http::PasskeyAccountHttpContext,
-                >(state)),
+                .with_state(authorized_route(
+                    state,
+                    state.passkey_account_http_context(),
+                )),
         )
         .merge(
             Router::new()
                 .route(
                     "/api/v1/me/passkeys/register/start",
-                    post(passkeys::register_start::<PostgresHttpRepositories>),
+                    post(passkeys::register_start::<H::Repositories>),
                 )
-                .with_state(authorized_route_state::<PasskeyStartHttpContext>(state)),
+                .with_state(authorized_route(state, state.passkey_start_http_context())),
         )
         .merge(
             Router::new()
                 .route(
                     "/api/v1/reports",
-                    get(my_reports::<PostgresHttpRepositories>)
-                        .post(create_report::<PostgresHttpRepositories>),
+                    get(my_reports::<H::Repositories>).post(create_report::<H::Repositories>),
                 )
                 .route(
                     "/api/v1/reports/{id}/appeals",
-                    post(create_appeal::<PostgresHttpRepositories>),
+                    post(create_appeal::<H::Repositories>),
                 )
-                .with_state(authorized_route_state::<crate::api::contexts::ReportContext>(state)),
+                .with_state(authorized_route(state, state.report_context())),
         )
 }
 
-pub(super) fn personal_credential_routes(state: &Arc<AppState>) -> Router {
+pub(super) fn personal_credential_routes<H: HttpHost>(state: &Arc<H>) -> Router {
     Router::new()
         .merge(
             Router::new()
                 .route(
                     "/api/v1/me/passkeys/remove",
-                    post(passkeys::remove::<PostgresHttpRepositories>),
+                    post(passkeys::remove::<H::Repositories>),
                 )
                 .with_state(PasskeyRemovalRoute {
                     queries: state.api_query_context(),
-                    account: FromRef::from_ref(state),
-                    start: FromRef::from_ref(state),
-                    teardown: FromRef::from_ref(state),
+                    account: state.passkey_account_http_context(),
+                    start: state.passkey_start_http_context(),
+                    teardown: state.account_generation_teardown_context(),
                 }),
         )
         .merge(
             Router::new()
                 .route(
                     "/api/v1/me/password",
-                    patch(change_password::<PostgresHttpRepositories>),
+                    patch(change_password::<H::Repositories>),
                 )
                 .with_state(RoutePair {
-                    first: FromRef::from_ref(state),
-                    second: FromRef::from_ref(state),
+                    first: state.password_change_http_context(),
+                    second: state.account_teardown_context(),
                 }),
         )
         .merge(
             Router::new()
                 .route(
                     "/api/v1/me/omemo-recovery-transfers/{id}/consume",
-                    post(consume_omemo_recovery::<PostgresHttpRepositories>),
+                    post(consume_omemo_recovery::<H::Repositories>),
                 )
                 .with_state(RoutePair {
-                    first: <OmemoRecoveryHttpContext>::from_ref(state),
-                    second: FromRef::from_ref(state),
+                    first: state.omemo_recovery_http_context(),
+                    second: state.account_generation_teardown_context(),
                 }),
         )
 }
 
-pub(super) fn public_capability_routes(state: &Arc<AppState>) -> Router {
+pub(super) fn public_capability_routes<H: HttpHost>(state: &Arc<H>) -> Router {
     Router::new()
         .merge(
             Router::new()
                 .route(
                     "/api/v1/passkeys/login/start",
-                    post(passkeys::login_start::<PostgresHttpRepositories>),
+                    post(passkeys::login_start::<H::Repositories>),
                 )
-                .with_state(<PasskeyStartHttpContext>::from_ref(state)),
+                .with_state(state.passkey_start_http_context()),
         )
         .merge(
             Router::new()
                 .route(
                     "/api/v1/passkeys/login/finish",
-                    post(passkeys::login_finish::<PostgresHttpRepositories>),
+                    post(passkeys::login_finish::<H::Repositories>),
                 )
-                .with_state(<PasskeyLoginFinishContext>::from_ref(state)),
+                .with_state(state.passkey_login_finish_context()),
         )
         .merge(
             Router::new()
                 .route(
                     "/api/v1/omemo-recovery-transfers/{id}/poll",
-                    post(poll_omemo_recovery::<PostgresHttpRepositories>),
+                    post(poll_omemo_recovery::<H::Repositories>),
                 )
-                .with_state(<OmemoRecoveryPollContext>::from_ref(state)),
+                .with_state(state.omemo_recovery_poll_context()),
         )
 }
 
-pub(super) fn personal_policy_routes(state: &Arc<AppState>) -> Router {
+pub(super) fn personal_policy_routes<H: HttpHost>(state: &Arc<H>) -> Router {
     Router::new()
         .route(
             "/api/v1/me/retention",
-            get(get_my_retention::<PostgresHttpRepositories>)
-                .put(update_my_retention::<PostgresHttpRepositories>),
+            get(get_my_retention::<H::Repositories>).put(update_my_retention::<H::Repositories>),
         )
         .route(
             "/api/v1/muc_rooms/{id}/retention",
-            get(get_muc_retention::<PostgresHttpRepositories>)
-                .put(update_muc_retention::<PostgresHttpRepositories>),
+            get(get_muc_retention::<H::Repositories>).put(update_muc_retention::<H::Repositories>),
         )
-        .with_state(<RetentionPolicyContext>::from_ref(state))
+        .with_state(state.retention_policy_context())
 }
 
-pub(super) fn omemo_recovery_routes(state: &Arc<AppState>) -> Router {
+pub(super) fn omemo_recovery_routes<H: HttpHost>(state: &Arc<H>) -> Router {
     Router::new()
         .route(
             "/api/v1/me/omemo-recovery-transfers",
-            post(prepare_omemo_recovery::<PostgresHttpRepositories>),
+            post(prepare_omemo_recovery::<H::Repositories>),
         )
         .route(
             "/api/v1/me/omemo-recovery-authority",
-            get(get_omemo_recovery_authority::<PostgresHttpRepositories>),
+            get(get_omemo_recovery_authority::<H::Repositories>),
         )
         .route(
             "/api/v1/me/omemo-recovery-transfers/{id}",
-            get(get_omemo_recovery::<PostgresHttpRepositories>)
-                .put(seal_omemo_recovery::<PostgresHttpRepositories>)
-                .delete(revoke_omemo_recovery::<PostgresHttpRepositories>),
+            get(get_omemo_recovery::<H::Repositories>)
+                .put(seal_omemo_recovery::<H::Repositories>)
+                .delete(revoke_omemo_recovery::<H::Repositories>),
         )
-        .with_state(<OmemoRecoveryHttpContext>::from_ref(state))
+        .with_state(state.omemo_recovery_http_context())
 }
 
-pub(super) fn public_upload_read_routes(state: &Arc<AppState>) -> Router {
+pub(super) fn public_upload_read_routes<H: HttpHost>(state: &Arc<H>) -> Router {
     Router::new()
-        .route("/uploads/{id}", get(upload_get::<PostgresHttpRepositories>))
-        .with_state(<UploadHttpReadContext>::from_ref(state))
+        .route("/uploads/{id}", get(upload_get::<H::Repositories>))
+        .with_state(state.upload_http_read_context())
 }
 
-pub(super) fn administrator_query_routes(
-    queries: ApiQueryContext,
+pub(super) fn administrator_query_routes<R: HttpRepositories>(
+    queries: ApiQueryContext<R>,
     upload_runtime_enabled: bool,
 ) -> Router {
     let router = Router::new()
-        .route(
-            "/api/v1/admin/stats",
-            get(admin_stats::<PostgresHttpRepositories>),
-        )
-        .route(
-            "/api/v1/admin/sessions",
-            get(admin_sessions::<PostgresHttpRepositories>),
-        )
-        .route(
-            "/api/v1/admin/muc_rooms",
-            get(admin_muc_rooms::<PostgresHttpRepositories>),
-        )
-        .route(
-            "/api/v1/admin/users",
-            get(admin_users::<PostgresHttpRepositories>),
-        )
-        .route(
-            "/api/v1/admin/reports",
-            get(admin_reports::<PostgresHttpRepositories>),
-        )
-        .route(
-            "/api/v1/admin/operations",
-            get(list_operations::<PostgresHttpRepositories>),
-        )
-        .route(
-            "/api/v1/admin/operations/{id}",
-            get(get_operation::<PostgresHttpRepositories>),
-        )
+        .route("/api/v1/admin/stats", get(admin_stats::<R>))
+        .route("/api/v1/admin/sessions", get(admin_sessions::<R>))
+        .route("/api/v1/admin/muc_rooms", get(admin_muc_rooms::<R>))
+        .route("/api/v1/admin/users", get(admin_users::<R>))
+        .route("/api/v1/admin/reports", get(admin_reports::<R>))
+        .route("/api/v1/admin/operations", get(list_operations::<R>))
+        .route("/api/v1/admin/operations/{id}", get(get_operation::<R>))
         .route(
             "/api/v1/admin/operations/{id}/targets",
-            get(list_targets::<PostgresHttpRepositories>),
+            get(list_targets::<R>),
         )
         .route(
             "/api/v1/admin/operations/{operation_id}/targets/{target_id}",
-            get(get_target::<PostgresHttpRepositories>),
+            get(get_target::<R>),
         );
     let router = if upload_runtime_enabled {
         router.route(
             "/api/v1/admin/upload-dead-letters",
-            get(admin_upload_dead_letters::<PostgresHttpRepositories>),
+            get(admin_upload_dead_letters::<R>),
         )
     } else {
         router
@@ -642,26 +609,4 @@ pub(super) fn discovery_routes(
         router = router.route("/.well-known/host-meta.json", get(host_meta_json));
     }
     router.with_state(context)
-}
-
-pub(super) fn xmpp_transport_routes(
-    state: Arc<AppState>,
-    websocket_enabled: bool,
-    bosh_enabled: bool,
-) -> Router {
-    let mut router: Router<Arc<AppState>> = Router::new();
-    if websocket_enabled {
-        router = router.route(
-            "/xmpp-websocket",
-            get(northstar_c2s::websocket_upgrade::websocket_upgrade::<AppState>),
-        );
-    }
-    if bosh_enabled {
-        router = router
-            .route("/http-bind", post(northstar_bosh::http_bind::<AppState>))
-            .route("/http-bind", options(northstar_bosh::http_bind_options))
-            .route("/bosh", post(northstar_bosh::http_bind::<AppState>))
-            .route("/bosh", options(northstar_bosh::http_bind_options));
-    }
-    router.with_state(state)
 }

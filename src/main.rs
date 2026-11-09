@@ -769,7 +769,12 @@ async fn run() -> Result<()> {
     spawn_service_task(
         &mut service_tasks,
         "HTTP",
-        api::serve(state.clone(), cancel.clone(), http_listener),
+        api::serve(
+            state.clone(),
+            state::http_host::xmpp_transport_routes(&state),
+            cancel.clone(),
+            http_listener,
+        ),
     );
     if listeners.admin.is_some() {
         let Some(listener) = admin_listener else {

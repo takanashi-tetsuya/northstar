@@ -826,8 +826,10 @@ impl Deref for ApiUser {
     }
 }
 
-pub(crate) async fn current_user_with_queries(
-    state: &crate::api::contexts::ApiQueryContext,
+pub(crate) async fn current_user_with_queries<
+    Q: northstar_operations_application::api_queries::ApiQueryRepository,
+>(
+    state: &crate::api::contexts::api_queries::ApiQueryContext<Q>,
     headers: &HeaderMap,
 ) -> Result<ApiUser, AppError> {
     let _authentication_timer = state.authentication_timer();

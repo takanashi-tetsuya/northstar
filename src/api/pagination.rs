@@ -1,9 +1,9 @@
 //! Shared REST keyset-pagination policy.
 
-use crate::api::contexts::ApiQueryContext;
+use crate::api::contexts::api_queries::ApiQueryContext;
 use crate::api::error::AppError;
 use chrono::{DateTime, Utc};
-use northstar_operations_application::api_queries::PageBoundary;
+use northstar_operations_application::api_queries::{ApiQueryRepository, PageBoundary};
 use uuid::Uuid;
 
 use super::cursor::{CanonicalScope, CursorBinding, CursorDirection, CursorPosition, CursorValue};
@@ -76,8 +76,8 @@ pub fn session_binding<'a>(
     }
 }
 
-pub async fn pg_boundary(
-    state: &ApiQueryContext,
+pub async fn pg_boundary<Q: ApiQueryRepository>(
+    state: &ApiQueryContext<Q>,
     token: Option<&str>,
     binding: &CursorBinding<'_>,
 ) -> Result<Option<PageBoundary>, AppError> {
@@ -97,8 +97,8 @@ pub async fn pg_boundary(
     Ok(Some(PageBoundary { created_at, id }))
 }
 
-pub fn issue_pg_cursor(
-    state: &ApiQueryContext,
+pub fn issue_pg_cursor<Q: ApiQueryRepository>(
+    state: &ApiQueryContext<Q>,
     binding: &CursorBinding<'_>,
     next: Option<PageBoundary>,
     database_now: DateTime<Utc>,
@@ -122,8 +122,8 @@ pub fn issue_pg_cursor(
     .transpose()
 }
 
-pub async fn session_after(
-    state: &ApiQueryContext,
+pub async fn session_after<Q: ApiQueryRepository>(
+    state: &ApiQueryContext<Q>,
     token: Option<&str>,
     binding: &CursorBinding<'_>,
 ) -> Result<Option<Uuid>, AppError> {
@@ -141,8 +141,8 @@ pub async fn session_after(
     }
 }
 
-pub fn issue_session_cursor(
-    state: &ApiQueryContext,
+pub fn issue_session_cursor<Q: ApiQueryRepository>(
+    state: &ApiQueryContext<Q>,
     binding: &CursorBinding<'_>,
     next: Option<Uuid>,
     database_now: DateTime<Utc>,

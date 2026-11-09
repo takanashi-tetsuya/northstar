@@ -338,6 +338,10 @@ stop_b() {
 start_b
 
 s2s_port_file="$runtime_dir/s2s-tls-b.port"
+# Root rewrites the port for every B lifecycle, but the HTTPS fixture reads it
+# after dropping to the runtime uid. Create the file as that uid so the later
+# truncating writes keep it readable whatever umask the privileged caller passes.
+install -o "$runtime_uid" -g "$runtime_gid" -m 0600 /dev/null "$s2s_port_file"
 printf '%s\n' "$s2s_tls_b" >"$s2s_port_file"
 takeover_ack="$runtime_dir/https.takeover.json"
 takeover_nonce="$(openssl rand -hex 16)"

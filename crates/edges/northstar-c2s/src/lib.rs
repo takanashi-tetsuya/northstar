@@ -12,6 +12,7 @@ pub mod direct_delivery;
 pub mod host;
 mod tcp_action;
 mod websocket_action;
+pub mod websocket_upgrade;
 
 use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket};

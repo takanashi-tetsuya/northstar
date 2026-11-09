@@ -651,7 +651,10 @@ pub(super) fn xmpp_transport_routes(
 ) -> Router {
     let mut router: Router<Arc<AppState>> = Router::new();
     if websocket_enabled {
-        router = router.route("/xmpp-websocket", get(websocket));
+        router = router.route(
+            "/xmpp-websocket",
+            get(northstar_c2s::websocket_upgrade::websocket_upgrade::<AppState>),
+        );
     }
     if bosh_enabled {
         router = router

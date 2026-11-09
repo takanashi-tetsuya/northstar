@@ -12,6 +12,7 @@ anyhow = "1.0"
 axum = { version = "0.8", features = ["ws", "multipart"] }
 futures = "0.3"
 northstar-auth-core = { path = "../../contexts/auth/northstar-auth-core" }
+northstar-config = { path = "../../platform/northstar-config" }
 northstar-delivery-core = { path = "../../contexts/message/northstar-delivery-core" }
 northstar-runtime = { path = "../../platform/northstar-runtime" }
 northstar-security = { path = "../../platform/northstar-security" }

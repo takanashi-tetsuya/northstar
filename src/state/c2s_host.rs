@@ -3,7 +3,9 @@
 use super::admission_guards::ClientConnectionGuard;
 use super::AppState;
 use crate::xmpp::protocol::ProtocolSession;
+use axum::http::HeaderMap;
 use northstar_c2s::host::C2sHost;
+use northstar_c2s::websocket_upgrade::WebSocketHost;
 use northstar_runtime::connection_actors::ConnectionActorRegistry;
 use northstar_stream::host::TransportHost;
 use northstar_stream::outbound::OutboundSender;
@@ -65,5 +67,26 @@ impl C2sHost for AppState {
 
     fn c2s_backpressure_telemetry(&self) -> C2sBackpressureTelemetry {
         AppState::c2s_backpressure_telemetry(self)
+    }
+}
+
+impl WebSocketHost for AppState {
+    fn public_url(&self) -> &str {
+        &self.public_discovery_context().policy().public_url
+    }
+
+    fn trusted_proxy_ips(&self) -> &[IpAddr] {
+        &self.public_discovery_context().policy().trusted_proxy_ips
+    }
+
+    fn websocket_allowed_origins(&self) -> &[String] {
+        &self
+            .public_discovery_context()
+            .policy()
+            .websocket_allowed_origins
+    }
+
+    fn client_ip(&self, peer_ip: IpAddr, headers: &HeaderMap) -> IpAddr {
+        crate::api::client_ip(peer_ip, headers, self)
     }
 }

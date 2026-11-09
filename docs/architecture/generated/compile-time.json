@@ -2956,6 +2956,10 @@
     ],
     [
       "northstar-c2s",
+      "northstar-config"
+    ],
+    [
+      "northstar-c2s",
       "northstar-delivery-core"
     ],
     [

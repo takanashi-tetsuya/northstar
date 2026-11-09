@@ -1090,6 +1090,7 @@ digraph compile_time {
   "northstar-c2s" -> "futures";
   "northstar-c2s" -> "northstar-auth-application";
   "northstar-c2s" -> "northstar-auth-core";
+  "northstar-c2s" -> "northstar-config";
   "northstar-c2s" -> "northstar-delivery-core";
   "northstar-c2s" -> "northstar-runtime";
   "northstar-c2s" -> "northstar-security";

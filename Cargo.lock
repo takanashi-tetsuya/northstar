@@ -2058,6 +2058,7 @@ dependencies = [
  "futures",
  "northstar-auth-application",
  "northstar-auth-core",
+ "northstar-config",
  "northstar-delivery-core",
  "northstar-runtime",
  "northstar-security",

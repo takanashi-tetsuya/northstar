@@ -2456,7 +2456,7 @@ for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bstate\s*\.\s*pool\b/, /\
 }
 if (!passkeyApiSource.includes('State<PasskeyAccountHttpContext>')
     || !passkeyApiSource.includes('State<PasskeyStartHttpContext>')
-    || !read('src/api/contexts/passkey_http.rs').includes('Arc<PasskeyService>')) {
+    || !read('src/api/contexts/passkey_http.rs').includes('Arc<PasskeyService<R>>')) {
   throw new Error('Passkeys HTTP must use scoped application services');
 }
 const passkeyAccountContext = structBody(

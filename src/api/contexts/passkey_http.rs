@@ -1,9 +1,10 @@
 //! Passkey HTTP capabilities. Bearer lookup remains with the API query context.
 
 use super::PasskeyService;
+use crate::api::postgres_repositories::PostgresHttpRepositories;
+use crate::api::repositories::HttpRepositories;
 use northstar_abuse_application::login::PasskeyLoginAbuseService;
 use northstar_abuse_policy::{GuardError, PowIntent, PowProof, WorkRequirement};
-use northstar_abuse_postgres::login::PostgresPasskeyLoginAbuseRepository;
 use northstar_auth_application::passkeys::{
     PasskeyActor, PasskeyError, PasskeyOptions, PasskeySummary,
 };
@@ -15,11 +16,11 @@ use webauthn_rs::prelude::{
 };
 
 #[derive(Clone)]
-pub(crate) struct PasskeyAccountHttpContext {
-    pub(crate) service: Arc<PasskeyService>,
+pub(crate) struct PasskeyAccountHttpContext<R: HttpRepositories = PostgresHttpRepositories> {
+    pub(crate) service: Arc<PasskeyService<R>>,
 }
 
-impl PasskeyAccountHttpContext {
+impl<R: HttpRepositories> PasskeyAccountHttpContext<R> {
     pub(crate) fn allowed_origin(&self) -> Result<String, PasskeyError> {
         self.service.allowed_origin()
     }
@@ -52,14 +53,24 @@ impl PasskeyAccountHttpContext {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct PasskeyStartHttpContext {
-    pub(crate) service: Arc<PasskeyService>,
-    pub(crate) abuse: Arc<PasskeyLoginAbuseService<PostgresPasskeyLoginAbuseRepository>>,
+pub(crate) struct PasskeyStartHttpContext<R: HttpRepositories = PostgresHttpRepositories> {
+    pub(crate) service: Arc<PasskeyService<R>>,
+    pub(crate) abuse: Arc<PasskeyLoginAbuseService<R::PasskeyLogins>>,
     pub(crate) trusted_proxies: Arc<[IpAddr]>,
 }
 
-impl PasskeyStartHttpContext {
+// A derived Clone would demand that the repository itself be Clone.
+impl<R: HttpRepositories> Clone for PasskeyStartHttpContext<R> {
+    fn clone(&self) -> Self {
+        Self {
+            service: Arc::clone(&self.service),
+            abuse: Arc::clone(&self.abuse),
+            trusted_proxies: Arc::clone(&self.trusted_proxies),
+        }
+    }
+}
+
+impl<R: HttpRepositories> PasskeyStartHttpContext<R> {
     pub(crate) fn allowed_origin(&self) -> Result<String, PasskeyError> {
         self.service.allowed_origin()
     }

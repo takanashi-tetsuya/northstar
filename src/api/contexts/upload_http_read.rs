@@ -3,6 +3,8 @@
 
 use super::upload_admission::{UploadAdmission, UploadDownloadGuard};
 use super::UploadService;
+use crate::api::postgres_repositories::PostgresHttpRepositories;
+use crate::api::repositories::HttpRepositories;
 use northstar_telemetry::metrics::DurationHistogram;
 use northstar_telemetry::metrics::DurationTimer;
 use northstar_upload_application::service::UploadSlot;
@@ -13,8 +15,8 @@ use std::time::Duration;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct UploadHttpReadContext {
-    pub(crate) service: Option<UploadService>,
+pub(crate) struct UploadHttpReadContext<R: HttpRepositories = PostgresHttpRepositories> {
+    pub(crate) service: Option<UploadService<R>>,
     pub(crate) guarded_store: Option<Arc<dyn UploadStore>>,
     pub(crate) admission: Option<UploadAdmission>,
     pub(crate) trusted_proxies: Arc<[IpAddr]>,
@@ -23,7 +25,7 @@ pub(crate) struct UploadHttpReadContext {
     pub(crate) max_duration: Duration,
 }
 
-impl UploadHttpReadContext {
+impl<R: HttpRepositories> UploadHttpReadContext<R> {
     pub(crate) fn operation_timer(&self) -> DurationTimer<'_> {
         self.operation_duration.start_timer()
     }

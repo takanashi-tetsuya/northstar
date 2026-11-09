@@ -54,6 +54,8 @@ mod body_limits;
 pub(crate) mod contexts;
 pub mod extract;
 pub(crate) mod governance_cursor;
+pub(crate) mod postgres_repositories;
+pub(crate) mod repositories;
 pub use extract::{ApiPath, ApiQuery};
 
 const API_BODY_LIMIT_BYTES: usize = 256 * 1024;

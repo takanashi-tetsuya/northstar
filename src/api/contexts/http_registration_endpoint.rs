@@ -1,7 +1,8 @@
 //! REST registration capability: account admission, proxy policy and outcome counters.
 
+use crate::api::postgres_repositories::PostgresHttpRepositories;
+use crate::api::repositories::HttpRepositories;
 use northstar_auth_application::account::{AccountService, HttpRegistrationAvailability};
-use northstar_workflows::account_repository::WorkflowAccountRepository;
 use std::{
     net::IpAddr,
     sync::{
@@ -11,8 +12,8 @@ use std::{
 };
 
 #[derive(Clone)]
-pub(crate) struct HttpRegistrationEndpointContext {
-    pub(crate) service: AccountService<WorkflowAccountRepository>,
+pub(crate) struct HttpRegistrationEndpointContext<R: HttpRepositories = PostgresHttpRepositories> {
+    pub(crate) service: AccountService<R::Accounts>,
     pub(crate) availability: HttpRegistrationAvailability,
     pub(crate) trusted_proxies: Vec<IpAddr>,
     pub(crate) registrations: Arc<AtomicU64>,
@@ -20,8 +21,8 @@ pub(crate) struct HttpRegistrationEndpointContext {
     pub(crate) capacity_rejected: Arc<AtomicU64>,
 }
 
-impl HttpRegistrationEndpointContext {
-    pub(crate) fn service(&self) -> &AccountService<WorkflowAccountRepository> {
+impl<R: HttpRepositories> HttpRegistrationEndpointContext<R> {
+    pub(crate) fn service(&self) -> &AccountService<R::Accounts> {
         &self.service
     }
 

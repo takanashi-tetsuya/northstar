@@ -2,18 +2,20 @@
 //! no bearer-session, anti-abuse, proxy, or broader application authority.
 
 use super::PasskeyService;
+use crate::api::postgres_repositories::PostgresHttpRepositories;
+use crate::api::repositories::HttpRepositories;
 use northstar_auth_application::passkeys::{PasskeyError, PasskeyLoginOutcome};
 use std::sync::Arc;
 use uuid::Uuid;
 use webauthn_rs::prelude::PublicKeyCredential;
 
 #[derive(Clone)]
-pub(crate) struct PasskeyLoginFinishContext {
-    service: Arc<PasskeyService>,
+pub(crate) struct PasskeyLoginFinishContext<R: HttpRepositories = PostgresHttpRepositories> {
+    service: Arc<PasskeyService<R>>,
 }
 
-impl PasskeyLoginFinishContext {
-    pub(crate) fn new(service: Arc<PasskeyService>) -> Self {
+impl<R: HttpRepositories> PasskeyLoginFinishContext<R> {
+    pub(crate) fn new(service: Arc<PasskeyService<R>>) -> Self {
         Self { service }
     }
 

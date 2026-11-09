@@ -127,7 +127,7 @@ impl AuthModule {
             dummy_scram_iteration_profiles,
             config.scram_sha1_enabled,
         );
-        let passkey_service = Arc::new(PasskeyService::new(
+        let passkey_service = Arc::new(<PasskeyService>::new(
             northstar_auth_postgres::passkeys::PostgresPasskeyRepository::new(
                 pool.clone(),
                 fast_token_secret.clone(),

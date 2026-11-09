@@ -1,9 +1,12 @@
 //! Read-only readiness context for the private readiness listeners.
 
+use crate::api::postgres_repositories::PostgresHttpRepositories;
+use crate::api::repositories::HttpRepositories;
+
 /// Private observability capability. It contains only read-only live probes
 /// and the existing typed persistence service, never AppState or a mutable
 /// cluster, worker, connection, upload, or SM owner.
-pub(crate) struct ReadinessContext {
+pub(crate) struct ReadinessContext<R: HttpRepositories = PostgresHttpRepositories> {
     pub(crate) connection: northstar_runtime::connection_actors::ConnectionAdmissionReadiness,
     pub(crate) sm: northstar_session_application::sm_capacity::SmMemoryReadiness,
     pub(crate) upload: northstar_upload_application::safety::UploadSafetyReadiness,
@@ -12,12 +15,11 @@ pub(crate) struct ReadinessContext {
     pub(crate) workers: northstar_runtime::workers::WorkerReadinessProbe,
     pub(crate) abuse_key_deployment:
         Option<northstar_abuse_policy::model::AbuseKeyDeploymentIdentity>,
-    pub(crate) persistence: northstar_operations_application::readiness::ReadinessService<
-        northstar_workflows::readiness_repository::PostgresReadinessRepository,
-    >,
+    pub(crate) persistence:
+        northstar_operations_application::readiness::ReadinessService<R::Readiness>,
 }
 
-impl ReadinessContext {
+impl<R: HttpRepositories> ReadinessContext<R> {
     pub(crate) fn connection_accepting(&self) -> bool {
         self.connection.is_accepting()
     }

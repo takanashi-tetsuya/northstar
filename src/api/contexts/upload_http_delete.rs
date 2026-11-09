@@ -1,6 +1,8 @@
 //! Authenticated upload deletion can queue an authorized removal and time the request.
 
 use super::UploadService;
+use crate::api::postgres_repositories::PostgresHttpRepositories;
+use crate::api::repositories::HttpRepositories;
 use northstar_telemetry::metrics::DurationHistogram;
 use northstar_telemetry::metrics::DurationTimer;
 use northstar_upload_application::service::UserUploadDeleteOutcome;
@@ -8,12 +10,12 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct UploadHttpDeleteContext {
-    pub(crate) service: Option<UploadService>,
+pub(crate) struct UploadHttpDeleteContext<R: HttpRepositories = PostgresHttpRepositories> {
+    pub(crate) service: Option<UploadService<R>>,
     pub(crate) operation_duration: Arc<DurationHistogram>,
 }
 
-impl UploadHttpDeleteContext {
+impl<R: HttpRepositories> UploadHttpDeleteContext<R> {
     pub(crate) fn operation_timer(&self) -> DurationTimer<'_> {
         self.operation_duration.start_timer()
     }

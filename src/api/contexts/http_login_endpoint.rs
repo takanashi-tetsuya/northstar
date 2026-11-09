@@ -1,15 +1,16 @@
 //! REST login transport capability: credential use case, immutable proxy
 //! policy, and only the two counters this endpoint can increment.
 
+use crate::api::postgres_repositories::PostgresHttpRepositories;
+use crate::api::repositories::HttpRepositories;
 use northstar_auth_application::http_login::HttpLoginService;
-use northstar_workflows::http_login_repository::PostgresHttpLoginRepository;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub(crate) struct HttpLoginEndpointContext {
-    pub(crate) service: HttpLoginService<PostgresHttpLoginRepository>,
+pub(crate) struct HttpLoginEndpointContext<R: HttpRepositories = PostgresHttpRepositories> {
+    pub(crate) service: HttpLoginService<R::HttpLogin>,
     pub(crate) trusted_proxies: Vec<IpAddr>,
     pub(crate) counters: HttpLoginEndpointCounters,
 }
@@ -30,8 +31,8 @@ impl HttpLoginEndpointCounters {
     }
 }
 
-impl HttpLoginEndpointContext {
-    pub(crate) fn service(&self) -> &HttpLoginService<PostgresHttpLoginRepository> {
+impl<R: HttpRepositories> HttpLoginEndpointContext<R> {
+    pub(crate) fn service(&self) -> &HttpLoginService<R::HttpLogin> {
         &self.service
     }
 

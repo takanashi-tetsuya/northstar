@@ -207,16 +207,16 @@ pub(super) fn administrator_static_routes() -> Router {
 pub(super) fn authentication_routes(state: &Arc<AppState>, registration_enabled: bool) -> Router {
     let login = Router::new()
         .route("/api/v1/login", post(login))
-        .with_state(HttpLoginEndpointContext::from_ref(state));
+        .with_state(<HttpLoginEndpointContext>::from_ref(state));
     let logout = Router::new()
         .route("/api/v1/session", delete(logout))
-        .with_state(ApiSessionHttpContext::from_ref(state));
+        .with_state(<ApiSessionHttpContext>::from_ref(state));
     let mut router = login.merge(logout);
     if registration_enabled {
         router = router.merge(
             Router::new()
                 .route("/api/v1/register", post(register))
-                .with_state(HttpRegistrationEndpointContext::from_ref(state)),
+                .with_state(<HttpRegistrationEndpointContext>::from_ref(state)),
         );
     }
     router
@@ -447,7 +447,7 @@ pub(super) fn personal_credential_routes(state: &Arc<AppState>) -> Router {
                     post(consume_omemo_recovery),
                 )
                 .with_state(RoutePair {
-                    first: OmemoRecoveryHttpContext::from_ref(state),
+                    first: <OmemoRecoveryHttpContext>::from_ref(state),
                     second: FromRef::from_ref(state),
                 }),
         )
@@ -458,7 +458,7 @@ pub(super) fn public_capability_routes(state: &Arc<AppState>) -> Router {
         .merge(
             Router::new()
                 .route("/api/v1/passkeys/login/start", post(passkeys::login_start))
-                .with_state(PasskeyStartHttpContext::from_ref(state)),
+                .with_state(<PasskeyStartHttpContext>::from_ref(state)),
         )
         .merge(
             Router::new()
@@ -466,7 +466,7 @@ pub(super) fn public_capability_routes(state: &Arc<AppState>) -> Router {
                     "/api/v1/passkeys/login/finish",
                     post(passkeys::login_finish),
                 )
-                .with_state(PasskeyLoginFinishContext::from_ref(state)),
+                .with_state(<PasskeyLoginFinishContext>::from_ref(state)),
         )
         .merge(
             Router::new()
@@ -474,7 +474,7 @@ pub(super) fn public_capability_routes(state: &Arc<AppState>) -> Router {
                     "/api/v1/omemo-recovery-transfers/{id}/poll",
                     post(poll_omemo_recovery),
                 )
-                .with_state(OmemoRecoveryPollContext::from_ref(state)),
+                .with_state(<OmemoRecoveryPollContext>::from_ref(state)),
         )
 }
 
@@ -488,7 +488,7 @@ pub(super) fn personal_policy_routes(state: &Arc<AppState>) -> Router {
             "/api/v1/muc_rooms/{id}/retention",
             get(get_muc_retention).put(update_muc_retention),
         )
-        .with_state(RetentionPolicyContext::from_ref(state))
+        .with_state(<RetentionPolicyContext>::from_ref(state))
 }
 
 pub(super) fn omemo_recovery_routes(state: &Arc<AppState>) -> Router {
@@ -507,13 +507,13 @@ pub(super) fn omemo_recovery_routes(state: &Arc<AppState>) -> Router {
                 .put(seal_omemo_recovery)
                 .delete(revoke_omemo_recovery),
         )
-        .with_state(OmemoRecoveryHttpContext::from_ref(state))
+        .with_state(<OmemoRecoveryHttpContext>::from_ref(state))
 }
 
 pub(super) fn public_upload_read_routes(state: &Arc<AppState>) -> Router {
     Router::new()
         .route("/uploads/{id}", get(upload_get))
-        .with_state(UploadHttpReadContext::from_ref(state))
+        .with_state(<UploadHttpReadContext>::from_ref(state))
 }
 
 pub(super) fn administrator_query_routes(

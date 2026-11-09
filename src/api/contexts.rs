@@ -2,6 +2,8 @@
 //! upload, account teardown, readiness and metrics contexts, and the service bindings handlers
 //! receive. The composition root constructs them, implements FromRef and the ports they hold.
 
+use crate::api::postgres_repositories::PostgresHttpRepositories;
+use crate::api::repositories::HttpRepositories;
 use std::sync::Arc;
 
 pub(crate) mod account_teardown;
@@ -49,81 +51,72 @@ impl<S> std::ops::Deref for ServiceContext<S> {
     }
 }
 
-pub(crate) type AccountAdminContext = ServiceContext<
+pub(crate) type AccountAdminContext<R = PostgresHttpRepositories> = ServiceContext<
     northstar_auth_application::account_admin::AccountAdminService<
-        northstar_workflows::account_admin_repository::PostgresAccountAdminRepository,
+        <R as HttpRepositories>::AccountAdmin,
     >,
 >;
 
-pub(crate) type AdminDispatchContext = ServiceContext<
+pub(crate) type AdminDispatchContext<R = PostgresHttpRepositories> = ServiceContext<
     northstar_operations_application::admin_dispatch::AdminDispatchService<
-        northstar_workflows::admin_dispatch_repository::PostgresAdminDispatchRepository,
+        <R as HttpRepositories>::AdminDispatch,
     >,
 >;
 
-pub(crate) type InvitationAdminContext = ServiceContext<
+pub(crate) type InvitationAdminContext<R = PostgresHttpRepositories> = ServiceContext<
     northstar_auth_application::invitation_admin::InvitationAdminService<
-        northstar_workflows::invitation_admin_repository::PostgresInvitationAdminRepository,
+        <R as HttpRepositories>::InvitationAdmin,
     >,
 >;
 
-pub(crate) type GovernanceContext = governance::GovernanceContext<
-    northstar_workflows::governance_repository::PostgresGovernanceRepository<
-        crate::api::governance_cursor::SignedGovernanceCursors,
-    >,
->;
+pub(crate) type GovernanceContext<R = PostgresHttpRepositories> =
+    governance::GovernanceContext<<R as HttpRepositories>::Governance>;
 
-pub(crate) type RetentionPolicyContext = retention_policy::RetentionPolicyContext<
-    northstar_workflows::retention_policy_repository::PostgresRetentionPolicyRepository,
->;
+pub(crate) type RetentionPolicyContext<R = PostgresHttpRepositories> =
+    retention_policy::RetentionPolicyContext<<R as HttpRepositories>::RetentionPolicy>;
 
-pub(crate) type ReportModerationContext = ServiceContext<
+pub(crate) type ReportModerationContext<R = PostgresHttpRepositories> = ServiceContext<
     northstar_operations_application::report_moderation::ReportModerationService<
-        northstar_workflows::report_moderation_repository::PostgresReportModerationRepository,
+        <R as HttpRepositories>::ReportModeration,
     >,
 >;
 
-pub(crate) type UploadAdminContext = ServiceContext<
+pub(crate) type UploadAdminContext<R = PostgresHttpRepositories> = ServiceContext<
     northstar_operations_application::upload_admin::UploadAdminService<
-        northstar_workflows::upload_admin_repository::PostgresUploadAdminRepository,
+        <R as HttpRepositories>::UploadAdmin,
     >,
 >;
 
-pub(crate) type OperationAdminContext = ServiceContext<
+pub(crate) type OperationAdminContext<R = PostgresHttpRepositories> = ServiceContext<
     northstar_operations_application::operations::OperationAdminService<
-        northstar_workflows::operation_admin_repository::PostgresOperationAdminRepository,
+        <R as HttpRepositories>::OperationAdmin,
     >,
 >;
 
-pub(crate) type ReportContext = reports::ReportContext<
-    northstar_workflows::report_repository::PostgresReportRepository,
-    northstar_workflows::api_queries::PostgresApiQueryRepository,
->;
+pub(crate) type ReportContext<R = PostgresHttpRepositories> =
+    reports::ReportContext<<R as HttpRepositories>::Reports, <R as HttpRepositories>::ApiQueries>;
 
-pub(crate) type ApiQueryContext =
-    api_queries::ApiQueryContext<northstar_workflows::api_queries::PostgresApiQueryRepository>;
+pub(crate) type ApiQueryContext<R = PostgresHttpRepositories> =
+    api_queries::ApiQueryContext<<R as HttpRepositories>::ApiQueries>;
 
-pub(crate) type OmemoRecoveryPollContext = omemo_poll::OmemoRecoveryPollContext<
-    northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository,
->;
+pub(crate) type OmemoRecoveryPollContext<R = PostgresHttpRepositories> =
+    omemo_poll::OmemoRecoveryPollContext<<R as HttpRepositories>::OmemoRecoveryPoll>;
 
-pub(crate) type PasskeyService = northstar_auth_application::passkeys::PasskeyService<
-    northstar_auth_postgres::passkeys::PostgresPasskeyRepository,
->;
-pub(crate) type UploadService = northstar_upload_application::service::UploadService<
-    northstar_upload_postgres::PostgresUploadRepository,
->;
+pub(crate) type PasskeyService<R = PostgresHttpRepositories> =
+    northstar_auth_application::passkeys::PasskeyService<<R as HttpRepositories>::Passkeys>;
+pub(crate) type UploadService<R = PostgresHttpRepositories> =
+    northstar_upload_application::service::UploadService<<R as HttpRepositories>::Uploads>;
 
-pub(crate) type RegistrationAdminContext = ServiceContext<
+pub(crate) type RegistrationAdminContext<R = PostgresHttpRepositories> = ServiceContext<
     northstar_auth_application::account_admin::RegistrationAdminService<
-        northstar_workflows::account_admin_repository::PostgresRegistrationAdminRepository,
+        <R as HttpRepositories>::RegistrationAdmin,
         Arc<dyn northstar_auth_application::account_admin::RegistrationCache>,
     >,
 >;
 
-pub(crate) type SessionAdminContext = ServiceContext<
+pub(crate) type SessionAdminContext<R = PostgresHttpRepositories> = ServiceContext<
     northstar_auth_application::account_admin::SessionAdminService<
-        northstar_workflows::account_admin_repository::PostgresSessionAdminRepository,
+        <R as HttpRepositories>::SessionAdmin,
         Arc<dyn northstar_auth_application::account_admin::AdminSessionLookup>,
     >,
 >;

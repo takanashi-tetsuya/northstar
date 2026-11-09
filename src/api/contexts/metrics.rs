@@ -2,6 +2,8 @@
 //! The HTTP endpoint never receives application state, route mutation handles,
 //! cluster control authority, or a raw PostgreSQL pool.
 
+use crate::api::postgres_repositories::PostgresHttpRepositories;
+use crate::api::repositories::HttpRepositories;
 use dashmap::DashMap;
 use northstar_federation_application::registry::S2sOutboundCountProbe;
 use northstar_operations_application::metrics_snapshot::{
@@ -9,7 +11,6 @@ use northstar_operations_application::metrics_snapshot::{
     ProcessGaugeSnapshot, SmRecoveryGaugeSnapshot,
 };
 use northstar_security::tls::TlsMetricsProbe;
-use northstar_workflows::metrics_snapshot_repository::PostgresMetricsSnapshotRepository;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,9 +18,9 @@ use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
 #[derive(Clone)]
-pub(crate) struct MetricsContext {
+pub(crate) struct MetricsContext<R: HttpRepositories = PostgresHttpRepositories> {
     pub(crate) bearer_token: Option<Arc<Zeroizing<String>>>,
-    pub(crate) persistence: MetricsSnapshotService<PostgresMetricsSnapshotRepository>,
+    pub(crate) persistence: MetricsSnapshotService<R::MetricsSnapshot>,
     pub(crate) registry: MetricsRenderProbe,
     pub(crate) component_domains: Vec<String>,
     pub(crate) limits: MetricsLimits,
@@ -90,7 +91,7 @@ pub(crate) trait SmRecoveryGauges: Send + Sync {
     fn sm_recovery_snapshot(&self) -> SmRecoveryGaugeSnapshot;
 }
 
-impl MetricsContext {
+impl<R: HttpRepositories> MetricsContext<R> {
     pub(crate) fn bind_fallback(&self) -> SocketAddr {
         self.bind_fallback
     }

@@ -2,20 +2,20 @@
 
 use crate::api::bearer_token;
 use crate::api::error::AppError;
+use crate::api::postgres_repositories::PostgresHttpRepositories;
+use crate::api::repositories::HttpRepositories;
 use axum::http::HeaderMap;
 use northstar_auth_application::omemo_recovery::{OmemoRecoveryActor, OmemoRecoveryService};
-use northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryRepository;
 use northstar_operations_application::api_queries::ApiQueryService;
 use northstar_telemetry::metrics::Metrics;
-use northstar_workflows::api_queries::PostgresApiQueryRepository;
 use std::sync::Arc;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
 #[derive(Clone)]
-pub(crate) struct OmemoRecoveryHttpContext {
-    pub(crate) queries: ApiQueryService<PostgresApiQueryRepository>,
-    pub(crate) recovery: OmemoRecoveryService<PostgresOmemoRecoveryRepository>,
+pub(crate) struct OmemoRecoveryHttpContext<R: HttpRepositories = PostgresHttpRepositories> {
+    pub(crate) queries: ApiQueryService<R::ApiQueries>,
+    pub(crate) recovery: OmemoRecoveryService<R::OmemoRecovery>,
     pub(crate) domain: String,
     pub(crate) metrics: Arc<Metrics>,
 }
@@ -41,7 +41,7 @@ impl OmemoRecoveryHttpUser {
     }
 }
 
-impl OmemoRecoveryHttpContext {
+impl<R: HttpRepositories> OmemoRecoveryHttpContext<R> {
     pub(crate) async fn current_user(
         &self,
         headers: &HeaderMap,
@@ -65,7 +65,7 @@ impl OmemoRecoveryHttpContext {
         })
     }
 
-    pub(crate) fn service(&self) -> &OmemoRecoveryService<PostgresOmemoRecoveryRepository> {
+    pub(crate) fn service(&self) -> &OmemoRecoveryService<R::OmemoRecovery> {
         &self.recovery
     }
 

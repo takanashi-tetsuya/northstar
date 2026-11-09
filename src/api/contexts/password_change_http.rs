@@ -1,7 +1,8 @@
 //! Password-change HTTP authority excluding post-commit account teardown.
 
+use crate::api::postgres_repositories::PostgresHttpRepositories;
+use crate::api::repositories::HttpRepositories;
 use northstar_auth_application::password_change::PasswordChangeService;
-use northstar_workflows::password_change_repository::PostgresPasswordChangeRepository;
 use std::{
     net::IpAddr,
     sync::{
@@ -11,16 +12,16 @@ use std::{
 };
 
 #[derive(Clone)]
-pub(crate) struct PasswordChangeHttpContext {
-    pub(crate) service: PasswordChangeService<PostgresPasswordChangeRepository>,
+pub(crate) struct PasswordChangeHttpContext<R: HttpRepositories = PostgresHttpRepositories> {
+    pub(crate) service: PasswordChangeService<R::PasswordChange>,
     pub(crate) trusted_proxies: Vec<IpAddr>,
     pub(crate) domain: String,
     pub(crate) rate_limited: Arc<AtomicU64>,
     pub(crate) backend_failures: Arc<AtomicU64>,
 }
 
-impl PasswordChangeHttpContext {
-    pub(crate) fn service(&self) -> &PasswordChangeService<PostgresPasswordChangeRepository> {
+impl<R: HttpRepositories> PasswordChangeHttpContext<R> {
+    pub(crate) fn service(&self) -> &PasswordChangeService<R::PasswordChange> {
         &self.service
     }
 

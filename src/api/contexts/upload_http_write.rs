@@ -3,6 +3,8 @@
 
 use super::upload_admission::{UploadAdmission, UploadRequestGuard};
 use super::UploadService;
+use crate::api::postgres_repositories::PostgresHttpRepositories;
+use crate::api::repositories::HttpRepositories;
 use northstar_telemetry::metrics::DurationHistogram;
 use northstar_telemetry::metrics::DurationTimer;
 use northstar_upload_application::safety::{UploadIoPermit, UploadSafetyError, UploadSafetyGate};
@@ -12,8 +14,8 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub(crate) struct UploadHttpWriteContext {
-    pub(crate) service: Option<UploadService>,
+pub(crate) struct UploadHttpWriteContext<R: HttpRepositories = PostgresHttpRepositories> {
+    pub(crate) service: Option<UploadService<R>>,
     pub(crate) guarded_store: Option<Arc<dyn UploadStore>>,
     pub(crate) admission: Option<UploadAdmission>,
     pub(crate) safety_gate: Arc<UploadSafetyGate>,
@@ -22,7 +24,7 @@ pub(crate) struct UploadHttpWriteContext {
     pub(crate) retention_seconds: u64,
 }
 
-impl UploadHttpWriteContext {
+impl<R: HttpRepositories> UploadHttpWriteContext<R> {
     pub(crate) fn operation_timer(&self) -> DurationTimer<'_> {
         self.operation_duration.start_timer()
     }
@@ -57,7 +59,7 @@ impl UploadHttpWriteContext {
         self.safety_gate.permit(UploadIoClass::NewWrite)
     }
 
-    pub(crate) fn service(&self) -> &UploadService {
+    pub(crate) fn service(&self) -> &UploadService<R> {
         self.service
             .as_ref()
             .expect("upload routes require an enabled or draining storage runtime")

@@ -1,8 +1,9 @@
 //! Public proof-of-work issuance; bearer lookup remains with the API query context.
 
+use crate::api::postgres_repositories::PostgresHttpRepositories;
+use crate::api::repositories::HttpRepositories;
 use northstar_abuse_application::challenge::{ChallengeIssueRequest, ChallengeIssueService};
 use northstar_abuse_policy::PowChallenge;
-use northstar_abuse_postgres::challenge::PostgresChallengeRepository;
 use std::{
     net::IpAddr,
     sync::{
@@ -12,14 +13,14 @@ use std::{
 };
 
 #[derive(Clone)]
-pub(crate) struct HttpChallengeEndpointContext {
-    pub(crate) service: ChallengeIssueService<PostgresChallengeRepository>,
+pub(crate) struct HttpChallengeEndpointContext<R: HttpRepositories = PostgresHttpRepositories> {
+    pub(crate) service: ChallengeIssueService<R::Challenges>,
     pub(crate) trusted_proxies: Vec<IpAddr>,
     pub(crate) requested: Arc<AtomicU64>,
     pub(crate) rate_limited: Arc<AtomicU64>,
 }
 
-impl HttpChallengeEndpointContext {
+impl<R: HttpRepositories> HttpChallengeEndpointContext<R> {
     pub(crate) fn trusted_proxies(&self) -> &[IpAddr] {
         &self.trusted_proxies
     }

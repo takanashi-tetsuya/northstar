@@ -1,3 +1,4 @@
+use crate::api::repositories::HttpRepositories;
 use crate::api::*;
 use axum::body::Body;
 use axum::http::HeaderMap;
@@ -21,8 +22,8 @@ use northstar_abuse_application::challenge::ChallengeIssueRequest;
 use northstar_abuse_policy::AbuseAction;
 use northstar_auth_core as auth;
 
-pub async fn register(
-    State(context): State<HttpRegistrationEndpointContext>,
+pub async fn register<R: HttpRepositories>(
+    State(context): State<HttpRegistrationEndpointContext<R>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     mut request: ApiJson<RegistrationRequest>,
@@ -148,8 +149,8 @@ fn registration_error(error: northstar_auth_postgres::users::RegistrationError) 
     }
 }
 
-pub async fn login(
-    State(context): State<HttpLoginEndpointContext>,
+pub async fn login<R: HttpRepositories>(
+    State(context): State<HttpLoginEndpointContext<R>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     mut request: ApiJson<Credentials>,
@@ -225,8 +226,8 @@ pub async fn login(
     }
 }
 
-pub async fn logout(
-    State(state): State<ApiSessionHttpContext>,
+pub async fn logout<R: HttpRepositories>(
+    State(state): State<ApiSessionHttpContext<R>>,
     Extension(ApiRequestId(request_id)): Extension<ApiRequestId>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
@@ -235,9 +236,9 @@ pub async fn logout(
     Ok(Json(json!({"logged_out":true})))
 }
 
-pub async fn anti_abuse_challenge(
-    State(context): State<HttpChallengeEndpointContext>,
-    State(queries): State<crate::api::contexts::ApiQueryContext>,
+pub async fn anti_abuse_challenge<R: HttpRepositories>(
+    State(context): State<HttpChallengeEndpointContext<R>>,
+    State(queries): State<crate::api::contexts::ApiQueryContext<R>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<ChallengeRequest>,

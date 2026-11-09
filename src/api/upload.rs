@@ -1,3 +1,4 @@
+use crate::api::repositories::HttpRepositories;
 use axum::body::Body;
 use axum::http::header::HeaderValue;
 use axum::http::HeaderMap;
@@ -43,8 +44,8 @@ async fn write_with_lease<T>(
     }
 }
 
-pub async fn upload_put(
-    State(state): State<UploadHttpWriteContext>,
+pub async fn upload_put<R: HttpRepositories>(
+    State(state): State<UploadHttpWriteContext<R>>,
     State(replay_read): State<UploadHttpReplayReadContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     crate::api::ApiPath(id): crate::api::ApiPath<Uuid>,
@@ -521,8 +522,8 @@ fn upload_in_progress(retry_after_seconds: u64) -> Result<Response, AppError> {
         .map_err(|error| AppError::Internal(error.into()))
 }
 
-pub async fn upload_get(
-    State(state): State<UploadHttpReadContext>,
+pub async fn upload_get<R: HttpRepositories>(
+    State(state): State<UploadHttpReadContext<R>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     crate::api::ApiPath(id): crate::api::ApiPath<Uuid>,
     headers: HeaderMap,
@@ -648,9 +649,9 @@ pub async fn upload_get(
     Ok((response_headers, body).into_response())
 }
 
-pub async fn upload_delete(
-    State(state): State<UploadHttpDeleteContext>,
-    State(queries): State<crate::api::contexts::ApiQueryContext>,
+pub async fn upload_delete<R: HttpRepositories>(
+    State(state): State<UploadHttpDeleteContext<R>>,
+    State(queries): State<crate::api::contexts::ApiQueryContext<R>>,
     axum::Extension(request_id): axum::Extension<crate::api::ApiRequestId>,
     crate::api::ApiPath(id): crate::api::ApiPath<Uuid>,
     headers: HeaderMap,
@@ -676,8 +677,8 @@ pub async fn upload_delete(
     }
 }
 
-async fn release_claim(
-    state: &UploadHttpWriteContext,
+async fn release_claim<R: HttpRepositories>(
+    state: &UploadHttpWriteContext<R>,
     id: Uuid,
     claim_token: Uuid,
 ) -> Result<(), AppError> {
@@ -687,14 +688,18 @@ async fn release_claim(
     Ok(())
 }
 
-async fn release_claim_best_effort(state: &UploadHttpWriteContext, id: Uuid, claim_token: Uuid) {
+async fn release_claim_best_effort<R: HttpRepositories>(
+    state: &UploadHttpWriteContext<R>,
+    id: Uuid,
+    claim_token: Uuid,
+) {
     if let Err(error) = release_claim(state, id, claim_token).await {
         tracing::error!(upload_id = %id, ?error, "failed to release upload claim");
     }
 }
 
-async fn abort_stage_best_effort(
-    state: &UploadHttpWriteContext,
+async fn abort_stage_best_effort<R: HttpRepositories>(
+    state: &UploadHttpWriteContext<R>,
     id: Uuid,
     claim_token: Uuid,
     stage_version: Option<&str>,

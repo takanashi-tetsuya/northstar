@@ -42,6 +42,8 @@ use axum::http::request::Parts;
 
 mod route_composition;
 
+use self::postgres_repositories::PostgresHttpRepositories;
+
 use self::route_composition::{
     administrator_command_routes, administrator_query_routes, administrator_static_routes,
     authentication_routes, discovery_routes, omemo_recovery_routes, personal_credential_routes,
@@ -389,9 +391,10 @@ pub fn public_router(state: Arc<AppState>) -> Router {
     let readiness = ReadyEndpointState::new(state.readiness_context());
     let discovery = state.public_discovery_context().clone();
     let policy = discovery.policy();
-    let mut router = Router::new()
-        .route("/healthz", get(health))
-        .route("/readyz", get(ready).with_state(readiness));
+    let mut router = Router::new().route("/healthz", get(health)).route(
+        "/readyz",
+        get(ready::<PostgresHttpRepositories>).with_state(readiness),
+    );
     if policy.rest_api_enabled {
         router = router
             .merge(public_rest_routes())
@@ -442,7 +445,10 @@ pub fn administrator_router(state: Arc<AppState>) -> Router {
     let policy = discovery.policy();
     let router = Router::new()
         .route("/healthz", get(health))
-        .route("/readyz", get(ready).with_state(readiness))
+        .route(
+            "/readyz",
+            get(ready::<PostgresHttpRepositories>).with_state(readiness),
+        )
         .merge(administrator_command_routes(
             &state,
             policy.upload_mode.keeps_storage_runtime(),
@@ -942,7 +948,7 @@ pub async fn serve_metrics(
     let endpoint = MetricsEndpointState::new(context);
     tracing::info!(address = %address, "private metrics listener ready");
     let router = Router::new()
-        .route("/metrics", get(metrics))
+        .route("/metrics", get(metrics::<PostgresHttpRepositories>))
         .with_state(endpoint);
     axum::serve(
         listener,

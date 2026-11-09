@@ -2370,9 +2370,9 @@ for (const [path, name] of [
   ['src/api/admin.rs', 'admin_muc_rooms'], ['src/api/users.rs', 'history'],
   ['src/api/reports.rs', 'my_reports'], ['src/api/upload_admin.rs', 'admin_upload_dead_letters'],
 ]) {
-  const body = structBody(read(path), `pub async fn ${name}(`);
-  const signature = read(path).slice(read(path).indexOf(`pub async fn ${name}(`)).split(') ->')[0];
-  if (!signature.includes('State<crate::api::contexts::ApiQueryContext>')) {
+  const body = structBody(read(path), `pub async fn ${name}<R: HttpRepositories>(`);
+  const signature = read(path).slice(read(path).indexOf(`pub async fn ${name}<R: HttpRepositories>(`)).split(') ->')[0];
+  if (!signature.includes('State<crate::api::contexts::ApiQueryContext<R>>')) {
     throw new Error(`${name} must receive the narrow REST query context`);
   }
 
@@ -2380,7 +2380,7 @@ for (const [path, name] of [
     throw new Error(`${name} must use a complete authorized query port`);
   }
 }
-const adminSessionRoute = structBody(read('src/api/admin.rs'), 'pub async fn admin_sessions(');
+const adminSessionRoute = structBody(read('src/api/admin.rs'), 'pub async fn admin_sessions<R: HttpRepositories>(');
 const adminSessionService = structBody(read('crates/contexts/operations/northstar-operations-application/src/api_queries.rs'), 'pub async fn sessions<F>(');
 const adminSessionRepository = structBody(read('crates/contexts/workflows/northstar-workflows/src/api_queries.rs'), 'async fn sessions<F>(');
 if (/\b(?:sort_unstable_by_key|retain|truncate)\b/.test(adminSessionRoute)
@@ -2420,18 +2420,18 @@ for (const [path, names, context] of [
 ]) {
   const source = read(path);
   for (const name of names) {
-    const body = structBody(source, `pub async fn ${name}(`);
-    const signature = source.slice(source.indexOf(`pub async fn ${name}(`)).split(') ->')[0];
-    if (!signature.includes(`State<crate::${context}>`) || /\b(?:sqlx|db|AppState)\b|\.pool\b/.test(body)) {
+    const body = structBody(source, `pub async fn ${name}<R: HttpRepositories>(`);
+    const signature = source.slice(source.indexOf(`pub async fn ${name}<R: HttpRepositories>(`)).split(') ->')[0];
+    if (!signature.includes(`State<crate::${context}<R>>`) || /\b(?:sqlx|db|AppState)\b|\.pool\b/.test(body)) {
       throw new Error(`${name} must retain its command service and narrow context`);
     }
   }
 }
 const governanceApiSource = read('src/api/data_lifecycle.rs');
 for (const name of ['list_legal_holds', 'create_legal_hold', 'release_legal_hold', 'export_legal_hold', 'export_audit']) {
-  const body = structBody(governanceApiSource, `pub async fn ${name}(`);
-  const signature = governanceApiSource.slice(governanceApiSource.indexOf(`pub async fn ${name}(`)).split(') ->')[0];
-  if (!signature.includes('State<GovernanceContext>') || /\b(?:sqlx|db|AppState)\b|\.pool\b/.test(body)) {
+  const body = structBody(governanceApiSource, `pub async fn ${name}<R: HttpRepositories>(`);
+  const signature = governanceApiSource.slice(governanceApiSource.indexOf(`pub async fn ${name}<R: HttpRepositories>(`)).split(') ->')[0];
+  if (!signature.includes('State<GovernanceContext<R>>') || /\b(?:sqlx|db|AppState)\b|\.pool\b/.test(body)) {
     throw new Error(`${name} must retain its governance use-case context`);
   }
 }
@@ -2446,7 +2446,7 @@ const recoveryApiSource = productionWithoutCfgTestModules(read('src/api/omemo_re
 for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\.pool\b/]) {
   if (forbidden.test(recoveryApiSource)) throw new Error('OMEMO recovery HTTP regained direct persistence authority');
 }
-const recoveryPollBody = structBody(recoveryApiSource, 'pub async fn poll_omemo_recovery(');
+const recoveryPollBody = structBody(recoveryApiSource, 'pub async fn poll_omemo_recovery<R: HttpRepositories>(');
 if (/\b(?:AppState|current_user)\b/.test(recoveryPollBody) || !recoveryPollBody.includes('.poll(')) {
   throw new Error('OMEMO polling must use its isolated completion capability');
 }
@@ -2454,8 +2454,8 @@ const passkeyApiSource = productionWithoutCfgTestModules(read('src/api/passkeys.
 for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bstate\s*\.\s*pool\b/, /\.begin_authorized_read\s*\(/]) {
   if (forbidden.test(passkeyApiSource)) throw new Error('Passkeys HTTP regained direct persistence authority');
 }
-if (!passkeyApiSource.includes('State<PasskeyAccountHttpContext>')
-    || !passkeyApiSource.includes('State<PasskeyStartHttpContext>')
+if (!passkeyApiSource.includes('State<PasskeyAccountHttpContext<R>>')
+    || !passkeyApiSource.includes('State<PasskeyStartHttpContext<R>>')
     || !read('src/api/contexts/passkey_http.rs').includes('Arc<PasskeyService<R>>')) {
   throw new Error('Passkeys HTTP must use scoped application services');
 }
@@ -2465,28 +2465,28 @@ const passkeyAccountContext = structBody(
 );
 const passkeyStartContext = structBody(read('src/api/contexts/passkey_http.rs'), 'pub(crate) struct PasskeyStartHttpContext');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passkeyStartContext)
-    || !/pub\(super\) async fn register_start\(\s*State\(state\): State<PasskeyStartHttpContext>/.test(passkeyApiSource)
-    || !/pub\(super\) async fn login_start\(\s*State\(state\): State<PasskeyStartHttpContext>/.test(passkeyApiSource)) {
+    || !/pub\(super\) async fn register_start<R: HttpRepositories>\(\s*State\(state\): State<PasskeyStartHttpContext<R>>/.test(passkeyApiSource)
+    || !/pub\(super\) async fn login_start<R: HttpRepositories>\(\s*State\(state\): State<PasskeyStartHttpContext<R>>/.test(passkeyApiSource)) {
   throw new Error('Passkey challenge starts must use scoped abuse and credential authority');
 }
 const apiSessionHttpContext = structBody(read('src/api/contexts/api_session_http.rs'), 'pub(crate) struct ApiSessionHttpContext');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(apiSessionHttpContext)
-    || !/pub async fn logout\(\s*State\(state\): State<ApiSessionHttpContext>/.test(read('src/api/auth_routes.rs'))) {
+    || !/pub async fn logout<R: HttpRepositories>\(\s*State\(state\): State<ApiSessionHttpContext<R>>/.test(read('src/api/auth_routes.rs'))) {
   throw new Error('HTTP logout must use only its audited session command');
 }
 const registrationHttpContext = structBody(read('src/api/contexts/http_registration_endpoint.rs'), 'pub(crate) struct HttpRegistrationEndpointContext');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(registrationHttpContext)
-    || !/pub async fn register\(\s*State\(context\): State<HttpRegistrationEndpointContext>/.test(read('src/api/auth_routes.rs'))) {
+    || !/pub async fn register<R: HttpRepositories>\(\s*State\(context\): State<HttpRegistrationEndpointContext<R>>/.test(read('src/api/auth_routes.rs'))) {
   throw new Error('HTTP registration must use scoped account admission authority');
 }
 const challengeHttpContext = structBody(read('src/api/contexts/http_challenge_endpoint.rs'), 'pub(crate) struct HttpChallengeEndpointContext');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(challengeHttpContext)
-    || !/pub async fn anti_abuse_challenge\(\s*State\(context\): State<HttpChallengeEndpointContext>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext>/.test(read('src/api/auth_routes.rs'))) {
+    || !/pub async fn anti_abuse_challenge<R: HttpRepositories>\(\s*State\(context\): State<HttpChallengeEndpointContext<R>>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext<R>>/.test(read('src/api/auth_routes.rs'))) {
   throw new Error('anti-abuse challenge issuance must use scoped HTTP authority');
 }
 const uploadDeleteContext = structBody(read('src/api/contexts/upload_http_delete.rs'), 'pub(crate) struct UploadHttpDeleteContext');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(uploadDeleteContext)
-    || !/pub async fn upload_delete\(\s*State\(state\): State<UploadHttpDeleteContext>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext>/.test(read('src/api/upload.rs'))) {
+    || !/pub async fn upload_delete<R: HttpRepositories>\(\s*State\(state\): State<UploadHttpDeleteContext<R>>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext<R>>/.test(read('src/api/upload.rs'))) {
   throw new Error('upload deletion must use scoped lifecycle and bearer authority');
 }
 const uploadReplayReadContext = structBody(read('src/api/contexts/upload_http_read.rs'), 'pub(crate) struct UploadHttpReplayReadContext');
@@ -2494,7 +2494,7 @@ const uploadWriteContext = structBody(read('src/api/contexts/upload_http_write.r
 const uploadApiSource = read('src/api/upload.rs');
 if (/\b(?:AppState|ClusterManager|PgPool|UploadHttpReadContext)\b/.test(uploadReplayReadContext)
     || /\b(?:AppState|ClusterManager|PgPool)\b/.test(uploadWriteContext)
-    || !/pub async fn upload_put\(\s*State\(state\): State<UploadHttpWriteContext>,\s*State\(replay_read\): State<UploadHttpReplayReadContext>/.test(uploadApiSource)
+    || !/pub async fn upload_put<R: HttpRepositories>\(\s*State\(state\): State<UploadHttpWriteContext<R>>,\s*State\(replay_read\): State<UploadHttpReplayReadContext>/.test(uploadApiSource)
     || /State<Arc<AppState>>/.test(uploadApiSource)
     || !/stored_object_digest\(&replay_read,\s*&slot\)\.await\?/.test(uploadApiSource)
     || !/state\.get\(object_key,\s*slot\.storage_object_version\.as_deref\(\)\)/.test(uploadApiSource)) {
@@ -2502,7 +2502,7 @@ if (/\b(?:AppState|ClusterManager|PgPool|UploadHttpReadContext)\b/.test(uploadRe
 }
 const passwordChangeContext = structBody(read('src/api/contexts/password_change_http.rs'), 'pub(crate) struct PasswordChangeHttpContext');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passwordChangeContext)
-    || !/pub async fn change_password\(\s*State\(state\): State<PasswordChangeHttpContext>/.test(read('src/api/users.rs'))) {
+    || !/pub async fn change_password<R: HttpRepositories>\(\s*State\(state\): State<PasswordChangeHttpContext<R>>/.test(read('src/api/users.rs'))) {
   throw new Error('password change admission must use scoped HTTP authority');
 }
 const accountGenerationTeardown = read('src/state/account_generation_teardown.rs');
@@ -2519,9 +2519,9 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(teardownSequence)
     || !/notifier\.send_account_generation_teardown\(/.test(accountGenerationTeardown)
     || !/revoke_durable_sm\(\)\.await[\s\S]+notify_cluster\(\)\.await/.test(accountGenerationTeardown)
     || !/self\.routes\.revoke\([\s\S]+self\.sm\.revoke_user_with_teardown\(user_id\)\.await[\s\S]+self\.generation\.committed_generation\(user_id\)\.await[\s\S]+send_account_generation_teardown\(/.test(accountTeardownRuntime)
-    || !/pub\(super\) async fn remove\(\s*State\(teardown\): State<AccountGenerationTeardownContext>/.test(passkeyApiSource)
-    || !/pub async fn consume_omemo_recovery\(\s*State\(context\): State<OmemoRecoveryHttpContext>,\s*State\(teardown\): State<AccountGenerationTeardownContext>/.test(recoveryApiSource)
-    || !/pub async fn change_password\(\s*State\(state\): State<PasswordChangeHttpContext>,\s*State\(teardown\): State<AccountTeardownContext>/.test(read('src/api/users.rs'))
+    || !/pub\(super\) async fn remove<R: HttpRepositories>\(\s*State\(teardown\): State<AccountGenerationTeardownContext>/.test(passkeyApiSource)
+    || !/pub async fn consume_omemo_recovery<R: HttpRepositories>\(\s*State\(context\): State<OmemoRecoveryHttpContext<R>>,\s*State\(teardown\): State<AccountGenerationTeardownContext>/.test(recoveryApiSource)
+    || !/pub async fn change_password<R: HttpRepositories>\(\s*State\(state\): State<PasswordChangeHttpContext<R>>,\s*State\(teardown\): State<AccountTeardownContext>/.test(read('src/api/users.rs'))
     || /\b(?:AppState|ClusterManager|PgPool)\b|crate::state\b/.test(accountTeardownPorts)
     || !accountTeardownPorts.includes('teardown: Arc<dyn AccountSessionTeardown>')
     || !accountTeardownPorts.includes('teardown: Arc<dyn AccountGenerationTeardown>')
@@ -2562,8 +2562,8 @@ if (!/pub async fn admin_nuke\(\s*_actor: ApiAdmin/.test(read('src/api/admin.rs'
   throw new Error('disabled factory reset must authenticate without broad application state');
 }
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passkeyAccountContext)
-    || !/pub\(super\) async fn list\(\s*State\(state\): State<PasskeyAccountHttpContext>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext>/s.test(passkeyApiSource)
-    || !/pub\(super\) async fn register_finish\(\s*State\(state\): State<PasskeyAccountHttpContext>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext>/s.test(passkeyApiSource)) {
+    || !/pub\(super\) async fn list<R: HttpRepositories>\(\s*State\(state\): State<PasskeyAccountHttpContext<R>>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext<R>>/s.test(passkeyApiSource)
+    || !/pub\(super\) async fn register_finish<R: HttpRepositories>\(\s*State\(state\): State<PasskeyAccountHttpContext<R>>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext<R>>/s.test(passkeyApiSource)) {
   throw new Error('account Passkeys reads and registration completion must use scoped HTTP authority');
 }
 const omemoRecoveryApi = read('src/api/omemo_recovery.rs');
@@ -2576,7 +2576,7 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(omemoRecoveryContext)) {
 }
 for (const handler of ['prepare_omemo_recovery', 'seal_omemo_recovery', 'get_omemo_recovery',
   'get_omemo_recovery_authority', 'revoke_omemo_recovery']) {
-  if (!new RegExp(`pub async fn ${handler}\\(\\s*State\\(context\\): State<OmemoRecoveryHttpContext>`, 's').test(omemoRecoveryApi)) {
+  if (!new RegExp(`pub async fn ${handler}<R: HttpRepositories>\\(\\s*State\\(context\\): State<OmemoRecoveryHttpContext<R>>`, 's').test(omemoRecoveryApi)) {
     throw new Error(`authenticated OMEMO recovery handler ${handler} regained broad state`);
   }
 }
@@ -2706,7 +2706,7 @@ for (const accessor of ['account_service', 'push_service']) {
   }
 }
 
-const registrationHandler = structBody(read('src/api/auth_routes.rs'), 'pub async fn register(');
+const registrationHandler = structBody(read('src/api/auth_routes.rs'), 'pub async fn register<R: HttpRepositories>(');
 if (!/\.service\(\)[\s\S]+\.register_http\(HttpRegistrationRequest/.test(registrationHandler)) {
   throw new Error('HTTP registration must enter the account service with a typed command');
 }
@@ -3673,17 +3673,17 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(panicEffectsFields)
   throw new Error('emergency disconnect must cancel all local routes before durable SM teardown');
 }
 const loginEndpointSource = read('src/api/auth_routes.rs');
-const loginEndpoint = structBody(loginEndpointSource, 'pub async fn login(');
+const loginEndpoint = structBody(loginEndpointSource, 'pub async fn login<R: HttpRepositories>(');
 const loginContext = structBody(read('src/api/contexts/http_login_endpoint.rs'), 'pub(crate) struct HttpLoginEndpointContext');
-if (!loginEndpointSource.includes('State(context): State<HttpLoginEndpointContext>')
+if (!loginEndpointSource.includes('State(context): State<HttpLoginEndpointContext<R>>')
     || /\bstate\.(?:metrics|pool|config)\b/.test(loginEndpoint)
     || /\bAppState\b|\bMetrics\b|PgPool/.test(loginContext)) {
   throw new Error('REST login must receive only its service, proxy policy and outcome counters');
 }
 const uploadSource = read('src/api/upload.rs');
-const uploadGet = structBody(uploadSource, 'pub async fn upload_get(');
+const uploadGet = structBody(uploadSource, 'pub async fn upload_get<R: HttpRepositories>(');
 const uploadReadContext = structBody(read('src/api/contexts/upload_http_read.rs'), 'pub(crate) struct UploadHttpReadContext');
-if (!uploadSource.includes('State(state): State<UploadHttpReadContext>')
+if (!uploadSource.includes('State(state): State<UploadHttpReadContext<R>>')
     || !uploadGet.includes('let download_guard = state.acquire_download(client_ip)')
     || !uploadGet.includes('let _download_guard = download_guard;')
     || /\b(?:AppState|Metrics|PgPool)\b/.test(uploadReadContext)
@@ -3696,9 +3696,9 @@ if (/\bstate\.metrics\b|\bself\.state\.metrics\b|&(?:(?:northstar_telemetry::)?m
   throw new Error('caps effect dispatch must receive only its admission and completion telemetry');
 }
 const passkeyFinishSource = read('src/api/passkeys.rs');
-const passkeyFinish = structBody(passkeyFinishSource, 'pub(super) async fn login_finish(');
+const passkeyFinish = structBody(passkeyFinishSource, 'pub(super) async fn login_finish<R: HttpRepositories>(');
 const passkeyFinishContext = structBody(read('src/api/contexts/passkey_login_finish.rs'), 'pub(crate) struct PasskeyLoginFinishContext');
-if (!passkeyFinishSource.includes('State(state): State<PasskeyLoginFinishContext>')
+if (!passkeyFinishSource.includes('State(state): State<PasskeyLoginFinishContext<R>>')
     || !/check_expected_origin\(&state\.allowed_origin\(\)\?, &headers\)\?;[\s\S]*?state\.finish\(/.test(passkeyFinish)
     || /\b(?:AppState|Metrics|PgPool)\b/.test(passkeyFinishContext)) {
   throw new Error('Passkey login completion must check the live origin before using its narrow service');

@@ -1,3 +1,5 @@
+use crate::api::postgres_repositories::PostgresHttpRepositories;
+use crate::api::repositories::HttpRepositories;
 use crate::api::*;
 use axum::body::Body;
 use axum::http::{HeaderMap, StatusCode};
@@ -28,8 +30,8 @@ use northstar_operations_application::readiness::{
 };
 
 /// Cache and single-flight gate for the private observability listener.
-pub struct MetricsEndpointState {
-    context: MetricsContext,
+pub struct MetricsEndpointState<R: HttpRepositories = PostgresHttpRepositories> {
+    context: MetricsContext<R>,
     gate: Semaphore,
     cache: Mutex<Option<(Instant, String)>>,
 }
@@ -47,14 +49,14 @@ enum ReadinessSnapshot {
 /// A bounded readiness capability. Its context exposes only live read-only
 /// health probes and a typed persistence service; one single-flight probe may
 /// use the authoritative pool while duplicates use the cache or fail fast.
-pub struct ReadyEndpointState {
-    context: ReadinessContext,
+pub struct ReadyEndpointState<R: HttpRepositories = PostgresHttpRepositories> {
+    context: ReadinessContext<R>,
     gate: Semaphore,
     cache: Mutex<Option<(Instant, ReadinessSnapshot)>>,
 }
 
-impl ReadyEndpointState {
-    pub(crate) fn new(context: ReadinessContext) -> Arc<Self> {
+impl<R: HttpRepositories> ReadyEndpointState<R> {
+    pub(crate) fn new(context: ReadinessContext<R>) -> Arc<Self> {
         Arc::new(Self {
             context,
             gate: Semaphore::new(1),
@@ -72,8 +74,8 @@ impl ReadyEndpointState {
     }
 }
 
-impl MetricsEndpointState {
-    pub fn new(context: MetricsContext) -> Arc<Self> {
+impl<R: HttpRepositories> MetricsEndpointState<R> {
+    pub fn new(context: MetricsContext<R>) -> Arc<Self> {
         Arc::new(Self {
             context,
             gate: Semaphore::new(1),
@@ -144,8 +146,8 @@ pub async fn api_docs() -> Response {
         .expect("static API documentation response is valid")
 }
 
-pub async fn ready(
-    State(endpoint): State<Arc<ReadyEndpointState>>,
+pub async fn ready<R: HttpRepositories>(
+    State(endpoint): State<Arc<ReadyEndpointState<R>>>,
 ) -> Result<&'static str, AppError> {
     if let Some(error) = current_runtime_readiness_error(&endpoint.context) {
         return Err(AppError::Unavailable(error.into()));
@@ -174,7 +176,9 @@ pub async fn ready(
     runtime_readiness_response(&endpoint.context, snapshot)
 }
 
-fn current_runtime_readiness_error(context: &ReadinessContext) -> Option<&'static str> {
+fn current_runtime_readiness_error<R: HttpRepositories>(
+    context: &ReadinessContext<R>,
+) -> Option<&'static str> {
     if !context.connection_accepting() {
         return Some("connection admission is closed");
     }
@@ -193,8 +197,8 @@ fn current_runtime_readiness_error(context: &ReadinessContext) -> Option<&'stati
     None
 }
 
-fn runtime_readiness_response(
-    context: &ReadinessContext,
+fn runtime_readiness_response<R: HttpRepositories>(
+    context: &ReadinessContext<R>,
     snapshot: ReadinessSnapshot,
 ) -> Result<&'static str, AppError> {
     // Admission can close while awaiting either the cache mutex or the
@@ -221,7 +225,7 @@ fn upload_storage_ready(state: northstar_upload_application::UploadSafetyState) 
     )
 }
 
-async fn probe_readiness(context: &ReadinessContext) -> ReadinessSnapshot {
+async fn probe_readiness<R: HttpRepositories>(context: &ReadinessContext<R>) -> ReadinessSnapshot {
     let cluster_authority = context.cluster_authority_snapshot();
     let persistence_probe = context.validate_persistence(cluster_authority.as_ref());
     match tokio::time::timeout(READINESS_PROBE_TIMEOUT, persistence_probe).await {
@@ -263,8 +267,8 @@ async fn probe_readiness(context: &ReadinessContext) -> ReadinessSnapshot {
     }
 }
 
-pub async fn metrics(
-    State(endpoint): State<Arc<MetricsEndpointState>>,
+pub async fn metrics<R: HttpRepositories>(
+    State(endpoint): State<Arc<MetricsEndpointState<R>>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
@@ -294,7 +298,11 @@ pub async fn metrics(
     metrics_response(body)
 }
 
-fn metrics_request_authorized(context: &MetricsContext, peer: IpAddr, headers: &HeaderMap) -> bool {
+fn metrics_request_authorized<R: HttpRepositories>(
+    context: &MetricsContext<R>,
+    peer: IpAddr,
+    headers: &HeaderMap,
+) -> bool {
     context.authorized(peer, metrics_bearer_candidate(headers))
 }
 
@@ -345,7 +353,7 @@ fn metrics_response(body: String) -> Response {
         .into_response()
 }
 
-async fn collect_metrics(context: &MetricsContext) -> String {
+async fn collect_metrics<R: HttpRepositories>(context: &MetricsContext<R>) -> String {
     let ping_started = std::time::Instant::now();
     let database_up = tokio::time::timeout(std::time::Duration::from_secs(2), context.ping())
         .await

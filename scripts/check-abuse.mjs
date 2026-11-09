@@ -160,7 +160,7 @@ assert.match(apiControl, /SELECT EXISTS\(\s*SELECT 1 FROM api_idempotency_capaci
 assert.match(appError, /IdempotencyBusy[\s\S]+StatusCode::SERVICE_UNAVAILABLE[\s\S]+RETRY_AFTER/,
   'idempotency contention must remain an explicit retryable 503 response');
 const httpRegistration = authRoutes.slice(
-  authRoutes.indexOf('pub async fn register('),
+  authRoutes.indexOf('pub async fn register<R: HttpRepositories>('),
   authRoutes.indexOf('fn registration_error('),
 );
 assert.match(httpRegistration, /\.service\(\)[\s\S]+\.register_http\(HttpRegistrationRequest/,

@@ -1,6 +1,7 @@
 use crate::api::contexts::GovernanceContext;
 use crate::api::error::AppError;
 use crate::api::idempotency::{mutation_rejection, stored_api_response};
+use crate::api::repositories::HttpRepositories;
 use crate::api::*;
 use axum::{extract::State, http::HeaderMap, response::Response, Json};
 use northstar_operations_application::governance::*;
@@ -105,8 +106,8 @@ fn governance_export_rows(
     Ok(rows)
 }
 
-pub async fn get_my_retention(
-    State(state): State<crate::api::contexts::RetentionPolicyContext>,
+pub async fn get_my_retention<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::RetentionPolicyContext<R>>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
     let policy = state
@@ -120,8 +121,8 @@ pub async fn get_my_retention(
     })))
 }
 
-pub async fn update_my_retention(
-    State(state): State<crate::api::contexts::RetentionPolicyContext>,
+pub async fn update_my_retention<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::RetentionPolicyContext<R>>,
     headers: HeaderMap,
     request: ApiJson<UserRetentionPolicyRequest>,
 ) -> Result<Response, AppError> {
@@ -151,8 +152,8 @@ pub async fn update_my_retention(
     retention_response(outcome)
 }
 
-pub async fn get_muc_retention(
-    State(state): State<crate::api::contexts::RetentionPolicyContext>,
+pub async fn get_muc_retention<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::RetentionPolicyContext<R>>,
     headers: HeaderMap,
     ApiPath(room_id): ApiPath<Uuid>,
 ) -> Result<Json<Value>, AppError> {
@@ -167,8 +168,8 @@ pub async fn get_muc_retention(
     })))
 }
 
-pub async fn update_muc_retention(
-    State(state): State<crate::api::contexts::RetentionPolicyContext>,
+pub async fn update_muc_retention<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::RetentionPolicyContext<R>>,
     headers: HeaderMap,
     ApiPath(room_id): ApiPath<Uuid>,
     request: ApiJson<MucRetentionPolicyRequest>,
@@ -220,8 +221,8 @@ fn parse_hold_targets(
         .collect()
 }
 
-pub async fn list_legal_holds(
-    State(state): State<GovernanceContext>,
+pub async fn list_legal_holds<R: HttpRepositories>(
+    State(state): State<GovernanceContext<R>>,
     actor: ApiAdmin,
     headers: HeaderMap,
     ApiQuery(query): ApiQuery<LegalHoldPageQuery>,
@@ -240,8 +241,8 @@ pub async fn list_legal_holds(
     Ok(Json(json!({"legal_holds":holds})))
 }
 
-pub async fn create_legal_hold(
-    State(state): State<GovernanceContext>,
+pub async fn create_legal_hold<R: HttpRepositories>(
+    State(state): State<GovernanceContext<R>>,
     actor: ApiAdmin,
     headers: HeaderMap,
     request: ApiJson<LegalHoldCreateRequest>,
@@ -272,8 +273,8 @@ pub async fn create_legal_hold(
     governance_response(outcome)
 }
 
-pub async fn release_legal_hold(
-    State(state): State<GovernanceContext>,
+pub async fn release_legal_hold<R: HttpRepositories>(
+    State(state): State<GovernanceContext<R>>,
     actor: ApiAdmin,
     headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
@@ -302,8 +303,8 @@ pub async fn release_legal_hold(
     governance_response(outcome)
 }
 
-pub async fn export_legal_hold(
-    State(state): State<GovernanceContext>,
+pub async fn export_legal_hold<R: HttpRepositories>(
+    State(state): State<GovernanceContext<R>>,
     actor: ApiAdmin,
     headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
@@ -339,8 +340,8 @@ pub async fn export_legal_hold(
     governance_response(outcome)
 }
 
-pub async fn export_audit(
-    State(state): State<GovernanceContext>,
+pub async fn export_audit<R: HttpRepositories>(
+    State(state): State<GovernanceContext<R>>,
     actor: ApiAdmin,
     headers: HeaderMap,
     request: ApiJson<GovernanceExportRequest>,

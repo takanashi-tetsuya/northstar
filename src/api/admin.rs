@@ -1,3 +1,4 @@
+use crate::api::repositories::HttpRepositories;
 use crate::api::*;
 use axum::{extract::State, response::Response, Json};
 use serde_json::json;
@@ -7,8 +8,8 @@ use uuid::Uuid;
 use crate::api::error::{AppError, Result};
 use crate::api::models::{BooleanToggle, BroadcastRequest, MucRoomView, OfflineMessagesStats};
 
-pub async fn admin_stats(
-    State(state): State<crate::api::contexts::ApiQueryContext>,
+pub async fn admin_stats<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ApiQueryContext<R>>,
     actor: ApiAdmin,
 ) -> Result<Json<Value>, AppError> {
     let northstar_operations_application::api_queries::AdminStatistics {
@@ -56,8 +57,8 @@ pub async fn admin_stats(
     })))
 }
 
-pub async fn admin_users(
-    State(state): State<crate::api::contexts::ApiQueryContext>,
+pub async fn admin_users<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ApiQueryContext<R>>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<CursorPage>,
 ) -> Result<Json<Value>, AppError> {
@@ -74,8 +75,8 @@ pub async fn admin_users(
     Ok(Json(json!({"users":page.rows,"next_cursor":next_cursor})))
 }
 
-pub async fn admin_update_user(
-    State(state): State<crate::api::contexts::AccountAdminContext>,
+pub async fn admin_update_user<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::AccountAdminContext<R>>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     request: ApiJson<UserPatch>,
@@ -104,8 +105,8 @@ pub async fn admin_update_user(
     admin_mutation_response(outcome)
 }
 
-pub async fn admin_reports(
-    State(state): State<crate::api::contexts::ApiQueryContext>,
+pub async fn admin_reports<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ApiQueryContext<R>>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<ReportPageQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -127,8 +128,8 @@ pub async fn admin_reports(
     })))
 }
 
-pub async fn admin_update_report(
-    State(state): State<crate::api::contexts::ReportModerationContext>,
+pub async fn admin_update_report<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ReportModerationContext<R>>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     request: ApiJson<ModerationPatch>,
@@ -155,8 +156,8 @@ pub async fn admin_update_report(
     admin_mutation_response(outcome)
 }
 
-pub async fn admin_update_appeal(
-    State(state): State<crate::api::contexts::ReportModerationContext>,
+pub async fn admin_update_appeal<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ReportModerationContext<R>>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     request: ApiJson<ModerationPatch>,
@@ -196,8 +197,8 @@ fn admin_mutation_response(
     }
 }
 
-pub async fn admin_tls_reload(
-    State(state): State<crate::api::contexts::AdminDispatchContext>,
+pub async fn admin_tls_reload<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::AdminDispatchContext<R>>,
     actor: ApiAdmin,
     request: ApiEmpty,
 ) -> Result<Response, AppError> {
@@ -219,8 +220,8 @@ pub async fn admin_tls_reload(
     admin_mutation_response(outcome)
 }
 
-pub async fn admin_invitations(
-    State(state): State<crate::api::contexts::ApiQueryContext>,
+pub async fn admin_invitations<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ApiQueryContext<R>>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<CursorPage>,
 ) -> Result<Json<Value>, AppError> {
@@ -242,8 +243,8 @@ pub async fn admin_invitations(
     })))
 }
 
-pub async fn admin_create_invitation(
-    State(state): State<crate::api::contexts::InvitationAdminContext>,
+pub async fn admin_create_invitation<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::InvitationAdminContext<R>>,
     actor: ApiAdmin,
     request: ApiJson<InvitationRequest>,
 ) -> Result<Response, AppError> {
@@ -271,8 +272,8 @@ pub async fn admin_create_invitation(
     admin_mutation_response(outcome)
 }
 
-pub async fn admin_revoke_invitation(
-    State(state): State<crate::api::contexts::InvitationAdminContext>,
+pub async fn admin_revoke_invitation<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::InvitationAdminContext<R>>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     request: ApiEmpty,
@@ -306,8 +307,8 @@ pub async fn admin_nuke(
     ))
 }
 
-pub async fn admin_panic_disconnect(
-    State(state): State<crate::api::contexts::AdminDispatchContext>,
+pub async fn admin_panic_disconnect<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::AdminDispatchContext<R>>,
     actor: ApiAdmin,
     request: ApiEmpty,
 ) -> Result<Response, AppError> {
@@ -329,8 +330,8 @@ pub async fn admin_panic_disconnect(
     admin_mutation_response(outcome)
 }
 
-pub async fn admin_toggle_island_mode(
-    State(state): State<crate::api::contexts::AdminDispatchContext>,
+pub async fn admin_toggle_island_mode<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::AdminDispatchContext<R>>,
     actor: ApiAdmin,
     request: ApiJson<BooleanToggle>,
 ) -> Result<Response, AppError> {
@@ -354,8 +355,8 @@ pub async fn admin_toggle_island_mode(
     admin_mutation_response(outcome)
 }
 
-pub async fn admin_toggle_registration(
-    State(state): State<crate::api::contexts::RegistrationAdminContext>,
+pub async fn admin_toggle_registration<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::RegistrationAdminContext<R>>,
     actor: ApiAdmin,
     request: ApiJson<BooleanToggle>,
 ) -> Result<Response, AppError> {
@@ -379,8 +380,8 @@ pub async fn admin_toggle_registration(
     admin_mutation_response(outcome)
 }
 
-pub async fn admin_sessions(
-    State(state): State<crate::api::contexts::ApiQueryContext>,
+pub async fn admin_sessions<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ApiQueryContext<R>>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<CursorPage>,
 ) -> Result<Json<Value>, AppError> {
@@ -408,8 +409,8 @@ pub async fn admin_sessions(
     Ok(Json(json!({"sessions":views,"next_cursor":next_cursor})))
 }
 
-pub async fn admin_kick_session(
-    State(state): State<crate::api::contexts::SessionAdminContext>,
+pub async fn admin_kick_session<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::SessionAdminContext<R>>,
     actor: ApiAdmin,
     ApiPath(connection_id): ApiPath<Uuid>,
     request: ApiEmpty,
@@ -435,8 +436,8 @@ pub async fn admin_kick_session(
     admin_mutation_response(outcome)
 }
 
-pub async fn admin_offline_messages_stats(
-    State(state): State<crate::api::contexts::ApiQueryContext>,
+pub async fn admin_offline_messages_stats<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ApiQueryContext<R>>,
     actor: ApiAdmin,
 ) -> Result<Json<OfflineMessagesStats>, AppError> {
     let statistics = state
@@ -447,8 +448,8 @@ pub async fn admin_offline_messages_stats(
     Ok(Json(statistics))
 }
 
-pub async fn admin_clear_offline_messages(
-    State(state): State<crate::api::contexts::AccountAdminContext>,
+pub async fn admin_clear_offline_messages<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::AccountAdminContext<R>>,
     actor: ApiAdmin,
     request: ApiEmpty,
 ) -> Result<Response, AppError> {
@@ -471,8 +472,8 @@ pub async fn admin_clear_offline_messages(
     admin_mutation_response(outcome)
 }
 
-pub async fn admin_muc_rooms(
-    State(state): State<crate::api::contexts::ApiQueryContext>,
+pub async fn admin_muc_rooms<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ApiQueryContext<R>>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<CursorPage>,
 ) -> Result<Json<Value>, AppError> {
@@ -510,8 +511,8 @@ pub async fn admin_muc_rooms(
     Ok(Json(json!({"rooms":views,"next_cursor":next_cursor})))
 }
 
-pub async fn admin_destroy_muc_room(
-    State(state): State<crate::api::contexts::AdminDispatchContext>,
+pub async fn admin_destroy_muc_room<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::AdminDispatchContext<R>>,
     actor: ApiAdmin,
     ApiPath(localpart): ApiPath<String>,
     request: ApiEmpty,
@@ -539,8 +540,8 @@ pub async fn admin_destroy_muc_room(
     admin_mutation_response(outcome)
 }
 
-pub async fn admin_broadcast(
-    State(state): State<crate::api::contexts::AdminDispatchContext>,
+pub async fn admin_broadcast<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::AdminDispatchContext<R>>,
     actor: ApiAdmin,
     request: ApiJson<BroadcastRequest>,
 ) -> Result<Response, AppError> {

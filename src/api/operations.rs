@@ -1,4 +1,5 @@
 use super::idempotency::{mutation_rejection, stored_api_response};
+use crate::api::repositories::HttpRepositories;
 use northstar_operations_core::api_mutations::{
     AdminMutationAdmission, ApiMutationOutcome, ApiPrincipalKind, StoredApiResponse,
 };
@@ -405,8 +406,8 @@ mod read_tests {
     }
 }
 
-pub async fn list_operations(
-    State(state): State<crate::api::contexts::ApiQueryContext>,
+pub async fn list_operations<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ApiQueryContext<R>>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<OperationListQuery>,
 ) -> Result<Json<Page<OperationSummary>>, AppError> {
@@ -442,8 +443,8 @@ pub async fn list_operations(
     }))
 }
 
-pub async fn get_operation(
-    State(state): State<crate::api::contexts::ApiQueryContext>,
+pub async fn get_operation<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ApiQueryContext<R>>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
 ) -> Result<Json<OperationView>, AppError> {
@@ -460,8 +461,8 @@ pub async fn get_operation(
     Ok(Json(item.into()))
 }
 
-pub async fn list_targets(
-    State(state): State<crate::api::contexts::ApiQueryContext>,
+pub async fn list_targets<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ApiQueryContext<R>>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<TargetListQuery>,
@@ -500,8 +501,8 @@ pub async fn list_targets(
     }))
 }
 
-pub async fn get_target(
-    State(state): State<crate::api::contexts::ApiQueryContext>,
+pub async fn get_target<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ApiQueryContext<R>>,
     actor: ApiAdmin,
     ApiPath((operation_id, target_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<TargetView>, AppError> {
@@ -548,8 +549,8 @@ fn mutation_response(result: ApiMutationOutcome<StoredApiResponse>) -> Result<Re
     }
 }
 
-pub async fn cancel_operation(
-    State(service): State<crate::api::contexts::OperationAdminContext>,
+pub async fn cancel_operation<R: HttpRepositories>(
+    State(service): State<crate::api::contexts::OperationAdminContext<R>>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     request: ApiEmpty,
@@ -575,8 +576,8 @@ pub async fn cancel_operation(
     )
 }
 
-pub async fn reconcile_operation(
-    State(service): State<crate::api::contexts::OperationAdminContext>,
+pub async fn reconcile_operation<R: HttpRepositories>(
+    State(service): State<crate::api::contexts::OperationAdminContext<R>>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     request: ApiJson<ReconcileRequest>,
@@ -603,8 +604,8 @@ pub async fn reconcile_operation(
     )
 }
 
-pub async fn reconcile_target(
-    State(service): State<crate::api::contexts::OperationAdminContext>,
+pub async fn reconcile_target<R: HttpRepositories>(
+    State(service): State<crate::api::contexts::OperationAdminContext<R>>,
     actor: ApiAdmin,
     ApiPath((operation_id, target_id)): ApiPath<(Uuid, Uuid)>,
     request: ApiJson<ReconcileRequest>,

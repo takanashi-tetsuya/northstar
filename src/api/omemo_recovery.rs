@@ -1,3 +1,4 @@
+use crate::api::repositories::HttpRepositories;
 use std::net::SocketAddr;
 
 use axum::{
@@ -100,8 +101,8 @@ fn transfer_response(
         .map_err(|error| AppError::Internal(error.into()))
 }
 
-pub async fn prepare_omemo_recovery(
-    State(context): State<OmemoRecoveryHttpContext>,
+pub async fn prepare_omemo_recovery<R: HttpRepositories>(
+    State(context): State<OmemoRecoveryHttpContext<R>>,
     headers: HeaderMap,
     mut request: ApiJson<OmemoRecoveryPrepareRequest>,
 ) -> Result<Response, AppError> {
@@ -146,8 +147,8 @@ pub async fn prepare_omemo_recovery(
     }
 }
 
-pub async fn seal_omemo_recovery(
-    State(context): State<OmemoRecoveryHttpContext>,
+pub async fn seal_omemo_recovery<R: HttpRepositories>(
+    State(context): State<OmemoRecoveryHttpContext<R>>,
     ApiPath(transfer_id): ApiPath<Uuid>,
     headers: HeaderMap,
     request: ApiJson<OmemoRecoverySealRequest>,
@@ -174,8 +175,8 @@ pub async fn seal_omemo_recovery(
     }
 }
 
-pub async fn get_omemo_recovery(
-    State(context): State<OmemoRecoveryHttpContext>,
+pub async fn get_omemo_recovery<R: HttpRepositories>(
+    State(context): State<OmemoRecoveryHttpContext<R>>,
     ApiPath(transfer_id): ApiPath<Uuid>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
@@ -192,8 +193,8 @@ pub async fn get_omemo_recovery(
     Ok(Json(transfer_view(&transfer)))
 }
 
-pub async fn get_omemo_recovery_authority(
-    State(context): State<OmemoRecoveryHttpContext>,
+pub async fn get_omemo_recovery_authority<R: HttpRepositories>(
+    State(context): State<OmemoRecoveryHttpContext<R>>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let user = context.current_user(&headers).await?;
@@ -216,8 +217,8 @@ pub async fn get_omemo_recovery_authority(
         .map_err(|error| AppError::Internal(error.into()))
 }
 
-pub async fn consume_omemo_recovery(
-    State(context): State<OmemoRecoveryHttpContext>,
+pub async fn consume_omemo_recovery<R: HttpRepositories>(
+    State(context): State<OmemoRecoveryHttpContext<R>>,
     State(teardown): State<AccountGenerationTeardownContext>,
     ApiPath(transfer_id): ApiPath<Uuid>,
     headers: HeaderMap,
@@ -279,8 +280,8 @@ pub async fn consume_omemo_recovery(
     Ok(response)
 }
 
-pub async fn poll_omemo_recovery(
-    State(state): State<crate::api::contexts::OmemoRecoveryPollContext>,
+pub async fn poll_omemo_recovery<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::OmemoRecoveryPollContext<R>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     ApiPath(transfer_id): ApiPath<Uuid>,
     headers: HeaderMap,
@@ -322,8 +323,8 @@ pub async fn poll_omemo_recovery(
         .map_err(|error| AppError::Internal(error.into()))
 }
 
-pub async fn revoke_omemo_recovery(
-    State(context): State<OmemoRecoveryHttpContext>,
+pub async fn revoke_omemo_recovery<R: HttpRepositories>(
+    State(context): State<OmemoRecoveryHttpContext<R>>,
     ApiPath(transfer_id): ApiPath<Uuid>,
     headers: HeaderMap,
 ) -> Result<StatusCode, AppError> {

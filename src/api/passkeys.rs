@@ -4,6 +4,7 @@ use crate::api::contexts::{
     passkey_http::{PasskeyAccountHttpContext, PasskeyStartHttpContext},
     PasskeyLoginFinishContext,
 };
+use crate::api::repositories::HttpRepositories;
 use northstar_auth_application::passkeys::{PasskeyActor, PasskeyError};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -48,8 +49,8 @@ fn actor(user: &ApiUser) -> PasskeyActor<'_> {
     }
 }
 
-async fn guard_start(
-    state: &PasskeyStartHttpContext,
+async fn guard_start<R: HttpRepositories>(
+    state: &PasskeyStartHttpContext<R>,
     peer: SocketAddr,
     headers: &HeaderMap,
     username: &str,
@@ -67,9 +68,9 @@ async fn guard_start(
     Ok(())
 }
 
-pub(super) async fn list(
-    State(state): State<PasskeyAccountHttpContext>,
-    State(queries): State<crate::api::contexts::ApiQueryContext>,
+pub(super) async fn list<R: HttpRepositories>(
+    State(state): State<PasskeyAccountHttpContext<R>>,
+    State(queries): State<crate::api::contexts::ApiQueryContext<R>>,
     headers: HeaderMap,
 ) -> Result<Json<Value>> {
     let user = current_user_with_queries(&queries, &headers).await?;
@@ -85,9 +86,9 @@ pub(super) struct RegisterStart {
     pow: Option<northstar_abuse_policy::PowProof>,
 }
 
-pub(super) async fn register_start(
-    State(state): State<PasskeyStartHttpContext>,
-    State(queries): State<crate::api::contexts::ApiQueryContext>,
+pub(super) async fn register_start<R: HttpRepositories>(
+    State(state): State<PasskeyStartHttpContext<R>>,
+    State(queries): State<crate::api::contexts::ApiQueryContext<R>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(mut body): Json<RegisterStart>,
@@ -120,9 +121,9 @@ pub(super) struct RegisterFinish {
     credential: RegisterPublicKeyCredential,
 }
 
-pub(super) async fn register_finish(
-    State(state): State<PasskeyAccountHttpContext>,
-    State(queries): State<crate::api::contexts::ApiQueryContext>,
+pub(super) async fn register_finish<R: HttpRepositories>(
+    State(state): State<PasskeyAccountHttpContext<R>>,
+    State(queries): State<crate::api::contexts::ApiQueryContext<R>>,
     headers: HeaderMap,
     Json(body): Json<RegisterFinish>,
 ) -> Result<Json<Value>> {
@@ -142,8 +143,8 @@ pub(super) struct LoginStart {
     pow: Option<northstar_abuse_policy::PowProof>,
 }
 
-pub(super) async fn login_start(
-    State(state): State<PasskeyStartHttpContext>,
+pub(super) async fn login_start<R: HttpRepositories>(
+    State(state): State<PasskeyStartHttpContext<R>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<LoginStart>,
@@ -172,8 +173,8 @@ pub(super) struct LoginFinish {
     credential: PublicKeyCredential,
 }
 
-pub(super) async fn login_finish(
-    State(state): State<PasskeyLoginFinishContext>,
+pub(super) async fn login_finish<R: HttpRepositories>(
+    State(state): State<PasskeyLoginFinishContext<R>>,
     headers: HeaderMap,
     Json(body): Json<LoginFinish>,
 ) -> Result<Json<Value>> {
@@ -194,11 +195,11 @@ pub(super) struct Remove {
     pow: Option<northstar_abuse_policy::PowProof>,
 }
 
-pub(super) async fn remove(
+pub(super) async fn remove<R: HttpRepositories>(
     State(teardown): State<AccountGenerationTeardownContext>,
-    State(start): State<PasskeyStartHttpContext>,
-    State(account): State<PasskeyAccountHttpContext>,
-    State(queries): State<crate::api::contexts::ApiQueryContext>,
+    State(start): State<PasskeyStartHttpContext<R>>,
+    State(account): State<PasskeyAccountHttpContext<R>>,
+    State(queries): State<crate::api::contexts::ApiQueryContext<R>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(mut body): Json<Remove>,

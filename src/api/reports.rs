@@ -1,3 +1,4 @@
+use crate::api::repositories::HttpRepositories;
 use crate::api::*;
 use axum::http::HeaderMap;
 use axum::{
@@ -17,7 +18,10 @@ use northstar_abuse_policy::AbuseAction;
 use northstar_operations_application::reports::{ReportCommit, ReportEvidenceInput, ReportInput};
 use northstar_operations_core::api_mutations::*;
 
-async fn report_user(state: &ReportContext, headers: &HeaderMap) -> Result<ApiUser, AppError> {
+async fn report_user<R: HttpRepositories>(
+    state: &ReportContext<R>,
+    headers: &HeaderMap,
+) -> Result<ApiUser, AppError> {
     let token = bearer_token(headers)?;
     let user = state
         .principal(token)
@@ -45,8 +49,8 @@ fn report_input(body: &ReportRequest) -> ReportInput<'_> {
             .collect(),
     }
 }
-fn report_response(
-    state: &ReportContext,
+fn report_response<R: HttpRepositories>(
+    state: &ReportContext<R>,
     result: ApiMutationOutcome<ReportCommit>,
 ) -> Result<Response, AppError> {
     match result {
@@ -59,13 +63,13 @@ fn report_response(
     }
 }
 
-pub async fn create_report(
-    State(state): State<ReportContext>,
+pub async fn create_report<R: HttpRepositories>(
+    State(state): State<ReportContext<R>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     request: ApiJson<ReportRequest>,
 ) -> Result<Response, AppError> {
-    let user = report_user(&state, &headers).await?;
+    let user = report_user::<R>(&state, &headers).await?;
     let peer_ip = client_ip_with_trusted_proxies(peer.ip(), &headers, state.trusted_proxies());
     let (subject, actors) = abuse_identity(AbuseAction::Report, peer_ip, Some(&user));
     let intent = request.value.pow_intent();
@@ -87,11 +91,11 @@ pub async fn create_report(
         .report_service()
         .create_report(admission, report_input(&request.value))
         .await?;
-    report_response(&state, result)
+    report_response::<R>(&state, result)
 }
 
-pub async fn my_reports(
-    State(state): State<crate::api::contexts::ApiQueryContext>,
+pub async fn my_reports<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ApiQueryContext<R>>,
     headers: HeaderMap,
     ApiQuery(query): ApiQuery<ReportPageQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -114,14 +118,14 @@ pub async fn my_reports(
     })))
 }
 
-pub async fn create_appeal(
-    State(state): State<ReportContext>,
+pub async fn create_appeal<R: HttpRepositories>(
+    State(state): State<ReportContext<R>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     ApiPath(report_id): ApiPath<Uuid>,
     request: ApiJson<AppealRequest>,
 ) -> Result<Response, AppError> {
-    let user = report_user(&state, &headers).await?;
+    let user = report_user::<R>(&state, &headers).await?;
     let peer_ip = client_ip_with_trusted_proxies(peer.ip(), &headers, state.trusted_proxies());
     let (subject, actors) = abuse_identity(AbuseAction::Appeal, peer_ip, Some(&user));
     let intent = request.value.pow_intent(report_id);
@@ -145,5 +149,5 @@ pub async fn create_appeal(
         .report_service()
         .create_appeal(admission, report_id, &request.value.reason)
         .await?;
-    report_response(&state, result)
+    report_response::<R>(&state, result)
 }

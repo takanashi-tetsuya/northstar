@@ -13,7 +13,7 @@ fn readiness_snapshots_are_typed_and_the_probe_budget_is_short() {
 fn readiness_checks_runtime_authorities_before_reusing_the_database_cache() {
     let source = include_str!("../system.rs");
     let ready = source
-        .split("pub async fn ready(")
+        .split("pub async fn ready<")
         .nth(1)
         .expect("ready handler exists")
         .split("fn current_runtime_readiness_error")
@@ -55,10 +55,10 @@ fn readiness_checks_runtime_authorities_before_reusing_the_database_cache() {
 fn readiness_persistence_uses_service_without_transport_database_authority() {
     let source = include_str!("../system.rs");
     let probe = source
-        .split("async fn probe_readiness(")
+        .split("async fn probe_readiness<")
         .nth(1)
         .expect("readiness probe exists")
-        .split("pub async fn metrics(")
+        .split("pub async fn metrics<")
         .next()
         .expect("metrics handler follows readiness probe");
     assert!(probe.contains("context.validate_persistence("));
@@ -88,7 +88,7 @@ fn database_metrics_use_one_read_only_transaction_without_pool_fanout() {
 fn metrics_authorization_precedes_cache_and_collection() {
     let source = include_str!("../system.rs");
     let handler = source
-        .split("pub async fn metrics(")
+        .split("pub async fn metrics<")
         .nth(1)
         .unwrap()
         .split("fn metrics_request_authorized")

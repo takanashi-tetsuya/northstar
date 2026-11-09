@@ -1,4 +1,5 @@
 use crate::api::contexts::account_teardown::AccountTeardownContext;
+use crate::api::repositories::HttpRepositories;
 use crate::api::*;
 use axum::{
     extract::{ConnectInfo, State},
@@ -16,8 +17,8 @@ use uuid::Uuid;
 use crate::api::contexts::password_change_http::PasswordChangeHttpContext;
 use crate::api::error::{AppError, Result};
 
-pub async fn me(
-    State(state): State<crate::api::contexts::ApiQueryContext>,
+pub async fn me<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ApiQueryContext<R>>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
     let user = current_user_with_queries(&state, &headers).await?;
@@ -26,8 +27,8 @@ pub async fn me(
     ))
 }
 
-pub async fn change_password(
-    State(state): State<PasswordChangeHttpContext>,
+pub async fn change_password<R: HttpRepositories>(
+    State(state): State<PasswordChangeHttpContext<R>>,
     State(teardown): State<AccountTeardownContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
@@ -293,8 +294,8 @@ fn prepare_history_query(query: &HistoryQuery) -> Result<PreparedHistoryQuery, A
     })
 }
 
-pub async fn history(
-    State(state): State<crate::api::contexts::ApiQueryContext>,
+pub async fn history<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ApiQueryContext<R>>,
     headers: HeaderMap,
     ApiQuery(query): ApiQuery<HistoryQuery>,
 ) -> Result<Json<Value>, AppError> {

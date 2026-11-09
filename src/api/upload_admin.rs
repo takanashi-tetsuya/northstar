@@ -5,6 +5,7 @@ use crate::api::cursor::{
 };
 use crate::api::error::AppError;
 use crate::api::idempotency::{mutation_rejection, stored_api_response};
+use crate::api::repositories::HttpRepositories;
 use crate::api::{idempotency_replay_response, pagination, ApiAdmin, ApiEmpty, ApiPath, ApiQuery};
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -109,8 +110,8 @@ fn boundary_from_position(
     }
 }
 
-async fn dead_letter_boundary(
-    state: &crate::api::contexts::ApiQueryContext,
+async fn dead_letter_boundary<R: HttpRepositories>(
+    state: &crate::api::contexts::ApiQueryContext<R>,
     token: Option<&str>,
     binding: &CursorBinding<'_>,
     kind: UploadDeadLetterKind,
@@ -126,8 +127,8 @@ async fn dead_letter_boundary(
     boundary_from_position(kind, position).map(Some)
 }
 
-fn issue_dead_letter_cursor(
-    state: &crate::api::contexts::ApiQueryContext,
+fn issue_dead_letter_cursor<R: HttpRepositories>(
+    state: &crate::api::contexts::ApiQueryContext<R>,
     binding: &CursorBinding<'_>,
     next: Option<UploadDeadLetterBoundary>,
     database_now: DateTime<Utc>,
@@ -289,8 +290,8 @@ fn view(kind: UploadDeadLetterKind, row: UploadDeadLetterRecord) -> UploadDeadLe
     }
 }
 
-pub async fn admin_upload_dead_letters(
-    State(state): State<crate::api::contexts::ApiQueryContext>,
+pub async fn admin_upload_dead_letters<R: HttpRepositories>(
+    State(state): State<crate::api::contexts::ApiQueryContext<R>>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<UploadDeadLetterPageQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -298,13 +299,14 @@ pub async fn admin_upload_dead_letters(
     let limit = pagination::checked_limit(query.limit, 25, 100)?;
     let filter = dead_letter_filter(kind)?;
     let binding = dead_letter_binding(&actor.id, &filter);
-    let after = dead_letter_boundary(&state, query.cursor.as_deref(), &binding, kind).await?;
+    let after = dead_letter_boundary::<R>(&state, query.cursor.as_deref(), &binding, kind).await?;
     let page = state
         .api_query_service()
         .upload_dead_letters(actor.read_authority(), kind, after, limit)
         .await?
         .ok_or(AppError::Forbidden)?;
-    let next_cursor = issue_dead_letter_cursor(&state, &binding, page.next, page.database_now)?;
+    let next_cursor =
+        issue_dead_letter_cursor::<R>(&state, &binding, page.next, page.database_now)?;
     let items = page
         .rows
         .into_iter()
@@ -318,8 +320,8 @@ pub async fn admin_upload_dead_letters(
     })))
 }
 
-pub async fn admin_retry_upload_dead_letter(
-    State(service): State<crate::api::contexts::UploadAdminContext>,
+pub async fn admin_retry_upload_dead_letter<R: HttpRepositories>(
+    State(service): State<crate::api::contexts::UploadAdminContext<R>>,
     actor: ApiAdmin,
     ApiPath((kind, id)): ApiPath<(String, String)>,
     headers: HeaderMap,

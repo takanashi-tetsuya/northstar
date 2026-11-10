@@ -10,6 +10,10 @@ pub mod private_xml;
 pub mod pubsub;
 pub mod vcard;
 
+pub use self::session_host::PubSubSessionHost;
+
+mod session_host;
+
 use northstar_pubsub_application::{
     PepAffiliationRepository, PepItemMutationRepository, PepItemQueryRepository,
     PepNodeMutationRepository, PepNodeQueryRepository, PepSubscriptionMutationRepository,

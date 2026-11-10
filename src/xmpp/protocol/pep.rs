@@ -1,10 +1,11 @@
 //! Personal Eventing Protocol (PEP) delegation to `northstar-pubsub-xmpp`.
 
-use super::{Action, ProtocolSession};
+use super::{Action, ProtocolSession, SessionHost};
 use anyhow::Result;
 use northstar_pubsub_application::profile::{ProfileRepository, ProfileService};
 use northstar_pubsub_application::PubSubService;
 use northstar_pubsub_core::{PepQuotas, PubSubAccount};
+use northstar_pubsub_xmpp::PubSubSessionHost;
 use roxmltree::Node;
 
 #[cfg(test)]
@@ -34,7 +35,7 @@ pub(crate) async fn federated_pep_disco_items(
         .await
 }
 
-impl ProtocolSession {
+impl<H: SessionHost + PubSubSessionHost> ProtocolSession<H> {
     pub(crate) async fn pep_get(
         &self,
         id: &str,
@@ -81,7 +82,9 @@ impl ProtocolSession {
     }
 }
 
-impl northstar_pubsub_xmpp::pep::PepSession for ProtocolSession {
+impl<H: SessionHost + PubSubSessionHost> northstar_pubsub_xmpp::pep::PepSession
+    for ProtocolSession<H>
+{
     fn pep_account(&self) -> Option<PubSubAccount> {
         self.authenticated.as_ref().map(|user| PubSubAccount {
             id: user.id,
@@ -99,7 +102,7 @@ impl northstar_pubsub_xmpp::pep::PepSession for ProtocolSession {
     }
 
     fn pep_local_domain(&self) -> &str {
-        self.host.local_domain()
+        self.host.pubsub_local_domain()
     }
 
     fn pep_quotas(&self) -> PepQuotas {
@@ -107,7 +110,7 @@ impl northstar_pubsub_xmpp::pep::PepSession for ProtocolSession {
     }
 
     fn pep_pubsub_service(&self) -> &PubSubService<impl northstar_pubsub_xmpp::PubSubRepositories> {
-        self.host.pubsub_service()
+        self.host.pubsub_application_service()
     }
 
     fn pep_profile_service(&self) -> &ProfileService<impl ProfileRepository> {
@@ -115,23 +118,23 @@ impl northstar_pubsub_xmpp::pep::PepSession for ProtocolSession {
     }
 
     fn pep_audience_routing(&self) -> &impl northstar_pubsub_xmpp::pep::PepAudienceRouting {
-        self.host.as_ref()
+        &*self.host
     }
 
     fn pep_record_published(&self, count: u64) {
-        self.host.pep_telemetry().published(count);
+        self.host.pep_record_published(count);
     }
 
     fn pep_record_retracted(&self, count: u64) {
-        self.host.pep_telemetry().retracted(count);
+        self.host.pep_record_retracted(count);
     }
 
     fn pep_record_retrieved(&self) {
-        self.host.pep_telemetry().retrieved();
+        self.host.pep_record_retrieved();
     }
 
     fn pep_refresh_avatar_presence(&self, owner_bare: &str, hash: Option<&str>) {
-        self.refresh_local_avatar_presence(owner_bare, hash);
+        self.host.refresh_avatar_presence(owner_bare, hash);
     }
 }
 

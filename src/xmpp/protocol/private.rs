@@ -1,13 +1,14 @@
-use super::{Action, ProtocolSession};
+use super::{Action, ProtocolSession, SessionHost};
 use anyhow::Result;
 use northstar_pubsub_application::private_storage::{
     PrivateStorageRepository, PrivateStorageService,
 };
 use northstar_pubsub_application::PubSubService;
 use northstar_pubsub_core::PepAudienceSnapshot;
+use northstar_pubsub_xmpp::PubSubSessionHost;
 use roxmltree::Node;
 
-impl ProtocolSession {
+impl<H: SessionHost + PubSubSessionHost> ProtocolSession<H> {
     pub(crate) async fn private_get(
         &mut self,
         id: &str,
@@ -32,7 +33,9 @@ impl ProtocolSession {
     }
 }
 
-impl northstar_pubsub_xmpp::private_xml::PrivateXmlSession for ProtocolSession {
+impl<H: SessionHost + PubSubSessionHost> northstar_pubsub_xmpp::private_xml::PrivateXmlSession
+    for ProtocolSession<H>
+{
     fn private_account(&self) -> Option<northstar_pubsub_core::PubSubAccount> {
         self.authenticated
             .as_ref()
@@ -52,7 +55,7 @@ impl northstar_pubsub_xmpp::private_xml::PrivateXmlSession for ProtocolSession {
     }
 
     fn private_local_domain(&self) -> &str {
-        self.host.local_domain()
+        self.host.pubsub_local_domain()
     }
 
     fn private_storage_service(&self) -> &PrivateStorageService<impl PrivateStorageRepository> {
@@ -62,7 +65,7 @@ impl northstar_pubsub_xmpp::private_xml::PrivateXmlSession for ProtocolSession {
     fn private_pubsub_service(
         &self,
     ) -> &PubSubService<impl northstar_pubsub_xmpp::PubSubRepositories> {
-        self.host.pubsub_service()
+        self.host.pubsub_application_service()
     }
 
     fn private_pep_audience_messages(
@@ -73,7 +76,7 @@ impl northstar_pubsub_xmpp::private_xml::PrivateXmlSession for ProtocolSession {
         audience: &PepAudienceSnapshot,
     ) -> Result<Vec<(String, String)>> {
         northstar_pubsub_xmpp::pep::pep_audience_messages(
-            self.host.as_ref(),
+            &*self.host,
             publisher_full_jid,
             node,
             event,

@@ -25,6 +25,7 @@ mod bosh_host;
 mod c2s_host;
 pub(crate) mod caps_effect_dispatch;
 pub(crate) mod pep_last_items;
+mod pubsub_session_host;
 mod s2s_host;
 pub(crate) use admin_session_cleanup::AdminSessionCleanupContext;
 mod admin_cluster_queries;

@@ -1782,7 +1782,7 @@ if (discoveryDbDomainReferences > MAX_DISCOVERY_DB_DOMAIN_REFERENCES) {
 // classifyDbDependencies. Each module is read with its non-test child files.
 for (const [name, serviceAccessor, source] of [
   ['pubsub.rs', 'pubsub_service', readProductionModule('src/xmpp/protocol/pubsub.rs', { root })],
-  ['pep.rs', 'pubsub_service', readProductionModule('src/xmpp/protocol/pep.rs', { root })],
+  ['pep.rs', 'pubsub_application_service', readProductionModule('src/xmpp/protocol/pep.rs', { root })],
   ['mix.rs', 'mix_service', readProductionModule('crates/contexts/room/northstar-mix-xmpp/src/lib.rs', { root })],
   ['mam.rs', 'mam_service', readProductionModule('src/xmpp/protocol/mam.rs', { root })],
   ['privacy.rs', 'privacy_service', readProductionModule('src/xmpp/protocol/privacy.rs', { root })],

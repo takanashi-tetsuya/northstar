@@ -1,14 +1,14 @@
-use super::{Action, ProtocolSession};
+use super::{Action, ProtocolSession, SessionHost};
 use anyhow::Result;
 use northstar_pubsub_application::profile::{
     ProfileAudienceSnapshot, ProfileRepository, ProfileService,
 };
 use northstar_pubsub_core::{PepQuotas, PubSubAccount};
 use northstar_pubsub_xmpp::vcard::VCardSession;
-use northstar_roster_xmpp::presence::inject_vcard_avatar_hash;
+use northstar_pubsub_xmpp::PubSubSessionHost;
 use roxmltree::Node;
 
-impl ProtocolSession {
+impl<H: SessionHost + PubSubSessionHost> ProtocolSession<H> {
     pub(crate) async fn vcard_get(&self, id: &str, iq: Node<'_, '_>) -> Result<Action> {
         northstar_pubsub_xmpp::vcard::vcard_get(self, id, iq)
             .await
@@ -26,25 +26,9 @@ impl ProtocolSession {
             .await
             .map(Action::Send)
     }
-
-    pub(crate) fn refresh_local_avatar_presence(&self, owner_bare: &str, hash: Option<&str>) {
-        for session in self.host.sessions_for(owner_bare) {
-            let mut last_presence = session
-                .last_presence
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let refreshed = last_presence.as_deref().and_then(|raw| {
-                let document = roxmltree::Document::parse(raw).ok()?;
-                Some(inject_vcard_avatar_hash(raw, document.root_element(), hash))
-            });
-            if let Some(refreshed) = refreshed {
-                *last_presence = Some(refreshed);
-            }
-        }
-    }
 }
 
-impl VCardSession for ProtocolSession {
+impl<H: SessionHost + PubSubSessionHost> VCardSession for ProtocolSession<H> {
     fn vcard_account(&self) -> Option<PubSubAccount> {
         self.authenticated.as_ref().map(|user| PubSubAccount {
             id: user.id,
@@ -62,7 +46,7 @@ impl VCardSession for ProtocolSession {
     }
 
     fn vcard_local_domain(&self) -> &str {
-        self.host.local_domain()
+        self.host.pubsub_local_domain()
     }
 
     fn vcard_pep_quotas(&self) -> PepQuotas {
@@ -81,7 +65,7 @@ impl VCardSession for ProtocolSession {
         audience: &ProfileAudienceSnapshot,
     ) -> Result<Vec<(String, String)>> {
         northstar_pubsub_xmpp::pep::profile_audience_messages(
-            self.host.as_ref(),
+            &*self.host,
             publisher_full_jid,
             node,
             event,
@@ -90,6 +74,6 @@ impl VCardSession for ProtocolSession {
     }
 
     fn vcard_refresh_avatar_presence(&self, owner_bare: &str, hash: Option<&str>) {
-        self.refresh_local_avatar_presence(owner_bare, hash);
+        self.host.refresh_avatar_presence(owner_bare, hash);
     }
 }

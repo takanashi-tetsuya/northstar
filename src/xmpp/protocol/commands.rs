@@ -1,15 +1,16 @@
 //! Binds the administrative command handlers to the client session.
 
-use super::ProtocolSession;
+use super::{ProtocolSession, SessionHost};
 use northstar_operations_application::admin_commands::{
     AdminActor, AdminCommandRepository, AdminCommandService, AdminScramPolicy,
 };
 use northstar_operations_xmpp::commands::CommandSession;
+use northstar_operations_xmpp::OperationsSessionHost;
 use std::collections::BTreeSet;
 
-impl CommandSession for ProtocolSession {
+impl<H: SessionHost + OperationsSessionHost> CommandSession for ProtocolSession<H> {
     fn command_service(&self) -> &AdminCommandService<impl AdminCommandRepository> {
-        self.host.admin_command_service()
+        self.host.command_service()
     }
 
     fn command_cached_admin(&self) -> Option<AdminActor> {
@@ -23,28 +24,28 @@ impl CommandSession for ProtocolSession {
     }
 
     fn command_local_domain(&self) -> &str {
-        self.host.local_domain()
+        self.host.command_local_domain()
     }
 
     fn command_scram_policy(&self) -> AdminScramPolicy {
-        self.host.admin_scram_policy()
+        self.host.command_scram_policy()
     }
 
     fn command_service_control_available(&self) -> bool {
-        self.host.xmpp_service_control_enabled() && self.host.service_control_available()
+        self.host.command_service_control_available()
     }
 
     fn command_send_local_announcement(&self, stanza: &str) -> BTreeSet<String> {
-        self.host.send_local_announcement(stanza)
+        self.host.command_send_local_announcement(stanza)
     }
 
     fn command_remote_announcement_enabled(&self) -> bool {
-        self.host.admin_remote_announcement_enabled()
+        self.host.command_remote_announcement_enabled()
     }
 
     fn command_replace_federation_rules(&self, blacklist: Vec<String>, whitelist: Vec<String>) {
         self.host
-            .replace_runtime_federation_cache(blacklist, whitelist);
+            .command_replace_federation_rules(blacklist, whitelist);
     }
 
     async fn command_send_remote_announcement(
@@ -53,17 +54,17 @@ impl CommandSession for ProtocolSession {
         stanza: &str,
     ) -> anyhow::Result<bool> {
         self.host
-            .send_remote_announcement_to_account(bare, stanza)
+            .command_send_remote_announcement(bare, stanza)
             .await
     }
 
     async fn command_online_bare_jids(&self) -> anyhow::Result<BTreeSet<String>> {
-        self.host.admin_online_bare_jids().await
+        self.host.command_online_bare_jids().await
     }
 
     async fn command_activity_bare_jids(
         &self,
     ) -> anyhow::Result<(BTreeSet<String>, BTreeSet<String>)> {
-        self.host.admin_activity_bare_jids().await
+        self.host.command_activity_bare_jids().await
     }
 }

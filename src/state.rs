@@ -25,6 +25,7 @@ pub(crate) mod background_maintenance;
 mod bosh_host;
 mod c2s_host;
 pub(crate) mod caps_effect_dispatch;
+mod operations_session_host;
 pub(crate) mod pep_last_items;
 mod pubsub_session_host;
 mod s2s_host;

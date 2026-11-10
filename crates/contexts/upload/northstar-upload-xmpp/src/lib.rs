@@ -2,6 +2,10 @@
 
 #![forbid(unsafe_code)]
 
+pub use self::session_host::UploadSessionHost;
+
+mod session_host;
+
 use northstar_upload_application::{
     UploadSlotAdmission, UploadSlotLimits, UploadSlotRequestCommand,
 };

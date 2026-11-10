@@ -28,6 +28,7 @@ pub(crate) mod caps_effect_dispatch;
 pub(crate) mod pep_last_items;
 mod pubsub_session_host;
 mod s2s_host;
+mod upload_session_host;
 pub(crate) use admin_session_cleanup::AdminSessionCleanupContext;
 mod admin_cluster_queries;
 pub(crate) mod cluster_adapters;

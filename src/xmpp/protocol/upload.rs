@@ -1,19 +1,20 @@
-use super::{Action, ProtocolSession};
+use super::{Action, ProtocolSession, SessionHost};
 use anyhow::Result;
 use northstar_upload_application::{
     UploadSlotAdmission, UploadSlotLimits, UploadSlotRequestCommand,
 };
+use northstar_upload_xmpp::UploadSessionHost;
 use roxmltree::Node;
 
-impl ProtocolSession {
+impl<H: SessionHost + UploadSessionHost> ProtocolSession<H> {
     pub(crate) fn http_upload_enabled(&self) -> bool {
-        self.host.xmpp_http_upload_enabled()
+        self.host.upload_enabled()
     }
 
     pub(crate) fn upload_domain(&self) -> String {
         northstar_xmpp_types::jid::prepare_domainpart(&format!(
             "upload.{}",
-            self.host.local_domain()
+            self.host.upload_local_domain()
         ))
         .expect("configured XMPP domain must form a valid upload service domain")
     }
@@ -30,7 +31,9 @@ impl ProtocolSession {
     }
 }
 
-impl northstar_upload_xmpp::UploadSlotSession for ProtocolSession {
+impl<H: SessionHost + UploadSessionHost> northstar_upload_xmpp::UploadSlotSession
+    for ProtocolSession<H>
+{
     fn upload_user_id(&self) -> Option<uuid::Uuid> {
         self.authenticated.as_ref().map(|user| user.id)
     }
@@ -48,16 +51,13 @@ impl northstar_upload_xmpp::UploadSlotSession for ProtocolSession {
     }
 
     fn upload_storage_backend(&self) -> &'static str {
-        self.host.upload_store().backend()
+        self.host.upload_storage_backend()
     }
 
     async fn reserve_upload_slot(
         &self,
         command: UploadSlotRequestCommand<'_>,
     ) -> Result<UploadSlotAdmission> {
-        self.host
-            .upload_service()
-            .execute_upload_slot_reservation(command)
-            .await
+        self.host.reserve_upload_slot(command).await
     }
 }

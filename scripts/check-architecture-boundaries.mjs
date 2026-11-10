@@ -2279,7 +2279,8 @@ for (const [name, accessor, forbiddenAuthority, route, path] of [
   ['mix_muc.rs', 'MixService', 'link_mix_muc_by_localpart', /\bmix\s*:\s*&MixService<R>[^]*?\bmix\s*\.\s*link_local_muc_mirror\s*\(/, 'crates/contexts/room/northstar-room-application/src/mix_muc.rs'],
   ['presence.rs', 'presence_service()', 'claim_admin_service_messages', /\.presence_service\s*\(\s*\)/],
   ['presence.rs', 'presence_service()', 'complete_admin_service_message_claim', /\.presence_service\s*\(\s*\)/],
-  ['upload.rs', 'upload_service()', 'create_upload_slot_bounded', /\.upload_service\s*\(\s*\)/],
+  ['upload.rs', 'UploadSessionHost', 'create_upload_slot_bounded', /\.reserve_upload_slot\s*\(/],
+  ['upload_session_host.rs', 'upload_service()', 'create_upload_slot_bounded', /\.upload_service\s*\(\s*\)/, 'src/state/upload_session_host.rs'],
 ]) {
   const production = productionWithoutCfgTestModules(
     path ? read(path) : readProtocolSource(name),

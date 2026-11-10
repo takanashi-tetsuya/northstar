@@ -7,7 +7,7 @@ impl ProtocolSession {
         &self,
         delivery: northstar_stream::outbound::DurableDelivery,
     ) -> Result<northstar_stream::outbound::DurableDelivery> {
-        self.state
+        self.host
             .replay_service()
             .fence_socket_write(delivery)
             .await
@@ -17,7 +17,7 @@ impl ProtocolSession {
         &self,
         delivery: northstar_stream::outbound::MixDelivery,
     ) -> Result<northstar_stream::outbound::MixDelivery> {
-        self.state
+        self.host
             .mix_service()
             .fence_mix_socket_write(delivery)
             .await
@@ -31,7 +31,7 @@ impl ProtocolSession {
         else {
             anyhow::bail!("native C2S acknowledgement source mismatch");
         };
-        self.state
+        self.host
             .replay_service()
             .acknowledge_socket_write_observed(delivery, Some(request))
             .await
@@ -41,7 +41,7 @@ impl ProtocolSession {
         &self,
         request: &northstar_delivery_core::native_write::AckRequest,
     ) -> Result<bool> {
-        self.state
+        self.host
             .mix_service()
             .acknowledge_mix_socket_write(request)
             .await
@@ -56,7 +56,7 @@ impl ProtocolSession {
     }
 
     pub fn record_replayed(&self) {
-        self.state.outbound_stanza_telemetry().recorded();
+        self.host.outbound_stanza_telemetry().recorded();
     }
 
     pub(super) fn sm_snapshot_view(&self) -> sm_owner::SmSnapshotView<'_> {
@@ -100,9 +100,9 @@ impl ProtocolSession {
             policy: &self.sm_runtime_policy,
             connection_id: self.connection_id,
             port: sm_owner::RealSmPort {
-                service: self.state.sm_service(),
-                governor: self.state.sm_memory_governor(),
-                telemetry: self.state.outbound_stanza_telemetry(),
+                service: self.host.sm_service(),
+                governor: self.host.sm_memory_governor(),
+                telemetry: self.host.outbound_stanza_telemetry(),
             },
         }
     }

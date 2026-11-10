@@ -41,7 +41,7 @@ impl northstar_roster_xmpp::privacy::PrivacySession for ProtocolSession {
     }
 
     fn privacy_service(&self) -> &PrivacyService<impl PrivacyRepository> {
-        self.state.privacy_service()
+        self.host.privacy_service()
     }
 
     fn privacy_mark_requested(&self) {
@@ -63,15 +63,15 @@ impl northstar_roster_xmpp::privacy::PrivacySession for ProtocolSession {
     }
 
     fn privacy_local_resources(&self, account: &str) -> usize {
-        self.state.sessions_for(account).len()
+        self.host.sessions_for(account).len()
     }
 
     async fn privacy_has_remote_resources(&self, account: &str) -> Result<bool> {
-        self.state.account_has_remote_resources(account).await
+        self.host.account_has_remote_resources(account).await
     }
 
     fn privacy_list_active_locally(&self, account: &str, name: &str) -> bool {
-        self.state.sessions_for(account).iter().any(|session| {
+        self.host.sessions_for(account).iter().any(|session| {
             session
                 .privacy_active
                 .read()
@@ -83,7 +83,7 @@ impl northstar_roster_xmpp::privacy::PrivacySession for ProtocolSession {
 
     async fn privacy_push_change(&self, account: &str, name: &str, base: &str) -> Option<String> {
         let mut current_push = None;
-        for (jid, session) in self.state.session_entries_for(account) {
+        for (jid, session) in self.host.session_entries_for(account) {
             if !session.privacy_requested.load(Ordering::Acquire) {
                 continue;
             }
@@ -98,7 +98,7 @@ impl northstar_roster_xmpp::privacy::PrivacySession for ProtocolSession {
                 // state instead of allowing later pushes to cross this gap.
                 session.sender.disconnect_backpressured_transport();
                 session.disconnect.cancel();
-                self.state.post_accept_failure_telemetry().record_failure();
+                self.host.post_accept_failure_telemetry().record_failure();
                 tracing::warn!(
                     %jid,
                     list = %name,
@@ -107,7 +107,7 @@ impl northstar_roster_xmpp::privacy::PrivacySession for ProtocolSession {
                 );
             }
         }
-        match self.state.route_remote_privacy_push(account, base).await {
+        match self.host.route_remote_privacy_push(account, base).await {
             Ok(failures) => {
                 for failure in failures {
                     tracing::warn!(

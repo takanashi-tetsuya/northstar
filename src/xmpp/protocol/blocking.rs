@@ -50,7 +50,7 @@ impl ProtocolSession {
 
 impl northstar_roster_xmpp::blocking::BlockingSession for ProtocolSession {
     fn blocking_service(&self) -> &BlockingService<impl BlockingRepository> {
-        self.state.blocking_service()
+        self.host.blocking_service()
     }
 
     fn blocking_mark_requested(&self) {
@@ -58,7 +58,7 @@ impl northstar_roster_xmpp::blocking::BlockingSession for ProtocolSession {
     }
 
     async fn blocking_push_change(&self, owner: &str, payload: &str) {
-        for (jid, session) in self.state.session_entries_for(owner) {
+        for (jid, session) in self.host.session_entries_for(owner) {
             if !session.blocklist_requested.load(Ordering::Acquire) {
                 continue;
             }
@@ -72,19 +72,19 @@ impl northstar_roster_xmpp::blocking::BlockingSession for ProtocolSession {
                     // server-authoritative list again after reconnect.
                     session.sender.disconnect_backpressured_transport();
                     session.disconnect.cancel();
-                    self.state.post_accept_failure_telemetry().record_failure();
+                    self.host.post_accept_failure_telemetry().record_failure();
                     tracing::warn!(%jid, ?error, "XEP-0191 blocklist push queue closed; disconnecting stale resource");
                 }
                 Err(_) => {
                     session.sender.disconnect_backpressured_transport();
                     session.disconnect.cancel();
-                    self.state.post_accept_failure_telemetry().record_failure();
+                    self.host.post_accept_failure_telemetry().record_failure();
                     tracing::warn!(%jid, "timed out delivering XEP-0191 blocklist push; disconnecting stale resource");
                 }
             }
         }
         match self
-            .state
+            .host
             .route_remote_blocklist_push(owner, || blocking_push_stanza(owner, payload))
             .await
         {
@@ -105,10 +105,10 @@ impl northstar_roster_xmpp::blocking::BlockingSession for ProtocolSession {
         changed_patterns: &[String],
         available: bool,
     ) {
-        deliver_blocking_presence_change(&self.state, owner, targets, changed_patterns, available)
+        deliver_blocking_presence_change(&self.host, owner, targets, changed_patterns, available)
             .await;
         match self
-            .state
+            .host
             .route_remote_blocking_presence_change(owner, targets, changed_patterns, available)
             .await
         {

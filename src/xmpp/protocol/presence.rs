@@ -49,7 +49,7 @@ impl ProtocolSession {
             if target_jid.domainpart() == self.muc_domain() {
                 if kind == "available" {
                     let user = self.authenticated.as_ref().expect("authenticated session");
-                    let avatar_hash = self.state.presence_service().avatar_hash(user.id).await?;
+                    let avatar_hash = self.host.presence_service().avatar_hash(user.id).await?;
                     let injected = inject_vcard_avatar_hash(raw, root, avatar_hash.as_deref());
                     let document = roxmltree::Document::parse(&injected)?;
                     return self.muc_presence(document.root_element(), &injected).await;
@@ -69,7 +69,7 @@ impl ProtocolSession {
             .lock_owned()
             .await;
         if !northstar_mix_xmpp::mix_presence_route_is_current(
-            self.state.as_ref(),
+            self.host.as_ref(),
             &from,
             self.connection_id,
             &self.presence.mix_presence_gate,
@@ -128,7 +128,7 @@ impl ProtocolSession {
         // on a degraded cluster control plane; a later replay worker must
         // not absorb messages inserted during those waits.
         let offline_replay_cutoff = if newly_offline_eligible && !self.bind2_mam_catchup {
-            Some(self.state.presence_service().replay_cutoff().await?)
+            Some(self.host.presence_service().replay_cutoff().await?)
         } else {
             None
         };
@@ -137,7 +137,7 @@ impl ProtocolSession {
 
         if first_available {
             deliver_service_messages(&*self, &from).await?;
-            let replay_service = self.state.replay_service().clone();
+            let replay_service = self.host.replay_service().clone();
             let outbound = self.outbound.clone();
             let active_privacy_list = self
                 .privacy_active
@@ -152,7 +152,7 @@ impl ProtocolSession {
             let generation = self.presence.availability_generation.clone();
             let recipient_id = user.id;
             let full_jid = from.clone();
-            let account = format!("{}@{}", user.username, self.state.local_domain());
+            let account = format!("{}@{}", user.username, self.host.local_domain());
             let bind2_mam_catchup = self.bind2_mam_catchup;
             let include_offline = priority >= 0 && !bind2_mam_catchup;
             self.defer_after_transport("available-offline-replay", async move {
@@ -179,7 +179,7 @@ impl ProtocolSession {
             // reaches the transport and applies awaited backpressure.
             let _ = self.pubsub_presence("available", &from).await?;
         } else if newly_offline_eligible && !self.bind2_mam_catchup {
-            let replay_service = self.state.replay_service().clone();
+            let replay_service = self.host.replay_service().clone();
             let outbound = self.outbound.clone();
             let active_privacy_list = self
                 .privacy_active

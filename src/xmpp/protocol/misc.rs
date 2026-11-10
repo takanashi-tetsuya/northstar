@@ -75,7 +75,7 @@ impl ProtocolSession {
                 .finish();
             return Ok(Action::Send(iq_result(id, &payload)));
         }
-        if self.state.registration_is_closed() {
+        if self.host.registration_is_closed() {
             return Ok(Action::Send(iq_registration_error(
                 id,
                 "service-unavailable",
@@ -84,7 +84,7 @@ impl ProtocolSession {
         if self.negotiation.registration_completed() {
             return Ok(Action::Send(iq_registration_error(id, "not-acceptable")));
         }
-        let invitation = if self.state.registration_requires_invitation() {
+        let invitation = if self.host.registration_requires_invitation() {
             XmlElement::new("field")
                 .attr("var", "urn:northstar:invite:token")
                 .attr("type", "text-private")
@@ -132,7 +132,7 @@ impl ProtocolSession {
         let mut query = XmlElement::namespaced("query", "jabber:iq:register").child(
             XmlElement::new("instructions").text("Choose a username and a password of at least 10 UTF-8 octets. If registration is rate limited, wait before trying again."),
         );
-        if !self.state.registration_requires_invitation() {
+        if !self.host.registration_requires_invitation() {
             query.push_child(XmlElement::new("username"));
             query.push_child(XmlElement::new("password"));
         }
@@ -145,7 +145,7 @@ impl ProtocolSession {
         if !self.secure_transport {
             return Ok(Action::Send(iq_registration_error(id, "not-authorized")));
         }
-        if self.state.registration_is_closed() {
+        if self.host.registration_is_closed() {
             return Ok(Action::Send(iq_registration_error(id, "not-allowed")));
         }
         if self.negotiation.registration_completed() {
@@ -247,7 +247,7 @@ impl ProtocolSession {
         let actors = vec![format!("ip:{}", self.peer_ip)];
         let subject = format!("registration:{}", self.peer_ip);
         let outcome = match self
-            .state
+            .host
             .account_service()
             .register(RegistrationRequest {
                 username: &username,
@@ -263,7 +263,7 @@ impl ProtocolSession {
             Ok(outcome) => outcome,
             Err(error) => {
                 tracing::error!(?error, "XEP-0077 registration backend failed");
-                self.state.registration_telemetry().backend_failed();
+                self.host.registration_telemetry().backend_failed();
                 return Ok(Action::Send(iq_registration_error(
                     id,
                     "internal-server-error",
@@ -273,11 +273,11 @@ impl ProtocolSession {
         match outcome {
             RegistrationOutcome::Created(_) => {
                 self.negotiation.mark_registration_completed();
-                self.state.registration_telemetry().registered();
+                self.host.registration_telemetry().registered();
                 Ok(Action::Send(iq_result(id, "")))
             }
             RegistrationOutcome::AbuseDenied(requirement) => {
-                self.state.registration_telemetry().rate_limited();
+                self.host.registration_telemetry().rate_limited();
                 if !pow_enabled {
                     return Ok(Action::Send(iq_registration_abuse_error(
                         id,
@@ -286,7 +286,7 @@ impl ProtocolSession {
                     )));
                 }
                 let challenge = match self
-                    .state
+                    .host
                     .challenge_issue_service()
                     .issue(
                         northstar_abuse_application::challenge::ChallengeIssueRequest {
@@ -301,7 +301,7 @@ impl ProtocolSession {
                     Ok(challenge) => Some(challenge),
                     Err(error) => {
                         tracing::warn!(?error, "XEP-0077 v2 challenge issuance failed");
-                        self.state.registration_telemetry().backend_failed();
+                        self.host.registration_telemetry().backend_failed();
                         None
                     }
                 };
@@ -325,7 +325,7 @@ impl ProtocolSession {
                 "resource-constraint",
             ))),
             RegistrationOutcome::CapacityExhausted => {
-                self.state.registration_telemetry().capacity_rejected();
+                self.host.registration_telemetry().capacity_rejected();
                 Ok(Action::Send(iq_registration_error(
                     id,
                     "resource-constraint",
@@ -381,7 +381,7 @@ impl ProtocolSession {
             powless_query.as_bytes(),
         );
         let changed = self
-            .state
+            .host
             .account_service()
             .change_password(PasswordChangeRequest {
                 subject: &subject,
@@ -396,7 +396,7 @@ impl ProtocolSession {
         match changed {
             Ok(PasswordChangeOutcome::Changed) => {}
             Ok(PasswordChangeOutcome::AbuseDenied(requirement)) => {
-                self.state.account_abuse_telemetry().rate_limited();
+                self.host.account_abuse_telemetry().rate_limited();
                 return Ok(Action::Send(iq_registration_abuse_error(
                     id,
                     &requirement,
@@ -411,7 +411,7 @@ impl ProtocolSession {
             }
             Err(error) => {
                 tracing::error!(?error, user_id = %user.id, "XEP-0077 password change failed");
-                self.state.account_abuse_telemetry().backend_failed();
+                self.host.account_abuse_telemetry().backend_failed();
                 return Ok(Action::Send(iq_registration_error(
                     id,
                     "internal-server-error",
@@ -421,8 +421,8 @@ impl ProtocolSession {
         // Revoke other local and resumable sessions before acknowledging the
         // credential change. The terminal action then delivers this IQ result
         // and closes the initiating stream without a detached crash window.
-        let account = format!("{}@{}", user.username, self.state.local_domain());
-        self.state.disconnect_account(user.id, &account).await;
+        let account = format!("{}@{}", user.username, self.host.local_domain());
+        self.host.disconnect_account(user.id, &account).await;
         Ok(Action::SendManyAndClose(vec![iq_result(id, "")]))
     }
 
@@ -459,7 +459,7 @@ impl ProtocolSession {
         // boundary atomically. New enable/resume attempts serialize after the
         // user lock and then fail the disabled/generation checks.
         match self
-            .state
+            .host
             .account_service()
             .quiesce_for_deletion(DeletionQuiesceRequest {
                 subject: &subject,
@@ -479,7 +479,7 @@ impl ProtocolSession {
                 )));
             }
             Ok(DeletionQuiesceOutcome::AbuseDenied(requirement)) => {
-                self.state.account_abuse_telemetry().rate_limited();
+                self.host.account_abuse_telemetry().rate_limited();
                 return Ok(Action::Send(iq_registration_abuse_error(
                     id,
                     &requirement,
@@ -488,14 +488,14 @@ impl ProtocolSession {
             }
             Err(error) => {
                 tracing::error!(?error, user_id = %user.id, "XEP-0077 guarded account quiesce failed");
-                self.state.account_abuse_telemetry().backend_failed();
+                self.host.account_abuse_telemetry().backend_failed();
                 return Ok(Action::Send(iq_registration_error(
                     id,
                     "internal-server-error",
                 )));
             }
         }
-        match crate::state::account_recovery::finalize(&self.state, user.id, &user.username).await {
+        match crate::state::account_recovery::finalize(&self.host, user.id, &user.username).await {
             Ok(crate::state::account_recovery::FinalizeAccountDeletion::Deleted) => {}
             Ok(crate::state::account_recovery::FinalizeAccountDeletion::Missing) => {
                 return Ok(Action::Send(iq_registration_error(
@@ -590,7 +590,7 @@ impl ProtocolSession {
         let jid = format!(
             "{}@{}/{}",
             user.username,
-            self.state.local_domain(),
+            self.host.local_domain(),
             resource
         );
         let key = match northstar_xmpp_types::jid::canonical_session_key(&jid) {
@@ -609,12 +609,12 @@ impl ProtocolSession {
         // count only this process's resources.
         match self
             .live_session_ownership
-            .attempt(self.state.sm_service().reserve_binding(
+            .attempt(self.host.sm_service().reserve_binding(
                 self.connection_id,
                 user.id,
                 user.auth_generation,
                 &key,
-                self.state.capacity_session_lease_seconds(),
+                self.host.capacity_session_lease_seconds(),
             ))
             .await?
         {
@@ -626,12 +626,12 @@ impl ProtocolSession {
                 return Ok(Err(ResourceBindingFailure::Conflict));
             }
             BindingReservationOutcome::CapacityExhausted => {
-                self.state.session_bind_telemetry().capacity_rejected();
+                self.host.session_bind_telemetry().capacity_rejected();
                 return Ok(Err(ResourceBindingFailure::CapacityExhausted));
             }
         }
         let available = Arc::new(AtomicBool::new(false));
-        let locally_reserved = self.state.try_stage_bound_session(
+        let locally_reserved = self.host.try_stage_bound_session(
             key.clone(),
             northstar_stream::local_routes::session::OnlineSession {
                 user_id: user.id,
@@ -679,7 +679,7 @@ impl ProtocolSession {
         );
         // Release the entry guard before touching PostgreSQL on a collision.
         if !locally_reserved {
-            self.state
+            self.host
                 .sm_service()
                 .release_live_session(self.connection_id)
                 .await?;
@@ -688,18 +688,18 @@ impl ProtocolSession {
         self.registered_key = Some(key.clone());
         self.full_jid = Some(jid.clone());
         self.available = Some(available);
-        self.state.session_bind_telemetry().staged_route_installed();
+        self.host.session_bind_telemetry().staged_route_installed();
 
         match self
-            .state
+            .host
             .claim_staged_binding_route(&key, self.connection_id)
             .await
         {
             Ok(true) => {}
             Ok(false) => {
-                self.state
+                self.host
                     .remove_session_if_connection(&key, self.connection_id);
-                self.state
+                self.host
                     .sm_service()
                     .release_live_session(self.connection_id)
                     .await?;
@@ -709,10 +709,10 @@ impl ProtocolSession {
                 return Ok(Err(ResourceBindingFailure::Conflict));
             }
             Err(error) => {
-                self.state
+                self.host
                     .remove_session_if_connection(&key, self.connection_id);
                 if let Err(release_error) = self
-                    .state
+                    .host
                     .sm_service()
                     .release_live_session(self.connection_id)
                     .await
@@ -738,7 +738,7 @@ impl ProtocolSession {
             northstar_auth_application::authentication::publication::CredentialKind::Binding,
         )?;
         let finalized = self
-            .state
+            .host
             .finalize_resource_binding(
                 self.connection_id,
                 user.id,
@@ -752,14 +752,14 @@ impl ProtocolSession {
         let mut receipt = match finalized {
             Ok(BindingFinalizationOutcome::Committed { receipt }) => receipt,
             Ok(BindingFinalizationOutcome::CredentialsExpired) => {
-                self.state
+                self.host
                     .remove_session_if_connection(&key, self.connection_id);
                 let _ = self
-                    .state
+                    .host
                     .release_staged_binding_route(&key, self.connection_id)
                     .await;
                 let _ = self
-                    .state
+                    .host
                     .sm_service()
                     .release_live_session(self.connection_id)
                     .await;
@@ -769,10 +769,10 @@ impl ProtocolSession {
                 return Ok(Err(ResourceBindingFailure::CredentialsExpired));
             }
             Ok(BindingFinalizationOutcome::ReservationLost) => {
-                self.state
+                self.host
                     .remove_session_if_connection(&key, self.connection_id);
                 let _ = self
-                    .state
+                    .host
                     .release_staged_binding_route(&key, self.connection_id)
                     .await;
                 self.registered_key = None;
@@ -781,14 +781,14 @@ impl ProtocolSession {
                 return Ok(Err(ResourceBindingFailure::Conflict));
             }
             Err(error) => {
-                self.state
+                self.host
                     .remove_session_if_connection(&key, self.connection_id);
                 let _ = self
-                    .state
+                    .host
                     .release_staged_binding_route(&key, self.connection_id)
                     .await;
                 let _ = self
-                    .state
+                    .host
                     .sm_service()
                     .release_live_session(self.connection_id)
                     .await;
@@ -800,7 +800,7 @@ impl ProtocolSession {
         };
         let issued_fast = receipt.take_issued_fast();
         self.retain_credential_commit(receipt, credential_attempt)?;
-        let route_is_current = self.state.staged_session_is_current(
+        let route_is_current = self.host.staged_session_is_current(
             &key,
             self.connection_id,
             user.id,
@@ -808,17 +808,17 @@ impl ProtocolSession {
             &self.route_lifecycle,
         );
         if !route_is_current {
-            self.state
+            self.host
                 .remove_session_if_connection(&key, self.connection_id);
             let _ = self
-                .state
+                .host
                 .release_staged_binding_route(&key, self.connection_id)
                 .await;
             self.registered_key = None;
             self.full_jid = None;
             self.available = None;
             let _ = self
-                .state
+                .host
                 .sm_service()
                 .release_live_session(self.connection_id)
                 .await;
@@ -861,14 +861,14 @@ impl ProtocolSession {
             northstar_xmpp_types::jid::canonicalize(to).is_ok_and(|to| {
                 to.as_str() == full_jid
                     || to.as_str() == own_bare
-                    || to.as_str() == self.state.local_domain()
+                    || to.as_str() == self.host.local_domain()
             })
         });
         if !valid_from || !valid_to {
             return Ok(addressed_error("not-allowed"));
         }
         if !self
-            .state
+            .host
             .set_local_carbons_for_connection(full_jid, self.connection_id, enabled)
         {
             // Never acknowledge a session-local capability unless the exact
@@ -901,7 +901,7 @@ impl ProtocolSession {
         let Some(user) = &self.authenticated else {
             return Ok(Action::Send(stanza_error(iq, "auth", "not-authorized")));
         };
-        let own_bare = format!("{}@{}", user.username, self.state.local_domain());
+        let own_bare = format!("{}@{}", user.username, self.host.local_domain());
         if !northstar_xep_0357::iq_targets_own_account(iq, &own_bare) {
             return Ok(Action::Send(stanza_error(iq, "cancel", "not-allowed")));
         }
@@ -919,7 +919,7 @@ impl ProtocolSession {
         let service_jid = request.service_jid().to_string();
         let node = request.node_str().to_owned();
         match self
-            .state
+            .host
             .push_service()
             .enable(user.id, &service_jid, &node, options)
             .await?
@@ -931,7 +931,7 @@ impl ProtocolSession {
                 "resource-constraint",
             ))),
             PushEnableOutcome::RateLimited => {
-                self.state.push_subscription_telemetry().rate_limited();
+                self.host.push_subscription_telemetry().rate_limited();
                 Ok(Action::Send(stanza_error(
                     iq,
                     "wait",
@@ -950,7 +950,7 @@ impl ProtocolSession {
         let Some(user) = &self.authenticated else {
             return Ok(Action::Send(stanza_error(iq, "auth", "not-authorized")));
         };
-        let own_bare = format!("{}@{}", user.username, self.state.local_domain());
+        let own_bare = format!("{}@{}", user.username, self.host.local_domain());
         if !northstar_xep_0357::iq_targets_own_account(iq, &own_bare) {
             return Ok(Action::Send(stanza_error(iq, "cancel", "not-allowed")));
         }
@@ -966,7 +966,7 @@ impl ProtocolSession {
         };
         let service_jid = request.service_jid.to_string();
         let node = request.node.map(northstar_xep_0357::PushNode::into_inner);
-        self.state
+        self.host
             .push_service()
             .disable(user.id, &service_jid, node.as_deref())
             .await?;
@@ -982,7 +982,7 @@ impl ProtocolSession {
         let Some(from) = root.attribute("from").or(self.full_jid.as_deref()) else {
             return Ok(false);
         };
-        handle_push_delivery_response(&self.state, id, kind, from).await
+        handle_push_delivery_response(&self.host, id, kind, from).await
     }
 
     pub(crate) async fn push_disable_message(
@@ -991,7 +991,7 @@ impl ProtocolSession {
         from: &str,
         to: &str,
     ) -> Result<bool> {
-        handle_push_disable(&self.state, root, from, to).await
+        handle_push_disable(&self.host, root, from, to).await
     }
 }
 

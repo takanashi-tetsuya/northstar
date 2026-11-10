@@ -33,7 +33,7 @@ fn map_pubsub_capacity_result(id: &str, result: Result<Action>) -> Result<Action
 
 impl ProtocolSession {
     pub async fn handle(&mut self, xml: &str) -> Result<Action> {
-        self.state.inbound_stanza_telemetry().received();
+        self.host.inbound_stanza_telemetry().received();
         self.enter_frame_stage(Stage::Validation);
         // External recovery wakes share this supervisor. Keep their replay
         // task pending until the current stanza's transport action completes.
@@ -150,7 +150,7 @@ impl ProtocolSession {
             return Ok(Action::CloseWith(stream_error("unexpected-request")));
         }
         if root.tag_name().namespace() == Some(northstar_xep_0198::NAMESPACE) {
-            if !self.state.xmpp_route_enabled(
+            if !self.host.xmpp_route_enabled(
                 northstar_xep_core::StanzaKind::Stream,
                 northstar_xep_0198::NAMESPACE,
                 root.tag_name().name(),
@@ -168,7 +168,7 @@ impl ProtocolSession {
                 Ok(indication) => indication,
                 Err(_) => return Ok(Action::CloseWith(stream_error("bad-format"))),
             };
-            if !self.state.xmpp_route_enabled(
+            if !self.host.xmpp_route_enabled(
                 northstar_xep_core::StanzaKind::Stream,
                 northstar_xep_0352::NAMESPACE,
                 indication.local_name(),
@@ -355,9 +355,9 @@ impl ProtocolSession {
             let target = northstar_xmpp_types::jid::CanonicalJid::parse(to)
                 .expect("validated client stanza target must be canonicalizable");
             let target_domain = target.domainpart();
-            let owner = format!("{}@{}", user.username, self.state.local_domain());
+            let owner = format!("{}@{}", user.username, self.host.local_domain());
             if self
-                .state
+                .host
                 .presence_service()
                 .is_blocked_for_account(user.id, &owner, to)
                 .await?
@@ -374,7 +374,7 @@ impl ProtocolSession {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone();
             if self
-                .state
+                .host
                 .privacy_service()
                 .denies(
                     user.id,
@@ -390,17 +390,17 @@ impl ProtocolSession {
                     Ok(Action::None)
                 };
             }
-            if target_domain == self.state.local_domain() && target.localpart().is_some() {
+            if target_domain == self.host.local_domain() && target.localpart().is_some() {
                 if let Some(recipient) = self
-                    .state
+                    .host
                     .presence_service()
                     .find_enabled_user(target.localpart().unwrap_or_default())
                     .await?
                 {
                     let recipient_bare =
-                        format!("{}@{}", recipient.username, self.state.local_domain());
+                        format!("{}@{}", recipient.username, self.host.local_domain());
                     if self
-                        .state
+                        .host
                         .presence_service()
                         .is_blocked_for_account(recipient.id, &recipient_bare, from)
                         .await?
@@ -435,17 +435,15 @@ impl ProtocolSession {
         }
         let muc_domain = self.muc_domain();
         let upload_domain = self.upload_domain();
-        let caps_disco_get = self
-            .state
-            .xmpp_extension_enabled(northstar_xep_0115::XEP_ID)
-            && is_caps_disco_get(root);
+        let caps_disco_get =
+            self.host.xmpp_extension_enabled(northstar_xep_0115::XEP_ID) && is_caps_disco_get(root);
         if let Some(to) = root.attribute("to") {
             if let Ok(target_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(to) {
                 let domain = target_jid.domainpart();
-                if domain == self.state.local_domain()
+                if domain == self.host.local_domain()
                     && target_jid.localpart().is_some()
                     && self
-                        .state
+                        .host
                         .presence_service()
                         .find_enabled_user(target_jid.localpart().unwrap_or_default())
                         .await?
@@ -465,7 +463,7 @@ impl ProtocolSession {
                         Ok(Action::None)
                     };
                 }
-                if domain == self.state.local_domain() && target_jid.resourcepart().is_some() {
+                if domain == self.host.local_domain() && target_jid.resourcepart().is_some() {
                     // RFC 6121 section 8.5.3.1 applies this presence-leak
                     // protection to every IQ get/set addressed to an exact
                     // full JID, not only to capability discovery.  The same
@@ -481,7 +479,7 @@ impl ProtocolSession {
                             )));
                         };
                         let Some(target_user) = self
-                            .state
+                            .host
                             .presence_service()
                             .find_enabled_user(target_name)
                             .await?
@@ -497,9 +495,9 @@ impl ProtocolSession {
                             northstar_xmpp_types::jid::canonical_bare_key(requester)
                                 .expect("authenticated full JIDs are canonical");
                         let same_account = requester_bare
-                            == format!("{}@{}", target_user.username, self.state.local_domain());
+                            == format!("{}@{}", target_user.username, self.host.local_domain());
                         let subscribed = self
-                            .state
+                            .host
                             .presence_service()
                             .roster_subscription(target_user.id, &requester_bare)
                             .await?
@@ -507,7 +505,7 @@ impl ProtocolSession {
                                 matches!(subscription.as_str(), "from" | "both")
                             });
                         let directed =
-                            self.state
+                            self.host
                                 .session_entries_for(to)
                                 .into_iter()
                                 .any(|(_, session)| {
@@ -534,9 +532,9 @@ impl ProtocolSession {
                     // result/error (and section 8.3.1 independently forbids
                     // an error loop). Check this before a server-side
                     // XEP-0115 cache can answer for a stale resource.
-                    let local_resource_matches = !self.state.session_entries_for(to).is_empty();
+                    let local_resource_matches = !self.host.session_entries_for(to).is_empty();
                     let remote_resource_matches =
-                        self.state.personal_message_remote_resource_exists(to).await;
+                        self.host.personal_message_remote_resource_exists(to).await;
                     if !local_resource_matches && !remote_resource_matches {
                         return if missing_full_jid_iq_needs_error(kind) {
                             Ok(Action::Send(stanza_error(
@@ -550,7 +548,7 @@ impl ProtocolSession {
                     }
                     if caps_disco_get {
                         if let Some(result) = super::caps::cached_disco_result(
-                            &self.state,
+                            &self.host,
                             id,
                             to,
                             child.and_then(|child| child.attribute("node")),
@@ -560,11 +558,11 @@ impl ProtocolSession {
                     }
                     let from = self.full_jid.as_deref().unwrap_or("");
                     let rewritten = set_from(raw, from);
-                    let targets = self.state.session_entries_for(to);
+                    let targets = self.host.session_entries_for(to);
                     let mut delivered = false;
                     for (_, target) in targets {
                         if self
-                            .state
+                            .host
                             .privacy_allows_session(&target, from, PrivacyStanzaKind::Iq)
                             .await?
                             && target.sender.try_send(rewritten.clone()).is_ok()
@@ -575,7 +573,7 @@ impl ProtocolSession {
                     }
                     if !delivered {
                         delivered = self
-                            .state
+                            .host
                             .route_client_iq_to_remote_resource(to, &rewritten)
                             .await;
                     }
@@ -601,7 +599,7 @@ impl ProtocolSession {
                     });
                     let is_ping = if kind == "get" {
                         if let Some(ping_child) = ping_child {
-                            if !self.state.xmpp_route_enabled(
+                            if !self.host.xmpp_route_enabled(
                                 northstar_xep_core::StanzaKind::IqGet,
                                 northstar_xep_0199::NAMESPACE,
                                 "ping",
@@ -627,9 +625,7 @@ impl ProtocolSession {
                         let full_jid = self.full_jid.as_deref().unwrap_or_default();
                         return Ok(Action::Send(set_to(&iq_result_from(id, to, ""), full_jid)));
                     }
-                    let Some(target) = self
-                        .state
-                        .local_muc_occupant_by_nick(&room_jid, target_nick)
+                    let Some(target) = self.host.local_muc_occupant_by_nick(&room_jid, target_nick)
                     else {
                         if kind == "get" || kind == "set" {
                             return Ok(Action::Send(iq_error(id, "item-not-found")));
@@ -657,7 +653,7 @@ impl ProtocolSession {
                         blocking_candidates.push(full_jid.to_owned());
                     }
                     let blocked = self
-                        .state
+                        .host
                         .blocked_muc_recipient_accounts(
                             std::slice::from_ref(&target),
                             &blocking_candidates,
@@ -677,7 +673,7 @@ impl ProtocolSession {
                         &target.full_jid,
                     );
                     tracing::debug!(room=%room_jid, from=%own_nick, to=%target.full_jid, "MUC routing IQ");
-                    let _ = self.state.deliver_to_muc_occupant(&target, rewritten).await;
+                    let _ = self.host.deliver_to_muc_occupant(&target, rewritten).await;
                     return Ok(Action::None);
                 }
             }
@@ -686,7 +682,7 @@ impl ProtocolSession {
         let remote_iq_domain = root.attribute("to").and_then(|to| {
             let target = northstar_xmpp_types::jid::CanonicalJid::parse(to).ok()?;
             let domain = target.domainpart();
-            (domain != self.state.local_domain()
+            (domain != self.host.local_domain()
                 && domain != muc_domain
                 && domain != upload_domain
                 && domain != self.pubsub_domain()
@@ -697,11 +693,11 @@ impl ProtocolSession {
             let Some(from) = self.full_jid.as_deref() else {
                 return Ok(Action::Send(iq_error(id, "not-authorized")));
             };
-            if !self.state.xmpp_external_route_domain_allowed(domain) {
+            if !self.host.xmpp_external_route_domain_allowed(domain) {
                 return Ok(Action::Send(iq_error(id, "remote-server-not-found")));
             }
             if !self
-                .state
+                .host
                 .federation_outbox()
                 .send(domain, set_from(raw, from), Some(from.to_owned()))
                 .await
@@ -733,7 +729,7 @@ impl ProtocolSession {
             } else {
                 northstar_xep_core::StanzaKind::IqSet
             };
-            if !self.state.xmpp_route_enabled(stanza, ns, "pubsub") {
+            if !self.host.xmpp_route_enabled(stanza, ns, "pubsub") {
                 return Ok(Action::Send(iq_error(id, "feature-not-implemented")));
             }
         }
@@ -751,9 +747,7 @@ impl ProtocolSession {
         ) || (targets_local_muc && ns == "jabber:iq:register");
         if targets_local_muc
             && is_muc_operation
-            && !self
-                .state
-                .xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
+            && !self.host.xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
         {
             return Ok(Action::Send(iq_error_from(
                 id,

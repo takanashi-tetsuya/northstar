@@ -54,15 +54,15 @@ impl ProtocolSession {
     }
 
     pub(crate) fn local_domain(&self) -> &str {
-        self.state.local_domain()
+        self.host.local_domain()
     }
 
     pub(crate) fn record_bosh_session_closed(&self) {
-        self.state.record_bosh_session_closed();
+        self.host.record_bosh_session_closed();
     }
 
     pub(crate) fn record_backpressure_disconnect(&self) {
-        self.state.record_c2s_backpressure_disconnect();
+        self.host.record_c2s_backpressure_disconnect();
     }
 
     pub(crate) fn activate_tls(&mut self, evidence: TlsSessionEvidence) {
@@ -98,7 +98,7 @@ impl ProtocolSession {
         unauthenticated_timed_out_for(
             self.is_authenticated(),
             self.connected_at,
-            self.state.unauthenticated_timeout(),
+            self.host.unauthenticated_timeout(),
             now,
         )
     }
@@ -117,7 +117,7 @@ impl ProtocolSession {
     ) -> Self {
         let sm_runtime_policy = SmRuntimePolicy::from_state(&state);
         Self {
-            state,
+            host: state,
             sm_runtime_policy,
             outbound,
             secure_transport,
@@ -177,7 +177,7 @@ impl ProtocolSession {
             self.authenticated.is_some(),
             self.full_jid.is_some(),
             self.authenticated_at,
-            self.state.c2s_resource_bind_timeout_seconds(),
+            self.host.c2s_resource_bind_timeout_seconds(),
         )
     }
 
@@ -185,11 +185,11 @@ impl ProtocolSession {
         let to = self
             .negotiation
             .stream_from()
-            .map(|username| format!("{}@{}", username, self.state.local_domain()));
+            .map(|username| format!("{}@{}", username, self.host.local_domain()));
         if self.uses_websocket_framing() {
             let _ = self.outbound.try_send(self.features());
             XmlElement::namespaced("open", "urn:ietf:params:xml:ns:xmpp-framing")
-                .attr("from", self.state.local_domain())
+                .attr("from", self.host.local_domain())
                 .optional_attr("to", to.as_deref())
                 .attr("id", stream_id())
                 .attr("version", "1.0")
@@ -197,7 +197,7 @@ impl ProtocolSession {
                 .finish()
         } else {
             let mut opening = XmlElement::new("stream:stream")
-                .attr("from", self.state.local_domain())
+                .attr("from", self.host.local_domain())
                 .optional_attr("to", to.as_deref())
                 .attr("id", stream_id())
                 .attr("version", "1.0")
@@ -225,17 +225,10 @@ impl ProtocolSession {
                 );
             }
             features.push_child(XmlElement::namespaced("ver", "urn:xmpp:features:rosterver"));
-            if !self.sm.enabled
-                && self
-                    .state
-                    .xmpp_extension_enabled(northstar_xep_0198::XEP_ID)
-            {
+            if !self.sm.enabled && self.host.xmpp_extension_enabled(northstar_xep_0198::XEP_ID) {
                 features.push_child(XmlElement::namespaced("sm", northstar_xep_0198::NAMESPACE));
             }
-            if self
-                .state
-                .xmpp_extension_enabled(northstar_xep_0352::XEP_ID)
-            {
+            if self.host.xmpp_extension_enabled(northstar_xep_0352::XEP_ID) {
                 features.push_child(XmlElement::namespaced("csi", northstar_xep_0352::NAMESPACE));
             }
             push_generated_feature(&mut features, &limits, "stream limits");
@@ -250,7 +243,7 @@ impl ProtocolSession {
                 .finish();
         }
         let mut register = String::new();
-        if !self.state.registration_is_closed() {
+        if !self.host.registration_is_closed() {
             // XEP-0077 explicitly supports required extension fields through
             // XEP-0004 data forms, including an invitation token. Legacy
             // element-only submissions remain accepted only when they satisfy
@@ -274,7 +267,7 @@ impl ProtocolSession {
             mechanisms.push_child(XmlElement::new("mechanism").text("SCRAM-SHA-256-PLUS"));
         }
         mechanisms.push_child(XmlElement::new("mechanism").text("SCRAM-SHA-256"));
-        if self.state.c2s_scram_sha1_enabled() {
+        if self.host.c2s_scram_sha1_enabled() {
             if self.channel_bindings.is_some() {
                 mechanisms.push_child(XmlElement::new("mechanism").text("SCRAM-SHA-1-PLUS"));
             }

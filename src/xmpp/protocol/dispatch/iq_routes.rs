@@ -65,7 +65,7 @@ impl RootIqRoute {
                     IqKind::Set => northstar_xep_core::StanzaKind::IqSet,
                 };
                 if session
-                    .state
+                    .host
                     .xmpp_route_enabled(stanza_kind, namespace, element)
                 {
                     Admission::Handle
@@ -79,7 +79,7 @@ impl RootIqRoute {
                     IqKind::Set => northstar_xep_core::StanzaKind::IqSet,
                 };
                 if session
-                    .state
+                    .host
                     .xmpp_route_enabled(stanza_kind, namespace, element)
                 {
                     Admission::Handle
@@ -650,11 +650,11 @@ fn version<'a>(
             return Ok(Action::Send(iq_error(request.id, "bad-request")));
         }
         let os = session
-            .state
+            .host
             .xmpp_version_includes_os()
             .then_some(xmpp_version_os());
         match northstar_xep_0092::build_response_from_parts(
-            session.state.server_name(),
+            session.host.server_name(),
             env!("CARGO_PKG_VERSION"),
             os,
         ) {

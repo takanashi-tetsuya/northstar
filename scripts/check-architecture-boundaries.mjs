@@ -1995,8 +1995,8 @@ if (/AuthenticationResult\s*<\s*(?:crate::)?(?:db|northstar_auth_postgres::users
 }
 const legacyAuthProtocolSource = readRoleSplitFile('src/xmpp/protocol.rs', { root });
 const protocolSessionBody = structBody(legacyAuthProtocolSource, 'pub struct ProtocolSession');
-if (!/^\s*state\s*:\s*Arc<AppState>\s*,?\s*$/m.test(protocolSessionBody)) {
-  throw new Error('ProtocolSession must keep AppState private to its protocol implementation');
+if (!/^\s*host\s*:\s*Arc<H>\s*,?\s*$/m.test(protocolSessionBody)) {
+  throw new Error('ProtocolSession must keep its host private to its protocol implementation');
 }
 const smRuntimePolicyBody = structBody(legacyAuthProtocolSource, 'struct SmRuntimePolicy');
 if (/\b(?:AppState|Arc)\b/.test(smRuntimePolicyBody)
@@ -2591,7 +2591,7 @@ const mucProductionSource = productionWithoutCfgTestModules(
   mucProtocolSource,
   'muc.rs production',
 );
-if (/\b(?:self\.)?state\s*\.\s*cluster\b/.test(mucProductionSource)) {
+if (/\b(?:self\.)?(?:state|host)\s*\.\s*cluster\b/.test(mucProductionSource)) {
   throw new Error('MUC protocol handlers must use purpose-specific state operations, not cluster authority');
 }
 const mucProductionDependencies = classifyDbDependencies(
@@ -2604,7 +2604,7 @@ if (mucProductionDependencies.authorityReferences !== 0) {
   );
 }
 for (const [description, pattern] of [
-  ['AppState pool access', /\b(?:self\.)?state\s*\.\s*pool\b/],
+  ['AppState pool access', /\b(?:self\.)?(?:state|host)\s*\.\s*pool\b/],
   ['a PostgreSQL pool type', /\b(?:sqlx\s*::\s*)?PgPool\b/],
   ['raw SQL execution', /\bsqlx\s*::/],
 ]) {
@@ -2667,7 +2667,7 @@ for (const signature of mucServiceSource.matchAll(
 
 const discoverySource = read('src/xmpp/protocol/discovery.rs');
 for (const [description, pattern] of [
-  ['AppState pool access', /\b(?:self\.)?state\s*\.\s*pool\b/],
+  ['AppState pool access', /\b(?:self\.)?(?:state|host)\s*\.\s*pool\b/],
   ['a PostgreSQL pool type', /\b(?:sqlx\s*::\s*)?PgPool\b/],
   ['raw SQL execution', /\bsqlx\s*::/],
 ]) {
@@ -2865,7 +2865,7 @@ if (retractionsProductionDependencies.authorityReferences !== 0) {
   );
 }
 for (const [description, pattern] of [
-  ['AppState pool access', /\b(?:self\.)?state\s*\.\s*pool\b/],
+  ['AppState pool access', /\b(?:self\.)?(?:state|host)\s*\.\s*pool\b/],
   ['a PostgreSQL pool type', /\b(?:sqlx\s*::\s*)?PgPool\b/],
   ['raw SQL execution', /\bsqlx\s*::/],
 ]) {
@@ -3691,7 +3691,7 @@ if (!uploadSource.includes('State(state): State<UploadHttpReadContext<R>>')
   throw new Error('public upload GET must retain shared download admission and guarded read authority');
 }
 const capsEffectSource = read('src/xmpp/protocol/caps.rs');
-if (/\bstate\.metrics\b|\bself\.state\.metrics\b|&(?:(?:northstar_telemetry::)?metrics::)?Metrics\b/.test(capsEffectSource)
+if (/\bstate\.metrics\b|\bself\.(?:state|host)\.metrics\b|&(?:(?:northstar_telemetry::)?metrics::)?Metrics\b/.test(capsEffectSource)
     || !capsEffectSource.includes('state.caps_effect_telemetry()')) {
   throw new Error('caps effect dispatch must receive only its admission and completion telemetry');
 }
@@ -3705,13 +3705,13 @@ if (!passkeyFinishSource.includes('State(state): State<PasskeyLoginFinishContext
 }
 const presenceProtocol = readProductionModule('src/xmpp/protocol/presence.rs', { root });
 const presenceClusterRouting = read('src/state/presence_cluster_routing.rs');
-if (/\bself\.state\s*\.metrics\b/.test(presenceProtocol)
+if (/\bself\.(?:state|host)\s*\.metrics\b/.test(presenceProtocol)
     || countMatches(presenceClusterRouting, /presence_probe_telemetry\(\)\.failed\(\)/g) !== 2) {
   throw new Error('cross-node presence replay failures must use their one-counter telemetry port');
 }
 // reads the whole module including test-only child files
 const mucProtocol = readModule('crates/contexts/room/northstar-muc-xmpp/src/muc.rs', { root });
-if (/\b(?:self\.)?state\s*\.metrics\b/.test(mucProtocol)
+if (/\b(?:self\.)?(?:state|host)\s*\.metrics\b/.test(mucProtocol)
     || !mucProtocol.includes('state.muc_telemetry().post_commit_failure()')) {
   throw new Error('MUC authority and post-commit reporting must use its narrow telemetry port');
 }
@@ -3920,18 +3920,18 @@ if (!read('crates/contexts/session/northstar-session-application/src/post_action
     || !read('crates/contexts/room/northstar-room-core/src/telemetry.rs').includes('struct FederatedMucTelemetry')
     || /\b(?:AppState|Metrics|PgPool|C2sRuntimePorts)\b/.test(c2sTelemetry)
     || !c2sProtocol.includes('c2s_post_action_telemetry()')
-    || /(?:self\.)?state\.metrics\.post_action_/.test(c2sProtocol)
-    || !/pub async fn handle\(&mut self, xml: &str\) -> Result<Action> \{\s*self\.state\.inbound_stanza_telemetry\(\)\.received\(\);/.test(c2sDispatch)
-    || /self\.state\.metrics\b/.test(c2sDispatch)
+    || /(?:self\.)?(?:state|host)\.metrics\.post_action_/.test(c2sProtocol)
+    || !/pub async fn handle\(&mut self, xml: &str\) -> Result<Action> \{\s*self\.host\.inbound_stanza_telemetry\(\)\.received\(\);/.test(c2sDispatch)
+    || /self\.(?:state|host)\.metrics\b/.test(c2sDispatch)
     || ['privacy.rs', 'blocking.rs', 'roster.rs'].some((name) =>
-      /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read(`src/xmpp/protocol/${name}`)))
-    || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/ibr.rs'))
-    || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/misc.rs'))
-    || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/sm.rs'))
-    || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(readProductionModule('src/xmpp/protocol/sasl2.rs', { root }))
-    || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(c2sProtocol)
-    || /(?:self\.)?state\.metrics\b/.test(readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs', { root }))
-    || /(?:self\.)?state\.metrics\b/.test(federatedMucSource)) {
+      /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read(`src/xmpp/protocol/${name}`)))
+    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/ibr.rs'))
+    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/misc.rs'))
+    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/sm.rs'))
+    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(readProductionModule('src/xmpp/protocol/sasl2.rs', { root }))
+    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(c2sProtocol)
+    || /(?:self\.)?(?:state|host)\.metrics\b/.test(readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs', { root }))
+    || /(?:self\.)?(?:state|host)\.metrics\b/.test(federatedMucSource)) {
   throw new Error('C2S post-action supervision must use narrow telemetry without broad state or registry authority');
 }
 const componentTransport = readProductionModule('crates/edges/northstar-s2s/src/components.rs', { root });

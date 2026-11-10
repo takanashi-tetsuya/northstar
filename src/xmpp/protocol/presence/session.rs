@@ -17,7 +17,7 @@ fn cluster_authority(
 
 impl northstar_roster_xmpp::presence::PresenceSession for ProtocolSession {
     fn presence_service(&self) -> &PresenceService<impl PresenceRepository> {
-        self.state.presence_service()
+        self.host.presence_service()
     }
 
     fn presence_is_available(&self) -> bool {
@@ -75,11 +75,11 @@ impl northstar_roster_xmpp::presence::PresenceSession for ProtocolSession {
     }
 
     fn presence_route_allowed(&self, domain: &str) -> bool {
-        self.state.xmpp_external_route_domain_allowed(domain)
+        self.host.xmpp_external_route_domain_allowed(domain)
     }
 
     fn presence_is_component_domain(&self, domain: &str) -> bool {
-        self.state.xmpp_component_domain_configured(domain)
+        self.host.xmpp_component_domain_configured(domain)
     }
 
     async fn presence_send_federated(
@@ -88,7 +88,7 @@ impl northstar_roster_xmpp::presence::PresenceSession for ProtocolSession {
         stanza: String,
         bounce_to: Option<String>,
     ) -> bool {
-        self.state
+        self.host
             .federation_outbox()
             .send(domain, stanza, bounce_to)
             .await
@@ -102,14 +102,14 @@ impl northstar_roster_xmpp::presence::PresenceSession for ProtocolSession {
         stanza: &str,
         bare_target: bool,
     ) -> Result<bool> {
-        let mut targets = self.state.session_entries_for(to);
+        let mut targets = self.host.session_entries_for(to);
         if bare_target {
             targets.retain(|(_, target)| target.available.load(Ordering::Relaxed));
         }
         let mut delivered = false;
         for (_, target) in targets {
             if self
-                .state
+                .host
                 .privacy_allows_session(&target, from, PrivacyStanzaKind::PresenceIn)
                 .await?
                 && target.sender.try_send(stanza.to_owned()).is_ok()
@@ -118,7 +118,7 @@ impl northstar_roster_xmpp::presence::PresenceSession for ProtocolSession {
             }
         }
         delivered |= self
-            .state
+            .host
             .route_directed_presence_remote(canonical_to, stanza, bare_target)
             .await;
         Ok(delivered)
@@ -132,7 +132,7 @@ impl northstar_roster_xmpp::presence::PresenceSession for ProtocolSession {
         recipient_bare: &str,
         stanza: &str,
     ) -> Result<()> {
-        let mut targets = self.state.session_entries_for(recipient_bare);
+        let mut targets = self.host.session_entries_for(recipient_bare);
         // RFC 6121 subscription-related presence is delivered to
         // available resources independently of roster interest.
         // `roster_requested` gates roster pushes only; using it here
@@ -145,14 +145,14 @@ impl northstar_roster_xmpp::presence::PresenceSession for ProtocolSession {
         });
         for (target_full, session) in targets {
             if self
-                .state
+                .host
                 .privacy_allows_session(&session, owner_bare, PrivacyStanzaKind::PresenceIn)
                 .await?
             {
                 let _ = session.sender.try_send(set_to(stanza, &target_full));
             }
         }
-        self.state
+        self.host
             .route_presence_subscription_remote(
                 recipient_bare,
                 stanza,
@@ -172,7 +172,7 @@ impl northstar_roster_xmpp::presence::PresenceSession for ProtocolSession {
     ) -> Result<()> {
         let current = self.full_jid.as_deref();
         for (jid, session) in self
-            .state
+            .host
             .session_entries_for(recipient_bare)
             .into_iter()
             .filter(|(_, session)| {
@@ -183,14 +183,14 @@ impl northstar_roster_xmpp::presence::PresenceSession for ProtocolSession {
         {
             if current != Some(jid.as_str())
                 && self
-                    .state
+                    .host
                     .privacy_allows_session(&session, owner_bare, PrivacyStanzaKind::PresenceIn)
                     .await?
             {
                 let _ = session.sender.try_send(approved.to_owned());
             }
         }
-        self.state
+        self.host
             .route_presence_subscription_remote(
                 recipient_bare,
                 approved,
@@ -207,33 +207,33 @@ impl northstar_roster_xmpp::presence::PresenceSession for ProtocolSession {
         stanza: &str,
     ) -> Result<()> {
         for (_, target) in self
-            .state
+            .host
             .session_entries_for(contact)
             .into_iter()
             .filter(|(_, target)| target.available.load(Ordering::Relaxed))
         {
             if self
-                .state
+                .host
                 .privacy_allows_session(&target, from, PrivacyStanzaKind::PresenceIn)
                 .await?
             {
                 let _ = target.sender.try_send(stanza.to_owned());
             }
         }
-        self.state
+        self.host
             .broadcast_available_presence_remote(contact, stanza)
             .await;
         Ok(())
     }
 
     async fn presence_echo_to_account(&self, account: &str, from: &str, stanza: &str) {
-        for (jid, target) in self.state.session_entries_for(account) {
+        for (jid, target) in self.host.session_entries_for(account) {
             if target.available.load(Ordering::Relaxed) || jid == from {
                 let _ = target.sender.try_send(set_to(stanza, &jid));
             }
         }
         let account_delivery = set_to(stanza, account);
-        self.state
+        self.host
             .broadcast_available_presence_remote(account, &account_delivery)
             .await;
     }
@@ -245,13 +245,13 @@ impl northstar_roster_xmpp::presence::PresenceSession for ProtocolSession {
         from: &str,
         stanza: &str,
     ) {
-        let mut recipients = self.state.session_entries_for(target);
+        let mut recipients = self.host.session_entries_for(target);
         if bare_target {
             recipients.retain(|(_, session)| session.available.load(Ordering::Relaxed));
         }
         for (_, recipient) in recipients {
             if self
-                .state
+                .host
                 .privacy_allows_session(&recipient, from, PrivacyStanzaKind::PresenceIn)
                 .await
                 .unwrap_or(false)
@@ -262,18 +262,18 @@ impl northstar_roster_xmpp::presence::PresenceSession for ProtocolSession {
     }
 
     fn presence_has_available_resource(&self, bare: &str) -> bool {
-        self.state
+        self.host
             .session_entries_for(bare)
             .into_iter()
             .any(|(_, session)| session.available.load(Ordering::Acquire))
     }
 
     async fn presence_probe_has_remote_owner(&self, bare: &str) -> Result<bool> {
-        self.state.presence_probe_has_remote_owner(bare).await
+        self.host.presence_probe_has_remote_owner(bare).await
     }
 
     fn presence_directed_recipient(&self, owner_full: &str, requester: &str) -> bool {
-        self.state
+        self.host
             .session_entries_for(owner_full)
             .into_iter()
             .any(|(_, owner)| {
@@ -318,12 +318,10 @@ impl northstar_roster_xmpp::presence::PresenceSession for ProtocolSession {
     }
 
     async fn presence_full_target_routed(&self, full_jid: &str) -> bool {
-        self.state
-            .subscription_full_target_has_route(full_jid)
-            .await
+        self.host.subscription_full_target_has_route(full_jid).await
     }
 
     async fn presence_notify_offline(&self, user_id: uuid::Uuid) -> Result<()> {
-        self.state.dispatch_push_notification(user_id).await
+        self.host.dispatch_push_notification(user_id).await
     }
 }

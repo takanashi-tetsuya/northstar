@@ -53,7 +53,7 @@ pub(crate) async fn node_metadata_form(state: &AppState, node: &PubSubNode) -> R
 
 impl ProtocolSession {
     pub(crate) fn pubsub_domain(&self) -> String {
-        northstar_pubsub_xmpp::pubsub::pubsub_domain(self.state.as_ref())
+        northstar_pubsub_xmpp::pubsub::pubsub_domain(self.host.as_ref())
     }
 
     pub(crate) async fn pubsub_iq_get(&self, id: &str, child: Node<'_, '_>) -> Result<Action> {
@@ -82,7 +82,7 @@ impl ProtocolSession {
         let Some(full_jid) = self.full_jid.as_deref() else {
             return Ok(Action::Send(iq_error_from(id, &service, "not-authorized")));
         };
-        let reply = match handle_request(&self.state, full_jid, kind, child).await {
+        let reply = match handle_request(&self.host, full_jid, kind, child).await {
             Ok(reply) => reply,
             Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
                 PubSubReply::Error("resource-constraint")
@@ -113,7 +113,7 @@ impl ProtocolSession {
         let Some(requester) = self.full_jid.as_deref() else {
             return Ok(true);
         };
-        handle_authorization_response(&self.state, requester, root).await?;
+        handle_authorization_response(&self.host, requester, root).await?;
         Ok(true)
     }
 
@@ -136,7 +136,7 @@ impl ProtocolSession {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         let connection_id = self.connection_id;
-        let state = self.state.clone();
+        let state = self.host.clone();
         let outbound = self.outbound.clone();
         let show = match self.show.load(std::sync::atomic::Ordering::Relaxed) {
             2 => "away",

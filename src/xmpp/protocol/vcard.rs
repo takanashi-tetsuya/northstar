@@ -28,7 +28,7 @@ impl ProtocolSession {
     }
 
     pub(crate) fn refresh_local_avatar_presence(&self, owner_bare: &str, hash: Option<&str>) {
-        for session in self.state.sessions_for(owner_bare) {
+        for session in self.host.sessions_for(owner_bare) {
             let mut last_presence = session
                 .last_presence
                 .write()
@@ -62,15 +62,15 @@ impl VCardSession for ProtocolSession {
     }
 
     fn vcard_local_domain(&self) -> &str {
-        self.state.local_domain()
+        self.host.local_domain()
     }
 
     fn vcard_pep_quotas(&self) -> PepQuotas {
-        self.state.pep_account_quotas()
+        self.host.pep_account_quotas()
     }
 
     fn vcard_profile_service(&self) -> &ProfileService<impl ProfileRepository> {
-        self.state.profile_service()
+        self.host.profile_service()
     }
 
     fn vcard_profile_audience_messages(
@@ -81,7 +81,7 @@ impl VCardSession for ProtocolSession {
         audience: &ProfileAudienceSnapshot,
     ) -> Result<Vec<(String, String)>> {
         northstar_pubsub_xmpp::pep::profile_audience_messages(
-            self.state.as_ref(),
+            self.host.as_ref(),
             publisher_full_jid,
             node,
             event,

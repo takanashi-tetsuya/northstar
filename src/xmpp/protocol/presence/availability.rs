@@ -16,11 +16,11 @@ impl ProtocolSession {
         // RFC 6121 section 4.3.2 requires a full-JID probe response to
         // communicate only the availability fact.  Replaying last_presence
         // here would leak show/status/priority and arbitrary extensions.
-        let requester_sessions = self.state.sessions_for(requester);
+        let requester_sessions = self.host.sessions_for(requester);
         let mut requester_allows = false;
         for requester_session in requester_sessions {
             if self
-                .state
+                .host
                 .privacy_allows_session(
                     &requester_session,
                     owner_full,
@@ -36,7 +36,7 @@ impl ProtocolSession {
             return Ok(());
         }
 
-        let owners = self.state.session_entries_for(owner_full);
+        let owners = self.host.session_entries_for(owner_full);
         let mut available = false;
         let mut available_but_private = false;
         let mut original_presence_id = None;
@@ -45,7 +45,7 @@ impl ProtocolSession {
                 continue;
             }
             if self
-                .state
+                .host
                 .privacy_allows_session(owner, requester, PrivacyStanzaKind::PresenceOut)
                 .await?
             {
@@ -82,12 +82,12 @@ impl ProtocolSession {
             .and_then(|jid| jid.localpart().map(str::to_owned));
         let authority = match (owner_identity, recipient_identity) {
             (Some(owner), Some(recipient)) => self
-                .state
+                .host
                 .presence_service()
                 .find_enabled_user(&owner)
                 .await?
                 .zip(
-                    self.state
+                    self.host
                         .presence_service()
                         .find_enabled_user(&recipient)
                         .await?,
@@ -103,7 +103,7 @@ impl ProtocolSession {
             _ => None,
         };
         let delegated = self
-            .state
+            .host
             .delegate_authorized_full_presence_probe_remote(owner_full, requester, authority)
             .await?;
         if !delegated {
@@ -161,8 +161,8 @@ impl ProtocolSession {
             .then(|| owner_jid.to_string());
         let resolved_owner = if expected_owner_id.is_none() {
             match owner_jid.localpart() {
-                Some(localpart) if owner_jid.domainpart() == self.state.local_domain() => self
-                    .state
+                Some(localpart) if owner_jid.domainpart() == self.host.local_domain() => self
+                    .host
                     .presence_service()
                     .find_enabled_user(localpart)
                     .await
@@ -181,8 +181,8 @@ impl ProtocolSession {
         };
         let resolved_recipient = if expected_recipient_id.is_none() {
             match recipient_jid.localpart() {
-                Some(localpart) if recipient_jid.domainpart() == self.state.local_domain() => self
-                    .state
+                Some(localpart) if recipient_jid.domainpart() == self.host.local_domain() => self
+                    .host
                     .presence_service()
                     .find_enabled_user(localpart)
                     .await
@@ -212,7 +212,7 @@ impl ProtocolSession {
             return;
         };
         let authoritative_avatar_hash = {
-            self.state
+            self.host
                 .presence_service()
                 .avatar_hash(expected_owner_id)
                 .await
@@ -222,7 +222,7 @@ impl ProtocolSession {
             return;
         };
         let recipients = self
-            .state
+            .host
             .sessions_for(&recipient)
             .into_iter()
             .filter(|session| {
@@ -234,7 +234,7 @@ impl ProtocolSession {
         // Iterate owned keys so a privacy database await never holds a DashMap
         // shard guard. Re-read each exact route after the await: a key may have
         // been rebound to a different connection in the meantime.
-        let owner_keys = self.state.local_presence_owner_keys();
+        let owner_keys = self.host.local_presence_owner_keys();
         for owner_key in owner_keys {
             if !owner_full.as_ref().map_or_else(
                 || {
@@ -245,7 +245,7 @@ impl ProtocolSession {
             ) {
                 continue;
             }
-            let Some(session) = self.state.local_presence_owner_candidate(
+            let Some(session) = self.host.local_presence_owner_candidate(
                 &owner_key,
                 expected_owner_id,
                 expected_owner_auth_generation,
@@ -253,14 +253,14 @@ impl ProtocolSession {
                 continue;
             };
             if !self
-                .state
+                .host
                 .privacy_allows_session(&session, &recipient, PrivacyStanzaKind::PresenceOut)
                 .await
                 .unwrap_or(false)
             {
                 continue;
             }
-            let Some(current_owner) = self.state.local_presence_owner_if_current(
+            let Some(current_owner) = self.host.local_presence_owner_if_current(
                 &owner_key,
                 &session,
                 expected_owner_id,
@@ -295,7 +295,7 @@ impl ProtocolSession {
                 });
             for recipient_session in &recipients {
                 if self
-                    .state
+                    .host
                     .privacy_allows_session(
                         recipient_session,
                         &owner_key,
@@ -304,7 +304,7 @@ impl ProtocolSession {
                     .await
                     .unwrap_or(false)
                 {
-                    self.state.send_presence_if_owner_current(
+                    self.host.send_presence_if_owner_current(
                         &owner_key,
                         &session,
                         expected_owner_id,
@@ -322,7 +322,7 @@ impl ProtocolSession {
             recipient_id: expected_recipient_id,
             recipient_auth_generation: expected_recipient_auth_generation,
         };
-        self.state
+        self.host
             .replay_current_presence_from_remote_owners(
                 owner_lookup,
                 &recipient,

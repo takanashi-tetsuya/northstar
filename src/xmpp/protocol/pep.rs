@@ -99,35 +99,35 @@ impl northstar_pubsub_xmpp::pep::PepSession for ProtocolSession {
     }
 
     fn pep_local_domain(&self) -> &str {
-        self.state.local_domain()
+        self.host.local_domain()
     }
 
     fn pep_quotas(&self) -> PepQuotas {
-        self.state.pep_account_quotas()
+        self.host.pep_account_quotas()
     }
 
     fn pep_pubsub_service(&self) -> &PubSubService<impl northstar_pubsub_xmpp::PubSubRepositories> {
-        self.state.pubsub_service()
+        self.host.pubsub_service()
     }
 
     fn pep_profile_service(&self) -> &ProfileService<impl ProfileRepository> {
-        self.state.profile_service()
+        self.host.profile_service()
     }
 
     fn pep_audience_routing(&self) -> &impl northstar_pubsub_xmpp::pep::PepAudienceRouting {
-        self.state.as_ref()
+        self.host.as_ref()
     }
 
     fn pep_record_published(&self, count: u64) {
-        self.state.pep_telemetry().published(count);
+        self.host.pep_telemetry().published(count);
     }
 
     fn pep_record_retracted(&self, count: u64) {
-        self.state.pep_telemetry().retracted(count);
+        self.host.pep_telemetry().retracted(count);
     }
 
     fn pep_record_retrieved(&self) {
-        self.state.pep_telemetry().retrieved();
+        self.host.pep_telemetry().retrieved();
     }
 
     fn pep_refresh_avatar_presence(&self, owner_bare: &str, hash: Option<&str>) {

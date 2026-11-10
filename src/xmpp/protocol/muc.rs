@@ -24,7 +24,7 @@ impl MucSession for ProtocolSession {
     type Host = AppState;
 
     fn host(&self) -> &AppState {
-        &self.state
+        &self.host
     }
 
     fn user(&self) -> Option<MucSessionUser<'_>> {

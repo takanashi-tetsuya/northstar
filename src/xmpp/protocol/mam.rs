@@ -82,7 +82,7 @@ impl northstar_archive_xmpp::MamSession for ProtocolSession {
     }
 
     fn mam_local_domain(&self) -> &str {
-        self.state.local_domain()
+        self.host.local_domain()
     }
 
     fn mam_muc_domain(&self) -> String {
@@ -98,7 +98,7 @@ impl northstar_archive_xmpp::MamSession for ProtocolSession {
     ) -> &MamService<
         impl MamQueryRepository<Error = anyhow::Error> + MamPreferencesWriter<Error = anyhow::Error>,
     > {
-        self.state.mam_service()
+        self.host.mam_service()
     }
 
     fn mam_room_stanza(&self, access: &MamRoomAccess, item: &ArchiveRow) -> String {

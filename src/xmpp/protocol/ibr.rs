@@ -47,7 +47,7 @@ impl ProtocolSession {
                 self.negotiation.mark_registration_completed();
                 Ok(Action::Send(ibr_success(
                     &username,
-                    self.state.local_domain(),
+                    self.host.local_domain(),
                 )))
             }
             IbrCompletion::Retry(challenge) => {
@@ -126,7 +126,7 @@ impl ProtocolSession {
             IbrCompletion::Created(username) => {
                 self.negotiation.mark_registration_completed();
                 let success_id = format!("ibr-success-{}", uuid::Uuid::new_v4());
-                let success_payload = ibr_success(&username, self.state.local_domain());
+                let success_payload = ibr_success(&username, self.host.local_domain());
                 let success = XmlElement::namespaced("iq", "jabber:client")
                     .attr("type", "set")
                     .attr("id", &success_id)
@@ -156,7 +156,7 @@ impl ProtocolSession {
         self.secure_transport
             && self.authenticated.is_none()
             && !self.negotiation.registration_completed()
-            && !self.state.registration_is_closed()
+            && !self.host.registration_is_closed()
     }
 
     fn ibr_challenge(
@@ -164,7 +164,7 @@ impl ProtocolSession {
         challenge: Option<&PowChallenge>,
         wait: Option<&WorkRequirement>,
     ) -> String {
-        let invitation = if self.state.registration_requires_invitation() {
+        let invitation = if self.host.registration_requires_invitation() {
             XmlElement::new("field")
                 .attr("var", "urn:northstar:invite:token")
                 .attr("type", "text-private")
@@ -294,7 +294,7 @@ impl ProtocolSession {
         let actors = vec![format!("ip:{}", self.peer_ip)];
         let subject = format!("registration:{}", self.peer_ip);
         let outcome = match self
-            .state
+            .host
             .account_service()
             .register(RegistrationRequest {
                 username: &submission.username,
@@ -310,22 +310,22 @@ impl ProtocolSession {
             Ok(outcome) => outcome,
             Err(error) => {
                 tracing::error!(?error, "XEP-0389 registration backend failed");
-                self.state.registration_telemetry().backend_failed();
+                self.host.registration_telemetry().backend_failed();
                 return IbrCompletion::Failed("internal-server-error");
             }
         };
         match outcome {
             RegistrationOutcome::Created(user) => {
-                self.state.registration_telemetry().registered();
+                self.host.registration_telemetry().registered();
                 IbrCompletion::Created(user.username)
             }
             RegistrationOutcome::AbuseDenied(requirement) => {
-                self.state.registration_telemetry().rate_limited();
+                self.host.registration_telemetry().rate_limited();
                 if !self.ibr_pow_enabled {
                     return IbrCompletion::Retry(self.ibr_challenge(None, Some(&requirement)));
                 }
                 match self
-                    .state
+                    .host
                     .challenge_issue_service()
                     .issue(
                         northstar_abuse_application::challenge::ChallengeIssueRequest {
@@ -342,7 +342,7 @@ impl ProtocolSession {
                     }
                     Err(error) => {
                         tracing::warn!(?error, "XEP-0389 v2 challenge issuance failed");
-                        self.state.registration_telemetry().backend_failed();
+                        self.host.registration_telemetry().backend_failed();
                         IbrCompletion::Failed("resource-constraint")
                     }
                 }
@@ -353,7 +353,7 @@ impl ProtocolSession {
             RegistrationOutcome::UsernameTaken => IbrCompletion::Failed("conflict"),
             RegistrationOutcome::RateLimited => IbrCompletion::Failed("resource-constraint"),
             RegistrationOutcome::CapacityExhausted => {
-                self.state.registration_telemetry().capacity_rejected();
+                self.host.registration_telemetry().capacity_rejected();
                 IbrCompletion::Failed("resource-constraint")
             }
             RegistrationOutcome::PasswordWorkOverloaded => {

@@ -120,10 +120,10 @@ for (const capability of [
 
 // Authentication timing spans mutable SASL2 session work, but it only needs
 // the histogram handle. A clone here would keep the entire AppState alive.
-if (/self\.state\.clone\(\)|Arc::clone\(&self\.state\)/.test(sasl2)) {
+if (/self\.host\.clone\(\)|Arc::clone\(&self\.host\)/.test(sasl2)) {
   throw new Error("SASL2 session work regained an owned AppState clone");
 }
-const sasl2Timers = sasl2.match(/self\.state\.sasl2_authentication_timer\(\)/g) ?? [];
+const sasl2Timers = sasl2.match(/self\.host\.sasl2_authentication_timer\(\)/g) ?? [];
 if (sasl2Timers.length !== 3) {
   throw new Error(`expected owned timers for SASL2 authenticate, response and abort; found ${sasl2Timers.length}`);
 }
@@ -136,7 +136,7 @@ for (const entry of [
   const item = findRustItem(sasl2, entry);
   requireMatch(
     item.text.slice(entry.length),
-    /^\s*\{\s*let _authentication_timer = self\.state\.sasl2_authentication_timer\(\);/,
+    /^\s*\{\s*let _authentication_timer = self\.host\.sasl2_authentication_timer\(\);/,
     `${entry} must start its owned timer before any early return`,
   );
 }

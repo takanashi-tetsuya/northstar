@@ -3,7 +3,7 @@
 use super::*;
 
 pub(crate) fn authentication_feature_xml(session: &ProtocolSession) -> String {
-    let fast_policy = session.state.sasl2_fast_token_policy();
+    let fast_policy = session.host.sasl2_fast_token_policy();
     let mut mechanism_names = Vec::with_capacity(6);
     if !session.client_certificate_identities.is_empty() {
         mechanism_names.push("EXTERNAL");
@@ -12,7 +12,7 @@ pub(crate) fn authentication_feature_xml(session: &ProtocolSession) -> String {
         mechanism_names.push("SCRAM-SHA-256-PLUS");
     }
     mechanism_names.push("SCRAM-SHA-256");
-    if session.state.c2s_scram_sha1_enabled() {
+    if session.host.c2s_scram_sha1_enabled() {
         if session.channel_bindings.is_some() {
             mechanism_names.push("SCRAM-SHA-1-PLUS");
         }
@@ -40,14 +40,14 @@ pub(crate) fn authentication_feature_xml(session: &ProtocolSession) -> String {
     let mut bind_inline = XmlElement::new("inline")
         .child(XmlElement::new("feature").attr("var", "urn:xmpp:carbons:2"));
     if session
-        .state
+        .host
         .xmpp_extension_enabled(northstar_xep_0352::XEP_ID)
     {
         bind_inline
             .push_child(XmlElement::new("feature").attr("var", northstar_xep_0352::NAMESPACE));
     }
     if session
-        .state
+        .host
         .xmpp_extension_enabled(northstar_xep_0198::XEP_ID)
     {
         bind_inline
@@ -55,7 +55,7 @@ pub(crate) fn authentication_feature_xml(session: &ProtocolSession) -> String {
     }
     let mut inline = XmlElement::new("inline");
     if session
-        .state
+        .host
         .xmpp_extension_enabled(northstar_xep_0198::XEP_ID)
     {
         inline.push_child(XmlElement::namespaced("sm", northstar_xep_0198::NAMESPACE));
@@ -127,7 +127,7 @@ impl ProtocolSession {
             },
         };
         let verified = self
-            .state
+            .host
             .authentication_service()
             .authenticate_fast(
                 northstar_auth_application::authentication::FastProofRequest {
@@ -138,7 +138,7 @@ impl ProtocolSession {
                     initiator_proof: &decoded[separator + 1..],
                     channel_binding,
                     invalidate: fast.invalidate,
-                    rotate_within_days: self.state.sasl2_fast_token_policy().rotation_days,
+                    rotate_within_days: self.host.sasl2_fast_token_policy().rotation_days,
                 },
             )
             .await;
@@ -181,7 +181,7 @@ impl ProtocolSession {
                 ));
             }
             northstar_auth_application::authentication::AuthenticationResult::IntegrityFailure => {
-                self.state
+                self.host
                     .sasl2_authentication_telemetry()
                     .integrity_failed();
                 tracing::error!(
@@ -214,7 +214,7 @@ impl ProtocolSession {
         &self,
         context: &Sasl2Context,
     ) -> northstar_auth_application::authentication::FastCommitPlan {
-        let fast_policy = self.state.sasl2_fast_token_policy();
+        let fast_policy = self.host.sasl2_fast_token_policy();
         let mechanism = if context.fast_should_rotate {
             context
                 .request
@@ -245,7 +245,7 @@ impl ProtocolSession {
     }
 
     pub(super) fn fast_mechanism_available(&self, mechanism: &str) -> bool {
-        if !self.state.sasl2_fast_token_policy().enabled {
+        if !self.host.sasl2_fast_token_policy().enabled {
             return false;
         }
         match mechanism {

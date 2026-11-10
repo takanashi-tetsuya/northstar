@@ -750,7 +750,7 @@ export function verifyAuthPublicationBoundaries(sources) {
   requireBoundary(sequence.includes('port.notification_deferred(&error);returnPublicationResult::CompletedWithDeferredNotification;') &&
     !/timeout|spawn|select!/.test(sequence), 'auth notification must stay visibly deferred without a new publication deadline');
   const adapter = body(protocol, "impl\\s+northstar_stream::auth_publication::PublicationPort\\s+for\\s+SessionAuthPublication<'_>");
-  requireBoundary(method(adapter, 'publish') === 'self.session.state.authentication_service().publish_credential_commit_observed(invocation).await',
+  requireBoundary(method(adapter, 'publish') === 'self.session.host.authentication_service().publish_credential_commit_observed(invocation).await',
     'auth production port must invoke the actual observed service');
   const mapping = method(adapter, 'epoch_and_mapping');
   requireBoundary(mapping.includes('self.session.registered_key.as_deref()!=Some(route.key.as_str())') &&
@@ -759,8 +759,8 @@ export function verifyAuthPublicationBoundaries(sources) {
     mapping.includes('publish_user_agent_epoch_if_current(&route.key,route.connection,route.user,route.generation,&route.lifecycle,epoch)') &&
     mapping.includes('ifcurrent{self.session.user_agent_epoch=epoch;}current'),
     'auth missing principal and changed route must reject with captured identity');
-  requireBoundary(method(adapter, 'activate') === 'self.session.state.activate_session_if_current(&route.key,route.connection,route.user,route.generation,&route.lifecycle,&route.disconnect)' &&
-    method(adapter, 'notify_remote') === 'self.session.state.notify_remote_user_agent_replacement(&intent.account,intent.user,intent.device,epoch).await' &&
+  requireBoundary(method(adapter, 'activate') === 'self.session.host.activate_session_if_current(&route.key,route.connection,route.user,route.generation,&route.lifecycle,&route.disconnect)' &&
+    method(adapter, 'notify_remote') === 'self.session.host.notify_remote_user_agent_replacement(&intent.account,intent.user,intent.device,epoch).await' &&
     method(adapter, 'rejected').endsWith('self.session.sm.resume_allowed=false;'),
     'auth adapter must preserve captured activation, notification and failure resume fence');
   const caps = method(authCaps, 'rebind_captured_caps_observation');

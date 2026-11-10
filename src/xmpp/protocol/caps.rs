@@ -505,7 +505,7 @@ impl ProtocolSession {
         }
 
         let _resource_epoch = Arc::clone(&intent.gate).lock_owned().await;
-        let route_is_current = self.state.local_caps_observer_connection_is_current(
+        let route_is_current = self.host.local_caps_observer_connection_is_current(
             full_jid,
             intent.connection,
             &intent.gate,
@@ -526,10 +526,7 @@ impl ProtocolSession {
         presence: Node<'_, '_>,
         full_jid: &str,
     ) -> northstar_room_core::mix::MixSessionCapability {
-        if !self
-            .state
-            .xmpp_extension_enabled(northstar_xep_0115::XEP_ID)
-        {
+        if !self.host.xmpp_extension_enabled(northstar_xep_0115::XEP_ID) {
             return northstar_room_core::mix::MixSessionCapability::Unknown;
         }
         let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(full_jid) else {
@@ -539,12 +536,12 @@ impl ProtocolSession {
             return northstar_room_core::mix::MixSessionCapability::Unknown;
         };
         let summary = self
-            .state
+            .host
             .caps_by_jid()
             .snapshot(&full_jid)
             .filter(|observation| observation.key.as_ref() == Some(&key))
             .and_then(|observation| observation.summary)
-            .or_else(|| self.state.caps_cache().query(&key, Instant::now()));
+            .or_else(|| self.host.caps_cache().query(&key, Instant::now()));
         let Some(summary) = summary else {
             return northstar_room_core::mix::MixSessionCapability::Unknown;
         };
@@ -576,38 +573,35 @@ impl ProtocolSession {
         gate: &Arc<tokio::sync::Mutex<()>>,
         generation: &std::sync::atomic::AtomicU64,
     ) {
-        if !self
-            .state
-            .xmpp_extension_enabled(northstar_xep_0115::XEP_ID)
-        {
+        if !self.host.xmpp_extension_enabled(northstar_xep_0115::XEP_ID) {
             return;
         }
         let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(full_jid) else {
             return;
         };
         let connection_is_current = self
-            .state
+            .host
             .local_caps_observer_connection_is_current(&full_jid, connection, gate);
         if !connection_is_current {
             return;
         }
         let epoch = allocate_local_caps_epoch(connection, generation);
         let _observation_fence = LocalCapsObservationFence {
-            state: &self.state,
+            state: &self.host,
             full_jid: &full_jid,
             epoch,
         };
         // Every presence is a latest-wins observation, including an available
         // stanza without `<c/>`. Retire only this connection's older state so
         // a late old actor cannot cancel a replacement's pending work.
-        self.state
+        self.host
             .pending_caps()
             .remove_local_resource(&full_jid, connection);
         if presence
             .attribute("type")
             .is_some_and(|kind| kind != "available")
         {
-            self.state
+            self.host
                 .caps_by_jid()
                 .remove_local_resource(&full_jid, connection);
             return;
@@ -616,11 +610,11 @@ impl ProtocolSession {
         let key = observed_caps_key(presence, &full_jid);
         let cached = key
             .as_ref()
-            .and_then(|key| self.state.caps_cache().query(key, now));
-        self.state
+            .and_then(|key| self.host.caps_cache().query(key, now));
+        self.host
             .caps_by_jid()
             .observe_local(full_jid.clone(), epoch, key, cached, now);
-        hint_caps_effects(&self.state, full_jid.clone());
+        hint_caps_effects(&self.host, full_jid.clone());
     }
 
     pub(crate) async fn handle_caps_response(
@@ -630,13 +624,13 @@ impl ProtocolSession {
         root: Node<'_, '_>,
         raw: &str,
     ) -> bool {
-        let Some(pending) = self.state.pending_caps().take(id) else {
+        let Some(pending) = self.host.pending_caps().take(id) else {
             return false;
         };
         let CapsObservationOwner::Local(epoch) = pending.owner else {
             // A C2S actor can never authorize a federated correlation. Put it
             // back only if it is still live; the S2S response path will own it.
-            let _ = self.state.pending_caps().insert(
+            let _ = self.host.pending_caps().insert(
                 id.to_owned(),
                 pending.full_jid,
                 pending.key,
@@ -649,12 +643,12 @@ impl ProtocolSession {
             .lock_owned()
             .await;
         if epoch.connection_id != self.connection_id
-            || !local_caps_epoch_is_current(&self.state, &pending.full_jid, epoch)
+            || !local_caps_epoch_is_current(&self.host, &pending.full_jid, epoch)
         {
             return true;
         }
         let _observation_fence = LocalCapsObservationFence {
-            state: &self.state,
+            state: &self.host,
             full_jid: &pending.full_jid,
             epoch,
         };
@@ -679,16 +673,16 @@ impl ProtocolSession {
                 "rearming entity capabilities after an invalid response envelope"
             );
             if self
-                .state
+                .host
                 .caps_by_jid()
                 .rearm_expired(id, &pending, Instant::now())
             {
-                hint_caps_effects(&self.state, pending.full_jid.clone());
+                hint_caps_effects(&self.host, pending.full_jid.clone());
             }
             return true;
         }
         if kind != "result" {
-            self.state.caps_by_jid().mark_invalid(
+            self.host.caps_by_jid().mark_invalid(
                 &pending.full_jid,
                 pending.owner,
                 &pending.key,
@@ -701,7 +695,7 @@ impl ProtocolSession {
                 && node.tag_name().name() == "query"
                 && node.tag_name().namespace() == Some(DISCO_INFO_NS)
         }) else {
-            self.state.caps_by_jid().mark_invalid(
+            self.host.caps_by_jid().mark_invalid(
                 &pending.full_jid,
                 pending.owner,
                 &pending.key,
@@ -712,7 +706,7 @@ impl ProtocolSession {
         let expected_node = format!("{}#{}", pending.key.node, pending.key.version);
         if query.attribute("node") != Some(expected_node.as_str()) {
             tracing::debug!(jid = %pending.full_jid, "discarded entity capabilities with a mismatched node");
-            self.state.caps_by_jid().mark_invalid(
+            self.host.caps_by_jid().mark_invalid(
                 &pending.full_jid,
                 pending.owner,
                 &pending.key,
@@ -725,7 +719,7 @@ impl ProtocolSession {
             return true;
         };
         if payload.len() > MAX_DISCO_PAYLOAD_BYTES {
-            self.state.caps_by_jid().mark_invalid(
+            self.host.caps_by_jid().mark_invalid(
                 &pending.full_jid,
                 pending.owner,
                 &pending.key,
@@ -735,7 +729,7 @@ impl ProtocolSession {
         }
         let Ok(verification) = verification_string(query) else {
             tracing::debug!(jid = %pending.full_jid, "discarded malformed entity capabilities");
-            self.state.caps_by_jid().mark_invalid(
+            self.host.caps_by_jid().mark_invalid(
                 &pending.full_jid,
                 pending.owner,
                 &pending.key,
@@ -745,7 +739,7 @@ impl ProtocolSession {
         };
         if !caps_hash_matches(&pending.key.algorithm, &verification, &pending.key.version) {
             tracing::warn!(jid = %pending.full_jid, "discarded entity capabilities whose hash did not verify");
-            self.state.caps_by_jid().mark_invalid(
+            self.host.caps_by_jid().mark_invalid(
                 &pending.full_jid,
                 pending.owner,
                 &pending.key,
@@ -754,7 +748,7 @@ impl ProtocolSession {
             return true;
         }
         let Ok(summary) = verified_caps_summary(query, payload) else {
-            self.state.caps_by_jid().mark_invalid(
+            self.host.caps_by_jid().mark_invalid(
                 &pending.full_jid,
                 pending.owner,
                 &pending.key,
@@ -763,7 +757,7 @@ impl ProtocolSession {
             return true;
         };
         let summary = Arc::new(summary);
-        self.state.caps_cache().insert(
+        self.host.caps_cache().insert(
             pending.key.clone(),
             payload.to_owned(),
             Arc::clone(&summary),
@@ -776,18 +770,18 @@ impl ProtocolSession {
             version = %pending.key.version,
             "cached verified entity capabilities"
         );
-        match self.state.caps_by_jid().mark_verified(
+        match self.host.caps_by_jid().mark_verified(
             &full_jid,
             pending.owner,
             &pending.key,
             id,
             summary,
         ) {
-            CapsVerificationCommit::Applied => hint_caps_effects(&self.state, full_jid),
+            CapsVerificationCommit::Applied => hint_caps_effects(&self.host, full_jid),
             CapsVerificationCommit::ResourceLimited => {
-                self.state.caps_effect_telemetry().failed(1);
+                self.host.caps_effect_telemetry().failed(1);
                 tracing::warn!(jid = %full_jid, "caps semantic memory budget exhausted; verification remains pending");
-                hint_caps_effects(&self.state, full_jid);
+                hint_caps_effects(&self.host, full_jid);
             }
             CapsVerificationCommit::Stale => {}
         }

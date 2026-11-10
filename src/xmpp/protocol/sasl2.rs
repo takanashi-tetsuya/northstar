@@ -30,7 +30,7 @@ fn complete_inbound_stream_opening_for_parser(xml: &str) -> String {
 
 impl ProtocolSession {
     pub(crate) async fn authenticate2(&mut self, root: Node<'_, '_>) -> Result<Action> {
-        let _authentication_timer = self.state.sasl2_authentication_timer();
+        let _authentication_timer = self.host.sasl2_authentication_timer();
         if !self.secure_transport {
             return Ok(Action::Send(failure_xml("encryption-required", None)));
         }
@@ -48,9 +48,7 @@ impl ProtocolSession {
             Err(condition) => return Ok(Action::Send(failure_xml(condition, None))),
         };
         if (request.resume.is_some() || request.bind.as_ref().is_some_and(|bind| bind.sm.is_some()))
-            && !self
-                .state
-                .xmpp_extension_enabled(northstar_xep_0198::XEP_ID)
+            && !self.host.xmpp_extension_enabled(northstar_xep_0198::XEP_ID)
         {
             return Ok(Action::Send(failure_xml("malformed-request", None)));
         }
@@ -58,9 +56,7 @@ impl ProtocolSession {
             .bind
             .as_ref()
             .is_some_and(|bind| bind.csi_active.is_some())
-            && !self
-                .state
-                .xmpp_extension_enabled(northstar_xep_0352::XEP_ID)
+            && !self.host.xmpp_extension_enabled(northstar_xep_0352::XEP_ID)
         {
             return Ok(Action::Send(failure_xml("malformed-request", None)));
         }
@@ -96,18 +92,18 @@ impl ProtocolSession {
                 auth::ExternalMechanism::new(self.client_certificate_identities.clone()),
             ),
             "PLAIN" => Box::new(auth::PlainMechanism::new(
-                self.state.local_domain().to_owned(),
+                self.host.local_domain().to_owned(),
             )),
             "SCRAM-SHA-256" => {
                 if self.channel_bindings.is_some() {
                     Box::new(
                         auth::ScramSha256Mechanism::new_with_channel_binding_support(
-                            self.state.local_domain().to_owned(),
+                            self.host.local_domain().to_owned(),
                         ),
                     )
                 } else {
                     Box::new(auth::ScramSha256Mechanism::new(
-                        self.state.local_domain().to_owned(),
+                        self.host.local_domain().to_owned(),
                     ))
                 }
             }
@@ -116,29 +112,29 @@ impl ProtocolSession {
                     return Ok(Action::Send(failure_xml("invalid-mechanism", None)));
                 };
                 Box::new(auth::ScramSha256Mechanism::new_plus(
-                    self.state.local_domain().to_owned(),
+                    self.host.local_domain().to_owned(),
                     bindings,
                 ))
             }
-            "SCRAM-SHA-1" if self.state.c2s_scram_sha1_enabled() => {
+            "SCRAM-SHA-1" if self.host.c2s_scram_sha1_enabled() => {
                 if self.channel_bindings.is_some() {
                     Box::new(
                         auth::ScramSha256Mechanism::new_sha1_with_channel_binding_support(
-                            self.state.local_domain().to_owned(),
+                            self.host.local_domain().to_owned(),
                         ),
                     )
                 } else {
                     Box::new(auth::ScramSha256Mechanism::new_sha1(
-                        self.state.local_domain().to_owned(),
+                        self.host.local_domain().to_owned(),
                     ))
                 }
             }
-            "SCRAM-SHA-1-PLUS" if self.state.c2s_scram_sha1_enabled() => {
+            "SCRAM-SHA-1-PLUS" if self.host.c2s_scram_sha1_enabled() => {
                 let Some(bindings) = self.channel_bindings.clone() else {
                     return Ok(Action::Send(failure_xml("invalid-mechanism", None)));
                 };
                 Box::new(auth::ScramSha256Mechanism::new_sha1_plus(
-                    self.state.local_domain().to_owned(),
+                    self.host.local_domain().to_owned(),
                     bindings,
                 ))
             }
@@ -164,7 +160,7 @@ impl ProtocolSession {
     }
 
     pub(crate) async fn sasl2_response(&mut self, root: Node<'_, '_>) -> Result<Action> {
-        let _authentication_timer = self.state.sasl2_authentication_timer();
+        let _authentication_timer = self.host.sasl2_authentication_timer();
         if root.tag_name().namespace() != Some(SASL2_NS)
             || root.tag_name().name() != "response"
             || !attr_is(root, &[])
@@ -200,7 +196,7 @@ impl ProtocolSession {
     }
 
     pub(crate) fn sasl2_abort(&mut self, root: Node<'_, '_>) -> Action {
-        let _authentication_timer = self.state.sasl2_authentication_timer();
+        let _authentication_timer = self.host.sasl2_authentication_timer();
         if root.tag_name().namespace() != Some(SASL2_NS)
             || !attr_is(root, &[])
             || !structural_text_is_empty(root)
@@ -251,7 +247,7 @@ impl ProtocolSession {
             return Ok(Action::Send(failure_xml("credentials-expired", None)));
         }
         match self
-            .state
+            .host
             .authentication_service()
             .revalidate_generation(user.id, expected_auth_generation)
             .await
@@ -269,7 +265,7 @@ impl ProtocolSession {
                 return Ok(Action::Send(failure_xml("not-authorized", None)));
             }
             northstar_auth_application::authentication::AuthenticationResult::IntegrityFailure => {
-                self.state
+                self.host
                     .sasl2_authentication_telemetry()
                     .integrity_failed();
                 tracing::error!(user_id = %user.id, "credential integrity failure during SASL2 revalidation");
@@ -277,7 +273,7 @@ impl ProtocolSession {
                 return Ok(Action::Send(failure_xml("temporary-auth-failure", None)));
             }
             northstar_auth_application::authentication::AuthenticationResult::BackendFailure(error) => {
-                self.state.sasl2_authentication_telemetry().backend_failed();
+                self.host.sasl2_authentication_telemetry().backend_failed();
                 tracing::error!(?error, user_id = %user.id, "could not revalidate SASL2 credentials");
                 self.sasl_state = None;
                 return Ok(Action::Send(failure_xml("temporary-auth-failure", None)));
@@ -311,7 +307,7 @@ impl ProtocolSession {
                 .map(|tag| format!("{tag}/{generated}"))
                 .unwrap_or(generated);
             let boundaries = match self
-                .state
+                .host
                 .authentication_service()
                 .bind2_archive_boundaries(user.id, expected_auth_generation)
                 .await
@@ -333,7 +329,7 @@ impl ProtocolSession {
                     return Ok(Action::Send(failure_xml("not-authorized", None)));
                 }
                 northstar_auth_application::authentication::AuthenticationResult::IntegrityFailure => {
-                    self.state
+                    self.host
                         .sasl2_authentication_telemetry()
                         .integrity_failed();
                     tracing::error!(user_id = %user.id, "credential integrity failure during Bind2 preflight");
@@ -342,7 +338,7 @@ impl ProtocolSession {
                     return Ok(Action::Send(failure_xml("temporary-auth-failure", None)));
                 }
                 northstar_auth_application::authentication::AuthenticationResult::BackendFailure(error) => {
-                    self.state.sasl2_authentication_telemetry().backend_failed();
+                    self.host.sasl2_authentication_telemetry().backend_failed();
                     tracing::error!(?error, "could not preflight Bind 2 MAM metadata");
                     self.sasl_state = None;
                     self.user_agent_id = None;
@@ -425,7 +421,7 @@ impl ProtocolSession {
                     )
                     .context("SASL2 inline resume envelope allocation overflow")?;
                     let envelope_capacity = self
-                        .state
+                        .host
                         .sm_memory_governor()
                         .try_reserve_transient(envelope_reservation)
                         .context("SASL2 inline resume transport memory capacity reached")?;
@@ -598,7 +594,7 @@ impl ProtocolSession {
             // This queue only duplicates MAM for Bind 2. Defer its deletion
             // until the resource is successfully active, and never convert a
             // post-acceptance cleanup outage into a false SASL failure.
-            let replay_service = self.state.replay_service().clone();
+            let replay_service = self.host.replay_service().clone();
             let user_id = user.id;
             let outbound = self.outbound.clone();
             let replay_full_jid = jid.clone();
@@ -616,7 +612,7 @@ impl ProtocolSession {
                 .finish();
             jid
         } else {
-            format!("{}@{}", user.username, self.state.local_domain())
+            format!("{}@{}", user.username, self.host.local_domain())
         };
 
         let success = sasl2_success_xml(
@@ -662,7 +658,7 @@ impl ProtocolSession {
             northstar_auth_application::authentication::publication::CredentialKind::UnboundFast,
         )?;
         match self
-            .state
+            .host
             .authentication_service()
             .commit_fast_with_login_epoch_observed(
                 user.id,
@@ -696,7 +692,7 @@ impl ProtocolSession {
                 Ok(Err("not-authorized"))
             }
             northstar_auth_application::authentication::AuthenticationResult::IntegrityFailure => {
-                self.state
+                self.host
                     .sasl2_authentication_telemetry()
                     .integrity_failed();
                 tracing::error!(
@@ -706,7 +702,7 @@ impl ProtocolSession {
                 Ok(Err("temporary-auth-failure"))
             }
             northstar_auth_application::authentication::AuthenticationResult::BackendFailure(error) => {
-                self.state.sasl2_authentication_telemetry().backend_failed();
+                self.host.sasl2_authentication_telemetry().backend_failed();
                 tracing::error!(?error, "atomic SASL2 credential/session commit failed");
                 Ok(Err("temporary-auth-failure"))
             }

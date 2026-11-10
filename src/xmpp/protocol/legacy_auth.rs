@@ -29,7 +29,7 @@ impl ProtocolSession {
     pub(super) fn external_certificate_session(
         &self,
     ) -> Result<northstar_security::tls::CertificateSessionGuard> {
-        self.state.tls_context().register_certificate_session(
+        self.host.tls_context().register_certificate_session(
             self.connection_id,
             northstar_security::tls::CertificateSessionKind::C2s,
             self.client_certificate_chain.clone(),
@@ -91,18 +91,18 @@ impl ProtocolSession {
                 ))
             }
             "PLAIN" => Box::new(northstar_auth_core::PlainMechanism::new(
-                self.state.local_domain().to_owned(),
+                self.host.local_domain().to_owned(),
             )),
             "SCRAM-SHA-256" => {
                 if self.channel_bindings.is_some() {
                     Box::new(
                         northstar_auth_core::ScramSha256Mechanism::new_with_channel_binding_support(
-                            self.state.local_domain().to_owned(),
+                            self.host.local_domain().to_owned(),
                         ),
                     )
                 } else {
                     Box::new(northstar_auth_core::ScramSha256Mechanism::new(
-                        self.state.local_domain().to_owned(),
+                        self.host.local_domain().to_owned(),
                     ))
                 }
             }
@@ -114,24 +114,24 @@ impl ProtocolSession {
                     )));
                 };
                 Box::new(northstar_auth_core::ScramSha256Mechanism::new_plus(
-                    self.state.local_domain().to_owned(),
+                    self.host.local_domain().to_owned(),
                     bindings,
                 ))
             }
-            "SCRAM-SHA-1" if self.state.c2s_scram_sha1_enabled() => {
+            "SCRAM-SHA-1" if self.host.c2s_scram_sha1_enabled() => {
                 if self.channel_bindings.is_some() {
                     Box::new(
                         northstar_auth_core::ScramSha256Mechanism::new_sha1_with_channel_binding_support(
-                            self.state.local_domain().to_owned(),
+                            self.host.local_domain().to_owned(),
                         ),
                     )
                 } else {
                     Box::new(northstar_auth_core::ScramSha256Mechanism::new_sha1(
-                        self.state.local_domain().to_owned(),
+                        self.host.local_domain().to_owned(),
                     ))
                 }
             }
-            "SCRAM-SHA-1-PLUS" if self.state.c2s_scram_sha1_enabled() => {
+            "SCRAM-SHA-1-PLUS" if self.host.c2s_scram_sha1_enabled() => {
                 let Some(bindings) = self.channel_bindings.clone() else {
                     return Ok(Action::Send(failure(
                         "urn:ietf:params:xml:ns:xmpp-sasl",
@@ -139,7 +139,7 @@ impl ProtocolSession {
                     )));
                 };
                 Box::new(northstar_auth_core::ScramSha256Mechanism::new_sha1_plus(
-                    self.state.local_domain().to_owned(),
+                    self.host.local_domain().to_owned(),
                     bindings,
                 ))
             }
@@ -260,7 +260,7 @@ impl ProtocolSession {
                 }
             }
             match self
-                .state
+                .host
                 .authentication_service()
                 .scram_credentials(username, algorithm)
                 .await
@@ -278,13 +278,13 @@ impl ProtocolSession {
                 | northstar_auth_application::authentication::AuthenticationResult::ReplayedCredentials => {
                     self.sasl_scram_fence = Some(None);
                     let (salt, iterations, stored_key, server_key) = self
-                        .state
+                        .host
                         .authentication_service()
                         .dummy_scram_credentials(username, algorithm);
                     step = sasl_mech.provide_credentials(salt, iterations, stored_key, server_key);
                 }
                 northstar_auth_application::authentication::AuthenticationResult::IntegrityFailure => {
-                    self.state.c2s_authentication_telemetry().integrity_failed();
+                    self.host.c2s_authentication_telemetry().integrity_failed();
                     tracing::error!("credential integrity failure while loading SCRAM verifier");
                     return Ok(Action::Send(failure(
                         "urn:ietf:params:xml:ns:xmpp-sasl",
@@ -337,7 +337,7 @@ impl ProtocolSession {
                 let user_result = if sasl_mech.name() == "PLAIN" {
                     let password = data_opt.take();
                     if let Some(password) = password.as_deref() {
-                        self.state
+                        self.host
                             .authentication_service()
                             .authenticate_plain(&username, password)
                             .await
@@ -346,12 +346,12 @@ impl ProtocolSession {
                     }
                 } else if sasl_mech.name().starts_with("SCRAM-") {
                     let fence = self.sasl_scram_fence.take().flatten();
-                    self.state
+                    self.host
                         .authentication_service()
                         .complete_scram(&username, fence)
                         .await
                 } else {
-                    self.state
+                    self.host
                         .authentication_service()
                         .authenticate_external(&username)
                         .await
@@ -383,7 +383,7 @@ impl ProtocolSession {
                         None
                     }
                     northstar_auth_application::authentication::AuthenticationResult::IntegrityFailure => {
-                        self.state.c2s_authentication_telemetry().integrity_failed();
+                        self.host.c2s_authentication_telemetry().integrity_failed();
                         tracing::error!(
                             "credential integrity failure while completing authentication"
                         );
@@ -456,7 +456,7 @@ impl ProtocolSession {
                                 &error,
                             ));
                         }
-                        self.state
+                        self.host
                             .c2s_authentication_telemetry()
                             .authentication_failed();
                         self.sasl_state = None;
@@ -509,7 +509,7 @@ impl ProtocolSession {
                 self.sasl_state = None;
                 self.sasl_scram_fence = None;
                 self.legacy_sasl_awaiting_initial_response = false;
-                self.state
+                self.host
                     .c2s_authentication_telemetry()
                     .authentication_failed();
                 if self.sasl2_state.take().is_some() {
@@ -547,7 +547,7 @@ impl ProtocolSession {
 
     pub(super) async fn sasl_login_is_limited(&self, username: &str) -> Result<bool> {
         let actors = self.sasl_abuse_actors(Some(username));
-        self.state
+        self.host
             .sasl_login_abuse_service()
             .is_limited(&actors)
             .await
@@ -555,7 +555,7 @@ impl ProtocolSession {
 
     pub(super) async fn record_sasl_failure(&self, username: Option<&str>) -> Result<()> {
         let actors = self.sasl_abuse_actors(username);
-        self.state
+        self.host
             .sasl_login_abuse_service()
             .record_failure(&actors)
             .await
@@ -564,7 +564,7 @@ impl ProtocolSession {
     pub(super) fn sasl_rate_limit_failure(&mut self) -> Action {
         self.legacy_sasl_awaiting_initial_response = false;
         self.sasl_scram_fence = None;
-        self.state.c2s_authentication_telemetry().rate_limited();
+        self.host.c2s_authentication_telemetry().rate_limited();
         if self.sasl2_state.take().is_some() {
             Action::Send(northstar_auth_xmpp::sasl2::failure_xml(
                 "temporary-auth-failure",
@@ -588,7 +588,7 @@ impl ProtocolSession {
         self.legacy_sasl_awaiting_initial_response = false;
         self.sasl_state = None;
         self.sasl_scram_fence = None;
-        self.state.c2s_authentication_telemetry().backend_failed();
+        self.host.c2s_authentication_telemetry().backend_failed();
         tracing::error!(
             %mechanism,
             %username,

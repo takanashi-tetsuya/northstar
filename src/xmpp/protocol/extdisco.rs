@@ -9,7 +9,7 @@ impl ExtDiscoSession for ProtocolSession {
     type Action = Action;
 
     fn extdisco_service(&self) -> &ExtDiscoService {
-        self.state.extdisco_service()
+        self.host.extdisco_service()
     }
 
     fn authenticated_username(&self) -> Option<&str> {

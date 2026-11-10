@@ -7,13 +7,13 @@ use roxmltree::Node;
 
 impl ProtocolSession {
     pub(crate) fn http_upload_enabled(&self) -> bool {
-        self.state.xmpp_http_upload_enabled()
+        self.host.xmpp_http_upload_enabled()
     }
 
     pub(crate) fn upload_domain(&self) -> String {
         northstar_xmpp_types::jid::prepare_domainpart(&format!(
             "upload.{}",
-            self.state.local_domain()
+            self.host.local_domain()
         ))
         .expect("configured XMPP domain must form a valid upload service domain")
     }
@@ -40,22 +40,22 @@ impl northstar_upload_xmpp::UploadSlotSession for ProtocolSession {
     }
 
     fn upload_public_url(&self) -> &str {
-        self.state.upload_public_url()
+        self.host.upload_public_url()
     }
 
     fn upload_slot_limits(&self) -> UploadSlotLimits {
-        self.state.upload_slot_limits()
+        self.host.upload_slot_limits()
     }
 
     fn upload_storage_backend(&self) -> &'static str {
-        self.state.upload_store().backend()
+        self.host.upload_store().backend()
     }
 
     async fn reserve_upload_slot(
         &self,
         command: UploadSlotRequestCommand<'_>,
     ) -> Result<UploadSlotAdmission> {
-        self.state
+        self.host
             .upload_service()
             .execute_upload_slot_reservation(command)
             .await

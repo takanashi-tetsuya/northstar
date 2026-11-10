@@ -233,13 +233,13 @@ impl ProtocolSession {
             return Err("resource-constraint");
         }
         let capacity = match self
-            .state
+            .host
             .sm_memory_governor()
             .try_reserve_live(snapshot_bytes)
         {
             Ok(capacity) => capacity,
             Err(_) => {
-                self.state.sm_session_telemetry().capacity_rejected();
+                self.host.sm_session_telemetry().capacity_rejected();
                 self.reset_sm();
                 return Err("resource-constraint");
             }
@@ -248,7 +248,7 @@ impl ProtocolSession {
         match self
             .live_session_ownership
             .attempt(
-                self.state
+                self.host
                     .sm_service()
                     .create_session(SmSessionCreationRequest {
                         token_hash: &token_hash,
@@ -256,7 +256,7 @@ impl ProtocolSession {
                         auth_generation: user.auth_generation,
                         full_jid: &full_jid,
                         resource,
-                        server_domain: self.state.local_domain(),
+                        server_domain: self.host.local_domain(),
                         connection_id: self.connection_id,
                         snapshot: &snapshot,
                         ttl_seconds: negotiated_max,
@@ -275,7 +275,7 @@ impl ProtocolSession {
                     .session_id_shared
                     .write()
                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(id);
-                self.state
+                self.host
                     .associate_local_muc_sm_session(
                         &full_jid,
                         self.connection_id,
@@ -299,7 +299,7 @@ impl ProtocolSession {
                 }
             }
             Ok(SmSessionCreationOutcome::CapacityExhausted) => {
-                self.state.sm_session_telemetry().capacity_rejected();
+                self.host.sm_session_telemetry().capacity_rejected();
                 self.reset_sm();
                 Err("resource-constraint")
             }
@@ -344,7 +344,7 @@ impl ProtocolSession {
                         // snapshot until teardown completes. A direct DELETE
                         // here creates a process-crash window with permanent
                         // ghost presence or occupants.
-                        self.state.revoke_sm_session_with_teardown(id).await?;
+                        self.host.revoke_sm_session_with_teardown(id).await?;
                         *self
                             .sm
                             .session_id_shared
@@ -425,10 +425,10 @@ impl ProtocolSession {
             // materialized snapshot. A Pending response drops this RAII lease
             // before waiting, so valid contention cannot pin the process-wide
             // SM memory budget for a live lease's entire duration.
-            let claim_capacity = match self.state.sm_memory_governor().try_reserve_claim() {
+            let claim_capacity = match self.host.sm_memory_governor().try_reserve_claim() {
                 Ok(capacity) => capacity,
                 Err(_) => {
-                    self.state.sm_session_telemetry().capacity_rejected();
+                    self.host.sm_session_telemetry().capacity_rejected();
                     return Ok((Action::Send(sm_failed("resource-constraint")), None));
                 }
             };
@@ -437,7 +437,7 @@ impl ProtocolSession {
                 .map(|(_, subscription)| subscription.probe_stamp());
             match self
                 .live_session_ownership
-                .attempt(self.state.sm_service().claim_resume(SmResumeClaimRequest {
+                .attempt(self.host.sm_service().claim_resume(SmResumeClaimRequest {
                     token_hash: &token_hash,
                     user_id: current_user.id,
                     peer_ip: self.peer_ip,
@@ -478,7 +478,7 @@ impl ProtocolSession {
                         // statement instead of becoming a lost wakeup.
                         pending_subscription = Some((
                             pending.session_id,
-                            self.state
+                            self.host
                                 .sm_service()
                                 .subscribe_authority(pending.session_id),
                         ));
@@ -496,7 +496,7 @@ impl ProtocolSession {
                     // A valid resume bearer may supersede only the exact
                     // local incarnation named by PostgreSQL. Cancellation
                     // starts normal cleanup; route removal remains the wake.
-                    let route_removed = self.state.sm_pending_route_removal_signal(
+                    let route_removed = self.host.sm_pending_route_removal_signal(
                         &pending.full_jid,
                         pending.old_connection_id,
                         current_user.id,
@@ -534,8 +534,8 @@ impl ProtocolSession {
         if claimed_bytes > self.sm_runtime_policy.buffer.max_snapshot_bytes
             || claim_capacity.shrink_to(claimed_bytes).is_err()
         {
-            self.state.sm_session_telemetry().capacity_rejected();
-            self.state
+            self.host.sm_session_telemetry().capacity_rejected();
+            self.host
                 .revoke_sm_session_with_teardown(claim.session_id)
                 .await?;
             return Ok((Action::Send(sm_failed("resource-constraint")), None));
@@ -543,16 +543,16 @@ impl ProtocolSession {
 
         let Some(delta) = acknowledgement_delta(claim.acked_h, client_h, claim.unacked.len())
         else {
-            self.state
+            self.host
                 .revoke_sm_session_with_teardown(claim.session_id)
                 .await?;
             return Ok((Action::Send(sm_failed("undefined-condition")), None));
         };
-        let account = format!("{}@{}", current_user.username, self.state.local_domain());
+        let account = format!("{}@{}", current_user.username, self.host.local_domain());
         let key = match validated_sm_session_key(&claim.full_jid, &claim.resource, &account) {
             Some(key) => key,
             _ => {
-                self.state
+                self.host
                     .revoke_sm_session_with_teardown(claim.session_id)
                     .await?;
                 return Ok((Action::Send(sm_failed("item-not-found")), None));
@@ -567,7 +567,7 @@ impl ProtocolSession {
             mut mix_presence_fallback_suppressed,
             mut caps_observation_generation,
         ) = self
-            .state
+            .host
             .sm_presence_epoch(&key)
             .map(|epoch| (epoch.gate, epoch.fallback_suppressed, epoch.caps_generation))
             .unwrap_or_else(|| {
@@ -595,7 +595,7 @@ impl ProtocolSession {
         {
             Ok(guard) => guard,
             Err(reason) => {
-                self.state
+                self.host
                     .sm_service()
                     .release_claim(claim.session_id, claim.claim_token)
                     .await?;
@@ -636,7 +636,7 @@ impl ProtocolSession {
         let sm_session_id_shared = Arc::new(std::sync::RwLock::new(Some(claim.session_id)));
         let effective_user_agent = self.user_agent_id.or(claim.user_agent_id);
         loop {
-            match self.state.stage_sm_resumed_session(
+            match self.host.stage_sm_resumed_session(
                 key.clone(),
                 northstar_stream::local_routes::session::OnlineSession {
                     user_id: current_user.id,
@@ -684,11 +684,11 @@ impl ProtocolSession {
                 &mix_presence_gate,
             ) {
                 northstar_stream::local_routes::session::SmStagedRouteClaim::Inserted => {
-                    self.state.sm_session_telemetry().staged_route_installed();
+                    self.host.sm_session_telemetry().staged_route_installed();
                     break;
                 }
                 northstar_stream::local_routes::session::SmStagedRouteClaim::Conflict => {
-                    self.state
+                    self.host
                         .sm_service()
                         .release_claim(claim.session_id, claim.claim_token)
                         .await?;
@@ -710,7 +710,7 @@ impl ProtocolSession {
                     {
                         Ok(guard) => guard,
                         Err(reason) => {
-                            self.state
+                            self.host
                                 .sm_service()
                                 .release_claim(claim.session_id, claim.claim_token)
                                 .await?;
@@ -734,15 +734,15 @@ impl ProtocolSession {
                     match claim_sm_route_lifecycle(&old_lifecycle) {
                         SmRouteTakeover::Acquired => {
                             old_disconnect.cancel();
-                            self.state
+                            self.host
                                 .remove_session_if_connection(&key, old_connection_id);
                             if let Err(error) = self
-                                .state
+                                .host
                                 .release_exact_local_session_route(&key, old_connection_id)
                                 .await
                             {
                                 let _ = self
-                                    .state
+                                    .host
                                     .sm_service()
                                     .release_claim(claim.session_id, claim.claim_token)
                                     .await;
@@ -769,14 +769,14 @@ impl ProtocolSession {
                                     // from the old signal alone.
                                 }
                                 RouteRemovalWait::ConnectionCancelled => {
-                                    self.state
+                                    self.host
                                         .sm_service()
                                         .release_claim(claim.session_id, claim.claim_token)
                                         .await?;
                                     return Ok((Action::Send(sm_failed("item-not-found")), None));
                                 }
                                 RouteRemovalWait::ClaimLeaseExpired => {
-                                    self.state
+                                    self.host
                                         .sm_service()
                                         .release_claim(claim.session_id, claim.claim_token)
                                         .await?;
@@ -791,7 +791,7 @@ impl ProtocolSession {
                             }
                         }
                         SmRouteTakeover::Conflict => {
-                            self.state
+                            self.host
                                 .sm_service()
                                 .release_claim(claim.session_id, claim.claim_token)
                                 .await?;
@@ -807,7 +807,7 @@ impl ProtocolSession {
         // database work rather than making teardown wait on that work.
         drop(mix_presence_epoch);
         match self
-            .state
+            .host
             .claim_sm_resume_route(
                 &key,
                 self.connection_id,
@@ -818,19 +818,19 @@ impl ProtocolSession {
         {
             Ok(true) => {}
             Ok(false) => {
-                self.state
+                self.host
                     .remove_session_if_connection(&key, self.connection_id);
-                self.state
+                self.host
                     .sm_service()
                     .release_claim(claim.session_id, claim.claim_token)
                     .await?;
                 return Ok((Action::Send(sm_failed("conflict")), None));
             }
             Err(error) => {
-                self.state
+                self.host
                     .remove_session_if_connection(&key, self.connection_id);
                 let _ = self
-                    .state
+                    .host
                     .sm_service()
                     .release_claim(claim.session_id, claim.claim_token)
                     .await;
@@ -839,14 +839,14 @@ impl ProtocolSession {
         }
 
         let paused_muc = self
-            .state
+            .host
             .pause_suspended_muc_delivery(claim.session_id)
             .await;
         let credential_attempt = self.prepare_credential_attempt(
             northstar_auth_application::authentication::publication::CredentialKind::Resume,
         )?;
         let finalized = self
-            .state
+            .host
             .finalize_sm_resume(
                 SmResumeFinalizationRequest {
                     session_id: claim.session_id,
@@ -877,66 +877,66 @@ impl ProtocolSession {
                 | SmResumeFinalizationOutcome::ClaimLost
                 | SmResumeFinalizationOutcome::PrivacySelectionMissing,
             ) => {
-                self.state
+                self.host
                     .remove_session_if_connection(&key, self.connection_id);
                 let _ = self
-                    .state
+                    .host
                     .release_exact_local_session_route(&key, self.connection_id)
                     .await;
                 if !self
-                    .state
+                    .host
                     .mark_suspended_muc_durable(paused_muc.clone())
                     .await
                 {
-                    let queued = self.state.sm_suspension_recovery_queue().enqueue_promote(
+                    let queued = self.host.sm_suspension_recovery_queue().enqueue_promote(
                         self.connection_id,
                         claim.session_id,
                         paused_muc,
                         claim_capacity.clone(),
                     );
                     if !queued {
-                        self.state.sm_memory_governor().mark_invariant_failure();
+                        self.host.sm_memory_governor().mark_invariant_failure();
                         let _ = self
-                            .state
+                            .host
                             .revoke_sm_session_with_teardown(claim.session_id)
                             .await;
                     }
                 }
                 let _ = self
-                    .state
+                    .host
                     .sm_service()
                     .release_claim(claim.session_id, claim.claim_token)
                     .await;
                 return Ok((Action::Send(sm_failed("item-not-found")), None));
             }
             Err(error) => {
-                self.state
+                self.host
                     .remove_session_if_connection(&key, self.connection_id);
                 let _ = self
-                    .state
+                    .host
                     .release_exact_local_session_route(&key, self.connection_id)
                     .await;
                 if !self
-                    .state
+                    .host
                     .mark_suspended_muc_durable(paused_muc.clone())
                     .await
                 {
-                    let queued = self.state.sm_suspension_recovery_queue().enqueue_promote(
+                    let queued = self.host.sm_suspension_recovery_queue().enqueue_promote(
                         self.connection_id,
                         claim.session_id,
                         paused_muc,
                         claim_capacity.clone(),
                     );
                     if !queued {
-                        self.state.sm_memory_governor().mark_invariant_failure();
+                        self.host.sm_memory_governor().mark_invariant_failure();
                         let _ = self
-                            .state
+                            .host
                             .revoke_sm_session_with_teardown(claim.session_id)
                             .await;
                     }
                 }
                 let _ = self
-                    .state
+                    .host
                     .sm_service()
                     .release_claim(claim.session_id, claim.claim_token)
                     .await;
@@ -949,10 +949,10 @@ impl ProtocolSession {
             activated.unacked.into();
         let exact_base_bytes = remaining.iter().map(|entry| entry.stanza.len()).sum();
         let muc_resume_ready = self
-            .state
+            .host
             .begin_suspended_muc_resume(&paused_muc, remaining.len(), exact_base_bytes)
             .await;
-        let route_is_current = self.state.staged_session_is_current(
+        let route_is_current = self.host.staged_session_is_current(
             &key,
             self.connection_id,
             current_user.id,
@@ -967,7 +967,7 @@ impl ProtocolSession {
                 muc_resume_ready,
                 "committed SM resume lost its staged local route before transport publication"
             );
-            self.state
+            self.host
                 .remove_session_if_connection(&key, self.connection_id);
             let abort_snapshot = SmSessionSnapshot {
                 inbound_h: claim.inbound_h,
@@ -988,7 +988,7 @@ impl ProtocolSession {
                 unacked: remaining.iter().cloned().collect(),
             };
             match self
-                .state
+                .host
                 .sm_service()
                 .suspend_exact_session(
                     claim.session_id,
@@ -1004,31 +1004,31 @@ impl ProtocolSession {
             {
                 Ok(true) => {
                     if !self
-                        .state
+                        .host
                         .mark_suspended_muc_durable(paused_muc.clone())
                         .await
                     {
-                        let queued = self.state.sm_suspension_recovery_queue().enqueue_promote(
+                        let queued = self.host.sm_suspension_recovery_queue().enqueue_promote(
                             self.connection_id,
                             claim.session_id,
                             paused_muc,
                             claim_capacity.clone(),
                         );
                         if !queued {
-                            self.state.sm_memory_governor().mark_invariant_failure();
+                            self.host.sm_memory_governor().mark_invariant_failure();
                             let _ = self
-                                .state
+                                .host
                                 .revoke_sm_session_with_teardown(claim.session_id)
                                 .await;
                         }
                     }
                 }
                 Ok(false) => {
-                    self.state.seal_suspended_muc_endpoints(&paused_muc).await;
+                    self.host.seal_suspended_muc_endpoints(&paused_muc).await;
                 }
                 Err(error) => {
-                    self.state.seal_suspended_muc_endpoints(&paused_muc).await;
-                    let queued = self.state.sm_suspension_recovery_queue().enqueue(
+                    self.host.seal_suspended_muc_endpoints(&paused_muc).await;
+                    let queued = self.host.sm_suspension_recovery_queue().enqueue(
                         northstar_session_application::SessionCleanupAccount {
                             user_id: current_user.id,
                             username: current_user.username.clone(),
@@ -1042,14 +1042,14 @@ impl ProtocolSession {
                         claim_capacity.clone(),
                     );
                     if !queued {
-                        self.state.sm_memory_governor().mark_invariant_failure();
+                        self.host.sm_memory_governor().mark_invariant_failure();
                         let _ = self
-                            .state
+                            .host
                             .revoke_sm_session_with_teardown(claim.session_id)
                             .await;
                     }
                     let _ = self
-                        .state
+                        .host
                         .release_exact_local_session_route(&key, self.connection_id)
                         .await;
                     tracing::error!(
@@ -1062,7 +1062,7 @@ impl ProtocolSession {
                 }
             }
             let _ = self
-                .state
+                .host
                 .release_exact_local_session_route(&key, self.connection_id)
                 .await;
             // Credential/SM finalization already committed. Never emit a
@@ -1109,7 +1109,7 @@ impl ProtocolSession {
         self.sm.acked_h = client_h;
         self.sm.unacked = remaining;
         let restored_muc = self
-            .state
+            .host
             .restore_local_muc_occupants(
                 northstar_stream::local_routes::muc::RestoreLocalMucOccupantsRequest {
                     user: &current_user,
@@ -1151,9 +1151,7 @@ impl ProtocolSession {
                 || claim_capacity.try_grow_to(bytes).is_err()
         }) {
             self.sm.resume_allowed = false;
-            self.state
-                .abort_local_muc_resume(&restored_muc, false)
-                .await;
+            self.host.abort_local_muc_resume(&restored_muc, false).await;
             anyhow::bail!("resumed MUC traffic exceeds process SM memory capacity");
         }
         let Some((staged_unacked, staged_outbound_h)) = stage_muc_replay_suffix(
@@ -1163,9 +1161,7 @@ impl ProtocolSession {
             self.sm_runtime_policy.buffer.max_unacked_stanzas,
             self.sm_runtime_policy.buffer.max_unacked_bytes,
         ) else {
-            self.state
-                .abort_local_muc_resume(&restored_muc, false)
-                .await;
+            self.host.abort_local_muc_resume(&restored_muc, false).await;
             anyhow::bail!("resumed MUC traffic exceeds the global SM replay budget");
         };
         self.sm.unacked = staged_unacked;
@@ -1177,7 +1173,7 @@ impl ProtocolSession {
         let resume_control =
             northstar_xep_0198::build_resumed(previd.as_str(), self.sm.inbound_h, None);
         let mut resume_payload = match super::ResumePayload::from_sm_unacked(
-            self.state.sm_memory_governor(),
+            self.host.sm_memory_governor(),
             resume_control,
             Vec::new(),
             &self.sm.unacked,
@@ -1186,9 +1182,7 @@ impl ProtocolSession {
             Ok(payload) => payload,
             Err(error) => {
                 self.sm.resume_allowed = false;
-                self.state
-                    .abort_local_muc_resume(&restored_muc, false)
-                    .await;
+                self.host.abort_local_muc_resume(&restored_muc, false).await;
                 return Err(error);
             }
         };
@@ -1196,7 +1190,7 @@ impl ProtocolSession {
             .sm_resident_bytes()
             .ok_or_else(|| anyhow::anyhow!("resumed SM resident-size overflow"))?;
         let _staged_snapshot_clone_capacity = self
-            .state
+            .host
             .sm_memory_governor()
             .try_reserve_live(staged_live_bytes)
             .context("resumed SM transient snapshot capacity reached")?;
@@ -1206,7 +1200,7 @@ impl ProtocolSession {
             .ok_or_else(|| anyhow::anyhow!("resumed SM resident-size overflow"))?;
         claim_capacity.shrink_to(staged_bytes)?;
         let checkpointed = self
-            .state
+            .host
             .sm_service()
             .checkpoint_session(
                 claim.session_id,
@@ -1224,28 +1218,28 @@ impl ProtocolSession {
                 self.apply_sm_ownership_resolution(&outcome.ownership);
             }
             Ok(_) => {
-                self.state.abort_local_muc_resume(&restored_muc, true).await;
+                self.host.abort_local_muc_resume(&restored_muc, true).await;
                 anyhow::bail!("durable XEP-0198 stream lease was lost before MUC replay");
             }
             Err(error) => {
-                self.state.abort_local_muc_resume(&restored_muc, true).await;
+                self.host.abort_local_muc_resume(&restored_muc, true).await;
                 return Err(error);
             }
         }
-        if !self.state.checkpoint_local_muc_resume(&restored_muc).await {
-            self.state.abort_local_muc_resume(&restored_muc, true).await;
+        if !self.host.checkpoint_local_muc_resume(&restored_muc).await {
+            self.host.abort_local_muc_resume(&restored_muc, true).await;
             anyhow::bail!("MUC resume suffix ownership changed during checkpoint");
         }
         // The new live claim lease now owns the exact replay FIFO; release the
         // old suspended endpoint's clone only after the durable checkpoint.
-        self.state.clear_suspended_sm_capacity(&paused_muc);
+        self.host.clear_suspended_sm_capacity(&paused_muc);
 
         // Do not expose the MUC endpoints to their new transport until the
         // transport driver has emitted `<resumed/>` and the complete replay.
         // The post-action task performs exact-actor swaps under the shared gate
         // and repairs only memberships which lost an ABA race; its targeted DB
         // update cannot overwrite a concurrent acknowledgement or later join.
-        let resume_state = Arc::clone(&self.state);
+        let resume_state = Arc::clone(&self.host);
         let resume_sender = self.outbound.clone();
         let resume_joined_rooms = Arc::clone(&self.joined_rooms);
         let resume_disconnect = self.disconnect.clone();
@@ -1325,7 +1319,7 @@ impl ProtocolSession {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .take()
                 .expect("rejected post-action returns the MUC resume plan");
-            self.state.abort_local_muc_resume(&restored_muc, true).await;
+            self.host.abort_local_muc_resume(&restored_muc, true).await;
             return Err(error);
         }
 
@@ -1340,7 +1334,7 @@ impl ProtocolSession {
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone();
-            let replay_service = self.state.replay_service().clone();
+            let replay_service = self.host.replay_service().clone();
             let replay_outbound = self.outbound.clone();
             let replay_user_id = current_user.id;
             let replay_full_jid = key.clone();

@@ -52,17 +52,17 @@ impl northstar_pubsub_xmpp::private_xml::PrivateXmlSession for ProtocolSession {
     }
 
     fn private_local_domain(&self) -> &str {
-        self.state.local_domain()
+        self.host.local_domain()
     }
 
     fn private_storage_service(&self) -> &PrivateStorageService<impl PrivateStorageRepository> {
-        self.state.private_storage_service()
+        self.host.private_storage_service()
     }
 
     fn private_pubsub_service(
         &self,
     ) -> &PubSubService<impl northstar_pubsub_xmpp::PubSubRepositories> {
-        self.state.pubsub_service()
+        self.host.pubsub_service()
     }
 
     fn private_pep_audience_messages(
@@ -73,7 +73,7 @@ impl northstar_pubsub_xmpp::private_xml::PrivateXmlSession for ProtocolSession {
         audience: &PepAudienceSnapshot,
     ) -> Result<Vec<(String, String)>> {
         northstar_pubsub_xmpp::pep::pep_audience_messages(
-            self.state.as_ref(),
+            self.host.as_ref(),
             publisher_full_jid,
             node,
             event,

@@ -50,11 +50,13 @@ use zeroize::{Zeroize, Zeroizing};
 
 mod bosh_record;
 mod direct_write;
+mod host;
 mod legacy_auth;
 mod session_sm;
 mod session_transport;
 mod stream_session;
 
+pub use self::host::SessionHost;
 use self::session_sm::durable_delivery_managed_by_sm;
 #[cfg(test)]
 use self::session_transport::{
@@ -136,8 +138,8 @@ impl SmRuntimePolicy {
     }
 }
 
-pub struct ProtocolSession {
-    state: Arc<AppState>,
+pub struct ProtocolSession<H: SessionHost = AppState> {
+    host: Arc<H>,
     sm_runtime_policy: SmRuntimePolicy,
     outbound: northstar_stream::outbound::OutboundSender,
     /// Authoritative transport-security decision. Native TLS and trusted
@@ -253,7 +255,7 @@ impl northstar_stream::auth_publication::PublicationPort for SessionAuthPublicat
         invocation: &northstar_auth_application::authentication::publication::Invocation<'_>,
     ) -> northstar_auth_application::authentication::AuthenticationResult<Option<i64>> {
         self.session
-            .state
+            .host
             .authentication_service()
             .publish_credential_commit_observed(invocation)
             .await
@@ -271,7 +273,7 @@ impl northstar_stream::auth_publication::PublicationPort for SessionAuthPublicat
         {
             return false;
         }
-        let current = self.session.state.publish_user_agent_epoch_if_current(
+        let current = self.session.host.publish_user_agent_epoch_if_current(
             &route.key,
             route.connection,
             route.user,
@@ -285,7 +287,7 @@ impl northstar_stream::auth_publication::PublicationPort for SessionAuthPublicat
         current
     }
     fn activate(&mut self, route: &northstar_stream::auth_publication::BoundRoute) -> bool {
-        self.session.state.activate_session_if_current(
+        self.session.host.activate_session_if_current(
             &route.key,
             route.connection,
             route.user,
@@ -302,7 +304,7 @@ impl northstar_stream::auth_publication::PublicationPort for SessionAuthPublicat
         intent: &northstar_stream::auth_publication::NotificationIntent,
         epoch: i64,
     ) {
-        for (other_key, session) in self.session.state.session_entries_for(&intent.account) {
+        for (other_key, session) in self.session.host.session_entries_for(&intent.account) {
             if other_key != intent.excluded_key
                 && session.user_id == intent.user
                 && session.user_agent_id == Some(intent.device)
@@ -318,7 +320,7 @@ impl northstar_stream::auth_publication::PublicationPort for SessionAuthPublicat
         epoch: i64,
     ) -> Result<()> {
         self.session
-            .state
+            .host
             .notify_remote_user_agent_replacement(
                 &intent.account,
                 intent.user,
@@ -336,14 +338,14 @@ impl northstar_stream::auth_publication::PublicationPort for SessionAuthPublicat
         match result {
             PublicationResult::BackendFailure => {
                 self.session
-                    .state
+                    .host
                     .c2s_authentication_telemetry()
                     .backend_failed();
                 tracing::error!(?error, connection_id = %self.session.connection_id, "could not publish transport-confirmed authentication epoch");
             }
             PublicationResult::IntegrityRejected => {
                 self.session
-                    .state
+                    .host
                     .c2s_authentication_telemetry()
                     .integrity_failed();
                 tracing::error!(connection_id = %self.session.connection_id, "authentication publication integrity failure");
@@ -389,12 +391,12 @@ impl ProtocolSession {
         F: Future<Output = ()> + Send + 'static,
     {
         self.post_actions
-            .defer(name, task, &self.state.c2s_post_action_telemetry())
+            .defer(name, task, &self.host.c2s_post_action_telemetry())
     }
 
     pub(crate) fn start_post_action_tasks(&mut self) {
         self.post_actions
-            .start(&self.state.c2s_post_action_telemetry());
+            .start(&self.host.c2s_post_action_telemetry());
     }
 
     pub(super) fn prepare_credential_attempt(
@@ -461,7 +463,7 @@ impl ProtocolSession {
                 None
             };
             let notification = self.user_agent_id.map(|device| NotificationIntent {
-                account: format!("{}@{}", user.username, self.state.local_domain()),
+                account: format!("{}@{}", user.username, self.host.local_domain()),
                 user: user.id,
                 device,
                 excluded_key: key,
@@ -634,7 +636,7 @@ impl ProtocolSession {
     pub(crate) async fn finalize(&mut self) -> SessionFinalizationOutcome {
         let account = self.cleanup_account();
         let service =
-            crate::state::session_cleanup::SessionCleanupService::new(Arc::clone(&self.state));
+            crate::state::session_cleanup::SessionCleanupService::new(Arc::clone(&self.host));
         match claim_session_cleanup(&self.route_lifecycle) {
             SessionCleanupOwnership::AlreadyFinalizing => {
                 return SessionFinalizationOutcome::AlreadyFinalized.observed();
@@ -649,7 +651,7 @@ impl ProtocolSession {
                 self.sm.capacity = None;
                 self._certificate_session = None;
                 self.local_quiesced = true;
-                let telemetry = self.state.c2s_post_action_telemetry();
+                let telemetry = self.host.c2s_post_action_telemetry();
                 self.post_actions
                     .take_for_shutdown()
                     .abort_and_drain(&telemetry)
@@ -723,7 +725,7 @@ impl ProtocolSession {
         // There must be no cancellation point between the lifecycle claim and
         // this marker. Drop can now safely avoid repeating local quiescing.
         self.local_quiesced = true;
-        let telemetry = self.state.c2s_post_action_telemetry();
+        let telemetry = self.host.c2s_post_action_telemetry();
         self.post_actions
             .take_for_shutdown()
             .abort_and_drain(&telemetry)
@@ -737,17 +739,17 @@ impl ProtocolSession {
     /// call or detached task is legal from Drop.
     fn synchronous_drop_fallback(&mut self) {
         self.local_quiesced = true;
-        self.state.session_drop_fallback_telemetry().started();
-        self.state.worker_registry().observer_error(
+        self.host.session_drop_fallback_telemetry().started();
+        self.host.worker_registry().observer_error(
             "session-cleanup",
             "ProtocolSession dropped before awaited cleanup",
         );
         self.disconnect.cancel();
         self.post_actions
-            .abort_now(&self.state.c2s_post_action_telemetry());
+            .abort_now(&self.host.c2s_post_action_telemetry());
         if let Some(key) = self.registered_key.take() {
             let _ = self
-                .state
+                .host
                 .remove_session_if_connection(&key, self.connection_id);
         }
         if let Some(available) = self.available.take() {
@@ -762,7 +764,7 @@ impl ProtocolSession {
         for (room_jid, membership) in memberships {
             self.joined_rooms
                 .remove_if(&room_jid, |_, current| current == &membership);
-            self.state.remove_local_muc_occupant_exact(
+            self.host.remove_local_muc_occupant_exact(
                 northstar_room_application::muc_service::LocalMucOccupantIdentity {
                     room_jid: &room_jid,
                     nick: &membership.nick,
@@ -785,14 +787,27 @@ impl ProtocolSession {
     }
 }
 
-impl Drop for ProtocolSession {
+impl<H: SessionHost> Drop for ProtocolSession<H> {
     fn drop(&mut self) {
+        H::drop_session(self);
+    }
+}
+
+impl SessionHost for AppState {
+    fn drop_session(session: &mut ProtocolSession) {
+        session.drop_on_node();
+    }
+}
+
+impl ProtocolSession {
+    /// Aborts the post actions of a session another owner superseded, or runs the synchronous cleanup fallback.
+    fn drop_on_node(&mut self) {
         if !drop_requires_local_quiesce(
             self.local_quiesced,
             self.route_lifecycle.load(Ordering::Acquire),
         ) {
             self.post_actions
-                .abort_now(&self.state.c2s_post_action_telemetry());
+                .abort_now(&self.host.c2s_post_action_telemetry());
             return;
         }
         match claim_session_cleanup(&self.route_lifecycle) {
@@ -803,7 +818,7 @@ impl Drop for ProtocolSession {
             }
             SessionCleanupOwnership::SupersededBySm => {
                 self.post_actions
-                    .abort_now(&self.state.c2s_post_action_telemetry());
+                    .abort_now(&self.host.c2s_post_action_telemetry());
                 self.joined_rooms.clear();
                 self.registered_key = None;
                 self.full_jid = None;

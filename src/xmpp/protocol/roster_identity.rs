@@ -13,6 +13,6 @@ impl northstar_roster_xmpp::SessionIdentity for ProtocolSession {
     }
 
     fn session_local_domain(&self) -> &str {
-        self.state.local_domain()
+        self.host.local_domain()
     }
 }

@@ -125,7 +125,7 @@ impl MixSession for ProtocolSession {
     type Host = AppState;
 
     fn host(&self) -> &Arc<AppState> {
-        &self.state
+        &self.host
     }
 
     fn user(&self) -> Option<MixSessionUser<'_>> {
@@ -158,7 +158,7 @@ impl MixSession for ProtocolSession {
 
 impl ProtocolSession {
     pub(crate) fn mix_domain(&self) -> String {
-        northstar_mix_xmpp::local_mix_domain(self.state.local_domain())
+        northstar_mix_xmpp::local_mix_domain(self.host.local_domain())
     }
 
     pub(crate) async fn try_mix_iq(&self, raw: &str) -> Result<Option<Action>> {

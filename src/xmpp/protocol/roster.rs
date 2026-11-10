@@ -32,7 +32,7 @@ impl ProtocolSession {
                     initial_delta,
                     target,
                 } => {
-                    let failure_telemetry = self.state.post_accept_failure_telemetry();
+                    let failure_telemetry = self.host.post_accept_failure_telemetry();
                     let outbound = self.outbound.clone();
                     let gate = Arc::clone(&self.roster_sync);
                     let disconnect = self.disconnect.clone();
@@ -73,13 +73,13 @@ impl ProtocolSession {
         change: &RosterChange,
         participant_id: Option<&str>,
     ) -> Result<()> {
-        deliver_roster_change(&self.state, owner_id, owner, change, participant_id).await
+        deliver_roster_change(&self.host, owner_id, owner, change, participant_id).await
     }
 }
 
 impl northstar_roster_xmpp::roster::RosterSession for ProtocolSession {
     fn roster_service(&self) -> &RosterService<impl RosterRepository<Error = anyhow::Error>> {
-        self.state.roster_service()
+        self.host.roster_service()
     }
 
     fn roster_full_jid(&self) -> Option<&str> {
@@ -112,11 +112,11 @@ impl northstar_roster_xmpp::roster::RosterSession for ProtocolSession {
     }
 
     fn roster_outbox_policy(&self) -> S2sOutboxPolicy {
-        self.state.federation_outbox().outbox_policy()
+        self.host.federation_outbox().outbox_policy()
     }
 
     fn roster_wake_outbox(&self) {
-        self.state.federation_outbox().wake_outbox();
+        self.host.federation_outbox().wake_outbox();
     }
 
     async fn roster_deliver_removal_presence(
@@ -127,7 +127,7 @@ impl northstar_roster_xmpp::roster::RosterSession for ProtocolSession {
         stanza: &str,
     ) {
         deliver_roster_removal_presence(
-            &self.state,
+            &self.host,
             owner.id,
             owner.auth_generation,
             recipient.id,

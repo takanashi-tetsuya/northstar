@@ -42,7 +42,7 @@ impl MessageSession for ProtocolSession {
     type Action = Action;
 
     fn host(&self) -> &AppState {
-        &self.state
+        &self.host
     }
 
     fn enter_frame_stage(&self, stage: MessageFrameStage) {

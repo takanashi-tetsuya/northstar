@@ -19,7 +19,7 @@ use crate::api::contexts::{
     PublicDiscoveryContext,
 };
 use northstar_abuse_policy::AbuseAction;
-use northstar_auth_core as auth;
+use northstar_auth_application::abuse_identity::{ip_actor, login_abuse_identity};
 use northstar_operations_core::api_mutations::{
     api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest, IdempotentResponse,
 };
@@ -685,10 +685,6 @@ async fn api_root_not_found() -> Result<(), AppError> {
     Err(AppError::NotFound("API endpoint was not found".into()))
 }
 
-pub fn ip_actor(ip: IpAddr) -> String {
-    format!("ip:{ip}")
-}
-
 pub fn client_ip(peer_ip: IpAddr, headers: &HeaderMap, transport: &HttpTransportPolicy) -> IpAddr {
     client_ip_with_trusted_proxies(peer_ip, headers, transport.trusted_proxies())
 }
@@ -762,20 +758,6 @@ pub fn abuse_identity(
             format!("behavior:{}", user.id),
         ],
     )
-}
-
-pub fn login_abuse_identity(ip: IpAddr, username: &str) -> Option<(String, Vec<String>)> {
-    if username.is_empty() || username.len() > 1024 {
-        return None;
-    }
-    let identity = auth::normalize_username(username).unwrap_or_else(|_| username.to_owned());
-    let digest = auth::token_hash(&identity);
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-    let account_actor = format!("login-account:{}", URL_SAFE_NO_PAD.encode(digest));
-    Some((
-        format!("login:{ip}:{account_actor}"),
-        vec![ip_actor(ip), account_actor],
-    ))
 }
 
 pub fn bearer_token(headers: &HeaderMap) -> Result<&str, AppError> {

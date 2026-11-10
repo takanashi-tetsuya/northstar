@@ -1,6 +1,7 @@
 //! Application services of the auth context. Persistence and protocol adapters stay outside; a
 //! service sees them only through its port.
 
+pub mod abuse_identity;
 pub mod account;
 pub mod account_admin;
 pub mod account_revocation_consumer;

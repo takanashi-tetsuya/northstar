@@ -531,9 +531,18 @@ impl ProtocolSession {
 
     pub(super) fn sasl_abuse_actors(&self, username: Option<&str>) -> Vec<String> {
         username
-            .and_then(|username| crate::api::login_abuse_identity(self.peer_ip, username))
+            .and_then(|username| {
+                northstar_auth_application::abuse_identity::login_abuse_identity(
+                    self.peer_ip,
+                    username,
+                )
+            })
             .map(|(_, actors)| actors)
-            .unwrap_or_else(|| vec![crate::api::ip_actor(self.peer_ip)])
+            .unwrap_or_else(|| {
+                vec![northstar_auth_application::abuse_identity::ip_actor(
+                    self.peer_ip,
+                )]
+            })
     }
 
     pub(super) async fn sasl_login_is_limited(&self, username: &str) -> Result<bool> {

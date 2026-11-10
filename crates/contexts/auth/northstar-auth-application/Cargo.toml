@@ -13,6 +13,7 @@ test-support = ["northstar-session-core/test-support"]
 
 [dependencies]
 anyhow = "1.0"
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
 northstar-archive-core = { path = "../../archive/northstar-archive-core" }
@@ -31,7 +32,6 @@ webauthn-rs = { version = "0.5.5", default-features = false, features = ["danger
 zeroize = "1.8"
 
 [dev-dependencies]
-base64 = "0.22"
 ring = "0.17.14"
 sha2 = "0.10"
 tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "sync", "time"] }

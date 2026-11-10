@@ -1163,7 +1163,7 @@ def assert_api_session(token: str, username: str, stage: str) -> None:
     )
 
 
-# These are fixed public readiness reasons emitted by src/api/system.rs. Never
+# These are fixed public readiness reasons emitted by crates/edges/northstar-http/src/system.rs. Never
 # echo an arbitrary response body or exception argument into a CI transcript.
 _READY_ERROR_REASONS = frozenset({
     "connection admission is closed",

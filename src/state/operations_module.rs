@@ -51,7 +51,7 @@ pub(super) struct OperationsModuleParts<'a> {
     pub(super) command_pool: &'a PgPool,
     pub(super) abuse: &'a Arc<AbuseGuard>,
     pub(super) api_control: &'a Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
-    pub(super) api_cursor: &'a Arc<crate::api::cursor::CursorKeyring>,
+    pub(super) api_cursor: &'a Arc<northstar_http::cursor::CursorKeyring>,
     pub(super) admin_mutations: &'a northstar_workflows::admin_mutations::AdminMutationStore,
     pub(super) cluster: &'a crate::cluster::ClusterManager,
     pub(super) metrics: &'a Arc<Metrics>,
@@ -176,7 +176,7 @@ impl OperationsModule {
                     pool.clone(),
                     admin_mutations.clone(),
                     Arc::clone(api_control),
-                    crate::api::governance_cursor::SignedGovernanceCursors::new(Arc::clone(
+                    northstar_http::governance_cursor::SignedGovernanceCursors::new(Arc::clone(
                         api_cursor,
                     )),
                 ),
@@ -210,14 +210,14 @@ impl OperationsModule {
                     ),
                 ),
             report_service,
-            operation_admin_service: crate::api::contexts::ServiceContext(operation_admin_service),
+            operation_admin_service: northstar_http::contexts::ServiceContext(operation_admin_service),
             operation_muc_destroy_service,
             operation_effect_fence_service,
             operation_journal_worker_service,
             admin_session_cleanup_worker_service,
-            admin_dispatch_service: crate::api::contexts::ServiceContext(admin_dispatch_service),
-            upload_admin_service: crate::api::contexts::ServiceContext(upload_admin_service),
-            report_moderation_service: crate::api::contexts::ServiceContext(
+            admin_dispatch_service: northstar_http::contexts::ServiceContext(admin_dispatch_service),
+            upload_admin_service: northstar_http::contexts::ServiceContext(upload_admin_service),
+            report_moderation_service: northstar_http::contexts::ServiceContext(
                 report_moderation_service,
             ),
             retention_policy_context,

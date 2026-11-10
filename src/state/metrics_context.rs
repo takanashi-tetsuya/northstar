@@ -1,10 +1,10 @@
 //! Composition-root construction of the metrics context and its SM recovery gauges.
 
 use super::AppState;
-use crate::api::contexts::metrics::{
+use crate::state::http_contexts::MetricsContext;
+use northstar_http::contexts::metrics::{
     MetricsLimits, MetricsRenderProbe, MucOccupancyCountProbe, OccupancyCount,
 };
-use crate::api::contexts::MetricsContext;
 use northstar_operations_application::metrics_snapshot::SmRecoveryGaugeSnapshot;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -36,7 +36,7 @@ impl SmRecoveryMetricsProbe {
     }
 }
 
-impl crate::api::contexts::metrics::SmRecoveryGauges for SmRecoveryMetricsProbe {
+impl northstar_http::contexts::metrics::SmRecoveryGauges for SmRecoveryMetricsProbe {
     fn sm_recovery_snapshot(&self) -> SmRecoveryGaugeSnapshot {
         self.snapshot()
     }

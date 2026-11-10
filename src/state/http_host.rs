@@ -2,29 +2,26 @@
 //! XMPP transport routes over the node itself.
 
 use super::AppState;
-use crate::api::contexts::{
-    account_teardown::{AccountGenerationTeardownContext, AccountTeardownContext},
-    api_session_http::ApiSessionHttpContext,
-    http_challenge_endpoint::HttpChallengeEndpointContext,
-    http_login_endpoint::HttpLoginEndpointCounters,
-    http_registration_endpoint::HttpRegistrationEndpointContext,
-    omemo_recovery_http::OmemoRecoveryHttpContext,
-    passkey_http::{PasskeyAccountHttpContext, PasskeyStartHttpContext},
-    password_change_http::PasswordChangeHttpContext,
-    reports,
-    upload_http_delete::UploadHttpDeleteContext,
-    upload_http_write::UploadHttpWriteContext,
-    AccountAdminContext, AdminDispatchContext, AdminGatewayVerifier, ApiQueryContext,
-    GovernanceContext, HttpLoginEndpointContext, HttpTransportPolicy, InvitationAdminContext,
-    OmemoRecoveryPollContext, OperationAdminContext, PasskeyLoginFinishContext,
-    PublicDiscoveryContext, ReadinessContext, RegistrationAdminContext, ReportContext,
-    ReportModerationContext, RetentionPolicyContext, SessionAdminContext, UploadAdminContext,
-    UploadHttpReadContext, UploadHttpReplayReadContext,
+use crate::state::http_contexts::{
+    AccountAdminContext, AdminDispatchContext, ApiQueryContext, ApiSessionHttpContext,
+    GovernanceContext, HttpChallengeEndpointContext, HttpLoginEndpointContext,
+    HttpRegistrationEndpointContext, InvitationAdminContext, OmemoRecoveryHttpContext,
+    OmemoRecoveryPollContext, OperationAdminContext, PasskeyAccountHttpContext,
+    PasskeyLoginFinishContext, PasskeyStartHttpContext, PasswordChangeHttpContext,
+    ReadinessContext, RegistrationAdminContext, ReportContext, ReportModerationContext,
+    RetentionPolicyContext, SessionAdminContext, UploadAdminContext, UploadHttpDeleteContext,
+    UploadHttpReadContext, UploadHttpWriteContext,
 };
-use crate::api::host::HttpHost;
-use crate::api::postgres_repositories::PostgresHttpRepositories;
+use crate::state::http_repositories::PostgresHttpRepositories;
 use axum::routing::{get, options, post};
 use axum::Router;
+use northstar_http::contexts::{
+    account_teardown::{AccountGenerationTeardownContext, AccountTeardownContext},
+    http_login_endpoint::HttpLoginEndpointCounters,
+    reports, AdminGatewayVerifier, HttpTransportPolicy, PublicDiscoveryContext,
+    UploadHttpReplayReadContext,
+};
+use northstar_http::host::HttpHost;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;

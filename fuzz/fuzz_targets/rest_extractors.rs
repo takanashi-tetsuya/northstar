@@ -10,33 +10,31 @@ use libfuzzer_sys::fuzz_target;
 use serde::Deserialize;
 use uuid::Uuid;
 
-// `src/api/extract.rs` depends only on the public shape of AppError. Keeping a
-// tiny rejection stub lets this target compile and execute the production
-// extractor implementation without pulling the database/server graph into the
-// libFuzzer process.
-mod api {
-    pub mod error {
-        use axum::{
-            http::StatusCode,
-            response::{IntoResponse, Response},
-        };
+// `crates/edges/northstar-http/src/extract.rs` depends only on the public
+// shape of the crate's AppError. Keeping a tiny rejection stub lets this target
+// compile and execute the production extractor implementation without pulling
+// the database/server graph into the libFuzzer process.
+mod error {
+    use axum::{
+        http::StatusCode,
+        response::{IntoResponse, Response},
+    };
 
-        #[derive(Debug)]
-        pub enum AppError {
-            BadRequest(String),
-        }
+    #[derive(Debug)]
+    pub enum AppError {
+        BadRequest(String),
+    }
 
-        impl IntoResponse for AppError {
-            fn into_response(self) -> Response {
-                match self {
-                    Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message).into_response(),
-                }
+    impl IntoResponse for AppError {
+        fn into_response(self) -> Response {
+            match self {
+                Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message).into_response(),
             }
         }
     }
 }
 
-#[path = "../../src/api/extract.rs"]
+#[path = "../../crates/edges/northstar-http/src/extract.rs"]
 mod extract;
 
 #[derive(Debug, Deserialize)]

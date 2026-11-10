@@ -5,7 +5,7 @@
       "request_policy",
       "response_output"
     ],
-    "src/api/mod.rs": [
+    "crates/edges/northstar-http/src/lib.rs": [
       "route_composition"
     ],
     "src/xmpp/protocol.rs": [

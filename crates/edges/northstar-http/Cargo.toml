@@ -1,0 +1,59 @@
+[package]
+name = "northstar-http"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "REST edge of Northstar: public and administration routers, handlers, extractors and private listeners"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+axum = { version = "0.8", features = ["ws", "multipart"] }
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+dashmap = "6.1"
+futures = "0.3"
+hmac = "0.12"
+northstar-abuse-application = { path = "../../contexts/abuse/northstar-abuse-application" }
+northstar-abuse-policy = { path = "../../contexts/abuse/northstar-abuse-policy" }
+northstar-archive-application = { path = "../../contexts/archive/northstar-archive-application" }
+northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application" }
+northstar-auth-core = { path = "../../contexts/auth/northstar-auth-core" }
+northstar-config = { path = "../../platform/northstar-config" }
+northstar-federation-application = { path = "../../contexts/federation/northstar-federation-application" }
+northstar-operations-application = { path = "../../contexts/operations/northstar-operations-application" }
+northstar-operations-core = { path = "../../contexts/operations/northstar-operations-core" }
+northstar-postgres = { path = "../../platform/northstar-postgres" }
+northstar-runtime = { path = "../../platform/northstar-runtime" }
+northstar-security = { path = "../../platform/northstar-security" }
+northstar-session-application = { path = "../../contexts/session/northstar-session-application" }
+northstar-telemetry = { path = "../../platform/northstar-telemetry" }
+northstar-upload-application = { path = "../../contexts/upload/northstar-upload-application" }
+northstar-xml-builder = { path = "../../kernel/northstar-xml-builder" }
+northstar-xmpp-types = { path = "../../kernel/northstar-xmpp-types" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+subtle = "2.6"
+thiserror = "2.0"
+tokio = { version = "1.43", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt", "io"] }
+tower-http = { version = "0.6", features = ["fs", "set-header", "trace"] }
+tracing = "0.1"
+uuid = { version = "1.12", features = ["v4", "serde"] }
+webauthn-rs = { version = "0.5.5", default-features = false, features = ["danger-allow-state-serialisation"] }
+zeroize = "1.8"
+
+[dev-dependencies]
+northstar-auth-postgres = { path = "../../contexts/auth/northstar-auth-postgres" }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
+northstar-abuse-application = { path = "../../contexts/abuse/northstar-abuse-application", features = ["test-support"] }
+northstar-abuse-policy = { path = "../../contexts/abuse/northstar-abuse-policy", features = ["test-support"] }
+northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application", features = ["test-support"] }
+northstar-operations-application = { path = "../../contexts/operations/northstar-operations-application", features = ["test-support"] }
+northstar-runtime = { path = "../../platform/northstar-runtime", features = ["test-support"] }
+northstar-security = { path = "../../platform/northstar-security", features = ["test-support"] }
+northstar-session-application = { path = "../../contexts/session/northstar-session-application", features = ["test-support"] }
+tokio = { version = "1.43", features = ["test-util"] }

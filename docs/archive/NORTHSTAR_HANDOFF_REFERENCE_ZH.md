@@ -95,7 +95,7 @@ PostgreSQL 是持久状态源；在线连接、SM 恢复、PoW 挑战和处罚�
 | `src/xmpp/xml_util.rs` | XML 转义、JID/消息重写、标准 result/error 辅助函数 |
 | `src/db/*.rs` | SQL 持久化；按 users/roster/archive/PEP/MUC/upload/reports/private 划分 |
 | `src/s2s/*.rs` | SRV 解析、S2S TLS、入站认证、按远程域复用的出站连接 |
-| `src/api/*.rs` | REST、WebSocket 升级、管理、举报、上传、健康检查 |
+| `crates/edges/northstar-http/src/*.rs` | REST、WebSocket 升级、管理、举报、上传、健康检查 |
 | `src/storage.rs` | 可替换上传存储接口；当前为本地磁盘原子写入 |
 | `web/` | 完全本地加载的首页、用户客户端、管理后台、OMEMO、头像、i18n、PoW worker |
 | `migrations/` | PostgreSQL 结构演进，启动时自动执行 |

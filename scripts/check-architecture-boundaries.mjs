@@ -2329,17 +2329,17 @@ for (const [name, source] of [
   ['SmSuspensionContext', read('src/state/suspension.rs')],
   ['SmSuspensionRepository', read('crates/contexts/session/northstar-session-application/src/sm_suspension.rs')],
   ['ApiQueryService', read('crates/contexts/operations/northstar-operations-application/src/api_queries.rs')],
-  ['ApiQueryContext', read('src/api/contexts/api_queries.rs')],
-  ['HTTP entry and public discovery policies', read('src/api/contexts/http_policy.rs')],
+  ['ApiQueryContext', read('crates/edges/northstar-http/src/contexts/api_queries.rs')],
+  ['HTTP entry and public discovery policies', read('crates/edges/northstar-http/src/contexts/http_policy.rs')],
   ['API mutation values', read('crates/contexts/operations/northstar-operations-core/src/api_mutations.rs')],
   ['ReportService', read('crates/contexts/operations/northstar-operations-application/src/reports.rs')],
-  ['ReportContext', read('src/api/contexts/reports.rs')],
+  ['ReportContext', read('crates/edges/northstar-http/src/contexts/reports.rs')],
   ['AccountAdminServices', read('crates/contexts/auth/northstar-auth-application/src/account_admin.rs')],
   ['AccountAdminRuntime', read('src/state/account_admin.rs')],
   ['OperationAdminService', read('crates/contexts/operations/northstar-operations-application/src/operations.rs')],
   ['AdminDispatchService', read('crates/contexts/operations/northstar-operations-application/src/admin_dispatch.rs')],
   ['GovernanceService', read('crates/contexts/operations/northstar-operations-application/src/governance.rs')],
-  ['GovernanceContext', read('src/api/contexts/governance.rs')],
+  ['GovernanceContext', read('crates/edges/northstar-http/src/contexts/governance.rs')],
   ['MetricsSnapshotService', read('crates/contexts/operations/northstar-operations-application/src/metrics_snapshot.rs')],
   ['FederationOutboxService', read('crates/contexts/federation/northstar-federation-application/src/outbox.rs')],
   ['TlsContext', readProductionModule('crates/platform/northstar-security/src/tls.rs', { root })],
@@ -2347,9 +2347,9 @@ for (const [name, source] of [
   ['ReportModerationService', read('crates/contexts/operations/northstar-operations-application/src/report_moderation.rs')],
   ['InvitationAdminService', read('crates/contexts/auth/northstar-auth-application/src/invitation_admin.rs')],
   ['RetentionPolicyService', read('crates/contexts/operations/northstar-operations-application/src/retention_policy.rs')],
-  ['RetentionPolicyContext', read('src/api/contexts/retention_policy.rs')],
+  ['RetentionPolicyContext', read('crates/edges/northstar-http/src/contexts/retention_policy.rs')],
   ['OmemoRecoveryService', read('crates/contexts/auth/northstar-auth-application/src/omemo_recovery.rs')],
-  ['OmemoRecoveryPollContext', read('src/api/contexts/omemo_poll.rs')],
+  ['OmemoRecoveryPollContext', read('crates/edges/northstar-http/src/contexts/omemo_poll.rs')],
 ]) {
   const production = productionWithoutCfgTestModules(source, name);
   for (const [label, pattern] of [
@@ -2362,17 +2362,17 @@ for (const [name, source] of [
   }
 }
 for (const [path, name] of [
-  ['src/api/operations.rs', 'list_operations'], ['src/api/operations.rs', 'get_operation'],
-  ['src/api/operations.rs', 'list_targets'], ['src/api/operations.rs', 'get_target'],
-  ['src/api/admin.rs', 'admin_stats'], ['src/api/admin.rs', 'admin_users'],
-  ['src/api/admin.rs', 'admin_reports'], ['src/api/admin.rs', 'admin_invitations'],
-  ['src/api/admin.rs', 'admin_sessions'], ['src/api/admin.rs', 'admin_offline_messages_stats'],
-  ['src/api/admin.rs', 'admin_muc_rooms'], ['src/api/users.rs', 'history'],
-  ['src/api/reports.rs', 'my_reports'], ['src/api/upload_admin.rs', 'admin_upload_dead_letters'],
+  ['crates/edges/northstar-http/src/operations.rs', 'list_operations'], ['crates/edges/northstar-http/src/operations.rs', 'get_operation'],
+  ['crates/edges/northstar-http/src/operations.rs', 'list_targets'], ['crates/edges/northstar-http/src/operations.rs', 'get_target'],
+  ['crates/edges/northstar-http/src/admin.rs', 'admin_stats'], ['crates/edges/northstar-http/src/admin.rs', 'admin_users'],
+  ['crates/edges/northstar-http/src/admin.rs', 'admin_reports'], ['crates/edges/northstar-http/src/admin.rs', 'admin_invitations'],
+  ['crates/edges/northstar-http/src/admin.rs', 'admin_sessions'], ['crates/edges/northstar-http/src/admin.rs', 'admin_offline_messages_stats'],
+  ['crates/edges/northstar-http/src/admin.rs', 'admin_muc_rooms'], ['crates/edges/northstar-http/src/users.rs', 'history'],
+  ['crates/edges/northstar-http/src/reports.rs', 'my_reports'], ['crates/edges/northstar-http/src/upload_admin.rs', 'admin_upload_dead_letters'],
 ]) {
   const body = structBody(read(path), `pub async fn ${name}<R: HttpRepositories>(`);
   const signature = read(path).slice(read(path).indexOf(`pub async fn ${name}<R: HttpRepositories>(`)).split(') ->')[0];
-  if (!signature.includes('State<crate::api::contexts::ApiQueryContext<R>>')) {
+  if (!signature.includes('State<crate::contexts::ApiQueryContext<R>>')) {
     throw new Error(`${name} must receive the narrow REST query context`);
   }
 
@@ -2380,7 +2380,7 @@ for (const [path, name] of [
     throw new Error(`${name} must use a complete authorized query port`);
   }
 }
-const adminSessionRoute = structBody(read('src/api/admin.rs'), 'pub async fn admin_sessions<R: HttpRepositories>(');
+const adminSessionRoute = structBody(read('crates/edges/northstar-http/src/admin.rs'), 'pub async fn admin_sessions<R: HttpRepositories>(');
 const adminSessionService = structBody(read('crates/contexts/operations/northstar-operations-application/src/api_queries.rs'), 'pub async fn sessions<F>(');
 const adminSessionRepository = structBody(read('crates/contexts/workflows/northstar-workflows/src/api_queries.rs'), 'async fn sessions<F>(');
 if (/\b(?:sort_unstable_by_key|retain|truncate)\b/.test(adminSessionRoute)
@@ -2393,7 +2393,7 @@ const sessionSnapshot = adminSessionRepository.indexOf('snapshot()');
 if (sessionAuthorization < 0 || sessionSnapshot <= sessionAuthorization) {
   throw new Error('administrator session snapshot must run after database authorization');
 }
-if (/begin_authorized_read/.test(readRoleSplitFile('src/api/mod.rs', { root }))) {
+if (/begin_authorized_read/.test(readRoleSplitFile('crates/edges/northstar-http/src/lib.rs', { root }))) {
   throw new Error('HTTP principals must not expose database read transactions');
 }
 const cleanupServiceSource = productionWithoutCfgTestModules(read('src/state/session_cleanup.rs'), 'Session cleanup');
@@ -2408,15 +2408,15 @@ if (!suspensionRecoverySource.includes('SmSuspensionContext<R>') || /\bAppState\
   throw new Error('SM suspension recovery must retain its narrow context');
 }
 for (const [path, names, context] of [
-  ['src/api/operations.rs', ['cancel_operation', 'reconcile_operation', 'reconcile_target'], 'api::contexts::OperationAdminContext'],
-  ['src/api/admin.rs', ['admin_update_report', 'admin_update_appeal'], 'api::contexts::ReportModerationContext'],
-  ['src/api/admin.rs', ['admin_update_user', 'admin_clear_offline_messages'], 'api::contexts::AccountAdminContext'],
-  ['src/api/admin.rs', ['admin_toggle_registration'], 'api::contexts::RegistrationAdminContext'],
-  ['src/api/admin.rs', ['admin_kick_session'], 'api::contexts::SessionAdminContext'],
-  ['src/api/upload_admin.rs', ['admin_retry_upload_dead_letter'], 'api::contexts::UploadAdminContext'],
-  ['src/api/admin.rs', ['admin_create_invitation', 'admin_revoke_invitation'], 'api::contexts::InvitationAdminContext'],
-  ['src/api/admin.rs', ['admin_tls_reload', 'admin_panic_disconnect', 'admin_toggle_island_mode', 'admin_destroy_muc_room', 'admin_broadcast'], 'api::contexts::AdminDispatchContext'],
-  ['src/api/data_lifecycle.rs', ['get_my_retention', 'update_my_retention', 'get_muc_retention', 'update_muc_retention'], 'api::contexts::RetentionPolicyContext'],
+  ['crates/edges/northstar-http/src/operations.rs', ['cancel_operation', 'reconcile_operation', 'reconcile_target'], 'contexts::OperationAdminContext'],
+  ['crates/edges/northstar-http/src/admin.rs', ['admin_update_report', 'admin_update_appeal'], 'contexts::ReportModerationContext'],
+  ['crates/edges/northstar-http/src/admin.rs', ['admin_update_user', 'admin_clear_offline_messages'], 'contexts::AccountAdminContext'],
+  ['crates/edges/northstar-http/src/admin.rs', ['admin_toggle_registration'], 'contexts::RegistrationAdminContext'],
+  ['crates/edges/northstar-http/src/admin.rs', ['admin_kick_session'], 'contexts::SessionAdminContext'],
+  ['crates/edges/northstar-http/src/upload_admin.rs', ['admin_retry_upload_dead_letter'], 'contexts::UploadAdminContext'],
+  ['crates/edges/northstar-http/src/admin.rs', ['admin_create_invitation', 'admin_revoke_invitation'], 'contexts::InvitationAdminContext'],
+  ['crates/edges/northstar-http/src/admin.rs', ['admin_tls_reload', 'admin_panic_disconnect', 'admin_toggle_island_mode', 'admin_destroy_muc_room', 'admin_broadcast'], 'contexts::AdminDispatchContext'],
+  ['crates/edges/northstar-http/src/data_lifecycle.rs', ['get_my_retention', 'update_my_retention', 'get_muc_retention', 'update_muc_retention'], 'contexts::RetentionPolicyContext'],
 ]) {
   const source = read(path);
   for (const name of names) {
@@ -2427,7 +2427,7 @@ for (const [path, names, context] of [
     }
   }
 }
-const governanceApiSource = read('src/api/data_lifecycle.rs');
+const governanceApiSource = read('crates/edges/northstar-http/src/data_lifecycle.rs');
 for (const name of ['list_legal_holds', 'create_legal_hold', 'release_legal_hold', 'export_legal_hold', 'export_audit']) {
   const body = structBody(governanceApiSource, `pub async fn ${name}<R: HttpRepositories>(`);
   const signature = governanceApiSource.slice(governanceApiSource.indexOf(`pub async fn ${name}<R: HttpRepositories>(`)).split(') ->')[0];
@@ -2435,14 +2435,14 @@ for (const name of ['list_legal_holds', 'create_legal_hold', 'release_legal_hold
     throw new Error(`${name} must retain its governance use-case context`);
   }
 }
-const reportApiSource = productionWithoutCfgTestModules(read('src/api/reports.rs'), 'Reports HTTP');
+const reportApiSource = productionWithoutCfgTestModules(read('crates/edges/northstar-http/src/reports.rs'), 'Reports HTTP');
 for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\.pool\b/]) {
   if (forbidden.test(reportApiSource)) throw new Error('Reports HTTP regained direct persistence authority');
 }
 if (!reportApiSource.includes('.report_service()') || /\bAppState\b/.test(reportApiSource)) {
   throw new Error('Reports HTTP must use its service and narrow context');
 }
-const recoveryApiSource = productionWithoutCfgTestModules(read('src/api/omemo_recovery.rs'), 'OMEMO recovery HTTP');
+const recoveryApiSource = productionWithoutCfgTestModules(read('crates/edges/northstar-http/src/omemo_recovery.rs'), 'OMEMO recovery HTTP');
 for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\.pool\b/]) {
   if (forbidden.test(recoveryApiSource)) throw new Error('OMEMO recovery HTTP regained direct persistence authority');
 }
@@ -2450,48 +2450,48 @@ const recoveryPollBody = structBody(recoveryApiSource, 'pub async fn poll_omemo_
 if (/\b(?:AppState|current_user)\b/.test(recoveryPollBody) || !recoveryPollBody.includes('.poll(')) {
   throw new Error('OMEMO polling must use its isolated completion capability');
 }
-const passkeyApiSource = productionWithoutCfgTestModules(read('src/api/passkeys.rs'), 'Passkeys HTTP');
+const passkeyApiSource = productionWithoutCfgTestModules(read('crates/edges/northstar-http/src/passkeys.rs'), 'Passkeys HTTP');
 for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bstate\s*\.\s*pool\b/, /\.begin_authorized_read\s*\(/]) {
   if (forbidden.test(passkeyApiSource)) throw new Error('Passkeys HTTP regained direct persistence authority');
 }
 if (!passkeyApiSource.includes('State<PasskeyAccountHttpContext<R>>')
     || !passkeyApiSource.includes('State<PasskeyStartHttpContext<R>>')
-    || !read('src/api/contexts/passkey_http.rs').includes('Arc<PasskeyService<R>>')) {
+    || !read('crates/edges/northstar-http/src/contexts/passkey_http.rs').includes('Arc<PasskeyService<R>>')) {
   throw new Error('Passkeys HTTP must use scoped application services');
 }
 const passkeyAccountContext = structBody(
-  read('src/api/contexts/passkey_http.rs'),
-  'pub(crate) struct PasskeyAccountHttpContext',
+  read('crates/edges/northstar-http/src/contexts/passkey_http.rs'),
+  'pub struct PasskeyAccountHttpContext',
 );
-const passkeyStartContext = structBody(read('src/api/contexts/passkey_http.rs'), 'pub(crate) struct PasskeyStartHttpContext');
+const passkeyStartContext = structBody(read('crates/edges/northstar-http/src/contexts/passkey_http.rs'), 'pub struct PasskeyStartHttpContext');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passkeyStartContext)
     || !/pub\(super\) async fn register_start<R: HttpRepositories>\(\s*State\(state\): State<PasskeyStartHttpContext<R>>/.test(passkeyApiSource)
     || !/pub\(super\) async fn login_start<R: HttpRepositories>\(\s*State\(state\): State<PasskeyStartHttpContext<R>>/.test(passkeyApiSource)) {
   throw new Error('Passkey challenge starts must use scoped abuse and credential authority');
 }
-const apiSessionHttpContext = structBody(read('src/api/contexts/api_session_http.rs'), 'pub(crate) struct ApiSessionHttpContext');
+const apiSessionHttpContext = structBody(read('crates/edges/northstar-http/src/contexts/api_session_http.rs'), 'pub struct ApiSessionHttpContext');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(apiSessionHttpContext)
-    || !/pub async fn logout<R: HttpRepositories>\(\s*State\(state\): State<ApiSessionHttpContext<R>>/.test(read('src/api/auth_routes.rs'))) {
+    || !/pub async fn logout<R: HttpRepositories>\(\s*State\(state\): State<ApiSessionHttpContext<R>>/.test(read('crates/edges/northstar-http/src/auth_routes.rs'))) {
   throw new Error('HTTP logout must use only its audited session command');
 }
-const registrationHttpContext = structBody(read('src/api/contexts/http_registration_endpoint.rs'), 'pub(crate) struct HttpRegistrationEndpointContext');
+const registrationHttpContext = structBody(read('crates/edges/northstar-http/src/contexts/http_registration_endpoint.rs'), 'pub struct HttpRegistrationEndpointContext');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(registrationHttpContext)
-    || !/pub async fn register<R: HttpRepositories>\(\s*State\(context\): State<HttpRegistrationEndpointContext<R>>/.test(read('src/api/auth_routes.rs'))) {
+    || !/pub async fn register<R: HttpRepositories>\(\s*State\(context\): State<HttpRegistrationEndpointContext<R>>/.test(read('crates/edges/northstar-http/src/auth_routes.rs'))) {
   throw new Error('HTTP registration must use scoped account admission authority');
 }
-const challengeHttpContext = structBody(read('src/api/contexts/http_challenge_endpoint.rs'), 'pub(crate) struct HttpChallengeEndpointContext');
+const challengeHttpContext = structBody(read('crates/edges/northstar-http/src/contexts/http_challenge_endpoint.rs'), 'pub struct HttpChallengeEndpointContext');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(challengeHttpContext)
-    || !/pub async fn anti_abuse_challenge<R: HttpRepositories>\(\s*State\(context\): State<HttpChallengeEndpointContext<R>>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext<R>>/.test(read('src/api/auth_routes.rs'))) {
+    || !/pub async fn anti_abuse_challenge<R: HttpRepositories>\(\s*State\(context\): State<HttpChallengeEndpointContext<R>>,\s*State\(queries\): State<crate::contexts::ApiQueryContext<R>>/.test(read('crates/edges/northstar-http/src/auth_routes.rs'))) {
   throw new Error('anti-abuse challenge issuance must use scoped HTTP authority');
 }
-const uploadDeleteContext = structBody(read('src/api/contexts/upload_http_delete.rs'), 'pub(crate) struct UploadHttpDeleteContext');
+const uploadDeleteContext = structBody(read('crates/edges/northstar-http/src/contexts/upload_http_delete.rs'), 'pub struct UploadHttpDeleteContext');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(uploadDeleteContext)
-    || !/pub async fn upload_delete<R: HttpRepositories>\(\s*State\(state\): State<UploadHttpDeleteContext<R>>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext<R>>/.test(read('src/api/upload.rs'))) {
+    || !/pub async fn upload_delete<R: HttpRepositories>\(\s*State\(state\): State<UploadHttpDeleteContext<R>>,\s*State\(queries\): State<crate::contexts::ApiQueryContext<R>>/.test(read('crates/edges/northstar-http/src/upload.rs'))) {
   throw new Error('upload deletion must use scoped lifecycle and bearer authority');
 }
-const uploadReplayReadContext = structBody(read('src/api/contexts/upload_http_read.rs'), 'pub(crate) struct UploadHttpReplayReadContext');
-const uploadWriteContext = structBody(read('src/api/contexts/upload_http_write.rs'), 'pub(crate) struct UploadHttpWriteContext');
-const uploadApiSource = read('src/api/upload.rs');
+const uploadReplayReadContext = structBody(read('crates/edges/northstar-http/src/contexts/upload_http_read.rs'), 'pub struct UploadHttpReplayReadContext');
+const uploadWriteContext = structBody(read('crates/edges/northstar-http/src/contexts/upload_http_write.rs'), 'pub struct UploadHttpWriteContext');
+const uploadApiSource = read('crates/edges/northstar-http/src/upload.rs');
 if (/\b(?:AppState|ClusterManager|PgPool|UploadHttpReadContext)\b/.test(uploadReplayReadContext)
     || /\b(?:AppState|ClusterManager|PgPool)\b/.test(uploadWriteContext)
     || !/pub async fn upload_put<R: HttpRepositories>\(\s*State\(state\): State<UploadHttpWriteContext<R>>,\s*State\(replay_read\): State<UploadHttpReplayReadContext>/.test(uploadApiSource)
@@ -2500,16 +2500,16 @@ if (/\b(?:AppState|ClusterManager|PgPool|UploadHttpReadContext)\b/.test(uploadRe
     || !/state\.get\(object_key,\s*slot\.storage_object_version\.as_deref\(\)\)/.test(uploadApiSource)) {
   throw new Error('upload PUT and replay readback must use scoped, exact guarded authority');
 }
-const passwordChangeContext = structBody(read('src/api/contexts/password_change_http.rs'), 'pub(crate) struct PasswordChangeHttpContext');
+const passwordChangeContext = structBody(read('crates/edges/northstar-http/src/contexts/password_change_http.rs'), 'pub struct PasswordChangeHttpContext');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passwordChangeContext)
-    || !/pub async fn change_password<R: HttpRepositories>\(\s*State\(state\): State<PasswordChangeHttpContext<R>>/.test(read('src/api/users.rs'))) {
+    || !/pub async fn change_password<R: HttpRepositories>\(\s*State\(state\): State<PasswordChangeHttpContext<R>>/.test(read('crates/edges/northstar-http/src/users.rs'))) {
   throw new Error('password change admission must use scoped HTTP authority');
 }
 const accountGenerationTeardown = read('src/state/account_generation_teardown.rs');
 const teardownSequence = structBody(accountGenerationTeardown, 'pub(crate) struct AccountGenerationTeardownSequence');
 const accountTeardownRuntime = read('src/state/account_teardown_runtime.rs');
 const fullTeardownContext = structBody(accountTeardownRuntime, 'pub(crate) struct AccountTeardownRuntime');
-const accountTeardownPorts = read('src/api/contexts/account_teardown.rs');
+const accountTeardownPorts = read('crates/edges/northstar-http/src/contexts/account_teardown.rs');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(teardownSequence)
     || /\b(?:AppState|ClusterManager|PgPool)\b/.test(fullTeardownContext)
     || !teardownSequence.includes('SmTeardownService<PostgresSmTeardownRepository>')
@@ -2521,11 +2521,11 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(teardownSequence)
     || !/self\.routes\.revoke\([\s\S]+self\.sm\.revoke_user_with_teardown\(user_id\)\.await[\s\S]+self\.generation\.committed_generation\(user_id\)\.await[\s\S]+send_account_generation_teardown\(/.test(accountTeardownRuntime)
     || !/pub\(super\) async fn remove<R: HttpRepositories>\(\s*State\(teardown\): State<AccountGenerationTeardownContext>/.test(passkeyApiSource)
     || !/pub async fn consume_omemo_recovery<R: HttpRepositories>\(\s*State\(context\): State<OmemoRecoveryHttpContext<R>>,\s*State\(teardown\): State<AccountGenerationTeardownContext>/.test(recoveryApiSource)
-    || !/pub async fn change_password<R: HttpRepositories>\(\s*State\(state\): State<PasswordChangeHttpContext<R>>,\s*State\(teardown\): State<AccountTeardownContext>/.test(read('src/api/users.rs'))
+    || !/pub async fn change_password<R: HttpRepositories>\(\s*State\(state\): State<PasswordChangeHttpContext<R>>,\s*State\(teardown\): State<AccountTeardownContext>/.test(read('crates/edges/northstar-http/src/users.rs'))
     || /\b(?:AppState|ClusterManager|PgPool)\b|crate::state\b/.test(accountTeardownPorts)
     || !accountTeardownPorts.includes('teardown: Arc<dyn AccountSessionTeardown>')
     || !accountTeardownPorts.includes('teardown: Arc<dyn AccountGenerationTeardown>')
-    || /State<Arc<AppState>>/.test(passkeyApiSource + recoveryApiSource + read('src/api/users.rs'))) {
+    || /State<Arc<AppState>>/.test(passkeyApiSource + recoveryApiSource + read('crates/edges/northstar-http/src/users.rs'))) {
   throw new Error('post-commit account teardown must use scoped HTTP contexts and ordered effects');
 }
 const smTeardownService = read('crates/contexts/session/northstar-session-application/src/sm_teardown.rs');
@@ -2556,20 +2556,20 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(operationWorkerFields)
     || !/pub\(crate\) async fn serve\(\s*runtime: OperationWorkerRuntime/.test(operationRuntime)) {
   throw new Error('ordinary operation claims and effects must retain scoped worker authority');
 }
-const disabledFactoryReset = structBody(read('src/api/admin.rs'), 'pub async fn admin_nuke(');
-if (!/pub async fn admin_nuke\(\s*_actor: ApiAdmin/.test(read('src/api/admin.rs'))
+const disabledFactoryReset = structBody(read('crates/edges/northstar-http/src/admin.rs'), 'pub async fn admin_nuke(');
+if (!/pub async fn admin_nuke\(\s*_actor: ApiAdmin/.test(read('crates/edges/northstar-http/src/admin.rs'))
     || /Arc<AppState>/.test(disabledFactoryReset)) {
   throw new Error('disabled factory reset must authenticate without broad application state');
 }
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passkeyAccountContext)
-    || !/pub\(super\) async fn list<R: HttpRepositories>\(\s*State\(state\): State<PasskeyAccountHttpContext<R>>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext<R>>/s.test(passkeyApiSource)
-    || !/pub\(super\) async fn register_finish<R: HttpRepositories>\(\s*State\(state\): State<PasskeyAccountHttpContext<R>>,\s*State\(queries\): State<crate::api::contexts::ApiQueryContext<R>>/s.test(passkeyApiSource)) {
+    || !/pub\(super\) async fn list<R: HttpRepositories>\(\s*State\(state\): State<PasskeyAccountHttpContext<R>>,\s*State\(queries\): State<crate::contexts::ApiQueryContext<R>>/s.test(passkeyApiSource)
+    || !/pub\(super\) async fn register_finish<R: HttpRepositories>\(\s*State\(state\): State<PasskeyAccountHttpContext<R>>,\s*State\(queries\): State<crate::contexts::ApiQueryContext<R>>/s.test(passkeyApiSource)) {
   throw new Error('account Passkeys reads and registration completion must use scoped HTTP authority');
 }
-const omemoRecoveryApi = read('src/api/omemo_recovery.rs');
+const omemoRecoveryApi = read('crates/edges/northstar-http/src/omemo_recovery.rs');
 const omemoRecoveryContext = structBody(
-  read('src/api/contexts/omemo_recovery_http.rs'),
-  'pub(crate) struct OmemoRecoveryHttpContext',
+  read('crates/edges/northstar-http/src/contexts/omemo_recovery_http.rs'),
+  'pub struct OmemoRecoveryHttpContext',
 );
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(omemoRecoveryContext)) {
   throw new Error('authenticated OMEMO recovery context gained broad application authority');
@@ -2706,7 +2706,7 @@ for (const accessor of ['account_service', 'push_service']) {
   }
 }
 
-const registrationHandler = structBody(read('src/api/auth_routes.rs'), 'pub async fn register<R: HttpRepositories>(');
+const registrationHandler = structBody(read('crates/edges/northstar-http/src/auth_routes.rs'), 'pub async fn register<R: HttpRepositories>(');
 if (!/\.service\(\)[\s\S]+\.register_http\(HttpRegistrationRequest/.test(registrationHandler)) {
   throw new Error('HTTP registration must enter the account service with a typed command');
 }
@@ -3672,17 +3672,17 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(panicEffectsFields)
     || !/let disconnected = routes\.cancel_all\(\);\s*teardown\(\)\.await\?;/.test(panicDisconnect)) {
   throw new Error('emergency disconnect must cancel all local routes before durable SM teardown');
 }
-const loginEndpointSource = read('src/api/auth_routes.rs');
+const loginEndpointSource = read('crates/edges/northstar-http/src/auth_routes.rs');
 const loginEndpoint = structBody(loginEndpointSource, 'pub async fn login<R: HttpRepositories>(');
-const loginContext = structBody(read('src/api/contexts/http_login_endpoint.rs'), 'pub(crate) struct HttpLoginEndpointContext');
+const loginContext = structBody(read('crates/edges/northstar-http/src/contexts/http_login_endpoint.rs'), 'pub struct HttpLoginEndpointContext');
 if (!loginEndpointSource.includes('State(context): State<HttpLoginEndpointContext<R>>')
     || /\bstate\.(?:metrics|pool|config)\b/.test(loginEndpoint)
     || /\bAppState\b|\bMetrics\b|PgPool/.test(loginContext)) {
   throw new Error('REST login must receive only its service, proxy policy and outcome counters');
 }
-const uploadSource = read('src/api/upload.rs');
+const uploadSource = read('crates/edges/northstar-http/src/upload.rs');
 const uploadGet = structBody(uploadSource, 'pub async fn upload_get<R: HttpRepositories>(');
-const uploadReadContext = structBody(read('src/api/contexts/upload_http_read.rs'), 'pub(crate) struct UploadHttpReadContext');
+const uploadReadContext = structBody(read('crates/edges/northstar-http/src/contexts/upload_http_read.rs'), 'pub struct UploadHttpReadContext');
 if (!uploadSource.includes('State(state): State<UploadHttpReadContext<R>>')
     || !uploadGet.includes('let download_guard = state.acquire_download(client_ip)')
     || !uploadGet.includes('let _download_guard = download_guard;')
@@ -3695,9 +3695,9 @@ if (/\bstate\.metrics\b|\bself\.state\.metrics\b|&(?:(?:northstar_telemetry::)?m
     || !capsEffectSource.includes('state.caps_effect_telemetry()')) {
   throw new Error('caps effect dispatch must receive only its admission and completion telemetry');
 }
-const passkeyFinishSource = read('src/api/passkeys.rs');
+const passkeyFinishSource = read('crates/edges/northstar-http/src/passkeys.rs');
 const passkeyFinish = structBody(passkeyFinishSource, 'pub(super) async fn login_finish<R: HttpRepositories>(');
-const passkeyFinishContext = structBody(read('src/api/contexts/passkey_login_finish.rs'), 'pub(crate) struct PasskeyLoginFinishContext');
+const passkeyFinishContext = structBody(read('crates/edges/northstar-http/src/contexts/passkey_login_finish.rs'), 'pub struct PasskeyLoginFinishContext');
 if (!passkeyFinishSource.includes('State(state): State<PasskeyLoginFinishContext<R>>')
     || !/check_expected_origin\(&state\.allowed_origin\(\)\?, &headers\)\?;[\s\S]*?state\.finish\(/.test(passkeyFinish)
     || /\b(?:AppState|Metrics|PgPool)\b/.test(passkeyFinishContext)) {
@@ -3739,12 +3739,12 @@ if (/\.metrics\b/.test(accountRecoverySource)
     || countMatches(accountRecoverySource, /context\.telemetry\(\)\.lease_lost\(\)/g) !== 1) {
   throw new Error('account deletion recovery must use its three shared telemetry cells');
 }
-const readinessEndpointSource = read('src/api/system.rs');
+const readinessEndpointSource = read('crates/edges/northstar-http/src/system.rs');
 const metricsEndpoint = structBody(readinessEndpointSource, 'pub struct MetricsEndpointState');
-const metricsContextSource = read('src/api/contexts/metrics.rs');
+const metricsContextSource = read('crates/edges/northstar-http/src/contexts/metrics.rs');
 const metricsContextProduction = productionWithoutCfgTestModules(metricsContextSource, 'metrics context production');
-const metricsContext = structBody(metricsContextSource, 'pub(crate) struct MetricsContext');
-const metricsServe = structBody(readRoleSplitFile('src/api/mod.rs', { root }), 'pub async fn serve_metrics<');
+const metricsContext = structBody(metricsContextSource, 'pub struct MetricsContext');
+const metricsServe = structBody(readRoleSplitFile('crates/edges/northstar-http/src/lib.rs', { root }), 'pub async fn serve_metrics<');
 if (!metricsEndpoint.includes('context: MetricsContext')
     || /Arc<AppState>/.test(metricsEndpoint)
     || /\b(?:AppState|ClusterManager|TlsContext)\b|Arc<dyn Fn/.test(metricsContext)
@@ -3758,10 +3758,10 @@ if (!metricsEndpoint.includes('context: MetricsContext')
   throw new Error('private metrics endpoint must use a narrow live, read-only observability context');
 }
 const readinessEndpoint = structBody(readinessEndpointSource, 'pub struct ReadyEndpointState');
-const readinessContext = rustItemBody(read('src/api/contexts/readiness.rs'), 'pub(crate) struct ReadinessContext');
+const readinessContext = rustItemBody(read('crates/edges/northstar-http/src/contexts/readiness.rs'), 'pub struct ReadinessContext');
 if (!readinessEndpoint.includes('context: ReadinessContext')
     || /Arc<AppState>|(?:AppState|ClusterManager|WorkerRegistry|SmMemoryGovernor|UploadSafetyGate|ConnectionActorRegistry)\b/.test(readinessContext)
-    || countMatches(readRoleSplitFile('src/api/mod.rs', { root }), /ReadyEndpointState::new\(state\.readiness_context\(\)\)/g) !== 2) {
+    || countMatches(readRoleSplitFile('crates/edges/northstar-http/src/lib.rs', { root }), /ReadyEndpointState::new\(state\.readiness_context\(\)\)/g) !== 2) {
   throw new Error('readiness listeners must receive only a narrow read-only runtime context');
 }
 const clusterSource = cluster;

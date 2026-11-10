@@ -1,9 +1,9 @@
 //! Ordered post-commit account revocation.
 
 use super::{sm_teardown_runtime::SmTeardownRuntime, AccountRevocationRoutes, AppState};
-use crate::api::contexts::account_teardown::AccountGenerationTeardown;
 use crate::cluster::ClusterAccountTeardownNotifier;
 use futures::future::BoxFuture;
+use northstar_http::contexts::account_teardown::AccountGenerationTeardown;
 use northstar_session_application::sm_teardown::SmTeardownService;
 use northstar_workflows::sm_teardown_repository::PostgresSmTeardownRepository;
 use std::future::Future;

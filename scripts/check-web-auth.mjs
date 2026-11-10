@@ -9,7 +9,7 @@ const xmppSource = fs.readFileSync(new URL('../web/xmpp.js', import.meta.url), '
 const omemoSource = fs.readFileSync(new URL('../web/omemo.js', import.meta.url), 'utf8');
 const appSource = fs.readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
 const storageSource = fs.readFileSync(new URL('../web/storage.js', import.meta.url), 'utf8');
-const apiSource = readRoleSplitFile('src/api/mod.rs');
+const apiSource = readRoleSplitFile('crates/edges/northstar-http/src/lib.rs');
 const csp = apiSource.match(/const SPA_CONTENT_SECURITY_POLICY: &str = "([^"]+)";/)?.[1] || '';
 const nodeRequire = createRequire(import.meta.url);
 const { safeFrame } = nodeRequire('./web-e2e.cjs');

@@ -71,10 +71,11 @@ fn retry_idempotency_request<'a>(
         method: "POST",
         route: "/api/v1/admin/upload-dead-letters/{kind}/{id}/retry",
         idempotency_key: key,
-        request_fingerprint: crate::api::upload_admin::admin_generation_bound_request_fingerprint(
-            base,
-            auth_generation,
-        ),
+        request_fingerprint:
+            northstar_http::upload_admin::admin_generation_bound_request_fingerprint(
+                base,
+                auth_generation,
+            ),
         ttl_seconds: 86_400,
         lease_seconds: 30,
     }
@@ -178,7 +179,7 @@ async fn postgres_retry_idempotency_replay_target_generation_and_not_found_contr
         other => panic!("unexpected replay outcome: {other:?}"),
     };
     replay_tx.commit().await.unwrap();
-    let response = crate::api::idempotency_replay_response(replay).unwrap();
+    let response = northstar_http::idempotency_replay_response(replay).unwrap();
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert_eq!(
         response
@@ -317,7 +318,7 @@ async fn postgres_retry_idempotency_replay_target_generation_and_not_found_contr
         other => panic!("unexpected stored-404 replay outcome: {other:?}"),
     };
     missing_replay_tx.commit().await.unwrap();
-    let response = crate::api::idempotency_replay_response(replay).unwrap();
+    let response = northstar_http::idempotency_replay_response(replay).unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(
         response

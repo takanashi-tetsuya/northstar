@@ -22,7 +22,6 @@
 /src/main.rs                          @takanashi-tetsuya
 /src/state.rs                         @takanashi-tetsuya
 /src/state/**                         @takanashi-tetsuya
-/src/api/**                           @takanashi-tetsuya
 /src/xmpp/**                          @takanashi-tetsuya
 
 # Workspace crates

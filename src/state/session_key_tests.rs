@@ -14,10 +14,10 @@ use super::{
     MucOccupantEndpoint, SerializableMucOccupant, SessionLookup, SuspendedMucEndpoint,
     SuspendedMucPhase, SuspendedMucRoute,
 };
-use crate::api::contexts::omemo_poll::{
+use dashmap::DashMap;
+use northstar_http::contexts::omemo_poll::{
     admit_bounded_omemo_poll_ip, admit_omemo_poll_ip_window, OMEMO_POLL_IP_REQUESTS_PER_MINUTE,
 };
-use dashmap::DashMap;
 use northstar_room_core::occupancy::muc_departure_identity_matches;
 use northstar_session_application::RouteIncarnationSignal;
 use northstar_session_core::{
@@ -1311,7 +1311,7 @@ fn service_control_only_stops_processes_started_before_the_fire_epoch() {
 
 #[test]
 fn api_cursor_rotation_uses_the_shared_api_secret_overlap() {
-    use crate::api::cursor::{CursorBinding, CursorDirection, CursorPosition, CursorValue};
+    use northstar_http::cursor::{CursorBinding, CursorDirection, CursorPosition, CursorValue};
 
     let old_secret = b"old-shared-api-secret-000000000001";
     let current_secret = b"new-shared-api-secret-000000000002";

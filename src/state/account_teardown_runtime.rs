@@ -3,13 +3,11 @@
 use super::{
     session_cleanup_sm_revoker::SessionCleanupSmRevoker, AccountRevocationRoutes, AppState,
 };
-use crate::{
-    api::contexts::account_teardown::AccountSessionTeardown,
-    cluster::ClusterAccountTeardownNotifier,
-};
+use crate::cluster::ClusterAccountTeardownNotifier;
 use futures::future::BoxFuture;
 use northstar_auth_application::account_teardown::AccountGenerationService;
 use northstar_auth_postgres::account_teardown_repository::PostgresAccountGenerationRepository;
+use northstar_http::contexts::account_teardown::AccountSessionTeardown;
 use std::sync::Arc;
 use uuid::Uuid;
 

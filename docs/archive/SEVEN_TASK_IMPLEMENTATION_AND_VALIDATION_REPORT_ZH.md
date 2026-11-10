@@ -19,7 +19,7 @@
 - XML 流和 stanza 语义在 `src/xmpp/`；
 - 持久化及事务一致性在 `src/db/`；
 - 联邦认证、DNS 和连接复用在 `src/s2s/`；
-- REST、管理与 WebSocket 入口在 `src/api/`；
+- REST、管理与 WebSocket 入口在 `crates/edges/northstar-http/src/`；
 - 进程内会话、缓存、信号量和撤销令牌在 `src/state.rs`；
 - 可变部署值只通过 `src/config.rs`、`.env` 或 mounted secret 进入。
 

@@ -326,7 +326,7 @@ PKG=rust-xmpp-server PREFIX=api_operations OPS=1 FILTER='^db::api_operations' ba
 - root 的 `pub use northstar_*::*` glob 不要帶過去，每個 `db::名稱` 都改成擁有它的 crate。
 - 消費者直接 import `northstar_workflows::...`，`src/db/mod.rs` 不留轉發。
 - 測試跟著模組移動。需要 SM 或其他 root 項目的測試留在 root，只改 import。
-- 主要消費者在 `src/state.rs:298`、`src/state/{auth_module,roster_module,service_accessors,account_deletion_recovery,session_cleanup_presence,pubsub_notification_delivery}.rs`、`src/api/contexts/http_registration_endpoint.rs`。
+- 主要消費者在 `src/state.rs:298`、`src/state/{auth_module,roster_module,service_accessors,account_deletion_recovery,session_cleanup_presence,pubsub_notification_delivery}.rs`、`crates/edges/northstar-http/src/contexts/http_registration_endpoint.rs`。
 
 ### C1 RootAbuseEffects（WP-420）
 
@@ -361,7 +361,7 @@ PKG=rust-xmpp-server PREFIX=api_operations OPS=1 FILTER='^db::api_operations' ba
 
 ## 工作流 D：OMEMO 恢復與 retention 收尾
 
-OMEMO 恢復歸屬 auth 上下文，移動後 `src/db/retention.rs` 就能整個退場。HTTP 層（`src/api/omemo_recovery.rs`、`src/api/contexts/{omemo_poll,omemo_recovery_http}.rs`）留在 root 等 S30，只改 import。
+OMEMO 恢復歸屬 auth 上下文，移動後 `src/db/retention.rs` 就能整個退場。HTTP 層（`crates/edges/northstar-http/src/omemo_recovery.rs`、`crates/edges/northstar-http/src/contexts/{omemo_poll,omemo_recovery_http}.rs`）留在 root 等 S30，只改 import。
 
 1. **WP-430**：`src/services/omemo_recovery.rs`（211 行）移入 `northstar-auth-application`。
 2. **WP-431**：`src/db/omemo_recovery.rs`（1,071 行）與 `src/db/omemo_recovery_repository.rs`（235 行）移入 `northstar-auth-postgres`。刪除 `src/db/mod.rs:111` 的 glob 匯出。

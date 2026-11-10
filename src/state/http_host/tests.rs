@@ -41,8 +41,8 @@ fn openapi_contract_lists_exact_router_methods() {
     }
 
     let router_source = [
-        include_str!("../../api/mod.rs"),
-        include_str!("../../api/route_composition.rs"),
+        include_str!("../../../crates/edges/northstar-http/src/lib.rs"),
+        include_str!("../../../crates/edges/northstar-http/src/route_composition.rs"),
         include_str!("../http_host.rs"),
     ]
     .join("\n");

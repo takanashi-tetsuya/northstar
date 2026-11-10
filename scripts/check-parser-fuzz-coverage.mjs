@@ -101,7 +101,7 @@ const targets = new Map([
   [
     "rest_extractors",
     {
-      modules: [["extract", "../../src/api/extract.rs"]],
+      modules: [["extract", "../../crates/edges/northstar-http/src/extract.rs"]],
       entryPoints: [
         ["production REST query extractor", /\bextract::ApiQuery\b/],
         ["production REST path extractor", /\bextract::ApiPath\b/],

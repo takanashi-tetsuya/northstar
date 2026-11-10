@@ -13,7 +13,7 @@ pub(super) struct LocalApiQueryPresence {
     pub(super) occupants: Arc<DashMap<String, MucOccupant>>,
 }
 
-impl crate::api::contexts::api_queries::LocalPresenceDirectory for LocalApiQueryPresence {
+impl northstar_http::contexts::api_queries::LocalPresenceDirectory for LocalApiQueryPresence {
     fn online_session_count(&self) -> usize {
         self.sessions.len()
     }

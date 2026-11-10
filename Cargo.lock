@@ -2240,6 +2240,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-http"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "dashmap",
+ "futures",
+ "hmac",
+ "northstar-abuse-application",
+ "northstar-abuse-policy",
+ "northstar-archive-application",
+ "northstar-auth-application",
+ "northstar-auth-core",
+ "northstar-auth-postgres",
+ "northstar-config",
+ "northstar-federation-application",
+ "northstar-operations-application",
+ "northstar-operations-core",
+ "northstar-postgres",
+ "northstar-runtime",
+ "northstar-security",
+ "northstar-session-application",
+ "northstar-telemetry",
+ "northstar-upload-application",
+ "northstar-xml-builder",
+ "northstar-xmpp-types",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "subtle",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "tower-http",
+ "tracing",
+ "uuid",
+ "webauthn-rs",
+ "zeroize",
+]
+
+[[package]]
 name = "northstar-message-application"
 version = "0.1.0"
 dependencies = [
@@ -4196,6 +4241,7 @@ dependencies = [
  "northstar-federation-application",
  "northstar-federation-core",
  "northstar-federation-postgres",
+ "northstar-http",
  "northstar-message-application",
  "northstar-message-core",
  "northstar-message-postgres",

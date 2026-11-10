@@ -7,11 +7,11 @@ const client = fs.readFileSync(new URL('../web/client.js', import.meta.url), 'ut
 const recovery = fs.readFileSync(new URL('../web/omemo-recovery.mjs', import.meta.url), 'utf8');
 const recoveryWorker = fs.readFileSync(new URL('../web/omemo-recovery-worker.mjs', import.meta.url), 'utf8');
 const recoveryWorkerClient = fs.readFileSync(new URL('../web/omemo-recovery-worker-client.mjs', import.meta.url), 'utf8');
-const recoveryApi = fs.readFileSync(new URL('../src/api/omemo_recovery.rs', import.meta.url), 'utf8');
+const recoveryApi = fs.readFileSync(new URL('../crates/edges/northstar-http/src/omemo_recovery.rs', import.meta.url), 'utf8');
 const recoveryDb = fs.readFileSync(new URL('../crates/contexts/auth/northstar-auth-postgres/src/omemo_recovery.rs', import.meta.url), 'utf8');
 const recoveryRepository = fs.readFileSync(new URL('../crates/contexts/auth/northstar-auth-postgres/src/omemo_recovery_repository.rs', import.meta.url), 'utf8');
-const recoveryPoll = fs.readFileSync(new URL('../src/api/contexts/omemo_poll.rs', import.meta.url), 'utf8');
-const api = readRoleSplitFile('src/api/mod.rs');
+const recoveryPoll = fs.readFileSync(new URL('../crates/edges/northstar-http/src/contexts/omemo_poll.rs', import.meta.url), 'utf8');
+const api = readRoleSplitFile('crates/edges/northstar-http/src/lib.rs');
 const serverState = readProductionModule('src/state.rs'); // whole production module
 const metrics = fs.readFileSync(new URL('../crates/platform/northstar-telemetry/src/metrics.rs', import.meta.url), 'utf8');
 
@@ -90,7 +90,7 @@ requirePattern(recoveryPoll, /OMEMO_POLL_CONCURRENCY: usize = 4[\s\S]+OMEMO_POLL
 requirePattern(serverState, /let omemo_recovery_poll_pool = startup_database_connect\([\s\S]+PostgresOmemoRecoveryPollRepository::new\(\s*omemo_recovery_poll_pool/, 'public recovery polling must retain its dedicated database pool');
 requirePattern(recoveryRepository, /struct PostgresOmemoRecoveryPollRepository\s*\{\s*pool: PgPool,[\s\S]+impl OmemoRecoveryPollRepository[\s\S]+crate::omemo_recovery::poll_omemo_recovery_transfer\(\s*&self\.pool,/, 'public recovery polling must use the isolated repository');
 requirePattern(recoveryPoll, /Semaphore::new\(OMEMO_POLL_CONCURRENCY\)[\s\S]+admit_bounded_omemo_poll_ip\([\s\S]+try_acquire_owned\(\)/, 'public recovery polling must enforce both IP and global admission');
-requirePattern(recoveryApi, /State<crate::api::contexts::OmemoRecoveryPollContext<R>>[\s\S]+client_ip_with_trusted_proxies\(peer.ip\(\), &headers, state.trusted_proxies\(\)\)[\s\S]+state.acquire\(source_ip\)[\s\S]+\.poll\(transfer_id, &poll_secret\)/, 'poll admission must use the trusted-proxy client IP and precede every database lookup');
+requirePattern(recoveryApi, /State<crate::contexts::OmemoRecoveryPollContext<R>>[\s\S]+client_ip_with_trusted_proxies\(peer.ip\(\), &headers, state.trusted_proxies\(\)\)[\s\S]+state.acquire\(source_ip\)[\s\S]+\.poll\(transfer_id, &poll_secret\)/, 'poll admission must use the trusted-proxy client IP and precede every database lookup');
 requirePattern(api, /fn client_ip_with_trusted_proxies\([\s\S]+if !trusted.contains\(&peer_ip\)\s*\{\s*return peer_ip;\s*\}[\s\S]+forwarded_client_ip_from_headers\(peer_ip, headers, trusted\)/, 'recovery polling must ignore forwarded addresses from untrusted peers');
 requirePattern(recoveryDb, /pool\.begin\(\)[\s\S]+SET LOCAL statement_timeout = '1500ms'[\s\S]+fetch_optional\(&mut \*tx\)/, 'public recovery polling has no transaction-local bounded database execution time');
 if (/admit_omemo_poll_ip_window\(&mut window, now\)[\s\S]{0,300}window\.push_back\(now\)/.test(recoveryPoll)) {

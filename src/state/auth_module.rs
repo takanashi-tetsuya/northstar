@@ -199,12 +199,12 @@ impl AuthModule {
             login_service,
             password_change_service,
             authentication_service,
-            account_admin_service: crate::api::contexts::ServiceContext(account_admin_service),
-            registration_admin_service: crate::api::contexts::ServiceContext(
+            account_admin_service: northstar_http::contexts::ServiceContext(account_admin_service),
+            registration_admin_service: northstar_http::contexts::ServiceContext(
                 registration_admin_service,
             ),
-            session_admin_service: crate::api::contexts::ServiceContext(session_admin_service),
-            invitation_admin_service: crate::api::contexts::ServiceContext(
+            session_admin_service: northstar_http::contexts::ServiceContext(session_admin_service),
+            invitation_admin_service: northstar_http::contexts::ServiceContext(
                 invitation_admin_service,
             ),
             omemo_recovery_service,

@@ -12,7 +12,9 @@ pub(crate) mod account_deletion_recovery;
 pub(crate) mod account_generation_teardown;
 pub(crate) mod account_recovery;
 mod api_query_presence;
+pub(crate) mod http_contexts;
 pub(crate) mod http_host;
+pub(crate) mod http_repositories;
 mod metrics_context;
 mod push_notification_delivery;
 pub(crate) use account_deletion_recovery::AccountDeletionRecoveryContext;
@@ -97,15 +99,13 @@ mod sm_teardown_session;
 pub(crate) mod standalone_muc_maintenance;
 pub(crate) mod suspension;
 
-use crate::api::contexts::{
-    api_queries, governance, http_body_admission, http_policy, omemo_poll, retention_policy,
-    AccountAdminContext, AdminDispatchContext, AdminGatewayVerifier, ApiQueryContext,
-    GovernanceContext, HttpTransportPolicy, InvitationAdminContext, OmemoRecoveryPollContext,
-    OperationAdminContext, PasskeyService, PublicDiscoveryContext, RegistrationAdminContext,
-    ReportModerationContext, RetentionPolicyContext, SessionAdminContext, UploadAdminContext,
-    UploadService,
-};
 use crate::s2s::FederationRouter;
+use crate::state::http_contexts::{
+    AccountAdminContext, AdminDispatchContext, ApiQueryContext, GovernanceContext,
+    InvitationAdminContext, OmemoRecoveryPollContext, OperationAdminContext, PasskeyService,
+    RegistrationAdminContext, ReportModerationContext, RetentionPolicyContext, SessionAdminContext,
+    UploadAdminContext, UploadService,
+};
 use anyhow::Context;
 use dashmap::DashMap;
 use hickory_resolver::{
@@ -119,6 +119,10 @@ use northstar_abuse_policy::AbuseConfig;
 use northstar_config::{
     AdminCommandPoolMode, Config, StoragePoolMode, OMEMO_RECOVERY_POOL_MAX_CONNECTIONS,
     SERVICE_CONTROL_POOL_MAX_CONNECTIONS, STORAGE_POOL_MAX_CONNECTIONS,
+};
+use northstar_http::contexts::{
+    api_queries, governance, http_body_admission, http_policy, omemo_poll, retention_policy,
+    AdminGatewayVerifier, HttpTransportPolicy, PublicDiscoveryContext,
 };
 use northstar_telemetry::metrics::Metrics;
 use northstar_upload_application::safety::UploadSafetyGate;

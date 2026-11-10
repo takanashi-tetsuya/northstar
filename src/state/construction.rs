@@ -13,14 +13,14 @@ pub(super) fn api_keyrings(
     previous_secret: Option<&[u8]>,
 ) -> anyhow::Result<(
     northstar_operations_postgres::api_control::ApiControlKeyring,
-    crate::api::cursor::CursorKeyring,
+    northstar_http::cursor::CursorKeyring,
 )> {
     let api_control = northstar_operations_postgres::api_control::ApiControlKeyring::new(
         current_secret,
         previous_secret,
     )
     .context("failed to derive API control keys")?;
-    let api_cursor = crate::api::cursor::CursorKeyring::new(current_secret, previous_secret)
+    let api_cursor = northstar_http::cursor::CursorKeyring::new(current_secret, previous_secret)
         .context("failed to derive API cursor keys")?;
     Ok((api_control, api_cursor))
 }

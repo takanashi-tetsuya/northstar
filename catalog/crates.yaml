@@ -258,6 +258,14 @@ crates:
     api_stability: internal
     publish_policy: never
 
+  - crate_id: northstar-http
+    package: northstar-http
+    path: crates/edges/northstar-http
+    tier: edge
+    owner_team: platform
+    api_stability: internal
+    publish_policy: never
+
   - crate_id: northstar-message-application
     package: northstar-message-application
     path: crates/contexts/message/northstar-message-application

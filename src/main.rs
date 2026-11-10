@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-mod api;
 use northstar_cluster as cluster;
 mod db;
 #[cfg(test)]
@@ -764,12 +763,12 @@ async fn run() -> Result<()> {
     spawn_service_task(
         &mut service_tasks,
         "metrics",
-        api::serve_metrics(state.metrics_context(), cancel.clone(), metrics_listener),
+        northstar_http::serve_metrics(state.metrics_context(), cancel.clone(), metrics_listener),
     );
     spawn_service_task(
         &mut service_tasks,
         "HTTP",
-        api::serve(
+        northstar_http::serve(
             state.clone(),
             state::http_host::xmpp_transport_routes(&state),
             cancel.clone(),
@@ -783,7 +782,7 @@ async fn run() -> Result<()> {
         spawn_service_task(
             &mut service_tasks,
             "Web administration",
-            api::serve_administration(state.clone(), cancel.clone(), listener),
+            northstar_http::serve_administration(state.clone(), cancel.clone(), listener),
         );
     }
     runtime::test_activation::publish_if_enabled(
@@ -801,7 +800,7 @@ async fn run() -> Result<()> {
                 .map(anyhow::Error::msg);
             false
         },
-        _ = api::shutdown_signal() => {
+        _ = northstar_http::shutdown_signal() => {
             tracing::info!("shutdown signal received; stopping listeners and draining HTTP requests");
             true
         },

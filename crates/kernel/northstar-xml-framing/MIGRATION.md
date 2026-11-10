@@ -94,7 +94,7 @@ The framing logic extracted into this crate is consumed by all XMPP transport me
 4. **BOSH / HTTP Binding (`crates/edges/northstar-stream/src/transport_parsing.rs`)**:
    - Validates XML entity framing and ensures request bodies contain well-formed `<body/>` wrapper frames without exceeding resource ceilings.
 
-5. **HTTP Upload & S2S DNS Framing Verification (`src/api/upload.rs`, `crates/edges/northstar-s2s/src/dns.rs`)**:
+5. **HTTP Upload & S2S DNS Framing Verification (`crates/edges/northstar-http/src/upload.rs`, `crates/edges/northstar-s2s/src/dns.rs`)**:
    - Verifies transport-level framing headers and enforces structural payload constraints.
 
 ---

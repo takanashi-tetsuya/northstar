@@ -193,7 +193,7 @@ During this extraction phase:
    - `src/db/cluster_muc.rs`: Clustered occupancy state transitions, eviction tracking.
 
 3. **HTTP / Admin APIs**:
-   - `src/api/admin.rs`: Room destruction and affiliation management endpoints.
+   - `crates/edges/northstar-http/src/admin.rs`: Room destruction and affiliation management endpoints.
 
 4. **Stream Management & Session Restoration**:
    - `src/xmpp/protocol/sm.rs`: Rejoining MUC rooms on resumed XEP-0198 sessions.

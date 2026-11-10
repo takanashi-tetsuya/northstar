@@ -1,0 +1,32 @@
+//! Passkey login completion can verify the origin and commit a login, but has
+//! no bearer-session, anti-abuse, proxy, or broader application authority.
+
+use super::PasskeyService;
+use crate::repositories::HttpRepositories;
+use northstar_auth_application::passkeys::{PasskeyError, PasskeyLoginOutcome};
+use std::sync::Arc;
+use uuid::Uuid;
+use webauthn_rs::prelude::PublicKeyCredential;
+
+#[derive(Clone)]
+pub struct PasskeyLoginFinishContext<R: HttpRepositories> {
+    service: Arc<PasskeyService<R>>,
+}
+
+impl<R: HttpRepositories> PasskeyLoginFinishContext<R> {
+    pub fn new(service: Arc<PasskeyService<R>>) -> Self {
+        Self { service }
+    }
+
+    pub fn allowed_origin(&self) -> Result<String, PasskeyError> {
+        self.service.allowed_origin()
+    }
+
+    pub async fn finish(
+        &self,
+        challenge_id: Uuid,
+        credential: PublicKeyCredential,
+    ) -> Result<PasskeyLoginOutcome, PasskeyError> {
+        self.service.login_finish(challenge_id, credential).await
+    }
+}

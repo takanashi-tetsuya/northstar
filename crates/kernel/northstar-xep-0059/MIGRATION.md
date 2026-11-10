@@ -11,10 +11,13 @@ This document records the extraction of the canonical, capability-free XEP-0059 
 orthstar-xep-0059
 - **Location**: crates/kernel/northstar-xep-0059
 - **Specification**: [XEP-0059: Result Set Management](https://xmpp.org/extensions/xep-0059.html) (Version 1.0.0)
-- **Policy**: Pure capability-free library crate (#![forbid(unsafe_code)], Rust 2021, ust-version = 1.97, publish = false, license = AGPL-3.0-only).
+- **Policy**: Pure capability-free library crate (#![forbid(unsafe_code)], Rust 2021, 
+ust-version = 1.97, publish = false, license = AGPL-3.0-only).
 - **Dependencies**: 
-orthstar-xep-core, oxmltree = 0.20, 	hiserror = 2.0, serde = 1.0 (optional).
-- **Forbidden Capabilities**: No database engines (sqlx, PgPool), caches (edis), async runtimes (	okio), networking/sockets, filesystem, environment access, logging engines (	racing/log), delivery routing, or global state (AppState).
+orthstar-xep-core, 
+oxmltree = 0.20, 	hiserror = 2.0, serde = 1.0 (optional).
+- **Forbidden Capabilities**: No database engines (sqlx, PgPool), caches (
+edis), async runtimes (	okio), networking/sockets, filesystem, environment access, logging engines (	racing/log), delivery routing, or global state (AppState).
 
 ---
 
@@ -40,7 +43,11 @@ orthstar_xep_0059::{RsmFin, build_mam_fin} |
 orthstar_xep_0059::{RsmFin, build_mam_fin} |
 | src/db/archive.rs & src/db/mix.rs | MamRsmPage | Database query cursor enum (First, Last, Before(Uuid), After(Uuid), Index(i64)). | Maps 1:1 with 
 orthstar_xep_0059::PagingDirective. |
-| src/api/users.rs | REST API query mapper | REST query parameters (sm_after, sm_before, sm_index, sm_page) mapped to MamRsmPage. | Compatible with 
+| crates/edges/northstar-http/src/users.rs | REST API query mapper | REST query parameters (
+sm_after, 
+sm_before, 
+sm_index, 
+sm_page) mapped to MamRsmPage. | Compatible with 
 orthstar_xep_0059::PagingDirective. |
 
 ---

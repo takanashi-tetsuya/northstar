@@ -1,5 +1,5 @@
-use crate::api::{cursor::CursorKeyring, governance_cursor::SignedGovernanceCursors};
 use northstar_auth_core::api_session::ApiReadAuthority;
+use northstar_http::{cursor::CursorKeyring, governance_cursor::SignedGovernanceCursors};
 use northstar_operations_application::governance::*;
 use northstar_operations_core::api_mutations::*;
 use northstar_workflows::admin_mutations::AdminMutationStore;

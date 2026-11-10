@@ -28,7 +28,7 @@ impl BoshHost for AppState {
     }
 
     fn client_ip(&self, peer_ip: IpAddr, headers: &HeaderMap) -> IpAddr {
-        crate::api::client_ip(peer_ip, headers, &self.http_transport_policy())
+        northstar_http::client_ip(peer_ip, headers, &self.http_transport_policy())
     }
 
     fn replay_service(&self) -> &ReplayService<PostgresReplayRepository> {

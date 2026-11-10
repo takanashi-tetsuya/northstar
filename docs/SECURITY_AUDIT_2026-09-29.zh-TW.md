@@ -22,7 +22,7 @@ Caddy fixture 核驗提前拒絕、EOF、分片 JSON、21 秒上傳、31 秒 BOS
 
 ## S1 — P2：REST 主體讀取沒有期限，可在驗證前保留連線
 
-位置：[src/api/mod.rs:161](../src/api/mod.rs#L161)、[src/api/mod.rs:188](../src/api/mod.rs#L188)、[src/api/mod.rs:1447](../src/api/mod.rs#L1447)。代理範例：[deploy/Caddyfile:6](../deploy/Caddyfile#L6)。
+位置：`src/api/mod.rs:161`、`src/api/mod.rs:188`、`src/api/mod.rs:1447`（該檔已於 S30 移至 `crates/edges/northstar-http/src/lib.rs`，行號為審計當時）。代理範例：[deploy/Caddyfile:6](../deploy/Caddyfile#L6)。
 
 `ApiJson::from_request()` 對 `to_bytes(request.into_body(), API_BODY_LIMIT_BYTES)` 直接 `.await`。目前限制主體總位元組數，沒有讀取期限。`ApiEmpty` 也直接等待主體結束；共用 HTTP middleware 沒有為一般 REST 安裝主體讀取期限或對應的全域／IP 讀取名額。公開登入路由須先完成 JSON extraction 才進入登入服務，因此此階段尚未執行帳號驗證、PoW 或登入服務的容量控制。
 

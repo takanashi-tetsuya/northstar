@@ -311,7 +311,7 @@ pub(crate) async fn run_maintenance() -> Result<()> {
     ));
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let shutdown = crate::api::shutdown_signal();
+    let shutdown = northstar_http::shutdown_signal();
     tokio::pin!(shutdown);
     tracing::info!(role="maintenance", address=%config.maintenance_bind, "maintenance subserver started");
     let outcome = loop {

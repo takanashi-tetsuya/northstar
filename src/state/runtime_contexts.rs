@@ -1,7 +1,7 @@
 //! AppState worker contexts, connection admission, component credentials and runtime registries.
 
 use super::*;
-use crate::api::contexts::ReadinessContext;
+use crate::state::http_contexts::ReadinessContext;
 
 impl AppState {
     pub(crate) fn background_housekeeping_counters(

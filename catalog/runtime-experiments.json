@@ -981,7 +981,7 @@
       "budgets": {
         "contract": "Existing operation/HTTP/cleanup budgets; durable operation worker repeated in-loop errors lack WorkerRegistry heartbeat.",
         "source": {
-          "path": "src/api/mod.rs",
+          "path": "crates/edges/northstar-http/src/lib.rs",
           "anchor": "const API_BODY_LIMIT_BYTES: usize = 256 * 1024;"
         }
       },

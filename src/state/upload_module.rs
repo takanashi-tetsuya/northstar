@@ -3,8 +3,8 @@
 
 use super::construction::{AUXILIARY_POOL_ACQUIRE_TIMEOUT, AUXILIARY_POOL_STARTUP_BUDGET};
 use super::*;
-use crate::api::contexts::upload_admission::UploadAdmission;
 use anyhow::Context;
+use northstar_http::contexts::upload_admission::UploadAdmission;
 
 /// The upload context's runtime parts, built once at startup.
 pub(super) struct UploadModule {

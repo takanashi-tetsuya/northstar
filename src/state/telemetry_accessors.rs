@@ -1,7 +1,7 @@
 //! AppState metrics recorders, telemetry handles, broadcast routes and cluster runtime handles.
 
 use super::*;
-use crate::api::contexts::MetricsContext;
+use crate::state::http_contexts::MetricsContext;
 
 impl AppState {
     pub(crate) fn record_bosh_session_opened(&self) {

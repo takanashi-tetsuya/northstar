@@ -189,6 +189,7 @@
     "northstar-federation-application",
     "northstar-federation-core",
     "northstar-federation-postgres",
+    "northstar-http",
     "northstar-message-application",
     "northstar-message-core",
     "northstar-message-postgres",
@@ -3501,6 +3502,162 @@
     [
       "northstar-federation-postgres",
       "uuid"
+    ],
+    [
+      "northstar-http",
+      "anyhow"
+    ],
+    [
+      "northstar-http",
+      "axum"
+    ],
+    [
+      "northstar-http",
+      "base64"
+    ],
+    [
+      "northstar-http",
+      "bytes"
+    ],
+    [
+      "northstar-http",
+      "chrono"
+    ],
+    [
+      "northstar-http",
+      "dashmap"
+    ],
+    [
+      "northstar-http",
+      "futures"
+    ],
+    [
+      "northstar-http",
+      "hmac"
+    ],
+    [
+      "northstar-http",
+      "northstar-abuse-application"
+    ],
+    [
+      "northstar-http",
+      "northstar-abuse-policy"
+    ],
+    [
+      "northstar-http",
+      "northstar-archive-application"
+    ],
+    [
+      "northstar-http",
+      "northstar-auth-application"
+    ],
+    [
+      "northstar-http",
+      "northstar-auth-core"
+    ],
+    [
+      "northstar-http",
+      "northstar-auth-postgres"
+    ],
+    [
+      "northstar-http",
+      "northstar-config"
+    ],
+    [
+      "northstar-http",
+      "northstar-federation-application"
+    ],
+    [
+      "northstar-http",
+      "northstar-operations-application"
+    ],
+    [
+      "northstar-http",
+      "northstar-operations-core"
+    ],
+    [
+      "northstar-http",
+      "northstar-postgres"
+    ],
+    [
+      "northstar-http",
+      "northstar-runtime"
+    ],
+    [
+      "northstar-http",
+      "northstar-security"
+    ],
+    [
+      "northstar-http",
+      "northstar-session-application"
+    ],
+    [
+      "northstar-http",
+      "northstar-telemetry"
+    ],
+    [
+      "northstar-http",
+      "northstar-upload-application"
+    ],
+    [
+      "northstar-http",
+      "northstar-xml-builder"
+    ],
+    [
+      "northstar-http",
+      "northstar-xmpp-types"
+    ],
+    [
+      "northstar-http",
+      "serde"
+    ],
+    [
+      "northstar-http",
+      "serde_json"
+    ],
+    [
+      "northstar-http",
+      "sha2"
+    ],
+    [
+      "northstar-http",
+      "sqlx"
+    ],
+    [
+      "northstar-http",
+      "subtle"
+    ],
+    [
+      "northstar-http",
+      "thiserror"
+    ],
+    [
+      "northstar-http",
+      "tokio"
+    ],
+    [
+      "northstar-http",
+      "tokio-util"
+    ],
+    [
+      "northstar-http",
+      "tower-http"
+    ],
+    [
+      "northstar-http",
+      "tracing"
+    ],
+    [
+      "northstar-http",
+      "uuid"
+    ],
+    [
+      "northstar-http",
+      "webauthn-rs"
+    ],
+    [
+      "northstar-http",
+      "zeroize"
     ],
     [
       "northstar-message-application",
@@ -7537,6 +7694,10 @@
     [
       "rust-xmpp-server",
       "northstar-federation-postgres"
+    ],
+    [
+      "rust-xmpp-server",
+      "northstar-http"
     ],
     [
       "rust-xmpp-server",

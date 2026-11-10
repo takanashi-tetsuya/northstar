@@ -2,6 +2,10 @@
 
 #![forbid(unsafe_code)]
 
+pub use self::session_host::ArchiveSessionHost;
+
+mod session_host;
+
 #[cfg(test)]
 use chrono::Utc;
 #[cfg(test)]

@@ -20,6 +20,7 @@ mod push_notification_delivery;
 pub(crate) use account_deletion_recovery::AccountDeletionRecoveryContext;
 pub(crate) mod account_teardown_runtime;
 mod admin_session_cleanup;
+mod archive_session_host;
 pub(crate) mod background_maintenance;
 mod bosh_host;
 mod c2s_host;

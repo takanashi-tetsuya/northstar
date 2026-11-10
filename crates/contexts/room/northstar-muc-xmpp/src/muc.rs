@@ -943,6 +943,11 @@ pub async fn authorized_muc_occupant<S: MucSession>(
 }
 
 pub fn muc_domain(session: &impl MucSession) -> String {
-    prepare_domainpart(&format!("conference.{}", session.host().local_domain()))
+    muc_service_domain(session.host().local_domain())
+}
+
+/// The MUC service domain of the node serving `local_domain`.
+pub fn muc_service_domain(local_domain: &str) -> String {
+    prepare_domainpart(&format!("conference.{local_domain}"))
         .expect("configured XMPP domain must form a valid MUC service domain")
 }

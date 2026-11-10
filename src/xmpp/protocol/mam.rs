@@ -1,8 +1,9 @@
-use super::{Action, ProtocolSession};
+use super::{Action, ProtocolSession, SessionHost};
 use anyhow::Result;
 use northstar_archive_application::{
     ArchiveRow, MamPreferencesWriter, MamQueryRepository, MamRoomAccess, MamService,
 };
+use northstar_archive_xmpp::ArchiveSessionHost;
 use northstar_room_core::stanza::{mam_muc_stanza, muc_occupant_id, set_muc_occupant_id};
 use roxmltree::Node;
 
@@ -13,7 +14,7 @@ fn action(reply: northstar_archive_xmpp::MamReply) -> Action {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost + ArchiveSessionHost> ProtocolSession<H> {
     pub(crate) async fn mam_preferences_get(
         &self,
         id: &str,
@@ -70,7 +71,9 @@ impl ProtocolSession {
     }
 }
 
-impl northstar_archive_xmpp::MamSession for ProtocolSession {
+impl<H: SessionHost + ArchiveSessionHost> northstar_archive_xmpp::MamSession
+    for ProtocolSession<H>
+{
     fn mam_account(&self) -> Option<(uuid::Uuid, &str)> {
         self.authenticated
             .as_ref()
@@ -82,11 +85,11 @@ impl northstar_archive_xmpp::MamSession for ProtocolSession {
     }
 
     fn mam_local_domain(&self) -> &str {
-        self.host.local_domain()
+        self.host.archive_local_domain()
     }
 
     fn mam_muc_domain(&self) -> String {
-        self.muc_domain()
+        self.host.archive_muc_domain()
     }
 
     fn mam_joined_room(&self, room_bare_jid: &str) -> bool {

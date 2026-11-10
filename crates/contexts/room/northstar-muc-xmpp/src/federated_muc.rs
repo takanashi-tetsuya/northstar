@@ -191,8 +191,7 @@ fn canonical_authenticated_domain(domain: &str) -> String {
 }
 
 fn muc_domain(state: &impl MucHost) -> String {
-    northstar_xmpp_types::jid::prepare_domainpart(&format!("conference.{}", state.local_domain()))
-        .expect("configured XMPP domain must form a valid MUC service domain")
+    crate::muc::muc_service_domain(state.local_domain())
 }
 
 fn federated_endpoint_matches<L, E>(

@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FinalizeAccountDeletion {
+pub enum FinalizeAccountDeletion {
     Deleted,
     Missing,
 }

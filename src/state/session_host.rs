@@ -2,6 +2,8 @@
 
 use super::AppState;
 use crate::s2s::FederationRouter;
+use crate::state::account_recovery::FinalizeAccountDeletion;
+use crate::state::session_cleanup::SessionCleanupService;
 use crate::state::CommittedLocalMucResume;
 use crate::state::RestoredLocalMucOccupants;
 use crate::state::Sasl2FastTokenPolicy;
@@ -680,5 +682,25 @@ impl SessionHost for AppState {
         local_name: &str,
     ) -> bool {
         AppState::xmpp_route_enabled(self, stanza, namespace, local_name)
+    }
+
+    fn session_cleanup(self: Arc<Self>) -> SessionCleanupService {
+        SessionCleanupService::new(self)
+    }
+
+    async fn finalize_account_deletion(
+        &self,
+        user_id: uuid::Uuid,
+        username: &str,
+    ) -> Result<FinalizeAccountDeletion> {
+        crate::state::account_recovery::finalize(self, user_id, username).await
+    }
+
+    fn account_abuse_telemetry(&self) -> crate::xmpp::capabilities::AccountAbuseTelemetry<'_> {
+        AppState::account_abuse_telemetry(self)
+    }
+
+    async fn disconnect_account(&self, user_id: uuid::Uuid, bare_account_jid: &str) {
+        AppState::disconnect_account(self, user_id, bare_account_jid).await
     }
 }

@@ -343,7 +343,7 @@ impl<H: SessionHost> ProtocolSession<H> {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) async fn change_password(&self, id: &str, query: Node<'_, '_>) -> Result<Action> {
         if query.children().any(|child| {
             child.is_element()
@@ -498,7 +498,11 @@ impl ProtocolSession {
                 )));
             }
         }
-        match crate::state::account_recovery::finalize(&self.host, user.id, &user.username).await {
+        match self
+            .host
+            .finalize_account_deletion(user.id, &user.username)
+            .await
+        {
             Ok(crate::state::account_recovery::FinalizeAccountDeletion::Deleted) => {}
             Ok(crate::state::account_recovery::FinalizeAccountDeletion::Missing) => {
                 return Ok(Action::Send(iq_registration_error(

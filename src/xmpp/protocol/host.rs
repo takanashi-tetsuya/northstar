@@ -3,6 +3,8 @@
 use super::dispatch::iq_routes::RootIqRoute;
 use super::ProtocolSession;
 use crate::s2s::FederationRouter;
+use crate::state::account_recovery::FinalizeAccountDeletion;
+use crate::state::session_cleanup::SessionCleanupService;
 use crate::state::CommittedLocalMucResume;
 use crate::state::RestoredLocalMucOccupants;
 use crate::state::Sasl2FastTokenPolicy;
@@ -499,4 +501,22 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         namespace: &str,
         local_name: &str,
     ) -> bool;
+    /// The bounded cleanup service of one session finalization.
+    fn session_cleanup(self: Arc<Self>) -> SessionCleanupService;
+    /// Commits a XEP-0077 account deletion that the session's proof authorized.
+    fn finalize_account_deletion(
+        &self,
+        user_id: uuid::Uuid,
+        username: &str,
+    ) -> impl std::future::Future<Output = Result<FinalizeAccountDeletion>> + Send;
+    /// See `AppState::account_abuse_telemetry`.
+    fn account_abuse_telemetry(&self) -> crate::xmpp::capabilities::AccountAbuseTelemetry<'_>;
+    /// Revoke local account routes and request durable SM revocation.
+    /// Remote nodes receive the generation fence over Redis, with a 30-second
+    /// maintenance sweep as fallback while PostgreSQL remains available.
+    fn disconnect_account(
+        &self,
+        user_id: uuid::Uuid,
+        bare_account_jid: &str,
+    ) -> impl std::future::Future<Output = ()> + Send;
 }

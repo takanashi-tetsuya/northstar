@@ -635,7 +635,7 @@ impl<H: SessionHost> ProtocolSession<H> {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     /// Deterministically retire one C2S protocol actor.
     ///
     /// The local route/MUC ownership fence is taken synchronously before any
@@ -645,8 +645,7 @@ impl ProtocolSession {
     /// same actor remains live until the upgraded transport actually exits.
     pub(crate) async fn finalize(&mut self) -> SessionFinalizationOutcome {
         let account = self.cleanup_account();
-        let service =
-            crate::state::session_cleanup::SessionCleanupService::new(Arc::clone(&self.host));
+        let service = Arc::clone(&self.host).session_cleanup();
         match claim_session_cleanup(&self.route_lifecycle) {
             SessionCleanupOwnership::AlreadyFinalizing => {
                 return SessionFinalizationOutcome::AlreadyFinalized.observed();

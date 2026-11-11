@@ -129,7 +129,7 @@ struct SmRuntimePolicy {
 }
 
 impl SmRuntimePolicy {
-    fn from_state(state: &AppState) -> Self {
+    fn from_state<H: SessionHost>(state: &H) -> Self {
         Self {
             session: state.sm_session_policy(),
             buffer: state.sm_buffer_limits(),
@@ -243,10 +243,12 @@ pub struct ProtocolSession<H: SessionHost = AppState> {
     post_actions: PostActionHandle,
 }
 
-struct SessionAuthPublication<'a> {
-    session: &'a mut ProtocolSession,
+struct SessionAuthPublication<'a, H: SessionHost> {
+    session: &'a mut ProtocolSession<H>,
 }
-impl northstar_stream::auth_publication::PublicationPort for SessionAuthPublication<'_> {
+impl<H: SessionHost> northstar_stream::auth_publication::PublicationPort
+    for SessionAuthPublication<'_, H>
+{
     fn connection(&self) -> uuid::Uuid {
         self.session.connection_id
     }
@@ -489,7 +491,7 @@ impl<H: SessionHost> ProtocolSession<H> {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     /// The transport supplies the exact consumed control owner; no latest
     /// session receipt/frame slot is consulted after successful transport.
     pub(crate) async fn publish_committed_authentication_and_route(

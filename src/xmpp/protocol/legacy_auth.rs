@@ -61,7 +61,7 @@ impl<H: SessionHost> ProtocolSession<H> {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) async fn authenticate(&mut self, root: Node<'_, '_>) -> Result<Action> {
         if !self.secure_transport {
             return Ok(Action::Send(failure(
@@ -241,7 +241,7 @@ impl<H: SessionHost> ProtocolSession<H> {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(super) async fn process_sasl_step(
         &mut self,
         mut sasl_mech: Box<dyn northstar_auth_core::SaslMechanism>,

@@ -756,7 +756,8 @@ export function verifyAuthPublicationBoundaries(sources) {
   ]) requireBoundary(sequence.includes(fragment), `auth ${result} publication classification must remain distinct`);
   requireBoundary(sequence.includes('port.notification_deferred(&error);returnPublicationResult::CompletedWithDeferredNotification;') &&
     !/timeout|spawn|select!/.test(sequence), 'auth notification must stay visibly deferred without a new publication deadline');
-  const adapter = body(protocol, "impl\\s+northstar_stream::auth_publication::PublicationPort\\s+for\\s+SessionAuthPublication<'_>");
+  const adapter = body(protocol, "impl<H:\\s*SessionHost>\\s+northstar_stream::auth_publication::PublicationPort\\s+for\\s+"
+    + "SessionAuthPublication<'_,\\s*H>");
   requireBoundary(method(adapter, 'publish') === 'self.session.host.authentication_service().publish_credential_commit_observed(invocation).await',
     'auth production port must invoke the actual observed service');
   const mapping = method(adapter, 'epoch_and_mapping');

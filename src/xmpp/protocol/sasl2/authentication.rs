@@ -3,7 +3,7 @@
 use super::*;
 use crate::xmpp::protocol::SessionHost;
 
-pub(crate) fn authentication_feature_xml(session: &ProtocolSession) -> String {
+pub(crate) fn authentication_feature_xml<H: SessionHost>(session: &ProtocolSession<H>) -> String {
     let fast_policy = session.host.sasl2_fast_token_policy();
     let mut mechanism_names = Vec::with_capacity(6);
     if !session.client_certificate_identities.is_empty() {
@@ -72,7 +72,7 @@ pub(crate) fn authentication_feature_xml(session: &ProtocolSession) -> String {
     authentication.child(inline).finish()
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(super) async fn authenticate_fast(&mut self, mut request: Sasl2Request) -> Result<Action> {
         use base64::Engine;
         let Some(fast) = request.fast.clone() else {

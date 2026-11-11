@@ -313,7 +313,7 @@ impl<H: SessionHost> ProtocolSession<H> {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) async fn stream_management(&mut self, root: Node<'_, '_>) -> Result<Action> {
         match root.tag_name().name() {
             "enable" => {

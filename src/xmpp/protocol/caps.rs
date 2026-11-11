@@ -68,8 +68,8 @@ impl Drop for CapsEffectRunGuard<'_> {
 type CapsEffectFuture =
     Pin<Box<dyn Future<Output = (CapsEffectJob, CapsEffects)> + Send + 'static>>;
 
-pub(super) fn local_caps_epoch_is_current(
-    state: &AppState,
+pub(super) fn local_caps_epoch_is_current<H: SessionHost>(
+    state: &H,
     full_jid: &str,
     epoch: LocalCapsEpoch,
 ) -> bool {
@@ -80,13 +80,13 @@ pub(super) fn local_caps_epoch_is_current(
 /// the async MIX gate. This fence closes the complementary interleaving: if
 /// route removal happened after the handler's initial check but before one of
 /// its index/queue insertions, Drop compare-removes only that exact epoch.
-struct LocalCapsObservationFence<'a> {
-    state: &'a AppState,
+struct LocalCapsObservationFence<'a, H: SessionHost> {
+    state: &'a H,
     full_jid: &'a str,
     epoch: LocalCapsEpoch,
 }
 
-impl Drop for LocalCapsObservationFence<'_> {
+impl<H: SessionHost> Drop for LocalCapsObservationFence<'_, H> {
     fn drop(&mut self) {
         if local_caps_epoch_is_current(self.state, self.full_jid, self.epoch) {
             return;
@@ -100,7 +100,7 @@ impl Drop for LocalCapsObservationFence<'_> {
     }
 }
 
-fn hint_caps_effects(state: &AppState, full_jid: String) {
+fn hint_caps_effects<H: SessionHost>(state: &H, full_jid: String) {
     let local = state
         .caps_by_jid()
         .owner(&full_jid)
@@ -471,7 +471,7 @@ pub(crate) fn start_caps_effect_dispatcher(
     );
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     /// Rebind a persisted XEP-0115 advertisement to a newly activated
     /// XEP-0198 transport incarnation.
     ///
@@ -556,7 +556,7 @@ impl<H: SessionHost> ProtocolSession<H> {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     /// Commit the latest caps observation only after the surrounding presence
     /// handler has durably applied the matching MIX projection and updated
     /// availability while holding `mix_presence_gate`.
@@ -592,7 +592,7 @@ impl ProtocolSession {
         }
         let epoch = allocate_local_caps_epoch(connection, generation);
         let _observation_fence = LocalCapsObservationFence {
-            state: &self.host,
+            state: &*self.host,
             full_jid: &full_jid,
             epoch,
         };
@@ -619,7 +619,7 @@ impl ProtocolSession {
         self.host
             .caps_by_jid()
             .observe_local(full_jid.clone(), epoch, key, cached, now);
-        hint_caps_effects(&self.host, full_jid.clone());
+        hint_caps_effects(&*self.host, full_jid.clone());
     }
 
     pub(crate) async fn handle_caps_response(
@@ -648,12 +648,12 @@ impl ProtocolSession {
             .lock_owned()
             .await;
         if epoch.connection_id != self.connection_id
-            || !local_caps_epoch_is_current(&self.host, &pending.full_jid, epoch)
+            || !local_caps_epoch_is_current(&*self.host, &pending.full_jid, epoch)
         {
             return true;
         }
         let _observation_fence = LocalCapsObservationFence {
-            state: &self.host,
+            state: &*self.host,
             full_jid: &pending.full_jid,
             epoch,
         };
@@ -682,7 +682,7 @@ impl ProtocolSession {
                 .caps_by_jid()
                 .rearm_expired(id, &pending, Instant::now())
             {
-                hint_caps_effects(&self.host, pending.full_jid.clone());
+                hint_caps_effects(&*self.host, pending.full_jid.clone());
             }
             return true;
         }
@@ -782,11 +782,11 @@ impl ProtocolSession {
             id,
             summary,
         ) {
-            CapsVerificationCommit::Applied => hint_caps_effects(&self.host, full_jid),
+            CapsVerificationCommit::Applied => hint_caps_effects(&*self.host, full_jid),
             CapsVerificationCommit::ResourceLimited => {
                 self.host.caps_effect_telemetry().failed(1);
                 tracing::warn!(jid = %full_jid, "caps semantic memory budget exhausted; verification remains pending");
-                hint_caps_effects(&self.host, full_jid);
+                hint_caps_effects(&*self.host, full_jid);
             }
             CapsVerificationCommit::Stale => {}
         }

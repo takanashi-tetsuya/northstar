@@ -52,7 +52,7 @@ impl RestoredLocalMucOccupants {
     }
 }
 
-pub(crate) struct CommittedLocalMucResume {
+pub struct CommittedLocalMucResume {
     pub(crate) joined_rooms: Vec<(String, JoinedMucMembership)>,
     pub(crate) failures: Vec<northstar_session_application::sm::SmMucMembership>,
 }

@@ -28,7 +28,7 @@ fn complete_inbound_stream_opening_for_parser(xml: &str) -> String {
     parser_input
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) async fn authenticate2(&mut self, root: Node<'_, '_>) -> Result<Action> {
         let _authentication_timer = self.host.sasl2_authentication_timer();
         if !self.secure_transport {
@@ -233,7 +233,7 @@ impl<H: SessionHost> ProtocolSession<H> {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) async fn complete_sasl2(
         &mut self,
         user: northstar_auth_application::authentication::AuthenticatedAccount,

@@ -109,16 +109,16 @@ impl<H: SessionHost> ProtocolSession<H> {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub fn new(
-        state: Arc<AppState>,
+        state: Arc<H>,
         outbound: northstar_stream::outbound::OutboundSender,
         secure_transport: bool,
         transport: ClientTransport,
         stream_limits: Option<StreamLimits>,
         peer_ip: IpAddr,
     ) -> Self {
-        let sm_runtime_policy = SmRuntimePolicy::from_state(&state);
+        let sm_runtime_policy = SmRuntimePolicy::from_state(&*state);
         Self {
             host: state,
             sm_runtime_policy,
@@ -187,7 +187,7 @@ impl<H: SessionHost> ProtocolSession<H> {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) fn open_stream(&self) -> String {
         let to = self
             .negotiation

@@ -1,16 +1,26 @@
 //! The node's side of the client session core.
 
 use super::AppState;
+use crate::state::CommittedLocalMucResume;
+use crate::state::RestoredLocalMucOccupants;
 use crate::state::Sasl2FastTokenPolicy;
+use crate::state::SmBufferLimits;
+use crate::state::SmSessionPolicy;
 use crate::xmpp::protocol::{ProtocolSession, SessionHost};
 use dashmap::DashMap;
 use northstar_room_application::muc_service::LocalMucOccupantIdentity;
 use northstar_session_core::JoinedMucMembership;
+use northstar_session_core::LocalCapsEpoch;
 use northstar_stream::local_routes::muc::MucOccupant;
+use northstar_stream::local_routes::muc::RestoreLocalMucOccupantsRequest;
+use northstar_stream::local_routes::muc::SuspendedMucEndpoint;
 use northstar_stream::local_routes::session::OnlineSession;
+use northstar_stream::local_routes::session::SmPresenceEpoch;
+use northstar_stream::local_routes::session::SmStagedRouteClaim;
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 impl SessionHost for AppState {
     fn drop_session(session: &mut ProtocolSession) {
@@ -295,5 +305,252 @@ impl SessionHost for AppState {
 
     fn xmpp_extension_enabled(&self, id: northstar_xep_core::XepId) -> bool {
         AppState::xmpp_extension_enabled(self, id)
+    }
+
+    async fn abort_local_muc_resume(
+        &self,
+        restored: &RestoredLocalMucOccupants,
+        snapshot_backed: bool,
+    ) {
+        AppState::abort_local_muc_resume(self, restored, snapshot_backed).await
+    }
+
+    fn activate_session_if_current(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+        lifecycle: &Arc<AtomicU8>,
+        disconnect: &CancellationToken,
+    ) -> bool {
+        AppState::activate_session_if_current(
+            self,
+            full_jid,
+            connection_id,
+            user_id,
+            auth_generation,
+            lifecycle,
+            disconnect,
+        )
+    }
+
+    async fn begin_suspended_muc_resume(
+        &self,
+        endpoints: &[Arc<SuspendedMucEndpoint>],
+        base_stanzas: usize,
+        base_bytes: usize,
+    ) -> bool {
+        AppState::begin_suspended_muc_resume(self, endpoints, base_stanzas, base_bytes).await
+    }
+
+    fn c2s_scram_sha1_enabled(&self) -> bool {
+        AppState::c2s_scram_sha1_enabled(self)
+    }
+
+    fn caps_effect_dispatcher(
+        &self,
+    ) -> &Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher> {
+        AppState::caps_effect_dispatcher(self)
+    }
+
+    fn caps_effect_telemetry(&self) -> crate::xmpp::capabilities::CapsEffectTelemetry<'_> {
+        AppState::caps_effect_telemetry(self)
+    }
+
+    async fn checkpoint_local_muc_resume(&self, restored: &RestoredLocalMucOccupants) -> bool {
+        AppState::checkpoint_local_muc_resume(self, restored).await
+    }
+
+    async fn claim_sm_resume_route(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+        session_id: uuid::Uuid,
+        claim_token: uuid::Uuid,
+    ) -> anyhow::Result<bool> {
+        AppState::claim_sm_resume_route(self, full_jid, connection_id, session_id, claim_token)
+            .await
+    }
+
+    fn clear_suspended_sm_capacity(&self, endpoints: &[Arc<SuspendedMucEndpoint>]) {
+        AppState::clear_suspended_sm_capacity(self, endpoints)
+    }
+
+    async fn commit_local_muc_resume(
+        &self,
+        restored: RestoredLocalMucOccupants,
+        sender: &northstar_stream::outbound::OutboundSender,
+        capacity: northstar_session_application::sm_capacity::SmCapacityLease,
+    ) -> CommittedLocalMucResume {
+        AppState::commit_local_muc_resume(self, restored, sender, capacity).await
+    }
+
+    async fn finalize_sm_resume(
+        &self,
+        request: northstar_session_application::sm::SmResumeFinalizationRequest<'_>,
+        observation: Option<
+            &northstar_auth_application::authentication::publication::PreparedCredential,
+        >,
+    ) -> anyhow::Result<northstar_session_application::sm::SmResumeFinalizationOutcome> {
+        AppState::finalize_sm_resume(self, request, observation).await
+    }
+
+    fn local_caps_epoch_is_current(
+        &self,
+        full_jid: &str,
+        epoch: LocalCapsEpoch,
+        expected_gate: Option<&Arc<tokio::sync::Mutex<()>>>,
+    ) -> bool {
+        AppState::local_caps_epoch_is_current(self, full_jid, epoch, expected_gate)
+    }
+
+    fn local_caps_observer_connection_is_current(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+        expected_gate: &Arc<tokio::sync::Mutex<()>>,
+    ) -> bool {
+        AppState::local_caps_observer_connection_is_current(
+            self,
+            full_jid,
+            connection_id,
+            expected_gate,
+        )
+    }
+
+    async fn mark_suspended_muc_durable(&self, endpoints: Vec<Arc<SuspendedMucEndpoint>>) -> bool {
+        AppState::mark_suspended_muc_durable(self, endpoints).await
+    }
+
+    async fn notify_remote_user_agent_replacement(
+        &self,
+        account: &str,
+        user_id: uuid::Uuid,
+        device_id: uuid::Uuid,
+        epoch: i64,
+    ) -> anyhow::Result<()> {
+        AppState::notify_remote_user_agent_replacement(self, account, user_id, device_id, epoch)
+            .await
+    }
+
+    async fn pause_suspended_muc_delivery(
+        &self,
+        sm_session_id: uuid::Uuid,
+    ) -> Vec<Arc<SuspendedMucEndpoint>> {
+        AppState::pause_suspended_muc_delivery(self, sm_session_id).await
+    }
+
+    fn pending_caps(&self) -> &northstar_protocol_runtime::caps::PendingCapsIndex {
+        AppState::pending_caps(self)
+    }
+
+    fn publish_user_agent_epoch_if_current(
+        &self,
+        key: &str,
+        connection_id: uuid::Uuid,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+        lifecycle: &Arc<AtomicU8>,
+        user_agent_epoch: Option<i64>,
+    ) -> bool {
+        AppState::publish_user_agent_epoch_if_current(
+            self,
+            key,
+            connection_id,
+            user_id,
+            auth_generation,
+            lifecycle,
+            user_agent_epoch,
+        )
+    }
+
+    fn push_delivery_telemetry(&self) -> crate::xmpp::capabilities::PushDeliveryTelemetry<'_> {
+        AppState::push_delivery_telemetry(self)
+    }
+
+    async fn release_exact_local_session_route(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+    ) -> anyhow::Result<()> {
+        AppState::release_exact_local_session_route(self, full_jid, connection_id).await
+    }
+
+    async fn restore_local_muc_occupants(
+        &self,
+        request: RestoreLocalMucOccupantsRequest<'_>,
+    ) -> RestoredLocalMucOccupants {
+        AppState::restore_local_muc_occupants(self, request).await
+    }
+
+    async fn revoke_sm_session_with_teardown(&self, id: uuid::Uuid) -> anyhow::Result<()> {
+        AppState::revoke_sm_session_with_teardown(self, id).await
+    }
+
+    async fn seal_suspended_muc_endpoints(&self, endpoints: &[Arc<SuspendedMucEndpoint>]) {
+        AppState::seal_suspended_muc_endpoints(self, endpoints).await
+    }
+
+    fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
+        AppState::session_entries_for(self, jid)
+    }
+
+    fn sm_buffer_limits(&self) -> SmBufferLimits {
+        AppState::sm_buffer_limits(self)
+    }
+
+    fn sm_ip_binding(&self) -> &str {
+        AppState::sm_ip_binding(self)
+    }
+
+    fn sm_pending_route_removal_signal(
+        &self,
+        key: &str,
+        old_connection_id: uuid::Uuid,
+        user_id: uuid::Uuid,
+        sm_session_id: uuid::Uuid,
+        cancel_live_route: bool,
+    ) -> Option<tokio::sync::watch::Receiver<bool>> {
+        AppState::sm_pending_route_removal_signal(
+            self,
+            key,
+            old_connection_id,
+            user_id,
+            sm_session_id,
+            cancel_live_route,
+        )
+    }
+
+    fn sm_presence_epoch(&self, key: &str) -> Option<SmPresenceEpoch> {
+        AppState::sm_presence_epoch(self, key)
+    }
+
+    fn sm_session_policy(&self) -> SmSessionPolicy {
+        AppState::sm_session_policy(self)
+    }
+
+    fn sm_suspension_recovery_queue(
+        &self,
+    ) -> &Arc<crate::state::session_cleanup::SmSuspensionRecoveryQueue> {
+        AppState::sm_suspension_recovery_queue(self)
+    }
+
+    fn stage_sm_resumed_session(
+        &self,
+        key: String,
+        candidate: OnlineSession,
+        claimant_user: uuid::Uuid,
+        claimed_sm_id: uuid::Uuid,
+        expected_gate: &Arc<tokio::sync::Mutex<()>>,
+    ) -> SmStagedRouteClaim {
+        AppState::stage_sm_resumed_session(
+            self,
+            key,
+            candidate,
+            claimant_user,
+            claimed_sm_id,
+            expected_gate,
+        )
     }
 }

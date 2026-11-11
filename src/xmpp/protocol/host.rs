@@ -1,15 +1,25 @@
 //! What a protocol session needs from the node it runs in.
 
 use super::ProtocolSession;
+use crate::state::CommittedLocalMucResume;
+use crate::state::RestoredLocalMucOccupants;
 use crate::state::Sasl2FastTokenPolicy;
+use crate::state::SmBufferLimits;
+use crate::state::SmSessionPolicy;
 use dashmap::DashMap;
 use northstar_room_application::muc_service::LocalMucOccupantIdentity;
 use northstar_session_core::JoinedMucMembership;
+use northstar_session_core::LocalCapsEpoch;
 use northstar_stream::local_routes::muc::MucOccupant;
+use northstar_stream::local_routes::muc::RestoreLocalMucOccupantsRequest;
+use northstar_stream::local_routes::muc::SuspendedMucEndpoint;
 use northstar_stream::local_routes::session::OnlineSession;
+use northstar_stream::local_routes::session::SmPresenceEpoch;
+use northstar_stream::local_routes::session::SmStagedRouteClaim;
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 /// The node a [`ProtocolSession`] runs in. The composition root implements it; the session core reaches the node
 /// through it as each part of the core becomes generic over the host.
@@ -200,4 +210,191 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     fn worker_registry(&self) -> &Arc<northstar_runtime::workers::WorkerRegistry>;
     /// See `AppState::xmpp_extension_enabled`.
     fn xmpp_extension_enabled(&self, id: northstar_xep_core::XepId) -> bool;
+    /// Roll a failed restore back to a suspended actor without taking suffix
+    /// ownership away from its sole durable source. `snapshot_backed` is true
+    /// only after the protocol session itself contains the staged suffix; in
+    /// that case successful connection cleanup clears this backup instead of
+    /// appending it again.
+    fn abort_local_muc_resume(
+        &self,
+        restored: &RestoredLocalMucOccupants,
+        snapshot_backed: bool,
+    ) -> impl std::future::Future<Output = ()> + Send;
+    /// Publish only the exact staged route incarnation that survived every
+    /// authorization and lifecycle fence.  The DashMap write guard provides
+    /// a local linearization point with account/session revocation helpers;
+    /// the cancellation/lifecycle recheck after publication also closes a
+    /// concurrent out-of-band transport cancellation window.
+    fn activate_session_if_current(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+        lifecycle: &Arc<AtomicU8>,
+        disconnect: &CancellationToken,
+    ) -> bool;
+    /// Install the exact post-finalization replay base. `claim_resume` is only
+    /// a preliminary snapshot: acknowledgements may advance before the
+    /// PostgreSQL activation CAS returns. Keeping the endpoint in `Waiting`
+    /// until this method prevents that stale claim size from opening excess
+    /// stanza or byte budget.
+    fn begin_suspended_muc_resume(
+        &self,
+        endpoints: &[Arc<SuspendedMucEndpoint>],
+        base_stanzas: usize,
+        base_bytes: usize,
+    ) -> impl std::future::Future<Output = bool> + Send;
+    /// See `AppState::c2s_scram_sha1_enabled`.
+    fn c2s_scram_sha1_enabled(&self) -> bool;
+    /// See `AppState::caps_effect_dispatcher`.
+    fn caps_effect_dispatcher(
+        &self,
+    ) -> &Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher>;
+    /// See `AppState::caps_effect_telemetry`.
+    fn caps_effect_telemetry(&self) -> crate::xmpp::capabilities::CapsEffectTelemetry<'_>;
+    /// Transfer the volatile suffix to the exact live SM checkpoint. The
+    /// queue is cleared only after PostgreSQL accepted that checkpoint, while
+    /// the endpoint mutex still excludes both delivery and transport
+    /// publication. A later socket failure therefore re-suspends the snapshot
+    /// without appending a duplicate copy of the suffix.
+    fn checkpoint_local_muc_resume(
+        &self,
+        restored: &RestoredLocalMucOccupants,
+    ) -> impl std::future::Future<Output = bool> + Send;
+    /// See `AppState::claim_sm_resume_route`.
+    fn claim_sm_resume_route(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+        session_id: uuid::Uuid,
+        claim_token: uuid::Uuid,
+    ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send;
+    /// See `AppState::clear_suspended_sm_capacity`.
+    fn clear_suspended_sm_capacity(&self, endpoints: &[Arc<SuspendedMucEndpoint>]);
+    /// Publish a restore plan only after the `<resumed/>` control and complete
+    /// replay have reached the transport. The endpoint mutex is held while all
+    /// exact actors are swapped, so an arriving stanza observes either the
+    /// sealed gate or the final live route, never a partially transferred FIFO.
+    fn commit_local_muc_resume(
+        &self,
+        restored: RestoredLocalMucOccupants,
+        sender: &northstar_stream::outbound::OutboundSender,
+        capacity: northstar_session_application::sm_capacity::SmCapacityLease,
+    ) -> impl std::future::Future<Output = CommittedLocalMucResume> + Send;
+    /// See `AppState::finalize_sm_resume`.
+    fn finalize_sm_resume(
+        &self,
+        request: northstar_session_application::sm::SmResumeFinalizationRequest<'_>,
+        observation: Option<
+            &northstar_auth_application::authentication::publication::PreparedCredential,
+        >,
+    ) -> impl std::future::Future<
+        Output = anyhow::Result<northstar_session_application::sm::SmResumeFinalizationOutcome>,
+    > + Send;
+    /// See `AppState::local_caps_epoch_is_current`.
+    fn local_caps_epoch_is_current(
+        &self,
+        full_jid: &str,
+        epoch: LocalCapsEpoch,
+        expected_gate: Option<&Arc<tokio::sync::Mutex<()>>>,
+    ) -> bool;
+    /// See `AppState::local_caps_observer_connection_is_current`.
+    fn local_caps_observer_connection_is_current(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+        expected_gate: &Arc<tokio::sync::Mutex<()>>,
+    ) -> bool;
+    /// See `AppState::mark_suspended_muc_durable`.
+    fn mark_suspended_muc_durable(
+        &self,
+        endpoints: Vec<Arc<SuspendedMucEndpoint>>,
+    ) -> impl std::future::Future<Output = bool> + Send;
+    /// See `AppState::notify_remote_user_agent_replacement`.
+    fn notify_remote_user_agent_replacement(
+        &self,
+        account: &str,
+        user_id: uuid::Uuid,
+        device_id: uuid::Uuid,
+        epoch: i64,
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
+    /// See `AppState::pause_suspended_muc_delivery`.
+    fn pause_suspended_muc_delivery(
+        &self,
+        sm_session_id: uuid::Uuid,
+    ) -> impl std::future::Future<Output = Vec<Arc<SuspendedMucEndpoint>>> + Send;
+    /// See `AppState::pending_caps`.
+    fn pending_caps(&self) -> &northstar_protocol_runtime::caps::PendingCapsIndex;
+    /// See `AppState::publish_user_agent_epoch_if_current`.
+    fn publish_user_agent_epoch_if_current(
+        &self,
+        key: &str,
+        connection_id: uuid::Uuid,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+        lifecycle: &Arc<AtomicU8>,
+        user_agent_epoch: Option<i64>,
+    ) -> bool;
+    /// See `AppState::push_delivery_telemetry`.
+    fn push_delivery_telemetry(&self) -> crate::xmpp::capabilities::PushDeliveryTelemetry<'_>;
+    /// See `AppState::release_exact_local_session_route`.
+    fn release_exact_local_session_route(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
+    /// Reattach only memberships that can still be proven valid. Existing
+    /// suspended actors are swapped in place; after a process restart a new
+    /// actor is recreated without join broadcast or history replay. The
+    /// volatile suspension FIFO moves into the returned replay suffix so the
+    /// resumed stream emits it strictly after `<resumed/>` and the durable
+    /// unacked replay.
+    fn restore_local_muc_occupants(
+        &self,
+        request: RestoreLocalMucOccupantsRequest<'_>,
+    ) -> impl std::future::Future<Output = RestoredLocalMucOccupants> + Send;
+    /// See `AppState::revoke_sm_session_with_teardown`.
+    fn revoke_sm_session_with_teardown(
+        &self,
+        id: uuid::Uuid,
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
+    /// See `AppState::seal_suspended_muc_endpoints`.
+    fn seal_suspended_muc_endpoints(
+        &self,
+        endpoints: &[Arc<SuspendedMucEndpoint>],
+    ) -> impl std::future::Future<Output = ()> + Send;
+    /// See `AppState::session_entries_for`.
+    fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)>;
+    /// See `AppState::sm_buffer_limits`.
+    fn sm_buffer_limits(&self) -> SmBufferLimits;
+    /// See `AppState::sm_ip_binding`.
+    fn sm_ip_binding(&self) -> &str;
+    /// See `AppState::sm_pending_route_removal_signal`.
+    fn sm_pending_route_removal_signal(
+        &self,
+        key: &str,
+        old_connection_id: uuid::Uuid,
+        user_id: uuid::Uuid,
+        sm_session_id: uuid::Uuid,
+        cancel_live_route: bool,
+    ) -> Option<tokio::sync::watch::Receiver<bool>>;
+    /// See `AppState::sm_presence_epoch`.
+    fn sm_presence_epoch(&self, key: &str) -> Option<SmPresenceEpoch>;
+    /// See `AppState::sm_session_policy`.
+    fn sm_session_policy(&self) -> SmSessionPolicy;
+    /// See `AppState::sm_suspension_recovery_queue`.
+    fn sm_suspension_recovery_queue(
+        &self,
+    ) -> &Arc<crate::state::session_cleanup::SmSuspensionRecoveryQueue>;
+    /// Inspect/insert inside one DashMap entry operation. The caller owns the
+    /// returned gate and route-incarnation handles before any async wait.
+    fn stage_sm_resumed_session(
+        &self,
+        key: String,
+        candidate: OnlineSession,
+        claimant_user: uuid::Uuid,
+        claimed_sm_id: uuid::Uuid,
+        expected_gate: &Arc<tokio::sync::Mutex<()>>,
+    ) -> SmStagedRouteClaim;
 }

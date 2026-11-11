@@ -979,7 +979,7 @@ impl<H: SessionHost> ProtocolSession<H> {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) async fn handle_push_response(
         &self,
         id: &str,
@@ -989,7 +989,7 @@ impl ProtocolSession {
         let Some(from) = root.attribute("from").or(self.full_jid.as_deref()) else {
             return Ok(false);
         };
-        handle_push_delivery_response(&self.host, id, kind, from).await
+        handle_push_delivery_response(&*self.host, id, kind, from).await
     }
 
     pub(crate) async fn push_disable_message(
@@ -998,15 +998,15 @@ impl ProtocolSession {
         from: &str,
         to: &str,
     ) -> Result<bool> {
-        handle_push_disable(&self.host, root, from, to).await
+        handle_push_disable(&*self.host, root, from, to).await
     }
 }
 
 /// Consume a local or federated Push Service IQ response.  PostgreSQL is the
 /// authority, so correlation remains correct across process restarts and
 /// cluster nodes.
-pub(crate) async fn handle_push_delivery_response(
-    state: &crate::state::AppState,
+pub(crate) async fn handle_push_delivery_response<H: SessionHost>(
+    state: &H,
     id: &str,
     kind: &str,
     from: &str,
@@ -1045,8 +1045,8 @@ pub(crate) async fn handle_push_delivery_response(
     }
 }
 
-pub(crate) async fn handle_push_disable(
-    state: &crate::state::AppState,
+pub(crate) async fn handle_push_disable<H: SessionHost>(
+    state: &H,
     root: Node<'_, '_>,
     from: &str,
     to: &str,

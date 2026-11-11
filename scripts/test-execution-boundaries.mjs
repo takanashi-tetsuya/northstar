@@ -31,7 +31,7 @@ test('current production execution owners satisfy the gate', () => verifyExecuti
 for (const [name, declaration, member] of [
   ['authUsers', "pub async fn lock_auth_generation_observed<'a>("],
   ['authUsers', "pub async fn lock_auth_generation<'a>("],
-  ['sasl2', 'impl ProtocolSession', 'payload.replace_envelope('],
+  ['sasl2', 'impl<H: SessionHost> ProtocolSession<H>', 'payload.replace_envelope('],
 ]) {
   test(`${declaration} remains checked after the parent test-module boundary`, () => {
     const source = baseline[name];

@@ -1,6 +1,6 @@
 //! The existing SM record/checkpoint/ACK operations over the real session
 //! substate. Only the current persistence/capacity capabilities are injected.
-use super::{ProtocolSession, SmRuntimePolicy, SmSubstate};
+use super::{SmRuntimePolicy, SmSubstate};
 use anyhow::{Context, Result};
 use northstar_delivery_core::sm_ownership::{self, Observation, Purpose, Scope, Terminal};
 use northstar_session_application::sm::ownership::{
@@ -463,7 +463,7 @@ impl<P: SmOwnerPort> SmTransportTurn<'_, P> {
             .request()
             .validate_checkpoint_return(outcome.updated, &rotations)?;
         anyhow::ensure!(outcome.updated, "durable XEP-0198 stream lease was lost");
-        ProtocolSession::apply_sm_ownership_resolution_to_unacked(
+        super::session_sm::apply_sm_ownership_resolution_to_unacked(
             &mut self.sm.unacked,
             &outcome.ownership,
         );
@@ -535,7 +535,7 @@ impl<P: SmOwnerPort> SmTransportTurn<'_, P> {
                 .request()
                 .validate_checkpoint_return(outcome.updated, &rotations)?;
             anyhow::ensure!(outcome.updated, "durable XEP-0198 stream lease was lost");
-            ProtocolSession::apply_sm_ownership_resolution_to_unacked(
+            super::session_sm::apply_sm_ownership_resolution_to_unacked(
                 &mut remaining,
                 &outcome.ownership,
             );

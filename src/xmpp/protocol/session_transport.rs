@@ -1,6 +1,7 @@
 //! Define transport-facing actions, connection handling, stream rendering, observations and deadlines.
 
 use super::*;
+use crate::xmpp::protocol::SessionHost;
 
 pub(super) fn stream_features_element() -> XmlElement {
     XmlElement::new("stream:features").attr("xmlns:stream", "http://etherx.jabber.org/streams")
@@ -38,7 +39,7 @@ pub(super) fn client_stream_limits_feature(
         .finish()
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(in crate::xmpp) fn enter_frame_stage(
         &self,
         stage: northstar_stream::frame_execution::Stage,
@@ -106,7 +107,9 @@ impl ProtocolSession {
     pub(crate) fn uses_websocket_framing(&self) -> bool {
         self.transport == ClientTransport::WebSocket
     }
+}
 
+impl ProtocolSession {
     pub fn new(
         state: Arc<AppState>,
         outbound: northstar_stream::outbound::OutboundSender,
@@ -171,7 +174,9 @@ impl ProtocolSession {
             post_actions: PostActionHandle::default(),
         }
     }
+}
 
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) fn resource_bind_deadline(&self) -> Option<std::time::Instant> {
         resource_bind_deadline_for(
             self.authenticated.is_some(),
@@ -180,7 +185,9 @@ impl ProtocolSession {
             self.host.c2s_resource_bind_timeout_seconds(),
         )
     }
+}
 
+impl ProtocolSession {
     pub(crate) fn open_stream(&self) -> String {
         let to = self
             .negotiation

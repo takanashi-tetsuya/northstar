@@ -375,7 +375,9 @@ impl ProtocolSession {
         let execution = self.frame_executions.begin(self.transport, frame);
         execution.run(self.handle(frame)).await
     }
+}
 
+impl<H: SessionHost> ProtocolSession<H> {
     pub(super) fn muc_discussion_operation(
         &self,
         prepared: &northstar_room_application::muc_service::discussion::PreparedDiscussion,
@@ -485,7 +487,9 @@ impl ProtocolSession {
             },
         )
     }
+}
 
+impl ProtocolSession {
     /// The transport supplies the exact consumed control owner; no latest
     /// session receipt/frame slot is consulted after successful transport.
     pub(crate) async fn publish_committed_authentication_and_route(
@@ -503,7 +507,9 @@ impl ProtocolSession {
             future.await.transport_succeeded()
         }
     }
+}
 
+impl<H: SessionHost> ProtocolSession<H> {
     /// Record one transport item before it crosses the socket boundary.
     /// Returns `true` when XEP-0198 owns the durable fence and the transport
     /// must therefore wait for a client `<a/>` instead of deleting the spool
@@ -615,7 +621,7 @@ impl SessionFinalizationOutcome {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     fn cleanup_account(&self) -> Option<northstar_session_application::SessionCleanupAccount> {
         self.authenticated.as_ref().map(|user| {
             northstar_session_application::SessionCleanupAccount {
@@ -625,7 +631,9 @@ impl ProtocolSession {
             }
         })
     }
+}
 
+impl ProtocolSession {
     /// Deterministically retire one C2S protocol actor.
     ///
     /// The local route/MUC ownership fence is taken synchronously before any
@@ -733,7 +741,9 @@ impl ProtocolSession {
         self._certificate_session = None;
         SessionFinalizationOutcome::Completed(service.finish(work).await).observed()
     }
+}
 
+impl<H: SessionHost> ProtocolSession<H> {
     /// Panic/cancellation fallback. This deliberately performs only
     /// process-local, exact-identity quiescing: no database access, network
     /// call or detached task is legal from Drop.
@@ -793,15 +803,9 @@ impl<H: SessionHost> Drop for ProtocolSession<H> {
     }
 }
 
-impl SessionHost for AppState {
-    fn drop_session(session: &mut ProtocolSession) {
-        session.drop_on_node();
-    }
-}
-
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     /// Aborts the post actions of a session another owner superseded, or runs the synchronous cleanup fallback.
-    fn drop_on_node(&mut self) {
+    pub(crate) fn drop_on_node(&mut self) {
         if !drop_requires_local_quiesce(
             self.local_quiesced,
             self.route_lifecycle.load(Ordering::Acquire),

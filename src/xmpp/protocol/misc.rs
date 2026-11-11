@@ -1,4 +1,5 @@
 use super::{Action, ProtocolSession};
+use crate::xmpp::protocol::SessionHost;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use northstar_abuse_policy::stanza::strip_pow_element;
@@ -59,7 +60,7 @@ impl ResourceBindingFailure {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) async fn registration_form(&self, id: &str, query: Node<'_, '_>) -> Result<Action> {
         if !self.secure_transport {
             return Ok(Action::Send(iq_registration_error(id, "not-authorized")));
@@ -340,7 +341,9 @@ impl ProtocolSession {
             }
         }
     }
+}
 
+impl ProtocolSession {
     pub(crate) async fn change_password(&self, id: &str, query: Node<'_, '_>) -> Result<Action> {
         if query.children().any(|child| {
             child.is_element()
@@ -520,7 +523,9 @@ impl ProtocolSession {
             stream_error("not-authorized"),
         ]))
     }
+}
 
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) async fn bind(&mut self, id: &str, bind: Node<'_, '_>) -> Result<Action> {
         if self.full_jid.is_some() {
             return Ok(Action::Send(iq_error(id, "unexpected-request")));
@@ -972,7 +977,9 @@ impl ProtocolSession {
             .await?;
         Ok(Action::Send(iq_result_from(id, &own_bare, "")))
     }
+}
 
+impl ProtocolSession {
     pub(crate) async fn handle_push_response(
         &self,
         id: &str,

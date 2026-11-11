@@ -1,9 +1,10 @@
 //! Run legacy SASL authentication, certificate admission, abuse handling and authentication replies.
 
 use super::*;
+use crate::xmpp::protocol::SessionHost;
 use northstar_auth_xmpp::sasl2::{legacy_sasl_auth, legacy_sasl_payload};
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(in crate::xmpp) fn auth_replies(&mut self, replies: Vec<String>) -> Result<Action> {
         let control = replies
             .first()
@@ -58,7 +59,9 @@ impl ProtocolSession {
         }
         None
     }
+}
 
+impl ProtocolSession {
     pub(crate) async fn authenticate(&mut self, root: Node<'_, '_>) -> Result<Action> {
         if !self.secure_transport {
             return Ok(Action::Send(failure(
@@ -215,7 +218,9 @@ impl ProtocolSession {
         };
         self.process_sasl_step(sasl_mech, step).await
     }
+}
 
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) fn sasl_abort(&mut self, root: Node<'_, '_>) -> Action {
         if !legacy_sasl_payload(root).is_some_and(|payload| payload.trim().is_empty())
             || self.sasl_state.is_none()
@@ -234,7 +239,9 @@ impl ProtocolSession {
         self.legacy_sasl_awaiting_initial_response = false;
         Action::Send(failure("urn:ietf:params:xml:ns:xmpp-sasl", "aborted"))
     }
+}
 
+impl ProtocolSession {
     pub(super) async fn process_sasl_step(
         &mut self,
         mut sasl_mech: Box<dyn northstar_auth_core::SaslMechanism>,
@@ -528,7 +535,9 @@ impl ProtocolSession {
             }
         }
     }
+}
 
+impl<H: SessionHost> ProtocolSession<H> {
     pub(super) fn sasl_abuse_actors(&self, username: Option<&str>) -> Vec<String> {
         username
             .and_then(|username| {

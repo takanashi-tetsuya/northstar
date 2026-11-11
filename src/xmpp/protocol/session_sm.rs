@@ -1,8 +1,9 @@
 //! Fence transport delivery and support session stream management.
 
 use super::*;
+use crate::xmpp::protocol::SessionHost;
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(in crate::xmpp) async fn fence_c2s_socket_write(
         &self,
         delivery: northstar_stream::outbound::DurableDelivery,
@@ -139,16 +140,16 @@ impl ProtocolSession {
         &mut self,
         resolution: &northstar_session_application::sm::SmQueueOwnershipResolution,
     ) {
-        Self::apply_sm_ownership_resolution_to_unacked(&mut self.sm.unacked, resolution);
+        apply_sm_ownership_resolution_to_unacked(&mut self.sm.unacked, resolution);
     }
+}
 
-    pub(crate) fn apply_sm_ownership_resolution_to_unacked(
-        stanzas: &mut VecDeque<northstar_stream::outbound::SmUnackedStanza>,
-        resolution: &northstar_session_application::sm::SmQueueOwnershipResolution,
-    ) {
-        for stanza in stanzas {
-            stanza.source = resolution.resolve_source(stanza.source);
-        }
+pub(crate) fn apply_sm_ownership_resolution_to_unacked(
+    stanzas: &mut VecDeque<northstar_stream::outbound::SmUnackedStanza>,
+    resolution: &northstar_session_application::sm::SmQueueOwnershipResolution,
+) {
+    for stanza in stanzas {
+        stanza.source = resolution.resolve_source(stanza.source);
     }
 }
 

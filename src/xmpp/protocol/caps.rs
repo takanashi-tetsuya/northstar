@@ -1,6 +1,7 @@
 use super::ProtocolSession;
 use crate::state::{caps_effect_dispatch::CapsEffectDispatchContext, AppState};
 use crate::xmpp::capabilities::CapsEffectTelemetry;
+use crate::xmpp::protocol::SessionHost;
 use crate::xmpp::xml_builder::XmlElement;
 use futures::{stream::FuturesUnordered, StreamExt};
 pub(crate) use northstar_protocol_runtime::caps::*;
@@ -520,7 +521,9 @@ impl ProtocolSession {
             );
         }
     }
+}
 
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) fn advertised_mix_capability(
         &self,
         presence: Node<'_, '_>,
@@ -551,7 +554,9 @@ impl ProtocolSession {
             northstar_room_core::mix::MixSessionCapability::Unsupported
         }
     }
+}
 
+impl ProtocolSession {
     /// Commit the latest caps observation only after the surrounding presence
     /// handler has durably applied the matching MIX projection and updated
     /// availability while holding `mix_presence_gate`.

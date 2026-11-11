@@ -1,4 +1,5 @@
 use super::{Action, ProtocolSession};
+use crate::xmpp::protocol::SessionHost;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -155,7 +156,7 @@ fn sm_resume_token_hash(emitted_bearer: &str) -> [u8; 32] {
     Sha256::digest(emitted_bearer.as_bytes()).into()
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     /// A fatal or explicit terminal transport outcome cannot leave this
     /// connection eligible for stream resumption.
     pub(crate) fn forbid_sm_resume(&mut self) {
@@ -310,7 +311,9 @@ impl ProtocolSession {
             }
         }
     }
+}
 
+impl ProtocolSession {
     pub(crate) async fn stream_management(&mut self, root: Node<'_, '_>) -> Result<Action> {
         match root.tag_name().name() {
             "enable" => {
@@ -1364,7 +1367,9 @@ impl ProtocolSession {
         }
         Ok((Action::Resume(resume_payload), issued_fast))
     }
+}
 
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) async fn acknowledge(&mut self, h: u32) -> Result<bool> {
         let mut turn = self.sm_transport_turn();
         let observation =

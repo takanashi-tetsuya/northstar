@@ -1,4 +1,5 @@
 use super::{Action, ProtocolSession};
+use crate::xmpp::protocol::SessionHost;
 use northstar_xep_0352::{
     classify_stanza, CsiIndication, CsiPolicyConfig, CsiStateMachine, DeferredQueue,
     DeliveryAction, EnqueueResult, OverflowDecision, StanzaMetadata,
@@ -18,7 +19,7 @@ impl Default for CsiSubstate {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(super) fn set_csi_active(&mut self, active: bool) {
         if active {
             self.csi.state.set_active();

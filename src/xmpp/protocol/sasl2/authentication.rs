@@ -1,6 +1,7 @@
 //! Render authentication features and handle FAST proofs, rotation planning, and mechanism availability.
 
 use super::*;
+use crate::xmpp::protocol::SessionHost;
 
 pub(crate) fn authentication_feature_xml(session: &ProtocolSession) -> String {
     let fast_policy = session.host.sasl2_fast_token_policy();
@@ -205,7 +206,9 @@ impl ProtocolSession {
         });
         self.complete_sasl2(user, Some(responder), false).await
     }
+}
 
+impl<H: SessionHost> ProtocolSession<H> {
     /// Commit FAST rotation/invalidation and any mandatory replacement token
     /// before Bind 2 publishes a routable resource. The proof counter is
     /// consumed during verification; every other credential side effect is

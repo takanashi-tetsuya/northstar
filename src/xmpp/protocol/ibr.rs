@@ -1,4 +1,5 @@
 use super::{Action, ProtocolSession};
+use crate::xmpp::protocol::SessionHost;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use northstar_abuse_policy::{AbuseAction, PowChallenge, PowIntent, WorkRequirement};
@@ -15,7 +16,7 @@ enum IbrCompletion {
     Failed(&'static str),
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) async fn handle_ibr_register(&mut self, node: Node<'_, '_>) -> Result<Action> {
         if !self.registration_transport_allowed() {
             return Ok(Action::CloseWith(stream_error("not-authorized")));

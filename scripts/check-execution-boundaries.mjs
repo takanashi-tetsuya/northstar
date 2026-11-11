@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readProductionModule, readRoleSplitFile } from './lib/source-module.mjs';
+import { readModuleParts, readProductionModule, readRoleSplitFile } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = {
@@ -202,9 +202,16 @@ function ordered(source, steps, message) {
   }
 }
 
+// The composition root's SessionHost impls (src/state/*session_host.rs) forward to AppState methods of the same
+// names; the boundaries below are the inherent AppState bodies, so the state source leaves the forwards out.
+const sessionHostForwards = /^src\/state\/(?:[a-z_]+_)?session_host\.rs$/;
+
 export function readExecutionSources() {
   return Object.fromEntries(Object.entries(files).map(([name, file]) => [name,
-    productionModules.has(name) ? readProductionModule(file, { root })
+    name === 'state' ? readModuleParts(file, { root, includeTests: false })
+      .filter(part => !sessionHostForwards.test(part.path.replaceAll('\\', '/')))
+      .map(part => part.source).join('\n')
+      : productionModules.has(name) ? readProductionModule(file, { root })
       : roleSplitSources.has(name) ? readRoleSplitFile(file, { root }) : fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
@@ -323,7 +330,7 @@ export function verifySmOwnershipBoundaries({ protocol, smProtocol, smOwner, smC
     'tokio::time::timeout(std::time::Duration::from_secs(5),self.port.checkpoint(&prepared)).await',
     'prepared.request().validate_checkpoint_return(outcome.updated,&rotations)?;',
     'anyhow::ensure!(outcome.updated);',
-    'ProtocolSession::apply_sm_ownership_resolution_to_unacked(&mutself.sm.unacked,&outcome.ownership);',
+    'super::session_sm::apply_sm_ownership_resolution_to_unacked(&mutself.sm.unacked,&outcome.ownership);',
     'observation.ownership_applied();'],
   'SM checkpoint must bind its snapshot and returned receipt before applying rotations');
   const ack = normalize(body(smOwner, 'async\\s+fn\\s+acknowledge\\b'));
@@ -336,7 +343,7 @@ export function verifySmOwnershipBoundaries({ protocol, smProtocol, smOwner, smC
     'PreparedCheckpoint::bind(observation,id,self.connection_id,&self.sm.unacked,&snapshot,&acknowledged,self.checkpoint_policy())?',
     'tokio::time::timeout(std::time::Duration::from_secs(5),self.port.checkpoint(&prepared)).await',
     'prepared.request().validate_checkpoint_return(outcome.updated,&rotations)?;',
-    'ProtocolSession::apply_sm_ownership_resolution_to_unacked(&mutremaining,&outcome.ownership);'],
+    'super::session_sm::apply_sm_ownership_resolution_to_unacked(&mutremaining,&outcome.ownership);'],
   'SM ACK must preserve actual h arithmetic, clone order and exact persisted cut');
   ordered(ack, ['PreparedBatch::bind(',
     'tokio::time::timeout(std::time::Duration::from_secs(5),self.port.acknowledge_batch(&prepared)).await',

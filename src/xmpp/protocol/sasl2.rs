@@ -1,4 +1,4 @@
-use crate::xmpp::xml_builder::XmlElement;
+use crate::xmpp::{protocol::SessionHost, xml_builder::XmlElement};
 use anyhow::{Context, Result};
 use northstar_auth_core as auth;
 use northstar_auth_xmpp::sasl2::*;
@@ -194,7 +194,9 @@ impl ProtocolSession {
         };
         self.process_sasl_step(mechanism, step).await
     }
+}
 
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) fn sasl2_abort(&mut self, root: Node<'_, '_>) -> Action {
         let _authentication_timer = self.host.sasl2_authentication_timer();
         if root.tag_name().namespace() != Some(SASL2_NS)
@@ -229,7 +231,9 @@ impl ProtocolSession {
         self.sasl2_state = None;
         Action::Send(failure_xml(condition, None))
     }
+}
 
+impl ProtocolSession {
     pub(crate) async fn complete_sasl2(
         &mut self,
         user: northstar_auth_application::authentication::AuthenticatedAccount,
@@ -638,7 +642,9 @@ impl ProtocolSession {
             Ok(Action::SendMany(vec![success, self.features()]))
         }
     }
+}
 
+impl<H: SessionHost> ProtocolSession<H> {
     async fn commit_sasl2_unbound_state(
         &self,
         plan: &northstar_auth_application::authentication::FastCommitPlan,

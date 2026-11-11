@@ -1,6 +1,7 @@
 //! Validate and parse stream openings, including stream capture and errors.
 
 use super::*;
+use crate::xmpp::protocol::SessionHost;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StreamOpenError {
@@ -157,7 +158,7 @@ pub(super) fn parse_stream_open(
     })
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) fn capture_stream_from(
         &mut self,
         xml: &str,

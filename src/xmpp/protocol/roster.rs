@@ -1,4 +1,5 @@
 use super::{Action, ProtocolSession};
+use crate::xmpp::protocol::SessionHost;
 use anyhow::Result;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_roster_application::{
@@ -106,9 +107,9 @@ impl northstar_roster_xmpp::roster::RosterSession for ProtocolSession {
     }
 
     fn roster_is_hosted_domain(&self, domain: &str) -> bool {
-        domain == self.muc_domain()
-            || domain == self.upload_domain()
-            || domain == self.pubsub_domain()
+        domain == self.host.muc_domain()
+            || domain == self.host.upload_domain()
+            || domain == self.host.pubsub_domain()
     }
 
     fn roster_outbox_policy(&self) -> S2sOutboxPolicy {

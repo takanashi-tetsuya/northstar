@@ -92,7 +92,7 @@ assert.match(messaging, /pow_intent_payload:\s*&pow_intent_payload/,
   'message admission must verify the reconstructed client commitment');
 assert.doesNotMatch(messaging, /pow_intent_payload:\s*&routed_raw/,
   'server-injected from/xml:lang bytes must never become part of the client PoW commitment');
-assert.match(dispatch, /"message"\s*=>\s*self\.message\(root,\s*xml,\s*client_xml\)\.await/,
+assert.match(dispatch, /"message"\s*=>\s*H::dispatch_message\(self,\s*root,\s*xml,\s*client_xml\)\.await/,
   'dispatch must preserve the pre-rewrite client frame for message PoW verification');
 assert.match(powIntentMigration, /protocol_version SMALLINT NOT NULL DEFAULT 1/);
 assert.match(powIntentMigration, /intent_method[\s\S]*intent_path[\s\S]*body_sha256[\s\S]*server_nonce[\s\S]*issued_at/,

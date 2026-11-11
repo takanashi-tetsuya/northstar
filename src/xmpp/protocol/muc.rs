@@ -77,10 +77,6 @@ impl MucSession for ProtocolSession {
 }
 
 impl ProtocolSession {
-    pub(crate) fn muc_domain(&self) -> String {
-        handlers::muc_domain(self)
-    }
-
     pub(crate) async fn authorized_muc_occupant(
         &self,
         room_jid: &str,

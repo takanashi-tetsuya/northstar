@@ -829,7 +829,10 @@ fn effective_c2s_caps_sender(
     }
 }
 
-fn current_caps_observation(state: &AppState, target: &str) -> Option<CapsObservationSnapshot> {
+fn current_caps_observation<H: SessionHost>(
+    state: &H,
+    target: &str,
+) -> Option<CapsObservationSnapshot> {
     let snapshot = state.caps_by_jid().snapshot(target)?;
     if let CapsObservationOwner::Local(epoch) = snapshot.owner {
         if !local_caps_epoch_is_current(state, target, epoch) {
@@ -1064,8 +1067,8 @@ pub(crate) async fn handle_federated_caps_response(
     true
 }
 
-pub(crate) fn cached_disco_result(
-    state: &AppState,
+pub(crate) fn cached_disco_result<H: SessionHost>(
+    state: &H,
     id: &str,
     target: &str,
     requested_node: Option<&str>,

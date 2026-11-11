@@ -157,10 +157,6 @@ impl MixSession for ProtocolSession {
 }
 
 impl ProtocolSession {
-    pub(crate) fn mix_domain(&self) -> String {
-        northstar_mix_xmpp::local_mix_domain(self.host.local_domain())
-    }
-
     pub(crate) async fn try_mix_iq(&self, raw: &str) -> Result<Option<Action>> {
         let action = northstar_mix_xmpp::session::try_mix_iq(self, raw).await?;
         Ok(action.map(Action::from))

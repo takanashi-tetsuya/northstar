@@ -1,11 +1,14 @@
 //! What a protocol session needs from the node it runs in.
 
+use super::dispatch::iq_routes::RootIqRoute;
 use super::ProtocolSession;
+use crate::s2s::FederationRouter;
 use crate::state::CommittedLocalMucResume;
 use crate::state::RestoredLocalMucOccupants;
 use crate::state::Sasl2FastTokenPolicy;
 use crate::state::SmBufferLimits;
 use crate::state::SmSessionPolicy;
+use anyhow::Result;
 use dashmap::DashMap;
 use northstar_room_application::muc_service::LocalMucOccupantIdentity;
 use northstar_session_core::JoinedMucMembership;
@@ -16,6 +19,9 @@ use northstar_stream::local_routes::muc::SuspendedMucEndpoint;
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::local_routes::session::SmPresenceEpoch;
 use northstar_stream::local_routes::session::SmStagedRouteClaim;
+use northstar_stream::transport::Action;
+use northstar_stream::IqRouter;
+use roxmltree::Node;
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use std::time::Duration;
@@ -397,4 +403,100 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         claimed_sm_id: uuid::Uuid,
         expected_gate: &Arc<tokio::sync::Mutex<()>>,
     ) -> SmStagedRouteClaim;
+    /// The MUC service domain (`conference.<local domain>`).
+    fn muc_domain(&self) -> String;
+    /// The MIX service domain.
+    fn mix_domain(&self) -> String;
+    /// The PubSub service domain.
+    fn pubsub_domain(&self) -> String;
+    /// The HTTP upload service domain (`upload.<local domain>`).
+    fn upload_domain(&self) -> String;
+    /// Whether the XEP-0363 HTTP upload service is enabled.
+    fn http_upload_enabled(&self) -> bool;
+    /// Handles a client `<message/>` (the message, MUC and MIX contexts).
+    fn dispatch_message(
+        session: &ProtocolSession<Self>,
+        root: Node<'_, '_>,
+        raw: &str,
+        client_raw: &str,
+    ) -> impl std::future::Future<Output = Result<Action>> + Send;
+    /// Handles a client `<presence/>` (the roster and room contexts).
+    fn dispatch_presence(
+        session: &mut ProtocolSession<Self>,
+        root: Node<'_, '_>,
+        raw: &str,
+    ) -> impl std::future::Future<Output = Result<Action>> + Send;
+    /// Answers an IQ addressed to a MIX channel, or `None` when the IQ is not one.
+    fn dispatch_mix_iq(
+        session: &ProtocolSession<Self>,
+        raw: &str,
+    ) -> impl std::future::Future<Output = Result<Option<Action>>> + Send;
+    /// The session's own occupant of the local MUC room `room_jid`, while its membership is authorized.
+    fn authorized_muc_occupant(
+        session: &ProtocolSession<Self>,
+        room_jid: &str,
+    ) -> impl std::future::Future<Output = Result<Option<MucOccupant>>> + Send;
+    /// The IQ routes the client dispatch hands requests to.
+    fn iq_routes() -> &'static IqRouter<RootIqRoute<Self>>;
+    /// See `AppState::blocked_muc_recipient_accounts`.
+    fn blocked_muc_recipient_accounts(
+        &self,
+        occupants: &[MucOccupant],
+        stanza_senders: &[String],
+    ) -> impl std::future::Future<Output = std::collections::HashSet<String>> + Send;
+    /// See `AppState::deliver_to_muc_occupant`.
+    fn deliver_to_muc_occupant(
+        &self,
+        occupant: &MucOccupant,
+        stanza: String,
+    ) -> impl std::future::Future<Output = bool> + Send;
+    /// See `AppState::federation_outbox`.
+    fn federation_outbox(&self) -> &FederationRouter;
+    /// See `AppState::inbound_stanza_telemetry`.
+    fn inbound_stanza_telemetry(&self) -> crate::xmpp::capabilities::InboundStanzaTelemetry<'_>;
+    /// See `AppState::local_muc_occupant_by_nick`.
+    fn local_muc_occupant_by_nick(&self, room_jid: &str, nick: &str) -> Option<MucOccupant>;
+    /// A failed route lookup supplies no evidence of an exact remote resource.
+    fn personal_message_remote_resource_exists(
+        &self,
+        jid: &str,
+    ) -> impl std::future::Future<Output = bool> + Send;
+    /// See `AppState::presence_service`.
+    fn presence_service(
+        &self,
+    ) -> &northstar_roster_application::presence::PresenceService<
+        northstar_workflows::presence_repository::PostgresPresenceRepository,
+    >;
+    /// Evaluate one resource's session-local XEP-0016 selection (or the
+    /// account default when no active list is selected). Callers must apply
+    /// XEP-0191 first; a blocking hit is never overridden by an allow rule.
+    /// Stanza paths that still hold a storage-level kind convert it at this
+    /// boundary; the service layer owns the mapping.
+    fn privacy_allows_session(
+        &self,
+        session: &OnlineSession,
+        peer: &str,
+        kind: impl Into<northstar_roster_application::privacy::PrivacyStanzaKind> + Send,
+    ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send;
+    /// See `AppState::privacy_service`.
+    fn privacy_service(
+        &self,
+    ) -> &northstar_roster_application::privacy::PrivacyService<
+        northstar_roster_postgres::privacy::PostgresPrivacyRepository,
+    >;
+    /// Client IQs addressed to a full JID stop at the first accepting node.
+    fn route_client_iq_to_remote_resource(
+        &self,
+        full_jid: &str,
+        stanza: &str,
+    ) -> impl std::future::Future<Output = bool> + Send;
+    /// See `AppState::xmpp_external_route_domain_allowed`.
+    fn xmpp_external_route_domain_allowed(&self, domain: &str) -> bool;
+    /// See `AppState::xmpp_route_enabled`.
+    fn xmpp_route_enabled(
+        &self,
+        stanza: northstar_xep_core::StanzaKind,
+        namespace: &str,
+        local_name: &str,
+    ) -> bool;
 }

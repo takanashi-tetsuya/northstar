@@ -1,3 +1,4 @@
+use crate::xmpp::protocol::SessionHost;
 use crate::xmpp::protocol::{Action, ProtocolSession};
 use anyhow::Result;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
@@ -31,7 +32,7 @@ fn map_pubsub_capacity_result(id: &str, result: Result<Action>) -> Result<Action
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     pub async fn handle(&mut self, xml: &str) -> Result<Action> {
         self.host.inbound_stanza_telemetry().received();
         self.enter_frame_stage(Stage::Validation);
@@ -306,8 +307,8 @@ impl ProtocolSession {
                 Ok(self.handle_ibr_cancel(root))
             }
             "iq" => self.iq(root, xml).await,
-            "message" => self.message(root, xml, client_xml).await,
-            "presence" => self.presence(root, xml).await,
+            "message" => H::dispatch_message(self, root, xml, client_xml).await,
+            "presence" => H::dispatch_presence(self, root, xml).await,
             _ => Ok(Action::CloseWith(stream_error("unsupported-stanza-type"))),
         }?;
         let action = if root.tag_name().name() == "iq"
@@ -344,7 +345,7 @@ impl ProtocolSession {
         if matches!(kind, "result" | "error") && self.handle_push_response(id, kind, root).await? {
             return Ok(Action::None);
         }
-        if let Some(action) = self.try_mix_iq(raw).await? {
+        if let Some(action) = H::dispatch_mix_iq(self, raw).await? {
             return Ok(action);
         }
         if let (Some(user), Some(from), Some(to)) = (
@@ -433,8 +434,8 @@ impl ProtocolSession {
                 return Ok(Action::Send(iq_error(id, condition)));
             }
         }
-        let muc_domain = self.muc_domain();
-        let upload_domain = self.upload_domain();
+        let muc_domain = self.host.muc_domain();
+        let upload_domain = self.host.upload_domain();
         let caps_disco_get =
             self.host.xmpp_extension_enabled(northstar_xep_0115::XEP_ID) && is_caps_disco_get(root);
         if let Some(to) = root.attribute("to") {
@@ -548,7 +549,7 @@ impl ProtocolSession {
                     }
                     if caps_disco_get {
                         if let Some(result) = super::caps::cached_disco_result(
-                            &self.host,
+                            &*self.host,
                             id,
                             to,
                             child.and_then(|child| child.attribute("node")),
@@ -617,8 +618,7 @@ impl ProtocolSession {
                         false
                     };
                     if is_ping
-                        && self
-                            .authorized_muc_occupant(&room_jid)
+                        && H::authorized_muc_occupant(self, &room_jid)
                             .await?
                             .is_some_and(|occupant| occupant.nick == target_nick)
                     {
@@ -633,7 +633,7 @@ impl ProtocolSession {
                             return Ok(Action::None);
                         }
                     };
-                    let Some(own) = self.authorized_muc_occupant(&room_jid).await? else {
+                    let Some(own) = H::authorized_muc_occupant(self, &room_jid).await? else {
                         if kind == "get" || kind == "set" {
                             return Ok(Action::Send(iq_error(id, "not-acceptable")));
                         } else {
@@ -685,8 +685,8 @@ impl ProtocolSession {
             (domain != self.host.local_domain()
                 && domain != muc_domain
                 && domain != upload_domain
-                && domain != self.pubsub_domain()
-                && domain != self.mix_domain())
+                && domain != self.host.pubsub_domain()
+                && domain != self.host.mix_domain())
             .then(|| domain.to_owned())
         });
         if let Some(domain) = remote_iq_domain.as_deref() {
@@ -757,7 +757,7 @@ impl ProtocolSession {
         }
         let element = child.tag_name().name();
         if let Some(iq_kind) = northstar_stream::IqKind::parse(kind) {
-            if let Some(route) = iq_routes::IQ_ROUTES.route(element, ns, iq_kind) {
+            if let Some(route) = H::iq_routes().route(element, ns, iq_kind) {
                 match route.admission(self, element, ns, iq_kind) {
                     iq_routes::Admission::Handle => {
                         let request = northstar_stream::IqRequest {
@@ -916,7 +916,7 @@ fn valid_client_stanza_namespace(root: Node<'_, '_>, websocket: bool, raw: &str)
     }
 }
 
-mod iq_routes;
+pub(crate) mod iq_routes;
 
 #[cfg(test)]
 mod tests;

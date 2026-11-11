@@ -1,4 +1,5 @@
 use super::{Action, ProtocolSession};
+use crate::xmpp::protocol::SessionHost;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use northstar_room_application::mix_service::{
@@ -141,7 +142,7 @@ impl ProtocolSession {
         };
         let from = target.to_string();
         let from = from.as_str();
-        let pubsub_domain = self.pubsub_domain();
+        let pubsub_domain = self.host.pubsub_domain();
         let is_pubsub_service = target.localpart().is_none()
             && target.resourcepart().is_none()
             && target.domainpart() == pubsub_domain;
@@ -151,14 +152,14 @@ impl ProtocolSession {
         if !is_pubsub_service && !valid_disco_query(request) {
             return Ok(Action::Send(iq_error_from(id, from, "bad-request")));
         }
-        let muc_domain = self.muc_domain();
+        let muc_domain = self.host.muc_domain();
         if target.domainpart() == muc_domain
             && !self.host.xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
         {
             return Ok(Action::Send(iq_error_from(id, from, "service-unavailable")));
         }
-        let upload_domain = self.upload_domain();
-        let mix_domain = self.mix_domain();
+        let upload_domain = self.host.upload_domain();
+        let mix_domain = self.host.mix_domain();
         let mirror_enabled = self.host.mix_muc_mirror_enabled();
         if target.localpart().is_none() && target.domainpart() == mix_domain {
             if request.attribute("node").is_some() {
@@ -283,7 +284,7 @@ impl ProtocolSession {
             let query = super::pubsub::service_disco_payload(&self.host);
             return Ok(Action::Send(iq_result_from(id, from, &query)));
         }
-        if self.http_upload_enabled()
+        if self.host.http_upload_enabled()
             && target.localpart().is_none()
             && target.domainpart() == upload_domain
         {
@@ -557,7 +558,7 @@ impl ProtocolSession {
         if !self.host.xmpp_extension_enabled(northstar_xep_0045::XEP_ID) {
             features.retain(|feature| *feature != northstar_xep_0045::XMLNS_MUC);
         }
-        if !self.http_upload_enabled() {
+        if !self.host.http_upload_enabled() {
             features.retain(|feature| *feature != northstar_xep_0363::NAMESPACE);
         }
         if is_account && self.host.xmpp_extension_enabled(northstar_xep_0313::XEP_ID) {
@@ -633,15 +634,15 @@ impl ProtocolSession {
             Ok(request) => request,
             Err(condition) => return Ok(Action::Send(iq_error_from(id, from, condition))),
         };
-        let muc_domain = self.muc_domain();
+        let muc_domain = self.host.muc_domain();
         if target.domainpart() == muc_domain
             && !self.host.xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
         {
             return Ok(Action::Send(iq_error_from(id, from, "service-unavailable")));
         }
-        let upload_domain = self.upload_domain();
-        let pubsub_domain = self.pubsub_domain();
-        let mix_domain = self.mix_domain();
+        let upload_domain = self.host.upload_domain();
+        let pubsub_domain = self.host.pubsub_domain();
+        let mix_domain = self.host.mix_domain();
         let requested_node = disco_request.node.as_deref();
         let mut query = disco_items_query(requested_node);
         if target.localpart().is_none()
@@ -845,7 +846,7 @@ impl ProtocolSession {
                 first_index,
                 total,
             ));
-        } else if self.http_upload_enabled()
+        } else if self.host.http_upload_enabled()
             && target.localpart().is_none()
             && target.domainpart() == upload_domain
         {
@@ -876,7 +877,7 @@ impl ProtocolSession {
                 (pubsub_domain.as_str(), "PubSub Service"),
                 (mix_domain.as_str(), "MIX Service"),
             ];
-            if self.http_upload_enabled() {
+            if self.host.http_upload_enabled() {
                 services.push((upload_domain.as_str(), "File Upload"));
             }
             for (jid, suffix) in services {

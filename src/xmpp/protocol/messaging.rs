@@ -2,6 +2,7 @@
 
 use super::{Action, ProtocolSession};
 use crate::state::AppState;
+use crate::xmpp::protocol::SessionHost;
 use anyhow::Result;
 #[cfg(test)]
 use northstar_abuse_policy::message_admission::MessageAdmissionStart;
@@ -68,15 +69,15 @@ impl MessageSession for ProtocolSession {
     }
 
     fn muc_domain(&self) -> String {
-        ProtocolSession::muc_domain(self)
+        self.host.muc_domain()
     }
 
     fn upload_domain(&self) -> String {
-        ProtocolSession::upload_domain(self)
+        self.host.upload_domain()
     }
 
     fn pubsub_domain(&self) -> String {
-        ProtocolSession::pubsub_domain(self)
+        self.host.pubsub_domain()
     }
 
     fn message_operation(&self) -> Option<DirectOperationHandle> {

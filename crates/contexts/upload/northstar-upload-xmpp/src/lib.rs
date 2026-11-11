@@ -31,6 +31,12 @@ pub trait UploadSlotSession: Sync {
     ) -> impl std::future::Future<Output = anyhow::Result<UploadSlotAdmission>> + Send;
 }
 
+/// The upload service domain of the node serving `local_domain`.
+pub fn upload_service_domain(local_domain: &str) -> String {
+    northstar_xmpp_types::jid::prepare_domainpart(&format!("upload.{local_domain}"))
+        .expect("configured XMPP domain must form a valid upload service domain")
+}
+
 fn file_too_large(id: &str, from: &str, maximum: u64) -> String {
     XmlElement::namespaced("iq", "jabber:client")
         .attr("type", "error")

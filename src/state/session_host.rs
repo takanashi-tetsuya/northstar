@@ -1,12 +1,15 @@
 //! The node's side of the client session core.
 
 use super::AppState;
+use crate::s2s::FederationRouter;
 use crate::state::CommittedLocalMucResume;
 use crate::state::RestoredLocalMucOccupants;
 use crate::state::Sasl2FastTokenPolicy;
 use crate::state::SmBufferLimits;
 use crate::state::SmSessionPolicy;
+use crate::xmpp::protocol::dispatch::iq_routes::{RootIqRoute, IQ_ROUTES};
 use crate::xmpp::protocol::{ProtocolSession, SessionHost};
+use anyhow::Result;
 use dashmap::DashMap;
 use northstar_room_application::muc_service::LocalMucOccupantIdentity;
 use northstar_session_core::JoinedMucMembership;
@@ -17,6 +20,9 @@ use northstar_stream::local_routes::muc::SuspendedMucEndpoint;
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::local_routes::session::SmPresenceEpoch;
 use northstar_stream::local_routes::session::SmStagedRouteClaim;
+use northstar_stream::transport::Action;
+use northstar_stream::IqRouter;
+use roxmltree::Node;
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use std::time::Duration;
@@ -552,5 +558,127 @@ impl SessionHost for AppState {
             claimed_sm_id,
             expected_gate,
         )
+    }
+
+    fn muc_domain(&self) -> String {
+        northstar_muc_xmpp::muc::muc_service_domain(self.local_domain())
+    }
+
+    fn mix_domain(&self) -> String {
+        northstar_mix_xmpp::local_mix_domain(self.local_domain())
+    }
+
+    fn pubsub_domain(&self) -> String {
+        northstar_pubsub_xmpp::pubsub::pubsub_domain(self)
+    }
+
+    fn upload_domain(&self) -> String {
+        northstar_upload_xmpp::upload_service_domain(self.local_domain())
+    }
+
+    fn http_upload_enabled(&self) -> bool {
+        self.xmpp_http_upload_enabled()
+    }
+
+    async fn dispatch_message(
+        session: &ProtocolSession,
+        root: Node<'_, '_>,
+        raw: &str,
+        client_raw: &str,
+    ) -> Result<Action> {
+        session.message(root, raw, client_raw).await
+    }
+
+    async fn dispatch_presence(
+        session: &mut ProtocolSession,
+        root: Node<'_, '_>,
+        raw: &str,
+    ) -> Result<Action> {
+        session.presence(root, raw).await
+    }
+
+    async fn dispatch_mix_iq(session: &ProtocolSession, raw: &str) -> Result<Option<Action>> {
+        session.try_mix_iq(raw).await
+    }
+
+    async fn authorized_muc_occupant(
+        session: &ProtocolSession,
+        room_jid: &str,
+    ) -> Result<Option<MucOccupant>> {
+        session.authorized_muc_occupant(room_jid).await
+    }
+
+    fn iq_routes() -> &'static IqRouter<RootIqRoute> {
+        &IQ_ROUTES
+    }
+
+    async fn blocked_muc_recipient_accounts(
+        &self,
+        occupants: &[MucOccupant],
+        stanza_senders: &[String],
+    ) -> std::collections::HashSet<String> {
+        AppState::blocked_muc_recipient_accounts(self, occupants, stanza_senders).await
+    }
+
+    async fn deliver_to_muc_occupant(&self, occupant: &MucOccupant, stanza: String) -> bool {
+        AppState::deliver_to_muc_occupant(self, occupant, stanza).await
+    }
+
+    fn federation_outbox(&self) -> &FederationRouter {
+        AppState::federation_outbox(self)
+    }
+
+    fn inbound_stanza_telemetry(&self) -> crate::xmpp::capabilities::InboundStanzaTelemetry<'_> {
+        AppState::inbound_stanza_telemetry(self)
+    }
+
+    fn local_muc_occupant_by_nick(&self, room_jid: &str, nick: &str) -> Option<MucOccupant> {
+        AppState::local_muc_occupant_by_nick(self, room_jid, nick)
+    }
+
+    async fn personal_message_remote_resource_exists(&self, jid: &str) -> bool {
+        AppState::personal_message_remote_resource_exists(self, jid).await
+    }
+
+    fn presence_service(
+        &self,
+    ) -> &northstar_roster_application::presence::PresenceService<
+        northstar_workflows::presence_repository::PostgresPresenceRepository,
+    > {
+        AppState::presence_service(self)
+    }
+
+    async fn privacy_allows_session(
+        &self,
+        session: &OnlineSession,
+        peer: &str,
+        kind: impl Into<northstar_roster_application::privacy::PrivacyStanzaKind> + Send,
+    ) -> anyhow::Result<bool> {
+        AppState::privacy_allows_session(self, session, peer, kind).await
+    }
+
+    fn privacy_service(
+        &self,
+    ) -> &northstar_roster_application::privacy::PrivacyService<
+        northstar_roster_postgres::privacy::PostgresPrivacyRepository,
+    > {
+        AppState::privacy_service(self)
+    }
+
+    async fn route_client_iq_to_remote_resource(&self, full_jid: &str, stanza: &str) -> bool {
+        AppState::route_client_iq_to_remote_resource(self, full_jid, stanza).await
+    }
+
+    fn xmpp_external_route_domain_allowed(&self, domain: &str) -> bool {
+        AppState::xmpp_external_route_domain_allowed(self, domain)
+    }
+
+    fn xmpp_route_enabled(
+        &self,
+        stanza: northstar_xep_core::StanzaKind,
+        namespace: &str,
+        local_name: &str,
+    ) -> bool {
+        AppState::xmpp_route_enabled(self, stanza, namespace, local_name)
     }
 }

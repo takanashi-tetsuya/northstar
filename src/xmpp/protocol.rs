@@ -367,7 +367,7 @@ impl<H: SessionHost> northstar_stream::auth_publication::PublicationPort
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost> ProtocolSession<H> {
     /// The production entry point shared by TCP, WebSocket and BOSH. Tests
     /// can still exercise `handle` directly without a transport budget.
     pub(crate) async fn process_frame(

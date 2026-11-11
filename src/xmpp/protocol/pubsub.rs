@@ -1,5 +1,6 @@
 use super::{Action, ProtocolSession};
 use crate::state::{pubsub_digest_worker::PubSubDigestWorkerContext, AppState};
+use crate::xmpp::protocol::SessionHost;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use northstar_pubsub_application::{service::subscription_event_children, PubSubService};
@@ -52,10 +53,6 @@ pub(crate) async fn node_metadata_form(state: &AppState, node: &PubSubNode) -> R
 }
 
 impl ProtocolSession {
-    pub(crate) fn pubsub_domain(&self) -> String {
-        northstar_pubsub_xmpp::pubsub::pubsub_domain(self.host.as_ref())
-    }
-
     pub(crate) async fn pubsub_iq_get(&self, id: &str, child: Node<'_, '_>) -> Result<Action> {
         self.pubsub_request(id, "get", child).await
     }
@@ -78,7 +75,7 @@ impl ProtocolSession {
     }
 
     async fn pubsub_request(&self, id: &str, kind: &str, child: Node<'_, '_>) -> Result<Action> {
-        let service = self.pubsub_domain();
+        let service = self.host.pubsub_domain();
         let Some(full_jid) = self.full_jid.as_deref() else {
             return Ok(Action::Send(iq_error_from(id, &service, "not-authorized")));
         };
@@ -104,7 +101,7 @@ impl ProtocolSession {
         if northstar_xmpp_types::jid::canonicalize_bare(to)
             .ok()
             .as_deref()
-            != northstar_xmpp_types::jid::canonicalize_bare(&self.pubsub_domain())
+            != northstar_xmpp_types::jid::canonicalize_bare(&self.host.pubsub_domain())
                 .ok()
                 .as_deref()
         {

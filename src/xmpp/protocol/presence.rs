@@ -1,4 +1,5 @@
 use super::{Action, ProtocolSession};
+use crate::xmpp::protocol::SessionHost;
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use northstar_roster_application::presence::{PresenceRepository, PresenceService};
@@ -42,11 +43,11 @@ impl ProtocolSession {
             }
             if target_jid.resourcepart().is_none()
                 && target_jid.localpart().is_none()
-                && target_jid.domainpart() == self.pubsub_domain()
+                && target_jid.domainpart() == self.host.pubsub_domain()
             {
                 return self.pubsub_presence(kind, &from).await;
             }
-            if target_jid.domainpart() == self.muc_domain() {
+            if target_jid.domainpart() == self.host.muc_domain() {
                 if kind == "available" {
                     let user = self.authenticated.as_ref().expect("authenticated session");
                     let avatar_hash = self.host.presence_service().avatar_hash(user.id).await?;

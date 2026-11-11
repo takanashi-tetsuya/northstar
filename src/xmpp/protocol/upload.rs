@@ -7,18 +7,6 @@ use northstar_upload_xmpp::UploadSessionHost;
 use roxmltree::Node;
 
 impl<H: SessionHost + UploadSessionHost> ProtocolSession<H> {
-    pub(crate) fn http_upload_enabled(&self) -> bool {
-        self.host.upload_enabled()
-    }
-
-    pub(crate) fn upload_domain(&self) -> String {
-        northstar_xmpp_types::jid::prepare_domainpart(&format!(
-            "upload.{}",
-            self.host.upload_local_domain()
-        ))
-        .expect("configured XMPP domain must form a valid upload service domain")
-    }
-
     pub(crate) async fn http_upload_slot(
         &self,
         id: &str,
@@ -39,7 +27,7 @@ impl<H: SessionHost + UploadSessionHost> northstar_upload_xmpp::UploadSlotSessio
     }
 
     fn upload_service_domain(&self) -> String {
-        self.upload_domain()
+        self.host.upload_domain()
     }
 
     fn upload_public_url(&self) -> &str {

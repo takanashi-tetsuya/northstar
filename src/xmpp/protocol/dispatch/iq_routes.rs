@@ -10,12 +10,12 @@ use northstar_stream::{HandlerFuture, IqKind, IqRequest, IqRoute, IqRouter};
 use std::sync::LazyLock;
 
 /// A handler of the client IQ dispatch.
-pub(super) type RootIqHandler =
-    for<'a> fn(&'a mut ProtocolSession, IqRequest<'a>) -> HandlerFuture<'a, Action>;
+pub(crate) type RootIqHandler<H = crate::state::AppState> =
+    for<'a> fn(&'a mut ProtocolSession<H>, IqRequest<'a>) -> HandlerFuture<'a, Action>;
 
 /// Whether a route dispatches unconditionally or only while its conditions are met.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RouteGate {
+pub(crate) enum RouteGate {
     /// The route always handles the request.
     Always,
     /// The route handles the request while its XEP route switch is on; otherwise the request is
@@ -25,14 +25,14 @@ pub(super) enum RouteGate {
     /// answered `service-unavailable`.
     RouteEnabledOrUnavailable,
     /// The route handles the request while the HTTP upload service is enabled
-    /// (`session.http_upload_enabled()`, the same call the XEP-0363 arms use as their guard);
+    /// (`session.host.http_upload_enabled()`, the same call the XEP-0363 arms use as their guard);
     /// otherwise the request is unsupported.
     HttpUpload,
 }
 
 /// What the dispatch does with a request that has a route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Admission {
+pub(crate) enum Admission {
     /// The route's handler answers the request.
     Handle,
     /// The request is answered like one without a route.
@@ -42,17 +42,24 @@ pub(super) enum Admission {
 }
 
 /// A registered route: its handler and its gate.
-#[derive(Clone, Copy)]
-pub(super) struct RootIqRoute {
-    pub(super) handler: RootIqHandler,
-    pub(super) gate: RouteGate,
+pub(crate) struct RootIqRoute<H: SessionHost = crate::state::AppState> {
+    pub(crate) handler: RootIqHandler<H>,
+    pub(crate) gate: RouteGate,
 }
 
-impl RootIqRoute {
+impl<H: SessionHost> Clone for RootIqRoute<H> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<H: SessionHost> Copy for RootIqRoute<H> {}
+
+impl<H: SessionHost> RootIqRoute<H> {
     /// What the dispatch does with a request for this route.
-    pub(super) fn admission(
+    pub(crate) fn admission(
         &self,
-        session: &ProtocolSession,
+        session: &ProtocolSession<H>,
         element: &str,
         namespace: &str,
         kind: IqKind,
@@ -88,7 +95,7 @@ impl RootIqRoute {
                 }
             }
             RouteGate::HttpUpload => {
-                if session.http_upload_enabled() {
+                if session.host.http_upload_enabled() {
                     Admission::Handle
                 } else {
                     Admission::Unsupported
@@ -378,7 +385,7 @@ fn build_routes() -> IqRouter<RootIqRoute> {
     router
 }
 
-pub(super) static IQ_ROUTES: LazyLock<IqRouter<RootIqRoute>> = LazyLock::new(build_routes);
+pub(crate) static IQ_ROUTES: LazyLock<IqRouter<RootIqRoute>> = LazyLock::new(build_routes);
 
 fn command<'a>(
     session: &'a mut ProtocolSession,
@@ -537,7 +544,7 @@ fn pubsub_set<'a>(
         if request
             .stanza
             .attribute("to")
-            .is_some_and(|to| is_service_jid(to, &session.pubsub_domain()))
+            .is_some_and(|to| is_service_jid(to, &session.host.pubsub_domain()))
         {
             session
                 .pubsub_iq_set(
@@ -563,7 +570,7 @@ fn pubsub_get<'a>(
         if request
             .stanza
             .attribute("to")
-            .is_some_and(|to| is_service_jid(to, &session.pubsub_domain()))
+            .is_some_and(|to| is_service_jid(to, &session.host.pubsub_domain()))
         {
             session.pubsub_iq_get(request.id, request.payload).await
         } else {
@@ -796,7 +803,7 @@ fn register_get<'a>(
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(async move {
-        let muc_domain = session.muc_domain();
+        let muc_domain = session.host.muc_domain();
         let is_local_muc_room = request.stanza.attribute("to").is_some_and(|to| {
             northstar_muc_xmpp::muc::canonical_local_muc_room(to, &muc_domain).is_some()
         });
@@ -813,7 +820,7 @@ fn register_set<'a>(
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(async move {
-        let muc_domain = session.muc_domain();
+        let muc_domain = session.host.muc_domain();
         let is_local_muc_room = request.stanza.attribute("to").is_some_and(|to| {
             northstar_muc_xmpp::muc::canonical_local_muc_room(to, &muc_domain).is_some()
         });
@@ -834,7 +841,7 @@ fn muc_unique<'a>(
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(async move {
-        let muc_domain = session.muc_domain();
+        let muc_domain = session.host.muc_domain();
         Ok(Action::Send(iq_result_from(
             request.id,
             request.stanza.attribute("to").unwrap_or(&muc_domain),
@@ -863,7 +870,7 @@ fn http_upload_set<'a>(
     Box::pin(async move {
         Ok(Action::Send(iq_error_from(
             request.id,
-            &session.upload_domain(),
+            &session.host.upload_domain(),
             "bad-request",
         )))
     })
@@ -877,7 +884,7 @@ fn pubsub_owner_set<'a>(
         if request
             .stanza
             .attribute("to")
-            .is_some_and(|to| is_service_jid(to, &session.pubsub_domain()))
+            .is_some_and(|to| is_service_jid(to, &session.host.pubsub_domain()))
         {
             session.pubsub_owner_set(request.id, request.payload).await
         } else {
@@ -897,7 +904,7 @@ fn pubsub_owner_get<'a>(
         if request
             .stanza
             .attribute("to")
-            .is_some_and(|to| is_service_jid(to, &session.pubsub_domain()))
+            .is_some_and(|to| is_service_jid(to, &session.host.pubsub_domain()))
         {
             session.pubsub_owner_get(request.id, request.payload).await
         } else {

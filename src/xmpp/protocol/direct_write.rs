@@ -1,7 +1,7 @@
 //! The session's side of a native write: stream management records the stanza, and the C2S and MIX delivery
 //! fences and acknowledgements run under one bounded backend deadline.
 
-use super::ProtocolSession;
+use super::{ProtocolSession, SessionHost};
 use anyhow::{Context, Result};
 use northstar_c2s::direct_delivery::DirectWritePort;
 use northstar_delivery_core::native_write::AckRequest;
@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 const C2S_BACKEND_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 
-impl DirectWritePort for ProtocolSession {
+impl<H: SessionHost> DirectWritePort for ProtocolSession<H> {
     async fn record(&mut self, item: &OutboundItem) -> Result<bool> {
         self.record_outbound_item(item).await
     }

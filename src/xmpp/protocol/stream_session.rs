@@ -1,6 +1,6 @@
 //! The transports' view of a protocol session.
 
-use super::ProtocolSession;
+use super::{ProtocolSession, SessionHost};
 use northstar_stream::auth_publication::OwnedPublication;
 use northstar_stream::frame_execution::FrameFailure;
 use northstar_stream::outbound::OutboundItem;
@@ -9,7 +9,7 @@ use northstar_stream::transport::{Action, SessionTerminationSignals, TlsSessionE
 use std::{future::Future, net::IpAddr, time::Instant};
 use uuid::Uuid;
 
-impl StreamSession for ProtocolSession {
+impl<H: SessionHost> StreamSession for ProtocolSession<H> {
     fn connection_id(&self) -> Uuid {
         self.connection_id
     }

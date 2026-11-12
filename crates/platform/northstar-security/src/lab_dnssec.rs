@@ -12,8 +12,9 @@ const MAX_ANCHOR_BYTES: usize = 8 * 1024;
 const MAX_LAB_PEERS: usize = 32;
 
 /// A custom anchor is only usable by an explicitly isolated required-DANE
-/// server. An unrestricted allowlist would let the extra key authenticate a
-/// DNS answer for a public target because Hickory stores key bytes, not owner.
+/// server. Hickory scopes a non-root anchor to its owner name, but the lab key
+/// must still never sit beside public federation targets, so the allowlist
+/// stays restricted to exact lab peers.
 pub fn validate_settings(
     path: Option<&Path>,
     mode: DaneMode,
@@ -69,8 +70,8 @@ fn require_unix() -> Result<()> {
 }
 
 /// The file format deliberately excludes DNSKEY owners other than lab.test.
-/// Hickory's TrustAnchors parser discards owner names after parsing; validating
-/// the owner here is essential before passing the key to its resolver builder.
+/// Hickory keeps a non-root anchor under its owner name and counts only root
+/// anchors in `len()`, so the one validated record must yield no root anchor.
 fn parse_anchor(input: &str) -> Result<TrustAnchors> {
     anyhow::ensure!(
         !input.is_empty() && input.len() <= MAX_ANCHOR_BYTES,
@@ -98,8 +99,8 @@ fn parse_anchor(input: &str) -> Result<TrustAnchors> {
     );
     let anchors: TrustAnchors = record.parse().context("lab DNSKEY record is invalid")?;
     anyhow::ensure!(
-        anchors.len() == 1,
-        "lab DNSKEY record did not yield one trust anchor"
+        anchors.is_empty(),
+        "lab DNSKEY record must yield only a lab.test. trust anchor"
     );
     Ok(anchors)
 }
@@ -228,7 +229,8 @@ mod tests {
 
     #[test]
     fn lab_anchor_rejects_foreign_owner_and_non_dnskey_material() {
-        assert_eq!(parse_anchor(TEST_DNSKEY).unwrap().len(), 1);
+        // The lab key is a lab.test. anchor, never a root one.
+        assert!(parse_anchor(TEST_DNSKEY).unwrap().is_empty());
         for invalid in [
             TEST_DNSKEY.replacen("lab.test.", "evil.test.", 1),
             TEST_DNSKEY.replacen("DNSKEY", "DS", 1),
@@ -253,7 +255,7 @@ mod tests {
         let anchor = root.join("anchor");
         fs::write(&anchor, TEST_DNSKEY).unwrap();
         fs::set_permissions(&anchor, fs::Permissions::from_mode(0o600)).unwrap();
-        assert_eq!(load_anchor(&anchor).unwrap().len(), 1);
+        assert!(load_anchor(&anchor).unwrap().is_empty());
         let link = root.join("link");
         symlink(&anchor, &link).unwrap();
         assert!(load_anchor(&link).is_err());

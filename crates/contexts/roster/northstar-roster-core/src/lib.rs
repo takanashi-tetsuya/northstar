@@ -147,6 +147,18 @@ pub struct PresenceAccount {
     pub auth_generation: i64,
 }
 
+/// Database identities carried by current-presence and local subscription
+/// replay. Signed Redis traffic authenticates a node, not the account
+/// incarnation named by a JID; the receiver therefore revalidates all four
+/// fields against PostgreSQL before touching a live route.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClusterPresenceAuthority {
+    pub owner_id: Uuid,
+    pub owner_auth_generation: i64,
+    pub recipient_id: Uuid,
+    pub recipient_auth_generation: i64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PresencePolicyDenial {
     Blocking,

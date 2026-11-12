@@ -3,8 +3,11 @@
 use anyhow::Result;
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
 use northstar_roster_application::{RosterRepository, RosterService, S2sOutboxPolicy};
-use northstar_roster_core::{LocalRosterContact, PresenceAccount, RosterChange};
+use northstar_roster_core::{
+    ClusterPresenceAuthority, LocalRosterContact, PresenceAccount, RosterChange,
+};
 use northstar_stream::local_routes::session::OnlineSession;
+use northstar_stream::outbound::OutboundSender;
 use northstar_stream::protocol::{ProtocolSession, SessionHost};
 use northstar_stream::transport::Action;
 use roxmltree::Node;
@@ -219,4 +222,76 @@ pub trait FederatedPresenceHost: RosterSessionHost + SessionHost {
     fn sessions_for(&self, jid: &str) -> Vec<OnlineSession>;
     /// Wakes the XEP-0357 push services of the account `user_id`.
     fn dispatch_push_notification(&self, user_id: Uuid) -> impl Future<Output = Result<()>> + Send;
+}
+
+/// The node as presence fan-out ([`crate::presence_delivery`]) sees it: the local session table's owner routes,
+/// rechecked after every await, and the cluster's presence routes to the other nodes.
+pub trait PresenceDeliveryHost: FederatedPresenceHost {
+    /// A snapshot of the local session keys. The caller rechecks each route after its awaits.
+    fn local_presence_owner_keys(&self) -> Vec<String>;
+    /// The routable, available local session `key` when it belongs to the account incarnation `user_id` at
+    /// `auth_generation`.
+    fn local_presence_owner_candidate(
+        &self,
+        key: &str,
+        user_id: Uuid,
+        auth_generation: i64,
+    ) -> Option<OnlineSession>;
+    /// The local session `key` when it is still the connection and route incarnation of `expected`, of that
+    /// account incarnation, routable and available.
+    fn local_presence_owner_if_current(
+        &self,
+        key: &str,
+        expected: &OnlineSession,
+        user_id: Uuid,
+        auth_generation: i64,
+    ) -> Option<OnlineSession>;
+    /// Sends `presence` to `recipient` only while the local session `key` is still `expected` (as
+    /// [`Self::local_presence_owner_if_current`] checks). True when it was queued.
+    fn send_presence_if_owner_current(
+        &self,
+        key: &str,
+        expected: &OnlineSession,
+        user_id: Uuid,
+        auth_generation: i64,
+        recipient: &OutboundSender,
+        presence: &str,
+    ) -> bool;
+    /// Routes directed presence to the other nodes holding `target`. True when one accepted it.
+    fn route_directed_presence_remote(
+        &self,
+        target: &str,
+        stanza: &str,
+        bare_target: bool,
+    ) -> impl Future<Output = bool> + Send;
+    /// Routes subscription presence to the other nodes holding `target`, for the account incarnations
+    /// `authority` names.
+    fn route_presence_subscription_remote(
+        &self,
+        target: &str,
+        stanza: &str,
+        authority: ClusterPresenceAuthority,
+    ) -> impl Future<Output = ()> + Send;
+    /// Broadcasts available presence to the other nodes holding `target`.
+    fn broadcast_available_presence_remote(
+        &self,
+        target: &str,
+        stanza: &str,
+    ) -> impl Future<Output = ()> + Send;
+    /// Hands a full-JID presence probe to the other nodes holding `owner_full`. True when one took it.
+    fn delegate_authorized_full_presence_probe_remote(
+        &self,
+        owner_full: &str,
+        requester: &str,
+        authority: Option<ClusterPresenceAuthority>,
+    ) -> impl Future<Output = Result<bool>> + Send;
+    /// Asks the other nodes holding `owner_lookup` to replay its current presence to `recipient`, only the
+    /// availability fact when `availability_only`.
+    fn replay_current_presence_from_remote_owners(
+        &self,
+        owner_lookup: &str,
+        recipient: &str,
+        availability_only: bool,
+        authority: ClusterPresenceAuthority,
+    ) -> impl Future<Output = ()> + Send;
 }

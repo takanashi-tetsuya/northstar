@@ -11,12 +11,17 @@ use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_roster_application::{
     RosterPushDisposition, RosterRepository, RosterService, S2sOutboxPolicy,
 };
-use northstar_roster_core::{LocalRosterContact, PresenceAccount, RosterChange};
+use northstar_roster_core::{
+    ClusterPresenceAuthority, LocalRosterContact, PresenceAccount, RosterChange,
+};
+use northstar_roster_xmpp::presence_delivery;
 use northstar_roster_xmpp::roster::{roster_change_item_element, roster_push_xml};
 use northstar_roster_xmpp::{
-    FederatedPresenceHost, PostAcceptFailureTelemetry, PresenceRouting, RosterSessionHost,
+    FederatedPresenceHost, PostAcceptFailureTelemetry, PresenceDeliveryHost, PresenceRouting,
+    RosterSessionHost,
 };
 use northstar_stream::local_routes::session::OnlineSession;
+use northstar_stream::outbound::OutboundSender;
 use northstar_stream::transport::Action;
 use northstar_xml_builder::rewrite::set_to;
 use northstar_xml_builder::stream::stream_id;
@@ -228,7 +233,15 @@ impl RosterSessionHost for AppState {
         stanza: &str,
         bare_target: bool,
     ) -> Result<bool> {
-        AppState::deliver_directed_presence(self, to, canonical_to, from, stanza, bare_target).await
+        presence_delivery::deliver_directed_presence(
+            self,
+            to,
+            canonical_to,
+            from,
+            stanza,
+            bare_target,
+        )
+        .await
     }
 
     async fn deliver_subscription_presence(
@@ -239,7 +252,7 @@ impl RosterSessionHost for AppState {
         recipient_bare: &str,
         stanza: &str,
     ) -> Result<()> {
-        AppState::deliver_subscription_presence(
+        presence_delivery::deliver_subscription_presence(
             self,
             owner,
             recipient,
@@ -259,7 +272,7 @@ impl RosterSessionHost for AppState {
         approved: &str,
         skip_full: Option<&str>,
     ) -> Result<()> {
-        AppState::deliver_subscription_approval(
+        presence_delivery::deliver_subscription_approval(
             self,
             owner,
             recipient,
@@ -277,11 +290,11 @@ impl RosterSessionHost for AppState {
         from: &str,
         stanza: &str,
     ) -> Result<()> {
-        AppState::deliver_contact_presence(self, contact, from, stanza).await
+        presence_delivery::deliver_contact_presence(self, contact, from, stanza).await
     }
 
     async fn echo_account_presence(&self, account: &str, from: &str, stanza: &str) {
-        AppState::echo_account_presence(self, account, from, stanza).await
+        presence_delivery::echo_account_presence(self, account, from, stanza).await
     }
 
     async fn deliver_directed_unavailable(
@@ -291,11 +304,12 @@ impl RosterSessionHost for AppState {
         from: &str,
         stanza: &str,
     ) {
-        AppState::deliver_directed_unavailable(self, target, bare_target, from, stanza).await
+        presence_delivery::deliver_directed_unavailable(self, target, bare_target, from, stanza)
+            .await
     }
 
     fn account_has_available_resource(&self, bare: &str) -> bool {
-        AppState::account_has_available_resource(self, bare)
+        presence_delivery::account_has_available_resource(self, bare)
     }
 
     async fn probe_has_remote_owner(&self, bare: &str) -> Result<bool> {
@@ -303,7 +317,7 @@ impl RosterSessionHost for AppState {
     }
 
     fn directed_presence_recipient(&self, owner_full: &str, requester: &str) -> bool {
-        AppState::directed_presence_recipient(self, owner_full, requester)
+        presence_delivery::directed_presence_recipient(self, owner_full, requester)
     }
 
     async fn answer_full_presence_probe(
@@ -313,12 +327,14 @@ impl RosterSessionHost for AppState {
         requester: &str,
         probe_id: Option<&str>,
     ) -> Result<Option<String>> {
-        AppState::answer_full_presence_probe(self, owner_full, owner_bare, requester, probe_id)
-            .await
+        presence_delivery::answer_full_presence_probe(
+            self, owner_full, owner_bare, requester, probe_id,
+        )
+        .await
     }
 
     async fn send_current_presence(&self, owner: &str, recipient: &str) {
-        self.send_current_availability(owner, recipient).await
+        presence_delivery::send_current_availability(self, owner, recipient).await
     }
 
     async fn send_current_presence_exact(
@@ -328,7 +344,8 @@ impl RosterSessionHost for AppState {
         owner_bare: &str,
         recipient_bare: &str,
     ) {
-        self.send_current_availability_exact(
+        presence_delivery::send_current_availability_exact(
+            self,
             owner_bare,
             owner.id,
             owner.auth_generation,
@@ -394,7 +411,7 @@ async fn deliver_roster_removal_presence(
         .route_remote_roster_removal_presence(
             target_bare,
             stanza,
-            crate::cluster::ClusterPresenceAuthority {
+            ClusterPresenceAuthority {
                 owner_id,
                 owner_auth_generation,
                 recipient_id,
@@ -670,6 +687,108 @@ impl FederatedPresenceHost for AppState {
 
     async fn dispatch_push_notification(&self, user_id: Uuid) -> Result<()> {
         AppState::dispatch_push_notification(self, user_id).await
+    }
+}
+
+impl PresenceDeliveryHost for AppState {
+    fn local_presence_owner_keys(&self) -> Vec<String> {
+        AppState::local_presence_owner_keys(self)
+    }
+
+    fn local_presence_owner_candidate(
+        &self,
+        key: &str,
+        user_id: Uuid,
+        auth_generation: i64,
+    ) -> Option<OnlineSession> {
+        AppState::local_presence_owner_candidate(self, key, user_id, auth_generation)
+    }
+
+    fn local_presence_owner_if_current(
+        &self,
+        key: &str,
+        expected: &OnlineSession,
+        user_id: Uuid,
+        auth_generation: i64,
+    ) -> Option<OnlineSession> {
+        AppState::local_presence_owner_if_current(self, key, expected, user_id, auth_generation)
+    }
+
+    fn send_presence_if_owner_current(
+        &self,
+        key: &str,
+        expected: &OnlineSession,
+        user_id: Uuid,
+        auth_generation: i64,
+        recipient: &OutboundSender,
+        presence: &str,
+    ) -> bool {
+        AppState::send_presence_if_owner_current(
+            self,
+            key,
+            expected,
+            user_id,
+            auth_generation,
+            recipient,
+            presence,
+        )
+    }
+
+    async fn route_directed_presence_remote(
+        &self,
+        target: &str,
+        stanza: &str,
+        bare_target: bool,
+    ) -> bool {
+        self.cluster()
+            .route_directed_presence_remote(target, stanza, bare_target)
+            .await
+    }
+
+    async fn route_presence_subscription_remote(
+        &self,
+        target: &str,
+        stanza: &str,
+        authority: ClusterPresenceAuthority,
+    ) {
+        self.cluster()
+            .route_presence_subscription_remote(target, stanza, authority)
+            .await
+    }
+
+    async fn broadcast_available_presence_remote(&self, target: &str, stanza: &str) {
+        self.cluster()
+            .broadcast_available_presence_remote(target, stanza)
+            .await
+    }
+
+    async fn delegate_authorized_full_presence_probe_remote(
+        &self,
+        owner_full: &str,
+        requester: &str,
+        authority: Option<ClusterPresenceAuthority>,
+    ) -> Result<bool> {
+        self.cluster()
+            .delegate_authorized_full_presence_probe_remote(owner_full, requester, authority)
+            .await
+    }
+
+    async fn replay_current_presence_from_remote_owners(
+        &self,
+        owner_lookup: &str,
+        recipient: &str,
+        availability_only: bool,
+        authority: ClusterPresenceAuthority,
+    ) {
+        self.cluster()
+            .replay_current_presence_from_remote_owners(
+                owner_lookup,
+                recipient,
+                availability_only,
+                authority,
+                &self.presence_probe_telemetry(),
+            )
+            .await
     }
 }
 

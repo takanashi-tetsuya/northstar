@@ -3746,9 +3746,9 @@ if (!passkeyFinishSource.includes('State(state): State<PasskeyLoginFinishContext
 }
 const presenceProtocol = protocolModuleSource('presence.rs');
 const presenceClusterRouting = read('crates/edges/northstar-cluster/src/presence_routing.rs');
-const presenceDelivery = read('src/state/presence_delivery.rs');
+const presenceDelivery = read('crates/contexts/roster/northstar-roster-xmpp/src/presence_delivery.rs');
 if (/\bself\.(?:state|host)\s*\.metrics\b/.test(presenceProtocol)
-    || /\bself\s*\.\s*metrics\b/.test(presenceDelivery)
+    || /\b(?:self|host)\s*\.\s*metrics\b/.test(presenceDelivery)
     || /\.metrics\b/.test(presenceClusterRouting)
     || !presenceClusterRouting.includes("telemetry: &PresenceProbeTelemetry<'_>")
     || countMatches(presenceClusterRouting, /\btelemetry\.failed\(\)/g) !== 2) {

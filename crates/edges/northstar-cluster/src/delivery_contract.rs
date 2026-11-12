@@ -156,17 +156,7 @@ pub(super) struct NodeDeliveryOptions<'a> {
     pub(super) presence_delivery: Option<ClusterPresenceDelivery>,
 }
 
-/// Database identities carried by current-presence and local subscription
-/// replay. Signed Redis traffic authenticates a node, not the account
-/// incarnation named by a JID; the receiver therefore revalidates all four
-/// fields against PostgreSQL before touching a live route.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ClusterPresenceAuthority {
-    pub owner_id: uuid::Uuid,
-    pub owner_auth_generation: i64,
-    pub recipient_id: uuid::Uuid,
-    pub recipient_auth_generation: i64,
-}
+pub use northstar_roster_core::ClusterPresenceAuthority;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ClusterPresenceDelivery {

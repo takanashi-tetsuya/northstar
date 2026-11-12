@@ -1,10 +1,10 @@
 //! The node's side of the roster context's session handlers.
 
 use super::AppState;
-use crate::xmpp::protocol::mix::MixHandlers;
-use crate::xmpp::protocol::muc::MucHandlers;
 use crate::xmpp::protocol::ClientSession;
 use anyhow::Result;
+use northstar_mix_xmpp::MixHandlers;
+use northstar_muc_xmpp::MucHandlers;
 use northstar_pubsub_xmpp::PubSubHandlers;
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
 use northstar_roster_application::privacy::PrivacyStanzaKind;

@@ -1888,7 +1888,7 @@ export function verifyRoomExecutionBoundaries(sources) {
     'MUC effects must preserve cluster, acquired order, privacy, sequential delivery and observed prefix');
   verifyMucDiscussionBoundaries(sources);
 
-  const mixIngress = compact(body(mix, 'async\\s+fn\\s+try_mix_message\\b'));
+  const mixIngress = compact(body(mix, 'pub\\s+async\\s+fn\\s+try_mix_message\\b'));
   requireBoundary(mixIngress.includes('if!CanonicalJid::parse(to).is_ok_and(|target|target.domainpart()==mix_domain(session)){returnOk(None);}session.frame_observer().enter(MixFrameStage::Policy);letSome(user)=session.user()') &&
     mixIngress.includes('process_channel_message(session.host(),&actor_bare,full_jid,raw,Some(session.frame_observer()),).await?'),
   'C2S MIX must attribute policy after target selection and pass its originating observation');

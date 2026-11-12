@@ -61,6 +61,7 @@ pub use self::payloads::{mix_channel_disco_info_payload, mix_service_disco_info_
 use self::ports::*;
 pub use self::presence::{mix_presence_route_is_current, publish_verified_mix_presence_with};
 use self::presence::{presence_children, process_channel_presence};
+pub use self::protocol_session::MixHandlers;
 use self::relay::{
     deliver_mix_relay_stanza, expire_mix_iq_relay, handle_channel_relay_request, parse_relay_iq,
     register_mix_iq_relay, relay_error, relay_iq_xml, relay_vcard_payload, RelayIq,

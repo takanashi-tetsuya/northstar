@@ -8,10 +8,10 @@
 use super::*;
 use crate::state::AppState;
 use crate::xmpp::protocol::discovery::DiscoveryHandlers;
-use crate::xmpp::protocol::muc::MucHandlers;
 use crate::xmpp::protocol::ClientSession;
 use northstar_archive_xmpp::MamHandlers;
 use northstar_message_xmpp::ExtDiscoHandlers;
+use northstar_muc_xmpp::MucHandlers;
 use northstar_pubsub_xmpp::PepHandlers;
 use northstar_pubsub_xmpp::PrivateXmlHandlers;
 use northstar_pubsub_xmpp::PubSubHandlers;

@@ -6,8 +6,9 @@
 //! audience before commit.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use chrono::Utc;
+use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -189,30 +190,6 @@ fn muc_principal_owns_address(address: &str, principal: &ClusterMucPrincipal) ->
     Ok(muc_address_bare_jid(address)? == principal.bare_jid())
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ClusterMucOccupancy {
-    pub room_id: Uuid,
-    pub room_epoch: Uuid,
-    pub occupant_incarnation: Uuid,
-    pub occupancy_epoch: i64,
-    pub config_version: i64,
-    pub identity_kind: String,
-    pub local_user_id: Option<Uuid>,
-    pub bare_jid: String,
-    pub full_jid: String,
-    pub nick: String,
-    pub authenticated_domain: Option<String>,
-    pub owner_node_id: String,
-    pub connection_uuid: Uuid,
-    pub connection_epoch: i64,
-    pub sm_session_id: Option<Uuid>,
-    pub role: String,
-    pub affiliation: String,
-    pub state: String,
-    pub presence_payload: String,
-    pub lease_until: DateTime<Utc>,
-}
-
 #[derive(Clone, Debug)]
 pub struct ClusterMucJoin<'a> {
     pub operation_id: Uuid,
@@ -262,56 +239,11 @@ pub struct ClusterMucResolvedOccupancy {
     pub target: ClusterMucOccupancyTarget,
 }
 
-impl From<&ClusterMucOccupancy> for ClusterMucPolicySnapshot {
-    fn from(value: &ClusterMucOccupancy) -> Self {
-        Self {
-            room_id: value.room_id,
-            room_epoch: value.room_epoch,
-            occupant_incarnation: value.occupant_incarnation,
-            occupancy_epoch: value.occupancy_epoch,
-            full_jid: value.full_jid.clone(),
-            bare_jid: value.bare_jid.clone(),
-            nick: value.nick.clone(),
-            connection_uuid: value.connection_uuid,
-            connection_epoch: value.connection_epoch,
-            sm_session_id: value.sm_session_id,
-            role: value.role.clone(),
-            affiliation: value.affiliation.clone(),
-            state: value.state.clone(),
-        }
-    }
-}
-
-impl From<&ClusterMucOccupancy> for ClusterMucOccupancyTarget {
-    fn from(value: &ClusterMucOccupancy) -> Self {
-        Self {
-            room_id: value.room_id,
-            room_epoch: value.room_epoch,
-            occupant_incarnation: value.occupant_incarnation,
-            occupancy_epoch: value.occupancy_epoch,
-            full_jid: value.full_jid.clone(),
-            nick: value.nick.clone(),
-            connection_uuid: value.connection_uuid,
-            connection_epoch: value.connection_epoch,
-        }
-    }
-}
-
 pub use northstar_room_core::{
     ClusterMucAudienceSnapshot, ClusterMucEventContext, ClusterMucEventOccupant,
-    ClusterMucOccupancyTarget, ClusterMucOutboxDelivery, ClusterMucOutboxSnapshot,
-    ClusterMucPolicySnapshot,
+    ClusterMucOccupancy, ClusterMucOccupancyTarget, ClusterMucOutboxDelivery,
+    ClusterMucOutboxSnapshot, ClusterMucPolicySnapshot, ClusterMucTransitionOutcome,
 };
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ClusterMucTransitionOutcome {
-    Applied,
-    Replay,
-    Stale,
-    Destroyed,
-    Conflict,
-    Unauthorized,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClusterMucConfigurationOutcome {
@@ -342,29 +274,6 @@ struct RoomAuthority {
     allow_invites: bool,
     allow_subject_change: bool,
     max_occupants: i32,
-}
-
-impl From<&ClusterMucOccupancy> for ClusterMucAudienceSnapshot {
-    fn from(value: &ClusterMucOccupancy) -> Self {
-        Self {
-            room_id: value.room_id,
-            room_epoch: value.room_epoch,
-            identity_kind: value.identity_kind.clone(),
-            local_user_id: value.local_user_id,
-            bare_jid: value.bare_jid.clone(),
-            full_jid: value.full_jid.clone(),
-            nick: value.nick.clone(),
-            authenticated_domain: value.authenticated_domain.clone(),
-            owner_node_id: value.owner_node_id.clone(),
-            occupant_incarnation: value.occupant_incarnation,
-            occupancy_epoch: value.occupancy_epoch,
-            connection_uuid: value.connection_uuid,
-            connection_epoch: value.connection_epoch,
-            sm_session_id: value.sm_session_id,
-            role: value.role.clone(),
-            affiliation: value.affiliation.clone(),
-        }
-    }
 }
 
 fn validate_node_id(node_id: &str) -> Result<()> {

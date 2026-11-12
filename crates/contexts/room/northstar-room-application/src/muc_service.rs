@@ -743,6 +743,20 @@ pub trait MucRepository:
         &self,
         target: &ClusterMucOccupancyTarget,
     ) -> impl std::future::Future<Output = Result<Option<ClusterMucOccupancy>>> + Send;
+    fn suspended_local_cluster_occupancy(
+        &self,
+        room_id: Uuid,
+        room_epoch: Uuid,
+        sm_session_id: Uuid,
+        full_jid: &str,
+        nick: &str,
+    ) -> impl std::future::Future<Output = Result<Option<ClusterMucOccupancy>>> + Send;
+    fn associate_local_cluster_sm_session(
+        &self,
+        target: &ClusterMucOccupancyTarget,
+        owner_node_id: &str,
+        sm_session_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
     fn cluster_room_is_empty(
         &self,
         room_id: Uuid,

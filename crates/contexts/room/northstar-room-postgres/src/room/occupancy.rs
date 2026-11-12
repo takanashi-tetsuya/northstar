@@ -32,7 +32,7 @@ impl ClusterMucOccupancyDepartureRepository for PostgresClusterMucOccupancyDepar
         owner_node_id: &str,
         lease: Duration,
     ) -> Result<ClusterMucTransitionOutcome> {
-        Ok(crate::cluster_muc::transition_cluster_muc_occupancy(
+        crate::cluster_muc::transition_cluster_muc_occupancy(
             &self.pool,
             operation_id,
             &target.into(),
@@ -43,8 +43,7 @@ impl ClusterMucOccupancyDepartureRepository for PostgresClusterMucOccupancyDepar
             None,
             lease,
         )
-        .await?
-        .into())
+        .await
     }
 }
 

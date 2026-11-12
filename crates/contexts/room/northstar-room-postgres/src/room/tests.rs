@@ -37,17 +37,7 @@ fn durable_delivery_outcomes_do_not_collapse_security_failures() {
 }
 
 #[test]
-fn cluster_transition_mapping_keeps_stale_and_unauthorized_separate() {
-    assert_eq!(
-        ClusterMucTransitionOutcome::from(crate::cluster_muc::ClusterMucTransitionOutcome::Stale),
-        ClusterMucTransitionOutcome::Stale
-    );
-    assert_eq!(
-        ClusterMucTransitionOutcome::from(
-            crate::cluster_muc::ClusterMucTransitionOutcome::Unauthorized
-        ),
-        ClusterMucTransitionOutcome::Unauthorized
-    );
+fn cluster_configuration_mapping_keeps_lock_contention() {
     assert_eq!(
         ClusterMucConfigurationOutcome::from(
             crate::cluster_muc::ClusterMucConfigurationOutcome::LockedByAnother

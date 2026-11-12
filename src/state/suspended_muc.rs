@@ -51,15 +51,14 @@ impl AppState {
             let encoded = serde_json::to_string(&serializable).unwrap_or_default();
             if self.cluster.is_enabled() {
                 let association = async {
-                    let room = northstar_room_postgres::muc::muc_room(
-                        &self.pool,
-                        crate::state::localpart(&serializable.room_jid),
-                    )
-                    .await?
-                    .context("SM association references a missing MUC room")?;
-                    let target =
-                        northstar_room_postgres::cluster_muc::cluster_muc_occupancy_target(
-                            &self.pool,
+                    let room = self
+                        .muc_service()
+                        .local_room_snapshot(crate::state::localpart(&serializable.room_jid))
+                        .await?
+                        .context("SM association references a missing MUC room")?;
+                    let target = self
+                        .muc_service()
+                        .local_cluster_occupancy_target(
                             room.id,
                             serializable.cluster_epoch,
                             serializable.connection_id,
@@ -67,13 +66,13 @@ impl AppState {
                         .await?
                         .context("SM association lost its exact MUC occupancy")?;
                     anyhow::ensure!(
-                        northstar_room_postgres::cluster_muc::associate_cluster_muc_sm_session(
-                            &self.pool,
-                            &target,
-                            &self.cluster.node_id,
-                            sm_session_id,
-                        )
-                        .await?,
+                        self.muc_service()
+                            .associate_local_cluster_sm_session(
+                                &target,
+                                &self.cluster.node_id,
+                                sm_session_id,
+                            )
+                            .await?,
                         "SM association lost its PG occupancy fence"
                     );
                     Ok::<_, anyhow::Error>(())

@@ -328,6 +328,32 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
+    /// The suspended occupancy an SM resume reclaims, while its lease is live.
+    pub async fn suspended_local_cluster_occupancy(
+        &self,
+        room_id: Uuid,
+        room_epoch: Uuid,
+        sm_session_id: Uuid,
+        full_jid: &str,
+        nick: &str,
+    ) -> Result<Option<ClusterMucOccupancy>> {
+        self.repository
+            .suspended_local_cluster_occupancy(room_id, room_epoch, sm_session_id, full_jid, nick)
+            .await
+    }
+
+    /// Fences the active occupancy to the SM session its stream just enabled.
+    pub async fn associate_local_cluster_sm_session(
+        &self,
+        target: &ClusterMucOccupancyTarget,
+        owner_node_id: &str,
+        sm_session_id: Uuid,
+    ) -> Result<bool> {
+        self.repository
+            .associate_local_cluster_sm_session(target, owner_node_id, sm_session_id)
+            .await
+    }
+
     pub async fn cluster_room_is_empty(&self, room_id: Uuid) -> Result<bool> {
         self.repository.cluster_room_is_empty(room_id).await
     }

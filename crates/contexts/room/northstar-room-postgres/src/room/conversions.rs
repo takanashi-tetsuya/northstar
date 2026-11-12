@@ -192,19 +192,6 @@ impl From<crate::muc::DurableMucInviteOutcome> for DurableMucInviteOutcome {
     }
 }
 
-impl From<crate::cluster_muc::ClusterMucTransitionOutcome> for ClusterMucTransitionOutcome {
-    fn from(outcome: crate::cluster_muc::ClusterMucTransitionOutcome) -> Self {
-        match outcome {
-            crate::cluster_muc::ClusterMucTransitionOutcome::Applied => Self::Applied,
-            crate::cluster_muc::ClusterMucTransitionOutcome::Replay => Self::Replay,
-            crate::cluster_muc::ClusterMucTransitionOutcome::Stale => Self::Stale,
-            crate::cluster_muc::ClusterMucTransitionOutcome::Destroyed => Self::Destroyed,
-            crate::cluster_muc::ClusterMucTransitionOutcome::Conflict => Self::Conflict,
-            crate::cluster_muc::ClusterMucTransitionOutcome::Unauthorized => Self::Unauthorized,
-        }
-    }
-}
-
 impl From<crate::muc::MucConfigurationOutcome> for MucConfigurationOutcome {
     fn from(outcome: crate::muc::MucConfigurationOutcome) -> Self {
         match outcome {
@@ -423,33 +410,6 @@ pub fn config_update_into_db<'a>(c: MucConfigUpdate<'a>) -> crate::muc::MucConfi
     }
 }
 
-impl From<crate::cluster_muc::ClusterMucOccupancy> for ClusterMucOccupancy {
-    fn from(occupancy: crate::cluster_muc::ClusterMucOccupancy) -> Self {
-        Self {
-            room_id: occupancy.room_id,
-            room_epoch: occupancy.room_epoch,
-            occupant_incarnation: occupancy.occupant_incarnation,
-            occupancy_epoch: occupancy.occupancy_epoch,
-            config_version: occupancy.config_version,
-            identity_kind: occupancy.identity_kind,
-            local_user_id: occupancy.local_user_id,
-            bare_jid: occupancy.bare_jid,
-            full_jid: occupancy.full_jid,
-            nick: occupancy.nick,
-            authenticated_domain: occupancy.authenticated_domain,
-            owner_node_id: occupancy.owner_node_id,
-            connection_uuid: occupancy.connection_uuid,
-            connection_epoch: occupancy.connection_epoch,
-            sm_session_id: occupancy.sm_session_id,
-            role: occupancy.role,
-            affiliation: occupancy.affiliation,
-            state: occupancy.state,
-            presence_payload: occupancy.presence_payload,
-            lease_until: occupancy.lease_until,
-        }
-    }
-}
-
 pub fn cluster_join_into_db<'a>(j: ClusterMucJoin<'a>) -> crate::cluster_muc::ClusterMucJoin<'a> {
     crate::cluster_muc::ClusterMucJoin {
         operation_id: j.operation_id,
@@ -472,12 +432,8 @@ pub fn cluster_join_into_db<'a>(j: ClusterMucJoin<'a>) -> crate::cluster_muc::Cl
 impl From<crate::cluster_muc::ClusterMucJoinOutcome> for ClusterMucJoinOutcome {
     fn from(outcome: crate::cluster_muc::ClusterMucJoinOutcome) -> Self {
         match outcome {
-            crate::cluster_muc::ClusterMucJoinOutcome::Joined(occupancy) => {
-                Self::Joined(occupancy.into())
-            }
-            crate::cluster_muc::ClusterMucJoinOutcome::Replay(occupancy) => {
-                Self::Replay(occupancy.into())
-            }
+            crate::cluster_muc::ClusterMucJoinOutcome::Joined(occupancy) => Self::Joined(occupancy),
+            crate::cluster_muc::ClusterMucJoinOutcome::Replay(occupancy) => Self::Replay(occupancy),
             crate::cluster_muc::ClusterMucJoinOutcome::RoomMissing => Self::RoomMissing,
             crate::cluster_muc::ClusterMucJoinOutcome::RoomDestroyed => Self::RoomDestroyed,
             crate::cluster_muc::ClusterMucJoinOutcome::RoomLocked => Self::RoomLocked,

@@ -231,36 +231,38 @@ impl AppState {
 
                 let resumed_cluster_target = if self.cluster.is_enabled() {
                     let resume = async {
-                        let target = northstar_room_postgres::cluster_muc::cluster_muc_occupancy_target(
-                            &self.pool,
-                            room.id,
-                            previous.cluster_epoch,
-                            previous.connection_id,
-                        )
-                        .await?
-                        .context("SM resume lost its exact suspended MUC occupancy")?;
+                        let target = self
+                            .muc_service()
+                            .local_cluster_occupancy_target(
+                                room.id,
+                                previous.cluster_epoch,
+                                previous.connection_id,
+                            )
+                            .await?
+                            .context("SM resume lost its exact suspended MUC occupancy")?;
                         let next_epoch = target
                             .connection_epoch
                             .checked_add(1)
                             .context("MUC connection epoch overflow")?;
                         let operation_id = uuid::Uuid::new_v4();
-                        let outcome = northstar_room_postgres::cluster_muc::transition_cluster_muc_occupancy(
-                            &self.pool,
-                            operation_id,
-                            &target,
-                            "resume",
-                            &self.cluster.node_id,
-                            Some(connection_id),
-                            Some(next_epoch),
-                            Some(sm_session_id),
-                            Duration::from_secs(90),
-                        )
-                        .await?;
+                        let outcome = self
+                            .muc_service()
+                            .transition_local_cluster_occupancy(
+                                operation_id,
+                                &target,
+                                "resume",
+                                &self.cluster.node_id,
+                                Some(connection_id),
+                                Some(next_epoch),
+                                Some(sm_session_id),
+                                Duration::from_secs(90),
+                            )
+                            .await?;
                         anyhow::ensure!(
                             matches!(
                                 outcome,
-                                northstar_room_postgres::cluster_muc::ClusterMucTransitionOutcome::Applied
-                                    | northstar_room_postgres::cluster_muc::ClusterMucTransitionOutcome::Replay
+                                northstar_room_core::ClusterMucTransitionOutcome::Applied
+                                    | northstar_room_core::ClusterMucTransitionOutcome::Replay
                             ),
                             "PG MUC resume rejected stale occupancy: {outcome:?}"
                         );
@@ -378,9 +380,9 @@ impl AppState {
             }
 
             let cluster_authority = if self.cluster.is_enabled() {
-                let authority =
-                    match northstar_room_postgres::cluster_muc::suspended_cluster_muc_occupancy(
-                        &self.pool,
+                let authority = match self
+                    .muc_service()
+                    .suspended_local_cluster_occupancy(
                         room.id,
                         room.room_epoch,
                         sm_session_id,
@@ -388,13 +390,13 @@ impl AppState {
                         &nick,
                     )
                     .await
-                    {
-                        Ok(Some(authority)) => authority,
-                        Ok(None) | Err(_) => {
-                            failures.push(membership.clone());
-                            continue;
-                        }
-                    };
+                {
+                    Ok(Some(authority)) => authority,
+                    Ok(None) | Err(_) => {
+                        failures.push(membership.clone());
+                        continue;
+                    }
+                };
                 Some(authority)
             } else {
                 None
@@ -464,25 +466,22 @@ impl AppState {
                     continue;
                 };
                 let operation_id = uuid::Uuid::new_v4();
-                match northstar_room_postgres::cluster_muc::transition_cluster_muc_occupancy(
-                    &self.pool,
-                    operation_id,
-                    &target,
-                    "resume",
-                    &self.cluster.node_id,
-                    Some(connection_id),
-                    Some(next_epoch),
-                    Some(sm_session_id),
-                    Duration::from_secs(90),
-                )
-                .await
-                {
-                    Ok(
-                        northstar_room_postgres::cluster_muc::ClusterMucTransitionOutcome::Applied,
+                match self
+                    .muc_service()
+                    .transition_local_cluster_occupancy(
+                        operation_id,
+                        &target,
+                        "resume",
+                        &self.cluster.node_id,
+                        Some(connection_id),
+                        Some(next_epoch),
+                        Some(sm_session_id),
+                        Duration::from_secs(90),
                     )
-                    | Ok(
-                        northstar_room_postgres::cluster_muc::ClusterMucTransitionOutcome::Replay,
-                    ) => {
+                    .await
+                {
+                    Ok(northstar_room_core::ClusterMucTransitionOutcome::Applied)
+                    | Ok(northstar_room_core::ClusterMucTransitionOutcome::Replay) => {
                         if let Err(error) = self
                             .muc_service()
                             .wake_committed_operation(&self.cluster, operation_id)
@@ -609,21 +608,22 @@ impl AppState {
             return;
         }
         let operation_id = uuid::Uuid::new_v4();
-        match northstar_room_postgres::cluster_muc::transition_cluster_muc_occupancy(
-            &self.pool,
-            operation_id,
-            target,
-            "suspend",
-            &self.cluster.node_id,
-            None,
-            None,
-            Some(sm_session_id),
-            Duration::from_secs(90),
-        )
-        .await
+        match self
+            .muc_service()
+            .transition_local_cluster_occupancy(
+                operation_id,
+                target,
+                "suspend",
+                &self.cluster.node_id,
+                None,
+                None,
+                Some(sm_session_id),
+                Duration::from_secs(90),
+            )
+            .await
         {
-            Ok(northstar_room_postgres::cluster_muc::ClusterMucTransitionOutcome::Applied)
-            | Ok(northstar_room_postgres::cluster_muc::ClusterMucTransitionOutcome::Replay) => {
+            Ok(northstar_room_core::ClusterMucTransitionOutcome::Applied)
+            | Ok(northstar_room_core::ClusterMucTransitionOutcome::Replay) => {
                 if let Err(error) = self
                     .muc_service()
                     .wake_committed_operation(&self.cluster, operation_id)

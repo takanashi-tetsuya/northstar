@@ -81,7 +81,6 @@ impl SmSuspensionRepository for PostgresSmSuspensionRepository {
             request.lease,
         )
         .await
-        .map(Into::into)
     }
 
     async fn committed_muc_wake(

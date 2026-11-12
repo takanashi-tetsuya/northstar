@@ -442,7 +442,7 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
         archive: bool,
     ) -> Result<ClusterMucTransitionOutcome> {
         let actor = actor.into();
-        Ok(crate::cluster_muc::set_cluster_muc_subject(
+        crate::cluster_muc::set_cluster_muc_subject(
             &self.pool,
             operation_id,
             expected_room_epoch,
@@ -451,8 +451,7 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
             subject_mutation_into_db(mutation),
             archive,
         )
-        .await?
-        .into())
+        .await
     }
 
     async fn retract_local_message_and_archive_action(
@@ -630,7 +629,7 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
         lease: Duration,
     ) -> Result<ClusterMucTransitionOutcome> {
         let target = target.into();
-        Ok(crate::cluster_muc::transition_cluster_muc_occupancy(
+        crate::cluster_muc::transition_cluster_muc_occupancy(
             &self.pool,
             operation_id,
             &target,
@@ -641,8 +640,7 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
             sm_session_id,
             lease,
         )
-        .await?
-        .into())
+        .await
     }
 
     async fn rebind_federated_cluster_occupancy(
@@ -654,7 +652,7 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
         new_connection_uuid: Uuid,
         lease: Duration,
     ) -> Result<ClusterMucTransitionOutcome> {
-        Ok(crate::cluster_muc::rebind_federated_cluster_muc_occupancy(
+        crate::cluster_muc::rebind_federated_cluster_muc_occupancy(
             &self.pool,
             operation_id,
             &target.into(),
@@ -663,8 +661,7 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
             new_connection_uuid,
             lease,
         )
-        .await?
-        .into())
+        .await
     }
 
     async fn disconnect_local_cluster_occupancy(
@@ -673,14 +670,13 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
         target: &ClusterMucOccupancyTarget,
         owner_node_id: &str,
     ) -> Result<ClusterMucTransitionOutcome> {
-        Ok(crate::cluster_muc::disconnect_cluster_muc_occupancy(
+        crate::cluster_muc::disconnect_cluster_muc_occupancy(
             &self.pool,
             operation_id,
             &target.into(),
             owner_node_id,
         )
-        .await?
-        .into())
+        .await
     }
 
     async fn rename_local_cluster_occupancy(
@@ -691,15 +687,14 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
         new_nick: &str,
     ) -> Result<ClusterMucTransitionOutcome> {
         let target = target.into();
-        Ok(crate::cluster_muc::rename_cluster_muc_occupancy(
+        crate::cluster_muc::rename_cluster_muc_occupancy(
             &self.pool,
             operation_id,
             &target,
             owner_node_id,
             new_nick,
         )
-        .await?
-        .into())
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -806,15 +801,14 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
     ) -> Result<ClusterMucTransitionOutcome> {
         let actor = actor.into();
         let target = target.into();
-        Ok(crate::cluster_muc::kick_cluster_muc_occupancy(
+        crate::cluster_muc::kick_cluster_muc_occupancy(
             &self.pool,
             operation_id,
             &actor,
             &target,
             reason,
         )
-        .await?
-        .into())
+        .await
     }
 
     async fn change_local_cluster_role(
@@ -827,7 +821,7 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
     ) -> Result<ClusterMucTransitionOutcome> {
         let actor = actor.into();
         let target = target.into();
-        Ok(crate::cluster_muc::change_cluster_muc_role(
+        crate::cluster_muc::change_cluster_muc_role(
             &self.pool,
             operation_id,
             &actor,
@@ -835,8 +829,7 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
             new_role,
             reason,
         )
-        .await?
-        .into())
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -852,7 +845,7 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
         reason: Option<&str>,
     ) -> Result<ClusterMucTransitionOutcome> {
         let actor = actor.map(Into::into);
-        Ok(crate::cluster_muc::destroy_cluster_muc_room(
+        crate::cluster_muc::destroy_cluster_muc_room(
             &self.pool,
             operation_id,
             room_id,
@@ -863,8 +856,7 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
             alternate_jid,
             reason,
         )
-        .await?
-        .into())
+        .await
     }
 
     async fn local_cluster_occupancy_target(
@@ -902,11 +894,41 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
         target: &ClusterMucOccupancyTarget,
     ) -> Result<Option<ClusterMucOccupancy>> {
         let target = target.into();
-        Ok(
-            crate::cluster_muc::cluster_muc_exact_occupancy_snapshot(&self.pool, &target)
-                .await?
-                .map(Into::into),
+        crate::cluster_muc::cluster_muc_exact_occupancy_snapshot(&self.pool, &target).await
+    }
+
+    async fn suspended_local_cluster_occupancy(
+        &self,
+        room_id: Uuid,
+        room_epoch: Uuid,
+        sm_session_id: Uuid,
+        full_jid: &str,
+        nick: &str,
+    ) -> Result<Option<ClusterMucOccupancy>> {
+        crate::cluster_muc::suspended_cluster_muc_occupancy(
+            &self.pool,
+            room_id,
+            room_epoch,
+            sm_session_id,
+            full_jid,
+            nick,
         )
+        .await
+    }
+
+    async fn associate_local_cluster_sm_session(
+        &self,
+        target: &ClusterMucOccupancyTarget,
+        owner_node_id: &str,
+        sm_session_id: Uuid,
+    ) -> Result<bool> {
+        crate::cluster_muc::associate_cluster_muc_sm_session(
+            &self.pool,
+            target,
+            owner_node_id,
+            sm_session_id,
+        )
+        .await
     }
 
     async fn cluster_room_is_empty(&self, room_id: Uuid) -> Result<bool> {

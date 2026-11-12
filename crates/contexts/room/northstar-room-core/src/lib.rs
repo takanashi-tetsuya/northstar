@@ -450,7 +450,7 @@ pub struct MucConfigUpdate<'a> {
     pub allow_registration: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct ClusterMucOccupancy {
     pub room_id: Uuid,
     pub room_epoch: Uuid,
@@ -472,6 +472,64 @@ pub struct ClusterMucOccupancy {
     pub state: String,
     pub presence_payload: String,
     pub lease_until: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<&ClusterMucOccupancy> for ClusterMucPolicySnapshot {
+    fn from(value: &ClusterMucOccupancy) -> Self {
+        Self {
+            room_id: value.room_id,
+            room_epoch: value.room_epoch,
+            occupant_incarnation: value.occupant_incarnation,
+            occupancy_epoch: value.occupancy_epoch,
+            full_jid: value.full_jid.clone(),
+            bare_jid: value.bare_jid.clone(),
+            nick: value.nick.clone(),
+            connection_uuid: value.connection_uuid,
+            connection_epoch: value.connection_epoch,
+            sm_session_id: value.sm_session_id,
+            role: value.role.clone(),
+            affiliation: value.affiliation.clone(),
+            state: value.state.clone(),
+        }
+    }
+}
+
+impl From<&ClusterMucOccupancy> for ClusterMucOccupancyTarget {
+    fn from(value: &ClusterMucOccupancy) -> Self {
+        Self {
+            room_id: value.room_id,
+            room_epoch: value.room_epoch,
+            occupant_incarnation: value.occupant_incarnation,
+            occupancy_epoch: value.occupancy_epoch,
+            full_jid: value.full_jid.clone(),
+            nick: value.nick.clone(),
+            connection_uuid: value.connection_uuid,
+            connection_epoch: value.connection_epoch,
+        }
+    }
+}
+
+impl From<&ClusterMucOccupancy> for ClusterMucAudienceSnapshot {
+    fn from(value: &ClusterMucOccupancy) -> Self {
+        Self {
+            room_id: value.room_id,
+            room_epoch: value.room_epoch,
+            identity_kind: value.identity_kind.clone(),
+            local_user_id: value.local_user_id,
+            bare_jid: value.bare_jid.clone(),
+            full_jid: value.full_jid.clone(),
+            nick: value.nick.clone(),
+            authenticated_domain: value.authenticated_domain.clone(),
+            owner_node_id: value.owner_node_id.clone(),
+            occupant_incarnation: value.occupant_incarnation,
+            occupancy_epoch: value.occupancy_epoch,
+            connection_uuid: value.connection_uuid,
+            connection_epoch: value.connection_epoch,
+            sm_session_id: value.sm_session_id,
+            role: value.role.clone(),
+            affiliation: value.affiliation.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

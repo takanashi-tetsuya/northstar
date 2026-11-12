@@ -242,3 +242,22 @@ pub struct RestoreLocalMucOccupantsRequest<'a> {
     pub base_stanzas: usize,
     pub base_bytes: usize,
 }
+
+/// The local MUC occupancies a resumed stream restored, as the session reads them before it commits or aborts the
+/// restore through its host.
+pub trait RestoredMucOccupancy: Send + Sync + 'static {
+    /// The memberships that could not be proven valid.
+    fn failures(&self) -> &[northstar_session_application::sm::SmMucMembership];
+    /// The volatile suspension FIFO in order; the stream emits it after `<resumed/>` and the durable unacked replay.
+    fn replay_suffix(&self) -> &[String];
+    /// The memberships the restore reattaches.
+    fn planned_memberships(&self) -> Vec<northstar_session_application::sm::SmMucMembership>;
+    /// The joined-room entries of the planned memberships.
+    fn planned_joined_rooms(&self) -> Vec<(String, northstar_session_core::JoinedMucMembership)>;
+}
+
+/// The memberships a committed MUC restore reattached and the ones it lost.
+pub struct CommittedLocalMucResume {
+    pub joined_rooms: Vec<(String, northstar_session_core::JoinedMucMembership)>,
+    pub failures: Vec<northstar_session_application::sm::SmMucMembership>,
+}

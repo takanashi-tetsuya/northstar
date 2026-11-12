@@ -26,17 +26,23 @@ pub(super) struct RestoredMucActor {
     pub(super) resumed_cluster_target: Option<northstar_room_core::ClusterMucOccupancyTarget>,
 }
 
-impl RestoredLocalMucOccupants {
-    pub(crate) fn planned_memberships(
-        &self,
-    ) -> Vec<northstar_session_application::sm::SmMucMembership> {
+impl northstar_stream::local_routes::muc::RestoredMucOccupancy for RestoredLocalMucOccupants {
+    fn failures(&self) -> &[northstar_session_application::sm::SmMucMembership] {
+        &self.failures
+    }
+
+    fn replay_suffix(&self) -> &[String] {
+        &self.replay_suffix
+    }
+
+    fn planned_memberships(&self) -> Vec<northstar_session_application::sm::SmMucMembership> {
         self.actors
             .iter()
             .map(|actor| actor.membership.clone())
             .collect()
     }
 
-    pub(crate) fn planned_joined_rooms(&self) -> Vec<(String, JoinedMucMembership)> {
+    fn planned_joined_rooms(&self) -> Vec<(String, JoinedMucMembership)> {
         self.actors
             .iter()
             .map(|actor| {
@@ -50,11 +56,6 @@ impl RestoredLocalMucOccupants {
             })
             .collect()
     }
-}
-
-pub struct CommittedLocalMucResume {
-    pub(crate) joined_rooms: Vec<(String, JoinedMucMembership)>,
-    pub(crate) failures: Vec<northstar_session_application::sm::SmMucMembership>,
 }
 
 impl AppState {

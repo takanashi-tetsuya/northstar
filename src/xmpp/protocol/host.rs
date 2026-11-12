@@ -3,8 +3,6 @@
 use super::dispatch::iq_routes::RootIqRoute;
 use super::ProtocolSession;
 use crate::s2s::FederationRouter;
-use crate::state::CommittedLocalMucResume;
-use crate::state::RestoredLocalMucOccupants;
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_auth_application::account_teardown::FinalizeAccountDeletion;
@@ -225,6 +223,8 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     fn worker_registry(&self) -> &Arc<northstar_runtime::workers::WorkerRegistry>;
     /// See `AppState::xmpp_extension_enabled`.
     fn xmpp_extension_enabled(&self, id: northstar_xep_core::XepId) -> bool;
+    /// The local MUC occupancies a resumed stream restored, until it commits or aborts them.
+    type RestoredMuc: northstar_stream::local_routes::muc::RestoredMucOccupancy;
     /// Roll a failed restore back to a suspended actor without taking suffix
     /// ownership away from its sole durable source. `snapshot_backed` is true
     /// only after the protocol session itself contains the staged suffix; in
@@ -232,7 +232,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// appending it again.
     fn abort_local_muc_resume(
         &self,
-        restored: &RestoredLocalMucOccupants,
+        restored: &Self::RestoredMuc,
         snapshot_backed: bool,
     ) -> impl std::future::Future<Output = ()> + Send;
     /// Publish only the exact staged route incarnation that survived every
@@ -277,7 +277,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// without appending a duplicate copy of the suffix.
     fn checkpoint_local_muc_resume(
         &self,
-        restored: &RestoredLocalMucOccupants,
+        restored: &Self::RestoredMuc,
     ) -> impl std::future::Future<Output = bool> + Send;
     /// See `AppState::claim_sm_resume_route`.
     fn claim_sm_resume_route(
@@ -295,10 +295,12 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// sealed gate or the final live route, never a partially transferred FIFO.
     fn commit_local_muc_resume(
         &self,
-        restored: RestoredLocalMucOccupants,
+        restored: Self::RestoredMuc,
         sender: &northstar_stream::outbound::OutboundSender,
         capacity: northstar_session_application::sm_capacity::SmCapacityLease,
-    ) -> impl std::future::Future<Output = CommittedLocalMucResume> + Send;
+    ) -> impl std::future::Future<
+        Output = northstar_stream::local_routes::muc::CommittedLocalMucResume,
+    > + Send;
     /// See `AppState::finalize_sm_resume`.
     fn finalize_sm_resume(
         &self,
@@ -372,7 +374,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     fn restore_local_muc_occupants(
         &self,
         request: RestoreLocalMucOccupantsRequest<'_>,
-    ) -> impl std::future::Future<Output = RestoredLocalMucOccupants> + Send;
+    ) -> impl std::future::Future<Output = Self::RestoredMuc> + Send;
     /// See `AppState::revoke_sm_session_with_teardown`.
     fn revoke_sm_session_with_teardown(
         &self,

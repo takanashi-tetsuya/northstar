@@ -8,6 +8,7 @@ use northstar_session_application::sm::{
     SmResumeFinalizationRequest, SmSessionCreationOutcome, SmSessionCreationRequest,
     SmSessionSnapshot,
 };
+use northstar_stream::local_routes::muc::RestoredMucOccupancy as _;
 use northstar_xep_0198::build_failed_str as sm_failed;
 use northstar_xep_0198::{
     acknowledgement_delta, resumability_allowed, resumed_offline_replay_eligible,
@@ -1127,13 +1128,13 @@ impl<H: SessionHost> ProtocolSession<H> {
             .await;
         let planned_muc = restored_muc.planned_memberships();
         let planned_joined_rooms = restored_muc.planned_joined_rooms();
-        let announced_failures = restored_muc.failures.clone();
+        let announced_failures = restored_muc.failures().to_vec();
         self.joined_rooms.clear();
         for (room_jid, membership) in &planned_joined_rooms {
             self.joined_rooms
                 .insert(room_jid.clone(), membership.clone());
         }
-        let mut muc_replay_suffix = restored_muc.replay_suffix.clone();
+        let mut muc_replay_suffix = restored_muc.replay_suffix().to_vec();
         muc_replay_suffix.extend(
             announced_failures
                 .iter()

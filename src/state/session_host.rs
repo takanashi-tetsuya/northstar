@@ -379,6 +379,8 @@ impl SessionHost for AppState {
         AppState::caps_effect_telemetry(self)
     }
 
+    type RestoredMuc = RestoredLocalMucOccupants;
+
     async fn checkpoint_local_muc_resume(&self, restored: &RestoredLocalMucOccupants) -> bool {
         AppState::checkpoint_local_muc_resume(self, restored).await
     }

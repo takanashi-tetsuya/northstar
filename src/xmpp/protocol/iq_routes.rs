@@ -7,11 +7,8 @@
 
 use super::*;
 use crate::state::AppState;
-use crate::xmpp::protocol::blocking::BlockingHandlers;
 use crate::xmpp::protocol::discovery::DiscoveryHandlers;
 use crate::xmpp::protocol::muc::MucHandlers;
-use crate::xmpp::protocol::privacy::PrivacyHandlers;
-use crate::xmpp::protocol::roster::RosterHandlers;
 use crate::xmpp::protocol::ClientSession;
 use northstar_archive_xmpp::MamHandlers;
 use northstar_message_xmpp::ExtDiscoHandlers;
@@ -19,6 +16,9 @@ use northstar_pubsub_xmpp::PepHandlers;
 use northstar_pubsub_xmpp::PrivateXmlHandlers;
 use northstar_pubsub_xmpp::PubSubHandlers;
 use northstar_pubsub_xmpp::VCardHandlers;
+use northstar_roster_xmpp::BlockingHandlers;
+use northstar_roster_xmpp::PrivacyHandlers;
+use northstar_roster_xmpp::RosterHandlers;
 use northstar_stream::protocol::dispatch::route::{ClientIqHandler, ClientIqRoute, RouteGate};
 use northstar_stream::protocol::dispatch::{
     is_service_jid, map_pubsub_capacity_result, valid_bind_payload, valid_empty_iq_payload,

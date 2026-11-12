@@ -13,7 +13,6 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BASELINE = new Map([
   ['crates/contexts/message/northstar-message-core/src/validation.rs', 0],
   ['crates/edges/northstar-stream/src/protocol.rs', 0],
-  ['src/xmpp/protocol/blocking.rs', 0],
   ['crates/edges/northstar-stream/src/protocol/caps.rs', 0],
   ['crates/edges/northstar-stream/src/protocol/csi.rs', 0],
   ['crates/contexts/operations/northstar-operations-xmpp/src/commands.rs', 0],
@@ -23,10 +22,8 @@ const BASELINE = new Map([
   ['crates/contexts/message/northstar-message-core/src/jingle.rs', 0],
   ['crates/contexts/archive/northstar-archive-xmpp/src/lib.rs', 0],
   ['crates/contexts/room/northstar-room-application/src/mix_muc.rs', 0],
-  ['src/xmpp/protocol/privacy.rs', 0],
   ['src/xmpp/protocol/presence.rs', 0],
   ['crates/contexts/message/northstar-message-xmpp/src/retractions.rs', 0],
-  ['src/xmpp/protocol/roster.rs', 0],
   ['crates/edges/northstar-stream/src/protocol/sasl2.rs', 0],
   ['crates/contexts/upload/northstar-upload-xmpp/src/lib.rs', 0],
   ['crates/contexts/message/northstar-message-xmpp/src/messaging.rs', 0],

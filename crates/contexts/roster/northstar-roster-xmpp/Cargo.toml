@@ -20,5 +20,7 @@ northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 northstar-xmpp-avatar = { path = "../../../kernel/northstar-xmpp-avatar" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 roxmltree = "0.20"
+tokio = { version = "1.43", features = ["time"] }
+tokio-util = { version = "0.7", features = ["rt", "io"] }
 tracing = "0.1"
 uuid = { version = "1.12", features = ["v4"] }

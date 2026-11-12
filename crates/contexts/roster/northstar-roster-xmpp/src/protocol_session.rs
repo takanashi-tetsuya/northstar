@@ -1,6 +1,9 @@
 //! The protocol session as this context sees it: the impls of this crate's session ports for
-//! `northstar_stream::protocol::ProtocolSession`.
+//! `northstar_stream::protocol::ProtocolSession`, and the handlers the root's client IQ route table calls on
+//! it.
 
+use crate::roster::RosterGetOutcome;
+use crate::PostAcceptFailureTelemetry;
 use crate::RosterSessionHost;
 use anyhow::Result;
 use northstar_federation_core::FederationRoute as _;
@@ -10,10 +13,15 @@ use northstar_roster_application::privacy::{PrivacyRepository, PrivacyService};
 use northstar_roster_application::{
     BeginRosterSyncError, RosterRepository, RosterService, RosterSyncPermit, S2sOutboxPolicy,
 };
+use northstar_roster_application::{RosterFlushBatch, RosterSyncGate};
 use northstar_roster_core::PresenceAccount;
 use northstar_roster_core::{LocalRosterContact, RosterChange};
 use northstar_stream::protocol::{ProtocolSession, SessionHost};
+use northstar_stream::transport::Action;
+use roxmltree::Node;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
 
 // From src/xmpp/protocol/roster_identity.rs.
 impl<H: SessionHost> crate::SessionIdentity for ProtocolSession<H> {
@@ -54,6 +62,52 @@ impl<H: SessionHost + RosterSessionHost> crate::blocking::BlockingSession for Pr
         self.host()
             .deliver_blocking_presence_change(owner, targets, changed_patterns, available)
             .await;
+    }
+}
+
+/// The blocking handlers the root calls on the session.
+#[allow(async_fn_in_trait)] // Called on the root's concrete session type only.
+pub trait BlockingHandlers {
+    async fn blocklist(
+        &self,
+        id: &str,
+        root: Node<'_, '_>,
+        _blocklist: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn block(&self, id: &str, root: Node<'_, '_>, _block: Node<'_, '_>) -> Result<Action>;
+
+    async fn unblock(&self, id: &str, root: Node<'_, '_>, _unblock: Node<'_, '_>)
+        -> Result<Action>;
+}
+
+impl<H: SessionHost + RosterSessionHost> BlockingHandlers for ProtocolSession<H> {
+    async fn blocklist(
+        &self,
+        id: &str,
+        root: Node<'_, '_>,
+        _blocklist: Node<'_, '_>,
+    ) -> Result<Action> {
+        crate::blocking::blocklist(self, id, root)
+            .await
+            .map(Action::Send)
+    }
+
+    async fn block(&self, id: &str, root: Node<'_, '_>, _block: Node<'_, '_>) -> Result<Action> {
+        crate::blocking::block(self, id, root)
+            .await
+            .map(Action::Send)
+    }
+
+    async fn unblock(
+        &self,
+        id: &str,
+        root: Node<'_, '_>,
+        _unblock: Node<'_, '_>,
+    ) -> Result<Action> {
+        crate::blocking::unblock(self, id, root)
+            .await
+            .map(Action::Send)
     }
 }
 
@@ -105,6 +159,50 @@ impl<H: SessionHost + RosterSessionHost> crate::privacy::PrivacySession for Prot
         self.host()
             .push_privacy_change(account, name, base, self.connection_id)
             .await
+    }
+}
+
+/// The privacy list handlers the root calls on the session.
+#[allow(async_fn_in_trait)] // Called on the root's concrete session type only.
+pub trait PrivacyHandlers {
+    async fn privacy_get(
+        &self,
+        id: &str,
+        root: Node<'_, '_>,
+        query: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn privacy_set(
+        &self,
+        id: &str,
+        root: Node<'_, '_>,
+        query: Node<'_, '_>,
+    ) -> Result<Action>;
+}
+
+impl<H: SessionHost + RosterSessionHost> PrivacyHandlers for ProtocolSession<H> {
+    async fn privacy_get(
+        &self,
+        id: &str,
+        root: Node<'_, '_>,
+        query: Node<'_, '_>,
+    ) -> Result<Action> {
+        crate::privacy::privacy_get(self, id, root, query)
+            .await
+            .map(Action::Send)
+    }
+
+    async fn privacy_set(
+        &self,
+        id: &str,
+        root: Node<'_, '_>,
+        query: Node<'_, '_>,
+    ) -> Result<Action> {
+        let (response, current_push) = crate::privacy::privacy_set(self, id, root, query).await?;
+        Ok(match current_push {
+            Some(push) => Action::SendMany(vec![response, push]),
+            None => Action::Send(response),
+        })
     }
 }
 
@@ -382,5 +480,136 @@ impl<H: SessionHost + RosterSessionHost> crate::roster::RosterSession for Protoc
         self.host()
             .deliver_committed_roster_change(owner_id, owner, change, None)
             .await
+    }
+}
+
+/// The roster handlers the root calls on the session.
+#[allow(async_fn_in_trait)] // Called on the root's concrete session type only.
+pub trait RosterHandlers {
+    async fn roster_get(
+        &mut self,
+        id: &str,
+        iq: Node<'_, '_>,
+        query: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn roster_set(&self, id: &str, iq: Node<'_, '_>, query: Node<'_, '_>) -> Result<Action>;
+}
+
+impl<H: SessionHost + RosterSessionHost> RosterHandlers for ProtocolSession<H> {
+    async fn roster_get(
+        &mut self,
+        id: &str,
+        iq: Node<'_, '_>,
+        query: Node<'_, '_>,
+    ) -> Result<Action> {
+        Ok(
+            match crate::roster::roster_get(&*self, id, iq, query).await? {
+                RosterGetOutcome::Reply(response) => Action::Send(response),
+                RosterGetOutcome::Synchronize {
+                    response,
+                    permit,
+                    snapshot_version,
+                    initial_delta,
+                    target,
+                } => {
+                    let failure_telemetry = self.host().post_accept_failure_telemetry();
+                    let outbound = self.outbound.clone();
+                    let gate = Arc::clone(&self.roster_sync);
+                    let disconnect = self.disconnect.clone();
+                    self.defer_after_transport("roster-initial-sync", async move {
+                        flush_roster_sync(RosterSyncFlush {
+                            failure_telemetry,
+                            outbound,
+                            gate,
+                            disconnect,
+                            permit,
+                            snapshot_version,
+                            initial_delta,
+                            target,
+                        })
+                        .await;
+                    })?;
+                    Action::Send(response)
+                }
+            },
+        )
+    }
+
+    async fn roster_set(&self, id: &str, iq: Node<'_, '_>, query: Node<'_, '_>) -> Result<Action> {
+        crate::roster::roster_set(self, id, iq, query)
+            .await
+            .map(Action::Send)
+    }
+}
+
+struct RosterSyncFlush {
+    failure_telemetry: PostAcceptFailureTelemetry,
+    outbound: northstar_stream::outbound::OutboundSender,
+    gate: Arc<RosterSyncGate>,
+    disconnect: tokio_util::sync::CancellationToken,
+    permit: RosterSyncPermit,
+    snapshot_version: i64,
+    initial_delta: Vec<String>,
+    target: String,
+}
+
+async fn flush_roster_sync(request: RosterSyncFlush) {
+    let RosterSyncFlush {
+        failure_telemetry,
+        outbound,
+        gate,
+        disconnect,
+        permit,
+        snapshot_version,
+        initial_delta,
+        target,
+    } = request;
+    async fn enqueue(
+        outbound: &northstar_stream::outbound::OutboundSender,
+        stanza: String,
+    ) -> bool {
+        matches!(
+            tokio::time::timeout(Duration::from_secs(5), outbound.send(stanza)).await,
+            Ok(Ok(()))
+        )
+    }
+
+    for stanza in initial_delta {
+        if !enqueue(&outbound, stanza).await {
+            gate.fail(permit);
+            outbound.disconnect_backpressured_transport();
+            disconnect.cancel();
+            failure_telemetry.record_failure();
+            tracing::warn!(%target, "roster delta could not enter the transport; forcing a full resync");
+            return;
+        }
+    }
+
+    let mut batch = gate.start_flush(permit, snapshot_version);
+    loop {
+        match batch {
+            RosterFlushBatch::Batch(pushes) => {
+                for (version, stanza) in pushes {
+                    if !enqueue(&outbound, stanza).await {
+                        gate.fail(permit);
+                        outbound.disconnect_backpressured_transport();
+                        disconnect.cancel();
+                        failure_telemetry.record_failure();
+                        tracing::warn!(%target, version, "buffered roster push could not enter the transport; forcing a full resync");
+                        return;
+                    }
+                }
+                batch = gate.next_flush_batch(permit);
+            }
+            RosterFlushBatch::Complete => return,
+            RosterFlushBatch::Failed | RosterFlushBatch::Superseded => {
+                outbound.disconnect_backpressured_transport();
+                disconnect.cancel();
+                failure_telemetry.record_failure();
+                tracing::warn!(%target, "roster synchronization fence failed; forcing a full resync");
+                return;
+            }
+        }
     }
 }

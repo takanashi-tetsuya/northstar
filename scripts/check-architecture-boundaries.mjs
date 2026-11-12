@@ -3966,7 +3966,7 @@ if (!read('crates/contexts/session/northstar-session-application/src/post_action
     || !/pub async fn handle\(&mut self, xml: &str\) -> Result<Action> \{\s*self\.host\.inbound_stanza_telemetry\(\)\.received\(\);/.test(c2sDispatch)
     || /self\.(?:state|host)\.metrics\b/.test(c2sDispatch)
     || ['privacy.rs', 'blocking.rs', 'roster.rs'].some((name) =>
-      /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read(`src/xmpp/protocol/${name}`)))
+      /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(protocolModuleSource(name, read)))
     || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('crates/edges/northstar-stream/src/protocol/ibr.rs'))
     || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('crates/edges/northstar-stream/src/protocol/misc.rs'))
     || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('crates/edges/northstar-stream/src/protocol/sm.rs'))

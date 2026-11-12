@@ -5065,6 +5065,14 @@
     ],
     [
       "northstar-roster-xmpp",
+      "tokio"
+    ],
+    [
+      "northstar-roster-xmpp",
+      "tokio-util"
+    ],
+    [
+      "northstar-roster-xmpp",
       "tracing"
     ],
     [

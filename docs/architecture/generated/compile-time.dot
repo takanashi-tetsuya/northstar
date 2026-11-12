@@ -1618,6 +1618,8 @@ digraph compile_time {
   "northstar-roster-xmpp" -> "northstar-xmpp-avatar";
   "northstar-roster-xmpp" -> "northstar-xmpp-types";
   "northstar-roster-xmpp" -> "roxmltree";
+  "northstar-roster-xmpp" -> "tokio";
+  "northstar-roster-xmpp" -> "tokio-util";
   "northstar-roster-xmpp" -> "tracing";
   "northstar-roster-xmpp" -> "uuid";
   "northstar-runtime" -> "anyhow";

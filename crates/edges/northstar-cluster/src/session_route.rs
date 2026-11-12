@@ -1,0 +1,66 @@
+//! Staged, SM-resume and live session routes in the cluster route table.
+
+use crate::ClusterManager;
+
+impl ClusterManager {
+    /// Claim a route that remains unpublished until the login transaction
+    /// commits. The binding proof is fixed at this boundary.
+    pub async fn claim_staged_binding_route(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+    ) -> anyhow::Result<bool> {
+        self.try_register_session(
+            full_jid,
+            connection_id,
+            northstar_session_application::sm::SessionRouteClaimProof::Binding,
+        )
+        .await
+    }
+
+    pub async fn release_staged_binding_route(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+    ) -> anyhow::Result<()> {
+        self.release_exact_local_session_route(full_jid, connection_id)
+            .await
+    }
+
+    pub async fn claim_sm_resume_route(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+        session_id: uuid::Uuid,
+        claim_token: uuid::Uuid,
+    ) -> anyhow::Result<bool> {
+        self.try_register_session(
+            full_jid,
+            connection_id,
+            northstar_session_application::sm::SessionRouteClaimProof::SmResume {
+                session_id,
+                claim_token,
+            },
+        )
+        .await
+    }
+
+    pub async fn release_exact_local_session_route(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+    ) -> anyhow::Result<()> {
+        self.unregister_session(full_jid, connection_id).await
+    }
+
+    pub async fn notify_remote_user_agent_replacement(
+        &self,
+        account: &str,
+        user_id: uuid::Uuid,
+        device_id: uuid::Uuid,
+        epoch: i64,
+    ) -> anyhow::Result<()> {
+        self.send_user_agent_replacement(account, user_id, device_id, epoch)
+            .await
+    }
+}

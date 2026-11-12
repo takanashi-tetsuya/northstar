@@ -1,9 +1,9 @@
 //! PostgreSQL occupancy mode and optional Redis routing for local MUC.
 
-use super::{AppState, SerializableMucOccupant};
-use crate::cluster::ClusterOperation;
+use crate::{ClusterManager, ClusterOperation};
 use anyhow::Result;
 use northstar_delivery_core::node_delivery::NodeDeliveryReceipt;
+use northstar_room_application::muc_service::SerializableMucOccupant;
 use northstar_room_core::occupancy::MucPresencePublication;
 use northstar_room_core::occupancy::{MucRename, MucRoleChange};
 use northstar_stream::outbound::DurableDelivery;
@@ -26,48 +26,48 @@ impl MucRuntimeMode {
     }
 }
 
-impl AppState {
+impl ClusterManager {
     fn muc_runtime_mode(&self) -> MucRuntimeMode {
-        MucRuntimeMode::current(self.cluster.is_enabled())
+        MucRuntimeMode::current(self.is_enabled())
     }
 
-    pub(crate) fn muc_pg_authority_enabled(&self) -> bool {
+    pub fn muc_pg_authority_enabled(&self) -> bool {
         self.muc_runtime_mode().pg_authority
     }
 
-    pub(crate) fn muc_redis_transport_enabled(&self) -> bool {
+    pub fn muc_redis_transport_enabled(&self) -> bool {
         self.muc_runtime_mode().redis_transport
     }
 
-    pub(crate) fn muc_cluster_node_id(&self) -> &str {
-        &self.cluster.node_id
+    pub fn muc_cluster_node_id(&self) -> &str {
+        &self.node_id
     }
 
-    pub(crate) fn admit_muc_pg_mutation(&self) -> Result<()> {
+    pub fn admit_muc_pg_mutation(&self) -> Result<()> {
         if self.muc_redis_transport_enabled() {
-            self.cluster.admit(ClusterOperation::MucMutation)?;
+            self.admit(ClusterOperation::MucMutation)?;
         }
         Ok(())
     }
 
-    pub(crate) async fn cached_muc_cluster_occupants(
+    pub async fn cached_muc_cluster_occupants(
         &self,
         room: &str,
     ) -> Result<HashMap<String, String>> {
         if !self.muc_redis_transport_enabled() {
             return Ok(HashMap::new());
         }
-        self.cluster.get_muc_occupants(room).await
+        self.get_muc_occupants(room).await
     }
 
-    pub(crate) async fn join_cluster_muc_room(&self, room: &str) -> Result<()> {
+    pub async fn join_cluster_muc_room(&self, room: &str) -> Result<()> {
         if !self.muc_redis_transport_enabled() {
             return Ok(());
         }
-        self.cluster.join_muc(room).await
+        self.join_muc(room).await
     }
 
-    pub(crate) async fn publish_muc_cluster_presence_with_id(
+    pub async fn publish_muc_cluster_presence_with_id(
         &self,
         room: &str,
         occupant: &SerializableMucOccupant,
@@ -78,12 +78,11 @@ impl AppState {
         if !self.muc_redis_transport_enabled() {
             return Ok(());
         }
-        self.cluster
-            .send_muc_presence(room, occupant, unavailable, created, id)
+        self.send_muc_presence(room, occupant, unavailable, created, id)
             .await
     }
 
-    pub(crate) async fn publish_muc_cluster_nickname_change(
+    pub async fn publish_muc_cluster_nickname_change(
         &self,
         room: &str,
         before: &SerializableMucOccupant,
@@ -93,12 +92,10 @@ impl AppState {
         if !self.muc_redis_transport_enabled() {
             return Ok(());
         }
-        self.cluster
-            .send_muc_nickname_change(room, before, after, id)
-            .await
+        self.send_muc_nickname_change(room, before, after, id).await
     }
 
-    pub(crate) async fn rename_cluster_muc_occupant_exact(
+    pub async fn rename_cluster_muc_occupant_exact(
         &self,
         room: &str,
         old_nick: &str,
@@ -110,35 +107,31 @@ impl AppState {
         if !self.muc_redis_transport_enabled() {
             return Ok(MucRename::Renamed);
         }
-        self.cluster
-            .rename_muc_occupant(room, old_nick, new_nick, expected_epoch, old_json, new_json)
+        self.rename_muc_occupant(room, old_nick, new_nick, expected_epoch, old_json, new_json)
             .await
     }
 
-    pub(crate) async fn change_cluster_muc_role_exact(
+    pub async fn change_cluster_muc_role_exact(
         &self,
         room: &str,
         occupant: &SerializableMucOccupant,
         role: &str,
     ) -> Result<MucRoleChange> {
-        self.cluster
-            .change_muc_occupant_role(room, occupant, role)
-            .await
+        self.change_muc_occupant_role(room, occupant, role).await
     }
 
-    pub(crate) async fn change_cluster_muc_affiliation_exact(
+    pub async fn change_cluster_muc_affiliation_exact(
         &self,
         room: &str,
         occupant: &SerializableMucOccupant,
         affiliation: &str,
         role: &str,
     ) -> Result<MucRoleChange> {
-        self.cluster
-            .change_muc_occupant_affiliation(room, occupant, affiliation, role)
+        self.change_muc_occupant_affiliation(room, occupant, affiliation, role)
             .await
     }
 
-    pub(crate) async fn revoke_cluster_muc_occupant_exact(
+    pub async fn revoke_cluster_muc_occupant_exact(
         &self,
         occupant: &SerializableMucOccupant,
         status: u16,
@@ -148,18 +141,17 @@ impl AppState {
         if !self.muc_redis_transport_enabled() {
             return Ok(true);
         }
-        self.cluster
-            .evict_muc_occupant(occupant, status, actor_nick, reason)
+        self.evict_muc_occupant(occupant, status, actor_nick, reason)
             .await
     }
 
-    pub(crate) fn record_muc_cluster_control_plane_failure(&self, error: &anyhow::Error) {
+    pub fn record_muc_cluster_control_plane_failure(&self, error: &anyhow::Error) {
         if self.muc_redis_transport_enabled() {
-            self.cluster.record_control_plane_failure(error);
+            self.record_control_plane_failure(error);
         }
     }
 
-    pub(crate) async fn publish_muc_cluster_private_message(
+    pub async fn publish_muc_cluster_private_message(
         &self,
         room: &str,
         nick: &str,
@@ -169,8 +161,7 @@ impl AppState {
         if !self.muc_redis_transport_enabled() {
             return Ok(());
         }
-        self.cluster
-            .send_muc_private_from(room, nick, stanza, real_sender)
+        self.send_muc_private_from(room, nick, stanza, real_sender)
             .await
     }
 
@@ -178,7 +169,7 @@ impl AppState {
     /// A failed lookup or send is treated as no delivery, so the caller can
     /// retain its existing durable/offline fallback. Only an acknowledged
     /// receipt proves that a remote node accepted the message.
-    pub(crate) async fn deliver_muc_primary_to_remote_node(
+    pub async fn deliver_muc_primary_to_remote_node(
         &self,
         target: &str,
         stanza: &str,
@@ -187,22 +178,17 @@ impl AppState {
         if !self.muc_redis_transport_enabled() {
             return None;
         }
-        let nodes = self.cluster.lookup_nodes(target).await.ok()?;
+        let nodes = self.lookup_nodes(target).await.ok()?;
         for node in nodes {
-            if node == self.cluster.node_id {
+            if node == self.node_id {
                 continue;
             }
             let receipt = match durable {
                 Some(delivery) => {
-                    self.cluster
-                        .send_to_node_primary_durable(&node, target, stanza, delivery)
+                    self.send_to_node_primary_durable(&node, target, stanza, delivery)
                         .await
                 }
-                None => {
-                    self.cluster
-                        .send_to_node_primary(&node, target, stanza)
-                        .await
-                }
+                None => self.send_to_node_primary(&node, target, stanza).await,
             };
             match receipt {
                 Ok(receipt) if receipt.delivered && receipt.acknowledged => return Some(receipt),
@@ -212,7 +198,7 @@ impl AppState {
         None
     }
 
-    pub(crate) async fn publish_muc_cluster_stanza(
+    pub async fn publish_muc_cluster_stanza(
         &self,
         room: &str,
         stanza: &str,
@@ -222,12 +208,12 @@ impl AppState {
             return Ok(());
         }
         match real_sender {
-            Some(sender) => self.cluster.send_to_muc_from(room, stanza, sender).await,
-            None => self.cluster.send_to_muc(room, stanza).await,
+            Some(sender) => self.send_to_muc_from(room, stanza, sender).await,
+            None => self.send_to_muc(room, stanza).await,
         }
     }
 
-    pub(crate) async fn evict_cluster_muc_occupant(
+    pub async fn evict_cluster_muc_occupant(
         &self,
         occupant: &SerializableMucOccupant,
         status: u16,
@@ -237,20 +223,19 @@ impl AppState {
         if !self.muc_redis_transport_enabled() {
             return Ok(());
         }
-        self.cluster
-            .evict_muc_occupant(occupant, status, actor_nick, reason)
+        self.evict_muc_occupant(occupant, status, actor_nick, reason)
             .await
             .map(|_| ())
     }
 
-    pub(crate) async fn leave_cluster_muc_room(&self, room: &str) -> Result<()> {
+    pub async fn leave_cluster_muc_room(&self, room: &str) -> Result<()> {
         if !self.muc_redis_transport_enabled() {
             return Ok(());
         }
-        self.cluster.leave_muc(room).await
+        self.leave_muc(room).await
     }
 
-    pub(crate) async fn register_cluster_muc_occupant(
+    pub async fn register_cluster_muc_occupant(
         &self,
         room: &str,
         nick: &str,
@@ -259,28 +244,27 @@ impl AppState {
         if !self.muc_redis_transport_enabled() {
             return Ok(true);
         }
-        self.cluster.register_muc_occupant(room, nick, json).await
+        self.register_muc_occupant(room, nick, json).await
     }
 
-    pub(crate) async fn publish_muc_cluster_presence(
+    pub async fn publish_muc_cluster_presence(
         &self,
         publication: MucPresencePublication<'_>,
     ) -> Result<()> {
         if !self.muc_redis_transport_enabled() {
             return Ok(());
         }
-        self.cluster
-            .send_muc_presence_with_status(
-                publication.room,
-                publication.occupant,
-                publication.unavailable,
-                publication.created,
-                None,
-                publication.removal_status,
-                publication.actor_nick,
-                publication.reason,
-            )
-            .await
+        self.send_muc_presence_with_status(
+            publication.room,
+            publication.occupant,
+            publication.unavailable,
+            publication.created,
+            None,
+            publication.removal_status,
+            publication.actor_nick,
+            publication.reason,
+        )
+        .await
     }
 }
 

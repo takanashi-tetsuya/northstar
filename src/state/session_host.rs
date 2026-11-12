@@ -131,7 +131,9 @@ impl SessionHost for AppState {
         full_jid: &str,
         connection_id: uuid::Uuid,
     ) -> anyhow::Result<bool> {
-        AppState::claim_staged_binding_route(self, full_jid, connection_id).await
+        self.cluster()
+            .claim_staged_binding_route(full_jid, connection_id)
+            .await
     }
 
     async fn finalize_resource_binding(
@@ -218,7 +220,9 @@ impl SessionHost for AppState {
         full_jid: &str,
         connection_id: uuid::Uuid,
     ) -> anyhow::Result<()> {
-        AppState::release_staged_binding_route(self, full_jid, connection_id).await
+        self.cluster()
+            .release_staged_binding_route(full_jid, connection_id)
+            .await
     }
 
     fn remove_local_muc_occupant_exact(
@@ -411,7 +415,8 @@ impl SessionHost for AppState {
         session_id: uuid::Uuid,
         claim_token: uuid::Uuid,
     ) -> anyhow::Result<bool> {
-        AppState::claim_sm_resume_route(self, full_jid, connection_id, session_id, claim_token)
+        self.cluster()
+            .claim_sm_resume_route(full_jid, connection_id, session_id, claim_token)
             .await
     }
 
@@ -472,7 +477,8 @@ impl SessionHost for AppState {
         device_id: uuid::Uuid,
         epoch: i64,
     ) -> anyhow::Result<()> {
-        AppState::notify_remote_user_agent_replacement(self, account, user_id, device_id, epoch)
+        self.cluster()
+            .notify_remote_user_agent_replacement(account, user_id, device_id, epoch)
             .await
     }
 
@@ -518,7 +524,9 @@ impl SessionHost for AppState {
         full_jid: &str,
         connection_id: uuid::Uuid,
     ) -> anyhow::Result<()> {
-        AppState::release_exact_local_session_route(self, full_jid, connection_id).await
+        self.cluster()
+            .release_exact_local_session_route(full_jid, connection_id)
+            .await
     }
 
     async fn restore_local_muc_occupants(

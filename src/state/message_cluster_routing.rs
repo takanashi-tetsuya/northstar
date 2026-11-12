@@ -98,19 +98,6 @@ impl DirectMessageRoutePort for AppState {
 
 /// An old cluster peer may acknowledge only with a delivered count. Accept a
 /// positive receipt rather than risk duplicating a stanza in offline storage.
-pub(super) fn accepted_cluster_message_delivery(
-    state: &AppState,
-    node_id: &str,
-    target: &str,
-    receipt: &northstar_delivery_core::node_delivery::NodeDeliveryReceipt,
-) -> bool {
-    if receipt.delivered && !receipt.acknowledged {
-        state.personal_message_telemetry().cluster_legacy_accepted();
-        tracing::warn!(%node_id, %target, "accepted legacy uncorrelated cluster message delivery acknowledgement");
-    }
-    receipt.delivered
-}
-
 impl AppState {
     /// A failed route lookup supplies no evidence of an exact remote resource.
     pub(crate) async fn personal_message_remote_resource_exists(&self, jid: &str) -> bool {
@@ -198,7 +185,12 @@ impl AppState {
                         .await
                         .unwrap_or_default()
                 };
-                if accepted_cluster_message_delivery(self, &node_id, jid, &receipt) {
+                if northstar_cluster::s2s_routing::accepted_cluster_message_delivery(
+                    &self.personal_message_telemetry(),
+                    &node_id,
+                    jid,
+                    &receipt,
+                ) {
                     return OnlineRouteResult {
                         delivered: true,
                         accepted_full_jid: receipt.accepted_full_jid,

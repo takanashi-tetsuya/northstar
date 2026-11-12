@@ -1,8 +1,9 @@
 //! Cluster operations used by federated MUC handlers.
 
-use super::{AppState, SerializableMucOccupant};
+use crate::ClusterManager;
 use anyhow::Result;
 use northstar_delivery_core::node_delivery::NodeDeliveryReceipt;
+use northstar_room_application::muc_service::SerializableMucOccupant;
 use northstar_room_core::occupancy::FederatedMucAccountRoute;
 use northstar_room_core::occupancy::{MucRename, MucRoleChange};
 use northstar_stream::outbound::DurableDelivery;
@@ -14,48 +15,48 @@ fn accepted_primary_route(receipt: NodeDeliveryReceipt) -> Option<FederatedMucAc
     })
 }
 
-impl AppState {
-    pub(crate) fn federated_muc_admit_mutation(&self) -> Result<()> {
+impl ClusterManager {
+    pub fn federated_muc_admit_mutation(&self) -> Result<()> {
         self.admit_muc_pg_mutation()
     }
 
-    pub(crate) fn federated_muc_pg_authority_enabled(&self) -> bool {
+    pub fn federated_muc_pg_authority_enabled(&self) -> bool {
         self.muc_pg_authority_enabled()
     }
 
-    pub(crate) fn federated_muc_redis_transport_enabled(&self) -> bool {
+    pub fn federated_muc_redis_transport_enabled(&self) -> bool {
         self.muc_redis_transport_enabled()
     }
 
-    pub(crate) fn federated_muc_owner_node_id(&self) -> &str {
-        &self.cluster.node_id
+    pub fn federated_muc_owner_node_id(&self) -> &str {
+        &self.node_id
     }
 
-    pub(crate) async fn federated_muc_global_occupants(
+    pub async fn federated_muc_global_occupants(
         &self,
         room_jid: &str,
     ) -> Result<HashMap<String, String>> {
         if !self.federated_muc_redis_transport_enabled() {
             return Ok(HashMap::new());
         }
-        self.cluster.get_muc_occupants(room_jid).await
+        self.get_muc_occupants(room_jid).await
     }
 
-    pub(crate) async fn federated_muc_join_room(&self, room_jid: &str) -> Result<()> {
+    pub async fn federated_muc_join_room(&self, room_jid: &str) -> Result<()> {
         if !self.federated_muc_redis_transport_enabled() {
             return Ok(());
         }
-        self.cluster.join_muc(room_jid).await
+        self.join_muc(room_jid).await
     }
 
-    pub(crate) async fn federated_muc_leave_room(&self, room_jid: &str) -> Result<()> {
+    pub async fn federated_muc_leave_room(&self, room_jid: &str) -> Result<()> {
         if !self.federated_muc_redis_transport_enabled() {
             return Ok(());
         }
-        self.cluster.leave_muc(room_jid).await
+        self.leave_muc(room_jid).await
     }
 
-    pub(crate) async fn federated_muc_rename_occupant(
+    pub async fn federated_muc_rename_occupant(
         &self,
         room_jid: &str,
         old_nick: &str,
@@ -67,19 +68,18 @@ impl AppState {
         if !self.federated_muc_redis_transport_enabled() {
             return Ok(MucRename::Renamed);
         }
-        self.cluster
-            .rename_muc_occupant(
-                room_jid,
-                old_nick,
-                new_nick,
-                expected_epoch,
-                old_json,
-                new_json,
-            )
-            .await
+        self.rename_muc_occupant(
+            room_jid,
+            old_nick,
+            new_nick,
+            expected_epoch,
+            old_json,
+            new_json,
+        )
+        .await
     }
 
-    pub(crate) async fn federated_muc_register_occupant(
+    pub async fn federated_muc_register_occupant(
         &self,
         room_jid: &str,
         nick: &str,
@@ -88,12 +88,10 @@ impl AppState {
         if !self.federated_muc_redis_transport_enabled() {
             return Ok(true);
         }
-        self.cluster
-            .register_muc_occupant(room_jid, nick, json)
-            .await
+        self.register_muc_occupant(room_jid, nick, json).await
     }
 
-    pub(crate) async fn federated_muc_evict_occupant(
+    pub async fn federated_muc_evict_occupant(
         &self,
         occupant: &SerializableMucOccupant,
         status: u16,
@@ -103,47 +101,43 @@ impl AppState {
         if !self.federated_muc_redis_transport_enabled() {
             return Ok(true);
         }
-        self.cluster
-            .evict_muc_occupant(occupant, status, actor_nick, reason)
+        self.evict_muc_occupant(occupant, status, actor_nick, reason)
             .await
     }
 
-    pub(crate) async fn federated_muc_change_occupant_role(
+    pub async fn federated_muc_change_occupant_role(
         &self,
         room_jid: &str,
         occupant: &SerializableMucOccupant,
         role: &str,
     ) -> Result<MucRoleChange> {
-        self.cluster
-            .change_muc_occupant_role(room_jid, occupant, role)
+        self.change_muc_occupant_role(room_jid, occupant, role)
             .await
     }
 
-    pub(crate) async fn federated_muc_change_occupant_affiliation(
+    pub async fn federated_muc_change_occupant_affiliation(
         &self,
         room_jid: &str,
         occupant: &SerializableMucOccupant,
         affiliation: &str,
         role: &str,
     ) -> Result<MucRoleChange> {
-        self.cluster
-            .change_muc_occupant_affiliation(room_jid, occupant, affiliation, role)
+        self.change_muc_occupant_affiliation(room_jid, occupant, affiliation, role)
             .await
     }
 
-    pub(crate) async fn federated_muc_change_occupant_policy(
+    pub async fn federated_muc_change_occupant_policy(
         &self,
         room_jid: &str,
         occupant: &SerializableMucOccupant,
         role: &str,
         room_non_anonymous: bool,
     ) -> Result<MucRoleChange> {
-        self.cluster
-            .change_muc_occupant_policy(room_jid, occupant, role, room_non_anonymous)
+        self.change_muc_occupant_policy(room_jid, occupant, role, room_non_anonymous)
             .await
     }
 
-    pub(crate) async fn federated_muc_publish_presence(
+    pub async fn federated_muc_publish_presence(
         &self,
         room_jid: &str,
         occupant: &SerializableMucOccupant,
@@ -154,12 +148,11 @@ impl AppState {
         if !self.federated_muc_redis_transport_enabled() {
             return Ok(());
         }
-        self.cluster
-            .send_muc_presence(room_jid, occupant, unavailable, created, id)
+        self.send_muc_presence(room_jid, occupant, unavailable, created, id)
             .await
     }
 
-    pub(crate) async fn federated_muc_publish_removal_presence(
+    pub async fn federated_muc_publish_removal_presence(
         &self,
         room_jid: &str,
         occupant: &SerializableMucOccupant,
@@ -170,14 +163,13 @@ impl AppState {
         if !self.federated_muc_redis_transport_enabled() {
             return Ok(());
         }
-        self.cluster
-            .send_muc_presence_with_status(
-                room_jid, occupant, true, false, None, status, actor_nick, reason,
-            )
-            .await
+        self.send_muc_presence_with_status(
+            room_jid, occupant, true, false, None, status, actor_nick, reason,
+        )
+        .await
     }
 
-    pub(crate) async fn federated_muc_publish_nickname_change(
+    pub async fn federated_muc_publish_nickname_change(
         &self,
         room_jid: &str,
         old_occupant: &SerializableMucOccupant,
@@ -187,12 +179,11 @@ impl AppState {
         if !self.federated_muc_redis_transport_enabled() {
             return Ok(());
         }
-        self.cluster
-            .send_muc_nickname_change(room_jid, old_occupant, new_occupant, id)
+        self.send_muc_nickname_change(room_jid, old_occupant, new_occupant, id)
             .await
     }
 
-    pub(crate) async fn federated_muc_publish_room_message(
+    pub async fn federated_muc_publish_room_message(
         &self,
         room_jid: &str,
         stanza: &str,
@@ -202,16 +193,12 @@ impl AppState {
             return Ok(());
         }
         match real_sender {
-            Some(sender) => {
-                self.cluster
-                    .send_to_muc_from(room_jid, stanza, sender)
-                    .await
-            }
-            None => self.cluster.send_to_muc(room_jid, stanza).await,
+            Some(sender) => self.send_to_muc_from(room_jid, stanza, sender).await,
+            None => self.send_to_muc(room_jid, stanza).await,
         }
     }
 
-    pub(crate) async fn federated_muc_publish_private_message(
+    pub async fn federated_muc_publish_private_message(
         &self,
         room_jid: &str,
         target_nick: &str,
@@ -221,8 +208,7 @@ impl AppState {
         if !self.federated_muc_redis_transport_enabled() {
             return Ok(());
         }
-        self.cluster
-            .send_muc_private_from(room_jid, target_nick, stanza, real_sender)
+        self.send_muc_private_from(room_jid, target_nick, stanza, real_sender)
             .await
     }
 
@@ -230,7 +216,7 @@ impl AppState {
     /// resource that acknowledges delivery. A durable invitation keeps its
     /// exact spool-row fence across this hand-off. Lookup and send failures
     /// are best-effort here; the caller retains its offline-storage policy.
-    pub(crate) async fn route_federated_muc_account_message_remote(
+    pub async fn route_federated_muc_account_message_remote(
         &self,
         target_jid: &str,
         stanza: &str,
@@ -239,23 +225,16 @@ impl AppState {
         if !self.federated_muc_redis_transport_enabled() {
             return None;
         }
-        for node_id in self
-            .cluster
-            .lookup_nodes(target_jid)
-            .await
-            .unwrap_or_default()
-        {
-            if node_id == self.cluster.node_id {
+        for node_id in self.lookup_nodes(target_jid).await.unwrap_or_default() {
+            if node_id == self.node_id {
                 continue;
             }
             let receipt = if let Some(delivery) = delivery {
-                self.cluster
-                    .send_to_node_primary_durable(&node_id, target_jid, stanza, delivery)
+                self.send_to_node_primary_durable(&node_id, target_jid, stanza, delivery)
                     .await
                     .unwrap_or_default()
             } else {
-                self.cluster
-                    .send_to_node_primary(&node_id, target_jid, stanza)
+                self.send_to_node_primary(&node_id, target_jid, stanza)
                     .await
                     .unwrap_or_default()
             };

@@ -3,6 +3,10 @@
 use super::*;
 
 impl AppState {
+    pub(crate) fn cluster(&self) -> &crate::cluster::ClusterManager {
+        &self.cluster
+    }
+
     pub(crate) fn omemo_recovery_service(
         &self,
     ) -> &northstar_auth_application::omemo_recovery::OmemoRecoveryService<

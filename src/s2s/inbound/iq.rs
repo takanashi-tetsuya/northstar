@@ -93,6 +93,7 @@ pub(crate) async fn route_inbound_iq(
         }
         if !delivered {
             state
+                .cluster()
                 .route_s2s_iq_response_to_remote_resource(to, raw)
                 .await;
         }
@@ -150,7 +151,7 @@ pub(crate) async fn route_inbound_iq(
         // server-side handler (including the XEP-0115 cache) can answer for
         // an exact resource which is not connected on any cluster node.
         let local_resource_matches = !state.session_entries_for(to).is_empty();
-        let remote_resource_matches = state.s2s_remote_recipient_route_exists(to).await;
+        let remote_resource_matches = state.cluster().s2s_remote_recipient_route_exists(to).await;
         if !local_resource_matches && !remote_resource_matches {
             return Ok(Some(s2s_iq_error(
                 root.attribute("id").unwrap_or_default(),
@@ -440,6 +441,7 @@ pub(crate) async fn route_inbound_iq(
             }
             if !delivered {
                 delivered = state
+                    .cluster()
                     .route_s2s_iq_request_remote(to, raw, bare_target)
                     .await;
             }

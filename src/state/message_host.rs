@@ -145,7 +145,7 @@ impl FederatedMessageHost for AppState {
     }
 
     async fn s2s_remote_recipient_route_exists(&self, jid: &str) -> bool {
-        AppState::s2s_remote_recipient_route_exists(self, jid).await
+        self.cluster().s2s_remote_recipient_route_exists(jid).await
     }
 
     async fn handle_push_disable(&self, root: Node<'_, '_>, from: &str, to: &str) -> Result<bool> {
@@ -170,7 +170,9 @@ impl FederatedMessageHost for AppState {
         stanza: &str,
         delivery: Option<DurableDelivery>,
     ) -> bool {
-        AppState::route_s2s_message_to_available_remote_resources(self, jid, stanza, delivery).await
+        self.cluster()
+            .route_s2s_message_to_available_remote_resources(jid, stanza, delivery)
+            .await
     }
 
     async fn route_s2s_message_to_remote_primary(
@@ -179,8 +181,15 @@ impl FederatedMessageHost for AppState {
         stanza: &str,
         delivery: Option<DurableDelivery>,
     ) -> OnlineRouteResult {
-        let routed =
-            AppState::route_s2s_message_to_remote_primary(self, jid, stanza, delivery).await;
+        let routed = self
+            .cluster()
+            .route_s2s_message_to_remote_primary(
+                jid,
+                stanza,
+                delivery,
+                &self.personal_message_telemetry(),
+            )
+            .await;
         OnlineRouteResult {
             delivered: routed.delivered,
             accepted_full_jid: routed.accepted_full_jid,

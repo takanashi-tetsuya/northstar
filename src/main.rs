@@ -735,7 +735,7 @@ async fn run() -> Result<()> {
                 )
             },
         );
-    } else if state.muc_pg_authority_enabled() {
+    } else if state.cluster().muc_pg_authority_enabled() {
         let maintenance_context = Arc::new(state.standalone_muc_maintenance_context());
         let maintenance_cancel = cancel.clone();
         worker_registry.supervise(

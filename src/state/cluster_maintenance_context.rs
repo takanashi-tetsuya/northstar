@@ -24,7 +24,7 @@ pub(crate) struct StandaloneMucMaintenanceContext {
 impl AppState {
     pub(crate) fn standalone_muc_maintenance_context(&self) -> StandaloneMucMaintenanceContext {
         StandaloneMucMaintenanceContext {
-            node_id: self.muc_cluster_node_id().to_owned(),
+            node_id: self.cluster().muc_cluster_node_id().to_owned(),
             muc_domain: northstar_xmpp_types::jid::prepare_domainpart(&format!(
                 "conference.{}",
                 self.config.domain

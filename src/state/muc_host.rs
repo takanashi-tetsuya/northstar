@@ -119,7 +119,7 @@ impl MucHost for AppState {
     }
 
     fn admit_muc_pg_mutation(&self) -> Result<()> {
-        AppState::admit_muc_pg_mutation(self)
+        self.cluster().admit_muc_pg_mutation()
     }
 
     fn archive_requires_encryption(&self) -> bool {
@@ -139,11 +139,13 @@ impl MucHost for AppState {
         occupant: &SerializableMucOccupant,
         capacity: usize,
     ) -> Result<MucJoinCacheAttempt> {
-        AppState::cache_committed_muc_join(self, occupant, capacity).await
+        self.cluster()
+            .cache_committed_muc_join(occupant, capacity)
+            .await
     }
 
     async fn cached_muc_cluster_occupants(&self, room: &str) -> Result<HashMap<String, String>> {
-        AppState::cached_muc_cluster_occupants(self, room).await
+        self.cluster().cached_muc_cluster_occupants(room).await
     }
 
     async fn change_cluster_muc_affiliation_exact(
@@ -153,7 +155,8 @@ impl MucHost for AppState {
         affiliation: &str,
         role: &str,
     ) -> Result<MucRoleChange> {
-        AppState::change_cluster_muc_affiliation_exact(self, room, occupant, affiliation, role)
+        self.cluster()
+            .change_cluster_muc_affiliation_exact(room, occupant, affiliation, role)
             .await
     }
 
@@ -163,7 +166,9 @@ impl MucHost for AppState {
         occupant: &SerializableMucOccupant,
         role: &str,
     ) -> Result<MucRoleChange> {
-        AppState::change_cluster_muc_role_exact(self, room, occupant, role).await
+        self.cluster()
+            .change_cluster_muc_role_exact(room, occupant, role)
+            .await
     }
 
     async fn deliver_muc_primary_to_remote_node(
@@ -172,7 +177,9 @@ impl MucHost for AppState {
         stanza: &str,
         durable: Option<DurableDelivery>,
     ) -> Option<NodeDeliveryReceipt> {
-        AppState::deliver_muc_primary_to_remote_node(self, target, stanza, durable).await
+        self.cluster()
+            .deliver_muc_primary_to_remote_node(target, stanza, durable)
+            .await
     }
 
     async fn deliver_to_muc_occupant(&self, occupant: &MucOccupant, stanza: String) -> bool {
@@ -198,11 +205,13 @@ impl MucHost for AppState {
         actor_nick: Option<&str>,
         reason: Option<&str>,
     ) -> Result<()> {
-        AppState::evict_cluster_muc_occupant(self, occupant, status, actor_nick, reason).await
+        self.cluster()
+            .evict_cluster_muc_occupant(occupant, status, actor_nick, reason)
+            .await
     }
 
     fn federated_muc_admit_mutation(&self) -> Result<()> {
-        AppState::federated_muc_admit_mutation(self)
+        self.cluster().federated_muc_admit_mutation()
     }
 
     async fn federated_muc_change_occupant_affiliation(
@@ -212,14 +221,9 @@ impl MucHost for AppState {
         affiliation: &str,
         role: &str,
     ) -> Result<MucRoleChange> {
-        AppState::federated_muc_change_occupant_affiliation(
-            self,
-            room_jid,
-            occupant,
-            affiliation,
-            role,
-        )
-        .await
+        self.cluster()
+            .federated_muc_change_occupant_affiliation(room_jid, occupant, affiliation, role)
+            .await
     }
 
     async fn federated_muc_change_occupant_policy(
@@ -229,14 +233,9 @@ impl MucHost for AppState {
         role: &str,
         room_non_anonymous: bool,
     ) -> Result<MucRoleChange> {
-        AppState::federated_muc_change_occupant_policy(
-            self,
-            room_jid,
-            occupant,
-            role,
-            room_non_anonymous,
-        )
-        .await
+        self.cluster()
+            .federated_muc_change_occupant_policy(room_jid, occupant, role, room_non_anonymous)
+            .await
     }
 
     async fn federated_muc_change_occupant_role(
@@ -245,7 +244,9 @@ impl MucHost for AppState {
         occupant: &SerializableMucOccupant,
         role: &str,
     ) -> Result<MucRoleChange> {
-        AppState::federated_muc_change_occupant_role(self, room_jid, occupant, role).await
+        self.cluster()
+            .federated_muc_change_occupant_role(room_jid, occupant, role)
+            .await
     }
 
     async fn federated_muc_evict_occupant(
@@ -255,22 +256,26 @@ impl MucHost for AppState {
         actor_nick: Option<&str>,
         reason: Option<&str>,
     ) -> Result<bool> {
-        AppState::federated_muc_evict_occupant(self, occupant, status, actor_nick, reason).await
+        self.cluster()
+            .federated_muc_evict_occupant(occupant, status, actor_nick, reason)
+            .await
     }
 
     async fn federated_muc_global_occupants(
         &self,
         room_jid: &str,
     ) -> Result<HashMap<String, String>> {
-        AppState::federated_muc_global_occupants(self, room_jid).await
+        self.cluster()
+            .federated_muc_global_occupants(room_jid)
+            .await
     }
 
     async fn federated_muc_join_room(&self, room_jid: &str) -> Result<()> {
-        AppState::federated_muc_join_room(self, room_jid).await
+        self.cluster().federated_muc_join_room(room_jid).await
     }
 
     async fn federated_muc_leave_room(&self, room_jid: &str) -> Result<()> {
-        AppState::federated_muc_leave_room(self, room_jid).await
+        self.cluster().federated_muc_leave_room(room_jid).await
     }
 
     fn federated_muc_occupants_for_closed_connection(
@@ -286,11 +291,11 @@ impl MucHost for AppState {
     }
 
     fn federated_muc_owner_node_id(&self) -> &str {
-        AppState::federated_muc_owner_node_id(self)
+        self.cluster().federated_muc_owner_node_id()
     }
 
     fn federated_muc_pg_authority_enabled(&self) -> bool {
-        AppState::federated_muc_pg_authority_enabled(self)
+        self.cluster().federated_muc_pg_authority_enabled()
     }
 
     async fn federated_muc_publish_nickname_change(
@@ -300,14 +305,9 @@ impl MucHost for AppState {
         new_occupant: &SerializableMucOccupant,
         id: Option<&str>,
     ) -> Result<()> {
-        AppState::federated_muc_publish_nickname_change(
-            self,
-            room_jid,
-            old_occupant,
-            new_occupant,
-            id,
-        )
-        .await
+        self.cluster()
+            .federated_muc_publish_nickname_change(room_jid, old_occupant, new_occupant, id)
+            .await
     }
 
     async fn federated_muc_publish_presence(
@@ -318,7 +318,8 @@ impl MucHost for AppState {
         created: bool,
         id: Option<&str>,
     ) -> Result<()> {
-        AppState::federated_muc_publish_presence(self, room_jid, occupant, unavailable, created, id)
+        self.cluster()
+            .federated_muc_publish_presence(room_jid, occupant, unavailable, created, id)
             .await
     }
 
@@ -329,14 +330,9 @@ impl MucHost for AppState {
         stanza: &str,
         real_sender: &str,
     ) -> Result<()> {
-        AppState::federated_muc_publish_private_message(
-            self,
-            room_jid,
-            target_nick,
-            stanza,
-            real_sender,
-        )
-        .await
+        self.cluster()
+            .federated_muc_publish_private_message(room_jid, target_nick, stanza, real_sender)
+            .await
     }
 
     async fn federated_muc_publish_removal_presence(
@@ -347,10 +343,9 @@ impl MucHost for AppState {
         actor_nick: Option<&str>,
         reason: Option<&str>,
     ) -> Result<()> {
-        AppState::federated_muc_publish_removal_presence(
-            self, room_jid, occupant, status, actor_nick, reason,
-        )
-        .await
+        self.cluster()
+            .federated_muc_publish_removal_presence(room_jid, occupant, status, actor_nick, reason)
+            .await
     }
 
     async fn federated_muc_publish_room_message(
@@ -359,11 +354,13 @@ impl MucHost for AppState {
         stanza: &str,
         real_sender: Option<&str>,
     ) -> Result<()> {
-        AppState::federated_muc_publish_room_message(self, room_jid, stanza, real_sender).await
+        self.cluster()
+            .federated_muc_publish_room_message(room_jid, stanza, real_sender)
+            .await
     }
 
     fn federated_muc_redis_transport_enabled(&self) -> bool {
-        AppState::federated_muc_redis_transport_enabled(self)
+        self.cluster().federated_muc_redis_transport_enabled()
     }
 
     async fn federated_muc_register_occupant(
@@ -372,7 +369,9 @@ impl MucHost for AppState {
         nick: &str,
         json: &str,
     ) -> Result<bool> {
-        AppState::federated_muc_register_occupant(self, room_jid, nick, json).await
+        self.cluster()
+            .federated_muc_register_occupant(room_jid, nick, json)
+            .await
     }
 
     async fn federated_muc_rename_occupant(
@@ -384,16 +383,16 @@ impl MucHost for AppState {
         old_json: &str,
         new_json: &str,
     ) -> Result<MucRename> {
-        AppState::federated_muc_rename_occupant(
-            self,
-            room_jid,
-            old_nick,
-            new_nick,
-            expected_epoch,
-            old_json,
-            new_json,
-        )
-        .await
+        self.cluster()
+            .federated_muc_rename_occupant(
+                room_jid,
+                old_nick,
+                new_nick,
+                expected_epoch,
+                old_json,
+                new_json,
+            )
+            .await
     }
 
     fn federated_muc_telemetry(&self) -> northstar_room_core::telemetry::FederatedMucTelemetry<'_> {
@@ -401,11 +400,11 @@ impl MucHost for AppState {
     }
 
     async fn join_cluster_muc_room(&self, room: &str) -> Result<()> {
-        AppState::join_cluster_muc_room(self, room).await
+        self.cluster().join_cluster_muc_room(room).await
     }
 
     async fn leave_cluster_muc_room(&self, room: &str) -> Result<()> {
-        AppState::leave_cluster_muc_room(self, room).await
+        self.cluster().leave_cluster_muc_room(room).await
     }
 
     fn local_domain(&self) -> &str {
@@ -437,7 +436,7 @@ impl MucHost for AppState {
     }
 
     fn muc_cluster_node_id(&self) -> &str {
-        AppState::muc_cluster_node_id(self)
+        self.cluster().muc_cluster_node_id()
     }
 
     fn muc_mam_retention_days(&self) -> i64 {
@@ -449,11 +448,11 @@ impl MucHost for AppState {
     }
 
     fn muc_pg_authority_enabled(&self) -> bool {
-        AppState::muc_pg_authority_enabled(self)
+        self.cluster().muc_pg_authority_enabled()
     }
 
     fn muc_redis_transport_enabled(&self) -> bool {
-        AppState::muc_redis_transport_enabled(self)
+        self.cluster().muc_redis_transport_enabled()
     }
 
     fn muc_telemetry(&self) -> northstar_room_core::telemetry::MucTelemetry<'_> {
@@ -475,14 +474,18 @@ impl MucHost for AppState {
         after: &SerializableMucOccupant,
         id: Option<&str>,
     ) -> Result<()> {
-        AppState::publish_muc_cluster_nickname_change(self, room, before, after, id).await
+        self.cluster()
+            .publish_muc_cluster_nickname_change(room, before, after, id)
+            .await
     }
 
     async fn publish_muc_cluster_presence(
         &self,
         publication: MucPresencePublication<'_>,
     ) -> Result<()> {
-        AppState::publish_muc_cluster_presence(self, publication).await
+        self.cluster()
+            .publish_muc_cluster_presence(publication)
+            .await
     }
 
     async fn publish_muc_cluster_presence_with_id(
@@ -493,15 +496,9 @@ impl MucHost for AppState {
         created: bool,
         id: Option<&str>,
     ) -> Result<()> {
-        AppState::publish_muc_cluster_presence_with_id(
-            self,
-            room,
-            occupant,
-            unavailable,
-            created,
-            id,
-        )
-        .await
+        self.cluster()
+            .publish_muc_cluster_presence_with_id(room, occupant, unavailable, created, id)
+            .await
     }
 
     async fn publish_muc_cluster_private_message(
@@ -511,7 +508,9 @@ impl MucHost for AppState {
         stanza: &str,
         real_sender: &str,
     ) -> Result<()> {
-        AppState::publish_muc_cluster_private_message(self, room, nick, stanza, real_sender).await
+        self.cluster()
+            .publish_muc_cluster_private_message(room, nick, stanza, real_sender)
+            .await
     }
 
     async fn publish_muc_cluster_stanza(
@@ -520,7 +519,9 @@ impl MucHost for AppState {
         stanza: &str,
         real_sender: Option<&str>,
     ) -> Result<()> {
-        AppState::publish_muc_cluster_stanza(self, room, stanza, real_sender).await
+        self.cluster()
+            .publish_muc_cluster_stanza(room, stanza, real_sender)
+            .await
     }
 
     fn rebind_local_federated_muc_occupant_exact(
@@ -532,7 +533,8 @@ impl MucHost for AppState {
     }
 
     fn record_muc_cluster_control_plane_failure(&self, error: &anyhow::Error) {
-        AppState::record_muc_cluster_control_plane_failure(self, error)
+        self.cluster()
+            .record_muc_cluster_control_plane_failure(error)
     }
 
     fn refresh_local_muc_policy_exact(
@@ -558,11 +560,13 @@ impl MucHost for AppState {
         nick: &str,
         json: &str,
     ) -> Result<bool> {
-        AppState::register_cluster_muc_occupant(self, room, nick, json).await
+        self.cluster()
+            .register_cluster_muc_occupant(room, nick, json)
+            .await
     }
 
     async fn remove_exact_muc_soft_state(&self, occupant: &MucOccupant) -> Result<bool> {
-        AppState::remove_exact_muc_soft_state(self, occupant).await
+        self.cluster().remove_exact_muc_soft_state(occupant).await
     }
 
     fn remove_live_muc_membership(&self, occupant: &SerializableMucOccupant) -> bool {
@@ -585,16 +589,16 @@ impl MucHost for AppState {
         old_json: &str,
         new_json: &str,
     ) -> Result<MucRename> {
-        AppState::rename_cluster_muc_occupant_exact(
-            self,
-            room,
-            old_nick,
-            new_nick,
-            expected_epoch,
-            old_json,
-            new_json,
-        )
-        .await
+        self.cluster()
+            .rename_cluster_muc_occupant_exact(
+                room,
+                old_nick,
+                new_nick,
+                expected_epoch,
+                old_json,
+                new_json,
+            )
+            .await
     }
 
     async fn revoke_cluster_muc_occupant_exact(
@@ -604,7 +608,8 @@ impl MucHost for AppState {
         actor_nick: Option<&str>,
         reason: Option<&str>,
     ) -> Result<bool> {
-        AppState::revoke_cluster_muc_occupant_exact(self, occupant, status, actor_nick, reason)
+        self.cluster()
+            .revoke_cluster_muc_occupant_exact(occupant, status, actor_nick, reason)
             .await
     }
 
@@ -614,7 +619,8 @@ impl MucHost for AppState {
         stanza: &str,
         delivery: Option<DurableDelivery>,
     ) -> Option<FederatedMucAccountRoute> {
-        AppState::route_federated_muc_account_message_remote(self, target_jid, stanza, delivery)
+        self.cluster()
+            .route_federated_muc_account_message_remote(target_jid, stanza, delivery)
             .await
     }
 

@@ -129,7 +129,7 @@ export function verifyFederatedRouteBoundaries(sources) {
   requireMatch(compactBody('route_available_remote'), /self\.0\.route_s2s_message_to_available_remote_resources\(jid,stanza,delivery\)\.await/, 'S2S fanout must use its federation remote adapter');
   requireMatch(compactBody('route_remote_primary'), /self\.0\.route_s2s_message_to_remote_primary\(jid,stanza,delivery\)\.await/, 'S2S primary must use its federation remote adapter');
   const primary = hostBody('route_s2s_message_to_remote_primary');
-  requireMatch(primary, /AppState::route_s2s_message_to_remote_primary\(self,jid,stanza,delivery\)\.await/, 'S2S primary must use its federation remote adapter');
+  requireMatch(primary, /self\.cluster\(\)\.route_s2s_message_to_remote_primary\(jid,stanza,delivery,&self\.personal_message_telemetry\(\),?\)\.await/, 'S2S primary must use its federation remote adapter');
   requireMatch(primary, /delivered:routed\.delivered,accepted_full_jid:routed\.accepted_full_jid,/, 'S2S remote receipt must preserve acceptance and Carbon exclusion');
   requireMatch(compactBody('rearm_direct_route'), /DirectMessageRoutePort::rearm_direct_route\(self\.0,delivery\)\.await;/, 'S2S rearm must retain the exact delivery claim');
   return { caller: 'route_inbound_message', owner: 'route_federated', adapter: 'FederatedDirectRoute' };

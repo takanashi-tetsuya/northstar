@@ -3707,7 +3707,9 @@ if (!passkeyFinishSource.includes('State(state): State<PasskeyLoginFinishContext
 }
 const presenceProtocol = readProductionModule('src/xmpp/protocol/presence.rs', { root });
 const presenceClusterRouting = read('src/state/presence_cluster_routing.rs');
+const presenceDelivery = read('src/state/presence_delivery.rs');
 if (/\bself\.(?:state|host)\s*\.metrics\b/.test(presenceProtocol)
+    || /\bself\s*\.\s*metrics\b/.test(presenceDelivery)
     || countMatches(presenceClusterRouting, /presence_probe_telemetry\(\)\.failed\(\)/g) !== 2) {
   throw new Error('cross-node presence replay failures must use their one-counter telemetry port');
 }

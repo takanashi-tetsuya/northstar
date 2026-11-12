@@ -1,25 +1,29 @@
 use super::{Action, ProtocolSession};
 use crate::xmpp::protocol::SessionHost;
-use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
+use northstar_mix_xmpp::ports::MixHost;
+use northstar_muc_xmpp::ports::MucHost;
+use northstar_pubsub_xmpp::pubsub::PubSubHost;
 use northstar_roster_application::presence::{PresenceRepository, PresenceService};
-use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_roster_core::PresenceAccount;
 use northstar_roster_xmpp::presence::{
     announced_priority, announced_show, broadcast_presence, deliver_service_messages,
     directed_presence_gate, inject_vcard_avatar_hash, route_directed_presence, PresenceGate,
 };
-use northstar_xml_builder::rewrite::set_to;
+use northstar_roster_xmpp::RosterSessionHost;
+use northstar_stream::outbound::OutboundSender;
 use northstar_xml_builder::stanza::stanza_error;
 use roxmltree::Node;
 use std::sync::{atomic::Ordering, Arc};
 
-mod availability;
 mod session;
 
 pub(crate) use northstar_presence_core::directed_recipient_matches;
 
-impl ProtocolSession {
+impl<
+        H: SessionHost + RosterSessionHost + MixHost + MucHost<Outbound = OutboundSender> + PubSubHost,
+    > ProtocolSession<H>
+{
     pub(crate) async fn presence(&mut self, root: Node<'_, '_>, raw: &str) -> Result<Action> {
         if self.authenticated.is_none() {
             return Ok(Action::Send(stanza_error(root, "auth", "not-authorized")));
@@ -153,7 +157,11 @@ impl ProtocolSession {
             let generation = self.presence.availability_generation.clone();
             let recipient_id = user.id;
             let full_jid = from.clone();
-            let account = format!("{}@{}", user.username, self.host.local_domain());
+            let account = format!(
+                "{}@{}",
+                user.username,
+                SessionHost::local_domain(&*self.host)
+            );
             let bind2_mam_catchup = self.bind2_mam_catchup;
             let include_offline = priority >= 0 && !bind2_mam_catchup;
             self.defer_after_transport("available-offline-replay", async move {

@@ -200,6 +200,137 @@ impl RosterSessionHost for AppState {
         }
         current_push
     }
+
+    fn presence_component_domain(&self, domain: &str) -> bool {
+        self.xmpp_component_domain_configured(domain)
+    }
+
+    async fn deliver_directed_presence(
+        &self,
+        to: &str,
+        canonical_to: &str,
+        from: &str,
+        stanza: &str,
+        bare_target: bool,
+    ) -> Result<bool> {
+        AppState::deliver_directed_presence(self, to, canonical_to, from, stanza, bare_target).await
+    }
+
+    async fn deliver_subscription_presence(
+        &self,
+        owner: &PresenceAccount,
+        recipient: &PresenceAccount,
+        owner_bare: &str,
+        recipient_bare: &str,
+        stanza: &str,
+    ) -> Result<()> {
+        AppState::deliver_subscription_presence(
+            self,
+            owner,
+            recipient,
+            owner_bare,
+            recipient_bare,
+            stanza,
+        )
+        .await
+    }
+
+    async fn deliver_subscription_approval(
+        &self,
+        owner: &PresenceAccount,
+        recipient: &PresenceAccount,
+        owner_bare: &str,
+        recipient_bare: &str,
+        approved: &str,
+        skip_full: Option<&str>,
+    ) -> Result<()> {
+        AppState::deliver_subscription_approval(
+            self,
+            owner,
+            recipient,
+            owner_bare,
+            recipient_bare,
+            approved,
+            skip_full,
+        )
+        .await
+    }
+
+    async fn deliver_contact_presence(
+        &self,
+        contact: &str,
+        from: &str,
+        stanza: &str,
+    ) -> Result<()> {
+        AppState::deliver_contact_presence(self, contact, from, stanza).await
+    }
+
+    async fn echo_account_presence(&self, account: &str, from: &str, stanza: &str) {
+        AppState::echo_account_presence(self, account, from, stanza).await
+    }
+
+    async fn deliver_directed_unavailable(
+        &self,
+        target: &str,
+        bare_target: bool,
+        from: &str,
+        stanza: &str,
+    ) {
+        AppState::deliver_directed_unavailable(self, target, bare_target, from, stanza).await
+    }
+
+    fn account_has_available_resource(&self, bare: &str) -> bool {
+        AppState::account_has_available_resource(self, bare)
+    }
+
+    async fn probe_has_remote_owner(&self, bare: &str) -> Result<bool> {
+        self.presence_probe_has_remote_owner(bare).await
+    }
+
+    fn directed_presence_recipient(&self, owner_full: &str, requester: &str) -> bool {
+        AppState::directed_presence_recipient(self, owner_full, requester)
+    }
+
+    async fn answer_full_presence_probe(
+        &self,
+        owner_full: &str,
+        owner_bare: &str,
+        requester: &str,
+        probe_id: Option<&str>,
+    ) -> Result<Option<String>> {
+        AppState::answer_full_presence_probe(self, owner_full, owner_bare, requester, probe_id)
+            .await
+    }
+
+    async fn send_current_presence(&self, owner: &str, recipient: &str) {
+        self.send_current_availability(owner, recipient).await
+    }
+
+    async fn send_current_presence_exact(
+        &self,
+        owner: &PresenceAccount,
+        recipient: &PresenceAccount,
+        owner_bare: &str,
+        recipient_bare: &str,
+    ) {
+        self.send_current_availability_exact(
+            owner_bare,
+            owner.id,
+            owner.auth_generation,
+            recipient_bare,
+            recipient.id,
+            recipient.auth_generation,
+        )
+        .await
+    }
+
+    async fn full_presence_target_routed(&self, full_jid: &str) -> bool {
+        self.subscription_full_target_has_route(full_jid).await
+    }
+
+    async fn notify_offline_account(&self, user_id: Uuid) -> Result<()> {
+        self.dispatch_push_notification(user_id).await
+    }
 }
 
 async fn deliver_roster_removal_presence(

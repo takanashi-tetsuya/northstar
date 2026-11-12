@@ -84,4 +84,92 @@ pub trait RosterSessionHost: Send + Sync {
         base: &str,
         current_connection: Uuid,
     ) -> impl Future<Output = Option<String>> + Send;
+    /// Whether `domain` is a configured external component's domain.
+    fn presence_component_domain(&self, domain: &str) -> bool;
+    /// Delivers directed presence from `from` to `to` on every node: the matching local sessions that the
+    /// recipient's privacy lists allow, then the other cluster nodes. A bare target reaches only available
+    /// resources. Returns whether any route took the stanza.
+    fn deliver_directed_presence(
+        &self,
+        to: &str,
+        canonical_to: &str,
+        from: &str,
+        stanza: &str,
+        bare_target: bool,
+    ) -> impl Future<Output = Result<bool>> + Send;
+    /// Delivers subscription-related presence of `owner` to the available resources of `recipient` on every node.
+    fn deliver_subscription_presence(
+        &self,
+        owner: &PresenceAccount,
+        recipient: &PresenceAccount,
+        owner_bare: &str,
+        recipient_bare: &str,
+        stanza: &str,
+    ) -> impl Future<Output = Result<()>> + Send;
+    /// Delivers a subscription approval to the available resources of `recipient` on every node, except the local
+    /// resource `skip_full`.
+    fn deliver_subscription_approval(
+        &self,
+        owner: &PresenceAccount,
+        recipient: &PresenceAccount,
+        owner_bare: &str,
+        recipient_bare: &str,
+        approved: &str,
+        skip_full: Option<&str>,
+    ) -> impl Future<Output = Result<()>> + Send;
+    /// Delivers broadcast presence from `from` to the available resources of `contact` on every node.
+    fn deliver_contact_presence(
+        &self,
+        contact: &str,
+        from: &str,
+        stanza: &str,
+    ) -> impl Future<Output = Result<()>> + Send;
+    /// Echoes broadcast presence to the resources of the sender's own account on every node.
+    fn echo_account_presence(
+        &self,
+        account: &str,
+        from: &str,
+        stanza: &str,
+    ) -> impl Future<Output = ()> + Send;
+    /// Delivers directed unavailable presence to the local sessions of `target`.
+    fn deliver_directed_unavailable(
+        &self,
+        target: &str,
+        bare_target: bool,
+        from: &str,
+        stanza: &str,
+    ) -> impl Future<Output = ()> + Send;
+    /// Whether a local resource of `bare` is available.
+    fn account_has_available_resource(&self, bare: &str) -> bool;
+    /// Whether another cluster node owns an available resource of `bare` that a probe must ask.
+    fn probe_has_remote_owner(&self, bare: &str) -> impl Future<Output = Result<bool>> + Send;
+    /// Whether the local resource `owner_full` sent directed presence to `requester`.
+    fn directed_presence_recipient(&self, owner_full: &str, requester: &str) -> bool;
+    /// Answers an authorized full-JID presence probe from `requester`. Returns the stanza to send back to the
+    /// requester's session, or `None` when nothing is to be sent there (privacy, or another node answers).
+    fn answer_full_presence_probe(
+        &self,
+        owner_full: &str,
+        owner_bare: &str,
+        requester: &str,
+        probe_id: Option<&str>,
+    ) -> impl Future<Output = Result<Option<String>>> + Send;
+    /// Sends the current presence of `owner` to the available resources of `recipient`, on every node.
+    fn send_current_presence(
+        &self,
+        owner: &str,
+        recipient: &str,
+    ) -> impl Future<Output = ()> + Send;
+    /// Sends the current presence of the exact account `owner` to the exact account `recipient`, on every node.
+    fn send_current_presence_exact(
+        &self,
+        owner: &PresenceAccount,
+        recipient: &PresenceAccount,
+        owner_bare: &str,
+        recipient_bare: &str,
+    ) -> impl Future<Output = ()> + Send;
+    /// Whether some node holds a route for the full JID `full_jid`.
+    fn full_presence_target_routed(&self, full_jid: &str) -> impl Future<Output = bool> + Send;
+    /// Dispatches the push notification of an offline account.
+    fn notify_offline_account(&self, user_id: Uuid) -> impl Future<Output = Result<()>> + Send;
 }

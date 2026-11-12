@@ -1272,20 +1272,20 @@ async fn postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe() {
     let suffix = marker.simple().to_string();
     let function_name = format!("test_message_admission_fail_{suffix}");
     let trigger_name = format!("test_message_admission_trigger_{suffix}");
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE FUNCTION {function_name}() RETURNS TRIGGER AS $$
          BEGIN RAISE EXCEPTION 'injected message admission commit failure'; END;
          $$ LANGUAGE plpgsql"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE CONSTRAINT TRIGGER {trigger_name}
          AFTER INSERT ON abuse_message_admissions
          DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
          EXECUTE FUNCTION {function_name}()"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
@@ -1321,16 +1321,18 @@ async fn postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe() {
         .unwrap(),
         sequence_before_rollback
     );
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "DROP TRIGGER {trigger_name} ON abuse_message_admissions"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query(&format!("DROP FUNCTION {function_name}()"))
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP FUNCTION {function_name}()"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
     assert!(matches!(
         restarted
             .begin_message_admission(&rollback_request)

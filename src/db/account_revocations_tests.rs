@@ -14,7 +14,7 @@ async fn committed_revocations_survive_lost_wakes_and_stale_acknowledgements() {
         .await
         .unwrap();
     let schema = format!("northstar_revocations_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -178,7 +178,7 @@ async fn committed_revocations_survive_lost_wakes_and_stale_acknowledgements() {
     assert_eq!(remaining, 0);
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();

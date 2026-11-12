@@ -175,7 +175,7 @@ pub async fn root_disco_page(
                 ORDER BY node {order} LIMIT $3
            ) page ON TRUE"
     );
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
         .bind(requester)
         .bind(cursor)
         .bind(limit.clamp(0, 1_000))

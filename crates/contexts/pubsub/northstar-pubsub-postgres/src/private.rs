@@ -326,7 +326,7 @@ mod tests {
             .await
             .unwrap();
         let schema = format!("xmpp_test_private_{}", Uuid::new_v4().simple());
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
@@ -336,7 +336,9 @@ mod tests {
             .after_connect(move |connection, _| {
                 let statement = format!("SET search_path TO {connection_schema}");
                 Box::pin(async move {
-                    sqlx::query(&statement).execute(connection).await?;
+                    sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                        .execute(connection)
+                        .await?;
                     Ok(())
                 })
             })
@@ -546,7 +548,7 @@ mod tests {
             .await
             .unwrap();
         pool.close().await;
-        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
             .execute(&admin)
             .await
             .unwrap();

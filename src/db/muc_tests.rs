@@ -41,20 +41,20 @@ async fn create_harness_owned_schema(admin: &sqlx::PgPool, schema: &str) {
     let owner_token = Uuid::new_v4().simple().to_string();
     register_isolated_schema_for_harness(schema, &owner_token);
     let mut transaction = admin.begin().await.unwrap();
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&mut *transaction)
         .await
         .unwrap();
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE TABLE {schema}.northstar_test_schema_guard \
          (singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK(singleton), token TEXT NOT NULL)"
-    ))
+    )))
     .execute(&mut *transaction)
     .await
     .unwrap();
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO {schema}.northstar_test_schema_guard(token) VALUES($1)"
-    ))
+    )))
     .bind(owner_token)
     .execute(&mut *transaction)
     .await
@@ -155,7 +155,9 @@ async fn locked_room_configuration_is_atomic_restart_safe_and_bounded() {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -209,7 +211,9 @@ async fn locked_room_configuration_is_atomic_restart_safe_and_bounded() {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {restart_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -415,7 +419,7 @@ async fn locked_room_configuration_is_atomic_restart_safe_and_bounded() {
     assert!(muc_room(&restarted, "expired").await.unwrap().is_none());
 
     restarted.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();
@@ -443,7 +447,9 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -765,7 +771,7 @@ async fn durable_invitation_admission_is_atomic_under_injected_failures() {
     .unwrap());
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();
@@ -792,7 +798,9 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -2275,7 +2283,7 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
     );
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();

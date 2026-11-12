@@ -66,7 +66,7 @@ pub async fn authorized_mix_access_entries(
     let statement = format!(
         "SELECT jid_pattern FROM {table} WHERE channel_id=$1 ORDER BY jid_pattern LIMIT $2"
     );
-    let entries = sqlx::query_scalar(&statement)
+    let entries = sqlx::query_scalar(sqlx::AssertSqlSafe(statement.as_str()))
         .bind(channel_id)
         .bind(limit.clamp(1, 500))
         .fetch_all(&mut *transaction)

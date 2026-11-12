@@ -20,7 +20,7 @@ northstar-telemetry = { path = "../../../platform/northstar-telemetry" }
 northstar-xep-0060 = { path = "../../../kernel/northstar-xep-0060" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 serde = { version = "1.0", features = ["derive"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
 thiserror = "2.0"
 tokio = { version = "1.43", features = ["rt", "sync", "time"] }
 uuid = { version = "1.12", features = ["v4"] }

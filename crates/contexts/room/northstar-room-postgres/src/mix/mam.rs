@@ -22,7 +22,7 @@ pub async fn mix_mam_blocked_patterns(
 }
 
 pub fn push_mix_mam_archive_base(
-    query_builder: &mut QueryBuilder<'_, Postgres>,
+    query_builder: &mut QueryBuilder<Postgres>,
     channel_id: Uuid,
     blocked_patterns: &[MamBlockedPattern],
 ) {
@@ -49,7 +49,7 @@ pub fn push_mix_mam_archive_base(
 }
 
 pub fn push_mix_mam_scope(
-    query_builder: &mut QueryBuilder<'_, Postgres>,
+    query_builder: &mut QueryBuilder<Postgres>,
     channel_id: Uuid,
     query: &northstar_archive_core::MamArchiveQuery,
     blocked_patterns: &[MamBlockedPattern],

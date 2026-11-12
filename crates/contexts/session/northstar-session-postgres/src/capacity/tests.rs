@@ -406,7 +406,7 @@ async fn postgres_capacity_audit_compares_complete_entity_and_counter_sets() {
     // PostgreSQL does not resolve functions through pg_temp; install only
     // this raising signature in a unique rollback-only helper schema.
     let helper_schema = format!("capacity_audit_helper_{}", Uuid::new_v4().simple());
-    sqlx::raw_sql(&format!(
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "CREATE SCHEMA {helper_schema};
              CREATE FUNCTION {helper_schema}.northstar_session_recovery_retention(
                  requested_lease UUID,observed_at TIMESTAMPTZ
@@ -417,7 +417,7 @@ async fn postgres_capacity_audit_compares_complete_entity_and_counter_sets() {
              END;
              $audit_retention$;
              SET LOCAL search_path=pg_temp,pg_catalog,{helper_schema};"
-    ))
+    )))
     .execute(&mut *tx)
     .await
     .unwrap();
@@ -578,7 +578,7 @@ async fn postgres_capacity_fixture_is_atomic_leased_and_idempotent() {
         .await
         .unwrap();
     let schema = format!("capacity_test_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -588,7 +588,9 @@ async fn postgres_capacity_fixture_is_atomic_leased_and_idempotent() {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -794,7 +796,7 @@ async fn postgres_capacity_fixture_is_atomic_leased_and_idempotent() {
     assert_eq!(final_snapshot.accounts_used, 0);
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();

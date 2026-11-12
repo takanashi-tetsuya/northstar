@@ -16,7 +16,7 @@ async fn ceremonies_are_single_use_and_key_removal_fences_sessions() {
         .await
         .unwrap();
     let schema = format!("northstar_passkeys_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -264,7 +264,7 @@ async fn ceremonies_are_single_use_and_key_removal_fences_sessions() {
     tx.rollback().await.unwrap();
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();

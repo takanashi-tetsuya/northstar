@@ -63,7 +63,7 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
         .await
         .unwrap();
     let schema = format!("s2s_recovery_integration_{}", uuid::Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -74,7 +74,9 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -366,7 +368,7 @@ async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_co
         );
     }
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();

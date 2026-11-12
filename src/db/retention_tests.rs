@@ -124,7 +124,7 @@ async fn insert_user(pool: &PgPool, prefix: &str) -> Uuid {
 
 async fn count(pool: &PgPool, table: &str, owner_column: &str, owner: Uuid) -> i64 {
     let sql = format!("SELECT COUNT(*) FROM {table} WHERE {owner_column}=$1");
-    sqlx::query_scalar(&sql)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql.as_str()))
         .bind(owner)
         .fetch_one(pool)
         .await

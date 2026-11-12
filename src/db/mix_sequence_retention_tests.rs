@@ -22,7 +22,7 @@ async fn sequence_gc_preserves_a_producer_committed_after_its_snapshot() -> Resu
     let url = std::env::var("TEST_DATABASE_URL")?;
     let owner = PgPool::connect(&url).await?;
     let schema = format!("sequence_gc_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&owner)
         .await?;
     let writer = fixture_pool(&url, &schema, "northstar-sequence-gc-writer").await?;
@@ -80,7 +80,7 @@ async fn sequence_gc_preserves_a_producer_committed_after_its_snapshot() -> Resu
             sqlx::query("UPDATE authority_rows SET next_sequence=3 WHERE recipient_jid='recipient@example.test'")
                 .execute(&mut *producer)
                 .await?;
-            sqlx::query(&format!("INSERT INTO {destination} VALUES('recipient@example.test')"))
+            sqlx::query(sqlx::AssertSqlSafe(format!("INSERT INTO {destination} VALUES('recipient@example.test')")))
                 .execute(&mut *producer)
                 .await?;
             producer.commit().await?;
@@ -94,7 +94,7 @@ async fn sequence_gc_preserves_a_producer_committed_after_its_snapshot() -> Resu
             anyhow::ensure!(sequence == Some(3), "GC deleted a committed {destination} authority");
             // Retention still removes an authority once its last durable
             // dependency disappears; keeping every authority is not a fix.
-            sqlx::query(&format!("DELETE FROM {destination}"))
+            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {destination}")))
                 .execute(&writer)
                 .await?;
             prune_empty_mix_delivery_sequences(&collector, 1).await?;
@@ -123,7 +123,7 @@ async fn sequence_gc_preserves_a_producer_committed_after_its_snapshot() -> Resu
     }.await;
     collector.close().await;
     writer.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&owner)
         .await?;
     owner.close().await;
@@ -136,7 +136,7 @@ async fn event_gc_preserves_a_requeue_committed_after_its_snapshot() -> Result<(
     let url = std::env::var("TEST_DATABASE_URL")?;
     let owner = PgPool::connect(&url).await?;
     let schema = format!("event_gc_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&owner)
         .await?;
     let writer = fixture_pool(&url, &schema, "northstar-event-gc-writer").await?;
@@ -193,7 +193,7 @@ async fn event_gc_preserves_a_requeue_committed_after_its_snapshot() -> Result<(
     }.await;
     collector.close().await;
     writer.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&owner)
         .await?;
     owner.close().await;
@@ -206,7 +206,7 @@ async fn empty_delivery_claim_avoids_the_event_lock_and_recovers_after_insert() 
     let url = std::env::var("TEST_DATABASE_URL")?;
     let owner = PgPool::connect(&url).await?;
     let schema = format!("empty_claim_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&owner)
         .await?;
     let pool = fixture_pool(&url, &schema, "northstar-empty-claim-test").await?;
@@ -240,7 +240,7 @@ async fn empty_delivery_claim_avoids_the_event_lock_and_recovers_after_insert() 
     }
     .await;
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&owner)
         .await?;
     owner.close().await;
@@ -253,7 +253,7 @@ async fn empty_delivery_claim_preserves_database_authority_errors() -> Result<()
     let url = std::env::var("TEST_DATABASE_URL")?;
     let owner = PgPool::connect(&url).await?;
     let schema = format!("claim_authority_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&owner)
         .await?;
     // Pin the session whose read-only mode and role we temporarily change.
@@ -276,9 +276,9 @@ async fn empty_delivery_claim_preserves_database_authority_errors() -> Result<()
         assert_claim_sqlstate(read_only, "25006")?;
         anyhow::ensure!(claim_mix_deliveries(&pool, 1, 65_536).await?.is_empty());
 
-        sqlx::query(&format!("GRANT USAGE ON SCHEMA {schema} TO pg_monitor"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("GRANT USAGE ON SCHEMA {schema} TO pg_monitor")))
             .execute(&pool).await?;
-        sqlx::query(&format!("GRANT SELECT ON ALL TABLES IN SCHEMA {schema} TO pg_monitor"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("GRANT SELECT ON ALL TABLES IN SCHEMA {schema} TO pg_monitor")))
             .execute(&pool).await?;
         assert_claim_sqlstate(claim_as_monitor(&pool).await?, "42501")?;
 
@@ -300,7 +300,7 @@ async fn empty_delivery_claim_preserves_database_authority_errors() -> Result<()
         Ok(())
     }.await;
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&owner)
         .await?;
     owner.close().await;

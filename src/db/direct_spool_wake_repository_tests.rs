@@ -20,7 +20,7 @@ async fn direct_spool_wake_commit_ack_takeover_and_cleanup_are_fenced() {
         .await
         .unwrap();
     let schema = format!("direct_spool_test_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -31,7 +31,9 @@ async fn direct_spool_wake_commit_ack_takeover_and_cleanup_are_fenced() {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -662,7 +664,7 @@ async fn direct_spool_wake_commit_ack_takeover_and_cleanup_are_fenced() {
     over_capacity.rollback().await.unwrap();
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();

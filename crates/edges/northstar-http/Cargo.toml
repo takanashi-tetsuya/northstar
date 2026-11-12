@@ -48,7 +48,7 @@ zeroize = "1.8"
 
 [dev-dependencies]
 northstar-auth-postgres = { path = "../../contexts/auth/northstar-auth-postgres" }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
 northstar-abuse-application = { path = "../../contexts/abuse/northstar-abuse-application", features = ["test-support"] }
 northstar-abuse-policy = { path = "../../contexts/abuse/northstar-abuse-policy", features = ["test-support"] }
 northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application", features = ["test-support"] }

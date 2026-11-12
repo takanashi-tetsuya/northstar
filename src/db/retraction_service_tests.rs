@@ -30,7 +30,7 @@ async fn isolated_pool() -> (PgPool, PgPool, String) {
         .unwrap();
     let schema = format!("retraction_service_test_{}", Uuid::new_v4().simple());
     eprintln!("isolated_schema={schema}");
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -41,7 +41,9 @@ async fn isolated_pool() -> (PgPool, PgPool, String) {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -619,7 +621,7 @@ async fn c2s_projection_is_atomic_idempotent_and_retains_replay_intent() {
     assert_eq!((failure_rollback.1, failure_rollback.2), (0, 0));
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();
@@ -1374,7 +1376,7 @@ async fn exact_replay_conflict_and_outbox_failure_are_atomic() {
     );
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();
@@ -1428,7 +1430,7 @@ async fn personal_retraction_is_author_scoped_unambiguous_and_atomic() {
         .unwrap();
     let schema = format!("modern_retraction_test_{}", Uuid::new_v4().simple());
     eprintln!("isolated_schema={schema}");
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -1439,7 +1441,9 @@ async fn personal_retraction_is_author_scoped_unambiguous_and_atomic() {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -1690,7 +1694,7 @@ async fn personal_retraction_is_author_scoped_unambiguous_and_atomic() {
     assert_eq!(leaked_action, 0);
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();

@@ -101,7 +101,7 @@ async fn personal_message_admission_accepts_maximum_scope_with_bounded_identity_
         .await
         .unwrap();
     let schema = format!("history_identity_test_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -113,7 +113,9 @@ async fn personal_message_admission_accepts_maximum_scope_with_bounded_identity_
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -169,7 +171,7 @@ async fn personal_message_admission_accepts_maximum_scope_with_bounded_identity_
     );
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();
@@ -187,7 +189,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         .await
         .unwrap();
     let schema = format!("history_identity_test_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -199,7 +201,9 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -1031,7 +1035,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
     );
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();
@@ -1049,7 +1053,7 @@ async fn mix_source_dedupe_and_mam_visibility_share_one_snapshot_scope() {
         .await
         .unwrap();
     let schema = format!("history_identity_test_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -1064,7 +1068,9 @@ async fn mix_source_dedupe_and_mam_visibility_share_one_snapshot_scope() {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -1932,7 +1938,7 @@ async fn mix_source_dedupe_and_mam_visibility_share_one_snapshot_scope() {
     assert_eq!(stored_authority, authoritative_id);
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();

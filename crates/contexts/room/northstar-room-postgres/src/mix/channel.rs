@@ -387,9 +387,9 @@ pub async fn discoverable_mix_channel_page(
         .as_deref()
         .or(before.as_ref().and_then(|v| v.as_deref()))
     {
-        let exists: bool = sqlx::query_scalar(&format!(
+        let exists: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT EXISTS(SELECT 1 FROM mix_channels c WHERE {visible} AND c.localpart = $4)"
-        ))
+        )))
         .bind(&service_domain)
         .bind(&requester)
         .bind(&requester_domain)
@@ -401,9 +401,9 @@ pub async fn discoverable_mix_channel_page(
             return Ok(None);
         }
     }
-    let total: i64 = sqlx::query_scalar(&format!(
+    let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT COUNT(*) FROM mix_channels c WHERE {visible}"
-    ))
+    )))
     .bind(&service_domain)
     .bind(&requester)
     .bind(&requester_domain)
@@ -411,9 +411,9 @@ pub async fn discoverable_mix_channel_page(
     .await?;
     let max = max.clamp(0, 100);
     let rows = if let Some(after) = after.as_deref() {
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT c.* FROM mix_channels c WHERE {visible} AND c.localpart > $4 ORDER BY c.localpart ASC LIMIT $5"
-        ))
+        )))
         .bind(&service_domain)
         .bind(&requester)
         .bind(&requester_domain)
@@ -422,9 +422,9 @@ pub async fn discoverable_mix_channel_page(
         .fetch_all(&mut *transaction)
         .await?
     } else if let Some(before) = before.as_ref() {
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT c.* FROM mix_channels c WHERE {visible} AND ($4::text IS NULL OR c.localpart < $4) ORDER BY c.localpart DESC LIMIT $5"
-        ))
+        )))
         .bind(&service_domain)
         .bind(&requester)
         .bind(&requester_domain)
@@ -433,9 +433,9 @@ pub async fn discoverable_mix_channel_page(
         .fetch_all(&mut *transaction)
         .await?
     } else {
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT c.* FROM mix_channels c WHERE {visible} ORDER BY c.localpart ASC LIMIT $4"
-        ))
+        )))
         .bind(&service_domain)
         .bind(&requester)
         .bind(&requester_domain)
@@ -451,9 +451,9 @@ pub async fn discoverable_mix_channel_page(
         channels.reverse();
     }
     let first_index = if let Some(first) = channels.first() {
-        sqlx::query_scalar(&format!(
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT COUNT(*) FROM mix_channels c WHERE {visible} AND c.localpart < $4"
-        ))
+        )))
         .bind(&service_domain)
         .bind(&requester)
         .bind(&requester_domain)

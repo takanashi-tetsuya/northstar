@@ -101,19 +101,22 @@ impl PostgresConfig {
                 Box::pin(async move {
                     // SET LOCAL cannot be used in after_connect: these are
                     // connection defaults and every request may open a new tx.
-                    sqlx::query(&format!(
+                    sqlx::query(sqlx::AssertSqlSafe(format!(
                         "SET SESSION statement_timeout = '{}ms'",
                         statement_timeout
-                    ))
+                    )))
                     .execute(&mut *connection)
                     .await?;
-                    sqlx::query(&format!("SET SESSION lock_timeout = '{}ms'", lock_timeout))
-                        .execute(&mut *connection)
-                        .await?;
-                    sqlx::query(&format!(
+                    sqlx::query(sqlx::AssertSqlSafe(format!(
+                        "SET SESSION lock_timeout = '{}ms'",
+                        lock_timeout
+                    )))
+                    .execute(&mut *connection)
+                    .await?;
+                    sqlx::query(sqlx::AssertSqlSafe(format!(
                         "SET SESSION idle_in_transaction_session_timeout = '{}ms'",
                         idle_timeout
-                    ))
+                    )))
                     .execute(&mut *connection)
                     .await?;
                     Ok(())
@@ -289,7 +292,9 @@ pub async fn begin_transaction<'a>(
         ""
     };
     let statement = format!("SET TRANSACTION ISOLATION LEVEL {isolation} {mode}{deferrable}");
-    sqlx::query(&statement).execute(&mut *tx).await?;
+    sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+        .execute(&mut *tx)
+        .await?;
     Ok(tx)
 }
 

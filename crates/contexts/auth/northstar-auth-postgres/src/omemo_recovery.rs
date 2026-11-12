@@ -109,7 +109,7 @@ async fn transfer_for_update(
         "SELECT {TRANSFER_COLUMNS} FROM omemo_recovery_transfers \
          WHERE id=$1 AND user_id=$2 FOR UPDATE"
     );
-    sqlx::query(&query)
+    sqlx::query(sqlx::AssertSqlSafe(query.as_str()))
         .bind(transfer_id)
         .bind(user_id)
         .fetch_optional(&mut **tx)
@@ -226,9 +226,9 @@ pub async fn prepare_omemo_recovery_transfer(
 
     // Recheck after taking the per-account generation lock. Two uncertain
     // HTTP retries with the same transfer UUID must never allocate twice.
-    let any_existing = sqlx::query(&format!(
+    let any_existing = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {TRANSFER_COLUMNS} FROM omemo_recovery_transfers WHERE id=$1"
-    ))
+    )))
     .bind(transfer_id)
     .fetch_optional(&mut *tx)
     .await?;
@@ -315,14 +315,14 @@ pub async fn prepare_omemo_recovery_transfer(
     .await?;
     // Use one database timestamp for both columns. Independent clock_timestamp()
     // calls can put expiry a few microseconds past the seven-day CHECK bound.
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "WITH issued_at AS MATERIALIZED (SELECT clock_timestamp() AS value) \
          INSERT INTO omemo_recovery_transfers(\
              id,user_id,generation,source_device_id,state,created_at,expires_at) \
          SELECT $1,$2,$3,$4,'preparing',issued_at.value,\
                 issued_at.value+INTERVAL '7 days' FROM issued_at \
          RETURNING {TRANSFER_COLUMNS}"
-    ))
+    )))
     .bind(transfer_id)
     .bind(user_id)
     .bind(next_generation)
@@ -420,11 +420,11 @@ pub async fn seal_omemo_recovery_transfer(
         tx.rollback().await?;
         return Ok(SealOmemoRecovery::Conflict);
     }
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE omemo_recovery_transfers SET state='prepared',package_sha256=$3,\
                 prepared_at=clock_timestamp() \
          WHERE id=$1 AND user_id=$2 RETURNING {TRANSFER_COLUMNS}"
-    ))
+    )))
     .bind(transfer_id)
     .bind(user_id)
     .bind(package_sha256.as_slice())
@@ -560,11 +560,11 @@ pub async fn consume_omemo_recovery_transfer(
         .bind(consumed_auth_generation)
         .fetch_one(&mut *tx)
         .await?;
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE omemo_recovery_transfers SET state='consumed',consumer_commitment=$3,\
                 consumed_auth_generation=$4,consumed_at=clock_timestamp() \
          WHERE id=$1 AND user_id=$2 RETURNING {TRANSFER_COLUMNS}"
-    ))
+    )))
     .bind(transfer_id)
     .bind(user_id)
     .bind(consumer_commitment.as_slice())
@@ -716,10 +716,10 @@ pub(crate) async fn omemo_recovery_transfer_in_tx(
     user_id: Uuid,
     transfer_id: Uuid,
 ) -> Result<Option<OmemoRecoveryTransfer>> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {TRANSFER_COLUMNS} FROM omemo_recovery_transfers \
          WHERE id=$1 AND user_id=$2"
-    ))
+    )))
     .bind(transfer_id)
     .bind(user_id)
     .fetch_optional(&mut **tx)

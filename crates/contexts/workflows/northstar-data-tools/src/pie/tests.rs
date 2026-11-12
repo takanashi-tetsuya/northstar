@@ -495,10 +495,11 @@ async fn portable_data_roundtrip_conflicts_and_rollback_are_atomic() {
         ("pep_items", 1),
         ("message_archive", 1),
     ] {
-        let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let count: i64 =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(count, expected, "unexpected row count for {table}");
     }
     options.conflict = ConflictPolicy::Skip;

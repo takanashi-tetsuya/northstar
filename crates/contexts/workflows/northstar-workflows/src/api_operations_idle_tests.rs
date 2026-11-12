@@ -257,9 +257,9 @@ mod idle_regressions {
         .fetch_one(&mut **tx)
         .await
         .unwrap();
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "GRANT SELECT ({full_columns}) ON api_operation_journal TO CURRENT_USER"
-        ))
+        )))
         .execute(&mut **tx)
         .await
         .unwrap();
@@ -316,7 +316,7 @@ mod idle_regressions {
             for use_probe in [false, true] {
                 let mut tx = pool.begin().await.unwrap();
                 grant_only_empty_claim_columns(&mut tx).await;
-                sqlx::query(&mutation).execute(&mut *tx).await.unwrap();
+                sqlx::query(sqlx::AssertSqlSafe(mutation.as_str())).execute(&mut *tx).await.unwrap();
                 let result = if use_probe {
                     pending(&mut *tx).await.map(|_| ())
                 } else {

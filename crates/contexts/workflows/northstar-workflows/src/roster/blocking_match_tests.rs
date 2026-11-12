@@ -79,7 +79,7 @@ async fn blocking_is_atomic_bounded_and_indexed_in_postgresql() {
         .await
         .unwrap();
     let schema = format!("blocking_test_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -89,7 +89,9 @@ async fn blocking_is_atomic_bounded_and_indexed_in_postgresql() {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -256,7 +258,7 @@ async fn blocking_is_atomic_bounded_and_indexed_in_postgresql() {
     );
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();
@@ -274,7 +276,7 @@ async fn local_presence_transitions_are_atomic_and_preserve_pending_stanzas() {
         .await
         .unwrap();
     let schema = format!("local_presence_test_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -284,7 +286,9 @@ async fn local_presence_transitions_are_atomic_and_preserve_pending_stanzas() {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -446,15 +450,15 @@ async fn local_presence_transitions_are_atomic_and_preserve_pending_stanzas() {
     let before_version = get_roster_version(&pool, actor_id).await.unwrap();
     let function_name = format!("fail_roster_{}", &suffix[..12]);
     let trigger_name = format!("fail_roster_trigger_{}", &suffix[..12]);
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE FUNCTION {function_name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.owner_id = '{target_id}'::uuid THEN RAISE EXCEPTION 'forced second-side failure'; END IF; RETURN NEW; END $$"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE TRIGGER {trigger_name} BEFORE INSERT OR UPDATE ON roster_items FOR EACH ROW EXECUTE FUNCTION {function_name}()"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
@@ -481,21 +485,25 @@ async fn local_presence_transitions_are_atomic_and_preserve_pending_stanzas() {
             .2,
         "to"
     );
-    sqlx::query(&format!("DROP TRIGGER {trigger_name} ON roster_items"))
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query(&format!("DROP FUNCTION {function_name}()"))
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP TRIGGER {trigger_name} ON roster_items"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP FUNCTION {function_name}()"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query("DELETE FROM users WHERE id=ANY($1)")
         .bind(vec![actor_id, target_id])
         .execute(&pool)
         .await
         .unwrap();
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();
@@ -513,7 +521,7 @@ async fn roster_removal_settles_local_mutual_pending_and_federated_state_atomica
         .await
         .unwrap();
     let schema = format!("roster_remove_test_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -523,7 +531,9 @@ async fn roster_removal_settles_local_mutual_pending_and_federated_state_atomica
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -693,15 +703,15 @@ async fn roster_removal_settles_local_mutual_pending_and_federated_state_atomica
     // roster deletion, pending cleanup and version increment together.
     let function_name = format!("fail_remove_outbox_{suffix}");
     let trigger_name = format!("fail_remove_outbox_trigger_{suffix}");
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE FUNCTION {function_name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.stanza LIKE '%type=''unsubscribed''%' THEN RAISE EXCEPTION 'forced second cancellation failure'; END IF; RETURN NEW; END $$"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE TRIGGER {trigger_name} BEFORE INSERT ON s2s_outbox FOR EACH ROW EXECUTE FUNCTION {function_name}()"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
@@ -730,14 +740,18 @@ async fn roster_removal_settles_local_mutual_pending_and_federated_state_atomica
             .len(),
         1
     );
-    sqlx::query(&format!("DROP TRIGGER {trigger_name} ON s2s_outbox"))
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query(&format!("DROP FUNCTION {function_name}()"))
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP TRIGGER {trigger_name} ON s2s_outbox"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP FUNCTION {function_name}()"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let federated = remove_roster_item(&pool, owner_id, remote, remote_route)
         .await
@@ -769,7 +783,9 @@ async fn roster_removal_settles_local_mutual_pending_and_federated_state_atomica
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {restart_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -788,7 +804,7 @@ async fn roster_removal_settles_local_mutual_pending_and_federated_state_atomica
         .unwrap()
         .is_none());
     restarted.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();
@@ -940,7 +956,7 @@ async fn remote_transition_and_pending_consumption_are_atomic() {
         .await
         .unwrap();
     let schema = format!("remote_presence_test_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -950,7 +966,9 @@ async fn remote_transition_and_pending_consumption_are_atomic() {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -984,15 +1002,15 @@ async fn remote_transition_and_pending_consumption_are_atomic() {
     let suffix = Uuid::new_v4().simple().to_string();
     let function_name = format!("fail_pending_delete_{suffix}");
     let trigger_name = format!("fail_pending_delete_trigger_{suffix}");
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE FUNCTION {function_name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced pending delete failure'; END $$"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE TRIGGER {trigger_name} BEFORE DELETE ON federated_presence_pending FOR EACH ROW EXECUTE FUNCTION {function_name}()"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
@@ -1016,16 +1034,18 @@ async fn remote_transition_and_pending_consumption_are_atomic() {
             .len(),
         1
     );
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "DROP TRIGGER {trigger_name} ON federated_presence_pending"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query(&format!("DROP FUNCTION {function_name}()"))
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP FUNCTION {function_name}()"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let transition = transition_remote_presence_subscription(&pool, owner_id, remote, "subscribed")
         .await
@@ -1049,15 +1069,15 @@ async fn remote_transition_and_pending_consumption_are_atomic() {
     // previously committed subscription untouched and publish no row.
     let outbox_function = format!("fail_subscription_outbox_{suffix}");
     let outbox_trigger = format!("fail_subscription_outbox_trigger_{suffix}");
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE FUNCTION {outbox_function}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.stanza LIKE '%atomic-failure-marker%' THEN RAISE EXCEPTION 'forced subscription outbox failure'; END IF; RETURN NEW; END $$"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE TRIGGER {outbox_trigger} BEFORE INSERT ON s2s_outbox FOR EACH ROW EXECUTE FUNCTION {outbox_function}()"
-    ))
+    )))
     .execute(&pool)
     .await
     .unwrap();
@@ -1094,14 +1114,18 @@ async fn remote_transition_and_pending_consumption_are_atomic() {
         .await
         .unwrap();
     assert_eq!(rejected_count, 0);
-    sqlx::query(&format!("DROP TRIGGER {outbox_trigger} ON s2s_outbox"))
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query(&format!("DROP FUNCTION {outbox_function}()"))
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP TRIGGER {outbox_trigger} ON s2s_outbox"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP FUNCTION {outbox_function}()"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let accepted = rejected.replace("atomic-failure-marker", "atomic-success-marker");
     transition_remote_presence_subscription_with_outbox(
@@ -1231,7 +1255,7 @@ async fn remote_transition_and_pending_consumption_are_atomic() {
         .await
         .unwrap();
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();
@@ -1249,7 +1273,7 @@ async fn roster_service_snapshot_authorization_and_account_identity_are_fenced()
         .await
         .unwrap();
     let schema = format!("roster_service_test_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -1259,7 +1283,9 @@ async fn roster_service_snapshot_authorization_and_account_identity_are_fenced()
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -1441,7 +1467,7 @@ async fn roster_service_snapshot_authorization_and_account_identity_are_fenced()
     .is_none());
 
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();

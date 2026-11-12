@@ -25,9 +25,7 @@ fn migration_0132_current() -> sqlx::migrate::Migration {
 fn migration_0132_only(migration: sqlx::migrate::Migration) -> sqlx::migrate::Migrator {
     sqlx::migrate::Migrator {
         migrations: Cow::Owned(vec![migration]),
-        ignore_missing: false,
-        locking: true,
-        no_tx: false,
+        ..sqlx::migrate::Migrator::DEFAULT
     }
 }
 
@@ -40,9 +38,7 @@ fn migrator_through(version: i64) -> sqlx::migrate::Migrator {
                 .cloned()
                 .collect(),
         ),
-        ignore_missing: false,
-        locking: true,
-        no_tx: false,
+        ..sqlx::migrate::Migrator::DEFAULT
     }
 }
 
@@ -136,19 +132,21 @@ fn pre_fix_0132_migrator() -> sqlx::migrate::Migrator {
     let mut migration = migration_0132_current();
     let corrected_arguments = "        migration_schema,\n        migration_schema\n";
     let historical_arguments = "        migration_schema\n";
-    let historical_sql = migration
-        .sql
-        .replacen(corrected_arguments, historical_arguments, 1);
+    let historical_sql =
+        migration
+            .sql
+            .as_str()
+            .replacen(corrected_arguments, historical_arguments, 1);
     assert_ne!(
         historical_sql,
-        migration.sql.as_ref(),
+        migration.sql.as_str(),
         "migration 0132 must retain the corrected two-argument format invocation"
     );
     migration = sqlx::migrate::Migration::new(
         migration.version,
         migration.description.clone(),
         migration.migration_type,
-        Cow::Owned(historical_sql),
+        sqlx::SqlSafeStr::into_sql_str(sqlx::AssertSqlSafe(historical_sql)),
         migration.no_tx,
     );
     assert_eq!(
@@ -660,16 +658,16 @@ async fn baseline_0013_upgrades_through_the_real_domain_migrator() {
         .execute(&mut *transaction)
         .await
         .unwrap();
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "DELETE FROM \"{quoted_schema}\".message_archive WHERE id=$1"
-    ))
+    )))
     .bind(archive_id)
     .execute(&mut *transaction)
     .await
     .unwrap();
-    let isolated_projection_state = sqlx::query_as::<_, (Option<uuid::Uuid>, bool)>(&format!(
+    let isolated_projection_state = sqlx::query_as::<_, (Option<uuid::Uuid>, bool)>(sqlx::AssertSqlSafe(format!(
         "SELECT sender_archive_id,delivery_completed_at IS NOT NULL FROM \"{quoted_schema}\".personal_message_admissions WHERE id=$1"
-    ))
+    )))
     .bind(admission_id)
     .fetch_one(&mut *transaction)
     .await
@@ -680,30 +678,30 @@ async fn baseline_0013_upgrades_through_the_real_domain_migrator() {
     // which made UPDATE RETURNING claim success while silently discarding the
     // delivery fence that a later acknowledgement depended on.
     let claim_id = uuid::Uuid::new_v4();
-    let returned_claim: Option<uuid::Uuid> = sqlx::query_scalar(&format!(
+    let returned_claim: Option<uuid::Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "UPDATE \"{quoted_schema}\".offline_messages
             SET delivery_claim_id=$2,
                 delivery_claim_expires_at=pg_catalog.clock_timestamp()+INTERVAL '30 seconds'
           WHERE id=$1
           RETURNING delivery_claim_id"
-    ))
+    )))
     .bind(offline_id)
     .bind(claim_id)
     .fetch_one(&mut *transaction)
     .await
     .unwrap();
     assert_eq!(returned_claim, Some(claim_id));
-    let stored_claim: Option<uuid::Uuid> = sqlx::query_scalar(&format!(
+    let stored_claim: Option<uuid::Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT delivery_claim_id FROM \"{quoted_schema}\".offline_messages WHERE id=$1"
-    ))
+    )))
     .bind(offline_id)
     .fetch_one(&mut *transaction)
     .await
     .unwrap();
     assert_eq!(stored_claim, Some(claim_id));
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "DELETE FROM \"{quoted_schema}\".offline_messages WHERE id=$1"
-    ))
+    )))
     .bind(offline_id)
     .execute(&mut *transaction)
     .await

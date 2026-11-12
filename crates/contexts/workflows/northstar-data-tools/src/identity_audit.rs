@@ -415,7 +415,7 @@ async fn audit_database(pool: &PgPool, options: &AuditOptions) -> Result<AuditRe
         }
         scanned_specs += 1;
         let query = query_for(spec);
-        let rows = sqlx::query(&query)
+        let rows = sqlx::query(sqlx::AssertSqlSafe(query.as_str()))
             .fetch_all(&mut *transaction)
             .await
             .with_context(|| {

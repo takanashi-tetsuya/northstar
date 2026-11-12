@@ -13,7 +13,7 @@ async fn route_recovery_test_pool() -> (PgPool, PgPool, String) {
         .await
         .unwrap();
     let schema = format!("s2s_route_recovery_test_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -24,7 +24,9 @@ async fn route_recovery_test_pool() -> (PgPool, PgPool, String) {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -37,7 +39,7 @@ async fn route_recovery_test_pool() -> (PgPool, PgPool, String) {
 
 async fn close_route_recovery_test_pool(admin: PgPool, pool: PgPool, schema: String) {
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();
@@ -499,7 +501,7 @@ async fn claim_preserves_mam_results_before_fin() {
         .await
         .unwrap();
     let schema = format!("s2s_ordering_test_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -511,7 +513,9 @@ async fn claim_preserves_mam_results_before_fin() {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -543,7 +547,7 @@ async fn claim_preserves_mam_results_before_fin() {
             .unwrap());
     }
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();
@@ -564,7 +568,7 @@ async fn scoped_claims_are_cross_worker_ordered_and_component_safe() {
         .await
         .unwrap();
     let schema = format!("s2s_outbox_test_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -576,7 +580,9 @@ async fn scoped_claims_are_cross_worker_ordered_and_component_safe() {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {connection_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -801,7 +807,9 @@ async fn scoped_claims_are_cross_worker_ordered_and_component_safe() {
         .after_connect(move |connection, _| {
             let statement = format!("SET search_path TO {restart_schema}");
             Box::pin(async move {
-                sqlx::query(&statement).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -834,7 +842,7 @@ async fn scoped_claims_are_cross_worker_ordered_and_component_safe() {
     );
     restarted_pool.close().await;
 
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();

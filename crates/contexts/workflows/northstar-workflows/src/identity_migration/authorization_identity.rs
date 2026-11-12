@@ -219,7 +219,7 @@ type Canonicalizer = fn(&str, &str, &str) -> Result<String>;
 async fn load_uuid_scoped(
     transaction: &mut Transaction<'_, Postgres>,
     table: &str,
-    query: &str,
+    query: &'static str,
     canonicalizer: Canonicalizer,
 ) -> Result<Vec<ScopedIdentity>> {
     sqlx::query(query)
@@ -296,7 +296,7 @@ async fn update_uuid_scoped(
     );
     let mut transformed = 0_i64;
     for row in rows {
-        transformed += sqlx::query(&statement)
+        transformed += sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
             .bind(Uuid::parse_str(&row.scope)?)
             .bind(&row.original)
             .bind(&row.canonical)

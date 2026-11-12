@@ -247,7 +247,7 @@ pub(crate) async fn canonicalize_identity_storage_in_transaction(
 async fn load_uuid_bare_identities(
     transaction: &mut Transaction<'_, Postgres>,
     table: &str,
-    query: &str,
+    query: &'static str,
 ) -> Result<Vec<TextIdentity>> {
     sqlx::query(query)
         .fetch_all(&mut **transaction)
@@ -270,7 +270,7 @@ async fn load_uuid_bare_identities(
 async fn load_scoped_bare_identities(
     transaction: &mut Transaction<'_, Postgres>,
     table: &str,
-    query: &str,
+    query: &'static str,
 ) -> Result<Vec<TextIdentity>> {
     sqlx::query(query)
         .fetch_all(&mut **transaction)
@@ -323,7 +323,7 @@ async fn update_uuid_column(
     let mut transformed = 0_i64;
     for row in rows {
         let id = Uuid::parse_str(&row.row_key)?;
-        transformed += sqlx::query(&statement)
+        transformed += sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
             .bind(id)
             .bind(&row.canonical)
             .execute(&mut **transaction)
@@ -347,7 +347,7 @@ async fn update_scoped_column(
             .canonical
             .split_once('\0')
             .context("scoped canonical JID key is malformed")?;
-        transformed += sqlx::query(&statement)
+        transformed += sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
             .bind(Uuid::parse_str(scope)?)
             .bind(&row.original)
             .bind(canonical)

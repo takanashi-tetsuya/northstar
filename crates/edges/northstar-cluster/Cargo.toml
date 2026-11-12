@@ -50,7 +50,7 @@ uuid = { version = "1.12", features = ["v4", "serde"] }
 
 [dev-dependencies]
 northstar-session-postgres = { path = "../../contexts/session/northstar-session-postgres" }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
 northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application", features = ["test-support"] }
 northstar-message-application = { path = "../../contexts/message/northstar-message-application", features = ["test-support"] }
 northstar-operations-application = { path = "../../contexts/operations/northstar-operations-application", features = ["test-support"] }

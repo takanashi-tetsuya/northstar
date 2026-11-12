@@ -1788,11 +1788,13 @@ async fn account_deletion_atomically_cancels_local_reverse_rosters() {
         ("personal_message_admissions", admission_id),
         ("personal_message_admissions", incoming_admission_id),
     ] {
-        let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE id=$1"))
-            .bind(id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT COUNT(*) FROM {table} WHERE id=$1"
+        )))
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(count, 1, "{table} must survive a rolled-back deletion");
     }
 
@@ -1849,13 +1851,14 @@ async fn account_deletion_atomically_cancels_local_reverse_rosters() {
             "subscription_node_id=$1 AND split_part(subscriber_jid, '/', 1)=$2",
         ),
     ] {
-        let count: i64 =
-            sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE {predicate}"))
-                .bind(shared_pubsub_node)
-                .bind(&removed_jid)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT COUNT(*) FROM {table} WHERE {predicate}"
+        )))
+        .bind(shared_pubsub_node)
+        .bind(&removed_jid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(count, 0, "{table} retained the deleted account");
     }
     let whitelist: Vec<String> =
@@ -1890,11 +1893,13 @@ async fn account_deletion_atomically_cancels_local_reverse_rosters() {
         ("personal_message_admissions", admission_id),
         ("personal_message_admissions", incoming_admission_id),
     ] {
-        let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE id=$1"))
-            .bind(id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT COUNT(*) FROM {table} WHERE id=$1"
+        )))
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(count, 0, "{table} must be removed with the account");
     }
 

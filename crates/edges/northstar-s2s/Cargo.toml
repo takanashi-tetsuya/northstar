@@ -41,5 +41,5 @@ northstar-federation-postgres = { path = "../../contexts/federation/northstar-fe
 northstar-security = { path = "../../platform/northstar-security", features = ["test-support"] }
 northstar-workflows = { path = "../../contexts/workflows/northstar-workflows", features = ["test-support"] }
 openssl = { version = "0.10.81", features = ["vendored"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
 tokio = { version = "1.43", features = ["test-util"] }

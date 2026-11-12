@@ -398,7 +398,7 @@ fn validate_participant_graph(
 async fn load_scoped_user_jids(
     transaction: &mut Transaction<'_, Postgres>,
     table: &str,
-    query: &str,
+    query: &'static str,
 ) -> Result<Vec<ScopedJid>> {
     sqlx::query(query)
         .fetch_all(&mut **transaction)
@@ -459,7 +459,7 @@ async fn load_access_patterns(
     let query = format!(
         "SELECT channel_id::text AS scope,jid_pattern AS value,jid_pattern AS row_key FROM {table} ORDER BY channel_id,jid_pattern"
     );
-    sqlx::query(&query)
+    sqlx::query(sqlx::AssertSqlSafe(query.as_str()))
         .fetch_all(&mut **transaction)
         .await?
         .into_iter()
@@ -742,7 +742,7 @@ async fn update_scoped_column(
         format!("UPDATE {table} SET {column}=$3 WHERE channel_id=$1::uuid AND {column}=$2");
     let mut changed = 0;
     for row in rows.iter().filter(|row| row.original != row.canonical) {
-        changed += sqlx::query(&statement)
+        changed += sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
             .bind(&row.scope)
             .bind(&row.original)
             .bind(&row.canonical)

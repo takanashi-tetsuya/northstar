@@ -1,18 +1,13 @@
 [advisories]
-# RUSTSEC-2023-0071 affects the `rsa` crate used by SQLx's optional MySQL
-# authentication path. Northstar enables SQLx with `default-features = false`
-# and the PostgreSQL driver only; `cargo tree -i rsa` is empty for the active
-# Windows and Linux dependency graphs. Cargo.lock still records SQLx's optional
-# MySQL dependency, so cargo-audit sees it even though it is not linked. Remove
-# this exception if MySQL support is ever enabled or SQLx stops recording it.
 # RUSTSEC-2026-0459 affects the SQLite bundled by `libsqlite3-sys`, which only
-# SQLx's optional SQLite driver (`sqlx-sqlite`) pulls in. The SQLite feature is
-# not enabled either, and `cargo tree -i libsqlite3-sys` is empty for the active
-# Windows and Linux dependency graphs; Cargo.lock records it for the same reason
-# as above. Remove this exception if SQLite support is ever enabled or SQLx moves
-# to a patched `libsqlite3-sys` (0.39 or later; SQLx 0.9.0 still caps it below
-# 0.38).
-ignore = ["RUSTSEC-2023-0071", "RUSTSEC-2026-0459"]
+# SQLx's optional SQLite driver (`sqlx-sqlite`) pulls in. Northstar enables SQLx
+# with `default-features = false` and the PostgreSQL driver only, and
+# `cargo tree -i libsqlite3-sys` is empty for the active Windows and Linux
+# dependency graphs; Cargo.lock still records SQLx's optional SQLite dependency,
+# so cargo-audit sees it even though it is not linked. Remove this exception if
+# SQLite support is ever enabled or SQLx moves to a patched `libsqlite3-sys`
+# (0.39 or later; SQLx 0.9.0 caps it below 0.38).
+ignore = ["RUSTSEC-2026-0459"]
 informational_warnings = ["unmaintained"]
 severity_threshold = "low"
 

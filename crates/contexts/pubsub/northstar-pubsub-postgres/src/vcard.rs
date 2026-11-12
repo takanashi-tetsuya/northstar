@@ -330,20 +330,20 @@ mod tests {
         let owner_token = Uuid::new_v4().simple().to_string();
         register_isolated_schema_for_harness(schema, &owner_token);
         let mut transaction = admin.begin().await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&mut *transaction)
             .await
             .unwrap();
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "CREATE TABLE {schema}.northstar_test_schema_guard \
              (singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK(singleton), token TEXT NOT NULL)"
-        ))
+        )))
         .execute(&mut *transaction)
         .await
         .unwrap();
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO {schema}.northstar_test_schema_guard(token) VALUES($1)"
-        ))
+        )))
         .bind(owner_token)
         .execute(&mut *transaction)
         .await
@@ -369,7 +369,9 @@ mod tests {
             .after_connect(move |connection, _| {
                 let statement = format!("SET search_path TO {connection_schema}");
                 Box::pin(async move {
-                    sqlx::query(&statement).execute(connection).await?;
+                    sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                        .execute(connection)
+                        .await?;
                     Ok(())
                 })
             })
@@ -511,7 +513,7 @@ mod tests {
             .await
             .unwrap();
         pool.close().await;
-        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
             .execute(&admin)
             .await
             .unwrap();
@@ -539,7 +541,9 @@ mod tests {
             .after_connect(move |connection, _| {
                 let statement = format!("SET search_path TO {connection_schema}");
                 Box::pin(async move {
-                    sqlx::query(&statement).execute(connection).await?;
+                    sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                        .execute(connection)
+                        .await?;
                     Ok(())
                 })
             })
@@ -732,7 +736,7 @@ mod tests {
             .await
             .unwrap();
         pool.close().await;
-        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
             .execute(&admin)
             .await
             .unwrap();

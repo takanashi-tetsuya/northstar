@@ -500,7 +500,7 @@ async fn insert_scope(
         "INSERT INTO legal_hold_scopes(hold_id,scope_type,subject_id)
          SELECT $1,$2,id FROM {table} WHERE id=$3 FOR KEY SHARE"
     );
-    sqlx::query(&query)
+    sqlx::query(sqlx::AssertSqlSafe(query.as_str()))
         .bind(hold_id)
         .bind(scope_type)
         .bind(subject_id)

@@ -22,7 +22,7 @@ impl IsolatedDatabase {
             .await
             .unwrap();
         let schema = format!("presence_{label}_{}", Uuid::new_v4().simple());
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
@@ -32,7 +32,9 @@ impl IsolatedDatabase {
             .after_connect(move |connection, _| {
                 let statement = format!("SET search_path TO {connection_schema}");
                 Box::pin(async move {
-                    sqlx::query(&statement).execute(connection).await?;
+                    sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                        .execute(connection)
+                        .await?;
                     Ok(())
                 })
             })
@@ -49,10 +51,13 @@ impl IsolatedDatabase {
 
     async fn finish(self) {
         self.pool.close().await;
-        sqlx::query(&format!("DROP SCHEMA {} CASCADE", self.schema))
-            .execute(&self.admin)
-            .await
-            .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA {} CASCADE",
+            self.schema
+        )))
+        .execute(&self.admin)
+        .await
+        .unwrap();
         self.admin.close().await;
     }
 }

@@ -30,9 +30,9 @@ fn personal_with_filter_distinguishes_bare_and_full_jids() {
             before: None,
         },
     );
-    assert!(bare.sql().contains("peer_jid ="));
-    assert!(!bare.sql().contains("lower(peer_jid)"));
-    assert!(!bare.sql().contains("peer_full_jid"));
+    assert!(bare.sql().as_str().contains("peer_jid ="));
+    assert!(!bare.sql().as_str().contains("lower(peer_jid)"));
+    assert!(!bare.sql().as_str().contains("peer_full_jid"));
 
     let mut full = QueryBuilder::<Postgres>::new("SELECT id FROM message_archive");
     push_mam_scope(
@@ -45,8 +45,8 @@ fn personal_with_filter_distinguishes_bare_and_full_jids() {
             before: None,
         },
     );
-    assert!(full.sql().contains("peer_full_jid ="));
-    assert!(!full.sql().contains("lower(peer_full_jid)"));
+    assert!(full.sql().as_str().contains("peer_full_jid ="));
+    assert!(!full.sql().as_str().contains("lower(peer_full_jid)"));
 }
 
 #[test]
@@ -67,7 +67,7 @@ fn mam_scope_is_parameterized_and_keyset_only() {
             before: None,
         },
     );
-    let sql = builder.sql();
+    let sql = builder.sql().as_str().to_owned();
     assert!(!sql.contains("mallory"));
     assert!(!sql.to_ascii_uppercase().contains("OFFSET"));
     assert!(sql.contains("(created_at, id) >"));

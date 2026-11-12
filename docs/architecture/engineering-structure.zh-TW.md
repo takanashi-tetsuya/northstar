@@ -119,6 +119,7 @@ facade 移出根 crate（5.13），根 crate 只剩上面三層。
 | S28 federation 上下文 | WP-317–328 | outbox 服務與 repository 進入上下文 crate，`FederationRoute` 取代 `MixFederationPort`（WP-317）；outbox 資料庫測試搬到介面卡旁（WP-318）；S2S 遙測格（WP-319）與兩項政策（WP-320）離開根 crate；S2S SM、dialback 與串流限制、純 wire 形式進入 `northstar-federation-core`（WP-321–323）；路由表（WP-324）、元件路由與 wire（WP-325）、端點探索的純邏輯（WP-326）進入 `northstar-federation-application`；`AppState` 以 `FederationModule` 持有上下文（WP-327）；記錄階段（WP-328）。盤點見 5.24 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與本機 PostgreSQL 套件通過。未完成：入站節處理等 S29 後進入 `northstar-federation-xmpp`（S30 改為分入各上下文的 `-xmpp` crate，見 5.26），連線、TLS、DNS 與 HTTPS I/O 等 S30，去處見 5.24 |
 | S29 會話與叢集 | WP-329–356 | 連線池關閉在交易中被釋放的連線（WP-329）；直接交接與路由項目合約進入 `northstar-message-core`（WP-330）；會話維護服務進入 `northstar-session-application`（WP-331）；workflows 的帳號介面卡別名依擁有者改名（WP-332）；回覆第二輪雲端報告（WP-333）；憑證發佈事實進入 `northstar-session-core`（WP-334）；SM、暫停與重放服務進入 session-application，`src/services` 不再存在（WP-335）；outbound 佇列進入 `northstar-stream`（WP-336）；post-action 監督進入 session-application（WP-337）；名冊同步閘門進入 `northstar-roster-core`（WP-338）；本機路由表進入 `northstar-stream`（WP-339）；`northstar-session-postgres` 建立（WP-340）；SM 儲存進入 `northstar-workflows`（WP-341）；叢集會話路由（WP-342）與六個跨上下文介面卡（WP-343）離開根 crate；叢集 MUC 快照值進入 `northstar-room-core`（WP-344）；session-postgres 的測試自帶 test-support（WP-345）；叢集經 `ClusterSessionStore` port 到達 PostgreSQL 權威（WP-346），context 對 `ClusterAdapters` 泛型（WP-347），直接命名 XML 與 frame 值的擁有 crate（WP-348）；離線重播驅動（WP-349）與 MUC 端點遞送（WP-350）進入 `northstar-stream`；叢集用到的兩個節建構函式進入 kernel（WP-351）；`src/cluster` 成為 edge crate `northstar-cluster`（WP-352），叢集測試夾具跟著讀新路徑（WP-355）；根 crate 剩下的會話時期資料庫程式碼移出（WP-353）；`AppState` 以 `SessionModule` 持有上下文（WP-354）；記錄階段（WP-356）。盤點見 5.25 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與搬移過的 PostgreSQL 套件通過。未完成：`ProtocolSession` 與建立在它上面的 caps、直接遞送、認證發佈等 S30，`state` 中把叢集與會話清理綁到 `AppState` 的接縫等 S31，去處見 5.25 |
 | S30 傳輸 | WP-360–423 | 傳輸值、frame 執行、認證發佈與 `Action` 進入 `northstar-stream`，`StreamSession` 列出傳輸可向會話要求的操作（WP-360–365）；客戶端傳輸與 BOSH 改經 host（WP-366、367）後成為 `northstar-c2s`、`northstar-bosh`（WP-368、369）；S2S 的探索、TLS、串流 I/O、傳輸與外部元件經 `S2sHost`、`ComponentHost` 進入 `northstar-s2s`（WP-370–374）；REST 經 `HttpRepositories`、`HttpHost` 泛型後成為 `northstar-http`，WebSocket 升級進入 c2s（WP-375–383）；`ProtocolSession` 對 host 泛型（WP-386），各上下文的 glue 取得 host trait（WP-387–390、396–400），核心依呼叫圖由下而上改為泛型（WP-391–395），釘住核心的根 crate 型別移走（WP-401–407、410–412）後核心進入`northstar_stream::protocol`（WP-413）；glue 進入各 `-xmpp` crate（WP-414–418），核心項目收窄（WP-419）；S2S 入站的訊息、出席與 PEP 處理器進入各上下文介面卡（WP-420–422）；期間的 CI 與相依修正（WP-384、385、408、409）；記錄階段（WP-423）。盤點見 5.26 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與搬移過的 PostgreSQL 套件通過。未完成：`state` 的 host 實作與接縫、IQ 路由表、服務探索與 S2S 入站分派等組合程式碼，等 S31，去處見 5.26 |
+| SQLx 0.9 | WP-435 | SQLx 0.8.6 升到 0.9.0。`query*()` 只收靜態字串或 `AssertSqlSafe`：執行時組出的 SQL（session 設定、識別字清單、測試 schema）在傳入處以 `sqlx::AssertSqlSafe` 標明，每個呼叫者傳一條字面 SQL 的四個 helper 改收 `&'static str`；`QueryBuilder` 去掉生命週期，`Migrator` 字面值以 `Migrator::DEFAULT` 補新欄位；`macros` 不再帶出 `json`，綁定 `serde_json` 值的 abuse、roster 介面卡自己開啟。lockfile 不再記錄 rsa，RUSTSEC-2023-0071 的忽略刪除 | migration checksum 不變；全部門禁、workspace 測試、各 `-postgres` crate 單獨建置與受影響的 PostgreSQL 套件通過；SQLite 驅動仍記錄 libsqlite3-sys 0.30.1，RUSTSEC-2026-0459 的忽略保留。已完成 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -1089,7 +1090,7 @@ S29 接在其上。
   取代 `ClusterManager`：未啟用的叢集准入本來就全部放行。
 - sqlx 0.8 在 BEGIN 得到回應前丟棄 future 時，連線會帶著交易回到池中。所有伺服器與工具的池改由
   `northstar_postgres::pool::options()` 建立，釋放時以一個 simple query 檢查並關閉仍在交易中的連線，門禁禁止生產程式碼
-  直接 `PgPoolOptions::new()`。
+  直接 `PgPoolOptions::new()`。SQLx 0.9 已在丟棄時送出 ROLLBACK，這個檢查保留（WP-435）。
 - 明寫 `target: "rust_xmpp_server::cluster"` 的叢集日誌保留原 target；其餘事件的預設 target 變成 `northstar_cluster::*`，
   `scripts/cluster-wsl.sh` 的 `RUST_LOG` 已加上。
 
@@ -1784,3 +1785,4 @@ Stage 證據仍綁定其原提交。
 | WP-421 | 完成：聯邦出席處理器進入 roster 介面卡 | 見 `git log --grep '\[WP-421\]'` |
 | WP-422 | 完成：聯邦 PEP items 與訂閱分支進入 pubsub 介面卡 | 見 `git log --grep '\[WP-422\]'` |
 | WP-423 | 完成：記錄 S30 的階段與盤點（5.26）、4.3。WP-360–422 依序接到 WP-356 之上；每個 WP 的 fmt、clippy、workspace 測試、層級、模糊測試、搬移過的 PostgreSQL 套件、全部門禁與 Python 腳本測試通過 | 見 `git log --grep '\[WP-423\]'` |
+| WP-435 | 完成：SQLx 升到 0.9，動態 SQL 以 `sqlx::AssertSqlSafe` 標明，RUSTSEC-2023-0071 的忽略隨 rsa 移除。編號接在雲端 WP-424–434 之後 | 見 `git log --grep '\[WP-435\]'` |

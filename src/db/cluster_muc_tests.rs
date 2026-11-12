@@ -621,7 +621,10 @@ async fn postgres_admin_batch_is_atomic_under_replay_and_failure() {
          CREATE TRIGGER reject_batch_outbox BEFORE INSERT ON cluster_muc_event_outbox
            FOR EACH ROW EXECUTE FUNCTION reject_batch_outbox()"
     );
-    sqlx::raw_sql(&trigger).execute(&pool).await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(trigger.as_str()))
+        .execute(&pool)
+        .await
+        .unwrap();
     command.operation_id = outbox_failure_id;
     assert!(apply_cluster_muc_admin_batch(&pool, command)
         .await

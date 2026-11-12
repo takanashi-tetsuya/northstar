@@ -20,7 +20,7 @@ northstar-xep-0359 = { path = "../../../kernel/northstar-xep-0359" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 roxmltree = "0.20"
 sha2 = "0.10"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid"] }
 uuid = { version = "1.12", features = ["v4", "serde"] }
 
 [dev-dependencies]

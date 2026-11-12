@@ -92,7 +92,7 @@ pub async fn mam_blocked_patterns(
 }
 
 pub fn push_mam_visibility(
-    query_builder: &mut QueryBuilder<'_, Postgres>,
+    query_builder: &mut QueryBuilder<Postgres>,
     source: MamArchiveSource,
     blocked_patterns: &[MamBlockedPattern],
 ) {
@@ -169,7 +169,7 @@ pub async fn archive_boundaries_for_in_transaction(
 }
 
 pub fn push_mam_archive_base(
-    query_builder: &mut QueryBuilder<'_, Postgres>,
+    query_builder: &mut QueryBuilder<Postgres>,
     source: MamArchiveSource,
     blocked_patterns: &[MamBlockedPattern],
 ) {
@@ -182,7 +182,7 @@ pub fn push_mam_archive_base(
 }
 
 pub fn push_mam_scope(
-    query_builder: &mut QueryBuilder<'_, Postgres>,
+    query_builder: &mut QueryBuilder<Postgres>,
     source: MamArchiveSource,
     query: &MamArchiveQuery,
     blocked_patterns: &[MamBlockedPattern],

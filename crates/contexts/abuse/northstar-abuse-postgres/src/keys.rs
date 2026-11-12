@@ -276,7 +276,7 @@ async fn load_record(
         "SELECT epoch,phase,current_key_id,previous_key_id,retire_not_before
          FROM abuse_key_deployments WHERE xmpp_domain=$1{suffix}"
     );
-    let row: Option<DeploymentRecordRow> = sqlx::query_as(&query)
+    let row: Option<DeploymentRecordRow> = sqlx::query_as(sqlx::AssertSqlSafe(query.as_str()))
         .bind(domain)
         .fetch_optional(&mut **tx)
         .await?;

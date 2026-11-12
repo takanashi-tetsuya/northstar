@@ -548,7 +548,7 @@ pub(crate) async fn route_inbound_iq(
                 else {
                     return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
                 };
-                let Some(payload) = crate::xmpp::protocol::pep::federated_pep_disco_info(
+                let Some(payload) = northstar_pubsub_xmpp::pep::federated_pep_disco_info(
                     state,
                     &owner,
                     from,
@@ -608,7 +608,7 @@ pub(crate) async fn route_inbound_iq(
             let Some(owner) = state.pubsub_service().find_enabled_user(owner_name).await? else {
                 return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
             };
-            let Some(payload) = crate::xmpp::protocol::pep::federated_pep_disco_items(
+            let Some(payload) = northstar_pubsub_xmpp::pep::federated_pep_disco_items(
                 state,
                 &owner,
                 from,

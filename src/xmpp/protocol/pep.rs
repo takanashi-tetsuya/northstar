@@ -10,30 +10,7 @@ use roxmltree::Node;
 
 #[cfg(test)]
 pub(crate) use northstar_pubsub_xmpp::pep::bookmarks2_items_event;
-pub(crate) use northstar_pubsub_xmpp::pep::{
-    deliver_explicit_pep_last_items_for_resource, deliver_pep_last_items_for_federated_resource,
-    deliver_pep_last_items_for_resource, pep_access_allowed, prepare_pep_last_item_outbox,
-};
-
-pub(crate) async fn federated_pep_disco_info(
-    state: &crate::state::AppState,
-    owner: &PubSubAccount,
-    requester: &str,
-    requested_node: Option<&str>,
-) -> Result<Option<String>> {
-    northstar_pubsub_xmpp::pep::federated_pep_disco_info(state, owner, requester, requested_node)
-        .await
-}
-
-pub(crate) async fn federated_pep_disco_items(
-    state: &crate::state::AppState,
-    owner: &PubSubAccount,
-    requester: &str,
-    requested_node: Option<&str>,
-) -> Result<Option<String>> {
-    northstar_pubsub_xmpp::pep::federated_pep_disco_items(state, owner, requester, requested_node)
-        .await
-}
+pub(crate) use northstar_pubsub_xmpp::pep::{pep_access_allowed, prepare_pep_last_item_outbox};
 
 impl<H: SessionHost + PubSubSessionHost> ProtocolSession<H> {
     pub(crate) async fn pep_get(
@@ -135,26 +112,5 @@ impl<H: SessionHost + PubSubSessionHost> northstar_pubsub_xmpp::pep::PepSession
 
     fn pep_refresh_avatar_presence(&self, owner_bare: &str, hash: Option<&str>) {
         self.host.refresh_avatar_presence(owner_bare, hash);
-    }
-}
-
-impl northstar_pubsub_xmpp::pep::PepAudienceRouting for crate::state::AppState {
-    fn pep_routing_local_domain(&self) -> &str {
-        self.local_domain()
-    }
-
-    fn pep_available_resources_wanting(&self, bare_jid: &str, node: &str) -> Vec<String> {
-        self.session_entries_for(bare_jid)
-            .into_iter()
-            .filter(|(full_jid, target)| {
-                target.available.load(std::sync::atomic::Ordering::Relaxed)
-                    && super::caps::wants_pep_node(self, full_jid, node)
-            })
-            .map(|(full_jid, _)| full_jid)
-            .collect()
-    }
-
-    fn pep_interested_resources(&self, bare_jid: &str, node: &str) -> Vec<String> {
-        super::caps::interested_resources_for_bare(self, bare_jid, node)
     }
 }

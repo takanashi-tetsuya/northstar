@@ -1141,7 +1141,7 @@
         },
         {
           "id": "worker:caps-side-effects",
-          "owner": "src/xmpp/protocol/caps.rs",
+          "owner": "src/state/caps_effect_dispatch.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },

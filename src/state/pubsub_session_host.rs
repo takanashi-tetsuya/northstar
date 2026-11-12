@@ -75,3 +75,24 @@ impl northstar_pubsub_xmpp::pubsub::PubSubHost for AppState {
         AppState::pubsub_service(self)
     }
 }
+
+impl northstar_pubsub_xmpp::pep::PepAudienceRouting for AppState {
+    fn pep_routing_local_domain(&self) -> &str {
+        self.local_domain()
+    }
+
+    fn pep_available_resources_wanting(&self, bare_jid: &str, node: &str) -> Vec<String> {
+        self.session_entries_for(bare_jid)
+            .into_iter()
+            .filter(|(full_jid, target)| {
+                target.available.load(std::sync::atomic::Ordering::Relaxed)
+                    && crate::xmpp::protocol::caps::wants_pep_node(self, full_jid, node)
+            })
+            .map(|(full_jid, _)| full_jid)
+            .collect()
+    }
+
+    fn pep_interested_resources(&self, bare_jid: &str, node: &str) -> Vec<String> {
+        crate::xmpp::protocol::caps::interested_resources_for_bare(self, bare_jid, node)
+    }
+}

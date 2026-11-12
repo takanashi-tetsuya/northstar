@@ -47,9 +47,6 @@
     "src/xmpp/protocol.rs": [
       "state"
     ],
-    "src/xmpp/protocol/caps.rs": [
-      "state"
-    ],
     "src/xmpp/protocol/dispatch/iq_routes.rs": [
       "state"
     ],
@@ -57,9 +54,6 @@
       "state"
     ],
     "src/xmpp/protocol/misc.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/pep.rs": [
       "state"
     ]
   }

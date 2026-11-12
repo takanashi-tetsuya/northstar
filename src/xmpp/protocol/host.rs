@@ -72,6 +72,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// See `AppState::caps_by_jid`.
     fn caps_by_jid(&self) -> &northstar_protocol_runtime::caps::CapsResourceIndex;
     /// See `AppState::caps_cache`.
+    fn federated_caps_gates(&self) -> &northstar_protocol_runtime::caps::FederatedCapsGateIndex;
     fn caps_cache(&self) -> &northstar_protocol_runtime::caps::CapsCacheIndex;
     /// See `AppState::challenge_issue_service`.
     fn challenge_issue_service(

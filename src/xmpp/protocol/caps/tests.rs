@@ -1,5 +1,7 @@
 use super::*;
+use crate::state::caps_effect_dispatch::CapsEffectRunGuard;
 use roxmltree::Document;
+use std::time::Duration;
 
 fn key(seed: u16) -> CapsKey {
     CapsKey {

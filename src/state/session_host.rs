@@ -92,6 +92,10 @@ impl SessionHost for AppState {
         AppState::caps_by_jid(self)
     }
 
+    fn federated_caps_gates(&self) -> &northstar_protocol_runtime::caps::FederatedCapsGateIndex {
+        AppState::federated_caps_gates(self)
+    }
+
     fn caps_cache(&self) -> &northstar_protocol_runtime::caps::CapsCacheIndex {
         AppState::caps_cache(self)
     }

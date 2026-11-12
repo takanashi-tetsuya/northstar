@@ -3231,7 +3231,8 @@ if (/Deliver\s*\(\s*(?:db|northstar_auth_postgres::users)::User\s*\)/.test(messa
 // waiter cancellation remove the registry entry without a background sweep.
 const capsProtocolSource =
   read('crates/contexts/session/northstar-protocol-runtime/src/caps.rs') +
-  read('src/xmpp/protocol/caps.rs');
+  read('src/xmpp/protocol/caps.rs') +
+  read('src/state/caps_effect_dispatch.rs');
 const s2sInboundSource = readProductionModule('src/s2s/inbound.rs', { root })
   + readProductionModule('crates/edges/northstar-s2s/src/inbound.rs', { root });
 if (/(?:db|northstar_message_postgres::\w+|northstar_workflows::\w+)::(?:store_offline_for_recipient|admit_personal_history)\s*\(/.test(s2sInboundSource)
@@ -3421,7 +3422,7 @@ const workerResponsibilityEvidence = {
   'runtime-control-refresh': ['src/state.rs', 'process startup reserves the connection', '5 s'],
   'sm-authority-listener': ['crates/contexts/workflows/northstar-workflows/src/authority_listener.rs', 'AppState database listener startup', '15 s'],
   'sm-suspension-recovery': ['src/state/session_cleanup.rs', 'session-cleanup service startup', '30 s'],
-  'caps-side-effects': ['src/xmpp/protocol/caps.rs', 'Caps subsystem startup', '60 s'],
+  'caps-side-effects': ['src/state/caps_effect_dispatch.rs', 'Caps subsystem startup', '60 s'],
   'mix-iq-relay-expiry': ['crates/contexts/room/northstar-mix-xmpp/src/lib.rs', 'MIX protocol capability startup', '10 s'],
   'mix-delivery-outbox': ['crates/contexts/room/northstar-mix-xmpp/src/worker.rs', 'MIX capability startup', '30 s'],
   'mix-presence-recovery': ['crates/contexts/room/northstar-mix-xmpp/src/lib.rs', 'MIX capability startup', '90 s'],
@@ -3693,8 +3694,13 @@ if (!uploadSource.includes('State(state): State<UploadHttpReadContext<R>>')
   throw new Error('public upload GET must retain shared download admission and guarded read authority');
 }
 const capsEffectSource = read('src/xmpp/protocol/caps.rs');
+const capsDispatchSource = read('src/state/caps_effect_dispatch.rs');
+const capsDispatchWorker = capsDispatchSource.slice(capsDispatchSource.indexOf('pub(crate) struct CapsEffectRunGuard'));
 if (/\bstate\.metrics\b|\bself\.(?:state|host)\.metrics\b|&(?:(?:northstar_telemetry::)?metrics::)?Metrics\b/.test(capsEffectSource)
-    || !capsEffectSource.includes('state.caps_effect_telemetry()')) {
+    || !capsEffectSource.includes('state.caps_effect_telemetry()')
+    || !capsDispatchSource.includes('pub(crate) struct CapsEffectRunGuard')
+    || /\bmetrics\b/.test(capsDispatchWorker)
+    || !capsDispatchWorker.includes('context.telemetry()')) {
   throw new Error('caps effect dispatch must receive only its admission and completion telemetry');
 }
 const passkeyFinishSource = read('crates/edges/northstar-http/src/passkeys.rs');

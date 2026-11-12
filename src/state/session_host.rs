@@ -674,6 +674,8 @@ impl SessionHost for AppState {
         AppState::deliver_to_muc_occupant(self, occupant, stanza).await
     }
 
+    type S2sOutbox = FederationRouter;
+
     fn federation_outbox(&self) -> &FederationRouter {
         AppState::federation_outbox(self)
     }

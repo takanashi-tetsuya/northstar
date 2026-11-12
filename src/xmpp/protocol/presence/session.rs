@@ -2,6 +2,7 @@
 //! until the session context moves.
 
 use super::*;
+use northstar_federation_core::FederationRoute as _;
 use northstar_roster_xmpp::RosterSessionHost;
 
 impl<H: SessionHost + RosterSessionHost> northstar_roster_xmpp::presence::PresenceSession

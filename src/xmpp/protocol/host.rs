@@ -2,7 +2,6 @@
 
 use super::dispatch::iq_routes::RootIqRoute;
 use super::ProtocolSession;
-use crate::s2s::FederationRouter;
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_auth_application::account_teardown::FinalizeAccountDeletion;
@@ -483,8 +482,10 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         occupant: &MucOccupant,
         stanza: String,
     ) -> impl std::future::Future<Output = bool> + Send;
+    /// The durable federation outbox and direct route.
+    type S2sOutbox: northstar_federation_core::FederationRoute;
     /// See `AppState::federation_outbox`.
-    fn federation_outbox(&self) -> &FederationRouter;
+    fn federation_outbox(&self) -> &Self::S2sOutbox;
     /// See `AppState::inbound_stanza_telemetry`.
     fn inbound_stanza_telemetry(
         &self,

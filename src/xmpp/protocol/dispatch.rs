@@ -1,6 +1,7 @@
 use crate::xmpp::protocol::SessionHost;
 use crate::xmpp::protocol::{Action, ProtocolSession};
 use anyhow::Result;
+use northstar_federation_core::FederationRoute as _;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_stream::frame_execution::Stage;
 use northstar_xml_builder::rewrite::{

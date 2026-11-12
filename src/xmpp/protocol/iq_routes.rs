@@ -12,14 +12,14 @@ use crate::xmpp::protocol::discovery::DiscoveryHandlers;
 use crate::xmpp::protocol::extdisco::ExtDiscoHandlers;
 use crate::xmpp::protocol::mam::MamHandlers;
 use crate::xmpp::protocol::muc::MucHandlers;
-use crate::xmpp::protocol::pep::PepHandlers;
 use crate::xmpp::protocol::privacy::PrivacyHandlers;
-use crate::xmpp::protocol::private::PrivateXmlHandlers;
-use crate::xmpp::protocol::pubsub::PubSubHandlers;
 use crate::xmpp::protocol::roster::RosterHandlers;
 use crate::xmpp::protocol::upload::UploadHandlers;
-use crate::xmpp::protocol::vcard::VCardHandlers;
 use crate::xmpp::protocol::ClientSession;
+use northstar_pubsub_xmpp::PepHandlers;
+use northstar_pubsub_xmpp::PrivateXmlHandlers;
+use northstar_pubsub_xmpp::PubSubHandlers;
+use northstar_pubsub_xmpp::VCardHandlers;
 use northstar_stream::protocol::dispatch::route::{ClientIqHandler, ClientIqRoute, RouteGate};
 use northstar_stream::protocol::dispatch::{
     is_service_jid, map_pubsub_capacity_result, valid_bind_payload, valid_empty_iq_payload,

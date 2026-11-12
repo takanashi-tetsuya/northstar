@@ -220,20 +220,20 @@ pub(crate) async fn route_inbound_iq(
         )
     {
         let reply =
-            match crate::xmpp::protocol::pubsub::handle_request(state, from, kind, child).await {
+            match northstar_pubsub_xmpp::pubsub::handle_request(state, from, kind, child).await {
                 Ok(reply) => reply,
                 Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
-                    crate::xmpp::protocol::pubsub::PubSubReply::Error("resource-constraint")
+                    northstar_pubsub_xmpp::pubsub::PubSubReply::Error("resource-constraint")
                 }
                 Err(error) => return Err(error),
             };
         return Ok(Some(match reply {
-            crate::xmpp::protocol::pubsub::PubSubReply::Result(payload) => {
+            northstar_pubsub_xmpp::pubsub::PubSubReply::Result(payload) => {
                 s2s_iq_result(id, to, from, &payload)
             }
-            reply @ (crate::xmpp::protocol::pubsub::PubSubReply::Error(_)
-            | crate::xmpp::protocol::pubsub::PubSubReply::ExtendedError(_)) => {
-                crate::xmpp::protocol::pubsub::pubsub_s2s_iq_error(id, to, from, &reply)
+            reply @ (northstar_pubsub_xmpp::pubsub::PubSubReply::Error(_)
+            | northstar_pubsub_xmpp::pubsub::PubSubReply::ExtendedError(_)) => {
+                northstar_pubsub_xmpp::pubsub::pubsub_s2s_iq_error(id, to, from, &reply)
             }
         }));
     }
@@ -308,7 +308,7 @@ pub(crate) async fn route_inbound_iq(
             {
                 return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
             }
-            if !crate::xmpp::protocol::pep::pep_access_allowed(
+            if !northstar_pubsub_xmpp::pep::pep_access_allowed(
                 state.pubsub_service(),
                 &owner,
                 state.local_domain(),
@@ -427,17 +427,17 @@ pub(crate) async fn route_inbound_iq(
                                 requested_subid: &requested_subid,
                             },
                         ),
-                        &crate::xmpp::protocol::pep::prepare_pep_last_item_outbox,
+                        &northstar_pubsub_xmpp::pep::prepare_pep_last_item_outbox,
                     )
                     .await
                 {
                     Ok(outcome) => outcome,
                     Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
-                        return Ok(Some(crate::xmpp::protocol::pubsub::pubsub_s2s_iq_error(
+                        return Ok(Some(northstar_pubsub_xmpp::pubsub::pubsub_s2s_iq_error(
                             id,
                             to,
                             from,
-                            &crate::xmpp::protocol::pubsub::PubSubReply::Error(
+                            &northstar_pubsub_xmpp::pubsub::PubSubReply::Error(
                                 "resource-constraint",
                             ),
                         )));
@@ -493,11 +493,11 @@ pub(crate) async fn route_inbound_iq(
                 {
                     Ok(outcome) => outcome,
                     Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
-                        return Ok(Some(crate::xmpp::protocol::pubsub::pubsub_s2s_iq_error(
+                        return Ok(Some(northstar_pubsub_xmpp::pubsub::pubsub_s2s_iq_error(
                             id,
                             to,
                             from,
-                            &crate::xmpp::protocol::pubsub::PubSubReply::Error(
+                            &northstar_pubsub_xmpp::pubsub::PubSubReply::Error(
                                 "resource-constraint",
                             ),
                         )));
@@ -526,19 +526,19 @@ pub(crate) async fn route_inbound_iq(
                     &format!("pubsub.{}", state.local_domain()),
                 )
             {
-                let reply = crate::xmpp::protocol::pubsub::federated_disco_info(
+                let reply = northstar_pubsub_xmpp::pubsub::federated_disco_info(
                     state,
                     from,
                     child.attribute("node"),
                 )
                 .await?;
                 return Ok(Some(match reply {
-                    crate::xmpp::protocol::pubsub::PubSubReply::Result(payload) => {
+                    northstar_pubsub_xmpp::pubsub::PubSubReply::Result(payload) => {
                         s2s_iq_result(id, to, from, &payload)
                     }
-                    reply @ (crate::xmpp::protocol::pubsub::PubSubReply::Error(_)
-                    | crate::xmpp::protocol::pubsub::PubSubReply::ExtendedError(_)) => {
-                        crate::xmpp::protocol::pubsub::pubsub_s2s_iq_error(id, to, from, &reply)
+                    reply @ (northstar_pubsub_xmpp::pubsub::PubSubReply::Error(_)
+                    | northstar_pubsub_xmpp::pubsub::PubSubReply::ExtendedError(_)) => {
+                        northstar_pubsub_xmpp::pubsub::pubsub_s2s_iq_error(id, to, from, &reply)
                     }
                 }));
             }
@@ -589,14 +589,14 @@ pub(crate) async fn route_inbound_iq(
                 ) =>
         {
             let reply =
-                crate::xmpp::protocol::pubsub::federated_disco_items(state, from, child).await?;
+                northstar_pubsub_xmpp::pubsub::federated_disco_items(state, from, child).await?;
             Ok(Some(match reply {
-                crate::xmpp::protocol::pubsub::PubSubReply::Result(payload) => {
+                northstar_pubsub_xmpp::pubsub::PubSubReply::Result(payload) => {
                     s2s_iq_result(id, to, from, &payload)
                 }
-                reply @ (crate::xmpp::protocol::pubsub::PubSubReply::Error(_)
-                | crate::xmpp::protocol::pubsub::PubSubReply::ExtendedError(_)) => {
-                    crate::xmpp::protocol::pubsub::pubsub_s2s_iq_error(id, to, from, &reply)
+                reply @ (northstar_pubsub_xmpp::pubsub::PubSubReply::Error(_)
+                | northstar_pubsub_xmpp::pubsub::PubSubReply::ExtendedError(_)) => {
+                    northstar_pubsub_xmpp::pubsub::pubsub_s2s_iq_error(id, to, from, &reply)
                 }
             }))
         }

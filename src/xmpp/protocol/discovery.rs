@@ -302,11 +302,12 @@ impl DiscoveryHandlers for ClientSession {
                     ));
                 }
                 query.push_validated_fragment(
-                    &super::pubsub::node_metadata_form(&**self.host(), &node).await?,
+                    &northstar_pubsub_xmpp::pubsub::node_metadata_form(&**self.host(), &node)
+                        .await?,
                 )?;
                 return Ok(Action::Send(iq_result_from(id, from, &query.finish())));
             }
-            let query = super::pubsub::service_disco_payload(&**self.host());
+            let query = northstar_pubsub_xmpp::pubsub::service_disco_payload(&**self.host());
             return Ok(Action::Send(iq_result_from(id, from, &query)));
         }
         if self.host().http_upload_enabled()
@@ -552,7 +553,7 @@ impl DiscoveryHandlers for ClientSession {
                 .as_ref()
                 .map(|requester| format!("{}@{}", requester.username, self.host().local_domain()));
             let allowed = if let Some(requester) = requester.as_deref() {
-                super::pep::pep_access_allowed(
+                northstar_pubsub_xmpp::pep::pep_access_allowed(
                     self.host().pubsub_service(),
                     owner,
                     self.host().local_domain(),
@@ -913,14 +914,21 @@ impl DiscoveryHandlers for ClientSession {
             }
         } else if target.localpart().is_none() && target.domainpart() == pubsub_domain {
             let requester = self.full_jid.as_deref().unwrap_or_default();
-            let reply =
-                super::pubsub::federated_disco_items(&**self.host(), requester, request).await?;
+            let reply = northstar_pubsub_xmpp::pubsub::federated_disco_items(
+                &**self.host(),
+                requester,
+                request,
+            )
+            .await?;
             return Ok(Action::Send(match reply {
-                super::pubsub::PubSubReply::Result(payload) => iq_result_from(id, from, &payload),
+                northstar_pubsub_xmpp::pubsub::PubSubReply::Result(payload) => {
+                    iq_result_from(id, from, &payload)
+                }
                 error => iq_error_from(
                     id,
                     from,
-                    super::pubsub::error_condition(&error).unwrap_or("undefined-condition"),
+                    northstar_pubsub_xmpp::pubsub::error_condition(&error)
+                        .unwrap_or("undefined-condition"),
                 ),
             }));
         } else if target.localpart().is_none()
@@ -977,7 +985,7 @@ impl DiscoveryHandlers for ClientSession {
                     format!("{}@{}", requester.username, self.host().local_domain())
                 });
                 let allowed = if let Some(requester) = requester.as_deref() {
-                    super::pep::pep_access_allowed(
+                    northstar_pubsub_xmpp::pep::pep_access_allowed(
                         self.host().pubsub_service(),
                         &owner,
                         self.host().local_domain(),
@@ -997,7 +1005,7 @@ impl DiscoveryHandlers for ClientSession {
                 });
                 for node in self.host().pubsub_service().pep_nodes(owner.id).await? {
                     let allowed = if let Some(requester) = requester.as_deref() {
-                        super::pep::pep_access_allowed(
+                        northstar_pubsub_xmpp::pep::pep_access_allowed(
                             self.host().pubsub_service(),
                             &owner,
                             self.host().local_domain(),

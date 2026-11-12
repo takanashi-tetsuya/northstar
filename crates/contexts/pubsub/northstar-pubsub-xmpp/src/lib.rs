@@ -11,6 +11,7 @@ mod protocol_session;
 pub mod pubsub;
 pub mod vcard;
 
+pub use self::protocol_session::{PepHandlers, PrivateXmlHandlers, PubSubHandlers, VCardHandlers};
 pub use self::session_host::PubSubSessionHost;
 
 mod session_host;

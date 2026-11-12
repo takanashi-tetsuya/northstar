@@ -939,9 +939,9 @@ if (
   throw new Error('AppState exposes a runtime secret/token/credential capability as a field');
 }
 
-// The context ports' impls for the session moved to the contexts' -xmpp crates. Each protocol_session.rs holds
-// one "// From src/xmpp/protocol/<module>.rs." section per root module it came from; a root glue module is read
-// together with its sections.
+// The context ports' impls for the session and the context glue moved to the contexts' -xmpp crates. Each
+// protocol_session.rs holds one "// From src/xmpp/protocol/<module>.rs." section per root module it came from; a
+// protocol module is read together with its sections, and a module whose file left the root is its sections.
 const sessionImplSections = new Map();
 const contextsDirectory = path.join(root, 'crates', 'contexts');
 for (const context of fs.readdirSync(contextsDirectory, { withFileTypes: true }).filter((entry) => entry.isDirectory())) {
@@ -960,27 +960,29 @@ function withSessionImpls(name, source) {
   return `${source}\n${sessionImplSections.get(name) ?? ''}`;
 }
 
-// The root's glue modules and northstar-stream's session modules; no module name is in both.
-const protocolModulePaths = new Map(
-  ['src/xmpp/protocol', 'crates/edges/northstar-stream/src/protocol'].flatMap((directory) =>
+// The root's glue modules, northstar-stream's session modules and the sections of glue that has no file left;
+// no module name has a file in both directories.
+const protocolModulePaths = new Map([
+  ...[...sessionImplSections.keys()].map((name) => [name, null]),
+  ...['src/xmpp/protocol', 'crates/edges/northstar-stream/src/protocol'].flatMap((directory) =>
     fs
       .readdirSync(path.join(root, directory))
       .filter((name) => name.endsWith('.rs'))
       .map((name) => [name, `${directory}/${name}`]),
   ),
-);
+]);
 const protocolFiles = [...protocolModulePaths.keys()].sort();
+function protocolModuleSource(name, readFile = (relative) => readProductionModule(relative, { root })) {
+  const relative = protocolModulePaths.get(name);
+  return withSessionImpls(name, relative ? readFile(relative) : '');
+}
 
 // Preserve single-file reads for unrelated modules in the mixed inventories below.
 const productionProtocolModules = new Set([
   'pep.rs', 'pubsub.rs', 'messaging.rs', 'commands.rs', 'presence.rs', 'sasl2.rs',
 ]);
 function readProtocolSource(name) {
-  const relative = protocolModulePaths.get(name);
-  return withSessionImpls(
-    name,
-    productionProtocolModules.has(name) ? readProductionModule(relative, { root }) : read(relative),
-  );
+  return productionProtocolModules.has(name) ? protocolModuleSource(name) : protocolModuleSource(name, read);
 }
 
 let protocolDbAuthorityReferences = 0;
@@ -992,7 +994,7 @@ const perFile = [];
 for (const name of protocolFiles) {
   // Each top-level protocol module is read with its non-test child files, so
   // code moved into `protocol/<name>/` keeps being counted.
-  const source = withSessionImpls(name, readProductionModule(protocolModulePaths.get(name), { root }));
+  const source = protocolModuleSource(name);
   const productionSource = productionWithoutCfgTestModules(source, `${name} production`);
   const { authorityReferences, domainReferences } = classifyDbDependencies(
     productionSource,
@@ -1812,14 +1814,14 @@ if (discoveryDbDomainReferences > MAX_DISCOVERY_DB_DOMAIN_REFERENCES) {
 for (const [name, serviceAccessor, source] of [
   ['pubsub.rs', 'pubsub_application_service',
     readProductionModule('crates/contexts/pubsub/northstar-pubsub-xmpp/src/pubsub.rs', { root })],
-  ['pep.rs', 'pubsub_application_service', withSessionImpls('pep.rs', readProductionModule('src/xmpp/protocol/pep.rs', { root }))],
+  ['pep.rs', 'pubsub_application_service', protocolModuleSource('pep.rs')],
   ['mix.rs', 'mix_service', readProductionModule('crates/contexts/room/northstar-mix-xmpp/src/lib.rs', { root })],
-  ['mam.rs', 'mam_service', withSessionImpls('mam.rs', readProductionModule('src/xmpp/protocol/mam.rs', { root }))],
-  ['privacy.rs', 'privacy_service', withSessionImpls('privacy.rs', readProductionModule('src/xmpp/protocol/privacy.rs', { root }))],
-  ['private.rs', 'private_storage_service', withSessionImpls('private.rs', readProductionModule('src/xmpp/protocol/private.rs', { root }))],
+  ['mam.rs', 'mam_service', protocolModuleSource('mam.rs')],
+  ['privacy.rs', 'privacy_service', protocolModuleSource('privacy.rs')],
+  ['private.rs', 'private_storage_service', protocolModuleSource('private.rs')],
   ['replay.rs', 'replay_service', readProductionModule('crates/edges/northstar-stream/src/replay.rs', { root })],
-  ['roster.rs', 'roster_service', withSessionImpls('roster.rs', readProductionModule('src/xmpp/protocol/roster.rs', { root }))],
-  ['vcard.rs', 'profile_service', withSessionImpls('vcard.rs', readProductionModule('src/xmpp/protocol/vcard.rs', { root }))],
+  ['roster.rs', 'roster_service', protocolModuleSource('roster.rs')],
+  ['vcard.rs', 'profile_service', protocolModuleSource('vcard.rs')],
 ]) {
   const dependency = classifyDbDependencies(source, name);
   if (dependency.authorityReferences !== 0) {
@@ -3350,7 +3352,7 @@ for (const invariant of [
 if (/interval\s*\(\s*CAPS_EFFECT_RETRY_BASE\s*\)/.test(capsProtocolSource)) {
   throw new Error('Caps retry correctness regressed to fixed periodic reconstruction');
 }
-if (/\.take\(128\)/.test(capsProtocolSource + readProductionModule('src/xmpp/protocol/pep.rs', { root })
+if (/\.take\(128\)/.test(capsProtocolSource + protocolModuleSource('pep.rs')
   + readProductionModule('crates/contexts/pubsub/northstar-pubsub-xmpp/src/pep.rs', { root }))) {
   throw new Error('Caps/PEP fan-out silently truncates a verified notify summary');
 }
@@ -3991,7 +3993,7 @@ if (!s2sTelemetry.includes('struct OnlineQueueAcceptanceTelemetry')
   throw new Error('S2S ingress and egress must use narrow telemetry cells');
 }
 for (const protocol of ['pep.rs', 'pubsub.rs']) {
-  if (/\bstate\s*\.\s*metrics\b/.test(readProductionModule(`src/xmpp/protocol/${protocol}`, { root }))) {
+  if (/\bstate\s*\.\s*metrics\b/.test(protocolModuleSource(protocol))) {
     throw new Error(`${protocol} must use a narrow telemetry capability`);
   }
 }

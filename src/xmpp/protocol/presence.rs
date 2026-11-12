@@ -1,12 +1,12 @@
 use super::{Action, ProtocolSession};
 use crate::xmpp::protocol::mix::MixHandlers;
 use crate::xmpp::protocol::muc::MucHandlers;
-use crate::xmpp::protocol::pubsub::PubSubHandlers;
 use crate::xmpp::protocol::SessionHost;
 use anyhow::Result;
 use northstar_mix_xmpp::ports::MixHost;
 use northstar_muc_xmpp::ports::MucHost;
 use northstar_pubsub_xmpp::pubsub::PubSubHost;
+use northstar_pubsub_xmpp::PubSubHandlers;
 use northstar_roster_xmpp::presence::{
     announced_priority, announced_show, broadcast_presence, deliver_service_messages,
     directed_presence_gate, inject_vcard_avatar_hash, route_directed_presence, PresenceGate,

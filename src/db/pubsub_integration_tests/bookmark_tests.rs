@@ -14,7 +14,7 @@ impl PepOutboxFactory for LockedBookmarksOutbox {
         audience: &PepAudienceSnapshot,
         changed_items: &[(&str, &str)],
     ) -> Result<Vec<(String, String)>> {
-        let Some(event) = crate::xmpp::protocol::pep::bookmarks2_items_event(changed_items)? else {
+        let Some(event) = northstar_pubsub_xmpp::pep::bookmarks2_items_event(changed_items)? else {
             return Ok(Vec::new());
         };
         let owner = &audience.owner_bare_jid;

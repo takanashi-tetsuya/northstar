@@ -11,14 +11,10 @@ pub(crate) mod mam;
 pub(crate) mod messaging;
 pub(crate) mod mix;
 pub(crate) mod muc;
-pub(crate) mod pep;
 pub(crate) mod presence;
 pub(crate) mod privacy;
-pub(crate) mod private;
-pub(crate) mod pubsub;
 pub(crate) mod roster;
 pub(crate) mod upload;
-pub(crate) mod vcard;
 
 use crate::state::AppState;
 pub(crate) use northstar_stream::protocol::*;

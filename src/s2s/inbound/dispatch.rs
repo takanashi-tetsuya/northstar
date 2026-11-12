@@ -332,7 +332,7 @@ pub(super) async fn route_inbound_scoped(
     };
     match root.tag_name().name() {
         "message" if to_is_pubsub_service => {
-            crate::xmpp::protocol::pubsub::handle_authorization_response(state, &from, root)
+            northstar_pubsub_xmpp::pubsub::handle_authorization_response(state, &from, root)
                 .await?;
             Ok(None)
         }

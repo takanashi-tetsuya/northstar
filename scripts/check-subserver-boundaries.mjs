@@ -6,7 +6,7 @@ import { readProductionModule } from './lib/source-module.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = { main: 'src/main.rs', subservers: 'src/runtime/subservers.rs', maintenanceOwnership: 'crates/contexts/operations/northstar-operations-postgres/src/maintenance_ownership.rs', retention: 'crates/contexts/operations/northstar-operations-application/src/retention_worker.rs',
   subscriptionCleanup: 'src/runtime/subscription_cleanup.rs',
-  pubsubProtocol: 'src/xmpp/protocol/pubsub.rs', pubsubDelivery: 'src/state/pubsub_delivery.rs',
+  pubsubProtocol: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/protocol_session.rs', pubsubDelivery: 'src/state/pubsub_delivery.rs',
   pubsubAdapter: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/pubsub.rs',
   pubsubService: 'crates/contexts/pubsub/northstar-pubsub-application/src/service.rs',
   state: 'src/state.rs', runtimeControl: 'src/state/runtime_control_refresh.rs',

@@ -25,7 +25,7 @@ impl OperationsSessionHost for AppState {
     }
 
     fn command_send_local_announcement(&self, stanza: &str) -> BTreeSet<String> {
-        self.send_local_announcement(stanza)
+        self.sessions.send_local_announcement(stanza)
     }
 
     fn command_remote_announcement_enabled(&self) -> bool {

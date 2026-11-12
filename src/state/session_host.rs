@@ -288,7 +288,8 @@ impl SessionHost for AppState {
         connection_id: uuid::Uuid,
         enabled: bool,
     ) -> bool {
-        AppState::set_local_carbons_for_connection(self, key, connection_id, enabled)
+        self.sessions
+            .set_local_carbons_for_connection(key, connection_id, enabled)
     }
 
     fn sm_memory_governor(
@@ -319,8 +320,7 @@ impl SessionHost for AppState {
         auth_generation: i64,
         lifecycle: &Arc<AtomicU8>,
     ) -> bool {
-        AppState::staged_session_is_current(
-            self,
+        self.sessions.staged_session_is_current(
             key,
             connection_id,
             user_id,
@@ -334,7 +334,7 @@ impl SessionHost for AppState {
     }
 
     fn try_stage_bound_session(&self, key: String, session: OnlineSession) -> bool {
-        AppState::try_stage_bound_session(self, key, session)
+        self.sessions.try_stage_bound_session(key, session)
     }
 
     fn unauthenticated_timeout(&self) -> Duration {
@@ -366,8 +366,7 @@ impl SessionHost for AppState {
         lifecycle: &Arc<AtomicU8>,
         disconnect: &CancellationToken,
     ) -> bool {
-        AppState::activate_session_if_current(
-            self,
+        self.sessions.activate_session_if_current(
             full_jid,
             connection_id,
             user_id,
@@ -449,7 +448,8 @@ impl SessionHost for AppState {
         epoch: LocalCapsEpoch,
         expected_gate: Option<&Arc<tokio::sync::Mutex<()>>>,
     ) -> bool {
-        AppState::local_caps_epoch_is_current(self, full_jid, epoch, expected_gate)
+        self.sessions
+            .local_caps_epoch_is_current(full_jid, epoch, expected_gate)
     }
 
     fn local_caps_observer_connection_is_current(
@@ -458,8 +458,7 @@ impl SessionHost for AppState {
         connection_id: uuid::Uuid,
         expected_gate: &Arc<tokio::sync::Mutex<()>>,
     ) -> bool {
-        AppState::local_caps_observer_connection_is_current(
-            self,
+        self.sessions.local_caps_observer_connection_is_current(
             full_jid,
             connection_id,
             expected_gate,
@@ -502,8 +501,7 @@ impl SessionHost for AppState {
         lifecycle: &Arc<AtomicU8>,
         user_agent_epoch: Option<i64>,
     ) -> bool {
-        AppState::publish_user_agent_epoch_if_current(
-            self,
+        self.sessions.publish_user_agent_epoch_if_current(
             key,
             connection_id,
             user_id,
@@ -545,7 +543,7 @@ impl SessionHost for AppState {
     }
 
     fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
-        AppState::session_entries_for(self, jid)
+        self.sessions.session_entries_for(jid)
     }
 
     fn sm_buffer_limits(&self) -> SmBufferLimits {
@@ -564,8 +562,7 @@ impl SessionHost for AppState {
         sm_session_id: uuid::Uuid,
         cancel_live_route: bool,
     ) -> Option<tokio::sync::watch::Receiver<bool>> {
-        AppState::sm_pending_route_removal_signal(
-            self,
+        self.sessions.sm_pending_route_removal_signal(
             key,
             old_connection_id,
             user_id,
@@ -575,7 +572,7 @@ impl SessionHost for AppState {
     }
 
     fn sm_presence_epoch(&self, key: &str) -> Option<SmPresenceEpoch> {
-        AppState::sm_presence_epoch(self, key)
+        self.sessions.sm_presence_epoch(key)
     }
 
     fn sm_session_policy(&self) -> SmSessionPolicy {
@@ -627,8 +624,7 @@ impl SessionHost for AppState {
         claimed_sm_id: uuid::Uuid,
         expected_gate: &Arc<tokio::sync::Mutex<()>>,
     ) -> SmStagedRouteClaim {
-        AppState::stage_sm_resumed_session(
-            self,
+        self.sessions.stage_sm_resumed_session(
             key,
             candidate,
             claimant_user,

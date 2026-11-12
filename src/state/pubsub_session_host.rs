@@ -36,7 +36,7 @@ impl PubSubSessionHost for AppState {
     }
 
     fn refresh_avatar_presence(&self, owner_bare: &str, hash: Option<&str>) {
-        for session in self.sessions_for(owner_bare) {
+        for session in self.sessions.sessions_for(owner_bare) {
             let mut last_presence = session
                 .last_presence
                 .write()
@@ -82,7 +82,8 @@ impl northstar_pubsub_xmpp::pep::PepAudienceRouting for AppState {
     }
 
     fn pep_available_resources_wanting(&self, bare_jid: &str, node: &str) -> Vec<String> {
-        self.session_entries_for(bare_jid)
+        self.sessions
+            .session_entries_for(bare_jid)
             .into_iter()
             .filter(|(full_jid, target)| {
                 target.available.load(std::sync::atomic::Ordering::Relaxed)

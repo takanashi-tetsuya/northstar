@@ -39,7 +39,7 @@ impl PushNotificationRouter for AppState {
             .as_ref()
             .is_some_and(|jid| jid.domainpart() == self.local_domain())
         {
-            let mut local_targets = self.session_entries_for(&delivery.service_jid);
+            let mut local_targets = self.sessions.session_entries_for(&delivery.service_jid);
             // Select the highest-priority available local resource, with its
             // full JID as a stable tie-breaker.
             local_targets.retain(|(_, session)| {

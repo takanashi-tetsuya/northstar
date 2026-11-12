@@ -1479,27 +1479,27 @@ rejectsRoute("route epoch helper cannot be replaced by a test-module shadow", "s
 rejectsRoute("route epoch helper rejects duplicate test-module shadow", "sessionTable",
   "pub fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool {\n    let Some(mut session) = sessions.get_mut(key) else {\n        return false;\n    };\n    if session.connection_id != connection_id\n        || session.user_id != user_id\n        || session.auth_generation != auth_generation\n        || !Arc::ptr_eq(&session.lifecycle, lifecycle)\n        || session.disconnect.is_cancelled()\n        || session.lifecycle.load(Ordering::Acquire) != 0\n    {\n        return false;\n    }\n    session.user_agent_epoch = user_agent_epoch;\n    true\n}\n",
   "pub fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool {\n    let Some(mut session) = sessions.get_mut(key) else {\n        return false;\n    };\n    if session.connection_id != connection_id\n        || session.user_id != user_id\n        || session.auth_generation != auth_generation\n        || !Arc::ptr_eq(&session.lifecycle, lifecycle)\n        || session.disconnect.is_cancelled()\n        || session.lifecycle.load(Ordering::Acquire) != 0\n    {\n        return false;\n    }\n    session.user_agent_epoch = user_agent_epoch;\n    true\n}\n\n#[cfg(test)] mod shadow_route { pub fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool {\n    let Some(mut session) = sessions.get_mut(key) else {\n        return false;\n    };\n    if session.connection_id != connection_id\n        || session.user_id != user_id\n        || session.auth_generation != auth_generation\n        || !Arc::ptr_eq(&session.lifecycle, lifecycle)\n        || session.disconnect.is_cancelled()\n        || session.lifecycle.load(Ordering::Acquire) != 0\n    {\n        return false;\n    }\n    session.user_agent_epoch = user_agent_epoch;\n    true\n}\n }");
-rejectsRoute("route epoch delegate cannot become test-only", "state",
-  "pub(crate) fn publish_user_agent_epoch_if_current(\n        &self,\n        key: &str,\n        connection_id: uuid::Uuid,\n        user_id: uuid::Uuid,\n        auth_generation: i64,\n        lifecycle: &Arc<AtomicU8>,\n        user_agent_epoch: Option<i64>,\n    ) -> bool",
-  "#[cfg(test)] pub(crate) fn publish_user_agent_epoch_if_current(\n        &self,\n        key: &str,\n        connection_id: uuid::Uuid,\n        user_id: uuid::Uuid,\n        auth_generation: i64,\n        lifecycle: &Arc<AtomicU8>,\n        user_agent_epoch: Option<i64>,\n    ) -> bool");
-rejectsRoute("route activation delegate cannot become test-only", "state",
-  "pub(crate) fn activate_session_if_current(\n        &self,\n        full_jid: &str,\n        connection_id: uuid::Uuid,\n        user_id: uuid::Uuid,\n        auth_generation: i64,\n        lifecycle: &Arc<AtomicU8>,\n        disconnect: &CancellationToken,\n    ) -> bool",
-  "#[cfg(test)] pub(crate) fn activate_session_if_current(\n        &self,\n        full_jid: &str,\n        connection_id: uuid::Uuid,\n        user_id: uuid::Uuid,\n        auth_generation: i64,\n        lifecycle: &Arc<AtomicU8>,\n        disconnect: &CancellationToken,\n    ) -> bool");
+rejectsRoute("route epoch delegate cannot become test-only", "sessionTable",
+  "pub fn publish_user_agent_epoch_if_current(\n        &self,\n        key: &str,\n        connection_id: uuid::Uuid,\n        user_id: uuid::Uuid,\n        auth_generation: i64,\n        lifecycle: &Arc<AtomicU8>,\n        user_agent_epoch: Option<i64>,\n    ) -> bool",
+  "#[cfg(test)] pub fn publish_user_agent_epoch_if_current(\n        &self,\n        key: &str,\n        connection_id: uuid::Uuid,\n        user_id: uuid::Uuid,\n        auth_generation: i64,\n        lifecycle: &Arc<AtomicU8>,\n        user_agent_epoch: Option<i64>,\n    ) -> bool");
+rejectsRoute("route activation delegate cannot become test-only", "sessionTable",
+  "pub fn activate_session_if_current(\n        &self,\n        full_jid: &str,\n        connection_id: uuid::Uuid,\n        user_id: uuid::Uuid,\n        auth_generation: i64,\n        lifecycle: &Arc<AtomicU8>,\n        disconnect: &CancellationToken,\n    ) -> bool",
+  "#[cfg(test)] pub fn activate_session_if_current(\n        &self,\n        full_jid: &str,\n        connection_id: uuid::Uuid,\n        user_id: uuid::Uuid,\n        auth_generation: i64,\n        lifecycle: &Arc<AtomicU8>,\n        disconnect: &CancellationToken,\n    ) -> bool");
 rejectsRoute("route caps delegate cannot become test-only", "mixOutboxState",
   "fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability",
   "#[cfg(test)] fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability");
-rejectsRoute("route epoch delegate preserves the supplied key", "state",
-  "publish_user_agent_epoch_if_current_in(&self.sessions, key, connection_id, user_id, auth_generation, lifecycle, user_agent_epoch)",
-  "publish_user_agent_epoch_if_current_in(&self.sessions, full_jid, connection_id, user_id, auth_generation, lifecycle, user_agent_epoch)", true);
-rejectsRoute("route epoch delegate preserves the supplied Option", "state",
-  "publish_user_agent_epoch_if_current_in(&self.sessions, key, connection_id, user_id, auth_generation, lifecycle, user_agent_epoch)",
-  "publish_user_agent_epoch_if_current_in(&self.sessions, key, connection_id, user_id, auth_generation, lifecycle, None)");
-rejectsRoute("route activation delegate preserves the lifecycle Arc", "state",
-  "activate_session_if_current_in(&self.sessions, full_jid, connection_id, user_id, auth_generation, lifecycle, disconnect)",
-  "activate_session_if_current_in(&self.sessions, full_jid, connection_id, user_id, auth_generation, &other_lifecycle, disconnect)");
-rejectsRoute("route activation delegate preserves owner cancellation", "state",
-  "activate_session_if_current_in(&self.sessions, full_jid, connection_id, user_id, auth_generation, lifecycle, disconnect)",
-  "activate_session_if_current_in(&self.sessions, full_jid, connection_id, user_id, auth_generation, lifecycle, &CancellationToken::new())");
+rejectsRoute("route epoch delegate preserves the supplied key", "sessionTable",
+  "publish_user_agent_epoch_if_current_in(&self.0, key, connection_id, user_id, auth_generation, lifecycle, user_agent_epoch)",
+  "publish_user_agent_epoch_if_current_in(&self.0, full_jid, connection_id, user_id, auth_generation, lifecycle, user_agent_epoch)", true);
+rejectsRoute("route epoch delegate preserves the supplied Option", "sessionTable",
+  "publish_user_agent_epoch_if_current_in(&self.0, key, connection_id, user_id, auth_generation, lifecycle, user_agent_epoch)",
+  "publish_user_agent_epoch_if_current_in(&self.0, key, connection_id, user_id, auth_generation, lifecycle, None)");
+rejectsRoute("route activation delegate preserves the lifecycle Arc", "sessionTable",
+  "activate_session_if_current_in(&self.0, full_jid, connection_id, user_id, auth_generation, lifecycle, disconnect)",
+  "activate_session_if_current_in(&self.0, full_jid, connection_id, user_id, auth_generation, &other_lifecycle, disconnect)");
+rejectsRoute("route activation delegate preserves owner cancellation", "sessionTable",
+  "activate_session_if_current_in(&self.0, full_jid, connection_id, user_id, auth_generation, lifecycle, disconnect)",
+  "activate_session_if_current_in(&self.0, full_jid, connection_id, user_id, auth_generation, lifecycle, &CancellationToken::new())");
 rejectsRoute("route CAPS delegate preserves the pending index", "mixOutboxState",
   "session_mix_capability_in(&self.sessions, &self.caps_by_jid, &self.pending_caps, full_jid)",
   "session_mix_capability_in(&self.sessions, &self.caps_by_jid, &other_pending_caps, full_jid)");

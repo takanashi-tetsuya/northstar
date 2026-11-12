@@ -14,7 +14,7 @@ impl CarbonDeliveryPort for AppState {
     }
 
     fn sessions(&self, bare: &str) -> Vec<(String, Self::Session)> {
-        self.session_entries_for(bare)
+        self.sessions.session_entries_for(bare)
     }
 
     fn carbon_enabled(&self, session: &Self::Session) -> bool {

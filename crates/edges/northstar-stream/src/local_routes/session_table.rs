@@ -12,6 +12,7 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
     Arc,
 };
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 /// A detached view of a local route for PostgreSQL credential maintenance.
@@ -354,5 +355,359 @@ pub fn session_entries_for_in(
             })
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect(),
+    }
+}
+
+/// The live C2S session table, keyed by full JID. The composition root holds one; workers that need only the raw
+/// routes take a clone of the shared map, which the table dereferences to.
+#[derive(Clone, Default)]
+pub struct LocalSessionTable(Arc<DashMap<String, OnlineSession>>);
+
+impl LocalSessionTable {
+    /// The table over the shared map `sessions`.
+    pub fn new(sessions: Arc<DashMap<String, OnlineSession>>) -> Self {
+        Self(sessions)
+    }
+
+    /// Reserve a non-routable bind candidate under the same map entry guard
+    /// that rejects a concurrent bind or resume for this full JID.
+    pub fn try_stage_bound_session(&self, key: String, session: OnlineSession) -> bool {
+        try_stage_bound_session_in(&self.0, key, session)
+    }
+
+    pub fn staged_session_is_current(
+        &self,
+        key: &str,
+        connection_id: uuid::Uuid,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+        lifecycle: &Arc<AtomicU8>,
+    ) -> bool {
+        self.0.get(key).is_some_and(|session| {
+            session.connection_id == connection_id
+                && session.user_id == user_id
+                && session.auth_generation == auth_generation
+                && Arc::ptr_eq(&session.lifecycle, lifecycle)
+                && !session.disconnect.is_cancelled()
+                && session.lifecycle.load(Ordering::Acquire) == 0
+        })
+    }
+
+    pub fn publish_user_agent_epoch_if_current(
+        &self,
+        key: &str,
+        connection_id: uuid::Uuid,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+        lifecycle: &Arc<AtomicU8>,
+        user_agent_epoch: Option<i64>,
+    ) -> bool {
+        publish_user_agent_epoch_if_current_in(
+            &self.0,
+            key,
+            connection_id,
+            user_id,
+            auth_generation,
+            lifecycle,
+            user_agent_epoch,
+        )
+    }
+
+    /// A carbon preference is session-local and must be visible to fan-out
+    /// before its IQ result is sent to the same connection.
+    pub fn set_local_carbons_for_connection(
+        &self,
+        key: &str,
+        connection_id: uuid::Uuid,
+        enabled: bool,
+    ) -> bool {
+        let Some(route) = self.0.get(key) else {
+            return false;
+        };
+        if route.connection_id != connection_id {
+            return false;
+        }
+        route.carbons.store(enabled, Ordering::Release);
+        true
+    }
+
+    pub fn sm_pending_route_removal_signal(
+        &self,
+        key: &str,
+        old_connection_id: uuid::Uuid,
+        user_id: uuid::Uuid,
+        sm_session_id: uuid::Uuid,
+        cancel_live_route: bool,
+    ) -> Option<tokio::sync::watch::Receiver<bool>> {
+        let session = self.0.get(key)?;
+        let exact_sm = session
+            .sm_session_id
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some_and(|current| current == sm_session_id);
+        if session.connection_id != old_connection_id || session.user_id != user_id || !exact_sm {
+            return None;
+        }
+        if cancel_live_route {
+            session.disconnect.cancel();
+        }
+        Some(session.route_incarnation.subscribe())
+    }
+
+    pub fn sm_presence_epoch(&self, key: &str) -> Option<SmPresenceEpoch> {
+        self.0.get(key).map(|session| SmPresenceEpoch {
+            gate: Arc::clone(&session.mix_presence_gate),
+            fallback_suppressed: Arc::clone(&session.mix_presence_fallback_suppressed),
+            caps_generation: Arc::clone(&session.caps_observation_generation),
+        })
+    }
+
+    /// Inspect/insert inside one DashMap entry operation. The caller owns the
+    /// returned gate and route-incarnation handles before any async wait.
+    pub fn stage_sm_resumed_session(
+        &self,
+        key: String,
+        candidate: OnlineSession,
+        claimant_user: uuid::Uuid,
+        claimed_sm_id: uuid::Uuid,
+        expected_gate: &Arc<tokio::sync::Mutex<()>>,
+    ) -> SmStagedRouteClaim {
+        stage_sm_resumed_session_in(
+            &self.0,
+            key,
+            candidate,
+            claimant_user,
+            claimed_sm_id,
+            expected_gate,
+        )
+    }
+
+    /// The command protocol receives only the delivered account identities,
+    /// not mutable access to the session table.
+    pub fn send_local_announcement(&self, stanza: &str) -> std::collections::BTreeSet<String> {
+        let mut recipients = std::collections::BTreeSet::new();
+        for entry in self.0.iter() {
+            if entry.routable.load(Ordering::Acquire)
+                && entry.available.load(Ordering::Acquire)
+                && entry.priority.load(Ordering::Acquire) >= 0
+                && entry.sender.try_send(stanza.to_owned()).is_ok()
+            {
+                if let Ok(bare) = northstar_xmpp_types::jid::canonical_bare_key(entry.key()) {
+                    recipients.insert(bare);
+                }
+            }
+        }
+        recipients
+    }
+
+    pub fn local_online_bare_jids(&self) -> std::collections::BTreeSet<String> {
+        self.0
+            .iter()
+            .filter(|entry| entry.routable.load(Ordering::Acquire))
+            .filter_map(|entry| northstar_xmpp_types::jid::canonical_bare_key(entry.key()).ok())
+            .collect()
+    }
+
+    pub fn local_activity_bare_jids(
+        &self,
+        idle_after: Duration,
+    ) -> (
+        std::collections::BTreeSet<String>,
+        std::collections::BTreeSet<String>,
+    ) {
+        let mut online = std::collections::BTreeSet::new();
+        let mut active = std::collections::BTreeSet::new();
+        for entry in self.0.iter() {
+            if !entry.routable.load(Ordering::Acquire) {
+                continue;
+            }
+            let Ok(bare) = northstar_xmpp_types::jid::canonical_bare_key(entry.key()) else {
+                continue;
+            };
+            online.insert(bare.clone());
+            if entry
+                .last_activity
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .elapsed()
+                < idle_after
+            {
+                active.insert(bare);
+            }
+        }
+        (online, active)
+    }
+
+    /// Initial key snapshot for an account presence probe. The protocol then
+    /// rechecks each incarnation after its privacy/database awaits.
+    pub fn local_presence_owner_keys(&self) -> Vec<String> {
+        self.0.iter().map(|entry| entry.key().clone()).collect()
+    }
+
+    pub fn local_presence_owner_candidate(
+        &self,
+        key: &str,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+    ) -> Option<OnlineSession> {
+        self.0.get(key).and_then(|session| {
+            (session.routable.load(Ordering::Acquire)
+                && session.user_id == user_id
+                && session.auth_generation == auth_generation
+                && session.available.load(Ordering::Relaxed))
+            .then(|| session.value().clone())
+        })
+    }
+
+    pub fn local_presence_owner_if_current(
+        &self,
+        key: &str,
+        expected: &OnlineSession,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+    ) -> Option<OnlineSession> {
+        self.0.get(key).and_then(|current| {
+            (current.connection_id == expected.connection_id
+                && Arc::ptr_eq(&current.route_incarnation, &expected.route_incarnation)
+                && current.user_id == user_id
+                && current.auth_generation == auth_generation
+                && current.routable.load(Ordering::Acquire)
+                && current.available.load(Ordering::Relaxed))
+            .then(|| current.value().clone())
+        })
+    }
+
+    pub fn send_presence_if_owner_current(
+        &self,
+        key: &str,
+        expected: &OnlineSession,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+        recipient: &crate::outbound::OutboundSender,
+        presence: &str,
+    ) -> bool {
+        let Some(current) = self.0.get(key) else {
+            return false;
+        };
+        if current.connection_id != expected.connection_id
+            || !Arc::ptr_eq(&current.route_incarnation, &expected.route_incarnation)
+            || current.user_id != user_id
+            || current.auth_generation != auth_generation
+            || !current.routable.load(Ordering::Acquire)
+            || !current.available.load(Ordering::Relaxed)
+        {
+            return false;
+        }
+        recipient.try_send(presence.to_owned()).is_ok()
+    }
+
+    pub fn local_caps_epoch_is_current(
+        &self,
+        full_jid: &str,
+        epoch: LocalCapsEpoch,
+        expected_gate: Option<&Arc<tokio::sync::Mutex<()>>>,
+    ) -> bool {
+        self.0.get(full_jid).is_some_and(|session| {
+            local_caps_route_epoch_matches(
+                session.connection_id,
+                session.caps_observation_generation.load(Ordering::Acquire),
+                session.routable.load(Ordering::Acquire),
+                session.disconnect.is_cancelled(),
+                session.lifecycle.load(Ordering::Acquire),
+                expected_gate.is_none_or(|gate| Arc::ptr_eq(&session.mix_presence_gate, gate)),
+                epoch,
+            )
+        })
+    }
+
+    pub fn local_caps_observer_connection_is_current(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+        expected_gate: &Arc<tokio::sync::Mutex<()>>,
+    ) -> bool {
+        self.0.get(full_jid).is_some_and(|session| {
+            session.connection_id == connection_id
+                && Arc::ptr_eq(&session.mix_presence_gate, expected_gate)
+                && session.routable.load(Ordering::Acquire)
+                && !session.disconnect.is_cancelled()
+                && session.lifecycle.load(Ordering::Acquire) == 0
+        })
+    }
+
+    pub fn local_mix_presence_route_is_current(
+        &self,
+        full_jid: &str,
+        expected_connection_id: uuid::Uuid,
+        expected_gate: &Arc<tokio::sync::Mutex<()>>,
+        require_available: bool,
+    ) -> bool {
+        self.0.get(full_jid).is_some_and(|session| {
+            session.connection_id == expected_connection_id
+                && Arc::ptr_eq(&session.mix_presence_gate, expected_gate)
+                && session.routable.load(Ordering::Acquire)
+                && (!require_available || session.available.load(Ordering::Acquire))
+                && !session.disconnect.is_cancelled()
+                && session.lifecycle.load(Ordering::Acquire) == 0
+        })
+    }
+
+    pub fn sessions_for(&self, jid: &str) -> Vec<OnlineSession> {
+        let Some(lookup) = session_lookup(jid) else {
+            return Vec::new();
+        };
+        match lookup {
+            SessionLookup::Full(full) => self
+                .0
+                .get(&full)
+                .filter(|entry| entry.routable.load(Ordering::Acquire))
+                .map(|entry| vec![entry.value().clone()])
+                .unwrap_or_default(),
+            SessionLookup::Bare(bare) => self
+                .0
+                .iter()
+                .filter(|entry| {
+                    bare_jid(entry.key()) == bare.as_str() && entry.routable.load(Ordering::Acquire)
+                })
+                .map(|entry| entry.value().clone())
+                .collect(),
+        }
+    }
+
+    pub fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
+        session_entries_for_in(&self.0, jid)
+    }
+
+    /// Publish only the exact staged route incarnation that survived every
+    /// authorization and lifecycle fence.  The DashMap write guard provides
+    /// a local linearization point with account/session revocation helpers;
+    /// the cancellation/lifecycle recheck after publication also closes a
+    /// concurrent out-of-band transport cancellation window.
+    pub fn activate_session_if_current(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+        lifecycle: &Arc<AtomicU8>,
+        disconnect: &CancellationToken,
+    ) -> bool {
+        activate_session_if_current_in(
+            &self.0,
+            full_jid,
+            connection_id,
+            user_id,
+            auth_generation,
+            lifecycle,
+            disconnect,
+        )
+    }
+}
+
+impl std::ops::Deref for LocalSessionTable {
+    type Target = Arc<DashMap<String, OnlineSession>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

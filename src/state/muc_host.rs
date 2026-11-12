@@ -36,7 +36,7 @@ impl MucHost for AppState {
     }
 
     fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
-        AppState::session_entries_for(self, jid)
+        self.sessions.session_entries_for(jid)
     }
 
     fn message_direct_mode(&self) -> DirectPostCommitMode {

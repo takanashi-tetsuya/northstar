@@ -633,7 +633,7 @@ impl AppState {
             cluster,
             account_revocation_consumer_service,
             bosh,
-            sessions,
+            sessions: LocalSessionTable::new(sessions),
             metrics,
             metrics_bearer_token,
             web_admin_gateway_token,

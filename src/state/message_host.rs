@@ -142,7 +142,7 @@ impl ExtDiscoHost for AppState {
 
 impl FederatedMessageHost for AppState {
     fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
-        AppState::session_entries_for(self, jid)
+        self.sessions.session_entries_for(jid)
     }
 
     async fn s2s_remote_recipient_route_exists(&self, jid: &str) -> bool {

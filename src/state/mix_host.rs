@@ -56,11 +56,11 @@ impl MixHost for AppState {
     }
 
     fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
-        AppState::session_entries_for(self, jid)
+        self.sessions.session_entries_for(jid)
     }
 
     fn sessions_for(&self, jid: &str) -> Vec<OnlineSession> {
-        AppState::sessions_for(self, jid)
+        self.sessions.sessions_for(jid)
     }
 
     fn mix_iq_relay_route(&self) -> MixIqRelayRoute {
@@ -94,8 +94,7 @@ impl MixHost for AppState {
         expected_gate: &Arc<Mutex<()>>,
         require_available: bool,
     ) -> bool {
-        AppState::local_mix_presence_route_is_current(
-            self,
+        self.sessions.local_mix_presence_route_is_current(
             full_jid,
             expected_connection_id,
             expected_gate,

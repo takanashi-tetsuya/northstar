@@ -202,7 +202,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     fn sm_session_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::SmSessionTelemetry<'_>;
-    /// See `AppState::staged_session_is_current`.
+    /// See `LocalSessionTable::staged_session_is_current`.
     fn staged_session_is_current(
         &self,
         key: &str,
@@ -308,14 +308,14 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     ) -> impl std::future::Future<
         Output = anyhow::Result<northstar_session_application::sm::SmResumeFinalizationOutcome>,
     > + Send;
-    /// See `AppState::local_caps_epoch_is_current`.
+    /// See `LocalSessionTable::local_caps_epoch_is_current`.
     fn local_caps_epoch_is_current(
         &self,
         full_jid: &str,
         epoch: LocalCapsEpoch,
         expected_gate: Option<&Arc<tokio::sync::Mutex<()>>>,
     ) -> bool;
-    /// See `AppState::local_caps_observer_connection_is_current`.
+    /// See `LocalSessionTable::local_caps_observer_connection_is_current`.
     fn local_caps_observer_connection_is_current(
         &self,
         full_jid: &str,
@@ -342,7 +342,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     ) -> impl std::future::Future<Output = Vec<Arc<SuspendedMucEndpoint>>> + Send;
     /// See `AppState::pending_caps`.
     fn pending_caps(&self) -> &northstar_protocol_runtime::caps::PendingCapsIndex;
-    /// See `AppState::publish_user_agent_epoch_if_current`.
+    /// See `LocalSessionTable::publish_user_agent_epoch_if_current`.
     fn publish_user_agent_epoch_if_current(
         &self,
         key: &str,
@@ -382,13 +382,13 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         &self,
         endpoints: &[Arc<SuspendedMucEndpoint>],
     ) -> impl std::future::Future<Output = ()> + Send;
-    /// See `AppState::session_entries_for`.
+    /// See `LocalSessionTable::session_entries_for`.
     fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)>;
     /// See `AppState::sm_buffer_limits`.
     fn sm_buffer_limits(&self) -> SmBufferLimits;
     /// See `AppState::sm_ip_binding`.
     fn sm_ip_binding(&self) -> &str;
-    /// See `AppState::sm_pending_route_removal_signal`.
+    /// See `LocalSessionTable::sm_pending_route_removal_signal`.
     fn sm_pending_route_removal_signal(
         &self,
         key: &str,
@@ -397,7 +397,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         sm_session_id: uuid::Uuid,
         cancel_live_route: bool,
     ) -> Option<tokio::sync::watch::Receiver<bool>>;
-    /// See `AppState::sm_presence_epoch`.
+    /// See `LocalSessionTable::sm_presence_epoch`.
     fn sm_presence_epoch(&self, key: &str) -> Option<SmPresenceEpoch>;
     /// See `AppState::sm_session_policy`.
     fn sm_session_policy(&self) -> SmSessionPolicy;

@@ -1,6 +1,8 @@
 //! Route federated IQ requests and responses with account, resource and service authorization.
 
 use super::*;
+use northstar_roster_xmpp::FederatedPresenceHost as _;
+use northstar_stream::protocol::SessionHost as _;
 
 pub(super) fn is_xep0357_notification_publish(pubsub: roxmltree::Node<'_, '_>) -> bool {
     pubsub.children().any(|operation| {

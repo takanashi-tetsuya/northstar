@@ -57,7 +57,7 @@ impl OnlineRoutePort for AppState {
 
 impl FullJidFallbackPort for AppState {
     fn fallback_sessions(&self, bare: &str) -> Vec<(String, Self::Session)> {
-        self.session_entries_for(bare)
+        self.sessions.session_entries_for(bare)
     }
 
     fn available_priority(&self, session: &Self::Session) -> Option<i16> {

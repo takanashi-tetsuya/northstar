@@ -135,10 +135,12 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     PgPool, Postgres,
 };
+#[cfg(test)]
+use std::sync::atomic::AtomicU8;
 use std::{
     collections::HashSet,
     sync::{
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, Ordering},
         Arc,
     },
     time::{Duration, Instant},
@@ -203,9 +205,9 @@ use northstar_stream::local_routes::muc::{
     SuspendedMucPhase, SuspendedMucRoute,
 };
 use northstar_stream::local_routes::muc_table::*;
-use northstar_stream::local_routes::session::{
-    AccountRevocationRoutes, OnlineSession, SmPresenceEpoch, SmStagedRouteClaim,
-};
+#[cfg(test)]
+use northstar_stream::local_routes::session::SmStagedRouteClaim;
+use northstar_stream::local_routes::session::{AccountRevocationRoutes, OnlineSession};
 use northstar_stream::local_routes::session_table::*;
 use northstar_stream::local_routes::suspended_muc::*;
 use northstar_xml_builder::escape::attr_escape;
@@ -222,6 +224,7 @@ mod runtime_control_health_tests;
 #[allow(unused_imports)]
 pub use northstar_protocol_runtime::caps::CapsKey;
 
+#[cfg(test)]
 pub use northstar_session_core::LocalCapsEpoch;
 
 pub use northstar_session_core::JoinedMucMembership;
@@ -265,7 +268,7 @@ pub struct AppState {
             northstar_auth_postgres::account_revocation_repository::PostgresAccountRevocationRepository,
         >,
     bosh: Option<northstar_bosh::BoshManager>,
-    sessions: Arc<DashMap<String, OnlineSession>>,
+    sessions: LocalSessionTable,
     metrics: Arc<Metrics>,
     /// Optional credential for the dedicated observability listener. Callers
     /// can ask for an authorization decision but cannot read the token.

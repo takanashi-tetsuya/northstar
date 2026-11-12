@@ -85,7 +85,7 @@ impl RosterSessionHost for AppState {
     }
 
     async fn push_blocklist_change(&self, owner: &str, payload: &str) {
-        for (jid, session) in self.session_entries_for(owner) {
+        for (jid, session) in self.sessions.session_entries_for(owner) {
             if !session.blocklist_requested.load(Ordering::Acquire) {
                 continue;
             }
@@ -149,7 +149,7 @@ impl RosterSessionHost for AppState {
     }
 
     fn local_resource_count(&self, account: &str) -> usize {
-        self.sessions_for(account).len()
+        self.sessions.sessions_for(account).len()
     }
 
     async fn account_has_remote_resources(&self, account: &str) -> Result<bool> {
@@ -157,7 +157,7 @@ impl RosterSessionHost for AppState {
     }
 
     fn privacy_list_active_locally(&self, account: &str, name: &str) -> bool {
-        self.sessions_for(account).iter().any(|session| {
+        self.sessions.sessions_for(account).iter().any(|session| {
             session
                 .privacy_active
                 .read()
@@ -175,7 +175,7 @@ impl RosterSessionHost for AppState {
         current_connection: Uuid,
     ) -> Option<String> {
         let mut current_push = None;
-        for (jid, session) in self.session_entries_for(account) {
+        for (jid, session) in self.sessions.session_entries_for(account) {
             if !session.privacy_requested.load(Ordering::Acquire) {
                 continue;
             }
@@ -390,7 +390,7 @@ async fn deliver_roster_removal_presence(
         // XEP-0016 list.
         return;
     };
-    for (target_full, session) in state.session_entries_for(target_bare) {
+    for (target_full, session) in state.sessions.session_entries_for(target_bare) {
         // RFC 6121 section 2.2 distinguishes an "available resource" from
         // an "interested resource".  Subscription-related presence is sent
         // to every available resource; only the roster push which follows it
@@ -573,6 +573,7 @@ where
     Fut: std::future::Future<Output = Result<()>>,
 {
     for (from, session) in state
+        .sessions
         .session_entries_for(owner)
         .into_iter()
         .filter(|(_, session)| session.available.load(Ordering::Acquire))
@@ -608,7 +609,7 @@ where
             };
             let delivery = set_to(&base_presence, &target);
             if target_jid.domainpart() == state.local_domain() {
-                let mut recipients = state.session_entries_for(&target);
+                let mut recipients = state.sessions.session_entries_for(&target);
                 if target_jid.resourcepart().is_none() {
                     recipients.retain(|(_, recipient)| recipient.available.load(Ordering::Acquire));
                 }
@@ -682,7 +683,7 @@ impl PresenceRouting for AppState {
 
 impl FederatedPresenceHost for AppState {
     fn sessions_for(&self, jid: &str) -> Vec<OnlineSession> {
-        AppState::sessions_for(self, jid)
+        self.sessions.sessions_for(jid)
     }
 
     async fn dispatch_push_notification(&self, user_id: Uuid) -> Result<()> {
@@ -692,7 +693,7 @@ impl FederatedPresenceHost for AppState {
 
 impl PresenceDeliveryHost for AppState {
     fn local_presence_owner_keys(&self) -> Vec<String> {
-        AppState::local_presence_owner_keys(self)
+        self.sessions.local_presence_owner_keys()
     }
 
     fn local_presence_owner_candidate(
@@ -701,7 +702,8 @@ impl PresenceDeliveryHost for AppState {
         user_id: Uuid,
         auth_generation: i64,
     ) -> Option<OnlineSession> {
-        AppState::local_presence_owner_candidate(self, key, user_id, auth_generation)
+        self.sessions
+            .local_presence_owner_candidate(key, user_id, auth_generation)
     }
 
     fn local_presence_owner_if_current(
@@ -711,7 +713,8 @@ impl PresenceDeliveryHost for AppState {
         user_id: Uuid,
         auth_generation: i64,
     ) -> Option<OnlineSession> {
-        AppState::local_presence_owner_if_current(self, key, expected, user_id, auth_generation)
+        self.sessions
+            .local_presence_owner_if_current(key, expected, user_id, auth_generation)
     }
 
     fn send_presence_if_owner_current(
@@ -723,8 +726,7 @@ impl PresenceDeliveryHost for AppState {
         recipient: &OutboundSender,
         presence: &str,
     ) -> bool {
-        AppState::send_presence_if_owner_current(
-            self,
+        self.sessions.send_presence_if_owner_current(
             key,
             expected,
             user_id,

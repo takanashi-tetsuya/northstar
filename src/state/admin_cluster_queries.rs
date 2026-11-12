@@ -29,7 +29,7 @@ impl AppState {
     }
 
     pub(crate) async fn admin_online_bare_jids(&self) -> anyhow::Result<BTreeSet<String>> {
-        let mut users = self.local_online_bare_jids();
+        let mut users = self.sessions.local_online_bare_jids();
         users.extend(self.cluster.online_bare_jids().await?);
         Ok(users)
     }
@@ -38,8 +38,9 @@ impl AppState {
         &self,
     ) -> anyhow::Result<(BTreeSet<String>, BTreeSet<String>)> {
         let idle_seconds = self.admin_activity_idle_seconds();
-        let (mut online, mut active) =
-            self.local_activity_bare_jids(Duration::from_secs(idle_seconds));
+        let (mut online, mut active) = self
+            .sessions
+            .local_activity_bare_jids(Duration::from_secs(idle_seconds));
         active.extend(self.cluster.activity_bare_jids(idle_seconds, true).await?);
         online.extend(active.iter().cloned());
         online.extend(self.cluster.activity_bare_jids(idle_seconds, false).await?);

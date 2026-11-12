@@ -935,7 +935,7 @@ do
         exit 1
     fi
 done
-sm_route_removal_source=$(module_item src/state.rs 'pub(crate) fn sm_pending_route_removal_signal(') || exit 1
+sm_route_removal_source=$(module_item crates/edges/northstar-stream/src/local_routes/session_table.rs 'pub fn sm_pending_route_removal_signal(') || exit 1
 for required_route_fragment in \
     'session.connection_id != old_connection_id || session.user_id != user_id || !exact_sm' \
     'if cancel_live_route {' \

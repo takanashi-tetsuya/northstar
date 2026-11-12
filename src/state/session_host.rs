@@ -31,6 +31,18 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 impl SessionHost for AppState {
+    type AccountStore = northstar_workflows::account_repository::WorkflowAccountRepository;
+    type AuthenticationStore =
+        northstar_workflows::authentication_effects::PostgresAuthenticationRepository;
+    type ChallengeStore = northstar_abuse_postgres::challenge::PostgresChallengeRepository;
+    type MixStore = northstar_workflows::room_effects::PostgresMixRepository;
+    type PushStore = northstar_workflows::push_repository::PostgresPushRepository;
+    type ReplayStore = northstar_session_postgres::replay_repository::PostgresReplayRepository;
+    type LoginAbuseStore = northstar_abuse_postgres::login::PostgresSaslLoginAbuseRepository;
+    type SmStore = northstar_workflows::sm_repository::PostgresSmRepository;
+    type PresenceStore = northstar_workflows::presence_repository::PostgresPresenceRepository;
+    type PrivacyStore = northstar_roster_postgres::privacy::PostgresPrivacyRepository;
+
     fn drop_session(session: &mut ClientSession) {
         session.drop_on_node();
     }

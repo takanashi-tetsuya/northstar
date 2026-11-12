@@ -27,14 +27,34 @@ use tokio_util::sync::CancellationToken;
 /// The node a [`ProtocolSession`] runs in. The composition root implements it; the session core reaches the node
 /// through it as each part of the core becomes generic over the host.
 pub trait SessionHost: Sized + Send + Sync + 'static {
+    /// The repository behind [`SessionHost::account_service`].
+    type AccountStore: northstar_auth_application::account::AccountRepository + 'static;
+    /// The repository behind [`SessionHost::authentication_service`].
+    type AuthenticationStore: northstar_auth_application::authentication::AuthenticationRepository
+        + 'static;
+    /// The repository behind [`SessionHost::challenge_issue_service`].
+    type ChallengeStore: northstar_abuse_application::challenge::ChallengeIssueRepository + 'static;
+    /// The repository behind [`SessionHost::mix_service`].
+    type MixStore: northstar_room_application::mix_service::MixRepository + 'static;
+    /// The repository behind [`SessionHost::push_service`].
+    type PushStore: northstar_message_application::push::PushRepository + 'static;
+    /// The repository behind [`SessionHost::replay_service`].
+    type ReplayStore: northstar_session_application::replay::ReplayRepository + Clone + 'static;
+    /// The repository behind [`SessionHost::sasl_login_abuse_service`].
+    type LoginAbuseStore: northstar_abuse_application::login::SaslLoginAbuseRepository + 'static;
+    /// The repository behind [`SessionHost::sm_service`].
+    type SmStore: northstar_session_application::sm::SmRepository + 'static;
+    /// The repository behind [`SessionHost::presence_service`].
+    type PresenceStore: northstar_roster_application::presence::PresenceRepository + 'static;
+    /// The repository behind [`SessionHost::privacy_service`].
+    type PrivacyStore: northstar_roster_application::privacy::PrivacyRepository + 'static;
+
     /// Finalizes a session dropped without its asynchronous cleanup.
     fn drop_session(session: &mut ProtocolSession<Self>);
     /// See `AppState::account_service`.
     fn account_service(
         &self,
-    ) -> &northstar_auth_application::account::AccountService<
-        northstar_workflows::account_repository::WorkflowAccountRepository,
-    >;
+    ) -> &northstar_auth_application::account::AccountService<Self::AccountStore>;
     /// Associate MUC occupants which were joined before SM enable with the
     /// newly-created durable stream epoch and update their Redis control
     /// records. This also makes active-session revocation exact and immune to
@@ -49,9 +69,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// See `AppState::authentication_service`.
     fn authentication_service(
         &self,
-    ) -> &northstar_auth_application::authentication::AuthenticationService<
-        northstar_workflows::authentication_effects::PostgresAuthenticationRepository,
-    >;
+    ) -> &northstar_auth_application::authentication::AuthenticationService<Self::AuthenticationStore>;
     /// See `AppState::c2s_authentication_telemetry`.
     fn c2s_authentication_telemetry(
         &self,
@@ -72,9 +90,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// See `AppState::challenge_issue_service`.
     fn challenge_issue_service(
         &self,
-    ) -> &northstar_abuse_application::challenge::ChallengeIssueService<
-        northstar_abuse_postgres::challenge::PostgresChallengeRepository,
-    >;
+    ) -> &northstar_abuse_application::challenge::ChallengeIssueService<Self::ChallengeStore>;
     /// Claim a route that remains unpublished until the login transaction
     /// commits. The binding proof is fixed at this boundary.
     fn claim_staged_binding_route(
@@ -101,21 +117,13 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// Validated local identity for protocol routing without exposing Config.
     fn local_domain(&self) -> &str;
     /// See `AppState::mix_service`.
-    fn mix_service(
-        &self,
-    ) -> &northstar_room_application::mix_service::MixService<
-        northstar_workflows::room_effects::PostgresMixRepository,
-    >;
+    fn mix_service(&self) -> &northstar_room_application::mix_service::MixService<Self::MixStore>;
     /// See `AppState::outbound_stanza_telemetry`.
     fn outbound_stanza_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::OutboundStanzaTelemetry<'_>;
     /// See `AppState::push_service`.
-    fn push_service(
-        &self,
-    ) -> &northstar_message_application::push::PushService<
-        northstar_workflows::push_repository::PostgresPushRepository,
-    >;
+    fn push_service(&self) -> &northstar_message_application::push::PushService<Self::PushStore>;
     /// See `AppState::push_subscription_telemetry`.
     fn push_subscription_telemetry(
         &self,
@@ -155,9 +163,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// See `AppState::replay_service`.
     fn replay_service(
         &self,
-    ) -> &northstar_session_application::replay::ReplayService<
-        northstar_session_postgres::replay_repository::PostgresReplayRepository,
-    >;
+    ) -> &northstar_session_application::replay::ReplayService<Self::ReplayStore>;
     /// See `AppState::sasl2_authentication_telemetry`.
     fn sasl2_authentication_telemetry(
         &self,
@@ -169,9 +175,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// See `AppState::sasl_login_abuse_service`.
     fn sasl_login_abuse_service(
         &self,
-    ) -> &northstar_abuse_application::login::SaslLoginAbuseService<
-        northstar_abuse_postgres::login::PostgresSaslLoginAbuseRepository,
-    >;
+    ) -> &northstar_abuse_application::login::SaslLoginAbuseService<Self::LoginAbuseStore>;
     /// See `AppState::session_bind_telemetry`.
     fn session_bind_telemetry(
         &self,
@@ -193,11 +197,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         &self,
     ) -> &Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>;
     /// See `AppState::sm_service`.
-    fn sm_service(
-        &self,
-    ) -> &northstar_session_application::sm::SmService<
-        northstar_workflows::sm_repository::PostgresSmRepository,
-    >;
+    fn sm_service(&self) -> &northstar_session_application::sm::SmService<Self::SmStore>;
     /// See `AppState::sm_session_telemetry`.
     fn sm_session_telemetry(
         &self,
@@ -500,9 +500,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// See `AppState::presence_service`.
     fn presence_service(
         &self,
-    ) -> &northstar_roster_application::presence::PresenceService<
-        northstar_workflows::presence_repository::PostgresPresenceRepository,
-    >;
+    ) -> &northstar_roster_application::presence::PresenceService<Self::PresenceStore>;
     /// Evaluate one resource's session-local XEP-0016 selection (or the
     /// account default when no active list is selected). Callers must apply
     /// XEP-0191 first; a blocking hit is never overridden by an allow rule.
@@ -517,9 +515,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// See `AppState::privacy_service`.
     fn privacy_service(
         &self,
-    ) -> &northstar_roster_application::privacy::PrivacyService<
-        northstar_roster_postgres::privacy::PostgresPrivacyRepository,
-    >;
+    ) -> &northstar_roster_application::privacy::PrivacyService<Self::PrivacyStore>;
     /// Client IQs addressed to a full JID stop at the first accepting node.
     fn route_client_iq_to_remote_resource(
         &self,

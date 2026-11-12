@@ -4,7 +4,6 @@ use crate::{
     cluster::{DirectPostCommitMode, DirectSpoolEligibility},
     db,
     state::AppState,
-    xmpp::xml_builder::XmlElement,
 };
 use anyhow::{Context, Result};
 use northstar_message_application::messaging::{
@@ -25,6 +24,7 @@ use northstar_xml_builder::message_policy::{
 };
 use northstar_xml_builder::rewrite::{set_from, set_to};
 use northstar_xml_builder::stanza::{is_encrypted, stanza_error_type};
+use northstar_xml_builder::XmlElement;
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 use roxmltree::Document;
 use std::sync::atomic::Ordering;

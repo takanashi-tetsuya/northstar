@@ -1,6 +1,5 @@
 use super::{Action, ProtocolSession};
 use crate::xmpp::protocol::SessionHost;
-use crate::xmpp::xml_builder::XmlElement;
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use northstar_session_application::sm::{
@@ -13,6 +12,7 @@ use northstar_xep_0198::build_failed_str as sm_failed;
 use northstar_xep_0198::{
     acknowledgement_delta, resumability_allowed, resumed_offline_replay_eligible,
 };
+use northstar_xml_builder::XmlElement;
 use rand::RngCore;
 use roxmltree::Node;
 use sha2::{Digest, Sha256};

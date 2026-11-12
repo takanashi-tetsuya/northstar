@@ -2,6 +2,7 @@
 
 use super::admission_guards::ClientConnectionGuard;
 use super::AppState;
+use crate::xmpp::protocol::ClientSession;
 use crate::xmpp::protocol::ProtocolSession;
 use axum::http::HeaderMap;
 use northstar_c2s::host::C2sHost;
@@ -14,7 +15,7 @@ use northstar_telemetry::metrics::C2sBackpressureTelemetry;
 use std::{net::IpAddr, sync::Arc};
 
 impl TransportHost for AppState {
-    type Session = ProtocolSession;
+    type Session = ClientSession;
     type ConnectionGuard = ClientConnectionGuard;
 
     fn local_domain(&self) -> &str {
@@ -36,7 +37,7 @@ impl TransportHost for AppState {
         transport: ClientTransport,
         stream_limits: Option<StreamLimits>,
         peer_ip: IpAddr,
-    ) -> ProtocolSession {
+    ) -> ClientSession {
         ProtocolSession::new(
             self,
             outbound,

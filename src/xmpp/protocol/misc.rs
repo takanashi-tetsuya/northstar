@@ -1,6 +1,5 @@
 use super::{Action, ProtocolSession};
 use crate::xmpp::protocol::SessionHost;
-use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use northstar_abuse_policy::stanza::strip_pow_element;
 use northstar_abuse_policy::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement};
@@ -19,6 +18,7 @@ use northstar_xml_builder::stanza::{
 };
 use northstar_xml_builder::stream::stream_error;
 use northstar_xml_builder::xdata::xdata_value_field;
+use northstar_xml_builder::XmlElement;
 use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::Node;
 use std::sync::{atomic::AtomicBool, atomic::AtomicU64, atomic::Ordering, Arc};

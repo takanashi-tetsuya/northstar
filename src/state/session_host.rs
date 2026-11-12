@@ -6,7 +6,8 @@ use crate::state::session_cleanup::SessionCleanupService;
 use crate::state::CommittedLocalMucResume;
 use crate::state::RestoredLocalMucOccupants;
 use crate::xmpp::protocol::dispatch::iq_routes::{RootIqRoute, IQ_ROUTES};
-use crate::xmpp::protocol::{ProtocolSession, SessionHost};
+use crate::xmpp::protocol::ClientSession;
+use crate::xmpp::protocol::SessionHost;
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_auth_application::account_teardown::FinalizeAccountDeletion;
@@ -30,7 +31,7 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 impl SessionHost for AppState {
-    fn drop_session(session: &mut ProtocolSession) {
+    fn drop_session(session: &mut ClientSession) {
         session.drop_on_node();
     }
 
@@ -631,7 +632,7 @@ impl SessionHost for AppState {
     }
 
     async fn dispatch_message(
-        session: &ProtocolSession,
+        session: &ClientSession,
         root: Node<'_, '_>,
         raw: &str,
         client_raw: &str,
@@ -640,25 +641,25 @@ impl SessionHost for AppState {
     }
 
     async fn dispatch_presence(
-        session: &mut ProtocolSession,
+        session: &mut ClientSession,
         root: Node<'_, '_>,
         raw: &str,
     ) -> Result<Action> {
         session.presence(root, raw).await
     }
 
-    async fn dispatch_mix_iq(session: &ProtocolSession, raw: &str) -> Result<Option<Action>> {
+    async fn dispatch_mix_iq(session: &ClientSession, raw: &str) -> Result<Option<Action>> {
         session.try_mix_iq(raw).await
     }
 
     async fn authorized_muc_occupant(
-        session: &ProtocolSession,
+        session: &ClientSession,
         room_jid: &str,
     ) -> Result<Option<MucOccupant>> {
         session.authorized_muc_occupant(room_jid).await
     }
 
-    fn iq_routes() -> &'static IqRouter<RootIqRoute> {
+    fn iq_routes() -> &'static IqRouter<RootIqRoute<AppState>> {
         &IQ_ROUTES
     }
 

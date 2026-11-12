@@ -4,7 +4,6 @@ use super::{session_entries_for_in, AppState, OnlineSession, RuntimeFederationPo
 use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
     s2s::FederationRouter,
-    xmpp::xml_builder::XmlElement,
 };
 use anyhow::Result;
 use dashmap::DashMap;
@@ -14,6 +13,7 @@ use northstar_pubsub_application::PubSubService;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_workflows::message_repository::PostgresMessageRepository;
 use northstar_workflows::pubsub_repository::PostgresPubSubRepository;
+use northstar_xml_builder::XmlElement;
 use northstar_xmpp_types::jid::CanonicalJid;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;

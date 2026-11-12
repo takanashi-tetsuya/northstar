@@ -1,6 +1,7 @@
 //! Binds the message handlers of `northstar-message-xmpp` to the client session.
 
 use super::{Action, ProtocolSession};
+use crate::xmpp::protocol::ClientSession;
 use crate::xmpp::protocol::SessionHost;
 use anyhow::Result;
 #[cfg(test)]
@@ -131,7 +132,7 @@ impl<
     }
 }
 
-impl ProtocolSession {
+impl ClientSession {
     /// Ordinary controlled tests use the actual frame owner without constructing
     /// a session. The returned runner owns observation before child polling.
     #[cfg(test)]

@@ -238,7 +238,7 @@ pub(super) async fn send_unavailable_presence_to_remote(
                 continue;
             }
         }
-        let stanza = crate::xmpp::xml_builder::XmlElement::new("presence")
+        let stanza = northstar_xml_builder::XmlElement::new("presence")
             .attr("xmlns", "jabber:client")
             .attr("from", &full_jid)
             .attr("to", contact)
@@ -281,7 +281,7 @@ pub(super) async fn send_current_presence_to_remote(state: &AppState, owner: &st
             .clone()
             .map(|presence| set_to(&presence, contact))
             .unwrap_or_else(|| {
-                crate::xmpp::xml_builder::XmlElement::new("presence")
+                northstar_xml_builder::XmlElement::new("presence")
                     .attr("xmlns", "jabber:client")
                     .attr("from", &full_jid)
                     .attr("to", contact)
@@ -386,7 +386,7 @@ pub(super) async fn route_inbound_presence_probe(
                     })
                     .map(str::to_owned)
             });
-            crate::xmpp::xml_builder::XmlElement::new("presence")
+            northstar_xml_builder::XmlElement::new("presence")
                 .attr("xmlns", "jabber:server")
                 .attr("from", &full_jid)
                 .attr("to", requester)
@@ -396,7 +396,7 @@ pub(super) async fn route_inbound_presence_probe(
             last_presence
                 .map(|presence| set_to(&presence, requester))
                 .unwrap_or_else(|| {
-                    crate::xmpp::xml_builder::XmlElement::new("presence")
+                    northstar_xml_builder::XmlElement::new("presence")
                         .attr("xmlns", "jabber:server")
                         .attr("from", &full_jid)
                         .attr("to", requester)
@@ -428,7 +428,7 @@ pub(super) fn presence_probe_status_response(
         "unsubscribed" => "unsubscribed",
         _ => "error",
     };
-    crate::xmpp::xml_builder::XmlElement::new("presence")
+    northstar_xml_builder::XmlElement::new("presence")
         .attr("xmlns", "jabber:server")
         .attr("from", from)
         .attr("to", to)

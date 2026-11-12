@@ -10,4 +10,3 @@ pub(crate) mod stage4_auth_publication;
 mod stage4_frame_capture;
 #[cfg(test)]
 pub(crate) mod stage4_native;
-pub(crate) mod xml_builder;

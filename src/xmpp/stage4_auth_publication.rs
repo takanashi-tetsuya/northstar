@@ -466,12 +466,12 @@ fn control_xml(control: &wire::ControlInput) -> Result<String> {
         wire::ControlInput::Binding(control) => {
             // Actual shared builders. Inline assembly remains source
             // correspondence with misc::handle_bind, not handler execution.
-            let payload = crate::xmpp::xml_builder::XmlElement::namespaced(
+            let payload = northstar_xml_builder::XmlElement::namespaced(
                 "bind",
                 "urn:ietf:params:xml:ns:xmpp-bind",
             )
             .child(
-                crate::xmpp::xml_builder::XmlElement::new("jid")
+                northstar_xml_builder::XmlElement::new("jid")
                     .text(control.full_jid.as_str().to_owned()),
             )
             .finish();

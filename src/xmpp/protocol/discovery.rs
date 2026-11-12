@@ -1,6 +1,6 @@
-use super::{Action, ProtocolSession};
+use super::Action;
+use crate::xmpp::protocol::ClientSession;
 use crate::xmpp::protocol::SessionHost;
-use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use northstar_room_application::mix_service::{
     CORE_NODES, NODE_ALLOWED, NODE_AVATAR_DATA, NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG,
@@ -8,6 +8,7 @@ use northstar_room_application::mix_service::{
 };
 use northstar_xml_builder::disco::{disco_rsm_result_element, parse_disco_items_query};
 use northstar_xml_builder::stanza::{iq_error, iq_error_from, iq_result_from};
+use northstar_xml_builder::XmlElement;
 
 const DISCO_INFO_NS: &str = "http://jabber.org/protocol/disco#info";
 const DISCO_ITEMS_NS: &str = "http://jabber.org/protocol/disco#items";
@@ -129,7 +130,7 @@ const SERVER_DISCO_FEATURES: &[&str] = &[
     "urn:xmpp:mix:roster:0",
 ];
 
-impl ProtocolSession {
+impl ClientSession {
     pub(crate) async fn disco_info(
         &self,
         id: &str,

@@ -6,11 +6,13 @@
 //! `feature-not-implemented`.
 
 use super::*;
+use crate::state::AppState;
+use crate::xmpp::protocol::ClientSession;
 use northstar_stream::{HandlerFuture, IqKind, IqRequest, IqRoute, IqRouter};
 use std::sync::LazyLock;
 
 /// A handler of the client IQ dispatch.
-pub(crate) type RootIqHandler<H = crate::state::AppState> =
+pub(crate) type RootIqHandler<H> =
     for<'a> fn(&'a mut ProtocolSession<H>, IqRequest<'a>) -> HandlerFuture<'a, Action>;
 
 /// Whether a route dispatches unconditionally or only while its conditions are met.
@@ -42,7 +44,7 @@ pub(crate) enum Admission {
 }
 
 /// A registered route: its handler and its gate.
-pub(crate) struct RootIqRoute<H: SessionHost = crate::state::AppState> {
+pub(crate) struct RootIqRoute<H: SessionHost> {
     pub(crate) handler: RootIqHandler<H>,
     pub(crate) gate: RouteGate,
 }
@@ -105,7 +107,7 @@ impl<H: SessionHost> RootIqRoute<H> {
     }
 }
 
-const ROUTES: &[(IqRoute, RootIqHandler, RouteGate)] = &[
+const ROUTES: &[(IqRoute, RootIqHandler<AppState>, RouteGate)] = &[
     (
         IqRoute::new(
             "command",
@@ -376,7 +378,7 @@ const ROUTES: &[(IqRoute, RootIqHandler, RouteGate)] = &[
     ),
 ];
 
-fn build_routes() -> IqRouter<RootIqRoute> {
+fn build_routes() -> IqRouter<RootIqRoute<AppState>> {
     let mut router = IqRouter::new();
     for &(route, handler, gate) in ROUTES {
         let result = router.register(route, RootIqRoute { handler, gate });
@@ -385,10 +387,11 @@ fn build_routes() -> IqRouter<RootIqRoute> {
     router
 }
 
-pub(crate) static IQ_ROUTES: LazyLock<IqRouter<RootIqRoute>> = LazyLock::new(build_routes);
+pub(crate) static IQ_ROUTES: LazyLock<IqRouter<RootIqRoute<AppState>>> =
+    LazyLock::new(build_routes);
 
 fn command<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(async move {
@@ -404,7 +407,7 @@ fn command<'a>(
 }
 
 fn ibr2_register_get<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(std::future::ready(Ok(
@@ -413,21 +416,21 @@ fn ibr2_register_get<'a>(
 }
 
 fn ibr2_register_set<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.select_ibr_flow_iq(request.id, request.payload))
 }
 
 fn ibr2_response_set<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.handle_ibr_response_iq(request.id, request.payload))
 }
 
 fn ibr2_cancel_set<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(std::future::ready(Ok(
@@ -435,7 +438,7 @@ fn ibr2_cancel_set<'a>(
     )))
 }
 
-fn bind<'a>(session: &'a mut ProtocolSession, request: IqRequest<'a>) -> HandlerFuture<'a, Action> {
+fn bind<'a>(session: &'a mut ClientSession, request: IqRequest<'a>) -> HandlerFuture<'a, Action> {
     Box::pin(async move {
         if !valid_bind_payload(request.payload) {
             Ok(Action::Send(iq_error(request.id, "bad-request")))
@@ -446,7 +449,7 @@ fn bind<'a>(session: &'a mut ProtocolSession, request: IqRequest<'a>) -> Handler
 }
 
 fn session<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     let _ = session;
@@ -460,84 +463,84 @@ fn session<'a>(
 }
 
 fn roster_get<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.roster_get(request.id, request.stanza, request.payload))
 }
 
 fn roster_set<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.roster_set(request.id, request.stanza, request.payload))
 }
 
 fn muc_owner_get<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.muc_owner_get(request.id, request.stanza))
 }
 
 fn muc_owner_set<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.muc_owner_set(request.id, request.stanza, request.payload))
 }
 
 fn muc_admin_get<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.muc_admin_get(request.id, request.stanza, request.payload))
 }
 
 fn muc_admin_set<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.muc_admin_set(request.id, request.stanza, request.payload))
 }
 
 fn muc_moderate<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.muc_moderate(request.id, request.stanza, request.payload))
 }
 
 fn disco_info<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.disco_info(request.id, request.stanza.attribute("to"), request.payload))
 }
 
 fn disco_items<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.disco_items(request.id, request.stanza.attribute("to"), request.payload))
 }
 
 fn vcard_get<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.vcard_get(request.id, request.stanza))
 }
 
 fn vcard_set<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.vcard_set(request.id, request.stanza, request.payload, request.raw))
 }
 
 fn pubsub_set<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(async move {
@@ -563,7 +566,7 @@ fn pubsub_set<'a>(
 }
 
 fn pubsub_get<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(async move {
@@ -582,14 +585,14 @@ fn pubsub_get<'a>(
 }
 
 fn private_get<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.private_get(request.id, request.stanza.attribute("to"), request.payload))
 }
 
 fn private_set<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.private_set(
@@ -601,20 +604,20 @@ fn private_set<'a>(
 }
 
 fn privacy_get<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.privacy_get(request.id, request.stanza, request.payload))
 }
 
 fn privacy_set<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.privacy_set(request.id, request.stanza, request.payload))
 }
 
-fn ping<'a>(session: &'a mut ProtocolSession, request: IqRequest<'a>) -> HandlerFuture<'a, Action> {
+fn ping<'a>(session: &'a mut ClientSession, request: IqRequest<'a>) -> HandlerFuture<'a, Action> {
     let _ = session;
     Box::pin(async move {
         if northstar_xep_0199::parse_ping_element(request.payload).is_err() {
@@ -628,7 +631,7 @@ fn ping<'a>(session: &'a mut ProtocolSession, request: IqRequest<'a>) -> Handler
     })
 }
 
-fn time<'a>(session: &'a mut ProtocolSession, request: IqRequest<'a>) -> HandlerFuture<'a, Action> {
+fn time<'a>(session: &'a mut ClientSession, request: IqRequest<'a>) -> HandlerFuture<'a, Action> {
     let _ = session;
     Box::pin(async move {
         if northstar_xep_0202::parse_time_request_element(request.payload).is_err() {
@@ -649,7 +652,7 @@ fn time<'a>(session: &'a mut ProtocolSession, request: IqRequest<'a>) -> Handler
 }
 
 fn version<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(async move {
@@ -675,7 +678,7 @@ fn version<'a>(
 }
 
 fn external_services<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(std::future::ready(session.external_services(
@@ -686,7 +689,7 @@ fn external_services<'a>(
 }
 
 fn external_credentials<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(std::future::ready(session.external_credentials(
@@ -697,42 +700,42 @@ fn external_credentials<'a>(
 }
 
 fn push_enable<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.enable_push(request.id, request.stanza, request.payload, request.raw))
 }
 
 fn push_disable<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.disable_push(request.id, request.stanza, request.payload))
 }
 
 fn mam_query_set<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.mam(request.id, request.payload, request.stanza.attribute("to")))
 }
 
 fn mam_query_get<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.mam_query_form(request.id, request.stanza.attribute("to"), request.payload))
 }
 
 fn mam_metadata<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.mam_metadata(request.id, request.stanza.attribute("to"), request.payload))
 }
 
 fn mam_prefs_get<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.mam_preferences_get(
@@ -743,7 +746,7 @@ fn mam_prefs_get<'a>(
 }
 
 fn mam_prefs_set<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.mam_preferences_set(
@@ -754,7 +757,7 @@ fn mam_prefs_set<'a>(
 }
 
 fn carbons_enable<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(std::future::ready(session.set_carbons(
@@ -766,7 +769,7 @@ fn carbons_enable<'a>(
 }
 
 fn carbons_disable<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(std::future::ready(session.set_carbons(
@@ -778,28 +781,25 @@ fn carbons_disable<'a>(
 }
 
 fn blocklist<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.blocklist(request.id, request.stanza, request.payload))
 }
 
-fn block<'a>(
-    session: &'a mut ProtocolSession,
-    request: IqRequest<'a>,
-) -> HandlerFuture<'a, Action> {
+fn block<'a>(session: &'a mut ClientSession, request: IqRequest<'a>) -> HandlerFuture<'a, Action> {
     Box::pin(session.block(request.id, request.stanza, request.payload))
 }
 
 fn unblock<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.unblock(request.id, request.stanza, request.payload))
 }
 
 fn register_get<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(async move {
@@ -816,7 +816,7 @@ fn register_get<'a>(
 }
 
 fn register_set<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(async move {
@@ -837,7 +837,7 @@ fn register_set<'a>(
 }
 
 fn muc_unique<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(async move {
@@ -854,7 +854,7 @@ fn muc_unique<'a>(
 }
 
 fn http_upload_slot<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(session.http_upload_slot(request.id, request.stanza.attribute("to"), request.payload))
@@ -864,7 +864,7 @@ fn http_upload_slot<'a>(
 /// service is known and implemented, so using IQ-set is a
 /// malformed request rather than an unknown feature.
 fn http_upload_set<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(async move {
@@ -877,7 +877,7 @@ fn http_upload_set<'a>(
 }
 
 fn pubsub_owner_set<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(async move {
@@ -897,7 +897,7 @@ fn pubsub_owner_set<'a>(
 }
 
 fn pubsub_owner_get<'a>(
-    session: &'a mut ProtocolSession,
+    session: &'a mut ClientSession,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
     Box::pin(async move {

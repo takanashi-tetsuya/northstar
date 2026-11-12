@@ -361,14 +361,13 @@ pub(crate) async fn route_inbound_iq(
             if stored.is_empty() && !requested.is_empty() {
                 return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
             }
-            let mut item_list =
-                crate::xmpp::xml_builder::XmlElement::new("items").attr("node", node);
+            let mut item_list = northstar_xml_builder::XmlElement::new("items").attr("node", node);
             for (_, item) in stored {
                 item_list = item_list
                     .validated_fragment(&item)
                     .context("stored PEP item is not valid XML")?;
             }
-            let payload = crate::xmpp::xml_builder::XmlElement::new("pubsub")
+            let payload = northstar_xml_builder::XmlElement::new("pubsub")
                 .attr("xmlns", "http://jabber.org/protocol/pubsub")
                 .child(item_list)
                 .finish();
@@ -462,10 +461,10 @@ pub(crate) async fn route_inbound_iq(
                         return Ok(Some(s2s_iq_error(id, to, from, "policy-violation")));
                     }
                 };
-                let payload = crate::xmpp::xml_builder::XmlElement::new("pubsub")
+                let payload = northstar_xml_builder::XmlElement::new("pubsub")
                     .attr("xmlns", "http://jabber.org/protocol/pubsub")
                     .child(
-                        crate::xmpp::xml_builder::XmlElement::new("subscription")
+                        northstar_xml_builder::XmlElement::new("subscription")
                             .attr("node", node)
                             .attr("jid", &requested)
                             .attr("subscription", "subscribed")

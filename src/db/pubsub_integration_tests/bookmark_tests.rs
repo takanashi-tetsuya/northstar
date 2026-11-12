@@ -44,21 +44,19 @@ impl PepOutboxFactory for LockedBookmarkReplacementOutbox {
             return Ok(Vec::new());
         }
         let mut items =
-            crate::xmpp::xml_builder::XmlElement::new("items").attr("node", "urn:xmpp:bookmarks:1");
+            northstar_xml_builder::XmlElement::new("items").attr("node", "urn:xmpp:bookmarks:1");
         for (_, payload) in &plan.changed_items {
             items.push_validated_fragment(payload)?;
         }
         for item_id in &plan.retracted_item_ids {
-            items.push_child(
-                crate::xmpp::xml_builder::XmlElement::new("retract").attr("id", item_id),
-            );
+            items.push_child(northstar_xml_builder::XmlElement::new("retract").attr("id", item_id));
         }
         let owner = &audience.owner_bare_jid;
-        let message = crate::xmpp::xml_builder::XmlElement::namespaced("message", "jabber:client")
+        let message = northstar_xml_builder::XmlElement::namespaced("message", "jabber:client")
             .attr("from", owner)
             .attr("to", owner)
             .child(
-                crate::xmpp::xml_builder::XmlElement::namespaced(
+                northstar_xml_builder::XmlElement::namespaced(
                     "event",
                     "http://jabber.org/protocol/pubsub#event",
                 )

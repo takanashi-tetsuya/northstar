@@ -25,7 +25,6 @@ mod sm_owner;
 pub(crate) mod upload;
 pub(crate) mod vcard;
 
-use super::xml_builder::XmlElement;
 use crate::state::AppState;
 use anyhow::{Context, Result};
 use dashmap::DashSet;
@@ -37,6 +36,7 @@ use northstar_stream::transport::{
     Action, ClientTransport, SessionTerminationSignals, StreamLimits, TlsSessionEvidence,
 };
 use northstar_xml_builder::stream::{failure, is_counted_stanza, stream_error, stream_id};
+use northstar_xml_builder::XmlElement;
 
 use roxmltree::Node;
 use std::{
@@ -140,7 +140,7 @@ impl SmRuntimePolicy {
     }
 }
 
-pub struct ProtocolSession<H: SessionHost = AppState> {
+pub struct ProtocolSession<H: SessionHost> {
     host: Arc<H>,
     sm_runtime_policy: SmRuntimePolicy,
     outbound: northstar_stream::outbound::OutboundSender,
@@ -244,6 +244,9 @@ pub struct ProtocolSession<H: SessionHost = AppState> {
     // mutex guard is ever held across an await.
     post_actions: PostActionHandle,
 }
+
+/// The protocol session of the root's own host.
+pub(crate) type ClientSession = ProtocolSession<AppState>;
 
 struct SessionAuthPublication<'a, H: SessionHost> {
     session: &'a mut ProtocolSession<H>,

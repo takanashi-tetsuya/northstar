@@ -9,13 +9,13 @@ use super::{
 use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
     s2s::FederationRouter,
-    xmpp::xml_builder::XmlElement,
 };
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_auth_application::account::{AccountService, DeletionRecoveryJob, RemovedAccount};
 use northstar_config::ExternalRouteDomainPolicy;
 use northstar_workflows::account_repository::WorkflowAccountRepository;
+use northstar_xml_builder::XmlElement;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,

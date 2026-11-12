@@ -1213,13 +1213,13 @@
         },
         {
           "id": "worker:pubsub-digest-delivery",
-          "owner": "src/xmpp/protocol/pubsub.rs",
+          "owner": "src/state/pubsub_delivery.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "worker:pubsub-event-outbox-delivery",
-          "owner": "src/xmpp/protocol/pubsub.rs",
+          "owner": "src/state/pubsub_delivery.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },

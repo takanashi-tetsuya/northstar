@@ -519,4 +519,16 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         user_id: uuid::Uuid,
         bare_account_jid: &str,
     ) -> impl std::future::Future<Output = ()> + Send;
+    /// Replays the last published PubSub items to a resource that became available (XEP-0060
+    /// `send_last_published_item=on_sub_and_presence`).
+    #[allow(clippy::too_many_arguments)]
+    fn replay_pubsub_last_items(
+        self: Arc<Self>,
+        outbound: northstar_stream::outbound::OutboundSender,
+        recipient_id: uuid::Uuid,
+        active_privacy_list: Option<String>,
+        connection_id: uuid::Uuid,
+        recipient: String,
+        show: &'static str,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'static;
 }

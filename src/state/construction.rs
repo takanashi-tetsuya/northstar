@@ -708,11 +708,11 @@ impl AppState {
             Arc::clone(state.worker_registry()),
             worker_cancel.clone(),
         );
-        crate::xmpp::protocol::pubsub::start_pubsub_digest_delivery(
+        crate::state::pubsub_delivery::start_pubsub_digest_delivery(
             Arc::clone(&state),
             worker_cancel.clone(),
         );
-        crate::xmpp::protocol::pubsub::start_pubsub_event_outbox_delivery(
+        crate::state::pubsub_delivery::start_pubsub_event_outbox_delivery(
             Arc::clone(&state),
             worker_cancel.clone(),
         );

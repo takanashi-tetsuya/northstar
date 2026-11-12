@@ -277,11 +277,11 @@ impl ProtocolSession {
                     ));
                 }
                 query.push_validated_fragment(
-                    &super::pubsub::node_metadata_form(&self.host, &node).await?,
+                    &super::pubsub::node_metadata_form(&*self.host, &node).await?,
                 )?;
                 return Ok(Action::Send(iq_result_from(id, from, &query.finish())));
             }
-            let query = super::pubsub::service_disco_payload(&self.host);
+            let query = super::pubsub::service_disco_payload(&*self.host);
             return Ok(Action::Send(iq_result_from(id, from, &query)));
         }
         if self.host.http_upload_enabled()
@@ -856,7 +856,7 @@ impl ProtocolSession {
         } else if target.localpart().is_none() && target.domainpart() == pubsub_domain {
             let requester = self.full_jid.as_deref().unwrap_or_default();
             let reply =
-                super::pubsub::federated_disco_items(&self.host, requester, request).await?;
+                super::pubsub::federated_disco_items(&*self.host, requester, request).await?;
             return Ok(Action::Send(match reply {
                 super::pubsub::PubSubReply::Result(payload) => iq_result_from(id, from, &payload),
                 error => iq_error_from(

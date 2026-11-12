@@ -266,7 +266,7 @@ impl 不能以搬移分割（`cluster/listener.rs` 的 `listen_once` 1,453 行�
 - 逐字比對：執行門禁比對 `services/mix.rs` 三個 ACK 函式與 `db/muc.rs` 的 `admit_muc_discussion_observed` 的正規化本體；
   架構門禁的 DB MIX 生產者方法以呼叫者允許清單綁定 `db/mix_repository.rs`；`catalog/runtime-experiments.json`
   以 `pub(crate) struct PubSubService<R> {` 綁定 `services/pubsub.rs`，以 `API_BODY_LIMIT_BYTES` 綁定 `api/mod.rs`；
-  `xmpp/protocol/pubsub.rs` 的兩個工作者註冊由架構門禁與 catalog 綁定該檔。
+  `state/pubsub_delivery.rs` 的兩個工作者註冊由架構門禁與 catalog 綁定該檔。
 
 ### 5.5 S9 盤點：超過上限的測試檔（`f1b63cc`）
 

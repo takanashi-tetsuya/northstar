@@ -1781,7 +1781,8 @@ if (discoveryDbDomainReferences > MAX_DISCOVERY_DB_DOMAIN_REFERENCES) {
 // from these protocol modules. Alias and glob escapes are rejected above by
 // classifyDbDependencies. Each module is read with its non-test child files.
 for (const [name, serviceAccessor, source] of [
-  ['pubsub.rs', 'pubsub_service', readProductionModule('src/xmpp/protocol/pubsub.rs', { root })],
+  ['pubsub.rs', 'pubsub_application_service',
+    readProductionModule('crates/contexts/pubsub/northstar-pubsub-xmpp/src/pubsub.rs', { root })],
   ['pep.rs', 'pubsub_application_service', readProductionModule('src/xmpp/protocol/pep.rs', { root })],
   ['mix.rs', 'mix_service', readProductionModule('crates/contexts/room/northstar-mix-xmpp/src/lib.rs', { root })],
   ['mam.rs', 'mam_service', readProductionModule('src/xmpp/protocol/mam.rs', { root })],
@@ -3424,8 +3425,8 @@ const workerResponsibilityEvidence = {
   'mix-iq-relay-expiry': ['crates/contexts/room/northstar-mix-xmpp/src/lib.rs', 'MIX protocol capability startup', '10 s'],
   'mix-delivery-outbox': ['crates/contexts/room/northstar-mix-xmpp/src/worker.rs', 'MIX capability startup', '30 s'],
   'mix-presence-recovery': ['crates/contexts/room/northstar-mix-xmpp/src/lib.rs', 'MIX capability startup', '90 s'],
-  'pubsub-digest-delivery': ['src/xmpp/protocol/pubsub.rs', 'PubSub capability startup', '5 s'],
-  'pubsub-event-outbox-delivery': ['src/xmpp/protocol/pubsub.rs', 'PubSub capability startup', '30 s'],
+  'pubsub-digest-delivery': ['src/state/pubsub_delivery.rs', 'PubSub capability startup', '5 s'],
+  'pubsub-event-outbox-delivery': ['src/state/pubsub_delivery.rs', 'PubSub capability startup', '30 s'],
 };
 const workerDocumentBehaviorEvidence = {
   'abuse-key-deployment-authority': ['first returned validation error/timeout'],

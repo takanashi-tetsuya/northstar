@@ -703,4 +703,25 @@ impl SessionHost for AppState {
     async fn disconnect_account(&self, user_id: uuid::Uuid, bare_account_jid: &str) {
         AppState::disconnect_account(self, user_id, bare_account_jid).await
     }
+
+    async fn replay_pubsub_last_items(
+        self: Arc<Self>,
+        outbound: northstar_stream::outbound::OutboundSender,
+        recipient_id: uuid::Uuid,
+        active_privacy_list: Option<String>,
+        connection_id: uuid::Uuid,
+        recipient: String,
+        show: &'static str,
+    ) -> anyhow::Result<()> {
+        crate::state::pubsub_delivery::deliver_last_items_on_presence(
+            self,
+            outbound,
+            recipient_id,
+            active_privacy_list,
+            connection_id,
+            recipient,
+            show,
+        )
+        .await
+    }
 }

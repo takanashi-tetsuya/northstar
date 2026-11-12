@@ -5,6 +5,7 @@ use northstar_pubsub_application::private_storage::{
     PrivateStorageRepository, PrivateStorageService,
 };
 use northstar_pubsub_application::profile::{ProfileRepository, ProfileService};
+use northstar_pubsub_application::PubSubService;
 use northstar_pubsub_core::PepQuotas;
 use northstar_pubsub_xmpp::PubSubSessionHost;
 use northstar_roster_xmpp::presence::inject_vcard_avatar_hash;
@@ -48,5 +49,29 @@ impl PubSubSessionHost for AppState {
                 *last_presence = Some(refreshed);
             }
         }
+    }
+}
+
+impl northstar_pubsub_xmpp::pubsub::PubSubHost for AppState {
+    fn pubsub_local_domain(&self) -> &str {
+        AppState::local_domain(self)
+    }
+
+    fn pubsub_server_name(&self) -> &str {
+        AppState::server_name(self)
+    }
+
+    fn pubsub_node_owner_limits(&self) -> northstar_pubsub_xmpp::pubsub::PubSubOwnerLimits {
+        let limits = AppState::pubsub_owner_limits(self);
+        northstar_pubsub_xmpp::pubsub::PubSubOwnerLimits {
+            max_nodes: limits.max_nodes,
+            max_storage_bytes: limits.max_storage_bytes,
+        }
+    }
+
+    fn pubsub_application_service(
+        &self,
+    ) -> &PubSubService<impl northstar_pubsub_xmpp::PubSubRepositories> {
+        AppState::pubsub_service(self)
     }
 }

@@ -16,6 +16,7 @@ pub mod outbound;
 pub mod replay;
 pub mod resume;
 pub mod session;
+pub mod session_cleanup;
 pub mod transport;
 pub mod transport_parsing;
 

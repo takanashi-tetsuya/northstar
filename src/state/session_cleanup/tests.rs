@@ -104,7 +104,7 @@ async fn unowned_or_suspended_cleanup_never_polls_the_exact_database_release() {
         .await;
         assert!(!polled.get());
         assert!(report.is_clean());
-        assert_eq!(report.completed_steps, 0);
+        assert_eq!(report.completed_steps(), 0);
         report.observe(&registry);
         assert!(
             registry.readiness_error().is_some(),
@@ -137,7 +137,7 @@ async fn unowned_or_suspended_cleanup_never_polls_the_exact_database_release() {
         "a real database failure must remain observable"
     );
     assert_eq!(owned.failures[0].operation, "release-live-session");
-    assert_eq!(owned.completed_steps, 0);
+    assert_eq!(owned.completed_steps(), 0);
 }
 
 fn queue() -> Arc<SmSuspensionRecoveryQueue> {

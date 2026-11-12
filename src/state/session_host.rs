@@ -553,10 +553,41 @@ impl SessionHost for AppState {
         AppState::sm_session_policy(self)
     }
 
-    fn sm_suspension_recovery_queue(
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_sm_suspension_recovery(
         &self,
-    ) -> &Arc<crate::state::session_cleanup::SmSuspensionRecoveryQueue> {
-        AppState::sm_suspension_recovery_queue(self)
+        account: northstar_session_application::SessionCleanupAccount,
+        connection_id: uuid::Uuid,
+        session_id: uuid::Uuid,
+        snapshot: northstar_session_application::sm::SmSessionSnapshot,
+        ttl_seconds: u64,
+        endpoints: Vec<Arc<northstar_stream::local_routes::muc::SuspendedMucEndpoint>>,
+        capacity: northstar_session_application::sm_capacity::SmCapacityLease,
+    ) -> bool {
+        AppState::sm_suspension_recovery_queue(self).enqueue(
+            account,
+            connection_id,
+            session_id,
+            snapshot,
+            ttl_seconds,
+            endpoints,
+            capacity,
+        )
+    }
+
+    fn enqueue_sm_promote_recovery(
+        &self,
+        connection_id: uuid::Uuid,
+        session_id: uuid::Uuid,
+        endpoints: Vec<Arc<northstar_stream::local_routes::muc::SuspendedMucEndpoint>>,
+        capacity: northstar_session_application::sm_capacity::SmCapacityLease,
+    ) -> bool {
+        AppState::sm_suspension_recovery_queue(self).enqueue_promote(
+            connection_id,
+            session_id,
+            endpoints,
+            capacity,
+        )
     }
 
     fn stage_sm_resumed_session(
@@ -700,6 +731,8 @@ impl SessionHost for AppState {
     ) -> bool {
         AppState::xmpp_route_enabled(self, stanza, namespace, local_name)
     }
+
+    type Cleanup = SessionCleanupService;
 
     fn session_cleanup(self: Arc<Self>) -> SessionCleanupService {
         SessionCleanupService::new(self)

@@ -3,7 +3,6 @@
 use super::dispatch::iq_routes::RootIqRoute;
 use super::ProtocolSession;
 use crate::s2s::FederationRouter;
-use crate::state::session_cleanup::SessionCleanupService;
 use crate::state::CommittedLocalMucResume;
 use crate::state::RestoredLocalMucOccupants;
 use anyhow::Result;
@@ -403,10 +402,28 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     fn sm_presence_epoch(&self, key: &str) -> Option<SmPresenceEpoch>;
     /// See `AppState::sm_session_policy`.
     fn sm_session_policy(&self) -> SmSessionPolicy;
-    /// See `AppState::sm_suspension_recovery_queue`.
-    fn sm_suspension_recovery_queue(
+    /// Queues an exact SM suspension whose database write failed for bounded retry; false when the recovery
+    /// budget is exhausted.
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_sm_suspension_recovery(
         &self,
-    ) -> &Arc<crate::state::session_cleanup::SmSuspensionRecoveryQueue>;
+        account: northstar_session_application::SessionCleanupAccount,
+        connection_id: uuid::Uuid,
+        session_id: uuid::Uuid,
+        snapshot: northstar_session_application::sm::SmSessionSnapshot,
+        ttl_seconds: u64,
+        endpoints: Vec<Arc<northstar_stream::local_routes::muc::SuspendedMucEndpoint>>,
+        capacity: northstar_session_application::sm_capacity::SmCapacityLease,
+    ) -> bool;
+    /// Queues the durable MUC handoff of a suspended session for bounded retry; false when the recovery budget
+    /// is exhausted.
+    fn enqueue_sm_promote_recovery(
+        &self,
+        connection_id: uuid::Uuid,
+        session_id: uuid::Uuid,
+        endpoints: Vec<Arc<northstar_stream::local_routes::muc::SuspendedMucEndpoint>>,
+        capacity: northstar_session_application::sm_capacity::SmCapacityLease,
+    ) -> bool;
     /// Inspect/insert inside one DashMap entry operation. The caller owns the
     /// returned gate and route-incarnation handles before any async wait.
     fn stage_sm_resumed_session(
@@ -515,8 +532,10 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         namespace: &str,
         local_name: &str,
     ) -> bool;
+    /// The bounded cleanup service of a session finalization.
+    type Cleanup: northstar_stream::session_cleanup::SessionCleanup;
     /// The bounded cleanup service of one session finalization.
-    fn session_cleanup(self: Arc<Self>) -> SessionCleanupService;
+    fn session_cleanup(self: Arc<Self>) -> Self::Cleanup;
     /// Commits a XEP-0077 account deletion that the session's proof authorized.
     fn finalize_account_deletion(
         &self,

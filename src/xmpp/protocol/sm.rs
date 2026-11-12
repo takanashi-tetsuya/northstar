@@ -891,7 +891,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                     .mark_suspended_muc_durable(paused_muc.clone())
                     .await
                 {
-                    let queued = self.host.sm_suspension_recovery_queue().enqueue_promote(
+                    let queued = self.host.enqueue_sm_promote_recovery(
                         self.connection_id,
                         claim.session_id,
                         paused_muc,
@@ -924,7 +924,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                     .mark_suspended_muc_durable(paused_muc.clone())
                     .await
                 {
-                    let queued = self.host.sm_suspension_recovery_queue().enqueue_promote(
+                    let queued = self.host.enqueue_sm_promote_recovery(
                         self.connection_id,
                         claim.session_id,
                         paused_muc,
@@ -1011,7 +1011,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                         .mark_suspended_muc_durable(paused_muc.clone())
                         .await
                     {
-                        let queued = self.host.sm_suspension_recovery_queue().enqueue_promote(
+                        let queued = self.host.enqueue_sm_promote_recovery(
                             self.connection_id,
                             claim.session_id,
                             paused_muc,
@@ -1031,7 +1031,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                 }
                 Err(error) => {
                     self.host.seal_suspended_muc_endpoints(&paused_muc).await;
-                    let queued = self.host.sm_suspension_recovery_queue().enqueue(
+                    let queued = self.host.enqueue_sm_suspension_recovery(
                         northstar_session_application::SessionCleanupAccount {
                             user_id: current_user.id,
                             username: current_user.username.clone(),

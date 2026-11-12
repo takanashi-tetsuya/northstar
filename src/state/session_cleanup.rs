@@ -19,7 +19,6 @@ use crate::state::{
 };
 use crate::xmpp::muc_delivery::MucDeliveryContext;
 use anyhow::Result;
-use dashmap::DashMap;
 use northstar_room_application::muc_service::ClusterMucTransitionOutcome;
 use northstar_session_application::sm_suspension;
 use std::{
@@ -38,34 +37,9 @@ const CLEANUP_TOTAL_BUDGET: Duration = Duration::from_secs(10);
 const CLEANUP_STEP_BUDGET: Duration = Duration::from_secs(2);
 
 pub(crate) use northstar_session_application::SessionCleanupAccount;
-
-#[derive(Debug)]
-pub(crate) enum SessionSmCleanup {
-    Suspend {
-        session_id: Uuid,
-        snapshot: northstar_session_application::sm::SmSessionSnapshot,
-        ttl_seconds: u64,
-        capacity: northstar_session_application::sm_capacity::SmCapacityLease,
-    },
-    Revoke {
-        session_id: Uuid,
-    },
-    None,
-}
-
-pub(crate) struct SessionCleanupPlan {
-    pub(crate) connection_id: Uuid,
-    pub(crate) may_own_live_session: bool,
-    pub(crate) mix_presence_gate: Arc<tokio::sync::Mutex<()>>,
-    pub(crate) account: Option<SessionCleanupAccount>,
-    pub(crate) registered_key: Option<String>,
-    pub(crate) full_jid: Option<String>,
-    pub(crate) available: Option<Arc<AtomicBool>>,
-    pub(crate) active_privacy_list: Option<String>,
-    pub(crate) directed_presence: Vec<String>,
-    pub(crate) joined_rooms: Arc<DashMap<String, northstar_session_core::JoinedMucMembership>>,
-    pub(crate) sm: SessionSmCleanup,
-}
+pub(crate) use northstar_stream::session_cleanup::{
+    CleanupRecovery, CleanupReport, SessionCleanupPlan, SessionSmCleanup,
+};
 
 struct MucDeparture {
     room_jid: String,
@@ -420,7 +394,7 @@ impl SmSuspensionRecoveryQueue {
     }
 }
 
-pub(crate) struct QuiescedSessionCleanup {
+pub struct QuiescedSessionCleanup {
     connection_id: Uuid,
     may_own_live_session: bool,
     mix_presence_gate: Arc<tokio::sync::Mutex<()>>,
@@ -434,58 +408,6 @@ pub(crate) struct QuiescedSessionCleanup {
     departures: Vec<MucDeparture>,
     durable_suspension: Option<DurableSuspension>,
     revoke_sm_session: Option<Uuid>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CleanupRecovery {
-    /// An exact database lease or epoch makes a retry/expiry safe.
-    LeaseOrEpoch,
-    /// Periodic cluster reconciliation removes stale soft state.
-    ClusterReconciliation,
-    /// Presence is soft state and peers converge on reconnect/probe.
-    PresenceRefresh,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CleanupFailure {
-    pub(crate) operation: &'static str,
-    pub(crate) recovery: CleanupRecovery,
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct CleanupReport {
-    pub(crate) failures: Vec<CleanupFailure>,
-    completed_steps: usize,
-}
-
-impl CleanupReport {
-    pub(crate) fn is_clean(&self) -> bool {
-        self.failures.is_empty()
-    }
-
-    fn failed(&mut self, operation: &'static str, recovery: CleanupRecovery) {
-        self.failures.push(CleanupFailure {
-            operation,
-            recovery,
-        });
-    }
-
-    fn completed(&mut self) {
-        self.completed_steps += 1;
-    }
-
-    fn observe(&self, registry: &northstar_runtime::workers::WorkerRegistry) {
-        if !self.is_clean() {
-            registry.observer_error(
-                "session-cleanup",
-                format!("{} bounded cleanup steps failed", self.failures.len()),
-            );
-        } else if self.completed_steps > 0 {
-            // Closing a transport that owned no durable or projected state
-            // cannot demonstrate recovery from an earlier cleanup failure.
-            registry.observer_ok("session-cleanup");
-        }
-    }
 }
 
 /// Keep the exact release future completely unpolled for transports that
@@ -535,7 +457,7 @@ async fn run_cleanup_step<T>(
     }
 }
 
-pub(crate) struct SessionCleanupService {
+pub struct SessionCleanupService {
     sm: SessionCleanupSm,
     sm_revoker: SessionCleanupSmRevoker,
     local: SessionCleanupLocal,
@@ -1248,6 +1170,26 @@ impl SessionCleanupService {
         self.mix
             .disconnect_presence(account.user_id, &actor_bare, full_jid)
             .await
+    }
+}
+
+impl northstar_stream::session_cleanup::SessionCleanup for SessionCleanupService {
+    type Quiesced = QuiescedSessionCleanup;
+
+    fn quiesce(&self, plan: SessionCleanupPlan) -> QuiescedSessionCleanup {
+        SessionCleanupService::quiesce(self, plan)
+    }
+
+    async fn finish(&self, work: QuiescedSessionCleanup) -> CleanupReport {
+        SessionCleanupService::finish(self, work).await
+    }
+
+    async fn clear_transferred_privacy(
+        &self,
+        account: Option<&SessionCleanupAccount>,
+        connection_id: Uuid,
+    ) -> CleanupReport {
+        SessionCleanupService::clear_transferred_privacy(self, account, connection_id).await
     }
 }
 

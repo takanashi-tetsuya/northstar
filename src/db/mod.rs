@@ -60,6 +60,7 @@ pub(crate) use northstar_roster_postgres::roster::add_federated_presence_pending
 pub(crate) use northstar_xep_0016::PrivacyStanzaKind;
 #[cfg(test)]
 mod pubsub_integration_tests;
+#[cfg(test)]
 pub use northstar_pubsub_postgres::*;
 
 #[cfg(test)]

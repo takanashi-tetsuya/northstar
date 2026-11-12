@@ -1509,6 +1509,7 @@ digraph compile_time {
   "northstar-pubsub-xmpp" -> "anyhow";
   "northstar-pubsub-xmpp" -> "base64";
   "northstar-pubsub-xmpp" -> "chrono";
+  "northstar-pubsub-xmpp" -> "northstar-federation-core";
   "northstar-pubsub-xmpp" -> "northstar-pubsub-application";
   "northstar-pubsub-xmpp" -> "northstar-pubsub-core";
   "northstar-pubsub-xmpp" -> "northstar-stream";

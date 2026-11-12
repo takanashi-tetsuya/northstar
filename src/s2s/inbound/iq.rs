@@ -268,253 +268,33 @@ pub(crate) async fn route_inbound_iq(
             };
             Ok(Some(s2s_iq_result(id, to, from, &payload)))
         }
-        ("pubsub", "http://jabber.org/protocol/pubsub", "get") => {
-            if to_jid.resourcepart().is_some()
-                || child.children().filter(|node| node.is_element()).count() != 1
-            {
-                return Ok(Some(s2s_iq_error(id, to, from, "bad-request")));
-            }
-            let Some(items) = child
-                .children()
-                .find(|node| node.is_element() && node.tag_name().name() == "items")
-            else {
-                return Ok(Some(s2s_iq_error(id, to, from, "bad-request")));
-            };
-            if items
-                .attributes()
-                .any(|attribute| !matches!(attribute.name(), "node" | "max_items" | "subid"))
-            {
-                return Ok(Some(s2s_iq_error(id, to, from, "bad-request")));
-            }
-            let Some(node) = items.attribute("node").filter(|node| {
-                !node.is_empty() && node.len() <= 1_024 && !node.chars().any(char::is_control)
-            }) else {
-                return Ok(Some(s2s_iq_error(id, to, from, "bad-request")));
-            };
-            let Some(owner_name) = recipient_name else {
-                return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
-            };
-            let Some(owner) = state.pubsub_service().find_enabled_user(owner_name).await? else {
-                return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
-            };
-            if state
-                .pubsub_service()
-                .pep_node(owner.id, node)
-                .await?
-                .is_none()
-            {
-                return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
-            }
-            if !northstar_pubsub_xmpp::pep::pep_access_allowed(
-                state.pubsub_service(),
-                &owner,
-                state.local_domain(),
-                node,
+        ("pubsub", "http://jabber.org/protocol/pubsub", "get") => Ok(Some(
+            northstar_pubsub_xmpp::federated_pep::federated_pep_items(
+                state,
+                recipient_name,
+                to_jid.resourcepart().is_some(),
+                child,
+                id,
+                to,
                 from,
             )
-            .await?
-            {
-                return Ok(Some(s2s_iq_error(id, to, from, "not-authorized")));
-            }
-            let requested = items
-                .children()
-                .filter(|node| node.is_element())
-                .map(|item| {
-                    (item.tag_name().namespace() == Some("http://jabber.org/protocol/pubsub")
-                        && item.tag_name().name() == "item"
-                        && item.attributes().len() == 1
-                        && item.attribute("id").is_some_and(|item_id| {
-                            !item_id.is_empty()
-                                && item_id.len() <= 1_024
-                                && !item_id.chars().any(char::is_control)
-                        })
-                        && !item.children().any(|child| child.is_element()))
-                    .then(|| item.attribute("id").unwrap_or_default())
-                })
-                .collect::<Option<Vec<_>>>();
-            let Some(requested) =
-                requested.filter(|items| items.len() <= db::PEP_MAX_ITEMS as usize)
-            else {
-                return Ok(Some(s2s_iq_error(id, to, from, "bad-request")));
-            };
-            let max_items = match items.attribute("max_items") {
-                Some(value) => match value.parse::<i64>() {
-                    Ok(value) if value > 0 => value.min(db::PEP_MAX_ITEMS as i64),
-                    _ => return Ok(Some(s2s_iq_error(id, to, from, "bad-request"))),
-                },
-                None => db::PEP_MAX_ITEMS as i64,
-            };
-            let stored = if requested.is_empty() {
-                state
-                    .pubsub_service()
-                    .pep_items(owner.id, node, None, max_items)
-                    .await?
-            } else {
-                state
-                    .pubsub_service()
-                    .pep_items_by_ids(owner.id, node, &requested, max_items)
-                    .await?
-            };
-            if stored.is_empty() && !requested.is_empty() {
-                return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
-            }
-            let mut item_list = northstar_xml_builder::XmlElement::new("items").attr("node", node);
-            for (_, item) in stored {
-                item_list = item_list
-                    .validated_fragment(&item)
-                    .context("stored PEP item is not valid XML")?;
-            }
-            let payload = northstar_xml_builder::XmlElement::new("pubsub")
-                .attr("xmlns", "http://jabber.org/protocol/pubsub")
-                .child(item_list)
-                .finish();
-            Ok(Some(s2s_iq_result(id, to, from, &payload)))
-        }
+            .await?,
+        )),
         ("pubsub", "http://jabber.org/protocol/pubsub", "set")
             if !is_xep0357_notification_publish(child) =>
         {
-            if to_jid.resourcepart().is_some() {
-                return Ok(Some(s2s_iq_error(id, to, from, "jid-malformed")));
-            }
-            let Some(owner_name) = recipient_name else {
-                return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
-            };
-            let Some(owner) = state.pubsub_service().find_enabled_user(owner_name).await? else {
-                return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
-            };
-            let operations = child
-                .children()
-                .filter(|node| node.is_element())
-                .collect::<Vec<_>>();
-            if operations.len() != 1 {
-                return Ok(Some(s2s_iq_error(id, to, from, "bad-request")));
-            }
-            let operation = operations[0];
-            if operation.tag_name().namespace() != Some("http://jabber.org/protocol/pubsub")
-                || !matches!(operation.tag_name().name(), "subscribe" | "unsubscribe")
-            {
-                return Ok(Some(s2s_iq_error(id, to, from, "feature-not-implemented")));
-            }
-            let Some(node) = operation.attribute("node").filter(|node| {
-                !node.is_empty() && node.len() <= 1_024 && !node.chars().any(char::is_control)
-            }) else {
-                return Ok(Some(s2s_iq_error(id, to, from, "bad-request")));
-            };
-            let Some(requested) = operation.attribute("jid") else {
-                return Ok(Some(s2s_iq_error(id, to, from, "bad-request")));
-            };
-            let Ok(requested) = northstar_xmpp_types::jid::canonicalize(requested) else {
-                return Ok(Some(s2s_iq_error(id, to, from, "jid-malformed")));
-            };
-            if operation.tag_name().name() == "subscribe" {
-                let requested_subid = uuid::Uuid::new_v4().to_string();
-                let outcome = match state
-                    .pubsub_service()
-                    .subscribe_pep_node(
-                        northstar_pubsub_application::PepSubscribeCommand::from(
-                            northstar_pubsub_core::PepSubscribeWrite {
-                                owner: &owner,
-                                actor: northstar_pubsub_core::PepSubscriptionActor {
-                                    jid: from,
-                                    local_account: None,
-                                },
-                                node,
-                                subscriber_jid: &requested,
-                                max_subscriptions: 1_000,
-                                requested_subid: &requested_subid,
-                            },
-                        ),
-                        &northstar_pubsub_xmpp::pep::prepare_pep_last_item_outbox,
-                    )
-                    .await
-                {
-                    Ok(outcome) => outcome,
-                    Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
-                        return Ok(Some(northstar_pubsub_xmpp::pubsub::pubsub_s2s_iq_error(
-                            id,
-                            to,
-                            from,
-                            &northstar_pubsub_xmpp::pubsub::PubSubReply::Error(
-                                "resource-constraint",
-                            ),
-                        )));
-                    }
-                    Err(error) => return Err(error),
-                };
-                let subscription = match outcome.outcome {
-                    northstar_pubsub_core::PepSubscribeOutcome::Subscribed(subscription) => {
-                        subscription
-                    }
-                    northstar_pubsub_core::PepSubscribeOutcome::NotFound => {
-                        return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
-                    }
-                    northstar_pubsub_core::PepSubscribeOutcome::Forbidden => {
-                        return Ok(Some(s2s_iq_error(id, to, from, "forbidden")));
-                    }
-                    northstar_pubsub_core::PepSubscribeOutcome::NotAuthorized(_) => {
-                        return Ok(Some(s2s_iq_error(id, to, from, "not-authorized")));
-                    }
-                    northstar_pubsub_core::PepSubscribeOutcome::LimitExceeded => {
-                        return Ok(Some(s2s_iq_error(id, to, from, "policy-violation")));
-                    }
-                };
-                let payload = northstar_xml_builder::XmlElement::new("pubsub")
-                    .attr("xmlns", "http://jabber.org/protocol/pubsub")
-                    .child(
-                        northstar_xml_builder::XmlElement::new("subscription")
-                            .attr("node", node)
-                            .attr("jid", &requested)
-                            .attr("subscription", "subscribed")
-                            .attr("subid", &subscription.subid),
-                    )
-                    .finish();
-                Ok(Some(s2s_iq_result(id, to, from, &payload)))
-            } else {
-                let outcome = match state
-                    .pubsub_service()
-                    .unsubscribe_pep_node(
-                        northstar_pubsub_application::PepUnsubscribeCommand::from(
-                            northstar_pubsub_core::PepUnsubscribeWrite {
-                                owner: &owner,
-                                actor: northstar_pubsub_core::PepSubscriptionActor {
-                                    jid: from,
-                                    local_account: None,
-                                },
-                                node,
-                                subscriber_jid: &requested,
-                                subid: operation.attribute("subid"),
-                            },
-                        ),
-                    )
-                    .await
-                {
-                    Ok(outcome) => outcome,
-                    Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
-                        return Ok(Some(northstar_pubsub_xmpp::pubsub::pubsub_s2s_iq_error(
-                            id,
-                            to,
-                            from,
-                            &northstar_pubsub_xmpp::pubsub::PubSubReply::Error(
-                                "resource-constraint",
-                            ),
-                        )));
-                    }
-                    Err(error) => return Err(error),
-                };
-                match outcome.outcome {
-                    northstar_pubsub_core::PepUnsubscribeOutcome::Unsubscribed(_) => {}
-                    northstar_pubsub_core::PepUnsubscribeOutcome::NotFound => {
-                        return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
-                    }
-                    northstar_pubsub_core::PepUnsubscribeOutcome::Forbidden => {
-                        return Ok(Some(s2s_iq_error(id, to, from, "forbidden")));
-                    }
-                    northstar_pubsub_core::PepUnsubscribeOutcome::InvalidSubid => {
-                        return Ok(Some(s2s_iq_error(id, to, from, "unexpected-request")));
-                    }
-                }
-                Ok(Some(s2s_iq_result(id, to, from, "")))
-            }
+            Ok(Some(
+                northstar_pubsub_xmpp::federated_pep::federated_pep_subscription(
+                    state,
+                    recipient_name,
+                    to_jid.resourcepart().is_some(),
+                    child,
+                    id,
+                    to,
+                    from,
+                )
+                .await?,
+            ))
         }
         ("query", "http://jabber.org/protocol/disco#info", "get") => {
             if to_jid.localpart().is_none()

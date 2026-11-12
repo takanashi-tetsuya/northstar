@@ -11,6 +11,7 @@ publish = false
 anyhow = "1.0"
 base64 = "0.22"
 chrono = "0.4"
+northstar-federation-core = { path = "../../federation/northstar-federation-core" }
 northstar-pubsub-application = { path = "../northstar-pubsub-application" }
 northstar-pubsub-core = { path = "../northstar-pubsub-core" }
 northstar-stream = { path = "../../../edges/northstar-stream" }

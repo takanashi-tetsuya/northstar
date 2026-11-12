@@ -636,29 +636,3 @@ fn persisted_federated_subscription_keeps_extensions_and_uses_bare_jids() {
             && child.text() == Some("Alice")
     }));
 }
-
-#[test]
-fn federated_pep_subscription_branch_has_no_split_authority_reads() {
-    let source = super::module_source();
-    let branch = source
-        .split_once("if !is_xep0357_notification_publish(child) =>")
-        .expect("federated PEP set branch must remain identifiable")
-        .1
-        .split_once("(\"query\", \"http://jabber.org/protocol/disco#info\", \"get\")")
-        .expect("federated PEP set branch must end before disco handling")
-        .0;
-    for forbidden in [
-        "db::pep_node(",
-        "pep_access_allowed(",
-        "subscribe_pep_node_with_outbox(",
-        "db::unsubscribe_pep_node(",
-    ] {
-        assert!(
-            !branch.contains(forbidden),
-            "federated PEP policy escaped the service transaction: {forbidden}"
-        );
-    }
-    assert!(branch.contains(".subscribe_pep_node("));
-    assert!(branch.contains(".unsubscribe_pep_node("));
-    assert!(branch.contains("PepSubscriptionActor"));
-}

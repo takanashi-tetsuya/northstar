@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod events;
+pub mod federated_pep;
 pub mod payload;
 pub mod pep;
 pub mod private_xml;

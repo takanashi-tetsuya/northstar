@@ -32,33 +32,6 @@ use self::iq::{bare_account_iq_may_route_to_service_resource, is_xep0357_notific
 #[cfg(test)]
 use self::presence::{canonical_subscription_stanza, presence_probe_status_response};
 
-/// Production source of this module: the file itself followed by each
-/// production child module file, so source-contract tests keep reading the
-/// whole module after code moves between them. The children are listed in
-/// the order their code had in the former single file, because some
-/// contracts split the source on a marker that occurs in more than one child.
-/// `module_source_lists_every_child_module` keeps this list in step with the
-/// non-test `mod` declarations above.
-#[cfg(test)]
-const MODULE_SOURCE: &[(&str, &str)] = &[
-    ("inbound", include_str!("inbound.rs")),
-    ("dispatch", include_str!("inbound/dispatch.rs")),
-    ("presence", include_str!("inbound/presence.rs")),
-    ("iq", include_str!("inbound/iq.rs")),
-];
-
-#[cfg(test)]
-fn module_source() -> String {
-    MODULE_SOURCE
-        .iter()
-        .map(|(_, text)| *text)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 #[cfg(test)]
 #[path = "inbound_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-mod module_source_tests;

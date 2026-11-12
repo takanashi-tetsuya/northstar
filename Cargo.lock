@@ -2626,6 +2626,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
+ "northstar-federation-core",
  "northstar-pubsub-application",
  "northstar-pubsub-core",
  "northstar-stream",

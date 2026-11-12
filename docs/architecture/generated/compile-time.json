@@ -4629,6 +4629,10 @@
     ],
     [
       "northstar-pubsub-xmpp",
+      "northstar-federation-core"
+    ],
+    [
+      "northstar-pubsub-xmpp",
       "northstar-pubsub-application"
     ],
     [

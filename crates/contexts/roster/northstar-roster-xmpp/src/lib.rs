@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod blocking;
+pub mod federated_presence;
 pub mod presence;
 pub mod privacy;
 mod protocol_session;
@@ -12,7 +13,9 @@ mod session_host;
 
 pub use self::protocol_session::PresenceHandlers;
 pub use self::protocol_session::{BlockingHandlers, PrivacyHandlers, RosterHandlers};
-pub use self::session_host::{PostAcceptFailureTelemetry, PresenceRouting, RosterSessionHost};
+pub use self::session_host::{
+    FederatedPresenceHost, PostAcceptFailureTelemetry, PresenceRouting, RosterSessionHost,
+};
 
 use northstar_roster_core::PresenceAccount;
 

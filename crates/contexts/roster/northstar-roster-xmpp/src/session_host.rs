@@ -4,6 +4,7 @@ use anyhow::Result;
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
 use northstar_roster_application::{RosterRepository, RosterService, S2sOutboxPolicy};
 use northstar_roster_core::{LocalRosterContact, PresenceAccount, RosterChange};
+use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::protocol::{ProtocolSession, SessionHost};
 use northstar_stream::transport::Action;
 use roxmltree::Node;
@@ -210,4 +211,12 @@ pub trait PresenceRouting: SessionHost {
         from: &str,
         raw: &str,
     ) -> impl Future<Output = Result<bool>> + Send;
+}
+
+/// The node as federated presence (an S2S inbound `<presence/>`) sees it.
+pub trait FederatedPresenceHost: RosterSessionHost + SessionHost {
+    /// The local sessions of `jid`: every resource of a bare JID, the one resource of a full JID.
+    fn sessions_for(&self, jid: &str) -> Vec<OnlineSession>;
+    /// Wakes the XEP-0357 push services of the account `user_id`.
+    fn dispatch_push_notification(&self, user_id: Uuid) -> impl Future<Output = Result<()>> + Send;
 }

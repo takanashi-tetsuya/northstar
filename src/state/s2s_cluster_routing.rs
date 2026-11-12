@@ -15,15 +15,6 @@ impl AppState {
             .is_ok_and(|nodes| nodes.iter().any(|node_id| node_id != &self.cluster.node_id))
     }
 
-    /// Preserve the full-JID subscription check's historical treatment of
-    /// any route entry, including this node, as an existing resource.
-    pub(crate) async fn s2s_subscription_target_route_exists(&self, full_jid: &str) -> bool {
-        self.cluster
-            .lookup_nodes(full_jid)
-            .await
-            .is_ok_and(|nodes| !nodes.is_empty())
-    }
-
     /// Fan a bare-JID stanza out to every remote available resource. Durable
     /// delivery carries the same acknowledgement fence as the local queue.
     pub(crate) async fn route_s2s_message_to_available_remote_resources(

@@ -13,7 +13,10 @@ use northstar_roster_application::{
 };
 use northstar_roster_core::{LocalRosterContact, PresenceAccount, RosterChange};
 use northstar_roster_xmpp::roster::{roster_change_item_element, roster_push_xml};
-use northstar_roster_xmpp::{PostAcceptFailureTelemetry, PresenceRouting, RosterSessionHost};
+use northstar_roster_xmpp::{
+    FederatedPresenceHost, PostAcceptFailureTelemetry, PresenceRouting, RosterSessionHost,
+};
+use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::transport::Action;
 use northstar_xml_builder::rewrite::set_to;
 use northstar_xml_builder::stream::stream_id;
@@ -643,6 +646,16 @@ impl PresenceRouting for AppState {
             .forward_presence_to_mix_channels(kind, advertised_mix_capability, raw)
             .await?;
         Ok(true)
+    }
+}
+
+impl FederatedPresenceHost for AppState {
+    fn sessions_for(&self, jid: &str) -> Vec<OnlineSession> {
+        AppState::sessions_for(self, jid)
+    }
+
+    async fn dispatch_push_notification(&self, user_id: Uuid) -> Result<()> {
+        AppState::dispatch_push_notification(self, user_id).await
     }
 }
 

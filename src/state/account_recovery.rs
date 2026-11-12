@@ -8,6 +8,7 @@ use crate::state::{
     roster_session_host::deliver_roster_change_with, AccountDeletionRecoveryContext, AppState,
 };
 use anyhow::{Context, Result};
+use northstar_auth_application::account_teardown::FinalizeAccountDeletion;
 use northstar_runtime::workers::WorkerHeartbeat;
 use std::{
     sync::{
@@ -18,12 +19,6 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FinalizeAccountDeletion {
-    Deleted,
-    Missing,
-}
 
 /// Recovery outcomes share the process counters without granting the worker
 /// access to unrelated observability state.

@@ -307,7 +307,7 @@ impl Fixture {
             sm,
             metadata,
             policy: SmRuntimePolicy {
-                session: crate::state::SmSessionPolicy {
+                session: northstar_session_application::sm::SmSessionPolicy {
                     require_same_device: true,
                     resume_timeout_seconds: 60,
                     live_lease_seconds: 30,
@@ -315,7 +315,7 @@ impl Fixture {
                     max_per_account: 4,
                     max_global: 100,
                 },
-                buffer: crate::state::SmBufferLimits {
+                buffer: northstar_session_application::sm::SmBufferLimits {
                     max_unacked_stanzas: 32,
                     max_unacked_bytes: 16_384,
                     max_snapshot_bytes: 32_768,

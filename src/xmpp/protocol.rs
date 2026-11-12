@@ -26,10 +26,11 @@ pub(crate) mod upload;
 pub(crate) mod vcard;
 
 use super::xml_builder::XmlElement;
-use crate::state::{AppState, SmBufferLimits, SmSessionPolicy};
+use crate::state::AppState;
 use anyhow::{Context, Result};
 use dashmap::DashSet;
 use northstar_session_application::post_actions::PostActionHandle;
+use northstar_session_application::sm::{SmBufferLimits, SmSessionPolicy};
 use northstar_stream::resume::ResumePayload;
 use northstar_stream::transport::{
     Action, ClientTransport, SessionTerminationSignals, StreamLimits, TlsSessionEvidence,

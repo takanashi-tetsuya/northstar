@@ -934,5 +934,24 @@ impl<R: SmRepository> SmService<R> {
     }
 }
 
+/// The fixed SM buffer limits of one connection.
+#[derive(Clone, Copy)]
+pub struct SmBufferLimits {
+    pub max_unacked_stanzas: usize,
+    pub max_unacked_bytes: usize,
+    pub max_snapshot_bytes: usize,
+}
+
+/// The SM resumption and admission policy of one connection.
+#[derive(Clone, Copy)]
+pub struct SmSessionPolicy {
+    pub require_same_device: bool,
+    pub resume_timeout_seconds: u64,
+    pub live_lease_seconds: u64,
+    pub claim_lease_seconds: u64,
+    pub max_per_account: usize,
+    pub max_global: usize,
+}
+
 #[cfg(test)]
 mod tests;

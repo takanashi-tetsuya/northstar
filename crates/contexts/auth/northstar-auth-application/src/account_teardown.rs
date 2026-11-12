@@ -26,6 +26,13 @@ impl<R: AccountGenerationRepository> AccountGenerationService<R> {
     }
 }
 
+/// The outcome of the XEP-0077 account deletion commit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FinalizeAccountDeletion {
+    Deleted,
+    Missing,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -503,8 +503,8 @@ impl<H: SessionHost> ProtocolSession<H> {
             .finalize_account_deletion(user.id, &user.username)
             .await
         {
-            Ok(crate::state::account_recovery::FinalizeAccountDeletion::Deleted) => {}
-            Ok(crate::state::account_recovery::FinalizeAccountDeletion::Missing) => {
+            Ok(northstar_auth_application::account_teardown::FinalizeAccountDeletion::Deleted) => {}
+            Ok(northstar_auth_application::account_teardown::FinalizeAccountDeletion::Missing) => {
                 return Ok(Action::Send(iq_registration_error(
                     id,
                     "registration-required",

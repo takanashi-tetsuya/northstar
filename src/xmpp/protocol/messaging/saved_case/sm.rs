@@ -304,7 +304,7 @@ impl Recorder {
         let mut metadata = SmMetadata::default();
         let mut sm = SmSubstate::default();
         let mut policy = SmRuntimePolicy {
-            session: crate::state::SmSessionPolicy {
+            session: northstar_session_application::sm::SmSessionPolicy {
                 require_same_device: true,
                 resume_timeout_seconds: 60,
                 live_lease_seconds: 30,
@@ -312,7 +312,7 @@ impl Recorder {
                 max_per_account: 4,
                 max_global: 100,
             },
-            buffer: crate::state::SmBufferLimits {
+            buffer: northstar_session_application::sm::SmBufferLimits {
                 max_unacked_stanzas: 32,
                 max_unacked_bytes: 16_384,
                 max_snapshot_bytes: 32_768,
@@ -330,7 +330,7 @@ impl Recorder {
             sm.acked_h = config.acked_h;
             *sm.session_id_shared.write().unwrap() = sm.db_id;
             policy = SmRuntimePolicy {
-                session: crate::state::SmSessionPolicy {
+                session: northstar_session_application::sm::SmSessionPolicy {
                     require_same_device: config.require_same_device,
                     resume_timeout_seconds: config.resume_timeout_seconds,
                     live_lease_seconds: config.live_lease_seconds,
@@ -338,7 +338,7 @@ impl Recorder {
                     max_per_account: config.max_per_account as usize,
                     max_global: config.max_global as usize,
                 },
-                buffer: crate::state::SmBufferLimits {
+                buffer: northstar_session_application::sm::SmBufferLimits {
                     max_unacked_stanzas: config.max_unacked_stanzas as usize,
                     max_unacked_bytes: config.max_unacked_bytes as usize,
                     max_snapshot_bytes: config.max_snapshot_bytes as usize,

@@ -7,23 +7,6 @@ pub(crate) use northstar_s2s::host::ComponentRuntimePolicy;
 use northstar_upload_application::UploadSlotLimits;
 
 #[derive(Clone, Copy)]
-pub(crate) struct SmBufferLimits {
-    pub(crate) max_unacked_stanzas: usize,
-    pub(crate) max_unacked_bytes: usize,
-    pub(crate) max_snapshot_bytes: usize,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct SmSessionPolicy {
-    pub(crate) require_same_device: bool,
-    pub(crate) resume_timeout_seconds: u64,
-    pub(crate) live_lease_seconds: u64,
-    pub(crate) claim_lease_seconds: u64,
-    pub(crate) max_per_account: usize,
-    pub(crate) max_global: usize,
-}
-
-#[derive(Clone, Copy)]
 pub(crate) struct RuntimeListenerPolicy {
     pub(crate) xmpp: std::net::SocketAddr,
     pub(crate) xmpps: std::net::SocketAddr,
@@ -39,14 +22,6 @@ pub(crate) struct RuntimeListenerPolicy {
 pub(crate) struct PubSubOwnerLimits {
     pub(crate) max_nodes: i64,
     pub(crate) max_storage_bytes: i64,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct Sasl2FastTokenPolicy {
-    pub(crate) enabled: bool,
-    pub(crate) rotation_days: i64,
-    pub(crate) ttl_days: i64,
-    pub(crate) strong_reauth_max_days: i64,
 }
 
 impl AppState {

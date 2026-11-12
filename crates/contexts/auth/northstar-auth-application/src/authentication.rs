@@ -540,3 +540,12 @@ impl<R: AuthenticationRepository> AuthenticationService<R> {
         result
     }
 }
+
+/// The SASL2 FAST token policy the session offers and enforces.
+#[derive(Clone, Copy)]
+pub struct Sasl2FastTokenPolicy {
+    pub enabled: bool,
+    pub rotation_days: i64,
+    pub ttl_days: i64,
+    pub strong_reauth_max_days: i64,
+}

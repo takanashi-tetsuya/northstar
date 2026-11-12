@@ -145,8 +145,8 @@ impl AppState {
 
     pub(crate) fn caps_effect_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::CapsEffectTelemetry<'_> {
-        crate::xmpp::capabilities::CapsEffectTelemetry::new(
+    ) -> northstar_session_application::telemetry::CapsEffectTelemetry<'_> {
+        northstar_session_application::telemetry::CapsEffectTelemetry::new(
             &self.metrics.caps_effect_coalesced_total,
             &self.metrics.caps_effect_queue_saturated_total,
             &self.metrics.caps_effect_failures_total,
@@ -164,8 +164,10 @@ impl AppState {
 
     pub(crate) fn inbound_stanza_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::InboundStanzaTelemetry<'_> {
-        crate::xmpp::capabilities::InboundStanzaTelemetry::new(&self.metrics.stanzas_in_total)
+    ) -> northstar_session_application::telemetry::InboundStanzaTelemetry<'_> {
+        northstar_session_application::telemetry::InboundStanzaTelemetry::new(
+            &self.metrics.stanzas_in_total,
+        )
     }
 
     pub(crate) fn post_accept_failure_telemetry(
@@ -178,8 +180,8 @@ impl AppState {
 
     pub(crate) fn push_subscription_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::PushSubscriptionTelemetry<'_> {
-        crate::xmpp::capabilities::PushSubscriptionTelemetry::new(
+    ) -> northstar_session_application::telemetry::PushSubscriptionTelemetry<'_> {
+        northstar_session_application::telemetry::PushSubscriptionTelemetry::new(
             &self.metrics.rate_limited_total,
             &self.metrics.push_subscriptions_rate_limited_total,
         )
@@ -187,8 +189,8 @@ impl AppState {
 
     pub(crate) fn push_delivery_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::PushDeliveryTelemetry<'_> {
-        crate::xmpp::capabilities::PushDeliveryTelemetry::new(
+    ) -> northstar_session_application::telemetry::PushDeliveryTelemetry<'_> {
+        northstar_session_application::telemetry::PushDeliveryTelemetry::new(
             &self.metrics.push_notifications_failed_total,
             &self.metrics.push_notifications_routed_total,
             &self.metrics.push_notifications_attempted_total,
@@ -197,8 +199,8 @@ impl AppState {
 
     pub(crate) fn registration_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::RegistrationTelemetry<'_> {
-        crate::xmpp::capabilities::RegistrationTelemetry::new(
+    ) -> northstar_session_application::telemetry::RegistrationTelemetry<'_> {
+        northstar_session_application::telemetry::RegistrationTelemetry::new(
             &self.metrics.anti_abuse_backend_failures_total,
             &self.metrics.registrations_total,
             &self.metrics.rate_limited_total,
@@ -208,8 +210,8 @@ impl AppState {
 
     pub(crate) fn account_abuse_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::AccountAbuseTelemetry<'_> {
-        crate::xmpp::capabilities::AccountAbuseTelemetry::new(
+    ) -> northstar_session_application::telemetry::AccountAbuseTelemetry<'_> {
+        northstar_session_application::telemetry::AccountAbuseTelemetry::new(
             &self.metrics.anti_abuse_backend_failures_total,
             &self.metrics.rate_limited_total,
         )
@@ -217,15 +219,17 @@ impl AppState {
 
     pub(crate) fn session_bind_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::SessionBindTelemetry<'_> {
-        crate::xmpp::capabilities::SessionBindTelemetry::new(
+    ) -> northstar_session_application::telemetry::SessionBindTelemetry<'_> {
+        northstar_session_application::telemetry::SessionBindTelemetry::new(
             &self.metrics.capacity_reservations_rejected_total,
             &self.metrics.active_sessions,
         )
     }
 
-    pub(crate) fn sm_session_telemetry(&self) -> crate::xmpp::capabilities::SmSessionTelemetry<'_> {
-        crate::xmpp::capabilities::SmSessionTelemetry::new(
+    pub(crate) fn sm_session_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::SmSessionTelemetry<'_> {
+        northstar_session_application::telemetry::SmSessionTelemetry::new(
             &self.metrics.capacity_reservations_rejected_total,
             &self.metrics.active_sessions,
         )
@@ -233,8 +237,8 @@ impl AppState {
 
     pub(crate) fn sasl2_authentication_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::Sasl2AuthenticationTelemetry<'_> {
-        crate::xmpp::capabilities::Sasl2AuthenticationTelemetry::new(
+    ) -> northstar_session_application::telemetry::Sasl2AuthenticationTelemetry<'_> {
+        northstar_session_application::telemetry::Sasl2AuthenticationTelemetry::new(
             &self.metrics.fast_credential_integrity_failures_total,
             &self.metrics.authentication_backend_failures_total,
         )
@@ -250,8 +254,8 @@ impl AppState {
 
     pub(crate) fn c2s_authentication_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::C2sAuthenticationTelemetry<'_> {
-        crate::xmpp::capabilities::C2sAuthenticationTelemetry::new(
+    ) -> northstar_session_application::telemetry::C2sAuthenticationTelemetry<'_> {
+        northstar_session_application::telemetry::C2sAuthenticationTelemetry::new(
             &self.metrics.authentication_backend_failures_total,
             &self.metrics.fast_credential_integrity_failures_total,
             &self.metrics.authentication_failures_total,
@@ -261,14 +265,16 @@ impl AppState {
 
     pub(crate) fn outbound_stanza_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::OutboundStanzaTelemetry<'_> {
-        crate::xmpp::capabilities::OutboundStanzaTelemetry::new(&self.metrics.stanzas_out_total)
+    ) -> northstar_session_application::telemetry::OutboundStanzaTelemetry<'_> {
+        northstar_session_application::telemetry::OutboundStanzaTelemetry::new(
+            &self.metrics.stanzas_out_total,
+        )
     }
 
     pub(crate) fn session_drop_fallback_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::SessionDropFallbackTelemetry<'_> {
-        crate::xmpp::capabilities::SessionDropFallbackTelemetry::new(
+    ) -> northstar_session_application::telemetry::SessionDropFallbackTelemetry<'_> {
+        northstar_session_application::telemetry::SessionDropFallbackTelemetry::new(
             &self.metrics.session_drop_fallbacks_total,
         )
     }

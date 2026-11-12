@@ -4,12 +4,13 @@ use super::{
     local_caps_route_epoch_matches, mix_presence_recovery::MixPresenceRecoveryContext,
     pep_last_items::PepLastItemsContext, AppState, OnlineSession,
 };
-use crate::{s2s::FederationRouter, xmpp::capabilities::CapsEffectTelemetry};
+use crate::s2s::FederationRouter;
 use dashmap::DashMap;
 use northstar_protocol_runtime::caps::{
     CapsCacheIndex, CapsEffectDispatcher, CapsResourceIndex, FederatedCapsGateIndex,
     FederatedCapsGuard, PendingCapsIndex,
 };
+use northstar_session_application::telemetry::CapsEffectTelemetry;
 use northstar_session_core::LocalCapsEpoch;
 use northstar_stream::outbound::OutboundSender;
 use northstar_telemetry::metrics::DurationHistogram;

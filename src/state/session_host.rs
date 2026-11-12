@@ -70,7 +70,7 @@ impl SessionHost for AppState {
 
     fn c2s_authentication_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::C2sAuthenticationTelemetry<'_> {
+    ) -> northstar_session_application::telemetry::C2sAuthenticationTelemetry<'_> {
         AppState::c2s_authentication_telemetry(self)
     }
 
@@ -149,7 +149,9 @@ impl SessionHost for AppState {
         AppState::mix_service(self)
     }
 
-    fn outbound_stanza_telemetry(&self) -> crate::xmpp::capabilities::OutboundStanzaTelemetry<'_> {
+    fn outbound_stanza_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::OutboundStanzaTelemetry<'_> {
         AppState::outbound_stanza_telemetry(self)
     }
 
@@ -163,7 +165,7 @@ impl SessionHost for AppState {
 
     fn push_subscription_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::PushSubscriptionTelemetry<'_> {
+    ) -> northstar_session_application::telemetry::PushSubscriptionTelemetry<'_> {
         AppState::push_subscription_telemetry(self)
     }
 
@@ -183,7 +185,9 @@ impl SessionHost for AppState {
         AppState::registration_requires_invitation(self)
     }
 
-    fn registration_telemetry(&self) -> crate::xmpp::capabilities::RegistrationTelemetry<'_> {
+    fn registration_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::RegistrationTelemetry<'_> {
         AppState::registration_telemetry(self)
     }
 
@@ -220,7 +224,7 @@ impl SessionHost for AppState {
 
     fn sasl2_authentication_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::Sasl2AuthenticationTelemetry<'_> {
+    ) -> northstar_session_application::telemetry::Sasl2AuthenticationTelemetry<'_> {
         AppState::sasl2_authentication_telemetry(self)
     }
 
@@ -240,13 +244,15 @@ impl SessionHost for AppState {
         AppState::sasl_login_abuse_service(self)
     }
 
-    fn session_bind_telemetry(&self) -> crate::xmpp::capabilities::SessionBindTelemetry<'_> {
+    fn session_bind_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::SessionBindTelemetry<'_> {
         AppState::session_bind_telemetry(self)
     }
 
     fn session_drop_fallback_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::SessionDropFallbackTelemetry<'_> {
+    ) -> northstar_session_application::telemetry::SessionDropFallbackTelemetry<'_> {
         AppState::session_drop_fallback_telemetry(self)
     }
 
@@ -273,7 +279,9 @@ impl SessionHost for AppState {
         AppState::sm_service(self)
     }
 
-    fn sm_session_telemetry(&self) -> crate::xmpp::capabilities::SmSessionTelemetry<'_> {
+    fn sm_session_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::SmSessionTelemetry<'_> {
         AppState::sm_session_telemetry(self)
     }
 
@@ -362,7 +370,9 @@ impl SessionHost for AppState {
         AppState::caps_effect_dispatcher(self)
     }
 
-    fn caps_effect_telemetry(&self) -> crate::xmpp::capabilities::CapsEffectTelemetry<'_> {
+    fn caps_effect_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::CapsEffectTelemetry<'_> {
         AppState::caps_effect_telemetry(self)
     }
 
@@ -473,7 +483,9 @@ impl SessionHost for AppState {
         )
     }
 
-    fn push_delivery_telemetry(&self) -> crate::xmpp::capabilities::PushDeliveryTelemetry<'_> {
+    fn push_delivery_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::PushDeliveryTelemetry<'_> {
         AppState::push_delivery_telemetry(self)
     }
 
@@ -630,7 +642,9 @@ impl SessionHost for AppState {
         AppState::federation_outbox(self)
     }
 
-    fn inbound_stanza_telemetry(&self) -> crate::xmpp::capabilities::InboundStanzaTelemetry<'_> {
+    fn inbound_stanza_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::InboundStanzaTelemetry<'_> {
         AppState::inbound_stanza_telemetry(self)
     }
 
@@ -696,7 +710,9 @@ impl SessionHost for AppState {
         crate::state::account_recovery::finalize(self, user_id, username).await
     }
 
-    fn account_abuse_telemetry(&self) -> crate::xmpp::capabilities::AccountAbuseTelemetry<'_> {
+    fn account_abuse_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::AccountAbuseTelemetry<'_> {
         AppState::account_abuse_telemetry(self)
     }
 

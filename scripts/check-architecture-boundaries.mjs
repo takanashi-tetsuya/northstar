@@ -3903,7 +3903,7 @@ if (!mainSource.includes('state.account_revocation_worker_context()')
     || !accountRevocationWorker.includes('context.routes.fence_all()')) {
   throw new Error('account revocation worker must use a narrow live-identity and fail-closed route context');
 }
-const c2sTelemetry = read('src/xmpp/capabilities.rs');
+const c2sTelemetry = read('crates/contexts/session/northstar-session-application/src/telemetry.rs');
 const c2sProtocol = readRoleSplitFile('src/xmpp/protocol.rs', { root });
 const c2sDispatch = read('src/xmpp/protocol/dispatch.rs');
 if (!read('crates/contexts/session/northstar-session-application/src/post_actions.rs')

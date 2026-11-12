@@ -24,6 +24,7 @@ pub mod sm_capacity;
 pub mod sm_suspension;
 pub mod sm_teardown;
 pub mod sm_teardown_presence;
+pub mod telemetry;
 use std::sync::Arc;
 use tokio::sync::watch;
 use uuid::Uuid;

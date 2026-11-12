@@ -1,10 +1,10 @@
 use super::ProtocolSession;
 use crate::state::{caps_effect_dispatch::CapsEffectDispatchContext, AppState};
-use crate::xmpp::capabilities::CapsEffectTelemetry;
 use crate::xmpp::protocol::SessionHost;
 use crate::xmpp::xml_builder::XmlElement;
 use futures::{stream::FuturesUnordered, StreamExt};
 pub(crate) use northstar_protocol_runtime::caps::*;
+use northstar_session_application::telemetry::CapsEffectTelemetry;
 use northstar_session_core::LocalCapsEpoch;
 use northstar_xep_0115::{
     generate_canonical_verification_string, parse_caps_from_presence, parse_disco_info_element,

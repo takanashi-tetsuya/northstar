@@ -22,6 +22,7 @@ northstar-message-core = { path = "../../message/northstar-message-core" }
 northstar-room-core = { path = "../../room/northstar-room-core" }
 northstar-security = { path = "../../../platform/northstar-security" }
 northstar-session-core = { path = "../northstar-session-core" }
+northstar-telemetry = { path = "../../../platform/northstar-telemetry" }
 northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 serde = { version = "1.0", features = ["derive"] }
@@ -34,5 +35,4 @@ uuid = { version = "1.12", features = ["v4", "serde"] }
 [dev-dependencies]
 chrono = "0.4"
 futures = "0.3"
-northstar-telemetry = { path = "../../../platform/northstar-telemetry" }
 tokio = { version = "1.43", features = ["macros", "rt", "sync", "test-util", "time"] }

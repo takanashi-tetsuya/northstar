@@ -151,7 +151,7 @@ pub(super) trait SmOwnerPort {
 pub(super) struct RealSmPort<'a, R> {
     pub(super) service: &'a SmService<R>,
     pub(super) governor: &'a Arc<SmMemoryGovernor>,
-    pub(super) telemetry: crate::xmpp::capabilities::OutboundStanzaTelemetry<'a>,
+    pub(super) telemetry: northstar_session_application::telemetry::OutboundStanzaTelemetry<'a>,
 }
 impl<R: SmRepository> SmOwnerPort for RealSmPort<'_, R> {
     fn recorded(&self) {

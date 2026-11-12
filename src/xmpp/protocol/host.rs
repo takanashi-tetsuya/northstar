@@ -60,7 +60,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// See `AppState::c2s_authentication_telemetry`.
     fn c2s_authentication_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::C2sAuthenticationTelemetry<'_>;
+    ) -> northstar_session_application::telemetry::C2sAuthenticationTelemetry<'_>;
     /// See `AppState::c2s_post_action_telemetry`.
     fn c2s_post_action_telemetry(
         &self,
@@ -111,7 +111,9 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         northstar_workflows::room_effects::PostgresMixRepository,
     >;
     /// See `AppState::outbound_stanza_telemetry`.
-    fn outbound_stanza_telemetry(&self) -> crate::xmpp::capabilities::OutboundStanzaTelemetry<'_>;
+    fn outbound_stanza_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::OutboundStanzaTelemetry<'_>;
     /// See `AppState::push_service`.
     fn push_service(
         &self,
@@ -121,7 +123,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// See `AppState::push_subscription_telemetry`.
     fn push_subscription_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::PushSubscriptionTelemetry<'_>;
+    ) -> northstar_session_application::telemetry::PushSubscriptionTelemetry<'_>;
     /// See `AppState::record_bosh_session_closed`.
     fn record_bosh_session_closed(&self);
     /// See `AppState::record_c2s_backpressure_disconnect`.
@@ -131,7 +133,9 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// See `AppState::registration_requires_invitation`.
     fn registration_requires_invitation(&self) -> bool;
     /// See `AppState::registration_telemetry`.
-    fn registration_telemetry(&self) -> crate::xmpp::capabilities::RegistrationTelemetry<'_>;
+    fn registration_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::RegistrationTelemetry<'_>;
     /// See `AppState::release_staged_binding_route`.
     fn release_staged_binding_route(
         &self,
@@ -161,7 +165,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// See `AppState::sasl2_authentication_telemetry`.
     fn sasl2_authentication_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::Sasl2AuthenticationTelemetry<'_>;
+    ) -> northstar_session_application::telemetry::Sasl2AuthenticationTelemetry<'_>;
     /// See `AppState::sasl2_authentication_timer`.
     fn sasl2_authentication_timer(&self) -> northstar_telemetry::metrics::OwnedDurationTimer;
     /// See `AppState::sasl2_fast_token_policy`.
@@ -173,11 +177,13 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         northstar_abuse_postgres::login::PostgresSaslLoginAbuseRepository,
     >;
     /// See `AppState::session_bind_telemetry`.
-    fn session_bind_telemetry(&self) -> crate::xmpp::capabilities::SessionBindTelemetry<'_>;
+    fn session_bind_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::SessionBindTelemetry<'_>;
     /// See `AppState::session_drop_fallback_telemetry`.
     fn session_drop_fallback_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::SessionDropFallbackTelemetry<'_>;
+    ) -> northstar_session_application::telemetry::SessionDropFallbackTelemetry<'_>;
     /// A carbon preference is session-local and must be visible to fan-out
     /// before its IQ result is sent to the same connection.
     fn set_local_carbons_for_connection(
@@ -197,7 +203,9 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         northstar_workflows::sm_repository::PostgresSmRepository,
     >;
     /// See `AppState::sm_session_telemetry`.
-    fn sm_session_telemetry(&self) -> crate::xmpp::capabilities::SmSessionTelemetry<'_>;
+    fn sm_session_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::SmSessionTelemetry<'_>;
     /// See `AppState::staged_session_is_current`.
     fn staged_session_is_current(
         &self,
@@ -260,7 +268,9 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         &self,
     ) -> &Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher>;
     /// See `AppState::caps_effect_telemetry`.
-    fn caps_effect_telemetry(&self) -> crate::xmpp::capabilities::CapsEffectTelemetry<'_>;
+    fn caps_effect_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::CapsEffectTelemetry<'_>;
     /// Transfer the volatile suffix to the exact live SM checkpoint. The
     /// queue is cleared only after PostgreSQL accepted that checkpoint, while
     /// the endpoint mutex still excludes both delivery and transport
@@ -345,7 +355,9 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         user_agent_epoch: Option<i64>,
     ) -> bool;
     /// See `AppState::push_delivery_telemetry`.
-    fn push_delivery_telemetry(&self) -> crate::xmpp::capabilities::PushDeliveryTelemetry<'_>;
+    fn push_delivery_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::PushDeliveryTelemetry<'_>;
     /// See `AppState::release_exact_local_session_route`.
     fn release_exact_local_session_route(
         &self,
@@ -455,7 +467,9 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     /// See `AppState::federation_outbox`.
     fn federation_outbox(&self) -> &FederationRouter;
     /// See `AppState::inbound_stanza_telemetry`.
-    fn inbound_stanza_telemetry(&self) -> crate::xmpp::capabilities::InboundStanzaTelemetry<'_>;
+    fn inbound_stanza_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::InboundStanzaTelemetry<'_>;
     /// See `AppState::local_muc_occupant_by_nick`.
     fn local_muc_occupant_by_nick(&self, room_jid: &str, nick: &str) -> Option<MucOccupant>;
     /// A failed route lookup supplies no evidence of an exact remote resource.
@@ -510,7 +524,9 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         username: &str,
     ) -> impl std::future::Future<Output = Result<FinalizeAccountDeletion>> + Send;
     /// See `AppState::account_abuse_telemetry`.
-    fn account_abuse_telemetry(&self) -> crate::xmpp::capabilities::AccountAbuseTelemetry<'_>;
+    fn account_abuse_telemetry(
+        &self,
+    ) -> northstar_session_application::telemetry::AccountAbuseTelemetry<'_>;
     /// Revoke local account routes and request durable SM revocation.
     /// Remote nodes receive the generation fence over Redis, with a 30-second
     /// maintenance sweep as fallback while PostgreSQL remains available.

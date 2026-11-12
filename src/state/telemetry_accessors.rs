@@ -170,8 +170,8 @@ impl AppState {
 
     pub(crate) fn post_accept_failure_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::PostAcceptFailureTelemetry {
-        crate::xmpp::capabilities::PostAcceptFailureTelemetry::new(Arc::clone(
+    ) -> northstar_roster_xmpp::PostAcceptFailureTelemetry {
+        northstar_roster_xmpp::PostAcceptFailureTelemetry::new(Arc::clone(
             &self.metrics.post_accept_side_effect_failures_total,
         ))
     }

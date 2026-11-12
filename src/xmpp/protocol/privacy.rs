@@ -1,10 +1,11 @@
-use super::{Action, ProtocolSession};
+use super::{Action, ProtocolSession, SessionHost};
 use anyhow::Result;
 use northstar_roster_application::privacy::{PrivacyRepository, PrivacyService};
+use northstar_roster_xmpp::RosterSessionHost;
 use roxmltree::Node;
 use std::sync::atomic::Ordering;
 
-impl ProtocolSession {
+impl<H: SessionHost + RosterSessionHost> ProtocolSession<H> {
     pub(crate) async fn privacy_get(
         &self,
         id: &str,
@@ -31,7 +32,9 @@ impl ProtocolSession {
     }
 }
 
-impl northstar_roster_xmpp::privacy::PrivacySession for ProtocolSession {
+impl<H: SessionHost + RosterSessionHost> northstar_roster_xmpp::privacy::PrivacySession
+    for ProtocolSession<H>
+{
     fn privacy_full_jid(&self) -> Option<&str> {
         self.full_jid.as_deref()
     }
@@ -63,7 +66,7 @@ impl northstar_roster_xmpp::privacy::PrivacySession for ProtocolSession {
     }
 
     fn privacy_local_resources(&self, account: &str) -> usize {
-        self.host.sessions_for(account).len()
+        self.host.local_resource_count(account)
     }
 
     async fn privacy_has_remote_resources(&self, account: &str) -> Result<bool> {
@@ -71,57 +74,12 @@ impl northstar_roster_xmpp::privacy::PrivacySession for ProtocolSession {
     }
 
     fn privacy_list_active_locally(&self, account: &str, name: &str) -> bool {
-        self.host.sessions_for(account).iter().any(|session| {
-            session
-                .privacy_active
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .as_deref()
-                == Some(name)
-        })
+        self.host.privacy_list_active_locally(account, name)
     }
 
     async fn privacy_push_change(&self, account: &str, name: &str, base: &str) -> Option<String> {
-        let mut current_push = None;
-        for (jid, session) in self.host.session_entries_for(account) {
-            if !session.privacy_requested.load(Ordering::Acquire) {
-                continue;
-            }
-            let push = northstar_xml_builder::rewrite::set_to(base, &jid);
-            if session.connection_id == self.connection_id {
-                current_push = Some(push);
-            } else if let Err(error) = session.sender.try_send(push) {
-                // The mutation has already committed.  Keeping this resource
-                // alive after dropping its ordered IQ push would let the
-                // client continue with a stale privacy-list view.  Force a
-                // reconnect so its next query observes the authoritative
-                // state instead of allowing later pushes to cross this gap.
-                session.sender.disconnect_backpressured_transport();
-                session.disconnect.cancel();
-                self.host.post_accept_failure_telemetry().record_failure();
-                tracing::warn!(
-                    %jid,
-                    list = %name,
-                    ?error,
-                    "XEP-0016 privacy-list push queue was unavailable; disconnecting stale resource"
-                );
-            }
-        }
-        match self.host.route_remote_privacy_push(account, base).await {
-            Ok(failures) => {
-                for failure in failures {
-                    tracing::warn!(
-                        error = ?failure.error,
-                        node_id = %failure.node_id,
-                        list = %name,
-                        "clustered XEP-0016 push failed"
-                    );
-                }
-            }
-            Err(error) => {
-                tracing::warn!(?error, list = %name, "could not enumerate nodes for XEP-0016 push")
-            }
-        }
-        current_push
+        self.host
+            .push_privacy_change(account, name, base, self.connection_id)
+            .await
     }
 }

@@ -47,9 +47,6 @@
     "src/xmpp/protocol.rs": [
       "state"
     ],
-    "src/xmpp/protocol/blocking.rs": [
-      "state"
-    ],
     "src/xmpp/protocol/caps.rs": [
       "state"
     ],
@@ -75,9 +72,6 @@
       "state"
     ],
     "src/xmpp/protocol/pubsub.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/roster.rs": [
       "state"
     ]
   }

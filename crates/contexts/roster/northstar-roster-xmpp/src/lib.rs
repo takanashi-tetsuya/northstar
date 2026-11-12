@@ -7,6 +7,9 @@ pub mod blocking;
 pub mod presence;
 pub mod privacy;
 pub mod roster;
+mod session_host;
+
+pub use self::session_host::{PostAcceptFailureTelemetry, RosterSessionHost};
 
 use northstar_roster_core::PresenceAccount;
 

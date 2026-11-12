@@ -3,7 +3,6 @@
 //! this module never exposes the complete process registry or application state.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 use northstar_telemetry::metrics::DurationHistogram;
@@ -99,22 +98,6 @@ impl<'a> InboundStanzaTelemetry<'a> {
 
     pub(crate) fn received(&self) {
         self.received.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-/// One post-commit delivery failure counter shared by roster, blocking and
-/// privacy pushes. Each caller retains its own recovery/disconnect decision.
-pub(crate) struct PostAcceptFailureTelemetry {
-    failures: Arc<AtomicU64>,
-}
-
-impl PostAcceptFailureTelemetry {
-    pub(crate) fn new(failures: Arc<AtomicU64>) -> Self {
-        Self { failures }
-    }
-
-    pub(crate) fn record_failure(&self) {
-        self.failures.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -450,13 +433,12 @@ impl<'a> PubSubOutboxTelemetry<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        PepTelemetry, PostAcceptFailureTelemetry, PubSubOutboxTelemetry, PushSubscriptionTelemetry,
-    };
+    use super::{PepTelemetry, PubSubOutboxTelemetry, PushSubscriptionTelemetry};
     use northstar_message_application::telemetry::{
         PersonalMessageTelemetry, PersonalMessageTelemetryCells,
     };
     use northstar_room_core::telemetry::FederatedMucTelemetry;
+    use northstar_roster_xmpp::PostAcceptFailureTelemetry;
     use northstar_telemetry::metrics::DurationHistogram;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;

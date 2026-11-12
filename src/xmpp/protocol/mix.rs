@@ -117,7 +117,14 @@ impl MixHost for AppState {
         change: &RosterChange,
         participant_id: Option<&str>,
     ) -> Result<()> {
-        super::roster::deliver_roster_change(self, owner_id, owner, change, participant_id).await
+        northstar_roster_xmpp::RosterSessionHost::deliver_committed_roster_change(
+            self,
+            owner_id,
+            owner,
+            change,
+            participant_id,
+        )
+        .await
     }
 }
 

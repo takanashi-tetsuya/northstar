@@ -1,6 +1,7 @@
 //! Handle federated presence, subscription transitions, probes and presence responses.
 
 use super::*;
+use northstar_roster_xmpp::RosterSessionHost;
 
 pub(crate) async fn route_inbound_presence(
     state: &AppState,
@@ -175,14 +176,9 @@ pub(crate) async fn route_inbound_presence(
         }
 
         if let Some(change) = transition.change.as_ref() {
-            if let Err(error) = crate::xmpp::protocol::roster::deliver_roster_change(
-                state,
-                recipient.id,
-                &recipient.username,
-                change,
-                None,
-            )
-            .await
+            if let Err(error) = state
+                .deliver_committed_roster_change(recipient.id, &recipient.username, change, None)
+                .await
             {
                 state.s2s_inbound_delivery_telemetry().post_accept_failed();
                 tracing::warn!(?error, recipient_id = %recipient.id, contact = %contact, %kind, "federated roster transition was committed but roster push failed");

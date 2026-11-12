@@ -4,9 +4,8 @@
 //! so resumable-session teardown, deletion and post-commit notifications cannot
 //! silently drift into two implementations.
 
-use crate::{
-    state::{AccountDeletionRecoveryContext, AppState},
-    xmpp::protocol::roster::deliver_roster_change_with,
+use crate::state::{
+    roster_session_host::deliver_roster_change_with, AccountDeletionRecoveryContext, AppState,
 };
 use anyhow::{Context, Result};
 use northstar_runtime::workers::WorkerHeartbeat;

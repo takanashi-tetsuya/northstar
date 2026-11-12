@@ -1,9 +1,9 @@
 //! The client session as the roster context's handlers see it.
 
-use super::ProtocolSession;
+use super::{ProtocolSession, SessionHost};
 use northstar_roster_core::PresenceAccount;
 
-impl northstar_roster_xmpp::SessionIdentity for ProtocolSession {
+impl<H: SessionHost> northstar_roster_xmpp::SessionIdentity for ProtocolSession<H> {
     fn session_account(&self) -> Option<PresenceAccount> {
         self.authenticated.as_ref().map(|user| PresenceAccount {
             id: user.id,

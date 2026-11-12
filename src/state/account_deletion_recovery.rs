@@ -2,7 +2,7 @@
 
 use super::{
     account_recovery::AccountDeletionRecoveryTelemetry,
-    account_teardown_runtime::AccountTeardownRuntime, cluster_routing::RemoteRosterPushFailure,
+    account_teardown_runtime::AccountTeardownRuntime,
     session_cleanup_sm_revoker::SessionCleanupSmRevoker, session_entries_for_in, AppState,
     OnlineSession, RuntimeFederationPolicy,
 };
@@ -13,6 +13,7 @@ use crate::{
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_auth_application::account::{AccountService, DeletionRecoveryJob, RemovedAccount};
+use northstar_cluster::account_routing::RemoteRosterPushFailure;
 use northstar_config::ExternalRouteDomainPolicy;
 use northstar_workflows::account_repository::WorkflowAccountRepository;
 use northstar_xml_builder::XmlElement;
@@ -61,7 +62,7 @@ impl RosterPushDelivery {
                 Ok(true) => {}
                 Ok(false) => failures.push(RemoteRosterPushFailure::NotAccepted { node_id }),
                 Err(error) => failures.push(RemoteRosterPushFailure::Delivery(
-                    super::cluster_routing::RemoteRouteFailure { node_id, error },
+                    northstar_cluster::account_routing::RemoteRouteFailure { node_id, error },
                 )),
             }
         }

@@ -106,6 +106,7 @@ impl RosterSessionHost for AppState {
             }
         }
         match self
+            .cluster()
             .route_remote_blocklist_push(owner, || blocking_push_stanza(owner, payload))
             .await
         {
@@ -128,6 +129,7 @@ impl RosterSessionHost for AppState {
     ) {
         deliver_blocking_presence_change(self, owner, targets, changed_patterns, available).await;
         match self
+            .cluster()
             .route_remote_blocking_presence_change(owner, targets, changed_patterns, available)
             .await
         {
@@ -146,7 +148,7 @@ impl RosterSessionHost for AppState {
     }
 
     async fn account_has_remote_resources(&self, account: &str) -> Result<bool> {
-        AppState::account_has_remote_resources(self, account).await
+        self.cluster().account_has_remote_resources(account).await
     }
 
     fn privacy_list_active_locally(&self, account: &str, name: &str) -> bool {
@@ -192,7 +194,11 @@ impl RosterSessionHost for AppState {
                 );
             }
         }
-        match self.route_remote_privacy_push(account, base).await {
+        match self
+            .cluster()
+            .route_remote_privacy_push(account, base)
+            .await
+        {
             Ok(failures) => {
                 for failure in failures {
                     tracing::warn!(
@@ -293,7 +299,7 @@ impl RosterSessionHost for AppState {
     }
 
     async fn probe_has_remote_owner(&self, bare: &str) -> Result<bool> {
-        self.presence_probe_has_remote_owner(bare).await
+        self.cluster().presence_probe_has_remote_owner(bare).await
     }
 
     fn directed_presence_recipient(&self, owner_full: &str, requester: &str) -> bool {
@@ -334,7 +340,9 @@ impl RosterSessionHost for AppState {
     }
 
     async fn full_presence_target_routed(&self, full_jid: &str) -> bool {
-        self.subscription_full_target_has_route(full_jid).await
+        self.cluster()
+            .subscription_full_target_has_route(full_jid)
+            .await
     }
 
     async fn notify_offline_account(&self, user_id: Uuid) -> Result<()> {
@@ -382,6 +390,7 @@ async fn deliver_roster_removal_presence(
         }
     }
     state
+        .cluster()
         .route_remote_roster_removal_presence(
             target_bare,
             stanza,
@@ -474,10 +483,14 @@ pub(crate) async fn deliver_roster_change_with(
             for failure in failures {
                 delivery.record_failure();
                 match failure {
-                    super::cluster_routing::RemoteRosterPushFailure::NotAccepted { node_id } => {
+                    northstar_cluster::account_routing::RemoteRosterPushFailure::NotAccepted {
+                        node_id,
+                    } => {
                         tracing::warn!(owner = %owner_jid, remote_node = %node_id, version = change.version, "committed roster push was not accepted by the remote node; roster version recovery remains authoritative");
                     }
-                    super::cluster_routing::RemoteRosterPushFailure::Delivery(failure) => {
+                    northstar_cluster::account_routing::RemoteRosterPushFailure::Delivery(
+                        failure,
+                    ) => {
                         tracing::warn!(owner = %owner_jid, remote_node = %failure.node_id, version = change.version, error=?failure.error, "committed roster push failed across the cluster; roster version recovery remains authoritative");
                     }
                 }
@@ -519,6 +532,7 @@ pub(crate) async fn deliver_blocking_presence_change(
         available,
         |node_id, target, delivery| async move {
             let _ = state
+                .cluster()
                 .route_remote_available_presence_to_node(&node_id, &target, &delivery)
                 .await;
             Ok(())
@@ -584,7 +598,7 @@ where
                 for (_, recipient) in recipients {
                     let _ = recipient.sender.try_send(delivery.clone());
                 }
-                if let Ok(nodes) = state.remote_resource_nodes(&target).await {
+                if let Ok(nodes) = state.cluster().remote_resource_nodes(&target).await {
                     for node_id in nodes {
                         send_remote(node_id, target.clone(), delivery.clone()).await?;
                     }

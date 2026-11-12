@@ -4,21 +4,6 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Failure to replay current presence across a cluster route.
-pub(crate) struct PresenceProbeTelemetry<'a> {
-    failures: &'a AtomicU64,
-}
-
-impl<'a> PresenceProbeTelemetry<'a> {
-    pub(crate) fn new(failures: &'a AtomicU64) -> Self {
-        Self { failures }
-    }
-
-    pub(crate) fn failed(&self) {
-        self.failures.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
 /// MIX delivery failures are observed after their durable commit.
 pub(crate) struct MixPostCommitTelemetry<'a> {
     delivery_failures: &'a AtomicU64,

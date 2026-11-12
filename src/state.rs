@@ -75,7 +75,6 @@ pub(crate) use operation_tls_reload_effects::OperationTlsReloadEffects;
 pub(crate) mod operation_tls_reload_effects;
 mod operation_worker_control;
 pub(crate) use operation_worker_control::OperationWorkerControl;
-mod presence_cluster_routing;
 mod presence_delivery;
 pub(crate) mod pubsub_delivery;
 pub(crate) mod pubsub_digest_worker;

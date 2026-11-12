@@ -65,6 +65,7 @@ impl PushNotificationRouter for AppState {
             }
             if !delivered {
                 delivered = self
+                    .cluster()
                     .route_push_service_notification_remote(&delivery.service_jid, &notification)
                     .await;
             }

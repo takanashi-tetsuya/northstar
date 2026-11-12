@@ -78,7 +78,9 @@ impl MessageHost for AppState {
     }
 
     async fn personal_message_remote_resource_exists(&self, jid: &str) -> bool {
-        AppState::personal_message_remote_resource_exists(self, jid).await
+        self.cluster()
+            .personal_message_remote_resource_exists(jid)
+            .await
     }
 
     async fn dispatch_push_notification(&self, recipient_id: uuid::Uuid) -> Result<()> {
@@ -117,8 +119,7 @@ impl MessageHost for AppState {
         actor_full_jid: &str,
         subject: ClusterMucAffiliationSubject,
     ) -> Result<Option<ClusterMucInviteAuthority>> {
-        AppState::direct_muc_invite_cluster_authority(
-            self,
+        self.cluster().direct_muc_invite_cluster_authority(
             operation_id,
             room_epoch,
             config_version,

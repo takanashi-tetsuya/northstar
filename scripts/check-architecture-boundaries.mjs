@@ -3745,11 +3745,13 @@ if (!passkeyFinishSource.includes('State(state): State<PasskeyLoginFinishContext
   throw new Error('Passkey login completion must check the live origin before using its narrow service');
 }
 const presenceProtocol = protocolModuleSource('presence.rs');
-const presenceClusterRouting = read('src/state/presence_cluster_routing.rs');
+const presenceClusterRouting = read('crates/edges/northstar-cluster/src/presence_routing.rs');
 const presenceDelivery = read('src/state/presence_delivery.rs');
 if (/\bself\.(?:state|host)\s*\.metrics\b/.test(presenceProtocol)
     || /\bself\s*\.\s*metrics\b/.test(presenceDelivery)
-    || countMatches(presenceClusterRouting, /presence_probe_telemetry\(\)\.failed\(\)/g) !== 2) {
+    || /\.metrics\b/.test(presenceClusterRouting)
+    || !presenceClusterRouting.includes("telemetry: &PresenceProbeTelemetry<'_>")
+    || countMatches(presenceClusterRouting, /\btelemetry\.failed\(\)/g) !== 2) {
   throw new Error('cross-node presence replay failures must use their one-counter telemetry port');
 }
 // reads the whole module including test-only child files

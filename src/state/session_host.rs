@@ -749,7 +749,9 @@ impl SessionHost for AppState {
     }
 
     async fn personal_message_remote_resource_exists(&self, jid: &str) -> bool {
-        AppState::personal_message_remote_resource_exists(self, jid).await
+        self.cluster()
+            .personal_message_remote_resource_exists(jid)
+            .await
     }
 
     fn presence_service(
@@ -778,7 +780,9 @@ impl SessionHost for AppState {
     }
 
     async fn route_client_iq_to_remote_resource(&self, full_jid: &str, stanza: &str) -> bool {
-        AppState::route_client_iq_to_remote_resource(self, full_jid, stanza).await
+        self.cluster()
+            .route_client_iq_to_remote_resource(full_jid, stanza)
+            .await
     }
 
     fn xmpp_external_route_domain_allowed(&self, domain: &str) -> bool {

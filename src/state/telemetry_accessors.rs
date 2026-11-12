@@ -156,8 +156,8 @@ impl AppState {
 
     pub(crate) fn presence_probe_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::PresenceProbeTelemetry<'_> {
-        crate::xmpp::capabilities::PresenceProbeTelemetry::new(
+    ) -> northstar_cluster::presence_routing::PresenceProbeTelemetry<'_> {
+        northstar_cluster::presence_routing::PresenceProbeTelemetry::new(
             &self.metrics.cluster_presence_probe_failures_total,
         )
     }

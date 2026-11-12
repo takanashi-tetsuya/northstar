@@ -37,6 +37,7 @@ impl AppState {
             }
         }
         delivered |= self
+            .cluster()
             .route_directed_presence_remote(canonical_to, stanza, bare_target)
             .await;
         Ok(delivered)
@@ -69,12 +70,13 @@ impl AppState {
                 let _ = session.sender.try_send(set_to(stanza, &target_full));
             }
         }
-        self.route_presence_subscription_remote(
-            recipient_bare,
-            stanza,
-            cluster_authority(owner, recipient),
-        )
-        .await;
+        self.cluster()
+            .route_presence_subscription_remote(
+                recipient_bare,
+                stanza,
+                cluster_authority(owner, recipient),
+            )
+            .await;
         Ok(())
     }
 
@@ -105,12 +107,13 @@ impl AppState {
                 let _ = session.sender.try_send(approved.to_owned());
             }
         }
-        self.route_presence_subscription_remote(
-            recipient_bare,
-            approved,
-            cluster_authority(owner, recipient),
-        )
-        .await;
+        self.cluster()
+            .route_presence_subscription_remote(
+                recipient_bare,
+                approved,
+                cluster_authority(owner, recipient),
+            )
+            .await;
         Ok(())
     }
 
@@ -132,7 +135,8 @@ impl AppState {
                 let _ = target.sender.try_send(stanza.to_owned());
             }
         }
-        self.broadcast_available_presence_remote(contact, stanza)
+        self.cluster()
+            .broadcast_available_presence_remote(contact, stanza)
             .await;
         Ok(())
     }
@@ -144,7 +148,8 @@ impl AppState {
             }
         }
         let account_delivery = set_to(stanza, account);
-        self.broadcast_available_presence_remote(account, &account_delivery)
+        self.cluster()
+            .broadcast_available_presence_remote(account, &account_delivery)
             .await;
     }
 
@@ -278,6 +283,7 @@ impl AppState {
             _ => None,
         };
         let delegated = self
+            .cluster()
             .delegate_authorized_full_presence_probe_remote(owner_full, requester, authority)
             .await?;
         Ok((!delegated).then(|| {
@@ -484,13 +490,15 @@ impl AppState {
             recipient_id: expected_recipient_id,
             recipient_auth_generation: expected_recipient_auth_generation,
         };
-        self.replay_current_presence_from_remote_owners(
-            owner_lookup,
-            &recipient,
-            owner_full.is_some(),
-            authority,
-        )
-        .await;
+        self.cluster()
+            .replay_current_presence_from_remote_owners(
+                owner_lookup,
+                &recipient,
+                owner_full.is_some(),
+                authority,
+                &self.presence_probe_telemetry(),
+            )
+            .await;
     }
 }
 

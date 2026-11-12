@@ -53,14 +53,16 @@ impl CarbonDeliveryPort for AppState {
         delivered_self: Option<&str>,
         muc_scope: Option<(&str, &str)>,
     ) {
-        self.route_sent_carbons_to_remote_resources(
-            bare,
-            forwarded,
-            current,
-            delivered_self,
-            muc_scope,
-        )
-        .await;
+        self.cluster()
+            .route_sent_carbons_to_remote_resources(
+                bare,
+                forwarded,
+                current,
+                delivered_self,
+                muc_scope,
+                &self.personal_message_telemetry(),
+            )
+            .await;
     }
 
     async fn route_received_remote(
@@ -69,7 +71,13 @@ impl CarbonDeliveryPort for AppState {
         delivered: Option<&str>,
         forwarded: &str,
     ) {
-        self.route_received_carbons_to_remote_resources(recipient, delivered, forwarded)
+        self.cluster()
+            .route_received_carbons_to_remote_resources(
+                recipient,
+                delivered,
+                forwarded,
+                &self.personal_message_telemetry(),
+            )
             .await;
     }
 

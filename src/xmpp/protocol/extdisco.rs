@@ -27,8 +27,25 @@ impl<H: SessionHost + ExtDiscoHost> ExtDiscoSession for ProtocolSession<H> {
     }
 }
 
-impl<H: SessionHost + ExtDiscoHost> ProtocolSession<H> {
-    pub(crate) fn external_services(
+/// The session handlers of extdisco.rs.
+pub(crate) trait ExtDiscoHandlers {
+    fn external_services(
+        &self,
+        id: &str,
+        iq: Node<'_, '_>,
+        services: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    fn external_credentials(
+        &self,
+        id: &str,
+        iq: Node<'_, '_>,
+        credentials: Node<'_, '_>,
+    ) -> Result<Action>;
+}
+
+impl<H: SessionHost + ExtDiscoHost> ExtDiscoHandlers for ProtocolSession<H> {
+    fn external_services(
         &self,
         id: &str,
         iq: Node<'_, '_>,
@@ -37,7 +54,7 @@ impl<H: SessionHost + ExtDiscoHost> ProtocolSession<H> {
         extdisco::external_services(self, id, iq, services)
     }
 
-    pub(crate) fn external_credentials(
+    fn external_credentials(
         &self,
         id: &str,
         iq: Node<'_, '_>,

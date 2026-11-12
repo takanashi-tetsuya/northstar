@@ -8,8 +8,26 @@ use northstar_pubsub_core::PepAudienceSnapshot;
 use northstar_pubsub_xmpp::PubSubSessionHost;
 use roxmltree::Node;
 
-impl<H: SessionHost + PubSubSessionHost> ProtocolSession<H> {
-    pub(crate) async fn private_get(
+/// The session handlers of private.rs.
+pub(crate) trait PrivateXmlHandlers {
+    async fn private_get(
+        &mut self,
+        id: &str,
+        to: Option<&str>,
+        query: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn private_set(
+        &mut self,
+        id: &str,
+        to: Option<&str>,
+        query: Node<'_, '_>,
+        raw: &str,
+    ) -> Result<Action>;
+}
+
+impl<H: SessionHost + PubSubSessionHost> PrivateXmlHandlers for ProtocolSession<H> {
+    async fn private_get(
         &mut self,
         id: &str,
         to: Option<&str>,
@@ -20,7 +38,7 @@ impl<H: SessionHost + PubSubSessionHost> ProtocolSession<H> {
             .map(Action::Send)
     }
 
-    pub(crate) async fn private_set(
+    async fn private_set(
         &mut self,
         id: &str,
         to: Option<&str>,

@@ -1,7 +1,6 @@
 //! Binds the message handlers of `northstar-message-xmpp` to the client session.
 
 use super::{Action, ProtocolSession};
-use crate::xmpp::protocol::ClientSession;
 use crate::xmpp::protocol::SessionHost;
 use anyhow::Result;
 #[cfg(test)]
@@ -117,28 +116,31 @@ impl<H: SessionHost + MessageHost> MessageSession for ProtocolSession<H> {
     }
 }
 
-impl ClientSession {
-    /// Ordinary controlled tests use the actual frame owner without constructing
-    /// a session. The returned runner owns observation before child polling.
-    #[cfg(test)]
-    pub(crate) fn retained_direct_frame_for_test<C, F, T>(
-        child: C,
-    ) -> (
-        DirectOperationHandle,
-        impl Future<Output = std::result::Result<T, northstar_stream::frame_execution::FrameFailure>>,
-    )
-    where
-        C: FnOnce(DirectOperationHandle) -> F,
-        F: Future<Output = Result<T>>,
-    {
-        let execution = northstar_stream::frame_execution::FrameExecution::new(
-            northstar_stream::transport::ClientTransport::Tcp,
-            direct_preparation_tests::FRAME_MESSAGE,
-        );
-        let operation = execution.direct_operation();
-        let future = child(operation.clone());
-        (operation, execution.run(future))
-    }
+/// Ordinary controlled tests use the actual frame owner without constructing
+/// a session. The returned runner owns observation before child polling.
+#[cfg(test)]
+pub(crate) fn retained_direct_frame_for_test<C, F, T>(
+    child: C,
+) -> (
+    DirectOperationHandle,
+    impl Future<Output = std::result::Result<T, northstar_stream::frame_execution::FrameFailure>>,
+)
+where
+    C: FnOnce(DirectOperationHandle) -> F,
+    F: Future<Output = Result<T>>,
+{
+    let execution = northstar_stream::frame_execution::FrameExecution::new(
+        northstar_stream::transport::ClientTransport::Tcp,
+        direct_preparation_tests::FRAME_MESSAGE,
+    );
+    let operation = execution.direct_operation();
+    let future = child(operation.clone());
+    (operation, execution.run(future))
+}
+
+/// The session handlers of messaging.rs.
+pub(crate) trait MessageHandlers {
+    async fn message(&self, root: Node<'_, '_>, raw: &str, client_raw: &str) -> Result<Action>;
 }
 
 impl<
@@ -147,14 +149,9 @@ impl<
             + MucHost<Outbound = northstar_stream::outbound::OutboundSender>
             + MixHost
             + PubSubHost,
-    > ProtocolSession<H>
+    > MessageHandlers for ProtocolSession<H>
 {
-    pub(crate) async fn message(
-        &self,
-        root: Node<'_, '_>,
-        raw: &str,
-        client_raw: &str,
-    ) -> Result<Action> {
+    async fn message(&self, root: Node<'_, '_>, raw: &str, client_raw: &str) -> Result<Action> {
         handlers::message(self, root, raw, client_raw).await
     }
 }

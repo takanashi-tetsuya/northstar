@@ -12,19 +12,41 @@ use roxmltree::Node;
 pub(crate) use northstar_pubsub_xmpp::pep::bookmarks2_items_event;
 pub(crate) use northstar_pubsub_xmpp::pep::{pep_access_allowed, prepare_pep_last_item_outbox};
 
-impl<H: SessionHost + PubSubSessionHost> ProtocolSession<H> {
-    pub(crate) async fn pep_get(
+/// The session handlers of pep.rs.
+pub(crate) trait PepHandlers {
+    async fn pep_get(&self, id: &str, iq: Node<'_, '_>, pubsub: Node<'_, '_>) -> Result<Action>;
+
+    async fn pep_publish(
         &self,
         id: &str,
         iq: Node<'_, '_>,
         pubsub: Node<'_, '_>,
-    ) -> Result<Action> {
+        raw: &str,
+    ) -> Result<Action>;
+
+    async fn pep_owner_get(
+        &self,
+        id: &str,
+        iq: Node<'_, '_>,
+        pubsub: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn pep_owner_set(
+        &self,
+        id: &str,
+        iq: Node<'_, '_>,
+        pubsub: Node<'_, '_>,
+    ) -> Result<Action>;
+}
+
+impl<H: SessionHost + PubSubSessionHost> PepHandlers for ProtocolSession<H> {
+    async fn pep_get(&self, id: &str, iq: Node<'_, '_>, pubsub: Node<'_, '_>) -> Result<Action> {
         northstar_pubsub_xmpp::pep::pep_get(self, id, iq, pubsub)
             .await
             .map(Action::Send)
     }
 
-    pub(crate) async fn pep_publish(
+    async fn pep_publish(
         &self,
         id: &str,
         iq: Node<'_, '_>,
@@ -36,7 +58,7 @@ impl<H: SessionHost + PubSubSessionHost> ProtocolSession<H> {
             .map(Action::Send)
     }
 
-    pub(crate) async fn pep_owner_get(
+    async fn pep_owner_get(
         &self,
         id: &str,
         iq: Node<'_, '_>,
@@ -47,7 +69,7 @@ impl<H: SessionHost + PubSubSessionHost> ProtocolSession<H> {
             .map(Action::Send)
     }
 
-    pub(crate) async fn pep_owner_set(
+    async fn pep_owner_set(
         &self,
         id: &str,
         iq: Node<'_, '_>,

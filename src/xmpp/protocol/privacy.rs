@@ -5,8 +5,25 @@ use northstar_roster_xmpp::RosterSessionHost;
 use roxmltree::Node;
 use std::sync::atomic::Ordering;
 
-impl<H: SessionHost + RosterSessionHost> ProtocolSession<H> {
-    pub(crate) async fn privacy_get(
+/// The session handlers of privacy.rs.
+pub(crate) trait PrivacyHandlers {
+    async fn privacy_get(
+        &self,
+        id: &str,
+        root: Node<'_, '_>,
+        query: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn privacy_set(
+        &self,
+        id: &str,
+        root: Node<'_, '_>,
+        query: Node<'_, '_>,
+    ) -> Result<Action>;
+}
+
+impl<H: SessionHost + RosterSessionHost> PrivacyHandlers for ProtocolSession<H> {
+    async fn privacy_get(
         &self,
         id: &str,
         root: Node<'_, '_>,
@@ -17,7 +34,7 @@ impl<H: SessionHost + RosterSessionHost> ProtocolSession<H> {
             .map(Action::Send)
     }
 
-    pub(crate) async fn privacy_set(
+    async fn privacy_set(
         &self,
         id: &str,
         root: Node<'_, '_>,

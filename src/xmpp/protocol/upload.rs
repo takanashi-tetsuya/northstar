@@ -6,8 +6,18 @@ use northstar_upload_application::{
 use northstar_upload_xmpp::UploadSessionHost;
 use roxmltree::Node;
 
-impl<H: SessionHost + UploadSessionHost> ProtocolSession<H> {
-    pub(crate) async fn http_upload_slot(
+/// The session handlers of upload.rs.
+pub(crate) trait UploadHandlers {
+    async fn http_upload_slot(
+        &self,
+        id: &str,
+        to: Option<&str>,
+        request: Node<'_, '_>,
+    ) -> Result<Action>;
+}
+
+impl<H: SessionHost + UploadSessionHost> UploadHandlers for ProtocolSession<H> {
+    async fn http_upload_slot(
         &self,
         id: &str,
         to: Option<&str>,

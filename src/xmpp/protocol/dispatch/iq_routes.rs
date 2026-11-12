@@ -7,6 +7,18 @@
 
 use super::*;
 use crate::state::AppState;
+use crate::xmpp::protocol::blocking::BlockingHandlers;
+use crate::xmpp::protocol::discovery::DiscoveryHandlers;
+use crate::xmpp::protocol::extdisco::ExtDiscoHandlers;
+use crate::xmpp::protocol::mam::MamHandlers;
+use crate::xmpp::protocol::muc::MucHandlers;
+use crate::xmpp::protocol::pep::PepHandlers;
+use crate::xmpp::protocol::privacy::PrivacyHandlers;
+use crate::xmpp::protocol::private::PrivateXmlHandlers;
+use crate::xmpp::protocol::pubsub::PubSubHandlers;
+use crate::xmpp::protocol::roster::RosterHandlers;
+use crate::xmpp::protocol::upload::UploadHandlers;
+use crate::xmpp::protocol::vcard::VCardHandlers;
 use crate::xmpp::protocol::ClientSession;
 use northstar_stream::{HandlerFuture, IqKind, IqRequest, IqRoute, IqRouter};
 use std::sync::LazyLock;

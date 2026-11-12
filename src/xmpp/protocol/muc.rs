@@ -74,27 +74,78 @@ impl<H: SessionHost + MucHost<Outbound = OutboundSender>> MucSession for Protoco
     }
 }
 
-impl<H: SessionHost + MucHost<Outbound = OutboundSender>> ProtocolSession<H> {
-    pub(crate) async fn authorized_muc_occupant(
+/// The session handlers of muc.rs.
+pub(crate) trait MucHandlers {
+    /// The session host whose occupancy records the handlers return.
+    type Host: MucHost;
+
+    async fn authorized_muc_occupant(&self, room_jid: &str)
+        -> Result<Option<Occupant<Self::Host>>>;
+
+    async fn muc_message(&self, root: Node<'_, '_>, raw: &str) -> Result<Action>;
+
+    async fn muc_presence(&mut self, root: Node<'_, '_>, raw: &str) -> Result<Action>;
+
+    async fn muc_admin_get(
         &self,
-        room_jid: &str,
-    ) -> Result<Option<Occupant<H>>> {
+        id: &str,
+        iq: Node<'_, '_>,
+        query: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn muc_admin_set(
+        &self,
+        id: &str,
+        iq: Node<'_, '_>,
+        query: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn muc_moderate(
+        &self,
+        id: &str,
+        iq: Node<'_, '_>,
+        moderate: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn muc_owner_get(&self, id: &str, iq: Node<'_, '_>) -> Result<Action>;
+
+    async fn muc_owner_set(
+        &self,
+        id: &str,
+        iq: Node<'_, '_>,
+        query: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn muc_register_get(&self, id: &str, iq: Node<'_, '_>) -> Result<Action>;
+
+    async fn muc_register_set(
+        &self,
+        id: &str,
+        iq: Node<'_, '_>,
+        query: Node<'_, '_>,
+    ) -> Result<Action>;
+}
+
+impl<H: SessionHost + MucHost<Outbound = OutboundSender>> MucHandlers for ProtocolSession<H> {
+    type Host = H;
+
+    async fn authorized_muc_occupant(&self, room_jid: &str) -> Result<Option<Occupant<H>>> {
         handlers::authorized_muc_occupant(self, room_jid).await
     }
 
-    pub(crate) async fn muc_message(&self, root: Node<'_, '_>, raw: &str) -> Result<Action> {
+    async fn muc_message(&self, root: Node<'_, '_>, raw: &str) -> Result<Action> {
         Ok(handlers::groupchat::muc_message(self, root, raw)
             .await?
             .into())
     }
 
-    pub(crate) async fn muc_presence(&mut self, root: Node<'_, '_>, raw: &str) -> Result<Action> {
+    async fn muc_presence(&mut self, root: Node<'_, '_>, raw: &str) -> Result<Action> {
         Ok(handlers::join::muc_presence(&*self, root, raw)
             .await?
             .into())
     }
 
-    pub(crate) async fn muc_admin_get(
+    async fn muc_admin_get(
         &self,
         id: &str,
         iq: Node<'_, '_>,
@@ -105,7 +156,7 @@ impl<H: SessionHost + MucHost<Outbound = OutboundSender>> ProtocolSession<H> {
             .into())
     }
 
-    pub(crate) async fn muc_admin_set(
+    async fn muc_admin_set(
         &self,
         id: &str,
         iq: Node<'_, '_>,
@@ -116,7 +167,7 @@ impl<H: SessionHost + MucHost<Outbound = OutboundSender>> ProtocolSession<H> {
             .into())
     }
 
-    pub(crate) async fn muc_moderate(
+    async fn muc_moderate(
         &self,
         id: &str,
         iq: Node<'_, '_>,
@@ -127,11 +178,11 @@ impl<H: SessionHost + MucHost<Outbound = OutboundSender>> ProtocolSession<H> {
             .into())
     }
 
-    pub(crate) async fn muc_owner_get(&self, id: &str, iq: Node<'_, '_>) -> Result<Action> {
+    async fn muc_owner_get(&self, id: &str, iq: Node<'_, '_>) -> Result<Action> {
         Ok(handlers::owner::muc_owner_get(self, id, iq).await?.into())
     }
 
-    pub(crate) async fn muc_owner_set(
+    async fn muc_owner_set(
         &self,
         id: &str,
         iq: Node<'_, '_>,
@@ -142,13 +193,13 @@ impl<H: SessionHost + MucHost<Outbound = OutboundSender>> ProtocolSession<H> {
             .into())
     }
 
-    pub(crate) async fn muc_register_get(&self, id: &str, iq: Node<'_, '_>) -> Result<Action> {
+    async fn muc_register_get(&self, id: &str, iq: Node<'_, '_>) -> Result<Action> {
         Ok(handlers::register::muc_register_get(self, id, iq)
             .await?
             .into())
     }
 
-    pub(crate) async fn muc_register_set(
+    async fn muc_register_set(
         &self,
         id: &str,
         iq: Node<'_, '_>,

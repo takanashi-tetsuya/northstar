@@ -52,31 +52,39 @@ impl<H: SessionHost + MixHost> MixSession for ProtocolSession<H> {
     }
 }
 
-impl<H: SessionHost + MixHost> ProtocolSession<H> {
-    pub(crate) async fn try_mix_iq(&self, raw: &str) -> Result<Option<Action>> {
+/// The session handlers of mix.rs.
+pub(crate) trait MixHandlers {
+    async fn try_mix_iq(&self, raw: &str) -> Result<Option<Action>>;
+
+    async fn try_mix_message(&self, root: Node<'_, '_>, raw: &str) -> Result<Option<Action>>;
+
+    async fn try_mix_presence(&self, root: Node<'_, '_>, raw: &str) -> Result<Option<Action>>;
+
+    async fn forward_presence_to_mix_channels(
+        &self,
+        kind: &str,
+        advertised_capability: MixSessionCapability,
+        raw: &str,
+    ) -> Result<()>;
+}
+
+impl<H: SessionHost + MixHost> MixHandlers for ProtocolSession<H> {
+    async fn try_mix_iq(&self, raw: &str) -> Result<Option<Action>> {
         let action = northstar_mix_xmpp::session::try_mix_iq(self, raw).await?;
         Ok(action.map(Action::from))
     }
 
-    pub(crate) async fn try_mix_message(
-        &self,
-        root: Node<'_, '_>,
-        raw: &str,
-    ) -> Result<Option<Action>> {
+    async fn try_mix_message(&self, root: Node<'_, '_>, raw: &str) -> Result<Option<Action>> {
         let action = northstar_mix_xmpp::session::try_mix_message(self, root, raw).await?;
         Ok(action.map(Action::from))
     }
 
-    pub(crate) async fn try_mix_presence(
-        &self,
-        root: Node<'_, '_>,
-        raw: &str,
-    ) -> Result<Option<Action>> {
+    async fn try_mix_presence(&self, root: Node<'_, '_>, raw: &str) -> Result<Option<Action>> {
         let action = northstar_mix_xmpp::session::try_mix_presence(self, root, raw).await?;
         Ok(action.map(Action::from))
     }
 
-    pub(crate) async fn forward_presence_to_mix_channels(
+    async fn forward_presence_to_mix_channels(
         &self,
         kind: &str,
         advertised_capability: MixSessionCapability,

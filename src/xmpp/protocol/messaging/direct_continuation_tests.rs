@@ -839,31 +839,29 @@ async fn unconfirmed_errors_keep_precommit_and_commit_unknown_separate() {
     let child_events = events.clone();
     let pair_returned = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let child_returned = pair_returned.clone();
-    let (owner, runner) = crate::xmpp::protocol::ProtocolSession::retained_direct_frame_for_test(
-        move |owner| async move {
-            let (service, mut lease) = admit(
-                &owner,
-                Admission::Reserved,
-                FinalizeCut::Success,
-                child_events.clone(),
-            )
-            .await;
-            let app = MessageApplication::new(Repository {
-                cut: DirectCut::CommitPending,
-                ..Repository::stored(child_events.clone())
-            });
-            let applied =
-                commit_prepared_application(&app, prepared(&owner, Admission::Reserved, "delayed"))
-                    .await;
-            child_returned.store(true, std::sync::atomic::Ordering::SeqCst);
-            let port = Port::new(&owner, child_events.clone());
-            let _ = continue_prepared_local_direct(applied, &mut lease, &service, &port, || {
-                followup(&owner, &child_events)
-            })
-            .await;
-            Ok(())
-        },
-    );
+    let (owner, runner) = super::retained_direct_frame_for_test(move |owner| async move {
+        let (service, mut lease) = admit(
+            &owner,
+            Admission::Reserved,
+            FinalizeCut::Success,
+            child_events.clone(),
+        )
+        .await;
+        let app = MessageApplication::new(Repository {
+            cut: DirectCut::CommitPending,
+            ..Repository::stored(child_events.clone())
+        });
+        let applied =
+            commit_prepared_application(&app, prepared(&owner, Admission::Reserved, "delayed"))
+                .await;
+        child_returned.store(true, std::sync::atomic::Ordering::SeqCst);
+        let port = Port::new(&owner, child_events.clone());
+        let _ = continue_prepared_local_direct(applied, &mut lease, &service, &port, || {
+            followup(&owner, &child_events)
+        })
+        .await;
+        Ok(())
+    });
     assert!(owner.snapshot().direct.is_none());
     let mut runner = Box::pin(runner);
     assert!(futures::poll!(&mut runner).is_pending());

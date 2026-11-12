@@ -11,8 +11,20 @@ use roxmltree::Node;
 use std::sync::Arc;
 use std::time::Duration;
 
-impl<H: SessionHost + RosterSessionHost> ProtocolSession<H> {
-    pub(crate) async fn roster_get(
+/// The session handlers of roster.rs.
+pub(crate) trait RosterHandlers {
+    async fn roster_get(
+        &mut self,
+        id: &str,
+        iq: Node<'_, '_>,
+        query: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn roster_set(&self, id: &str, iq: Node<'_, '_>, query: Node<'_, '_>) -> Result<Action>;
+}
+
+impl<H: SessionHost + RosterSessionHost> RosterHandlers for ProtocolSession<H> {
+    async fn roster_get(
         &mut self,
         id: &str,
         iq: Node<'_, '_>,
@@ -51,12 +63,7 @@ impl<H: SessionHost + RosterSessionHost> ProtocolSession<H> {
         )
     }
 
-    pub(crate) async fn roster_set(
-        &self,
-        id: &str,
-        iq: Node<'_, '_>,
-        query: Node<'_, '_>,
-    ) -> Result<Action> {
+    async fn roster_set(&self, id: &str, iq: Node<'_, '_>, query: Node<'_, '_>) -> Result<Action> {
         northstar_roster_xmpp::roster::roster_set(self, id, iq, query)
             .await
             .map(Action::Send)

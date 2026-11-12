@@ -14,8 +14,41 @@ fn action(reply: northstar_archive_xmpp::MamReply) -> Action {
     }
 }
 
-impl<H: SessionHost + ArchiveSessionHost> ProtocolSession<H> {
-    pub(crate) async fn mam_preferences_get(
+/// The session handlers of mam.rs.
+pub(crate) trait MamHandlers {
+    async fn mam_preferences_get(
+        &self,
+        id: &str,
+        to: Option<&str>,
+        prefs: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn mam_preferences_set(
+        &self,
+        id: &str,
+        to: Option<&str>,
+        prefs: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn mam_query_form(
+        &self,
+        id: &str,
+        to: Option<&str>,
+        query: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn mam_metadata(
+        &self,
+        id: &str,
+        to: Option<&str>,
+        metadata: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn mam(&self, id: &str, query: Node<'_, '_>, to: Option<&str>) -> Result<Action>;
+}
+
+impl<H: SessionHost + ArchiveSessionHost> MamHandlers for ProtocolSession<H> {
+    async fn mam_preferences_get(
         &self,
         id: &str,
         to: Option<&str>,
@@ -26,7 +59,7 @@ impl<H: SessionHost + ArchiveSessionHost> ProtocolSession<H> {
             .map(action)
     }
 
-    pub(crate) async fn mam_preferences_set(
+    async fn mam_preferences_set(
         &self,
         id: &str,
         to: Option<&str>,
@@ -37,7 +70,7 @@ impl<H: SessionHost + ArchiveSessionHost> ProtocolSession<H> {
             .map(action)
     }
 
-    pub(crate) async fn mam_query_form(
+    async fn mam_query_form(
         &self,
         id: &str,
         to: Option<&str>,
@@ -48,7 +81,7 @@ impl<H: SessionHost + ArchiveSessionHost> ProtocolSession<H> {
             .map(action)
     }
 
-    pub(crate) async fn mam_metadata(
+    async fn mam_metadata(
         &self,
         id: &str,
         to: Option<&str>,
@@ -59,12 +92,7 @@ impl<H: SessionHost + ArchiveSessionHost> ProtocolSession<H> {
             .map(action)
     }
 
-    pub(crate) async fn mam(
-        &self,
-        id: &str,
-        query: Node<'_, '_>,
-        to: Option<&str>,
-    ) -> Result<Action> {
+    async fn mam(&self, id: &str, query: Node<'_, '_>, to: Option<&str>) -> Result<Action> {
         northstar_archive_xmpp::mam_query(self, id, query, to)
             .await
             .map(action)

@@ -5,8 +5,23 @@ use northstar_roster_xmpp::RosterSessionHost;
 use roxmltree::Node;
 use std::sync::atomic::Ordering;
 
-impl<H: SessionHost + RosterSessionHost> ProtocolSession<H> {
-    pub(crate) async fn blocklist(
+/// The session handlers of blocking.rs.
+pub(crate) trait BlockingHandlers {
+    async fn blocklist(
+        &self,
+        id: &str,
+        root: Node<'_, '_>,
+        _blocklist: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn block(&self, id: &str, root: Node<'_, '_>, _block: Node<'_, '_>) -> Result<Action>;
+
+    async fn unblock(&self, id: &str, root: Node<'_, '_>, _unblock: Node<'_, '_>)
+        -> Result<Action>;
+}
+
+impl<H: SessionHost + RosterSessionHost> BlockingHandlers for ProtocolSession<H> {
+    async fn blocklist(
         &self,
         id: &str,
         root: Node<'_, '_>,
@@ -17,18 +32,13 @@ impl<H: SessionHost + RosterSessionHost> ProtocolSession<H> {
             .map(Action::Send)
     }
 
-    pub(crate) async fn block(
-        &self,
-        id: &str,
-        root: Node<'_, '_>,
-        _block: Node<'_, '_>,
-    ) -> Result<Action> {
+    async fn block(&self, id: &str, root: Node<'_, '_>, _block: Node<'_, '_>) -> Result<Action> {
         northstar_roster_xmpp::blocking::block(self, id, root)
             .await
             .map(Action::Send)
     }
 
-    pub(crate) async fn unblock(
+    async fn unblock(
         &self,
         id: &str,
         root: Node<'_, '_>,

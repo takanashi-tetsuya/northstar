@@ -51,25 +51,40 @@ pub(crate) async fn node_metadata_form<S: PubSubHost>(
     northstar_pubsub_xmpp::pubsub::node_metadata_form(state, node).await
 }
 
-impl<H: SessionHost + PubSubHost> ProtocolSession<H> {
-    pub(crate) async fn pubsub_iq_get(&self, id: &str, child: Node<'_, '_>) -> Result<Action> {
+/// The session handlers of pubsub.rs.
+pub(crate) trait PubSubHandlers {
+    async fn pubsub_iq_get(&self, id: &str, child: Node<'_, '_>) -> Result<Action>;
+
+    async fn pubsub_iq_set(&self, id: &str, child: Node<'_, '_>, _to: &str) -> Result<Action>;
+
+    async fn pubsub_owner_get(&self, id: &str, child: Node<'_, '_>) -> Result<Action>;
+
+    async fn pubsub_owner_set(&self, id: &str, child: Node<'_, '_>) -> Result<Action>;
+
+    async fn pubsub_request(&self, id: &str, kind: &str, child: Node<'_, '_>) -> Result<Action>;
+
+    async fn pubsub_authorization_response(&self, root: Node<'_, '_>) -> Result<bool>;
+
+    /// XEP-0060 `send_last_published_item=on_sub_and_presence` delivery.
+    /// Presence addressed to the service is consumed by the service and is
+    /// never routed to a similarly named local account.
+    async fn pubsub_presence(&mut self, kind: &str, from: &str) -> Result<Action>;
+}
+
+impl<H: SessionHost + PubSubHost> PubSubHandlers for ProtocolSession<H> {
+    async fn pubsub_iq_get(&self, id: &str, child: Node<'_, '_>) -> Result<Action> {
         self.pubsub_request(id, "get", child).await
     }
 
-    pub(crate) async fn pubsub_iq_set(
-        &self,
-        id: &str,
-        child: Node<'_, '_>,
-        _to: &str,
-    ) -> Result<Action> {
+    async fn pubsub_iq_set(&self, id: &str, child: Node<'_, '_>, _to: &str) -> Result<Action> {
         self.pubsub_request(id, "set", child).await
     }
 
-    pub(crate) async fn pubsub_owner_get(&self, id: &str, child: Node<'_, '_>) -> Result<Action> {
+    async fn pubsub_owner_get(&self, id: &str, child: Node<'_, '_>) -> Result<Action> {
         self.pubsub_request(id, "get", child).await
     }
 
-    pub(crate) async fn pubsub_owner_set(&self, id: &str, child: Node<'_, '_>) -> Result<Action> {
+    async fn pubsub_owner_set(&self, id: &str, child: Node<'_, '_>) -> Result<Action> {
         self.pubsub_request(id, "set", child).await
     }
 
@@ -93,7 +108,7 @@ impl<H: SessionHost + PubSubHost> ProtocolSession<H> {
         })
     }
 
-    pub(crate) async fn pubsub_authorization_response(&self, root: Node<'_, '_>) -> Result<bool> {
+    async fn pubsub_authorization_response(&self, root: Node<'_, '_>) -> Result<bool> {
         let Some(to) = root.attribute("to") else {
             return Ok(false);
         };
@@ -113,10 +128,7 @@ impl<H: SessionHost + PubSubHost> ProtocolSession<H> {
         Ok(true)
     }
 
-    /// XEP-0060 `send_last_published_item=on_sub_and_presence` delivery.
-    /// Presence addressed to the service is consumed by the service and is
-    /// never routed to a similarly named local account.
-    pub(crate) async fn pubsub_presence(&mut self, kind: &str, from: &str) -> Result<Action> {
+    async fn pubsub_presence(&mut self, kind: &str, from: &str) -> Result<Action> {
         if kind != "available" {
             return Ok(Action::None);
         }

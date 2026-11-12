@@ -130,8 +130,25 @@ const SERVER_DISCO_FEATURES: &[&str] = &[
     "urn:xmpp:mix:roster:0",
 ];
 
-impl ClientSession {
-    pub(crate) async fn disco_info(
+/// The session handlers of discovery.rs.
+pub(crate) trait DiscoveryHandlers {
+    async fn disco_info(
+        &self,
+        id: &str,
+        to: Option<&str>,
+        request: roxmltree::Node<'_, '_>,
+    ) -> Result<Action>;
+
+    async fn disco_items(
+        &self,
+        id: &str,
+        to: Option<&str>,
+        request: roxmltree::Node<'_, '_>,
+    ) -> Result<Action>;
+}
+
+impl DiscoveryHandlers for ClientSession {
+    async fn disco_info(
         &self,
         id: &str,
         to: Option<&str>,
@@ -619,7 +636,7 @@ impl ClientSession {
         Ok(Action::Send(iq_result_from(id, from, &query.finish())))
     }
 
-    pub(crate) async fn disco_items(
+    async fn disco_items(
         &self,
         id: &str,
         to: Option<&str>,

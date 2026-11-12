@@ -1,4 +1,7 @@
 use super::{Action, ProtocolSession};
+use crate::xmpp::protocol::mix::MixHandlers;
+use crate::xmpp::protocol::muc::MucHandlers;
+use crate::xmpp::protocol::pubsub::PubSubHandlers;
 use crate::xmpp::protocol::SessionHost;
 use anyhow::Result;
 use northstar_mix_xmpp::ports::MixHost;
@@ -20,11 +23,16 @@ mod session;
 
 pub(crate) use northstar_presence_core::directed_recipient_matches;
 
+/// The session handlers of presence.rs.
+pub(crate) trait PresenceHandlers {
+    async fn presence(&mut self, root: Node<'_, '_>, raw: &str) -> Result<Action>;
+}
+
 impl<
         H: SessionHost + RosterSessionHost + MixHost + MucHost<Outbound = OutboundSender> + PubSubHost,
-    > ProtocolSession<H>
+    > PresenceHandlers for ProtocolSession<H>
 {
-    pub(crate) async fn presence(&mut self, root: Node<'_, '_>, raw: &str) -> Result<Action> {
+    async fn presence(&mut self, root: Node<'_, '_>, raw: &str) -> Result<Action> {
         if self.authenticated.is_none() {
             return Ok(Action::Send(stanza_error(root, "auth", "not-authorized")));
         }

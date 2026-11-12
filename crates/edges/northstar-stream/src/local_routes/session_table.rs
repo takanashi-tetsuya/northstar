@@ -249,7 +249,7 @@ pub fn mix_presence_fallback_is_suppressed(
     suppressed.contains("*") || suppressed.contains(channel_jid)
 }
 
-pub fn matching_sm_route(
+pub(crate) fn matching_sm_route(
     existing_user: uuid::Uuid,
     existing_sm_id: Option<uuid::Uuid>,
     claimant_user: uuid::Uuid,
@@ -286,7 +286,7 @@ pub fn fence_local_session_in(
     })
 }
 
-pub fn fence_local_session_if(
+pub(crate) fn fence_local_session_if(
     sessions: &DashMap<String, OnlineSession>,
     full_jid: &str,
     matches: impl FnOnce(&OnlineSession) -> bool,

@@ -132,7 +132,7 @@ pub fn refresh_local_muc_policy_exact_in(
     })
 }
 
-pub fn muc_presence_endpoint_matches(current: &MucOccupant, prepared: &MucOccupant) -> bool {
+pub(crate) fn muc_presence_endpoint_matches(current: &MucOccupant, prepared: &MucOccupant) -> bool {
     match (&current.endpoint, &prepared.endpoint) {
         (MucOccupantEndpoint::Local(_), MucOccupantEndpoint::Local(_)) => true,
         (

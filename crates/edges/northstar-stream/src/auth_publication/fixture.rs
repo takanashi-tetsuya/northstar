@@ -55,7 +55,7 @@ pub fn fixture_bound_control(
         .unwrap();
     (holder, observation)
 }
-pub fn fixture_bound_effects(connection: Uuid, notify: bool) -> CapturedEffects {
+pub(crate) fn fixture_bound_effects(connection: Uuid, notify: bool) -> CapturedEffects {
     let user = Uuid::from_u128(303);
     let device = Uuid::from_u128(304);
     let route = BoundRoute {

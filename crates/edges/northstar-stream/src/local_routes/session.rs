@@ -142,7 +142,7 @@ impl AccountRevocationRoutes {
         Self { sessions }
     }
 
-    pub fn revoke_in(
+    pub(crate) fn revoke_in(
         sessions: &DashMap<String, OnlineSession>,
         user_id: uuid::Uuid,
         bare_account_jid: &str,

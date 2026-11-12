@@ -112,7 +112,7 @@ impl std::fmt::Display for CredentialHandoffIntegrity {
     }
 }
 impl std::error::Error for CredentialHandoffIntegrity {}
-pub fn credential_handoff_failed(error: &anyhow::Error) -> bool {
+pub(crate) fn credential_handoff_failed(error: &anyhow::Error) -> bool {
     error.is::<CredentialHandoffIntegrity>()
 }
 
@@ -144,7 +144,10 @@ impl CredentialAttempt {
     ) -> Option<&northstar_auth_application::authentication::publication::PreparedCredential> {
         self.prepared.as_ref()
     }
-    pub fn into_owner(self, receipt: CredentialCommitReceipt) -> Result<KnownCredentialOwner> {
+    pub(crate) fn into_owner(
+        self,
+        receipt: CredentialCommitReceipt,
+    ) -> Result<KnownCredentialOwner> {
         match (self.origin, self.prepared) {
             (Some(origin), Some(prepared)) => {
                 KnownCredentialOwner::from_observed(receipt, origin, self.connection, &prepared)
@@ -166,7 +169,7 @@ pub struct KnownCredentialOwner {
     observation: Observation,
 }
 impl KnownCredentialOwner {
-    pub fn from_returned(
+    pub(crate) fn from_returned(
         receipt: CredentialCommitReceipt,
         origin: Option<FrameExecution>,
         connection: Uuid,

@@ -152,7 +152,7 @@ pub(crate) fn apply_sm_ownership_resolution_to_unacked(
     }
 }
 
-pub fn durable_delivery_managed_by_sm(
+pub(crate) fn durable_delivery_managed_by_sm(
     sm_enabled: bool,
     stanza: &str,
     has_durable_delivery: bool,

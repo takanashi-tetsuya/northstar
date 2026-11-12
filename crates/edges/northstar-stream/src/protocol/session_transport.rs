@@ -23,7 +23,10 @@ pub(super) fn push_generated_feature(parent: &mut XmlElement, feature: &str, lab
     }
 }
 
-pub fn client_stream_limits_feature(limits: Option<StreamLimits>, authenticated: bool) -> String {
+pub(crate) fn client_stream_limits_feature(
+    limits: Option<StreamLimits>,
+    authenticated: bool,
+) -> String {
     let Some(limits) = limits else {
         return String::new();
     };
@@ -284,7 +287,7 @@ impl<H: SessionHost> ProtocolSession<H> {
     }
 }
 
-pub fn unauthenticated_timed_out_for(
+pub(crate) fn unauthenticated_timed_out_for(
     authenticated: bool,
     connected_at: std::time::Instant,
     timeout: std::time::Duration,
@@ -293,7 +296,7 @@ pub fn unauthenticated_timed_out_for(
     !authenticated && now.saturating_duration_since(connected_at) >= timeout
 }
 
-pub fn resource_bind_deadline_for(
+pub(crate) fn resource_bind_deadline_for(
     authenticated: bool,
     bound: bool,
     authenticated_at: Option<std::time::Instant>,

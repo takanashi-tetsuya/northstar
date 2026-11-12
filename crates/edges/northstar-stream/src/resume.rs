@@ -77,7 +77,7 @@ impl ResumePayload {
         &self.control
     }
 
-    pub fn replace_envelope(
+    pub(crate) fn replace_envelope(
         &mut self,
         control: String,
         post_control: Vec<String>,

@@ -283,7 +283,7 @@ impl SessionExecutions {
         execution
     }
 
-    pub fn auth_origin(&self) -> Option<FrameExecution> {
+    pub(crate) fn auth_origin(&self) -> Option<FrameExecution> {
         self.current
             .as_ref()
             .filter(|execution| {

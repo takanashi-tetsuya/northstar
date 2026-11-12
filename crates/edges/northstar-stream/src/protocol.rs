@@ -35,10 +35,10 @@ use std::{
 use zeroize::{Zeroize, Zeroizing};
 
 pub mod host;
-pub mod legacy_auth;
-pub mod session_sm;
-pub mod session_transport;
-pub mod stream_session;
+pub(crate) mod legacy_auth;
+pub(crate) mod session_sm;
+pub(crate) mod session_transport;
+pub(crate) mod stream_session;
 
 pub use self::host::SessionHost;
 use self::session_sm::durable_delivery_managed_by_sm;

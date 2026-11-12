@@ -5,7 +5,7 @@ use crate::protocol::SessionHost;
 use northstar_auth_xmpp::sasl2::{legacy_sasl_auth, legacy_sasl_payload};
 
 impl<H: SessionHost> ProtocolSession<H> {
-    pub fn auth_replies(&mut self, replies: Vec<String>) -> Result<Action> {
+    pub(crate) fn auth_replies(&mut self, replies: Vec<String>) -> Result<Action> {
         let control = replies
             .first()
             .context("auth action has no terminal control")?;
@@ -15,7 +15,7 @@ impl<H: SessionHost> ProtocolSession<H> {
         ))
     }
 
-    pub fn seal_resume_authentication(&mut self, payload: &mut ResumePayload) -> Result<()> {
+    pub(crate) fn seal_resume_authentication(&mut self, payload: &mut ResumePayload) -> Result<()> {
         anyhow::ensure!(
             payload.activate_route && payload.auth_publication.is_none(),
             "resume authentication seal is not pending"

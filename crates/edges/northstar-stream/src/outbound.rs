@@ -393,7 +393,7 @@ impl OutboundSender {
     /// `Ok(false)` means the routing fence changed and the item was not queued;
     /// the caller still owns its durable database projection and must release
     /// or retry that projection. A transport closure remains an error.
-    pub async fn send_durable_if_current<F>(
+    pub(crate) async fn send_durable_if_current<F>(
         &self,
         stanza: String,
         delivery: DurableDelivery,

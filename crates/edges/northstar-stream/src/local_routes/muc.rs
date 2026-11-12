@@ -119,7 +119,7 @@ impl SuspendedMucBuffer {
     /// Remove only a stanza whose next owner has already accepted it.  Using
     /// the actual front length (rather than clearing/saturating the counter)
     /// keeps the byte bound exact after a first or mid-drain failure.
-    pub fn commit_front(&mut self) {
+    pub(crate) fn commit_front(&mut self) {
         let stanza = self
             .stanzas
             .pop_front()

@@ -604,7 +604,7 @@ pub async fn replay_newly_available_resource(
     }
 }
 
-pub async fn replay_bind2_offline(
+pub(crate) async fn replay_bind2_offline(
     service: ReplayService<impl ReplayRepository>,
     outbound: crate::outbound::OutboundSender,
     recipient_id: Uuid,
@@ -630,7 +630,7 @@ pub async fn replay_bind2_offline(
     clippy::too_many_arguments,
     reason = "the resumed replay task carries one immutable availability generation and privacy snapshot"
 )]
-pub async fn replay_resumed_offline(
+pub(crate) async fn replay_resumed_offline(
     service: ReplayService<impl ReplayRepository>,
     outbound: crate::outbound::OutboundSender,
     recipient_id: Uuid,

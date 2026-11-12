@@ -652,6 +652,37 @@ impl SessionHost for AppState {
         session.message(root, raw, client_raw).await
     }
 
+    async fn dispatch_muc_message(
+        session: &ClientSession,
+        root: Node<'_, '_>,
+        raw: &str,
+    ) -> Result<Action> {
+        ClientSession::muc_message(session, root, raw).await
+    }
+
+    async fn dispatch_mix_message(
+        session: &ClientSession,
+        root: Node<'_, '_>,
+        raw: &str,
+    ) -> Result<Option<Action>> {
+        ClientSession::try_mix_message(session, root, raw).await
+    }
+
+    async fn dispatch_pubsub_authorization_response(
+        session: &ClientSession,
+        root: Node<'_, '_>,
+    ) -> Result<bool> {
+        match ClientSession::pubsub_authorization_response(session, root).await {
+            Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
+                tracing::warn!(
+                    "dropping PubSub authorization form while mutation capacity is exhausted"
+                );
+                Ok(true)
+            }
+            result => result,
+        }
+    }
+
     async fn dispatch_presence(
         session: &mut ClientSession,
         root: Node<'_, '_>,

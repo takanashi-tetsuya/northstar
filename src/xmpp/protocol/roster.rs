@@ -61,18 +61,6 @@ impl<H: SessionHost + RosterSessionHost> ProtocolSession<H> {
             .await
             .map(Action::Send)
     }
-
-    pub(crate) async fn push_roster_change(
-        &self,
-        owner_id: uuid::Uuid,
-        owner: &str,
-        change: &RosterChange,
-        participant_id: Option<&str>,
-    ) -> Result<()> {
-        self.host
-            .deliver_committed_roster_change(owner_id, owner, change, participant_id)
-            .await
-    }
 }
 
 impl<H: SessionHost + RosterSessionHost> northstar_roster_xmpp::roster::RosterSession
@@ -137,7 +125,9 @@ impl<H: SessionHost + RosterSessionHost> northstar_roster_xmpp::roster::RosterSe
         owner: &str,
         change: &RosterChange,
     ) -> Result<()> {
-        self.push_roster_change(owner_id, owner, change, None).await
+        self.host
+            .deliver_committed_roster_change(owner_id, owner, change, None)
+            .await
     }
 }
 

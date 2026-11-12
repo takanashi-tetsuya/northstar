@@ -41,14 +41,7 @@ use uuid::Uuid;
 #[cfg(test)]
 mod saved_case;
 
-impl<
-        H: SessionHost
-            + MessageHost
-            + MucHost<Outbound = northstar_stream::outbound::OutboundSender>
-            + MixHost
-            + PubSubHost,
-    > MessageSession for ProtocolSession<H>
-{
+impl<H: SessionHost + MessageHost> MessageSession for ProtocolSession<H> {
     type Host = H;
     type Action = Action;
 
@@ -108,15 +101,7 @@ impl<
     }
 
     async fn pubsub_authorization_response(&self, root: Node<'_, '_>) -> Result<bool> {
-        match ProtocolSession::pubsub_authorization_response(self, root).await {
-            Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
-                tracing::warn!(
-                    "dropping PubSub authorization form while mutation capacity is exhausted"
-                );
-                Ok(true)
-            }
-            result => result,
-        }
+        H::dispatch_pubsub_authorization_response(self, root).await
     }
 
     async fn push_disable_message(&self, root: Node<'_, '_>, from: &str, to: &str) -> Result<bool> {
@@ -124,11 +109,11 @@ impl<
     }
 
     async fn try_mix_message(&self, root: Node<'_, '_>, raw: &str) -> Result<Option<Action>> {
-        ProtocolSession::try_mix_message(self, root, raw).await
+        H::dispatch_mix_message(self, root, raw).await
     }
 
     async fn muc_message(&self, root: Node<'_, '_>, raw: &str) -> Result<Action> {
-        ProtocolSession::muc_message(self, root, raw).await
+        H::dispatch_muc_message(self, root, raw).await
     }
 }
 

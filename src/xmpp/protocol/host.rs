@@ -452,6 +452,24 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         raw: &str,
         client_raw: &str,
     ) -> impl std::future::Future<Output = Result<Action>> + Send;
+    /// Hands a groupchat `<message/>` to the room context.
+    fn dispatch_muc_message(
+        session: &ProtocolSession<Self>,
+        root: Node<'_, '_>,
+        raw: &str,
+    ) -> impl std::future::Future<Output = Result<Action>> + Send;
+    /// Hands a `<message/>` to the MIX context, or `None` when it addresses no MIX channel.
+    fn dispatch_mix_message(
+        session: &ProtocolSession<Self>,
+        root: Node<'_, '_>,
+        raw: &str,
+    ) -> impl std::future::Future<Output = Result<Option<Action>>> + Send;
+    /// True when the message was a PubSub authorization form and needs no further handling. A form dropped
+    /// because mutation capacity is exhausted counts as handled.
+    fn dispatch_pubsub_authorization_response(
+        session: &ProtocolSession<Self>,
+        root: Node<'_, '_>,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
     /// Handles a client `<presence/>` (the roster and room contexts).
     fn dispatch_presence(
         session: &mut ProtocolSession<Self>,

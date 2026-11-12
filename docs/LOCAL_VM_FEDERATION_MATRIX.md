@@ -17,7 +17,7 @@ Northstar's DNSSEC resolver uses Hickory's default root trust anchors unless
 the lab-only override is explicitly configured. `lab.test` is an isolated
 signed zone without a chain from that root.
 An explicit `delv` trust anchor can validate the zone for `delv`, but it does
-not configure Northstar's resolver. Hickory 0.26.1 accepts DNSKEY records for
+not configure Northstar's resolver. Hickory 0.26.2 accepts DNSKEY records for
 custom anchors; the lab's existing DS file is not a suitable input. Do not
 label a TLSA test as passed until Northstar itself reports a locally validated
 SRV, selected A/AAAA and TLSA chain.

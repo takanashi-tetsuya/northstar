@@ -23,21 +23,6 @@ impl<'a> OnlineQueueAcceptanceTelemetry<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub struct AcceptedHistoryTelemetry<'a> {
-    failure: &'a AtomicU64,
-}
-
-impl<'a> AcceptedHistoryTelemetry<'a> {
-    pub fn new(failure: &'a AtomicU64) -> Self {
-        Self { failure }
-    }
-
-    pub fn failed(self) {
-        self.failure.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-#[derive(Clone, Copy)]
 pub struct OutboxDeliveryTelemetry<'a> {
     duration: &'a DurationHistogram,
 }

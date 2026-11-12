@@ -352,14 +352,6 @@ impl AppState {
         )
     }
 
-    pub(crate) fn s2s_accepted_history_telemetry(
-        &self,
-    ) -> northstar_federation_application::telemetry::AcceptedHistoryTelemetry<'_> {
-        northstar_federation_application::telemetry::AcceptedHistoryTelemetry::new(
-            &self.metrics.post_accept_side_effect_failures_total,
-        )
-    }
-
     pub(crate) fn s2s_outbox_delivery_telemetry(
         &self,
     ) -> northstar_federation_application::telemetry::OutboxDeliveryTelemetry<'_> {

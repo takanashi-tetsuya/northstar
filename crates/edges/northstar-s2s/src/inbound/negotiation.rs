@@ -24,12 +24,7 @@ pub fn authenticated_s2s_sender(asserted: &str, authenticated_domain: &str) -> b
     asserted.domainpart() == authenticated_domain
 }
 
-pub fn same_s2s_domain(left: &str, right: &str) -> bool {
-    matches!(
-        (prepare_domainpart(left), prepare_domainpart(right)),
-        (Ok(left), Ok(right)) if left == right
-    )
-}
+pub use northstar_federation_core::wire::same_s2s_domain;
 
 pub fn valid_starttls_request(raw: &str) -> bool {
     let Ok(document) = Document::parse(raw) else {

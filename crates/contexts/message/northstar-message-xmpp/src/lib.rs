@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod extdisco;
+pub mod federated_message;
 pub mod messaging;
 pub mod ports;
 mod protocol_session;

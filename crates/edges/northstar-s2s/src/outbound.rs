@@ -84,13 +84,6 @@ enum DialbackAuthorizationFailure {
     Error(String),
 }
 
-fn same_s2s_domain(left: &str, right: &str) -> bool {
-    matches!(
-        (prepare_domainpart(left), prepare_domainpart(right)),
-        (Ok(left), Ok(right)) if left == right
-    )
-}
-
 impl std::fmt::Display for PeerStanzaLimitExceeded {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

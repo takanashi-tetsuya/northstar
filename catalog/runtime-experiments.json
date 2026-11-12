@@ -363,8 +363,8 @@
       "id": "federation",
       "title": "S2S, components and federation outbox",
       "production_owner": {
-        "path": "src/s2s/inbound.rs",
-        "anchor": "pub(crate) async fn route_inbound_message("
+        "path": "crates/contexts/message/northstar-message-xmpp/src/federated_message.rs",
+        "anchor": "pub async fn route_inbound_message<H: FederatedMessageHost>("
       },
       "runtime_identities": [
         {
@@ -454,9 +454,9 @@
           "id": "federation-protocol-policy",
           "level": "deterministic_unit",
           "status": "declared",
-          "command": "cargo test --locked --bin rust-xmpp-server s2s::inbound",
+          "command": "cargo test --locked -p northstar-message-xmpp federated_message::tests",
           "test": {
-            "path": "src/s2s/inbound_tests.rs",
+            "path": "crates/contexts/message/northstar-message-xmpp/src/federated_message_tests.rs",
             "anchor": "fn degraded_inbound_postcommit_is_accepted_without_live_effects() {"
           },
           "assertions": [

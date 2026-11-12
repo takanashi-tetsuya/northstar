@@ -8,12 +8,14 @@ use northstar_message_application::message_admission::{
 };
 use northstar_message_application::message_carbons::CarbonDeliveryPort;
 use northstar_message_application::messaging::{
-    DirectMessageRoutePort, MessageRepository, MessageService,
+    DirectMessageRoutePort, MessageRepository, MessageService, OnlineRoutePort, OnlineRouteResult,
 };
 use northstar_message_application::retractions::{RetractionRepository, RetractionService};
 use northstar_message_application::telemetry::PersonalMessageTelemetry;
 use northstar_message_core::OfflineDeliveryLimits;
 use northstar_room_core::{ClusterMucAffiliationSubject, ClusterMucInviteAuthority};
+use northstar_stream::local_routes::session::OnlineSession;
+use northstar_stream::outbound::{DurableDelivery, OutboundItem};
 use northstar_stream::transport::Action;
 use roxmltree::Node;
 use std::future::Future;
@@ -115,6 +117,43 @@ pub trait MessageHost: DirectMessageRoutePort + CarbonDeliveryPort + Send + Sync
         &self,
         operation_id: Uuid,
     ) -> impl Future<Output = Result<()>> + Send;
+}
+
+/// The node as federated message delivery (an S2S inbound `<message/>`) sees it.
+pub trait FederatedMessageHost:
+    MessageHost + OnlineRoutePort<Session = OnlineSession, Item = OutboundItem>
+{
+    /// The local sessions of `jid`: every resource of a bare JID, the one resource of a full JID.
+    fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)>;
+    /// Whether another cluster node holds a route for `jid`. A failed lookup is no route.
+    fn s2s_remote_recipient_route_exists(&self, jid: &str) -> impl Future<Output = bool> + Send;
+    /// Handles a XEP-0357 push-disable `<message/>` from `from` to `to`; true when it was one.
+    fn handle_push_disable(
+        &self,
+        root: Node<'_, '_>,
+        from: &str,
+        to: &str,
+    ) -> impl Future<Output = Result<bool>> + Send;
+    /// Counts a side effect that failed after a federated stanza was accepted.
+    fn record_s2s_post_accept_failure(&self);
+    /// Counts a federated message routed to a local recipient.
+    fn record_s2s_message_routed(&self);
+    /// Counts a federated message a local session queue accepted; `durable` when it carries a durable delivery.
+    fn record_s2s_online_accept(&self, durable: bool);
+    /// Routes `stanza` to every available resource of the bare `jid` on the other cluster nodes.
+    fn route_s2s_message_to_available_remote_resources(
+        &self,
+        jid: &str,
+        stanza: &str,
+        delivery: Option<DurableDelivery>,
+    ) -> impl Future<Output = bool> + Send;
+    /// Routes `stanza` to the primary resource of `jid` on another cluster node.
+    fn route_s2s_message_to_remote_primary(
+        &self,
+        jid: &str,
+        stanza: &str,
+        delivery: Option<DurableDelivery>,
+    ) -> impl Future<Output = OnlineRouteResult> + Send;
 }
 
 /// One client session as the message pipeline sees it.

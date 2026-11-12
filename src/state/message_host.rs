@@ -4,17 +4,20 @@ use super::*;
 use anyhow::Result;
 use northstar_federation_core::S2sOutboxPolicy;
 use northstar_message_application::message_admission::MessageAdmissionService;
-use northstar_message_application::messaging::MessageService;
+use northstar_message_application::messaging::{MessageService, OnlineRouteResult};
 use northstar_message_application::retractions::RetractionService;
 use northstar_message_application::telemetry::PersonalMessageTelemetry;
 use northstar_message_core::OfflineDeliveryLimits;
 use northstar_message_xmpp::extdisco::ExtDiscoHost;
-use northstar_message_xmpp::ports::{DirectInviteRoom, MessageHost};
+use northstar_message_xmpp::ports::{DirectInviteRoom, FederatedMessageHost, MessageHost};
 use northstar_room_core::{ClusterMucAffiliationSubject, ClusterMucInviteAuthority};
 use northstar_session_application::RemoteRoutePort;
+use northstar_stream::local_routes::session::OnlineSession;
+use northstar_stream::outbound::DurableDelivery;
 use northstar_workflows::message_admission_port::AbuseMessageAdmissionPort;
 use northstar_workflows::message_repository::PostgresMessageRepository;
 use northstar_workflows::retraction_repository::PostgresRetractionRepository;
+use roxmltree::Node;
 
 impl MessageHost for AppState {
     type Messages = PostgresMessageRepository;
@@ -133,5 +136,54 @@ impl MessageHost for AppState {
 impl ExtDiscoHost for AppState {
     fn extdisco_service(&self) -> &northstar_message_application::extdisco::ExtDiscoService {
         AppState::extdisco_service(self)
+    }
+}
+
+impl FederatedMessageHost for AppState {
+    fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
+        AppState::session_entries_for(self, jid)
+    }
+
+    async fn s2s_remote_recipient_route_exists(&self, jid: &str) -> bool {
+        AppState::s2s_remote_recipient_route_exists(self, jid).await
+    }
+
+    async fn handle_push_disable(&self, root: Node<'_, '_>, from: &str, to: &str) -> Result<bool> {
+        northstar_stream::protocol::misc::handle_push_disable(self, root, from, to).await
+    }
+
+    fn record_s2s_post_accept_failure(&self) {
+        self.s2s_inbound_delivery_telemetry().post_accept_failed();
+    }
+
+    fn record_s2s_message_routed(&self) {
+        self.s2s_inbound_delivery_telemetry().routed();
+    }
+
+    fn record_s2s_online_accept(&self, durable: bool) {
+        self.s2s_online_queue_telemetry().accepted(durable);
+    }
+
+    async fn route_s2s_message_to_available_remote_resources(
+        &self,
+        jid: &str,
+        stanza: &str,
+        delivery: Option<DurableDelivery>,
+    ) -> bool {
+        AppState::route_s2s_message_to_available_remote_resources(self, jid, stanza, delivery).await
+    }
+
+    async fn route_s2s_message_to_remote_primary(
+        &self,
+        jid: &str,
+        stanza: &str,
+        delivery: Option<DurableDelivery>,
+    ) -> OnlineRouteResult {
+        let routed =
+            AppState::route_s2s_message_to_remote_primary(self, jid, stanza, delivery).await;
+        OnlineRouteResult {
+            delivered: routed.delivered,
+            accepted_full_jid: routed.accepted_full_jid,
+        }
     }
 }

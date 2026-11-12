@@ -9,9 +9,10 @@ import { readProductionModule } from './lib/source-module.mjs';
 export function readFederatedRouteSources() {
   const read = file => fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
   return {
-    inbound: readProductionModule('src/s2s/inbound.rs'),
-    adapter: read('src/state/s2s_direct_route.rs'),
-    state: read('src/state.rs'),
+    inbound: readProductionModule('crates/contexts/message/northstar-message-xmpp/src/federated_message.rs'),
+    adapter: readProductionModule('crates/contexts/message/northstar-message-xmpp/src/federated_message.rs'),
+    host: read('src/state/message_host.rs'),
+    state: read('crates/contexts/message/northstar-message-xmpp/src/lib.rs'),
   };
 }
 
@@ -82,12 +83,13 @@ function requireMatch(code, pattern, message) {
 export function verifyFederatedRouteBoundaries(sources) {
   const inbound = maskRust(sources.inbound);
   const adapter = maskRust(sources.adapter);
-  requireMatch(maskRust(sources.state), /\bpub\(crate\)\s+mod\s+s2s_direct_route\s*;/, 'S2S route adapter module must stay registered');
-  requireMatch(inbound, /\buse\s+crate::state::s2s_direct_route::S2sDirectRoutePort\s*;/, 'S2S caller must import its origin-specific adapter');
+  const host = maskRust(sources.host);
+  requireMatch(maskRust(sources.state), /\bpub\s+mod\s+federated_message\s*;/, 'S2S route adapter module must stay registered');
+  requireMatch(adapter, /\bstruct\s+FederatedDirectRoute\s*<\s*'a\s*,\s*H\s*>\s*\(\s*&'a\s+H\s*\)\s*;/, 'S2S caller must own its origin-specific adapter');
   const caller = functionBody(inbound, 'route_inbound_message');
-  const invocation = /\bDirectMessageRouter::route_federated\s*\(\s*&S2sDirectRoutePort\s*\(\s*state\s*\)\s*,/.exec(caller);
+  const invocation = /\bDirectMessageRouter::route_federated\s*\(\s*&FederatedDirectRoute\s*\(\s*state\s*\)\s*,/.exec(caller);
   if (!invocation || (caller.match(/\bDirectMessageRouter::route_federated\s*\(/g) ?? []).length !== 1) {
-    throw new Error('S2S message caller must invoke route_federated once through S2sDirectRoutePort');
+    throw new Error('S2S message caller must invoke route_federated once through FederatedDirectRoute');
   }
   const argumentsBody = balancedBody(caller, caller.indexOf('(', invocation.index), '(', ')');
   requireMatch(argumentsBody, /\bDirectRouteRequest\s*\{/, 'S2S route must use the typed request');
@@ -102,8 +104,15 @@ export function verifyFederatedRouteBoundaries(sources) {
   requireMatch(caller, /\bSome\(delivered_key\)\s*=\s*delivered_key\.as_deref\(\)/, 'S2S caller must use the optional accepted Carbon exclusion key');
 
   const compactBody = name => functionBody(adapter, name).replace(/\s+/g, '');
-  requireMatch(compactBody('record_local_accept'), /self\.0\.s2s_online_queue_telemetry\(\)\.accepted\(durable\);/, 'S2S local acceptance must retain federation queue telemetry and delivery kind');
-  requireMatch(compactBody('post_accept_failed'), /self\.0\.s2s_inbound_delivery_telemetry\(\)\.post_accept_failed\(\);/, 'S2S post-accept failures must retain federation telemetry');
+  const hostBody = name => functionBody(host, name).replace(/\s+/g, '');
+  requireMatch(compactBody('record_local_accept'), /self\.0\.record_s2s_online_accept\(durable\);/, 'S2S local acceptance must retain federation queue telemetry and delivery kind');
+  if (hostBody('record_s2s_online_accept') !== 'self.s2s_online_queue_telemetry().accepted(durable);') {
+    throw new Error('S2S local acceptance must retain federation queue telemetry and delivery kind');
+  }
+  requireMatch(compactBody('post_accept_failed'), /self\.0\.record_s2s_post_accept_failure\(\);/, 'S2S post-accept failures must retain federation telemetry');
+  if (hostBody('record_s2s_post_accept_failure') !== 'self.s2s_inbound_delivery_telemetry().post_accept_failed();') {
+    throw new Error('S2S post-accept failures must retain federation telemetry');
+  }
   if (/\bpersonal_message_telemetry\s*\(/.test(adapter)) throw new Error('S2S adapter must not record C2S origin telemetry');
   const localEntries = [...adapter.matchAll(/\bfn\s+try_local\s*\(/g)];
   if (localEntries.length !== 1) {
@@ -118,11 +127,12 @@ export function verifyFederatedRouteBoundaries(sources) {
     throw new Error('S2S adapter must forward the exact owned local enqueue and return its refusal unchanged');
   }
   requireMatch(compactBody('route_available_remote'), /self\.0\.route_s2s_message_to_available_remote_resources\(jid,stanza,delivery\)\.await/, 'S2S fanout must use its federation remote adapter');
-  const primary = compactBody('route_remote_primary');
-  requireMatch(primary, /self\.0\.route_s2s_message_to_remote_primary\(jid,stanza,delivery\)\.await/, 'S2S primary must use its federation remote adapter');
+  requireMatch(compactBody('route_remote_primary'), /self\.0\.route_s2s_message_to_remote_primary\(jid,stanza,delivery\)\.await/, 'S2S primary must use its federation remote adapter');
+  const primary = hostBody('route_s2s_message_to_remote_primary');
+  requireMatch(primary, /AppState::route_s2s_message_to_remote_primary\(self,jid,stanza,delivery\)\.await/, 'S2S primary must use its federation remote adapter');
   requireMatch(primary, /delivered:routed\.delivered,accepted_full_jid:routed\.accepted_full_jid,/, 'S2S remote receipt must preserve acceptance and Carbon exclusion');
   requireMatch(compactBody('rearm_direct_route'), /DirectMessageRoutePort::rearm_direct_route\(self\.0,delivery\)\.await;/, 'S2S rearm must retain the exact delivery claim');
-  return { caller: 'route_inbound_message', owner: 'route_federated', adapter: 'S2sDirectRoutePort' };
+  return { caller: 'route_inbound_message', owner: 'route_federated', adapter: 'FederatedDirectRoute' };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

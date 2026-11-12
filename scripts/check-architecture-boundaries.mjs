@@ -3265,6 +3265,7 @@ const capsProtocolSource =
   read('crates/edges/northstar-stream/src/protocol/caps.rs') +
   read('src/state/caps_effect_dispatch.rs');
 const s2sInboundSource = readProductionModule('src/s2s/inbound.rs', { root })
+  + readProductionModule('crates/contexts/message/northstar-message-xmpp/src/federated_message.rs', { root })
   + readProductionModule('crates/edges/northstar-s2s/src/inbound.rs', { root });
 if (/(?:db|northstar_message_postgres::\w+|northstar_workflows::\w+)::(?:store_offline_for_recipient|admit_personal_history)\s*\(/.test(s2sInboundSource)
     || !s2sInboundSource.includes('.store_offline(OfflineMessageAdmission {')

@@ -4,6 +4,15 @@ use anyhow::{Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use northstar_xml_builder::XmlElement;
+use northstar_xmpp_types::jid::prepare_domainpart;
+
+/// Whether two S2S domains are the same after domainpart preparation; an invalid domain matches nothing.
+pub fn same_s2s_domain(left: &str, right: &str) -> bool {
+    matches!(
+        (prepare_domainpart(left), prepare_domainpart(right)),
+        (Ok(left), Ok(right)) if left == right
+    )
+}
 
 pub fn stream_error_element(condition: &str) -> &'static str {
     match condition {

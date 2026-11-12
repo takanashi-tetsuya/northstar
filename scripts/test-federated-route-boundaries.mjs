@@ -14,15 +14,15 @@ function rejectsMutation(name, file, before, after, expected) {
 
 test('production federation caller and origin-specific adapter are wired', () => {
   assert.deepEqual(verifyFederatedRouteBoundaries(baseline), {
-    caller: 'route_inbound_message', owner: 'route_federated', adapter: 'S2sDirectRoutePort',
+    caller: 'route_inbound_message', owner: 'route_federated', adapter: 'FederatedDirectRoute',
   });
 });
 test('comments, literals and unrelated functions do not spoof caller wiring', () => {
   const missing = baseline.inbound.replace('DirectMessageRouter::route_federated(', 'DirectMessageRouter::route(');
-  const decoys = '\n// DirectMessageRouter::route_federated(&S2sDirectRoutePort(state), request, history_committed);\n'
-    + '/* outer /* nested */ DirectMessageRouter::route_federated(&S2sDirectRoutePort(state), request, history_committed); */\n'
-    + 'const DECOY: &str = r##"DirectMessageRouter::route_federated(&S2sDirectRoutePort(state), request, history_committed);"##;\n'
-    + 'fn unrelated() { DirectMessageRouter::route_federated(&S2sDirectRoutePort(state), request, history_committed); }';
+  const decoys = '\n// DirectMessageRouter::route_federated(&FederatedDirectRoute(state), request, history_committed);\n'
+    + '/* outer /* nested */ DirectMessageRouter::route_federated(&FederatedDirectRoute(state), request, history_committed); */\n'
+    + 'const DECOY: &str = r##"DirectMessageRouter::route_federated(&FederatedDirectRoute(state), request, history_committed);"##;\n'
+    + 'fn unrelated() { DirectMessageRouter::route_federated(&FederatedDirectRoute(state), request, history_committed); }';
   assert.throws(() => verifyFederatedRouteBoundaries({ ...baseline, inbound: missing + decoys }), /caller must invoke/);
 });
 test('irrelevant strings, nested comments and character braces are masked', () => {
@@ -40,22 +40,26 @@ test('an unrelated declaration cannot spoof the owned entry signature', () => {
   assert.throws(() => verifyFederatedRouteBoundaries({ ...baseline, adapter: changed }), /owned local enqueue and preserve its refusal type/);
 });
 
-rejectsMutation('adapter module cannot disappear', 'state', 'pub(crate) mod s2s_direct_route;', '// pub(crate) mod s2s_direct_route;', /module must stay registered/);
-rejectsMutation('adapter import cannot disappear', 'inbound', 'use crate::state::s2s_direct_route::S2sDirectRoutePort;', '// use crate::state::s2s_direct_route::S2sDirectRoutePort;', /import its origin-specific adapter/);
+rejectsMutation('adapter module cannot disappear', 'state', 'pub mod federated_message;', '// pub mod federated_message;', /module must stay registered/);
+rejectsMutation('adapter type cannot disappear', 'adapter', "struct FederatedDirectRoute<'a, H>(&'a H);", "// struct FederatedDirectRoute<'a, H>(&'a H);", /own its origin-specific adapter/);
 rejectsMutation('caller cannot switch to C2S checkpoint policy', 'inbound', 'DirectMessageRouter::route_federated(', 'DirectMessageRouter::route(', /caller must invoke/);
-rejectsMutation('caller cannot use unwrapped AppState', 'inbound', '&S2sDirectRoutePort(state)', '&state', /caller must invoke/);
-rejectsMutation('caller cannot substitute a different state', 'inbound', '&S2sDirectRoutePort(state)', '&S2sDirectRoutePort(other_state)', /caller must invoke/);
+rejectsMutation('caller cannot use unwrapped AppState', 'inbound', '&FederatedDirectRoute(state)', '&state', /caller must invoke/);
+rejectsMutation('caller cannot substitute a different state', 'inbound', '&FederatedDirectRoute(state)', '&FederatedDirectRoute(other_state)', /caller must invoke/);
 rejectsMutation('caller cannot drop committed history', 'inbound', '        history_committed,\n    )\n    .await?;', '        false,\n    )\n    .await?;', /committed-history input/);
 rejectsMutation('caller cannot disable direct health', 'inbound', 'enforce_direct_health: true,', 'enforce_direct_health: false,', /envelope, targets and health/);
 rejectsMutation('caller must use approved targets', 'inbound', 'approved_targets: &targets,', 'approved_targets: &unfiltered_targets,', /envelope, targets and health/);
 rejectsMutation('caller must use authoritative envelope', 'inbound', '            stanza: &annotated,\n            delivery,', '            stanza: raw,\n            delivery,', /envelope, targets and health/);
 rejectsMutation('caller cannot resume inline enqueue', 'inbound', 'let outcome = DirectMessageRouter::route_federated(', 'target.sender.try_send(annotated.clone());\n    let outcome = DirectMessageRouter::route_federated(', /regained inline/);
 rejectsMutation('caller cannot discard Carbon exclusion', 'inbound', 'DirectRouteOutcome::Routed { accepted_full_jid } => (true, accepted_full_jid)', 'DirectRouteOutcome::Routed { accepted_full_jid } => (true, None)', /retain the accepted resource/);
-rejectsMutation('queue telemetry cannot switch to C2S', 'adapter', 'self.0.s2s_online_queue_telemetry().accepted(durable);', 'self.0.personal_message_telemetry().online_queue_result(true, durable);', /federation queue telemetry/);
-rejectsMutation('queue telemetry cannot lose durable classification', 'adapter', '.accepted(durable);', '.accepted(false);', /federation queue telemetry/);
-rejectsMutation('postaccept telemetry cannot switch to C2S', 'adapter', 'self.0.s2s_inbound_delivery_telemetry().post_accept_failed();', 'self.0.personal_message_telemetry().post_accept_failed();', /federation telemetry/);
-rejectsMutation('comments cannot satisfy postaccept telemetry', 'adapter', 'self.0.s2s_inbound_delivery_telemetry().post_accept_failed();', '// self.0.s2s_inbound_delivery_telemetry().post_accept_failed();', /federation telemetry/);
-rejectsMutation('additional C2S telemetry cannot be double counted', 'adapter', 'self.0.s2s_inbound_delivery_telemetry().post_accept_failed();', 'self.0.s2s_inbound_delivery_telemetry().post_accept_failed();\n self.0.personal_message_telemetry().post_accept_failed();', /must not record C2S/);
+rejectsMutation('queue telemetry cannot switch to C2S', 'adapter', 'self.0.record_s2s_online_accept(durable);', 'self.0.personal_message_telemetry().online_queue_result(true, durable);', /federation queue telemetry/);
+rejectsMutation('queue telemetry cannot lose durable classification', 'adapter', 'record_s2s_online_accept(durable);', 'record_s2s_online_accept(false);', /federation queue telemetry/);
+rejectsMutation('host queue telemetry cannot switch to C2S', 'host', 'self.s2s_online_queue_telemetry().accepted(durable);', 'self.personal_message_telemetry().online_queue_result(true, durable);', /federation queue telemetry/);
+rejectsMutation('host queue telemetry cannot lose durable classification', 'host', '.accepted(durable);', '.accepted(false);', /federation queue telemetry/);
+rejectsMutation('postaccept telemetry cannot switch to C2S', 'adapter', 'self.0.record_s2s_post_accept_failure();', 'self.0.personal_message_telemetry().post_accept_failed();', /federation telemetry/);
+rejectsMutation('comments cannot satisfy postaccept telemetry', 'adapter', 'self.0.record_s2s_post_accept_failure();', '// self.0.record_s2s_post_accept_failure();', /federation telemetry/);
+rejectsMutation('additional C2S telemetry cannot be double counted', 'adapter', 'self.0.record_s2s_post_accept_failure();', 'self.0.record_s2s_post_accept_failure();\n self.0.personal_message_telemetry().post_accept_failed();', /must not record C2S/);
+rejectsMutation('host postaccept telemetry cannot switch to C2S', 'host', 'self.s2s_inbound_delivery_telemetry().post_accept_failed();', 'self.personal_message_telemetry().post_accept_failed();', /federation telemetry/);
+rejectsMutation('host postaccept telemetry cannot be double counted', 'host', 'self.s2s_inbound_delivery_telemetry().post_accept_failed();', 'self.s2s_inbound_delivery_telemetry().post_accept_failed();\n self.personal_message_telemetry().post_accept_failed();', /federation telemetry/);
 rejectsMutation('local adapter cannot substitute the owned item', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'OnlineRoutePort::try_local(self.0, session, other_enqueue)', /exact owned local enqueue/);
 rejectsMutation('local adapter cannot clone the owned item', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'OnlineRoutePort::try_local(self.0, session, enqueue.clone())', /exact owned local enqueue/);
 rejectsMutation('local adapter cannot substitute the session', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'OnlineRoutePort::try_local(self.0, other_session, enqueue)', /exact owned local enqueue/);
@@ -68,8 +72,8 @@ rejectsMutation('local adapter must retain the typed refusal', 'adapter', ') -> 
 rejectsMutation('local adapter cannot add a second entry', 'adapter', '    fn try_local(', '    fn try_local(&self) {}\n    fn try_local(', /one owned local enqueue entry/);
 rejectsMutation('fanout adapter cannot switch routing origins', 'adapter', '.route_s2s_message_to_available_remote_resources(jid, stanza, delivery)', '.route_personal_message_to_available_remote_resources(jid, stanza, delivery)', /federation remote adapter/);
 rejectsMutation('primary adapter cannot switch routing origins', 'adapter', '.route_s2s_message_to_remote_primary(jid, stanza, delivery)', '.route_personal_message_to_remote_primary(jid, stanza, delivery)', /federation remote adapter/);
-rejectsMutation('remote receipt cannot discard Carbon exclusion', 'adapter', 'accepted_full_jid: routed.accepted_full_jid,', 'accepted_full_jid: None,', /receipt must preserve/);
-rejectsMutation('remote receipt cannot invent acceptance', 'adapter', 'delivered: routed.delivered,', 'delivered: true,', /receipt must preserve/);
+rejectsMutation('remote receipt cannot discard Carbon exclusion', 'host', 'accepted_full_jid: routed.accepted_full_jid,', 'accepted_full_jid: None,', /receipt must preserve/);
+rejectsMutation('remote receipt cannot invent acceptance', 'host', 'delivered: routed.delivered,', 'delivered: true,', /receipt must preserve/);
 rejectsMutation('rearm must preserve exact claim', 'adapter', 'DirectMessageRoutePort::rearm_direct_route(self.0, delivery).await;', 'DirectMessageRoutePort::rearm_direct_route(self.0, other_delivery).await;', /exact delivery claim/);
 
 rejectsMutation('caller cannot discard committed delivery', 'inbound', '            delivery,\n            approved_targets:', '            delivery: DirectRouteDelivery::Volatile,\n            approved_targets:', /envelope, targets and health/);

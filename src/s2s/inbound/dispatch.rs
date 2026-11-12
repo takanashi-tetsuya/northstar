@@ -337,7 +337,15 @@ pub(super) async fn route_inbound_scoped(
             Ok(None)
         }
         "message" => {
-            route_inbound_message(state, root, &client_raw, &from, &to, authenticated_domain).await
+            northstar_message_xmpp::federated_message::route_inbound_message(
+                state,
+                root,
+                &client_raw,
+                &from,
+                &to,
+                authenticated_domain,
+            )
+            .await
         }
         "iq" => route_inbound_iq(state, root, &client_raw, &from, &to).await,
         "presence" => {

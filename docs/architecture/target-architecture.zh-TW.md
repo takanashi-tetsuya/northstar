@@ -76,7 +76,7 @@ flowchart TB
 | context application | `northstar-<ctx>-application` | 本上下文 core、kernel、其他上下文的 core、platform 的契約型別 | sqlx、axum、tokio 網路、任何介面卡與 edge |
 | context adapter | `northstar-<ctx>-postgres`、`northstar-<ctx>-xmpp`（必要時 `-http`；物件儲存為 `-storage`） | 本上下文 application、任何 core、platform、kernel；`-xmpp` 另可依賴 `northstar-stream` | 其他上下文的介面卡；`-xmpp` 不可依賴 `-postgres` 與任何傳輸 |
 | workflows | `northstar-workflows` | kernel、platform、任何 core、任何 application、任何 `-postgres` | `-xmpp`、`-http`、edge |
-| edge | `northstar-stream`（會話核心）、`northstar-c2s`、`northstar-bosh`、`northstar-s2s`、`northstar-http`、`northstar-cluster` | application、core、platform、kernel；`stream` 以外的 edge 可依賴 `northstar-stream`；`northstar-cluster` 以 Redis pub/sub 作跨節點傳輸，edge 可依賴 redis | 上下文的 `-postgres`、sqlx |
+| edge | `northstar-stream`（會話核心）、`northstar-c2s`、`northstar-bosh`、`northstar-s2s`、`northstar-http`、`northstar-cluster` | application、core、platform、kernel；`stream` 以外的 edge 可依賴 `northstar-stream`；`northstar-stream` 另可依賴 `northstar-auth-xmpp`（SASL、SASL2、IBR 的線路格式，`auth-xmpp` 不依賴任何 edge）；`northstar-cluster` 以 Redis pub/sub 作跨節點傳輸，edge 可依賴 redis | 上下文的 `-postgres`、sqlx |
 | composition | `northstar-server`（bin） | 全部 | — |
 | tooling | `tools/*`、測試支援 crate | 全部 | 不得成為執行期依賴 |
 
@@ -110,6 +110,8 @@ flowchart TB
   的 50 個欄位拆回會話核心與各上下文。
 - `northstar-c2s`（TCP、STARTTLS、direct TLS、WebSocket）、`northstar-bosh`、`northstar-s2s` 只負責連線、
   frame 與背壓，再把 frame 交給 `northstar-stream`。
+- `northstar-stream` 的 `test-support` feature 提供 SM 擁有權的記憶體 port 與 fixture
+  （`protocol::sm_owner::test_support`），供傳輸 crate 的組合測試使用；傳輸只在 dev-dependency 開啟它。
 - `northstar-http` 以 axum 提供 REST、管理 API、上傳端點與 web surface，呼叫各上下文的 application。
 - `northstar-cluster` 是跨節點的介面卡：實作 `session` 的遠端路由 port、`room` 的佔用投影 port 等，並執行
   叢集監聽與復原重播。它的 context 對 `ClusterAdapters` 介面卡家族泛型，由組合根綁定 PostgreSQL 這一族；權威資料

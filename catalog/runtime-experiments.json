@@ -77,7 +77,7 @@
       "id": "c2s",
       "title": "C2S frames and authentication publication",
       "production_owner": {
-        "path": "src/xmpp/protocol.rs",
+        "path": "crates/edges/northstar-stream/src/protocol.rs",
         "anchor": "pub(crate) async fn process_frame("
       },
       "runtime_identities": [

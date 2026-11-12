@@ -89,11 +89,11 @@ impl<H: SessionHost + PubSubHost> PubSubHandlers for ProtocolSession<H> {
     }
 
     async fn pubsub_request(&self, id: &str, kind: &str, child: Node<'_, '_>) -> Result<Action> {
-        let service = self.host.pubsub_domain();
+        let service = self.host().pubsub_domain();
         let Some(full_jid) = self.full_jid.as_deref() else {
             return Ok(Action::Send(iq_error_from(id, &service, "not-authorized")));
         };
-        let reply = match handle_request(&*self.host, full_jid, kind, child).await {
+        let reply = match handle_request(&**self.host(), full_jid, kind, child).await {
             Ok(reply) => reply,
             Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
                 PubSubReply::Error("resource-constraint")
@@ -115,7 +115,7 @@ impl<H: SessionHost + PubSubHost> PubSubHandlers for ProtocolSession<H> {
         if northstar_xmpp_types::jid::canonicalize_bare(to)
             .ok()
             .as_deref()
-            != northstar_xmpp_types::jid::canonicalize_bare(&self.host.pubsub_domain())
+            != northstar_xmpp_types::jid::canonicalize_bare(&self.host().pubsub_domain())
                 .ok()
                 .as_deref()
         {
@@ -124,7 +124,7 @@ impl<H: SessionHost + PubSubHost> PubSubHandlers for ProtocolSession<H> {
         let Some(requester) = self.full_jid.as_deref() else {
             return Ok(true);
         };
-        handle_authorization_response(&*self.host, requester, root).await?;
+        handle_authorization_response(&**self.host(), requester, root).await?;
         Ok(true)
     }
 
@@ -144,7 +144,7 @@ impl<H: SessionHost + PubSubHost> PubSubHandlers for ProtocolSession<H> {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         let connection_id = self.connection_id;
-        let state = self.host.clone();
+        let state = self.host().clone();
         let outbound = self.outbound.clone();
         let show = match self.show.load(std::sync::atomic::Ordering::Relaxed) {
             2 => "away",

@@ -12,10 +12,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // literals still require the exact allowlist below.
 const BASELINE = new Map([
   ['crates/contexts/message/northstar-message-core/src/validation.rs', 0],
-  ['src/xmpp/protocol.rs', 0],
+  ['crates/edges/northstar-stream/src/protocol.rs', 0],
   ['src/xmpp/protocol/blocking.rs', 0],
-  ['src/xmpp/protocol/caps.rs', 0],
-  ['src/xmpp/protocol/csi.rs', 0],
+  ['crates/edges/northstar-stream/src/protocol/caps.rs', 0],
+  ['crates/edges/northstar-stream/src/protocol/csi.rs', 0],
   ['crates/contexts/operations/northstar-operations-xmpp/src/commands.rs', 0],
   ['src/xmpp/protocol/discovery.rs', 0],
   ['src/xmpp/protocol/extdisco.rs', 0],
@@ -29,7 +29,7 @@ const BASELINE = new Map([
   ['src/xmpp/protocol/presence.rs', 0],
   ['crates/contexts/message/northstar-message-xmpp/src/retractions.rs', 0],
   ['src/xmpp/protocol/roster.rs', 0],
-  ['src/xmpp/protocol/sasl2.rs', 0],
+  ['crates/edges/northstar-stream/src/protocol/sasl2.rs', 0],
   ['src/xmpp/protocol/upload.rs', 0],
   ['crates/contexts/upload/northstar-upload-xmpp/src/lib.rs', 0],
   ['src/xmpp/protocol/vcard.rs', 0],
@@ -44,8 +44,8 @@ const BASELINE = new Map([
   ['crates/contexts/roster/northstar-roster-xmpp/src/lib.rs', 0],
   ['src/xmpp/protocol/federated_muc.rs', 0],
   ['crates/contexts/room/northstar-muc-xmpp/src/federated_muc.rs', 0],
-  ['src/xmpp/protocol/misc.rs', 0],
-  ['src/xmpp/protocol/sm.rs', 0],
+  ['crates/edges/northstar-stream/src/protocol/misc.rs', 0],
+  ['crates/edges/northstar-stream/src/protocol/sm.rs', 0],
   ['crates/contexts/room/northstar-room-application/src/mix_service.rs', 0],
   ['crates/contexts/room/northstar-room-postgres/src/mix.rs', 0],
   ['crates/edges/northstar-s2s/src/components.rs', 0],
@@ -54,7 +54,7 @@ const BASELINE = new Map([
   ['crates/edges/northstar-s2s/src/inbound.rs', 0],
   ['crates/edges/northstar-s2s/src/outbound.rs', 0],
   ['crates/edges/northstar-s2s/src/sm.rs', 0],
-  ['src/xmpp/protocol/ibr.rs', 0],
+  ['crates/edges/northstar-stream/src/protocol/ibr.rs', 0],
   ['crates/contexts/auth/northstar-auth-xmpp/src/ibr.rs', 0],
   ['crates/contexts/auth/northstar-auth-xmpp/src/sasl2.rs', 0],
 ]);
@@ -63,7 +63,7 @@ const BASELINE = new Map([
 // the file and its role-split children listed in catalog/source-role-splits.json.
 // Other modules (protocol/dispatch.rs, northstar-stream's replay.rs) are not yet migrated
 // off raw XML and stay outside this entry until they get their own entries.
-const FILE_SCOPED_ENTRIES = new Set(['src/xmpp/protocol.rs']);
+const FILE_SCOPED_ENTRIES = new Set(['crates/edges/northstar-stream/src/protocol.rs']);
 
 // These pre-existing child modules have findings outside the entry file's zero
 // baseline. Exclude their production subtrees, while covering the entry file
@@ -77,7 +77,7 @@ const EXCLUDED_CHILD_MODULES = new Map([
 // stanzas; the line-bound match deliberately fails closed if moved.
 const STATIC_LITERAL_ALLOWLIST = [
   {
-    file: 'src/xmpp/protocol/sasl2.rs',
+    file: 'crates/edges/northstar-stream/src/protocol/sasl2.rs',
     line: 24,
     literal: '</stream:stream>',
     reason: 'parser-only synthetic close used to validate a stream opening element',
@@ -414,11 +414,11 @@ if (findings('self-test.rs', splitProductionSelfTest).length !== 2) {
 // exact file, line and literal must match; each single-field change fails closed.
 // These bounded in-memory controls perform no filesystem probes or TAP registration.
 const parserLiteralSelfTest = '\n'.repeat(23) + 'fn parser_input() { let closing = "</stream:stream>"; }\n';
-if (findings('src/xmpp/protocol/sasl2.rs', parserLiteralSelfTest).length !== 0) {
+if (findings('crates/edges/northstar-stream/src/protocol/sasl2.rs', parserLiteralSelfTest).length !== 0) {
   throw new Error('outbound XML detector rejected the exact parser-only literal at line 24');
 }
 const movedParserLiteralSelfTest = findings(
-  'src/xmpp/protocol/sasl2.rs',
+  'crates/edges/northstar-stream/src/protocol/sasl2.rs',
   `\n${parserLiteralSelfTest}`,
 );
 if (
@@ -437,7 +437,7 @@ if (
   throw new Error('outbound XML detector exempted the parser-only literal in a different file');
 }
 const wrongValueParserLiteralSelfTest = findings(
-  'src/xmpp/protocol/sasl2.rs',
+  'crates/edges/northstar-stream/src/protocol/sasl2.rs',
   parserLiteralSelfTest.replace('</stream:stream>', '</stream:other>'),
 );
 if (

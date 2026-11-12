@@ -13,6 +13,7 @@ chrono = { version = "0.4", features = ["serde"] }
 northstar-auth-core = { path = "../../auth/northstar-auth-core" }
 northstar-operations-application = { path = "../northstar-operations-application" }
 northstar-security = { path = "../../../platform/northstar-security" }
+northstar-stream = { path = "../../../edges/northstar-stream" }
 northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 roxmltree = "0.20"

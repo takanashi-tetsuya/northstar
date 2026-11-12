@@ -8,7 +8,7 @@
     "crates/edges/northstar-http/src/lib.rs": [
       "route_composition"
     ],
-    "src/xmpp/protocol.rs": [
+    "crates/edges/northstar-stream/src/protocol.rs": [
       "legacy_auth",
       "session_sm",
       "session_transport"

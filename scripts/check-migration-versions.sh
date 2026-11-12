@@ -908,7 +908,7 @@ do
     fi
 done
 
-sm_resume_source=$(sed -n '/pub(crate) async fn resume_values_with_fast(/,/let claimed_bytes =/p' src/xmpp/protocol/sm.rs)
+sm_resume_source=$(sed -n '/pub(crate) async fn resume_values_with_fast(/,/let claimed_bytes =/p' crates/edges/northstar-stream/src/protocol/sm.rs)
 for forbidden_fragment in \
     'from_millis(10)' \
     'from_millis(500)' \

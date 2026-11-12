@@ -297,7 +297,7 @@ secret authority.
 
 1. **C2S, WebSocket or BOSH stanza.** A listener/HTTP adapter authenticates the
    transport and gives bounded frames to a connection actor. The actor invokes
-   `ProtocolSession` dispatch in `src/xmpp/protocol/dispatch.rs`. The protocol
+   `ProtocolSession` dispatch in `crates/edges/northstar-stream/src/protocol/dispatch.rs`. The protocol
    handler validates XMPP shape and calls a typed `AppState` service; the
    service authorizes and delegates to `src/db/*`, or to its explicitly tracked
    embedded repository path, to commit the durable operation. Only

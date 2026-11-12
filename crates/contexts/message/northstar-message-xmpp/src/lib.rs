@@ -7,4 +7,5 @@
 pub mod extdisco;
 pub mod messaging;
 pub mod ports;
+mod protocol_session;
 mod retractions;

@@ -7,6 +7,7 @@ pub mod events;
 pub mod payload;
 pub mod pep;
 pub mod private_xml;
+mod protocol_session;
 pub mod pubsub;
 pub mod vcard;
 

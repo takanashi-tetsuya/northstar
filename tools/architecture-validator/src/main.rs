@@ -546,6 +546,9 @@ fn internal_allowed(from: &CrateRecord, to: &CrateRecord) -> bool {
                 || (to.tier == "edge"
                     && to.package == "northstar-stream"
                     && from.package != to.package)
+                // The session core negotiates SASL, SASL2 and IBR in the auth context's wire formats;
+                // northstar-auth-xmpp depends on no edge.
+                || (from.package == "northstar-stream" && to.package == "northstar-auth-xmpp")
         }
         "composition" => true,
         "tooling" => true,
@@ -716,6 +719,18 @@ mod tests {
             api_stability: stability.to_string(),
             publish_policy: "never".to_string(),
         }
+    }
+
+    #[test]
+    fn only_the_session_core_may_use_the_auth_wire_adapter() {
+        let auth_xmpp = record(
+            "northstar-auth-xmpp",
+            "crates/contexts/auth/northstar-auth-xmpp",
+        );
+        let stream = record("northstar-stream", "crates/edges/northstar-stream");
+        let c2s = record("northstar-c2s", "crates/edges/northstar-c2s");
+        assert!(internal_allowed(&stream, &auth_xmpp));
+        assert!(!internal_allowed(&c2s, &auth_xmpp));
     }
 
     #[test]

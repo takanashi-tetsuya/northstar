@@ -10,6 +10,7 @@
 mod auth_publication_write_tests;
 pub mod direct_delivery;
 pub mod host;
+mod protocol_session;
 mod tcp_action;
 mod websocket_action;
 pub mod websocket_upgrade;
@@ -1337,5 +1338,7 @@ async fn websocket_record_and_send_item<P: StreamSession + direct_delivery::Dire
     .await
 }
 
+#[cfg(test)]
+mod sm_record_tests;
 #[cfg(test)]
 mod tests;

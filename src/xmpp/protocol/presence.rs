@@ -7,8 +7,6 @@ use anyhow::Result;
 use northstar_mix_xmpp::ports::MixHost;
 use northstar_muc_xmpp::ports::MucHost;
 use northstar_pubsub_xmpp::pubsub::PubSubHost;
-use northstar_roster_application::presence::{PresenceRepository, PresenceService};
-use northstar_roster_core::PresenceAccount;
 use northstar_roster_xmpp::presence::{
     announced_priority, announced_show, broadcast_presence, deliver_service_messages,
     directed_presence_gate, inject_vcard_avatar_hash, route_directed_presence, PresenceGate,
@@ -18,8 +16,6 @@ use northstar_stream::outbound::OutboundSender;
 use northstar_xml_builder::stanza::stanza_error;
 use roxmltree::Node;
 use std::sync::{atomic::Ordering, Arc};
-
-mod session;
 
 pub(crate) use northstar_presence_core::directed_recipient_matches;
 
@@ -55,14 +51,14 @@ impl<
             }
             if target_jid.resourcepart().is_none()
                 && target_jid.localpart().is_none()
-                && target_jid.domainpart() == self.host.pubsub_domain()
+                && target_jid.domainpart() == self.host().pubsub_domain()
             {
                 return self.pubsub_presence(kind, &from).await;
             }
-            if target_jid.domainpart() == self.host.muc_domain() {
+            if target_jid.domainpart() == self.host().muc_domain() {
                 if kind == "available" {
                     let user = self.authenticated.as_ref().expect("authenticated session");
-                    let avatar_hash = self.host.presence_service().avatar_hash(user.id).await?;
+                    let avatar_hash = self.host().presence_service().avatar_hash(user.id).await?;
                     let injected = inject_vcard_avatar_hash(raw, root, avatar_hash.as_deref());
                     let document = roxmltree::Document::parse(&injected)?;
                     return self.muc_presence(document.root_element(), &injected).await;
@@ -82,7 +78,7 @@ impl<
             .lock_owned()
             .await;
         if !northstar_mix_xmpp::mix_presence_route_is_current(
-            self.host.as_ref(),
+            self.host().as_ref(),
             &from,
             self.connection_id,
             &self.presence.mix_presence_gate,
@@ -141,7 +137,7 @@ impl<
         // on a degraded cluster control plane; a later replay worker must
         // not absorb messages inserted during those waits.
         let offline_replay_cutoff = if newly_offline_eligible && !self.bind2_mam_catchup {
-            Some(self.host.presence_service().replay_cutoff().await?)
+            Some(self.host().presence_service().replay_cutoff().await?)
         } else {
             None
         };
@@ -150,7 +146,7 @@ impl<
 
         if first_available {
             deliver_service_messages(&*self, &from).await?;
-            let replay_service = self.host.replay_service().clone();
+            let replay_service = self.host().replay_service().clone();
             let outbound = self.outbound.clone();
             let active_privacy_list = self
                 .privacy_active
@@ -168,7 +164,7 @@ impl<
             let account = format!(
                 "{}@{}",
                 user.username,
-                SessionHost::local_domain(&*self.host)
+                SessionHost::local_domain(&**self.host())
             );
             let bind2_mam_catchup = self.bind2_mam_catchup;
             let include_offline = priority >= 0 && !bind2_mam_catchup;
@@ -196,7 +192,7 @@ impl<
             // reaches the transport and applies awaited backpressure.
             let _ = self.pubsub_presence("available", &from).await?;
         } else if newly_offline_eligible && !self.bind2_mam_catchup {
-            let replay_service = self.host.replay_service().clone();
+            let replay_service = self.host().replay_service().clone();
             let outbound = self.outbound.clone();
             let active_privacy_list = self
                 .privacy_active

@@ -7,3 +7,4 @@
 pub mod federated_muc;
 pub mod muc;
 pub mod ports;
+mod protocol_session;

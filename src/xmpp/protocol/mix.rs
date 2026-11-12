@@ -6,51 +6,16 @@
 
 use super::{Action, ProtocolSession, SessionHost};
 use anyhow::Result;
-use dashmap::DashSet;
-use northstar_mix_xmpp::ports::{MixFrameObserver, MixHost, MixSession, MixSessionUser};
+use northstar_mix_xmpp::ports::MixHost;
 use northstar_room_core::mix::MixSessionCapability;
 use roxmltree::Node;
+#[cfg(test)]
 use std::sync::Arc;
-use tokio::sync::Mutex;
+#[cfg(test)]
 use uuid::Uuid;
 
 #[cfg(test)]
 pub(crate) mod stage4_saved;
-
-impl<H: SessionHost + MixHost> MixSession for ProtocolSession<H> {
-    type Host = H;
-
-    fn host(&self) -> &Arc<H> {
-        &self.host
-    }
-
-    fn user(&self) -> Option<MixSessionUser<'_>> {
-        self.authenticated.as_ref().map(|user| MixSessionUser {
-            id: user.id,
-            username: &user.username,
-        })
-    }
-
-    fn full_jid(&self) -> Option<&str> {
-        self.full_jid.as_deref()
-    }
-
-    fn connection_id(&self) -> Uuid {
-        self.connection_id
-    }
-
-    fn mix_presence_gate(&self) -> &Arc<Mutex<()>> {
-        &self.presence.mix_presence_gate
-    }
-
-    fn mix_presence_fallback_suppressed(&self) -> &DashSet<String> {
-        &self.presence.mix_presence_fallback_suppressed
-    }
-
-    fn frame_observer(&self) -> &dyn MixFrameObserver {
-        &self.frame_executions
-    }
-}
 
 /// The session handlers of mix.rs.
 pub(crate) trait MixHandlers {

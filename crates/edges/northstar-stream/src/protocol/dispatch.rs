@@ -1,0 +1,923 @@
+use crate::frame_execution::Stage;
+use crate::protocol::SessionHost;
+use crate::protocol::{Action, ProtocolSession};
+use anyhow::Result;
+use northstar_federation_core::FederationRoute as _;
+use northstar_roster_application::privacy::PrivacyStanzaKind;
+use northstar_xml_builder::rewrite::{
+    root_resets_default_namespace, set_from, set_root_attribute, set_to,
+};
+use northstar_xml_builder::stanza::{
+    blocked_stanza_error, iq_error, iq_error_from, iq_result_from, reflect_iq_error_response,
+    stanza_error,
+};
+use northstar_xml_builder::stream::stream_error;
+use northstar_xmpp_types::jid_text::bare_jid;
+use roxmltree::{Document, Node};
+
+pub fn xmpp_version_os() -> &'static str {
+    match std::env::consts::OS {
+        "linux" => "Linux",
+        "windows" => "Windows",
+        "macos" => "macOS",
+        other => other,
+    }
+}
+
+pub fn map_pubsub_capacity_result(id: &str, result: Result<Action>) -> Result<Action> {
+    match result {
+        Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
+            Ok(Action::Send(iq_error(id, "resource-constraint")))
+        }
+        result => result,
+    }
+}
+
+impl<H: SessionHost> ProtocolSession<H> {
+    pub async fn handle(&mut self, xml: &str) -> Result<Action> {
+        self.host.inbound_stanza_telemetry().received();
+        self.enter_frame_stage(Stage::Validation);
+        // External recovery wakes share this supervisor. Keep their replay
+        // task pending until the current stanza's transport action completes.
+        self.post_actions.begin_action();
+        let stream_open = crate::protocol::sasl2::is_tcp_stream_opening(xml)
+            || (self.uses_websocket_framing() && is_websocket_open(xml));
+        if stream_open {
+            if self.negotiation.is_open() {
+                return Ok(Action::CloseWith(stream_error("unexpected-request")));
+            }
+            if let Err(error) = self.capture_stream_from(xml) {
+                return Ok(Action::CloseWith(stream_error(error.condition())));
+            }
+            return Ok(Action::Send(self.open_stream()));
+        }
+        if is_stream_close(xml) {
+            self.sm.resume_allowed = false;
+            self.negotiation.close();
+            return Ok(Action::Close);
+        }
+        let doc = match Document::parse(xml) {
+            Ok(document) => document,
+            Err(error) => {
+                tracing::debug!(?error, "malformed XML stanza");
+                return Ok(Action::CloseWith(stream_error("not-well-formed")));
+            }
+        };
+        // Keep the exact client frame separate from the authoritative stanza
+        // the server builds below. PoW v2 commits the client's pow-less bytes;
+        // RFC-mandated `from` and inherited `xml:lang` materialization are
+        // server assertions and must never be values a client has to predict.
+        let client_xml = xml;
+        let root = doc.root_element();
+        if root.tag_name().name() == "close"
+            && root.tag_name().namespace() == Some("urn:ietf:params:xml:ns:xmpp-framing")
+        {
+            self.sm.resume_allowed = false;
+            self.negotiation.close();
+            return Ok(Action::Close);
+        }
+        if !self.negotiation.is_open() {
+            return Ok(Action::CloseWith(stream_error("not-well-formed")));
+        }
+        if root.tag_name().name() == "starttls"
+            && root.tag_name().namespace() == Some("urn:ietf:params:xml:ns:xmpp-tls")
+        {
+            if root.attributes().len() != 0
+                || root.children().any(|child| child.is_element())
+                || root.text().is_some_and(|text| !text.trim().is_empty())
+                || self.uses_websocket_framing()
+                || self.secure_transport
+                || self.authenticated.is_some()
+            {
+                // RFC 6120 section 5.3.3 defines TLS negotiation failure as
+                // an empty <failure/> in the TLS namespace followed by a
+                // terminal stream close. A stanza-style nested condition is
+                // not part of this protocol and continuing would permit
+                // negotiation state confusion.
+                self.sm.resume_allowed = false;
+                self.negotiation.close();
+                return Ok(Action::SendManyAndClose(vec![tls_failure()]));
+            }
+            self.negotiation.restart_after_transport_upgrade();
+            self.sasl_state = None;
+            self.legacy_sasl_awaiting_initial_response = false;
+            self.sasl2_state = None;
+            return Ok(Action::StartTls);
+        }
+        // XEP-0388 permits only SASL2 continuation elements while an
+        // authentication exchange is active. Treating application stanzas as
+        // ordinary traffic here would allow cross-protocol state confusion.
+        if self.sasl2_state.is_some()
+            && !matches!(
+                (root.tag_name().name(), root.tag_name().namespace()),
+                (
+                    "response" | "abort",
+                    Some(northstar_auth_xmpp::sasl2::SASL2_NS)
+                )
+            )
+        {
+            self.sasl_state = None;
+            self.sasl2_state = None;
+            return Ok(Action::Close);
+        }
+        // RFC 6120 carries legacy SASL as an exclusive stream negotiation.
+        // Once a challenge is outstanding, application stanzas and other
+        // negotiation protocols cannot be interleaved with the response.
+        if self.sasl_state.is_some()
+            && self.sasl2_state.is_none()
+            && !matches!(
+                (root.tag_name().name(), root.tag_name().namespace()),
+                (
+                    "response" | "abort",
+                    Some("urn:ietf:params:xml:ns:xmpp-sasl")
+                )
+            )
+        {
+            self.sasl_state = None;
+            self.legacy_sasl_awaiting_initial_response = false;
+            return Ok(Action::CloseWith(stream_error("unexpected-request")));
+        }
+        // A selected XEP-0389 flow is a stateful stream negotiation. Do not
+        // allow SASL or application stanzas to interleave with its challenge.
+        if self.ibr_flow == Some(northstar_auth_xmpp::ibr::IbrFlowTransport::Stream)
+            && !matches!(
+                (root.tag_name().name(), root.tag_name().namespace()),
+                (
+                    "response" | "cancel",
+                    Some(northstar_auth_xmpp::ibr::IBR2_NS)
+                )
+            )
+        {
+            self.ibr_flow = None;
+            return Ok(Action::CloseWith(stream_error("unexpected-request")));
+        }
+        if root.tag_name().namespace() == Some(northstar_xep_0198::NAMESPACE) {
+            if !self.host.xmpp_route_enabled(
+                northstar_xep_core::StanzaKind::Stream,
+                northstar_xep_0198::NAMESPACE,
+                root.tag_name().name(),
+            ) {
+                return Ok(Action::CloseWith(stream_error("unsupported-stanza-type")));
+            }
+            self.enter_frame_stage(Stage::Handler);
+            return self.stream_management(root).await;
+        }
+        if root.tag_name().namespace() == Some(northstar_xep_0352::NAMESPACE) {
+            if self.authenticated.is_none() {
+                return Ok(Action::CloseWith(stream_error("not-authorized")));
+            }
+            let indication = match northstar_xep_0352::parse_indication_node(root) {
+                Ok(indication) => indication,
+                Err(_) => return Ok(Action::CloseWith(stream_error("bad-format"))),
+            };
+            if !self.host.xmpp_route_enabled(
+                northstar_xep_core::StanzaKind::Stream,
+                northstar_xep_0352::NAMESPACE,
+                indication.local_name(),
+            ) {
+                return Ok(Action::CloseWith(stream_error("unsupported-stanza-type")));
+            }
+            if !super::csi::valid_indication(root) {
+                return Ok(Action::CloseWith(stream_error("bad-format")));
+            }
+            return Ok(self.client_state(indication));
+        }
+        if matches!(root.tag_name().name(), "iq" | "message" | "presence") {
+            if !valid_client_stanza_namespace(root, self.uses_websocket_framing(), xml) {
+                return Ok(Action::CloseWith(stream_error("invalid-namespace")));
+            }
+            if let Err(condition) =
+                northstar_xml_builder::stanza_validation::validate_client_stanza(root)
+            {
+                if root.attribute("type") == Some("error") {
+                    return Ok(Action::None);
+                }
+                return Ok(Action::Send(stanza_error(root, "modify", condition)));
+            }
+            // XEP-0077/0389 may run before SASL only on an already protected
+            // stream. Before STARTTLS, RFC 6120 mandatory negotiation permits
+            // no application stanza exception: terminate instead of returning
+            // an IQ error on the plaintext stream.
+            if self.authenticated.is_none()
+                && !(self.secure_transport && pre_auth_registration_iq(root))
+            {
+                return Ok(Action::CloseWith(stream_error("not-authorized")));
+            }
+            if self.authenticated.is_some() && self.full_jid.is_none() && !resource_binding_iq(root)
+            {
+                return Ok(Action::Send(stanza_error(root, "auth", "not-authorized")));
+            }
+        }
+        // RFC 6120 section 4.7.4 requires a receiving entity to materialize
+        // the stream's default language on a stanza that omitted xml:lang
+        // before routing or delivery.  An explicit stanza language never
+        // changes the stream default.
+        let language_xml = matches!(root.tag_name().name(), "iq" | "message" | "presence")
+            .then(|| {
+                self.negotiation.language().and_then(|language| {
+                    root.attribute(("http://www.w3.org/XML/1998/namespace", "lang"))
+                        .is_none()
+                        .then(|| set_root_attribute(xml, "xml:lang", language))
+                })
+            })
+            .flatten();
+        let language_doc = language_xml
+            .as_deref()
+            .map(Document::parse)
+            .transpose()
+            .expect("server language injection must remain well-formed XML");
+        let root = language_doc
+            .as_ref()
+            .map(Document::root_element)
+            .unwrap_or(root);
+        let xml = language_xml.as_deref().unwrap_or(xml);
+
+        // RFC 6120 section 8.1.2.1 makes the receiving server authoritative
+        // for a C2S stanza's `from`: it MUST add or override the value supplied
+        // by the client.  Subscription presence is stamped with the account's
+        // bare JID; all other bound stanzas use the connected full JID.  Do
+        // this once at the dispatch boundary so no downstream route can
+        // accidentally trust or reflect a client-spoofed sender.
+        let authoritative_xml = self.full_jid.as_deref().and_then(|full_jid| {
+            matches!(root.tag_name().name(), "iq" | "message" | "presence")
+                .then(|| authoritative_client_stanza(xml, root, full_jid))
+        });
+        let authoritative_doc = authoritative_xml
+            .as_deref()
+            .map(Document::parse)
+            .transpose()
+            .expect("server-stamped stanza must remain well-formed XML");
+        let root = authoritative_doc
+            .as_ref()
+            .map(Document::root_element)
+            .unwrap_or(root);
+        let xml = authoritative_xml.as_deref().unwrap_or(xml);
+
+        let counted = matches!(root.tag_name().name(), "iq" | "message" | "presence");
+        if counted && self.full_jid.is_some() {
+            *self
+                .last_activity
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = std::time::Instant::now();
+        }
+        self.enter_frame_stage(Stage::Handler);
+        let action = match root.tag_name().name() {
+            "authenticate"
+                if root.tag_name().namespace() == Some(northstar_auth_xmpp::sasl2::SASL2_NS) =>
+            {
+                match self.begin_sasl_attempt() {
+                    Some(action) => Ok(action),
+                    None => self.authenticate2(root).await,
+                }
+            }
+            "auth" if root.tag_name().namespace() == Some("urn:ietf:params:xml:ns:xmpp-sasl") => {
+                match self.begin_sasl_attempt() {
+                    Some(action) => Ok(action),
+                    None => self.authenticate(root).await,
+                }
+            }
+            "response"
+                if root.tag_name().namespace() == Some(northstar_auth_xmpp::ibr::IBR2_NS) =>
+            {
+                self.handle_ibr_response(root).await
+            }
+            "response"
+                if root.tag_name().namespace() == Some(northstar_auth_xmpp::sasl2::SASL2_NS) =>
+            {
+                self.sasl2_response(root).await
+            }
+            "response"
+                if root.tag_name().namespace() == Some("urn:ietf:params:xml:ns:xmpp-sasl") =>
+            {
+                self.sasl_response(root).await
+            }
+            "abort"
+                if root.tag_name().namespace() == Some(northstar_auth_xmpp::sasl2::SASL2_NS) =>
+            {
+                Ok(self.sasl2_abort(root))
+            }
+            "abort" if root.tag_name().namespace() == Some("urn:ietf:params:xml:ns:xmpp-sasl") => {
+                Ok(self.sasl_abort(root))
+            }
+            "register"
+                if root.tag_name().namespace() == Some(northstar_auth_xmpp::ibr::IBR2_NS) =>
+            {
+                self.handle_ibr_register(root).await
+            }
+            "cancel" if root.tag_name().namespace() == Some(northstar_auth_xmpp::ibr::IBR2_NS) => {
+                Ok(self.handle_ibr_cancel(root))
+            }
+            "iq" => self.iq(root, xml).await,
+            "message" => H::dispatch_message(self, root, xml, client_xml).await,
+            "presence" => H::dispatch_presence(self, root, xml).await,
+            _ => Ok(Action::CloseWith(stream_error("unsupported-stanza-type"))),
+        }?;
+        let action = if root.tag_name().name() == "iq"
+            && matches!(root.attribute("type"), Some("get" | "set"))
+        {
+            match action {
+                Action::Send(response) => {
+                    let reflected = reflect_iq_error_response(root, &response);
+                    Action::Send(reflected.unwrap_or(response))
+                }
+                action => action,
+            }
+        } else {
+            action
+        };
+        if counted && self.sm.enabled {
+            self.sm.inbound_h = self.sm.inbound_h.wrapping_add(1);
+            self.enter_frame_stage(Stage::SmCheckpoint);
+            self.checkpoint_sm().await?;
+        }
+        Ok(action)
+    }
+
+    pub(crate) async fn iq(&mut self, root: Node<'_, '_>, raw: &str) -> Result<Action> {
+        // `validate_client_stanza` has already checked that every IQ has a
+        // non-empty, bounded id and one of the four RFC 6120 IQ types.
+        let id = root.attribute("id").unwrap_or_default();
+        let kind = root.attribute("type").unwrap_or_default();
+        if matches!(kind, "result" | "error")
+            && self.handle_caps_response(id, kind, root, raw).await
+        {
+            return Ok(Action::None);
+        }
+        if matches!(kind, "result" | "error") && self.handle_push_response(id, kind, root).await? {
+            return Ok(Action::None);
+        }
+        if let Some(action) = H::dispatch_mix_iq(self, raw).await? {
+            return Ok(action);
+        }
+        if let (Some(user), Some(from), Some(to)) = (
+            self.authenticated.as_ref(),
+            self.full_jid.as_deref(),
+            root.attribute("to"),
+        ) {
+            let target = northstar_xmpp_types::jid::CanonicalJid::parse(to)
+                .expect("validated client stanza target must be canonicalizable");
+            let target_domain = target.domainpart();
+            let owner = format!("{}@{}", user.username, self.host.local_domain());
+            if self
+                .host
+                .presence_service()
+                .is_blocked_for_account(user.id, &owner, to)
+                .await?
+            {
+                return if matches!(kind, "get" | "set") {
+                    Ok(Action::Send(blocked_stanza_error(root)))
+                } else {
+                    Ok(Action::None)
+                };
+            }
+            let active_privacy = self
+                .privacy_active
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            if self
+                .host
+                .privacy_service()
+                .denies(
+                    user.id,
+                    active_privacy.as_deref(),
+                    to,
+                    PrivacyStanzaKind::Iq,
+                )
+                .await?
+            {
+                return if matches!(kind, "get" | "set") {
+                    Ok(Action::Send(iq_error(id, "service-unavailable")))
+                } else {
+                    Ok(Action::None)
+                };
+            }
+            if target_domain == self.host.local_domain() && target.localpart().is_some() {
+                if let Some(recipient) = self
+                    .host
+                    .presence_service()
+                    .find_enabled_user(target.localpart().unwrap_or_default())
+                    .await?
+                {
+                    let recipient_bare =
+                        format!("{}@{}", recipient.username, self.host.local_domain());
+                    if self
+                        .host
+                        .presence_service()
+                        .is_blocked_for_account(recipient.id, &recipient_bare, from)
+                        .await?
+                    {
+                        return if matches!(kind, "get" | "set") {
+                            Ok(Action::Send(iq_error(id, "service-unavailable")))
+                        } else {
+                            Ok(Action::None)
+                        };
+                    }
+                }
+            }
+        }
+        let child = root.children().find(|node| node.is_element());
+        if kind == "set"
+            && child.is_some_and(|child| {
+                child.tag_name().name() == "jingle"
+                    && child.tag_name().namespace()
+                        == Some(northstar_message_core::jingle::JINGLE_NS)
+            })
+        {
+            let Some(full_jid) = self.full_jid.as_deref() else {
+                return Ok(Action::Send(iq_error(id, "not-authorized")));
+            };
+            if let Err(condition) = northstar_message_core::jingle::validate_jingle_iq(
+                root,
+                child.expect("checked above"),
+                Some(full_jid),
+            ) {
+                return Ok(Action::Send(iq_error(id, condition)));
+            }
+        }
+        let muc_domain = self.host.muc_domain();
+        let upload_domain = self.host.upload_domain();
+        let caps_disco_get =
+            self.host.xmpp_extension_enabled(northstar_xep_0115::XEP_ID) && is_caps_disco_get(root);
+        if let Some(to) = root.attribute("to") {
+            if let Ok(target_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(to) {
+                let domain = target_jid.domainpart();
+                if domain == self.host.local_domain()
+                    && target_jid.localpart().is_some()
+                    && self
+                        .host
+                        .presence_service()
+                        .find_enabled_user(target_jid.localpart().unwrap_or_default())
+                        .await?
+                        .is_none()
+                {
+                    // RFC 6121 section 8.5.1 requires service-unavailable for
+                    // an IQ request addressed to a nonexistent local account.
+                    // IQ responses remain terminal under RFC 6120 section
+                    // 8.2.3 and therefore cannot be answered here.
+                    return if missing_full_jid_iq_needs_error(kind) {
+                        Ok(Action::Send(stanza_error(
+                            root,
+                            "cancel",
+                            "service-unavailable",
+                        )))
+                    } else {
+                        Ok(Action::None)
+                    };
+                }
+                if domain == self.host.local_domain() && target_jid.resourcepart().is_some() {
+                    // RFC 6121 section 8.5.3.1 applies this presence-leak
+                    // protection to every IQ get/set addressed to an exact
+                    // full JID, not only to capability discovery.  The same
+                    // account is necessarily entitled to address its own
+                    // resources; other entities need a from/both subscription
+                    // or a directed-presence grant from the target resource.
+                    if matches!(kind, "get" | "set") {
+                        let Some(target_name) = target_jid.localpart() else {
+                            return Ok(Action::Send(stanza_error(
+                                root,
+                                "cancel",
+                                "service-unavailable",
+                            )));
+                        };
+                        let Some(target_user) = self
+                            .host
+                            .presence_service()
+                            .find_enabled_user(target_name)
+                            .await?
+                        else {
+                            return Ok(Action::Send(stanza_error(
+                                root,
+                                "cancel",
+                                "service-unavailable",
+                            )));
+                        };
+                        let requester = self.full_jid.as_deref().unwrap_or_default();
+                        let requester_bare =
+                            northstar_xmpp_types::jid::canonical_bare_key(requester)
+                                .expect("authenticated full JIDs are canonical");
+                        let same_account = requester_bare
+                            == format!("{}@{}", target_user.username, self.host.local_domain());
+                        let subscribed = self
+                            .host
+                            .presence_service()
+                            .roster_subscription(target_user.id, &requester_bare)
+                            .await?
+                            .is_some_and(|subscription| {
+                                matches!(subscription.as_str(), "from" | "both")
+                            });
+                        let directed =
+                            self.host
+                                .session_entries_for(to)
+                                .into_iter()
+                                .any(|(_, session)| {
+                                    session.directed_presence.iter().any(|authorized| {
+                                        northstar_presence_core::directed_recipient_matches(
+                                            authorized.key(),
+                                            requester,
+                                        )
+                                    })
+                                });
+                        if !full_jid_iq_visible(same_account, subscribed, directed) {
+                            return Ok(Action::Send(stanza_error(
+                                root,
+                                "cancel",
+                                "service-unavailable",
+                            )));
+                        }
+                    }
+                    // RFC 6121 section 8.5.3.2.3 requires
+                    // service-unavailable when an IQ request targets a
+                    // missing exact resource. Its broad wording cannot make
+                    // an IQ response into a new request: RFC 6120 section
+                    // 8.2.3 says an entity MUST NOT respond to an IQ
+                    // result/error (and section 8.3.1 independently forbids
+                    // an error loop). Check this before a server-side
+                    // XEP-0115 cache can answer for a stale resource.
+                    let local_resource_matches = !self.host.session_entries_for(to).is_empty();
+                    let remote_resource_matches =
+                        self.host.personal_message_remote_resource_exists(to).await;
+                    if !local_resource_matches && !remote_resource_matches {
+                        return if missing_full_jid_iq_needs_error(kind) {
+                            Ok(Action::Send(stanza_error(
+                                root,
+                                "cancel",
+                                "service-unavailable",
+                            )))
+                        } else {
+                            Ok(Action::None)
+                        };
+                    }
+                    if caps_disco_get {
+                        if let Some(result) = super::caps::cached_disco_result(
+                            &*self.host,
+                            id,
+                            to,
+                            child.and_then(|child| child.attribute("node")),
+                        ) {
+                            return Ok(Action::Send(result));
+                        }
+                    }
+                    let from = self.full_jid.as_deref().unwrap_or("");
+                    let rewritten = set_from(raw, from);
+                    let targets = self.host.session_entries_for(to);
+                    let mut delivered = false;
+                    for (_, target) in targets {
+                        if self
+                            .host
+                            .privacy_allows_session(&target, from, PrivacyStanzaKind::Iq)
+                            .await?
+                            && target.sender.try_send(rewritten.clone()).is_ok()
+                        {
+                            delivered = true;
+                            break;
+                        }
+                    }
+                    if !delivered {
+                        delivered = self
+                            .host
+                            .route_client_iq_to_remote_resource(to, &rewritten)
+                            .await;
+                    }
+                    if delivered {
+                        return Ok(Action::None);
+                    } else {
+                        if kind == "get" || kind == "set" {
+                            return Ok(Action::Send(iq_error(id, "service-unavailable")));
+                        } else {
+                            return Ok(Action::None);
+                        }
+                    }
+                } else if domain == muc_domain && target_jid.resourcepart().is_some() {
+                    let to_jid = target_jid;
+                    let room_jid = to_jid.bare();
+                    let Some(target_nick) = to_jid.resourcepart() else {
+                        return Ok(Action::Send(iq_error(id, "jid-malformed")));
+                    };
+                    let ping_child = root.children().find(|node| {
+                        node.is_element()
+                            && node.tag_name().name() == "ping"
+                            && node.tag_name().namespace() == Some(northstar_xep_0199::NAMESPACE)
+                    });
+                    let is_ping = if kind == "get" {
+                        if let Some(ping_child) = ping_child {
+                            if !self.host.xmpp_route_enabled(
+                                northstar_xep_core::StanzaKind::IqGet,
+                                northstar_xep_0199::NAMESPACE,
+                                "ping",
+                            ) {
+                                return Ok(Action::Send(iq_error(id, "service-unavailable")));
+                            }
+                            if northstar_xep_0199::parse_ping_element(ping_child).is_err() {
+                                return Ok(Action::Send(iq_error(id, "bad-request")));
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    if is_ping
+                        && H::authorized_muc_occupant(self, &room_jid)
+                            .await?
+                            .is_some_and(|occupant| occupant.nick == target_nick)
+                    {
+                        let full_jid = self.full_jid.as_deref().unwrap_or_default();
+                        return Ok(Action::Send(set_to(&iq_result_from(id, to, ""), full_jid)));
+                    }
+                    let Some(target) = self.host.local_muc_occupant_by_nick(&room_jid, target_nick)
+                    else {
+                        if kind == "get" || kind == "set" {
+                            return Ok(Action::Send(iq_error(id, "item-not-found")));
+                        } else {
+                            return Ok(Action::None);
+                        }
+                    };
+                    let Some(own) = H::authorized_muc_occupant(self, &room_jid).await? else {
+                        if kind == "get" || kind == "set" {
+                            return Ok(Action::Send(iq_error(id, "not-acceptable")));
+                        } else {
+                            return Ok(Action::None);
+                        }
+                    };
+                    // XEP-0191 applies before MUC-mediated IQ delivery.  The
+                    // recipient may have blocked either the visible occupant
+                    // address or the sender's real JID.  The latter is not
+                    // placed on the wire, but the local MUC service knows it
+                    // and must enforce it without disclosing which rule
+                    // matched.  IQ errors are never answered with another
+                    // error.
+                    let own_nick = own.nick;
+                    let mut blocking_candidates = vec![format!("{room_jid}/{own_nick}")];
+                    if let Some(full_jid) = self.full_jid.as_deref() {
+                        blocking_candidates.push(full_jid.to_owned());
+                    }
+                    let blocked = self
+                        .host
+                        .blocked_muc_recipient_accounts(
+                            std::slice::from_ref(&target),
+                            &blocking_candidates,
+                        )
+                        .await;
+                    if northstar_xmpp_types::jid::canonical_bare_key(&target.full_jid)
+                        .is_ok_and(|owner| blocked.contains(&owner))
+                    {
+                        if kind == "get" || kind == "set" {
+                            return Ok(Action::Send(iq_error(id, "service-unavailable")));
+                        }
+                        return Ok(Action::None);
+                    }
+
+                    let rewritten = set_to(
+                        &set_from(raw, &format!("{}/{}", room_jid, own_nick)),
+                        &target.full_jid,
+                    );
+                    tracing::debug!(room=%room_jid, from=%own_nick, to=%target.full_jid, "MUC routing IQ");
+                    let _ = self.host.deliver_to_muc_occupant(&target, rewritten).await;
+                    return Ok(Action::None);
+                }
+            }
+        }
+
+        let remote_iq_domain = root.attribute("to").and_then(|to| {
+            let target = northstar_xmpp_types::jid::CanonicalJid::parse(to).ok()?;
+            let domain = target.domainpart();
+            (domain != self.host.local_domain()
+                && domain != muc_domain
+                && domain != upload_domain
+                && domain != self.host.pubsub_domain()
+                && domain != self.host.mix_domain())
+            .then(|| domain.to_owned())
+        });
+        if let Some(domain) = remote_iq_domain.as_deref() {
+            let Some(from) = self.full_jid.as_deref() else {
+                return Ok(Action::Send(iq_error(id, "not-authorized")));
+            };
+            if !self.host.xmpp_external_route_domain_allowed(domain) {
+                return Ok(Action::Send(iq_error(id, "remote-server-not-found")));
+            }
+            if !self
+                .host
+                .federation_outbox()
+                .send(domain, set_from(raw, from), Some(from.to_owned()))
+                .await
+            {
+                return Ok(Action::Send(iq_error(id, "remote-server-timeout")));
+            }
+            return Ok(Action::None);
+        }
+        // Results and errors addressed to the server are responses, never new
+        // requests.  Known correlations were consumed above; silently ignore
+        // anything else rather than creating an IQ error loop.
+        if matches!(kind, "result" | "error") {
+            return Ok(Action::None);
+        }
+        let Some(child) = child else {
+            // Defensive fallback; get/set cardinality is checked before this
+            // method is entered.
+            return Ok(Action::Send(iq_error(id, "bad-request")));
+        };
+        let ns = child.tag_name().namespace().unwrap_or_default();
+        if child.tag_name().name() == "pubsub"
+            && matches!(
+                ns,
+                northstar_xep_0060::NS_PUBSUB | northstar_xep_0060::NS_PUBSUB_OWNER
+            )
+        {
+            let stanza = if kind == "get" {
+                northstar_xep_core::StanzaKind::IqGet
+            } else {
+                northstar_xep_core::StanzaKind::IqSet
+            };
+            if !self.host.xmpp_route_enabled(stanza, ns, "pubsub") {
+                return Ok(Action::Send(iq_error(id, "feature-not-implemented")));
+            }
+        }
+        let targets_local_muc = root.attribute("to").is_some_and(|to| {
+            northstar_xmpp_types::jid::CanonicalJid::parse(to)
+                .is_ok_and(|jid| jid.domainpart() == muc_domain)
+        });
+        let is_muc_operation = matches!(
+            ns,
+            "http://jabber.org/protocol/muc"
+                | "http://jabber.org/protocol/muc#unique"
+                | "http://jabber.org/protocol/muc#admin"
+                | "http://jabber.org/protocol/muc#owner"
+                | "urn:xmpp:message-moderate:1"
+        ) || (targets_local_muc && ns == "jabber:iq:register");
+        if targets_local_muc
+            && is_muc_operation
+            && !self.host.xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
+        {
+            return Ok(Action::Send(iq_error_from(
+                id,
+                &muc_domain,
+                "service-unavailable",
+            )));
+        }
+        let element = child.tag_name().name();
+        if let Some(iq_kind) = crate::IqKind::parse(kind) {
+            if let Some(route) = H::iq_routes().route(element, ns, iq_kind) {
+                match route.admission(self, element, ns, iq_kind) {
+                    route::Admission::Handle => {
+                        let request = crate::IqRequest {
+                            id,
+                            kind: iq_kind,
+                            stanza: root,
+                            payload: child,
+                            raw,
+                        };
+                        return (route.handler)(self, request).await;
+                    }
+                    route::Admission::Unavailable => {
+                        return Ok(Action::Send(iq_error(id, "service-unavailable")));
+                    }
+                    route::Admission::Unsupported => {}
+                }
+            }
+        }
+        tracing::debug!(
+            element,
+            namespace = ns,
+            iq_type = kind,
+            iq_id = id,
+            "unsupported IQ"
+        );
+        Ok(Action::Send(iq_error(id, "feature-not-implemented")))
+    }
+}
+
+pub fn is_service_jid(value: &str, service_domain: &str) -> bool {
+    northstar_xmpp_types::jid::CanonicalJid::parse(value).is_ok_and(|jid| {
+        jid.localpart().is_none()
+            && jid.resourcepart().is_none()
+            && jid.domainpart() == service_domain
+    })
+}
+
+pub(crate) fn is_caps_disco_get(root: Node<'_, '_>) -> bool {
+    root.tag_name().name() == "iq"
+        && root.attribute("type") == Some("get")
+        && root.children().find(Node::is_element).is_some_and(|child| {
+            child.tag_name().name() == "query"
+                && child.tag_name().namespace() == Some("http://jabber.org/protocol/disco#info")
+        })
+}
+
+fn full_jid_iq_visible(same_account: bool, subscribed: bool, directed: bool) -> bool {
+    same_account || subscribed || directed
+}
+
+fn missing_full_jid_iq_needs_error(kind: &str) -> bool {
+    matches!(kind, "get" | "set")
+}
+
+fn is_websocket_open(xml: &str) -> bool {
+    let Ok(document) = Document::parse(xml) else {
+        return false;
+    };
+    let root = document.root_element();
+    root.tag_name().name() == "open"
+        && root.tag_name().namespace() == Some("urn:ietf:params:xml:ns:xmpp-framing")
+}
+
+fn is_stream_close(xml: &str) -> bool {
+    xml.strip_prefix("</stream:stream")
+        .and_then(|suffix| suffix.strip_suffix('>'))
+        .is_some_and(|trailing| trailing.trim().is_empty())
+}
+
+fn tls_failure() -> String {
+    "<failure xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>".to_owned()
+}
+
+fn authoritative_client_stanza(xml: &str, root: Node<'_, '_>, full_jid: &str) -> String {
+    let subscription_presence = root.tag_name().name() == "presence"
+        && matches!(
+            root.attribute("type"),
+            Some("subscribe" | "subscribed" | "unsubscribe" | "unsubscribed")
+        );
+    let from = if subscription_presence {
+        bare_jid(full_jid)
+    } else {
+        full_jid
+    };
+    set_from(xml, from)
+}
+
+fn pre_auth_registration_iq(root: Node<'_, '_>) -> bool {
+    if root.tag_name().name() != "iq" || !matches!(root.attribute("type"), Some("get" | "set")) {
+        return false;
+    }
+    let mut children = root.children().filter(|child| child.is_element());
+    let Some(child) = children.next() else {
+        return false;
+    };
+    children.next().is_none()
+        && matches!(
+            (child.tag_name().name(), child.tag_name().namespace()),
+            ("query", Some("jabber:iq:register"))
+                | ("register", Some(northstar_auth_xmpp::ibr::IBR2_NS))
+        )
+}
+
+fn resource_binding_iq(root: Node<'_, '_>) -> bool {
+    if root.tag_name().name() != "iq" || root.attribute("type") != Some("set") {
+        return false;
+    }
+    let mut children = root.children().filter(|child| child.is_element());
+    let Some(child) = children.next() else {
+        return false;
+    };
+    children.next().is_none()
+        && child.tag_name().name() == "bind"
+        && child.tag_name().namespace() == Some("urn:ietf:params:xml:ns:xmpp-bind")
+}
+
+pub fn valid_bind_payload(bind: Node<'_, '_>) -> bool {
+    if bind.attributes().len() != 0
+        || bind.children().any(|child| {
+            child.is_text() && child.text().is_some_and(|text| !text.trim().is_empty())
+        })
+    {
+        return false;
+    }
+    let children = bind
+        .children()
+        .filter(|child| child.is_element())
+        .collect::<Vec<_>>();
+    match children.as_slice() {
+        [] => true,
+        [resource] => {
+            resource.tag_name().name() == "resource"
+                && resource.tag_name().namespace() == bind.tag_name().namespace()
+                && resource.attributes().len() == 0
+                && !resource.children().any(|child| child.is_element())
+                && resource.text().is_some_and(|text| !text.is_empty())
+        }
+        _ => false,
+    }
+}
+
+pub fn valid_empty_iq_payload(payload: Node<'_, '_>) -> bool {
+    payload.attributes().len() == 0
+        && !payload.children().any(|child| child.is_element())
+        && payload.text().is_none_or(|text| text.trim().is_empty())
+}
+
+fn valid_client_stanza_namespace(root: Node<'_, '_>, websocket: bool, raw: &str) -> bool {
+    match root.tag_name().namespace() {
+        Some("jabber:client") => true,
+        // In a TCP XML stream the default `jabber:client` namespace is
+        // inherited from the open stream element, which is deliberately not
+        // present in the standalone frame passed to roxmltree.
+        None => !websocket && !root_resets_default_namespace(raw),
+        _ => false,
+    }
+}
+
+pub mod route;
+
+#[cfg(test)]
+mod tests;

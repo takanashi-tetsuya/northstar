@@ -14,10 +14,10 @@ const files = {
   authUsers: 'crates/contexts/auth/northstar-auth-postgres/src/users.rs',
   credentialSmService: 'crates/contexts/session/northstar-session-application/src/sm.rs',
   credentialSmDb: 'crates/contexts/workflows/northstar-workflows/src/sm_repository.rs',
-  authCaps: 'src/xmpp/protocol/caps.rs',
-  sasl2: 'src/xmpp/protocol/sasl2.rs',
-  authMisc: 'src/xmpp/protocol/misc.rs',
-  protocol: 'src/xmpp/protocol.rs',
+  authCaps: 'crates/edges/northstar-stream/src/protocol/caps.rs',
+  sasl2: 'crates/edges/northstar-stream/src/protocol/sasl2.rs',
+  authMisc: 'crates/edges/northstar-stream/src/protocol/misc.rs',
+  protocol: 'crates/edges/northstar-stream/src/protocol.rs',
   transport: 'crates/edges/northstar-c2s/src/lib.rs',
   tcp: 'crates/edges/northstar-c2s/src/tcp_action.rs',
   websocket: 'crates/edges/northstar-c2s/src/websocket_action.rs',
@@ -48,8 +48,8 @@ const files = {
   nativeCore: 'crates/contexts/message/northstar-delivery-core/src/native_write.rs',
   replayDb: 'crates/contexts/session/northstar-session-postgres/src/replay.rs',
   mixDb: 'crates/contexts/room/northstar-room-postgres/src/mix.rs',
-  smProtocol: 'src/xmpp/protocol/sm.rs',
-  smOwner: 'src/xmpp/protocol/sm_owner.rs',
+  smProtocol: 'crates/edges/northstar-stream/src/protocol/sm.rs',
+  smOwner: 'crates/edges/northstar-stream/src/protocol/sm_owner.rs',
   smCore: 'crates/contexts/message/northstar-delivery-core/src/sm_ownership.rs',
   smPrepared: 'crates/contexts/session/northstar-session-application/src/sm/ownership.rs',
   smDb: 'crates/contexts/workflows/northstar-workflows/src/sm.rs',
@@ -315,7 +315,7 @@ export function verifySmOwnershipBoundaries({ protocol, smProtocol, smOwner, smC
     'self.sm.outbound_h=self.sm.outbound_h.wrapping_add(1);',
     'self.sm.unacked.push_back(SmUnackedStanza::with_source(stanza.to_owned(),source));',
     'observation.appended();', 'self.checkpoint_in_turn(observation).await',
-    'iferror.downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>().is_some()&&observation.may_restore_superseded(){',
+    'iferror.downcast_ref::<crate::outbound::DurableDeliverySuperseded>().is_some()&&observation.may_restore_superseded(){',
     'self.sm.unacked.pop_back();', 'self.sm.outbound_h=self.sm.outbound_h.wrapping_sub(1);', 'observation.restored();'],
   'SM recording must append before checkpoint and restore only typed supersession');
   requireBoundary(count(record, 'pop_back(') === 1 && count(record, '.await') === 1,
@@ -688,7 +688,7 @@ export function verifyAuthPublicationBoundaries(sources) {
     transportFacts.includes('ifprevious==rid'),
     'auth transport observations must remain monotone and phase checked');
   const retain = method(protocol, 'retain_credential_commit');
-  requireBoundary(method(protocol, 'prepare_credential_attempt') === 'northstar_stream::auth_publication::CredentialAttempt::new(self.frame_executions.auth_origin(),self.connection_id,kind)',
+  requireBoundary(method(protocol, 'prepare_credential_attempt') === 'crate::auth_publication::CredentialAttempt::new(self.frame_executions.auth_origin(),self.connection_id,kind)',
     'auth originating frame must be captured before credential service polling');
   ordered(retain, ['letowner=attempt.into_owner(receipt)?;',
     'self.pending_credential_commit.is_none()', 'ifletSome(origin)=owner.origin()',
@@ -756,7 +756,7 @@ export function verifyAuthPublicationBoundaries(sources) {
   ]) requireBoundary(sequence.includes(fragment), `auth ${result} publication classification must remain distinct`);
   requireBoundary(sequence.includes('port.notification_deferred(&error);returnPublicationResult::CompletedWithDeferredNotification;') &&
     !/timeout|spawn|select!/.test(sequence), 'auth notification must stay visibly deferred without a new publication deadline');
-  const adapter = body(protocol, "impl<H:\\s*SessionHost>\\s+northstar_stream::auth_publication::PublicationPort\\s+for\\s+"
+  const adapter = body(protocol, "impl<H:\\s*SessionHost>\\s+crate::auth_publication::PublicationPort\\s+for\\s+"
     + "SessionAuthPublication<'_,\\s*H>");
   requireBoundary(method(adapter, 'publish') === 'self.session.host.authentication_service().publish_credential_commit_observed(invocation).await',
     'auth production port must invoke the actual observed service');
@@ -943,7 +943,7 @@ export function verifyAuthPublicationBoundaries(sources) {
       `credential ${kind} ingress must capture its original attempt before service polling`);
   }
   requireBoundary(method(owner, 'credential_handoff_failed') === 'error.is::<CredentialHandoffIntegrity>()' &&
-    inline.includes('Err(error)ifself.pending_credential_commit.is_some()||northstar_stream::auth_publication::credential_handoff_failed(&error)=>{'),
+    inline.includes('Err(error)ifself.pending_credential_commit.is_some()||crate::auth_publication::credential_handoff_failed(&error)=>{'),
     'credential contradictory returned success must close through the existing internal error branch');
   requireBoundary(inline.includes('ifbind_plan.is_none()&&!unbound_state_committed{') &&
     count(inline, '.commit_sasl2_unbound_state(&fast_plan,&user,expected_auth_generation).await?') === 2 &&

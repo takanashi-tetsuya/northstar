@@ -4,6 +4,7 @@
 
 pub use self::session_host::ArchiveSessionHost;
 
+mod protocol_session;
 mod session_host;
 
 #[cfg(test)]

@@ -47,7 +47,7 @@
     "src/xmpp/protocol.rs": [
       "state"
     ],
-    "src/xmpp/protocol/dispatch/iq_routes.rs": [
+    "src/xmpp/protocol/iq_routes.rs": [
       "state"
     ]
   }

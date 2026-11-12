@@ -13,21 +13,40 @@ test-support = []
 
 [dependencies]
 anyhow = "1.0"
+base64 = "0.22"
 chrono = "0.4"
 dashmap = "6.1"
+northstar-abuse-application = { path = "../../contexts/abuse/northstar-abuse-application" }
+northstar-abuse-policy = { path = "../../contexts/abuse/northstar-abuse-policy" }
 northstar-auth-core = { path = "../../contexts/auth/northstar-auth-core" }
 northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application" }
+northstar-auth-xmpp = { path = "../../contexts/auth/northstar-auth-xmpp" }
 northstar-delivery-core = { path = "../../contexts/message/northstar-delivery-core" }
 northstar-federation-core = { path = "../../contexts/federation/northstar-federation-core" }
 northstar-message-application = { path = "../../contexts/message/northstar-message-application" }
 northstar-message-core = { path = "../../contexts/message/northstar-message-core" }
+northstar-presence-core = { path = "../../contexts/roster/northstar-presence-core" }
+northstar-protocol-runtime = { path = "../../contexts/session/northstar-protocol-runtime" }
+northstar-pubsub-application = { path = "../../contexts/pubsub/northstar-pubsub-application" }
 northstar-room-application = { path = "../../contexts/room/northstar-room-application" }
 northstar-room-core = { path = "../../contexts/room/northstar-room-core" }
+northstar-roster-application = { path = "../../contexts/roster/northstar-roster-application" }
 northstar-roster-core = { path = "../../contexts/roster/northstar-roster-core" }
 northstar-runtime = { path = "../../platform/northstar-runtime" }
+northstar-security = { path = "../../platform/northstar-security" }
 northstar-session-application = { path = "../../contexts/session/northstar-session-application" }
 northstar-session-core = { path = "../../contexts/session/northstar-session-core" }
+northstar-telemetry = { path = "../../platform/northstar-telemetry" }
 northstar-xep-0016 = { path = "../../kernel/northstar-xep-0016" }
+northstar-xep-0045 = { path = "../../kernel/northstar-xep-0045" }
+northstar-xep-0060 = { path = "../../kernel/northstar-xep-0060" }
+northstar-xep-0115 = { path = "../../kernel/northstar-xep-0115" }
+northstar-xep-0198 = { path = "../../kernel/northstar-xep-0198" }
+northstar-xep-0199 = { path = "../../kernel/northstar-xep-0199" }
+northstar-xep-0280 = { path = "../../kernel/northstar-xep-0280" }
+northstar-xep-0352 = { path = "../../kernel/northstar-xep-0352" }
+northstar-xep-0357 = { path = "../../kernel/northstar-xep-0357" }
+northstar-xep-core = { path = "../../kernel/northstar-xep-core" }
 northstar-xml-builder = { path = "../../kernel/northstar-xml-builder" }
 northstar-xml-framing = { path = "../../kernel/northstar-xml-framing" }
 northstar-xmpp-types = { path = "../../kernel/northstar-xmpp-types" }
@@ -39,6 +58,7 @@ tokio-rustls = "0.26"
 tokio-util = "0.7"
 tracing = "0.1"
 uuid = { version = "1.12", features = ["v4"] }
+zeroize = "1.8"
 
 [dev-dependencies]
 futures = "0.3"

@@ -4,6 +4,7 @@
 
 pub use self::session_host::UploadSessionHost;
 
+mod protocol_session;
 mod session_host;
 
 use northstar_upload_application::{

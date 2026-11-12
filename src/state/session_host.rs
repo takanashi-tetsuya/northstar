@@ -5,7 +5,7 @@ use crate::s2s::FederationRouter;
 use crate::state::session_cleanup::SessionCleanupService;
 use crate::state::CommittedLocalMucResume;
 use crate::state::RestoredLocalMucOccupants;
-use crate::xmpp::protocol::dispatch::iq_routes::{RootIqRoute, IQ_ROUTES};
+use crate::xmpp::protocol::iq_routes::IQ_ROUTES;
 use crate::xmpp::protocol::messaging::MessageHandlers;
 use crate::xmpp::protocol::mix::MixHandlers;
 use crate::xmpp::protocol::muc::MucHandlers;
@@ -27,6 +27,7 @@ use northstar_stream::local_routes::muc::SuspendedMucEndpoint;
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::local_routes::session::SmPresenceEpoch;
 use northstar_stream::local_routes::session::SmStagedRouteClaim;
+use northstar_stream::protocol::dispatch::route::ClientIqRoute;
 use northstar_stream::transport::Action;
 use northstar_stream::IqRouter;
 use roxmltree::Node;
@@ -707,7 +708,7 @@ impl SessionHost for AppState {
         session.authorized_muc_occupant(room_jid).await
     }
 
-    fn iq_routes() -> &'static IqRouter<RootIqRoute<AppState>> {
+    fn iq_routes() -> &'static IqRouter<ClientIqRoute<AppState>> {
         &IQ_ROUTES
     }
 

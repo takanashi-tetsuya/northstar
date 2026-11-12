@@ -1,10 +1,6 @@
 use super::{Action, ProtocolSession, SessionHost};
 use anyhow::Result;
-use northstar_roster_application::{
-    BeginRosterSyncError, RosterFlushBatch, RosterRepository, RosterService, RosterSyncGate,
-    RosterSyncPermit, S2sOutboxPolicy,
-};
-use northstar_roster_core::{LocalRosterContact, PresenceAccount, RosterChange};
+use northstar_roster_application::{RosterFlushBatch, RosterSyncGate, RosterSyncPermit};
 use northstar_roster_xmpp::roster::RosterGetOutcome;
 use northstar_roster_xmpp::{PostAcceptFailureTelemetry, RosterSessionHost};
 use roxmltree::Node;
@@ -40,7 +36,7 @@ impl<H: SessionHost + RosterSessionHost> RosterHandlers for ProtocolSession<H> {
                     initial_delta,
                     target,
                 } => {
-                    let failure_telemetry = self.host.post_accept_failure_telemetry();
+                    let failure_telemetry = self.host().post_accept_failure_telemetry();
                     let outbound = self.outbound.clone();
                     let gate = Arc::clone(&self.roster_sync);
                     let disconnect = self.disconnect.clone();
@@ -67,74 +63,6 @@ impl<H: SessionHost + RosterSessionHost> RosterHandlers for ProtocolSession<H> {
         northstar_roster_xmpp::roster::roster_set(self, id, iq, query)
             .await
             .map(Action::Send)
-    }
-}
-
-impl<H: SessionHost + RosterSessionHost> northstar_roster_xmpp::roster::RosterSession
-    for ProtocolSession<H>
-{
-    fn roster_service(&self) -> &RosterService<impl RosterRepository<Error = anyhow::Error>> {
-        self.host.roster_service()
-    }
-
-    fn roster_full_jid(&self) -> Option<&str> {
-        self.full_jid.as_deref()
-    }
-
-    fn roster_begin_sync(
-        &self,
-        annotations_requested: bool,
-    ) -> std::result::Result<RosterSyncPermit, BeginRosterSyncError> {
-        self.roster_sync.begin(
-            &self.roster_requested,
-            &self.mix_roster_annotations,
-            annotations_requested,
-        )
-    }
-
-    fn roster_fail_sync(&self, permit: RosterSyncPermit) {
-        self.roster_sync.fail(permit);
-    }
-
-    fn roster_disconnect(&self) {
-        self.disconnect.cancel();
-    }
-
-    fn roster_is_hosted_domain(&self, domain: &str) -> bool {
-        domain == self.host.muc_domain()
-            || domain == self.host.upload_domain()
-            || domain == self.host.pubsub_domain()
-    }
-
-    fn roster_outbox_policy(&self) -> S2sOutboxPolicy {
-        self.host.roster_outbox_policy()
-    }
-
-    fn roster_wake_outbox(&self) {
-        self.host.roster_wake_outbox();
-    }
-
-    async fn roster_deliver_removal_presence(
-        &self,
-        owner: &PresenceAccount,
-        recipient: &LocalRosterContact,
-        target_bare: &str,
-        stanza: &str,
-    ) {
-        self.host
-            .deliver_roster_removal_presence(owner, recipient, target_bare, stanza)
-            .await;
-    }
-
-    async fn roster_push_change(
-        &self,
-        owner_id: uuid::Uuid,
-        owner: &str,
-        change: &RosterChange,
-    ) -> Result<()> {
-        self.host
-            .deliver_committed_roster_change(owner_id, owner, change, None)
-            .await
     }
 }
 

@@ -6,6 +6,7 @@
 pub mod blocking;
 pub mod presence;
 pub mod privacy;
+mod protocol_session;
 pub mod roster;
 mod session_host;
 

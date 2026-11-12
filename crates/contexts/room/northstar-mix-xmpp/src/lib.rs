@@ -18,6 +18,7 @@ pub mod message;
 pub mod payloads;
 pub mod ports;
 pub mod presence;
+mod protocol_session;
 pub mod relay;
 pub mod session;
 pub mod worker;

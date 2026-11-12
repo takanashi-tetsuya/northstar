@@ -137,7 +137,7 @@ if (!read('.github/SECURITY.md').includes(`\`${packageVersion.split('.').slice(0
 if (read('crates/edges/northstar-s2s/src/dns.rs').includes('User-Agent: Northstar-XMPP/1.1')) {
   throw new Error('XEP-0487 HTTP identity retains a stale hard-coded release version');
 }
-if (read('src/xmpp/protocol/dispatch.rs').includes('<os>Linux</os>')) {
+if (read('crates/edges/northstar-stream/src/protocol/dispatch.rs').includes('<os>Linux</os>')) {
   throw new Error('XEP-0092 still reports Linux for non-Linux release binaries');
 }
 const pinnedToolchain = read('rust-toolchain.toml').match(/^channel = "([^"]+)"$/m)?.[1];

@@ -1,0 +1,1425 @@
+use super::{Action, ProtocolSession};
+use crate::protocol::SessionHost;
+use anyhow::Result;
+use northstar_abuse_policy::stanza::strip_pow_element;
+use northstar_abuse_policy::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement};
+use northstar_auth_application::account::{
+    DeletionQuiesceOutcome, DeletionQuiesceRequest, PasswordChangeOutcome, PasswordChangeRequest,
+    RegistrationOutcome, RegistrationRequest,
+};
+use northstar_auth_core as auth;
+use northstar_message_application::push::{
+    PushEnableOutcome, PushResponseKind, PushResponseOutcome,
+};
+use northstar_session_application::sm::{BindingFinalizationOutcome, BindingReservationOutcome};
+use northstar_xml_builder::rewrite::set_to;
+use northstar_xml_builder::stanza::{
+    child_text, iq_error, iq_error_from, iq_result, iq_result_from, stanza_error, stanza_error_type,
+};
+use northstar_xml_builder::stream::stream_error;
+use northstar_xml_builder::xdata::xdata_value_field;
+use northstar_xml_builder::XmlElement;
+use northstar_xmpp_types::jid_text::bare_jid;
+use roxmltree::Node;
+use std::sync::{atomic::AtomicBool, atomic::AtomicU64, atomic::Ordering, Arc};
+use zeroize::Zeroizing;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResourceBindingFailure {
+    UnexpectedRequest,
+    JidMalformed,
+    CredentialsExpired,
+    Conflict,
+    CapacityExhausted,
+    /// PostgreSQL credential/session finalization committed, but the exact
+    /// non-routable in-memory/cluster route was lost before a success could be
+    /// emitted. Callers must close; they may not manufacture a rollback or a
+    /// contradictory ordinary failure.
+    CommittedRouteLost,
+}
+
+impl ResourceBindingFailure {
+    fn iq_condition(self) -> &'static str {
+        match self {
+            Self::UnexpectedRequest => "unexpected-request",
+            Self::JidMalformed => "jid-malformed",
+            Self::CredentialsExpired => "not-authorized",
+            Self::Conflict => "conflict",
+            Self::CapacityExhausted => "resource-constraint",
+            Self::CommittedRouteLost => "internal-server-error",
+        }
+    }
+
+    pub(crate) fn sasl_condition(self) -> &'static str {
+        match self {
+            Self::UnexpectedRequest | Self::JidMalformed => "malformed-request",
+            Self::CredentialsExpired => "credentials-expired",
+            Self::Conflict | Self::CapacityExhausted => "temporary-auth-failure",
+            Self::CommittedRouteLost => "temporary-auth-failure",
+        }
+    }
+}
+
+impl<H: SessionHost> ProtocolSession<H> {
+    pub async fn registration_form(&self, id: &str, query: Node<'_, '_>) -> Result<Action> {
+        if !self.secure_transport {
+            return Ok(Action::Send(iq_registration_error(id, "not-authorized")));
+        }
+        if !valid_empty_register_query(query) {
+            return Ok(Action::Send(iq_registration_error(id, "bad-request")));
+        }
+        if let Some(user) = self.authenticated.as_ref() {
+            let payload = XmlElement::namespaced("query", "jabber:iq:register")
+                .child(XmlElement::new("registered"))
+                .child(XmlElement::new("username").text(user.username.clone()))
+                .child(XmlElement::new("password"))
+                .finish();
+            return Ok(Action::Send(iq_result(id, &payload)));
+        }
+        if self.host.registration_is_closed() {
+            return Ok(Action::Send(iq_registration_error(
+                id,
+                "service-unavailable",
+            )));
+        }
+        if self.negotiation.registration_completed() {
+            return Ok(Action::Send(iq_registration_error(id, "not-acceptable")));
+        }
+        let invitation = if self.host.registration_requires_invitation() {
+            XmlElement::new("field")
+                .attr("var", "urn:northstar:invite:token")
+                .attr("type", "text-private")
+                .attr("label", "Invitation token")
+                .child(XmlElement::new("required"))
+        } else {
+            XmlElement::new("field")
+                .attr("var", "urn:northstar:invite:token")
+                .attr("type", "text-private")
+                .attr("label", "Invitation token (optional)")
+        };
+        // When the invitation is mandatory, XEP-0077 recommends returning a
+        // data form plus instructions without legacy fields that cannot carry
+        // the required extension. This prevents an old client from assuming a
+        // username/password-only submission can succeed.
+        let mut form = XmlElement::namespaced("x", "jabber:x:data")
+            .attr("type", "form")
+            .child(xdata_value_field(
+                "FORM_TYPE",
+                "hidden",
+                "jabber:iq:register",
+            ))
+            .child(
+                XmlElement::new("field")
+                    .attr("var", "username")
+                    .attr("type", "text-single")
+                    .attr("label", "Username")
+                    .child(XmlElement::new("required")),
+            )
+            .child(
+                XmlElement::new("field")
+                    .attr("var", "password")
+                    .attr("type", "text-private")
+                    .attr("label", "Password")
+                    .child(XmlElement::new("required")),
+            )
+            .child(invitation);
+        // Ordinary form clients echo 0. A capable client must explicitly
+        // select version 2 before the server issues a computational challenge.
+        form.push_child(xdata_value_field(
+            "urn:northstar:pow:version",
+            "hidden",
+            "0",
+        ));
+        let mut query = XmlElement::namespaced("query", "jabber:iq:register").child(
+            XmlElement::new("instructions").text("Choose a username and a password of at least 10 UTF-8 octets. If registration is rate limited, wait before trying again."),
+        );
+        if !self.host.registration_requires_invitation() {
+            query.push_child(XmlElement::new("username"));
+            query.push_child(XmlElement::new("password"));
+        }
+        query.push_child(form);
+        let payload = query.finish();
+        Ok(Action::Send(iq_result(id, &payload)))
+    }
+
+    pub async fn register(&mut self, id: &str, query: Node<'_, '_>) -> Result<Action> {
+        if !self.secure_transport {
+            return Ok(Action::Send(iq_registration_error(id, "not-authorized")));
+        }
+        if self.host.registration_is_closed() {
+            return Ok(Action::Send(iq_registration_error(id, "not-allowed")));
+        }
+        if self.negotiation.registration_completed() {
+            return Ok(Action::Send(iq_registration_error(id, "not-acceptable")));
+        }
+        if query.tag_name().name() != "query"
+            || query.tag_name().namespace() != Some("jabber:iq:register")
+            || query.attributes().len() != 0
+            || query.children().any(|child| {
+                !child.is_element() && child.text().is_some_and(|text| !text.trim().is_empty())
+            })
+        {
+            return Ok(Action::Send(iq_registration_error(id, "bad-request")));
+        }
+        let mut form_nodes = query.children().filter(|node| {
+            node.is_element()
+                && node.tag_name().name() == "x"
+                && node.tag_name().namespace() == Some("jabber:x:data")
+        });
+        let form = form_nodes.next();
+        if form.is_some() && form_nodes.next().is_some() {
+            return Ok(Action::Send(iq_registration_error(id, "bad-request")));
+        }
+
+        let (username, password, invitation_token, pow_challenge_id, pow_nonce, pow_enabled) =
+            if let Some(x_form) = form {
+                if query.children().filter(|node| node.is_element()).count() != 1 {
+                    return Ok(Action::Send(iq_registration_error(id, "bad-request")));
+                }
+                let fields = match northstar_xml_builder::xdata::strict_xdata_submit(
+                    x_form,
+                    "jabber:iq:register",
+                    &[
+                        "username",
+                        "password",
+                        "urn:northstar:invite:token",
+                        "urn:northstar:pow:version",
+                        "urn:northstar:pow:challenge-id",
+                        "urn:northstar:pow:nonce",
+                    ],
+                ) {
+                    Ok(fields) => fields,
+                    Err(_) => return Ok(Action::Send(iq_registration_error(id, "bad-request"))),
+                };
+
+                let pow_enabled = match fields.get("urn:northstar:pow:version").map(String::as_str)
+                {
+                    None | Some("0") => false,
+                    Some("2") => true,
+                    _ => return Ok(Action::Send(iq_registration_error(id, "bad-request"))),
+                };
+                if !pow_enabled
+                    && (fields.contains_key("urn:northstar:pow:challenge-id")
+                        || fields.contains_key("urn:northstar:pow:nonce"))
+                {
+                    return Ok(Action::Send(iq_registration_error(id, "bad-request")));
+                }
+                (
+                    fields.get("username").cloned().unwrap_or_default(),
+                    fields.get("password").cloned().unwrap_or_default(),
+                    fields.get("urn:northstar:invite:token").cloned(),
+                    fields
+                        .get("urn:northstar:pow:challenge-id")
+                        .and_then(|value| value.parse().ok()),
+                    fields.get("urn:northstar:pow:nonce").cloned(),
+                    pow_enabled,
+                )
+            } else {
+                match parse_legacy_register(query) {
+                    Ok((username, password)) => (username, password, None, None, None, false),
+                    Err(_) => return Ok(Action::Send(iq_registration_error(id, "bad-request"))),
+                }
+            };
+
+        let password = Zeroizing::new(password);
+        let invitation_token = invitation_token
+            .map(|token| token.trim().to_owned())
+            .filter(|token| !token.is_empty())
+            .map(Zeroizing::new);
+        if username.is_empty() || password.is_empty() {
+            return Ok(Action::Send(iq_registration_error(id, "not-acceptable")));
+        }
+        let proof = match (pow_challenge_id, pow_nonce) {
+            (Some(challenge_id), Some(nonce)) if !nonce.is_empty() => Some(PowProof {
+                challenge_id,
+                nonce,
+            }),
+            _ => None,
+        };
+
+        if auth::validate_password(&password).is_err() {
+            return Ok(Action::Send(iq_registration_error(id, "not-acceptable")));
+        }
+        let intent = PowIntent::xmpp_registration(
+            &username,
+            &password,
+            invitation_token.as_deref().map(String::as_str),
+        );
+        let actors = vec![format!("ip:{}", self.peer_ip)];
+        let subject = format!("registration:{}", self.peer_ip);
+        let outcome = match self
+            .host
+            .account_service()
+            .register(RegistrationRequest {
+                username: &username,
+                password: &password,
+                invitation_token: invitation_token.as_deref().map(String::as_str),
+                proof: proof.as_ref(),
+                intent: &intent,
+                subject: &subject,
+                actors: &actors,
+            })
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                tracing::error!(?error, "XEP-0077 registration backend failed");
+                self.host.registration_telemetry().backend_failed();
+                return Ok(Action::Send(iq_registration_error(
+                    id,
+                    "internal-server-error",
+                )));
+            }
+        };
+        match outcome {
+            RegistrationOutcome::Created(_) => {
+                self.negotiation.mark_registration_completed();
+                self.host.registration_telemetry().registered();
+                Ok(Action::Send(iq_result(id, "")))
+            }
+            RegistrationOutcome::AbuseDenied(requirement) => {
+                self.host.registration_telemetry().rate_limited();
+                if !pow_enabled {
+                    return Ok(Action::Send(iq_registration_abuse_error(
+                        id,
+                        &requirement,
+                        None,
+                    )));
+                }
+                let challenge = match self
+                    .host
+                    .challenge_issue_service()
+                    .issue(
+                        northstar_abuse_application::challenge::ChallengeIssueRequest {
+                            action: AbuseAction::Registration,
+                            subject: &subject,
+                            actors: &actors,
+                            intent: Some(&intent),
+                        },
+                    )
+                    .await
+                {
+                    Ok(challenge) => Some(challenge),
+                    Err(error) => {
+                        tracing::warn!(?error, "XEP-0077 v2 challenge issuance failed");
+                        self.host.registration_telemetry().backend_failed();
+                        None
+                    }
+                };
+                Ok(Action::Send(iq_registration_abuse_error(
+                    id,
+                    &requirement,
+                    challenge.as_ref(),
+                )))
+            }
+            RegistrationOutcome::InvalidUsername => {
+                Ok(Action::Send(iq_registration_error(id, "not-acceptable")))
+            }
+            RegistrationOutcome::InvitationRejected => {
+                Ok(Action::Send(iq_registration_error(id, "not-acceptable")))
+            }
+            RegistrationOutcome::UsernameTaken => {
+                Ok(Action::Send(iq_registration_error(id, "conflict")))
+            }
+            RegistrationOutcome::RateLimited => Ok(Action::Send(iq_registration_error(
+                id,
+                "resource-constraint",
+            ))),
+            RegistrationOutcome::CapacityExhausted => {
+                self.host.registration_telemetry().capacity_rejected();
+                Ok(Action::Send(iq_registration_error(
+                    id,
+                    "resource-constraint",
+                )))
+            }
+            RegistrationOutcome::PasswordWorkOverloaded => Ok(Action::Send(iq_registration_error(
+                id,
+                "resource-constraint",
+            ))),
+            RegistrationOutcome::Closed => {
+                Ok(Action::Send(iq_registration_error(id, "not-allowed")))
+            }
+        }
+    }
+}
+
+impl<H: SessionHost> ProtocolSession<H> {
+    pub async fn change_password(&self, id: &str, query: Node<'_, '_>) -> Result<Action> {
+        if query.children().any(|child| {
+            child.is_element()
+                && child.tag_name().name() == "remove"
+                && child.tag_name().namespace() == Some("jabber:iq:register")
+        }) {
+            return self.remove_account(id, query).await;
+        }
+        let Some(user) = &self.authenticated else {
+            return Ok(Action::Send(iq_registration_error(id, "not-authorized")));
+        };
+        let powless_query = query
+            .document()
+            .input_text()
+            .get(query.range())
+            .map(strip_pow_element)
+            .ok_or_else(|| anyhow::anyhow!("password-change query range is invalid"))?;
+        let (username, password, proof) = match parse_password_change(query, &user.username) {
+            Ok(values) => values,
+            Err(()) => return Ok(Action::Send(iq_registration_error(id, "bad-request"))),
+        };
+        let password = Zeroizing::new(password);
+        if !northstar_xmpp_types::jid::prepare_localpart(&username)
+            .is_ok_and(|username| username == user.username)
+            || auth::validate_password(&password).is_err()
+        {
+            return Ok(Action::Send(iq_registration_error(id, "not-acceptable")));
+        }
+        let actors = vec![
+            format!("ip:{}", self.peer_ip),
+            format!("user:{}", user.id),
+            format!("behavior:{}", user.id),
+        ];
+        let subject = format!("password_change:{}", user.id);
+        let intent = northstar_abuse_policy::PowIntent::xmpp(
+            AbuseAction::PasswordChange,
+            "/xmpp/password-change",
+            powless_query.as_bytes(),
+        );
+        let changed = self
+            .host
+            .account_service()
+            .change_password(PasswordChangeRequest {
+                subject: &subject,
+                actors: &actors,
+                proof: proof.as_ref(),
+                intent: &intent,
+                user_id: user.id,
+                expected_auth_generation: user.auth_generation,
+                password: &password,
+            })
+            .await;
+        match changed {
+            Ok(PasswordChangeOutcome::Changed) => {}
+            Ok(PasswordChangeOutcome::AbuseDenied(requirement)) => {
+                self.host.account_abuse_telemetry().rate_limited();
+                return Ok(Action::Send(iq_registration_abuse_error(
+                    id,
+                    &requirement,
+                    None,
+                )));
+            }
+            Ok(PasswordChangeOutcome::PasswordWorkOverloaded) => {
+                return Ok(Action::Send(iq_registration_error(
+                    id,
+                    "resource-constraint",
+                )));
+            }
+            Err(error) => {
+                tracing::error!(?error, user_id = %user.id, "XEP-0077 password change failed");
+                self.host.account_abuse_telemetry().backend_failed();
+                return Ok(Action::Send(iq_registration_error(
+                    id,
+                    "internal-server-error",
+                )));
+            }
+        }
+        // Revoke other local and resumable sessions before acknowledging the
+        // credential change. The terminal action then delivers this IQ result
+        // and closes the initiating stream without a detached crash window.
+        let account = format!("{}@{}", user.username, self.host.local_domain());
+        self.host.disconnect_account(user.id, &account).await;
+        Ok(Action::SendManyAndClose(vec![iq_result(id, "")]))
+    }
+
+    async fn remove_account(&self, id: &str, query: Node<'_, '_>) -> Result<Action> {
+        let Some(user) = &self.authenticated else {
+            return Ok(Action::Send(iq_registration_error(
+                id,
+                "registration-required",
+            )));
+        };
+        let proof = match parse_account_remove(query) {
+            Ok(proof) => proof,
+            Err(()) => return Ok(Action::Send(iq_registration_error(id, "bad-request"))),
+        };
+        let powless_query = query
+            .document()
+            .input_text()
+            .get(query.range())
+            .map(strip_pow_element)
+            .ok_or_else(|| anyhow::anyhow!("account-removal query range is invalid"))?;
+
+        let actors = vec![
+            format!("ip:{}", self.peer_ip),
+            format!("user:{}", user.id),
+            format!("behavior:{}", user.id),
+        ];
+        let intent = northstar_abuse_policy::PowIntent::xmpp(
+            AbuseAction::PasswordChange,
+            "/xmpp/account-remove",
+            powless_query.as_bytes(),
+        );
+        let subject = format!("account_remove:{}", user.id);
+        // Consume the one-use proof and establish the fail-closed deletion
+        // boundary atomically. New enable/resume attempts serialize after the
+        // user lock and then fail the disabled/generation checks.
+        match self
+            .host
+            .account_service()
+            .quiesce_for_deletion(DeletionQuiesceRequest {
+                subject: &subject,
+                actors: &actors,
+                proof: proof.as_ref(),
+                intent: &intent,
+                user_id: user.id,
+                expected_auth_generation: user.auth_generation,
+            })
+            .await
+        {
+            Ok(DeletionQuiesceOutcome::Quiesced) => {}
+            Ok(DeletionQuiesceOutcome::Missing) => {
+                return Ok(Action::Send(iq_registration_error(
+                    id,
+                    "registration-required",
+                )));
+            }
+            Ok(DeletionQuiesceOutcome::AbuseDenied(requirement)) => {
+                self.host.account_abuse_telemetry().rate_limited();
+                return Ok(Action::Send(iq_registration_abuse_error(
+                    id,
+                    &requirement,
+                    None,
+                )));
+            }
+            Err(error) => {
+                tracing::error!(?error, user_id = %user.id, "XEP-0077 guarded account quiesce failed");
+                self.host.account_abuse_telemetry().backend_failed();
+                return Ok(Action::Send(iq_registration_error(
+                    id,
+                    "internal-server-error",
+                )));
+            }
+        }
+        match self
+            .host
+            .finalize_account_deletion(user.id, &user.username)
+            .await
+        {
+            Ok(northstar_auth_application::account_teardown::FinalizeAccountDeletion::Deleted) => {}
+            Ok(northstar_auth_application::account_teardown::FinalizeAccountDeletion::Missing) => {
+                return Ok(Action::Send(iq_registration_error(
+                    id,
+                    "registration-required",
+                )));
+            }
+            Err(error) => {
+                tracing::error!(?error, user_id = %user.id, "XEP-0077 account deletion failed");
+                return Ok(Action::Send(iq_registration_error(
+                    id,
+                    if error.to_string().contains("upload storage capacity busy") {
+                        "resource-constraint"
+                    } else {
+                        "internal-server-error"
+                    },
+                )));
+            }
+        }
+        Ok(Action::SendManyAndClose(vec![
+            iq_result(id, ""),
+            stream_error("not-authorized"),
+        ]))
+    }
+}
+
+impl<H: SessionHost> ProtocolSession<H> {
+    pub async fn bind(&mut self, id: &str, bind: Node<'_, '_>) -> Result<Action> {
+        if self.full_jid.is_some() {
+            return Ok(Action::Send(iq_error(id, "unexpected-request")));
+        }
+        let Some(user) = self.authenticated.clone() else {
+            return Ok(Action::Send(iq_error(id, "not-authorized")));
+        };
+        let generated = uuid::Uuid::new_v4().to_string();
+        let resource = match child_text(bind, "resource") {
+            Some(resource) => match northstar_xmpp_types::jid::prepare_resourcepart(resource) {
+                Ok(resource) => resource,
+                Err(_) => return Ok(Action::Send(iq_error(id, "bad-request"))),
+            },
+            None => generated,
+        };
+        let jid = match self.bind_resource_internal(&user, resource).await? {
+            Ok(jid) => jid,
+            Err(ResourceBindingFailure::CommittedRouteLost) => return Ok(Action::Close),
+            Err(failure) => return Ok(Action::Send(iq_error(id, failure.iq_condition()))),
+        };
+        let payload = XmlElement::namespaced("bind", "urn:ietf:params:xml:ns:xmpp-bind")
+            .child(XmlElement::new("jid").text(jid))
+            .finish();
+        self.auth_replies(vec![iq_result(id, &payload)])
+    }
+
+    /// Registers one authenticated resource. Both RFC 6120 IQ binding and
+    /// XEP-0386 Bind 2 call this path so session limits, cluster ownership and
+    /// cleanup cannot drift between authentication generations.
+    pub(crate) async fn bind_resource_internal(
+        &mut self,
+        user: &northstar_auth_application::authentication::AuthenticatedAccount,
+        resource: String,
+    ) -> Result<std::result::Result<String, ResourceBindingFailure>> {
+        let result = self
+            .bind_resource_sasl2_internal(user, resource, None, self.user_agent_id)
+            .await?;
+        let (jid, _) = match result {
+            Ok(result) => result,
+            Err(failure) => return Ok(Err(failure)),
+        };
+        Ok(Ok(jid))
+    }
+
+    /// Bind a SASL2 resource using a bounded durable reservation followed by
+    /// an exact finalization fence. PostgreSQL transactions never cross the
+    /// Redis/in-memory route publication awaits, and the installed route stays
+    /// non-routable until both durable finalization and transport success.
+    pub(crate) async fn bind_resource_sasl2_internal(
+        &mut self,
+        user: &northstar_auth_application::authentication::AuthenticatedAccount,
+        resource: String,
+        fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
+        login_device: Option<uuid::Uuid>,
+    ) -> Result<
+        std::result::Result<
+            (
+                String,
+                Option<northstar_auth_application::authentication::IssuedFastToken>,
+            ),
+            ResourceBindingFailure,
+        >,
+    > {
+        if self.full_jid.is_some() {
+            return Ok(Err(ResourceBindingFailure::UnexpectedRequest));
+        }
+        let jid = format!(
+            "{}@{}/{}",
+            user.username,
+            self.host.local_domain(),
+            resource
+        );
+        let key = match northstar_xmpp_types::jid::canonical_session_key(&jid) {
+            Ok(key) => key,
+            Err(_) => return Ok(Err(ResourceBindingFailure::JidMalformed)),
+        };
+        let resource = northstar_xmpp_types::jid::CanonicalJid::parse(&key)
+            .expect("canonical session key must parse")
+            .resourcepart()
+            .expect("canonical session key must contain a resource")
+            .to_owned();
+        let jid = key.clone();
+        // The PostgreSQL lease reservation below is the sole deployment-wide
+        // per-account authority. A local in-memory precheck would disagree
+        // across nodes during an epoch-fenced rolling limit change and would
+        // count only this process's resources.
+        match self
+            .live_session_ownership
+            .attempt(self.host.sm_service().reserve_binding(
+                self.connection_id,
+                user.id,
+                user.auth_generation,
+                &key,
+                self.host.capacity_session_lease_seconds(),
+            ))
+            .await?
+        {
+            BindingReservationOutcome::Reserved => {}
+            BindingReservationOutcome::CredentialsExpired => {
+                return Ok(Err(ResourceBindingFailure::CredentialsExpired));
+            }
+            BindingReservationOutcome::Conflict => {
+                return Ok(Err(ResourceBindingFailure::Conflict));
+            }
+            BindingReservationOutcome::CapacityExhausted => {
+                self.host.session_bind_telemetry().capacity_rejected();
+                return Ok(Err(ResourceBindingFailure::CapacityExhausted));
+            }
+        }
+        let available = Arc::new(AtomicBool::new(false));
+        let locally_reserved = self.host.try_stage_bound_session(
+            key.clone(),
+            crate::local_routes::session::OnlineSession {
+                user_id: user.id,
+                auth_generation: user.auth_generation,
+                user_agent_epoch: None,
+                connection_id: self.connection_id,
+                route_incarnation: northstar_session_application::RouteIncarnationSignal::new(
+                    self.connection_id,
+                ),
+                lifecycle: Arc::clone(&self.route_lifecycle),
+                metrics_counted: Arc::new(AtomicBool::new(true)),
+                routable: Arc::new(AtomicBool::new(false)),
+                sender: self.outbound.clone(),
+                available: Arc::clone(&available),
+                availability_generation: Arc::clone(&self.presence.availability_generation),
+                post_actions: self.post_actions.clone(),
+                recovery_replay_inflight_epoch: Arc::new(AtomicU64::new(0)),
+                recovery_replay_completed_epoch: Arc::new(AtomicU64::new(0)),
+                bind2_mam_catchup: fast_plan.is_some(),
+                mix_presence_gate: Arc::clone(&self.presence.mix_presence_gate),
+                mix_presence_fallback_suppressed: Arc::clone(
+                    &self.presence.mix_presence_fallback_suppressed,
+                ),
+                caps_observation_generation: Arc::clone(&self.presence.caps_observation_generation),
+                carbons: Arc::clone(&self.carbons),
+                priority: Arc::clone(&self.priority),
+                show: Arc::clone(&self.show),
+                blocklist_requested: Arc::clone(&self.blocklist_requested),
+                roster_requested: Arc::clone(&self.roster_requested),
+                roster_sync: Arc::clone(&self.roster_sync),
+                mix_roster_annotations: Arc::clone(&self.mix_roster_annotations),
+                privacy_active: Arc::clone(&self.privacy_active),
+                privacy_requested: Arc::clone(&self.privacy_requested),
+                directed_presence: Arc::clone(&self.directed_presence),
+                last_presence: Arc::clone(&self.last_presence),
+                ip: Some(self.peer_ip),
+                resource: resource.clone(),
+                user_agent_id: self.user_agent_id,
+                sm_session_id: Arc::clone(&self.sm.session_id_shared),
+                muc_memberships: Arc::clone(&self.joined_rooms),
+                connected_at: std::time::Instant::now(),
+                last_activity: Arc::clone(&self.last_activity),
+                disconnect: self.disconnect.clone(),
+            },
+        );
+        // Release the entry guard before touching PostgreSQL on a collision.
+        if !locally_reserved {
+            self.host
+                .sm_service()
+                .release_live_session(self.connection_id)
+                .await?;
+            return Ok(Err(ResourceBindingFailure::Conflict));
+        }
+        self.registered_key = Some(key.clone());
+        self.full_jid = Some(jid.clone());
+        self.available = Some(available);
+        self.host.session_bind_telemetry().staged_route_installed();
+
+        match self
+            .host
+            .claim_staged_binding_route(&key, self.connection_id)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                self.host
+                    .remove_session_if_connection(&key, self.connection_id);
+                self.host
+                    .sm_service()
+                    .release_live_session(self.connection_id)
+                    .await?;
+                self.registered_key = None;
+                self.full_jid = None;
+                self.available = None;
+                return Ok(Err(ResourceBindingFailure::Conflict));
+            }
+            Err(error) => {
+                self.host
+                    .remove_session_if_connection(&key, self.connection_id);
+                if let Err(release_error) = self
+                    .host
+                    .sm_service()
+                    .release_live_session(self.connection_id)
+                    .await
+                {
+                    tracing::warn!(
+                        ?release_error,
+                        connection_id = %self.connection_id,
+                        "failed to release a rejected binding reservation; TTL cleanup will retry"
+                    );
+                }
+                self.registered_key = None;
+                self.full_jid = None;
+                self.available = None;
+                return Err(error);
+            }
+        }
+        // Keep the reserved route explicitly non-routable until the
+        // authentication/FAST transaction commits. In particular, do not
+        // revoke an older suspended SM epoch yet: that teardown has durable
+        // and externally visible side effects which cannot be rolled back if
+        // FAST issuance or the login transaction fails below.
+        let credential_attempt = self.prepare_credential_attempt(
+            northstar_auth_application::authentication::publication::CredentialKind::Binding,
+        )?;
+        let finalized = self
+            .host
+            .finalize_resource_binding(
+                self.connection_id,
+                user.id,
+                user.auth_generation,
+                &key,
+                login_device,
+                fast_plan,
+                credential_attempt.prepared(),
+            )
+            .await;
+        let mut receipt = match finalized {
+            Ok(BindingFinalizationOutcome::Committed { receipt }) => receipt,
+            Ok(BindingFinalizationOutcome::CredentialsExpired) => {
+                self.host
+                    .remove_session_if_connection(&key, self.connection_id);
+                let _ = self
+                    .host
+                    .release_staged_binding_route(&key, self.connection_id)
+                    .await;
+                let _ = self
+                    .host
+                    .sm_service()
+                    .release_live_session(self.connection_id)
+                    .await;
+                self.registered_key = None;
+                self.full_jid = None;
+                self.available = None;
+                return Ok(Err(ResourceBindingFailure::CredentialsExpired));
+            }
+            Ok(BindingFinalizationOutcome::ReservationLost) => {
+                self.host
+                    .remove_session_if_connection(&key, self.connection_id);
+                let _ = self
+                    .host
+                    .release_staged_binding_route(&key, self.connection_id)
+                    .await;
+                self.registered_key = None;
+                self.full_jid = None;
+                self.available = None;
+                return Ok(Err(ResourceBindingFailure::Conflict));
+            }
+            Err(error) => {
+                self.host
+                    .remove_session_if_connection(&key, self.connection_id);
+                let _ = self
+                    .host
+                    .release_staged_binding_route(&key, self.connection_id)
+                    .await;
+                let _ = self
+                    .host
+                    .sm_service()
+                    .release_live_session(self.connection_id)
+                    .await;
+                self.registered_key = None;
+                self.full_jid = None;
+                self.available = None;
+                return Err(error);
+            }
+        };
+        let issued_fast = receipt.take_issued_fast();
+        self.retain_credential_commit(receipt, credential_attempt)?;
+        let route_is_current = self.host.staged_session_is_current(
+            &key,
+            self.connection_id,
+            user.id,
+            user.auth_generation,
+            &self.route_lifecycle,
+        );
+        if !route_is_current {
+            self.host
+                .remove_session_if_connection(&key, self.connection_id);
+            let _ = self
+                .host
+                .release_staged_binding_route(&key, self.connection_id)
+                .await;
+            self.registered_key = None;
+            self.full_jid = None;
+            self.available = None;
+            let _ = self
+                .host
+                .sm_service()
+                .release_live_session(self.connection_id)
+                .await;
+            return Ok(Err(ResourceBindingFailure::CommittedRouteLost));
+        }
+        // A replacement claim deliberately leaves the previous resumable SM
+        // row intact until the terminal bind success reaches the transport.
+        // Publication transfers its stable live-session lease; the old SM row
+        // then becomes non-resumable and the existing expiry/teardown worker
+        // performs idempotent presence/MUC cleanup. Never revoke by full JID
+        // here: Bind2 may create the replacement SM row before publication.
+        Ok(Ok((jid, issued_fast)))
+    }
+
+    pub fn set_carbons(
+        &self,
+        id: &str,
+        iq: Node<'_, '_>,
+        control: Node<'_, '_>,
+        enabled: bool,
+    ) -> Result<Action> {
+        let Some(full_jid) = self.full_jid.as_deref() else {
+            return Ok(Action::Send(iq_error(id, "not-authorized")));
+        };
+        let own_bare = bare_jid(full_jid);
+        let addressed_error =
+            |condition| Action::Send(set_to(&iq_error_from(id, own_bare, condition), full_jid));
+        let parsed_control = match northstar_xep_0280::parse_control(control) {
+            Ok(control) => control,
+            Err(_) => return Ok(addressed_error("bad-request")),
+        };
+        if enabled != matches!(parsed_control, northstar_xep_0280::Control::Enable) {
+            return Ok(addressed_error("bad-request"));
+        }
+        let valid_from = iq.attribute("from").is_none_or(|from| {
+            northstar_xmpp_types::jid::canonicalize(from)
+                .is_ok_and(|from| from.as_str() == full_jid)
+        });
+        let valid_to = iq.attribute("to").is_none_or(|to| {
+            northstar_xmpp_types::jid::canonicalize(to).is_ok_and(|to| {
+                to.as_str() == full_jid
+                    || to.as_str() == own_bare
+                    || to.as_str() == self.host.local_domain()
+            })
+        });
+        if !valid_from || !valid_to {
+            return Ok(addressed_error("not-allowed"));
+        }
+        if !self
+            .host
+            .set_local_carbons_for_connection(full_jid, self.connection_id, enabled)
+        {
+            // Never acknowledge a session-local capability unless the exact
+            // bound route that fanout will inspect was updated. This also
+            // closes a replacement/resumption race where the protocol actor
+            // could otherwise mutate a detached Arc and return success.
+            return Ok(addressed_error("service-unavailable"));
+        };
+        // The IQ handler and message fanout can run on different Tokio
+        // tasks. Publish the per-resource selection before acknowledging the
+        // control IQ so subsequent routing observes it.
+        self.carbons.store(enabled, Ordering::Release);
+        // XEP-0280 examples 4 and 7 require the account bare JID as the
+        // responder and the enabling resource's full JID as the result
+        // target. The connection itself is not a substitute for the wire
+        // addressing because clients use it to reject forged IQ results.
+        Ok(Action::Send(set_to(
+            &iq_result_from(id, own_bare, ""),
+            full_jid,
+        )))
+    }
+
+    pub async fn enable_push(
+        &self,
+        id: &str,
+        iq: Node<'_, '_>,
+        enable: Node<'_, '_>,
+        raw: &str,
+    ) -> Result<Action> {
+        let Some(user) = &self.authenticated else {
+            return Ok(Action::Send(stanza_error(iq, "auth", "not-authorized")));
+        };
+        let own_bare = format!("{}@{}", user.username, self.host.local_domain());
+        if !northstar_xep_0357::iq_targets_own_account(iq, &own_bare) {
+            return Ok(Action::Send(stanza_error(iq, "cancel", "not-allowed")));
+        }
+        let (request, options_node) = match northstar_xep_0357::parse_enable(enable) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                return Ok(Action::Send(stanza_error(
+                    iq,
+                    error.stanza_error_type(),
+                    error.as_stanza_error_condition(),
+                )))
+            }
+        };
+        let options = options_node.map(|options| &raw[options.range()]);
+        let service_jid = request.service_jid().to_string();
+        let node = request.node_str().to_owned();
+        match self
+            .host
+            .push_service()
+            .enable(user.id, &service_jid, &node, options)
+            .await?
+        {
+            PushEnableOutcome::Enabled => Ok(Action::Send(iq_result_from(id, &own_bare, ""))),
+            PushEnableOutcome::QuotaExceeded => Ok(Action::Send(stanza_error(
+                iq,
+                "wait",
+                "resource-constraint",
+            ))),
+            PushEnableOutcome::RateLimited => {
+                self.host.push_subscription_telemetry().rate_limited();
+                Ok(Action::Send(stanza_error(
+                    iq,
+                    "wait",
+                    "resource-constraint",
+                )))
+            }
+        }
+    }
+
+    pub async fn disable_push(
+        &self,
+        id: &str,
+        iq: Node<'_, '_>,
+        disable: Node<'_, '_>,
+    ) -> Result<Action> {
+        let Some(user) = &self.authenticated else {
+            return Ok(Action::Send(stanza_error(iq, "auth", "not-authorized")));
+        };
+        let own_bare = format!("{}@{}", user.username, self.host.local_domain());
+        if !northstar_xep_0357::iq_targets_own_account(iq, &own_bare) {
+            return Ok(Action::Send(stanza_error(iq, "cancel", "not-allowed")));
+        }
+        let request = match northstar_xep_0357::parse_disable(disable) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                return Ok(Action::Send(stanza_error(
+                    iq,
+                    error.stanza_error_type(),
+                    error.as_stanza_error_condition(),
+                )))
+            }
+        };
+        let service_jid = request.service_jid.to_string();
+        let node = request.node.map(northstar_xep_0357::PushNode::into_inner);
+        self.host
+            .push_service()
+            .disable(user.id, &service_jid, node.as_deref())
+            .await?;
+        Ok(Action::Send(iq_result_from(id, &own_bare, "")))
+    }
+}
+
+impl<H: SessionHost> ProtocolSession<H> {
+    pub(crate) async fn handle_push_response(
+        &self,
+        id: &str,
+        kind: &str,
+        root: Node<'_, '_>,
+    ) -> Result<bool> {
+        let Some(from) = root.attribute("from").or(self.full_jid.as_deref()) else {
+            return Ok(false);
+        };
+        handle_push_delivery_response(&*self.host, id, kind, from).await
+    }
+
+    pub async fn push_disable_message(
+        &self,
+        root: Node<'_, '_>,
+        from: &str,
+        to: &str,
+    ) -> Result<bool> {
+        handle_push_disable(&*self.host, root, from, to).await
+    }
+}
+
+/// Consume a local or federated Push Service IQ response.  PostgreSQL is the
+/// authority, so correlation remains correct across process restarts and
+/// cluster nodes.
+pub async fn handle_push_delivery_response<H: SessionHost>(
+    state: &H,
+    id: &str,
+    kind: &str,
+    from: &str,
+) -> Result<bool> {
+    if !state.xmpp_extension_enabled(northstar_xep_0357::XEP_ID) {
+        return Ok(false);
+    }
+    let Some(request_id) = id
+        .strip_prefix("push-")
+        .and_then(|id| uuid::Uuid::parse_str(id).ok())
+    else {
+        return Ok(false);
+    };
+    let Ok(sender) = northstar_xmpp_types::jid::canonical_bare_key(from) else {
+        return Ok(false);
+    };
+    let response_kind = if kind == "result" {
+        PushResponseKind::Success
+    } else if kind == "error" {
+        PushResponseKind::PermanentError
+    } else {
+        return Ok(false);
+    };
+    let outcome = state
+        .push_service()
+        .complete_response(request_id, &sender, response_kind)
+        .await?;
+    match outcome {
+        PushResponseOutcome::Unknown | PushResponseOutcome::SenderMismatch => Ok(false),
+        PushResponseOutcome::Completed => Ok(true),
+        PushResponseOutcome::SubscriptionDisabled => {
+            state.push_delivery_telemetry().failed();
+            tracing::warn!(service = %sender, "push service rejected notifications repeatedly or permanently; subscription disabled");
+            Ok(true)
+        }
+    }
+}
+
+pub async fn handle_push_disable<H: SessionHost>(
+    state: &H,
+    root: Node<'_, '_>,
+    from: &str,
+    to: &str,
+) -> Result<bool> {
+    if !state.xmpp_extension_enabled(northstar_xep_0357::XEP_ID) {
+        return Ok(false);
+    }
+    if !matches!(
+        root.attribute("type").unwrap_or("normal"),
+        "normal" | "headline"
+    ) {
+        return Ok(false);
+    }
+    let elements = root
+        .children()
+        .filter(|child| child.is_element())
+        .collect::<Vec<_>>();
+    if elements.len() != 1 {
+        return Ok(false);
+    }
+    let pubsub = elements[0];
+    if pubsub.tag_name().name() != "pubsub"
+        || pubsub.tag_name().namespace() != Some("http://jabber.org/protocol/pubsub")
+        || pubsub
+            .attributes()
+            .any(|attribute| attribute.name() != "node")
+        || pubsub.children().any(|child| {
+            !child.is_element() && child.text().is_some_and(|text| !text.trim().is_empty())
+        })
+    {
+        return Ok(false);
+    }
+    let Some(node) = pubsub
+        .attribute("node")
+        .filter(|node| northstar_xep_0357::PushNode::new((*node).to_owned()).is_ok())
+    else {
+        return Ok(false);
+    };
+    let affiliations = pubsub
+        .children()
+        .filter(|child| child.is_element())
+        .collect::<Vec<_>>();
+    if affiliations.len() != 1 {
+        return Ok(false);
+    }
+    let affiliation = affiliations[0];
+    if affiliation.tag_name().name() != "affiliation"
+        || affiliation.tag_name().namespace() != Some("http://jabber.org/protocol/pubsub")
+        || affiliation.attribute("affiliation") != Some("none")
+        || affiliation
+            .attributes()
+            .any(|attribute| !matches!(attribute.name(), "jid" | "affiliation"))
+        || affiliation.children().any(|child| {
+            child.is_element() || child.text().is_some_and(|text| !text.trim().is_empty())
+        })
+    {
+        return Ok(false);
+    }
+    let Ok(target) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(to) else {
+        return Ok(false);
+    };
+    let target = target.bare();
+    if affiliation.attribute("jid").is_none_or(|jid| {
+        !northstar_xmpp_types::jid::canonical_bare_key(jid).is_ok_and(|jid| jid == target)
+    }) {
+        return Ok(false);
+    }
+    let target_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&target)?;
+    if target_jid.domainpart() != state.local_domain() {
+        return Ok(false);
+    }
+    let Some(target_username) = target_jid.localpart() else {
+        return Ok(false);
+    };
+    let service = northstar_xmpp_types::jid::canonical_bare_key(from)?;
+    if !state
+        .push_service()
+        .disable_from_service(target_username, &service, node)
+        .await?
+    {
+        return Ok(false);
+    }
+    tracing::info!(%service, user = %target, %node, "push subscription disabled by service");
+    Ok(true)
+}
+
+fn valid_empty_register_query(query: Node<'_, '_>) -> bool {
+    query.tag_name().name() == "query"
+        && query.tag_name().namespace() == Some("jabber:iq:register")
+        && query.attributes().len() == 0
+        && !query.children().any(|child| child.is_element())
+        && query.text().is_none_or(|text| text.trim().is_empty())
+}
+
+/// XEP-0077 section 9 requires both the legacy HTTP-style code and the
+/// RFC 6120 stanza condition. Keep this compatibility surface scoped to
+/// `jabber:iq:register` instead of reintroducing deprecated codes globally.
+fn iq_registration_error(id: &str, condition: &str) -> String {
+    let code = match condition {
+        "bad-request" | "jid-malformed" | "unexpected-request" => 400,
+        "not-authorized" => 401,
+        "forbidden" => 403,
+        "item-not-found" | "recipient-unavailable" => 404,
+        "not-allowed" => 405,
+        "not-acceptable" => 406,
+        "registration-required" | "subscription-required" => 407,
+        "conflict" => 409,
+        "remote-server-timeout" => 504,
+        "service-unavailable" => 503,
+        _ => 500,
+    };
+    let error_type = stanza_error_type(condition);
+    let condition = XmlElement::dynamic(condition)
+        .unwrap_or_else(|_| XmlElement::new("undefined-condition"))
+        .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-stanzas");
+    XmlElement::namespaced("iq", "jabber:client")
+        .attr("type", "error")
+        .attr("id", id)
+        .child(
+            XmlElement::new("error")
+                .attr("code", code)
+                .attr("type", error_type)
+                .child(condition),
+        )
+        .finish()
+}
+
+pub(crate) fn registration_retry_seconds(requirement: &WorkRequirement) -> u64 {
+    requirement
+        .cooldown_seconds
+        .max(requirement.hard_wait_seconds)
+        .max(requirement.retry_after_seconds)
+        .max(1)
+}
+
+fn iq_registration_abuse_error(
+    id: &str,
+    requirement: &WorkRequirement,
+    challenge: Option<&PowChallenge>,
+) -> String {
+    let mut pow = XmlElement::namespaced("pow-required", "urn:northstar:pow:2")
+        .attr("version", 2)
+        .attr("step", requirement.step)
+        .attr("work-factor", requirement.work_factor)
+        .attr("max-work-factor", requirement.max_work_factor)
+        .attr(
+            "retry-after",
+            requirement
+                .hard_wait_seconds
+                .max(requirement.retry_after_seconds),
+        )
+        .attr("cooldown", requirement.cooldown_seconds)
+        .attr(
+            "max-device-seconds",
+            requirement.approximate_max_device_seconds,
+        );
+    if let Some(challenge) = challenge {
+        pow = pow
+            .attr("challenge", challenge.challenge_id)
+            .attr("prefix", challenge.prefix.clone())
+            .attr("key-id", challenge.key_id.clone())
+            .attr("issued-at", challenge.issued_at.to_rfc3339())
+            .attr("expires-at", challenge.expires_at.to_rfc3339())
+            .attr("expires-in", challenge.expires_in_seconds)
+            .attr("server-nonce", challenge.server_nonce.clone());
+        if let Some(intent) = challenge.intent.as_ref() {
+            pow = pow
+                .attr("intent-method", intent.method.clone())
+                .attr("intent-path", intent.path.clone())
+                .attr("intent-body-sha256", intent.body_sha256.clone());
+        }
+    }
+    let mut error = XmlElement::new("error")
+        .attr("code", "500")
+        .attr("type", "wait")
+        .child(XmlElement::namespaced(
+            "resource-constraint",
+            "urn:ietf:params:xml:ns:xmpp-stanzas",
+        ))
+        .child(
+            XmlElement::namespaced("text", "urn:ietf:params:xml:ns:xmpp-stanzas")
+                .attr("xml:lang", "en")
+                .text(format!(
+                    "Too many requests. Wait at least {} seconds before trying again.",
+                    registration_retry_seconds(requirement)
+                )),
+        );
+    if challenge.is_some() {
+        error.push_child(pow);
+    }
+    XmlElement::namespaced("iq", "jabber:client")
+        .attr("type", "error")
+        .attr("id", id)
+        .child(error)
+        .finish()
+}
+
+pub(crate) fn parse_legacy_register(
+    query: Node<'_, '_>,
+) -> std::result::Result<(String, String), ()> {
+    if query.tag_name().name() != "query"
+        || query.tag_name().namespace() != Some("jabber:iq:register")
+        || query.attributes().len() != 0
+        || query.children().any(|child| {
+            !child.is_element() && child.text().is_some_and(|text| !text.trim().is_empty())
+        })
+    {
+        return Err(());
+    }
+    let mut username = String::new();
+    let mut password = String::new();
+    let mut username_count = 0;
+    let mut password_count = 0;
+    for child in query.children().filter(|n| n.is_element()) {
+        if child.tag_name().namespace() != Some("jabber:iq:register")
+            || child.attributes().len() != 0
+            || child.children().any(|nested| nested.is_element())
+        {
+            return Err(());
+        }
+        let value = child
+            .children()
+            .filter_map(|node| node.text())
+            .collect::<String>();
+        if value.len() > 4_096 {
+            return Err(());
+        }
+        match child.tag_name().name() {
+            "username" => {
+                username_count += 1;
+                username = value;
+            }
+            "password" => {
+                password_count += 1;
+                password = value;
+            }
+            _ => return Err(()),
+        }
+    }
+    if username_count != 1 || password_count != 1 {
+        return Err(());
+    }
+    Ok((username, password))
+}
+
+fn parse_password_change(
+    query: Node<'_, '_>,
+    default_username: &str,
+) -> std::result::Result<(String, String, Option<PowProof>), ()> {
+    if query.tag_name().name() != "query"
+        || query.tag_name().namespace() != Some("jabber:iq:register")
+        || query.attributes().len() != 0
+        || query.children().any(|child| {
+            !child.is_element() && child.text().is_some_and(|text| !text.trim().is_empty())
+        })
+    {
+        return Err(());
+    }
+    let mut username = None;
+    let mut password = None;
+    let mut proof = None;
+    for child in query.children().filter(|child| child.is_element()) {
+        if child.tag_name().name() == "pow"
+            && child.tag_name().namespace() == Some("urn:northstar:pow:1")
+        {
+            if proof.is_some()
+                || child.attributes().any(|attribute| {
+                    attribute.namespace().is_some()
+                        || !matches!(attribute.name(), "challenge" | "nonce")
+                })
+                || child.children().any(|nested| {
+                    nested.is_element() || nested.text().is_some_and(|text| !text.trim().is_empty())
+                })
+            {
+                return Err(());
+            }
+            proof = Some(PowProof {
+                challenge_id: child
+                    .attribute("challenge")
+                    .ok_or(())?
+                    .parse()
+                    .map_err(|_| ())?,
+                nonce: child.attribute("nonce").ok_or(())?.to_owned(),
+            });
+            continue;
+        }
+        if child.tag_name().namespace() != Some("jabber:iq:register")
+            || child.attributes().len() != 0
+            || child.children().any(|nested| nested.is_element())
+        {
+            return Err(());
+        }
+        let value = child
+            .children()
+            .filter_map(|node| node.text())
+            .collect::<String>();
+        if value.len() > 4_096 {
+            return Err(());
+        }
+        match child.tag_name().name() {
+            "username" if username.is_none() => username = Some(value),
+            "password" if password.is_none() => password = Some(value),
+            _ => return Err(()),
+        }
+    }
+    Ok((
+        username.unwrap_or_else(|| default_username.to_owned()),
+        password.ok_or(())?,
+        proof,
+    ))
+}
+
+fn parse_account_remove(query: Node<'_, '_>) -> std::result::Result<Option<PowProof>, ()> {
+    if query.tag_name().name() != "query"
+        || query.tag_name().namespace() != Some("jabber:iq:register")
+        || query.attributes().len() != 0
+        || query.children().any(|child| {
+            !child.is_element() && child.text().is_some_and(|text| !text.trim().is_empty())
+        })
+    {
+        return Err(());
+    }
+    let mut remove_seen = false;
+    let mut proof = None;
+    for child in query.children().filter(|child| child.is_element()) {
+        if child.tag_name().name() == "remove"
+            && child.tag_name().namespace() == Some("jabber:iq:register")
+        {
+            if remove_seen
+                || child.attributes().len() != 0
+                || child.children().any(|nested| nested.is_element())
+                || child.text().is_some_and(|text| !text.trim().is_empty())
+            {
+                return Err(());
+            }
+            remove_seen = true;
+            continue;
+        }
+        if child.tag_name().name() == "pow"
+            && child.tag_name().namespace() == Some("urn:northstar:pow:1")
+        {
+            if proof.is_some()
+                || child.attributes().any(|attribute| {
+                    attribute.namespace().is_some()
+                        || !matches!(attribute.name(), "challenge" | "nonce")
+                })
+                || child.children().any(|nested| {
+                    nested.is_element() || nested.text().is_some_and(|text| !text.trim().is_empty())
+                })
+            {
+                return Err(());
+            }
+            proof = Some(PowProof {
+                challenge_id: child
+                    .attribute("challenge")
+                    .ok_or(())?
+                    .parse()
+                    .map_err(|_| ())?,
+                nonce: child.attribute("nonce").ok_or(())?.to_owned(),
+            });
+            continue;
+        }
+        return Err(());
+    }
+    if !remove_seen {
+        return Err(());
+    }
+    Ok(proof)
+}
+
+#[cfg(test)]
+mod legacy_tests;

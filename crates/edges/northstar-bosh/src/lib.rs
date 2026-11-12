@@ -14,6 +14,7 @@
 mod action;
 pub mod host;
 mod ownership;
+mod protocol_session;
 mod response_owner;
 pub use ownership::RecordPort;
 #[cfg(any(test, feature = "test-support"))]
@@ -1411,5 +1412,7 @@ fn apply_cors(headers: &mut HeaderMap) {
     );
 }
 
+#[cfg(test)]
+mod sm_record_tests;
 #[cfg(test)]
 mod tests;

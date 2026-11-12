@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
+northstar-stream = { path = "../../../edges/northstar-stream" }
 northstar-upload-application = { path = "../northstar-upload-application" }
 northstar-xep-0363 = { path = "../../../kernel/northstar-xep-0363" }
 northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }

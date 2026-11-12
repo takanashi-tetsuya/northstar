@@ -26,7 +26,7 @@ function fixture(run) {
   };
   const roleSplits = (children) => write('catalog/source-role-splits.json', JSON.stringify({
     schema: 'northstar-source-role-splits-v1',
-    files: { 'src/xmpp/protocol.rs': children },
+    files: { 'crates/edges/northstar-stream/src/protocol.rs': children },
   }));
   try {
     for (const script of [gate, 'scripts/lib/source-module.mjs']) {
@@ -93,17 +93,17 @@ test('MIX keeps existing child modules and their descendants outside its zero bu
 
 test('file-scoped entries check listed role children at their real file and line', () => {
   fixture(({ write, append, roleSplits, check }) => {
-    append('src/xmpp/protocol.rs', 'mod zz_probe;\n');
-    write('src/xmpp/protocol/zz_probe.rs', `\n\n${rawXml}`);
+    append('crates/edges/northstar-stream/src/protocol.rs', 'mod zz_probe;\n');
+    write('crates/edges/northstar-stream/src/protocol/zz_probe.rs', `\n\n${rawXml}`);
     roleSplits(['zz_probe']);
-    rejects(check(), 'src/xmpp/protocol/zz_probe.rs', 3);
+    rejects(check(), 'crates/edges/northstar-stream/src/protocol/zz_probe.rs', 3);
   });
 });
 
 test('file-scoped entries leave independently owned siblings outside their budget', () => {
   fixture(({ write, append, check }) => {
-    append('src/xmpp/protocol.rs', 'mod zz_probe;\n');
-    write('src/xmpp/protocol/zz_probe.rs', rawXml);
+    append('crates/edges/northstar-stream/src/protocol.rs', 'mod zz_probe;\n');
+    write('crates/edges/northstar-stream/src/protocol/zz_probe.rs', rawXml);
     passes(check());
   });
 });
@@ -112,7 +112,7 @@ for (const entry of [
   'crates/contexts/message/northstar-message-core/src/validation.rs',
   'crates/contexts/operations/northstar-operations-xmpp/src/commands.rs',
   'src/xmpp/protocol/presence.rs',
-  'src/xmpp/protocol/sasl2.rs',
+  'crates/edges/northstar-stream/src/protocol/sasl2.rs',
   'crates/contexts/message/northstar-message-xmpp/src/messaging.rs',
   'src/xmpp/protocol/pubsub.rs',
   'src/xmpp/protocol/pep.rs',
@@ -142,10 +142,10 @@ test('MIX excludes a cfg(test) bodyless child module', () => {
 test('the SASL2 parser literal exemption remains specific to its original file', () => {
   fixture(({ write, append, check }) => {
     const parserLiteral = '\n'.repeat(23) + 'fn parser_input() { let closing = "</stream:stream>"; }\n';
-    write('src/xmpp/protocol/sasl2.rs', parserLiteral);
+    write('crates/edges/northstar-stream/src/protocol/sasl2.rs', parserLiteral);
     passes(check());
-    append('src/xmpp/protocol/sasl2.rs', 'mod zz_probe;\n');
-    write('src/xmpp/protocol/sasl2/zz_probe.rs', parserLiteral);
-    rejects(check(), 'src/xmpp/protocol/sasl2/zz_probe.rs', 24);
+    append('crates/edges/northstar-stream/src/protocol/sasl2.rs', 'mod zz_probe;\n');
+    write('crates/edges/northstar-stream/src/protocol/sasl2/zz_probe.rs', parserLiteral);
+    rejects(check(), 'crates/edges/northstar-stream/src/protocol/sasl2/zz_probe.rs', 24);
   });
 });

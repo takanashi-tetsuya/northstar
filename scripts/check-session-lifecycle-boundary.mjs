@@ -35,12 +35,12 @@ function verifyMucSmAssociationBoundary(source) {
   );
 }
 
-const protocol = readRoleSplitFile("src/xmpp/protocol.rs");
-const protocolTests = read("src/xmpp/protocol/legacy_sasl_wire_tests.rs");
+const protocol = readRoleSplitFile("crates/edges/northstar-stream/src/protocol.rs");
+const protocolTests = read("crates/edges/northstar-stream/src/protocol/legacy_sasl_wire_tests.rs");
 const transport = read("crates/edges/northstar-c2s/src/lib.rs");
 const bosh = readRoleSplitFile("crates/edges/northstar-bosh/src/lib.rs");
 const replay = read("crates/contexts/session/northstar-session-application/src/replay.rs");
-const sasl2 = readProductionModule("src/xmpp/protocol/sasl2.rs");
+const sasl2 = readProductionModule("crates/edges/northstar-stream/src/protocol/sasl2.rs");
 const state = readProductionModule("src/state.rs"); // whole production module
 
 verifyMucSmAssociationBoundary(state);

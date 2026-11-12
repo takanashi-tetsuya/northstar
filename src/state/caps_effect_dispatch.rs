@@ -513,3 +513,44 @@ fn caps_disco_request(domain: &str, full_jid: &str, id: &str, node: &str, versio
         )
         .finish()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dispatcher_drop_rearms_claimed_effects_and_requests_rescan() {
+        let observations = CapsResourceIndex::with_limits(4, 4);
+        let dispatcher = CapsEffectDispatcher::with_limits(1, 1);
+        let resource = "alice@remote.test/Phone";
+        observations
+            .observe_federated(
+                resource.to_owned(),
+                uuid::Uuid::new_v4(),
+                "remote.test".to_owned(),
+                None,
+                None,
+                Instant::now(),
+            )
+            .unwrap();
+        let claimed = observations
+            .claim_effects(resource, Instant::now())
+            .unwrap();
+        assert!(observations
+            .claim_effects(resource, Instant::now())
+            .is_none());
+        assert!(!dispatcher.begin_rescan());
+
+        drop(CapsEffectRunGuard {
+            observations: &observations,
+            dispatcher: dispatcher.as_ref(),
+        });
+
+        assert!(dispatcher.begin_rescan());
+        let retry = observations
+            .claim_effects(resource, Instant::now())
+            .unwrap();
+        assert_eq!(retry.owner, claimed.owner);
+        assert_eq!(retry.effects, claimed.effects);
+    }
+}

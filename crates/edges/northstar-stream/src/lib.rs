@@ -13,6 +13,7 @@ pub mod iq;
 pub mod local_routes;
 pub mod muc_delivery;
 pub mod outbound;
+pub mod protocol;
 pub mod replay;
 pub mod resume;
 pub mod session;

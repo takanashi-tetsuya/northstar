@@ -2581,6 +2581,14 @@
     ],
     [
       "northstar-archive-xmpp",
+      "northstar-room-core"
+    ],
+    [
+      "northstar-archive-xmpp",
+      "northstar-stream"
+    ],
+    [
+      "northstar-archive-xmpp",
       "northstar-xep-0313"
     ],
     [
@@ -4405,6 +4413,10 @@
     ],
     [
       "northstar-operations-xmpp",
+      "northstar-stream"
+    ],
+    [
+      "northstar-operations-xmpp",
       "northstar-xml-builder"
     ],
     [
@@ -4622,6 +4634,10 @@
     [
       "northstar-pubsub-xmpp",
       "northstar-pubsub-core"
+    ],
+    [
+      "northstar-pubsub-xmpp",
+      "northstar-stream"
     ],
     [
       "northstar-pubsub-xmpp",
@@ -5005,6 +5021,10 @@
     ],
     [
       "northstar-roster-xmpp",
+      "northstar-federation-core"
+    ],
+    [
+      "northstar-roster-xmpp",
       "northstar-presence-core"
     ],
     [
@@ -5014,6 +5034,10 @@
     [
       "northstar-roster-xmpp",
       "northstar-roster-core"
+    ],
+    [
+      "northstar-roster-xmpp",
+      "northstar-stream"
     ],
     [
       "northstar-roster-xmpp",
@@ -5485,6 +5509,10 @@
     ],
     [
       "northstar-stream",
+      "base64"
+    ],
+    [
+      "northstar-stream",
       "chrono"
     ],
     [
@@ -5497,6 +5525,10 @@
     ],
     [
       "northstar-stream",
+      "northstar-abuse-application"
+    ],
+    [
+      "northstar-stream",
       "northstar-abuse-policy"
     ],
     [
@@ -5506,6 +5538,10 @@
     [
       "northstar-stream",
       "northstar-auth-core"
+    ],
+    [
+      "northstar-stream",
+      "northstar-auth-xmpp"
     ],
     [
       "northstar-stream",
@@ -5525,6 +5561,18 @@
     ],
     [
       "northstar-stream",
+      "northstar-presence-core"
+    ],
+    [
+      "northstar-stream",
+      "northstar-protocol-runtime"
+    ],
+    [
+      "northstar-stream",
+      "northstar-pubsub-application"
+    ],
+    [
+      "northstar-stream",
       "northstar-room-application"
     ],
     [
@@ -5533,11 +5581,19 @@
     ],
     [
       "northstar-stream",
+      "northstar-roster-application"
+    ],
+    [
+      "northstar-stream",
       "northstar-roster-core"
     ],
     [
       "northstar-stream",
       "northstar-runtime"
+    ],
+    [
+      "northstar-stream",
+      "northstar-security"
     ],
     [
       "northstar-stream",
@@ -5553,7 +5609,47 @@
     ],
     [
       "northstar-stream",
+      "northstar-telemetry"
+    ],
+    [
+      "northstar-stream",
       "northstar-xep-0016"
+    ],
+    [
+      "northstar-stream",
+      "northstar-xep-0045"
+    ],
+    [
+      "northstar-stream",
+      "northstar-xep-0060"
+    ],
+    [
+      "northstar-stream",
+      "northstar-xep-0115"
+    ],
+    [
+      "northstar-stream",
+      "northstar-xep-0198"
+    ],
+    [
+      "northstar-stream",
+      "northstar-xep-0199"
+    ],
+    [
+      "northstar-stream",
+      "northstar-xep-0280"
+    ],
+    [
+      "northstar-stream",
+      "northstar-xep-0352"
+    ],
+    [
+      "northstar-stream",
+      "northstar-xep-0357"
+    ],
+    [
+      "northstar-stream",
+      "northstar-xep-core"
     ],
     [
       "northstar-stream",
@@ -5870,6 +5966,10 @@
     [
       "northstar-upload-xmpp",
       "anyhow"
+    ],
+    [
+      "northstar-upload-xmpp",
+      "northstar-stream"
     ],
     [
       "northstar-upload-xmpp",

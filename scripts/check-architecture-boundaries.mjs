@@ -939,19 +939,48 @@ if (
   throw new Error('AppState exposes a runtime secret/token/credential capability as a field');
 }
 
-const protocolDirectory = path.join(root, 'src', 'xmpp', 'protocol');
-const protocolFiles = fs
-  .readdirSync(protocolDirectory)
-  .filter((name) => name.endsWith('.rs'))
-  .sort();
+// The context ports' impls for the session moved to the contexts' -xmpp crates. Each protocol_session.rs holds
+// one "// From src/xmpp/protocol/<module>.rs." section per root module it came from; a root glue module is read
+// together with its sections.
+const sessionImplSections = new Map();
+const contextsDirectory = path.join(root, 'crates', 'contexts');
+for (const context of fs.readdirSync(contextsDirectory, { withFileTypes: true }).filter((entry) => entry.isDirectory())) {
+  const contextDirectory = path.join(contextsDirectory, context.name);
+  for (const crate of fs.readdirSync(contextDirectory, { withFileTypes: true }).filter((entry) => entry.isDirectory())) {
+    const file = path.join(contextDirectory, crate.name, 'src', 'protocol_session.rs');
+    if (!fs.existsSync(file)) continue;
+    const parts = fs.readFileSync(file, 'utf8').split(/^\/\/ From src\/xmpp\/protocol\/([\w/]+)\.rs\.$/m);
+    for (let index = 1; index < parts.length; index += 2) {
+      const name = `${parts[index].split('/')[0]}.rs`;
+      sessionImplSections.set(name, `${sessionImplSections.get(name) ?? ''}\n${parts[index + 1]}`);
+    }
+  }
+}
+function withSessionImpls(name, source) {
+  return `${source}\n${sessionImplSections.get(name) ?? ''}`;
+}
+
+// The root's glue modules and northstar-stream's session modules; no module name is in both.
+const protocolModulePaths = new Map(
+  ['src/xmpp/protocol', 'crates/edges/northstar-stream/src/protocol'].flatMap((directory) =>
+    fs
+      .readdirSync(path.join(root, directory))
+      .filter((name) => name.endsWith('.rs'))
+      .map((name) => [name, `${directory}/${name}`]),
+  ),
+);
+const protocolFiles = [...protocolModulePaths.keys()].sort();
 
 // Preserve single-file reads for unrelated modules in the mixed inventories below.
 const productionProtocolModules = new Set([
   'pep.rs', 'pubsub.rs', 'messaging.rs', 'commands.rs', 'presence.rs', 'sasl2.rs',
 ]);
 function readProtocolSource(name) {
-  const relative = `src/xmpp/protocol/${name}`;
-  return productionProtocolModules.has(name) ? readProductionModule(relative, { root }) : read(relative);
+  const relative = protocolModulePaths.get(name);
+  return withSessionImpls(
+    name,
+    productionProtocolModules.has(name) ? readProductionModule(relative, { root }) : read(relative),
+  );
 }
 
 let protocolDbAuthorityReferences = 0;
@@ -963,7 +992,7 @@ const perFile = [];
 for (const name of protocolFiles) {
   // Each top-level protocol module is read with its non-test child files, so
   // code moved into `protocol/<name>/` keeps being counted.
-  const source = readProductionModule(`src/xmpp/protocol/${name}`, { root });
+  const source = withSessionImpls(name, readProductionModule(protocolModulePaths.get(name), { root }));
   const productionSource = productionWithoutCfgTestModules(source, `${name} production`);
   const { authorityReferences, domainReferences } = classifyDbDependencies(
     productionSource,
@@ -1783,14 +1812,14 @@ if (discoveryDbDomainReferences > MAX_DISCOVERY_DB_DOMAIN_REFERENCES) {
 for (const [name, serviceAccessor, source] of [
   ['pubsub.rs', 'pubsub_application_service',
     readProductionModule('crates/contexts/pubsub/northstar-pubsub-xmpp/src/pubsub.rs', { root })],
-  ['pep.rs', 'pubsub_application_service', readProductionModule('src/xmpp/protocol/pep.rs', { root })],
+  ['pep.rs', 'pubsub_application_service', withSessionImpls('pep.rs', readProductionModule('src/xmpp/protocol/pep.rs', { root }))],
   ['mix.rs', 'mix_service', readProductionModule('crates/contexts/room/northstar-mix-xmpp/src/lib.rs', { root })],
-  ['mam.rs', 'mam_service', readProductionModule('src/xmpp/protocol/mam.rs', { root })],
-  ['privacy.rs', 'privacy_service', readProductionModule('src/xmpp/protocol/privacy.rs', { root })],
-  ['private.rs', 'private_storage_service', readProductionModule('src/xmpp/protocol/private.rs', { root })],
+  ['mam.rs', 'mam_service', withSessionImpls('mam.rs', readProductionModule('src/xmpp/protocol/mam.rs', { root }))],
+  ['privacy.rs', 'privacy_service', withSessionImpls('privacy.rs', readProductionModule('src/xmpp/protocol/privacy.rs', { root }))],
+  ['private.rs', 'private_storage_service', withSessionImpls('private.rs', readProductionModule('src/xmpp/protocol/private.rs', { root }))],
   ['replay.rs', 'replay_service', readProductionModule('crates/edges/northstar-stream/src/replay.rs', { root })],
-  ['roster.rs', 'roster_service', readProductionModule('src/xmpp/protocol/roster.rs', { root })],
-  ['vcard.rs', 'profile_service', readProductionModule('src/xmpp/protocol/vcard.rs', { root })],
+  ['roster.rs', 'roster_service', withSessionImpls('roster.rs', readProductionModule('src/xmpp/protocol/roster.rs', { root }))],
+  ['vcard.rs', 'profile_service', withSessionImpls('vcard.rs', readProductionModule('src/xmpp/protocol/vcard.rs', { root }))],
 ]) {
   const dependency = classifyDbDependencies(source, name);
   if (dependency.authorityReferences !== 0) {
@@ -1934,7 +1963,7 @@ for (const invariant of ['ReplayStartOutcome', 'ReplayStartOutcome::BusyUntil'])
 if (!replayProtocolSource.includes('REPLAY_RECOVERY_DEADLINE')) {
   throw new Error('offline replay busy retry lost its bounded recovery deadline');
 }
-const sasl2Source = readProductionModule('src/xmpp/protocol/sasl2.rs', { root });
+const sasl2Source = readProductionModule('crates/edges/northstar-stream/src/protocol/sasl2.rs', { root });
 for (const forbidden of [
   'deliver_bind2_offline',
   'deliver_offline_leased',
@@ -1944,7 +1973,7 @@ for (const forbidden of [
     throw new Error(`sasl2.rs bypasses ReplayService via ${forbidden}`);
   }
 }
-if (!/northstar_stream\s*::\s*replay\s*::\s*replay_bind2_offline\s*\(/.test(sasl2Source)) {
+if (!/crate\s*::\s*replay\s*::\s*replay_bind2_offline\s*\(/.test(sasl2Source)) {
   throw new Error('SASL2 Bind 2 no longer delegates offline reconciliation to ReplayService');
 }
 
@@ -1994,7 +2023,7 @@ for (const forbidden of [
 if (/AuthenticationResult\s*<\s*(?:crate::)?(?:db|northstar_auth_postgres::users)::User\s*>/.test(authenticationServiceSource)) {
   throw new Error('AuthenticationService must never return the credential-bearing db::User DTO');
 }
-const legacyAuthProtocolSource = readRoleSplitFile('src/xmpp/protocol.rs', { root });
+const legacyAuthProtocolSource = readRoleSplitFile('crates/edges/northstar-stream/src/protocol.rs', { root });
 const protocolSessionBody = structBody(legacyAuthProtocolSource, 'pub struct ProtocolSession');
 if (!/^\s*host\s*:\s*Arc<H>\s*,?\s*$/m.test(protocolSessionBody)) {
   throw new Error('ProtocolSession must keep its host private to its protocol implementation');
@@ -2009,7 +2038,7 @@ if (/\b(?:AppState|Arc)\b/.test(smRuntimePolicyBody)
 }
 for (const [name, source] of [
   ['protocol.rs', legacyAuthProtocolSource],
-  ['protocol/sm.rs', read('src/xmpp/protocol/sm.rs')],
+  ['protocol/sm.rs', read('crates/edges/northstar-stream/src/protocol/sm.rs')],
 ]) {
   if (/\bself\s*\.\s*state\s*\.\s*(?:sm_session_policy|sm_buffer_limits|sm_ip_binding)\s*\(/.test(source)) {
     throw new Error(`${name} reads SM safety configuration through global state after construction`);
@@ -2055,7 +2084,7 @@ for (const connection of [
     throw new Error(`${connection} retains its host after opening the protocol session`);
   }
 }
-if (/\bself\s*\.\s*state\b/.test(read('src/xmpp/protocol/direct_write.rs'))) {
+if (/\bself\s*\.\s*state\b/.test(read('crates/edges/northstar-c2s/src/protocol_session.rs'))) {
   throw new Error('the session\'s direct write port traverses ProtocolSession into global state');
 }
 if (!/authenticated\s*:\s*\r?\n?\s*Option<northstar_auth_application::authentication::AuthenticatedAccount>/.test(legacyAuthProtocolSource)) {
@@ -2686,7 +2715,7 @@ for (const accessor of ['mix_service', 'muc_service', 'pubsub_service']) {
 // ARCH-SVC account/push boundary: resource binding remains a deliberately
 // separate stateful session transaction, but XEP-0077 and XEP-0357 handlers
 // must not regain direct persistence authority.
-const miscSource = read('src/xmpp/protocol/misc.rs');
+const miscSource = read('crates/edges/northstar-stream/src/protocol/misc.rs');
 for (const authority of [
   'prepare_registration',
   'create_user_with_invitation_guarded_in_tx',
@@ -2728,7 +2757,7 @@ if (!/acquire_idempotency_in_tx[\s\S]+reservation\.commit\(\)[\s\S]+verify_regis
 // in-memory routes only while no PostgreSQL authorization transaction exists.
 // Exact auth-generation, capacity/claim, FAST and privacy authority belongs to
 // SmService's short phase-one/phase-two transactions.
-const smProtocolSource = read('src/xmpp/protocol/sm.rs');
+const smProtocolSource = read('crates/edges/northstar-stream/src/protocol/sm.rs');
 const smProductionSource = productionWithoutCfgTestModules(
   smProtocolSource,
   'sm.rs production',
@@ -3065,7 +3094,7 @@ if (/\bapi_control\b|ApiControlKeyring/.test(contentGenerationBody)) {
 }
 // The abuse context owns the purpose selector; its callers must not name it.
 const sourceFilesNamingContentPurpose = [];
-for (const directory of ['src/xmpp/protocol', 'src/db', 'crates/contexts']) {
+for (const directory of ['src/xmpp/protocol', 'crates/edges/northstar-stream/src/protocol', 'src/db', 'crates/contexts']) {
   const pending = [path.join(root, directory)];
   while (pending.length > 0) {
     const current = pending.pop();
@@ -3231,7 +3260,7 @@ if (/Deliver\s*\(\s*(?:db|northstar_auth_postgres::users)::User\s*\)/.test(messa
 // waiter cancellation remove the registry entry without a background sweep.
 const capsProtocolSource =
   read('crates/contexts/session/northstar-protocol-runtime/src/caps.rs') +
-  read('src/xmpp/protocol/caps.rs') +
+  read('crates/edges/northstar-stream/src/protocol/caps.rs') +
   read('src/state/caps_effect_dispatch.rs');
 const s2sInboundSource = readProductionModule('src/s2s/inbound.rs', { root })
   + readProductionModule('crates/edges/northstar-s2s/src/inbound.rs', { root });
@@ -3263,7 +3292,7 @@ for (const invariant of [
   '.remove_federated_resource_if_connection(&full_jid, connection_id)',
   '.current_owner(&pending.full_jid, pending.owner)',
   '.mark_verified(&resource, pending.owner, &pending.key, id, summary)',
-  'pub(crate) async fn federated_caps_connection_closed',
+  'pub async fn federated_caps_connection_closed',
 ]) {
   if (!capsProtocolSource.includes(invariant)) {
     throw new Error(`federated Caps lifecycle lost cancellation-safe invariant: ${invariant}`);
@@ -3330,7 +3359,7 @@ if (countMatches(capsProtocolSource, /self\.entries\.insert\(\s*full_jid,/g) < 2
 }
 const commitCapsObservationWrapper = structBody(
   capsProtocolSource,
-  'pub(crate) fn commit_caps_observation(',
+  'pub fn commit_caps_observation(',
 );
 if (
   commitCapsObservationWrapper.replace(/\s+/g, '').replace(/,\)/g, ')') !==
@@ -3693,7 +3722,7 @@ if (!uploadSource.includes('State(state): State<UploadHttpReadContext<R>>')
     || !read('src/state/http_host.rs').includes('admission: self.upload.runtime.download_admission().cloned()')) {
   throw new Error('public upload GET must retain shared download admission and guarded read authority');
 }
-const capsEffectSource = read('src/xmpp/protocol/caps.rs');
+const capsEffectSource = read('crates/edges/northstar-stream/src/protocol/caps.rs');
 const capsDispatchSource = read('src/state/caps_effect_dispatch.rs');
 const capsDispatchWorker = capsDispatchSource.slice(capsDispatchSource.indexOf('pub(crate) struct CapsEffectRunGuard'));
 if (/\bstate\.metrics\b|\bself\.(?:state|host)\.metrics\b|&(?:(?:northstar_telemetry::)?metrics::)?Metrics\b/.test(capsEffectSource)
@@ -3910,8 +3939,8 @@ if (!mainSource.includes('state.account_revocation_worker_context()')
   throw new Error('account revocation worker must use a narrow live-identity and fail-closed route context');
 }
 const c2sTelemetry = read('crates/contexts/session/northstar-session-application/src/telemetry.rs');
-const c2sProtocol = readRoleSplitFile('src/xmpp/protocol.rs', { root });
-const c2sDispatch = read('src/xmpp/protocol/dispatch.rs');
+const c2sProtocol = readRoleSplitFile('crates/edges/northstar-stream/src/protocol.rs', { root });
+const c2sDispatch = read('crates/edges/northstar-stream/src/protocol/dispatch.rs');
 if (!read('crates/contexts/session/northstar-session-application/src/post_actions.rs')
       .includes('struct PostActionTelemetry')
     || !c2sTelemetry.includes('struct InboundStanzaTelemetry')
@@ -3936,10 +3965,10 @@ if (!read('crates/contexts/session/northstar-session-application/src/post_action
     || /self\.(?:state|host)\.metrics\b/.test(c2sDispatch)
     || ['privacy.rs', 'blocking.rs', 'roster.rs'].some((name) =>
       /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read(`src/xmpp/protocol/${name}`)))
-    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/ibr.rs'))
-    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/misc.rs'))
-    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/sm.rs'))
-    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(readProductionModule('src/xmpp/protocol/sasl2.rs', { root }))
+    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('crates/edges/northstar-stream/src/protocol/ibr.rs'))
+    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('crates/edges/northstar-stream/src/protocol/misc.rs'))
+    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('crates/edges/northstar-stream/src/protocol/sm.rs'))
+    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(readProductionModule('crates/edges/northstar-stream/src/protocol/sasl2.rs', { root }))
     || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(c2sProtocol)
     || /(?:self\.)?(?:state|host)\.metrics\b/.test(readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs', { root }))
     || /(?:self\.)?(?:state|host)\.metrics\b/.test(federatedMucSource)) {

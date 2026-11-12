@@ -154,38 +154,44 @@ impl DiscoveryHandlers for ClientSession {
         to: Option<&str>,
         request: roxmltree::Node<'_, '_>,
     ) -> Result<Action> {
-        let requested_from = to.unwrap_or(self.host.local_domain());
+        let requested_from = to.unwrap_or(self.host().local_domain());
         let Ok(target) = northstar_xmpp_types::jid::CanonicalJid::parse(requested_from) else {
             return Ok(Action::Send(iq_error(id, "jid-malformed")));
         };
         let from = target.to_string();
         let from = from.as_str();
-        let pubsub_domain = self.host.pubsub_domain();
+        let pubsub_domain = self.host().pubsub_domain();
         let is_pubsub_service = target.localpart().is_none()
             && target.resourcepart().is_none()
             && target.domainpart() == pubsub_domain;
-        if is_pubsub_service && !self.host.xmpp_extension_enabled(northstar_xep_0060::XEP_ID) {
+        if is_pubsub_service
+            && !self
+                .host()
+                .xmpp_extension_enabled(northstar_xep_0060::XEP_ID)
+        {
             return Ok(Action::Send(iq_error_from(id, from, "service-unavailable")));
         }
         if !is_pubsub_service && !valid_disco_query(request) {
             return Ok(Action::Send(iq_error_from(id, from, "bad-request")));
         }
-        let muc_domain = self.host.muc_domain();
+        let muc_domain = self.host().muc_domain();
         if target.domainpart() == muc_domain
-            && !self.host.xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
+            && !self
+                .host()
+                .xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
         {
             return Ok(Action::Send(iq_error_from(id, from, "service-unavailable")));
         }
-        let upload_domain = self.host.upload_domain();
-        let mix_domain = self.host.mix_domain();
-        let mirror_enabled = self.host.mix_muc_mirror_enabled();
+        let upload_domain = self.host().upload_domain();
+        let mix_domain = self.host().mix_domain();
+        let mirror_enabled = self.host().mix_muc_mirror_enabled();
         if target.localpart().is_none() && target.domainpart() == mix_domain {
             if request.attribute("node").is_some() {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
             let linked = mirror_enabled
                 && self
-                    .host
+                    .host()
                     .mix_service()
                     .mix_muc_mirror_service_complete(&mix_domain)
                     .await?;
@@ -196,7 +202,7 @@ impl DiscoveryHandlers for ClientSession {
                 &muc_domain,
             );
             let query = northstar_mix_xmpp::mix_service_disco_info_payload(
-                self.host.server_name(),
+                self.host().server_name(),
                 &mirror,
             )?;
             return Ok(Action::Send(iq_result_from(id, from, &query)));
@@ -206,7 +212,7 @@ impl DiscoveryHandlers for ClientSession {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
             let Some(channel) = self
-                .host
+                .host()
                 .mix_service()
                 .mix_channel(
                     &mix_domain,
@@ -219,9 +225,9 @@ impl DiscoveryHandlers for ClientSession {
             let Some(user) = self.authenticated.as_ref() else {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             };
-            let requester = format!("{}@{}", user.username, self.host.local_domain());
+            let requester = format!("{}@{}", user.username, self.host().local_domain());
             if !self
-                .host
+                .host()
                 .mix_service()
                 .mix_channel_discoverable_to(&channel, &requester)
                 .await?
@@ -230,7 +236,7 @@ impl DiscoveryHandlers for ClientSession {
             }
             let linked = mirror_enabled
                 && self
-                    .host
+                    .host()
                     .mix_service()
                     .mix_muc_mirror_for_mix(channel.id)
                     .await?
@@ -246,7 +252,8 @@ impl DiscoveryHandlers for ClientSession {
                 channel.allow_user_message_retraction
                     || channel.administrator_retraction_rights != "nobody",
                 channel.allow_private_messages,
-                self.host.xmpp_extension_enabled(northstar_xep_0313::XEP_ID),
+                self.host()
+                    .xmpp_extension_enabled(northstar_xep_0313::XEP_ID),
                 &mirror,
             )?;
             return Ok(Action::Send(iq_result_from(id, from, &query)));
@@ -269,12 +276,12 @@ impl DiscoveryHandlers for ClientSession {
                     query.push_child(form);
                     return Ok(Action::Send(iq_result_from(id, from, &query.finish())));
                 }
-                let Some(node) = self.host.pubsub_service().get_node(node_name).await? else {
+                let Some(node) = self.host().pubsub_service().get_node(node_name).await? else {
                     return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
                 };
                 let requester = self.full_jid.as_deref().unwrap_or_default();
                 if !self
-                    .host
+                    .host()
                     .pubsub_service()
                     .can_retrieve_node(&node, requester)
                     .await?
@@ -295,28 +302,28 @@ impl DiscoveryHandlers for ClientSession {
                     ));
                 }
                 query.push_validated_fragment(
-                    &super::pubsub::node_metadata_form(&*self.host, &node).await?,
+                    &super::pubsub::node_metadata_form(&**self.host(), &node).await?,
                 )?;
                 return Ok(Action::Send(iq_result_from(id, from, &query.finish())));
             }
-            let query = super::pubsub::service_disco_payload(&*self.host);
+            let query = super::pubsub::service_disco_payload(&**self.host());
             return Ok(Action::Send(iq_result_from(id, from, &query)));
         }
-        if self.host.http_upload_enabled()
+        if self.host().http_upload_enabled()
             && target.localpart().is_none()
             && target.domainpart() == upload_domain
         {
             if request.attribute("node").is_some() {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
-            let upload_name = format!("{} File Upload", self.host.server_name());
+            let upload_name = format!("{} File Upload", self.host().server_name());
             let mut query = disco_info_query(None);
             query.push_child(disco_identity("store", "file", Some(&upload_name)));
             query.push_child(disco_feature(northstar_xep_0363::NAMESPACE));
             let mut form = result_form(northstar_xep_0363::NAMESPACE);
             form.push_child(data_field(
                 "max-file-size",
-                [self.host.upload_slot_limits().max_file_bytes],
+                [self.host().upload_slot_limits().max_file_bytes],
             ));
             query.push_child(form);
             return Ok(Action::Send(iq_result_from(id, from, &query.finish())));
@@ -327,7 +334,7 @@ impl DiscoveryHandlers for ClientSession {
             }
             let linked = mirror_enabled
                 && self
-                    .host
+                    .host()
                     .mix_service()
                     .mix_muc_mirror_service_complete(&mix_domain)
                     .await?;
@@ -337,7 +344,7 @@ impl DiscoveryHandlers for ClientSession {
                 northstar_room_application::mix_muc::MirrorDirection::Mix,
                 &mix_domain,
             );
-            let muc_name = format!("{} Group Chat", self.host.server_name());
+            let muc_name = format!("{} Group Chat", self.host().server_name());
             let mut query = disco_info_query(None);
             query.push_child(disco_identity("conference", "text", Some(&muc_name)));
             for feature in [
@@ -354,7 +361,10 @@ impl DiscoveryHandlers for ClientSession {
             ] {
                 query.push_child(disco_feature(feature));
             }
-            if self.host.xmpp_extension_enabled(northstar_xep_0199::XEP_ID) {
+            if self
+                .host()
+                .xmpp_extension_enabled(northstar_xep_0199::XEP_ID)
+            {
                 query.push_child(disco_feature(northstar_xep_0199::NAMESPACE));
             }
             query.push_validated_fragment(&mirror)?;
@@ -366,7 +376,7 @@ impl DiscoveryHandlers for ClientSession {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
             let Some(room) = self
-                .host
+                .host()
                 .muc_service()
                 .room(target.localpart().expect("MUC room localpart checked"))
                 .await?
@@ -386,7 +396,7 @@ impl DiscoveryHandlers for ClientSession {
                 let mut query = disco_info_query(Some("x-roomuser-item"));
                 if let Some(user) = self.authenticated.as_ref() {
                     if let Some(nick) = self
-                        .host
+                        .host()
                         .muc_service()
                         .local_reserved_nick(room.id, user.id)
                         .await?
@@ -440,7 +450,10 @@ impl DiscoveryHandlers for ClientSession {
             ] {
                 query.push_child(disco_feature(feature));
             }
-            if self.host.xmpp_extension_enabled(northstar_xep_0199::XEP_ID) {
+            if self
+                .host()
+                .xmpp_extension_enabled(northstar_xep_0199::XEP_ID)
+            {
                 query.push_child(disco_feature(
                     "http://jabber.org/protocol/muc#self-ping-optimization",
                 ));
@@ -458,7 +471,10 @@ impl DiscoveryHandlers for ClientSession {
             ] {
                 query.push_child(disco_feature(feature));
             }
-            if self.host.xmpp_extension_enabled(northstar_xep_0313::XEP_ID) {
+            if self
+                .host()
+                .xmpp_extension_enabled(northstar_xep_0313::XEP_ID)
+            {
                 query.push_child(disco_feature(northstar_xep_0313::DISCO_FEATURE_MAM));
                 query.push_child(disco_feature(
                     northstar_xep_0313::DISCO_FEATURE_MAM_EXTENDED,
@@ -466,7 +482,7 @@ impl DiscoveryHandlers for ClientSession {
             }
             let linked = mirror_enabled
                 && self
-                    .host
+                    .host()
                     .mix_service()
                     .mix_muc_mirror_for_muc(room.id)
                     .await?
@@ -483,13 +499,13 @@ impl DiscoveryHandlers for ClientSession {
         }
         let is_server = target.localpart().is_none()
             && target.resourcepart().is_none()
-            && target.domainpart() == self.host.local_domain();
+            && target.domainpart() == self.host().local_domain();
         let is_account = target.localpart().is_some()
             && target.resourcepart().is_none()
-            && target.domainpart() == self.host.local_domain();
+            && target.domainpart() == self.host().local_domain();
         let owner = if is_account {
             let Some(owner) = self
-                .host
+                .host()
                 .pubsub_service()
                 .find_enabled_user(target.localpart().expect("account localpart checked"))
                 .await?
@@ -523,18 +539,23 @@ impl DiscoveryHandlers for ClientSession {
         }
 
         if let (Some(owner), Some(node)) = (owner.as_ref(), request.attribute("node")) {
-            let Some(config) = self.host.pubsub_service().pep_node(owner.id, node).await? else {
+            let Some(config) = self
+                .host()
+                .pubsub_service()
+                .pep_node(owner.id, node)
+                .await?
+            else {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             };
             let requester = self
                 .authenticated
                 .as_ref()
-                .map(|requester| format!("{}@{}", requester.username, self.host.local_domain()));
+                .map(|requester| format!("{}@{}", requester.username, self.host().local_domain()));
             let allowed = if let Some(requester) = requester.as_deref() {
                 super::pep::pep_access_allowed(
-                    self.host.pubsub_service(),
+                    self.host().pubsub_service(),
                     owner,
-                    self.host.local_domain(),
+                    self.host().local_domain(),
                     node,
                     requester,
                 )
@@ -570,20 +591,35 @@ impl DiscoveryHandlers for ClientSession {
         } else {
             SERVER_DISCO_FEATURES.to_vec()
         };
-        if is_account && !self.host.xmpp_extension_enabled(northstar_xep_0060::XEP_ID) {
+        if is_account
+            && !self
+                .host()
+                .xmpp_extension_enabled(northstar_xep_0060::XEP_ID)
+        {
             features.retain(|feature| !feature.starts_with("http://jabber.org/protocol/pubsub"));
         }
-        if !self.host.xmpp_extension_enabled(northstar_xep_0045::XEP_ID) {
+        if !self
+            .host()
+            .xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
+        {
             features.retain(|feature| *feature != northstar_xep_0045::XMLNS_MUC);
         }
-        if !self.host.http_upload_enabled() {
+        if !self.host().http_upload_enabled() {
             features.retain(|feature| *feature != northstar_xep_0363::NAMESPACE);
         }
-        if is_account && self.host.xmpp_extension_enabled(northstar_xep_0313::XEP_ID) {
+        if is_account
+            && self
+                .host()
+                .xmpp_extension_enabled(northstar_xep_0313::XEP_ID)
+        {
             features.push(northstar_xep_0313::DISCO_FEATURE_MAM);
             features.push(northstar_xep_0313::DISCO_FEATURE_MAM_EXTENDED);
         }
-        if is_account && self.host.xmpp_extension_enabled(northstar_xep_0357::XEP_ID) {
+        if is_account
+            && self
+                .host()
+                .xmpp_extension_enabled(northstar_xep_0357::XEP_ID)
+        {
             features.push(northstar_xep_0357::DISCO_FEATURE_PUSH);
         }
         if is_server {
@@ -592,22 +628,24 @@ impl DiscoveryHandlers for ClientSession {
             // closed. XEP-0389 is currently a registration-only flow and is
             // advertised only while that flow can actually be selected.
             features.push("jabber:iq:register");
-            if !self.host.registration_is_closed() {
+            if !self.host().registration_is_closed() {
                 features.push(northstar_auth_xmpp::ibr::IBR2_NS);
             }
             if northstar_operations_xmpp::commands::available_to(self).await? {
                 features.push("http://jabber.org/protocol/commands");
             }
-            features.extend(self.host.server_disco_features());
+            features.extend(self.host().server_disco_features());
         }
         if is_server
-            && self.host.xmpp_extension_enabled(northstar_xep_0215::XEP_ID)
-            && self.host.external_service_discovery_available()
+            && self
+                .host()
+                .xmpp_extension_enabled(northstar_xep_0215::XEP_ID)
+            && self.host().external_service_discovery_available()
         {
             features.push(northstar_xep_0215::NAMESPACE);
         }
         let mut query = disco_info_query(None);
-        for identity in disco_entity_identities(is_account, self.host.server_name()) {
+        for identity in disco_entity_identities(is_account, self.host().server_name()) {
             query.push_child(identity);
         }
         for feature in features {
@@ -622,7 +660,7 @@ impl DiscoveryHandlers for ClientSession {
                 }
             };
 
-            for (variable, addrs) in self.host.server_info_addresses() {
+            for (variable, addrs) in self.host().server_info_addresses() {
                 add_addresses(variable, addrs);
             }
 
@@ -642,7 +680,7 @@ impl DiscoveryHandlers for ClientSession {
         to: Option<&str>,
         request: roxmltree::Node<'_, '_>,
     ) -> Result<Action> {
-        let requested_from = to.unwrap_or(self.host.local_domain());
+        let requested_from = to.unwrap_or(self.host().local_domain());
         let Ok(target) = northstar_xmpp_types::jid::CanonicalJid::parse(requested_from) else {
             return Ok(Action::Send(iq_error(id, "jid-malformed")));
         };
@@ -652,20 +690,22 @@ impl DiscoveryHandlers for ClientSession {
             Ok(request) => request,
             Err(condition) => return Ok(Action::Send(iq_error_from(id, from, condition))),
         };
-        let muc_domain = self.host.muc_domain();
+        let muc_domain = self.host().muc_domain();
         if target.domainpart() == muc_domain
-            && !self.host.xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
+            && !self
+                .host()
+                .xmpp_extension_enabled(northstar_xep_0045::XEP_ID)
         {
             return Ok(Action::Send(iq_error_from(id, from, "service-unavailable")));
         }
-        let upload_domain = self.host.upload_domain();
-        let pubsub_domain = self.host.pubsub_domain();
-        let mix_domain = self.host.mix_domain();
+        let upload_domain = self.host().upload_domain();
+        let pubsub_domain = self.host().pubsub_domain();
+        let mix_domain = self.host().mix_domain();
         let requested_node = disco_request.node.as_deref();
         let mut query = disco_items_query(requested_node);
         if target.localpart().is_none()
             && target.resourcepart().is_none()
-            && target.domainpart() == self.host.local_domain()
+            && target.domainpart() == self.host().local_domain()
         {
             if let Some(node) = requested_node {
                 if node == "http://jabber.org/protocol/commands" {
@@ -685,9 +725,9 @@ impl DiscoveryHandlers for ClientSession {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
             if let Some(user) = self.authenticated.as_ref() {
-                let requester = format!("{}@{}", user.username, self.host.local_domain());
+                let requester = format!("{}@{}", user.username, self.host().local_domain());
                 let Some(page) = self
-                    .host
+                    .host()
                     .mix_service()
                     .discoverable_mix_channel_page(
                         &mix_domain,
@@ -716,7 +756,7 @@ impl DiscoveryHandlers for ClientSession {
             }
         } else if target.localpart().is_some() && target.domainpart() == mix_domain {
             let Some(channel) = self
-                .host
+                .host()
                 .mix_service()
                 .mix_channel(
                     &mix_domain,
@@ -735,12 +775,12 @@ impl DiscoveryHandlers for ClientSession {
             let requester = self
                 .authenticated
                 .as_ref()
-                .map(|user| format!("{}@{}", user.username, self.host.local_domain()));
+                .map(|user| format!("{}@{}", user.username, self.host().local_domain()));
             let Some(requester_jid) = requester.as_deref() else {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             };
             if !self
-                .host
+                .host()
                 .mix_service()
                 .mix_channel_discoverable_to(&channel, requester_jid)
                 .await?
@@ -748,7 +788,7 @@ impl DiscoveryHandlers for ClientSession {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
             let is_admin = if let Some(requester) = requester.as_deref() {
-                self.host
+                self.host()
                     .mix_service()
                     .mix_role(channel.id, requester)
                     .await?
@@ -772,7 +812,7 @@ impl DiscoveryHandlers for ClientSession {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
             let page = match self
-                .host
+                .host()
                 .muc_service()
                 .public_room_page(
                     disco_request.after.as_deref(),
@@ -802,7 +842,7 @@ impl DiscoveryHandlers for ClientSession {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
             let Some(room) = self
-                .host
+                .host()
                 .muc_service()
                 .room(target.localpart().expect("MUC room localpart checked"))
                 .await?
@@ -815,7 +855,7 @@ impl DiscoveryHandlers for ClientSession {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
             let room_jid = target.bare();
-            let occupants = self.host.discovery_room_occupants(&room_jid).await?;
+            let occupants = self.host().discovery_room_occupants(&room_jid).await?;
             let cursor = disco_request.after.as_deref().or_else(|| {
                 disco_request
                     .before
@@ -864,7 +904,7 @@ impl DiscoveryHandlers for ClientSession {
                 first_index,
                 total,
             ));
-        } else if self.host.http_upload_enabled()
+        } else if self.host().http_upload_enabled()
             && target.localpart().is_none()
             && target.domainpart() == upload_domain
         {
@@ -874,7 +914,7 @@ impl DiscoveryHandlers for ClientSession {
         } else if target.localpart().is_none() && target.domainpart() == pubsub_domain {
             let requester = self.full_jid.as_deref().unwrap_or_default();
             let reply =
-                super::pubsub::federated_disco_items(&*self.host, requester, request).await?;
+                super::pubsub::federated_disco_items(&**self.host(), requester, request).await?;
             return Ok(Action::Send(match reply {
                 super::pubsub::PubSubReply::Result(payload) => iq_result_from(id, from, &payload),
                 error => iq_error_from(
@@ -885,7 +925,7 @@ impl DiscoveryHandlers for ClientSession {
             }));
         } else if target.localpart().is_none()
             && target.resourcepart().is_none()
-            && target.domainpart() == self.host.local_domain()
+            && target.domainpart() == self.host().local_domain()
         {
             if requested_node.is_some() {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
@@ -895,17 +935,17 @@ impl DiscoveryHandlers for ClientSession {
                 (pubsub_domain.as_str(), "PubSub Service"),
                 (mix_domain.as_str(), "MIX Service"),
             ];
-            if self.host.http_upload_enabled() {
+            if self.host().http_upload_enabled() {
                 services.push((upload_domain.as_str(), "File Upload"));
             }
             for (jid, suffix) in services {
                 query.push_child(disco_item(
                     jid,
                     None,
-                    Some(&format!("{} {suffix}", self.host.server_name())),
+                    Some(&format!("{} {suffix}", self.host().server_name())),
                 ));
             }
-            for domain in self.host.configured_component_domains() {
+            for domain in self.host().configured_component_domains() {
                 query.push_child(disco_item(
                     &domain,
                     None,
@@ -914,10 +954,10 @@ impl DiscoveryHandlers for ClientSession {
             }
         } else if target.localpart().is_some()
             && target.resourcepart().is_none()
-            && target.domainpart() == self.host.local_domain()
+            && target.domainpart() == self.host().local_domain()
         {
             let Some(owner) = self
-                .host
+                .host()
                 .pubsub_service()
                 .find_enabled_user(target.localpart().expect("account localpart checked"))
                 .await?
@@ -925,18 +965,22 @@ impl DiscoveryHandlers for ClientSession {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             };
             if let Some(node) = requested_node {
-                let Some(config) = self.host.pubsub_service().pep_node(owner.id, node).await?
+                let Some(config) = self
+                    .host()
+                    .pubsub_service()
+                    .pep_node(owner.id, node)
+                    .await?
                 else {
                     return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
                 };
                 let requester = self.authenticated.as_ref().map(|requester| {
-                    format!("{}@{}", requester.username, self.host.local_domain())
+                    format!("{}@{}", requester.username, self.host().local_domain())
                 });
                 let allowed = if let Some(requester) = requester.as_deref() {
                     super::pep::pep_access_allowed(
-                        self.host.pubsub_service(),
+                        self.host().pubsub_service(),
                         &owner,
-                        self.host.local_domain(),
+                        self.host().local_domain(),
                         node,
                         requester,
                     )
@@ -949,20 +993,20 @@ impl DiscoveryHandlers for ClientSession {
                 }
             } else {
                 let requester = self.authenticated.as_ref().map(|requester| {
-                    format!("{}@{}", requester.username, self.host.local_domain())
+                    format!("{}@{}", requester.username, self.host().local_domain())
                 });
-                for node in self.host.pubsub_service().pep_nodes(owner.id).await? {
+                for node in self.host().pubsub_service().pep_nodes(owner.id).await? {
                     let allowed = if let Some(requester) = requester.as_deref() {
                         super::pep::pep_access_allowed(
-                            self.host.pubsub_service(),
+                            self.host().pubsub_service(),
                             &owner,
-                            self.host.local_domain(),
+                            self.host().local_domain(),
                             &node,
                             requester,
                         )
                         .await?
                     } else {
-                        self.host
+                        self.host()
                             .pubsub_service()
                             .pep_node(owner.id, &node)
                             .await?

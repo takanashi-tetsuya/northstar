@@ -1,7 +1,6 @@
 //! Binds the message handlers of `northstar-message-xmpp` to the client session.
 
 use super::{Action, ProtocolSession};
-use crate::state::AppState;
 use crate::xmpp::protocol::SessionHost;
 use anyhow::Result;
 #[cfg(test)]
@@ -26,7 +25,10 @@ use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
 use northstar_message_xmpp::messaging as handlers;
 #[cfg(test)]
 use northstar_message_xmpp::messaging::preparation_fixture::*;
-use northstar_message_xmpp::ports::{MessageFrameStage, MessageSession};
+use northstar_message_xmpp::ports::{MessageFrameStage, MessageHost, MessageSession};
+use northstar_mix_xmpp::ports::MixHost;
+use northstar_muc_xmpp::ports::MucHost;
+use northstar_pubsub_xmpp::pubsub::PubSubHost;
 use northstar_stream::frame_execution::Stage;
 #[cfg(test)]
 use northstar_xmpp_types::jid_text::bare_jid;
@@ -38,11 +40,18 @@ use uuid::Uuid;
 #[cfg(test)]
 mod saved_case;
 
-impl MessageSession for ProtocolSession {
-    type Host = AppState;
+impl<
+        H: SessionHost
+            + MessageHost
+            + MucHost<Outbound = northstar_stream::outbound::OutboundSender>
+            + MixHost
+            + PubSubHost,
+    > MessageSession for ProtocolSession<H>
+{
+    type Host = H;
     type Action = Action;
 
-    fn host(&self) -> &AppState {
+    fn host(&self) -> &H {
         &self.host
     }
 
@@ -144,7 +153,16 @@ impl ProtocolSession {
         let future = child(operation.clone());
         (operation, execution.run(future))
     }
+}
 
+impl<
+        H: SessionHost
+            + MessageHost
+            + MucHost<Outbound = northstar_stream::outbound::OutboundSender>
+            + MixHost
+            + PubSubHost,
+    > ProtocolSession<H>
+{
     pub(crate) async fn message(
         &self,
         root: Node<'_, '_>,

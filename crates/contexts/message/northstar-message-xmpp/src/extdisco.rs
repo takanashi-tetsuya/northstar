@@ -9,6 +9,12 @@ use roxmltree::Node;
 use std::net::IpAddr;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+/// What the node provides to the external service discovery handlers. The composition root implements it.
+pub trait ExtDiscoHost: Send + Sync {
+    /// The external service discovery service.
+    fn extdisco_service(&self) -> &ExtDiscoService;
+}
+
 /// What the external service discovery handlers read from the session that took the request.
 pub trait ExtDiscoSession {
     type Action: MessageOutcome;

@@ -1,11 +1,11 @@
-use super::{Action, ProtocolSession};
+use super::{Action, ProtocolSession, SessionHost};
 use anyhow::Result;
 use northstar_message_application::extdisco::ExtDiscoService;
-use northstar_message_xmpp::extdisco::{self, ExtDiscoSession};
+use northstar_message_xmpp::extdisco::{self, ExtDiscoHost, ExtDiscoSession};
 use roxmltree::Node;
 use std::net::IpAddr;
 
-impl ExtDiscoSession for ProtocolSession {
+impl<H: SessionHost + ExtDiscoHost> ExtDiscoSession for ProtocolSession<H> {
     type Action = Action;
 
     fn extdisco_service(&self) -> &ExtDiscoService {
@@ -27,7 +27,7 @@ impl ExtDiscoSession for ProtocolSession {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost + ExtDiscoHost> ProtocolSession<H> {
     pub(crate) fn external_services(
         &self,
         id: &str,

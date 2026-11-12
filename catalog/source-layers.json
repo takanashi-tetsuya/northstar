@@ -56,9 +56,6 @@
     "src/xmpp/protocol/host.rs": [
       "state"
     ],
-    "src/xmpp/protocol/messaging.rs": [
-      "state"
-    ],
     "src/xmpp/protocol/misc.rs": [
       "state"
     ],

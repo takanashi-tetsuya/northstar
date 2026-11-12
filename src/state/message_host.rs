@@ -8,6 +8,7 @@ use northstar_message_application::messaging::MessageService;
 use northstar_message_application::retractions::RetractionService;
 use northstar_message_application::telemetry::PersonalMessageTelemetry;
 use northstar_message_core::OfflineDeliveryLimits;
+use northstar_message_xmpp::extdisco::ExtDiscoHost;
 use northstar_message_xmpp::ports::{DirectInviteRoom, MessageHost};
 use northstar_room_core::{ClusterMucAffiliationSubject, ClusterMucInviteAuthority};
 use northstar_session_application::RemoteRoutePort;
@@ -126,5 +127,11 @@ impl MessageHost for AppState {
 
     async fn wake_committed_direct_muc_invite(&self, operation_id: uuid::Uuid) -> Result<()> {
         AppState::wake_committed_direct_muc_invite(self, operation_id).await
+    }
+}
+
+impl ExtDiscoHost for AppState {
+    fn extdisco_service(&self) -> &northstar_message_application::extdisco::ExtDiscoService {
+        AppState::extdisco_service(self)
     }
 }

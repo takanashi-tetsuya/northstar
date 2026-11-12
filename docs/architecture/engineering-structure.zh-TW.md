@@ -116,8 +116,9 @@ facade 移出根 crate（5.13），根 crate 只剩上面三層。
 | S25 operations 上下文 | WP-265–276 | 運維服務讀取的上傳死信值與濫用金鑰身分下放到 core，API 登出併入 auth（WP-265）；運維服務成為 `northstar-operations-application`（WP-266）；REST 命令儲存、操作日誌、檢舉與資料生命週期成為 `northstar-operations-postgres`（WP-267），管理命令會話與執行期控制隨後加入，角色證明進入 `northstar-postgres`（WP-268）；建立 `northstar-workflows`，驗證器加入 workflows 角色（WP-269）；帳號生命週期、管理命令、保存與分頁查詢進入 workflows，操作工作者的 repository 進入 `-postgres`（WP-270）；封存保存 worker 進入 application（WP-271）；管理命令成為 `northstar-operations-xmpp`（WP-272）；REST 查詢進入 workflows（WP-273）；`AppState` 以 `OperationsModule` 持有十五個服務（WP-274）；帳號 repository 進入 workflows（WP-275）；記錄階段（WP-276）。盤點見 5.21 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與本機 PostgreSQL 套件通過。未完成：房間資料表上的操作等 S26，就緒與容量等 S29，去處見 5.21 |
 | S26 room 上下文 | WP-280–299 | MUC 節文輔助進入 `northstar-room-core`（WP-280）；小型房間服務（WP-281）、MUC 服務（WP-282）與 MIX 服務（WP-284）進入 `northstar-room-application`，MIX 內容金鑰環先下放到 `northstar-abuse-policy`（WP-283）；MUC 持久化成為 `northstar-room-postgres`，碰到別人資料表的步驟抽成 `RoomEffects`（WP-285），跨上下文的 repository 進入 `northstar-workflows`（WP-286），MIX 持久化與房間 MAM 授權隨後加入（WP-287、WP-288）；MUC 叢集靜態合約改指新路徑（WP-289）；MIX 介面卡需要的值下放（WP-290–292），`northstar-mix-xmpp` 建立（WP-293）；房間記錄與訊息提示政策下放（WP-294、WP-295），`northstar-muc-xmpp` 建立（WP-296）；`AppState` 以 `RoomModule` 持有七個欄位（WP-297）；`AccountDeletionEffects` 退役（WP-298）；記錄階段（WP-299）。盤點見 5.22 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與本機 PostgreSQL 套件通過。未完成：MIX 封存與房間 MAM 分頁等 S27，房間的執行期路由與叢集投影等 S29，去處見 5.22 |
 | S27 message 上下文 | WP-300–315 | Jingle 與節文檢查下放（WP-300）；`services/xml_util` 退役（WP-301）；准入合約進入 `northstar-abuse-policy`（WP-302）；Carbons、推播與直接 spool 喚醒（WP-303）、訊息准入（WP-304）、撤回服務（WP-305）與訊息服務（WP-307）進入 `northstar-message-application`，線上路由合約改為對項目泛型（WP-306）；S2S outbox 模組提前成為 `northstar-federation-postgres`（WP-308）；`northstar-message-postgres` 建立（WP-309）；跨上下文的訊息交易（WP-310）與 MAM、MIX 封存流程（WP-311）進入 `northstar-workflows`；`northstar-message-xmpp` 建立（WP-312）；`AppState` 以 `MessageModule` 持有上下文（WP-313）；extdisco 與撤回意圖到期歸入 message（WP-314）；記錄階段（WP-315）。盤點見 5.23 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與本機 PostgreSQL 套件通過。未完成：重放、`xmpp/direct_delivery.rs` 與 outbound 等 S29/S30，去處見 5.23 |
-| S28 federation 上下文 | WP-317–328 | outbox 服務與 repository 進入上下文 crate，`FederationRoute` 取代 `MixFederationPort`（WP-317）；outbox 資料庫測試搬到介面卡旁（WP-318）；S2S 遙測格（WP-319）與兩項政策（WP-320）離開根 crate；S2S SM、dialback 與串流限制、純 wire 形式進入 `northstar-federation-core`（WP-321–323）；路由表（WP-324）、元件路由與 wire（WP-325）、端點探索的純邏輯（WP-326）進入 `northstar-federation-application`；`AppState` 以 `FederationModule` 持有上下文（WP-327）；記錄階段（WP-328）。盤點見 5.24 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與本機 PostgreSQL 套件通過。未完成：入站節處理等 S29 後進入 `northstar-federation-xmpp`，連線、TLS、DNS 與 HTTPS I/O 等 S30，去處見 5.24 |
+| S28 federation 上下文 | WP-317–328 | outbox 服務與 repository 進入上下文 crate，`FederationRoute` 取代 `MixFederationPort`（WP-317）；outbox 資料庫測試搬到介面卡旁（WP-318）；S2S 遙測格（WP-319）與兩項政策（WP-320）離開根 crate；S2S SM、dialback 與串流限制、純 wire 形式進入 `northstar-federation-core`（WP-321–323）；路由表（WP-324）、元件路由與 wire（WP-325）、端點探索的純邏輯（WP-326）進入 `northstar-federation-application`；`AppState` 以 `FederationModule` 持有上下文（WP-327）；記錄階段（WP-328）。盤點見 5.24 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與本機 PostgreSQL 套件通過。未完成：入站節處理等 S29 後進入 `northstar-federation-xmpp`（S30 改為分入各上下文的 `-xmpp` crate，見 5.26），連線、TLS、DNS 與 HTTPS I/O 等 S30，去處見 5.24 |
 | S29 會話與叢集 | WP-329–356 | 連線池關閉在交易中被釋放的連線（WP-329）；直接交接與路由項目合約進入 `northstar-message-core`（WP-330）；會話維護服務進入 `northstar-session-application`（WP-331）；workflows 的帳號介面卡別名依擁有者改名（WP-332）；回覆第二輪雲端報告（WP-333）；憑證發佈事實進入 `northstar-session-core`（WP-334）；SM、暫停與重放服務進入 session-application，`src/services` 不再存在（WP-335）；outbound 佇列進入 `northstar-stream`（WP-336）；post-action 監督進入 session-application（WP-337）；名冊同步閘門進入 `northstar-roster-core`（WP-338）；本機路由表進入 `northstar-stream`（WP-339）；`northstar-session-postgres` 建立（WP-340）；SM 儲存進入 `northstar-workflows`（WP-341）；叢集會話路由（WP-342）與六個跨上下文介面卡（WP-343）離開根 crate；叢集 MUC 快照值進入 `northstar-room-core`（WP-344）；session-postgres 的測試自帶 test-support（WP-345）；叢集經 `ClusterSessionStore` port 到達 PostgreSQL 權威（WP-346），context 對 `ClusterAdapters` 泛型（WP-347），直接命名 XML 與 frame 值的擁有 crate（WP-348）；離線重播驅動（WP-349）與 MUC 端點遞送（WP-350）進入 `northstar-stream`；叢集用到的兩個節建構函式進入 kernel（WP-351）；`src/cluster` 成為 edge crate `northstar-cluster`（WP-352），叢集測試夾具跟著讀新路徑（WP-355）；根 crate 剩下的會話時期資料庫程式碼移出（WP-353）；`AppState` 以 `SessionModule` 持有上下文（WP-354）；記錄階段（WP-356）。盤點見 5.25 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與搬移過的 PostgreSQL 套件通過。未完成：`ProtocolSession` 與建立在它上面的 caps、直接遞送、認證發佈等 S30，`state` 中把叢集與會話清理綁到 `AppState` 的接縫等 S31，去處見 5.25 |
+| S30 傳輸 | WP-360–423 | 傳輸值、frame 執行、認證發佈與 `Action` 進入 `northstar-stream`，`StreamSession` 列出傳輸可向會話要求的操作（WP-360–365）；客戶端傳輸與 BOSH 改經 host（WP-366、367）後成為 `northstar-c2s`、`northstar-bosh`（WP-368、369）；S2S 的探索、TLS、串流 I/O、傳輸與外部元件經 `S2sHost`、`ComponentHost` 進入 `northstar-s2s`（WP-370–374）；REST 經 `HttpRepositories`、`HttpHost` 泛型後成為 `northstar-http`，WebSocket 升級進入 c2s（WP-375–383）；`ProtocolSession` 對 host 泛型（WP-386），各上下文的 glue 取得 host trait（WP-387–390、396–400），核心依呼叫圖由下而上改為泛型（WP-391–395），釘住核心的根 crate 型別移走（WP-401–407、410–412）後核心進入`northstar_stream::protocol`（WP-413）；glue 進入各 `-xmpp` crate（WP-414–418），核心項目收窄（WP-419）；S2S 入站的訊息、出席與 PEP 處理器進入各上下文介面卡（WP-420–422）；期間的 CI 與相依修正（WP-384、385、408、409）；記錄階段（WP-423）。盤點見 5.26 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與搬移過的 PostgreSQL 套件通過。未完成：`state` 的 host 實作與接縫、IQ 路由表、服務探索與 S2S 入站分派等組合程式碼，等 S31，去處見 5.26 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -1030,12 +1031,13 @@ federation 的三個 crate 共 7,642 行（core 1,751、application 4,202、post
 
 根 crate 中仍與 federation 有關的程式碼與去處：
 
-- `s2s/inbound/{dispatch,iq,presence}.rs`：入站節處理，依賴會話路由，S29 之後進入 `northstar-federation-xmpp`。
+- `s2s/inbound/{dispatch,iq,presence}.rs`：入站節處理，依賴會話路由，S29 之後進入 `northstar-federation-xmpp`。S30
+  改為各上下文的處理器進入自己的 `-xmpp` crate，分派與 `<iq/>` 路由留在組合根，見 5.26。
 - `s2s/outbound.rs` 與子模組、`s2s/inbound/{negotiation,session}.rs`、`s2s/tls.rs`、`s2s/resume.rs`、`s2s/util.rs` 的 frame 讀取、
   `s2s/sm.rs` 的 `StreamManagement`、`s2s/dns.rs` 的解析器、HTTPS 擷取與端點驗證、`s2s/components/{connections,session}.rs` 與
   監督迴圈：連線、背壓與 socket 寫入，S30 進入 `northstar-s2s`。
 - `state/{s2s_direct_route,s2s_cluster_routing,s2s_outbox_dispatch,federated_muc_cluster_effects,federation_policy,federation_dns}.rs`：
-  根 crate 的 seam，隨 S29 到 S31 退役。
+  根 crate 的 seam，隨 S29 到 S31 退役。`s2s_direct_route` 已在 S30 退役，其餘等 S31。
 
 根 crate 由 515 檔 228,309 行變為 505 檔 221,910 行。
 
@@ -1106,6 +1108,68 @@ S29 接在其上。
   `communication_denied` 只有它旁邊的測試使用。
 
 根 crate 由 463 檔 200,870 行變為 363 檔 157,352 行。
+
+### 5.26 S30 盤點：傳輸與 `ProtocolSession`（`52f17b8b`）
+
+| 原位置 | 去處 | 角色 |
+| --- | --- | --- |
+| `xmpp/framing` 外觀 | 呼叫者直接用 `northstar_xml_framing` | 退役 |
+| `ClientTransport`、`StreamLimits`、`TlsSessionEvidence`、`SessionTerminationSignals`、`Action`、恢復負載 | `northstar_stream::transport` | edge |
+| `xmpp/{frame_execution,auth_publication,transport_parsing}` | `northstar_stream` 的同名模組 | edge |
+| `xmpp/mod.rs` 的 TCP、STARTTLS、direct TLS 迴圈，`tcp_action`、`websocket_action`、`direct_delivery`、WebSocket 升級 | `crates/edges/northstar-c2s`，對 `C2sHost` 泛型 | edge |
+| `bosh.rs` 與 `bosh/*` | `crates/edges/northstar-bosh`，對 `BoshHost` 泛型 | edge |
+| `s2s/{dns,tls,util,resume,sm}.rs`、`s2s/outbound*`、`s2s/inbound/{negotiation,session}.rs`、`s2s/components/*` | `crates/edges/northstar-s2s`，對 `S2sHost`、`ComponentHost` 泛型 | edge |
+| `src/api` | `crates/edges/northstar-http`：handler 對 `HttpRepositories` 泛型，router 對 `HttpHost` 泛型 | edge |
+| `AppError` 的 sqlx 爭用分類 | `northstar_postgres::is_retryable_contention` | platform |
+| REST 讀取的叢集健康 | operations-application 的 `ClusterReadiness`、`ClusterMetrics` port | port |
+| `ip_actor`、`login_abuse_identity` | `northstar_auth_application::abuse_identity` | application |
+| `xmpp/capabilities.rs` 的十二個會話遙測檢視 | `northstar_session_application::telemetry` | application |
+| `SmBufferLimits`、`SmSessionPolicy`、`Sasl2FastTokenPolicy`、`FinalizeAccountDeletion` | session-application、auth-application | application |
+| `CleanupReport`、`SessionCleanupPlan` 等會話結束契約 | `northstar_stream::session_cleanup` | edge |
+| caps、PEP 中以 `&AppState` 寫成的節點端函式與 `PepAudienceRouting` 實作 | `src/state` | 組合根 |
+| `ProtocolSession` 與核心模組（`protocol.rs`、`session_transport`、`session_sm`、`stream_session`、`sm`、`sm_owner`、`csi`、`misc`、`caps`、`dispatch`、`sasl2`、`legacy_auth`、`ibr`） | `northstar_stream::protocol`，`ProtocolSession<H: SessionHost>` | edge |
+| `direct_write.rs`、`bosh_record.rs` | `northstar-c2s`、`northstar-bosh` | edge |
+| 各上下文的會話 glue：pep、private、vcard、pubsub；mam；upload；extdisco；roster、blocking、privacy、presence；muc；mix | 各 `-xmpp` crate 的 `protocol_session.rs`，`impl<H: SessionHost + 上下文 host> 處理器 trait for ProtocolSession<H>` | adapter |
+| `s2s/inbound` 的聯邦訊息路由、`presence.rs`、`iq.rs` 的 PEP items 與訂閱分支 | `northstar_message_xmpp::federated_message`、`northstar_roster_xmpp::federated_presence`、`northstar_pubsub_xmpp::federated_pep` | adapter |
+
+各 crate 的行數：`northstar-stream` 22,105（S29 後 4,175）、`northstar-c2s` 3,686、`northstar-bosh` 7,458、`northstar-s2s`
+8,483、`northstar-http` 13,049。`src/state` 有 124 檔，測試以外 20,281 行。
+
+新決定：
+
+- edge 之間只可依賴 `northstar-stream`，所以 BOSH 與 WebSocket 的路由由組合根掛進 HTTP router。串流協商屬於會話核心，
+  `northstar-stream` 因此可依賴 SASL、SASL2、IBR 的線路格式 crate `northstar-auth-xmpp`（4.1），這是 edge 唯一可用的介面卡。
+- `ProtocolSession` 必須在 `northstar-stream`：`-xmpp` crate 為它實作自己定義的 trait，而介面卡在 edge 中只能依賴 stream。
+  根 crate 不能為 `ProtocolSession<AppState>` 實作外部 trait（E0117），只能為 `AppState` 實作 host trait，所以核心需要上下文
+  的地方（訊息、出席、MUC 與 MIX 訊息、PubSub 授權回應、會話清理）都是取 `&mut ProtocolSession<Self>` 的 host hook，由
+  組合根以 `-xmpp` 的處理器填入。服務網域是 host 提供的事實，網域規則留在各上下文 crate。
+- 拆解依方法呼叫圖由下而上：先讓各上下文的 glue 對 host 泛型，再逐層把核心方法改為 `impl<H: SessionHost>`，移走仍命名
+  根 crate 型別的簽名（PostgreSQL repository 成為 `SessionHost` 的關聯型別），最後一次搬移核心，再把 glue 移入 `-xmpp`
+  crate。
+- REST 的每個用例是 `HttpRepositories` 的一個關聯型別，PostgreSQL 這一族在根 crate 的 `state/http_repositories.rs`；29 個
+  `FromRef<Arc<AppState>>` 改為 `HttpHost`，在 `state/http_host.rs` 實作。投影別名（`type X<R> = Foo<<R as T>::Y>`）推不出
+  `R`，所以收這種值的 helper 對結構自己的型別參數泛型。
+- S2S 入站的處理器以同樣方式進入各上下文：對 host 子 trait（例如 `FederatedPresenceHost`）泛型，與既有 hook 等價的不再
+  另開。分派（`s2s/inbound/dispatch.rs`）與 `<iq/>` 路由（`s2s/inbound/iq.rs`）跨上下文，是組合程式碼。
+- 搬移改變日誌 target 時，grep 那一行的執行期腳本要在 `RUST_LOG` 選新的 target（`northstar_s2s=debug` 等）。
+- 門禁的模組讀取把 `lib.rs` 入口旁的所有檔案視為正式程式碼，只依名稱排除 `#[cfg(test)]` 子模組，所以 crate 中的測試放在
+  `<module>/tests.rs`，不放兄弟檔 `<module>_tests.rs`。
+- 期間的相依變更：hickory 升到 0.26.2（WP-408、409），RUSTSEC-2026-0459 在 SQLx 改用 libsqlite3-sys 0.39 以上前忽略
+  （WP-385）。SQLx 0.9 是 S30 之後的獨立階段。
+
+根 crate 中仍有的程式碼與去處：
+
+- `state/*`：各 host trait 的實作、上下文模組的建構，以及叢集與會話清理接縫，S31 組合根收斂時處理。`SessionHost` 仍是
+  一個約百個方法的 trait，`AppState` 刪除時依關注點拆分。
+- `xmpp/protocol/{iq_routes,discovery}.rs`、`s2s/inbound/{dispatch,iq}.rs`：IQ 路由表、服務探索的彙整與 S2S 入站分派，
+  組合程式碼，S31 隨組合根移動。`xmpp/capabilities.rs` 剩下執行期工作用的窄遙測，同樣隨組合根移動。
+- `runtime/*`、`main.rs`、`tools/`：啟動、監督與子命令，S31。
+- `xmpp/protocol/{messaging,muc,mix,federated_muc}` 下的測試與 Stage 4 harness、`xmpp/stage4_*`、`stage4_replay`、
+  `direct_replay`：`#[cfg(test)]`，以 `AppState` 建構。凍結工具釘住測試路徑
+  `xmpp::protocol::messaging::saved_case::replay_saved_case`，所以 `messaging/saved_case` 留在根 crate。
+- `db/*_tests.rs`（60 檔 37,692 行）：驅動 `AppState` 或根 crate 綁定的資料庫測試，隨各自綁定的程式碼移動。
+
+根 crate 由 363 檔 157,352 行變為 256 檔 106,099 行。
 
 ## 6. 委派與驗收協議
 
@@ -1656,3 +1720,67 @@ Stage 證據仍綁定其原提交。
 | WP-354 | 完成：`AppState` 以 `SessionModule` 持有四個會話欄位 | 見 `git log --grep '\[WP-354\]'` |
 | WP-355 | 完成：`scripts/cluster-wsl.py` 由 `northstar-cluster` 的 crate 根讀取叢集協定版本 | 見 `git log --grep '\[WP-355\]'` |
 | WP-356 | 完成：記錄 S29 的階段與盤點（5.25）、4.2、4.3。WP-329–355 依序接到 WP-328 與雲端 WP-434 之上；fmt、clippy、workspace 測試、層級、模糊測試、搬移過的 PostgreSQL 套件、全部門禁與 Python 腳本測試通過 | 見 `git log --grep '\[WP-356\]'` |
+| WP-360 | 完成：`xmpp/framing` 外觀退役，呼叫者直接用 `northstar_xml_framing` | 見 `git log --grep '\[WP-360\]'` |
+| WP-361 | 完成：傳輸值進入 `northstar_stream::transport` | 見 `git log --grep '\[WP-361\]'` |
+| WP-362 | 完成：frame 執行與認證發佈進入 `northstar-stream` | 見 `git log --grep '\[WP-362\]'` |
+| WP-363 | 完成：`Action` 與恢復負載進入 `northstar_stream::transport` | 見 `git log --grep '\[WP-363\]'` |
+| WP-364 | 完成：`StreamSession` 列出傳輸可向協定會話要求的操作 | 見 `git log --grep '\[WP-364\]'` |
+| WP-365 | 完成：stream 的追蹤擷取不再把 callsite 快取為 `never` | 見 `git log --grep '\[WP-365\]'` |
+| WP-366 | 完成：客戶端傳輸改經 `C2sHost`，不再持有 `AppState` | 見 `git log --grep '\[WP-366\]'` |
+| WP-367 | 完成：BOSH 改經 `BoshHost` | 見 `git log --grep '\[WP-367\]'` |
+| WP-368 | 完成：原生客戶端傳輸成為 `northstar-c2s` | 見 `git log --grep '\[WP-368\]'` |
+| WP-369 | 完成：BOSH 連線管理器成為 `northstar-bosh` | 見 `git log --grep '\[WP-369\]'` |
+| WP-370 | 完成：S2S 的端點探索、TLS 與串流 I/O 進入 `northstar-s2s` | 見 `git log --grep '\[WP-370\]'` |
+| WP-371 | 完成：S2S 傳輸經 `S2sHost` port 執行 | 見 `git log --grep '\[WP-371\]'` |
+| WP-372 | 完成：外部元件經 `ComponentHost` port 執行 | 見 `git log --grep '\[WP-372\]'` |
+| WP-373 | 完成：S2S 傳輸與外部元件進入 `northstar-s2s` | 見 `git log --grep '\[WP-373\]'` |
+| WP-374 | 完成：執行期腳本選取 `northstar_s2s` 日誌 target | 見 `git log --grep '\[WP-374\]'` |
+| WP-375 | 完成：可重試的資料庫爭用由 `northstar-postgres` 分類，`AppError` 不再命名 sqlx | 見 `git log --grep '\[WP-375\]'` |
+| WP-376 | 完成：叢集健康經 operations-application 的 port 讀取 | 見 `git log --grep '\[WP-376\]'` |
+| WP-377 | 完成：REST repository 經 `HttpRepositories` trait 命名 | 見 `git log --grep '\[WP-377\]'` |
+| WP-378 | 完成：REST 共用 helper 對查詢 context 泛型 | 見 `git log --grep '\[WP-378\]'` |
+| WP-379 | 完成：REST handler 對 `HttpRepositories` 泛型 | 見 `git log --grep '\[WP-379\]'` |
+| WP-380 | 完成：WebSocket 升級進入 `northstar-c2s` | 見 `git log --grep '\[WP-380\]'` |
+| WP-381 | 完成：REST router 對 `HttpHost` 組合 | 見 `git log --grep '\[WP-381\]'` |
+| WP-382 | 完成：登入濫用的 actor 由 auth-application 推導 | 見 `git log --grep '\[WP-382\]'` |
+| WP-383 | 完成：REST API 成為 edge crate `northstar-http` | 見 `git log --grep '\[WP-383\]'` |
+| WP-384 | 完成：XEP-0487 port 檔以夾具 uid 建立 | 見 `git log --grep '\[WP-384\]'` |
+| WP-385 | 完成：SQLx 未連結的 SQLite 驅動帶來的 RUSTSEC-2026-0459 列入忽略 | 見 `git log --grep '\[WP-385\]'` |
+| WP-386 | 完成：協定會話對 host 泛型 | 見 `git log --grep '\[WP-386\]'` |
+| WP-387 | 完成：PubSub 會話處理器取得 host trait | 見 `git log --grep '\[WP-387\]'` |
+| WP-388 | 完成：archive 會話處理器取得 host trait | 見 `git log --grep '\[WP-388\]'` |
+| WP-389 | 完成：upload 會話處理器取得 host trait | 見 `git log --grep '\[WP-389\]'` |
+| WP-390 | 完成：operations 會話處理器取得 host trait | 見 `git log --grep '\[WP-390\]'` |
+| WP-391 | 完成：會話核心中只用節點 accessor 的一半對 host 泛型 | 見 `git log --grep '\[WP-391\]'` |
+| WP-392 | 完成：被具體 helper 釘住的會話核心方法改為泛型 | 見 `git log --grep '\[WP-392\]'` |
+| WP-393 | 完成：會話分派取得 host hook 與服務網域事實 | 見 `git log --grep '\[WP-393\]'` |
+| WP-394 | 完成：會話清理與帳號刪除經 host 到達 | 見 `git log --grep '\[WP-394\]'` |
+| WP-395 | 完成：傳輸的會話 port 對 host 泛型 | 見 `git log --grep '\[WP-395\]'` |
+| WP-396 | 完成：roster 上下文的會話 glue 對 host 泛型 | 見 `git log --grep '\[WP-396\]'` |
+| WP-397 | 完成：room 上下文的會話 glue 對 host 泛型 | 見 `git log --grep '\[WP-397\]'` |
+| WP-398 | 完成：PubSub 會話 glue 對 host 泛型，節點端程式碼移出 | 見 `git log --grep '\[WP-398\]'` |
+| WP-399 | 完成：message 上下文的會話 glue 對 host 泛型 | 見 `git log --grep '\[WP-399\]'` |
+| WP-400 | 完成：presence glue 對 host 泛型 | 見 `git log --grep '\[WP-400\]'` |
+| WP-401 | 完成：會話遙測檢視進入 session-application | 見 `git log --grep '\[WP-401\]'` |
+| WP-402 | 完成：節點端的 caps 與 PEP 程式碼移出協定介面卡 | 見 `git log --grep '\[WP-402\]'` |
+| WP-403 | 完成：會話政策與結果型別移到根 crate 之下 | 見 `git log --grep '\[WP-403\]'` |
+| WP-404 | 完成：會話結束契約進入 `northstar-stream` | 見 `git log --grep '\[WP-404\]'` |
+| WP-405 | 完成：恢復的 MUC 佔用經 session host 命名 | 見 `git log --grep '\[WP-405\]'` |
+| WP-406 | 完成：會話的聯邦 outbox 經 `FederationRoute` 命名 | 見 `git log --grep '\[WP-406\]'` |
+| WP-407 | 完成：`AppState` 預設型別參數與 xml_builder 外觀退役 | 見 `git log --grep '\[WP-407\]'` |
+| WP-408 | 完成：hickory 升到 0.26.2，修正五個 RUSTSEC 公告 | 見 `git log --grep '\[WP-408\]'` |
+| WP-409 | 完成：實驗室 DNSKEY 以限定名稱的 Hickory 信任錨接受 | 見 `git log --grep '\[WP-409\]'` |
+| WP-410 | 完成：session host 的 repository 改為關聯型別 | 見 `git log --grep '\[WP-410\]'` |
+| WP-411 | 完成：根 crate 的訊息 glue 經 session host hook 到達 | 見 `git log --grep '\[WP-411\]'` |
+| WP-412 | 完成：根 crate 的會話 glue 改為處理器 trait | 見 `git log --grep '\[WP-412\]'` |
+| WP-413 | 完成：協定會話核心進入 `northstar_stream::protocol` | 見 `git log --grep '\[WP-413\]'` |
+| WP-414 | 完成：PubSub 會話 glue 進入 `northstar-pubsub-xmpp` | 見 `git log --grep '\[WP-414\]'` |
+| WP-415 | 完成：archive、upload 與外部服務探索 glue 進入介面卡 | 見 `git log --grep '\[WP-415\]'` |
+| WP-416 | 完成：roster、blocking、privacy glue 進入 roster-xmpp | 見 `git log --grep '\[WP-416\]'` |
+| WP-417 | 完成：presence glue 經路由 hook 進入 roster-xmpp | 見 `git log --grep '\[WP-417\]'` |
+| WP-418 | 完成：MUC 與 MIX 會話 glue 進入房間介面卡 | 見 `git log --grep '\[WP-418\]'` |
+| WP-419 | 完成：只有 `northstar-stream` 使用的會話核心項目收窄可見性 | 見 `git log --grep '\[WP-419\]'` |
+| WP-420 | 完成：聯邦訊息路由進入 message 介面卡 | 見 `git log --grep '\[WP-420\]'` |
+| WP-421 | 完成：聯邦出席處理器進入 roster 介面卡 | 見 `git log --grep '\[WP-421\]'` |
+| WP-422 | 完成：聯邦 PEP items 與訂閱分支進入 pubsub 介面卡 | 見 `git log --grep '\[WP-422\]'` |
+| WP-423 | 完成：記錄 S30 的階段與盤點（5.26）、4.3。WP-360–422 依序接到 WP-356 之上；每個 WP 的 fmt、clippy、workspace 測試、層級、模糊測試、搬移過的 PostgreSQL 套件、全部門禁與 Python 腳本測試通過 | 見 `git log --grep '\[WP-423\]'` |

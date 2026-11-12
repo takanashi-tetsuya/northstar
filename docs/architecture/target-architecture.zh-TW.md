@@ -103,11 +103,13 @@ flowchart TB
 
 ### 4.3 會話核心與傳輸
 
-- `northstar-stream` 是會話核心：串流協商狀態機（既有的 `StreamNegotiation`）、驗證與綁定的流程控制（透過
-  `auth`、`session` 的 port），以及 stanza 分派註冊表。
-- 每個上下文的 `-xmpp` crate 實作 `StanzaHandler`，由組合根註冊。處理器只拿到窄的 `SessionContext`：已綁定的
-  JID、串流功能、有序的 outbound sink（既有的 `OrderedOutboundSink`）、SM 與 CSI 狀態。`ProtocolSession`
-  的 50 個欄位拆回會話核心與各上下文。
+- `northstar-stream` 是會話核心：`protocol` 模組的 `ProtocolSession<H>` 負責串流協商（SASL、SASL2／FAST、legacy
+  auth、IBR、資源綁定）、SM、CSI、caps 與 stanza 分派，對組合根實作的 `SessionHost` 泛型；PostgreSQL repository 是
+  `SessionHost` 的關聯型別。
+- 每個上下文的 `-xmpp` crate 在 `protocol_session.rs` 為 `ProtocolSession<H>` 實作自己的處理器 trait，`H` 另受該上下文的
+  host trait 約束（例如 `PubSubSessionHost`），根 crate 為 `AppState` 實作這些 host trait。核心需要上下文時呼叫取
+  `&mut ProtocolSession<Self>` 的 host hook，由組合根以 `-xmpp` 的處理器填入。IQ 路由表（`ClientIqRoute`）與服務探索
+  彙整各上下文，是組合程式碼。S2S 入站節同理：處理器在各 `-xmpp` crate 的 `federated_*` 模組，分派留在組合根。
 - `northstar-c2s`（TCP、STARTTLS、direct TLS、WebSocket）、`northstar-bosh`、`northstar-s2s` 只負責連線、
   frame 與背壓，再把 frame 交給 `northstar-stream`。
 - `northstar-stream` 的 `test-support` feature 提供 SM 擁有權的記憶體 port 與 fixture
@@ -166,7 +168,7 @@ port 綁定到提供方，註冊 stanza 處理器，再依程序角色（core、
 | S18 會話核心介面 | 建立 `northstar-stream`：`StanzaHandler`、`SessionContext`、分派註冊表；根 crate 的分派改經註冊表，處理器暫時以轉接器包住；以 `session` 路由 port 切斷協定處理器對 `bosh`、`s2s` 的依賴 | 分派只經註冊表；協定處理器不再引用傳輸模組。已完成（WP-181–185，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.14）：IQ 只經路由表分派；會話能力由各上下文的 `-xmpp` crate 以窄 trait 定義，`StanzaHandler` 留到 S30 |
 | S19–S28 上下文 | 依序搬移：`upload` → `archive` → `pubsub` → `roster` → `abuse` → `auth` → `operations` → `room` → `message` → `federation`。每個上下文：先定義 port 與模組結構、以它取代對應的 `AppState` accessor，再把 `services`、`db`、`xmpp/protocol` 中的程式碼移入各 crate，最後更新門禁並在組合根綁定。`api` 的端點依 4.3 屬於 `northstar-http`，於 S30 移出；端點使用的應用層型別隨上下文移動 | 該上下文的應用、持久化與協定程式碼不再出現在根 crate；`AppState` 只持有組合根建構的上下文模組。S19 upload 已完成（WP-191–203，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.15）；S20 archive 已完成（WP-210–214，見 5.16）；S21 pubsub 已完成（WP-220–231，見 5.17）；S22 roster 已完成（WP-240–248，見 5.18）；S23 abuse 已完成（WP-250–255，見 5.19）；S24 auth 已完成（WP-256–264，見 5.20）；S25 operations 已完成（WP-265–276，見 5.21），同交易的帳號流程已進入 `northstar-workflows`；S26 room 已完成（WP-280–299，見 5.22），房間的執行期路由與叢集投影留待 S29；S27 message 已完成（WP-300–315，見 5.23），重放與 outbound 留待 S29/S30；S28 federation 已完成（WP-317–328，見 5.24），入站節處理留待 S29 之後，連線與 DNS I/O 留待 S30 |
 | S29 會話與叢集 | `session` 上下文與 `northstar-cluster` | 路由表、SM、叢集監聽離開根 crate。已完成（WP-329–356，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.25）：`ProtocolSession` 與 `state` 中把叢集、會話清理綁到 `AppState` 的接縫留待 S30、S31 |
-| S30 傳輸 | `northstar-c2s`、`northstar-bosh`、`northstar-s2s`、`northstar-http`；`ProtocolSession` 拆解完畢 | 根 crate 只剩組合程式碼 |
+| S30 傳輸 | `northstar-c2s`、`northstar-bosh`、`northstar-s2s`、`northstar-http`；`ProtocolSession` 拆解完畢 | 根 crate 只剩組合程式碼。已完成（WP-360–423，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.26）：`ProtocolSession` 在 `northstar-stream`，glue 與 S2S 入站處理器在各 `-xmpp` crate，處理器 trait 直接為 `ProtocolSession<H>` 實作，`StanzaHandler` 與 `SessionContext` 不再需要；`state` 的 host 實作與接縫、IQ 路由表、服務探索與 S2S 入站分派留待 S31 |
 | S31 組合根 | 根 crate 更名為 `northstar-server`，`AppState` 刪除；R9 與其餘讀原始碼的邊界門禁退役；文件改寫 | `src/` 只有組合根；全部門禁與完整 CI 通過 |
 
 與其他計劃的關係：模組化執行計劃的 C1（PubSub）與 C2（MAM）是語義上的重構，在對應上下文搬進新 crate 後於新

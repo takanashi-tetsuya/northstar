@@ -412,14 +412,16 @@ impl MucHost for AppState {
     }
 
     fn local_muc_occupant_by_nick(&self, room_jid: &str, nick: &str) -> Option<MucOccupant> {
-        AppState::local_muc_occupant_by_nick(self, room_jid, nick)
+        self.room
+            .muc_occupants
+            .local_muc_occupant_by_nick(room_jid, nick)
     }
 
     fn local_muc_occupant_exact(
         &self,
         identity: LocalMucOccupantIdentity<'_>,
     ) -> Option<MucOccupant> {
-        AppState::local_muc_occupant_exact(self, identity)
+        self.room.muc_occupants.local_muc_occupant_exact(identity)
     }
 
     fn mix_muc_mirror_enabled(&self) -> bool {
@@ -432,7 +434,9 @@ impl MucHost for AppState {
         renamed: &MucOccupant,
         cluster_committed: bool,
     ) -> LocalMucNicknameMove {
-        AppState::move_local_muc_nickname_exact(self, old, renamed, cluster_committed)
+        self.room
+            .muc_occupants
+            .move_local_muc_nickname_exact(old, renamed, cluster_committed)
     }
 
     fn muc_cluster_node_id(&self) -> &str {
@@ -464,7 +468,9 @@ impl MucHost for AppState {
     }
 
     fn publish_local_muc_join_if_vacant(&self, joining: &MucOccupant) -> LocalMucJoinPublication {
-        AppState::publish_local_muc_join_if_vacant(self, joining)
+        self.room
+            .muc_occupants
+            .publish_local_muc_join_if_vacant(joining)
     }
 
     async fn publish_muc_cluster_nickname_change(
@@ -529,7 +535,9 @@ impl MucHost for AppState {
         old: &MucOccupant,
         new_connection_id: uuid::Uuid,
     ) -> Option<MucOccupant> {
-        AppState::rebind_local_federated_muc_occupant_exact(self, old, new_connection_id)
+        self.room
+            .muc_occupants
+            .rebind_local_federated_muc_occupant_exact(old, new_connection_id)
     }
 
     fn record_muc_cluster_control_plane_failure(&self, error: &anyhow::Error) {
@@ -543,7 +551,9 @@ impl MucHost for AppState {
         moderated: Option<bool>,
         non_anonymous: Option<bool>,
     ) -> Option<(MucOccupant, bool)> {
-        AppState::refresh_local_muc_policy_exact(self, identity, moderated, non_anonymous)
+        self.room
+            .muc_occupants
+            .refresh_local_muc_policy_exact(identity, moderated, non_anonymous)
     }
 
     fn refresh_local_muc_presence_exact(
@@ -551,7 +561,9 @@ impl MucHost for AppState {
         prepared: &MucOccupant,
         apply_policy: bool,
     ) -> Option<MucOccupant> {
-        AppState::refresh_local_muc_presence_exact(self, prepared, apply_policy)
+        self.room
+            .muc_occupants
+            .refresh_local_muc_presence_exact(prepared, apply_policy)
     }
 
     async fn register_cluster_muc_occupant(
@@ -570,14 +582,16 @@ impl MucHost for AppState {
     }
 
     fn remove_live_muc_membership(&self, occupant: &SerializableMucOccupant) -> bool {
-        AppState::remove_live_muc_membership(self, occupant)
+        self.sessions.remove_live_muc_membership(occupant)
     }
 
     fn remove_local_muc_occupant_exact(
         &self,
         identity: LocalMucOccupantIdentity<'_>,
     ) -> Option<MucOccupant> {
-        AppState::remove_local_muc_occupant_exact(self, identity)
+        self.room
+            .muc_occupants
+            .remove_local_muc_occupant_exact(identity)
     }
 
     async fn rename_cluster_muc_occupant_exact(
@@ -636,8 +650,7 @@ impl MucHost for AppState {
         only_if_none: bool,
         expected_affiliation: Option<&str>,
     ) -> Option<MucOccupant> {
-        AppState::set_local_muc_affiliation_exact(
-            self,
+        self.room.muc_occupants.set_local_muc_affiliation_exact(
             identity,
             affiliation,
             moderated,
@@ -653,7 +666,12 @@ impl MucHost for AppState {
         role: &str,
         non_anonymous: Option<bool>,
     ) -> Option<MucOccupant> {
-        AppState::set_local_muc_role_exact(self, identity, expected_role, role, non_anonymous)
+        self.room.muc_occupants.set_local_muc_role_exact(
+            identity,
+            expected_role,
+            role,
+            non_anonymous,
+        )
     }
 
     fn validate_routed_message(&self, root: roxmltree::Node<'_, '_>) -> Result<(), &'static str> {

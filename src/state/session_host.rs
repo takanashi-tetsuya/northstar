@@ -229,7 +229,9 @@ impl SessionHost for AppState {
         &self,
         identity: LocalMucOccupantIdentity<'_>,
     ) -> Option<MucOccupant> {
-        AppState::remove_local_muc_occupant_exact(self, identity)
+        self.room
+            .muc_occupants
+            .remove_local_muc_occupant_exact(identity)
     }
 
     fn remove_session_if_connection(
@@ -741,7 +743,9 @@ impl SessionHost for AppState {
     }
 
     fn local_muc_occupant_by_nick(&self, room_jid: &str, nick: &str) -> Option<MucOccupant> {
-        AppState::local_muc_occupant_by_nick(self, room_jid, nick)
+        self.room
+            .muc_occupants
+            .local_muc_occupant_by_nick(room_jid, nick)
     }
 
     async fn personal_message_remote_resource_exists(&self, jid: &str) -> bool {

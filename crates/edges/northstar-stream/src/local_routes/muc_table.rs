@@ -327,3 +327,126 @@ pub fn local_cluster_muc_projection_snapshot_in(
         .map(|entry| entry.value().clone())
         .collect()
 }
+
+/// The live MUC occupant table, keyed by room and nickname. The composition root holds one; workers that need only
+/// the raw occupants take a clone of the shared map, which the table dereferences to.
+#[derive(Clone, Default)]
+pub struct LocalMucOccupantTable(Arc<DashMap<String, MucOccupant>>);
+
+impl LocalMucOccupantTable {
+    pub fn local_muc_occupant_by_nick(&self, room_jid: &str, nick: &str) -> Option<MucOccupant> {
+        let room_jid = northstar_xmpp_types::jid::canonicalize_bare(room_jid).ok()?;
+        let key = northstar_room_core::stanza::muc_occupant_key(&room_jid, nick);
+        self.0
+            .get(&key)
+            .filter(|occupant| occupant.room_jid == room_jid)
+            .map(|occupant| occupant.value().clone())
+    }
+
+    pub fn local_muc_occupant_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+    ) -> Option<MucOccupant> {
+        with_local_muc_occupant_exact(&self.0, identity, |current| current.clone())
+    }
+
+    /// Refresh presence fields only while this exact transport still owns the
+    /// nickname. Keep the current endpoint so an SM suspension cannot be undone.
+    pub fn refresh_local_muc_presence_exact(
+        &self,
+        prepared: &MucOccupant,
+        apply_policy: bool,
+    ) -> Option<MucOccupant> {
+        refresh_local_muc_presence_exact_in(&self.0, prepared, apply_policy)
+    }
+
+    /// Update only the exact old federated actor after PostgreSQL commits a
+    /// connection rebind. A late old-stream disconnect cannot remove it.
+    pub fn rebind_local_federated_muc_occupant_exact(
+        &self,
+        old: &MucOccupant,
+        new_connection_id: uuid::Uuid,
+    ) -> Option<MucOccupant> {
+        rebind_local_federated_muc_occupant_exact_in(&self.0, old, new_connection_id)
+    }
+
+    /// Move a nickname after the caller's room gate or PG transition. A local
+    /// collision restores the exact removed old value; a committed cluster
+    /// collision leaves the other incarnation untouched for reconciliation.
+    pub fn move_local_muc_nickname_exact(
+        &self,
+        old: LocalMucOccupantIdentity<'_>,
+        renamed: &MucOccupant,
+        cluster_committed: bool,
+    ) -> LocalMucNicknameMove {
+        move_local_muc_nickname_exact_in(&self.0, old, renamed, cluster_committed)
+    }
+
+    /// Publish a join under one map shard lock without replacing a later
+    /// transport that acquired the same nickname.
+    pub fn publish_local_muc_join_if_vacant(
+        &self,
+        joining: &MucOccupant,
+    ) -> LocalMucJoinPublication {
+        publish_local_muc_join_if_vacant_in(&self.0, joining)
+    }
+
+    /// Compare and remove under one map shard lock. Callers retain the removed
+    /// value for any post-removal delivery; no map guard crosses an await.
+    pub fn remove_local_muc_occupant_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+    ) -> Option<MucOccupant> {
+        remove_local_muc_occupant_exact_from(&self.0, identity)
+    }
+
+    /// Apply a registration or admin affiliation change to the same live
+    /// occupancy that was authorized. The returned snapshot holds no map lock.
+    pub fn set_local_muc_affiliation_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+        affiliation: &str,
+        moderated: bool,
+        only_if_none: bool,
+        expected_affiliation: Option<&str>,
+    ) -> Option<MucOccupant> {
+        set_local_muc_affiliation_exact_in(
+            &self.0,
+            identity,
+            affiliation,
+            moderated,
+            only_if_none,
+            expected_affiliation,
+        )
+    }
+
+    /// Change only the role and optional room visibility of an exact occupant.
+    pub fn set_local_muc_role_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+        expected_role: &str,
+        role: &str,
+        non_anonymous: Option<bool>,
+    ) -> Option<MucOccupant> {
+        set_local_muc_role_exact_in(&self.0, identity, expected_role, role, non_anonymous)
+    }
+
+    /// Recompute policy fields from the current affiliation, preserving
+    /// transport, presence payload and any other concurrently refreshed data.
+    pub fn refresh_local_muc_policy_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+        moderated: Option<bool>,
+        non_anonymous: Option<bool>,
+    ) -> Option<(MucOccupant, bool)> {
+        refresh_local_muc_policy_exact_in(&self.0, identity, moderated, non_anonymous)
+    }
+}
+
+impl std::ops::Deref for LocalMucOccupantTable {
+    type Target = Arc<DashMap<String, MucOccupant>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}

@@ -14,7 +14,7 @@ pub(super) struct RoomModule {
     /// deliberately do not cross this boundary.
     pub(super) muc_service: northstar_room_application::muc_service::MucService<northstar_workflows::room_effects::PostgresMucRepository>,
     pub(super) mix_service: northstar_room_application::mix_service::MixService<northstar_workflows::room_effects::PostgresMixRepository>,
-    pub(super) muc_occupants: Arc<DashMap<String, MucOccupant>>,
+    pub(super) muc_occupants: LocalMucOccupantTable,
     /// Exactly one process-local suspension/resume FIFO per durable SM
     /// session.  Every room occupancy for the same client points at this Arc,
     /// preserving cross-room arrival order and enforcing one shared budget.
@@ -67,7 +67,7 @@ impl RoomModule {
                     durable_outbox_database_admission.clone(),
                     sm_authority_schema,
                 )?,
-            muc_occupants: Arc::new(DashMap::new()),
+            muc_occupants: LocalMucOccupantTable::default(),
             suspended_muc_sessions: Arc::new(DashMap::new()),
             pending_mix_iq: Arc::new(northstar_room_core::mix_iq_relay::MixIqRelayIndex::new()),
             locked_muc_expiry_service:

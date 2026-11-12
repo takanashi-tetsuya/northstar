@@ -506,7 +506,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     fn inbound_stanza_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::InboundStanzaTelemetry<'_>;
-    /// See `AppState::local_muc_occupant_by_nick`.
+    /// See `LocalMucOccupantTable::local_muc_occupant_by_nick`.
     fn local_muc_occupant_by_nick(&self, room_jid: &str, nick: &str) -> Option<MucOccupant>;
     /// A failed route lookup supplies no evidence of an exact remote resource.
     fn personal_message_remote_resource_exists(

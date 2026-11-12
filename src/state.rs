@@ -199,6 +199,7 @@ use northstar_federation_application::registry::S2sConnectionRegistry;
 use northstar_federation_application::write_policy::FederationWritePolicy;
 use northstar_federation_core::policy::RuntimeFederationPolicy;
 use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
+#[cfg(test)]
 use northstar_room_core::occupancy::{LocalMucJoinPublication, LocalMucNicknameMove};
 use northstar_stream::local_routes::muc::{
     MucOccupant, MucOccupantEndpoint, RestoreLocalMucOccupantsRequest, SuspendedMucEndpoint,

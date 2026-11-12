@@ -3,6 +3,7 @@
 
 use super::session::{OnlineSession, SmPresenceEpoch, SmStagedRouteClaim};
 use dashmap::{DashMap, DashSet};
+use northstar_room_application::muc_service::SerializableMucOccupant;
 use northstar_session_core::{
     staged_route_activation_allowed, LocalCapsEpoch, StagedRouteActivationCheck,
     StagedRouteIdentity,
@@ -367,6 +368,13 @@ impl LocalSessionTable {
     /// The table over the shared map `sessions`.
     pub fn new(sessions: Arc<DashMap<String, OnlineSession>>) -> Self {
         Self(sessions)
+    }
+
+    /// Revoke the exact live protocol actor membership represented by an
+    /// occupant.  All four identities are required so a delayed kick or
+    /// teardown cannot affect a later connection or a reused nickname.
+    pub fn remove_live_muc_membership(&self, occupant: &SerializableMucOccupant) -> bool {
+        super::muc_table::remove_live_muc_membership_in(&self.0, occupant)
     }
 
     /// Reserve a non-routable bind candidate under the same map entry guard

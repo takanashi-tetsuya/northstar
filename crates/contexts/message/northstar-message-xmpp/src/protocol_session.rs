@@ -1,7 +1,8 @@
 //! The protocol session as this context sees it: the impls of this crate's session ports for
-//! `northstar_stream::protocol::ProtocolSession`.
+//! `northstar_stream::protocol::ProtocolSession`, and the handlers the root's client IQ route table calls on
+//! it.
 
-use crate::extdisco::{ExtDiscoHost, ExtDiscoSession};
+use crate::extdisco::{self, ExtDiscoHost, ExtDiscoSession};
 use crate::ports::{MessageFrameStage, MessageHost, MessageSession};
 use anyhow::Result;
 use northstar_message_application::extdisco::ExtDiscoService;
@@ -33,6 +34,43 @@ impl<H: SessionHost + ExtDiscoHost> ExtDiscoSession for ProtocolSession<H> {
 
     fn peer_ip(&self) -> IpAddr {
         self.peer_ip
+    }
+}
+
+/// The external service discovery handlers the root calls on the session.
+pub trait ExtDiscoHandlers {
+    fn external_services(
+        &self,
+        id: &str,
+        iq: Node<'_, '_>,
+        services: Node<'_, '_>,
+    ) -> Result<Action>;
+
+    fn external_credentials(
+        &self,
+        id: &str,
+        iq: Node<'_, '_>,
+        credentials: Node<'_, '_>,
+    ) -> Result<Action>;
+}
+
+impl<H: SessionHost + ExtDiscoHost> ExtDiscoHandlers for ProtocolSession<H> {
+    fn external_services(
+        &self,
+        id: &str,
+        iq: Node<'_, '_>,
+        services: Node<'_, '_>,
+    ) -> Result<Action> {
+        extdisco::external_services(self, id, iq, services)
+    }
+
+    fn external_credentials(
+        &self,
+        id: &str,
+        iq: Node<'_, '_>,
+        credentials: Node<'_, '_>,
+    ) -> Result<Action> {
+        extdisco::external_credentials(self, id, iq, credentials)
     }
 }
 

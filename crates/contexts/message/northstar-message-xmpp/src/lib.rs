@@ -8,4 +8,5 @@ pub mod extdisco;
 pub mod messaging;
 pub mod ports;
 mod protocol_session;
+pub use self::protocol_session::ExtDiscoHandlers;
 mod retractions;

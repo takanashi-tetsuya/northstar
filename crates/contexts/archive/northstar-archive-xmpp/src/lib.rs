@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub use self::protocol_session::MamHandlers;
 pub use self::session_host::ArchiveSessionHost;
 
 mod protocol_session;

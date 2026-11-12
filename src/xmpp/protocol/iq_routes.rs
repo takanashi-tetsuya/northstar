@@ -9,13 +9,12 @@ use super::*;
 use crate::state::AppState;
 use crate::xmpp::protocol::blocking::BlockingHandlers;
 use crate::xmpp::protocol::discovery::DiscoveryHandlers;
-use crate::xmpp::protocol::extdisco::ExtDiscoHandlers;
-use crate::xmpp::protocol::mam::MamHandlers;
 use crate::xmpp::protocol::muc::MucHandlers;
 use crate::xmpp::protocol::privacy::PrivacyHandlers;
 use crate::xmpp::protocol::roster::RosterHandlers;
-use crate::xmpp::protocol::upload::UploadHandlers;
 use crate::xmpp::protocol::ClientSession;
+use northstar_archive_xmpp::MamHandlers;
+use northstar_message_xmpp::ExtDiscoHandlers;
 use northstar_pubsub_xmpp::PepHandlers;
 use northstar_pubsub_xmpp::PrivateXmlHandlers;
 use northstar_pubsub_xmpp::PubSubHandlers;
@@ -26,6 +25,7 @@ use northstar_stream::protocol::dispatch::{
     xmpp_version_os,
 };
 use northstar_stream::{HandlerFuture, IqKind, IqRequest, IqRoute, IqRouter};
+use northstar_upload_xmpp::UploadHandlers;
 use northstar_xml_builder::stanza::{iq_error, iq_error_from, iq_result, iq_result_from};
 use std::sync::LazyLock;
 

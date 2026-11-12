@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub use self::protocol_session::UploadHandlers;
 pub use self::session_host::UploadSessionHost;
 
 mod protocol_session;

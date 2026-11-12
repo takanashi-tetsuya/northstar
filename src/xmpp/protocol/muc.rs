@@ -3,16 +3,14 @@
 //! `northstar-muc-xmpp` holds the handlers. This seam gives them the live
 //! session and maps their replies back to session actions.
 
-use super::{Action, ProtocolSession};
-use crate::state::AppState;
+use super::{Action, ProtocolSession, SessionHost};
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_muc_xmpp::muc as handlers;
-use northstar_muc_xmpp::ports::{MucFrameStage, MucSession, MucSessionUser};
+use northstar_muc_xmpp::ports::{MucFrameStage, MucHost, MucSession, MucSessionUser, Occupant};
 use northstar_room_application::discussion;
 use northstar_session_core::JoinedMucMembership;
 use northstar_stream::frame_execution::Stage;
-use northstar_stream::local_routes::muc::MucOccupant;
 use northstar_stream::outbound::OutboundSender;
 use roxmltree::Node;
 use uuid::Uuid;
@@ -20,10 +18,10 @@ use uuid::Uuid;
 #[cfg(test)]
 pub(crate) mod saved_stage4;
 
-impl MucSession for ProtocolSession {
-    type Host = AppState;
+impl<H: SessionHost + MucHost<Outbound = OutboundSender>> MucSession for ProtocolSession<H> {
+    type Host = H;
 
-    fn host(&self) -> &AppState {
+    fn host(&self) -> &H {
         &self.host
     }
 
@@ -76,11 +74,11 @@ impl MucSession for ProtocolSession {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost + MucHost<Outbound = OutboundSender>> ProtocolSession<H> {
     pub(crate) async fn authorized_muc_occupant(
         &self,
         room_jid: &str,
-    ) -> Result<Option<MucOccupant>> {
+    ) -> Result<Option<Occupant<H>>> {
         handlers::authorized_muc_occupant(self, room_jid).await
     }
 

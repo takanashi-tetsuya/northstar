@@ -62,12 +62,6 @@
     "src/xmpp/protocol/misc.rs": [
       "state"
     ],
-    "src/xmpp/protocol/mix.rs": [
-      "state"
-    ],
-    "src/xmpp/protocol/muc.rs": [
-      "state"
-    ],
     "src/xmpp/protocol/pep.rs": [
       "state"
     ],

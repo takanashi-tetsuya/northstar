@@ -4,21 +4,11 @@
 //! sessions, routes and federation outbox the root crate still owns, and maps
 //! their replies back to session actions.
 
-use super::{Action, ProtocolSession};
-use crate::s2s::FederationRouter;
-use crate::state::mix_iq_relay::MixIqRelayRoute;
-use crate::state::mix_outbox::MixOutboxContext;
-use crate::state::AppState;
+use super::{Action, ProtocolSession, SessionHost};
 use anyhow::Result;
 use dashmap::DashSet;
-use northstar_mix_xmpp::ports::{
-    MixFrameObserver, MixHost, MixOutboxPort, MixSession, MixSessionUser,
-};
-use northstar_room_application::mix_service::MixService;
-use northstar_room_core::mix::{MixSessionCapability, CORE_NS, PAM_NS};
-use northstar_room_core::mix_iq_relay::MixIqRelayIndex;
-use northstar_roster_core::RosterChange;
-use northstar_stream::local_routes::session::OnlineSession;
+use northstar_mix_xmpp::ports::{MixFrameObserver, MixHost, MixSession, MixSessionUser};
+use northstar_room_core::mix::MixSessionCapability;
 use roxmltree::Node;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -27,111 +17,10 @@ use uuid::Uuid;
 #[cfg(test)]
 pub(crate) mod stage4_saved;
 
-impl MixHost for AppState {
-    type Repository = <MixOutboxContext as MixOutboxPort>::Repository;
-    type Session = OnlineSession;
-    type Federation = FederationRouter;
-    type IqRelayRoute = MixIqRelayRoute;
-    type OutboxContext = MixOutboxContext;
+impl<H: SessionHost + MixHost> MixSession for ProtocolSession<H> {
+    type Host = H;
 
-    fn mix_service(&self) -> &MixService<Self::Repository> {
-        AppState::mix_service(self)
-    }
-
-    fn federation_outbox(&self) -> &FederationRouter {
-        AppState::federation_outbox(self)
-    }
-
-    fn local_domain(&self) -> &str {
-        AppState::local_domain(self)
-    }
-
-    fn server_name(&self) -> &str {
-        AppState::server_name(self)
-    }
-
-    fn pending_mix_iq(&self) -> &MixIqRelayIndex {
-        AppState::pending_mix_iq(self)
-    }
-
-    fn federation_domain_allowed(&self, domain: &str) -> bool {
-        AppState::federation_domain_allowed(self, domain)
-    }
-
-    fn mix_muc_mirror_enabled(&self) -> bool {
-        AppState::mix_muc_mirror_enabled(self)
-    }
-
-    fn xmpp_extension_enabled(&self, id: northstar_xep_core::XepId) -> bool {
-        AppState::xmpp_extension_enabled(self, id)
-    }
-
-    fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
-        AppState::session_entries_for(self, jid)
-    }
-
-    fn sessions_for(&self, jid: &str) -> Vec<OnlineSession> {
-        AppState::sessions_for(self, jid)
-    }
-
-    fn mix_iq_relay_route(&self) -> MixIqRelayRoute {
-        AppState::mix_iq_relay_route(self)
-    }
-
-    fn mix_outbox_context(&self) -> MixOutboxContext {
-        AppState::mix_outbox_context(self)
-    }
-
-    fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability {
-        match super::caps::verified_caps_has_any_feature(self, full_jid, &[CORE_NS, PAM_NS]) {
-            Some(true) => MixSessionCapability::Supported,
-            Some(false) => MixSessionCapability::Unsupported,
-            None => MixSessionCapability::Unknown,
-        }
-    }
-
-    fn validate_routed_message(&self, root: Node<'_, '_>) -> Result<(), &'static str> {
-        AppState::validate_routed_message(self, root)
-    }
-
-    fn local_mix_presence_route_is_current(
-        &self,
-        full_jid: &str,
-        expected_connection_id: Uuid,
-        expected_gate: &Arc<Mutex<()>>,
-        require_available: bool,
-    ) -> bool {
-        AppState::local_mix_presence_route_is_current(
-            self,
-            full_jid,
-            expected_connection_id,
-            expected_gate,
-            require_available,
-        )
-    }
-
-    async fn deliver_roster_change(
-        &self,
-        owner_id: Uuid,
-        owner: &str,
-        change: &RosterChange,
-        participant_id: Option<&str>,
-    ) -> Result<()> {
-        northstar_roster_xmpp::RosterSessionHost::deliver_committed_roster_change(
-            self,
-            owner_id,
-            owner,
-            change,
-            participant_id,
-        )
-        .await
-    }
-}
-
-impl MixSession for ProtocolSession {
-    type Host = AppState;
-
-    fn host(&self) -> &Arc<AppState> {
+    fn host(&self) -> &Arc<H> {
         &self.host
     }
 
@@ -163,7 +52,7 @@ impl MixSession for ProtocolSession {
     }
 }
 
-impl ProtocolSession {
+impl<H: SessionHost + MixHost> ProtocolSession<H> {
     pub(crate) async fn try_mix_iq(&self, raw: &str) -> Result<Option<Action>> {
         let action = northstar_mix_xmpp::session::try_mix_iq(self, raw).await?;
         Ok(action.map(Action::from))

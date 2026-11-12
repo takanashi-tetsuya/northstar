@@ -22,7 +22,6 @@ const BASELINE = new Map([
   ['crates/contexts/message/northstar-message-core/src/jingle.rs', 0],
   ['crates/contexts/archive/northstar-archive-xmpp/src/lib.rs', 0],
   ['crates/contexts/room/northstar-room-application/src/mix_muc.rs', 0],
-  ['src/xmpp/protocol/presence.rs', 0],
   ['crates/contexts/message/northstar-message-xmpp/src/retractions.rs', 0],
   ['crates/edges/northstar-stream/src/protocol/sasl2.rs', 0],
   ['crates/contexts/upload/northstar-upload-xmpp/src/lib.rs', 0],

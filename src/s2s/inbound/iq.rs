@@ -134,10 +134,7 @@ pub(crate) async fn route_inbound_iq(
                 .into_iter()
                 .any(|(_, session)| {
                     session.directed_presence.iter().any(|authorized| {
-                        crate::xmpp::protocol::presence::directed_recipient_matches(
-                            authorized.key(),
-                            from,
-                        )
+                        northstar_presence_core::directed_recipient_matches(authorized.key(), from)
                     })
                 });
             if !subscribed && !directed {

@@ -3742,7 +3742,7 @@ if (!passkeyFinishSource.includes('State(state): State<PasskeyLoginFinishContext
     || /\b(?:AppState|Metrics|PgPool)\b/.test(passkeyFinishContext)) {
   throw new Error('Passkey login completion must check the live origin before using its narrow service');
 }
-const presenceProtocol = readProductionModule('src/xmpp/protocol/presence.rs', { root });
+const presenceProtocol = protocolModuleSource('presence.rs');
 const presenceClusterRouting = read('src/state/presence_cluster_routing.rs');
 const presenceDelivery = read('src/state/presence_delivery.rs');
 if (/\bself\.(?:state|host)\s*\.metrics\b/.test(presenceProtocol)

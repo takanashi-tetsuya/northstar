@@ -4,6 +4,9 @@ use anyhow::Result;
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
 use northstar_roster_application::{RosterRepository, RosterService, S2sOutboxPolicy};
 use northstar_roster_core::{LocalRosterContact, PresenceAccount, RosterChange};
+use northstar_stream::protocol::{ProtocolSession, SessionHost};
+use northstar_stream::transport::Action;
+use roxmltree::Node;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -172,4 +175,39 @@ pub trait RosterSessionHost: Send + Sync {
     fn full_presence_target_routed(&self, full_jid: &str) -> impl Future<Output = bool> + Send;
     /// Dispatches the push notification of an offline account.
     fn notify_offline_account(&self, user_id: Uuid) -> impl Future<Output = Result<()>> + Send;
+}
+
+/// Where a client's presence leaves the roster context: presence addressed to the MIX, MUC and PubSub services,
+/// and the broadcast copy the MIX channels of the account receive. The composition root hands each to its
+/// context.
+pub trait PresenceRouting: SessionHost {
+    /// Hands a directed `<presence/>` to the MIX context, or `None` when it addresses no MIX channel.
+    fn route_mix_presence(
+        session: &ProtocolSession<Self>,
+        root: Node<'_, '_>,
+        raw: &str,
+    ) -> impl Future<Output = Result<Option<Action>>> + Send;
+    /// Hands a `<presence/>` of kind `kind` addressed to the PubSub service to the PubSub context, which replays
+    /// the last published items to an available resource.
+    fn route_pubsub_presence(
+        session: &mut ProtocolSession<Self>,
+        kind: &str,
+        from: &str,
+    ) -> impl Future<Output = Result<Action>> + Send;
+    /// Hands a `<presence/>` addressed to the MUC service to the MUC context.
+    fn route_muc_presence(
+        session: &mut ProtocolSession<Self>,
+        root: Node<'_, '_>,
+        raw: &str,
+    ) -> impl Future<Output = Result<Action>> + Send;
+    /// Forwards a broadcast `<presence/>` of kind `kind` from `from` to the account's MIX channels, while the
+    /// caller holds the resource's MIX presence gate. False, forwarding nothing, when this connection no longer
+    /// owns the resource's MIX presence route.
+    fn forward_presence_to_mix(
+        session: &ProtocolSession<Self>,
+        root: Node<'_, '_>,
+        kind: &str,
+        from: &str,
+        raw: &str,
+    ) -> impl Future<Output = Result<bool>> + Send;
 }

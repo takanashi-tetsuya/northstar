@@ -10,8 +10,9 @@ mod protocol_session;
 pub mod roster;
 mod session_host;
 
+pub use self::protocol_session::PresenceHandlers;
 pub use self::protocol_session::{BlockingHandlers, PrivacyHandlers, RosterHandlers};
-pub use self::session_host::{PostAcceptFailureTelemetry, RosterSessionHost};
+pub use self::session_host::{PostAcceptFailureTelemetry, PresenceRouting, RosterSessionHost};
 
 use northstar_roster_core::PresenceAccount;
 

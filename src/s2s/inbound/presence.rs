@@ -317,10 +317,7 @@ pub(super) async fn route_inbound_presence_probe(
             .into_iter()
             .any(|(_, session)| {
                 session.directed_presence.iter().any(|authorized| {
-                    crate::xmpp::protocol::presence::directed_recipient_matches(
-                        authorized.key(),
-                        requester,
-                    )
+                    northstar_presence_core::directed_recipient_matches(authorized.key(), requester)
                 })
             });
     if !roster_authorized && !directed_authorized {

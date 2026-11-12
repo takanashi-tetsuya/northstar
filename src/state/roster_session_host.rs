@@ -1,7 +1,11 @@
 //! The node's side of the roster context's session handlers.
 
 use super::AppState;
+use crate::xmpp::protocol::mix::MixHandlers;
+use crate::xmpp::protocol::muc::MucHandlers;
+use crate::xmpp::protocol::ClientSession;
 use anyhow::Result;
+use northstar_pubsub_xmpp::PubSubHandlers;
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_roster_application::{
@@ -9,10 +13,12 @@ use northstar_roster_application::{
 };
 use northstar_roster_core::{LocalRosterContact, PresenceAccount, RosterChange};
 use northstar_roster_xmpp::roster::{roster_change_item_element, roster_push_xml};
-use northstar_roster_xmpp::{PostAcceptFailureTelemetry, RosterSessionHost};
+use northstar_roster_xmpp::{PostAcceptFailureTelemetry, PresenceRouting, RosterSessionHost};
+use northstar_stream::transport::Action;
 use northstar_xml_builder::rewrite::set_to;
 use northstar_xml_builder::stream::stream_id;
 use northstar_xml_builder::XmlElement;
+use roxmltree::Node;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -589,6 +595,55 @@ where
         }
     }
     Ok(())
+}
+
+impl PresenceRouting for AppState {
+    async fn route_mix_presence(
+        session: &ClientSession,
+        root: Node<'_, '_>,
+        raw: &str,
+    ) -> Result<Option<Action>> {
+        session.try_mix_presence(root, raw).await
+    }
+
+    async fn route_pubsub_presence(
+        session: &mut ClientSession,
+        kind: &str,
+        from: &str,
+    ) -> Result<Action> {
+        session.pubsub_presence(kind, from).await
+    }
+
+    async fn route_muc_presence(
+        session: &mut ClientSession,
+        root: Node<'_, '_>,
+        raw: &str,
+    ) -> Result<Action> {
+        session.muc_presence(root, raw).await
+    }
+
+    async fn forward_presence_to_mix(
+        session: &ClientSession,
+        root: Node<'_, '_>,
+        kind: &str,
+        from: &str,
+        raw: &str,
+    ) -> Result<bool> {
+        if !northstar_mix_xmpp::mix_presence_route_is_current(
+            session.host().as_ref(),
+            from,
+            session.connection_id,
+            &session.presence.mix_presence_gate,
+            false,
+        ) {
+            return Ok(false);
+        }
+        let advertised_mix_capability = session.advertised_mix_capability(root, from);
+        session
+            .forward_presence_to_mix_channels(kind, advertised_mix_capability, raw)
+            .await?;
+        Ok(true)
+    }
 }
 
 #[cfg(test)]

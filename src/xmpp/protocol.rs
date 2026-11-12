@@ -7,7 +7,6 @@ pub(crate) mod iq_routes;
 pub(crate) mod messaging;
 pub(crate) mod mix;
 pub(crate) mod muc;
-pub(crate) mod presence;
 
 use crate::state::AppState;
 pub(crate) use northstar_stream::protocol::*;

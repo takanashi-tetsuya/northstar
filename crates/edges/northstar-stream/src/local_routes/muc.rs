@@ -2,6 +2,7 @@
 
 use crate::outbound::OutboundSender;
 use northstar_room_core::occupancy;
+pub use northstar_session_application::sm_capacity::SmCapacityLease;
 use std::collections::VecDeque;
 
 pub type MucOccupant = occupancy::MucOccupant<OutboundSender, SuspendedMucEndpoint>;
@@ -19,8 +20,7 @@ pub struct SuspendedMucEndpoint {
     pub changed: tokio::sync::Notify,
     /// Shared actual-byte lease for the durable stream plus its process-local
     /// MUC suffix. Clones across room occupants reference one reservation.
-    pub sm_capacity:
-        std::sync::Mutex<Option<northstar_session_application::sm_capacity::SmCapacityLease>>,
+    pub sm_capacity: std::sync::Mutex<Option<SmCapacityLease>>,
 }
 
 #[derive(Clone)]

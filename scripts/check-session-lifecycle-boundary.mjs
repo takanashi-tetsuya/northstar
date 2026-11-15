@@ -15,7 +15,7 @@ function verifyMucSmAssociationBoundary(source) {
   // diagnostics. Preserve offsets while masking comments and string literals.
   const code = source.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"/g,
     (text) => text.replace(/[^\n]/g, " "));
-  const start = code.search(/\bpub\s+async\s+fn\s+associate_local_muc_sm_session\s*\(/);
+  const start = code.search(/\bpub\s+async\s+fn\s+associate_local_muc_sm_session\s*(?:<[^>{]*>)?\s*\(/);
   if (start < 0) throw new Error("MUC SM association function is missing");
   const open = code.indexOf("{", start);
   let depth = 0;
@@ -41,13 +41,13 @@ const transport = read("crates/edges/northstar-c2s/src/lib.rs");
 const bosh = readRoleSplitFile("crates/edges/northstar-bosh/src/lib.rs");
 const replay = read("crates/contexts/session/northstar-session-application/src/replay.rs");
 const sasl2 = readProductionModule("crates/edges/northstar-stream/src/protocol/sasl2.rs");
-const state = readProductionModule("src/state.rs"); // whole production module
+const resume = readProductionModule("crates/contexts/room/northstar-muc-xmpp/src/resume.rs");
 
-verifyMucSmAssociationBoundary(state);
+verifyMucSmAssociationBoundary(resume);
 // Keep the production ownership boundary tied to the helper's runtime test.
 // Cloning an iterator item alone still leaves its shard guard in the iterator.
 const snapshotLoop = /for\s*\(\s*room_jid\s*,\s*membership\s*\)\s+in\s+local_muc_membership_snapshots\s*\(\s*memberships\s*\)\s*\{/;
-requireMatch(state, snapshotLoop, "MUC SM association mutation fixture no longer matches");
+requireMatch(resume, snapshotLoop, "MUC SM association mutation fixture no longer matches");
 for (const [name, replacement] of [
   ["live iterator", "for membership in memberships {"],
   ["cloned but uncollected iterator", "for (room_jid, membership) in memberships.iter().map(|entry| (entry.key().clone(), entry.value().clone())) {"],
@@ -55,7 +55,7 @@ for (const [name, replacement] of [
   ["comment-only snapshot", "// for (room_jid, membership) in local_muc_membership_snapshots(memberships) {\nfor membership in memberships {"],
 ]) {
   assert.throws(
-    () => verifyMucSmAssociationBoundary(state.replace(snapshotLoop, replacement)),
+    () => verifyMucSmAssociationBoundary(resume.replace(snapshotLoop, replacement)),
     /MUC SM association must iterate owned membership snapshots/,
     `MUC SM association boundary accepted ${name}`,
   );

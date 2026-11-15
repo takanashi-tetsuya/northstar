@@ -8,4 +8,5 @@ pub mod federated_muc;
 pub mod muc;
 pub mod ports;
 mod protocol_session;
+pub mod resume;
 pub use self::protocol_session::MucHandlers;

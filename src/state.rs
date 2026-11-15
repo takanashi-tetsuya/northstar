@@ -159,8 +159,8 @@ mod federation_policy;
 mod local_muc;
 mod local_session;
 mod message_module;
-mod muc_resume;
-pub(crate) use muc_resume::RestoredLocalMucOccupants;
+mod muc_resume_host;
+pub(crate) use northstar_muc_xmpp::resume::RestoredLocalMucOccupants;
 pub(crate) use northstar_stream::local_routes::muc::CommittedLocalMucResume;
 mod operations_module;
 mod pubsub_module;
@@ -201,8 +201,7 @@ use northstar_room_application::muc_service::{LocalMucOccupantIdentity, Serializ
 #[cfg(test)]
 use northstar_room_core::occupancy::{LocalMucJoinPublication, LocalMucNicknameMove};
 use northstar_stream::local_routes::muc::{
-    MucOccupant, MucOccupantEndpoint, RestoreLocalMucOccupantsRequest, SuspendedMucEndpoint,
-    SuspendedMucPhase, SuspendedMucRoute,
+    MucOccupant, MucOccupantEndpoint, SuspendedMucEndpoint, SuspendedMucPhase, SuspendedMucRoute,
 };
 use northstar_stream::local_routes::muc_table::*;
 #[cfg(test)]

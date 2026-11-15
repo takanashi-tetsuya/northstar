@@ -68,7 +68,7 @@ impl SessionHost for AppState {
         sm_session_id: uuid::Uuid,
         memberships: &DashMap<String, JoinedMucMembership>,
     ) {
-        AppState::associate_local_muc_sm_session(
+        northstar_muc_xmpp::resume::associate_local_muc_sm_session(
             self,
             full_jid,
             connection_id,
@@ -356,7 +356,7 @@ impl SessionHost for AppState {
         restored: &RestoredLocalMucOccupants,
         snapshot_backed: bool,
     ) {
-        AppState::abort_local_muc_resume(self, restored, snapshot_backed).await
+        northstar_muc_xmpp::resume::abort_local_muc_resume(self, restored, snapshot_backed).await
     }
 
     fn activate_session_if_current(
@@ -411,7 +411,7 @@ impl SessionHost for AppState {
     type RestoredMuc = RestoredLocalMucOccupants;
 
     async fn checkpoint_local_muc_resume(&self, restored: &RestoredLocalMucOccupants) -> bool {
-        AppState::checkpoint_local_muc_resume(self, restored).await
+        northstar_muc_xmpp::resume::checkpoint_local_muc_resume(restored).await
     }
 
     async fn claim_sm_resume_route(
@@ -436,7 +436,7 @@ impl SessionHost for AppState {
         sender: &northstar_stream::outbound::OutboundSender,
         capacity: northstar_session_application::sm_capacity::SmCapacityLease,
     ) -> CommittedLocalMucResume {
-        AppState::commit_local_muc_resume(self, restored, sender, capacity).await
+        northstar_muc_xmpp::resume::commit_local_muc_resume(self, restored, sender, capacity).await
     }
 
     async fn finalize_sm_resume(
@@ -543,7 +543,7 @@ impl SessionHost for AppState {
         &self,
         request: RestoreLocalMucOccupantsRequest<'_>,
     ) -> RestoredLocalMucOccupants {
-        AppState::restore_local_muc_occupants(self, request).await
+        northstar_muc_xmpp::resume::restore_local_muc_occupants(self, request).await
     }
 
     async fn revoke_sm_session_with_teardown(&self, id: uuid::Uuid) -> anyhow::Result<()> {

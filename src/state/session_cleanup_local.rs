@@ -64,7 +64,9 @@ impl SessionCleanupLocal {
         endpoints: &[Arc<SuspendedMucEndpoint>],
         capacity: northstar_session_application::sm_capacity::SmCapacityLease,
     ) {
-        retain_suspended_sm_capacity_in(endpoints, capacity);
+        northstar_stream::local_routes::suspended_muc::retain_suspended_sm_capacity(
+            endpoints, capacity,
+        );
     }
 
     pub(crate) fn remove_local_muc_occupant_exact(
@@ -151,16 +153,4 @@ pub(super) fn suspend_local_muc_occupants_in(
     // An in-flight delivery may already hold this fence, even if every
     // membership in the cleanup plan is stale.
     vec![endpoint]
-}
-
-pub(super) fn retain_suspended_sm_capacity_in(
-    endpoints: &[Arc<SuspendedMucEndpoint>],
-    capacity: northstar_session_application::sm_capacity::SmCapacityLease,
-) {
-    for endpoint in endpoints {
-        *endpoint
-            .sm_capacity
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(capacity.clone());
-    }
 }

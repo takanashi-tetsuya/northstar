@@ -685,7 +685,7 @@ impl AppState {
                 worker_cancel.clone(),
             );
         }
-        crate::state::session_cleanup::start_sm_suspension_recovery(
+        northstar_stream::session_cleanup::recovery::start_sm_suspension_recovery(
             Arc::new(state.sm_suspension_context()),
             Arc::clone(state.worker_registry()),
             Arc::clone(&state.session.sm_suspension_recovery),

@@ -52,6 +52,7 @@ northstar-xml-framing = { path = "../../kernel/northstar-xml-framing" }
 northstar-xmpp-types = { path = "../../kernel/northstar-xmpp-types" }
 rand = "0.8"
 roxmltree = "0.20"
+serde_json = "1.0"
 sha2 = "0.10"
 tokio = { version = "1.43", features = ["macros", "sync", "time"] }
 tokio-rustls = "0.26"

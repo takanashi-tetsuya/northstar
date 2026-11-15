@@ -97,7 +97,6 @@ mod sm_teardown_muc_projection;
 pub(crate) mod sm_teardown_runtime;
 mod sm_teardown_session;
 pub(crate) mod standalone_muc_maintenance;
-pub(crate) mod suspension;
 
 use crate::s2s::FederationRouter;
 use crate::state::http_contexts::{
@@ -196,9 +195,9 @@ use northstar_federation_core::policy::RuntimeFederationPolicy;
 use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
 #[cfg(test)]
 use northstar_room_core::occupancy::{LocalMucJoinPublication, LocalMucNicknameMove};
-use northstar_stream::local_routes::muc::{
-    MucOccupant, MucOccupantEndpoint, SuspendedMucEndpoint, SuspendedMucPhase, SuspendedMucRoute,
-};
+use northstar_stream::local_routes::muc::{MucOccupant, MucOccupantEndpoint, SuspendedMucEndpoint};
+#[cfg(test)]
+use northstar_stream::local_routes::muc::{SuspendedMucPhase, SuspendedMucRoute};
 use northstar_stream::local_routes::muc_table::*;
 #[cfg(test)]
 use northstar_stream::local_routes::session::SmStagedRouteClaim;

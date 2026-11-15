@@ -421,6 +421,19 @@ pub async fn begin_suspended_muc_resume(
 }
 
 /// Drop the SM capacity lease each endpoint holds.
+/// Hand an SM session's deployment-capacity lease to each of its suspended endpoints.
+pub fn retain_suspended_sm_capacity(
+    endpoints: &[Arc<SuspendedMucEndpoint>],
+    capacity: northstar_session_application::sm_capacity::SmCapacityLease,
+) {
+    for endpoint in endpoints {
+        *endpoint
+            .sm_capacity
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(capacity.clone());
+    }
+}
+
 pub fn clear_suspended_sm_capacity(endpoints: &[Arc<SuspendedMucEndpoint>]) {
     for endpoint in endpoints {
         endpoint

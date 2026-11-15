@@ -1249,7 +1249,7 @@
         },
         {
           "id": "worker:sm-suspension-recovery",
-          "owner": "src/state/session_cleanup.rs",
+          "owner": "crates/edges/northstar-stream/src/session_cleanup/recovery.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },

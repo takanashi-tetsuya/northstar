@@ -2359,7 +2359,7 @@ for (const [name, source] of [
   ['CapacityMaintenanceService', read('crates/contexts/session/northstar-session-application/src/capacity_maintenance.rs')],
   ['CapacityMaintenanceContexts', read('src/state/capacity_maintenance.rs')],
   ['CapacityMaintenanceWorkers', read('src/runtime/capacity_maintenance.rs')],
-  ['SmSuspensionContext', read('src/state/suspension.rs')],
+  ['SmSuspensionContext', read('crates/edges/northstar-stream/src/session_cleanup/suspension.rs')],
   ['SmSuspensionRepository', read('crates/contexts/session/northstar-session-application/src/sm_suspension.rs')],
   ['ApiQueryService', read('crates/contexts/operations/northstar-operations-application/src/api_queries.rs')],
   ['ApiQueryContext', read('crates/edges/northstar-http/src/contexts/api_queries.rs')],
@@ -2433,11 +2433,11 @@ const cleanupServiceSource = productionWithoutCfgTestModules(read('src/state/ses
 for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\bstate\s*\.\s*pool\b/]) {
   if (forbidden.test(cleanupServiceSource)) throw new Error('Session cleanup regained direct persistence authority');
 }
-const suspensionRecoverySource = cleanupServiceSource.slice(
-  cleanupServiceSource.indexOf('async fn run_sm_suspension_recovery'),
-  cleanupServiceSource.indexOf('impl SessionCleanupService'),
+const suspensionRecoverySource = productionWithoutCfgTestModules(
+  read('crates/edges/northstar-stream/src/session_cleanup/recovery.rs'),
+  'SM suspension recovery',
 );
-if (!suspensionRecoverySource.includes('SmSuspensionContext<R>') || /\bAppState\b/.test(suspensionRecoverySource)) {
+if (!suspensionRecoverySource.includes('SmSuspensionContext<R, C>') || /\bAppState\b/.test(suspensionRecoverySource)) {
   throw new Error('SM suspension recovery must retain its narrow context');
 }
 for (const [path, names, context] of [
@@ -3454,7 +3454,7 @@ const workerResponsibilityEvidence = {
   'locked-muc-expiry': ['src/state.rs', '`AppState` MUC startup', '20 s'],
   'runtime-control-refresh': ['src/state.rs', 'process startup reserves the connection', '5 s'],
   'sm-authority-listener': ['crates/contexts/workflows/northstar-workflows/src/authority_listener.rs', 'AppState database listener startup', '15 s'],
-  'sm-suspension-recovery': ['src/state/session_cleanup.rs', 'session-cleanup service startup', '30 s'],
+  'sm-suspension-recovery': ['crates/edges/northstar-stream/src/session_cleanup/recovery.rs', 'session-cleanup service startup', '30 s'],
   'caps-side-effects': ['src/state/caps_effect_dispatch.rs', 'Caps subsystem startup', '60 s'],
   'mix-iq-relay-expiry': ['crates/contexts/room/northstar-mix-xmpp/src/lib.rs', 'MIX protocol capability startup', '10 s'],
   'mix-delivery-outbox': ['crates/contexts/room/northstar-mix-xmpp/src/worker.rs', 'MIX capability startup', '30 s'],

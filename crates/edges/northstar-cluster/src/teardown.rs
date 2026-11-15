@@ -449,6 +449,33 @@ impl northstar_room_application::muc_service::MucWakePort for ClusterSmSuspensio
     }
 }
 
+impl northstar_stream::session_cleanup::suspension::SmSuspensionCluster for ClusterSmSuspension {
+    fn is_enabled(&self) -> bool {
+        ClusterSmSuspension::is_enabled(self)
+    }
+
+    fn node_id(&self) -> &str {
+        ClusterSmSuspension::node_id(self)
+    }
+
+    async fn register_suspended_muc_occupant(
+        &self,
+        room_jid: &str,
+        nick: &str,
+        sm_session_id: uuid::Uuid,
+        json: &str,
+    ) -> Result<bool> {
+        ClusterSmSuspension::register_suspended_muc_occupant(
+            self,
+            room_jid,
+            nick,
+            sm_session_id,
+            json,
+        )
+        .await
+    }
+}
+
 impl northstar_room_application::muc_service::MucWakePort for ClusterMucOperationWake {
     async fn wake(&self, descriptor: &northstar_room_core::ClusterMucWakeDescriptor) -> Result<()> {
         send_muc_operation_wake(&self.publisher, &self.muc_outbox_notify, descriptor).await

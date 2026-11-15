@@ -15,7 +15,7 @@ pub(super) struct SessionModule {
     /// outcome was an error or timeout. The corresponding MUC FIFO remains
     /// sealed until this queue proves a durable handoff.
     pub(super) sm_suspension_recovery:
-        Arc<crate::state::session_cleanup::SmSuspensionRecoveryQueue>,
+        Arc<northstar_stream::session_cleanup::recovery::SmSuspensionRecoveryQueue>,
     pub(super) sm_memory_governor:
         Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>,
 }
@@ -62,12 +62,13 @@ impl SessionModule {
                 &config.domain,
                 config.offline_message_ttl_days,
             ),
-            sm_suspension_recovery: crate::state::session_cleanup::SmSuspensionRecoveryQueue::new(
-                config.sm_recovery_max_jobs,
-                config.sm_recovery_max_bytes,
-                sm_capacity_metrics,
-                Arc::clone(&sm_memory_governor),
-            ),
+            sm_suspension_recovery:
+                northstar_stream::session_cleanup::recovery::SmSuspensionRecoveryQueue::new(
+                    config.sm_recovery_max_jobs,
+                    config.sm_recovery_max_bytes,
+                    sm_capacity_metrics,
+                    Arc::clone(&sm_memory_governor),
+                ),
             sm_memory_governor,
         })
     }

@@ -245,10 +245,11 @@ impl AppState {
 
     pub(crate) fn sm_suspension_context(
         &self,
-    ) -> suspension::SmSuspensionContext<
+    ) -> northstar_stream::session_cleanup::suspension::SmSuspensionContext<
         northstar_workflows::sm_suspension::PostgresSmSuspensionRepository,
+        crate::cluster::ClusterSmSuspension,
     > {
-        suspension::SmSuspensionContext::new(
+        northstar_stream::session_cleanup::suspension::SmSuspensionContext::new(
             northstar_workflows::sm_suspension::PostgresSmSuspensionRepository::new(
                 self.pool.clone(),
             ),
@@ -263,7 +264,7 @@ impl AppState {
 
     pub(crate) fn sm_suspension_recovery_queue(
         &self,
-    ) -> &Arc<crate::state::session_cleanup::SmSuspensionRecoveryQueue> {
+    ) -> &Arc<northstar_stream::session_cleanup::recovery::SmSuspensionRecoveryQueue> {
         &self.session.sm_suspension_recovery
     }
 

@@ -1,30 +1,49 @@
 //! Shared process-local MUC suspension state and its durable handoff.
-use super::{
+
+use crate::local_routes::muc::{
+    MucOccupant, MucOccupantEndpoint, SuspendedMucEndpoint, SuspendedMucPhase, SuspendedMucRoute,
+};
+use crate::local_routes::suspended_muc::{
     append_suspended_muc_suffix_to_snapshot, complete_snapshot_owned_handoff,
-    finalize_suspended_muc_route_transition, localpart, promote_suspended_muc_buffer,
-    seal_suspended_muc_buffer, MucOccupant, MucOccupantEndpoint, SerializableMucOccupant,
-    SuspendedMucEndpoint, SuspendedMucPhase, SuspendedMucRoute,
+    finalize_suspended_muc_route_transition, promote_suspended_muc_buffer,
+    seal_suspended_muc_buffer,
 };
 use anyhow::Result;
 use dashmap::DashMap;
+use northstar_room_application::muc_service::{MucWakePort, SerializableMucOccupant};
 use northstar_session_application::sm_suspension::{
     MucSuspensionRequest, SmSuspensionLimits, SmSuspensionRepository, SmSuspensionRequest,
 };
+use northstar_xmpp_types::jid_text::localpart;
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
-pub(crate) struct SmSuspensionContext<R> {
+/// The cluster calls SM suspension makes: whether PostgreSQL MUC authority is on, this node's id, the wake of a
+/// committed MUC operation, and the Redis record of a suspended occupant.
+pub trait SmSuspensionCluster: MucWakePort + Send + Sync {
+    fn is_enabled(&self) -> bool;
+    fn node_id(&self) -> &str;
+    fn register_suspended_muc_occupant(
+        &self,
+        room_jid: &str,
+        nick: &str,
+        sm_session_id: uuid::Uuid,
+        json: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+}
+
+pub struct SmSuspensionContext<R, C> {
     repository: R,
     limits: SmSuspensionLimits,
     muc_occupants: Arc<DashMap<String, MucOccupant>>,
-    cluster: crate::cluster::ClusterSmSuspension,
+    cluster: C,
 }
 
-impl<R: SmSuspensionRepository> SmSuspensionContext<R> {
-    pub(crate) fn new(
+impl<R: SmSuspensionRepository, C: SmSuspensionCluster> SmSuspensionContext<R, C> {
+    pub fn new(
         repository: R,
         limits: SmSuspensionLimits,
         muc_occupants: Arc<DashMap<String, MucOccupant>>,
-        cluster: crate::cluster::ClusterSmSuspension,
+        cluster: C,
     ) -> Self {
         Self {
             repository,
@@ -34,16 +53,13 @@ impl<R: SmSuspensionRepository> SmSuspensionContext<R> {
         }
     }
 
-    pub(crate) async fn suspend_exact_session(
-        &self,
-        request: SmSuspensionRequest<'_>,
-    ) -> Result<bool> {
+    pub async fn suspend_exact_session(&self, request: SmSuspensionRequest<'_>) -> Result<bool> {
         self.repository
             .suspend_exact_session(request, self.limits)
             .await
     }
 
-    pub(crate) async fn mark_suspended_muc_durable(
+    pub async fn mark_suspended_muc_durable(
         &self,
         endpoints: Vec<Arc<SuspendedMucEndpoint>>,
     ) -> bool {
@@ -190,10 +206,7 @@ impl<R: SmSuspensionRepository> SmSuspensionContext<R> {
         complete
     }
 
-    pub(crate) async fn seal_suspended_muc_endpoints(
-        &self,
-        endpoints: &[Arc<SuspendedMucEndpoint>],
-    ) {
+    pub async fn seal_suspended_muc_endpoints(&self, endpoints: &[Arc<SuspendedMucEndpoint>]) {
         let mut seen = HashSet::new();
         for endpoint in endpoints {
             if seen.insert(Arc::as_ptr(endpoint) as usize) {
@@ -202,15 +215,15 @@ impl<R: SmSuspensionRepository> SmSuspensionContext<R> {
         }
     }
 
-    pub(crate) fn retain_suspended_sm_capacity(
+    pub fn retain_suspended_sm_capacity(
         &self,
         endpoints: &[Arc<SuspendedMucEndpoint>],
         capacity: northstar_session_application::sm_capacity::SmCapacityLease,
     ) {
-        super::session_cleanup_local::retain_suspended_sm_capacity_in(endpoints, capacity);
+        crate::local_routes::suspended_muc::retain_suspended_sm_capacity(endpoints, capacity);
     }
 
-    pub(crate) async fn snapshot_suspended_muc_for_disconnect(
+    pub async fn snapshot_suspended_muc_for_disconnect(
         &self,
         endpoints: &[Arc<SuspendedMucEndpoint>],
         snapshot: &mut northstar_session_application::sm::SmSessionSnapshot,
@@ -271,6 +284,37 @@ mod tests {
     };
     use std::{collections::HashMap, sync::Mutex};
     use uuid::Uuid;
+
+    #[derive(Clone, Copy)]
+    struct DisabledCluster;
+
+    impl MucWakePort for DisabledCluster {
+        async fn wake(&self, _descriptor: &ClusterMucWakeDescriptor) -> Result<()> {
+            Ok(())
+        }
+
+        fn record_failure(&self, _error: &anyhow::Error) {}
+    }
+
+    impl SmSuspensionCluster for DisabledCluster {
+        fn is_enabled(&self) -> bool {
+            false
+        }
+
+        fn node_id(&self) -> &str {
+            "example.test"
+        }
+
+        async fn register_suspended_muc_occupant(
+            &self,
+            _room_jid: &str,
+            _nick: &str,
+            _sm_session_id: uuid::Uuid,
+            _json: &str,
+        ) -> Result<bool> {
+            Ok(true)
+        }
+    }
 
     #[derive(Default)]
     struct LostAppendResponse {
@@ -335,10 +379,7 @@ mod tests {
         let repository = SharedLostAppend::default();
         let occupants = Arc::new(DashMap::new());
         let suspended = Arc::new(DashMap::new());
-        let cluster =
-            crate::cluster::ClusterManager::new(None, "example.test", None, None, None, None)
-                .await
-                .unwrap();
+        let cluster = DisabledCluster;
         let context = || {
             SmSuspensionContext::new(
                 repository.clone(),
@@ -347,22 +388,17 @@ mod tests {
                     max_bytes: 4096,
                 },
                 Arc::clone(&occupants),
-                cluster.sm_suspension(),
+                cluster,
             )
         };
         let session_id = Uuid::new_v4();
         let first = context();
-        let endpoints = super::super::session_cleanup_local::suspend_local_muc_occupants_in(
-            &occupants,
+        let endpoint = crate::local_routes::suspended_muc::canonical_suspended_muc_endpoint(
             &suspended,
-            "alice@example.test/phone",
-            Uuid::new_v4(),
             session_id,
-            &DashMap::new(),
-            0,
-            0,
+            Arc::new(SuspendedMucEndpoint::new(session_id)),
         );
-        let endpoint = Arc::clone(&endpoints[0]);
+        let endpoints = vec![Arc::clone(&endpoint)];
         {
             let mut buffer = endpoint.buffer.lock().await;
             for stanza in ["first", "middle", "last"] {

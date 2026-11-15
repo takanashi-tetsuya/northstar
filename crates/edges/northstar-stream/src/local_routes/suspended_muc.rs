@@ -9,7 +9,7 @@ use anyhow::Context;
 use dashmap::DashMap;
 use northstar_room_application::muc_service::SerializableMucOccupant;
 use northstar_session_core::JoinedMucMembership;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 pub fn muc_actor_identity_matches(
@@ -316,4 +316,117 @@ pub fn local_muc_membership_snapshots(
         .iter()
         .map(|entry| (entry.key().clone(), entry.value().clone()))
         .collect()
+}
+
+/// Collect every suspended endpoint of one SM session, from its occupants and the session-global gate, and
+/// register the first as that gate. An endpoint already waiting or mid-commit is sealed, a reserved one stays
+/// reserved and any other goes back to `Waiting`; a live route is marked suspended.
+pub async fn pause_suspended_muc_delivery(
+    occupants: &DashMap<String, MucOccupant>,
+    suspended_sessions: &DashMap<uuid::Uuid, Arc<SuspendedMucEndpoint>>,
+    sm_session_id: uuid::Uuid,
+) -> Vec<Arc<SuspendedMucEndpoint>> {
+    let mut endpoints = occupants
+        .iter()
+        .filter_map(|occupant| match &occupant.endpoint {
+            MucOccupantEndpoint::Suspended(endpoint) if endpoint.sm_session_id == sm_session_id => {
+                Some(Arc::clone(endpoint))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if let Some(endpoint) = suspended_sessions.get(&sm_session_id) {
+        endpoints.push(Arc::clone(&endpoint));
+    }
+    let mut seen = HashSet::new();
+    endpoints.retain(|endpoint| seen.insert(Arc::as_ptr(endpoint) as usize));
+    if let Some(endpoint) = endpoints.first() {
+        match suspended_sessions.entry(sm_session_id) {
+            dashmap::mapref::entry::Entry::Vacant(slot) => {
+                slot.insert(Arc::clone(endpoint));
+            }
+            dashmap::mapref::entry::Entry::Occupied(_) => {}
+        }
+    }
+    for endpoint in &endpoints {
+        let transition_from_live = {
+            let mut route = endpoint
+                .route
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if matches!(&*route, SuspendedMucRoute::Live(_)) {
+                *route = SuspendedMucRoute::Transitioning;
+                true
+            } else {
+                false
+            }
+        };
+        let mut buffer = endpoint.buffer.lock().await;
+        buffer.phase = match buffer.phase.clone() {
+            SuspendedMucPhase::Durable
+            | SuspendedMucPhase::Collecting
+            | SuspendedMucPhase::Resuming
+            | SuspendedMucPhase::Sealed => SuspendedMucPhase::Waiting,
+            SuspendedMucPhase::Reserved => SuspendedMucPhase::Reserved,
+            SuspendedMucPhase::Dormant => SuspendedMucPhase::Waiting,
+            SuspendedMucPhase::Waiting
+            | SuspendedMucPhase::Committing
+            | SuspendedMucPhase::CheckpointOwned => SuspendedMucPhase::Sealed,
+        };
+        drop(buffer);
+        if transition_from_live {
+            *endpoint
+                .route
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = SuspendedMucRoute::Suspended;
+        }
+        endpoint.changed.notify_waiters();
+    }
+    endpoints
+}
+
+/// Install the exact post-finalization replay base. `claim_resume` is only
+/// a preliminary snapshot: acknowledgements may advance before the
+/// PostgreSQL activation CAS returns. Keeping the endpoint in `Waiting`
+/// until this method prevents that stale claim size from opening excess
+/// stanza or byte budget.
+pub async fn begin_suspended_muc_resume(
+    endpoints: &[Arc<SuspendedMucEndpoint>],
+    base_stanzas: usize,
+    base_bytes: usize,
+) -> bool {
+    let mut complete = true;
+    let mut seen = HashSet::new();
+    for endpoint in endpoints {
+        if !seen.insert(Arc::as_ptr(endpoint) as usize) {
+            continue;
+        }
+        let mut buffer = endpoint.buffer.lock().await;
+        match buffer.phase.clone() {
+            SuspendedMucPhase::Waiting | SuspendedMucPhase::Sealed => {
+                buffer.base_stanzas = base_stanzas;
+                buffer.base_bytes = base_bytes;
+                buffer.phase = SuspendedMucPhase::Resuming;
+            }
+            SuspendedMucPhase::Reserved => {
+                buffer.base_stanzas = base_stanzas;
+                buffer.base_bytes = base_bytes;
+            }
+            _ => complete = false,
+        }
+        drop(buffer);
+        endpoint.changed.notify_waiters();
+    }
+    complete
+}
+
+/// Drop the SM capacity lease each endpoint holds.
+pub fn clear_suspended_sm_capacity(endpoints: &[Arc<SuspendedMucEndpoint>]) {
+    for endpoint in endpoints {
+        endpoint
+            .sm_capacity
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
 }

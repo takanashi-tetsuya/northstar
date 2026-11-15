@@ -286,7 +286,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         session_id: uuid::Uuid,
         claim_token: uuid::Uuid,
     ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send;
-    /// See `AppState::clear_suspended_sm_capacity`.
+    /// See `local_routes::suspended_muc::clear_suspended_sm_capacity`.
     fn clear_suspended_sm_capacity(&self, endpoints: &[Arc<SuspendedMucEndpoint>]);
     /// Publish a restore plan only after the `<resumed/>` control and complete
     /// replay have reached the transport. The endpoint mutex is held while all
@@ -335,7 +335,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         device_id: uuid::Uuid,
         epoch: i64,
     ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
-    /// See `AppState::pause_suspended_muc_delivery`.
+    /// See `local_routes::suspended_muc::pause_suspended_muc_delivery`.
     fn pause_suspended_muc_delivery(
         &self,
         sm_session_id: uuid::Uuid,

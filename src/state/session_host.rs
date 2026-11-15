@@ -384,7 +384,12 @@ impl SessionHost for AppState {
         base_stanzas: usize,
         base_bytes: usize,
     ) -> bool {
-        AppState::begin_suspended_muc_resume(self, endpoints, base_stanzas, base_bytes).await
+        northstar_stream::local_routes::suspended_muc::begin_suspended_muc_resume(
+            endpoints,
+            base_stanzas,
+            base_bytes,
+        )
+        .await
     }
 
     fn c2s_scram_sha1_enabled(&self) -> bool {
@@ -422,7 +427,7 @@ impl SessionHost for AppState {
     }
 
     fn clear_suspended_sm_capacity(&self, endpoints: &[Arc<SuspendedMucEndpoint>]) {
-        AppState::clear_suspended_sm_capacity(self, endpoints)
+        northstar_stream::local_routes::suspended_muc::clear_suspended_sm_capacity(endpoints)
     }
 
     async fn commit_local_muc_resume(
@@ -487,7 +492,12 @@ impl SessionHost for AppState {
         &self,
         sm_session_id: uuid::Uuid,
     ) -> Vec<Arc<SuspendedMucEndpoint>> {
-        AppState::pause_suspended_muc_delivery(self, sm_session_id).await
+        northstar_stream::local_routes::suspended_muc::pause_suspended_muc_delivery(
+            &self.room.muc_occupants,
+            &self.room.suspended_muc_sessions,
+            sm_session_id,
+        )
+        .await
     }
 
     fn pending_caps(&self) -> &northstar_protocol_runtime::caps::PendingCapsIndex {

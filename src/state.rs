@@ -138,7 +138,6 @@ use sqlx::{
 #[cfg(test)]
 use std::sync::atomic::AtomicU8;
 use std::{
-    collections::HashSet,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,

@@ -486,13 +486,13 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     ) -> impl std::future::Future<Output = Result<Option<MucOccupant>>> + Send;
     /// The IQ routes the client dispatch hands requests to.
     fn iq_routes() -> &'static IqRouter<ClientIqRoute<Self>>;
-    /// See `AppState::blocked_muc_recipient_accounts`.
+    /// See `MucDeliveryContext::blocked_muc_recipient_accounts`.
     fn blocked_muc_recipient_accounts(
         &self,
         occupants: &[MucOccupant],
         stanza_senders: &[String],
     ) -> impl std::future::Future<Output = std::collections::HashSet<String>> + Send;
-    /// See `AppState::deliver_to_muc_occupant`.
+    /// See `MucDeliveryContext::deliver_to_muc_occupant`.
     fn deliver_to_muc_occupant(
         &self,
         occupant: &MucOccupant,

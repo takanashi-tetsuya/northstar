@@ -131,7 +131,9 @@ impl MucHost for AppState {
         occupants: &[MucOccupant],
         stanza_senders: &[String],
     ) -> std::collections::HashSet<String> {
-        AppState::blocked_muc_recipient_accounts(self, occupants, stanza_senders).await
+        self.muc_delivery_context()
+            .blocked_muc_recipient_accounts(occupants, stanza_senders)
+            .await
     }
 
     async fn cache_committed_muc_join(
@@ -183,7 +185,9 @@ impl MucHost for AppState {
     }
 
     async fn deliver_to_muc_occupant(&self, occupant: &MucOccupant, stanza: String) -> bool {
-        AppState::deliver_to_muc_occupant(self, occupant, stanza).await
+        self.muc_delivery_context()
+            .deliver_to_muc_occupant(occupant, stanza)
+            .await
     }
 
     async fn deliver_to_muc_occupant_unchecked(
@@ -191,7 +195,9 @@ impl MucHost for AppState {
         occupant: &MucOccupant,
         stanza: String,
     ) -> bool {
-        AppState::deliver_to_muc_occupant_unchecked(self, occupant, stanza).await
+        self.muc_delivery_context()
+            .deliver_to_muc_occupant_unchecked(occupant, stanza)
+            .await
     }
 
     async fn dispatch_push_notification(&self, recipient_id: uuid::Uuid) -> Result<()> {
@@ -283,11 +289,9 @@ impl MucHost for AppState {
         authenticated_domain: &str,
         connection_id: uuid::Uuid,
     ) -> Vec<MucOccupant> {
-        AppState::federated_muc_occupants_for_closed_connection(
-            self,
-            authenticated_domain,
-            connection_id,
-        )
+        self.room
+            .muc_occupants
+            .federated_muc_occupants_for_closed_connection(authenticated_domain, connection_id)
     }
 
     fn federated_muc_owner_node_id(&self) -> &str {
@@ -448,7 +452,7 @@ impl MucHost for AppState {
     }
 
     fn muc_occupants_for(&self, room_jid: &str) -> Vec<(String, MucOccupant)> {
-        AppState::muc_occupants_for(self, room_jid)
+        self.room.muc_occupants.muc_occupants_for(room_jid)
     }
 
     fn muc_pg_authority_enabled(&self) -> bool {
@@ -685,7 +689,13 @@ impl MucHost for AppState {
         room_jid: &str,
         membership: &JoinedMucMembership,
     ) -> Option<MucOccupant> {
-        AppState::validated_local_muc_occupant(self, full_jid, connection_id, room_jid, membership)
+        self.room.muc_occupants.validated_local_muc_occupant(
+            &self.sessions,
+            full_jid,
+            connection_id,
+            room_jid,
+            membership,
+        )
     }
 
     async fn wake_committed_muc_operation(&self, operation_id: uuid::Uuid) -> anyhow::Result<()> {

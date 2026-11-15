@@ -18,7 +18,7 @@ impl AppState {
             .filter_map(|json| serde_json::from_str::<super::SerializableMucOccupant>(&json).ok())
             .map(|occupant| (occupant.nick.clone(), occupant))
             .collect::<std::collections::HashMap<_, _>>();
-        for (_, occupant) in self.muc_occupants_for(room_jid) {
+        for (_, occupant) in self.room.muc_occupants.muc_occupants_for(room_jid) {
             let occupant = super::SerializableMucOccupant::from(&occupant);
             occupants.insert(occupant.nick.clone(), occupant);
         }

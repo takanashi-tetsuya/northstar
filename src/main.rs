@@ -815,10 +815,11 @@ async fn run() -> Result<()> {
     // the abort-and-reap deadline below.
     shutdown_state.connection_actors().close_admission();
     if graceful_signal {
+        let muc_delivery = shutdown_state.muc_delivery_context();
         match await_shutdown_notifications(
             &cancel,
             &mut service_tasks,
-            shutdown_state.notify_muc_system_shutdown(),
+            northstar_muc_xmpp::shutdown::notify_muc_system_shutdown(&muc_delivery),
             tokio::time::Instant::now() + std::time::Duration::from_secs(2),
         )
         .await

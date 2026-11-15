@@ -75,14 +75,10 @@ impl SessionCleanupLocal {
     }
 
     pub(crate) fn muc_occupants_for(&self, room_jid: &str) -> Vec<(String, MucOccupant)> {
-        let Ok(room_jid) = northstar_xmpp_types::jid::canonicalize_bare(room_jid) else {
-            return Vec::new();
-        };
-        self.occupants
-            .iter()
-            .filter(|entry| entry.value().room_jid == room_jid)
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect()
+        northstar_stream::local_routes::muc_table::muc_occupants_for_room_in(
+            &self.occupants,
+            room_jid,
+        )
     }
 
     /// Remove only the old incarnation, then publish its removal before

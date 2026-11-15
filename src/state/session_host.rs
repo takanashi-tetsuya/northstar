@@ -733,11 +733,15 @@ impl SessionHost for AppState {
         occupants: &[MucOccupant],
         stanza_senders: &[String],
     ) -> std::collections::HashSet<String> {
-        AppState::blocked_muc_recipient_accounts(self, occupants, stanza_senders).await
+        self.muc_delivery_context()
+            .blocked_muc_recipient_accounts(occupants, stanza_senders)
+            .await
     }
 
     async fn deliver_to_muc_occupant(&self, occupant: &MucOccupant, stanza: String) -> bool {
-        AppState::deliver_to_muc_occupant(self, occupant, stanza).await
+        self.muc_delivery_context()
+            .deliver_to_muc_occupant(occupant, stanza)
+            .await
     }
 
     type S2sOutbox = FederationRouter;

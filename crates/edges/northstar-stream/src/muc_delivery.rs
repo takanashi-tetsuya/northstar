@@ -4,9 +4,9 @@ use crate::local_routes::muc::{
     MucOccupant, MucOccupantEndpoint, SuspendedMucEndpoint, SuspendedMucPhase, SuspendedMucRoute,
     SuspendedMucStanza,
 };
+use crate::local_routes::muc_table::validated_local_muc_occupant_in;
 use crate::local_routes::session::OnlineSession;
 use crate::local_routes::session_table::session_entries_for_in;
-use crate::local_routes::suspended_muc::muc_actor_identity_matches;
 use dashmap::DashMap;
 use northstar_federation_core::FederationRoute;
 use northstar_room_application::cluster_muc_receipt_claim::ClusterMucReceiptClaimRepository;
@@ -71,34 +71,14 @@ where
         room_jid: &str,
         membership: &JoinedMucMembership,
     ) -> Option<MucOccupant> {
-        if connection_id.is_nil() || membership.cluster_epoch.is_nil() {
-            return None;
-        }
-        let full_jid = northstar_xmpp_types::jid::canonical_session_key(full_jid).ok()?;
-        let room_jid = northstar_xmpp_types::jid::canonicalize_bare(room_jid).ok()?;
-        let session = self.sessions.get(&full_jid)?;
-        if session.connection_id != connection_id
-            || !session
-                .muc_memberships
-                .get(&room_jid)
-                .is_some_and(|current| current.value() == membership)
-        {
-            return None;
-        }
-        drop(session);
-        let key = northstar_room_core::stanza::muc_occupant_key(&room_jid, &membership.nick);
-        self.muc_occupants
-            .get(&key)
-            .filter(|occupant| {
-                muc_actor_identity_matches(
-                    occupant,
-                    &full_jid,
-                    connection_id,
-                    &room_jid,
-                    membership,
-                )
-            })
-            .map(|occupant| occupant.value().clone())
+        validated_local_muc_occupant_in(
+            &self.sessions,
+            &self.muc_occupants,
+            full_jid,
+            connection_id,
+            room_jid,
+            membership,
+        )
     }
 
     pub async fn deliver_to_muc_occupant(&self, occupant: &MucOccupant, stanza: String) -> bool {

@@ -255,22 +255,24 @@ async fn slow_notification_does_not_block_fast_peers_and_cancellation_drops_pend
     let started = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let dropped = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (fast_tx, fast_rx) = oneshot::channel();
-    let mut completions = Box::pin(crate::state::count_shutdown_notification_completions(
-        [None, Some(fast_tx)].into_iter().map(|fast_tx| {
-            let started = std::sync::Arc::clone(&started);
-            let dropped = std::sync::Arc::clone(&dropped);
-            async move {
-                started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let _drop_count = NotificationDropCount(dropped);
-                if let Some(fast_tx) = fast_tx {
-                    let _ = fast_tx.send(());
-                    true
-                } else {
-                    std::future::pending::<bool>().await
+    let mut completions = Box::pin(
+        northstar_muc_xmpp::shutdown::count_shutdown_notification_completions(
+            [None, Some(fast_tx)].into_iter().map(|fast_tx| {
+                let started = std::sync::Arc::clone(&started);
+                let dropped = std::sync::Arc::clone(&dropped);
+                async move {
+                    started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let _drop_count = NotificationDropCount(dropped);
+                    if let Some(fast_tx) = fast_tx {
+                        let _ = fast_tx.send(());
+                        true
+                    } else {
+                        std::future::pending::<bool>().await
+                    }
                 }
-            }
-        }),
-    ));
+            }),
+        ),
+    );
     tokio::time::timeout(Duration::from_secs(2), async {
         tokio::select! {
             result = &mut completions => panic!("slow notification completed unexpectedly: {result}"),
@@ -290,8 +292,8 @@ async fn notification_concurrency_remains_bounded_when_all_peers_are_slow() {
     use std::future::Future;
     let started = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let dropped = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let mut completions = Box::pin(crate::state::count_shutdown_notification_completions(
-        (0..17).map(|_| {
+    let mut completions = Box::pin(
+        northstar_muc_xmpp::shutdown::count_shutdown_notification_completions((0..17).map(|_| {
             let started = std::sync::Arc::clone(&started);
             let dropped = std::sync::Arc::clone(&dropped);
             async move {
@@ -299,8 +301,8 @@ async fn notification_concurrency_remains_bounded_when_all_peers_are_slow() {
                 let _drop_count = NotificationDropCount(dropped);
                 std::future::pending::<bool>().await
             }
-        }),
-    ));
+        })),
+    );
     std::future::poll_fn(|context| {
         assert!(completions.as_mut().poll(context).is_pending());
         std::task::Poll::Ready(())

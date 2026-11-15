@@ -9,4 +9,5 @@ pub mod muc;
 pub mod ports;
 mod protocol_session;
 pub mod resume;
+pub mod shutdown;
 pub use self::protocol_session::MucHandlers;

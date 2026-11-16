@@ -99,3 +99,29 @@ impl CapsEffectPorts for CapsEffectAdapters {
         .await
     }
 }
+
+impl AppState {
+    pub(crate) fn caps_effect_dispatcher(
+        &self,
+    ) -> &Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher> {
+        &self.caps_effect_dispatcher
+    }
+
+    pub(crate) fn caps_cache(&self) -> &northstar_protocol_runtime::caps::CapsCacheIndex {
+        &self.caps_cache
+    }
+
+    pub(crate) fn caps_by_jid(&self) -> &northstar_protocol_runtime::caps::CapsResourceIndex {
+        &self.caps_by_jid
+    }
+
+    pub(crate) fn pending_caps(&self) -> &northstar_protocol_runtime::caps::PendingCapsIndex {
+        &self.pending_caps
+    }
+
+    pub(crate) fn federated_caps_gates(
+        &self,
+    ) -> &northstar_protocol_runtime::caps::FederatedCapsGateIndex {
+        &self.federated_caps_gates
+    }
+}

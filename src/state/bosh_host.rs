@@ -58,3 +58,13 @@ impl BoshHost for AppState {
         self.metrics.record_bosh_session_opened();
     }
 }
+
+impl AppState {
+    /// Process-local XEP-0124/XEP-0206 session authority. Transport handlers
+    /// may submit bounded manager operations but cannot replace the manager.
+    pub(crate) fn bosh_manager(&self) -> &northstar_bosh::BoshManager {
+        self.bosh
+            .as_ref()
+            .expect("BOSH routes exist only when the capability runtime is enabled")
+    }
+}

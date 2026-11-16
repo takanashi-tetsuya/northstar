@@ -6,7 +6,6 @@ pub(crate) mod account_teardown_runtime;
 mod admin_session_cleanup;
 mod api_query_presence;
 mod archive_session_host;
-pub(crate) mod background_maintenance;
 mod bosh_host;
 mod c2s_host;
 pub(crate) mod caps_effect_dispatch;
@@ -29,15 +28,12 @@ pub(crate) use admin_session_cleanup::AdminSessionCleanupContext;
 mod admin_cluster_queries;
 pub(crate) mod cluster_adapters;
 pub(crate) mod cluster_direct_commit;
-pub(crate) mod cluster_failure_supervisor;
-mod cluster_listener;
 pub(crate) mod cluster_listener_blocking;
 pub(crate) mod cluster_listener_dispatch;
 pub(crate) mod cluster_listener_message;
 pub(crate) mod cluster_listener_mix_caps;
 pub(crate) mod cluster_listener_sm_muc_teardown;
 pub(crate) mod cluster_maintenance;
-pub(crate) mod cluster_maintenance_context;
 pub(crate) mod cluster_muc_delivery_endpoints;
 pub(crate) mod cluster_muc_outbox_worker;
 pub(crate) mod cluster_recovery_replay;
@@ -109,7 +105,7 @@ use northstar_config::{
 };
 use northstar_http::contexts::{
     api_queries, governance, http_body_admission, http_policy, omemo_poll, retention_policy,
-    AdminGatewayVerifier, HttpTransportPolicy, PublicDiscoveryContext,
+    PublicDiscoveryContext,
 };
 use northstar_telemetry::metrics::Metrics;
 use northstar_upload_application::safety::UploadSafetyGate;
@@ -149,11 +145,12 @@ mod operations_module;
 mod pubsub_module;
 mod room_module;
 mod roster_module;
-mod runtime_contexts;
 mod runtime_control;
 mod session_module;
+mod session_runtime;
 mod suspended_muc;
 mod upload_module;
+mod workers;
 
 use self::abuse_module::*;
 use self::archive_module::*;

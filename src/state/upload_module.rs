@@ -406,3 +406,12 @@ impl UploadRuntime {
         }
     }
 }
+
+impl AppState {
+    pub(crate) fn upload_store(&self) -> &dyn UploadStore {
+        self.upload
+            .store
+            .as_deref()
+            .expect("upload routes and workers require an enabled or draining runtime")
+    }
+}

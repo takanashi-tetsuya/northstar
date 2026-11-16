@@ -1,17 +1,14 @@
 //! Bind the durable workers to the live root effect contexts and repositories.
 
 use super::{
-    AdminSessionCleanupContext, AppState, OperationIslandEffects, OperationMucDestroyEffects,
-    OperationPanicEffects, OperationSessionEffects, OperationTlsReloadEffects,
-    OperationWorkerControl,
+    AppState, OperationIslandEffects, OperationMucDestroyEffects, OperationPanicEffects,
+    OperationSessionEffects, OperationTlsReloadEffects, OperationWorkerControl,
 };
 use anyhow::Result;
-use northstar_operations_application::admin_session_cleanup_worker::AdminSessionCleanupWorkerService;
 use northstar_operations_application::operation_effect_fence::OperationEffectFenceService;
 use northstar_operations_application::operation_journal_worker::OperationJournalWorkerService;
 use northstar_operations_application::operation_muc_destroy::{MucDestroyCommit, MucDestroyEffect};
 use northstar_operations_application::operations::{OperationRecord, OperationTargetRecord};
-use northstar_operations_postgres::admin_session_cleanup_worker_repository::PostgresAdminSessionCleanupRepository;
 use northstar_operations_postgres::api_operations::{OperationLease, OperationTargetLease};
 use northstar_operations_postgres::operation_effect_fence_repository::PostgresOperationEffectFenceRepository;
 use northstar_operations_postgres::operation_journal_worker_repository::PostgresOperationJournalWorkerRepository;
@@ -27,7 +24,6 @@ pub(crate) struct RuntimeTlsReloadEffects(OperationTlsReloadEffects);
 pub(crate) struct RuntimeIslandEffects(OperationIslandEffects);
 pub(crate) struct RuntimeMucDestroyEffects(OperationMucDestroyEffects);
 pub(crate) struct RuntimePanicEffects(OperationPanicEffects);
-pub(crate) struct RuntimeAdminSessionCleanup(AdminSessionCleanupContext);
 
 pub(crate) type BoundOperationWorkerRuntime = OperationWorkerRuntime<
     RuntimeControl,
@@ -48,10 +44,6 @@ impl AppState {
             RuntimeMucDestroyEffects(self.operation_muc_destroy_effects()),
             RuntimePanicEffects(self.operation_panic_effects()),
         )
-    }
-
-    pub(crate) fn admin_session_cleanup_runtime(&self) -> RuntimeAdminSessionCleanup {
-        RuntimeAdminSessionCleanup(self.admin_session_cleanup_context())
     }
 }
 
@@ -131,61 +123,5 @@ impl ports::OperationMucDestroyEffects for RuntimeMucDestroyEffects {
 impl ports::OperationPanicEffects for RuntimePanicEffects {
     async fn execute(&self) -> Result<Value> {
         self.0.execute().await
-    }
-}
-
-impl ports::AdminSessionCleanupContext for RuntimeAdminSessionCleanup {
-    type Repository = PostgresAdminSessionCleanupRepository;
-
-    fn service(&self) -> &AdminSessionCleanupWorkerService<Self::Repository> {
-        self.0.service()
-    }
-
-    fn local_domain(&self) -> &str {
-        self.0.local_domain()
-    }
-
-    fn revoke_generation_routes(
-        &self,
-        user_id: Uuid,
-        bare_account_jid: &str,
-        auth_generation: i64,
-    ) -> usize {
-        self.0
-            .revoke_generation_routes(user_id, bare_account_jid, auth_generation)
-    }
-
-    fn fence_exact_session(
-        &self,
-        full_jid: &str,
-        user_id: Uuid,
-        auth_generation: i64,
-        connection_id: Uuid,
-    ) -> bool {
-        self.0
-            .fence_exact_session(full_jid, user_id, auth_generation, connection_id)
-    }
-
-    async fn send_account_generation_teardown(
-        &self,
-        bare_jid: &str,
-        user_id: Uuid,
-        auth_generation: i64,
-    ) -> Result<()> {
-        self.0
-            .notifier()
-            .send_account_generation_teardown(bare_jid, user_id, auth_generation)
-            .await
-    }
-
-    async fn send_session_instance_termination(
-        &self,
-        full_jid: &str,
-        connection_id: Uuid,
-    ) -> Result<bool> {
-        self.0
-            .notifier()
-            .send_session_instance_termination(full_jid, connection_id)
-            .await
     }
 }

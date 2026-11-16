@@ -286,6 +286,11 @@ idempotency keyrings, upload storage, client/upload admission internals, the
 message persistence capability, or the worker registry as public fields.
 It supplies purpose-specific FAST and Dialback operations and narrow internal
 capability accessors. Secret byte vectors are zeroized when state is dropped.
+`src/main.rs` calls `AppState::start_workers()` once; `src/state/workers.rs`
+dispatches to concern modules under `src/state/workers/`, which construct narrow
+contexts beside their supervisor registrations in the original worker order.
+Existing `AppState::start_*` functions keep their startup sites. Shared HTTP,
+federation, session and admission handles live in their concern's state module.
 Background policy, cleanup, digest, Redis and recovery work is registered with
 the worker supervisor: security-critical exits or heartbeat expiry cancel the
 service, restartable exits or heartbeat expiry abort the stuck attempt and use

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readProductionModule } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const files = { main: 'src/main.rs', subservers: 'src/runtime/subservers.rs', maintenanceOwnership: 'crates/contexts/operations/northstar-operations-postgres/src/maintenance_ownership.rs', retention: 'crates/contexts/operations/northstar-operations-application/src/retention_worker.rs',
+const files = { main: 'src/main.rs', workerComposition: 'src/state/workers.rs', subservers: 'src/runtime/subservers.rs', maintenanceOwnership: 'crates/contexts/operations/northstar-operations-postgres/src/maintenance_ownership.rs', retention: 'crates/contexts/operations/northstar-operations-application/src/retention_worker.rs',
   subscriptionCleanup: 'crates/contexts/pubsub/northstar-pubsub-application/src/subscription_cleanup.rs',
   pubsubProtocol: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/protocol_session.rs', pubsubDelivery: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/delivery.rs',
   pubsubAdapter: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/pubsub.rs',
@@ -42,13 +42,13 @@ function exactFields(source, declaration, expected) {
 }
 
 export function readSubserverSources() {
-  // State and PubSub sources are read as their whole production modules.
+  // State, worker composition and PubSub are read as whole production modules.
   return Object.fromEntries(Object.entries(files).map(([name, file]) => [name,
-    ['state', 'pubsubProtocol', 'pubsubDelivery', 'pubsubAdapter', 'pubsubService'].includes(name)
+    ['state', 'workerComposition', 'pubsubProtocol', 'pubsubDelivery', 'pubsubAdapter', 'pubsubService'].includes(name)
       ? readProductionModule(file, { root }) : fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
-export function verifySubserverBoundaries({ main, subservers, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubDelivery, pubsubAdapter, pubsubService, state, runtimeControl, cluster, responsibility }) {
+export function verifySubserverBoundaries({ main, workerComposition, subservers, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubDelivery, pubsubAdapter, pubsubService, state, runtimeControl, cluster, responsibility }) {
   // Alternate control ticks can legitimately perform no SQL. They must not
   // reset a lost advisory-lock session's consecutive database error count.
   const report = codeOnly(body(state, 'fn report_runtime_control_health(')).replace(/\s+/g, '');
@@ -161,13 +161,13 @@ export function verifySubserverBoundaries({ main, subservers, maintenanceOwnersh
   requireBoundary(ownership.includes('claim_maintenance_on_connection(&mut runtime_control_connection)') &&
     main.indexOf('claim_maintenance_on_connection(') < main.indexOf('let state = AppState::new('),
   'standalone must claim retention before state/listener activation on its existing control connection');
-  const guardedRegistrations = [...main.matchAll(/if process_role\.embeds_retention\(\)/g)]
-    .map((match) => body(main.slice(match.index), 'if process_role.embeds_retention()'));
+  const guardedRegistrations = [...workerComposition.matchAll(/if process_role\.embeds_retention\(\)/g)]
+    .map((match) => body(workerComposition.slice(match.index), 'if process_role.embeds_retention()'));
   requireBoundary(guardedRegistrations.filter((block) => block.includes('"archive-retention"') &&
     block.includes('retention_worker::serve_context(')).length === 1, 'standalone retention worker must have one explicit role guard');
   requireBoundary(guardedRegistrations.filter((block) => block.includes('"pubsub-subscription-cleanup"') &&
     block.includes('subscription_cleanup::serve_context(')).length === 1 &&
-    [...main.matchAll(/\.supervise\(\s*"pubsub-subscription-cleanup"/g)].length === 1,
+    [...workerComposition.matchAll(/\.supervise\(\s*"pubsub-subscription-cleanup"/g)].length === 1,
   'standalone subscription cleanup must have one explicit role guard');
   const workers = [...subservers.matchAll(/\.supervise(?:_draining)?\(\s*"([^"]+)"/g)].map((match) => match[1]);
   requireBoundary(JSON.stringify(workers) === JSON.stringify(['archive-retention', 'pubsub-subscription-cleanup']),

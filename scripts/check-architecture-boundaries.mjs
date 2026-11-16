@@ -260,6 +260,10 @@ const cluster = readProductionModule('crates/edges/northstar-cluster/src/lib.rs'
 // crates/platform/northstar-config/src/lib.rs and its non-test sibling modules (the whole production module)
 const configSource = readProductionModule('crates/platform/northstar-config/src/lib.rs', { root });
 const mainSource = read('src/main.rs');
+const workerComposition = readProductionModule('src/state/workers.rs', { root });
+const abuseWorkers = read('src/state/workers/abuse.rs');
+const maintenanceWorkers = read('src/state/workers/maintenance.rs');
+const clusterWorkers = read('src/state/workers/cluster.rs');
 const responsibilityDocument = read('docs/PROGRAM_RESPONSIBILITIES.md');
 const listenerStressDriver = read('scripts/listener-readiness-stress-wsl.sh');
 const loopbackPostgresFixture = read('scripts/loopback-postgres-ci.sh');
@@ -466,15 +470,19 @@ if (terminalMain.replace(/\s+/g, '') !== 'northstar_telemetry::logging::report_r
   throw new Error('main must report its final result through the bounded console owner');
 }
 const runtimeMain = structBody(mainSource, 'async fn run()');
-if (!runtimeMain.includes('let authority_probe = state.abuse_key_authority_probe();')
-    || !/tokio::time::timeout\(\s*ABUSE_KEY_AUTHORITY_QUERY_TIMEOUT,\s*authority_probe\.validate\(&authority_identity\)/s.test(runtimeMain)
-    || !runtimeMain.includes('let bg_context = Arc::new(state.background_maintenance_context());')
-    || /let authority_pool = state\.pool\.clone\(\)/.test(runtimeMain)) {
+if ([...runtimeMain.matchAll(/state\.start_workers\(&cancel, process_role\)/g)].length !== 1
+    || /\.supervise(?:_draining)?\(/.test(runtimeMain)) {
+  throw new Error('main must delegate supervised worker composition through exactly one startup call');
+}
+if (!abuseWorkers.includes('let authority_probe = abuse_key_authority_probe(state);')
+    || !/tokio::time::timeout\(\s*ABUSE_KEY_AUTHORITY_QUERY_TIMEOUT,\s*authority_probe\.validate\(&authority_identity\)/s.test(abuseWorkers)
+    || !maintenanceWorkers.includes('let bg_context = Arc::new(background_maintenance_context(state));')
+    || /let authority_pool = state\.pool\.clone\(\)/.test(workerComposition)) {
   throw new Error('critical key guard and housekeeping must use narrow repository-backed capabilities');
 }
-if (!runtimeMain.includes('state.retention_context()')
-    || !runtimeMain.includes('state.subscription_cleanup_context()')
-    || /PostgresMaintenanceRepository::new\(state\.pool\.clone\(\)\)/.test(runtimeMain)) {
+if (!maintenanceWorkers.includes('retention_context(state)')
+    || !maintenanceWorkers.includes('subscription_cleanup_context(state)')
+    || /PostgresMaintenanceRepository::new\(state\.pool\.clone\(\)\)/.test(workerComposition)) {
   throw new Error('retention workers must receive separate state-owned repository contexts');
 }
 const clusterShutdown = read('src/state/cluster_shutdown.rs');
@@ -3444,20 +3452,20 @@ const supervisedWorkerContracts = [
 ];
 const supervisedWorkers = supervisedWorkerContracts.map(({ name }) => name);
 const workerResponsibilityEvidence = {
-  'abuse-key-deployment-authority': ['src/main.rs', '`main`', '2 ×'],
-  'deployment-capacity-session-leases': ['src/main.rs', '`main`', '2 ×'],
-  'deployment-capacity-lease-reaper': ['src/main.rs', '`main`', '120 s'],
-  'background-maintenance': ['src/main.rs', '`main`', '180 s'],
-  'account-deletion-recovery': ['src/main.rs', '`main`', '1,200 s'],
-  'upload-storage-reconciliation': ['src/main.rs', '`main`', '600 s'],
-  'archive-retention': ['src/main.rs', '`main`', 'derived retention'],
-  'pubsub-subscription-cleanup': ['src/main.rs', '`main`, standalone only', '110 s'],
-  'admin-session-cleanup': ['src/main.rs', '`main`', '90 s'],
-  'redis-pubsub': ['src/main.rs', '`main`, cluster only', '45 s'],
-  'account-revocations': ['src/main.rs', '`main`, cluster only', '10 s'],
-  'cluster-maintenance': ['src/main.rs', '`main`, cluster only', '90 s'],
-  'standalone-muc-occupancy': ['src/main.rs', '`main`, standalone PostgreSQL MUC only', '45 s'],
-  'cluster-failure-policy': ['src/main.rs', '`main`, cluster only', '15 s'],
+  'abuse-key-deployment-authority': ['src/state/workers/abuse.rs', '`state/workers/abuse.rs`', '2 ×'],
+  'deployment-capacity-session-leases': ['src/state/workers/session.rs', '`state/workers/session.rs`', '2 ×'],
+  'deployment-capacity-lease-reaper': ['src/state/workers/session.rs', '`state/workers/session.rs`', '120 s'],
+  'background-maintenance': ['src/state/workers/maintenance.rs', '`state/workers/maintenance.rs`', '180 s'],
+  'account-deletion-recovery': ['src/state/workers/maintenance.rs', '`state/workers/maintenance.rs`', '1,200 s'],
+  'upload-storage-reconciliation': ['src/state/workers/upload.rs', '`state/workers/upload.rs`', '600 s'],
+  'archive-retention': ['src/state/workers/maintenance.rs', '`state/workers/maintenance.rs`', 'derived retention'],
+  'pubsub-subscription-cleanup': ['src/state/workers/maintenance.rs', '`state/workers/maintenance.rs`, standalone only', '110 s'],
+  'admin-session-cleanup': ['src/state/workers/operations.rs', '`state/workers/operations.rs`', '90 s'],
+  'redis-pubsub': ['src/state/workers/cluster.rs', '`state/workers/cluster.rs`, cluster only', '45 s'],
+  'account-revocations': ['src/state/workers/cluster.rs', '`state/workers/cluster.rs`, cluster only', '10 s'],
+  'cluster-maintenance': ['src/state/workers/cluster.rs', '`state/workers/cluster.rs`, cluster only', '90 s'],
+  'standalone-muc-occupancy': ['src/state/workers/cluster.rs', '`state/workers/cluster.rs`, standalone PostgreSQL MUC only', '45 s'],
+  'cluster-failure-policy': ['src/state/workers/cluster.rs', '`state/workers/cluster.rs`, cluster only', '15 s'],
   'cluster-muc-outbox': ['crates/edges/northstar-cluster/src/lib.rs', 'unconditionally registered', '30 s'],
   'locked-muc-expiry': ['src/state.rs', '`AppState` MUC startup', '20 s'],
   'runtime-control-refresh': ['src/state.rs', 'process startup reserves the connection', '5 s'],
@@ -3918,7 +3926,7 @@ const clusterFailureAuthority = rustItemBody(
 if (!clusterFailureSupervisor.includes('context.replay_maintenance')
     || !clusterFailureSupervisor.includes('context.route_maintenance')
     || !clusterFailureSupervisor.includes('.cleanup_and_validate(4096)')
-    || !mainSource.includes('state.cluster_failure_supervisor_context()')
+    || !clusterWorkers.includes('cluster_failure_supervisor_context(state)')
     || /ClusterManager|\bPgPool\b|\bAppState\b/.test(clusterFailureContext)
     || /ClusterManager|\bPgPool\b/.test(clusterFailureAuthority)
     || /cluster_(?:session_route|replay)_maintenance_service\s*:/.test(appState)
@@ -3945,7 +3953,7 @@ const accountRevocationWorker = rustItemBody(
   cluster,
   'pub async fn run_account_revocations<',
 );
-if (!mainSource.includes('state.account_revocation_worker_context()')
+if (!clusterWorkers.includes('account_revocation_worker_context(state)')
     || /Arc<AppState>|\bstate\./.test(accountRevocationWorker)
     || !accountRevocationWorker.includes('context.authority.identity()')
     || !accountRevocationWorker.includes('context.routes.revoke(')
@@ -4017,7 +4025,7 @@ if (!retentionContext.includes('counters: RetentionCounters')
 const housekeepingContext = structBody(read('crates/contexts/operations/northstar-operations-application/src/background_housekeeping.rs'), 'pub struct BackgroundHousekeepingContext');
 if (!housekeepingContext.includes('counters: BackgroundHousekeepingCounters')
     || housekeepingContext.includes('Arc<Metrics>')
-    || /bg_state\.metrics\b/.test(mainSource)) {
+    || /bg_state\.metrics\b/.test(workerComposition)) {
   throw new Error('background housekeeping must not retain the complete metrics registry');
 }
 const lockedMucExpiryWorker = rustItemBody(state, 'fn start_locked_muc_expiry(');

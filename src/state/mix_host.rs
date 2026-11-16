@@ -122,3 +122,9 @@ impl MixHost for AppState {
         .await
     }
 }
+
+impl AppState {
+    pub(crate) fn pending_mix_iq(&self) -> &northstar_room_core::mix_iq_relay::MixIqRelayIndex {
+        self.room.pending_mix_iq.as_ref()
+    }
+}

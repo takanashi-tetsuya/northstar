@@ -266,3 +266,52 @@ pub(crate) fn xmpp_transport_routes(state: &Arc<AppState>) -> Router {
 
 #[cfg(test)]
 mod tests;
+
+impl AppState {
+    pub(crate) fn readiness_context(&self) -> ReadinessContext {
+        ReadinessContext {
+            connection: self.connection_actors.readiness_probe(),
+            sm: self.session.sm_memory_governor.readiness_probe(),
+            upload: self.upload.safety_gate.readiness_probe(),
+            cluster: Arc::new(self.cluster.readiness_probe()),
+            workers: self.workers.readiness_probe(),
+            abuse_key_deployment: self.abuse.abuse_key_deployment.clone(),
+            persistence: self.operations.readiness_service.clone(),
+        }
+    }
+
+    pub(crate) fn http_transport_policy(&self) -> HttpTransportPolicy {
+        HttpTransportPolicy::new(
+            self.config.trusted_proxy_ips.clone(),
+            Arc::clone(&self.metrics.http_insecure_requests_rejected_total),
+            Arc::clone(&self.http_body_admission),
+        )
+    }
+
+    pub(crate) fn admin_gateway_verifier(&self) -> AdminGatewayVerifier {
+        AdminGatewayVerifier::new(self.web_admin_gateway_token.clone())
+    }
+
+    pub(crate) fn http_registration_availability(
+        &self,
+    ) -> northstar_auth_application::account::HttpRegistrationAvailability {
+        northstar_auth_application::account::HttpRegistrationAvailability::new(
+            Arc::clone(&self.registration_closed),
+            self.config.registration_dependency_locked(),
+            self.config.configured_registration_mode()
+                == northstar_config::RegistrationMode::InvitationOnly,
+        )
+    }
+
+    pub(crate) fn admin_gateway_authentication_enabled(&self) -> bool {
+        self.web_admin_gateway_token.is_some()
+    }
+
+    pub(crate) fn public_http_bind_address(&self) -> std::net::SocketAddr {
+        self.config.http_bind
+    }
+
+    pub(crate) fn admin_http_bind_address(&self) -> std::net::SocketAddr {
+        self.config.web_admin_bind
+    }
+}

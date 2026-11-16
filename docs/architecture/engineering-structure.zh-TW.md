@@ -68,7 +68,11 @@ facade 移出根 crate（5.13），根 crate 只剩上面三層。
 
 WP-495 後，operation runtime 的現行位置為
 `crates/contexts/operations/northstar-operations-xmpp/src/operation_runtime.rs`，測試位於同名目錄的
-`tests.rs`；根 crate 的 `src/state/operation_runtime_adapters.rs` 綁定 ports，`src/main.rs` 啟動 worker。
+`tests.rs`；根 crate 的 `src/state/operation_runtime_adapters.rs` 綁定一般 operation worker 的 ports，
+`src/main.rs` 保留其 `spawn_service_task`。WP-500 後，受監督的管理員會話清理由
+`src/state/workers/operations.rs` 綁定 ports 並註冊；`src/main.rs` 只呼叫一次
+`AppState::start_workers()`，`src/state/workers.rs` 依原順序委派各 concern 子模組建構 context 並註冊 worker。
+原有 `AppState::start_*` 函式留在原檔；共用的 HTTP、聯邦、會話與准入存取器留在對應的 state 模組。
 上表與 WP-44 紀錄保留 S4 搬移當時的配置。
 
 ## 4. 結構規則（由門禁執行）

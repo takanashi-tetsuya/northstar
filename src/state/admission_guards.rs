@@ -47,3 +47,11 @@ impl AppState {
         })
     }
 }
+
+impl AppState {
+    pub(crate) fn connection_actors(
+        &self,
+    ) -> &northstar_runtime::connection_actors::ConnectionActorRegistry {
+        &self.connection_actors
+    }
+}

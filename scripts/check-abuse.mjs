@@ -6,7 +6,7 @@ import { findRustItem, readModuleParts, readProductionModule, readRoleSplitFile 
 
 const root = new URL('../', import.meta.url);
 const read = (path) => readFile(new URL(path, root), 'utf8');
-const [abuseSources, abuseTransaction, abuseVerification, config, envExample, apiRouter, authRoutes, reportRoutes, protocolSession, dispatch, messaging, miscProtocol, ibrProtocol, accountService, accountRepository, accountRecovery, dbUsers, apiControl, appError, migration, messageAdmissionMigration, powIntentMigration, parallelChallengeMigration, deletionRecoveryMigration, main, client, powClient, clientHtml, admin, adminHtml, workerSource] = await Promise.all([
+const [abuseSources, abuseTransaction, abuseVerification, config, envExample, apiRouter, authRoutes, reportRoutes, protocolSession, dispatch, messaging, miscProtocol, ibrProtocol, accountService, accountRepository, accountRecovery, dbUsers, apiControl, appError, migration, messageAdmissionMigration, powIntentMigration, parallelChallengeMigration, deletionRecoveryMigration, maintenanceWorkers, client, powClient, clientHtml, admin, adminHtml, workerSource] = await Promise.all([
   Promise.all([
     readModuleParts('crates/contexts/abuse/northstar-abuse-application/src/guard.rs', { includeTests: false }).map(({ source }) => source),
     read('crates/contexts/abuse/northstar-abuse-policy/src/lib.rs'),
@@ -25,7 +25,7 @@ const [abuseSources, abuseTransaction, abuseVerification, config, envExample, ap
   read('crates/edges/northstar-http/src/reports.rs'), readRoleSplitFile('crates/edges/northstar-stream/src/protocol.rs'), read('crates/edges/northstar-stream/src/protocol/dispatch.rs'),
   readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs'), read('crates/edges/northstar-stream/src/protocol/misc.rs'), read('crates/edges/northstar-stream/src/protocol/ibr.rs'), read('crates/contexts/auth/northstar-auth-application/src/account.rs'), read('crates/contexts/workflows/northstar-workflows/src/account_repository.rs'), read('crates/contexts/auth/northstar-auth-xmpp/src/account_deletion.rs'), readProductionModule('crates/contexts/workflows/northstar-workflows/src/account_lifecycle.rs') + '\n' + readProductionModule('crates/contexts/auth/northstar-auth-postgres/src/users.rs'), read('crates/contexts/operations/northstar-operations-postgres/src/api_control.rs'), read('crates/edges/northstar-http/src/error.rs'),
   read('migrations/0009_abuse_reports.sql'), read('migrations/0078_message_pow_admissions.sql'),
-  read('migrations/0084_pow_intent_v2.sql'), read('migrations/0100_parallel_pow_challenges.sql'), read('migrations/0101_durable_account_deletion_recovery.sql'), read('src/main.rs'), read('web/client.js'), read('web/pow.js'), read('web/client.html'),
+  read('migrations/0084_pow_intent_v2.sql'), read('migrations/0100_parallel_pow_challenges.sql'), read('migrations/0101_durable_account_deletion_recovery.sql'), read('src/state/workers/maintenance.rs'), read('web/client.js'), read('web/pow.js'), read('web/client.html'),
   read('web/app.js'), read('web/index.html'), read('web/pow-worker.js'),
 ]);
 const abuse = abuseSources.join('\n');
@@ -222,7 +222,7 @@ assert.match(accountRecovery, /context\.claim\(\)[\s\S]+context\.release\(&job\)
 const deletionRecoveryContext = await read('crates/contexts/auth/northstar-auth-xmpp/src/account_deletion/context.rs');
 assert.match(deletionRecoveryContext, /fn claim[\s\S]+claim_deletion_recovery[\s\S]+fn release[\s\S]+release_deletion_recovery/,
   'the recovery context must preserve durable claim and release semantics');
-assert.match(main, /"account-deletion-recovery"[\s\S]+WorkerCriticality::Restartable/,
+assert.match(maintenanceWorkers, /"account-deletion-recovery"[\s\S]+WorkerCriticality::Restartable/,
   'account deletion recovery must remain under the worker supervisor');
 assert.match(messageAdmissionMigration, /payload_mac BYTEA NOT NULL,[\s\S]*CHECK \(octet_length\(payload_mac\) = 32\)/,
   'message admission must retain only a keyed payload digest');

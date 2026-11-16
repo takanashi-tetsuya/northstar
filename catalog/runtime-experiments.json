@@ -1105,37 +1105,37 @@
         },
         {
           "id": "worker:abuse-key-deployment-authority",
-          "owner": "src/main.rs",
+          "owner": "src/state/workers/abuse.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "worker:account-deletion-recovery",
-          "owner": "src/main.rs",
+          "owner": "src/state/workers/maintenance.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "worker:account-revocations",
-          "owner": "src/main.rs",
+          "owner": "src/state/workers/cluster.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "worker:admin-session-cleanup",
-          "owner": "src/main.rs",
+          "owner": "src/state/workers/operations.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "worker:archive-retention",
-          "owner": "src/main.rs",
+          "owner": "src/state/workers/maintenance.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "worker:background-maintenance",
-          "owner": "src/main.rs",
+          "owner": "src/state/workers/maintenance.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
@@ -1147,13 +1147,13 @@
         },
         {
           "id": "worker:cluster-failure-policy",
-          "owner": "src/main.rs",
+          "owner": "src/state/workers/cluster.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "worker:cluster-maintenance",
-          "owner": "src/main.rs",
+          "owner": "src/state/workers/cluster.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
@@ -1165,13 +1165,13 @@
         },
         {
           "id": "worker:deployment-capacity-lease-reaper",
-          "owner": "src/main.rs",
+          "owner": "src/state/workers/session.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "worker:deployment-capacity-session-leases",
-          "owner": "src/main.rs",
+          "owner": "src/state/workers/session.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
@@ -1225,13 +1225,13 @@
         },
         {
           "id": "worker:pubsub-subscription-cleanup",
-          "owner": "src/main.rs",
+          "owner": "src/state/workers/maintenance.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "worker:redis-pubsub",
-          "owner": "src/main.rs",
+          "owner": "src/state/workers/cluster.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
@@ -1255,13 +1255,13 @@
         },
         {
           "id": "worker:standalone-muc-occupancy",
-          "owner": "src/main.rs",
+          "owner": "src/state/workers/cluster.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "worker:upload-storage-reconciliation",
-          "owner": "src/main.rs",
+          "owner": "src/state/workers/upload.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         }

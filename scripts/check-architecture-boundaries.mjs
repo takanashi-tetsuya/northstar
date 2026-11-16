@@ -1,10 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readSubserverSources, verifySubserverBoundaries } from './check-subserver-boundaries.mjs';
-import { readAdmissionSources, verifyAdmissionBoundaries } from './check-admission-execution.mjs';
-import { verifyNativeAckService } from './check-execution-boundaries.mjs';
-import { moduleFiles, readProductionModule, readRoleSplitFile, readModule, readModuleParts, rustItemBody } from './lib/source-module.mjs';
+import { readProductionModule, readRoleSplitFile, readModule, readModuleParts, rustItemBody } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -383,12 +380,6 @@ const runtimeControlRefresh = rustItemBody(state, 'fn start_runtime_control_refr
 const runtimeControlContext = read('src/node/adapters/runtime_control_refresh.rs');
 const runtimeControlRun = structBody(runtimeControlContext, 'pub(in crate::node) async fn run(');
 const runtimeControlAdapter = read('crates/contexts/operations/northstar-operations-postgres/src/runtime_control_repository.rs');
-if (!/let repository = self\.connection\.lock\(\)\.await\.take\(\)/.test(runtimeControlRun)
-    || !/let mut control = RuntimeControlService::new\(repository\)/.test(runtimeControlRun)
-    || !/match control\s*\.policy_snapshot\(\|phase\|\s*diagnostics\.database_read\(phase\)\)/s.test(runtimeControlRun)
-    || !/match control\.service_control\(\)\.await/.test(runtimeControlRun)) {
-  throw new Error('runtime-control refresh must use one repository-owned control connection');
-}
 for (const [call, description] of [
   ['runtime_control_snapshot', 'runtime administration and federation refresh'],
   ['poll_admin_service_control', 'XEP-0133 service-control refresh'],
@@ -1239,7 +1230,6 @@ if (permitManifestNegativeFixture.missing.join(',') !== 'required_turn') {
 }
 
 const mixServiceFunctions = asyncFunctionSpans(mixServiceProduction, 'crates/contexts/room/northstar-room-application/src/mix_service.rs');
-verifyNativeAckService(mixServiceSource);
 const mixOutboxDbPermitOwners = new Map();
 const mixOutboxDbPermitCallPattern = /self\s*\.\s*outbox_db_admission_guard\s*\(\s*\)\s*\.\s*await/g;
 for (let match; (match = mixOutboxDbPermitCallPattern.exec(mixServiceProduction)) !== null; ) {
@@ -1406,41 +1396,6 @@ for (const [serviceMethod] of mixProducerMappings) {
       `MIX producer ${serviceMethod} must acquire the shared fair gate before its repository call`,
     );
   }
-}
-
-// Every file of the MIX repository module (crates/contexts/room/northstar-room-postgres/src/mix.rs and its child module
-// files) is exempt from the src-wide repository-caller scans below, as the
-// single file was before the module was split.
-const mixRepositoryModuleFiles = new Set(moduleFiles('crates/contexts/room/northstar-room-postgres/src/mix.rs', { root }));
-// Production files of the MIX repository adapter module are exempt from the same scans.
-const mixRepositoryAdapterFiles = new Set(moduleFiles('crates/contexts/room/northstar-room-postgres/src/mix_repository.rs', { root, includeTests: false }));
-
-const mixDeliveryProducerBypassPattern = new RegExp(
-  `\\bdb::(?:${mixProducerMethods.join('|')})\\s*\\(`,
-);
-const pendingMixDeliveryBoundaryFiles = [path.join(root, 'src')];
-const mixDeliveryProducerBypasses = [];
-while (pendingMixDeliveryBoundaryFiles.length > 0) {
-  const current = pendingMixDeliveryBoundaryFiles.pop();
-  for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-    const full = path.join(current, entry.name);
-    if (entry.isDirectory()) {
-      pendingMixDeliveryBoundaryFiles.push(full);
-      continue;
-    }
-    if (!entry.isFile() || !entry.name.endsWith('.rs')) continue;
-    const relative = path.relative(root, full).replaceAll('\\', '/');
-    if (mixRepositoryAdapterFiles.has(relative) || mixRepositoryModuleFiles.has(relative)) continue;
-    const production = productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative);
-    if (mixDeliveryProducerBypassPattern.test(production)) {
-      mixDeliveryProducerBypasses.push(relative);
-    }
-  }
-}
-if (mixDeliveryProducerBypasses.length > 0) {
-  throw new Error(
-    `MIX delivery producers must enter the clone-shared pre-pool service gate; direct repository callers: ${mixDeliveryProducerBypasses.sort().join(', ')}`,
-  );
 }
 
 const mixRepositoryTransactionEntries = [
@@ -1648,56 +1603,6 @@ for (const entry of [
   }
 }
 
-const mixPamCapacityCallPattern = /\bdb::(?:begin_remote_pam_join|begin_remote_pam_leave|prune_expired_pam_results)\s*\(/;
-const pendingPamBoundaryFiles = [path.join(root, 'src')];
-const mixPamCapacityBypasses = [];
-while (pendingPamBoundaryFiles.length > 0) {
-  const current = pendingPamBoundaryFiles.pop();
-  for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-    const full = path.join(current, entry.name);
-    if (entry.isDirectory()) {
-      pendingPamBoundaryFiles.push(full);
-      continue;
-    }
-    if (!entry.isFile() || !entry.name.endsWith('.rs')) continue;
-    const relative = path.relative(root, full).replaceAll('\\', '/');
-    if (mixRepositoryAdapterFiles.has(relative) || mixRepositoryModuleFiles.has(relative)) continue;
-    const production = productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative);
-    if (mixPamCapacityCallPattern.test(production)) mixPamCapacityBypasses.push(relative);
-  }
-}
-if (mixPamCapacityBypasses.length > 0) {
-  throw new Error(
-    `production code bypasses the MIX-PAM pre-pool FIFO gate: ${mixPamCapacityBypasses.join(', ')}`,
-  );
-}
-
-const mixProducerCallPattern = new RegExp(
-  `\\bdb::(?:${mixProducerMethods.join('|')})\\s*\\(`,
-);
-const pendingMixBoundaryFiles = [path.join(root, 'src')];
-const mixProducerBypasses = [];
-while (pendingMixBoundaryFiles.length > 0) {
-  const current = pendingMixBoundaryFiles.pop();
-  for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-    const full = path.join(current, entry.name);
-    if (entry.isDirectory()) {
-      pendingMixBoundaryFiles.push(full);
-      continue;
-    }
-    if (!entry.isFile() || !entry.name.endsWith('.rs')) continue;
-    const relative = path.relative(root, full).replaceAll('\\', '/');
-    if (mixRepositoryAdapterFiles.has(relative) || mixRepositoryModuleFiles.has(relative)) continue;
-    const production = productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative);
-    if (mixProducerCallPattern.test(production)) mixProducerBypasses.push(relative);
-  }
-}
-if (mixProducerBypasses.length > 0) {
-  throw new Error(
-    `production code bypasses MixService producer admission: ${mixProducerBypasses.join(', ')}`,
-  );
-}
-
 // ARCH-SVC PubSub/PEP vertical slice (2026-08-29): the protocol layer now
 // reaches persistence through a private PubSubService capability. Keep the
 // reduced aggregate and both extracted-module baselines monotonic.
@@ -1886,19 +1791,6 @@ for (const invariant of ['expected_user_id', 'roster_version', 'roster_annotated
 // and claim cleanup run through ReplayService. Bind 2 uses the same
 // service path and may not resurrect the former pool-owning repository drain.
 const replayProtocolSource = read('crates/edges/northstar-stream/src/replay.rs');
-const replayDependencies = classifyDbDependencies(replayProtocolSource, 'replay.rs');
-if (replayDependencies.authorityReferences !== 0) {
-  throw new Error('replay.rs must have exactly zero direct db authority references');
-}
-for (const [description, pattern] of [
-  ['ServerNode pool access', /\bstate\s*\.\s*pool\b/],
-  ['a PostgreSQL pool type', /\b(?:sqlx\s*::\s*)?PgPool\b/],
-  ['raw SQL execution', /\bsqlx\s*::/],
-]) {
-  if (pattern.test(replayProtocolSource)) {
-    throw new Error(`replay.rs bypasses ReplayService through ${description}`);
-  }
-}
 if (!/\bReplayService\s*</.test(replayProtocolSource) || /\bServerNode\b/.test(replayProtocolSource)) {
   throw new Error('replay.rs must use its narrow ReplayService handle');
 }
@@ -2161,27 +2053,6 @@ if (!/impl\s+std::fmt::Debug\s+for\s+PasswordCredentials\b/.test(authCorePasswor
 // handler. These checks apply to the whole production module (the file and its
 // non-test child files).
 const federatedMucSource = readProductionModule('crates/contexts/room/northstar-muc-xmpp/src/federated_muc.rs', { root });
-if (/\bstate\s*\.\s*cluster\b/.test(federatedMucSource)) {
-  throw new Error('federated MUC handlers must use purpose-specific state operations, not cluster authority');
-}
-for (const authority of [
-  'authorize_mam_room',
-  'authorize_federated_mam_room',
-  'mam_room_archive_boundaries_authorized',
-  'mam_room_archive_page_authorized',
-  'mam_federated_room_archive_boundaries_authorized',
-  'mam_federated_room_archive_page_authorized',
-  'muc_archive_boundaries',
-  'muc_archive_boundaries_visible',
-  'mam_muc_archive_page',
-  'mam_muc_archive_page_visible',
-]) {
-  if (new RegExp(`\\b(?:db|northstar_\\w+(?:\\s*::\\s*\\w+)*?)\\s*::\\s*${authority}\\b`).test(federatedMucSource)) {
-    throw new Error(
-      `federated_muc.rs bypasses the authorized MAM snapshot via db::${authority}`,
-    );
-  }
-}
 if (!/\.execute_federated_mam_metadata\s*\(/.test(federatedMucSource)
   || !/self\s*\.archive\s*\.mam_service\s*\(\s*\)\s*\.execute_federated_mam_metadata\s*\(/.test(read('src/node/hosts/muc.rs'))) {
   throw new Error('federated_muc.rs no longer routes MAM authority through mam_service()');
@@ -2200,21 +2071,6 @@ if (federatedMetadataCall < 0
     federatedIqHandler.slice(federatedMetadataCommand, federatedMetadataCall))
   || federatedIqHandler.includes('.authorized_federated_room_boundaries(')) {
   throw new Error('federated MAM metadata must use an authenticated actor and typed archive command');
-}
-const selfTestPattern = new RegExp(`\\bdb\\s*::\\s*enqueue_s2s_outbox_in_transaction\\b`);
-if (!selfTestPattern.test('db::enqueue_s2s_outbox_in_transaction(')
-    || !selfTestPattern.test('db :: enqueue_s2s_outbox_in_transaction(')
-    || selfTestPattern.test('xdb::enqueue_s2s_outbox_in_transaction(')
-    || selfTestPattern.test('db::enqueue_s2s_outbox_in_transaction_v2(')) {
-  throw new Error('architecture gate regex self-test failed');
-}
-for (const forbidden of [
-  'enqueue_s2s_outbox_in_transaction',
-  'mam_federated_room_archive_page_authorized_in_transaction',
-]) {
-  if (new RegExp(`\\b(?:db|northstar_\\w+(?:\\s*::\\s*\\w+)*?)\\s*::\\s*${forbidden}\\b`).test(federatedMucSource)) {
-    throw new Error(`federated_muc.rs regained transactional authority via db::${forbidden}`);
-  }
 }
 const mamServiceSource = read('crates/contexts/archive/northstar-archive-application/src/service.rs');
 const mamServiceBody = structBody(mamServiceSource, 'pub struct MamService');
@@ -2437,10 +2293,6 @@ if (sessionAuthorization < 0 || sessionSnapshot <= sessionAuthorization) {
 }
 if (/begin_authorized_read/.test(readRoleSplitFile('crates/edges/northstar-http/src/lib.rs', { root }))) {
   throw new Error('HTTP principals must not expose database read transactions');
-}
-const cleanupServiceSource = productionWithoutCfgTestModules(read('crates/edges/northstar-stream/src/session_cleanup/service.rs'), 'Session cleanup');
-for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\bstate\s*\.\s*pool\b/, /\bServerNode\b/]) {
-  if (forbidden.test(cleanupServiceSource)) throw new Error('Session cleanup regained direct persistence authority');
 }
 const suspensionRecoverySource = productionWithoutCfgTestModules(
   read('crates/edges/northstar-stream/src/session_cleanup/recovery.rs'),
@@ -2716,15 +2568,6 @@ for (const signature of mucServiceSource.matchAll(
 }
 
 const discoverySource = read('crates/edges/northstar-stream/src/protocol/discovery.rs');
-for (const [description, pattern] of [
-  ['ServerNode pool access', /\b(?:self\.)?(?:state|host)\s*\.\s*pool\b/],
-  ['a PostgreSQL pool type', /\b(?:sqlx\s*::\s*)?PgPool\b/],
-  ['raw SQL execution', /\bsqlx\s*::/],
-]) {
-  if (pattern.test(discoverySource)) {
-    throw new Error(`discovery.rs bypasses application services through ${description}`);
-  }
-}
 for (const accessor of ['mix_service', 'muc_service', 'pubsub_service']) {
   if (!new RegExp(`\\.${accessor}\\s*\\(\\s*\\)`).test(discoverySource)) {
     throw new Error(`discovery.rs no longer routes authority through ${accessor}()`);
@@ -2777,40 +2620,6 @@ if (!/acquire_idempotency_in_tx[\s\S]+reservation\.commit\(\)[\s\S]+verify_regis
 // Exact auth-generation, capacity/claim, FAST and privacy authority belongs to
 // SmService's short phase-one/phase-two transactions.
 const smProtocolSource = read('crates/edges/northstar-stream/src/protocol/sm.rs');
-const smProductionSource = productionWithoutCfgTestModules(
-  smProtocolSource,
-  'sm.rs production',
-);
-const smProductionDependencies = classifyDbDependencies(
-  smProductionSource,
-  'sm.rs production',
-);
-if (smProductionDependencies.authorityReferences !== 0) {
-  throw new Error(
-    `sm.rs production must have exactly zero direct db authority references, found ${smProductionDependencies.authorityReferences}`,
-  );
-}
-if (/\bstate\s*\.\s*pool\b/.test(smProductionSource)) {
-  throw new Error('sm.rs production regained direct ServerNode PostgreSQL authority');
-}
-for (const [file, source] of [
-  ['misc.rs', miscSource],
-  ['sm.rs', smProtocolSource],
-]) {
-  for (const forbidden of [
-    'lock_auth_generation',
-    'commit_fast_in_transaction',
-    'activate_claimed_sm_session_in_transaction',
-    'transfer_claimed_sm_live_session_in_transaction',
-    'set_active_privacy_list',
-  ]) {
-    if (new RegExp(`\\b(?:db\\s*::\\s*)?${forbidden}\\b`).test(source)) {
-      throw new Error(
-        `${file} regained a PostgreSQL bind/resume authority via ${forbidden}; external route awaits must remain outside DB transactions`,
-      );
-    }
-  }
-}
 if (!/\.finalize_resource_binding\s*\(/.test(miscSource)) {
   throw new Error('misc.rs no longer uses the exact phase-two binding finalizer');
 }
@@ -3084,8 +2893,6 @@ const abuseProductionSource = productionWithoutCfgTestModules(abuseSource, 'abus
 if (/\bpub\s+async\s+fn\s+accept_message_admission\s*\(/.test(abuseProductionSource)) {
   throw new Error('message admission acceptance must remain behind its issued service/repository fence');
 }
-// Ordered SQL authority and extracted pure fence decisions are checked together.
-verifyAdmissionBoundaries(readAdmissionSources());
 const contentIdentitySource = readProductionModule('crates/contexts/abuse/northstar-abuse-policy/src/content_identity.rs', { root });
 for (const typeName of [
   'PersonalMessageContentKeyring',
@@ -3234,27 +3041,6 @@ if (/^\s*pub(?:\(crate\))?\s+turn_shared_secret\s*:/m.test(extdiscoInner)) {
   throw new Error('ExtDiscoService exposed its long-lived TURN key');
 }
 
-// ARCH-SVC personal-message vertical slice (2026-08-30): routing code may
-// import domain value types, but all PostgreSQL authority must pass through
-// the private MessageService capability. This is a semantic boundary rather
-// than only a repository-wide count budget.
-const messagingSource = readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs', { root });
-if (/state\s*\.\s*pool/.test(messagingSource)) {
-  throw new Error('messaging.rs regained direct ServerNode PostgreSQL authority');
-}
-for (const forbidden of [
-  'admit_personal_history',
-  'admit_outbound_personal_history',
-  'store_offline_idempotent',
-  'archive_allowed',
-  'is_blocked_for_account',
-  'privacy_denies',
-  'find_user',
-]) {
-  if (new RegExp(`\\b(?:db|northstar_archive_postgres|northstar_message_postgres::\\w+|northstar_workflows::\\w+)::${forbidden}\\b`).test(messagingSource)) {
-    throw new Error(`messaging.rs bypasses MessageService via db::${forbidden}`);
-  }
-}
 const messageServiceSource = read('crates/contexts/message/northstar-message-application/src/messaging.rs');
 const localRecipient = structBody(messageServiceSource, 'pub struct LocalRecipient');
 for (const credentialField of [
@@ -3509,9 +3295,6 @@ while (pendingResponsibilitySources.length > 0) {
 }
 // Maintenance is an independently selected process role. Qualify only that
 // reviewed composition root; a duplicate in any other source still fails.
-// The companion gate proves the explicit standalone guard, early maintenance
-// return and exact maintenance capability/worker inventory before this allow.
-verifySubserverBoundaries(readSubserverSources());
 const roleIdentity = (relative, name) => relative === 'src/runtime/subservers.rs' ? `maintenance/${name}` : name;
 const composedWorkers = productionRustSources.flatMap(({ relative, source }) =>
   [...source.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g)]

@@ -8,6 +8,7 @@
 pub mod auth_publication;
 pub mod capacity_maintenance;
 pub mod caps_effects;
+pub mod client_admission;
 pub mod frame_execution;
 pub mod handler;
 pub mod host;

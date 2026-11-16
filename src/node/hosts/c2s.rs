@@ -1,6 +1,5 @@
 //! The node's capabilities as the client transports see them.
 
-use crate::node::adapters::admission_guards::ClientConnectionGuard;
 use crate::node::{ClientSession, ServerNode};
 use axum::http::HeaderMap;
 use northstar_c2s::host::C2sHost;
@@ -15,14 +14,14 @@ use std::{net::IpAddr, sync::Arc};
 
 impl TransportHost for ServerNode {
     type Session = ClientSession;
-    type ConnectionGuard = ClientConnectionGuard;
+    type ConnectionGuard = northstar_stream::client_admission::ClientConnectionGuard;
 
     fn local_domain(&self) -> &str {
         &self.config.domain
     }
 
-    fn acquire_client_connection(self: &Arc<Self>, ip: IpAddr) -> Option<ClientConnectionGuard> {
-        ServerNode::acquire_client_connection(self, ip)
+    fn acquire_client_connection(self: &Arc<Self>, ip: IpAddr) -> Option<Self::ConnectionGuard> {
+        self.client_admission.acquire(ip)
     }
 
     fn connection_actors(&self) -> &ConnectionActorRegistry {
@@ -45,6 +44,14 @@ impl TransportHost for ServerNode {
             stream_limits,
             peer_ip,
         )
+    }
+}
+
+impl ServerNode {
+    pub(crate) fn connection_actors(
+        &self,
+    ) -> &northstar_runtime::connection_actors::ConnectionActorRegistry {
+        &self.connection_actors
     }
 }
 

@@ -344,6 +344,7 @@ for (const field of [
   'archive',
   'session',
   'bosh',
+  'client_admission',
   'started_at',
   'registration_closed',
   'tls_context',

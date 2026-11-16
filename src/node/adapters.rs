@@ -6,7 +6,6 @@ pub(crate) mod account_generation_teardown;
 pub(crate) mod account_teardown_runtime;
 pub(in crate::node) mod admin_cluster_queries;
 pub(in crate::node) mod admin_session_cleanup;
-pub(in crate::node) mod admission_guards;
 pub(in crate::node) mod api_query_presence;
 pub(crate) mod caps_effect_dispatch;
 pub(crate) mod cluster_adapters;

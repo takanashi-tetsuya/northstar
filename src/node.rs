@@ -53,7 +53,6 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
     time::{Duration, Instant},
 };
-use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use zeroize::{Zeroize, Zeroizing};
@@ -178,8 +177,8 @@ pub struct ServerNode {
     /// Bounded, per-full-JID single-flight boundary for XEP-0115-triggered
     /// PEP last-item delivery and verified MIX presence publication.
     caps_effect_dispatcher: Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher>,
-    client_connections: Arc<Semaphore>,
-    client_connections_by_ip: DashMap<std::net::IpAddr, usize>,
+    /// Shared client connection admission authority.
+    client_admission: Arc<northstar_stream::client_admission::ClientAdmission>,
     connection_actors: northstar_runtime::connection_actors::ConnectionActorRegistry,
     /// The auth context; see [`AuthModule`].
     auth: AuthModule,

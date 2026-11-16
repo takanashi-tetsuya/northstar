@@ -275,6 +275,10 @@ impl ServerNode {
             "FAST and dummy SCRAM master keys must be independent"
         );
         let client_connections = Arc::new(Semaphore::new(config.max_client_connections));
+        let client_admission = Arc::new(northstar_stream::client_admission::ClientAdmission::new(
+            client_connections,
+            config.max_connections_per_ip,
+        ));
         let connection_actors =
             northstar_runtime::connection_actors::ConnectionActorRegistry::for_transport_limits(
                 config.max_client_connections,
@@ -631,8 +635,7 @@ impl ServerNode {
             ),
             caps_effect_dispatcher: northstar_protocol_runtime::caps::CapsEffectDispatcher::new(),
             http_body_admission: Arc::new(http_body_admission::HttpBodyAdmission::default()),
-            client_connections,
-            client_connections_by_ip: DashMap::new(),
+            client_admission,
             connection_actors,
             auth,
             operations,

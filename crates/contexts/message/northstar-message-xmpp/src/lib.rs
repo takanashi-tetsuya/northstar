@@ -10,4 +10,5 @@ pub mod messaging;
 pub mod ports;
 mod protocol_session;
 pub use self::protocol_session::ExtDiscoHandlers;
+pub mod push_routing;
 mod retractions;

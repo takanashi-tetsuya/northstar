@@ -3727,6 +3727,10 @@
       ],
       [
         "northstar-message-xmpp",
+        "northstar-xep-0357"
+      ],
+      [
+        "northstar-message-xmpp",
         "northstar-xep-0359"
       ],
       [

@@ -2422,6 +2422,7 @@ dependencies = [
  "northstar-stream",
  "northstar-xep-0215",
  "northstar-xep-0280",
+ "northstar-xep-0357",
  "northstar-xep-0359",
  "northstar-xml-builder",
  "northstar-xmpp-types",

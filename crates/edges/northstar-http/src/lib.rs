@@ -57,6 +57,7 @@ use self::route_composition::{
 };
 
 mod body_limits;
+pub mod container_probe;
 pub mod contexts;
 pub mod extract;
 pub mod governance_cursor;

@@ -44,8 +44,8 @@
       "budgets": {
         "contract": "Existing startup and listener readiness budgets; no new global startup deadline.",
         "source": {
-          "path": "src/runtime/service_tasks.rs",
-          "anchor": "pub(crate) const SERVICE_TASK_DRAIN_TIMEOUT: Duration = Duration::from_secs(15);"
+          "path": "crates/platform/northstar-runtime/src/service_tasks.rs",
+          "anchor": "pub const SERVICE_TASK_DRAIN_TIMEOUT: Duration = Duration::from_secs(15);"
         }
       },
       "experiments": [

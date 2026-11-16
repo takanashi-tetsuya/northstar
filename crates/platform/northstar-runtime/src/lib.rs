@@ -4,4 +4,6 @@
 
 pub mod connection_actors;
 pub mod durable_outbox;
+pub mod service_tasks;
+pub mod test_activation;
 pub mod workers;

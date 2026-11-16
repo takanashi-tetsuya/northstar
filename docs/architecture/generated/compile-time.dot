@@ -1691,6 +1691,7 @@ digraph compile_time {
   "northstar-roster-xmpp" -> "uuid";
   "northstar-runtime" -> "anyhow";
   "northstar-runtime" -> "futures";
+  "northstar-runtime" -> "serde";
   "northstar-runtime" -> "serde_json";
   "northstar-runtime" -> "tokio";
   "northstar-runtime" -> "tokio-util";

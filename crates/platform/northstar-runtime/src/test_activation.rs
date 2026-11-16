@@ -16,10 +16,10 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
 #[derive(Clone, Copy)]
-pub(crate) struct TestActivationPolicy<'a> {
-    pub(crate) enabled: bool,
-    pub(crate) destination: Option<&'a Path>,
-    pub(crate) nonce: Option<&'a str>,
+pub struct TestActivationPolicy<'a> {
+    pub enabled: bool,
+    pub destination: Option<&'a Path>,
+    pub nonce: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -30,7 +30,7 @@ struct ReadinessRecord<'a> {
     listeners: &'a BTreeMap<String, SocketAddr>,
 }
 
-pub(crate) fn publish_if_enabled(
+pub fn publish_if_enabled(
     policy: TestActivationPolicy<'_>,
     listeners: &BTreeMap<String, SocketAddr>,
     pid: u32,

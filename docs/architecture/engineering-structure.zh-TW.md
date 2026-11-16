@@ -40,7 +40,7 @@ S16 起 workspace 的 crate 結構以[目標架構](target-architecture.zh-TW.md
 `catalog/source-layers.json`，由 R9 執行：
 
 ```text
-4 組合          main.rs、runtime（程序角色、operation runtime、維護 worker）、state（AppState 組裝）、tools
+4 組合          main.rs、runtime（程序角色、維護 worker）、state（AppState 組裝）、tools
 3 介面卡        持久化 db；協議／傳輸 xmpp、bosh、s2s；HTTP api；物件儲存 storage；叢集控制面 cluster
 2 應用服務      services（呼叫 crates/*-application 與注入的 port）
 函式庫          crates/{kernel,platform,contexts/*}/*，不得依賴根 crate
@@ -65,6 +65,11 @@ facade 移出根 crate（5.13），根 crate 只剩上面三層。
 
 `auth.rs`、`jid.rs`、`mam_pubsub_parsing.rs` 等相容 facade 在呼叫方遷完後移除。
 搬動以「新路徑＋舊路徑暫時 `pub(crate) use` 轉出」進行，最後一個 WP 刪除轉出。
+
+WP-495 後，operation runtime 的現行位置為
+`crates/contexts/operations/northstar-operations-xmpp/src/operation_runtime.rs`，測試位於同名目錄的
+`tests.rs`；根 crate 的 `src/state/operation_runtime_adapters.rs` 綁定 ports，`src/main.rs` 啟動 worker。
+上表與 WP-44 紀錄保留 S4 搬移當時的配置。
 
 ## 4. 結構規則（由門禁執行）
 

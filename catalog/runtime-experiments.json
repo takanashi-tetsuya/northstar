@@ -898,8 +898,8 @@
       "id": "administration",
       "title": "REST, admin, authentication and operation journal",
       "production_owner": {
-        "path": "src/runtime/operation_runtime.rs",
-        "anchor": "pub(crate) async fn serve("
+        "path": "crates/contexts/operations/northstar-operations-xmpp/src/operation_runtime.rs",
+        "anchor": "pub async fn serve("
       },
       "runtime_identities": [
         {
@@ -990,9 +990,9 @@
           "id": "administration-regression",
           "level": "deterministic_unit",
           "status": "declared",
-          "command": "cargo test --locked --bin rust-xmpp-server operation_runtime::tests",
+          "command": "cargo test --locked -p northstar-operations-xmpp operation_runtime::tests",
           "test": {
-            "path": "src/runtime/operation_runtime/tests.rs",
+            "path": "crates/contexts/operations/northstar-operations-xmpp/src/operation_runtime/tests.rs",
             "anchor": "async fn cleanup_attempt_cancellation_cannot_detach_renewal() {"
           },
           "assertions": [

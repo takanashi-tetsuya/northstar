@@ -1,8 +1,10 @@
 //! Local cancellation and durable teardown for committed panic-disconnect operations.
 
 use super::{session_cleanup_sm_revoker::SessionCleanupSmRevoker, AppState};
-use crate::runtime::operation_runtime::{panic_disconnect_with, LocalPanicDisconnectRoutes};
 use anyhow::Result;
+use northstar_operations_xmpp::operation_runtime::{
+    panic_disconnect_with, LocalPanicDisconnectRoutes,
+};
 use serde_json::Value;
 
 pub(crate) struct OperationPanicEffects {

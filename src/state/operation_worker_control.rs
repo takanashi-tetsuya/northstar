@@ -1,13 +1,13 @@
 //! Durable operation claim, lease, and point-of-no-return authority.
 
 use super::AppState;
-use crate::runtime::operation_runtime::LocalBroadcastTargetSnapshot;
 use anyhow::Result;
 use northstar_operations_application::operation_effect_fence::OperationEffectFenceService;
 use northstar_operations_application::operation_journal_worker::OperationJournalWorkerService;
 use northstar_operations_postgres::api_operations::OperationLease;
 use northstar_operations_postgres::operation_effect_fence_repository::PostgresOperationEffectFenceRepository;
 use northstar_operations_postgres::operation_journal_worker_repository::PostgresOperationJournalWorkerRepository;
+use northstar_operations_xmpp::operation_runtime::LocalBroadcastTargetSnapshot;
 use uuid::Uuid;
 
 pub(crate) struct OperationWorkerControl {

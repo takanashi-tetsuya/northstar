@@ -57,6 +57,7 @@ mod muc_host;
 pub(crate) mod operation_island_effects;
 pub(crate) mod operation_muc_destroy_effects;
 pub(crate) mod operation_panic_effects;
+mod operation_runtime_adapters;
 pub(crate) use operation_island_effects::OperationIslandEffects;
 pub(crate) use operation_muc_destroy_effects::OperationMucDestroyEffects;
 pub(crate) use operation_panic_effects::OperationPanicEffects;

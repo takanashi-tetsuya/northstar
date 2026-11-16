@@ -101,8 +101,8 @@ impl AppState {
 
     pub(crate) fn broadcast_routes(
         &self,
-    ) -> crate::runtime::operation_runtime::LocalBroadcastRoutes {
-        crate::runtime::operation_runtime::LocalBroadcastRoutes::new(
+    ) -> northstar_operations_xmpp::operation_runtime::LocalBroadcastRoutes {
+        northstar_operations_xmpp::operation_runtime::LocalBroadcastRoutes::new(
             Arc::clone(&self.sessions),
             self.config.domain.clone(),
             self.cluster.node_id.clone(),
@@ -111,22 +111,24 @@ impl AppState {
 
     pub(crate) fn session_kick_routes(
         &self,
-    ) -> crate::runtime::operation_runtime::LocalSessionKickRoutes {
-        crate::runtime::operation_runtime::LocalSessionKickRoutes::new(Arc::clone(&self.sessions))
+    ) -> northstar_operations_xmpp::operation_runtime::LocalSessionKickRoutes {
+        northstar_operations_xmpp::operation_runtime::LocalSessionKickRoutes::new(Arc::clone(
+            &self.sessions,
+        ))
     }
 
     pub(crate) fn generation_cleanup_routes(
         &self,
-    ) -> crate::runtime::operation_runtime::LocalGenerationCleanupRoutes {
-        crate::runtime::operation_runtime::LocalGenerationCleanupRoutes::new(Arc::clone(
+    ) -> northstar_operations_xmpp::operation_runtime::LocalGenerationCleanupRoutes {
+        northstar_operations_xmpp::operation_runtime::LocalGenerationCleanupRoutes::new(Arc::clone(
             &self.sessions,
         ))
     }
 
     pub(crate) fn panic_disconnect_routes(
         &self,
-    ) -> crate::runtime::operation_runtime::LocalPanicDisconnectRoutes {
-        crate::runtime::operation_runtime::LocalPanicDisconnectRoutes::new(Arc::clone(
+    ) -> northstar_operations_xmpp::operation_runtime::LocalPanicDisconnectRoutes {
+        northstar_operations_xmpp::operation_runtime::LocalPanicDisconnectRoutes::new(Arc::clone(
             &self.sessions,
         ))
     }

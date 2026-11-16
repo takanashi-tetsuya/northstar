@@ -264,7 +264,7 @@ Key ownership:
   never authoritative.
   PostgreSQL retains the security fences, storage-eligible direct-message
   spools and durable queues listed below.
-- `crates/edges/northstar-http/src/` and `src/runtime/operation_runtime.rs` own REST authorization,
+- `crates/edges/northstar-http/src/` and `crates/contexts/operations/northstar-operations-xmpp/src/operation_runtime.rs` own REST authorization,
   idempotency, bounded operations and ambiguous-effect handling.
 - `web/omemo.js` owns browser endpoint cryptography; the server never receives
   its private device/session keys.

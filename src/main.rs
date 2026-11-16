@@ -631,12 +631,14 @@ async fn run() -> Result<()> {
         "external component",
         northstar_s2s::components::serve(state.clone(), cancel.clone(), component_listener),
     );
-    let operation_worker_runtime =
-        runtime::operation_runtime::OperationWorkerRuntime::from_state(&state);
+    let operation_worker_runtime = state.operation_worker_runtime();
     spawn_service_task(
         &mut service_tasks,
         "durable operation worker",
-        runtime::operation_runtime::serve(operation_worker_runtime, cancel.clone()),
+        northstar_operations_xmpp::operation_runtime::serve(
+            operation_worker_runtime,
+            cancel.clone(),
+        ),
     );
 
     // Credential-generation and exact-connection cleanup is a security
@@ -644,7 +646,7 @@ async fn run() -> Result<()> {
     // independently supervised worker so a large broadcast cannot delay a
     // committed revocation. One attempt owns a 60-second renewable database
     // lease; the watchdog includes a bounded margin for delivery and cleanup.
-    let admin_cleanup_context = Arc::new(state.admin_session_cleanup_context());
+    let admin_cleanup_context = Arc::new(state.admin_session_cleanup_runtime());
     let admin_cleanup_cancel = cancel.clone();
     worker_registry.supervise(
         "admin-session-cleanup",
@@ -653,7 +655,7 @@ async fn run() -> Result<()> {
         Some(std::time::Duration::from_secs(90)),
         cancel.clone(),
         move |heartbeat| {
-            runtime::operation_runtime::serve_admin_session_cleanup(
+            northstar_operations_xmpp::operation_runtime::serve_admin_session_cleanup(
                 Arc::clone(&admin_cleanup_context),
                 admin_cleanup_cancel.clone(),
                 heartbeat,

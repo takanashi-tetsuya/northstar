@@ -356,7 +356,7 @@ test('Real repository checks', () => {
   assert.equal(files[0], 'crates/contexts/room/northstar-mix-xmpp/src/lib.rs');
   assert.ok(files.includes('crates/contexts/room/northstar-mix-xmpp/src/worker.rs'));
   
-  const body = rustItemBody(readModule('src/runtime/operation_runtime.rs'), 'async fn run_one(');
+  const body = rustItemBody(readModule('crates/contexts/operations/northstar-operations-xmpp/src/operation_runtime.rs'), 'async fn run_one<');
   assert.ok(body.includes('lease_heartbeat('));
   
   const prodFiles = productionModuleFiles('crates/contexts/room/northstar-mix-xmpp/src/lib.rs');
@@ -370,7 +370,7 @@ test('Real repository checks', () => {
 
 test('CLI tests', () => {
   // item output
-  let res = spawnSync(process.execPath, [libraryPath, 'item', 'src/runtime/operation_runtime.rs', 'async fn run_one('], { encoding: 'utf8' });
+  let res = spawnSync(process.execPath, [libraryPath, 'item', 'crates/contexts/operations/northstar-operations-xmpp/src/operation_runtime.rs', 'async fn run_one<'], { encoding: 'utf8' });
   assert.equal(res.status, 0);
   assert.ok(res.stdout.includes('lease_heartbeat('));
   assert.ok(res.stdout.endsWith('}\n'));
@@ -396,7 +396,7 @@ test('CLI tests', () => {
   assert.ok(res.stderr.includes('Unknown subcommand: unknown'));
   
   // missing declaration error
-  res = spawnSync(process.execPath, [libraryPath, 'item', 'src/runtime/operation_runtime.rs', 'fn missing_fn('], { encoding: 'utf8' });
+  res = spawnSync(process.execPath, [libraryPath, 'item', 'crates/contexts/operations/northstar-operations-xmpp/src/operation_runtime.rs', 'fn missing_fn('], { encoding: 'utf8' });
   assert.equal(res.status, 1);
   assert.ok(res.stderr.includes('missing'));
 });

@@ -9,8 +9,10 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::state::{
-    AdminSessionCleanupContext, AppState, OperationIslandEffects, OperationMucDestroyEffects,
+pub mod ports;
+
+use self::ports::{
+    AdminSessionCleanupContext, OperationIslandEffects, OperationMucDestroyEffects,
     OperationPanicEffects, OperationSessionEffects, OperationTlsReloadEffects,
     OperationWorkerControl,
 };
@@ -23,36 +25,51 @@ use northstar_operations_application::operation_journal_worker::{
     ClaimedOperation, LeaseRenewal, NextTarget, TargetSeed, TargetSettlement,
 };
 use northstar_operations_application::operation_muc_destroy::MucDestroyCommit;
-use northstar_room_application::muc_service::LocalMucOccupantIdentity;
+use northstar_operations_application::operations::OperationRecord;
+use northstar_room_core::occupancy::LocalMucOccupantIdentity;
 
 const LEASE_SECONDS: i64 = 60;
 
 /// The durable worker owns only the authorities needed to execute a committed
 /// operation. Every handle refers to the same live state as protocol traffic.
-pub(crate) struct OperationWorkerRuntime {
-    control: Arc<OperationWorkerControl>,
-    session_effects: OperationSessionEffects,
-    tls_reload_effects: OperationTlsReloadEffects,
-    island_effects: OperationIslandEffects,
-    muc_destroy_effects: OperationMucDestroyEffects,
-    panic_effects: OperationPanicEffects,
+pub struct OperationWorkerRuntime<C, S, T, I, M, P> {
+    control: Arc<C>,
+    session_effects: S,
+    tls_reload_effects: T,
+    island_effects: I,
+    muc_destroy_effects: M,
+    panic_effects: P,
 }
 
-impl OperationWorkerRuntime {
-    pub(crate) fn from_state(state: &AppState) -> Self {
+impl<C, S, T, I, M, P> OperationWorkerRuntime<C, S, T, I, M, P> {
+    pub fn new(
+        control: C,
+        session_effects: S,
+        tls_reload_effects: T,
+        island_effects: I,
+        muc_destroy_effects: M,
+        panic_effects: P,
+    ) -> Self {
         Self {
-            control: Arc::new(state.operation_worker_control()),
-            session_effects: state.operation_session_effects(),
-            tls_reload_effects: state.operation_tls_reload_effects(),
-            island_effects: state.operation_island_effects(),
-            muc_destroy_effects: state.operation_muc_destroy_effects(),
-            panic_effects: state.operation_panic_effects(),
+            control: Arc::new(control),
+            session_effects,
+            tls_reload_effects,
+            island_effects,
+            muc_destroy_effects,
+            panic_effects,
         }
     }
 }
 
-pub(crate) async fn serve(
-    runtime: OperationWorkerRuntime,
+pub async fn serve(
+    runtime: OperationWorkerRuntime<
+        impl OperationWorkerControl,
+        impl OperationSessionEffects,
+        impl OperationTlsReloadEffects,
+        impl OperationIslandEffects,
+        impl OperationMucDestroyEffects,
+        impl OperationPanicEffects,
+    >,
     cancel: CancellationToken,
 ) -> Result<()> {
     let worker_id = Uuid::new_v4();
@@ -78,7 +95,7 @@ pub(crate) async fn serve(
 /// allow an unrelated long broadcast to delay a committed credential or exact
 /// connection revocation.
 pub async fn serve_admin_session_cleanup(
-    context: Arc<AdminSessionCleanupContext>,
+    context: Arc<impl AdminSessionCleanupContext>,
     cancel: CancellationToken,
     health: northstar_runtime::workers::WorkerHeartbeat,
 ) -> Result<()> {
@@ -87,7 +104,7 @@ pub async fn serve_admin_session_cleanup(
         health.pulse();
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
-            result = run_one_admin_session_cleanup(&context, worker_id) => match result {
+            result = run_one_admin_session_cleanup(context.as_ref(), worker_id) => match result {
                 Ok(true) => health.ok(),
                 Ok(false) => {
                     health.ok();
@@ -110,7 +127,7 @@ pub async fn serve_admin_session_cleanup(
 }
 
 async fn run_one_admin_session_cleanup(
-    context: &AdminSessionCleanupContext,
+    context: &impl AdminSessionCleanupContext,
     worker_id: Uuid,
 ) -> Result<bool> {
     let Some(lease) = context.service().claim(worker_id).await? else {
@@ -251,7 +268,7 @@ async fn admin_session_cleanup_heartbeat<R: AdminSessionCleanupRepository>(
 }
 
 async fn execute_admin_session_cleanup(
-    context: &AdminSessionCleanupContext,
+    context: &impl AdminSessionCleanupContext,
     lease: &AdminSessionCleanupLease,
     worker_id: Uuid,
 ) -> Result<bool> {
@@ -273,7 +290,6 @@ async fn execute_admin_session_cleanup(
                 lease.auth_generation,
             );
             context
-                .notifier()
                 .send_account_generation_teardown(
                     &bare_jid.to_string(),
                     lease.user_id,
@@ -306,7 +322,6 @@ async fn execute_admin_session_cleanup(
                 connection_id,
             );
             context
-                .notifier()
                 .send_session_instance_termination(&full_jid, connection_id)
                 .await?;
             Ok(!context.service().target_current(lease, worker_id).await?)
@@ -314,7 +329,17 @@ async fn execute_admin_session_cleanup(
     }
 }
 
-async fn run_one(runtime: &OperationWorkerRuntime, worker_id: Uuid) -> Result<bool> {
+async fn run_one<C: OperationWorkerControl>(
+    runtime: &OperationWorkerRuntime<
+        C,
+        impl OperationSessionEffects,
+        impl OperationTlsReloadEffects,
+        impl OperationIslandEffects,
+        impl OperationMucDestroyEffects,
+        impl OperationPanicEffects,
+    >,
+    worker_id: Uuid,
+) -> Result<bool> {
     let control = &runtime.control;
     let Some(lease) = control
         .claim_parent_with_targets(worker_id, LEASE_SECONDS)
@@ -344,8 +369,8 @@ async fn run_one(runtime: &OperationWorkerRuntime, worker_id: Uuid) -> Result<bo
                         &runtime.island_effects,
                         &runtime.muc_destroy_effects,
                         &runtime.panic_effects,
-                        &lease.operation,
-                        &target.target.payload,
+                        C::operation(&lease),
+                        &C::target(&target).payload,
                     ),
                     |stop| {
                         lease_heartbeat(Arc::clone(control), lease.clone(), target.clone(), stop)
@@ -362,8 +387,8 @@ async fn run_one(runtime: &OperationWorkerRuntime, worker_id: Uuid) -> Result<bo
             .settle_target(
                 &lease,
                 &target,
-                lease.operation.id,
-                target.target.id,
+                C::operation(&lease).id,
+                C::target(&target).id,
                 effect,
             )
             .await?
@@ -377,10 +402,10 @@ async fn run_one(runtime: &OperationWorkerRuntime, worker_id: Uuid) -> Result<bo
     Ok(true)
 }
 
-async fn lease_heartbeat(
-    control: Arc<OperationWorkerControl>,
-    parent: northstar_operations_postgres::api_operations::OperationLease,
-    target: northstar_operations_postgres::api_operations::OperationTargetLease,
+async fn lease_heartbeat<C: OperationWorkerControl>(
+    control: Arc<C>,
+    parent: C::Parent,
+    target: C::Target,
     stop: CancellationToken,
 ) -> Result<()> {
     loop {
@@ -402,20 +427,20 @@ async fn lease_heartbeat(
 /// needed by the administrator broadcast operation. Its methods never expose
 /// the underlying session map to callers.
 #[derive(Clone)]
-pub(crate) struct LocalBroadcastRoutes {
+pub struct LocalBroadcastRoutes {
     sessions: Arc<dashmap::DashMap<String, northstar_stream::local_routes::session::OnlineSession>>,
     domain: String,
     node_id: String,
 }
 
 /// Claim-time route snapshot only; it cannot deliver an administrator message.
-pub(crate) struct LocalBroadcastTargetSnapshot {
+pub struct LocalBroadcastTargetSnapshot {
     sessions: Arc<dashmap::DashMap<String, northstar_stream::local_routes::session::OnlineSession>>,
     node_id: String,
 }
 
 impl LocalBroadcastRoutes {
-    pub(crate) fn new(
+    pub fn new(
         sessions: Arc<
             dashmap::DashMap<String, northstar_stream::local_routes::session::OnlineSession>,
         >,
@@ -429,14 +454,14 @@ impl LocalBroadcastRoutes {
         }
     }
 
-    pub(crate) fn target_snapshot(&self) -> LocalBroadcastTargetSnapshot {
+    pub fn target_snapshot(&self) -> LocalBroadcastTargetSnapshot {
         LocalBroadcastTargetSnapshot {
             sessions: Arc::clone(&self.sessions),
             node_id: self.node_id.clone(),
         }
     }
 
-    pub(crate) fn send_exact(&self, payload: &Value) -> Result<Value> {
+    pub fn send_exact(&self, payload: &Value) -> Result<Value> {
         let Some(key) = payload.get("session_key").and_then(Value::as_str) else {
             return Ok(json!({"sent":false,"reason":"empty_snapshot"}));
         };
@@ -468,7 +493,7 @@ impl LocalBroadcastRoutes {
 }
 
 impl LocalBroadcastTargetSnapshot {
-    pub(crate) fn target_seeds(&self, operation: ClaimedOperation<'_>) -> Result<Vec<TargetSeed>> {
+    pub fn target_seeds(&self, operation: ClaimedOperation<'_>) -> Result<Vec<TargetSeed>> {
         let routes = self.sessions.iter().filter_map(|entry| {
             let session = entry.value();
             session
@@ -487,12 +512,12 @@ impl LocalBroadcastTargetSnapshot {
 
 /// An administrator operation may cancel only a session with the exact
 /// committed user, credential generation, and connection incarnation.
-pub(crate) struct LocalSessionKickRoutes {
+pub struct LocalSessionKickRoutes {
     sessions: Arc<dashmap::DashMap<String, northstar_stream::local_routes::session::OnlineSession>>,
 }
 
 impl LocalSessionKickRoutes {
-    pub(crate) fn new(
+    pub fn new(
         sessions: Arc<
             dashmap::DashMap<String, northstar_stream::local_routes::session::OnlineSession>,
         >,
@@ -500,12 +525,7 @@ impl LocalSessionKickRoutes {
         Self { sessions }
     }
 
-    pub(crate) fn kick_exact(
-        &self,
-        user_id: Uuid,
-        auth_generation: i64,
-        connection_id: Uuid,
-    ) -> bool {
+    pub fn kick_exact(&self, user_id: Uuid, auth_generation: i64, connection_id: Uuid) -> bool {
         self.sessions
             .iter()
             .find(|entry| {
@@ -523,12 +543,12 @@ impl LocalSessionKickRoutes {
 
 /// Committed account cleanup can disconnect every resource of one exact
 /// credential generation, without gaining route admission or removal access.
-pub(crate) struct LocalGenerationCleanupRoutes {
+pub struct LocalGenerationCleanupRoutes {
     sessions: Arc<dashmap::DashMap<String, northstar_stream::local_routes::session::OnlineSession>>,
 }
 
 impl LocalGenerationCleanupRoutes {
-    pub(crate) fn new(
+    pub fn new(
         sessions: Arc<
             dashmap::DashMap<String, northstar_stream::local_routes::session::OnlineSession>,
         >,
@@ -536,7 +556,7 @@ impl LocalGenerationCleanupRoutes {
         Self { sessions }
     }
 
-    pub(crate) fn cancel_exact_generation(&self, user_id: Uuid, auth_generation: i64) -> u64 {
+    pub fn cancel_exact_generation(&self, user_id: Uuid, auth_generation: i64) -> u64 {
         let mut disconnected = 0_u64;
         for session in self.sessions.iter() {
             if session.user_id == user_id && session.auth_generation == auth_generation {
@@ -550,12 +570,12 @@ impl LocalGenerationCleanupRoutes {
 
 /// Process-wide emergency cancellation. This handle only signals local
 /// transports; durable SM teardown remains a separate, ordered effect.
-pub(crate) struct LocalPanicDisconnectRoutes {
+pub struct LocalPanicDisconnectRoutes {
     sessions: Arc<dashmap::DashMap<String, northstar_stream::local_routes::session::OnlineSession>>,
 }
 
 impl LocalPanicDisconnectRoutes {
-    pub(crate) fn new(
+    pub fn new(
         sessions: Arc<
             dashmap::DashMap<String, northstar_stream::local_routes::session::OnlineSession>,
         >,
@@ -563,7 +583,7 @@ impl LocalPanicDisconnectRoutes {
         Self { sessions }
     }
 
-    pub(crate) fn cancel_all(&self) -> u64 {
+    pub fn cancel_all(&self) -> u64 {
         let mut disconnected = 0_u64;
         for session in self.sessions.iter() {
             session.disconnect.cancel();
@@ -573,7 +593,7 @@ impl LocalPanicDisconnectRoutes {
     }
 }
 
-pub(crate) async fn panic_disconnect_with<Teardown, TeardownFuture>(
+pub async fn panic_disconnect_with<Teardown, TeardownFuture>(
     routes: &LocalPanicDisconnectRoutes,
     teardown: Teardown,
 ) -> Result<Value>
@@ -638,12 +658,12 @@ fn target_seeds_for_operation(
 }
 
 async fn execute_effect(
-    session_effects: &OperationSessionEffects,
-    tls_reload_effects: &OperationTlsReloadEffects,
-    island_effects: &OperationIslandEffects,
-    muc_destroy_effects: &OperationMucDestroyEffects,
-    panic_effects: &OperationPanicEffects,
-    operation: &northstar_operations_postgres::api_operations::OperationRecord,
+    session_effects: &impl OperationSessionEffects,
+    tls_reload_effects: &impl OperationTlsReloadEffects,
+    island_effects: &impl OperationIslandEffects,
+    muc_destroy_effects: &impl OperationMucDestroyEffects,
+    panic_effects: &impl OperationPanicEffects,
+    operation: &OperationRecord,
     payload: &Value,
 ) -> Result<Value> {
     match operation.kind.as_str() {

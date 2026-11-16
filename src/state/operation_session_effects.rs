@@ -1,10 +1,10 @@
 //! Local session effects for committed administrator operations.
 
 use super::AppState;
-use crate::runtime::operation_runtime::{
+use anyhow::Result;
+use northstar_operations_xmpp::operation_runtime::{
     LocalBroadcastRoutes, LocalGenerationCleanupRoutes, LocalSessionKickRoutes,
 };
-use anyhow::Result;
 use serde_json::Value;
 use uuid::Uuid;
 

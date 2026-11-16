@@ -2578,10 +2578,11 @@ if (/\b(?:sqlx|PgPool|AppState|ClusterManager)\b/.test(smTeardownService.split('
 }
 const operationWorkerControl = read('src/state/operation_worker_control.rs');
 const operationWorkerFields = structBody(operationWorkerControl, 'pub(crate) struct OperationWorkerControl');
-const operationRuntime = read('src/runtime/operation_runtime.rs');
-const operationRuntimeFields = structBody(operationRuntime, 'pub(crate) struct OperationWorkerRuntime');
-const ordinaryRun = structBody(operationRuntime, 'async fn run_one(');
-const ordinaryHeartbeat = structBody(operationRuntime, 'async fn lease_heartbeat(');
+const operationRuntime = read('crates/contexts/operations/northstar-operations-xmpp/src/operation_runtime.rs');
+const operationRuntimeAdapters = read('src/state/operation_runtime_adapters.rs');
+const operationRuntimeFields = structBody(operationRuntime, 'pub struct OperationWorkerRuntime');
+const ordinaryRun = structBody(operationRuntime, 'async fn run_one<');
+const ordinaryHeartbeat = structBody(operationRuntime, 'async fn lease_heartbeat<');
 const ordinaryEffects = structBody(operationRuntime, 'async fn execute_effect(');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(operationWorkerFields)
     || /\b(?:AppState|ClusterManager|PgPool)\b/.test(operationRuntimeFields)
@@ -2590,9 +2591,10 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(operationWorkerFields)
     || !ordinaryRun.includes('.execute_after_commit(')
     || !ordinaryRun.includes('execute_effect(')
     || !ordinaryHeartbeat.includes('.renew_effect_leases(')
-    || !operationRuntime.includes('session_effects: &OperationSessionEffects')
-    || !operationRuntime.includes('control: Arc::new(state.operation_worker_control())')
-    || !/pub\(crate\) async fn serve\(\s*runtime: OperationWorkerRuntime/.test(operationRuntime)) {
+    || !operationRuntime.includes('session_effects: &impl OperationSessionEffects')
+    || !operationRuntime.includes('control: Arc::new(control)')
+    || !operationRuntimeAdapters.includes('RuntimeControl(self.operation_worker_control())')
+    || !/pub async fn serve\(\s*runtime: OperationWorkerRuntime/.test(operationRuntime)) {
   throw new Error('ordinary operation claims and effects must retain scoped worker authority');
 }
 const disabledFactoryReset = structBody(read('crates/edges/northstar-http/src/admin.rs'), 'pub async fn admin_nuke(');
@@ -2665,7 +2667,7 @@ if (!/pub\(crate\) async fn wake_committed_muc_operation\s*\([\s\S]*?\.muc_servi
   throw new Error('AppState committed MUC wake must delegate to MucService with cluster authority');
 }
 const operationRuntimeSource = productionWithoutCfgTestModules(
-  read('src/runtime/operation_runtime.rs'),
+  read('crates/contexts/operations/northstar-operations-xmpp/src/operation_runtime.rs'),
   'operation_runtime.rs production',
 );
 if (/state\.pool|sqlx::Transaction|db::(?:operation_work_pending|claim_operation_in_tx|enqueue_operation_target_in_tx)\s*\(/.test(operationRuntimeSource)
@@ -3674,7 +3676,7 @@ if ([mucOutcome, mucAckTurn, mucAck, mucAckFence, mucDeliveryMetric,
     || !clusterMucOutboxSettlementRepository.includes('crate::cluster_muc::retry_cluster_muc_outbox(&self.pool, delivery, error)')) {
   throw new Error('cluster MUC outbox settlement lost exact ACK, retry, database-turn or metric ordering');
 }
-const operationRuntimeOwnershipSource = read('src/runtime/operation_runtime.rs');
+const operationRuntimeOwnershipSource = read('crates/contexts/operations/northstar-operations-xmpp/src/operation_runtime.rs');
 const mucDestroyServiceSource = read('crates/contexts/operations/northstar-operations-application/src/operation_muc_destroy.rs');
 const mucDestroyEffect = structBody(mucDestroyServiceSource, 'pub struct MucDestroyEffect');
 if (/\blocal_domain\b/.test(mucDestroyEffect)

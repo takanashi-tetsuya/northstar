@@ -4384,6 +4384,10 @@
     ],
     [
       "northstar-operations-xmpp",
+      "dashmap"
+    ],
+    [
+      "northstar-operations-xmpp",
       "northstar-auth-core"
     ],
     [
@@ -4392,7 +4396,19 @@
     ],
     [
       "northstar-operations-xmpp",
+      "northstar-room-core"
+    ],
+    [
+      "northstar-operations-xmpp",
+      "northstar-runtime"
+    ],
+    [
+      "northstar-operations-xmpp",
       "northstar-security"
+    ],
+    [
+      "northstar-operations-xmpp",
+      "northstar-session-application"
     ],
     [
       "northstar-operations-xmpp",
@@ -4412,7 +4428,19 @@
     ],
     [
       "northstar-operations-xmpp",
+      "serde_json"
+    ],
+    [
+      "northstar-operations-xmpp",
       "sha2"
+    ],
+    [
+      "northstar-operations-xmpp",
+      "tokio"
+    ],
+    [
+      "northstar-operations-xmpp",
+      "tokio-util"
     ],
     [
       "northstar-operations-xmpp",

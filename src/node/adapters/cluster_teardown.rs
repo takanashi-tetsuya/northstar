@@ -1,0 +1,20 @@
+//! Cluster capabilities used to retire an account, session, or MUC endpoint.
+
+use crate::cluster::{
+    ClusterAccountTeardownNotifier, ClusterSessionRouteRelease, ClusterSmMucTeardown,
+};
+use crate::node::ServerNode;
+
+impl ServerNode {
+    pub(crate) fn cluster_account_teardown_notifier(&self) -> ClusterAccountTeardownNotifier {
+        self.cluster.account_teardown_notifier()
+    }
+
+    pub(crate) fn session_cleanup_route_release(&self) -> ClusterSessionRouteRelease {
+        self.cluster.session_route_release()
+    }
+
+    pub(in crate::node) fn sm_teardown_muc_cluster(&self) -> ClusterSmMucTeardown {
+        self.cluster.sm_muc_teardown()
+    }
+}

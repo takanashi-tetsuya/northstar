@@ -560,7 +560,7 @@ async fn upload_claim_is_atomic_and_cleanup_is_retryable() {
         .await
         .unwrap();
     db::migrate(&pool).await.unwrap();
-    // Production binds this durable deployment authority in AppState
+    // Production binds this durable deployment authority in ServerNode
     // before opening any listener. Mirror that startup boundary here: an
     // unbound policy intentionally rejects every new cleanup obligation.
     validate_upload_capacity_policy(

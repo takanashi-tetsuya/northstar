@@ -6,7 +6,7 @@ use crate::direct_spool_wake::record_direct_spool_wake_in_transaction;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_message_core::DirectSpoolEligibility;
-// Still named through this module by `src/state/s2s_inbound_tests.rs` (S28 federation path).
+// Still named through this module by `src/node/hosts/s2s_inbound_tests.rs` (S28 federation path).
 pub use northstar_message_core::{OfflineStoreOutcome, OfflineStorePolicy};
 use northstar_postgres::cluster_lock::lock_direct_spool_instance_claims_in_transaction;
 use sqlx::{PgPool, Row};

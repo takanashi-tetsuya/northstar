@@ -3,7 +3,7 @@
 use super::*;
 
 /// The immutable domains allowed by the configured component and federation
-/// transports. Runtime federation rules are applied separately by AppState.
+/// transports. Runtime federation rules are applied separately by ServerNode.
 #[derive(Clone)]
 pub struct ExternalRouteDomainPolicy {
     pub(super) local_domain: String,

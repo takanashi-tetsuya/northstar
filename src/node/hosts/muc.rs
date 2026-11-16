@@ -1,0 +1,737 @@
+//! The node's capabilities as the MUC handlers see them.
+
+use crate::node::*;
+use anyhow::Result;
+use northstar_archive_core::{
+    FederatedMamAdmissionOutcome, FederatedMamMetadataCommand, FederatedMamStreamPage,
+    FederatedMamStreamRequest, MamMetadataResult, MamRoomAccessOutcome,
+};
+use northstar_delivery_core::node_delivery::NodeDeliveryReceipt;
+use northstar_federation_core::S2sOutboxPolicy;
+use northstar_message_core::{DirectPostCommitMode, OfflineDeliveryLimits};
+use northstar_muc_xmpp::ports::MucHost;
+use northstar_room_application::mix_service::MixService;
+use northstar_room_application::muc_service::MucService;
+use northstar_room_core::occupancy::{
+    FederatedMucAccountRoute, LocalMucJoinPublication, LocalMucNicknameMove, MucJoinCacheAttempt,
+    MucPresencePublication, MucRename, MucRoleChange,
+};
+use northstar_stream::outbound::{DurableDelivery, OutboundSender};
+use northstar_workflows::room_effects::{PostgresMixRepository, PostgresMucRepository};
+use std::collections::HashMap;
+
+impl MucHost for ServerNode {
+    type Repository = PostgresMucRepository;
+    type MixRepository = PostgresMixRepository;
+    type Outbound = OutboundSender;
+    type SuspendedEndpoint = SuspendedMucEndpoint;
+    type Session = OnlineSession;
+
+    fn muc_service(&self) -> &MucService<PostgresMucRepository> {
+        self.room.muc_service()
+    }
+
+    fn mix_service(&self) -> &MixService<PostgresMixRepository> {
+        self.room.mix_service()
+    }
+
+    fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
+        self.sessions.session_entries_for(jid)
+    }
+
+    fn message_direct_mode(&self) -> DirectPostCommitMode {
+        self.message.message_service().direct_mode()
+    }
+
+    async fn rearm_unrouted_live_direct(
+        &self,
+        recipient_id: uuid::Uuid,
+        message_id: uuid::Uuid,
+        claim_id: &mut Option<uuid::Uuid>,
+    ) {
+        self.message
+            .message_service()
+            .rearm_unrouted_live_direct(recipient_id, message_id, claim_id)
+            .await;
+    }
+
+    async fn send_received_carbons(
+        &self,
+        recipient: &str,
+        delivered: Option<&str>,
+        forwarded: &str,
+    ) {
+        northstar_message_application::message_carbons::send_received_carbons(
+            self, recipient, delivered, forwarded,
+        )
+        .await;
+    }
+
+    fn federation_outbox_policy(&self) -> S2sOutboxPolicy {
+        self.federation.federation_outbox.outbox_policy()
+    }
+
+    fn wake_federation_outbox(&self) {
+        self.federation.federation_outbox.wake_outbox();
+    }
+
+    async fn send_federated(
+        &self,
+        target_domain: &str,
+        stanza: String,
+        bounce_to: Option<String>,
+    ) -> bool {
+        self.federation
+            .federation_outbox
+            .send(target_domain, stanza, bounce_to)
+            .await
+    }
+
+    async fn authorize_federated_room(
+        &self,
+        localpart: &str,
+        viewer_bare_jid: &str,
+        currently_joined: bool,
+    ) -> Result<MamRoomAccessOutcome> {
+        self.archive
+            .mam_service()
+            .authorize_federated_room(localpart, viewer_bare_jid, currently_joined)
+            .await
+    }
+
+    async fn execute_federated_mam_metadata(
+        &self,
+        command: FederatedMamMetadataCommand,
+    ) -> Result<MamMetadataResult> {
+        self.archive
+            .mam_service()
+            .execute_federated_mam_metadata(command)
+            .await
+    }
+
+    async fn admit_federated_room_stream<F>(
+        &self,
+        request: FederatedMamStreamRequest<'_>,
+        render: F,
+    ) -> Result<FederatedMamAdmissionOutcome>
+    where
+        F: FnOnce(&FederatedMamStreamPage) -> Result<Vec<String>> + Send,
+    {
+        self.archive
+            .mam_service()
+            .admit_federated_room_stream(request, render)
+            .await
+    }
+
+    fn admit_muc_pg_mutation(&self) -> Result<()> {
+        self.cluster.admit_muc_pg_mutation()
+    }
+
+    fn archive_requires_encryption(&self) -> bool {
+        self.config.require_encrypted_archive
+    }
+
+    async fn blocked_muc_recipient_accounts(
+        &self,
+        occupants: &[MucOccupant],
+        stanza_senders: &[String],
+    ) -> std::collections::HashSet<String> {
+        self.muc_delivery_context()
+            .blocked_muc_recipient_accounts(occupants, stanza_senders)
+            .await
+    }
+
+    async fn cache_committed_muc_join(
+        &self,
+        occupant: &SerializableMucOccupant,
+        capacity: usize,
+    ) -> Result<MucJoinCacheAttempt> {
+        self.cluster
+            .cache_committed_muc_join(occupant, capacity)
+            .await
+    }
+
+    async fn cached_muc_cluster_occupants(&self, room: &str) -> Result<HashMap<String, String>> {
+        self.cluster.cached_muc_cluster_occupants(room).await
+    }
+
+    async fn change_cluster_muc_affiliation_exact(
+        &self,
+        room: &str,
+        occupant: &SerializableMucOccupant,
+        affiliation: &str,
+        role: &str,
+    ) -> Result<MucRoleChange> {
+        self.cluster
+            .change_cluster_muc_affiliation_exact(room, occupant, affiliation, role)
+            .await
+    }
+
+    async fn change_cluster_muc_role_exact(
+        &self,
+        room: &str,
+        occupant: &SerializableMucOccupant,
+        role: &str,
+    ) -> Result<MucRoleChange> {
+        self.cluster
+            .change_cluster_muc_role_exact(room, occupant, role)
+            .await
+    }
+
+    async fn deliver_muc_primary_to_remote_node(
+        &self,
+        target: &str,
+        stanza: &str,
+        durable: Option<DurableDelivery>,
+    ) -> Option<NodeDeliveryReceipt> {
+        self.cluster
+            .deliver_muc_primary_to_remote_node(target, stanza, durable)
+            .await
+    }
+
+    async fn deliver_to_muc_occupant(&self, occupant: &MucOccupant, stanza: String) -> bool {
+        self.muc_delivery_context()
+            .deliver_to_muc_occupant(occupant, stanza)
+            .await
+    }
+
+    async fn deliver_to_muc_occupant_unchecked(
+        &self,
+        occupant: &MucOccupant,
+        stanza: String,
+    ) -> bool {
+        self.muc_delivery_context()
+            .deliver_to_muc_occupant_unchecked(occupant, stanza)
+            .await
+    }
+
+    async fn dispatch_push_notification(&self, recipient_id: uuid::Uuid) -> Result<()> {
+        ServerNode::dispatch_push_notification(self, recipient_id).await
+    }
+
+    async fn evict_cluster_muc_occupant(
+        &self,
+        occupant: &SerializableMucOccupant,
+        status: u16,
+        actor_nick: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        self.cluster
+            .evict_cluster_muc_occupant(occupant, status, actor_nick, reason)
+            .await
+    }
+
+    fn federated_muc_admit_mutation(&self) -> Result<()> {
+        self.cluster.federated_muc_admit_mutation()
+    }
+
+    async fn federated_muc_change_occupant_affiliation(
+        &self,
+        room_jid: &str,
+        occupant: &SerializableMucOccupant,
+        affiliation: &str,
+        role: &str,
+    ) -> Result<MucRoleChange> {
+        self.cluster
+            .federated_muc_change_occupant_affiliation(room_jid, occupant, affiliation, role)
+            .await
+    }
+
+    async fn federated_muc_change_occupant_policy(
+        &self,
+        room_jid: &str,
+        occupant: &SerializableMucOccupant,
+        role: &str,
+        room_non_anonymous: bool,
+    ) -> Result<MucRoleChange> {
+        self.cluster
+            .federated_muc_change_occupant_policy(room_jid, occupant, role, room_non_anonymous)
+            .await
+    }
+
+    async fn federated_muc_change_occupant_role(
+        &self,
+        room_jid: &str,
+        occupant: &SerializableMucOccupant,
+        role: &str,
+    ) -> Result<MucRoleChange> {
+        self.cluster
+            .federated_muc_change_occupant_role(room_jid, occupant, role)
+            .await
+    }
+
+    async fn federated_muc_evict_occupant(
+        &self,
+        occupant: &SerializableMucOccupant,
+        status: u16,
+        actor_nick: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<bool> {
+        self.cluster
+            .federated_muc_evict_occupant(occupant, status, actor_nick, reason)
+            .await
+    }
+
+    async fn federated_muc_global_occupants(
+        &self,
+        room_jid: &str,
+    ) -> Result<HashMap<String, String>> {
+        self.cluster.federated_muc_global_occupants(room_jid).await
+    }
+
+    async fn federated_muc_join_room(&self, room_jid: &str) -> Result<()> {
+        self.cluster.federated_muc_join_room(room_jid).await
+    }
+
+    async fn federated_muc_leave_room(&self, room_jid: &str) -> Result<()> {
+        self.cluster.federated_muc_leave_room(room_jid).await
+    }
+
+    fn federated_muc_occupants_for_closed_connection(
+        &self,
+        authenticated_domain: &str,
+        connection_id: uuid::Uuid,
+    ) -> Vec<MucOccupant> {
+        self.room
+            .muc_occupants
+            .federated_muc_occupants_for_closed_connection(authenticated_domain, connection_id)
+    }
+
+    fn federated_muc_owner_node_id(&self) -> &str {
+        self.cluster.federated_muc_owner_node_id()
+    }
+
+    fn federated_muc_pg_authority_enabled(&self) -> bool {
+        self.cluster.federated_muc_pg_authority_enabled()
+    }
+
+    async fn federated_muc_publish_nickname_change(
+        &self,
+        room_jid: &str,
+        old_occupant: &SerializableMucOccupant,
+        new_occupant: &SerializableMucOccupant,
+        id: Option<&str>,
+    ) -> Result<()> {
+        self.cluster
+            .federated_muc_publish_nickname_change(room_jid, old_occupant, new_occupant, id)
+            .await
+    }
+
+    async fn federated_muc_publish_presence(
+        &self,
+        room_jid: &str,
+        occupant: &SerializableMucOccupant,
+        unavailable: bool,
+        created: bool,
+        id: Option<&str>,
+    ) -> Result<()> {
+        self.cluster
+            .federated_muc_publish_presence(room_jid, occupant, unavailable, created, id)
+            .await
+    }
+
+    async fn federated_muc_publish_private_message(
+        &self,
+        room_jid: &str,
+        target_nick: &str,
+        stanza: &str,
+        real_sender: &str,
+    ) -> Result<()> {
+        self.cluster
+            .federated_muc_publish_private_message(room_jid, target_nick, stanza, real_sender)
+            .await
+    }
+
+    async fn federated_muc_publish_removal_presence(
+        &self,
+        room_jid: &str,
+        occupant: &SerializableMucOccupant,
+        status: Option<u16>,
+        actor_nick: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        self.cluster
+            .federated_muc_publish_removal_presence(room_jid, occupant, status, actor_nick, reason)
+            .await
+    }
+
+    async fn federated_muc_publish_room_message(
+        &self,
+        room_jid: &str,
+        stanza: &str,
+        real_sender: Option<&str>,
+    ) -> Result<()> {
+        self.cluster
+            .federated_muc_publish_room_message(room_jid, stanza, real_sender)
+            .await
+    }
+
+    fn federated_muc_redis_transport_enabled(&self) -> bool {
+        self.cluster.federated_muc_redis_transport_enabled()
+    }
+
+    async fn federated_muc_register_occupant(
+        &self,
+        room_jid: &str,
+        nick: &str,
+        json: &str,
+    ) -> Result<bool> {
+        self.cluster
+            .federated_muc_register_occupant(room_jid, nick, json)
+            .await
+    }
+
+    async fn federated_muc_rename_occupant(
+        &self,
+        room_jid: &str,
+        old_nick: &str,
+        new_nick: &str,
+        expected_epoch: uuid::Uuid,
+        old_json: &str,
+        new_json: &str,
+    ) -> Result<MucRename> {
+        self.cluster
+            .federated_muc_rename_occupant(
+                room_jid,
+                old_nick,
+                new_nick,
+                expected_epoch,
+                old_json,
+                new_json,
+            )
+            .await
+    }
+
+    fn federated_muc_telemetry(&self) -> northstar_room_core::telemetry::FederatedMucTelemetry<'_> {
+        northstar_room_core::telemetry::FederatedMucTelemetry::new(
+            &self.metrics.muc_post_commit_delivery_failures_total,
+            &self.metrics.post_accept_side_effect_failures_total,
+            &self.metrics.capacity_reservations_rejected_total,
+            &self.metrics.online_queue_durable_acceptances_total,
+            &self.metrics.online_queue_volatile_acceptances_total,
+            &self.metrics.messages_routed_total,
+        )
+    }
+
+    async fn join_cluster_muc_room(&self, room: &str) -> Result<()> {
+        self.cluster.join_cluster_muc_room(room).await
+    }
+
+    async fn leave_cluster_muc_room(&self, room: &str) -> Result<()> {
+        self.cluster.leave_cluster_muc_room(room).await
+    }
+
+    fn local_domain(&self) -> &str {
+        &self.config.domain
+    }
+
+    fn local_muc_occupant_by_nick(&self, room_jid: &str, nick: &str) -> Option<MucOccupant> {
+        self.room
+            .muc_occupants
+            .local_muc_occupant_by_nick(room_jid, nick)
+    }
+
+    fn local_muc_occupant_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+    ) -> Option<MucOccupant> {
+        self.room.muc_occupants.local_muc_occupant_exact(identity)
+    }
+
+    fn mix_muc_mirror_enabled(&self) -> bool {
+        self.config.mix_muc_mirror_enabled
+    }
+
+    fn move_local_muc_nickname_exact(
+        &self,
+        old: LocalMucOccupantIdentity<'_>,
+        renamed: &MucOccupant,
+        cluster_committed: bool,
+    ) -> LocalMucNicknameMove {
+        self.room
+            .muc_occupants
+            .move_local_muc_nickname_exact(old, renamed, cluster_committed)
+    }
+
+    fn muc_cluster_node_id(&self) -> &str {
+        self.cluster.muc_cluster_node_id()
+    }
+
+    fn muc_mam_retention_days(&self) -> i64 {
+        self.config.muc_mam_retention_days
+    }
+
+    fn muc_occupants_for(&self, room_jid: &str) -> Vec<(String, MucOccupant)> {
+        self.room.muc_occupants.muc_occupants_for(room_jid)
+    }
+
+    fn muc_pg_authority_enabled(&self) -> bool {
+        self.cluster.muc_pg_authority_enabled()
+    }
+
+    fn muc_redis_transport_enabled(&self) -> bool {
+        self.cluster.muc_redis_transport_enabled()
+    }
+
+    fn muc_telemetry(&self) -> northstar_room_core::telemetry::MucTelemetry<'_> {
+        northstar_room_core::telemetry::MucTelemetry::new(
+            &self.metrics.muc_post_commit_delivery_failures_total,
+            &self.metrics.post_accept_side_effect_failures_total,
+            &self.metrics.cluster_muc_authority_rejections_total,
+            &self.metrics.online_queue_durable_acceptances_total,
+            &self.metrics.online_queue_volatile_acceptances_total,
+            &self.metrics.messages_routed_total,
+            &self.metrics.capacity_reservations_rejected_total,
+        )
+    }
+
+    fn offline_delivery_limits(&self) -> OfflineDeliveryLimits {
+        northstar_message_core::OfflineDeliveryLimits {
+            max_messages: self.config.offline_max_messages_per_account,
+            max_bytes: self.config.offline_max_bytes_per_account,
+            ttl_days: self.config.offline_message_ttl_days,
+        }
+    }
+
+    fn publish_local_muc_join_if_vacant(&self, joining: &MucOccupant) -> LocalMucJoinPublication {
+        self.room
+            .muc_occupants
+            .publish_local_muc_join_if_vacant(joining)
+    }
+
+    async fn publish_muc_cluster_nickname_change(
+        &self,
+        room: &str,
+        before: &SerializableMucOccupant,
+        after: &SerializableMucOccupant,
+        id: Option<&str>,
+    ) -> Result<()> {
+        self.cluster
+            .publish_muc_cluster_nickname_change(room, before, after, id)
+            .await
+    }
+
+    async fn publish_muc_cluster_presence(
+        &self,
+        publication: MucPresencePublication<'_>,
+    ) -> Result<()> {
+        self.cluster.publish_muc_cluster_presence(publication).await
+    }
+
+    async fn publish_muc_cluster_presence_with_id(
+        &self,
+        room: &str,
+        occupant: &SerializableMucOccupant,
+        unavailable: bool,
+        created: bool,
+        id: Option<&str>,
+    ) -> Result<()> {
+        self.cluster
+            .publish_muc_cluster_presence_with_id(room, occupant, unavailable, created, id)
+            .await
+    }
+
+    async fn publish_muc_cluster_private_message(
+        &self,
+        room: &str,
+        nick: &str,
+        stanza: &str,
+        real_sender: &str,
+    ) -> Result<()> {
+        self.cluster
+            .publish_muc_cluster_private_message(room, nick, stanza, real_sender)
+            .await
+    }
+
+    async fn publish_muc_cluster_stanza(
+        &self,
+        room: &str,
+        stanza: &str,
+        real_sender: Option<&str>,
+    ) -> Result<()> {
+        self.cluster
+            .publish_muc_cluster_stanza(room, stanza, real_sender)
+            .await
+    }
+
+    fn rebind_local_federated_muc_occupant_exact(
+        &self,
+        old: &MucOccupant,
+        new_connection_id: uuid::Uuid,
+    ) -> Option<MucOccupant> {
+        self.room
+            .muc_occupants
+            .rebind_local_federated_muc_occupant_exact(old, new_connection_id)
+    }
+
+    fn record_muc_cluster_control_plane_failure(&self, error: &anyhow::Error) {
+        self.cluster.record_muc_cluster_control_plane_failure(error)
+    }
+
+    fn refresh_local_muc_policy_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+        moderated: Option<bool>,
+        non_anonymous: Option<bool>,
+    ) -> Option<(MucOccupant, bool)> {
+        self.room
+            .muc_occupants
+            .refresh_local_muc_policy_exact(identity, moderated, non_anonymous)
+    }
+
+    fn refresh_local_muc_presence_exact(
+        &self,
+        prepared: &MucOccupant,
+        apply_policy: bool,
+    ) -> Option<MucOccupant> {
+        self.room
+            .muc_occupants
+            .refresh_local_muc_presence_exact(prepared, apply_policy)
+    }
+
+    async fn register_cluster_muc_occupant(
+        &self,
+        room: &str,
+        nick: &str,
+        json: &str,
+    ) -> Result<bool> {
+        self.cluster
+            .register_cluster_muc_occupant(room, nick, json)
+            .await
+    }
+
+    async fn remove_exact_muc_soft_state(&self, occupant: &MucOccupant) -> Result<bool> {
+        self.cluster.remove_exact_muc_soft_state(occupant).await
+    }
+
+    fn remove_live_muc_membership(&self, occupant: &SerializableMucOccupant) -> bool {
+        self.sessions.remove_live_muc_membership(occupant)
+    }
+
+    fn remove_local_muc_occupant_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+    ) -> Option<MucOccupant> {
+        self.room
+            .muc_occupants
+            .remove_local_muc_occupant_exact(identity)
+    }
+
+    async fn rename_cluster_muc_occupant_exact(
+        &self,
+        room: &str,
+        old_nick: &str,
+        new_nick: &str,
+        expected_epoch: uuid::Uuid,
+        old_json: &str,
+        new_json: &str,
+    ) -> Result<MucRename> {
+        self.cluster
+            .rename_cluster_muc_occupant_exact(
+                room,
+                old_nick,
+                new_nick,
+                expected_epoch,
+                old_json,
+                new_json,
+            )
+            .await
+    }
+
+    async fn revoke_cluster_muc_occupant_exact(
+        &self,
+        occupant: &SerializableMucOccupant,
+        status: u16,
+        actor_nick: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<bool> {
+        self.cluster
+            .revoke_cluster_muc_occupant_exact(occupant, status, actor_nick, reason)
+            .await
+    }
+
+    async fn route_federated_muc_account_message_remote(
+        &self,
+        target_jid: &str,
+        stanza: &str,
+        delivery: Option<DurableDelivery>,
+    ) -> Option<FederatedMucAccountRoute> {
+        self.cluster
+            .route_federated_muc_account_message_remote(target_jid, stanza, delivery)
+            .await
+    }
+
+    fn server_name(&self) -> &str {
+        &self.config.server_name
+    }
+
+    fn set_local_muc_affiliation_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+        affiliation: &str,
+        moderated: bool,
+        only_if_none: bool,
+        expected_affiliation: Option<&str>,
+    ) -> Option<MucOccupant> {
+        self.room.muc_occupants.set_local_muc_affiliation_exact(
+            identity,
+            affiliation,
+            moderated,
+            only_if_none,
+            expected_affiliation,
+        )
+    }
+
+    fn set_local_muc_role_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+        expected_role: &str,
+        role: &str,
+        non_anonymous: Option<bool>,
+    ) -> Option<MucOccupant> {
+        self.room.muc_occupants.set_local_muc_role_exact(
+            identity,
+            expected_role,
+            role,
+            non_anonymous,
+        )
+    }
+
+    fn validate_routed_message(&self, root: roxmltree::Node<'_, '_>) -> Result<(), &'static str> {
+        northstar_message_core::validation::validate_routed_message(
+            root,
+            &self.config.xmpp_extensions,
+        )
+    }
+
+    fn validated_local_muc_occupant(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+        room_jid: &str,
+        membership: &JoinedMucMembership,
+    ) -> Option<MucOccupant> {
+        self.room.muc_occupants.validated_local_muc_occupant(
+            &self.sessions,
+            full_jid,
+            connection_id,
+            room_jid,
+            membership,
+        )
+    }
+
+    async fn wake_committed_muc_operation(&self, operation_id: uuid::Uuid) -> anyhow::Result<()> {
+        self.room
+            .muc_service()
+            .wake_committed_operation(&self.cluster, operation_id)
+            .await
+    }
+
+    fn xmpp_extension_enabled(&self, id: northstar_xep_core::XepId) -> bool {
+        self.config.xmpp_extension_enabled(id)
+    }
+
+    fn xmpp_external_route_domain_allowed(&self, domain: &str) -> bool {
+        self.config.external_route_domain_allowed(domain)
+    }
+}

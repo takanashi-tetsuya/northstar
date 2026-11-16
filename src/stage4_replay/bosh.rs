@@ -33,7 +33,7 @@ impl BoshSite {
     }
 }
 
-/// Finite actor fields, never a fake AppState or another BOSH policy engine.
+/// Finite actor fields, never a fake ServerNode or another BOSH policy engine.
 /// Observational item keys contain values only; they grant no transfer rights.
 pub(crate) struct Session {
     input: wire::BoshSessionInput,

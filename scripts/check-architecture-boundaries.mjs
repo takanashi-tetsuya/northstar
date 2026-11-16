@@ -253,22 +253,22 @@ function classifyDbDependencies(source, moduleName) {
 
 // whole production module (the file and its non-test child files); items are
 // read by their unique declaration, so they keep being found after a split
-const state = readProductionModule('src/state.rs', { root });
+const state = readProductionModule('src/node.rs', { root });
 // crates/edges/northstar-cluster/src/lib.rs is read as its whole production module too (listener.rs,
 // pool.rs and the files a split adds), with items read by unique declaration
 const cluster = readProductionModule('crates/edges/northstar-cluster/src/lib.rs', { root });
 // crates/platform/northstar-config/src/lib.rs and its non-test sibling modules (the whole production module)
 const configSource = readProductionModule('crates/platform/northstar-config/src/lib.rs', { root });
 const mainSource = read('src/main.rs');
-const workerComposition = readProductionModule('src/state/workers.rs', { root });
-const abuseWorkers = read('src/state/workers/abuse.rs');
-const maintenanceWorkers = read('src/state/workers/maintenance.rs');
-const clusterWorkers = read('src/state/workers/cluster.rs');
+const workerComposition = readProductionModule('src/node/workers.rs', { root });
+const abuseWorkers = read('src/node/workers/abuse.rs');
+const maintenanceWorkers = read('src/node/workers/maintenance.rs');
+const clusterWorkers = read('src/node/workers/cluster.rs');
 const responsibilityDocument = read('docs/PROGRAM_RESPONSIBILITIES.md');
 const listenerStressDriver = read('scripts/listener-readiness-stress-wsl.sh');
 const loopbackPostgresFixture = read('scripts/loopback-postgres-ci.sh');
 const ciWorkflow = read('.github/workflows/ci.yml');
-const appState = rustItemBody(state, 'pub struct AppState');
+const appState = rustItemBody(state, 'pub struct ServerNode');
 const publicFields = countMatches(appState, /^\s*pub\s+[A-Za-z_][A-Za-z0-9_]*\s*:/gm);
 const cratePublicFields = countMatches(appState, /^\s*pub\(crate\)\s+[A-Za-z_][A-Za-z0-9_]*\s*:/gm);
 const publicFieldNames = [
@@ -283,12 +283,12 @@ const EXPECTED_APP_STATE_PUBLIC_CAPABILITIES = [];
 
 if (publicFields > MAX_APP_STATE_PUBLIC_FIELDS) {
   throw new Error(
-    `AppState public-field budget regressed: ${publicFields} > ${MAX_APP_STATE_PUBLIC_FIELDS}`,
+    `ServerNode public-field budget regressed: ${publicFields} > ${MAX_APP_STATE_PUBLIC_FIELDS}`,
   );
 }
 if (cratePublicFields > MAX_APP_STATE_CRATE_PUBLIC_FIELDS) {
   throw new Error(
-    `AppState crate-public-field budget regressed: ${cratePublicFields} > ${MAX_APP_STATE_CRATE_PUBLIC_FIELDS}`,
+    `ServerNode crate-public-field budget regressed: ${cratePublicFields} > ${MAX_APP_STATE_CRATE_PUBLIC_FIELDS}`,
   );
 }
 const actualPublicCapabilities = [...publicFieldNames].sort();
@@ -299,7 +299,7 @@ if (
   )
 ) {
   throw new Error(
-    'AppState public capability identity changed; extract a typed port or update the reviewed ' +
+    'ServerNode public capability identity changed; extract a typed port or update the reviewed ' +
       `responsibility model instead of swapping fields under the count budget: ${actualPublicCapabilities.join(', ')}`,
   );
 }
@@ -307,7 +307,7 @@ if (/\b(?:state|shutdown_state)\.pool\b/.test(mainSource + cluster)
     || !appState.includes('pool: PgPool,')) {
   throw new Error('process and cluster workers must use narrow state-owned database capabilities');
 }
-if (!rustItemBody(read('src/state/s2s_inbound_host.rs'), 'fn local_domain(').includes('&self.config.domain')
+if (!rustItemBody(read('src/node/hosts/s2s_inbound.rs'), 'fn local_domain(').includes('&self.config.domain')
     || /\bstate\.config\.domain\b/.test(readProductionModule('crates/edges/northstar-s2s/src/inbound.rs', { root }))) {
   throw new Error('S2S ingress must receive only the validated local domain');
 }
@@ -315,14 +315,14 @@ const clusterMessageResolver = rustItemBody(cluster, 'async fn resolve_node_mess
 if (!clusterMessageResolver.includes('verifier.resolve(request, stanza, target_jid).await?')
     || /sqlx::|\.fetch_(?:one|optional|all)\(/.test(clusterMessageResolver)
     || !readProductionModule('crates/edges/northstar-cluster/src/listener.rs', { root }).includes('message_policy.verifier()')
-    || !read('src/state/cluster_listener_message.rs').includes('verifier: northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier::new(')
-    || !read('src/state/cluster_listener_message.rs').includes('northstar_session_postgres::node_message_projection_repository::PostgresNodeMessageProjectionRepository::new(')) {
+    || !read('src/node/adapters/cluster_listener_message.rs').includes('verifier: northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier::new(')
+    || !read('src/node/adapters/cluster_listener_message.rs').includes('northstar_session_postgres::node_message_projection_repository::PostgresNodeMessageProjectionRepository::new(')) {
   throw new Error('inbound cluster message contracts must use the PostgreSQL projection verifier port');
 }
 
 // The loaded configuration transiently contains database, cluster,
 // component, TURN, FAST and anti-abuse credentials. It must be move-only so
-// AppState::new can consume and scrub the sole configuration instance instead
+// ServerNode::new can consume and scrub the sole configuration instance instead
 // of leaving an unconstrained plaintext clone elsewhere in the process.
 for (const typeName of ['RawConfig', 'Config']) {
   const declaration = new RegExp(
@@ -352,17 +352,17 @@ for (const field of [
   'tls_context',
 ]) {
   if (!new RegExp(`^\\s*${field}\\s*:`, 'm').test(appState)) {
-    throw new Error(`AppState capability ${field} is no longer private or is missing`);
+    throw new Error(`ServerNode capability ${field} is no longer private or is missing`);
   }
   if (new RegExp(`^\\s*pub(?:\\(crate\\))?\\s+${field}\\s*:`, 'm').test(appState)) {
-    throw new Error(`AppState capability ${field} became publicly accessible`);
+    throw new Error(`ServerNode capability ${field} became publicly accessible`);
   }
 }
-if (!/^\s*pub\(super\)\s+dialback_secret\s*:\s*Zeroizing<Vec<u8>>\s*,/m.test(read('src/state/federation_module.rs'))) {
-  throw new Error('FederationModule dialback_secret must remain inside state and Zeroizing');
+if (!/^\s*pub\(in crate::node\)\s+dialback_secret\s*:\s*Zeroizing<Vec<u8>>\s*,/m.test(read('src/node/modules/federation.rs'))) {
+  throw new Error('FederationModule dialback_secret must remain inside the node and Zeroizing');
 }
 if (/^\s*(?:pub(?:\(crate\))?\s+)?fast_token_secret\s*:/m.test(appState)) {
-  throw new Error('AppState must not retain the FAST derivation key after adapter construction');
+  throw new Error('ServerNode must not retain the FAST derivation key after adapter construction');
 }
 const smAdapterBody = structBody(read('crates/contexts/workflows/northstar-workflows/src/sm_repository.rs'), 'pub struct PostgresSmRepository');
 if (!/^\s*fast_token_secret\s*:\s*Arc<Zeroizing<Vec<u8>>>\s*,/m.test(smAdapterBody)) {
@@ -380,8 +380,8 @@ for (const invariant of [
   }
 }
 const runtimeControlRefresh = rustItemBody(state, 'fn start_runtime_control_refresh(');
-const runtimeControlContext = read('src/state/runtime_control_refresh.rs');
-const runtimeControlRun = structBody(runtimeControlContext, 'pub(super) async fn run(');
+const runtimeControlContext = read('src/node/adapters/runtime_control_refresh.rs');
+const runtimeControlRun = structBody(runtimeControlContext, 'pub(in crate::node) async fn run(');
 const runtimeControlAdapter = read('crates/contexts/operations/northstar-operations-postgres/src/runtime_control_repository.rs');
 if (!/let repository = self\.connection\.lock\(\)\.await\.take\(\)/.test(runtimeControlRun)
     || !/let mut control = RuntimeControlService::new\(repository\)/.test(runtimeControlRun)
@@ -405,7 +405,7 @@ if ((runtimeControlRefresh.match(/let\s+max_silence\s*=/g) ?? []).length !== 1
     || !/let max_silence = Duration::from_secs\(5\);/.test(runtimeControlRefresh)
     || !/"runtime-control-refresh",\s*northstar_runtime::workers::WorkerCriticality::Critical,\s*northstar_runtime::workers::WorkerMode::Continuous,\s*Some\(max_silence\),/s.test(runtimeControlRefresh)
     || !/RuntimeControlDiagnostics::new\(diagnostic_cancel,\s*max_silence\)/s.test(runtimeControlRun)
-    || /\bArc<AppState>\b/.test(runtimeControlContext)
+    || /\bArc<ServerNode>\b/.test(runtimeControlContext)
     || !runtimeControlRun.includes('Duration::from_millis(500)')
     || !runtimeControlRun.includes('self.connection.lock().await.take()')) {
   throw new Error('runtime-control diagnostics and supervision must share the unchanged five-second silence bound');
@@ -463,7 +463,7 @@ if (!/const RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET:\s*Duration\s*=\s*Dur
 }
 const appStateConstruction = rustItemBody(state, 'pub async fn new(');
 if (!/pub async fn new\([\s\S]*?runtime_control_connection\s*:\s*PoolConnection<Postgres>/.test(state)) {
-  throw new Error('AppState must receive the already-reserved runtime-control connection');
+  throw new Error('ServerNode must receive the already-reserved runtime-control connection');
 }
 const terminalMain = structBody(mainSource, 'async fn main()');
 if (terminalMain.replace(/\s+/g, '') !== 'northstar_telemetry::logging::report_result(run().await)') {
@@ -485,7 +485,7 @@ if (!maintenanceWorkers.includes('retention_context(state)')
     || /PostgresMaintenanceRepository::new\(state\.pool\.clone\(\)\)/.test(workerComposition)) {
   throw new Error('retention workers must receive separate state-owned repository contexts');
 }
-const clusterShutdown = read('src/state/cluster_shutdown.rs');
+const clusterShutdown = read('src/node/adapters/cluster_shutdown.rs');
 const shutdownFence = clusterShutdown.indexOf('let _publication_fence =');
 const publicationTimeout = clusterShutdown.indexOf('tokio::time::timeout(quiesce_timeout, self.cluster.quiesce_publication())', shutdownFence);
 const releaseInstance = clusterShutdown.indexOf('.release_instance_authority_with(release_service)', publicationTimeout);
@@ -497,14 +497,14 @@ if (shutdownFence < 0 || publicationTimeout < shutdownFence || releaseInstance <
     || /release_instance_authority\(&shutdown_state\.pool\)/.test(runtimeMain)) {
   throw new Error('cluster node-instance release must remain inside the signed-publication fence');
 }
-const mainRuntimeControlReservation = runtimeMain.indexOf('state::reserve_runtime_control_connection(&config).await?');
+const mainRuntimeControlReservation = runtimeMain.indexOf('node::reserve_runtime_control_connection(&config).await?');
 const mainPrimaryPoolConstruction = runtimeMain.indexOf('let pool_options = northstar_postgres::pool::options()');
 if (mainRuntimeControlReservation < 0 || mainPrimaryPoolConstruction < 0
     || mainRuntimeControlReservation > mainPrimaryPoolConstruction) {
   throw new Error('main must reserve runtime-control authority before constructing the traffic pool');
 }
 if (!/Self::start_runtime_control_refresh\(\s*Arc::clone\(&state\),\s*runtime_control_connection,\s*worker_cancel,\s*\);/s.test(state)) {
-  throw new Error('AppState must transfer the reserved connection to the coordinated runtime-control worker');
+  throw new Error('ServerNode must transfer the reserved connection to the coordinated runtime-control worker');
 }
 const serviceControlInstallation = rustItemBody(state, 'pub fn install_service_shutdown(');
 if (!/self\.service_shutdown\s*\.set\(cancel\)/s.test(serviceControlInstallation)) {
@@ -756,8 +756,8 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
 verifyMixOutboxLifecycle(mixProtocol);
 
 const commandPoolConstruction = rustItemBody(state, 'pub async fn new(');
-// The upload storage pool is opened by UploadModule::start, called from AppState::new.
-const uploadModuleStart = rustItemBody(state, 'pub(super) async fn start(');
+// The upload storage pool is opened by UploadModule::start, called from ServerNode::new.
+const uploadModuleStart = rustItemBody(state, 'pub(in crate::node) async fn start(');
 for (const invariant of [
   'let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;',
   'startup_database_connect( auxiliary_pool_deadline, AUXILIARY_POOL_ACQUIRE_TIMEOUT, "XEP-0133 command",',
@@ -894,7 +894,7 @@ if (
 }
 
 // Runtime secrets must be transferred exactly once from Config into their
-// narrow owner. AppState deliberately keeps Config for non-secret policy, so
+// narrow owner. ServerNode deliberately keeps Config for non-secret policy, so
 // leaving even an Option/Arc clone behind would make the secret reachable by
 // every protocol handler through `state.config`.
 const appStateNew = rustItemBody(state, 'pub async fn new(');
@@ -912,12 +912,12 @@ for (const field of [
       `config\\s*\\.\\s*raw\\s*\\.\\s*${field}\\s*\\.\\s*take\\s*\\(`,
     ).test(appStateNew)
   ) {
-    throw new Error(`AppState::new must take and consume config.raw.${field}`);
+    throw new Error(`ServerNode::new must take and consume config.raw.${field}`);
   }
 }
 for (const field of ['metrics_bearer_token', 'cluster_security']) {
   if (!new RegExp(`config\\s*\\.\\s*${field}\\s*\\.\\s*take\\s*\\(`).test(appStateNew)) {
-    throw new Error(`AppState::new must take and consume config.${field}`);
+    throw new Error(`ServerNode::new must take and consume config.${field}`);
   }
 }
 for (const operation of ['zeroize', 'clear']) {
@@ -926,26 +926,26 @@ for (const operation of ['zeroize', 'clear']) {
       `config\\s*\\.\\s*raw\\s*\\.\\s*database_url\\s*\\.\\s*${operation}\\s*\\(`,
     ).test(appStateNew)
   ) {
-    throw new Error(`AppState::new must ${operation} config.raw.database_url after pool creation`);
+    throw new Error(`ServerNode::new must ${operation} config.raw.database_url after pool creation`);
   }
 }
 if (!/std\s*::\s*mem\s*::\s*take\s*\(\s*&mut\s+config\s*\.\s*components\s*\)/.test(appStateNew)) {
-  throw new Error('AppState::new must take exclusive ownership of component credentials');
+  throw new Error('ServerNode::new must take exclusive ownership of component credentials');
 }
 for (const field of ['secret_value', 'secret_file']) {
   if (!new RegExp(`credential\\s*\\.\\s*${field}\\s*=\\s*None`).test(appStateNew)) {
-    throw new Error(`AppState::new must remove component ${field} from shared Config metadata`);
+    throw new Error(`ServerNode::new must remove component ${field} from shared Config metadata`);
   }
 }
 if (!/credential\s*\.\s*secret_sha256\s*\.\s*zeroize\s*\(/.test(appStateNew)) {
-  throw new Error('AppState::new must zero the component verifier in shared Config metadata');
+  throw new Error('ServerNode::new must zero the component verifier in shared Config metadata');
 }
 if (
   /^\s*pub(?:\(crate\))?\s+[A-Za-z_][A-Za-z0-9_]*(?:secret|token|credential|keyring)[A-Za-z0-9_]*\s*:/gim.test(
     appState,
   )
 ) {
-  throw new Error('AppState exposes a runtime secret/token/credential capability as a field');
+  throw new Error('ServerNode exposes a runtime secret/token/credential capability as a field');
 }
 
 // The context ports' impls for the session and the context glue moved to the contexts' -xmpp crates. Each
@@ -1143,14 +1143,14 @@ if (
 ) {
   throw new Error('MIX outbox DB admission must acquire an owned permit from the shared capability');
 }
-const stateOutboxAdmission = rustItemBody(state, 'pub struct AppState');
+const stateOutboxAdmission = rustItemBody(state, 'pub struct ServerNode');
 if (
   !/^\s*durable_outbox_database_admission\s*:\s*northstar_runtime\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*,?$/m.test(
     stateOutboxAdmission,
   ) ||
   /^\s*pub(?:\(crate\))?\s+durable_outbox_database_admission\s*:/m.test(stateOutboxAdmission)
 ) {
-  throw new Error('AppState must privately own the shared durable-outbox database admission');
+  throw new Error('ServerNode must privately own the shared durable-outbox database admission');
 }
 if (
   !/let\s+durable_outbox_database_admission\s*=\s*northstar_runtime\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*::\s*for_primary_pool\s*\(\s*config\s*\.\s*database_max_connections\s*,?\s*\)/s.test(
@@ -1163,7 +1163,7 @@ if (
     state,
   )
 ) {
-  throw new Error('AppState must inject one durable-outbox admission into PubSub and MIX services');
+  throw new Error('ServerNode must inject one durable-outbox admission into PubSub and MIX services');
 }
 
 // The only code that can hold this private owned permit is a reviewed service
@@ -1837,7 +1837,7 @@ for (const [name, serviceAccessor, source] of [
     throw new Error(`${name} must have exactly zero direct db authority references`);
   }
   for (const [description, pattern] of [
-    ['AppState pool access', /\bstate\s*\.\s*pool\b/],
+    ['ServerNode pool access', /\bstate\s*\.\s*pool\b/],
     ['a PostgreSQL pool type', /\b(?:sqlx\s*::\s*)?PgPool\b/],
     ['raw SQL execution', /\bsqlx\s*::/],
   ]) {
@@ -1846,7 +1846,7 @@ for (const [name, serviceAccessor, source] of [
     }
   }
   if (name === 'replay.rs') {
-    if (!/\bReplayService\s*</.test(source) || /\bAppState\b/.test(source)) {
+    if (!/\bReplayService\s*</.test(source) || /\bServerNode\b/.test(source)) {
       throw new Error('replay.rs must receive a narrow ReplayService handle');
     }
     for (const caller of ['presence.rs', 'sasl2.rs', 'sm.rs']) {
@@ -1891,7 +1891,7 @@ if (replayDependencies.authorityReferences !== 0) {
   throw new Error('replay.rs must have exactly zero direct db authority references');
 }
 for (const [description, pattern] of [
-  ['AppState pool access', /\bstate\s*\.\s*pool\b/],
+  ['ServerNode pool access', /\bstate\s*\.\s*pool\b/],
   ['a PostgreSQL pool type', /\b(?:sqlx\s*::\s*)?PgPool\b/],
   ['raw SQL execution', /\bsqlx\s*::/],
 ]) {
@@ -1899,7 +1899,7 @@ for (const [description, pattern] of [
     throw new Error(`replay.rs bypasses ReplayService through ${description}`);
   }
 }
-if (!/\bReplayService\s*</.test(replayProtocolSource) || /\bAppState\b/.test(replayProtocolSource)) {
+if (!/\bReplayService\s*</.test(replayProtocolSource) || /\bServerNode\b/.test(replayProtocolSource)) {
   throw new Error('replay.rs must use its narrow ReplayService handle');
 }
 const replayServiceSource = read('crates/contexts/session/northstar-session-application/src/replay.rs');
@@ -2040,7 +2040,7 @@ if (!/^\s*host\s*:\s*Arc<H>\s*,?\s*$/m.test(protocolSessionBody)) {
   throw new Error('ProtocolSession must keep its host private to its protocol implementation');
 }
 const smRuntimePolicyBody = structBody(legacyAuthProtocolSource, 'struct SmRuntimePolicy');
-if (/\b(?:AppState|Arc)\b/.test(smRuntimePolicyBody)
+if (/\b(?:ServerNode|Arc)\b/.test(smRuntimePolicyBody)
     || !/\bsession\s*:\s*SmSessionPolicy\b/.test(smRuntimePolicyBody)
     || !/\bbuffer\s*:\s*SmBufferLimits\b/.test(smRuntimePolicyBody)
     || !/\bip_binding\s*:\s*String\b/.test(smRuntimePolicyBody)
@@ -2062,12 +2062,12 @@ for (const transport of ['crates/edges/northstar-bosh/src/lib.rs', 'crates/edges
 }
 const nativeTransportSource = read('crates/edges/northstar-c2s/src/lib.rs');
 const backpressureGuard = structBody(nativeTransportSource, 'struct BackpressureDisconnectMetric');
-if (/\bAppState\b/.test(backpressureGuard)
+if (/\bServerNode\b/.test(backpressureGuard)
     || !/\btelemetry\s*:\s*C2sBackpressureTelemetry\b/.test(backpressureGuard)) {
   throw new Error('TCP/WebSocket backpressure guard must hold only narrow telemetry');
 }
 const nativeTransportPolicy = structBody(nativeTransportSource, 'struct NativeTransportPolicy');
-if (/\b(?:AppState|Arc)\b/.test(nativeTransportPolicy)
+if (/\b(?:ServerNode|Arc)\b/.test(nativeTransportPolicy)
     || !/\bsm_lease_poll_interval\s*:\s*Duration\b/.test(nativeTransportPolicy)
     || !/\bbackpressure_telemetry\s*:\s*C2sBackpressureTelemetry\b/.test(nativeTransportPolicy)) {
   throw new Error('TCP/WebSocket transport policy must contain only immutable cadence and typed telemetry');
@@ -2077,7 +2077,7 @@ const driveIoDeclaration = nativeTransportSource.slice(
   nativeTransportSource.indexOf('async fn drive_io<S, P>') + 400,
 );
 if (!/transport_policy\s*:\s*&NativeTransportPolicy/.test(driveIoDeclaration)
-    || /\bstate\s*:|\bAppState\b/.test(driveIoDeclaration)
+    || /\bstate\s*:|\bServerNode\b/.test(driveIoDeclaration)
     || /\bstate\s*\./.test(structBody(nativeTransportSource, 'async fn drive_io<S, P>'))) {
   throw new Error('TCP transport loop must use NativeTransportPolicy, not global state');
 }
@@ -2090,7 +2090,7 @@ for (const connection of [
   const opening = 'let mut session = host.open_session(';
   const sessionCreated = body.indexOf(opening);
   if (sessionCreated < 0
-      || /\bAppState\b/.test(body)
+      || /\bServerNode\b/.test(body)
       || /\bhost\s*\./.test(body.slice(sessionCreated + opening.length))) {
     throw new Error(`${connection} retains its host after opening the protocol session`);
   }
@@ -2124,7 +2124,7 @@ for (const [name, source] of [
   }
 }
 if (/\bstate\s*\.\s*pool\b/.test(sasl2Source)) {
-  throw new Error('sasl2.rs regained direct AppState PostgreSQL authority');
+  throw new Error('sasl2.rs regained direct ServerNode PostgreSQL authority');
 }
 const accountServiceSource = read('crates/contexts/auth/northstar-auth-application/src/account.rs');
 if (/RegistrationOutcome[\s\S]*?Created\s*\(\s*(?:db|northstar_auth_postgres::users)::User\s*\)/.test(accountServiceSource)) {
@@ -2183,7 +2183,7 @@ for (const authority of [
   }
 }
 if (!/\.execute_federated_mam_metadata\s*\(/.test(federatedMucSource)
-  || !/self\s*\.archive\s*\.mam_service\s*\(\s*\)\s*\.execute_federated_mam_metadata\s*\(/.test(read('src/state/muc_host.rs'))) {
+  || !/self\s*\.archive\s*\.mam_service\s*\(\s*\)\s*\.execute_federated_mam_metadata\s*\(/.test(read('src/node/hosts/muc.rs'))) {
   throw new Error('federated_muc.rs no longer routes MAM authority through mam_service()');
 }
 const federatedIqHandler = rustItemBody(federatedMucSource, 'async fn federated_muc_iq_owned(');
@@ -2315,13 +2315,13 @@ for (const invariant of [
   previousFederatedMamAdmissionStep = position;
 }
 
-// mix_muc.rs receives the MIX service from its callers instead of AppState.
+// mix_muc.rs receives the MIX service from its callers instead of ServerNode.
 for (const [name, accessor, forbiddenAuthority, route, path] of [
   ['mix_muc.rs', 'MixService', 'link_mix_muc_by_localpart', /\bmix\s*:\s*&MixService<R>[^]*?\bmix\s*\.\s*link_local_muc_mirror\s*\(/, 'crates/contexts/room/northstar-room-application/src/mix_muc.rs'],
   ['presence.rs', 'presence_service()', 'claim_admin_service_messages', /\.presence_service\s*\(\s*\)/],
   ['presence.rs', 'presence_service()', 'complete_admin_service_message_claim', /\.presence_service\s*\(\s*\)/],
   ['upload.rs', 'UploadSessionHost', 'create_upload_slot_bounded', /\.reserve_upload_slot\s*\(/],
-  ['upload_session_host.rs', 'upload_service()', 'create_upload_slot_bounded', /\.upload_service\s*\(\s*\)/, 'src/state/upload_session_host.rs'],
+  ['upload_session_host.rs', 'upload_service()', 'create_upload_slot_bounded', /\.upload_service\s*\(\s*\)/, 'src/node/hosts/upload_session.rs'],
 ]) {
   const production = productionWithoutCfgTestModules(
     path ? read(path) : readProtocolSource(name),
@@ -2377,7 +2377,7 @@ for (const [name, source] of [
   ['ReportService', read('crates/contexts/operations/northstar-operations-application/src/reports.rs')],
   ['ReportContext', read('crates/edges/northstar-http/src/contexts/reports.rs')],
   ['AccountAdminServices', read('crates/contexts/auth/northstar-auth-application/src/account_admin.rs')],
-  ['AccountAdminRuntime', read('src/state/account_admin.rs')],
+  ['AccountAdminRuntime', read('src/node/adapters/account_admin.rs')],
   ['OperationAdminService', read('crates/contexts/operations/northstar-operations-application/src/operations.rs')],
   ['AdminDispatchService', read('crates/contexts/operations/northstar-operations-application/src/admin_dispatch.rs')],
   ['GovernanceService', read('crates/contexts/operations/northstar-operations-application/src/governance.rs')],
@@ -2398,7 +2398,7 @@ for (const [name, source] of [
     ['SQLx', /\bsqlx\s*::/],
     ['database pools', /\bPgPool\b/],
     ['concrete database adapters', /\bdb\b/],
-    ['global state', /\bAppState\b/],
+    ['global state', /\bServerNode\b/],
   ]) {
     if (pattern.test(production)) throw new Error(`${name} regained ${label} authority`);
   }
@@ -2439,14 +2439,14 @@ if (/begin_authorized_read/.test(readRoleSplitFile('crates/edges/northstar-http/
   throw new Error('HTTP principals must not expose database read transactions');
 }
 const cleanupServiceSource = productionWithoutCfgTestModules(read('crates/edges/northstar-stream/src/session_cleanup/service.rs'), 'Session cleanup');
-for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\bstate\s*\.\s*pool\b/, /\bAppState\b/]) {
+for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\bstate\s*\.\s*pool\b/, /\bServerNode\b/]) {
   if (forbidden.test(cleanupServiceSource)) throw new Error('Session cleanup regained direct persistence authority');
 }
 const suspensionRecoverySource = productionWithoutCfgTestModules(
   read('crates/edges/northstar-stream/src/session_cleanup/recovery.rs'),
   'SM suspension recovery',
 );
-if (!suspensionRecoverySource.includes('SmSuspensionContext<R, C>') || /\bAppState\b/.test(suspensionRecoverySource)) {
+if (!suspensionRecoverySource.includes('SmSuspensionContext<R, C>') || /\bServerNode\b/.test(suspensionRecoverySource)) {
   throw new Error('SM suspension recovery must retain its narrow context');
 }
 for (const [path, names, context] of [
@@ -2464,7 +2464,7 @@ for (const [path, names, context] of [
   for (const name of names) {
     const body = structBody(source, `pub async fn ${name}<R: HttpRepositories>(`);
     const signature = source.slice(source.indexOf(`pub async fn ${name}<R: HttpRepositories>(`)).split(') ->')[0];
-    if (!signature.includes(`State<crate::${context}<R>>`) || /\b(?:sqlx|db|AppState)\b|\.pool\b/.test(body)) {
+    if (!signature.includes(`State<crate::${context}<R>>`) || /\b(?:sqlx|db|ServerNode)\b|\.pool\b/.test(body)) {
       throw new Error(`${name} must retain its command service and narrow context`);
     }
   }
@@ -2473,7 +2473,7 @@ const governanceApiSource = read('crates/edges/northstar-http/src/data_lifecycle
 for (const name of ['list_legal_holds', 'create_legal_hold', 'release_legal_hold', 'export_legal_hold', 'export_audit']) {
   const body = structBody(governanceApiSource, `pub async fn ${name}<R: HttpRepositories>(`);
   const signature = governanceApiSource.slice(governanceApiSource.indexOf(`pub async fn ${name}<R: HttpRepositories>(`)).split(') ->')[0];
-  if (!signature.includes('State<GovernanceContext<R>>') || /\b(?:sqlx|db|AppState)\b|\.pool\b/.test(body)) {
+  if (!signature.includes('State<GovernanceContext<R>>') || /\b(?:sqlx|db|ServerNode)\b|\.pool\b/.test(body)) {
     throw new Error(`${name} must retain its governance use-case context`);
   }
 }
@@ -2481,7 +2481,7 @@ const reportApiSource = productionWithoutCfgTestModules(read('crates/edges/north
 for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\.pool\b/]) {
   if (forbidden.test(reportApiSource)) throw new Error('Reports HTTP regained direct persistence authority');
 }
-if (!reportApiSource.includes('.report_service()') || /\bAppState\b/.test(reportApiSource)) {
+if (!reportApiSource.includes('.report_service()') || /\bServerNode\b/.test(reportApiSource)) {
   throw new Error('Reports HTTP must use its service and narrow context');
 }
 const recoveryApiSource = productionWithoutCfgTestModules(read('crates/edges/northstar-http/src/omemo_recovery.rs'), 'OMEMO recovery HTTP');
@@ -2489,7 +2489,7 @@ for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\.pool\b/]) 
   if (forbidden.test(recoveryApiSource)) throw new Error('OMEMO recovery HTTP regained direct persistence authority');
 }
 const recoveryPollBody = structBody(recoveryApiSource, 'pub async fn poll_omemo_recovery<R: HttpRepositories>(');
-if (/\b(?:AppState|current_user)\b/.test(recoveryPollBody) || !recoveryPollBody.includes('.poll(')) {
+if (/\b(?:ServerNode|current_user)\b/.test(recoveryPollBody) || !recoveryPollBody.includes('.poll(')) {
   throw new Error('OMEMO polling must use its isolated completion capability');
 }
 const passkeyApiSource = productionWithoutCfgTestModules(read('crates/edges/northstar-http/src/passkeys.rs'), 'Passkeys HTTP');
@@ -2506,57 +2506,57 @@ const passkeyAccountContext = structBody(
   'pub struct PasskeyAccountHttpContext',
 );
 const passkeyStartContext = structBody(read('crates/edges/northstar-http/src/contexts/passkey_http.rs'), 'pub struct PasskeyStartHttpContext');
-if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passkeyStartContext)
+if (/\b(?:ServerNode|ClusterManager|PgPool)\b/.test(passkeyStartContext)
     || !/pub\(super\) async fn register_start<R: HttpRepositories>\(\s*State\(state\): State<PasskeyStartHttpContext<R>>/.test(passkeyApiSource)
     || !/pub\(super\) async fn login_start<R: HttpRepositories>\(\s*State\(state\): State<PasskeyStartHttpContext<R>>/.test(passkeyApiSource)) {
   throw new Error('Passkey challenge starts must use scoped abuse and credential authority');
 }
 const apiSessionHttpContext = structBody(read('crates/edges/northstar-http/src/contexts/api_session_http.rs'), 'pub struct ApiSessionHttpContext');
-if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(apiSessionHttpContext)
+if (/\b(?:ServerNode|ClusterManager|PgPool)\b/.test(apiSessionHttpContext)
     || !/pub async fn logout<R: HttpRepositories>\(\s*State\(state\): State<ApiSessionHttpContext<R>>/.test(read('crates/edges/northstar-http/src/auth_routes.rs'))) {
   throw new Error('HTTP logout must use only its audited session command');
 }
 const registrationHttpContext = structBody(read('crates/edges/northstar-http/src/contexts/http_registration_endpoint.rs'), 'pub struct HttpRegistrationEndpointContext');
-if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(registrationHttpContext)
+if (/\b(?:ServerNode|ClusterManager|PgPool)\b/.test(registrationHttpContext)
     || !/pub async fn register<R: HttpRepositories>\(\s*State\(context\): State<HttpRegistrationEndpointContext<R>>/.test(read('crates/edges/northstar-http/src/auth_routes.rs'))) {
   throw new Error('HTTP registration must use scoped account admission authority');
 }
 const challengeHttpContext = structBody(read('crates/edges/northstar-http/src/contexts/http_challenge_endpoint.rs'), 'pub struct HttpChallengeEndpointContext');
-if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(challengeHttpContext)
+if (/\b(?:ServerNode|ClusterManager|PgPool)\b/.test(challengeHttpContext)
     || !/pub async fn anti_abuse_challenge<R: HttpRepositories>\(\s*State\(context\): State<HttpChallengeEndpointContext<R>>,\s*State\(queries\): State<crate::contexts::ApiQueryContext<R>>/.test(read('crates/edges/northstar-http/src/auth_routes.rs'))) {
   throw new Error('anti-abuse challenge issuance must use scoped HTTP authority');
 }
 const uploadDeleteContext = structBody(read('crates/edges/northstar-http/src/contexts/upload_http_delete.rs'), 'pub struct UploadHttpDeleteContext');
-if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(uploadDeleteContext)
+if (/\b(?:ServerNode|ClusterManager|PgPool)\b/.test(uploadDeleteContext)
     || !/pub async fn upload_delete<R: HttpRepositories>\(\s*State\(state\): State<UploadHttpDeleteContext<R>>,\s*State\(queries\): State<crate::contexts::ApiQueryContext<R>>/.test(read('crates/edges/northstar-http/src/upload.rs'))) {
   throw new Error('upload deletion must use scoped lifecycle and bearer authority');
 }
 const uploadReplayReadContext = structBody(read('crates/edges/northstar-http/src/contexts/upload_http_read.rs'), 'pub struct UploadHttpReplayReadContext');
 const uploadWriteContext = structBody(read('crates/edges/northstar-http/src/contexts/upload_http_write.rs'), 'pub struct UploadHttpWriteContext');
 const uploadApiSource = read('crates/edges/northstar-http/src/upload.rs');
-if (/\b(?:AppState|ClusterManager|PgPool|UploadHttpReadContext)\b/.test(uploadReplayReadContext)
-    || /\b(?:AppState|ClusterManager|PgPool)\b/.test(uploadWriteContext)
+if (/\b(?:ServerNode|ClusterManager|PgPool|UploadHttpReadContext)\b/.test(uploadReplayReadContext)
+    || /\b(?:ServerNode|ClusterManager|PgPool)\b/.test(uploadWriteContext)
     || !/pub async fn upload_put<R: HttpRepositories>\(\s*State\(state\): State<UploadHttpWriteContext<R>>,\s*State\(replay_read\): State<UploadHttpReplayReadContext>/.test(uploadApiSource)
-    || /State<Arc<AppState>>/.test(uploadApiSource)
+    || /State<Arc<ServerNode>>/.test(uploadApiSource)
     || !/stored_object_digest\(&replay_read,\s*&slot\)\.await\?/.test(uploadApiSource)
     || !/state\.get\(object_key,\s*slot\.storage_object_version\.as_deref\(\)\)/.test(uploadApiSource)) {
   throw new Error('upload PUT and replay readback must use scoped, exact guarded authority');
 }
 const passwordChangeContext = structBody(read('crates/edges/northstar-http/src/contexts/password_change_http.rs'), 'pub struct PasswordChangeHttpContext');
-if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passwordChangeContext)
+if (/\b(?:ServerNode|ClusterManager|PgPool)\b/.test(passwordChangeContext)
     || !/pub async fn change_password<R: HttpRepositories>\(\s*State\(state\): State<PasswordChangeHttpContext<R>>/.test(read('crates/edges/northstar-http/src/users.rs'))) {
   throw new Error('password change admission must use scoped HTTP authority');
 }
 const accountGenerationTeardown = read('crates/contexts/auth/northstar-auth-xmpp/src/account_generation_teardown.rs');
 const teardownSequence = structBody(accountGenerationTeardown, 'pub struct AccountGenerationTeardownSequence');
-const accountGenerationTeardownAdapter = read('src/state/account_generation_teardown.rs');
+const accountGenerationTeardownAdapter = read('src/node/adapters/account_generation_teardown.rs');
 const teardownAdapters = structBody(accountGenerationTeardownAdapter, 'pub(crate) struct AccountGenerationTeardownAdapters');
-const accountTeardownRuntime = read('src/state/account_teardown_runtime.rs');
+const accountTeardownRuntime = read('src/node/adapters/account_teardown_runtime.rs');
 const fullTeardownContext = structBody(accountTeardownRuntime, 'pub(crate) struct AccountTeardownRuntime');
 const accountTeardownPorts = read('crates/edges/northstar-http/src/contexts/account_teardown.rs');
-if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(teardownSequence)
-    || /\b(?:AppState|ClusterManager|PgPool)\b/.test(teardownAdapters)
-    || /\b(?:AppState|ClusterManager|PgPool)\b/.test(fullTeardownContext)
+if (/\b(?:ServerNode|ClusterManager|PgPool)\b/.test(teardownSequence)
+    || /\b(?:ServerNode|ClusterManager|PgPool)\b/.test(teardownAdapters)
+    || /\b(?:ServerNode|ClusterManager|PgPool)\b/.test(fullTeardownContext)
     || !teardownAdapters.includes('SmTeardownService<PostgresSmTeardownRepository>')
     || !fullTeardownContext.includes('SessionCleanupSmRevoker')
     || !fullTeardownContext.includes('AccountGenerationService<PostgresAccountGenerationRepository>')
@@ -2570,14 +2570,14 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(teardownSequence)
     || !/pub\(super\) async fn remove<R: HttpRepositories>\(\s*State\(teardown\): State<AccountGenerationTeardownContext>/.test(passkeyApiSource)
     || !/pub async fn consume_omemo_recovery<R: HttpRepositories>\(\s*State\(context\): State<OmemoRecoveryHttpContext<R>>,\s*State\(teardown\): State<AccountGenerationTeardownContext>/.test(recoveryApiSource)
     || !/pub async fn change_password<R: HttpRepositories>\(\s*State\(state\): State<PasswordChangeHttpContext<R>>,\s*State\(teardown\): State<AccountTeardownContext>/.test(read('crates/edges/northstar-http/src/users.rs'))
-    || /\b(?:AppState|ClusterManager|PgPool)\b|crate::state\b/.test(accountTeardownPorts)
+    || /\b(?:ServerNode|ClusterManager|PgPool)\b|crate::node\b/.test(accountTeardownPorts)
     || !accountTeardownPorts.includes('teardown: Arc<dyn AccountSessionTeardown>')
     || !accountTeardownPorts.includes('teardown: Arc<dyn AccountGenerationTeardown>')
-    || /State<Arc<AppState>>/.test(passkeyApiSource + recoveryApiSource + read('crates/edges/northstar-http/src/users.rs'))) {
+    || /State<Arc<ServerNode>>/.test(passkeyApiSource + recoveryApiSource + read('crates/edges/northstar-http/src/users.rs'))) {
   throw new Error('post-commit account teardown must use scoped HTTP contexts and ordered effects');
 }
 const smTeardownService = read('crates/contexts/session/northstar-session-application/src/sm_teardown.rs');
-if (/\b(?:sqlx|PgPool|AppState|ClusterManager)\b/.test(smTeardownService.split('#[cfg(test)]')[0])
+if (/\b(?:sqlx|PgPool|ServerNode|ClusterManager)\b/.test(smTeardownService.split('#[cfg(test)]')[0])
     || !smTeardownService.includes('render(snapshot).await?;')
     || !smTeardownService.includes('self.repository.finalize(lease).await?')
     || !smTeardownService.includes('batch.pending == 0')
@@ -2585,17 +2585,17 @@ if (/\b(?:sqlx|PgPool|AppState|ClusterManager)\b/.test(smTeardownService.split('
     || !/self\.sm\s*\.revoke_before_generation\(/.test(accountGenerationTeardownAdapter)) {
   throw new Error('durable SM generation teardown must retain fenced claims and post-effect finalization');
 }
-const operationWorkerControl = read('src/state/operation_worker_control.rs');
+const operationWorkerControl = read('src/node/adapters/operation_worker_control.rs');
 const operationWorkerFields = structBody(operationWorkerControl, 'pub(crate) struct OperationWorkerControl');
 const operationRuntime = read('crates/contexts/operations/northstar-operations-xmpp/src/operation_runtime.rs');
-const operationRuntimeAdapters = read('src/state/operation_runtime_adapters.rs');
+const operationRuntimeAdapters = read('src/node/adapters/operation_runtime_adapters.rs');
 const operationRuntimeFields = structBody(operationRuntime, 'pub struct OperationWorkerRuntime');
 const ordinaryRun = structBody(operationRuntime, 'async fn run_one<');
 const ordinaryHeartbeat = structBody(operationRuntime, 'async fn lease_heartbeat<');
 const ordinaryEffects = structBody(operationRuntime, 'async fn execute_effect(');
-if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(operationWorkerFields)
-    || /\b(?:AppState|ClusterManager|PgPool)\b/.test(operationRuntimeFields)
-    || /\bAppState\b/.test(ordinaryRun + ordinaryHeartbeat + ordinaryEffects)
+if (/\b(?:ServerNode|ClusterManager|PgPool)\b/.test(operationWorkerFields)
+    || /\b(?:ServerNode|ClusterManager|PgPool)\b/.test(operationRuntimeFields)
+    || /\bServerNode\b/.test(ordinaryRun + ordinaryHeartbeat + ordinaryEffects)
     || !operationWorkerControl.includes('claim_parent_with_targets')
     || !ordinaryRun.includes('.execute_after_commit(')
     || !ordinaryRun.includes('execute_effect(')
@@ -2608,10 +2608,10 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(operationWorkerFields)
 }
 const disabledFactoryReset = structBody(read('crates/edges/northstar-http/src/admin.rs'), 'pub async fn admin_nuke(');
 if (!/pub async fn admin_nuke\(\s*_actor: ApiAdmin/.test(read('crates/edges/northstar-http/src/admin.rs'))
-    || /Arc<AppState>/.test(disabledFactoryReset)) {
+    || /Arc<ServerNode>/.test(disabledFactoryReset)) {
   throw new Error('disabled factory reset must authenticate without broad application state');
 }
-if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passkeyAccountContext)
+if (/\b(?:ServerNode|ClusterManager|PgPool)\b/.test(passkeyAccountContext)
     || !/pub\(super\) async fn list<R: HttpRepositories>\(\s*State\(state\): State<PasskeyAccountHttpContext<R>>,\s*State\(queries\): State<crate::contexts::ApiQueryContext<R>>/s.test(passkeyApiSource)
     || !/pub\(super\) async fn register_finish<R: HttpRepositories>\(\s*State\(state\): State<PasskeyAccountHttpContext<R>>,\s*State\(queries\): State<crate::contexts::ApiQueryContext<R>>/s.test(passkeyApiSource)) {
   throw new Error('account Passkeys reads and registration completion must use scoped HTTP authority');
@@ -2621,7 +2621,7 @@ const omemoRecoveryContext = structBody(
   read('crates/edges/northstar-http/src/contexts/omemo_recovery_http.rs'),
   'pub struct OmemoRecoveryHttpContext',
 );
-if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(omemoRecoveryContext)) {
+if (/\b(?:ServerNode|ClusterManager|PgPool)\b/.test(omemoRecoveryContext)) {
   throw new Error('authenticated OMEMO recovery context gained broad application authority');
 }
 for (const handler of ['prepare_omemo_recovery', 'seal_omemo_recovery', 'get_omemo_recovery',
@@ -2654,7 +2654,7 @@ if (mucProductionDependencies.authorityReferences !== 0) {
   );
 }
 for (const [description, pattern] of [
-  ['AppState pool access', /\b(?:self\.)?(?:state|host)\s*\.\s*pool\b/],
+  ['ServerNode pool access', /\b(?:self\.)?(?:state|host)\s*\.\s*pool\b/],
   ['a PostgreSQL pool type', /\b(?:sqlx\s*::\s*)?PgPool\b/],
   ['raw SQL execution', /\bsqlx\s*::/],
 ]) {
@@ -2670,10 +2670,10 @@ if (!(/\.wake_committed_operation\s*\(\s*&self\.state\.cluster\s*,/.test(mucProd
   throw new Error('muc.rs no longer routes committed outbox wakes through MucService');
 }
 if (/\.wake_committed_muc_operation\s*\(\s*&self\.pool\b/.test(state)) {
-  throw new Error('AppState runtime paths bypass MucService for committed MUC wakes');
+  throw new Error('ServerNode runtime paths bypass MucService for committed MUC wakes');
 }
-if (!/async fn wake_committed_muc_operation\s*\([\s\S]*?self\s*\.room\s*\.muc_service\s*\(\s*\)\s*\.wake_committed_operation\s*\(\s*&self\.cluster\s*,\s*operation_id\s*\)/.test(read('src/state/muc_host.rs'))) {
-  throw new Error('AppState committed MUC wake must delegate to MucService with cluster authority');
+if (!/async fn wake_committed_muc_operation\s*\([\s\S]*?self\s*\.room\s*\.muc_service\s*\(\s*\)\s*\.wake_committed_operation\s*\(\s*&self\.cluster\s*,\s*operation_id\s*\)/.test(read('src/node/hosts/muc.rs'))) {
+  throw new Error('ServerNode committed MUC wake must delegate to MucService with cluster authority');
 }
 const operationRuntimeSource = productionWithoutCfgTestModules(
   read('crates/contexts/operations/northstar-operations-xmpp/src/operation_runtime.rs'),
@@ -2686,7 +2686,7 @@ if (/state\.pool|sqlx::Transaction|db::(?:operation_work_pending|claim_operation
 if (/\.wake_committed_operation\s*\(\s*&state\.pool\b/.test(operationRuntimeSource)) {
   throw new Error('operation_runtime.rs bypasses MucService for committed MUC wakes');
 }
-const operationMucDestroyEffectsSource = read('src/state/operation_muc_destroy_effects.rs');
+const operationMucDestroyEffectsSource = read('src/node/adapters/operation_muc_destroy_effects.rs');
 const committedMucWakeServiceSource = read('crates/contexts/room/northstar-room-application/src/operation_muc_wake.rs');
 if (!/muc_destroy_effects\.notify_committed\(operation\.id\)\.await/.test(operationRuntimeSource)
     || !operationMucDestroyEffectsSource.includes('self.wake.notify(&self.publisher, operation_id).await')
@@ -2717,7 +2717,7 @@ for (const signature of mucServiceSource.matchAll(
 
 const discoverySource = read('crates/edges/northstar-stream/src/protocol/discovery.rs');
 for (const [description, pattern] of [
-  ['AppState pool access', /\b(?:self\.)?(?:state|host)\s*\.\s*pool\b/],
+  ['ServerNode pool access', /\b(?:self\.)?(?:state|host)\s*\.\s*pool\b/],
   ['a PostgreSQL pool type', /\b(?:sqlx\s*::\s*)?PgPool\b/],
   ['raw SQL execution', /\bsqlx\s*::/],
 ]) {
@@ -2791,7 +2791,7 @@ if (smProductionDependencies.authorityReferences !== 0) {
   );
 }
 if (/\bstate\s*\.\s*pool\b/.test(smProductionSource)) {
-  throw new Error('sm.rs production regained direct AppState PostgreSQL authority');
+  throw new Error('sm.rs production regained direct ServerNode PostgreSQL authority');
 }
 for (const [file, source] of [
   ['misc.rs', miscSource],
@@ -2838,7 +2838,7 @@ if (commandsProductionDependencies.authorityReferences !== 0) {
   );
 }
 for (const [description, pattern] of [
-  ['AppState pool access', /\bstate\s*\.\s*pool\b/],
+  ['ServerNode pool access', /\bstate\s*\.\s*pool\b/],
   ['a PostgreSQL pool type', /\b(?:sqlx\s*::\s*)?PgPool\b/],
   ['raw SQL execution', /\bsqlx\s*::/],
 ]) {
@@ -2915,7 +2915,7 @@ if (retractionsProductionDependencies.authorityReferences !== 0) {
   );
 }
 for (const [description, pattern] of [
-  ['AppState pool access', /\b(?:self\.)?(?:state|host)\s*\.\s*pool\b/],
+  ['ServerNode pool access', /\b(?:self\.)?(?:state|host)\s*\.\s*pool\b/],
   ['a PostgreSQL pool type', /\b(?:sqlx\s*::\s*)?PgPool\b/],
   ['raw SQL execution', /\bsqlx\s*::/],
 ]) {
@@ -3186,7 +3186,7 @@ for (const retirementReference of [
 }
 
 // ARCH-SVC runtime secret boundary. Protocol modules may request semantic
-// operations from services/AppState methods, but must never name or traverse
+// operations from services/ServerNode methods, but must never name or traverse
 // long-lived configuration material directly.
 const protocolSource = protocolFiles
   .map((name) => readProtocolSource(name))
@@ -3240,7 +3240,7 @@ if (/^\s*pub(?:\(crate\))?\s+turn_shared_secret\s*:/m.test(extdiscoInner)) {
 // than only a repository-wide count budget.
 const messagingSource = readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs', { root });
 if (/state\s*\.\s*pool/.test(messagingSource)) {
-  throw new Error('messaging.rs regained direct AppState PostgreSQL authority');
+  throw new Error('messaging.rs regained direct ServerNode PostgreSQL authority');
 }
 for (const forbidden of [
   'admit_personal_history',
@@ -3452,24 +3452,24 @@ const supervisedWorkerContracts = [
 ];
 const supervisedWorkers = supervisedWorkerContracts.map(({ name }) => name);
 const workerResponsibilityEvidence = {
-  'abuse-key-deployment-authority': ['src/state/workers/abuse.rs', '`state/workers/abuse.rs`', '2 ×'],
-  'deployment-capacity-session-leases': ['src/state/workers/session.rs', '`state/workers/session.rs`', '2 ×'],
-  'deployment-capacity-lease-reaper': ['src/state/workers/session.rs', '`state/workers/session.rs`', '120 s'],
-  'background-maintenance': ['src/state/workers/maintenance.rs', '`state/workers/maintenance.rs`', '180 s'],
-  'account-deletion-recovery': ['src/state/workers/maintenance.rs', '`state/workers/maintenance.rs`', '1,200 s'],
-  'upload-storage-reconciliation': ['src/state/workers/upload.rs', '`state/workers/upload.rs`', '600 s'],
-  'archive-retention': ['src/state/workers/maintenance.rs', '`state/workers/maintenance.rs`', 'derived retention'],
-  'pubsub-subscription-cleanup': ['src/state/workers/maintenance.rs', '`state/workers/maintenance.rs`, standalone only', '110 s'],
-  'admin-session-cleanup': ['src/state/workers/operations.rs', '`state/workers/operations.rs`', '90 s'],
-  'redis-pubsub': ['src/state/workers/cluster.rs', '`state/workers/cluster.rs`, cluster only', '45 s'],
-  'account-revocations': ['src/state/workers/cluster.rs', '`state/workers/cluster.rs`, cluster only', '10 s'],
-  'cluster-maintenance': ['src/state/workers/cluster.rs', '`state/workers/cluster.rs`, cluster only', '90 s'],
-  'standalone-muc-occupancy': ['src/state/workers/cluster.rs', '`state/workers/cluster.rs`, standalone PostgreSQL MUC only', '45 s'],
-  'cluster-failure-policy': ['src/state/workers/cluster.rs', '`state/workers/cluster.rs`, cluster only', '15 s'],
+  'abuse-key-deployment-authority': ['src/node/workers/abuse.rs', '`state/workers/abuse.rs`', '2 ×'],
+  'deployment-capacity-session-leases': ['src/node/workers/session.rs', '`state/workers/session.rs`', '2 ×'],
+  'deployment-capacity-lease-reaper': ['src/node/workers/session.rs', '`state/workers/session.rs`', '120 s'],
+  'background-maintenance': ['src/node/workers/maintenance.rs', '`state/workers/maintenance.rs`', '180 s'],
+  'account-deletion-recovery': ['src/node/workers/maintenance.rs', '`state/workers/maintenance.rs`', '1,200 s'],
+  'upload-storage-reconciliation': ['src/node/workers/upload.rs', '`state/workers/upload.rs`', '600 s'],
+  'archive-retention': ['src/node/workers/maintenance.rs', '`state/workers/maintenance.rs`', 'derived retention'],
+  'pubsub-subscription-cleanup': ['src/node/workers/maintenance.rs', '`state/workers/maintenance.rs`, standalone only', '110 s'],
+  'admin-session-cleanup': ['src/node/workers/operations.rs', '`state/workers/operations.rs`', '90 s'],
+  'redis-pubsub': ['src/node/workers/cluster.rs', '`state/workers/cluster.rs`, cluster only', '45 s'],
+  'account-revocations': ['src/node/workers/cluster.rs', '`state/workers/cluster.rs`, cluster only', '10 s'],
+  'cluster-maintenance': ['src/node/workers/cluster.rs', '`state/workers/cluster.rs`, cluster only', '90 s'],
+  'standalone-muc-occupancy': ['src/node/workers/cluster.rs', '`state/workers/cluster.rs`, standalone PostgreSQL MUC only', '45 s'],
+  'cluster-failure-policy': ['src/node/workers/cluster.rs', '`state/workers/cluster.rs`, cluster only', '15 s'],
   'cluster-muc-outbox': ['crates/edges/northstar-cluster/src/lib.rs', 'unconditionally registered', '30 s'],
-  'locked-muc-expiry': ['src/state.rs', '`AppState` MUC startup', '20 s'],
-  'runtime-control-refresh': ['src/state.rs', 'process startup reserves the connection', '5 s'],
-  'sm-authority-listener': ['crates/contexts/workflows/northstar-workflows/src/authority_listener.rs', 'AppState database listener startup', '15 s'],
+  'locked-muc-expiry': ['src/node.rs', '`ServerNode` MUC startup', '20 s'],
+  'runtime-control-refresh': ['src/node.rs', 'process startup reserves the connection', '5 s'],
+  'sm-authority-listener': ['crates/contexts/workflows/northstar-workflows/src/authority_listener.rs', 'ServerNode database listener startup', '15 s'],
   'sm-suspension-recovery': ['crates/edges/northstar-stream/src/session_cleanup/recovery.rs', 'session-cleanup service startup', '30 s'],
   'caps-side-effects': ['crates/edges/northstar-stream/src/caps_effects.rs', 'Caps subsystem startup', '60 s'],
   'mix-iq-relay-expiry': ['crates/contexts/room/northstar-mix-xmpp/src/lib.rs', 'MIX protocol capability startup', '10 s'],
@@ -3607,7 +3607,7 @@ const clusterMucOutboxContext = structBody(
 );
 if (!clusterMucOutboxWorker.includes('let housekeeping = &context.housekeeping;')
     || !state.includes('state.cluster_muc_outbox_worker_context()')
-    || /\b(?:AppState|ClusterManager|PgPool)\b/.test(clusterMucOutboxContext)
+    || /\b(?:ServerNode|ClusterManager|PgPool)\b/.test(clusterMucOutboxContext)
     || /(?:crate::db|northstar_room_postgres::cluster_muc)::(?:cleanup_cluster_muc_dead_letters|cleanup_cluster_muc_history|cluster_muc_outbox_snapshot)\s*\(/.test(clusterMucOutboxWorker)) {
   throw new Error('cluster MUC outbox housekeeping must use separate narrow repository operations');
 }
@@ -3693,14 +3693,14 @@ if (/\blocal_domain\b/.test(mucDestroyEffect)
     || !state.includes('config.domain.clone(),')) {
   throw new Error('MUC destruction must validate the immutable service-owned local domain');
 }
-const operationWorkerControlSource = read('src/state/operation_worker_control.rs');
-const operationSessionEffectsSource = read('src/state/operation_session_effects.rs');
+const operationWorkerControlSource = read('src/node/adapters/operation_worker_control.rs');
+const operationSessionEffectsSource = read('src/node/adapters/operation_session_effects.rs');
 if (!operationWorkerControlSource.replace(/\s+/g, '').includes('routes:northstar_operations_xmpp::operation_runtime::LocalBroadcastRoutes::new(std::sync::Arc::clone(&self.sessions),self.config.domain.clone(),self.cluster.node_id.clone(),).target_snapshot()')
     || !operationWorkerControlSource.includes('self.routes.target_seeds(operation)')
     || !/control\s*\.claim_parent_with_targets\(worker_id, LEASE_SECONDS\)/.test(operationRuntimeOwnershipSource)
     || !operationRuntimeOwnershipSource.includes('"admin.broadcast" => session_effects.send_broadcast_exact(payload)')
     || !operationSessionEffectsSource.includes('self.broadcast.send_exact(payload)')
-    || /fn local_target_seeds\(\s*state:\s*&AppState/.test(operationRuntimeOwnershipSource)) {
+    || /fn local_target_seeds\(\s*state:\s*&ServerNode/.test(operationRuntimeOwnershipSource)) {
   throw new Error('administrator broadcast must snapshot and deliver through its exact local-route capability');
 }
 if (!operationSessionEffectsSource.replace(/\s+/g, '').replace(/,\)/g, ')').includes('kick:northstar_operations_xmpp::operation_runtime::LocalSessionKickRoutes::new(std::sync::Arc::clone(&self.sessions))')
@@ -3717,9 +3717,9 @@ if (!operationSessionEffectsSource.replace(/\s+/g, '').replace(/,\)/g, ')').incl
   throw new Error('administrator account cleanup must cancel only the exact account generation');
 }
 const panicDisconnect = structBody(operationRuntimeOwnershipSource, 'async fn panic_disconnect_with<');
-const panicEffectsSource = read('src/state/operation_panic_effects.rs');
+const panicEffectsSource = read('src/node/adapters/operation_panic_effects.rs');
 const panicEffectsFields = structBody(panicEffectsSource, 'pub(crate) struct OperationPanicEffects');
-if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(panicEffectsFields)
+if (/\b(?:ServerNode|ClusterManager|PgPool)\b/.test(panicEffectsFields)
     || !panicEffectsSource.includes('panic_disconnect_with(&self.routes, || self.sm.revoke_all_with_teardown()).await')
     || !/let disconnected = routes\.cancel_all\(\);\s*teardown\(\)\.await\?;/.test(panicDisconnect)) {
   throw new Error('emergency disconnect must cancel all local routes before durable SM teardown');
@@ -3729,7 +3729,7 @@ const loginEndpoint = structBody(loginEndpointSource, 'pub async fn login<R: Htt
 const loginContext = structBody(read('crates/edges/northstar-http/src/contexts/http_login_endpoint.rs'), 'pub struct HttpLoginEndpointContext');
 if (!loginEndpointSource.includes('State(context): State<HttpLoginEndpointContext<R>>')
     || /\bstate\.(?:metrics|pool|config)\b/.test(loginEndpoint)
-    || /\bAppState\b|\bMetrics\b|PgPool/.test(loginContext)) {
+    || /\bServerNode\b|\bMetrics\b|PgPool/.test(loginContext)) {
   throw new Error('REST login must receive only its service, proxy policy and outcome counters');
 }
 const uploadSource = read('crates/edges/northstar-http/src/upload.rs');
@@ -3738,8 +3738,8 @@ const uploadReadContext = structBody(read('crates/edges/northstar-http/src/conte
 if (!uploadSource.includes('State(state): State<UploadHttpReadContext<R>>')
     || !uploadGet.includes('let download_guard = state.acquire_download(client_ip)')
     || !uploadGet.includes('let _download_guard = download_guard;')
-    || /\b(?:AppState|Metrics|PgPool)\b/.test(uploadReadContext)
-    || !read('src/state/http_host.rs').includes('admission: self.upload.runtime.download_admission().cloned()')) {
+    || /\b(?:ServerNode|Metrics|PgPool)\b/.test(uploadReadContext)
+    || !read('src/node/hosts/http.rs').includes('admission: self.upload.runtime.download_admission().cloned()')) {
   throw new Error('public upload GET must retain shared download admission and guarded read authority');
 }
 const capsEffectSource = read('crates/edges/northstar-stream/src/protocol/caps.rs');
@@ -3757,7 +3757,7 @@ const passkeyFinish = structBody(passkeyFinishSource, 'pub(super) async fn login
 const passkeyFinishContext = structBody(read('crates/edges/northstar-http/src/contexts/passkey_login_finish.rs'), 'pub struct PasskeyLoginFinishContext');
 if (!passkeyFinishSource.includes('State(state): State<PasskeyLoginFinishContext<R>>')
     || !/check_expected_origin\(&state\.allowed_origin\(\)\?, &headers\)\?;[\s\S]*?state\.finish\(/.test(passkeyFinish)
-    || /\b(?:AppState|Metrics|PgPool)\b/.test(passkeyFinishContext)) {
+    || /\b(?:ServerNode|Metrics|PgPool)\b/.test(passkeyFinishContext)) {
   throw new Error('Passkey login completion must check the live origin before using its narrow service');
 }
 const presenceProtocol = protocolModuleSource('presence.rs');
@@ -3776,14 +3776,14 @@ if (/\b(?:self\.)?(?:state|host)\s*\.metrics\b/.test(mucProtocol)
     || !mucProtocol.includes('state.muc_telemetry().post_commit_failure()')) {
   throw new Error('MUC authority and post-commit reporting must use its narrow telemetry port');
 }
-const mixOutboxContext = read('src/state/mix_outbox.rs');
+const mixOutboxContext = read('src/node/adapters/mix_outbox.rs');
 const mixOutboxStart = structBody(mixProtocolProduction, 'pub fn start_mix_delivery_outbox(');
 if (/\bstate\s*\.metrics\b/.test(mixProtocol)
     || !mixProtocol.includes('context.record_post_commit_failure()')
     || !mixOutboxContext.includes('MixPostCommitTelemetry::new(&self.delivery_failures, &self.post_accept_failures)')
     || !state.includes('Arc::new(state.mix_outbox_context())')
-    || /\b(?:Arc<AppState>|PgPool|ClusterManager|Arc<Metrics>)\b/.test(mixOutboxContext)
-    || /\bArc<AppState>\b/.test(mixOutboxStart)
+    || /\b(?:Arc<ServerNode>|PgPool|ClusterManager|Arc<Metrics>)\b/.test(mixOutboxContext)
+    || /\bArc<ServerNode>\b/.test(mixOutboxStart)
     || !/self\s*\.\s*service\s*\.\s*outbox_lookup_cluster_nodes\s*\(/.test(mixOutboxContext)
     || !/self\s*\.\s*cluster_delivery\s*\.\s*send_mix\s*\(/.test(mixOutboxContext)) {
   throw new Error('MIX post-commit delivery must use its two-counter telemetry port');
@@ -3807,13 +3807,13 @@ const metricsContextProduction = productionWithoutCfgTestModules(metricsContextS
 const metricsContext = structBody(metricsContextSource, 'pub struct MetricsContext');
 const metricsServe = structBody(readRoleSplitFile('crates/edges/northstar-http/src/lib.rs', { root }), 'pub async fn serve_metrics<');
 if (!metricsEndpoint.includes('context: MetricsContext')
-    || /Arc<AppState>/.test(metricsEndpoint)
-    || /\b(?:AppState|ClusterManager|TlsContext)\b|Arc<dyn Fn/.test(metricsContext)
+    || /Arc<ServerNode>/.test(metricsEndpoint)
+    || /\b(?:ServerNode|ClusterManager|TlsContext)\b|Arc<dyn Fn/.test(metricsContext)
     || !metricsContext.includes('cluster: Arc<dyn ClusterMetrics>')
     || !metricsContext.includes('tls: TlsMetricsProbe')
     || !metricsContext.includes('muc_occupant_count: MucOccupancyCountProbe')
     || !metricsContext.includes('sm: Arc<dyn SmRecoveryGauges>')
-    || /\bAppState\b|crate::state\b/.test(metricsContextProduction)
+    || /\bServerNode\b|crate::node\b/.test(metricsContextProduction)
     || !metricsServe.includes('MetricsEndpointState::new(context)')
     || !readinessEndpointSource.includes('context.authorized(peer, metrics_bearer_candidate(headers))')) {
   throw new Error('private metrics endpoint must use a narrow live, read-only observability context');
@@ -3821,7 +3821,7 @@ if (!metricsEndpoint.includes('context: MetricsContext')
 const readinessEndpoint = structBody(readinessEndpointSource, 'pub struct ReadyEndpointState');
 const readinessContext = rustItemBody(read('crates/edges/northstar-http/src/contexts/readiness.rs'), 'pub struct ReadinessContext');
 if (!readinessEndpoint.includes('context: ReadinessContext')
-    || /Arc<AppState>|(?:AppState|ClusterManager|WorkerRegistry|SmMemoryGovernor|UploadSafetyGate|ConnectionActorRegistry)\b/.test(readinessContext)
+    || /Arc<ServerNode>|(?:ServerNode|ClusterManager|WorkerRegistry|SmMemoryGovernor|UploadSafetyGate|ConnectionActorRegistry)\b/.test(readinessContext)
     || countMatches(readRoleSplitFile('crates/edges/northstar-http/src/lib.rs', { root }), /ReadyEndpointState::new\(state\.readiness_context\(\)\)/g) !== 2) {
   throw new Error('readiness listeners must receive only a narrow read-only runtime context');
 }
@@ -3857,7 +3857,7 @@ if (/\bstate\.cluster\b/.test(clusterMaintenance)
     || /\bredis\s*\.\s*(?:join_muc|register_muc_occupant|reconcile_muc_soft_state)\s*\(/.test(clusterMaintenance)
     || clusterMaintenance.indexOf('for chunk in unrenewed_muc.chunks(')
       > clusterMaintenance.indexOf('MucSoftStateProjectionService::new(redis)')
-    || /\b(?:ClusterManager|AppState|redis::)\b/.test(mucSoftStatePort + mucSoftStateService)
+    || /\b(?:ClusterManager|ServerNode|redis::)\b/.test(mucSoftStatePort + mucSoftStateService)
     || !mucSoftStateService.includes('.join_room(room_jid)')
     || !mucSoftStateService.includes('.refresh_occupant(room_jid, nick, exact_occupant_json)')
     || !mucSoftStateService.includes('.reconcile_room(room_jid)')
@@ -3874,14 +3874,14 @@ if (!clusterMaintenance.includes('let occupancy_maintenance = &context.muc_occup
 const clusterListener = rustItemBody(readProductionModule('crates/edges/northstar-cluster/src/listener.rs', { root }), 'async fn listen_once<A: ClusterAdapters>(');
 const clusterListenerTransport = rustItemBody(cluster, 'pub struct ClusterPubsubListenerTransport');
 const clusterListenerSupervisor = rustItemBody(cluster, 'pub async fn run_pubsub_listener<A: ClusterAdapters>(');
-if (/\b(?:AppState|ClusterManager|signer|pending_acks|replay)\s*:/.test(clusterListenerTransport)
+if (/\b(?:ServerNode|ClusterManager|signer|pending_acks|replay)\s*:/.test(clusterListenerTransport)
     || /\bstate\.cluster\b/.test(clusterListenerSupervisor)
     || !clusterListener.includes('transport.confirm_generation(')
     || !clusterListener.includes('publish_listener_probe(&transport,')) {
   throw new Error('PubSub listener setup and generation must use scoped transport authority');
 }
 const listenerDispatch = read('crates/edges/northstar-cluster/src/listener_dispatch.rs');
-const listenerDispatchConstructor = read('src/state/cluster_listener_dispatch.rs');
+const listenerDispatchConstructor = read('src/node/adapters/cluster_listener_dispatch.rs');
 if (clusterListener.includes('db::cluster_session_route_authority(')
     || !clusterListener.includes('dispatch.terminate_exact_session(')
     || !listenerDispatchConstructor.includes('SessionTerminationAuthorityService::new(')
@@ -3927,10 +3927,10 @@ if (!clusterFailureSupervisor.includes('context.replay_maintenance')
     || !clusterFailureSupervisor.includes('context.route_maintenance')
     || !clusterFailureSupervisor.includes('.cleanup_and_validate(4096)')
     || !clusterWorkers.includes('cluster_failure_supervisor_context(state)')
-    || /ClusterManager|\bPgPool\b|\bAppState\b/.test(clusterFailureContext)
+    || /ClusterManager|\bPgPool\b|\bServerNode\b/.test(clusterFailureContext)
     || /ClusterManager|\bPgPool\b/.test(clusterFailureAuthority)
     || /cluster_(?:session_route|replay)_maintenance_service\s*:/.test(appState)
-    || /Arc<AppState>/.test(clusterFailureSupervisor)
+    || /Arc<ServerNode>/.test(clusterFailureSupervisor)
     || /(?:crate::)?db::(?:cleanup_cluster_envelope_replays|validate_cluster_replay_capacity_authority)\s*\(/.test(clusterFailureSupervisor)) {
   throw new Error('cluster failure supervisor must own narrow authority and bounded maintenance services');
 }
@@ -3954,7 +3954,7 @@ const accountRevocationWorker = rustItemBody(
   'pub async fn run_account_revocations<',
 );
 if (!clusterWorkers.includes('account_revocation_worker_context(state)')
-    || /Arc<AppState>|\bstate\./.test(accountRevocationWorker)
+    || /Arc<ServerNode>|\bstate\./.test(accountRevocationWorker)
     || !accountRevocationWorker.includes('context.authority.identity()')
     || !accountRevocationWorker.includes('context.routes.revoke(')
     || !accountRevocationWorker.includes('context.routes.fence_all()')) {
@@ -3980,7 +3980,7 @@ if (!read('crates/contexts/session/northstar-session-application/src/post_action
     || !c2sTelemetry.includes('struct SessionDropFallbackTelemetry')
     || !read('crates/contexts/message/northstar-message-application/src/telemetry.rs').includes('struct PersonalMessageTelemetry')
     || !read('crates/contexts/room/northstar-room-core/src/telemetry.rs').includes('struct FederatedMucTelemetry')
-    || /\b(?:AppState|Metrics|PgPool|C2sRuntimePorts)\b/.test(c2sTelemetry)
+    || /\b(?:ServerNode|Metrics|PgPool|C2sRuntimePorts)\b/.test(c2sTelemetry)
     || !c2sProtocol.includes('c2s_post_action_telemetry()')
     || /(?:self\.)?(?:state|host)\.metrics\.post_action_/.test(c2sProtocol)
     || !/pub async fn handle\(&mut self, xml: &str\) -> Result<Action> \{\s*self\.host\.inbound_stanza_telemetry\(\)\.received\(\);/.test(c2sDispatch)
@@ -4007,7 +4007,7 @@ const s2sTelemetry = read('crates/contexts/federation/northstar-federation-appli
 if (!s2sTelemetry.includes('struct OnlineQueueAcceptanceTelemetry')
     || !s2sTelemetry.includes('struct InboundConnectionTelemetry')
     || !s2sTelemetry.includes('struct OutboundDispositionTelemetry')
-    || /\b(?:AppState|Metrics|PgPool)\b/.test(s2sTelemetry)
+    || /\b(?:ServerNode|Metrics|PgPool)\b/.test(s2sTelemetry)
     || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(s2sInboundSource)
     || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(readProductionModule('crates/edges/northstar-s2s/src/outbound.rs', { root }))) {
   throw new Error('S2S ingress and egress must use narrow telemetry cells');
@@ -4036,11 +4036,11 @@ if (!lockedMucExpiryWorker.includes('.locked_muc_expiry_context')
   throw new Error('locked MUC expiry worker must commit through its repository service');
 }
 const mixPresenceRecovery = structBody(readProductionModule('crates/contexts/room/northstar-mix-xmpp/src/lib.rs', { root }), 'pub fn start_mix_presence_recovery(');
-const mixPresenceContext = read('src/state/mix_presence_recovery.rs');
+const mixPresenceContext = read('src/node/adapters/mix_presence_recovery.rs');
 const verifiedMixPresence = structBody(readProductionModule('crates/contexts/room/northstar-mix-xmpp/src/lib.rs', { root }), 'async fn publish_verified_mix_presence_with(');
 if (!state.includes('Arc::new(state.mix_presence_recovery_context())')
-    || /\b(?:AppState|PgPool|ClusterManager)\b/.test(mixPresenceRecovery)
-    || /\b(?:Arc<AppState>|PgPool|ClusterManager)\b/.test(mixPresenceContext)
+    || /\b(?:ServerNode|PgPool|ClusterManager)\b/.test(mixPresenceRecovery)
+    || /\b(?:Arc<ServerNode>|PgPool|ClusterManager)\b/.test(mixPresenceContext)
     || !mixPresenceRecovery.includes('context.routes().local_epochs(')
     || !mixPresenceRecovery.includes('context.expire_unrefreshed(cutoff)')
     || !verifiedMixPresence.includes('context.routes().epoch_state(')
@@ -4108,19 +4108,19 @@ const moduleServiceAccessors = [
 if (!state.includes('let upload_service = config.upload_mode.keeps_storage_runtime().then(')) {
   throw new Error('upload service must exist while the drain-read-only GET and DELETE routes are mounted');
 }
-// AppState keeps composition and runtime handles; every inherent *_service
+// ServerNode keeps composition and runtime handles; every inherent *_service
 // method, regardless of visibility, belongs to its owning context module.
-const appStateServiceAccessors = [...state.matchAll(/^\s*impl\s+AppState\s*\{/gm)].flatMap((block) => {
+const appStateServiceAccessors = [...state.matchAll(/^\s*impl\s+ServerNode\s*\{/gm)].flatMap((block) => {
   const open = block.index + block[0].length - 1;
   return [...state.slice(open, matchingRustBrace(state, open))
     .matchAll(/\bfn\s+([a-z][a-z0-9_]*_service)\s*(?:<[^>{}]*>)?\s*\(/g)].map((match) => match[1]);
 });
-assertExactUniqueInventory('AppState service accessor', appStateServiceAccessors, []);
+assertExactUniqueInventory('ServerNode service accessor', appStateServiceAccessors, []);
 
 // Inventory only crate-private service accessors in inherent context module
 // implementations. Host-trait methods keep their names and are not accessors.
 const composedModuleServiceAccessors = productionRustSources
-  .filter(({ relative }) => relative.startsWith('src/state/'))
+  .filter(({ relative }) => relative.startsWith('src/node/'))
   .flatMap(({ relative, source }) => [...source.matchAll(/^\s*impl\s+[A-Za-z][A-Za-z0-9_]*Module\s*\{/gm)]
     .flatMap((block) => {
       const open = block.index + block[0].length - 1;
@@ -4151,7 +4151,7 @@ const largestDomain = [...perFile]
   .join(', ');
 
 console.log(
-  `Architecture boundary budgets passed: AppState=${publicFields} public fields, ` +
+  `Architecture boundary budgets passed: ServerNode=${publicFields} public fields, ` +
     `protocol=${protocolDbAuthorityReferences} db authority refs / ` +
     `${protocolDbDomainReferences} db domain-model refs / ` +
     `${protocolStatePoolReferences} state.pool / ${protocolSqlxReferences} sqlx:: / ` +

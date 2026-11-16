@@ -5,7 +5,7 @@
 //! This crate contains transport-neutral domain models and pure validation logic for XEP-0357
 //! Push Notifications. It deliberately has no dependencies on PostgreSQL (`sqlx`, `PgPool`),
 //! Redis, async runtimes (`tokio`), networking/sockets, filesystem, environment access,
-//! logging, clocks, randomness, or server state (`AppState`).
+//! logging, clocks, randomness, or server state (`ServerNode`).
 
 pub mod builder;
 pub mod constants;

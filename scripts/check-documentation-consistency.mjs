@@ -385,19 +385,19 @@ if (!read('docs/HANDOFF.md').includes('(README.md#status-map)')) {
 
 const architecture = read('docs/ARCHITECTURE.md').replace(/\s+/g, ' ');
 const architectureBudget =
-  '`AppState=0` public fields and, across the production protocol tree (excluding `#[cfg(test)]` code), ' +
+  '`ServerNode=0` public fields and, across the production protocol tree (excluding `#[cfg(test)]` code), ' +
   '`0 db authority references / 0 db domain-model references / 0 state.pool / 0 sqlx:: / 0 PgPool`';
 if (!architecture.includes(architectureBudget)) {
   throw new Error('docs/ARCHITECTURE.md does not state the current 0/0/0/0/0/0 architecture budget');
 }
-if (!knownIssues.replace(/\s+/g, ' ').includes('`AppState=0 public fields`')) {
-  throw new Error('KNOWN_ISSUES.md does not state the current AppState public-field count');
+if (!knownIssues.replace(/\s+/g, ' ').includes('`ServerNode=0 public fields`')) {
+  throw new Error('KNOWN_ISSUES.md does not state the current ServerNode public-field count');
 }
 const responsibilityModel = read('docs/PROGRAM_RESPONSIBILITIES.md');
 for (const marker of [
   '## Executable programs and deployment identities',
   '## Runtime layers',
-  '### `AppState` capability boundary',
+  '### `ServerNode` capability boundary',
   '## Source ownership map',
   '## End-to-end authority hand-offs',
   '## Process and operation lifecycles',

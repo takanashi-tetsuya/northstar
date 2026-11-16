@@ -1,0 +1,23 @@
+//! The node's side of the archive context's session handlers.
+
+use crate::node::ServerNode;
+use northstar_archive_application::{MamPreferencesWriter, MamQueryRepository, MamService};
+use northstar_archive_xmpp::ArchiveSessionHost;
+
+impl ArchiveSessionHost for ServerNode {
+    fn archive_local_domain(&self) -> &str {
+        self.config.domain.as_str()
+    }
+
+    fn archive_muc_domain(&self) -> String {
+        northstar_muc_xmpp::muc::muc_service_domain(self.config.domain.as_str())
+    }
+
+    fn mam_service(
+        &self,
+    ) -> &MamService<
+        impl MamQueryRepository<Error = anyhow::Error> + MamPreferencesWriter<Error = anyhow::Error>,
+    > {
+        self.archive.mam_service()
+    }
+}

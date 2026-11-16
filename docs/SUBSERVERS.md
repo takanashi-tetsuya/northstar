@@ -27,7 +27,7 @@ flowchart LR
 Core is still the only owner of in-memory sessions and transport delivery.
 Administrative revocation, connection counts and routing therefore retain a
 single authority. Workers that need these capabilities remain inside core.
-Maintenance does not construct `AppState`, initialize protocol services, load
+Maintenance does not construct `ServerNode`, initialize protocol services, load
 TLS/signing keys, mount uploads, or read the core `.env` file.
 
 `src/runtime/subservers.rs` owns command selection, maintenance configuration, process

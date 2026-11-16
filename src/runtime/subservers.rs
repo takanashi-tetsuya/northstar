@@ -2,7 +2,7 @@
 //!
 //! The core is the sole owner of live sessions and transport delivery. The
 //! maintenance process receives only a retention policy, a bounded database
-//! pool and metrics; it never constructs AppState or loads protocol secrets.
+//! pool and metrics; it never constructs ServerNode or loads protocol secrets.
 
 use anyhow::{Context, Result};
 use northstar_operations_application::retention_worker::{

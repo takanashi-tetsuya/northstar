@@ -104,7 +104,7 @@ fn test_upload_mode_lifecycle_and_subsystem_permissions() {
             && a.reason == AdjustmentReason::UploadDrainingReadOnly));
 
     // 3. Disabled mode with unproven facts produces a pending startup plan;
-    // AppState must prove the durable and object-store authorities clean.
+    // ServerNode must prove the durable and object-store authorities clean.
     let req_dis_unknown = RequestedWebCapabilities::default()
         .with_upload_mode(UploadMode::Disabled)
         .with_upload_facts(UploadRuntimeFacts::unknown());

@@ -24,7 +24,7 @@ northstar-server (composition root)
 ```
 
 Dependencies must never point back toward the composition root. In
-particular, a reusable crate must not import `AppState`, a raw `PgPool`, an
+particular, a reusable crate must not import `ServerNode`, a raw `PgPool`, an
 Axum router, or a transport socket merely to obtain a service.
 
 The intended workspace responsibilities are:
@@ -38,7 +38,7 @@ The intended workspace responsibilities are:
 | domain services | authorization snapshots and complete transactional use cases | XML, XEP namespaces, Axum, sockets |
 | PostgreSQL adapter | domain-port implementations, migrations, lock order and durable invariants | stanza parsing and transport behaviour |
 | storage adapter | local/object-store byte persistence behind the upload port | XMPP and HTTP request policy |
-| XEP libraries | wire validation/mapping, manifest, discovery declaration and exact typed ports | `AppState`, generic service lookup, raw SQL and arbitrary spawning |
+| XEP libraries | wire validation/mapping, manifest, discovery declaration and exact typed ports | `ServerNode`, generic service lookup, raw SQL and arbitrary spawning |
 | transport libraries | C2S/S2S/component/WS/BOSH framing and connection lifetime | concrete XEP and repository implementations |
 | HTTP surface libraries | one bounded router surface and its middleware contract | routes belonging to another surface, raw cross-surface session state |
 | server binary | configuration composition, concrete provider selection, registry freeze and listener supervision | reusable protocol/domain behaviour |
@@ -266,7 +266,7 @@ Each extraction must pass all of these checks:
 
 - no unexpected change to the support matrix;
 - an XEP crate has no dependency on the server package, SQLx, Axum,
-  `AppState`, `PgPool`, or raw sockets;
+  `ServerNode`, `PgPool`, or raw sockets;
 - plugin IDs, route keys, worker names and HTTP surface routes are unique;
 - disabled extensions have no route, discovery entry, worker or companion
   endpoint;

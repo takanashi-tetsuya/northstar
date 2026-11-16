@@ -11,7 +11,7 @@ export function readFederatedRouteSources() {
   return {
     inbound: readProductionModule('crates/contexts/message/northstar-message-xmpp/src/federated_message.rs'),
     adapter: readProductionModule('crates/contexts/message/northstar-message-xmpp/src/federated_message.rs'),
-    host: read('src/state/message_host.rs'),
+    host: read('src/node/hosts/message.rs'),
     state: read('crates/contexts/message/northstar-message-xmpp/src/lib.rs'),
   };
 }

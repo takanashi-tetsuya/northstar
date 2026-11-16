@@ -4,20 +4,20 @@ use northstar_cluster as cluster;
 mod db;
 #[cfg(test)]
 mod direct_replay;
+mod node;
 mod runtime;
 #[cfg(test)]
 mod stage4_replay;
-mod state;
 mod xmpp;
 
 use anyhow::{Context, Result};
+use node::ServerNode;
 use northstar_config::Config;
 use runtime::service_tasks::{
     await_shutdown_notifications, drain_service_tasks, spawn_service_task,
     unexpected_service_task_exit, SERVICE_TASK_ABORT_DRAIN_TIMEOUT, SERVICE_TASK_DRAIN_TIMEOUT,
 };
 use sqlx::PgPool;
-use state::AppState;
 use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -272,7 +272,7 @@ async fn run() -> Result<()> {
     // the traffic pool before it can establish its own isolated connection.
     let startup_phase =
         northstar_telemetry::logging::StartupPhase::begin("runtime_control_reservation");
-    let mut runtime_control_connection = state::reserve_runtime_control_connection(&config).await?;
+    let mut runtime_control_connection = node::reserve_runtime_control_connection(&config).await?;
     if process_role.embeds_retention() {
         // Retention ownership shares this already-reserved physical session;
         // it consumes no primary-pool slot. Its existing critical supervisor
@@ -358,7 +358,7 @@ async fn run() -> Result<()> {
     let test_listener_activation = config.test_listener_activation;
     let test_readiness_file = config.test_readiness_file.clone();
     let test_readiness_nonce = config.test_readiness_nonce.clone();
-    let state = AppState::new(
+    let state = ServerNode::new(
         config,
         pool,
         federation,
@@ -455,7 +455,7 @@ async fn run() -> Result<()> {
         "HTTP",
         northstar_http::serve(
             state.clone(),
-            state::http_host::xmpp_transport_routes(&state),
+            node::hosts::http::xmpp_transport_routes(&state),
             cancel.clone(),
             http_listener,
         ),

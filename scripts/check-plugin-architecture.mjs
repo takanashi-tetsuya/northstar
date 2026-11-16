@@ -38,7 +38,7 @@ const forbiddenDependencies = new Set([
 ]);
 
 const forbiddenSourceCapabilities = [
-  ['Northstar global application state', /\bAppState\b/],
+  ['Northstar global application state', /\bServerNode\b/],
   ['PostgreSQL pool', /\bPgPool\b/],
   ['PostgreSQL connection', /\bPgConnection\b/],
   ['SQLx API', /\bsqlx\s*::/],
@@ -78,7 +78,7 @@ function filesBelow(directory, extension) {
 }
 
 // The capability scan ignores prose and literals. This prevents a crate-level
-// comment such as "does not use AppState" from becoming a false positive while
+// comment such as "does not use ServerNode" from becoming a false positive while
 // still preserving byte offsets and line numbers for executable identifiers.
 export function maskRustCommentsAndStrings(source) {
   const output = [...source];

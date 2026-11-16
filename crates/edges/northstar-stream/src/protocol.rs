@@ -106,7 +106,7 @@ pub struct PresenceSubstate {
     pub availability_generation: Arc<AtomicU64>,
 }
 
-/// Fixed SM admission and replay limits for this connection. AppState owns
+/// Fixed SM admission and replay limits for this connection. ServerNode owns
 /// immutable configuration; durable ownership still belongs to the SM service.
 pub struct SmRuntimePolicy {
     pub session: SmSessionPolicy,

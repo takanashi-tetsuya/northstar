@@ -51,7 +51,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
 
     /// Finalizes a session dropped without its asynchronous cleanup.
     fn drop_session(session: &mut ProtocolSession<Self>);
-    /// See `AppState::account_service`.
+    /// See `ServerNode::account_service`.
     fn account_service(
         &self,
     ) -> &northstar_auth_application::account::AccountService<Self::AccountStore>;
@@ -66,28 +66,28 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         sm_session_id: uuid::Uuid,
         memberships: &DashMap<String, JoinedMucMembership>,
     ) -> impl std::future::Future<Output = ()> + Send;
-    /// See `AppState::authentication_service`.
+    /// See `ServerNode::authentication_service`.
     fn authentication_service(
         &self,
     ) -> &northstar_auth_application::authentication::AuthenticationService<Self::AuthenticationStore>;
-    /// See `AppState::c2s_authentication_telemetry`.
+    /// See `ServerNode::c2s_authentication_telemetry`.
     fn c2s_authentication_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::C2sAuthenticationTelemetry<'_>;
-    /// See `AppState::c2s_post_action_telemetry`.
+    /// See `ServerNode::c2s_post_action_telemetry`.
     fn c2s_post_action_telemetry(
         &self,
     ) -> northstar_session_application::post_actions::PostActionTelemetry<'_>;
-    /// See `AppState::c2s_resource_bind_timeout_seconds`.
+    /// See `ServerNode::c2s_resource_bind_timeout_seconds`.
     fn c2s_resource_bind_timeout_seconds(&self) -> u64;
-    /// See `AppState::capacity_session_lease_seconds`.
+    /// See `ServerNode::capacity_session_lease_seconds`.
     fn capacity_session_lease_seconds(&self) -> u64;
-    /// See `AppState::caps_by_jid`.
+    /// See `ServerNode::caps_by_jid`.
     fn caps_by_jid(&self) -> &northstar_protocol_runtime::caps::CapsResourceIndex;
-    /// See `AppState::caps_cache`.
+    /// See `ServerNode::caps_cache`.
     fn federated_caps_gates(&self) -> &northstar_protocol_runtime::caps::FederatedCapsGateIndex;
     fn caps_cache(&self) -> &northstar_protocol_runtime::caps::CapsCacheIndex;
-    /// See `AppState::challenge_issue_service`.
+    /// See `ServerNode::challenge_issue_service`.
     fn challenge_issue_service(
         &self,
     ) -> &northstar_abuse_application::challenge::ChallengeIssueService<Self::ChallengeStore>;
@@ -98,7 +98,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         full_jid: &str,
         connection_id: uuid::Uuid,
     ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send;
-    /// See `AppState::finalize_resource_binding`.
+    /// See `ServerNode::finalize_resource_binding`.
     #[allow(clippy::too_many_arguments)]
     fn finalize_resource_binding(
         &self,
@@ -116,31 +116,31 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     > + Send;
     /// Validated local identity for protocol routing without exposing Config.
     fn local_domain(&self) -> &str;
-    /// See `AppState::mix_service`.
+    /// See `ServerNode::mix_service`.
     fn mix_service(&self) -> &northstar_room_application::mix_service::MixService<Self::MixStore>;
-    /// See `AppState::outbound_stanza_telemetry`.
+    /// See `ServerNode::outbound_stanza_telemetry`.
     fn outbound_stanza_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::OutboundStanzaTelemetry<'_>;
-    /// See `AppState::push_service`.
+    /// See `ServerNode::push_service`.
     fn push_service(&self) -> &northstar_message_application::push::PushService<Self::PushStore>;
-    /// See `AppState::push_subscription_telemetry`.
+    /// See `ServerNode::push_subscription_telemetry`.
     fn push_subscription_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::PushSubscriptionTelemetry<'_>;
-    /// See `AppState::record_bosh_session_closed`.
+    /// See `ServerNode::record_bosh_session_closed`.
     fn record_bosh_session_closed(&self);
-    /// See `AppState::record_c2s_backpressure_disconnect`.
+    /// See `ServerNode::record_c2s_backpressure_disconnect`.
     fn record_c2s_backpressure_disconnect(&self);
     /// Read the public-registration kill switch with acquire ordering.
     fn registration_is_closed(&self) -> bool;
-    /// See `AppState::registration_requires_invitation`.
+    /// See `ServerNode::registration_requires_invitation`.
     fn registration_requires_invitation(&self) -> bool;
-    /// See `AppState::registration_telemetry`.
+    /// See `ServerNode::registration_telemetry`.
     fn registration_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::RegistrationTelemetry<'_>;
-    /// See `AppState::release_staged_binding_route`.
+    /// See `ServerNode::release_staged_binding_route`.
     fn release_staged_binding_route(
         &self,
         full_jid: &str,
@@ -160,27 +160,27 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         key: &str,
         connection_id: uuid::Uuid,
     ) -> Option<OnlineSession>;
-    /// See `AppState::replay_service`.
+    /// See `ServerNode::replay_service`.
     fn replay_service(
         &self,
     ) -> &northstar_session_application::replay::ReplayService<Self::ReplayStore>;
-    /// See `AppState::sasl2_authentication_telemetry`.
+    /// See `ServerNode::sasl2_authentication_telemetry`.
     fn sasl2_authentication_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::Sasl2AuthenticationTelemetry<'_>;
-    /// See `AppState::sasl2_authentication_timer`.
+    /// See `ServerNode::sasl2_authentication_timer`.
     fn sasl2_authentication_timer(&self) -> northstar_telemetry::metrics::OwnedDurationTimer;
-    /// See `AppState::sasl2_fast_token_policy`.
+    /// See `ServerNode::sasl2_fast_token_policy`.
     fn sasl2_fast_token_policy(&self) -> Sasl2FastTokenPolicy;
-    /// See `AppState::sasl_login_abuse_service`.
+    /// See `ServerNode::sasl_login_abuse_service`.
     fn sasl_login_abuse_service(
         &self,
     ) -> &northstar_abuse_application::login::SaslLoginAbuseService<Self::LoginAbuseStore>;
-    /// See `AppState::session_bind_telemetry`.
+    /// See `ServerNode::session_bind_telemetry`.
     fn session_bind_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::SessionBindTelemetry<'_>;
-    /// See `AppState::session_drop_fallback_telemetry`.
+    /// See `ServerNode::session_drop_fallback_telemetry`.
     fn session_drop_fallback_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::SessionDropFallbackTelemetry<'_>;
@@ -192,13 +192,13 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         connection_id: uuid::Uuid,
         enabled: bool,
     ) -> bool;
-    /// See `AppState::sm_memory_governor`.
+    /// See `ServerNode::sm_memory_governor`.
     fn sm_memory_governor(
         &self,
     ) -> &Arc<northstar_session_application::sm_capacity::SmMemoryGovernor>;
-    /// See `AppState::sm_service`.
+    /// See `ServerNode::sm_service`.
     fn sm_service(&self) -> &northstar_session_application::sm::SmService<Self::SmStore>;
-    /// See `AppState::sm_session_telemetry`.
+    /// See `ServerNode::sm_session_telemetry`.
     fn sm_session_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::SmSessionTelemetry<'_>;
@@ -211,16 +211,16 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         auth_generation: i64,
         lifecycle: &Arc<AtomicU8>,
     ) -> bool;
-    /// See `AppState::tls_context`.
+    /// See `ServerNode::tls_context`.
     fn tls_context(&self) -> &northstar_security::tls::TlsContext;
     /// Reserve a non-routable bind candidate under the same map entry guard
     /// that rejects a concurrent bind or resume for this full JID.
     fn try_stage_bound_session(&self, key: String, session: OnlineSession) -> bool;
-    /// See `AppState::unauthenticated_timeout`.
+    /// See `ServerNode::unauthenticated_timeout`.
     fn unauthenticated_timeout(&self) -> Duration;
-    /// See `AppState::worker_registry`.
+    /// See `ServerNode::worker_registry`.
     fn worker_registry(&self) -> &Arc<northstar_runtime::workers::WorkerRegistry>;
-    /// See `AppState::xmpp_extension_enabled`.
+    /// See `ServerNode::xmpp_extension_enabled`.
     fn xmpp_extension_enabled(&self, id: northstar_xep_core::XepId) -> bool;
     /// The local MUC occupancies a resumed stream restored, until it commits or aborts them.
     type RestoredMuc: crate::local_routes::muc::RestoredMucOccupancy;
@@ -259,13 +259,13 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         base_stanzas: usize,
         base_bytes: usize,
     ) -> impl std::future::Future<Output = bool> + Send;
-    /// See `AppState::c2s_scram_sha1_enabled`.
+    /// See `ServerNode::c2s_scram_sha1_enabled`.
     fn c2s_scram_sha1_enabled(&self) -> bool;
-    /// See `AppState::caps_effect_dispatcher`.
+    /// See `ServerNode::caps_effect_dispatcher`.
     fn caps_effect_dispatcher(
         &self,
     ) -> &Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher>;
-    /// See `AppState::caps_effect_telemetry`.
+    /// See `ServerNode::caps_effect_telemetry`.
     fn caps_effect_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::CapsEffectTelemetry<'_>;
@@ -278,7 +278,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         &self,
         restored: &Self::RestoredMuc,
     ) -> impl std::future::Future<Output = bool> + Send;
-    /// See `AppState::claim_sm_resume_route`.
+    /// See `ServerNode::claim_sm_resume_route`.
     fn claim_sm_resume_route(
         &self,
         full_jid: &str,
@@ -298,7 +298,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         sender: &crate::outbound::OutboundSender,
         capacity: northstar_session_application::sm_capacity::SmCapacityLease,
     ) -> impl std::future::Future<Output = crate::local_routes::muc::CommittedLocalMucResume> + Send;
-    /// See `AppState::finalize_sm_resume`.
+    /// See `ServerNode::finalize_sm_resume`.
     fn finalize_sm_resume(
         &self,
         request: northstar_session_application::sm::SmResumeFinalizationRequest<'_>,
@@ -322,12 +322,12 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         connection_id: uuid::Uuid,
         expected_gate: &Arc<tokio::sync::Mutex<()>>,
     ) -> bool;
-    /// See `AppState::mark_suspended_muc_durable`.
+    /// See `ServerNode::mark_suspended_muc_durable`.
     fn mark_suspended_muc_durable(
         &self,
         endpoints: Vec<Arc<SuspendedMucEndpoint>>,
     ) -> impl std::future::Future<Output = bool> + Send;
-    /// See `AppState::notify_remote_user_agent_replacement`.
+    /// See `ServerNode::notify_remote_user_agent_replacement`.
     fn notify_remote_user_agent_replacement(
         &self,
         account: &str,
@@ -340,7 +340,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         &self,
         sm_session_id: uuid::Uuid,
     ) -> impl std::future::Future<Output = Vec<Arc<SuspendedMucEndpoint>>> + Send;
-    /// See `AppState::pending_caps`.
+    /// See `ServerNode::pending_caps`.
     fn pending_caps(&self) -> &northstar_protocol_runtime::caps::PendingCapsIndex;
     /// See `LocalSessionTable::publish_user_agent_epoch_if_current`.
     fn publish_user_agent_epoch_if_current(
@@ -352,11 +352,11 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         lifecycle: &Arc<AtomicU8>,
         user_agent_epoch: Option<i64>,
     ) -> bool;
-    /// See `AppState::push_delivery_telemetry`.
+    /// See `ServerNode::push_delivery_telemetry`.
     fn push_delivery_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::PushDeliveryTelemetry<'_>;
-    /// See `AppState::release_exact_local_session_route`.
+    /// See `ServerNode::release_exact_local_session_route`.
     fn release_exact_local_session_route(
         &self,
         full_jid: &str,
@@ -372,21 +372,21 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         &self,
         request: RestoreLocalMucOccupantsRequest<'_>,
     ) -> impl std::future::Future<Output = Self::RestoredMuc> + Send;
-    /// See `AppState::revoke_sm_session_with_teardown`.
+    /// See `ServerNode::revoke_sm_session_with_teardown`.
     fn revoke_sm_session_with_teardown(
         &self,
         id: uuid::Uuid,
     ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
-    /// See `AppState::seal_suspended_muc_endpoints`.
+    /// See `ServerNode::seal_suspended_muc_endpoints`.
     fn seal_suspended_muc_endpoints(
         &self,
         endpoints: &[Arc<SuspendedMucEndpoint>],
     ) -> impl std::future::Future<Output = ()> + Send;
     /// See `LocalSessionTable::session_entries_for`.
     fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)>;
-    /// See `AppState::sm_buffer_limits`.
+    /// See `ServerNode::sm_buffer_limits`.
     fn sm_buffer_limits(&self) -> SmBufferLimits;
-    /// See `AppState::sm_ip_binding`.
+    /// See `ServerNode::sm_ip_binding`.
     fn sm_ip_binding(&self) -> &str;
     /// See `LocalSessionTable::sm_pending_route_removal_signal`.
     fn sm_pending_route_removal_signal(
@@ -399,7 +399,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     ) -> Option<tokio::sync::watch::Receiver<bool>>;
     /// See `LocalSessionTable::sm_presence_epoch`.
     fn sm_presence_epoch(&self, key: &str) -> Option<SmPresenceEpoch>;
-    /// See `AppState::sm_session_policy`.
+    /// See `ServerNode::sm_session_policy`.
     fn sm_session_policy(&self) -> SmSessionPolicy;
     /// Queues an exact SM suspension whose database write failed for bounded retry; false when the recovery
     /// budget is exhausted.
@@ -500,9 +500,9 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
     ) -> impl std::future::Future<Output = bool> + Send;
     /// The durable federation outbox and direct route.
     type S2sOutbox: northstar_federation_core::FederationRoute;
-    /// See `AppState::federation_outbox`.
+    /// See `ServerNode::federation_outbox`.
     fn federation_outbox(&self) -> &Self::S2sOutbox;
-    /// See `AppState::inbound_stanza_telemetry`.
+    /// See `ServerNode::inbound_stanza_telemetry`.
     fn inbound_stanza_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::InboundStanzaTelemetry<'_>;
@@ -513,7 +513,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         &self,
         jid: &str,
     ) -> impl std::future::Future<Output = bool> + Send;
-    /// See `AppState::presence_service`.
+    /// See `ServerNode::presence_service`.
     fn presence_service(
         &self,
     ) -> &northstar_roster_application::presence::PresenceService<Self::PresenceStore>;
@@ -528,7 +528,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         peer: &str,
         kind: impl Into<northstar_roster_application::privacy::PrivacyStanzaKind> + Send,
     ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send;
-    /// See `AppState::privacy_service`.
+    /// See `ServerNode::privacy_service`.
     fn privacy_service(
         &self,
     ) -> &northstar_roster_application::privacy::PrivacyService<Self::PrivacyStore>;
@@ -538,9 +538,9 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         full_jid: &str,
         stanza: &str,
     ) -> impl std::future::Future<Output = bool> + Send;
-    /// See `AppState::xmpp_external_route_domain_allowed`.
+    /// See `ServerNode::xmpp_external_route_domain_allowed`.
     fn xmpp_external_route_domain_allowed(&self, domain: &str) -> bool;
-    /// See `AppState::xmpp_route_enabled`.
+    /// See `ServerNode::xmpp_route_enabled`.
     fn xmpp_route_enabled(
         &self,
         stanza: northstar_xep_core::StanzaKind,
@@ -557,7 +557,7 @@ pub trait SessionHost: Sized + Send + Sync + 'static {
         user_id: uuid::Uuid,
         username: &str,
     ) -> impl std::future::Future<Output = Result<FinalizeAccountDeletion>> + Send;
-    /// See `AppState::account_abuse_telemetry`.
+    /// See `ServerNode::account_abuse_telemetry`.
     fn account_abuse_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::AccountAbuseTelemetry<'_>;

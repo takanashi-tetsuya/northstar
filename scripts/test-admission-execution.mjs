@@ -9,7 +9,7 @@ test('current production-shared admission source boundaries are present', () => 
 });
 
 test('comments and literals do not acquire capabilities', () => {
-  const execution = sources.execution + '\n// tokio::spawn AppState\nconst NOTE: &str = "Utc::now()";\n';
+  const execution = sources.execution + '\n// tokio::spawn ServerNode\nconst NOTE: &str = "Utc::now()";\n';
   assert.doesNotThrow(() => verifyAdmissionBoundaries({ ...sources, execution }));
 });
 
@@ -17,7 +17,7 @@ const mutations = [
   ['ambient core I/O', 'execution', source => source + '\nfn leak() { std::fs::read("x"); }'],
   ['ambient core clock', 'transaction', source => source + '\nfn leak() { Utc::now(); }'],
   ['ambient core entropy', 'execution', source => source + '\nfn leak() { Uuid::new_v4(); }'],
-  ['core AppState', 'execution', source => source + '\nfn leak(state: &AppState) {}'],
+  ['core ServerNode', 'execution', source => source + '\nfn leak(state: &ServerNode) {}'],
   ['ambient retained lifecycle I/O', 'lifecycle', source => source + '\nfn leak() { std::fs::read("x"); }'],
   ['unchecked request completion', 'execution', source => source.replace('expected.command != actual.command', 'false')],
   ['completion supplies trusted knowledge', 'execution', source => source.replace('self.observed.as_ref() != Some(&completion.knowledge)', 'false')],

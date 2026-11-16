@@ -24,7 +24,7 @@ pub struct OnlineSession {
     pub user_agent_epoch: Option<i64>,
     pub connection_id: uuid::Uuid,
     /// Terminal, exact-incarnation route-removal notification. Every local
-    /// compare-and-remove publishes through `AppState`, including rollback,
+    /// compare-and-remove publishes through `ServerNode`, including rollback,
     /// cleanup and synchronous Drop paths.
     pub route_incarnation: Arc<RouteIncarnationSignal>,
     /// Shared with the owning protocol session. A successful SM takeover sets

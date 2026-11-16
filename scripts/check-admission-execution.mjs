@@ -189,7 +189,7 @@ function verifyDirectContinuation(sources) {
 export function verifyAdmissionBoundaries(sources) {
   for (const name of ['execution', 'transaction', 'lifecycle']) {
     const code = codeOnly(sources[name]);
-    requireAdmission(!/\b(?:AppState|sqlx|tokio|getrandom|rand|rand_core)\b|std\s*::\s*(?:fs|net|process|thread|env)\b|(?:Utc|SystemTime|Instant)\s*::\s*now\s*\(|Uuid\s*::\s*new_/u.test(code),
+    requireAdmission(!/\b(?:ServerNode|sqlx|tokio|getrandom|rand|rand_core)\b|std\s*::\s*(?:fs|net|process|thread|env)\b|(?:Utc|SystemTime|Instant)\s*::\s*now\s*\(|Uuid\s*::\s*new_/u.test(code),
       `${name} core regained ambient authority, time, entropy or executor access`);
     requireAdmission(!/\bunsafe\b/u.test(code), `${name} core contains unsafe code`);
   }

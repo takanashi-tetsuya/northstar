@@ -6,9 +6,9 @@ pub(crate) mod messaging;
 pub(crate) mod mix;
 pub(crate) mod muc;
 
-use crate::state::AppState;
+use crate::node::ServerNode;
 pub(crate) use northstar_stream::protocol::*;
 use northstar_stream::transport::Action;
 
 /// The protocol session of the root's own host.
-pub(crate) type ClientSession = ProtocolSession<AppState>;
+pub(crate) type ClientSession = ProtocolSession<ServerNode>;

@@ -2,7 +2,7 @@
 //! Side observations cannot change owner results. Resource stops are independent.
 //! Requires the accepted Stage4 wire module, reviewed raw frame observer, and
 //! pending cfg(test) SessionExecutions::for_saved_frame constructor.
-//! No SQL, AppState, spawned tasks, new timers, Stage3 adapter, or verdicts.
+//! No SQL, ServerNode, spawned tasks, new timers, Stage3 adapter, or verdicts.
 use super::{MucDiscussionLive, PreparedMucDiscussion};
 use crate::stage4_replay::{self as wire, driver};
 use crate::xmpp::stage4_frame_capture::capture_frame;
@@ -830,7 +830,7 @@ impl MucFanoutPort for FanoutPort {
     }
     fn record_failure(&self, _: &Endpoint) {
         // Actual endpoint false was already recorded. No retry or metric-backed
-        // AppState is supplied, and a failed effect cannot undo the receipt.
+        // ServerNode is supplied, and a failed effect cannot undo the receipt.
     }
 }
 

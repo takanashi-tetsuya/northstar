@@ -1,7 +1,7 @@
 //! Test-only construction of the exact map/queue objects shared by auth and MIX.
-//! No AppState, SQL, workers, discovery or transport is constructed here.
+//! No ServerNode, SQL, workers, discovery or transport is constructed here.
 use super::{driver, map, observed, Recorder};
-use crate::{stage4_replay as wire, state};
+use crate::{node, stage4_replay as wire};
 use anyhow::{ensure, Result};
 use dashmap::DashMap;
 use northstar_protocol_runtime::caps::{
@@ -230,7 +230,7 @@ impl RouteMap {
     ) -> super::super::MixSessionCapability {
         let before = self.0.caps.snapshot(full_jid);
         let pending_before = self.0.pending.len();
-        let capability = state::mix_outbox::session_mix_capability_in(
+        let capability = node::adapters::mix_outbox::session_mix_capability_in(
             &self.0.sessions,
             &self.0.caps,
             &self.0.pending,

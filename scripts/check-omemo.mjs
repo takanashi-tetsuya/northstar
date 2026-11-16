@@ -12,7 +12,7 @@ const recoveryDb = fs.readFileSync(new URL('../crates/contexts/auth/northstar-au
 const recoveryRepository = fs.readFileSync(new URL('../crates/contexts/auth/northstar-auth-postgres/src/omemo_recovery_repository.rs', import.meta.url), 'utf8');
 const recoveryPoll = fs.readFileSync(new URL('../crates/edges/northstar-http/src/contexts/omemo_poll.rs', import.meta.url), 'utf8');
 const api = readRoleSplitFile('crates/edges/northstar-http/src/lib.rs');
-const serverState = readProductionModule('src/state.rs'); // whole production module
+const serverState = readProductionModule('src/node.rs'); // whole production module
 const metrics = fs.readFileSync(new URL('../crates/platform/northstar-telemetry/src/metrics.rs', import.meta.url), 'utf8');
 
 function requirePattern(source, pattern, message) {

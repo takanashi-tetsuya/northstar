@@ -22,7 +22,7 @@ Existing domain transactions and transport-specific actions remain separate.
    admission. MAM, identity replay, spool/outbox projections and transaction
    fences have not moved
 6. `crates/contexts/message/northstar-message-application/src/messaging/direct_route.rs` owns the C2S local live-handoff
-   lifecycle after those decisions. `src/state/message_cluster_routing.rs`
+   lifecycle after those decisions. `src/node/adapters/message_cluster_routing.rs`
    adapts its narrow port to the existing live/cluster routing and rearm service
 7. The protocol caller owns remaining offline policy, accepted PoW finalization,
    Push and Carbons. The transport owns actual completion via the existing

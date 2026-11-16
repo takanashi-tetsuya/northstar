@@ -26,7 +26,7 @@ pub(super) fn resolve_web_capability_plan(raw: &RawConfig) -> Result<ResolvedWeb
         .with_upload_protocol(raw.xep_0363_enabled)
         // Durable facts are obtained only after the database authority is
         // available.  Disabled plans therefore remain explicitly pending
-        // runtime proof and AppState refuses construction unless all facts
+        // runtime proof and ServerNode refuses construction unless all facts
         // are empty.
         .with_upload_facts(UploadRuntimeFacts::unknown())
         .with_upload_ceiling(upload_ceiling)

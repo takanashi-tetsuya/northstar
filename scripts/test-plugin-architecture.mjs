@@ -85,7 +85,7 @@ assert.deepEqual(validatePluginArchitecture(cleanModel()).violations, []);
   const file = model.crates.get('northstar-xep-0184').rustFiles[0];
   model.crates.get('northstar-xep-0184').sources.set(
     file,
-    `${cleanSource}\nfn escape() { let _: Option<AppState> = None; let _ = TcpStream::connect("ignored"); }`,
+    `${cleanSource}\nfn escape() { let _: Option<ServerNode> = None; let _ = TcpStream::connect("ignored"); }`,
   );
   const result = validatePluginArchitecture(model).violations.join('\n');
   assert.match(result, /forbidden runtime capability sqlx/);

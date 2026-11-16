@@ -74,7 +74,7 @@ impl DurationHistogram {
     }
 
     /// Keep one timer alive across a mutable session operation without
-    /// retaining its AppState or the full metrics registry.
+    /// retaining its ServerNode or the full metrics registry.
     pub fn start_owned_timer(self: &Arc<Self>) -> OwnedDurationTimer {
         OwnedDurationTimer {
             histogram: Arc::clone(self),

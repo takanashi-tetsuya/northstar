@@ -53,7 +53,7 @@ test('an unrelated declaration cannot spoof the owned entry signature', () => {
 rejectsMutation('adapter module cannot disappear', 'state', 'pub mod federated_message;', '// pub mod federated_message;', /module must stay registered/);
 rejectsMutation('adapter type cannot disappear', 'adapter', "struct FederatedDirectRoute<'a, H>(&'a H);", "// struct FederatedDirectRoute<'a, H>(&'a H);", /own its origin-specific adapter/);
 rejectsMutation('caller cannot switch to C2S checkpoint policy', 'inbound', 'DirectMessageRouter::route_federated(', 'DirectMessageRouter::route(', /caller must invoke/);
-rejectsMutation('caller cannot use unwrapped AppState', 'inbound', '&FederatedDirectRoute(state)', '&state', /caller must invoke/);
+rejectsMutation('caller cannot use unwrapped ServerNode', 'inbound', '&FederatedDirectRoute(state)', '&state', /caller must invoke/);
 rejectsMutation('caller cannot substitute a different state', 'inbound', '&FederatedDirectRoute(state)', '&FederatedDirectRoute(other_state)', /caller must invoke/);
 rejectsMutation('caller cannot drop committed history', 'inbound', '        history_committed,\n    )\n    .await?;', '        false,\n    )\n    .await?;', /committed-history input/);
 rejectsMutation('caller cannot disable direct health', 'inbound', 'enforce_direct_health: true,', 'enforce_direct_health: false,', /envelope, targets and health/);

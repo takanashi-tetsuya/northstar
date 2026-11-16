@@ -1,0 +1,59 @@
+//! Exact post-commit effects for an administrator room destroy operation.
+
+use crate::cluster::ClusterMucOperationWake;
+use crate::node::{
+    remove_local_muc_occupant_exact_from, LocalMucOccupantIdentity, MucOccupant, ServerNode,
+};
+use anyhow::Result;
+use dashmap::DashMap;
+use northstar_operations_application::operation_muc_destroy::{
+    MucDestroyCommit, MucDestroyEffect, MucDestroyService,
+};
+use northstar_room_application::operation_muc_wake::CommittedMucWakeService;
+use northstar_room_postgres::operation_muc_wake_repository::PostgresCommittedMucWakeRepository;
+use northstar_workflows::operation_muc_destroy_repository::PostgresMucDestroyRepository;
+use std::sync::Arc;
+use uuid::Uuid;
+
+pub(crate) struct OperationMucDestroyEffects {
+    destroy: Arc<MucDestroyService<PostgresMucDestroyRepository>>,
+    wake: CommittedMucWakeService<PostgresCommittedMucWakeRepository>,
+    publisher: ClusterMucOperationWake,
+    audience: LocalMucDestroyAudience,
+}
+
+struct LocalMucDestroyAudience {
+    occupants: Arc<DashMap<String, MucOccupant>>,
+}
+
+impl ServerNode {
+    pub(crate) fn operation_muc_destroy_effects(&self) -> OperationMucDestroyEffects {
+        OperationMucDestroyEffects {
+            destroy: Arc::clone(&self.operations.operation_muc_destroy_service),
+            wake: CommittedMucWakeService::new(PostgresCommittedMucWakeRepository::new(
+                self.pool.clone(),
+            )),
+            publisher: self.cluster.muc_operation_wake(),
+            audience: LocalMucDestroyAudience {
+                occupants: Arc::clone(&self.room.muc_occupants),
+            },
+        }
+    }
+}
+
+impl OperationMucDestroyEffects {
+    pub(crate) async fn commit(&self, effect: MucDestroyEffect<'_>) -> Result<MucDestroyCommit> {
+        self.destroy.execute(effect).await
+    }
+
+    pub(crate) async fn notify_committed(&self, operation_id: Uuid) {
+        self.wake.notify(&self.publisher, operation_id).await;
+    }
+
+    pub(crate) fn remove_local_occupant_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+    ) -> bool {
+        remove_local_muc_occupant_exact_from(&self.audience.occupants, identity).is_some()
+    }
+}

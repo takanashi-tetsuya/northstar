@@ -1,7 +1,7 @@
 //! Private preparation binding, retained direct SQL witness, and bounded async
 //! continuation through borrowed admission and routing capabilities.
 //! Buffers stay with the original protocol preparation; this module parses no
-//! XML and owns no AppState, clock, SQL, socket, task, or retry capability.
+//! XML and owns no ServerNode, clock, SQL, socket, task, or retry capability.
 use crate::message_admission::witness::DirectOperationHandle;
 use crate::message_admission::{
     finalize_message_admission_with, MessageAdmissionRepository, MessageAdmissionService,

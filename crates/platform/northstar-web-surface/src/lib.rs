@@ -1,7 +1,7 @@
 //! Deployment-surface capability model, upload mode lifecycle, and deterministic
 //! dependency resolution for Northstar.
 //!
-//! This crate deliberately has no dependency on Axum, Tokio, SQLx, AppState, sockets,
+//! This crate deliberately has no dependency on Axum, Tokio, SQLx, ServerNode, sockets,
 //! or filesystem I/O. It provides a pure, auditable domain model for web surface
 //! capabilities, listener ownership, and asset boundaries.
 

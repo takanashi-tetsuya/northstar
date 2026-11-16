@@ -4,7 +4,7 @@
 //!
 //! This crate contains transport-neutral domain models and pure validation logic for XEP-0313 MAM.
 //! It deliberately has no dependencies on PostgreSQL (`sqlx`, `PgPool`), Redis, async runtimes (`tokio`),
-//! networking/sockets, filesystem, environment access, logging, clocks, or server state (`AppState`).
+//! networking/sockets, filesystem, environment access, logging, clocks, or server state (`ServerNode`).
 
 pub mod builder;
 pub mod constants;

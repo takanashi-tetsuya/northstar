@@ -119,9 +119,9 @@ for (const capability of [
 }
 
 // Authentication timing spans mutable SASL2 session work, but it only needs
-// the histogram handle. A clone here would keep the entire AppState alive.
+// the histogram handle. A clone here would keep the entire ServerNode alive.
 if (/self\.host\.clone\(\)|Arc::clone\(&self\.host\)/.test(sasl2)) {
-  throw new Error("SASL2 session work regained an owned AppState clone");
+  throw new Error("SASL2 session work regained an owned ServerNode clone");
 }
 const sasl2Timers = sasl2.match(/self\.host\.sasl2_authentication_timer\(\)/g) ?? [];
 if (sasl2Timers.length !== 3) {

@@ -5,8 +5,8 @@
       "rank": 4,
       "modules": [
         "main",
-        "runtime",
-        "state"
+        "node",
+        "runtime"
       ],
       "may_use": [
         "composition",
@@ -41,7 +41,7 @@
   },
   "baseline": {
     "src/xmpp/protocol.rs": [
-      "state"
+      "node"
     ]
   }
 }

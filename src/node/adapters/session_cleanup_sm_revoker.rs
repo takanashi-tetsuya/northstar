@@ -1,0 +1,59 @@
+//! Exact durable SM revocation after a client cleanup fallback.
+
+use crate::node::{
+    adapters::sm_teardown_runtime::{sm_teardown_snapshot, AppSmTeardownRuntime},
+    ServerNode,
+};
+use anyhow::Result;
+use northstar_session_application::sm_teardown::SmTeardownService;
+use northstar_workflows::sm_teardown_repository::PostgresSmTeardownRepository;
+use uuid::Uuid;
+
+pub(crate) struct SessionCleanupSmRevoker {
+    claims: SmTeardownService<PostgresSmTeardownRepository>,
+    effects: AppSmTeardownRuntime,
+}
+
+impl ServerNode {
+    pub(crate) fn session_cleanup_sm_revoker(&self) -> SessionCleanupSmRevoker {
+        SessionCleanupSmRevoker {
+            claims: SmTeardownService::new(
+                PostgresSmTeardownRepository::new(self.pool.clone()),
+                self.config.sm_claim_lease_seconds,
+            ),
+            effects: self.sm_teardown_runtime(),
+        }
+    }
+}
+
+impl SessionCleanupSmRevoker {
+    pub(crate) async fn revoke_with_teardown(&self, session_id: Uuid) -> Result<()> {
+        self.claims
+            .revoke_exact(session_id, |snapshot| async move {
+                self.effects
+                    .teardown_snapshot(&sm_teardown_snapshot(&snapshot))
+                    .await
+            })
+            .await
+    }
+
+    pub(crate) async fn revoke_all_with_teardown(&self) -> Result<usize> {
+        self.claims
+            .revoke_all(|snapshot| async move {
+                self.effects
+                    .teardown_snapshot(&sm_teardown_snapshot(&snapshot))
+                    .await
+            })
+            .await
+    }
+
+    pub(crate) async fn revoke_user_with_teardown(&self, user_id: Uuid) -> Result<usize> {
+        self.claims
+            .revoke_user(user_id, |snapshot| async move {
+                self.effects
+                    .teardown_snapshot(&sm_teardown_snapshot(&snapshot))
+                    .await
+            })
+            .await
+    }
+}

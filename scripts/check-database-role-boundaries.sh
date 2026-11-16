@@ -21,7 +21,7 @@ registration_repository="$project_dir/crates/contexts/workflows/northstar-workfl
 admin_dispatch_repository="$project_dir/crates/contexts/workflows/northstar-workflows/src/admin_dispatch_repository.rs"
 identity_migration_module="$project_dir/crates/contexts/workflows/northstar-workflows/src/identity_migration.rs"
 main_source="$project_dir/src/main.rs"
-state_source="$project_dir/src/state.rs"
+state_source="$project_dir/src/node.rs"
 pie_source="$project_dir/crates/contexts/workflows/northstar-data-tools/src/pie.rs"
 users_source="$project_dir/crates/contexts/auth/northstar-auth-postgres/src/users.rs"
 admin_commands_source="$project_dir/crates/contexts/workflows/northstar-workflows/src/admin_accounts.rs"
@@ -510,11 +510,11 @@ require_literal "$grant_policy" "northstar-database-role-policy-v1" \
   'ACL reconciliation uses a different database policy lock key'
 require_literal "$main_source" 'northstar_postgres::role_attestation::attest_runtime_role(&pool)' \
   'long-lived server does not attest its runtime database identity'
-require_module_literal src/state.rs 'role_attestation::attest_admin_command_role(&command_pool)' \
+require_module_literal src/node.rs 'role_attestation::attest_admin_command_role(&command_pool)' \
   'isolated XEP-0133 command pool does not attest its exact role'
 require_literal "$main_source" 'northstar_postgres::role_attestation::pin_public_application_schema(pool_options)' \
   'production migrator/runtime pools do not override DSN search_path options'
-require_module_literal src/state.rs \
+require_module_literal src/node.rs \
   'role_attestation::pin_public_application_schema(omemo_recovery_pool_options)' \
   'isolated OMEMO recovery pool does not inherit the production schema pin'
 require_module_literal crates/contexts/workflows/northstar-data-tools/src/pie.rs 'northstar_postgres::role_attestation::pin_public_application_schema(pool_options)' \

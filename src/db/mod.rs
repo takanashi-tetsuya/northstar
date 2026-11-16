@@ -53,7 +53,7 @@ mod push_tests;
 mod retraction_service_tests;
 #[cfg(test)]
 pub use archive::*;
-// The privacy stanza kind that the root binding (src/state/s2s_inbound_host.rs)
+// The privacy stanza kind that the root binding (src/node/hosts/s2s_inbound.rs)
 // still reaches through db::. Every other consumer imports the owning crate.
 #[cfg(test)]
 pub(crate) use northstar_roster_postgres::roster::add_federated_presence_pending_with_stanza;

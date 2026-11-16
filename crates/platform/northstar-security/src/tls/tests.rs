@@ -157,7 +157,7 @@ fn c2s_xmppaddr_decoder_requires_explicit_utf8_der() {
 }
 
 fn install_crypto_provider() {
-    // The binary installs this before constructing AppState. Unit tests
+    // The binary installs this before constructing ServerNode. Unit tests
     // enter TLS construction directly and can race each other, so an
     // already-installed identical process provider is also success.
     let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();

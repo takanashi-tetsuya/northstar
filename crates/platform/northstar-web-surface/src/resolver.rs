@@ -440,7 +440,7 @@ mod tests {
         assert!(res_drain.is_surface_enabled(SurfaceId::HttpUpload));
 
         // 3. UploadMode::Disabled with unknown facts -> construct a pending
-        // startup plan that AppState must prove clean before listeners start.
+        // startup plan that ServerNode must prove clean before listeners start.
         let req_disabled_unknown = RequestedWebCapabilities::default()
             .with_upload_mode(UploadMode::Disabled)
             .with_upload_facts(UploadRuntimeFacts::unknown());

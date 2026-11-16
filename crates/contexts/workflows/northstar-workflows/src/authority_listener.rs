@@ -12,7 +12,7 @@ const SM_AUTHORITY_NOTIFICATION_CHANNEL: &str = "northstar_sm_authority_v1";
 /// Run the one reserved PostgreSQL notification connection shared by the
 /// XEP-0198, MIX delivery and account revocation workers.
 ///
-/// AppState composes these independent services here; neither protocol layer
+/// ServerNode composes these independent services here; neither protocol layer
 /// reaches into the other's broker.  This deliberately reuses the existing
 /// reserved listener connection instead of consuming a primary-pool slot or
 /// adding a new runtime-role connection.
@@ -151,7 +151,7 @@ async fn run_database_authority_listener(
     }
 }
 
-/// Start the one database authority listener after AppState has composed the
+/// Start the one database authority listener after ServerNode has composed the
 /// independent SM and MIX service brokers.  The listener is a wake transport,
 /// not a source of protocol authority; each recipient/session path still
 /// reads its fenced PostgreSQL record before acting.

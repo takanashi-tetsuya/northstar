@@ -85,7 +85,7 @@ Key ownership:
 - `src/xmpp/protocol/` owns negotiated wire behavior and error mapping. The
   protocol tree no longer imports database authority/domain symbols, accesses
   a pool, or uses SQLx directly; persistence is reached only through the
-  purpose-specific application-service capabilities exposed by `AppState`.
+  purpose-specific application-service capabilities exposed by `ServerNode`.
 - Protocol output uses `northstar-xml-builder` for escaping and validated
   fragments. Several XEP crates use it for generated payloads while keeping
   their existing parse and input-validation rules.
@@ -270,7 +270,7 @@ Key ownership:
   its private device/session keys.
 
 The architecture gate measures protocol/database dependency and public state
-capability in monotonic budgets. The current baseline is `AppState=0` public
+capability in monotonic budgets. The current baseline is `ServerNode=0` public
 fields and, across the production protocol tree (excluding `#[cfg(test)]` code),
 `0 db authority references / 0 db domain-model references / 0 state.pool / 0
 sqlx:: / 0 PgPool`. Importing or aliasing database symbols is rejected so an
@@ -281,15 +281,15 @@ typed capabilities; other composition paths still receive broad state.
 Subsystem-specific database roles remain incomplete. `messaging.rs` additionally has semantic
 gates forbidding raw pool access and bypasses of `MessageService`.
 
-`AppState` no longer exposes raw FAST or Dialback key bytes, REST cursor and
+`ServerNode` no longer exposes raw FAST or Dialback key bytes, REST cursor and
 idempotency keyrings, upload storage, client/upload admission internals, the
 message persistence capability, or the worker registry as public fields.
 It supplies purpose-specific FAST and Dialback operations and narrow internal
 capability accessors. Secret byte vectors are zeroized when state is dropped.
-`src/main.rs` calls `AppState::start_workers()` once; `src/state/workers.rs`
-dispatches to concern modules under `src/state/workers/`, which construct narrow
+`src/main.rs` calls `ServerNode::start_workers()` once; `src/node/workers.rs`
+dispatches to concern modules under `src/node/workers/`, which construct narrow
 contexts beside their supervisor registrations in the original worker order.
-Existing `AppState::start_*` functions keep their startup sites. Shared HTTP,
+Existing `ServerNode::start_*` functions keep their startup sites. Shared HTTP,
 federation, session and admission handles live in their concern's state module.
 Background policy, cleanup, digest, Redis and recovery work is registered with
 the worker supervisor: security-critical exits or heartbeat expiry cancel the
@@ -311,8 +311,8 @@ shared-authority exceptions visible.
 | Layer | Current responsibility | Enforcement | Residual shared authority / exception |
 | --- | --- | --- | --- |
 | Transport adapters | TCP/TLS, WebSocket/BOSH framing, byte/depth/time limits, connection lifetime | module APIs and parser/transport tests | same process as protocol and runtime services |
-| Protocol sessions | negotiation state, stanza parsing, RFC/XEP error mapping, per-resource ordering | production-tree static gate forbids DB symbols, SQLx and raw pools | inline test code is excluded from that gate; session still calls `AppState` service capabilities |
-| Application services | authorization snapshots, message/roster/replay policy, transaction intent and typed outcomes | Rust visibility, typed ports and targeted semantic gates | some composition paths still receive broad `Arc<AppState>` |
+| Protocol sessions | negotiation state, stanza parsing, RFC/XEP error mapping, per-resource ordering | production-tree static gate forbids DB symbols, SQLx and raw pools | inline test code is excluded from that gate; session still calls `ServerNode` service capabilities |
+| Application services | authorization snapshots, message/roster/replay policy, transaction intent and typed outcomes | Rust visibility, typed ports and targeted semantic gates | some composition paths still receive broad `Arc<ServerNode>` |
 | Database repository responsibility | SQL, lock order, transactions, durable identity, outbox/admission invariants | PostgreSQL workload ACLs, reviewed routines and Rust module boundary | `src/db/*` owns the extracted transaction paths; most still share the runtime role |
 | Live routing | exact connection incarnation, loss-explicit ordered admission, bounded backpressure, SM/BOSH/socket transfer fences | injected ordered-output port, bounded adapter queues, disconnect/fallback rules and delivery-fence state | in-memory availability state is process-local by design |
 | Federation/components | remote identity, discovery/TLS/Dialback and durable outbox ownership | authenticated streams, domain checks and durable repositories | S2S/component code remains in the same binary and runtime role |

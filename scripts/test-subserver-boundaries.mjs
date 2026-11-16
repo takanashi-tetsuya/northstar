@@ -19,17 +19,17 @@ test('reviewed compositions have exact role-qualified maintenance workers', () =
 });
 test('comments and string descriptions do not grant core capabilities', () => {
   verifySubserverBoundaries({ ...baseline,
-    subservers: `${baseline.subservers}\n// AppState and Keyring are forbidden\nconst DESCRIPTION: &str = "Config::from_env()";\n`,
+    subservers: `${baseline.subservers}\n// ServerNode and Keyring are forbidden\nconst DESCRIPTION: &str = "Config::from_env()";\n`,
   });
 });
 
 test('subscription cleanup authority after tests stays checked', () => {
   assert.throws(() => verifySubserverBoundaries({ ...baseline,
-    subscriptionCleanup: `${baseline.subscriptionCleanup}\nuse crate::state::AppState;\n`,
+    subscriptionCleanup: `${baseline.subscriptionCleanup}\nuse crate::node::ServerNode;\n`,
   }), /narrow existing-pool/);
 });
 
-rejectsMutation('reject core state authority', 'subservers', 'use std::', 'use crate::state::AppState;\nuse std::', /core state/);
+rejectsMutation('reject core state authority', 'subservers', 'use std::', 'use crate::node::ServerNode;\nuse std::', /core state/);
 rejectsMutation('reject general configuration loading', 'subservers', 'config.validate()?;', 'Config::from_env()?;\nconfig.validate()?;', /general runtime config/);
 rejectsMutation('reject expanding maintenance input secrets', 'subservers', 'struct MaintenanceConfig {', 'struct MaintenanceConfig {\n signing_key: String,', /capability inventory/);
 rejectsMutation('reject expanding retention context authority', 'retention', 'struct RetentionContext<R> {', 'struct RetentionContext<R> {\n session_authority: usize,', /capability inventory/);
@@ -43,7 +43,7 @@ rejectsMutation('reject increased health header budget', 'subservers', '[0u8; 40
 rejectsMutation('reject increased request deadline', 'subservers', 'Duration::from_secs(2)', 'Duration::from_secs(200)', /bounded local authority/);
 rejectsMutation('readiness requires a successful retention pass', 'subservers', 'retention_readiness.is_ready()', 'true', /bounded local authority/);
 rejectsMutation('readiness requires successful subscription cleanup', 'subservers', 'subscription_readiness.is_ready()', 'true', /bounded local authority/);
-rejectsMutation('subscription cleanup cannot gain core state', 'subscriptionCleanup', 'struct SubscriptionCleanupContext<R> {', 'struct SubscriptionCleanupContext<R> {\n state: AppState,', /capability inventory/);
+rejectsMutation('subscription cleanup cannot gain core state', 'subscriptionCleanup', 'struct SubscriptionCleanupContext<R> {', 'struct SubscriptionCleanupContext<R> {\n state: ServerNode,', /capability inventory/);
 rejectsMutation('subscription cleanup cannot allocate another pool', 'subscriptionCleanup', 'use std::', 'use sqlx::postgres::PgPoolOptions;\nuse std::', /narrow existing-pool/);
 rejectsMutation('subscription cleanup keeps its total execution budget', 'subscriptionCleanup', 'Duration::from_secs(40)', 'Duration::from_secs(5)', /CLEANUP_BUDGET/);
 rejectsMutation('subscription cleanup keeps the physical cleanup cadence', 'subscriptionCleanup', 'Duration::from_secs(60)', 'Duration::from_secs(3600)', /CLEANUP_INTERVAL/);

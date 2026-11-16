@@ -4,12 +4,12 @@ import { fileURLToPath } from 'node:url';
 import { readProductionModule } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const files = { main: 'src/main.rs', workerComposition: 'src/state/workers.rs', subservers: 'src/runtime/subservers.rs', maintenanceOwnership: 'crates/contexts/operations/northstar-operations-postgres/src/maintenance_ownership.rs', retention: 'crates/contexts/operations/northstar-operations-application/src/retention_worker.rs',
+const files = { main: 'src/main.rs', workerComposition: 'src/node/workers.rs', subservers: 'src/runtime/subservers.rs', maintenanceOwnership: 'crates/contexts/operations/northstar-operations-postgres/src/maintenance_ownership.rs', retention: 'crates/contexts/operations/northstar-operations-application/src/retention_worker.rs',
   subscriptionCleanup: 'crates/contexts/pubsub/northstar-pubsub-application/src/subscription_cleanup.rs',
   pubsubProtocol: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/protocol_session.rs', pubsubDelivery: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/delivery.rs',
   pubsubAdapter: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/pubsub.rs',
   pubsubService: 'crates/contexts/pubsub/northstar-pubsub-application/src/service.rs',
-  state: 'src/state.rs', runtimeControl: 'src/state/runtime_control_refresh.rs',
+  state: 'src/node.rs', runtimeControl: 'src/node/adapters/runtime_control_refresh.rs',
   cluster: 'scripts/cluster-wsl.sh', responsibility: 'docs/PROGRAM_RESPONSIBILITIES.md' };
 
 function requireBoundary(condition, message) {
@@ -54,7 +54,7 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
   const report = codeOnly(body(state, 'fn report_runtime_control_health(')).replace(/\s+/g, '');
   requireBoundary(report === 'ifletSome(error)=error{heartbeat.error(error);}elseifobserved_database{heartbeat.ok();}else{heartbeat.pulse();}',
     'control health must preserve errors on idle ticks and clear them only after successful database observation');
-  const coordinator = body(runtimeControl, 'pub(super) async fn run(');
+  const coordinator = body(runtimeControl, 'pub(in crate::node) async fn run(');
   requireBoundary(coordinator.includes('let mut observed_database = false;') &&
     coordinator.includes('report_runtime_control_health(&heartbeat, observed_database, first_error);') &&
     !/heartbeat\.(?:ok|error)\(/.test(coordinator) &&
@@ -72,9 +72,9 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
       'control coordinator must tie health observation to a read of its exact reserved connection');
   }
   const subserverCode = codeOnly(subservers);
-  requireBoundary(!/\b(?:AppState|AbuseGuard|FederationRouter|ReloadableTlsConfig|Keyring|KeyRing)\b/.test(subserverCode),
+  requireBoundary(!/\b(?:ServerNode|AbuseGuard|FederationRouter|ReloadableTlsConfig|Keyring|KeyRing)\b/.test(subserverCode),
     'maintenance cannot construct or import core state, routing or key authorities');
-  requireBoundary(!/\bConfig\s*::\s*from_env\b|crate\s*::\s*(?:auth|abuse|state|s2s|xmpp|tls|storage)\s*::/.test(subserverCode),
+  requireBoundary(!/\bConfig\s*::\s*from_env\b|crate\s*::\s*(?:auth|abuse|node|s2s|xmpp|tls|storage)\s*::/.test(subserverCode),
     'maintenance cannot load the general runtime config or core capability modules');
   exactFields(subservers, 'struct MaintenanceConfig', [
     'xmpp_domain', 'database_url', 'database_url_file', 'database_allow_unsafe_role_for_development',
@@ -91,7 +91,7 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
   const testEnd = subscriptionCleanup.indexOf(testBody, testStart) + testBody.length + 1;
   const subscriptionProduction = subscriptionCleanup.slice(0, testStart) + subscriptionCleanup.slice(testEnd);
   const subscriptionCode = codeOnly(subscriptionProduction);
-  requireBoundary(!/\b(?:AppState|Config|Keyring|KeyRing|FederationRouter|PgPoolOptions|PgConnection)\b|crate\s*::\s*(?:state|s2s|xmpp|auth)\s*::/.test(subscriptionCode),
+  requireBoundary(!/\b(?:ServerNode|Config|Keyring|KeyRing|FederationRouter|PgPoolOptions|PgConnection)\b|crate\s*::\s*(?:node|s2s|xmpp|auth)\s*::/.test(subscriptionCode),
     'subscription cleanup must retain its narrow existing-pool authority');
   for (const [name, seconds] of [['CLEANUP_INTERVAL', 60], ['CLEANUP_BUDGET', 40], ['MAX_SILENCE', 110]]) {
     requireBoundary(new RegExp(`const ${name}: Duration = Duration::from_secs\\(${seconds}\\)`).test(subscriptionCode),
@@ -142,7 +142,7 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
   const dispatch = body(main, 'if process_role == runtime::subservers::ProcessRole::Maintenance');
   requireBoundary(dispatch.includes('return runtime::subservers::run_maintenance().await') &&
     main.indexOf('if process_role == runtime::subservers::ProcessRole::Maintenance') < main.indexOf('Config::from_env()?'),
-  'maintenance must exit the composition path before general Config and AppState assembly');
+  'maintenance must exit the composition path before general Config and ServerNode assembly');
   const dotenv = main.indexOf('config::load_dotenv()?;');
   requireBoundary(dotenv >= 0, 'dotenv loading errors must propagate before mode-specific configuration');
   const startup = body(main, 'async fn run()');
@@ -159,7 +159,7 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
     'only standalone may embed retention in the core composition');
   const ownership = body(main, 'if process_role.embeds_retention()');
   requireBoundary(ownership.includes('claim_maintenance_on_connection(&mut runtime_control_connection)') &&
-    main.indexOf('claim_maintenance_on_connection(') < main.indexOf('let state = AppState::new('),
+    main.indexOf('claim_maintenance_on_connection(') < main.indexOf('let state = ServerNode::new('),
   'standalone must claim retention before state/listener activation on its existing control connection');
   const guardedRegistrations = [...workerComposition.matchAll(/if process_role\.embeds_retention\(\)/g)]
     .map((match) => body(workerComposition.slice(match.index), 'if process_role.embeds_retention()'));

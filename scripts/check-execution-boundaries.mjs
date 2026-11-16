@@ -41,9 +41,9 @@ const files = {
   mixWorkerOwner: 'crates/contexts/room/northstar-room-application/src/mix_service/outbox.rs',
   mixWorker: 'crates/contexts/room/northstar-mix-xmpp/src/worker.rs',
   mixArchive: 'crates/contexts/workflows/northstar-workflows/src/mix_archive.rs',
-  state: 'src/state.rs',
+  state: 'src/node.rs',
   sessionTable: 'crates/edges/northstar-stream/src/local_routes/session_table.rs',
-  mixOutboxState: 'src/state/mix_outbox.rs',
+  mixOutboxState: 'src/node/adapters/mix_outbox.rs',
   nativeWrite: 'crates/edges/northstar-c2s/src/direct_delivery.rs',
   nativeCore: 'crates/contexts/message/northstar-delivery-core/src/native_write.rs',
   replayDb: 'crates/contexts/session/northstar-session-postgres/src/replay.rs',
@@ -202,9 +202,9 @@ function ordered(source, steps, message) {
   }
 }
 
-// The composition root's SessionHost impls (src/state/*session_host.rs) forward to AppState methods of the same
-// names; the boundaries below are the inherent AppState bodies, so the state source leaves the forwards out.
-const sessionHostForwards = /^src\/state\/(?:[a-z_]+_)?session_host\.rs$/;
+// The composition root's SessionHost impls (src/node/*session_host.rs) forward to ServerNode methods of the same
+// names; the boundaries below are the inherent ServerNode bodies, so the state source leaves the forwards out.
+const sessionHostForwards = /^src\/node\/hosts\/(?:[a-z_]+_)?session\.rs$/;
 
 export function readExecutionSources() {
   return Object.fromEntries(Object.entries(files).map(([name, file]) => [name,
@@ -1356,7 +1356,7 @@ export function verifyExecutionBoundaries(sources) {
 
 export function verifyMucDiscussionBoundaries({ muc, mucCore, mucApplication, mucService, mucSlot, mucDb, mucRepository, frame, protocol }) {
   const compact = source => source.replace(/\s+/g, '').replace(/,([)}])/g, '$1');
-  requireBoundary(!/(?:tokio|sqlx|reqwest)::|std::(?:fs|net|time|env)::|Uuid::new_v4|AppState/.test(codeOnly(productionModule(mucCore))),
+  requireBoundary(!/(?:tokio|sqlx|reqwest)::|std::(?:fs|net|time|env)::|Uuid::new_v4|ServerNode/.test(codeOnly(productionModule(mucCore))),
     'MUC discussion core must remain free of ambient I/O, clocks and application state');
   const application = body(mucApplication, 'impl<R>\\s+RoomApplication<R>');
   const prepare = compact(body(application, 'fn\\s+prepare_discussion\\b'));
@@ -1465,7 +1465,7 @@ export function verifyMucDiscussionBoundaries({ muc, mucCore, mucApplication, mu
 export function verifyMixForegroundBoundaries({ mix, mixCore, mixData, mixSlot, mixService, mixDb, mixRepository, frame, state }) {
   const dense = source => compact(source).replace(/,([)}])/g, '$1');
   for (const source of [mixCore, mixData]) {
-    requireBoundary(!/(?:tokio|sqlx|reqwest)::|std::(?:fs|net|time|env)::|Uuid::new_v4|AppState/.test(codeOnly(productionModule(source))),
+    requireBoundary(!/(?:tokio|sqlx|reqwest)::|std::(?:fs|net|time|env)::|Uuid::new_v4|ServerNode/.test(codeOnly(productionModule(source))),
       'MIX foreground core must remain free of ambient effects');
   }
   const serviceConstructor = dense(body(mixService, 'fn\\s+new_with_outbox_database_admission\\b'));
@@ -1479,7 +1479,7 @@ export function verifyMixForegroundBoundaries({ mix, mixCore, mixData, mixSlot, 
     serviceConstructor.includes('repository,configured_mix_domain,message_identity,'),
     'MIX receiving domain must come from the configured service constructor');
   requireBoundary(dense(codeOnly(state)).includes('MixService::new_with_outbox_database_admission(northstar_workflows::room_effects::PostgresMixRepository::new(pool.clone()),config.domain.clone(),'),
-    'MIX AppState construction must supply actual runtime configuration');
+    'MIX ServerNode construction must supply actual runtime configuration');
   const preparation = dense(body(mixService, 'fn\\s+prepare_mix_foreground\\b'));
   requireBoundary(preparation === 'if!ingress.matches_receiving_domain(&self.configured_mix_domain){returnErr(foreground::Rejected::Input);}Ok(foreground::PreparedIngress::new(ingress))',
     'MIX ingress cannot supply its own receiving authority');
@@ -1618,7 +1618,7 @@ export function verifyMixWorkerBoundaries({ mixWorkerCore, mixWorkerOwner, mixWo
   const core = productionModule(mixWorkerCore);
   const mixProduction = withoutTestModules(mix);
   const coreCode = dense(codeOnly(core));
-  requireBoundary(!/(?:tokio|sqlx|reqwest)::|std::(?:fs|net|time|env)::|Uuid::new_v4|AppState/.test(codeOnly(core)),
+  requireBoundary(!/(?:tokio|sqlx|reqwest)::|std::(?:fs|net|time|env)::|Uuid::new_v4|ServerNode/.test(codeOnly(core)),
     'MIX worker core must remain free of ambient effects');
   for (const name of ['ClaimRequest', 'ClaimStatement', 'Attempt', 'RouteRequest', 'ArchiveRequest', 'ArchiveCommit', 'LocalRequest', 'ClusterRequest', 'RouteCompletion', 'RenewalScopeClosed', 'RenewalRequest', 'RenewalStatement', 'SettlementRequest', 'SettlementBoundary']) {
     requireBoundary(!new RegExp(`#\\[derive\\([^\\]]*Clone[^\\]]*\\)\\]\\s*pub\\s+struct\\s+${name}\\b|impl\\s+Clone\\s+for\\s+${name}\\b`).test(codeOnly(core)),

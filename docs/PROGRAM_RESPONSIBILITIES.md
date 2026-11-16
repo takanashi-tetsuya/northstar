@@ -52,7 +52,7 @@ re-running all earlier decisions informally.
 | --- | --- | --- | --- | --- | --- | --- |
 | `xmpp-server migrate` | migrator URL and XMPP domain | verify migrator identity and apply the embedded SQLx migration chain | network listeners, runtime/backup credentials and normal message processing | one-shot process; migration transactions are owned by SQLx/PostgreSQL | separate Compose job and exit code | migrator owns the application database/schema |
 | `database-grants` | migrator URL, migration ledger and capability manifest | converge exact database/schema/default ACL and reviewed routine grants | application traffic, bootstrap password and backup reads | one policy transaction guarded by a target-local advisory lock | separate image/job | shares the migrator identity with migration and stopped restore |
-| `xmpp-server` runtime | runtime URL, command URL, TLS/cluster/abuse secrets, optional application bootstrap-admin password and service configuration | one startup-only administrator ensure step, then C2S/S2S/components, HTTP, routing, domain services and supervised workers | PostgreSQL bootstrap/migrator/backup credentials and schema DDL | the bootstrap-admin password is consumed before `AppState`; listener failure then cancels the service; new business transactions belong to services/repositories, while tracked API/cluster/federation legacy paths still own direct persistence | one OS process with supervised top-level and worker tasks | runtime services share one address space and mostly one runtime DB role; startup still temporarily holds an account-creation secret |
+| `xmpp-server` runtime | runtime URL, command URL, TLS/cluster/abuse secrets, optional application bootstrap-admin password and service configuration | one startup-only administrator ensure step, then C2S/S2S/components, HTTP, routing, domain services and supervised workers | PostgreSQL bootstrap/migrator/backup credentials and schema DDL | the bootstrap-admin password is consumed before `ServerNode`; listener failure then cancels the service; new business transactions belong to services/repositories, while tracked API/cluster/federation legacy paths still own direct persistence | one OS process with supervised top-level and worker tasks | runtime services share one address space and mostly one runtime DB role; startup still temporarily holds an account-creation secret |
 | online backup | backup URL, completed upload objects, signing key and age recipients | consistent read-only dump, object manifest, lineage, signature and encryption | database mutation, restore and migrator/runtime secrets | one-shot job; an artifact becomes valid only after its final `READY` publication | separate backup container and backup DB role | database snapshot and object capture are coordinated by completed-upload ordering, not one distributed transaction |
 | stopped restore parent | verified archive, migrator URL, rollback roots and decryption material | cutover state machine, child registry, journal, connection fence and compensation decision | treating child exit/EOF as commit evidence | catchable failures converge on compensation; hard kill/power loss retains recovery evidence | separate one-shot restore container | holds the broad migrator credential and can bypass child routing if compromised |
 | role bootstrap/reconciliation | audit uses only the selected connection/bootstrap credential; initialization/apply additionally receives all workload password files | audit or create/repair roles, owner and cluster/database ACL policy | application serving and long-lived secret exposure | guarded one-shot operation and post-apply audit | PostgreSQL init process or explicit maintenance job | bootstrap is a superuser and is a break-glass authority |
@@ -61,7 +61,7 @@ The PostgreSQL bootstrap/superuser credential is never mounted into migration,
 runtime, backup or restore. This is distinct from the optional application
 bootstrap-admin password: the runtime loader receives that password, uses the
 ordinary runtime capability to ensure the configured administrator, and only
-then clears the configuration field while constructing `AppState`. The runtime
+then clears the configuration field while constructing `ServerNode`. The runtime
 process also receives ordinary and command-only database credentials. They are
 separate PostgreSQL authorities but still exist in the same OS process.
 
@@ -91,7 +91,7 @@ its Compose overlay. These are independent OS processes of the same binary.
 | --- | --- | --- | --- |
 | no command or `serve standalone` | compatible combined server with embedded archive and subscription cleanup workers | general runtime configuration and existing core secrets | cannot coexist with another retention owner for the same database/schema |
 | `serve core` | existing public listeners, sessions, routing, administration and remaining core workers | general runtime configuration and existing core secrets | does not register archive or subscription cleanup |
-| `serve maintenance` | archive/audit/offline retention, physical PubSub subscription cleanup and loopback health | database connection, domain, bounded retention policy; skips `.env` and does not load core signing/keyring configuration | no `AppState`, public listener, session or routing authority |
+| `serve maintenance` | archive/audit/offline retention, physical PubSub subscription cleanup and loopback health | database connection, domain, bounded retention policy; skips `.env` and does not load core signing/keyring configuration | no `ServerNode`, public listener, session or routing authority |
 
 Supported split deployment runs one core and one maintenance process against a
 shared PostgreSQL runtime role. This is process/secret separation, while the
@@ -141,23 +141,23 @@ closes the listener and joins/aborts every accepted connection.
 | Layer | Accepted input | Owned capability | Explicitly forbidden | Transaction or failure boundary | Supervisor | Actual isolation | Remaining shared authority |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | configuration/secret loader | CLI, environment, `.env` and secret files | syntax/semantic validation, file checks, single ownership transfer and zeroization | logging, cloning or leaving raw secret values in shared configuration | failure precedes every listener | top-level `main` | initialization phase in runtime process | secrets coexist briefly while state is constructed |
-| `AppState` assembly | validated configuration, pools, routers, stores and key owners | compose services and process-local routing capabilities | becoming an unconstrained public service locator | construction is all-or-nothing before listener start | top-level `main` | Rust private fields/accessors | no public fields; some internal callers still receive broad state |
+| `ServerNode` assembly | validated configuration, pools, routers, stores and key owners | compose services and process-local routing capabilities | becoming an unconstrained public service locator | construction is all-or-nothing before listener start | top-level `main` | Rust private fields/accessors | no public fields; some internal callers still receive broad state |
 | XMPP/BOSH/WebSocket transport adapters | untrusted TCP/TLS bytes, XMPP HTTP frames, peer/proxy identity | framing, size/depth/time budgets, TLS provenance and connection lifetime | business SQL, archive policy and account authorization | per-connection failure closes that connection; listener exit is service-fatal | top-level listener set plus connection actor registry | Tokio tasks in runtime process | shares memory with protocol and services; the REST edge is tracked separately because legacy routes still own direct database access |
-| protocol session | framed XML plus authenticated transport state | stream/SASL/bind/SM state machine, stanza parsing, XMPP errors and resource-ordering | production `db::*` authority, SQLx, `PgPool` and `state.pool` | one connection actor; durable resume is delegated to SM service | connection actor registry | Rust module/static gate | may call typed `AppState` services and live routing; `#[cfg(test)]` is outside zero-reference count |
+| protocol session | framed XML plus authenticated transport state | stream/SASL/bind/SM state machine, stanza parsing, XMPP errors and resource-ordering | production `db::*` authority, SQLx, `PgPool` and `state.pool` | one connection actor; durable resume is delegated to SM service | connection actor registry | Rust module/static gate | may call typed `ServerNode` services and live routing; `#[cfg(test)]` is outside zero-reference count |
 | application service | prepared identities/commands from protocol or HTTP | authorization snapshot, policy, transaction intent and typed result | parsing raw transport frames or exposing raw transactions upward | service method defines one business operation and its commit-before-side-effect rule | caller task or dedicated worker | private Rust capability with injected repository ports | production service code has no direct SQLx pool or query; repositories still share the runtime database role |
 | database repository responsibility | typed service or legacy runtime request | SQL, lock order, transaction, durable identity, admission/outbox invariant | XML/HTTP parsing, socket delivery and retry policy | PostgreSQL transaction/routine/constraint | caller plus PostgreSQL | mostly `src/db/*`, migration constraints and PostgreSQL ACL | repository responsibility is not yet a universal directory boundary: some services, API, cluster, federation and worker paths still contain direct persistence |
 | live routing/outbound | authorized delivery plan and exact route incarnation | transport-neutral ordered admission, bounded adapter queues, route ABA fence, SM/BOSH/socket ownership transfer and slow-peer disconnect | re-deciding privacy/blocking or claiming a DB transaction committed | the ordered-output port returns every backpressured, closed or stale item; ownership moves only at an explicit transfer point | connection actors | process-local data plane; Tokio is one injected sink adapter | online sessions and MUC maps are volatile by design |
-| worker registry | worker closure, criticality, mode and heartbeat | unique registration, restart/backoff, readiness degradation and fatal cancellation | detached `JoinHandle`, unreported exit or infinite silent retry | one supervised attempt at a time | `WorkerRegistry` | supervised Tokio tasks | several closures still receive broader `Arc<AppState>` access than their target ports |
+| worker registry | worker closure, criticality, mode and heartbeat | unique registration, restart/backoff, readiness degradation and fatal cancellation | detached `JoinHandle`, unreported exit or infinite silent retry | one supervised attempt at a time | `WorkerRegistry` | supervised Tokio tasks | several closures still receive broader `Arc<ServerNode>` access than their target ports |
 | observability | internal health/metrics request | bounded cached readiness and metrics rendering | business mutation or anonymous public DB amplification | read-only probe deadline; readiness can degrade independently of commits | HTTP/metrics top-level tasks | separate listener, same process | readiness uses bounded runtime DB access |
 
-### `AppState` capability boundary
+### `ServerNode` capability boundary
 
 All fields are private, and CI rejects any newly public field. This limits
-direct access across modules; it does not make an `Arc<AppState>` a narrow
+direct access across modules; it does not make an `Arc<ServerNode>` a narrow
 capability. Session cleanup, some workers and transport entry points still
 need dedicated contexts before this boundary is complete.
 
-Private `AppState` fields include `pool`, `sessions` and `metrics`, along with
+Private `ServerNode` fields include `pool`, `sessions` and `metrics`, along with
 database keyrings, FAST/Dialback material, stores, component credentials,
 service objects and worker registry. Protocol handlers use purpose-specific
 methods for staged binds, SM takeover and exact route checks. HTTP, transport
@@ -225,8 +225,8 @@ inputs. They use the same registry and shutdown token; being registered outside
 
 | Worker/observer name | Registration owner | Criticality / mode | Stall watchdog | Shutdown | Owned recovery/work | Forbidden shortcut |
 | --- | --- | --- | --- | --- | --- | --- |
-| `session-cleanup` | `AppState` observer registration | restartable health observer; **no task/factory** | none | not applicable | bounded per-session cleanup reports errors or actual successful work into readiness; an empty report is neutral | describing it as a restartable loop or hiding repeated cleanup errors |
-| `sm-authority-listener` | AppState database listener startup | restartable / continuous | 15 s, fed by a 5 s liveness tick even when LISTEN is quiet | immediate | consume durable SM authority and schema-only MIX delivery wake hints; each consumer reclaims its own fenced row/generation | treating notification silence as failure or a notification as authority without the durable generation |
+| `session-cleanup` | `ServerNode` observer registration | restartable health observer; **no task/factory** | none | not applicable | bounded per-session cleanup reports errors or actual successful work into readiness; an empty report is neutral | describing it as a restartable loop or hiding repeated cleanup errors |
+| `sm-authority-listener` | ServerNode database listener startup | restartable / continuous | 15 s, fed by a 5 s liveness tick even when LISTEN is quiet | immediate | consume durable SM authority and schema-only MIX delivery wake hints; each consumer reclaims its own fenced row/generation | treating notification silence as failure or a notification as authority without the durable generation |
 | `sm-suspension-recovery` | session-cleanup service startup | restartable / continuous | 30 s | drain up to 5 s | recover suspended SM/MUC endpoint teardown and replay ownership | dropping a claimed suffix on cancellation |
 | `caps-side-effects` | Caps subsystem startup | restartable / continuous | 60 s | bounded `CAPS_EFFECT_DRAIN_GRACE` | execute pending verified capability/PEP/MIX effects with no-lost-wakeup rescan | declaring work complete because a bounded hint queue filled |
 | `mix-iq-relay-expiry` | MIX protocol capability startup | restartable / continuous | 10 s | immediate | expire exact pending IQ relays and route generations | expiring a replacement relay by stale timer identity |
@@ -235,8 +235,8 @@ inputs. They use the same registry and shutdown token; being registered outside
 | `pubsub-digest-delivery` | PubSub capability startup | restartable / continuous | 5 s | immediate | deliver due digest batches from durable queue state | losing work when an in-memory wake is dropped or reclaiming physical subscription cleanup inside the five-second delivery worker |
 | `pubsub-event-outbox-delivery` | PubSub capability startup | restartable / continuous | 30 s | immediate | deliver/retry durable PubSub/PEP mutation events | publishing before the mutation/outbox transaction commits |
 | `cluster-muc-outbox` | cluster MUC startup, unconditionally registered | restartable / continuous | 30 s | immediate | in every mode expire/recover PostgreSQL MUC occupancy, dead-letter/history and metric state; with clustering also bridge durable MUC outbox events to authenticated cluster delivery | making Redis publication the durable completion record or skipping single-node PostgreSQL maintenance |
-| `locked-muc-expiry` | `AppState` MUC startup | restartable / continuous | 20 s | immediate | expire locked empty-room creation windows | deleting an occupied/replacement room from a stale observation |
-| `runtime-control-refresh` | process startup reserves the connection; `AppState` transfers it to runtime-control startup | critical / continuous | 5 s | immediate | before traffic startup, reserve and attest one connection; initial handshakes receive at most 3 s, clamped to the remaining absolute 15 s admission budget; only `PoolTimedOut` is retried with bounded per-process jitter, while all other setup errors fail immediately; role attestation and final reservation share the same deadline; then sequentially refresh durable federation rules and security-relevant administration settings each second, and observe XEP-0133 service control every 500 ms when enabled | allowing traffic-adjacent startup work to exhaust the control connection, pooling a runtime control read after activation, splitting control-plane reads into competing workers, silently retaining a superseded security setting, continuing with stale allow/deny authority, or keeping listeners available after committed shutdown control changes |
+| `locked-muc-expiry` | `ServerNode` MUC startup | restartable / continuous | 20 s | immediate | expire locked empty-room creation windows | deleting an occupied/replacement room from a stale observation |
+| `runtime-control-refresh` | process startup reserves the connection; `ServerNode` transfers it to runtime-control startup | critical / continuous | 5 s | immediate | before traffic startup, reserve and attest one connection; initial handshakes receive at most 3 s, clamped to the remaining absolute 15 s admission budget; only `PoolTimedOut` is retried with bounded per-process jitter, while all other setup errors fail immediately; role attestation and final reservation share the same deadline; then sequentially refresh durable federation rules and security-relevant administration settings each second, and observe XEP-0133 service control every 500 ms when enabled | allowing traffic-adjacent startup work to exhaust the control connection, pooling a runtime control read after activation, splitting control-plane reads into competing workers, silently retaining a superseded security setting, continuing with stale allow/deny authority, or keeping listeners available after committed shutdown control changes |
 
 Criticality is a semantic declaration, not a performance tuning knob. A worker
 is critical only when continuing without it would violate an authority or
@@ -272,19 +272,19 @@ the enforcement column distinguishes a hard gate from a remaining review rule.
 
 | Path | Owns | May call | Must not own or call | Enforcement and current exception |
 | --- | --- | --- | --- | --- |
-| `src/main.rs` | CLI mode selection, process composition, pool construction/attestation, listener startup, one worker-startup call, coordinated shutdown | configuration, `AppState`, listener factories, worker registry and one-shot migration/audit modes | stanza policy, business SQL or domain transaction composition | review plus top-level failure tests; worker construction and registration belong to `src/state/workers` |
+| `src/main.rs` | CLI mode selection, process composition, pool construction/attestation, listener startup, one worker-startup call, coordinated shutdown | configuration, `ServerNode`, listener factories, worker registry and one-shot migration/audit modes | stanza policy, business SQL or domain transaction composition | review plus top-level failure tests; worker construction and registration belong to `src/node/workers` |
 | `crates/platform/northstar-config/src/lib.rs` | parsing, normalization, deployment-mode validation, secret-file/value exclusivity and transfer into typed configuration | filesystem metadata and pure validation helpers | opening network listeners, querying application data or logging secret values | typed configuration and tests; secret consumers remain in the same process after transfer |
-| `src/state/workers.rs`, `src/state/workers/*` | ordered worker startup, private context construction and adjacent supervisor registration | services, repositories, runtime handles and worker registry | worker loops or business policy in `main.rs` | exact worker registration, contract and owner inventories in the architecture gate |
-| `src/state.rs` | construction of domain capabilities and process-local registries; private context modules and narrow runtime handles | services, stores, routers, key owners and worker registry | becoming an unrestricted global service locator or exposing new raw key/pool fields | Rust visibility and a CI gate requiring zero public `AppState` fields |
+| `src/node/workers.rs`, `src/node/workers/*` | ordered worker startup, private context construction and adjacent supervisor registration | services, repositories, runtime handles and worker registry | worker loops or business policy in `main.rs` | exact worker registration, contract and owner inventories in the architecture gate |
+| `src/node.rs` | construction of domain capabilities and process-local registries; private context modules and narrow runtime handles | services, stores, routers, key owners and worker registry | becoming an unrestricted global service locator or exposing new raw key/pool fields | Rust visibility and a CI gate requiring zero public `ServerNode` fields |
 | `northstar-xml-framing`, `crates/edges/northstar-stream/src/transport_parsing.rs`, `crates/edges/northstar-bosh/src/lib.rs`, WebSocket/C2S entry code | bytes-to-frame conversion, transport provenance, per-connection budgets, BOSH RID/response ownership and connection lifetime | parser utilities, connection actors and `ProtocolSession` | authorization, archive decisions or business database transactions | parser/transport tests and bounded actors; BOSH persistence calls are transport-specific fence bookkeeping, not general business authority |
-| `src/xmpp/protocol.rs`, `src/xmpp/protocol/*` | stream/session state, RFC/XEP parsing, canonical protocol errors and ordered invocation of typed capabilities | `AppState` service methods, XML builders and live-delivery interfaces | `db::*`, SQLx, `PgPool`, `state.pool` or composing archive/offline/outbox transactions | production-tree CI ceiling is exactly zero for every forbidden database reference; test-only fixtures are excluded |
+| `src/xmpp/protocol.rs`, `src/xmpp/protocol/*` | stream/session state, RFC/XEP parsing, canonical protocol errors and ordered invocation of typed capabilities | `ServerNode` service methods, XML builders and live-delivery interfaces | `db::*`, SQLx, `PgPool`, `state.pool` or composing archive/offline/outbox transactions | production-tree CI ceiling is exactly zero for every forbidden database reference; test-only fixtures are excluded |
 | `src/services/*` | business authorization, one-snapshot policy, transaction intent, commit/side-effect ordering and typed outcomes | domain repositories and narrow runtime ports | raw socket/framing parsing or returning an open transaction to protocol code | Rust visibility and semantic source gates; transaction adapters belong in `src/db` |
 | `src/db/*` | SQL, routines, lock order, isolation level, durable identities, capacity ledgers, claims and outbox/admission atomicity | SQLx/PostgreSQL and typed persistence models | XML/HTTP parsing, socket backpressure or retrying external effects while a transaction is held | module boundary, migration constraints and exact PostgreSQL capability manifest |
 | `crates/edges/northstar-http/src/*`, `crates/contexts/operations/northstar-operations-xmpp/src/operation_runtime.rs` | HTTP routing, authentication, request/idempotency context, admin operation journal and response mapping | scoped API and worker capabilities | bootstrap/migrator/backup credentials or unaudited external effects | middleware, DB ACLs and operation journal; HTTP account teardown and ordinary operation claims use typed contexts, while some composition paths remain broad |
 | `crates/edges/northstar-stream/src/outbound.rs`, `crates/platform/northstar-runtime/src/connection_actors.rs` | exact live-route incarnation, bounded queue ownership, socket/SM/BOSH transfer and slow-peer action | session/MUC registries, metrics and typed delivery plans | deciding privacy/block policy or claiming persistence before PostgreSQL commits | route generations, bounded channels and actor registry; volatile signals retain their documented best-effort semantics |
-| `crates/edges/northstar-s2s/src/*`, `src/state/s2s_inbound_host.rs` | remote/component authentication, domain authority, discovery/TLS/Dialback and delivery attempts | federation policy, DNS/TLS, durable outbox repositories and outbound transport | asserting local identity from an unauthenticated stream or treating socket write as universal exactly-once ACK | authenticated stream state plus stable IDs/outbox; XMPP delivery remains at-least-once at defined retry boundaries |
+| `crates/edges/northstar-s2s/src/*`, `src/node/hosts/s2s_inbound.rs` | remote/component authentication, domain authority, discovery/TLS/Dialback and delivery attempts | federation policy, DNS/TLS, durable outbox repositories and outbound transport | asserting local identity from an unauthenticated stream or treating socket write as universal exactly-once ACK | authenticated stream state plus stable IDs/outbox; XMPP delivery remains at-least-once at defined retry boundaries |
 | `src/cluster.rs`, `crates/platform/northstar-security/src/cluster_bus.rs`, `src/db/cluster_*` | signed Redis control envelopes, node/route epochs, PostgreSQL leases and degraded-mode decisions | live registries, PostgreSQL authority and Redis transport | making Redis durable truth or authorization authority | signature/replay checks and PostgreSQL revalidation; multi-node behavior remains experimental |
-| `crates/platform/northstar-runtime/src/workers.rs`, `crates/contexts/operations/northstar-operations-application/src/retention_worker.rs`, `crates/contexts/upload/northstar-upload-application/src/worker.rs` | named task lifecycle, heartbeat, restart/fail-fast class, bounded retry and shutdown joining | narrow service/repository capabilities and readiness reporting | detached `JoinHandle`, invisible permanent exit or holding a DB transaction during external I/O/backoff | `WorkerRegistry`; some closures still receive a broader `Arc<AppState>` than the target design |
+| `crates/platform/northstar-runtime/src/workers.rs`, `crates/contexts/operations/northstar-operations-application/src/retention_worker.rs`, `crates/contexts/upload/northstar-upload-application/src/worker.rs` | named task lifecycle, heartbeat, restart/fail-fast class, bounded retry and shutdown joining | narrow service/repository capabilities and readiness reporting | detached `JoinHandle`, invisible permanent exit or holding a DB transaction during external I/O/backoff | `WorkerRegistry`; some closures still receive a broader `Arc<ServerNode>` than the target design |
 | `crates/contexts/upload/northstar-upload-storage` | object locator validation and local/S3 byte operations | bounded object-store APIs and hashing/I/O permits | account authorization, SQL transaction ownership or interpreting an object write as a committed slot | typed store interface; claim/fence/finalize remains split across upload service/repository/worker |
 | `crates/platform/northstar-telemetry/src/metrics.rs`, health routes | fixed-cardinality counters, cached/single-flight bounded health rendering | narrow snapshots and bounded database probes | business mutation, secrets/high-cardinality labels or public unbounded query amplification | private observability listener policy and source/tests |
 | `web/*` | UI state, browser XMPP transport, SASL2/FAST/SM, endpoint OMEMO keys/trust and IndexedDB | server public APIs and browser cryptographic/runtime APIs | sending private OMEMO keys to the server; the current protocol/API also contains no required-encryption downgrade path | browser tests and no server key API; same-origin code delivery remains a permanent trust boundary |
@@ -299,7 +299,7 @@ secret authority.
 1. **C2S, WebSocket or BOSH stanza.** A listener/HTTP adapter authenticates the
    transport and gives bounded frames to a connection actor. The actor invokes
    `ProtocolSession` dispatch in `crates/edges/northstar-stream/src/protocol/dispatch.rs`. The protocol
-   handler validates XMPP shape and calls a typed `AppState` service; the
+   handler validates XMPP shape and calls a typed `ServerNode` service; the
    service authorizes and delegates to `src/db/*`, or to its explicitly tracked
    embedded repository path, to commit the durable operation. Only
    the resulting delivery plan reaches `crates/edges/northstar-stream/src/outbound.rs`, SM/BOSH fencing or a
@@ -345,7 +345,7 @@ secret authority.
    already-attested primary pool instead of creating a duplicate same-identity
    command pool. Role identity, migration/schema state and required capacity
    authorities are attested before service construction.
-3. `AppState` assembles services, stores, routers, registries, key owners and
+3. `ServerNode` assembles services, stores, routers, registries, key owners and
    metrics. Failure is still startup-fatal.
 4. Security-critical and restartable background tasks are registered with the
    worker supervisor; no detached task is part of the accepted architecture.
@@ -420,19 +420,19 @@ environment remains unchanged.
 
 ## Application-service capability registry
 
-`AppState` constructs context modules under `src/state/*_module.rs`. Each module
+`ServerNode` constructs context modules under `src/node/*_module.rs`. Each module
 owns its services and exposes the crate-private module accessors listed below,
 keeping each `name()` as the capability boundary. Callers use the owning module,
 for example `state.auth.omemo_recovery_service()`, to receive a specific domain
-service. Inherent `AppState` implementations define no `*_service()` methods;
-its fields remain private. Main calls `AppState::start_workers()` once. The ordered
-dispatcher in `src/state/workers.rs` delegates to concern modules under
-`src/state/workers/`, where private context constructors sit beside their worker
+service. Inherent `ServerNode` implementations define no `*_service()` methods;
+its fields remain private. Main calls `ServerNode::start_workers()` once. The ordered
+dispatcher in `src/node/workers.rs` delegates to concern modules under
+`src/node/workers/`, where private context constructors sit beside their worker
 registrations. Shared HTTP, federation, session and admission handles remain in
-the corresponding `src/state` modules. Existing `AppState::start_*` functions
+the corresponding `src/node` modules. Existing `ServerNode::start_*` functions
 remain in their original files.
 
-The archive module in `src/state/archive_module.rs` owns `mam_service()`.
+The archive module in `src/node/modules/archive.rs` owns `mam_service()`.
 The auth module owns `api_session_service()` and the account-revocation consumer;
 the session module owns `cluster_authority_service()` and
 `cluster_instance_release_service()`; the room module owns
@@ -462,17 +462,17 @@ teardown services are likewise owned by the session and room modules.
 | `LocalGenerationCleanupRoutes` | administrator cleanup of one account generation | cancel every matching local resource after the effect fence, including pending routes | exposing the session map or disconnecting a newer generation |
 | `LocalPanicDisconnectRoutes` | emergency process-wide transport cancellation | signal every local route before the separate durable SM teardown | moving teardown before cancellation or exposing route mutation to the operation worker |
 | `ReadinessService` | persisted security-authority and cleanup readiness | bounded abuse-key, cluster-key and administrator-cleanup repository probes | process-local admission checks, caching and HTTP response mapping |
-| `ReadinessContext` | live `/readyz` checks | read-only connection, SM, upload, cluster and worker probes; persisted checks through `ReadinessService` | mutable owners or general `AppState` in the endpoint |
+| `ReadinessContext` | live `/readyz` checks | read-only connection, SM, upload, cluster and worker probes; persisted checks through `ReadinessService` | mutable owners or general `ServerNode` in the endpoint |
 | `api_session_service()` | audited logout | session deletion and audit in one repository transaction | exposing an open transaction to HTTP handlers |
-| `ClusterAuthorityService` (constructed in `src/state/workers/cluster.rs`) | cluster signing-key and process-instance authority checks | purpose-specific PostgreSQL reads, exact local lease validation and ordered peer cache refresh | handing the shared traffic pool to cluster workers |
-| `ClusterMucOccupancyMaintenanceService` (constructed in `src/state/workers/cluster.rs`) | node-local MUC occupancy reconciliation | one authoritative snapshot and exact 90-second lease renewals before Redis soft-state refresh | room mutation or a general PostgreSQL pool in cluster maintenance |
+| `ClusterAuthorityService` (constructed in `src/node/workers/cluster.rs`) | cluster signing-key and process-instance authority checks | purpose-specific PostgreSQL reads, exact local lease validation and ordered peer cache refresh | handing the shared traffic pool to cluster workers |
+| `ClusterMucOccupancyMaintenanceService` (constructed in `src/node/workers/cluster.rs`) | node-local MUC occupancy reconciliation | one authoritative snapshot and exact 90-second lease renewals before Redis soft-state refresh | room mutation or a general PostgreSQL pool in cluster maintenance |
 | `ClusterMucOutboxWorkerContext::delivery_item` | stable audience item progress | exact completed check before transport and fenced completion after durable receipt | a transaction spanning network I/O or ACK before the receipt |
 | `ClusterMucOutboxWorkerContext::delivery_read` | committed MUC event and audience projections | event context for every row; immutable recipient snapshot only on cache miss; current-audience check only when the snapshot is absent, each in its own database turn | querying on the exact cached path, reviving a stale audience or merging the independent reads |
-| `NodeMessageContractVerifier` (constructed in `src/state/cluster_listener_message.rs`) | inbound clustered message source verification | exact C2S spool or MIX lease and payload reads; volatile and identity-free legacy paths skip SQL | accepting an unverified Redis payload or passing a pool into cluster transport |
-| `ClusterInstanceReleaseService` (constructed in `src/state/cluster_shutdown.rs`) | final node-instance lease release | one exact PostgreSQL release after signed publication has quiesced | release on publication-fence timeout or the failure supervisor inheriting release authority |
-| `abuse_key_authority_probe()` (`src/state/workers/abuse.rs`) | periodic anti-abuse key deployment check | one repository validation under the worker's unchanged timeout | general readiness probes or direct pool access in the guard |
-| `background_housekeeping_context()` (`src/state/workers/maintenance.rs`) | independent expired-state cleanup steps | state-owned repository and retention policy with the same two shared counters | direct pool access or a cross-step transaction in main |
-| `retention_context()` / `subscription_cleanup_context()` (`src/state/workers/maintenance.rs`) | standalone archive retention and subscription cleanup | separate repository instances over the existing primary pool, each with its own readiness and counters | merging worker transactions or handing main the shared pool |
+| `NodeMessageContractVerifier` (constructed in `src/node/adapters/cluster_listener_message.rs`) | inbound clustered message source verification | exact C2S spool or MIX lease and payload reads; volatile and identity-free legacy paths skip SQL | accepting an unverified Redis payload or passing a pool into cluster transport |
+| `ClusterInstanceReleaseService` (constructed in `src/node/adapters/cluster_shutdown.rs`) | final node-instance lease release | one exact PostgreSQL release after signed publication has quiesced | release on publication-fence timeout or the failure supervisor inheriting release authority |
+| `abuse_key_authority_probe()` (`src/node/workers/abuse.rs`) | periodic anti-abuse key deployment check | one repository validation under the worker's unchanged timeout | general readiness probes or direct pool access in the guard |
+| `background_housekeeping_context()` (`src/node/workers/maintenance.rs`) | independent expired-state cleanup steps | state-owned repository and retention policy with the same two shared counters | direct pool access or a cross-step transaction in main |
+| `retention_context()` / `subscription_cleanup_context()` (`src/node/workers/maintenance.rs`) | standalone archive retention and subscription cleanup | separate repository instances over the existing primary pool, each with its own readiness and counters | merging worker transactions or handing main the shared pool |
 | `challenge_issue_service()` / `challenge_cleanup_service()` | challenge issuance for HTTP/XMPP and background expiry | separate issue and cleanup grants over the private abuse guard | exposing arbitrary failure recording or proof verification to these callers |
 | `sasl_login_abuse_service()` / `PasskeyStartHttpContext` | login-specific SASL penalty and Passkey proof decisions | distinct read/failure and proof-verification grants | exposing a general abuse guard to either ingress |
 | `PasswordChangeHttpContext` | authenticated password change, abuse proof and exact request replay | credential-generation checks, proof admission, password publication and response commit in repository-owned transactions | socket teardown and full application state |
@@ -492,7 +492,7 @@ teardown services are likewise owned by the session and room modules.
 | `OperationWorkerRuntime` / `OperationWorkerControl` | administrator operation claim and point-of-no-return effect fence | typed claim, target snapshot, renewal and effect handles assembled before `serve`; effect starts only after its durable fence commits | full application state in the worker loop or an effect before commit |
 | `OperationSessionEffects` / `OperationTlsReloadEffects` / `OperationIslandEffects` / `OperationPanicEffects` | committed administrator effects | exact session routes, TLS reload, island-mode convergence and local cancellation before durable SM teardown | a broad state handle in the operation execution loop |
 | `AdminSessionCleanupContext` | administrator session-cleanup lease, local route fence and remote notification | claim, renewal, exact local fence, signed remote control and completion or retry | delivery inside a database transaction or unrelated application state |
-| `account_revocation_worker_context()` (`src/state/workers/cluster.rs`) | committed account-revocation consumption | typed consumer, live cluster-instance identity, local route fencing before exact revision ACK and bounded continuation | ACK before local sessions are fenced or broad `AppState` authority in the worker |
+| `account_revocation_worker_context()` (`src/node/workers/cluster.rs`) | committed account-revocation consumption | typed consumer, live cluster-instance identity, local route fencing before exact revision ACK and bounded continuation | ACK before local sessions are fenced or broad `ServerNode` authority in the worker |
 | `session_authority_sweep_service()` | periodic account and device-epoch authority checks | read-only repository queries and ordered stale-route decisions | local route cancellation or Redis publication |
 | `cluster_failure_supervisor_context()` | periodic cluster identity and lease validation | exact PostgreSQL authority, bounded replay and route cleanup, peer-cache refresh and fail-closed shutdown | Redis publication, signing, or unrelated application state |
 | `cluster_maintenance_locals()` | process-local snapshots for cluster reconciliation | exact session and MUC occupant snapshots plus maintenance counters | database, Redis, or signing authority |
@@ -530,12 +530,12 @@ teardown services are likewise owned by the session and room modules.
 | `push_service()` | push-enable/disable policy and payload eligibility | subscription/delivery-attempt persistence | claiming a push provider accepted a message without its completion boundary |
 | `upload_service()` | slot reservation ownership, quota, MIME/size and locator policy | injected reservation and upload-lifecycle repository; HTTP owns byte streaming while the service owns claim, stage, promotion and deletion calls | holding a PostgreSQL transaction during upload/download bytes |
 | `extdisco_service()` | XEP-0215 service targeting, advertised STUN/TURN records, eligibility and credential issuance windows | owns the public service projection and private TURN secret | exposing the long-term secret or allowing protocol handlers to select records from broad configuration |
-| `SessionCleanupService` | exact expired/revoked session teardown plan | typed local ownership, SM revocation, presence, MUC, MIX and route-release handles; `Arc<AppState>` is used only during construction | deleting a replacement connection or retaining broad state after construction |
+| `SessionCleanupService` | exact expired/revoked session teardown plan | typed local ownership, SM revocation, presence, MUC, MIX and route-release handles; `Arc<ServerNode>` is used only during construction | deleting a replacement connection or retaining broad state after construction |
 
 Except for the `SessionCleanupService` construction seam, the listed services
 are assembled by the composition root and exposed through crate-private module
 accessors or narrow runtime contexts. The architecture gate inventories the same
-33 module service accessor names and requires an empty AppState service-accessor
+33 module service accessor names and requires an empty ServerNode service-accessor
 inventory.
 Services return typed domain outcomes. Transport-specific XML/JSON, SQL row
 types, raw `PgPool`, open transactions, secret bytes and live socket senders
@@ -676,7 +676,7 @@ not additional authorization boundaries.
 | upload store and safety authority | upload adapter/reconciler | HTTP transfer and upload worker | external bytes fenced by durable locator/version/digest | stop admission; leases/jobs recover incomplete transfer |
 | worker and connection registries | composition root/registry methods | readiness and coordinated shutdown | process-local identity/generation | close registration gates, cancel, drain and report unreaped entries |
 | runtime federation/admin policy cache | critical refresh workers | request/session policy evaluation | PostgreSQL authoritative, cache versioned/replaceable | critical staleness/failure cancels service |
-| admission governors | `AppState` bounded semaphores/per-IP maps and `AbuseGuard` | C2S, upload, polling and action ingress | process-local permits plus PostgreSQL durable actor/cooldown state | permits drop; durable penalties survive restart |
+| admission governors | `ServerNode` bounded semaphores/per-IP maps and `AbuseGuard` | C2S, upload, polling and action ingress | process-local permits plus PostgreSQL durable actor/cooldown state | permits drop; durable penalties survive restart |
 | secret/key authorities | private typed owners described below | purpose-specific service/adapter only | memory-zeroized where supported; selected generations durable by ID | no secret logging; process memory is discarded on exit |
 
 `state.rs` currently combines construction, live session/MUC registries,
@@ -684,26 +684,26 @@ SM/MUC suspension coordination, runtime policy caches, admission governors and
 secret accessors. The target decomposition is `StateBuilder`,
 `LiveSessionRegistry`, `MucLiveRegistry`, `SmMucSuspensionCoordinator`,
 `RuntimePolicyCache`, `AdmissionGovernors` and `SecretAuthorities`, with
-`AppState` retaining only composition and narrow read-only capability access.
+`ServerNode` retaining only composition and narrow read-only capability access.
 
 ## Secret and key authority ledger
 
 | Secret/key | Runtime owner and purpose | Source/rotation | Loss or compromise effect | Never allowed |
 | --- | --- | --- | --- | --- |
 | TLS private key | reloadable TLS owner for C2S, S2S and XEP-0225 external-component TLS | permission-checked certificate/key files; atomic reload policy | loss blocks restart/reload; compromise permits those XMPP endpoint impersonations | logs, API responses or general service access; Northstar's Axum HTTP/metrics listeners are plaintext and production HTTPS belongs to the reverse proxy |
-| application bootstrap-admin password | startup-only account bootstrap call before `AppState` construction | optional environment/secret-file input; it creates the configured administrator only when the users table is empty, leaves an existing administrator/password unchanged, and clears the configuration field after use | loss prevents first-account creation; compromise can choose that first administrator password only during empty-database startup and is **not** a password-rotation path | confusion with the PostgreSQL bootstrap superuser, retention in `AppState`, logs or child arguments |
+| application bootstrap-admin password | startup-only account bootstrap call before `ServerNode` construction | optional environment/secret-file input; it creates the configured administrator only when the users table is empty, leaves an existing administrator/password unchanged, and clears the configuration field after use | loss prevents first-account creation; compromise can choose that first administrator password only during empty-database startup and is **not** a password-rotation path | confusion with the PostgreSQL bootstrap superuser, retention in `ServerNode`, logs or child arguments |
 | abuse HMAC current/previous generations | `AbuseGuard`; actor pseudonyms and purpose-derived durable message/retraction identity keys | required protected file in production; controlled generation overlap | loss breaks stable mapping/recovery; compromise weakens privacy and durable identity integrity | reuse as FAST/API/cluster key or expose derived content keyrings to protocol code |
 | FAST master key | authentication service/token keyring | protected file; current issuance plus bounded prior-token lifetime | loss invalidates FAST chains; compromise permits token forgery within policy | reuse as dummy SCRAM or log token/key material |
 | dummy SCRAM key | authentication anti-enumeration path | independent protected file | loss changes dummy verifier behavior; compromise only weakens that masking boundary | equality with FAST or user credential material |
 | Dialback secret | S2S Dialback verifier | protected shared file is mandatory with Redis clustering; without one, single-node startup currently generates a process-local random secret in every environment | restart with a generated value invalidates outstanding/stable Dialback proofs; compromise permits forged callback proofs within other checks | process-local random value in clustered mode or an assumption that single-node production is restart-stable without a configured file |
 | API control/cursor current/previous keys | API operation/idempotency/cursor key owner | protected files with bounded overlap | loss invalidates control tokens/records; compromise permits forgery/tampering attempts | exposure through general config, logs or client JS |
 | cluster Ed25519 private key | cluster envelope signer | protected key file with key-ID deployment authority | loss isolates node; compromise permits signed control-envelope forgery until revoked | Redis storage or treating possession as DB lease authority |
-| component credentials | private `AppState.component_credentials` map; the handshake receives only an exact credential clone while the separate component registry owns live routes | protected components JSON may contain an inline secret or a `secret_file`; file form is preferred and provenance is hashed | loss breaks component auth; compromise grants only configured component/domain scope | plaintext logs, protocol-wide map access, or implicit wildcard domains |
+| component credentials | private `ServerNode.component_credentials` map; the handshake receives only an exact credential clone while the separate component registry owns live routes | protected components JSON may contain an inline secret or a `secret_file`; file form is preferred and provenance is hashed | loss breaks component auth; compromise grants only configured component/domain scope | plaintext logs, protocol-wide map access, or implicit wildcard domains |
 | TURN shared secret | `ExtDiscoService` credential derivation | mutually exclusive inline environment value or protected file; derived credentials have bounded TTL | loss breaks issued credentials; compromise permits TURN credential minting | returning the long-term secret to clients |
 | metrics bearer | metrics listener authentication | protected file; required for non-loopback bind | loss blocks scraper; compromise exposes bounded operational telemetry | URL/query string or metric label |
 | PostgreSQL URLs/passwords | pool/client wrapper owners | mutually exclusive value/file; mounted role-specific secret | compromise grants exactly that role's capabilities | PostgreSQL bootstrap URL in runtime, command URL in protocol, or command-line password |
 | Redis URL/authentication material | `ClusterManager` transport connector | protected value/file configuration associated only with cluster mode | loss disables cluster transport; compromise grants the configured Redis authority but not PostgreSQL business authority | protocol/service exposure, logs, or treating Redis authentication as message/account authorization |
-| Redis mTLS client private key | `ClusterManager` TLS connector | permission-checked protected key file with configured client certificate/CA | loss prevents Redis TLS authentication; compromise permits client impersonation to the configured Redis trust domain | reuse as the XMPP TLS identity, general `AppState` exposure or logging |
+| Redis mTLS client private key | `ClusterManager` TLS connector | permission-checked protected key file with configured client certificate/CA | loss prevents Redis TLS authentication; compromise permits client impersonation to the configured Redis trust domain | reuse as the XMPP TLS identity, general `ServerNode` exposure or logging |
 | S3 credentials/KMS identifier | object-store adapter | atomic credential bundle or ambient workload identity | loss blocks object I/O/reconciliation; compromise reaches configured bucket/prefix | embedded public config, logs or unbounded provider scope |
 | backup signing/age keys | separate backup/restore jobs | offline/mounted signer, recipients and restore identities | loss blocks authenticity/decryption; compromise affects backup trust/confidentiality | runtime container mount or repurposing restore identity as rollback encryption |
 
@@ -711,7 +711,7 @@ secret accessors. The target decomposition is `StateBuilder`,
 
 | Class | Examples | Update owner | Runtime interpretation |
 | --- | --- | --- | --- |
-| immutable startup configuration | binds, domain, pool sizes, feature enablement, storage backend | environment/secret files before `AppState` | validated once; change requires controlled restart |
+| immutable startup configuration | binds, domain, pool sizes, feature enablement, storage backend | environment/secret files before `ServerNode` | validated once; change requires controlled restart |
 | durable runtime policy | federation rules, administration settings, service control | PostgreSQL command/admin transaction | critical watcher refreshes a versioned cache; database remains source of truth |
 | cluster notification/soft state | Redis route and invalidation envelopes | authenticated publishing node | wake/hint only; recipient revalidates PostgreSQL generation/lease |
 | local derived cache | Caps/disco, readiness and policy projections | owning cache/worker | bounded and replaceable; miss/staleness cannot silently authorize |
@@ -825,11 +825,11 @@ Use these rules before adding a module, dependency or public field:
 | long-running or periodic work | `WorkerRegistry` | unique name, criticality, heartbeat, restart/backoff and shutdown test | discarded `JoinHandle` or silent infinite loop |
 | configuration or secret | typed `Config` plus narrow owner | startup validation, file form, redaction/zeroization and deployment docs | new global environment reads throughout business code |
 | database authority | exact PostgreSQL role/capability manifest | init/reconcile SQL, static gate, isolated ACL test and operational docs | granting table-wide/runtime-owner rights because one call is missing |
-| process-global state | private `AppState` capability or dedicated registry | accessor/port and exact architecture budget update only when it narrows authority | new public raw pool, key bytes or generic service locator field |
+| process-global state | private `ServerNode` capability or dedicated registry | accessor/port and exact architecture budget update only when it narrows authority | new public raw pool, key bytes or generic service locator field |
 
 Every public feature also updates the smallest applicable set of tests,
 metrics, logs, README/operations, OpenAPI and `XEP_MATRIX.md`. The current
-exception classes—three public `AppState` capabilities, direct REST persistence
+exception classes—three public `ServerNode` capabilities, direct REST persistence
 and embedded service/runtime repository work—must decrease over time and may
 not be copied into new work.
 
@@ -837,8 +837,8 @@ not be copied into new work.
 
 Remaining architecture work:
 
-1. The three public `AppState` fields still form a broad same-process authority.
-2. Operation/background paths still hold `Arc<AppState>` where narrower ports
+1. The three public `ServerNode` fields still form a broad same-process authority.
+2. Operation/background paths still hold `Arc<ServerNode>` where narrower ports
    would make transaction and failure ownership clearer.
 3. Some REST routes still own direct pool/transaction access instead of a
    service port; the XMPP protocol tree's zero-database boundary does not yet
@@ -867,7 +867,7 @@ Remaining architecture work:
     modules. Their stanza parsing belongs there; their claim/retry/runtime
     loops should move to domain runtime modules that depend on service ports.
 12. Runtime startup still receives the application bootstrap-admin password and
-    performs the one-time administrator ensure operation before `AppState`.
+    performs the one-time administrator ensure operation before `ServerNode`.
     Moving that operation to a distinct one-shot bootstrap job would remove the
     secret and account-creation responsibility from the long-lived executable.
 13. PIE export publishes the completed file before appending its audit row. A

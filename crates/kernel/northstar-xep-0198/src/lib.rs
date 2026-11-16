@@ -7,7 +7,7 @@
 //! and deterministic lifecycle state transitions.
 //!
 //! It deliberately has no dependencies on Tokio, PostgreSQL/SQLx, sockets, network I/O,
-//! or server AppState.
+//! or server ServerNode.
 
 pub mod counter;
 pub mod error;

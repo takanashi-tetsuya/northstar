@@ -11,7 +11,6 @@ pub(crate) use adapters::operation_island_effects::OperationIslandEffects;
 pub(crate) use adapters::operation_muc_destroy_effects::OperationMucDestroyEffects;
 pub(crate) use adapters::operation_panic_effects::OperationPanicEffects;
 pub(crate) use adapters::operation_session_effects::OperationSessionEffects;
-pub(crate) use adapters::operation_tls_reload_effects::OperationTlsReloadEffects;
 pub(crate) use adapters::operation_worker_control::OperationWorkerControl;
 
 use crate::node::adapters::http_contexts::{

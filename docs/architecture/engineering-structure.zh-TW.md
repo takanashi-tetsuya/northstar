@@ -132,6 +132,7 @@ WP-495 後，operation runtime 的現行位置為
 | S30 傳輸 | WP-360–423 | 傳輸值、frame 執行、認證發佈與 `Action` 進入 `northstar-stream`，`StreamSession` 列出傳輸可向會話要求的操作（WP-360–365）；客戶端傳輸與 BOSH 改經 host（WP-366、367）後成為 `northstar-c2s`、`northstar-bosh`（WP-368、369）；S2S 的探索、TLS、串流 I/O、傳輸與外部元件經 `S2sHost`、`ComponentHost` 進入 `northstar-s2s`（WP-370–374）；REST 經 `HttpRepositories`、`HttpHost` 泛型後成為 `northstar-http`，WebSocket 升級進入 c2s（WP-375–383）；`ProtocolSession` 對 host 泛型（WP-386），各上下文的 glue 取得 host trait（WP-387–390、396–400），核心依呼叫圖由下而上改為泛型（WP-391–395），釘住核心的根 crate 型別移走（WP-401–407、410–412）後核心進入`northstar_stream::protocol`（WP-413）；glue 進入各 `-xmpp` crate（WP-414–418），核心項目收窄（WP-419）；S2S 入站的訊息、出席與 PEP 處理器進入各上下文介面卡（WP-420–422）；期間的 CI 與相依修正（WP-384、385、408、409）；記錄階段（WP-423）。盤點見 5.26 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯與搬移過的 PostgreSQL 套件通過。未完成：`state` 的 host 實作與接縫、IQ 路由表、服務探索與 S2S 入站分派等組合程式碼，等 S31，去處見 5.26 |
 | SQLx 0.9 | WP-435 | SQLx 0.8.6 升到 0.9.0。`query*()` 只收靜態字串或 `AssertSqlSafe`：執行時組出的 SQL（session 設定、識別字清單、測試 schema）在傳入處以 `sqlx::AssertSqlSafe` 標明，每個呼叫者傳一條字面 SQL 的四個 helper 改收 `&'static str`；`QueryBuilder` 去掉生命週期，`Migrator` 字面值以 `Migrator::DEFAULT` 補新欄位；`macros` 不再帶出 `json`，綁定 `serde_json` 值的 abuse、roster 介面卡自己開啟。lockfile 不再記錄 rsa，RUSTSEC-2023-0071 的忽略刪除 | migration checksum 不變；全部門禁、workspace 測試、各 `-postgres` crate 單獨建置與受影響的 PostgreSQL 套件通過；SQLite 驅動仍記錄 libsqlite3-sys 0.30.1，RUSTSEC-2026-0459 的忽略保留。已完成 |
 | S31 組合根 | WP-470–506 | 只服務叢集的路由與 standalone MUC 佔用維護進入 `northstar-cluster`（WP-470、471、483）；出席扇出進入 `northstar-roster-xmpp`（WP-472）；即時會話表與 MUC 佔用表成為 `northstar-stream` 的型別（WP-473、474）；MUC 的 SM 恢復、暫停端點轉換、本機驗證、關機通知與鎖定房間到期進入 stream 與 `northstar-muc-xmpp`（WP-475–478、489）；SM 暫停與復原、會話清理協調、容量租約維護、CAPS 效果分派、SM 拆除效果與離線出席經 port 進入 `northstar-stream`（WP-479、481、484、485、491）；PubSub 遞送 worker、CAPS 觸發的 PEP 遞送、政策檢查後的通知遞送與訂閱清理進入 pubsub 上下文（WP-482、488、490、492）；帳號刪除復原與拆除進入 `northstar-auth-xmpp`（WP-486）；S2S 入站分派與 IQ 路由進入 `northstar-s2s`（WP-493），服務探索與用戶端 IQ 路由表進入 `northstar_stream::protocol`（WP-494、497）；operation runtime 與上傳儲存遷移工具進入各自的上下文（WP-495、496）；`AppState` 的設定、遙測與服務 accessor 外觀退役，上下文模組擁有自己的服務，worker 在註冊處組合（WP-498–500）；`src/state` 改為 `src/node`，`AppState` 改名為 `ServerNode`（WP-501）；資料庫整合測試進入 tooling crate `northstar-db-it`（WP-502）；套件與二進位檔改名為 `northstar-server`（WP-503）；根 crate 刪除不再命名的依賴（WP-504），層級目錄只列仍存在的模組（WP-505）；quinn 的 RustSec 修正（WP-480）；記錄階段（WP-506）。WP-487 保留未用。盤點見 5.27 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯、受影響 crate 的單獨建置、搬移過的 PostgreSQL 套件與離線 CI 通過。未完成：讀原始碼的邊界門禁退役與 R9 的去留改為 S32；`runtime_control` 的重新整理（原 WP-487）、MIX outbox 等仍含流程的介面卡與 `xmpp/capabilities.rs` 留在根 crate，見 5.27 |
+| S32 門禁退役 | WP-507–510 | 讀原始碼的邊界門禁 `check-architecture-boundaries.mjs` 逐段對照 crate 圖盤點，刪除 crate 圖或其他門禁已涵蓋的 14 段（WP-507）；`xmpp/capabilities.rs` 的窄遙測移入 `node`，`src/xmpp` 只在測試中編譯（WP-508）；根 crate 的生產碼只剩組合一層，R9 退役（WP-509）；記錄階段（WP-510）。盤點見 5.28 | 測試名稱依路徑對應後不變；退役的兩項之外，全部門禁、Python 腳本測試與離線 CI 通過。未完成：保留的語義與接線檢查改寫為擁有 crate 的測試；`node/adapters` 中仍含流程的介面卡、`runtime_control` 的重新整理、`ServerNode` 的即時狀態與 `SessionHost` 的拆分，改為 S33，見 5.28 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -1266,7 +1267,49 @@ S29 接在其上。
 - `stage4_replay`、`direct_replay` 與 `xmpp` 下的協定測試和 Stage 4 harness（約 3.6 萬行）是 `#[cfg(test)]`，以
   `ServerNode` 建構，留在根 crate 的二進位檔測試中。
 
-根 crate 由 256 檔 106,099 行變為 173 檔 55,549 行；生產碼 15,748 行，其餘是測試。
+根 crate 由 256 檔 106,099 行變為 173 檔 55,549 行；生產碼 15,748 行，其餘是測試。S32 的處理見 5.28。
+
+### 5.28 S32 盤點：門禁退役（`eb91c492`）
+
+`scripts/check-architecture-boundaries.mjs` 有 4,194 行、120 段、386 個失敗點（`throw`）。S32 逐段核對每段保護的
+性質能否由 crate 圖（`tools/architecture-validator` 的層級規則）或其他門禁保證：
+
+| 類別 | 段數 | 失敗點 | 行數 | 處理 |
+| --- | ---: | ---: | ---: | --- |
+| 依賴圖 | 7 | 12 | 129 | 刪除（WP-507）。這些段落檢查某 crate 不命名另一 crate 的 PostgreSQL 函式、`PgPool` 或 sqlx（stream 重放、會話清理、服務探索、SM 收尾、聯邦 MUC、訊息路由）。受檢 crate 不依賴被命名的 crate，驗證器也禁止加上該依賴：edge 不得依賴 adapter、workflows 或 sqlx，adapter 不得依賴其他 adapter 或 workflows |
+| 空洞 | 3 | 4 | 93 | 刪除。兩項 MIX producer 繞道檢查只在 `src/` 找 `db::` 呼叫，根 crate 已沒有；一項 regex 自測沒有任何掃描使用 |
+| 重複 | 4 | 1 | 18 | 刪除。runtime-control 重新整理（`check-subserver-boundaries`）、原生 MIX ACK（`check-execution-boundaries`）、admission 驗證器（`test-admission-execution` 對實際原始碼執行）與 subserver 邊界，各自的門禁仍在 CI 單獨執行 |
+| 語義 | 88 | 326 | 3,401 | 保留。交易與鎖的順序、permit、秘密的持有與可見性、outbox、MIX worker 的通道與期限等不是依賴邊，crate 圖無法保證 |
+| 組合根接線 | 18 | 43 | 553 | 保留。`ServerNode` 欄位私有、worker 的窄 context、啟動與關機順序；`northstar-server` 的組合測試可取代 |
+
+刪除後門禁剩 3,977 行、369 個失敗點；保留的段落維持原本的模式、訊息與順序，只被刪除段落使用的 import 與 helper
+一併刪除。
+
+新決定：
+
+- 讀原始碼的門禁不整體改寫。語義檢查要先在擁有該行為的 crate 有替代測試才能退役（目標架構 4.7）；盤點已為每段列出
+  擁有者與替代方式，例如 MIX worker 的通道、期限與排空由 `northstar-mix-xmpp` 以暫停時鐘的測試取代，連線預算與模式
+  矩陣由 `northstar-config` 的邊界測試取代，runtime control 的連線保留與重試由 `northstar-server` 的測試取代。這些
+  改寫隨 S33 移動對應程式碼時一起做。
+- `src/xmpp` 在生產中只提供兩樣東西：`capabilities.rs` 的窄遙測與 `ClientSession` 別名。遙測原樣移為
+  `node/telemetry.rs`，別名定義在 `node.rs`，`src/main.rs` 以 `#[cfg(test)]` 宣告 `mod xmpp`（WP-508）。根 crate 的
+  `MessageHandlers` trait 只有一個轉呼叫 `northstar_message_xmpp::messaging::message` 的方法，session host 改為直接
+  呼叫後刪除。凍結工具釘住的 `xmpp::protocol::messaging::saved_case` 與 `src/xmpp/mod.rs` 不動。
+- R9 退役（WP-509）。WP-508 後 R9 走到的生產碼是 113 檔、15,532 行，全部屬於組合層，基線 0 條，門禁不可能再發現
+  違規。它曾排序的每一層都已是 workspace crate，方向由 R10 執行。
+
+根 crate 中仍有的程式碼與去處（S33）：
+
+- `node/adapters/*` 中仍含流程的介面卡：`mix_outbox.rs`、`mix_presence_recovery.rs`、`message_carbon_delivery.rs`、
+  `message_cluster_routing.rs` 等，依擁有者移入 room 與 message 上下文。
+- `node/adapters/runtime_control{,_refresh}.rs`：執行期控制與設定重新整理，移入 operations 上下文。
+- `ServerNode` 直接持有的即時會話表、caps 快取與索引、連線計數、叢集與 BOSH 管理器，移入擁有它的上下文模組（目標
+  架構 4.4）。
+- `SessionHost` 約百個方法，`ServerNode` 對它的實作有 935 行，依關注點拆分。
+- 隨上列程式碼移動，把對應的語義與接線檢查改寫為擁有 crate 的測試，再從門禁刪除。
+
+根 crate 由 173 檔 55,549 行變為 173 檔 55,519 行；生產碼由 119 檔 15,748 行變為 113 檔 15,532 行。門禁腳本、測試、目錄
+與 CI 共淨刪除 1,145 行。
 
 ## 6. 委派與驗收協議
 
@@ -1501,6 +1544,9 @@ S29 接在其上。
      實驗程式的選取規則都要一起盤點。文件門禁遇到第一個失效連結就停止，要反覆執行到全部通過（S31）。
    - 根 crate 刪除依賴後，外部 crate 的 feature 可能只剩 workspace 的 feature 統一在提供；要確認實際使用者自己宣告了
      相同的 feature（S31）。
+   - 模組改為只在測試中編譯後，只為生產項目存在的 import 在測試建置中成為未使用；`-D warnings` 的 clippy 要包含測試
+     目標才會發現（S32）。
+   - 盤點報告的行範圍是記帳用的，不是刪除補丁：保留的檢查仍用到的宣告與 helper 要留下（S32）。
 10. Codex（S31 的 WP-483 起，2026-11-16）：agy 額度用盡期間，程式修改改由 Codex CLI（`gpt-6.1-sol`）執行，呼叫方式與
     限制同第 8 點，`model_reasoning_effort` 依任務難度選擇；第 1、3、4、7 點與第 9 點的機械搬移做法照舊。agy 恢復後回到
     第 9 點。
@@ -1929,3 +1975,7 @@ Stage 證據仍綁定其原提交。
 | WP-504 | 完成：根 crate 刪除組合根不再命名的依賴 | 見 `git log --grep '\[WP-504\]'` |
 | WP-505 | 完成：根 crate 的層級目錄只列仍存在的模組 | 見 `git log --grep '\[WP-505\]'` |
 | WP-506 | 完成：記錄 S31 的階段與盤點（5.27）、4.3、4.4、4.6。WP-470–505 依序接到 WP-435 之上，WP-487 保留未用；每個 WP 的 fmt、clippy、workspace 測試、層級、模糊測試、受影響 crate 的單獨建置、全部門禁與 Python 腳本測試通過，離線 CI 在推送前通過 | 見 `git log --grep '\[WP-506\]'` |
+| WP-507 | 完成：刪除 crate 圖或其他門禁已涵蓋的 14 段邊界檢查 | 見 `git log --grep '\[WP-507\]'` |
+| WP-508 | 完成：`src/xmpp` 只在測試中編譯，窄遙測移為 `node/telemetry.rs` | 見 `git log --grep '\[WP-508\]'` |
+| WP-509 | 完成：根 crate 的層級門禁（R9）退役 | 見 `git log --grep '\[WP-509\]'` |
+| WP-510 | 完成：記錄 S32 的階段與盤點（5.28）、目標架構 4.7 與第 5 節。WP-507–509 依序接到 WP-506 之上；每個 WP 的 fmt、clippy、workspace 測試、模糊測試、全部門禁與 Python 腳本測試通過，離線 CI 在推送前通過 | 見 `git log --grep '\[WP-510\]'` |

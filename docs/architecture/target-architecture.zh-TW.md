@@ -165,7 +165,9 @@ edge 與子伺服器。服務定位器式的 accessor 已刪除，各上下文�
 - `catalog/source-layers.json`（R9）原定在 `src/` 消失時退役。`src/` 留作組合根，S32 後它的生產碼只剩組合一層，
   R9 因此退役（WP-509），層級只由 crate 圖執行。
 - 讀原始碼文字的門禁逐支處理：邊界已由 crate 圖保證的直接刪除（例如「協定模組不得使用 `db::`」）；交易順序、
-  outbox 等語義檢查改寫成擁有該行為的 crate 中的測試；在那之前，每個 WP 都列出它要更新的門禁。
+  outbox 等語義檢查改寫成擁有該行為的 crate 中的測試；在那之前，每個 WP 都列出它要更新的門禁。S32 盤點了
+  `check-architecture-boundaries.mjs` 的 120 段，刪除 crate 圖或其他門禁已涵蓋的 14 段（WP-507）；其餘是語義與
+  組合根接線檢查，隨 S33 移動程式碼時改寫為測試。
 
 ## 5. 遷移順序
 
@@ -182,7 +184,8 @@ edge 與子伺服器。服務定位器式的 accessor 已刪除，各上下文�
 | S29 會話與叢集 | `session` 上下文與 `northstar-cluster` | 路由表、SM、叢集監聽離開根 crate。已完成（WP-329–356，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.25）：`ProtocolSession` 與 `state` 中把叢集、會話清理綁到 `AppState` 的接縫留待 S30、S31 |
 | S30 傳輸 | `northstar-c2s`、`northstar-bosh`、`northstar-s2s`、`northstar-http`；`ProtocolSession` 拆解完畢 | 根 crate 只剩組合程式碼。已完成（WP-360–423，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.26）：`ProtocolSession` 在 `northstar-stream`，glue 與 S2S 入站處理器在各 `-xmpp` crate，處理器 trait 直接為 `ProtocolSession<H>` 實作，`StanzaHandler` 與 `SessionContext` 不再需要；`state` 的 host 實作與接縫、IQ 路由表、服務探索與 S2S 入站分派留待 S31 |
 | S31 組合根 | 根 crate 更名為 `northstar-server`，`AppState` 刪除；R9 與其餘讀原始碼的邊界門禁退役；文件改寫 | `src/` 只有組合根；全部門禁與完整 CI 通過。已完成（WP-470–506，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.27）：根 crate 的流程進入各上下文與 edge，`AppState` 的 accessor 外觀刪除，組合根成為 `src/node` 的 `ServerNode`，資料庫整合測試進入 `northstar-db-it`，套件與二進位檔改名為 `northstar-server`；門禁退役改為 S32，MIX outbox 等仍含流程的介面卡、`runtime_control` 與 `ServerNode` 持有的即時狀態留在組合根 |
-| S32 門禁退役 | 逐項核對 `check-architecture-boundaries.mjs` 等讀原始碼的門禁：邊界已由 crate 圖保證的刪除，交易順序、outbox 等語義檢查改寫為擁有該行為的 crate 中的測試；決定 R9 在只剩兩層的組合根是否保留 | 每支刪除的檢查都對應到 crate 圖規則或測試；全部門禁與完整 CI 通過 |
+| S32 門禁退役 | 逐項核對 `check-architecture-boundaries.mjs` 等讀原始碼的門禁：邊界已由 crate 圖保證的刪除，交易順序、outbox 等語義檢查改寫為擁有該行為的 crate 中的測試；決定 R9 在只剩兩層的組合根是否保留 | 每支刪除的檢查都對應到 crate 圖規則或測試；全部門禁與完整 CI 通過。已完成（WP-507–510，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.28）：刪除 14 段由 crate 圖或其他門禁涵蓋的檢查，`src/xmpp` 只在測試中編譯，R9 退役；語義檢查的改寫隨 S33 進行 |
+| S33 組合根收斂 | `node/adapters` 中仍含流程的介面卡移入 room、message、operations 上下文；`ServerNode` 的即時狀態移入擁有它的上下文模組；`SessionHost` 依關注點拆分；移動的程式碼對應的語義與接線檢查改寫為擁有 crate 的測試後從門禁刪除 | 組合根只剩建構、host 綁定與 worker 註冊；全部門禁與完整 CI 通過 |
 
 與其他計劃的關係：模組化執行計劃的 C1（PubSub）與 C2（MAM）是語義上的重構，在對應上下文搬進新 crate 後於新
 結構中進行；D1 由 S18 與 S30 吸收；R1–R3 不受影響。

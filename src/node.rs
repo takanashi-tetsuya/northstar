@@ -56,8 +56,6 @@ pub(crate) use northstar_muc_xmpp::resume::RestoredLocalMucOccupants;
 pub(crate) use northstar_stream::local_routes::muc::CommittedLocalMucResume;
 mod workers;
 
-use self::adapters::federation_policy::*;
-use self::adapters::runtime_control::*;
 #[cfg(test)]
 use self::construction::*;
 use self::modules::abuse::*;
@@ -90,10 +88,6 @@ use northstar_stream::local_routes::session::{AccountRevocationRoutes, OnlineSes
 use northstar_stream::local_routes::session_table::*;
 #[cfg(test)]
 use northstar_stream::local_routes::suspended_muc::*;
-
-#[cfg(test)]
-#[path = "node/runtime_control_health_tests.rs"]
-mod runtime_control_health_tests;
 
 #[allow(unused_imports)]
 pub use northstar_protocol_runtime::caps::CapsKey;
@@ -214,9 +208,7 @@ impl ServerNode {
         cancel: CancellationToken,
     ) {
         let context = Arc::new(
-            adapters::runtime_control_refresh::RuntimeControlRefreshContext::from_state(
-                &state, connection,
-            ),
+            adapters::runtime_control_refresh::runtime_control_coordinator(&state, connection),
         );
         let max_silence = Duration::from_secs(5);
         let diagnostic_cancel = cancel.clone();

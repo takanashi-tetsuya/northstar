@@ -70,9 +70,9 @@ rejectsMutation('maintenance worker inventory stays exact', 'subservers', '"arch
 rejectsMutation('standalone peer restart keeps core-only role', 'cluster', '"$binary" serve core >"$redis_tmp/cluster-b.log"', '"$binary" serve standalone >"$redis_tmp/cluster-b.log"', /cluster startup\/restart/);
 rejectsMutation('document residual authority and detection limit', 'responsibility', 'bounded overlap', 'exclusive fencing', /document lacks/);
 rejectsMutation('document the actual maintenance watchdog', 'responsibility', '2 × retention interval + 60 s', 'none', /stale role-qualified worker semantics/);
-rejectsMutation('idle control ticks cannot clear database errors', 'state', 'heartbeat.pulse();', 'heartbeat.ok();', /control health/);
-rejectsMutation('control errors cannot be reported as healthy', 'state', 'heartbeat.error(error);', 'heartbeat.ok();', /control health/);
-rejectsMutation('successful database reads are distinguished from idle ticks', 'state', 'else if observed_database {', 'else if true {', /control health/);
+rejectsMutation('idle control ticks cannot clear database errors', 'runtimeControlHealth', 'heartbeat.pulse();', 'heartbeat.ok();', /control health/);
+rejectsMutation('control errors cannot be reported as healthy', 'runtimeControlHealth', 'heartbeat.error(error);', 'heartbeat.ok();', /control health/);
+rejectsMutation('successful database reads are distinguished from idle ticks', 'runtimeControlHealth', 'else if observed_database {', 'else if true {', /control health/);
 rejectsMutation('coordinator must use the reviewed error-preserving health report', 'runtimeControl',
   'report_runtime_control_health(&heartbeat, observed_database, first_error);',
   'heartbeat.ok();', /control coordinator/);

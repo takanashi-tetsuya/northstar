@@ -9,7 +9,8 @@ const files = { main: 'src/main.rs', workerComposition: 'src/node/workers.rs', s
   pubsubProtocol: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/protocol_session.rs', pubsubDelivery: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/delivery.rs',
   pubsubAdapter: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/pubsub.rs',
   pubsubService: 'crates/contexts/pubsub/northstar-pubsub-application/src/service.rs',
-  state: 'src/node.rs', runtimeControl: 'src/node/adapters/runtime_control_refresh.rs',
+  state: 'src/node.rs', runtimeControl: 'crates/contexts/operations/northstar-operations-application/src/runtime_control_coordinator.rs',
+  runtimeControlHealth: 'crates/contexts/operations/northstar-operations-application/src/runtime_control_coordinator.rs',
   cluster: 'scripts/cluster-wsl.sh', responsibility: 'docs/PROGRAM_RESPONSIBILITIES.md' };
 
 function requireBoundary(condition, message) {
@@ -48,13 +49,13 @@ export function readSubserverSources() {
       ? readProductionModule(file, { root }) : fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
-export function verifySubserverBoundaries({ main, workerComposition, subservers, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubDelivery, pubsubAdapter, pubsubService, state, runtimeControl, cluster, responsibility }) {
+export function verifySubserverBoundaries({ main, workerComposition, subservers, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubDelivery, pubsubAdapter, pubsubService, state, runtimeControl, runtimeControlHealth, cluster, responsibility }) {
   // Alternate control ticks can legitimately perform no SQL. They must not
   // reset a lost advisory-lock session's consecutive database error count.
-  const report = codeOnly(body(state, 'fn report_runtime_control_health(')).replace(/\s+/g, '');
+  const report = codeOnly(body(runtimeControlHealth, 'fn report_runtime_control_health(')).replace(/\s+/g, '');
   requireBoundary(report === 'ifletSome(error)=error{heartbeat.error(error);}elseifobserved_database{heartbeat.ok();}else{heartbeat.pulse();}',
     'control health must preserve errors on idle ticks and clear them only after successful database observation');
-  const coordinator = body(runtimeControl, 'pub(in crate::node) async fn run(');
+  const coordinator = body(runtimeControl, 'pub async fn run(');
   requireBoundary(coordinator.includes('let mut observed_database = false;') &&
     coordinator.includes('report_runtime_control_health(&heartbeat, observed_database, first_error);') &&
     !/heartbeat\.(?:ok|error)\(/.test(coordinator) &&

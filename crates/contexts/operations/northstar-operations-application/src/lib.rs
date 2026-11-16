@@ -22,5 +22,6 @@ pub mod reports;
 pub mod retention_policy;
 pub mod retention_worker;
 pub mod runtime_control;
+pub mod runtime_control_coordinator;
 pub mod tls_reload;
 pub mod upload_admin;

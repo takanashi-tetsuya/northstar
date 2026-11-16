@@ -2,15 +2,6 @@
 
 use crate::node::*;
 
-pub(in crate::node) fn service_control_applies(
-    process_started_at: chrono::DateTime<chrono::Utc>,
-    control: &northstar_operations_postgres::admin_commands::DurableServiceControl,
-) -> bool {
-    control
-        .fired_at
-        .is_some_and(|fired_at| process_started_at < fired_at)
-}
-
 impl ServerNode {
     pub fn federation_domain_allowed(&self, domain: &str) -> bool {
         self.federation.effective_policy.domain_allowed(domain)

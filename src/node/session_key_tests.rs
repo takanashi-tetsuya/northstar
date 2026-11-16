@@ -6,13 +6,13 @@ use crate::node::{
     promote_suspended_muc_buffer, publish_local_muc_join_if_vacant_in,
     rebind_local_federated_muc_occupant_exact_in, refresh_local_muc_policy_exact_in,
     refresh_local_muc_presence_exact_in, remove_local_muc_occupant_exact_from,
-    seal_suspended_muc_buffer, service_control_applies, session_lookup,
-    set_local_muc_affiliation_exact_in, set_local_muc_role_exact_in,
-    snapshot_suspended_muc_buffer_for_resume, suspended_muc_resume_actor_matches,
-    suspended_occupant_is_created, transfer_muc_suffix_to_checkpoint, JoinedMucMembership,
-    LocalMucJoinPublication, LocalMucNicknameMove, LocalMucOccupantIdentity, MucOccupant,
-    MucOccupantEndpoint, SerializableMucOccupant, SessionLookup, SuspendedMucEndpoint,
-    SuspendedMucPhase, SuspendedMucRoute,
+    seal_suspended_muc_buffer, session_lookup, set_local_muc_affiliation_exact_in,
+    set_local_muc_role_exact_in, snapshot_suspended_muc_buffer_for_resume,
+    suspended_muc_resume_actor_matches, suspended_occupant_is_created,
+    transfer_muc_suffix_to_checkpoint, JoinedMucMembership, LocalMucJoinPublication,
+    LocalMucNicknameMove, LocalMucOccupantIdentity, MucOccupant, MucOccupantEndpoint,
+    SerializableMucOccupant, SessionLookup, SuspendedMucEndpoint, SuspendedMucPhase,
+    SuspendedMucRoute,
 };
 use dashmap::DashMap;
 use northstar_http::contexts::omemo_poll::{
@@ -1259,35 +1259,6 @@ fn cluster_muc_epoch_is_backward_compatible_and_exact() {
     let round_trip: SerializableMucOccupant =
         serde_json::from_str(&serde_json::to_string(&current).unwrap()).unwrap();
     assert_eq!(round_trip.sm_session_id, Some(id));
-}
-
-#[test]
-fn service_control_only_stops_processes_started_before_the_fire_epoch() {
-    let fired_at = chrono::Utc::now();
-    let control = northstar_operations_postgres::admin_commands::DurableServiceControl {
-        generation: uuid::Uuid::new_v4(),
-        action: "restart".to_owned(),
-        execute_at: fired_at - chrono::Duration::seconds(1),
-        fired_at: Some(fired_at),
-        expires_at: fired_at + chrono::Duration::minutes(5),
-    };
-    assert!(service_control_applies(
-        fired_at - chrono::Duration::seconds(1),
-        &control
-    ));
-    assert!(!service_control_applies(fired_at, &control));
-    assert!(!service_control_applies(
-        fired_at + chrono::Duration::seconds(1),
-        &control
-    ));
-    let pending = northstar_operations_postgres::admin_commands::DurableServiceControl {
-        fired_at: None,
-        ..control
-    };
-    assert!(!service_control_applies(
-        fired_at - chrono::Duration::seconds(1),
-        &pending
-    ));
 }
 
 #[test]

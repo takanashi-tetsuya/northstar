@@ -55,3 +55,46 @@ impl<R: RuntimeControlRepository> RuntimeControlService<R> {
         self.repository.service_control().await
     }
 }
+
+pub fn service_control_applies(
+    process_started_at: chrono::DateTime<chrono::Utc>,
+    control: &DurableServiceControl,
+) -> bool {
+    control
+        .fired_at
+        .is_some_and(|fired_at| process_started_at < fired_at)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{service_control_applies, DurableServiceControl};
+
+    #[test]
+    fn service_control_only_stops_processes_started_before_the_fire_epoch() {
+        let fired_at = chrono::Utc::now();
+        let control = DurableServiceControl {
+            generation: uuid::Uuid::new_v4(),
+            action: "restart".to_owned(),
+            execute_at: fired_at - chrono::Duration::seconds(1),
+            fired_at: Some(fired_at),
+            expires_at: fired_at + chrono::Duration::minutes(5),
+        };
+        assert!(service_control_applies(
+            fired_at - chrono::Duration::seconds(1),
+            &control
+        ));
+        assert!(!service_control_applies(fired_at, &control));
+        assert!(!service_control_applies(
+            fired_at + chrono::Duration::seconds(1),
+            &control
+        ));
+        let pending = DurableServiceControl {
+            fired_at: None,
+            ..control
+        };
+        assert!(!service_control_applies(
+            fired_at - chrono::Duration::seconds(1),
+            &pending
+        ));
+    }
+}

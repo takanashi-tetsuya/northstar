@@ -382,8 +382,8 @@ for (const invariant of [
   }
 }
 const runtimeControlRefresh = rustItemBody(state, 'fn start_runtime_control_refresh(');
-const runtimeControlContext = read('src/node/adapters/runtime_control_refresh.rs');
-const runtimeControlRun = structBody(runtimeControlContext, 'pub(in crate::node) async fn run(');
+const runtimeControlContext = read('crates/contexts/operations/northstar-operations-application/src/runtime_control_coordinator.rs');
+const runtimeControlRun = structBody(runtimeControlContext, 'pub async fn run(');
 const runtimeControlAdapter = read('crates/contexts/operations/northstar-operations-postgres/src/runtime_control_repository.rs');
 for (const [call, description] of [
   ['runtime_control_snapshot', 'runtime administration and federation refresh'],

@@ -1,47 +1,54 @@
-//! One reserved PostgreSQL connection for durable runtime policy and control.
+//! Root policy targets for the durable runtime-control coordinator.
 
-use crate::node::{
-    report_runtime_control_health, service_control_applies, FederationWritePolicy,
-    RuntimeControlDiagnostics, RuntimeControlPhase, RuntimeFederationPolicy, ServerNode,
-};
-use anyhow::Result;
+use crate::node::{FederationWritePolicy, RuntimeFederationPolicy, ServerNode};
 use arc_swap::ArcSwap;
 use northstar_auth_application::account_admin::RegistrationCache;
 use northstar_auth_application::registration_availability::RegistrationAvailability;
 use northstar_federation_application::registry::S2sOutboundClearance;
-use northstar_operations_application::runtime_control::RuntimeControlService;
-use northstar_operations_postgres::runtime_control_repository::PostgresRuntimeControlRepository;
-use northstar_runtime::workers::WorkerHeartbeat;
-use sqlx::{pool::PoolConnection, Postgres};
-use std::{
-    sync::{Arc, OnceLock, Weak},
-    time::Duration,
+use northstar_operations_application::runtime_control_coordinator::{
+    RuntimeControlCoordinator, RuntimePolicyEffects,
 };
-use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
+use northstar_operations_postgres::runtime_control_repository::PostgresRuntimeControlRepository;
+use sqlx::{pool::PoolConnection, Postgres};
+use std::sync::Arc;
 
-pub(in crate::node) struct RuntimeControlRefreshContext {
-    liveness: Weak<()>,
-    connection: Arc<Mutex<Option<PostgresRuntimeControlRepository>>>,
+pub(in crate::node) struct RuntimePolicyApplier {
     federation_writes: Arc<FederationWritePolicy>,
     registration: RegistrationAvailability,
     federation_rules: Arc<ArcSwap<RuntimeFederationPolicy>>,
     s2s_connections: S2sOutboundClearance,
-    service_control_enabled: bool,
-    service_shutdown: Arc<OnceLock<CancellationToken>>,
-    process_started_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl RuntimeControlRefreshContext {
-    pub(in crate::node) fn from_state(
-        state: &ServerNode,
-        connection: PoolConnection<Postgres>,
-    ) -> Self {
-        Self {
-            liveness: Arc::downgrade(&state.runtime_control_liveness),
-            connection: Arc::new(Mutex::new(Some(PostgresRuntimeControlRepository::new(
-                connection,
-            )))),
+impl RuntimePolicyEffects for RuntimePolicyApplier {
+    async fn refresh_island_mode(&self, island_mode: bool) -> bool {
+        self.federation_writes.refresh(island_mode).await
+    }
+
+    fn apply_registration_closed(&self, closed: bool) {
+        self.registration.apply_current_closed(closed);
+    }
+
+    fn clear_for_island_mode(&self) {
+        self.s2s_connections.clear_for_island_mode();
+    }
+
+    fn store_federation_rules(&self, blacklist: Vec<String>, whitelist: Vec<String>) {
+        self.federation_rules
+            .store(Arc::new(RuntimeFederationPolicy {
+                blacklist: blacklist.into_iter().collect(),
+                whitelist: whitelist.into_iter().collect(),
+            }));
+    }
+}
+
+pub(in crate::node) fn runtime_control_coordinator(
+    state: &ServerNode,
+    connection: PoolConnection<Postgres>,
+) -> RuntimeControlCoordinator<PostgresRuntimeControlRepository, RuntimePolicyApplier> {
+    RuntimeControlCoordinator::new(
+        Arc::downgrade(&state.runtime_control_liveness),
+        PostgresRuntimeControlRepository::new(connection),
+        RuntimePolicyApplier {
             federation_writes: Arc::clone(&state.federation.federation_write_policy),
             registration: state.auth.registration.clone(),
             federation_rules: Arc::clone(&state.federation.federation_runtime_policy),
@@ -49,107 +56,9 @@ impl RuntimeControlRefreshContext {
                 .federation
                 .s2s_connection_registry
                 .outbound_clearance(),
-            service_control_enabled: state.config.enable_xmpp_service_control,
-            service_shutdown: Arc::clone(&state.service_shutdown),
-            process_started_at: state.process_started_at,
-        }
-    }
-
-    pub(in crate::node) async fn run(
-        &self,
-        heartbeat: WorkerHeartbeat,
-        diagnostic_cancel: CancellationToken,
-        max_silence: Duration,
-    ) -> Result<()> {
-        let mut diagnostics = RuntimeControlDiagnostics::new(diagnostic_cancel, max_silence);
-        let repository = self.connection.lock().await.take().ok_or_else(|| {
-            anyhow::anyhow!(
-                "runtime-control coordinator was restarted after its reserved connection ended"
-            )
-        })?;
-        // The connection cannot be returned to another worker after this
-        // attempt ends. Reads, application and service control stay serialized.
-        let mut control = RuntimeControlService::new(repository);
-        let mut interval = tokio::time::interval(Duration::from_millis(500));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut refresh_policy = true;
-        let mut acted_service_control = None;
-        loop {
-            interval.tick().await;
-            let Some(_state_alive) = self.liveness.upgrade() else {
-                return Ok(());
-            };
-
-            let mut first_error = None;
-            let mut observed_database = false;
-            if refresh_policy {
-                observed_database = true;
-                match control
-                    .policy_snapshot(|phase| diagnostics.database_read(phase))
-                    .await
-                {
-                    Ok(policy) => {
-                        diagnostics.enter(RuntimeControlPhase::PolicyApply);
-                        let was_island = self.federation_writes.refresh(policy.island_mode).await;
-                        self.registration
-                            .apply_current_closed(policy.registration_closed);
-                        if policy.island_mode && !was_island {
-                            self.s2s_connections.clear_for_island_mode();
-                        }
-                        self.federation_rules
-                            .store(Arc::new(RuntimeFederationPolicy {
-                                blacklist: policy.blacklist.into_iter().collect(),
-                                whitelist: policy.whitelist.into_iter().collect(),
-                            }));
-                    }
-                    Err(error) => {
-                        tracing::error!(
-                            ?error,
-                            "could not refresh durable administration settings"
-                        );
-                        first_error = Some(error);
-                    }
-                }
-            }
-
-            // The shutdown token is installed after ServerNode::new returns, so
-            // readiness must be read live rather than captured at construction.
-            if self.service_control_enabled && self.service_shutdown.get().is_some() {
-                observed_database = true;
-                diagnostics.enter(RuntimeControlPhase::ServiceControlRead);
-                match control.service_control().await {
-                    Ok(Some(control))
-                        if service_control_applies(self.process_started_at, &control)
-                            && acted_service_control != Some(control.generation) =>
-                    {
-                        acted_service_control = Some(control.generation);
-                        tracing::warn!(
-                            operation = %control.action,
-                            generation = %control.generation,
-                            execute_at = %control.execute_at,
-                            expires_at = %control.expires_at,
-                            "executing durable cluster-wide service control"
-                        );
-                        if let Some(shutdown) = self.service_shutdown.get() {
-                            shutdown.cancel();
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::error!(
-                            ?error,
-                            "could not poll durable cluster-wide service control"
-                        );
-                        if first_error.is_none() {
-                            first_error = Some(error);
-                        }
-                    }
-                }
-            }
-
-            report_runtime_control_health(&heartbeat, observed_database, first_error);
-            diagnostics.reported();
-            refresh_policy = !refresh_policy;
-        }
-    }
+        },
+        state.config.enable_xmpp_service_control,
+        Arc::clone(&state.service_shutdown),
+        state.process_started_at,
+    )
 }

@@ -3,39 +3,22 @@
 use anyhow::Result;
 use northstar_pubsub_application::PubSubService;
 use northstar_session_core::LocalCapsEpoch;
-use northstar_stream::local_routes::{
-    session::OnlineSession,
-    session_table::{local_caps_route_epoch_matches, session_entries_for_in, LocalSessionTable},
+use northstar_stream::local_routes::session_table::{
+    local_caps_route_epoch_matches, session_entries_for_in, LocalSessionTable,
 };
 use northstar_xmpp_types::jid::CanonicalJid;
-use std::{
-    future::Future,
-    sync::{atomic::Ordering, Arc},
-};
+use std::sync::{atomic::Ordering, Arc};
+
+use crate::notification_delivery::PubSubNotificationPorts;
 
 /// Access to CAPS observations, session privacy, cluster routes and federation.
-pub trait PepLastItemsPorts: Send + Sync {
+pub trait PepLastItemsPorts: PubSubNotificationPorts {
     /// One owned observation; its hints are read only after checking its epoch.
     type CapsSnapshot;
     fn caps_snapshot(&self, full_jid: &str) -> Option<Self::CapsSnapshot>;
     fn caps_snapshot_local_epoch(&self, snapshot: &Self::CapsSnapshot) -> Option<LocalCapsEpoch>;
     fn caps_snapshot_notify_nodes(&self, snapshot: Self::CapsSnapshot) -> Vec<String>;
     fn remove_local_caps_epoch(&self, full_jid: &str, epoch: LocalCapsEpoch);
-    fn privacy_allows_session(
-        &self,
-        session: &OnlineSession,
-        peer: &str,
-    ) -> impl Future<Output = Result<bool>> + Send;
-    fn remote_nodes(&self, recipient: &str) -> impl Future<Output = Result<Vec<String>>> + Send;
-    fn send_pubsub_notification(
-        &self,
-        node_id: &str,
-        recipient: &str,
-        message: &str,
-    ) -> impl Future<Output = Result<bool>> + Send;
-    /// Applies the static and runtime policies to a prepared domain.
-    fn federation_domain_allowed(&self, domain: &str) -> bool;
-    fn send_federated(&self, domain: &str, message: String) -> impl Future<Output = bool> + Send;
 }
 
 pub struct PepLastItemsContext<R, P> {
@@ -191,7 +174,7 @@ impl<R, P: PepLastItemsPorts> PepLastItemsContext<R, P> {
                 anyhow::bail!("no local PEP resource accepted the notification");
             }
         } else if self.federation_domain_allowed(domain) {
-            if !self.ports.send_federated(domain, message).await {
+            if !self.ports.send_federated(domain, message, None).await {
                 anyhow::bail!("federated PEP notification was not admitted to the durable outbox");
             }
         } else {

@@ -656,7 +656,9 @@ CAPS 索引所在的 `northstar-protocol-runtime` 則經根 crate 的 `PepLastIt
 - `xmpp/capabilities.rs`：多個上下文共用的窄遙測，隨各使用者移出，不屬於 pubsub（4.2 已改）。
 - `crates/contexts/pubsub/northstar-pubsub-xmpp/src/pep_last_items.rs`：CAPS 觸發的 PEP send-last 讀取、世代檢查與投遞；
   `state/pep_last_items.rs` 只保留建構與 CAPS、隱私、叢集及聯邦路由的介面卡。
-- `state/{pubsub_digest_worker,pubsub_event_outbox_worker,pubsub_notification_delivery,caps_effect_dispatch}`
+- `crates/contexts/pubsub/northstar-pubsub-xmpp/src/notification_delivery.rs`：持久 PubSub 通知的封鎖、隱私、show 值及本機、叢集、聯邦投遞；
+  `state/pubsub_notification_delivery.rs` 只保留建構與 `PubSubRootRoutes` 委派，並共用 `state/pep_last_items.rs` 的介面卡。
+- `state/{pubsub_digest_worker,pubsub_event_outbox_worker,caps_effect_dispatch}`
   與根 `pubsub.rs` 的投遞函式：經叢集與聯邦路由投遞，持有 `AppState`，S29 後仍在根 crate，隨 S30、S31 移出，見 5.25。
 - 根 `xmpp/protocol/{pubsub,pep,private,vcard}.rs` 的 `ProtocolSession` 入口與 trait 實作：S30 拆解
   `ProtocolSession` 時處理。

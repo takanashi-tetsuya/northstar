@@ -139,7 +139,8 @@ Key ownership:
   policy locks, item/subscription changes and the immutable outbox audience.
   XML rendering uses domain snapshots while those locks are held. Subscription
   notifications use the XEP-0060 builder from both service and protocol paths.
-  `PubSubNotificationDelivery` routes local, clustered and federated recipients
+  `crates/contexts/pubsub/northstar-pubsub-xmpp/src/notification_delivery.rs`
+  owns `PubSubNotificationDelivery`, which routes local, clustered and federated recipients
   after the durable outbox claims an event.
   Notification claims carry their payload digest and lease token without a
   hidden database row or a second copy of the payload.

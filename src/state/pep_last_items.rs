@@ -1,4 +1,4 @@
-//! Root construction and adapters for CAPS-triggered PEP send-last delivery.
+//! Root construction and shared adapters for PEP send-last and PubSub notification delivery.
 
 use super::{AppState, OnlineSession, RuntimeFederationPolicy};
 use crate::{
@@ -11,6 +11,7 @@ use northstar_message_application::messaging::MessageService;
 use northstar_protocol_runtime::caps::{
     CapsObservationOwner, CapsObservationSnapshot, CapsResourceIndex, PendingCapsIndex,
 };
+use northstar_pubsub_xmpp::notification_delivery::PubSubNotificationPorts;
 use northstar_pubsub_xmpp::pep_last_items::{PepLastItemsContext, PepLastItemsPorts};
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_session_core::LocalCapsEpoch;
@@ -38,17 +39,21 @@ impl AppState {
             self.pubsub.pubsub_service.clone(),
             LocalSessionTable::new(Arc::clone(&self.sessions)),
             self.config.domain.clone(),
-            PepLastItemsAdapters {
-                privacy: self.message.message_service.clone(),
-                observations: Arc::clone(&self.caps_by_jid),
-                pending_caps: Arc::clone(&self.pending_caps),
-                remote_routes: self.cluster.listener_presence_routes(),
-                remote_sender: self.cluster.node_delivery(),
-                federation: self.federation.federation_outbox.clone(),
-                static_policy: self.config.external_route_domain_policy(),
-                runtime_policy: Arc::clone(&self.federation.federation_runtime_policy),
-            },
+            self.pep_last_items_adapters(),
         )
+    }
+
+    pub(crate) fn pep_last_items_adapters(&self) -> PepLastItemsAdapters {
+        PepLastItemsAdapters {
+            privacy: self.message.message_service.clone(),
+            observations: Arc::clone(&self.caps_by_jid),
+            pending_caps: Arc::clone(&self.pending_caps),
+            remote_routes: self.cluster.listener_presence_routes(),
+            remote_sender: self.cluster.node_delivery(),
+            federation: self.federation.federation_outbox.clone(),
+            static_policy: self.config.external_route_domain_policy(),
+            runtime_policy: Arc::clone(&self.federation.federation_runtime_policy),
+        }
     }
 }
 
@@ -79,7 +84,9 @@ impl PepLastItemsPorts for PepLastItemsAdapters {
         self.pending_caps.remove_local_epoch(full_jid, epoch);
         self.observations.remove_local_epoch(full_jid, epoch);
     }
+}
 
+impl PubSubNotificationPorts for PepLastItemsAdapters {
     async fn privacy_allows_session(&self, session: &OnlineSession, peer: &str) -> Result<bool> {
         let active = session
             .privacy_active
@@ -117,7 +124,7 @@ impl PepLastItemsPorts for PepLastItemsAdapters {
             && self.runtime_policy.load().allows_domain(domain)
     }
 
-    async fn send_federated(&self, domain: &str, message: String) -> bool {
-        self.federation.send(domain, message, None).await
+    async fn send_federated(&self, domain: &str, message: String, sender: Option<String>) -> bool {
+        self.federation.send(domain, message, sender).await
     }
 }

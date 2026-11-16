@@ -6,6 +6,7 @@
 pub mod delivery;
 pub mod events;
 pub mod federated_pep;
+pub mod notification_delivery;
 pub mod payload;
 pub mod pep;
 pub mod pep_last_items;

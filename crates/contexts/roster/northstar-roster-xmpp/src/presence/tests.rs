@@ -5,6 +5,66 @@ use super::{
     unsubscribed_probe_response,
 };
 use northstar_presence_core::{directed_recipient_matches, offline_replay_became_eligible};
+use northstar_stream::local_routes::session::test_online_session;
+use uuid::Uuid;
+
+#[test]
+fn avatar_refresh_rewrites_parsable_presence_and_keeps_unparsable() {
+    for hash in [Some("stored-hash"), None] {
+        let (parsable, mut parsable_rx) =
+            test_online_session(Uuid::new_v4(), 7, Uuid::new_v4(), "parsable", 1);
+        let (unparsable, mut unparsable_rx) =
+            test_online_session(Uuid::new_v4(), 7, Uuid::new_v4(), "unparsable", 1);
+        let raw = "<presence from='alice@example.test/parsable'><status>Here</status><x xmlns='vcard-temp:x:update'><photo>old-hash</photo></x></presence>";
+        let malformed = "<presence from='alice@example.test/unparsable'";
+        *parsable.last_presence.write().unwrap() = Some(raw.into());
+        *unparsable.last_presence.write().unwrap() = Some(malformed.into());
+
+        super::refresh_avatar_presence([parsable.clone(), unparsable.clone()], hash);
+
+        let refreshed = parsable.last_presence.read().unwrap();
+        let document = roxmltree::Document::parse(refreshed.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            document.root_element().attribute("from"),
+            Some("alice@example.test/parsable")
+        );
+        assert_eq!(document.root_element().attribute("to"), None);
+        assert_eq!(
+            document
+                .descendants()
+                .find(|node| node.has_tag_name("status"))
+                .unwrap()
+                .text(),
+            Some("Here")
+        );
+        let photos = document
+            .descendants()
+            .filter(|node| node.has_tag_name(("vcard-temp:x:update", "photo")))
+            .collect::<Vec<_>>();
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0].text(), hash);
+        assert_eq!(
+            unparsable.last_presence.read().unwrap().as_deref(),
+            Some(malformed)
+        );
+        assert!(parsable_rx.try_recv().is_err());
+        assert!(unparsable_rx.try_recv().is_err());
+        assert!(!parsable.disconnect.is_cancelled());
+        assert!(!unparsable.disconnect.is_cancelled());
+    }
+}
+
+#[test]
+fn avatar_refresh_without_presence_is_a_no_op() {
+    let (session, mut receiver) =
+        test_online_session(Uuid::new_v4(), 7, Uuid::new_v4(), "absent", 1);
+    for hash in [Some("stored-hash"), None] {
+        super::refresh_avatar_presence([session.clone()], hash);
+        assert_eq!(*session.last_presence.read().unwrap(), None);
+        assert!(receiver.try_recv().is_err());
+        assert!(!session.disconnect.is_cancelled());
+    }
+}
 
 #[test]
 fn offline_replay_starts_on_first_nonnegative_available_priority() {

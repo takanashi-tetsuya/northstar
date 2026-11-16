@@ -241,17 +241,41 @@ pub async fn push_privacy_change(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use northstar_stream::local_routes::session::test_online_session;
+    use std::sync::atomic::AtomicU64;
     use std::sync::Mutex;
+
+    #[derive(Debug, PartialEq)]
+    enum RemoteCall {
+        Blocklist(String),
+        BlockingPresence(String, Vec<String>, Vec<String>, bool),
+        Privacy(String, String),
+        ResourceNodes(String),
+        NodePresence(String, String, String),
+        DomainPolicy(String),
+        FederatedPresence(String, String, String),
+    }
 
     #[derive(Default)]
     struct Routes {
         request_push: bool,
         remote_pushes: Mutex<Vec<String>>,
+        sessions: Vec<(String, OnlineSession)>,
+        failures: AtomicU64,
+        calls: Mutex<Vec<RemoteCall>>,
+        nodes: Vec<String>,
+        allowed_domains: Vec<String>,
     }
 
     impl RosterFanoutRoutes for Routes {
-        fn fanout_sessions(&self, _jid: &str) -> Vec<(String, OnlineSession)> {
-            Vec::new()
+        fn fanout_sessions(&self, jid: &str) -> Vec<(String, OnlineSession)> {
+            self.sessions
+                .iter()
+                .filter(|(full, _)| {
+                    full == jid || northstar_xmpp_types::jid_text::bare_jid(full) == jid
+                })
+                .cloned()
+                .collect()
         }
 
         fn fanout_local_domain(&self) -> &str {
@@ -259,7 +283,7 @@ mod tests {
         }
 
         fn record_fanout_failure(&self) {
-            panic!("unexpected fanout failure");
+            self.failures.fetch_add(1, Ordering::Relaxed);
         }
 
         async fn remote_blocklist_push(
@@ -268,6 +292,10 @@ mod tests {
             mut push: impl FnMut() -> String + Send,
         ) -> Result<Vec<RemoteRouteFailure>> {
             assert_eq!(owner, "alice@example.test");
+            self.calls
+                .lock()
+                .unwrap()
+                .push(RemoteCall::Blocklist(owner.to_owned()));
             if self.request_push {
                 self.remote_pushes.lock().unwrap().push(push());
             }
@@ -276,42 +304,459 @@ mod tests {
 
         async fn remote_blocking_presence_change(
             &self,
-            _owner: &str,
-            _targets: &[String],
-            _changed_patterns: &[String],
-            _available: bool,
+            owner: &str,
+            targets: &[String],
+            changed_patterns: &[String],
+            available: bool,
         ) -> Result<Vec<RemoteRouteFailure>> {
-            panic!("unexpected remote blocking presence change");
+            self.calls
+                .lock()
+                .unwrap()
+                .push(RemoteCall::BlockingPresence(
+                    owner.to_owned(),
+                    targets.to_vec(),
+                    changed_patterns.to_vec(),
+                    available,
+                ));
+            Ok(Vec::new())
         }
 
         async fn remote_privacy_push(
             &self,
-            _account: &str,
-            _base: &str,
+            account: &str,
+            base: &str,
         ) -> Result<Vec<RemoteRouteFailure>> {
-            panic!("unexpected remote privacy push");
+            self.calls
+                .lock()
+                .unwrap()
+                .push(RemoteCall::Privacy(account.to_owned(), base.to_owned()));
+            Ok(Vec::new())
         }
 
-        async fn remote_resource_nodes(&self, _target: &str) -> Result<Vec<String>> {
-            panic!("unexpected remote resource lookup");
+        async fn remote_resource_nodes(&self, target: &str) -> Result<Vec<String>> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(RemoteCall::ResourceNodes(target.to_owned()));
+            Ok(self.nodes.clone())
         }
 
         async fn send_available_presence_to_node(
             &self,
-            _node_id: &str,
-            _target: &str,
-            _delivery: &str,
+            node_id: &str,
+            target: &str,
+            delivery: &str,
         ) {
-            panic!("unexpected remote presence delivery");
+            self.calls.lock().unwrap().push(RemoteCall::NodePresence(
+                node_id.to_owned(),
+                target.to_owned(),
+                delivery.to_owned(),
+            ));
         }
 
-        fn external_presence_domain_allowed(&self, _domain: &str) -> bool {
-            panic!("unexpected external domain policy lookup");
+        fn external_presence_domain_allowed(&self, domain: &str) -> bool {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(RemoteCall::DomainPolicy(domain.to_owned()));
+            self.allowed_domains.iter().any(|allowed| allowed == domain)
         }
 
-        async fn send_federated_presence(&self, _domain: &str, _delivery: String, _from: String) {
-            panic!("unexpected federated presence delivery");
+        async fn send_federated_presence(&self, domain: &str, delivery: String, from: String) {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(RemoteCall::FederatedPresence(
+                    domain.to_owned(),
+                    delivery,
+                    from,
+                ));
         }
+    }
+
+    fn run(future: impl Future<Output = ()>) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .unwrap()
+            .block_on(future);
+    }
+
+    fn session(
+        resource: &str,
+    ) -> (
+        OnlineSession,
+        tokio::sync::mpsc::Receiver<northstar_stream::outbound::OutboundItem>,
+    ) {
+        test_online_session(Uuid::from_u128(1), 7, Uuid::new_v4(), resource, 1)
+    }
+
+    fn assert_to(stanza: &str, target: &str) {
+        let document = roxmltree::Document::parse(stanza).unwrap();
+        assert_eq!(document.root_element().attribute("to"), Some(target));
+    }
+
+    #[test]
+    fn blocklist_push_skips_sessions_that_did_not_request_it() {
+        run(async {
+            let (interested, mut interested_rx) = session("interested");
+            let (uninterested, mut uninterested_rx) = session("uninterested");
+            interested
+                .blocklist_requested
+                .store(true, Ordering::Release);
+            let routes = Routes {
+                request_push: true,
+                sessions: vec![
+                    ("alice@example.test/interested".into(), interested.clone()),
+                    (
+                        "alice@example.test/uninterested".into(),
+                        uninterested.clone(),
+                    ),
+                ],
+                ..Routes::default()
+            };
+            let payload = "<unblock xmlns='urn:xmpp:blocking'/>";
+            push_blocklist_change(&routes, "alice@example.test", payload).await;
+            let push = interested_rx.try_recv().unwrap().stanza;
+            assert_to(&push, "alice@example.test/interested");
+            assert!(push.contains(payload));
+            assert!(interested_rx.try_recv().is_err());
+            assert!(uninterested_rx.try_recv().is_err());
+            assert!(!interested.disconnect.is_cancelled());
+            assert!(!uninterested.disconnect.is_cancelled());
+            assert_eq!(routes.failures.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                *routes.calls.lock().unwrap(),
+                vec![RemoteCall::Blocklist("alice@example.test".into())]
+            );
+            let pushes = routes.remote_pushes.lock().unwrap();
+            assert_eq!(pushes.len(), 1);
+            assert_to(&pushes[0], "alice@example.test");
+            assert!(pushes[0].contains(payload));
+        });
+    }
+
+    #[test]
+    fn blocklist_push_closed_queue_disconnects_and_counts() {
+        run(async {
+            let (session, receiver) = session("closed");
+            session.blocklist_requested.store(true, Ordering::Release);
+            drop(receiver);
+            let routes = Routes {
+                sessions: vec![("alice@example.test/closed".into(), session.clone())],
+                ..Routes::default()
+            };
+            push_blocklist_change(
+                &routes,
+                "alice@example.test",
+                "<block xmlns='urn:xmpp:blocking'/>",
+            )
+            .await;
+            assert!(session.disconnect.is_cancelled());
+            assert!(session.sender.backpressure_disconnect().is_cancelled());
+            assert_eq!(routes.failures.load(Ordering::Relaxed), 1);
+            assert_eq!(
+                *routes.calls.lock().unwrap(),
+                vec![RemoteCall::Blocklist("alice@example.test".into())]
+            );
+        });
+    }
+
+    #[test]
+    fn blocklist_push_full_queue_times_out_disconnects_and_counts() {
+        run(async {
+            let (session, mut receiver) = session("full");
+            session.blocklist_requested.store(true, Ordering::Release);
+            session.sender.try_send("older".into()).unwrap();
+            let routes = Routes {
+                sessions: vec![("alice@example.test/full".into(), session.clone())],
+                ..Routes::default()
+            };
+            let started = tokio::time::Instant::now();
+            push_blocklist_change(
+                &routes,
+                "alice@example.test",
+                "<block xmlns='urn:xmpp:blocking'/>",
+            )
+            .await;
+            assert!(started.elapsed() >= Duration::from_secs(2));
+            assert!(started.elapsed() < Duration::from_secs(3));
+            assert!(session.disconnect.is_cancelled());
+            assert!(session.sender.backpressure_disconnect().is_cancelled());
+            assert_eq!(routes.failures.load(Ordering::Relaxed), 1);
+            assert_eq!(receiver.try_recv().unwrap().stanza, "older");
+            assert!(receiver.try_recv().is_err());
+            assert_eq!(
+                *routes.calls.lock().unwrap(),
+                vec![RemoteCall::Blocklist("alice@example.test".into())]
+            );
+        });
+    }
+
+    #[test]
+    fn privacy_push_returns_the_current_connection_push_instead_of_sending() {
+        run(async {
+            let (current, mut current_rx) = session("current");
+            let (other, mut other_rx) = session("other");
+            let (uninterested, mut uninterested_rx) = session("uninterested");
+            current.privacy_requested.store(true, Ordering::Release);
+            other.privacy_requested.store(true, Ordering::Release);
+            let routes = Routes {
+                sessions: vec![
+                    ("alice@example.test/current".into(), current.clone()),
+                    ("alice@example.test/other".into(), other.clone()),
+                    (
+                        "alice@example.test/uninterested".into(),
+                        uninterested.clone(),
+                    ),
+                ],
+                ..Routes::default()
+            };
+            let base = "<iq type='set' id='privacy'><query xmlns='jabber:iq:privacy'><list name='work'/></query></iq>";
+            let returned = push_privacy_change(
+                &routes,
+                "alice@example.test",
+                "work",
+                base,
+                current.connection_id,
+            )
+            .await;
+            assert_eq!(returned, Some(set_to(base, "alice@example.test/current")));
+            assert_to(returned.as_deref().unwrap(), "alice@example.test/current");
+            assert!(current_rx.try_recv().is_err());
+            let push = other_rx.try_recv().unwrap().stanza;
+            assert_eq!(push, set_to(base, "alice@example.test/other"));
+            assert_to(&push, "alice@example.test/other");
+            assert!(other_rx.try_recv().is_err());
+            assert!(uninterested_rx.try_recv().is_err());
+            for session in [current, other, uninterested] {
+                assert!(!session.disconnect.is_cancelled());
+            }
+            assert_eq!(routes.failures.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                *routes.calls.lock().unwrap(),
+                vec![RemoteCall::Privacy(
+                    "alice@example.test".into(),
+                    base.into()
+                )]
+            );
+        });
+    }
+
+    #[test]
+    fn privacy_push_full_queue_disconnects_and_counts() {
+        run(async {
+            let (session, mut receiver) = session("full");
+            session.privacy_requested.store(true, Ordering::Release);
+            session.sender.try_send("older".into()).unwrap();
+            let routes = Routes {
+                sessions: vec![("alice@example.test/full".into(), session.clone())],
+                ..Routes::default()
+            };
+            let base = "<iq type='set' id='privacy'><query xmlns='jabber:iq:privacy'><list name='work'/></query></iq>";
+            assert_eq!(
+                push_privacy_change(&routes, "alice@example.test", "work", base, Uuid::new_v4())
+                    .await,
+                None
+            );
+            assert!(session.disconnect.is_cancelled());
+            assert!(session.sender.backpressure_disconnect().is_cancelled());
+            assert_eq!(routes.failures.load(Ordering::Relaxed), 1);
+            assert_eq!(receiver.try_recv().unwrap().stanza, "older");
+            assert!(receiver.try_recv().is_err());
+            assert_eq!(
+                *routes.calls.lock().unwrap(),
+                vec![RemoteCall::Privacy(
+                    "alice@example.test".into(),
+                    base.into()
+                )]
+            );
+        });
+    }
+
+    #[test]
+    fn blocking_presence_unavailable_reaches_roster_and_matching_directed_targets() {
+        run(async {
+            let (owner, _owner_rx) = session("source");
+            owner.available.store(true, Ordering::Release);
+            owner.directed_presence.insert("bob@example.test".into());
+            owner
+                .directed_presence
+                .insert("carol@example.test/Phone".into());
+            owner
+                .directed_presence
+                .insert("dave@example.test/Phone".into());
+            let (unavailable_owner, _unavailable_owner_rx) = session("unavailable-source");
+            unavailable_owner
+                .directed_presence
+                .insert("dave@example.test/Phone".into());
+            let (bob, mut bob_rx) = session("bob");
+            bob.available.store(true, Ordering::Release);
+            let (carol, mut carol_rx) = session("Phone");
+            let (dave, mut dave_rx) = session("Phone");
+            let routes = Routes {
+                sessions: vec![
+                    ("alice@example.test/source".into(), owner),
+                    (
+                        "alice@example.test/unavailable-source".into(),
+                        unavailable_owner,
+                    ),
+                    ("bob@example.test/Desktop".into(), bob),
+                    ("carol@example.test/Phone".into(), carol),
+                    ("dave@example.test/Phone".into(), dave),
+                ],
+                ..Routes::default()
+            };
+            let targets = vec!["bob@example.test".into()];
+            let patterns = vec!["bob@example.test".into(), "carol@example.test/Phone".into()];
+            deliver_blocking_presence_change(
+                &routes,
+                "alice@example.test",
+                &targets,
+                &patterns,
+                false,
+            )
+            .await;
+            for (target, receiver) in [
+                ("bob@example.test", &mut bob_rx),
+                ("carol@example.test/Phone", &mut carol_rx),
+            ] {
+                let stanza = receiver.try_recv().unwrap().stanza;
+                let document = roxmltree::Document::parse(&stanza).unwrap();
+                let presence = document.root_element();
+                assert_eq!(presence.attribute("to"), Some(target));
+                assert_eq!(
+                    presence.attribute("from"),
+                    Some("alice@example.test/source")
+                );
+                assert_eq!(presence.attribute("type"), Some("unavailable"));
+                assert!(receiver.try_recv().is_err());
+            }
+            assert!(dave_rx.try_recv().is_err());
+            let calls = routes.calls.lock().unwrap();
+            assert_eq!(calls.len(), 3);
+            for target in ["bob@example.test", "carol@example.test/Phone"] {
+                assert!(calls.contains(&RemoteCall::ResourceNodes(target.into())));
+            }
+            assert_eq!(
+                calls.last(),
+                Some(&RemoteCall::BlockingPresence(
+                    "alice@example.test".into(),
+                    targets,
+                    patterns,
+                    false,
+                ))
+            );
+            assert_eq!(routes.failures.load(Ordering::Relaxed), 0);
+        });
+    }
+
+    #[test]
+    fn blocking_presence_local_bare_target_skips_unavailable_recipients_and_routes_remote_nodes() {
+        run(async {
+            let (owner, _owner_rx) = session("source");
+            owner.available.store(true, Ordering::Release);
+            let base = "<presence from='alice@example.test/source'><show>away</show><status>Lunch</status></presence>";
+            *owner.last_presence.write().unwrap() = Some(base.into());
+            let (available, mut available_rx) = session("available");
+            available.available.store(true, Ordering::Release);
+            let (unavailable, mut unavailable_rx) = session("unavailable");
+            let routes = Routes {
+                sessions: vec![
+                    ("alice@example.test/source".into(), owner),
+                    ("bob@example.test/available".into(), available),
+                    ("bob@example.test/unavailable".into(), unavailable),
+                ],
+                nodes: vec!["node-a".into(), "node-b".into()],
+                ..Routes::default()
+            };
+            let targets = vec!["bob@example.test".into()];
+            let patterns = vec!["bob@example.test".into()];
+            deliver_blocking_presence_change(
+                &routes,
+                "alice@example.test",
+                &targets,
+                &patterns,
+                true,
+            )
+            .await;
+            let delivery = set_to(base, "bob@example.test");
+            let queued = available_rx.try_recv().unwrap().stanza;
+            assert_eq!(queued, delivery);
+            assert_to(&queued, "bob@example.test");
+            assert!(available_rx.try_recv().is_err());
+            assert!(unavailable_rx.try_recv().is_err());
+            assert_eq!(
+                *routes.calls.lock().unwrap(),
+                vec![
+                    RemoteCall::ResourceNodes("bob@example.test".into()),
+                    RemoteCall::NodePresence(
+                        "node-a".into(),
+                        "bob@example.test".into(),
+                        delivery.clone(),
+                    ),
+                    RemoteCall::NodePresence("node-b".into(), "bob@example.test".into(), delivery,),
+                    RemoteCall::BlockingPresence(
+                        "alice@example.test".into(),
+                        targets,
+                        patterns,
+                        true,
+                    ),
+                ]
+            );
+            assert_eq!(routes.failures.load(Ordering::Relaxed), 0);
+        });
+    }
+
+    #[test]
+    fn blocking_presence_remote_domain_requires_policy() {
+        run(async {
+            for allowed in [false, true] {
+                let (owner, _owner_rx) = session("source");
+                owner.available.store(true, Ordering::Release);
+                let base =
+                    "<presence from='alice@example.test/source'><status>Here</status></presence>";
+                *owner.last_presence.write().unwrap() = Some(base.into());
+                let routes = Routes {
+                    sessions: vec![("alice@example.test/source".into(), owner)],
+                    allowed_domains: if allowed {
+                        vec!["remote.test".into()]
+                    } else {
+                        Vec::new()
+                    },
+                    ..Routes::default()
+                };
+                let targets = vec!["bob@remote.test/Phone".into()];
+                let patterns = vec!["remote.test".into()];
+                deliver_blocking_presence_change(
+                    &routes,
+                    "alice@example.test",
+                    &targets,
+                    &patterns,
+                    true,
+                )
+                .await;
+                let mut expected = vec![RemoteCall::DomainPolicy("remote.test".into())];
+                if allowed {
+                    let delivery = set_to(base, "bob@remote.test/Phone");
+                    assert_to(&delivery, "bob@remote.test/Phone");
+                    expected.push(RemoteCall::FederatedPresence(
+                        "remote.test".into(),
+                        delivery,
+                        "alice@example.test/source".into(),
+                    ));
+                }
+                expected.push(RemoteCall::BlockingPresence(
+                    "alice@example.test".into(),
+                    targets,
+                    patterns,
+                    true,
+                ));
+                assert_eq!(*routes.calls.lock().unwrap(), expected);
+                assert_eq!(routes.failures.load(Ordering::Relaxed), 0);
+            }
+        });
     }
 
     #[test]

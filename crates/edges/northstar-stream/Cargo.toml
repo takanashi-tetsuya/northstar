@@ -8,8 +8,9 @@ description = "Session core for Northstar XMPP streams: transport-neutral stanza
 publish = false
 
 [features]
-# Test-only queue helpers the root crate's tests use.
-test-support = []
+# Test-only queue helpers and the local session fixture. The publication join observations they
+# expose come from the auth and session test hooks, so a crate that enables only this feature builds.
+test-support = ["northstar-auth-application/test-support", "northstar-session-core/test-support"]
 
 [dependencies]
 anyhow = "1.0"

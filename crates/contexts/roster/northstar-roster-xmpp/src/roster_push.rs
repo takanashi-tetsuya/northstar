@@ -258,6 +258,7 @@ pub async fn deliver_roster_removal_presence(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use northstar_stream::local_routes::session::test_online_session;
     use std::sync::Mutex;
 
     fn run(future: impl Future<Output = ()>) {
@@ -267,8 +268,11 @@ mod tests {
             .block_on(future);
     }
 
+    #[derive(Default)]
     struct PushPorts {
         lookup_error: bool,
+        sessions: Vec<(String, OnlineSession)>,
+        nodes: Vec<String>,
         sent_nodes: Mutex<Vec<String>>,
     }
 
@@ -277,7 +281,7 @@ mod tests {
 
         fn local_sessions(&self, jid: &str) -> Vec<(String, OnlineSession)> {
             assert_eq!(jid, "alice@example.test");
-            Vec::new()
+            self.sessions.clone()
         }
 
         async fn remote_nodes(&self, account: &str) -> Result<Vec<String>> {
@@ -285,7 +289,7 @@ mod tests {
             if self.lookup_error {
                 anyhow::bail!("lookup failed");
             }
-            Ok(vec!["rejected".into(), "failed".into(), "accepted".into()])
+            Ok(self.nodes.clone())
         }
 
         async fn send_roster_push(
@@ -355,7 +359,8 @@ mod tests {
                 let delivery = RosterPushDelivery::new(
                     PushPorts {
                         lookup_error,
-                        sent_nodes: Mutex::new(Vec::new()),
+                        nodes: vec!["rejected".into(), "failed".into(), "accepted".into()],
+                        ..PushPorts::default()
                     },
                     Arc::clone(&failures),
                     "example.test".into(),
@@ -389,6 +394,8 @@ mod tests {
     #[derive(Default)]
     struct RemovalRoutes {
         events: Mutex<Vec<RemovalEvent>>,
+        sessions: Vec<(String, OnlineSession)>,
+        privacy_calls: Mutex<Vec<(String, String, PrivacyStanzaKind)>>,
     }
 
     impl RosterRemovalPresenceRoutes for RemovalRoutes {
@@ -397,16 +404,25 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(RemovalEvent::Local(target_bare.to_owned()));
-            Vec::new()
+            self.sessions.clone()
         }
 
         async fn removal_presence_privacy_allows(
             &self,
-            _: &OnlineSession,
-            _: &str,
-            _: PrivacyStanzaKind,
+            session: &OnlineSession,
+            owner_bare: &str,
+            kind: PrivacyStanzaKind,
         ) -> Result<bool> {
-            unreachable!("there are no local sessions");
+            self.privacy_calls.lock().unwrap().push((
+                session.resource.clone(),
+                owner_bare.to_owned(),
+                kind,
+            ));
+            match session.resource.as_str() {
+                "denied" => Ok(false),
+                "privacy-error" => anyhow::bail!("privacy lookup failed"),
+                _ => Ok(true),
+            }
         }
 
         async fn route_remote_removal_presence(
@@ -471,14 +487,218 @@ mod tests {
                 stanza,
             )
             .await;
-            // This covers the empty local-session pass; constructing a live
-            // session also requires northstar-session-application.
             assert_eq!(
                 *routes.events.lock().unwrap(),
                 vec![
                     RemovalEvent::Local("bob@example.test".into()),
                     RemovalEvent::Remote("bob@example.test".into(), stanza.into(), authority),
                 ]
+            );
+        });
+    }
+
+    fn change() -> RosterChange {
+        RosterChange {
+            version: 42,
+            contact_jid: "room@mix.example.test".into(),
+            display_name: None,
+            subscription: Some("both".into()),
+            ask: None,
+            groups: Vec::new(),
+            approved: false,
+            removed: false,
+        }
+    }
+
+    #[test]
+    fn committed_push_reaches_only_interested_sessions_of_the_owner() {
+        run(async {
+            let owner_id = Uuid::from_u128(1);
+            let mut ports = PushPorts::default();
+            let mut receivers = Vec::new();
+            for (resource, user_id, interested) in [
+                ("interested", owner_id, true),
+                ("uninterested", owner_id, false),
+                ("recreated", Uuid::from_u128(2), true),
+            ] {
+                let (session, receiver) =
+                    test_online_session(user_id, 7, Uuid::new_v4(), resource, 1);
+                session
+                    .roster_requested
+                    .store(interested, Ordering::Release);
+                let target = format!("alice@example.test/{resource}");
+                ports.sessions.push((target.clone(), session.clone()));
+                receivers.push((target, session, receiver));
+            }
+            let failures = Arc::new(AtomicU64::new(0));
+            let delivery = RosterPushDelivery::new(ports, failures.clone(), "example.test".into());
+            deliver_committed_roster_change(&delivery, owner_id, "alice", &change(), None)
+                .await
+                .unwrap();
+            for (target, session, mut receiver) in receivers {
+                if session.resource == "interested" {
+                    let push = receiver.try_recv().unwrap().stanza;
+                    let document = roxmltree::Document::parse(&push).unwrap();
+                    assert_eq!(
+                        document.root_element().attribute("to"),
+                        Some(target.as_str())
+                    );
+                    assert!(document
+                        .descendants()
+                        .any(|node| node.attribute("ver") == Some("42")));
+                }
+                assert!(receiver.try_recv().is_err());
+                assert!(!session.disconnect.is_cancelled());
+            }
+            assert_eq!(failures.load(Ordering::Relaxed), 0);
+        });
+    }
+
+    #[test]
+    fn committed_push_annotates_only_for_mix_annotation_sessions() {
+        run(async {
+            let owner_id = Uuid::from_u128(1);
+            let mut ports = PushPorts::default();
+            let mut receivers = Vec::new();
+            for (resource, annotated) in [("plain", false), ("annotated", true)] {
+                let (session, receiver) =
+                    test_online_session(owner_id, 7, Uuid::new_v4(), resource, 1);
+                session.roster_requested.store(true, Ordering::Release);
+                session
+                    .mix_roster_annotations
+                    .store(annotated, Ordering::Release);
+                let target = format!("alice@example.test/{resource}");
+                ports.sessions.push((target.clone(), session));
+                receivers.push((target, annotated, receiver));
+            }
+            let delivery =
+                RosterPushDelivery::new(ports, Arc::new(AtomicU64::new(0)), "example.test".into());
+            deliver_committed_roster_change(
+                &delivery,
+                owner_id,
+                "alice",
+                &change(),
+                Some("opaque-id"),
+            )
+            .await
+            .unwrap();
+            for (target, annotated, mut receiver) in receivers {
+                let push = receiver.try_recv().unwrap().stanza;
+                let document = roxmltree::Document::parse(&push).unwrap();
+                assert_eq!(
+                    document.root_element().attribute("to"),
+                    Some(target.as_str())
+                );
+                let channel = document
+                    .descendants()
+                    .find(|node| node.has_tag_name(("urn:xmpp:mix:roster:0", "channel")));
+                assert_eq!(channel.is_some(), annotated);
+                if let Some(channel) = channel {
+                    assert_eq!(channel.attribute("participant-id"), Some("opaque-id"));
+                }
+                assert!(receiver.try_recv().is_err());
+            }
+        });
+    }
+
+    #[test]
+    fn committed_push_queue_failure_disconnects_and_counts() {
+        run(async {
+            for closed in [true, false] {
+                let owner_id = Uuid::from_u128(1);
+                let (session, receiver) =
+                    test_online_session(owner_id, 7, Uuid::new_v4(), "full", 1);
+                session.roster_requested.store(true, Ordering::Release);
+                let mut receiver = if closed {
+                    drop(receiver);
+                    None
+                } else {
+                    session.sender.try_send("older".into()).unwrap();
+                    Some(receiver)
+                };
+                let failures = Arc::new(AtomicU64::new(0));
+                let delivery = RosterPushDelivery::new(
+                    PushPorts {
+                        sessions: vec![("alice@example.test/full".into(), session.clone())],
+                        ..PushPorts::default()
+                    },
+                    failures.clone(),
+                    "example.test".into(),
+                );
+                deliver_committed_roster_change(&delivery, owner_id, "alice", &change(), None)
+                    .await
+                    .unwrap();
+                assert!(session.disconnect.is_cancelled());
+                assert!(session.sender.backpressure_disconnect().is_cancelled());
+                assert_eq!(failures.load(Ordering::Relaxed), 1);
+                if let Some(receiver) = receiver.as_mut() {
+                    assert_eq!(receiver.try_recv().unwrap().stanza, "older");
+                    assert!(receiver.try_recv().is_err());
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn removal_presence_requires_identity_generation_availability_and_privacy() {
+        run(async {
+            let authority = ClusterPresenceAuthority {
+                owner_id: Uuid::from_u128(1),
+                owner_auth_generation: 17,
+                recipient_id: Uuid::from_u128(2),
+                recipient_auth_generation: 29,
+            };
+            let mut routes = RemovalRoutes::default();
+            let mut receivers = Vec::new();
+            for (resource, user_id, generation, available) in [
+                ("allowed", authority.recipient_id, 29, true),
+                ("wrong-id", Uuid::from_u128(3), 29, true),
+                ("wrong-generation", authority.recipient_id, 28, true),
+                ("unavailable", authority.recipient_id, 29, false),
+                ("denied", authority.recipient_id, 29, true),
+                ("privacy-error", authority.recipient_id, 29, true),
+            ] {
+                let (session, receiver) =
+                    test_online_session(user_id, generation, Uuid::new_v4(), resource, 1);
+                session.available.store(available, Ordering::Release);
+                let target = format!("bob@example.test/{resource}");
+                routes.sessions.push((target.clone(), session.clone()));
+                receivers.push((target, session, receiver));
+            }
+            let stanza = "<presence from='Alice@Example.TEST' type='unsubscribed'/>";
+            deliver_roster_removal_presence(
+                &routes,
+                authority.owner_id,
+                authority.owner_auth_generation,
+                authority.recipient_id,
+                authority.recipient_auth_generation,
+                "bob@example.test",
+                stanza,
+            )
+            .await;
+            for (target, session, mut receiver) in receivers {
+                if session.resource == "allowed" {
+                    assert_eq!(receiver.try_recv().unwrap().stanza, set_to(stanza, &target));
+                }
+                assert!(receiver.try_recv().is_err());
+                assert!(!session.disconnect.is_cancelled());
+            }
+            assert_eq!(
+                *routes.privacy_calls.lock().unwrap(),
+                ["allowed", "denied", "privacy-error"]
+                    .map(|resource| (
+                        resource.to_owned(),
+                        "alice@example.test".to_owned(),
+                        PrivacyStanzaKind::PresenceIn,
+                    ))
+                    .to_vec(),
+            );
+            assert_eq!(
+                *routes.events.lock().unwrap(),
+                vec![
+                    RemovalEvent::Local("bob@example.test".into()),
+                    RemovalEvent::Remote("bob@example.test".into(), stanza.into(), authority),
+                ],
             );
         });
     }

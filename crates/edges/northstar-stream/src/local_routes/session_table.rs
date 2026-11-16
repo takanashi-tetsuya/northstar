@@ -791,8 +791,6 @@ impl std::ops::Deref for LocalSessionTable {
 mod tests {
     use super::*;
     use northstar_protocol_runtime::caps::{CapsKey, VerifiedCapsSummary};
-    use northstar_session_application::RouteIncarnationSignal;
-    use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::time::{Duration, Instant};
     use uuid::Uuid;
 
@@ -806,51 +804,13 @@ mod tests {
         OnlineSession,
         tokio::sync::mpsc::Receiver<crate::outbound::OutboundItem>,
     ) {
-        let (sender, receiver) = tokio::sync::mpsc::channel(1);
-        let now = Instant::now();
-        (
-            OnlineSession {
-                user_id,
-                auth_generation: 7,
-                user_agent_epoch: None,
-                connection_id,
-                route_incarnation: RouteIncarnationSignal::new(connection_id),
-                lifecycle: Arc::default(),
-                metrics_counted: Arc::default(),
-                routable: Arc::new(AtomicBool::new(routable)),
-                sender: crate::outbound::OutboundSender::new(sender),
-                available: Arc::default(),
-                availability_generation: Arc::default(),
-                post_actions:
-                    northstar_session_application::post_actions::PostActionHandle::default(),
-                recovery_replay_inflight_epoch: Arc::default(),
-                recovery_replay_completed_epoch: Arc::default(),
-                bind2_mam_catchup: false,
-                mix_presence_gate: Arc::default(),
-                mix_presence_fallback_suppressed: Arc::default(),
-                caps_observation_generation: Arc::new(AtomicU64::new(11)),
-                carbons: Arc::default(),
-                priority: Arc::default(),
-                show: Arc::default(),
-                blocklist_requested: Arc::default(),
-                roster_requested: Arc::default(),
-                roster_sync: Arc::default(),
-                mix_roster_annotations: Arc::default(),
-                privacy_active: Arc::default(),
-                privacy_requested: Arc::default(),
-                directed_presence: Arc::default(),
-                last_presence: Arc::default(),
-                ip: None,
-                resource: "fixture".into(),
-                user_agent_id: None,
-                sm_session_id: Arc::default(),
-                muc_memberships: Arc::default(),
-                connected_at: now,
-                last_activity: Arc::new(std::sync::RwLock::new(now)),
-                disconnect: CancellationToken::new(),
-            },
-            receiver,
-        )
+        let (session, receiver) =
+            super::super::session::test_online_session(user_id, 7, connection_id, "fixture", 1);
+        session.routable.store(routable, Ordering::Relaxed);
+        session
+            .caps_observation_generation
+            .store(11, Ordering::Relaxed);
+        (session, receiver)
     }
 
     #[test]

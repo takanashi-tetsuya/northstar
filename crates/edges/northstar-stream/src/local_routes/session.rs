@@ -109,6 +109,64 @@ pub struct OnlineSession {
     pub disconnect: CancellationToken,
 }
 
+/// A detached local session for tests of crates that cannot name the route-incarnation type.
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_online_session(
+    user_id: uuid::Uuid,
+    auth_generation: i64,
+    connection_id: uuid::Uuid,
+    resource: &str,
+    queue_capacity: usize,
+) -> (
+    OnlineSession,
+    tokio::sync::mpsc::Receiver<crate::outbound::OutboundItem>,
+) {
+    let (sender, receiver) = tokio::sync::mpsc::channel(queue_capacity);
+    let now = Instant::now();
+    (
+        OnlineSession {
+            user_id,
+            auth_generation,
+            user_agent_epoch: None,
+            connection_id,
+            route_incarnation: RouteIncarnationSignal::new(connection_id),
+            lifecycle: Arc::default(),
+            metrics_counted: Arc::default(),
+            routable: Arc::new(AtomicBool::new(true)),
+            sender: crate::outbound::OutboundSender::new(sender),
+            available: Arc::default(),
+            availability_generation: Arc::default(),
+            post_actions: northstar_session_application::post_actions::PostActionHandle::default(),
+            recovery_replay_inflight_epoch: Arc::default(),
+            recovery_replay_completed_epoch: Arc::default(),
+            bind2_mam_catchup: false,
+            mix_presence_gate: Arc::default(),
+            mix_presence_fallback_suppressed: Arc::default(),
+            caps_observation_generation: Arc::default(),
+            carbons: Arc::default(),
+            priority: Arc::default(),
+            show: Arc::default(),
+            blocklist_requested: Arc::default(),
+            roster_requested: Arc::default(),
+            roster_sync: Arc::default(),
+            mix_roster_annotations: Arc::default(),
+            privacy_active: Arc::default(),
+            privacy_requested: Arc::default(),
+            directed_presence: Arc::default(),
+            last_presence: Arc::default(),
+            ip: None,
+            resource: resource.into(),
+            user_agent_id: None,
+            sm_session_id: Arc::default(),
+            muc_memberships: Arc::default(),
+            connected_at: now,
+            last_activity: Arc::new(std::sync::RwLock::new(now)),
+            disconnect: CancellationToken::new(),
+        },
+        receiver,
+    )
+}
+
 impl OnlineSession {
     /// Whether this resource joined the room under exactly this nick.
     pub fn joined_muc_as(&self, room: &str, nick: &str) -> bool {

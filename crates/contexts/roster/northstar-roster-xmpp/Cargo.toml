@@ -26,4 +26,5 @@ tracing = "0.1"
 uuid = { version = "1.12", features = ["v4"] }
 
 [dev-dependencies]
-tokio = { version = "1.43", features = ["rt", "time"] }
+northstar-stream = { path = "../../../edges/northstar-stream", features = ["test-support"] }
+tokio = { version = "1.43", features = ["rt", "test-util", "time"] }

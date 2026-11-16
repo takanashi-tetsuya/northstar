@@ -4013,7 +4013,7 @@ if (!housekeepingContext.includes('counters: BackgroundHousekeepingCounters')
   throw new Error('background housekeeping must not retain the complete metrics registry');
 }
 const lockedMucExpiryWorker = rustItemBody(state, 'fn start_locked_muc_expiry(');
-const lockedMucExpiryContext = read('src/state/locked_muc_expiry.rs');
+const lockedMucExpiryContext = read('crates/contexts/room/northstar-muc-xmpp/src/locked_room_expiry.rs');
 if (!lockedMucExpiryWorker.includes('.locked_muc_expiry_context')
     || !lockedMucExpiryContext.includes('.expire_locked_rooms(')
     || /(?:db|muc)::delete_expired_locked_muc_rooms\s*\(/.test(lockedMucExpiryWorker)) {

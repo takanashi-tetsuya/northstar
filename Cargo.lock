@@ -2402,6 +2402,7 @@ dependencies = [
  "northstar-message-core",
  "northstar-room-application",
  "northstar-room-core",
+ "northstar-runtime",
  "northstar-security",
  "northstar-session-core",
  "northstar-stream",

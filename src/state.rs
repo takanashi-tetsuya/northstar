@@ -311,7 +311,10 @@ impl AppState {
             cancel,
             move |heartbeat| {
                 let weak = weak.clone();
-                async move { locked_muc_expiry::run_locked_muc_expiry(weak, heartbeat).await }
+                async move {
+                    northstar_muc_xmpp::locked_room_expiry::run_locked_muc_expiry(weak, heartbeat)
+                        .await
+                }
             },
         );
     }

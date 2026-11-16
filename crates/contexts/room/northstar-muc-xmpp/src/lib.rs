@@ -5,6 +5,7 @@
 //! those capabilities.
 
 pub mod federated_muc;
+pub mod locked_room_expiry;
 pub mod muc;
 pub mod ports;
 mod protocol_session;

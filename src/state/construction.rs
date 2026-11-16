@@ -726,9 +726,7 @@ impl AppState {
         assert!(state
             .room
             .locked_muc_expiry_context
-            .set(Arc::new(
-                locked_muc_expiry::LockedMucExpiryContext::from_state(&state)
-            ))
+            .set(Arc::new(state.locked_muc_expiry_context()))
             .is_ok());
         Self::start_locked_muc_expiry(Arc::clone(&state), worker_cancel.clone());
         // Both durable policy snapshots deliberately share the single reserved

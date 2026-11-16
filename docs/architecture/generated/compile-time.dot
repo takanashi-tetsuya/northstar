@@ -1363,6 +1363,7 @@ digraph compile_time {
   "northstar-muc-xmpp" -> "northstar-message-core";
   "northstar-muc-xmpp" -> "northstar-room-application";
   "northstar-muc-xmpp" -> "northstar-room-core";
+  "northstar-muc-xmpp" -> "northstar-runtime";
   "northstar-muc-xmpp" -> "northstar-security";
   "northstar-muc-xmpp" -> "northstar-session-core";
   "northstar-muc-xmpp" -> "northstar-stream";

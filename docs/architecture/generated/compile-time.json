@@ -4084,6 +4084,10 @@
     ],
     [
       "northstar-muc-xmpp",
+      "northstar-runtime"
+    ],
+    [
+      "northstar-muc-xmpp",
       "northstar-security"
     ],
     [

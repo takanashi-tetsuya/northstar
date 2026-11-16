@@ -19,6 +19,7 @@ use northstar_pubsub_core::{
     PubSubSubscriptionOptions, PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite,
     SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscriptionOptionsOutcome,
 };
+use northstar_stream::protocol::discovery::PubSubDiscoItemsReply;
 use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
 use std::{
@@ -339,6 +340,22 @@ pub async fn federated_disco_items<H: PubSubHost>(
     }
     query.push_validated_fragment(&rsm_xml)?;
     Ok(PubSubReply::Result(query.finish()))
+}
+
+/// Map PubSub disco items to the discovery port's reply, including its error fallback.
+pub async fn disco_items_reply<H: PubSubHost>(
+    host: &H,
+    requester: &str,
+    request: Node<'_, '_>,
+) -> Result<PubSubDiscoItemsReply> {
+    Ok(
+        match federated_disco_items(host, requester, request).await? {
+            PubSubReply::Result(payload) => PubSubDiscoItemsReply::Result(payload),
+            error => PubSubDiscoItemsReply::Error(
+                error_condition(&error).unwrap_or("undefined-condition"),
+            ),
+        },
+    )
 }
 
 async fn root_disco_items<H: PubSubHost>(

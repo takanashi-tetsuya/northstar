@@ -8,6 +8,7 @@ use northstar_roster_application::presence::{
 };
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_roster_core::PresenceAccount;
+use northstar_stream::local_routes::session::OnlineSession;
 use northstar_xml_builder::rewrite::{set_from, set_to};
 use northstar_xml_builder::stanza::{blocked_stanza_error, child_text, stanza_error};
 use northstar_xml_builder::XmlElement;
@@ -24,7 +25,27 @@ mod availability;
 mod subscriptions;
 
 pub use self::availability::{full_jid_probe_available_response, presence_probe_status_response};
-pub use northstar_xmpp_avatar::vcard_update::inject_vcard_avatar_hash;
+pub(crate) use northstar_xmpp_avatar::vcard_update::inject_vcard_avatar_hash;
+
+/// Refresh stored local presence with the owner's current vCard avatar hash.
+pub fn refresh_avatar_presence(
+    sessions: impl IntoIterator<Item = OnlineSession>,
+    hash: Option<&str>,
+) {
+    for session in sessions {
+        let mut last_presence = session
+            .last_presence
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let refreshed = last_presence.as_deref().and_then(|raw| {
+            let document = roxmltree::Document::parse(raw).ok()?;
+            Some(inject_vcard_avatar_hash(raw, document.root_element(), hash))
+        });
+        if let Some(refreshed) = refreshed {
+            *last_presence = Some(refreshed);
+        }
+    }
+}
 
 use self::availability::{
     answer_directed_presence_probe, broadcast_directed_unavailable, commit_directed_presence,

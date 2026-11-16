@@ -754,15 +754,7 @@ impl SessionHost for ServerNode {
         session: &ClientSession,
         root: Node<'_, '_>,
     ) -> Result<bool> {
-        match ClientSession::pubsub_authorization_response(session, root).await {
-            Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
-                tracing::warn!(
-                    "dropping PubSub authorization form while mutation capacity is exhausted"
-                );
-                Ok(true)
-            }
-            result => result,
-        }
+        ClientSession::pubsub_authorization_response_unless_busy(session, root).await
     }
 
     async fn dispatch_presence(

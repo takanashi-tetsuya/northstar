@@ -89,16 +89,7 @@ impl DiscoveryHost for ServerNode {
         requester: &str,
         request: Node<'_, '_>,
     ) -> Result<PubSubDiscoItemsReply> {
-        use northstar_pubsub_xmpp::pubsub::{error_condition, federated_disco_items, PubSubReply};
-
-        Ok(
-            match federated_disco_items(self, requester, request).await? {
-                PubSubReply::Result(payload) => PubSubDiscoItemsReply::Result(payload),
-                error => PubSubDiscoItemsReply::Error(
-                    error_condition(&error).unwrap_or("undefined-condition"),
-                ),
-            },
-        )
+        northstar_pubsub_xmpp::pubsub::disco_items_reply(self, requester, request).await
     }
 
     async fn pep_access_allowed(

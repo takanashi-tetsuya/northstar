@@ -9,7 +9,6 @@ use northstar_pubsub_application::PubSubService;
 use northstar_pubsub_core::telemetry::PepTelemetry;
 use northstar_pubsub_core::PepQuotas;
 use northstar_pubsub_xmpp::PubSubSessionHost;
-use northstar_roster_xmpp::presence::inject_vcard_avatar_hash;
 
 impl PubSubSessionHost for ServerNode {
     fn pep_account_quotas(&self) -> PepQuotas {
@@ -55,19 +54,10 @@ impl PubSubSessionHost for ServerNode {
     }
 
     fn refresh_avatar_presence(&self, owner_bare: &str, hash: Option<&str>) {
-        for session in self.sessions.sessions_for(owner_bare) {
-            let mut last_presence = session
-                .last_presence
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let refreshed = last_presence.as_deref().and_then(|raw| {
-                let document = roxmltree::Document::parse(raw).ok()?;
-                Some(inject_vcard_avatar_hash(raw, document.root_element(), hash))
-            });
-            if let Some(refreshed) = refreshed {
-                *last_presence = Some(refreshed);
-            }
-        }
+        northstar_roster_xmpp::presence::refresh_avatar_presence(
+            self.sessions.sessions_for(owner_bare),
+            hash,
+        );
     }
 }
 
@@ -100,15 +90,11 @@ impl northstar_pubsub_xmpp::pep::PepAudienceRouting for ServerNode {
     }
 
     fn pep_available_resources_wanting(&self, bare_jid: &str, node: &str) -> Vec<String> {
-        self.sessions
-            .session_entries_for(bare_jid)
-            .into_iter()
-            .filter(|(full_jid, target)| {
-                target.available.load(std::sync::atomic::Ordering::Relaxed)
-                    && northstar_stream::protocol::caps::wants_pep_node(self, full_jid, node)
-            })
-            .map(|(full_jid, _)| full_jid)
-            .collect()
+        northstar_stream::protocol::caps::available_resources_wanting_pep_node(
+            self,
+            self.sessions.session_entries_for(bare_jid),
+            node,
+        )
     }
 
     fn pep_interested_resources(&self, bare_jid: &str, node: &str) -> Vec<String> {

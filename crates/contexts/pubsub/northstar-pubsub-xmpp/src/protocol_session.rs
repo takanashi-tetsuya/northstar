@@ -337,6 +337,9 @@ pub trait PubSubHandlers {
 
     async fn pubsub_authorization_response(&self, root: Node<'_, '_>) -> Result<bool>;
 
+    /// Consume authorization forms when PubSub mutation capacity is exhausted.
+    async fn pubsub_authorization_response_unless_busy(&self, root: Node<'_, '_>) -> Result<bool>;
+
     /// XEP-0060 `send_last_published_item=on_sub_and_presence` delivery.
     /// Presence addressed to the service is consumed by the service and is
     /// never routed to a similarly named local account.
@@ -398,6 +401,18 @@ impl<H: SessionHost + PubSubHost> PubSubHandlers for ProtocolSession<H> {
         };
         handle_authorization_response(&**self.host(), requester, root).await?;
         Ok(true)
+    }
+
+    async fn pubsub_authorization_response_unless_busy(&self, root: Node<'_, '_>) -> Result<bool> {
+        match Self::pubsub_authorization_response(self, root).await {
+            Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
+                tracing::warn!(
+                    "dropping PubSub authorization form while mutation capacity is exhausted"
+                );
+                Ok(true)
+            }
+            result => result,
+        }
     }
 
     async fn pubsub_presence(&mut self, kind: &str, from: &str) -> Result<Action> {

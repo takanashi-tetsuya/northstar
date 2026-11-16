@@ -1,4 +1,5 @@
 use super::ProtocolSession;
+use crate::local_routes::session::OnlineSession;
 use crate::protocol::SessionHost;
 pub use northstar_protocol_runtime::caps::*;
 use northstar_session_application::telemetry::CapsEffectTelemetry;
@@ -756,6 +757,22 @@ pub fn wants_pep_node<H: SessionHost>(state: &H, target: &str, node: &str) -> bo
     current_caps_observation(state, &target)
         .and_then(|observation| observation.summary)
         .is_some_and(|summary| summary.wants_node(node))
+}
+
+/// Select available local resources interested in notifications for this PEP node.
+pub fn available_resources_wanting_pep_node<H: SessionHost>(
+    state: &H,
+    entries: Vec<(String, OnlineSession)>,
+    node: &str,
+) -> Vec<String> {
+    entries
+        .into_iter()
+        .filter(|(full_jid, target)| {
+            target.available.load(std::sync::atomic::Ordering::Relaxed)
+                && wants_pep_node(state, full_jid, node)
+        })
+        .map(|(full_jid, _)| full_jid)
+        .collect()
 }
 
 pub fn interested_resources_for_bare<H: SessionHost>(

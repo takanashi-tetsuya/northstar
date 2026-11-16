@@ -84,11 +84,7 @@ impl PepLastItemsPorts for PepLastItemsAdapters {
 
 impl PubSubNotificationPorts for PepLastItemsAdapters {
     async fn privacy_allows_session(&self, session: &OnlineSession, peer: &str) -> Result<bool> {
-        let active = session
-            .privacy_active
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
+        let active = session.privacy_active_snapshot();
         self.privacy
             .privacy_allows_session(
                 session.user_id,

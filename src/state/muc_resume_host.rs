@@ -20,11 +20,11 @@ impl MucResumeHost for AppState {
     }
 
     fn muc_cluster_enabled(&self) -> bool {
-        self.cluster().is_enabled()
+        self.cluster.is_enabled()
     }
 
     fn muc_wake(&self) -> &Self::MucWake {
-        self.cluster()
+        &self.cluster
     }
 
     async fn resume_cluster_muc_occupant(
@@ -32,7 +32,7 @@ impl MucResumeHost for AppState {
         previous: &SerializableMucOccupant,
         resumed: &SerializableMucOccupant,
     ) -> anyhow::Result<bool> {
-        self.cluster().resume_muc_occupant(previous, resumed).await
+        self.cluster.resume_muc_occupant(previous, resumed).await
     }
 
     async fn unregister_cluster_muc_occupant_epoch(
@@ -42,7 +42,7 @@ impl MucResumeHost for AppState {
         cluster_epoch: uuid::Uuid,
         connection_id: uuid::Uuid,
     ) -> anyhow::Result<bool> {
-        self.cluster()
+        self.cluster
             .unregister_muc_occupant_epoch(room_jid, nick, cluster_epoch, connection_id)
             .await
     }
@@ -54,7 +54,7 @@ impl MucResumeHost for AppState {
         sm_session_id: uuid::Uuid,
         json: &str,
     ) -> anyhow::Result<bool> {
-        self.cluster()
+        self.cluster
             .register_suspended_muc_occupant(room_jid, nick, sm_session_id, json)
             .await
     }

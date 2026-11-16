@@ -73,16 +73,16 @@ impl C2sHost for AppState {
 
 impl WebSocketHost for AppState {
     fn public_url(&self) -> &str {
-        &self.public_discovery_context().policy().public_url
+        &self.public_discovery_context.policy().public_url
     }
 
     fn trusted_proxy_ips(&self) -> &[IpAddr] {
-        &self.public_discovery_context().policy().trusted_proxy_ips
+        &self.public_discovery_context.policy().trusted_proxy_ips
     }
 
     fn websocket_allowed_origins(&self) -> &[String] {
         &self
-            .public_discovery_context()
+            .public_discovery_context
             .policy()
             .websocket_allowed_origins
     }

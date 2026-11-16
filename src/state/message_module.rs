@@ -37,6 +37,44 @@ pub(super) struct MessageModuleParts<'a> {
 }
 
 impl MessageModule {
+    pub(crate) fn extdisco_service(
+        &self,
+    ) -> &northstar_message_application::extdisco::ExtDiscoService {
+        &self.extdisco_service
+    }
+
+    pub(crate) fn message_service(
+        &self,
+    ) -> &northstar_message_application::messaging::MessageService<
+        northstar_workflows::message_repository::PostgresMessageRepository,
+    > {
+        &self.message_service
+    }
+
+    pub(crate) fn message_admission_service(
+        &self,
+    ) -> &northstar_message_application::message_admission::MessageAdmissionService<
+        northstar_workflows::message_admission_port::AbuseMessageAdmissionPort,
+    > {
+        &self.message_admission_service
+    }
+
+    pub(crate) fn retraction_service(
+        &self,
+    ) -> &northstar_message_application::retractions::RetractionService<
+        northstar_workflows::retraction_repository::PostgresRetractionRepository,
+    > {
+        &self.retraction_service
+    }
+
+    pub(crate) fn push_service(
+        &self,
+    ) -> &northstar_message_application::push::PushService<
+        northstar_workflows::push_repository::PostgresPushRepository,
+    > {
+        &self.push_service
+    }
+
     /// Builds the services over the primary pool.
     pub(super) fn new(parts: MessageModuleParts<'_>) -> Self {
         let MessageModuleParts {

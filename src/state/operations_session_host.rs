@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 
 impl OperationsSessionHost for AppState {
     fn command_service(&self) -> &AdminCommandService<impl AdminCommandRepository> {
-        self.admin_command_service()
+        self.operations.admin_command_service()
     }
 
     fn command_local_domain(&self) -> &str {

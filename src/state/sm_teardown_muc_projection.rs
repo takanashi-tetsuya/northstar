@@ -17,7 +17,7 @@ pub(super) struct SmTeardownMucProjection {
 impl AppState {
     pub(super) fn sm_teardown_muc_projection(&self) -> SmTeardownMucProjection {
         SmTeardownMucProjection {
-            service: self.sm_teardown_muc_service(),
+            service: self.room.sm_teardown_muc_service().clone(),
             occupants: Arc::clone(&self.room.muc_occupants),
         }
     }

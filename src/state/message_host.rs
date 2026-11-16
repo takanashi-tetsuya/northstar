@@ -25,15 +25,15 @@ impl MessageHost for AppState {
     type Retractions = PostgresRetractionRepository;
 
     fn message_service(&self) -> &MessageService<PostgresMessageRepository> {
-        AppState::message_service(self)
+        self.message.message_service()
     }
 
     fn message_admission_service(&self) -> &MessageAdmissionService<AbuseMessageAdmissionPort> {
-        AppState::message_admission_service(self)
+        self.message.message_admission_service()
     }
 
     fn retraction_service(&self) -> &RetractionService<PostgresRetractionRepository> {
-        AppState::retraction_service(self)
+        self.message.retraction_service()
     }
 
     fn personal_message_telemetry(&self) -> PersonalMessageTelemetry<'_> {
@@ -98,7 +98,7 @@ impl MessageHost for AppState {
     }
 
     async fn personal_message_remote_resource_exists(&self, jid: &str) -> bool {
-        self.cluster()
+        self.cluster
             .personal_message_remote_resource_exists(jid)
             .await
     }
@@ -109,6 +109,7 @@ impl MessageHost for AppState {
 
     async fn direct_invite_room(&self, localpart: &str) -> Result<Option<DirectInviteRoom>> {
         Ok(self
+            .room
             .muc_service()
             .room(localpart)
             .await?
@@ -125,7 +126,8 @@ impl MessageHost for AppState {
         room_id: uuid::Uuid,
         account_id: uuid::Uuid,
     ) -> Result<Option<String>> {
-        self.muc_service()
+        self.room
+            .muc_service()
             .local_affiliation(room_id, account_id)
             .await
     }
@@ -139,7 +141,7 @@ impl MessageHost for AppState {
         actor_full_jid: &str,
         subject: ClusterMucAffiliationSubject,
     ) -> Result<Option<ClusterMucInviteAuthority>> {
-        self.cluster().direct_muc_invite_cluster_authority(
+        self.cluster.direct_muc_invite_cluster_authority(
             operation_id,
             room_epoch,
             config_version,
@@ -156,7 +158,7 @@ impl MessageHost for AppState {
 
 impl ExtDiscoHost for AppState {
     fn extdisco_service(&self) -> &northstar_message_application::extdisco::ExtDiscoService {
-        AppState::extdisco_service(self)
+        self.message.extdisco_service()
     }
 }
 
@@ -166,7 +168,7 @@ impl FederatedMessageHost for AppState {
     }
 
     async fn s2s_remote_recipient_route_exists(&self, jid: &str) -> bool {
-        self.cluster().s2s_remote_recipient_route_exists(jid).await
+        self.cluster.s2s_remote_recipient_route_exists(jid).await
     }
 
     async fn handle_push_disable(&self, root: Node<'_, '_>, from: &str, to: &str) -> Result<bool> {
@@ -203,7 +205,7 @@ impl FederatedMessageHost for AppState {
         stanza: &str,
         delivery: Option<DurableDelivery>,
     ) -> bool {
-        self.cluster()
+        self.cluster
             .route_s2s_message_to_available_remote_resources(jid, stanza, delivery)
             .await
     }
@@ -215,7 +217,7 @@ impl FederatedMessageHost for AppState {
         delivery: Option<DurableDelivery>,
     ) -> OnlineRouteResult {
         let routed = self
-            .cluster()
+            .cluster
             .route_s2s_message_to_remote_primary(
                 jid,
                 stanza,

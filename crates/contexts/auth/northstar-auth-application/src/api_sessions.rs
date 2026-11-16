@@ -11,6 +11,7 @@ pub trait ApiSessionRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
 
+#[derive(Clone)]
 pub struct ApiSessionService<R> {
     repository: R,
 }

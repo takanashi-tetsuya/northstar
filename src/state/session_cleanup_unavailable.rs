@@ -26,7 +26,7 @@ pub(crate) struct SessionCleanupUnavailableAdapters {
 impl AppState {
     pub(crate) fn session_cleanup_unavailable(&self) -> AppSessionCleanupUnavailable {
         SessionCleanupUnavailable::new(
-            self.sm_teardown_presence_service(),
+            self.session.sm_teardown_presence_service().clone(),
             Arc::clone(&self.sessions),
             self.message.message_service.clone(),
             SessionCleanupUnavailableAdapters {

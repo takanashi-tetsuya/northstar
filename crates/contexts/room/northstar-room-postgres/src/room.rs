@@ -31,6 +31,7 @@ impl<E: RoomEffects> PostgresMucRepository<E> {
     }
 }
 
+#[derive(Clone)]
 pub struct PostgresClusterMucOccupancyMaintenanceRepository {
     pool: PgPool,
 }

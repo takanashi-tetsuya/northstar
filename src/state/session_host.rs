@@ -59,7 +59,7 @@ impl SessionHost for AppState {
     ) -> &northstar_auth_application::account::AccountService<
         northstar_workflows::account_repository::WorkflowAccountRepository,
     > {
-        AppState::account_service(self)
+        self.auth.account_service()
     }
 
     async fn associate_local_muc_sm_session(
@@ -84,7 +84,7 @@ impl SessionHost for AppState {
     ) -> &northstar_auth_application::authentication::AuthenticationService<
         northstar_workflows::authentication_effects::PostgresAuthenticationRepository,
     > {
-        AppState::authentication_service(self)
+        self.auth.authentication_service()
     }
 
     fn c2s_authentication_telemetry(
@@ -135,7 +135,7 @@ impl SessionHost for AppState {
     ) -> &northstar_abuse_application::challenge::ChallengeIssueService<
         northstar_abuse_postgres::challenge::PostgresChallengeRepository,
     > {
-        AppState::challenge_issue_service(self)
+        self.abuse.challenge_issue_service()
     }
 
     async fn claim_staged_binding_route(
@@ -143,7 +143,7 @@ impl SessionHost for AppState {
         full_jid: &str,
         connection_id: uuid::Uuid,
     ) -> anyhow::Result<bool> {
-        self.cluster()
+        self.cluster
             .claim_staged_binding_route(full_jid, connection_id)
             .await
     }
@@ -182,7 +182,7 @@ impl SessionHost for AppState {
     ) -> &northstar_room_application::mix_service::MixService<
         northstar_workflows::room_effects::PostgresMixRepository,
     > {
-        AppState::mix_service(self)
+        self.room.mix_service()
     }
 
     fn outbound_stanza_telemetry(
@@ -198,7 +198,7 @@ impl SessionHost for AppState {
     ) -> &northstar_message_application::push::PushService<
         northstar_workflows::push_repository::PostgresPushRepository,
     > {
-        AppState::push_service(self)
+        self.message.push_service()
     }
 
     fn push_subscription_telemetry(
@@ -246,7 +246,7 @@ impl SessionHost for AppState {
         full_jid: &str,
         connection_id: uuid::Uuid,
     ) -> anyhow::Result<()> {
-        self.cluster()
+        self.cluster
             .release_staged_binding_route(full_jid, connection_id)
             .await
     }
@@ -273,7 +273,7 @@ impl SessionHost for AppState {
     ) -> &northstar_session_application::replay::ReplayService<
         northstar_session_postgres::replay_repository::PostgresReplayRepository,
     > {
-        AppState::replay_service(self)
+        self.session.replay_service()
     }
 
     fn sasl2_authentication_telemetry(
@@ -305,7 +305,7 @@ impl SessionHost for AppState {
     ) -> &northstar_abuse_application::login::SaslLoginAbuseService<
         northstar_abuse_postgres::login::PostgresSaslLoginAbuseRepository,
     > {
-        AppState::sasl_login_abuse_service(self)
+        self.abuse.sasl_login_abuse_service()
     }
 
     fn session_bind_telemetry(
@@ -346,7 +346,7 @@ impl SessionHost for AppState {
     ) -> &northstar_session_application::sm::SmService<
         northstar_workflows::sm_repository::PostgresSmRepository,
     > {
-        AppState::sm_service(self)
+        self.session.sm_service()
     }
 
     fn sm_session_telemetry(
@@ -470,7 +470,7 @@ impl SessionHost for AppState {
         session_id: uuid::Uuid,
         claim_token: uuid::Uuid,
     ) -> anyhow::Result<bool> {
-        self.cluster()
+        self.cluster
             .claim_sm_resume_route(full_jid, connection_id, session_id, claim_token)
             .await
     }
@@ -532,7 +532,7 @@ impl SessionHost for AppState {
         device_id: uuid::Uuid,
         epoch: i64,
     ) -> anyhow::Result<()> {
-        self.cluster()
+        self.cluster
             .notify_remote_user_agent_replacement(account, user_id, device_id, epoch)
             .await
     }
@@ -587,7 +587,7 @@ impl SessionHost for AppState {
         full_jid: &str,
         connection_id: uuid::Uuid,
     ) -> anyhow::Result<()> {
-        self.cluster()
+        self.cluster
             .release_exact_local_session_route(full_jid, connection_id)
             .await
     }
@@ -829,7 +829,7 @@ impl SessionHost for AppState {
     }
 
     async fn personal_message_remote_resource_exists(&self, jid: &str) -> bool {
-        self.cluster()
+        self.cluster
             .personal_message_remote_resource_exists(jid)
             .await
     }
@@ -839,7 +839,7 @@ impl SessionHost for AppState {
     ) -> &northstar_roster_application::presence::PresenceService<
         northstar_workflows::presence_repository::PostgresPresenceRepository,
     > {
-        AppState::presence_service(self)
+        self.roster.presence_service()
     }
 
     async fn privacy_allows_session(
@@ -856,11 +856,11 @@ impl SessionHost for AppState {
     ) -> &northstar_roster_application::privacy::PrivacyService<
         northstar_roster_postgres::privacy::PostgresPrivacyRepository,
     > {
-        AppState::privacy_service(self)
+        self.roster.privacy_service()
     }
 
     async fn route_client_iq_to_remote_resource(&self, full_jid: &str, stanza: &str) -> bool {
-        self.cluster()
+        self.cluster
             .route_client_iq_to_remote_resource(full_jid, stanza)
             .await
     }
@@ -921,7 +921,7 @@ impl SessionHost for AppState {
         show: &'static str,
     ) -> anyhow::Result<()> {
         northstar_pubsub_xmpp::delivery::deliver_last_items_on_presence(
-            self.pubsub_service(),
+            self.pubsub.pubsub_service(),
             northstar_pubsub_xmpp::pubsub::pubsub_domain(self.as_ref()),
             outbound,
             recipient_id,

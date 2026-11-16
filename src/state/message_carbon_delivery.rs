@@ -54,7 +54,7 @@ impl CarbonDeliveryPort for AppState {
         delivered_self: Option<&str>,
         muc_scope: Option<(&str, &str)>,
     ) {
-        self.cluster()
+        self.cluster
             .route_sent_carbons_to_remote_resources(
                 bare,
                 forwarded,
@@ -93,7 +93,7 @@ impl CarbonDeliveryPort for AppState {
         delivered: Option<&str>,
         forwarded: &str,
     ) {
-        self.cluster()
+        self.cluster
             .route_received_carbons_to_remote_resources(
                 recipient,
                 delivered,

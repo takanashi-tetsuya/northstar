@@ -93,7 +93,8 @@ impl S2sHost for AppState {
         originating_domain: &str,
         stream_id: &str,
     ) -> String {
-        AppState::derive_dialback_key(self, receiving_domain, originating_domain, stream_id)
+        self.federation
+            .derive_dialback_key(receiving_domain, originating_domain, stream_id)
     }
 
     fn connection_actors(&self) -> &ConnectionActorRegistry {
@@ -127,11 +128,11 @@ impl S2sHost for AppState {
     fn s2s_outbox_dispatch_service(
         &self,
     ) -> &S2sOutboxDispatchService<PostgresS2sOutboxDispatchRepository> {
-        AppState::s2s_outbox_dispatch_service(self)
+        self.federation.s2s_outbox_dispatch_service()
     }
 
     fn s2s_sm_outbox_service(&self) -> &SmOutboxService<PostgresSmOutboxRepository> {
-        AppState::s2s_sm_outbox_service(self)
+        self.federation.s2s_sm_outbox_service()
     }
 
     fn s2s_outbox_dispatch_context(

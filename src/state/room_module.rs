@@ -10,6 +10,12 @@ use northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission;
 
 /// The room context's services and live tables, built once at startup.
 pub(super) struct RoomModule {
+    pub(super) sm_teardown_muc_service: northstar_room_application::sm_teardown_muc::SmTeardownMucService<
+        northstar_workflows::sm_teardown_muc_repository::PostgresSmTeardownMucRepository,
+    >,
+    pub(super) cluster_muc_occupancy_maintenance_service: northstar_room_application::muc_service::ClusterMucOccupancyMaintenanceService<
+        northstar_room_postgres::room::PostgresClusterMucOccupancyMaintenanceRepository,
+    >,
     /// PostgreSQL-authoritative MUC application service. Redis capabilities
     /// deliberately do not cross this boundary.
     pub(super) muc_service: northstar_room_application::muc_service::MucService<northstar_workflows::room_effects::PostgresMucRepository>,
@@ -39,6 +45,38 @@ pub(super) struct RoomModuleParts<'a> {
 }
 
 impl RoomModule {
+    pub(super) fn sm_teardown_muc_service(
+        &self,
+    ) -> &northstar_room_application::sm_teardown_muc::SmTeardownMucService<
+        northstar_workflows::sm_teardown_muc_repository::PostgresSmTeardownMucRepository,
+    > {
+        &self.sm_teardown_muc_service
+    }
+
+    pub(crate) fn mix_service(
+        &self,
+    ) -> &northstar_room_application::mix_service::MixService<
+        northstar_workflows::room_effects::PostgresMixRepository,
+    > {
+        &self.mix_service
+    }
+
+    pub(crate) fn muc_service(
+        &self,
+    ) -> &northstar_room_application::muc_service::MucService<
+        northstar_workflows::room_effects::PostgresMucRepository,
+    > {
+        &self.muc_service
+    }
+
+    pub(crate) fn cluster_muc_occupancy_maintenance_service(
+        &self,
+    ) -> &northstar_room_application::muc_service::ClusterMucOccupancyMaintenanceService<
+        northstar_room_postgres::room::PostgresClusterMucOccupancyMaintenanceRepository,
+    > {
+        &self.cluster_muc_occupancy_maintenance_service
+    }
+
     /// Builds the services and empty live tables over the primary pool.
     pub(super) fn new(parts: RoomModuleParts<'_>) -> Result<Self> {
         let RoomModuleParts {
@@ -50,6 +88,16 @@ impl RoomModule {
             sm_authority_schema,
         } = parts;
         Ok(Self {
+            sm_teardown_muc_service: northstar_room_application::sm_teardown_muc::SmTeardownMucService::new(
+                northstar_workflows::sm_teardown_muc_repository::PostgresSmTeardownMucRepository::new(
+                    pool.clone(),
+                ),
+            ),
+            cluster_muc_occupancy_maintenance_service: northstar_room_application::muc_service::ClusterMucOccupancyMaintenanceService::new(
+                northstar_room_postgres::room::PostgresClusterMucOccupancyMaintenanceRepository::new(
+                    pool.clone(),
+                ),
+            ),
             muc_service: northstar_room_application::muc_service::MucService::new(
                 northstar_workflows::room_effects::PostgresMucRepository::new(pool.clone()),
                 config.domain.clone(),

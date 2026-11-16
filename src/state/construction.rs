@@ -428,16 +428,7 @@ impl AppState {
             .await
             .context("failed to load dummy SCRAM iteration profiles")?;
         let pubsub = PubSubModule::new(&config, &pool, &durable_outbox_database_admission);
-        let mam_service = northstar_archive_application::MamService::new(
-            northstar_workflows::mam_repository::PostgresMamRepository::new(pool.clone()),
-            northstar_archive_application::FederatedMamOutboxLimits {
-                ttl_seconds: config.s2s_outbox_ttl_seconds,
-                max_rows: config.s2s_outbox_max_rows,
-                max_bytes: config.s2s_outbox_max_bytes,
-                max_per_domain: config.s2s_outbox_max_per_domain,
-            },
-            federation_outbox.outbox_wakeup(),
-        );
+        let archive = ArchiveModule::new(&config, &pool, &federation_outbox);
         let roster = RosterModule::new(&pool);
         let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;
         let command_pool = match config.admin_command_pool_mode {
@@ -613,12 +604,6 @@ impl AppState {
             muc_occupants: &room.muc_occupants,
             started_at,
         });
-        let account_revocation_consumer_service =
-            northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService::new(
-                northstar_auth_postgres::account_revocation_repository::PostgresAccountRevocationRepository::new(
-                    pool.clone(),
-                ),
-            );
         let state = Arc::new(Self {
             config,
             public_discovery_context,
@@ -628,10 +613,9 @@ impl AppState {
             message,
             federation,
             session,
-            mam_service,
+            archive,
             pool,
             cluster,
-            account_revocation_consumer_service,
             bosh,
             sessions: LocalSessionTable::new(sessions),
             metrics,
@@ -666,8 +650,8 @@ impl AppState {
             northstar_runtime::workers::WorkerCriticality::Restartable,
         );
         northstar_workflows::authority_listener::start_database_authority_listener(
-            state.sm_service().authority_broker(),
-            state.mix_service().delivery_wake_broker(),
+            state.session.sm_service().authority_broker(),
+            state.room.mix_service().delivery_wake_broker(),
             state.cluster.account_revocation_notify(),
             state.cluster.direct_spool_notify(),
             sm_authority_connect_options,

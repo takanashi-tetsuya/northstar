@@ -50,7 +50,7 @@ impl HttpHost for AppState {
     }
 
     fn public_discovery_context(&self) -> &PublicDiscoveryContext {
-        AppState::public_discovery_context(self)
+        &self.public_discovery_context
     }
 
     fn readiness_context(&self) -> ReadinessContext {
@@ -58,7 +58,7 @@ impl HttpHost for AppState {
     }
 
     fn api_query_context(&self) -> ApiQueryContext {
-        AppState::api_query_context(self)
+        self.operations.api_query_context()
     }
 
     fn account_admin_context(&self) -> AccountAdminContext {
@@ -103,8 +103,8 @@ impl HttpHost for AppState {
 
     fn report_context(&self) -> ReportContext {
         reports::ReportContext::new(
-            self.report_service().clone(),
-            self.api_query_service().clone(),
+            self.operations.report_service().clone(),
+            self.operations.api_query_service().clone(),
             Arc::clone(&self.metrics),
             self.config.trusted_proxy_ips.clone(),
         )
@@ -112,7 +112,7 @@ impl HttpHost for AppState {
 
     fn api_session_http_context(&self) -> ApiSessionHttpContext {
         ApiSessionHttpContext {
-            service: Arc::new(self.api_session_service()),
+            service: Arc::new(self.auth.api_session_service().clone()),
         }
     }
 
@@ -149,9 +149,9 @@ impl HttpHost for AppState {
 
     fn omemo_recovery_http_context(&self) -> OmemoRecoveryHttpContext {
         OmemoRecoveryHttpContext {
-            queries: self.api_query_service().clone(),
-            recovery: self.omemo_recovery_service().clone(),
-            domain: self.public_discovery_context().policy().domain.clone(),
+            queries: self.operations.api_query_service().clone(),
+            recovery: self.auth.omemo_recovery_service().clone(),
+            domain: self.public_discovery_context.policy().domain.clone(),
             metrics: Arc::clone(&self.metrics),
         }
     }
@@ -246,7 +246,7 @@ impl HttpHost for AppState {
 /// The XMPP transports the public listener serves beside REST: the WebSocket upgrade and BOSH,
 /// each over the node itself.
 pub(crate) fn xmpp_transport_routes(state: &Arc<AppState>) -> Router {
-    let policy = state.public_discovery_context().policy();
+    let policy = state.public_discovery_context.policy();
     let mut router: Router<Arc<AppState>> = Router::new();
     if policy.websocket_enabled {
         router = router.route(

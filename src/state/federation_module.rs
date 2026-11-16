@@ -59,6 +59,36 @@ pub(super) struct FederationModuleParts<'a> {
 }
 
 impl FederationModule {
+    pub(crate) fn s2s_outbox_dispatch_service(
+        &self,
+    ) -> &northstar_federation_application::dispatch::S2sOutboxDispatchService<
+        northstar_federation_postgres::dispatch_repository::PostgresS2sOutboxDispatchRepository,
+    > {
+        &self.s2s_outbox_dispatch_service
+    }
+
+    pub(crate) fn s2s_sm_outbox_service(
+        &self,
+    ) -> &northstar_federation_application::sm_outbox::SmOutboxService<
+        northstar_federation_postgres::sm_outbox_repository::PostgresSmOutboxRepository,
+    > {
+        &self.s2s_sm_outbox_service
+    }
+
+    pub(crate) fn derive_dialback_key(
+        &self,
+        receiving_domain: &str,
+        originating_domain: &str,
+        stream_id: &str,
+    ) -> String {
+        northstar_federation_core::compute_dialback_key(
+            self.dialback_secret.as_slice(),
+            receiving_domain,
+            originating_domain,
+            stream_id,
+        )
+    }
+
     /// Builds the resolvers from the system DNS configuration and the services over the primary
     /// pool.
     pub(super) fn new(parts: FederationModuleParts<'_>) -> anyhow::Result<Self> {

@@ -46,7 +46,7 @@ impl OnlineRoutePort for AppState {
         stanza: &str,
         delivery: Option<DurableDelivery>,
     ) -> bool {
-        self.cluster()
+        self.cluster
             .route_personal_message_to_available_remote_resources(jid, stanza, delivery)
             .await
     }
@@ -57,7 +57,7 @@ impl OnlineRoutePort for AppState {
         stanza: &str,
         delivery: Option<DurableDelivery>,
     ) -> OnlineRouteResult {
-        self.cluster()
+        self.cluster
             .route_personal_message_to_remote_primary(
                 jid,
                 stanza,
@@ -132,16 +132,19 @@ impl FullJidFallbackPort for AppState {
 
 impl DirectMessageRoutePort for AppState {
     fn direct_route_mode(&self) -> crate::cluster::DirectPostCommitMode {
-        self.message_service().direct_mode()
+        self.message.message_service().direct_mode()
     }
 
     fn clustered_direct_routes(&self) -> bool {
-        self.message_service().clustered_direct_admission_enabled()
+        self.message
+            .message_service()
+            .clustered_direct_admission_enabled()
     }
 
     async fn rearm_direct_route(&self, delivery: DurableDelivery) {
         let mut claim_id = delivery.claim_id;
-        self.message_service()
+        self.message
+            .message_service()
             .rearm_unrouted_live_direct(delivery.recipient_id, delivery.message_id, &mut claim_id)
             .await;
     }
@@ -151,7 +154,8 @@ impl DirectMessageRoutePort for AppState {
 /// positive receipt rather than risk duplicating a stanza in offline storage.
 impl AppState {
     pub(crate) async fn wake_committed_direct_muc_invite(&self, operation_id: Uuid) -> Result<()> {
-        self.muc_service()
+        self.room
+            .muc_service()
             .wake_committed_operation(&self.cluster, operation_id)
             .await
     }

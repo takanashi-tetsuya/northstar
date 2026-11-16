@@ -18,6 +18,6 @@ impl ArchiveSessionHost for AppState {
     ) -> &MamService<
         impl MamQueryRepository<Error = anyhow::Error> + MamPreferencesWriter<Error = anyhow::Error>,
     > {
-        AppState::mam_service(self)
+        self.archive.mam_service()
     }
 }

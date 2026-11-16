@@ -153,6 +153,7 @@ pub trait ClusterMucOccupancyMaintenanceRepository: Send + Sync {
     ) -> impl std::future::Future<Output = Result<Vec<ClusterMucOccupancyTarget>>> + Send;
 }
 
+#[derive(Clone)]
 pub struct ClusterMucOccupancyMaintenanceService<R> {
     repository: R,
 }

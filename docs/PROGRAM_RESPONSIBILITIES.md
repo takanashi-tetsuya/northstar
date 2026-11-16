@@ -274,7 +274,7 @@ the enforcement column distinguishes a hard gate from a remaining review rule.
 | --- | --- | --- | --- | --- |
 | `src/main.rs` | CLI mode selection, process composition, pool construction/attestation, listener and worker startup, coordinated shutdown | configuration, `AppState`, listener factories, worker registry and one-shot migration/audit modes | stanza policy, business SQL or domain transaction composition | review plus top-level failure tests; it is the only runtime composition root |
 | `crates/platform/northstar-config/src/lib.rs` | parsing, normalization, deployment-mode validation, secret-file/value exclusivity and transfer into typed configuration | filesystem metadata and pure validation helpers | opening network listeners, querying application data or logging secret values | typed configuration and tests; secret consumers remain in the same process after transfer |
-| `src/state.rs` | construction of domain capabilities and process-local registries; private capability accessors | services, stores, routers, key owners and worker registry | becoming an unrestricted global service locator or exposing new raw key/pool fields | Rust visibility and a CI gate requiring zero public `AppState` fields |
+| `src/state.rs` | construction of domain capabilities and process-local registries; private context modules and narrow runtime handles | services, stores, routers, key owners and worker registry | becoming an unrestricted global service locator or exposing new raw key/pool fields | Rust visibility and a CI gate requiring zero public `AppState` fields |
 | `northstar-xml-framing`, `crates/edges/northstar-stream/src/transport_parsing.rs`, `crates/edges/northstar-bosh/src/lib.rs`, WebSocket/C2S entry code | bytes-to-frame conversion, transport provenance, per-connection budgets, BOSH RID/response ownership and connection lifetime | parser utilities, connection actors and `ProtocolSession` | authorization, archive decisions or business database transactions | parser/transport tests and bounded actors; BOSH persistence calls are transport-specific fence bookkeeping, not general business authority |
 | `src/xmpp/protocol.rs`, `src/xmpp/protocol/*` | stream/session state, RFC/XEP parsing, canonical protocol errors and ordered invocation of typed capabilities | `AppState` service methods, XML builders and live-delivery interfaces | `db::*`, SQLx, `PgPool`, `state.pool` or composing archive/offline/outbox transactions | production-tree CI ceiling is exactly zero for every forbidden database reference; test-only fixtures are excluded |
 | `src/services/*` | business authorization, one-snapshot policy, transaction intent, commit/side-effect ordering and typed outcomes | domain repositories and narrow runtime ports | raw socket/framing parsing or returning an open transaction to protocol code | Rust visibility and semantic source gates; transaction adapters belong in `src/db` |
@@ -419,9 +419,24 @@ environment remains unchanged.
 
 ## Application-service capability registry
 
-`AppState` constructs these services and exposes crate-private accessors. The
-accessor is the capability boundary: callers receive a specific domain service,
-not a generic database handle or keyring.
+`AppState` constructs context modules under `src/state/*_module.rs`. Each module
+owns its services and exposes the crate-private module accessors listed below,
+keeping each `name()` as the capability boundary. Callers use the owning module,
+for example `state.auth.omemo_recovery_service()`, to receive a specific domain
+service. Inherent `AppState` implementations define no `*_service()` methods;
+its fields remain private. Main uses narrow runtime queries and worker-context
+constructors, including `muc_pg_authority_enabled()` and
+`account_revocation_worker_context()`.
+
+The archive module in `src/state/archive_module.rs` owns `mam_service()`.
+The auth module owns `api_session_service()` and the account-revocation consumer;
+the session module owns `cluster_authority_service()` and
+`cluster_instance_release_service()`; the room module owns
+`cluster_muc_occupancy_maintenance_service()`. The API-session and cluster
+maintenance/release services are built once in their module constructors and
+returned by reference. Their constructors only store a `Send + Sync` repository
+over the existing pool, with no construction side effects. The internal SM
+teardown services are likewise owned by the session and room modules.
 
 | Capability/accessor | Decision responsibility | Persistence/side-effect responsibility today | Explicitly outside the capability |
 | --- | --- | --- | --- |
@@ -513,8 +528,11 @@ not a generic database handle or keyring.
 | `extdisco_service()` | XEP-0215 service targeting, advertised STUN/TURN records, eligibility and credential issuance windows | owns the public service projection and private TURN secret | exposing the long-term secret or allowing protocol handlers to select records from broad configuration |
 | `SessionCleanupService` | exact expired/revoked session teardown plan | typed local ownership, SM revocation, presence, MUC, MIX and route-release handles; `Arc<AppState>` is used only during construction | deleting a replacement connection or retaining broad state after construction |
 
-Except for the `SessionCleanupService` construction seam, the listed accessors
-are constructed by `AppState` and are crate-private.
+Except for the `SessionCleanupService` construction seam, the listed services
+are assembled by the composition root and exposed through crate-private module
+accessors or narrow runtime contexts. The architecture gate inventories the same
+33 module service accessor names and requires an empty AppState service-accessor
+inventory.
 Services return typed domain outcomes. Transport-specific XML/JSON, SQL row
 types, raw `PgPool`, open transactions, secret bytes and live socket senders
 must not cross these accessors. Repository transactions remain in `src/db`;

@@ -166,7 +166,10 @@ impl InboundHost for AppState {
     }
 
     async fn find_enabled_presence_user(&self, username: &str) -> Result<Option<PresenceAccount>> {
-        self.presence_service().find_enabled_user(username).await
+        self.roster
+            .presence_service()
+            .find_enabled_user(username)
+            .await
     }
 
     async fn is_blocked_for_account(
@@ -175,13 +178,15 @@ impl InboundHost for AppState {
         account_bare: &str,
         from: &str,
     ) -> Result<bool> {
-        self.presence_service()
+        self.roster
+            .presence_service()
             .is_blocked_for_account(account_id, account_bare, from)
             .await
     }
 
     async fn allows_presence(&self, account_id: Uuid, requester_bare: &str) -> Result<bool> {
-        self.s2s_roster_authorization_service()
+        self.roster
+            .s2s_roster_authorization_service()
             .allows_presence(account_id, requester_bare)
             .await
     }
@@ -224,27 +229,30 @@ impl InboundHost for AppState {
     }
 
     async fn route_s2s_iq_response_to_remote_resource(&self, to: &str, raw: &str) {
-        self.cluster()
+        self.cluster
             .route_s2s_iq_response_to_remote_resource(to, raw)
             .await;
     }
 
     async fn s2s_remote_recipient_route_exists(&self, to: &str) -> bool {
-        self.cluster().s2s_remote_recipient_route_exists(to).await
+        self.cluster.s2s_remote_recipient_route_exists(to).await
     }
 
     async fn route_s2s_iq_request_remote(&self, to: &str, raw: &str, bare_target: bool) -> bool {
-        self.cluster()
+        self.cluster
             .route_s2s_iq_request_remote(to, raw, bare_target)
             .await
     }
 
     async fn public_vcard(&self, username: &str) -> Result<PublicVCard> {
-        self.profile_service().public_vcard(username).await
+        self.pubsub.profile_service().public_vcard(username).await
     }
 
     async fn find_enabled_pubsub_user(&self, username: &str) -> Result<Option<PubSubAccount>> {
-        self.pubsub_service().find_enabled_user(username).await
+        self.pubsub
+            .pubsub_service()
+            .find_enabled_user(username)
+            .await
     }
 
     async fn handle_pubsub_request(

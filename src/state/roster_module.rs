@@ -22,6 +22,42 @@ pub(super) struct RosterModule {
 }
 
 impl RosterModule {
+    pub(crate) fn blocking_service(
+        &self,
+    ) -> &northstar_roster_application::blocking::BlockingService<
+        northstar_roster_postgres::roster::PostgresBlockingRepository,
+    > {
+        &self.blocking_service
+    }
+
+    pub(crate) fn presence_service(
+        &self,
+    ) -> &northstar_roster_application::presence::PresenceService<
+        northstar_workflows::presence_repository::PostgresPresenceRepository,
+    > {
+        &self.presence_service
+    }
+
+    pub(crate) fn roster_service(&self) -> &RosterService {
+        &self.roster_service
+    }
+
+    pub(crate) fn s2s_roster_authorization_service(
+        &self,
+    ) -> &northstar_roster_application::s2s_roster_authorization::FederatedRosterAuthorizationService<
+        northstar_roster_postgres::federated_roster::PostgresFederatedRosterRepository,
+    >{
+        &self.s2s_roster_authorization_service
+    }
+
+    pub(crate) fn privacy_service(
+        &self,
+    ) -> &northstar_roster_application::privacy::PrivacyService<
+        northstar_roster_postgres::privacy::PostgresPrivacyRepository,
+    > {
+        &self.privacy_service
+    }
+
     /// Builds the services over the primary pool.
     pub(super) fn new(pool: &PgPool) -> Self {
         Self {

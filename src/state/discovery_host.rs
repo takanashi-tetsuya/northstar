@@ -14,11 +14,11 @@ impl DiscoveryHost for AppState {
     type PubSubStore = northstar_workflows::pubsub_repository::PostgresPubSubRepository;
 
     fn muc_service(&self) -> &MucService<Self::MucStore> {
-        AppState::muc_service(self)
+        self.room.muc_service()
     }
 
     fn pubsub_service(&self) -> &PubSubService<Self::PubSubStore> {
-        AppState::pubsub_service(self)
+        self.pubsub.pubsub_service()
     }
 
     fn server_name(&self) -> &str {
@@ -109,7 +109,7 @@ impl DiscoveryHost for AppState {
         requester: &str,
     ) -> Result<bool> {
         northstar_pubsub_xmpp::pep::pep_access_allowed(
-            self.pubsub_service(),
+            self.pubsub.pubsub_service(),
             owner,
             domain,
             node,

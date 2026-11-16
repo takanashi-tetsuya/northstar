@@ -15,7 +15,8 @@ impl AppState {
         {
             return Ok(());
         }
-        self.push_service()
+        self.message
+            .push_service()
             .dispatch_after_commit(recipient_id, self)
             .await
     }
@@ -68,7 +69,7 @@ impl PushNotificationRouter for AppState {
             }
             if !delivered {
                 delivered = self
-                    .cluster()
+                    .cluster
                     .route_push_service_notification_remote(&delivery.service_jid, &notification)
                     .await;
             }

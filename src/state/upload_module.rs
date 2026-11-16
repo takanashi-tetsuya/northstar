@@ -25,6 +25,12 @@ pub(super) struct UploadModule {
 }
 
 impl UploadModule {
+    pub(crate) fn upload_service(&self) -> &UploadService {
+        self.service
+            .as_ref()
+            .expect("upload routes require an enabled or draining storage runtime")
+    }
+
     /// Opens the upload storage pool, proves the durable upload authority, reconciles the ledger
     /// and staging files, and builds the store, the slot service and the HTTP admission.
     pub(super) async fn start(config: &Config, pool: &PgPool) -> anyhow::Result<Self> {

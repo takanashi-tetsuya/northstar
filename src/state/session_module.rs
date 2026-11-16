@@ -5,6 +5,15 @@ use super::*;
 
 /// The session context's services, built once at startup.
 pub(super) struct SessionModule {
+    pub(super) sm_teardown_presence_service: northstar_session_application::sm_teardown_presence::SmTeardownPresenceService<
+        northstar_workflows::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository,
+    >,
+    pub(super) cluster_instance_release_service: northstar_session_application::cluster_instance_release::ClusterInstanceReleaseService<
+        northstar_session_postgres::cluster_instance_release_repository::PostgresClusterInstanceReleaseRepository,
+    >,
+    pub(super) cluster_authority_service: northstar_session_application::cluster_authority::ClusterAuthorityService<
+        northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository,
+    >,
     pub(super) sm_service: northstar_session_application::sm::SmService<
         northstar_workflows::sm_repository::PostgresSmRepository,
     >,
@@ -29,6 +38,46 @@ pub(super) struct SessionModuleParts<'a> {
 }
 
 impl SessionModule {
+    pub(super) fn sm_teardown_presence_service(
+        &self,
+    ) -> &northstar_session_application::sm_teardown_presence::SmTeardownPresenceService<
+        northstar_workflows::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository,
+    > {
+        &self.sm_teardown_presence_service
+    }
+
+    pub(crate) fn sm_service(
+        &self,
+    ) -> &northstar_session_application::sm::SmService<
+        northstar_workflows::sm_repository::PostgresSmRepository,
+    > {
+        &self.sm_service
+    }
+
+    pub(crate) fn replay_service(
+        &self,
+    ) -> &northstar_session_application::replay::ReplayService<
+        northstar_session_postgres::replay_repository::PostgresReplayRepository,
+    > {
+        &self.replay_service
+    }
+
+    pub(crate) fn cluster_authority_service(
+        &self,
+    ) -> &northstar_session_application::cluster_authority::ClusterAuthorityService<
+        northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository,
+    >{
+        &self.cluster_authority_service
+    }
+
+    pub(crate) fn cluster_instance_release_service(
+        &self,
+    ) -> &northstar_session_application::cluster_instance_release::ClusterInstanceReleaseService<
+        northstar_session_postgres::cluster_instance_release_repository::PostgresClusterInstanceReleaseRepository,
+    >{
+        &self.cluster_instance_release_service
+    }
+
     /// Builds the services over the primary pool, with one capacity metrics sink shared by the
     /// memory governor and the recovery queue.
     pub(super) fn new(parts: SessionModuleParts<'_>) -> anyhow::Result<Self> {
@@ -48,6 +97,21 @@ impl SessionModule {
             Arc::clone(&sm_capacity_metrics),
         )?;
         Ok(Self {
+            sm_teardown_presence_service: northstar_session_application::sm_teardown_presence::SmTeardownPresenceService::new(
+                northstar_workflows::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository::new(
+                    pool.clone(),
+                ),
+            ),
+            cluster_instance_release_service: northstar_session_application::cluster_instance_release::ClusterInstanceReleaseService::new(
+                northstar_session_postgres::cluster_instance_release_repository::PostgresClusterInstanceReleaseRepository::new(
+                    pool.clone(),
+                ),
+            ),
+            cluster_authority_service: northstar_session_application::cluster_authority::ClusterAuthorityService::new(
+                northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
+                    pool.clone(),
+                ),
+            ),
             sm_service: northstar_session_application::sm::SmService::new(
                 northstar_workflows::sm_repository::PostgresSmRepository::new(
                     pool.clone(),

@@ -42,6 +42,7 @@ pub trait ClusterAuthorityRepository: Send + Sync {
     ) -> impl Future<Output = Result<()>> + Send;
 }
 
+#[derive(Clone)]
 pub struct ClusterAuthorityService<R> {
     repository: R,
 }

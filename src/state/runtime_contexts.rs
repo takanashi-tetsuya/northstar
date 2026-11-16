@@ -5,6 +5,18 @@ use crate::state::http_contexts::ReadinessContext;
 use northstar_s2s::host::ComponentRuntimePolicy;
 
 impl AppState {
+    pub(crate) fn account_revocation_worker_context(
+        &self,
+    ) -> crate::cluster::AccountRevocationWorkerContext<
+        northstar_auth_postgres::account_revocation_repository::PostgresAccountRevocationRepository,
+    > {
+        crate::cluster::AccountRevocationWorkerContext::new(
+            self.auth.account_revocation_consumer_service.clone(),
+            AccountRevocationRoutes::new(Arc::clone(&self.sessions)),
+            self.cluster.account_revocation_authority(),
+        )
+    }
+
     pub(crate) fn background_housekeeping_counters(
         &self,
     ) -> northstar_operations_application::background_housekeeping::BackgroundHousekeepingCounters

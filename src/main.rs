@@ -671,8 +671,8 @@ async fn run() -> Result<()> {
         },
     );
 
-    if state.cluster().is_enabled() {
-        let pubsub_transport = Arc::new(state.cluster().pubsub_listener_transport());
+    if state.cluster_workers_enabled() {
+        let pubsub_transport = Arc::new(state.cluster_pubsub_listener_transport());
         let listener_admission = Arc::new(state.cluster_listener_admission());
         let state_pubsub = state.clone();
         let pubsub_cancel = cancel.clone();
@@ -744,7 +744,7 @@ async fn run() -> Result<()> {
                 )
             },
         );
-    } else if state.cluster().muc_pg_authority_enabled() {
+    } else if state.muc_pg_authority_enabled() {
         let maintenance_context = Arc::new(state.standalone_muc_maintenance_context());
         let maintenance_cancel = cancel.clone();
         worker_registry.supervise(

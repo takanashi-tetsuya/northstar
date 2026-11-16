@@ -43,11 +43,11 @@ impl BoshHost for AppState {
     }
 
     fn replay_service(&self) -> &ReplayService<PostgresReplayRepository> {
-        AppState::replay_service(self)
+        self.session.replay_service()
     }
 
     fn mix_service(&self) -> &MixService<PostgresMixRepository> {
-        AppState::mix_service(self)
+        self.room.mix_service()
     }
 
     fn sm_memory_governor(&self) -> &Arc<SmMemoryGovernor> {

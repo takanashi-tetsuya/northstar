@@ -19,11 +19,11 @@ impl PubSubSessionHost for AppState {
     }
 
     fn profile_service(&self) -> &ProfileService<impl ProfileRepository> {
-        AppState::profile_service(self)
+        self.pubsub.profile_service()
     }
 
     fn private_storage_service(&self) -> &PrivateStorageService<impl PrivateStorageRepository> {
-        AppState::private_storage_service(self)
+        self.pubsub.private_storage_service()
     }
 
     fn pep_record_published(&self, count: u64) {
@@ -89,7 +89,7 @@ impl northstar_pubsub_xmpp::pubsub::PubSubHost for AppState {
     fn pubsub_application_service(
         &self,
     ) -> &PubSubService<impl northstar_pubsub_xmpp::PubSubRepositories> {
-        AppState::pubsub_service(self)
+        self.pubsub.pubsub_service()
     }
 }
 

@@ -28,6 +28,22 @@ pub(super) struct AbuseModule {
 }
 
 impl AbuseModule {
+    pub(crate) fn challenge_issue_service(
+        &self,
+    ) -> &northstar_abuse_application::challenge::ChallengeIssueService<
+        northstar_abuse_postgres::challenge::PostgresChallengeRepository,
+    > {
+        &self.challenge_issue_service
+    }
+
+    pub(crate) fn sasl_login_abuse_service(
+        &self,
+    ) -> &northstar_abuse_application::login::SaslLoginAbuseService<
+        northstar_abuse_postgres::login::PostgresSaslLoginAbuseRepository,
+    > {
+        &self.sasl_login_abuse_service
+    }
+
     /// Builds the services over the guard the other contexts share.
     pub(super) fn new(
         guard: &Arc<AbuseGuard>,

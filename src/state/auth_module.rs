@@ -9,6 +9,13 @@ use northstar_workflows::authentication_effects::{
 
 /// The auth context's services, built once at startup.
 pub(super) struct AuthModule {
+    pub(super) account_revocation_consumer_service:
+        northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService<
+            northstar_auth_postgres::account_revocation_repository::PostgresAccountRevocationRepository,
+        >,
+    pub(super) api_session_service: northstar_auth_application::api_sessions::ApiSessionService<
+        northstar_auth_postgres::api_session_repository::PostgresApiSessionRepository,
+    >,
     pub(super) passkey_service: Arc<PasskeyService>,
     pub(super) account_service: northstar_auth_application::account::AccountService<
         northstar_workflows::account_repository::WorkflowAccountRepository,
@@ -59,6 +66,38 @@ pub(super) struct AuthModuleParts<'a> {
 }
 
 impl AuthModule {
+    pub(crate) fn omemo_recovery_service(
+        &self,
+    ) -> &northstar_auth_application::omemo_recovery::OmemoRecoveryService<
+        northstar_auth_postgres::omemo_recovery_repository::PostgresOmemoRecoveryRepository,
+    > {
+        &self.omemo_recovery_service
+    }
+
+    pub(crate) fn api_session_service(
+        &self,
+    ) -> &northstar_auth_application::api_sessions::ApiSessionService<
+        northstar_auth_postgres::api_session_repository::PostgresApiSessionRepository,
+    > {
+        &self.api_session_service
+    }
+
+    pub(crate) fn account_service(
+        &self,
+    ) -> &northstar_auth_application::account::AccountService<
+        northstar_workflows::account_repository::WorkflowAccountRepository,
+    > {
+        &self.account_service
+    }
+
+    pub(crate) fn authentication_service(
+        &self,
+    ) -> &northstar_auth_application::authentication::AuthenticationService<
+        northstar_workflows::authentication_effects::PostgresAuthenticationRepository,
+    > {
+        &self.authentication_service
+    }
+
     /// Builds the services over the stores and policies the composition root owns.
     pub(super) fn new(parts: AuthModuleParts<'_>) -> Self {
         let AuthModuleParts {
@@ -193,7 +232,19 @@ impl AuthModule {
             config.trusted_proxy_ips.clone(),
             omemo_poll::OmemoRecoveryPollCounters::from_metrics(metrics),
         );
+        let account_revocation_consumer_service =
+            northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService::new(
+                northstar_auth_postgres::account_revocation_repository::PostgresAccountRevocationRepository::new(
+                    pool.clone(),
+                ),
+            );
         Self {
+            account_revocation_consumer_service,
+            api_session_service: northstar_auth_application::api_sessions::ApiSessionService::new(
+                northstar_auth_postgres::api_session_repository::PostgresApiSessionRepository::new(
+                    pool.clone(),
+                ),
+            ),
             passkey_service,
             account_service,
             login_service,

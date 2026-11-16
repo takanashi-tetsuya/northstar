@@ -3,6 +3,7 @@ use northstar_auth_application::api_sessions::ApiSessionRepository;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+#[derive(Clone)]
 pub struct PostgresApiSessionRepository {
     pool: PgPool,
 }

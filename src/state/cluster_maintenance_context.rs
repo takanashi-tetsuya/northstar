@@ -8,24 +8,36 @@ use crate::cluster::{
 };
 
 impl AppState {
+    pub(crate) fn muc_pg_authority_enabled(&self) -> bool {
+        self.cluster.muc_pg_authority_enabled()
+    }
+
+    pub(crate) fn cluster_workers_enabled(&self) -> bool {
+        self.cluster.is_enabled()
+    }
+
+    pub(crate) fn cluster_pubsub_listener_transport(
+        &self,
+    ) -> crate::cluster::ClusterPubsubListenerTransport {
+        self.cluster.pubsub_listener_transport()
+    }
+
     pub(crate) fn standalone_muc_maintenance_context(
         &self,
     ) -> StandaloneMucMaintenanceContext<
         northstar_room_postgres::room::PostgresClusterMucOccupancyMaintenanceRepository,
     > {
         StandaloneMucMaintenanceContext::new(
-            self.cluster().muc_cluster_node_id().to_owned(),
+            self.cluster.muc_cluster_node_id().to_owned(),
             northstar_xmpp_types::jid::prepare_domainpart(&format!(
                 "conference.{}",
                 self.config.domain
             ))
             .expect("configured XMPP domain must form a valid MUC domain"),
             self.cluster_maintenance_locals(),
-            northstar_room_application::muc_service::ClusterMucOccupancyMaintenanceService::new(
-                northstar_room_postgres::room::PostgresClusterMucOccupancyMaintenanceRepository::new(
-                    self.pool.clone(),
-                ),
-            ),
+            self.room
+                .cluster_muc_occupancy_maintenance_service()
+                .clone(),
         )
     }
 
@@ -47,16 +59,8 @@ impl AppState {
                     self.pool.clone(),
                 ),
             ),
-            cluster_authority: northstar_session_application::cluster_authority::ClusterAuthorityService::new(
-                northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
-                    self.pool.clone(),
-                ),
-            ),
-            muc_occupancy: northstar_room_application::muc_service::ClusterMucOccupancyMaintenanceService::new(
-                northstar_room_postgres::room::PostgresClusterMucOccupancyMaintenanceRepository::new(
-                    self.pool.clone(),
-                ),
-            ),
+            cluster_authority: self.session.cluster_authority_service().clone(),
+            muc_occupancy: self.room.cluster_muc_occupancy_maintenance_service().clone(),
         }
     }
 }

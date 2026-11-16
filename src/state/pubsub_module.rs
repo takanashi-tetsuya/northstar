@@ -25,6 +25,30 @@ pub(super) struct PubSubModule {
 }
 
 impl PubSubModule {
+    pub(crate) fn pubsub_service(
+        &self,
+    ) -> &northstar_pubsub_application::PubSubService<
+        northstar_workflows::pubsub_repository::PostgresPubSubRepository,
+    > {
+        &self.pubsub_service
+    }
+
+    pub(crate) fn profile_service(
+        &self,
+    ) -> &northstar_pubsub_application::profile::ProfileService<
+        northstar_workflows::profile::PostgresProfileRepository,
+    > {
+        &self.profile_service
+    }
+
+    pub(crate) fn private_storage_service(
+        &self,
+    ) -> &northstar_pubsub_application::private_storage::PrivateStorageService<
+        northstar_pubsub_postgres::PostgresPrivateStorageRepository,
+    > {
+        &self.private_storage_service
+    }
+
     /// Builds the services over the primary pool. The PubSub event outbox shares the durable
     /// outbox admission of the primary pool, and the profile service shares the PubSub service's
     /// mutation admission.

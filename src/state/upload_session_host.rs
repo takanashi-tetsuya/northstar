@@ -38,7 +38,8 @@ impl UploadSessionHost for AppState {
         &self,
         command: UploadSlotRequestCommand<'_>,
     ) -> anyhow::Result<UploadSlotAdmission> {
-        self.upload_service()
+        self.upload
+            .upload_service()
             .execute_upload_slot_reservation(command)
             .await
     }

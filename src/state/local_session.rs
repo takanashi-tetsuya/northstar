@@ -125,28 +125,4 @@ impl AppState {
         })
         .await
     }
-
-    pub(super) fn sm_teardown_presence_service(
-        &self,
-    ) -> northstar_session_application::sm_teardown_presence::SmTeardownPresenceService<
-        northstar_workflows::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository,
-    > {
-        northstar_session_application::sm_teardown_presence::SmTeardownPresenceService::new(
-            northstar_workflows::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository::new(
-                self.pool.clone(),
-            ),
-        )
-    }
-
-    pub(super) fn sm_teardown_muc_service(
-        &self,
-    ) -> northstar_room_application::sm_teardown_muc::SmTeardownMucService<
-        northstar_workflows::sm_teardown_muc_repository::PostgresSmTeardownMucRepository,
-    > {
-        northstar_room_application::sm_teardown_muc::SmTeardownMucService::new(
-            northstar_workflows::sm_teardown_muc_repository::PostgresSmTeardownMucRepository::new(
-                self.pool.clone(),
-            ),
-        )
-    }
 }

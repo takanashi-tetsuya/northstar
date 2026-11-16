@@ -63,6 +63,34 @@ pub(super) struct OperationsModuleParts<'a> {
 }
 
 impl OperationsModule {
+    pub(crate) fn report_service(
+        &self,
+    ) -> &northstar_operations_application::reports::ReportService<
+        northstar_workflows::report_repository::PostgresReportRepository,
+    > {
+        &self.report_service
+    }
+
+    pub(crate) fn api_query_service(
+        &self,
+    ) -> &northstar_operations_application::api_queries::ApiQueryService<
+        northstar_workflows::api_queries::PostgresApiQueryRepository,
+    > {
+        self.api_query_context.api_query_service()
+    }
+
+    pub(crate) fn api_query_context(&self) -> ApiQueryContext {
+        self.api_query_context.clone()
+    }
+
+    pub(crate) fn admin_command_service(
+        &self,
+    ) -> &northstar_operations_application::admin_commands::AdminCommandService<
+        northstar_workflows::admin_command_repository::WorkflowAdminCommandRepository,
+    > {
+        &self.admin_command_service
+    }
+
     /// Builds the services over the stores and policies the composition root owns.
     pub(super) fn new(parts: OperationsModuleParts<'_>) -> Self {
         let OperationsModuleParts {

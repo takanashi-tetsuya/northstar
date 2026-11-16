@@ -134,6 +134,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 mod abuse_module;
 mod admission_guards;
+mod archive_module;
 mod auth_module;
 mod construction;
 mod federation_dns;
@@ -150,12 +151,12 @@ mod room_module;
 mod roster_module;
 mod runtime_contexts;
 mod runtime_control;
-mod service_accessors;
 mod session_module;
 mod suspended_muc;
 mod upload_module;
 
 use self::abuse_module::*;
+use self::archive_module::*;
 use self::auth_module::*;
 #[cfg(test)]
 use self::construction::*;
@@ -238,15 +239,10 @@ pub struct AppState {
     /// The session context; see [`SessionModule`].
     session: SessionModule,
     public_discovery_context: PublicDiscoveryContext,
-    /// XEP-0215 TURN credential authority. Long-lived key material and its
-    /// bounded rate windows never cross into protocol or public state.
-    mam_service: northstar_archive_application::MamService<northstar_workflows::mam_repository::PostgresMamRepository>,
+    /// The archive context; see [`ArchiveModule`].
+    archive: ArchiveModule,
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
     cluster: crate::cluster::ClusterManager,
-    account_revocation_consumer_service:
-        northstar_auth_application::account_revocation_consumer::AccountRevocationConsumerService<
-            northstar_auth_postgres::account_revocation_repository::PostgresAccountRevocationRepository,
-        >,
     bosh: Option<northstar_bosh::BoshManager>,
     sessions: LocalSessionTable,
     metrics: Arc<Metrics>,

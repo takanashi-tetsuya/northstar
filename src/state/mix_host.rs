@@ -24,7 +24,7 @@ impl MixHost for AppState {
     type OutboxContext = MixOutboxContext;
 
     fn mix_service(&self) -> &MixService<Self::Repository> {
-        AppState::mix_service(self)
+        self.room.mix_service()
     }
 
     fn federation_outbox(&self) -> &FederationRouter {

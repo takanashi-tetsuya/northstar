@@ -11,7 +11,7 @@ impl AppState {
         ClusterListenerSmMucTeardown {
             local: self.sm_teardown_local_effects(),
             redis: self.cluster.sm_muc_teardown_projection(),
-            rooms: self.sm_teardown_muc_service(),
+            rooms: self.room.sm_teardown_muc_service().clone(),
             delivery: self.muc_delivery_context(),
             local_domain: self.config.domain.clone(),
         }

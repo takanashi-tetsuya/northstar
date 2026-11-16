@@ -11,6 +11,7 @@ use northstar_session_application::cluster_authority::ClusterAuthorityRepository
 use sqlx::PgPool;
 use std::time::Duration;
 
+#[derive(Clone)]
 pub struct PostgresClusterAuthorityRepository {
     pool: PgPool,
 }

@@ -340,7 +340,7 @@ for (const field of [
   'operations',
   'message',
   'federation',
-  'mam_service',
+  'archive',
   'session',
   'bosh',
   'started_at',
@@ -480,7 +480,7 @@ if (!runtimeMain.includes('state.retention_context()')
 const clusterShutdown = read('src/state/cluster_shutdown.rs');
 const shutdownFence = clusterShutdown.indexOf('let _publication_fence =');
 const publicationTimeout = clusterShutdown.indexOf('tokio::time::timeout(quiesce_timeout, self.cluster.quiesce_publication())', shutdownFence);
-const releaseInstance = clusterShutdown.indexOf('.release_instance_authority_with(&release_service)', publicationTimeout);
+const releaseInstance = clusterShutdown.indexOf('.release_instance_authority_with(release_service)', publicationTimeout);
 if (shutdownFence < 0 || publicationTimeout < shutdownFence || releaseInstance < publicationTimeout
     || !/\.release_cluster_instance_after_publication_quiescence\(std::time::Duration::from_secs\(15\)\)/.test(runtimeMain)
     || !runtimeMain.includes('shutdown_state.begin_cluster_shutdown();')
@@ -2175,7 +2175,7 @@ for (const authority of [
   }
 }
 if (!/\.execute_federated_mam_metadata\s*\(/.test(federatedMucSource)
-  || !/self\s*\.mam_service\s*\(\s*\)\s*\.execute_federated_mam_metadata\s*\(/.test(read('src/state/muc_host.rs'))) {
+  || !/self\s*\.archive\s*\.mam_service\s*\(\s*\)\s*\.execute_federated_mam_metadata\s*\(/.test(read('src/state/muc_host.rs'))) {
   throw new Error('federated_muc.rs no longer routes MAM authority through mam_service()');
 }
 const federatedIqHandler = rustItemBody(federatedMucSource, 'async fn federated_muc_iq_owned(');
@@ -2664,7 +2664,7 @@ if (!(/\.wake_committed_operation\s*\(\s*&self\.state\.cluster\s*,/.test(mucProd
 if (/\.wake_committed_muc_operation\s*\(\s*&self\.pool\b/.test(state)) {
   throw new Error('AppState runtime paths bypass MucService for committed MUC wakes');
 }
-if (!/pub\(crate\) async fn wake_committed_muc_operation\s*\([\s\S]*?\.muc_service\s*\(\s*\)\s*\.wake_committed_operation\s*\(\s*&self\.cluster\s*,\s*operation_id\s*\)/.test(state)) {
+if (!/async fn wake_committed_muc_operation\s*\([\s\S]*?self\s*\.room\s*\.muc_service\s*\(\s*\)\s*\.wake_committed_operation\s*\(\s*&self\.cluster\s*,\s*operation_id\s*\)/.test(read('src/state/muc_host.rs'))) {
   throw new Error('AppState committed MUC wake must delegate to MucService with cluster authority');
 }
 const operationRuntimeSource = productionWithoutCfgTestModules(
@@ -4062,9 +4062,12 @@ for (const task of serviceTaskNames) {
     throw new Error(`program responsibility model omits top-level service task: ${task}`);
   }
 }
-const stateServiceAccessors = [
+const moduleServiceAccessors = [
   'api_query_service',
   'api_session_service',
+  'cluster_authority_service',
+  'cluster_instance_release_service',
+  'cluster_muc_occupancy_maintenance_service',
   'challenge_issue_service',
   'sasl_login_abuse_service',
   's2s_roster_authorization_service',
@@ -4097,58 +4100,31 @@ const stateServiceAccessors = [
 if (!state.includes('let upload_service = config.upload_mode.keeps_storage_runtime().then(')) {
   throw new Error('upload service must exist while the drain-read-only GET and DELETE routes are mounted');
 }
-// AppState service accessors are the `pub(crate) fn *_service(` members of the
-// `impl AppState` blocks of the module; context types in child files have
-// their own accessors with the same names, which are not AppState capabilities.
-const composedServiceAccessors = [...state.matchAll(/^impl AppState \{/gm)].flatMap((block) => {
+// AppState keeps composition and runtime handles; every inherent *_service
+// method, regardless of visibility, belongs to its owning context module.
+const appStateServiceAccessors = [...state.matchAll(/^\s*impl\s+AppState\s*\{/gm)].flatMap((block) => {
   const open = block.index + block[0].length - 1;
   return [...state.slice(open, matchingRustBrace(state, open))
-    .matchAll(/pub\(crate\)\s+fn\s+([a-z][a-z0-9_]*_service)\s*\(/g)].map((match) => match[1]);
+    .matchAll(/\bfn\s+([a-z][a-z0-9_]*_service)\s*(?:<[^>{}]*>)?\s*\(/g)].map((match) => match[1]);
 });
-assertExactUniqueInventory('AppState service accessor', composedServiceAccessors, stateServiceAccessors);
-for (const accessor of stateServiceAccessors) {
-  if (!state.includes(`fn ${accessor}(`)) {
-    throw new Error(`documented AppState service accessor is absent: ${accessor}`);
-  }
-  if (!responsibilityDocument.includes(`\`${accessor}()\``)) {
-    throw new Error(`program responsibility model omits service accessor: ${accessor}`);
-  }
-}
+assertExactUniqueInventory('AppState service accessor', appStateServiceAccessors, []);
 
-// These cluster services are constructed where their private pool is bound,
-// rather than exposed through inherent AppState service accessors.
-const constructedClusterServices = [
-  {
-    name: 'cluster_authority_service',
-    owner: 'src/state/cluster_maintenance_context.rs',
-    constructor: 'northstar_session_application::cluster_authority::ClusterAuthorityService::new(',
-    repository: 'northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository::new(',
-    documentation: 'ClusterAuthorityService',
-    count: 1,
-  },
-  {
-    name: 'cluster_instance_release_service',
-    owner: 'src/state/cluster_shutdown.rs',
-    constructor: 'northstar_session_application::cluster_instance_release::ClusterInstanceReleaseService::new(',
-    repository: 'northstar_session_postgres::cluster_instance_release_repository::PostgresClusterInstanceReleaseRepository::new(',
-    documentation: 'ClusterInstanceReleaseService',
-    count: 1,
-  },
-  {
-    name: 'cluster_muc_occupancy_maintenance_service',
-    owner: 'src/state/cluster_maintenance_context.rs',
-    constructor: 'northstar_room_application::muc_service::ClusterMucOccupancyMaintenanceService::new(',
-    repository: 'northstar_room_postgres::room::PostgresClusterMucOccupancyMaintenanceRepository::new(',
-    documentation: 'ClusterMucOccupancyMaintenanceService',
-    count: 2,
-  },
-];
-for (const service of constructedClusterServices) {
-  const source = read(service.owner).replace(/\s+/g, '');
-  const construction = service.constructor + service.repository + 'self.pool.clone(),),)';
-  if (source.split(construction).length - 1 !== service.count
-      || !responsibilityDocument.includes(`\`${service.documentation}\``)) {
-    throw new Error(`cluster service must retain its private PostgreSQL composition: ${service.name}`);
+// Inventory only crate-private service accessors in inherent context module
+// implementations. Host-trait methods keep their names and are not accessors.
+const composedModuleServiceAccessors = productionRustSources
+  .filter(({ relative }) => relative.startsWith('src/state/'))
+  .flatMap(({ relative, source }) => [...source.matchAll(/^\s*impl\s+[A-Za-z][A-Za-z0-9_]*Module\s*\{/gm)]
+    .flatMap((block) => {
+      const open = block.index + block[0].length - 1;
+      return [...source.slice(open, matchingRustBrace(source, open))
+        .matchAll(/pub\(crate\)\s+fn\s+([a-z][a-z0-9_]*_service)\s*\(/g)]
+        .map((match) => ({ name: match[1], owner: relative }));
+    }));
+const composedServiceAccessors = composedModuleServiceAccessors.map(({ name }) => name);
+assertExactUniqueInventory('module service accessor', composedServiceAccessors, moduleServiceAccessors);
+for (const accessor of moduleServiceAccessors) {
+  if (!responsibilityDocument.includes(`\`${accessor}()\``)) {
+    throw new Error(`program responsibility model omits module service accessor: ${accessor}`);
   }
 }
 
@@ -4206,6 +4182,5 @@ export const verifiedRuntimeInventory = [
       id: `observer:${roleIdentity(relative, match[1])}`, kind: 'observer', owner: relative,
     }))),
   ...composedServiceTasks.map((name) => ({ id: `task:${name}`, kind: 'task', owner: 'src/main.rs' })),
-  ...composedServiceAccessors.map((name) => ({ id: `service:${name}`, kind: 'service', owner: 'src/state.rs' })),
-  ...constructedClusterServices.map(({ name, owner }) => ({ id: `service:${name}`, kind: 'service', owner })),
+  ...composedModuleServiceAccessors.map(({ name, owner }) => ({ id: `service:${name}`, kind: 'service', owner })),
 ].sort((left, right) => left.id.localeCompare(right.id));

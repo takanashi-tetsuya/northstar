@@ -36,11 +36,11 @@ const BLOCKING_PUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 impl RosterSessionHost for AppState {
     fn roster_service(&self) -> &RosterService<impl RosterRepository<Error = anyhow::Error>> {
-        AppState::roster_service(self)
+        self.roster.roster_service()
     }
 
     fn blocking_service(&self) -> &BlockingService<impl BlockingRepository> {
-        AppState::blocking_service(self)
+        self.roster.blocking_service()
     }
 
     fn post_accept_failure_telemetry(&self) -> PostAcceptFailureTelemetry {
@@ -119,7 +119,7 @@ impl RosterSessionHost for AppState {
             }
         }
         match self
-            .cluster()
+            .cluster
             .route_remote_blocklist_push(owner, || blocking_push_stanza(owner, payload))
             .await
         {
@@ -142,7 +142,7 @@ impl RosterSessionHost for AppState {
     ) {
         deliver_blocking_presence_change(self, owner, targets, changed_patterns, available).await;
         match self
-            .cluster()
+            .cluster
             .route_remote_blocking_presence_change(owner, targets, changed_patterns, available)
             .await
         {
@@ -161,7 +161,7 @@ impl RosterSessionHost for AppState {
     }
 
     async fn account_has_remote_resources(&self, account: &str) -> Result<bool> {
-        self.cluster().account_has_remote_resources(account).await
+        self.cluster.account_has_remote_resources(account).await
     }
 
     fn privacy_list_active_locally(&self, account: &str, name: &str) -> bool {
@@ -210,11 +210,7 @@ impl RosterSessionHost for AppState {
                 );
             }
         }
-        match self
-            .cluster()
-            .route_remote_privacy_push(account, base)
-            .await
-        {
+        match self.cluster.route_remote_privacy_push(account, base).await {
             Ok(failures) => {
                 for failure in failures {
                     tracing::warn!(
@@ -324,7 +320,7 @@ impl RosterSessionHost for AppState {
     }
 
     async fn probe_has_remote_owner(&self, bare: &str) -> Result<bool> {
-        self.cluster().presence_probe_has_remote_owner(bare).await
+        self.cluster.presence_probe_has_remote_owner(bare).await
     }
 
     fn directed_presence_recipient(&self, owner_full: &str, requester: &str) -> bool {
@@ -368,7 +364,7 @@ impl RosterSessionHost for AppState {
     }
 
     async fn full_presence_target_routed(&self, full_jid: &str) -> bool {
-        self.cluster()
+        self.cluster
             .subscription_full_target_has_route(full_jid)
             .await
     }
@@ -418,7 +414,7 @@ async fn deliver_roster_removal_presence(
         }
     }
     state
-        .cluster()
+        .cluster
         .route_remote_roster_removal_presence(
             target_bare,
             stanza,
@@ -562,7 +558,7 @@ pub(crate) async fn deliver_blocking_presence_change(
         available,
         |node_id, target, delivery| async move {
             let _ = state
-                .cluster()
+                .cluster
                 .route_remote_available_presence_to_node(&node_id, &target, &delivery)
                 .await;
             Ok(())
@@ -629,7 +625,7 @@ where
                 for (_, recipient) in recipients {
                     let _ = recipient.sender.try_send(delivery.clone());
                 }
-                if let Ok(nodes) = state.cluster().remote_resource_nodes(&target).await {
+                if let Ok(nodes) = state.cluster.remote_resource_nodes(&target).await {
                     for node_id in nodes {
                         send_remote(node_id, target.clone(), delivery.clone()).await?;
                     }
@@ -759,7 +755,7 @@ impl PresenceDeliveryHost for AppState {
         stanza: &str,
         bare_target: bool,
     ) -> bool {
-        self.cluster()
+        self.cluster
             .route_directed_presence_remote(target, stanza, bare_target)
             .await
     }
@@ -770,13 +766,13 @@ impl PresenceDeliveryHost for AppState {
         stanza: &str,
         authority: ClusterPresenceAuthority,
     ) {
-        self.cluster()
+        self.cluster
             .route_presence_subscription_remote(target, stanza, authority)
             .await
     }
 
     async fn broadcast_available_presence_remote(&self, target: &str, stanza: &str) {
-        self.cluster()
+        self.cluster
             .broadcast_available_presence_remote(target, stanza)
             .await
     }
@@ -787,7 +783,7 @@ impl PresenceDeliveryHost for AppState {
         requester: &str,
         authority: Option<ClusterPresenceAuthority>,
     ) -> Result<bool> {
-        self.cluster()
+        self.cluster
             .delegate_authorized_full_presence_probe_remote(owner_full, requester, authority)
             .await
     }
@@ -799,7 +795,7 @@ impl PresenceDeliveryHost for AppState {
         availability_only: bool,
         authority: ClusterPresenceAuthority,
     ) {
-        self.cluster()
+        self.cluster
             .replay_current_presence_from_remote_owners(
                 owner_lookup,
                 recipient,

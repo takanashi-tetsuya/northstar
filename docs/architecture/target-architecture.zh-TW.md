@@ -162,8 +162,8 @@ edge 與子伺服器。服務定位器式的 accessor 已刪除，各上下文�
 
 - 新的 crate 依賴圖門禁讀 `cargo metadata` 與 `catalog/crates.yaml` 的層級，拒絕違反 4.1 的依賴，並依層級限制
   外部依賴（例如 application 層不得依賴 `sqlx`、`axum`、`hickory-resolver`、`tokio-rustls`）。
-- `catalog/source-layers.json`（R9）在 `src/` 消失時退役。S31 後 `src/` 仍是組合根，R9 只剩組合與 `xmpp` 兩層，
-  去留在 S32 決定。
+- `catalog/source-layers.json`（R9）原定在 `src/` 消失時退役。`src/` 留作組合根，S32 後它的生產碼只剩組合一層，
+  R9 因此退役（WP-509），層級只由 crate 圖執行。
 - 讀原始碼文字的門禁逐支處理：邊界已由 crate 圖保證的直接刪除（例如「協定模組不得使用 `db::`」）；交易順序、
   outbox 等語義檢查改寫成擁有該行為的 crate 中的測試；在那之前，每個 WP 都列出它要更新的門禁。
 

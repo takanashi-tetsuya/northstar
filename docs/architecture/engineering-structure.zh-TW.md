@@ -36,22 +36,22 @@
 ## 3. 目標分層
 
 S16 起 workspace 的 crate 結構以[目標架構](target-architecture.zh-TW.md)為準：crate 依目錄分為 kernel、platform、contexts、edges 與 tools，由 R10 執行。
-根 crate 內部以頂層模組分層，依賴只能由上往下，同層可互相使用。分層的權威清單是
-`catalog/source-layers.json`，由 R9 執行：
+根 crate 內部曾以頂層模組分層，依賴只能由上往下，分層清單是 `catalog/source-layers.json`，由 R9 執行。S32 後根 crate
+的生產碼只剩組合一層，R9 退役（WP-509），層級只由 R10 的 crate 圖執行：
 
 ```text
-4 組合          main.rs（設定、子命令、啟動與關機）、node（ServerNode：上下文模組、host 實作、port 綁定、worker 註冊）、
-                runtime（程序角色、服務工作監督）
-3 介面卡        xmpp（公告的伺服器能力；其餘是 cfg(test) 的協定測試與 Stage 4 harness）
+組合            main.rs（設定、子命令、啟動與關機）、node（ServerNode：上下文模組、host 實作、port 綁定、worker 註冊、
+                窄遙測）、runtime（程序角色、服務工作監督）
 函式庫          crates/{kernel,platform,contexts/*,edges}/*，不得依賴根 crate
-測試專用        只在 #[cfg(test)]；受控重播與 Stage 4 實驗程式只在既有 cfg(test) 模組；資料庫整合測試在
-                tooling crate tools/northstar-db-it
+測試專用        只在 #[cfg(test)]：xmpp（協定測試與 Stage 4 harness）、stage4_replay、direct_replay；資料庫整合測試
+                在 tooling crate tools/northstar-db-it
 ```
 
 介面卡呼叫應用服務，應用服務經 port 使用持久化與傳輸，因此介面卡在應用服務之上。S10 之前本節把兩者
 的順序寫反，平台層也沒有列出 worker 監督；S10 依呼叫方向修正，並量測現有的違規（5.6）。S17 把平台層與相容
 facade 移出根 crate（5.13），根 crate 剩下組合、介面卡與應用服務三層。S19–S30 把應用服務與 db、bosh、s2s、api、
-storage、cluster 介面卡移為 crate，S31 後只剩上圖的兩層（5.27）。
+storage、cluster 介面卡移為 crate，S31 後只剩組合與 `xmpp` 兩層（5.27）；S32 把 `xmpp` 的窄遙測移入 `node`，
+`xmpp` 只在測試中編譯（WP-508）。
 
 ### 3.1 根 crate 目標目錄（S4 階段才搬動）
 
@@ -90,7 +90,7 @@ WP-495 後，operation runtime 的現行位置為
 | R7 提交 | 一個 WP 一至數個提交，訊息首行以 `[WP-xx]` 開頭；不推 WIP | 審閱 |
 | R8 文件不留舊路徑 | 現行文件與 `crates/*/MIGRATION.md` 不得寫 S4 已移走的根目錄模組路徑（含 `../src/` 與目錄形式）；有日期的紀錄（`docs/` 下的 `evidence`、`archive`、`handoff`、`changelog`、`releases` 與 `CHANGELOG.md`）、本文與固定提交的連結保留當時的路徑 | `scripts/check-documentation-consistency.mjs` |
 | R10 crate 層級 | workspace crate 依所在目錄屬於 kernel、platform、context（core／application／adapter）、edge、composition 或 tooling 層（[目標架構](target-architecture.zh-TW.md) 4.1）；只能依 [crate 政策](crate-policy.md) 的規則依賴其他 workspace crate 與外部 crate，dev-dependency 不檢查 | `tools/architecture-validator`＋`catalog/crates.yaml`（由 `scripts/generate-crate-catalog.mjs` 產生） |
-| R9 層級方向 | 根 crate 的每個頂層模組屬於 `catalog/source-layers.json` 的一層（第 3 節）；一層只能使用同層與 `may_use` 所列的層，`may_use` 不得列出 rank 較高的層。檢查範圍是從 `src/main.rs` 沿 `mod` 宣告走到的生產碼：測試專用 cfg 下宣告的模組連同整個子樹不算，檔內測試專用的項目、欄位、分支與陳述式也不算。既有違規以「檔案→目標頂層模組」記錄在同一檔案的 `baseline`，只能減少：新的違規、不再需要的基線項目與不屬任何層的目標都失敗。搬移 WP 以 `--write` 重寫基線，審閱時確認只刪不增 | `scripts/check-layer-dependencies.mjs`＋`catalog/source-layers.json` |
+| R9 層級方向 | S32 退役（WP-509）：根 crate 的生產碼只剩組合一層，層級改由 R10 的 crate 圖執行。退役前的規則：根 crate 的每個頂層模組屬於 `catalog/source-layers.json` 的一層（第 3 節）；一層只能使用同層與 `may_use` 所列的層，`may_use` 不得列出 rank 較高的層。檢查範圍是從 `src/main.rs` 沿 `mod` 宣告走到的生產碼：測試專用 cfg 下宣告的模組連同整個子樹不算，檔內測試專用的項目、欄位、分支與陳述式也不算。既有違規以「檔案→目標頂層模組」記錄在同一檔案的 `baseline`，只能減少：新的違規、不再需要的基線項目與不屬任何層的目標都失敗。搬移 WP 以 `--write` 重寫基線，審閱時確認只刪不增 | 已刪除（原為 `scripts/check-layer-dependencies.mjs`＋`catalog/source-layers.json`） |
 
 ## 5. 工作包順序
 

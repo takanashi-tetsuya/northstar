@@ -10,6 +10,7 @@ pub mod presence_delivery;
 pub mod privacy;
 mod protocol_session;
 pub mod roster;
+pub mod roster_push;
 mod session_host;
 
 pub use self::protocol_session::PresenceHandlers;

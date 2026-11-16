@@ -44,6 +44,7 @@ pub(crate) mod pep_last_items;
 pub(crate) mod pubsub_notification_delivery;
 pub(in crate::node) mod push_notification_delivery;
 pub(in crate::node) mod remote_route;
+pub(crate) mod roster_removal_presence;
 pub(in crate::node) mod runtime_control;
 pub(in crate::node) mod runtime_control_refresh;
 pub(crate) mod s2s_outbox_dispatch;

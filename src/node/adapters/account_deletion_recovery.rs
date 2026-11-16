@@ -3,19 +3,18 @@
 use crate::node::FederationRouter;
 use crate::node::{
     adapters::account_teardown_runtime::AccountTeardownRuntime,
-    adapters::session_cleanup_sm_revoker::SessionCleanupSmRevoker,
-    hosts::roster_session::deliver_roster_change_with, session_entries_for_in, OnlineSession,
-    ServerNode,
+    adapters::session_cleanup_sm_revoker::SessionCleanupSmRevoker, session_entries_for_in,
+    OnlineSession, ServerNode,
 };
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_auth_xmpp::account_deletion::{
-    AccountDeletionRecoveryContext, AccountDeletionRecoveryPorts, RosterPushDelivery,
-    RosterPushDeliveryPorts,
+    AccountDeletionRecoveryContext, AccountDeletionRecoveryPorts,
 };
 use northstar_cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery};
 use northstar_federation_application::effective_policy::EffectiveFederationPolicy;
 use northstar_roster_core::RosterChange;
+use northstar_roster_xmpp::roster_push::{RosterPushDelivery, RosterPushDeliveryPorts};
 use northstar_stream::local_routes::session_table::try_send_to_entries_in;
 use northstar_workflows::account_repository::WorkflowAccountRepository;
 use std::sync::Arc;
@@ -110,7 +109,14 @@ impl AccountDeletionRecoveryPorts for AccountDeletionRecoveryAdapters {
         owner: &str,
         change: &RosterChange,
     ) -> Result<()> {
-        deliver_roster_change_with(&self.roster, owner_id, owner, change, None).await
+        northstar_roster_xmpp::roster_push::deliver_committed_roster_change(
+            &self.roster,
+            owner_id,
+            owner,
+            change,
+            None,
+        )
+        .await
     }
 
     fn deliver_local_presence(&self, to: &str, stanza: &str) {

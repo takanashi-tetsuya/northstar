@@ -6,15 +6,14 @@ use northstar_mix_xmpp::MixHandlers;
 use northstar_muc_xmpp::MucHandlers;
 use northstar_pubsub_xmpp::PubSubHandlers;
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
-use northstar_roster_application::privacy::PrivacyStanzaKind;
-use northstar_roster_application::{
-    RosterPushDisposition, RosterRepository, RosterService, S2sOutboxPolicy,
-};
+use northstar_roster_application::{RosterRepository, RosterService, S2sOutboxPolicy};
 use northstar_roster_core::{
     ClusterPresenceAuthority, LocalRosterContact, PresenceAccount, RosterChange,
 };
 use northstar_roster_xmpp::presence_delivery;
-use northstar_roster_xmpp::roster::{roster_change_item_element, roster_push_xml};
+use northstar_roster_xmpp::roster_push::{
+    deliver_committed_roster_change, deliver_roster_removal_presence,
+};
 use northstar_roster_xmpp::{
     FederatedPresenceHost, PostAcceptFailureTelemetry, PresenceDeliveryHost, PresenceRouting,
     RosterSessionHost,
@@ -63,7 +62,14 @@ impl RosterSessionHost for ServerNode {
         change: &RosterChange,
         participant_id: Option<&str>,
     ) -> Result<()> {
-        deliver_roster_change(self, owner_id, owner, change, participant_id).await
+        deliver_committed_roster_change(
+            &self.roster_push_delivery(),
+            owner_id,
+            owner,
+            change,
+            participant_id,
+        )
+        .await
     }
 
     async fn deliver_roster_removal_presence(
@@ -371,162 +377,6 @@ impl RosterSessionHost for ServerNode {
     async fn notify_offline_account(&self, user_id: Uuid) -> Result<()> {
         self.dispatch_push_notification(user_id).await
     }
-}
-
-async fn deliver_roster_removal_presence(
-    state: &ServerNode,
-    owner_id: Uuid,
-    owner_auth_generation: i64,
-    recipient_id: Uuid,
-    recipient_auth_generation: i64,
-    target_bare: &str,
-    stanza: &str,
-) {
-    let Some(owner_bare) = roxmltree::Document::parse(stanza)
-        .ok()
-        .and_then(|document| {
-            document
-                .root_element()
-                .attribute("from")
-                .and_then(|value| northstar_xmpp_types::jid::canonicalize_bare(value).ok())
-        })
-    else {
-        // This is an internally constructed stanza. A malformed source must
-        // fail closed instead of bypassing the recipient resource's active
-        // XEP-0016 list.
-        return;
-    };
-    for (target_full, session) in state.sessions.session_entries_for(target_bare) {
-        // RFC 6121 section 2.2 distinguishes an "available resource" from
-        // an "interested resource".  Subscription-related presence is sent
-        // to every available resource; only the roster push which follows it
-        // is restricted to resources that requested the roster.
-        if session.user_id == recipient_id
-            && session.auth_generation == recipient_auth_generation
-            && session.available.load(Ordering::Acquire)
-            && state
-                .privacy_allows_session(&session, &owner_bare, PrivacyStanzaKind::PresenceIn)
-                .await
-                .unwrap_or(false)
-        {
-            let _ = session.sender.try_send(set_to(stanza, &target_full));
-        }
-    }
-    state
-        .cluster
-        .route_remote_roster_removal_presence(
-            target_bare,
-            stanza,
-            ClusterPresenceAuthority {
-                owner_id,
-                owner_auth_generation,
-                recipient_id,
-                recipient_auth_generation,
-            },
-        )
-        .await;
-}
-
-pub(crate) async fn deliver_roster_change(
-    state: &ServerNode,
-    owner_id: Uuid,
-    owner: &str,
-    change: &RosterChange,
-    participant_id: Option<&str>,
-) -> Result<()> {
-    deliver_roster_change_with(
-        &state.roster_push_delivery(),
-        owner_id,
-        owner,
-        change,
-        participant_id,
-    )
-    .await
-}
-
-pub(crate) async fn deliver_roster_change_with(
-    delivery: &northstar_auth_xmpp::account_deletion::RosterPushDelivery<
-        crate::node::adapters::account_deletion_recovery::RosterPushDeliveryAdapters,
-    >,
-    owner_id: Uuid,
-    owner: &str,
-    change: &RosterChange,
-    participant_id: Option<&str>,
-) -> Result<()> {
-    let item = roster_change_item_element(change, None);
-    let annotated = participant_id
-        .map(|participant_id| roster_change_item_element(change, Some(participant_id)));
-    let owner_jid = format!("{}@{}", owner, delivery.local_domain());
-    for (target_jid, target) in delivery.local_sessions(&owner_jid) {
-        if target.user_id != owner_id {
-            continue;
-        }
-        let plain_push = roster_push_xml(&owner_jid, &target_jid, change.version, item.clone());
-        let annotated_push = annotated.as_ref().map(|annotated| {
-            roster_push_xml(&owner_jid, &target_jid, change.version, annotated.clone())
-        });
-        match target.roster_sync.route(
-            &target.roster_requested,
-            &target.mix_roster_annotations,
-            change.version,
-            plain_push,
-            annotated_push,
-        ) {
-            RosterPushDisposition::NotInterested | RosterPushDisposition::Buffered => {}
-            RosterPushDisposition::Deliver(push) => {
-                if let Err(error) = target.sender.try_send(push) {
-                    target.sender.disconnect_backpressured_transport();
-                    target.disconnect.cancel();
-                    delivery.record_failure();
-                    tracing::warn!(owner = %owner_jid, target = %target_jid, version = change.version, ?error, "committed roster push did not enter the local resource queue; forcing a full resync");
-                }
-            }
-            RosterPushDisposition::Overflow => {
-                target.sender.disconnect_backpressured_transport();
-                target.disconnect.cancel();
-                delivery.record_failure();
-                tracing::warn!(owner = %owner_jid, target = %target_jid, version = change.version, "roster synchronization buffer overflowed; forcing a full resync");
-            }
-        }
-    }
-    // The immutable journal snapshot and exact committed version cross node
-    // boundaries together; remote resources add their exact full-JID target.
-    let push = roster_push_xml(&owner_jid, &owner_jid, change.version, item);
-    let annotated_push = annotated
-        .map(|annotated| roster_push_xml(&owner_jid, &owner_jid, change.version, annotated));
-    match delivery
-        .route_remote_push(
-            &owner_jid,
-            owner_id,
-            change.version,
-            &push,
-            annotated_push.as_deref(),
-        )
-        .await
-    {
-        Ok(failures) => {
-            for failure in failures {
-                delivery.record_failure();
-                match failure {
-                    northstar_auth_xmpp::account_deletion::RemoteRosterPushFailure::NotAccepted {
-                        node_id,
-                    } => {
-                        tracing::warn!(owner = %owner_jid, remote_node = %node_id, version = change.version, "committed roster push was not accepted by the remote node; roster version recovery remains authoritative");
-                    }
-                    northstar_auth_xmpp::account_deletion::RemoteRosterPushFailure::Delivery(
-                        failure,
-                    ) => {
-                        tracing::warn!(owner = %owner_jid, remote_node = %failure.node_id, version = change.version, error=?failure.error, "committed roster push failed across the cluster; roster version recovery remains authoritative");
-                    }
-                }
-            }
-        }
-        Err(error) => {
-            delivery.record_failure();
-            tracing::warn!(owner = %owner_jid, version = change.version, ?error, "could not discover remote resources for a committed roster push; roster version recovery remains authoritative");
-        }
-    }
-    Ok(())
 }
 
 fn blocking_push_stanza(target: &str, payload: &str) -> String {

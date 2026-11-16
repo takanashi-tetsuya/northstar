@@ -123,46 +123,27 @@ northstar-abuse-application = { path = "crates/contexts/abuse/northstar-abuse-ap
 northstar-abuse-policy = { path = "crates/contexts/abuse/northstar-abuse-policy" }
 northstar-abuse-postgres = { path = "crates/contexts/abuse/northstar-abuse-postgres" }
 anyhow = "1.0"
-argon2 = "0.5"
 axum = { version = "0.8", features = ["ws", "multipart"] }
 arc-swap = "1"
-bytes = "1"
-base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 dashmap = "6.1"
-dotenvy = "0.15"
 futures = "0.3"
 hickory-resolver = { version = "0.26.2", default-features = false, features = ["dnssec-aws-lc-rs", "system-config", "tokio"] }
 rand = "0.8"
-ring = "0.17.14"
 roxmltree = "0.20"
-rustls-webpki = "0.103"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
-sha1 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
-thiserror = "2.0"
-subtle = "2.6"
-hmac = "0.12"
-idna = "1.1"
-libc = "0.2"
-pbkdf2 = { version = "0.12", features = ["hmac"] }
-precis-profiles = "0.1.13"
 tokio = { version = "1.43", features = ["full"] }
 tokio-rustls = "0.26"
 tokio-util = { version = "0.7", features = ["rt", "io"] }
-tower-http = { version = "0.6", features = ["fs", "set-header", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1.12", features = ["v4", "serde"] }
-webpki-roots = "1"
 zeroize = "1.8"
-x509-parser = { version = "0.18.1", default-features = false }
 tracing-appender = "0.2.5"
 envy = "0.4.2"
-redis = { version = "1.6.0", features = ["tokio-rustls-comp"] }
-bb8 = "0.9.1"
 northstar-xep-0184 = { path = "crates/kernel/northstar-xep-0184" }
 northstar-xep-0085 = { path = "crates/kernel/northstar-xep-0085" }
 northstar-xep-0092 = { path = "crates/kernel/northstar-xep-0092" }
@@ -183,13 +164,10 @@ northstar-auth-postgres = { path = "crates/contexts/auth/northstar-auth-postgres
 northstar-auth-xmpp = { path = "crates/contexts/auth/northstar-auth-xmpp" }
 northstar-operations-application = { path = "crates/contexts/operations/northstar-operations-application" }
 northstar-operations-xmpp = { path = "crates/contexts/operations/northstar-operations-xmpp" }
-northstar-operations-core = { path = "crates/contexts/operations/northstar-operations-core" }
 northstar-operations-postgres = { path = "crates/contexts/operations/northstar-operations-postgres" }
 northstar-workflows = { path = "crates/contexts/workflows/northstar-workflows" }
 northstar-data-tools = { path = "crates/contexts/workflows/northstar-data-tools" }
 northstar-xmpp-types = { path = "crates/kernel/northstar-xmpp-types" }
-northstar-xmpp-avatar = { path = "crates/kernel/northstar-xmpp-avatar" }
-northstar-xml-framing = { path = "crates/kernel/northstar-xml-framing" }
 northstar-xml-builder = { path = "crates/kernel/northstar-xml-builder" }
 northstar-xep-0059 = { path = "crates/kernel/northstar-xep-0059" }
 northstar-xep-0060 = { path = "crates/kernel/northstar-xep-0060" }
@@ -208,14 +186,12 @@ northstar-security = { path = "crates/platform/northstar-security" }
 northstar-config = { path = "crates/platform/northstar-config" }
 northstar-postgres = { path = "crates/platform/northstar-postgres" }
 northstar-telemetry = { path = "crates/platform/northstar-telemetry" }
-northstar-web-surface = { path = "crates/platform/northstar-web-surface" }
 northstar-message-core = { path = "crates/contexts/message/northstar-message-core" }
 northstar-message-application = { path = "crates/contexts/message/northstar-message-application" }
 northstar-message-postgres = { path = "crates/contexts/message/northstar-message-postgres" }
 northstar-message-xmpp = { path = "crates/contexts/message/northstar-message-xmpp" }
 northstar-session-core = { path = "crates/contexts/session/northstar-session-core" }
 northstar-delivery-core = { path = "crates/contexts/message/northstar-delivery-core" }
-northstar-presence-core = { path = "crates/contexts/roster/northstar-presence-core" }
 northstar-room-core = { path = "crates/contexts/room/northstar-room-core" }
 northstar-room-postgres = { path = "crates/contexts/room/northstar-room-postgres" }
 northstar-room-application = { path = "crates/contexts/room/northstar-room-application" }
@@ -233,7 +209,6 @@ northstar-archive-core = { path = "crates/contexts/archive/northstar-archive-cor
 northstar-archive-application = { path = "crates/contexts/archive/northstar-archive-application" }
 northstar-archive-postgres = { path = "crates/contexts/archive/northstar-archive-postgres" }
 northstar-archive-xmpp = { path = "crates/contexts/archive/northstar-archive-xmpp" }
-northstar-upload-core = { path = "crates/contexts/upload/northstar-upload-core" }
 northstar-upload-application = { path = "crates/contexts/upload/northstar-upload-application" }
 northstar-upload-storage = { path = "crates/contexts/upload/northstar-upload-storage" }
 northstar-upload-postgres = { path = "crates/contexts/upload/northstar-upload-postgres" }
@@ -250,10 +225,6 @@ northstar-federation-core = { path = "crates/contexts/federation/northstar-feder
 northstar-federation-postgres = { path = "crates/contexts/federation/northstar-federation-postgres" }
 northstar-federation-application = { path = "crates/contexts/federation/northstar-federation-application" }
 northstar-protocol-runtime = { path = "crates/contexts/session/northstar-protocol-runtime" }
-# Ceremony state is serialized only into the server-side PostgreSQL challenge table.
-webauthn-rs = { version = "0.5.5", default-features = false, features = ["danger-allow-state-serialisation"] }
-# Keep native distributions independent of a system OpenSSL installation.
-openssl = { version = "0.10.81", features = ["vendored"] }
 
 [dev-dependencies]
 northstar-message-postgres = { path = "crates/contexts/message/northstar-message-postgres", features = ["test-support"] }

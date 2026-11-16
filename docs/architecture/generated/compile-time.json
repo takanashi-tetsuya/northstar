@@ -5653,23 +5653,7 @@
     ],
     [
       "northstar-server",
-      "argon2"
-    ],
-    [
-      "northstar-server",
       "axum"
-    ],
-    [
-      "northstar-server",
-      "base64"
-    ],
-    [
-      "northstar-server",
-      "bb8"
-    ],
-    [
-      "northstar-server",
-      "bytes"
     ],
     [
       "northstar-server",
@@ -5678,10 +5662,6 @@
     [
       "northstar-server",
       "dashmap"
-    ],
-    [
-      "northstar-server",
-      "dotenvy"
     ],
     [
       "northstar-server",
@@ -5694,18 +5674,6 @@
     [
       "northstar-server",
       "hickory-resolver"
-    ],
-    [
-      "northstar-server",
-      "hmac"
-    ],
-    [
-      "northstar-server",
-      "idna"
-    ],
-    [
-      "northstar-server",
-      "libc"
     ],
     [
       "northstar-server",
@@ -5821,10 +5789,6 @@
     ],
     [
       "northstar-server",
-      "northstar-operations-core"
-    ],
-    [
-      "northstar-server",
       "northstar-operations-postgres"
     ],
     [
@@ -5834,10 +5798,6 @@
     [
       "northstar-server",
       "northstar-postgres"
-    ],
-    [
-      "northstar-server",
-      "northstar-presence-core"
     ],
     [
       "northstar-server",
@@ -5925,10 +5885,6 @@
     ],
     [
       "northstar-server",
-      "northstar-upload-core"
-    ],
-    [
-      "northstar-server",
       "northstar-upload-postgres"
     ],
     [
@@ -5938,10 +5894,6 @@
     [
       "northstar-server",
       "northstar-upload-xmpp"
-    ],
-    [
-      "northstar-server",
-      "northstar-web-surface"
     ],
     [
       "northstar-server",
@@ -6057,27 +6009,7 @@
     ],
     [
       "northstar-server",
-      "northstar-xml-framing"
-    ],
-    [
-      "northstar-server",
-      "northstar-xmpp-avatar"
-    ],
-    [
-      "northstar-server",
       "northstar-xmpp-types"
-    ],
-    [
-      "northstar-server",
-      "openssl"
-    ],
-    [
-      "northstar-server",
-      "pbkdf2"
-    ],
-    [
-      "northstar-server",
-      "precis-profiles"
     ],
     [
       "northstar-server",
@@ -6085,19 +6017,7 @@
     ],
     [
       "northstar-server",
-      "redis"
-    ],
-    [
-      "northstar-server",
-      "ring"
-    ],
-    [
-      "northstar-server",
       "roxmltree"
-    ],
-    [
-      "northstar-server",
-      "rustls-webpki"
     ],
     [
       "northstar-server",
@@ -6109,23 +6029,11 @@
     ],
     [
       "northstar-server",
-      "sha1"
-    ],
-    [
-      "northstar-server",
       "sha2"
     ],
     [
       "northstar-server",
       "sqlx"
-    ],
-    [
-      "northstar-server",
-      "subtle"
-    ],
-    [
-      "northstar-server",
-      "thiserror"
     ],
     [
       "northstar-server",
@@ -6138,10 +6046,6 @@
     [
       "northstar-server",
       "tokio-util"
-    ],
-    [
-      "northstar-server",
-      "tower-http"
     ],
     [
       "northstar-server",
@@ -6158,18 +6062,6 @@
     [
       "northstar-server",
       "uuid"
-    ],
-    [
-      "northstar-server",
-      "webauthn-rs"
-    ],
-    [
-      "northstar-server",
-      "webpki-roots"
-    ],
-    [
-      "northstar-server",
-      "x509-parser"
     ],
     [
       "northstar-server",

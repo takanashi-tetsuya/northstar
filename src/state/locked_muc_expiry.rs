@@ -9,7 +9,7 @@ pub(crate) type LockedMucExpiryContext =
         northstar_room_postgres::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
         northstar_workflows::muc_delivery_repository::PostgresMucDeliveryRepository,
         northstar_room_postgres::cluster_muc_receipt_claim_repository::PostgresClusterMucReceiptClaimRepository,
-        crate::s2s::FederationRouter,
+        crate::state::FederationRouter,
     >;
 
 impl AppState {

@@ -5,7 +5,6 @@ mod db;
 #[cfg(test)]
 mod direct_replay;
 mod runtime;
-mod s2s;
 #[cfg(test)]
 mod stage4_replay;
 mod state;

@@ -161,7 +161,7 @@ impl S2sHost for AppState {
         connection_id: Uuid,
         raw: String,
     ) -> anyhow::Result<InboundFederationRoute> {
-        crate::s2s::route_inbound_for_connection(
+        northstar_s2s::inbound::route_inbound_for_connection(
             &self,
             &authenticated_domain,
             &local_domain,
@@ -236,6 +236,12 @@ impl ComponentHost for AppState {
         connection_id: Uuid,
         raw: String,
     ) -> anyhow::Result<Option<String>> {
-        crate::s2s::route_inbound_component(&self, &authenticated_domain, connection_id, &raw).await
+        northstar_s2s::inbound::route_inbound_component(
+            &self,
+            &authenticated_domain,
+            connection_id,
+            &raw,
+        )
+        .await
     }
 }

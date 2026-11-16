@@ -17,8 +17,16 @@ hickory-resolver = { version = "0.26.2", default-features = false, features = ["
 northstar-config = { path = "../../platform/northstar-config" }
 northstar-federation-application = { path = "../../contexts/federation/northstar-federation-application" }
 northstar-federation-core = { path = "../../contexts/federation/northstar-federation-core" }
+northstar-message-core = { path = "../../contexts/message/northstar-message-core" }
+northstar-presence-core = { path = "../../contexts/roster/northstar-presence-core" }
+northstar-pubsub-application = { path = "../../contexts/pubsub/northstar-pubsub-application" }
+northstar-pubsub-core = { path = "../../contexts/pubsub/northstar-pubsub-core" }
+northstar-roster-core = { path = "../../contexts/roster/northstar-roster-core" }
 northstar-runtime = { path = "../../platform/northstar-runtime" }
 northstar-security = { path = "../../platform/northstar-security" }
+northstar-stream = { path = "../northstar-stream" }
+northstar-xep-0060 = { path = "../../kernel/northstar-xep-0060" }
+northstar-xep-0199 = { path = "../../kernel/northstar-xep-0199" }
 northstar-xml-builder = { path = "../../kernel/northstar-xml-builder" }
 northstar-xml-framing = { path = "../../kernel/northstar-xml-framing" }
 northstar-xmpp-types = { path = "../../kernel/northstar-xmpp-types" }

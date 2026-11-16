@@ -4,7 +4,7 @@ use super::{
     mix_presence_recovery::MixPresenceRecoveryContext, pep_last_items::PepLastItemsAdapters,
     AppState,
 };
-use crate::s2s::FederationRouter;
+use crate::state::FederationRouter;
 use northstar_pubsub_xmpp::pep_last_items::PepLastItemsContext;
 use northstar_session_core::LocalCapsEpoch;
 use northstar_stream::caps_effects::{

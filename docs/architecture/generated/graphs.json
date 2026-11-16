@@ -4711,6 +4711,26 @@
       ],
       [
         "northstar-s2s",
+        "northstar-message-core"
+      ],
+      [
+        "northstar-s2s",
+        "northstar-presence-core"
+      ],
+      [
+        "northstar-s2s",
+        "northstar-pubsub-application"
+      ],
+      [
+        "northstar-s2s",
+        "northstar-pubsub-core"
+      ],
+      [
+        "northstar-s2s",
+        "northstar-roster-core"
+      ],
+      [
+        "northstar-s2s",
         "northstar-runtime"
       ],
       [
@@ -4719,7 +4739,19 @@
       ],
       [
         "northstar-s2s",
+        "northstar-stream"
+      ],
+      [
+        "northstar-s2s",
         "northstar-workflows"
+      ],
+      [
+        "northstar-s2s",
+        "northstar-xep-0060"
+      ],
+      [
+        "northstar-s2s",
+        "northstar-xep-0199"
       ],
       [
         "northstar-s2s",

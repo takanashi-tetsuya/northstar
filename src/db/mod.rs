@@ -53,8 +53,8 @@ mod push_tests;
 mod retraction_service_tests;
 #[cfg(test)]
 pub use archive::*;
-// The privacy stanza kind that paths owned by the mainline (src/s2s) still reach
-// through db::. Every other consumer imports the owning crate.
+// The privacy stanza kind that the root binding (src/state/s2s_inbound_host.rs)
+// still reaches through db::. Every other consumer imports the owning crate.
 #[cfg(test)]
 pub(crate) use northstar_roster_postgres::roster::add_federated_presence_pending_with_stanza;
 pub(crate) use northstar_xep_0016::PrivacyStanzaKind;

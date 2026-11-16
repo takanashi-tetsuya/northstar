@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
-    s2s::FederationRouter,
+    state::FederationRouter,
 };
 use anyhow::Result;
 use dashmap::DashMap;

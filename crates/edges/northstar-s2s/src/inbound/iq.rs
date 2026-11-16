@@ -1,8 +1,7 @@
 //! Route federated IQ requests and responses with account, resource and service authorization.
 
 use super::*;
-use northstar_roster_xmpp::FederatedPresenceHost as _;
-use northstar_stream::protocol::SessionHost as _;
+use crate::inbound_host::{InboundPepRequest, PubSubReply};
 
 pub(super) fn is_xep0357_notification_publish(pubsub: roxmltree::Node<'_, '_>) -> bool {
     pubsub.children().any(|operation| {
@@ -31,8 +30,8 @@ pub(super) fn bare_account_iq_may_route_to_service_resource(
         && is_xep0357_notification_publish(payload)
 }
 
-pub(crate) async fn route_inbound_iq(
-    state: &AppState,
+pub(super) async fn route_inbound_iq<H: InboundHost>(
+    state: &H,
     root: roxmltree::Node<'_, '_>,
     raw: &str,
     from: &str,
@@ -44,13 +43,12 @@ pub(crate) async fn route_inbound_iq(
     };
     let recipient_name = to_jid.localpart();
     let recipient = match recipient_name {
-        Some(username) => state.presence_service().find_enabled_user(username).await?,
+        Some(username) => state.find_enabled_presence_user(username).await?,
         None => None,
     };
     if let Some(recipient) = recipient.as_ref() {
         let recipient_bare = format!("{}@{}", recipient.username, state.local_domain());
         if state
-            .presence_service()
             .is_blocked_for_account(recipient.id, &recipient_bare, from)
             .await?
         {
@@ -68,13 +66,13 @@ pub(crate) async fn route_inbound_iq(
     }
     if matches!(kind, "result" | "error") {
         let id = root.attribute("id").unwrap_or_default();
-        if crate::xmpp::protocol::caps::handle_federated_caps_response(state, id, kind, root, raw)
+        if state
+            .handle_federated_caps_response(id, kind, root, raw)
             .await
         {
             return Ok(None);
         }
-        if crate::xmpp::protocol::misc::handle_push_delivery_response(state, id, kind, from).await?
-        {
+        if state.handle_push_delivery_response(id, kind, from).await? {
             return Ok(None);
         }
         // Never broadcast an uncorrelated response to every resource of an
@@ -84,9 +82,7 @@ pub(crate) async fn route_inbound_iq(
         }
         let mut delivered = false;
         for target in state.sessions_for(to) {
-            if state
-                .privacy_allows_session(&target, from, db::PrivacyStanzaKind::Iq)
-                .await?
+            if state.privacy_allows_iq(&target, from).await?
                 && target.sender.try_send(raw.to_owned()).is_ok()
             {
                 delivered = true;
@@ -95,7 +91,6 @@ pub(crate) async fn route_inbound_iq(
         }
         if !delivered {
             state
-                .cluster()
                 .route_s2s_iq_response_to_remote_resource(to, raw)
                 .await;
         }
@@ -128,10 +123,7 @@ pub(crate) async fn route_inbound_iq(
         // and unknown extension IQs; capability discovery is not special.
         if matches!(kind, "get" | "set") {
             let requester_bare = northstar_xmpp_types::jid::canonical_bare_key(from)?;
-            let subscribed = state
-                .s2s_roster_authorization_service()
-                .allows_presence(recipient.id, &requester_bare)
-                .await?;
+            let subscribed = state.allows_presence(recipient.id, &requester_bare).await?;
             let directed = state
                 .session_entries_for(to)
                 .into_iter()
@@ -153,7 +145,7 @@ pub(crate) async fn route_inbound_iq(
         // server-side handler (including the XEP-0115 cache) can answer for
         // an exact resource which is not connected on any cluster node.
         let local_resource_matches = !state.session_entries_for(to).is_empty();
-        let remote_resource_matches = state.cluster().s2s_remote_recipient_route_exists(to).await;
+        let remote_resource_matches = state.s2s_remote_recipient_route_exists(to).await;
         if !local_resource_matches && !remote_resource_matches {
             return Ok(Some(s2s_iq_error(
                 root.attribute("id").unwrap_or_default(),
@@ -166,10 +158,7 @@ pub(crate) async fn route_inbound_iq(
         if !targets.is_empty() {
             let mut allowed = false;
             for target in &targets {
-                if state
-                    .privacy_allows_session(target, from, db::PrivacyStanzaKind::Iq)
-                    .await?
-                {
+                if state.privacy_allows_iq(target, from).await? {
                     allowed = true;
                     break;
                 }
@@ -207,9 +196,7 @@ pub(crate) async fn route_inbound_iq(
         && child.tag_name().name() == "query"
         && child.tag_name().namespace() == Some("http://jabber.org/protocol/disco#info")
     {
-        if let Some(result) =
-            crate::xmpp::protocol::caps::cached_disco_result(state, id, to, child.attribute("node"))
-        {
+        if let Some(result) = state.cached_disco_result(id, to, child.attribute("node")) {
             return Ok(Some(northstar_xml_builder::rewrite::set_to(&result, from)));
         }
     }
@@ -219,21 +206,17 @@ pub(crate) async fn route_inbound_iq(
             &format!("pubsub.{}", state.local_domain()),
         )
     {
-        let reply =
-            match northstar_pubsub_xmpp::pubsub::handle_request(state, from, kind, child).await {
-                Ok(reply) => reply,
-                Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
-                    northstar_pubsub_xmpp::pubsub::PubSubReply::Error("resource-constraint")
-                }
-                Err(error) => return Err(error),
-            };
-        return Ok(Some(match reply {
-            northstar_pubsub_xmpp::pubsub::PubSubReply::Result(payload) => {
-                s2s_iq_result(id, to, from, &payload)
+        let reply = match state.handle_pubsub_request(from, kind, child).await {
+            Ok(reply) => reply,
+            Err(error) if northstar_pubsub_application::is_pubsub_mutation_busy(&error) => {
+                PubSubReply::Error("resource-constraint")
             }
-            reply @ (northstar_pubsub_xmpp::pubsub::PubSubReply::Error(_)
-            | northstar_pubsub_xmpp::pubsub::PubSubReply::ExtendedError(_)) => {
-                northstar_pubsub_xmpp::pubsub::pubsub_s2s_iq_error(id, to, from, &reply)
+            Err(error) => return Err(error),
+        };
+        return Ok(Some(match reply {
+            PubSubReply::Result(payload) => s2s_iq_result(id, to, from, &payload),
+            reply @ (PubSubReply::Error(_) | PubSubReply::ExtendedError(_)) => {
+                pubsub_s2s_iq_error(id, to, from, &reply)
             }
         }));
     }
@@ -258,7 +241,7 @@ pub(crate) async fn route_inbound_iq(
             let Some(owner_name) = recipient_name else {
                 return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
             };
-            let payload = match state.profile_service().public_vcard(owner_name).await? {
+            let payload = match state.public_vcard(owner_name).await? {
                 northstar_pubsub_application::profile::PublicVCard::MissingAccount => {
                     return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
                 }
@@ -272,31 +255,31 @@ pub(crate) async fn route_inbound_iq(
             Ok(Some(s2s_iq_result(id, to, from, &payload)))
         }
         ("pubsub", "http://jabber.org/protocol/pubsub", "get") => Ok(Some(
-            northstar_pubsub_xmpp::federated_pep::federated_pep_items(
-                state,
-                recipient_name,
-                to_jid.resourcepart().is_some(),
-                child,
-                id,
-                to,
-                from,
-            )
-            .await?,
+            state
+                .federated_pep_items(InboundPepRequest {
+                    owner_name: recipient_name,
+                    full_target: to_jid.resourcepart().is_some(),
+                    child,
+                    id,
+                    to,
+                    from,
+                })
+                .await?,
         )),
         ("pubsub", "http://jabber.org/protocol/pubsub", "set")
             if !is_xep0357_notification_publish(child) =>
         {
             Ok(Some(
-                northstar_pubsub_xmpp::federated_pep::federated_pep_subscription(
-                    state,
-                    recipient_name,
-                    to_jid.resourcepart().is_some(),
-                    child,
-                    id,
-                    to,
-                    from,
-                )
-                .await?,
+                state
+                    .federated_pep_subscription(InboundPepRequest {
+                        owner_name: recipient_name,
+                        full_target: to_jid.resourcepart().is_some(),
+                        child,
+                        id,
+                        to,
+                        from,
+                    })
+                    .await?,
             ))
         }
         ("query", "http://jabber.org/protocol/disco#info", "get") => {
@@ -306,34 +289,23 @@ pub(crate) async fn route_inbound_iq(
                     &format!("pubsub.{}", state.local_domain()),
                 )
             {
-                let reply = northstar_pubsub_xmpp::pubsub::federated_disco_info(
-                    state,
-                    from,
-                    child.attribute("node"),
-                )
-                .await?;
+                let reply = state
+                    .pubsub_disco_info(from, child.attribute("node"))
+                    .await?;
                 return Ok(Some(match reply {
-                    northstar_pubsub_xmpp::pubsub::PubSubReply::Result(payload) => {
-                        s2s_iq_result(id, to, from, &payload)
-                    }
-                    reply @ (northstar_pubsub_xmpp::pubsub::PubSubReply::Error(_)
-                    | northstar_pubsub_xmpp::pubsub::PubSubReply::ExtendedError(_)) => {
-                        northstar_pubsub_xmpp::pubsub::pubsub_s2s_iq_error(id, to, from, &reply)
+                    PubSubReply::Result(payload) => s2s_iq_result(id, to, from, &payload),
+                    reply @ (PubSubReply::Error(_) | PubSubReply::ExtendedError(_)) => {
+                        pubsub_s2s_iq_error(id, to, from, &reply)
                     }
                 }));
             }
             if let Some(owner_name) = recipient_name {
-                let Some(owner) = state.pubsub_service().find_enabled_user(owner_name).await?
-                else {
+                let Some(owner) = state.find_enabled_pubsub_user(owner_name).await? else {
                     return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
                 };
-                let Some(payload) = northstar_pubsub_xmpp::pep::federated_pep_disco_info(
-                    state,
-                    &owner,
-                    from,
-                    child.attribute("node"),
-                )
-                .await?
+                let Some(payload) = state
+                    .pep_disco_info(&owner, from, child.attribute("node"))
+                    .await?
                 else {
                     return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
                 };
@@ -354,7 +326,7 @@ pub(crate) async fn route_inbound_iq(
             ] {
                 payload.push_child(XmlElement::new("feature").attr("var", feature));
             }
-            if state.xmpp_extension_enabled(northstar_xep_0199::XEP_ID) {
+            if state.s2s_ping_feature_enabled() {
                 payload.push_child(
                     XmlElement::new("feature").attr("var", northstar_xep_0199::NAMESPACE),
                 );
@@ -368,15 +340,11 @@ pub(crate) async fn route_inbound_iq(
                     &format!("pubsub.{}", state.local_domain()),
                 ) =>
         {
-            let reply =
-                northstar_pubsub_xmpp::pubsub::federated_disco_items(state, from, child).await?;
+            let reply = state.pubsub_disco_items(from, child).await?;
             Ok(Some(match reply {
-                northstar_pubsub_xmpp::pubsub::PubSubReply::Result(payload) => {
-                    s2s_iq_result(id, to, from, &payload)
-                }
-                reply @ (northstar_pubsub_xmpp::pubsub::PubSubReply::Error(_)
-                | northstar_pubsub_xmpp::pubsub::PubSubReply::ExtendedError(_)) => {
-                    northstar_pubsub_xmpp::pubsub::pubsub_s2s_iq_error(id, to, from, &reply)
+                PubSubReply::Result(payload) => s2s_iq_result(id, to, from, &payload),
+                reply @ (PubSubReply::Error(_) | PubSubReply::ExtendedError(_)) => {
+                    pubsub_s2s_iq_error(id, to, from, &reply)
                 }
             }))
         }
@@ -384,16 +352,12 @@ pub(crate) async fn route_inbound_iq(
             if recipient_name.is_some() && to_jid.resourcepart().is_none() =>
         {
             let owner_name = recipient_name.expect("guarded above");
-            let Some(owner) = state.pubsub_service().find_enabled_user(owner_name).await? else {
+            let Some(owner) = state.find_enabled_pubsub_user(owner_name).await? else {
                 return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
             };
-            let Some(payload) = northstar_pubsub_xmpp::pep::federated_pep_disco_items(
-                state,
-                &owner,
-                from,
-                child.attribute("node"),
-            )
-            .await?
+            let Some(payload) = state
+                .pep_disco_items(&owner, from, child.attribute("node"))
+                .await?
             else {
                 return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
             };
@@ -430,9 +394,7 @@ pub(crate) async fn route_inbound_iq(
             }
             let mut delivered = false;
             for (_, target) in targets {
-                if state
-                    .privacy_allows_session(&target, from, db::PrivacyStanzaKind::Iq)
-                    .await?
+                if state.privacy_allows_iq(&target, from).await?
                     && target.sender.try_send(raw.to_owned()).is_ok()
                 {
                     delivered = true;
@@ -443,7 +405,6 @@ pub(crate) async fn route_inbound_iq(
             }
             if !delivered {
                 delivered = state
-                    .cluster()
                     .route_s2s_iq_request_remote(to, raw, bare_target)
                     .await;
             }
@@ -451,6 +412,25 @@ pub(crate) async fn route_inbound_iq(
                 return Ok(Some(s2s_iq_error(id, to, from, "service-unavailable")));
             }
             Ok(None)
+        }
+    }
+}
+
+fn pubsub_s2s_iq_error(id: &str, from: &str, to: &str, reply: &PubSubReply) -> String {
+    use northstar_xep_0060::PubSubError;
+
+    match reply {
+        PubSubReply::Result(_) => northstar_xep_0060::build_s2s_iq_error(
+            id,
+            from,
+            to,
+            &PubSubError::simple("undefined-condition"),
+        ),
+        PubSubReply::Error(condition) => {
+            northstar_xep_0060::build_s2s_iq_error(id, from, to, &PubSubError::simple(condition))
+        }
+        PubSubReply::ExtendedError(error) => {
+            northstar_xep_0060::build_s2s_iq_error(id, from, to, error)
         }
     }
 }

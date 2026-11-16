@@ -3,7 +3,7 @@
 use super::mix_iq_relay::MixIqRelayRoute;
 use super::mix_outbox::MixOutboxContext;
 use super::AppState;
-use crate::s2s::FederationRouter;
+use crate::state::FederationRouter;
 use anyhow::Result;
 use northstar_mix_xmpp::ports::{MixHost, MixOutboxPort};
 use northstar_room_application::mix_service::MixService;

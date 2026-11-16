@@ -304,7 +304,7 @@ if (/\b(?:state|shutdown_state)\.pool\b/.test(mainSource + cluster)
   throw new Error('process and cluster workers must use narrow state-owned database capabilities');
 }
 if (!state.includes('fn local_domain(&self) -> &str')
-    || /\bstate\.config\.domain\b/.test(readProductionModule('src/s2s/inbound.rs', { root }))) {
+    || /\bstate\.config\.domain\b/.test(readProductionModule('crates/edges/northstar-s2s/src/inbound.rs', { root }))) {
   throw new Error('S2S ingress must receive only the validated local domain');
 }
 const clusterMessageResolver = rustItemBody(cluster, 'async fn resolve_node_message_delivery<');
@@ -3270,10 +3270,9 @@ const capsProtocolSource =
   read('crates/contexts/session/northstar-protocol-runtime/src/caps.rs') +
   read('crates/edges/northstar-stream/src/protocol/caps.rs') +
   read('crates/edges/northstar-stream/src/caps_effects.rs');
-const s2sInboundSource = readProductionModule('src/s2s/inbound.rs', { root })
+const s2sInboundSource = readProductionModule('crates/edges/northstar-s2s/src/inbound.rs', { root })
   + readProductionModule('crates/contexts/roster/northstar-roster-xmpp/src/federated_presence.rs', { root })
-  + readProductionModule('crates/contexts/message/northstar-message-xmpp/src/federated_message.rs', { root })
-  + readProductionModule('crates/edges/northstar-s2s/src/inbound.rs', { root });
+  + readProductionModule('crates/contexts/message/northstar-message-xmpp/src/federated_message.rs', { root });
 if (/(?:db|northstar_message_postgres::\w+|northstar_workflows::\w+)::(?:store_offline_for_recipient|admit_personal_history)\s*\(/.test(s2sInboundSource)
     || !s2sInboundSource.includes('.store_offline(OfflineMessageAdmission {')
     || !s2sInboundSource.includes('.admit_history(&writes)')) {

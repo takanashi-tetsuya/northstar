@@ -41,9 +41,6 @@
     }
   },
   "baseline": {
-    "src/s2s/inbound.rs": [
-      "state"
-    ],
     "src/xmpp/protocol.rs": [
       "state"
     ],

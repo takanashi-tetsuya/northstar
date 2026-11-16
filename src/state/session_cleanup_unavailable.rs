@@ -1,7 +1,7 @@
 //! Root bindings for stream-owned unavailable presence delivery.
 
 use super::AppState;
-use crate::{cluster::ClusterUnavailableDelivery, s2s::FederationRouter};
+use crate::{cluster::ClusterUnavailableDelivery, state::FederationRouter};
 use anyhow::Result;
 use northstar_config::ExternalRouteDomainPolicy;
 use northstar_stream::session_cleanup::unavailable::{

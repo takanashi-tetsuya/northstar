@@ -1156,7 +1156,8 @@ S29 接在其上。
   `FromRef<Arc<AppState>>` 改為 `HttpHost`，在 `state/http_host.rs` 實作。投影別名（`type X<R> = Foo<<R as T>::Y>`）推不出
   `R`，所以收這種值的 helper 對結構自己的型別參數泛型。
 - S2S 入站的處理器以同樣方式進入各上下文：對 host 子 trait（例如 `FederatedPresenceHost`）泛型，與既有 hook 等價的不再
-  另開。分派（`s2s/inbound/dispatch.rs`）與 `<iq/>` 路由（`s2s/inbound/iq.rs`）跨上下文，是組合程式碼。
+  另開。分派與 `<iq/>` 路由在 S30 留於組合根；WP-493 已移至 `crates/edges/northstar-s2s/src/inbound/{dispatch,iq}.rs`，
+  對 `InboundHost` 泛型，根 crate 在 `src/state/s2s_inbound_host.rs` 綁定上下文處理器、資料查詢與本地／叢集路由。
 - 搬移改變日誌 target 時，grep 那一行的執行期腳本要在 `RUST_LOG` 選新的 target（`northstar_s2s=debug` 等）。
 - 門禁的模組讀取把 `lib.rs` 入口旁的所有檔案視為正式程式碼，只依名稱排除 `#[cfg(test)]` 子模組，所以 crate 中的測試放在
   `<module>/tests.rs`，不放兄弟檔 `<module>_tests.rs`。
@@ -1167,8 +1168,9 @@ S29 接在其上。
 
 - `state/*`：各 host trait 的實作、上下文模組的建構，以及叢集與會話清理接縫，S31 組合根收斂時處理。`SessionHost` 仍是
   一個約百個方法的 trait，`AppState` 刪除時依關注點拆分。
-- `xmpp/protocol/{iq_routes,discovery}.rs`、`s2s/inbound/{dispatch,iq}.rs`：IQ 路由表、服務探索的彙整與 S2S 入站分派，
+- `xmpp/protocol/{iq_routes,discovery}.rs`：IQ 路由表與服務探索的彙整，
   組合程式碼，S31 隨組合根移動。`xmpp/capabilities.rs` 剩下執行期工作用的窄遙測，同樣隨組合根移動。
+- S2S 入站分派與 IQ 路由目前位於 `crates/edges/northstar-s2s/src/inbound/{dispatch,iq}.rs`（WP-493）。
 - `runtime/*`、`main.rs`、`tools/`：啟動、監督與子命令，S31。
 - `xmpp/protocol/{messaging,muc,mix,federated_muc}` 下的測試與 Stage 4 harness、`xmpp/stage4_*`、`stage4_replay`、
   `direct_replay`：`#[cfg(test)]`，以 `AppState` 建構。凍結工具釘住測試路徑

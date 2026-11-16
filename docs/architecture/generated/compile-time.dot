@@ -1635,9 +1635,17 @@ digraph compile_time {
   "northstar-s2s" -> "northstar-federation-application";
   "northstar-s2s" -> "northstar-federation-core";
   "northstar-s2s" -> "northstar-federation-postgres";
+  "northstar-s2s" -> "northstar-message-core";
+  "northstar-s2s" -> "northstar-presence-core";
+  "northstar-s2s" -> "northstar-pubsub-application";
+  "northstar-s2s" -> "northstar-pubsub-core";
+  "northstar-s2s" -> "northstar-roster-core";
   "northstar-s2s" -> "northstar-runtime";
   "northstar-s2s" -> "northstar-security";
+  "northstar-s2s" -> "northstar-stream";
   "northstar-s2s" -> "northstar-workflows";
+  "northstar-s2s" -> "northstar-xep-0060";
+  "northstar-s2s" -> "northstar-xep-0199";
   "northstar-s2s" -> "northstar-xml-builder";
   "northstar-s2s" -> "northstar-xml-framing";
   "northstar-s2s" -> "northstar-xmpp-types";

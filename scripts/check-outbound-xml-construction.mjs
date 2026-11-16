@@ -39,7 +39,6 @@ const BASELINE = new Map([
   ['crates/contexts/room/northstar-room-postgres/src/mix.rs', 0],
   ['crates/edges/northstar-s2s/src/components.rs', 0],
   ['crates/edges/northstar-cluster/src/lib.rs', 0],
-  ['src/s2s/inbound.rs', 0],
   ['crates/contexts/message/northstar-message-xmpp/src/federated_message.rs', 0],
   ['crates/edges/northstar-s2s/src/inbound.rs', 0],
   ['crates/edges/northstar-s2s/src/outbound.rs', 0],

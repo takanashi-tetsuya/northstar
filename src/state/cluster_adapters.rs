@@ -42,5 +42,5 @@ impl crate::cluster::ClusterAdapters for PostgresClusterAdapters {
     type DirectSpoolWake =
         northstar_message_postgres::direct_spool_wake::PostgresDirectSpoolWakeRepository;
     type Presence = northstar_workflows::presence_repository::PostgresPresenceRepository;
-    type Federation = crate::s2s::FederationRouter;
+    type Federation = crate::state::FederationRouter;
 }

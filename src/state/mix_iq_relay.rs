@@ -1,7 +1,7 @@
 //! The MIX IQ timeout worker shares its correlation index with live responses.
 
 use super::{session_entries_for_in, AppState, OnlineSession, RuntimeFederationPolicy};
-use crate::s2s::FederationRouter;
+use crate::state::FederationRouter;
 use dashmap::DashMap;
 use northstar_config::ExternalRouteDomainPolicy;
 use northstar_mix_xmpp::ports::{MixIqRelayExpiryPort, MixIqRelayRoutePort};

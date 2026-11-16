@@ -52,7 +52,7 @@
 
 ### 4.1 S2S 的直接訊息流程
 
-目前 `src/s2s/inbound.rs` 把 local queue、remote route、fallback privacy、health recheck、claim rearm、history 跟錯誤映射放在大段流程內。它不能直接改呼叫 C2S router：S2S 在 primary local handoff 後、fallback privacy await 後、fallback remote 前還有額外 health checkpoint；最後 health check 只在路由接受後執行；`history_committed` 也不是 durable delivery 的別名。
+目前 `crates/contexts/message/northstar-message-xmpp/src/federated_message.rs` 把 local queue、remote route、fallback privacy、health recheck、claim rearm、history 跟錯誤映射放在大段流程內。它不能直接改呼叫 C2S router：S2S 在 primary local handoff 後、fallback privacy await 後、fallback remote 前還有額外 health checkpoint；最後 health check 只在路由接受後執行；`history_committed` 也不是 durable delivery 的別名。
 
 執行原則：先畫現有狀態／順序表，再抽出可注入的 S2S routing owner。共用能共用的 delivery 值、route 結果語義及現有窄 ports；若統一 orchestrator 會隱藏以上差異，就保留兩個具名策略 owner，而不是製造一個布林組合框架。協定 mapping、S2S telemetry、offline/history 決策保留在其明確 caller 邊界。
 

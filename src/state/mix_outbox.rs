@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     cluster::{ClusterMixRouteLookup, ClusterNodeDelivery},
-    s2s::FederationRouter,
+    state::FederationRouter,
     xmpp::capabilities::MixPostCommitTelemetry,
 };
 use anyhow::Result;

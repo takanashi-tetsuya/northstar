@@ -3,7 +3,7 @@
 use super::{AppState, OnlineSession, RuntimeFederationPolicy};
 use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
-    s2s::FederationRouter,
+    state::FederationRouter,
 };
 use anyhow::Result;
 use northstar_config::ExternalRouteDomainPolicy;

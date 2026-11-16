@@ -2,8 +2,8 @@
 
 use super::*;
 
-pub(crate) async fn route_inbound_component(
-    state: &Arc<AppState>,
+pub async fn route_inbound_component<H: InboundHost>(
+    state: &Arc<H>,
     authenticated_domain: &str,
     connection_id: uuid::Uuid,
     raw: &str,
@@ -18,7 +18,7 @@ pub(crate) async fn route_inbound_component(
         return Ok(reply);
     }
     route_inbound_scoped(
-        state,
+        state.as_ref(),
         authenticated_domain,
         InboundRouteAuthority::Component { connection_id },
         raw,
@@ -26,8 +26,8 @@ pub(crate) async fn route_inbound_component(
     .await
 }
 
-pub(crate) async fn route_inbound_for_connection(
-    state: &Arc<AppState>,
+pub async fn route_inbound_for_connection<H: InboundHost>(
+    state: &Arc<H>,
     authenticated_domain: &str,
     local_domain: &str,
     connection_id: uuid::Uuid,
@@ -53,7 +53,7 @@ pub(crate) async fn route_inbound_for_connection(
     }
     Ok(InboundFederationRoute::Reply(
         route_inbound_scoped(
-            state,
+            state.as_ref(),
             authenticated_domain,
             InboundRouteAuthority::Federation { connection_id },
             raw,
@@ -102,8 +102,8 @@ pub(super) enum MixDispatch {
     Handled(Option<String>),
 }
 
-pub(super) async fn route_inbound_mix(
-    state: &Arc<AppState>,
+pub(super) async fn route_inbound_mix<H: InboundHost>(
+    state: &Arc<H>,
     authenticated_domain: &str,
     client_raw: &str,
     enforce_federation_policy: bool,
@@ -180,32 +180,36 @@ pub(super) async fn route_inbound_mix(
     ))
 }
 
-pub(super) async fn federated_mix_iq_owned(
-    state: Arc<AppState>,
+pub(super) async fn federated_mix_iq_owned<H: InboundHost>(
+    state: Arc<H>,
     authenticated_domain: String,
     raw: String,
 ) -> Result<bool> {
-    northstar_mix_xmpp::federated_mix_iq(state, &authenticated_domain, raw).await
+    state.federated_mix_iq(&authenticated_domain, raw).await
 }
 
-pub(super) async fn federated_mix_message_owned(
-    state: Arc<AppState>,
+pub(super) async fn federated_mix_message_owned<H: InboundHost>(
+    state: Arc<H>,
     authenticated_domain: String,
     raw: String,
 ) -> Result<bool> {
-    northstar_mix_xmpp::federated_mix_message(state, &authenticated_domain, raw).await
+    state
+        .federated_mix_message(&authenticated_domain, raw)
+        .await
 }
 
-pub(super) async fn federated_mix_presence_owned(
-    state: Arc<AppState>,
+pub(super) async fn federated_mix_presence_owned<H: InboundHost>(
+    state: Arc<H>,
     authenticated_domain: String,
     raw: String,
 ) -> Result<bool> {
-    northstar_mix_xmpp::federated_mix_presence(state, &authenticated_domain, raw).await
+    state
+        .federated_mix_presence(&authenticated_domain, raw)
+        .await
 }
 
-pub(super) async fn route_inbound_scoped(
-    state: &AppState,
+pub(super) async fn route_inbound_scoped<H: InboundHost>(
+    state: &H,
     authenticated_domain: &str,
     authority: InboundRouteAuthority,
     raw: &str,
@@ -259,34 +263,19 @@ pub(super) async fn route_inbound_scoped(
         };
         return match root.tag_name().name() {
             "presence" => {
-                northstar_muc_xmpp::federated_muc::federated_muc_presence(
-                    state,
-                    authenticated_domain,
-                    connection_id,
-                    root,
-                    &client_raw,
-                )
-                .await
+                state
+                    .federated_muc_presence(authenticated_domain, connection_id, root, &client_raw)
+                    .await
             }
             "message" => {
-                northstar_muc_xmpp::federated_muc::federated_muc_message(
-                    state,
-                    authenticated_domain,
-                    connection_id,
-                    root,
-                    &client_raw,
-                )
-                .await
+                state
+                    .federated_muc_message(authenticated_domain, connection_id, root, &client_raw)
+                    .await
             }
             "iq" => {
-                northstar_muc_xmpp::federated_muc::federated_muc_iq(
-                    state,
-                    authenticated_domain,
-                    connection_id,
-                    root,
-                    &client_raw,
-                )
-                .await
+                state
+                    .federated_muc_iq(authenticated_domain, connection_id, root, &client_raw)
+                    .await
             }
             _ => Ok(Some(s2s_stanza_error(
                 root,
@@ -305,11 +294,7 @@ pub(super) async fn route_inbound_scoped(
         return Ok(Some(s2s_stanza_error(root, "auth", "not-authorized")));
     }
     if from_is_authenticated && state.s2s_component_domain_configured(to_domain) {
-        return if state
-            .federation_outbox()
-            .send(to_domain, client_raw.clone(), None)
-            .await
-        {
+        return if state.send_to_component(to_domain, client_raw.clone()).await {
             Ok(None)
         } else {
             Ok(Some(s2s_stanza_error(
@@ -332,24 +317,21 @@ pub(super) async fn route_inbound_scoped(
     };
     match root.tag_name().name() {
         "message" if to_is_pubsub_service => {
-            northstar_pubsub_xmpp::pubsub::handle_authorization_response(state, &from, root)
+            state
+                .handle_pubsub_authorization_response(&from, root)
                 .await?;
             Ok(None)
         }
         "message" => {
-            northstar_message_xmpp::federated_message::route_inbound_message(
-                state,
-                root,
-                &client_raw,
-                &from,
-                &to,
-                authenticated_domain,
-            )
-            .await
+            state
+                .route_inbound_message(root, &client_raw, &from, &to, authenticated_domain)
+                .await
         }
         "iq" => route_inbound_iq(state, root, &client_raw, &from, &to).await,
         "presence" => {
-            route_inbound_presence(state, root, &client_raw, &from, &to, connection_id).await
+            state
+                .route_inbound_presence(root, &client_raw, &from, &to, connection_id)
+                .await
         }
         _ => Ok(Some(s2s_stanza_error(
             root,
@@ -359,7 +341,7 @@ pub(super) async fn route_inbound_scoped(
     }
 }
 
-pub(super) fn component_local_target(state: &AppState, domain: &str) -> bool {
+pub(super) fn component_local_target(state: &impl InboundHost, domain: &str) -> bool {
     locally_hosted_identity_domain(state.local_domain(), domain)
 }
 

@@ -247,7 +247,7 @@ Key ownership:
   migration-time invariants. Some API, cluster, federation and worker paths
   still need narrower runtime authority; zero public state fields do not prove
   every caller is scoped.
-- `src/s2s/` owns discovery, DANE, TLS, EXTERNAL/Dialback and durable delivery.
+- `crates/edges/northstar-s2s/src/` owns discovery, DANE, TLS, EXTERNAL/Dialback, inbound routing and durable delivery.
 - `crates/edges/northstar-s2s/src/components.rs` isolates component domain authority and outbox handling.
 - `crates/edges/northstar-bosh/src/lib.rs` and the WebSocket path adapt HTTP framing to the same
   `ProtocolSession` state machine.

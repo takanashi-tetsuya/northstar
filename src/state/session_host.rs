@@ -1,9 +1,9 @@
 //! The node's side of the client session core.
 
 use super::AppState;
-use crate::s2s::FederationRouter;
 use crate::state::session_cleanup::SessionCleanupAdapters;
 use crate::state::CommittedLocalMucResume;
+use crate::state::FederationRouter;
 use crate::state::RestoredLocalMucOccupants;
 use crate::xmpp::protocol::iq_routes::IQ_ROUTES;
 use crate::xmpp::protocol::messaging::MessageHandlers;

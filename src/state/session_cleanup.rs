@@ -10,7 +10,7 @@ use crate::state::{
     session_cleanup_sm::SessionCleanupSm, session_cleanup_sm_revoker::SessionCleanupSmRevoker,
     session_cleanup_unavailable::AppSessionCleanupUnavailable,
 };
-use crate::xmpp::muc_delivery::MucDeliveryContext;
+use crate::state::muc_delivery::MucDeliveryContext;
 use anyhow::Result;
 use northstar_room_application::muc_service::ClusterMucTransitionOutcome;
 use northstar_runtime::workers::WorkerRegistry;

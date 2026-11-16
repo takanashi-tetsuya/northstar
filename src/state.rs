@@ -21,6 +21,7 @@ mod pubsub_session_host;
 mod push_notification_delivery;
 pub(crate) mod roster_session_host;
 mod s2s_host;
+mod s2s_inbound_host;
 mod session_host;
 mod upload_session_host;
 pub(crate) use admin_session_cleanup::AdminSessionCleanupContext;
@@ -84,7 +85,6 @@ mod sm_teardown_muc_projection;
 pub(crate) mod sm_teardown_runtime;
 mod sm_teardown_session;
 
-use crate::s2s::FederationRouter;
 use crate::state::http_contexts::{
     AccountAdminContext, AdminDispatchContext, ApiQueryContext, GovernanceContext,
     InvitationAdminContext, OmemoRecoveryPollContext, OperationAdminContext, PasskeyService,
@@ -211,6 +211,12 @@ pub use northstar_session_core::JoinedMucMembership;
 
 #[cfg(test)]
 mod muc_membership_snapshot_tests;
+
+/// Application service backing the private federation outbox capability.
+pub(crate) type FederationRouter =
+    northstar_federation_application::outbox::FederationOutboxService<
+        northstar_federation_postgres::outbox_repository::PostgresFederationOutboxRepository,
+    >;
 
 type RosterService = northstar_roster_application::RosterService<
     northstar_workflows::roster::PostgresRosterRepository,

@@ -1,10 +1,16 @@
-//! Builds the purpose-limited MUC delivery context (`xmpp::muc_delivery`) from the composition root.
+//! The root's MUC endpoint delivery: northstar-stream's context over the PostgreSQL repositories and the
+//! federation outbox, built from the composition root.
 
 use super::AppState;
-use crate::xmpp::muc_delivery::MucDeliveryContext;
 use northstar_room_application::cluster_muc_receipt_claim::ClusterMucReceiptClaimService;
 use northstar_workflows::muc_delivery_repository::PostgresMucDeliveryRepository;
 use std::sync::Arc;
+
+pub(crate) type MucDeliveryContext = northstar_stream::muc_delivery::MucDeliveryContext<
+    northstar_workflows::muc_delivery_repository::PostgresMucDeliveryRepository,
+    northstar_room_postgres::cluster_muc_receipt_claim_repository::PostgresClusterMucReceiptClaimRepository,
+    super::FederationRouter,
+>;
 
 impl AppState {
     pub(crate) fn muc_delivery_context(&self) -> MucDeliveryContext {

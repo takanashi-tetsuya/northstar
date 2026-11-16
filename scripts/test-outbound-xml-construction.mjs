@@ -118,7 +118,7 @@ for (const entry of [
   'crates/contexts/pubsub/northstar-pubsub-xmpp/src/lib.rs',
   'crates/contexts/room/northstar-room-application/src/mix_service.rs',
   'crates/edges/northstar-s2s/src/components.rs',
-  'src/s2s/inbound.rs',
+  'crates/edges/northstar-s2s/src/inbound.rs',
   'crates/edges/northstar-s2s/src/outbound.rs',
 ]) {
   test(`${entry} rejects raw XML in a new production child`, () => {

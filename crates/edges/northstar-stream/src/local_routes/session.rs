@@ -110,6 +110,22 @@ pub struct OnlineSession {
 }
 
 impl OnlineSession {
+    /// Whether this resource joined the room under exactly this nick.
+    pub fn joined_muc_as(&self, room: &str, nick: &str) -> bool {
+        self.muc_memberships
+            .get(room)
+            .is_some_and(|membership| membership.nick == nick)
+    }
+
+    /// This resource's non-negative priority while available.
+    pub fn available_priority(&self) -> Option<i16> {
+        if !self.available.load(Ordering::Relaxed) {
+            return None;
+        }
+        let priority = self.priority.load(Ordering::Relaxed);
+        (priority >= 0).then_some(priority)
+    }
+
     /// Snapshot this resource's active privacy list selection.
     pub fn privacy_active_snapshot(&self) -> Option<String> {
         self.privacy_active
@@ -196,5 +212,46 @@ impl AccountRevocationRoutes {
             session.routable.store(false, Ordering::Release);
             session.disconnect.cancel();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capacity_maintenance::tests::session;
+    use uuid::Uuid;
+
+    #[test]
+    fn joined_muc_as_requires_the_same_room_and_nick() {
+        let session = session(Uuid::new_v4(), true);
+        session.muc_memberships.insert(
+            "room@conference.example.test".into(),
+            JoinedMucMembership {
+                nick: "alice".into(),
+                cluster_epoch: Uuid::new_v4(),
+            },
+        );
+
+        assert!(session.joined_muc_as("room@conference.example.test", "alice"));
+        assert!(!session.joined_muc_as("room@conference.example.test", "bob"));
+        assert!(!session.joined_muc_as("unknown@conference.example.test", "alice"));
+    }
+
+    #[test]
+    fn available_priority_requires_availability_and_a_non_negative_priority() {
+        let session = session(Uuid::new_v4(), true);
+        session.available.store(false, Ordering::Relaxed);
+        for priority in [i16::MIN, -1, 0, 5, i16::MAX] {
+            session.priority.store(priority, Ordering::Relaxed);
+            assert_eq!(session.available_priority(), None);
+        }
+
+        session.available.store(true, Ordering::Relaxed);
+        session.priority.store(-1, Ordering::Relaxed);
+        assert_eq!(session.available_priority(), None);
+        session.priority.store(0, Ordering::Relaxed);
+        assert_eq!(session.available_priority(), Some(0));
+        session.priority.store(5, Ordering::Relaxed);
+        assert_eq!(session.available_priority(), Some(5));
     }
 }

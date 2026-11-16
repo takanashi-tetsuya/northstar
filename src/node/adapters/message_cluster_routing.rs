@@ -5,6 +5,7 @@ use anyhow::Result;
 use northstar_message_application::messaging::{
     DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
 };
+use northstar_message_xmpp::ports::MessageHost;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_stream::outbound::DurableDelivery;
 use std::sync::atomic::Ordering;
@@ -23,21 +24,8 @@ impl OnlineRoutePort for ServerNode {
     }
 
     fn record_local_accept(&self, durable: bool) {
-        northstar_message_application::telemetry::PersonalMessageTelemetry::new(
-            northstar_message_application::telemetry::PersonalMessageTelemetryCells {
-                routing_duration: &self.metrics.routing_duration_seconds,
-                rate_limited: &self.metrics.rate_limited_total,
-                abuse_backend_failures: &self.metrics.anti_abuse_backend_failures_total,
-                messages_routed: &self.metrics.messages_routed_total,
-                post_accept_failures: &self.metrics.post_accept_side_effect_failures_total,
-                durable_queue_acceptances: &self.metrics.online_queue_durable_acceptances_total,
-                volatile_queue_acceptances: &self.metrics.online_queue_volatile_acceptances_total,
-                carbon_delivery_failures: &self.metrics.carbon_post_accept_delivery_failures_total,
-                carbon_target_timeouts: &self.metrics.carbon_fanout_target_timeouts_total,
-                cluster_legacy_acceptances: &self.metrics.cluster_legacy_delivery_acceptances_total,
-            },
-        )
-        .online_queue_result(true, durable);
+        self.personal_message_telemetry()
+            .online_queue_result(true, durable);
     }
 
     async fn route_available_remote(
@@ -62,28 +50,7 @@ impl OnlineRoutePort for ServerNode {
                 jid,
                 stanza,
                 delivery,
-                &northstar_message_application::telemetry::PersonalMessageTelemetry::new(
-                    northstar_message_application::telemetry::PersonalMessageTelemetryCells {
-                        routing_duration: &self.metrics.routing_duration_seconds,
-                        rate_limited: &self.metrics.rate_limited_total,
-                        abuse_backend_failures: &self.metrics.anti_abuse_backend_failures_total,
-                        messages_routed: &self.metrics.messages_routed_total,
-                        post_accept_failures: &self.metrics.post_accept_side_effect_failures_total,
-                        durable_queue_acceptances: &self
-                            .metrics
-                            .online_queue_durable_acceptances_total,
-                        volatile_queue_acceptances: &self
-                            .metrics
-                            .online_queue_volatile_acceptances_total,
-                        carbon_delivery_failures: &self
-                            .metrics
-                            .carbon_post_accept_delivery_failures_total,
-                        carbon_target_timeouts: &self.metrics.carbon_fanout_target_timeouts_total,
-                        cluster_legacy_acceptances: &self
-                            .metrics
-                            .cluster_legacy_delivery_acceptances_total,
-                    },
-                ),
+                &self.personal_message_telemetry(),
             )
             .await
     }
@@ -95,11 +62,7 @@ impl FullJidFallbackPort for ServerNode {
     }
 
     fn available_priority(&self, session: &Self::Session) -> Option<i16> {
-        if !session.available.load(Ordering::Relaxed) {
-            return None;
-        }
-        let priority = session.priority.load(Ordering::Relaxed);
-        (priority >= 0).then_some(priority)
+        session.available_priority()
     }
 
     fn priority(&self, session: &Self::Session) -> i16 {
@@ -112,21 +75,7 @@ impl FullJidFallbackPort for ServerNode {
     }
 
     fn post_accept_failed(&self) {
-        northstar_message_application::telemetry::PersonalMessageTelemetry::new(
-            northstar_message_application::telemetry::PersonalMessageTelemetryCells {
-                routing_duration: &self.metrics.routing_duration_seconds,
-                rate_limited: &self.metrics.rate_limited_total,
-                abuse_backend_failures: &self.metrics.anti_abuse_backend_failures_total,
-                messages_routed: &self.metrics.messages_routed_total,
-                post_accept_failures: &self.metrics.post_accept_side_effect_failures_total,
-                durable_queue_acceptances: &self.metrics.online_queue_durable_acceptances_total,
-                volatile_queue_acceptances: &self.metrics.online_queue_volatile_acceptances_total,
-                carbon_delivery_failures: &self.metrics.carbon_post_accept_delivery_failures_total,
-                carbon_target_timeouts: &self.metrics.carbon_fanout_target_timeouts_total,
-                cluster_legacy_acceptances: &self.metrics.cluster_legacy_delivery_acceptances_total,
-            },
-        )
-        .post_accept_failed();
+        self.personal_message_telemetry().post_accept_failed();
     }
 }
 

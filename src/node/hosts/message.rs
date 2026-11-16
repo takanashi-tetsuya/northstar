@@ -222,28 +222,7 @@ impl FederatedMessageHost for ServerNode {
                 jid,
                 stanza,
                 delivery,
-                &northstar_message_application::telemetry::PersonalMessageTelemetry::new(
-                    northstar_message_application::telemetry::PersonalMessageTelemetryCells {
-                        routing_duration: &self.metrics.routing_duration_seconds,
-                        rate_limited: &self.metrics.rate_limited_total,
-                        abuse_backend_failures: &self.metrics.anti_abuse_backend_failures_total,
-                        messages_routed: &self.metrics.messages_routed_total,
-                        post_accept_failures: &self.metrics.post_accept_side_effect_failures_total,
-                        durable_queue_acceptances: &self
-                            .metrics
-                            .online_queue_durable_acceptances_total,
-                        volatile_queue_acceptances: &self
-                            .metrics
-                            .online_queue_volatile_acceptances_total,
-                        carbon_delivery_failures: &self
-                            .metrics
-                            .carbon_post_accept_delivery_failures_total,
-                        carbon_target_timeouts: &self.metrics.carbon_fanout_target_timeouts_total,
-                        cluster_legacy_acceptances: &self
-                            .metrics
-                            .cluster_legacy_delivery_acceptances_total,
-                    },
-                ),
+                &self.personal_message_telemetry(),
             )
             .await;
         OnlineRouteResult {

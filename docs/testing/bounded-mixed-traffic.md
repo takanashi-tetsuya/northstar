@@ -8,10 +8,10 @@ It never connects to an existing database or starts a production deployment.
 Build the binary first, then run the fixture as an ordinary user:
 
 ```sh
-cargo build --locked --bin rust-xmpp-server
+cargo build --locked --bin northstar-server
 python3 scripts/test-mixed-traffic-soak.py
 python3 scripts/mixed-traffic-soak.py \
-  --binary target/debug/rust-xmpp-server \
+  --binary target/debug/northstar-server \
   --duration-seconds 600 \
   --output-dir /tmp/northstar-mixed-qualification
 ```

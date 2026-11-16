@@ -103,7 +103,7 @@ env \
   NORTHSTAR_DISABLE_DOTENV=true \
   XMPP_DOMAIN=localhost \
   MIGRATOR_DATABASE_URL="$database_url" \
-  "$target_dir/debug/rust-xmpp-server" migrate
+  "$target_dir/debug/northstar-server" migrate
 
 # Public URLs must remain live fixture-owned endpoints after the server moves
 # to child-owned HTTP :0.  The relay binds first and stays stable for the
@@ -140,8 +140,8 @@ env \
   MAX_CONNECTIONS_PER_IP=1200 \
   MAX_SESSIONS_PER_ACCOUNT=1200 \
   LOG_FORMAT=json \
-  RUST_LOG=rust_xmpp_server=warn \
-  "$target_dir/debug/rust-xmpp-server" >"$runtime_dir/server.log" 2>&1 &
+  RUST_LOG=northstar_server=warn \
+  "$target_dir/debug/northstar-server" >"$runtime_dir/server.log" 2>&1 &
 server_pid=$!
 
 # The server, not the fixture, owns every TCP bind.  The record proves the

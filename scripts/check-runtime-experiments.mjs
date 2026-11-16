@@ -151,8 +151,8 @@ export function verifyRuntimeExperiments(catalog, { inventory = verifiedRuntimeI
       text(experiment.command, 'command'); reference(experiment.test, `${experiment.id} test`);
       const argv = experiment.command.split(/\s+/);
       if (argv[0] === 'cargo') {
-        const isBin = argv.length === 6 && argv.slice(0, 5).join(' ') === 'cargo test --locked --bin rust-xmpp-server';
-        const isPkg = argv.length === 6 && argv.slice(0, 4).join(' ') === 'cargo test --locked -p' && argv[4] !== 'rust-xmpp-server';
+        const isBin = argv.length === 6 && argv.slice(0, 5).join(' ') === 'cargo test --locked --bin northstar-server';
+        const isPkg = argv.length === 6 && argv.slice(0, 4).join(' ') === 'cargo test --locked -p' && argv[4] !== 'northstar-server';
         requireValue(isBin || isPkg, 'Cargo experiment must declare one explicit binary/selector');
         let relativePath;
         if (isBin) {

@@ -152,7 +152,7 @@ export MODERATION_RUNTIME_STATE="$runtime_dir/state.json"
 cargo_args=(--locked)
 if [[ "${XMPP_TEST_OFFLINE:-true}" != "false" ]]; then cargo_args+=(--offline); fi
 cargo build "${cargo_args[@]}"
-binary="${CARGO_TARGET_DIR:-$project_dir/target}/debug/rust-xmpp-server"
+binary="${CARGO_TARGET_DIR:-$project_dir/target}/debug/northstar-server"
 database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$test_database?options=-csearch_path%3D$schema"
 env \
   NORTHSTAR_DISABLE_DOTENV=true \
@@ -246,7 +246,7 @@ start_server() {
     BOOTSTRAP_ADMIN_USERNAME="$MODERATION_ADMIN_USERNAME" \
     BOOTSTRAP_ADMIN_PASSWORD="$MODERATION_ADMIN_PASSWORD" \
     LOG_FORMAT=json \
-    RUST_LOG=rust_xmpp_server=info \
+    RUST_LOG=northstar_server=info \
     "$binary" >"$runtime_dir/server.log" 2>&1 &
   server_pid=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid" || {

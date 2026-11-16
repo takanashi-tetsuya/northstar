@@ -11,7 +11,7 @@ COPY docs/openapi.yaml ./docs/openapi.yaml
 COPY deploy/postgres-init/lib/northstar-capability-manifest.sql \
      deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql \
      ./deploy/postgres-init/lib/
-RUN cargo build -p rust-xmpp-server --release --locked
+RUN cargo build -p northstar-server --release --locked
 
 FROM docker.io/library/postgres:17-bookworm@sha256:84560e3b9c6874893fc4e2854f5dc3e7c1a37bc9d1dfd7a8c641310ae22ba5ad
 
@@ -37,7 +37,7 @@ RUN apt-get update \
     && chmod 0700 /uploads /rollback /state /scratch \
     && chmod 0600 /uploads/.northstar-upload-root /rollback/.northstar-rollback-root
 COPY --chown=10001:10001 --chmod=0555 scripts/backup.sh scripts/verify-backup.sh scripts/restore-backup.sh scripts/recover-restore.sh scripts/restore-recovery.py scripts/validate-backup-dump-local.sh scripts/run-postgres.py scripts/verify-upload-archive.py scripts/backup-security.py scripts/backup-security-offline.sh /opt/northstar/
-COPY --from=builder --chmod=0555 /app/target/release/rust-xmpp-server /usr/local/bin/xmpp-server
+COPY --from=builder --chmod=0555 /app/target/release/northstar-server /usr/local/bin/xmpp-server
 COPY --chown=10001:10001 --chmod=0555 scripts/backup-inventory.py scripts/test-backup-inventory.py scripts/test-restore-recovery.py /opt/northstar/
 COPY --chown=10001:10001 --chmod=0444 \
     deploy/postgres-init/lib/reconcile-northstar-grants.sql \

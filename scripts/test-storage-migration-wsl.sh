@@ -115,8 +115,8 @@ export UPLOAD_S3_CREDENTIAL_MODE=files
 export UPLOAD_S3_ACCESS_KEY_ID_FILE="$NORTHSTAR_MINIO_ACCESS_KEY_FILE"
 export UPLOAD_S3_SECRET_ACCESS_KEY_FILE="$NORTHSTAR_MINIO_SECRET_KEY_FILE"
 
-cargo build --locked --bin rust-xmpp-server
-binary="${CARGO_TARGET_DIR:-$project_dir/target}/debug/rust-xmpp-server"
+cargo build --locked --bin northstar-server
+binary="${CARGO_TARGET_DIR:-$project_dir/target}/debug/northstar-server"
 NORTHSTAR_MINIO_TEST_ENDPOINT="$NORTHSTAR_MINIO_ENDPOINT" \
 NORTHSTAR_MINIO_TEST_BUCKET=northstar-migrate-it \
 NORTHSTAR_MINIO_TEST_ACCESS_KEY_FILE="$NORTHSTAR_MINIO_ACCESS_KEY_FILE" \

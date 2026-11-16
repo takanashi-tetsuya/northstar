@@ -51,7 +51,7 @@ function cleanModel() {
   const pluginDirectory = path.join(root, 'crates', 'kernel', pluginName);
   return {
     root,
-    rootPackageName: 'rust-xmpp-server',
+    rootPackageName: 'northstar-server',
     rootDependencyNames: new Set([pluginName]),
     rootSource: 'fn parse() { northstar_xep_0184::parse_message(todo!()); }',
     xepDirectories: [coreDirectory, pluginDirectory],
@@ -81,7 +81,7 @@ assert.deepEqual(validatePluginArchitecture(cleanModel()).violations, []);
 
 {
   const model = cleanModel();
-  model.packages[1].dependencies.push({ name: 'sqlx' }, { name: 'rust-xmpp-server' });
+  model.packages[1].dependencies.push({ name: 'sqlx' }, { name: 'northstar-server' });
   const file = model.crates.get('northstar-xep-0184').rustFiles[0];
   model.crates.get('northstar-xep-0184').sources.set(
     file,
@@ -89,7 +89,7 @@ assert.deepEqual(validatePluginArchitecture(cleanModel()).violations, []);
   );
   const result = validatePluginArchitecture(model).violations.join('\n');
   assert.match(result, /forbidden runtime capability sqlx/);
-  assert.match(result, /forbidden runtime capability rust-xmpp-server/);
+  assert.match(result, /forbidden runtime capability northstar-server/);
   assert.match(result, /global application state/);
   assert.match(result, /raw network stream\/listener/);
 }

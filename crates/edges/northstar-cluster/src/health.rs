@@ -283,7 +283,7 @@ pub(super) fn note_cluster_authentication_failure(health: &ClusterHealth, error:
         .authentication_failures
         .fetch_add(1, Ordering::Relaxed);
     // scripts/cluster-wsl.py observes this rejection under the cluster target.
-    tracing::warn!(target: "rust_xmpp_server::cluster",
+    tracing::warn!(target: "northstar_server::cluster",
         ?error, "rejected unauthenticated cluster protocol envelope");
 }
 

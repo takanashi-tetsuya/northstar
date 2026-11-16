@@ -28,7 +28,7 @@ if [[ "$browser_host" != "127.0.0.1" && "$browser_host" != "localhost" \
   exit 2
 fi
 pid_file="$project_dir/browser-e2e-server.pid"
-binary="$CARGO_TARGET_DIR/debug/rust-xmpp-server"
+binary="$CARGO_TARGET_DIR/debug/northstar-server"
 
 if [[ ! "$schema" =~ ^[a-z_][a-z0-9_]*$ ]]; then
   echo "NORTHSTAR_BROWSER_SCHEMA must be a simple lowercase PostgreSQL identifier" >&2
@@ -130,7 +130,7 @@ nohup env \
   BOOTSTRAP_ADMIN_PASSWORD=integration-admin-password-123 \
   FEDERATION_ENABLED=false \
   LOG_FORMAT=json \
-  RUST_LOG="${RUST_LOG:-rust_xmpp_server=info}" \
+  RUST_LOG="${RUST_LOG:-northstar_server=info}" \
   "$binary" >browser-e2e-server.log 2>&1 </dev/null &
 server_pid=$!
 echo "$server_pid" >"$pid_file"

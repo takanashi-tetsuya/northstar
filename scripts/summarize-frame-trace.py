@@ -13,7 +13,7 @@ from pathlib import Path
 import sys
 import uuid
 
-TARGET = 'rust_xmpp_server::xmpp::frame_execution'
+TARGET = 'northstar_server::xmpp::frame_execution'
 START = 'C2S execution started'
 FINISH = 'C2S execution finished'
 ADVANCE = 'C2S execution advanced'

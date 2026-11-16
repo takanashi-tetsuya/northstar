@@ -149,7 +149,7 @@ if [[ "${XMPP_TEST_OFFLINE:-true}" != "false" ]]; then cargo_args+=(--offline); 
 if [[ "${NORTHSTAR_LOAD_SKIP_BUILD:-false}" != "true" ]]; then
   cargo build --release "${cargo_args[@]}"
 fi
-binary="${CARGO_TARGET_DIR:-$project_dir/target}/release/rust-xmpp-server"
+binary="${CARGO_TARGET_DIR:-$project_dir/target}/release/northstar-server"
 database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:$database_port/$test_database?options=-csearch_path%3D$schema"
 env \
   NORTHSTAR_DISABLE_DOTENV=true \
@@ -204,7 +204,7 @@ env \
   POW_MAX_WORK_FACTOR=4096 \
   ABUSE_MESSAGE_FREE_BURST=10000 \
   LOG_FORMAT=json \
-  RUST_LOG=rust_xmpp_server=info \
+  RUST_LOG=northstar_server=info \
   "$binary" >"$runtime_dir/server.log" 2>&1 &
 server_pid=$!
 

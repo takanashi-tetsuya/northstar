@@ -176,8 +176,8 @@ def source_identity():
 def fixture_log_filter(trace_frames):
     # Do not accept an arbitrary ambient filter: experiments opt in only to
     # the sanitized execution target, never XML/authentication payload logs.
-    base = 'rust_xmpp_server=info'
-    return base + ',rust_xmpp_server::xmpp::frame_execution=debug' if trace_frames else base
+    base = 'northstar_server=info'
+    return base + ',northstar_server::xmpp::frame_execution=debug' if trace_frames else base
 
 
 def candidate_database_port():
@@ -278,7 +278,7 @@ class OwnedFixture:
         base = {**self.environment, 'NORTHSTAR_DISABLE_DOTENV': 'true', 'XMPP_DOMAIN': 'localhost',
                 'DATABASE_ALLOW_UNSAFE_ROLE_FOR_DEVELOPMENT': 'true',
                 'DATABASE_URL': database}
-        binary = self.runtime / 'rust-xmpp-server'
+        binary = self.runtime / 'northstar-server'
         shutil.copy2(self.input_binary, binary)
         self.binary_sha256 = digest(binary)
         migration_environment = {**base, 'MIGRATOR_DATABASE_URL': database,
@@ -838,7 +838,7 @@ def postgres_environment(environment):
 def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=pathlib.Path, required=True,
-                        help='already-built rust-xmpp-server; copied into the owned fixture')
+                        help='already-built northstar-server; copied into the owned fixture')
     parser.add_argument('--output-dir', type=pathlib.Path,
                         help='new private evidence directory, outside the checkout; default: unique temporary directory')
     parser.add_argument('--duration-seconds', type=float, default=600,

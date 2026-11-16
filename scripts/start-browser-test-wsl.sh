@@ -5,7 +5,7 @@ export MIGRATOR_ALLOW_UNSAFE_ROLE_FOR_DEVELOPMENT=true
 export METRICS_BIND=127.0.0.1:0
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-expected_binary="$project_dir/target-wsl/debug/rust-xmpp-server"
+expected_binary="$project_dir/target-wsl/debug/northstar-server"
 pid_file="$project_dir/browser-server.pid"
 test_schema="northstar_browser_manual_it"
 browser_http_bind="127.0.0.1"
@@ -95,7 +95,7 @@ nohup env \
   BOOTSTRAP_ADMIN_USERNAME=admin_it \
   BOOTSTRAP_ADMIN_PASSWORD=integration-admin-password-123 \
   LOG_FORMAT=json \
-  RUST_LOG=rust_xmpp_server=info \
+  RUST_LOG=northstar_server=info \
   "$expected_binary" \
   >browser-server.log 2>&1 </dev/null &
 

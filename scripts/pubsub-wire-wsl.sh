@@ -89,7 +89,7 @@ pubsub_database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:
 # apply migrations explicitly with the disposable test role first.
 env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
   MIGRATOR_DATABASE_URL="$pubsub_database_url" \
-  "$target_dir/debug/rust-xmpp-server" migrate
+  "$target_dir/debug/northstar-server" migrate
 
 # PubSub's restart client keeps one external WebSocket/HTTP authority.  The
 # relay owns that public loopback port for both generations and receives a new
@@ -138,8 +138,8 @@ start_server() {
     OPEN_REGISTRATION=true REQUIRE_ENCRYPTED_ARCHIVE=false REGISTRATION_RATE_PER_HOUR=20 \
     PUBSUB_MAX_NODES_PER_OWNER=10 BOOTSTRAP_ADMIN_USERNAME=pubsub_wire_admin \
     BOOTSTRAP_ADMIN_PASSWORD=pubsub-wire-admin-password-123 FEDERATION_ENABLED=false \
-    LOG_FORMAT=json RUST_LOG=rust_xmpp_server=info \
-    "$target_dir/debug/rust-xmpp-server" >>"$runtime_dir/server.log" 2>&1 &
+    LOG_FORMAT=json RUST_LOG=northstar_server=info \
+    "$target_dir/debug/northstar-server" >>"$runtime_dir/server.log" 2>&1 &
   server_pid=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid" || {
     echo "PubSub wire server failed before publishing readiness" >&2

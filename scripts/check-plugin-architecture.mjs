@@ -53,7 +53,7 @@ const forbiddenSourceCapabilities = [
   ['Windows network API', /\bwindows_sys\s*::[^;\n]*\bNetworking\b/],
   ['raw file descriptor/socket', /\b(?:RawFd|RawSocket)\b/],
   ['root server state module', /\bcrate\s*::\s*state\b/],
-  ['root server crate', /\brust_xmpp_server\b/],
+  ['root server crate', /\bnorthstar_server\b/],
   ['connection actor registry', /\bConnectionActorRegistry\b/],
   ['out-of-crate Rust source inclusion', /\binclude\s*!\s*\(/],
   ['out-of-crate module path override', /#\s*\[\s*path\s*=/],

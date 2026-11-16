@@ -730,7 +730,7 @@ impl Write for TraceCapture {
 
 impl TraceCapture {
     fn install() -> (Self, tracing::subscriber::DefaultGuard) {
-        Self::install_with_filter("off,rust_xmpp_server::xmpp::frame_execution=debug")
+        Self::install_with_filter("off,northstar_server::xmpp::frame_execution=debug")
     }
 
     fn install_with_filter(filter: &str) -> (Self, tracing::subscriber::DefaultGuard) {
@@ -817,7 +817,7 @@ fn assert_one_trace_pair(
     );
     assert_eq!(starts[0]["fields"]["outcome"], "pending");
     for event in &phase_events {
-        assert_eq!(event["target"], "rust_xmpp_server::xmpp::frame_execution");
+        assert_eq!(event["target"], "northstar_server::xmpp::frame_execution");
         let fields = event["fields"].as_object().unwrap();
         assert_eq!(fields.len(), 11, "bounded event field allowlist");
         for name in [
@@ -1581,7 +1581,7 @@ async fn credential_trace_retains_bounded_facts_without_private_request_receipt_
         SmResumeFinalizationOutcome, SmResumeFinalizationRequest,
     };
     let (capture, _subscriber) =
-        TraceCapture::install_with_filter("off,rust_xmpp_server::xmpp::auth_credential=debug");
+        TraceCapture::install_with_filter("off,northstar_server::xmpp::auth_credential=debug");
     let bearer = "PRIVATE_FAST_BEARER_71829";
     let key = "private-credential@example.test/resource";
     let privacy = "PRIVATE_RESUME_PRIVACY_731";
@@ -1673,7 +1673,7 @@ async fn credential_trace_retains_bounded_facts_without_private_request_receipt_
         );
     }
     for event in events {
-        assert_eq!(event["target"], "rust_xmpp_server::xmpp::auth_credential");
+        assert_eq!(event["target"], "northstar_server::xmpp::auth_credential");
         assert!(event["fields"].get("commit").is_some());
         assert!(event["fields"].get("returned").is_some());
         assert!(event["fields"].get("handler").is_some());
@@ -2029,7 +2029,7 @@ async fn actual_room_stage_traces_retain_failure_and_cancel_without_payload() {
 
 #[tokio::test]
 async fn abnormal_terminal_remains_visible_under_existing_crate_info_filter() {
-    let (capture, _subscriber) = TraceCapture::install_with_filter("rust_xmpp_server=info");
+    let (capture, _subscriber) = TraceCapture::install_with_filter("northstar_server=info");
     let execution = execution();
     assert!(matches!(
         execution
@@ -2049,7 +2049,7 @@ async fn abnormal_terminal_remains_visible_under_existing_crate_info_filter() {
     );
     assert_eq!(
         events[0]["target"],
-        "rust_xmpp_server::xmpp::frame_execution"
+        "northstar_server::xmpp::frame_execution"
     );
     assert_eq!(events[0]["level"], "WARN");
     assert_eq!(events[0]["fields"]["message"], "C2S execution finished");

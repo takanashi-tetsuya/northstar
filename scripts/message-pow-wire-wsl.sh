@@ -130,7 +130,7 @@ env \
   NORTHSTAR_DISABLE_DOTENV=true \
   XMPP_DOMAIN=localhost \
   MIGRATOR_DATABASE_URL="$database_url" \
-  "$target_dir/debug/rust-xmpp-server" migrate
+  "$target_dir/debug/northstar-server" migrate
 : >"$runtime_dir/server.log"
 
 # HTTP now belongs to each Northstar child as an ephemeral listener.  Keep the
@@ -206,8 +206,8 @@ start_server() {
     S2S_OUTBOX_MAX_ATTEMPTS=200 \
     LOG_DIR="$runtime_dir/logs" \
     LOG_FORMAT=json \
-    RUST_LOG=rust_xmpp_server=info
-    exec "$target_dir/debug/rust-xmpp-server"
+    RUST_LOG=northstar_server=info
+    exec "$target_dir/debug/northstar-server"
   ) >>"$runtime_dir/server.log" 2>&1 &
   server_pid=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid" || {

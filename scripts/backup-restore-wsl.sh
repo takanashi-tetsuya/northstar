@@ -723,8 +723,8 @@ exercise_s3_backup_restore() (
   mark_rollback_root "$s3_root/crash-rollback"
   mark_rollback_root "$s3_root/abort-rollback"
   command -v cargo >/dev/null || { echo 'S3 drill requires cargo' >&2; exit 1; }
-  cargo build --locked --bin rust-xmpp-server --quiet
-  export NORTHSTAR_BACKUP_STORAGE_HELPER="$project_dir/target/debug/rust-xmpp-server"
+  cargo build --locked --bin northstar-server --quiet
+  export NORTHSTAR_BACKUP_STORAGE_HELPER="$project_dir/target/debug/northstar-server"
   export NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost
   export MIGRATOR_ALLOW_UNSAFE_ROLE_FOR_DEVELOPMENT=true
   export UPLOAD_STORAGE_BACKEND=s3

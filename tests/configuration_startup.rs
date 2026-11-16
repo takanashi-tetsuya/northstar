@@ -28,7 +28,7 @@ impl StartupFixture {
     }
 
     fn run(&self, arguments: &[&str], disable_dotenv: bool) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_rust-xmpp-server"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_northstar-server"));
         command
             .args(arguments)
             .env_clear()

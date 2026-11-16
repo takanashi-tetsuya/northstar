@@ -204,7 +204,7 @@ if [[ "${NORTHSTAR_XEP0487_SKIP_BUILD:-false}" != true ]]; then
   [[ "${XMPP_TEST_OFFLINE:-true}" == false ]] || cargo_args+=(--offline)
   cargo build "${cargo_args[@]}"
 fi
-binary="$CARGO_TARGET_DIR/debug/rust-xmpp-server"
+binary="$CARGO_TARGET_DIR/debug/northstar-server"
 [[ -x "$binary" ]] || { echo "XEP-0487 runtime binary is missing: $binary" >&2; exit 1; }
 database_url_a="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$schema_a"
 database_url_b="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$schema_b"
@@ -232,7 +232,7 @@ common_env=(
   DIALBACK_ENABLED=true
   FEDERATION_EXTRA_ROOT_CERT_PATH="$runtime_dir/certs/ca.crt"
   LOG_FORMAT=json
-  RUST_LOG=rust_xmpp_server=debug,northstar_s2s=debug
+  RUST_LOG=northstar_server=debug,northstar_s2s=debug
 )
 
 start_a() {

@@ -214,14 +214,14 @@ def main() -> None:
             "rss=$(ps -o rss= -p \"$pid\" | tr -d '[:space:]'); "
             "test -n \"$rss\" || exit 1; "
             "running=$(sudo -n stat -Lc '%d:%i' \"/proc/$pid/exe\"); "
-            "on_disk=$(stat -Lc '%d:%i' /home/lab/northstar/rust-xmpp-server); "
+            "on_disk=$(stat -Lc '%d:%i' /home/lab/northstar/northstar-server); "
             "printf '%s %s %s %s\\n' \"$pid\" \"$rss\" \"$running\" \"$on_disk\"",
         )
         return parse_service_sample(observed)
 
     def check_service_hash(name: str, pid: int) -> None:
         observed = run(name,
-            "sudo -n sha256sum /home/lab/northstar/rust-xmpp-server "
+            "sudo -n sha256sum /home/lab/northstar/northstar-server "
             f"/proc/{pid}/exe",
             timeout=90,
         ).splitlines()

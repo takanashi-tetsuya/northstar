@@ -52,7 +52,7 @@ for command in curl install mktemp openssl psql python3 rm sed sha256sum sleep t
 done
 
 target_dir="${CARGO_TARGET_DIR:-$project_dir/target}"
-readonly binary="$target_dir/debug/rust-xmpp-server"
+readonly binary="$target_dir/debug/northstar-server"
 [[ -x "$binary" ]] || fail "current candidate binary is missing: $binary"
 binary_version="$($binary --version)" || fail 'candidate binary did not report its version'
 [[ "$binary_version" == 'xmpp-server '* ]] || fail 'candidate binary reported an unexpected version format'
@@ -224,7 +224,7 @@ env NORTHSTAR_DISABLE_DOTENV=true \
   FAST_TOKEN_SECRET_FILE="$fast_secret" DUMMY_SCRAM_SECRET_FILE="$dummy_scram_secret" \
   ABUSE_STATE_HMAC_KEY_FILE="$abuse_secret" API_CONTROL_SECRET_FILE="$api_control_secret" \
   OPEN_REGISTRATION=false INVITATION_REQUIRED=false FEDERATION_ENABLED=false DIALBACK_ENABLED=false \
-  LOG_FORMAT=json RUST_LOG=rust_xmpp_server=info \
+  LOG_FORMAT=json RUST_LOG=northstar_server=info \
   "$binary" >"$runtime_log" 2>&1 &
 server_pid=$!
 fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid" \

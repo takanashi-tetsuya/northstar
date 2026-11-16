@@ -68,10 +68,10 @@ class RuntimeProfileTests(unittest.TestCase):
         GUARD.validate_environment({"RUSTFLAGS": "", "CARGO_BUILD_JOBS": "2", "CARGO_TARGET_DIR": "target-test"})
 
     def records(self, directory):
-        binary = directory / "runtime-test/rust-xmpp-server"
+        binary = directory / "runtime-test/northstar-server"
         source = directory / "src/main.rs"
         artifact = {"reason": "compiler-artifact", "executable": str(binary), "fresh": True,
-                    "target": {"name": "rust-xmpp-server", "kind": ["bin"], "src_path": str(source)},
+                    "target": {"name": "northstar-server", "kind": ["bin"], "src_path": str(source)},
                     "profile": {"opt_level": "2", "debug_assertions": True,
                                 "overflow_checks": True, "test": False}}
         return [artifact, {"reason": "build-finished", "success": True}], binary, source
@@ -94,7 +94,7 @@ class RuntimeProfileTests(unittest.TestCase):
     def test_build_rejects_stale_path_other_source_failure_and_duplicates(self):
         with tempfile.TemporaryDirectory() as directory:
             original, binary, source = self.records(Path(directory))
-            mutations = [lambda r: r[0].update(executable=str(binary.parent.parent / "debug/rust-xmpp-server")),
+            mutations = [lambda r: r[0].update(executable=str(binary.parent.parent / "debug/northstar-server")),
                          lambda r: r[0]["target"].update(src_path=str(source.parent / "other.rs")),
                          lambda r: r[1].update(success=False), lambda r: r[1].update(success=1), lambda r: r.pop(),
                          lambda r: r.append(copy.deepcopy(r[0])), lambda r: r.pop(0)]

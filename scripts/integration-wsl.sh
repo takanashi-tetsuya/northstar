@@ -190,7 +190,7 @@ env \
   NORTHSTAR_DISABLE_DOTENV=true \
   XMPP_DOMAIN=localhost \
   MIGRATOR_DATABASE_URL="$integration_database_url" \
-  "$target_dir/debug/rust-xmpp-server" migrate
+  "$target_dir/debug/northstar-server" migrate
 
 : >"$runtime_dir/integration-server.log"
 # Bind the relay before a server generation exists.  It publishes the only
@@ -257,8 +257,8 @@ start_server() {
     BOOTSTRAP_ADMIN_PASSWORD=integration-admin-password-123 \
     LOG_DIR="$runtime_dir/logs" \
     LOG_FORMAT=json \
-    RUST_LOG="${RUST_LOG:-rust_xmpp_server=info}" \
-    "$target_dir/debug/rust-xmpp-server" >>"$runtime_dir/integration-server.log" 2>&1 &
+    RUST_LOG="${RUST_LOG:-northstar_server=info}" \
+    "$target_dir/debug/northstar-server" >>"$runtime_dir/integration-server.log" 2>&1 &
   server_pid=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid" || return 1
   test_http_backend_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"

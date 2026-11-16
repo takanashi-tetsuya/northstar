@@ -3,7 +3,7 @@ set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pid_file="$project_dir/browser-server.pid"
-expected_binary="$project_dir/target-wsl/debug/rust-xmpp-server"
+expected_binary="$project_dir/target-wsl/debug/northstar-server"
 
 if [[ -f "$pid_file" ]]; then
   server_pid="$(cat "$pid_file")"

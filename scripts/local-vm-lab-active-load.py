@@ -321,7 +321,7 @@ print(json.dumps({'pid':pid,'rss_kib':rss,'fds':len(list((root / 'fd').iterdir()
                   'mem_available_kib':available, 'cpu_ticks':cpu_ticks,
                   'clock_ticks_per_second':os.sysconf('SC_CLK_TCK'),
                   'exe_inode':f'{os.stat(root / "exe").st_dev}:{os.stat(root / "exe").st_ino}',
-                  'disk_inode':f'{os.stat("/home/lab/northstar/rust-xmpp-server").st_dev}:{os.stat("/home/lab/northstar/rust-xmpp-server").st_ino}',
+                  'disk_inode':f'{os.stat("/home/lab/northstar/northstar-server").st_dev}:{os.stat("/home/lab/northstar/northstar-server").st_ino}',
                   'metrics':metrics},sort_keys=True))
 ''' % (repr(METRICS),)
 
@@ -477,7 +477,7 @@ class Lab:
         for name in ("ns-a", "ns-b"):
             pid, inode = identities[name]
             observed = self.run(name,
-                "sudo -n sha256sum /home/lab/northstar/rust-xmpp-server "
+                "sudo -n sha256sum /home/lab/northstar/northstar-server "
                 f"/proc/{pid}/exe", timeout=100,
             ).splitlines()
             hashes = [line.split()[0] for line in observed]

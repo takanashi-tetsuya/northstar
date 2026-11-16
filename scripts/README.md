@@ -61,7 +61,7 @@ preview, then re-raises. Caddy policy and production behavior are unchanged;
 `docs/evidence/experimental-rebuild/caddy-ingress-receive-diagnostics.json`
 records the diagnosis.
 
-`maintenance-subserver-wsl.py --server /absolute/path/to/rust-xmpp-server`
+`maintenance-subserver-wsl.py --server /absolute/path/to/northstar-server`
 tests an existing Linux binary using its own temporary Unix-socket PostgreSQL
 cluster and real runtime grants. It starts core and maintenance against the
 same database, checks simultaneous readiness and restarts core without taking
@@ -130,7 +130,7 @@ budget, bounded late-response drain and consecutive-error policy described in
 private PostgreSQL regressions before starting the pressure matrix.
 
 Capacity runs explicitly build the `runtime-test` Cargo profile and use
-`$CARGO_TARGET_DIR/runtime-test/rust-xmpp-server`. This profile inherits `dev`,
+`$CARGO_TARGET_DIR/runtime-test/northstar-server`. This profile inherits `dev`,
 uses optimization level 2, and keeps debug assertions, integer overflow checks
 and panic unwinding. Ordinary unit tests and direct federation integrations
 retain their existing debug builds. The parent passes

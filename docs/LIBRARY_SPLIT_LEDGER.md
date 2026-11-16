@@ -22,7 +22,7 @@ maps typed results to protocol errors, invokes application services and owns
 all external effects. The allowed dependency direction is therefore:
 
 ```text
-rust-xmpp-server
+northstar-server
   -> application services / transport adapters
   -> northstar-* leaf libraries
   -> northstar-xep-core / northstar-xmpp-types

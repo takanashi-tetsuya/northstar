@@ -18,7 +18,7 @@ section 4.1.
 | `crates/platform/<crate>` | platform | kernel, platform |
 | `crates/contexts/<context>/<crate>` | context | see the roles below |
 | `crates/edges/<crate>` | edge | kernel, platform, any context's core or application, the edge `northstar-stream` |
-| `.` (`rust-xmpp-server`) | composition | any runtime crate |
+| `.` (`northstar-server`) | composition | any runtime crate |
 | `tools/<crate>` | tooling | anything; only tooling may depend on tooling |
 
 A context crate's role follows its name: `application` for `*-application` and

@@ -895,7 +895,7 @@ mod tests {
 
     #[test]
     fn composition_with_normal_dependency_on_tooling_is_reported_and_dev_dependency_is_accepted() {
-        let comp = record("rust-xmpp-server", ".");
+        let comp = record("northstar-server", ".");
         let tool = record("architecture-validator", "tools/architecture-validator");
         let records = vec![comp.clone(), tool.clone()];
         let workspace_members = vec![comp.package.clone(), tool.package.clone()];
@@ -925,7 +925,7 @@ mod tests {
         assert_eq!(errors_normal.len(), 1);
         assert_eq!(
             errors_normal[0],
-            "crate graph: rust-xmpp-server (composition) must not depend on architecture-validator (tooling)"
+            "crate graph: northstar-server (composition) must not depend on architecture-validator (tooling)"
         );
 
         let packages_dev = vec![
@@ -1028,7 +1028,7 @@ mod tests {
             Some(("tooling".to_string(), None, None))
         );
         assert_eq!(
-            expected_tier(".", "rust-xmpp-server"),
+            expected_tier(".", "northstar-server"),
             Some(("composition".to_string(), None, None))
         );
         assert_eq!(

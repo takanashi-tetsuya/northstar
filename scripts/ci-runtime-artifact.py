@@ -109,18 +109,18 @@ def transfer(mode, project, bundle, binary, build_log=None):
         bundle.mkdir(parents=True, exist_ok=True)
         if any(bundle.iterdir()):
             raise ValueError('artifact output must be empty')
-        checked_copy(binary, bundle / 'rust-xmpp-server', value['binary_sha256'])
+        checked_copy(binary, bundle / 'northstar-server', value['binary_sha256'])
         (bundle / 'manifest.json').write_text(json.dumps(value, sort_keys=True) + '\n')
     else:
-        if {p.name for p in bundle.iterdir()} != {'manifest.json', 'rust-xmpp-server'}:
+        if {p.name for p in bundle.iterdir()} != {'manifest.json', 'northstar-server'}:
             raise ValueError('incomplete runtime artifact')
         manifest = bundle / 'manifest.json'
         digest(manifest, 16384)
         value = json.loads(manifest.read_text())
         validate_manifest(value, current)
-        if digest(bundle / 'rust-xmpp-server') != value['binary_sha256']:
+        if digest(bundle / 'northstar-server') != value['binary_sha256']:
             raise ValueError('runtime binary digest mismatch')
-        checked_copy(bundle / 'rust-xmpp-server', binary, value['binary_sha256'])
+        checked_copy(bundle / 'northstar-server', binary, value['binary_sha256'])
     print('runtime_artifact=' + mode + '_verified')
 
 

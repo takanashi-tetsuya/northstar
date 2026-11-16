@@ -4,7 +4,7 @@ set +x
 
 # Join the two isolated Northstar guests to one signed Redis control plane.
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
-binary=$project_dir/target/debug/rust-xmpp-server
+binary=$project_dir/target/debug/northstar-server
 key=${NORTHSTAR_LAB_SSH_KEY:-/tmp/northstar-lab-keys/id_ed25519}
 [[ -x $binary && -f $key ]] || { echo 'candidate binary or lab SSH key missing' >&2; exit 2; }
 bash "$project_dir/scripts/local-vm-lab-preflight.sh" >/dev/null
@@ -86,7 +86,7 @@ ssh "${ssh_opts[@]}" "$a" \
 ssh "${ssh_opts[@]}" "$b" \
   'sudo chown lab:lab /etc/northstar-lab-pki/ns-a.key; sudo chmod 640 /etc/northstar-lab-pki/ns-a.key; cat /etc/northstar-lab-pki/ns-a.pem /etc/northstar-lab-pki/ca.pem > /home/lab/northstar/fullchain.pem; chmod 644 /home/lab/northstar/fullchain.pem'
 
-scp "${ssh_opts[@]}" "$binary" "$b:/home/lab/northstar/rust-xmpp-server"
+scp "${ssh_opts[@]}" "$binary" "$b:/home/lab/northstar/northstar-server"
 ssh "${ssh_opts[@]}" "$a" \
   'sudo cat /etc/systemd/system/northstar-lab.service' |
   sed 's@serve standalone@serve core@' |

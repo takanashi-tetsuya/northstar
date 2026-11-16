@@ -20,7 +20,7 @@ See the [documentation index](docs/README.md), [security policy](.github/SECURIT
 [contribution guide](.github/CONTRIBUTING.md).
 
 The supported architecture is the single-process modular monolith
-(`rust-xmpp-server`). The same binary can also run separate core and maintenance
+(`northstar-server`). The same binary can also run separate core and maintenance
 processes over shared PostgreSQL; see [process ownership and deployment](docs/SUBSERVERS.md).
 The earlier distributed-service prototype (`services/*`) was never integrated and
 was removed in 2026-10; the [target architecture](docs/architecture/target-architecture.zh-TW.md)

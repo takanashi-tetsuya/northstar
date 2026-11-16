@@ -561,7 +561,7 @@ fn time<'a, H: IqRouteHost>(
             Ok(payload) => Ok(Action::Send(iq_result(request.id, &payload))),
             Err(error) => {
                 tracing::error!(
-                    target: "rust_xmpp_server::xmpp::protocol::iq_routes",
+                    target: "northstar_server::xmpp::protocol::iq_routes",
                     %error,
                     "failed to build validated XEP-0202 response"
                 );
@@ -591,7 +591,7 @@ fn version<'a, H: IqRouteHost>(
             Ok(payload) => Ok(Action::Send(iq_result(request.id, &payload))),
             Err(error) => {
                 tracing::error!(
-                    target: "rust_xmpp_server::xmpp::protocol::iq_routes",
+                    target: "northstar_server::xmpp::protocol::iq_routes",
                     %error,
                     "failed to build validated XEP-0092 response"
                 );

@@ -1613,7 +1613,7 @@ done
 require_literal "$database_acceptance" '--demote-legacy-xmpp' \
   'database-backed acceptance test does not exercise the legacy-role cutover'
 require_literal "$database_acceptance" \
-  'cargo run --quiet --locked --bin rust-xmpp-server -- migrate' \
+  'cargo run --quiet --locked --bin northstar-server -- migrate' \
   'database-backed acceptance test does not run the real migrator command'
 require_literal "$database_acceptance" \
   'bash scripts/reconcile-database-grants.sh' \

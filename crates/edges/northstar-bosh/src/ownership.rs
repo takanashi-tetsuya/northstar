@@ -173,7 +173,7 @@ impl ObservationGuard {
             Some(keep_running) => self.operation.returned(keep_running),
             None => self.operation.retire(terminal),
         };
-        tracing::debug!(target: "rust_xmpp_server::bosh::ownership", ?summary, "BOSH operation retired");
+        tracing::debug!(target: "northstar_server::bosh::ownership", ?summary, "BOSH operation retired");
     }
 }
 impl Drop for ObservationGuard {

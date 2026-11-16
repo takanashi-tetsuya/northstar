@@ -22,16 +22,16 @@ class ArtifactTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.bundle = self.root / 'bundle'
-        self.binary = self.root / 'build/rust-xmpp-server'
+        self.binary = self.root / 'build/northstar-server'
         self.binary.parent.mkdir()
         self.binary.write_bytes(b'fixture binary bytes; never executed\n')
         self.binary.chmod(0o755)
-        self.destination = self.root / 'restore/rust-xmpp-server'
+        self.destination = self.root / 'restore/northstar-server'
         self.destination.parent.mkdir()
         self.destination.write_bytes(b'original')
         self.log = self.root / 'build.jsonl'
         self.records = [dict(reason='compiler-artifact', executable=str(self.binary),
-            target=dict(name='rust-xmpp-server', kind=['bin'], src_path=str(ROOT / 'src/main.rs')),
+            target=dict(name='northstar-server', kind=['bin'], src_path=str(ROOT / 'src/main.rs')),
             profile=dict(opt_level='2', debug_assertions=True, overflow_checks=True, test=False)),
             dict(reason='build-finished', success=True)]
         self.log.write_text('\n'.join(map(json.dumps, self.records)))
@@ -47,7 +47,7 @@ class ArtifactTests(unittest.TestCase):
 
     def test_round_trip_restores_verified_bytes_and_executable_mode(self):
         self.pack()
-        (self.bundle / 'rust-xmpp-server').chmod(0o644)  # Actions strips executable mode.
+        (self.bundle / 'northstar-server').chmod(0o644)  # Actions strips executable mode.
         ARTIFACT.transfer('restore', ROOT, self.bundle, self.destination)
         self.assertEqual(self.destination.read_bytes(), self.binary.read_bytes())
         self.assertEqual(self.destination.stat().st_mode & 0o777, 0o755)
@@ -71,7 +71,7 @@ class ArtifactTests(unittest.TestCase):
 
     def test_changed_binary_and_symlink_are_rejected(self):
         self.pack()
-        binary = self.bundle / 'rust-xmpp-server'
+        binary = self.bundle / 'northstar-server'
         binary.write_bytes(b'tampered')
         with self.assertRaises(ValueError):
             ARTIFACT.transfer('restore', ROOT, self.bundle, self.destination)

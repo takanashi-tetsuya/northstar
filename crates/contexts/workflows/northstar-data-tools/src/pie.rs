@@ -250,7 +250,7 @@ fn parse_command(arguments: &[String]) -> Result<Command> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  rust-xmpp-server pie export --output PATH [--exclude-mam]\n  rust-xmpp-server pie import --input PATH [--root DIR] [--dry-run] [--conflict fail|skip|replace] [--unknown warn|fail] [--allow-plaintext-passwords]\n\nRun PIE import while Northstar is stopped. Export creates a new owner-only file and never writes plaintext passwords. Encrypt exported files with an external, authenticated encryption tool before transport or long-term storage."
+    "usage:\n  northstar-server pie export --output PATH [--exclude-mam]\n  northstar-server pie import --input PATH [--root DIR] [--dry-run] [--conflict fail|skip|replace] [--unknown warn|fail] [--allow-plaintext-passwords]\n\nRun PIE import while Northstar is stopped. Export creates a new owner-only file and never writes plaintext passwords. Encrypt exported files with an external, authenticated encryption tool before transport or long-term storage."
 }
 
 async fn assert_schema_ready(pool: &PgPool) -> Result<()> {

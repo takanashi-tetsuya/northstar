@@ -22,7 +22,7 @@ SECRET = "synthetic-private-log-content-must-not-be-reported"
 
 def rejection(**changes):
     event = {
-        "target": "rust_xmpp_server::cluster",
+        "target": "northstar_server::cluster",
         "fields": {
             "message": "rejected unauthenticated cluster protocol envelope",
             "error": "cluster envelope is oversized",
@@ -156,7 +156,7 @@ class RejectionObservationTests(unittest.TestCase):
     def test_wrong_target_message_or_reason_never_counts(self):
         expected = json.loads(rejection())
         wrong_events = [
-            rejection(target="rust_xmpp_server::xmpp"),
+            rejection(target="northstar_server::xmpp"),
             rejection(fields={**expected["fields"], "message": "different rejection"}),
             rejection(fields={**expected["fields"], "error": "cluster signature is invalid"}),
             rejection(fields={**expected["fields"], "error": "cluster envelope is oversized: extra"}),
@@ -283,7 +283,7 @@ class RejectionObservationTests(unittest.TestCase):
             self.assertEqual(len(calls), 1, message)
             path, call = calls[0]
             self.assertTrue(
-                path == root / "crates/edges/northstar-cluster" / "src" / "lib.rs" or 'target: "rust_xmpp_server::cluster"' in call,
+                path == root / "crates/edges/northstar-cluster" / "src" / "lib.rs" or 'target: "northstar_server::cluster"' in call,
                 f"{path.relative_to(root)} logs {message!r} outside the cluster target",
             )
 

@@ -879,7 +879,7 @@ PSQL
 NORTHSTAR_DISABLE_DOTENV=true \
 XMPP_DOMAIN=ci.northstar.invalid \
 MIGRATOR_DATABASE_URL_FILE="$migrator_url_file" \
-  cargo run --quiet --locked --bin rust-xmpp-server -- migrate
+  cargo run --quiet --locked --bin northstar-server -- migrate
 
 control_psql --dbname=postgres <<'PSQL'
 CREATE ROLE northstar_ci_stale_grantee NOLOGIN NOINHERIT NOSUPERUSER

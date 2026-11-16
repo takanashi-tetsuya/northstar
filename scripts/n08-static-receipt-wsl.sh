@@ -61,7 +61,7 @@ run_case clippy cargo clippy --workspace --all-targets --all-features --locked -
 run_case ci-supervisor bash scripts/test-github-ci-supervisor.sh || exit $?
 run_case listener-worker bash scripts/test-listener-stress-worker.sh || exit $?
 
-binary="$project_dir/target/debug/rust-xmpp-server"
+binary="$project_dir/target/debug/northstar-server"
 [[ -f "$binary" && -x "$binary" ]] || {
   echo 'N08 static receipt did not find the current Linux executable' >&2
   exit 1

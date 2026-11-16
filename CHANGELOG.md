@@ -6,6 +6,11 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 ## Unreleased
 
+- Rename the server's Cargo package and binary target from `rust-xmpp-server`
+  to `northstar-server`. The installed release executable is still
+  `xmpp-server`. Log targets under `rust_xmpp_server` move to
+  `northstar_server` (update `RUST_LOG` filters), and the sample Prometheus
+  job is now `northstar-server`.
 - Complete S2S outbox deliveries on peer ACK when XEP-0198 is negotiated,
   with bounded acknowledgement waits and retries after disconnection.
 - Add optional Web Passkeys with one-use challenges and device-bound XMPP login.

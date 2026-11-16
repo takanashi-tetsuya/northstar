@@ -436,7 +436,7 @@ impl FrameExecution {
             stage,
             Stage::AuthPublication | Stage::CapsPublication | Stage::ReplacementNotification
         );
-        tracing::debug!(target: "rust_xmpp_server::xmpp::frame_execution",
+        tracing::debug!(target: "northstar_server::xmpp::frame_execution",
             operation_id = %progress.operation_id,
             sequence = progress.sequence,
             transport = progress.policy.transport,
@@ -560,7 +560,7 @@ struct Observation {
 impl Observation {
     fn new(execution: FrameExecution, phase: &'static str, budget: Option<Duration>) -> Self {
         let progress = &execution.0;
-        tracing::debug!(target: "rust_xmpp_server::xmpp::frame_execution",
+        tracing::debug!(target: "northstar_server::xmpp::frame_execution",
             operation_id = %progress.operation_id,
             sequence = progress.sequence,
             transport = progress.policy.transport,
@@ -603,7 +603,7 @@ impl Observation {
                 // Never print the snapshot, command, payload, fence, or lease.
                 // Reservation, direct SQL, and queue facts remain independent;
                 // none implies a transport write or settlement.
-                tracing::debug!(target: "rust_xmpp_server::xmpp::direct_lifecycle",
+                tracing::debug!(target: "northstar_server::xmpp::direct_lifecycle",
                     operation_id = %snapshot.operation,
                     classification = ?snapshot.classification(),
                     reservation = ?snapshot.reservation,
@@ -622,7 +622,7 @@ impl Observation {
                 TerminalReason::Panicked => discussion::TerminalReason::Panicked,
             };
             if let Some(summary) = progress.muc_discussion.retire(muc_reason) {
-                tracing::debug!(target: "rust_xmpp_server::xmpp::muc_discussion",
+                tracing::debug!(target: "northstar_server::xmpp::muc_discussion",
                     operation_id = %progress.operation_id,
                     repository_started = summary.repository_started,
                     knowledge = ?summary.knowledge,
@@ -643,7 +643,7 @@ impl Observation {
                 _ => foreground::TerminalReason::BackendFailure,
             };
             if let Some(summary) = progress.mix_foreground.retire(reason) {
-                tracing::debug!(target: "rust_xmpp_server::xmpp::mix_foreground",
+                tracing::debug!(target: "northstar_server::xmpp::mix_foreground",
                     operation_id = %progress.operation_id,
                     replay_started = summary.replay_started,
                     replay_returned = ?summary.replay_returned,
@@ -674,7 +674,7 @@ impl Observation {
             for attempt in attempts.into_iter().flatten() {
                 attempt.handler_returned(returned);
                 let snapshot = attempt.snapshot();
-                tracing::debug!(target: "rust_xmpp_server::xmpp::auth_credential",
+                tracing::debug!(target: "northstar_server::xmpp::auth_credential",
                     operation_id = %snapshot.frame, attempt = %snapshot.attempt,
                     ordinal = snapshot.ordinal, kind = ?snapshot.kind,
                     begin = ?snapshot.begin, eligibility = ?snapshot.eligibility,
@@ -696,7 +696,7 @@ impl Observation {
         let budget_ms = self.budget.map_or(0, |value| value.as_millis() as u64);
         macro_rules! emit {
             ($level:expr) => {
-                tracing::event!(target: "rust_xmpp_server::xmpp::frame_execution", $level,
+                tracing::event!(target: "northstar_server::xmpp::frame_execution", $level,
                     operation_id = %progress.operation_id,
                     sequence = progress.sequence,
                     transport = progress.policy.transport,

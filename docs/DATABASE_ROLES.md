@@ -145,7 +145,7 @@ release-equivalent validation uses PostgreSQL 17):
 
 ```sh
 python3 scripts/test-migration-preflight.py \
-  --binary target/debug/rust-xmpp-server \
+  --binary target/debug/northstar-server \
   --pg-bin /path/to/postgresql/17/bin \
   --evidence /tmp/northstar-migration-preflight.json
 ```

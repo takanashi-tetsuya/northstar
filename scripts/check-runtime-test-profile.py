@@ -44,8 +44,8 @@ def validate_fixture_sources(sources):
             '"NORTHSTAR_RUNTIME_TEST_PROFILE=$fixture_cargo_profile"',
             '--profile "$fixture_cargo_profile" --message-format=json-render-diagnostics',
             '--manifest "$project_dir/Cargo.toml" --check-environment || return 1',
-            'candidate="$configured_target_dir/$fixture_cargo_profile_directory/rust-xmpp-server"',
-            '"$resolved_target_dir/$fixture_cargo_profile_directory/rust-xmpp-server"',
+            'candidate="$configured_target_dir/$fixture_cargo_profile_directory/northstar-server"',
+            '"$resolved_target_dir/$fixture_cargo_profile_directory/northstar-server"',
             '--build-log "$runtime_dir/parent-preflight-build.raw.log"',
             '--binary "$resolved_binary" --source "$project_dir/src/main.rs" || return 1',
             'scripts/ci-runtime-artifact.py" restore',
@@ -54,12 +54,12 @@ def validate_fixture_sources(sources):
         "federation-wsl.sh": [
             'fixture_select_runtime_profile "${NORTHSTAR_RUNTIME_TEST_PROFILE:-dev}"',
             '--profile "$fixture_cargo_profile"',
-            'binary="$target_dir/$fixture_cargo_profile_directory/rust-xmpp-server"',
+            'binary="$target_dir/$fixture_cargo_profile_directory/northstar-server"',
         ],
         "mix-federation-runtime-wsl.sh": [
             'fixture_select_runtime_profile "${NORTHSTAR_RUNTIME_TEST_PROFILE:-dev}"',
             '--profile "$fixture_cargo_profile"',
-            'binary="${CARGO_TARGET_DIR:-$project_dir/target}/$fixture_cargo_profile_directory/rust-xmpp-server"',
+            'binary="${CARGO_TARGET_DIR:-$project_dir/target}/$fixture_cargo_profile_directory/northstar-server"',
         ],
     }
     for name, invariants in expected.items():
@@ -80,7 +80,7 @@ def validate_build_records(records, binary, source):
             target = record.get("target", {})
             if not isinstance(target, dict):
                 raise ValueError("Cargo artifact target is not an object")
-            if target.get("name") == "rust-xmpp-server" and target.get("kind") == ["bin"]:
+            if target.get("name") == "northstar-server" and target.get("kind") == ["bin"]:
                 artifacts.append(record)
     if len(finished) != 1 or finished[0] is not True or len(artifacts) != 1:
         raise ValueError("capacity build must contain one successful current server artifact")

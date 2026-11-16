@@ -308,7 +308,7 @@ pub async fn finalize_message_admission_with<A, O, F, E>(
         // Acceptance cannot be turned into a retriable stanza rejection by
         // failure to finish its independent PoW reservation transaction.
         post_accept_failed();
-        tracing::warn!(target: "rust_xmpp_server::xmpp::protocol::messaging",
+        tracing::warn!(target: "northstar_server::xmpp::protocol::messaging",
             ?error, route = route_label,
             "accepted message PoW admission could not be finalized");
     }

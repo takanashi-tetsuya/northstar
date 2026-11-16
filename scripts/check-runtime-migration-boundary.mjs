@@ -92,7 +92,7 @@ function hasBoundedLedgerNegativeProof(source, firstRuntime, firstMigration) {
 
 function inspectRuntimeFixture(name, source) {
   const fixtureViolations = [];
-  const startsNorthstar = /rust-xmpp-server/.test(source) && listeners.test(source);
+  const startsNorthstar = /northstar-server/.test(source) && listeners.test(source);
   if (!startsNorthstar) return fixtureViolations;
 
   if (!migratorCredential.test(source)) {
@@ -139,13 +139,13 @@ start_runtime() {
 }
 MIGRATOR_DATABASE_URL_FILE=/run/secret "$binary" migrate
 start_runtime
-rust-xmpp-server
+northstar-server
 `;
   const directRuntimeBeforeMigration = `
 MIGRATOR_DATABASE_URL_FILE=/run/secret
 XMPP_BIND=127.0.0.1:0 "$binary"
 "$binary" migrate
-rust-xmpp-server
+northstar-server
 `;
   const boundedNegative = `
 MIGRATOR_DATABASE_URL_FILE=/run/secret
@@ -155,7 +155,7 @@ XMPP_BIND=127.0.0.1:0 "$binary"
 [[ ! -e "$readiness_file" ]]
 grep -Fq 'PostgreSQL migration ledger drifted:' "$runtime_log"
 "$binary" migrate
-rust-xmpp-server
+northstar-server
 `;
   const failures = [
     ['function-body-before-migration', functionBodyBeforeMigration, 0],

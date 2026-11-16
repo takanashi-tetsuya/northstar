@@ -436,7 +436,7 @@ def cluster_log_fields_since(
             continue
         fields = event["fields"]
         if (
-            event.get("target") == "rust_xmpp_server::cluster"
+            event.get("target") == "northstar_server::cluster"
             and all(fields.get(key) == value for key, value in expected_fields.items())
         ):
             return True

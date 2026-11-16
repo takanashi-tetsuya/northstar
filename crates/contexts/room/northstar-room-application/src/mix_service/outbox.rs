@@ -76,7 +76,7 @@ impl ClaimHandle {
             core::ClaimKnowledge::AutocommitStatementEntered => "statement_entered",
             core::ClaimKnowledge::StatementReceipt(_) => "statement_receipt",
         };
-        tracing::debug!(target: "rust_xmpp_server::xmpp::mix_outbox_owner", knowledge, terminal=?snapshot.terminal, "MIX claim ownership retired");
+        tracing::debug!(target: "northstar_server::xmpp::mix_outbox_owner", knowledge, terminal=?snapshot.terminal, "MIX claim ownership retired");
     }
 }
 
@@ -209,7 +209,7 @@ impl AttemptHandle {
             core::ArchiveKnowledge::CommitCallEntered(_) => "commit_entered",
             core::ArchiveKnowledge::ReceiptKnown(_) => "receipt_known",
         };
-        tracing::debug!(target: "rust_xmpp_server::xmpp::mix_outbox_owner",
+        tracing::debug!(target: "northstar_server::xmpp::mix_outbox_owner",
             archive, route=?snapshot.route, transfer_known=snapshot.transfer.is_some(),
             lease_lost=snapshot.lease_lost, settlement=?snapshot.settlement, terminal=?snapshot.terminal,
             "MIX worker attempt ownership retired");

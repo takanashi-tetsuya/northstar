@@ -85,7 +85,7 @@ chmod 0600 "$runtime_dir/api-control.secret" "$runtime_dir/abuse-state.secret" \
 cargo_args=(--locked)
 if [[ "${XMPP_TEST_OFFLINE:-true}" != "false" ]]; then cargo_args+=(--offline); fi
 cargo build "${cargo_args[@]}"
-binary="${CARGO_TARGET_DIR:-$project_dir/target}/debug/rust-xmpp-server"
+binary="${CARGO_TARGET_DIR:-$project_dir/target}/debug/northstar-server"
 mix_database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$schema"
 
 # The runtime identity is verification-only. Apply the random schema with the
@@ -117,7 +117,7 @@ env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
   TLS_CERT_PATH="$runtime_dir/server.crt" TLS_KEY_PATH="$runtime_dir/server.key" \
   OPEN_REGISTRATION=true REQUIRE_ENCRYPTED_ARCHIVE=false REGISTRATION_RATE_PER_HOUR=20 \
   BOOTSTRAP_ADMIN_USERNAME=mix_runtime_admin BOOTSTRAP_ADMIN_PASSWORD=mix-runtime-admin-password-123 \
-  FEDERATION_ENABLED=false LOG_FORMAT=json RUST_LOG=rust_xmpp_server=debug \
+  FEDERATION_ENABLED=false LOG_FORMAT=json RUST_LOG=northstar_server=debug \
   "$binary" >"$runtime_dir/server.log" 2>&1 &
 server_pid=$!
 

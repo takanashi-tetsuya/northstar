@@ -216,7 +216,7 @@ impl ObservationGuard {
         }
         self.finished = true;
         let summary = self.observation.retire(terminal);
-        tracing::debug!(target: "rust_xmpp_server::xmpp::sm_ownership", ?summary, "SM turn retired");
+        tracing::debug!(target: "northstar_server::xmpp::sm_ownership", ?summary, "SM turn retired");
     }
 }
 impl Drop for ObservationGuard {

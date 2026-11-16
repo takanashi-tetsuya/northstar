@@ -167,9 +167,9 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(SOAK.fixture_environment(input_env), {'PATH': '/bin', 'LD_LIBRARY_PATH': '/lib'})
 
     def test_frame_tracing_is_explicit_and_cannot_enable_payload_targets(self):
-        self.assertEqual(SOAK.fixture_log_filter(False), 'rust_xmpp_server=info')
+        self.assertEqual(SOAK.fixture_log_filter(False), 'northstar_server=info')
         self.assertEqual(SOAK.fixture_log_filter(True),
-                         'rust_xmpp_server=info,rust_xmpp_server::xmpp::frame_execution=debug')
+                         'northstar_server=info,northstar_server::xmpp::frame_execution=debug')
         ordinary = SOAK.parse_arguments(['--binary', sys.executable])
         traced = SOAK.parse_arguments(['--binary', sys.executable, '--trace-frames'])
         self.assertFalse(ordinary.trace_frames)

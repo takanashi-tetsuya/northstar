@@ -96,10 +96,10 @@ test. It adds no actor, task, queue, database connection or lock across an await
 Enable only the sanitized target when reproducing:
 
 ```sh
-RUST_LOG='rust_xmpp_server=info,rust_xmpp_server::xmpp::frame_execution=debug'
+RUST_LOG='northstar_server=info,northstar_server::xmpp::frame_execution=debug'
 ```
 
-`rust_xmpp_server::xmpp::frame_execution` emits `C2S execution started`,
+`northstar_server::xmpp::frame_execution` emits `C2S execution started`,
 `C2S execution advanced` and `C2S execution finished` records. The identity is a
 new ephemeral operation UUID plus process-local sequence. It is not a JID,
 message/room/archive identifier, session token, credential or metric label.
@@ -142,7 +142,7 @@ Fast deterministic checks, with no database or network:
 
 ```sh
 cargo test --locked -p northstar-stream frame_execution::tests
-cargo test --locked --bin rust-xmpp-server messaging::direct_route::tests
+cargo test --locked --bin northstar-server messaging::direct_route::tests
 python3 scripts/test-frame-trace.py
 python3 scripts/test-mixed-traffic-soak.py
 ```
@@ -157,9 +157,9 @@ simulation of its state machine.
 Real wire/DB observation uses the existing owned mixed-traffic fixture:
 
 ```sh
-cargo build --locked --bin rust-xmpp-server
+cargo build --locked --bin northstar-server
 python3 scripts/mixed-traffic-soak.py \
-  --binary target/debug/rust-xmpp-server --duration-seconds 600 \
+  --binary target/debug/northstar-server --duration-seconds 600 \
   --trace-frames --output-dir /tmp/northstar-message-experiment
 python3 scripts/summarize-frame-trace.py \
   /tmp/northstar-message-experiment/server.log --require-complete

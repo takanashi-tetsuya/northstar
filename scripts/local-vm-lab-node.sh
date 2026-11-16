@@ -5,7 +5,7 @@ set +x
 # Rebuild the standalone Northstar node against the isolated lab database.
 [[ $# -eq 1 && $1 == ns-a ]] || { echo "usage: $0 ns-a" >&2; exit 2; }
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
-binary=$project_dir/target/debug/rust-xmpp-server
+binary=$project_dir/target/debug/northstar-server
 [[ -x $binary ]] || { echo "build the candidate binary first" >&2; exit 2; }
 key=${NORTHSTAR_LAB_SSH_KEY:-/tmp/northstar-lab-keys/id_ed25519}
 [[ -f $key ]] || { echo "lab SSH key not found" >&2; exit 2; }
@@ -52,9 +52,9 @@ for name in ("migrator", "runtime", "storage", "command"):
     path.chmod(0o600)
 PY'
 
-scp "${ssh_opts[@]}" "$binary" "$node:/home/lab/northstar/rust-xmpp-server"
+scp "${ssh_opts[@]}" "$binary" "$node:/home/lab/northstar/northstar-server"
 ssh "${ssh_opts[@]}" "$node" \
-  'cat /etc/northstar-lab-pki/ns-a.pem /etc/northstar-lab-pki/ca.pem > /home/lab/northstar/fullchain.pem; chmod 644 /home/lab/northstar/fullchain.pem; NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=ns-a.lab.test MIGRATOR_DATABASE_URL_FILE=/home/lab/northstar/secrets/migrator_database_url /home/lab/northstar/rust-xmpp-server migrate'
+  'cat /etc/northstar-lab-pki/ns-a.pem /etc/northstar-lab-pki/ca.pem > /home/lab/northstar/fullchain.pem; chmod 644 /home/lab/northstar/fullchain.pem; NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=ns-a.lab.test MIGRATOR_DATABASE_URL_FILE=/home/lab/northstar/secrets/migrator_database_url /home/lab/northstar/northstar-server migrate'
 
 scp "${ssh_opts[@]}" "$project_dir/scripts/reconcile-database-grants.sh" \
   "$project_dir/scripts/run-postgres.py" "$infra:/home/lab/northstar-lab-db/scripts/"
@@ -146,7 +146,7 @@ Environment=UPLOAD_S3_CREDENTIAL_BUNDLE_FILE=/home/lab/northstar/secrets/s3-cred
 UNIT
 fi
 cat >>"$unit_file" <<'UNIT'
-ExecStart=/home/lab/northstar/rust-xmpp-server serve standalone
+ExecStart=/home/lab/northstar/northstar-server serve standalone
 Restart=no
 UNIT
 ssh "${ssh_opts[@]}" "$node" \

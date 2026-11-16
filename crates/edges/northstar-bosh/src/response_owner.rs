@@ -650,7 +650,7 @@ pub async fn prepare<P: ReplayPort>(
                         })?;
                         if removed && superseded_rebuilds < fields.max_output_stanzas {
                             superseded_rebuilds += 1;
-                            tracing::debug!(target: "rust_xmpp_server::bosh", %message_id, rid = metadata.rid, "superseded durable BOSH item removed before response exposure");
+                            tracing::debug!(target: "northstar_server::bosh", %message_id, rid = metadata.rid, "superseded durable BOSH item removed before response exposure");
                             continue;
                         }
                     }

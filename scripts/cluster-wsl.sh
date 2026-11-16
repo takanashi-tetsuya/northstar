@@ -136,7 +136,7 @@ PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbnam
 if [[ "${NORTHSTAR_CLUSTER_SKIP_BUILD:-false}" != "true" ]]; then
   cargo build --locked --offline
 fi
-binary="$CARGO_TARGET_DIR/debug/rust-xmpp-server"
+binary="$CARGO_TARGET_DIR/debug/northstar-server"
 [[ -x "$binary" ]] || { echo "cluster runtime binary is missing: $binary" >&2; exit 1; }
 cluster_database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:$database_port/xmpp_test?options=-csearch_path%3D$schema"
 env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=cluster.localhost \
@@ -373,7 +373,7 @@ common_env=(
   FAST_TOKEN_SECRET_FILE="$redis_tmp/fast_token_secret"
   DUMMY_SCRAM_SECRET_FILE="$redis_tmp/dummy_scram_secret"
   LOG_FORMAT=json
-  RUST_LOG=rust_xmpp_server=info,rust_xmpp_server::cluster=debug,northstar_cluster=debug,rust_xmpp_server::xmpp=debug,rust_xmpp_server::xmpp::protocol=info,northstar_stream::protocol=info,rust_xmpp_server::xmpp::protocol::messaging=debug,rust_xmpp_server::db::replay=debug
+  RUST_LOG=northstar_server=info,northstar_server::cluster=debug,northstar_cluster=debug,northstar_server::xmpp=debug,northstar_server::xmpp::protocol=info,northstar_stream::protocol=info,northstar_server::xmpp::protocol::messaging=debug,northstar_server::db::replay=debug
 )
 
 # PUBLIC_URL is consumed while each node starts, before that node can publish

@@ -22,7 +22,7 @@ import time
 
 
 DOMAIN = "ns-a.lab.test"
-BINARY = Path("/home/lab/northstar/rust-xmpp-server")
+BINARY = Path("/home/lab/northstar/northstar-server")
 PASSWORD = Path("/home/lab/northstar/secrets/prosody-test-password")
 HEARTBEAT_NS = 60_000_000_000
 MIN_BOUNDARY_NS = 300_000_000_000

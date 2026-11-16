@@ -129,7 +129,7 @@ EOF
 cargo_args=(--locked)
 if [[ "${XMPP_TEST_OFFLINE:-true}" != "false" ]]; then cargo_args+=(--offline); fi
 cargo build "${cargo_args[@]}"
-binary="${CARGO_TARGET_DIR:-$project_dir/target}/debug/rust-xmpp-server"
+binary="${CARGO_TARGET_DIR:-$project_dir/target}/debug/northstar-server"
 component_database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$schema"
 
 # Runtime startup is verification-only. This suite owns its random schema, so
@@ -176,7 +176,7 @@ start_server() {
     ABUSE_STATE_ALLOW_EPHEMERAL=true \
     FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token.secret" \
     DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram.secret" \
-    LOG_FORMAT=json RUST_LOG=rust_xmpp_server=debug,northstar_s2s=debug \
+    LOG_FORMAT=json RUST_LOG=northstar_server=debug,northstar_s2s=debug \
     "$binary" >"$runtime_dir/server.log" 2>&1 &
   pid=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid" || return 1

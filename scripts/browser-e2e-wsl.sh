@@ -129,7 +129,7 @@ cargo build "${cargo_args[@]}"
 database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$schema"
 env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
   MIGRATOR_DATABASE_URL="$database_url" \
-  "$target_dir/debug/rust-xmpp-server" migrate
+  "$target_dir/debug/northstar-server" migrate
 
 # The browser must know its origin before Northstar can bind its own ephemeral
 # HTTP listener.  A fixture-owned loopback relay supplies that stable origin;
@@ -157,8 +157,8 @@ env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
   TLS_KEY_PATH="$runtime_dir/server.key" OPEN_REGISTRATION=true REQUIRE_ENCRYPTED_ARCHIVE=true \
   REGISTRATION_RATE_PER_HOUR=20 BOOTSTRAP_ADMIN_USERNAME=admin_it \
   BOOTSTRAP_ADMIN_PASSWORD=integration-admin-password-123 FEDERATION_ENABLED=false \
-  LOG_FORMAT=json RUST_LOG="${RUST_LOG:-rust_xmpp_server=debug}" \
-  "$target_dir/debug/rust-xmpp-server" >"$runtime_dir/server.log" 2>&1 &
+  LOG_FORMAT=json RUST_LOG="${RUST_LOG:-northstar_server=debug}" \
+  "$target_dir/debug/northstar-server" >"$runtime_dir/server.log" 2>&1 &
 server_pid=$!
 
 fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid"

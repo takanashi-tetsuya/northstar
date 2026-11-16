@@ -11,7 +11,7 @@ COPY docs/openapi.yaml ./docs/openapi.yaml
 COPY deploy/postgres-init/lib/northstar-capability-manifest.sql \
      deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql \
      ./deploy/postgres-init/lib/
-RUN cargo build -p rust-xmpp-server --release --locked
+RUN cargo build -p northstar-server --release --locked
 
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 ARG NORTHSTAR_VERSION=0.2.0
@@ -32,7 +32,7 @@ RUN groupadd --system --gid 10001 xmpp \
     && chmod 0700 /data/uploads /data/logs \
     && chmod 0600 /data/uploads/.northstar-upload-root
 WORKDIR /app
-COPY --from=builder --chmod=0555 /app/target/release/rust-xmpp-server /usr/local/bin/xmpp-server
+COPY --from=builder --chmod=0555 /app/target/release/northstar-server /usr/local/bin/xmpp-server
 COPY --chmod=0555 deploy/northstar-entrypoint.sh /usr/local/bin/northstar-entrypoint
 COPY web ./web
 COPY third_party/swagger-ui/dist ./third_party/swagger-ui/dist

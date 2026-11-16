@@ -77,7 +77,7 @@ chmod 0600 "$runtime_dir/fast-token.secret" "$runtime_dir/dummy-scram.secret"
 cargo_args=(--locked)
 if [[ "${XMPP_TEST_OFFLINE:-true}" != "false" ]]; then cargo_args+=(--offline); fi
 cargo build "${cargo_args[@]}"
-binary="$target_dir/debug/rust-xmpp-server"
+binary="$target_dir/debug/northstar-server"
 database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$schema"
 env \
   NORTHSTAR_DISABLE_DOTENV=true \
@@ -141,7 +141,7 @@ start_server() {
     TLS_CERT_PATH="$runtime_dir/server.crt" TLS_KEY_PATH="$runtime_dir/server.key" \
     OPEN_REGISTRATION=true REQUIRE_ENCRYPTED_ARCHIVE=false REGISTRATION_RATE_PER_HOUR=20 \
     PEP_MAX_NODES_PER_ACCOUNT=20 PEP_MAX_STORAGE_BYTES_PER_ACCOUNT=16777216 \
-    FEDERATION_ENABLED=false LOG_FORMAT=json RUST_LOG=rust_xmpp_server=info \
+    FEDERATION_ENABLED=false LOG_FORMAT=json RUST_LOG=northstar_server=info \
     "$binary" >>"$runtime_dir/server.log" 2>&1 &
   server_pid=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid" || {

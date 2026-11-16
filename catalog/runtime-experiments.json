@@ -53,7 +53,7 @@
           "id": "startup-regression",
           "level": "deterministic_unit",
           "status": "declared",
-          "command": "cargo test --locked --bin rust-xmpp-server migration_environment_is_minimal_and_requires_an_exclusive_url",
+          "command": "cargo test --locked --bin northstar-server migration_environment_is_minimal_and_requires_an_exclusive_url",
           "test": {
             "path": "src/main.rs",
             "anchor": "fn migration_environment_is_minimal_and_requires_an_exclusive_url() {"
@@ -337,7 +337,7 @@
           "id": "wire-sm-mixed",
           "level": "wire",
           "status": "declared",
-          "command": "python3 scripts/mixed-traffic-soak.py --binary target/debug/rust-xmpp-server --duration-seconds 600 --trace-frames --stream-management --output-dir /tmp/northstar-sm-experiment",
+          "command": "python3 scripts/mixed-traffic-soak.py --binary target/debug/northstar-server --duration-seconds 600 --trace-frames --stream-management --output-dir /tmp/northstar-sm-experiment",
           "test": {
             "path": "scripts/mixed-traffic-soak.py",
             "anchor": "    def new_peer(self, username, generation):"
@@ -553,7 +553,7 @@
           "id": "wire-non-sm-mixed",
           "level": "wire",
           "status": "declared",
-          "command": "python3 scripts/mixed-traffic-soak.py --binary target/debug/rust-xmpp-server --duration-seconds 600 --trace-frames --output-dir /tmp/northstar-non-sm-experiment",
+          "command": "python3 scripts/mixed-traffic-soak.py --binary target/debug/northstar-server --duration-seconds 600 --trace-frames --output-dir /tmp/northstar-non-sm-experiment",
           "test": {
             "path": "scripts/mixed-traffic-soak.py",
             "anchor": "    def message(self, sender, recipients, to, typ, mid, encrypted=True, store=True):"
@@ -655,7 +655,7 @@
           "id": "mix-settlement-owner",
           "level": "deterministic_unit",
           "status": "declared",
-          "command": "cargo test --locked --bin rust-xmpp-server transferred_mix_source_never_constructs_old_worker_acknowledgement",
+          "command": "cargo test --locked --bin northstar-server transferred_mix_source_never_constructs_old_worker_acknowledgement",
           "test": {
             "path": "src/xmpp/protocol/mix_tests.rs",
             "anchor": "async fn transferred_mix_source_never_constructs_old_worker_acknowledgement() {"

@@ -5,7 +5,7 @@ Runs an owned PostgreSQL 15+ cluster on a fresh loopback TCP port, with Unix
 sockets disabled. No inherited application credentials or external DSN is used.
 
 Usage:
-  python3 scripts/test-migration-preflight.py --binary target/debug/rust-xmpp-server \
+  python3 scripts/test-migration-preflight.py --binary target/debug/northstar-server \
       --pg-bin /path/to/postgresql/17/bin --evidence /tmp/migration-preflight.json
 """
 

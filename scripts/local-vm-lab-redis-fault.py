@@ -232,7 +232,7 @@ class Lab:
         if self.helper("preflight").get("status") != "ready":
             raise RuntimeError("ns-b fault preflight failed")
         for guest in ("ns-a", "ns-b"):
-            if self.ssh(guest, f"{guest}-binary", "sha256sum /home/lab/northstar/rust-xmpp-server").split()[0] != self.expected_sha:
+            if self.ssh(guest, f"{guest}-binary", "sha256sum /home/lab/northstar/northstar-server").split()[0] != self.expected_sha:
                 raise RuntimeError(f"frozen binary differs on {guest}")
             if self.ssh(guest, f"{guest}-service", "systemctl is-active northstar-lab.service").strip() != "active":
                 raise RuntimeError(f"{guest} service is not active")
@@ -480,7 +480,7 @@ def self_test() -> None:
                     return json.dumps({"status": {"fault-preflight": "ready", "fault-add": "installed",
                                                   "fault-status": "present", "fault-remove": "removed"}[label]})
                 if label.endswith("-binary"):
-                    return "a" * 64 + "  rust-xmpp-server\n"
+                    return "a" * 64 + "  northstar-server\n"
                 if label.endswith("-service"):
                     return "active\n"
                 if label.endswith("-redis-link"):

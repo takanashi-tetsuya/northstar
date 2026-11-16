@@ -160,7 +160,7 @@ where
                     LocalDirectStanzaError::InternalPostCommitShape,
                 );
             };
-            tracing::debug!(target: "rust_xmpp_server::xmpp::protocol::messaging",
+            tracing::debug!(target: "northstar_server::xmpp::protocol::messaging",
                 recipient_id = %continuation.live.recipient_id,
                 message_id = %delivery_id,
                 target = %continuation.live.target,
@@ -191,7 +191,7 @@ where
                 }
                 Err(error) => {
                     route.post_accept_failed();
-                    tracing::warn!(target: "rust_xmpp_server::xmpp::protocol::messaging", ?error,
+                    tracing::warn!(target: "northstar_server::xmpp::protocol::messaging", ?error,
                         "stored direct handoff could not be issued; row remains recoverable");
                     ContinuedLocalDirect::Accepted
                 }
@@ -252,7 +252,7 @@ where
                 ContinuedLocalDirect::Reject(LocalDirectStanzaError::AccountUnavailable)
             }
             None => {
-                tracing::warn!(target: "rust_xmpp_server::xmpp::protocol::messaging", ?error,
+                tracing::warn!(target: "northstar_server::xmpp::protocol::messaging", ?error,
                     recipient_id = %continuation.live.recipient_id,
                     "local history/C2S admission did not return a confirmed result");
                 ContinuedLocalDirect::Reject(LocalDirectStanzaError::Unconfirmed)

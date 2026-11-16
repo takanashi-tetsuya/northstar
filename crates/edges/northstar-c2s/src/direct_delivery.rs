@@ -41,7 +41,7 @@ impl ObservationGuard {
         }
         self.finished = true;
         let summary = self.observation.retire(terminal).summary();
-        tracing::debug!(target: "rust_xmpp_server::xmpp::native_write", ?summary, "native write owner retired");
+        tracing::debug!(target: "northstar_server::xmpp::native_write", ?summary, "native write owner retired");
     }
 }
 impl Drop for ObservationGuard {

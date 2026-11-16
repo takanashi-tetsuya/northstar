@@ -284,7 +284,7 @@ services:
       LOG_ROTATION: ${LOG_ROTATION:-daily}
       LOG_FORMAT: ${LOG_FORMAT:-json}
       LOG_RETENTION_FILES: ${LOG_RETENTION_FILES:-30}
-      RUST_LOG: ${RUST_LOG:-rust_xmpp_server=info,tower_http=info}
+      RUST_LOG: ${RUST_LOG:-northstar_server=info,tower_http=info}
       ENABLE_XMPP_SERVICE_CONTROL: ${ENABLE_XMPP_SERVICE_CONTROL:-false}
       ADMIN_IDLE_SECONDS: ${ADMIN_IDLE_SECONDS:-900}
     ports:

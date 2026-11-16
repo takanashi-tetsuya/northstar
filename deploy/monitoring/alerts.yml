@@ -2,7 +2,7 @@ groups:
   - name: northstar-availability
     rules:
       - alert: NorthstarUnavailable
-        expr: up{job="rust-xmpp-server"} == 0
+        expr: up{job="northstar-server"} == 0
         for: 2m
         labels:
           severity: critical

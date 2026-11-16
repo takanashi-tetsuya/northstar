@@ -77,7 +77,7 @@ separate PostgreSQL authorities but still exist in the same OS process.
 | `xmpp-server pie import` | migrator in production; serializable write transaction and audit record | **yes** | reads an operator-supplied bounded PIE tree; plaintext password import requires explicit opt-in | dry-run executes then rolls back; normal import commits all selected users atomically |
 | `xmpp-server` | runtime plus command-only pool and auxiliary runtime-identity pools | n/a | long-lived protocol/HTTP service | startup attestation precedes listeners; listener/critical-worker failure coordinates shutdown |
 
-The Cargo target is named `rust-xmpp-server`; the installed release executable
+The Cargo target is named `northstar-server`; the installed release executable
 is `xmpp-server`. This naming difference does not create separate programs or
 authorities.
 

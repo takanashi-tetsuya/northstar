@@ -184,7 +184,7 @@ test('cache restores retain mandatory Cargo commands and checked runtime builds'
     assert.doesNotMatch(block, /cache-hit|continue-on-error/);
   }
   const driver = fs.readFileSync(new URL('./listener-readiness-stress-wsl.sh', import.meta.url), 'utf8');
-  assert.ok(driver.includes('cargo build "${cargo_args[@]}" --bin rust-xmpp-server'));
+  assert.ok(driver.includes('cargo build "${cargo_args[@]}" --bin northstar-server'));
   assert.ok(driver.includes('--build-log "$runtime_dir/parent-preflight-build.raw.log"'));
 });
 

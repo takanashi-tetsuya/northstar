@@ -761,7 +761,7 @@ jobs:
       - name: Prove independent maintenance authority on a private PostgreSQL cluster
         run: >-
           python3 scripts/maintenance-subserver-wsl.py
-          --server "$GITHUB_WORKSPACE/target/debug/rust-xmpp-server"
+          --server "$GITHUB_WORKSPACE/target/debug/northstar-server"
 
       - name: Verify migration bootstrap before any schema changes
         env:
@@ -769,7 +769,7 @@ jobs:
         run: >-
           bash scripts/github-ci-run.sh 'migration bootstrap admission'
           python3 scripts/test-migration-preflight.py
-          --binary "$GITHUB_WORKSPACE/target/debug/rust-xmpp-server"
+          --binary "$GITHUB_WORKSPACE/target/debug/northstar-server"
           --evidence "$RUNNER_TEMP/migration-preflight-evidence.json"
 
       - name: Verify mixed traffic and owned fixture shutdown
@@ -778,7 +778,7 @@ jobs:
         run: >-
           bash scripts/github-ci-run.sh 'mixed traffic smoke and shutdown'
           python3 scripts/mixed-traffic-soak.py
-          --binary "$GITHUB_WORKSPACE/target/debug/rust-xmpp-server"
+          --binary "$GITHUB_WORKSPACE/target/debug/northstar-server"
           --duration-seconds 90
           --output-dir "$RUNNER_TEMP/northstar-mixed-traffic-smoke"
 
@@ -1177,10 +1177,10 @@ jobs:
       - name: Package verified runtime for this CI run
         if: matrix.fixture == 'federation'
         run: |
-          cargo build --locked --profile runtime-test --message-format=json-render-diagnostics --bin rust-xmpp-server > "$RUNNER_TEMP/runtime-build.jsonl"
+          cargo build --locked --profile runtime-test --message-format=json-render-diagnostics --bin northstar-server > "$RUNNER_TEMP/runtime-build.jsonl"
           python3 scripts/ci-runtime-artifact.py pack \
             --bundle "$RUNNER_TEMP/northstar-runtime-fixture" \
-            --binary "$GITHUB_WORKSPACE/target/runtime-test/rust-xmpp-server" \
+            --binary "$GITHUB_WORKSPACE/target/runtime-test/northstar-server" \
             --build-log "$RUNNER_TEMP/runtime-build.jsonl"
 
       - name: Upload verified runtime for this CI run

@@ -1702,12 +1702,12 @@ resolve_current_build_binary() {
     --manifest "$project_dir/Cargo.toml" --check-environment || return 1
   cargo_args=(--locked --profile "$fixture_cargo_profile" --message-format=json-render-diagnostics)
   [[ "${XMPP_TEST_OFFLINE:-true}" == false ]] || cargo_args+=(--offline)
-  candidate="$configured_target_dir/$fixture_cargo_profile_directory/rust-xmpp-server"
+  candidate="$configured_target_dir/$fixture_cargo_profile_directory/northstar-server"
   if [[ -n "${NORTHSTAR_RUNTIME_ARTIFACT_DIR:-}" ]]; then
     run_parent_phase preflight-runtime-artifact python3 "$project_dir/scripts/ci-runtime-artifact.py" restore \
       --bundle "$NORTHSTAR_RUNTIME_ARTIFACT_DIR" --binary "$candidate" || return 1
   else
-    run_parent_phase preflight-build cargo build "${cargo_args[@]}" --bin rust-xmpp-server || return 1
+    run_parent_phase preflight-build cargo build "${cargo_args[@]}" --bin northstar-server || return 1
   fi
   if [[ ! -f "$candidate" || ! -x "$candidate" ]]; then
     [[ -n "$parent_failure_phase" ]] || parent_failure_phase=preflight-binary
@@ -1722,7 +1722,7 @@ resolve_current_build_binary() {
     echo "listener stress could not resolve its current build output" >&2
     return 1
   fi
-  if [[ "$resolved_binary" != "$resolved_target_dir/$fixture_cargo_profile_directory/rust-xmpp-server" ]]; then
+  if [[ "$resolved_binary" != "$resolved_target_dir/$fixture_cargo_profile_directory/northstar-server" ]]; then
     [[ -n "$parent_failure_phase" ]] || parent_failure_phase=preflight-binary
     record_parent_diagnostic "phase=preflight-binary status=resolved_outside_expected_target"
     echo "listener stress refused a binary resolved outside CARGO_TARGET_DIR" >&2

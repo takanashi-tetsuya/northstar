@@ -358,7 +358,7 @@ impl Trace {
             .json()
             .with_ansi(false)
             .with_target(true)
-            .with_env_filter("off,rust_xmpp_server::xmpp::protocol::messaging=debug")
+            .with_env_filter("off,northstar_server::xmpp::protocol::messaging=debug")
             .with_writer(move || writer.clone())
             .finish();
         (trace, tracing::subscriber::set_default(subscriber))
@@ -382,7 +382,7 @@ impl Trace {
         assert_eq!(warnings.len(), 1);
         assert_eq!(
             warnings[0]["target"],
-            "rust_xmpp_server::xmpp::protocol::messaging"
+            "northstar_server::xmpp::protocol::messaging"
         );
         assert_eq!(warnings[0]["level"], "WARN");
         assert_eq!(warnings[0]["fields"]["route"], label);
@@ -470,7 +470,7 @@ async fn stored_live_finalizes_before_returning_one_use_route() {
             .unwrap();
         assert_eq!(
             event["target"],
-            "rust_xmpp_server::xmpp::protocol::messaging"
+            "northstar_server::xmpp::protocol::messaging"
         );
         assert_eq!(
             event["fields"]["recipient_id"],
@@ -828,7 +828,7 @@ async fn unconfirmed_errors_keep_precommit_and_commit_unknown_separate() {
         assert_eq!(warnings.len(), 1);
         assert_eq!(
             warnings[0]["target"],
-            "rust_xmpp_server::xmpp::protocol::messaging"
+            "northstar_server::xmpp::protocol::messaging"
         );
         assert_eq!(
             warnings[0]["fields"]["message"],
@@ -1012,6 +1012,6 @@ async fn continuation_rejection_never_turns_known_storage_into_live_route() {
         .unwrap();
     assert_eq!(
         warning["target"],
-        "rust_xmpp_server::xmpp::protocol::messaging"
+        "northstar_server::xmpp::protocol::messaging"
     );
 }

@@ -258,7 +258,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          binary="target/${{ matrix.target }}/release/rust-xmpp-server"
+          binary="target/${{ matrix.target }}/release/northstar-server"
           actual="$("$binary" --version)"
           expected="xmpp-server $RELEASE_VERSION"
           if [[ "$actual" != "$expected" ]]; then
@@ -271,7 +271,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $binary = "target\${{ matrix.target }}\release\rust-xmpp-server.exe"
+          $binary = "target\${{ matrix.target }}\release\northstar-server.exe"
           $actual = (& $binary --version).Trim()
           $expected = "xmpp-server $env:RELEASE_VERSION"
           if ($actual -ne $expected) {
@@ -280,12 +280,12 @@ jobs:
 
       - name: Strip Linux release binary
         if: runner.os == 'Linux'
-        run: strip "target/${{ matrix.target }}/release/rust-xmpp-server"
+        run: strip "target/${{ matrix.target }}/release/northstar-server"
 
       - name: Package complete native distribution
         run: >-
           python scripts/release-package.py pack
-          --binary "target/${{ matrix.target }}/release/rust-xmpp-server${{ runner.os == 'Windows' && '.exe' || '' }}"
+          --binary "target/${{ matrix.target }}/release/northstar-server${{ runner.os == 'Windows' && '.exe' || '' }}"
           --target "${{ matrix.id }}"
           --version "${{ needs.prepare.outputs.version }}"
           --commit "${{ needs.prepare.outputs.commit }}"

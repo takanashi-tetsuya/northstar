@@ -21,7 +21,7 @@ stress_database_a="${NORTHSTAR_LISTENER_STRESS_DATABASE_A:-}"
 stress_database_b="${NORTHSTAR_LISTENER_STRESS_DATABASE_B:-}"
 stress_database_host="${NORTHSTAR_LISTENER_STRESS_DATABASE_HOST:-127.0.0.1}"
 stress_database_port="${NORTHSTAR_LISTENER_STRESS_DATABASE_PORT:-5432}"
-fixture_rust_log="${NORTHSTAR_MIX_FEDERATION_RUST_LOG:-rust_xmpp_server=info,northstar_s2s=info,northstar_s2s::inbound=debug}"
+fixture_rust_log="${NORTHSTAR_MIX_FEDERATION_RUST_LOG:-northstar_server=info,northstar_s2s=info,northstar_s2s::inbound=debug}"
 [[ -n "$fixture_rust_log" ]] || {
   echo "NORTHSTAR_MIX_FEDERATION_RUST_LOG must not be empty" >&2
   exit 2
@@ -295,7 +295,7 @@ cargo_args=(--locked --profile "$fixture_cargo_profile"); [[ "${XMPP_TEST_OFFLIN
 if [[ "${NORTHSTAR_MIX_FEDERATION_SKIP_BUILD:-false}" != true ]]; then
   cargo build "${cargo_args[@]}"
 fi
-binary="${CARGO_TARGET_DIR:-$project_dir/target}/$fixture_cargo_profile_directory/rust-xmpp-server"
+binary="${CARGO_TARGET_DIR:-$project_dir/target}/$fixture_cargo_profile_directory/northstar-server"
 [[ -x "$binary" ]] || { echo "MIX federation runtime binary is missing: $binary" >&2; exit 1; }
 database_url_a="postgres://xmpp_test:xmpp-test-password@$database_host:$database_port/$database_name_a?options=-csearch_path%3D$schema_a"
 database_url_b="postgres://xmpp_test:xmpp-test-password@$database_host:$database_port/$database_name_b?options=-csearch_path%3D$schema_b"

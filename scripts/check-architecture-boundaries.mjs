@@ -2538,18 +2538,24 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passwordChangeContext)
     || !/pub async fn change_password<R: HttpRepositories>\(\s*State\(state\): State<PasswordChangeHttpContext<R>>/.test(read('crates/edges/northstar-http/src/users.rs'))) {
   throw new Error('password change admission must use scoped HTTP authority');
 }
-const accountGenerationTeardown = read('src/state/account_generation_teardown.rs');
-const teardownSequence = structBody(accountGenerationTeardown, 'pub(crate) struct AccountGenerationTeardownSequence');
+const accountGenerationTeardown = read('crates/contexts/auth/northstar-auth-xmpp/src/account_generation_teardown.rs');
+const teardownSequence = structBody(accountGenerationTeardown, 'pub struct AccountGenerationTeardownSequence');
+const accountGenerationTeardownAdapter = read('src/state/account_generation_teardown.rs');
+const teardownAdapters = structBody(accountGenerationTeardownAdapter, 'pub(crate) struct AccountGenerationTeardownAdapters');
 const accountTeardownRuntime = read('src/state/account_teardown_runtime.rs');
 const fullTeardownContext = structBody(accountTeardownRuntime, 'pub(crate) struct AccountTeardownRuntime');
 const accountTeardownPorts = read('crates/edges/northstar-http/src/contexts/account_teardown.rs');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(teardownSequence)
+    || /\b(?:AppState|ClusterManager|PgPool)\b/.test(teardownAdapters)
     || /\b(?:AppState|ClusterManager|PgPool)\b/.test(fullTeardownContext)
-    || !teardownSequence.includes('SmTeardownService<PostgresSmTeardownRepository>')
+    || !teardownAdapters.includes('SmTeardownService<PostgresSmTeardownRepository>')
     || !fullTeardownContext.includes('SessionCleanupSmRevoker')
     || !fullTeardownContext.includes('AccountGenerationService<PostgresAccountGenerationRepository>')
-    || !/routes\.revoke\(/.test(accountGenerationTeardown)
-    || !/notifier\.send_account_generation_teardown\(/.test(accountGenerationTeardown)
+    || !/routes\s*\.revoke\(/.test(accountGenerationTeardownAdapter)
+    || !/notifier\s*\.send_account_generation_teardown\(/.test(accountGenerationTeardownAdapter)
+    || !/self\.ports\s*\.revoke_local_routes\(/.test(accountGenerationTeardown)
+    || !/self\.ports\s*\.revoke_durable_sm\(/.test(accountGenerationTeardown)
+    || !/self\.ports\s*\.notify_cluster\(/.test(accountGenerationTeardown)
     || !/revoke_durable_sm\(\)\.await[\s\S]+notify_cluster\(\)\.await/.test(accountGenerationTeardown)
     || !/self\.routes\.revoke\([\s\S]+self\.sm\.revoke_user_with_teardown\(user_id\)\.await[\s\S]+self\.generation\.committed_generation\(user_id\)\.await[\s\S]+send_account_generation_teardown\(/.test(accountTeardownRuntime)
     || !/pub\(super\) async fn remove<R: HttpRepositories>\(\s*State\(teardown\): State<AccountGenerationTeardownContext>/.test(passkeyApiSource)
@@ -2567,7 +2573,7 @@ if (/\b(?:sqlx|PgPool|AppState|ClusterManager)\b/.test(smTeardownService.split('
     || !smTeardownService.includes('self.repository.finalize(lease).await?')
     || !smTeardownService.includes('batch.pending == 0')
     || !smTeardownService.includes('Duration::from_millis(25)')
-    || !accountGenerationTeardown.includes('self.sm.revoke_before_generation(')) {
+    || !/self\.sm\s*\.revoke_before_generation\(/.test(accountGenerationTeardownAdapter)) {
   throw new Error('durable SM generation teardown must retain fenced claims and post-effect finalization');
 }
 const operationWorkerControl = read('src/state/operation_worker_control.rs');
@@ -3772,8 +3778,8 @@ if (/\bstate\s*\.metrics\b/.test(mixProtocol)
     || !/self\s*\.\s*cluster_delivery\s*\.\s*send_mix\s*\(/.test(mixOutboxContext)) {
   throw new Error('MIX post-commit delivery must use its two-counter telemetry port');
 }
-const accountRecoverySource = read('src/state/account_recovery.rs');
-const accountRecoveryTelemetry = structBody(accountRecoverySource, 'pub(crate) struct AccountDeletionRecoveryTelemetry');
+const accountRecoverySource = read('crates/contexts/auth/northstar-auth-xmpp/src/account_deletion.rs');
+const accountRecoveryTelemetry = structBody(accountRecoverySource, 'pub struct AccountDeletionRecoveryTelemetry');
 if (/\.metrics\b/.test(accountRecoverySource)
     || /Arc<(?:(?:crate::)?(?:platform::)?metrics::)?Metrics>/.test(accountRecoveryTelemetry)
     || !accountRecoveryTelemetry.includes("success: &'a AtomicU64")

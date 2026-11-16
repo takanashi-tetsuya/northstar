@@ -439,7 +439,9 @@ pub(crate) async fn deliver_roster_change(
 }
 
 pub(crate) async fn deliver_roster_change_with(
-    delivery: &super::account_deletion_recovery::RosterPushDelivery,
+    delivery: &northstar_auth_xmpp::account_deletion::RosterPushDelivery<
+        super::account_deletion_recovery::RosterPushDeliveryAdapters,
+    >,
     owner_id: Uuid,
     owner: &str,
     change: &RosterChange,
@@ -500,12 +502,12 @@ pub(crate) async fn deliver_roster_change_with(
             for failure in failures {
                 delivery.record_failure();
                 match failure {
-                    northstar_cluster::account_routing::RemoteRosterPushFailure::NotAccepted {
+                    northstar_auth_xmpp::account_deletion::RemoteRosterPushFailure::NotAccepted {
                         node_id,
                     } => {
                         tracing::warn!(owner = %owner_jid, remote_node = %node_id, version = change.version, "committed roster push was not accepted by the remote node; roster version recovery remains authoritative");
                     }
-                    northstar_cluster::account_routing::RemoteRosterPushFailure::Delivery(
+                    northstar_auth_xmpp::account_deletion::RemoteRosterPushFailure::Delivery(
                         failure,
                     ) => {
                         tracing::warn!(owner = %owner_jid, remote_node = %failure.node_id, version = change.version, error=?failure.error, "committed roster push failed across the cluster; roster version recovery remains authoritative");

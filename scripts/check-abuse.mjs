@@ -23,7 +23,7 @@ const [abuseSources, abuseTransaction, abuseVerification, config, envExample, ap
   readProductionModule('crates/platform/northstar-config/src/lib.rs'), read('.env.example'),
   readRoleSplitFile('crates/edges/northstar-http/src/lib.rs'), read('crates/edges/northstar-http/src/auth_routes.rs'),
   read('crates/edges/northstar-http/src/reports.rs'), readRoleSplitFile('crates/edges/northstar-stream/src/protocol.rs'), read('crates/edges/northstar-stream/src/protocol/dispatch.rs'),
-  readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs'), read('crates/edges/northstar-stream/src/protocol/misc.rs'), read('crates/edges/northstar-stream/src/protocol/ibr.rs'), read('crates/contexts/auth/northstar-auth-application/src/account.rs'), read('crates/contexts/workflows/northstar-workflows/src/account_repository.rs'), read('src/state/account_recovery.rs'), readProductionModule('crates/contexts/workflows/northstar-workflows/src/account_lifecycle.rs') + '\n' + readProductionModule('crates/contexts/auth/northstar-auth-postgres/src/users.rs'), read('crates/contexts/operations/northstar-operations-postgres/src/api_control.rs'), read('crates/edges/northstar-http/src/error.rs'),
+  readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs'), read('crates/edges/northstar-stream/src/protocol/misc.rs'), read('crates/edges/northstar-stream/src/protocol/ibr.rs'), read('crates/contexts/auth/northstar-auth-application/src/account.rs'), read('crates/contexts/workflows/northstar-workflows/src/account_repository.rs'), read('crates/contexts/auth/northstar-auth-xmpp/src/account_deletion.rs'), readProductionModule('crates/contexts/workflows/northstar-workflows/src/account_lifecycle.rs') + '\n' + readProductionModule('crates/contexts/auth/northstar-auth-postgres/src/users.rs'), read('crates/contexts/operations/northstar-operations-postgres/src/api_control.rs'), read('crates/edges/northstar-http/src/error.rs'),
   read('migrations/0009_abuse_reports.sql'), read('migrations/0078_message_pow_admissions.sql'),
   read('migrations/0084_pow_intent_v2.sql'), read('migrations/0100_parallel_pow_challenges.sql'), read('migrations/0101_durable_account_deletion_recovery.sql'), read('src/main.rs'), read('web/client.js'), read('web/pow.js'), read('web/client.html'),
   read('web/app.js'), read('web/index.html'), read('web/pow-worker.js'),
@@ -219,7 +219,7 @@ assert.match(accountRepository, /claim_account_deletion_jobs[\s\S]+release_accou
   'the account repository must retain deletion claim-token authority');
 assert.match(accountRecovery, /context\.claim\(\)[\s\S]+context\.release\(&job\)/,
   'failed deletion recovery must release its durable lease with backoff');
-const deletionRecoveryContext = await read('src/state/account_deletion_recovery.rs');
+const deletionRecoveryContext = await read('crates/contexts/auth/northstar-auth-xmpp/src/account_deletion/context.rs');
 assert.match(deletionRecoveryContext, /fn claim[\s\S]+claim_deletion_recovery[\s\S]+fn release[\s\S]+release_deletion_recovery/,
   'the recovery context must preserve durable claim and release semantics');
 assert.match(main, /"account-deletion-recovery"[\s\S]+WorkerCriticality::Restartable/,

@@ -4,10 +4,14 @@
 //! so resumable-session teardown, deletion and post-commit notifications cannot
 //! silently drift into two implementations.
 
-use crate::state::{
-    roster_session_host::deliver_roster_change_with, AccountDeletionRecoveryContext, AppState,
-};
+mod context;
+
 use anyhow::{Context, Result};
+pub use context::{
+    AccountDeletionRecoveryContext, AccountDeletionRecoveryPorts, RemoteRosterPushFailure,
+    RemoteRouteFailure, RosterPushDelivery, RosterPushDeliveryPorts,
+};
+use northstar_auth_application::account::AccountRepository;
 use northstar_auth_application::account_teardown::FinalizeAccountDeletion;
 use northstar_runtime::workers::WorkerHeartbeat;
 use std::{
@@ -22,18 +26,14 @@ use uuid::Uuid;
 
 /// Recovery outcomes share the process counters without granting the worker
 /// access to unrelated observability state.
-pub(crate) struct AccountDeletionRecoveryTelemetry<'a> {
+pub struct AccountDeletionRecoveryTelemetry<'a> {
     success: &'a AtomicU64,
     failure: &'a AtomicU64,
     lease_loss: &'a AtomicU64,
 }
 
 impl<'a> AccountDeletionRecoveryTelemetry<'a> {
-    pub(crate) fn new(
-        success: &'a AtomicU64,
-        failure: &'a AtomicU64,
-        lease_loss: &'a AtomicU64,
-    ) -> Self {
+    pub fn new(success: &'a AtomicU64, failure: &'a AtomicU64, lease_loss: &'a AtomicU64) -> Self {
         Self {
             success,
             failure,
@@ -41,34 +41,29 @@ impl<'a> AccountDeletionRecoveryTelemetry<'a> {
         }
     }
 
-    pub(crate) fn succeeded(&self) {
+    pub fn succeeded(&self) {
         self.success.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn failed(&self) {
+    pub fn failed(&self) {
         self.failure.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn lease_lost(&self) {
+    pub fn lease_lost(&self) {
         self.lease_loss.fetch_add(1, Ordering::Relaxed);
     }
 }
 
-pub(crate) async fn finalize(
-    state: &AppState,
+pub async fn finalize<R: AccountRepository, P: AccountDeletionRecoveryPorts>(
+    context: &AccountDeletionRecoveryContext<R, P>,
     user_id: Uuid,
     username: &str,
 ) -> Result<FinalizeAccountDeletion> {
-    finalize_with(
-        &state.account_deletion_recovery_context(),
-        user_id,
-        username,
-    )
-    .await
+    finalize_with(context, user_id, username).await
 }
 
-async fn finalize_with(
-    context: &AccountDeletionRecoveryContext,
+async fn finalize_with<R: AccountRepository, P: AccountDeletionRecoveryPorts>(
+    context: &AccountDeletionRecoveryContext<R, P>,
     user_id: Uuid,
     username: &str,
 ) -> Result<FinalizeAccountDeletion> {
@@ -91,14 +86,9 @@ async fn finalize_with(
     // Deletion is already committed. Notification failures are observable but
     // cannot truthfully turn the successful mutation into an IQ failure.
     for (contact_id, contact_username, change) in &removed.reverse_roster_changes {
-        if let Err(error) = deliver_roster_change_with(
-            context.roster(),
-            *contact_id,
-            contact_username,
-            change,
-            None,
-        )
-        .await
+        if let Err(error) = context
+            .deliver_roster_change(*contact_id, contact_username, change)
+            .await
         {
             tracing::warn!(
                 contact = %contact_username,
@@ -125,8 +115,8 @@ async fn finalize_with(
     Ok(FinalizeAccountDeletion::Deleted)
 }
 
-pub(crate) async fn serve(
-    context: Arc<AccountDeletionRecoveryContext>,
+pub async fn serve<R: AccountRepository + 'static, P: AccountDeletionRecoveryPorts>(
+    context: Arc<AccountDeletionRecoveryContext<R, P>>,
     cancel: CancellationToken,
     heartbeat: WorkerHeartbeat,
 ) -> Result<()> {

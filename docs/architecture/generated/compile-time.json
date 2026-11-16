@@ -2788,11 +2788,39 @@
     ],
     [
       "northstar-auth-xmpp",
+      "northstar-roster-core"
+    ],
+    [
+      "northstar-auth-xmpp",
+      "northstar-runtime"
+    ],
+    [
+      "northstar-auth-xmpp",
+      "northstar-telemetry"
+    ],
+    [
+      "northstar-auth-xmpp",
       "northstar-xml-builder"
     ],
     [
       "northstar-auth-xmpp",
+      "northstar-xmpp-types"
+    ],
+    [
+      "northstar-auth-xmpp",
       "roxmltree"
+    ],
+    [
+      "northstar-auth-xmpp",
+      "tokio"
+    ],
+    [
+      "northstar-auth-xmpp",
+      "tokio-util"
+    ],
+    [
+      "northstar-auth-xmpp",
+      "tracing"
     ],
     [
       "northstar-auth-xmpp",

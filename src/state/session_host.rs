@@ -824,7 +824,12 @@ impl SessionHost for AppState {
         user_id: uuid::Uuid,
         username: &str,
     ) -> Result<FinalizeAccountDeletion> {
-        crate::state::account_recovery::finalize(self, user_id, username).await
+        northstar_auth_xmpp::account_deletion::finalize(
+            &self.account_deletion_recovery_context(),
+            user_id,
+            username,
+        )
+        .await
     }
 
     fn account_abuse_telemetry(

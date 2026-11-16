@@ -490,7 +490,7 @@ async fn run() -> Result<()> {
         Some(std::time::Duration::from_secs(1_200)),
         cancel.clone(),
         move |heartbeat| {
-            state::account_recovery::serve(
+            northstar_auth_xmpp::account_deletion::serve(
                 Arc::clone(&deletion_context),
                 deletion_cancel.clone(),
                 heartbeat,

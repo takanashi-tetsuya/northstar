@@ -1,8 +1,8 @@
-//! Capabilities needed to finish a committed account deletion and retry it.
+//! Root bindings for auth-owned account deletion and recovery.
 
 use super::{
-    account_recovery::AccountDeletionRecoveryTelemetry,
     account_teardown_runtime::AccountTeardownRuntime,
+    roster_session_host::deliver_roster_change_with,
     session_cleanup_sm_revoker::SessionCleanupSmRevoker, session_entries_for_in, AppState,
     OnlineSession, RuntimeFederationPolicy,
 };
@@ -12,190 +12,143 @@ use crate::{
 };
 use anyhow::Result;
 use dashmap::DashMap;
-use northstar_auth_application::account::{AccountService, DeletionRecoveryJob, RemovedAccount};
-use northstar_cluster::account_routing::RemoteRosterPushFailure;
-use northstar_config::ExternalRouteDomainPolicy;
-use northstar_workflows::account_repository::WorkflowAccountRepository;
-use northstar_xml_builder::XmlElement;
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
+use northstar_auth_xmpp::account_deletion::{
+    AccountDeletionRecoveryContext, AccountDeletionRecoveryPorts, RosterPushDelivery,
+    RosterPushDeliveryPorts,
 };
+use northstar_config::ExternalRouteDomainPolicy;
+use northstar_roster_core::RosterChange;
+use northstar_workflows::account_repository::WorkflowAccountRepository;
+use std::sync::Arc;
 use uuid::Uuid;
 
-pub(crate) struct RosterPushDelivery {
+pub(crate) struct RosterPushDeliveryAdapters {
     sessions: Arc<DashMap<String, OnlineSession>>,
     routes: ClusterListenerPresenceRoutes,
     sender: ClusterNodeDelivery,
-    post_accept_failures: Arc<AtomicU64>,
-    domain: String,
 }
 
-impl RosterPushDelivery {
-    pub(crate) fn local_domain(&self) -> &str {
-        &self.domain
-    }
+impl RosterPushDeliveryPorts for RosterPushDeliveryAdapters {
+    type LocalSession = OnlineSession;
 
-    pub(crate) fn local_sessions(&self, jid: &str) -> Vec<(String, OnlineSession)> {
+    fn local_sessions(&self, jid: &str) -> Vec<(String, OnlineSession)> {
         session_entries_for_in(&self.sessions, jid)
     }
 
-    pub(crate) fn record_failure(&self) {
-        self.post_accept_failures.fetch_add(1, Ordering::Relaxed);
+    async fn remote_nodes(&self, account: &str) -> Result<Vec<String>> {
+        self.routes.remote_nodes(account).await
     }
 
-    pub(crate) async fn route_remote_push(
+    async fn send_roster_push(
         &self,
+        node_id: &str,
         account: &str,
         owner_id: Uuid,
         version: i64,
         push: &str,
         annotated_push: Option<&str>,
-    ) -> Result<Vec<RemoteRosterPushFailure>> {
-        let mut failures = Vec::new();
-        for node_id in self.routes.remote_nodes(account).await? {
-            match self
-                .sender
-                .send_roster_push(&node_id, account, owner_id, version, push, annotated_push)
-                .await
-            {
-                Ok(true) => {}
-                Ok(false) => failures.push(RemoteRosterPushFailure::NotAccepted { node_id }),
-                Err(error) => failures.push(RemoteRosterPushFailure::Delivery(
-                    northstar_cluster::account_routing::RemoteRouteFailure { node_id, error },
-                )),
-            }
-        }
-        Ok(failures)
+    ) -> Result<bool> {
+        self.sender
+            .send_roster_push(node_id, account, owner_id, version, push, annotated_push)
+            .await
     }
 }
 
-struct AccountDeletionPresence {
+pub(crate) struct AccountDeletionRecoveryAdapters {
     sessions: Arc<DashMap<String, OnlineSession>>,
+    sm: SessionCleanupSmRevoker,
+    roster: RosterPushDelivery<RosterPushDeliveryAdapters>,
     routes: ClusterListenerPresenceRoutes,
     sender: ClusterNodeDelivery,
     federation: FederationRouter,
     domains: ExternalRouteDomainPolicy,
     runtime_policy: Arc<arc_swap::ArcSwap<RuntimeFederationPolicy>>,
-    local_domain: String,
-}
-
-impl AccountDeletionPresence {
-    async fn route(&self, from: &str, to: &str, kind: &str) {
-        let stanza = XmlElement::namespaced("presence", "jabber:client")
-            .attr("from", from)
-            .attr("to", to)
-            .attr("type", kind)
-            .finish();
-        let Ok(target) = northstar_xmpp_types::jid::CanonicalJid::parse(to) else {
-            return;
-        };
-        let domain = target.domainpart();
-        if domain == self.local_domain {
-            for (_, session) in session_entries_for_in(&self.sessions, to) {
-                let _ = session.sender.try_send(stanza.clone());
-            }
-            if let Ok(nodes) = self.routes.remote_nodes(to).await {
-                for node_id in nodes {
-                    let _ = self
-                        .sender
-                        .send_account_removal_presence(&node_id, to, &stanza)
-                        .await;
-                }
-            }
-        } else if self.domains.federation_domain_allowed(domain)
-            && self.runtime_policy.load().allows_domain(domain)
-        {
-            let _ = self
-                .federation
-                .send(domain, stanza, Some(from.to_owned()))
-                .await;
-        }
-    }
-}
-
-pub(crate) struct AccountDeletionRecoveryContext {
-    accounts: AccountService<WorkflowAccountRepository>,
-    sm: SessionCleanupSmRevoker,
-    roster: RosterPushDelivery,
-    presence: AccountDeletionPresence,
     teardown: AccountTeardownRuntime,
-    metrics: Arc<northstar_telemetry::metrics::Metrics>,
-    domain: String,
 }
 
 impl AppState {
-    pub(crate) fn roster_push_delivery(&self) -> RosterPushDelivery {
-        RosterPushDelivery {
-            sessions: Arc::clone(&self.sessions),
-            routes: self.cluster.listener_presence_routes(),
-            sender: self.cluster.node_delivery(),
-            post_accept_failures: Arc::clone(&self.metrics.post_accept_side_effect_failures_total),
-            domain: self.config.domain.clone(),
-        }
+    pub(crate) fn roster_push_delivery(&self) -> RosterPushDelivery<RosterPushDeliveryAdapters> {
+        RosterPushDelivery::new(
+            RosterPushDeliveryAdapters {
+                sessions: Arc::clone(&self.sessions),
+                routes: self.cluster.listener_presence_routes(),
+                sender: self.cluster.node_delivery(),
+            },
+            Arc::clone(&self.metrics.post_accept_side_effect_failures_total),
+            self.config.domain.clone(),
+        )
     }
 
-    pub(crate) fn account_deletion_recovery_context(&self) -> AccountDeletionRecoveryContext {
-        AccountDeletionRecoveryContext {
-            accounts: self.auth.account_service.clone(),
-            sm: self.session_cleanup_sm_revoker(),
-            roster: self.roster_push_delivery(),
-            presence: AccountDeletionPresence {
+    pub(crate) fn account_deletion_recovery_context(
+        &self,
+    ) -> AccountDeletionRecoveryContext<WorkflowAccountRepository, AccountDeletionRecoveryAdapters>
+    {
+        AccountDeletionRecoveryContext::new(
+            self.auth.account_service.clone(),
+            AccountDeletionRecoveryAdapters {
                 sessions: Arc::clone(&self.sessions),
+                sm: self.session_cleanup_sm_revoker(),
+                roster: self.roster_push_delivery(),
                 routes: self.cluster.listener_presence_routes(),
                 sender: self.cluster.node_delivery(),
                 federation: self.federation.federation_outbox.clone(),
                 domains: self.config.external_route_domain_policy(),
                 runtime_policy: Arc::clone(&self.federation.federation_runtime_policy),
-                local_domain: self.config.domain.clone(),
+                teardown: self.account_teardown_runtime(),
             },
-            teardown: self.account_teardown_runtime(),
-            metrics: Arc::clone(&self.metrics),
-            domain: self.config.domain.clone(),
-        }
+            Arc::clone(&self.metrics),
+            self.config.domain.clone(),
+        )
     }
 }
 
-impl AccountDeletionRecoveryContext {
-    pub(crate) fn local_domain(&self) -> &str {
-        &self.domain
-    }
-
-    pub(crate) fn roster(&self) -> &RosterPushDelivery {
-        &self.roster
-    }
-
-    pub(crate) fn telemetry(&self) -> AccountDeletionRecoveryTelemetry<'_> {
-        AccountDeletionRecoveryTelemetry::new(
-            &self.metrics.account_deletion_recovery_success_total,
-            &self.metrics.account_deletion_recovery_failures_total,
-            &self.metrics.account_deletion_recovery_lease_losses_total,
-        )
-    }
-
-    pub(crate) async fn claim(&self) -> Result<Vec<DeletionRecoveryJob>> {
-        self.accounts.claim_deletion_recovery(16, 900).await
-    }
-
-    pub(crate) async fn release(&self, job: &DeletionRecoveryJob) -> Result<bool> {
-        self.accounts
-            .release_deletion_recovery(job, "finalization-failed")
-            .await
-    }
-
-    pub(crate) async fn revoke_sm(&self, user_id: Uuid) -> Result<usize> {
+impl AccountDeletionRecoveryPorts for AccountDeletionRecoveryAdapters {
+    async fn revoke_sm(&self, user_id: Uuid) -> Result<usize> {
         self.sm.revoke_user_with_teardown(user_id).await
     }
 
-    pub(crate) async fn delete_quiesced(&self, user_id: Uuid) -> Result<Option<RemovedAccount>> {
-        self.accounts.delete_quiesced(user_id).await
+    async fn deliver_roster_change(
+        &self,
+        owner_id: Uuid,
+        owner: &str,
+        change: &RosterChange,
+    ) -> Result<()> {
+        deliver_roster_change_with(&self.roster, owner_id, owner, change, None).await
     }
 
-    pub(crate) async fn route_presence(&self, from: &str, to: &str, kind: &str) {
-        self.presence.route(from, to, kind).await;
+    fn deliver_local_presence(&self, to: &str, stanza: &str) {
+        for (_, session) in session_entries_for_in(&self.sessions, to) {
+            let _ = session.sender.try_send(stanza.to_owned());
+        }
     }
 
-    pub(crate) async fn disconnect_account(&self, user_id: Uuid, bare_jid: &str) {
+    async fn remote_nodes(&self, to: &str) -> Result<Vec<String>> {
+        self.routes.remote_nodes(to).await
+    }
+
+    async fn send_account_removal_presence(
+        &self,
+        node_id: &str,
+        to: &str,
+        stanza: &str,
+    ) -> Result<bool> {
+        self.sender
+            .send_account_removal_presence(node_id, to, stanza)
+            .await
+    }
+
+    fn federation_domain_allowed(&self, domain: &str) -> bool {
+        self.domains.federation_domain_allowed(domain)
+            && self.runtime_policy.load().allows_domain(domain)
+    }
+
+    async fn send_federation_presence(&self, domain: &str, stanza: String, from: &str) -> bool {
+        self.federation
+            .send(domain, stanza, Some(from.to_owned()))
+            .await
+    }
+
+    async fn disconnect_account(&self, user_id: Uuid, bare_jid: &str) {
         self.teardown.disconnect_account(user_id, bare_jid).await;
     }
 }

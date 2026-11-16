@@ -1,179 +1,94 @@
-//! Ordered post-commit account revocation.
+//! Root bindings for the auth-owned ordered account generation teardown.
 
 use super::{sm_teardown_runtime::SmTeardownRuntime, AccountRevocationRoutes, AppState};
 use crate::cluster::ClusterAccountTeardownNotifier;
+use anyhow::Result;
 use futures::future::BoxFuture;
+use northstar_auth_xmpp::account_generation_teardown::{
+    AccountGenerationTeardownPorts, AccountGenerationTeardownSequence,
+};
 use northstar_http::contexts::account_teardown::AccountGenerationTeardown;
 use northstar_session_application::sm_teardown::SmTeardownService;
 use northstar_workflows::sm_teardown_repository::PostgresSmTeardownRepository;
-use std::future::Future;
 use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct AccountGenerationTeardownSequence {
+pub(crate) struct AccountGenerationTeardownAdapters {
     routes: AccountRevocationRoutes,
     sm: SmTeardownService<PostgresSmTeardownRepository>,
     sm_effects: Arc<SmTeardownRuntime>,
     notifier: ClusterAccountTeardownNotifier,
 }
 
-impl AccountGenerationTeardown for AccountGenerationTeardownSequence {
+#[derive(Clone)]
+pub(crate) struct AccountGenerationTeardownAdapter {
+    sequence: AccountGenerationTeardownSequence<AccountGenerationTeardownAdapters>,
+}
+
+impl AccountGenerationTeardown for AccountGenerationTeardownAdapter {
     fn run<'a>(
         &'a self,
         user_id: Uuid,
         bare_account_jid: &'a str,
         auth_generation_exclusive: i64,
     ) -> BoxFuture<'a, ()> {
-        Box::pin(AccountGenerationTeardownSequence::run(
-            self,
-            user_id,
-            bare_account_jid,
-            auth_generation_exclusive,
-        ))
+        Box::pin(
+            self.sequence
+                .run(user_id, bare_account_jid, auth_generation_exclusive),
+        )
     }
 }
 
 impl AppState {
-    pub(crate) fn account_generation_teardown_sequence(&self) -> AccountGenerationTeardownSequence {
-        AccountGenerationTeardownSequence {
-            routes: AccountRevocationRoutes::new(std::sync::Arc::clone(&self.sessions)),
-            sm: SmTeardownService::new(
-                PostgresSmTeardownRepository::new(self.pool.clone()),
-                self.config.sm_claim_lease_seconds,
-            ),
-            sm_effects: Arc::new(self.sm_teardown_runtime()),
-            notifier: self.cluster_account_teardown_notifier(),
+    pub(crate) fn account_generation_teardown_sequence(&self) -> AccountGenerationTeardownAdapter {
+        AccountGenerationTeardownAdapter {
+            sequence: AccountGenerationTeardownSequence::new(AccountGenerationTeardownAdapters {
+                routes: AccountRevocationRoutes::new(Arc::clone(&self.sessions)),
+                sm: SmTeardownService::new(
+                    PostgresSmTeardownRepository::new(self.pool.clone()),
+                    self.config.sm_claim_lease_seconds,
+                ),
+                sm_effects: Arc::new(self.sm_teardown_runtime()),
+                notifier: self.cluster_account_teardown_notifier(),
+            }),
         }
     }
 }
 
-impl AccountGenerationTeardownSequence {
-    pub(crate) async fn run(
+impl AccountGenerationTeardownPorts for AccountGenerationTeardownAdapters {
+    fn revoke_local_routes(
         &self,
         user_id: Uuid,
         bare_account_jid: &str,
+        auth_generation_exclusive: Option<i64>,
+    ) -> usize {
+        self.routes
+            .revoke(user_id, bare_account_jid, auth_generation_exclusive)
+    }
+
+    async fn revoke_durable_sm(
+        &self,
+        user_id: Uuid,
         auth_generation_exclusive: i64,
-    ) {
-        run_ordered(
-            &self.routes,
-            user_id,
-            bare_account_jid,
-            auth_generation_exclusive,
-            || {
-                let effects = Arc::clone(&self.sm_effects);
-                self.sm.revoke_before_generation(
-                    user_id,
-                    auth_generation_exclusive,
-                    move |snapshot| {
-                        let effects = Arc::clone(&effects);
-                        async move { effects.teardown_snapshot(&snapshot).await }
-                    },
-                )
-            },
-            || {
-                self.notifier.send_account_generation_teardown(
-                    bare_account_jid,
-                    user_id,
-                    auth_generation_exclusive,
-                )
-            },
-        )
-        .await;
-    }
-}
-
-async fn run_ordered<Sm, SmFuture, Cluster, ClusterFuture>(
-    routes: &AccountRevocationRoutes,
-    user_id: Uuid,
-    bare_account_jid: &str,
-    auth_generation_exclusive: i64,
-    revoke_durable_sm: Sm,
-    notify_cluster: Cluster,
-) where
-    Sm: FnOnce() -> SmFuture,
-    SmFuture: Future<Output = anyhow::Result<usize>>,
-    Cluster: FnOnce() -> ClusterFuture,
-    ClusterFuture: Future<Output = anyhow::Result<()>>,
-{
-    if auth_generation_exclusive <= 0 {
-        tracing::error!(
-            %user_id,
-            auth_generation = auth_generation_exclusive,
-            "refused invalid account authorization teardown fence"
-        );
-        return;
-    }
-    routes.revoke(user_id, bare_account_jid, Some(auth_generation_exclusive));
-    if let Err(error) = revoke_durable_sm().await {
-        tracing::error!(
-            ?error,
-            %user_id,
-            auth_generation = auth_generation_exclusive,
-            "failed to revoke generation-fenced durable SM sessions"
-        );
-    }
-    if let Err(error) = notify_cluster().await {
-        tracing::error!(
-            ?error,
-            %user_id,
-            auth_generation = auth_generation_exclusive,
-            "generation-fenced cross-node account revocation was not acknowledged"
-        );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use dashmap::DashMap;
-    use std::sync::{Arc, Mutex};
-
-    #[tokio::test]
-    async fn failed_sm_teardown_still_notifies_cluster() {
-        let routes = AccountRevocationRoutes::new(Arc::new(DashMap::new()));
-        let calls = Arc::new(Mutex::new(Vec::new()));
-        let sm_calls = Arc::clone(&calls);
-        let cluster_calls = Arc::clone(&calls);
-        run_ordered(
-            &routes,
-            Uuid::new_v4(),
-            "alice@example.test",
-            5,
-            move || async move {
-                sm_calls.lock().unwrap().push("sm");
-                anyhow::bail!("fixture SM failure")
-            },
-            move || async move {
-                cluster_calls.lock().unwrap().push("cluster");
-                Ok(())
-            },
-        )
-        .await;
-        assert_eq!(*calls.lock().unwrap(), ["sm", "cluster"]);
+    ) -> Result<usize> {
+        let effects = Arc::clone(&self.sm_effects);
+        self.sm
+            .revoke_before_generation(user_id, auth_generation_exclusive, move |snapshot| {
+                let effects = Arc::clone(&effects);
+                async move { effects.teardown_snapshot(&snapshot).await }
+            })
+            .await
     }
 
-    #[tokio::test]
-    async fn invalid_generation_runs_no_teardown_effects() {
-        let routes = AccountRevocationRoutes::new(Arc::new(DashMap::new()));
-        let calls = Arc::new(Mutex::new(Vec::new()));
-        let sm_calls = Arc::clone(&calls);
-        let cluster_calls = Arc::clone(&calls);
-        run_ordered(
-            &routes,
-            Uuid::new_v4(),
-            "alice@example.test",
-            0,
-            move || async move {
-                sm_calls.lock().unwrap().push("sm");
-                Ok(0)
-            },
-            move || async move {
-                cluster_calls.lock().unwrap().push("cluster");
-                Ok(())
-            },
-        )
-        .await;
-        assert!(calls.lock().unwrap().is_empty());
+    async fn notify_cluster(
+        &self,
+        bare_account_jid: &str,
+        user_id: Uuid,
+        auth_generation_exclusive: i64,
+    ) -> Result<()> {
+        self.notifier
+            .send_account_generation_teardown(bare_account_jid, user_id, auth_generation_exclusive)
+            .await
     }
 }

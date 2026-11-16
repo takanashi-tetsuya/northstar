@@ -224,7 +224,61 @@ pub struct Config {
     pub pow_v1_compatibility_until: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+pub fn reserved_development_domain(domain: &str) -> bool {
+    domain == "localhost" || domain.ends_with(".localhost") || domain.ends_with(".test")
+}
+
+fn raw_listeners_are_loopback(raw: &RawConfig) -> bool {
+    [
+        raw.xmpp_bind,
+        raw.xmpps_bind,
+        raw.http_bind,
+        raw.metrics_bind,
+        raw.s2s_bind,
+        raw.s2s_tls_bind,
+        raw.component_bind,
+    ]
+    .iter()
+    .all(|address| address.ip().is_loopback())
+        && (!raw.web_admin_enabled || raw.web_admin_bind.ip().is_loopback())
+}
+
 impl Config {
+    pub fn listeners_are_loopback(&self) -> bool {
+        raw_listeners_are_loopback(&self.raw)
+    }
+
+    pub fn ephemeral_api_control_allowed(&self) -> bool {
+        self.api_control_allow_ephemeral
+            && self.redis_url.is_none()
+            && self.http_bind.ip().is_loopback()
+            && (!self.web_admin_enabled || self.web_admin_bind.ip().is_loopback())
+            && reserved_development_domain(&self.domain)
+    }
+
+    pub fn ephemeral_abuse_state_allowed(&self) -> bool {
+        self.abuse_state_allow_ephemeral
+            && self.redis_url.is_none()
+            && self.listeners_are_loopback()
+            && reserved_development_domain(&self.domain)
+    }
+
+    pub fn take_component_credentials(&mut self) -> Arc<[ComponentCredential]> {
+        let component_credentials: Arc<[ComponentCredential]> =
+            std::mem::take(&mut self.components).into();
+        self.components = component_credentials
+            .iter()
+            .cloned()
+            .map(|mut credential| {
+                credential.secret_value = None;
+                credential.secret_file = None;
+                credential.secret_sha256.zeroize();
+                credential
+            })
+            .collect();
+        component_credentials
+    }
+
     pub fn configured_registration_mode(&self) -> RegistrationMode {
         self.web_capabilities.registration.mode
     }

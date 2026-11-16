@@ -341,20 +341,8 @@ impl Config {
                 )
             })
             .transpose()?;
-        let listeners_are_loopback = [
-            raw.xmpp_bind,
-            raw.xmpps_bind,
-            raw.http_bind,
-            raw.metrics_bind,
-            raw.s2s_bind,
-            raw.s2s_tls_bind,
-            raw.component_bind,
-        ]
-        .iter()
-        .all(|address| address.ip().is_loopback())
-            && (!raw.web_admin_enabled || raw.web_admin_bind.ip().is_loopback());
-        let reserved_development_domain =
-            domain == "localhost" || domain.ends_with(".localhost") || domain.ends_with(".test");
+        let listeners_are_loopback = raw_listeners_are_loopback(&raw);
+        let reserved_development_domain = reserved_development_domain(&domain);
         validate_test_listener_activation(
             &raw,
             listeners_are_loopback,
@@ -426,10 +414,7 @@ impl Config {
             }
             if raw.redis_url.is_some()
                 && raw.upload_storage_backend != "s3"
-                && !(listeners_are_loopback
-                    && (domain == "localhost"
-                        || domain.ends_with(".localhost")
-                        || domain.ends_with(".test")))
+                && !(listeners_are_loopback && reserved_development_domain)
             {
                 anyhow::bail!(
                     "public Redis cluster mode requires shared UPLOAD_STORAGE_BACKEND=s3"
@@ -489,9 +474,7 @@ impl Config {
                 }
                 let development_storage = listeners_are_loopback
                     && raw.redis_url.is_none()
-                    && (domain == "localhost"
-                        || domain.ends_with(".localhost")
-                        || domain.ends_with(".test"));
+                    && reserved_development_domain;
                 if let Some(endpoint) = raw.upload_s3_endpoint.as_deref() {
                     let uri = endpoint
                         .parse::<axum::http::Uri>()

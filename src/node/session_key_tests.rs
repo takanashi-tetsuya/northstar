@@ -1,6 +1,6 @@
 use crate::node::{
     api_keyrings, append_suspended_muc_suffix_to_snapshot, begin_suspended_muc_route_transition,
-    canonical_suspended_muc_endpoint, complete_snapshot_owned_handoff, encode_api_control_entropy,
+    canonical_suspended_muc_endpoint, complete_snapshot_owned_handoff,
     ephemeral_api_control_secret, insert_restored_muc_occupant, move_local_muc_nickname_exact_in,
     muc_actor_identity_matches, muc_suspended_teardown_identity_matches,
     promote_suspended_muc_buffer, publish_local_muc_join_if_vacant_in,
@@ -1310,7 +1310,7 @@ fn nul_containing_entropy_is_encoded_before_keyring_validation() {
     entropy[31] = 0x80;
     assert!(api_keyrings(&entropy, None).is_err());
 
-    let encoded = encode_api_control_entropy(entropy);
+    let encoded = northstar_security::secret_encoding::lowercase_hex_secret(entropy);
     assert_eq!(&encoded[..4], b"00ff");
     assert_eq!(&encoded[62..], b"80");
     assert!(!encoded.contains(&0));

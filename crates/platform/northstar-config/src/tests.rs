@@ -21,6 +21,175 @@ fn web_dependency_fixture() -> super::RawConfig {
         .expect("RawConfig defaults must deserialize")
 }
 
+fn startup_policy_fixture() -> super::Config {
+    let mut raw = web_dependency_fixture();
+    raw.test_listener_activation = true;
+    super::apply_test_listener_defaults(&mut raw, super::TestListenerBindExplicitness::default());
+    raw.api_control_allow_ephemeral = true;
+    raw.abuse_state_allow_ephemeral = true;
+    raw.redis_url = None;
+    raw.web_admin_enabled = false;
+    let web_capabilities = std::sync::Arc::new(resolve_web_capability_plan(&raw).unwrap());
+    super::Config {
+        raw,
+        admin_command_pool_mode: AdminCommandPoolMode::SharedUnsafeDevelopment,
+        storage_pool_mode: StoragePoolMode::SharedUnsafeDevelopment,
+        domain: "localhost".to_owned(),
+        public_url: "http://localhost:18080".to_owned(),
+        websocket_allowed_origins: Vec::new(),
+        trusted_proxy_ips: Vec::new(),
+        xep_0487_ips: Vec::new(),
+        xmpp_extensions: std::sync::Arc::new(northstar_xep_catalog::ExtensionRuntime::resolve(
+            northstar_xep_catalog::ExtensionSwitches::default(),
+        )),
+        federation_allowlist: Vec::new(),
+        federation_denylist: Vec::new(),
+        federation_dns_overrides: Vec::new(),
+        federation_dane_mode: northstar_security::dane::DaneMode::Off,
+        stun_service: None,
+        turn_service: None,
+        components: Vec::new(),
+        cluster_security: None,
+        fast_token_enabled: false,
+        dummy_scram_secret: None,
+        api_control_secret: None,
+        api_control_previous_secret: None,
+        metrics_bearer_token: None,
+        web_admin_gateway_token: None,
+        web_capabilities,
+        invitation_policy_disabled_with_web_client: false,
+        pow_v1_compatibility_until: None,
+    }
+}
+
+#[test]
+fn ephemeral_api_control_requires_every_development_condition() {
+    assert!(startup_policy_fixture().ephemeral_api_control_allowed());
+    for condition in 0..5 {
+        let mut config = startup_policy_fixture();
+        match condition {
+            0 => config.raw.api_control_allow_ephemeral = false,
+            1 => config.raw.redis_url = Some("redis://127.0.0.1/".to_owned()),
+            2 => config.raw.http_bind = "0.0.0.0:8080".parse().unwrap(),
+            3 => {
+                config.raw.web_admin_enabled = true;
+                config.raw.web_admin_bind = "0.0.0.0:8443".parse().unwrap();
+            }
+            4 => config.domain = "example.com".to_owned(),
+            _ => unreachable!(),
+        }
+        assert!(
+            !config.ephemeral_api_control_allowed(),
+            "condition {condition}"
+        );
+    }
+    let mut config = startup_policy_fixture();
+    config.raw.web_admin_bind = "0.0.0.0:8443".parse().unwrap();
+    assert!(config.ephemeral_api_control_allowed());
+    config.raw.web_admin_bind = "127.0.0.1:8443".parse().unwrap();
+    config.raw.web_admin_enabled = true;
+    assert!(config.ephemeral_api_control_allowed());
+}
+
+#[test]
+fn ephemeral_abuse_state_requires_every_listener_on_loopback() {
+    let base = startup_policy_fixture();
+    assert!(base.listeners_are_loopback());
+    assert!(base.ephemeral_abuse_state_allowed());
+    for listener in 0..7 {
+        let mut config = startup_policy_fixture();
+        let bind = match listener {
+            0 => &mut config.raw.xmpp_bind,
+            1 => &mut config.raw.xmpps_bind,
+            2 => &mut config.raw.http_bind,
+            3 => &mut config.raw.metrics_bind,
+            4 => &mut config.raw.s2s_bind,
+            5 => &mut config.raw.s2s_tls_bind,
+            6 => &mut config.raw.component_bind,
+            _ => unreachable!(),
+        };
+        *bind = "0.0.0.0:8080".parse().unwrap();
+        assert!(!config.listeners_are_loopback(), "listener {listener}");
+        assert!(
+            !config.ephemeral_abuse_state_allowed(),
+            "listener {listener}"
+        );
+    }
+    let mut config = startup_policy_fixture();
+    config.raw.web_admin_bind = "0.0.0.0:8443".parse().unwrap();
+    assert!(config.ephemeral_abuse_state_allowed());
+    config.raw.web_admin_enabled = true;
+    assert!(!config.listeners_are_loopback());
+    assert!(!config.ephemeral_abuse_state_allowed());
+    for condition in 0..3 {
+        let mut config = startup_policy_fixture();
+        match condition {
+            0 => config.raw.abuse_state_allow_ephemeral = false,
+            1 => config.raw.redis_url = Some("redis://127.0.0.1/".to_owned()),
+            2 => config.domain = "example.com".to_owned(),
+            _ => unreachable!(),
+        }
+        assert!(
+            !config.ephemeral_abuse_state_allowed(),
+            "condition {condition}"
+        );
+    }
+}
+
+#[test]
+fn reserved_development_domain_accepts_only_reserved_names() {
+    for domain in ["localhost", "a.localhost", "a.test"] {
+        assert!(super::reserved_development_domain(domain), "{domain}");
+    }
+    for domain in ["example.com", "localhost.example", "test"] {
+        assert!(!super::reserved_development_domain(domain), "{domain}");
+    }
+}
+
+#[test]
+fn component_credential_redaction_keeps_secrets_only_in_the_returned_copy() {
+    let mut config = startup_policy_fixture();
+    config.components.push(ComponentCredential {
+        primary_domain: "bridge.localhost".to_owned(),
+        allowed_domains: vec!["bridge.localhost".to_owned(), "other.localhost".to_owned()],
+        secret_value: Some(std::sync::Arc::new(zeroize::Zeroizing::new(
+            "component-secret".to_owned(),
+        ))),
+        secret_file: Some(std::path::PathBuf::from("component-secret-file")),
+        secret_sha256: [0x42; 32],
+        legacy_0114: false,
+        modern_0225: true,
+        connection: ComponentConnectionMode::Accept,
+        connect_endpoint: None,
+        allow_public_connect: false,
+    });
+
+    let credentials = config.take_component_credentials();
+    assert_eq!(credentials.len(), 1);
+    assert_eq!(config.components.len(), 1);
+    let original = &credentials[0];
+    assert_eq!(
+        original.secret_value.as_ref().unwrap().as_str(),
+        "component-secret"
+    );
+    assert_eq!(
+        original.secret_file.as_deref(),
+        Some(std::path::Path::new("component-secret-file"))
+    );
+    assert_eq!(original.secret_sha256, [0x42; 32]);
+    let redacted = &config.components[0];
+    assert!(redacted.secret_value.is_none());
+    assert!(redacted.secret_file.is_none());
+    assert_eq!(redacted.secret_sha256, [0; 32]);
+    assert_eq!(redacted.primary_domain, original.primary_domain);
+    assert_eq!(redacted.allowed_domains, original.allowed_domains);
+    assert_eq!(redacted.legacy_0114, original.legacy_0114);
+    assert_eq!(redacted.modern_0225, original.modern_0225);
+    assert_eq!(redacted.connection, original.connection);
+    assert!(redacted.connect_endpoint.is_none());
+    assert_eq!(redacted.allow_public_connect, original.allow_public_connect);
+}
+
 #[test]
 fn external_route_policy_keeps_component_and_federation_domains_distinct() {
     let policy = super::ExternalRouteDomainPolicy {

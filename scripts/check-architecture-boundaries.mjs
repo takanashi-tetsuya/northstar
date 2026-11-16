@@ -926,15 +926,17 @@ for (const operation of ['zeroize', 'clear']) {
     throw new Error(`ServerNode::new must ${operation} config.raw.database_url after pool creation`);
   }
 }
-if (!/std\s*::\s*mem\s*::\s*take\s*\(\s*&mut\s+config\s*\.\s*components\s*\)/.test(appStateNew)) {
+const takeComponentCredentials = rustItemBody(configSource, 'pub fn take_component_credentials(');
+if (!/config\s*\.\s*take_component_credentials\s*\(/.test(appStateNew)
+    || !/std\s*::\s*mem\s*::\s*take\s*\(\s*&mut\s+self\s*\.\s*components\s*\)/.test(takeComponentCredentials)) {
   throw new Error('ServerNode::new must take exclusive ownership of component credentials');
 }
 for (const field of ['secret_value', 'secret_file']) {
-  if (!new RegExp(`credential\\s*\\.\\s*${field}\\s*=\\s*None`).test(appStateNew)) {
+  if (!new RegExp(`credential\\s*\\.\\s*${field}\\s*=\\s*None`).test(takeComponentCredentials)) {
     throw new Error(`ServerNode::new must remove component ${field} from shared Config metadata`);
   }
 }
-if (!/credential\s*\.\s*secret_sha256\s*\.\s*zeroize\s*\(/.test(appStateNew)) {
+if (!/credential\s*\.\s*secret_sha256\s*\.\s*zeroize\s*\(/.test(takeComponentCredentials)) {
   throw new Error('ServerNode::new must zero the component verifier in shared Config metadata');
 }
 if (

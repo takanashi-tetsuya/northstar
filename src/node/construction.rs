@@ -26,23 +26,12 @@ pub(super) fn api_keyrings(
     Ok((api_control, api_cursor))
 }
 
-pub(super) fn encode_api_control_entropy(mut entropy: [u8; 32]) -> [u8; 64] {
-    const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = [0_u8; 64];
-    for (index, byte) in entropy.iter().copied().enumerate() {
-        encoded[index * 2] = LOWER_HEX[usize::from(byte >> 4)];
-        encoded[index * 2 + 1] = LOWER_HEX[usize::from(byte & 0x0f)];
-    }
-    entropy.zeroize();
-    encoded
-}
-
 pub(super) fn ephemeral_api_control_secret() -> [u8; 64] {
     use rand::RngCore;
 
     let mut entropy = [0_u8; 32];
     rand::thread_rng().fill_bytes(&mut entropy);
-    encode_api_control_entropy(entropy)
+    northstar_security::secret_encoding::lowercase_hex_secret(entropy)
 }
 
 impl ServerNode {
@@ -61,18 +50,7 @@ impl ServerNode {
         }
         let metrics_bearer_token = config.metrics_bearer_token.take();
         let web_admin_gateway_token = config.web_admin_gateway_token.take();
-        let component_credentials: Arc<[northstar_config::ComponentCredential]> =
-            std::mem::take(&mut config.components).into();
-        config.components = component_credentials
-            .iter()
-            .cloned()
-            .map(|mut credential| {
-                credential.secret_value = None;
-                credential.secret_file = None;
-                credential.secret_sha256.zeroize();
-                credential
-            })
-            .collect();
+        let component_credentials = config.take_component_credentials();
         let mut previous_api_control_secret = config.api_control_previous_secret.take();
         let (api_control, api_cursor) = if let Some(mut current_secret) =
             config.api_control_secret.take()
@@ -88,13 +66,7 @@ impl ServerNode {
             keyrings?
         } else {
             anyhow::ensure!(
-                config.api_control_allow_ephemeral
-                    && config.redis_url.is_none()
-                    && config.http_bind.ip().is_loopback()
-                    && (!config.web_admin_enabled || config.web_admin_bind.ip().is_loopback())
-                    && (config.domain == "localhost"
-                        || config.domain.ends_with(".localhost")
-                        || config.domain.ends_with(".test")),
+                config.ephemeral_api_control_allowed(),
                 "API_CONTROL_SECRET_FILE is required outside an explicitly opted-in single-node loopback development deployment"
             );
             tracing::warn!(
@@ -139,25 +111,8 @@ impl ServerNode {
             .take()
             .map(Zeroizing::new);
         if abuse_state_hmac_key.is_none() {
-            let listeners_are_loopback = [
-                config.xmpp_bind,
-                config.xmpps_bind,
-                config.http_bind,
-                config.metrics_bind,
-                config.s2s_bind,
-                config.s2s_tls_bind,
-                config.component_bind,
-            ]
-            .iter()
-            .all(|address| address.ip().is_loopback())
-                && (!config.web_admin_enabled || config.web_admin_bind.ip().is_loopback());
             anyhow::ensure!(
-                config.abuse_state_allow_ephemeral
-                    && config.redis_url.is_none()
-                    && listeners_are_loopback
-                    && (config.domain == "localhost"
-                        || config.domain.ends_with(".localhost")
-                        || config.domain.ends_with(".test")),
+                config.ephemeral_abuse_state_allowed(),
                 "ABUSE_STATE_HMAC_KEY_FILE is required unless every listener is loopback-only and ABUSE_STATE_ALLOW_EPHEMERAL=true explicitly enables single-node development mode"
             );
         }

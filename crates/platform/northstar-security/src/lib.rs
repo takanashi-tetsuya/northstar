@@ -11,5 +11,6 @@ pub mod dane;
 pub mod lab_dnssec;
 pub mod ocsp;
 pub mod password_work;
+pub mod secret_encoding;
 pub mod secret_files;
 pub mod tls;

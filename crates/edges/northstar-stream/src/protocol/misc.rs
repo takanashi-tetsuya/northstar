@@ -1,5 +1,7 @@
 use super::{Action, ProtocolSession};
-use crate::protocol::SessionHost;
+use crate::protocol::{
+    SessionHost, SessionIdentityHost, SessionMessageEffectsHost, SessionTelemetryHost,
+};
 use anyhow::Result;
 use northstar_abuse_policy::stanza::strip_pow_element;
 use northstar_abuse_policy::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement};
@@ -1009,7 +1011,9 @@ impl<H: SessionHost> ProtocolSession<H> {
 /// Consume a local or federated Push Service IQ response.  PostgreSQL is the
 /// authority, so correlation remains correct across process restarts and
 /// cluster nodes.
-pub async fn handle_push_delivery_response<H: SessionHost>(
+pub async fn handle_push_delivery_response<
+    H: SessionIdentityHost + SessionMessageEffectsHost + SessionTelemetryHost,
+>(
     state: &H,
     id: &str,
     kind: &str,
@@ -1049,7 +1053,7 @@ pub async fn handle_push_delivery_response<H: SessionHost>(
     }
 }
 
-pub async fn handle_push_disable<H: SessionHost>(
+pub async fn handle_push_disable<H: SessionIdentityHost + SessionMessageEffectsHost>(
     state: &H,
     root: Node<'_, '_>,
     from: &str,

@@ -42,7 +42,12 @@ pub(crate) mod session_sm;
 pub(crate) mod session_transport;
 pub(crate) mod stream_session;
 
-pub use self::host::SessionHost;
+pub use self::host::{
+    SessionAccountHost, SessionCapsHost, SessionDispatchHost, SessionHost, SessionIdentityHost,
+    SessionLifecycleHost, SessionMessageEffectsHost, SessionMixAckHost, SessionMucHost,
+    SessionPresencePolicyHost, SessionPubSubEffectsHost, SessionRoutesHost, SessionSmHost,
+    SessionTelemetryHost,
+};
 use self::session_sm::durable_delivery_managed_by_sm;
 #[cfg(test)]
 use self::session_transport::{
@@ -115,7 +120,7 @@ pub struct SmRuntimePolicy {
 }
 
 impl SmRuntimePolicy {
-    fn from_state<H: SessionHost>(state: &H) -> Self {
+    fn from_state<H: SessionSmHost>(state: &H) -> Self {
         Self {
             session: state.sm_session_policy(),
             buffer: state.sm_buffer_limits(),

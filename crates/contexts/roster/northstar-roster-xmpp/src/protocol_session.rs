@@ -21,7 +21,7 @@ use northstar_roster_application::{
 use northstar_roster_application::{RosterFlushBatch, RosterSyncGate};
 use northstar_roster_core::PresenceAccount;
 use northstar_roster_core::{LocalRosterContact, RosterChange};
-use northstar_stream::protocol::{ProtocolSession, SessionHost};
+use northstar_stream::protocol::{ProtocolSession, SessionHost, SessionIdentityHost};
 use northstar_stream::transport::Action;
 use northstar_xml_builder::stanza::stanza_error;
 use roxmltree::Node;
@@ -755,7 +755,7 @@ impl<H: RosterSessionHost + PresenceRouting> PresenceHandlers for ProtocolSessio
             let account = format!(
                 "{}@{}",
                 user.username,
-                SessionHost::local_domain(&**self.host())
+                SessionIdentityHost::local_domain(&**self.host())
             );
             let bind2_mam_catchup = self.bind2_mam_catchup;
             let include_offline = priority >= 0 && !bind2_mam_catchup;

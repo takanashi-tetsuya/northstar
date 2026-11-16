@@ -1,6 +1,9 @@
 //! Policy-checked delivery of durable PubSub notifications.
 
-use super::{session_entries_for_in, AppState, OnlineSession, RuntimeFederationPolicy};
+use super::{
+    pep_last_items::PepLastItemsAdapters, session_entries_for_in, AppState, OnlineSession,
+    RuntimeFederationPolicy,
+};
 use crate::{
     cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
     s2s::FederationRouter,
@@ -11,6 +14,7 @@ use northstar_config::ExternalRouteDomainPolicy;
 use northstar_message_application::messaging::MessageService;
 use northstar_pubsub_application::PubSubService;
 use northstar_pubsub_xmpp::delivery::{PubSubDigestWorkerContext, PubSubEventOutboxWorkerContext};
+use northstar_pubsub_xmpp::pep_last_items::PepLastItemsContext;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_workflows::message_repository::PostgresMessageRepository;
 use northstar_workflows::pubsub_repository::PostgresPubSubRepository;
@@ -209,7 +213,7 @@ impl PubSubNotificationDelivery {
 /// The root routes the PubSub delivery workers use.
 pub(crate) struct PubSubRootRoutes {
     notification: PubSubNotificationDelivery,
-    pep: super::pep_last_items::PepLastItemsContext,
+    pep: PepLastItemsContext<PostgresPubSubRepository, PepLastItemsAdapters>,
 }
 
 impl AppState {

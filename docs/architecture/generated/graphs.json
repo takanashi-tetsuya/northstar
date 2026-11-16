@@ -4135,6 +4135,10 @@
       ],
       [
         "northstar-pubsub-xmpp",
+        "northstar-session-core"
+      ],
+      [
+        "northstar-pubsub-xmpp",
         "northstar-stream"
       ],
       [

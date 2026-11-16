@@ -1491,6 +1491,7 @@ digraph compile_time {
   "northstar-pubsub-xmpp" -> "northstar-pubsub-application";
   "northstar-pubsub-xmpp" -> "northstar-pubsub-core";
   "northstar-pubsub-xmpp" -> "northstar-runtime";
+  "northstar-pubsub-xmpp" -> "northstar-session-core";
   "northstar-pubsub-xmpp" -> "northstar-stream";
   "northstar-pubsub-xmpp" -> "northstar-telemetry";
   "northstar-pubsub-xmpp" -> "northstar-xep-0060";

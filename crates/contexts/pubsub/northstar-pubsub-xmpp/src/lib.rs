@@ -8,6 +8,7 @@ pub mod events;
 pub mod federated_pep;
 pub mod payload;
 pub mod pep;
+pub mod pep_last_items;
 pub mod private_xml;
 mod protocol_session;
 pub mod pubsub;

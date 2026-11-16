@@ -636,12 +636,13 @@ repository 型別（`impl MamQueryRepository + MamPreferencesWriter`）回傳，
 | `xmpp/protocol/pep/` | `northstar_pubsub_xmpp::pep`：`PepSession`、`PepAudienceRouting`、`PepLastItemDelivery` | adapter |
 | `AppState` 的三個服務欄位 | `state/pubsub_module.rs` 的 `PubSubModule` | 組合根 |
 
-pubsub 的四個 crate 共 24,612 行（core 1,437、application 5,744、postgres 8,611、xmpp 8,820）。`northstar-pubsub-xmpp` 只依賴 pubsub 的 core 與 application、
-kernel 與通用函式庫，不依賴 `-postgres`、其他上下文與根 crate。處理器是對窄 trait 泛型的自由函式：會話層的
+pubsub 的四個 crate 共 24,612 行（core 1,437、application 5,744、postgres 8,611、xmpp 8,820）。`northstar-pubsub-xmpp` 可依賴 pubsub 的 application、
+各上下文的 core、kernel、platform 與 `northstar-stream`，不依賴 `-postgres`、其他上下文的 application 與根 crate。處理器是對窄 trait 泛型的自由函式：會話層的
 `PepSession`、`VCardSession`、`PrivateXmlSession` 由 `ProtocolSession` 實作；主機層的 `PubSubHost`、
-`PepAudienceRouting` 由 `AppState` 實作；`PepLastItemDelivery` 由 `PepLastItemsContext` 實作。trait 方法回傳
-`&Service<impl Ports>`，`PubSubRepositories` 把 16 個 PubSub 與 PEP port 集中成一個界限。上下文介面卡不能依賴
-`northstar-session-core`，所以 `PepLastItemDelivery` 以關聯型別 `CapsEpoch` 帶入 caps 世代，由根 crate 綁定。
+`PepAudienceRouting` 由 `AppState` 實作；`PepLastItemDelivery` 由 `northstar_pubsub_xmpp::pep_last_items::PepLastItemsContext` 實作。trait 方法回傳
+`&Service<impl Ports>`，`PubSubRepositories` 把 16 個 PubSub 與 PEP port 集中成一個界限。
+`PepLastItemDelivery` 以關聯型別 `CapsEpoch` 帶入 caps 世代；具體 context 使用 `northstar_session_core::LocalCapsEpoch`，
+CAPS 索引所在的 `northstar-protocol-runtime` 則經根 crate 的 `PepLastItemsPorts` 介面卡存取。
 根 crate 的同名函式保留 `&AppState` 簽章，只委派給 crate，所以 S2S、discovery 與組合程式碼的呼叫點不變。
 
 根 crate 中仍與 pubsub 有關的程式碼與去處：
@@ -653,7 +654,9 @@ kernel 與通用函式庫，不依賴 `-postgres`、其他上下文與根 crate�
 - `xmpp/protocol/caps.rs`：實體能力與叢集、S2S、`AppState`、MIX 緊密耦合，驅動會話路由，屬於 session（4.2 已改）。
   它建立在 `ProtocolSession` 上，S29 沒有移出，隨 S30 處理，見 5.25。
 - `xmpp/capabilities.rs`：多個上下文共用的窄遙測，隨各使用者移出，不屬於 pubsub（4.2 已改）。
-- `state/{pubsub_digest_worker,pubsub_event_outbox_worker,pubsub_notification_delivery,pep_last_items,caps_effect_dispatch}`
+- `crates/contexts/pubsub/northstar-pubsub-xmpp/src/pep_last_items.rs`：CAPS 觸發的 PEP send-last 讀取、世代檢查與投遞；
+  `state/pep_last_items.rs` 只保留建構與 CAPS、隱私、叢集及聯邦路由的介面卡。
+- `state/{pubsub_digest_worker,pubsub_event_outbox_worker,pubsub_notification_delivery,caps_effect_dispatch}`
   與根 `pubsub.rs` 的投遞函式：經叢集與聯邦路由投遞，持有 `AppState`，S29 後仍在根 crate，隨 S30、S31 移出，見 5.25。
 - 根 `xmpp/protocol/{pubsub,pep,private,vcard}.rs` 的 `ProtocolSession` 入口與 trait 實作：S30 拆解
   `ProtocolSession` 時處理。

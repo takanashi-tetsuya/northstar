@@ -1,19 +1,21 @@
 //! Root bindings for the stream-owned CAPS effect dispatcher.
 
 use super::{
-    mix_presence_recovery::MixPresenceRecoveryContext, pep_last_items::PepLastItemsContext,
+    mix_presence_recovery::MixPresenceRecoveryContext, pep_last_items::PepLastItemsAdapters,
     AppState,
 };
 use crate::s2s::FederationRouter;
+use northstar_pubsub_xmpp::pep_last_items::PepLastItemsContext;
 use northstar_session_core::LocalCapsEpoch;
 use northstar_stream::caps_effects::{
     CapsEffectCounters, CapsEffectDispatchContext, CapsEffectPorts,
 };
+use northstar_workflows::pubsub_repository::PostgresPubSubRepository;
 use std::sync::Arc;
 
 pub(crate) struct CapsEffectAdapters {
     federation_outbox: FederationRouter,
-    pep: PepLastItemsContext,
+    pep: PepLastItemsContext<PostgresPubSubRepository, PepLastItemsAdapters>,
     mix: MixPresenceRecoveryContext,
 }
 

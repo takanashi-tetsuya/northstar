@@ -2596,6 +2596,7 @@ dependencies = [
  "northstar-pubsub-application",
  "northstar-pubsub-core",
  "northstar-runtime",
+ "northstar-session-core",
  "northstar-stream",
  "northstar-telemetry",
  "northstar-xep-0060",

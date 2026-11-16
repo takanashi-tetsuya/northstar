@@ -3,6 +3,7 @@
 
 pub mod caps;
 pub mod csi;
+pub mod discovery;
 pub mod dispatch;
 pub mod ibr;
 pub mod misc;

@@ -7,7 +7,6 @@
 
 use super::*;
 use crate::state::AppState;
-use crate::xmpp::protocol::discovery::DiscoveryHandlers;
 use crate::xmpp::protocol::ClientSession;
 use northstar_archive_xmpp::MamHandlers;
 use northstar_message_xmpp::ExtDiscoHandlers;

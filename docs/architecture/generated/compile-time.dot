@@ -1742,6 +1742,7 @@ digraph compile_time {
   "northstar-stream" -> "northstar-presence-core";
   "northstar-stream" -> "northstar-protocol-runtime";
   "northstar-stream" -> "northstar-pubsub-application";
+  "northstar-stream" -> "northstar-pubsub-core";
   "northstar-stream" -> "northstar-room-application";
   "northstar-stream" -> "northstar-room-core";
   "northstar-stream" -> "northstar-roster-application";
@@ -1758,9 +1759,12 @@ digraph compile_time {
   "northstar-stream" -> "northstar-xep-0115";
   "northstar-stream" -> "northstar-xep-0198";
   "northstar-stream" -> "northstar-xep-0199";
+  "northstar-stream" -> "northstar-xep-0215";
   "northstar-stream" -> "northstar-xep-0280";
+  "northstar-stream" -> "northstar-xep-0313";
   "northstar-stream" -> "northstar-xep-0352";
   "northstar-stream" -> "northstar-xep-0357";
+  "northstar-stream" -> "northstar-xep-0363";
   "northstar-stream" -> "northstar-xep-core";
   "northstar-stream" -> "northstar-xml-builder";
   "northstar-stream" -> "northstar-xml-framing";

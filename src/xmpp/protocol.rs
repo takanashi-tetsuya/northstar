@@ -1,7 +1,6 @@
 //! The root's half of the client protocol session: the context glue over [`ClientSession`] and the client
 //! IQ route table. The session core is `northstar_stream::protocol`.
 
-pub(crate) mod discovery;
 pub(crate) mod federated_muc;
 pub(crate) mod iq_routes;
 pub(crate) mod messaging;

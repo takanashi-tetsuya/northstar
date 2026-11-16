@@ -1,6 +1,4 @@
-use super::Action;
-use crate::xmpp::protocol::ClientSession;
-use crate::xmpp::protocol::SessionHost;
+use super::{Action, ProtocolSession};
 use anyhow::Result;
 use northstar_room_application::mix_service::{
     CORE_NODES, NODE_ALLOWED, NODE_AVATAR_DATA, NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG,
@@ -9,6 +7,10 @@ use northstar_room_application::mix_service::{
 use northstar_xml_builder::disco::{disco_rsm_result_element, parse_disco_items_query};
 use northstar_xml_builder::stanza::{iq_error, iq_error_from, iq_result_from};
 use northstar_xml_builder::XmlElement;
+
+mod host;
+
+pub use self::host::{DiscoveryHost, PubSubDiscoItemsReply};
 
 const DISCO_INFO_NS: &str = "http://jabber.org/protocol/disco#info";
 const DISCO_ITEMS_NS: &str = "http://jabber.org/protocol/disco#items";
@@ -130,25 +132,8 @@ const SERVER_DISCO_FEATURES: &[&str] = &[
     "urn:xmpp:mix:roster:0",
 ];
 
-/// The session handlers of discovery.rs.
-pub(crate) trait DiscoveryHandlers {
-    async fn disco_info(
-        &self,
-        id: &str,
-        to: Option<&str>,
-        request: roxmltree::Node<'_, '_>,
-    ) -> Result<Action>;
-
-    async fn disco_items(
-        &self,
-        id: &str,
-        to: Option<&str>,
-        request: roxmltree::Node<'_, '_>,
-    ) -> Result<Action>;
-}
-
-impl DiscoveryHandlers for ClientSession {
-    async fn disco_info(
+impl<H: DiscoveryHost> ProtocolSession<H> {
+    pub async fn disco_info(
         &self,
         id: &str,
         to: Option<&str>,
@@ -201,10 +186,7 @@ impl DiscoveryHandlers for ClientSession {
                 northstar_room_application::mix_muc::MirrorDirection::Muc,
                 &muc_domain,
             );
-            let query = northstar_mix_xmpp::mix_service_disco_info_payload(
-                self.host().server_name(),
-                &mirror,
-            )?;
+            let query = H::mix_service_disco_info_payload(self.host().server_name(), &mirror)?;
             return Ok(Action::Send(iq_result_from(id, from, &query)));
         }
         if target.localpart().is_some() && target.domainpart() == mix_domain {
@@ -247,7 +229,7 @@ impl DiscoveryHandlers for ClientSession {
                 northstar_room_application::mix_muc::MirrorDirection::Muc,
                 &muc_domain,
             );
-            let query = northstar_mix_xmpp::mix_channel_disco_info_payload(
+            let query = H::mix_channel_disco_info_payload(
                 channel.name.as_deref().unwrap_or(&channel.localpart),
                 channel.allow_user_message_retraction
                     || channel.administrator_retraction_rights != "nobody",
@@ -302,12 +284,11 @@ impl DiscoveryHandlers for ClientSession {
                     ));
                 }
                 query.push_validated_fragment(
-                    &northstar_pubsub_xmpp::pubsub::node_metadata_form(&**self.host(), &node)
-                        .await?,
+                    &self.host().pubsub_node_metadata_form(&node).await?,
                 )?;
                 return Ok(Action::Send(iq_result_from(id, from, &query.finish())));
             }
-            let query = northstar_pubsub_xmpp::pubsub::service_disco_payload(&**self.host());
+            let query = self.host().pubsub_service_disco_payload();
             return Ok(Action::Send(iq_result_from(id, from, &query)));
         }
         if self.host().http_upload_enabled()
@@ -324,7 +305,7 @@ impl DiscoveryHandlers for ClientSession {
             let mut form = result_form(northstar_xep_0363::NAMESPACE);
             form.push_child(data_field(
                 "max-file-size",
-                [self.host().upload_slot_limits().max_file_bytes],
+                [self.host().upload_max_file_bytes()],
             ));
             query.push_child(form);
             return Ok(Action::Send(iq_result_from(id, from, &query.finish())));
@@ -523,13 +504,8 @@ impl DiscoveryHandlers for ClientSession {
 
         if is_server {
             if let Some(node) = request.attribute("node") {
-                if node == "http://jabber.org/protocol/commands"
-                    || northstar_operations_xmpp::commands::is_command(node)
-                {
-                    if let Some(reply) =
-                        northstar_operations_xmpp::commands::disco_info(self, id, from, node)
-                            .await?
-                    {
+                if node == "http://jabber.org/protocol/commands" || H::is_command(node) {
+                    if let Some(reply) = H::command_disco_info(self, id, from, node).await? {
                         return Ok(Action::Send(reply));
                     } else {
                         return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
@@ -553,14 +529,9 @@ impl DiscoveryHandlers for ClientSession {
                 .as_ref()
                 .map(|requester| format!("{}@{}", requester.username, self.host().local_domain()));
             let allowed = if let Some(requester) = requester.as_deref() {
-                northstar_pubsub_xmpp::pep::pep_access_allowed(
-                    self.host().pubsub_service(),
-                    owner,
-                    self.host().local_domain(),
-                    node,
-                    requester,
-                )
-                .await?
+                self.host()
+                    .pep_access_allowed(owner, self.host().local_domain(), node, requester)
+                    .await?
             } else {
                 config.access_model == "open"
             };
@@ -632,7 +603,7 @@ impl DiscoveryHandlers for ClientSession {
             if !self.host().registration_is_closed() {
                 features.push(northstar_auth_xmpp::ibr::IBR2_NS);
             }
-            if northstar_operations_xmpp::commands::available_to(self).await? {
+            if H::commands_available_to(self).await? {
                 features.push("http://jabber.org/protocol/commands");
             }
             features.extend(self.host().server_disco_features());
@@ -675,7 +646,7 @@ impl DiscoveryHandlers for ClientSession {
         Ok(Action::Send(iq_result_from(id, from, &query.finish())))
     }
 
-    async fn disco_items(
+    pub async fn disco_items(
         &self,
         id: &str,
         to: Option<&str>,
@@ -710,10 +681,7 @@ impl DiscoveryHandlers for ClientSession {
         {
             if let Some(node) = requested_node {
                 if node == "http://jabber.org/protocol/commands" {
-                    if let Some(reply) =
-                        northstar_operations_xmpp::commands::disco_items(self, id, from, node)
-                            .await?
-                    {
+                    if let Some(reply) = H::command_disco_items(self, id, from, node).await? {
                         return Ok(Action::Send(reply));
                     } else {
                         return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
@@ -914,22 +882,10 @@ impl DiscoveryHandlers for ClientSession {
             }
         } else if target.localpart().is_none() && target.domainpart() == pubsub_domain {
             let requester = self.full_jid.as_deref().unwrap_or_default();
-            let reply = northstar_pubsub_xmpp::pubsub::federated_disco_items(
-                &**self.host(),
-                requester,
-                request,
-            )
-            .await?;
+            let reply = self.host().pubsub_disco_items(requester, request).await?;
             return Ok(Action::Send(match reply {
-                northstar_pubsub_xmpp::pubsub::PubSubReply::Result(payload) => {
-                    iq_result_from(id, from, &payload)
-                }
-                error => iq_error_from(
-                    id,
-                    from,
-                    northstar_pubsub_xmpp::pubsub::error_condition(&error)
-                        .unwrap_or("undefined-condition"),
-                ),
+                PubSubDiscoItemsReply::Result(payload) => iq_result_from(id, from, &payload),
+                PubSubDiscoItemsReply::Error(condition) => iq_error_from(id, from, condition),
             }));
         } else if target.localpart().is_none()
             && target.resourcepart().is_none()
@@ -985,14 +941,9 @@ impl DiscoveryHandlers for ClientSession {
                     format!("{}@{}", requester.username, self.host().local_domain())
                 });
                 let allowed = if let Some(requester) = requester.as_deref() {
-                    northstar_pubsub_xmpp::pep::pep_access_allowed(
-                        self.host().pubsub_service(),
-                        &owner,
-                        self.host().local_domain(),
-                        node,
-                        requester,
-                    )
-                    .await?
+                    self.host()
+                        .pep_access_allowed(&owner, self.host().local_domain(), node, requester)
+                        .await?
                 } else {
                     config.access_model == "open"
                 };
@@ -1005,14 +956,14 @@ impl DiscoveryHandlers for ClientSession {
                 });
                 for node in self.host().pubsub_service().pep_nodes(owner.id).await? {
                     let allowed = if let Some(requester) = requester.as_deref() {
-                        northstar_pubsub_xmpp::pep::pep_access_allowed(
-                            self.host().pubsub_service(),
-                            &owner,
-                            self.host().local_domain(),
-                            &node,
-                            requester,
-                        )
-                        .await?
+                        self.host()
+                            .pep_access_allowed(
+                                &owner,
+                                self.host().local_domain(),
+                                &node,
+                                requester,
+                            )
+                            .await?
                     } else {
                         self.host()
                             .pubsub_service()

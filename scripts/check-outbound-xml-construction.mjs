@@ -16,7 +16,7 @@ const BASELINE = new Map([
   ['crates/edges/northstar-stream/src/protocol/caps.rs', 0],
   ['crates/edges/northstar-stream/src/protocol/csi.rs', 0],
   ['crates/contexts/operations/northstar-operations-xmpp/src/commands.rs', 0],
-  ['src/xmpp/protocol/discovery.rs', 0],
+  ['crates/edges/northstar-stream/src/protocol/discovery.rs', 0],
   ['crates/contexts/message/northstar-message-xmpp/src/protocol_session.rs', 0],
   ['crates/contexts/message/northstar-message-xmpp/src/extdisco.rs', 0],
   ['crates/contexts/message/northstar-message-core/src/jingle.rs', 0],

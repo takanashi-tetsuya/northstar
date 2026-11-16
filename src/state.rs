@@ -10,6 +10,7 @@ pub(crate) mod background_maintenance;
 mod bosh_host;
 mod c2s_host;
 pub(crate) mod caps_effect_dispatch;
+mod discovery_host;
 pub(crate) mod http_contexts;
 pub(crate) mod http_host;
 pub(crate) mod http_repositories;

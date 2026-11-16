@@ -29,6 +29,7 @@ northstar-message-core = { path = "../../contexts/message/northstar-message-core
 northstar-presence-core = { path = "../../contexts/roster/northstar-presence-core" }
 northstar-protocol-runtime = { path = "../../contexts/session/northstar-protocol-runtime" }
 northstar-pubsub-application = { path = "../../contexts/pubsub/northstar-pubsub-application" }
+northstar-pubsub-core = { path = "../../contexts/pubsub/northstar-pubsub-core" }
 northstar-room-application = { path = "../../contexts/room/northstar-room-application" }
 northstar-room-core = { path = "../../contexts/room/northstar-room-core" }
 northstar-roster-application = { path = "../../contexts/roster/northstar-roster-application" }
@@ -44,9 +45,12 @@ northstar-xep-0060 = { path = "../../kernel/northstar-xep-0060" }
 northstar-xep-0115 = { path = "../../kernel/northstar-xep-0115" }
 northstar-xep-0198 = { path = "../../kernel/northstar-xep-0198" }
 northstar-xep-0199 = { path = "../../kernel/northstar-xep-0199" }
+northstar-xep-0215 = { path = "../../kernel/northstar-xep-0215" }
 northstar-xep-0280 = { path = "../../kernel/northstar-xep-0280" }
+northstar-xep-0313 = { path = "../../kernel/northstar-xep-0313" }
 northstar-xep-0352 = { path = "../../kernel/northstar-xep-0352" }
 northstar-xep-0357 = { path = "../../kernel/northstar-xep-0357" }
+northstar-xep-0363 = { path = "../../kernel/northstar-xep-0363" }
 northstar-xep-core = { path = "../../kernel/northstar-xep-core" }
 northstar-xml-builder = { path = "../../kernel/northstar-xml-builder" }
 northstar-xml-framing = { path = "../../kernel/northstar-xml-framing" }

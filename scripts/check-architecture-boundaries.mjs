@@ -2704,7 +2704,7 @@ for (const signature of mucServiceSource.matchAll(
   }
 }
 
-const discoverySource = read('src/xmpp/protocol/discovery.rs');
+const discoverySource = read('crates/edges/northstar-stream/src/protocol/discovery.rs');
 for (const [description, pattern] of [
   ['AppState pool access', /\b(?:self\.)?(?:state|host)\s*\.\s*pool\b/],
   ['a PostgreSQL pool type', /\b(?:sqlx\s*::\s*)?PgPool\b/],

@@ -5139,6 +5139,10 @@
       ],
       [
         "northstar-stream",
+        "northstar-pubsub-core"
+      ],
+      [
+        "northstar-stream",
         "northstar-room-application"
       ],
       [
@@ -5203,7 +5207,15 @@
       ],
       [
         "northstar-stream",
+        "northstar-xep-0215"
+      ],
+      [
+        "northstar-stream",
         "northstar-xep-0280"
+      ],
+      [
+        "northstar-stream",
+        "northstar-xep-0313"
       ],
       [
         "northstar-stream",
@@ -5212,6 +5224,10 @@
       [
         "northstar-stream",
         "northstar-xep-0357"
+      ],
+      [
+        "northstar-stream",
+        "northstar-xep-0363"
       ],
       [
         "northstar-stream",

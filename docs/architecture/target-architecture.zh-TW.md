@@ -9,8 +9,8 @@
 Northstar 的部署形態維持現狀：一個二進位檔，以 core、maintenance 或 standalone 角色執行，共用 PostgreSQL
 （見 [SUBSERVERS.md](../SUBSERVERS.md)）。改變的是原始碼的組織方式：
 
-- **根 crate 解體**：現在的 `rust-xmpp-server`（`src/`，約 39.7 萬行）依限界上下文拆成多個 crate，最後只剩一個
-  很薄的組合根 `northstar-server`。
+- **根 crate 解體**：S16 時的 `rust-xmpp-server`（`src/`，約 39.7 萬行）依限界上下文拆成多個 crate，最後只剩一個
+  很薄的組合根 `northstar-server`。S31 完成：生產碼約 1.6 萬行，其餘是測試。
 - **邊界交給編譯器**：重要的邊界必須是 crate 邊界，由 Cargo 依賴圖與可見性強制執行。以正則比對原始碼的門禁
   逐步退役，只保留型別系統表達不了的語義檢查，而且優先改寫成測試。
 - **`AppState` 消失**：各上下文自己擁有服務與執行期狀態，組合根把它們接起來；不再有傳遍全系統的服務定位器。
@@ -107,9 +107,11 @@ flowchart TB
   auth、IBR、資源綁定）、SM、CSI、caps 與 stanza 分派，對組合根實作的 `SessionHost` 泛型；PostgreSQL repository 是
   `SessionHost` 的關聯型別。
 - 每個上下文的 `-xmpp` crate 在 `protocol_session.rs` 為 `ProtocolSession<H>` 實作自己的處理器 trait，`H` 另受該上下文的
-  host trait 約束（例如 `PubSubSessionHost`），根 crate 為 `AppState` 實作這些 host trait。核心需要上下文時呼叫取
-  `&mut ProtocolSession<Self>` 的 host hook，由組合根以 `-xmpp` 的處理器填入。IQ 路由表（`ClientIqRoute`）與服務探索
-  彙整各上下文，是組合程式碼。S2S 入站節同理：處理器在各 `-xmpp` crate 的 `federated_*` 模組，分派留在組合根。
+  host trait 約束（例如 `PubSubSessionHost`），組合根的 `ServerNode` 實作這些 host trait。核心需要上下文時呼叫取
+  `&mut ProtocolSession<Self>` 的 host hook，由組合根以 `-xmpp` 的處理器填入。用戶端 IQ 路由表與服務探索在
+  `northstar_stream::protocol::{iq_routes,discovery}`，對 `IqRouteHost` 泛型，組合根綁定各上下文的處理器。S2S 入站節
+  同理：處理器在各 `-xmpp` crate 的 `federated_*` 模組，分派與 `<iq/>` 路由在 `northstar_s2s::inbound`，對
+  `InboundHost` 泛型。
 - `northstar-c2s`（TCP、STARTTLS、direct TLS、WebSocket）、`northstar-bosh`、`northstar-s2s` 只負責連線、
   frame 與背壓，再把 frame 交給 `northstar-stream`。
 - `northstar-stream` 的 `test-support` feature 提供 SM 擁有權的記憶體 port 與 fixture
@@ -128,6 +130,13 @@ port 綁定到提供方，註冊 stanza 處理器，再依程序角色（core、
 並監督關機。即時狀態（路由表、MUC 佔用者、caps 快取、連線計數）歸屬於擁有它的上下文；`tools/` 的子命令留在
 二進位檔中，呼叫各上下文的 application。
 
+S31 後的實際版面（[工程結構藍圖](engineering-structure.zh-TW.md) 5.27）：`src/main.rs` 載入設定、處理子命令並依程序
+角色啟動；`src/node.rs` 的 `ServerNode` 持有設定、平台控制代碼與各上下文模組，欄位私有；即時會話表與 caps 快取
+等即時狀態仍由它持有，尚未歸到擁有的上下文。`src/node/` 下分為建構（`construction.rs`、`modules/`）、host trait
+實作（`hosts/`）、跨上下文的 port 綁定（`adapters/`）與 worker 註冊（`workers/`）；`src/runtime/` 依程序角色啟動
+edge 與子伺服器。服務定位器式的 accessor 已刪除，各上下文模組擁有並公開自己的服務。安裝的執行檔仍名為
+`xmpp-server`。
+
 ### 4.5 持久化
 
 - 單一 schema 與 `migrations/` 目錄保持不變，由 `northstar-postgres` 執行。
@@ -140,10 +149,12 @@ port 綁定到提供方，註冊 stanza 處理器，再依程序角色（core、
 ### 4.6 測試
 
 - 單元測試隨程式碼移動。PostgreSQL 整合測試移到對應的 `-postgres` crate。端到端協定測試移到
-  `northstar-server/tests`。
+  `northstar-server/tests`。需要完整 schema、edge 或叢集的資料庫整合測試在 S31 集中到 tooling crate
+  `tools/northstar-db-it`：放進上下文 crate 會違反 4.1 的層級，dev-dependency 又會把受測 crate 編譯第二份。
 - Stage 4 重播與 saved-case 夾具是只在測試編譯的程式碼，移到專用的測試支援 crate。依 2026-10-22 的決定，
   `catalog/source-structure-baseline.json` 的 `pinned` 解除；已保存的 Stage 4 證據仍綁定其原提交，之後若要產生
-  新的 Stage 4 record，需重新產生來源契約。
+  新的 Stage 4 record，需重新產生來源契約。S31 時 Stage 4 harness 仍是根 crate 二進位檔中的 `#[cfg(test)]` 模組，
+  凍結的 Stage 4 工具保留舊的套件名稱，它的 CI lane 使用合成 record。
 - 測試延續檢查改為整個 workspace：`cargo test --workspace -- --list` 的名稱集合，經「舊路徑 → crate 與新路徑」
   的對應後必須與基準相同。
 
@@ -151,7 +162,8 @@ port 綁定到提供方，註冊 stanza 處理器，再依程序角色（core、
 
 - 新的 crate 依賴圖門禁讀 `cargo metadata` 與 `catalog/crates.yaml` 的層級，拒絕違反 4.1 的依賴，並依層級限制
   外部依賴（例如 application 層不得依賴 `sqlx`、`axum`、`hickory-resolver`、`tokio-rustls`）。
-- `catalog/source-layers.json`（R9）在 `src/` 消失時退役。
+- `catalog/source-layers.json`（R9）在 `src/` 消失時退役。S31 後 `src/` 仍是組合根，R9 只剩組合與 `xmpp` 兩層，
+  去留在 S32 決定。
 - 讀原始碼文字的門禁逐支處理：邊界已由 crate 圖保證的直接刪除（例如「協定模組不得使用 `db::`」）；交易順序、
   outbox 等語義檢查改寫成擁有該行為的 crate 中的測試；在那之前，每個 WP 都列出它要更新的門禁。
 
@@ -169,7 +181,8 @@ port 綁定到提供方，註冊 stanza 處理器，再依程序角色（core、
 | S19–S28 上下文 | 依序搬移：`upload` → `archive` → `pubsub` → `roster` → `abuse` → `auth` → `operations` → `room` → `message` → `federation`。每個上下文：先定義 port 與模組結構、以它取代對應的 `AppState` accessor，再把 `services`、`db`、`xmpp/protocol` 中的程式碼移入各 crate，最後更新門禁並在組合根綁定。`api` 的端點依 4.3 屬於 `northstar-http`，於 S30 移出；端點使用的應用層型別隨上下文移動 | 該上下文的應用、持久化與協定程式碼不再出現在根 crate；`AppState` 只持有組合根建構的上下文模組。S19 upload 已完成（WP-191–203，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.15）；S20 archive 已完成（WP-210–214，見 5.16）；S21 pubsub 已完成（WP-220–231，見 5.17）；S22 roster 已完成（WP-240–248，見 5.18）；S23 abuse 已完成（WP-250–255，見 5.19）；S24 auth 已完成（WP-256–264，見 5.20）；S25 operations 已完成（WP-265–276，見 5.21），同交易的帳號流程已進入 `northstar-workflows`；S26 room 已完成（WP-280–299，見 5.22），房間的執行期路由與叢集投影留待 S29；S27 message 已完成（WP-300–315，見 5.23），重放與 outbound 留待 S29/S30；S28 federation 已完成（WP-317–328，見 5.24），入站節處理留待 S29 之後，連線與 DNS I/O 留待 S30 |
 | S29 會話與叢集 | `session` 上下文與 `northstar-cluster` | 路由表、SM、叢集監聽離開根 crate。已完成（WP-329–356，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.25）：`ProtocolSession` 與 `state` 中把叢集、會話清理綁到 `AppState` 的接縫留待 S30、S31 |
 | S30 傳輸 | `northstar-c2s`、`northstar-bosh`、`northstar-s2s`、`northstar-http`；`ProtocolSession` 拆解完畢 | 根 crate 只剩組合程式碼。已完成（WP-360–423，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.26）：`ProtocolSession` 在 `northstar-stream`，glue 與 S2S 入站處理器在各 `-xmpp` crate，處理器 trait 直接為 `ProtocolSession<H>` 實作，`StanzaHandler` 與 `SessionContext` 不再需要；`state` 的 host 實作與接縫、IQ 路由表、服務探索與 S2S 入站分派留待 S31 |
-| S31 組合根 | 根 crate 更名為 `northstar-server`，`AppState` 刪除；R9 與其餘讀原始碼的邊界門禁退役；文件改寫 | `src/` 只有組合根；全部門禁與完整 CI 通過 |
+| S31 組合根 | 根 crate 更名為 `northstar-server`，`AppState` 刪除；R9 與其餘讀原始碼的邊界門禁退役；文件改寫 | `src/` 只有組合根；全部門禁與完整 CI 通過。已完成（WP-470–506，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.27）：根 crate 的流程進入各上下文與 edge，`AppState` 的 accessor 外觀刪除，組合根成為 `src/node` 的 `ServerNode`，資料庫整合測試進入 `northstar-db-it`，套件與二進位檔改名為 `northstar-server`；門禁退役改為 S32，MIX outbox 等仍含流程的介面卡、`runtime_control` 與 `ServerNode` 持有的即時狀態留在組合根 |
+| S32 門禁退役 | 逐項核對 `check-architecture-boundaries.mjs` 等讀原始碼的門禁：邊界已由 crate 圖保證的刪除，交易順序、outbox 等語義檢查改寫為擁有該行為的 crate 中的測試；決定 R9 在只剩兩層的組合根是否保留 | 每支刪除的檢查都對應到 crate 圖規則或測試；全部門禁與完整 CI 通過 |
 
 與其他計劃的關係：模組化執行計劃的 C1（PubSub）與 C2（MAM）是語義上的重構，在對應上下文搬進新 crate 後於新
 結構中進行；D1 由 S18 與 S30 吸收；R1–R3 不受影響。

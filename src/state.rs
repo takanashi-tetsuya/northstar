@@ -92,7 +92,6 @@ mod sm_teardown_local;
 mod sm_teardown_muc_projection;
 pub(crate) mod sm_teardown_runtime;
 mod sm_teardown_session;
-pub(crate) mod standalone_muc_maintenance;
 
 use crate::s2s::FederationRouter;
 use crate::state::http_contexts::{

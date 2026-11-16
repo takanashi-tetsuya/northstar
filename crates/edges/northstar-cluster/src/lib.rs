@@ -70,6 +70,7 @@ pub mod recovery_replay_wake;
 mod routing;
 pub mod s2s_routing;
 pub mod session_route;
+pub mod standalone_muc_maintenance;
 mod teardown;
 mod worker_capabilities;
 mod workers;

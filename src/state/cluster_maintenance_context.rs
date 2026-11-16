@@ -1,39 +1,28 @@
-//! The single-node MUC maintenance context, and the constructors of both maintenance contexts.
+//! Constructors of the single-node MUC and cluster maintenance contexts.
 
 use super::cluster_adapters::PostgresClusterAdapters;
 use super::AppState;
 use crate::cluster::{
-    maintenance_context::ClusterMaintenanceContext, maintenance_locals::ClusterMaintenanceLocals,
+    maintenance_context::ClusterMaintenanceContext,
+    standalone_muc_maintenance::StandaloneMucMaintenanceContext,
 };
-use std::{sync::Mutex, time::Instant};
-
-/// PostgreSQL occupancy renewal in the single-node runtime has no Redis
-/// dependency. The last complete pass survives worker restarts so repeated
-/// failures cannot extend a local actor beyond its database lease.
-pub(crate) struct StandaloneMucMaintenanceContext {
-    pub(crate) node_id: String,
-    pub(crate) muc_domain: String,
-    pub(crate) locals: ClusterMaintenanceLocals,
-    pub(crate) occupancy:
-        northstar_room_application::muc_service::ClusterMucOccupancyMaintenanceService<
-            northstar_room_postgres::room::PostgresClusterMucOccupancyMaintenanceRepository,
-        >,
-    pub(crate) last_complete_pass: Mutex<Instant>,
-}
 
 impl AppState {
-    pub(crate) fn standalone_muc_maintenance_context(&self) -> StandaloneMucMaintenanceContext {
-        StandaloneMucMaintenanceContext {
-            node_id: self.cluster().muc_cluster_node_id().to_owned(),
-            muc_domain: northstar_xmpp_types::jid::prepare_domainpart(&format!(
+    pub(crate) fn standalone_muc_maintenance_context(
+        &self,
+    ) -> StandaloneMucMaintenanceContext<
+        northstar_room_postgres::room::PostgresClusterMucOccupancyMaintenanceRepository,
+    > {
+        StandaloneMucMaintenanceContext::new(
+            self.cluster().muc_cluster_node_id().to_owned(),
+            northstar_xmpp_types::jid::prepare_domainpart(&format!(
                 "conference.{}",
                 self.config.domain
             ))
             .expect("configured XMPP domain must form a valid MUC domain"),
-            locals: self.cluster_maintenance_locals(),
-            occupancy: self.cluster_muc_occupancy_maintenance_service(),
-            last_complete_pass: Mutex::new(Instant::now()),
-        }
+            self.cluster_maintenance_locals(),
+            self.cluster_muc_occupancy_maintenance_service(),
+        )
     }
 
     pub(crate) fn cluster_maintenance_context(

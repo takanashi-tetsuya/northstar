@@ -1,8 +1,9 @@
 //! PostgreSQL MUC occupancy renewal when Redis clustering is disabled.
 
-use crate::state::cluster_maintenance_context::StandaloneMucMaintenanceContext;
+use crate::maintenance_locals::ClusterMaintenanceLocals;
 use anyhow::{ensure, Result};
 use northstar_room_application::muc_service::{
+    ClusterMucOccupancyMaintenanceRepository, ClusterMucOccupancyMaintenanceService,
     ClusterMucOccupancyTarget, MucOccupancyLookup, MucResolvedOccupancy,
     MAX_MUC_OCCUPANCY_RENEW_BATCH,
 };
@@ -10,7 +11,7 @@ use northstar_runtime::workers::WorkerHeartbeat;
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
@@ -19,6 +20,34 @@ use uuid::Uuid;
 const RENEW_INTERVAL: Duration = Duration::from_secs(15);
 const OCCUPANCY_LEASE: Duration = Duration::from_secs(90);
 const PASS_BUDGET: Duration = Duration::from_secs(30);
+
+/// PostgreSQL occupancy renewal in the single-node runtime has no Redis
+/// dependency. The last complete pass survives worker restarts so repeated
+/// failures cannot extend a local actor beyond its database lease.
+pub struct StandaloneMucMaintenanceContext<R: ClusterMucOccupancyMaintenanceRepository> {
+    node_id: String,
+    muc_domain: String,
+    locals: ClusterMaintenanceLocals,
+    occupancy: ClusterMucOccupancyMaintenanceService<R>,
+    last_complete_pass: Mutex<Instant>,
+}
+
+impl<R: ClusterMucOccupancyMaintenanceRepository> StandaloneMucMaintenanceContext<R> {
+    pub fn new(
+        node_id: String,
+        muc_domain: String,
+        locals: ClusterMaintenanceLocals,
+        occupancy: ClusterMucOccupancyMaintenanceService<R>,
+    ) -> Self {
+        Self {
+            node_id,
+            muc_domain,
+            locals,
+            occupancy,
+            last_complete_pass: Mutex::new(Instant::now()),
+        }
+    }
+}
 
 fn target_key(target: &ClusterMucOccupancyTarget) -> (Uuid, Uuid, Uuid, i64, Uuid, i64) {
     (
@@ -57,7 +86,9 @@ async fn within_pass_budget<T>(
         .map_err(|_| anyhow::anyhow!("PostgreSQL MUC occupancy renewal exceeded its budget"))?
 }
 
-fn fence_local_actors(context: &StandaloneMucMaintenanceContext) {
+fn fence_local_actors<R: ClusterMucOccupancyMaintenanceRepository>(
+    context: &StandaloneMucMaintenanceContext<R>,
+) {
     for occupant in context.locals.muc_occupant_snapshots() {
         context.locals.remove_stale_muc_actor(&occupant);
     }
@@ -66,7 +97,9 @@ fn fence_local_actors(context: &StandaloneMucMaintenanceContext) {
 /// A complete pass alone refreshes the safety deadline. Every lookup and
 /// renewal is bounded to the same 128 local actors; a slow or unavailable
 /// database cannot extend local authority beyond the lease deadline.
-async fn renew_once(context: &StandaloneMucMaintenanceContext) -> Result<()> {
+async fn renew_once<R: ClusterMucOccupancyMaintenanceRepository>(
+    context: &StandaloneMucMaintenanceContext<R>,
+) -> Result<()> {
     let occupants = context.locals.muc_occupant_snapshots();
     for chunk in occupants.chunks(MAX_MUC_OCCUPANCY_RENEW_BATCH) {
         let mut candidates = Vec::with_capacity(chunk.len());
@@ -210,8 +243,8 @@ async fn renew_once(context: &StandaloneMucMaintenanceContext) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn run(
-    context: Arc<StandaloneMucMaintenanceContext>,
+pub async fn run<R: ClusterMucOccupancyMaintenanceRepository>(
+    context: Arc<StandaloneMucMaintenanceContext<R>>,
     cancel: CancellationToken,
     heartbeat: WorkerHeartbeat,
 ) -> Result<()> {

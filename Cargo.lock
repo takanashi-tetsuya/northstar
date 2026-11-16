@@ -2557,6 +2557,8 @@ dependencies = [
  "northstar-xmpp-types",
  "roxmltree",
  "tokio",
+ "tokio-util",
+ "tracing",
  "uuid",
 ]
 
@@ -2590,6 +2592,7 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-util",
  "uuid",
 ]
 

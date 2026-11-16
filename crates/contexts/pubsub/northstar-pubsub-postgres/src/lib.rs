@@ -10,6 +10,7 @@ mod pep;
 mod private;
 mod pubsub;
 mod rendering;
+pub mod subscription_cleanup;
 mod vcard;
 
 pub use outbox::*;

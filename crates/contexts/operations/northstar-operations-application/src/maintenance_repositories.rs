@@ -1,4 +1,4 @@
-//! Repository ports of the retention and PubSub subscription cleanup workers, implemented by the database adapter.
+//! Repository ports of the retention worker, implemented by the database adapter.
 
 use chrono::Utc;
 
@@ -53,13 +53,6 @@ pub trait RetentionRepository: Send + Sync {
         batch_size: i64,
     ) -> impl std::future::Future<Output = anyhow::Result<u64>> + Send;
     fn purge_expired_retraction_intents(
-        &self,
-        batch_size: i64,
-    ) -> impl std::future::Future<Output = anyhow::Result<u64>> + Send;
-}
-
-pub trait SubscriptionCleanupRepository: Send + Sync {
-    fn cleanup_expired_subscriptions(
         &self,
         batch_size: i64,
     ) -> impl std::future::Future<Output = anyhow::Result<u64>> + Send;

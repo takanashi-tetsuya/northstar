@@ -7,7 +7,7 @@ mod health_regressions {
         address: SocketAddr,
         workers: Arc<WorkerRegistry>,
         readiness: RetentionReadiness,
-        subscription_readiness: RetentionReadiness,
+        subscription_readiness: SubscriptionCleanupReadiness,
         cancel: CancellationToken,
         task: Option<JoinHandle<Result<()>>>,
     }
@@ -19,7 +19,8 @@ mod health_regressions {
             let workers = WorkerRegistry::new();
             let cancel = CancellationToken::new();
             let readiness = RetentionReadiness::for_test(true);
-            let subscription_readiness = RetentionReadiness::for_test(true);
+            let subscription_readiness = SubscriptionCleanupReadiness::default();
+            subscription_readiness.complete_pass();
             let task = tokio::spawn(private_health(
                 listener,
                 Arc::clone(&workers),
@@ -85,7 +86,11 @@ mod health_regressions {
             (true, false, "503 Service Unavailable"),
         ] {
             fixture.readiness.set_for_test(archive);
-            fixture.subscription_readiness.set_for_test(subscriptions);
+            if subscriptions {
+                fixture.subscription_readiness.complete_pass();
+            } else {
+                fixture.subscription_readiness.begin_pass();
+            }
             response_body(
                 &fixture.request(b"GET /readyz HTTP/1.1\r\n\r\n").await,
                 expected,

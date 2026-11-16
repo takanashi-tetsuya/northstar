@@ -9,6 +9,7 @@ use northstar_operations_application::retention_worker::{
     RetentionContext, RetentionPolicy, RetentionReadiness,
 };
 use northstar_operations_postgres::maintenance_ownership;
+use northstar_pubsub_application::subscription_cleanup::SubscriptionCleanupReadiness;
 use northstar_runtime::workers::WorkerCriticality;
 use northstar_runtime::workers::WorkerMode;
 use northstar_runtime::workers::WorkerRegistry;
@@ -276,8 +277,8 @@ pub(crate) async fn run_maintenance() -> Result<()> {
         },
     );
     let subscriptions = Arc::new(
-        crate::runtime::subscription_cleanup::SubscriptionCleanupContext::new(
-            northstar_workflows::maintenance_repository::PostgresMaintenanceRepository::new(
+        northstar_pubsub_application::subscription_cleanup::SubscriptionCleanupContext::new(
+            northstar_pubsub_postgres::subscription_cleanup::PostgresSubscriptionCleanupRepository::new(
                 pool.clone(),
             ),
             Arc::clone(&metrics.subscription_cleanup),
@@ -289,10 +290,10 @@ pub(crate) async fn run_maintenance() -> Result<()> {
         "pubsub-subscription-cleanup",
         WorkerCriticality::Restartable,
         WorkerMode::Continuous,
-        Some(crate::runtime::subscription_cleanup::MAX_SILENCE),
+        Some(northstar_pubsub_application::subscription_cleanup::MAX_SILENCE),
         cancel.clone(),
         move |heartbeat| {
-            crate::runtime::subscription_cleanup::serve_context(
+            northstar_pubsub_application::subscription_cleanup::serve_context(
                 Arc::clone(&subscriptions),
                 subscription_cancel.clone(),
                 heartbeat,
@@ -367,7 +368,7 @@ async fn private_health(
     workers: Arc<WorkerRegistry>,
     metrics: Arc<Metrics>,
     retention_readiness: RetentionReadiness,
-    subscription_readiness: RetentionReadiness,
+    subscription_readiness: SubscriptionCleanupReadiness,
     cancel: CancellationToken,
 ) -> Result<()> {
     anyhow::ensure!(

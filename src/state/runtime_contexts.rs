@@ -59,11 +59,11 @@ impl AppState {
 
     pub(crate) fn subscription_cleanup_context(
         &self,
-    ) -> crate::runtime::subscription_cleanup::SubscriptionCleanupContext<
-        northstar_workflows::maintenance_repository::PostgresMaintenanceRepository,
+    ) -> northstar_pubsub_application::subscription_cleanup::SubscriptionCleanupContext<
+        northstar_pubsub_postgres::subscription_cleanup::PostgresSubscriptionCleanupRepository,
     > {
-        crate::runtime::subscription_cleanup::SubscriptionCleanupContext::new(
-            northstar_workflows::maintenance_repository::PostgresMaintenanceRepository::new(
+        northstar_pubsub_application::subscription_cleanup::SubscriptionCleanupContext::new(
+            northstar_pubsub_postgres::subscription_cleanup::PostgresSubscriptionCleanupRepository::new(
                 self.pool.clone(),
             ),
             Arc::clone(&self.metrics.subscription_cleanup),

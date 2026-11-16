@@ -207,6 +207,14 @@ pub trait PubSubSubscriptionQueryRepository: Send + Sync {
         jid: &str,
     ) -> impl std::future::Future<Output = Result<Option<PubSubSubscription>>> + Send;
 }
+/// Physical garbage collection only; expiry remains an authorization predicate.
+pub trait SubscriptionCleanupRepository: Send + Sync {
+    fn cleanup_expired_subscriptions(
+        &self,
+        batch_size: i64,
+    ) -> impl std::future::Future<Output = anyhow::Result<u64>> + Send;
+}
+
 pub trait PubSubSubscriptionMutationRepository: Send + Sync {
     fn local_domain(&self) -> &str;
     fn update_subscription_options_checked(

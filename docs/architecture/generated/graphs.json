@@ -4051,6 +4051,14 @@
       ],
       [
         "northstar-pubsub-application",
+        "tokio-util"
+      ],
+      [
+        "northstar-pubsub-application",
+        "tracing"
+      ],
+      [
+        "northstar-pubsub-application",
         "uuid"
       ],
       [
@@ -4132,6 +4140,10 @@
       [
         "northstar-pubsub-postgres",
         "tokio"
+      ],
+      [
+        "northstar-pubsub-postgres",
+        "tokio-util"
       ],
       [
         "northstar-pubsub-postgres",

@@ -5,7 +5,7 @@ import { readProductionModule } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = { main: 'src/main.rs', subservers: 'src/runtime/subservers.rs', maintenanceOwnership: 'crates/contexts/operations/northstar-operations-postgres/src/maintenance_ownership.rs', retention: 'crates/contexts/operations/northstar-operations-application/src/retention_worker.rs',
-  subscriptionCleanup: 'src/runtime/subscription_cleanup.rs',
+  subscriptionCleanup: 'crates/contexts/pubsub/northstar-pubsub-application/src/subscription_cleanup.rs',
   pubsubProtocol: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/protocol_session.rs', pubsubDelivery: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/delivery.rs',
   pubsubAdapter: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/pubsub.rs',
   pubsubService: 'crates/contexts/pubsub/northstar-pubsub-application/src/service.rs',
@@ -174,7 +174,7 @@ export function verifySubserverBoundaries({ main, subservers, maintenanceOwnersh
     'maintenance may supervise only its declared retention worker');
   requireBoundary(/"archive-retention",\s*WorkerCriticality::Restartable,\s*WorkerMode::Continuous,\s*Some\(silence\)/.test(run),
     'maintenance retention must retain its restart/readiness/watchdog contract');
-  requireBoundary(/"pubsub-subscription-cleanup",\s*WorkerCriticality::Restartable,\s*WorkerMode::Continuous,\s*Some\((?:crate::runtime::)?subscription_cleanup::MAX_SILENCE\)/.test(run) &&
+  requireBoundary(/"pubsub-subscription-cleanup",\s*WorkerCriticality::Restartable,\s*WorkerMode::Continuous,\s*Some\(northstar_pubsub_application::subscription_cleanup::MAX_SILENCE\)/.test(run) &&
     run.includes('subscription_cleanup::serve_context('),
     'maintenance subscription cleanup must retain its independent restart/readiness/watchdog contract');
   const observers = [...subservers.matchAll(/\.register_observer\(\s*"([^"]+)"/g)].map((match) => match[1]);

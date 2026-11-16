@@ -33,10 +33,12 @@ TLS/signing keys, mount uploads, or read the core `.env` file.
 `src/runtime/subservers.rs` owns command selection, maintenance configuration, process
 lifecycle and private health. `crates/contexts/operations/northstar-operations-application/src/retention_worker.rs` receives only a retention
 policy, database pool and metrics. Retention SQL belongs to `crates/contexts/workflows/northstar-workflows/src/retention.rs`.
-`src/runtime/subscription_cleanup.rs` owns physical subscription cleanup with only the
-existing pool, narrow counters and independent readiness; its SQL remains in
-`crates/contexts/pubsub/northstar-pubsub-postgres`. Application services and protocol handlers remain outside
-these maintenance dependency paths.
+`crates/contexts/pubsub/northstar-pubsub-application/src/subscription_cleanup.rs` owns physical
+subscription cleanup with only a repository port, narrow counters and independent readiness.
+`crates/contexts/pubsub/northstar-pubsub-postgres/src/subscription_cleanup.rs` implements that port
+over the existing pool; its SQL remains in
+`crates/contexts/pubsub/northstar-pubsub-postgres/src/pubsub/subscription.rs`. Protocol handlers remain
+outside these maintenance dependency paths.
 
 Core tracks whether a connection has ever attempted to reserve or receive a
 live-session lease or binding claim. It records that possibility before the

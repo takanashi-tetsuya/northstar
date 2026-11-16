@@ -1470,6 +1470,8 @@ digraph compile_time {
   "northstar-pubsub-application" -> "northstar-xmpp-types";
   "northstar-pubsub-application" -> "roxmltree";
   "northstar-pubsub-application" -> "tokio";
+  "northstar-pubsub-application" -> "tokio-util";
+  "northstar-pubsub-application" -> "tracing";
   "northstar-pubsub-application" -> "uuid";
   "northstar-pubsub-core" -> "anyhow";
   "northstar-pubsub-core" -> "base64";
@@ -1491,6 +1493,7 @@ digraph compile_time {
   "northstar-pubsub-postgres" -> "sqlx";
   "northstar-pubsub-postgres" -> "thiserror";
   "northstar-pubsub-postgres" -> "tokio";
+  "northstar-pubsub-postgres" -> "tokio-util";
   "northstar-pubsub-postgres" -> "uuid";
   "northstar-pubsub-xmpp" -> "anyhow";
   "northstar-pubsub-xmpp" -> "base64";

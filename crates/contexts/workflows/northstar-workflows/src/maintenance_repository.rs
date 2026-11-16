@@ -1,4 +1,4 @@
-//! The maintenance subserver's retention and subscription cleanup over the tables of every context.
+//! The maintenance subserver's retention over the tables of every context.
 
 use anyhow::Result;
 use chrono::Utc;
@@ -62,13 +62,5 @@ impl northstar_operations_application::maintenance_repositories::RetentionReposi
             &self.pool, batch_size,
         )
         .await
-    }
-}
-
-impl northstar_operations_application::maintenance_repositories::SubscriptionCleanupRepository
-    for PostgresMaintenanceRepository
-{
-    async fn cleanup_expired_subscriptions(&self, batch_size: i64) -> Result<u64> {
-        northstar_pubsub_postgres::cleanup_expired_subscriptions(&self.pool, batch_size).await
     }
 }

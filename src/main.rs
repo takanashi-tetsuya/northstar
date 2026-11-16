@@ -558,10 +558,10 @@ async fn run() -> Result<()> {
             "pubsub-subscription-cleanup",
             WorkerCriticality::Restartable,
             WorkerMode::Continuous,
-            Some(runtime::subscription_cleanup::MAX_SILENCE),
+            Some(northstar_pubsub_application::subscription_cleanup::MAX_SILENCE),
             cancel.clone(),
             move |heartbeat| {
-                runtime::subscription_cleanup::serve_context(
+                northstar_pubsub_application::subscription_cleanup::serve_context(
                     Arc::clone(&subscriptions),
                     subscription_cancel.clone(),
                     heartbeat,

@@ -4,46 +4,81 @@
 //! worker only removes durable garbage; it never uses delivery admission or
 //! receives protocol state, routing capabilities, or a separate database pool.
 
-use northstar_operations_application::maintenance_repositories::SubscriptionCleanupRepository;
-use northstar_operations_application::retention_worker::RetentionReadiness;
+use crate::repository::SubscriptionCleanupRepository;
 use northstar_runtime::workers::WorkerHeartbeat;
 use northstar_telemetry::metrics::SubscriptionCleanupMetrics;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-pub(crate) const CLEANUP_BATCH_SIZE: i64 = 1_000;
-pub(crate) const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
+pub const CLEANUP_BATCH_SIZE: i64 = 1_000;
+pub const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
 // The existing repository permits 2 seconds to acquire a connection and
 // 15 seconds per DELETE. Bound the entire pass, including SETs and COMMIT,
 // without borrowing the delivery worker's unrelated five-second heartbeat.
-pub(crate) const CLEANUP_BUDGET: Duration = Duration::from_secs(40);
-pub(crate) const MAX_SILENCE: Duration = Duration::from_secs(110);
+pub const CLEANUP_BUDGET: Duration = Duration::from_secs(40);
+pub const MAX_SILENCE: Duration = Duration::from_secs(110);
 
-pub(crate) struct SubscriptionCleanupContext<R> {
+/// Independently published health of physical subscription cleanup.
+#[derive(Clone, Default)]
+pub struct SubscriptionCleanupReadiness {
+    ready: Arc<AtomicBool>,
+}
+
+impl SubscriptionCleanupReadiness {
+    pub fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::Acquire)
+    }
+
+    pub fn begin_pass(&self) {
+        self.ready.store(false, Ordering::Release);
+    }
+
+    pub fn complete_pass(&self) {
+        self.ready.store(true, Ordering::Release);
+    }
+}
+
+pub struct SubscriptionCleanupContext<R> {
     repository: R,
     metrics: Arc<SubscriptionCleanupMetrics>,
-    readiness: RetentionReadiness,
+    readiness: SubscriptionCleanupReadiness,
 }
 
 impl<R: SubscriptionCleanupRepository> SubscriptionCleanupContext<R> {
-    pub(crate) fn new(repository: R, metrics: Arc<SubscriptionCleanupMetrics>) -> Self {
+    pub fn new(repository: R, metrics: Arc<SubscriptionCleanupMetrics>) -> Self {
         Self {
             repository,
             metrics,
-            readiness: RetentionReadiness::default(),
+            readiness: SubscriptionCleanupReadiness::default(),
         }
     }
 
-    pub(crate) fn readiness(&self) -> RetentionReadiness {
+    pub fn readiness(&self) -> SubscriptionCleanupReadiness {
         self.readiness.clone()
+    }
+
+    /// Run one bounded pass without starting the maintenance loop.
+    pub async fn run_once(
+        &self,
+        cancel: &CancellationToken,
+        deadline: Instant,
+    ) -> anyhow::Result<Option<u64>> {
+        run_once_with(&self.readiness, &self.metrics, cancel, deadline, || {
+            self.repository
+                .cleanup_expired_subscriptions(CLEANUP_BATCH_SIZE)
+        })
+        .await
     }
 }
 
 // Even cancellation or a panic between passes invalidates the independently
 // published cleanup health. Archive-retention health is never written here.
-struct ClearReadinessOnDrop(RetentionReadiness);
+struct ClearReadinessOnDrop(SubscriptionCleanupReadiness);
 
 impl Drop for ClearReadinessOnDrop {
     fn drop(&mut self) {
@@ -51,7 +86,7 @@ impl Drop for ClearReadinessOnDrop {
     }
 }
 
-pub(crate) async fn serve_context<R: SubscriptionCleanupRepository>(
+pub async fn serve_context<R: SubscriptionCleanupRepository>(
     context: Arc<SubscriptionCleanupContext<R>>,
     cancel: CancellationToken,
     heartbeat: WorkerHeartbeat,
@@ -71,7 +106,7 @@ pub(crate) async fn serve_context<R: SubscriptionCleanupRepository>(
 }
 
 async fn run_once_with<F, Fut>(
-    readiness: &RetentionReadiness,
+    readiness: &SubscriptionCleanupReadiness,
     metrics: &SubscriptionCleanupMetrics,
     cancel: &CancellationToken,
     deadline: Instant,
@@ -110,7 +145,7 @@ where
 }
 
 async fn serve_with<F, Fut>(
-    readiness: &RetentionReadiness,
+    readiness: &SubscriptionCleanupReadiness,
     metrics: &SubscriptionCleanupMetrics,
     mut cleanup: F,
     cancel: CancellationToken,
@@ -162,8 +197,16 @@ mod tests {
     use northstar_runtime::workers::WorkerMode;
     use northstar_runtime::workers::WorkerRegistry;
     use std::future::Future;
-    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    use std::sync::atomic::AtomicUsize;
     use tokio::sync::oneshot;
+
+    impl SubscriptionCleanupReadiness {
+        fn for_test(ready: bool) -> Self {
+            Self {
+                ready: Arc::new(AtomicBool::new(ready)),
+            }
+        }
+    }
 
     struct Dropped(Arc<AtomicBool>);
 
@@ -175,7 +218,7 @@ mod tests {
 
     #[tokio::test]
     async fn expired_total_budget_drops_pending_work_and_never_reports_success() {
-        let readiness = RetentionReadiness::for_test(true);
+        let readiness = SubscriptionCleanupReadiness::for_test(true);
         let metrics = SubscriptionCleanupMetrics::default();
         let cancelled = CancellationToken::new();
         let dropped = Arc::new(AtomicBool::new(false));
@@ -198,7 +241,7 @@ mod tests {
 
     #[tokio::test]
     async fn expired_ready_result_does_not_publish_cleanup_health_or_success_metrics() {
-        let readiness = RetentionReadiness::for_test(true);
+        let readiness = SubscriptionCleanupReadiness::for_test(true);
         let metrics = SubscriptionCleanupMetrics::default();
         let cancel = CancellationToken::new();
         let entered = AtomicBool::new(false);
@@ -218,8 +261,8 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_drops_started_cleanup_without_overwriting_archive_health() {
-        let readiness = RetentionReadiness::for_test(true);
-        let archive_readiness = RetentionReadiness::for_test(false);
+        let readiness = SubscriptionCleanupReadiness::for_test(true);
+        let archive_readiness = SubscriptionCleanupReadiness::for_test(false);
         let metrics = SubscriptionCleanupMetrics::default();
         let cancel = CancellationToken::new();
         let dropped = Arc::new(AtomicBool::new(false));
@@ -256,7 +299,7 @@ mod tests {
         assert_eq!(MAX_SILENCE, Duration::from_secs(110));
         let workers = WorkerRegistry::new();
         let cancel = CancellationToken::new();
-        let readiness = RetentionReadiness::default();
+        let readiness = SubscriptionCleanupReadiness::default();
         let metrics = Arc::new(SubscriptionCleanupMetrics::default());
         let calls = Arc::new(AtomicUsize::new(0));
         let (started_tx, started_rx) = oneshot::channel();
@@ -341,153 +384,5 @@ mod tests {
             .await;
         assert!(report.is_clean());
         assert!(!readiness.is_ready());
-    }
-
-    #[tokio::test]
-    #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
-    async fn postgres_cleanup_preserves_live_subscriptions_and_event_snapshots_and_is_bounded() {
-        let url = std::env::var("TEST_DATABASE_URL")
-            .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
-        // A single ordinary connection owns all temporary fixtures. Any
-        // replacement connection is pinned away from persistent relations.
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .after_connect(|connection, _| {
-                Box::pin(async move {
-                    sqlx::query("SET search_path TO pg_temp, pg_catalog")
-                        .execute(connection)
-                        .await?;
-                    Ok(())
-                })
-            })
-            .connect(&url)
-            .await
-            .unwrap();
-        sqlx::raw_sql(
-            "CREATE TEMP TABLE pubsub_subscriptions (
-                node_id UUID NOT NULL, jid TEXT NOT NULL, expire TIMESTAMPTZ,
-                PRIMARY KEY(node_id,jid));
-             CREATE TEMP TABLE pubsub_digest_queue (
-                id UUID PRIMARY KEY, subscription_node_id UUID NOT NULL,
-                subscriber_jid TEXT NOT NULL, source_delivery_id UUID);
-             INSERT INTO pubsub_subscriptions(node_id,jid,expire)
-                SELECT md5(sequence::text)::uuid, 'expired@example.test',
-                       NOW()-INTERVAL '1 hour'
-                  FROM generate_series(1,1001) sequence;
-             INSERT INTO pubsub_subscriptions(node_id,jid,expire) VALUES
-                (md5('future')::uuid,'future@example.test',NOW()+INTERVAL '1 hour'),
-                (md5('permanent')::uuid,'permanent@example.test',NULL);
-             INSERT INTO pubsub_digest_queue(id,subscription_node_id,subscriber_jid,source_delivery_id)
-                SELECT md5('legacy')::uuid,node_id,jid,NULL
-                  FROM pubsub_subscriptions WHERE expire<NOW()
-                 ORDER BY expire,node_id,jid LIMIT 1;
-             INSERT INTO pubsub_digest_queue(id,subscription_node_id,subscriber_jid,source_delivery_id)
-                SELECT md5('snapshot')::uuid,node_id,jid,md5('delivery')::uuid
-                  FROM pubsub_subscriptions WHERE expire<NOW()
-                 ORDER BY expire,node_id,jid LIMIT 1;"
-        ).execute(&pool).await.unwrap();
-        let context = SubscriptionCleanupContext::new(
-            northstar_workflows::maintenance_repository::PostgresMaintenanceRepository::new(
-                pool.clone(),
-            ),
-            Arc::new(SubscriptionCleanupMetrics::default()),
-        );
-        let readiness = context.readiness();
-        let cancel = CancellationToken::new();
-        assert!(!readiness.is_ready());
-        let first = run_once_with(
-            &context.readiness,
-            &context.metrics,
-            &cancel,
-            Instant::now() + CLEANUP_BUDGET,
-            || {
-                context
-                    .repository
-                    .cleanup_expired_subscriptions(CLEANUP_BATCH_SIZE)
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(first, Some(1_000));
-        assert!(readiness.is_ready());
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT count(*) FROM pubsub_subscriptions WHERE expire<NOW()"
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-            1
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT count(*) FROM pubsub_subscriptions WHERE expire IS NULL OR expire>NOW()"
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-            2
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT count(*) FROM pubsub_digest_queue WHERE source_delivery_id IS NULL"
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-            0
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT count(*) FROM pubsub_digest_queue WHERE source_delivery_id IS NOT NULL"
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-            1,
-            "committed event snapshots survive physical subscription removal"
-        );
-        let second = run_once_with(
-            &context.readiness,
-            &context.metrics,
-            &cancel,
-            Instant::now() + CLEANUP_BUDGET,
-            || {
-                context
-                    .repository
-                    .cleanup_expired_subscriptions(CLEANUP_BATCH_SIZE)
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(second, Some(1));
-        assert_eq!(context.metrics.deleted_total.load(Ordering::Relaxed), 1_001);
-        // A prior successful cleanup cannot conceal a later repository error.
-        sqlx::query("DROP TABLE pubsub_digest_queue")
-            .execute(&pool)
-            .await
-            .unwrap();
-        let failure = run_once_with(
-            &context.readiness,
-            &context.metrics,
-            &cancel,
-            Instant::now() + CLEANUP_BUDGET,
-            || {
-                context
-                    .repository
-                    .cleanup_expired_subscriptions(CLEANUP_BATCH_SIZE)
-            },
-        )
-        .await;
-        assert!(failure.is_err());
-        assert!(!readiness.is_ready());
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM pubsub_subscriptions")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-            2
-        );
-        pool.close().await;
     }
 }

@@ -29,3 +29,4 @@ uuid = { version = "1.12", features = ["v4"] }
 futures = "0.3"
 northstar-postgres = { path = "../../../platform/northstar-postgres" }
 tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }

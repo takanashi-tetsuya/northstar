@@ -1,11 +1,11 @@
 //! Cluster bus, authority, revocation and standalone MUC workers.
 
-use crate::cluster::{
-    self, failure_supervisor_context::ClusterFailureSupervisorContext,
+use crate::node::{adapters::cluster_adapters::PostgresClusterAdapters, ServerNode};
+use northstar_cluster::{
+    failure_supervisor_context::ClusterFailureSupervisorContext,
     maintenance_context::ClusterMaintenanceContext,
     standalone_muc_maintenance::StandaloneMucMaintenanceContext,
 };
-use crate::node::{adapters::cluster_adapters::PostgresClusterAdapters, ServerNode};
 use northstar_runtime::workers::{WorkerCriticality, WorkerMode};
 use northstar_stream::local_routes::session::AccountRevocationRoutes;
 use std::sync::Arc;
@@ -25,7 +25,7 @@ pub(super) fn start(state: &Arc<ServerNode>, cancel: &CancellationToken) {
             Some(std::time::Duration::from_secs(45)),
             cancel.clone(),
             move |heartbeat| {
-                cluster::run_pubsub_listener(
+                northstar_cluster::run_pubsub_listener(
                     Arc::clone(&pubsub_transport),
                     Arc::clone(&listener_admission),
                     cluster_listener_runtime(&state_pubsub),
@@ -44,7 +44,7 @@ pub(super) fn start(state: &Arc<ServerNode>, cancel: &CancellationToken) {
             Some(std::time::Duration::from_secs(10)),
             cancel.clone(),
             move |heartbeat| {
-                cluster::run_account_revocations(
+                northstar_cluster::run_account_revocations(
                     Arc::clone(&revocation_context),
                     revocation_cancel.clone(),
                     heartbeat,
@@ -64,8 +64,12 @@ pub(super) fn start(state: &Arc<ServerNode>, cancel: &CancellationToken) {
                 let maintenance_context = Arc::clone(&maintenance_context);
                 let maintenance_cancel = maintenance_cancel.clone();
                 async move {
-                    cluster::run_maintenance(maintenance_context, maintenance_cancel, heartbeat)
-                        .await
+                    northstar_cluster::run_maintenance(
+                        maintenance_context,
+                        maintenance_cancel,
+                        heartbeat,
+                    )
+                    .await
                 }
             },
         );
@@ -79,7 +83,7 @@ pub(super) fn start(state: &Arc<ServerNode>, cancel: &CancellationToken) {
             Some(std::time::Duration::from_secs(15)),
             cancel.clone(),
             move |heartbeat| {
-                cluster::run_failure_supervisor(
+                northstar_cluster::run_failure_supervisor(
                     Arc::clone(&state_policy),
                     policy_cancel.clone(),
                     heartbeat,
@@ -99,7 +103,7 @@ pub(super) fn start(state: &Arc<ServerNode>, cancel: &CancellationToken) {
                 let maintenance_context = Arc::clone(&maintenance_context);
                 let maintenance_cancel = maintenance_cancel.clone();
                 async move {
-                    cluster::standalone_muc_maintenance::run(
+                    northstar_cluster::standalone_muc_maintenance::run(
                         maintenance_context,
                         maintenance_cancel,
                         heartbeat,
@@ -113,10 +117,10 @@ pub(super) fn start(state: &Arc<ServerNode>, cancel: &CancellationToken) {
 
 fn account_revocation_worker_context(
     state: &ServerNode,
-) -> crate::cluster::AccountRevocationWorkerContext<
+) -> northstar_cluster::AccountRevocationWorkerContext<
     northstar_auth_postgres::account_revocation_repository::PostgresAccountRevocationRepository,
 > {
-    crate::cluster::AccountRevocationWorkerContext::new(
+    northstar_cluster::AccountRevocationWorkerContext::new(
         state.auth.account_revocation_consumer_service.clone(),
         AccountRevocationRoutes::new(Arc::clone(&state.sessions)),
         state.cluster.account_revocation_authority(),
@@ -125,8 +129,8 @@ fn account_revocation_worker_context(
 
 fn cluster_listener_runtime(
     state: &ServerNode,
-) -> crate::cluster::ClusterListenerRuntime<PostgresClusterAdapters> {
-    crate::cluster::ClusterListenerRuntime {
+) -> northstar_cluster::ClusterListenerRuntime<PostgresClusterAdapters> {
+    northstar_cluster::ClusterListenerRuntime {
         message_policy: Arc::new(state.cluster_listener_message_policy()),
         dispatch: state.cluster_listener_dispatch(),
         muc_endpoints: state.cluster_muc_delivery_endpoints(),

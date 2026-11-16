@@ -1,8 +1,8 @@
 //! Builds the cluster listener's suspended-MUC teardown (`cluster::listener_sm_muc_teardown`).
 
-use crate::cluster::listener_sm_muc_teardown::ClusterListenerSmMucTeardown;
 use crate::node::adapters::cluster_adapters::PostgresClusterAdapters;
 use crate::node::ServerNode;
+use northstar_cluster::listener_sm_muc_teardown::ClusterListenerSmMucTeardown;
 
 impl ServerNode {
     pub(crate) fn cluster_listener_sm_muc_teardown(

@@ -1,9 +1,9 @@
 //! Builds the local C2S recovery replay wake (`cluster::recovery_replay_wake`) from the composition root.
 
-use crate::cluster::recovery_replay_wake::{
+use crate::node::ServerNode;
+use northstar_cluster::recovery_replay_wake::{
     ClusterRecoveryReplayWake, MAX_CONCURRENT_RECOVERY_REPLAYS,
 };
-use crate::node::ServerNode;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 

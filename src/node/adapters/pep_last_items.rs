@@ -1,11 +1,9 @@
 //! Root construction and shared adapters for PEP send-last and PubSub notification delivery.
 
+use crate::node::FederationRouter;
 use crate::node::{OnlineSession, RuntimeFederationPolicy, ServerNode};
-use crate::{
-    cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
-    node::FederationRouter,
-};
 use anyhow::Result;
+use northstar_cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery};
 use northstar_config::ExternalRouteDomainPolicy;
 use northstar_message_application::messaging::MessageService;
 use northstar_protocol_runtime::caps::{

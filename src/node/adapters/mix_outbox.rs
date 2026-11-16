@@ -4,13 +4,10 @@ use crate::node::{
     local_caps_route_epoch_matches, session_entries_for_in, OnlineSession, RuntimeFederationPolicy,
     ServerNode,
 };
-use crate::{
-    cluster::{ClusterMixRouteLookup, ClusterNodeDelivery},
-    node::FederationRouter,
-    xmpp::capabilities::MixPostCommitTelemetry,
-};
+use crate::{node::FederationRouter, xmpp::capabilities::MixPostCommitTelemetry};
 use anyhow::Result;
 use dashmap::DashMap;
+use northstar_cluster::{ClusterMixRouteLookup, ClusterNodeDelivery};
 use northstar_config::ExternalRouteDomainPolicy;
 use northstar_delivery_core::node_delivery::NodeDeliveryReceipt;
 use northstar_mix_xmpp::ports::MixOutboxPort;

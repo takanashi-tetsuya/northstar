@@ -1,7 +1,7 @@
 //! Builds the cluster listener's blocking-presence fanout (`cluster::listener_blocking`).
 
-use crate::cluster::listener_blocking::ClusterListenerBlocking;
 use crate::node::ServerNode;
+use northstar_cluster::listener_blocking::ClusterListenerBlocking;
 use std::sync::Arc;
 
 impl ServerNode {

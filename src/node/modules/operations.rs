@@ -55,7 +55,7 @@ pub(in crate::node) struct OperationsModuleParts<'a> {
     pub(in crate::node) api_cursor: &'a Arc<northstar_http::cursor::CursorKeyring>,
     pub(in crate::node) admin_mutations:
         &'a northstar_workflows::admin_mutations::AdminMutationStore,
-    pub(in crate::node) cluster: &'a crate::cluster::ClusterManager,
+    pub(in crate::node) cluster: &'a northstar_cluster::ClusterManager,
     pub(in crate::node) metrics: &'a Arc<Metrics>,
     pub(in crate::node) registration_closed: &'a Arc<AtomicBool>,
     pub(in crate::node) federation_write_policy: &'a Arc<FederationWritePolicy>,

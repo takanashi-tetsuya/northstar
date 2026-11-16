@@ -5,7 +5,7 @@ use crate::node::*;
 use northstar_muc_xmpp::resume::MucResumeHost;
 
 impl MucResumeHost for ServerNode {
-    type MucWake = crate::cluster::ClusterManager;
+    type MucWake = northstar_cluster::ClusterManager;
 
     fn muc_occupant_table(&self) -> &LocalMucOccupantTable {
         &self.room.muc_occupants

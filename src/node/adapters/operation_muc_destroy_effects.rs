@@ -1,11 +1,11 @@
 //! Exact post-commit effects for an administrator room destroy operation.
 
-use crate::cluster::ClusterMucOperationWake;
 use crate::node::{
     remove_local_muc_occupant_exact_from, LocalMucOccupantIdentity, MucOccupant, ServerNode,
 };
 use anyhow::Result;
 use dashmap::DashMap;
+use northstar_cluster::ClusterMucOperationWake;
 use northstar_operations_application::operation_muc_destroy::{
     MucDestroyCommit, MucDestroyEffect, MucDestroyService,
 };

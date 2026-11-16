@@ -1,8 +1,9 @@
 //! Root bindings for stream-owned unavailable presence delivery.
 
+use crate::node::FederationRouter;
 use crate::node::ServerNode;
-use crate::{cluster::ClusterUnavailableDelivery, node::FederationRouter};
 use anyhow::Result;
+use northstar_cluster::ClusterUnavailableDelivery;
 use northstar_config::ExternalRouteDomainPolicy;
 use northstar_stream::session_cleanup::unavailable::{
     SessionCleanupUnavailable, SessionCleanupUnavailablePorts,

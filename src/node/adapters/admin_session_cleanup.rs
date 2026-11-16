@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 pub(crate) struct AdminSessionCleanupContext {
     service: AdminSessionCleanupWorkerService<PostgresAdminSessionCleanupRepository>,
-    notifier: crate::cluster::ClusterAccountTeardownNotifier,
+    notifier: northstar_cluster::ClusterAccountTeardownNotifier,
     routes: AccountRevocationRoutes,
     sessions: Arc<DashMap<String, OnlineSession>>,
     local_domain: String,
@@ -30,7 +30,7 @@ impl ServerNode {
 }
 
 impl AdminSessionCleanupContext {
-    pub(crate) fn notifier(&self) -> &crate::cluster::ClusterAccountTeardownNotifier {
+    pub(crate) fn notifier(&self) -> &northstar_cluster::ClusterAccountTeardownNotifier {
         &self.notifier
     }
 

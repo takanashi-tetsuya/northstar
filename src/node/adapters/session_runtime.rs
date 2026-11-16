@@ -8,7 +8,7 @@ impl ServerNode {
         &self,
     ) -> northstar_stream::session_cleanup::suspension::SmSuspensionContext<
         northstar_workflows::sm_suspension::PostgresSmSuspensionRepository,
-        crate::cluster::ClusterSmSuspension,
+        northstar_cluster::ClusterSmSuspension,
     > {
         northstar_stream::session_cleanup::suspension::SmSuspensionContext::new(
             northstar_workflows::sm_suspension::PostgresSmSuspensionRepository::new(

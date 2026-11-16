@@ -1,8 +1,8 @@
 //! Builds the cluster listener's session-termination dispatch (`cluster::listener_dispatch`).
 
-use crate::cluster::listener_dispatch::ClusterListenerDispatch;
 use crate::node::adapters::cluster_adapters::PostgresClusterAdapters;
 use crate::node::ServerNode;
+use northstar_cluster::listener_dispatch::ClusterListenerDispatch;
 use northstar_session_application::session_termination_authority::SessionTerminationAuthorityService;
 use northstar_session_postgres::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository;
 use northstar_stream::local_routes::session::AccountRevocationRoutes;

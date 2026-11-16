@@ -13,7 +13,8 @@ import {
   layerOf,
   validateCatalog,
   findViolations,
-  evaluateLayers
+  evaluateLayers,
+  staleModules
 } from './check-layer-dependencies.mjs';
 
 function references(text, modulePath = []) {
@@ -33,6 +34,16 @@ function layerCatalog() {
     aliases: { outbound: 'xmpp' },
     baseline: {}
   };
+}
+
+// The CLI fixtures declare only main, services and db.
+function cliCatalog() {
+  const catalog = layerCatalog();
+  catalog.layers.adapter.modules = ['db'];
+  catalog.layers.platform.modules = [];
+  catalog.layers.facade.modules = [];
+  catalog.aliases = {};
+  return catalog;
 }
 
 function runCli(root, args) {
@@ -302,6 +313,39 @@ test('validateCatalog - rejects upward use, duplicate modules and dangling alias
   ]);
 });
 
+test('staleModules - catalog modules need a production file', () => {
+  const tree = new Map([
+    ['src/main.rs', { modulePath: [], top: 'main' }],
+    ['src/xmpp.rs', { modulePath: ['xmpp'], top: 'xmpp' }],
+    ['src/services/a.rs', { modulePath: ['services', 'a'], top: 'services' }]
+  ]);
+  assert.deepEqual(staleModules(tree, layerCatalog()), [
+    'layer adapter: module db has no production source; remove it from catalog/source-layers.json',
+    'layer platform: module platform has no production source; remove it from catalog/source-layers.json',
+    'layer facade: module auth has no production source; remove it from catalog/source-layers.json'
+  ]);
+  tree.set('src/db.rs', { modulePath: ['db'], top: 'db' });
+  tree.set('src/platform.rs', { modulePath: ['platform'], top: 'platform' });
+  tree.set('src/auth.rs', { modulePath: ['auth'], top: 'auth' });
+  assert.deepEqual(staleModules(tree, layerCatalog()), []);
+});
+
+test('CLI - rejects catalog modules that left the root', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'layer-dependencies-'));
+  try {
+    fs.mkdirSync(path.join(tmp, 'src'));
+    fs.mkdirSync(path.join(tmp, 'catalog'));
+    fs.writeFileSync(path.join(tmp, 'src', 'main.rs'), 'mod services;\n');
+    fs.writeFileSync(path.join(tmp, 'src', 'services.rs'), '\n');
+    fs.writeFileSync(path.join(tmp, 'catalog', 'source-layers.json'), JSON.stringify(cliCatalog(), null, 2) + '\n');
+    const res = runCli(tmp, []);
+    assert.equal(res.status, 1, res.stderr);
+    assert.match(res.stderr, /catalog\/source-layers\.json: layer adapter: module db has no production source/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('findViolations - adapter references to application ports are allowed', () => {
   const tree = new Map([['src/db.rs', { modulePath: ['db'], top: 'db' }]]);
   const violations = findViolations(tree, () => 'use crate::services::Port; use crate::db::Q;', layerCatalog());
@@ -376,7 +420,7 @@ test('CLI - records forbidden references and rejects stale entries', () => {
     fs.writeFileSync(path.join(tmp, 'src', 'services.rs'), 'use crate::db::Q;\n');
     fs.writeFileSync(path.join(tmp, 'src', 'db.rs'), '\n');
     const catalogPath = path.join(tmp, 'catalog', 'source-layers.json');
-    fs.writeFileSync(catalogPath, JSON.stringify(layerCatalog(), null, 2) + '\n');
+    fs.writeFileSync(catalogPath, JSON.stringify(cliCatalog(), null, 2) + '\n');
     let res = runCli(tmp, []);
     assert.equal(res.status, 1, res.stderr);
     assert.match(res.stderr, /src\/services\.rs: layer application must not use crate::db \(layer adapter\)/);
@@ -411,7 +455,7 @@ test('CLI - write excludes unknown names and still fails', () => {
     fs.writeFileSync(path.join(tmp, 'src', 'services.rs'), 'use crate::{missing, db};\n');
     fs.writeFileSync(path.join(tmp, 'src', 'db.rs'), '\n');
     const catalogPath = path.join(tmp, 'catalog', 'source-layers.json');
-    fs.writeFileSync(catalogPath, JSON.stringify(layerCatalog(), null, 2) + '\n');
+    fs.writeFileSync(catalogPath, JSON.stringify(cliCatalog(), null, 2) + '\n');
     const res = runCli(tmp, ['--write']);
     assert.equal(res.status, 1, res.stderr);
     assert.match(res.stderr, /src\/services\.rs: crate::missing is not in any layer of catalog\/source-layers\.json/);

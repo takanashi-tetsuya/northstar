@@ -290,7 +290,7 @@ impl ServerNode {
         // reaching through configuration.
         let mut redis_url = config.raw.redis_url.take();
         let cluster_security = config.cluster_security.take();
-        let cluster = crate::cluster::ClusterManager::new(
+        let cluster = northstar_cluster::ClusterManager::new(
             redis_url.as_deref(),
             &config.domain,
             config.raw.redis_tls_ca_cert_path.as_deref(),
@@ -702,7 +702,7 @@ impl ServerNode {
             Arc::clone(state.worker_registry()),
             worker_cancel.clone(),
         );
-        crate::cluster::start_muc_outbox_delivery(
+        northstar_cluster::start_muc_outbox_delivery(
             Arc::clone(state.worker_registry()),
             Arc::new(state.cluster_muc_outbox_worker_context()),
             worker_cancel.clone(),

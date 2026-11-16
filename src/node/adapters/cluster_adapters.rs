@@ -2,7 +2,7 @@
 
 pub(crate) struct PostgresClusterAdapters;
 
-impl crate::cluster::ClusterAdapters for PostgresClusterAdapters {
+impl northstar_cluster::ClusterAdapters for PostgresClusterAdapters {
     type ClusterAuthority =
         northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository;
     type ReplayMaintenance =

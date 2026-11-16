@@ -10,31 +10,16 @@
       ],
       "may_use": [
         "composition",
-        "adapter",
-        "application"
+        "adapter"
       ]
     },
     "adapter": {
       "rank": 3,
       "modules": [
-        "api",
-        "bosh",
-        "cluster",
-        "s2s",
         "xmpp"
       ],
       "may_use": [
-        "adapter",
-        "application"
-      ]
-    },
-    "application": {
-      "rank": 2,
-      "modules": [
-        "services"
-      ],
-      "may_use": [
-        "application"
+        "adapter"
       ]
     }
   },

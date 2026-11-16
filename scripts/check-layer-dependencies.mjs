@@ -373,6 +373,25 @@ export function evaluateLayers({ violations, baseline }) {
   return { errors, baselined };
 }
 
+/**
+ * Lists catalog modules that no production file belongs to, so the catalog drops a module once it leaves the root.
+ * @param {Map<string, {modulePath: string[], top: string}>} tree
+ * @param {object} catalog
+ * @returns {string[]} Errors
+ */
+export function staleModules(tree, catalog) {
+  const present = new Set([...tree.values()].map(({ top }) => top));
+  const errors = [];
+  for (const [name, layer] of Object.entries(catalog.layers)) {
+    for (const module of layer.modules) {
+      if (!present.has(module)) {
+        errors.push(`layer ${name}: module ${module} has no production source; remove it from catalog/source-layers.json`);
+      }
+    }
+  }
+  return errors;
+}
+
 // CLI entry point
 if (process.argv[1] && import.meta.url === url.pathToFileURL(process.argv[1]).href) {
   let write = false;
@@ -395,6 +414,8 @@ if (process.argv[1] && import.meta.url === url.pathToFileURL(process.argv[1]).hr
     const catalogErrors = validateCatalog(catalog);
     if (catalogErrors.length > 0) throw new Error(catalogErrors.map(error => `catalog/source-layers.json: ${error}`).join('\n'));
     const tree = moduleTree(root);
+    const staleErrors = staleModules(tree, catalog);
+    if (staleErrors.length > 0) throw new Error(staleErrors.map(error => `catalog/source-layers.json: ${error}`).join('\n'));
     const violations = findViolations(tree, file => fs.readFileSync(path.join(root, file), 'utf8'), catalog);
     if (write) {
       const baseline = {};

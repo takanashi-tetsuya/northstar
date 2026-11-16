@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 pub(crate) struct SessionCleanupSm {
     suspension:
-        SmSuspensionContext<PostgresSmSuspensionRepository, crate::cluster::ClusterSmSuspension>,
+        SmSuspensionContext<PostgresSmSuspensionRepository, northstar_cluster::ClusterSmSuspension>,
     sessions: SmService<PostgresSmRepository>,
     recovery: Arc<SmSuspensionRecoveryQueue>,
     memory: Arc<SmMemoryGovernor>,

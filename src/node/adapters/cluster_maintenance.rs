@@ -1,15 +1,15 @@
 //! Cluster maintenance handles and the local projections (`cluster::maintenance_locals`) built from the composition root.
 
-use crate::cluster::maintenance_locals::ClusterMaintenanceLocals;
 use crate::node::ServerNode;
+use northstar_cluster::maintenance_locals::ClusterMaintenanceLocals;
 use std::sync::Arc;
 
 impl ServerNode {
     pub(crate) fn cluster_maintenance_handles(
         &self,
     ) -> (
-        crate::cluster::ClusterMaintenanceControl,
-        crate::cluster::ClusterMaintenanceRedis,
+        northstar_cluster::ClusterMaintenanceControl,
+        northstar_cluster::ClusterMaintenanceRedis,
     ) {
         (
             self.cluster.maintenance_control(),

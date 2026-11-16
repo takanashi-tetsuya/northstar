@@ -1,7 +1,6 @@
 //! The composition of C2S session finalization: the node services the
 //! stream-owned orchestrator drives, bound to their root implementations.
 
-use crate::cluster::{ClusterMucDeparture, ClusterSessionRouteRelease};
 use crate::node::adapters::muc_delivery::MucDeliveryContext;
 use crate::node::ServerNode;
 use crate::node::{
@@ -15,6 +14,7 @@ use crate::node::{
     adapters::session_cleanup_unavailable::AppSessionCleanupUnavailable,
 };
 use anyhow::Result;
+use northstar_cluster::{ClusterMucDeparture, ClusterSessionRouteRelease};
 use northstar_room_application::muc_service::ClusterMucTransitionOutcome;
 use northstar_runtime::workers::WorkerRegistry;
 use northstar_session_application::sm::SmSessionSnapshot;

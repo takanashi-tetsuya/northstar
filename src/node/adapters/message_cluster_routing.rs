@@ -131,7 +131,7 @@ impl FullJidFallbackPort for ServerNode {
 }
 
 impl DirectMessageRoutePort for ServerNode {
-    fn direct_route_mode(&self) -> crate::cluster::DirectPostCommitMode {
+    fn direct_route_mode(&self) -> northstar_cluster::DirectPostCommitMode {
         self.message.message_service().direct_mode()
     }
 

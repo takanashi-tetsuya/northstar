@@ -1,8 +1,8 @@
 //! Exact local and cluster session fencing for durable SM teardown.
 
-use crate::cluster::ClusterSmSessionTeardownNotifier;
 use crate::node::{OnlineSession, ServerNode};
 use dashmap::DashMap;
+use northstar_cluster::ClusterSmSessionTeardownNotifier;
 use std::sync::{atomic::Ordering, Arc};
 use uuid::Uuid;
 

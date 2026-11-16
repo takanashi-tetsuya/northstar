@@ -32,7 +32,7 @@ pub(in crate::node) struct MessageModuleParts<'a> {
     pub(in crate::node) config: &'a Config,
     pub(in crate::node) pool: &'a PgPool,
     pub(in crate::node) abuse: &'a Arc<AbuseGuard>,
-    pub(in crate::node) cluster: &'a crate::cluster::ClusterManager,
+    pub(in crate::node) cluster: &'a northstar_cluster::ClusterManager,
     /// Built by `ServerNode::new`, which consumes the TURN secret from `Config`.
     pub(in crate::node) extdisco_service: northstar_message_application::extdisco::ExtDiscoService,
 }

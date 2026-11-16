@@ -1,6 +1,5 @@
 //! Root bindings for the auth-owned ordered account generation teardown.
 
-use crate::cluster::ClusterAccountTeardownNotifier;
 use crate::node::{
     adapters::sm_teardown_runtime::{sm_teardown_snapshot, AppSmTeardownRuntime},
     AccountRevocationRoutes, ServerNode,
@@ -10,6 +9,7 @@ use futures::future::BoxFuture;
 use northstar_auth_xmpp::account_generation_teardown::{
     AccountGenerationTeardownPorts, AccountGenerationTeardownSequence,
 };
+use northstar_cluster::ClusterAccountTeardownNotifier;
 use northstar_http::contexts::account_teardown::AccountGenerationTeardown;
 use northstar_session_application::sm_teardown::SmTeardownService;
 use northstar_workflows::sm_teardown_repository::PostgresSmTeardownRepository;

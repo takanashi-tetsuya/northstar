@@ -147,7 +147,7 @@ pub struct ServerNode {
     /// The archive context; see [`ArchiveModule`].
     archive: ArchiveModule,
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
-    cluster: crate::cluster::ClusterManager,
+    cluster: northstar_cluster::ClusterManager,
     bosh: Option<northstar_bosh::BoshManager>,
     sessions: LocalSessionTable,
     metrics: Arc<Metrics>,

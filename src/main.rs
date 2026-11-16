@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-use northstar_cluster as cluster;
 #[cfg(test)]
 mod direct_replay;
 mod node;

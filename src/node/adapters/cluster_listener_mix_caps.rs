@@ -1,7 +1,7 @@
 //! Builds the cluster listener's MIX capability admission (`cluster::listener_mix_caps`).
 
-use crate::cluster::listener_mix_caps::ClusterListenerMixCaps;
 use crate::node::ServerNode;
+use northstar_cluster::listener_mix_caps::ClusterListenerMixCaps;
 use std::sync::Arc;
 
 impl ServerNode {

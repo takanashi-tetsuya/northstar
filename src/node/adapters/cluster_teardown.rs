@@ -1,9 +1,9 @@
 //! Cluster capabilities used to retire an account, session, or MUC endpoint.
 
-use crate::cluster::{
+use crate::node::ServerNode;
+use northstar_cluster::{
     ClusterAccountTeardownNotifier, ClusterSessionRouteRelease, ClusterSmMucTeardown,
 };
-use crate::node::ServerNode;
 
 impl ServerNode {
     pub(crate) fn cluster_account_teardown_notifier(&self) -> ClusterAccountTeardownNotifier {

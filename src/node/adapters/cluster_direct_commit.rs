@@ -1,11 +1,11 @@
 //! Binds the cluster's direct-commit admission to the message adapters' port. The composition root holds the
 //! binding because the admission belongs to the cluster edge and the PostgreSQL fence to the session adapter.
 
-use crate::cluster::{
-    ClusterAdmission, DirectCommitTurn, DirectPostCommitMode, DirectSpoolEligibility,
-};
 use anyhow::Result;
 use futures::{future::BoxFuture, FutureExt};
+use northstar_cluster::{
+    ClusterAdmission, DirectCommitTurn, DirectPostCommitMode, DirectSpoolEligibility,
+};
 use northstar_message_postgres::direct_cluster::{DirectCommitCluster, DirectCommitPermit};
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use sqlx::{Postgres, Transaction};

@@ -1,6 +1,5 @@
 //! Post-commit account teardown for credential changes that replace all sessions.
 
-use crate::cluster::ClusterAccountTeardownNotifier;
 use crate::node::{
     adapters::session_cleanup_sm_revoker::SessionCleanupSmRevoker, AccountRevocationRoutes,
     ServerNode,
@@ -8,6 +7,7 @@ use crate::node::{
 use futures::future::BoxFuture;
 use northstar_auth_application::account_teardown::AccountGenerationService;
 use northstar_auth_postgres::account_teardown_repository::PostgresAccountGenerationRepository;
+use northstar_cluster::ClusterAccountTeardownNotifier;
 use northstar_http::contexts::account_teardown::AccountSessionTeardown;
 use std::sync::Arc;
 use uuid::Uuid;

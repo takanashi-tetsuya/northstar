@@ -1,8 +1,8 @@
 //! Builds the cluster MUC outbox worker context (`cluster::muc_outbox_worker`) from the composition root.
 
-use crate::cluster::muc_outbox_worker::ClusterMucOutboxWorkerContext;
 use crate::node::adapters::cluster_adapters::PostgresClusterAdapters;
 use crate::node::ServerNode;
+use northstar_cluster::muc_outbox_worker::ClusterMucOutboxWorkerContext;
 use std::sync::Arc;
 
 impl ServerNode {

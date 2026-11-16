@@ -1,14 +1,11 @@
 //! Root bindings for auth-owned account deletion and recovery.
 
+use crate::node::FederationRouter;
 use crate::node::{
     adapters::account_teardown_runtime::AccountTeardownRuntime,
     adapters::session_cleanup_sm_revoker::SessionCleanupSmRevoker,
     hosts::roster_session::deliver_roster_change_with, session_entries_for_in, OnlineSession,
     RuntimeFederationPolicy, ServerNode,
-};
-use crate::{
-    cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery},
-    node::FederationRouter,
 };
 use anyhow::Result;
 use dashmap::DashMap;
@@ -16,6 +13,7 @@ use northstar_auth_xmpp::account_deletion::{
     AccountDeletionRecoveryContext, AccountDeletionRecoveryPorts, RosterPushDelivery,
     RosterPushDeliveryPorts,
 };
+use northstar_cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery};
 use northstar_config::ExternalRouteDomainPolicy;
 use northstar_roster_core::RosterChange;
 use northstar_workflows::account_repository::WorkflowAccountRepository;

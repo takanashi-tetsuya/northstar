@@ -55,7 +55,7 @@ pub(in crate::node) struct AuthModuleParts<'a> {
         &'a Arc<northstar_operations_postgres::api_control::ApiControlKeyring>,
     pub(in crate::node) admin_mutations:
         &'a northstar_workflows::admin_mutations::AdminMutationStore,
-    pub(in crate::node) cluster: &'a crate::cluster::ClusterManager,
+    pub(in crate::node) cluster: &'a northstar_cluster::ClusterManager,
     pub(in crate::node) metrics: &'a Arc<Metrics>,
     pub(in crate::node) registration_closed: &'a Arc<AtomicBool>,
     pub(in crate::node) sessions: &'a Arc<DashMap<String, OnlineSession>>,

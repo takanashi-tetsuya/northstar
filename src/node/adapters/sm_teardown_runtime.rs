@@ -1,13 +1,13 @@
 //! Root bindings for stream-owned durable SM teardown effects.
 
-use crate::cluster::listener_sm_muc_teardown::ClusterListenerSmMucTeardown;
-use crate::cluster::ClusterSmMucTeardown;
 use crate::node::{
     adapters::cluster_adapters::PostgresClusterAdapters,
     adapters::session_cleanup_unavailable::SessionCleanupUnavailableAdapters,
     adapters::sm_teardown_muc_projection::SmTeardownMucProjection,
     adapters::sm_teardown_session::SmTeardownSessionEffects, ServerNode,
 };
+use northstar_cluster::listener_sm_muc_teardown::ClusterListenerSmMucTeardown;
+use northstar_cluster::ClusterSmMucTeardown;
 use northstar_room_application::muc_service::SerializableMucOccupant;
 use northstar_stream::session_cleanup::sm_teardown::{
     SmTeardownPorts, SmTeardownRuntime, SmTeardownSnapshot,

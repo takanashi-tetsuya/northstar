@@ -1,8 +1,8 @@
 //! Cluster effects for one exact local MUC departure.
 
-use crate::cluster::ClusterMucDeparture;
 use crate::node::ServerNode;
 use anyhow::Result;
+use northstar_cluster::ClusterMucDeparture;
 use northstar_room_application::muc_service::{
     ClusterMucOccupancyDepartureService, ClusterMucTransitionOutcome,
 };

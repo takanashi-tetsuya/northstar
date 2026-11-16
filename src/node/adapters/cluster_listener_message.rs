@@ -1,8 +1,8 @@
 //! Typed policy and durable hand-off effects for authenticated node delivery.
 
-use crate::cluster::ClusterListenerMessagePolicy;
 use crate::node::adapters::cluster_adapters::PostgresClusterAdapters;
 use crate::node::ServerNode;
+use northstar_cluster::ClusterListenerMessagePolicy;
 use std::sync::Arc;
 
 impl ServerNode {

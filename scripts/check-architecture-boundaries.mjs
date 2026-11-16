@@ -3594,7 +3594,7 @@ if (
   throw new Error('program responsibility model must identify session-cleanup as a taskless observer');
 }
 if (
-  countMatches(state, /crate::cluster::start_muc_outbox_delivery\(/g) !== 1 ||
+  countMatches(state, /northstar_cluster::start_muc_outbox_delivery\(/g) !== 1 ||
   !cluster.includes('also runs in supported single-node')
 ) {
   throw new Error('cluster MUC PostgreSQL maintenance must remain unconditionally composed');

@@ -1,7 +1,7 @@
 //! Builds the cluster MUC delivery endpoints (`cluster::muc_delivery_endpoints`) over the live route tables.
 
-use crate::cluster::muc_delivery_endpoints::ClusterMucDeliveryEndpoints;
 use crate::node::ServerNode;
+use northstar_cluster::muc_delivery_endpoints::ClusterMucDeliveryEndpoints;
 use std::sync::Arc;
 
 impl ServerNode {

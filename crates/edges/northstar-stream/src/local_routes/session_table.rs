@@ -409,6 +409,23 @@ pub fn try_send_to_entries_in(sessions: &DashMap<String, OnlineSession>, jid: &s
     }
 }
 
+/// Clone routable sibling routes before sending; no DashMap guard is held
+/// while a transport accepts the unavailable presence.
+pub fn try_send_to_available_entries_in(
+    sessions: &DashMap<String, OnlineSession>,
+    jid: &str,
+    stanza: &str,
+) {
+    for (jid, target) in session_entries_for_in(sessions, jid)
+        .into_iter()
+        .filter(|(_, target)| target.available.load(Ordering::Relaxed))
+    {
+        let _ = target
+            .sender
+            .try_send(northstar_xml_builder::rewrite::set_to(stanza, &jid));
+    }
+}
+
 /// The live C2S session table, keyed by full JID. The composition root holds one; workers that need only the raw
 /// routes take a clone of the shared map, which the table dereferences to.
 #[derive(Clone, Default)]
@@ -834,6 +851,39 @@ mod tests {
             },
             receiver,
         )
+    }
+
+    #[test]
+    fn try_send_to_available_entries_skips_unavailable_sessions() {
+        let sessions = DashMap::new();
+        let mut receivers = Vec::new();
+        for (key, routable, available) in [
+            (KEY, true, true),
+            ("alice@example.test/unavailable", true, false),
+            ("alice@example.test/pending", false, true),
+            ("bob@example.test/fixture", true, true),
+        ] {
+            let (route, receiver) = session(Uuid::new_v4(), Uuid::new_v4(), routable);
+            route.available.store(available, Ordering::Relaxed);
+            sessions.insert(key.to_owned(), route);
+            receivers.push((key, receiver));
+        }
+        let stanza = "<presence from='alice@example.test/gone' type='unavailable'/>";
+
+        try_send_to_available_entries_in(&sessions, "alice@example.test", stanza);
+
+        for (key, mut receiver) in receivers {
+            if key == KEY {
+                assert_eq!(
+                    receiver.try_recv().unwrap().stanza,
+                    northstar_xml_builder::rewrite::set_to(stanza, KEY)
+                );
+            }
+            assert!(matches!(
+                receiver.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ));
+        }
     }
 
     #[test]

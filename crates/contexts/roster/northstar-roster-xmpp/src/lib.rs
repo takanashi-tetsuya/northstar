@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod blocking;
+pub mod fanout;
 pub mod federated_presence;
 pub mod presence;
 pub mod presence_delivery;

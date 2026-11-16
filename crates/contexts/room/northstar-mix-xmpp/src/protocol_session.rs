@@ -58,6 +58,14 @@ pub trait MixHandlers {
 
     async fn try_mix_presence(&self, root: Node<'_, '_>, raw: &str) -> Result<Option<Action>>;
 
+    async fn forward_presence_if_route_current(
+        &self,
+        root: Node<'_, '_>,
+        kind: &str,
+        from: &str,
+        raw: &str,
+    ) -> Result<bool>;
+
     async fn forward_presence_to_mix_channels(
         &self,
         kind: &str,
@@ -67,6 +75,28 @@ pub trait MixHandlers {
 }
 
 impl<H: SessionHost + MixHost> MixHandlers for ProtocolSession<H> {
+    async fn forward_presence_if_route_current(
+        &self,
+        root: Node<'_, '_>,
+        kind: &str,
+        from: &str,
+        raw: &str,
+    ) -> Result<bool> {
+        if !crate::mix_presence_route_is_current(
+            self.host().as_ref(),
+            from,
+            self.connection_id,
+            &self.presence.mix_presence_gate,
+            false,
+        ) {
+            return Ok(false);
+        }
+        let advertised_mix_capability = self.advertised_mix_capability(root, from);
+        self.forward_presence_to_mix_channels(kind, advertised_mix_capability, raw)
+            .await?;
+        Ok(true)
+    }
+
     async fn try_mix_iq(&self, raw: &str) -> Result<Option<Action>> {
         let action = crate::session::try_mix_iq(self, raw).await?;
         Ok(action.map(Action::from))

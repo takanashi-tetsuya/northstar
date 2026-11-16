@@ -1,11 +1,12 @@
 //! Presence audience and process-local sibling delivery during session cleanup.
 
-use crate::node::{session_entries_for_in, OnlineSession, ServerNode};
+use crate::node::{OnlineSession, ServerNode};
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_roster_application::presence::PresenceService;
+use northstar_stream::local_routes::session_table::try_send_to_available_entries_in;
 use northstar_workflows::presence_repository::PostgresPresenceRepository;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub(crate) struct SessionCleanupPresence {
@@ -35,16 +36,7 @@ impl SessionCleanupPresence {
         format!("{username}@{}", self.domain)
     }
 
-    /// Clone routable sibling routes before sending; no DashMap guard is held
-    /// while a transport accepts the unavailable presence.
     pub(crate) fn send_available_sibling_presence(&self, actor_bare: &str, presence: &str) {
-        for (jid, target) in session_entries_for_in(&self.sessions, actor_bare)
-            .into_iter()
-            .filter(|(_, target)| target.available.load(Ordering::Relaxed))
-        {
-            let _ = target
-                .sender
-                .try_send(northstar_xml_builder::rewrite::set_to(presence, &jid));
-        }
+        try_send_to_available_entries_in(&self.sessions, actor_bare, presence);
     }
 }

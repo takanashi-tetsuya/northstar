@@ -78,7 +78,9 @@ pub(crate) use northstar_operations_postgres::runtime_control_connection::reserv
 use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
 #[cfg(test)]
 use northstar_room_core::occupancy::{LocalMucJoinPublication, LocalMucNicknameMove};
-use northstar_stream::local_routes::muc::{MucOccupant, MucOccupantEndpoint, SuspendedMucEndpoint};
+#[cfg(test)]
+use northstar_stream::local_routes::muc::MucOccupantEndpoint;
+use northstar_stream::local_routes::muc::{MucOccupant, SuspendedMucEndpoint};
 #[cfg(test)]
 use northstar_stream::local_routes::muc::{SuspendedMucPhase, SuspendedMucRoute};
 use northstar_stream::local_routes::muc_table::*;
@@ -88,7 +90,6 @@ use northstar_stream::local_routes::session::{AccountRevocationRoutes, OnlineSes
 use northstar_stream::local_routes::session_table::*;
 #[cfg(test)]
 use northstar_stream::local_routes::suspended_muc::*;
-use northstar_xmpp_types::jid_text::*;
 
 #[cfg(test)]
 #[path = "node/runtime_control_health_tests.rs"]

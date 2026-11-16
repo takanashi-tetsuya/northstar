@@ -19,14 +19,6 @@ impl ServerNode {
 
 impl SessionCleanupRooms {
     pub(crate) async fn delete_temporary_room(&self, room_jid: &str) -> Result<()> {
-        let localpart = crate::node::localpart(room_jid);
-        let Some(room) = self.rooms.room(localpart).await? else {
-            return Ok(());
-        };
-        let _ = self
-            .rooms
-            .delete_temporary_room(room.id, room.room_epoch, room.config_version)
-            .await?;
-        Ok(())
+        self.rooms.delete_temporary_room_by_jid(room_jid).await
     }
 }

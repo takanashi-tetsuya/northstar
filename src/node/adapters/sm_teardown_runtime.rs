@@ -3,16 +3,17 @@
 use crate::node::{
     adapters::cluster_adapters::PostgresClusterAdapters,
     adapters::session_cleanup_unavailable::SessionCleanupUnavailableAdapters,
-    adapters::sm_teardown_muc_projection::SmTeardownMucProjection,
     adapters::sm_teardown_session::SmTeardownSessionEffects, ServerNode,
 };
 use northstar_cluster::listener_sm_muc_teardown::ClusterListenerSmMucTeardown;
 use northstar_cluster::ClusterSmMucTeardown;
+use northstar_muc_xmpp::sm_teardown_projection::SmTeardownMucProjection;
 use northstar_room_application::muc_service::SerializableMucOccupant;
 use northstar_stream::session_cleanup::sm_teardown::{
     SmTeardownPorts, SmTeardownRuntime, SmTeardownSnapshot,
 };
 use northstar_workflows::message_repository::PostgresMessageRepository;
+use northstar_workflows::sm_teardown_muc_repository::PostgresSmTeardownMucRepository;
 use northstar_workflows::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository;
 use uuid::Uuid;
 
@@ -25,7 +26,7 @@ pub(crate) type AppSmTeardownRuntime = SmTeardownRuntime<
 
 pub(crate) struct SmTeardownAdapters {
     session: SmTeardownSessionEffects,
-    muc_projection: SmTeardownMucProjection,
+    muc_projection: SmTeardownMucProjection<PostgresSmTeardownMucRepository>,
     muc_cluster: ClusterSmMucTeardown,
     muc_local: ClusterListenerSmMucTeardown<PostgresClusterAdapters>,
 }

@@ -87,3 +87,78 @@ async fn disconnect_leave_is_bound_to_one_stream_and_one_stable_operation() {
         &[first.operation_id; 2]
     );
 }
+
+#[tokio::test]
+async fn exact_departure_not_found_does_not_leave() {
+    let repository = StubRepository {
+        target: ClusterMucOccupancyTarget {
+            room_id: Uuid::new_v4(),
+            room_epoch: Uuid::new_v4(),
+            occupant_incarnation: Uuid::new_v4(),
+            occupancy_epoch: 1,
+            full_jid: "alice@example.test/Phone".to_owned(),
+            nick: "Alice".to_owned(),
+            connection_uuid: Uuid::new_v4(),
+            connection_epoch: 1,
+        },
+        leaves: Mutex::new(Vec::new()),
+    };
+    let target = &repository.target;
+    let service = ClusterMucOccupancyDepartureService::new(&repository);
+    assert_eq!(
+        service
+            .leave_exact_departure(
+                "room@muc.example.test",
+                &target.full_jid,
+                &target.nick,
+                target.occupant_incarnation,
+                Uuid::new_v4(),
+                "node-1",
+            )
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(repository.leaves.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn exact_departure_leaves_the_resolved_target_with_stable_operation() {
+    let repository = StubRepository {
+        target: ClusterMucOccupancyTarget {
+            room_id: Uuid::new_v4(),
+            room_epoch: Uuid::new_v4(),
+            occupant_incarnation: Uuid::new_v4(),
+            occupancy_epoch: 1,
+            full_jid: "alice@example.test/Phone".to_owned(),
+            nick: "Alice".to_owned(),
+            connection_uuid: Uuid::new_v4(),
+            connection_epoch: 1,
+        },
+        leaves: Mutex::new(Vec::new()),
+    };
+    let target = &repository.target;
+    let service = ClusterMucOccupancyDepartureService::new(&repository);
+    assert_eq!(
+        service
+            .leave_exact_departure(
+                "room@muc.example.test",
+                &target.full_jid,
+                &target.nick,
+                target.occupant_incarnation,
+                target.connection_uuid,
+                "node-1",
+            )
+            .await
+            .unwrap(),
+        Some(ClusterMucTransitionOutcome::Applied)
+    );
+    assert_eq!(
+        repository.leaves.lock().unwrap().as_slice(),
+        &[operation_id(&serde_json::json!({
+            "kind":"muc_disconnect_leave",
+            "target":target,
+        }))
+        .unwrap()]
+    );
+}

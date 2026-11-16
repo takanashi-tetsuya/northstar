@@ -324,6 +324,35 @@ impl<R: ClusterMucOccupancyDepartureRepository> ClusterMucOccupancyDepartureServ
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub async fn leave_exact_departure(
+        &self,
+        room_jid: &str,
+        full_jid: &str,
+        nick: &str,
+        cluster_epoch: Uuid,
+        connection_id: Uuid,
+        node_id: &str,
+    ) -> Result<Option<ClusterMucTransitionOutcome>> {
+        let Some(target) = self
+            .find_exact_for_disconnect(
+                room_jid,
+                full_jid,
+                nick,
+                cluster_epoch,
+                connection_id,
+                node_id,
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        let result = self
+            .leave_exact_for_disconnect(connection_id, &target, node_id)
+            .await?;
+        Ok(Some(result.outcome))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub async fn find_exact_for_disconnect(
         &self,
         room_jid: &str,

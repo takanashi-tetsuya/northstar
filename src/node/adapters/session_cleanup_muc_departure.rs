@@ -22,9 +22,8 @@ impl SessionCleanupPgMucDeparture {
         room_jid: &str,
         departed: &crate::node::MucOccupant,
     ) -> Result<Option<ClusterMucTransitionOutcome>> {
-        let Some(target) = self
-            .service
-            .find_exact_for_disconnect(
+        self.service
+            .leave_exact_departure(
                 room_jid,
                 &departed.full_jid,
                 &departed.nick,
@@ -32,15 +31,7 @@ impl SessionCleanupPgMucDeparture {
                 departed.connection_id,
                 &self.node_id,
             )
-            .await?
-        else {
-            return Ok(None);
-        };
-        let result = self
-            .service
-            .leave_exact_for_disconnect(departed.connection_id, &target, &self.node_id)
-            .await?;
-        Ok(Some(result.outcome))
+            .await
     }
 }
 

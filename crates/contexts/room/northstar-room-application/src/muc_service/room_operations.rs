@@ -218,6 +218,17 @@ impl<R: MucRepository> MucService<R> {
         self.repository.delete_expired_locked_room(room_id).await
     }
 
+    pub async fn delete_temporary_room_by_jid(&self, room_jid: &str) -> Result<()> {
+        let localpart = northstar_xmpp_types::jid_text::localpart(room_jid);
+        let Some(room) = self.room(localpart).await? else {
+            return Ok(());
+        };
+        let _ = self
+            .delete_temporary_room(room.id, room.room_epoch, room.config_version)
+            .await?;
+        Ok(())
+    }
+
     pub async fn delete_temporary_room(
         &self,
         room_id: Uuid,

@@ -5,7 +5,7 @@ use crate::node::{
     adapters::account_teardown_runtime::AccountTeardownRuntime,
     adapters::session_cleanup_sm_revoker::SessionCleanupSmRevoker,
     hosts::roster_session::deliver_roster_change_with, session_entries_for_in, OnlineSession,
-    RuntimeFederationPolicy, ServerNode,
+    ServerNode,
 };
 use anyhow::Result;
 use dashmap::DashMap;
@@ -14,7 +14,7 @@ use northstar_auth_xmpp::account_deletion::{
     RosterPushDeliveryPorts,
 };
 use northstar_cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery};
-use northstar_config::ExternalRouteDomainPolicy;
+use northstar_federation_application::effective_policy::EffectiveFederationPolicy;
 use northstar_roster_core::RosterChange;
 use northstar_workflows::account_repository::WorkflowAccountRepository;
 use std::sync::Arc;
@@ -59,8 +59,7 @@ pub(crate) struct AccountDeletionRecoveryAdapters {
     routes: ClusterListenerPresenceRoutes,
     sender: ClusterNodeDelivery,
     federation: FederationRouter,
-    domains: ExternalRouteDomainPolicy,
-    runtime_policy: Arc<arc_swap::ArcSwap<RuntimeFederationPolicy>>,
+    policy: EffectiveFederationPolicy,
     teardown: AccountTeardownRuntime,
 }
 
@@ -90,8 +89,7 @@ impl ServerNode {
                 routes: self.cluster.listener_presence_routes(),
                 sender: self.cluster.node_delivery(),
                 federation: self.federation.federation_outbox.clone(),
-                domains: self.config.external_route_domain_policy(),
-                runtime_policy: Arc::clone(&self.federation.federation_runtime_policy),
+                policy: self.federation.effective_policy.clone(),
                 teardown: self.account_teardown_runtime(),
             },
             Arc::clone(&self.metrics),
@@ -136,8 +134,7 @@ impl AccountDeletionRecoveryPorts for AccountDeletionRecoveryAdapters {
     }
 
     fn federation_domain_allowed(&self, domain: &str) -> bool {
-        self.domains.federation_domain_allowed(domain)
-            && self.runtime_policy.load().allows_domain(domain)
+        self.policy.prepared_domain_allowed(domain)
     }
 
     async fn send_federation_presence(&self, domain: &str, stanza: String, from: &str) -> bool {

@@ -1,21 +1,19 @@
 //! MIX presence withdrawal for a fenced client resource.
 
 use crate::node::FederationRouter;
-use crate::node::{RuntimeFederationPolicy, ServerNode};
+use crate::node::ServerNode;
 use anyhow::Result;
-use northstar_config::ExternalRouteDomainPolicy;
+use northstar_federation_application::effective_policy::EffectiveFederationPolicy;
 use northstar_room_application::mix_service::{MixService, NODE_PRESENCE};
 use northstar_workflows::room_effects::PostgresMixRepository;
 use northstar_xml_builder::XmlElement;
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
-use std::sync::Arc;
 use uuid::Uuid;
 
 pub(crate) struct SessionCleanupMix {
     service: MixService<PostgresMixRepository>,
     federation: FederationRouter,
-    domains: ExternalRouteDomainPolicy,
-    runtime_policy: Arc<arc_swap::ArcSwap<RuntimeFederationPolicy>>,
+    policy: EffectiveFederationPolicy,
     local_mix_domain: String,
 }
 
@@ -24,8 +22,7 @@ impl ServerNode {
         SessionCleanupMix {
             service: self.room.mix_service.clone(),
             federation: self.federation.federation_outbox.clone(),
-            domains: self.config.external_route_domain_policy(),
-            runtime_policy: Arc::clone(&self.federation.federation_runtime_policy),
+            policy: self.federation.effective_policy.clone(),
             local_mix_domain: prepare_domainpart(&format!("mix.{}", self.config.domain))
                 .expect("configured XMPP domain must form a valid MIX service domain"),
         }
@@ -34,11 +31,7 @@ impl ServerNode {
 
 impl SessionCleanupMix {
     fn federation_domain_allowed(&self, domain: &str) -> bool {
-        let Ok(domain) = prepare_domainpart(domain) else {
-            return false;
-        };
-        self.domains.federation_domain_allowed(&domain)
-            && self.runtime_policy.load().allows_domain(&domain)
+        self.policy.domain_allowed(domain)
     }
 
     pub(crate) async fn disconnect_presence(

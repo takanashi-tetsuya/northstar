@@ -1,9 +1,9 @@
 //! The MIX IQ timeout worker shares its correlation index with live responses.
 
 use crate::node::FederationRouter;
-use crate::node::{session_entries_for_in, OnlineSession, RuntimeFederationPolicy, ServerNode};
+use crate::node::{session_entries_for_in, OnlineSession, ServerNode};
 use dashmap::DashMap;
-use northstar_config::ExternalRouteDomainPolicy;
+use northstar_federation_application::effective_policy::EffectiveFederationPolicy;
 use northstar_mix_xmpp::ports::{MixIqRelayExpiryPort, MixIqRelayRoutePort};
 use northstar_room_core::mix_iq_relay::{MixIqRelayIndex, PendingMixIqRelay};
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
@@ -12,8 +12,7 @@ use std::{sync::Arc, time::Instant};
 pub struct MixIqRelayRoute {
     sessions: Arc<DashMap<String, OnlineSession>>,
     local_domain: String,
-    static_policy: ExternalRouteDomainPolicy,
-    runtime_policy: Arc<arc_swap::ArcSwap<RuntimeFederationPolicy>>,
+    policy: EffectiveFederationPolicy,
     federation: FederationRouter,
 }
 
@@ -27,8 +26,7 @@ impl ServerNode {
         MixIqRelayRoute {
             sessions: Arc::clone(&self.sessions),
             local_domain: self.config.domain.clone(),
-            static_policy: self.config.external_route_domain_policy(),
-            runtime_policy: Arc::clone(&self.federation.federation_runtime_policy),
+            policy: self.federation.effective_policy.clone(),
             federation: self.federation.federation_outbox.clone(),
         }
     }
@@ -66,9 +64,7 @@ impl MixIqRelayRoutePort for MixIqRelayRoute {
             for (_, target) in session_entries_for_in(&self.sessions, recipient) {
                 let _ = target.sender.try_send(stanza.clone());
             }
-        } else if self.static_policy.federation_domain_allowed(&domain)
-            && self.runtime_policy.load().allows_domain(&domain)
-        {
+        } else if self.policy.prepared_domain_allowed(&domain) {
             let _ = self.federation.send(&domain, stanza, None).await;
         }
     }

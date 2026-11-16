@@ -31,6 +31,12 @@ impl EffectiveFederationPolicy {
             && self.runtime.load().allows_domain(&domain)
     }
 
+    /// Check a domainpart that the caller has already prepared.
+    pub fn prepared_domain_allowed(&self, domain: &str) -> bool {
+        self.static_policy.federation_domain_allowed(domain)
+            && self.runtime.load().allows_domain(domain)
+    }
+
     /// Apply XEP-0133 entity rules using XEP-0016-style JID specificity: a
     /// domain rule matches the whole domain, a bare JID matches all of its
     /// resources, and a full JID matches exactly one resource.

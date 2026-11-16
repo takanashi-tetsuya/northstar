@@ -1,10 +1,10 @@
 //! Root construction and shared adapters for PEP send-last and PubSub notification delivery.
 
 use crate::node::FederationRouter;
-use crate::node::{OnlineSession, RuntimeFederationPolicy, ServerNode};
+use crate::node::{OnlineSession, ServerNode};
 use anyhow::Result;
 use northstar_cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery};
-use northstar_config::ExternalRouteDomainPolicy;
+use northstar_federation_application::effective_policy::EffectiveFederationPolicy;
 use northstar_message_application::messaging::MessageService;
 use northstar_protocol_runtime::caps::{
     CapsObservationOwner, CapsObservationSnapshot, CapsResourceIndex, PendingCapsIndex,
@@ -25,8 +25,7 @@ pub(crate) struct PepLastItemsAdapters {
     remote_routes: ClusterListenerPresenceRoutes,
     remote_sender: ClusterNodeDelivery,
     federation: FederationRouter,
-    static_policy: ExternalRouteDomainPolicy,
-    runtime_policy: Arc<arc_swap::ArcSwap<RuntimeFederationPolicy>>,
+    policy: EffectiveFederationPolicy,
 }
 
 impl ServerNode {
@@ -49,8 +48,7 @@ impl ServerNode {
             remote_routes: self.cluster.listener_presence_routes(),
             remote_sender: self.cluster.node_delivery(),
             federation: self.federation.federation_outbox.clone(),
-            static_policy: self.config.external_route_domain_policy(),
-            runtime_policy: Arc::clone(&self.federation.federation_runtime_policy),
+            policy: self.federation.effective_policy.clone(),
         }
     }
 }
@@ -118,8 +116,7 @@ impl PubSubNotificationPorts for PepLastItemsAdapters {
     }
 
     fn federation_domain_allowed(&self, domain: &str) -> bool {
-        self.static_policy.federation_domain_allowed(domain)
-            && self.runtime_policy.load().allows_domain(domain)
+        self.policy.prepared_domain_allowed(domain)
     }
 
     async fn send_federated(&self, domain: &str, message: String, sender: Option<String>) -> bool {

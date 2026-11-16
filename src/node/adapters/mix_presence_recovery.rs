@@ -3,12 +3,12 @@
 use crate::node::FederationRouter;
 use crate::node::{
     mix_presence_epoch_is_current, mix_presence_fallback_is_suppressed, session_entries_for_in,
-    OnlineSession, RuntimeFederationPolicy, ServerNode,
+    OnlineSession, ServerNode,
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
-use northstar_config::ExternalRouteDomainPolicy;
+use northstar_federation_application::effective_policy::EffectiveFederationPolicy;
 use northstar_mix_xmpp::ports::{MixPresenceRecoveryPort, MixPresenceRoutes};
 use northstar_room_application::mix_service::{
     MixAccount, MixChannel, MixService, PamMembership, PresenceOutcome,
@@ -21,8 +21,7 @@ pub struct MixPresenceRecoveryContext {
     routes: MixPresenceRecoveryRoutes,
     service: MixService<PostgresMixRepository>,
     local_domain: String,
-    static_policy: ExternalRouteDomainPolicy,
-    runtime_policy: Arc<arc_swap::ArcSwap<RuntimeFederationPolicy>>,
+    policy: EffectiveFederationPolicy,
     federation: FederationRouter,
 }
 
@@ -36,8 +35,7 @@ impl ServerNode {
             routes: MixPresenceRecoveryRoutes::new(Arc::clone(&self.sessions)),
             service: self.room.mix_service.clone(),
             local_domain: self.config.domain.clone(),
-            static_policy: self.config.external_route_domain_policy(),
-            runtime_policy: Arc::clone(&self.federation.federation_runtime_policy),
+            policy: self.federation.effective_policy.clone(),
             federation: self.federation.federation_outbox.clone(),
         }
     }
@@ -115,11 +113,7 @@ impl MixPresenceRecoveryPort for MixPresenceRecoveryContext {
     }
 
     fn federation_domain_allowed(&self, domain: &str) -> bool {
-        let Ok(domain) = northstar_xmpp_types::jid::prepare_domainpart(domain) else {
-            return false;
-        };
-        self.static_policy.federation_domain_allowed(&domain)
-            && self.runtime_policy.load().allows_domain(&domain)
+        self.policy.domain_allowed(domain)
     }
 
     async fn send_federated(&self, domain: &str, stanza: String, source: Option<String>) {

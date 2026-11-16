@@ -2,13 +2,13 @@
 
 use crate::node::{
     local_caps_route_epoch_matches, session_entries_for_in, FederationRouter, OnlineSession,
-    RuntimeFederationPolicy, ServerNode,
+    ServerNode,
 };
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_cluster::{ClusterMixRouteLookup, ClusterNodeDelivery};
-use northstar_config::ExternalRouteDomainPolicy;
 use northstar_delivery_core::node_delivery::NodeDeliveryReceipt;
+use northstar_federation_application::effective_policy::EffectiveFederationPolicy;
 use northstar_mix_xmpp::ports::MixOutboxPort;
 use northstar_protocol_runtime::caps::{CapsObservationOwner, CapsResourceIndex, PendingCapsIndex};
 use northstar_room_application::mix_service::MixService;
@@ -31,8 +31,7 @@ pub struct MixOutboxContext {
     cluster_delivery: ClusterNodeDelivery,
     federation: FederationRouter,
     local_domain: String,
-    static_policy: ExternalRouteDomainPolicy,
-    runtime_policy: Arc<arc_swap::ArcSwap<RuntimeFederationPolicy>>,
+    policy: EffectiveFederationPolicy,
     delivery_failures: Arc<AtomicU64>,
     post_accept_failures: Arc<AtomicU64>,
 }
@@ -94,8 +93,7 @@ impl ServerNode {
             cluster_delivery: self.cluster.node_delivery(),
             federation: self.federation.federation_outbox.clone(),
             local_domain: self.config.domain.clone(),
-            static_policy: self.config.external_route_domain_policy(),
-            runtime_policy: Arc::clone(&self.federation.federation_runtime_policy),
+            policy: self.federation.effective_policy.clone(),
             delivery_failures: Arc::clone(&self.metrics.mix_post_commit_delivery_failures_total),
             post_accept_failures: Arc::clone(&self.metrics.post_accept_side_effect_failures_total),
         }
@@ -116,11 +114,7 @@ impl MixOutboxPort for MixOutboxContext {
     }
 
     fn federation_domain_allowed(&self, domain: &str) -> bool {
-        let Ok(domain) = northstar_xmpp_types::jid::prepare_domainpart(domain) else {
-            return false;
-        };
-        self.static_policy.federation_domain_allowed(&domain)
-            && self.runtime_policy.load().allows_domain(&domain)
+        self.policy.domain_allowed(domain)
     }
 
     fn federation_outbox(&self) -> &FederationRouter {

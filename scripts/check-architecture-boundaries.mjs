@@ -3833,7 +3833,7 @@ if (!state.includes('Arc::new(state.mix_presence_recovery_context())')
     || !mixPresenceRecovery.includes('context.routes().local_epochs(')
     || !mixPresenceRecovery.includes('context.expire_unrefreshed(cutoff)')
     || !verifiedMixPresence.includes('context.routes().epoch_state(')
-    || !mixPresenceContext.includes('self.runtime_policy.load().allows_domain(')) {
+    || !mixPresenceContext.includes('self.policy.domain_allowed(')) {
   throw new Error('MIX presence recovery must use live route fences and narrow application effects');
 }
 const serviceTaskNames = [

@@ -16,6 +16,7 @@ anyhow = "1.0"
 base64 = "0.22"
 chrono = "0.4"
 dashmap = "6.1"
+futures = "0.3"
 northstar-abuse-application = { path = "../../contexts/abuse/northstar-abuse-application" }
 northstar-abuse-policy = { path = "../../contexts/abuse/northstar-abuse-policy" }
 northstar-auth-core = { path = "../../contexts/auth/northstar-auth-core" }
@@ -62,7 +63,6 @@ uuid = { version = "1.12", features = ["v4"] }
 zeroize = "1.8"
 
 [dev-dependencies]
-futures = "0.3"
 northstar-abuse-policy = { path = "../../contexts/abuse/northstar-abuse-policy", features = ["test-support"] }
 northstar-message-application = { path = "../../contexts/message/northstar-message-application", features = ["test-support"] }
 northstar-room-application = { path = "../../contexts/room/northstar-room-application", features = ["test-support"] }

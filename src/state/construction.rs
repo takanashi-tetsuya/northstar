@@ -679,7 +679,7 @@ impl AppState {
             .xmpp_extensions
             .enabled(northstar_xep_0115::XEP_ID)
         {
-            crate::state::caps_effect_dispatch::start_caps_effect_dispatcher(
+            northstar_stream::caps_effects::start_caps_effect_dispatcher(
                 Arc::new(state.caps_effect_dispatch_context()),
                 Arc::clone(state.worker_registry()),
                 worker_cancel.clone(),

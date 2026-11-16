@@ -3263,7 +3263,7 @@ if (/Deliver\s*\(\s*(?:db|northstar_auth_postgres::users)::User\s*\)/.test(messa
 const capsProtocolSource =
   read('crates/contexts/session/northstar-protocol-runtime/src/caps.rs') +
   read('crates/edges/northstar-stream/src/protocol/caps.rs') +
-  read('src/state/caps_effect_dispatch.rs');
+  read('crates/edges/northstar-stream/src/caps_effects.rs');
 const s2sInboundSource = readProductionModule('src/s2s/inbound.rs', { root })
   + readProductionModule('crates/contexts/roster/northstar-roster-xmpp/src/federated_presence.rs', { root })
   + readProductionModule('crates/contexts/message/northstar-message-xmpp/src/federated_message.rs', { root })
@@ -3455,7 +3455,7 @@ const workerResponsibilityEvidence = {
   'runtime-control-refresh': ['src/state.rs', 'process startup reserves the connection', '5 s'],
   'sm-authority-listener': ['crates/contexts/workflows/northstar-workflows/src/authority_listener.rs', 'AppState database listener startup', '15 s'],
   'sm-suspension-recovery': ['crates/edges/northstar-stream/src/session_cleanup/recovery.rs', 'session-cleanup service startup', '30 s'],
-  'caps-side-effects': ['src/state/caps_effect_dispatch.rs', 'Caps subsystem startup', '60 s'],
+  'caps-side-effects': ['crates/edges/northstar-stream/src/caps_effects.rs', 'Caps subsystem startup', '60 s'],
   'mix-iq-relay-expiry': ['crates/contexts/room/northstar-mix-xmpp/src/lib.rs', 'MIX protocol capability startup', '10 s'],
   'mix-delivery-outbox': ['crates/contexts/room/northstar-mix-xmpp/src/worker.rs', 'MIX capability startup', '30 s'],
   'mix-presence-recovery': ['crates/contexts/room/northstar-mix-xmpp/src/lib.rs', 'MIX capability startup', '90 s'],
@@ -3727,7 +3727,7 @@ if (!uploadSource.includes('State(state): State<UploadHttpReadContext<R>>')
   throw new Error('public upload GET must retain shared download admission and guarded read authority');
 }
 const capsEffectSource = read('crates/edges/northstar-stream/src/protocol/caps.rs');
-const capsDispatchSource = read('src/state/caps_effect_dispatch.rs');
+const capsDispatchSource = read('crates/edges/northstar-stream/src/caps_effects.rs');
 const capsDispatchWorker = capsDispatchSource.slice(capsDispatchSource.indexOf('pub(crate) struct CapsEffectRunGuard'));
 if (/\bstate\.metrics\b|\bself\.(?:state|host)\.metrics\b|&(?:(?:northstar_telemetry::)?metrics::)?Metrics\b/.test(capsEffectSource)
     || !capsEffectSource.includes('state.caps_effect_telemetry()')

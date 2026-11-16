@@ -1,10 +1,10 @@
 //! Durable MIX delivery lanes and their live routing observations.
 
+use crate::node::telemetry::MixPostCommitTelemetry;
 use crate::node::{
-    local_caps_route_epoch_matches, session_entries_for_in, OnlineSession, RuntimeFederationPolicy,
-    ServerNode,
+    local_caps_route_epoch_matches, session_entries_for_in, FederationRouter, OnlineSession,
+    RuntimeFederationPolicy, ServerNode,
 };
-use crate::{node::FederationRouter, xmpp::capabilities::MixPostCommitTelemetry};
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_cluster::{ClusterMixRouteLookup, ClusterNodeDelivery};

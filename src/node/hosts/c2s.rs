@@ -1,15 +1,14 @@
 //! The node's capabilities as the client transports see them.
 
 use crate::node::adapters::admission_guards::ClientConnectionGuard;
-use crate::node::ServerNode;
-use crate::xmpp::protocol::ClientSession;
-use crate::xmpp::protocol::ProtocolSession;
+use crate::node::{ClientSession, ServerNode};
 use axum::http::HeaderMap;
 use northstar_c2s::host::C2sHost;
 use northstar_c2s::websocket_upgrade::WebSocketHost;
 use northstar_runtime::connection_actors::ConnectionActorRegistry;
 use northstar_stream::host::TransportHost;
 use northstar_stream::outbound::OutboundSender;
+use northstar_stream::protocol::ProtocolSession;
 use northstar_stream::transport::{ClientTransport, StreamLimits};
 use northstar_telemetry::metrics::C2sBackpressureTelemetry;
 use std::{net::IpAddr, sync::Arc};

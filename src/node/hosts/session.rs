@@ -2,13 +2,11 @@
 
 use crate::node::adapters::session_cleanup::SessionCleanupAdapters;
 use crate::node::hosts::iq_route::IQ_ROUTES;
+use crate::node::ClientSession;
 use crate::node::CommittedLocalMucResume;
 use crate::node::FederationRouter;
 use crate::node::RestoredLocalMucOccupants;
 use crate::node::ServerNode;
-use crate::xmpp::protocol::messaging::MessageHandlers;
-use crate::xmpp::protocol::ClientSession;
-use crate::xmpp::protocol::SessionHost;
 use anyhow::Result;
 use dashmap::DashMap;
 use northstar_auth_application::account_teardown::FinalizeAccountDeletion;
@@ -28,6 +26,7 @@ use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::local_routes::session::SmPresenceEpoch;
 use northstar_stream::local_routes::session::SmStagedRouteClaim;
 use northstar_stream::protocol::dispatch::route::ClientIqRoute;
+use northstar_stream::protocol::SessionHost;
 use northstar_stream::session_cleanup::service::SessionCleanupService;
 use northstar_stream::transport::Action;
 use northstar_stream::IqRouter;
@@ -735,7 +734,7 @@ impl SessionHost for ServerNode {
         raw: &str,
         client_raw: &str,
     ) -> Result<Action> {
-        session.message(root, raw, client_raw).await
+        northstar_message_xmpp::messaging::message(session, root, raw, client_raw).await
     }
 
     async fn dispatch_muc_message(

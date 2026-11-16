@@ -9,23 +9,9 @@
         "runtime"
       ],
       "may_use": [
-        "composition",
-        "adapter"
-      ]
-    },
-    "adapter": {
-      "rank": 3,
-      "modules": [
-        "xmpp"
-      ],
-      "may_use": [
-        "adapter"
+        "composition"
       ]
     }
   },
-  "baseline": {
-    "src/xmpp/protocol.rs": [
-      "node"
-    ]
-  }
+  "baseline": {}
 }

@@ -72,7 +72,7 @@ impl MixHost for ServerNode {
     }
 
     fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability {
-        match crate::xmpp::protocol::caps::verified_caps_has_any_feature(
+        match northstar_stream::protocol::caps::verified_caps_has_any_feature(
             self,
             full_jid,
             &[CORE_NS, PAM_NS],

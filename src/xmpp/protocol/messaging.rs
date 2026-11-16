@@ -1,7 +1,5 @@
-//! Binds the message handlers of `northstar-message-xmpp` to the client session.
+//! Messaging tests of the client session over `northstar-message-xmpp`, and the saved Stage 4 case.
 
-use super::{Action, ProtocolSession};
-use crate::xmpp::protocol::SessionHost;
 use anyhow::Result;
 #[cfg(test)]
 use northstar_abuse_policy::message_admission::MessageAdmissionStart;
@@ -23,18 +21,12 @@ use northstar_message_application::messaging::{
 };
 #[cfg(test)]
 use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
-use northstar_message_xmpp::messaging as handlers;
 #[cfg(test)]
 use northstar_message_xmpp::messaging::preparation_fixture::*;
-use northstar_message_xmpp::ports::MessageHost;
-use northstar_mix_xmpp::ports::MixHost;
-use northstar_muc_xmpp::ports::MucHost;
-use northstar_pubsub_xmpp::pubsub::PubSubHost;
 #[cfg(test)]
 use northstar_stream::frame_execution::Stage;
 #[cfg(test)]
 use northstar_xmpp_types::jid_text::bare_jid;
-use roxmltree::Node;
 #[cfg(test)]
 use std::future::Future;
 
@@ -61,24 +53,6 @@ where
     let operation = execution.direct_operation();
     let future = child(operation.clone());
     (operation, execution.run(future))
-}
-
-/// The session handlers of messaging.rs.
-pub(crate) trait MessageHandlers {
-    async fn message(&self, root: Node<'_, '_>, raw: &str, client_raw: &str) -> Result<Action>;
-}
-
-impl<
-        H: SessionHost
-            + MessageHost
-            + MucHost<Outbound = northstar_stream::outbound::OutboundSender>
-            + MixHost
-            + PubSubHost,
-    > MessageHandlers for ProtocolSession<H>
-{
-    async fn message(&self, root: Node<'_, '_>, raw: &str, client_raw: &str) -> Result<Action> {
-        handlers::message(self, root, raw, client_raw).await
-    }
 }
 
 #[cfg(test)]

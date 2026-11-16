@@ -27,7 +27,7 @@ impl PubSubSessionHost for ServerNode {
     }
 
     fn pep_record_published(&self, count: u64) {
-        crate::xmpp::capabilities::PepTelemetry::new(
+        crate::node::telemetry::PepTelemetry::new(
             &self.metrics.pep_items_published_total,
             &self.metrics.pep_items_retracted_total,
             &self.metrics.pep_retrievals_total,
@@ -36,7 +36,7 @@ impl PubSubSessionHost for ServerNode {
     }
 
     fn pep_record_retracted(&self, count: u64) {
-        crate::xmpp::capabilities::PepTelemetry::new(
+        crate::node::telemetry::PepTelemetry::new(
             &self.metrics.pep_items_published_total,
             &self.metrics.pep_items_retracted_total,
             &self.metrics.pep_retrievals_total,
@@ -45,7 +45,7 @@ impl PubSubSessionHost for ServerNode {
     }
 
     fn pep_record_retrieved(&self) {
-        crate::xmpp::capabilities::PepTelemetry::new(
+        crate::node::telemetry::PepTelemetry::new(
             &self.metrics.pep_items_published_total,
             &self.metrics.pep_items_retracted_total,
             &self.metrics.pep_retrievals_total,
@@ -104,13 +104,13 @@ impl northstar_pubsub_xmpp::pep::PepAudienceRouting for ServerNode {
             .into_iter()
             .filter(|(full_jid, target)| {
                 target.available.load(std::sync::atomic::Ordering::Relaxed)
-                    && crate::xmpp::protocol::caps::wants_pep_node(self, full_jid, node)
+                    && northstar_stream::protocol::caps::wants_pep_node(self, full_jid, node)
             })
             .map(|(full_jid, _)| full_jid)
             .collect()
     }
 
     fn pep_interested_resources(&self, bare_jid: &str, node: &str) -> Vec<String> {
-        crate::xmpp::protocol::caps::interested_resources_for_bare(self, bare_jid, node)
+        northstar_stream::protocol::caps::interested_resources_for_bare(self, bare_jid, node)
     }
 }

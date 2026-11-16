@@ -189,7 +189,8 @@ impl S2sHost for ServerNode {
     }
 
     async fn federated_caps_connection_closed(&self, connection_id: Uuid) {
-        crate::xmpp::protocol::caps::federated_caps_connection_closed(self, connection_id).await;
+        northstar_stream::protocol::caps::federated_caps_connection_closed(self, connection_id)
+            .await;
     }
 
     async fn federated_muc_connection_closed(

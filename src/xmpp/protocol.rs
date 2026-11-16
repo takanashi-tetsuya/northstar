@@ -1,14 +1,9 @@
-//! The root's context glue over [`ClientSession`]. The session core and client IQ route table are in
-//! `northstar_stream::protocol`.
+//! Protocol tests and Stage 4 harnesses of the root's `ProtocolSession<ServerNode>`. The session core and the
+//! client IQ route table are in `northstar_stream::protocol`.
 
 pub(crate) mod federated_muc;
 pub(crate) mod messaging;
 pub(crate) mod mix;
 pub(crate) mod muc;
 
-use crate::node::ServerNode;
 pub(crate) use northstar_stream::protocol::*;
-use northstar_stream::transport::Action;
-
-/// The protocol session of the root's own host.
-pub(crate) type ClientSession = ProtocolSession<ServerNode>;

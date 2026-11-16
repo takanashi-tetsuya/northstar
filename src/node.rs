@@ -1,6 +1,10 @@
 pub(crate) mod adapters;
 pub(crate) mod hosts;
 pub(crate) mod modules;
+pub(crate) mod telemetry;
+
+/// The protocol session of the root's own host.
+pub(crate) type ClientSession = northstar_stream::protocol::ProtocolSession<ServerNode>;
 
 pub(crate) use adapters::admin_session_cleanup::AdminSessionCleanupContext;
 pub(crate) use adapters::operation_island_effects::OperationIslandEffects;

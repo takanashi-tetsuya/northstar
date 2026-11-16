@@ -1,7 +1,6 @@
 //! The node's side of the roster context's session handlers.
 
-use crate::node::ServerNode;
-use crate::xmpp::protocol::ClientSession;
+use crate::node::{ClientSession, ServerNode};
 use anyhow::Result;
 use northstar_mix_xmpp::MixHandlers;
 use northstar_muc_xmpp::MucHandlers;

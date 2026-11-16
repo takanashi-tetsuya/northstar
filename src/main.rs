@@ -6,6 +6,7 @@ mod node;
 mod runtime;
 #[cfg(test)]
 mod stage4_replay;
+#[cfg(test)]
 mod xmpp;
 
 use anyhow::{Context, Result};

@@ -42,9 +42,12 @@ northstar-telemetry = { path = "../../platform/northstar-telemetry" }
 northstar-xep-0016 = { path = "../../kernel/northstar-xep-0016" }
 northstar-xep-0045 = { path = "../../kernel/northstar-xep-0045" }
 northstar-xep-0060 = { path = "../../kernel/northstar-xep-0060" }
+northstar-xep-0092 = { path = "../../kernel/northstar-xep-0092" }
 northstar-xep-0115 = { path = "../../kernel/northstar-xep-0115" }
+northstar-xep-0191 = { path = "../../kernel/northstar-xep-0191" }
 northstar-xep-0198 = { path = "../../kernel/northstar-xep-0198" }
 northstar-xep-0199 = { path = "../../kernel/northstar-xep-0199" }
+northstar-xep-0202 = { path = "../../kernel/northstar-xep-0202" }
 northstar-xep-0215 = { path = "../../kernel/northstar-xep-0215" }
 northstar-xep-0280 = { path = "../../kernel/northstar-xep-0280" }
 northstar-xep-0313 = { path = "../../kernel/northstar-xep-0313" }

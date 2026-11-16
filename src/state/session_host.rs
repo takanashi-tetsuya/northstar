@@ -1,11 +1,11 @@
 //! The node's side of the client session core.
 
+use super::iq_route_host::IQ_ROUTES;
 use super::AppState;
 use crate::state::session_cleanup::SessionCleanupAdapters;
 use crate::state::CommittedLocalMucResume;
 use crate::state::FederationRouter;
 use crate::state::RestoredLocalMucOccupants;
-use crate::xmpp::protocol::iq_routes::IQ_ROUTES;
 use crate::xmpp::protocol::messaging::MessageHandlers;
 use crate::xmpp::protocol::ClientSession;
 use crate::xmpp::protocol::SessionHost;

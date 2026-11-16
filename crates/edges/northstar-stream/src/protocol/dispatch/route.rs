@@ -1,6 +1,6 @@
 //! The route type of the client IQ dispatch. A route pairs a handler with a gate that decides whether the
 //! handler answers the request, the request is answered `service-unavailable`, or it is treated like a
-//! request without a route. The composition root builds the route table.
+//! request without a route. `protocol::iq_routes` builds the table for the composition root's host.
 
 use super::super::{ProtocolSession, SessionHost};
 use crate::transport::Action;

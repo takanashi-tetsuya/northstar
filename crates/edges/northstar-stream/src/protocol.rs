@@ -6,6 +6,7 @@ pub mod csi;
 pub mod discovery;
 pub mod dispatch;
 pub mod ibr;
+pub mod iq_routes;
 pub mod misc;
 pub mod sasl2;
 pub mod sm;

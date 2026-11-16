@@ -42,9 +42,6 @@
   "baseline": {
     "src/xmpp/protocol.rs": [
       "state"
-    ],
-    "src/xmpp/protocol/iq_routes.rs": [
-      "state"
     ]
   }
 }

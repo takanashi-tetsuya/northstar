@@ -5716,7 +5716,15 @@
     ],
     [
       "northstar-stream",
+      "northstar-xep-0092"
+    ],
+    [
+      "northstar-stream",
       "northstar-xep-0115"
+    ],
+    [
+      "northstar-stream",
+      "northstar-xep-0191"
     ],
     [
       "northstar-stream",
@@ -5725,6 +5733,10 @@
     [
       "northstar-stream",
       "northstar-xep-0199"
+    ],
+    [
+      "northstar-stream",
+      "northstar-xep-0202"
     ],
     [
       "northstar-stream",

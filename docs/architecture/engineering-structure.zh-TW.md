@@ -1173,8 +1173,10 @@ S29 接在其上。
 
 - `state/*`：各 host trait 的實作、上下文模組的建構，以及叢集與會話清理接縫，S31 組合根收斂時處理。`SessionHost` 仍是
   一個約百個方法的 trait，`AppState` 刪除時依關注點拆分。
-- `xmpp/protocol/{iq_routes,discovery}.rs`：IQ 路由表與服務探索的彙整，
-  組合程式碼，S31 隨組合根移動。`xmpp/capabilities.rs` 剩下執行期工作用的窄遙測，同樣隨組合根移動。
+- `xmpp/capabilities.rs` 剩下執行期工作用的窄遙測，S31 隨組合根移動。
+- 用戶端 IQ 路由表位於 `crates/edges/northstar-stream/src/protocol/iq_routes.rs`（WP-497），
+  對 `IqRouteHost` 泛型；根 crate 在 `src/state/iq_route_host.rs` 綁定上下文處理器並建立一次靜態路由表。
+  服務探索位於 `crates/edges/northstar-stream/src/protocol/discovery.rs`（WP-494）。
 - S2S 入站分派與 IQ 路由目前位於 `crates/edges/northstar-s2s/src/inbound/{dispatch,iq}.rs`（WP-493）。
 - `runtime/*`、`main.rs`、`tools/`：啟動、監督與子命令，S31。
 - `xmpp/protocol/{messaging,muc,mix,federated_muc}` 下的測試與 Stage 4 harness、`xmpp/stage4_*`、`stage4_replay`、

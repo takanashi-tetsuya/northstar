@@ -122,12 +122,9 @@ use sqlx::{
     PgPool, Postgres,
 };
 #[cfg(test)]
-use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::{
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::{atomic::AtomicBool, Arc},
     time::{Duration, Instant},
 };
 use tokio::sync::OwnedSemaphorePermit;
@@ -151,15 +148,11 @@ mod operations_module;
 mod pubsub_module;
 mod room_module;
 mod roster_module;
-mod runtime_config;
-pub(crate) use northstar_auth_application::authentication::Sasl2FastTokenPolicy;
-pub(crate) use northstar_session_application::sm::{SmBufferLimits, SmSessionPolicy};
 mod runtime_contexts;
 mod runtime_control;
 mod service_accessors;
 mod session_module;
 mod suspended_muc;
-mod telemetry_accessors;
 mod upload_module;
 
 use self::abuse_module::*;
@@ -173,7 +166,6 @@ use self::operations_module::*;
 use self::pubsub_module::*;
 use self::room_module::*;
 use self::roster_module::*;
-pub(crate) use self::runtime_config::*;
 pub(crate) use self::runtime_control::*;
 use self::session_module::*;
 use self::upload_module::*;

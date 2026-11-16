@@ -106,11 +106,11 @@ export function verifyFederatedRouteBoundaries(sources) {
   const compactBody = name => functionBody(adapter, name).replace(/\s+/g, '');
   const hostBody = name => functionBody(host, name).replace(/\s+/g, '');
   requireMatch(compactBody('record_local_accept'), /self\.0\.record_s2s_online_accept\(durable\);/, 'S2S local acceptance must retain federation queue telemetry and delivery kind');
-  if (hostBody('record_s2s_online_accept') !== 'self.s2s_online_queue_telemetry().accepted(durable);') {
+  if (hostBody('record_s2s_online_accept') !== 'northstar_federation_application::telemetry::OnlineQueueAcceptanceTelemetry::new(&self.metrics.online_queue_durable_acceptances_total,&self.metrics.online_queue_volatile_acceptances_total,).accepted(durable);') {
     throw new Error('S2S local acceptance must retain federation queue telemetry and delivery kind');
   }
   requireMatch(compactBody('post_accept_failed'), /self\.0\.record_s2s_post_accept_failure\(\);/, 'S2S post-accept failures must retain federation telemetry');
-  if (hostBody('record_s2s_post_accept_failure') !== 'self.s2s_inbound_delivery_telemetry().post_accept_failed();') {
+  if (hostBody('record_s2s_post_accept_failure') !== 'northstar_federation_application::telemetry::InboundDeliveryTelemetry::new(&self.metrics.post_accept_side_effect_failures_total,&self.metrics.messages_routed_total,).post_accept_failed();') {
     throw new Error('S2S post-accept failures must retain federation telemetry');
   }
   if (/\bpersonal_message_telemetry\s*\(/.test(adapter)) throw new Error('S2S adapter must not record C2S origin telemetry');
@@ -129,7 +129,7 @@ export function verifyFederatedRouteBoundaries(sources) {
   requireMatch(compactBody('route_available_remote'), /self\.0\.route_s2s_message_to_available_remote_resources\(jid,stanza,delivery\)\.await/, 'S2S fanout must use its federation remote adapter');
   requireMatch(compactBody('route_remote_primary'), /self\.0\.route_s2s_message_to_remote_primary\(jid,stanza,delivery\)\.await/, 'S2S primary must use its federation remote adapter');
   const primary = hostBody('route_s2s_message_to_remote_primary');
-  requireMatch(primary, /self\.cluster\(\)\.route_s2s_message_to_remote_primary\(jid,stanza,delivery,&self\.personal_message_telemetry\(\),?\)\.await/, 'S2S primary must use its federation remote adapter');
+  requireMatch(primary, /self\.cluster\(\)\.route_s2s_message_to_remote_primary\(jid,stanza,delivery,&northstar_message_application::telemetry::PersonalMessageTelemetry::new\([^()]*\),?\)\.await/, 'S2S primary must use its federation remote adapter');
   requireMatch(primary, /delivered:routed\.delivered,accepted_full_jid:routed\.accepted_full_jid,/, 'S2S remote receipt must preserve acceptance and Carbon exclusion');
   requireMatch(compactBody('rearm_direct_route'), /DirectMessageRoutePort::rearm_direct_route\(self\.0,delivery\)\.await;/, 'S2S rearm must retain the exact delivery claim');
   return { caller: 'route_inbound_message', owner: 'route_federated', adapter: 'FederatedDirectRoute' };

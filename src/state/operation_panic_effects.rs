@@ -15,7 +15,9 @@ pub(crate) struct OperationPanicEffects {
 impl AppState {
     pub(crate) fn operation_panic_effects(&self) -> OperationPanicEffects {
         OperationPanicEffects {
-            routes: self.panic_disconnect_routes(),
+            routes: northstar_operations_xmpp::operation_runtime::LocalPanicDisconnectRoutes::new(
+                std::sync::Arc::clone(&self.sessions),
+            ),
             sm: self.session_cleanup_sm_revoker(),
         }
     }

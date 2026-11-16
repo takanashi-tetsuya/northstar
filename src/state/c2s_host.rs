@@ -19,7 +19,7 @@ impl TransportHost for AppState {
     type ConnectionGuard = ClientConnectionGuard;
 
     fn local_domain(&self) -> &str {
-        AppState::local_domain(self)
+        &self.config.domain
     }
 
     fn acquire_client_connection(self: &Arc<Self>, ip: IpAddr) -> Option<ClientConnectionGuard> {
@@ -51,23 +51,23 @@ impl TransportHost for AppState {
 
 impl C2sHost for AppState {
     fn tls_context(&self) -> &northstar_security::tls::TlsContext {
-        AppState::tls_context(self)
+        &self.tls_context
     }
 
     fn record_c2s_tcp_connection(&self) {
-        AppState::record_c2s_tcp_connection(self);
+        self.metrics.record_c2s_tcp_connection();
     }
 
     fn record_c2s_websocket_connection(&self) {
-        AppState::record_c2s_websocket_connection(self);
+        self.metrics.record_c2s_websocket_connection();
     }
 
     fn sm_live_lease_seconds(&self) -> u64 {
-        self.sm_session_policy().live_lease_seconds
+        self.config.sm_live_lease_seconds
     }
 
     fn c2s_backpressure_telemetry(&self) -> C2sBackpressureTelemetry {
-        AppState::c2s_backpressure_telemetry(self)
+        self.metrics.c2s_backpressure_telemetry()
     }
 }
 

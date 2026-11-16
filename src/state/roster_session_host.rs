@@ -44,15 +44,17 @@ impl RosterSessionHost for AppState {
     }
 
     fn post_accept_failure_telemetry(&self) -> PostAcceptFailureTelemetry {
-        AppState::post_accept_failure_telemetry(self)
+        northstar_roster_xmpp::PostAcceptFailureTelemetry::new(std::sync::Arc::clone(
+            &self.metrics.post_accept_side_effect_failures_total,
+        ))
     }
 
     fn roster_outbox_policy(&self) -> S2sOutboxPolicy {
-        self.federation_outbox().outbox_policy()
+        self.federation.federation_outbox.outbox_policy()
     }
 
     fn roster_wake_outbox(&self) {
-        self.federation_outbox().wake_outbox();
+        self.federation.federation_outbox.wake_outbox();
     }
 
     async fn deliver_committed_roster_change(
@@ -99,13 +101,19 @@ impl RosterSessionHost for AppState {
                     // server-authoritative list again after reconnect.
                     session.sender.disconnect_backpressured_transport();
                     session.disconnect.cancel();
-                    self.post_accept_failure_telemetry().record_failure();
+                    northstar_roster_xmpp::PostAcceptFailureTelemetry::new(std::sync::Arc::clone(
+                        &self.metrics.post_accept_side_effect_failures_total,
+                    ))
+                    .record_failure();
                     tracing::warn!(%jid, ?error, "XEP-0191 blocklist push queue closed; disconnecting stale resource");
                 }
                 Err(_) => {
                     session.sender.disconnect_backpressured_transport();
                     session.disconnect.cancel();
-                    self.post_accept_failure_telemetry().record_failure();
+                    northstar_roster_xmpp::PostAcceptFailureTelemetry::new(std::sync::Arc::clone(
+                        &self.metrics.post_accept_side_effect_failures_total,
+                    ))
+                    .record_failure();
                     tracing::warn!(%jid, "timed out delivering XEP-0191 blocklist push; disconnecting stale resource");
                 }
             }
@@ -190,7 +198,10 @@ impl RosterSessionHost for AppState {
                 // state instead of allowing later pushes to cross this gap.
                 session.sender.disconnect_backpressured_transport();
                 session.disconnect.cancel();
-                self.post_accept_failure_telemetry().record_failure();
+                northstar_roster_xmpp::PostAcceptFailureTelemetry::new(std::sync::Arc::clone(
+                    &self.metrics.post_accept_side_effect_failures_total,
+                ))
+                .record_failure();
                 tracing::warn!(
                     %jid,
                     list = %name,
@@ -222,7 +233,7 @@ impl RosterSessionHost for AppState {
     }
 
     fn presence_component_domain(&self, domain: &str) -> bool {
-        self.xmpp_component_domain_configured(domain)
+        self.config.component_domain_configured(domain)
     }
 
     async fn deliver_directed_presence(
@@ -610,7 +621,7 @@ where
                 continue;
             };
             let delivery = set_to(&base_presence, &target);
-            if target_jid.domainpart() == state.local_domain() {
+            if target_jid.domainpart() == state.config.domain.as_str() {
                 let mut recipients = state.sessions.session_entries_for(&target);
                 if target_jid.resourcepart().is_none() {
                     recipients.retain(|(_, recipient)| recipient.available.load(Ordering::Acquire));
@@ -623,9 +634,13 @@ where
                         send_remote(node_id, target.clone(), delivery.clone()).await?;
                     }
                 }
-            } else if state.xmpp_external_route_domain_allowed(target_jid.domainpart()) {
+            } else if state
+                .config
+                .external_route_domain_allowed(target_jid.domainpart())
+            {
                 let _ = state
-                    .federation_outbox()
+                    .federation
+                    .federation_outbox
                     .send(target_jid.domainpart(), delivery, Some(from.clone()))
                     .await;
             }
@@ -790,7 +805,9 @@ impl PresenceDeliveryHost for AppState {
                 recipient,
                 availability_only,
                 authority,
-                &self.presence_probe_telemetry(),
+                &northstar_cluster::presence_routing::PresenceProbeTelemetry::new(
+                    &self.metrics.cluster_presence_probe_failures_total,
+                ),
             )
             .await
     }

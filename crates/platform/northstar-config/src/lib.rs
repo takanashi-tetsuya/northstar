@@ -11,6 +11,7 @@ mod listeners;
 mod loading;
 mod parsing;
 mod raw;
+mod runtime_policy;
 mod runtime_validation;
 mod web_origin;
 
@@ -23,6 +24,7 @@ pub use self::domain_policy::*;
 use self::listeners::*;
 use self::parsing::*;
 pub use self::raw::*;
+pub use self::runtime_policy::RuntimeListenerPolicy;
 use self::runtime_validation::*;
 pub use self::web_origin::*;
 use northstar_security::secret_files::{read_protected_utf8_file, read_secret_file};

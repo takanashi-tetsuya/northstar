@@ -28,15 +28,15 @@ impl MixHost for AppState {
     }
 
     fn federation_outbox(&self) -> &FederationRouter {
-        AppState::federation_outbox(self)
+        &self.federation.federation_outbox
     }
 
     fn local_domain(&self) -> &str {
-        AppState::local_domain(self)
+        &self.config.domain
     }
 
     fn server_name(&self) -> &str {
-        AppState::server_name(self)
+        &self.config.server_name
     }
 
     fn pending_mix_iq(&self) -> &MixIqRelayIndex {
@@ -48,11 +48,11 @@ impl MixHost for AppState {
     }
 
     fn mix_muc_mirror_enabled(&self) -> bool {
-        AppState::mix_muc_mirror_enabled(self)
+        self.config.mix_muc_mirror_enabled
     }
 
     fn xmpp_extension_enabled(&self, id: northstar_xep_core::XepId) -> bool {
-        AppState::xmpp_extension_enabled(self, id)
+        self.config.xmpp_extension_enabled(id)
     }
 
     fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
@@ -84,7 +84,10 @@ impl MixHost for AppState {
     }
 
     fn validate_routed_message(&self, root: Node<'_, '_>) -> Result<(), &'static str> {
-        AppState::validate_routed_message(self, root)
+        northstar_message_core::validation::validate_routed_message(
+            root,
+            &self.config.xmpp_extensions,
+        )
     }
 
     fn local_mix_presence_route_is_current(

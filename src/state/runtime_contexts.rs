@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::state::http_contexts::ReadinessContext;
+use northstar_s2s::host::ComponentRuntimePolicy;
 
 impl AppState {
     pub(crate) fn background_housekeeping_counters(
@@ -199,12 +200,6 @@ impl AppState {
             .await
     }
 
-    /// Read the federation kill switch with acquire ordering so a caller that
-    /// observes an applied value also observes the preceding policy update.
-    pub(crate) fn island_mode_enabled(&self) -> bool {
-        self.federation.federation_write_policy.enabled()
-    }
-
     /// Acquire the application-stanza write boundary and revalidate island
     /// mode after route admission. The caller holds the returned guard over
     /// the socket write, making a completed policy transition linearizable.
@@ -212,24 +207,6 @@ impl AppState {
         &self,
     ) -> Option<tokio::sync::RwLockReadGuard<'_, ()>> {
         self.federation.federation_write_policy.permit().await
-    }
-
-    /// Read the public-registration kill switch with acquire ordering.
-    pub(crate) fn registration_is_closed(&self) -> bool {
-        self.config.registration_dependency_locked()
-            || self.registration_closed.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn registration_mode(&self) -> northstar_config::RegistrationMode {
-        if self.registration_is_closed() {
-            northstar_config::RegistrationMode::Closed
-        } else {
-            self.config.configured_registration_mode()
-        }
-    }
-
-    pub(crate) fn registration_requires_invitation(&self) -> bool {
-        self.registration_mode() == northstar_config::RegistrationMode::InvitationOnly
     }
 
     pub(crate) fn http_registration_availability(

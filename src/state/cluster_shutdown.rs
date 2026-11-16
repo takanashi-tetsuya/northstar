@@ -20,7 +20,11 @@ impl AppState {
             tokio::time::timeout(quiesce_timeout, self.cluster.quiesce_publication())
                 .await
                 .ok()?;
-        let release_service = self.cluster_instance_release_service();
+        let release_service = northstar_session_application::cluster_instance_release::ClusterInstanceReleaseService::new(
+            northstar_session_postgres::cluster_instance_release_repository::PostgresClusterInstanceReleaseRepository::new(
+                self.pool.clone(),
+            ),
+        );
         Some(
             self.cluster
                 .release_instance_authority_with(&release_service)

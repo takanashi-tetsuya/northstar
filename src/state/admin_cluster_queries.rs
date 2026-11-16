@@ -37,7 +37,7 @@ impl AppState {
     pub(crate) async fn admin_activity_bare_jids(
         &self,
     ) -> anyhow::Result<(BTreeSet<String>, BTreeSet<String>)> {
-        let idle_seconds = self.admin_activity_idle_seconds();
+        let idle_seconds = self.config.admin_idle_seconds;
         let (mut online, mut active) = self
             .sessions
             .local_activity_bare_jids(Duration::from_secs(idle_seconds));

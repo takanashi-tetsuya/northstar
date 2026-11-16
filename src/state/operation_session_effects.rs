@@ -17,9 +17,18 @@ pub(crate) struct OperationSessionEffects {
 impl AppState {
     pub(crate) fn operation_session_effects(&self) -> OperationSessionEffects {
         OperationSessionEffects {
-            kick: self.session_kick_routes(),
-            broadcast: self.broadcast_routes(),
-            generation_cleanup: self.generation_cleanup_routes(),
+            kick: northstar_operations_xmpp::operation_runtime::LocalSessionKickRoutes::new(
+                std::sync::Arc::clone(&self.sessions),
+            ),
+            broadcast: northstar_operations_xmpp::operation_runtime::LocalBroadcastRoutes::new(
+                std::sync::Arc::clone(&self.sessions),
+                self.config.domain.clone(),
+                self.cluster.node_id.clone(),
+            ),
+            generation_cleanup:
+                northstar_operations_xmpp::operation_runtime::LocalGenerationCleanupRoutes::new(
+                    std::sync::Arc::clone(&self.sessions),
+                ),
         }
     }
 }

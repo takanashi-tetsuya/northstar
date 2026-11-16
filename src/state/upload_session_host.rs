@@ -8,19 +8,26 @@ use northstar_upload_xmpp::UploadSessionHost;
 
 impl UploadSessionHost for AppState {
     fn upload_enabled(&self) -> bool {
-        self.xmpp_http_upload_enabled()
+        self.config.xmpp_http_upload_enabled()
     }
 
     fn upload_local_domain(&self) -> &str {
-        self.local_domain()
+        self.config.domain.as_str()
     }
 
     fn upload_public_url(&self) -> &str {
-        AppState::upload_public_url(self)
+        &self.config.public_url
     }
 
     fn upload_slot_limits(&self) -> UploadSlotLimits {
-        AppState::upload_slot_limits(self)
+        northstar_upload_application::UploadSlotLimits {
+            max_file_bytes: self.config.upload_max_bytes,
+            max_files_per_user: self.config.upload_max_files_per_user,
+            max_bytes_per_user: self.config.upload_max_bytes_per_user,
+            max_retained_files: self.config.upload_storage_max_retained_files,
+            max_retained_bytes: self.config.upload_storage_max_retained_bytes,
+            max_pending_jobs: self.config.upload_storage_max_pending_jobs,
+        }
     }
 
     fn upload_storage_backend(&self) -> &'static str {

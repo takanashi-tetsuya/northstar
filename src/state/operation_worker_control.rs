@@ -21,7 +21,12 @@ impl AppState {
         OperationWorkerControl {
             journal: self.operations.operation_journal_worker_service.clone(),
             effects: self.operations.operation_effect_fence_service.clone(),
-            routes: self.broadcast_routes().target_snapshot(),
+            routes: northstar_operations_xmpp::operation_runtime::LocalBroadcastRoutes::new(
+                std::sync::Arc::clone(&self.sessions),
+                self.config.domain.clone(),
+                self.cluster.node_id.clone(),
+            )
+            .target_snapshot(),
         }
     }
 }

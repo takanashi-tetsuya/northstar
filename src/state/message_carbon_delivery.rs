@@ -10,7 +10,8 @@ impl CarbonDeliveryPort for AppState {
     type Session = OnlineSession;
 
     fn enabled(&self) -> bool {
-        self.xmpp_extension_enabled(northstar_xep_0280::XEP_ID)
+        self.config
+            .xmpp_extension_enabled(northstar_xep_0280::XEP_ID)
     }
 
     fn sessions(&self, bare: &str) -> Vec<(String, Self::Session)> {
@@ -60,7 +61,28 @@ impl CarbonDeliveryPort for AppState {
                 current,
                 delivered_self,
                 muc_scope,
-                &self.personal_message_telemetry(),
+                &northstar_message_application::telemetry::PersonalMessageTelemetry::new(
+                    northstar_message_application::telemetry::PersonalMessageTelemetryCells {
+                        routing_duration: &self.metrics.routing_duration_seconds,
+                        rate_limited: &self.metrics.rate_limited_total,
+                        abuse_backend_failures: &self.metrics.anti_abuse_backend_failures_total,
+                        messages_routed: &self.metrics.messages_routed_total,
+                        post_accept_failures: &self.metrics.post_accept_side_effect_failures_total,
+                        durable_queue_acceptances: &self
+                            .metrics
+                            .online_queue_durable_acceptances_total,
+                        volatile_queue_acceptances: &self
+                            .metrics
+                            .online_queue_volatile_acceptances_total,
+                        carbon_delivery_failures: &self
+                            .metrics
+                            .carbon_post_accept_delivery_failures_total,
+                        carbon_target_timeouts: &self.metrics.carbon_fanout_target_timeouts_total,
+                        cluster_legacy_acceptances: &self
+                            .metrics
+                            .cluster_legacy_delivery_acceptances_total,
+                    },
+                ),
             )
             .await;
     }
@@ -76,16 +98,65 @@ impl CarbonDeliveryPort for AppState {
                 recipient,
                 delivered,
                 forwarded,
-                &self.personal_message_telemetry(),
+                &northstar_message_application::telemetry::PersonalMessageTelemetry::new(
+                    northstar_message_application::telemetry::PersonalMessageTelemetryCells {
+                        routing_duration: &self.metrics.routing_duration_seconds,
+                        rate_limited: &self.metrics.rate_limited_total,
+                        abuse_backend_failures: &self.metrics.anti_abuse_backend_failures_total,
+                        messages_routed: &self.metrics.messages_routed_total,
+                        post_accept_failures: &self.metrics.post_accept_side_effect_failures_total,
+                        durable_queue_acceptances: &self
+                            .metrics
+                            .online_queue_durable_acceptances_total,
+                        volatile_queue_acceptances: &self
+                            .metrics
+                            .online_queue_volatile_acceptances_total,
+                        carbon_delivery_failures: &self
+                            .metrics
+                            .carbon_post_accept_delivery_failures_total,
+                        carbon_target_timeouts: &self.metrics.carbon_fanout_target_timeouts_total,
+                        cluster_legacy_acceptances: &self
+                            .metrics
+                            .cluster_legacy_delivery_acceptances_total,
+                    },
+                ),
             )
             .await;
     }
 
     fn delivery_failed(&self) {
-        self.personal_message_telemetry().carbon_delivery_failed();
+        northstar_message_application::telemetry::PersonalMessageTelemetry::new(
+            northstar_message_application::telemetry::PersonalMessageTelemetryCells {
+                routing_duration: &self.metrics.routing_duration_seconds,
+                rate_limited: &self.metrics.rate_limited_total,
+                abuse_backend_failures: &self.metrics.anti_abuse_backend_failures_total,
+                messages_routed: &self.metrics.messages_routed_total,
+                post_accept_failures: &self.metrics.post_accept_side_effect_failures_total,
+                durable_queue_acceptances: &self.metrics.online_queue_durable_acceptances_total,
+                volatile_queue_acceptances: &self.metrics.online_queue_volatile_acceptances_total,
+                carbon_delivery_failures: &self.metrics.carbon_post_accept_delivery_failures_total,
+                carbon_target_timeouts: &self.metrics.carbon_fanout_target_timeouts_total,
+                cluster_legacy_acceptances: &self.metrics.cluster_legacy_delivery_acceptances_total,
+            },
+        )
+        .carbon_delivery_failed();
     }
 
     fn target_timed_out(&self) {
-        self.personal_message_telemetry().carbon_target_timed_out();
+        northstar_message_application::telemetry::PersonalMessageTelemetry::new(
+            northstar_message_application::telemetry::PersonalMessageTelemetryCells {
+                routing_duration: &self.metrics.routing_duration_seconds,
+                rate_limited: &self.metrics.rate_limited_total,
+                abuse_backend_failures: &self.metrics.anti_abuse_backend_failures_total,
+                messages_routed: &self.metrics.messages_routed_total,
+                post_accept_failures: &self.metrics.post_accept_side_effect_failures_total,
+                durable_queue_acceptances: &self.metrics.online_queue_durable_acceptances_total,
+                volatile_queue_acceptances: &self.metrics.online_queue_volatile_acceptances_total,
+                carbon_delivery_failures: &self.metrics.carbon_post_accept_delivery_failures_total,
+                carbon_target_timeouts: &self.metrics.carbon_fanout_target_timeouts_total,
+                cluster_legacy_acceptances: &self.metrics.cluster_legacy_delivery_acceptances_total,
+            },
+        )
+        .carbon_target_timed_out();
     }
 }

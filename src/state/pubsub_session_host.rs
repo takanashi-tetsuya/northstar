@@ -12,7 +12,10 @@ use northstar_roster_xmpp::presence::inject_vcard_avatar_hash;
 
 impl PubSubSessionHost for AppState {
     fn pep_account_quotas(&self) -> PepQuotas {
-        AppState::pep_account_quotas(self)
+        northstar_pubsub_core::PepQuotas {
+            max_nodes: self.config.pep_max_nodes_per_account,
+            max_storage_bytes: self.config.pep_max_storage_bytes_per_account,
+        }
     }
 
     fn profile_service(&self) -> &ProfileService<impl ProfileRepository> {
@@ -24,15 +27,30 @@ impl PubSubSessionHost for AppState {
     }
 
     fn pep_record_published(&self, count: u64) {
-        self.pep_telemetry().published(count);
+        crate::xmpp::capabilities::PepTelemetry::new(
+            &self.metrics.pep_items_published_total,
+            &self.metrics.pep_items_retracted_total,
+            &self.metrics.pep_retrievals_total,
+        )
+        .published(count);
     }
 
     fn pep_record_retracted(&self, count: u64) {
-        self.pep_telemetry().retracted(count);
+        crate::xmpp::capabilities::PepTelemetry::new(
+            &self.metrics.pep_items_published_total,
+            &self.metrics.pep_items_retracted_total,
+            &self.metrics.pep_retrievals_total,
+        )
+        .retracted(count);
     }
 
     fn pep_record_retrieved(&self) {
-        self.pep_telemetry().retrieved();
+        crate::xmpp::capabilities::PepTelemetry::new(
+            &self.metrics.pep_items_published_total,
+            &self.metrics.pep_items_retracted_total,
+            &self.metrics.pep_retrievals_total,
+        )
+        .retrieved();
     }
 
     fn refresh_avatar_presence(&self, owner_bare: &str, hash: Option<&str>) {
@@ -54,18 +72,17 @@ impl PubSubSessionHost for AppState {
 
 impl northstar_pubsub_xmpp::pubsub::PubSubHost for AppState {
     fn pubsub_local_domain(&self) -> &str {
-        AppState::local_domain(self)
+        &self.config.domain
     }
 
     fn pubsub_server_name(&self) -> &str {
-        AppState::server_name(self)
+        &self.config.server_name
     }
 
     fn pubsub_node_owner_limits(&self) -> northstar_pubsub_xmpp::pubsub::PubSubOwnerLimits {
-        let limits = AppState::pubsub_owner_limits(self);
         northstar_pubsub_xmpp::pubsub::PubSubOwnerLimits {
-            max_nodes: limits.max_nodes,
-            max_storage_bytes: limits.max_storage_bytes,
+            max_nodes: self.config.pubsub_max_nodes_per_owner,
+            max_storage_bytes: self.config.pubsub_max_storage_bytes_per_owner,
         }
     }
 
@@ -78,7 +95,7 @@ impl northstar_pubsub_xmpp::pubsub::PubSubHost for AppState {
 
 impl northstar_pubsub_xmpp::pep::PepAudienceRouting for AppState {
     fn pep_routing_local_domain(&self) -> &str {
-        self.local_domain()
+        self.config.domain.as_str()
     }
 
     fn pep_available_resources_wanting(&self, bare_jid: &str, node: &str) -> Vec<String> {

@@ -8,7 +8,7 @@ use northstar_archive_core::{
 };
 use northstar_delivery_core::node_delivery::NodeDeliveryReceipt;
 use northstar_federation_core::S2sOutboxPolicy;
-use northstar_message_core::DirectPostCommitMode;
+use northstar_message_core::{DirectPostCommitMode, OfflineDeliveryLimits};
 use northstar_muc_xmpp::ports::MucHost;
 use northstar_room_application::mix_service::MixService;
 use northstar_room_application::muc_service::MucService;
@@ -67,11 +67,11 @@ impl MucHost for AppState {
     }
 
     fn federation_outbox_policy(&self) -> S2sOutboxPolicy {
-        self.federation_outbox().outbox_policy()
+        self.federation.federation_outbox.outbox_policy()
     }
 
     fn wake_federation_outbox(&self) {
-        self.federation_outbox().wake_outbox();
+        self.federation.federation_outbox.wake_outbox();
     }
 
     async fn send_federated(
@@ -80,7 +80,8 @@ impl MucHost for AppState {
         stanza: String,
         bounce_to: Option<String>,
     ) -> bool {
-        self.federation_outbox()
+        self.federation
+            .federation_outbox
             .send(target_domain, stanza, bounce_to)
             .await
     }
@@ -123,7 +124,7 @@ impl MucHost for AppState {
     }
 
     fn archive_requires_encryption(&self) -> bool {
-        AppState::archive_requires_encryption(self)
+        self.config.require_encrypted_archive
     }
 
     async fn blocked_muc_recipient_accounts(
@@ -400,7 +401,14 @@ impl MucHost for AppState {
     }
 
     fn federated_muc_telemetry(&self) -> northstar_room_core::telemetry::FederatedMucTelemetry<'_> {
-        AppState::federated_muc_telemetry(self)
+        northstar_room_core::telemetry::FederatedMucTelemetry::new(
+            &self.metrics.muc_post_commit_delivery_failures_total,
+            &self.metrics.post_accept_side_effect_failures_total,
+            &self.metrics.capacity_reservations_rejected_total,
+            &self.metrics.online_queue_durable_acceptances_total,
+            &self.metrics.online_queue_volatile_acceptances_total,
+            &self.metrics.messages_routed_total,
+        )
     }
 
     async fn join_cluster_muc_room(&self, room: &str) -> Result<()> {
@@ -412,7 +420,7 @@ impl MucHost for AppState {
     }
 
     fn local_domain(&self) -> &str {
-        AppState::local_domain(self)
+        &self.config.domain
     }
 
     fn local_muc_occupant_by_nick(&self, room_jid: &str, nick: &str) -> Option<MucOccupant> {
@@ -429,7 +437,7 @@ impl MucHost for AppState {
     }
 
     fn mix_muc_mirror_enabled(&self) -> bool {
-        AppState::mix_muc_mirror_enabled(self)
+        self.config.mix_muc_mirror_enabled
     }
 
     fn move_local_muc_nickname_exact(
@@ -448,7 +456,7 @@ impl MucHost for AppState {
     }
 
     fn muc_mam_retention_days(&self) -> i64 {
-        AppState::muc_mam_retention_days(self)
+        self.config.muc_mam_retention_days
     }
 
     fn muc_occupants_for(&self, room_jid: &str) -> Vec<(String, MucOccupant)> {
@@ -464,11 +472,23 @@ impl MucHost for AppState {
     }
 
     fn muc_telemetry(&self) -> northstar_room_core::telemetry::MucTelemetry<'_> {
-        AppState::muc_telemetry(self)
+        northstar_room_core::telemetry::MucTelemetry::new(
+            &self.metrics.muc_post_commit_delivery_failures_total,
+            &self.metrics.post_accept_side_effect_failures_total,
+            &self.metrics.cluster_muc_authority_rejections_total,
+            &self.metrics.online_queue_durable_acceptances_total,
+            &self.metrics.online_queue_volatile_acceptances_total,
+            &self.metrics.messages_routed_total,
+            &self.metrics.capacity_reservations_rejected_total,
+        )
     }
 
     fn offline_delivery_limits(&self) -> OfflineDeliveryLimits {
-        AppState::offline_delivery_limits(self)
+        northstar_message_core::OfflineDeliveryLimits {
+            max_messages: self.config.offline_max_messages_per_account,
+            max_bytes: self.config.offline_max_bytes_per_account,
+            ttl_days: self.config.offline_message_ttl_days,
+        }
     }
 
     fn publish_local_muc_join_if_vacant(&self, joining: &MucOccupant) -> LocalMucJoinPublication {
@@ -643,7 +663,7 @@ impl MucHost for AppState {
     }
 
     fn server_name(&self) -> &str {
-        AppState::server_name(self)
+        &self.config.server_name
     }
 
     fn set_local_muc_affiliation_exact(
@@ -679,7 +699,10 @@ impl MucHost for AppState {
     }
 
     fn validate_routed_message(&self, root: roxmltree::Node<'_, '_>) -> Result<(), &'static str> {
-        AppState::validate_routed_message(self, root)
+        northstar_message_core::validation::validate_routed_message(
+            root,
+            &self.config.xmpp_extensions,
+        )
     }
 
     fn validated_local_muc_occupant(
@@ -703,10 +726,10 @@ impl MucHost for AppState {
     }
 
     fn xmpp_extension_enabled(&self, id: northstar_xep_core::XepId) -> bool {
-        AppState::xmpp_extension_enabled(self, id)
+        self.config.xmpp_extension_enabled(id)
     }
 
     fn xmpp_external_route_domain_allowed(&self, domain: &str) -> bool {
-        AppState::xmpp_external_route_domain_allowed(self, domain)
+        self.config.external_route_domain_allowed(domain)
     }
 }

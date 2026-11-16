@@ -9,7 +9,10 @@ use std::sync::atomic::Ordering;
 
 impl AppState {
     pub(crate) async fn dispatch_push_notification(&self, recipient_id: uuid::Uuid) -> Result<()> {
-        if !self.xmpp_extension_enabled(northstar_xep_0357::XEP_ID) {
+        if !self
+            .config
+            .xmpp_extension_enabled(northstar_xep_0357::XEP_ID)
+        {
             return Ok(());
         }
         self.push_service()
@@ -25,7 +28,7 @@ impl PushNotificationRouter for AppState {
             .with_message_count(counts.message_count as u64)
             .with_pending_subscription_count(counts.pending_subscription_count as u64);
         let notification = northstar_xep_0357::build_notification_iq(
-            self.local_domain(),
+            self.config.domain.as_str(),
             &delivery.service_jid,
             &request_id,
             (!delivery.node.is_empty()).then_some(delivery.node.as_str()),
@@ -37,7 +40,7 @@ impl PushNotificationRouter for AppState {
             northstar_xmpp_types::jid::CanonicalJid::parse_bare(&delivery.service_jid).ok();
         if service
             .as_ref()
-            .is_some_and(|jid| jid.domainpart() == self.local_domain())
+            .is_some_and(|jid| jid.domainpart() == self.config.domain.as_str())
         {
             let mut local_targets = self.sessions.session_entries_for(&delivery.service_jid);
             // Select the highest-priority available local resource, with its
@@ -72,7 +75,8 @@ impl PushNotificationRouter for AppState {
         } else if let Some(domain) = service.as_ref().map(|jid| jid.domainpart()) {
             if self.federation_domain_allowed(domain) {
                 delivered = self
-                    .federation_outbox()
+                    .federation
+                    .federation_outbox
                     .send(domain, notification.clone(), None)
                     .await;
             }
@@ -81,14 +85,29 @@ impl PushNotificationRouter for AppState {
     }
 
     fn routed(&self) {
-        self.push_delivery_telemetry().routed();
+        northstar_session_application::telemetry::PushDeliveryTelemetry::new(
+            &self.metrics.push_notifications_failed_total,
+            &self.metrics.push_notifications_routed_total,
+            &self.metrics.push_notifications_attempted_total,
+        )
+        .routed();
     }
 
     fn failed(&self) {
-        self.push_delivery_telemetry().failed();
+        northstar_session_application::telemetry::PushDeliveryTelemetry::new(
+            &self.metrics.push_notifications_failed_total,
+            &self.metrics.push_notifications_routed_total,
+            &self.metrics.push_notifications_attempted_total,
+        )
+        .failed();
     }
 
     fn attempted(&self) {
-        self.push_delivery_telemetry().attempted();
+        northstar_session_application::telemetry::PushDeliveryTelemetry::new(
+            &self.metrics.push_notifications_failed_total,
+            &self.metrics.push_notifications_routed_total,
+            &self.metrics.push_notifications_attempted_total,
+        )
+        .attempted();
     }
 }

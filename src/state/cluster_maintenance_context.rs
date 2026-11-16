@@ -21,7 +21,11 @@ impl AppState {
             ))
             .expect("configured XMPP domain must form a valid MUC domain"),
             self.cluster_maintenance_locals(),
-            self.cluster_muc_occupancy_maintenance_service(),
+            northstar_room_application::muc_service::ClusterMucOccupancyMaintenanceService::new(
+                northstar_room_postgres::room::PostgresClusterMucOccupancyMaintenanceRepository::new(
+                    self.pool.clone(),
+                ),
+            ),
         )
     }
 
@@ -43,8 +47,16 @@ impl AppState {
                     self.pool.clone(),
                 ),
             ),
-            cluster_authority: self.cluster_authority_service(),
-            muc_occupancy: self.cluster_muc_occupancy_maintenance_service(),
+            cluster_authority: northstar_session_application::cluster_authority::ClusterAuthorityService::new(
+                northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
+                    self.pool.clone(),
+                ),
+            ),
+            muc_occupancy: northstar_room_application::muc_service::ClusterMucOccupancyMaintenanceService::new(
+                northstar_room_postgres::room::PostgresClusterMucOccupancyMaintenanceRepository::new(
+                    self.pool.clone(),
+                ),
+            ),
         }
     }
 }

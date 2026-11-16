@@ -1,8 +1,8 @@
 //! SM persistence, suspended MUC handoff, and bounded recovery for cleanup.
 
-use super::{AppState, SmBufferLimits, SuspendedMucEndpoint};
+use super::{AppState, SuspendedMucEndpoint};
 use anyhow::Result;
-use northstar_session_application::sm::{SmService, SmSessionSnapshot};
+use northstar_session_application::sm::{SmBufferLimits, SmService, SmSessionSnapshot};
 use northstar_session_application::sm_capacity::{SmCapacityLease, SmMemoryGovernor};
 use northstar_session_application::SessionCleanupAccount;
 use northstar_stream::session_cleanup::recovery::SmSuspensionRecoveryQueue;
@@ -28,7 +28,11 @@ impl AppState {
             sessions: self.session.sm_service.clone(),
             recovery: Arc::clone(&self.session.sm_suspension_recovery),
             memory: Arc::clone(&self.session.sm_memory_governor),
-            limits: self.sm_buffer_limits(),
+            limits: northstar_session_application::sm::SmBufferLimits {
+                max_unacked_stanzas: self.config.sm_max_unacked_stanzas,
+                max_unacked_bytes: self.config.sm_max_unacked_bytes,
+                max_snapshot_bytes: self.config.sm_max_snapshot_bytes,
+            },
         }
     }
 }

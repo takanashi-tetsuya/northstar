@@ -14,7 +14,11 @@ impl AppState {
             presence: self.roster.presence_service.clone(),
             message: self.message.message_service.clone(),
             mix: self.room.mix_service.clone(),
-            verifier: self.node_message_contract_verifier(),
+            verifier: northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier::new(
+                northstar_session_postgres::node_message_projection_repository::PostgresNodeMessageProjectionRepository::new(
+                    self.pool.clone(),
+                ),
+            ),
             metrics: Arc::clone(&self.metrics),
         }
     }

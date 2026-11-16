@@ -32,11 +32,11 @@ impl S2sHost for AppState {
     type SmOutboxStore = PostgresSmOutboxRepository;
 
     fn local_domain(&self) -> &str {
-        AppState::local_domain(self)
+        &self.config.domain
     }
 
     fn island_mode_enabled(&self) -> bool {
-        AppState::island_mode_enabled(self)
+        self.federation.federation_write_policy.enabled()
     }
 
     async fn federation_delivery_permit(&self) -> Option<RwLockReadGuard<'_, ()>> {
@@ -48,31 +48,35 @@ impl S2sHost for AppState {
     }
 
     fn s2s_federation_enabled(&self) -> bool {
-        AppState::s2s_federation_enabled(self)
+        self.config.federation_enabled
     }
 
     fn s2s_dialback_enabled(&self) -> bool {
-        AppState::s2s_dialback_enabled(self)
+        self.config.dialback_enabled
     }
 
     fn s2s_sasl_external_enabled(&self) -> bool {
-        AppState::s2s_sasl_external_enabled(self)
+        self.config.s2s_sasl_external_enabled
     }
 
     fn s2s_ocsp_staple_required(&self) -> bool {
-        AppState::s2s_ocsp_staple_required(self)
+        self.config.federation_ocsp_staple_required
     }
 
     fn s2s_dane_mode(&self) -> DaneMode {
-        AppState::s2s_dane_mode(self)
+        self.config.federation_dane_mode
     }
 
     fn s2s_feature_policy(&self) -> S2sFeaturePolicy {
-        AppState::s2s_feature_policy(self)
+        northstar_federation_core::dialback::S2sFeaturePolicy {
+            sasl_external: self.config.s2s_sasl_external_enabled,
+            dialback: self.config.dialback_enabled,
+            bidi: self.config.federation_enabled,
+        }
     }
 
     fn tls_context(&self) -> &TlsContext {
-        AppState::tls_context(self)
+        &self.tls_context
     }
 
     fn federation_dns_context(&self) -> FederationDnsContext<'_> {
@@ -117,7 +121,7 @@ impl S2sHost for AppState {
     }
 
     fn federation_outbox(&self) -> &FederationOutboxService<PostgresFederationOutboxRepository> {
-        AppState::federation_outbox(self)
+        &self.federation.federation_outbox
     }
 
     fn s2s_outbox_dispatch_service(
@@ -143,15 +147,27 @@ impl S2sHost for AppState {
     }
 
     fn s2s_inbound_connection_telemetry(&self) -> InboundConnectionTelemetry<'_> {
-        AppState::s2s_inbound_connection_telemetry(self)
+        northstar_federation_application::telemetry::InboundConnectionTelemetry::new(
+            &self.metrics.federation_inbound_connections_total,
+            &self.metrics.federation_inbound_active,
+        )
     }
 
     fn s2s_outbox_delivery_telemetry(&self) -> OutboxDeliveryTelemetry<'_> {
-        AppState::s2s_outbox_delivery_telemetry(self)
+        northstar_federation_application::telemetry::OutboxDeliveryTelemetry::new(
+            &self.metrics.outbox_delivery_duration_seconds,
+        )
     }
 
     fn s2s_outbound_disposition_telemetry(&self) -> OutboundDispositionTelemetry<'_> {
-        AppState::s2s_outbound_disposition_telemetry(self)
+        northstar_federation_application::telemetry::OutboundDispositionTelemetry::new(
+            &self.metrics.federation_failures_total,
+            &self.metrics.s2s_outbox_lease_lost_total,
+            &self.metrics.federation_outbound_deliveries_total,
+            &self.metrics.s2s_outbox_permanent_failures_total,
+            &self.metrics.s2s_outbox_expired_total,
+            &self.metrics.s2s_outbox_retries_total,
+        )
     }
 
     async fn route_inbound_stanza(
@@ -199,7 +215,13 @@ impl ComponentHost for AppState {
     }
 
     fn component_telemetry(&self) -> ComponentTelemetry<'_> {
-        AppState::component_telemetry(self)
+        northstar_federation_application::components::ComponentTelemetry::new(
+            &self.metrics.component_connections_active,
+            &self.metrics.outbox_delivery_duration_seconds,
+            &self.metrics.component_failures_total,
+            &self.metrics.component_deliveries_total,
+            &self.metrics.s2s_outbox_lease_lost_total,
+        )
     }
 
     fn has_component_credentials(&self) -> bool {
@@ -219,7 +241,7 @@ impl ComponentHost for AppState {
     }
 
     fn xmpp_component_domain_configured(&self, domain: &str) -> bool {
-        AppState::xmpp_component_domain_configured(self, domain)
+        self.config.component_domain_configured(domain)
     }
 
     fn try_acquire_component_connection(&self) -> Result<OwnedSemaphorePermit, TryAcquireError> {

@@ -37,35 +37,55 @@ impl MessageHost for AppState {
     }
 
     fn personal_message_telemetry(&self) -> PersonalMessageTelemetry<'_> {
-        AppState::personal_message_telemetry(self)
+        northstar_message_application::telemetry::PersonalMessageTelemetry::new(
+            northstar_message_application::telemetry::PersonalMessageTelemetryCells {
+                routing_duration: &self.metrics.routing_duration_seconds,
+                rate_limited: &self.metrics.rate_limited_total,
+                abuse_backend_failures: &self.metrics.anti_abuse_backend_failures_total,
+                messages_routed: &self.metrics.messages_routed_total,
+                post_accept_failures: &self.metrics.post_accept_side_effect_failures_total,
+                durable_queue_acceptances: &self.metrics.online_queue_durable_acceptances_total,
+                volatile_queue_acceptances: &self.metrics.online_queue_volatile_acceptances_total,
+                carbon_delivery_failures: &self.metrics.carbon_post_accept_delivery_failures_total,
+                carbon_target_timeouts: &self.metrics.carbon_fanout_target_timeouts_total,
+                cluster_legacy_acceptances: &self.metrics.cluster_legacy_delivery_acceptances_total,
+            },
+        )
     }
 
     fn validate_routed_message(&self, root: roxmltree::Node<'_, '_>) -> Result<(), &'static str> {
-        AppState::validate_routed_message(self, root)
+        northstar_message_core::validation::validate_routed_message(
+            root,
+            &self.config.xmpp_extensions,
+        )
     }
 
     fn local_domain(&self) -> &str {
-        AppState::local_domain(self)
+        &self.config.domain
     }
 
     fn archive_requires_encryption(&self) -> bool {
-        AppState::archive_requires_encryption(self)
+        self.config.require_encrypted_archive
     }
 
     fn offline_delivery_limits(&self) -> OfflineDeliveryLimits {
-        AppState::offline_delivery_limits(self)
+        northstar_message_core::OfflineDeliveryLimits {
+            max_messages: self.config.offline_max_messages_per_account,
+            max_bytes: self.config.offline_max_bytes_per_account,
+            ttl_days: self.config.offline_message_ttl_days,
+        }
     }
 
     fn xmpp_external_route_domain_allowed(&self, domain: &str) -> bool {
-        AppState::xmpp_external_route_domain_allowed(self, domain)
+        self.config.external_route_domain_allowed(domain)
     }
 
     fn federation_outbox_policy(&self) -> S2sOutboxPolicy {
-        self.federation_outbox().outbox_policy()
+        self.federation.federation_outbox.outbox_policy()
     }
 
     fn wake_federation_outbox(&self) {
-        self.federation_outbox().wake_outbox();
+        self.federation.federation_outbox.wake_outbox();
     }
 
     async fn send_volatile(
@@ -154,15 +174,27 @@ impl FederatedMessageHost for AppState {
     }
 
     fn record_s2s_post_accept_failure(&self) {
-        self.s2s_inbound_delivery_telemetry().post_accept_failed();
+        northstar_federation_application::telemetry::InboundDeliveryTelemetry::new(
+            &self.metrics.post_accept_side_effect_failures_total,
+            &self.metrics.messages_routed_total,
+        )
+        .post_accept_failed();
     }
 
     fn record_s2s_message_routed(&self) {
-        self.s2s_inbound_delivery_telemetry().routed();
+        northstar_federation_application::telemetry::InboundDeliveryTelemetry::new(
+            &self.metrics.post_accept_side_effect_failures_total,
+            &self.metrics.messages_routed_total,
+        )
+        .routed();
     }
 
     fn record_s2s_online_accept(&self, durable: bool) {
-        self.s2s_online_queue_telemetry().accepted(durable);
+        northstar_federation_application::telemetry::OnlineQueueAcceptanceTelemetry::new(
+            &self.metrics.online_queue_durable_acceptances_total,
+            &self.metrics.online_queue_volatile_acceptances_total,
+        )
+        .accepted(durable);
     }
 
     async fn route_s2s_message_to_available_remote_resources(
@@ -188,7 +220,28 @@ impl FederatedMessageHost for AppState {
                 jid,
                 stanza,
                 delivery,
-                &self.personal_message_telemetry(),
+                &northstar_message_application::telemetry::PersonalMessageTelemetry::new(
+                    northstar_message_application::telemetry::PersonalMessageTelemetryCells {
+                        routing_duration: &self.metrics.routing_duration_seconds,
+                        rate_limited: &self.metrics.rate_limited_total,
+                        abuse_backend_failures: &self.metrics.anti_abuse_backend_failures_total,
+                        messages_routed: &self.metrics.messages_routed_total,
+                        post_accept_failures: &self.metrics.post_accept_side_effect_failures_total,
+                        durable_queue_acceptances: &self
+                            .metrics
+                            .online_queue_durable_acceptances_total,
+                        volatile_queue_acceptances: &self
+                            .metrics
+                            .online_queue_volatile_acceptances_total,
+                        carbon_delivery_failures: &self
+                            .metrics
+                            .carbon_post_accept_delivery_failures_total,
+                        carbon_target_timeouts: &self.metrics.carbon_fanout_target_timeouts_total,
+                        cluster_legacy_acceptances: &self
+                            .metrics
+                            .cluster_legacy_delivery_acceptances_total,
+                    },
+                ),
             )
             .await;
         OnlineRouteResult {

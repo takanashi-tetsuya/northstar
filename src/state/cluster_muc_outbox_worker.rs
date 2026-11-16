@@ -11,7 +11,7 @@ impl AppState {
     ) -> ClusterMucOutboxWorkerContext<PostgresClusterAdapters> {
         ClusterMucOutboxWorkerContext {
             signal: self.cluster.muc_outbox_signal(),
-            domain: self.local_domain().to_owned(),
+            domain: self.config.domain.clone(),
             endpoints: self.cluster_muc_delivery_endpoints(),
             delivery: self.muc_delivery_context(),
             preclaim: northstar_room_application::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService::new(

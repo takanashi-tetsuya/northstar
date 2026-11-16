@@ -6,11 +6,11 @@ use northstar_archive_xmpp::ArchiveSessionHost;
 
 impl ArchiveSessionHost for AppState {
     fn archive_local_domain(&self) -> &str {
-        self.local_domain()
+        self.config.domain.as_str()
     }
 
     fn archive_muc_domain(&self) -> String {
-        northstar_muc_xmpp::muc::muc_service_domain(self.local_domain())
+        northstar_muc_xmpp::muc::muc_service_domain(self.config.domain.as_str())
     }
 
     fn mam_service(

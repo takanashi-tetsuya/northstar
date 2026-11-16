@@ -13,15 +13,18 @@ impl OperationsSessionHost for AppState {
     }
 
     fn command_local_domain(&self) -> &str {
-        self.local_domain()
+        self.config.domain.as_str()
     }
 
     fn command_scram_policy(&self) -> AdminScramPolicy {
-        self.admin_scram_policy()
+        northstar_operations_application::admin_commands::AdminScramPolicy {
+            iterations: self.config.scram_iterations,
+            sha1_enabled: self.config.scram_sha1_enabled,
+        }
     }
 
     fn command_service_control_available(&self) -> bool {
-        self.xmpp_service_control_enabled() && self.service_control_available()
+        self.config.enable_xmpp_service_control && self.service_control_available()
     }
 
     fn command_send_local_announcement(&self, stanza: &str) -> BTreeSet<String> {

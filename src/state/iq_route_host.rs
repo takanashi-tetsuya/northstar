@@ -20,7 +20,7 @@ pub(super) static IQ_ROUTES: LazyLock<IqRouter<ClientIqRoute<AppState>>> =
 
 impl IqRouteHost for AppState {
     fn xmpp_version_includes_os(&self) -> bool {
-        AppState::xmpp_version_includes_os(self)
+        self.config.xep_0092_include_os
     }
 
     fn server_version(&self) -> &str {

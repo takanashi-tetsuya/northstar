@@ -1020,19 +1020,19 @@
       "runtime_identities": [
         {
           "id": "service:cluster_authority_service",
-          "owner": "src/state.rs",
+          "owner": "src/state/cluster_maintenance_context.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "service:cluster_instance_release_service",
-          "owner": "src/state.rs",
+          "owner": "src/state/cluster_shutdown.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "service:cluster_muc_occupancy_maintenance_service",
-          "owner": "src/state.rs",
+          "owner": "src/state/cluster_maintenance_context.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         }

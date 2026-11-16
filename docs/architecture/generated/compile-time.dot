@@ -1140,7 +1140,10 @@ digraph compile_time {
   "northstar-config" -> "envy";
   "northstar-config" -> "northstar-security";
   "northstar-config" -> "northstar-web-surface";
+  "northstar-config" -> "northstar-xep-0199";
+  "northstar-config" -> "northstar-xep-0363";
   "northstar-config" -> "northstar-xep-catalog";
+  "northstar-config" -> "northstar-xep-core";
   "northstar-config" -> "northstar-xmpp-types";
   "northstar-config" -> "redis";
   "northstar-config" -> "serde";

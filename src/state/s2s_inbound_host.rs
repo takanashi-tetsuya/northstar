@@ -13,11 +13,11 @@ use uuid::Uuid;
 
 impl InboundHost for AppState {
     fn local_domain(&self) -> &str {
-        AppState::local_domain(self)
+        &self.config.domain
     }
 
     fn island_mode_enabled(&self) -> bool {
-        AppState::island_mode_enabled(self)
+        self.federation.federation_write_policy.enabled()
     }
 
     fn federation_entity_allowed(&self, entity: &str) -> bool {
@@ -25,19 +25,23 @@ impl InboundHost for AppState {
     }
 
     fn s2s_component_domain_configured(&self, domain: &str) -> bool {
-        AppState::s2s_component_domain_configured(self, domain)
+        self.config.component_domain_configured(domain)
     }
 
     fn s2s_ping_route_enabled(&self) -> bool {
-        AppState::s2s_ping_route_enabled(self)
+        self.config.s2s_ping_route_enabled()
     }
 
     fn s2s_ping_feature_enabled(&self) -> bool {
-        self.xmpp_extension_enabled(northstar_xep_0199::XEP_ID)
+        self.config
+            .xmpp_extension_enabled(northstar_xep_0199::XEP_ID)
     }
 
     async fn send_to_component(&self, domain: &str, stanza: String) -> bool {
-        self.federation_outbox().send(domain, stanza, None).await
+        self.federation
+            .federation_outbox
+            .send(domain, stanza, None)
+            .await
     }
 
     async fn federated_mix_iq(

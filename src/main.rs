@@ -358,6 +358,10 @@ async fn run() -> Result<()> {
     );
     let cancel = CancellationToken::new();
     let startup_phase = northstar_telemetry::logging::StartupPhase::begin("application_state");
+    let listeners = config.runtime_listener_policy();
+    let test_listener_activation = config.test_listener_activation;
+    let test_readiness_file = config.test_readiness_file.clone();
+    let test_readiness_nonce = config.test_readiness_nonce.clone();
     let state = AppState::new(
         config,
         pool,
@@ -577,7 +581,6 @@ async fn run() -> Result<()> {
     // Listener ownership belongs to this process before any service task is
     // spawned. Test fixtures can therefore use `127.0.0.1:0` and consume a
     // nonce-bound readiness record instead of racing a port-number allocator.
-    let listeners = state.runtime_listener_policy();
     let xmpp_listener = bind_runtime_listener("XMPP", listeners.xmpp).await?;
     let xmpps_listener = bind_runtime_listener("XMPPS", listeners.xmpps).await?;
     let http_listener = bind_runtime_listener("HTTP", listeners.http).await?;
@@ -668,8 +671,8 @@ async fn run() -> Result<()> {
         },
     );
 
-    if state.cluster_workers_enabled() {
-        let pubsub_transport = Arc::new(state.cluster_pubsub_listener_transport());
+    if state.cluster().is_enabled() {
+        let pubsub_transport = Arc::new(state.cluster().pubsub_listener_transport());
         let listener_admission = Arc::new(state.cluster_listener_admission());
         let state_pubsub = state.clone();
         let pubsub_cancel = cancel.clone();
@@ -792,7 +795,11 @@ async fn run() -> Result<()> {
         );
     }
     runtime::test_activation::publish_if_enabled(
-        state.test_listener_activation_policy(),
+        runtime::test_activation::TestActivationPolicy {
+            enabled: test_listener_activation,
+            destination: test_readiness_file.as_deref(),
+            nonce: test_readiness_nonce.as_deref(),
+        },
         &listener_addresses,
         std::process::id(),
     )?;

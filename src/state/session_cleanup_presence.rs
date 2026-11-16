@@ -19,7 +19,7 @@ impl AppState {
         SessionCleanupPresence {
             audience: self.roster.presence_service.clone(),
             sessions: Arc::clone(&self.sessions),
-            domain: self.local_domain().to_owned(),
+            domain: self.config.domain.clone(),
         }
     }
 }

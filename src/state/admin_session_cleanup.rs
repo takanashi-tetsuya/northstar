@@ -24,7 +24,7 @@ impl AppState {
             notifier: self.cluster_account_teardown_notifier(),
             routes: AccountRevocationRoutes::new(Arc::clone(&self.sessions)),
             sessions: Arc::clone(&self.sessions),
-            local_domain: self.local_domain().to_owned(),
+            local_domain: self.config.domain.clone(),
         }
     }
 }

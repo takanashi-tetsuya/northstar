@@ -20,11 +20,22 @@ impl BoshHost for AppState {
     }
 
     fn bosh_policy(&self) -> BoshPolicy {
-        AppState::bosh_policy(self)
+        northstar_bosh::host::BoshPolicy {
+            max_wait_seconds: self.config.bosh_max_wait_seconds,
+            inactivity_seconds: self.config.bosh_inactivity_seconds,
+            polling_seconds: self.config.bosh_polling_seconds,
+            max_pause_seconds: self.config.bosh_max_pause_seconds,
+            body_read_timeout_seconds: self.config.bosh_body_read_timeout_seconds,
+            max_request_bytes: self.config.bosh_max_request_bytes,
+            max_response_bytes: self.config.bosh_max_response_bytes,
+            max_stanzas_per_request: self.config.bosh_max_stanzas_per_request,
+            max_output_stanzas: self.config.bosh_max_output_stanzas,
+            max_output_bytes: self.config.bosh_max_output_bytes,
+        }
     }
 
     fn trusted_proxy_ips(&self) -> &[IpAddr] {
-        AppState::trusted_proxy_ips(self)
+        &self.config.trusted_proxy_ips
     }
 
     fn client_ip(&self, peer_ip: IpAddr, headers: &HeaderMap) -> IpAddr {
@@ -44,6 +55,6 @@ impl BoshHost for AppState {
     }
 
     fn record_bosh_session_opened(&self) {
-        AppState::record_bosh_session_opened(self);
+        self.metrics.record_bosh_session_opened();
     }
 }

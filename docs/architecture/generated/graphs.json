@@ -2731,7 +2731,19 @@
       ],
       [
         "northstar-config",
+        "northstar-xep-0199"
+      ],
+      [
+        "northstar-config",
+        "northstar-xep-0363"
+      ],
+      [
+        "northstar-config",
         "northstar-xep-catalog"
+      ],
+      [
+        "northstar-config",
+        "northstar-xep-core"
       ],
       [
         "northstar-config",

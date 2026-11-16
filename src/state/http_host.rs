@@ -164,7 +164,7 @@ impl HttpHost for AppState {
         PasswordChangeHttpContext {
             service: self.auth.password_change_service.clone(),
             trusted_proxies: self.config.trusted_proxy_ips.clone(),
-            domain: self.local_domain().to_owned(),
+            domain: self.config.domain.clone(),
             rate_limited: Arc::clone(&self.metrics.rate_limited_total),
             backend_failures: Arc::clone(&self.metrics.authentication_backend_failures_total),
         }

@@ -303,7 +303,7 @@ if (/\b(?:state|shutdown_state)\.pool\b/.test(mainSource + cluster)
     || !appState.includes('pool: PgPool,')) {
   throw new Error('process and cluster workers must use narrow state-owned database capabilities');
 }
-if (!state.includes('fn local_domain(&self) -> &str')
+if (!rustItemBody(read('src/state/s2s_inbound_host.rs'), 'fn local_domain(').includes('&self.config.domain')
     || /\bstate\.config\.domain\b/.test(readProductionModule('crates/edges/northstar-s2s/src/inbound.rs', { root }))) {
   throw new Error('S2S ingress must receive only the validated local domain');
 }
@@ -311,7 +311,8 @@ const clusterMessageResolver = rustItemBody(cluster, 'async fn resolve_node_mess
 if (!clusterMessageResolver.includes('verifier.resolve(request, stanza, target_jid).await?')
     || /sqlx::|\.fetch_(?:one|optional|all)\(/.test(clusterMessageResolver)
     || !readProductionModule('crates/edges/northstar-cluster/src/listener.rs', { root }).includes('message_policy.verifier()')
-    || !read('src/state/cluster_listener_message.rs').includes('verifier: self.node_message_contract_verifier()')) {
+    || !read('src/state/cluster_listener_message.rs').includes('verifier: northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier::new(')
+    || !read('src/state/cluster_listener_message.rs').includes('northstar_session_postgres::node_message_projection_repository::PostgresNodeMessageProjectionRepository::new(')) {
   throw new Error('inbound cluster message contracts must use the PostgreSQL projection verifier port');
 }
 
@@ -3686,7 +3687,7 @@ if (/\blocal_domain\b/.test(mucDestroyEffect)
 }
 const operationWorkerControlSource = read('src/state/operation_worker_control.rs');
 const operationSessionEffectsSource = read('src/state/operation_session_effects.rs');
-if (!operationWorkerControlSource.includes('self.broadcast_routes().target_snapshot()')
+if (!operationWorkerControlSource.replace(/\s+/g, '').includes('routes:northstar_operations_xmpp::operation_runtime::LocalBroadcastRoutes::new(std::sync::Arc::clone(&self.sessions),self.config.domain.clone(),self.cluster.node_id.clone(),).target_snapshot()')
     || !operationWorkerControlSource.includes('self.routes.target_seeds(operation)')
     || !/control\s*\.claim_parent_with_targets\(worker_id, LEASE_SECONDS\)/.test(operationRuntimeOwnershipSource)
     || !operationRuntimeOwnershipSource.includes('"admin.broadcast" => session_effects.send_broadcast_exact(payload)')
@@ -3694,14 +3695,14 @@ if (!operationWorkerControlSource.includes('self.broadcast_routes().target_snaps
     || /fn local_target_seeds\(\s*state:\s*&AppState/.test(operationRuntimeOwnershipSource)) {
   throw new Error('administrator broadcast must snapshot and deliver through its exact local-route capability');
 }
-if (!operationSessionEffectsSource.includes('self.session_kick_routes()')
+if (!operationSessionEffectsSource.replace(/\s+/g, '').replace(/,\)/g, ')').includes('kick:northstar_operations_xmpp::operation_runtime::LocalSessionKickRoutes::new(std::sync::Arc::clone(&self.sessions))')
     || !operationRuntimeOwnershipSource.includes('session_effects.kick_exact(user_id, generation, connection_id)')
     || !operationSessionEffectsSource.includes('.kick_exact(user_id, auth_generation, connection_id)')
     || !operationRuntimeOwnershipSource.includes('session.connection_id == connection_id')
     || !operationRuntimeOwnershipSource.includes('session.auth_generation == auth_generation')) {
   throw new Error('administrator session kick must cancel only the exact committed route incarnation');
 }
-if (!operationSessionEffectsSource.includes('self.generation_cleanup_routes()')
+if (!operationSessionEffectsSource.replace(/\s+/g, '').replace(/,\)/g, ')').includes('generation_cleanup:northstar_operations_xmpp::operation_runtime::LocalGenerationCleanupRoutes::new(std::sync::Arc::clone(&self.sessions))')
     || !operationRuntimeOwnershipSource.includes('session_effects.cancel_exact_generation(user_id, generation)')
     || !operationSessionEffectsSource.includes('.cancel_exact_generation(user_id, auth_generation)')
     || !operationRuntimeOwnershipSource.includes('session.user_id == user_id && session.auth_generation == auth_generation')) {
@@ -4064,9 +4065,6 @@ for (const task of serviceTaskNames) {
 const stateServiceAccessors = [
   'api_query_service',
   'api_session_service',
-  'cluster_authority_service',
-  'cluster_instance_release_service',
-  'cluster_muc_occupancy_maintenance_service',
   'challenge_issue_service',
   'sasl_login_abuse_service',
   's2s_roster_authorization_service',
@@ -4114,6 +4112,43 @@ for (const accessor of stateServiceAccessors) {
   }
   if (!responsibilityDocument.includes(`\`${accessor}()\``)) {
     throw new Error(`program responsibility model omits service accessor: ${accessor}`);
+  }
+}
+
+// These cluster services are constructed where their private pool is bound,
+// rather than exposed through inherent AppState service accessors.
+const constructedClusterServices = [
+  {
+    name: 'cluster_authority_service',
+    owner: 'src/state/cluster_maintenance_context.rs',
+    constructor: 'northstar_session_application::cluster_authority::ClusterAuthorityService::new(',
+    repository: 'northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository::new(',
+    documentation: 'ClusterAuthorityService',
+    count: 1,
+  },
+  {
+    name: 'cluster_instance_release_service',
+    owner: 'src/state/cluster_shutdown.rs',
+    constructor: 'northstar_session_application::cluster_instance_release::ClusterInstanceReleaseService::new(',
+    repository: 'northstar_session_postgres::cluster_instance_release_repository::PostgresClusterInstanceReleaseRepository::new(',
+    documentation: 'ClusterInstanceReleaseService',
+    count: 1,
+  },
+  {
+    name: 'cluster_muc_occupancy_maintenance_service',
+    owner: 'src/state/cluster_maintenance_context.rs',
+    constructor: 'northstar_room_application::muc_service::ClusterMucOccupancyMaintenanceService::new(',
+    repository: 'northstar_room_postgres::room::PostgresClusterMucOccupancyMaintenanceRepository::new(',
+    documentation: 'ClusterMucOccupancyMaintenanceService',
+    count: 2,
+  },
+];
+for (const service of constructedClusterServices) {
+  const source = read(service.owner).replace(/\s+/g, '');
+  const construction = service.constructor + service.repository + 'self.pool.clone(),),)';
+  if (source.split(construction).length - 1 !== service.count
+      || !responsibilityDocument.includes(`\`${service.documentation}\``)) {
+    throw new Error(`cluster service must retain its private PostgreSQL composition: ${service.name}`);
   }
 }
 
@@ -4172,4 +4207,5 @@ export const verifiedRuntimeInventory = [
     }))),
   ...composedServiceTasks.map((name) => ({ id: `task:${name}`, kind: 'task', owner: 'src/main.rs' })),
   ...composedServiceAccessors.map((name) => ({ id: `service:${name}`, kind: 'service', owner: 'src/state.rs' })),
+  ...constructedClusterServices.map(({ name, owner }) => ({ id: `service:${name}`, kind: 'service', owner })),
 ].sort((left, right) => left.id.localeCompare(right.id));

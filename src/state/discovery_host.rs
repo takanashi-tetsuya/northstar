@@ -22,27 +22,27 @@ impl DiscoveryHost for AppState {
     }
 
     fn server_name(&self) -> &str {
-        AppState::server_name(self)
+        &self.config.server_name
     }
 
     fn mix_muc_mirror_enabled(&self) -> bool {
-        AppState::mix_muc_mirror_enabled(self)
+        self.config.mix_muc_mirror_enabled
     }
 
     fn upload_max_file_bytes(&self) -> u64 {
-        self.upload_slot_limits().max_file_bytes
+        self.config.upload_max_bytes
     }
 
     fn server_disco_features(&self) -> Vec<&'static str> {
-        AppState::server_disco_features(self)
+        self.config.server_disco_features()
     }
 
     fn external_service_discovery_available(&self) -> bool {
-        AppState::external_service_discovery_available(self)
+        self.config.external_service_discovery_available()
     }
 
     fn server_info_addresses(&self) -> [(&'static str, &[String]); 6] {
-        AppState::server_info_addresses(self)
+        self.config.server_info_addresses()
     }
 
     fn configured_component_domains(&self) -> Vec<String> {

@@ -3,6 +3,16 @@ import test from 'node:test';
 import { readFederatedRouteSources, verifyFederatedRouteBoundaries } from './check-federated-route-boundaries.mjs';
 
 const baseline = readFederatedRouteSources();
+const hostQueueTelemetry = `northstar_federation_application::telemetry::OnlineQueueAcceptanceTelemetry::new(
+            &self.metrics.online_queue_durable_acceptances_total,
+            &self.metrics.online_queue_volatile_acceptances_total,
+        )
+        .accepted(durable);`;
+const hostPostAcceptTelemetry = `northstar_federation_application::telemetry::InboundDeliveryTelemetry::new(
+            &self.metrics.post_accept_side_effect_failures_total,
+            &self.metrics.messages_routed_total,
+        )
+        .post_accept_failed();`;
 function rejectsMutation(name, file, before, after, expected) {
   test(name, () => {
     assert.equal(baseline[file].split(before).length - 1, 1, `mutation fixture must match exactly once: ${before}`);
@@ -53,13 +63,13 @@ rejectsMutation('caller cannot resume inline enqueue', 'inbound', 'let outcome =
 rejectsMutation('caller cannot discard Carbon exclusion', 'inbound', 'DirectRouteOutcome::Routed { accepted_full_jid } => (true, accepted_full_jid)', 'DirectRouteOutcome::Routed { accepted_full_jid } => (true, None)', /retain the accepted resource/);
 rejectsMutation('queue telemetry cannot switch to C2S', 'adapter', 'self.0.record_s2s_online_accept(durable);', 'self.0.personal_message_telemetry().online_queue_result(true, durable);', /federation queue telemetry/);
 rejectsMutation('queue telemetry cannot lose durable classification', 'adapter', 'record_s2s_online_accept(durable);', 'record_s2s_online_accept(false);', /federation queue telemetry/);
-rejectsMutation('host queue telemetry cannot switch to C2S', 'host', 'self.s2s_online_queue_telemetry().accepted(durable);', 'self.personal_message_telemetry().online_queue_result(true, durable);', /federation queue telemetry/);
+rejectsMutation('host queue telemetry cannot switch to C2S', 'host', hostQueueTelemetry, 'self.personal_message_telemetry().online_queue_result(true, durable);', /federation queue telemetry/);
 rejectsMutation('host queue telemetry cannot lose durable classification', 'host', '.accepted(durable);', '.accepted(false);', /federation queue telemetry/);
 rejectsMutation('postaccept telemetry cannot switch to C2S', 'adapter', 'self.0.record_s2s_post_accept_failure();', 'self.0.personal_message_telemetry().post_accept_failed();', /federation telemetry/);
 rejectsMutation('comments cannot satisfy postaccept telemetry', 'adapter', 'self.0.record_s2s_post_accept_failure();', '// self.0.record_s2s_post_accept_failure();', /federation telemetry/);
 rejectsMutation('additional C2S telemetry cannot be double counted', 'adapter', 'self.0.record_s2s_post_accept_failure();', 'self.0.record_s2s_post_accept_failure();\n self.0.personal_message_telemetry().post_accept_failed();', /must not record C2S/);
-rejectsMutation('host postaccept telemetry cannot switch to C2S', 'host', 'self.s2s_inbound_delivery_telemetry().post_accept_failed();', 'self.personal_message_telemetry().post_accept_failed();', /federation telemetry/);
-rejectsMutation('host postaccept telemetry cannot be double counted', 'host', 'self.s2s_inbound_delivery_telemetry().post_accept_failed();', 'self.s2s_inbound_delivery_telemetry().post_accept_failed();\n self.personal_message_telemetry().post_accept_failed();', /federation telemetry/);
+rejectsMutation('host postaccept telemetry cannot switch to C2S', 'host', hostPostAcceptTelemetry, 'self.personal_message_telemetry().post_accept_failed();', /federation telemetry/);
+rejectsMutation('host postaccept telemetry cannot be double counted', 'host', hostPostAcceptTelemetry, `${hostPostAcceptTelemetry}\n self.personal_message_telemetry().post_accept_failed();`, /federation telemetry/);
 rejectsMutation('local adapter cannot substitute the owned item', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'OnlineRoutePort::try_local(self.0, session, other_enqueue)', /exact owned local enqueue/);
 rejectsMutation('local adapter cannot clone the owned item', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'OnlineRoutePort::try_local(self.0, session, enqueue.clone())', /exact owned local enqueue/);
 rejectsMutation('local adapter cannot substitute the session', 'adapter', 'OnlineRoutePort::try_local(self.0, session, enqueue)', 'OnlineRoutePort::try_local(self.0, other_session, enqueue)', /exact owned local enqueue/);

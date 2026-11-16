@@ -32,7 +32,7 @@ use northstar_stream::session_cleanup::service::SessionCleanupService;
 use northstar_stream::transport::Action;
 use northstar_stream::IqRouter;
 use roxmltree::Node;
-use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -90,21 +90,32 @@ impl SessionHost for AppState {
     fn c2s_authentication_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::C2sAuthenticationTelemetry<'_> {
-        AppState::c2s_authentication_telemetry(self)
+        northstar_session_application::telemetry::C2sAuthenticationTelemetry::new(
+            &self.metrics.authentication_backend_failures_total,
+            &self.metrics.fast_credential_integrity_failures_total,
+            &self.metrics.authentication_failures_total,
+            &self.metrics.rate_limited_total,
+        )
     }
 
     fn c2s_post_action_telemetry(
         &self,
     ) -> northstar_session_application::post_actions::PostActionTelemetry<'_> {
-        AppState::c2s_post_action_telemetry(self)
+        northstar_session_application::post_actions::PostActionTelemetry::new(
+            &self.metrics.post_action_tasks_started_total,
+            &self.metrics.post_action_tasks_completed_total,
+            &self.metrics.post_action_tasks_panicked_total,
+            &self.metrics.post_action_tasks_aborted_total,
+            &self.metrics.post_action_capacity_rejections_total,
+        )
     }
 
     fn c2s_resource_bind_timeout_seconds(&self) -> u64 {
-        AppState::c2s_resource_bind_timeout_seconds(self)
+        self.config.resource_bind_timeout_seconds
     }
 
     fn capacity_session_lease_seconds(&self) -> u64 {
-        AppState::capacity_session_lease_seconds(self)
+        self.config.capacity_session_lease_seconds
     }
 
     fn caps_by_jid(&self) -> &northstar_protocol_runtime::caps::CapsResourceIndex {
@@ -163,7 +174,7 @@ impl SessionHost for AppState {
     }
 
     fn local_domain(&self) -> &str {
-        AppState::local_domain(self)
+        &self.config.domain
     }
 
     fn mix_service(
@@ -177,7 +188,9 @@ impl SessionHost for AppState {
     fn outbound_stanza_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::OutboundStanzaTelemetry<'_> {
-        AppState::outbound_stanza_telemetry(self)
+        northstar_session_application::telemetry::OutboundStanzaTelemetry::new(
+            &self.metrics.stanzas_out_total,
+        )
     }
 
     fn push_service(
@@ -191,29 +204,41 @@ impl SessionHost for AppState {
     fn push_subscription_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::PushSubscriptionTelemetry<'_> {
-        AppState::push_subscription_telemetry(self)
+        northstar_session_application::telemetry::PushSubscriptionTelemetry::new(
+            &self.metrics.rate_limited_total,
+            &self.metrics.push_subscriptions_rate_limited_total,
+        )
     }
 
     fn record_bosh_session_closed(&self) {
-        AppState::record_bosh_session_closed(self)
+        self.metrics.record_bosh_session_closed()
     }
 
     fn record_c2s_backpressure_disconnect(&self) {
-        AppState::record_c2s_backpressure_disconnect(self)
+        self.metrics.record_c2s_backpressure_disconnect()
     }
 
     fn registration_is_closed(&self) -> bool {
-        AppState::registration_is_closed(self)
+        self.config.registration_dependency_locked()
+            || self.registration_closed.load(Ordering::Acquire)
     }
 
     fn registration_requires_invitation(&self) -> bool {
-        AppState::registration_requires_invitation(self)
+        self.config.registration_requires_invitation(
+            self.config.registration_dependency_locked()
+                || self.registration_closed.load(Ordering::Acquire),
+        )
     }
 
     fn registration_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::RegistrationTelemetry<'_> {
-        AppState::registration_telemetry(self)
+        northstar_session_application::telemetry::RegistrationTelemetry::new(
+            &self.metrics.anti_abuse_backend_failures_total,
+            &self.metrics.registrations_total,
+            &self.metrics.rate_limited_total,
+            &self.metrics.capacity_reservations_rejected_total,
+        )
     }
 
     async fn release_staged_binding_route(
@@ -254,15 +279,25 @@ impl SessionHost for AppState {
     fn sasl2_authentication_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::Sasl2AuthenticationTelemetry<'_> {
-        AppState::sasl2_authentication_telemetry(self)
+        northstar_session_application::telemetry::Sasl2AuthenticationTelemetry::new(
+            &self.metrics.fast_credential_integrity_failures_total,
+            &self.metrics.authentication_backend_failures_total,
+        )
     }
 
     fn sasl2_authentication_timer(&self) -> northstar_telemetry::metrics::OwnedDurationTimer {
-        AppState::sasl2_authentication_timer(self)
+        self.metrics
+            .authentication_duration_seconds
+            .start_owned_timer()
     }
 
     fn sasl2_fast_token_policy(&self) -> Sasl2FastTokenPolicy {
-        AppState::sasl2_fast_token_policy(self)
+        northstar_auth_application::authentication::Sasl2FastTokenPolicy {
+            enabled: self.config.fast_token_enabled,
+            rotation_days: self.config.fast_token_rotation_days,
+            ttl_days: self.config.fast_token_ttl_days,
+            strong_reauth_max_days: self.config.fast_strong_reauth_max_days,
+        }
     }
 
     fn sasl_login_abuse_service(
@@ -276,13 +311,18 @@ impl SessionHost for AppState {
     fn session_bind_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::SessionBindTelemetry<'_> {
-        AppState::session_bind_telemetry(self)
+        northstar_session_application::telemetry::SessionBindTelemetry::new(
+            &self.metrics.capacity_reservations_rejected_total,
+            &self.metrics.active_sessions,
+        )
     }
 
     fn session_drop_fallback_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::SessionDropFallbackTelemetry<'_> {
-        AppState::session_drop_fallback_telemetry(self)
+        northstar_session_application::telemetry::SessionDropFallbackTelemetry::new(
+            &self.metrics.session_drop_fallbacks_total,
+        )
     }
 
     fn set_local_carbons_for_connection(
@@ -312,7 +352,10 @@ impl SessionHost for AppState {
     fn sm_session_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::SmSessionTelemetry<'_> {
-        AppState::sm_session_telemetry(self)
+        northstar_session_application::telemetry::SmSessionTelemetry::new(
+            &self.metrics.capacity_reservations_rejected_total,
+            &self.metrics.active_sessions,
+        )
     }
 
     fn staged_session_is_current(
@@ -333,7 +376,7 @@ impl SessionHost for AppState {
     }
 
     fn tls_context(&self) -> &northstar_security::tls::TlsContext {
-        AppState::tls_context(self)
+        &self.tls_context
     }
 
     fn try_stage_bound_session(&self, key: String, session: OnlineSession) -> bool {
@@ -341,7 +384,7 @@ impl SessionHost for AppState {
     }
 
     fn unauthenticated_timeout(&self) -> Duration {
-        AppState::unauthenticated_timeout(self)
+        self.config.unauthenticated_timeout()
     }
 
     fn worker_registry(&self) -> &Arc<northstar_runtime::workers::WorkerRegistry> {
@@ -349,7 +392,7 @@ impl SessionHost for AppState {
     }
 
     fn xmpp_extension_enabled(&self, id: northstar_xep_core::XepId) -> bool {
-        AppState::xmpp_extension_enabled(self, id)
+        self.config.xmpp_extension_enabled(id)
     }
 
     async fn abort_local_muc_resume(
@@ -394,7 +437,7 @@ impl SessionHost for AppState {
     }
 
     fn c2s_scram_sha1_enabled(&self) -> bool {
-        AppState::c2s_scram_sha1_enabled(self)
+        self.config.scram_sha1_enabled
     }
 
     fn caps_effect_dispatcher(
@@ -406,7 +449,12 @@ impl SessionHost for AppState {
     fn caps_effect_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::CapsEffectTelemetry<'_> {
-        AppState::caps_effect_telemetry(self)
+        northstar_session_application::telemetry::CapsEffectTelemetry::new(
+            &self.metrics.caps_effect_coalesced_total,
+            &self.metrics.caps_effect_queue_saturated_total,
+            &self.metrics.caps_effect_failures_total,
+            &self.metrics.caps_effect_latency_seconds,
+        )
     }
 
     type RestoredMuc = RestoredLocalMucOccupants;
@@ -527,7 +575,11 @@ impl SessionHost for AppState {
     fn push_delivery_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::PushDeliveryTelemetry<'_> {
-        AppState::push_delivery_telemetry(self)
+        northstar_session_application::telemetry::PushDeliveryTelemetry::new(
+            &self.metrics.push_notifications_failed_total,
+            &self.metrics.push_notifications_routed_total,
+            &self.metrics.push_notifications_attempted_total,
+        )
     }
 
     async fn release_exact_local_session_route(
@@ -560,11 +612,15 @@ impl SessionHost for AppState {
     }
 
     fn sm_buffer_limits(&self) -> SmBufferLimits {
-        AppState::sm_buffer_limits(self)
+        northstar_session_application::sm::SmBufferLimits {
+            max_unacked_stanzas: self.config.sm_max_unacked_stanzas,
+            max_unacked_bytes: self.config.sm_max_unacked_bytes,
+            max_snapshot_bytes: self.config.sm_max_snapshot_bytes,
+        }
     }
 
     fn sm_ip_binding(&self) -> &str {
-        AppState::sm_ip_binding(self)
+        &self.config.sm_ip_binding
     }
 
     fn sm_pending_route_removal_signal(
@@ -589,7 +645,14 @@ impl SessionHost for AppState {
     }
 
     fn sm_session_policy(&self) -> SmSessionPolicy {
-        AppState::sm_session_policy(self)
+        northstar_session_application::sm::SmSessionPolicy {
+            require_same_device: self.config.sm_require_same_device,
+            resume_timeout_seconds: self.config.sm_resume_timeout_seconds,
+            live_lease_seconds: self.config.sm_live_lease_seconds,
+            claim_lease_seconds: self.config.sm_claim_lease_seconds,
+            max_per_account: self.config.max_sessions_per_account,
+            max_global: self.config.sm_max_resumable_sessions,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -647,11 +710,11 @@ impl SessionHost for AppState {
     }
 
     fn muc_domain(&self) -> String {
-        northstar_muc_xmpp::muc::muc_service_domain(self.local_domain())
+        northstar_muc_xmpp::muc::muc_service_domain(self.config.domain.as_str())
     }
 
     fn mix_domain(&self) -> String {
-        northstar_mix_xmpp::local_mix_domain(self.local_domain())
+        northstar_mix_xmpp::local_mix_domain(self.config.domain.as_str())
     }
 
     fn pubsub_domain(&self) -> String {
@@ -659,11 +722,11 @@ impl SessionHost for AppState {
     }
 
     fn upload_domain(&self) -> String {
-        northstar_upload_xmpp::upload_service_domain(self.local_domain())
+        northstar_upload_xmpp::upload_service_domain(self.config.domain.as_str())
     }
 
     fn http_upload_enabled(&self) -> bool {
-        self.xmpp_http_upload_enabled()
+        self.config.xmpp_http_upload_enabled()
     }
 
     async fn dispatch_message(
@@ -748,13 +811,15 @@ impl SessionHost for AppState {
     type S2sOutbox = FederationRouter;
 
     fn federation_outbox(&self) -> &FederationRouter {
-        AppState::federation_outbox(self)
+        &self.federation.federation_outbox
     }
 
     fn inbound_stanza_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::InboundStanzaTelemetry<'_> {
-        AppState::inbound_stanza_telemetry(self)
+        northstar_session_application::telemetry::InboundStanzaTelemetry::new(
+            &self.metrics.stanzas_in_total,
+        )
     }
 
     fn local_muc_occupant_by_nick(&self, room_jid: &str, nick: &str) -> Option<MucOccupant> {
@@ -801,7 +866,7 @@ impl SessionHost for AppState {
     }
 
     fn xmpp_external_route_domain_allowed(&self, domain: &str) -> bool {
-        AppState::xmpp_external_route_domain_allowed(self, domain)
+        self.config.external_route_domain_allowed(domain)
     }
 
     fn xmpp_route_enabled(
@@ -810,7 +875,8 @@ impl SessionHost for AppState {
         namespace: &str,
         local_name: &str,
     ) -> bool {
-        AppState::xmpp_route_enabled(self, stanza, namespace, local_name)
+        self.config
+            .xmpp_route_enabled(stanza, namespace, local_name)
     }
 
     type Cleanup = SessionCleanupService<SessionCleanupAdapters>;
@@ -835,7 +901,10 @@ impl SessionHost for AppState {
     fn account_abuse_telemetry(
         &self,
     ) -> northstar_session_application::telemetry::AccountAbuseTelemetry<'_> {
-        AppState::account_abuse_telemetry(self)
+        northstar_session_application::telemetry::AccountAbuseTelemetry::new(
+            &self.metrics.anti_abuse_backend_failures_total,
+            &self.metrics.rate_limited_total,
+        )
     }
 
     async fn disconnect_account(&self, user_id: uuid::Uuid, bare_account_jid: &str) {

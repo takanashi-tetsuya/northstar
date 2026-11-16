@@ -306,6 +306,29 @@ pub struct Metrics {
 }
 
 impl Metrics {
+    pub fn record_bosh_session_opened(&self) {
+        self.bosh_sessions_total.fetch_add(1, Ordering::Relaxed);
+        self.bosh_sessions_active.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_bosh_session_closed(&self) {
+        self.bosh_sessions_active.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    pub fn record_c2s_tcp_connection(&self) {
+        self.tcp_connections_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_c2s_websocket_connection(&self) {
+        self.websocket_connections_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_c2s_backpressure_disconnect(&self) {
+        self.c2s_backpressure_disconnects_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn c2s_backpressure_telemetry(&self) -> C2sBackpressureTelemetry {
         C2sBackpressureTelemetry {
             disconnects: Arc::clone(&self.c2s_backpressure_disconnects_total),

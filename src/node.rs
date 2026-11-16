@@ -97,9 +97,6 @@ mod runtime_control_health_tests;
 #[allow(unused_imports)]
 pub use northstar_protocol_runtime::caps::CapsKey;
 
-#[cfg(test)]
-pub use northstar_session_core::LocalCapsEpoch;
-
 pub use northstar_session_core::JoinedMucMembership;
 
 #[cfg(test)]

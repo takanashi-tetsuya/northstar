@@ -1457,9 +1457,9 @@ test('untouched route helpers satisfy focused and complete production gates', ()
   verifyRouteHelperBoundaries(baseline);
   verifyExecutionBoundaries(baseline);
 });
-function rejectsRoute(name, file, before, after, complete = false) {
+function rejectsRoute(name, file, before, after, complete = false, expectedMatches = 1) {
   test(name, () => {
-    const mutant = changedMuc(file, before, after);
+    const mutant = changedMuc(file, before, after, expectedMatches);
     assert.throws(() => verifyRouteHelperBoundaries(mutant), /execution boundary: route helper/);
     if (complete) assert.throws(() => verifyExecutionBoundaries(mutant), /execution boundary: route helper/);
   });
@@ -1470,9 +1470,9 @@ rejectsRoute("route epoch helper cannot become test-only", "sessionTable",
 rejectsRoute("route activation helper cannot become test-only", "sessionTable",
   "pub fn activate_session_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    full_jid: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    disconnect: &CancellationToken,\n) -> bool",
   "#[cfg(test)] pub fn activate_session_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    full_jid: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    disconnect: &CancellationToken,\n) -> bool");
-rejectsRoute("route caps helper cannot become test-only", "mixOutboxState",
-  "pub(crate) fn session_mix_capability_in(\n    sessions: &DashMap<String, OnlineSession>,\n    caps_by_jid: &CapsResourceIndex,\n    pending_caps: &PendingCapsIndex,\n    full_jid: &str,\n) -> MixSessionCapability",
-  "#[cfg(test)] pub(crate) fn session_mix_capability_in(\n    sessions: &DashMap<String, OnlineSession>,\n    caps_by_jid: &CapsResourceIndex,\n    pending_caps: &PendingCapsIndex,\n    full_jid: &str,\n) -> MixSessionCapability");
+rejectsRoute("route caps helper cannot become test-only", "sessionTable",
+  "pub fn session_mix_capability_in(\n    sessions: &DashMap<String, OnlineSession>,\n    caps_by_jid: &CapsResourceIndex,\n    pending_caps: &PendingCapsIndex,\n    full_jid: &str,\n) -> MixSessionCapability",
+  "#[cfg(test)] pub fn session_mix_capability_in(\n    sessions: &DashMap<String, OnlineSession>,\n    caps_by_jid: &CapsResourceIndex,\n    pending_caps: &PendingCapsIndex,\n    full_jid: &str,\n) -> MixSessionCapability");
 rejectsRoute("route epoch helper cannot be replaced by a test-module shadow", "sessionTable",
   "pub fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool {\n    let Some(mut session) = sessions.get_mut(key) else {\n        return false;\n    };\n    if session.connection_id != connection_id\n        || session.user_id != user_id\n        || session.auth_generation != auth_generation\n        || !Arc::ptr_eq(&session.lifecycle, lifecycle)\n        || session.disconnect.is_cancelled()\n        || session.lifecycle.load(Ordering::Acquire) != 0\n    {\n        return false;\n    }\n    session.user_agent_epoch = user_agent_epoch;\n    true\n}\n",
   "#[cfg(test)] mod shadow_route { pub fn publish_user_agent_epoch_if_current_in(\n    sessions: &DashMap<String, OnlineSession>,\n    key: &str,\n    connection_id: uuid::Uuid,\n    user_id: uuid::Uuid,\n    auth_generation: i64,\n    lifecycle: &Arc<AtomicU8>,\n    user_agent_epoch: Option<i64>,\n) -> bool {\n    let Some(mut session) = sessions.get_mut(key) else {\n        return false;\n    };\n    if session.connection_id != connection_id\n        || session.user_id != user_id\n        || session.auth_generation != auth_generation\n        || !Arc::ptr_eq(&session.lifecycle, lifecycle)\n        || session.disconnect.is_cancelled()\n        || session.lifecycle.load(Ordering::Acquire) != 0\n    {\n        return false;\n    }\n    session.user_agent_epoch = user_agent_epoch;\n    true\n}\n }");
@@ -1563,43 +1563,43 @@ rejectsRoute("route activation rechecks the owner token after publication", "ses
 rejectsRoute("route activation must roll back false on a failed recheck", "sessionTable",
   "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true",
   "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() {  return false; } true");
-rejectsRoute("route CAPS lookup must canonicalize the queried key", "mixOutboxState",
+rejectsRoute("route CAPS lookup must canonicalize the queried key", "sessionTable",
   "let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(full_jid) else { return MixSessionCapability::Unknown; };",
   "let full_jid = full_jid.to_owned();");
-rejectsRoute("route CAPS snapshot uses the canonical queried key", "mixOutboxState",
+rejectsRoute("route CAPS snapshot uses the canonical queried key", "sessionTable",
   "let Some(observation) = caps_by_jid.snapshot(&full_jid) else { return MixSessionCapability::Unknown; };",
   "let Some(observation) = caps_by_jid.snapshot(&other_jid) else { return MixSessionCapability::Unknown; };");
-rejectsRoute("route CAPS keeps local owner fencing separate from federated owners", "mixOutboxState",
+rejectsRoute("route CAPS keeps local owner fencing separate from federated owners", "sessionTable",
   "if let CapsObservationOwner::Local(epoch) = observation.owner {",
   "if let CapsObservationOwner::Federated(epoch) = observation.owner {");
-rejectsRoute("route CAPS fence reads the actual map epoch", "mixOutboxState",
+rejectsRoute("route CAPS fence reads the actual map epoch", "sessionTable",
   "session.caps_observation_generation.load(Ordering::Acquire),",
-  "epoch.generation,");
-rejectsRoute("route CAPS fence retains the same-gate argument", "mixOutboxState",
+  "epoch.generation,", false, 2);
+rejectsRoute("route CAPS fence retains the same-gate argument", "sessionTable",
   "session.lifecycle.load(Ordering::Acquire), true, epoch, )",
   "session.lifecycle.load(Ordering::Acquire), false, epoch, )");
-rejectsRoute("route CAPS stale observations cannot skip eviction", "mixOutboxState",
+rejectsRoute("route CAPS stale observations cannot skip eviction", "sessionTable",
   "if !current {",
   "if false {");
-rejectsRoute("route CAPS evicts pending before resource observation", "mixOutboxState",
+rejectsRoute("route CAPS evicts pending before resource observation", "sessionTable",
   "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);",
   "caps_by_jid.remove_local_epoch(&full_jid, epoch); pending_caps.remove_local_epoch(&full_jid, epoch);");
-rejectsRoute("route CAPS must evict the stale pending epoch", "mixOutboxState",
+rejectsRoute("route CAPS must evict the stale pending epoch", "sessionTable",
   "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);",
   "caps_by_jid.remove_local_epoch(&full_jid, epoch);");
-rejectsRoute("route CAPS must evict the stale resource epoch", "mixOutboxState",
+rejectsRoute("route CAPS must evict the stale resource epoch", "sessionTable",
   "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);",
   "pending_caps.remove_local_epoch(&full_jid, epoch);");
-rejectsRoute("route CAPS pending eviction uses the exact observed epoch", "mixOutboxState",
+rejectsRoute("route CAPS pending eviction uses the exact observed epoch", "sessionTable",
   "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);",
   "pending_caps.remove_local_epoch(&full_jid, other_epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);");
-rejectsRoute("route CAPS resource eviction uses the exact observed epoch", "mixOutboxState",
+rejectsRoute("route CAPS resource eviction uses the exact observed epoch", "sessionTable",
   "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);",
   "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, other_epoch);");
-rejectsRoute("route CAPS support remains CORE or PAM", "mixOutboxState",
+rejectsRoute("route CAPS support remains CORE or PAM", "sessionTable",
   "summary.has_feature(CORE_NS) || summary.has_feature(PAM_NS)",
   "summary.has_feature(CORE_NS) && summary.has_feature(PAM_NS)");
-rejectsRoute("route CAPS missing summaries cannot become supported", "mixOutboxState",
+rejectsRoute("route CAPS missing summaries cannot become supported", "sessionTable",
   "None => MixSessionCapability::Unknown, }",
   "None => MixSessionCapability::Supported, }");
 rejectsRoute("route CAPS lookup cannot be hoisted out of the actual target loop", "mix",

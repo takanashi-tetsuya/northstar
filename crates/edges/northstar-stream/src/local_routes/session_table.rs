@@ -3,7 +3,9 @@
 
 use super::session::{OnlineSession, SmPresenceEpoch, SmStagedRouteClaim};
 use dashmap::{DashMap, DashSet};
+use northstar_protocol_runtime::caps::{CapsObservationOwner, CapsResourceIndex, PendingCapsIndex};
 use northstar_room_application::muc_service::SerializableMucOccupant;
+use northstar_room_core::mix::{MixSessionCapability, CORE_NS, PAM_NS};
 use northstar_session_core::{
     staged_route_activation_allowed, LocalCapsEpoch, StagedRouteActivationCheck,
     StagedRouteIdentity,
@@ -226,6 +228,48 @@ pub fn local_caps_route_epoch_matches(
         && !cancelled
         && lifecycle == 0
         && same_gate
+}
+
+/// The same verified observation and stale-local-epoch eviction used by
+/// ordinary CAPS routing. An unknown observation keeps durable delivery
+/// parked until verification or the recipient's next route wake.
+pub fn session_mix_capability_in(
+    sessions: &DashMap<String, OnlineSession>,
+    caps_by_jid: &CapsResourceIndex,
+    pending_caps: &PendingCapsIndex,
+    full_jid: &str,
+) -> MixSessionCapability {
+    let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(full_jid) else {
+        return MixSessionCapability::Unknown;
+    };
+    let Some(observation) = caps_by_jid.snapshot(&full_jid) else {
+        return MixSessionCapability::Unknown;
+    };
+    if let CapsObservationOwner::Local(epoch) = observation.owner {
+        let current = sessions.get(&full_jid).is_some_and(|session| {
+            local_caps_route_epoch_matches(
+                session.connection_id,
+                session.caps_observation_generation.load(Ordering::Acquire),
+                session.routable.load(Ordering::Acquire),
+                session.disconnect.is_cancelled(),
+                session.lifecycle.load(Ordering::Acquire),
+                true,
+                epoch,
+            )
+        });
+        if !current {
+            pending_caps.remove_local_epoch(&full_jid, epoch);
+            caps_by_jid.remove_local_epoch(&full_jid, epoch);
+            return MixSessionCapability::Unknown;
+        }
+    }
+    match observation.summary {
+        Some(summary) if summary.has_feature(CORE_NS) || summary.has_feature(PAM_NS) => {
+            MixSessionCapability::Supported
+        }
+        Some(_) => MixSessionCapability::Unsupported,
+        None => MixSessionCapability::Unknown,
+    }
 }
 
 pub fn mix_presence_epoch_is_current(
@@ -717,5 +761,310 @@ impl std::ops::Deref for LocalSessionTable {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use northstar_protocol_runtime::caps::{CapsKey, VerifiedCapsSummary};
+    use northstar_session_application::RouteIncarnationSignal;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+    use std::time::{Duration, Instant};
+    use uuid::Uuid;
+
+    const KEY: &str = "alice@example.test/fixture";
+
+    fn session(
+        connection_id: uuid::Uuid,
+        user_id: uuid::Uuid,
+        routable: bool,
+    ) -> (
+        OnlineSession,
+        tokio::sync::mpsc::Receiver<crate::outbound::OutboundItem>,
+    ) {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let now = Instant::now();
+        (
+            OnlineSession {
+                user_id,
+                auth_generation: 7,
+                user_agent_epoch: None,
+                connection_id,
+                route_incarnation: RouteIncarnationSignal::new(connection_id),
+                lifecycle: Arc::default(),
+                metrics_counted: Arc::default(),
+                routable: Arc::new(AtomicBool::new(routable)),
+                sender: crate::outbound::OutboundSender::new(sender),
+                available: Arc::default(),
+                availability_generation: Arc::default(),
+                post_actions:
+                    northstar_session_application::post_actions::PostActionHandle::default(),
+                recovery_replay_inflight_epoch: Arc::default(),
+                recovery_replay_completed_epoch: Arc::default(),
+                bind2_mam_catchup: false,
+                mix_presence_gate: Arc::default(),
+                mix_presence_fallback_suppressed: Arc::default(),
+                caps_observation_generation: Arc::new(AtomicU64::new(11)),
+                carbons: Arc::default(),
+                priority: Arc::default(),
+                show: Arc::default(),
+                blocklist_requested: Arc::default(),
+                roster_requested: Arc::default(),
+                roster_sync: Arc::default(),
+                mix_roster_annotations: Arc::default(),
+                privacy_active: Arc::default(),
+                privacy_requested: Arc::default(),
+                directed_presence: Arc::default(),
+                last_presence: Arc::default(),
+                ip: None,
+                resource: "fixture".into(),
+                user_agent_id: None,
+                sm_session_id: Arc::default(),
+                muc_memberships: Arc::default(),
+                connected_at: now,
+                last_activity: Arc::new(std::sync::RwLock::new(now)),
+                disconnect: CancellationToken::new(),
+            },
+            receiver,
+        )
+    }
+
+    fn caps_key(version: &str) -> CapsKey {
+        CapsKey {
+            algorithm: "sha-1".to_owned(),
+            node: "https://example.test/caps".to_owned(),
+            version: version.to_owned(),
+        }
+    }
+
+    fn supplied_summary(core: bool, pam: bool) -> Arc<VerifiedCapsSummary> {
+        // Supplied verified environment; these tests do not run disco/hash verification.
+        Arc::new(VerifiedCapsSummary::new(
+            core,
+            pam,
+            String::new(),
+            Vec::new(),
+        ))
+    }
+
+    #[test]
+    fn local_caps_classification_uses_the_current_canonical_route_and_summary() {
+        for (features, expected) in [
+            (Some((true, false)), MixSessionCapability::Supported),
+            (Some((false, true)), MixSessionCapability::Supported),
+            (Some((false, false)), MixSessionCapability::Unsupported),
+            (None, MixSessionCapability::Unknown),
+        ] {
+            let sessions = DashMap::new();
+            let (route, _receiver) = session(Uuid::from_u128(1), Uuid::from_u128(2), true);
+            let epoch = LocalCapsEpoch {
+                connection_id: route.connection_id,
+                generation: route.caps_observation_generation.load(Ordering::Acquire),
+            };
+            sessions.insert(KEY.to_owned(), route);
+            let caps = CapsResourceIndex::new();
+            let pending = PendingCapsIndex::new();
+            let now = Instant::now();
+            caps.observe_local(
+                KEY.to_owned(),
+                epoch,
+                Some(caps_key("current")),
+                features.map(|(core, pam)| supplied_summary(core, pam)),
+                now,
+            );
+            assert!(pending.insert(
+                "current".to_owned(),
+                KEY.to_owned(),
+                caps_key("current"),
+                CapsObservationOwner::Local(epoch),
+                now + Duration::from_secs(30),
+            ));
+            assert_eq!(
+                session_mix_capability_in(&sessions, &caps, &pending, "ALICE@EXAMPLE.TEST/fixture"),
+                expected
+            );
+            assert_eq!(caps.owner(KEY), Some(CapsObservationOwner::Local(epoch)));
+            assert_eq!(caps.len(), 1);
+            assert_eq!(pending.len(), 1);
+            assert_eq!(
+                pending.entries.get("current").unwrap().owner,
+                CapsObservationOwner::Local(epoch)
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_or_unobserved_caps_target_keeps_existing_indexes() {
+        let sessions = DashMap::new();
+        let (route, _receiver) = session(Uuid::from_u128(1), Uuid::from_u128(2), true);
+        let epoch = LocalCapsEpoch {
+            connection_id: route.connection_id,
+            generation: route.caps_observation_generation.load(Ordering::Acquire),
+        };
+        sessions.insert(KEY.to_owned(), route);
+        let caps = CapsResourceIndex::new();
+        let pending = PendingCapsIndex::new();
+        let now = Instant::now();
+        caps.observe_local(
+            KEY.to_owned(),
+            epoch,
+            Some(caps_key("current")),
+            Some(supplied_summary(true, false)),
+            now,
+        );
+        assert!(pending.insert(
+            "current".to_owned(),
+            KEY.to_owned(),
+            caps_key("current"),
+            CapsObservationOwner::Local(epoch),
+            now + Duration::from_secs(30),
+        ));
+        for target in ["", "alice@example.test", "alice@example.test/missing"] {
+            assert_eq!(
+                session_mix_capability_in(&sessions, &caps, &pending, target),
+                MixSessionCapability::Unknown,
+                "{target}"
+            );
+            assert_eq!(caps.owner(KEY), Some(CapsObservationOwner::Local(epoch)));
+            assert_eq!(caps.len(), 1);
+            assert_eq!(pending.len(), 1);
+        }
+    }
+
+    #[test]
+    fn stale_local_caps_evict_only_the_queried_epoch_and_preserve_other_observations() {
+        for case in [
+            "missing session",
+            "connection",
+            "generation",
+            "unroutable",
+            "session cancelled",
+            "lifecycle one",
+            "lifecycle two",
+        ] {
+            let sessions = DashMap::new();
+            let (mut route, _receiver) = session(Uuid::from_u128(1), Uuid::from_u128(2), true);
+            let epoch = LocalCapsEpoch {
+                connection_id: route.connection_id,
+                generation: route.caps_observation_generation.load(Ordering::Acquire),
+            };
+            match case {
+                "missing session" => {}
+                "connection" => {
+                    route.connection_id = Uuid::from_u128(3);
+                    route.route_incarnation =
+                        northstar_session_application::RouteIncarnationSignal::new(
+                            route.connection_id,
+                        );
+                }
+                "generation" => route
+                    .caps_observation_generation
+                    .store(12, Ordering::Release),
+                "unroutable" => route.routable.store(false, Ordering::Release),
+                "session cancelled" => route.disconnect.cancel(),
+                "lifecycle one" => route.lifecycle.store(1, Ordering::Release),
+                "lifecycle two" => route.lifecycle.store(2, Ordering::Release),
+                _ => unreachable!(),
+            }
+            if case != "missing session" {
+                sessions.insert(KEY.to_owned(), route);
+            }
+            let caps = CapsResourceIndex::new();
+            let pending = PendingCapsIndex::new();
+            let now = Instant::now();
+            let summary = supplied_summary(true, false);
+            for key in [KEY, "alice@example.test/other"] {
+                caps.observe_local(
+                    key.to_owned(),
+                    epoch,
+                    Some(caps_key("old")),
+                    Some(Arc::clone(&summary)),
+                    now,
+                );
+            }
+            let newer_epoch = LocalCapsEpoch {
+                connection_id: epoch.connection_id,
+                generation: epoch.generation + 1,
+            };
+            for (id, owner) in [("old", epoch), ("newer", newer_epoch)] {
+                assert!(pending.insert(
+                    id.to_owned(),
+                    KEY.to_owned(),
+                    caps_key(id),
+                    CapsObservationOwner::Local(owner),
+                    now + Duration::from_secs(30),
+                ));
+            }
+            assert_eq!(caps.len(), 2);
+            assert_eq!(pending.len(), 2);
+            assert_eq!(
+                session_mix_capability_in(&sessions, &caps, &pending, "ALICE@EXAMPLE.TEST/fixture"),
+                MixSessionCapability::Unknown,
+                "{case}"
+            );
+            assert!(caps.owner(KEY).is_none(), "{case}");
+            assert!(pending.entries.get("old").is_none(), "{case}");
+            assert_eq!(
+                pending.entries.get("newer").unwrap().owner,
+                CapsObservationOwner::Local(newer_epoch),
+                "{case}"
+            );
+            // The other target is also stale, but was never queried.
+            assert_eq!(
+                caps.owner("alice@example.test/other"),
+                Some(CapsObservationOwner::Local(epoch)),
+                "{case}"
+            );
+            assert_eq!(caps.len(), 1);
+            assert_eq!(pending.len(), 1);
+            assert_eq!(
+                caps.admission.lock().unwrap().summary_bytes,
+                summary.resident_charge()
+            );
+        }
+    }
+
+    #[test]
+    fn federated_caps_classification_does_not_apply_local_route_fences() {
+        for (features, expected) in [
+            (Some((false, true)), MixSessionCapability::Supported),
+            (Some((false, false)), MixSessionCapability::Unsupported),
+            (None, MixSessionCapability::Unknown),
+        ] {
+            let sessions = DashMap::new();
+            let (route, _receiver) = session(Uuid::from_u128(1), Uuid::from_u128(2), false);
+            route.disconnect.cancel();
+            route.lifecycle.store(2, Ordering::Release);
+            sessions.insert(KEY.to_owned(), route);
+            let caps = CapsResourceIndex::new();
+            let pending = PendingCapsIndex::new();
+            let now = Instant::now();
+            let owner = caps
+                .observe_federated(
+                    KEY.to_owned(),
+                    Uuid::from_u128(3),
+                    "example.test".to_owned(),
+                    Some(caps_key("federated")),
+                    features.map(|(core, pam)| supplied_summary(core, pam)),
+                    now,
+                )
+                .unwrap();
+            assert!(pending.insert(
+                "federated".to_owned(),
+                KEY.to_owned(),
+                caps_key("federated"),
+                owner,
+                now + Duration::from_secs(30),
+            ));
+            assert_eq!(
+                session_mix_capability_in(&sessions, &caps, &pending, KEY),
+                expected
+            );
+            assert_eq!(caps.owner(KEY), Some(owner));
+            assert_eq!(pending.entries.get("federated").unwrap().owner, owner);
+            assert_eq!(caps.len(), 1);
+            assert_eq!(pending.len(), 1);
+        }
     }
 }

@@ -31,6 +31,14 @@ use tokio::sync::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+/// Keep remote nodes in authority order, including duplicate routes.
+pub fn remote_nodes_in_order(nodes: Vec<String>, local_node: &str) -> Vec<String> {
+    nodes
+        .into_iter()
+        .filter(|node| node != local_node)
+        .collect()
+}
+
 /// What one MIX stanza asks the session to write.
 #[derive(Debug)]
 pub enum MixAction {
@@ -325,5 +333,24 @@ impl MixLocalSession for OnlineSession {
 
     fn is_available(&self) -> bool {
         self.available.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remote_nodes_in_order;
+
+    #[test]
+    fn remote_mix_nodes_keep_authority_order_and_duplicate_routes() {
+        assert_eq!(
+            remote_nodes_in_order(
+                vec!["second", "local", "first", "second"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+                "local",
+            ),
+            vec!["second", "first", "second"]
+        );
     }
 }

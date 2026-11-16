@@ -9,20 +9,20 @@ northstar_start_test_schema "northstar_retention_it_" "retention"
 cd "$project_dir"
 northstar_use_test_toolchain "$project_dir"
 TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
-  cargo test --locked --offline \
-  db::retention_tests::bounded_concurrent_cleanup_is_restart_safe_and_preserves_evidence \
+  cargo test --locked --offline -p northstar-db-it \
+  message::retention::bounded_concurrent_cleanup_is_restart_safe_and_preserves_evidence \
   -- --ignored --exact --nocapture
 TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
-  cargo test --locked --offline \
-  db::retention_tests::asymmetric_mam_retention_preserves_admission_until_the_last_projection_ends \
+  cargo test --locked --offline -p northstar-db-it \
+  message::retention::asymmetric_mam_retention_preserves_admission_until_the_last_projection_ends \
   -- --ignored --exact --nocapture
 TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
-  cargo test --locked --offline \
-  db::retention_tests::offline_retention_and_admin_clear_respect_sm_and_bosh_owners \
+  cargo test --locked --offline -p northstar-db-it \
+  message::retention::offline_retention_and_admin_clear_respect_sm_and_bosh_owners \
   -- --ignored --exact --nocapture
 TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
-  cargo test --locked --offline \
-  db::data_lifecycle_tests::postgres_hold_cleanup_delete_release_and_audit_invariants \
+  cargo test --locked --offline -p northstar-db-it \
+  operations::data_lifecycle::postgres_hold_cleanup_delete_release_and_audit_invariants \
   -- --ignored --exact --nocapture
 TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
   cargo test --locked --offline \

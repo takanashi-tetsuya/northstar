@@ -87,7 +87,8 @@ run_exact_ignored() {
   local test_name="$1"
   local output
   # The capacity ledger tests live in the session PostgreSQL crate.
-  local package=()
+  # The repository suites live in the database integration test crate.
+  local package=(-p northstar-db-it)
   [[ "$test_name" != capacity::* ]] || package=(-p northstar-session-postgres)
   # The authentication service tests run beside the full migration in northstar-workflows.
   [[ "$test_name" != authentication_tests::* ]] || package=(-p northstar-workflows)
@@ -118,14 +119,14 @@ run_exact_ignored \
 run_exact_ignored \
   authentication_tests::publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
 run_exact_ignored \
-  db::fast_tests::fast_derivation_integrity_failures_are_side_effect_free
+  auth::fast::fast_derivation_integrity_failures_are_side_effect_free
 run_exact_ignored \
   capacity::tests::postgres_capacity_audit_compares_complete_entity_and_counter_sets
 run_exact_ignored \
   capacity::tests::postgres_capacity_fixture_is_atomic_leased_and_idempotent
 run_exact_ignored \
-  db::account_revocations_tests::committed_revocations_survive_lost_wakes_and_stale_acknowledgements
+  auth::account_revocations::committed_revocations_survive_lost_wakes_and_stale_acknowledgements
 run_exact_ignored \
-  db::passkeys_tests::ceremonies_are_single_use_and_key_removal_fences_sessions
+  auth::passkeys::ceremonies_are_single_use_and_key_removal_fences_sessions
 
 trap - EXIT

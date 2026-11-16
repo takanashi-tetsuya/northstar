@@ -17,8 +17,8 @@ backups.
 ## Change boundaries
 
 - Keep protocol parsing and error mapping in `src/xmpp/`; application services
-  own transaction and side-effect boundaries; repositories under `src/db/` own
-  SQL and database DTOs.
+  own transaction and side-effect boundaries; repositories in the
+  `crates/contexts/*/*-postgres` crates own SQL and database DTOs.
 - Published files in `migrations/` are immutable. Add a new monotonically
   numbered migration and update the migration/capability manifests instead of
   editing an applied migration.

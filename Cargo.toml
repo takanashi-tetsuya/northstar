@@ -97,6 +97,7 @@ members = [
     "crates/platform/foundation-kms",
     "crates/platform/foundation-eventing",
     "tools/northstar-test-harness",
+    "tools/northstar-db-it",
     "tools/db-bootstrap",
     "tools/restore-verifier",
     "tools/kafka-policy-generator",

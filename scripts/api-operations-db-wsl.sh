@@ -96,18 +96,18 @@ fi
 # The journal worker claims the oldest operation of the whole journal, so it
 # runs before the repository tests leave theirs pending.
 for port_test in \
-  db::operation_journal_worker_repository_tests::claim_and_target_plan_commit_or_roll_back_together \
-  db::governance_repository_tests::governance_ports_replay_before_cursor_validation_and_bound_exports_before_commit \
-  db::account_admin_repository_tests::account_disable_commits_exact_old_generation_and_rolls_back_failed_cleanup_enqueue \
-  db::account_admin_repository_tests::registration_command_repository_commits_200_and_replays_without_reapplying_policy \
-  db::account_admin_repository_tests::session_kick_snapshots_after_replay_and_retains_missing_session_response \
-  db::account_admin_repository_tests::offline_clear_preserves_transport_owned_queue_and_retries_the_rolled_back_key \
-  db::report_moderation_repository_tests::moderation_ports_commit_decisions_and_replay_terminal_errors_once \
-  db::invitation_admin_repository_tests::invitation_ports_revalidate_secret_replay_and_commit_revoke_outcomes_once \
-  db::retention_policy_repository_tests::policy_ports_preserve_ceilings_room_ownership_and_response_replay \
-  db::retention_policy_repository_tests::retention_commit_holds_secondary_owner_until_affiliation_demotion \
-  db::admin_dispatch_repository_tests::administrative_dispatch_preserves_intents_replay_and_atomic_side_records; do
-  port_output="$(cargo test --locked --offline "$port_test" -- --ignored --exact --nocapture --test-threads=1 2>&1)" || {
+  operations::operation_journal_worker_repository::claim_and_target_plan_commit_or_roll_back_together \
+  operations::governance_repository::governance_ports_replay_before_cursor_validation_and_bound_exports_before_commit \
+  operations::account_admin_repository::account_disable_commits_exact_old_generation_and_rolls_back_failed_cleanup_enqueue \
+  operations::account_admin_repository::registration_command_repository_commits_200_and_replays_without_reapplying_policy \
+  operations::account_admin_repository::session_kick_snapshots_after_replay_and_retains_missing_session_response \
+  operations::account_admin_repository::offline_clear_preserves_transport_owned_queue_and_retries_the_rolled_back_key \
+  operations::report_moderation_repository::moderation_ports_commit_decisions_and_replay_terminal_errors_once \
+  operations::invitation_admin_repository::invitation_ports_revalidate_secret_replay_and_commit_revoke_outcomes_once \
+  operations::retention_policy_repository::policy_ports_preserve_ceilings_room_ownership_and_response_replay \
+  operations::retention_policy_repository::retention_commit_holds_secondary_owner_until_affiliation_demotion \
+  operations::admin_dispatch_repository::administrative_dispatch_preserves_intents_replay_and_atomic_side_records; do
+  port_output="$(cargo test --locked --offline -p northstar-db-it "$port_test" -- --ignored --exact --nocapture --test-threads=1 2>&1)" || {
     printf '%s\n' "$port_output"
     exit 1
   }

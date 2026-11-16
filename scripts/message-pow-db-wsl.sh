@@ -70,28 +70,32 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
 fi
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema"
 
-cargo test --locked --offline \
-  abuse_guard_tests::postgres_v2_intent_mismatch_consumes_but_rollback_restores_proof \
+cargo test --locked --offline -p northstar-db-it \
+  abuse::guard::postgres_v2_intent_mismatch_consumes_but_rollback_restores_proof \
   -- --ignored --nocapture
-cargo test --locked --offline \
-  abuse_guard_tests::postgres_parallel_message_challenges_are_independent_bounded_and_one_use \
+cargo test --locked --offline -p northstar-db-it \
+  abuse::guard::postgres_parallel_message_challenges_are_independent_bounded_and_one_use \
   -- --ignored --nocapture
-cargo test --locked --offline \
-  abuse_guard_tests::postgres_challenge_capacity_is_concurrent_restart_safe_and_hard_limited \
+cargo test --locked --offline -p northstar-db-it \
+  abuse::guard::postgres_challenge_capacity_is_concurrent_restart_safe_and_hard_limited \
   -- --ignored --nocapture
-cargo test --locked --offline \
-  abuse_guard_tests::postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe \
+cargo test --locked --offline -p northstar-db-it \
+  abuse::guard::postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe \
   -- --ignored --nocapture
-cargo test --locked --offline \
-  abuse_guard_tests::postgres_message_admission_capacity_and_cleanup_are_bounded \
+cargo test --locked --offline -p northstar-db-it \
+  abuse::guard::postgres_message_admission_capacity_and_cleanup_are_bounded \
   -- --ignored --nocapture
-cargo test --locked --offline \
-  db::archive::offline_queue_tests::offline_dedupe_rotation_grace_capacity_and_cleanup_are_bounded \
+cargo test --locked --offline -p northstar-db-it \
+  archive::offline_queue_tests::offline_dedupe_rotation_grace_capacity_and_cleanup_are_bounded \
   -- --ignored --nocapture
 
 run_exact_ignored() {
   local test_name="$1" test_output
-  if ! test_output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture 2>&1)"; then
+  # The S2S acceptance boundary is a root binary test; the repository suites live in the database
+  # integration test crate.
+  local package=(-p northstar-db-it)
+  [[ "$test_name" != node::* ]] || package=()
+  if ! test_output="$(cargo test --locked --offline "${package[@]}" "$test_name" -- --ignored --exact --nocapture 2>&1)"; then
     printf '%s\n' "$test_output" | tee -a "$test_log"
     return 1
   fi
@@ -101,8 +105,8 @@ run_exact_ignored() {
     return 1
   fi
 }
-run_exact_ignored db::retraction_service_tests::c2s_projection_is_atomic_idempotent_and_retains_replay_intent
-run_exact_ignored db::retraction_service_tests::exact_replay_conflict_and_outbox_failure_are_atomic
+run_exact_ignored message::retraction_service::c2s_projection_is_atomic_idempotent_and_retains_replay_intent
+run_exact_ignored message::retraction_service::exact_replay_conflict_and_outbox_failure_are_atomic
 run_exact_ignored node::hosts::s2s_inbound::tests::message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts
-run_exact_ignored db::retraction_service_tests::personal_retraction_is_author_scoped_unambiguous_and_atomic
-run_exact_ignored db::archive::offline_queue_tests::concurrent_writers_reject_new_message_instead_of_evicting_old_history
+run_exact_ignored message::retraction_service::personal_retraction_is_author_scoped_unambiguous_and_atomic
+run_exact_ignored archive::offline_queue_tests::concurrent_writers_reject_new_message_instead_of_evicting_old_history

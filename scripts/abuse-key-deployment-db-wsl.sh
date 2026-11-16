@@ -63,12 +63,12 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
 fi
 export TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")"
 
-cargo test --locked --offline \
-  db::abuse_keys_tests::postgres_authority_enforces_bootstrap_overlap_and_retirement \
+cargo test --locked --offline -p northstar-db-it \
+  abuse::keys::postgres_authority_enforces_bootstrap_overlap_and_retirement \
   -- --ignored --nocapture
-cargo test --locked --offline \
-  abuse_guard_tests::postgres_challenges_are_one_use_restart_safe_and_deidentified \
+cargo test --locked --offline -p northstar-db-it \
+  abuse::guard::postgres_challenges_are_one_use_restart_safe_and_deidentified \
   -- --ignored --nocapture
-cargo test --locked --offline \
-  abuse_guard_tests::postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe \
+cargo test --locked --offline -p northstar-db-it \
+  abuse::guard::postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe \
   -- --ignored --nocapture

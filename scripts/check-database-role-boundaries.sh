@@ -28,7 +28,7 @@ admin_commands_source="$project_dir/crates/contexts/workflows/northstar-workflow
 roster_source="$project_dir/crates/contexts/roster/northstar-roster-postgres/src/roster.rs"
 mix_source="$project_dir/crates/contexts/room/northstar-room-postgres/src/mix.rs"
 muc_source="$project_dir/crates/contexts/room/northstar-room-postgres/src/muc.rs"
-muc_test_source="$project_dir/src/db/muc_tests.rs"
+muc_test_source="$project_dir/tools/northstar-db-it/src/room/muc.rs"
 muc_protocol_source="$project_dir/src/xmpp/protocol/muc.rs"
 muc_protocol_test_source="$project_dir/src/xmpp/protocol/muc_tests.rs"
 omemo_recovery_source="$project_dir/crates/contexts/auth/northstar-auth-postgres/src/omemo_recovery.rs"
@@ -1557,7 +1557,7 @@ if grep -Fq 'no_matching_frame' "$message_pow_fixture"; then
   fail 'message PoW duplicate suppression must use an ordered recipient barrier instead of a timed absence window'
 fi
 
-require_literal "$project_dir/src/db/mod.rs" 'mod muc_tests;' \
+require_literal "$project_dir/tools/northstar-db-it/src/room.rs" 'mod muc;' \
   'MUC repository must compile its extracted tests'
 require_literal "$muc_protocol_source" '#[path = "muc_tests.rs"]' \
   'MUC protocol must compile its extracted tests'

@@ -37,28 +37,28 @@ SUITE_TIMEOUT_SECONDS = 1800
 PASSWORD = 'xmpp-test-password'  # Fixed disposable identity required by these suites.
 EXPECTED_TESTS = {
     'muc': (
-        'db::muc_tests::locked_room_configuration_is_atomic_restart_safe_and_bounded',
-        'db::muc_tests::durable_invitation_admission_is_atomic_under_injected_failures',
-        'db::muc_tests::history_identity_and_mutations_are_atomic_under_replay_and_failure',
-        'db::cluster_muc_tests::postgres_outbox_maintenance_is_atomic_and_snapshot_is_complete',
-        'db::cluster_muc_tests::postgres_admin_batch_is_atomic_under_replay_and_failure',
-        'db::cluster_muc_tests::federated_rebind_is_atomic_and_fences_the_old_connection',
-        'db::cluster_muc_tests::postgres_failure_fixture_covers_cluster_muc_authority',
-        'db::operation_muc_destroy_repository_tests::missing_exact_destroy_intent_rolls_back_without_audit_or_room_mutation',
+        'room::muc::locked_room_configuration_is_atomic_restart_safe_and_bounded',
+        'room::muc::durable_invitation_admission_is_atomic_under_injected_failures',
+        'room::muc::history_identity_and_mutations_are_atomic_under_replay_and_failure',
+        'room::cluster_muc::postgres_outbox_maintenance_is_atomic_and_snapshot_is_complete',
+        'room::cluster_muc::postgres_admin_batch_is_atomic_under_replay_and_failure',
+        'room::cluster_muc::federated_rebind_is_atomic_and_fences_the_old_connection',
+        'room::cluster_muc::postgres_failure_fixture_covers_cluster_muc_authority',
+        'operations::operation_muc_destroy_repository::missing_exact_destroy_intent_rolls_back_without_audit_or_room_mutation',
     ),
     'mix': (
-        'db::mix_pam_durability_tests::pam_restart_and_result_claims_preserve_authority_and_token_fencing',
-        'db::mix_sequence_retention_tests::sequence_gc_preserves_a_producer_committed_after_its_snapshot',
-        'db::mix_sequence_retention_tests::event_gc_preserves_a_requeue_committed_after_its_snapshot',
-        'db::mix_sequence_retention_tests::empty_delivery_claim_avoids_the_event_lock_and_recovers_after_insert',
-        'db::mix_sequence_retention_tests::empty_delivery_claim_preserves_database_authority_errors',
-        'db::mix_delivery_route_wake_tests::an_expired_unowned_head_blocks_until_terminalized',
-        'db::mix_muc_tests::mirror_link_is_common_owner_only_one_to_one_and_idempotent',
-        'db::mix_mam_tests::mix_anon_misc_permissions_are_atomic_and_private',
-        'db::mix_delivery_capacity_tests::delivery_ack_is_independent_of_the_producer_fence_and_release_is_atomic',
-        'db::mix_delivery_route_wake_tests::leased_route_wake_defeats_defer_and_retry_but_not_unrelated_backoff',
-        'db::mix_delivery_route_wake_tests::attempt_limit_route_wake_gets_one_fresh_claim_before_dead_letter',
-        'db::mix_delivery_route_wake_tests::dead_letter_requeue_uses_tail_and_preserves_current_head_wake',
+        'room::mix_pam_durability::pam_restart_and_result_claims_preserve_authority_and_token_fencing',
+        'room::mix_sequence_retention::sequence_gc_preserves_a_producer_committed_after_its_snapshot',
+        'room::mix_sequence_retention::event_gc_preserves_a_requeue_committed_after_its_snapshot',
+        'room::mix_sequence_retention::empty_delivery_claim_avoids_the_event_lock_and_recovers_after_insert',
+        'room::mix_sequence_retention::empty_delivery_claim_preserves_database_authority_errors',
+        'room::mix_delivery_route_wake::an_expired_unowned_head_blocks_until_terminalized',
+        'room::mix_muc::mirror_link_is_common_owner_only_one_to_one_and_idempotent',
+        'room::mix_mam::mix_anon_misc_permissions_are_atomic_and_private',
+        'room::mix_delivery_capacity::delivery_ack_is_independent_of_the_producer_fence_and_release_is_atomic',
+        'room::mix_delivery_route_wake::leased_route_wake_defeats_defer_and_retry_but_not_unrelated_backoff',
+        'room::mix_delivery_route_wake::attempt_limit_route_wake_gets_one_fresh_claim_before_dead_letter',
+        'room::mix_delivery_route_wake::dead_letter_requeue_uses_tail_and_preserves_current_head_wake',
     ),
     'authentication': (
         'authentication_tests::authentication_service_fences_all_credential_and_inline_state_transitions',
@@ -66,11 +66,11 @@ EXPECTED_TESTS = {
         'authentication_tests::bind2_resets_active_pooled_transaction_before_preflight',
         'authentication_tests::login_epoch_publication_is_fenced_invisible_and_atomic_with_binding',
         'authentication_tests::publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup',
-        'db::fast_tests::fast_derivation_integrity_failures_are_side_effect_free',
+        'auth::fast::fast_derivation_integrity_failures_are_side_effect_free',
         'capacity::tests::postgres_capacity_audit_compares_complete_entity_and_counter_sets',
         'capacity::tests::postgres_capacity_fixture_is_atomic_leased_and_idempotent',
-        'db::account_revocations_tests::committed_revocations_survive_lost_wakes_and_stale_acknowledgements',
-        'db::passkeys_tests::ceremonies_are_single_use_and_key_removal_fences_sessions',
+        'auth::account_revocations::committed_revocations_survive_lost_wakes_and_stale_acknowledgements',
+        'auth::passkeys::ceremonies_are_single_use_and_key_removal_fences_sessions',
     ),
 }
 
@@ -380,7 +380,7 @@ class OwnedRoomDatabase:
         raise TimeoutError('owned PostgreSQL startup exceeded 30 seconds')
 
     def run_suite(self, name, script, record):
-        declared = re.findall(r'^\s*((?:db|services|capacity|authentication_tests)::[A-Za-z0-9_:]+)\s*\\?\s*$',
+        declared = re.findall(r'^\s*((?:auth|authentication_tests|capacity|operations|room|services)::[A-Za-z0-9_:]+)\s*\\?\s*$',
                               (SOURCE / script).read_text(), re.MULTILINE)
         if tuple(declared) != EXPECTED_TESTS[name]:
             raise RuntimeError('suite selectors differ from the reviewed experiment manifest')

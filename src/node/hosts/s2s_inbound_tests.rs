@@ -1,4 +1,3 @@
-use crate::db;
 use northstar_message_application::retractions::{
     ArchiveWrite, DeliveryProjection, OwnerProjection, RetractionCommand, RetractionOutcome,
     RetractionService,
@@ -36,7 +35,9 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
         .connect(&url)
         .await
         .unwrap();
-    crate::db::migrate(&pool).await.unwrap();
+    northstar_workflows::identity_migration::migrate_for_tests(&pool)
+        .await
+        .unwrap();
 
     let recipient_id = uuid::Uuid::new_v4();
     let sender_id = uuid::Uuid::new_v4();
@@ -47,7 +48,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
         .await
         .unwrap();
     let persisted_subscribe = "<presence xmlns='jabber:client' from='alice@remote.test' to='bob@local.test' type='subscribe'><status>hello</status></presence>";
-    db::add_federated_presence_pending_with_stanza(
+    northstar_roster_postgres::roster::add_federated_presence_pending_with_stanza(
         &pool,
         recipient_id,
         "alice@remote.test",
@@ -56,14 +57,16 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
     .await
     .unwrap();
     let oversized_subscription = "x".repeat(65_537);
-    assert!(db::add_federated_presence_pending_with_stanza(
-        &pool,
-        recipient_id,
-        "mallory@remote.test",
-        Some(&oversized_subscription),
-    )
-    .await
-    .is_err());
+    assert!(
+        northstar_roster_postgres::roster::add_federated_presence_pending_with_stanza(
+            &pool,
+            recipient_id,
+            "mallory@remote.test",
+            Some(&oversized_subscription),
+        )
+        .await
+        .is_err()
+    );
     let pending_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM federated_presence_pending")
         .fetch_one(&pool)
         .await

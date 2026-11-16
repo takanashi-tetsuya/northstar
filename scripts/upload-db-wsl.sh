@@ -157,20 +157,20 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
 fi
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$test_schema"
 cargo test --locked --offline -p northstar-upload-postgres tests:: -- --skip migration:: --ignored --nocapture --test-threads=1
-cargo test --locked --offline db::upload_account_tests -- --ignored --nocapture --test-threads=1
+cargo test --locked --offline -p northstar-db-it upload::account -- --ignored --nocapture --test-threads=1
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$admin_schema"
-cargo test --locked --offline \
-  db::upload_admin_tests::postgres_retry_idempotency_replay_target_generation_and_not_found_contract \
+cargo test --locked --offline -p northstar-db-it \
+  upload::admin::postgres_retry_idempotency_replay_target_generation_and_not_found_contract \
   -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked --offline \
-  db::upload_admin_tests::postgres_retry_authorization_pagination_concurrency_and_fencing \
+cargo test --locked --offline -p northstar-db-it \
+  upload::admin::postgres_retry_authorization_pagination_concurrency_and_fencing \
   -- --ignored --exact --nocapture --test-threads=1
 # The account-deletion fixture binds its own upload-capacity policy after
 # migration, so this invocation must not depend on a preceding test command's
 # durable state in the shared isolated schema.
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$test_schema"
-cargo test --locked --offline \
-  db::users_tests::account_deletion_atomically_cancels_local_reverse_rosters \
+cargo test --locked --offline -p northstar-db-it \
+  auth::users::account_deletion_atomically_cancels_local_reverse_rosters \
   -- --ignored --nocapture --test-threads=1
 # The cutover journal test asserts its own random schema, so the `tests::` run
 # above skips it.

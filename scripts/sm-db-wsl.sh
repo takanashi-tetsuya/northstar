@@ -13,8 +13,9 @@ export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PG
 run_exact_ignored() {
   local test_name="$1"
   local output
-  # The store's own tests live in the workflows crate.
-  local package=()
+  # The store's own tests live in the workflows crate; the repository suites in the database
+  # integration test crate.
+  local package=(-p northstar-db-it)
   [[ "$test_name" != sm::* ]] || package=(-p northstar-workflows)
   output="$(cargo test --locked --offline "${package[@]}" "$test_name" -- --ignored --exact --nocapture 2>&1)" || {
     printf '%s\n' "$output"
@@ -42,10 +43,10 @@ run_exact_ignored \
 run_exact_ignored \
   sm::tests::account_deletion_quiesce_closes_all_sm_race_barriers
 run_exact_ignored \
-  db::account_deletion_tests::deletion_recovery_is_delayed_single_owner_and_cascading
+  auth::account_deletion::deletion_recovery_is_delayed_single_owner_and_cascading
 run_exact_ignored \
-  db::sm_service_tests::binding_reservation_is_bounded_leased_and_rechecks_auth_generation
+  session::sm_service::binding_reservation_is_bounded_leased_and_rechecks_auth_generation
 run_exact_ignored \
-  db::sm_service_tests::sm_activation_and_privacy_selection_commit_or_roll_back_together
+  session::sm_service::sm_activation_and_privacy_selection_commit_or_roll_back_together
 run_exact_ignored \
-  db::sm_service_tests::resumable_binding_lease_transfers_only_after_transport_publication
+  session::sm_service::resumable_binding_lease_transfers_only_after_transport_publication

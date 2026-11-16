@@ -1,0 +1,68 @@
+[package]
+name = "northstar-db-it"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "PostgreSQL integration tests of the Northstar context repositories"
+publish = false
+
+[lib]
+doctest = false
+
+[dev-dependencies]
+anyhow = "1.0"
+axum = { version = "0.8", features = ["ws", "multipart"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
+rand = "0.8"
+ring = "0.17.14"
+roxmltree = "0.20"
+serde_json = "1.0"
+sha2 = "0.10"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
+tokio = { version = "1.43", features = ["full", "test-util"] }
+tokio-rustls = "0.26"
+uuid = { version = "1.12", features = ["v4", "serde"] }
+zeroize = "1.8"
+northstar-abuse-application = { path = "../../crates/contexts/abuse/northstar-abuse-application", features = ["test-support"] }
+northstar-abuse-policy = { path = "../../crates/contexts/abuse/northstar-abuse-policy", features = ["test-support"] }
+northstar-abuse-postgres = { path = "../../crates/contexts/abuse/northstar-abuse-postgres" }
+northstar-archive-application = { path = "../../crates/contexts/archive/northstar-archive-application" }
+northstar-archive-core = { path = "../../crates/contexts/archive/northstar-archive-core" }
+northstar-archive-postgres = { path = "../../crates/contexts/archive/northstar-archive-postgres", features = ["test-support"] }
+northstar-auth-application = { path = "../../crates/contexts/auth/northstar-auth-application", features = ["test-support"] }
+northstar-auth-core = { path = "../../crates/contexts/auth/northstar-auth-core" }
+northstar-auth-postgres = { path = "../../crates/contexts/auth/northstar-auth-postgres", features = ["test-support"] }
+northstar-cluster = { path = "../../crates/edges/northstar-cluster" }
+northstar-data-tools = { path = "../../crates/contexts/workflows/northstar-data-tools", features = ["test-support"] }
+northstar-federation-core = { path = "../../crates/contexts/federation/northstar-federation-core" }
+northstar-http = { path = "../../crates/edges/northstar-http" }
+northstar-message-application = { path = "../../crates/contexts/message/northstar-message-application", features = ["test-support"] }
+northstar-message-core = { path = "../../crates/contexts/message/northstar-message-core" }
+northstar-message-postgres = { path = "../../crates/contexts/message/northstar-message-postgres", features = ["test-support"] }
+northstar-operations-application = { path = "../../crates/contexts/operations/northstar-operations-application", features = ["test-support"] }
+northstar-operations-core = { path = "../../crates/contexts/operations/northstar-operations-core" }
+northstar-operations-postgres = { path = "../../crates/contexts/operations/northstar-operations-postgres", features = ["test-support"] }
+northstar-postgres = { path = "../../crates/platform/northstar-postgres" }
+northstar-pubsub-application = { path = "../../crates/contexts/pubsub/northstar-pubsub-application" }
+northstar-pubsub-core = { path = "../../crates/contexts/pubsub/northstar-pubsub-core" }
+northstar-pubsub-postgres = { path = "../../crates/contexts/pubsub/northstar-pubsub-postgres", features = ["test-support"] }
+northstar-pubsub-xmpp = { path = "../../crates/contexts/pubsub/northstar-pubsub-xmpp" }
+northstar-room-application = { path = "../../crates/contexts/room/northstar-room-application", features = ["test-support"] }
+northstar-room-core = { path = "../../crates/contexts/room/northstar-room-core" }
+northstar-room-postgres = { path = "../../crates/contexts/room/northstar-room-postgres", features = ["test-support"] }
+northstar-roster-application = { path = "../../crates/contexts/roster/northstar-roster-application" }
+northstar-roster-core = { path = "../../crates/contexts/roster/northstar-roster-core" }
+northstar-roster-postgres = { path = "../../crates/contexts/roster/northstar-roster-postgres", features = ["test-support"] }
+northstar-security = { path = "../../crates/platform/northstar-security", features = ["test-support"] }
+northstar-session-application = { path = "../../crates/contexts/session/northstar-session-application", features = ["test-support"] }
+northstar-session-postgres = { path = "../../crates/contexts/session/northstar-session-postgres", features = ["test-support"] }
+northstar-stream = { path = "../../crates/edges/northstar-stream", features = ["test-support"] }
+northstar-upload-application = { path = "../../crates/contexts/upload/northstar-upload-application" }
+northstar-upload-postgres = { path = "../../crates/contexts/upload/northstar-upload-postgres", features = ["test-support"] }
+northstar-workflows = { path = "../../crates/contexts/workflows/northstar-workflows", features = ["test-support"] }
+northstar-xep-0016 = { path = "../../crates/kernel/northstar-xep-0016" }
+northstar-xep-0060 = { path = "../../crates/kernel/northstar-xep-0060" }
+northstar-xml-builder = { path = "../../crates/kernel/northstar-xml-builder" }
+northstar-xmpp-types = { path = "../../crates/kernel/northstar-xmpp-types" }

@@ -519,7 +519,7 @@
           "status": "declared",
           "command": "bash scripts/muc-db-wsl.sh",
           "test": {
-            "path": "src/db/muc_tests.rs",
+            "path": "tools/northstar-db-it/src/room/muc.rs",
             "anchor": "async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {"
           },
           "assertions": [
@@ -640,7 +640,7 @@
           "command": "bash scripts/mix-family-db-wsl.sh",
           "test": {
             "path": "scripts/mix-family-db-wsl.sh",
-            "anchor": "  db::mix_sequence_retention_tests::empty_delivery_claim_preserves_database_authority_errors"
+            "anchor": "  room::mix_sequence_retention::empty_delivery_claim_preserves_database_authority_errors"
           },
           "assertions": [
             "MIX DB suite tests PAM authority, sequence/event GC races, delivery capacity and exact route-wake claim/requeue behavior."

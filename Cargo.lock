@@ -2146,6 +2146,68 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-db-it"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "futures",
+ "northstar-abuse-application",
+ "northstar-abuse-policy",
+ "northstar-abuse-postgres",
+ "northstar-archive-application",
+ "northstar-archive-core",
+ "northstar-archive-postgres",
+ "northstar-auth-application",
+ "northstar-auth-core",
+ "northstar-auth-postgres",
+ "northstar-cluster",
+ "northstar-data-tools",
+ "northstar-federation-core",
+ "northstar-http",
+ "northstar-message-application",
+ "northstar-message-core",
+ "northstar-message-postgres",
+ "northstar-operations-application",
+ "northstar-operations-core",
+ "northstar-operations-postgres",
+ "northstar-postgres",
+ "northstar-pubsub-application",
+ "northstar-pubsub-core",
+ "northstar-pubsub-postgres",
+ "northstar-pubsub-xmpp",
+ "northstar-room-application",
+ "northstar-room-core",
+ "northstar-room-postgres",
+ "northstar-roster-application",
+ "northstar-roster-core",
+ "northstar-roster-postgres",
+ "northstar-security",
+ "northstar-session-application",
+ "northstar-session-postgres",
+ "northstar-stream",
+ "northstar-upload-application",
+ "northstar-upload-postgres",
+ "northstar-workflows",
+ "northstar-xep-0016",
+ "northstar-xep-0060",
+ "northstar-xml-builder",
+ "northstar-xmpp-types",
+ "rand 0.8.7",
+ "ring",
+ "roxmltree",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "tokio",
+ "tokio-rustls",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "northstar-delivery-core"
 version = "0.1.0"
 dependencies = [

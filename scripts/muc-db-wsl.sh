@@ -185,27 +185,27 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
 fi
 
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema"
-cargo test --locked --offline \
-  db::muc_tests::locked_room_configuration_is_atomic_restart_safe_and_bounded \
+cargo test --locked --offline -p northstar-db-it \
+  room::muc::locked_room_configuration_is_atomic_restart_safe_and_bounded \
   -- --ignored --nocapture
-cargo test --locked --offline \
-  db::muc_tests::durable_invitation_admission_is_atomic_under_injected_failures \
+cargo test --locked --offline -p northstar-db-it \
+  room::muc::durable_invitation_admission_is_atomic_under_injected_failures \
   -- --ignored --nocapture
-cargo test --locked --offline \
-  db::muc_tests::history_identity_and_mutations_are_atomic_under_replay_and_failure \
+cargo test --locked --offline -p northstar-db-it \
+  room::muc::history_identity_and_mutations_are_atomic_under_replay_and_failure \
   -- --ignored --nocapture
-cargo test --locked --offline \
-  db::cluster_muc_tests::postgres_outbox_maintenance_is_atomic_and_snapshot_is_complete \
+cargo test --locked --offline -p northstar-db-it \
+  room::cluster_muc::postgres_outbox_maintenance_is_atomic_and_snapshot_is_complete \
   -- --ignored --exact --nocapture
-cargo test --locked --offline \
-  db::cluster_muc_tests::postgres_admin_batch_is_atomic_under_replay_and_failure \
+cargo test --locked --offline -p northstar-db-it \
+  room::cluster_muc::postgres_admin_batch_is_atomic_under_replay_and_failure \
   -- --ignored --exact --nocapture
-cargo test --locked --offline \
-  db::cluster_muc_tests::federated_rebind_is_atomic_and_fences_the_old_connection \
+cargo test --locked --offline -p northstar-db-it \
+  room::cluster_muc::federated_rebind_is_atomic_and_fences_the_old_connection \
   -- --ignored --exact --nocapture
-cargo test --locked --offline \
-  db::cluster_muc_tests::postgres_failure_fixture_covers_cluster_muc_authority \
+cargo test --locked --offline -p northstar-db-it \
+  room::cluster_muc::postgres_failure_fixture_covers_cluster_muc_authority \
   -- --ignored --exact --nocapture
-cargo test --locked --offline \
-  db::operation_muc_destroy_repository_tests::missing_exact_destroy_intent_rolls_back_without_audit_or_room_mutation \
+cargo test --locked --offline -p northstar-db-it \
+  operations::operation_muc_destroy_repository::missing_exact_destroy_intent_rolls_back_without_audit_or_room_mutation \
   -- --ignored --exact --nocapture

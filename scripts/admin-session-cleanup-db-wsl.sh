@@ -56,7 +56,7 @@ export TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema
 run_exact_ignored() {
   local test_name="$1"
   local output
-  if ! output="$(cargo test --locked --offline "$test_name" -- \
+  if ! output="$(cargo test --locked --offline -p northstar-db-it "$test_name" -- \
       --ignored --exact --nocapture --test-threads=1 2>&1)"; then
     printf '%s\n' "$output"
     return 1
@@ -69,13 +69,13 @@ run_exact_ignored() {
 }
 
 run_exact_ignored \
-  db::admin_commands_boundary_tests::admin_cleanup_effects_are_atomic_lease_fenced_and_compacted
+  operations::admin_commands_boundary::admin_cleanup_effects_are_atomic_lease_fenced_and_compacted
 run_exact_ignored \
-  db::admin_commands_boundary_tests::admin_cleanup_effects_survive_delete_and_do_not_retarget_rebinds
+  operations::admin_commands_boundary::admin_cleanup_effects_survive_delete_and_do_not_retarget_rebinds
 run_exact_ignored \
-  db::admin_commands_boundary_tests::service_control_poll_isolates_traffic_exhaustion_and_fails_closed_on_lock
+  operations::admin_commands_boundary::service_control_poll_isolates_traffic_exhaustion_and_fails_closed_on_lock
 run_exact_ignored \
-  db::admin_commands_boundary_tests::admin_command_same_request_retry_replays_one_terminal_result
+  operations::admin_commands_boundary::admin_command_same_request_retry_replays_one_terminal_result
 
 cleanup
 created=0

@@ -20,7 +20,6 @@
         "api",
         "bosh",
         "cluster",
-        "db",
         "s2s",
         "xmpp"
       ],

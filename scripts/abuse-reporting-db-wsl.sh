@@ -12,20 +12,20 @@ export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PG
 
 scope="${ABUSE_REPORTING_TEST_SCOPE:-all}"
 if [[ "$scope" != "reports" && "$scope" != "atomic" && "$scope" != "legacy" ]]; then
-  cargo test --locked --offline \
-    abuse_guard_tests::postgres_challenges_are_one_use_restart_safe_and_deidentified \
+  cargo test --locked --offline -p northstar-db-it \
+    abuse::guard::postgres_challenges_are_one_use_restart_safe_and_deidentified \
     -- --ignored --nocapture
-  cargo test --locked --offline \
-    abuse_guard_tests::postgres_accepts_one_thousand_independent_actor_decisions \
+  cargo test --locked --offline -p northstar-db-it \
+    abuse::guard::postgres_accepts_one_thousand_independent_actor_decisions \
     -- --ignored --nocapture
 fi
 if [[ "$scope" != "abuse" && "$scope" != "atomic" ]]; then
-  cargo test --locked --offline \
-    db::reports_tests::report_evidence_is_owned_peer_bound_atomic_and_moderation_is_serialized \
+  cargo test --locked --offline -p northstar-db-it \
+    abuse::reports::report_evidence_is_owned_peer_bound_atomic_and_moderation_is_serialized \
     -- --ignored --nocapture
 fi
 if [[ "$scope" != "abuse" && "$scope" != "legacy" ]]; then
-  cargo test --locked --offline \
-    db::reports_tests::report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized \
+  cargo test --locked --offline -p northstar-db-it \
+    abuse::reports::report_and_appeal_transactions_are_idempotent_pow_atomic_and_serialized \
     -- --ignored --nocapture
 fi

@@ -3052,7 +3052,7 @@ for (const upgradeEvidence of [
   }
 }
 // reads the whole module including test-only child files
-const archiveRepositorySource = `${readModule('src/db/archive.rs', { root })}\n${readModule('crates/contexts/message/northstar-message-postgres/src/personal_history.rs', { root })}\n${readModule('crates/contexts/workflows/northstar-workflows/src/personal_history.rs', { root })}\n${read('crates/contexts/workflows/northstar-workflows/src/mam_room.rs')}\n${read('crates/contexts/workflows/northstar-workflows/src/mix_archive.rs')}`;
+const archiveRepositorySource = `${readModule('tools/northstar-db-it/src/archive.rs', { root })}\n${readModule('crates/contexts/message/northstar-message-postgres/src/personal_history.rs', { root })}\n${readModule('crates/contexts/workflows/northstar-workflows/src/personal_history.rs', { root })}\n${read('crates/contexts/workflows/northstar-workflows/src/mam_room.rs')}\n${read('crates/contexts/workflows/northstar-workflows/src/mix_archive.rs')}`;
 if (/\bpayload_value\b/.test(archiveRepositorySource)) {
   throw new Error('archive repository must not read, bind, or persist plaintext admission payload_value');
 }
@@ -3113,7 +3113,7 @@ if (/\bapi_control\b|ApiControlKeyring/.test(contentGenerationBody)) {
 }
 // The abuse context owns the purpose selector; its callers must not name it.
 const sourceFilesNamingContentPurpose = [];
-for (const directory of ['src/xmpp/protocol', 'crates/edges/northstar-stream/src/protocol', 'src/db', 'crates/contexts']) {
+for (const directory of ['src/xmpp/protocol', 'crates/edges/northstar-stream/src/protocol', 'tools/northstar-db-it/src', 'crates/contexts']) {
   const pending = [path.join(root, directory)];
   while (pending.length > 0) {
     const current = pending.pop();

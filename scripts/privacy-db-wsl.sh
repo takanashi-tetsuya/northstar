@@ -41,11 +41,11 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$database?options=-csearch_path%3D$schema"
-cargo test --locked --offline \
-  db::privacy::tests::postgres_privacy_lists_are_bounded_ordered_cascading_and_enforced \
+cargo test --locked --offline -p northstar-db-it \
+  roster::privacy::tests::postgres_privacy_lists_are_bounded_ordered_cascading_and_enforced \
   -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked --offline \
-  db::privacy_service_tests::privacy_service_boundary_preserves_stanza_kind_allow_deny_results \
+cargo test --locked --offline -p northstar-db-it \
+  roster::privacy_service::privacy_service_boundary_preserves_stanza_kind_allow_deny_results \
   -- --ignored --exact --nocapture --test-threads=1
 
 cleanup

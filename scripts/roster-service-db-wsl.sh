@@ -60,8 +60,8 @@ cargo test --locked --offline -p northstar-workflows \
 cargo test --locked --offline -p northstar-workflows \
   roster::blocking_match_tests::roster_versions_and_committed_snapshots_survive_concurrent_writes \
   -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked --offline \
-  db::presence_service_tests:: \
+cargo test --locked --offline -p northstar-db-it \
+  roster::presence_service:: \
   -- --ignored --nocapture --test-threads=1
 
 cleanup

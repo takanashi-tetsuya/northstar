@@ -224,7 +224,7 @@ impl InboundHost for ServerNode {
     }
 
     async fn privacy_allows_iq(&self, session: &OnlineSession, from: &str) -> Result<bool> {
-        self.privacy_allows_session(session, from, crate::db::PrivacyStanzaKind::Iq)
+        self.privacy_allows_session(session, from, northstar_xep_0016::PrivacyStanzaKind::Iq)
             .await
     }
 

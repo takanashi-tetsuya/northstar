@@ -2,6 +2,60 @@
 
 use super::*;
 
+/// MIX presence withdrawal for a fenced client resource.
+pub async fn disconnect_mix_presence(
+    port: &impl MixPresenceWithdrawalPort,
+    user_id: Uuid,
+    actor_bare: &str,
+    actor_full: &str,
+) -> Result<()> {
+    let unavailable = XmlElement::namespaced("presence", "jabber:client")
+        .attr("from", actor_full)
+        .attr("type", "unavailable")
+        .finish();
+    for membership in port.service().pam_memberships(user_id).await? {
+        if membership.state != "joined"
+            || !membership
+                .subscriptions
+                .iter()
+                .any(|subscription| subscription == NODE_PRESENCE)
+        {
+            continue;
+        }
+        let Ok(channel) = CanonicalJid::parse_bare(&membership.channel_jid) else {
+            tracing::warn!(channel = %membership.channel_jid, "ignored malformed persisted MIX membership JID");
+            continue;
+        };
+        let domain = channel.domainpart();
+        if domain == port.local_mix_domain() {
+            let Some(channel_localpart) = channel.localpart() else {
+                continue;
+            };
+            // The generated unavailable stanza has no children. The
+            // channel service performs the same idempotent transaction as
+            // a direct unavailable presence from this resource.
+            if let Some(room) = port
+                .service()
+                .mix_channel(port.local_mix_domain(), channel_localpart)
+                .await?
+            {
+                let _ = port
+                    .service()
+                    .store_mix_presence(room.id, actor_bare, actor_full, "", true)
+                    .await?;
+            }
+        } else if port.federation_domain_allowed(domain) {
+            let directed =
+                northstar_xml_builder::rewrite::set_to(&unavailable, &membership.channel_jid);
+            let _ = port
+                .federation_outbox()
+                .send(domain, directed, Some(actor_bare.to_owned()))
+                .await;
+        }
+    }
+    Ok(())
+}
+
 pub fn presence_children(raw: &str) -> Result<(String, bool)> {
     let document = Document::parse(raw).context("malformed MIX presence")?;
     let root = document.root_element();

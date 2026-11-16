@@ -208,9 +208,10 @@ impl SessionCleanupPorts for SessionCleanupAdapters {
         actor_bare: &str,
         actor_full: &str,
     ) -> Result<()> {
-        self.mix
-            .disconnect_presence(user_id, actor_bare, actor_full)
-            .await
+        northstar_mix_xmpp::presence::disconnect_mix_presence(
+            &self.mix, user_id, actor_bare, actor_full,
+        )
+        .await
     }
 
     fn pg_muc_authoritative(&self) -> bool {

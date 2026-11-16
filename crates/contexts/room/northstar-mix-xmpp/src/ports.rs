@@ -178,6 +178,17 @@ pub trait MixOutboxPort: Send + Sync + 'static {
     fn record_post_commit_failure(&self);
 }
 
+/// What MIX presence withdrawal needs when a client resource is fenced.
+pub trait MixPresenceWithdrawalPort: Send + Sync {
+    type Repository: MixRepository + 'static;
+    type Federation: FederationRoute;
+
+    fn service(&self) -> &MixService<Self::Repository>;
+    fn local_mix_domain(&self) -> &str;
+    fn federation_domain_allowed(&self, domain: &str) -> bool;
+    fn federation_outbox(&self) -> &Self::Federation;
+}
+
 /// Live-route fences read by MIX presence recovery.
 pub trait MixPresenceRoutes: Send + Sync + 'static {
     fn local_epochs(&self, participant: &str) -> Vec<(String, Uuid, u64)>;

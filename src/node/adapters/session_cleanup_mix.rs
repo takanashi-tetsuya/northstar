@@ -1,14 +1,12 @@
-//! MIX presence withdrawal for a fenced client resource.
+//! Concrete bindings for MIX presence withdrawal after a client resource is fenced.
 
 use crate::node::FederationRouter;
 use crate::node::ServerNode;
-use anyhow::Result;
 use northstar_federation_application::effective_policy::EffectiveFederationPolicy;
-use northstar_room_application::mix_service::{MixService, NODE_PRESENCE};
+use northstar_mix_xmpp::ports::MixPresenceWithdrawalPort;
+use northstar_room_application::mix_service::MixService;
 use northstar_workflows::room_effects::PostgresMixRepository;
-use northstar_xml_builder::XmlElement;
-use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
-use uuid::Uuid;
+use northstar_xmpp_types::jid::prepare_domainpart;
 
 pub(crate) struct SessionCleanupMix {
     service: MixService<PostgresMixRepository>,
@@ -29,61 +27,23 @@ impl ServerNode {
     }
 }
 
-impl SessionCleanupMix {
+impl MixPresenceWithdrawalPort for SessionCleanupMix {
+    type Repository = PostgresMixRepository;
+    type Federation = FederationRouter;
+
+    fn service(&self) -> &MixService<Self::Repository> {
+        &self.service
+    }
+
+    fn local_mix_domain(&self) -> &str {
+        &self.local_mix_domain
+    }
+
     fn federation_domain_allowed(&self, domain: &str) -> bool {
         self.policy.domain_allowed(domain)
     }
 
-    pub(crate) async fn disconnect_presence(
-        &self,
-        user_id: Uuid,
-        actor_bare: &str,
-        actor_full: &str,
-    ) -> Result<()> {
-        let unavailable = XmlElement::namespaced("presence", "jabber:client")
-            .attr("from", actor_full)
-            .attr("type", "unavailable")
-            .finish();
-        for membership in self.service.pam_memberships(user_id).await? {
-            if membership.state != "joined"
-                || !membership
-                    .subscriptions
-                    .iter()
-                    .any(|subscription| subscription == NODE_PRESENCE)
-            {
-                continue;
-            }
-            let Ok(channel) = CanonicalJid::parse_bare(&membership.channel_jid) else {
-                tracing::warn!(channel = %membership.channel_jid, "ignored malformed persisted MIX membership JID");
-                continue;
-            };
-            let domain = channel.domainpart();
-            if domain == self.local_mix_domain {
-                let Some(channel_localpart) = channel.localpart() else {
-                    continue;
-                };
-                // The generated unavailable stanza has no children. The
-                // channel service performs the same idempotent transaction as
-                // a direct unavailable presence from this resource.
-                if let Some(room) = self
-                    .service
-                    .mix_channel(&self.local_mix_domain, channel_localpart)
-                    .await?
-                {
-                    let _ = self
-                        .service
-                        .store_mix_presence(room.id, actor_bare, actor_full, "", true)
-                        .await?;
-                }
-            } else if self.federation_domain_allowed(domain) {
-                let directed =
-                    northstar_xml_builder::rewrite::set_to(&unavailable, &membership.channel_jid);
-                let _ = self
-                    .federation
-                    .send(domain, directed, Some(actor_bare.to_owned()))
-                    .await;
-            }
-        }
-        Ok(())
+    fn federation_outbox(&self) -> &Self::Federation {
+        &self.federation
     }
 }

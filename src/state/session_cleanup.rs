@@ -8,7 +8,7 @@ use crate::state::{
     session_cleanup_muc_departure::SessionCleanupPgMucDeparture,
     session_cleanup_presence::SessionCleanupPresence, session_cleanup_rooms::SessionCleanupRooms,
     session_cleanup_sm::SessionCleanupSm, session_cleanup_sm_revoker::SessionCleanupSmRevoker,
-    session_cleanup_unavailable::SessionCleanupUnavailable,
+    session_cleanup_unavailable::AppSessionCleanupUnavailable,
 };
 use crate::xmpp::muc_delivery::MucDeliveryContext;
 use anyhow::Result;
@@ -32,7 +32,7 @@ pub struct SessionCleanupAdapters {
     muc_delivery: MucDeliveryContext,
     muc_departure: ClusterMucDeparture,
     pg_muc_departure: Option<SessionCleanupPgMucDeparture>,
-    unavailable: SessionCleanupUnavailable,
+    unavailable: AppSessionCleanupUnavailable,
     mix: SessionCleanupMix,
     route_release: ClusterSessionRouteRelease,
     bookkeeping: SessionCleanupBookkeeping,

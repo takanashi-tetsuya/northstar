@@ -1,6 +1,9 @@
 //! Root bindings for the auth-owned ordered account generation teardown.
 
-use super::{sm_teardown_runtime::SmTeardownRuntime, AccountRevocationRoutes, AppState};
+use super::{
+    sm_teardown_runtime::{sm_teardown_snapshot, AppSmTeardownRuntime},
+    AccountRevocationRoutes, AppState,
+};
 use crate::cluster::ClusterAccountTeardownNotifier;
 use anyhow::Result;
 use futures::future::BoxFuture;
@@ -17,7 +20,7 @@ use uuid::Uuid;
 pub(crate) struct AccountGenerationTeardownAdapters {
     routes: AccountRevocationRoutes,
     sm: SmTeardownService<PostgresSmTeardownRepository>,
-    sm_effects: Arc<SmTeardownRuntime>,
+    sm_effects: Arc<AppSmTeardownRuntime>,
     notifier: ClusterAccountTeardownNotifier,
 }
 
@@ -76,7 +79,11 @@ impl AccountGenerationTeardownPorts for AccountGenerationTeardownAdapters {
         self.sm
             .revoke_before_generation(user_id, auth_generation_exclusive, move |snapshot| {
                 let effects = Arc::clone(&effects);
-                async move { effects.teardown_snapshot(&snapshot).await }
+                async move {
+                    effects
+                        .teardown_snapshot(&sm_teardown_snapshot(&snapshot))
+                        .await
+                }
             })
             .await
     }

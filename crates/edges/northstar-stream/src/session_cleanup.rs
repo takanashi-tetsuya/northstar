@@ -12,7 +12,9 @@ use uuid::Uuid;
 pub mod local;
 pub mod recovery;
 pub mod service;
+pub mod sm_teardown;
 pub mod suspension;
+pub mod unavailable;
 
 pub const CLEANUP_STEP_BUDGET: Duration = Duration::from_secs(2);
 

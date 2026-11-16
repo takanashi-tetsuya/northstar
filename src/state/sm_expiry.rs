@@ -1,12 +1,15 @@
 //! Expired durable stream claims and their post-claim teardown effects.
 
-use super::{sm_teardown_runtime::SmTeardownRuntime, AppState};
+use super::{
+    sm_teardown_runtime::{sm_teardown_snapshot, AppSmTeardownRuntime},
+    AppState,
+};
 use northstar_session_application::sm_teardown::SmTeardownService;
 use northstar_workflows::sm_teardown_repository::PostgresSmTeardownRepository;
 
 pub(crate) struct SmExpiryContext {
     service: SmTeardownService<PostgresSmTeardownRepository>,
-    runtime: SmTeardownRuntime,
+    runtime: AppSmTeardownRuntime,
 }
 
 impl AppState {
@@ -24,9 +27,11 @@ impl AppState {
 impl SmExpiryContext {
     pub(crate) async fn cleanup(&self) -> anyhow::Result<usize> {
         self.service
-            .cleanup_expired(
-                |snapshot| async move { self.runtime.teardown_snapshot(&snapshot).await },
-            )
+            .cleanup_expired(|snapshot| async move {
+                self.runtime
+                    .teardown_snapshot(&sm_teardown_snapshot(&snapshot))
+                    .await
+            })
             .await
     }
 }

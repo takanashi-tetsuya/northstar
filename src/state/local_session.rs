@@ -119,7 +119,9 @@ impl AppState {
             self.config.sm_claim_lease_seconds,
         )
         .finish(snapshot, |snapshot| async move {
-            runtime.teardown_snapshot(&snapshot).await
+            runtime
+                .teardown_snapshot(&super::sm_teardown_runtime::sm_teardown_snapshot(&snapshot))
+                .await
         })
         .await
     }

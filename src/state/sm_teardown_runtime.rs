@@ -1,154 +1,102 @@
-//! Effects for a leased durable SM snapshot. The lease owner finalizes only
-//! after this renderer has completed every required post-commit effect.
+//! Root bindings for stream-owned durable SM teardown effects.
 
 use super::{
-    attr_escape, cluster_adapters::PostgresClusterAdapters,
-    session_cleanup_unavailable::SessionCleanupUnavailable,
+    cluster_adapters::PostgresClusterAdapters,
+    session_cleanup_unavailable::SessionCleanupUnavailableAdapters,
     sm_teardown_muc_projection::SmTeardownMucProjection,
     sm_teardown_session::SmTeardownSessionEffects, AppState,
 };
 use crate::cluster::listener_sm_muc_teardown::ClusterListenerSmMucTeardown;
 use crate::cluster::ClusterSmMucTeardown;
-use northstar_stream::local_routes::sm_teardown::SmTeardownLocalEffects;
-use std::collections::HashSet;
+use northstar_room_application::muc_service::SerializableMucOccupant;
+use northstar_stream::session_cleanup::sm_teardown::{
+    SmTeardownPorts, SmTeardownRuntime, SmTeardownSnapshot,
+};
+use northstar_workflows::message_repository::PostgresMessageRepository;
+use northstar_workflows::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository;
+use uuid::Uuid;
 
-pub(crate) struct SmTeardownRuntime {
+pub(crate) type AppSmTeardownRuntime = SmTeardownRuntime<
+    PostgresSmTeardownPresenceRepository,
+    PostgresMessageRepository,
+    SessionCleanupUnavailableAdapters,
+    SmTeardownAdapters,
+>;
+
+pub(crate) struct SmTeardownAdapters {
     session: SmTeardownSessionEffects,
-    unavailable: SessionCleanupUnavailable,
-    local: SmTeardownLocalEffects,
     muc_projection: SmTeardownMucProjection,
     muc_cluster: ClusterSmMucTeardown,
     muc_local: ClusterListenerSmMucTeardown<PostgresClusterAdapters>,
 }
 
 impl AppState {
-    pub(crate) fn sm_teardown_runtime(&self) -> SmTeardownRuntime {
-        SmTeardownRuntime {
-            session: self.sm_teardown_session_effects(),
-            unavailable: self.session_cleanup_unavailable(),
-            local: self.sm_teardown_local_effects(),
-            muc_projection: self.sm_teardown_muc_projection(),
-            muc_cluster: self.sm_teardown_muc_cluster(),
-            muc_local: self.cluster_listener_sm_muc_teardown(),
-        }
+    pub(crate) fn sm_teardown_runtime(&self) -> AppSmTeardownRuntime {
+        let session = self.sm_teardown_session_effects();
+        let unavailable = self.session_cleanup_unavailable();
+        let local = self.sm_teardown_local_effects();
+        SmTeardownRuntime::new(
+            unavailable,
+            local,
+            SmTeardownAdapters {
+                session,
+                muc_projection: self.sm_teardown_muc_projection(),
+                muc_cluster: self.sm_teardown_muc_cluster(),
+                muc_local: self.cluster_listener_sm_muc_teardown(),
+            },
+        )
     }
 }
 
-impl SmTeardownRuntime {
-    pub(crate) async fn teardown_snapshot(
+/// Project the workflow-owned lease into the stream renderer's borrowed input.
+pub(super) fn sm_teardown_snapshot(
+    snapshot: &northstar_workflows::sm::SmTeardownSnapshot,
+) -> SmTeardownSnapshot<'_> {
+    SmTeardownSnapshot {
+        session_id: snapshot.session_id,
+        user_id: snapshot.user_id,
+        full_jid: &snapshot.full_jid,
+        available: snapshot.available,
+        active_privacy_list: snapshot.active_privacy_list.as_deref(),
+        joined_rooms: &snapshot.joined_rooms,
+        directed_presence: &snapshot.directed_presence,
+    }
+}
+
+impl SmTeardownPorts for SmTeardownAdapters {
+    async fn fence_and_notify(&self, full_jid: &str, sm_session_id: Uuid) -> anyhow::Result<()> {
+        self.session.fence_and_notify(full_jid, sm_session_id).await
+    }
+
+    async fn occupant(
         &self,
-        snapshot: &northstar_workflows::sm::SmTeardownSnapshot,
+        sm_session_id: Uuid,
+        user_id: Uuid,
+        full_jid: &str,
+        room_jid: &str,
+        nick: &str,
+    ) -> anyhow::Result<SerializableMucOccupant> {
+        self.muc_projection
+            .occupant(sm_session_id, user_id, full_jid, room_jid, nick)
+            .await
+    }
+
+    async fn send_sm_muc_teardown(
+        &self,
+        room_jid: &str,
+        sm_session_id: Uuid,
+        occupant: &SerializableMucOccupant,
     ) -> anyhow::Result<()> {
-        let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(&snapshot.full_jid)
-        else {
-            tracing::warn!(sm_session_id = %snapshot.session_id, "discarded invalid durable SM teardown JID");
-            anyhow::bail!("invalid durable SM teardown JID");
-        };
-        self.session
-            .fence_and_notify(&full_jid, snapshot.session_id)
-            .await?;
+        self.muc_cluster
+            .send_sm_muc_teardown(room_jid, sm_session_id, occupant)
+            .await
+    }
 
-        let mut first_error = None;
-
-        if snapshot.available {
-            let unavailable = format!(
-                "<presence xmlns='jabber:client' from='{}' type='unavailable'/>",
-                attr_escape(&full_jid)
-            );
-            let mut routed = HashSet::new();
-            let roster = self
-                .unavailable
-                .roster_subscribers(snapshot.user_id)
-                .await?;
-            for jid in roster {
-                if routed.insert(jid.clone()) {
-                    if let Err(error) = self
-                        .unavailable
-                        .route_with_policy(
-                            snapshot.user_id,
-                            snapshot.active_privacy_list.as_deref(),
-                            &full_jid,
-                            &unavailable,
-                            &jid,
-                        )
-                        .await
-                    {
-                        first_error.get_or_insert(error);
-                    }
-                }
-            }
-
-            // Other resources of the same account are part of the same
-            // presence session audience, independent of roster privacy.
-            if let Err(error) = self
-                .unavailable
-                .route_siblings_unchecked(&full_jid, &unavailable)
-                .await
-            {
-                first_error.get_or_insert(error);
-            }
-
-            for target in &snapshot.directed_presence {
-                if routed.insert(target.clone()) {
-                    if let Err(error) = self
-                        .unavailable
-                        .route_with_policy(
-                            snapshot.user_id,
-                            snapshot.active_privacy_list.as_deref(),
-                            &full_jid,
-                            &unavailable,
-                            target,
-                        )
-                        .await
-                    {
-                        first_error.get_or_insert(error);
-                    }
-                }
-            }
-        }
-
-        let mut memberships = HashSet::new();
-        for membership in &snapshot.joined_rooms {
-            let Ok(room_jid) = northstar_xmpp_types::jid::canonicalize_bare(&membership.room_jid)
-            else {
-                continue;
-            };
-            let Ok(nick) = northstar_room_core::stanza::prepare_muc_nick(&membership.nick) else {
-                continue;
-            };
-            if !memberships.insert((room_jid.clone(), nick.clone())) {
-                continue;
-            }
-            let occupant = self
-                .muc_projection
-                .occupant(
-                    snapshot.session_id,
-                    snapshot.user_id,
-                    &full_jid,
-                    &room_jid,
-                    &nick,
-                )
-                .await?;
-            if let Err(error) = self
-                .muc_cluster
-                .send_sm_muc_teardown(&room_jid, snapshot.session_id, &occupant)
-                .await
-            {
-                tracing::warn!(?error, %room_jid, "failed to publish clustered SM MUC teardown");
-                first_error.get_or_insert(error);
-            }
-            if let Err(error) = self
-                .muc_local
-                .teardown_exact(snapshot.session_id, &occupant)
-                .await
-            {
-                first_error.get_or_insert(error);
-            }
-        }
-        if let Some(error) = first_error {
-            return Err(error);
-        }
-        self.local.finish_suspended_session(snapshot.session_id);
-        Ok(())
+    async fn teardown_exact(
+        &self,
+        sm_session_id: Uuid,
+        occupant: &SerializableMucOccupant,
+    ) -> anyhow::Result<usize> {
+        self.muc_local.teardown_exact(sm_session_id, occupant).await
     }
 }

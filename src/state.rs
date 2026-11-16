@@ -190,7 +190,6 @@ use northstar_stream::local_routes::session::{AccountRevocationRoutes, OnlineSes
 use northstar_stream::local_routes::session_table::*;
 #[cfg(test)]
 use northstar_stream::local_routes::suspended_muc::*;
-use northstar_xml_builder::escape::attr_escape;
 use northstar_xmpp_types::jid_text::*;
 
 #[cfg(test)]

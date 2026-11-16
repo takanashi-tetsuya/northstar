@@ -4131,7 +4131,15 @@
       ],
       [
         "northstar-pubsub-xmpp",
+        "northstar-runtime"
+      ],
+      [
+        "northstar-pubsub-xmpp",
         "northstar-stream"
+      ],
+      [
+        "northstar-pubsub-xmpp",
+        "northstar-telemetry"
       ],
       [
         "northstar-pubsub-xmpp",
@@ -4156,6 +4164,14 @@
       [
         "northstar-pubsub-xmpp",
         "sha1"
+      ],
+      [
+        "northstar-pubsub-xmpp",
+        "tokio"
+      ],
+      [
+        "northstar-pubsub-xmpp",
+        "tokio-util"
       ],
       [
         "northstar-pubsub-xmpp",

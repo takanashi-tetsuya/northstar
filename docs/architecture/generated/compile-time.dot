@@ -1490,13 +1490,17 @@ digraph compile_time {
   "northstar-pubsub-xmpp" -> "northstar-federation-core";
   "northstar-pubsub-xmpp" -> "northstar-pubsub-application";
   "northstar-pubsub-xmpp" -> "northstar-pubsub-core";
+  "northstar-pubsub-xmpp" -> "northstar-runtime";
   "northstar-pubsub-xmpp" -> "northstar-stream";
+  "northstar-pubsub-xmpp" -> "northstar-telemetry";
   "northstar-pubsub-xmpp" -> "northstar-xep-0060";
   "northstar-pubsub-xmpp" -> "northstar-xml-builder";
   "northstar-pubsub-xmpp" -> "northstar-xmpp-avatar";
   "northstar-pubsub-xmpp" -> "northstar-xmpp-types";
   "northstar-pubsub-xmpp" -> "roxmltree";
   "northstar-pubsub-xmpp" -> "sha1";
+  "northstar-pubsub-xmpp" -> "tokio";
+  "northstar-pubsub-xmpp" -> "tokio-util";
   "northstar-pubsub-xmpp" -> "tracing";
   "northstar-pubsub-xmpp" -> "uuid";
   "northstar-room-application" -> "anyhow";

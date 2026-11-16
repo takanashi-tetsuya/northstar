@@ -61,45 +61,9 @@ impl<'a> PepTelemetry<'a> {
     }
 }
 
-/// PubSub outbox worker timing and last-successful-maintenance gauges.
-pub(crate) struct PubSubOutboxTelemetry<'a> {
-    pending_rows: &'a AtomicU64,
-    pending_bytes: &'a AtomicU64,
-    dead_letter_rows: &'a AtomicU64,
-}
-
-impl<'a> PubSubOutboxTelemetry<'a> {
-    pub(crate) fn new(
-        pending_rows: &'a AtomicU64,
-        pending_bytes: &'a AtomicU64,
-        dead_letter_rows: &'a AtomicU64,
-    ) -> Self {
-        Self {
-            pending_rows,
-            pending_bytes,
-            dead_letter_rows,
-        }
-    }
-
-    pub(crate) fn publish_snapshot(
-        &self,
-        pending_rows: i64,
-        pending_bytes: i64,
-        dead_letter_rows: i64,
-    ) {
-        let nonnegative = |value: i64| u64::try_from(value.max(0)).unwrap_or(u64::MAX);
-        self.pending_rows
-            .store(nonnegative(pending_rows), Ordering::Relaxed);
-        self.pending_bytes
-            .store(nonnegative(pending_bytes), Ordering::Relaxed);
-        self.dead_letter_rows
-            .store(nonnegative(dead_letter_rows), Ordering::Relaxed);
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{PepTelemetry, PubSubOutboxTelemetry};
+    use super::PepTelemetry;
     use northstar_message_application::telemetry::{
         PersonalMessageTelemetry, PersonalMessageTelemetryCells,
     };
@@ -152,19 +116,6 @@ mod tests {
         federated.online_queue_result(true, false);
         assert_eq!(counters[4].load(Ordering::Relaxed), 1);
         assert_eq!(counters[5].load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn pubsub_snapshot_clamps_negative_database_counts() {
-        let pending_rows = AtomicU64::new(7);
-        let pending_bytes = AtomicU64::new(11);
-        let dead_letters = AtomicU64::new(13);
-        let telemetry = PubSubOutboxTelemetry::new(&pending_rows, &pending_bytes, &dead_letters);
-
-        telemetry.publish_snapshot(-1, i64::MAX, -3);
-        assert_eq!(pending_rows.load(Ordering::Relaxed), 0);
-        assert_eq!(pending_bytes.load(Ordering::Relaxed), i64::MAX as u64);
-        assert_eq!(dead_letters.load(Ordering::Relaxed), 0);
     }
 
     #[test]

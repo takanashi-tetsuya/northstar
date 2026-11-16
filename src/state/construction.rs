@@ -708,12 +708,14 @@ impl AppState {
             Arc::clone(state.worker_registry()),
             worker_cancel.clone(),
         );
-        crate::state::pubsub_delivery::start_pubsub_digest_delivery(
-            Arc::clone(&state),
+        northstar_pubsub_xmpp::delivery::start_pubsub_digest_delivery(
+            Arc::new(state.pubsub_digest_worker_context()),
+            Arc::clone(state.worker_registry()),
             worker_cancel.clone(),
         );
-        crate::state::pubsub_delivery::start_pubsub_event_outbox_delivery(
-            Arc::clone(&state),
+        northstar_pubsub_xmpp::delivery::start_pubsub_event_outbox_delivery(
+            Arc::new(state.pubsub_event_outbox_worker_context()),
+            Arc::clone(state.worker_registry()),
             worker_cancel.clone(),
         );
         crate::cluster::start_muc_outbox_delivery(

@@ -10,6 +10,7 @@ use dashmap::DashMap;
 use northstar_config::ExternalRouteDomainPolicy;
 use northstar_message_application::messaging::MessageService;
 use northstar_pubsub_application::PubSubService;
+use northstar_pubsub_xmpp::delivery::{PubSubDigestWorkerContext, PubSubEventOutboxWorkerContext};
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_workflows::message_repository::PostgresMessageRepository;
 use northstar_workflows::pubsub_repository::PostgresPubSubRepository;
@@ -202,5 +203,82 @@ impl PubSubNotificationDelivery {
             anyhow::bail!("federated PubSub notification is denied by domain policy");
         }
         Ok(())
+    }
+}
+
+/// The root routes the PubSub delivery workers use.
+pub(crate) struct PubSubRootRoutes {
+    notification: PubSubNotificationDelivery,
+    pep: super::pep_last_items::PepLastItemsContext,
+}
+
+impl AppState {
+    pub(crate) fn pubsub_root_routes(&self) -> PubSubRootRoutes {
+        PubSubRootRoutes {
+            notification: self.pubsub_notification_delivery(),
+            pep: self.pep_last_items_context(),
+        }
+    }
+
+    pub(crate) fn pubsub_digest_worker_context(
+        &self,
+    ) -> PubSubDigestWorkerContext<PostgresPubSubRepository, PubSubRootRoutes> {
+        PubSubDigestWorkerContext::new(
+            self.pubsub.pubsub_service.clone(),
+            self.pubsub_root_routes(),
+        )
+    }
+
+    pub(crate) fn pubsub_event_outbox_worker_context(
+        &self,
+    ) -> PubSubEventOutboxWorkerContext<PostgresPubSubRepository, PubSubRootRoutes> {
+        PubSubEventOutboxWorkerContext::new(
+            self.pubsub.pubsub_service.clone(),
+            self.pubsub_root_routes(),
+            Arc::clone(&self.metrics.outbox_delivery_duration_seconds),
+            Arc::clone(&self.metrics.pubsub_event_outbox_pending_rows),
+            Arc::clone(&self.metrics.pubsub_event_outbox_pending_bytes),
+            Arc::clone(&self.metrics.pubsub_event_outbox_dead_letter_rows),
+        )
+    }
+}
+
+impl northstar_pubsub_xmpp::delivery::PubSubDeliveryRoutes for PubSubRootRoutes {
+    fn service_domain(&self) -> String {
+        self.notification.service_domain()
+    }
+
+    async fn route_children(
+        &self,
+        recipient: &str,
+        children: &str,
+        show_values: Option<&[String]>,
+        message_id: Uuid,
+    ) -> Result<()> {
+        self.notification
+            .route_children(recipient, children, show_values, message_id)
+            .await
+    }
+
+    async fn route_service_message(
+        &self,
+        service: &str,
+        recipient: &str,
+        message: String,
+    ) -> Result<()> {
+        self.notification
+            .route_service_message(service, recipient, message)
+            .await
+    }
+
+    async fn route_pep_message(
+        &self,
+        sender_bare_jid: &str,
+        recipient: &str,
+        message: String,
+    ) -> Result<()> {
+        self.pep
+            .route_message(sender_bare_jid, recipient, message, None)
+            .await
     }
 }

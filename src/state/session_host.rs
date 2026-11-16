@@ -846,8 +846,9 @@ impl SessionHost for AppState {
         recipient: String,
         show: &'static str,
     ) -> anyhow::Result<()> {
-        crate::state::pubsub_delivery::deliver_last_items_on_presence(
-            self,
+        northstar_pubsub_xmpp::delivery::deliver_last_items_on_presence(
+            self.pubsub_service(),
+            northstar_pubsub_xmpp::pubsub::pubsub_domain(self.as_ref()),
             outbound,
             recipient_id,
             active_privacy_list,

@@ -3459,8 +3459,8 @@ const workerResponsibilityEvidence = {
   'mix-iq-relay-expiry': ['crates/contexts/room/northstar-mix-xmpp/src/lib.rs', 'MIX protocol capability startup', '10 s'],
   'mix-delivery-outbox': ['crates/contexts/room/northstar-mix-xmpp/src/worker.rs', 'MIX capability startup', '30 s'],
   'mix-presence-recovery': ['crates/contexts/room/northstar-mix-xmpp/src/lib.rs', 'MIX capability startup', '90 s'],
-  'pubsub-digest-delivery': ['src/state/pubsub_delivery.rs', 'PubSub capability startup', '5 s'],
-  'pubsub-event-outbox-delivery': ['src/state/pubsub_delivery.rs', 'PubSub capability startup', '30 s'],
+  'pubsub-digest-delivery': ['crates/contexts/pubsub/northstar-pubsub-xmpp/src/delivery.rs', 'PubSub capability startup', '5 s'],
+  'pubsub-event-outbox-delivery': ['crates/contexts/pubsub/northstar-pubsub-xmpp/src/delivery.rs', 'PubSub capability startup', '30 s'],
 };
 const workerDocumentBehaviorEvidence = {
   'abuse-key-deployment-authority': ['first returned validation error/timeout'],

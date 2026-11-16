@@ -1232,6 +1232,7 @@ digraph compile_time {
   "northstar-delivery-core" -> "serde";
   "northstar-delivery-core" -> "uuid";
   "northstar-federation-application" -> "anyhow";
+  "northstar-federation-application" -> "arc-swap";
   "northstar-federation-application" -> "base64";
   "northstar-federation-application" -> "dashmap";
   "northstar-federation-application" -> "northstar-config";

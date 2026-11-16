@@ -22,6 +22,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
+pub mod credentials;
 mod wire;
 
 pub use self::wire::*;

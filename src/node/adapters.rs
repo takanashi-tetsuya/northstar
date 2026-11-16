@@ -36,7 +36,6 @@ pub(crate) mod mix_iq_relay;
 pub(crate) mod mix_outbox;
 pub(crate) mod mix_presence_recovery;
 pub(crate) mod muc_delivery;
-pub(crate) mod operation_island_effects;
 pub(crate) mod operation_muc_destroy_effects;
 pub(crate) mod operation_panic_effects;
 pub(in crate::node) mod operation_runtime_adapters;

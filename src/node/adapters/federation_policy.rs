@@ -13,36 +13,18 @@ pub(in crate::node) fn service_control_applies(
 
 impl ServerNode {
     pub fn federation_domain_allowed(&self, domain: &str) -> bool {
-        let Ok(domain) = northstar_xmpp_types::jid::prepare_domainpart(domain) else {
-            return false;
-        };
-        let policy = self.federation.federation_runtime_policy.load();
-        self.config.federation_domain_allowed(&domain) && policy.allows_domain(&domain)
+        self.federation.effective_policy.domain_allowed(domain)
     }
 
-    /// Apply XEP-0133 entity rules using XEP-0016-style JID specificity: a
-    /// domain rule matches the whole domain, a bare JID matches all of its
-    /// resources, and a full JID matches exactly one resource.
+    /// Apply the federation application's effective entity policy.
     pub fn federation_entity_allowed(&self, entity: &str) -> bool {
-        let Ok(entity) = northstar_xmpp_types::jid::CanonicalJid::parse(entity) else {
-            return false;
-        };
-        if !self.config.federation_domain_allowed(entity.domainpart()) {
-            return false;
-        }
-        self.federation
-            .federation_runtime_policy
-            .load()
-            .allows_entity(&entity)
+        self.federation.effective_policy.entity_allowed(entity)
     }
 
     pub fn replace_runtime_federation_cache(&self, blacklist: Vec<String>, whitelist: Vec<String>) {
         self.federation
-            .federation_runtime_policy
-            .store(Arc::new(RuntimeFederationPolicy {
-                blacklist: blacklist.into_iter().collect(),
-                whitelist: whitelist.into_iter().collect(),
-            }));
+            .effective_policy
+            .replace_runtime_cache(blacklist, whitelist);
     }
 
     pub fn install_service_shutdown(

@@ -3,6 +3,8 @@
 //! material and the island-mode and runtime policies.
 
 use crate::node::*;
+use northstar_federation_application::components::credentials::ComponentCredentials;
+use northstar_federation_application::effective_policy::EffectiveFederationPolicy;
 
 /// The federation context's runtime parts, built once at startup.
 pub(in crate::node) struct FederationModule {
@@ -17,7 +19,7 @@ pub(in crate::node) struct FederationModule {
     pub(in crate::node) federation_outbox: FederationRouter,
     /// Full XEP-0114/XEP-0225 authentication records. `config.components`
     /// retains only redacted routing/discovery metadata after construction.
-    pub(in crate::node) component_credentials: Arc<[northstar_config::ComponentCredential]>,
+    pub(in crate::node) component_credentials: ComponentCredentials,
     pub(in crate::node) components: northstar_federation_application::components::ComponentRegistry,
     pub(in crate::node) s2s_connection_registry: Arc<S2sConnectionRegistry>,
     pub(in crate::node) s2s_resumption: northstar_s2s::resume::Registry,
@@ -43,6 +45,7 @@ pub(in crate::node) struct FederationModule {
     /// Durable XEP-0133 federation policy overlay. Static environment policy
     /// remains the outer ceiling; runtime rules may only restrict it further.
     pub(in crate::node) federation_runtime_policy: Arc<arc_swap::ArcSwap<RuntimeFederationPolicy>>,
+    pub(in crate::node) effective_policy: EffectiveFederationPolicy,
 }
 
 /// What the federation context is built from. Component credentials and the dialback secret
@@ -143,6 +146,11 @@ impl FederationModule {
                     .context("failed to initialize the locally validating DNSSEC resolver")
             })
             .transpose()?;
+        let federation_runtime_policy =
+            Arc::new(arc_swap::ArcSwap::from_pointee(RuntimeFederationPolicy {
+                blacklist: runtime_blacklist.into_iter().collect(),
+                whitelist: runtime_whitelist.into_iter().collect(),
+            }));
         Ok(Self {
             s2s_outbox_dispatch_service:
             northstar_federation_application::dispatch::S2sOutboxDispatchService::new(
@@ -161,7 +169,7 @@ impl FederationModule {
                 northstar_federation_postgres::sm_outbox_repository::PostgresSmOutboxRepository::new(pool.clone()),
             ),
             federation_outbox,
-            component_credentials,
+            component_credentials: ComponentCredentials::new(component_credentials),
             components,
             s2s_connection_registry: Arc::new(S2sConnectionRegistry::default()),
             s2s_resumption: northstar_s2s::resume::Registry::default(),
@@ -173,12 +181,11 @@ impl FederationModule {
             s2s_connection_attempts: Arc::new(Semaphore::new(config.max_s2s_connections)),
             component_connections: Arc::new(Semaphore::new(config.max_component_connections)),
             federation_write_policy: Arc::new(FederationWritePolicy::new(island_mode)),
-            federation_runtime_policy: Arc::new(arc_swap::ArcSwap::from_pointee(
-                RuntimeFederationPolicy {
-                    blacklist: runtime_blacklist.into_iter().collect(),
-                    whitelist: runtime_whitelist.into_iter().collect(),
-                },
-            )),
+            effective_policy: EffectiveFederationPolicy::new(
+                config.external_route_domain_policy(),
+                Arc::clone(&federation_runtime_policy),
+            ),
+            federation_runtime_policy,
         })
     }
 }

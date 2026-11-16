@@ -3,16 +3,14 @@
 //! envelope is checked against, and the domains the node serves itself. The node builds one per
 //! drain or per failure, so a drain sees one consistent policy.
 
-use arc_swap::ArcSwap;
-use northstar_config::ExternalRouteDomainPolicy;
 use northstar_federation_application::dispatch::S2sOutboxDispatchService;
+use northstar_federation_application::effective_policy::EffectiveFederationPolicy;
 use northstar_federation_application::registry::{BidiRouteSnapshot, S2sConnectionRegistry};
 use northstar_federation_application::telemetry::OutboundDispositionTelemetry;
 use northstar_federation_application::write_policy::FederationWritePolicy;
 use northstar_federation_application::FederationEnvelope;
-use northstar_federation_core::policy::RuntimeFederationPolicy;
 use northstar_federation_core::wire::client_namespace;
-use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
+use northstar_xmpp_types::jid::prepare_domainpart;
 use roxmltree::Document;
 use std::sync::{atomic::AtomicU64, Arc};
 
@@ -66,8 +64,7 @@ pub struct S2sOutboxDispatchContext<R> {
     pub failure: S2sOutboxFailureEffects<R>,
     pub registry: Arc<S2sConnectionRegistry>,
     pub island: Arc<FederationWritePolicy>,
-    pub static_policy: ExternalRouteDomainPolicy,
-    pub runtime_policy: Arc<ArcSwap<RuntimeFederationPolicy>>,
+    pub policy: EffectiveFederationPolicy,
     pub component_domains: Vec<String>,
     pub local_domain: String,
 }
@@ -98,24 +95,11 @@ impl<R> S2sOutboxDispatchContext<R> {
     }
 
     pub fn federation_domain_allowed(&self, domain: &str) -> bool {
-        let Ok(domain) = prepare_domainpart(domain) else {
-            return false;
-        };
-        self.static_policy.federation_domain_allowed(&domain)
-            && self.runtime_policy.load().allows_domain(&domain)
+        self.policy.domain_allowed(domain)
     }
 
     pub fn federation_entity_allowed(&self, entity: &str) -> bool {
-        let Ok(entity) = CanonicalJid::parse(entity) else {
-            return false;
-        };
-        if !self
-            .static_policy
-            .federation_domain_allowed(entity.domainpart())
-        {
-            return false;
-        }
-        self.runtime_policy.load().allows_entity(&entity)
+        self.policy.entity_allowed(entity)
     }
 
     pub fn component_domain_configured(&self, domain: &str) -> bool {

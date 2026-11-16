@@ -1,10 +1,11 @@
 //! Bind the durable workers to the live root effect contexts and repositories.
 
 use crate::node::{
-    OperationIslandEffects, OperationMucDestroyEffects, OperationPanicEffects,
-    OperationSessionEffects, OperationWorkerControl, ServerNode,
+    OperationMucDestroyEffects, OperationPanicEffects, OperationSessionEffects,
+    OperationWorkerControl, ServerNode,
 };
 use anyhow::Result;
+use northstar_federation_application::island_effects::OperationIslandEffects;
 use northstar_operations_application::operation_effect_fence::OperationEffectFenceService;
 use northstar_operations_application::operation_journal_worker::OperationJournalWorkerService;
 use northstar_operations_application::operation_muc_destroy::{MucDestroyCommit, MucDestroyEffect};
@@ -17,6 +18,7 @@ use northstar_operations_xmpp::operation_runtime::{ports, OperationWorkerRuntime
 use northstar_room_core::occupancy::LocalMucOccupantIdentity;
 use northstar_security::tls::TlsReloadOutcome;
 use serde_json::Value;
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub(crate) struct RuntimeControl(OperationWorkerControl);
@@ -36,6 +38,13 @@ pub(crate) type BoundOperationWorkerRuntime = OperationWorkerRuntime<
 >;
 
 impl ServerNode {
+    pub(crate) fn operation_island_effects(&self) -> OperationIslandEffects {
+        OperationIslandEffects::new(
+            Arc::clone(&self.federation.federation_write_policy),
+            self.federation.s2s_connection_registry.outbound_clearance(),
+        )
+    }
+
     pub(crate) fn operation_worker_runtime(&self) -> BoundOperationWorkerRuntime {
         OperationWorkerRuntime::new(
             RuntimeControl(self.operation_worker_control()),

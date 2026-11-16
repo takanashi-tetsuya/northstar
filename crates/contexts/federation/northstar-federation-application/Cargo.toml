@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
+arc-swap = "1"
 base64 = "0.22"
 dashmap = "6.1"
 northstar-config = { path = "../../../platform/northstar-config" }

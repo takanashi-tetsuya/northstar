@@ -6,7 +6,6 @@ pub(crate) mod modules;
 pub(crate) type ClientSession = northstar_stream::protocol::ProtocolSession<ServerNode>;
 
 pub(crate) use adapters::admin_session_cleanup::AdminSessionCleanupContext;
-pub(crate) use adapters::operation_island_effects::OperationIslandEffects;
 pub(crate) use adapters::operation_muc_destroy_effects::OperationMucDestroyEffects;
 pub(crate) use adapters::operation_panic_effects::OperationPanicEffects;
 pub(crate) use adapters::operation_session_effects::OperationSessionEffects;

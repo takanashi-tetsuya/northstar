@@ -3557,6 +3557,10 @@
     ],
     [
       "northstar-federation-application",
+      "arc-swap"
+    ],
+    [
+      "northstar-federation-application",
       "base64"
     ],
     [

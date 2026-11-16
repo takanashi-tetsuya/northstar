@@ -41,8 +41,7 @@ impl ServerNode {
             failure: self.s2s_outbox_failure_effects(),
             registry: Arc::clone(&self.federation.s2s_connection_registry),
             island: Arc::clone(&self.federation.federation_write_policy),
-            static_policy: self.config.external_route_domain_policy(),
-            runtime_policy: Arc::clone(&self.federation.federation_runtime_policy),
+            policy: self.federation.effective_policy.clone(),
             component_domains: self.configured_component_domains(),
             local_domain: self.config.domain.clone(),
         }

@@ -385,39 +385,19 @@ impl ServerNode {
     pub(crate) fn component_connect_credentials(
         &self,
     ) -> Vec<northstar_config::ComponentCredential> {
-        self.federation
-            .component_credentials
-            .iter()
-            .filter(|credential| {
-                credential.connection == northstar_config::ComponentConnectionMode::Connect
-            })
-            .cloned()
-            .collect()
+        self.federation.component_credentials.connect_credentials()
     }
 
     pub(crate) fn accepts_component_connections(&self) -> bool {
-        self.federation
-            .component_credentials
-            .iter()
-            .any(|credential| {
-                credential.connection == northstar_config::ComponentConnectionMode::Accept
-            })
+        self.federation.component_credentials.accepts_connections()
     }
 
     pub(crate) fn component_authentication_credential(
         &self,
         domain: &str,
     ) -> Option<northstar_config::ComponentCredential> {
-        let domain = northstar_xmpp_types::jid::prepare_domainpart(domain).ok()?;
         self.federation
             .component_credentials
-            .iter()
-            .find(|credential| {
-                credential
-                    .allowed_domains
-                    .iter()
-                    .any(|allowed| allowed == &domain)
-            })
-            .cloned()
+            .authentication_credential(domain)
     }
 }

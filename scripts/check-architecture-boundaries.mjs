@@ -2429,8 +2429,8 @@ if (sessionAuthorization < 0 || sessionSnapshot <= sessionAuthorization) {
 if (/begin_authorized_read/.test(readRoleSplitFile('crates/edges/northstar-http/src/lib.rs', { root }))) {
   throw new Error('HTTP principals must not expose database read transactions');
 }
-const cleanupServiceSource = productionWithoutCfgTestModules(read('src/state/session_cleanup.rs'), 'Session cleanup');
-for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\bstate\s*\.\s*pool\b/]) {
+const cleanupServiceSource = productionWithoutCfgTestModules(read('crates/edges/northstar-stream/src/session_cleanup/service.rs'), 'Session cleanup');
+for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\bstate\s*\.\s*pool\b/, /\bAppState\b/]) {
   if (forbidden.test(cleanupServiceSource)) throw new Error('Session cleanup regained direct persistence authority');
 }
 const suspensionRecoverySource = productionWithoutCfgTestModules(

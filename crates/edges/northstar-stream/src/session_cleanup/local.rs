@@ -1,19 +1,23 @@
 //! Synchronous, process-local ownership changes made before session cleanup I/O.
 
-use super::{
-    begin_suspended_muc_route_transition, canonical_suspended_muc_endpoint,
-    muc_actor_epoch_matches, remove_local_muc_occupant_exact_from, AppState, JoinedMucMembership,
-    LocalMucOccupantIdentity, MucOccupant, MucOccupantEndpoint, OnlineSession,
-    SuspendedMucEndpoint,
+use crate::local_routes::muc::{MucOccupant, MucOccupantEndpoint, SuspendedMucEndpoint};
+use crate::local_routes::muc_table::{
+    muc_occupants_for_room_in, remove_local_muc_occupant_exact_from,
+};
+use crate::local_routes::session::OnlineSession;
+use crate::local_routes::suspended_muc::{
+    begin_suspended_muc_route_transition, canonical_suspended_muc_endpoint, muc_actor_epoch_matches,
 };
 use dashmap::DashMap;
+use northstar_room_application::muc_service::LocalMucOccupantIdentity;
+use northstar_session_core::JoinedMucMembership;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
 use uuid::Uuid;
 
-pub(crate) struct SessionCleanupLocal {
+pub struct SessionCleanupLocal {
     sessions: Arc<DashMap<String, OnlineSession>>,
     occupants: Arc<DashMap<String, MucOccupant>>,
     suspended_muc_sessions: Arc<DashMap<Uuid, Arc<SuspendedMucEndpoint>>>,
@@ -23,22 +27,29 @@ pub(crate) struct SessionCleanupLocal {
     active_sessions: Arc<AtomicU64>,
 }
 
-impl AppState {
-    pub(crate) fn session_cleanup_local(&self) -> SessionCleanupLocal {
-        SessionCleanupLocal {
-            sessions: Arc::clone(&self.sessions),
-            occupants: Arc::clone(&self.room.muc_occupants),
-            suspended_muc_sessions: Arc::clone(&self.room.suspended_muc_sessions),
-            caps_effect_dispatcher: Arc::clone(&self.caps_effect_dispatcher),
-            caps_by_jid: Arc::clone(&self.caps_by_jid),
-            pending_caps: Arc::clone(&self.pending_caps),
-            active_sessions: Arc::clone(&self.metrics.active_sessions),
+impl SessionCleanupLocal {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        sessions: Arc<DashMap<String, OnlineSession>>,
+        occupants: Arc<DashMap<String, MucOccupant>>,
+        suspended_muc_sessions: Arc<DashMap<Uuid, Arc<SuspendedMucEndpoint>>>,
+        caps_effect_dispatcher: Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher>,
+        caps_by_jid: Arc<northstar_protocol_runtime::caps::CapsResourceIndex>,
+        pending_caps: Arc<northstar_protocol_runtime::caps::PendingCapsIndex>,
+        active_sessions: Arc<AtomicU64>,
+    ) -> Self {
+        Self {
+            sessions,
+            occupants,
+            suspended_muc_sessions,
+            caps_effect_dispatcher,
+            caps_by_jid,
+            pending_caps,
+            active_sessions,
         }
     }
-}
 
-impl SessionCleanupLocal {
-    pub(crate) fn suspend_local_muc_occupants(
+    pub fn suspend_local_muc_occupants(
         &self,
         full_jid: &str,
         connection_id: Uuid,
@@ -59,33 +70,20 @@ impl SessionCleanupLocal {
         )
     }
 
-    pub(crate) fn retain_suspended_sm_capacity(
-        &self,
-        endpoints: &[Arc<SuspendedMucEndpoint>],
-        capacity: northstar_session_application::sm_capacity::SmCapacityLease,
-    ) {
-        northstar_stream::local_routes::suspended_muc::retain_suspended_sm_capacity(
-            endpoints, capacity,
-        );
-    }
-
-    pub(crate) fn remove_local_muc_occupant_exact(
+    pub fn remove_local_muc_occupant_exact(
         &self,
         identity: LocalMucOccupantIdentity<'_>,
     ) -> Option<MucOccupant> {
         remove_local_muc_occupant_exact_from(&self.occupants, identity)
     }
 
-    pub(crate) fn muc_occupants_for(&self, room_jid: &str) -> Vec<(String, MucOccupant)> {
-        northstar_stream::local_routes::muc_table::muc_occupants_for_room_in(
-            &self.occupants,
-            room_jid,
-        )
+    pub fn muc_occupants_for(&self, room_jid: &str) -> Vec<(String, MucOccupant)> {
+        muc_occupants_for_room_in(&self.occupants, room_jid)
     }
 
     /// Remove only the old incarnation, then publish its removal before
     /// retiring associated CAPS state and its active-session metric.
-    pub(crate) fn remove_session_if_connection(
+    pub fn remove_session_if_connection(
         &self,
         key: &str,
         connection_id: Uuid,
@@ -111,7 +109,7 @@ impl SessionCleanupLocal {
 /// Publish the session-wide suspension fence before walking room entries.
 /// The SM context and cleanup service share this exact process-local step.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn suspend_local_muc_occupants_in(
+pub fn suspend_local_muc_occupants_in(
     occupants: &DashMap<String, MucOccupant>,
     suspended_muc_sessions: &DashMap<Uuid, Arc<SuspendedMucEndpoint>>,
     full_jid: &str,

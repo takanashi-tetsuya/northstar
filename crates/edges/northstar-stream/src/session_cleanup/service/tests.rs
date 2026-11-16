@@ -11,6 +11,11 @@ fn cleanup_observer() -> Arc<northstar_runtime::workers::WorkerRegistry> {
     registry
 }
 
+/// The exact live-session release as a closed pool answers it.
+fn closed_pool_release(connection_id: Uuid) -> anyhow::Result<bool> {
+    anyhow::bail!("pool closed before releasing live session {connection_id}")
+}
+
 #[test]
 fn empty_reports_neither_interrupt_consecutive_errors_nor_heal_cleanup_debt() {
     let registry = cleanup_observer();
@@ -68,16 +73,12 @@ async fn only_completed_steps_without_failures_can_restore_cleanup_health() {
 
 #[tokio::test]
 async fn unowned_or_suspended_cleanup_never_polls_the_exact_database_release() {
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .connect_lazy("postgresql://localhost/unused_cleanup_test")
-        .unwrap();
-    pool.close().await;
     let registry = cleanup_observer();
     for _ in 0..3 {
         registry.observer_error("session-cleanup", "existing real cleanup debt");
     }
-    // A closed pool would reject every real acquire. The same lazy
-    // release boundary used by finish must leave it entirely untouched.
+    // The release step fails like a closed database pool once polled. The
+    // same lazy release boundary used by finish must leave it untouched.
     for (may_own, suspended) in [(false, false), (false, true), (true, true)] {
         let polled = std::cell::Cell::new(false);
         let mut report = CleanupReport::default();
@@ -88,11 +89,7 @@ async fn unowned_or_suspended_cleanup_never_polls_the_exact_database_release() {
                 CleanupRecovery::LeaseOrEpoch,
                 async {
                     polled.set(true);
-                    northstar_session_postgres::capacity::release_live_session(
-                        &pool,
-                        Uuid::new_v4(),
-                    )
-                    .await
+                    closed_pool_release(Uuid::new_v4())
                 },
                 &mut report,
             )
@@ -117,8 +114,7 @@ async fn unowned_or_suspended_cleanup_never_polls_the_exact_database_release() {
             CleanupRecovery::LeaseOrEpoch,
             async {
                 polled.set(true);
-                northstar_session_postgres::capacity::release_live_session(&pool, Uuid::new_v4())
-                    .await
+                closed_pool_release(Uuid::new_v4())
             },
             &mut owned,
         )
@@ -131,7 +127,7 @@ async fn unowned_or_suspended_cleanup_never_polls_the_exact_database_release() {
     );
     assert!(
         !owned.is_clean(),
-        "a real database failure must remain observable"
+        "a release failure must remain observable"
     );
     assert_eq!(owned.failures[0].operation, "release-live-session");
     assert_eq!(owned.completed_steps(), 0);

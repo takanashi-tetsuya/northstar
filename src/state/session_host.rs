@@ -2,7 +2,7 @@
 
 use super::AppState;
 use crate::s2s::FederationRouter;
-use crate::state::session_cleanup::SessionCleanupService;
+use crate::state::session_cleanup::SessionCleanupAdapters;
 use crate::state::CommittedLocalMucResume;
 use crate::state::RestoredLocalMucOccupants;
 use crate::xmpp::protocol::iq_routes::IQ_ROUTES;
@@ -28,6 +28,7 @@ use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::local_routes::session::SmPresenceEpoch;
 use northstar_stream::local_routes::session::SmStagedRouteClaim;
 use northstar_stream::protocol::dispatch::route::ClientIqRoute;
+use northstar_stream::session_cleanup::service::SessionCleanupService;
 use northstar_stream::transport::Action;
 use northstar_stream::IqRouter;
 use roxmltree::Node;
@@ -812,10 +813,10 @@ impl SessionHost for AppState {
         AppState::xmpp_route_enabled(self, stanza, namespace, local_name)
     }
 
-    type Cleanup = SessionCleanupService;
+    type Cleanup = SessionCleanupService<SessionCleanupAdapters>;
 
-    fn session_cleanup(self: Arc<Self>) -> SessionCleanupService {
-        SessionCleanupService::new(self)
+    fn session_cleanup(self: Arc<Self>) -> SessionCleanupService<SessionCleanupAdapters> {
+        self.compose_session_cleanup()
     }
 
     async fn finalize_account_deletion(

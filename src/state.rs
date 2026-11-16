@@ -83,7 +83,6 @@ mod runtime_control_refresh;
 pub(crate) mod s2s_outbox_dispatch;
 pub(crate) mod session_cleanup;
 pub(crate) mod session_cleanup_bookkeeping;
-pub(crate) mod session_cleanup_local;
 pub(crate) mod session_cleanup_mix;
 pub(crate) mod session_cleanup_muc_departure;
 pub(crate) mod session_cleanup_presence;
@@ -203,6 +202,7 @@ use northstar_stream::local_routes::muc_table::*;
 use northstar_stream::local_routes::session::SmStagedRouteClaim;
 use northstar_stream::local_routes::session::{AccountRevocationRoutes, OnlineSession};
 use northstar_stream::local_routes::session_table::*;
+#[cfg(test)]
 use northstar_stream::local_routes::suspended_muc::*;
 use northstar_xml_builder::escape::attr_escape;
 use northstar_xmpp_types::jid_text::*;

@@ -1,10 +1,10 @@
 //! SM persistence, suspended MUC handoff, and bounded recovery for cleanup.
 
 use super::{AppState, SmBufferLimits, SuspendedMucEndpoint};
-use crate::state::session_cleanup::SessionCleanupAccount;
 use anyhow::Result;
 use northstar_session_application::sm::{SmService, SmSessionSnapshot};
 use northstar_session_application::sm_capacity::{SmCapacityLease, SmMemoryGovernor};
+use northstar_session_application::SessionCleanupAccount;
 use northstar_stream::session_cleanup::recovery::SmSuspensionRecoveryQueue;
 use northstar_stream::session_cleanup::suspension::SmSuspensionContext;
 use northstar_workflows::sm_repository::PostgresSmRepository;
@@ -117,15 +117,6 @@ impl SessionCleanupSm {
             endpoints,
             capacity,
         )
-    }
-
-    pub(crate) fn retain_suspended_sm_capacity(
-        &self,
-        endpoints: &[Arc<SuspendedMucEndpoint>],
-        capacity: SmCapacityLease,
-    ) {
-        self.suspension
-            .retain_suspended_sm_capacity(endpoints, capacity);
     }
 
     pub(crate) async fn revoke_session(&self, session_id: Uuid) -> Result<()> {

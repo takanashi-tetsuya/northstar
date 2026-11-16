@@ -9,7 +9,9 @@ use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 use uuid::Uuid;
 
+pub mod local;
 pub mod recovery;
+pub mod service;
 pub mod suspension;
 
 pub const CLEANUP_STEP_BUDGET: Duration = Duration::from_secs(2);

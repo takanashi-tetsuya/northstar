@@ -1,6 +1,5 @@
 //! Durable MIX delivery lanes and their live routing observations.
 
-use crate::node::telemetry::MixPostCommitTelemetry;
 use crate::node::{
     local_caps_route_epoch_matches, session_entries_for_in, FederationRouter, OnlineSession,
     RuntimeFederationPolicy, ServerNode,
@@ -14,6 +13,7 @@ use northstar_mix_xmpp::ports::MixOutboxPort;
 use northstar_protocol_runtime::caps::{CapsObservationOwner, CapsResourceIndex, PendingCapsIndex};
 use northstar_room_application::mix_service::MixService;
 use northstar_room_core::mix::{MixSessionCapability, CORE_NS, PAM_NS};
+use northstar_room_core::telemetry::MixPostCommitTelemetry;
 use northstar_stream::outbound::MixDelivery;
 use northstar_workflows::room_effects::PostgresMixRepository;
 use std::sync::{

@@ -6,6 +6,7 @@ use northstar_pubsub_application::private_storage::{
 };
 use northstar_pubsub_application::profile::{ProfileRepository, ProfileService};
 use northstar_pubsub_application::PubSubService;
+use northstar_pubsub_core::telemetry::PepTelemetry;
 use northstar_pubsub_core::PepQuotas;
 use northstar_pubsub_xmpp::PubSubSessionHost;
 use northstar_roster_xmpp::presence::inject_vcard_avatar_hash;
@@ -27,7 +28,7 @@ impl PubSubSessionHost for ServerNode {
     }
 
     fn pep_record_published(&self, count: u64) {
-        crate::node::telemetry::PepTelemetry::new(
+        PepTelemetry::new(
             &self.metrics.pep_items_published_total,
             &self.metrics.pep_items_retracted_total,
             &self.metrics.pep_retrievals_total,
@@ -36,7 +37,7 @@ impl PubSubSessionHost for ServerNode {
     }
 
     fn pep_record_retracted(&self, count: u64) {
-        crate::node::telemetry::PepTelemetry::new(
+        PepTelemetry::new(
             &self.metrics.pep_items_published_total,
             &self.metrics.pep_items_retracted_total,
             &self.metrics.pep_retrievals_total,
@@ -45,7 +46,7 @@ impl PubSubSessionHost for ServerNode {
     }
 
     fn pep_record_retrieved(&self) {
-        crate::node::telemetry::PepTelemetry::new(
+        PepTelemetry::new(
             &self.metrics.pep_items_published_total,
             &self.metrics.pep_items_retracted_total,
             &self.metrics.pep_retrievals_total,

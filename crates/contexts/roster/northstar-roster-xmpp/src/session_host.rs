@@ -295,3 +295,19 @@ pub trait PresenceDeliveryHost: FederatedPresenceHost {
         authority: ClusterPresenceAuthority,
     ) -> impl Future<Output = ()> + Send;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::PostAcceptFailureTelemetry;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn deferred_failure_telemetry_shares_its_counter() {
+        let failures = Arc::new(AtomicU64::new(0));
+        let telemetry = PostAcceptFailureTelemetry::new(Arc::clone(&failures));
+        telemetry.record_failure();
+
+        assert_eq!(failures.load(Ordering::Relaxed), 1);
+    }
+}

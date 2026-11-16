@@ -317,10 +317,53 @@ impl<'a> SessionDropFallbackTelemetry<'a> {
     }
 }
 
+/// Session finalization attempts and their failure counts.
+pub struct SessionFinalizationTelemetry<'a> {
+    session_finalizations_total: &'a AtomicU64,
+    session_finalization_failures_total: &'a AtomicU64,
+}
+
+impl<'a> SessionFinalizationTelemetry<'a> {
+    pub fn new(
+        session_finalizations_total: &'a AtomicU64,
+        session_finalization_failures_total: &'a AtomicU64,
+    ) -> Self {
+        Self {
+            session_finalizations_total,
+            session_finalization_failures_total,
+        }
+    }
+
+    pub fn started(&self) {
+        self.session_finalizations_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn failed(&self, failures: usize) {
+        self.session_finalization_failures_total
+            .fetch_add(failures as u64, Ordering::Relaxed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::PushSubscriptionTelemetry;
+    use super::{PushSubscriptionTelemetry, SessionFinalizationTelemetry};
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn finalization_telemetry_counts_starts_and_failures() {
+        let starts = AtomicU64::new(0);
+        let failures = AtomicU64::new(0);
+        let telemetry = SessionFinalizationTelemetry::new(&starts, &failures);
+
+        telemetry.started();
+        telemetry.started();
+        telemetry.failed(3);
+        telemetry.failed(0);
+        telemetry.failed(2);
+        assert_eq!(starts.load(Ordering::Relaxed), 2);
+        assert_eq!(failures.load(Ordering::Relaxed), 5);
+    }
 
     #[test]
     fn push_subscription_rejection_counts_global_and_feature_limits() {

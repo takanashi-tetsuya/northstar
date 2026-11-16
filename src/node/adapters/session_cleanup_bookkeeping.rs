@@ -5,8 +5,9 @@ use anyhow::Result;
 use northstar_roster_application::privacy::PrivacyService;
 use northstar_roster_postgres::privacy::PostgresPrivacyRepository;
 use northstar_runtime::workers::WorkerRegistry;
+use northstar_session_application::telemetry::SessionFinalizationTelemetry;
 use northstar_telemetry::metrics::Metrics;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub(crate) struct SessionCleanupBookkeeping {
@@ -37,15 +38,19 @@ impl SessionCleanupBookkeeping {
     }
 
     pub(crate) fn finalization_started(&self) {
-        self.metrics
-            .session_finalizations_total
-            .fetch_add(1, Ordering::Relaxed);
+        SessionFinalizationTelemetry::new(
+            &self.metrics.session_finalizations_total,
+            &self.metrics.session_finalization_failures_total,
+        )
+        .started();
     }
 
     pub(crate) fn finalization_failed(&self, failures: usize) {
-        self.metrics
-            .session_finalization_failures_total
-            .fetch_add(failures as u64, Ordering::Relaxed);
+        SessionFinalizationTelemetry::new(
+            &self.metrics.session_finalizations_total,
+            &self.metrics.session_finalization_failures_total,
+        )
+        .failed(failures);
     }
 
     pub(crate) fn worker_registry(&self) -> &WorkerRegistry {

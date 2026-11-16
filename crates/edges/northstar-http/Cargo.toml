@@ -26,6 +26,7 @@ northstar-federation-application = { path = "../../contexts/federation/northstar
 northstar-operations-application = { path = "../../contexts/operations/northstar-operations-application" }
 northstar-operations-core = { path = "../../contexts/operations/northstar-operations-core" }
 northstar-postgres = { path = "../../platform/northstar-postgres" }
+northstar-pubsub-application = { path = "../../contexts/pubsub/northstar-pubsub-application" }
 northstar-runtime = { path = "../../platform/northstar-runtime" }
 northstar-security = { path = "../../platform/northstar-security" }
 northstar-session-application = { path = "../../contexts/session/northstar-session-application" }

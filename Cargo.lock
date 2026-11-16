@@ -2303,6 +2303,7 @@ dependencies = [
  "northstar-operations-application",
  "northstar-operations-core",
  "northstar-postgres",
+ "northstar-pubsub-application",
  "northstar-runtime",
  "northstar-security",
  "northstar-session-application",

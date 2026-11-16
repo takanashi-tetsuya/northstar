@@ -1295,6 +1295,7 @@ digraph compile_time {
   "northstar-http" -> "northstar-operations-application";
   "northstar-http" -> "northstar-operations-core";
   "northstar-http" -> "northstar-postgres";
+  "northstar-http" -> "northstar-pubsub-application";
   "northstar-http" -> "northstar-runtime";
   "northstar-http" -> "northstar-security";
   "northstar-http" -> "northstar-session-application";

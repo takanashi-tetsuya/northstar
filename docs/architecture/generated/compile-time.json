@@ -3809,6 +3809,10 @@
     ],
     [
       "northstar-http",
+      "northstar-pubsub-application"
+    ],
+    [
+      "northstar-http",
       "northstar-runtime"
     ],
     [

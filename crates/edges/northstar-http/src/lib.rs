@@ -62,6 +62,7 @@ pub mod contexts;
 pub mod extract;
 pub mod governance_cursor;
 pub mod host;
+pub mod maintenance_health;
 pub mod repositories;
 pub use extract::{ApiPath, ApiQuery};
 

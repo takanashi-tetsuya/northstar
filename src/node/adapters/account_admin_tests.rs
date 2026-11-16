@@ -1,5 +1,6 @@
 use super::*;
 use northstar_session_application::RouteIncarnationSignal;
+use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -44,19 +45,6 @@ fn session(connection_id: Uuid, routable: bool) -> OnlineSession {
         last_activity: Arc::new(std::sync::RwLock::new(Instant::now())),
         disconnect: CancellationToken::new(),
     }
-}
-
-#[test]
-fn registration_cache_updates_the_original_flag_and_preserves_dependency_lock() {
-    let shared = Arc::new(AtomicBool::new(true));
-    let cache = LocalRegistrationCache::new(false, Arc::clone(&shared));
-    cache.apply_current_closed(false);
-    assert!(!shared.load(Ordering::Acquire));
-    cache.apply_current_closed(true);
-    assert!(shared.load(Ordering::Acquire));
-    let locked = LocalRegistrationCache::new(true, Arc::clone(&shared));
-    locked.apply_current_closed(false);
-    assert!(shared.load(Ordering::Acquire));
 }
 
 #[test]

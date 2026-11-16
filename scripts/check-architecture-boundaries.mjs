@@ -346,7 +346,6 @@ for (const field of [
   'bosh',
   'client_admission',
   'started_at',
-  'registration_closed',
   'tls_context',
 ]) {
   if (!new RegExp(`^\\s*${field}\\s*:`, 'm').test(appState)) {
@@ -355,6 +354,9 @@ for (const field of [
   if (new RegExp(`^\\s*pub(?:\\(crate\\))?\\s+${field}\\s*:`, 'm').test(appState)) {
     throw new Error(`ServerNode capability ${field} became publicly accessible`);
   }
+}
+if (!/^\s*pub\(in crate::node\)\s+registration\s*:\s*northstar_auth_application::registration_availability::RegistrationAvailability\s*,/m.test(read('src/node/modules/auth.rs'))) {
+  throw new Error('AuthModule registration availability must remain inside the node');
 }
 if (!/^\s*pub\(in crate::node\)\s+dialback_secret\s*:\s*Zeroizing<Vec<u8>>\s*,/m.test(read('src/node/modules/federation.rs'))) {
   throw new Error('FederationModule dialback_secret must remain inside the node and Zeroizing');
@@ -2237,6 +2239,7 @@ for (const [name, source] of [
   ['ReportContext', read('crates/edges/northstar-http/src/contexts/reports.rs')],
   ['AccountAdminServices', read('crates/contexts/auth/northstar-auth-application/src/account_admin.rs')],
   ['AccountAdminRuntime', read('src/node/adapters/account_admin.rs')],
+  ['RegistrationAvailability', read('crates/contexts/auth/northstar-auth-application/src/registration_availability.rs')],
   ['OperationAdminService', read('crates/contexts/operations/northstar-operations-application/src/operations.rs')],
   ['AdminDispatchService', read('crates/contexts/operations/northstar-operations-application/src/admin_dispatch.rs')],
   ['GovernanceService', read('crates/contexts/operations/northstar-operations-application/src/governance.rs')],

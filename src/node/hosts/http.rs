@@ -295,9 +295,7 @@ impl ServerNode {
     pub(crate) fn http_registration_availability(
         &self,
     ) -> northstar_auth_application::account::HttpRegistrationAvailability {
-        northstar_auth_application::account::HttpRegistrationAvailability::new(
-            Arc::clone(&self.registration_closed),
-            self.config.registration_dependency_locked(),
+        self.auth.registration.http_availability(
             self.config.configured_registration_mode()
                 == northstar_config::RegistrationMode::InvitationOnly,
         )

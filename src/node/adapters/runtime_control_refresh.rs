@@ -6,13 +6,15 @@ use crate::node::{
 };
 use anyhow::Result;
 use arc_swap::ArcSwap;
+use northstar_auth_application::account_admin::RegistrationCache;
+use northstar_auth_application::registration_availability::RegistrationAvailability;
 use northstar_federation_application::registry::S2sOutboundClearance;
 use northstar_operations_application::runtime_control::RuntimeControlService;
 use northstar_operations_postgres::runtime_control_repository::PostgresRuntimeControlRepository;
 use northstar_runtime::workers::WorkerHeartbeat;
 use sqlx::{pool::PoolConnection, Postgres};
 use std::{
-    sync::{atomic::AtomicBool, Arc, OnceLock, Weak},
+    sync::{Arc, OnceLock, Weak},
     time::Duration,
 };
 use tokio::sync::Mutex;
@@ -22,8 +24,7 @@ pub(in crate::node) struct RuntimeControlRefreshContext {
     liveness: Weak<()>,
     connection: Arc<Mutex<Option<PostgresRuntimeControlRepository>>>,
     federation_writes: Arc<FederationWritePolicy>,
-    registration_closed: Arc<AtomicBool>,
-    registration_dependency_locked: bool,
+    registration: RegistrationAvailability,
     federation_rules: Arc<ArcSwap<RuntimeFederationPolicy>>,
     s2s_connections: S2sOutboundClearance,
     service_control_enabled: bool,
@@ -42,8 +43,7 @@ impl RuntimeControlRefreshContext {
                 connection,
             )))),
             federation_writes: Arc::clone(&state.federation.federation_write_policy),
-            registration_closed: Arc::clone(&state.registration_closed),
-            registration_dependency_locked: state.config.registration_dependency_locked(),
+            registration: state.auth.registration.clone(),
             federation_rules: Arc::clone(&state.federation.federation_runtime_policy),
             s2s_connections: state
                 .federation
@@ -91,10 +91,8 @@ impl RuntimeControlRefreshContext {
                     Ok(policy) => {
                         diagnostics.enter(RuntimeControlPhase::PolicyApply);
                         let was_island = self.federation_writes.refresh(policy.island_mode).await;
-                        self.registration_closed.store(
-                            policy.registration_closed || self.registration_dependency_locked,
-                            std::sync::atomic::Ordering::Release,
-                        );
+                        self.registration
+                            .apply_current_closed(policy.registration_closed);
                         if policy.island_mode && !was_island {
                             self.s2s_connections.clear_for_island_mode();
                         }

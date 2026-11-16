@@ -181,7 +181,6 @@ pub struct ServerNode {
     started_at: Instant,
     process_started_at: chrono::DateTime<chrono::Utc>,
     tls_context: northstar_security::tls::TlsContext,
-    registration_closed: Arc<AtomicBool>,
     service_shutdown: Arc<std::sync::OnceLock<CancellationToken>>,
     runtime_control_liveness: Arc<()>,
     workers: Arc<northstar_runtime::workers::WorkerRegistry>,

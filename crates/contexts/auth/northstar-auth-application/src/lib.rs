@@ -13,3 +13,4 @@ pub mod invitation_admin;
 pub mod omemo_recovery;
 pub mod passkeys;
 pub mod password_change;
+pub mod registration_availability;

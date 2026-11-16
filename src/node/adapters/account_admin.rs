@@ -1,37 +1,9 @@
 //! Process-local state exposed to registration and exact-session commands.
 use crate::node::OnlineSession;
 use dashmap::DashMap;
-use northstar_auth_application::account_admin::{
-    AdminSessionLookup, RegistrationCache, SessionKickSnapshot,
-};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use northstar_auth_application::account_admin::{AdminSessionLookup, SessionKickSnapshot};
+use std::sync::Arc;
 use uuid::Uuid;
-
-#[derive(Clone)]
-pub(crate) struct LocalRegistrationCache {
-    dependency_locked: bool,
-    closed: Arc<AtomicBool>,
-}
-impl LocalRegistrationCache {
-    pub(in crate::node) fn new(dependency_locked: bool, closed: Arc<AtomicBool>) -> Self {
-        Self {
-            dependency_locked,
-            closed,
-        }
-    }
-}
-impl RegistrationCache for LocalRegistrationCache {
-    fn dependency_locked(&self) -> bool {
-        self.dependency_locked
-    }
-    fn apply_current_closed(&self, closed: bool) {
-        self.closed
-            .store(closed || self.dependency_locked, Ordering::Release);
-    }
-}
 
 #[derive(Clone)]
 pub(crate) struct LocalAdminSessions {

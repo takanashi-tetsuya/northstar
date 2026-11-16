@@ -31,7 +31,7 @@ use northstar_stream::session_cleanup::service::SessionCleanupService;
 use northstar_stream::transport::Action;
 use northstar_stream::IqRouter;
 use roxmltree::Node;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -218,15 +218,12 @@ impl SessionHost for ServerNode {
     }
 
     fn registration_is_closed(&self) -> bool {
-        self.config.registration_dependency_locked()
-            || self.registration_closed.load(Ordering::Acquire)
+        self.auth.registration.is_closed()
     }
 
     fn registration_requires_invitation(&self) -> bool {
-        self.config.registration_requires_invitation(
-            self.config.registration_dependency_locked()
-                || self.registration_closed.load(Ordering::Acquire),
-        )
+        self.config
+            .registration_requires_invitation(self.auth.registration.is_closed())
     }
 
     fn registration_telemetry(

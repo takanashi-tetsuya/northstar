@@ -32,6 +32,8 @@ pub(in crate::node) struct AuthModule {
     /// derivation key.
     pub(in crate::node) authentication_service: AuthenticationService<PostgresAuthenticationRepository>,
     pub(in crate::node) account_admin_service: AccountAdminContext,
+    pub(in crate::node) registration:
+        northstar_auth_application::registration_availability::RegistrationAvailability,
     pub(in crate::node) registration_admin_service: RegistrationAdminContext,
     pub(in crate::node) session_admin_service: SessionAdminContext,
     pub(in crate::node) invitation_admin_service: InvitationAdminContext,
@@ -190,6 +192,11 @@ impl AuthModule {
                     admin_mutations.clone(),
                 ),
             );
+        let registration =
+            northstar_auth_application::registration_availability::RegistrationAvailability::new(
+                config.registration_dependency_locked(),
+                Arc::clone(registration_closed),
+            );
         let registration_admin_service =
             northstar_auth_application::account_admin::RegistrationAdminService::new(
                 northstar_workflows::account_admin_repository::PostgresRegistrationAdminRepository::new(
@@ -200,10 +207,7 @@ impl AuthModule {
                     ),
                     pool.clone(),
                 ),
-                Arc::new(crate::node::adapters::account_admin::LocalRegistrationCache::new(
-                    config.registration_dependency_locked(),
-                    Arc::clone(registration_closed),
-                ))
+                Arc::new(registration.clone())
                     as Arc<dyn northstar_auth_application::account_admin::RegistrationCache>,
             );
         let session_admin_service =
@@ -257,6 +261,7 @@ impl AuthModule {
             password_change_service,
             authentication_service,
             account_admin_service: northstar_http::contexts::ServiceContext(account_admin_service),
+            registration,
             registration_admin_service: northstar_http::contexts::ServiceContext(
                 registration_admin_service,
             ),

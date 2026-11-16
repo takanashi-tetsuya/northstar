@@ -644,7 +644,6 @@ impl ServerNode {
             started_at,
             process_started_at,
             tls_context: northstar_security::tls::TlsContext::new(tls),
-            registration_closed,
             service_shutdown: Arc::new(std::sync::OnceLock::new()),
             runtime_control_liveness: Arc::new(()),
             workers: northstar_runtime::workers::WorkerRegistry::new(),

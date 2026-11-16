@@ -9,6 +9,7 @@ pub mod maintenance;
 pub mod repository;
 pub mod safety;
 pub mod service;
+pub mod storage_migration;
 pub mod store;
 pub mod worker;
 pub use repository::*;

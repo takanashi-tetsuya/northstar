@@ -1820,6 +1820,7 @@ digraph compile_time {
   "northstar-upload-application" -> "northstar-telemetry";
   "northstar-upload-application" -> "northstar-upload-core";
   "northstar-upload-application" -> "northstar-xmpp-types";
+  "northstar-upload-application" -> "sha2";
   "northstar-upload-application" -> "thiserror";
   "northstar-upload-application" -> "tokio";
   "northstar-upload-application" -> "tokio-util";
@@ -1837,7 +1838,6 @@ digraph compile_time {
   "northstar-upload-postgres" -> "northstar-postgres";
   "northstar-upload-postgres" -> "northstar-upload-application";
   "northstar-upload-postgres" -> "serde_json";
-  "northstar-upload-postgres" -> "sha2";
   "northstar-upload-postgres" -> "sqlx";
   "northstar-upload-postgres" -> "tokio";
   "northstar-upload-postgres" -> "uuid";

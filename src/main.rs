@@ -8,7 +8,6 @@ mod runtime;
 #[cfg(test)]
 mod stage4_replay;
 mod state;
-mod tools;
 mod xmpp;
 
 use anyhow::{Context, Result};
@@ -227,7 +226,13 @@ async fn run() -> Result<()> {
             Some("migrate") => {
                 let environment = migration_environment()?;
                 let pool = connect_migrator_pool(&environment).await?;
-                let result = tools::storage_migration::run_cli(&pool, &arguments[2..]).await;
+                let repository =
+                    northstar_upload_postgres::PostgresUploadRepository::new(pool.clone());
+                let result = northstar_upload_storage::storage_migration::run_cli(
+                    &repository,
+                    &arguments[2..],
+                )
+                .await;
                 pool.close().await;
                 return result;
             }

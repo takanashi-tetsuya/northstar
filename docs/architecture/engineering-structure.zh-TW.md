@@ -583,7 +583,7 @@ WP-179 只跑了模糊測試編譯、沒有重跑門禁，dev 的 CI 仍失敗�
   `db/upload_admin_tests.rs`（冪等重播、API session、授權）。`northstar-upload-postgres` 以 `test-support` feature
   提供它們需要的容量常數與原始碼；依 4.6，它們隨組合根移到 `northstar-server/tests`。
 - `ProtocolSession` 對 `UploadSlotSession` 的實作：S30 拆解 `ProtocolSession` 時處理。
-- `state/upload_module.rs` 與離線遷移命令 `tools/storage_migration.rs`：組合根與二進位檔的子命令（4.4）。
+- `state/upload_module.rs` 與 `main.rs` 的離線遷移命令分派：組合根與二進位檔的子命令（4.4）。遷移驅動位於 `crates/contexts/upload/northstar-upload-storage/src/storage_migration.rs`，journal port 與 manifest 位於 `crates/contexts/upload/northstar-upload-application/src/storage_migration.rs`。
 
 與目標架構 S19–S28 列的差異：該列要求把 `api` 的程式碼也移入上下文 crate，但 4.3 把 REST、管理 API 與上傳端點
 放在 `northstar-http`。端點共用 `AppError`、抽取器、API session 驗證與冪等框架，後兩者屬於 auth 與 operations；

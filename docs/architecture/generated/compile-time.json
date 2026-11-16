@@ -5912,6 +5912,10 @@
     ],
     [
       "northstar-upload-application",
+      "sha2"
+    ],
+    [
+      "northstar-upload-application",
       "thiserror"
     ],
     [
@@ -5977,10 +5981,6 @@
     [
       "northstar-upload-postgres",
       "serde_json"
-    ],
-    [
-      "northstar-upload-postgres",
-      "sha2"
     ],
     [
       "northstar-upload-postgres",

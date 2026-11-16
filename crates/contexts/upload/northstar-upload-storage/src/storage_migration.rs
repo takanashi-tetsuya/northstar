@@ -8,17 +8,16 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use anyhow::{ensure, Context, Result};
 use futures::{stream, StreamExt, TryStreamExt};
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
 use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
+use northstar_upload_application::storage_migration::{
+    BeginRun, CanonicalManifestHasher, MigrationItem, MigrationRun, StorageMigrationRepository,
+    VerifiedItem, VerifiedManifestItem,
+};
 use northstar_upload_application::store::UploadStore;
-use northstar_upload_postgres::migration::{
-    self as upload_migration, BeginRun, CanonicalManifestHasher, MigrationItem, VerifiedItem,
-};
-use northstar_upload_storage::{
-    s3_settings_from_env, upload_storage_namespace_id, LocalUploadStore, S3UploadStore,
-};
+
+use crate::{s3_settings_from_env, upload_storage_namespace_id, LocalUploadStore, S3UploadStore};
 
 const OBJECT_IO_DEADLINE: Duration = Duration::from_secs(180);
 const CLAIM_LEASE_SECONDS: i64 = 900;
@@ -128,14 +127,14 @@ fn parse_options(args: &[String]) -> Result<Options> {
     })
 }
 
-pub(crate) async fn run_cli(pool: &PgPool, args: &[String]) -> Result<()> {
+pub async fn run_cli(repository: &impl StorageMigrationRepository, args: &[String]) -> Result<()> {
     let options = parse_options(args)?;
     let pause_after_claim =
         development_pause_enabled("NORTHSTAR_STORAGE_MIGRATION_TEST_PAUSE_AFTER_CLAIM")?;
     let pause_before_cutover =
         development_pause_enabled("NORTHSTAR_STORAGE_MIGRATION_TEST_PAUSE_BEFORE_CUTOVER")?;
     if let Some(run_id) = options.abort_run {
-        upload_migration::abort_run(pool, run_id).await?;
+        repository.abort_run(run_id).await?;
         println!(
             "upload migration {run_id} aborted; the journal and copied objects remain for review"
         );
@@ -150,7 +149,7 @@ pub(crate) async fn run_cli(pool: &PgPool, args: &[String]) -> Result<()> {
     let target_namespace_sha256 =
         upload_storage_namespace_id(&options.target, &local_root, Some(&s3_settings))?;
     if let Some(requested_id) = options.run_id {
-        if let Some(previous) = upload_migration::get_run(pool, requested_id).await? {
+        if let Some(previous) = repository.get_run(requested_id).await? {
             ensure!(
                 previous.source_backend == options.source
                     && previous.target_backend == options.target
@@ -162,13 +161,9 @@ pub(crate) async fn run_cli(pool: &PgPool, args: &[String]) -> Result<()> {
                 let manifest = previous
                     .manifest_sha256
                     .context("completed migration has no manifest digest")?;
-                let cutover = upload_migration::final_cutover(
-                    pool,
-                    requested_id,
-                    manifest,
-                    OFFLINE_CONFIRMATION,
-                )
-                .await?;
+                let cutover = repository
+                    .final_cutover(requested_id, manifest, OFFLINE_CONFIRMATION)
+                    .await?;
                 println!(
                     "upload migration {} already committed generation {} manifest {}",
                     cutover.run_id,
@@ -188,16 +183,15 @@ pub(crate) async fn run_cli(pool: &PgPool, args: &[String]) -> Result<()> {
     };
     let target_store = if options.target == "s3" { s3 } else { local };
 
-    let existing = upload_migration::find_active_run(pool).await?;
+    let existing = repository.find_active_run().await?;
     if let (Some(requested), Some(active)) = (options.run_id, &existing) {
         ensure!(
             requested == active.run_id,
             "a different migration run is already active"
         );
     }
-    let run = upload_migration::begin_offline_run(
-        pool,
-        BeginRun {
+    let run = repository
+        .begin_offline_run(BeginRun {
             run_id: options
                 .run_id
                 .or_else(|| existing.as_ref().map(|run| run.run_id))
@@ -206,36 +200,31 @@ pub(crate) async fn run_cli(pool: &PgPool, args: &[String]) -> Result<()> {
             target_backend: options.target,
             source_namespace_sha256,
             target_namespace_sha256,
-        },
-    )
-    .await?;
+        })
+        .await?;
     eprintln!(
         "upload migration run {}: {} -> {}, {} objects",
         run.run_id, run.source_backend, run.target_backend, run.source_slot_count
     );
     let mut empty_rounds = 0_u16;
     loop {
-        let items = upload_migration::claim_items(
-            pool,
-            run.run_id,
-            options.concurrency as i64,
-            CLAIM_LEASE_SECONDS,
-        )
-        .await?;
+        let items = repository
+            .claim_items(run.run_id, options.concurrency as i64, CLAIM_LEASE_SECONDS)
+            .await?;
         if items.is_empty() {
-            match verified_manifest(pool, &run).await? {
+            match verified_manifest(repository, &run).await? {
                 Some(manifest) => {
                     if pause_before_cutover {
                         tokio::time::sleep(Duration::from_secs(20)).await;
                     }
                     revalidate_verified_destinations(
-                        pool,
+                        repository,
                         &run,
                         target_store.as_ref(),
                         options.concurrency,
                     )
                     .await?;
-                    let cutover = upload_migration::final_cutover(pool, run.run_id, manifest,
+                    let cutover = repository.final_cutover(run.run_id, manifest,
                         if options.all_nodes_stopped { OFFLINE_CONFIRMATION } else { "" }).await?;
                     println!("upload migration {} committed generation {} manifest {}",
                         cutover.run_id, cutover.generation, digest_hex(&cutover.manifest_sha256));
@@ -256,11 +245,14 @@ pub(crate) async fn run_cli(pool: &PgPool, args: &[String]) -> Result<()> {
         if pause_after_claim {
             tokio::time::sleep(Duration::from_secs(60)).await;
         }
-        stream::iter(
-            items
-                .into_iter()
-                .map(|item| copy_one(pool, source_store.as_ref(), target_store.as_ref(), item)),
-        )
+        stream::iter(items.into_iter().map(|item| {
+            copy_one(
+                repository,
+                source_store.as_ref(),
+                target_store.as_ref(),
+                item,
+            )
+        }))
         .buffer_unordered(options.concurrency)
         .try_collect::<Vec<_>>()
         .await?;
@@ -268,17 +260,19 @@ pub(crate) async fn run_cli(pool: &PgPool, args: &[String]) -> Result<()> {
 }
 
 async fn verified_manifest(
-    pool: &PgPool,
-    run: &upload_migration::MigrationRun,
+    repository: &impl StorageMigrationRepository,
+    run: &MigrationRun,
 ) -> Result<Option<[u8; 32]>> {
-    if upload_migration::has_unverified_items(pool, run.run_id).await? {
+    if repository.has_unverified_items(run.run_id).await? {
         return Ok(None);
     }
     let mut hasher = CanonicalManifestHasher::new(run);
     let mut cursor = None;
     let mut count = 0_i64;
     loop {
-        let page = upload_migration::list_verified_items(pool, run.run_id, cursor, 128).await?;
+        let page = repository
+            .list_verified_items(run.run_id, cursor, 128)
+            .await?;
         if page.is_empty() {
             break;
         }
@@ -295,8 +289,8 @@ async fn verified_manifest(
 }
 
 async fn revalidate_verified_destinations(
-    pool: &PgPool,
-    run: &upload_migration::MigrationRun,
+    repository: &impl StorageMigrationRepository,
+    run: &MigrationRun,
     target: &dyn UploadStore,
     concurrency: usize,
 ) -> Result<()> {
@@ -307,7 +301,9 @@ async fn revalidate_verified_destinations(
     let mut cursor = None;
     let mut count = 0_i64;
     loop {
-        let page = upload_migration::list_verified_items(pool, run.run_id, cursor, 128).await?;
+        let page = repository
+            .list_verified_items(run.run_id, cursor, 128)
+            .await?;
         if page.is_empty() {
             break;
         }
@@ -325,10 +321,7 @@ async fn revalidate_verified_destinations(
     Ok(())
 }
 
-async fn validate_destination(
-    target: &dyn UploadStore,
-    item: &upload_migration::VerifiedManifestItem,
-) -> Result<()> {
+async fn validate_destination(target: &dyn UploadStore, item: &VerifiedManifestItem) -> Result<()> {
     tokio::time::timeout(OBJECT_IO_DEADLINE, async {
         let mut object = target
             .get(&item.dest_key, item.dest_version.as_deref())
@@ -368,7 +361,7 @@ async fn validate_destination(
 }
 
 async fn copy_one(
-    pool: &PgPool,
+    repository: &impl StorageMigrationRepository,
     source: &dyn UploadStore,
     target: &dyn UploadStore,
     item: MigrationItem,
@@ -394,13 +387,9 @@ async fn copy_one(
         Err(error) => {
             // No destination request has started, so this attempt can be
             // retired immediately without an ambiguous provider write.
-            upload_migration::release_or_retry_claim(
-                pool,
-                item.run_id,
-                item.object_id,
-                item.claim_token,
-            )
-            .await?;
+            repository
+                .release_or_retry_claim(item.run_id, item.object_id, item.claim_token)
+                .await?;
             return Err(error);
         }
     };
@@ -453,7 +442,7 @@ async fn copy_one(
         dest_sha256: source_sha256,
     };
     ensure!(
-        upload_migration::mark_verified(pool, &verified).await?,
+        repository.mark_verified(&verified).await?,
         "migration claim changed before object verification could be committed"
     );
     staged.durably_recorded();

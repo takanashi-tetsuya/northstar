@@ -1,5 +1,5 @@
 //! Upload object storage adapter: the local-disk and S3 upload stores behind the
-//! application crate's store port, and the offline object backup tool.
+//! application crate's store port, and the offline object backup and migration tools.
 
 #![forbid(unsafe_code)]
 
@@ -21,6 +21,7 @@ use northstar_upload_application::{UploadAuthorityGeneration, UploadIoClass};
 
 pub mod backup;
 mod s3;
+pub mod storage_migration;
 
 pub use s3::{S3CleanupMode, S3UploadSettings, S3UploadStore};
 

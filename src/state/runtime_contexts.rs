@@ -104,8 +104,12 @@ impl AppState {
         AdminGatewayVerifier::new(self.web_admin_gateway_token.clone())
     }
 
-    pub(crate) fn capacity_lease_renewal_context(&self) -> CapacityLeaseRenewalContext {
-        capacity_maintenance::CapacityLeaseRenewalContext::new(
+    pub(crate) fn capacity_lease_renewal_context(
+        &self,
+    ) -> northstar_stream::capacity_maintenance::CapacityLeaseRenewalContext<
+        northstar_session_postgres::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository,
+    >{
+        northstar_stream::capacity_maintenance::CapacityLeaseRenewalContext::new(
             northstar_session_application::capacity_maintenance::CapacityMaintenanceService::new(
                 northstar_session_postgres::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository::new(
                     self.pool.clone(),

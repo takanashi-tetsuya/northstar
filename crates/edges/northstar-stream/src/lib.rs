@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod auth_publication;
+pub mod capacity_maintenance;
 pub mod frame_execution;
 pub mod handler;
 pub mod host;

@@ -440,7 +440,7 @@ async fn run() -> Result<()> {
         Some(capacity_interval.saturating_mul(2)),
         cancel.clone(),
         move |heartbeat| {
-            runtime::capacity_maintenance::serve_renewal(
+            northstar_stream::capacity_maintenance::serve_renewal(
                 capacity_context.clone(),
                 capacity_cancel.clone(),
                 heartbeat,
@@ -455,7 +455,7 @@ async fn run() -> Result<()> {
         Some(std::time::Duration::from_secs(120)),
         cancel.clone(),
         move |heartbeat| {
-            runtime::capacity_maintenance::serve_reaper(
+            northstar_stream::capacity_maintenance::serve_reaper(
                 capacity_reaper_context.clone(),
                 capacity_reaper_cancel.clone(),
                 heartbeat,

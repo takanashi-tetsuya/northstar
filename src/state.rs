@@ -1,13 +1,5 @@
 pub(crate) mod account_admin;
 
-pub(crate) mod capacity_maintenance;
-pub(crate) type CapacityLeaseRenewalContext = capacity_maintenance::CapacityLeaseRenewalContext<
-    northstar_session_postgres::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository,
->;
-pub(crate) type CapacityLeaseReaperContext = capacity_maintenance::CapacityLeaseReaperContext<
-    northstar_session_postgres::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository,
->;
-
 pub(crate) mod account_deletion_recovery;
 pub(crate) mod account_generation_teardown;
 pub(crate) mod account_recovery;

@@ -105,7 +105,9 @@ flowchart TB
 
 - `northstar-stream` 是會話核心：`protocol` 模組的 `ProtocolSession<H>` 負責串流協商（SASL、SASL2／FAST、legacy
   auth、IBR、資源綁定）、SM、CSI、caps 與 stanza 分派，對組合根實作的 `SessionHost` 泛型；PostgreSQL repository 是
-  `SessionHost` 的關聯型別。
+  `SessionHost` 的關聯型別。S33 起 `SessionHost` 是 13 個關注點 trait 的聚合（身分、帳號、路由、caps、SM、MUC、出席
+  政策、訊息效果、MIX ACK、PubSub 效果、分派、生命週期、遙測），以 blanket impl 自動實作；repository 是各關注點的
+  關聯型別，只用到 host 參考的函式只約束它需要的關注點。
 - 每個上下文的 `-xmpp` crate 在 `protocol_session.rs` 為 `ProtocolSession<H>` 實作自己的處理器 trait，`H` 另受該上下文的
   host trait 約束（例如 `PubSubSessionHost`），組合根的 `ServerNode` 實作這些 host trait。核心需要上下文時呼叫取
   `&mut ProtocolSession<Self>` 的 host hook，由組合根以 `-xmpp` 的處理器填入。用戶端 IQ 路由表與服務探索在
@@ -115,7 +117,8 @@ flowchart TB
 - `northstar-c2s`（TCP、STARTTLS、direct TLS、WebSocket）、`northstar-bosh`、`northstar-s2s` 只負責連線、
   frame 與背壓，再把 frame 交給 `northstar-stream`。
 - `northstar-stream` 的 `test-support` feature 提供 SM 擁有權的記憶體 port 與 fixture
-  （`protocol::sm_owner::test_support`），供傳輸 crate 的組合測試使用；傳輸只在 dev-dependency 開啟它。
+  （`protocol::sm_owner::test_support`），供傳輸 crate 的組合測試使用；傳輸只在 dev-dependency 開啟它。S33 起它也
+  提供 `local_routes::session::test_online_session`，讓不能命名 session 應用層的上下文介面卡在測試中建構本機會話。
 - `northstar-http` 以 axum 提供 REST、管理 API、上傳端點與 web surface，呼叫各上下文的 application。
 - `northstar-cluster` 是跨節點的介面卡：實作 `session` 的遠端路由 port、`room` 的佔用投影 port 等，並執行
   叢集監聽與復原重播。它的 context 對 `ClusterAdapters` 介面卡家族泛型，由組合根綁定 PostgreSQL 這一族；權威資料
@@ -136,6 +139,11 @@ S31 後的實際版面（[工程結構藍圖](engineering-structure.zh-TW.md) 5.
 實作（`hosts/`）、跨上下文的 port 綁定（`adapters/`）與 worker 註冊（`workers/`）；`src/runtime/` 依程序角色啟動
 edge 與子伺服器。服務定位器式的 accessor 已刪除，各上下文模組擁有並公開自己的服務。安裝的執行檔仍名為
 `xmpp-server`。
+
+S33 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.29）：連線准入、runtime control 協調器、服務工作監督、維護
+健康監聽與啟動秘密政策已在擁有的 crate，`node/adapters` 大多只剩 port 綁定，仍含流程的是 MIX 出席恢復與 IQ 轉送。
+`ServerNode` 仍持有即時會話表、caps 索引、叢集與 BOSH 管理器、連線准入與 runtime control 的狀態；`main.rs` 仍有關機
+監督、維護所有權監控、啟動稽核序列與叢集 claim。這些由 S34 處理。
 
 ### 4.5 持久化
 
@@ -167,7 +175,8 @@ edge 與子伺服器。服務定位器式的 accessor 已刪除，各上下文�
 - 讀原始碼文字的門禁逐支處理：邊界已由 crate 圖保證的直接刪除（例如「協定模組不得使用 `db::`」）；交易順序、
   outbox 等語義檢查改寫成擁有該行為的 crate 中的測試；在那之前，每個 WP 都列出它要更新的門禁。S32 盤點了
   `check-architecture-boundaries.mjs` 的 120 段，刪除 crate 圖或其他門禁已涵蓋的 14 段（WP-507）；其餘是語義與
-  組合根接線檢查，隨 S33 移動程式碼時改寫為測試。
+  組合根接線檢查。S33 移動程式碼時只把這些檢查改指向擁有 crate 的檔案（8 個腳本與目錄檔），字面值、訊息與強度
+  不變；改寫為測試再刪除改在 S34 進行。
 
 ## 5. 遷移順序
 
@@ -185,7 +194,8 @@ edge 與子伺服器。服務定位器式的 accessor 已刪除，各上下文�
 | S30 傳輸 | `northstar-c2s`、`northstar-bosh`、`northstar-s2s`、`northstar-http`；`ProtocolSession` 拆解完畢 | 根 crate 只剩組合程式碼。已完成（WP-360–423，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.26）：`ProtocolSession` 在 `northstar-stream`，glue 與 S2S 入站處理器在各 `-xmpp` crate，處理器 trait 直接為 `ProtocolSession<H>` 實作，`StanzaHandler` 與 `SessionContext` 不再需要；`state` 的 host 實作與接縫、IQ 路由表、服務探索與 S2S 入站分派留待 S31 |
 | S31 組合根 | 根 crate 更名為 `northstar-server`，`AppState` 刪除；R9 與其餘讀原始碼的邊界門禁退役；文件改寫 | `src/` 只有組合根；全部門禁與完整 CI 通過。已完成（WP-470–506，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.27）：根 crate 的流程進入各上下文與 edge，`AppState` 的 accessor 外觀刪除，組合根成為 `src/node` 的 `ServerNode`，資料庫整合測試進入 `northstar-db-it`，套件與二進位檔改名為 `northstar-server`；門禁退役改為 S32，MIX outbox 等仍含流程的介面卡、`runtime_control` 與 `ServerNode` 持有的即時狀態留在組合根 |
 | S32 門禁退役 | 逐項核對 `check-architecture-boundaries.mjs` 等讀原始碼的門禁：邊界已由 crate 圖保證的刪除，交易順序、outbox 等語義檢查改寫為擁有該行為的 crate 中的測試；決定 R9 在只剩兩層的組合根是否保留 | 每支刪除的檢查都對應到 crate 圖規則或測試；全部門禁與完整 CI 通過。已完成（WP-507–510，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.28）：刪除 14 段由 crate 圖或其他門禁涵蓋的檢查，`src/xmpp` 只在測試中編譯，R9 退役；語義檢查的改寫隨 S33 進行 |
-| S33 組合根收斂 | `node/adapters` 中仍含流程的介面卡移入 room、message、operations 上下文；`ServerNode` 的即時狀態移入擁有它的上下文模組；`SessionHost` 依關注點拆分；移動的程式碼對應的語義與接線檢查改寫為擁有 crate 的測試後從門禁刪除 | 組合根只剩建構、host 綁定與 worker 註冊；全部門禁與完整 CI 通過 |
+| S33 組合根收斂 | `node/adapters` 中仍含流程的介面卡移入 room、message、operations 上下文；`ServerNode` 的即時狀態移入擁有它的上下文模組；`SessionHost` 依關注點拆分；移動的程式碼對應的語義與接線檢查改寫為擁有 crate 的測試後從門禁刪除 | 組合根只剩建構、host 綁定與 worker 註冊；全部門禁與完整 CI 通過。已完成（WP-511–537，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.29）：審計 A1–A25 中組合根的流程移入各上下文、`northstar-runtime`、`northstar-http`、config 與 security，`SessionHost` 拆成 13 個關注點 trait；`ServerNode` 的即時狀態、ClusterModule、MIX 出席恢復與 IQ 轉送、`main.rs` 的關機監督與維護所有權監控留在組合根，門禁只改指向，改寫為測試改為 S34 |
+| S34 組合根狀態與門禁改寫 | `ServerNode` 的即時狀態（會話表、caps 索引、連線准入、連線 actor、BOSH 管理器）移入 SessionModule，叢集管理器與路由移入 ClusterModule；MIX 出席恢復與 IQ 轉送移入 `northstar-mix-xmpp`；`main.rs` 的關機監督移入 `northstar-runtime`，維護所有權監控移入 operations，啟動稽核序列與叢集 claim 經啟動 port；移動過的程式碼對應的語義與接線檢查改寫為擁有 crate 的測試後從門禁刪除 | `ServerNode` 只持有上下文模組與平台控制代碼；組合根只剩建構、host 綁定與 worker 註冊；全部門禁與完整 CI 通過 |
 
 與其他計劃的關係：模組化執行計劃的 C1（PubSub）與 C2（MAM）是語義上的重構，在對應上下文搬進新 crate 後於新
 結構中進行；D1 由 S18 與 S30 吸收；R1–R3 不受影響。

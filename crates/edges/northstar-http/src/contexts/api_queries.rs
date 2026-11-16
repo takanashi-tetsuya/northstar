@@ -1,7 +1,9 @@
 //! Read-only runtime capabilities used by REST collection handlers.
+use dashmap::DashMap;
 use northstar_operations_application::api_queries::{
     ApiQueryRepository, ApiQueryService, LiveAdminStats, SessionView,
 };
+use northstar_stream::local_routes::{muc::MucOccupant, session::OnlineSession};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -17,6 +19,65 @@ pub trait LocalPresenceDirectory: Send + Sync {
     /// Routable local sessions as REST views, each stamped with `node`.
     fn routable_sessions(&self, node: &str) -> Vec<SessionView>;
     fn room_occupant_count(&self, room_jid: &str) -> usize;
+}
+
+/// The REST query context's read-only view of this node's live session and MUC occupant maps.
+pub struct StreamPresenceDirectory {
+    sessions: Arc<DashMap<String, OnlineSession>>,
+    occupants: Arc<DashMap<String, MucOccupant>>,
+}
+
+impl StreamPresenceDirectory {
+    pub fn new(
+        sessions: Arc<DashMap<String, OnlineSession>>,
+        occupants: Arc<DashMap<String, MucOccupant>>,
+    ) -> Self {
+        Self {
+            sessions,
+            occupants,
+        }
+    }
+}
+
+impl LocalPresenceDirectory for StreamPresenceDirectory {
+    fn online_session_count(&self) -> usize {
+        self.sessions.len()
+    }
+
+    fn room_occupant_total(&self) -> usize {
+        self.occupants.len()
+    }
+
+    fn routable_sessions(&self, node: &str) -> Vec<SessionView> {
+        let now = Instant::now();
+        self.sessions
+            .iter()
+            .filter_map(|entry| {
+                let session = entry.value();
+                if !session.routable.load(Ordering::Acquire) {
+                    return None;
+                }
+                Some(SessionView {
+                    connection_id: session.connection_id,
+                    node: node.to_owned(),
+                    jid: entry.key().clone(),
+                    ip: session.ip.map(|ip| ip.to_string()),
+                    resource: session.resource.clone(),
+                    carbons_enabled: session.carbons.load(Ordering::Acquire),
+                    connected_duration_seconds: now
+                        .saturating_duration_since(session.connected_at)
+                        .as_secs(),
+                })
+            })
+            .collect()
+    }
+
+    fn room_occupant_count(&self, room_jid: &str) -> usize {
+        self.occupants
+            .iter()
+            .filter(|occupant| occupant.room_jid == room_jid)
+            .count()
+    }
 }
 
 pub struct ApiQueryRuntime {
@@ -140,5 +201,129 @@ impl<R: ApiQueryRepository> ApiQueryContext<R> {
             reports_created: metrics.reports_total.load(Ordering::Relaxed),
             appeals_created: metrics.appeals_total.load(Ordering::Relaxed),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use northstar_session_application::RouteIncarnationSignal;
+    use northstar_stream::{local_routes::muc::MucOccupantEndpoint, outbound::OutboundSender};
+    use tokio_util::sync::CancellationToken;
+    use uuid::Uuid;
+
+    fn session(connection_id: Uuid, routable: bool) -> OnlineSession {
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        OnlineSession {
+            user_id: Uuid::new_v4(),
+            auth_generation: 0,
+            user_agent_epoch: None,
+            connection_id,
+            route_incarnation: RouteIncarnationSignal::new(connection_id),
+            lifecycle: Arc::default(),
+            metrics_counted: Arc::default(),
+            routable: Arc::new(AtomicBool::new(routable)),
+            sender: OutboundSender::new(sender),
+            available: Arc::default(),
+            availability_generation: Arc::default(),
+            post_actions: northstar_session_application::post_actions::PostActionHandle::default(),
+            recovery_replay_inflight_epoch: Arc::default(),
+            recovery_replay_completed_epoch: Arc::default(),
+            bind2_mam_catchup: false,
+            mix_presence_gate: Arc::default(),
+            mix_presence_fallback_suppressed: Arc::default(),
+            caps_observation_generation: Arc::default(),
+            carbons: Arc::default(),
+            priority: Arc::default(),
+            show: Arc::default(),
+            blocklist_requested: Arc::default(),
+            roster_requested: Arc::default(),
+            roster_sync: Arc::default(),
+            mix_roster_annotations: Arc::default(),
+            privacy_active: Arc::default(),
+            privacy_requested: Arc::default(),
+            directed_presence: Arc::default(),
+            last_presence: Arc::default(),
+            ip: None,
+            resource: "fixture".into(),
+            user_agent_id: None,
+            sm_session_id: Arc::default(),
+            muc_memberships: Arc::default(),
+            connected_at: Instant::now(),
+            last_activity: Arc::new(std::sync::RwLock::new(Instant::now())),
+            disconnect: CancellationToken::new(),
+        }
+    }
+
+    fn occupant(room_jid: &str, nick: &str) -> MucOccupant {
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        MucOccupant {
+            full_jid: format!("{nick}@example.test/fixture"),
+            room_jid: room_jid.into(),
+            nick: nick.into(),
+            endpoint: MucOccupantEndpoint::Local(OutboundSender::new(sender)),
+            affiliation: "member".into(),
+            role: "participant".into(),
+            room_non_anonymous: false,
+            occupant_id: nick.into(),
+            cluster_epoch: Uuid::new_v4(),
+            connection_id: Uuid::new_v4(),
+            sm_session_id: None,
+            payload: String::new(),
+        }
+    }
+
+    #[test]
+    fn routable_sessions_skip_unroutable_entries_and_occupants_are_counted_per_room() {
+        let sessions = Arc::new(DashMap::new());
+        let occupants = Arc::new(DashMap::new());
+        let directory = StreamPresenceDirectory::new(Arc::clone(&sessions), Arc::clone(&occupants));
+        let connection_id = Uuid::new_v4();
+        let mut live = session(connection_id, true);
+        live.ip = Some("192.0.2.1".parse().unwrap());
+        live.carbons.store(true, Ordering::Release);
+        live.connected_at = Instant::now() - Duration::from_secs(30);
+        sessions.insert("alice@example.test/fixture".into(), live);
+        sessions.insert(
+            "bob@example.test/fixture".into(),
+            session(Uuid::new_v4(), false),
+        );
+        occupants.insert(
+            "one/alice".into(),
+            occupant("one@conference.example.test", "alice"),
+        );
+        occupants.insert(
+            "one/bob".into(),
+            occupant("one@conference.example.test", "bob"),
+        );
+        occupants.insert(
+            "two/alice".into(),
+            occupant("two@conference.example.test", "alice"),
+        );
+
+        assert_eq!(directory.online_session_count(), 2);
+        let views = directory.routable_sessions("node-a");
+        assert_eq!(views.len(), 1);
+        let view = &views[0];
+        assert_eq!(view.connection_id, connection_id);
+        assert_eq!(view.node, "node-a");
+        assert_eq!(view.jid, "alice@example.test/fixture");
+        assert_eq!(view.ip.as_deref(), Some("192.0.2.1"));
+        assert_eq!(view.resource, "fixture");
+        assert!(view.carbons_enabled);
+        assert!(view.connected_duration_seconds >= 30);
+        assert_eq!(directory.room_occupant_total(), 3);
+        assert_eq!(
+            directory.room_occupant_count("one@conference.example.test"),
+            2
+        );
+        assert_eq!(
+            directory.room_occupant_count("two@conference.example.test"),
+            1
+        );
+        assert_eq!(
+            directory.room_occupant_count("missing@conference.example.test"),
+            0
+        );
     }
 }

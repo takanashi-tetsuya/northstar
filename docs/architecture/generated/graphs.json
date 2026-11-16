@@ -3359,6 +3359,10 @@
       ],
       [
         "northstar-http",
+        "northstar-stream"
+      ],
+      [
+        "northstar-http",
         "northstar-telemetry"
       ],
       [

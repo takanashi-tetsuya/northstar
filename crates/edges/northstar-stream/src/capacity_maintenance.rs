@@ -169,4 +169,4 @@ pub async fn serve_reaper<R: CapacityMaintenanceRepository>(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

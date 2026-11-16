@@ -29,6 +29,7 @@ northstar-postgres = { path = "../../platform/northstar-postgres" }
 northstar-runtime = { path = "../../platform/northstar-runtime" }
 northstar-security = { path = "../../platform/northstar-security" }
 northstar-session-application = { path = "../../contexts/session/northstar-session-application" }
+northstar-stream = { path = "../northstar-stream" }
 northstar-telemetry = { path = "../../platform/northstar-telemetry" }
 northstar-upload-application = { path = "../../contexts/upload/northstar-upload-application" }
 northstar-xml-builder = { path = "../../kernel/northstar-xml-builder" }

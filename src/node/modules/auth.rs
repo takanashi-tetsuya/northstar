@@ -3,6 +3,7 @@
 
 use crate::node::*;
 use northstar_auth_application::authentication::AuthenticationService;
+use northstar_stream::local_routes::admin_sessions::StreamAdminSessions;
 use northstar_workflows::authentication_effects::{
     PostgresAuthenticationRepository, WorkflowAuthenticationEffects,
 };
@@ -215,11 +216,7 @@ impl AuthModule {
                 northstar_workflows::account_admin_repository::PostgresSessionAdminRepository::new(
                     admin_mutations.clone(),
                 ),
-                Arc::new(
-                    crate::node::adapters::account_admin::LocalAdminSessions::new(Arc::clone(
-                        sessions,
-                    )),
-                )
+                Arc::new(StreamAdminSessions::new(Arc::clone(sessions)))
                     as Arc<dyn northstar_auth_application::account_admin::AdminSessionLookup>,
             );
         let invitation_admin_service =

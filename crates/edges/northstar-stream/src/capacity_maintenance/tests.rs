@@ -68,7 +68,7 @@ impl CapacityMaintenanceRepository for ControlledRepository {
     }
 }
 
-fn session(connection_id: Uuid, routable: bool) -> OnlineSession {
+pub(crate) fn session(connection_id: Uuid, routable: bool) -> OnlineSession {
     let (sender, _receiver) = tokio::sync::mpsc::channel(1);
     OnlineSession {
         user_id: Uuid::new_v4(),

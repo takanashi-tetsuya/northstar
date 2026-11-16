@@ -109,6 +109,16 @@ pub struct OnlineSession {
     pub disconnect: CancellationToken,
 }
 
+impl OnlineSession {
+    /// Snapshot this resource's active privacy list selection.
+    pub fn privacy_active_snapshot(&self) -> Option<String> {
+        self.privacy_active
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}
+
 /// Only the state needed to transfer a live SM resource's presence epoch.
 pub struct SmPresenceEpoch {
     pub gate: Arc<tokio::sync::Mutex<()>>,

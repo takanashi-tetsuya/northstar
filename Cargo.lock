@@ -2306,6 +2306,7 @@ dependencies = [
  "northstar-runtime",
  "northstar-security",
  "northstar-session-application",
+ "northstar-stream",
  "northstar-telemetry",
  "northstar-upload-application",
  "northstar-xml-builder",

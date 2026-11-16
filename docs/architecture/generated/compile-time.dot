@@ -1298,6 +1298,7 @@ digraph compile_time {
   "northstar-http" -> "northstar-runtime";
   "northstar-http" -> "northstar-security";
   "northstar-http" -> "northstar-session-application";
+  "northstar-http" -> "northstar-stream";
   "northstar-http" -> "northstar-telemetry";
   "northstar-http" -> "northstar-upload-application";
   "northstar-http" -> "northstar-xml-builder";

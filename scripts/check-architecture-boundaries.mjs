@@ -2238,7 +2238,7 @@ for (const [name, source] of [
   ['ReportService', read('crates/contexts/operations/northstar-operations-application/src/reports.rs')],
   ['ReportContext', read('crates/edges/northstar-http/src/contexts/reports.rs')],
   ['AccountAdminServices', read('crates/contexts/auth/northstar-auth-application/src/account_admin.rs')],
-  ['AccountAdminRuntime', read('src/node/adapters/account_admin.rs')],
+  ['AccountAdminRuntime', read('crates/edges/northstar-stream/src/local_routes/admin_sessions.rs')],
   ['RegistrationAvailability', read('crates/contexts/auth/northstar-auth-application/src/registration_availability.rs')],
   ['OperationAdminService', read('crates/contexts/operations/northstar-operations-application/src/operations.rs')],
   ['AdminDispatchService', read('crates/contexts/operations/northstar-operations-application/src/admin_dispatch.rs')],

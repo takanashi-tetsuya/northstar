@@ -15,11 +15,7 @@ impl ServerNode {
         peer: &str,
         kind: impl Into<northstar_roster_application::privacy::PrivacyStanzaKind>,
     ) -> anyhow::Result<bool> {
-        let active = session
-            .privacy_active
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
+        let active = session.privacy_active_snapshot();
         self.message
             .message_service
             .privacy_allows_session(

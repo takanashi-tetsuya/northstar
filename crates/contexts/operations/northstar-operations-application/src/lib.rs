@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod abuse_authority_worker;
 pub mod admin_commands;
 pub mod admin_dispatch;
 pub mod admin_presence;
@@ -11,6 +12,7 @@ pub mod api_queries;
 pub mod background_housekeeping;
 pub mod governance;
 pub mod maintenance_repositories;
+pub mod maintenance_worker;
 pub mod metrics_snapshot;
 pub mod operation_effect_fence;
 pub mod operation_journal_worker;

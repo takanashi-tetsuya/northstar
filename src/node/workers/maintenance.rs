@@ -1,4 +1,4 @@
-//! Ordered once-per-minute maintenance with only its cleanup capabilities.
+//! Construction, cleanup delegation and registration for maintenance workers.
 
 use crate::node::{adapters::sm_expiry::SmExpiryContext, ServerNode};
 use northstar_abuse_application::challenge::ChallengeCleanupService;
@@ -7,7 +7,10 @@ use northstar_operations_application::admin_commands::AdminCommandService;
 use northstar_operations_application::background_housekeeping::{
     BackgroundHousekeepingContext, BackgroundHousekeepingCounters,
 };
-use northstar_runtime::workers::{WorkerCriticality, WorkerHeartbeat, WorkerMode};
+use northstar_operations_application::maintenance_worker::{
+    serve_background_maintenance, BackgroundMaintenancePorts,
+};
+use northstar_runtime::workers::{WorkerCriticality, WorkerMode};
 use northstar_workflows::admin_command_repository::WorkflowAdminCommandRepository;
 use northstar_workflows::background_housekeeping_repository::PostgresBackgroundHousekeepingRepository;
 use std::{sync::Arc, time::Duration};
@@ -34,45 +37,29 @@ fn background_maintenance_context(state: &ServerNode) -> BackgroundMaintenanceCo
     }
 }
 
-async fn serve(
-    context: Arc<BackgroundMaintenanceContext>,
-    cancel: CancellationToken,
-    heartbeat: WorkerHeartbeat,
-) -> anyhow::Result<()> {
-    let mut interval = tokio::time::interval(Duration::from_secs(60));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
-        tokio::select! {
-            _ = cancel.cancelled() => return Ok(()),
-            _ = interval.tick() => {
-                let failures_before = context.counters.failures_total();
-                if let Err(error) = context.challenge.cleanup().await {
-                    tracing::warn!(?error, "anti-abuse cleanup failed");
-                    context.counters.record_failure();
-                }
-                context.database.sweep_database().await;
-                if let Err(error) = context.admin.cleanup_sessions().await {
-                    tracing::error!("failed to cleanup expired admin command sessions: {error}");
-                    context.counters.record_failure();
-                }
-                match context.sm_expiry.cleanup().await {
-                    Ok(expired) if expired > 0 => {
-                        tracing::info!(expired, "tore down expired SM resume sessions");
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::error!("failed to cleanup expired SM resume sessions: {error}");
-                        context.counters.record_failure();
-                    }
-                }
-                context.caps_cache.sweep(std::time::Instant::now());
-                if context.counters.failures_total() == failures_before {
-                    heartbeat.ok();
-                } else {
-                    heartbeat.error("one or more background maintenance operations failed");
-                }
-            }
-        }
+impl BackgroundMaintenancePorts for BackgroundMaintenanceContext {
+    async fn cleanup_challenges(&self) -> anyhow::Result<()> {
+        self.challenge.cleanup().await
+    }
+
+    async fn sweep_database(&self) {
+        self.database.sweep_database().await;
+    }
+
+    async fn cleanup_admin_sessions(&self) -> anyhow::Result<u64> {
+        self.admin.cleanup_sessions().await
+    }
+
+    async fn cleanup_expired_sm(&self) -> anyhow::Result<usize> {
+        self.sm_expiry.cleanup().await
+    }
+
+    fn sweep_caps_cache(&self, now: std::time::Instant) {
+        self.caps_cache.sweep(now);
+    }
+
+    fn maintenance_counters(&self) -> &BackgroundHousekeepingCounters {
+        &self.counters
     }
 }
 
@@ -89,7 +76,7 @@ pub(super) fn start_background(state: &Arc<ServerNode>, cancel: &CancellationTok
         move |heartbeat| {
             let bg_context = Arc::clone(&bg_context);
             let bg_cancel = bg_cancel.clone();
-            async move { serve(bg_context, bg_cancel, heartbeat).await }
+            async move { serve_background_maintenance(bg_context, bg_cancel, heartbeat).await }
         },
     );
 }

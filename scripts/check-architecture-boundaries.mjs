@@ -259,6 +259,7 @@ const configSource = readProductionModule('crates/platform/northstar-config/src/
 const mainSource = read('src/main.rs');
 const workerComposition = readProductionModule('src/node/workers.rs', { root });
 const abuseWorkers = read('src/node/workers/abuse.rs');
+const abuseAuthorityWorker = read('crates/contexts/operations/northstar-operations-application/src/abuse_authority_worker.rs');
 const maintenanceWorkers = read('src/node/workers/maintenance.rs');
 const clusterWorkers = read('src/node/workers/cluster.rs');
 const responsibilityDocument = read('docs/PROGRAM_RESPONSIBILITIES.md');
@@ -471,7 +472,7 @@ if ([...runtimeMain.matchAll(/state\.start_workers\(&cancel, process_role\)/g)].
   throw new Error('main must delegate supervised worker composition through exactly one startup call');
 }
 if (!abuseWorkers.includes('let authority_probe = abuse_key_authority_probe(state);')
-    || !/tokio::time::timeout\(\s*ABUSE_KEY_AUTHORITY_QUERY_TIMEOUT,\s*authority_probe\.validate\(&authority_identity\)/s.test(abuseWorkers)
+    || !/tokio::time::timeout\(\s*ABUSE_KEY_AUTHORITY_QUERY_TIMEOUT,\s*authority_probe\.validate\(&authority_identity\)/s.test(abuseAuthorityWorker)
     || !maintenanceWorkers.includes('let bg_context = Arc::new(background_maintenance_context(state));')
     || /let authority_pool = state\.pool\.clone\(\)/.test(workerComposition)) {
   throw new Error('critical key guard and housekeeping must use narrow repository-backed capabilities');

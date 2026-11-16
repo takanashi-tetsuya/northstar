@@ -5,6 +5,7 @@
 
 pub mod admin_commands;
 pub mod admin_dispatch;
+pub mod admin_presence;
 pub mod admin_session_cleanup_worker;
 pub mod api_queries;
 pub mod background_housekeeping;

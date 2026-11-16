@@ -1,4 +1,5 @@
 use crate::node::ServerNode;
+use northstar_operations_application::admin_presence::{AdminPresenceSources, AnnouncementRoutes};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -6,45 +7,47 @@ impl ServerNode {
     pub(crate) fn admin_remote_announcement_enabled(&self) -> bool {
         self.cluster.is_enabled()
     }
+}
 
-    /// A headline announcement reaches every remote node with an eligible
-    /// resource; count the account only if one node accepted it.
-    pub(crate) async fn send_remote_announcement_to_account(
+impl AdminPresenceSources for ServerNode {
+    fn local_online_bare_jids(&self) -> BTreeSet<String> {
+        self.sessions.local_online_bare_jids()
+    }
+
+    fn local_activity_bare_jids(&self, idle: Duration) -> (BTreeSet<String>, BTreeSet<String>) {
+        self.sessions.local_activity_bare_jids(idle)
+    }
+
+    async fn cluster_online_bare_jids(&self) -> anyhow::Result<BTreeSet<String>> {
+        self.cluster.online_bare_jids().await
+    }
+
+    async fn cluster_activity_bare_jids(
         &self,
+        idle_seconds: u64,
+        active: bool,
+    ) -> anyhow::Result<BTreeSet<String>> {
+        self.cluster.activity_bare_jids(idle_seconds, active).await
+    }
+}
+
+impl AnnouncementRoutes for ServerNode {
+    fn local_node_id(&self) -> &str {
+        &self.cluster.node_id
+    }
+
+    async fn account_nodes(&self, account: &str) -> anyhow::Result<Vec<String>> {
+        self.cluster.lookup_nodes(account).await
+    }
+
+    async fn send_to_node_available(
+        &self,
+        node_id: &str,
         account: &str,
         stanza: &str,
     ) -> anyhow::Result<bool> {
-        let mut delivered = false;
-        for node_id in self.cluster.lookup_nodes(account).await? {
-            if node_id != self.cluster.node_id
-                && self
-                    .cluster
-                    .send_to_node_available(&node_id, account, stanza)
-                    .await?
-            {
-                delivered = true;
-            }
-        }
-        Ok(delivered)
-    }
-
-    pub(crate) async fn admin_online_bare_jids(&self) -> anyhow::Result<BTreeSet<String>> {
-        let mut users = self.sessions.local_online_bare_jids();
-        users.extend(self.cluster.online_bare_jids().await?);
-        Ok(users)
-    }
-
-    pub(crate) async fn admin_activity_bare_jids(
-        &self,
-    ) -> anyhow::Result<(BTreeSet<String>, BTreeSet<String>)> {
-        let idle_seconds = self.config.admin_idle_seconds;
-        let (mut online, mut active) = self
-            .sessions
-            .local_activity_bare_jids(Duration::from_secs(idle_seconds));
-        active.extend(self.cluster.activity_bare_jids(idle_seconds, true).await?);
-        online.extend(active.iter().cloned());
-        online.extend(self.cluster.activity_bare_jids(idle_seconds, false).await?);
-        let idle = online.difference(&active).cloned().collect();
-        Ok((active, idle))
+        self.cluster
+            .send_to_node_available(node_id, account, stanza)
+            .await
     }
 }

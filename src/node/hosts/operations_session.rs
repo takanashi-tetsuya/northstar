@@ -44,16 +44,23 @@ impl OperationsSessionHost for ServerNode {
         bare: &str,
         stanza: &str,
     ) -> anyhow::Result<bool> {
-        self.send_remote_announcement_to_account(bare, stanza).await
+        northstar_operations_application::admin_presence::send_remote_announcement(
+            self, bare, stanza,
+        )
+        .await
     }
 
     async fn command_online_bare_jids(&self) -> anyhow::Result<BTreeSet<String>> {
-        self.admin_online_bare_jids().await
+        northstar_operations_application::admin_presence::online_bare_jids(self).await
     }
 
     async fn command_activity_bare_jids(
         &self,
     ) -> anyhow::Result<(BTreeSet<String>, BTreeSet<String>)> {
-        self.admin_activity_bare_jids().await
+        northstar_operations_application::admin_presence::activity_bare_jids(
+            self,
+            self.config.admin_idle_seconds,
+        )
+        .await
     }
 }

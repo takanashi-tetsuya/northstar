@@ -366,7 +366,9 @@ const smAdapterBody = structBody(read('crates/contexts/workflows/northstar-workf
 if (!/^\s*fast_token_secret\s*:\s*Arc<Zeroizing<Vec<u8>>>\s*,/m.test(smAdapterBody)) {
   throw new Error('SM repository FAST key must remain private Arc<Zeroizing<Vec<u8>>>');
 }
-const runtimeControlPoolConstruction = rustItemBody(state, 'fn runtime_control_pool_options(');
+const runtimeControlConnection = read('crates/contexts/operations/northstar-operations-postgres/src/runtime_control_connection.rs');
+const postgresStartup = read('crates/platform/northstar-postgres/src/startup.rs');
+const runtimeControlPoolConstruction = rustItemBody(runtimeControlConnection, 'fn runtime_control_pool_options(');
 for (const invariant of [
   'max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
   'min_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
@@ -408,8 +410,8 @@ if (!/"runtime-control-refresh"/.test(runtimeControlRefresh)) {
 if (/fn start_runtime_(?:federation_policy|admin_setting)_refresh\(|fn start_service_control_watcher\(/.test(state)) {
   throw new Error('independent runtime control workers can contend for the one-connection control pool');
 }
-const runtimeControlReservation = rustItemBody(state, 'pub(crate) async fn reserve_runtime_control_connection(');
-const runtimeControlConnectOptions = rustItemBody(state, 'fn runtime_control_connect_options(');
+const runtimeControlReservation = rustItemBody(runtimeControlConnection, 'pub async fn reserve_runtime_control_connection(');
+const runtimeControlConnectOptions = rustItemBody(runtimeControlConnection, 'fn runtime_control_connect_options(');
 if (runtimeControlConnectOptions.replace(/\s+/g, '') !== 'Ok(database_url.parse::<PgConnectOptions>()?.application_name("northstar-runtime-control"))') {
   throw new Error('runtime-control connection identity must only label the original parsed database URL');
 }
@@ -430,11 +432,11 @@ for (const invariant of [
 if (!/runtime_control_pool\s*\.acquire\(\)\s*\.await/s.test(runtimeControlReservation)) {
   throw new Error('runtime-control startup reservation must retain its one dedicated connection');
 }
-const runtimeControlConnect = rustItemBody(state, 'async fn runtime_control_startup_connect<');
+const runtimeControlConnect = rustItemBody(runtimeControlConnection, 'async fn runtime_control_startup_connect<');
 if (!/startup_database_connect\(\s*deadline,\s*RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET,/.test(runtimeControlConnect)) {
   throw new Error('runtime-control must use bounded startup admission with its handshake limit');
 }
-const runtimeControlAdmission = rustItemBody(state, 'async fn startup_database_connect<');
+const runtimeControlAdmission = rustItemBody(postgresStartup, 'async fn startup_database_connect<');
 for (const invariant of [
   'tokio::time::timeout_at(deadline,',
   'deadline.saturating_duration_since(tokio::time::Instant::now())',
@@ -449,8 +451,8 @@ for (const invariant of [
     throw new Error(`runtime-control startup lost a bounded admission invariant: ${invariant}`);
   }
 }
-if (!/const RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(3\)/.test(state)
-    || !/const RUNTIME_CONTROL_STARTUP_RETRY_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(15\)/.test(state)) {
+if (!/const RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(3\)/.test(runtimeControlConnection)
+    || !/const RUNTIME_CONTROL_STARTUP_RETRY_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(15\)/.test(runtimeControlConnection)) {
   throw new Error('runtime-control cold handshake remains at most 3 s within one absolute 15 s admission budget');
 }
 const appStateConstruction = rustItemBody(state, 'pub async fn new(');

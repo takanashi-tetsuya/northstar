@@ -65,6 +65,7 @@ pub mod migration_preflight;
 pub mod pool;
 pub mod role_attestation;
 pub mod schema;
+pub mod startup;
 
 #[cfg(test)]
 mod tests {

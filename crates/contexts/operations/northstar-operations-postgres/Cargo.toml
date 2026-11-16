@@ -16,8 +16,10 @@ anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 hmac = "0.12"
 northstar-auth-core = { path = "../../auth/northstar-auth-core" }
+northstar-config = { path = "../../../platform/northstar-config" }
 northstar-operations-application = { path = "../northstar-operations-application" }
 northstar-operations-core = { path = "../northstar-operations-core" }
+northstar-postgres = { path = "../../../platform/northstar-postgres" }
 northstar-roster-core = { path = "../../roster/northstar-roster-core" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 rand = "0.8"
@@ -33,3 +35,6 @@ tokio = { version = "1.43", features = ["time"] }
 tracing = "0.1"
 uuid = { version = "1.12", features = ["v4", "serde"] }
 zeroize = "1.8"
+
+[dev-dependencies]
+tokio = { version = "1.43", features = ["macros", "rt", "time"] }

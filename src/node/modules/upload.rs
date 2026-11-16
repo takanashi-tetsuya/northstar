@@ -5,6 +5,7 @@ use crate::node::construction::{AUXILIARY_POOL_ACQUIRE_TIMEOUT, AUXILIARY_POOL_S
 use crate::node::*;
 use anyhow::Context;
 use northstar_http::contexts::upload_admission::UploadAdmission;
+use northstar_postgres::startup::startup_database_connect;
 
 /// The upload context's runtime parts, built once at startup.
 pub(in crate::node) struct UploadModule {

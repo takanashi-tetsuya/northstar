@@ -2,6 +2,7 @@
 
 use super::*;
 use northstar_postgres::role_attestation;
+use northstar_postgres::startup::startup_database_connect;
 
 // Auxiliary pools retain their two-second acquisition policy while serving.
 // Only initial handshakes may retry, within one shared admission window.

@@ -30,7 +30,7 @@ use northstar_abuse_application::guard::AbuseGuard;
 use northstar_abuse_policy::AbuseConfig;
 use northstar_config::{
     AdminCommandPoolMode, Config, StoragePoolMode, OMEMO_RECOVERY_POOL_MAX_CONNECTIONS,
-    SERVICE_CONTROL_POOL_MAX_CONNECTIONS, STORAGE_POOL_MAX_CONNECTIONS,
+    STORAGE_POOL_MAX_CONNECTIONS,
 };
 use northstar_http::contexts::{
     api_queries, governance, http_body_admission, http_policy, omemo_poll, retention_policy,
@@ -41,11 +41,7 @@ use northstar_upload_application::safety::UploadSafetyGate;
 use northstar_upload_application::store::{GuardedUploadStore, UploadStore};
 use northstar_upload_application::UploadAuthorityGeneration;
 use northstar_upload_storage::{LocalUploadStore, S3UploadSettings, S3UploadStore};
-use sqlx::{
-    pool::PoolConnection,
-    postgres::{PgConnectOptions, PgPoolOptions},
-    PgPool, Postgres,
-};
+use sqlx::{pool::PoolConnection, postgres::PgConnectOptions, PgPool, Postgres};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::{
@@ -62,7 +58,7 @@ pub(crate) use northstar_stream::local_routes::muc::CommittedLocalMucResume;
 mod workers;
 
 use self::adapters::federation_policy::*;
-pub(crate) use self::adapters::runtime_control::*;
+use self::adapters::runtime_control::*;
 #[cfg(test)]
 use self::construction::*;
 use self::modules::abuse::*;
@@ -79,6 +75,7 @@ use self::modules::upload::*;
 use northstar_federation_application::registry::S2sConnectionRegistry;
 use northstar_federation_application::write_policy::FederationWritePolicy;
 use northstar_federation_core::policy::RuntimeFederationPolicy;
+pub(crate) use northstar_operations_postgres::runtime_control_connection::reserve_runtime_control_connection;
 use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
 #[cfg(test)]
 use northstar_room_core::occupancy::{LocalMucJoinPublication, LocalMucNicknameMove};
@@ -93,10 +90,6 @@ use northstar_stream::local_routes::session_table::*;
 #[cfg(test)]
 use northstar_stream::local_routes::suspended_muc::*;
 use northstar_xmpp_types::jid_text::*;
-
-#[cfg(test)]
-#[path = "node/runtime_control_startup_tests.rs"]
-mod runtime_control_startup_tests;
 
 #[cfg(test)]
 #[path = "node/runtime_control_health_tests.rs"]

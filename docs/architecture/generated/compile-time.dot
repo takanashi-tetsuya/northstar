@@ -1479,8 +1479,10 @@ digraph compile_time {
   "northstar-operations-postgres" -> "chrono";
   "northstar-operations-postgres" -> "hmac";
   "northstar-operations-postgres" -> "northstar-auth-core";
+  "northstar-operations-postgres" -> "northstar-config";
   "northstar-operations-postgres" -> "northstar-operations-application";
   "northstar-operations-postgres" -> "northstar-operations-core";
+  "northstar-operations-postgres" -> "northstar-postgres";
   "northstar-operations-postgres" -> "northstar-roster-core";
   "northstar-operations-postgres" -> "northstar-xmpp-types";
   "northstar-operations-postgres" -> "rand";

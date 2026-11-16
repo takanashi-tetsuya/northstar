@@ -6,8 +6,8 @@ use crate::node::{
     promote_suspended_muc_buffer, publish_local_muc_join_if_vacant_in,
     rebind_local_federated_muc_occupant_exact_in, refresh_local_muc_policy_exact_in,
     refresh_local_muc_presence_exact_in, remove_local_muc_occupant_exact_from,
-    runtime_control_startup_retry_delay, seal_suspended_muc_buffer, service_control_applies,
-    session_lookup, set_local_muc_affiliation_exact_in, set_local_muc_role_exact_in,
+    seal_suspended_muc_buffer, service_control_applies, session_lookup,
+    set_local_muc_affiliation_exact_in, set_local_muc_role_exact_in,
     snapshot_suspended_muc_buffer_for_resume, suspended_muc_resume_actor_matches,
     suspended_occupant_is_created, transfer_muc_suffix_to_checkpoint, JoinedMucMembership,
     LocalMucJoinPublication, LocalMucNicknameMove, LocalMucOccupantIdentity, MucOccupant,
@@ -24,31 +24,12 @@ use northstar_session_core::{
     staged_route_activation_allowed, StagedRouteActivationCheck, StagedRouteIdentity,
 };
 use northstar_stream::local_routes::muc::{SuspendedMucBuffer, SuspendedMucStanza};
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
 };
 use std::time::{Duration, Instant};
-
-#[test]
-fn runtime_control_startup_backoff_is_bounded_and_decorrelates_processes() {
-    let first = runtime_control_startup_retry_delay(1, 17);
-    assert!(first >= Duration::from_millis(10));
-    assert!(first <= Duration::from_millis(500));
-
-    let saturated = runtime_control_startup_retry_delay(128, 17);
-    assert!(saturated <= Duration::from_millis(500));
-    assert!(saturated >= first);
-
-    let delays = (10_u32..110)
-        .map(|process_id| runtime_control_startup_retry_delay(3, process_id))
-        .collect::<BTreeSet<_>>();
-    assert!(
-        delays.len() > 16,
-        "a cold-start cohort must not retry in one synchronized wave"
-    );
-}
 
 #[test]
 fn live_sm_shutdown_write_receipt_does_not_cross_the_suspension_fence() {

@@ -13,4 +13,5 @@ pub mod maintenance_ownership;
 pub mod operation_effect_fence_repository;
 pub mod operation_journal_worker_repository;
 pub mod reports;
+pub mod runtime_control_connection;
 pub mod runtime_control_repository;

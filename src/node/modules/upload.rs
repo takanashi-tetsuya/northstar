@@ -6,6 +6,11 @@ use crate::node::*;
 use anyhow::Context;
 use northstar_http::contexts::upload_admission::UploadAdmission;
 use northstar_postgres::startup::startup_database_connect;
+use northstar_upload_application::startup::{
+    ensure_disabled_upload_state_empty, establish_upload_authority, reconcile_abandoned_stages,
+    UploadCapacityLimits,
+};
+use northstar_upload_postgres::PostgresUploadStartupRepository;
 
 /// The upload context's runtime parts, built once at startup.
 pub(in crate::node) struct UploadModule {
@@ -77,77 +82,21 @@ impl UploadModule {
                     .expect("enabled or draining uploads require an attested storage pool");
                 let upload_safety_gate = UploadSafetyGate::new();
                 let upload_namespace = upload_storage_namespace_id(config)?;
-                let startup_phase = northstar_telemetry::logging::StartupPhase::begin(
-                    "upload_namespace_and_policy",
-                );
-                let namespace_generation =
-                    northstar_upload_postgres::validate_upload_storage_backend(
-                        upload_db,
-                        &config.upload_storage_backend,
-                        &upload_namespace,
-                    )
-                    .await
-                    .context("upload storage backend does not match durable metadata")?;
-                let (capacity_policy_generation, recovery_draining) =
-                    northstar_upload_postgres::validate_upload_capacity_policy(
-                        upload_db,
-                        config.upload_storage_max_pending_jobs,
-                        config.upload_storage_max_retained_files,
-                        config.upload_storage_max_retained_bytes,
-                    )
-                    .await
-                    .context(
-                        "upload capacity policy does not match durable deployment authority",
-                    )?;
-                let upload_authority_generation = UploadAuthorityGeneration {
-                    namespace: namespace_generation,
-                    capacity_policy: capacity_policy_generation,
+                let startup = PostgresUploadStartupRepository::new(upload_db.clone());
+                let limits = UploadCapacityLimits {
+                    max_pending_jobs: config.upload_storage_max_pending_jobs,
+                    max_retained_files: config.upload_storage_max_retained_files,
+                    max_retained_bytes: config.upload_storage_max_retained_bytes,
                 };
-                startup_phase.complete();
-                let startup_phase =
-                    northstar_telemetry::logging::StartupPhase::begin("upload_authority_audit");
-                let authority_audit_started_at = tokio::time::Instant::now();
-                let authority_audit = northstar_upload_postgres::audit_upload_capacity_authority(
-                    upload_db,
-                    config.upload_storage_max_pending_jobs,
-                    config.upload_storage_max_retained_files,
-                    config.upload_storage_max_retained_bytes,
+                let authority = establish_upload_authority(
+                    &startup,
+                    &upload_safety_gate,
+                    &config.upload_storage_backend,
+                    &upload_namespace,
+                    limits,
                 )
-                .await
-                .context("could not prove upload authority catalog and ACL invariants")?;
-                if authority_audit.violation_count() != 0 {
-                    upload_safety_gate.mark_capacity_authority_unsafe(Arc::<str>::from(format!(
-                        "upload authority catalog/ACL audit found {} violations",
-                        authority_audit.violation_count()
-                    )));
-                    anyhow::bail!(
-                        "upload authority catalog/ACL audit found {} violations",
-                        authority_audit.violation_count()
-                    );
-                }
-                startup_phase.complete();
-                let startup_phase = northstar_telemetry::logging::StartupPhase::begin(
-                    "upload_ledger_reconciliation",
-                );
-                let ledger_audit_started_at = tokio::time::Instant::now();
-                let capacity_reconciliation =
-                    northstar_upload_postgres::reconcile_upload_capacity_ledger(upload_db)
-                        .await
-                        .context(
-                            "could not reconcile upload capacity facts before storage startup",
-                        )?;
-                if capacity_reconciliation.mismatch_count() != 0 {
-                    upload_safety_gate.mark_ledger_mismatch(Arc::<str>::from(format!(
-                        "upload capacity ledger differs from {} durable facts",
-                        capacity_reconciliation.mismatch_count()
-                    )));
-                    anyhow::bail!(
-                        "upload capacity ledger differs from {} durable facts",
-                        capacity_reconciliation.mismatch_count()
-                    );
-                }
-                startup_phase.complete();
-                upload_safety_gate.establish(upload_authority_generation, recovery_draining);
+                .await?;
+                let upload_authority_generation = authority.generation;
                 let upload_store: Arc<dyn UploadStore> = match config
                     .upload_storage_backend
                     .as_str()
@@ -161,66 +110,12 @@ impl UploadModule {
                             local.clone(),
                             Arc::clone(&upload_safety_gate),
                         ));
-                        // This bounded local enumeration is retained only for legacy
-                        // pre-0091 partials. S3 reconciliation never lists a bucket;
-                        // every stage is represented by a PostgreSQL job.
-                        let mut abandoned_stages = 0_u64;
-                        let startup_stages =
-                            tokio::time::timeout(Duration::from_secs(10), local.staging_attempts())
-                                .await
-                                .context("upload staging scan exceeded its startup time budget")?
-                                .context("failed to enumerate upload staging files")?;
-                        // Enumeration is bounded above, but every candidate still
-                        // needs an authoritative lease lookup and may need one exact
-                        // unlink. Keep the complete reconciliation phase under one
-                        // wall-clock budget so thousands of crash remnants cannot
-                        // hold readiness indefinitely through sequential queries.
-                        let startup_cleanup_deadline =
-                            tokio::time::Instant::now() + Duration::from_secs(30);
-                        for (object_id, claim_token) in startup_stages {
-                            let remaining = startup_cleanup_deadline
-                            .checked_duration_since(tokio::time::Instant::now())
-                            .context(
-                                "upload staging reconciliation exceeded its startup time budget",
-                            )?;
-                            if tokio::time::timeout(
-                            remaining,
-                            northstar_upload_postgres::upload_claim_is_live(upload_db, object_id, claim_token),
+                        reconcile_abandoned_stages(
+                            &startup,
+                            guarded.as_ref(),
+                            local.staging_attempts(),
                         )
-                        .await
-                        .context(
-                            "upload staging lease verification exceeded its startup time budget",
-                        )?
-                        .context("failed to verify an upload staging lease")?
-                        {
-                            continue;
-                        }
-                            let remaining = startup_cleanup_deadline
-                            .checked_duration_since(tokio::time::Instant::now())
-                            .context(
-                                "upload staging reconciliation exceeded its startup time budget",
-                            )?;
-                            if tokio::time::timeout(
-                                remaining,
-                                guarded.abort(
-                                    &object_id.to_string(),
-                                    &claim_token.to_string(),
-                                    None,
-                                ),
-                            )
-                            .await
-                            .context("upload staging deletion exceeded its startup time budget")?
-                            .context("failed to remove an abandoned upload stage")?
-                            {
-                                abandoned_stages = abandoned_stages.saturating_add(1);
-                            }
-                        }
-                        if abandoned_stages > 0 {
-                            tracing::warn!(
-                                abandoned_stages,
-                                "removed upload stages left by a previous process"
-                            );
-                        }
+                        .await?;
                         guarded
                     }
                     "s3" => {
@@ -258,17 +153,7 @@ impl UploadModule {
                     }
                     _ => unreachable!("upload backend was validated by Config"),
                 };
-                upload_startup_audits =
-                    northstar_upload_application::worker::StartupAuditHandoff::after_successful_audits(
-                        upload_authority_generation,
-                        [
-                            config.upload_storage_max_pending_jobs,
-                            config.upload_storage_max_retained_files,
-                            config.upload_storage_max_retained_bytes,
-                        ],
-                        authority_audit_started_at,
-                        ledger_audit_started_at,
-                    );
+                upload_startup_audits = authority.startup_audits;
                 (
                     upload_safety_gate,
                     upload_namespace,
@@ -276,17 +161,10 @@ impl UploadModule {
                     Some(upload_store),
                 )
             } else {
-                let durable_upload_state_exists =
-                    northstar_upload_postgres::durable_upload_state_exists(pool)
-                        .await
-                        .context("could not verify that disabled upload storage is empty")?;
-                anyhow::ensure!(
-                    !durable_upload_state_exists,
-                    "UPLOAD_MODE=disabled requires empty durable upload state; use drain_read_only until historical downloads and cleanup jobs have drained"
-                );
-                tracing::info!(
-                    "upload capability disabled; skipping storage authority, object-store and reconciliation initialization"
-                );
+                ensure_disabled_upload_state_empty(
+                    northstar_upload_postgres::durable_upload_state_exists(pool),
+                )
+                .await?;
                 upload_startup_audits =
                     northstar_upload_application::worker::StartupAuditHandoff::default();
                 (

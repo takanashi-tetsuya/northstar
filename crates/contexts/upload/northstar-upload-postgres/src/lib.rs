@@ -20,6 +20,7 @@ mod capacity_audit;
 mod deletion;
 mod lifecycle;
 mod slots;
+mod startup_repository;
 mod storage_jobs;
 
 pub mod admin;
@@ -30,6 +31,7 @@ pub use self::capacity_audit::*;
 pub use self::deletion::*;
 pub use self::lifecycle::*;
 pub use self::slots::*;
+pub use self::startup_repository::*;
 pub use self::storage_jobs::*;
 
 #[derive(Clone)]
@@ -232,6 +234,7 @@ const MODULE_SOURCE: &[(&str, &str)] = &[
     ("capacity_audit", include_str!("capacity_audit.rs")),
     ("storage_jobs", include_str!("storage_jobs.rs")),
     ("deletion", include_str!("deletion.rs")),
+    ("startup_repository", include_str!("startup_repository.rs")),
 ];
 
 #[cfg(any(test, feature = "test-support"))]

@@ -403,6 +403,12 @@ pub fn session_entries_for_in(
     }
 }
 
+pub fn try_send_to_entries_in(sessions: &DashMap<String, OnlineSession>, jid: &str, stanza: &str) {
+    for (_, session) in session_entries_for_in(sessions, jid) {
+        let _ = session.sender.try_send(stanza.to_owned());
+    }
+}
+
 /// The live C2S session table, keyed by full JID. The composition root holds one; workers that need only the raw
 /// routes take a clone of the shared map, which the table dereferences to.
 #[derive(Clone, Default)]
@@ -828,6 +834,39 @@ mod tests {
             },
             receiver,
         )
+    }
+
+    #[test]
+    fn try_send_to_entries_delivers_one_copy_to_each_matching_session() {
+        for jid in ["alice@example.test", KEY] {
+            let sessions = DashMap::new();
+            let mut receivers = Vec::new();
+            for (key, user_id, routable) in [
+                (KEY, Uuid::from_u128(1), true),
+                ("alice@example.test/other", Uuid::from_u128(1), true),
+                ("alice@example.test/pending", Uuid::from_u128(1), false),
+                ("bob@example.test/fixture", Uuid::from_u128(2), true),
+            ] {
+                let (route, receiver) = session(Uuid::new_v4(), user_id, routable);
+                sessions.insert(key.to_owned(), route);
+                receivers.push((key, receiver));
+            }
+            let expected = session_entries_for_in(&sessions, jid);
+            assert_eq!(expected.len(), if jid == KEY { 1 } else { 2 });
+            let stanza = "<presence/>";
+
+            try_send_to_entries_in(&sessions, jid, stanza);
+
+            for (key, mut receiver) in receivers {
+                if expected.iter().any(|(full_jid, _)| full_jid == key) {
+                    assert_eq!(receiver.try_recv().unwrap().stanza, stanza);
+                }
+                assert!(matches!(
+                    receiver.try_recv(),
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                ));
+            }
+        }
     }
 
     fn caps_key(version: &str) -> CapsKey {

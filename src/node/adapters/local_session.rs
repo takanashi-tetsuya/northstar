@@ -2,6 +2,8 @@
 //! removal and SM teardown. The table's own operations are `LocalSessionTable`'s, in northstar-stream.
 
 use crate::node::*;
+use northstar_session_application::sm_teardown::SmTeardownService;
+use northstar_workflows::sm_teardown_repository::PostgresSmTeardownRepository;
 
 impl ServerNode {
     /// Evaluate one resource's session-local XEP-0016 selection (or the
@@ -91,36 +93,28 @@ impl ServerNode {
     }
 
     pub async fn revoke_sm_session_with_teardown(&self, id: uuid::Uuid) -> anyhow::Result<()> {
-        if let Some(snapshot) = northstar_workflows::sm::take_sm_session_for_teardown(
-            &self.pool,
-            id,
-            self.config.sm_claim_lease_seconds.max(1),
-        )
-        .await?
-        {
-            self.perform_and_finalize_sm_teardown(snapshot).await?;
-        }
-        Ok(())
+        self.sm_teardown_claims()
+            .revoke_exact(id, |snapshot| {
+                let runtime = self.sm_teardown_runtime();
+                async move {
+                    runtime
+                        .teardown_snapshot(
+                            &crate::node::adapters::sm_teardown_runtime::sm_teardown_snapshot(
+                                &snapshot,
+                            ),
+                        )
+                        .await
+                }
+            })
+            .await
     }
 
-    pub(in crate::node) async fn perform_and_finalize_sm_teardown(
+    pub(in crate::node) fn sm_teardown_claims(
         &self,
-        snapshot: northstar_workflows::sm::SmTeardownSnapshot,
-    ) -> anyhow::Result<()> {
-        let runtime = self.sm_teardown_runtime();
-        northstar_session_application::sm_teardown::SmTeardownService::new(
-            northstar_workflows::sm_teardown_repository::PostgresSmTeardownRepository::new(
-                self.pool.clone(),
-            ),
+    ) -> SmTeardownService<PostgresSmTeardownRepository> {
+        SmTeardownService::new(
+            PostgresSmTeardownRepository::new(self.pool.clone()),
             self.config.sm_claim_lease_seconds,
         )
-        .finish(snapshot, |snapshot| async move {
-            runtime
-                .teardown_snapshot(
-                    &crate::node::adapters::sm_teardown_runtime::sm_teardown_snapshot(&snapshot),
-                )
-                .await
-        })
-        .await
     }
 }

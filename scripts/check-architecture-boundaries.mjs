@@ -2411,6 +2411,7 @@ const accountGenerationTeardownAdapter = read('src/node/adapters/account_generat
 const teardownAdapters = structBody(accountGenerationTeardownAdapter, 'pub(crate) struct AccountGenerationTeardownAdapters');
 const accountTeardownRuntime = read('src/node/adapters/account_teardown_runtime.rs');
 const fullTeardownContext = structBody(accountTeardownRuntime, 'pub(crate) struct AccountTeardownRuntime');
+const accountTeardownFlow = structBody(read('crates/contexts/auth/northstar-auth-application/src/account_teardown.rs'), 'pub async fn disconnect_account(');
 const accountTeardownPorts = read('crates/edges/northstar-http/src/contexts/account_teardown.rs');
 if (/\b(?:ServerNode|ClusterManager|PgPool)\b/.test(teardownSequence)
     || /\b(?:ServerNode|ClusterManager|PgPool)\b/.test(teardownAdapters)
@@ -2425,6 +2426,7 @@ if (/\b(?:ServerNode|ClusterManager|PgPool)\b/.test(teardownSequence)
     || !/self\.ports\s*\.notify_cluster\(/.test(accountGenerationTeardown)
     || !/revoke_durable_sm\(\)\.await[\s\S]+notify_cluster\(\)\.await/.test(accountGenerationTeardown)
     || !/self\.routes\.revoke\([\s\S]+self\.sm\.revoke_user_with_teardown\(user_id\)\.await[\s\S]+self\.generation\.committed_generation\(user_id\)\.await[\s\S]+send_account_generation_teardown\(/.test(accountTeardownRuntime)
+    || !/effects\.revoke_local_routes\(user_id, bare_account_jid\);[\s\S]+effects\.revoke_sm_sessions\(user_id\)\.await[\s\S]+effects\.committed_generation\(user_id\)\.await[\s\S]+\.notify_generation_teardown\(bare_account_jid, user_id, generation\)/.test(accountTeardownFlow)
     || !/pub\(super\) async fn remove<R: HttpRepositories>\(\s*State\(teardown\): State<AccountGenerationTeardownContext>/.test(passkeyApiSource)
     || !/pub async fn consume_omemo_recovery<R: HttpRepositories>\(\s*State\(context\): State<OmemoRecoveryHttpContext<R>>,\s*State\(teardown\): State<AccountGenerationTeardownContext>/.test(recoveryApiSource)
     || !/pub async fn change_password<R: HttpRepositories>\(\s*State\(state\): State<PasswordChangeHttpContext<R>>,\s*State\(teardown\): State<AccountTeardownContext>/.test(read('crates/edges/northstar-http/src/users.rs'))

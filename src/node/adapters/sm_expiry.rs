@@ -15,10 +15,7 @@ pub(crate) struct SmExpiryContext {
 impl ServerNode {
     pub(crate) fn sm_expiry_context(&self) -> SmExpiryContext {
         SmExpiryContext {
-            service: SmTeardownService::new(
-                PostgresSmTeardownRepository::new(self.pool.clone()),
-                self.config.sm_claim_lease_seconds,
-            ),
+            service: self.sm_teardown_claims(),
             runtime: self.sm_teardown_runtime(),
         }
     }

@@ -17,10 +17,7 @@ pub(crate) struct SessionCleanupSmRevoker {
 impl ServerNode {
     pub(crate) fn session_cleanup_sm_revoker(&self) -> SessionCleanupSmRevoker {
         SessionCleanupSmRevoker {
-            claims: SmTeardownService::new(
-                PostgresSmTeardownRepository::new(self.pool.clone()),
-                self.config.sm_claim_lease_seconds,
-            ),
+            claims: self.sm_teardown_claims(),
             effects: self.sm_teardown_runtime(),
         }
     }

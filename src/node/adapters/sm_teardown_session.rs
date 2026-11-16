@@ -3,7 +3,8 @@
 use crate::node::{OnlineSession, ServerNode};
 use dashmap::DashMap;
 use northstar_cluster::ClusterSmSessionTeardownNotifier;
-use std::sync::{atomic::Ordering, Arc};
+use northstar_stream::local_routes::session_table::{fence_local_session_in, LocalSessionFence};
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub(in crate::node) struct SmTeardownSessionEffects {
@@ -26,17 +27,11 @@ impl SmTeardownSessionEffects {
         full_jid: &str,
         sm_session_id: Uuid,
     ) -> anyhow::Result<()> {
-        if let Some(session) = self.sessions.get_mut(full_jid) {
-            let matches = *session
-                .sm_session_id
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                == Some(sm_session_id);
-            if matches {
-                session.routable.store(false, Ordering::Release);
-                session.disconnect.cancel();
-            }
-        }
+        fence_local_session_in(
+            &self.sessions,
+            full_jid,
+            LocalSessionFence::Sm(sm_session_id),
+        );
         self.notifier
             .send_sm_session_teardown(full_jid, sm_session_id)
             .await

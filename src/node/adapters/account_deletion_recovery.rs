@@ -16,6 +16,7 @@ use northstar_auth_xmpp::account_deletion::{
 use northstar_cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery};
 use northstar_federation_application::effective_policy::EffectiveFederationPolicy;
 use northstar_roster_core::RosterChange;
+use northstar_stream::local_routes::session_table::try_send_to_entries_in;
 use northstar_workflows::account_repository::WorkflowAccountRepository;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -113,9 +114,7 @@ impl AccountDeletionRecoveryPorts for AccountDeletionRecoveryAdapters {
     }
 
     fn deliver_local_presence(&self, to: &str, stanza: &str) {
-        for (_, session) in session_entries_for_in(&self.sessions, to) {
-            let _ = session.sender.try_send(stanza.to_owned());
-        }
+        try_send_to_entries_in(&self.sessions, to, stanza);
     }
 
     async fn remote_nodes(&self, to: &str) -> Result<Vec<String>> {

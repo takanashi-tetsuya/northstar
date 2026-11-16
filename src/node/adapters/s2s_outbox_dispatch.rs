@@ -1,10 +1,11 @@
 //! Builds the federation outbox drain's view of the node and bounces given-up stanzas to their
 //! local senders.
 
-use crate::node::{session_entries_for_in, OnlineSession, ServerNode};
+use crate::node::{OnlineSession, ServerNode};
 use dashmap::DashMap;
 use northstar_federation_postgres::dispatch_repository::PostgresS2sOutboxDispatchRepository;
 use northstar_s2s::outbox::{LocalBounce, S2sOutboxDispatchContext, S2sOutboxFailureEffects};
+use northstar_stream::local_routes::session_table::try_send_to_entries_in;
 use std::sync::Arc;
 
 /// The local sessions a given-up stanza's error goes back to.
@@ -12,9 +13,7 @@ struct LocalSessions(Arc<DashMap<String, OnlineSession>>);
 
 impl LocalBounce for LocalSessions {
     fn bounce_to_local(&self, origin: &str, error: &str) {
-        for (_, session) in session_entries_for_in(&self.0, origin) {
-            let _ = session.sender.try_send(error.to_owned());
-        }
+        try_send_to_entries_in(&self.0, origin, error);
     }
 }
 

@@ -48,10 +48,7 @@ impl ServerNode {
         AccountGenerationTeardownAdapter {
             sequence: AccountGenerationTeardownSequence::new(AccountGenerationTeardownAdapters {
                 routes: AccountRevocationRoutes::new(Arc::clone(&self.sessions)),
-                sm: SmTeardownService::new(
-                    PostgresSmTeardownRepository::new(self.pool.clone()),
-                    self.config.sm_claim_lease_seconds,
-                ),
+                sm: self.sm_teardown_claims(),
                 sm_effects: Arc::new(self.sm_teardown_runtime()),
                 notifier: self.cluster_account_teardown_notifier(),
             }),

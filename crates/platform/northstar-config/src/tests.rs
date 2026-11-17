@@ -1018,18 +1018,30 @@ fn test_listener_addresses_overlap_port_zero() {
     assert!(listener_addresses_overlap(c, d));
 }
 
-#[test]
-fn from_variables_loads_only_the_given_variables() {
-    let values =
-        dotenvy::from_read_iter(include_str!("../../../../.env.development.example").as_bytes())
-            .collect::<dotenvy::Result<Vec<(String, String)>>>()
-            .expect("the development example must be valid dotenv");
+fn development_example() -> Vec<(String, String)> {
+    dotenvy::from_read_iter(include_str!("../../../../.env.development.example").as_bytes())
+        .collect::<dotenvy::Result<Vec<(String, String)>>>()
+        .expect("the development example must be valid dotenv")
+}
+
+fn development_example_with<'a>(
+    values: &'a [(String, String)],
+    name: &'a str,
+    value: &'a str,
+) -> Vec<(&'a str, &'a str)> {
     let mut variables: Vec<(&str, &str)> = values
         .iter()
-        .map(|(name, value)| (name.as_str(), value.as_str()))
-        .filter(|(name, _)| *name != "SERVER_NAME")
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .filter(|(key, _)| *key != name)
         .collect();
-    variables.push(("SERVER_NAME", "From Variables Probe"));
+    variables.push((name, value));
+    variables
+}
+
+#[test]
+fn from_variables_loads_only_the_given_variables() {
+    let values = development_example();
+    let variables = development_example_with(&values, "SERVER_NAME", "From Variables Probe");
     let config = super::Config::from_variables(&variables)
         .expect("the development example loads from variables");
     assert_eq!(config.server_name, "From Variables Probe");
@@ -1045,4 +1057,30 @@ fn from_variables_loads_only_the_given_variables() {
     assert!(error
         .to_string()
         .contains("Failed to parse config from variables"));
+}
+
+#[test]
+fn message_free_burst_is_validated_between_ten_and_ten_thousand() {
+    let values = development_example();
+    for (burst, accepted) in [
+        ("9", false),
+        ("10", true),
+        ("10000", true),
+        ("10001", false),
+    ] {
+        let variables = development_example_with(&values, "ABUSE_MESSAGE_FREE_BURST", burst);
+        match super::Config::from_variables(&variables) {
+            Ok(config) => {
+                assert!(accepted, "burst {burst} must be refused");
+                assert_eq!(config.raw.abuse_message_free_burst.to_string(), burst);
+            }
+            Err(error) => {
+                assert!(!accepted, "burst {burst} must load: {error:#}");
+                assert!(
+                    format!("{error:#}").contains("ABUSE_MESSAGE_FREE_BURST must be 10..10000"),
+                    "burst {burst}: {error:#}"
+                );
+            }
+        }
+    }
 }

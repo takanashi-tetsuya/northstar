@@ -6,7 +6,7 @@ import { readModuleParts, readProductionModule, readRoleSplitFile } from './lib/
 
 const root = new URL('../', import.meta.url);
 const read = (path) => readFile(new URL(path, root), 'utf8');
-const [abuseSources, config, envExample, apiRouter, authRoutes, reportRoutes, messaging, miscProtocol, ibrProtocol, accountRepository, migration, messageAdmissionMigration, powIntentMigration, parallelChallengeMigration, deletionRecoveryMigration, maintenanceWorkers, client, powClient, clientHtml, admin, adminHtml, workerSource] = await Promise.all([
+const [abuseSources, envExample, apiRouter, authRoutes, reportRoutes, messaging, miscProtocol, ibrProtocol, accountRepository, migration, messageAdmissionMigration, powIntentMigration, parallelChallengeMigration, deletionRecoveryMigration, maintenanceWorkers, client, powClient, clientHtml, admin, adminHtml, workerSource] = await Promise.all([
   Promise.all([
     readModuleParts('crates/contexts/abuse/northstar-abuse-application/src/guard.rs', { includeTests: false }).map(({ source }) => source),
     read('crates/contexts/abuse/northstar-abuse-policy/src/lib.rs'),
@@ -17,8 +17,7 @@ const [abuseSources, config, envExample, apiRouter, authRoutes, reportRoutes, me
     read('crates/contexts/abuse/northstar-abuse-policy/src/cooldown.rs'),
     read('crates/contexts/abuse/northstar-abuse-policy/src/config.rs'),
   ]).then(([parts, ...policyParts]) => [...parts, policyParts.join('\n')]),
-  // crates/platform/northstar-config/src/lib.rs and its non-test sibling modules (the whole production module)
-  readProductionModule('crates/platform/northstar-config/src/lib.rs'), read('.env.example'),
+  read('.env.example'),
   readRoleSplitFile('crates/edges/northstar-http/src/lib.rs'), read('crates/edges/northstar-http/src/auth_routes.rs'),
   read('crates/edges/northstar-http/src/reports.rs'),
   readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs'), read('crates/edges/northstar-stream/src/protocol/misc.rs'), read('crates/edges/northstar-stream/src/protocol/ibr.rs'), read('crates/contexts/workflows/northstar-workflows/src/account_repository.rs'),
@@ -57,8 +56,6 @@ assert.match(stanzaIntent.body_sha256, /^[A-Za-z0-9_-]{43}$/);
 
 assert.match(abuse, /fn policy\(action: AbuseAction, base: u64, message_free_burst: usize\)/,
   'message burst must be an explicit policy input');
-assert.match(config, /\(10\.\.=10_000\)\.contains\(&raw\.abuse_message_free_burst\)/,
-  'message burst configuration must have a bounded validation range');
 assert.match(envExample, /^ABUSE_MESSAGE_FREE_BURST=60$/m,
   'the deployment example must agree with the Rust default');
 assert.match(abuse, /prefetched_message_challenge_remains_sufficient/,

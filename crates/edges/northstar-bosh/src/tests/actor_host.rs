@@ -7,19 +7,22 @@ use axum::http::HeaderMap;
 use northstar_abuse_policy::content_identity::{
     MixMessageContentKeyring, MixRetractionContentKeyring,
 };
+use northstar_auth_application::authentication::publication::Transport;
 use northstar_delivery_core::{DurableDeliverySuperseded, MixDelivery, TransportOwnershipSource};
 use northstar_room_application::mix_service::MixService;
 use northstar_runtime::connection_actors::ConnectionActorRegistry;
 use northstar_session_application::replay::ReplayService;
 use northstar_session_application::sm_capacity::SmMemoryGovernor;
+use northstar_stream::auth_publication::fixture::{Cut, FakePort};
 use northstar_stream::auth_publication::OwnedPublication;
-use northstar_stream::frame_execution::FrameFailure;
+use northstar_stream::frame_execution::{FrameExecution, FrameFailure, Stage};
 use northstar_stream::host::TransportHost;
 use northstar_stream::outbound::{OutboundItem, OutboundSender};
 use northstar_stream::session::StreamSession;
 use northstar_stream::transport::{
     Action, ClientTransport, SessionTerminationSignals, StreamLimits, TlsSessionEvidence,
 };
+use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -68,6 +71,15 @@ pub(super) enum Event {
     Csi(ItemFacts),
     Record(ItemFacts),
     RecordStanza(String),
+    Publish {
+        connection: Uuid,
+        control: Uuid,
+        transport: Transport,
+    },
+    Published {
+        control: Uuid,
+        succeeded: bool,
+    },
     Transfer {
         source: MixDelivery,
         session_id: Uuid,
@@ -108,6 +120,14 @@ pub(super) enum RecordCut {
     Panic,
 }
 
+#[derive(Clone, Copy, Default)]
+pub(super) enum PublicationCut {
+    #[default]
+    Pass,
+    Reject,
+    Gated,
+}
+
 pub(super) struct TestHost {
     pub manager: BoshManager,
     pub trace: Trace,
@@ -116,6 +136,13 @@ pub(super) struct TestHost {
     pub actors: ConnectionActorRegistry,
     pub record_cut: Arc<Mutex<RecordCut>>,
     pub frame_items: Arc<Mutex<Vec<OutboundItem>>>,
+    pub frame_actions: Arc<Mutex<VecDeque<Action>>>,
+    pub frame_executions: Arc<Mutex<Vec<FrameExecution>>>,
+    pub publication_cuts: Arc<Mutex<VecDeque<PublicationCut>>>,
+    pub publication_gate: Arc<tokio::sync::Semaphore>,
+    pub reject_stanza_record: Arc<Mutex<bool>>,
+    pub policy_revoke: CancellationToken,
+    pub backpressure: CancellationToken,
     pub outbound: Mutex<Option<OutboundSender>>,
     replay_service: ReplayService<ReplayStore>,
     mix_service: MixService<MixStore>,
@@ -147,6 +174,13 @@ impl TestHost {
             mix,
             record_cut: Arc::new(Mutex::new(RecordCut::Pass)),
             frame_items: Arc::new(Mutex::new(vec![])),
+            frame_actions: Arc::new(Mutex::new(VecDeque::new())),
+            frame_executions: Arc::new(Mutex::new(vec![])),
+            publication_cuts: Arc::new(Mutex::new(VecDeque::new())),
+            publication_gate: Arc::new(tokio::sync::Semaphore::new(0)),
+            reject_stanza_record: Arc::new(Mutex::new(false)),
+            policy_revoke: CancellationToken::new(),
+            backpressure: CancellationToken::new(),
             outbound: Mutex::new(None),
             proxies: [Ipv4Addr::LOCALHOST.into()],
         })
@@ -199,9 +233,14 @@ impl TransportHost for TestHost {
             trace: self.trace.clone(),
             record_cut: self.record_cut.clone(),
             frame_items: self.frame_items.clone(),
+            frame_actions: self.frame_actions.clone(),
+            frame_executions: self.frame_executions.clone(),
+            publication_cuts: self.publication_cuts.clone(),
+            publication_gate: self.publication_gate.clone(),
+            reject_stanza_record: self.reject_stanza_record.clone(),
             signals: SessionTerminationSignals::new(
-                CancellationToken::new(),
-                CancellationToken::new(),
+                self.policy_revoke.clone(),
+                self.backpressure.clone(),
             ),
         }
     }
@@ -266,6 +305,11 @@ pub(super) struct RecordingSession {
     trace: Trace,
     record_cut: Arc<Mutex<RecordCut>>,
     frame_items: Arc<Mutex<Vec<OutboundItem>>>,
+    frame_actions: Arc<Mutex<VecDeque<Action>>>,
+    frame_executions: Arc<Mutex<Vec<FrameExecution>>>,
+    publication_cuts: Arc<Mutex<VecDeque<PublicationCut>>>,
+    publication_gate: Arc<tokio::sync::Semaphore>,
+    reject_stanza_record: Arc<Mutex<bool>>,
     signals: SessionTerminationSignals,
 }
 
@@ -274,6 +318,14 @@ struct RecordDrop(Trace);
 impl Drop for RecordDrop {
     fn drop(&mut self) {
         self.0.push(Event::Session("record dropped"));
+    }
+}
+
+struct FrameDrop(Trace);
+
+impl Drop for FrameDrop {
+    fn drop(&mut self) {
+        self.0.push(Event::Session("frame dropped"));
     }
 }
 
@@ -346,16 +398,68 @@ impl StreamSession for RecordingSession {
     }
     async fn process_frame(&mut self, frame: &str) -> Result<Action, FrameFailure> {
         self.trace.push(Event::Frame(frame.to_owned()));
-        Ok(match frame {
-            "<items/>" => {
-                Action::SendManyItems(std::mem::take(&mut *self.frame_items.lock().unwrap()))
-            }
-            _ => Action::None,
-        })
+        let execution = {
+            let mut executions = self.frame_executions.lock().unwrap();
+            let execution = FrameExecution::for_saved_case(
+                ClientTransport::Bosh,
+                frame,
+                Uuid::from_u128(9100 + executions.len() as u128),
+            );
+            executions.push(execution.clone());
+            execution
+        };
+        execution
+            .run(async {
+                execution.enter(Stage::Handler);
+                Ok(match frame {
+                    "<items/>" => Action::SendManyItems(std::mem::take(
+                        &mut *self.frame_items.lock().unwrap(),
+                    )),
+                    "<actions/>" => self.frame_actions.lock().unwrap().pop_front().unwrap(),
+                    "<backend/>" => anyhow::bail!("recorded frame backend failure"),
+                    "<pending/>" => {
+                        let _drop = FrameDrop(self.trace.clone());
+                        std::future::pending().await
+                    }
+                    "<panic/>" => panic!("recorded frame panic"),
+                    _ => Action::None,
+                })
+            })
+            .await
     }
-    async fn publish_committed_authentication_and_route(&mut self, _: OwnedPublication) -> bool {
-        self.trace.push(Event::Session("publish"));
-        true
+    async fn publish_committed_authentication_and_route(
+        &mut self,
+        owner: OwnedPublication,
+    ) -> bool {
+        let snapshot = owner.observation().snapshot();
+        self.trace.push(Event::Publish {
+            connection: owner.connection(),
+            control: snapshot.control,
+            transport: snapshot.transport,
+        });
+        let cut = self
+            .publication_cuts
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_default();
+        if matches!(cut, PublicationCut::Gated) {
+            self.publication_gate.acquire().await.unwrap().forget();
+        }
+        let mut port = FakePort::new(
+            CONNECTION,
+            if matches!(cut, PublicationCut::Reject) {
+                Cut::BeforeCommit
+            } else {
+                Cut::Success
+            },
+        );
+        let succeeded = owner.publish(&mut port).await.transport_succeeded();
+        self.trace.push(Event::Published {
+            control: snapshot.control,
+            succeeded,
+        });
+        succeeded
     }
     fn start_post_action_tasks(&mut self) {
         self.trace.push(Event::Session("post action"));
@@ -366,6 +470,10 @@ impl StreamSession for RecordingSession {
     }
     async fn record_outbound(&mut self, stanza: &str) -> Result<()> {
         self.trace.push(Event::RecordStanza(stanza.to_owned()));
+        anyhow::ensure!(
+            !*self.reject_stanza_record.lock().unwrap(),
+            "recorded stanza failure"
+        );
         Ok(())
     }
     fn record_replayed(&self) {

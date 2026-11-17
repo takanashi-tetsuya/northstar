@@ -1116,9 +1116,12 @@ fn held_empty_overactivity_exempts_pause_terminate_and_payload_requests() {
     ));
 }
 
+mod actor_actions;
 mod actor_fixture;
 mod actor_host;
+mod actor_lifecycle;
 mod actor_operations;
+mod actor_publication;
 mod actor_responses;
 mod mix_store;
 mod replay_service;

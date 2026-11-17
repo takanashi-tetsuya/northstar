@@ -951,3 +951,6 @@ pub fn muc_service_domain(local_domain: &str) -> String {
     prepare_domainpart(&format!("conference.{local_domain}"))
         .expect("configured XMPP domain must form a valid MUC service domain")
 }
+
+#[cfg(test)]
+mod tests;

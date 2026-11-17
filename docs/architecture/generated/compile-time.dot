@@ -1428,12 +1428,14 @@ digraph compile_time {
   "northstar-muc-xmpp" -> "chrono";
   "northstar-muc-xmpp" -> "dashmap";
   "northstar-muc-xmpp" -> "futures";
+  "northstar-muc-xmpp" -> "northstar-abuse-policy";
   "northstar-muc-xmpp" -> "northstar-archive-core";
   "northstar-muc-xmpp" -> "northstar-delivery-core";
   "northstar-muc-xmpp" -> "northstar-federation-core";
   "northstar-muc-xmpp" -> "northstar-message-core";
   "northstar-muc-xmpp" -> "northstar-room-application";
   "northstar-muc-xmpp" -> "northstar-room-core";
+  "northstar-muc-xmpp" -> "northstar-roster-core";
   "northstar-muc-xmpp" -> "northstar-runtime";
   "northstar-muc-xmpp" -> "northstar-security";
   "northstar-muc-xmpp" -> "northstar-session-core";

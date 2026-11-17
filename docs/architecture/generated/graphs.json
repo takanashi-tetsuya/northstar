@@ -3879,6 +3879,10 @@
       ],
       [
         "northstar-muc-xmpp",
+        "northstar-abuse-policy"
+      ],
+      [
+        "northstar-muc-xmpp",
         "northstar-archive-core"
       ],
       [
@@ -3900,6 +3904,10 @@
       [
         "northstar-muc-xmpp",
         "northstar-room-core"
+      ],
+      [
+        "northstar-muc-xmpp",
+        "northstar-roster-core"
       ],
       [
         "northstar-muc-xmpp",

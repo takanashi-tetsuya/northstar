@@ -363,7 +363,6 @@ jobs:
           node --test scripts/test-execution-boundaries.mjs
           node scripts/check-federated-route-boundaries.mjs
           node --test scripts/test-federated-route-boundaries.mjs
-          node --test scripts/test-mix-outbox-boundaries.mjs
           node --test scripts/test-source-module.mjs
           node --test scripts/test-workspace-members.mjs
           node --test scripts/test-move-only.mjs

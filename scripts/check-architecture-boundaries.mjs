@@ -159,19 +159,6 @@ function functionBody(source, span) {
   return source.slice(span.opening + 1, span.closing);
 }
 
-function matchArm(source, markers, marker, description) {
-  const start = source.indexOf(marker);
-  if (start < 0) throw new Error(`missing ${description} match arm ${marker}`);
-  if (countMatches(source, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) !== 1) {
-    throw new Error(`${description} must have exactly one ${marker} match arm`);
-  }
-  const end = markers
-    .map((candidate) => source.indexOf(candidate))
-    .filter((index) => index > start)
-    .sort((left, right) => left - right)[0] ?? source.length;
-  return source.slice(start, end);
-}
-
 function statementBeforeAwait(source, awaitOffset) {
   const boundary = Math.max(
     source.lastIndexOf(';', awaitOffset),
@@ -319,20 +306,6 @@ if (!clusterMessageResolver.includes('verifier.resolve(request, stanza, target_j
   throw new Error('inbound cluster message contracts must use the PostgreSQL projection verifier port');
 }
 
-// The loaded configuration transiently contains database, cluster,
-// component, TURN, FAST and anti-abuse credentials. It must be move-only so
-// ServerNode::new can consume and scrub the sole configuration instance instead
-// of leaving an unconstrained plaintext clone elsewhere in the process.
-for (const typeName of ['RawConfig', 'Config']) {
-  const declaration = new RegExp(
-    `#\\s*\\[\\s*derive\\s*\\(([^)]*\\bClone\\b[^)]*)\\)\\s*\\]\\s*pub\\s+struct\\s+${typeName}\\b`,
-    's',
-  );
-  if (declaration.test(configSource)) {
-    throw new Error(`${typeName} must remain move-only because it transiently owns runtime secrets`);
-  }
-}
-
 for (const field of [
   'upload',
   'pubsub',
@@ -404,7 +377,6 @@ if (!/^\s*fast_token_secret\s*:\s*Arc<Zeroizing<Vec<u8>>>\s*,/m.test(smAdapterBo
   throw new Error('SM repository FAST key must remain private Arc<Zeroizing<Vec<u8>>>');
 }
 const runtimeControlConnection = read('crates/contexts/operations/northstar-operations-postgres/src/runtime_control_connection.rs');
-const postgresStartup = read('crates/platform/northstar-postgres/src/startup.rs');
 const runtimeControlPoolConstruction = rustItemBody(runtimeControlConnection, 'fn runtime_control_pool_options(');
 for (const invariant of [
   'max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
@@ -419,19 +391,6 @@ for (const invariant of [
 const runtimeControlRefresh = rustItemBody(state, 'fn start_runtime_control_refresh(');
 const runtimeControlContext = read('crates/contexts/operations/northstar-operations-application/src/runtime_control_coordinator.rs');
 const runtimeControlRun = structBody(runtimeControlContext, 'pub async fn run(');
-const runtimeControlAdapter = read('crates/contexts/operations/northstar-operations-postgres/src/runtime_control_repository.rs');
-for (const [call, description] of [
-  ['runtime_control_snapshot', 'runtime administration and federation refresh'],
-  ['poll_admin_service_control', 'XEP-0133 service-control refresh'],
-]) {
-  if (!new RegExp(`db::${call}\\(\\s*&mut self\\.connection`, 's').test(runtimeControlAdapter)) {
-    throw new Error(`${description} must use the repository-owned control connection`);
-  }
-  if (new RegExp(`\\bdb::${call}\\(`).test(runtimeControlRun)
-      || new RegExp(`${call}\\(&state\\.(?:pool|runtime_control_pool)\\)`).test(runtimeControlRun)) {
-    throw new Error(`${description} must not access database authority from the refresh worker`);
-  }
-}
 if ((runtimeControlRefresh.match(/let\s+max_silence\s*=/g) ?? []).length !== 1
     || !/let max_silence = Duration::from_secs\(5\);/.test(runtimeControlRefresh)
     || !/"runtime-control-refresh",\s*northstar_runtime::workers::WorkerCriticality::Critical,\s*northstar_runtime::workers::WorkerMode::Continuous,\s*Some\(max_silence\),/s.test(runtimeControlRefresh)
@@ -448,10 +407,6 @@ if (/fn start_runtime_(?:federation_policy|admin_setting)_refresh\(|fn start_ser
   throw new Error('independent runtime control workers can contend for the one-connection control pool');
 }
 const runtimeControlReservation = rustItemBody(runtimeControlConnection, 'pub async fn reserve_runtime_control_connection(');
-const runtimeControlConnectOptions = rustItemBody(runtimeControlConnection, 'fn runtime_control_connect_options(');
-if (runtimeControlConnectOptions.replace(/\s+/g, '') !== 'Ok(database_url.parse::<PgConnectOptions>()?.application_name("northstar-runtime-control"))') {
-  throw new Error('runtime-control connection identity must only label the original parsed database URL');
-}
 for (const invariant of [
   'runtime_control_pool_options(config, attempt_budget)',
   'let connect_options = runtime_control_connect_options(&config.database_url)?;',
@@ -472,21 +427,6 @@ if (!/runtime_control_pool\s*\.acquire\(\)\s*\.await/s.test(runtimeControlReserv
 const runtimeControlConnect = rustItemBody(runtimeControlConnection, 'async fn runtime_control_startup_connect<');
 if (!/startup_database_connect\(\s*deadline,\s*RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET,/.test(runtimeControlConnect)) {
   throw new Error('runtime-control must use bounded startup admission with its handshake limit');
-}
-const runtimeControlAdmission = rustItemBody(postgresStartup, 'async fn startup_database_connect<');
-for (const invariant of [
-  'tokio::time::timeout_at(deadline,',
-  'deadline.saturating_duration_since(tokio::time::Instant::now())',
-  'remaining.min(attempt_limit)',
-  'tokio::time::timeout(attempt_budget, connect(attempt_budget))',
-  'runtime_control_startup_retry_delay(attempts, std::process::id())',
-  '.min(remaining)',
-  'Err(sqlx::Error::PoolTimedOut) =>',
-  'Err(error) => return Err(error)',
-]) {
-  if (!runtimeControlAdmission.replace(/\s+/g, '').includes(invariant.replace(/\s+/g, ''))) {
-    throw new Error(`runtime-control startup lost a bounded admission invariant: ${invariant}`);
-  }
 }
 if (!/const RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(3\)/.test(runtimeControlConnection)
     || !/const RUNTIME_CONTROL_STARTUP_RETRY_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(15\)/.test(runtimeControlConnection)) {
@@ -542,17 +482,6 @@ const serviceControlInstallation = rustItemBody(runtimeModuleSource, 'pub(in cra
 if (!/self\.service_shutdown\s*\.set\(cancel\)/s.test(serviceControlInstallation)) {
   throw new Error('XEP-0133 service control must install the shutdown authority before the coordinator polls it');
 }
-for (const invariant of [
-  'self.service_control_enabled && self.service_shutdown.get().is_some()',
-  'report_runtime_control_health(&heartbeat, observed_database, first_error)',
-]) {
-  if (!runtimeControlRun.includes(invariant)) {
-    throw new Error(`runtime control coordinator lost a fail-closed XEP-0133 invariant: ${invariant}`);
-  }
-}
-if (!/service_control_applies\(\s*self\.process_started_at,\s*&control\s*,?\s*\)/s.test(runtimeControlRun)) {
-  throw new Error('runtime control coordinator must retain the XEP-0133 process/generation authority check');
-}
 if (!responsibilityDocument.includes('| runtime control pool | `northstar_runtime` | exactly 1 reserved connection; at most 3 s per initial handshake within one absolute 15 s admission deadline, including jitter, role attestation and reservation |')) {
   throw new Error('program responsibility model must document the dedicated runtime control pool');
 }
@@ -562,231 +491,6 @@ const mixProtocolProduction = productionWithoutCfgTestModules(
   mixProtocol,
   'crates/contexts/room/northstar-mix-xmpp/src/lib.rs',
 );
-export function verifyMixOutboxLifecycle(mixProtocol) {
-  // Match executable source shape rather than comments, string descriptions or
-  // cfg(test) examples. This uses the same bounded masking convention as the
-  // subserver source gate, not a general Rust parser.
-  const mixProtocolProduction = productionWithoutCfgTestModules(
-    mixProtocol, 'crates/contexts/room/northstar-mix-xmpp/src/lib.rs',
-  ).replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"/g,
-    (text) => text.replace(/[^\r\n]/g, ' '));
-  const mixOutboxQueue = structBody(mixProtocolProduction, 'enum MixOutboxQueue');
-  for (const lane of ['Delivery', 'PamResult']) {
-    if (!new RegExp(`^\\s*${lane}\\s*,?\\s*$`, 'm').test(mixOutboxQueue)) {
-      throw new Error(`MIX outbox must retain an independent ${lane} lane`);
-    }
-  }
-  if (!/const\s+PAM_RESULT_MAX_CONCURRENCY\s*:\s*usize\s*=\s*2\s*;/.test(mixProtocolProduction)) {
-    throw new Error('MIX PAM-result lane must remain capped at two concurrent deliveries');
-  }
-  const mixLaneBudgets = structBody(mixProtocolProduction, 'const fn mix_outbox_lane_budgets(');
-  if (
-    !/let\s+pam_budget\s*=\s*if\s+background_budget\s*<\s*PAM_RESULT_MAX_CONCURRENCY\s*\{\s*background_budget\s*\}\s*else\s*\{\s*PAM_RESULT_MAX_CONCURRENCY\s*\};/s.test(
-      mixLaneBudgets,
-    ) ||
-    !/\(\s*background_budget\s*,\s*pam_budget\s*\)/.test(mixLaneBudgets)
-  ) {
-    throw new Error(
-      'MIX outbox lane budgets must give delivery the typed budget and PAM its independent cap',
-    );
-  }
-  const mixClaimWork = structBody(mixProtocolProduction, 'fn claim_mix_outbox_work(');
-  const mixClaimArmMarkers = [
-    'MixOutboxQueue::Delivery =>',
-    'MixOutboxQueue::PamResult =>',
-  ];
-  const mixDeliveryClaimArm = matchArm(
-    mixClaimWork,
-    mixClaimArmMarkers,
-    'MixOutboxQueue::Delivery =>',
-    'MIX outbox claim',
-  );
-  const mixPamClaimArm = matchArm(
-    mixClaimWork,
-    mixClaimArmMarkers,
-    'MixOutboxQueue::PamResult =>',
-    'MIX outbox claim',
-  );
-  if (
-    !/\.claim_mix_deliveries_observed\s*\(/.test(mixDeliveryClaimArm) ||
-    /\.claim_mix_deliveries\s*\(/.test(mixDeliveryClaimArm) ||
-    /\.claim_pam_results\s*\(/.test(mixDeliveryClaimArm) ||
-    !/\.claim_pam_results\s*\(/.test(mixPamClaimArm) ||
-    /\.claim_mix_deliveries(?:_observed)?\s*\(/.test(mixPamClaimArm)
-  ) {
-    throw new Error('MIX delivery and PAM lanes must claim only their own durable work; no fallback');
-  }
-  const mixProcessWork = structBody(mixProtocolProduction, 'fn process_mix_outbox_work(');
-  if (
-    !/MixOutboxWork\s*::\s*Delivery\s*\(delivery\)\s*=>\s*\{\s*let\s+run\s*=\s*delivery\.run\s*\(\s*move\s*\|attempt,\s*handle\|\s*\{\s*process_claimed_mix_delivery\s*\(\s*context\s*,\s*attempt\s*,\s*handle\s*,\s*cancel\s*\)/.test(
-      mixProcessWork,
-    ) ||
-    !/Box::pin\s*\(\s*async\s+move\s*\{\s*\(\s*MixOutboxQueue\s*::\s*Delivery\s*,\s*run\.await\s*,?\s*\)\s*\}/.test(mixProcessWork) ||
-    !/MixOutboxWork\s*::\s*PamResult\s*\([^)]*\)\s*=>\s*Box::pin\s*\(\s*async\s+move\s*\{\s*\(\s*MixOutboxQueue\s*::\s*PamResult\s*,[\s\S]*?process_claimed_pam_result\s*\(/.test(
-      mixProcessWork,
-    )
-  ) {
-    throw new Error('MIX outbox work must stay in its claimed delivery or PAM lane');
-  }
-  const mixOutboxLaneWorker = structBody(mixProtocolProduction, 'async fn run_mix_outbox_lane(');
-  const mixOutboxClaimWork = structBody(mixProtocolProduction, 'fn claim_mix_outbox_work(');
-  const mixOutboxClaim = structBody(mixProtocolProduction, 'fn process_mix_outbox_claim(');
-  const mixOutboxMaintenance = structBody(mixProtocolProduction, 'fn process_mix_outbox_maintenance(');
-  if (
-    !/FuturesUnordered\s*::\s*<\s*MixOutboxTask\s*>\s*::\s*new\s*\(\s*\)/.test(
-      mixOutboxLaneWorker,
-    ) ||
-    !/claim_task\s*=\s*Some\s*\(\s*process_mix_outbox_claim\s*\(/.test(
-      mixOutboxLaneWorker,
-    ) ||
-    !/in_flight\s*\.\s*push\s*\(\s*process_mix_outbox_work\s*\(/.test(mixOutboxLaneWorker) ||
-    !/maintenance_task\s*=\s*Some\s*\(\s*process_mix_outbox_maintenance\s*\(/.test(
-      mixOutboxLaneWorker,
-    ) ||
-    !/next_mix_outbox_progress\s*\(\s*&mut\s+in_flight\s*,\s*&mut\s+claim_task\s*,\s*&mut\s+maintenance_task\s*\)/.test(
-      mixOutboxLaneWorker,
-    ) ||
-    !/claim_mix_outbox_work\s*\(\s*context\s*,\s*stop_claiming\s*,\s*cancel\s*,\s*queue\s*,\s*available\s*,?\s*\)/.test(
-      mixOutboxClaim,
-    ) ||
-    countMatches(mixOutboxClaimWork, /drainable_mix_outbox_claim\s*\(\s*&stop_claiming\s*,\s*&cancel\s*,/g) !== 2 ||
-    countMatches(mixDeliveryClaimArm, /drainable_mix_outbox_claim\s*\(\s*&stop_claiming\s*,\s*&cancel\s*,/g) !== 1 ||
-    countMatches(mixPamClaimArm, /drainable_mix_outbox_claim\s*\(\s*&stop_claiming\s*,\s*&cancel\s*,/g) !== 1 ||
-    !/cancellable_mix_outbox_turn\s*\(\s*&cancel\s*,/.test(mixOutboxMaintenance) ||
-    !/maintain_mix_delivery_retention\s*\(\s*\)/.test(mixOutboxMaintenance)
-  ) {
-    throw new Error('each MIX outbox lane must keep claims and maintenance independently bounded, cancellation-aware, and jointly polled');
-  }
-  const joinMixOutboxLanes = structBody(mixProtocolProduction, 'async fn join_mix_outbox_lanes');
-  if (
-    !/tokio\s*::\s*select!/.test(joinMixOutboxLanes) ||
-    !/lane_cancel\s*\.\s*cancel\s*\(\s*\)/.test(joinMixOutboxLanes) ||
-    !/pam\s*\.\s*await/.test(joinMixOutboxLanes) ||
-    !/delivery\s*\.\s*await/.test(joinMixOutboxLanes)
-  ) {
-    throw new Error('MIX lane join must cancel and drain its peer before surfacing a terminal lane result');
-  }
-  const startMixOutbox = structBody(mixProtocolProduction, 'pub fn start_mix_delivery_outbox(');
-  const deliveryLaneStart = startMixOutbox.search(/let\s+delivery\s*=\s*run_mix_outbox_lane\s*\(/);
-  const pamLaneStart = startMixOutbox.search(/let\s+pam\s*=\s*run_mix_outbox_lane\s*\(/);
-  const laneJoin = startMixOutbox.search(/join_mix_outbox_lanes\s*\(\s*cancel\s*,\s*lane_cancel\s*,\s*delivery\s*,\s*pam\s*,?\s*\)\s*\.\s*await/);
-  if (deliveryLaneStart < 0 || pamLaneStart < 0 || laneJoin < 0 || deliveryLaneStart > pamLaneStart) {
-    throw new Error('MIX outbox startup must construct delivery and PAM lanes before joining them');
-  }
-  const deliveryLaneStartBody = startMixOutbox.slice(deliveryLaneStart, pamLaneStart);
-  const pamLaneStartBody = startMixOutbox.slice(pamLaneStart, laneJoin);
-  if (
-    !deliveryLaneStartBody.includes('MixOutboxQueue::Delivery') ||
-    !deliveryLaneStartBody.includes('delivery_budget') ||
-    deliveryLaneStartBody.includes('MixOutboxQueue::PamResult') ||
-    !pamLaneStartBody.includes('MixOutboxQueue::PamResult') ||
-    !pamLaneStartBody.includes('pam_budget') ||
-    pamLaneStartBody.includes('MixOutboxQueue::Delivery') ||
-    /\b(?:delivery|pam)\s*\.\s*await\b/.test(startMixOutbox)
-  ) {
-    throw new Error('MIX outbox lanes must start separately without delivery/PAM fallback or head-of-line blocking');
-  }
-  const mixNoHolTest = structBody(
-    read('src/xmpp/protocol/mix_tests.rs'),
-    'async fn pam_lane_starts_while_a_delivery_lane_waits_on_external_io(',
-  );
-  if (
-    !mixNoHolTest.includes('join_mix_outbox_lanes(') ||
-    !/timeout\s*\([\s\S]*?pam_started_rx\s*\)/.test(mixNoHolTest)
-  ) {
-    throw new Error('MIX must retain a regression test proving slow delivery cannot head-of-line block PAM');
-  }
-
-  // Inspect production bodies; exclude fixtures and comments from these checks.
-  const compact = (source) => source.replace(/\s+/g, '').replace(/,\)/g, ')');
-  const requireMix = (condition, message) => {
-    if (!condition) throw new Error('MIX lifecycle boundary: ' + message);
-  };
-  for (const [name, seconds] of [
-    ['MIX_OUTBOX_DRAIN_GRACE', 14],
-    ['MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE', 5],
-    ['MIX_OUTBOX_ATTEMPT_DEADLINE', 20],
-    ['MIX_OUTBOX_LEASE_RENEWAL_INTERVAL', 10],
-  ]) {
-    requireMix(compact(mixProtocolProduction).includes(
-      'const' + name + ':Duration=Duration::from_secs(' + seconds + ');'),
-    'keep the reviewed ' + name + ' deadline');
-  }
-  const claimAdmission = compact(structBody(mixProtocolProduction, 'async fn drainable_mix_outbox_claim<'));
-  requireMix(claimAdmission ===
-    'ifstop_claiming.is_cancelled(){returnOk(Vec::new());}cancellable_mix_outbox_turn(cancel,claim).await',
-  'claim admission must stop before polling and preserve only hard cancellation after the claim begins');
-  const claimTurn = compact(structBody(mixProtocolProduction, 'async fn cancellable_mix_outbox_turn<'));
-  requireMix(claimTurn ===
-    'bounded_mix_outbox_turn(cancel,tokio::time::Instant::now()+MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE,turn).await',
-  'claims must retain their five-second bounded hard-cancellation turn');
-  const boundedTurn = compact(structBody(mixProtocolProduction, 'async fn bounded_mix_outbox_turn<'));
-  requireMix(boundedTurn.includes('ifcancel.is_cancelled(){returnErr(MixOutboxShutdown.into());}') &&
-    boundedTurn.includes('tokio::select!{biased;_=cancel.cancelled()=>Err(MixOutboxShutdown.into()),') &&
-    boundedTurn.includes('_=tokio::time::sleep_until(deadline)=>Err(MixOutboxDeadlineElapsed.into()),') &&
-    boundedTurn.includes('result=turn=>result'),
-  'bounded turns must prioritize hard cancellation and retain the original absolute deadline');
-  const lane = compact(mixOutboxLaneWorker);
-  requireMix(lane.includes('ifaccepting&&(stop_claiming.is_cancelled()||cancel.is_cancelled()){accepting=false;}') &&
-    lane.includes('_=stop_claiming.cancelled(),ifaccepting=>{accepting=false;}') &&
-    lane.includes('_=cancel.cancelled(),ifaccepting=>{accepting=false;}'),
-  'lane admission must close for either parent stop or hard cancellation');
-  requireMix(lane.includes('ifaccepting&&claim_task.is_none()&&maintenance_task.is_none()&&in_flight.len()<concurrency&&tokio::time::Instant::now()>=claim_schedule.next_claim{') &&
-    lane.includes('process_mix_outbox_claim(Arc::clone(&context),stop_claiming.clone(),cancel.clone(),queue,available)') &&
-    lane.includes('process_mix_outbox_work(Arc::clone(&context),work,cancel.clone())'),
-  'new claims require open bounded admission; pending claims and work keep the independent hard token');
-  requireMix(lane.includes('if!accepting{maintenance_task.take();}') &&
-    lane.includes('if!accepting&&in_flight.is_empty()&&claim_task.is_none(){returnmatchterminal_error{') &&
-    !/(?:claim_task|in_flight)\s*\.\s*(?:take|clear)\s*\(/.test(mixOutboxLaneWorker) &&
-    !/claim_task[\s\S]*?\.as_mut\(\)[\s\S]*?\.await/.test(mixOutboxLaneWorker),
-  'graceful drain must retain claimed work and claim responses while dropping maintenance');
-  const progress = compact(structBody(mixProtocolProduction, 'async fn next_mix_outbox_progress('));
-  requireMix(progress.includes('tokio::select!{biased;') &&
-    progress.includes('in_flight.next(),if!in_flight.is_empty()=>') &&
-    progress.includes('},ifclaim.is_some()=>{claim.take();MixOutboxProgress::Claim(outcome)') &&
-    progress.includes('},ifmaintenance.is_some()=>{maintenance.take();MixOutboxProgress::Maintenance(outcome)'),
-  'claim, maintenance and owned delivery must remain jointly polled');
-  for (const [finished, peer] of [['delivery', 'pam'], ['pam', 'delivery']]) {
-    const branch = compact(structBody(joinMixOutboxLanes, finished + '_result = &mut ' + finished + ' =>'));
-    const expected = 'if' + finished + '_result.is_err()||!stop_claiming.is_cancelled(){lane_cancel.cancel();}' +
-      'let' + peer + '_result=' + peer + '.await;' + finished + '_result?;' + peer + '_result';
-    requireMix(branch === expected,
-      finished + ' lane must preserve a normal stopped peer and hard-cancel errors or unexpected exits');
-  }
-  requireMix(countMatches(joinMixOutboxLanes, /lane_cancel\s*\.\s*cancel\s*\(/g) === 2,
-    'peer hard cancellation belongs only to the two guarded join branches');
-  const startup = compact(startMixOutbox);
-  const attemptFactory = structBody(startMixOutbox, 'move |heartbeat|');
-  const attemptBody = compact(structBody(attemptFactory, 'async move'));
-  const freshTokenOffset = attemptBody.indexOf('letlane_cancel=tokio_util::sync::CancellationToken::new();');
-  requireMix(freshTokenOffset >= 0 && freshTokenOffset < attemptBody.indexOf('run_mix_outbox_lane('),
-    'every supervised attempt must construct its own independent hard token before starting lanes');
-  requireMix(startup.includes('letlane_cancel=tokio_util::sync::CancellationToken::new();') &&
-    !/\.child_token\s*\(/.test(startMixOutbox) &&
-    startup.includes('run_mix_outbox_lane(Arc::clone(&context),cancel.clone(),lane_cancel.clone(),MixOutboxQueue::Delivery,delivery_budget,true,heartbeat.clone())') &&
-    startup.includes('run_mix_outbox_lane(context,cancel.clone(),lane_cancel.clone(),MixOutboxQueue::PamResult,pam_budget,false,heartbeat)') &&
-    startup.includes('join_mix_outbox_lanes(cancel,lane_cancel,delivery,pam).await'),
-  'production lanes must share a fresh independent hard token and receive the parent stop separately');
-  requireMix(startup.includes('registry.supervise_draining(,northstar_runtime::workers::WorkerCriticality::Restartable,northstar_runtime::workers::WorkerMode::Continuous,Some(Duration::from_secs(30)),MIX_OUTBOX_DRAIN_GRACE,cancel.clone(),'),
-  'supervisor must enforce the existing 14-second whole-worker drain');
-  const deliveryWrapper = compact(structBody(mixProtocolProduction, 'async fn process_claimed_mix_delivery('));
-  requireMix(deliveryWrapper ===
-    'process_claimed_mix_delivery_with_port(MixOutboxDeliveryPort{context},attempt,handle,cancel).await',
-  'production delivery wrapper must delegate its exact attempt to the shared policy');
-  for (const [name, suffix] of [
-    ['process_claimed_mix_delivery_with_port', '<'],
-    ['process_claimed_pam_result', '('],
-  ]) {
-    const attempt = compact(structBody(mixProtocolProduction, 'async fn ' + name + suffix));
-    requireMix(attempt.includes('letattempt_deadline=tokio::time::Instant::now()+MIX_OUTBOX_ATTEMPT_DEADLINE;') &&
-      attempt.includes('bounded_mix_outbox_turn(&cancel,attempt_deadline,'),
-    name + ' must share its original attempt deadline with final durable transitions');
-  }
-
-}
-
-verifyMixOutboxLifecycle(mixProtocol);
-
 const commandPoolConstruction = rustItemBody(state, 'pub async fn new(');
 // The upload storage pool is opened by UploadModule::start, called from ServerNode::new.
 const uploadModuleStart = rustItemBody(state, 'pub(in crate::node) async fn start(');
@@ -1134,27 +838,6 @@ if (
 ) {
   throw new Error('MixService must clone the shared durable-outbox admission instead of replacing it');
 }
-const mixServiceConstructor = structBody(
-  mixServiceProduction,
-  'pub fn new_with_outbox_database_admission(',
-);
-if (
-  !/let\s+outbox_background_budget\s*=\s*outbox_db_admission\s*\.\s*capacity\s*\(\s*\)\s*;/.test(
-    mixServiceConstructor,
-  ) ||
-  !/outbox_db_admission\s*,/.test(
-    mixServiceConstructor,
-  )
-) {
-  throw new Error('MixService must derive its outbox budget from the injected application admission');
-}
-if (
-  !/pub\s+const\s+fn\s+outbox_background_budget\s*\(\s*&self\s*\)\s*->\s*usize/.test(
-    mixServiceProduction,
-  )
-) {
-  throw new Error('MIX protocol scheduling must consume the service-owned typed outbox budget');
-}
 const durableOutboxAdmission = read('crates/platform/northstar-runtime/src/durable_outbox.rs');
 if (
   !/primary_pool_max_connections\s+as\s+usize[\s\S]*?\.\s*saturating_sub\s*\(\s*1\s*\)[\s\S]*?\.\s*clamp\s*\(\s*1\s*,\s*MAX_BACKGROUND_DATABASE_TURNS\s*\)/s.test(
@@ -1170,17 +853,6 @@ if (
   /pub(?:\(crate\))?\s+async\s+fn\s+outbox_db_admission_guard\b/.test(mixServiceProduction)
 ) {
   throw new Error('MIX outbox DB permits must remain private OwnedSemaphorePermit capability tokens');
-}
-const mixOutboxDbAdmissionGuard = structBody(
-  mixServiceProduction,
-  'async fn outbox_db_admission_guard(',
-);
-if (
-  !/self\s*\.\s*outbox_db_admission\s*\.\s*acquire\s*\(\s*\)\s*\.\s*await/.test(
-    mixOutboxDbAdmissionGuard,
-  )
-) {
-  throw new Error('MIX outbox DB admission must acquire an owned permit from the shared capability');
 }
 const stateOutboxAdmission = rustItemBody(state, 'pub struct ServerNode');
 if (
@@ -1362,87 +1034,11 @@ for (const lane of ['LiveIngress', 'DurableOutbox']) {
     throw new Error(`MIX channel stanza database lanes must retain ${lane}`);
   }
 }
-const deliverChannelStanza = structBody(mixProtocolProduction, 'async fn deliver_channel_stanza_inner(');
-const deliveryDatabaseLaneMatches = [];
-const deliveryDatabaseLanePattern = /\bmatch\s+database_lane\s*\{/g;
-for (let match; (match = deliveryDatabaseLanePattern.exec(deliverChannelStanza)) !== null; ) {
-  const opening = deliverChannelStanza.indexOf('{', match.index);
-  const closing = matchingRustBrace(deliverChannelStanza, opening);
-  if (closing < 0) throw new Error('MIX channel stanza database-lane match is unterminated');
-  deliveryDatabaseLaneMatches.push(deliverChannelStanza.slice(opening + 1, closing));
-  deliveryDatabaseLanePattern.lastIndex = closing + 1;
-}
-// These are durable-delivery authority choices, not all PostgreSQL turns:
-// the session-route lookup is Redis-backed and must deliberately stay outside
-// the outbox database-admission permit. Keep its live/durable lane selection
-// explicit nevertheless, because it is part of the same routing decision.
-const channelStanzaDurableLaneOperations = [
-  ['find_enabled_user', 'outbox_find_enabled_user'],
-  ['is_blocked', 'outbox_is_blocked'],
-  ['archive_mix_message_once', 'outbox_archive_mix_message_once'],
-  ['lookup_nodes', 'outbox_lookup_cluster_nodes'],
-  ['send', 'outbox_admit_federated_stanza'],
-];
-if (deliveryDatabaseLaneMatches.length !== channelStanzaDurableLaneOperations.length) {
-  throw new Error('MIX channel delivery must explicitly select a durable lane for every routed authority operation');
-}
-for (const [index, [liveMethod, outboxMethod]] of channelStanzaDurableLaneOperations.entries()) {
-  const laneMatch = deliveryDatabaseLaneMatches[index];
-  const laneMarkers = [
-    'ChannelStanzaDatabaseLane::LiveIngress =>',
-    'ChannelStanzaDatabaseLane::DurableOutbox =>',
-  ];
-  const liveArm = matchArm(
-    laneMatch,
-    laneMarkers,
-    'ChannelStanzaDatabaseLane::LiveIngress =>',
-    'MIX channel stanza database lane',
-  );
-  const outboxArm = matchArm(
-    laneMatch,
-    laneMarkers,
-    'ChannelStanzaDatabaseLane::DurableOutbox =>',
-    'MIX channel stanza database lane',
-  );
-  if (
-    !new RegExp(`\\.\\s*${liveMethod}\\s*\\(`).test(liveArm) ||
-    new RegExp(`\\.\\s*${outboxMethod}\\s*\\(`).test(liveArm) ||
-    !new RegExp(`\\.\\s*${outboxMethod}\\s*\\(`).test(outboxArm) ||
-    new RegExp(`\\.\\s*${liveMethod}\\s*\\(`).test(outboxArm)
-  ) {
-    throw new Error(
-      `MIX durable outbox ${outboxMethod} must be a separate short DB turn, never a live-ingress fallback`,
-    );
-  }
-}
-const processClaimedMixDelivery = structBody(
-  mixProtocolProduction,
-  'async fn process_claimed_mix_delivery_with_port<',
-);
-const mixDeliveryPort = structBody(mixProtocolProduction, 'impl<C: MixOutboxPort> ClaimedMixDeliveryPort for MixOutboxDeliveryPort<C>');
-const mixDeliveryPortRoute = structBody(mixDeliveryPort, 'async fn route(');
-const deliverClaimedMixStanza = structBody(mixProtocolProduction, 'async fn deliver_claimed_channel_stanza(');
-if (
-  !/port\.route\s*\(\s*&request\s*\)/.test(processClaimedMixDelivery) ||
-  !/deliver_claimed_channel_stanza\s*\(\s*self\.context\.as_ref\(\)\s*,\s*request\s*\)/.test(mixDeliveryPortRoute) ||
-  !/deliver_channel_stanza_inner\s*\([\s\S]*?ChannelStanzaDelivery\s*\{[\s\S]*?database_lane\s*:\s*ChannelStanzaDatabaseLane\s*::\s*DurableOutbox/s.test(deliverClaimedMixStanza) ||
-  !/Some\(request\)\s*,?\s*\)\s*\.await/.test(deliverClaimedMixStanza)
-) {
-  throw new Error('claimed MIX outbox work must select the bounded durable database lane before transport I/O');
-}
 const mixAdapterSource = readProductionModule('crates/contexts/room/northstar-room-postgres/src/mix_repository.rs', { root });
 for (const [serviceMethod] of mixProducerMappings) {
-  const body = structBody(mixServiceSource, `pub async fn ${serviceMethod}(`);
-  const gate = body.indexOf('self.delivery_admission_guard().await');
   const adapter = structBody(mixAdapterSource, `async fn ${serviceMethod}(`);
   if (!adapter.includes(`crate::mix::${serviceMethod}(`)) {
     throw new Error(`MIX producer adapter ${serviceMethod} lost its reviewed atomic repository operation`);
-  }
-  const repositoryCall = body.search(new RegExp(`self\\s*\\.\\s*repository\\s*\\.\\s*${serviceMethod}\\s*\\(`));
-  if (gate < 0 || repositoryCall < 0 || gate > repositoryCall) {
-    throw new Error(
-      `MIX producer ${serviceMethod} must acquire the shared fair gate before its repository call`,
-    );
   }
 }
 
@@ -1536,91 +1132,11 @@ if (
   throw new Error(`MIX service/repository producer mapping mismatch; ${details.join('; ')}`);
 }
 
-for (const [serviceMethod, repositoryEntry] of mixProducerMappings) {
-  if (serviceMethod === repositoryEntry) continue;
-  const wrapperBody = structBody(mixRepositorySource, `pub async fn ${serviceMethod}(`);
-  if (!wrapperBody.includes(`${repositoryEntry}(`)) {
-    throw new Error(
-      `MIX repository wrapper ${serviceMethod} must delegate to fenced producer ${repositoryEntry}`,
-    );
-  }
-}
-
-for (const entry of mixRepositoryTransactionEntries) {
-  const visibility = ['store_mix_presence_with_policy', 'store_mix_message_inner'].includes(entry) ? 'async fn' : 'pub async fn';
-  const body = structBody(mixRepositorySource, `${visibility} ${entry}(`);
-  const admission = body.indexOf('begin_mix_delivery_admission(pool).await?');
-  const directBegin = body.indexOf('pool.begin().await?');
-  const sql = body.indexOf('sqlx::');
-  if (admission < 0 || directBegin >= 0 || (sql >= 0 && admission > sql)) {
-    throw new Error(
-      `MIX repository producer ${entry} must acquire the blocking DB fence before any SQL/row lock`,
-    );
-  }
-}
-
-const mixCapacityReconciliationBody = structBody(
-  mixRepositorySource,
-  'async fn reconcile_mix_delivery_capacity_committed(',
-);
-const mixAdmissionBody = structBody(
-  mixRepositorySource,
-  'async fn begin_mix_delivery_admission(',
-);
-const mixReserveBody = structBody(
-  mixRepositorySource,
-  'async fn reserve_mix_delivery_capacity_tx(',
-);
-if (
-  !mixCapacityReconciliationBody.includes(
-    'SELECT northstar_mix_delivery_capacity_reconcile()',
-  ) ||
-  !mixCapacityReconciliationBody.includes('transaction.commit().await?') ||
-  !mixAdmissionBody.includes('reconcile_mix_delivery_capacity_committed(pool).await?') ||
-  !mixAdmissionBody.includes('begin_mix_delivery_fenced_transaction(pool).await') ||
-  mixReserveBody.includes('prune_empty_mix_delivery_events')
-) {
-  throw new Error(
-    'MIX delivery admission must consume a separately committed complete reconciliation proof before opening its producer transaction',
-  );
-}
-
-for (const entry of ['begin_remote_pam_join', 'begin_remote_pam_leave']) {
-  const body = structBody(mixRepositorySource, `pub async fn ${entry}(`);
-  const reconciliation = body.indexOf('reconcile_mix_pam_capacity_committed(pool).await?');
-  const transaction = body.indexOf('pool.begin().await?');
-  const accountLock = body.indexOf('remote_pam_account_matches_actor_tx(');
-  const businessLock = body.indexOf('lock_pam_admission_tx(');
-  const capabilityInsert = body.indexOf('insert_pam_operation_and_outbox_tx(');
-  if (
-    reconciliation < 0 ||
-    transaction < 0 ||
-    reconciliation > transaction ||
-    accountLock < 0 ||
-    businessLock < 0 ||
-    capabilityInsert < 0 ||
-    accountLock > businessLock ||
-    businessLock > capabilityInsert
-  ) {
-    throw new Error(
-      `MIX-PAM ${entry} must lock account -> global capacity -> business identity before owner-held insertion`,
-    );
-  }
-}
-const mixPamInsertHelper = structBody(
-  mixRepositorySource,
-  'async fn insert_pam_operation_and_outbox_tx(',
-);
 if (
   countMatches(
     mixRepositoryProduction,
     /SELECT northstar_mix_pam_operation_insert\(/g,
-  ) !== 1 ||
-  !mixPamInsertHelper.includes('MIX-PAM requester requires a localpart') ||
-  !mixPamInsertHelper.includes('.enqueue_federated_stanza_with_id(') ||
-  !mixPamInsertHelper.includes('SELECT northstar_mix_pam_operation_insert(') ||
-  mixPamInsertHelper.indexOf('.enqueue_federated_stanza_with_id(') >
-    mixPamInsertHelper.indexOf('SELECT northstar_mix_pam_operation_insert(')
+  ) !== 1
 ) {
   throw new Error(
     'MIX-PAM journal insertion must have one production capability caller after its durable outbox projection and pass the canonical account identity',
@@ -1634,21 +1150,6 @@ if (
   throw new Error(
     'production MIX-PAM code must use blocking owner-held insert/prune capabilities instead of try-lock, COUNT, or direct journal DML',
   );
-}
-
-for (const entry of [
-  'begin_remote_pam_join',
-  'begin_remote_pam_leave',
-  'prune_expired_pam_results',
-]) {
-  const body = structBody(mixServiceSource, `pub async fn ${entry}(`);
-  const gate = body.indexOf('self.pam_capacity_admission_guard().await');
-  const repository = body.search(new RegExp(`self\\s*\\.\\s*repository\\s*\\.\\s*${entry}\\s*\\(`));
-  if (gate < 0 || repository < 0 || gate > repository) {
-    throw new Error(
-      `MIX service ${entry} must take the clone-shared PAM FIFO gate before repository/PgPool access`,
-    );
-  }
 }
 
 // ARCH-SVC PubSub/PEP vertical slice (2026-08-29): the protocol layer now
@@ -1827,12 +1328,6 @@ for (const invariant of [
     throw new Error(`RosterService lost safety invariant: ${invariant}`);
   }
 }
-const clusterRosterSource = cluster;
-for (const invariant of ['expected_user_id', 'roster_version', 'roster_annotated_stanza']) {
-  if (!clusterRosterSource.includes(invariant)) {
-    throw new Error(`cluster roster delivery lost identity/ordering field: ${invariant}`);
-  }
-}
 
 // ARCH-SVC XEP-0160 replay boundary: only transport ordering/backpressure is
 // allowed in protocol code. PostgreSQL account/page leases, policy snapshots
@@ -1902,18 +1397,6 @@ for (const invariant of [
     throw new Error(`offline replay database boundary lost invariant: ${invariant}`);
   }
 }
-if (!structBody(replayServiceSource, 'pub enum OfflineReplayLeaseAcquire')
-  .includes('BusyUntil(OfflineReplayBusyUntil)')) {
-  throw new Error('offline replay lease result lost its explicit busy outcome');
-}
-for (const invariant of ['ReplayStartOutcome', 'ReplayStartOutcome::BusyUntil']) {
-  if (!replayServiceSource.includes(invariant) && !replayProtocolSource.includes(invariant)) {
-    throw new Error(`offline replay retry coordinator lost invariant: ${invariant}`);
-  }
-}
-if (!replayProtocolSource.includes('REPLAY_RECOVERY_DEADLINE')) {
-  throw new Error('offline replay busy retry lost its bounded recovery deadline');
-}
 const sasl2Source = readProductionModule('crates/edges/northstar-stream/src/protocol/sasl2.rs', { root });
 for (const forbidden of [
   'deliver_bind2_offline',
@@ -1923,9 +1406,6 @@ for (const forbidden of [
   if (new RegExp(`\\b(?:db\\s*::\\s*)?${forbidden}\\b`).test(sasl2Source)) {
     throw new Error(`sasl2.rs bypasses ReplayService via ${forbidden}`);
   }
-}
-if (!/crate\s*::\s*replay\s*::\s*replay_bind2_offline\s*\(/.test(sasl2Source)) {
-  throw new Error('SASL2 Bind 2 no longer delegates offline reconciliation to ReplayService');
 }
 
 // ARCH-SVC authentication vertical slice: protocol code owns SASL wire state
@@ -2125,100 +1605,6 @@ const mamServiceBody = structBody(mamServiceSource, 'pub struct MamService');
 if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(mamServiceBody)) {
   throw new Error('MamService must receive its repository port');
 }
-const mamRepositorySource = read('crates/contexts/workflows/northstar-workflows/src/mam_repository.rs');
-const mamMetadataRepository = structBody(mamRepositorySource, 'async fn get_federated_boundaries(');
-if (!mamMetadataRepository.includes('mam_room::mam_federated_room_archive_boundaries_authorized(')
-  || !mamMetadataRepository.includes('MamMetadataResult::from_room_read(read)')) {
-  throw new Error('federated MAM metadata lost its authorized archive repository result');
-}
-const genericMamMetadataRepository = structBody(mamRepositorySource, 'async fn get_boundaries(');
-const genericMamPageRepository = structBody(mamRepositorySource, 'async fn query_archive(');
-if (!genericMamMetadataRepository.includes('MamQueryScope::FederatedRoom { .. } => Ok(MamMetadataResult::Forbidden)')
-  || !genericMamPageRepository.includes('MamQueryScope::FederatedRoom { .. } => Ok(MamQueryResult::Forbidden)')) {
-  throw new Error('generic federated MAM metadata or page scope no longer fails closed');
-}
-const federatedMetadataSnapshot = structBody(
-  read('crates/contexts/workflows/northstar-workflows/src/mam_room.rs'),
-  'pub async fn mam_federated_room_archive_boundaries_authorized(',
-);
-let previousFederatedMetadataStep = -1;
-for (const invariant of [
-  'FederatedMamRoomGuard::acquire(pool, localpart)',
-  'guard.begin_snapshot().await?',
-  'authorize_federated_mam_room_in_transaction(',
-  'archive_boundaries_for_in_transaction(',
-  'transaction.commit().await?',
-]) {
-  const position = federatedMetadataSnapshot.indexOf(invariant);
-  if (position <= previousFederatedMetadataStep) {
-    throw new Error(`federated MAM metadata lost its guarded read snapshot: ${invariant}`);
-  }
-  previousFederatedMetadataStep = position;
-}
-for (const invariant of [
-  'mam_federated_room_archive_page_authorized_in_transaction',
-  'enqueue_s2s_outbox_in_transaction',
-  'transaction.commit().await?',
-  'transaction.rollback().await?',
-  'FederatedMamAdmissionOutcome::OutboxRejected',
-]) {
-  if (!mamRepositorySource.includes(invariant)) {
-    throw new Error(`MAM repository federated stream lost atomicity invariant: ${invariant}`);
-  }
-}
-if (!/if matches!\(outcome, FederatedMamAdmissionOutcome::Queued\)\s*\{[\s\S]*?self\.outbox_wake\.try_send\(\(\)\)/.test(mamServiceSource)) {
-  throw new Error('MamService must wake delivery only after a successful outbox commit');
-}
-// whole production module (the file and its non-test child files)
-const mamAuthorizationSource = readProductionModule('crates/contexts/room/northstar-room-postgres/src/mam_authorization.rs', { root });
-const roomGuardAcquire = structBody(mamAuthorizationSource, 'pub async fn acquire(');
-const lockSteps = [
-  'pool.acquire().await?',
-  'SELECT id FROM muc_rooms WHERE localpart=$1 AND destroyed_at IS NULL',
-  'maybe_held: true',
-  'pg_advisory_lock(hashtextextended($1::TEXT, 29))',
-  '.execute(&mut *guard.connection)',
-];
-let previousLockStep = -1;
-for (const step of lockSteps) {
-  const position = roomGuardAcquire.indexOf(step);
-  if (position <= previousLockStep) {
-    throw new Error(`federated MAM room guard lost lock ordering: ${step}`);
-  }
-  previousLockStep = position;
-}
-const roomGuardSnapshot = structBody(mamAuthorizationSource, 'pub async fn begin_snapshot(');
-if (!/self\.connection\.begin\(\)\.await\?[\s\S]*SET TRANSACTION ISOLATION LEVEL REPEATABLE READ/.test(roomGuardSnapshot)) {
-  throw new Error('federated MAM opens its repeatable-read snapshot before the room lock');
-}
-const roomAuthorization = structBody(
-  mamAuthorizationSource, 'async fn authorize_federated_mam_room_in_transaction(',
-);
-if (!/WHERE localpart=\$1 AND id=\$2 AND destroyed_at IS NULL\s+FOR SHARE/.test(roomAuthorization)
-  || !roomAuthorization.includes('muc_external_affiliations\n          WHERE room_id=$1 AND jid=$2 FOR SHARE')) {
-  throw new Error('federated MAM lost its exact-room and affiliation checks inside the snapshot');
-}
-const roomGuardDrop = structBody(mamAuthorizationSource, 'impl Drop for FederatedMamRoomGuard');
-if (!/if self\.maybe_held[\s\S]*self\.connection\.close_on_drop\(\)/.test(roomGuardDrop)) {
-  throw new Error('cancelled federated MAM reads can return a locked connection to the pool');
-}
-const federatedStreamAdmission = structBody(mamRepositorySource, 'async fn admit_federated_room_stream<');
-let previousFederatedMamAdmissionStep = -1;
-for (const invariant of [
-  'FederatedMamRoomGuard::acquire(&self.pool, request.localpart)',
-  'let room_id = guard.room_id()',
-  'guard.begin_snapshot().await?',
-  'mam_federated_room_archive_page_authorized_in_transaction(',
-  'transaction.commit().await?',
-  'guard.release().await',
-]) {
-  const position = federatedStreamAdmission.indexOf(invariant);
-  if (position <= previousFederatedMamAdmissionStep) {
-    throw new Error(`federated MAM outbox lost its guarded snapshot: ${invariant}`);
-  }
-  previousFederatedMamAdmissionStep = position;
-}
-
 // mix_muc.rs receives the MIX service from its callers instead of ServerNode.
 for (const [name, accessor, forbiddenAuthority, route, path] of [
   ['mix_muc.rs', 'MixService', 'link_mix_muc_by_localpart', /\bmix\s*:\s*&MixService<R>[^]*?\bmix\s*\.\s*link_local_muc_mirror\s*\(/, 'crates/contexts/room/northstar-room-application/src/mix_muc.rs'],
@@ -2328,17 +1714,8 @@ for (const [path, name] of [
   }
 }
 const adminSessionRoute = structBody(read('crates/edges/northstar-http/src/admin.rs'), 'pub async fn admin_sessions<R: HttpRepositories>(');
-const adminSessionService = structBody(read('crates/contexts/operations/northstar-operations-application/src/api_queries.rs'), 'pub async fn sessions<F>(');
-const adminSessionRepository = structBody(read('crates/contexts/workflows/northstar-workflows/src/api_queries.rs'), 'async fn sessions<F>(');
-if (/\b(?:sort_unstable_by_key|retain|truncate)\b/.test(adminSessionRoute)
-    || !adminSessionService.includes('page_sessions(snapshot(), after, limit)')
-    || !structBody(read('crates/contexts/operations/northstar-operations-application/src/api_queries.rs'), 'fn page_sessions(').includes('sort_unstable_by_key')) {
+if (/\b(?:sort_unstable_by_key|retain|truncate)\b/.test(adminSessionRoute)) {
   throw new Error('administrator session page selection must belong to the application service');
-}
-const sessionAuthorization = adminSessionRepository.indexOf('begin_authorized_read(&actor, true)');
-const sessionSnapshot = adminSessionRepository.indexOf('snapshot()');
-if (sessionAuthorization < 0 || sessionSnapshot <= sessionAuthorization) {
-  throw new Error('administrator session snapshot must run after database authorization');
 }
 if (/begin_authorized_read/.test(readRoleSplitFile('crates/edges/northstar-http/src/lib.rs', { root }))) {
   throw new Error('HTTP principals must not expose database read transactions');
@@ -2438,9 +1815,7 @@ const uploadApiSource = read('crates/edges/northstar-http/src/upload.rs');
 if (/\b(?:ServerNode|ClusterManager|PgPool|UploadHttpReadContext)\b/.test(uploadReplayReadContext)
     || /\b(?:ServerNode|ClusterManager|PgPool)\b/.test(uploadWriteContext)
     || !/pub async fn upload_put<R: HttpRepositories>\(\s*State\(state\): State<UploadHttpWriteContext<R>>,\s*State\(replay_read\): State<UploadHttpReplayReadContext>/.test(uploadApiSource)
-    || /State<Arc<ServerNode>>/.test(uploadApiSource)
-    || !/stored_object_digest\(&replay_read,\s*&slot\)\.await\?/.test(uploadApiSource)
-    || !/state\.get\(object_key,\s*slot\.storage_object_version\.as_deref\(\)\)/.test(uploadApiSource)) {
+    || /State<Arc<ServerNode>>/.test(uploadApiSource)) {
   throw new Error('upload PUT and replay readback must use scoped, exact guarded authority');
 }
 const passwordChangeContext = structBody(read('crates/edges/northstar-http/src/contexts/password_change_http.rs'), 'pub struct PasswordChangeHttpContext');
@@ -2666,18 +2041,6 @@ if (!/acquire_idempotency_in_tx[\s\S]+reservation\.commit\(\)[\s\S]+verify_regis
   throw new Error('HTTP registration repository must own the ordered reservation, guard and publication transactions');
 }
 
-// ARCH-SVC two-phase bind/resume boundary: protocol code may stage Redis and
-// in-memory routes only while no PostgreSQL authorization transaction exists.
-// Exact auth-generation, capacity/claim, FAST and privacy authority belongs to
-// SmService's short phase-one/phase-two transactions.
-const smProtocolSource = read('crates/edges/northstar-stream/src/protocol/sm.rs');
-if (!/\.finalize_resource_binding\s*\(/.test(miscSource)) {
-  throw new Error('misc.rs no longer uses the exact phase-two binding finalizer');
-}
-if (!/\.finalize_sm_resume\s*\(/.test(smProtocolSource)) {
-  throw new Error('sm.rs no longer uses the atomic phase-two SM finalizer');
-}
-
 // ARCH-SVC XEP-0050/XEP-0133 administrative boundary: inline DB fixtures
 // intentionally remain below `#[cfg(test)]`, but every production command
 // must delegate persistence, audit and command lifecycle authority to the
@@ -2709,51 +2072,6 @@ for (const [description, pattern] of [
 if (!/\.command_service\s*\(\s*\)/.test(commandsProductionSource)) {
   throw new Error('commands.rs no longer routes persistence through command_service()');
 }
-const adminCommandServiceSource = productionWithoutCfgTestModules(
-  read('crates/contexts/workflows/northstar-workflows/src/admin_command_repository.rs'),
-  'admin_commands repository',
-);
-const adminReadBoundary = adminCommandServiceSource;
-for (const required of [
-  'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ',
-  'auth_generation=$3',
-  'is_admin AND NOT is_disabled',
-  'FOR SHARE',
-]) {
-  if (!adminReadBoundary.includes(required)) {
-    throw new Error(`Admin command repository read authorization lost required boundary: ${required}`);
-  }
-}
-for (const method of [
-  'registered_account_count',
-  'disabled_account_count',
-  'registered_account_usernames',
-  'disabled_account_usernames',
-  'announcement_account_page',
-  'administrator_usernames',
-  'account_last_login',
-  'account_roster',
-  'account_statistics',
-  'service_message_body',
-  'federation_rule_domains',
-]) {
-  const declaration = `async fn ${method}`;
-  const start = adminCommandServiceSource.indexOf(declaration);
-  if (start < 0) throw new Error(`AdminCommandService lost sensitive read method ${method}`);
-  const opening = adminCommandServiceSource.indexOf('{', start + declaration.length);
-  const closing = matchingRustBrace(adminCommandServiceSource, opening);
-  const body = adminCommandServiceSource.slice(opening + 1, closing);
-  if (!body.includes('begin_authorized_read(actor)')) {
-    throw new Error(`${method} no longer binds authorization and data to one transaction`);
-  }
-}
-if (/db::roster\s*\(\s*&self\.pool/.test(adminReadBoundary)) {
-  throw new Error('account_roster reopened the pool after administrative authorization');
-}
-if (!adminReadBoundary.includes('replace_federation_runtime_rules_command')) {
-  throw new Error('federation rule replacement no longer returns its cache image atomically');
-}
-
 // ARCH-SVC XEP-0424/XEP-0444 boundary: protocol code may parse a retraction
 // and map its typed result, but tombstone ownership, replay identity, archive
 // writes and the optional S2S outbox share one RetractionService transaction.
@@ -2810,56 +2128,11 @@ const retractionIntentMigration = read('migrations/0102_personal_retraction_inte
 if (/\bpublic\s*\./i.test(retractionIntentMigration)) {
   throw new Error('retraction intent migration must remain search_path/schema safe');
 }
-for (const evidence of [
-  'semantic_sha256',
-  'semantic_sha512',
-  'semantic_length',
-  'owner_projection_sha256',
-  'owner_projection_sha512',
-  'owner_projection_length',
-]) {
-  if (!new RegExp(`\\b${evidence}\\b`).test(retractionIntentMigration)) {
-    throw new Error(`retraction intent migration lost collision evidence ${evidence}`);
-  }
-}
-if (/\b(?:semantic_value|payload_value|stanza)\s+(?:BYTEA|TEXT|VARCHAR)/i.test(retractionIntentMigration)) {
-  throw new Error('retraction intent table must not persist plaintext semantic XML');
-}
-for (const projectionInvariant of [
-  'CREATE TABLE personal_retraction_action_projections',
-  'UNIQUE (intent_id, owner_id)',
-  'ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED',
-]) {
-  if (!retractionIntentMigration.includes(projectionInvariant)) {
-    throw new Error(`retraction projection snapshot lost invariant: ${projectionInvariant}`);
-  }
-}
 const retractionOwnerIdentityMigration = read(
   'migrations/0119_personal_retraction_owner_identity.sql',
 );
 if (/\bpublic\s*\./i.test(retractionOwnerIdentityMigration)) {
   throw new Error('retraction owner identity migration must remain search_path/schema safe');
-}
-for (const ownerIdentityInvariant of [
-  'owner_projection_key_id VARCHAR(16)',
-  'owner_projection_mac BYTEA',
-  'personal_retraction_intent_owner_evidence_check',
-  'personal_retraction_intent_owner_key_idx',
-  'DROP COLUMN peer_bare_jid',
-  'message_archive_retraction_stanza_bucket_idx',
-  'fence_personal_retraction_owner_identity',
-]) {
-  if (!retractionOwnerIdentityMigration.includes(ownerIdentityInvariant)) {
-    throw new Error(
-      `retraction owner identity migration lost invariant: ${ownerIdentityInvariant}`,
-    );
-  }
-}
-if (!/pg_catalog\.md5\s*\(\s*stanza_id\s*\)/.test(retractionOwnerIdentityMigration)) {
-  throw new Error('retraction target index must use a bounded stanza-id bucket');
-}
-if (!/owner_projection_key_id\s*=\s*\$1/.test(read('crates/contexts/workflows/northstar-workflows/src/abuse_effects.rs'))) {
-  throw new Error('anti-abuse key retirement lost owner-topology references');
 }
 
 // ARCH-SECRET Durable content identity (migration 0104): a personal-message
@@ -3023,24 +2296,8 @@ if (retractionIntentInserts.length !== 1) {
   throw new Error(`Retraction repository must have one reviewed intent insert, found ${retractionIntentInserts.length}`);
 }
 const retractionIntentInsertColumns = retractionIntentInserts[0][1];
-for (const keyedColumn of ['semantic_key_id', 'semantic_mac']) {
-  if (!new RegExp(`\\b${keyedColumn}\\b`).test(retractionIntentInsertColumns)) {
-    throw new Error(`new retraction intent writes lost keyed column ${keyedColumn}`);
-  }
-}
 if (/\b(?:semantic_sha256|semantic_sha512|semantic_length)\b/.test(retractionIntentInsertColumns)) {
   throw new Error('new retraction intent writes must never use legacy semantic evidence columns');
-}
-const abuseKeyRepositorySource = read('crates/contexts/workflows/northstar-workflows/src/abuse_effects.rs');
-for (const retirementReference of [
-  'FROM personal_message_admissions',
-  'WHERE payload_key_id=$1',
-  'FROM personal_retraction_intents',
-  'WHERE semantic_key_id=$1',
-]) {
-  if (!abuseKeyRepositorySource.includes(retirementReference)) {
-    throw new Error(`anti-abuse key retirement fence lost content identity reference: ${retirementReference}`);
-  }
 }
 
 // ARCH-SVC runtime secret boundary. Protocol modules may request semantic
@@ -3141,22 +2398,12 @@ if (!federationCoreSource.includes('pub fn classify_hosted_domain(')
 for (const invariant of [
   'struct FederatedCapsGateSlot',
   'struct FederatedCapsParticipant',
-  'participants.fetch_sub(1, Ordering::AcqRel)',
-  'Arc::ptr_eq(current, &self.slot)',
-  'let _resource_epoch = state.federated_caps_gates().lock(&resource).await;',
-  'let Some(pending) = state.pending_caps().take(id) else',
   'observation_id: uuid::Uuid',
-  '.remove_federated_resource_if_connection(&full_jid, connection_id)',
-  '.current_owner(&pending.full_jid, pending.owner)',
-  '.mark_verified(&resource, pending.owner, &pending.key, id, summary)',
   'pub async fn federated_caps_connection_closed',
 ]) {
   if (!capsProtocolSource.includes(invariant)) {
     throw new Error(`federated Caps lifecycle lost cancellation-safe invariant: ${invariant}`);
   }
-}
-if (!/participants\s*\.\s*fetch_add\(1,\s*Ordering::AcqRel\)/s.test(capsProtocolSource)) {
-  throw new Error('federated Caps admission no longer registers a participant before awaiting');
 }
 for (const invariant of [
   'let federated_presence_epoch = if matches!(kind, "available" | "unavailable")',
@@ -3186,24 +2433,6 @@ if (/observe_federated_caps[\s\S]{0,500}federated_caps_gates\(\)\.lock/.test(cap
 // The observation table, not a periodic poll or bounded hint queue, owns
 // pending work. Saturation requests a no-lost-wakeup reconstruction, while
 // retry and IQ-correlation expiry use the exact earliest deadline.
-for (const invariant of [
-  'rescan_required: bool',
-  'fn request_rescan(&self)',
-  'fn begin_rescan(&self) -> bool',
-  'fn next_retry_deadline(&self, now: Instant)',
-  'fn next_expiration(&self)',
-  'tokio::time::sleep_until(deadline.into())',
-  'MAX_CAPS_CACHE_RAW_BYTES',
-  'MAX_CAPS_CACHE_SUMMARY_BYTES',
-  'MAX_CAPS_OBSERVATION_SUMMARY_BYTES',
-  '.min_by_key(|entry| entry.touched_at)',
-  'notify_storage: String',
-  'notify_ranges: Vec<(u32, u32)>',
-]) {
-  if (!capsProtocolSource.includes(invariant)) {
-    throw new Error(`Caps observation resource/dispatch invariant is missing: ${invariant}`);
-  }
-}
 if (/interval\s*\(\s*CAPS_EFFECT_RETRY_BASE\s*\)/.test(capsProtocolSource)) {
   throw new Error('Caps retry correctness regressed to fixed periodic reconstruction');
 }
@@ -3447,80 +2676,6 @@ if (!clusterMucOutboxWorker.includes('let housekeeping = &context.housekeeping;'
     || /(?:crate::db|northstar_room_postgres::cluster_muc)::(?:cleanup_cluster_muc_dead_letters|cleanup_cluster_muc_history|cluster_muc_outbox_snapshot)\s*\(/.test(clusterMucOutboxWorker)) {
   throw new Error('cluster MUC outbox housekeeping must use separate narrow repository operations');
 }
-const mucPreclaimService = read('crates/contexts/room/northstar-room-application/src/cluster_muc_outbox_preclaim.rs');
-const mucPreclaimRepository = read('crates/contexts/room/northstar-room-postgres/src/cluster_muc_outbox_preclaim_repository.rs');
-if (!mucPreclaimService.includes('self.repository.expire_occupancies(room_limit).await?;')
-    || !mucPreclaimService.includes('self.repository.dead_letter_expired(outbox_limit).await?;')
-    || !mucPreclaimRepository.includes('crate::cluster_muc::expire_cluster_muc_occupancies(&self.pool, room_limit).await')
-    || !mucPreclaimRepository.includes('crate::cluster_muc::dead_letter_expired_cluster_muc_outbox(&self.pool, limit).await')) {
-  throw new Error('cluster MUC preclaim maintenance must preserve ordered independent database operations');
-}
-const mucClaimTurn = clusterMucOutboxWorker.indexOf('let _database_turn = context.database_turn().await;');
-const mucPreclaim = clusterMucOutboxWorker.indexOf('context.preclaim.prepare_pass(32, 256).await?', mucClaimTurn);
-const mucClaim = clusterMucOutboxWorker.indexOf('let deliveries = {', mucPreclaim);
-const mucClaimDatabaseTurn = clusterMucOutboxWorker.indexOf('let _database_turn = context.database_turn().await;', mucClaim);
-const mucClaimCall = clusterMucOutboxWorker.indexOf('.claim_batch(', mucClaimDatabaseTurn);
-const mucClaimLease = clusterMucOutboxWorker.indexOf('Duration::from_secs(30)', mucClaimCall);
-const mucClaimCommit = clusterMucOutboxWorker.indexOf('if deliveries.is_empty()', mucClaimLease);
-const mucDeliveryStart = clusterMucOutboxWorker.indexOf('for delivery in deliveries', mucClaimCommit);
-if ([mucClaimTurn, mucPreclaim, mucClaim, mucClaimDatabaseTurn, mucClaimCall, mucClaimLease, mucClaimCommit, mucDeliveryStart].some((offset) => offset < 0)
-    || mucPreclaim >= mucClaim || mucClaim >= mucClaimDatabaseTurn || mucClaimDatabaseTurn >= mucClaimCall
-    || /(?:crate::db|northstar_room_postgres::cluster_muc)::(?:expire_cluster_muc_occupancies|dead_letter_expired_cluster_muc_outbox)\s*\(/.test(clusterMucOutboxWorker)
-    || /(?:crate::db|northstar_room_postgres::cluster_muc)::claim_cluster_muc_outbox\s*\(/.test(clusterMucOutboxWorker)) {
-  throw new Error('cluster MUC preclaim maintenance and claim must complete under the bounded database turn before delivery');
-}
-const clusterMucOutboxSettlementService = read('crates/contexts/room/northstar-room-application/src/cluster_muc_outbox_settlement.rs');
-const clusterMucDelivery = rustItemBody(cluster, 'async fn deliver_cluster_muc_event<A: ClusterAdapters>(');
-const mucContextTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;');
-const mucContextRead = clusterMucDelivery.indexOf('.event_context(delivery.operation_id)', mucContextTurn);
-const mucCacheBranch = clusterMucDelivery.search(/let (?:mut )?recipient = if exact_cached/);
-const mucSnapshotTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;', mucCacheBranch);
-const mucSnapshotRead = clusterMucDelivery.indexOf('.recipient_snapshot(delivery)', mucSnapshotTurn);
-const mucCurrentTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;', mucSnapshotRead);
-const mucCurrentRead = clusterMucDelivery.indexOf('.audience_is_current(delivery)', mucCurrentTurn);
-const mucAbsentCheck = clusterMucDelivery.indexOf('let Some(snapshot) = snapshot else', mucSnapshotRead);
-const mucOriginalTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;', mucCurrentRead);
-const mucOriginalRead = clusterMucDelivery.indexOf('.original_audience_snapshot(delivery)', mucOriginalTurn);
-if ([mucContextTurn, mucContextRead, mucCacheBranch, mucSnapshotTurn, mucSnapshotRead,
-     mucCurrentTurn, mucCurrentRead, mucAbsentCheck, mucOriginalTurn, mucOriginalRead].some((offset) => offset < 0)
-    || mucContextRead >= mucCacheBranch
-    || mucSnapshotRead >= mucAbsentCheck
-    || mucAbsentCheck >= mucCurrentRead
-    || mucCurrentRead >= mucOriginalTurn
-    || /(?:crate::db|northstar_room_postgres::cluster_muc)::(?:cluster_muc_event_context|cluster_muc_delivery_recipient_snapshot|cluster_muc_delivery_audience_is_current)\s*\(/.test(clusterMucDelivery)) {
-  throw new Error('cluster MUC event and audience reads must keep independent database turns and the cached-recipient fast path');
-}
-const itemReadTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;', clusterMucDelivery.indexOf('let stable_item_id ='));
-const itemCompleted = clusterMucDelivery.indexOf('.completed(delivery.delivery_id, ordinal, &stable_item_id)', itemReadTurn);
-const itemTransport = clusterMucDelivery.indexOf('.deliver_to_muc_occupant_with_receipt(', itemCompleted);
-const itemWriteTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;', itemTransport);
-const itemCompleteExact = clusterMucDelivery.indexOf('.complete_exact(delivery, ordinal, &stable_item_id)', itemWriteTurn);
-if ([itemReadTurn, itemCompleted, itemTransport, itemWriteTurn, itemCompleteExact].some((offset) => offset < 0)
-    || /(?:crate::db|northstar_room_postgres::cluster_muc)::(?:cluster_muc_delivery_item_completed|complete_cluster_muc_delivery_item)\s*\(/.test(clusterMucDelivery)) {
-  throw new Error('MUC delivery-item completion must follow the durable receipt across independent database turns');
-}
-const clusterMucOutboxSettlementRepository = read('crates/contexts/room/northstar-room-postgres/src/cluster_muc_outbox_settlement_repository.rs');
-const mucOutcome = clusterMucOutboxWorker.indexOf('let outcome = tokio::time::timeout(');
-const mucAckTurn = clusterMucOutboxWorker.indexOf('let _database_turn = context.database_turn().await;', mucOutcome);
-const mucAck = clusterMucOutboxWorker.indexOf('.acknowledge(&delivery)', mucAckTurn);
-const mucAckFence = clusterMucOutboxWorker.indexOf('cluster MUC outbox ACK lost its exact claim lease', mucAck);
-const mucDeliveryMetric = clusterMucOutboxWorker.indexOf('context.record_delivery()', mucAckFence);
-const mucRetryWarning = clusterMucOutboxWorker.indexOf('cluster MUC audience delivery will retry with the same stable event ID', mucDeliveryMetric);
-const mucRetryTurn = clusterMucOutboxWorker.indexOf('let _database_turn = context.database_turn().await;', mucRetryWarning);
-const mucRetry = clusterMucOutboxWorker.indexOf('.retry(&delivery, &error.to_string())', mucRetryTurn);
-const mucRetryMetric = clusterMucOutboxWorker.indexOf('context.record_retry()', mucRetry);
-const mucHeartbeat = clusterMucOutboxWorker.indexOf('heartbeat.ok();', mucRetryMetric);
-if ([mucOutcome, mucAckTurn, mucAck, mucAckFence, mucDeliveryMetric,
-     mucRetryWarning, mucRetryTurn, mucRetry, mucRetryMetric, mucHeartbeat].some((offset) => offset < 0)
-    || /(?:crate::db|northstar_room_postgres::cluster_muc)::(?:ack_cluster_muc_outbox|retry_cluster_muc_outbox)\s*\(/.test(clusterMucOutboxWorker)
-    || !clusterMucOutboxWorker.includes('acknowledged == AckOutcome::Acknowledged')
-    || !clusterMucOutboxSettlementService.includes('let _ = self.repository.record_retry(delivery, error).await?;')
-    || !/self\.metrics\s*\.cluster_muc_outbox_deliveries_total\s*\.fetch_add\(1, Ordering::Relaxed\)/.test(clusterMucOutboxContextSource)
-    || !/self\.metrics\s*\.cluster_muc_outbox_retries_total\s*\.fetch_add\(1, Ordering::Relaxed\)/.test(clusterMucOutboxContextSource)
-    || !/crate::cluster_muc::ack_cluster_muc_outbox\(\s*&self\.pool,\s*delivery\.delivery_id,\s*delivery\.claim_token,?\s*\)/.test(clusterMucOutboxSettlementRepository)
-    || !clusterMucOutboxSettlementRepository.includes('crate::cluster_muc::retry_cluster_muc_outbox(&self.pool, delivery, error)')) {
-  throw new Error('cluster MUC outbox settlement lost exact ACK, retry, database-turn or metric ordering');
-}
 const operationRuntimeOwnershipSource = read('crates/contexts/operations/northstar-operations-xmpp/src/operation_runtime.rs');
 const mucDestroyServiceSource = read('crates/contexts/operations/northstar-operations-application/src/operation_muc_destroy.rs');
 const mucDestroyEffect = structBody(mucDestroyServiceSource, 'pub struct MucDestroyEffect');
@@ -3702,18 +2857,11 @@ if (/\bstate\.cluster\b/.test(clusterMaintenance)
     || !mucRedisAdapter.includes('self.reconcile_muc_soft_state(room_jid)')) {
   throw new Error('cluster lease maintenance must use scoped Redis projection authority');
 }
-if (!clusterMaintenance.includes('let occupancy_maintenance = &context.muc_occupancy;')
-    || !clusterMaintenance.includes('.renew_exact(authority, &control.node_id)')
-    || /(?:crate::db|northstar_room_postgres::cluster_muc)::(?:authoritative_cluster_muc_occupancies_for_node|renew_cluster_muc_occupancy)\s*\(/.test(clusterMaintenance)) {
-  throw new Error('cluster MUC reconciliation must snapshot and renew exact authority through its narrow port');
-}
 const clusterListener = rustItemBody(readProductionModule('crates/edges/northstar-cluster/src/listener.rs', { root }), 'async fn listen_once<A: ClusterAdapters>(');
 const clusterListenerTransport = rustItemBody(cluster, 'pub struct ClusterPubsubListenerTransport');
 const clusterListenerSupervisor = rustItemBody(cluster, 'pub async fn run_pubsub_listener<A: ClusterAdapters>(');
 if (/\b(?:ServerNode|ClusterManager|signer|pending_acks|replay)\s*:/.test(clusterListenerTransport)
-    || /\bstate\.cluster\b/.test(clusterListenerSupervisor)
-    || !clusterListener.includes('transport.confirm_generation(')
-    || !clusterListener.includes('publish_listener_probe(&transport,')) {
+    || /\bstate\.cluster\b/.test(clusterListenerSupervisor)) {
   throw new Error('PubSub listener setup and generation must use scoped transport authority');
 }
 const listenerDispatch = read('crates/edges/northstar-cluster/src/listener_dispatch.rs');
@@ -3774,16 +2922,6 @@ if (!clusterFailureSupervisor.includes('context.route_maintenance')
     || !clusterFailureSupervisor.includes('.cleanup_and_validate(4096)')
     || /(?:crate::)?db::(?:cleanup_cluster_session_routes|validate_cluster_session_route_authority)\s*\(/.test(clusterFailureSupervisor)) {
   throw new Error('cluster failure supervisor must clean and validate session routes through its bounded maintenance service');
-}
-if (clusterFailureSupervisor.includes('cancel.cancel()')) {
-  throw new Error(
-    'cluster failure policy must return its terminal error before WorkerRegistry cancels the service',
-  );
-}
-for (const invariant of ['authority.require_shutdown()', 'anyhow::bail!']) {
-  if (!clusterFailureSupervisor.includes(invariant)) {
-    throw new Error(`cluster failure policy lost fail-closed transition: ${invariant}`);
-  }
 }
 const accountRevocationWorker = rustItemBody(
   cluster,

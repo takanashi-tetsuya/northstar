@@ -11,6 +11,10 @@ use std::{future::Future, time::Duration};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+/// These events moved here from the server binary and keep its log target: operators and the runtime
+/// harnesses select them with `RUST_LOG=northstar_server=info` and wait for "shutdown complete".
+const PROCESS_LOG_TARGET: &str = "northstar_server";
+
 /// What the process shutdown needs from contexts the runtime cannot name.
 pub trait ProcessShutdownPorts {
     /// Built when called (on the graceful path only) and polled inside the notification window.
@@ -40,7 +44,7 @@ pub async fn supervise_process_shutdown<P: ProcessShutdownPorts, S: Future<Outpu
             false
         },
         _ = shutdown_signal => {
-            tracing::info!("shutdown signal received; stopping listeners and draining HTTP requests");
+            tracing::info!(target: PROCESS_LOG_TARGET, "shutdown signal received; stopping listeners and draining HTTP requests");
             true
         },
         result = service_tasks.join_next() => {
@@ -63,7 +67,7 @@ pub async fn supervise_process_shutdown<P: ProcessShutdownPorts, S: Future<Outpu
         .await
         {
             Ok(Some(notified_muc_occupants)) if notified_muc_occupants > 0 => {
-                tracing::info!(notified_muc_occupants, "confirmed XEP-0045 shutdown notification transport writes or BOSH response acknowledgements");
+                tracing::info!(target: PROCESS_LOG_TARGET, notified_muc_occupants, "confirmed XEP-0045 shutdown notification transport writes or BOSH response acknowledgements");
             }
             Ok(_) => {}
             Err(error) => {
@@ -83,10 +87,12 @@ pub async fn supervise_process_shutdown<P: ProcessShutdownPorts, S: Future<Outpu
     {
         Some(Ok(())) => {}
         Some(Err(error)) => tracing::warn!(
+            target: PROCESS_LOG_TARGET,
             ?error,
             "could not audit the final cluster node-instance lease release"
         ),
         None => tracing::error!(
+            target: PROCESS_LOG_TARGET,
             "signed cluster publications did not drain; leaving the instance fenced until its database lease expires"
         ),
     }
@@ -97,21 +103,22 @@ pub async fn supervise_process_shutdown<P: ProcessShutdownPorts, S: Future<Outpu
     );
     if !worker_report.is_clean() {
         let error = anyhow::anyhow!("background worker shutdown was incomplete: {worker_report:?}");
-        tracing::error!(?error);
+        tracing::error!(target: PROCESS_LOG_TARGET, ?error);
         shutdown_error.get_or_insert(error);
     }
     if service_report.aborted > 0 || !service_report.failures.is_empty() {
         let error = anyhow::anyhow!("listener shutdown was incomplete: {service_report:?}");
-        tracing::error!(?error);
+        tracing::error!(target: PROCESS_LOG_TARGET, ?error);
         shutdown_error.get_or_insert(error);
     }
     if connection_report.remaining > 0 {
         let error =
             anyhow::anyhow!("connection actor shutdown was incomplete: {connection_report:?}");
-        tracing::error!(?error);
+        tracing::error!(target: PROCESS_LOG_TARGET, ?error);
         shutdown_error.get_or_insert(error);
     }
     tracing::info!(
+        target: PROCESS_LOG_TARGET,
         worker_supervisors_joined = worker_report.joined,
         service_tasks_joined = service_report.joined,
         connection_actors_aborted = connection_report.aborted,
@@ -140,7 +147,7 @@ where
         ShutdownNotificationWindow::Cancelled => Ok(None),
         ShutdownNotificationWindow::Confirmed(confirmed) => Ok(Some(confirmed)),
         ShutdownNotificationWindow::Expired => {
-            tracing::warn!("MUC shutdown notification window expired; unconfirmed endpoints will close without a write guarantee");
+            tracing::warn!(target: PROCESS_LOG_TARGET, "MUC shutdown notification window expired; unconfirmed endpoints will close without a write guarantee");
             Ok(None)
         }
     }

@@ -307,7 +307,9 @@ async fn release_outcomes_do_not_change_the_result() {
         let mut tasks = JoinSet::new();
         let logs = LogBuffer::default();
         let captured = logs.clone();
+        // The harnesses' filter: every process shutdown event must pass it.
         let subscriber = tracing_subscriber::fmt()
+            .with_env_filter("northstar_server=info")
             .without_time()
             .with_ansi(false)
             .with_writer(move || captured.clone())

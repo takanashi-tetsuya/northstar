@@ -1463,6 +1463,12 @@ fn policy_preserves_transport_specific_inline_auth_budget() {
     }
 }
 
+#[test]
+fn frame_budget_is_five_seconds_and_inline_authentication_eight() {
+    assert_eq!(FRAME_BUDGET, Duration::from_secs(5));
+    assert_eq!(INLINE_AUTH_BUDGET, Duration::from_secs(8));
+}
+
 #[tokio::test]
 async fn deferred_publication_retains_origin_after_later_bosh_frame() {
     let mut executions = SessionExecutions::default();

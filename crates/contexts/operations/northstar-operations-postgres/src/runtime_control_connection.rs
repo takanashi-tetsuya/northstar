@@ -132,6 +132,18 @@ mod tests {
         assert!(runtime_control_connect_options("not a database URL").is_err());
     }
 
+    #[test]
+    fn startup_admission_allows_three_second_handshakes_within_fifteen_seconds() {
+        assert_eq!(
+            RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET,
+            Duration::from_secs(3)
+        );
+        assert_eq!(
+            RUNTIME_CONTROL_STARTUP_RETRY_BUDGET,
+            Duration::from_secs(15)
+        );
+    }
+
     #[tokio::test]
     async fn slow_initial_handshake_finishes_without_half_second_cancellation() {
         let attempts = AtomicU32::new(0);

@@ -516,10 +516,10 @@ if (!maintenanceWorkers.includes('retention_context(state)')
     || /PostgresMaintenanceRepository::new\(state\.pool\.clone\(\)\)/.test(workerComposition)) {
   throw new Error('retention workers must receive separate state-owned repository contexts');
 }
-const clusterShutdown = read('src/node/adapters/cluster_shutdown.rs');
+const clusterShutdown = rustItemBody(read('crates/edges/northstar-cluster/src/authority.rs'), 'pub async fn release_instance_after_publication_quiescence<');
 const shutdownFence = clusterShutdown.indexOf('let _publication_fence =');
-const publicationTimeout = clusterShutdown.indexOf('tokio::time::timeout(quiesce_timeout, self.cluster.quiesce_publication())', shutdownFence);
-const releaseInstance = clusterShutdown.indexOf('.release_instance_authority_with(release_service)', publicationTimeout);
+const publicationTimeout = clusterShutdown.indexOf('tokio::time::timeout(quiesce_timeout, self.quiesce_publication())', shutdownFence);
+const releaseInstance = clusterShutdown.indexOf('.release_instance_authority_with(service)', publicationTimeout);
 if (shutdownFence < 0 || publicationTimeout < shutdownFence || releaseInstance < publicationTimeout
     || !/\.release_cluster_instance_after_publication_quiescence\(std::time::Duration::from_secs\(15\)\)/.test(runtimeMain)
     || !runtimeMain.includes('shutdown_state.begin_cluster_shutdown();')

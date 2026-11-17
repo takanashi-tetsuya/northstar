@@ -35,6 +35,10 @@ impl ClusterManager {
         self.muc_runtime_mode().pg_authority
     }
 
+    pub fn standalone_pg_muc_authority(&self) -> bool {
+        self.muc_pg_authority_enabled() && !self.is_enabled()
+    }
+
     pub fn muc_redis_transport_enabled(&self) -> bool {
         self.muc_runtime_mode().redis_transport
     }

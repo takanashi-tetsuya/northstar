@@ -41,7 +41,7 @@ impl ServerNode {
     }
 
     pub(crate) fn session_cleanup_pg_muc_departure(&self) -> Option<SessionCleanupPgMucDeparture> {
-        (self.cluster.muc_pg_authority_enabled() && !self.cluster.is_enabled()).then(|| {
+        self.cluster.standalone_pg_muc_authority().then(|| {
             SessionCleanupPgMucDeparture {
                 service: ClusterMucOccupancyDepartureService::new(
                     northstar_room_postgres::room::PostgresClusterMucOccupancyDepartureRepository::new(

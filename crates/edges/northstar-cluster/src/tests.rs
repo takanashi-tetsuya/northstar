@@ -1,6 +1,104 @@
 use super::*;
 use northstar_room_core::occupancy::{MucRegistration, MucRename, MucRoleChange};
 
+struct RecordingInstanceReleaseRepository {
+    calls: Mutex<Vec<ClusterInstanceReleaseIdentity>>,
+    result: std::result::Result<bool, &'static str>,
+    completion: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+}
+
+impl ClusterInstanceReleaseRepository for &RecordingInstanceReleaseRepository {
+    async fn release(&self, identity: &ClusterInstanceReleaseIdentity) -> Result<bool> {
+        self.calls.lock().unwrap().push(identity.clone());
+        let completion = self.completion.lock().unwrap().take();
+        if let Some(completion) = completion {
+            completion.await.unwrap();
+        }
+        self.result.map_err(anyhow::Error::msg)
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn release_waits_for_publications_and_times_out_without_releasing() {
+    let manager = listener_health_manager();
+    manager.begin_shutdown();
+    let _publication = manager.publication_gate.read().await;
+    let repository = RecordingInstanceReleaseRepository {
+        calls: Mutex::new(Vec::new()),
+        result: Ok(true),
+        completion: Mutex::new(None),
+    };
+    let service = ClusterInstanceReleaseService::new(&repository);
+
+    assert!(manager
+        .release_instance_after_publication_quiescence(Duration::from_millis(20), &service)
+        .await
+        .is_none());
+    assert!(repository.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn release_holds_the_publication_fence_until_the_release_finishes() {
+    let manager = listener_health_manager();
+    manager.begin_shutdown();
+    let (finish, completion) = tokio::sync::oneshot::channel();
+    let repository = RecordingInstanceReleaseRepository {
+        calls: Mutex::new(Vec::new()),
+        result: Ok(true),
+        completion: Mutex::new(Some(completion)),
+    };
+    let service = ClusterInstanceReleaseService::new(&repository);
+    let release =
+        manager.release_instance_after_publication_quiescence(Duration::from_millis(20), &service);
+    tokio::pin!(release);
+
+    assert!(futures::poll!(release.as_mut()).is_pending());
+    assert_eq!(repository.calls.lock().unwrap().len(), 1);
+    assert!(manager.publication_gate.try_read().is_err());
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(futures::poll!(release.as_mut()).is_pending());
+    assert!(manager.publication_gate.try_read().is_err());
+
+    finish.send(()).unwrap();
+    release.await.unwrap().unwrap();
+    assert!(manager.publication_gate.try_read().is_ok());
+}
+
+#[tokio::test]
+async fn release_maps_committed_absent_and_error_outcomes() {
+    let manager = listener_health_manager();
+    manager.begin_shutdown();
+    for expected in [Ok(true), Ok(false), Err("lease release failed")] {
+        let repository = RecordingInstanceReleaseRepository {
+            calls: Mutex::new(Vec::new()),
+            result: expected,
+            completion: Mutex::new(None),
+        };
+        let service = ClusterInstanceReleaseService::new(&repository);
+        let actual = manager
+            .release_instance_after_publication_quiescence(Duration::from_millis(20), &service)
+            .await
+            .unwrap();
+        match expected {
+            Ok(_) => actual.unwrap(),
+            Err(message) => assert_eq!(actual.unwrap_err().to_string(), message),
+        }
+        assert_eq!(repository.calls.lock().unwrap().len(), 1);
+        assert!(manager.publication_gate.try_read().is_ok());
+    }
+}
+
+#[tokio::test]
+async fn standalone_pg_muc_authority_requires_disabled_cluster() {
+    let disabled = ClusterManager::new(None, "example.test", None, None, None, None)
+        .await
+        .unwrap();
+    assert!(disabled.standalone_pg_muc_authority());
+
+    let enabled = listener_health_manager();
+    assert!(!enabled.standalone_pg_muc_authority());
+}
+
 #[test]
 fn muc_disconnect_outbox_renders_status_333_on_every_attempt() {
     let target = rename_occupant(uuid::Uuid::from_u128(1), "GatewayBot");

@@ -9,23 +9,15 @@ impl ServerNode {
         self.cluster.begin_shutdown();
     }
 
-    /// `None` means publications did not quiesce before the deadline. The
-    /// timeout covers only guard acquisition; once held, the guard remains
-    /// live until the PostgreSQL instance release has completed or failed.
     pub(crate) async fn release_cluster_instance_after_publication_quiescence(
         &self,
         quiesce_timeout: Duration,
     ) -> Option<Result<()>> {
-        let _publication_fence =
-            tokio::time::timeout(quiesce_timeout, self.cluster.quiesce_publication())
-                .await
-                .ok()?;
-        let release_service = self.session.cluster_instance_release_service();
-        Some(
-            self.cluster
-                .release_instance_authority_with(release_service)
-                .await
-                .map(|_| ()),
-        )
+        self.cluster
+            .release_instance_after_publication_quiescence(
+                quiesce_timeout,
+                self.session.cluster_instance_release_service(),
+            )
+            .await
     }
 }

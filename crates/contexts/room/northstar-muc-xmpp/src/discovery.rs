@@ -1,6 +1,22 @@
 //! Room occupants for discovery: the cluster cache merged with this node's occupants.
 
 use northstar_room_core::occupancy::SerializableMucOccupant;
+use std::future::Future;
+
+/// Read the cluster cache before taking the local occupant snapshot.
+pub async fn discovery_room_occupants<R, L, I>(
+    remote: R,
+    local: L,
+) -> anyhow::Result<Vec<SerializableMucOccupant>>
+where
+    R: Future<Output = anyhow::Result<I>>,
+    I: IntoIterator<Item = String>,
+    L: FnOnce() -> Vec<SerializableMucOccupant>,
+{
+    let cached_json = remote.await?;
+    let local = local();
+    Ok(merge_discovery_occupants(cached_json, local))
+}
 
 /// Discovery combines the disposable cluster cache with this node's
 /// current occupants, then returns a stable nickname order for paging.
@@ -40,6 +56,58 @@ mod tests {
             sm_session_id: None,
             payload: String::new(),
         }
+    }
+
+    #[test]
+    fn remote_failure_skips_the_local_snapshot() {
+        let local_called = std::cell::Cell::new(false);
+        let result = futures::executor::block_on(discovery_room_occupants(
+            async { Err::<Vec<String>, _>(anyhow::anyhow!("cluster cache read failed")) },
+            || {
+                local_called.set(true);
+                Vec::new()
+            },
+        ));
+        let Err(error) = result else {
+            panic!("a failed cluster cache read must be returned");
+        };
+        assert_eq!(error.to_string(), "cluster cache read failed");
+        assert!(!local_called.get());
+    }
+
+    #[test]
+    fn remote_then_local_are_merged() {
+        let stage = std::cell::Cell::new(0);
+        let cached = occupant("Alice", "alice@example.test/Old");
+        let local = occupant("Alice", "alice@example.test/New");
+        let result = futures::executor::block_on(discovery_room_occupants(
+            async {
+                assert_eq!(stage.get(), 0);
+                stage.set(1);
+                Ok([
+                    serde_json::to_string(&occupant("Zoe", "zoe@example.test/Phone")).unwrap(),
+                    serde_json::to_string(&cached).unwrap(),
+                ])
+            },
+            || {
+                assert_eq!(stage.get(), 1);
+                stage.set(2);
+                vec![occupant("Bob", "bob@example.test/Phone"), local.clone()]
+            },
+        ))
+        .unwrap();
+        assert_eq!(stage.get(), 2);
+        assert_eq!(
+            result
+                .iter()
+                .map(|occupant| occupant.nick.as_str())
+                .collect::<Vec<_>>(),
+            ["Alice", "Bob", "Zoe"]
+        );
+        assert_eq!(
+            serde_json::to_value(&result[0]).unwrap(),
+            serde_json::to_value(&local).unwrap()
+        );
     }
 
     #[test]

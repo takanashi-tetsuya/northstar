@@ -267,6 +267,26 @@ impl ClusterManager {
             .await
     }
 
+    /// `None` means publications did not quiesce before the deadline. The
+    /// timeout covers only guard acquisition; once held, the guard remains
+    /// live until the PostgreSQL instance release has completed or failed.
+    pub async fn release_instance_after_publication_quiescence<
+        R: ClusterInstanceReleaseRepository,
+    >(
+        &self,
+        quiesce_timeout: std::time::Duration,
+        service: &ClusterInstanceReleaseService<R>,
+    ) -> Option<anyhow::Result<()>> {
+        let _publication_fence = tokio::time::timeout(quiesce_timeout, self.quiesce_publication())
+            .await
+            .ok()?;
+        Some(
+            self.release_instance_authority_with(service)
+                .await
+                .map(|_| ()),
+        )
+    }
+
     pub(super) fn key(&self, suffix: String) -> String {
         format!("{}:{suffix}", self.key_prefix)
     }

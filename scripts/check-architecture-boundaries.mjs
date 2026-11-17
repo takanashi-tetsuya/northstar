@@ -3334,9 +3334,11 @@ while (pendingResponsibilitySources.length > 0) {
     if (entry.isDirectory()) pendingResponsibilitySources.push(full);
     else if (entry.isFile() && entry.name.endsWith('.rs')) {
       const relative = path.relative(root, full).replaceAll('\\', '/');
-      // Sibling test modules are compiled only through #[cfg(test)] #[path].
-      // They are not production worker registration sites.
-      if (/(?:^|\/)(?:[^/]*_tests|tests)\.rs$/.test(relative)) continue;
+      // Test modules (a `tests.rs`/`*_tests.rs` file, every file below a
+      // `tests/` module directory, and crate integration tests) compile only
+      // under #[cfg(test)] or as test targets. They are not production worker
+      // registration sites.
+      if (/(?:^|\/)(?:[^/]*_tests|tests)(?:\.rs$|\/)/.test(relative)) continue;
       productionRustSources.push({
         relative,
         source: productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative),

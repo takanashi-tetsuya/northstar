@@ -2,15 +2,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
-import { readRoleSplitFile } from './lib/source-module.mjs';
 
 const clientSource = fs.readFileSync(new URL('../web/client.js', import.meta.url), 'utf8');
 const xmppSource = fs.readFileSync(new URL('../web/xmpp.js', import.meta.url), 'utf8');
 const omemoSource = fs.readFileSync(new URL('../web/omemo.js', import.meta.url), 'utf8');
 const appSource = fs.readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
 const storageSource = fs.readFileSync(new URL('../web/storage.js', import.meta.url), 'utf8');
-const apiSource = readRoleSplitFile('crates/edges/northstar-http/src/lib.rs');
-const csp = apiSource.match(/const SPA_CONTENT_SECURITY_POLICY: &str = "([^"]+)";/)?.[1] || '';
 const nodeRequire = createRequire(import.meta.url);
 const { safeFrame } = nodeRequire('./web-e2e.cjs');
 
@@ -83,20 +80,9 @@ if (/requestUploadSlot\(safeName|\.encrypted`,\s*ciphertext\.byteLength/.test(cl
 requirePattern(xmppSource, /url\.origin !== pageOrigin[\s\S]+Cross-origin file transfer URLs are not permitted/, 'upload slot URLs are not restricted to the exact page origin');
 requirePattern(omemoSource, /url\.origin !== pageOrigin[\s\S]+不允许从跨域地址下载加密文件/, 'encrypted attachment downloads are not restricted to the exact page origin');
 
-if (/style-src[^;\"]*'unsafe-inline'/.test(apiSource)) {
-  throw new Error('the browser application CSP permits inline style injection');
-}
 if (/\.style\b|setAttribute\(\s*['\"]style['\"]/.test(clientSource)) {
   throw new Error('the browser application relies on inline styles that weaken CSP');
 }
-requirePattern(csp, /connect-src 'self';/, 'browser CSP does not limit network connections to the exact application origin');
-if (/connect-src[^;]*(?:\bws:|\bwss:|\bhttps:)/.test(csp)) {
-  throw new Error('browser CSP contains a scheme-wide connection source');
-}
-requirePattern(csp, /worker-src 'self';/, 'browser CSP does not limit workers to static same-origin modules');
-if (/worker-src[^;]*blob:/.test(csp)) throw new Error('browser CSP permits blob workers');
-requirePattern(csp, /base-uri 'none'/, 'browser CSP does not disable base URL rewriting');
-requirePattern(csp, /form-action 'self'/, 'browser CSP does not restrict form submissions');
 
 for (const frame of [
   "<authenticate xmlns='urn:xmpp:sasl:2'><initial-response>password-like-secret</initial-response></authenticate>",

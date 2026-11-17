@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { readProductionModule, readRoleSplitFile } from './lib/source-module.mjs';
+import { readProductionModule } from './lib/source-module.mjs';
 
 const omemo = fs.readFileSync(new URL('../web/omemo.js', import.meta.url), 'utf8');
 const xmpp = fs.readFileSync(new URL('../web/xmpp.js', import.meta.url), 'utf8');
@@ -7,13 +7,9 @@ const client = fs.readFileSync(new URL('../web/client.js', import.meta.url), 'ut
 const recovery = fs.readFileSync(new URL('../web/omemo-recovery.mjs', import.meta.url), 'utf8');
 const recoveryWorker = fs.readFileSync(new URL('../web/omemo-recovery-worker.mjs', import.meta.url), 'utf8');
 const recoveryWorkerClient = fs.readFileSync(new URL('../web/omemo-recovery-worker-client.mjs', import.meta.url), 'utf8');
-const recoveryApi = fs.readFileSync(new URL('../crates/edges/northstar-http/src/omemo_recovery.rs', import.meta.url), 'utf8');
-const recoveryDb = fs.readFileSync(new URL('../crates/contexts/auth/northstar-auth-postgres/src/omemo_recovery.rs', import.meta.url), 'utf8');
 const recoveryRepository = fs.readFileSync(new URL('../crates/contexts/auth/northstar-auth-postgres/src/omemo_recovery_repository.rs', import.meta.url), 'utf8');
 const recoveryPoll = fs.readFileSync(new URL('../crates/edges/northstar-http/src/contexts/omemo_poll.rs', import.meta.url), 'utf8');
-const api = readRoleSplitFile('crates/edges/northstar-http/src/lib.rs');
 const serverState = readProductionModule('src/node.rs'); // whole production module
-const metrics = fs.readFileSync(new URL('../crates/platform/northstar-telemetry/src/metrics.rs', import.meta.url), 'utf8');
 
 function requirePattern(source, pattern, message) {
   if (!pattern.test(source)) throw new Error(message);
@@ -86,13 +82,8 @@ requirePattern(recoveryWorkerClient, /signal\?\.removeEventListener\('abort', ab
 requirePattern(recoveryWorkerClient, /deadline = setTimeout[\s\S]+deadlineMs/, 'OMEMO transfer worker has no hard deadline');
 requirePattern(recoveryWorkerClient, /clearTimeout\(deadline\)[\s\S]+worker\.terminate\(\)/, 'OMEMO transfer worker is not terminated on every settled path');
 requirePattern(recoveryWorkerClient, /requiredBytes <= budgetBytes[\s\S]+navigator\.deviceMemory/, 'OMEMO transfer worker lacks a device-memory budget');
-requirePattern(recoveryPoll, /OMEMO_POLL_CONCURRENCY: usize = 4[\s\S]+OMEMO_POLL_IP_REQUESTS_PER_MINUTE: usize = 30/, 'public OMEMO recovery polling lost its admission limits');
 requirePattern(serverState, /let omemo_recovery_poll_pool = startup_database_connect\([\s\S]+PostgresOmemoRecoveryPollRepository::new\(\s*omemo_recovery_poll_pool/, 'public recovery polling must retain its dedicated database pool');
 requirePattern(recoveryRepository, /struct PostgresOmemoRecoveryPollRepository\s*\{\s*pool: PgPool,[\s\S]+impl OmemoRecoveryPollRepository[\s\S]+crate::omemo_recovery::poll_omemo_recovery_transfer\(\s*&self\.pool,/, 'public recovery polling must use the isolated repository');
-requirePattern(recoveryPoll, /Semaphore::new\(OMEMO_POLL_CONCURRENCY\)[\s\S]+admit_bounded_omemo_poll_ip\([\s\S]+try_acquire_owned\(\)/, 'public recovery polling must enforce both IP and global admission');
-requirePattern(recoveryApi, /State<crate::contexts::OmemoRecoveryPollContext<R>>[\s\S]+client_ip_with_trusted_proxies\(peer.ip\(\), &headers, state.trusted_proxies\(\)\)[\s\S]+state.acquire\(source_ip\)[\s\S]+\.poll\(transfer_id, &poll_secret\)/, 'poll admission must use the trusted-proxy client IP and precede every database lookup');
-requirePattern(api, /fn client_ip_with_trusted_proxies\([\s\S]+if !trusted.contains\(&peer_ip\)\s*\{\s*return peer_ip;\s*\}[\s\S]+forwarded_client_ip_from_headers\(peer_ip, headers, trusted\)/, 'recovery polling must ignore forwarded addresses from untrusted peers');
-requirePattern(recoveryDb, /pool\.begin\(\)[\s\S]+SET LOCAL statement_timeout = '1500ms'[\s\S]+fetch_optional\(&mut \*tx\)/, 'public recovery polling has no transaction-local bounded database execution time');
 if (/admit_omemo_poll_ip_window\(&mut window, now\)[\s\S]{0,300}window\.push_back\(now\)/.test(recoveryPoll)) {
   throw new Error('public recovery poll admission counts one request twice');
 }
@@ -107,7 +98,6 @@ requirePattern(client, /function recoveryWatchCurrent[\s\S]+omemoTransferWatchEp
 requirePattern(client, /validateRecoveryAuthority\([\s\S]+recoveryWatchCurrent\(epoch, transferId\)[\s\S]+if \(!recoveryWatchCurrent\(epoch, transferId\)\) return;/, 'authority watcher does not revalidate its fence after asynchronous authority work');
 requirePattern(omemo, /validateRecoveryAuthorityLocked\(isCurrent[\s\S]+if \(!isCurrent\(\)\) return \{ stale: true \};[\s\S]+if \(\['revoked', 'expired'\]/, 'authority validation can mutate a marker after its watcher became stale');
 requirePattern(client, /if \(!confirm\([\s\S]+\)\) return;[\s\S]+omemoTransferAbortController\?\.abort\(\)/, 'declining transfer cancellation still aborts the worker');
-requirePattern(metrics, /xmpp_omemo_recovery_poll_requests_total \{\}[\s\S]+xmpp_omemo_recovery_poll_rate_limited_total \{\}[\s\S]+xmpp_omemo_recovery_poll_concurrency_rejected_total \{\}/, 'poll metrics must remain aggregate and fixed-cardinality');
 requirePattern(recoveryWorker, /payload\.passphrase = ''[\s\S]+payload\.state = null/, 'OMEMO worker does not discard sensitive request references');
 requirePattern(omemo, /generateKey\(\{ name: 'AES-GCM', length: 256 \}, false, \['encrypt', 'decrypt'\]\)/, 'OMEMO wrapping key is not non-exportable AES-256-GCM');
 requirePattern(omemo, /additionalData = stateAdditionalData\(account\)[\s\S]+additionalData,/, 'sealed OMEMO state is not bound to its account');

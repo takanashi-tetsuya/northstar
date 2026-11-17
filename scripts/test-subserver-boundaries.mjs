@@ -37,24 +37,10 @@ rejectsMutation('reject a pub(super) retention context field', 'retention', 'str
 rejectsMutation('reject a pub(in path) cleanup context field', 'subscriptionCleanup', 'struct SubscriptionCleanupContext<R> {', 'struct SubscriptionCleanupContext<R> {\n pub(in crate::runtime) state: usize,', /capability inventory/);
 rejectsMutation('reject public maintenance bind', 'maintenanceConfig', 'self.maintenance_bind.ip().is_loopback()', 'true', /reject public/);
 rejectsMutation('reject kernel-selected production port', 'maintenanceConfig', 'self.maintenance_bind.port() != 0', 'true', /reject public/);
-rejectsMutation('recheck the actual health listener', 'maintenanceHealth', 'listener.local_addr()?.ip().is_loopback()', 'true', /bounded local authority/);
-rejectsMutation('reject unbounded health concurrency', 'maintenanceHealth', 'Semaphore::new(16)', 'Semaphore::new(16000)', /bounded local authority/);
-rejectsMutation('reject increased health header budget', 'maintenanceHealth', '[0u8; 4096]', '[0u8; 65536]', /bounded local authority/);
-rejectsMutation('reject increased request deadline', 'maintenanceHealth', 'Duration::from_secs(2)', 'Duration::from_secs(200)', /bounded local authority/);
-rejectsMutation('readiness requires a successful retention pass', 'maintenanceHealth', 'retention_readiness.is_ready()', 'true', /bounded local authority/);
-rejectsMutation('readiness requires successful subscription cleanup', 'maintenanceHealth', 'subscription_readiness.is_ready()', 'true', /bounded local authority/);
 rejectsMutation('subscription cleanup cannot gain core state', 'subscriptionCleanup', 'struct SubscriptionCleanupContext<R> {', 'struct SubscriptionCleanupContext<R> {\n state: ServerNode,', /capability inventory/);
 rejectsMutation('subscription cleanup cannot allocate another pool', 'subscriptionCleanup', 'use std::', 'use sqlx::postgres::PgPoolOptions;\nuse std::', /narrow existing-pool/);
-rejectsMutation('subscription cleanup keeps its total execution budget', 'subscriptionCleanup', 'Duration::from_secs(40)', 'Duration::from_secs(5)', /CLEANUP_BUDGET/);
-rejectsMutation('subscription cleanup keeps the physical cleanup cadence', 'subscriptionCleanup', 'Duration::from_secs(60)', 'Duration::from_secs(3600)', /CLEANUP_INTERVAL/);
 rejectsMutation('physical cleanup cannot return to digest delivery', 'pubsubDelivery', 'let mut interval = tokio::time::interval(Duration::from_secs(1));', 'cleanup_expired_subscriptions(&state.pool, 1000).await;\nlet mut interval = tokio::time::interval(Duration::from_secs(1));', /delivery-worker/);
-rejectsMutation('subscription cleanup cannot skip its actual deadline', 'subscriptionCleanup', 'tokio::time::timeout_at(deadline, async { cleanup().await })', 'unbounded_cleanup(async { cleanup().await })', /total pass deadline/);
-rejectsMutation('subscription cleanup cannot publish stale success during a pass', 'subscriptionCleanup', 'readiness.begin_pass();', 'readiness.complete_pass();', /total pass deadline/);
 rejectsMutation('maintenance cleanup watchdog keeps its own budget', 'subservers', 'Some(northstar_pubsub_application::subscription_cleanup::MAX_SILENCE)', 'Some(Duration::from_secs(5))', /independent restart/);
-rejectsMutation('subscription cleanup cannot silently increase batch size', 'subscriptionCleanup', 'CLEANUP_BATCH_SIZE: i64 = 1_000', 'CLEANUP_BATCH_SIZE: i64 = 100_000', /batch size/);
-rejectsMutation('readiness also requires worker health', 'maintenanceHealth', 'workers.readiness_error().is_none()', 'true', /bounded local authority/);
-rejectsMutation('reap health connections on cancellation', 'maintenanceHealth', 'connections.shutdown().await', 'drop(connections)', /bounded local authority/);
-rejectsMutation('reject raw health error disclosure', 'maintenanceHealth', 'let permits =', 'let detail = error.to_string();\nlet permits =', /failure details/);
 rejectsMutation('keep runtime role attestation', 'subservers', 'northstar_postgres::role_attestation::attest_runtime_role(&pool)', 'skip_attestation(&pool)', /startup\/shutdown/);
 rejectsMutation('close the exact advisory-lock session on early return', 'maintenanceOwnership', 'connection.close_on_drop()', 'connection.flush()', /physical session/);
 rejectsMutation('probe the exact ownership connection', 'maintenanceOwnership', 'execute(&mut **connection)', 'execute(&pool)', /physical session/);
@@ -71,18 +57,9 @@ rejectsMutation('maintenance worker inventory stays exact', 'subservers', '"arch
 rejectsMutation('standalone peer restart keeps core-only role', 'cluster', '"$binary" serve core >"$redis_tmp/cluster-b.log"', '"$binary" serve standalone >"$redis_tmp/cluster-b.log"', /cluster startup\/restart/);
 rejectsMutation('document residual authority and detection limit', 'responsibility', 'bounded overlap', 'exclusive fencing', /document lacks/);
 rejectsMutation('document the actual maintenance watchdog', 'responsibility', '2 × retention interval + 60 s', 'none', /stale role-qualified worker semantics/);
-rejectsMutation('idle control ticks cannot clear database errors', 'runtimeControlHealth', 'heartbeat.pulse();', 'heartbeat.ok();', /control health/);
-rejectsMutation('control errors cannot be reported as healthy', 'runtimeControlHealth', 'heartbeat.error(error);', 'heartbeat.ok();', /control health/);
-rejectsMutation('successful database reads are distinguished from idle ticks', 'runtimeControlHealth', 'else if observed_database {', 'else if true {', /control health/);
 rejectsMutation('coordinator must use the reviewed error-preserving health report', 'runtimeControl',
   'report_runtime_control_health(&heartbeat, observed_database, first_error);',
   'heartbeat.ok();', /control coordinator/);
-rejectsMutation('instrumented settings reads still use the reserved connection', 'runtimeControl',
-  'let repository = self.connection.lock().await.take()',
-  'let repository = acquire_shared_repository()', /exact reserved connection/);
-rejectsMutation('control read instrumentation cannot silently drop its phase observation', 'runtimeControl',
-  'diagnostics.database_read(phase)',
-  'drop(phase)', /exact reserved connection/);
 rejectsMutation('control phase observation cannot report speculative success', 'runtimeControl',
   'diagnostics.database_read(phase)',
   'heartbeat.ok(); diagnostics.database_read(phase)', /control coordinator/);

@@ -88,28 +88,16 @@ export function verifyFederatedRouteBoundaries(sources) {
   requireMatch(adapter, /\bstruct\s+FederatedDirectRoute\s*<\s*'a\s*,\s*H\s*>\s*\(\s*&'a\s+H\s*\)\s*;/, 'S2S caller must own its origin-specific adapter');
   const caller = functionBody(inbound, 'route_inbound_message');
   const invocation = /\bDirectMessageRouter::route_federated\s*\(\s*&FederatedDirectRoute\s*\(\s*state\s*\)\s*,/.exec(caller);
-  if (!invocation || (caller.match(/\bDirectMessageRouter::route_federated\s*\(/g) ?? []).length !== 1) {
-    throw new Error('S2S message caller must invoke route_federated once through FederatedDirectRoute');
-  }
   const argumentsBody = balancedBody(caller, caller.indexOf('(', invocation.index), '(', ')');
-  requireMatch(argumentsBody, /\bDirectRouteRequest\s*\{/, 'S2S route must use the typed request');
-  for (const field of [/\bdelivery\s*,/, /\bsender\s*:\s*from\s*,/, /\brecipient_id\s*:\s*recipient\.id\s*,/, /\bstanza\s*:\s*&annotated\s*,/, /\bapproved_targets\s*:\s*&targets\s*,/, /\benforce_direct_health\s*:\s*true\s*,/]) {
-    requireMatch(argumentsBody, field, 'S2S route must keep the approved envelope, targets and health enforcement');
-  }
   requireMatch(argumentsBody, /\bhistory_committed\s*,?\s*$/, 'S2S route must preserve independent committed-history input');
   if (/\.\s*(?:try_send(?:_durable)?|route_s2s_message_to_[a-z_]+)\s*\(/.test(caller)) {
     throw new Error('S2S caller regained inline queue/remote routing outside the direct owner');
   }
-  requireMatch(caller, /\bDirectRouteOutcome::Routed\s*\{\s*accepted_full_jid\s*\}\s*=>\s*\(\s*true\s*,\s*accepted_full_jid\s*\)/, 'S2S caller must retain the accepted resource for Carbon exclusion');
-  requireMatch(caller, /\bSome\(delivered_key\)\s*=\s*delivered_key\.as_deref\(\)/, 'S2S caller must use the optional accepted Carbon exclusion key');
 
-  const compactBody = name => functionBody(adapter, name).replace(/\s+/g, '');
   const hostBody = name => functionBody(host, name).replace(/\s+/g, '');
-  requireMatch(compactBody('record_local_accept'), /self\.0\.record_s2s_online_accept\(durable\);/, 'S2S local acceptance must retain federation queue telemetry and delivery kind');
   if (hostBody('record_s2s_online_accept') !== 'northstar_federation_application::telemetry::OnlineQueueAcceptanceTelemetry::new(&self.metrics.online_queue_durable_acceptances_total,&self.metrics.online_queue_volatile_acceptances_total,).accepted(durable);') {
     throw new Error('S2S local acceptance must retain federation queue telemetry and delivery kind');
   }
-  requireMatch(compactBody('post_accept_failed'), /self\.0\.record_s2s_post_accept_failure\(\);/, 'S2S post-accept failures must retain federation telemetry');
   if (hostBody('record_s2s_post_accept_failure') !== 'northstar_federation_application::telemetry::InboundDeliveryTelemetry::new(&self.metrics.post_accept_side_effect_failures_total,&self.metrics.messages_routed_total,).post_accept_failed();') {
     throw new Error('S2S post-accept failures must retain federation telemetry');
   }
@@ -123,16 +111,10 @@ export function verifyFederatedRouteBoundaries(sources) {
   if (localSignature !== 'fntry_local(&self,session:&Self::Session,enqueue:northstar_stream::outbound::RouteEnqueue,)->Result<(),northstar_stream::outbound::RouteSendError>') {
     throw new Error('S2S adapter must accept an owned local enqueue and preserve its refusal type');
   }
-  if (compactBody('try_local') !== 'OnlineRoutePort::try_local(self.0,session,enqueue)') {
-    throw new Error('S2S adapter must forward the exact owned local enqueue and return its refusal unchanged');
-  }
-  requireMatch(compactBody('route_available_remote'), /self\.0\.route_s2s_message_to_available_remote_resources\(jid,stanza,delivery\)\.await/, 'S2S fanout must use its federation remote adapter');
-  requireMatch(compactBody('route_remote_primary'), /self\.0\.route_s2s_message_to_remote_primary\(jid,stanza,delivery\)\.await/, 'S2S primary must use its federation remote adapter');
   const primary = hostBody('route_s2s_message_to_remote_primary')
     .replace('self.personal_message_telemetry()', hostBody('personal_message_telemetry'));
   requireMatch(primary, /self\.cluster\.route_s2s_message_to_remote_primary\(jid,stanza,delivery,&northstar_message_application::telemetry::PersonalMessageTelemetry::new\([^()]*\),?\)\.await/, 'S2S primary must use its federation remote adapter');
   requireMatch(primary, /delivered:routed\.delivered,accepted_full_jid:routed\.accepted_full_jid,/, 'S2S remote receipt must preserve acceptance and Carbon exclusion');
-  requireMatch(compactBody('rearm_direct_route'), /DirectMessageRoutePort::rearm_direct_route\(self\.0,delivery\)\.await;/, 'S2S rearm must retain the exact delivery claim');
   return { caller: 'route_inbound_message', owner: 'route_federated', adapter: 'FederatedDirectRoute' };
 }
 

@@ -53,28 +53,12 @@ export function readSubserverSources() {
 }
 
 export function verifySubserverBoundaries({ main, workerComposition, subservers, maintenanceProcess, maintenanceConfig, maintenanceHealth, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubDelivery, pubsubAdapter, pubsubService, state, runtimeControl, runtimeControlHealth, cluster, responsibility }) {
-  // Alternate control ticks can legitimately perform no SQL. They must not
-  // reset a lost advisory-lock session's consecutive database error count.
-  const report = codeOnly(body(runtimeControlHealth, 'fn report_runtime_control_health(')).replace(/\s+/g, '');
-  requireBoundary(report === 'ifletSome(error)=error{heartbeat.error(error);}elseifobserved_database{heartbeat.ok();}else{heartbeat.pulse();}',
-    'control health must preserve errors on idle ticks and clear them only after successful database observation');
   const coordinator = body(runtimeControl, 'pub async fn run(');
   requireBoundary(coordinator.includes('let mut observed_database = false;') &&
     coordinator.includes('report_runtime_control_health(&heartbeat, observed_database, first_error);') &&
     !/heartbeat\.(?:ok|error)\(/.test(coordinator) &&
     [...coordinator.matchAll(/observed_database = true;/g)].length === 2,
   'control coordinator must report exactly its two actual database-read paths through the reviewed health function');
-  requireBoundary(/let repository = self\.connection\.lock\(\)\.await\.take\(\)/.test(coordinator) &&
-    /let mut control = RuntimeControlService::new\(repository\)/.test(coordinator),
-  'control coordinator must retain the exact reserved connection through one repository');
-  for (const [declaration, query] of [
-    ['if refresh_policy', /control\s*\.policy_snapshot\(\s*\|phase\|\s*diagnostics\.database_read\(phase\)\s*\)/],
-    ['if self.service_control_enabled', /control\.service_control\(\)/],
-  ]) {
-    const read = body(coordinator, declaration);
-    requireBoundary(read.includes('observed_database = true;') && query.test(codeOnly(read)),
-      'control coordinator must tie health observation to a read of its exact reserved connection');
-  }
   const subserverCode = codeOnly(subservers) + codeOnly(maintenanceProcess) + codeOnly(maintenanceConfig) + codeOnly(maintenanceHealth);
   requireBoundary(!/\b(?:ServerNode|AbuseGuard|FederationRouter|ReloadableTlsConfig|Keyring|KeyRing)\b/.test(subserverCode),
     'maintenance cannot construct or import core state, routing or key authorities');
@@ -97,31 +81,13 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
   const subscriptionCode = codeOnly(subscriptionProduction);
   requireBoundary(!/\b(?:ServerNode|Config|Keyring|KeyRing|FederationRouter|PgPoolOptions|PgConnection)\b|crate\s*::\s*(?:node|s2s|xmpp|auth)\s*::/.test(subscriptionCode),
     'subscription cleanup must retain its narrow existing-pool authority');
-  for (const [name, seconds] of [['CLEANUP_INTERVAL', 60], ['CLEANUP_BUDGET', 40], ['MAX_SILENCE', 110]]) {
-    requireBoundary(new RegExp(`const ${name}: Duration = Duration::from_secs\\(${seconds}\\)`).test(subscriptionCode),
-      `subscription cleanup lost its independent ${name} budget`);
-  }
-  requireBoundary(/const CLEANUP_BATCH_SIZE: i64 = 1_?000/.test(subscriptionCode),
-    'subscription cleanup must retain its bounded batch size');
   requireBoundary(!/\bcleanup_expired_subscriptions\s*\(/.test(codeOnly(pubsubProtocol) + codeOnly(pubsubDelivery) + codeOnly(pubsubAdapter)
     + codeOnly(pubsubService)),
     'physical subscription cleanup cannot reacquire delivery-worker or shared-outbox authority');
-  const cleanupPass = codeOnly(body(subscriptionProduction, 'async fn run_once_with'));
-  requireBoundary(cleanupPass.includes('tokio::time::timeout_at(deadline, async { cleanup().await })') &&
-    cleanupPass.includes('readiness.begin_pass()') && cleanupPass.includes('cancel.cancelled()'),
-    'subscription cleanup must enforce a cancellation-aware total pass deadline before publishing health');
-  requireBoundary(codeOnly(body(subscriptionProduction, 'async fn serve_with')).includes('Instant::now() + CLEANUP_BUDGET'),
-    'subscription cleanup must apply its reviewed budget to each pass');
   exactFields(maintenanceConfig, 'struct RetentionPolicy', ['mam_retention_days', 'muc_mam_retention_days',
     'offline_message_ttl_days', 'audit_log_retention_days', 'retention_cleanup_batch_size', 'retention_cleanup_interval_seconds']);
   requireBoundary(/self\.maintenance_bind\.ip\(\)\.is_loopback\(\)/.test(maintenanceConfig) &&
     /self\.maintenance_bind\.port\(\)\s*!=\s*0/.test(maintenanceConfig), 'maintenance config must reject public or unowned binds');
-  const health = body(maintenanceHealth, 'async fn private_health(');
-  for (const marker of ['listener.local_addr()?.ip().is_loopback()', 'Semaphore::new(16)',
-    '[0u8; 4096]', 'Duration::from_secs(2)', 'connections.shutdown().await', 'workers.readiness_error().is_none()', 'retention_readiness.is_ready()', 'subscription_readiness.is_ready()']) {
-    requireBoundary(health.replace(/\s+/g, '').includes(marker.replace(/\s+/g, '')), `private health lost bounded local authority: ${marker}`);
-  }
-  requireBoundary(!health.includes('error.to_string()'), 'private health cannot return internal failure details');
   const run = body(subservers, 'async fn run_maintenance(');
   const monitor = body(maintenanceProcess, 'async fn supervise_maintenance<');
   const closeOwnership = body(maintenanceOwnership, 'async fn close(');

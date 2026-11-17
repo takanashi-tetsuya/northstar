@@ -35,6 +35,7 @@ northstar-auth-application = { path = "../../crates/contexts/auth/northstar-auth
 northstar-auth-core = { path = "../../crates/contexts/auth/northstar-auth-core" }
 northstar-auth-postgres = { path = "../../crates/contexts/auth/northstar-auth-postgres", features = ["test-support"] }
 northstar-cluster = { path = "../../crates/edges/northstar-cluster" }
+northstar-config = { path = "../../crates/platform/northstar-config", features = ["test-support"] }
 northstar-data-tools = { path = "../../crates/contexts/workflows/northstar-data-tools", features = ["test-support"] }
 northstar-delivery-core = { path = "../../crates/contexts/message/northstar-delivery-core" }
 northstar-federation-core = { path = "../../crates/contexts/federation/northstar-federation-core" }

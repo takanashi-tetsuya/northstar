@@ -2923,6 +2923,10 @@
       ],
       [
         "northstar-db-it",
+        "northstar-config"
+      ],
+      [
+        "northstar-db-it",
         "northstar-data-tools"
       ],
       [

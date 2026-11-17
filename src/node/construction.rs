@@ -599,12 +599,14 @@ impl ServerNode {
             auth,
             operations,
             abuse: AbuseModule::new(&abuse, abuse_key_deployment),
-            started_at,
-            process_started_at,
             tls_context: northstar_security::tls::TlsContext::new(tls),
-            service_shutdown: Arc::new(std::sync::OnceLock::new()),
-            runtime_control_liveness: Arc::new(()),
-            workers: northstar_runtime::workers::WorkerRegistry::new(),
+            runtime: RuntimeModule::new(
+                started_at,
+                process_started_at,
+                Arc::new(std::sync::OnceLock::new()),
+                Arc::new(()),
+                northstar_runtime::workers::WorkerRegistry::new(),
+            ),
         });
         state.worker_registry().register_observer(
             "session-cleanup",

@@ -344,7 +344,7 @@ for (const field of [
   'federation',
   'archive',
   'session',
-  'started_at',
+  'runtime',
   'tls_context',
 ]) {
   if (!new RegExp(`^\\s*${field}\\s*:`, 'm').test(appState)) {
@@ -370,6 +370,22 @@ for (const field of [
     throw new Error(`ServerNode capability ${field} is no longer private or is missing`);
   }
   if (new RegExp(`^\\s*pub(?:\\(crate\\))?\\s+${field}\\s*:`, 'm').test(sessionLiveState)) {
+    throw new Error(`ServerNode capability ${field} became publicly accessible`);
+  }
+}
+const runtimeModuleSource = read('src/node/modules/runtime.rs');
+const runtimeModule = structBody(runtimeModuleSource, 'pub(in crate::node) struct RuntimeModule');
+for (const field of [
+  'started_at',
+  'process_started_at',
+  'service_shutdown',
+  'runtime_control_liveness',
+  'workers',
+]) {
+  if (!new RegExp(`^\\s*${field}\\s*:`, 'm').test(runtimeModule)) {
+    throw new Error(`ServerNode capability ${field} is no longer private or is missing`);
+  }
+  if (new RegExp(`^\\s*pub(?:\\(crate\\))?\\s+${field}\\s*:`, 'm').test(runtimeModule)) {
     throw new Error(`ServerNode capability ${field} became publicly accessible`);
   }
 }
@@ -520,7 +536,7 @@ if (mainRuntimeControlReservation < 0 || mainPrimaryPoolConstruction < 0
 if (!/Self::start_runtime_control_refresh\(\s*Arc::clone\(&state\),\s*runtime_control_connection,\s*worker_cancel,\s*\);/s.test(state)) {
   throw new Error('ServerNode must transfer the reserved connection to the coordinated runtime-control worker');
 }
-const serviceControlInstallation = rustItemBody(state, 'pub fn install_service_shutdown(');
+const serviceControlInstallation = rustItemBody(runtimeModuleSource, 'pub(in crate::node) fn install_service_shutdown(');
 if (!/self\.service_shutdown\s*\.set\(cancel\)/s.test(serviceControlInstallation)) {
   throw new Error('XEP-0133 service control must install the shutdown authority before the coordinator polls it');
 }

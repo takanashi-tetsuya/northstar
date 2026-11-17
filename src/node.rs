@@ -62,6 +62,7 @@ use self::modules::operations::*;
 use self::modules::pubsub::*;
 use self::modules::room::*;
 use self::modules::roster::*;
+use self::modules::runtime::*;
 use self::modules::session::*;
 use self::modules::upload::*;
 use northstar_federation_application::registry::S2sConnectionRegistry;
@@ -146,12 +147,8 @@ pub struct ServerNode {
     operations: OperationsModule,
     /// The anti-abuse context; see [`AbuseModule`].
     abuse: AbuseModule,
-    started_at: Instant,
-    process_started_at: chrono::DateTime<chrono::Utc>,
     tls_context: northstar_security::tls::TlsContext,
-    service_shutdown: Arc<std::sync::OnceLock<CancellationToken>>,
-    runtime_control_liveness: Arc<()>,
-    workers: Arc<northstar_runtime::workers::WorkerRegistry>,
+    runtime: RuntimeModule,
 }
 
 impl ServerNode {

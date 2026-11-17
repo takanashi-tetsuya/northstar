@@ -6,7 +6,7 @@ use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 pub(super) fn start(state: &Arc<ServerNode>, cancel: &CancellationToken) {
-    let worker_registry = &state.workers;
+    let worker_registry = state.runtime.workers();
     let capacity_context = capacity_lease_renewal_context(state);
     let capacity_reaper_context = capacity_context.reaper();
     let capacity_interval = capacity_context.heartbeat_interval();

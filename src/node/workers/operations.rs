@@ -13,7 +13,7 @@ use uuid::Uuid;
 struct RuntimeAdminSessionCleanup(AdminSessionCleanupContext);
 
 pub(super) fn start(state: &Arc<ServerNode>, cancel: &CancellationToken) {
-    let worker_registry = &state.workers;
+    let worker_registry = state.runtime.workers();
     // Credential-generation and exact-connection cleanup is a security
     // authority, not ordinary administrator background work. Keep it on an
     // independently supervised worker so a large broadcast cannot delay a

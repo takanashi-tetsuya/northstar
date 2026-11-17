@@ -274,7 +274,7 @@ impl ServerNode {
             sm: self.session.sm_memory_governor.readiness_probe(),
             upload: self.upload.safety_gate.readiness_probe(),
             cluster: Arc::new(self.cluster.readiness_probe()),
-            workers: self.workers.readiness_probe(),
+            workers: self.runtime.workers().readiness_probe(),
             abuse_key_deployment: self.abuse.abuse_key_deployment.clone(),
             persistence: self.operations.readiness_service.clone(),
         }

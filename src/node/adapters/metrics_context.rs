@@ -72,7 +72,7 @@ impl ServerNode {
                 governor: Arc::clone(&self.session.sm_memory_governor),
                 recovery: Arc::clone(&self.session.sm_suspension_recovery),
             }),
-            started_at: self.started_at,
+            started_at: self.runtime.started_at(),
             bind_fallback: self.config.metrics_bind,
         }
     }

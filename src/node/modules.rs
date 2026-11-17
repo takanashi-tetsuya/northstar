@@ -9,5 +9,6 @@ pub(in crate::node) mod operations;
 pub(in crate::node) mod pubsub;
 pub(in crate::node) mod room;
 pub(in crate::node) mod roster;
+pub(in crate::node) mod runtime;
 pub(in crate::node) mod session;
 pub(in crate::node) mod upload;

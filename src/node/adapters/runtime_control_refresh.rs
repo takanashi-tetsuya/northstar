@@ -46,7 +46,7 @@ pub(in crate::node) fn runtime_control_coordinator(
     connection: PoolConnection<Postgres>,
 ) -> RuntimeControlCoordinator<PostgresRuntimeControlRepository, RuntimePolicyApplier> {
     RuntimeControlCoordinator::new(
-        Arc::downgrade(&state.runtime_control_liveness),
+        Arc::downgrade(state.runtime.control_liveness()),
         PostgresRuntimeControlRepository::new(connection),
         RuntimePolicyApplier {
             federation_writes: Arc::clone(&state.federation.federation_write_policy),
@@ -58,7 +58,7 @@ pub(in crate::node) fn runtime_control_coordinator(
                 .outbound_clearance(),
         },
         state.config.enable_xmpp_service_control,
-        Arc::clone(&state.service_shutdown),
-        state.process_started_at,
+        Arc::clone(state.runtime.service_shutdown()),
+        state.runtime.process_started_at(),
     )
 }

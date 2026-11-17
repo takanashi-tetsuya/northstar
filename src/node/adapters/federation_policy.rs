@@ -22,13 +22,11 @@ impl ServerNode {
         self: &Arc<Self>,
         cancel: CancellationToken,
     ) -> anyhow::Result<()> {
-        self.service_shutdown
-            .set(cancel)
-            .map_err(|_| anyhow::anyhow!("service shutdown control was already installed"))?;
-        Ok(())
+        self.runtime.install_service_shutdown(cancel)
     }
 
     pub fn service_control_available(&self) -> bool {
-        self.config.enable_xmpp_service_control && self.service_shutdown.get().is_some()
+        self.runtime
+            .service_control_available(self.config.enable_xmpp_service_control)
     }
 }

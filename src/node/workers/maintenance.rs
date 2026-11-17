@@ -64,7 +64,7 @@ impl BackgroundMaintenancePorts for BackgroundMaintenanceContext {
 }
 
 pub(super) fn start_background(state: &Arc<ServerNode>, cancel: &CancellationToken) {
-    let worker_registry = &state.workers;
+    let worker_registry = state.runtime.workers();
     let bg_context = Arc::new(background_maintenance_context(state));
     let bg_cancel = cancel.clone();
     worker_registry.supervise(
@@ -82,7 +82,7 @@ pub(super) fn start_background(state: &Arc<ServerNode>, cancel: &CancellationTok
 }
 
 pub(super) fn start_account_deletion_recovery(state: &Arc<ServerNode>, cancel: &CancellationToken) {
-    let worker_registry = &state.workers;
+    let worker_registry = state.runtime.workers();
     let deletion_context = Arc::new(state.account_deletion_recovery_context());
     let deletion_cancel = cancel.clone();
     worker_registry.supervise(
@@ -108,7 +108,7 @@ pub(super) fn start_retention(
     cancel: &CancellationToken,
     process_role: crate::runtime::subservers::ProcessRole,
 ) {
-    let worker_registry = &state.workers;
+    let worker_registry = state.runtime.workers();
     if process_role.embeds_retention() {
         let retention_context = Arc::new(retention_context(state));
         let retention_cancel = cancel.clone();

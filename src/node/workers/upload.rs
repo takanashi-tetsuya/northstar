@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 pub(super) fn start(state: &Arc<ServerNode>, cancel: &CancellationToken) {
-    let worker_registry = &state.workers;
+    let worker_registry = state.runtime.workers();
     if let Some(upload_context) = upload_maintenance_context(state) {
         let upload_context = Arc::new(upload_context);
         let upload_cancel = cancel.clone();

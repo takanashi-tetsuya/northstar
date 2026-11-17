@@ -21,7 +21,7 @@ impl ServerNode {
         SessionCleanupBookkeeping {
             privacy: self.roster.privacy_service.clone(),
             metrics: Arc::clone(&self.metrics),
-            workers: Arc::clone(&self.workers),
+            workers: Arc::clone(self.runtime.workers()),
         }
     }
 }

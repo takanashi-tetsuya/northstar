@@ -29,6 +29,6 @@ impl ServerNode {
     }
 
     pub(crate) fn worker_registry(&self) -> &Arc<northstar_runtime::workers::WorkerRegistry> {
-        &self.workers
+        self.runtime.workers()
     }
 }

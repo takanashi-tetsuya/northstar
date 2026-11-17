@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 pub(super) fn start(state: &Arc<ServerNode>, cancel: &CancellationToken) {
-    let worker_registry = &state.workers;
+    let worker_registry = state.runtime.workers();
     if state.cluster.is_enabled() {
         let pubsub_transport = Arc::new(state.cluster.pubsub_listener_transport());
         let listener_admission = Arc::new(state.cluster.listener_admission());

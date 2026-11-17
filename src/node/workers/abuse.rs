@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 pub(super) fn start(state: &Arc<ServerNode>, cancel: &CancellationToken) {
-    let worker_registry = &state.workers;
+    let worker_registry = state.runtime.workers();
     if let Some(authority_identity) = state.abuse.abuse_key_deployment.clone() {
         tracing::info!(
             poll_seconds = ABUSE_KEY_AUTHORITY_POLL_INTERVAL.as_secs(),

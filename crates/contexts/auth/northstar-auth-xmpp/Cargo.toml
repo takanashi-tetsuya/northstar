@@ -30,4 +30,5 @@ uuid = { version = "1.12", features = ["v4"] }
 zeroize = "1.8"
 
 [dev-dependencies]
-tokio = { version = "1.43", features = ["macros", "rt", "sync", "time"] }
+northstar-security = { path = "../../../platform/northstar-security" }
+tokio = { version = "1.43", features = ["macros", "rt", "sync", "test-util", "time"] }

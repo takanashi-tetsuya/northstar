@@ -1042,6 +1042,7 @@ digraph compile_time {
   "northstar-auth-xmpp" -> "northstar-auth-core";
   "northstar-auth-xmpp" -> "northstar-roster-core";
   "northstar-auth-xmpp" -> "northstar-runtime";
+  "northstar-auth-xmpp" -> "northstar-security";
   "northstar-auth-xmpp" -> "northstar-telemetry";
   "northstar-auth-xmpp" -> "northstar-xml-builder";
   "northstar-auth-xmpp" -> "northstar-xmpp-types";

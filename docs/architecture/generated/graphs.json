@@ -2335,6 +2335,10 @@
       ],
       [
         "northstar-auth-xmpp",
+        "northstar-security"
+      ],
+      [
+        "northstar-auth-xmpp",
         "northstar-telemetry"
       ],
       [

@@ -1984,6 +1984,7 @@ dependencies = [
  "northstar-auth-core",
  "northstar-roster-core",
  "northstar-runtime",
+ "northstar-security",
  "northstar-telemetry",
  "northstar-xml-builder",
  "northstar-xmpp-types",

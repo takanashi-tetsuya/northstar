@@ -158,3 +158,6 @@ pub async fn serve<R: AccountRepository + 'static, P: AccountDeletionRecoveryPor
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

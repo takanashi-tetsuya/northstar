@@ -3723,6 +3723,14 @@
       ],
       [
         "northstar-message-xmpp",
+        "northstar-telemetry"
+      ],
+      [
+        "northstar-message-xmpp",
+        "northstar-xep-0016"
+      ],
+      [
+        "northstar-message-xmpp",
         "northstar-xep-0215"
       ],
       [

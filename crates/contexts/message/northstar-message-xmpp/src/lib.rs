@@ -12,3 +12,6 @@ mod protocol_session;
 pub use self::protocol_session::ExtDiscoHandlers;
 pub mod push_routing;
 mod retractions;
+
+#[cfg(test)]
+mod test_support;

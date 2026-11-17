@@ -329,3 +329,511 @@ fn only_offline_admission_can_cross_the_personal_side_effect_boundary() {
         );
     }
 }
+
+#[tokio::test]
+async fn client_admission_preserves_commitment_before_routed_effects() {
+    use crate::ports::MessageFrameStage;
+    use crate::test_support::{Event, Session, State, ACTOR, SENDER, TARGET};
+    use northstar_abuse_policy::message_admission::acceptance_fence;
+    use northstar_stream::transport::Action;
+
+    for (label, payload, rated, refused, retained, finalize_error) in [
+        (
+            "rated_content",
+            "<body>original content</body>",
+            true,
+            false,
+            true,
+            false,
+        ),
+        (
+            "encrypted_content",
+            "<encrypted xmlns='urn:xmpp:omemo:2'>ciphertext</encrypted>",
+            true,
+            false,
+            true,
+            false,
+        ),
+        (
+            "admission_refusal",
+            "<body>refused content</body>",
+            true,
+            true,
+            true,
+            false,
+        ),
+        (
+            "unrated_receipt",
+            "<received xmlns='urn:xmpp:receipts' id='earlier'/>",
+            false,
+            false,
+            true,
+            false,
+        ),
+        (
+            "unowned_acceptance",
+            "<body>compatibility caller</body>",
+            true,
+            false,
+            false,
+            false,
+        ),
+        (
+            "accepted_finalize_failure",
+            "<body>accepted content</body>",
+            true,
+            false,
+            true,
+            true,
+        ),
+    ] {
+        let mut session = Session::new(
+            State {
+                admission_conflict: refused,
+                finalize_error,
+                ..State::default()
+            },
+            retained,
+        );
+        session.mix = true;
+        let commitment = format!("<message xmlns='jabber:client' to='{TARGET}' type='chat' id='client-id'>{payload}<origin-id xmlns='urn:xmpp:sid:0' id='original'/></message>");
+        let proof = "<pow xmlns='urn:northstar:pow:1' challenge='00000000-0000-0000-0000-000000000031' nonce='fixed-nonce'/>";
+        let client = commitment.replace(
+            "</message>",
+            &format!(
+                "{proof}<delay xmlns='urn:xmpp:delay' stamp='2000-01-01T00:00:00Z'/></message>"
+            ),
+        );
+        let routed = set_root_attribute(&set_from(&client, SENDER), "xml:lang", "ja");
+        let document = Document::parse(&routed).unwrap();
+        let action = super::message(&session, document.root_element(), &routed, &client)
+            .await
+            .unwrap();
+        let events = session.host.state.events();
+        let begins: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Begin(request, retained) => Some((request, *retained)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            begins.len(),
+            usize::from(rated),
+            "{label}: begin_before_effects"
+        );
+        if let Some((request, used_retained)) = begins.first() {
+            assert_eq!(*used_retained, retained, "{label}: originating_begin");
+            assert_eq!(request.actor_id, ACTOR, "{label}: actor");
+            assert_eq!(
+                request.account_bare, "alice@example.test",
+                "{label}: account"
+            );
+            assert_eq!(request.normalized_target, TARGET, "{label}: target");
+            assert_eq!(
+                request.origin_id.as_deref(),
+                Some("original"),
+                "{label}: origin"
+            );
+            assert_eq!(
+                request.pow_intent_payload, commitment,
+                "{label}: client_commitment"
+            );
+            assert_ne!(
+                request.pow_intent_payload, request.normalized_payload,
+                "{label}: separate_authoritative_envelope"
+            );
+            assert_eq!(
+                request.subject,
+                format!("message:{ACTOR}"),
+                "{label}: subject"
+            );
+            assert_eq!(
+                request.actors,
+                [
+                    "ip:192.0.2.1".to_owned(),
+                    format!("user:{ACTOR}"),
+                    format!("behavior:{ACTOR}")
+                ],
+                "{label}: actors"
+            );
+            let proof = request.proof.as_ref().expect(label);
+            assert_eq!(
+                proof.challenge_id,
+                uuid::Uuid::from_u128(49),
+                "{label}: proof"
+            );
+            assert_eq!(proof.nonce, "fixed-nonce", "{label}: proof");
+            let normalized = Document::parse(&request.normalized_payload).unwrap();
+            assert_eq!(
+                normalized.root_element().attribute("from"),
+                Some("alice@example.test"),
+                "{label}: normalized_sender"
+            );
+            assert!(
+                !normalized
+                    .descendants()
+                    .any(|node| matches!(node.tag_name().name(), "pow" | "delay")),
+                "{label}: stripped_admission"
+            );
+        }
+        if refused {
+            let Action::Send(error) = action else {
+                panic!("{label}: refusal must return an error")
+            };
+            assert!(error.contains("conflict"), "{label}: refusal");
+            assert!(
+                !events.iter().any(|event| matches!(
+                    event,
+                    Event::Authorize(..) | Event::Mix(_) | Event::Finalize(..) | Event::Local(..)
+                )),
+                "{label}: zero_effects_after_refusal"
+            );
+        } else {
+            assert!(matches!(action, Action::None), "{label}: accepted_result");
+            let sanitized = set_root_attribute(&set_from(&commitment, SENDER), "xml:lang", "ja");
+            assert!(
+                events.contains(&Event::Mix(sanitized)),
+                "{label}: stripped_routing"
+            );
+            assert!(
+                events.contains(&Event::Authorize(
+                    ACTOR,
+                    "alice@example.test".to_owned(),
+                    Some("sender-policy".to_owned()),
+                    TARGET.to_owned()
+                )),
+                "{label}: exact_policy_request"
+            );
+            let finalizes: Vec<_> = events
+                .iter()
+                .filter(|event| matches!(event, Event::Finalize(..)))
+                .collect();
+            assert_eq!(
+                finalizes.len(),
+                usize::from(rated),
+                "{label}: accepted_finalize"
+            );
+            if rated {
+                assert_eq!(
+                    finalizes[0],
+                    &Event::Finalize(
+                        acceptance_fence(&crate::test_support::lease().acceptance()),
+                        retained
+                    ),
+                    "{label}: exact_finalize"
+                );
+                let begin = events
+                    .iter()
+                    .position(|event| matches!(event, Event::Begin(..)))
+                    .unwrap();
+                let route = events
+                    .iter()
+                    .position(|event| matches!(event, Event::Mix(_)))
+                    .unwrap();
+                let followup = events
+                    .iter()
+                    .position(|event| *event == Event::Stage(MessageFrameStage::Followup))
+                    .unwrap();
+                let finalize = events
+                    .iter()
+                    .position(|event| matches!(event, Event::Finalize(..)))
+                    .unwrap();
+                assert!(
+                    begin < route && route < followup && followup < finalize,
+                    "{label}: begin_route_finalize_order"
+                );
+                assert_eq!(
+                    events.contains(&Event::Finalized),
+                    !finalize_error,
+                    "{label}: finalization_result"
+                );
+            }
+        }
+        assert_eq!(
+            session.host.counters[3].load(Ordering::Relaxed),
+            u64::from(finalize_error),
+            "{label}: post_accept_failure_counter"
+        );
+    }
+}
+
+#[tokio::test]
+async fn local_direct_continuation_retains_commit_and_originating_operation() {
+    use crate::ports::MessageFrameStage;
+    use crate::test_support::{
+        poll_once, CommitAnswer, Event, Session, State, ACTOR, OPERATION, RECIPIENT, SENDER, TARGET,
+    };
+    use northstar_message_application::message_admission::witness::DirectOperationHandle;
+    use northstar_message_core::DirectPostCommitMode;
+    use northstar_stream::transport::Action;
+    use std::sync::atomic::Ordering as AtomicOrdering;
+
+    for (label, answer, retained, finalize_error, degrade) in [
+        ("stored_original", CommitAnswer::Stored, true, false, false),
+        ("unowned_route", CommitAnswer::Stored, false, false, false),
+        ("replay_no_route", CommitAnswer::Replay, true, false, false),
+        (
+            "account_unavailable",
+            CommitAnswer::Unavailable,
+            true,
+            false,
+            false,
+        ),
+        (
+            "unconfirmed_no_route",
+            CommitAnswer::Error,
+            true,
+            false,
+            false,
+        ),
+        (
+            "receipt_survives_error",
+            CommitAnswer::ReceiptThenError,
+            true,
+            false,
+            false,
+        ),
+        (
+            "finalize_failure_keeps_commit",
+            CommitAnswer::Stored,
+            true,
+            true,
+            false,
+        ),
+        (
+            "health_after_finalize",
+            CommitAnswer::Stored,
+            true,
+            false,
+            true,
+        ),
+    ] {
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let session = Session::new(
+            State {
+                answer,
+                finalize_error,
+                finalize_gate: std::sync::Mutex::new(Some(gate)),
+                ..State::default()
+            },
+            retained,
+        );
+        let original = session.operation.lock().unwrap().clone();
+        let client = "<message xmlns='jabber:client' to='bob@example.test' type='chat' id='original'><body>committed body</body><origin-id xmlns='urn:xmpp:sid:0' id='origin'/><pow xmlns='urn:northstar:pow:1' challenge='00000000-0000-0000-0000-000000000031' nonce='proof'/></message>";
+        let routed = set_root_attribute(&set_from(client, SENDER), "xml:lang", "ja");
+        let document = Document::parse(&routed).unwrap();
+        let mut future = Box::pin(super::message(
+            &session,
+            document.root_element(),
+            &routed,
+            client,
+        ));
+        let first = poll_once(future.as_mut());
+        let finalizes = !matches!(answer, CommitAnswer::Unavailable | CommitAnswer::Error);
+        let mut events = session.host.state.events();
+        let action = if finalizes {
+            assert!(first.is_pending(), "{label}: finalize_pending");
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, Event::Commit(_, value) if *value == retained)),
+                "{label}: application_before_finalization"
+            );
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, Event::Finalize(_, value) if *value == retained)),
+                "{label}: exact_finalize_owner"
+            );
+            assert!(
+                !events.iter().any(|event| matches!(
+                    event,
+                    Event::Health
+                        | Event::Local(..)
+                        | Event::Rearm(_)
+                        | Event::Carbon(..)
+                        | Event::Push(_)
+                        | Event::Stage(MessageFrameStage::Routing)
+                )),
+                "{label}: finalize_before_route"
+            );
+            let later = DirectOperationHandle::new(uuid::Uuid::from_u128(40));
+            *session.operation.lock().unwrap() = Some(later.clone());
+            if degrade {
+                *session.host.state.mode.lock().unwrap() = DirectPostCommitMode::SpoolOnly;
+            }
+            release.send(()).unwrap();
+            let result = future.await.unwrap();
+            assert!(
+                later.snapshot().reservation.is_none(),
+                "{label}: later_frame_untouched"
+            );
+            assert!(
+                later.snapshot().finalization.is_none(),
+                "{label}: later_frame_untouched"
+            );
+            result
+        } else {
+            let std::task::Poll::Ready(result) = first else {
+                panic!("{label}: refusal unexpectedly pending")
+            };
+            result.unwrap()
+        };
+        events.extend(session.host.state.events());
+        let committed = session
+            .host
+            .state
+            .committed
+            .lock()
+            .unwrap()
+            .clone()
+            .expect(label);
+        assert_eq!(committed.actor, Some(ACTOR), "{label}: original_actor");
+        assert_eq!(
+            (committed.source.recipient_id, committed.source.claim_id),
+            (RECIPIENT, Some(committed.source.message_id)),
+            "{label}: exact_source"
+        );
+        assert_eq!(
+            (&*committed.sender, &*committed.recipient),
+            (SENDER, TARGET),
+            "{label}: exact_address"
+        );
+        assert_eq!(
+            committed.eligibility,
+            DirectSpoolEligibility::Eligible,
+            "{label}: spool_authority"
+        );
+        assert_eq!(committed.archives.len(), 2, "{label}: both_archive_owners");
+        assert_eq!(committed.archives[0].1, ACTOR, "{label}: sender_archive");
+        assert_eq!(
+            committed.archives[1].1, RECIPIENT,
+            "{label}: recipient_archive"
+        );
+        assert_eq!(
+            committed.archives[1].0, committed.source.message_id,
+            "{label}: committed_delivery_identity"
+        );
+        assert_eq!(committed.archives[0].2, TARGET, "{label}: sender_peer");
+        assert_eq!(committed.archives[1].2, SENDER, "{label}: recipient_peer");
+        for stanza in std::iter::once(&committed.stanza)
+            .chain(committed.archives.iter().map(|archive| &archive.3))
+        {
+            let parsed = Document::parse(stanza).unwrap();
+            assert_eq!(
+                parsed.root_element().attribute("from"),
+                Some(SENDER),
+                "{label}: committed_sender"
+            );
+            assert!(
+                !parsed
+                    .descendants()
+                    .any(|node| node.tag_name().name() == "pow"),
+                "{label}: stripped_archive"
+            );
+            assert!(stanza.contains("committed body"), "{label}: original_bytes");
+        }
+        let identity = committed.identity.as_ref().unwrap();
+        assert_eq!(
+            (&*identity.0, &*identity.1, &*identity.2),
+            ("alice@example.test", TARGET, "origin"),
+            "{label}: original_identity"
+        );
+        let routes: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Local(connection, stanza, source) => Some((*connection, stanza, *source)),
+                _ => None,
+            })
+            .collect();
+        let live = answer == CommitAnswer::Stored && !degrade;
+        assert_eq!(
+            routes.len(),
+            usize::from(live),
+            "{label}: one_route_or_no_route"
+        );
+        if live {
+            assert_eq!(
+                routes[0].0,
+                uuid::Uuid::from_u128(21),
+                "{label}: approved_primary"
+            );
+            assert_eq!(
+                routes[0].2,
+                Some(committed.source),
+                "{label}: original_delivery_fence"
+            );
+            assert_eq!(
+                *routes[0].1, committed.archives[1].3,
+                "{label}: committed_live_projection"
+            );
+            let route = events
+                .iter()
+                .position(|event| matches!(event, Event::Local(..)))
+                .unwrap();
+            assert!(
+                matches!(events[route - 1], Event::Health),
+                "{label}: health_before_handoff"
+            );
+            assert!(
+                events[..route].contains(&Event::Stage(MessageFrameStage::Routing)),
+                "{label}: routing_stage"
+            );
+        }
+        if degrade || answer == CommitAnswer::ReceiptThenError {
+            assert!(
+                events.contains(&Event::Rearm(committed.source)),
+                "{label}: recover_exact_claim"
+            );
+        }
+        if finalizes {
+            assert!(
+                matches!(action, Action::None),
+                "{label}: acceptance_retained"
+            );
+        } else {
+            let Action::Send(error) = action else {
+                panic!("{label}: expected stanza error")
+            };
+            let condition = if answer == CommitAnswer::Unavailable {
+                "service-unavailable"
+            } else {
+                "resource-constraint"
+            };
+            assert!(error.contains(condition), "{label}: refusal_condition");
+        }
+        if let Some(original) = original {
+            let snapshot = original.snapshot();
+            assert_eq!(snapshot.operation, OPERATION, "{label}: original_operation");
+            assert!(
+                snapshot
+                    .reservation
+                    .unwrap()
+                    .has_durable_reservation_receipt(),
+                "{label}: retained_begin"
+            );
+            assert_eq!(
+                snapshot.finalization.is_some(),
+                finalizes,
+                "{label}: retained_finalization"
+            );
+            assert!(snapshot.direct.is_some(), "{label}: retained_application");
+        }
+        if finalize_error {
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, Event::PostAcceptFailed))
+                    .count(),
+                1,
+                "{label}: failure_count"
+            );
+            assert_eq!(
+                session.host.counters[3].load(AtomicOrdering::Relaxed),
+                0,
+                "{label}: owner_failure_port"
+            );
+        }
+    }
+}

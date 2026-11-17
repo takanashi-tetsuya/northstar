@@ -2443,6 +2443,7 @@ dependencies = [
  "chrono",
  "dashmap",
  "futures",
+ "northstar-abuse-policy",
  "northstar-archive-core",
  "northstar-delivery-core",
  "northstar-federation-core",

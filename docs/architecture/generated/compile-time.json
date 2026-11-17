@@ -4249,6 +4249,10 @@
     ],
     [
       "northstar-mix-xmpp",
+      "northstar-abuse-policy"
+    ],
+    [
+      "northstar-mix-xmpp",
       "northstar-archive-core"
     ],
     [

@@ -38,6 +38,8 @@ tracing = "0.1"
 uuid = { version = "1.12", features = ["v4"] }
 
 [dev-dependencies]
+northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
+northstar-room-application = { path = "../northstar-room-application", features = ["test-support"] }
 northstar-stream = { path = "../../../edges/northstar-stream", features = ["test-support"] }
 # The route tests run on the current-thread runtime.
-tokio = { version = "1.43", features = ["rt"] }
+tokio = { version = "1.43", features = ["rt", "test-util"] }

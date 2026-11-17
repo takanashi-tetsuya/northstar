@@ -237,3 +237,6 @@ pub fn start_mix_presence_recovery(
         },
     );
 }
+
+#[cfg(test)]
+mod tests;

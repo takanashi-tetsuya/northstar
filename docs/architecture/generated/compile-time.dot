@@ -1405,6 +1405,7 @@ digraph compile_time {
   "northstar-mix-xmpp" -> "chrono";
   "northstar-mix-xmpp" -> "dashmap";
   "northstar-mix-xmpp" -> "futures";
+  "northstar-mix-xmpp" -> "northstar-abuse-policy";
   "northstar-mix-xmpp" -> "northstar-archive-core";
   "northstar-mix-xmpp" -> "northstar-delivery-core";
   "northstar-mix-xmpp" -> "northstar-federation-core";

@@ -2064,3 +2064,276 @@ async fn real_governor_rejection_preserves_fifo_before_response_buffer_allocatio
         0
     );
 }
+
+#[tokio::test]
+async fn each_cached_rid_keeps_its_selected_bytes_sources_and_receipt_channel() {
+    let operation = operation();
+    let port = FakeReplay::default();
+    let (first_receipt, mut first_received) = mpsc::unbounded_channel();
+    let (second_receipt, mut second_received) = mpsc::unbounded_channel();
+    let mut first_item = durable_item(601);
+    first_item.transport_receipt = Some(first_receipt);
+    let first_text = first_item.stanza.clone();
+    let second_text = "<message id='second-rid'/>";
+    let (mut second_item, _handoff) = OutboundItem::durable_mix(second_text.to_owned(), mix());
+    second_item.transport_receipt = Some(second_receipt);
+    let control = "<success xmlns='urn:xmpp:sasl:2'/>";
+    let (holder, publication) = fixture_control(control, AUTH_CONNECTION);
+    let mut harness = Harness::new([
+        first_item,
+        second_item,
+        OutboundItem::plain(control.to_owned())
+            .with_auth_publication(holder)
+            .unwrap(),
+    ]);
+    harness.max_bytes = first_text.len() + 256;
+    let mut last = Instant::now() - std::time::Duration::from_secs(1);
+    let before_last = last;
+    let mut highest = 7;
+
+    let first = harness.prepare(&operation, &port, 61, None).await.unwrap();
+    let first_membership = first.ownership.clone();
+    assert_eq!(*first_membership, membership(&[Source::C2s(c2s(601))]));
+    assert_eq!(harness.output.len(), 2);
+    assert_eq!(harness.bytes, second_text.len() + control.len());
+    let (tx, rx) = oneshot::channel();
+    let exposed = first.expose(vec![tx]).unwrap();
+    let first_response = rx.await.unwrap();
+    assert!(body(&first_response).contains(&first_text));
+    assert!(!body(&first_response).contains(second_text));
+    assert!(!body(&first_response).contains(control));
+    let ready = exposed
+        .publish_authentication(|_| async { panic!("unselected control invoked publication") })
+        .await
+        .unwrap();
+    assert_eq!(last, before_last);
+    assert_eq!(highest, 7);
+    assert!(harness.replay.is_empty());
+    assert!(!operation.snapshot().responses[0].bookkeeping);
+    ready
+        .finish(&mut last, &mut highest, &mut harness.replay)
+        .unwrap();
+    assert_eq!(highest, 61);
+    assert!(last > before_last);
+    assert_eq!(harness.replay[0].rid, 61);
+    assert_eq!(harness.replay[0].fingerprint, metadata(61).fingerprint);
+    assert_eq!(harness.replay[0].response.body, first_response.body);
+    assert_eq!(
+        harness.replay[0].response.body.as_ptr(),
+        first_response.body.as_ptr()
+    );
+    assert!(Arc::ptr_eq(
+        &harness.replay[0].durable_ownership,
+        &first_membership
+    ));
+    assert_eq!(harness.replay[0].transport_receipts.len(), 1);
+    assert_eq!(harness.replay[0].response_bytes, first_response.body.len());
+    assert!(harness.replay[0].owned_at >= last);
+    assert!(operation.snapshot().responses[0].bookkeeping);
+    assert!(operation.snapshot().responses[0].cached);
+
+    harness.max_bytes = 64 * 1024;
+    let second = harness.prepare(&operation, &port, 62, None).await.unwrap();
+    let second_membership = second.ownership.clone();
+    assert_eq!(*second_membership, membership(&[Source::Mix(mix())]));
+    assert!(harness.output.is_empty());
+    assert_eq!(harness.bytes, 0);
+    let (tx, mut rx) = oneshot::channel();
+    let (refused, refused_rx) = oneshot::channel();
+    drop(refused_rx);
+    let exposed = second.expose(vec![refused, tx]).unwrap();
+    let mut second_response = None;
+    let previous_last = last;
+    let ready = exposed
+        .publish_authentication(|owners| {
+            let delivered = rx.try_recv().expect("exposure must precede publication");
+            assert!(body(&delivered).contains(&format!("{second_text}{control}")));
+            assert!(!body(&delivered).contains(&first_text));
+            second_response = Some(delivered);
+            assert_eq!(owners.len(), 1);
+            assert_eq!(highest, 61);
+            assert_eq!(last, previous_last);
+            assert_eq!(harness.replay.len(), 1);
+            let snapshot = operation.snapshot();
+            assert_eq!(snapshot.responses[1].responder_calls, 2);
+            assert_eq!(snapshot.responses[1].accepted_responders, 1);
+            assert_eq!(snapshot.responses[1].refused_responders, 1);
+            assert!(snapshot.responses[1].exposure_entered);
+            assert!(!snapshot.responses[1].bookkeeping);
+            publish_unbound_fixture(owners)
+        })
+        .await
+        .unwrap();
+    assert!(publication.completed());
+    assert_eq!(harness.replay.len(), 1);
+    ready
+        .finish(&mut last, &mut highest, &mut harness.replay)
+        .unwrap();
+    let second_response = second_response.unwrap();
+    assert_eq!(highest, 62);
+    assert_eq!(harness.replay.len(), 2);
+    assert_eq!(harness.replay[1].rid, 62);
+    assert_eq!(harness.replay[1].fingerprint, metadata(62).fingerprint);
+    assert_eq!(harness.replay[1].response.body, second_response.body);
+    assert_eq!(
+        harness.replay[1].response.body.as_ptr(),
+        second_response.body.as_ptr()
+    );
+    assert!(Arc::ptr_eq(
+        &harness.replay[1].durable_ownership,
+        &second_membership
+    ));
+    assert_eq!(harness.replay[1].transport_receipts.len(), 1);
+    assert_eq!(harness.replay[1].response_bytes, second_response.body.len());
+    assert!(harness.replay[1].owned_at >= last);
+    assert!(operation.snapshot().responses[1].bookkeeping);
+    assert!(operation.snapshot().responses[1].cached);
+    assert_eq!(
+        *port.bound_sources.lock().unwrap(),
+        [vec![Source::C2s(c2s(601))], vec![Source::Mix(mix())]]
+    );
+    assert!(matches!(
+        first_received.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    assert!(matches!(
+        second_received.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+
+    let (tx, rx) = oneshot::channel();
+    assert!(matches!(
+        replay_cached(
+            &mut harness.replay,
+            &request(61),
+            tx,
+            &mut last,
+            &operation,
+            &port
+        )
+        .await,
+        ReplayOutcome::Sent { terminate: false }
+    ));
+    assert_eq!(
+        rx.await.unwrap().body.as_ptr(),
+        first_response.body.as_ptr()
+    );
+    assert_eq!(harness.replay[0].replays, 1);
+    assert_eq!(harness.replay[1].replays, 0);
+    assert_eq!(
+        *port.expected.lock().unwrap(),
+        [Some((61, first_membership.as_ref().clone()))]
+    );
+    assert!(operation.snapshot().acknowledgements.is_empty());
+    assert!(matches!(
+        first_received.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    assert!(matches!(
+        second_received.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+
+    renew_and_acknowledge(&mut harness.replay, Some(61), &operation, &port)
+        .await
+        .unwrap();
+    assert_eq!(harness.replay.len(), 1);
+    assert_eq!(harness.replay[0].rid, 62);
+    assert_eq!(first_received.try_recv(), Ok(()));
+    assert!(matches!(
+        first_received.try_recv(),
+        Err(mpsc::error::TryRecvError::Disconnected)
+    ));
+    assert!(matches!(
+        second_received.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    renew_and_acknowledge(&mut harness.replay, Some(62), &operation, &port)
+        .await
+        .unwrap();
+    assert!(harness.replay.is_empty());
+    assert_eq!(second_received.try_recv(), Ok(()));
+    assert!(matches!(
+        second_received.try_recv(),
+        Err(mpsc::error::TryRecvError::Disconnected)
+    ));
+    let snapshot = operation.snapshot();
+    assert_eq!(
+        snapshot
+            .acknowledgements
+            .iter()
+            .map(|ack| ack.rid)
+            .collect::<Vec<_>>(),
+        [61, 62]
+    );
+    for ack in &snapshot.acknowledgements {
+        assert_eq!(ack.knowledge, response::Knowledge::ReceiptKnown);
+        assert!(ack.return_matches);
+        assert_eq!(ack.cache_evictions, 1);
+        assert_eq!(ack.receipt_calls, 1);
+        assert_eq!(ack.receipts_sent, 1);
+        assert_eq!(ack.receipts_refused, 0);
+    }
+    assert_eq!(
+        *port.events.lock().unwrap(),
+        [
+            "bind",
+            "bind_commit",
+            "bind",
+            "bind_commit",
+            "renew",
+            "renew_commit",
+            "renew",
+            "renew_commit",
+            "ack",
+            "ack_commit",
+            "renew",
+            "renew_commit",
+            "ack",
+            "ack_commit",
+        ]
+    );
+}
+
+#[test]
+fn responder_callbacks_bracket_actual_delivery_and_report_refusal() {
+    use std::cell::RefCell;
+
+    for (label, accepts) in [("accepted responder", true), ("closed responder", false)] {
+        let response = cache(61, vec![]).response;
+        let expected = response.clone();
+        let (tx, rx) = oneshot::channel();
+        let receiver = RefCell::new(Some(rx));
+        if !accepts {
+            drop(receiver.borrow_mut().take());
+        }
+        let events = RefCell::new(Vec::new());
+        let accepted = send_one(
+            response,
+            tx,
+            || {
+                assert!(events.borrow().is_empty(), "{label}");
+                if let Some(rx) = receiver.borrow_mut().as_mut() {
+                    assert!(
+                        matches!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+                        "{label}"
+                    );
+                }
+                events.borrow_mut().push("entering");
+            },
+            |accepted| {
+                assert_eq!(*events.borrow(), ["entering"], "{label}");
+                assert_eq!(accepted, accepts, "{label}");
+                if let Some(rx) = receiver.borrow_mut().as_mut() {
+                    let delivered = rx.try_recv().expect("send must precede returned callback");
+                    assert_eq!(delivered.body, expected.body, "{label}");
+                    assert_eq!(delivered.body.as_ptr(), expected.body.as_ptr(), "{label}");
+                    assert_eq!(delivered.content_type, expected.content_type, "{label}");
+                }
+                events.borrow_mut().push("returned");
+            },
+        );
+        assert_eq!(accepted, accepts, "{label}");
+        assert_eq!(*events.borrow(), ["entering", "returned"], "{label}");
+    }
+}

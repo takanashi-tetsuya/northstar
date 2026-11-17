@@ -947,4 +947,180 @@ mod tests {
         assert_eq!(snapshot.terminal, Some(Terminal::TimedOut));
         assert_eq!(snapshot.keep_running, None);
     }
+
+    #[tokio::test(start_paused = true)]
+    async fn backend_deadline_preserves_transfer_knowledge_and_drops_child_before_retirement() {
+        use std::time::Duration;
+
+        assert_eq!(
+            super::super::BOSH_BACKEND_OPERATION_TIMEOUT,
+            Duration::from_secs(5)
+        );
+        for (label, cut, knowledge, expected_events) in [
+            (
+                "waiting for repository",
+                Cut::BeforeRepositoryPending,
+                TransferKnowledge::NoCommitRequested,
+                vec!["transfer"],
+            ),
+            (
+                "commit in progress",
+                Cut::DuringCommit,
+                TransferKnowledge::CommitCallEntered(current()),
+                vec!["transfer", "commit"],
+            ),
+            (
+                "receipt retained",
+                Cut::AfterReceiptPending,
+                TransferKnowledge::ReceiptKnown(current()),
+                vec!["transfer", "commit", "receipt"],
+            ),
+        ] {
+            let operation = operation();
+            let events = Arc::new(Mutex::new(vec![]));
+            let port = FakeTransfer::new(cut, events.clone());
+            let (item, mut handoff) = item();
+            let alias = item.clone();
+            let mut items = VecDeque::new();
+            let mut bytes = 0;
+            let dropped = Arc::new(AtomicBool::new(false));
+            let probe = DropProbe {
+                operation: operation.clone(),
+                dropped: dropped.clone(),
+                ready: false,
+                panic_poll: false,
+                panic_drop: false,
+            };
+            let mut output = Output {
+                items: &mut items,
+                bytes: &mut bytes,
+                max_stanzas: 2,
+                max_bytes: 1024,
+            };
+            let mut runner = Box::pin(OperationRunner::new(
+                operation.clone(),
+                tokio::time::timeout(super::super::BOSH_BACKEND_OPERATION_TIMEOUT, async {
+                    let _probe = probe;
+                    transfer_and_push(&mut output, item, &operation, &port)
+                        .await
+                        .unwrap()
+                }),
+            ));
+            assert!(poll_once(runner.as_mut()).is_pending(), "{label}");
+            assert_eq!(*events.lock().unwrap(), expected_events, "{label}");
+            tokio::time::advance(Duration::from_millis(4_999)).await;
+            assert!(poll_once(runner.as_mut()).is_pending(), "{label}");
+            assert!(!dropped.load(Ordering::SeqCst), "{label}");
+            assert_eq!(operation.snapshot().terminal, None, "{label}");
+            tokio::time::advance(Duration::from_millis(1)).await;
+            assert!(
+                matches!(poll_once(runner.as_mut()), Poll::Ready(Err(_))),
+                "{label}"
+            );
+            assert!(dropped.load(Ordering::SeqCst), "{label}");
+            drop(runner);
+            let snapshot = operation.snapshot();
+            assert_eq!(snapshot.terminal, Some(Terminal::TimedOut), "{label}");
+            assert_eq!(snapshot.keep_running, None, "{label}");
+            assert_eq!(snapshot.transfers[0].knowledge, knowledge, "{label}");
+            assert!(!snapshot.transfers[0].local_entered, "{label}");
+            assert!(!snapshot.transfers[0].source_applied, "{label}");
+            assert!(!snapshot.transfers[0].notification_attempted, "{label}");
+            assert_eq!(snapshot.transfers[0].queue_accepted, None, "{label}");
+            assert!(items.is_empty(), "{label}");
+            assert_eq!(bytes, 0, "{label}");
+            assert_eq!(alias.mix_delivery(), Some(old()), "{label}");
+            assert!(
+                matches!(
+                    handoff.try_recv(),
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+                ),
+                "{label}"
+            );
+            assert_eq!(*events.lock().unwrap(), expected_events, "{label}");
+            drop(alias);
+        }
+    }
+
+    #[tokio::test]
+    async fn record_sees_original_item_before_stanza_and_byte_capacity_refusals() {
+        struct GatedRecord {
+            pointer: usize,
+            gate: Option<tokio::sync::oneshot::Receiver<()>>,
+            events: Arc<Mutex<Vec<&'static str>>>,
+        }
+        impl RecordPort for GatedRecord {
+            async fn record(&mut self, item: &OutboundItem) -> Result<bool> {
+                assert_eq!(item.stanza.as_ptr() as usize, self.pointer);
+                assert_eq!(item.mix_delivery(), Some(old()));
+                assert!(item.mix_handoff.is_some());
+                self.events.lock().unwrap().push("record entered");
+                self.gate.take().unwrap().await.unwrap();
+                self.events.lock().unwrap().push("record returned");
+                Ok(false)
+            }
+        }
+
+        for (label, stanza_full) in [("stanza capacity", true), ("byte capacity", false)] {
+            let operation = operation();
+            let events = Arc::new(Mutex::new(vec![]));
+            let transfer = FakeTransfer::new(Cut::Success, events.clone());
+            let (item, mut handoff) = item();
+            let alias = item.clone();
+            let (release, gate) = tokio::sync::oneshot::channel();
+            let mut record = GatedRecord {
+                pointer: item.stanza.as_ptr() as usize,
+                gate: Some(gate),
+                events: events.clone(),
+            };
+            let mut items = VecDeque::from([OutboundItem::plain("<presence/>".to_owned())]);
+            let prefix_pointer = items[0].stanza.as_ptr();
+            let mut bytes = items[0].stanza.len();
+            let before_bytes = bytes;
+            let mut output = Output {
+                items: &mut items,
+                bytes: &mut bytes,
+                max_stanzas: if stanza_full { 1 } else { 2 },
+                max_bytes: if stanza_full {
+                    1024
+                } else {
+                    before_bytes + item.stanza.len() - 1
+                },
+            };
+            let mut future = Box::pin(record_and_push(
+                &mut output,
+                item,
+                &operation,
+                &mut record,
+                &transfer,
+            ));
+            assert!(poll_once(future.as_mut()).is_pending(), "{label}");
+            assert_eq!(*events.lock().unwrap(), ["record entered"], "{label}");
+            assert!(operation.snapshot().transfers.is_empty(), "{label}");
+            release.send(()).unwrap();
+            assert!(
+                matches!(poll_once(future.as_mut()), Poll::Ready(Ok(false))),
+                "{label}"
+            );
+            drop(future);
+            assert_eq!(
+                *events.lock().unwrap(),
+                ["record entered", "record returned"],
+                "{label}"
+            );
+            assert!(operation.snapshot().transfers.is_empty(), "{label}");
+            assert_eq!(items.len(), 1, "{label}");
+            assert_eq!(items[0].stanza.as_ptr(), prefix_pointer, "{label}");
+            assert_eq!(bytes, before_bytes, "{label}");
+            assert_eq!(alias.mix_delivery(), Some(old()), "{label}");
+            assert!(
+                matches!(
+                    handoff.try_recv(),
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+                ),
+                "{label}"
+            );
+            drop(alias);
+        }
+    }
 }

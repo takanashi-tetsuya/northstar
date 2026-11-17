@@ -65,4 +65,5 @@ pub(in crate::node) mod sm_teardown_local;
 pub(in crate::node) mod sm_teardown_muc_projection;
 pub(crate) mod sm_teardown_runtime;
 pub(in crate::node) mod sm_teardown_session;
+pub(in crate::node) mod startup_recovery;
 pub(in crate::node) mod suspended_muc;

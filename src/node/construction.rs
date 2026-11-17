@@ -1,7 +1,11 @@
 //! ServerNode construction: database pools, API keyrings, services, contexts and startup workers.
 
 use super::adapters::cluster_key_deployment::ClusterKeyDeployment;
+use super::adapters::startup_recovery::StartupRecoveryAdapters;
 use super::*;
+use northstar_operations_application::startup_recovery::{
+    audit_durable_capacity, recover_after_restart,
+};
 use northstar_postgres::role_attestation;
 use northstar_postgres::startup::startup_database_connect;
 
@@ -84,18 +88,11 @@ impl ServerNode {
             keyrings?
         };
         let api_control = Arc::new(api_control);
-        let startup_phase =
-            northstar_telemetry::logging::StartupPhase::begin("mix_delivery_capacity_audit");
-        northstar_room_postgres::mix::audit_mix_delivery_capacity_ledger(&pool)
-            .await
-            .context("MIX delivery capacity ledger failed startup reconciliation")?;
-        startup_phase.complete();
-        let startup_phase =
-            northstar_telemetry::logging::StartupPhase::begin("mix_pam_capacity_audit");
-        northstar_room_postgres::mix::audit_mix_pam_operation_capacity(&pool)
-            .await
-            .context("MIX-PAM operation capacity authority failed startup audit")?;
-        startup_phase.complete();
+        audit_durable_capacity(&StartupRecoveryAdapters {
+            pool: &pool,
+            domain: &config.domain,
+        })
+        .await?;
         let upload = UploadModule::start(&config, &pool).await?;
         let extdisco_service = northstar_message_application::extdisco::ExtDiscoService::new(
             config.domain.clone(),
@@ -298,34 +295,15 @@ impl ServerNode {
         let (runtime_blacklist, runtime_whitelist) =
             northstar_operations_postgres::admin_commands::federation_runtime_rules(&pool).await?;
 
-        northstar_room_postgres::mix::recover_remote_pam_after_restart(&pool)
-            .await
-            .context("failed to recover pending MIX-PAM federation operations")?;
-        let mix_presence_recovery =
-            northstar_room_postgres::mix::prepare_mix_presence_after_restart(&pool, &config.domain)
-                .await
-                .context("failed to prepare XEP-0403 presence recovery")?;
-        if config.mix_muc_mirror_enabled {
-            let mix_domain = format!("mix.{}", config.domain);
-            let linked = northstar_room_postgres::mix_muc::reconcile_mix_muc_mirrors(
-                &pool,
-                &mix_domain,
-                &config.domain,
-            )
-            .await
-            .context("failed to reconcile XEP-0408 MIX/MUC mirror associations")?;
-            tracing::info!(linked, "XEP-0408 partial MIX/MUC mirror mode enabled");
-        }
-
-        if let Some(identity) = &abuse_key_deployment {
-            northstar_abuse_postgres::keys::reconcile_abuse_key_deployment(
-                &pool,
-                identity,
-                &northstar_workflows::abuse_effects::WorkflowAbuseEffects,
-            )
-            .await
-            .context("anti-abuse HMAC deployment consistency check failed")?;
-        }
+        let mix_presence_recovery = recover_after_restart(
+            &StartupRecoveryAdapters {
+                pool: &pool,
+                domain: &config.domain,
+            },
+            config.mix_muc_mirror_enabled,
+            abuse_key_deployment.as_ref(),
+        )
+        .await?;
 
         let bosh = config.bosh_enabled.then(|| {
             northstar_bosh::BoshManager::new(

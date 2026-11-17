@@ -273,3 +273,63 @@ async fn private_health_cancellation_closes_incomplete_requests_without_waiting_
         "shutdown fabricated a response to an incomplete request"
     );
 }
+
+#[tokio::test]
+async fn private_health_rejects_public_binds_and_bounds_incomplete_connections() {
+    let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let result = private_health(
+        listener,
+        WorkerRegistry::new(),
+        Arc::new(Metrics::default()),
+        RetentionReadiness::for_test(true),
+        SubscriptionCleanupReadiness::default(),
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "maintenance health listener must remain loopback-only",
+        "loopback authority"
+    );
+
+    let fixture = HealthFixture::start().await;
+    let mut clients = Vec::new();
+    for _ in 0..16 {
+        let mut client = TcpStream::connect(fixture.address).await.unwrap();
+        client
+            .write_all(b"GET /readyz HTTP/1.1\r\nHost:")
+            .await
+            .unwrap();
+        clients.push(client);
+    }
+    // Accepts are ordered on this one listener. The next connection must be
+    // closed before the two second request deadline can free an existing slot.
+    let mut extra = TcpStream::connect(fixture.address).await.unwrap();
+    let mut rejected = Vec::new();
+    tokio::time::timeout(Duration::from_secs(1), extra.read_to_end(&mut rejected))
+        .await
+        .expect("sixteen connection budget did not reject immediately")
+        .unwrap();
+    assert!(rejected.is_empty(), "sixteen connection budget");
+    tokio::time::timeout(Duration::from_secs(3), async {
+        for mut client in clients {
+            let mut response = Vec::new();
+            client.read_to_end(&mut response).await.unwrap();
+            assert!(
+                response.is_empty(),
+                "incomplete request expires without a response"
+            );
+        }
+    })
+    .await
+    .expect("two second request deadline did not release incomplete connections");
+    assert_eq!(
+        response_body(
+            &fixture.request(b"GET /healthz HTTP/1.1\r\n\r\n").await,
+            "200 OK",
+        ),
+        "ok\n",
+        "expired requests release connection permits"
+    );
+    fixture.stop().await;
+}

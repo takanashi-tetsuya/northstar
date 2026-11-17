@@ -56,3 +56,6 @@ pub trait HttpRepositories: Clone + Send + Sync + 'static {
         + Clone
         + 'static;
 }
+
+#[cfg(test)]
+mod tests;

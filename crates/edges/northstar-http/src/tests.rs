@@ -359,3 +359,114 @@ fn browser_csp_does_not_allow_inline_code_or_styles() {
     assert!(SPA_CONTENT_SECURITY_POLICY.contains("form-action 'self'"));
     assert!(SPA_CONTENT_SECURITY_POLICY.contains("frame-ancestors 'none'"));
 }
+
+#[tokio::test]
+async fn rendered_browser_csp_restricts_styles_connections_workers_and_navigation() {
+    use std::sync::atomic::AtomicU64;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    struct ServerTask(tokio::task::JoinHandle<()>);
+    impl Drop for ServerTask {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+
+    for (label, public) in [
+        ("public browser response", true),
+        ("administrator browser response", false),
+    ] {
+        let policy = HttpTransportPolicy::new(
+            vec![],
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(contexts::http_body_admission::HttpBodyAdmission::default()),
+        );
+        let router = common_http_layers(
+            Router::new().route("/", get(|| async { axum::response::Html("<html></html>") })),
+            policy,
+            public,
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let shutdown = cancel.clone();
+        let mut server = ServerTask(tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown.cancelled_owned())
+            .await
+            .unwrap();
+        }));
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+            client
+                .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            let mut response = String::new();
+            client.read_to_string(&mut response).await.unwrap();
+            response
+        })
+        .await
+        .expect("browser response did not complete");
+        cancel.cancel();
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK\r\n"),
+            "{label}: {response}"
+        );
+        let headers = response.split_once("\r\n\r\n").unwrap().0;
+        let values: Vec<_> = headers
+            .lines()
+            .filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-security-policy")
+                    .then(|| value.trim())
+            })
+            .collect();
+        assert_eq!(values.len(), 1, "{label}: exactly one rendered CSP header");
+        let directives: std::collections::BTreeMap<_, _> = values[0]
+            .split(';')
+            .map(|directive| {
+                let mut words = directive.split_ascii_whitespace();
+                (words.next().unwrap(), words.collect::<Vec<_>>())
+            })
+            .collect();
+        for (case, name, expected) in [
+            ("styles exclude inline injection", "style-src", "'self'"),
+            ("connections use exact origin", "connect-src", "'self'"),
+            (
+                "workers use static same-origin modules",
+                "worker-src",
+                "'self'",
+            ),
+            ("base rewriting disabled", "base-uri", "'none'"),
+            ("forms stay same origin", "form-action", "'self'"),
+        ] {
+            assert_eq!(
+                directives.get(name),
+                Some(&vec![expected]),
+                "{label}: {case}"
+            );
+        }
+        for (case, name, forbidden) in [
+            (
+                "no scheme-wide connections",
+                "connect-src",
+                vec!["ws:", "wss:", "https:"],
+            ),
+            ("no blob workers", "worker-src", vec!["blob:"]),
+        ] {
+            let sources = directives.get(name).expect("required directive");
+            assert!(
+                forbidden.iter().all(|source| !sources.contains(source)),
+                "{label}: {case}"
+            );
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(1), &mut server.0)
+            .await
+            .expect("browser test listener did not stop")
+            .expect("browser test listener panicked");
+    }
+}

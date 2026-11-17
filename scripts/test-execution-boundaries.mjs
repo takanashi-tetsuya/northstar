@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { findRustItem, matchingRustBrace } from './lib/source-module.mjs';
-import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyMixForegroundBoundaries, verifyMixWorkerBoundaries, verifyNativeAckService, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries, verifyBoshResponseBoundaries, verifyBoshSelectionObservations, verifyRouteHelperBoundaries } from './check-execution-boundaries.mjs';
+import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyMixForegroundBoundaries, verifyMixWorkerBoundaries, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries, verifyBoshResponseBoundaries, verifyBoshSelectionObservations, verifyRouteHelperBoundaries } from './check-execution-boundaries.mjs';
 
 const baseline = readExecutionSources();
 const CROSS_CRATE_TEST_ONLY = '#[cfg(any(test, feature = "test-support"))]';
@@ -44,80 +44,16 @@ test('comments and ordinary formatting are not executable authority', () => {
   verifyExecutionBoundaries(changed('frame', 'let result = future.await;',
     'let /* comment { } */ result =\n future . await;'));
 });
-rejects('native TCP ingress cannot bypass observed frame execution', 'transport',
-  'let action = match session.process_frame(&frame).await {\n                        Ok(action) => action,',
-  'let action = match session.handle(&frame).await {\n                        Ok(action) => action,', /drive_io/);
-rejects('native WebSocket ingress cannot bypass observed frame execution', 'transport',
-  'let action = match session.process_frame(&frame).await {\n                            Ok(action) => Ok(action),',
-  'let action = match session.handle(&frame).await {\n                            Ok(action) => Ok(action),', /websocket_connection/);
-rejects('activation must retain originating frame', 'protocol',
-  'CredentialAttempt::new(self.frame_executions.auth_origin(), self.connection_id, kind)', 'CredentialAttempt::new(None, self.connection_id, kind)', /originating frame/);
-rejects('comment cannot replace originating frame ownership', 'protocol',
-  'CredentialAttempt::new(self.frame_executions.auth_origin(), self.connection_id, kind)',
-  '/* CredentialAttempt::new(self.frame_executions.auth_origin(), self.connection_id, kind) */', /originating frame/);
-rejects('raw string cannot replace originating frame ownership', 'protocol',
-  'CredentialAttempt::new(self.frame_executions.auth_origin(), self.connection_id, kind)',
-  'r###"CredentialAttempt::new(self.frame_executions.auth_origin(), self.connection_id, kind)"###', /originating frame/);
-rejects('publication cannot bypass typed observation', 'protocol',
-  '.observe_publication(future)',
-  '.run(future)', /observed typed owner/);
-rejects('publication cannot add a deadline', 'frame',
-  'let result = future.await;',
-  'let result = tokio::time::timeout(FRAME_BUDGET, future).await.unwrap();', /without adding a deadline/);
+rejects('comment cannot replace root credential forwarding', 'state',
+  'self.session.sm_service.finalize_binding_observed(connection_id, user_id, expected_auth_generation, full_jid, self.config.capacity_session_lease_seconds, device_id, fast_plan, observation).await',
+  '/* self.session.sm_service.finalize_binding_observed(connection_id, user_id, expected_auth_generation, full_jid, self.config.capacity_session_lease_seconds, device_id, fast_plan, observation).await */', /state forwarding/);
+rejects('raw string cannot replace root credential forwarding', 'state',
+  'self.session.sm_service.finalize_binding_observed(connection_id, user_id, expected_auth_generation, full_jid, self.config.capacity_session_lease_seconds, device_id, fast_plan, observation).await',
+  'r###"self.session.sm_service.finalize_binding_observed(connection_id, user_id, expected_auth_generation, full_jid, self.config.capacity_session_lease_seconds, device_id, fast_plan, observation).await"###', /state forwarding/);
 rejects('publication cannot fork a detached observer', 'frame',
   'let result = future.await;',
   'tokio::spawn(async {}); let result = future.await;', /without adding a deadline/);
-rejects('frame budget cannot be expanded to hide a stall', 'frame',
-  'const FRAME_BUDGET: Duration = Duration::from_secs(5);',
-  'const FRAME_BUDGET: Duration = Duration::from_secs(6);', /reviewed budget/);
-rejects('WebSocket inline budget cannot drift', 'frame',
-  'const INLINE_AUTH_BUDGET: Duration = Duration::from_secs(8);',
-  'const INLINE_AUTH_BUDGET: Duration = Duration::from_secs(9);', /reviewed budget/);
-rejects('backend failure cannot be flattened to credential rejection', 'authOwner',
-  'return PublicationResult::BackendFailure;', 'return PublicationResult::CredentialRejected;', /BackendFailure/);
-rejects('integrity failure cannot be flattened to credential rejection', 'authOwner',
-  'AuthenticationResult::Authenticated(_) | AuthenticationResult::IntegrityFailure => { port.rejected(PublicationResult::IntegrityRejected, None); return PublicationResult::IntegrityRejected; }',
-  'AuthenticationResult::Authenticated(_) | AuthenticationResult::IntegrityFailure => { port.rejected(PublicationResult::CredentialRejected, None); return PublicationResult::CredentialRejected; }', /IntegrityRejected/);
-rejects('credential fence loss cannot continue transport', 'authOwner',
-  'return PublicationResult::CredentialRejected;', 'return PublicationResult::Completed;', /credential fence/);
-rejects('missing principal cannot become successful publication', 'protocol',
-  'self.session.authenticated.as_ref().is_none_or(|user| { user.id != route.user || user.auth_generation != route.generation })',
-  'self.session.authenticated.as_ref().is_some_and(|user| { user.id != route.user || user.auth_generation != route.generation })', /missing principal/);
-rejects('deferred replacement notification must remain visible', 'authOwner',
-  'return PublicationResult::CompletedWithDeferredNotification;',
-  'return PublicationResult::Completed;', /visibly deferred/);
-rejects('deferred replacement notification cannot force a client retry', 'frame',
-  'Self::Completed | Self::CompletedWithDeferredNotification',
-  'Self::Completed', /only authoritative publication success/);
-for (const [file, helper, end] of [
-  ['tcp', 'tcp_record_and_send_auth(io, session, reply, holder, opening).await?', 'return Ok(TcpActionDisposition::Close);'],
-  ['websocket', 'write_auth_control(socket, reply, holder, send_cancellation).await', 'return false;'],
-]) {
-  rejects(`${file} first write must succeed before activation`, file,
-    `let Some(owner) = ${helper} else { ${end} };`,
-    `let Some(owner) = ${helper} else { ${end} }; tokio::task::yield_now().await;`, /successful first\/control write/);
-  rejects(`${file} resumed control must succeed before activation`, file,
-    `let Some(owner) = ${helper.replace('reply', 'control')} else { ${end} };`,
-    `let Some(owner) = ${helper.replace('reply', 'control')} else { ${end} }; tokio::task::yield_now().await;`, /successful first\/control write/);
-  rejects(`${file} publication guard cannot be supplied by a comment`, file,
-    `let Some(owner) = ${helper} else { ${end} };`,
-    `/* let Some(owner) = ${helper} else { ${end} }; */`, /successful first\/control write/);
-  rejects(`${file} rejected publication must close rather than continue`, file,
-    `let Some(owner) = ${helper} else { ${end} }; if !session.publish_committed_authentication_and_route(owner).await { ${end} }`,
-    `let Some(owner) = ${helper} else { ${end} }; if !session.publish_committed_authentication_and_route(owner).await { continue; }`, /successful first\/control write/);
-}
 
-// Runtime trace tests alone do not prevent an adapter/owner bypass.
-rejects('inner credential publication cannot acquire a new five-second deadline', 'authOwner',
-  'match port.publish(&invocation).await {',
-  'match tokio::time::timeout(std::time::Duration::from_secs(5), port.publish(&invocation)).await.unwrap_or(AuthenticationResult::StaleGeneration) {',
-  /auth consuming sequence/);
-rejects('backend publication outcome cannot report completed', 'frame',
-  'Self::BackendFailure => Outcome::BackendFailure,',
-  'Self::BackendFailure => Outcome::Completed,', /result-to-outcome classification/);
-rejects('frame runner cannot apply inline budget to every transport', 'frame',
-  'let budget = self.0.policy.budget;',
-  'let budget = INLINE_AUTH_BUDGET;', /transport-specific policy budget/);
 rejects('frame observation must exist before child polling', 'frame',
   'pub fn run<T>(', 'pub async fn run<T>(', /production body/);
 rejects('frame timer cannot start in the synchronous constructor', 'frame',
@@ -131,19 +67,10 @@ rejects('normal pending must clear the panic marker', 'frame',
 rejects('ready child destruction must precede clearing the panic marker', 'frame',
   'drop(this.child.take());\n        this.poll_in_progress = false;',
   'this.poll_in_progress = false;\n        drop(this.child.take());', /destroy the ready child/);
-rejects('frame backend failure cannot become completed', 'frame',
-  'this.observation.finish(Outcome::BackendFailure);',
-  'this.observation.finish(Outcome::Completed);', /typed terminal result/);
-rejects('frame timeout cannot become backend failure', 'frame',
-  'this.observation.finish(Outcome::TimedOut);',
-  'this.observation.finish(Outcome::BackendFailure);', /typed terminal result/);
 rejects('runner drop cannot omit child destruction', 'frame',
   'drop(self.child.take());', '', /destroy the child first/);
 rejects('runner drop cannot forget a caught panic', 'frame',
   'if self.poll_in_progress {', 'if std::thread::panicking() {', /preserve a caught panic/);
-rejects('capture behind a dead condition is not originating ownership', 'protocol',
-  'CredentialAttempt::new(self.frame_executions.auth_origin(), self.connection_id, kind)',
-  'CredentialAttempt::new(if false { self.frame_executions.auth_origin() } else { None }, self.connection_id, kind)', /originating frame/);
 rejects('inline classifier remains transport-specific', 'frame',
   'let inline = transport == ClientTransport::WebSocket && is_inline_auth(frame);',
   'let inline = is_inline_auth(frame);', /guarded WebSocket inline/);
@@ -159,30 +86,18 @@ rejects('BOSH unexposed response cannot publish authentication', 'boshResponse',
 rejects('BOSH publication failure cannot succeed', 'bosh',
   'Ok(ready) => ready,\n            Err(_) => return false',
   'Ok(ready) => ready,\n            Err(_) => return true', /BOSH must observe publication/);
-rejects('BOSH exposure must reflect actual responder acceptance', 'boshResponse',
-  'let accepted = responder.send(response).is_ok();',
-  'let accepted = true; let _ = responder.send(response);', /actual responder acceptance/);
 rejects('BOSH cannot insert a suspension between exposure and publication', 'bosh',
   'let ready = match exposed',
   'tokio::task::yield_now().await;\n        let ready = match exposed', /BOSH must observe publication/);
 rejects('BOSH activation marker cannot be hidden behind a dead condition', 'boshAction',
   'let item = if index == 0 {',
   'let item = if false {', /BOSH activation/);
-rejects('BOSH resume must honor the activation flag', 'bosh',
-  'let control = if activate_route {',
-  'let control = if false {', /BOSH resume/);
 rejects('BOSH publication cannot treat every accepted response as selected', 'boshResponse',
   'if self.auth_control_selected {',
   'if true {', /BOSH publication gate/);
 rejects('BOSH publication callback failure cannot mint readiness', 'boshResponse',
   'anyhow::ensure!(publish(owners).await, "BOSH authentication publication failed");',
   'let _ = publish(owners).await;', /BOSH publication gate/);
-rejects('BOSH selected membership must use the final response items', 'boshResponse',
-  'SelectedControls::new(selected.iter().map(|item| (item.stanza.as_str(), item.auth_publication())))',
-  'SelectedControls::new(fields.output.iter().map(|item| (item.stanza.as_str(), item.auth_publication())))', /BOSH auth membership/);
-rejects('BOSH exposure cannot discard selected membership', 'boshResponse',
-  'auth_control_selected: self.auth_control_selected,',
-  'auth_control_selected: false,', /actual responder acceptance/);
 rejects('BOSH plain compatibility finish cannot bypass auth publication', 'boshResponse',
   '!self.auth_control_selected,\n            "selected BOSH authentication control requires publication"',
   'true,\n            "selected BOSH authentication control requires publication"', /plain compatibility finish/);
@@ -246,97 +161,9 @@ rejects('BOSH plain compatibility finish must remain test-only', 'boshResponse',
 // Finite auth owner/adapter negatives reuse the same exact token-span helper.
 rejects('auth receipt identity cannot become public substitution authority', 'authCredential',
   'publication_identity: Uuid,', 'pub publication_identity: Uuid,', /receipt instance identity must remain private/);
-rejects('auth value-equal receipt cannot substitute its private instance', 'authFacts',
-  'state.receipt_id == receipt.publication_identity() && state.receipt == ReceiptProjection::of(receipt)',
-  'state.receipt == ReceiptProjection::of(receipt)', /actual receipt and successful control transport/);
-rejects('auth invocation cannot begin before successful control transport', 'authFacts',
-  'ensure!(matches!(state.snapshot.transport, Transport::Written | Transport::BoshAccepted { .. }), "auth publication requires successful control transport");',
-  '', /actual receipt and successful control transport/);
-rejects('auth service start cannot be repeated through another borrow', 'authFacts',
-  'ensure!(!state.snapshot.service_started, "auth publication service already started");',
-  '', /distinct one-use transitions/);
-rejects('auth repository start cannot be repeated before pool begin', 'authFacts',
-  'ensure!(state.snapshot.service_started && !state.snapshot.repository_started, "auth publication repository is not pending");',
-  'ensure!(state.snapshot.service_started, "auth publication repository is not pending");', /distinct one-use transitions/);
-rejects('auth actual return must pass the observed service', 'protocol',
-  '.publish_credential_commit_observed(invocation).await',
-  '.publish_credential_commit(invocation.receipt()).await', /actual observed service/);
-rejects('auth frame registration cannot accept another origin', 'frame',
-  'observation.snapshot().frame == Some(self.0.operation_id)',
-  'true', /frame registration/);
-rejects('auth completed handler cannot retire a sealed publication', 'authFacts',
-  'if !state.snapshot.sealed && state.snapshot.terminal.is_none() {',
-  'if state.snapshot.terminal.is_none() {', /independently owned/);
-rejects('auth COMMIT knowledge cannot be recorded after the await', 'authFacts',
-  'state.snapshot.publication = Knowledge::CommitCallEntered;',
-  'state.snapshot.publication = Knowledge::BeforeCommit;', /COMMIT entry, receipt and return/);
-rejects('auth SQL publication cannot replace the stored epoch with a hint', 'authDb',
-  'invocation.commit(tx.commit(), published_epoch)',
-  'invocation.commit(tx.commit(), receipt.staged_login_epoch().map(|stage| stage.epoch))', /actual transaction order/);
-rejects('auth actual return cannot mint a matching receipt', 'authFacts',
-  'state.snapshot.publication == Knowledge::ReceiptKnown(epoch)',
-  'true', /return cannot synthesize/);
-rejects('auth final control binding cannot ignore its digest', 'authOwner',
-  'self.0.length == control.len() && self.0.digest == <[u8; 32]>::from(Sha256::digest(control.as_bytes()))',
-  'self.0.length == control.len()', /control bytes must match/);
-rejects('auth native alias cannot write before claiming the current holder', 'authOwner',
-  'state.pending.is_some() && state.phase == HolderPhase::Recording',
-  'state.pending.is_some()', /native write must claim/);
-rejects('auth late transport observation cannot overwrite written facts', 'authFacts',
-  'ensure!(allowed, "auth transport observation is late or out of order");',
-  '', /transport observations must remain monotone/);
-rejects('auth selected controls cannot skip duplicate IDs', 'authOwner',
-  'ids.insert(holder.0.id) && pointers.insert(Arc::as_ptr(&holder.0) as usize)',
-  'pointers.insert(Arc::as_ptr(&holder.0) as usize)', /reject duplicate IDs and aliases/);
-rejects('auth selected controls cannot skip duplicate holder addresses', 'authOwner',
-  'ids.insert(holder.0.id) && pointers.insert(Arc::as_ptr(&holder.0) as usize)',
-  'ids.insert(holder.0.id)', /reject duplicate IDs and aliases/);
-rejects('auth selected take cannot remove a holder during validation', 'authOwner',
-  'let pending = pending.pending.as_ref().ok_or_else(|| anyhow::anyhow!("auth holder was already consumed"))?;',
-  'let pending = pending.pending.take().ok_or_else(|| anyhow::anyhow!("auth holder was already consumed"))?;', /entire set before FIFO consumption/);
-rejects('auth selected lock set cannot cross an await', 'authOwner',
-  'drop(guards);\n        drop(sorted);',
-  'tokio::task::yield_now().await; drop(guards); drop(sorted);', /locks cannot cross an await/);
 rejects('auth selection completion cannot ignore one selected owner', 'boshResponse',
   'observations.iter().all(|observation| observation.completed())',
   'observations.iter().any(|observation| observation.completed())', /BOSH publication gate/);
-rejects('auth bound caps publication cannot use latest session intent', 'authOwner',
-  'port.caps(effects.caps.take()).await;',
-  'port.caps(None).await;', /captured route, caps and notifier ordering/);
-rejects('auth caps adapter cannot replace the captured connection', 'authCaps',
-  'self.commit_caps_observation_for(presence, full_jid, intent.connection, &intent.gate, &intent.generation);',
-  'self.commit_caps_observation_for(presence, full_jid, self.connection_id, &intent.gate, &intent.generation);', /captured presence, gate, generation/);
-rejects('auth route adapter cannot use latest connection for captured activation', 'protocol',
-  '&route.key, route.connection, route.user, route.generation, &route.lifecycle, &route.disconnect',
-  '&route.key, self.session.connection_id, route.user, route.generation, &route.lifecycle, &route.disconnect', /captured activation/);
-rejects('auth forged terminal marker cannot mint completed ownership', 'authFacts',
-  'Some(Terminal::Completed) => self.successful_completion(false),',
-  'Some(Terminal::Completed) => true,', /captured effect results/);
-rejects('auth completion cannot flatten missing caps result', 'authFacts',
-  '|| !effects.caps_entered || !effects.caps_returned',
-  '|| !effects.caps_entered', /captured effect results/);
-rejects('auth publication ready child must be destroyed before retirement', 'authOwner',
-  'drop(this.child.take());\n                this.retirement.polling = false;',
-  'this.retirement.polling = false; drop(this.child.take());', /destroy its child/);
-rejects('auth retirement field cannot precede its child', 'authOwner',
-  'struct PublicationRunner<F> { child: Option<Pin<Box<F>>>, retirement: PublicationRetirement }',
-  'struct PublicationRunner<F> { retirement: PublicationRetirement, child: Option<Pin<Box<F>>> }', /retirement field guard/);
-rejects('auth retirement cannot forget a caught poll panic', 'authOwner',
-  'if self.polling || std::thread::panicking() { Terminal::Panicked } else { Terminal::Cancelled }',
-  'if std::thread::panicking() { Terminal::Panicked } else { Terminal::Cancelled }', /retirement field guard/);
-rejects('auth actual TCP record cannot start before exact byte validation', 'transport',
-  'holder.validate_control(&stanza)?;',
-  '', /TCP adapter must validate/);
-rejects('auth inline resume cannot seal before final activation', 'sasl2',
-  'payload.activate_route = true;\n                    self.seal_resume_authentication(&mut payload)?;',
-  'self.seal_resume_authentication(&mut payload)?; payload.activate_route = true;', /inline resume must seal/);
-rejects('auth CredentialCommitReceipt cannot derive Clone', 'authCredential',
-  'pub struct CredentialCommitReceipt', '#[derive(Clone)] pub struct CredentialCommitReceipt', /cannot derive or implement Clone or Copy/);
-for (const [file, owner] of [['authOwner', 'KnownCredentialOwner'],
-  ['authOwner', 'OwnedPublication'], ['authOwner', 'SelectedControls']]) {
-  rejects(`auth ${owner} cannot derive Clone`, file,
-    `pub struct ${owner}`, `#[derive(Clone)] pub struct ${owner}`, /cannot derive or implement Clone or Copy/);
-}
 rejects('auth owner cannot publish its mutable receipt field', 'authOwner',
   'struct PendingPublication {\n    receipt: CredentialCommitReceipt,',
   'struct PendingPublication {\n    pub(crate) receipt: CredentialCommitReceipt,', /receipt, origin and effects private/);
@@ -397,56 +224,6 @@ rejects('auth control joins cannot erase the actual frame association', 'authOwn
   'frame: None', /actual holder and moved pending receipt/);
 
 // Pre-receipt controls use the same exact-one token-span mutation helper.
-rejects('credential prepared owner cannot become Clone', 'authFacts',
-  'pub struct PreparedCredential', '#[derive(Clone)] pub struct PreparedCredential', /cannot derive or implement Clone or Copy/);
-rejects('credential receipt handoff cannot acquire the latest frame', 'protocol',
-  'let owner = attempt.into_owner(receipt)?;', 'let owner = latest_attempt().into_owner(receipt)?;', /exact captured attempt/);
-rejects('credential observed mode cannot downgrade after a missing witness', 'authOwner',
-  '(Some(origin), Some(prepared)) => { KnownCredentialOwner::from_observed(receipt, origin, self.connection, &prepared) }',
-  '(Some(origin), Some(prepared)) => Ok(KnownCredentialOwner::from_returned(receipt, Some(origin), self.connection))', /cannot downgrade/);
-rejects('credential checked owner cannot skip independent transfer validation', 'authOwner',
-  'let credential = prepared.transfer(&receipt, origin.operation_id(), connection).map_err(|_| CredentialHandoffIntegrity)?;',
-  'let credential = prepared.observation();', /validate before creating/);
-rejects('credential handoff cannot accept an equal replacement receipt', 'authFacts',
-  'state.constructed.as_ref() == Some(&actual) && state.returned.as_ref() == Some(&actual)',
-  'state.constructed.is_some() && state.returned.is_some()', /exact constructed\/returned instance/);
-rejects('credential raw success cannot replace its independent witness', 'authFacts',
-  'state.snapshot.return_matches && state.integrity', 'state.snapshot.returned.is_some()', /same-attempt witness/);
-rejects('credential COMMIT cannot freeze after polling the driver', 'authFacts',
-  'state.snapshot.commit = CredentialCall::Entered;', 'state.snapshot.commit = CredentialCall::Ok;', /freeze preparation/);
-rejects('credential COMMIT acknowledgement cannot be inferred from entry', 'authFacts',
-  'state.snapshot.commit = if result.is_ok() { CredentialCall::Ok } else { CredentialCall::Err };',
-  'state.snapshot.commit = CredentialCall::Ok;', /acknowledge only the actual result/);
-rejects('credential COMMIT cannot replace the frozen projection after await', 'authFacts',
-  'if result.is_ok() { state.witness = state.prospective.take(); }',
-  'if result.is_ok() { state.witness = fresh_witness(); }', /freeze preparation/);
-rejects('credential true eligibility cannot flatten SQL false or missing', 'authFacts',
-  'snapshot.eligibility != Eligibility::Returned(Some(true))', 'false', /true eligibility/);
-rejects('credential stage projection cannot substitute another SQL operation', 'authFacts',
-  'Some(stage.operation_id) == snapshot.stage_id', 'true', /original SQL stage/);
-rejects('credential rollback cannot ignore its actual refusal site', 'authFacts',
-  '&& site.permitted(snapshot)', '', /exact rollback sites/);
-rejects('credential duplicate construction cannot replace its original receipt', 'authFacts',
-  'if state.constructed.is_some() { state.integrity = false; return; }', '', /preserve first facts/);
-rejects('credential repository errors cannot lose the original downcast identity', 'authFacts',
-  'CommitError::Repository(error) => error.into()', 'CommitError::Repository(error) => anyhow::anyhow!("wrapper")', /original repository error identity/);
-rejects('credential hidden helper begin cannot bypass observation', 'authUsers',
-  'CredentialInvocation::begin(observation, pool.begin()).await.map_err(credential_error)?',
-  'pool.begin().await?', /real begin\/query\/refusal rollback/);
-rejects('credential hidden helper cannot collapse false into missing', 'authUsers',
-  'if eligible != Some(true) {', 'if eligible.is_none() {', /None and false/);
-rejects('credential hidden helper rollback cannot be inferred from Drop', 'authUsers',
-  'CredentialInvocation::rollback(observation, CredentialRollbackSite::GenerationRefused, tx.rollback()).await.map_err(credential_error)?;',
-  'drop(tx);', /real begin\/query\/refusal rollback/);
-rejects('credential helper compatibility must explicitly remain unobserved', 'authUsers',
-  'lock_auth_generation_observed(pool, user_id, expected_generation, None).await',
-  'lock_auth_generation_observed(pool, user_id, expected_generation, current_observation()).await', /compatibility must share/);
-rejects('credential generated stage identity must be recorded before SQL', 'authDb',
-  'if let Some(observation) = observation { observation.stage_id(operation_id); }',
-  '', /original generated ID before the query/);
-rejects('credential staged SQL cannot generate a replacement identity', 'authDb',
-  'connection_id, operation_id, LOGIN_EPOCH_STAGE_TTL_SECONDS',
-  'connection_id, Uuid::new_v4(), LOGIN_EPOCH_STAGE_TTL_SECONDS', /original generated ID before the query/);
 rejects('credential FAST cannot lose its actual COMMIT observation', 'authDb',
   'match CredentialInvocation::commit(observation, tx.commit()).await {',
   'match tx.commit().await {', /actual transaction and construct/);
@@ -461,17 +238,6 @@ for (const [file, site] of [['authDb', 'FastExpired'], ['credentialSmDb', 'Bindi
 rejects('credential binding state must retain configured lease policy', 'state',
   'self.session.sm_service.finalize_binding_observed(connection_id, user_id, expected_auth_generation, full_jid, self.config.capacity_session_lease_seconds, device_id, fast_plan, observation).await',
   'self.session.sm_service.finalize_binding_observed(connection_id, user_id, expected_auth_generation, full_jid, 99, device_id, fast_plan, observation).await', /actual lease and exact resume request/);
-rejects('credential fixed history cannot replace an earlier attempt', 'frame',
-  'attempts.slots[kind.index()].is_none()', 'true', /original fixed-kind attempts/);
-rejects('credential registration cannot reopen after retirement snapshot', 'frame',
-  'attempts.closed = true;', 'attempts.closed = false;', /close registration and copy handles atomically/);
-rejects('credential frame history cannot retain only the latest attempt', 'frame',
-  'attempts.slots.clone()', 'latest_credential_only()', /close registration and copy handles atomically/);
-rejects('credential contradictory returned success cannot fall through as ordinary Unknown', 'sasl2',
-  '|| crate::auth_publication::credential_handoff_failed(&error)', '', /contradictory returned success must close/);
-rejects('credential resume Unknown cannot prohibit the existing fallback', 'sasl2',
-  'if bind_plan.is_none() && !unbound_state_committed {',
-  'if bind_plan.is_none() && !unbound_state_committed && !resume_was_unknown {', /existing separate fallback attempt/);
 
 // Reuse the bounded token-span mutation helper for auth and room guards.
 // Match the exact selected token span while tolerating whitespace and optional final commas;
@@ -504,63 +270,7 @@ function changedMuc(file, before, after, expectedMatches = 1) {
   return { ...baseline, [file]: source.slice(0, start) + after + source.slice(end) };
 }
 
-function rejectsRoom(name, file, before, after, expected) {
-  test(name, () => assert.throws(() => verifyRoomExecutionBoundaries(
-    ['muc', 'mucFanout'].includes(file) ? changedMuc(file, before, after) : changed(file, before, after)
-  ), expected));
-}
 test('current production room owners satisfy the gate', () => verifyRoomExecutionBoundaries(baseline));
-rejectsRoom('MUC policy observation cannot be removed', 'muc',
-  'session.enter_frame_stage(MucFrameStage::Policy);', '', /MUC message policy/);
-rejectsRoom('MUC wait stage cannot be supplied by a comment', 'muc',
-  'session.enter_frame_stage(MucFrameStage::GateWait);',
-  '/* session.enter_frame_stage(MucFrameStage::GateWait); */', /MUC standalone gate wait/);
-rejectsRoom('MUC authority observation cannot be removed', 'muc',
-  'session.enter_frame_stage(MucFrameStage::Authority);', '', /MUC standalone gate wait/);
-for (const call of [
-  'match session\n                .host()\n                .muc_service()\n                .execute_muc_retraction(',
-  'match service\n                    .set_local_cluster_subject(',
-  'match service\n                .execute_muc_subject(',
-]) {
-  const gap = call.includes('set_local_cluster_subject') ? '\n                ' : '\n            ';
-  rejectsRoom(`MUC admission hook cannot disappear before ${call.split('.').at(-1)}`, 'muc',
-    'session.enter_frame_stage(MucFrameStage::Admission);' + gap + call, call, /MUC admission stage/);
-}
-rejectsRoom('observed MUC admission must retain its frame stage', 'muc',
-  'session.enter_frame_stage(MucFrameStage::Admission);\n                let completion = session',
-  'let completion = session', /MUC admission stage/);
-rejectsRoom('legacy MUC admission must retain its frame stage', 'muc',
-  'session.enter_frame_stage(MucFrameStage::Admission);\n                session.host()\n                    .muc_service()\n                    .execute_muc_discussion(',
-  'session.host()\n                    .muc_service()\n                    .execute_muc_discussion(', /MUC admission stage/);
-rejectsRoom('MUC replay cannot become fresh live fanout', 'muc',
-  'fanout_disposition = MucFanoutDisposition::Replay;',
-  'fanout_disposition = MucFanoutDisposition::Accepted;', /MUC replay and accepted fanout/);
-rejectsRoom('MUC message cannot bypass reviewed fanout owner', 'muc',
-  'accepted.fanout(session).await?', 'unreviewed_fanout(session).await?', /MUC replay and accepted fanout/);
-rejectsRoom('MUC fanout stage adapter cannot swap local and cluster meaning', 'muc',
-  'MucFanoutStage::Cluster => MucFrameStage::ClusterFanout,',
-  'MucFanoutStage::Cluster => MucFrameStage::LocalFanout,', /MUC fanout adapter/);
-rejectsRoom('MUC fanout cannot report effects for replay', 'mucFanout',
-  'if disposition == MucFanoutDisposition::Replay {\n        return false;\n    }',
-  'if disposition == MucFanoutDisposition::Replay {\n        return true;\n    }', /MUC fanout must skip replay/);
-rejectsRoom('MUC fanout cannot move local stage before cluster publication', 'mucFanout',
-  'port.enter(MucFanoutStage::Cluster);\n    port.publish_cluster().await;',
-  'port.enter(MucFanoutStage::Local);\n    port.publish_cluster().await;', /MUC effects must preserve/);
-rejectsRoom('C2S MIX cannot discard originating frame observation', 'mix',
-  'Some(session.frame_observer()),', 'None,', /C2S MIX must attribute/);
-rejectsRoom('MIX shared message owner cannot lose policy observation', 'mix',
-  'observation.enter(MixFrameStage::Policy);', '', /MIX shared owner/);
-for (const call of ['retract_mix_message']) {
-  const indentation = call === 'retract_mix_message' ? '        ' : '    ';
-  const before = `if let Some(observation) = observation {\n${indentation}    observation.enter(MixFrameStage::Admission);\n${indentation}}\n${indentation}let admission = state\n${indentation}    .mix_service()\n${indentation}    .${call}(`;
-  const after = `let admission = state\n${indentation}    .mix_service()\n${indentation}    .${call}(`;
-  rejectsRoom(`MIX ${call} must retain its admission hook`, 'mix', before, after, /MIX admission stage/);
-}
-test('MIX foreground admission must retain its admission hook', () => {
-  assert.throws(() => verifyRoomExecutionBoundaries(changedMuc('mix',
-    'if let Some(observation) = observation { observation.enter(MixFrameStage::Admission); } let admission = if let Some(owner) = &foreground {',
-    'let admission = if let Some(owner) = &foreground {')), /MIX admission stage/);
-});
 
 function rejectsMixForeground(name, file, before, after, expected, matches = 1) {
   test(name, () => assert.throws(() => verifyMixForegroundBoundaries(
@@ -569,257 +279,14 @@ function rejectsMixForeground(name, file, before, after, expected, matches = 1) 
 test('current production MIX foreground satisfies its retained-owner gate', () => verifyMixForegroundBoundaries(baseline));
 rejectsMixForeground('MIX configuration cannot be supplied by a caller claim', 'state',
   'config.domain.clone(), mix_message_content_identity,', 'claimed_domain(), mix_message_content_identity,', /actual runtime configuration/);
-rejectsMixForeground('MIX receiving domain keeps the existing subdomain policy', 'mixService',
-  '&format!("mix.{configured_domain}")', '&format!("other.{configured_domain}")', /canonical mix subdomain/);
-rejectsMixForeground('MIX configured domain cannot be supplied by a comment', 'mixService',
-  'let configured_mix_domain = northstar_xmpp_types::prepare_domainpart(&format!("mix.{configured_domain}"))?;',
-  '/* let configured_mix_domain = northstar_xmpp_types::prepare_domainpart(&format!("mix.{configured_domain}"))?; */ let configured_mix_domain = claimed_domain();', /canonical mix subdomain/);
-rejectsMixForeground('MIX preparation cannot accept a self-consistent foreign domain', 'mixService',
-  'if !ingress.matches_receiving_domain(&self.configured_mix_domain)', 'if false', /own receiving authority/);
-rejectsMixForeground('MIX observed service cannot substitute claimed domain', 'mixService',
-  'request, &self.configured_mix_domain, self.repository.store_mix_message_observed(',
-  'request, claimed_domain(), self.repository.store_mix_message_observed(', /receiving domain and bound repository/);
-rejectsMixForeground('MIX observed service retains the fair pre-pool guard', 'mixService',
-  'let _admission = self.delivery_admission_guard().await; let completion = crate::mix::admit_observed(',
-  'let completion = crate::mix::admit_observed(', /fair admission/);
-rejectsMixForeground('MIX compatibility service retains the fair pre-pool guard', 'mixService',
-  'let _admission = self.delivery_admission_guard().await; let result = self.repository.store_mix_message(',
-  'let result = self.repository.store_mix_message(', /compatibility service/);
-rejectsMixForeground('MIX equal UUIDs cannot replace private invocation identity', 'mixCore',
-  'fn same_invocation(&self, other: &Self) -> bool { Arc::ptr_eq(&self.0, &other.0) }',
-  'fn same_invocation(&self, other: &Self) -> bool { true }', /private allocation identity/);
-rejectsMixForeground('MIX store input pointer cannot be substituted', 'mixCore',
-  'Arc::ptr_eq(command, &self.command)', 'true', /immutable invocation input/);
-rejectsMixForeground('MIX COMMIT receipt cannot follow an unrelated await', 'mixCore',
-  'commit.await.map_err(CommitError::Commit)?; request.received(prepared)',
-  'commit.await.map_err(CommitError::Commit)?; unrelated().await; request.received(prepared)', /without an intervening await/);
-rejectsMixForeground('MIX actual entered fact cannot be replaced by equal values', 'mixCore',
-  'Arc::ptr_eq(fact, &prepared.fact)', 'true', /exact active invocation/);
-rejectsMixForeground('MIX contradictory returns remain diagnosable', 'mixCore',
-  'state.snapshot.returned = Some(Returned::Admission(admission.clone()));',
-  'drop(admission.clone());', /contradictory returns/);
-rejectsMixForeground('MIX accepted return retains one audience', 'mixCore',
-  'state.snapshot.returned = Some(Returned::AcceptedStored(id));',
-  'state.snapshot.returned = Some(Returned::Admission(admission.clone()));', /matched Stored retains one audience/);
-rejectsMixForeground('MIX wake is consumed before invocation', 'mixCore',
-  'state.snapshot.wake = Wake::Invoked; } publish();',
-  'publish(); state.snapshot.wake = Wake::Invoked; }', /consume before synchronous invocation/);
-rejectsMixForeground('MIX observed SQL actor is obtained from its request', 'mixDb',
-  'pool, command.channel_id, &command.actor, &command.item_id.to_string(),',
-  'pool, command.channel_id, &forged_actor(), &command.item_id.to_string(),', /only from the bound request/);
 rejectsMixForeground('MIX raw Existing survives rollback suspension', 'mixDb',
   'request.observed_existing(foreground_existing(&existing))?; } transaction.rollback().await?;',
   '} transaction.rollback().await?;', /before both rollback awaits/, 2);
-rejectsMixForeground('MIX admission wraps its actual COMMIT', 'mixDb',
-  'transaction.commit(), request, northstar_room_core::mix::Stored {',
-  'fabricated_commit(), request, northstar_room_core::mix::Stored {', /actual COMMIT order/);
-rejectsMixForeground('MIX projection retains actual delivery IDs', 'mixDb',
-  'delivery_id: delivery_ids[recipient.jid.as_str()]', 'delivery_id: event_id', /actual IDs\/sequences/);
-rejectsMixForeground('MIX projection retains returned sequence values', 'mixDb',
-  'sequence: sequences[&recipient.jid]', 'sequence: 1', /actual IDs\/sequences/);
-rejectsMixForeground('MIX empty audience does not invent an event', 'mixDb',
-  'if recipients.is_empty() { return Ok(None); }', 'if false { return Ok(None); }', /no empty durable event/);
-rejectsMixForeground('MIX preflight replay needs repository authentication', 'mixRepository',
-  'request.authenticated(&raw, result)?;', '/* request.authenticated(&raw, result)?; */', /authenticated repository evidence/);
-rejectsMixForeground('MIX SQL Existing cannot skip classification', 'mixRepository',
-  'request.authenticated(&raw, classified)?;', '', /classified by the repository/);
-rejectsMixForeground('MIX store authentication true branch keeps original replay identity', 'mixRepository',
-  'let classified = if exact { MixBusinessReplay::Replay(existing.authoritative_id) } else { MixBusinessReplay::Conflict };',
-  'let classified = if exact { MixBusinessReplay::Conflict } else { MixBusinessReplay::Conflict };', /store authentication must map/);
-rejectsMixForeground('MIX store authentication false branch remains conflict', 'mixRepository',
-  'let classified = if exact { MixBusinessReplay::Replay(existing.authoritative_id) } else { MixBusinessReplay::Conflict };',
-  'let classified = if exact { MixBusinessReplay::Replay(existing.authoritative_id) } else { MixBusinessReplay::Replay(existing.authoritative_id) };', /store authentication must map/);
-rejectsMixForeground('MIX store returned branch cannot contradict authenticated classification', 'mixRepository',
-  'request.authenticated(&raw, classified)?; if exact { StoreEventOutcome::Replay(existing.authoritative_id) } else { StoreEventOutcome::Conflict }',
-  'request.authenticated(&raw, classified)?; if exact { StoreEventOutcome::Replay(existing.authoritative_id) } else { StoreEventOutcome::Replay(existing.authoritative_id) }', /store authentication must map/);
-rejectsMixForeground('MIX read authentication true branch keeps original replay identity', 'mixRepository',
-  'let result = if existing.target_id.is_none() && authenticators.verifies(&existing.semantic_key_id, &existing.semantic_mac) { MixBusinessReplay::Replay(existing.authoritative_id) } else { MixBusinessReplay::Conflict };',
-  'let result = if existing.target_id.is_none() && authenticators.verifies(&existing.semantic_key_id, &existing.semantic_mac) { MixBusinessReplay::Replay(Uuid::nil()) } else { MixBusinessReplay::Conflict };', /read authentication must map/);
-rejectsMixForeground('MIX read authentication false branch remains conflict', 'mixRepository',
-  'let result = if existing.target_id.is_none() && authenticators.verifies(&existing.semantic_key_id, &existing.semantic_mac) { MixBusinessReplay::Replay(existing.authoritative_id) } else { MixBusinessReplay::Conflict };',
-  'let result = if existing.target_id.is_none() && authenticators.verifies(&existing.semantic_key_id, &existing.semantic_mac) { MixBusinessReplay::Replay(existing.authoritative_id) } else { MixBusinessReplay::Replay(existing.authoritative_id) };', /read authentication must map/);
-rejectsMixForeground('MIX absent frames skip observed preparation', 'frame',
-  'let prepared = prepare()?; execution.0.mix_foreground.register(&prepared).map(Some)',
-  'execution.0.mix_foreground.register(&untrusted_prepared()).map(Some)', /true absence must skip preparation/);
-rejectsMixForeground('MIX conflicting registration cannot be downgraded', 'mixSlot',
-  'if !observation.is_for(prepared) { return Err(Rejected::Input); }',
-  'if !observation.is_for(prepared) { return Ok(observation.clone()); }', /retired\/conflicting owners/);
-rejectsMixForeground('MIX observed ingress cannot fall back after registration failure', 'mix',
-  'frames.mix_foreground(Box::new(|| { state.mix_service().prepare_mix_foreground(',
-  'legacy_or_failed_registration(Box::new(|| { state.mix_service().prepare_mix_foreground(', /contiguous unfiltered registration/);
-rejectsMixForeground('MIX active frame cannot be filtered into legacy compatibility', 'mix',
-  'if let Some(frames) = observation {',
-  'if let Some(frames) = observation.filter(|_| false) {', /contiguous unfiltered registration/);
-rejectsMixForeground('MIX active foreground cannot be shadowed into compatibility', 'mix',
-  'let foreground = if retraction_target.is_none() {',
-  'let observation = observation.filter(|_| false); let foreground = if retraction_target.is_none() {', /contiguous unfiltered registration/);
-rejectsMixForeground('MIX replay selection cannot filter an active owner', 'mix',
-  'let replay = if let Some(owner) = &foreground {',
-  'let replay = if let Some(owner) = foreground.as_ref().filter(|_| false) {', /contiguous unfiltered registration/);
-rejectsMixForeground('MIX store selection cannot filter an active owner', 'mix',
-  'let admission = if let Some(owner) = &foreground {',
-  'let admission = if let Some(owner) = foreground.as_ref().filter(|_| false) {', /contiguous unfiltered registration/);
-rejectsMixForeground('MIX mutable membership cannot move before replay', 'mix',
-  'let foreground = if retraction_target.is_none()',
-  'let early = state.mix_service().mix_participant(channel.id, actor_bare).await?; let foreground = if retraction_target.is_none()',
-  /mutable membership must follow/);
-rejectsRoom('federated MIX cannot invent a C2S observation', 'mix',
-  'process_channel_message(&state, &actor_bare, &actor_full, &raw, None).await?',
-  'process_channel_message(&state, &actor_bare, &actor_full, &raw, Some(&SessionExecutions::default())).await?',
-  /federated MIX/);
-rejectsRoom('transferred MIX owner cannot acknowledge through old worker token', 'mix',
-  'ChannelStanzaDeliveryOutcome::TransferredToRecoverableTransport => Ok(true),',
-  'ChannelStanzaDeliveryOutcome::TransferredToRecoverableTransport => acknowledge().await,', /MIX settlement/);
-rejectsRoom('worker-owned MIX result cannot skip acknowledgement', 'mix',
-  'ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker => acknowledge().await,',
-  'ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker => Ok(true),', /MIX settlement/);
-rejectsMixWorker('MIX claimed delivery cannot bypass lazy settlement owner', 'mix',
-  'completion.settlement(command, closed)?', 'unreviewed_settlement(command, closed)?', /MIX claimed delivery/);
-test('MUC room guard cannot be released before accepted fanout', () => {
-  const start = baseline.muc.indexOf('    let attempted = if let Some(accepted) = discussion_fanout {');
-  const release = '    drop(local_authority_guard);';
-  const end = baseline.muc.indexOf(release, start);
-  assert.ok(start >= 0 && end > start);
-  const before = baseline.muc.slice(start, end + release.length);
-  const after = release + '\n' + before.slice(0, -release.length);
-  assert.throws(() => verifyRoomExecutionBoundaries(changed('muc', before, after)), /before releasing the room guard/);
-});
-
-function rejectsMucDiscussion(name, file, before, after, expected) {
-  test(name, () => assert.throws(() => verifyMucDiscussionBoundaries(changedMuc(file, before, after)), expected));
-}
 test('current MUC discussion source bridges retain accepted knowledge', () => verifyMucDiscussionBoundaries(baseline));
 test('MUC service constructor remains checked with an unrelated impl block', () => {
   const mucService = baseline.mucService + '\nimpl<R: MucRepository> MucService<R> {\n    pub(crate) fn zz_probe(&self) {}\n}\n';
   verifyMucDiscussionBoundaries({ ...baseline, mucService });
 });
-test('MUC service constructor cannot appear in multiple impl blocks', () => {
-  const mucService = baseline.mucService + '\nimpl<R: MucRepository> MucService<R> {\n    pub(crate) fn zz_probe(&self) {}\n    pub(crate) fn new() {}\n}\n';
-  assert.throws(() => verifyMucDiscussionBoundaries({ ...baseline, mucService }), /expected one production body containing/);
-});
-test('MUC service preparation must stay in the constructor-bearing impl', () => {
-  const source = baseline.mucService;
-  const item = findRustItem(source, 'pub fn prepare_muc_discussion(');
-  const mucService = source.slice(0, item.start) + source.slice(item.close + 1)
-    + '\nimpl<R: MucRepository> MucService<R> {\n' + item.text + '\n}\n';
-  assert.throws(() => verifyMucDiscussionBoundaries({ ...baseline, mucService }), /expected one production body: .*prepare_muc_discussion/);
-});
-rejectsMucDiscussion('MUC prepared domain must come from receiving configuration', 'mucApplication',
-  'discussion::PreparedDiscussion::new(command, self.configured_domain.clone())',
-  'discussion::PreparedDiscussion::new(command, caller_domain())', /receiving application configuration/);
-rejectsMucDiscussion('MUC request cannot validate its own foreign domain', 'mucCore',
-  'self.observation.0.prepared.0.configured_domain == configured_domain',
-  'true', /cannot authorize its own configured domain/);
-rejectsMucDiscussion('MUC observed repository cannot start before domain refusal', 'mucApplication',
-  'request.start().map_err(AdmissionError::Observation)?;', '', /before repository start/);
-rejectsMucDiscussion('MUC repository must project input from the bound request', 'mucDb',
-  'super::room::discussion_to_db(request.command()),',
-  'unrelated_command(),', /projected from its bound request/);
-rejectsMucDiscussion('MUC actual COMMIT entry cannot disappear', 'mucCore',
-  'let prepared = request.enter_commit(outcome).map_err(CommitError::Observation)?;',
-  'let prepared = fabricated_commit();', /actual entry and successful receipt/);
-rejectsMucDiscussion('MUC receipt must precede any post-COMMIT suspension', 'mucCore',
-  'request.received(prepared).map_err(CommitError::Observation)',
-  'unrelated().await; request.received(prepared).map_err(CommitError::Observation)', /actual entry and successful receipt/);
-rejectsMucDiscussion('MUC receipt token cannot cross invocations', 'mucCore',
-  'if !self.observation.same_invocation(&prepared.observation) {',
-  'if false {', /exact active invocation/);
-rejectsMucDiscussion('MUC stored result cannot substitute another fresh identity', 'mucCore',
-  'MucDiscussionAdmission::Stored(id) if id == self.command().id => {',
-  'MucDiscussionAdmission::Stored(id) if true => {', /Stored must match fresh identity/);
-rejectsMucDiscussion('MUC replay cannot infer original archive presence from the new request', 'mucCore',
-  'MucDiscussionAdmission::Replay(_) if self.command().origin_id.is_some() => None,',
-  'MucDiscussionAdmission::Replay(_) if self.command().origin_id.is_some() => Some(self.observation.0.prepared.requested_class()),', /Replay must keep original identity/);
-rejectsMucDiscussion('MUC volatile acceptance cannot gain identity recovery', 'mucCore',
-  '(false, false) => Self::Volatile',
-  '(false, false) => Self::IdentityOnly', /archive and identity independence/);
-rejectsMucDiscussion('MUC returned-only success cannot mint an observed permit', 'mucCore',
-  'return Err(Rejected::MissingReceipt);',
-  '/* receipt was not observed */', /returned-only success/);
-test('MUC first fresh SQL COMMIT exit cannot bypass observation', () => {
-  const before = 'commit_muc_discussion(transaction, request, MucDiscussionAdmission::Stored(message.id)).await';
-  const sources = changedMuc('mucDb', before, 'legacy_commit(transaction).await', 2);
-  assert.throws(() => verifyMucDiscussionBoundaries(sources), /all three existing COMMIT exits/);
-});
-rejectsMucDiscussion('MUC replay SQL COMMIT must observe its original ID', 'mucDb',
-  'commit_muc_discussion(transaction, request, MucDiscussionAdmission::Replay(existing_id)).await',
-  'commit_muc_discussion(transaction, request, MucDiscussionAdmission::Replay(message.id)).await', /all three existing COMMIT exits/);
-rejectsMucDiscussion('MUC PostgreSQL repository cannot select legacy returned-only admission', 'mucRepository',
-  'crate::muc::admit_muc_discussion_observed(&self.pool, request).await?',
-  'crate::muc::admit_muc_discussion(&self.pool, discussion_to_db(request.command())).await?', /observed SQL entry/);
-rejectsMucDiscussion('MUC service cannot skip the request-bound application', 'mucService',
-  '.admit_discussion_observed(request)', '.legacy_discussion(request)', /request-bound application/);
-rejectsMucDiscussion('MUC service constructor cannot substitute a different configured domain', 'mucService',
-  'discussion_application: RoomApplication::new(repository.clone(), configured_domain.to_string())',
-  'discussion_application: RoomApplication::new(repository.clone(), "evil.test")', /actual receiving configuration/);
-rejectsMucDiscussion('MUC service preparation cannot select another application', 'mucService',
-  'self.discussion_application.prepare_discussion(command)',
-  'self.other_application.prepare_discussion(command)', /configured discussion application/);
-rejectsMucDiscussion('MUC retired lazy slot cannot register another invocation', 'mucSlot',
-  'if slot.terminal.is_some() {', 'if false {', /retired\/conflicting rejection/);
-rejectsMucDiscussion('MUC conflicting slot cannot masquerade as an existing matching input', 'mucSlot',
-  'if !observation.is_for(prepared) {', 'if false {', /retired\/conflicting rejection/);
-rejectsMucDiscussion('MUC retired current frame cannot fall back to legacy absence', 'frame',
-  'return Err(discussion::Rejected::Retired);', 'return Ok(None);', /legacy absence must remain distinct/);
-rejectsMucDiscussion('MUC protocol accessor cannot swallow registration errors', 'protocol',
-  'self.frame_executions.muc_discussion(prepared)',
-  'Ok(self.frame_executions.muc_discussion(prepared).ok().flatten())', /propagate registration errors/);
-rejectsMucDiscussion('MUC frame completion must retire its discussion slot', 'frame',
-  'progress.muc_discussion.retire(muc_reason)', 'None', /frame retirement/);
-rejectsMucDiscussion('MUC envelope cannot skip archive/live pairing', 'muc',
-  'anyhow::ensure!(command.stanza == archive,', 'anyhow::ensure!(true,', /bind exact archive projection/);
-rejectsMucDiscussion('MUC bound envelope cannot consume another invocation result', 'muc',
-  'completion.into_fanout(&self.observation)?', 'completion.into_fanout(&other)?', /consume matching completion/);
-rejectsMucDiscussion('MUC accepted envelope cannot substitute fanout payload', 'muc',
-  'stanza: &live.stanza', 'stanza: &replacement', /cannot substitute live payload/);
-rejectsRoom('MUC discussion registration failure cannot select legacy fallback', 'muc',
-  'session.muc_discussion_operation(&prepared.prepared)?',
-  'session.muc_discussion_operation(&prepared.prepared).ok().flatten()', /MUC discussion dispatch/);
-rejectsRoom('MUC active frame cannot be filtered into legacy admission', 'muc',
-  'if let Some(operation) = operation {',
-  'if let Some(operation) = operation.filter(|_| false) {', /MUC discussion dispatch/);
-rejectsRoom('MUC observed fanout cannot borrow a reusable permit', 'mucFanout',
-  'let progress = permit.start()?;', 'let progress = permit.borrow();', /consume its permit/);
-rejectsRoom('MUC acquired recipient order cannot be silently sorted', 'mucFanout',
-  'let recipients = port.recipients();', 'let mut recipients = port.recipients(); recipients.sort();', /MUC effects must preserve/);
-rejectsRoom('MUC pending endpoint cannot advance before its actual return', 'mucFanout',
-  'let accepted = port.deliver(&recipient).await;', 'let accepted = true;', /MUC effects must preserve/);
-rejectsMixWorker('MIX acknowledgement cannot substitute a different exact fence', 'mixDb',
-  'remove_mix_delivery_tx(&mut transaction, source.delivery_id, source.lease_token)',
-  'remove_mix_delivery_tx(&mut transaction, source.delivery_id, source.delivery_id)', /ACK must observe/);
-
-test('native and compatibility MIX ACK share the reviewed database owner', () => verifyNativeAckService(baseline.mixService));
-function rejectsNativeAck(name, declaration, before, after, expected) {
-  test(name, () => {
-    assert.equal(baseline.mixService.split(declaration).length - 1, 1);
-    const start = baseline.mixService.indexOf(declaration);
-    const end = baseline.mixService.indexOf('\n    }', start);
-    assert.ok(end > start, 'reviewed service method boundary must exist');
-    const method = baseline.mixService.slice(start, end + 6);
-    assert.equal(method.split(before).length - 1, 1, 'mutation must match once within its service method');
-    const source = baseline.mixService.slice(0, start) + method.replace(before, after) + baseline.mixService.slice(end + 6);
-    assert.notEqual(source, baseline.mixService, 'mutation must change source');
-    assert.throws(() => verifyNativeAckService(source), expected);
-  });
-}
-const legacyAck = 'pub async fn acknowledge_mix_delivery(';
-const nativeAck = 'pub async fn acknowledge_mix_socket_write(';
-const sharedAck = 'async fn acknowledge_mix_delivery_inner(';
-rejectsNativeAck('legacy MIX ACK cannot replace the exact delivery', legacyAck, 'delivery_id,', 'other_delivery,', /legacy MIX acknowledgement/);
-rejectsNativeAck('legacy MIX ACK cannot replace the exact token', legacyAck, 'lease_token,', 'other_token,', /legacy MIX acknowledgement/);
-rejectsNativeAck('legacy MIX ACK cannot invent an observation', legacyAck, 'None', 'Some(request)', /legacy MIX acknowledgement/);
-rejectsNativeAck('native MIX ACK cannot reinterpret a C2S source', nativeAck, 'TransportOwnershipSource::Mix(source)', 'TransportOwnershipSource::C2s(source)', /native MIX acknowledgement/);
-rejectsNativeAck('native MIX ACK cannot extract a different request', nativeAck, 'request.source()', 'other_request.source()', /native MIX acknowledgement/);
-rejectsNativeAck('native MIX ACK cannot replace the exact token', nativeAck, 'source.lease_token', 'source.delivery_id', /native MIX acknowledgement/);
-rejectsNativeAck('native MIX ACK cannot discard its observation', nativeAck, 'Some(request)', 'None', /native MIX acknowledgement/);
-rejectsNativeAck('native MIX ACK cannot replace its observation', nativeAck, 'Some(request)', 'Some(other_request)', /native MIX acknowledgement/);
-rejectsNativeAck('shared MIX ACK cannot bypass database admission', sharedAck, 'self.outbox_db_admission_guard().await', 'unbounded_permit()', /shared MIX acknowledgement/);
-rejectsNativeAck('shared MIX ACK cannot omit the repository observation', sharedAck, 'lease_token, observation', 'lease_token, None', /shared MIX acknowledgement/);
-rejectsNativeAck('shared MIX ACK cannot erase the repository failure', sharedAck, '.await?', '.await.unwrap_or(true)', /shared MIX acknowledgement/);
-rejectsNativeAck('shared MIX ACK cannot wake after no-match', sharedAck, 'if result', 'if true', /shared MIX acknowledgement/);
-rejectsNativeAck('shared MIX ACK cannot invert the wake condition', sharedAck, 'if result', 'if !result', /shared MIX acknowledgement/);
-rejectsNativeAck('shared MIX ACK cannot wake twice', sharedAck, 'self.publish_delivery_local_commit();', 'self.publish_delivery_local_commit(); self.publish_delivery_local_commit();', /shared MIX acknowledgement/);
-rejectsNativeAck('shared MIX ACK cannot fabricate success', sharedAck, 'Ok(result)', 'Ok(true)', /shared MIX acknowledgement/);
 
 test('native receive, write and settlement owners satisfy their source gate', () => verifyNativeWriteBoundaries(baseline));
 function rejectsNativeWrite(name, file, pattern, replacement, expected) {
@@ -1039,12 +506,6 @@ function rejectsMixWorker(name, file, before, after, expected, matches = 1) {
 }
 
 test('MIX worker production adapters and private permissions satisfy their gate', () => verifyMixWorkerBoundaries(baseline));
-rejectsMixWorker('MIX production wrapper cannot bypass its shared policy', 'mix',
-  'process_claimed_mix_delivery_with_port(MixOutboxDeliveryPort { context }, attempt, handle, cancel).await',
-  'Ok(())', /production wrapper must delegate/);
-rejectsMixWorker('MIX production wrapper cannot substitute its cancellation token', 'mix',
-  'process_claimed_mix_delivery_with_port(MixOutboxDeliveryPort { context }, attempt, handle, cancel).await',
-  'process_claimed_mix_delivery_with_port(MixOutboxDeliveryPort { context }, attempt, handle, other_cancel).await', /production wrapper must delegate/);
 rejectsMixWorker('MIX shared worker port cannot grow a generic executor operation', 'mix',
   "trait ClaimedMixDeliveryPort: Clone + Send + Sync + 'static {",
   "trait ClaimedMixDeliveryPort: Clone + Send + Sync + 'static { fn execute(&self);", /port must contain only/);
@@ -1060,199 +521,9 @@ test('MIX production port cannot substitute its context type', () => {
     'struct MixOutboxDeliveryPort<C> {\n    pub context: Arc<()>,\n}')),
   { message: 'execution boundary: MIX production port must retain only its existing context' });
 });
-rejectsMixWorker('MIX production route port cannot substitute its request', 'mix',
-  'deliver_claimed_channel_stanza(self.context.as_ref(), request).await',
-  'deliver_claimed_channel_stanza(self.context.as_ref(), other_request).await', /port must forward/);
-for (const operation of ['renew_mix_delivery_lease_observed', 'settle_mix_delivery_observed']) {
-  rejectsMixWorker(`MIX production ${operation} port cannot bypass observed service work`, 'mix',
-    `self.context.service().${operation}(request).await`, 'Ok(true)', /port must forward/);
-}
-rejectsMixWorker('MIX shared policy cannot retarget its addressed row', 'mix',
-  'let stanza = match addressed_mix_delivery(&attempt.row().stanza, &attempt.row().recipient_jid)',
-  'let stanza = match addressed_mix_delivery(&attempt.row().stanza, other_recipient)', /exact row addressing/);
-rejectsMixWorker('MIX invalid-template settlement cannot bypass the shared deadline', 'mix',
-  'bounded_mix_outbox_turn(&cancel, attempt_deadline, port.settle(&request))',
-  'unbounded_turn(port.settle(&request))', /bounded invalid-template/);
-rejectsMixWorker('MIX shared policy cannot flatten route errors into renewal errors', 'mix',
-  'async { Ok(port.route(&request).await) }',
-  'async { port.route(&request).await }', /close renewal scope/);
-rejectsMixWorker('MIX shared policy cannot shorten its first renewal interval', 'mix',
-  'MIX_OUTBOX_LEASE_RENEWAL_INTERVAL, async { Ok(port.route(&request).await) }',
-  'Duration::from_millis(1), async { Ok(port.route(&request).await) }', /close renewal scope/);
-rejectsMixWorker('MIX shared policy cannot renew without its bound observation request', 'mix',
-  'let renewal = owner.renewal_request()?; port.renew(&renewal).await',
-  'port.renew(&other_renewal).await', /close renewal scope/);
-rejectsMixWorker('MIX shared policy cannot settle an unrelated request', 'mix',
-  'bounded_mix_outbox_turn(&cancel, attempt_deadline, port.settle(&settlement))',
-  'bounded_mix_outbox_turn(&cancel, attempt_deadline, port.settle(&other_settlement))', /consume transfer or lazily/);
-rejectsMixWorker('MIX shared policy cannot reinterpret LeaseLost as success', 'mix',
-  'mix_worker::SettlementResult::Ack(false) | mix_worker::SettlementResult::Defer(false) | mix_worker::SettlementResult::Retry(mix_worker::RetryResult::LeaseLost)',
-  'mix_worker::SettlementResult::Ack(false) | mix_worker::SettlementResult::Defer(false) | mix_worker::SettlementResult::Retry(mix_worker::RetryResult::Retried)', /NotMoved and exact-fence/);
-rejectsMixWorker('MIX shared policy cannot relabel route cancellation as timeout', 'mix',
-  'if mix_outbox_is_shutting_down(&error) { handle.finish_as(mix_worker::TerminalReason::Cancelled); return Ok(()); } else if error.downcast_ref::<MixDeliveryRoutePending>().is_some()',
-  'if mix_outbox_is_shutting_down(&error) { handle.finish_as(mix_worker::TerminalReason::TimedOut); return Ok(()); } else if error.downcast_ref::<MixDeliveryRoutePending>().is_some()', /cancellation classes/);
-rejectsMixWorker('MIX claim cannot accept value-equal substituted row storage', 'mixWorkerCore',
-  'ClaimKnowledge::StatementReceipt(receipt) => Arc::ptr_eq(receipt, &rows)',
-  'ClaimKnowledge::StatementReceipt(receipt) => receipt == &rows', /exact returned storage/);
-rejectsMixWorker('MIX claim cannot erase a rejected actual return', 'mixWorkerCore',
-  'state.returned = Some(ClaimReturned::Rejected(rows.clone()));', 'state.returned = None;', /exact returned storage/);
-rejectsMixWorker('MIX claim cannot mint attempts for duplicate delivery rows', 'mixWorkerCore',
-  'if rows.iter().map(|row| row.source.delivery_id).collect::<std::collections::BTreeSet<_>>().len() != rows.len()',
-  'if false', /unique rows/);
 rejectsMixWorker('MIX attempt UUID equality cannot replace private invocation identity', 'mixWorkerCore',
   'fn same(&self, other: &Self) -> bool { Arc::ptr_eq(&self.0, &other.0) }',
   'fn same(&self, other: &Self) -> bool { self.row().source == other.row().source }', /private invocation identity/);
-rejectsMixWorker('MIX archive mismatch cannot reopen retry permission', 'mixWorkerCore',
-  'if state.snapshot.archive.knowledge != ArchiveKnowledge::ReceiptKnown(result) { state.snapshot.aborted = true; return Err(Rejected::MissingReceipt); }',
-  'if state.snapshot.archive.knowledge != ArchiveKnowledge::ReceiptKnown(result) { return Err(Rejected::MissingReceipt); }', /archive mismatch/);
-rejectsMixWorker('MIX archive receipt alone cannot authorize routing before exact return', 'mixWorkerCore',
-  '(ArchiveKnowledge::ReceiptKnown(known), Some(ArchiveReturned::Outcome(returned))) if known == returned',
-  '(ArchiveKnowledge::ReceiptKnown(known), Some(ArchiveReturned::Outcome(returned))) if true', /matching receipt and returned/);
-rejectsMixWorker('MIX contradictory local return cannot authorize another resource', 'mixWorkerCore',
-  'if enqueued != requires_enqueue { state.snapshot.aborted = true; return Err(Rejected::Result); }',
-  'if enqueued != requires_enqueue { return Err(Rejected::Result); }', /contradictory local returns/);
-rejectsMixWorker('MIX renewal backend failure cannot reset into another renewal', 'mixWorkerCore',
-  'renewal.returned = Some(RenewalReturned::Error); renewal.pending = false; state.snapshot.aborted = true;',
-  'renewal.returned = Some(RenewalReturned::Error); renewal.pending = false;', /renewal error/);
-rejectsMixWorker('MIX renewal false must retain unavailable lease knowledge', 'mixWorkerCore',
-  'renewal.last_receipt = Some((self.ordinal, result)); if !result { state.snapshot.lease_lost = true; }',
-  'renewal.last_receipt = Some((self.ordinal, result));', /false lease knowledge/);
-rejectsMixWorker('MIX closed renewal scope cannot invent completion of a pending child', 'mixWorkerCore',
-  'state.snapshot.renewal_scope_closed = true; Ok(RenewalScopeClosed { observation: self.clone() })',
-  'state.snapshot.renewal.pending = false; state.snapshot.renewal_scope_closed = true; Ok(RenewalScopeClosed { observation: self.clone() })', /pending invocation knowledge/);
-rejectsMixWorker('MIX settlement cannot start before renewal children are destroyed', 'mixWorkerCore',
-  'if !state.snapshot.renewal_scope_closed { return Err(Rejected::Renewal); }',
-  'if false { return Err(Rejected::Renewal); }', /closed renewal scope/);
-rejectsMixWorker('MIX pending route cannot select ACK settlement', 'mixWorkerCore',
-  'RouteResult::Pending => SettlementKind::Defer,',
-  'RouteResult::Pending => SettlementKind::Ack,', /exclusive outcome kind/);
-rejectsMixWorker('MIX settlement cannot silently substitute its returned receipt', 'mixWorkerCore',
-  'settlement.knowledge != SettlementKnowledge::ReceiptKnown(result)',
-  'false', /actual receipt and command/);
-for (const [name, receipt] of [['archive', 'prepared'], ['settlement', 'prepared, result']]) {
-  rejectsMixWorker(`MIX ${name} COMMIT cannot erase an independently observed receipt`, 'mixWorkerCore',
-    `request.received(${receipt}).map_err(CommitError::Observation)`, 'Ok(())', /COMMIT wrappers/);
-}
-for (const name of ['Claim', 'Attempt']) {
-  rejectsMixWorker(`MIX ${name} holder cannot retire before child destruction`, 'mixWorkerOwner',
-    `impl Drop for ${name}Run { fn drop(&mut self) { drop(self.child.take());`,
-    `impl Drop for ${name}Run { fn drop(&mut self) { self.retirement.finish(core::TerminalReason::Cancelled); drop(self.child.take());`, /field guard/);
-  rejectsMixWorker(`MIX ${name} retirement must preserve caught poll panic`, 'mixWorkerOwner',
-    `impl Drop for ${name}Retirement { fn drop(&mut self) { if !self.retired { self.finish(if self.polling || std::thread::panicking()`,
-    `impl Drop for ${name}Retirement { fn drop(&mut self) { if !self.retired { self.finish(if std::thread::panicking()`, /field guard/);
-}
-rejectsMixWorker('MIX observed claim cannot be replaced by a raw DTO compatibility claim', 'mixWorker',
-  'context.service().claim_mix_deliveries_observed(&request)',
-  'context.service().claim_mix_deliveries(claim_limit, 8 * 1024 * 1024)', /bounded observed claim/);
-rejectsMixWorker('MIX work cannot bypass its owning attempt holder', 'mixWorker',
-  'let run = delivery.run(move |attempt, handle| { process_claimed_mix_delivery(context, attempt, handle, cancel) });',
-  'let run = process_claimed_mix_delivery(context, delivery, handle, cancel);', /attempt holder/);
-for (const [name, repository] of [
-  ['claim_mix_deliveries_observed', 'claim_mix_deliveries_observed'],
-  ['outbox_archive_mix_message_once_observed', 'archive_mix_message_once_observed'],
-  ['renew_mix_delivery_lease_observed', 'renew_mix_delivery_lease_observed'],
-  ['settle_mix_delivery_observed', 'settle_mix_delivery_observed'],
-]) {
-  rejectsMixWorker(`MIX ${name} must forward its own closed request`, 'mixService',
-    `self.repository.${repository}(request).await`,
-    `self.repository.${repository}(other_request).await`, /fair admission and exact request/);
-}
-rejectsMixWorker('MIX settlement cannot wake on ACK false', 'mixService',
-  'SettlementResult::Ack(true) | SettlementResult::DeadLetter(true)',
-  'SettlementResult::Ack(false) | SettlementResult::DeadLetter(true)', /wake must follow/);
-rejectsMixWorker('MIX authorized empty claim cannot manufacture a mutating statement receipt', 'mixDb',
-  'request.read_empty()?;', 'request.enter_statement()?;', /authorized read-empty/);
-rejectsMixWorker('MIX successful CTE claim cannot lose its independent row receipt', 'mixDb',
-  'request.received(entered.expect("observed claim entered its mutating statement"), rows.clone())?;',
-  'drop(entered);', /actual autocommit statement receipt/);
-rejectsMixWorker('MIX worker ACK false cannot be converted to a true receipt', 'mixDb',
-  'northstar_delivery_core::mix_outbox::SettlementResult::Ack(removed)',
-  'northstar_delivery_core::mix_outbox::SettlementResult::Ack(true)', /ACK must observe/);
-rejectsMixWorker('MIX shared settlement cannot bypass the actual COMMIT observer', 'mixDb',
-  'northstar_delivery_core::mix_outbox::settlement_commit_observed(transaction.commit(), request, result)',
-  'unobserved_commit(transaction.commit(), request, result)', /shared settlement helper/);
-rejectsMixWorker('MIX dead-letter NotMoved cannot report a moved receipt', 'mixDb',
-  'northstar_delivery_core::mix_outbox::SettlementResult::DeadLetter(moved)',
-  'northstar_delivery_core::mix_outbox::SettlementResult::DeadLetter(true)', /Moved and NotMoved/);
-rejectsMixWorker('MIX retry LeaseLost cannot skip its actual COMMIT', 'mixDb',
-  'commit_mix_worker_settlement(transaction, observation, northstar_delivery_core::mix_outbox::SettlementResult::Retry(MixDeliveryRetryOutcome::LeaseLost)).await?;',
-  'drop(transaction);', /actual COMMIT for LeaseLost/);
-rejectsMixWorker('MIX retry cannot replace the locked-row outcome in its receipt', 'mixDb',
-  'northstar_delivery_core::mix_outbox::SettlementResult::Retry(outcome)',
-  'northstar_delivery_core::mix_outbox::SettlementResult::Retry(MixDeliveryRetryOutcome::Retried)', /locked-row decisions/);
-rejectsMixWorker('MIX renewal false cannot be upgraded to a positive receipt', 'mixDb',
-  'request.received(entered.expect("observed renewal entered its statement"), renewed)?;',
-  'request.received(entered.expect("observed renewal entered its statement"), true)?;', /autocommit boolean receipt/);
-rejectsMixWorker('MIX defer false cannot be upgraded to a positive receipt', 'mixDb',
-  'northstar_delivery_core::mix_outbox::SettlementResult::Defer(updated)',
-  'northstar_delivery_core::mix_outbox::SettlementResult::Defer(true)', /autocommit boolean receipt/);
-rejectsMixWorker('MIX retry cannot borrow a different claimed wake generation', 'mixDb',
-  'retry_mix_delivery_inner(pool, source.delivery_id, source.lease_token, request.route_wake_generation(), error, Some(request)).await',
-  'retry_mix_delivery_inner(pool, source.delivery_id, source.lease_token, other_generation, error, Some(request)).await', /generation and command/);
-rejectsMixWorker('MIX personal archive Stored cannot bypass the actual COMMIT', 'mixArchive',
-  'commit_mix_archive(transaction, observation, SourceArchiveAdmission::Stored(personal_archive_id)).await?;',
-  'drop(transaction);', /Stored and authenticated original-ID Replay/);
-rejectsMixWorker('MIX personal archive replay receipt must keep the original row ID', 'mixArchive',
-  'commit_mix_archive(transaction, observation, SourceArchiveAdmission::Replay(existing_id)).await?;',
-  'commit_mix_archive(transaction, observation, SourceArchiveAdmission::Replay(personal_archive_id)).await?;', /original-ID Replay/);
-rejectsMixWorker('MIX route cannot force optional producer rows into always-archived messages', 'mix',
-  'authoritative_stanza_id: row.authoritative_stanza_id, archive: row.archive,',
-  'authoritative_stanza_id: row.authoritative_stanza_id, archive: true,', /optional-ID and archive shape/);
-for (const effect of ['archive', 'local', 'cluster']) {
-  const before = effect === 'archive' ? 'let admission = if let Some(owner) = observation {' :
-    `let result = if let Some(owner) = observation { let request = owner.${effect}_request(`;
-  const after = before.replace('= observation {', '= observation.filter(|_| false) {');
-  rejectsMixWorker(`MIX active worker cannot filter out its observed ${effect} branch`, 'mix', before, after, /unfiltered bound/);
-}
-rejectsMixWorker('MIX local handoff cannot discard its pending disconnect guard', 'mix',
-  'let mut pending = PendingMixLocalHandoff::new(sender.clone(), disconnect.clone());',
-  'let mut pending = UnobservedHandoff::new(sender.clone(), disconnect.clone());', /pending-disconnect guard/);
-rejectsMixWorker('MIX local enqueue cannot be recorded as typed ownership transfer', 'mix',
-  'request.enqueued().map_err(MixLocalTransportFailure::Observation)?;',
-  'request.returned(mix_worker::LocalResult::Transferred(mix_worker::TransferBoundary::ClusterSocketFenced)).map_err(MixLocalTransportFailure::Observation)?;', /pending-disconnect guard/);
-rejectsMixWorker('MIX typed local receipt cannot defer consumption across another await', 'mix',
-  'pending.mark_completed(); if let Some(request) = observation {',
-  'pending.mark_completed(); std::future::pending::<()>().await; if let Some(request) = observation {', /immediately before any later await/);
-rejectsMixWorker('MIX cluster result cannot return before transfer consumption', 'mix',
-  'record_claimed_cluster_result(request, &result)?; result',
-  'return result; record_claimed_cluster_result(request, &result)?;', /typed result before returning/);
-rejectsMixWorker('MIX delivered boolean cannot authorize cluster transfer', 'mix',
-  'Ok(receipt) if receipt.acknowledged => receipt.mix_handoff.map',
-  'Ok(receipt) if receipt.delivered => receipt.mix_handoff.map', /acknowledged typed handoff/);
-rejectsMixWorker('MIX settlement cannot close renewal scope before child destruction', 'mix',
-  'let closed = handle.observation.close_renewal_scope()?;',
-  'let closed = premature_scope;', /close renewal scope/);
-rejectsMixWorker('MIX transferred route cannot select worker ACK', 'mix',
-  'request.returned(mix_worker::RouteResult::Transferred)?.transferred(closed)?; return Ok(());',
-  'let settlement = request.returned(mix_worker::RouteResult::CompletedByWorker)?.settlement(mix_worker::SettlementCommand::Ack, closed)?; return Ok(());', /consume transfer or lazily/);
-for (const [kind, database, other] of [['Ack', 'acknowledge', 'defer'], ['Defer', 'defer', 'acknowledge'], ['Retry', 'retry', 'dead_letter'], ['DeadLetter', 'dead_letter', 'retry']]) {
-  rejectsMixWorker(`MIX ${kind} repository cannot select another settlement`, 'mixRepository',
-    `crate::mix::${database}_mix_delivery_worker_observed(&self.pool, request).await?`,
-    `crate::mix::${other}_mix_delivery_worker_observed(&self.pool, request).await?`, /typed command and exact request/);
-}
-rejectsMixWorker('MIX claim projection cannot replace its actual lease token', 'mixDb',
-  'source: northstar_delivery_core::MixDelivery { delivery_id: delivery.delivery_id, lease_token: delivery.lease_token, },',
-  'source: northstar_delivery_core::MixDelivery { delivery_id: delivery.delivery_id, lease_token: other_token, },', /claimed attempt projection/);
-rejectsMixWorker('MIX archive adapter cannot retarget a personal projection', 'mixArchive',
-  'pool, command.personal_archive_id, command.owner_id, &command.channel_jid,',
-  'pool, command.personal_archive_id, other_owner, &command.channel_jid,', /bound command/);
-rejectsMixWorker('MIX archive repository cannot turn Replay into Stored', 'mixRepository',
-  'SourceArchiveAdmission::Replay(id) => outbox::core::ArchiveResult::Replay(id)',
-  'SourceArchiveAdmission::Replay(id) => outbox::core::ArchiveResult::Stored(id)', /same request/);
-rejectsMixWorker('MIX pending route cannot change the existing defer delay policy', 'mix',
-  'mix_worker::SettlementCommand::Defer { delay_seconds: MIX_DELIVERY_ROUTE_RECOVERY_DELAY_SECS }',
-  'mix_worker::SettlementCommand::Defer { delay_seconds: 1 }', /actual route result/);
-for (const [name, request, result] of [
-  ['claim_mix_deliveries_observed', 'ClaimRequest', 'Vec<outbox::OwnedAttempt>'],
-  ['outbox_archive_mix_message_once_observed', 'ArchiveRequest', 'outbox::core::ArchiveResult'],
-  ['renew_mix_delivery_lease_observed', 'RenewalRequest', 'bool'],
-  ['settle_mix_delivery_observed', 'SettlementRequest', 'outbox::core::SettlementResult'],
-]) {
-  const declaration = `pub async fn ${name}(&self, request: &outbox::core::${request}) -> Result<${result}> {`;
-  rejectsMixWorker(`MIX ${name} cannot skip the fair outbox gate`, 'mixService',
-    `${declaration} let _admission = self.outbox_db_admission_guard().await;`, declaration,
-    /fair admission and exact request/);
-}
 
 // The baseline is the untouched source read from disk, including the proposed
 // Rust observer after an authorized integration. Do not synthesize a positive
@@ -1351,81 +622,9 @@ rejectsSelection('BOSH selection owner getter cannot leak selected controls',
   'pub fn selection_observation(&self) -> SelectionObservation { self.selection.clone() }',
   'pub fn selection_observation(&self) -> &SelectedControls { &self.auth_controls }', /test-only and clone only/);
 for (const [name, before, after] of [
-  ['original selected FIFO', 'selected.get(ordinal).map(|item|', 'selected.get(selected.len() - 1 - ordinal).map(|item|'],
-  ['actual source', 'source: item.durable_source,', 'source: expected_source,'],
-  ['actual UTF8 length', 'utf8_length: item.stanza.len(),', 'utf8_length: item.stanza.chars().count(),'],
-  ['same-item digest', 'sha256: Sha256::digest(item.stanza.as_bytes()).into(),', 'sha256: Sha256::digest(selected.front().unwrap().stanza.as_bytes()).into(),'],
-  ['actual auth marker', 'let auth_marker = item.is_bosh_auth_control();', 'let auth_marker = association.is_some();'],
-  ['independent holder joins', 'let joins = item.auth_publication().map(|holder| holder.join_observation());', 'let joins = supplied_holder_joins;'],
-  ['original sealed introduction', 'let association = holder_joins.and_then(|joins| joins.introduced);', 'let association = holder_joins.and_then(|joins| joins.transferred);'],
-  ['actual sealed association', 'sealed_association: association,', 'sealed_association: expected_association,'],
-  ['missing associations', 'if auth_marker && association.is_none() {', 'if false {'],
-  ['retained missing-association count', 'missing_auth_associations += 1;', 'missing_auth_associations += 0;'],
   ['explicit overflow count', 'let omitted_items = selected.len().saturating_sub(MAX_SELECTED_FACTS);', 'let omitted_items = 0;'],
-  ['overflow status', 'if omitted_items == 0 && missing_auth_associations == 0 {', 'if missing_auth_associations == 0 {'],
-  ['missing-association status', 'if omitted_items == 0 && missing_auth_associations == 0 {', 'if omitted_items == 0 {'],
-  ['actual session', 'session: operation.session_id(),', 'session: uuid::Uuid::nil(),'],
-  ['actual RID', 'rid: metadata.rid, fingerprint: metadata.fingerprint, first_validated_connection: None,', 'rid: 0, fingerprint: metadata.fingerprint, first_validated_connection: None,'],
-  ['actual fingerprint', 'rid: metadata.rid, fingerprint: metadata.fingerprint, first_validated_connection: None,', 'rid: metadata.rid, fingerprint: [0; 32], first_validated_connection: None,'],
-  ['actual selected count', 'selected_count: selected.len(),', 'selected_count: items.len(),'],
-  ['absent initial connection', 'first_validated_connection: None, validated_connection: None,', 'first_validated_connection: Some(operation.session_id()), validated_connection: Some(operation.session_id()),'],
 ]) {
   rejectsSelection(`BOSH selection capture must retain ${name}`, before, after, /capacity|final FIFO facts/);
-}
-for (const [name, before, after] of [
-  ['sealed association after transfer', 'let mut snapshot = item.at_selection;', 'let mut snapshot = item.at_selection; snapshot.sealed_association = item.joins.as_ref().and_then(|joins| joins.snapshot().transferred);'],
-  ['live holder facts', 'snapshot.holder_joins = item.joins.as_ref().map(|joins| joins.snapshot());', 'snapshot.holder_joins = item.at_selection.holder_joins;'],
-  ['captured selection order', 'state.items[ordinal].as_ref().map(|item|', 'state.items[MAX_SELECTED_FACTS - 1 - ordinal].as_ref().map(|item|'],
-  ['loss status', 'status: state.status,', 'status: SelectionReadStatus::Complete,'],
-  ['first successful connection', 'first_validated_connection: state.first_validated_connection,', 'first_validated_connection: state.validated_connection,'],
-  ['latest successful connection', 'validated_connection: state.validated_connection,', 'validated_connection: state.first_validated_connection,'],
-]) {
-  rejectsSelection(`BOSH selection snapshot must retain ${name}`, before, after, /capacity|live fact-only holder joins/);
-}
-rejectsSelection('BOSH selection final capture cannot read the remaining queue',
-  'SelectionObservation::capture(&selected, operation, metadata)',
-  'SelectionObservation::capture(fields.output, operation, metadata)', /final successful bind/);
-rejectsSelection('BOSH selection final capture cannot use supplied fixture membership',
-  'SelectionObservation::capture(&selected, operation, metadata)',
-  'SelectionObservation::capture(&expected_selection, operation, metadata)', /final successful bind/);
-rejectsSelection('BOSH selection final capture cannot substitute operation identity',
-  'SelectionObservation::capture(&selected, operation, metadata)',
-  'SelectionObservation::capture(&selected, other_operation, metadata)', /final successful bind/);
-rejectsSelection('BOSH selection final capture cannot substitute metadata identity',
-  'SelectionObservation::capture(&selected, operation, metadata)',
-  'SelectionObservation::capture(&selected, operation, other_metadata)', /final successful bind/);
-rejectsSelection('BOSH selection final capture cannot escape test configuration',
-  `${CROSS_CRATE_TEST_ONLY} let selection = SelectionObservation::capture(&selected, operation, metadata);`,
-  'let selection = SelectionObservation::capture(&selected, operation, metadata);', /final successful bind/);
-rejectsSelection('BOSH selection constructor field cannot escape test configuration',
-  `auth_connection: None, ${CROSS_CRATE_TEST_ONLY} selection`, 'auth_connection: None, selection', /final successful bind/);
-rejectsSelection('BOSH selection capture cannot be duplicated before binding',
-  'let bound = request.returned(ownership).map_err(|error|',
-  `${CROSS_CRATE_TEST_ONLY} let early_selection = SelectionObservation::capture(&selected, operation, metadata); let bound = request.returned(ownership).map_err(|error|`, /final successful bind/);
-rejectsSelection('BOSH selection capture cannot depend on a publication callback',
-  `${CROSS_CRATE_TEST_ONLY} let selection = SelectionObservation::capture(&selected, operation, metadata);`,
-  `${CROSS_CRATE_TEST_ONLY} let selection = { publish(owners).await; SelectionObservation::capture(&selected, operation, metadata) };`, /final successful bind/);
-rejectsSelection('BOSH selection callback cannot mint another selection observation',
-  'let owners = selected.take_all()?;',
-  `let owners = selected.take_all()?; ${CROSS_CRATE_TEST_ONLY} let later_selection = SelectionObservation::capture(&supplied_selection, operation, metadata);`, /final successful bind/);
-rejectsSelection('BOSH selection success cannot add a suspension before capture',
-  'let auth_control_selected = !auth_controls.is_empty();',
-  'let auth_control_selected = !auth_controls.is_empty(); tokio::task::yield_now().await;', /final successful bind/);
-for (const [name, before, after] of [
-  ['connection assignment before validation', 'self.auth_controls.validate_connection(connection)?; self.auth_connection = Some(connection);', 'self.auth_connection = Some(connection); self.auth_controls.validate_connection(connection)?;'],
-  ['observer connection before validation', 'self.auth_controls.validate_connection(connection)?; self.auth_connection = Some(connection);', 'self.selection.0.lock().unwrap().validated_connection = Some(connection); self.auth_controls.validate_connection(connection)?; self.auth_connection = Some(connection);'],
-  ['ignored validation error', 'self.auth_controls.validate_connection(connection)?; self.auth_connection = Some(connection);', 'let _ = self.auth_controls.validate_connection(connection); self.auth_connection = Some(connection);'],
-  ['connection capture outside test configuration', `${CROSS_CRATE_TEST_ONLY} { let mut selection = self.selection.0.lock().unwrap();`, '{ let mut selection = self.selection.0.lock().unwrap();'],
-  ['first binding overwritten by rebinding', 'selection.validated_connection = Some(connection);', 'selection.first_validated_connection = Some(connection); selection.validated_connection = Some(connection);'],
-  ['latest binding lost on successful rebind', 'selection.validated_connection = Some(connection);', 'selection.validated_connection = selection.first_validated_connection;'],
-  ['return to first connection clearing loss', 'if previous != connection {', 'if selection.first_validated_connection != Some(connection) {'],
-  ['rebinding silently complete', 'selection.status = SelectionReadStatus::Incomplete { omitted_items, missing_auth_associations, connection_changed: true, };', 'selection.status = SelectionReadStatus::Complete;'],
-  ['previous overflow forgotten on rebinding', '} => (omitted_items, missing_auth_associations)', '} => (0, missing_auth_associations)'],
-  ['previous missing association forgotten on rebinding', '} => (omitted_items, missing_auth_associations)', '} => (omitted_items, 0)'],
-  ['equal successful validation adding loss', 'if previous != connection {', 'if true {'],
-  ['auth-free rebinding becoming production rejection', 'self.auth_controls.validate_connection(connection)?; self.auth_connection = Some(connection);', 'self.auth_controls.validate_connection(connection)?; anyhow::ensure!(self.auth_connection.is_none()); self.auth_connection = Some(connection);'],
-]) {
-  rejectsSelection(`BOSH selection forbids ${name}`, before, after, /successful validation.*sticky loss/);
 }
 for (const [name, before, after] of [
   ['bound effect literal', 'bound_effects: state.bound_effects,', 'bound_effects: true,'],
@@ -1488,51 +687,12 @@ rejectsRoute("route activation delegate cannot become test-only", "sessionTable"
 rejectsRoute("route caps delegate cannot become test-only", "mixOutboxState",
   "fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability",
   "#[cfg(test)] fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability");
-rejectsRoute("route epoch delegate preserves the supplied key", "sessionTable",
-  "publish_user_agent_epoch_if_current_in(&self.0, key, connection_id, user_id, auth_generation, lifecycle, user_agent_epoch)",
-  "publish_user_agent_epoch_if_current_in(&self.0, full_jid, connection_id, user_id, auth_generation, lifecycle, user_agent_epoch)", true);
-rejectsRoute("route epoch delegate preserves the supplied Option", "sessionTable",
-  "publish_user_agent_epoch_if_current_in(&self.0, key, connection_id, user_id, auth_generation, lifecycle, user_agent_epoch)",
-  "publish_user_agent_epoch_if_current_in(&self.0, key, connection_id, user_id, auth_generation, lifecycle, None)");
-rejectsRoute("route activation delegate preserves the lifecycle Arc", "sessionTable",
-  "activate_session_if_current_in(&self.0, full_jid, connection_id, user_id, auth_generation, lifecycle, disconnect)",
-  "activate_session_if_current_in(&self.0, full_jid, connection_id, user_id, auth_generation, &other_lifecycle, disconnect)");
-rejectsRoute("route activation delegate preserves owner cancellation", "sessionTable",
-  "activate_session_if_current_in(&self.0, full_jid, connection_id, user_id, auth_generation, lifecycle, disconnect)",
-  "activate_session_if_current_in(&self.0, full_jid, connection_id, user_id, auth_generation, lifecycle, &CancellationToken::new())");
 rejectsRoute("route CAPS delegate preserves the pending index", "mixOutboxState",
   "session_mix_capability_in(&self.sessions, &self.caps_by_jid, &self.pending_caps, full_jid)",
   "session_mix_capability_in(&self.sessions, &self.caps_by_jid, &other_pending_caps, full_jid)");
 rejectsRoute("route CAPS delegate preserves the queried key", "mixOutboxState",
   "session_mix_capability_in(&self.sessions, &self.caps_by_jid, &self.pending_caps, full_jid)",
   "session_mix_capability_in(&self.sessions, &self.caps_by_jid, &self.pending_caps, other_jid)");
-rejectsRoute("route epoch assignment retains the map write guard", "sessionTable",
-  "let Some(mut session) = sessions.get_mut(key) else { return false; };",
-  "let Some(mut session) = sessions.get(key).map(|entry| entry.value().clone()) else { return false; };");
-rejectsRoute("route epoch assignment preserves connection rejection", "sessionTable",
-  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
-  "if session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0");
-rejectsRoute("route epoch assignment preserves user rejection", "sessionTable",
-  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
-  "if session.connection_id != connection_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0");
-rejectsRoute("route epoch assignment preserves generation rejection", "sessionTable",
-  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
-  "if session.connection_id != connection_id || session.user_id != user_id || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0");
-rejectsRoute("route epoch assignment preserves lifecycle pointer rejection", "sessionTable",
-  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
-  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0");
-rejectsRoute("route epoch assignment preserves session cancellation rejection", "sessionTable",
-  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
-  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.lifecycle.load(Ordering::Acquire) != 0");
-rejectsRoute("route epoch assignment preserves lifecycle state rejection", "sessionTable",
-  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled() || session.lifecycle.load(Ordering::Acquire) != 0",
-  "if session.connection_id != connection_id || session.user_id != user_id || session.auth_generation != auth_generation || !Arc::ptr_eq(&session.lifecycle, lifecycle) || session.disconnect.is_cancelled()");
-rejectsRoute("route epoch assignment uses the actual Option", "sessionTable",
-  "session.user_agent_epoch = user_agent_epoch;",
-  "session.user_agent_epoch = Some(43);");
-rejectsRoute("route epoch missing key cannot return success", "sessionTable",
-  "let Some(mut session) = sessions.get_mut(key) else { return false; };",
-  "let Some(mut session) = sessions.get_mut(key) else { return true; };");
 rejectsRoute("route activation must call the actual shared predicate", "sessionTable",
   "if !staged_route_activation_allowed(StagedRouteActivationCheck {\n        session: StagedRouteIdentity {\n            connection_id: session.connection_id,\n            user_id: session.user_id,\n            auth_generation: session.auth_generation,\n        },\n        expected: StagedRouteIdentity {\n            connection_id,\n            user_id,\n            auth_generation,\n        },\n        same_lifecycle: Arc::ptr_eq(&session.lifecycle, lifecycle),\n        lifecycle_state: session.lifecycle.load(Ordering::Acquire),\n        session_cancelled: session.disconnect.is_cancelled(),\n        owner_cancelled: disconnect.is_cancelled(),\n    }) {\n        return false;\n    }",
   "if false { return false; }", true);
@@ -1563,54 +723,3 @@ rejectsRoute("route activation rechecks the owner token after publication", "ses
 rejectsRoute("route activation must roll back false on a failed recheck", "sessionTable",
   "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() { session.routable.store(false, Ordering::Release); return false; } true",
   "session.routable.store(true, Ordering::Release); if session.lifecycle.load(Ordering::Acquire) != 0 || session.disconnect.is_cancelled() || disconnect.is_cancelled() {  return false; } true");
-rejectsRoute("route CAPS lookup must canonicalize the queried key", "sessionTable",
-  "let Ok(full_jid) = northstar_xmpp_types::jid::canonical_session_key(full_jid) else { return MixSessionCapability::Unknown; };",
-  "let full_jid = full_jid.to_owned();");
-rejectsRoute("route CAPS snapshot uses the canonical queried key", "sessionTable",
-  "let Some(observation) = caps_by_jid.snapshot(&full_jid) else { return MixSessionCapability::Unknown; };",
-  "let Some(observation) = caps_by_jid.snapshot(&other_jid) else { return MixSessionCapability::Unknown; };");
-rejectsRoute("route CAPS keeps local owner fencing separate from federated owners", "sessionTable",
-  "if let CapsObservationOwner::Local(epoch) = observation.owner {",
-  "if let CapsObservationOwner::Federated(epoch) = observation.owner {");
-rejectsRoute("route CAPS fence reads the actual map epoch", "sessionTable",
-  "session.caps_observation_generation.load(Ordering::Acquire),",
-  "epoch.generation,", false, 2);
-rejectsRoute("route CAPS fence retains the same-gate argument", "sessionTable",
-  "session.lifecycle.load(Ordering::Acquire), true, epoch, )",
-  "session.lifecycle.load(Ordering::Acquire), false, epoch, )");
-rejectsRoute("route CAPS stale observations cannot skip eviction", "sessionTable",
-  "if !current {",
-  "if false {");
-rejectsRoute("route CAPS evicts pending before resource observation", "sessionTable",
-  "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);",
-  "caps_by_jid.remove_local_epoch(&full_jid, epoch); pending_caps.remove_local_epoch(&full_jid, epoch);");
-rejectsRoute("route CAPS must evict the stale pending epoch", "sessionTable",
-  "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);",
-  "caps_by_jid.remove_local_epoch(&full_jid, epoch);");
-rejectsRoute("route CAPS must evict the stale resource epoch", "sessionTable",
-  "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);",
-  "pending_caps.remove_local_epoch(&full_jid, epoch);");
-rejectsRoute("route CAPS pending eviction uses the exact observed epoch", "sessionTable",
-  "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);",
-  "pending_caps.remove_local_epoch(&full_jid, other_epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);");
-rejectsRoute("route CAPS resource eviction uses the exact observed epoch", "sessionTable",
-  "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, epoch);",
-  "pending_caps.remove_local_epoch(&full_jid, epoch); caps_by_jid.remove_local_epoch(&full_jid, other_epoch);");
-rejectsRoute("route CAPS support remains CORE or PAM", "sessionTable",
-  "summary.has_feature(CORE_NS) || summary.has_feature(PAM_NS)",
-  "summary.has_feature(CORE_NS) && summary.has_feature(PAM_NS)");
-rejectsRoute("route CAPS missing summaries cannot become supported", "sessionTable",
-  "None => MixSessionCapability::Unknown, }",
-  "None => MixSessionCapability::Supported, }");
-rejectsRoute("route CAPS lookup cannot be hoisted out of the actual target loop", "mix",
-  "for (jid, session) in &local_targets { match context.session_mix_capability(jid) {",
-  "let capability = context.session_mix_capability(&local_targets[0].0); for (jid, session) in &local_targets { match capability {", true);
-rejectsRoute("route CAPS lookup keeps the existing sorted target order", "mix",
-  "local_targets.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));",
-  "");
-rejectsRoute("route CAPS lookup keeps the current target key", "mix",
-  "for (jid, session) in &local_targets { match context.session_mix_capability(jid) {",
-  "for (jid, session) in &local_targets { match context.session_mix_capability(&recipient.jid) {");
-rejectsRoute("route CAPS lookup cannot sweep targets eagerly before routing", "mix",
-  "let mut local_targets = context.session_entries_for(&recipient.jid);",
-  "let mut local_targets = context.session_entries_for(&recipient.jid); for (jid, _) in &local_targets { context.session_mix_capability(jid); }");

@@ -178,6 +178,31 @@ pub struct CapsObservationSnapshot {
     pub summary: Option<Arc<VerifiedCapsSummary>>,
 }
 
+impl CapsObservationSnapshot {
+    pub fn local_epoch(&self) -> Option<LocalCapsEpoch> {
+        match self.owner {
+            CapsObservationOwner::Local(epoch) => Some(epoch),
+            CapsObservationOwner::Federated { .. } => None,
+        }
+    }
+
+    pub fn into_notify_nodes(self) -> Vec<String> {
+        self.summary.map_or_else(Vec::new, |summary| {
+            summary.notify_nodes().map(str::to_owned).collect()
+        })
+    }
+}
+
+pub fn remove_local_caps_epoch(
+    pending: &PendingCapsIndex,
+    observations: &CapsResourceIndex,
+    full_jid: &str,
+    epoch: LocalCapsEpoch,
+) {
+    pending.remove_local_epoch(full_jid, epoch);
+    observations.remove_local_epoch(full_jid, epoch);
+}
+
 #[derive(Clone)]
 pub struct CachedCaps {
     pub query: Option<String>,
@@ -1542,5 +1567,121 @@ impl CapsEffectDispatcher {
 
     pub fn execution_slots(&self) -> &Arc<Semaphore> {
         &self.execution_slots
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn caps_snapshot_local_epoch_distinguishes_local_and_federated_owners() {
+        let epoch = LocalCapsEpoch {
+            connection_id: Uuid::new_v4(),
+            generation: 7,
+        };
+        let mut snapshot = CapsObservationSnapshot {
+            owner: CapsObservationOwner::Local(epoch),
+            key: None,
+            summary: None,
+        };
+        assert_eq!(snapshot.local_epoch(), Some(epoch));
+
+        snapshot.owner = CapsObservationOwner::Federated {
+            connection_id: Uuid::new_v4(),
+            observation_id: Uuid::new_v4(),
+        };
+        assert_eq!(snapshot.local_epoch(), None);
+    }
+
+    #[test]
+    fn caps_snapshot_notify_nodes_without_summary_is_empty() {
+        let snapshot = CapsObservationSnapshot {
+            owner: CapsObservationOwner::Local(LocalCapsEpoch {
+                connection_id: Uuid::new_v4(),
+                generation: 7,
+            }),
+            key: None,
+            summary: None,
+        };
+        assert!(snapshot.into_notify_nodes().is_empty());
+    }
+
+    #[test]
+    fn caps_snapshot_notify_nodes_keeps_all_nodes_in_order() {
+        let snapshot = CapsObservationSnapshot {
+            owner: CapsObservationOwner::Local(LocalCapsEpoch {
+                connection_id: Uuid::new_v4(),
+                generation: 7,
+            }),
+            key: None,
+            summary: Some(Arc::new(VerifiedCapsSummary::new(
+                false,
+                false,
+                "firstsecondthird".to_owned(),
+                vec![(5, 11), (0, 5), (11, 16), (5, 11)],
+            ))),
+        };
+        assert_eq!(
+            snapshot.into_notify_nodes(),
+            vec!["second", "first", "third", "second"]
+        );
+    }
+
+    #[test]
+    fn remove_local_caps_epoch_removes_both_indexes_and_preserves_other_epochs() {
+        let pending = PendingCapsIndex::new();
+        let observations = CapsResourceIndex::new();
+        let epoch = LocalCapsEpoch {
+            connection_id: Uuid::new_v4(),
+            generation: 7,
+        };
+        let other_epoch = LocalCapsEpoch {
+            generation: 8,
+            ..epoch
+        };
+        let full_jid = "alice@example.test/fixture";
+        let other_jid = "alice@example.test/other";
+        let now = Instant::now();
+        for (id, jid, owner) in [
+            ("target", full_jid, epoch),
+            ("newer", full_jid, other_epoch),
+            ("other", other_jid, other_epoch),
+        ] {
+            assert!(pending.insert(
+                id.to_owned(),
+                jid.to_owned(),
+                CapsKey {
+                    algorithm: "sha-1".to_owned(),
+                    node: id.to_owned(),
+                    version: "v1".to_owned(),
+                },
+                CapsObservationOwner::Local(owner),
+                now + PENDING_TTL,
+            ));
+        }
+        observations.observe_local(full_jid.to_owned(), epoch, None, None, now);
+        observations.observe_local(other_jid.to_owned(), other_epoch, None, None, now);
+
+        remove_local_caps_epoch(&pending, &observations, full_jid, epoch);
+
+        assert!(!pending.entries.contains_key("target"));
+        assert!(observations.snapshot(full_jid).is_none());
+        assert!(pending.entries.contains_key("newer"));
+        assert!(pending.entries.contains_key("other"));
+        assert_eq!(
+            observations.owner(other_jid),
+            Some(CapsObservationOwner::Local(other_epoch))
+        );
+
+        observations.observe_local(full_jid.to_owned(), other_epoch, None, None, now);
+        remove_local_caps_epoch(&pending, &observations, full_jid, epoch);
+
+        assert!(pending.entries.contains_key("newer"));
+        assert_eq!(
+            observations.owner(full_jid),
+            Some(CapsObservationOwner::Local(other_epoch))
+        );
     }
 }

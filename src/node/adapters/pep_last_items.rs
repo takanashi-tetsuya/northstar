@@ -7,7 +7,7 @@ use northstar_cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery};
 use northstar_federation_application::effective_policy::EffectiveFederationPolicy;
 use northstar_message_application::messaging::MessageService;
 use northstar_protocol_runtime::caps::{
-    CapsObservationOwner, CapsObservationSnapshot, CapsResourceIndex, PendingCapsIndex,
+    remove_local_caps_epoch, CapsObservationSnapshot, CapsResourceIndex, PendingCapsIndex,
 };
 use northstar_pubsub_xmpp::notification_delivery::PubSubNotificationPorts;
 use northstar_pubsub_xmpp::pep_last_items::{PepLastItemsContext, PepLastItemsPorts};
@@ -64,21 +64,15 @@ impl PepLastItemsPorts for PepLastItemsAdapters {
         &self,
         snapshot: &CapsObservationSnapshot,
     ) -> Option<LocalCapsEpoch> {
-        match snapshot.owner {
-            CapsObservationOwner::Local(epoch) => Some(epoch),
-            CapsObservationOwner::Federated { .. } => None,
-        }
+        snapshot.local_epoch()
     }
 
     fn caps_snapshot_notify_nodes(&self, snapshot: CapsObservationSnapshot) -> Vec<String> {
-        snapshot.summary.map_or_else(Vec::new, |summary| {
-            summary.notify_nodes().map(str::to_owned).collect()
-        })
+        snapshot.into_notify_nodes()
     }
 
     fn remove_local_caps_epoch(&self, full_jid: &str, epoch: LocalCapsEpoch) {
-        self.pending_caps.remove_local_epoch(full_jid, epoch);
-        self.observations.remove_local_epoch(full_jid, epoch);
+        remove_local_caps_epoch(&self.pending_caps, &self.observations, full_jid, epoch);
     }
 }
 

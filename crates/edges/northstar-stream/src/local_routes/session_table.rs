@@ -749,6 +749,17 @@ impl LocalSessionTable {
         }
     }
 
+    pub fn privacy_list_active_locally(&self, account: &str, name: &str) -> bool {
+        self.sessions_for(account).iter().any(|session| {
+            session
+                .privacy_active
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_deref()
+                == Some(name)
+        })
+    }
+
     pub fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
         session_entries_for_in(&self.0, jid)
     }
@@ -811,6 +822,62 @@ mod tests {
             .caps_observation_generation
             .store(11, Ordering::Relaxed);
         (session, receiver)
+    }
+
+    #[test]
+    fn privacy_list_active_locally_matches_any_resource() {
+        let table = LocalSessionTable::new(Arc::new(DashMap::new()));
+        let (inactive, _inactive_receiver) = session(Uuid::new_v4(), Uuid::new_v4(), true);
+        let (active, _active_receiver) = session(Uuid::new_v4(), Uuid::new_v4(), true);
+        *active.privacy_active.write().unwrap() = Some("friends".to_owned());
+        table.insert(KEY.to_owned(), inactive);
+        table.insert("alice@example.test/active".to_owned(), active);
+
+        assert!(table.privacy_list_active_locally("alice@example.test", "friends"));
+    }
+
+    #[test]
+    fn privacy_list_active_locally_returns_false_without_a_match() {
+        let table = LocalSessionTable::new(Arc::new(DashMap::new()));
+        let (inactive, _inactive_receiver) = session(Uuid::new_v4(), Uuid::new_v4(), true);
+        let (active, _active_receiver) = session(Uuid::new_v4(), Uuid::new_v4(), true);
+        *active.privacy_active.write().unwrap() = Some("other".to_owned());
+        table.insert(KEY.to_owned(), inactive);
+        table.insert("alice@example.test/active".to_owned(), active);
+
+        assert!(!table.privacy_list_active_locally("alice@example.test", "friends"));
+        assert!(!table.privacy_list_active_locally("absent@example.test", "friends"));
+    }
+
+    #[test]
+    fn privacy_list_active_locally_ignores_other_accounts() {
+        let table = LocalSessionTable::new(Arc::new(DashMap::new()));
+        let (inactive, _inactive_receiver) = session(Uuid::new_v4(), Uuid::new_v4(), true);
+        let (active, _active_receiver) = session(Uuid::new_v4(), Uuid::new_v4(), true);
+        *active.privacy_active.write().unwrap() = Some("friends".to_owned());
+        table.insert(KEY.to_owned(), inactive);
+        table.insert("bob@example.test/active".to_owned(), active);
+
+        assert!(!table.privacy_list_active_locally("alice@example.test", "friends"));
+    }
+
+    #[test]
+    fn privacy_list_active_locally_recovers_poisoned_lock() {
+        let table = LocalSessionTable::new(Arc::new(DashMap::new()));
+        let (active, _receiver) = session(Uuid::new_v4(), Uuid::new_v4(), true);
+        let privacy_active = Arc::clone(&active.privacy_active);
+        assert!(std::thread::spawn(move || {
+            let mut guard = privacy_active.write().unwrap();
+            *guard = Some("friends".to_owned());
+            panic!("poison privacy_active");
+        })
+        .join()
+        .is_err());
+        assert!(active.privacy_active.is_poisoned());
+        table.insert(KEY.to_owned(), active);
+
+        assert!(table.privacy_list_active_locally("alice@example.test", "friends"));
+        assert!(!table.privacy_list_active_locally("alice@example.test", "other"));
     }
 
     #[test]

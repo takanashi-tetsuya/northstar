@@ -109,16 +109,7 @@ impl RosterSessionHost for ServerNode {
         self.session
             .live()
             .sessions()
-            .sessions_for(account)
-            .iter()
-            .any(|session| {
-                session
-                    .privacy_active
-                    .read()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .as_deref()
-                    == Some(name)
-            })
+            .privacy_list_active_locally(account, name)
     }
 
     async fn push_privacy_change(

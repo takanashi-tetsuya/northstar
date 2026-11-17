@@ -75,3 +75,5 @@ pub(crate) async fn blocked_backend(pool: &sqlx::PgPool, blocker: i32) -> i32 {
     .await
     .expect("repository operation did not reach the database lock")
 }
+
+pub(crate) mod delivery;

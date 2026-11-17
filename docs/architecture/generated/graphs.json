@@ -2927,6 +2927,10 @@
       ],
       [
         "northstar-db-it",
+        "northstar-delivery-core"
+      ],
+      [
+        "northstar-db-it",
         "northstar-federation-core"
       ],
       [

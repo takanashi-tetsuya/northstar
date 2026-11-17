@@ -2168,6 +2168,7 @@ dependencies = [
  "northstar-auth-postgres",
  "northstar-cluster",
  "northstar-data-tools",
+ "northstar-delivery-core",
  "northstar-federation-core",
  "northstar-http",
  "northstar-message-application",

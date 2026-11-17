@@ -1190,6 +1190,7 @@ digraph compile_time {
   "northstar-db-it" -> "northstar-auth-postgres";
   "northstar-db-it" -> "northstar-cluster";
   "northstar-db-it" -> "northstar-data-tools";
+  "northstar-db-it" -> "northstar-delivery-core";
   "northstar-db-it" -> "northstar-federation-core";
   "northstar-db-it" -> "northstar-http";
   "northstar-db-it" -> "northstar-message-application";

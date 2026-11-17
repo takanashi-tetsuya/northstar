@@ -38,14 +38,22 @@ conformance_tests=(
   room::producer_conformance::committed_reconciliation_survives_a_refused_message_producer
   room::producer_conformance::producers_and_wrappers_take_the_delivery_fence_before_business_rows
   room::producer_conformance::wrappers_preserve_original_presence_and_message_projections_after_the_fence
+  room::transport_receipts::bosh_transfer_receipts_bind_clamped_inputs
+  room::transport_receipts::mix_native_ack_receipts_distinguish_no_match
   room::worker_conformance::claim_row_and_byte_limits_bound_the_acknowledged_sql_allocation
   room::worker_conformance::settlement_receipt_waits_for_the_actual_commit_acknowledgment
   room::worker_conformance::worker_claim_and_settlement_receipts_match_committed_exact_fences
   room::worker_conformance::worker_renewal_and_archive_keep_exact_statement_and_commit_receipts
   roster::snapshot_conformance::roster_body_version_and_annotations_share_the_authorized_snapshot
+  session::bosh_response_receipts::bosh_ack_receipts_count_committed_sources
+  session::bosh_response_receipts::bosh_bind_receipts_match_exact_membership
+  session::bosh_response_receipts::bosh_renew_receipts_validate_cached_membership
   session::credential_conformance::binding_credential_receipts_follow_commit_and_keep_reservation_and_fast_refusals
   session::credential_conformance::resume_credential_receipts_keep_activation_privacy_and_fast_rollback_sites
+  session::native_receipts::native_ack_receipts_follow_commit
   session::replay_fencing::replay_replacement_preserves_other_resources_and_rejects_stale_tokens
+  session::sm_receipts::sm_checkpoint_receipts_preserve_atomic_queue
+  session::sm_receipts::unpersisted_sm_ack_receipts_bind_the_batch
 )
 
 control_psql() {

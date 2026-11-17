@@ -3039,7 +3039,6 @@ dependencies = [
  "tokio-rustls",
  "tokio-util",
  "tracing",
- "tracing-appender",
  "tracing-subscriber",
  "uuid",
  "zeroize",

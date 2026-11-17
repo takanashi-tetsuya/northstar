@@ -1863,7 +1863,6 @@ digraph compile_time {
   "northstar-server" -> "tokio-rustls";
   "northstar-server" -> "tokio-util";
   "northstar-server" -> "tracing";
-  "northstar-server" -> "tracing-appender";
   "northstar-server" -> "tracing-subscriber";
   "northstar-server" -> "uuid";
   "northstar-server" -> "zeroize";

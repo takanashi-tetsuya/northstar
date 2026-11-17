@@ -4,12 +4,75 @@
 //! into invalid JSON or an ambiguous fragment. The rolling file sink retains
 //! its existing policy. Main owns both appender guards until service teardown.
 
+use anyhow::Context;
 use std::io::{self, Write};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tracing_appender::non_blocking::{ErrorCounter, NonBlocking, NonBlockingBuilder, WorkerGuard};
 use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::EnvFilter;
+
+pub struct ProcessLogSettings<'a> {
+    pub log_rotation: &'a str,
+    pub log_dir: &'a Path,
+    pub log_retention_files: usize,
+    pub log_format: &'a str,
+}
+
+pub fn init_process_logging(settings: ProcessLogSettings<'_>) -> anyhow::Result<LogGuards> {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let rotation = match settings.log_rotation.to_lowercase().as_str() {
+        "hourly" => tracing_appender::rolling::Rotation::HOURLY,
+        "minutely" => tracing_appender::rolling::Rotation::MINUTELY,
+        "never" => tracing_appender::rolling::Rotation::NEVER,
+        _ => tracing_appender::rolling::Rotation::DAILY,
+    };
+
+    let file_appender = tracing_appender::rolling::Builder::new()
+        .rotation(rotation)
+        .filename_prefix("server.log")
+        .max_log_files(settings.log_retention_files)
+        .build(settings.log_dir)
+        .context("failed to build rolling file appender")?;
+
+    let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
+    let (console, console_guard) = console(std::io::stderr());
+    let guards = LogGuards::new(vec![file_guard, console_guard]);
+
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    if settings.log_format.eq_ignore_ascii_case("json") {
+        let file_layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_writer(non_blocking)
+            .with_ansi(false);
+        let console_layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_writer(console)
+            .with_ansi(false);
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(file_layer)
+            .with(console_layer)
+            .init();
+    } else {
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_writer(non_blocking)
+            .with_ansi(false);
+        let console_layer = tracing_subscriber::fmt::layer().with_writer(console);
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(file_layer)
+            .with(console_layer)
+            .init();
+    }
+
+    Ok(guards)
+}
 
 pub const CONSOLE_QUEUE_EVENTS: usize = 256;
 pub const CONSOLE_EVENT_BYTES: usize = 64 * 1024;

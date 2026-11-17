@@ -12,16 +12,14 @@ mod xmpp;
 use anyhow::{Context, Result};
 use node::ServerNode;
 use northstar_config::Config;
-use northstar_runtime::service_tasks::{
-    drain_service_tasks, spawn_service_task, unexpected_service_task_exit,
-    SERVICE_TASK_ABORT_DRAIN_TIMEOUT, SERVICE_TASK_DRAIN_TIMEOUT,
-};
-use runtime::service_tasks::await_shutdown_notifications;
+use northstar_runtime::listeners::{runtime_listener_addresses, RuntimeListeners};
+use northstar_runtime::process_shutdown::supervise_process_shutdown;
+use northstar_runtime::service_tasks::spawn_service_task;
+use northstar_telemetry::logging::{init_process_logging, ProcessLogSettings};
 use sqlx::PgPool;
-use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::EnvFilter;
 use zeroize::Zeroizing;
 
 const fn version_line() -> &'static str {
@@ -247,7 +245,12 @@ async fn run() -> Result<()> {
         return runtime::subservers::run_maintenance().await;
     }
     let config = Config::from_env()?;
-    let _log_guard = init_logging(&config)?;
+    let _log_guard = init_process_logging(ProcessLogSettings {
+        log_rotation: &config.log_rotation,
+        log_dir: &config.log_dir,
+        log_retention_files: config.log_retention_files,
+        log_format: &config.log_format,
+    })?;
     if process_role == runtime::subservers::ProcessRole::Core {
         anyhow::ensure!(config.database_max_connections <= runtime::subservers::MAX_CORE_PRIMARY_CONNECTIONS,
             "core subserver DATABASE_MAX_CONNECTIONS must be at most {}, reserving shared-role capacity for maintenance",
@@ -480,104 +483,15 @@ async fn run() -> Result<()> {
         std::process::id(),
     )?;
 
-    let mut shutdown_error = None;
-    let graceful_signal = tokio::select! {
-        biased;
-        _ = cancel.cancelled() => {
-            shutdown_error = worker_registry
-                .critical_failure()
-                .map(anyhow::Error::msg);
-            false
-        },
-        _ = northstar_http::shutdown_signal() => {
-            tracing::info!("shutdown signal received; stopping listeners and draining HTTP requests");
-            true
-        },
-        result = service_tasks.join_next() => {
-            shutdown_error = Some(unexpected_service_task_exit(result));
-            false
-        },
-    };
-
-    // Close connection admission before signalling any child. Every accepted
-    // transport is now owned by the bounded registry and must finalize before
-    // the abort-and-reap deadline below.
-    shutdown_state.connection_actors().close_admission();
-    if graceful_signal {
-        let muc_delivery = shutdown_state.muc_delivery_context();
-        match await_shutdown_notifications(
-            &cancel,
-            &mut service_tasks,
-            northstar_muc_xmpp::shutdown::notify_muc_system_shutdown(&muc_delivery),
-            tokio::time::Instant::now() + std::time::Duration::from_secs(2),
-        )
-        .await
-        {
-            Ok(Some(notified_muc_occupants)) if notified_muc_occupants > 0 => {
-                tracing::info!(notified_muc_occupants, "confirmed XEP-0045 shutdown notification transport writes or BOSH response acknowledgements");
-            }
-            Ok(_) => {}
-            Err(error) => {
-                shutdown_error.get_or_insert(error);
-            }
-        }
-        if let Some(error) = worker_registry.critical_failure() {
-            shutdown_error.get_or_insert_with(|| anyhow::Error::msg(error));
-        }
-    }
-    shutdown_state.begin_cluster_shutdown();
-    shutdown_state.connection_actors().begin_shutdown();
-    cancel.cancel();
-    match shutdown_state
-        .release_cluster_instance_after_publication_quiescence(std::time::Duration::from_secs(15))
-        .await
-    {
-        Some(Ok(())) => {}
-        Some(Err(error)) => tracing::warn!(
-            ?error,
-            "could not audit the final cluster node-instance lease release"
-        ),
-        None => tracing::error!(
-            "signed cluster publications did not drain; leaving the instance fenced until its database lease expires"
-        ),
-    }
-    let (worker_report, service_report, connection_report) = tokio::join!(
-        worker_registry.shutdown_and_join(&cancel, SERVICE_TASK_DRAIN_TIMEOUT),
-        drain_service_tasks(&mut service_tasks, SERVICE_TASK_DRAIN_TIMEOUT),
-        shutdown_state
-            .connection_actors()
-            .join_or_abort(SERVICE_TASK_DRAIN_TIMEOUT, SERVICE_TASK_ABORT_DRAIN_TIMEOUT,),
-    );
-    if !worker_report.is_clean() {
-        let error = anyhow::anyhow!("background worker shutdown was incomplete: {worker_report:?}");
-        tracing::error!(?error);
-        shutdown_error.get_or_insert(error);
-    }
-    if service_report.aborted > 0 || !service_report.failures.is_empty() {
-        let error = anyhow::anyhow!("listener shutdown was incomplete: {service_report:?}");
-        tracing::error!(?error);
-        shutdown_error.get_or_insert(error);
-    }
-    if connection_report.remaining > 0 {
-        let error =
-            anyhow::anyhow!("connection actor shutdown was incomplete: {connection_report:?}");
-        tracing::error!(?error);
-        shutdown_error.get_or_insert(error);
-    }
-    tracing::info!(
-        worker_supervisors_joined = worker_report.joined,
-        service_tasks_joined = service_report.joined,
-        connection_actors_aborted = connection_report.aborted,
-        "shutdown complete"
-    );
-
-    if let Some(error) = worker_registry.critical_failure() {
-        shutdown_error.get_or_insert_with(|| anyhow::Error::msg(error));
-    }
-    match shutdown_error {
-        Some(error) => Err(error),
-        None => Ok(()),
-    }
+    supervise_process_shutdown(
+        shutdown_state.as_ref(),
+        &cancel,
+        &worker_registry,
+        shutdown_state.connection_actors(),
+        &mut service_tasks,
+        northstar_http::shutdown_signal(),
+    )
+    .await
 }
 
 async fn bind_runtime_listener(
@@ -587,105 +501,6 @@ async fn bind_runtime_listener(
     tokio::net::TcpListener::bind(address)
         .await
         .with_context(|| format!("could not bind {purpose} listener to {address}"))
-}
-
-struct RuntimeListeners<'a> {
-    xmpp: &'a tokio::net::TcpListener,
-    xmpps: &'a tokio::net::TcpListener,
-    http: &'a tokio::net::TcpListener,
-    metrics: &'a tokio::net::TcpListener,
-    admin: Option<&'a tokio::net::TcpListener>,
-    s2s: Option<&'a tokio::net::TcpListener>,
-    s2s_tls: Option<&'a tokio::net::TcpListener>,
-    component: Option<&'a tokio::net::TcpListener>,
-}
-
-fn runtime_listener_addresses(
-    listeners: RuntimeListeners<'_>,
-) -> Result<BTreeMap<String, SocketAddr>> {
-    let mut addresses = BTreeMap::new();
-    for (purpose, listener) in [
-        ("xmpp", listeners.xmpp),
-        ("xmpps", listeners.xmpps),
-        ("http", listeners.http),
-        ("metrics", listeners.metrics),
-    ] {
-        addresses.insert(
-            purpose.to_owned(),
-            listener
-                .local_addr()
-                .with_context(|| format!("could not inspect {purpose} listener"))?,
-        );
-    }
-    for (purpose, listener) in [
-        ("web-admin", listeners.admin),
-        ("s2s", listeners.s2s),
-        ("s2s-tls", listeners.s2s_tls),
-        ("component", listeners.component),
-    ] {
-        if let Some(listener) = listener {
-            addresses.insert(
-                purpose.to_owned(),
-                listener
-                    .local_addr()
-                    .with_context(|| format!("could not inspect {purpose} listener"))?,
-            );
-        }
-    }
-    Ok(addresses)
-}
-
-fn init_logging(config: &Config) -> Result<northstar_telemetry::logging::LogGuards> {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-
-    let rotation = match config.log_rotation.to_lowercase().as_str() {
-        "hourly" => tracing_appender::rolling::Rotation::HOURLY,
-        "minutely" => tracing_appender::rolling::Rotation::MINUTELY,
-        "never" => tracing_appender::rolling::Rotation::NEVER,
-        _ => tracing_appender::rolling::Rotation::DAILY,
-    };
-
-    let file_appender = tracing_appender::rolling::Builder::new()
-        .rotation(rotation)
-        .filename_prefix("server.log")
-        .max_log_files(config.log_retention_files)
-        .build(&config.log_dir)
-        .context("failed to build rolling file appender")?;
-
-    let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
-    let (console, console_guard) = northstar_telemetry::logging::console(std::io::stderr());
-    let guards = northstar_telemetry::logging::LogGuards::new(vec![file_guard, console_guard]);
-
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
-
-    if config.log_format.eq_ignore_ascii_case("json") {
-        let file_layer = tracing_subscriber::fmt::layer()
-            .json()
-            .with_writer(non_blocking)
-            .with_ansi(false);
-        let console_layer = tracing_subscriber::fmt::layer()
-            .json()
-            .with_writer(console)
-            .with_ansi(false);
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(file_layer)
-            .with(console_layer)
-            .init();
-    } else {
-        let file_layer = tracing_subscriber::fmt::layer()
-            .with_writer(non_blocking)
-            .with_ansi(false);
-        let console_layer = tracing_subscriber::fmt::layer().with_writer(console);
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(file_layer)
-            .with(console_layer)
-            .init();
-    }
-
-    Ok(guards)
 }
 
 #[cfg(test)]
@@ -699,34 +514,6 @@ mod container_healthcheck_tests {
             version_line(),
             concat!("xmpp-server ", env!("CARGO_PKG_VERSION"))
         );
-    }
-
-    #[tokio::test]
-    async fn runtime_listener_inventory_uses_bound_ephemeral_addresses() {
-        let xmpp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let xmpps = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let http = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let metrics = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addresses = super::runtime_listener_addresses(super::RuntimeListeners {
-            xmpp: &xmpp,
-            xmpps: &xmpps,
-            http: &http,
-            metrics: &metrics,
-            admin: None,
-            s2s: None,
-            s2s_tls: None,
-            component: None,
-        })
-        .unwrap();
-        assert_eq!(addresses.len(), 4);
-        for (purpose, address) in addresses {
-            assert!(address.ip().is_loopback(), "{purpose} must remain loopback");
-            assert_ne!(
-                address.port(),
-                0,
-                "{purpose} must be resolved before readiness"
-            );
-        }
     }
 
     #[test]

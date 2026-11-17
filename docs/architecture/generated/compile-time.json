@@ -6081,10 +6081,6 @@
     ],
     [
       "northstar-server",
-      "tracing-appender"
-    ],
-    [
-      "northstar-server",
       "tracing-subscriber"
     ],
     [

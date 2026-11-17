@@ -41,6 +41,7 @@ pub(crate) mod operation_session_effects;
 pub(crate) mod operation_tls_reload_effects;
 pub(in crate::node) mod operation_worker_control;
 pub(crate) mod pep_last_items;
+pub(in crate::node) mod process_shutdown;
 pub(crate) mod pubsub_notification_delivery;
 pub(in crate::node) mod push_notification_delivery;
 pub(in crate::node) mod remote_route;

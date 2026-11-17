@@ -520,12 +520,13 @@ const clusterShutdown = rustItemBody(read('crates/edges/northstar-cluster/src/au
 const shutdownFence = clusterShutdown.indexOf('let _publication_fence =');
 const publicationTimeout = clusterShutdown.indexOf('tokio::time::timeout(quiesce_timeout, self.quiesce_publication())', shutdownFence);
 const releaseInstance = clusterShutdown.indexOf('.release_instance_authority_with(service)', publicationTimeout);
+const processShutdown = read('crates/platform/northstar-runtime/src/process_shutdown.rs');
 if (shutdownFence < 0 || publicationTimeout < shutdownFence || releaseInstance < publicationTimeout
-    || !/\.release_cluster_instance_after_publication_quiescence\(std::time::Duration::from_secs\(15\)\)/.test(runtimeMain)
-    || !runtimeMain.includes('shutdown_state.begin_cluster_shutdown();')
-    || !runtimeMain.includes('Some(Err(error)) => tracing::warn!(')
-    || !runtimeMain.includes('None => tracing::error!(')
-    || /release_instance_authority\(&shutdown_state\.pool\)/.test(runtimeMain)) {
+    || !/\.release_cluster_after_publication_quiescence\(std::time::Duration::from_secs\(15\)\)/.test(processShutdown)
+    || !processShutdown.includes('ports.begin_cluster_shutdown();')
+    || !processShutdown.includes('Some(Err(error)) => tracing::warn!(')
+    || !processShutdown.includes('None => tracing::error!(')
+    || /release_instance_authority\(&ports\.pool\)/.test(processShutdown)) {
   throw new Error('cluster node-instance release must remain inside the signed-publication fence');
 }
 const mainRuntimeControlReservation = runtimeMain.indexOf('node::reserve_runtime_control_connection(&config).await?');

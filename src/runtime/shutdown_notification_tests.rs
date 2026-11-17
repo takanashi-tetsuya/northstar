@@ -1,62 +1,9 @@
-use northstar_runtime::connection_actors::ConnectionActorKind;
-use northstar_runtime::connection_actors::ConnectionActorRegistry;
-use northstar_runtime::connection_actors::ConnectionActorSpawnError;
 use northstar_stream::outbound::{
     MixDelivery, MixTransportCompletion, OutboundItem, OutboundSender,
 };
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
-
-#[tokio::test]
-async fn closed_admission_keeps_existing_actor_alive_until_explicit_shutdown() {
-    let registry = ConnectionActorRegistry::new(2);
-    let shutdown = registry.shutdown_token();
-    let (started_tx, started_rx) = oneshot::channel();
-    let (notify_tx, notify_rx) = oneshot::channel();
-    let (written_tx, written_rx) = oneshot::channel();
-    let (finished_tx, finished_rx) = oneshot::channel();
-    registry
-        .try_spawn(ConnectionActorKind::C2sWebSocket, None, async move {
-            let _ = started_tx.send(());
-            notify_rx
-                .await
-                .expect("existing actor receives its notification");
-            let _ = written_tx.send(!shutdown.is_cancelled());
-            shutdown.cancelled().await;
-            let _ = finished_tx.send(());
-        })
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(2), started_rx)
-        .await
-        .unwrap()
-        .unwrap();
-
-    registry.close_admission();
-    registry.close_admission();
-    assert!(!registry.is_accepting());
-    assert!(!registry.shutdown_token().is_cancelled());
-    assert_eq!(
-        registry.try_spawn(ConnectionActorKind::C2sWebSocket, None, async {}),
-        Err(ConnectionActorSpawnError::AdmissionClosed)
-    );
-    notify_tx.send(()).unwrap();
-    assert!(tokio::time::timeout(Duration::from_secs(2), written_rx)
-        .await
-        .unwrap()
-        .unwrap());
-    assert_eq!(registry.active_count(), 1);
-
-    registry.begin_shutdown();
-    let report = registry
-        .join_or_abort(Duration::from_secs(2), Duration::from_secs(2))
-        .await;
-    assert!(report.graceful);
-    assert_eq!(report.aborted, 0);
-    assert_eq!(report.remaining, 0);
-    finished_rx.await.unwrap();
-    assert_eq!(registry.active_count(), 0);
-}
 
 #[test]
 fn shutdown_write_receipt_is_not_completed_by_recoverable_ownership() {

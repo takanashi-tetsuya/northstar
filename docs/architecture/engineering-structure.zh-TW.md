@@ -136,6 +136,7 @@ WP-495 後，operation runtime 的現行位置為
 | S32 門禁退役 | WP-507–510 | 讀原始碼的邊界門禁 `check-architecture-boundaries.mjs` 逐段對照 crate 圖盤點，刪除 crate 圖或其他門禁已涵蓋的 14 段（WP-507）；`xmpp/capabilities.rs` 的窄遙測移入 `node`，`src/xmpp` 只在測試中編譯（WP-508）；根 crate 的生產碼只剩組合一層，R9 退役（WP-509）；記錄階段（WP-510）。盤點見 5.28 | 測試名稱依路徑對應後不變；退役的兩項之外，全部門禁、Python 腳本測試與離線 CI 通過。未完成：保留的語義與接線檢查改寫為擁有 crate 的測試；`node/adapters` 中仍含流程的介面卡、`runtime_control` 的重新整理、`ServerNode` 的即時狀態與 `SessionHost` 的拆分，改為 S33，見 5.28 |
 | S33 組合根收斂 | WP-511–537 | 依唯讀審計（A1–A25）把組合根中仍含流程的程式碼移入擁有者：遙測葉節點移入 message、pubsub、room、roster 與 session 上下文（WP-511）；C2S 連線准入由 `northstar-stream` 的 `ClientAdmission` 擁有（WP-512）；啟動時的資料庫連線重試與執行期控制專用連線移入 `northstar-postgres`、`northstar-operations-postgres`（WP-513）；TLS 重新載入效果移入 operations 應用層（WP-514）；註冊開放狀態移入 auth 應用層（WP-515）；本機會話快照移入 stream 與 HTTP edge（WP-516）；有效聯邦政策與元件憑證移出根 crate（WP-517），六處聯邦檢查改經同一政策（WP-518）；MIX 能力圍欄移入 stream 會話表（WP-519），會話清理時的 MIX 出席撤回移入 `northstar-mix-xmpp`（WP-520）；離開房間與佔用者投影移入 room 上下文（WP-521）；個人訊息的會話判斷移為 `OnlineSession` 的方法（WP-522），推播路由移入 `northstar-message-xmpp` 與 stream（WP-523）；SM 拆除改用 stream 的圍欄與精確撤銷，帳號拆除流程移入 auth 應用層（WP-524）；管理員出席與公告扇出移入 operations（WP-525）；名冊推送與移除出席（WP-526）、封鎖與隱私扇出、MIX 出席守衛與同帳號出席（WP-527）、PubSub 忙碌回應、服務探索後備、頭像出席與 PEP 篩選（WP-528）移入各上下文介面卡；runtime control 協調器（WP-529）、反濫用金鑰權威輪詢與維護工作（WP-530）移入 operations 應用層；上傳啟動權威與暫存清理移入 upload 上下文（WP-531）；服務工作監督、測試就緒紀錄與容器健康探測移入 `northstar-runtime`、`northstar-http`（WP-532），維護子伺服器的私有健康監聽移入 `northstar-http`（WP-533）；啟動秘密政策移入 config 與 security（WP-534）；`SessionHost` 拆成 13 個關注點 trait（WP-535）；stream 的測試會話夾具與 roster 扇出測試（WP-536）；記錄階段（WP-537）。盤點見 5.29 | 測試名稱依路徑對應後不變，擁有 crate 新增 86 個測試；全部門禁、Python 腳本測試與離線 CI 通過。未完成：`ServerNode` 仍持有會話表、caps 索引、叢集與 BOSH 管理器、連線准入與 runtime control 的狀態；`main.rs` 的關機監督、維護所有權監控、啟動稽核序列與叢集 claim 留在組合根；門禁只改指向，語義檢查改寫為測試後刪除改為 S34，見 5.29 |
 | S34 組合根狀態 | WP-540–555 | 依狀態審計（F1–F23）把 `ServerNode` 的即時狀態與組合根中剩下的流程移入擁有者：會話表、caps 索引、連線准入、連線 actor 與 BOSH 管理器移入 SessionModule（WP-540），程序生命週期狀態移入 RuntimeModule（WP-541），HTTP 探索與閘道憑證移入 HttpModule（WP-542）；維護設定移入 `northstar-config`（WP-543），聯邦 DNS 解析器的建構移入 `northstar-security`（WP-544）；推播守衛與 PubSub 位址後備移入上下文（WP-545）；叢集的發佈靜止後釋放與 MUC 探索順序移入擁有者（WP-546）；MIX 出席恢復、IQ 轉送路由與遠端節點排序移入 `northstar-mix-xmpp`（WP-547）；caps 快照與隱私查詢移入 protocol-runtime 與 stream（WP-548）；維護程序的所有權監控移入 operations 應用層（WP-549），核心程序的關機監督移入 `northstar-runtime`（WP-550）；上傳儲存的啟動與准入移入 upload-storage 與 HTTP（WP-551）；叢集啟動權威序列移入 `ClusterManager`（WP-552），持久稽核與重啟恢復移入 operations 應用層（WP-553）；passkey 與邀請制判斷移入 config（WP-554）；記錄階段（WP-555）。盤點見 5.30 | 測試名稱依路徑對應後不變，擁有 crate 新增 65 個測試；全部門禁、Python 腳本測試與離線 CI 通過。`ServerNode` 只持有設定、平台控制代碼、13 個上下文模組與 `ClusterManager`。未做：ClusterModule（決定不做，見 5.30）；門禁改寫為測試改為 S35 |
+| S35 門禁改寫為測試 | WP-556–580 | 依 S34 的門禁審計為擁有者補上行為測試（WP-556–573）：abuse 政策與准入（WP-556）、auth 服務與憑證收據（WP-557）、config、啟動與 OMEMO 指標（WP-558）、operations 與 PubSub 清理（WP-559）、會話發佈與 SM 所有權（WP-560）、caps 閘道等待者與飽和佇列（WP-561）、訊息准入與直接流程（WP-562）、message-xmpp 准入與聯邦路由（WP-563）、HTTP 健康、上傳、OMEMO 與 CSP（WP-564）、delivery-core 提交與 MIX outbox（WP-565）、BOSH 所有權與回應快取（WP-566）、C2S 原生寫入與會話入口（WP-567）、叢集 MUC 投遞、權威與名冊（WP-568）、MIX outbox worker 通道與已認領效果（WP-569）、MUC 討論信封與訊息階段（WP-570）、MIX 與 MUC 討論服務（WP-571）、`northstar-stream` 的 SM、重播、caps 與 inline 恢復（WP-572）、PostgreSQL 介面卡一致性（WP-573，31 個 ignored 測試與新的資料庫 CI 套件）；再依案例帳本刪除被涵蓋的檢查：架構門禁（WP-574）、執行門禁（WP-575）、abuse 與准入門禁（WP-576）、subserver、會話生命週期、聯邦路由、OMEMO 與 CSP 門禁（WP-577）。關機事件的日誌 target 恢復為 `northstar_server`（WP-578），架構門禁的 worker 清單略過測試目錄（WP-579） |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -1407,6 +1408,42 @@ HttpModule）。根 crate 刪除 1,237 行、新增 738 行，crates 新增 3,62
 3,276 個，既有測試的名稱依路徑對應後不變。`ServerNode` 只持有設定、連線池、遙測、TLS、持久 outbox 准入、13 個上下文
 模組與 `ClusterManager`。
 
+### 5.31 S35 盤點：門禁改寫為測試（`7264de60`）
+
+S35 以 S34 的門禁審計為輸入（5.30、目標架構 4.7），分兩步。先由 18 個 WP 在擁有 crate 補測試，每個審計案例在 WP 報告中
+標為 written（新測試）、existing（已有測試涵蓋）或 KEEP（寫不出，附原因）：467 個案例有測試（written 360、existing
+107），43 個 KEEP。報告合成案例帳本後，4 個 WP 逐段刪除門禁：一段檢查所附的案例全部是 written 或 existing 才刪，混合的
+OR/AND 謂詞只刪被取代的運算元，只服務被刪檢查的輔助函式、讀檔與自測變異一併刪除，其餘都保留。
+
+| 門禁 | 行數 | 刪除的段 | 保留的可改寫檢查 |
+| --- | --- | --- | --- |
+| `check-architecture-boundaries.mjs` | 4,028 → 3,168 | 42，含 MIX outbox 生命週期驗證器與其自測 `test-mix-outbox-boundaries.mjs` | T01、T03、T23、T37（測試需要依賴或私有 hook）；帳本沒有的 C02、C04–C07、C09、C20；具體 producer 介面卡、Redis 與 MUC fixture 的檢查；T55 |
+| `check-execution-boundaries.mjs` | 1,924 → 980 | 204，含原生 ACK 驗證器與 D13、D14 的不可 Clone 探針；自測刪除 236 個變異 | 原生寫入、SM 所有權、BOSH 轉交與 BOSH 回應四個完整驗證器（各含 KEEP 案例）；帳本沒有點名的 e1194、e1206、e1209、e1268、e1310 |
+| `check-abuse.mjs`、`check-admission-execution.mjs` | 743 → 442 | 91；准入自測刪除 46 個變異、保留 26 個 | 讀環境的設定驗證；需要 `northstar-auth-xmpp` 的帳號恢復 runner 分派 |
+| subserver、會話生命週期、聯邦路由、OMEMO、web-auth | 2,389 → 2,264 | 44 | BOSH 的 frame 入口運算元；聯邦路由的歷史轉送；OMEMO 的重複計數守衛 |
+
+每支門禁的結構規則、組合根接線與基礎設施檢查都不在刪除範圍內。
+
+與審計的差異：
+
+- `northstar-db-it` 的 31 個測試以真實 PostgreSQL 介面卡對照另行提交的資料列，需要隨機 schema 與一般權限的擁有者角色。
+  既有的資料庫 CI 套件都不提供，新增 `scripts/repository-conformance-db-wsl.sh`，列入 `stateful-database-ci.sh` 的
+  auth-identity 分片並由 `check-stateful-database-ci.mjs` 驗證。
+- 43 個 KEEP 中，21 個在 `northstar-db-it`：17 個需要它沒有依賴的 `northstar-delivery-core`、`northstar-config` 或
+  `northstar-auth-xmpp`，3 個的最後一個分支需要私有 hook 或在持鎖時到不了。另一個是審計預期錯了：註冊在守衛拒絕時，
+  生產碼明確放棄保留，審計原以為保留會存續。BOSH 的 19 個 actor 案例需要 TransportHost fake。這些留給 S36。
+- 執行門禁的四個完整驗證器以整支為一段，含 KEEP 案例就整支保留，其中已涵蓋的謂詞也還在；拆成逐謂詞留給 S36。
+
+新決定：
+
+- 從根 crate 移出的程式碼保留原來的日誌 target：`northstar-runtime` 的關機事件以 `target: "northstar_server"` 發出，
+  因為 runtime harness 以 `RUST_LOG=northstar_server=info` 等待 "shutdown complete"（WP-578）。
+- 架構門禁的 worker 註冊清單只掃生產碼：`tests.rs`、`*_tests.rs` 與 `tests/` 模組目錄下的檔案略過（WP-579）。
+
+S35 沒有改動根 crate（169 檔 51,681 行不變）。crates 與 tools 新增 33,617 行、刪除 1,236 行（大型測試模組拆檔）；門禁
+與自測新增 46 行、刪除 3,453 行，讀 Rust 的 9 支門禁由 9,084 行減為 6,854 行。workspace 測試由 3,276 個增為 3,430 個
+（ignored 由 255 個增為 286 個），既有測試名稱不變。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點），S31 的 WP-483 起 agy 額度用盡，再改由 Codex CLI 執行（第 10 點）。
@@ -1659,6 +1696,13 @@ HttpModule）。根 crate 刪除 1,237 行、新增 738 行，crates 新增 3,62
      `Debug` 時不能 `unwrap_err`，改用 `let Err(e) = r else { panic!() }`；只有測試用到的 tokio feature 放在
      dev-dependencies（S34）。
    - 審計的行號只對應審計時的 commit。之後的 WP 移動了程式碼，規格要以名稱定位項目，行號只當線索（S34）。
+   - 日誌 target 是運作合約：移動發出事件的程式碼時保留原 target，否則依 target 過濾日誌的 harness 會逾時（S35）。
+   - 新增的 ignored 資料庫測試要有 CI harness 列在 `scripts/stateful-database-ci.sh`，否則 CI 永遠不跑。agent 寫的資料庫
+     測試在合併前以拋棄式 PostgreSQL 在本機全部跑過：WP-573 首跑有 4 個失敗（讀錯表、CHECK 約束的時間競爭、誤解工作量
+     公式）（S35）。
+   - PostgreSQL 識別字上限 63 位元組，超過時只發 NOTICE 並截斷；隨機 schema 與角色名的前綴要算進長度（S35）。
+   - 刪除門禁檢查由案例帳本驅動：agent 只讀不跑，逐段列出所附案例與帳本狀態；Claude 以 node 執行每支門禁與自測，並檢查
+     刪除後沒有留下未使用的讀檔與宣告（S35）。
 10. Codex（S31 的 WP-483 起，2026-11-16）：agy 額度用盡期間，程式修改改由 Codex CLI（`gpt-6.1-sol`）執行，呼叫方式與
     限制同第 8 點，`model_reasoning_effort` 依任務難度選擇；第 1、3、4、7 點與第 9 點的機械搬移做法照舊。agy 恢復後回到
     第 9 點。
@@ -2134,3 +2178,28 @@ Stage 證據仍綁定其原提交。
 | WP-553 | 完成：持久稽核與重啟恢復移入 operations 應用層 | 見 `git log --grep '\[WP-553\]'` |
 | WP-554 | 完成：passkey 與邀請制判斷移入 `northstar-config` | 見 `git log --grep '\[WP-554\]'` |
 | WP-555 | 完成：記錄 S34 的階段與盤點（5.30）、目標架構 4.4、4.7 與第 5 節。WP-540–554 接在 WP-537 之上成一條鏈，整條鏈驗證 fmt、clippy、workspace 測試、模糊測試、受影響 crate 的單獨建置、全部門禁與 Python 腳本測試，離線 CI 在推送前通過 | 見 `git log --grep '\[WP-555\]'` |
+| WP-556 | 完成：abuse 政策與准入的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-556\]'` |
+| WP-557 | 完成：auth 服務與憑證收據的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-557\]'` |
+| WP-558 | 完成：config、啟動與 OMEMO 指標的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-558\]'` |
+| WP-559 | 完成：operations 與 PubSub 清理的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-559\]'` |
+| WP-560 | 完成：會話發佈與 SM 所有權的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-560\]'` |
+| WP-561 | 完成：caps 閘道等待者與飽和佇列的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-561\]'` |
+| WP-562 | 完成：訊息准入與直接流程的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-562\]'` |
+| WP-563 | 完成：message-xmpp 准入與聯邦路由的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-563\]'` |
+| WP-564 | 完成：HTTP 健康、上傳、OMEMO 與 CSP 的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-564\]'` |
+| WP-565 | 完成：delivery-core 提交與 MIX outbox 的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-565\]'` |
+| WP-566 | 完成：BOSH 所有權與回應快取的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-566\]'` |
+| WP-567 | 完成：C2S 原生寫入與會話入口的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-567\]'` |
+| WP-568 | 完成：叢集 MUC 投遞、權威與名冊的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-568\]'` |
+| WP-569 | 完成：MIX outbox worker 通道與已認領效果的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-569\]'` |
+| WP-570 | 完成：MUC 討論信封與訊息階段的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-570\]'` |
+| WP-571 | 完成：MIX 與 MUC 討論服務的門禁案例改為擁有者測試 | 見 `git log --grep '\[WP-571\]'` |
+| WP-572 | 完成：`northstar-stream` 的 SM、重播、caps 與 inline 恢復案例改為擁有者測試，協議測試拆為三檔 | 見 `git log --grep '\[WP-572\]'` |
+| WP-573 | 完成：PostgreSQL 介面卡的門禁案例改為 31 個 `northstar-db-it` 測試，新增資料庫 CI 套件 `repository-conformance-db-wsl.sh` | 見 `git log --grep '\[WP-573\]'` |
+| WP-574 | 完成：架構門禁刪除被涵蓋的檢查，MIX outbox 自測退役 | 見 `git log --grep '\[WP-574\]'` |
+| WP-575 | 完成：執行門禁刪除被涵蓋的檢查 | 見 `git log --grep '\[WP-575\]'` |
+| WP-576 | 完成：abuse 與准入門禁刪除被涵蓋的檢查 | 見 `git log --grep '\[WP-576\]'` |
+| WP-577 | 完成：subserver、會話生命週期、聯邦路由、OMEMO 與 CSP 門禁刪除被涵蓋的檢查 | 見 `git log --grep '\[WP-577\]'` |
+| WP-578 | 完成：`northstar-runtime` 的關機事件恢復 `northstar_server` 日誌 target | 見 `git log --grep '\[WP-578\]'` |
+| WP-579 | 完成：架構門禁的 worker 清單略過測試模組目錄 | 見 `git log --grep '\[WP-579\]'` |
+| WP-580 | 完成：記錄 S35 的階段與盤點（5.31）、目標架構 4.7 與第 5 節。WP-556–579 接在 WP-578 之上成一條鏈，整條鏈驗證 fmt、clippy、workspace 測試、模糊測試、受影響 crate 的單獨建置、全部門禁與 Python 腳本測試，新的資料庫套件以本機 PostgreSQL 執行，離線 CI 在推送前通過 | 見 `git log --grep '\[WP-580\]'` |

@@ -190,6 +190,11 @@ S34 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.30）：`Server
   組合根接線檢查保留。可改寫的檢查分屬 24 個擁有者套件（含需要 PostgreSQL 的 `northstar-db-it`），S35 先補測試，再逐支
   門禁刪除被涵蓋的檢查與其自測。CI 以 `cargo test --all-targets` 執行、不跑 doctest，型別不可 Clone 的檢查因此以單元
   測試中的固有方法探針表達，不用 `compile_fail`。
+- S35 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.31）：擁有者 crate 補上 154 個測試，其中 31 個是需要 PostgreSQL
+  的 `northstar-db-it` 介面卡一致性測試，由新的資料庫 CI 套件執行；門禁刪除被涵蓋的 381 段檢查，讀 Rust 的 9 支門禁由
+  9,084 行減為 6,854 行，MIX outbox 的自測整支退役。保留的是結構規則、組合根接線與 43 個 KEEP 案例：`northstar-db-it`
+  缺少依賴的資料庫案例、需要 TransportHost fake 的 BOSH actor 案例與需要私有 hook 的分支；含這些案例的 4 個執行門禁
+  完整驗證器整支保留。
 
 ## 5. 遷移順序
 
@@ -209,7 +214,8 @@ S34 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.30）：`Server
 | S32 門禁退役 | 逐項核對 `check-architecture-boundaries.mjs` 等讀原始碼的門禁：邊界已由 crate 圖保證的刪除，交易順序、outbox 等語義檢查改寫為擁有該行為的 crate 中的測試；決定 R9 在只剩兩層的組合根是否保留 | 每支刪除的檢查都對應到 crate 圖規則或測試；全部門禁與完整 CI 通過。已完成（WP-507–510，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.28）：刪除 14 段由 crate 圖或其他門禁涵蓋的檢查，`src/xmpp` 只在測試中編譯，R9 退役；語義檢查的改寫隨 S33 進行 |
 | S33 組合根收斂 | `node/adapters` 中仍含流程的介面卡移入 room、message、operations 上下文；`ServerNode` 的即時狀態移入擁有它的上下文模組；`SessionHost` 依關注點拆分；移動的程式碼對應的語義與接線檢查改寫為擁有 crate 的測試後從門禁刪除 | 組合根只剩建構、host 綁定與 worker 註冊；全部門禁與完整 CI 通過。已完成（WP-511–537，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.29）：審計 A1–A25 中組合根的流程移入各上下文、`northstar-runtime`、`northstar-http`、config 與 security，`SessionHost` 拆成 13 個關注點 trait；`ServerNode` 的即時狀態、ClusterModule、MIX 出席恢復與 IQ 轉送、`main.rs` 的關機監督與維護所有權監控留在組合根，門禁只改指向，改寫為測試改為 S34 |
 | S34 組合根狀態與門禁改寫 | `ServerNode` 的即時狀態（會話表、caps 索引、連線准入、連線 actor、BOSH 管理器）移入 SessionModule，叢集管理器與路由移入 ClusterModule；MIX 出席恢復與 IQ 轉送移入 `northstar-mix-xmpp`；`main.rs` 的關機監督移入 `northstar-runtime`，維護所有權監控移入 operations，啟動稽核序列與叢集 claim 經啟動 port；移動過的程式碼對應的語義與接線檢查改寫為擁有 crate 的測試後從門禁刪除 | `ServerNode` 只持有上下文模組與平台控制代碼；組合根只剩建構、host 綁定與 worker 註冊；全部門禁與完整 CI 通過。已完成（WP-540–555，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.30）：會話即時狀態、程序生命週期狀態與 HTTP 探索各歸 SessionModule、RuntimeModule、HttpModule；MIX 出席恢復與 IQ 轉送、維護所有權監控、關機監督、上傳啟動、叢集啟動權威與持久稽核移入擁有者。ClusterModule 決定不做（`ClusterManager` 本身就是叢集 edge 的聚合）；門禁改寫為測試改為 S35 |
-| S35 門禁改寫為測試 | 依 S34 的門禁審計，為 24 個擁有者套件（abuse、auth、config、postgres、telemetry、operations、pubsub、session、protocol-runtime、message、delivery-core、BOSH、C2S、cluster、HTTP、MIX、MUC、room、stream 與 `northstar-db-it`）補上行為測試，再逐支門禁刪除被涵蓋的檢查與對應的自測 | 每支刪除的檢查都對應到擁有 crate 的測試；結構規則與組合根接線檢查保留；全部門禁與完整 CI 通過 |
+| S35 門禁改寫為測試 | 依 S34 的門禁審計，為 24 個擁有者套件（abuse、auth、config、postgres、telemetry、operations、pubsub、session、protocol-runtime、message、delivery-core、BOSH、C2S、cluster、HTTP、MIX、MUC、room、stream 與 `northstar-db-it`）補上行為測試，再逐支門禁刪除被涵蓋的檢查與對應的自測 | 每支刪除的檢查都對應到擁有 crate 的測試；結構規則與組合根接線檢查保留；全部門禁與完整 CI 通過。已完成（WP-556–580，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.31）：467 個審計案例有測試，門禁刪除 381 段被涵蓋的檢查；43 個 KEEP 案例與含它們的 4 個執行門禁完整驗證器留給 S36 |
+| S36 門禁改寫收尾 | `northstar-db-it` 加上 `northstar-delivery-core`、`northstar-config`、`northstar-auth-xmpp` 的 dev 依賴，寫出 S35 因缺依賴而 KEEP 的資料庫案例；為 BOSH actor 案例建 TransportHost fake；執行門禁的 4 個完整驗證器拆成逐謂詞，刪除已涵蓋的部分 | 每支刪除的檢查都對應到測試；結構規則與組合根接線檢查保留；全部門禁與完整 CI 通過 |
 
 與其他計劃的關係：模組化執行計劃的 C1（PubSub）與 C2（MAM）是語義上的重構，在對應上下文搬進新 crate 後於新
 結構中進行；D1 由 S18 與 S30 吸收；R1–R3 不受影響。

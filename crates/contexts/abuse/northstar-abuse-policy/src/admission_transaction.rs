@@ -407,6 +407,117 @@ mod tests {
             FinalizeDecision::PayloadConflict
         );
     }
+
+    #[test]
+    fn finalize_checks_keys_before_replay_and_retains_completion_after_expiry() {
+        use crate::admission_execution::{
+            Command, CommitFact, CommitWitness, Completion, CompletionRejected, Coordinator,
+            Correlation, EffectResult, ExecutionOutcome, FinalizeSuccess, PreparedCommit, Receipt,
+            TransactionScope,
+        };
+
+        for (label, state, wrong_key, stale_token, expected) in [
+            (
+                "accepted key conflict",
+                RowState::Accepted,
+                true,
+                false,
+                FinalizeDecision::PayloadConflict,
+            ),
+            (
+                "expired pending lease",
+                RowState::Pending,
+                false,
+                false,
+                FinalizeDecision::AcceptPending,
+            ),
+            (
+                "expired accepted replay",
+                RowState::Accepted,
+                false,
+                true,
+                FinalizeDecision::AlreadyAccepted,
+            ),
+        ] {
+            let (now, _, mut row, fence) = fixture();
+            row.state = state;
+            row.lease_expires_at = now - chrono::Duration::days(1);
+            row.expires_at = now - chrono::Duration::days(1);
+            if wrong_key {
+                row.admission_key[0] ^= 1;
+            }
+            if stale_token {
+                row.lease_token = Uuid::from_u128(99);
+            }
+            let decision = decide_finalize(Some(&row), &fence);
+            assert_eq!(decision, expected, "{label}");
+
+            let mut coordinator = Coordinator::new(
+                Correlation {
+                    operation: Uuid::from_u128(10),
+                    effect: 20,
+                    generation: 30,
+                    attempt: 1,
+                },
+                Command::Finalize(fence.clone()),
+            );
+            let effect = coordinator.pending().expect(label).clone();
+            let mut witness = CommitWitness::new(effect.clone());
+            if matches!(
+                expected,
+                FinalizeDecision::AcceptPending | FinalizeDecision::AlreadyAccepted
+            ) {
+                let prepared = PreparedCommit {
+                    correlation: effect.correlation,
+                    scope: TransactionScope::AdmissionFinalize,
+                    fact: CommitFact::Finalized {
+                        fence,
+                        result: if expected == FinalizeDecision::AcceptPending {
+                            FinalizeSuccess::PendingAccepted
+                        } else {
+                            FinalizeSuccess::AlreadyAccepted
+                        },
+                    },
+                };
+                witness.enter_commit(prepared.clone()).unwrap();
+                witness
+                    .record_receipt(Receipt {
+                        correlation: prepared.correlation,
+                        scope: prepared.scope,
+                        fact: prepared.fact,
+                    })
+                    .unwrap();
+            }
+            coordinator.observe_witness(&witness).unwrap();
+            let completion = Completion {
+                effect,
+                result: EffectResult::Finalize(decision),
+                knowledge: witness.knowledge().clone(),
+            };
+            assert_eq!(
+                coordinator.complete(completion.clone()).unwrap(),
+                &ExecutionOutcome::Completed {
+                    result: EffectResult::Finalize(expected),
+                    knowledge: witness.knowledge().clone(),
+                },
+                "{label}"
+            );
+            assert!(coordinator.pending().is_none(), "{label}");
+            let finished = coordinator.clone();
+            assert_eq!(
+                coordinator.complete(completion),
+                Err(CompletionRejected::AlreadyCompleted),
+                "{label}: duplicate completion"
+            );
+            assert_eq!(
+                coordinator.observe_witness(&witness),
+                Err(CompletionRejected::AlreadyCompleted),
+                "{label}: late witness"
+            );
+            assert_eq!(coordinator, finished, "{label}");
+        }
+    }
+
     #[test]
     fn every_reconcile_classification_retains_the_exact_sample() {
         let (_, _, row, fence) = fixture();

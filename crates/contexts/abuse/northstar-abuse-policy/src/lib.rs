@@ -72,6 +72,158 @@ mod tests {
             .unwrap()
     }
 
+    #[test]
+    fn report_and_appeal_work_and_xmpp_intents_bind_the_operation() {
+        let config = test_config();
+        for (label, action, base, expected_base, expected_work) in [
+            (
+                "report requires work immediately",
+                AbuseAction::Report,
+                100,
+                200,
+                200,
+            ),
+            (
+                "appeal costs eight times base",
+                AbuseAction::Appeal,
+                100,
+                800,
+                800,
+            ),
+            (
+                "report base saturates",
+                AbuseAction::Report,
+                u64::MAX,
+                u64::MAX,
+                10_000,
+            ),
+            (
+                "appeal base saturates",
+                AbuseAction::Appeal,
+                u64::MAX,
+                u64::MAX,
+                10_000,
+            ),
+        ] {
+            let policy = policy(action, base, config.message_free_burst);
+            assert_eq!(policy.free_burst, 0, "{label}");
+            assert_eq!(policy.base_work, expected_base, "{label}");
+            let requirement = build_requirement(action, policy, 0, 0, 0, &config);
+            assert_eq!(requirement.step, 1, "{label}");
+            assert_eq!(requirement.work_factor, expected_work, "{label}");
+        }
+
+        let digest = [7; 32];
+        let removal = PowIntent::new(
+            AbuseAction::PasswordChange,
+            "XMPP",
+            "/xmpp/account-remove",
+            digest,
+        )
+        .unwrap();
+        assert_eq!(removal.method(), "XMPP", "account removal route");
+        assert_eq!(
+            removal.path(),
+            "/xmpp/account-remove",
+            "account removal route"
+        );
+        assert_eq!(removal.body_sha256(), &digest, "account removal body");
+        for (label, action, method, path, error) in [
+            (
+                "removal wrong action",
+                AbuseAction::Registration,
+                "XMPP",
+                "/xmpp/account-remove",
+                IntentError::ActionMismatch,
+            ),
+            (
+                "removal wrong transport",
+                AbuseAction::PasswordChange,
+                "POST",
+                "/xmpp/account-remove",
+                IntentError::ActionMismatch,
+            ),
+            (
+                "removal unknown route",
+                AbuseAction::PasswordChange,
+                "XMPP",
+                "/xmpp/account-remove/other",
+                IntentError::ActionMismatch,
+            ),
+            (
+                "removal query rejected",
+                AbuseAction::PasswordChange,
+                "XMPP",
+                "/xmpp/account-remove?all=1",
+                IntentError::InvalidPath,
+            ),
+        ] {
+            assert_eq!(
+                PowIntent::new(action, method, path, digest),
+                Err(error),
+                "{label}"
+            );
+        }
+
+        let registration = PowIntent::xmpp_registration("alice", "secret", Some("invite"));
+        let expected_digest: [u8; 32] = Sha256::digest(
+            b"northstar/xmpp-registration-intent/v1\0\x01\0\0\0\0\0\0\0\x05alice\x01\0\0\0\0\0\0\0\x06secret\x01\0\0\0\0\0\0\0\x06invite",
+        )
+        .into();
+        assert_eq!(registration.method(), "XMPP", "semantic registration route");
+        assert_eq!(
+            registration.path(),
+            "/xmpp/register",
+            "semantic registration route"
+        );
+        assert_eq!(
+            registration.body_sha256(),
+            &expected_digest,
+            "registration profile"
+        );
+        assert_eq!(
+            registration,
+            PowIntent::new(
+                AbuseAction::Registration,
+                "XMPP",
+                "/xmpp/register",
+                expected_digest,
+            )
+            .unwrap(),
+            "registration has one transport-independent semantic commitment"
+        );
+        for (label, changed) in [
+            (
+                "registration username",
+                PowIntent::xmpp_registration("bob", "secret", Some("invite")),
+            ),
+            (
+                "registration password",
+                PowIntent::xmpp_registration("alice", "changed", Some("invite")),
+            ),
+            (
+                "registration invitation",
+                PowIntent::xmpp_registration("alice", "secret", Some("other")),
+            ),
+            (
+                "registration missing invitation",
+                PowIntent::xmpp_registration("alice", "secret", None),
+            ),
+        ] {
+            assert_ne!(registration, changed, "{label}");
+        }
+        assert_ne!(
+            PowIntent::xmpp_registration("ab", "c", None),
+            PowIntent::xmpp_registration("a", "bc", None),
+            "registration field boundaries"
+        );
+        assert_ne!(
+            PowIntent::xmpp_registration("alice", "secret", None),
+            PowIntent::xmpp_registration("alice", "secret", Some("")),
+            "registration optional field presence"
+        );
+    }
+
     fn solve(prefix: &str, work_factor: u64) -> String {
         let target = u64::MAX / work_factor.max(1);
         for nonce in 0_u64.. {

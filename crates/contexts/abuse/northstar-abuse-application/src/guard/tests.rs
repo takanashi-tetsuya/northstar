@@ -12,6 +12,58 @@ fn guard() -> AbuseGuard {
     })
 }
 
+#[test]
+fn behavior_state_is_shared_across_actions_while_user_state_is_scoped() {
+    for (label, actor, message_key, login_key, state_count, message_events, login_events) in [
+        (
+            "shared behavior",
+            "behavior:cross-action",
+            "behavior:cross-action",
+            "behavior:cross-action",
+            1,
+            2,
+            2,
+        ),
+        (
+            "scoped user",
+            "user:cross-action",
+            "message:user:cross-action",
+            "login:user:cross-action",
+            2,
+            1,
+            1,
+        ),
+    ] {
+        let guard = guard();
+        let actors = vec![actor.to_owned()];
+        let message = guard
+            .verify_memory(AbuseAction::Message, "message:cross-action", &actors, None)
+            .unwrap();
+        assert_eq!(message.work_factor, 1, "{label}");
+        let first_event = {
+            let state = guard.states.get(message_key).expect(label);
+            assert_eq!(state.events.len(), 1, "{label}");
+            assert_eq!(state.sequence, 1, "{label}");
+            state.events[0]
+        };
+
+        let login = guard
+            .verify_memory(AbuseAction::Login, "login:cross-action", &actors, None)
+            .unwrap();
+        assert_eq!(login.work_factor, 1, "{label}");
+        assert_eq!(guard.states.len(), state_count, "{label}");
+        {
+            let state = guard.states.get(message_key).expect(label);
+            assert_eq!(state.events.len(), message_events, "{label}");
+            assert_eq!(state.sequence, message_events as u64, "{label}");
+            assert_eq!(state.events[0], first_event, "{label}");
+        }
+        let state = guard.states.get(login_key).expect(label);
+        assert_eq!(state.events.len(), login_events, "{label}");
+        assert_eq!(state.sequence, login_events as u64, "{label}");
+    }
+}
+
 #[tokio::test]
 async fn shared_nat_state_waits_before_a_database_connection_is_acquired() {
     let guard = guard();

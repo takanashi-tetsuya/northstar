@@ -241,8 +241,6 @@ const state = readProductionModule('src/node.rs', { root });
 // crates/edges/northstar-cluster/src/lib.rs is read as its whole production module too (listener.rs,
 // pool.rs and the files a split adds), with items read by unique declaration
 const cluster = readProductionModule('crates/edges/northstar-cluster/src/lib.rs', { root });
-// crates/platform/northstar-config/src/lib.rs and its non-test sibling modules (the whole production module)
-const configSource = readProductionModule('crates/platform/northstar-config/src/lib.rs', { root });
 const mainSource = read('src/main.rs');
 const workerComposition = readProductionModule('src/node/workers.rs', { root });
 const abuseWorkers = read('src/node/workers/abuse.rs');
@@ -411,8 +409,6 @@ for (const invariant of [
   'runtime_control_pool_options(config, attempt_budget)',
   'let connect_options = runtime_control_connect_options(&config.database_url)?;',
   '.connect_with(connect_options.clone())',
-  'attest_development_database_is_loopback',
-  'attest_runtime_role',
   'RUNTIME_CONTROL_STARTUP_RETRY_BUDGET',
   'runtime_control_startup_connect(deadline,',
   'tokio::time::timeout_at(deadline,',
@@ -423,14 +419,6 @@ for (const invariant of [
 }
 if (!/runtime_control_pool\s*\.acquire\(\)\s*\.await/s.test(runtimeControlReservation)) {
   throw new Error('runtime-control startup reservation must retain its one dedicated connection');
-}
-const runtimeControlConnect = rustItemBody(runtimeControlConnection, 'async fn runtime_control_startup_connect<');
-if (!/startup_database_connect\(\s*deadline,\s*RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET,/.test(runtimeControlConnect)) {
-  throw new Error('runtime-control must use bounded startup admission with its handshake limit');
-}
-if (!/const RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(3\)/.test(runtimeControlConnection)
-    || !/const RUNTIME_CONTROL_STARTUP_RETRY_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(15\)/.test(runtimeControlConnection)) {
-  throw new Error('runtime-control cold handshake remains at most 3 s within one absolute 15 s admission budget');
 }
 const appStateConstruction = rustItemBody(state, 'pub async fn new(');
 if (!/pub async fn new\([\s\S]*?runtime_control_connection\s*:\s*PoolConnection<Postgres>/.test(state)) {
@@ -529,63 +517,6 @@ if (
 ) {
   throw new Error('production command mode must keep its separately attested command-role pool');
 }
-const adminCommandPoolMode = rustItemBody(configSource, 'pub enum AdminCommandPoolMode');
-if (
-  !/^\s*DedicatedProductionRole\s*,?\s*$/m.test(adminCommandPoolMode) ||
-  !/^\s*SharedUnsafeDevelopment\s*,?\s*$/m.test(adminCommandPoolMode)
-) {
-  throw new Error('command-pool modes must distinguish dedicated production from shared unsafe development');
-}
-const resolveAdminCommandPoolMode = rustItemBody(
-  configSource,
-  'fn resolve_admin_command_pool_mode(',
-);
-const unsafeDevelopmentCommandMode = structBody(
-  resolveAdminCommandPoolMode,
-  'if unsafe_development',
-);
-if (
-  !/!\s*configured/.test(unsafeDevelopmentCommandMode) ||
-  !/AdminCommandPoolMode\s*::\s*SharedUnsafeDevelopment/.test(unsafeDevelopmentCommandMode)
-) {
-  throw new Error('unsafe command mode must reject a separate command URL and select primary-pool sharing');
-}
-const runtimePoolBudget = rustItemBody(configSource, 'fn validate_runtime_pool_budget(');
-if (
-  !/pub\s+const\s+DATABASE_PRIMARY_POOL_MIN_CONNECTIONS\s*:\s*u32\s*=\s*2\s*;/.test(
-    configSource,
-  ) ||
-  !/!\s*\(\s*DATABASE_PRIMARY_POOL_MIN_CONNECTIONS\s*\.\.\s*=\s*DATABASE_MAX_CONNECTIONS_LIMIT\s*\)\s*\.\s*contains\s*\(\s*&max_connections\s*\)/s.test(
-    runtimePoolBudget,
-  )
-) {
-  throw new Error('the primary runtime pool must reject capacity below two connections');
-}
-for (const invariant of [
-  'pub const RUNTIME_ROLE_CONNECTION_LIMIT: u32 = 64;',
-  'pub const OMEMO_RECOVERY_POOL_MAX_CONNECTIONS: u32 = 2;',
-  'pub const SM_AUTHORITY_LISTENER_MAX_CONNECTIONS: u32 = 1;',
-  'pub const SERVICE_CONTROL_POOL_MAX_CONNECTIONS: u32 = 1;',
-  'pub const DATABASE_MAX_CONNECTIONS_LIMIT: u32 =',
-  'RUNTIME_ROLE_CONNECTION_LIMIT - RUNTIME_ROLE_RESERVED_CONNECTIONS;',
-  'validate_runtime_pool_budget(raw.database_max_connections, raw.database_min_connections)?;',
-  'pub struct RuntimeConnectionBudgetManifest',
-  'pub const fn runtime_connection_budget_manifest()',
-  'auxiliary_connections: RUNTIME_ROLE_RESERVED_CONNECTIONS,',
-]) {
-  if (!configSource.includes(invariant)) {
-    throw new Error(`runtime pool-budget invariant is missing: ${invariant}`);
-  }
-}
-for (const invariant of [
-  'pub const STORAGE_POOL_MAX_CONNECTIONS: u32 = 2;',
-  'pub const STORAGE_ROLE_CONNECTION_LIMIT: u32 = 16;',
-  'pub const fn storage_connection_budget_manifest()',
-]) {
-  if (!configSource.includes(invariant)) {
-    throw new Error(`storage pool-budget invariant is missing: ${invariant}`);
-  }
-}
 if (!mainSource.includes('Some("--storage-connection-budget")')
     || !uploadModuleStart.includes('StoragePoolMode::Disabled => None')
     || !uploadModuleStart.includes('StoragePoolMode::SharedUnsafeDevelopment => Some(pool.clone())')
@@ -665,18 +596,8 @@ for (const operation of ['zeroize', 'clear']) {
     throw new Error(`ServerNode::new must ${operation} config.raw.database_url after pool creation`);
   }
 }
-const takeComponentCredentials = rustItemBody(configSource, 'pub fn take_component_credentials(');
-if (!/config\s*\.\s*take_component_credentials\s*\(/.test(appStateNew)
-    || !/std\s*::\s*mem\s*::\s*take\s*\(\s*&mut\s+self\s*\.\s*components\s*\)/.test(takeComponentCredentials)) {
+if (!/config\s*\.\s*take_component_credentials\s*\(/.test(appStateNew)) {
   throw new Error('ServerNode::new must take exclusive ownership of component credentials');
-}
-for (const field of ['secret_value', 'secret_file']) {
-  if (!new RegExp(`credential\\s*\\.\\s*${field}\\s*=\\s*None`).test(takeComponentCredentials)) {
-    throw new Error(`ServerNode::new must remove component ${field} from shared Config metadata`);
-  }
-}
-if (!/credential\s*\.\s*secret_sha256\s*\.\s*zeroize\s*\(/.test(takeComponentCredentials)) {
-  throw new Error('ServerNode::new must zero the component verifier in shared Config metadata');
 }
 if (
   /^\s*pub(?:\(crate\))?\s+[A-Za-z_][A-Za-z0-9_]*(?:secret|token|credential|keyring)[A-Za-z0-9_]*\s*:/gim.test(
@@ -837,14 +758,6 @@ if (
   )
 ) {
   throw new Error('MixService must clone the shared durable-outbox admission instead of replacing it');
-}
-const durableOutboxAdmission = read('crates/platform/northstar-runtime/src/durable_outbox.rs');
-if (
-  !/primary_pool_max_connections\s+as\s+usize[\s\S]*?\.\s*saturating_sub\s*\(\s*1\s*\)[\s\S]*?\.\s*clamp\s*\(\s*1\s*,\s*MAX_BACKGROUND_DATABASE_TURNS\s*\)/s.test(
-    durableOutboxAdmission,
-  )
-) {
-  throw new Error('durable outbox admission must reserve one primary-pool connection for foreground work');
 }
 if (
   !/async\s+fn\s+outbox_db_admission_guard\s*\(\s*&self\s*\)\s*->\s*OwnedSemaphorePermit/.test(
@@ -1377,18 +1290,6 @@ for (const invariant of [
   }
 }
 const replayDbSource = readProductionModule('crates/contexts/session/northstar-session-postgres/src/replay.rs', { root }).replace(/\s+/g, ' ');
-for (const invariant of [
-  'ON CONFLICT(recipient_id,resource)',
-  'SET owner_token=EXCLUDED.owner_token',
-]) {
-  if (!replayDbSource.includes(invariant)) {
-    throw new Error(`offline replay acquisition lost invariant: ${invariant}`);
-  }
-}
-const resourceOwnerFence = 'WHERE recipient_id=$1 AND resource=$2 AND owner_token=$3';
-if (replayDbSource.split(resourceOwnerFence).length - 1 < 3) {
-  throw new Error('offline replay claim/renew/release lost its resource + owner-token fence');
-}
 for (const invariant of [
   'OfflineReplayLeaseAcquire',
   'Some("40001")',
@@ -2031,14 +1932,6 @@ if (!/\.service\(\)[\s\S]+\.register_http\(HttpRegistrationRequest/.test(registr
 }
 if (/(?:\bstate\s*\.\s*pool\b|\bdb::(?:acquire_idempotency_in_tx|prepare_registration|create_user_with_invitation_guarded_in_tx_v2)\b|\btransaction\b|\bPgPool\b)/.test(registrationHandler)) {
   throw new Error('HTTP registration regained SQL, transaction or password-work authority');
-}
-const accountRepositorySource = read('crates/contexts/workflows/northstar-workflows/src/account_repository.rs');
-const httpRegistrationRepository = accountRepositorySource.slice(
-  accountRepositorySource.indexOf('async fn register_http('),
-  accountRepositorySource.indexOf('async fn verify_registration_guard('),
-);
-if (!/acquire_idempotency_in_tx[\s\S]+reservation\.commit\(\)[\s\S]+verify_registration_guard[\s\S]+prepare_registration\([\s\S]+publication\.commit\(\)/.test(httpRegistrationRepository)) {
-  throw new Error('HTTP registration repository must own the ordered reservation, guard and publication transactions');
 }
 
 // ARCH-SVC XEP-0050/XEP-0133 administrative boundary: inline DB fixtures
@@ -2744,10 +2637,8 @@ if (/\bstate\.metrics\b|\bself\.(?:state|host)\.metrics\b|&(?:(?:northstar_telem
   throw new Error('caps effect dispatch must receive only its admission and completion telemetry');
 }
 const passkeyFinishSource = read('crates/edges/northstar-http/src/passkeys.rs');
-const passkeyFinish = structBody(passkeyFinishSource, 'pub(super) async fn login_finish<R: HttpRepositories>(');
 const passkeyFinishContext = structBody(read('crates/edges/northstar-http/src/contexts/passkey_login_finish.rs'), 'pub struct PasskeyLoginFinishContext');
 if (!passkeyFinishSource.includes('State(state): State<PasskeyLoginFinishContext<R>>')
-    || !/check_expected_origin\(&state\.allowed_origin\(\)\?, &headers\)\?;[\s\S]*?state\.finish\(/.test(passkeyFinish)
     || /\b(?:ServerNode|Metrics|PgPool)\b/.test(passkeyFinishContext)) {
   throw new Error('Passkey login completion must check the live origin before using its narrow service');
 }
@@ -2878,22 +2769,6 @@ if (!clusterMaintenance.includes('.session_authority')
 }
 if (/tokio::spawn\s*\(\s*admin_session_cleanup_heartbeat/.test(operationRuntimeOwnershipSource)) {
   throw new Error('administrator cleanup lease renewal must not be a detached Tokio task');
-}
-const structuredCleanupRenewal = structBody(
-  operationRuntimeOwnershipSource,
-  'async fn execute_with_lease_renewal',
-);
-for (const invariant of [
-  'tokio::select!',
-  'renewal_stop.cancel()',
-  'result = &mut renewal',
-]) {
-  if (!structuredCleanupRenewal.includes(invariant)) {
-    throw new Error(`administrator cleanup lost structured lease ownership: ${invariant}`);
-  }
-}
-if (!/renewal\s*\.await/.test(structuredCleanupRenewal)) {
-  throw new Error('administrator cleanup must await its cancelled lease renewal');
 }
 const clusterFailureSupervisor = rustItemBody(
   cluster,

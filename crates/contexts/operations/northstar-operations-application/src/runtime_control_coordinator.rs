@@ -675,6 +675,232 @@ mod tests {
         (guard, captured)
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn control_requires_installed_shutdown_and_matching_generation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let actions = Arc::new(AtomicUsize::new(0));
+        let _subscriber = tracing::subscriber::set_default(ControlActions(Arc::clone(&actions)));
+        let process_started_at = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        for (label, enabled, initially_installed, install_later) in [
+            ("disabled control", false, true, false),
+            ("missing shutdown", true, false, false),
+            ("live shutdown installation", true, false, true),
+            ("installed shutdown", true, true, false),
+        ] {
+            actions.store(0, Ordering::SeqCst);
+            let (workers, cancel, heartbeat) = test_heartbeat().await;
+            let liveness = Arc::new(());
+            let shutdown = CancellationToken::new();
+            let installed = Arc::new(OnceLock::new());
+            if initially_installed {
+                installed.set(shutdown.clone()).unwrap();
+            }
+            let command = |generation, fired_at| {
+                Some(DurableServiceControl {
+                    generation: uuid::Uuid::from_u128(generation),
+                    action: "restart".to_owned(),
+                    execute_at: process_started_at,
+                    fired_at,
+                    expires_at: process_started_at + chrono::Duration::minutes(5),
+                })
+            };
+            let fired_at = process_started_at + chrono::Duration::seconds(1);
+            let (sender, mut reads) = tokio::sync::mpsc::unbounded_channel();
+            let coordinator = RuntimeControlCoordinator::new(
+                Arc::downgrade(&liveness),
+                FakeRepository {
+                    policies: VecDeque::new(),
+                    controls: [
+                        command(1, None),
+                        command(1, Some(process_started_at - chrono::Duration::seconds(1))),
+                        command(1, Some(process_started_at)),
+                        command(1, Some(fired_at)),
+                        command(1, Some(fired_at)),
+                        command(2, Some(fired_at)),
+                    ]
+                    .into(),
+                    reads: sender,
+                },
+                FakeEffects::default(),
+                enabled,
+                Arc::clone(&installed),
+                process_started_at,
+            );
+            let mut run =
+                Box::pin(coordinator.run(heartbeat, cancel.clone(), Duration::from_secs(5)));
+            if !initially_installed {
+                for _ in 0..2 {
+                    std::future::poll_fn(|cx| {
+                        assert!(run.as_mut().poll(cx).is_pending(), "{label}");
+                        std::task::Poll::Ready(())
+                    })
+                    .await;
+                    assert!(
+                        reads.try_recv().is_err(),
+                        "{label}: read before installation"
+                    );
+                    assert!(!shutdown.is_cancelled(), "{label}");
+                    assert_eq!(actions.load(Ordering::SeqCst), 0, "{label}");
+                    tokio::time::advance(Duration::from_millis(500)).await;
+                }
+            }
+            if install_later {
+                installed.set(shutdown.clone()).unwrap();
+            }
+            let can_act = enabled && (initially_installed || install_later);
+            for (step_label, expected_actions) in [
+                ("unfired command", 0),
+                ("fire predates process", 0),
+                ("fire equals process start", 0),
+                ("new fired generation", 1),
+                ("repeated generation", 1),
+                ("different fired generation", 2),
+            ] {
+                std::future::poll_fn(|cx| {
+                    assert!(run.as_mut().poll(cx).is_pending(), "{label}");
+                    std::task::Poll::Ready(())
+                })
+                .await;
+                assert_eq!(reads.try_recv().is_ok(), can_act, "{label}: {step_label}");
+                assert!(
+                    reads.try_recv().is_err(),
+                    "{label}: {step_label}: duplicate read"
+                );
+                let expected = if can_act { expected_actions } else { 0 };
+                assert_eq!(
+                    actions.load(Ordering::SeqCst),
+                    expected,
+                    "{label}: {step_label}"
+                );
+                assert_eq!(
+                    shutdown.is_cancelled(),
+                    expected > 0,
+                    "{label}: {step_label}"
+                );
+                tokio::time::advance(Duration::from_millis(500)).await;
+            }
+            drop(liveness);
+            run.await.unwrap();
+            assert!(workers
+                .shutdown_and_join(&cancel, Duration::from_secs(1))
+                .await
+                .is_clean());
+        }
+    }
+
+    struct HealthRepository {
+        policies: VecDeque<Result<RuntimePolicySnapshot>>,
+        controls: VecDeque<Result<Option<DurableServiceControl>>>,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl RuntimeControlRepository for HealthRepository {
+        async fn policy_snapshot(
+            &mut self,
+            mut read_phase: impl FnMut(RuntimeControlReadPhase) + Send,
+        ) -> Result<RuntimePolicySnapshot> {
+            self.calls.lock().unwrap().push("snapshot");
+            read_phase(RuntimeControlReadPhase::Snapshot);
+            self.policies.pop_front().expect("unexpected snapshot read")
+        }
+
+        async fn service_control(&mut self) -> Result<Option<DurableServiceControl>> {
+            self.calls.lock().unwrap().push("service control");
+            self.controls.pop_front().expect("unexpected control read")
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn coordinator_health_preserves_idle_errors_and_recovers_only_after_reads() {
+        for enabled in [false, true] {
+            let label = if enabled {
+                "service control reads"
+            } else {
+                "idle ticks"
+            };
+            let (workers, cancel, heartbeat) = test_heartbeat().await;
+            let liveness = Arc::new(());
+            let installed = Arc::new(OnceLock::new());
+            installed.set(CancellationToken::new()).unwrap();
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let coordinator = RuntimeControlCoordinator::new(
+                Arc::downgrade(&liveness),
+                HealthRepository {
+                    policies: [Err(anyhow::anyhow!("snapshot failed")), Ok(policy(false))].into(),
+                    controls: [
+                        Err(anyhow::anyhow!("control failed too")),
+                        Ok(None),
+                        Err(anyhow::anyhow!("control failed")),
+                        Ok(None),
+                    ]
+                    .into(),
+                    calls: Arc::clone(&calls),
+                },
+                FakeEffects::default(),
+                enabled,
+                installed,
+                chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            );
+            let mut run =
+                Box::pin(coordinator.run(heartbeat, cancel.clone(), Duration::from_secs(5)));
+            let expected_errors = if enabled {
+                [
+                    ("snapshot error wins", Some("snapshot failed")),
+                    ("control read recovers", None),
+                    (
+                        "control error survives policy success",
+                        Some("control failed"),
+                    ),
+                    ("control read restores health", None),
+                ]
+            } else {
+                [
+                    ("snapshot failure", Some("snapshot failed")),
+                    ("idle retains failure", Some("snapshot failed")),
+                    ("snapshot read recovers", None),
+                    ("idle retains health", None),
+                ]
+            };
+            for ((step_label, expected_error), snapshot_read) in
+                expected_errors.into_iter().zip([true, false, true, false])
+            {
+                std::future::poll_fn(|cx| {
+                    assert!(run.as_mut().poll(cx).is_pending(), "{label}");
+                    std::task::Poll::Ready(())
+                })
+                .await;
+                let mut expected_calls = Vec::new();
+                if snapshot_read {
+                    expected_calls.push("snapshot");
+                }
+                if enabled {
+                    expected_calls.push("service control");
+                }
+                assert_eq!(
+                    std::mem::take(&mut *calls.lock().unwrap()),
+                    expected_calls,
+                    "{label}: {step_label}"
+                );
+                assert_eq!(
+                    workers
+                        .observer_last_error_for_test("test-runtime-control-coordinator")
+                        .as_deref(),
+                    expected_error,
+                    "{label}: {step_label}"
+                );
+                assert!(!cancel.is_cancelled(), "{label}: {step_label}");
+                tokio::time::advance(Duration::from_millis(500)).await;
+            }
+            drop(liveness);
+            run.await.unwrap();
+            assert!(workers
+                .shutdown_and_join(&cancel, Duration::from_secs(1))
+                .await
+                .is_clean());
+        }
+    }
+
     #[tokio::test]
     async fn dropped_pending_control_turn_reports_its_actual_phase() {
         use super::RuntimeControlPhase;

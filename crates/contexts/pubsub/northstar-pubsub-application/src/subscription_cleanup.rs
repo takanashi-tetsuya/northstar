@@ -216,6 +216,157 @@ mod tests {
         }
     }
 
+    struct RecordingCleanupRepository {
+        calls: std::sync::Mutex<Vec<(Instant, i64)>>,
+        dropped: Arc<AtomicUsize>,
+    }
+
+    struct CountDroppedCleanup(Arc<AtomicUsize>);
+
+    impl Drop for CountDroppedCleanup {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    impl SubscriptionCleanupRepository for RecordingCleanupRepository {
+        async fn cleanup_expired_subscriptions(&self, batch_size: i64) -> anyhow::Result<u64> {
+            let pass = {
+                let mut calls = self.calls.lock().unwrap();
+                calls.push((Instant::now(), batch_size));
+                calls.len()
+            };
+            match pass {
+                1 | 4 => Ok(7),
+                2 | 3 => {
+                    let _dropped = CountDroppedCleanup(Arc::clone(&self.dropped));
+                    std::future::pending().await
+                }
+                _ => panic!("unexpected cleanup pass"),
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cleanup_uses_bounded_batches_and_a_fresh_total_budget_on_each_interval() {
+        for (label, actual, seconds) in [
+            ("cleanup interval", CLEANUP_INTERVAL, 60),
+            ("total pass budget", CLEANUP_BUDGET, 40),
+            ("cleanup silence limit", MAX_SILENCE, 110),
+        ] {
+            assert_eq!(actual, Duration::from_secs(seconds), "{label}");
+        }
+        assert_eq!(CLEANUP_BATCH_SIZE, 1_000, "bounded batch");
+        let workers = WorkerRegistry::new();
+        let cancel = CancellationToken::new();
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        workers.supervise(
+            "test-reviewed-cleanup",
+            WorkerCriticality::Restartable,
+            WorkerMode::Continuous,
+            None,
+            cancel.clone(),
+            move |heartbeat| {
+                sender.send(heartbeat).unwrap();
+                std::future::pending()
+            },
+        );
+        let heartbeat = receiver.recv().await.unwrap();
+        let metrics = Arc::new(SubscriptionCleanupMetrics::default());
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let context = Arc::new(SubscriptionCleanupContext::new(
+            RecordingCleanupRepository {
+                calls: std::sync::Mutex::new(Vec::new()),
+                dropped: Arc::clone(&dropped),
+            },
+            Arc::clone(&metrics),
+        ));
+        let readiness = context.readiness();
+        let started = Instant::now();
+        let mut run = Box::pin(serve_context(
+            Arc::clone(&context),
+            cancel.clone(),
+            heartbeat,
+        ));
+        for (label, elapsed_ms, passes, dropped_passes, failures, ready, deleted) in [
+            ("immediate first pass", 0, 1, 0, 0, true, 7),
+            ("wait for interval", 59_999, 1, 0, 0, true, 7),
+            ("second pass begins", 60_000, 2, 0, 0, false, 7),
+            (
+                "second pass retains its full budget",
+                99_999,
+                2,
+                0,
+                0,
+                false,
+                7,
+            ),
+            ("second pass expires", 100_000, 2, 1, 1, false, 7),
+            ("wait after timeout", 119_999, 2, 1, 1, false, 7),
+            ("third pass begins", 120_000, 3, 1, 1, false, 7),
+            (
+                "third pass receives a fresh budget",
+                159_999,
+                3,
+                1,
+                1,
+                false,
+                7,
+            ),
+            ("third pass expires", 160_000, 3, 2, 2, false, 7),
+            ("later success restores health", 180_000, 4, 2, 2, true, 14),
+        ] {
+            let target = started + Duration::from_millis(elapsed_ms);
+            tokio::time::advance(target.saturating_duration_since(Instant::now())).await;
+            std::future::poll_fn(|cx| {
+                assert!(run.as_mut().poll(cx).is_pending(), "{label}");
+                std::task::Poll::Ready(())
+            })
+            .await;
+            let expected_calls = [0, 60, 120, 180]
+                .into_iter()
+                .take(passes)
+                .map(|seconds| (started + Duration::from_secs(seconds), 1_000))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                *context.repository.calls.lock().unwrap(),
+                expected_calls,
+                "{label}"
+            );
+            assert_eq!(dropped.load(Ordering::Relaxed), dropped_passes, "{label}");
+            assert_eq!(
+                metrics.failures_total.load(Ordering::Relaxed),
+                failures,
+                "{label}"
+            );
+            assert_eq!(
+                metrics.deleted_total.load(Ordering::Relaxed),
+                deleted,
+                "{label}"
+            );
+            assert_eq!(readiness.is_ready(), ready, "{label}");
+            let expected_error = if failures > 0 && !ready {
+                Some("subscription cleanup exceeded its total pass budget")
+            } else {
+                None
+            };
+            assert_eq!(
+                workers
+                    .observer_last_error_for_test("test-reviewed-cleanup")
+                    .as_deref(),
+                expected_error,
+                "{label}"
+            );
+        }
+        cancel.cancel();
+        run.await.unwrap();
+        assert!(!readiness.is_ready());
+        assert!(workers
+            .shutdown_and_join(&cancel, Duration::from_secs(1))
+            .await
+            .is_clean());
+    }
+
     #[tokio::test]
     async fn expired_total_budget_drops_pending_work_and_never_reports_success() {
         let readiness = SubscriptionCleanupReadiness::for_test(true);

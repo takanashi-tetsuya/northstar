@@ -443,8 +443,114 @@ fn page_sessions(
 
 #[cfg(test)]
 mod tests {
-    use super::{page_sessions, SessionView};
+    use super::{
+        page_sessions, ApiQueryRepository, ApiQueryService, ApiReadAuthority, SessionPage,
+        SessionView,
+    };
     use uuid::Uuid;
+
+    struct SessionQueryRecorder {
+        calls: std::sync::Mutex<Vec<(Uuid, i64, String)>>,
+    }
+
+    // The session projection is the only repository operation this fixture permits.
+    macro_rules! unexpected_queries {
+        ($(fn $name:ident($($arg:ident: $ty:ty),* $(,)?) -> $output:ty;)*) => {
+            $(async fn $name(&self, $($arg: $ty),*) -> $output {
+                panic!(concat!("unexpected repository call: ", stringify!($name)))
+            })*
+        };
+    }
+
+    impl ApiQueryRepository for SessionQueryRecorder {
+        unexpected_queries! {
+            fn operations(
+                _actor: ApiReadAuthority<'_>, _status: Option<&str>, _kind: Option<&str>,
+                _after: Option<super::OperationPageBoundary>, _limit: i64,
+            ) -> anyhow::Result<super::AuthorizedRead<super::OperationPage>>;
+            fn operation(
+                _actor: ApiReadAuthority<'_>, _id: Uuid,
+            ) -> anyhow::Result<super::AuthorizedRead<Option<super::OperationRecord>>>;
+            fn operation_targets(
+                _actor: ApiReadAuthority<'_>, _id: Uuid, _status: Option<&str>,
+                _after: Option<super::OperationPageBoundary>, _limit: i64,
+            ) -> anyhow::Result<super::AuthorizedRead<Option<super::OperationTargetPage>>>;
+            fn operation_target(
+                _actor: ApiReadAuthority<'_>, _operation_id: Uuid, _target_id: Uuid,
+            ) -> anyhow::Result<super::AuthorizedRead<Option<super::OperationTargetRecord>>>;
+            fn principal(_token: &str) -> anyhow::Result<Option<super::ApiPrincipal>>;
+            fn cursor_clock() -> anyhow::Result<chrono::DateTime<chrono::Utc>>;
+            fn users(
+                _actor: ApiReadAuthority<'_>, _after: Option<super::PageBoundary>, _limit: i64,
+            ) -> anyhow::Result<Option<super::KeysetPage<super::UserPageRow>>>;
+            fn admin_reports(
+                _actor: ApiReadAuthority<'_>, _status: Option<&str>,
+                _after: Option<super::PageBoundary>, _limit: i64,
+            ) -> anyhow::Result<Option<super::KeysetPage<super::ReportPageRow>>>;
+            fn own_reports(
+                _actor: ApiReadAuthority<'_>, _status: Option<&str>,
+                _after: Option<super::PageBoundary>, _limit: i64,
+            ) -> anyhow::Result<Option<super::KeysetPage<super::ReportPageRow>>>;
+            fn invitations(
+                _actor: ApiReadAuthority<'_>, _after: Option<super::PageBoundary>, _limit: i64,
+            ) -> anyhow::Result<Option<super::KeysetPage<super::InvitationPageRow>>>;
+            fn upload_dead_letters(
+                _actor: ApiReadAuthority<'_>, _kind: super::UploadDeadLetterKind,
+                _after: Option<super::UploadDeadLetterBoundary>, _limit: i64,
+            ) -> anyhow::Result<Option<super::UploadDeadLetterPage>>;
+            fn history(
+                _actor: ApiReadAuthority<'_>, _query: &super::MamArchiveQuery,
+            ) -> anyhow::Result<Option<super::TimedRead<Option<super::ArchivePage>>>>;
+            fn offline_statistics(
+                _actor: ApiReadAuthority<'_>,
+            ) -> anyhow::Result<Option<super::OfflineMessagesStats>>;
+        }
+
+        async fn statistics<F>(
+            &self,
+            _actor: ApiReadAuthority<'_>,
+            _snapshot: F,
+        ) -> anyhow::Result<Option<super::AdminStatistics>>
+        where
+            F: FnOnce() -> super::LiveAdminStats + Send,
+        {
+            panic!("unexpected statistics query");
+        }
+
+        async fn sessions<F>(
+            &self,
+            actor: ApiReadAuthority<'_>,
+            snapshot: F,
+        ) -> anyhow::Result<Option<SessionPage>>
+        where
+            F: FnOnce() -> (Vec<SessionView>, Option<Uuid>) + Send,
+        {
+            self.calls.lock().unwrap().push((
+                actor.user_id,
+                actor.auth_generation,
+                actor.session_token.to_owned(),
+            ));
+            let (rows, next) = snapshot();
+            Ok(Some(SessionPage {
+                rows,
+                next,
+                database_now: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            }))
+        }
+
+        async fn muc_rooms<F>(
+            &self,
+            _actor: ApiReadAuthority<'_>,
+            _after: Option<super::PageBoundary>,
+            _limit: i64,
+            _snapshot: F,
+        ) -> anyhow::Result<Option<super::KeysetPage<super::MucRoomView>>>
+        where
+            F: FnOnce(Vec<super::MucRoomPageRow>) -> Vec<super::MucRoomView> + Send,
+        {
+            panic!("unexpected room query");
+        }
+    }
 
     fn session(connection_id: u128) -> SessionView {
         SessionView {
@@ -508,5 +614,98 @@ mod tests {
         let (exact, next) = page_sessions(vec![session(2), session(1)], None, 2);
         assert_eq!(exact.len(), 2);
         assert!(next.is_none());
+    }
+
+    #[tokio::test]
+    async fn session_page_orders_filters_and_limits() {
+        let service = ApiQueryService::new(SessionQueryRecorder {
+            calls: std::sync::Mutex::new(Vec::new()),
+        });
+        let user_id = Uuid::from_u128(99);
+        let database_now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        for (label, input, after, limit, expected, next) in [
+            (
+                "descending first page",
+                vec![2, 5, 1, 4, 3],
+                None,
+                2,
+                vec![5, 4],
+                Some(4),
+            ),
+            (
+                "strict continuation boundary",
+                vec![7, 2, 4, 1, 3],
+                Some(4),
+                2,
+                vec![3, 2],
+                Some(2),
+            ),
+            (
+                "exact limit has no continuation",
+                vec![1, 4, 3, 2],
+                Some(3),
+                2,
+                vec![2, 1],
+                None,
+            ),
+            ("short last page", vec![5, 1, 3], Some(2), 2, vec![1], None),
+            ("all rows filtered", vec![5, 4], Some(4), 2, vec![], None),
+            ("empty snapshot", vec![], None, 2, vec![], None),
+        ] {
+            let snapshots = std::sync::atomic::AtomicUsize::new(0);
+            let result = service
+                .sessions(
+                    ApiReadAuthority {
+                        user_id,
+                        auth_generation: 17,
+                        session_token: "fixture-session",
+                    },
+                    after.map(Uuid::from_u128),
+                    limit,
+                    || {
+                        snapshots.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        input.into_iter().map(session).collect()
+                    },
+                )
+                .await
+                .unwrap()
+                .expect("authorized session page");
+            assert_eq!(
+                result
+                    .rows
+                    .iter()
+                    .map(|row| row.connection_id.as_u128())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{label}"
+            );
+            assert_eq!(result.next.map(|id| id.as_u128()), next, "{label}");
+            assert_eq!(
+                result.database_now, database_now,
+                "{label}: repository clock"
+            );
+            for row in result.rows {
+                assert_eq!(row.node, "test-node", "{label}");
+                assert_eq!(
+                    row.jid,
+                    format!("user{}@example.test/phone", row.connection_id.as_u128()),
+                    "{label}"
+                );
+                assert_eq!(row.ip, None, "{label}");
+                assert_eq!(row.resource, "phone", "{label}");
+                assert!(!row.carbons_enabled, "{label}");
+                assert_eq!(row.connected_duration_seconds, 0, "{label}");
+            }
+            assert_eq!(
+                snapshots.load(std::sync::atomic::Ordering::Relaxed),
+                1,
+                "{label}"
+            );
+            assert_eq!(
+                std::mem::take(&mut *service.repository.calls.lock().unwrap()),
+                vec![(user_id, 17, "fixture-session".to_owned())],
+                "{label}: exact authority forwarded once"
+            );
+        }
     }
 }

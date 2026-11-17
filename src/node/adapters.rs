@@ -8,6 +8,7 @@ pub(in crate::node) mod admin_session_cleanup;
 pub(crate) mod caps_effect_dispatch;
 pub(crate) mod cluster_adapters;
 pub(crate) mod cluster_direct_commit;
+pub(in crate::node) mod cluster_key_deployment;
 pub(crate) mod cluster_listener_blocking;
 pub(crate) mod cluster_listener_dispatch;
 pub(crate) mod cluster_listener_message;

@@ -1,5 +1,6 @@
 //! ServerNode construction: database pools, API keyrings, services, contexts and startup workers.
 
+use super::adapters::cluster_key_deployment::ClusterKeyDeployment;
 use super::*;
 use northstar_postgres::role_attestation;
 use northstar_postgres::startup::startup_database_connect;
@@ -269,46 +270,16 @@ impl ServerNode {
                 pool.clone(),
             ),
         ))?;
-        if let Some(identity) = cluster.key_authority_identity() {
-            northstar_session_postgres::cluster_keys::reconcile_cluster_key_deployment_before_instance_claim(&pool, &identity)
-                .await
-                .context("cluster signing-key authority preparation failed")?;
-            for peer in cluster.peer_key_authority_identities() {
-                northstar_session_postgres::cluster_keys::reconcile_cluster_peer_key_deployment(
-                    &pool, &peer,
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "configured cluster peer {} key authority is inconsistent",
-                        peer.node_id
-                    )
-                })?;
-            }
-            cluster
-                .claim_instance_authority()
-                .await
-                .context("cluster node ID is already owned by another live process")?;
-            northstar_session_postgres::cluster_keys::reconcile_cluster_key_deployment(
-                &pool, &identity,
-            )
-            .await
-            .context("cluster signing-key authority finalization failed")?;
-            cluster
-                .refresh_instance_authority_with(
-                    &northstar_session_application::cluster_authority::ClusterAuthorityService::new(
-                        northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
-                            pool.clone(),
-                        ),
-                    ),
-                )
-                .await
-                .context("could not load peer cluster instance authority")?;
-        }
         cluster
-            .activate()
-            .await
-            .context("failed to publish the initial signed cluster node lease")?;
+            .establish_startup_authority(
+                &ClusterKeyDeployment::new(&pool),
+                &northstar_session_application::cluster_authority::ClusterAuthorityService::new(
+                    northstar_session_postgres::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
+                        pool.clone(),
+                    ),
+                ),
+            )
+            .await?;
         northstar_operations_postgres::admin_commands::initialize_admin_runtime_settings(
             &pool,
             false,

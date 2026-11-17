@@ -71,6 +71,7 @@ mod routing;
 pub mod s2s_routing;
 pub mod session_route;
 pub mod standalone_muc_maintenance;
+pub mod startup_authority;
 mod teardown;
 mod worker_capabilities;
 mod workers;

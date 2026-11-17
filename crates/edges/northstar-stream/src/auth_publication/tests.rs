@@ -929,3 +929,472 @@ fn publication_child_drop_and_caught_poll_panics_retire_after_destruction() {
         assert_eq!(observation.snapshot().terminal, Some(Terminal::Panicked));
     }
 }
+
+struct CloneProbe<T>(std::marker::PhantomData<T>);
+trait NotClone {
+    fn is_clone(&self) -> bool {
+        false
+    }
+}
+impl<T> NotClone for CloneProbe<T> {}
+impl<T: Clone> CloneProbe<T> {
+    fn is_clone(&self) -> bool {
+        true
+    }
+}
+struct CopyProbe<T>(std::marker::PhantomData<T>);
+trait NotCopy {
+    fn is_copy(&self) -> bool {
+        false
+    }
+}
+impl<T> NotCopy for CopyProbe<T> {}
+impl<T: Copy> CopyProbe<T> {
+    fn is_copy(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn known_credential_owner_has_one_consuming_owner() {
+    assert!(!CloneProbe::<KnownCredentialOwner>(std::marker::PhantomData).is_clone());
+    assert!(CloneProbe::<String>(std::marker::PhantomData).is_clone());
+    assert!(!CopyProbe::<KnownCredentialOwner>(std::marker::PhantomData).is_copy());
+    assert!(CopyProbe::<u64>(std::marker::PhantomData).is_copy());
+}
+
+#[test]
+fn owned_publication_has_one_consuming_owner() {
+    assert!(!CloneProbe::<OwnedPublication>(std::marker::PhantomData).is_clone());
+    assert!(CloneProbe::<String>(std::marker::PhantomData).is_clone());
+    assert!(!CopyProbe::<OwnedPublication>(std::marker::PhantomData).is_copy());
+    assert!(CopyProbe::<u64>(std::marker::PhantomData).is_copy());
+}
+
+#[test]
+fn selected_controls_have_one_consuming_owner() {
+    assert!(!CloneProbe::<SelectedControls>(std::marker::PhantomData).is_clone());
+    assert!(CloneProbe::<String>(std::marker::PhantomData).is_clone());
+    assert!(!CopyProbe::<SelectedControls>(std::marker::PhantomData).is_copy());
+    assert!(CopyProbe::<u64>(std::marker::PhantomData).is_copy());
+}
+
+#[test]
+fn credential_attempt_has_one_consuming_owner() {
+    assert!(!CloneProbe::<CredentialAttempt>(std::marker::PhantomData).is_clone());
+    assert!(CloneProbe::<String>(std::marker::PhantomData).is_clone());
+    assert!(!CopyProbe::<CredentialAttempt>(std::marker::PhantomData).is_copy());
+    assert!(CopyProbe::<u64>(std::marker::PhantomData).is_copy());
+}
+
+#[test]
+fn selections_start_unexposed_and_release_locks_before_returning_fifo_owners() {
+    let empty = SelectedControls::empty();
+    assert!(empty.is_empty());
+    assert!(!empty.exposed);
+    assert!(empty.proof.is_none());
+    let connection = Uuid::from_u128(302);
+    let (first, a) = fixture_control("<success id='a'/>", connection);
+    let (second, b) = fixture_control("<success id='b'/>", connection);
+    let mut selection = SelectedControls::new([
+        ("<success id='b'/>", Some(&second)),
+        ("<message/>", None),
+        ("<success id='a'/>", Some(&first)),
+    ])
+    .unwrap();
+    assert!(!selection.is_empty());
+    assert!(!selection.exposed);
+    assert!(selection.proof.is_none());
+    assert_eq!(
+        selection
+            .observations()
+            .iter()
+            .map(|o| o.snapshot().control)
+            .collect::<Vec<_>>(),
+        vec![b.snapshot().control, a.snapshot().control]
+    );
+    // Poison is a deterministic witness of an attempted lock. Validation must
+    // reject aliases before touching either holder's state mutex.
+    let poisoned = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let _guard = first.0.pending.lock().unwrap();
+        panic!("selection lock witness");
+    }));
+    assert!(poisoned.is_err());
+    let duplicate = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        SelectedControls::new([
+            ("<success id='a'/>", Some(&first)),
+            ("<success id='a'/>", Some(&first)),
+        ])
+    }));
+    first.0.pending.clear_poison();
+    assert!(duplicate
+        .expect("duplicate validation acquired a holder lock")
+        .is_err());
+    selection.begin_exposure(44).unwrap();
+    selection.exposure(44, true).unwrap();
+    let owners = selection.take_all().unwrap();
+    assert_eq!(
+        owners
+            .iter()
+            .map(|owner| owner.observation().snapshot().control)
+            .collect::<Vec<_>>(),
+        vec![b.snapshot().control, a.snapshot().control]
+    );
+    for holder in [&first, &second] {
+        let state = holder
+            .0
+            .pending
+            .try_lock()
+            .expect("selection retained a holder lock");
+        assert!(state.pending.is_none());
+        assert!(matches!(state.phase, HolderPhase::Taken));
+    }
+}
+
+#[tokio::test]
+async fn sealed_final_envelope_rejects_equal_length_mutations_before_io() {
+    let connection = Uuid::from_u128(302);
+    let control = "<success id='a'/>";
+    for (label, changed) in [
+        ("digest", "<success id='b'/>"),
+        ("length", "<success id='a'/> "),
+        ("old inline envelope", "<resumed/>"),
+    ] {
+        let (holder, observation) = fixture_control(control, connection);
+        holder.recording().unwrap();
+        let calls = AtomicUsize::new(0);
+        let result = holder
+            .clone()
+            .write(changed.to_owned(), |_| async {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+            .await;
+        assert!(result.is_err(), "{label}");
+        assert_eq!(calls.load(Ordering::Relaxed), 0, "{label}");
+        assert_eq!(
+            observation.snapshot().transport,
+            Transport::Recording,
+            "{label}"
+        );
+        assert!(
+            holder.validate_connection(Uuid::from_u128(999)).is_err(),
+            "{label}"
+        );
+        let owner = holder
+            .write(control.to_owned(), |bytes| async move {
+                assert_eq!(bytes, control);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let mut port = FakePort::new(Uuid::from_u128(999), Cut::Success);
+        assert_eq!(
+            owner.publish(&mut port).await,
+            PublicationResult::RouteRejected,
+            "{label}"
+        );
+        assert_eq!(port.events, ["rejected"], "{label}");
+        assert!(!observation.completed(), "{label}");
+    }
+}
+
+async fn receipt_for_attempt(
+    attempt: &CredentialAttempt,
+    connection: Uuid,
+) -> CredentialCommitReceipt {
+    use northstar_auth_application::authentication::publication::{
+        CredentialInvocation, CredentialPreparation, PreparationResult,
+    };
+    let prepared = attempt.prepared().expect("observed credential attempt");
+    let plan = northstar_auth_application::authentication::FastCommitPlan::default();
+    let invocation = prepared
+        .fast(Uuid::from_u128(2), 7, &plan, None, connection)
+        .unwrap();
+    invocation
+        .enter_fast(Uuid::from_u128(2), 7, &plan, None, connection)
+        .unwrap();
+    CredentialInvocation::begin(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
+        .await
+        .unwrap();
+    CredentialInvocation::eligibility(
+        Some(&invocation),
+        std::future::ready(Ok::<_, ()>(Some(true))),
+    )
+    .await
+    .unwrap();
+    invocation.transaction_returned();
+    invocation.preparation_entered(CredentialPreparation::Stage);
+    invocation.stage_returned(&Ok(None));
+    invocation.preparation_entered(CredentialPreparation::Fast);
+    invocation.preparation_returned(CredentialPreparation::Fast, PreparationResult::Present);
+    CredentialInvocation::commit(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
+        .await
+        .unwrap();
+    let receipt = CredentialCommitReceipt::new(None, None, None);
+    invocation.constructed(&receipt);
+    let returned = AuthenticationResult::Authenticated(receipt);
+    invocation.fast_returned(&returned);
+    drop(invocation);
+    let AuthenticationResult::Authenticated(receipt) = returned else {
+        unreachable!()
+    };
+    receipt
+}
+
+#[tokio::test]
+async fn credential_handoff_keeps_the_captured_frame_and_never_downgrades_a_mismatch() {
+    use crate::frame_execution::SessionExecutions;
+    use crate::transport::ClientTransport;
+    use northstar_auth_application::authentication::publication::CredentialKind;
+    let connection = Uuid::from_u128(302);
+    for label in ["captured origin", "different receipt"] {
+        let original = FrameExecution::for_saved_case(
+            ClientTransport::Bosh,
+            "<authenticate/>",
+            Uuid::from_u128(830),
+        );
+        let mut frames = SessionExecutions::for_saved_frame(original.clone());
+        let attempt = CredentialAttempt::new(
+            frames.auth_origin(),
+            connection,
+            CredentialKind::UnboundFast,
+        )
+        .unwrap();
+        let credential = attempt.prepared().unwrap().observation();
+        assert_eq!(credential.snapshot().frame, Uuid::from_u128(830), "{label}");
+        assert!(!credential.snapshot().service_started, "{label}");
+        let receipt = receipt_for_attempt(&attempt, connection).await;
+        let later = frames.begin(ClientTransport::Bosh, "<iq/>");
+        let handed_off = attempt.into_owner(if label == "different receipt" {
+            CredentialCommitReceipt::new(None, None, None)
+        } else {
+            receipt
+        });
+        if label == "different receipt" {
+            let Err(error) = handed_off else {
+                panic!("observed mismatch became a compatibility owner")
+            };
+            assert!(credential_handoff_failed(&error));
+            assert!(!credential.snapshot().transferred);
+        } else {
+            let owner = handed_off.unwrap();
+            assert_eq!(
+                owner.origin().unwrap().operation_id(),
+                original.operation_id()
+            );
+            assert_eq!(
+                owner.observation().snapshot().frame,
+                Some(original.operation_id())
+            );
+            assert!(credential.snapshot().transferred);
+            assert!(later
+                .retain_auth_receipt(owner.observation().clone())
+                .is_err());
+            original
+                .retain_auth_receipt(owner.observation().clone())
+                .unwrap();
+        }
+    }
+    let compatibility =
+        CredentialAttempt::new(None, connection, CredentialKind::UnboundFast).unwrap();
+    assert!(compatibility.prepared().is_none());
+    let owner = compatibility
+        .into_owner(CredentialCommitReceipt::new(None, None, None))
+        .unwrap();
+    assert!(owner.origin().is_none());
+    assert!(owner.observation().credential().is_none());
+}
+
+struct CapturedPort {
+    inner: FakePort,
+    lifecycle: Arc<AtomicU8>,
+    gate: Arc<tokio::sync::Mutex<()>>,
+    generation: Arc<AtomicU64>,
+    label: &'static str,
+}
+
+impl PublicationPort for CapturedPort {
+    fn connection(&self) -> Uuid {
+        self.inner.connection
+    }
+    async fn publish(&mut self, invocation: &Invocation<'_>) -> AuthenticationResult<Option<i64>> {
+        if self.label == "credential rejected" {
+            invocation.enter_service().unwrap();
+            let result = AuthenticationResult::StaleGeneration;
+            let _ = invocation.returned(&result);
+            self.inner.events.push("service");
+            result
+        } else {
+            self.inner.publish(invocation).await
+        }
+    }
+    fn epoch_and_mapping(&mut self, route: &BoundRoute, epoch: Option<i64>) -> bool {
+        assert!(Arc::ptr_eq(&route.lifecycle, &self.lifecycle));
+        self.inner.epoch_and_mapping(route, epoch)
+    }
+    fn activate(&mut self, route: &BoundRoute) -> bool {
+        assert!(Arc::ptr_eq(&route.lifecycle, &self.lifecycle));
+        assert_eq!(route.connection, Uuid::from_u128(302));
+        assert_eq!(route.user, Uuid::from_u128(303));
+        assert_eq!(route.generation, 2);
+        let activated = self.inner.activate(route);
+        activated && self.label != "activation rejected"
+    }
+    async fn caps(&mut self, intent: Option<CapsIntent>) {
+        let intent = intent.expect("captured presence");
+        assert!(Arc::ptr_eq(&intent.gate, &self.gate));
+        assert!(Arc::ptr_eq(&intent.generation, &self.generation));
+        self.inner.caps(Some(intent)).await;
+    }
+    fn notify_local(&mut self, intent: &NotificationIntent, epoch: i64) {
+        self.inner.notify_local(intent, epoch);
+    }
+    async fn notify_remote(&mut self, intent: &NotificationIntent, epoch: i64) -> Result<()> {
+        assert_eq!(intent.account, "fixture@example.test");
+        assert_eq!(intent.user, Uuid::from_u128(303));
+        assert_eq!(intent.device, Uuid::from_u128(304));
+        assert_eq!(intent.excluded_key, "fixture@example.test/captured");
+        assert_eq!(epoch, 7);
+        if self.label == "pending notification" {
+            self.inner.events.push("remote_notification");
+            std::future::pending().await
+        } else {
+            self.inner.notify_remote(intent, epoch).await
+        }
+    }
+    fn rejected(&mut self, result: PublicationResult, error: Option<&anyhow::Error>) {
+        self.inner.rejected(result, error);
+    }
+    fn notification_deferred(&mut self, error: &anyhow::Error) {
+        self.inner.notification_deferred(error);
+    }
+}
+
+fn captured_publication(
+    label: &'static str,
+    cut: Cut,
+) -> (OwnedPublication, Observation, CapturedPort) {
+    let connection = Uuid::from_u128(302);
+    let (holder, observation) = fixture_bound_control("<success/>", connection, true);
+    let mut owners = selected(&[("<success/>", &holder)], 77).take_all().unwrap();
+    let owner = owners.pop().unwrap();
+    let effects = owner.captured_effects();
+    let RouteIntent::Bound(route) = &effects.route else {
+        panic!("bound fixture")
+    };
+    let caps = effects.caps.as_ref().unwrap();
+    let port = CapturedPort {
+        inner: FakePort::new(connection, cut),
+        lifecycle: Arc::clone(&route.lifecycle),
+        gate: Arc::clone(&caps.gate),
+        generation: Arc::clone(&caps.generation),
+        label,
+    };
+    (owner, observation, port)
+}
+
+#[tokio::test]
+async fn publication_preserves_captured_pointers_and_classifies_each_failure_before_effects() {
+    for (label, cut, expected, events) in [
+        (
+            "success",
+            Cut::Success,
+            PublicationResult::Completed,
+            vec![
+                "service",
+                "repository",
+                "route",
+                "activate",
+                "caps",
+                "local_notification",
+                "remote_notification",
+            ],
+        ),
+        (
+            "backend rejected",
+            Cut::BeforeCommit,
+            PublicationResult::BackendFailure,
+            vec!["service", "rejected"],
+        ),
+        (
+            "integrity rejected",
+            Cut::BareSuccess,
+            PublicationResult::IntegrityRejected,
+            vec!["service", "repository", "rejected"],
+        ),
+        (
+            "credential rejected",
+            Cut::Success,
+            PublicationResult::CredentialRejected,
+            vec!["service", "rejected"],
+        ),
+        (
+            "mapping rejected",
+            Cut::RouteRejected,
+            PublicationResult::RouteRejected,
+            vec!["service", "repository", "route", "rejected"],
+        ),
+        (
+            "activation rejected",
+            Cut::Success,
+            PublicationResult::RouteRejected,
+            vec!["service", "repository", "route", "activate", "rejected"],
+        ),
+        (
+            "notification deferred",
+            Cut::NotifyError,
+            PublicationResult::CompletedWithDeferredNotification,
+            vec![
+                "service",
+                "repository",
+                "route",
+                "activate",
+                "caps",
+                "local_notification",
+                "remote_notification",
+                "deferred",
+            ],
+        ),
+    ] {
+        let (owner, observation, mut port) = captured_publication(label, cut);
+        assert_eq!(owner.publish(&mut port).await, expected, "{label}");
+        assert_eq!(port.inner.events, events, "{label}");
+        assert_eq!(
+            observation.completed(),
+            expected.transport_succeeded(),
+            "{label}"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn pending_notification_has_no_frame_deadline_and_keeps_authoritative_publication() {
+    let (owner, observation, mut port) = captured_publication("pending notification", Cut::Success);
+    let mut publishing = Box::pin(owner.publish(&mut port));
+    assert!(poll_once(publishing.as_mut()).is_pending());
+    tokio::time::advance(std::time::Duration::from_secs(20)).await;
+    assert!(poll_once(publishing.as_mut()).is_pending());
+    let snapshot = observation.snapshot();
+    assert_eq!(snapshot.publication, Knowledge::ReceiptKnown(Some(7)));
+    assert_eq!(snapshot.returned, Some(Returned::Authenticated(Some(7))));
+    assert_eq!(snapshot.terminal, None);
+    drop(publishing);
+    assert_eq!(observation.snapshot().terminal, Some(Terminal::Cancelled));
+    assert_eq!(
+        observation.snapshot().publication,
+        Knowledge::ReceiptKnown(Some(7))
+    );
+    assert_eq!(
+        port.inner.events,
+        [
+            "service",
+            "repository",
+            "route",
+            "activate",
+            "caps",
+            "local_notification",
+            "remote_notification"
+        ]
+    );
+}

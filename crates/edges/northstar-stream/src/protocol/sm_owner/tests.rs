@@ -550,3 +550,111 @@ async fn mislabeled_typed_supersession_after_commit_keeps_fifo_h_and_original_er
         assert_eq!(fixture.port.events().contains(&"shrink"), restored);
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn persistence_deadlines_cancel_at_five_seconds_without_applying_or_notifying() {
+    for (label, persisted) in [
+        ("record", true),
+        ("checkpoint", true),
+        ("persisted ack", true),
+        ("unpersisted ack", false),
+    ] {
+        let mut fixture = Fixture::new(persisted, mixed_queue());
+        fixture.port.cut = Cut::DuringCommit;
+        let original = fixture.sm.unacked.clone();
+        let original_h = fixture.sm.outbound_h;
+        let (item, mut notification) = OutboundItem::durable_mix(
+            "<message id='deadline'/>".to_owned(),
+            crate::outbound::MixDelivery {
+                delivery_id: Uuid::from_u128(603),
+                lease_token: Uuid::from_u128(604),
+            },
+        );
+        let mut turn = fixture.turn();
+        let purpose = match label {
+            "record" => Purpose::Record,
+            "checkpoint" => Purpose::Checkpoint,
+            _ => Purpose::Acknowledge { h: 12 },
+        };
+        let observation = turn.start(purpose);
+        let child_observation = observation.clone();
+        let mut runner = Box::pin(SmTurnRunner::new(observation.clone(), async {
+            let result = match label {
+                "record" => turn
+                    .record_item(&item, &child_observation)
+                    .await
+                    .map(|_| ()),
+                "checkpoint" => turn.checkpoint_in_turn(&child_observation).await,
+                _ => turn.acknowledge(12, &child_observation).await.map(|_| ()),
+            };
+            if result.is_err() {
+                child_observation.returned_error();
+            }
+            result
+        }));
+        assert!(poll_once(runner.as_mut()).is_pending(), "{label}");
+        assert_eq!(
+            observation.snapshot().summary().knowledge,
+            KnowledgeClass::CommitCallEntered,
+            "{label}"
+        );
+        assert!(notification.try_recv().is_err(), "{label}");
+        tokio::time::advance(std::time::Duration::from_millis(4999)).await;
+        assert!(
+            poll_once(runner.as_mut()).is_pending(),
+            "{label}: expired early"
+        );
+        tokio::time::advance(std::time::Duration::from_millis(1)).await;
+        let Poll::Ready(Err(error)) = poll_once(runner.as_mut()) else {
+            panic!("{label}: persistence did not time out at five seconds");
+        };
+        assert!(error.to_string().contains("timed out"), "{label}: {error}");
+        drop(runner);
+        let snapshot = observation.snapshot();
+        assert_eq!(snapshot.terminal, Some(Terminal::Returned), "{label}");
+        assert_eq!(
+            snapshot.summary().knowledge,
+            KnowledgeClass::CommitCallEntered,
+            "{label}"
+        );
+        assert!(!snapshot.notification_attempted, "{label}");
+        assert!(!snapshot.ownership_applied, "{label}");
+        assert_eq!(snapshot.acknowledged_h_applied, None, "{label}");
+        assert!(!snapshot.restored, "{label}");
+        assert_eq!(fixture.sm.acked_h, 10, "{label}");
+        let mut expected = original;
+        if label == "record" {
+            expected.push_back(SmUnackedStanza::with_source(
+                item.stanza.clone(),
+                item.durable_source,
+            ));
+        }
+        assert_eq!(fixture.sm.unacked, expected, "{label}");
+        assert_eq!(
+            fixture.sm.outbound_h,
+            original_h + u32::from(label == "record"),
+            "{label}"
+        );
+        assert!(notification.try_recv().is_err(), "{label}");
+        let events = fixture.port.events();
+        assert_eq!(
+            events.iter().filter(|event| **event == "commit").count(),
+            1,
+            "{label}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == "checkpoint")
+                .count(),
+            usize::from(persisted),
+            "{label}"
+        );
+        assert_eq!(
+            events.iter().filter(|event| **event == "batch").count(),
+            usize::from(!persisted),
+            "{label}"
+        );
+        assert!(!events.contains(&"receipt"), "{label}");
+    }
+}

@@ -47,6 +47,119 @@ async fn federated_gate_serializes_and_self_cleans_after_waiters_leave() {
     assert_eq!(index.len(), 0);
 }
 
+struct CapsHost {
+    observations: CapsResourceIndex,
+    pending: PendingCapsIndex,
+    gates: FederatedCapsGateIndex,
+    cache: CapsCacheIndex,
+    dispatcher: Arc<CapsEffectDispatcher>,
+}
+
+impl SessionCapsHost for CapsHost {
+    fn caps_by_jid(&self) -> &CapsResourceIndex {
+        &self.observations
+    }
+    fn pending_caps(&self) -> &PendingCapsIndex {
+        &self.pending
+    }
+    fn federated_caps_gates(&self) -> &FederatedCapsGateIndex {
+        &self.gates
+    }
+    fn caps_cache(&self) -> &CapsCacheIndex {
+        &self.cache
+    }
+    fn caps_effect_dispatcher(&self) -> &Arc<CapsEffectDispatcher> {
+        &self.dispatcher
+    }
+    fn local_caps_epoch_is_current(
+        &self,
+        _: &str,
+        _: LocalCapsEpoch,
+        _: Option<&Arc<tokio::sync::Mutex<()>>>,
+    ) -> bool {
+        panic!("federated teardown must not inspect a local route")
+    }
+    fn local_caps_observer_connection_is_current(
+        &self,
+        _: &str,
+        _: uuid::Uuid,
+        _: &Arc<tokio::sync::Mutex<()>>,
+    ) -> bool {
+        panic!("federated teardown must not inspect a local connection")
+    }
+}
+
+#[tokio::test]
+async fn old_connection_teardown_rechecks_the_owner_after_waiting_for_the_resource_gate() {
+    let host = CapsHost {
+        observations: CapsResourceIndex::with_limits(4, 4),
+        pending: PendingCapsIndex::new(),
+        gates: FederatedCapsGateIndex::new(),
+        cache: CapsCacheIndex::with_limits(4, Duration::from_secs(60)),
+        dispatcher: CapsEffectDispatcher::with_limits(2, 2),
+    };
+    let resource = "alice@remote.test/Phone";
+    let old = uuid::Uuid::from_u128(201);
+    let replacement = uuid::Uuid::from_u128(202);
+    let now = Instant::now();
+    let old_owner = host
+        .observations
+        .observe_federated(
+            resource.to_owned(),
+            old,
+            "remote.test".to_owned(),
+            Some(key(1)),
+            Some(summary("urn:test:old+notify")),
+            now,
+        )
+        .unwrap();
+    assert!(host.pending.insert(
+        "old-query".to_owned(),
+        resource.to_owned(),
+        key(1),
+        old_owner,
+        now + Duration::from_secs(30)
+    ));
+    let gate = host.gates.lock(resource).await;
+    let mut closing = Box::pin(federated_caps_connection_closed(&host, old));
+    assert!(futures::poll!(&mut closing).is_pending());
+    assert_eq!(host.gates.participants(resource), 2);
+    let replacement_summary = summary("urn:test:new+notify");
+    let owner = host
+        .observations
+        .observe_federated(
+            resource.to_owned(),
+            replacement,
+            "remote.test".to_owned(),
+            Some(key(2)),
+            Some(Arc::clone(&replacement_summary)),
+            now,
+        )
+        .unwrap();
+    assert!(host.pending.insert(
+        "new-query".to_owned(),
+        resource.to_owned(),
+        key(2),
+        owner,
+        now + Duration::from_secs(30)
+    ));
+    drop(gate);
+    closing.await;
+    assert_eq!(host.gates.len(), 0);
+    let retained = host.observations.snapshot(resource).unwrap();
+    assert_eq!(retained.owner, owner);
+    assert!(Arc::ptr_eq(
+        retained.summary.as_ref().unwrap(),
+        &replacement_summary
+    ));
+    assert!(!host.pending.entries.contains_key("old-query"));
+    assert_eq!(host.pending.entries.get("new-query").unwrap().owner, owner);
+    federated_caps_connection_closed(&host, replacement).await;
+    assert!(host.observations.snapshot(resource).is_none());
+    assert!(host.pending.is_empty());
+    assert_eq!(host.gates.len(), 0);
+}
+
 #[test]
 fn verified_summary_keeps_every_notify_feature_within_parser_bounds() {
     let features = (0..200)

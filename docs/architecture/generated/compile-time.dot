@@ -1929,6 +1929,7 @@ digraph compile_time {
   "northstar-stream" -> "northstar-auth-application";
   "northstar-stream" -> "northstar-auth-core";
   "northstar-stream" -> "northstar-auth-xmpp";
+  "northstar-stream" -> "northstar-config";
   "northstar-stream" -> "northstar-delivery-core";
   "northstar-stream" -> "northstar-federation-core";
   "northstar-stream" -> "northstar-message-application";

@@ -538,4 +538,179 @@ mod tests {
         assert_eq!(retry.owner, claimed.owner);
         assert_eq!(retry.effects, claimed.effects);
     }
+
+    struct RecordingCapsPorts(Arc<std::sync::Mutex<Vec<String>>>);
+    impl CapsEffectPorts for RecordingCapsPorts {
+        async fn send_federated_disco(&self, _: &str, _: String, _: &str) -> bool {
+            panic!("retry fixture has no disco work")
+        }
+        async fn deliver_explicit_pep_last_items_for_resource(
+            &self,
+            full_jid: &str,
+            epoch: Option<LocalCapsEpoch>,
+        ) -> anyhow::Result<()> {
+            assert_eq!(epoch, None);
+            self.0.lock().unwrap().push(full_jid.to_owned());
+            Ok(())
+        }
+        async fn deliver_pep_last_items_for_resource(
+            &self,
+            _: &str,
+            _: LocalCapsEpoch,
+        ) -> anyhow::Result<()> {
+            panic!("retry fixture has no local PEP work")
+        }
+        async fn deliver_pep_last_items_for_federated_resource(
+            &self,
+            _: &str,
+        ) -> anyhow::Result<()> {
+            panic!("retry fixture has no automatic PEP work")
+        }
+        async fn publish_verified_mix_presence(
+            &self,
+            _: &str,
+            _: LocalCapsEpoch,
+        ) -> anyhow::Result<()> {
+            panic!("retry fixture has no MIX work")
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn caps_dispatcher_wakes_at_the_earlier_retry_or_pending_expiration() {
+        use northstar_protocol_runtime::caps::CapsKey;
+        use northstar_runtime::workers::{WorkerCriticality, WorkerMode, WorkerRegistry};
+        let resource = "alice@remote.test/Phone";
+        for label in ["retry first", "expiration first"] {
+            let registry = WorkerRegistry::new();
+            let worker_cancel = CancellationToken::new();
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            let sender = Arc::new(std::sync::Mutex::new(Some(sender)));
+            let factory_cancel = worker_cancel.clone();
+            registry.supervise(
+                "caps-deadline-fixture",
+                WorkerCriticality::Restartable,
+                WorkerMode::Continuous,
+                None,
+                worker_cancel.clone(),
+                move |heartbeat| {
+                    let _ = sender.lock().unwrap().take().unwrap().send(heartbeat);
+                    let cancel = factory_cancel.clone();
+                    async move {
+                        cancel.cancelled().await;
+                        Ok(())
+                    }
+                },
+            );
+            let heartbeat = receiver.await.unwrap();
+            let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let context = Arc::new(CapsEffectDispatchContext {
+                observations: Arc::new(CapsResourceIndex::with_limits(4, 4)),
+                pending: Arc::new(PendingCapsIndex::new()),
+                cache: Arc::new(CapsCacheIndex::new()),
+                dispatcher: CapsEffectDispatcher::with_limits(4, 2),
+                counters: CapsEffectCounters {
+                    coalesced: Arc::new(AtomicU64::new(0)),
+                    queue_saturated: Arc::new(AtomicU64::new(0)),
+                    failures: Arc::new(AtomicU64::new(0)),
+                    latency: Arc::new(DurationHistogram::default()),
+                },
+                federated_gates: Arc::new(FederatedCapsGateIndex::new()),
+                sessions: Arc::new(DashMap::new()),
+                local_domain: "example.test".to_owned(),
+                ports: RecordingCapsPorts(Arc::clone(&calls)),
+            });
+            let now = tokio::time::Instant::now().into_std();
+            let early = now + Duration::from_secs(1);
+            let late = now + Duration::from_secs(2);
+            let owner = context
+                .observations
+                .observe_federated(
+                    resource.to_owned(),
+                    uuid::Uuid::from_u128(901),
+                    "remote.test".to_owned(),
+                    None,
+                    None,
+                    now,
+                )
+                .unwrap();
+            {
+                let mut observation = context.observations.entries.get_mut(resource).unwrap();
+                observation.pending_effects = CapsEffects::EXPLICIT_PEP_LAST_ITEMS.0;
+                observation.retry_at = if label == "retry first" { early } else { late };
+            }
+            assert!(context.pending.insert(
+                "expiry".to_owned(),
+                "other@remote.test/Phone".to_owned(),
+                CapsKey {
+                    algorithm: "sha-1".to_owned(),
+                    node: "test-node".to_owned(),
+                    version: "test-version".to_owned()
+                },
+                owner,
+                if label == "expiration first" {
+                    early
+                } else {
+                    late
+                },
+            ));
+            let cancel = CancellationToken::new();
+            let mut running = Box::pin(run_caps_effect_dispatcher(
+                Arc::clone(&context),
+                cancel.clone(),
+                heartbeat,
+            ));
+            assert!(futures::poll!(&mut running).is_pending(), "{label}");
+            // The authoritative indexes use std::Instant. Make the selected
+            // work due without sending a hint; paused Tokio time then proves
+            // that the already-armed dispatcher timer supplies the wake.
+            let due = Instant::now()
+                .checked_sub(Duration::from_millis(1))
+                .unwrap();
+            if label == "retry first" {
+                context
+                    .observations
+                    .entries
+                    .get_mut(resource)
+                    .unwrap()
+                    .retry_at = due;
+            } else {
+                context
+                    .pending
+                    .entries
+                    .get_mut("expiry")
+                    .unwrap()
+                    .expires_at = due;
+            }
+            let before = tokio::time::Instant::from_std(early) - Duration::from_millis(1);
+            tokio::time::advance(before.saturating_duration_since(tokio::time::Instant::now()))
+                .await;
+            assert!(futures::poll!(&mut running).is_pending(), "{label}");
+            assert!(
+                calls.lock().unwrap().is_empty(),
+                "{label}: work ran before its timer"
+            );
+            assert_eq!(context.pending.len(), 1, "{label}");
+            tokio::time::advance(Duration::from_millis(1)).await;
+            assert!(futures::poll!(&mut running).is_pending(), "{label}");
+            assert_eq!(
+                calls.lock().unwrap().len(),
+                usize::from(label == "retry first"),
+                "{label}: earliest retry was missed"
+            );
+            assert_eq!(
+                context.pending.len(),
+                usize::from(label == "retry first"),
+                "{label}: earliest expiration was missed"
+            );
+            if label == "retry first" {
+                assert_eq!(calls.lock().unwrap().as_slice(), [resource]);
+            }
+            cancel.cancel();
+            running.await.unwrap();
+            assert!(registry
+                .shutdown_and_join(&worker_cancel, Duration::from_secs(1))
+                .await
+                .is_clean());
+        }
+    }
 }

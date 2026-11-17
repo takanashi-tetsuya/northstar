@@ -6345,6 +6345,10 @@
     ],
     [
       "northstar-stream",
+      "northstar-config"
+    ],
+    [
+      "northstar-stream",
       "northstar-delivery-core"
     ],
     [

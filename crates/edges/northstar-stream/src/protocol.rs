@@ -824,3 +824,6 @@ impl<H: SessionHost> ProtocolSession<H> {
 
 #[cfg(test)]
 mod legacy_sasl_wire_tests;
+
+#[cfg(test)]
+mod tests;

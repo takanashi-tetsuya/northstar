@@ -2058,3 +2058,161 @@ async fn abnormal_terminal_remains_visible_under_existing_crate_info_filter() {
         .unwrap()
         .contains("private backend details"));
 }
+
+#[tokio::test(start_paused = true)]
+async fn frame_deadlines_start_on_first_poll_and_use_five_or_eight_seconds() {
+    let inline =
+        "<authenticate xmlns='urn:xmpp:sasl:2'><bind xmlns='urn:xmpp:bind:0'/></authenticate>";
+    for (label, transport, xml, seconds) in [
+        ("tcp inline", ClientTransport::Tcp, inline, 5),
+        ("bosh inline", ClientTransport::Bosh, inline, 5),
+        ("websocket bind", ClientTransport::WebSocket, inline, 8),
+        (
+            "websocket resume",
+            ClientTransport::WebSocket,
+            "<authenticate xmlns='urn:xmpp:sasl:2'><resume xmlns='urn:xmpp:sm:3'/></authenticate>",
+            8,
+        ),
+        (
+            "ordinary websocket",
+            ClientTransport::WebSocket,
+            "<message/>",
+            5,
+        ),
+        (
+            "noninline authentication",
+            ClientTransport::WebSocket,
+            "<authenticate xmlns='urn:xmpp:sasl:2'/>",
+            5,
+        ),
+        (
+            "foreign bind namespace",
+            ClientTransport::WebSocket,
+            "<authenticate xmlns='urn:xmpp:sasl:2'><bind xmlns='urn:other'/></authenticate>",
+            5,
+        ),
+    ] {
+        let frame = FrameExecution::for_saved_case(transport, xml, Uuid::from_u128(820));
+        let polled = std::cell::Cell::new(false);
+        let mut runner = Box::pin(frame.run(async {
+            polled.set(true);
+            frame.enter(Stage::Handler);
+            pending::<anyhow::Result<()>>().await
+        }));
+        tokio::time::advance(Duration::from_secs(20)).await;
+        assert!(!polled.get(), "{label}: construction polled the child");
+        assert_eq!(outcome(&frame), Outcome::Pending as u8, "{label}");
+        assert!(futures::poll!(&mut runner).is_pending(), "{label}");
+        assert!(polled.get(), "{label}");
+        tokio::time::advance(Duration::from_secs(seconds) - Duration::from_millis(1)).await;
+        assert!(
+            futures::poll!(&mut runner).is_pending(),
+            "{label}: expired early"
+        );
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert!(
+            matches!(
+                futures::poll!(&mut runner),
+                Poll::Ready(Err(FrameFailure::TimedOut))
+            ),
+            "{label}: did not expire at {seconds} seconds"
+        );
+        drop(runner);
+        assert_eq!(outcome(&frame), Outcome::TimedOut as u8, "{label}");
+        assert_eq!(
+            frame.0.stage.load(Ordering::Relaxed),
+            Stage::Handler as u8,
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn auth_receipt_registration_rejects_foreign_frames_without_consuming_the_slot() {
+    use crate::auth_publication::KnownCredentialOwner;
+    use northstar_auth_application::authentication::CredentialCommitReceipt;
+
+    let original = FrameExecution::for_saved_case(
+        ClientTransport::Bosh,
+        "<authenticate/>",
+        Uuid::from_u128(821),
+    );
+    let later =
+        FrameExecution::for_saved_case(ClientTransport::Bosh, "<iq/>", Uuid::from_u128(822));
+    let owner = KnownCredentialOwner::from_returned(
+        CredentialCommitReceipt::new(None, None, None),
+        Some(original.clone()),
+        Uuid::from_u128(823),
+    );
+    let observation = owner.observation().clone();
+    assert_eq!(
+        later
+            .retain_auth_receipt(observation.clone())
+            .unwrap_err()
+            .to_string(),
+        "auth receipt belongs to another frame"
+    );
+    assert!(later.0.auth_receipt.lock().unwrap().is_none());
+    original.retain_auth_receipt(observation.clone()).unwrap();
+    assert_eq!(
+        original
+            .retain_auth_receipt(observation.clone())
+            .unwrap_err()
+            .to_string(),
+        "frame already returned a credential receipt"
+    );
+    assert_eq!(
+        original
+            .0
+            .auth_receipt
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .snapshot(),
+        observation.snapshot()
+    );
+}
+
+#[test]
+fn production_frames_mint_fresh_identities_and_bind_each_direct_owner_to_its_frame() {
+    let first = FrameExecution::new(ClientTransport::Tcp, "<message/>");
+    let second = FrameExecution::new(ClientTransport::Tcp, "<message/>");
+    assert!(!first.operation_id().is_nil());
+    assert!(!second.operation_id().is_nil());
+    assert_ne!(first.operation_id(), second.operation_id());
+    assert!(second.0.sequence > first.0.sequence);
+    for frame in [first, second] {
+        assert_eq!(frame.0.policy.budget, Duration::from_secs(5));
+        assert_eq!(
+            frame.0.stage.load(Ordering::Relaxed),
+            Stage::Validation as u8
+        );
+        assert_eq!(outcome(&frame), Outcome::Pending as u8);
+        assert!(frame.0.auth_receipt.lock().unwrap().is_none());
+        let direct = frame.direct_operation();
+        let request = northstar_abuse_policy::MessageAdmissionRequest {
+            actor_id: Uuid::from_u128(1),
+            account_bare: "alice@example.test",
+            normalized_target: "bob@example.test",
+            origin_id: None,
+            normalized_payload: "<message/>",
+            pow_intent_payload: "<message/>",
+            subject: "message",
+            actors: &[],
+            proof: None,
+        };
+        let _admission = direct.begin(&request).unwrap();
+        assert_eq!(
+            direct
+                .snapshot()
+                .reservation
+                .unwrap()
+                .witness
+                .effect()
+                .correlation
+                .operation,
+            frame.operation_id()
+        );
+    }
+}

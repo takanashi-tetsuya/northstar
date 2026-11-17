@@ -3129,6 +3129,7 @@ dependencies = [
  "northstar-auth-application",
  "northstar-auth-core",
  "northstar-auth-xmpp",
+ "northstar-config",
  "northstar-delivery-core",
  "northstar-federation-core",
  "northstar-message-application",

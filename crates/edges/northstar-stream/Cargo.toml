@@ -72,6 +72,8 @@ zeroize = "1.8"
 
 [dev-dependencies]
 northstar-abuse-policy = { path = "../../contexts/abuse/northstar-abuse-policy", features = ["test-support"] }
+northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application", features = ["test-support"] }
+northstar-config = { path = "../../platform/northstar-config" }
 northstar-message-application = { path = "../../contexts/message/northstar-message-application", features = ["test-support"] }
 northstar-room-application = { path = "../../contexts/room/northstar-room-application", features = ["test-support"] }
 northstar-session-postgres = { path = "../../contexts/session/northstar-session-postgres", features = ["test-support"] }

@@ -1183,4 +1183,115 @@ mod tests {
             assert_eq!(pending.len(), 1);
         }
     }
+
+    #[test]
+    fn epoch_publication_and_activation_fence_every_captured_route_argument() {
+        for label in [
+            "current",
+            "missing key",
+            "connection",
+            "user",
+            "generation",
+            "lifecycle pointer",
+            "finalizing",
+            "superseded",
+            "session cancelled",
+            "owner cancelled",
+            "replacement",
+        ] {
+            let sessions = Arc::new(DashMap::new());
+            let table = LocalSessionTable::new(Arc::clone(&sessions));
+            let (mut route, _receiver) = session(Uuid::from_u128(1), Uuid::from_u128(2), false);
+            route.user_agent_epoch = Some(13);
+            let mut key = KEY;
+            let mut connection = route.connection_id;
+            let mut user = route.user_id;
+            let mut generation = route.auth_generation;
+            let mut lifecycle = Arc::clone(&route.lifecycle);
+            let owner_disconnect = CancellationToken::new();
+            match label {
+                "missing key" => key = "alice@example.test/missing",
+                "connection" => connection = Uuid::from_u128(3),
+                "user" => user = Uuid::from_u128(4),
+                "generation" => generation += 1,
+                "lifecycle pointer" => lifecycle = Arc::new(AtomicU8::new(0)),
+                "finalizing" => route.lifecycle.store(1, Ordering::Release),
+                "superseded" => route.lifecycle.store(2, Ordering::Release),
+                "session cancelled" => route.disconnect.cancel(),
+                "owner cancelled" => owner_disconnect.cancel(),
+                "current" | "replacement" => {}
+                _ => unreachable!(),
+            }
+            sessions.insert(KEY.to_owned(), route);
+            if label == "replacement" {
+                let (mut replacement, _replacement_receiver) =
+                    session(Uuid::from_u128(5), user, false);
+                replacement.user_agent_epoch = Some(13);
+                sessions.insert(KEY.to_owned(), replacement);
+            }
+            let epoch_allowed = matches!(label, "current" | "owner cancelled");
+            // The epoch helper has no owner-cancellation argument. Both its direct
+            // entry point and the table facade must assign the supplied Option.
+            for epoch in [Some(43), None] {
+                assert_eq!(
+                    publish_user_agent_epoch_if_current_in(
+                        &sessions, key, connection, user, generation, &lifecycle, epoch
+                    ),
+                    epoch_allowed,
+                    "{label}: direct epoch publication"
+                );
+                assert_eq!(
+                    table.publish_user_agent_epoch_if_current(
+                        key, connection, user, generation, &lifecycle, epoch
+                    ),
+                    epoch_allowed,
+                    "{label}: table epoch publication"
+                );
+                let stored = sessions.get(KEY).unwrap();
+                assert_eq!(
+                    stored.user_agent_epoch,
+                    if epoch_allowed { epoch } else { Some(13) },
+                    "{label}"
+                );
+                assert!(
+                    !stored.routable.load(Ordering::Acquire),
+                    "{label}: epoch publication activated route"
+                );
+            }
+            let activation_allowed = label == "current";
+            assert_eq!(
+                activate_session_if_current_in(
+                    &sessions,
+                    key,
+                    connection,
+                    user,
+                    generation,
+                    &lifecycle,
+                    &owner_disconnect
+                ),
+                activation_allowed,
+                "{label}: direct activation"
+            );
+            assert_eq!(
+                table.activate_session_if_current(
+                    key,
+                    connection,
+                    user,
+                    generation,
+                    &lifecycle,
+                    &owner_disconnect
+                ),
+                activation_allowed,
+                "{label}: table activation"
+            );
+            assert_eq!(
+                sessions.get(KEY).unwrap().routable.load(Ordering::Acquire),
+                activation_allowed,
+                "{label}"
+            );
+            assert_eq!(sessions.len(), 1, "{label}");
+            // Both calls must have released their map guards.
+            assert!(sessions.remove(KEY).is_some(), "{label}");
+        }
+    }
 }

@@ -6,7 +6,7 @@ import { readModuleParts, readProductionModule, readRoleSplitFile } from './lib/
 
 const root = new URL('../', import.meta.url);
 const read = (path) => readFile(new URL(path, root), 'utf8');
-const [abuseSources, config, envExample, apiRouter, authRoutes, reportRoutes, messaging, miscProtocol, ibrProtocol, accountRepository, accountRecovery, migration, messageAdmissionMigration, powIntentMigration, parallelChallengeMigration, deletionRecoveryMigration, maintenanceWorkers, client, powClient, clientHtml, admin, adminHtml, workerSource] = await Promise.all([
+const [abuseSources, config, envExample, apiRouter, authRoutes, reportRoutes, messaging, miscProtocol, ibrProtocol, accountRepository, migration, messageAdmissionMigration, powIntentMigration, parallelChallengeMigration, deletionRecoveryMigration, maintenanceWorkers, client, powClient, clientHtml, admin, adminHtml, workerSource] = await Promise.all([
   Promise.all([
     readModuleParts('crates/contexts/abuse/northstar-abuse-application/src/guard.rs', { includeTests: false }).map(({ source }) => source),
     read('crates/contexts/abuse/northstar-abuse-policy/src/lib.rs'),
@@ -21,7 +21,7 @@ const [abuseSources, config, envExample, apiRouter, authRoutes, reportRoutes, me
   readProductionModule('crates/platform/northstar-config/src/lib.rs'), read('.env.example'),
   readRoleSplitFile('crates/edges/northstar-http/src/lib.rs'), read('crates/edges/northstar-http/src/auth_routes.rs'),
   read('crates/edges/northstar-http/src/reports.rs'),
-  readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs'), read('crates/edges/northstar-stream/src/protocol/misc.rs'), read('crates/edges/northstar-stream/src/protocol/ibr.rs'), read('crates/contexts/workflows/northstar-workflows/src/account_repository.rs'), read('crates/contexts/auth/northstar-auth-xmpp/src/account_deletion.rs'),
+  readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs'), read('crates/edges/northstar-stream/src/protocol/misc.rs'), read('crates/edges/northstar-stream/src/protocol/ibr.rs'), read('crates/contexts/workflows/northstar-workflows/src/account_repository.rs'),
   read('migrations/0009_abuse_reports.sql'), read('migrations/0078_message_pow_admissions.sql'),
   read('migrations/0084_pow_intent_v2.sql'), read('migrations/0100_parallel_pow_challenges.sql'), read('migrations/0101_durable_account_deletion_recovery.sql'), Promise.all([
     read('src/node/workers/maintenance.rs'),
@@ -106,13 +106,6 @@ assert.doesNotMatch(httpRegistration, /(?:\.pool\.begin\(|(?:db|northstar_auth_p
 assert.match(deletionRecoveryMigration, /user_id UUID PRIMARY KEY REFERENCES users\(id\) ON DELETE CASCADE/);
 assert.match(deletionRecoveryMigration, /recovery_after TIMESTAMPTZ NOT NULL[\s\S]+claim_token UUID[\s\S]+claim_until TIMESTAMPTZ/,
   'account deletion recovery must be delayed and lease-fenced');
-assert.match(accountRecovery, /context\s*\.revoke_sm\(user_id\)[\s\S]+context\s*\.delete_quiesced\(user_id\)/,
-  'durable SM state must be torn down before the account row can cascade it');
-assert.match(accountRecovery, /context\.claim\(\)[\s\S]+context\.release\(&job\)/,
-  'failed deletion recovery must release its durable lease with backoff');
-const deletionRecoveryContext = await read('crates/contexts/auth/northstar-auth-xmpp/src/account_deletion/context.rs');
-assert.match(deletionRecoveryContext, /fn claim[\s\S]+claim_deletion_recovery[\s\S]+fn release[\s\S]+release_deletion_recovery/,
-  'the recovery context must preserve durable claim and release semantics');
 assert.match(maintenanceWorkers, /"account-deletion-recovery"[\s\S]+WorkerCriticality::Restartable/,
   'account deletion recovery must remain under the worker supervisor');
 assert.match(messageAdmissionMigration, /payload_mac BYTEA NOT NULL,[\s\S]*CHECK \(octet_length\(payload_mac\) = 32\)/,

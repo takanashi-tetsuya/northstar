@@ -549,3 +549,6 @@ pub struct Sasl2FastTokenPolicy {
     pub ttl_days: i64,
     pub strong_reauth_max_days: i64,
 }
+
+#[cfg(test)]
+mod tests;

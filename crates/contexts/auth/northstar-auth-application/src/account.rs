@@ -327,3 +327,6 @@ impl<R: AccountRepository> AccountService<R> {
             .await
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -144,3 +144,6 @@ pub enum AuthenticationResult<T> {
     IntegrityFailure,
     BackendFailure(anyhow::Error),
 }
+
+#[cfg(test)]
+mod tests;

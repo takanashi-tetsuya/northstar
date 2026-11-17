@@ -10,7 +10,7 @@ impl ServerNode {
     ) -> ClusterListenerBlocking<crate::node::adapters::cluster_adapters::PostgresClusterAdapters>
     {
         ClusterListenerBlocking {
-            sessions: Arc::clone(&self.sessions),
+            sessions: Arc::clone(self.session.live().sessions()),
             remote_routes: self.cluster.listener_presence_routes(),
             local_domain: self.config.domain.clone(),
             external_routes: self.config.external_route_domain_policy(),

@@ -17,7 +17,7 @@ impl ServerNode {
         LockedMucExpiryContext {
             service: self.room.locked_muc_expiry_service.clone(),
             local: LockedMucExpiryLocal {
-                sessions: Arc::clone(&self.sessions),
+                sessions: Arc::clone(self.session.live().sessions()),
                 occupants: Arc::clone(&self.room.muc_occupants),
             },
             delivery: self.muc_delivery_context(),

@@ -19,7 +19,7 @@ impl ServerNode {
     pub(crate) fn session_cleanup_presence(&self) -> SessionCleanupPresence {
         SessionCleanupPresence {
             audience: self.roster.presence_service.clone(),
-            sessions: Arc::clone(&self.sessions),
+            sessions: Arc::clone(self.session.live().sessions()),
             domain: self.config.domain.clone(),
         }
     }

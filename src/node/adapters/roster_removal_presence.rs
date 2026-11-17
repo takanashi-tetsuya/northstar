@@ -9,7 +9,10 @@ use northstar_stream::local_routes::session::OnlineSession;
 
 impl RosterRemovalPresenceRoutes for ServerNode {
     fn removal_presence_sessions(&self, target_bare: &str) -> Vec<(String, OnlineSession)> {
-        self.sessions.session_entries_for(target_bare)
+        self.session
+            .live()
+            .sessions()
+            .session_entries_for(target_bare)
     }
 
     async fn removal_presence_privacy_allows(

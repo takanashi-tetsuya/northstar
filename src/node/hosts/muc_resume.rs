@@ -16,7 +16,7 @@ impl MucResumeHost for ServerNode {
     }
 
     fn local_session_table(&self) -> &LocalSessionTable {
-        &self.sessions
+        self.session.live().sessions()
     }
 
     fn muc_cluster_enabled(&self) -> bool {

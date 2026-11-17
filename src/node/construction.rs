@@ -455,7 +455,22 @@ impl ServerNode {
             sm_authority_connect_options =
                 sm_authority_connect_options.options([("search_path", "public")]);
         }
+        let sessions = Arc::new(DashMap::new());
+        let live = SessionLiveState::new(SessionLiveParts {
+            bosh,
+            sessions: LocalSessionTable::new(sessions),
+            caps_cache: Arc::new(northstar_protocol_runtime::caps::CapsCacheIndex::new()),
+            caps_by_jid: Arc::new(northstar_protocol_runtime::caps::CapsResourceIndex::new()),
+            pending_caps: Arc::new(northstar_protocol_runtime::caps::PendingCapsIndex::new()),
+            federated_caps_gates: Arc::new(
+                northstar_protocol_runtime::caps::FederatedCapsGateIndex::new(),
+            ),
+            caps_effect_dispatcher: northstar_protocol_runtime::caps::CapsEffectDispatcher::new(),
+            client_admission,
+            connection_actors,
+        });
         let session = SessionModule::new(SessionModuleParts {
+            live,
             config: &config,
             pool: &pool,
             fast_token_secret: &fast_token_secret,
@@ -475,7 +490,6 @@ impl ServerNode {
         config.raw.admin_command_database_url.clear();
         config.raw.storage_database_url.zeroize();
         config.raw.storage_database_url.clear();
-        let sessions = Arc::new(DashMap::new());
         let started_at = Instant::now();
         let api_cursor = Arc::new(api_cursor);
         let federation = FederationModule::new(FederationModuleParts {
@@ -542,7 +556,7 @@ impl ServerNode {
             cluster: &cluster,
             metrics: &metrics,
             registration_closed: &registration_closed,
-            sessions: &sessions,
+            sessions: session.live().sessions(),
             fast_token_secret: &fast_token_secret,
             dummy_scram_secret,
             dummy_scram_iteration_profiles,
@@ -560,7 +574,7 @@ impl ServerNode {
             metrics: &metrics,
             registration_closed: &registration_closed,
             federation_write_policy: &federation.federation_write_policy,
-            sessions: &sessions,
+            sessions: session.live().sessions(),
             muc_occupants: &room.muc_occupants,
             started_at,
         });
@@ -576,23 +590,12 @@ impl ServerNode {
             archive,
             pool,
             cluster,
-            bosh,
-            sessions: LocalSessionTable::new(sessions),
             metrics,
             metrics_bearer_token,
             web_admin_gateway_token,
             durable_outbox_database_admission,
             upload,
-            caps_cache: Arc::new(northstar_protocol_runtime::caps::CapsCacheIndex::new()),
-            caps_by_jid: Arc::new(northstar_protocol_runtime::caps::CapsResourceIndex::new()),
-            pending_caps: Arc::new(northstar_protocol_runtime::caps::PendingCapsIndex::new()),
-            federated_caps_gates: Arc::new(
-                northstar_protocol_runtime::caps::FederatedCapsGateIndex::new(),
-            ),
-            caps_effect_dispatcher: northstar_protocol_runtime::caps::CapsEffectDispatcher::new(),
             http_body_admission: Arc::new(http_body_admission::HttpBodyAdmission::default()),
-            client_admission,
-            connection_actors,
             auth,
             operations,
             abuse: AbuseModule::new(&abuse, abuse_key_deployment),

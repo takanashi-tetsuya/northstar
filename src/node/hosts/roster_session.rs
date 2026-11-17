@@ -98,7 +98,7 @@ impl RosterSessionHost for ServerNode {
     }
 
     fn local_resource_count(&self, account: &str) -> usize {
-        self.sessions.sessions_for(account).len()
+        self.session.live().sessions().sessions_for(account).len()
     }
 
     async fn account_has_remote_resources(&self, account: &str) -> Result<bool> {
@@ -106,14 +106,19 @@ impl RosterSessionHost for ServerNode {
     }
 
     fn privacy_list_active_locally(&self, account: &str, name: &str) -> bool {
-        self.sessions.sessions_for(account).iter().any(|session| {
-            session
-                .privacy_active
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .as_deref()
-                == Some(name)
-        })
+        self.session
+            .live()
+            .sessions()
+            .sessions_for(account)
+            .iter()
+            .any(|session| {
+                session
+                    .privacy_active
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .as_deref()
+                    == Some(name)
+            })
     }
 
     async fn push_privacy_change(
@@ -312,7 +317,7 @@ impl PresenceRouting for ServerNode {
 
 impl FederatedPresenceHost for ServerNode {
     fn sessions_for(&self, jid: &str) -> Vec<OnlineSession> {
-        self.sessions.sessions_for(jid)
+        self.session.live().sessions().sessions_for(jid)
     }
 
     async fn dispatch_push_notification(&self, user_id: Uuid) -> Result<()> {
@@ -322,7 +327,7 @@ impl FederatedPresenceHost for ServerNode {
 
 impl PresenceDeliveryHost for ServerNode {
     fn local_presence_owner_keys(&self) -> Vec<String> {
-        self.sessions.local_presence_owner_keys()
+        self.session.live().sessions().local_presence_owner_keys()
     }
 
     fn local_presence_owner_candidate(
@@ -331,7 +336,9 @@ impl PresenceDeliveryHost for ServerNode {
         user_id: Uuid,
         auth_generation: i64,
     ) -> Option<OnlineSession> {
-        self.sessions
+        self.session
+            .live()
+            .sessions()
             .local_presence_owner_candidate(key, user_id, auth_generation)
     }
 
@@ -342,7 +349,9 @@ impl PresenceDeliveryHost for ServerNode {
         user_id: Uuid,
         auth_generation: i64,
     ) -> Option<OnlineSession> {
-        self.sessions
+        self.session
+            .live()
+            .sessions()
             .local_presence_owner_if_current(key, expected, user_id, auth_generation)
     }
 
@@ -355,14 +364,17 @@ impl PresenceDeliveryHost for ServerNode {
         recipient: &OutboundSender,
         presence: &str,
     ) -> bool {
-        self.sessions.send_presence_if_owner_current(
-            key,
-            expected,
-            user_id,
-            auth_generation,
-            recipient,
-            presence,
-        )
+        self.session
+            .live()
+            .sessions()
+            .send_presence_if_owner_current(
+                key,
+                expected,
+                user_id,
+                auth_generation,
+                recipient,
+                presence,
+            )
     }
 
     async fn route_directed_presence_remote(

@@ -75,12 +75,12 @@ impl ServerNode {
 
     pub(crate) fn session_cleanup_local(&self) -> SessionCleanupLocal {
         SessionCleanupLocal::new(
-            Arc::clone(&self.sessions),
+            Arc::clone(self.session.live().sessions()),
             Arc::clone(&self.room.muc_occupants),
             Arc::clone(&self.room.suspended_muc_sessions),
-            Arc::clone(&self.caps_effect_dispatcher),
-            Arc::clone(&self.caps_by_jid),
-            Arc::clone(&self.pending_caps),
+            Arc::clone(self.session.live().caps_effect_dispatcher()),
+            Arc::clone(self.session.live().caps_by_jid()),
+            Arc::clone(self.session.live().pending_caps()),
             Arc::clone(&self.metrics.active_sessions),
         )
     }

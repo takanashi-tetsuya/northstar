@@ -36,8 +36,14 @@ impl northstar_message_xmpp::push_routing::PushNotificationRoutes for ServerNode
     }
 
     async fn deliver_local(&self, service_jid: &str, notification: &str) -> bool {
-        deliver_to_best_local_resource(self.sessions.session_entries_for(service_jid), notification)
-            .await
+        deliver_to_best_local_resource(
+            self.session
+                .live()
+                .sessions()
+                .session_entries_for(service_jid),
+            notification,
+        )
+        .await
     }
 
     async fn route_cluster(&self, service_jid: &str, notification: &str) -> bool {

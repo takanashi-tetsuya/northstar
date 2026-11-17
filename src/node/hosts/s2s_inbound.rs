@@ -216,11 +216,11 @@ impl InboundHost for ServerNode {
     }
 
     fn sessions_for(&self, jid: &str) -> Vec<OnlineSession> {
-        self.sessions.sessions_for(jid)
+        self.session.live().sessions().sessions_for(jid)
     }
 
     fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
-        self.sessions.session_entries_for(jid)
+        self.session.live().sessions().session_entries_for(jid)
     }
 
     async fn privacy_allows_iq(&self, session: &OnlineSession, from: &str) -> Result<bool> {

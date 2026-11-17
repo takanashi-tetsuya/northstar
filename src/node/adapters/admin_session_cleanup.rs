@@ -22,8 +22,8 @@ impl ServerNode {
         AdminSessionCleanupContext {
             service: self.operations.admin_session_cleanup_worker_service.clone(),
             notifier: self.cluster_account_teardown_notifier(),
-            routes: AccountRevocationRoutes::new(Arc::clone(&self.sessions)),
-            sessions: Arc::clone(&self.sessions),
+            routes: AccountRevocationRoutes::new(Arc::clone(self.session.live().sessions())),
+            sessions: Arc::clone(self.session.live().sessions()),
             local_domain: self.config.domain.clone(),
         }
     }

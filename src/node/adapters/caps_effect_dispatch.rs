@@ -24,18 +24,18 @@ impl ServerNode {
         &self,
     ) -> CapsEffectDispatchContext<CapsEffectAdapters> {
         CapsEffectDispatchContext {
-            observations: Arc::clone(&self.caps_by_jid),
-            pending: Arc::clone(&self.pending_caps),
-            cache: Arc::clone(&self.caps_cache),
-            dispatcher: Arc::clone(&self.caps_effect_dispatcher),
+            observations: Arc::clone(self.session.live().caps_by_jid()),
+            pending: Arc::clone(self.session.live().pending_caps()),
+            cache: Arc::clone(self.session.live().caps_cache()),
+            dispatcher: Arc::clone(self.session.live().caps_effect_dispatcher()),
             counters: CapsEffectCounters {
                 coalesced: Arc::clone(&self.metrics.caps_effect_coalesced_total),
                 queue_saturated: Arc::clone(&self.metrics.caps_effect_queue_saturated_total),
                 failures: Arc::clone(&self.metrics.caps_effect_failures_total),
                 latency: Arc::clone(&self.metrics.caps_effect_latency_seconds),
             },
-            federated_gates: Arc::clone(&self.federated_caps_gates),
-            sessions: Arc::clone(&self.sessions),
+            federated_gates: Arc::clone(self.session.live().federated_caps_gates()),
+            sessions: Arc::clone(self.session.live().sessions()),
             local_domain: self.config.domain.clone(),
             ports: CapsEffectAdapters {
                 federation_outbox: self.federation.federation_outbox.clone(),
@@ -104,24 +104,24 @@ impl ServerNode {
     pub(crate) fn caps_effect_dispatcher(
         &self,
     ) -> &Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher> {
-        &self.caps_effect_dispatcher
+        self.session.live().caps_effect_dispatcher()
     }
 
     pub(crate) fn caps_cache(&self) -> &northstar_protocol_runtime::caps::CapsCacheIndex {
-        &self.caps_cache
+        self.session.live().caps_cache()
     }
 
     pub(crate) fn caps_by_jid(&self) -> &northstar_protocol_runtime::caps::CapsResourceIndex {
-        &self.caps_by_jid
+        self.session.live().caps_by_jid()
     }
 
     pub(crate) fn pending_caps(&self) -> &northstar_protocol_runtime::caps::PendingCapsIndex {
-        &self.pending_caps
+        self.session.live().pending_caps()
     }
 
     pub(crate) fn federated_caps_gates(
         &self,
     ) -> &northstar_protocol_runtime::caps::FederatedCapsGateIndex {
-        &self.federated_caps_gates
+        self.session.live().federated_caps_gates()
     }
 }

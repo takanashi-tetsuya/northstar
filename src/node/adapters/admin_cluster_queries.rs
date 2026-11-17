@@ -11,11 +11,14 @@ impl ServerNode {
 
 impl AdminPresenceSources for ServerNode {
     fn local_online_bare_jids(&self) -> BTreeSet<String> {
-        self.sessions.local_online_bare_jids()
+        self.session.live().sessions().local_online_bare_jids()
     }
 
     fn local_activity_bare_jids(&self, idle: Duration) -> (BTreeSet<String>, BTreeSet<String>) {
-        self.sessions.local_activity_bare_jids(idle)
+        self.session
+            .live()
+            .sessions()
+            .local_activity_bare_jids(idle)
     }
 
     async fn cluster_online_bare_jids(&self) -> anyhow::Result<BTreeSet<String>> {

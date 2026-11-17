@@ -56,11 +56,11 @@ impl MixHost for ServerNode {
     }
 
     fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
-        self.sessions.session_entries_for(jid)
+        self.session.live().sessions().session_entries_for(jid)
     }
 
     fn sessions_for(&self, jid: &str) -> Vec<OnlineSession> {
-        self.sessions.sessions_for(jid)
+        self.session.live().sessions().sessions_for(jid)
     }
 
     fn mix_iq_relay_route(&self) -> MixIqRelayRoute {
@@ -97,12 +97,15 @@ impl MixHost for ServerNode {
         expected_gate: &Arc<Mutex<()>>,
         require_available: bool,
     ) -> bool {
-        self.sessions.local_mix_presence_route_is_current(
-            full_jid,
-            expected_connection_id,
-            expected_gate,
-            require_available,
-        )
+        self.session
+            .live()
+            .sessions()
+            .local_mix_presence_route_is_current(
+                full_jid,
+                expected_connection_id,
+                expected_gate,
+                require_available,
+            )
     }
 
     async fn deliver_roster_change(

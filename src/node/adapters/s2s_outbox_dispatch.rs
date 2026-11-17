@@ -23,7 +23,7 @@ impl ServerNode {
     ) -> S2sOutboxFailureEffects<PostgresS2sOutboxDispatchRepository> {
         S2sOutboxFailureEffects {
             service: self.federation.s2s_outbox_dispatch_service.clone(),
-            local: Arc::new(LocalSessions(Arc::clone(&self.sessions))),
+            local: Arc::new(LocalSessions(Arc::clone(self.session.live().sessions()))),
             connection_failure: Arc::clone(&self.metrics.federation_failures_total),
             lease_lost: Arc::clone(&self.metrics.s2s_outbox_lease_lost_total),
             delivered: Arc::clone(&self.metrics.federation_outbound_deliveries_total),

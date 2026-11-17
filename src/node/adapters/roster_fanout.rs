@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 impl RosterFanoutRoutes for ServerNode {
     fn fanout_sessions(&self, jid: &str) -> Vec<(String, OnlineSession)> {
-        self.sessions.session_entries_for(jid)
+        self.session.live().sessions().session_entries_for(jid)
     }
 
     fn fanout_local_domain(&self) -> &str {

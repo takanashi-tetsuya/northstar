@@ -16,7 +16,9 @@ impl ServerNode {
             muc_outbox: self.cluster.muc_outbox_signal(),
             muc_projection: self.cluster.listener_muc_projection(),
             presence_routes: self.cluster.listener_presence_routes(),
-            account_routes: AccountRevocationRoutes::new(Arc::clone(&self.sessions)),
+            account_routes: AccountRevocationRoutes::new(Arc::clone(
+                self.session.live().sessions(),
+            )),
             session_identity: self.cluster.session_termination_identity(),
             session_authority: SessionTerminationAuthorityService::new(
                 PostgresSessionTerminationAuthorityRepository::new(self.pool.clone()),

@@ -15,7 +15,7 @@ impl ServerNode {
         northstar_session_postgres::replay_repository::PostgresRecoveryReplayStore,
     > {
         ClusterRecoveryReplayWake {
-            sessions: Arc::clone(&self.sessions),
+            sessions: Arc::clone(self.session.live().sessions()),
             replay: self.session.replay_service.clone(),
             admission: self.cluster.admission(),
             store: northstar_session_postgres::replay_repository::PostgresRecoveryReplayStore::new(

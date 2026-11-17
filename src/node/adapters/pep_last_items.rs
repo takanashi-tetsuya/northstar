@@ -34,7 +34,7 @@ impl ServerNode {
     ) -> PepLastItemsContext<PostgresPubSubRepository, PepLastItemsAdapters> {
         PepLastItemsContext::new(
             self.pubsub.pubsub_service.clone(),
-            LocalSessionTable::new(Arc::clone(&self.sessions)),
+            LocalSessionTable::new(Arc::clone(self.session.live().sessions())),
             self.config.domain.clone(),
             self.pep_last_items_adapters(),
         )
@@ -43,8 +43,8 @@ impl ServerNode {
     pub(crate) fn pep_last_items_adapters(&self) -> PepLastItemsAdapters {
         PepLastItemsAdapters {
             privacy: self.message.message_service.clone(),
-            observations: Arc::clone(&self.caps_by_jid),
-            pending_caps: Arc::clone(&self.pending_caps),
+            observations: Arc::clone(self.session.live().caps_by_jid()),
+            pending_caps: Arc::clone(self.session.live().pending_caps()),
             remote_routes: self.cluster.listener_presence_routes(),
             remote_sender: self.cluster.node_delivery(),
             federation: self.federation.federation_outbox.clone(),

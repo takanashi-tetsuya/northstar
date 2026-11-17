@@ -38,7 +38,7 @@ impl AccountSessionTeardown for AccountTeardownRuntime {
 impl ServerNode {
     pub(crate) fn account_teardown_runtime(&self) -> AccountTeardownRuntime {
         AccountTeardownRuntime {
-            routes: AccountRevocationRoutes::new(Arc::clone(&self.sessions)),
+            routes: AccountRevocationRoutes::new(Arc::clone(self.session.live().sessions())),
             sm: self.session_cleanup_sm_revoker(),
             generation: AccountGenerationService::new(PostgresAccountGenerationRepository::new(
                 self.pool.clone(),

@@ -24,7 +24,7 @@ pub struct MixIqRelayExpiryContext {
 impl ServerNode {
     pub(crate) fn mix_iq_relay_route(&self) -> MixIqRelayRoute {
         MixIqRelayRoute {
-            sessions: Arc::clone(&self.sessions),
+            sessions: Arc::clone(self.session.live().sessions()),
             local_domain: self.config.domain.clone(),
             policy: self.federation.effective_policy.clone(),
             federation: self.federation.federation_outbox.clone(),

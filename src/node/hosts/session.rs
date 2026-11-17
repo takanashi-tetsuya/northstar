@@ -245,7 +245,7 @@ impl SessionRoutesHost for ServerNode {
         auth_generation: i64,
         lifecycle: &Arc<AtomicU8>,
     ) -> bool {
-        self.sessions.staged_session_is_current(
+        self.session.live().sessions().staged_session_is_current(
             key,
             connection_id,
             user_id,
@@ -255,7 +255,10 @@ impl SessionRoutesHost for ServerNode {
     }
 
     fn try_stage_bound_session(&self, key: String, session: OnlineSession) -> bool {
-        self.sessions.try_stage_bound_session(key, session)
+        self.session
+            .live()
+            .sessions()
+            .try_stage_bound_session(key, session)
     }
 
     fn activate_session_if_current(
@@ -267,7 +270,7 @@ impl SessionRoutesHost for ServerNode {
         lifecycle: &Arc<AtomicU8>,
         disconnect: &CancellationToken,
     ) -> bool {
-        self.sessions.activate_session_if_current(
+        self.session.live().sessions().activate_session_if_current(
             full_jid,
             connection_id,
             user_id,
@@ -298,18 +301,21 @@ impl SessionRoutesHost for ServerNode {
         lifecycle: &Arc<AtomicU8>,
         user_agent_epoch: Option<i64>,
     ) -> bool {
-        self.sessions.publish_user_agent_epoch_if_current(
-            key,
-            connection_id,
-            user_id,
-            auth_generation,
-            lifecycle,
-            user_agent_epoch,
-        )
+        self.session
+            .live()
+            .sessions()
+            .publish_user_agent_epoch_if_current(
+                key,
+                connection_id,
+                user_id,
+                auth_generation,
+                lifecycle,
+                user_agent_epoch,
+            )
     }
 
     fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
-        self.sessions.session_entries_for(jid)
+        self.session.live().sessions().session_entries_for(jid)
     }
 
     async fn personal_message_remote_resource_exists(&self, jid: &str) -> bool {
@@ -350,7 +356,9 @@ impl SessionCapsHost for ServerNode {
         epoch: LocalCapsEpoch,
         expected_gate: Option<&Arc<tokio::sync::Mutex<()>>>,
     ) -> bool {
-        self.sessions
+        self.session
+            .live()
+            .sessions()
             .local_caps_epoch_is_current(full_jid, epoch, expected_gate)
     }
 
@@ -360,11 +368,10 @@ impl SessionCapsHost for ServerNode {
         connection_id: uuid::Uuid,
         expected_gate: &Arc<tokio::sync::Mutex<()>>,
     ) -> bool {
-        self.sessions.local_caps_observer_connection_is_current(
-            full_jid,
-            connection_id,
-            expected_gate,
-        )
+        self.session
+            .live()
+            .sessions()
+            .local_caps_observer_connection_is_current(full_jid, connection_id, expected_gate)
     }
 
     fn pending_caps(&self) -> &northstar_protocol_runtime::caps::PendingCapsIndex {
@@ -455,17 +462,20 @@ impl SessionSmHost for ServerNode {
         sm_session_id: uuid::Uuid,
         cancel_live_route: bool,
     ) -> Option<tokio::sync::watch::Receiver<bool>> {
-        self.sessions.sm_pending_route_removal_signal(
-            key,
-            old_connection_id,
-            user_id,
-            sm_session_id,
-            cancel_live_route,
-        )
+        self.session
+            .live()
+            .sessions()
+            .sm_pending_route_removal_signal(
+                key,
+                old_connection_id,
+                user_id,
+                sm_session_id,
+                cancel_live_route,
+            )
     }
 
     fn sm_presence_epoch(&self, key: &str) -> Option<SmPresenceEpoch> {
-        self.sessions.sm_presence_epoch(key)
+        self.session.live().sessions().sm_presence_epoch(key)
     }
 
     fn sm_session_policy(&self) -> SmSessionPolicy {
@@ -524,7 +534,7 @@ impl SessionSmHost for ServerNode {
         claimed_sm_id: uuid::Uuid,
         expected_gate: &Arc<tokio::sync::Mutex<()>>,
     ) -> SmStagedRouteClaim {
-        self.sessions.stage_sm_resumed_session(
+        self.session.live().sessions().stage_sm_resumed_session(
             key,
             candidate,
             claimant_user,
@@ -707,7 +717,9 @@ impl SessionMessageEffectsHost for ServerNode {
         connection_id: uuid::Uuid,
         enabled: bool,
     ) -> bool {
-        self.sessions
+        self.session
+            .live()
+            .sessions()
             .set_local_carbons_for_connection(key, connection_id, enabled)
     }
 

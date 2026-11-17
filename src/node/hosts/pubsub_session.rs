@@ -55,7 +55,7 @@ impl PubSubSessionHost for ServerNode {
 
     fn refresh_avatar_presence(&self, owner_bare: &str, hash: Option<&str>) {
         northstar_roster_xmpp::presence::refresh_avatar_presence(
-            self.sessions.sessions_for(owner_bare),
+            self.session.live().sessions().sessions_for(owner_bare),
             hash,
         );
     }
@@ -92,7 +92,7 @@ impl northstar_pubsub_xmpp::pep::PepAudienceRouting for ServerNode {
     fn pep_available_resources_wanting(&self, bare_jid: &str, node: &str) -> Vec<String> {
         northstar_stream::protocol::caps::available_resources_wanting_pep_node(
             self,
-            self.sessions.session_entries_for(bare_jid),
+            self.session.live().sessions().session_entries_for(bare_jid),
             node,
         )
     }

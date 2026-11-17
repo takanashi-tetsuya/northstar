@@ -28,7 +28,10 @@ impl OperationsSessionHost for ServerNode {
     }
 
     fn command_send_local_announcement(&self, stanza: &str) -> BTreeSet<String> {
-        self.sessions.send_local_announcement(stanza)
+        self.session
+            .live()
+            .sessions()
+            .send_local_announcement(stanza)
     }
 
     fn command_remote_announcement_enabled(&self) -> bool {

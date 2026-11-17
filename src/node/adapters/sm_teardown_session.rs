@@ -15,7 +15,7 @@ pub(in crate::node) struct SmTeardownSessionEffects {
 impl ServerNode {
     pub(in crate::node) fn sm_teardown_session_effects(&self) -> SmTeardownSessionEffects {
         SmTeardownSessionEffects {
-            sessions: Arc::clone(&self.sessions),
+            sessions: Arc::clone(self.session.live().sessions()),
             notifier: self.cluster.sm_session_teardown_notifier(),
         }
     }

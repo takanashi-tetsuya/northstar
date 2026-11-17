@@ -28,7 +28,7 @@ impl ServerNode {
     pub(crate) fn session_cleanup_unavailable(&self) -> AppSessionCleanupUnavailable {
         SessionCleanupUnavailable::new(
             self.session.sm_teardown_presence_service().clone(),
-            Arc::clone(&self.sessions),
+            Arc::clone(self.session.live().sessions()),
             self.message.message_service.clone(),
             SessionCleanupUnavailableAdapters {
                 remote: self.cluster.unavailable_delivery(),

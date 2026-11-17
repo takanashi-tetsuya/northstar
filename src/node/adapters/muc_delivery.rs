@@ -22,7 +22,7 @@ impl ServerNode {
                 ),
             ),
             local_domain: self.config.domain.clone(),
-            sessions: Arc::clone(&self.sessions),
+            sessions: Arc::clone(self.session.live().sessions()),
             muc_occupants: Arc::clone(&self.room.muc_occupants),
             suspended_muc_sessions: Arc::clone(&self.room.suspended_muc_sessions),
             sm_memory_governor: Arc::clone(&self.session.sm_memory_governor),

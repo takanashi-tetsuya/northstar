@@ -270,7 +270,7 @@ mod tests;
 impl ServerNode {
     pub(crate) fn readiness_context(&self) -> ReadinessContext {
         ReadinessContext {
-            connection: self.connection_actors.readiness_probe(),
+            connection: self.session.live().connection_actors().readiness_probe(),
             sm: self.session.sm_memory_governor.readiness_probe(),
             upload: self.upload.safety_gate.readiness_probe(),
             cluster: Arc::new(self.cluster.readiness_probe()),

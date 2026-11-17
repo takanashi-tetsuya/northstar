@@ -21,7 +21,7 @@ impl TransportHost for ServerNode {
     }
 
     fn acquire_client_connection(self: &Arc<Self>, ip: IpAddr) -> Option<Self::ConnectionGuard> {
-        self.client_admission.acquire(ip)
+        self.session.live().client_admission().acquire(ip)
     }
 
     fn connection_actors(&self) -> &ConnectionActorRegistry {
@@ -51,7 +51,7 @@ impl ServerNode {
     pub(crate) fn connection_actors(
         &self,
     ) -> &northstar_runtime::connection_actors::ConnectionActorRegistry {
-        &self.connection_actors
+        self.session.live().connection_actors()
     }
 }
 

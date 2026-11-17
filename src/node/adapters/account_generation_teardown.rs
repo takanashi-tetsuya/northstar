@@ -47,7 +47,7 @@ impl ServerNode {
     pub(crate) fn account_generation_teardown_sequence(&self) -> AccountGenerationTeardownAdapter {
         AccountGenerationTeardownAdapter {
             sequence: AccountGenerationTeardownSequence::new(AccountGenerationTeardownAdapters {
-                routes: AccountRevocationRoutes::new(Arc::clone(&self.sessions)),
+                routes: AccountRevocationRoutes::new(Arc::clone(self.session.live().sessions())),
                 sm: self.sm_teardown_claims(),
                 sm_effects: Arc::new(self.sm_teardown_runtime()),
                 notifier: self.cluster_account_teardown_notifier(),

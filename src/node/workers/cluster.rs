@@ -122,7 +122,7 @@ fn account_revocation_worker_context(
 > {
     northstar_cluster::AccountRevocationWorkerContext::new(
         state.auth.account_revocation_consumer_service.clone(),
-        AccountRevocationRoutes::new(Arc::clone(&state.sessions)),
+        AccountRevocationRoutes::new(Arc::clone(state.session.live().sessions())),
         state.cluster.account_revocation_authority(),
     )
 }

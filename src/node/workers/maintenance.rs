@@ -32,7 +32,7 @@ fn background_maintenance_context(state: &ServerNode) -> BackgroundMaintenanceCo
         database: background_housekeeping_context(state, counters.clone()),
         admin: state.operations.admin_command_service.clone(),
         sm_expiry: state.sm_expiry_context(),
-        caps_cache: Arc::clone(&state.caps_cache),
+        caps_cache: Arc::clone(state.session.live().caps_cache()),
         counters,
     }
 }

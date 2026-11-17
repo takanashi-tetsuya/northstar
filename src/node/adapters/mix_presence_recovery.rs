@@ -32,7 +32,7 @@ pub struct MixPresenceRecoveryRoutes {
 impl ServerNode {
     pub(crate) fn mix_presence_recovery_context(&self) -> MixPresenceRecoveryContext {
         MixPresenceRecoveryContext {
-            routes: MixPresenceRecoveryRoutes::new(Arc::clone(&self.sessions)),
+            routes: MixPresenceRecoveryRoutes::new(Arc::clone(self.session.live().sessions())),
             service: self.room.mix_service.clone(),
             local_domain: self.config.domain.clone(),
             policy: self.federation.effective_policy.clone(),

@@ -67,7 +67,7 @@ impl ServerNode {
     pub(crate) fn roster_push_delivery(&self) -> RosterPushDelivery<RosterPushDeliveryAdapters> {
         RosterPushDelivery::new(
             RosterPushDeliveryAdapters {
-                sessions: Arc::clone(&self.sessions),
+                sessions: Arc::clone(self.session.live().sessions()),
                 routes: self.cluster.listener_presence_routes(),
                 sender: self.cluster.node_delivery(),
             },
@@ -83,7 +83,7 @@ impl ServerNode {
         AccountDeletionRecoveryContext::new(
             self.auth.account_service.clone(),
             AccountDeletionRecoveryAdapters {
-                sessions: Arc::clone(&self.sessions),
+                sessions: Arc::clone(self.session.live().sessions()),
                 sm: self.session_cleanup_sm_revoker(),
                 roster: self.roster_push_delivery(),
                 routes: self.cluster.listener_presence_routes(),

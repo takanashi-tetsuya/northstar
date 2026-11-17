@@ -164,7 +164,7 @@ impl ExtDiscoHost for ServerNode {
 
 impl FederatedMessageHost for ServerNode {
     fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
-        self.sessions.session_entries_for(jid)
+        self.session.live().sessions().session_entries_for(jid)
     }
 
     async fn s2s_remote_recipient_route_exists(&self, jid: &str) -> bool {

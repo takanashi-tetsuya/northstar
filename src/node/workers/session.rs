@@ -53,7 +53,7 @@ fn capacity_lease_renewal_context(
                 state.pool.clone(),
             ),
         ),
-        Arc::clone(&state.sessions),
+        Arc::clone(state.session.live().sessions()),
         Arc::clone(&state.metrics),
         Duration::from_secs(state.config.capacity_session_heartbeat_seconds),
         state.config.capacity_session_lease_seconds,

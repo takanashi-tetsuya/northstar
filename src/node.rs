@@ -128,8 +128,6 @@ pub struct ServerNode {
     archive: ArchiveModule,
     http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
     cluster: northstar_cluster::ClusterManager,
-    bosh: Option<northstar_bosh::BoshManager>,
-    sessions: LocalSessionTable,
     metrics: Arc<Metrics>,
     /// Optional credential for the dedicated observability listener. Callers
     /// can ask for an authorization decision but cannot read the token.
@@ -142,22 +140,6 @@ pub struct ServerNode {
     /// reserve without giving protocol handlers raw pool access.
     durable_outbox_database_admission:
         northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
-    /// XEP-0115 entries are inserted only after the advertised verification
-    /// string has been recomputed successfully. Unverified payloads never
-    /// enter this shared cache.
-    caps_cache: Arc<northstar_protocol_runtime::caps::CapsCacheIndex>,
-    caps_by_jid: Arc<northstar_protocol_runtime::caps::CapsResourceIndex>,
-    pending_caps: Arc<northstar_protocol_runtime::caps::PendingCapsIndex>,
-    /// Cross-stream ordering authority for one authenticated federated full
-    /// JID's capability lifecycle. Weak, self-cleaning entries exist only
-    /// while an observer or response owns or waits for the resource.
-    federated_caps_gates: Arc<northstar_protocol_runtime::caps::FederatedCapsGateIndex>,
-    /// Bounded, per-full-JID single-flight boundary for XEP-0115-triggered
-    /// PEP last-item delivery and verified MIX presence publication.
-    caps_effect_dispatcher: Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher>,
-    /// Shared client connection admission authority.
-    client_admission: Arc<northstar_stream::client_admission::ClientAdmission>,
-    connection_actors: northstar_runtime::connection_actors::ConnectionActorRegistry,
     /// The auth context; see [`AuthModule`].
     auth: AuthModule,
     /// The operations context; see [`OperationsModule`].

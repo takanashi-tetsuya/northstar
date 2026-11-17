@@ -36,7 +36,7 @@ impl MucHost for ServerNode {
     }
 
     fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
-        self.sessions.session_entries_for(jid)
+        self.session.live().sessions().session_entries_for(jid)
     }
 
     fn message_direct_mode(&self) -> DirectPostCommitMode {
@@ -605,7 +605,10 @@ impl MucHost for ServerNode {
     }
 
     fn remove_live_muc_membership(&self, occupant: &SerializableMucOccupant) -> bool {
-        self.sessions.remove_live_muc_membership(occupant)
+        self.session
+            .live()
+            .sessions()
+            .remove_live_muc_membership(occupant)
     }
 
     fn remove_local_muc_occupant_exact(
@@ -712,7 +715,7 @@ impl MucHost for ServerNode {
         membership: &JoinedMucMembership,
     ) -> Option<MucOccupant> {
         self.room.muc_occupants.validated_local_muc_occupant(
-            &self.sessions,
+            self.session.live().sessions(),
             full_jid,
             connection_id,
             room_jid,

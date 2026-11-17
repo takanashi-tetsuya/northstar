@@ -16,7 +16,7 @@ impl CarbonDeliveryPort for ServerNode {
     }
 
     fn sessions(&self, bare: &str) -> Vec<(String, Self::Session)> {
-        self.sessions.session_entries_for(bare)
+        self.session.live().sessions().session_entries_for(bare)
     }
 
     fn carbon_enabled(&self, session: &Self::Session) -> bool {

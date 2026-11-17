@@ -18,16 +18,16 @@ impl ServerNode {
     pub(crate) fn operation_session_effects(&self) -> OperationSessionEffects {
         OperationSessionEffects {
             kick: northstar_operations_xmpp::operation_runtime::LocalSessionKickRoutes::new(
-                std::sync::Arc::clone(&self.sessions),
+                std::sync::Arc::clone(self.session.live().sessions()),
             ),
             broadcast: northstar_operations_xmpp::operation_runtime::LocalBroadcastRoutes::new(
-                std::sync::Arc::clone(&self.sessions),
+                std::sync::Arc::clone(self.session.live().sessions()),
                 self.config.domain.clone(),
                 self.cluster.node_id.clone(),
             ),
             generation_cleanup:
                 northstar_operations_xmpp::operation_runtime::LocalGenerationCleanupRoutes::new(
-                    std::sync::Arc::clone(&self.sessions),
+                    std::sync::Arc::clone(self.session.live().sessions()),
                 ),
         }
     }

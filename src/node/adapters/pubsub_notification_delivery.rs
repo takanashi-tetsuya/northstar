@@ -16,7 +16,7 @@ impl ServerNode {
     ) -> PubSubNotificationDelivery<PostgresPubSubRepository, PepLastItemsAdapters> {
         PubSubNotificationDelivery::new(
             self.pubsub.pubsub_service.clone(),
-            LocalSessionTable::new(Arc::clone(&self.sessions)),
+            LocalSessionTable::new(Arc::clone(self.session.live().sessions())),
             self.config.domain.clone(),
             self.pep_last_items_adapters(),
         )

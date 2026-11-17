@@ -3,8 +3,113 @@
 
 use crate::node::*;
 
+/// The session context's live state, built once at startup.
+pub(in crate::node) struct SessionLiveState {
+    bosh: Option<northstar_bosh::BoshManager>,
+    sessions: LocalSessionTable,
+    /// XEP-0115 entries are inserted only after the advertised verification
+    /// string has been recomputed successfully. Unverified payloads never
+    /// enter this shared cache.
+    caps_cache: Arc<northstar_protocol_runtime::caps::CapsCacheIndex>,
+    caps_by_jid: Arc<northstar_protocol_runtime::caps::CapsResourceIndex>,
+    pending_caps: Arc<northstar_protocol_runtime::caps::PendingCapsIndex>,
+    /// Cross-stream ordering authority for one authenticated federated full
+    /// JID's capability lifecycle. Weak, self-cleaning entries exist only
+    /// while an observer or response owns or waits for the resource.
+    federated_caps_gates: Arc<northstar_protocol_runtime::caps::FederatedCapsGateIndex>,
+    /// Bounded, per-full-JID single-flight boundary for XEP-0115-triggered
+    /// PEP last-item delivery and verified MIX presence publication.
+    caps_effect_dispatcher: Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher>,
+    /// Shared client connection admission authority.
+    client_admission: Arc<northstar_stream::client_admission::ClientAdmission>,
+    connection_actors: northstar_runtime::connection_actors::ConnectionActorRegistry,
+}
+
+/// Already-constructed values owned by the session context.
+pub(in crate::node) struct SessionLiveParts {
+    pub(in crate::node) bosh: Option<northstar_bosh::BoshManager>,
+    pub(in crate::node) sessions: LocalSessionTable,
+    pub(in crate::node) caps_cache: Arc<northstar_protocol_runtime::caps::CapsCacheIndex>,
+    pub(in crate::node) caps_by_jid: Arc<northstar_protocol_runtime::caps::CapsResourceIndex>,
+    pub(in crate::node) pending_caps: Arc<northstar_protocol_runtime::caps::PendingCapsIndex>,
+    pub(in crate::node) federated_caps_gates:
+        Arc<northstar_protocol_runtime::caps::FederatedCapsGateIndex>,
+    pub(in crate::node) caps_effect_dispatcher:
+        Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher>,
+    pub(in crate::node) client_admission: Arc<northstar_stream::client_admission::ClientAdmission>,
+    pub(in crate::node) connection_actors:
+        northstar_runtime::connection_actors::ConnectionActorRegistry,
+}
+
+impl SessionLiveState {
+    pub(in crate::node) fn new(parts: SessionLiveParts) -> Self {
+        Self {
+            bosh: parts.bosh,
+            sessions: parts.sessions,
+            caps_cache: parts.caps_cache,
+            caps_by_jid: parts.caps_by_jid,
+            pending_caps: parts.pending_caps,
+            federated_caps_gates: parts.federated_caps_gates,
+            caps_effect_dispatcher: parts.caps_effect_dispatcher,
+            client_admission: parts.client_admission,
+            connection_actors: parts.connection_actors,
+        }
+    }
+
+    pub(in crate::node) fn bosh(&self) -> Option<&northstar_bosh::BoshManager> {
+        self.bosh.as_ref()
+    }
+
+    pub(in crate::node) fn sessions(&self) -> &LocalSessionTable {
+        &self.sessions
+    }
+
+    pub(in crate::node) fn caps_cache(
+        &self,
+    ) -> &Arc<northstar_protocol_runtime::caps::CapsCacheIndex> {
+        &self.caps_cache
+    }
+
+    pub(in crate::node) fn caps_by_jid(
+        &self,
+    ) -> &Arc<northstar_protocol_runtime::caps::CapsResourceIndex> {
+        &self.caps_by_jid
+    }
+
+    pub(in crate::node) fn pending_caps(
+        &self,
+    ) -> &Arc<northstar_protocol_runtime::caps::PendingCapsIndex> {
+        &self.pending_caps
+    }
+
+    pub(in crate::node) fn federated_caps_gates(
+        &self,
+    ) -> &Arc<northstar_protocol_runtime::caps::FederatedCapsGateIndex> {
+        &self.federated_caps_gates
+    }
+
+    pub(in crate::node) fn caps_effect_dispatcher(
+        &self,
+    ) -> &Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher> {
+        &self.caps_effect_dispatcher
+    }
+
+    pub(in crate::node) fn client_admission(
+        &self,
+    ) -> &Arc<northstar_stream::client_admission::ClientAdmission> {
+        &self.client_admission
+    }
+
+    pub(in crate::node) fn connection_actors(
+        &self,
+    ) -> &northstar_runtime::connection_actors::ConnectionActorRegistry {
+        &self.connection_actors
+    }
+}
+
 /// The session context's services, built once at startup.
 pub(in crate::node) struct SessionModule {
+    live: SessionLiveState,
     pub(in crate::node) sm_teardown_presence_service: northstar_session_application::sm_teardown_presence::SmTeardownPresenceService<
         northstar_workflows::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository,
     >,
@@ -31,6 +136,7 @@ pub(in crate::node) struct SessionModule {
 
 /// What the session context is built from.
 pub(in crate::node) struct SessionModuleParts<'a> {
+    pub(in crate::node) live: SessionLiveState,
     pub(in crate::node) config: &'a Config,
     pub(in crate::node) pool: &'a PgPool,
     pub(in crate::node) fast_token_secret: &'a Arc<Zeroizing<Vec<u8>>>,
@@ -38,6 +144,10 @@ pub(in crate::node) struct SessionModuleParts<'a> {
 }
 
 impl SessionModule {
+    pub(in crate::node) fn live(&self) -> &SessionLiveState {
+        &self.live
+    }
+
     pub(in crate::node) fn sm_teardown_presence_service(
         &self,
     ) -> &northstar_session_application::sm_teardown_presence::SmTeardownPresenceService<
@@ -82,6 +192,7 @@ impl SessionModule {
     /// memory governor and the recovery queue.
     pub(in crate::node) fn new(parts: SessionModuleParts<'_>) -> anyhow::Result<Self> {
         let SessionModuleParts {
+            live,
             config,
             pool,
             fast_token_secret,
@@ -97,6 +208,7 @@ impl SessionModule {
             Arc::clone(&sm_capacity_metrics),
         )?;
         Ok(Self {
+            live,
             sm_teardown_presence_service: northstar_session_application::sm_teardown_presence::SmTeardownPresenceService::new(
                 northstar_workflows::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository::new(
                     pool.clone(),

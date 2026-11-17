@@ -344,8 +344,6 @@ for (const field of [
   'federation',
   'archive',
   'session',
-  'bosh',
-  'client_admission',
   'started_at',
   'tls_context',
 ]) {
@@ -353,6 +351,25 @@ for (const field of [
     throw new Error(`ServerNode capability ${field} is no longer private or is missing`);
   }
   if (new RegExp(`^\\s*pub(?:\\(crate\\))?\\s+${field}\\s*:`, 'm').test(appState)) {
+    throw new Error(`ServerNode capability ${field} became publicly accessible`);
+  }
+}
+const sessionLiveState = structBody(read('src/node/modules/session.rs'), 'pub(in crate::node) struct SessionLiveState');
+for (const field of [
+  'bosh',
+  'sessions',
+  'caps_cache',
+  'caps_by_jid',
+  'pending_caps',
+  'federated_caps_gates',
+  'caps_effect_dispatcher',
+  'client_admission',
+  'connection_actors',
+]) {
+  if (!new RegExp(`^\\s*${field}\\s*:`, 'm').test(sessionLiveState)) {
+    throw new Error(`ServerNode capability ${field} is no longer private or is missing`);
+  }
+  if (new RegExp(`^\\s*pub(?:\\(crate\\))?\\s+${field}\\s*:`, 'm').test(sessionLiveState)) {
     throw new Error(`ServerNode capability ${field} became publicly accessible`);
   }
 }
@@ -3489,7 +3506,7 @@ if (/\blocal_domain\b/.test(mucDestroyEffect)
 }
 const operationWorkerControlSource = read('src/node/adapters/operation_worker_control.rs');
 const operationSessionEffectsSource = read('src/node/adapters/operation_session_effects.rs');
-if (!operationWorkerControlSource.replace(/\s+/g, '').includes('routes:northstar_operations_xmpp::operation_runtime::LocalBroadcastRoutes::new(std::sync::Arc::clone(&self.sessions),self.config.domain.clone(),self.cluster.node_id.clone(),).target_snapshot()')
+if (!operationWorkerControlSource.replace(/\s+/g, '').includes('routes:northstar_operations_xmpp::operation_runtime::LocalBroadcastRoutes::new(std::sync::Arc::clone(self.session.live().sessions()),self.config.domain.clone(),self.cluster.node_id.clone(),).target_snapshot()')
     || !operationWorkerControlSource.includes('self.routes.target_seeds(operation)')
     || !/control\s*\.claim_parent_with_targets\(worker_id, LEASE_SECONDS\)/.test(operationRuntimeOwnershipSource)
     || !operationRuntimeOwnershipSource.includes('"admin.broadcast" => session_effects.send_broadcast_exact(payload)')
@@ -3497,14 +3514,14 @@ if (!operationWorkerControlSource.replace(/\s+/g, '').includes('routes:northstar
     || /fn local_target_seeds\(\s*state:\s*&ServerNode/.test(operationRuntimeOwnershipSource)) {
   throw new Error('administrator broadcast must snapshot and deliver through its exact local-route capability');
 }
-if (!operationSessionEffectsSource.replace(/\s+/g, '').replace(/,\)/g, ')').includes('kick:northstar_operations_xmpp::operation_runtime::LocalSessionKickRoutes::new(std::sync::Arc::clone(&self.sessions))')
+if (!operationSessionEffectsSource.replace(/\s+/g, '').replace(/,\)/g, ')').includes('kick:northstar_operations_xmpp::operation_runtime::LocalSessionKickRoutes::new(std::sync::Arc::clone(self.session.live().sessions()))')
     || !operationRuntimeOwnershipSource.includes('session_effects.kick_exact(user_id, generation, connection_id)')
     || !operationSessionEffectsSource.includes('.kick_exact(user_id, auth_generation, connection_id)')
     || !operationRuntimeOwnershipSource.includes('session.connection_id == connection_id')
     || !operationRuntimeOwnershipSource.includes('session.auth_generation == auth_generation')) {
   throw new Error('administrator session kick must cancel only the exact committed route incarnation');
 }
-if (!operationSessionEffectsSource.replace(/\s+/g, '').replace(/,\)/g, ')').includes('generation_cleanup:northstar_operations_xmpp::operation_runtime::LocalGenerationCleanupRoutes::new(std::sync::Arc::clone(&self.sessions))')
+if (!operationSessionEffectsSource.replace(/\s+/g, '').replace(/,\)/g, ')').includes('generation_cleanup:northstar_operations_xmpp::operation_runtime::LocalGenerationCleanupRoutes::new(std::sync::Arc::clone(self.session.live().sessions()))')
     || !operationRuntimeOwnershipSource.includes('session_effects.cancel_exact_generation(user_id, generation)')
     || !operationSessionEffectsSource.includes('.cancel_exact_generation(user_id, auth_generation)')
     || !operationRuntimeOwnershipSource.includes('session.user_id == user_id && session.auth_generation == auth_generation')) {

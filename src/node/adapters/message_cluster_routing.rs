@@ -58,7 +58,7 @@ impl OnlineRoutePort for ServerNode {
 
 impl FullJidFallbackPort for ServerNode {
     fn fallback_sessions(&self, bare: &str) -> Vec<(String, Self::Session)> {
-        self.sessions.session_entries_for(bare)
+        self.session.live().sessions().session_entries_for(bare)
     }
 
     fn available_priority(&self, session: &Self::Session) -> Option<i16> {

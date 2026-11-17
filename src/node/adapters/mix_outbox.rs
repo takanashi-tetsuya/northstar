@@ -35,9 +35,9 @@ impl ServerNode {
     pub(crate) fn mix_outbox_context(&self) -> MixOutboxContext {
         MixOutboxContext {
             service: self.room.mix_service.clone(),
-            sessions: Arc::clone(&self.sessions),
-            caps_by_jid: Arc::clone(&self.caps_by_jid),
-            pending_caps: Arc::clone(&self.pending_caps),
+            sessions: Arc::clone(self.session.live().sessions()),
+            caps_by_jid: Arc::clone(self.session.live().caps_by_jid()),
+            pending_caps: Arc::clone(self.session.live().pending_caps()),
             cluster_routes: self.cluster.mix_route_lookup(),
             cluster_delivery: self.cluster.node_delivery(),
             federation: self.federation.federation_outbox.clone(),

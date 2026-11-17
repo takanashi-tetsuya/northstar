@@ -7,9 +7,9 @@ use std::sync::Arc;
 impl ServerNode {
     pub(crate) fn cluster_listener_mix_caps(&self) -> ClusterListenerMixCaps {
         ClusterListenerMixCaps {
-            sessions: Arc::clone(&self.sessions),
-            verified: Arc::clone(&self.caps_by_jid),
-            pending: Arc::clone(&self.pending_caps),
+            sessions: Arc::clone(self.session.live().sessions()),
+            verified: Arc::clone(self.session.live().caps_by_jid()),
+            pending: Arc::clone(self.session.live().pending_caps()),
         }
     }
 }

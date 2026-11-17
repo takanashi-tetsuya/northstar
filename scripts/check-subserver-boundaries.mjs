@@ -5,6 +5,7 @@ import { readProductionModule } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = { main: 'src/main.rs', workerComposition: 'src/node/workers.rs', subservers: 'src/runtime/subservers.rs', maintenanceOwnership: 'crates/contexts/operations/northstar-operations-postgres/src/maintenance_ownership.rs', retention: 'crates/contexts/operations/northstar-operations-application/src/retention_worker.rs',
+  maintenanceConfig: 'crates/platform/northstar-config/src/maintenance.rs',
   maintenanceHealth: 'crates/edges/northstar-http/src/maintenance_health.rs',
   subscriptionCleanup: 'crates/contexts/pubsub/northstar-pubsub-application/src/subscription_cleanup.rs',
   pubsubProtocol: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/protocol_session.rs', pubsubDelivery: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/delivery.rs',
@@ -50,7 +51,7 @@ export function readSubserverSources() {
       ? readProductionModule(file, { root }) : fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
-export function verifySubserverBoundaries({ main, workerComposition, subservers, maintenanceHealth, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubDelivery, pubsubAdapter, pubsubService, state, runtimeControl, runtimeControlHealth, cluster, responsibility }) {
+export function verifySubserverBoundaries({ main, workerComposition, subservers, maintenanceConfig, maintenanceHealth, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubDelivery, pubsubAdapter, pubsubService, state, runtimeControl, runtimeControlHealth, cluster, responsibility }) {
   // Alternate control ticks can legitimately perform no SQL. They must not
   // reset a lost advisory-lock session's consecutive database error count.
   const report = codeOnly(body(runtimeControlHealth, 'fn report_runtime_control_health(')).replace(/\s+/g, '');
@@ -73,12 +74,12 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
     requireBoundary(read.includes('observed_database = true;') && query.test(codeOnly(read)),
       'control coordinator must tie health observation to a read of its exact reserved connection');
   }
-  const subserverCode = codeOnly(subservers) + codeOnly(maintenanceHealth);
+  const subserverCode = codeOnly(subservers) + codeOnly(maintenanceConfig) + codeOnly(maintenanceHealth);
   requireBoundary(!/\b(?:ServerNode|AbuseGuard|FederationRouter|ReloadableTlsConfig|Keyring|KeyRing)\b/.test(subserverCode),
     'maintenance cannot construct or import core state, routing or key authorities');
   requireBoundary(!/\bConfig\s*::\s*from_env\b|crate\s*::\s*(?:auth|abuse|node|s2s|xmpp|tls|storage)\s*::/.test(subserverCode),
     'maintenance cannot load the general runtime config or core capability modules');
-  exactFields(subservers, 'struct MaintenanceConfig', [
+  exactFields(maintenanceConfig, 'struct MaintenanceConfig', [
     'xmpp_domain', 'database_url', 'database_url_file', 'database_allow_unsafe_role_for_development',
     'maintenance_bind', 'mam_retention_days', 'muc_mam_retention_days', 'offline_message_ttl_days',
     'audit_log_retention_days', 'retention_cleanup_batch_size', 'retention_cleanup_interval_seconds',
@@ -110,10 +111,10 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
     'subscription cleanup must enforce a cancellation-aware total pass deadline before publishing health');
   requireBoundary(codeOnly(body(subscriptionProduction, 'async fn serve_with')).includes('Instant::now() + CLEANUP_BUDGET'),
     'subscription cleanup must apply its reviewed budget to each pass');
-  exactFields(retention, 'struct RetentionPolicy', ['mam_retention_days', 'muc_mam_retention_days',
+  exactFields(maintenanceConfig, 'struct RetentionPolicy', ['mam_retention_days', 'muc_mam_retention_days',
     'offline_message_ttl_days', 'audit_log_retention_days', 'retention_cleanup_batch_size', 'retention_cleanup_interval_seconds']);
-  requireBoundary(/self\.maintenance_bind\.ip\(\)\.is_loopback\(\)/.test(subservers) &&
-    /self\.maintenance_bind\.port\(\)\s*!=\s*0/.test(subservers), 'maintenance config must reject public or unowned binds');
+  requireBoundary(/self\.maintenance_bind\.ip\(\)\.is_loopback\(\)/.test(maintenanceConfig) &&
+    /self\.maintenance_bind\.port\(\)\s*!=\s*0/.test(maintenanceConfig), 'maintenance config must reject public or unowned binds');
   const health = body(maintenanceHealth, 'async fn private_health(');
   for (const marker of ['listener.local_addr()?.ip().is_loopback()', 'Semaphore::new(16)',
     '[0u8; 4096]', 'Duration::from_secs(2)', 'connections.shutdown().await', 'workers.readiness_error().is_none()', 'retention_readiness.is_ready()', 'subscription_readiness.is_ready()']) {
@@ -121,12 +122,14 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
   }
   requireBoundary(!health.includes('error.to_string()'), 'private health cannot return internal failure details');
   const run = body(subservers, 'async fn run_maintenance(');
+  const fromEnv = body(maintenanceConfig, 'pub fn from_env(');
   for (const marker of ['config.validate()?', 'northstar_postgres::role_attestation::attest_runtime_role(&pool)',
     'northstar_postgres::role_attestation::attest_development_database_is_loopback(&pool)', 'northstar_postgres::schema::verify_schema(&pool',
     'claim_maintenance(&pool)', '.max_connections(MAINTENANCE_POOL_MAX_CONNECTIONS)',
     '.min_connections(0)', 'ownership.close().await', 'pool.close().await',
     'workers.shutdown_and_join(', 'cancel.cancel()']) {
-    requireBoundary(run.replace(/\s+/g, '').includes(marker.replace(/\s+/g, '')), `maintenance startup/shutdown lost ${marker}`);
+    const source = marker === 'config.validate()?' ? fromEnv : run;
+    requireBoundary(source.replace(/\s+/g, '').includes(marker.replace(/\s+/g, '')), `maintenance startup/shutdown lost ${marker}`);
   }
   requireBoundary(subservers.includes('DATABASE_MAX_CONNECTIONS_LIMIT - MAINTENANCE_POOL_MAX_CONNECTIONS'),
     'core capacity must derive from the shared runtime-role budget');

@@ -1,6 +1,6 @@
 use crate::maintenance_repositories::{RetentionRepository, RetentionStore};
 use chrono::Utc;
-use northstar_config::Config;
+pub use northstar_config::maintenance::RetentionPolicy;
 use northstar_telemetry::metrics::Metrics;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -8,50 +8,6 @@ use std::sync::{
 };
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-
-/// The complete retention policy. This value carries no listener, identity,
-/// cryptographic key or live-session authority.
-#[derive(Clone, Debug)]
-pub struct RetentionPolicy {
-    pub mam_retention_days: i64,
-    pub muc_mam_retention_days: i64,
-    pub offline_message_ttl_days: i64,
-    pub audit_log_retention_days: i64,
-    pub retention_cleanup_batch_size: i64,
-    pub retention_cleanup_interval_seconds: u64,
-}
-
-impl RetentionPolicy {
-    pub fn from_config(config: &Config) -> Self {
-        Self {
-            mam_retention_days: config.mam_retention_days,
-            muc_mam_retention_days: config.muc_mam_retention_days,
-            offline_message_ttl_days: config.offline_message_ttl_days,
-            audit_log_retention_days: config.audit_log_retention_days,
-            retention_cleanup_batch_size: config.retention_cleanup_batch_size,
-            retention_cleanup_interval_seconds: config.retention_cleanup_interval_seconds,
-        }
-    }
-
-    pub fn validate(&self) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            (0..=3650).contains(&self.offline_message_ttl_days)
-                && (0..=36_500).contains(&self.mam_retention_days)
-                && (0..=36_500).contains(&self.muc_mam_retention_days),
-            "retention days must be zero (disabled) or within the documented maximum"
-        );
-        anyhow::ensure!(
-            (30..=36_500).contains(&self.audit_log_retention_days),
-            "AUDIT_LOG_RETENTION_DAYS must be between 30 and 36500"
-        );
-        anyhow::ensure!(
-            (1..=10_000).contains(&self.retention_cleanup_batch_size)
-                && (60..=86_400).contains(&self.retention_cleanup_interval_seconds),
-            "retention cleanup batch size must be 1..10000 and interval 60..86400 seconds"
-        );
-        Ok(())
-    }
-}
 
 /// Read-only process health, separate from database and cleanup authority.
 /// Readiness requires a completed successful pass, including after a retry.

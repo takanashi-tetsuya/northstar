@@ -30,13 +30,13 @@ test('subscription cleanup authority after tests stays checked', () => {
 });
 
 rejectsMutation('reject core state authority', 'subservers', 'use std::', 'use crate::node::ServerNode;\nuse std::', /core state/);
-rejectsMutation('reject general configuration loading', 'subservers', 'config.validate()?;', 'Config::from_env()?;\nconfig.validate()?;', /general runtime config/);
-rejectsMutation('reject expanding maintenance input secrets', 'subservers', 'struct MaintenanceConfig {', 'struct MaintenanceConfig {\n signing_key: String,', /capability inventory/);
+rejectsMutation('reject general configuration loading', 'maintenanceConfig', 'config.validate()?;', 'Config::from_env()?;\nconfig.validate()?;', /general runtime config/);
+rejectsMutation('reject expanding maintenance input secrets', 'maintenanceConfig', 'struct MaintenanceConfig {', 'struct MaintenanceConfig {\n signing_key: String,', /capability inventory/);
 rejectsMutation('reject expanding retention context authority', 'retention', 'struct RetentionContext<R> {', 'struct RetentionContext<R> {\n session_authority: usize,', /capability inventory/);
 rejectsMutation('reject a pub(super) retention context field', 'retention', 'struct RetentionContext<R> {', 'struct RetentionContext<R> {\n pub(super) session_authority: usize,', /capability inventory/);
 rejectsMutation('reject a pub(in path) cleanup context field', 'subscriptionCleanup', 'struct SubscriptionCleanupContext<R> {', 'struct SubscriptionCleanupContext<R> {\n pub(in crate::runtime) state: usize,', /capability inventory/);
-rejectsMutation('reject public maintenance bind', 'subservers', 'self.maintenance_bind.ip().is_loopback()', 'true', /reject public/);
-rejectsMutation('reject kernel-selected production port', 'subservers', 'self.maintenance_bind.port() != 0', 'true', /reject public/);
+rejectsMutation('reject public maintenance bind', 'maintenanceConfig', 'self.maintenance_bind.ip().is_loopback()', 'true', /reject public/);
+rejectsMutation('reject kernel-selected production port', 'maintenanceConfig', 'self.maintenance_bind.port() != 0', 'true', /reject public/);
 rejectsMutation('recheck the actual health listener', 'maintenanceHealth', 'listener.local_addr()?.ip().is_loopback()', 'true', /bounded local authority/);
 rejectsMutation('reject unbounded health concurrency', 'maintenanceHealth', 'Semaphore::new(16)', 'Semaphore::new(16000)', /bounded local authority/);
 rejectsMutation('reject increased health header budget', 'maintenanceHealth', '[0u8; 4096]', '[0u8; 65536]', /bounded local authority/);

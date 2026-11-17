@@ -5,15 +5,15 @@
 //! pool and metrics; it never constructs ServerNode or loads protocol secrets.
 
 use anyhow::{Context, Result};
-use northstar_operations_application::retention_worker::{RetentionContext, RetentionPolicy};
+use northstar_config::maintenance::MaintenanceConfig;
+use northstar_operations_application::retention_worker::RetentionContext;
 use northstar_operations_postgres::maintenance_ownership;
 use northstar_runtime::workers::WorkerCriticality;
 use northstar_runtime::workers::WorkerMode;
 use northstar_runtime::workers::WorkerRegistry;
 use northstar_telemetry::metrics::Metrics;
-use serde::Deserialize;
 use sqlx::{postgres::PgConnectOptions, PgPool};
-use std::{net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc, time::Duration};
+use std::{str::FromStr, sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
@@ -66,83 +66,6 @@ pub(crate) fn print_inventory() -> Result<()> {
     Ok(())
 }
 
-#[derive(Deserialize)]
-struct MaintenanceConfig {
-    xmpp_domain: String,
-    #[serde(default)]
-    database_url: String,
-    database_url_file: Option<PathBuf>,
-    #[serde(default)]
-    database_allow_unsafe_role_for_development: bool,
-    #[serde(default = "default_bind")]
-    maintenance_bind: SocketAddr,
-    #[serde(default = "default_mam_days")]
-    mam_retention_days: i64,
-    #[serde(default = "default_mam_days")]
-    muc_mam_retention_days: i64,
-    #[serde(default = "default_offline_days")]
-    offline_message_ttl_days: i64,
-    #[serde(default = "default_audit_days")]
-    audit_log_retention_days: i64,
-    #[serde(default = "default_batch")]
-    retention_cleanup_batch_size: i64,
-    #[serde(default = "default_interval")]
-    retention_cleanup_interval_seconds: u64,
-}
-
-fn default_bind() -> SocketAddr {
-    ([127, 0, 0, 1], 9092).into()
-}
-fn default_mam_days() -> i64 {
-    365
-}
-fn default_offline_days() -> i64 {
-    30
-}
-fn default_audit_days() -> i64 {
-    730
-}
-fn default_batch() -> i64 {
-    1000
-}
-fn default_interval() -> u64 {
-    60
-}
-
-impl MaintenanceConfig {
-    fn policy(&self) -> RetentionPolicy {
-        RetentionPolicy {
-            mam_retention_days: self.mam_retention_days,
-            muc_mam_retention_days: self.muc_mam_retention_days,
-            offline_message_ttl_days: self.offline_message_ttl_days,
-            audit_log_retention_days: self.audit_log_retention_days,
-            retention_cleanup_batch_size: self.retention_cleanup_batch_size,
-            retention_cleanup_interval_seconds: self.retention_cleanup_interval_seconds,
-        }
-    }
-
-    fn validate(&self) -> Result<()> {
-        anyhow::ensure!(
-            self.maintenance_bind.ip().is_loopback(),
-            "MAINTENANCE_BIND must use a loopback IP; the maintenance process has no public API"
-        );
-        anyhow::ensure!(
-            self.maintenance_bind.port() != 0,
-            "MAINTENANCE_BIND must use a nonzero port"
-        );
-        self.policy().validate()?;
-        if self.database_allow_unsafe_role_for_development {
-            anyhow::ensure!(
-                self.xmpp_domain == "localhost"
-                    || self.xmpp_domain.ends_with(".localhost")
-                    || self.xmpp_domain.ends_with(".test"),
-                "development database override requires a reserved development domain"
-            );
-        }
-        Ok(())
-    }
-}
-
 /// Exclusive per-schema ownership survives neither connection loss nor process
 /// exit. Different isolated test schemas do not contend on this lock.
 pub(crate) async fn claim_maintenance(
@@ -167,25 +90,8 @@ pub(crate) async fn claim_maintenance_on_connection(
 }
 
 pub(crate) async fn run_maintenance() -> Result<()> {
-    let mut config: MaintenanceConfig =
-        envy::from_env().context("invalid maintenance configuration")?;
-    config.xmpp_domain = northstar_xmpp_types::jid::prepare_domainpart(config.xmpp_domain.trim())
-        .context("invalid XMPP_DOMAIN")?;
-    config.validate()?;
-    anyhow::ensure!(
-        config.database_url.is_empty() || config.database_url_file.is_none(),
-        "set only one of DATABASE_URL and DATABASE_URL_FILE"
-    );
-    let url = zeroize::Zeroizing::new(match config.database_url_file.as_ref() {
-        Some(path) => {
-            northstar_security::secret_files::read_secret_file(path, "DATABASE_URL_FILE")?
-        }
-        None => std::mem::take(&mut config.database_url),
-    });
-    anyhow::ensure!(
-        !url.trim().is_empty(),
-        "maintenance requires DATABASE_URL_FILE or DATABASE_URL"
-    );
+    let mut config = MaintenanceConfig::from_env()?;
+    let url = config.take_database_url()?;
     let (console, console_guard) = northstar_telemetry::logging::console(std::io::stdout());
     let _log_guard = northstar_telemetry::logging::LogGuards::new(vec![console_guard]);
     tracing_subscriber::fmt()

@@ -145,6 +145,13 @@ S33 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.29）：連線�
 `ServerNode` 仍持有即時會話表、caps 索引、叢集與 BOSH 管理器、連線准入與 runtime control 的狀態；`main.rs` 仍有關機
 監督、維護所有權監控、啟動稽核序列與叢集 claim。這些由 S34 處理。
 
+S34 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.30）：`ServerNode` 只持有設定、連線池、遙測、TLS、持久 outbox
+准入、13 個上下文模組與叢集 edge 自己的 `ClusterManager`。即時會話表、caps 索引、連線准入、連線 actor 與 BOSH 管理器
+在 SessionModule，程序生命週期狀態在 RuntimeModule，HTTP 探索與閘道憑證在 HttpModule。關機監督在 `northstar-runtime`，
+維護程序的所有權監控、持久稽核與重啟恢復在 operations 應用層，叢集啟動權威在 `ClusterManager`，SQL 經 port 留在各
+介面卡。組合根剩下的判斷都是綁定：HTTP 傳輸路由接到 C2S 與 BOSH 的處理器、worker 的註冊與啟動順序、選用元件的有無
+與型別轉接。
+
 ### 4.5 持久化
 
 - 單一 schema 與 `migrations/` 目錄保持不變，由 `northstar-postgres` 執行。
@@ -177,6 +184,12 @@ S33 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.29）：連線�
   `check-architecture-boundaries.mjs` 的 120 段，刪除 crate 圖或其他門禁已涵蓋的 14 段（WP-507）；其餘是語義與
   組合根接線檢查。S33 移動程式碼時只把這些檢查改指向擁有 crate 的檔案（8 個腳本與目錄檔），字面值、訊息與強度
   不變；改寫為測試再刪除改在 S34 進行。
+- S34 唯讀審計了 28 支門禁腳本，其中 17 支讀 Rust 原始碼。`check-architecture-boundaries.mjs` 的 170 段中，21 段是基礎設施、41 段
+  檢查組合根接線、57 段是結構規則（原始碼清單、匯入、欄位、文件同步，執行期測試表達不了），42 段可改寫為擁有 crate
+  的行為測試，9 段已有測試涵蓋；`check-execution-boundaries.mjs` 的 353 處斷言中 284 處可改寫、5 處已涵蓋。結構與
+  組合根接線檢查保留。可改寫的檢查分屬 24 個擁有者套件（含需要 PostgreSQL 的 `northstar-db-it`），S35 先補測試，再逐支
+  門禁刪除被涵蓋的檢查與其自測。CI 以 `cargo test --all-targets` 執行、不跑 doctest，型別不可 Clone 的檢查因此以單元
+  測試中的固有方法探針表達，不用 `compile_fail`。
 
 ## 5. 遷移順序
 
@@ -195,7 +208,8 @@ S33 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.29）：連線�
 | S31 組合根 | 根 crate 更名為 `northstar-server`，`AppState` 刪除；R9 與其餘讀原始碼的邊界門禁退役；文件改寫 | `src/` 只有組合根；全部門禁與完整 CI 通過。已完成（WP-470–506，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.27）：根 crate 的流程進入各上下文與 edge，`AppState` 的 accessor 外觀刪除，組合根成為 `src/node` 的 `ServerNode`，資料庫整合測試進入 `northstar-db-it`，套件與二進位檔改名為 `northstar-server`；門禁退役改為 S32，MIX outbox 等仍含流程的介面卡、`runtime_control` 與 `ServerNode` 持有的即時狀態留在組合根 |
 | S32 門禁退役 | 逐項核對 `check-architecture-boundaries.mjs` 等讀原始碼的門禁：邊界已由 crate 圖保證的刪除，交易順序、outbox 等語義檢查改寫為擁有該行為的 crate 中的測試；決定 R9 在只剩兩層的組合根是否保留 | 每支刪除的檢查都對應到 crate 圖規則或測試；全部門禁與完整 CI 通過。已完成（WP-507–510，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.28）：刪除 14 段由 crate 圖或其他門禁涵蓋的檢查，`src/xmpp` 只在測試中編譯，R9 退役；語義檢查的改寫隨 S33 進行 |
 | S33 組合根收斂 | `node/adapters` 中仍含流程的介面卡移入 room、message、operations 上下文；`ServerNode` 的即時狀態移入擁有它的上下文模組；`SessionHost` 依關注點拆分；移動的程式碼對應的語義與接線檢查改寫為擁有 crate 的測試後從門禁刪除 | 組合根只剩建構、host 綁定與 worker 註冊；全部門禁與完整 CI 通過。已完成（WP-511–537，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.29）：審計 A1–A25 中組合根的流程移入各上下文、`northstar-runtime`、`northstar-http`、config 與 security，`SessionHost` 拆成 13 個關注點 trait；`ServerNode` 的即時狀態、ClusterModule、MIX 出席恢復與 IQ 轉送、`main.rs` 的關機監督與維護所有權監控留在組合根，門禁只改指向，改寫為測試改為 S34 |
-| S34 組合根狀態與門禁改寫 | `ServerNode` 的即時狀態（會話表、caps 索引、連線准入、連線 actor、BOSH 管理器）移入 SessionModule，叢集管理器與路由移入 ClusterModule；MIX 出席恢復與 IQ 轉送移入 `northstar-mix-xmpp`；`main.rs` 的關機監督移入 `northstar-runtime`，維護所有權監控移入 operations，啟動稽核序列與叢集 claim 經啟動 port；移動過的程式碼對應的語義與接線檢查改寫為擁有 crate 的測試後從門禁刪除 | `ServerNode` 只持有上下文模組與平台控制代碼；組合根只剩建構、host 綁定與 worker 註冊；全部門禁與完整 CI 通過 |
+| S34 組合根狀態與門禁改寫 | `ServerNode` 的即時狀態（會話表、caps 索引、連線准入、連線 actor、BOSH 管理器）移入 SessionModule，叢集管理器與路由移入 ClusterModule；MIX 出席恢復與 IQ 轉送移入 `northstar-mix-xmpp`；`main.rs` 的關機監督移入 `northstar-runtime`，維護所有權監控移入 operations，啟動稽核序列與叢集 claim 經啟動 port；移動過的程式碼對應的語義與接線檢查改寫為擁有 crate 的測試後從門禁刪除 | `ServerNode` 只持有上下文模組與平台控制代碼；組合根只剩建構、host 綁定與 worker 註冊；全部門禁與完整 CI 通過。已完成（WP-540–555，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.30）：會話即時狀態、程序生命週期狀態與 HTTP 探索各歸 SessionModule、RuntimeModule、HttpModule；MIX 出席恢復與 IQ 轉送、維護所有權監控、關機監督、上傳啟動、叢集啟動權威與持久稽核移入擁有者。ClusterModule 決定不做（`ClusterManager` 本身就是叢集 edge 的聚合）；門禁改寫為測試改為 S35 |
+| S35 門禁改寫為測試 | 依 S34 的門禁審計，為 24 個擁有者套件（abuse、auth、config、postgres、telemetry、operations、pubsub、session、protocol-runtime、message、delivery-core、BOSH、C2S、cluster、HTTP、MIX、MUC、room、stream 與 `northstar-db-it`）補上行為測試，再逐支門禁刪除被涵蓋的檢查與對應的自測 | 每支刪除的檢查都對應到擁有 crate 的測試；結構規則與組合根接線檢查保留；全部門禁與完整 CI 通過 |
 
 與其他計劃的關係：模組化執行計劃的 C1（PubSub）與 C2（MAM）是語義上的重構，在對應上下文搬進新 crate 後於新
 結構中進行；D1 由 S18 與 S30 吸收；R1–R3 不受影響。

@@ -135,6 +135,7 @@ WP-495 後，operation runtime 的現行位置為
 | S31 組合根 | WP-470–506 | 只服務叢集的路由與 standalone MUC 佔用維護進入 `northstar-cluster`（WP-470、471、483）；出席扇出進入 `northstar-roster-xmpp`（WP-472）；即時會話表與 MUC 佔用表成為 `northstar-stream` 的型別（WP-473、474）；MUC 的 SM 恢復、暫停端點轉換、本機驗證、關機通知與鎖定房間到期進入 stream 與 `northstar-muc-xmpp`（WP-475–478、489）；SM 暫停與復原、會話清理協調、容量租約維護、CAPS 效果分派、SM 拆除效果與離線出席經 port 進入 `northstar-stream`（WP-479、481、484、485、491）；PubSub 遞送 worker、CAPS 觸發的 PEP 遞送、政策檢查後的通知遞送與訂閱清理進入 pubsub 上下文（WP-482、488、490、492）；帳號刪除復原與拆除進入 `northstar-auth-xmpp`（WP-486）；S2S 入站分派與 IQ 路由進入 `northstar-s2s`（WP-493），服務探索與用戶端 IQ 路由表進入 `northstar_stream::protocol`（WP-494、497）；operation runtime 與上傳儲存遷移工具進入各自的上下文（WP-495、496）；`AppState` 的設定、遙測與服務 accessor 外觀退役，上下文模組擁有自己的服務，worker 在註冊處組合（WP-498–500）；`src/state` 改為 `src/node`，`AppState` 改名為 `ServerNode`（WP-501）；資料庫整合測試進入 tooling crate `northstar-db-it`（WP-502）；套件與二進位檔改名為 `northstar-server`（WP-503）；根 crate 刪除不再命名的依賴（WP-504），層級目錄只列仍存在的模組（WP-505）；quinn 的 RustSec 修正（WP-480）；記錄階段（WP-506）。WP-487 保留未用。盤點見 5.27 | 測試名稱依路徑對應後不變；全部門禁、模糊測試編譯、受影響 crate 的單獨建置、搬移過的 PostgreSQL 套件與離線 CI 通過。未完成：讀原始碼的邊界門禁退役與 R9 的去留改為 S32；`runtime_control` 的重新整理（原 WP-487）、MIX outbox 等仍含流程的介面卡與 `xmpp/capabilities.rs` 留在根 crate，見 5.27 |
 | S32 門禁退役 | WP-507–510 | 讀原始碼的邊界門禁 `check-architecture-boundaries.mjs` 逐段對照 crate 圖盤點，刪除 crate 圖或其他門禁已涵蓋的 14 段（WP-507）；`xmpp/capabilities.rs` 的窄遙測移入 `node`，`src/xmpp` 只在測試中編譯（WP-508）；根 crate 的生產碼只剩組合一層，R9 退役（WP-509）；記錄階段（WP-510）。盤點見 5.28 | 測試名稱依路徑對應後不變；退役的兩項之外，全部門禁、Python 腳本測試與離線 CI 通過。未完成：保留的語義與接線檢查改寫為擁有 crate 的測試；`node/adapters` 中仍含流程的介面卡、`runtime_control` 的重新整理、`ServerNode` 的即時狀態與 `SessionHost` 的拆分，改為 S33，見 5.28 |
 | S33 組合根收斂 | WP-511–537 | 依唯讀審計（A1–A25）把組合根中仍含流程的程式碼移入擁有者：遙測葉節點移入 message、pubsub、room、roster 與 session 上下文（WP-511）；C2S 連線准入由 `northstar-stream` 的 `ClientAdmission` 擁有（WP-512）；啟動時的資料庫連線重試與執行期控制專用連線移入 `northstar-postgres`、`northstar-operations-postgres`（WP-513）；TLS 重新載入效果移入 operations 應用層（WP-514）；註冊開放狀態移入 auth 應用層（WP-515）；本機會話快照移入 stream 與 HTTP edge（WP-516）；有效聯邦政策與元件憑證移出根 crate（WP-517），六處聯邦檢查改經同一政策（WP-518）；MIX 能力圍欄移入 stream 會話表（WP-519），會話清理時的 MIX 出席撤回移入 `northstar-mix-xmpp`（WP-520）；離開房間與佔用者投影移入 room 上下文（WP-521）；個人訊息的會話判斷移為 `OnlineSession` 的方法（WP-522），推播路由移入 `northstar-message-xmpp` 與 stream（WP-523）；SM 拆除改用 stream 的圍欄與精確撤銷，帳號拆除流程移入 auth 應用層（WP-524）；管理員出席與公告扇出移入 operations（WP-525）；名冊推送與移除出席（WP-526）、封鎖與隱私扇出、MIX 出席守衛與同帳號出席（WP-527）、PubSub 忙碌回應、服務探索後備、頭像出席與 PEP 篩選（WP-528）移入各上下文介面卡；runtime control 協調器（WP-529）、反濫用金鑰權威輪詢與維護工作（WP-530）移入 operations 應用層；上傳啟動權威與暫存清理移入 upload 上下文（WP-531）；服務工作監督、測試就緒紀錄與容器健康探測移入 `northstar-runtime`、`northstar-http`（WP-532），維護子伺服器的私有健康監聽移入 `northstar-http`（WP-533）；啟動秘密政策移入 config 與 security（WP-534）；`SessionHost` 拆成 13 個關注點 trait（WP-535）；stream 的測試會話夾具與 roster 扇出測試（WP-536）；記錄階段（WP-537）。盤點見 5.29 | 測試名稱依路徑對應後不變，擁有 crate 新增 86 個測試；全部門禁、Python 腳本測試與離線 CI 通過。未完成：`ServerNode` 仍持有會話表、caps 索引、叢集與 BOSH 管理器、連線准入與 runtime control 的狀態；`main.rs` 的關機監督、維護所有權監控、啟動稽核序列與叢集 claim 留在組合根；門禁只改指向，語義檢查改寫為測試後刪除改為 S34，見 5.29 |
+| S34 組合根狀態 | WP-540–555 | 依狀態審計（F1–F23）把 `ServerNode` 的即時狀態與組合根中剩下的流程移入擁有者：會話表、caps 索引、連線准入、連線 actor 與 BOSH 管理器移入 SessionModule（WP-540），程序生命週期狀態移入 RuntimeModule（WP-541），HTTP 探索與閘道憑證移入 HttpModule（WP-542）；維護設定移入 `northstar-config`（WP-543），聯邦 DNS 解析器的建構移入 `northstar-security`（WP-544）；推播守衛與 PubSub 位址後備移入上下文（WP-545）；叢集的發佈靜止後釋放與 MUC 探索順序移入擁有者（WP-546）；MIX 出席恢復、IQ 轉送路由與遠端節點排序移入 `northstar-mix-xmpp`（WP-547）；caps 快照與隱私查詢移入 protocol-runtime 與 stream（WP-548）；維護程序的所有權監控移入 operations 應用層（WP-549），核心程序的關機監督移入 `northstar-runtime`（WP-550）；上傳儲存的啟動與准入移入 upload-storage 與 HTTP（WP-551）；叢集啟動權威序列移入 `ClusterManager`（WP-552），持久稽核與重啟恢復移入 operations 應用層（WP-553）；passkey 與邀請制判斷移入 config（WP-554）；記錄階段（WP-555）。盤點見 5.30 | 測試名稱依路徑對應後不變，擁有 crate 新增 65 個測試；全部門禁、Python 腳本測試與離線 CI 通過。`ServerNode` 只持有設定、平台控制代碼、13 個上下文模組與 `ClusterManager`。未做：ClusterModule（決定不做，見 5.30）；門禁改寫為測試改為 S35 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -1367,6 +1368,45 @@ S32 後根 crate 的生產碼只剩組合一層，但 `node/adapters`、`node/co
 4,558 行、新增 1,219 行，crates 新增 8,972 行、刪除 744 行。workspace 測試由 3,125 個增為 3,211 個，既有測試的名稱
 依路徑對應後不變。
 
+### 5.30 S34 盤點：組合根狀態（`9f5ed972`）
+
+S34 從兩份唯讀審計開始。狀態審計列出 `ServerNode` 的每個欄位與組合根中仍有的 23 項判斷（F1–F23），提出 20 個 WP；
+門禁審計逐段分類 17 支讀 Rust 原始碼的門禁（見目標架構 4.7）。狀態與流程的移動分兩條鏈交付，門禁改寫為測試另立 S35：
+
+| 類別 | WP | 移入 | 留在根 crate |
+| --- | --- | --- | --- |
+| 即時狀態 | 540–542 | SessionModule 的私有 `SessionLiveState`（會話表、5 個 caps 索引與分派器、連線准入、連線 actor、BOSH 管理器）；RuntimeModule（啟動時刻、XEP-0133 關機槽、runtime control 活性、worker 登錄）；HttpModule（公開探索政策、HTTP 本體准入、指標與管理閘道 token） | 欄位的建構點與共用的會話表配置 |
+| 設定與安全 | 543、544、554 | `northstar_config::maintenance`（`MaintenanceConfig`、`RetentionPolicy`）；`northstar_security::dns_resolvers`；`Config::passkey_login_configured`、`configured_registration_is_invitation_only` | 維護程序讀環境的時機 |
+| 上下文流程 | 545–548 | `northstar-message-xmpp` 的推播守衛；PubSub 缺位址的後備；`ClusterManager` 的發佈靜止後釋放與 PG MUC 權威判斷；`northstar-muc-xmpp` 的探索順序；`northstar-mix-xmpp` 的 MIX 出席恢復路由、IQ 轉送路由與遠端節點排序；`MixSessionCapability::from_verified_features`；`northstar-protocol-runtime` 的 caps 快照；`LocalSessionTable::privacy_list_active_locally` | `mix_presence_recovery.rs`、`mix_iq_relay.rs` 只剩 port 綁定 |
+| 程序監督 | 549、550 | operations 應用層的 `supervise_maintenance`（所有權探測與關閉經 `MaintenanceOwnership` port，operations-postgres 在保留的連線上實作）；`northstar-runtime` 的 `supervise_process_shutdown`、監聽位址清單；`northstar-telemetry` 的 `init_process_logging` | 子伺服器與 listener 的建構、CLI |
+| 啟動 | 551–553 | `northstar-upload-storage` 的 S3 設定、命名空間身分與後端選擇；`northstar-http` 的 `UploadRuntime`；`ClusterManager::establish_startup_authority`（金鑰部署 SQL 經 `ClusterKeyDeploymentPort`）；operations 應用層的 `audit_durable_capacity`、`recover_after_restart` | 啟動順序本身：上傳權威、儲存與協調、稽核交接；三個 port 綁定（`cluster_key_deployment.rs`、`startup_recovery.rs`、`process_shutdown.rs`） |
+
+與審計的差異：
+
+- 審計 WP2 的 ClusterModule 不做。`ClusterManager` 是叢集 edge 自己的聚合，組合根與 100 多個呼叫點直接用它；外包一層
+  模組只增加轉發，不移動任何判斷。發佈靜止後的釋放與 PG MUC 權威判斷改為它的方法（WP-546）。
+- 審計 WP6（MIX outbox 排序與 host 分類）併入 WP-547；WP9 與 WP10 併為 WP-545；WP7 與 WP8 併為 WP-548；WP15 拆為
+  叢集啟動權威（WP-552）與持久稽核（WP-553）。
+- F18 的路由綁定、F10 的選用 PG 離開、F13 的 PubSub 回覆型別轉接、F20–F23 的 worker 註冊選擇與順序留在根 crate：判斷
+  謂詞已由擁有者提供（`ClusterManager::is_enabled`、`muc_pg_authority_enabled`、`ProcessRole::embeds_retention`、HTTP
+  探索政策），根 crate 只把具體的處理器與 worker 綁上去。`northstar-http` 依層級規則不能依賴 C2S 與 BOSH，改以回呼
+  交出路由安裝只多一層轉發。F19 的靜默上限計算由 WP-549 的 `RetentionPolicy::max_silence` 取代。
+- 門禁只改指向（3 個腳本 +82/−32 行），字面值、訊息與強度不變；WP-552、553 的啟動順序原本沒有門禁，由新測試守護。
+  門禁改寫為測試再刪除需要 24 個擁有者套件的測試，規模超過一個階段的收尾，另立 S35。
+
+新決定：
+
+- 擁有者的 port trait 由組合根以 `&T` 實作時，呼叫端傳 `Arc::as_ref()`；不為 `Arc<ServerNode>` 另寫實作（WP-550）。
+- 啟動 port 的介面卡在每個呼叫點以區域值建構，避免借用 `config` 的欄位跨過之後的 `take`（WP-553）。
+- 門禁審計的 `compile_fail` doctest 不採用：CI 以 `cargo test --all-targets` 執行，不跑 doctest。型別不可 Clone 改以
+  單元測試中的固有方法探針檢查（S35）。
+
+根 crate 由 165 檔 52,180 行變為 169 檔 51,681 行；`src/xmpp`、`stage4_replay`、`direct_replay` 以外、檔名不屬測試的
+生產碼由 108 檔 13,088 行變為 112 檔 12,742 行（量法同 5.29；新增的是三個啟動與關機的 port 綁定和 RuntimeModule、
+HttpModule）。根 crate 刪除 1,237 行、新增 738 行，crates 新增 3,626 行、刪除 48 行。workspace 測試由 3,211 個增為
+3,276 個，既有測試的名稱依路徑對應後不變。`ServerNode` 只持有設定、連線池、遙測、TLS、持久 outbox 准入、13 個上下文
+模組與 `ClusterManager`。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點），S31 的 WP-483 起 agy 額度用盡，再改由 Codex CLI 執行（第 10 點）。
@@ -1613,6 +1653,12 @@ S32 後根 crate 的生產碼只剩組合一層，但 `node/adapters`、`node/co
    - 平行的 WP 改同一門禁的同一行（例如同一函式的參數列）時，串接會衝突；規格要指定合併後的形式（S33）。
    - 測試名稱對應的 sed `$a` 也會套用到 ignored 清單。新增測試要以存在於測試清單、不在 ignored 清單的名稱為錨點
      （`/^name$/a`）（S33）。
+   - 門禁的原始碼走訪器不跟隨 `#[path]`：以 `#[path]` 引入的測試檔被當成生產碼掃描，測試中的字面 XML 觸發 outbound XML
+     門禁。外部測試檔一律是 `parent/tests.rs`，在檔尾宣告 `#[cfg(test)] mod tests;`（S34）。
+   - 測試 fake 在 trait impl 中寫 `async fn`，不寫回傳 `async` 區塊的 `fn`（clippy `manual_async_fn`）；`Ok` 型別沒有
+     `Debug` 時不能 `unwrap_err`，改用 `let Err(e) = r else { panic!() }`；只有測試用到的 tokio feature 放在
+     dev-dependencies（S34）。
+   - 審計的行號只對應審計時的 commit。之後的 WP 移動了程式碼，規格要以名稱定位項目，行號只當線索（S34）。
 10. Codex（S31 的 WP-483 起，2026-11-16）：agy 額度用盡期間，程式修改改由 Codex CLI（`gpt-6.1-sol`）執行，呼叫方式與
     限制同第 8 點，`model_reasoning_effort` 依任務難度選擇；第 1、3、4、7 點與第 9 點的機械搬移做法照舊。agy 恢復後回到
     第 9 點。
@@ -2072,3 +2118,19 @@ Stage 證據仍綁定其原提交。
 | WP-535 | 完成：`SessionHost` 拆成 13 個關注點 trait | 見 `git log --grep '\[WP-535\]'` |
 | WP-536 | 完成：stream 的本機會話測試夾具；補上 WP-526–528 的名冊扇出測試 | 見 `git log --grep '\[WP-536\]'` |
 | WP-537 | 完成：記錄 S33 的階段與盤點（5.29）、目標架構 4.3、4.4、4.7 與第 5 節。WP-511–536 依相依關係接到 WP-510 之上（WP-536 在 WP-535 之前），分三條鏈；每條鏈累積驗證 fmt、clippy、workspace 測試、模糊測試、受影響 crate 的單獨建置、全部門禁與 Python 腳本測試，離線 CI 在推送前通過 | 見 `git log --grep '\[WP-537\]'` |
+| WP-540 | 完成：會話即時狀態移入 SessionModule | 見 `git log --grep '\[WP-540\]'` |
+| WP-541 | 完成：程序生命週期狀態移入 RuntimeModule | 見 `git log --grep '\[WP-541\]'` |
+| WP-542 | 完成：HTTP 探索與閘道憑證移入 HttpModule | 見 `git log --grep '\[WP-542\]'` |
+| WP-543 | 完成：維護設定移入 `northstar-config` | 見 `git log --grep '\[WP-543\]'` |
+| WP-544 | 完成：聯邦 DNS 解析器的建構移入 `northstar-security` | 見 `git log --grep '\[WP-544\]'` |
+| WP-545 | 完成：推播守衛與 PubSub 位址後備移入上下文 | 見 `git log --grep '\[WP-545\]'` |
+| WP-546 | 完成：叢集的發佈靜止後釋放與 MUC 探索順序移入擁有者 | 見 `git log --grep '\[WP-546\]'` |
+| WP-547 | 完成：MIX 出席恢復、IQ 轉送路由與遠端節點排序移入 `northstar-mix-xmpp` | 見 `git log --grep '\[WP-547\]'` |
+| WP-548 | 完成：caps 快照與隱私查詢移入 protocol-runtime 與 stream | 見 `git log --grep '\[WP-548\]'` |
+| WP-549 | 完成：維護程序的所有權監控移入 operations 應用層 | 見 `git log --grep '\[WP-549\]'` |
+| WP-550 | 完成：核心程序的關機監督移入 `northstar-runtime` | 見 `git log --grep '\[WP-550\]'` |
+| WP-551 | 完成：上傳儲存的啟動與准入移入 upload-storage 與 HTTP | 見 `git log --grep '\[WP-551\]'` |
+| WP-552 | 完成：叢集啟動權威序列移入 `ClusterManager` | 見 `git log --grep '\[WP-552\]'` |
+| WP-553 | 完成：持久稽核與重啟恢復移入 operations 應用層 | 見 `git log --grep '\[WP-553\]'` |
+| WP-554 | 完成：passkey 與邀請制判斷移入 `northstar-config` | 見 `git log --grep '\[WP-554\]'` |
+| WP-555 | 完成：記錄 S34 的階段與盤點（5.30）、目標架構 4.4、4.7 與第 5 節。WP-540–554 接在 WP-537 之上成一條鏈，整條鏈驗證 fmt、clippy、workspace 測試、模糊測試、受影響 crate 的單獨建置、全部門禁與 Python 腳本測試，離線 CI 在推送前通過 | 見 `git log --grep '\[WP-555\]'` |

@@ -284,6 +284,16 @@ impl Config {
         self.web_capabilities.registration.mode
     }
 
+    /// Passkey login needs both the web client and FAST tokens.
+    pub fn passkey_login_configured(&self) -> bool {
+        self.web_client_enabled && self.fast_token_enabled
+    }
+
+    /// Whether the configured mode is invitation-only, before any runtime closure.
+    pub fn configured_registration_is_invitation_only(&self) -> bool {
+        self.configured_registration_mode() == RegistrationMode::InvitationOnly
+    }
+
     pub fn registration_dependency_locked(&self) -> bool {
         self.web_capabilities.registration.lock.is_locked()
     }

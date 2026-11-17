@@ -295,10 +295,9 @@ impl ServerNode {
     pub(crate) fn http_registration_availability(
         &self,
     ) -> northstar_auth_application::account::HttpRegistrationAvailability {
-        self.auth.registration.http_availability(
-            self.config.configured_registration_mode()
-                == northstar_config::RegistrationMode::InvitationOnly,
-        )
+        self.auth
+            .registration
+            .http_availability(self.config.configured_registration_is_invitation_only())
     }
 
     pub(crate) fn admin_gateway_authentication_enabled(&self) -> bool {

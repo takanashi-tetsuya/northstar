@@ -466,8 +466,7 @@ impl ServerNode {
                 websocket_enabled: config.websocket_enabled,
                 bosh_enabled: config.bosh_enabled,
                 web_client_enabled: config.web_client_enabled,
-                passkeys_enabled: config.web_client_enabled
-                    && config.fast_token_enabled
+                passkeys_enabled: config.passkey_login_configured()
                     && northstar_auth_application::passkeys::relying_party(&config.public_url)
                         .is_ok(),
                 web_admin_enabled: config.web_admin_enabled,

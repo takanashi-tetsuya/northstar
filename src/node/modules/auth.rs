@@ -177,7 +177,7 @@ impl AuthModule {
                 fast_token_secret.clone(),
             ),
             northstar_auth_application::passkeys::PasskeyConfig {
-                enabled: config.web_client_enabled && config.fast_token_enabled,
+                enabled: config.passkey_login_configured(),
                 public_url: config.public_url.clone(),
                 domain: config.domain.clone(),
                 scram_iterations: config.scram_iterations,

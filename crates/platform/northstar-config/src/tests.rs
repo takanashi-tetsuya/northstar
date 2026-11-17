@@ -63,6 +63,42 @@ fn startup_policy_fixture() -> super::Config {
 }
 
 #[test]
+fn passkey_login_needs_the_web_client_and_fast_tokens() {
+    for (web_client_enabled, fast_token_enabled, expected) in [
+        (false, false, false),
+        (false, true, false),
+        (true, false, false),
+        (true, true, true),
+    ] {
+        let mut config = startup_policy_fixture();
+        config.raw.web_client_enabled = web_client_enabled;
+        config.fast_token_enabled = fast_token_enabled;
+        assert_eq!(config.passkey_login_configured(), expected);
+    }
+}
+
+#[test]
+fn invitation_only_follows_the_configured_registration_mode() {
+    for (mode, open_registration, invitation_required, expected) in [
+        (super::RegistrationMode::Closed, false, false, false),
+        (super::RegistrationMode::Open, true, false, false),
+        (super::RegistrationMode::InvitationOnly, true, true, true),
+    ] {
+        let mut config = startup_policy_fixture();
+        config.raw.web_client_enabled = true;
+        config.raw.open_registration = open_registration;
+        config.raw.invitation_required = invitation_required;
+        config.web_capabilities =
+            std::sync::Arc::new(resolve_web_capability_plan(&config.raw).unwrap());
+        assert_eq!(config.configured_registration_mode(), mode);
+        assert_eq!(
+            config.configured_registration_is_invitation_only(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn ephemeral_api_control_requires_every_development_condition() {
     assert!(startup_policy_fixture().ephemeral_api_control_allowed());
     for condition in 0..5 {

@@ -30,6 +30,7 @@ uuid = { version = "1.12", features = ["v4", "serde"] }
 northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application", features = ["test-support"] }
 northstar-runtime = { path = "../../platform/northstar-runtime", features = ["test-support"] }
 northstar-security = { path = "../../platform/northstar-security", features = ["test-support"] }
+northstar-session-application = { path = "../../contexts/session/northstar-session-application" }
 northstar-stream = { path = "../../edges/northstar-stream", features = ["test-support"] }
 roxmltree = "0.20"
 tokio = { version = "1.43", features = ["test-util"] }

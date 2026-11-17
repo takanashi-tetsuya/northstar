@@ -2961,6 +2961,10 @@
     ],
     [
       "northstar-c2s",
+      "northstar-session-application"
+    ],
+    [
+      "northstar-c2s",
       "northstar-stream"
     ],
     [

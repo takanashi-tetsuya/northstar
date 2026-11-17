@@ -2037,6 +2037,7 @@ dependencies = [
  "northstar-delivery-core",
  "northstar-runtime",
  "northstar-security",
+ "northstar-session-application",
  "northstar-stream",
  "northstar-telemetry",
  "northstar-xml-builder",

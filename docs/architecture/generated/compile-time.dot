@@ -1083,6 +1083,7 @@ digraph compile_time {
   "northstar-c2s" -> "northstar-delivery-core";
   "northstar-c2s" -> "northstar-runtime";
   "northstar-c2s" -> "northstar-security";
+  "northstar-c2s" -> "northstar-session-application";
   "northstar-c2s" -> "northstar-stream";
   "northstar-c2s" -> "northstar-telemetry";
   "northstar-c2s" -> "northstar-xml-builder";

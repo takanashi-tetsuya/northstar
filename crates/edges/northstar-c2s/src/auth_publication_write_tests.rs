@@ -19,11 +19,13 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[derive(Default)]
-struct MemoryWrite {
-    bytes: Vec<u8>,
-    fail_at: Option<usize>,
-    fail_flush: bool,
-    flushes: usize,
+pub(super) struct MemoryWrite {
+    pub(super) bytes: Vec<u8>,
+    pub(super) fail_at: Option<usize>,
+    pub(super) fail_flush: bool,
+    pub(super) flushes: usize,
+    pub(super) pending_after: Option<usize>,
+    pub(super) pending_flush: bool,
 }
 impl tokio::io::AsyncWrite for MemoryWrite {
     fn poll_write(
@@ -32,6 +34,12 @@ impl tokio::io::AsyncWrite for MemoryWrite {
         bytes: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         let this = self.get_mut();
+        if this
+            .pending_after
+            .is_some_and(|limit| this.bytes.len() >= limit)
+        {
+            return Poll::Pending;
+        }
         if this.fail_at.is_some_and(|limit| this.bytes.len() >= limit) {
             return Poll::Ready(Err(std::io::Error::other("controlled partial write")));
         }
@@ -45,6 +53,9 @@ impl tokio::io::AsyncWrite for MemoryWrite {
     fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         let this = self.get_mut();
         this.flushes += 1;
+        if this.pending_flush {
+            return Poll::Pending;
+        }
         if this.fail_flush {
             Poll::Ready(Err(std::io::Error::other("controlled flush failure")))
         } else {

@@ -62,6 +62,41 @@ fn startup_policy_fixture() -> super::Config {
     }
 }
 
+struct CloneProbe<T>(std::marker::PhantomData<T>);
+
+trait NotClone {
+    fn is_clone(&self) -> bool {
+        false
+    }
+}
+
+impl<T> NotClone for CloneProbe<T> {}
+
+impl<T: Clone> CloneProbe<T> {
+    fn is_clone(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn loaded_and_raw_configuration_remain_move_only() {
+    assert!(CloneProbe::<String>(std::marker::PhantomData).is_clone());
+    assert!(
+        !CloneProbe::<super::Config>(std::marker::PhantomData).is_clone(),
+        "loaded configuration owns runtime secrets"
+    );
+    assert!(
+        !CloneProbe::<super::RawConfig>(std::marker::PhantomData).is_clone(),
+        "raw configuration owns runtime secrets"
+    );
+}
+
+#[test]
+fn message_free_burst_defaults_to_sixty() {
+    let config = startup_policy_fixture();
+    assert_eq!(config.raw.abuse_message_free_burst, 60, "default burst");
+}
+
 #[test]
 fn passkey_login_needs_the_web_client_and_fast_tokens() {
     for (web_client_enabled, fast_token_enabled, expected) in [

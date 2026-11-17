@@ -70,6 +70,95 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     #[tokio::test]
+    async fn startup_retries_share_one_budget_and_only_retry_timeouts() {
+        struct CancelledAttempt<'a>(&'a AtomicU32);
+
+        impl Drop for CancelledAttempt<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        for (label, timeout, expected_attempts) in [
+            ("pool timeout retries", true, 2),
+            ("protocol failure stops", false, 1),
+        ] {
+            let started = tokio::time::Instant::now();
+            let deadline = started + Duration::from_secs(1);
+            let mut budgets = Vec::new();
+            let result = startup_database_connect(
+                deadline,
+                Duration::from_secs(2),
+                "budget-matrix",
+                |budget| {
+                    budgets.push(budget);
+                    std::future::ready(if budgets.len() > 1 {
+                        Ok(7_u8)
+                    } else if timeout {
+                        Err(sqlx::Error::PoolTimedOut)
+                    } else {
+                        Err(sqlx::Error::Protocol("invalid handshake".to_owned()))
+                    })
+                },
+            )
+            .await;
+            assert_eq!(budgets.len(), expected_attempts, "{label}");
+            assert!(budgets[0] <= deadline - started, "{label}");
+            assert!(!budgets[0].is_zero(), "{label}");
+            if timeout {
+                assert_eq!(result.unwrap(), 7, "{label}");
+                assert!(budgets[1] < budgets[0], "{label}: shared deadline shrinks");
+                assert!(!budgets[1].is_zero(), "{label}");
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(
+                    error.to_string(),
+                    "could not create isolated budget-matrix database pool after 1 bounded startup admission attempts",
+                    "{label}"
+                );
+                assert!(
+                    matches!(
+                        error.downcast_ref::<sqlx::Error>(),
+                        Some(sqlx::Error::Protocol(message)) if message == "invalid handshake"
+                    ),
+                    "{label}: preserve the original error"
+                );
+            }
+        }
+
+        let cancelled = AtomicU32::new(0);
+        let mut budgets = Vec::new();
+        let value = startup_database_connect(
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            Duration::from_millis(5),
+            "attempt-timeout",
+            |budget| {
+                budgets.push(budget);
+                let first = budgets.len() == 1;
+                let cancelled = &cancelled;
+                async move {
+                    if first {
+                        let _attempt = CancelledAttempt(cancelled);
+                        std::future::pending::<Result<u8, sqlx::Error>>().await
+                    } else {
+                        assert_eq!(cancelled.load(Ordering::Relaxed), 1);
+                        Ok(9)
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(value, 9, "elapsed attempt retries");
+        assert_eq!(
+            budgets,
+            vec![Duration::from_millis(5); 2],
+            "elapsed attempt retries: cap each connection attempt"
+        );
+        assert_eq!(cancelled.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
     async fn auxiliary_pools_share_the_remaining_deadline_and_cancel_inflight_connect() {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
         startup_database_connect(deadline, Duration::from_secs(2), "command", |_| async {

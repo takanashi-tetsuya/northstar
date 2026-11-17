@@ -855,10 +855,32 @@ mod tests {
         metrics
             .omemo_recovery_poll_rate_limited_total
             .store(2, Ordering::Relaxed);
+        metrics
+            .omemo_recovery_poll_concurrency_rejected_total
+            .store(3, Ordering::Relaxed);
         let rendered = metrics.render();
-        assert!(rendered.contains("xmpp_omemo_recovery_poll_requests_total 4\n"));
-        assert!(rendered.contains("xmpp_omemo_recovery_poll_rate_limited_total 2\n"));
+        for (label, name, value) in [
+            ("requests", "xmpp_omemo_recovery_poll_requests_total", 4),
+            (
+                "rate limited",
+                "xmpp_omemo_recovery_poll_rate_limited_total",
+                2,
+            ),
+            (
+                "concurrency rejected",
+                "xmpp_omemo_recovery_poll_concurrency_rejected_total",
+                3,
+            ),
+        ] {
+            let samples = rendered
+                .lines()
+                .filter(|line| line.starts_with(name))
+                .collect::<Vec<_>>();
+            assert_eq!(samples, vec![format!("{name} {value}")], "{label}");
+        }
         assert!(!rendered.contains("client_ip="));
+        assert!(!rendered.contains("source="));
+        assert!(!rendered.contains("subject="));
     }
 
     #[test]

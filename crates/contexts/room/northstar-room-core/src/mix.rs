@@ -15,6 +15,16 @@ pub enum MixSessionCapability {
     Unknown,
 }
 
+impl MixSessionCapability {
+    pub fn from_verified_features(verified: Option<bool>) -> Self {
+        match verified {
+            Some(true) => Self::Supported,
+            Some(false) => Self::Unsupported,
+            None => Self::Unknown,
+        }
+    }
+}
+
 use northstar_xmpp_types::CanonicalJid;
 pub use uuid::Uuid as Id;
 
@@ -190,5 +200,24 @@ impl Stored {
                     .map(|r| &r.participant)
                     .eq(admission.recipients.iter()),
             }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MixSessionCapability;
+
+    #[test]
+    fn mix_session_capability_from_verified_features() {
+        for (verified, expected) in [
+            (Some(true), MixSessionCapability::Supported),
+            (Some(false), MixSessionCapability::Unsupported),
+            (None, MixSessionCapability::Unknown),
+        ] {
+            assert_eq!(
+                MixSessionCapability::from_verified_features(verified),
+                expected,
+            );
+        }
     }
 }

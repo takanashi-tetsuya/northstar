@@ -1,20 +1,17 @@
 //! Live-route fences and application effects for MIX presence recovery.
 
 use crate::node::FederationRouter;
-use crate::node::{
-    mix_presence_epoch_is_current, mix_presence_fallback_is_suppressed, session_entries_for_in,
-    OnlineSession, ServerNode,
-};
+use crate::node::ServerNode;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use dashmap::DashMap;
 use northstar_federation_application::effective_policy::EffectiveFederationPolicy;
-use northstar_mix_xmpp::ports::{MixPresenceRecoveryPort, MixPresenceRoutes};
+use northstar_mix_xmpp::ports::MixPresenceRecoveryPort;
+use northstar_mix_xmpp::presence_recovery_routes::MixPresenceRecoveryRoutes;
 use northstar_room_application::mix_service::{
     MixAccount, MixChannel, MixService, PamMembership, PresenceOutcome,
 };
 use northstar_workflows::room_effects::PostgresMixRepository;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub struct MixPresenceRecoveryContext {
@@ -23,10 +20,6 @@ pub struct MixPresenceRecoveryContext {
     local_domain: String,
     policy: EffectiveFederationPolicy,
     federation: FederationRouter,
-}
-
-pub struct MixPresenceRecoveryRoutes {
-    sessions: Arc<DashMap<String, OnlineSession>>,
 }
 
 impl ServerNode {
@@ -38,61 +31,6 @@ impl ServerNode {
             policy: self.federation.effective_policy.clone(),
             federation: self.federation.federation_outbox.clone(),
         }
-    }
-}
-
-impl MixPresenceRecoveryRoutes {
-    pub(crate) fn new(sessions: Arc<DashMap<String, OnlineSession>>) -> Self {
-        Self { sessions }
-    }
-}
-
-impl MixPresenceRoutes for MixPresenceRecoveryRoutes {
-    fn local_epochs(&self, participant: &str) -> Vec<(String, Uuid, u64)> {
-        session_entries_for_in(&self.sessions, participant)
-            .into_iter()
-            .map(|(full_jid, session)| {
-                (
-                    full_jid,
-                    session.connection_id,
-                    session.caps_observation_generation.load(Ordering::Acquire),
-                )
-            })
-            .collect()
-    }
-
-    fn gate(&self, full_jid: &str, connection_id: Uuid) -> Option<Arc<tokio::sync::Mutex<()>>> {
-        self.sessions
-            .get(full_jid)
-            .filter(|session| session.connection_id == connection_id)
-            .map(|session| Arc::clone(&session.mix_presence_gate))
-    }
-
-    fn epoch_state(
-        &self,
-        full_jid: &str,
-        expected_connection_id: Uuid,
-        expected_caps_generation: u64,
-        expected_gate: &Arc<tokio::sync::Mutex<()>>,
-        channel_jid: &str,
-    ) -> Option<(bool, bool)> {
-        self.sessions.get(full_jid).map(|session| {
-            (
-                mix_presence_epoch_is_current(
-                    session.connection_id,
-                    expected_connection_id,
-                    session.caps_observation_generation.load(Ordering::Acquire),
-                    expected_caps_generation,
-                    session.routable.load(Ordering::Acquire),
-                    session.available.load(Ordering::Acquire),
-                    Arc::ptr_eq(&session.mix_presence_gate, expected_gate),
-                ),
-                mix_presence_fallback_is_suppressed(
-                    &session.mix_presence_fallback_suppressed,
-                    channel_jid,
-                ),
-            )
-        })
     }
 }
 

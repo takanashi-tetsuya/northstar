@@ -131,6 +131,11 @@ pub trait MixLocalSession: Clone + Send + Sync + 'static {
     fn is_available(&self) -> bool;
 }
 
+/// The federation policy check for an already prepared MIX recipient domain.
+pub trait MixFederationPolicy: Send + Sync + 'static {
+    fn prepared_domain_allowed(&self, domain: &str) -> bool;
+}
+
 /// Delivery of one relayed MIX IQ response to a local or federated JID.
 pub trait MixIqRelayRoutePort: Send + Sync + 'static {
     fn deliver(&self, recipient: &str, stanza: String) -> impl Future<Output = ()> + Send;

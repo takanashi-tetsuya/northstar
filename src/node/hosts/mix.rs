@@ -72,15 +72,13 @@ impl MixHost for ServerNode {
     }
 
     fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability {
-        match northstar_stream::protocol::caps::verified_caps_has_any_feature(
-            self,
-            full_jid,
-            &[CORE_NS, PAM_NS],
-        ) {
-            Some(true) => MixSessionCapability::Supported,
-            Some(false) => MixSessionCapability::Unsupported,
-            None => MixSessionCapability::Unknown,
-        }
+        MixSessionCapability::from_verified_features(
+            northstar_stream::protocol::caps::verified_caps_has_any_feature(
+                self,
+                full_jid,
+                &[CORE_NS, PAM_NS],
+            ),
+        )
     }
 
     fn validate_routed_message(&self, root: Node<'_, '_>) -> Result<(), &'static str> {

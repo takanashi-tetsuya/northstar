@@ -1,5 +1,4 @@
 use super::*;
-use northstar_mix_xmpp::ports::MixPresenceRoutes;
 use northstar_session_application::RouteIncarnationSignal;
 use std::time::Instant;
 
@@ -45,79 +44,6 @@ fn session(user_id: uuid::Uuid, generation: i64, routable: bool) -> OnlineSessio
         last_activity: Arc::new(std::sync::RwLock::new(Instant::now())),
         disconnect: tokio_util::sync::CancellationToken::new(),
     }
-}
-
-#[tokio::test]
-async fn mix_recovery_rechecks_the_live_epoch_after_waiting_for_its_gate() {
-    let sessions = Arc::new(DashMap::new());
-    let full_jid = "alice@example.test/fixture";
-    let current = session(uuid::Uuid::new_v4(), 1, true);
-    current.available.store(true, Ordering::Release);
-    current
-        .caps_observation_generation
-        .store(7, Ordering::Release);
-    sessions.insert(full_jid.into(), current);
-    let routes = crate::node::adapters::mix_presence_recovery::MixPresenceRecoveryRoutes::new(
-        Arc::clone(&sessions),
-    );
-    let [(snapshot_jid, connection_id, generation)] = routes
-        .local_epochs("alice@example.test")
-        .try_into()
-        .unwrap();
-    assert_eq!(snapshot_jid, full_jid);
-    let gate = routes.gate(full_jid, connection_id).unwrap();
-    let held = Arc::clone(&gate).lock_owned().await;
-    let (waiting_tx, waiting_rx) = tokio::sync::oneshot::channel();
-    let recheck = tokio::spawn(async move {
-        let _ = waiting_tx.send(());
-        let _epoch = Arc::clone(&gate).lock_owned().await;
-        routes.epoch_state(
-            &snapshot_jid,
-            connection_id,
-            generation,
-            &gate,
-            "room@mix.example.test",
-        )
-    });
-    waiting_rx.await.unwrap();
-    sessions
-        .get(full_jid)
-        .unwrap()
-        .caps_observation_generation
-        .store(8, Ordering::Release);
-    drop(held);
-    assert_eq!(recheck.await.unwrap(), Some((false, false)));
-}
-
-#[test]
-fn mix_recovery_rejects_a_replaced_route_even_when_its_generation_matches() {
-    let sessions = Arc::new(DashMap::new());
-    let full_jid = "alice@example.test/fixture";
-    let old = session(uuid::Uuid::new_v4(), 1, true);
-    old.available.store(true, Ordering::Release);
-    sessions.insert(full_jid.into(), old);
-    let routes = crate::node::adapters::mix_presence_recovery::MixPresenceRecoveryRoutes::new(
-        Arc::clone(&sessions),
-    );
-    let [(snapshot_jid, connection_id, generation)] = routes
-        .local_epochs("alice@example.test")
-        .try_into()
-        .unwrap();
-    let old_gate = routes.gate(full_jid, connection_id).unwrap();
-    let replacement = session(uuid::Uuid::new_v4(), 1, true);
-    replacement.available.store(true, Ordering::Release);
-    sessions.insert(full_jid.into(), replacement);
-    assert!(routes.gate(full_jid, connection_id).is_none());
-    assert_eq!(
-        routes.epoch_state(
-            &snapshot_jid,
-            connection_id,
-            generation,
-            &old_gate,
-            "room@mix.example.test",
-        ),
-        Some((false, false)),
-    );
 }
 
 #[test]

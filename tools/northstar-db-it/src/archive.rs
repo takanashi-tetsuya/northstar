@@ -12,6 +12,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 mod history_identity_pg_tests;
+mod mam_guard_conformance;
 mod offline_queue_tests;
 
 /// Deliver queued offline messages without deleting a stanza until it has

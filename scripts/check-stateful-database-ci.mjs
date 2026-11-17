@@ -23,6 +23,7 @@ const expectedManifestEntries = [
   ['mix-jid-identity', 'MIX JID identity database', 480, 'mix-jid-identity-db-wsl.sh'],
   ['session-jid-identity', 'Session JID identity database', 480, 'session-jid-identity-db-wsl.sh'],
   ['profile-jid-identity', 'Profile JID identity database', 480, 'profile-jid-identity-db-wsl.sh'],
+  ['repository-conformance', 'Repository conformance database', 600, 'repository-conformance-db-wsl.sh'],
   ['abuse-reporting', 'Abuse reporting database', 600, 'abuse-reporting-db-wsl.sh'],
   ['abuse-key-deployment', 'Abuse key deployment database', 480, 'abuse-key-deployment-db-wsl.sh'],
   ['message-pow', 'Message PoW database', 600, 'message-pow-db-wsl.sh'],

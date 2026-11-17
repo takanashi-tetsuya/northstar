@@ -631,3 +631,5 @@ async fn registration_guard_consumes_v2_proof_with_marker_and_fences_old_worker(
     assert!(surviving_marker);
     pool.close().await;
 }
+
+mod conformance;

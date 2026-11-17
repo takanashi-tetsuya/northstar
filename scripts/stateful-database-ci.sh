@@ -34,6 +34,7 @@ case "$shard" in
       'mix-jid-identity|MIX JID identity database|480|mix-jid-identity-db-wsl.sh'
       'session-jid-identity|Session JID identity database|480|session-jid-identity-db-wsl.sh'
       'profile-jid-identity|Profile JID identity database|480|profile-jid-identity-db-wsl.sh'
+      'repository-conformance|Repository conformance database|600|repository-conformance-db-wsl.sh'
     )
     ;;
   abuse-delivery)

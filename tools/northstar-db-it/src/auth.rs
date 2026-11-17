@@ -6,4 +6,6 @@ mod account_revocations;
 mod fast;
 mod passkeys;
 mod password_change_repository;
+mod publication_conformance;
+mod recovery_poll_conformance;
 mod users;

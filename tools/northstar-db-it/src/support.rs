@@ -12,11 +12,15 @@ pub(crate) async fn operation_mutation_pool() -> sqlx::PgPool {
     let role = std::env::var("TEST_DATABASE_ROLE").ok();
     let expected_schema = std::env::var("TEST_DATABASE_SCHEMA")
         .expect("set TEST_DATABASE_SCHEMA to the isolated mutation fixture schema");
-    assert!(expected_schema
-        .strip_prefix("northstar_api_operations_it_")
-        .is_some_and(
-            |suffix| suffix.len() == 32 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
-        ));
+    // The API operations and repository conformance suites each create one random fixture schema.
+    assert!(
+        ["northstar_api_operations_it_", "northstar_conformance_it_"]
+            .iter()
+            .any(|prefix| expected_schema
+                .strip_prefix(prefix)
+                .is_some_and(|suffix| suffix.len() == 32
+                    && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())))
+    );
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(4)
         .after_connect(move |connection, _| {
@@ -47,4 +51,27 @@ pub(crate) async fn operation_mutation_pool() -> sqlx::PgPool {
         .connect(&url).await.unwrap();
     migrate(&pool).await.unwrap();
     pool
+}
+
+/// Wait for PostgreSQL, rather than the task scheduler, to attest that an
+/// operation reached a particular lock. The fixture role owns both sessions.
+pub(crate) async fn blocked_backend(pool: &sqlx::PgPool, blocker: i32) -> i32 {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let pid: Option<i32> = sqlx::query_scalar(
+                "SELECT pid FROM pg_stat_activity
+                 WHERE $1=ANY(pg_blocking_pids(pid)) ORDER BY pid LIMIT 1",
+            )
+            .bind(blocker)
+            .fetch_optional(pool)
+            .await
+            .unwrap();
+            if let Some(pid) = pid {
+                return pid;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("repository operation did not reach the database lock")
 }

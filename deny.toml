@@ -6,7 +6,15 @@
 all-features = true
 
 [advisories]
-ignore = []
+ignore = [
+    # Informational "unmaintained" notices, no vulnerability. chrono carries the
+    # timestamps of 51 workspace crates and SQLx's `chrono` feature; moving to
+    # `time` (already locked) is planned as its own stage.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; migration to time planned" },
+    # humantime is flagged only because it wraps chrono; object_store pulls it
+    # in and Northstar never calls it.
+    { id = "RUSTSEC-2026-0542", reason = "humantime unmaintained via chrono; object_store only" },
+]
 yanked = "deny"
 
 [licenses]

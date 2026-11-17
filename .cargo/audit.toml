@@ -7,7 +7,12 @@
 # so cargo-audit sees it even though it is not linked. Remove this exception if
 # SQLite support is ever enabled or SQLx moves to a patched `libsqlite3-sys`
 # (0.39 or later; SQLx 0.9.0 caps it below 0.38).
-ignore = ["RUSTSEC-2026-0459"]
+# RUSTSEC-2026-0543 (chrono) and RUSTSEC-2026-0542 (humantime, which wraps
+# chrono) are informational "unmaintained" notices with no vulnerability.
+# chrono carries the timestamps of 51 workspace crates and SQLx's `chrono`
+# feature, and humantime arrives only through object_store. Keep both until the
+# planned migration to `time` (already in Cargo.lock) removes chrono.
+ignore = ["RUSTSEC-2026-0459", "RUSTSEC-2026-0543", "RUSTSEC-2026-0542"]
 informational_warnings = ["unmaintained"]
 severity_threshold = "low"
 

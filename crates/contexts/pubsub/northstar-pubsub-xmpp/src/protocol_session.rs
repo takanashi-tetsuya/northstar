@@ -327,6 +327,16 @@ impl<H: SessionHost + PubSubSessionHost> VCardHandlers for ProtocolSession<H> {
 pub trait PubSubHandlers {
     async fn pubsub_iq_get(&self, id: &str, child: Node<'_, '_>) -> Result<Action>;
 
+    /// Normalize a missing IQ address before calling the addressed PubSub handler.
+    async fn pubsub_iq_set_with_optional_to(
+        &self,
+        id: &str,
+        child: Node<'_, '_>,
+        to: Option<&str>,
+    ) -> Result<Action> {
+        self.pubsub_iq_set(id, child, to.unwrap_or("")).await
+    }
+
     async fn pubsub_iq_set(&self, id: &str, child: Node<'_, '_>, _to: &str) -> Result<Action>;
 
     async fn pubsub_owner_get(&self, id: &str, child: Node<'_, '_>) -> Result<Action>;
@@ -461,3 +471,6 @@ impl<H: SessionHost + PubSubHost> PubSubHandlers for ProtocolSession<H> {
         Ok(Action::None)
     }
 }
+
+#[cfg(test)]
+mod tests;

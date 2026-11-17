@@ -242,10 +242,10 @@ impl IqRouteHost for ServerNode {
         request: IqRequest<'_>,
     ) -> Result<Action> {
         session
-            .pubsub_iq_set(
+            .pubsub_iq_set_with_optional_to(
                 request.id,
                 request.payload,
-                request.stanza.attribute("to").unwrap_or(""),
+                request.stanza.attribute("to"),
             )
             .await
     }

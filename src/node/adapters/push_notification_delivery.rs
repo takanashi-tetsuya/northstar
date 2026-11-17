@@ -9,16 +9,14 @@ use northstar_stream::local_routes::push_targets::deliver_to_best_local_resource
 
 impl ServerNode {
     pub(crate) async fn dispatch_push_notification(&self, recipient_id: uuid::Uuid) -> Result<()> {
-        if !self
-            .config
-            .xmpp_extension_enabled(northstar_xep_0357::XEP_ID)
-        {
-            return Ok(());
-        }
-        self.message
-            .push_service()
-            .dispatch_after_commit(recipient_id, self)
-            .await
+        northstar_message_xmpp::push_routing::dispatch_push_notification(
+            self.config
+                .xmpp_extension_enabled(northstar_xep_0357::XEP_ID),
+            self.message.push_service(),
+            recipient_id,
+            self,
+        )
+        .await
     }
 
     fn push_delivery_telemetry(

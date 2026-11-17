@@ -1,7 +1,23 @@
 //! Push notification IQ construction and routing.
 
-use northstar_message_application::push::{PushDelivery, PushNotificationCounts};
+use northstar_message_application::push::{
+    PushDelivery, PushNotificationCounts, PushNotificationRouter, PushRepository, PushService,
+};
 use std::future::Future;
+
+pub async fn dispatch_push_notification<R: PushRepository>(
+    enabled: bool,
+    push_service: &PushService<R>,
+    recipient_id: uuid::Uuid,
+    router: &impl PushNotificationRouter,
+) -> anyhow::Result<()> {
+    if !enabled {
+        return Ok(());
+    }
+    push_service
+        .dispatch_after_commit(recipient_id, router)
+        .await
+}
 
 /// Where a push notification can go, bound by the composition root.
 pub trait PushNotificationRoutes: Send + Sync {
@@ -66,8 +82,137 @@ pub async fn route_push_notification(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use northstar_message_application::push::{
+        PushBatch, PushEnableOutcome, PushResponseKind, PushResponseOutcome,
+    };
+    use std::sync::{Arc, Mutex};
     use uuid::Uuid;
+
+    struct FakePushRepository {
+        calls: Arc<Mutex<Vec<&'static str>>>,
+        claim_fails: bool,
+    }
+
+    impl PushRepository for FakePushRepository {
+        async fn enable(
+            &self,
+            _: Uuid,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> anyhow::Result<PushEnableOutcome> {
+            unreachable!()
+        }
+
+        async fn disable(&self, _: Uuid, _: &str, _: Option<&str>) -> anyhow::Result<u64> {
+            unreachable!()
+        }
+
+        async fn claim_batch(&self, user_id: Uuid) -> anyhow::Result<PushBatch> {
+            assert_eq!(user_id, Uuid::from_u128(545));
+            self.calls.lock().unwrap().push("claim");
+            if self.claim_fails {
+                anyhow::bail!("claim failed");
+            }
+            Ok(PushBatch {
+                message_count: 7,
+                pending_subscription_count: 3,
+                deliveries: vec![delivery("push@example.test")],
+            })
+        }
+
+        async fn mark_unroutable(&self, _: Uuid) -> anyhow::Result<()> {
+            unreachable!()
+        }
+
+        async fn complete_response(
+            &self,
+            _: Uuid,
+            _: &str,
+            _: PushResponseKind,
+        ) -> anyhow::Result<PushResponseOutcome> {
+            unreachable!()
+        }
+
+        async fn disable_from_service(&self, _: &str, _: &str, _: &str) -> anyhow::Result<bool> {
+            unreachable!()
+        }
+    }
+
+    struct RecordingPushRouter {
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl PushNotificationRouter for RecordingPushRouter {
+        async fn route(
+            &self,
+            delivery: &PushDelivery,
+            counts: PushNotificationCounts,
+        ) -> anyhow::Result<bool> {
+            assert_eq!(delivery.request_id, Uuid::from_u128(523));
+            assert_eq!(delivery.service_jid, "push@example.test");
+            assert_eq!(counts.message_count, 7);
+            assert_eq!(counts.pending_subscription_count, 3);
+            self.calls.lock().unwrap().push("route");
+            Ok(true)
+        }
+
+        fn routed(&self) {
+            self.calls.lock().unwrap().push("routed");
+        }
+
+        fn failed(&self) {
+            unreachable!()
+        }
+
+        fn attempted(&self) {
+            self.calls.lock().unwrap().push("attempted");
+        }
+    }
+
+    #[tokio::test]
+    async fn disabled_push_dispatches_nothing() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let service = PushService::new(FakePushRepository {
+            calls: Arc::clone(&calls),
+            claim_fails: true,
+        });
+        let router = RecordingPushRouter {
+            calls: Arc::clone(&calls),
+        };
+
+        dispatch_push_notification(false, &service, Uuid::from_u128(545), &router)
+            .await
+            .unwrap();
+        assert!(calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn enabled_push_dispatches_once() {
+        for claim_fails in [false, true] {
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let service = PushService::new(FakePushRepository {
+                calls: Arc::clone(&calls),
+                claim_fails,
+            });
+            let router = RecordingPushRouter {
+                calls: Arc::clone(&calls),
+            };
+
+            let result =
+                dispatch_push_notification(true, &service, Uuid::from_u128(545), &router).await;
+            if claim_fails {
+                assert_eq!(result.unwrap_err().to_string(), "claim failed");
+                assert_eq!(*calls.lock().unwrap(), vec!["claim"]);
+            } else {
+                result.unwrap();
+                assert_eq!(
+                    *calls.lock().unwrap(),
+                    vec!["claim", "route", "routed", "attempted"]
+                );
+            }
+        }
+    }
 
     #[derive(Debug, Eq, PartialEq)]
     enum Call {

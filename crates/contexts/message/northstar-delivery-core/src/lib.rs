@@ -212,6 +212,9 @@ pub fn recipient_delivery_identity(
 }
 
 #[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -732,4 +732,63 @@ mod tests {
             assert_ne!(disposition, AckDisposition::Deleted);
         }
     }
+
+    #[test]
+    fn ack_commit_binds_before_poll_and_retains_only_a_successful_receipt() {
+        for (label, result) in [
+            ("cancelled", None),
+            ("reply_lost", Some(Err("commit reply lost"))),
+            ("committed", Some(Ok(()))),
+        ] {
+            let (observation, request) = request();
+            let fact = AckFact {
+                source: fenced(),
+                disposition: AckDisposition::Deleted,
+            };
+            let control = crate::test_support::CommitControl::default();
+            let commit = control.future(|| {
+                assert_eq!(
+                    observation.snapshot().ack,
+                    AckKnowledge::CommitCallEntered(fact),
+                    "{label}"
+                );
+            });
+            let mut future = Box::pin(commit_observed(commit, &request, fact.disposition));
+            assert_eq!(observation.snapshot().ack, AckKnowledge::NoCommitRequested);
+            assert!(poll_once(future.as_mut()).is_pending(), "{label}");
+            if let Some(result) = result {
+                control.result.set(Some(result));
+                match (poll_once(future.as_mut()), result) {
+                    (Poll::Ready(Ok(())), Ok(())) => {}
+                    (Poll::Ready(Err(CommitError::Repository(error))), Err(expected)) => {
+                        assert_eq!(error, expected, "{label}");
+                    }
+                    _ => panic!("unexpected commit result: {label}"),
+                }
+            }
+            drop(future);
+            assert_eq!(
+                *control.events.borrow(),
+                if result.is_some() {
+                    vec!["poll", "poll", "drop"]
+                } else {
+                    vec!["poll", "drop"]
+                },
+                "{label}"
+            );
+            assert_eq!(
+                observation.snapshot().ack,
+                if result == Some(Ok(())) {
+                    AckKnowledge::ReceiptKnown(fact)
+                } else {
+                    AckKnowledge::CommitCallEntered(fact)
+                },
+                "{label}"
+            );
+            assert_eq!(observation.snapshot().ack_returned, None, "{label}");
+            request.returned(false);
+            observation.retire(Terminal::Cancelled);
+            assert_eq!(observation.snapshot().ack_returned, Some(false), "{label}");
+        }
+    }
 }

@@ -1571,6 +1571,226 @@ mod tests {
     }
 
     #[test]
+    fn response_commits_bind_before_poll_and_keep_exact_receipts_on_success_only() {
+        for kind in ["bind", "renew", "ack"] {
+            for (cut, result) in [
+                ("cancelled", None),
+                ("reply_lost", Some(Err("response commit reply lost"))),
+                ("committed", Some(Ok(()))),
+                ("retired", None),
+            ] {
+                let operation = operation();
+                let control = crate::test_support::CommitControl::default();
+                let commit = control.future(|| {
+                    assert_ne!(cut, "retired", "{kind} must reject before polling");
+                    let snapshot = operation.snapshot();
+                    match kind {
+                        "bind" => assert_eq!(
+                            snapshot.responses[0].attempts[0].knowledge,
+                            BindKnowledge::CommitCallEntered(Arc::new(ownership())),
+                            "{kind}/{cut}"
+                        ),
+                        "renew" => assert_eq!(
+                            snapshot.renewals[0].knowledge,
+                            Knowledge::CommitCallEntered,
+                            "{kind}/{cut}"
+                        ),
+                        "ack" => {
+                            assert_eq!(
+                                snapshot.acknowledgements[0].knowledge,
+                                Knowledge::CommitCallEntered,
+                                "{kind}/{cut}"
+                            );
+                            assert_eq!(
+                                snapshot.acknowledgements[0].deleted.as_deref(),
+                                Some(&deleted()),
+                                "{kind}/{cut}"
+                            );
+                        }
+                        _ => unreachable!(),
+                    }
+                });
+                let mut future = Box::pin(async {
+                    match kind {
+                        "bind" => {
+                            let request = bind(&operation);
+                            if cut == "retired" {
+                                operation.retire(Terminal::Cancelled);
+                            }
+                            bind_commit_observed(commit, &request, ownership()).await
+                        }
+                        "renew" => {
+                            let request = operation.begin_renew(None).unwrap();
+                            if cut == "retired" {
+                                operation.retire(Terminal::Cancelled);
+                            }
+                            renew_commit_observed(commit, &request).await
+                        }
+                        "ack" => {
+                            let request = ack(&operation);
+                            if cut == "retired" {
+                                operation.retire(Terminal::Cancelled);
+                            }
+                            ack_commit_observed(commit, &request, deleted()).await
+                        }
+                        _ => unreachable!(),
+                    }
+                });
+                let first = poll_once(future.as_mut());
+                if cut == "retired" {
+                    assert!(
+                        matches!(
+                            first,
+                            Poll::Ready(Err(CompletionError::Binding(Rejected::Retired)))
+                        ),
+                        "{kind}/{cut}"
+                    );
+                } else {
+                    assert!(first.is_pending(), "{kind}/{cut}");
+                    if let Some(result) = result {
+                        control.result.set(Some(result));
+                        match (poll_once(future.as_mut()), result) {
+                            (Poll::Ready(Ok(())), Ok(())) => {}
+                            (
+                                Poll::Ready(Err(CompletionError::Repository(error))),
+                                Err(expected),
+                            ) => {
+                                assert_eq!(error, expected, "{kind}/{cut}");
+                            }
+                            _ => panic!("unexpected response result: {kind}/{cut}"),
+                        }
+                    }
+                }
+                drop(future);
+                assert_eq!(
+                    *control.events.borrow(),
+                    if cut == "retired" {
+                        vec!["drop"]
+                    } else if result.is_some() {
+                        vec!["poll", "poll", "drop"]
+                    } else {
+                        vec!["poll", "drop"]
+                    },
+                    "{kind}/{cut}"
+                );
+                let snapshot = operation.snapshot();
+                let expected = if cut == "retired" {
+                    Knowledge::NoCommitRequested
+                } else if result == Some(Ok(())) {
+                    Knowledge::ReceiptKnown
+                } else {
+                    Knowledge::CommitCallEntered
+                };
+                match kind {
+                    "bind" => {
+                        let expected = match expected {
+                            Knowledge::NoCommitRequested => BindKnowledge::NoCommitRequested,
+                            Knowledge::CommitCallEntered => {
+                                BindKnowledge::CommitCallEntered(Arc::new(ownership()))
+                            }
+                            Knowledge::ReceiptKnown => {
+                                BindKnowledge::ReceiptKnown(Arc::new(ownership()))
+                            }
+                        };
+                        let attempt = &snapshot.responses[0].attempts[0];
+                        assert_eq!(attempt.knowledge, expected, "{kind}/{cut}");
+                        assert_eq!(attempt.returned, None, "{kind}/{cut}");
+                    }
+                    "renew" => {
+                        assert_eq!(snapshot.renewals[0].knowledge, expected, "{kind}/{cut}");
+                        assert!(!snapshot.renewals[0].returned, "{kind}/{cut}");
+                    }
+                    "ack" => {
+                        assert_eq!(
+                            snapshot.acknowledgements[0].knowledge, expected,
+                            "{kind}/{cut}"
+                        );
+                        assert!(!snapshot.acknowledgements[0].returned, "{kind}/{cut}");
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(
+                    !snapshot
+                        .responses
+                        .iter()
+                        .any(|response| response.exposure_entered),
+                    "{kind}/{cut}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn exposure_requires_its_matching_returned_bind_and_rejects_reuse() {
+        for (label, committed, returned, restored) in [
+            ("receipt_without_return", true, false, false),
+            ("return_without_receipt", false, true, false),
+            ("restored_selection", true, true, true),
+            ("matched_selection", true, true, false),
+        ] {
+            let operation = operation();
+            let request = bind(&operation);
+            if committed {
+                request.enter_commit(ownership()).unwrap().received();
+            }
+            // Deliberately corrupt a private continuation to exercise the
+            // exposure guard even when a caller could not obtain it normally.
+            if returned {
+                let result = request.returned(ownership());
+                if !committed {
+                    assert!(matches!(result, Err(Rejected::Receipt)), "{label}");
+                    assert!(
+                        !operation.snapshot().responses[0].exposure_entered,
+                        "{label}"
+                    );
+                    continue;
+                }
+                let bound = result.unwrap();
+                if restored {
+                    operation.0.lock().unwrap().responses[0].attempts[0].restored = true;
+                }
+                let duplicate = BoundResponse {
+                    request: BindRequest {
+                        operation: bound.request.operation.clone(),
+                        response: bound.request.response,
+                        attempt: bound.request.attempt,
+                        scope: bound.request.scope,
+                        rid: bound.request.rid,
+                        sources: bound.request.sources.clone(),
+                    },
+                    ownership: bound.ownership.clone(),
+                };
+                if restored {
+                    assert!(
+                        matches!(bound.begin_exposure(), Err(Rejected::Receipt)),
+                        "{label}"
+                    );
+                } else {
+                    bound.begin_exposure().unwrap();
+                    assert!(
+                        matches!(duplicate.begin_exposure(), Err(Rejected::State)),
+                        "{label}"
+                    );
+                }
+            } else {
+                let bound = BoundResponse {
+                    request,
+                    ownership: Arc::new(ownership()),
+                };
+                assert!(
+                    matches!(bound.begin_exposure(), Err(Rejected::Receipt)),
+                    "{label}"
+                );
+            }
+            assert_eq!(
+                operation.snapshot().responses[0].exposure_entered,
+                !restored && returned,
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
     fn response_request_snapshot_and_summary_debug_redact_retained_tokens() {
         let operation = operation();
         let request = bind(&operation);

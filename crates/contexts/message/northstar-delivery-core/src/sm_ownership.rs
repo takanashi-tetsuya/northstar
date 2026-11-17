@@ -844,6 +844,102 @@ mod tests {
         ));
     }
     #[test]
+    fn persistence_binds_before_poll_and_restoration_requires_active_no_commit() {
+        let unbound = Observation::new(scope(true));
+        assert!(!unbound.may_restore_superseded());
+        for (operation, rollback) in [("commit", false), ("rollback", true)] {
+            for (cut, result) in [
+                ("cancelled", None),
+                ("reply_lost", Some(Err("persistence reply lost"))),
+                ("completed", Some(Ok(()))),
+            ] {
+                let (observation, request) = request(true);
+                let entered = if rollback {
+                    Knowledge::RollbackCallEntered
+                } else {
+                    Knowledge::CommitCallEntered(Arc::new(checkpoint()))
+                };
+                let control = crate::test_support::CommitControl::default();
+                let commit = control.future(|| {
+                    assert_eq!(
+                        observation.snapshot().knowledge,
+                        entered,
+                        "{operation}/{cut}"
+                    );
+                    assert!(!observation.may_restore_superseded(), "{operation}/{cut}");
+                });
+                let mut future = Box::pin(async {
+                    if rollback {
+                        rollback_observed(commit, &request).await
+                    } else {
+                        commit_observed(commit, &request, checkpoint()).await
+                    }
+                });
+                assert!(observation.may_restore_superseded(), "{operation}/{cut}");
+                assert!(poll_once(future.as_mut()).is_pending(), "{operation}/{cut}");
+                if let Some(result) = result {
+                    control.result.set(Some(result));
+                    match (poll_once(future.as_mut()), result) {
+                        (Poll::Ready(Ok(())), Ok(())) => {}
+                        (Poll::Ready(Err(CompletionError::Repository(error))), Err(expected)) => {
+                            assert_eq!(error, expected, "{operation}/{cut}");
+                        }
+                        _ => panic!("unexpected persistence result: {operation}/{cut}"),
+                    }
+                }
+                drop(future);
+                assert_eq!(
+                    *control.events.borrow(),
+                    if result.is_some() {
+                        vec!["poll", "poll", "drop"]
+                    } else {
+                        vec!["poll", "drop"]
+                    },
+                    "{operation}/{cut}"
+                );
+                let expected = if result == Some(Ok(())) {
+                    if rollback {
+                        Knowledge::RollbackKnown
+                    } else {
+                        Knowledge::ReceiptKnown(Arc::new(checkpoint()))
+                    }
+                } else {
+                    entered
+                };
+                assert_eq!(
+                    observation.snapshot().knowledge,
+                    expected,
+                    "{operation}/{cut}"
+                );
+                assert!(!observation.may_restore_superseded(), "{operation}/{cut}");
+                observation.retire(Terminal::Cancelled);
+                assert!(!observation.may_restore_superseded(), "{operation}/{cut}");
+            }
+
+            let (observation, request) = request(true);
+            observation.retire(Terminal::Cancelled);
+            assert!(!observation.may_restore_superseded(), "retired/{operation}");
+            let before = observation.snapshot();
+            let control = crate::test_support::CommitControl::default();
+            let commit = control.future(|| panic!("retired {operation} must not poll persistence"));
+            let mut future = Box::pin(async {
+                if rollback {
+                    rollback_observed(commit, &request).await
+                } else {
+                    commit_observed(commit, &request, checkpoint()).await
+                }
+            });
+            assert!(matches!(
+                poll_once(future.as_mut()),
+                Poll::Ready(Err(CompletionError::Binding(Rejected::Retired)))
+            ));
+            drop(future);
+            assert_eq!(*control.events.borrow(), ["drop"], "retired/{operation}");
+            assert_eq!(observation.snapshot(), before, "retired/{operation}");
+        }
+    }
+
+    #[test]
     fn snapshot_and_owner_debug_redact_exact_claim_and_lease_tokens() {
         let observation = Observation::new(scope(true));
         observation.h_decision(Some(1));

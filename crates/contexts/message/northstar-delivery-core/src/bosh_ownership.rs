@@ -762,6 +762,71 @@ mod tests {
         assert_eq!(operation.retire(Terminal::Cancelled), summary);
     }
     #[test]
+    fn transfer_commit_records_entry_before_poll_and_receipt_before_return() {
+        for (label, result) in [
+            ("cancelled", None),
+            ("reply_lost", Some(Err("transfer reply lost"))),
+            ("committed", Some(Ok(()))),
+        ] {
+            let operation = operation();
+            let request = operation.begin_transfer(old()).unwrap();
+            let control = crate::test_support::CommitControl::default();
+            let commit = control.future(|| {
+                assert_eq!(
+                    operation.snapshot().transfers[0].knowledge,
+                    TransferKnowledge::CommitCallEntered(current()),
+                    "{label}"
+                );
+            });
+            let mut future = Box::pin(transfer_commit_observed(commit, &request, current()));
+            assert_eq!(
+                operation.snapshot().transfers[0].knowledge,
+                TransferKnowledge::NoCommitRequested
+            );
+            assert!(poll_once(future.as_mut()).is_pending(), "{label}");
+            if let Some(result) = result {
+                control.result.set(Some(result));
+                match (poll_once(future.as_mut()), result) {
+                    (Poll::Ready(Ok(())), Ok(())) => {}
+                    (Poll::Ready(Err(CompletionError::Repository(error))), Err(expected)) => {
+                        assert_eq!(error, expected, "{label}");
+                    }
+                    _ => panic!("unexpected transfer result: {label}"),
+                }
+            }
+            drop(future);
+            assert_eq!(
+                *control.events.borrow(),
+                if result.is_some() {
+                    vec!["poll", "poll", "drop"]
+                } else {
+                    vec!["poll", "drop"]
+                },
+                "{label}"
+            );
+            assert_eq!(
+                operation.snapshot().transfers[0].knowledge,
+                if result == Some(Ok(())) {
+                    TransferKnowledge::ReceiptKnown(current())
+                } else {
+                    TransferKnowledge::CommitCallEntered(current())
+                },
+                "{label}"
+            );
+            assert_eq!(operation.snapshot().transfers[0].returned_source, None);
+            if result == Some(Ok(())) {
+                let local = request.returned(current()).unwrap().begin_local().unwrap();
+                assert_eq!(local.current(), current(), "{label}");
+            } else {
+                assert!(matches!(
+                    request.returned(current()),
+                    Err(Rejected::Receipt)
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn debug_redacts_retained_original_committed_and_mismatched_return_tokens() {
         let operation = operation();
         let request = operation.begin_transfer(old()).unwrap();

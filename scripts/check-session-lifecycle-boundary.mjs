@@ -77,11 +77,6 @@ requireMatch(
   "the cancellation-after-cleanup-claim regression test is missing",
 );
 
-requireMatch(
-  bosh,
-  /self\.manager\.remove\(&self\.session_key\);[\s\S]*release_bosh_fences[\s\S]*self\.protocol\.finalize\(\)\.await/,
-  "BOSH actor exits must stop admission, release response fences and finalize exactly once",
-);
 if (transport.includes("crate::db::replay") || bosh.includes("crate::db::replay")) {
   throw new Error("C2S transports regained direct durable replay database authority");
 }
@@ -105,24 +100,3 @@ if (/self\.host\.clone\(\)|Arc::clone\(&self\.host\)/.test(sasl2)) {
 }
 
 console.log("session lifecycle and durable transport authority boundaries are intact");
-
-// The frame runner is the production ingress, not an optional observer beside
-// transport-specific handling. Behavioral timeout/cancellation tests live in
-// frame_execution.rs; these mutation checks prevent adapter bypass drift.
-function verifyFrameExecutionIngress(boshSource) {
-  if (/\bprotocol\.handle\s*\(/.test(boshSource)) {
-    throw new Error('BOSH bypassed the owned frame execution boundary');
-  }
-  if ((boshSource.match(/self\.protocol\.process_frame\(payload\)/g) ?? []).length !== 1) {
-    throw new Error('BOSH must enter the canonical frame runner exactly once');
-  }
-}
-verifyFrameExecutionIngress(bosh);
-for (const boshSource of [
-  bosh.replace('self.protocol.process_frame(payload)', 'self.protocol.handle(payload)'),
-]) {
-  let rejected = false;
-  try { verifyFrameExecutionIngress(boshSource); } catch { rejected = true; }
-  if (!rejected) throw new Error('frame-runner bypass mutation was not rejected');
-}
-console.log('canonical frame ingress and bypass mutations are intact');

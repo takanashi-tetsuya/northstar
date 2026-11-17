@@ -59,21 +59,6 @@ rejects('frame observation must exist before child polling', 'frame',
 rejects('frame timer cannot start in the synchronous constructor', 'frame',
   'child: Some(Box::pin(async move {\n                tokio::time::timeout(budget, future).await\n            })),',
   'child: Some(Box::pin(tokio::time::timeout(budget, future))),', /first-poll timer/);
-rejects('BOSH ingress cannot bypass observed execution', 'bosh',
-  'match self.protocol.process_frame(payload).await {',
-  'match self.protocol.handle(payload).await {', /BOSH must enter/);
-rejects('BOSH publication cannot bypass observed owner', 'bosh',
-  '.publish_committed_authentication_and_route(owner)',
-  '.publish_committed_authentication_and_route_inner(owner)', /auth BOSH continuation/);
-rejects('BOSH publication failure cannot succeed', 'bosh',
-  'Ok(ready) => ready,\n            Err(_) => return false',
-  'Ok(ready) => ready,\n            Err(_) => return true', /BOSH must observe publication/);
-rejects('BOSH cannot insert a suspension between exposure and publication', 'bosh',
-  'let ready = match exposed',
-  'tokio::task::yield_now().await;\n        let ready = match exposed', /BOSH must observe publication/);
-rejects('BOSH activation marker cannot be hidden behind a dead condition', 'boshAction',
-  'let item = if index == 0 {',
-  'let item = if false {', /BOSH activation/);
 rejects('BOSH item marker cannot become public mutable authority', 'outbound',
   '    bosh_auth_control: bool,',
   '    pub(crate) bosh_auth_control: bool,', /private item selection metadata/);

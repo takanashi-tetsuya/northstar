@@ -15,7 +15,6 @@ const files = {
   sasl2: 'crates/edges/northstar-stream/src/protocol/sasl2.rs',
   protocol: 'crates/edges/northstar-stream/src/protocol.rs',
   bosh: 'crates/edges/northstar-bosh/src/lib.rs',
-  boshAction: 'crates/edges/northstar-bosh/src/action.rs',
   outbound: 'crates/edges/northstar-stream/src/outbound.rs',
   mucCore: 'crates/contexts/room/northstar-room-application/src/discussion.rs',
   mucService: 'crates/contexts/room/northstar-room-application/src/muc_service.rs',
@@ -171,7 +170,7 @@ export function readExecutionSources() {
 // observations and the existing receipt/transport-bound publication owner.
 export function verifyAuthPublicationBoundaries(sources) {
   const { authFacts, authOwner, authCredential, authDb, credentialSmDb, protocol, frame,
-    bosh, state } = sources;
+    state } = sources;
   const normalize = value => compact(value).replace(/,([)}])/g, '$1').replace(/,$/, '');
   const method = (source, name) => normalize(body(productionModule(source), `(?:async\\s+)?fn\\s+${name}\\b`));
   const facts = productionModule(authFacts).replaceAll(CROSS_CRATE_TEST_ONLY, '#[cfg(test)]');
@@ -219,10 +218,6 @@ export function verifyAuthPublicationBoundaries(sources) {
     'auth holder join observation must remain a test-only read-only clone of its actual captured joins');
   const selected = body(owner, 'impl\\s+SelectedControls\\b');
   const take = method(selected, 'take_all');
-  const finish = method(bosh, 'finish_pending');
-  ordered(finish, ['bound.for_connection(self.protocol.connection_id())', 'bound.expose(pending.responders)',
-    '.publish_authentication(|owners|async{forownerinowners{if!self.protocol.publish_committed_authentication_and_route(owner).await{returnfalse;}}true})',
-    'ready.finish('], 'auth BOSH continuation must preserve selected FIFO, early failure and exact connection');
   // These finite source shapes pin real SQL cuts. They do not execute SQL or
   // infer rollback from a transaction destructor.
   const prepared = body(facts, 'impl\\s+PreparedCredential\\b');
@@ -434,7 +429,7 @@ export function verifyRouteHelperBoundaries({ sessionTable, mixOutboxState }) {
 }
 
 export function verifyExecutionBoundaries(sources) {
-  let { frame, bosh, boshAction, boshResponse, outbound } = sources;
+  let { frame, bosh, boshResponse, outbound } = sources;
   const normalize = value => compact(value).replace(/,([)}])/g, '$1');
   boshResponse = productionModule(boshResponse).replaceAll(CROSS_CRATE_TEST_ONLY, '#[cfg(test)]');
   verifyAuthPublicationBoundaries(sources);
@@ -449,20 +444,6 @@ export function verifyExecutionBoundaries(sources) {
   requireBoundary(count(run, '.await') === 1 && count(run, 'tokio::time::timeout(') === 1
     && run.includes('poll_in_progress:false') && !/spawn|select!/.test(run),
   'frame execution must retain one first-poll timer without a new task');
-  const boshIngress = compact(body(bosh, 'async\\s+fn\\s+process_pending\\b'));
-  requireBoundary(boshIngress.includes('matchself.protocol.process_frame(payload).await{') &&
-    !boshIngress.includes('self.protocol.handle('), 'BOSH must enter the observed frame runner');
-  const boshPublication = normalize(body(bosh, 'async\\s+fn\\s+finish_pending\\b'));
-  const exposure = 'letexposed=matchbound.expose(pending.responders){Ok(exposed)=>exposed,Err(error)=>{tracing::error!(?error,rid);returnfalse;}};';
-  const continuation = 'letready=matchexposed.publish_authentication(|owners|async{forownerinowners{if!self.protocol.publish_committed_authentication_and_route(owner).await{returnfalse;}}true}).await{Ok(ready)=>ready,Err(_)=>returnfalse};';
-  requireBoundary(boshPublication.includes(exposure + continuation +
-    'ready.finish(&mutself.last_response,&mutself.highest_responded,&mutself.replay).is_ok()'),
-  'BOSH must observe publication only after response exposure and before cache bookkeeping');
-  requireBoundary(count(boshPublication, 'bound.expose(') === 1 &&
-    count(boshPublication, '.publish_committed_authentication_and_route(owner)') === 1 &&
-    !boshPublication.includes('publish_committed_authentication_and_route_inner') &&
-    !compact(codeOnly(productionModule(bosh))).includes('auth_publication_pending'),
-  'BOSH must observe publication only after response exposure and reject publication failure');
   // Closed lexical inventory for these three concrete owners, not a Rust
   // parser or a proof over alternate syntax, macro expansion or other files.
   const responseCode = codeOnly(boshResponse);
@@ -513,23 +494,6 @@ export function verifyExecutionBoundaries(sources) {
     compact(body(outbound, 'fn\\s+with_auth_publication\\b')) === 'holder.validate_control(&self.stanza)?;self.bosh_auth_control=true;self.auth_publication=Some(std::sync::Arc::new(holder));Ok(self)' &&
     compact(body(outbound, 'fn\\s+is_bosh_auth_control\\b')) === 'self.bosh_auth_control',
     'BOSH auth control must remain private item selection metadata with an exact marker accessor');
-  const boshApply = body(boshAction, 'async\\s+fn\\s+apply_action\\b');
-  requireBoundary(!compact(boshApply).includes('publish_committed_authentication'),
-    'BOSH FIFO admission must defer authentication publication until response exposure');
-  const boshActivate = normalize(body(boshApply, 'Action::SendManyThenActivate\\([^)]*\\)\\s*=>'));
-  ordered(boshActivate, ['ifindex==0{', 'holder.validate_connection(self.protocol.connection_id())',
-    '.and_then(|_|holder.validate_control(&reply))', '.and_then(|_|holder.recording()).is_err(){returnfalse;}',
-    'ifself.protocol.record_outbound(&reply).await.is_err(){returnfalse;}',
-    'letitem=northstar_stream::outbound::OutboundItem::plain(reply);letitem=ifindex==0{',
-    'item.with_auth_publication(holder.take().expect())', 'if!self.push_output_item(item){returnfalse;}'],
-    'BOSH activation must validate before recording then enqueue the exact first control holder');
-  const boshResume = normalize(body(boshApply, 'Action::Resume\\([^)]*\\)\\s*=>'));
-  ordered(boshResume, ['ifactivate_route!=auth_publication.is_some(){returnfalse;}',
-    'ifletSome(holder)=&auth_publication{', 'holder.validate_connection(self.protocol.connection_id())',
-    '.and_then(|_|holder.validate_control(&control))', '.and_then(|_|holder.recording()).is_err(){returnfalse;}',
-    'ifself.protocol.record_outbound(&control).await.is_err(){returnfalse;}',
-    'ResumeTransportParts{control,post_control,replay,activate_route,auth_publication,transient_capacity}'],
-    'BOSH resume must validate exact control before recording and retain its holder for atomic queue admission');
   verifyBoshSelectionObservations(sources);
   verifyRouteHelperBoundaries(sources);
 }

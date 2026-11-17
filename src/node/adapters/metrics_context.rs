@@ -45,7 +45,7 @@ impl northstar_http::contexts::metrics::SmRecoveryGauges for SmRecoveryMetricsPr
 impl ServerNode {
     pub(crate) fn metrics_context(&self) -> MetricsContext {
         MetricsContext {
-            bearer_token: self.metrics_bearer_token.clone(),
+            bearer_token: self.http.metrics_bearer_token().cloned(),
             persistence: self.operations.metrics_snapshot_service.clone(),
             registry: MetricsRenderProbe {
                 registry: Arc::clone(&self.metrics),

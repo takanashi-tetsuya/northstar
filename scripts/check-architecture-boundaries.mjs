@@ -267,6 +267,7 @@ const listenerStressDriver = read('scripts/listener-readiness-stress-wsl.sh');
 const loopbackPostgresFixture = read('scripts/loopback-postgres-ci.sh');
 const ciWorkflow = read('.github/workflows/ci.yml');
 const appState = rustItemBody(state, 'pub struct ServerNode');
+const httpModule = rustItemBody(read('src/node/modules/http.rs'), 'pub(in crate::node) struct HttpModule');
 const publicFields = countMatches(appState, /^\s*pub\s+[A-Za-z_][A-Za-z0-9_]*\s*:/gm);
 const cratePublicFields = countMatches(appState, /^\s*pub\(crate\)\s+[A-Za-z_][A-Za-z0-9_]*\s*:/gm);
 const publicFieldNames = [
@@ -974,10 +975,15 @@ if (!/credential\s*\.\s*secret_sha256\s*\.\s*zeroize\s*\(/.test(takeComponentCre
 }
 if (
   /^\s*pub(?:\(crate\))?\s+[A-Za-z_][A-Za-z0-9_]*(?:secret|token|credential|keyring)[A-Za-z0-9_]*\s*:/gim.test(
-    appState,
+    `${appState}\n${httpModule}`,
   )
 ) {
   throw new Error('ServerNode exposes a runtime secret/token/credential capability as a field');
+}
+for (const field of ['metrics_bearer_token', 'web_admin_gateway_token']) {
+  if (!new RegExp(`^\\s*${field}\\s*:\\s*Option<Arc<Zeroizing<String>>>\\s*,`, 'm').test(httpModule)) {
+    throw new Error('ServerNode exposes a runtime secret/token/credential capability as a field');
+  }
 }
 
 // The context ports' impls for the session and the context glue moved to the contexts' -xmpp crates. Each

@@ -79,18 +79,15 @@ impl C2sHost for ServerNode {
 
 impl WebSocketHost for ServerNode {
     fn public_url(&self) -> &str {
-        &self.public_discovery_context.policy().public_url
+        &self.http.discovery().policy().public_url
     }
 
     fn trusted_proxy_ips(&self) -> &[IpAddr] {
-        &self.public_discovery_context.policy().trusted_proxy_ips
+        &self.http.discovery().policy().trusted_proxy_ips
     }
 
     fn websocket_allowed_origins(&self) -> &[String] {
-        &self
-            .public_discovery_context
-            .policy()
-            .websocket_allowed_origins
+        &self.http.discovery().policy().websocket_allowed_origins
     }
 
     fn client_ip(&self, peer_ip: IpAddr, headers: &HeaderMap) -> IpAddr {

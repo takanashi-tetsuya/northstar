@@ -580,7 +580,6 @@ impl ServerNode {
         });
         let state = Arc::new(Self {
             config,
-            public_discovery_context,
             pubsub,
             room,
             roster,
@@ -591,11 +590,14 @@ impl ServerNode {
             pool,
             cluster,
             metrics,
-            metrics_bearer_token,
-            web_admin_gateway_token,
             durable_outbox_database_admission,
             upload,
-            http_body_admission: Arc::new(http_body_admission::HttpBodyAdmission::default()),
+            http: HttpModule::new(
+                public_discovery_context,
+                Arc::new(http_body_admission::HttpBodyAdmission::default()),
+                metrics_bearer_token,
+                web_admin_gateway_token,
+            ),
             auth,
             operations,
             abuse: AbuseModule::new(&abuse, abuse_key_deployment),

@@ -57,6 +57,7 @@ use self::modules::abuse::*;
 use self::modules::archive::*;
 use self::modules::auth::*;
 use self::modules::federation::*;
+use self::modules::http::*;
 use self::modules::message::*;
 use self::modules::operations::*;
 use self::modules::pubsub::*;
@@ -124,18 +125,12 @@ pub struct ServerNode {
     federation: FederationModule,
     /// The session context; see [`SessionModule`].
     session: SessionModule,
-    public_discovery_context: PublicDiscoveryContext,
+    /// The HTTP context; see [`HttpModule`].
+    http: HttpModule,
     /// The archive context; see [`ArchiveModule`].
     archive: ArchiveModule,
-    http_body_admission: Arc<http_body_admission::HttpBodyAdmission>,
     cluster: northstar_cluster::ClusterManager,
     metrics: Arc<Metrics>,
-    /// Optional credential for the dedicated observability listener. Callers
-    /// can ask for an authorization decision but cannot read the token.
-    metrics_bearer_token: Option<Arc<Zeroizing<String>>>,
-    /// Reverse-proxy credential for the isolated administration origin. The
-    /// API can ask for a constant-time decision but cannot read key bytes.
-    web_admin_gateway_token: Option<Arc<Zeroizing<String>>>,
     /// Clone-shared permission for short MIX, PubSub and clustered-MUC
     /// durable-outbox database turns. It preserves a primary-pool foreground
     /// reserve without giving protocol handlers raw pool access.

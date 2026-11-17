@@ -4,6 +4,7 @@ pub(in crate::node) mod abuse;
 pub(in crate::node) mod archive;
 pub(in crate::node) mod auth;
 pub(in crate::node) mod federation;
+pub(in crate::node) mod http;
 pub(in crate::node) mod message;
 pub(in crate::node) mod operations;
 pub(in crate::node) mod pubsub;

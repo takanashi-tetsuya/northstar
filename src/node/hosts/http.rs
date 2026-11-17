@@ -50,7 +50,7 @@ impl HttpHost for ServerNode {
     }
 
     fn public_discovery_context(&self) -> &PublicDiscoveryContext {
-        &self.public_discovery_context
+        self.http.discovery()
     }
 
     fn readiness_context(&self) -> ReadinessContext {
@@ -151,7 +151,7 @@ impl HttpHost for ServerNode {
         OmemoRecoveryHttpContext {
             queries: self.operations.api_query_service().clone(),
             recovery: self.auth.omemo_recovery_service().clone(),
-            domain: self.public_discovery_context.policy().domain.clone(),
+            domain: self.http.discovery().policy().domain.clone(),
             metrics: Arc::clone(&self.metrics),
         }
     }
@@ -246,7 +246,7 @@ impl HttpHost for ServerNode {
 /// The XMPP transports the public listener serves beside REST: the WebSocket upgrade and BOSH,
 /// each over the node itself.
 pub(crate) fn xmpp_transport_routes(state: &Arc<ServerNode>) -> Router {
-    let policy = state.public_discovery_context.policy();
+    let policy = state.http.discovery().policy();
     let mut router: Router<Arc<ServerNode>> = Router::new();
     if policy.websocket_enabled {
         router = router.route(
@@ -284,12 +284,12 @@ impl ServerNode {
         HttpTransportPolicy::new(
             self.config.trusted_proxy_ips.clone(),
             Arc::clone(&self.metrics.http_insecure_requests_rejected_total),
-            Arc::clone(&self.http_body_admission),
+            Arc::clone(self.http.body_admission()),
         )
     }
 
     pub(crate) fn admin_gateway_verifier(&self) -> AdminGatewayVerifier {
-        AdminGatewayVerifier::new(self.web_admin_gateway_token.clone())
+        AdminGatewayVerifier::new(self.http.web_admin_gateway_token().cloned())
     }
 
     pub(crate) fn http_registration_availability(
@@ -302,7 +302,7 @@ impl ServerNode {
     }
 
     pub(crate) fn admin_gateway_authentication_enabled(&self) -> bool {
-        self.web_admin_gateway_token.is_some()
+        self.http.web_admin_gateway_token().is_some()
     }
 
     pub(crate) fn public_http_bind_address(&self) -> std::net::SocketAddr {

@@ -32,9 +32,8 @@ use northstar_http::contexts::{
 };
 use northstar_telemetry::metrics::Metrics;
 use northstar_upload_application::safety::UploadSafetyGate;
-use northstar_upload_application::store::{GuardedUploadStore, UploadStore};
+use northstar_upload_application::store::UploadStore;
 use northstar_upload_application::UploadAuthorityGeneration;
-use northstar_upload_storage::{LocalUploadStore, S3UploadSettings, S3UploadStore};
 use sqlx::{pool::PoolConnection, postgres::PgConnectOptions, PgPool, Postgres};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU8, Ordering};

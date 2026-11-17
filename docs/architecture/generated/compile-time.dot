@@ -2022,6 +2022,7 @@ digraph compile_time {
   "northstar-upload-storage" -> "axum";
   "northstar-upload-storage" -> "bytes";
   "northstar-upload-storage" -> "futures";
+  "northstar-upload-storage" -> "northstar-config";
   "northstar-upload-storage" -> "northstar-security";
   "northstar-upload-storage" -> "northstar-upload-application";
   "northstar-upload-storage" -> "object_store";

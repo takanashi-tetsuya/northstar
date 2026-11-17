@@ -6717,6 +6717,10 @@
     ],
     [
       "northstar-upload-storage",
+      "northstar-config"
+    ],
+    [
+      "northstar-upload-storage",
       "northstar-security"
     ],
     [

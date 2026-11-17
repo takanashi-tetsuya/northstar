@@ -3258,6 +3258,7 @@ dependencies = [
  "axum",
  "bytes",
  "futures",
+ "northstar-config",
  "northstar-security",
  "northstar-upload-application",
  "object_store",

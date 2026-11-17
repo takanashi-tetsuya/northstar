@@ -20,6 +20,7 @@ use northstar_upload_application::store::{
 use northstar_upload_application::{UploadAuthorityGeneration, UploadIoClass};
 
 pub mod backup;
+pub mod config_settings;
 mod s3;
 pub mod storage_migration;
 

@@ -4,13 +4,13 @@
 use crate::node::construction::{AUXILIARY_POOL_ACQUIRE_TIMEOUT, AUXILIARY_POOL_STARTUP_BUDGET};
 use crate::node::*;
 use anyhow::Context;
-use northstar_http::contexts::upload_admission::UploadAdmission;
+use northstar_http::contexts::upload_admission::UploadRuntime;
 use northstar_postgres::startup::startup_database_connect;
 use northstar_upload_application::startup::{
-    ensure_disabled_upload_state_empty, establish_upload_authority, reconcile_abandoned_stages,
-    UploadCapacityLimits,
+    ensure_disabled_upload_state_empty, establish_upload_authority, UploadCapacityLimits,
 };
 use northstar_upload_postgres::PostgresUploadStartupRepository;
+use northstar_upload_storage::config_settings::{namespace_id_from_config, start_upload_store};
 
 /// The upload context's runtime parts, built once at startup.
 pub(in crate::node) struct UploadModule {
@@ -81,7 +81,7 @@ impl UploadModule {
                     .as_ref()
                     .expect("enabled or draining uploads require an attested storage pool");
                 let upload_safety_gate = UploadSafetyGate::new();
-                let upload_namespace = upload_storage_namespace_id(config)?;
+                let upload_namespace = namespace_id_from_config(config)?;
                 let startup = PostgresUploadStartupRepository::new(upload_db.clone());
                 let limits = UploadCapacityLimits {
                     max_pending_jobs: config.upload_storage_max_pending_jobs,
@@ -97,62 +97,8 @@ impl UploadModule {
                 )
                 .await?;
                 let upload_authority_generation = authority.generation;
-                let upload_store: Arc<dyn UploadStore> = match config
-                    .upload_storage_backend
-                    .as_str()
-                {
-                    "local" => {
-                        let local = Arc::new(
-                            LocalUploadStore::new(config.upload_dir.clone())
-                                .with_safety_gate(Arc::clone(&upload_safety_gate)),
-                        );
-                        let guarded = Arc::new(GuardedUploadStore::new(
-                            local.clone(),
-                            Arc::clone(&upload_safety_gate),
-                        ));
-                        reconcile_abandoned_stages(
-                            &startup,
-                            guarded.as_ref(),
-                            local.staging_attempts(),
-                        )
-                        .await?;
-                        guarded
-                    }
-                    "s3" => {
-                        let inner: Arc<dyn UploadStore> = Arc::new(
-                            S3UploadStore::new(S3UploadSettings {
-                                endpoint: config.upload_s3_endpoint.clone(),
-                                region: config.upload_s3_region.clone(),
-                                bucket: config
-                                    .upload_s3_bucket
-                                    .clone()
-                                    .context("S3 upload bucket is missing after validation")?,
-                                prefix: config.upload_s3_prefix.clone(),
-                                path_style: config.upload_s3_path_style,
-                                allow_http: config.upload_s3_allow_http,
-                                ambient_credentials: config.upload_s3_credential_mode == "ambient",
-                                cleanup_mode: northstar_upload_storage::S3CleanupMode::parse(
-                                    &config.upload_s3_cleanup_mode,
-                                )?,
-                                credential_bundle_file: config
-                                    .upload_s3_credential_bundle_file
-                                    .clone(),
-                                access_key_id_file: config.upload_s3_access_key_id_file.clone(),
-                                secret_access_key_file: config
-                                    .upload_s3_secret_access_key_file
-                                    .clone(),
-                                session_token_file: config.upload_s3_session_token_file.clone(),
-                                sse_kms_key_id_file: config.upload_s3_sse_kms_key_id_file.clone(),
-                            })?
-                            .with_safety_gate(Arc::clone(&upload_safety_gate)),
-                        );
-                        Arc::new(GuardedUploadStore::new(
-                            inner,
-                            Arc::clone(&upload_safety_gate),
-                        ))
-                    }
-                    _ => unreachable!("upload backend was validated by Config"),
-                };
+                let upload_store =
+                    start_upload_store(config, &startup, &upload_safety_gate).await?;
                 upload_startup_audits = authority.startup_audits;
                 (
                     upload_safety_gate,
@@ -201,89 +147,6 @@ impl UploadModule {
             startup_audits: Arc::new(upload_startup_audits),
             runtime,
         })
-    }
-}
-
-/// Stable, non-secret identity for the physical upload namespace shared by
-/// every node. PostgreSQL stores this digest so a node configured for a
-/// different bucket/prefix cannot serve or delete another node's objects.
-/// Credential material is deliberately excluded: rotating credentials must
-/// not change storage authority.
-pub(in crate::node) fn upload_storage_namespace_id(config: &Config) -> anyhow::Result<[u8; 32]> {
-    let s3 = (config.upload_storage_backend == "s3")
-        .then(|| -> anyhow::Result<S3UploadSettings> {
-            Ok(S3UploadSettings {
-                endpoint: config.upload_s3_endpoint.clone(),
-                region: config.upload_s3_region.clone(),
-                bucket: config.upload_s3_bucket.clone().unwrap_or_default(),
-                prefix: config.upload_s3_prefix.clone(),
-                path_style: config.upload_s3_path_style,
-                allow_http: config.upload_s3_allow_http,
-                ambient_credentials: config.upload_s3_credential_mode == "ambient",
-                cleanup_mode: northstar_upload_storage::S3CleanupMode::parse(
-                    &config.upload_s3_cleanup_mode,
-                )?,
-                credential_bundle_file: config.upload_s3_credential_bundle_file.clone(),
-                access_key_id_file: config.upload_s3_access_key_id_file.clone(),
-                secret_access_key_file: config.upload_s3_secret_access_key_file.clone(),
-                session_token_file: config.upload_s3_session_token_file.clone(),
-                sse_kms_key_id_file: config.upload_s3_sse_kms_key_id_file.clone(),
-            })
-        })
-        .transpose()?;
-    northstar_upload_storage::upload_storage_namespace_id(
-        &config.upload_storage_backend,
-        &config.upload_dir,
-        s3.as_ref(),
-    )
-}
-
-pub(in crate::node) enum UploadRuntime {
-    Enabled {
-        requests: UploadAdmission,
-        downloads: UploadAdmission,
-    },
-    DrainReadOnly {
-        downloads: UploadAdmission,
-    },
-    Disabled,
-}
-
-impl UploadRuntime {
-    pub(in crate::node) fn from_config(config: &northstar_config::Config) -> Self {
-        let downloads = || UploadAdmission {
-            semaphore: Arc::new(Semaphore::new(config.upload_download_max_concurrent)),
-            by_ip: Arc::new(DashMap::new()),
-            max_per_ip: config.upload_download_max_per_ip,
-        };
-        match config.upload_mode {
-            northstar_config::UploadMode::Enabled => Self::Enabled {
-                requests: UploadAdmission {
-                    semaphore: Arc::new(Semaphore::new(32)),
-                    by_ip: Arc::new(DashMap::new()),
-                    max_per_ip: 4,
-                },
-                downloads: downloads(),
-            },
-            northstar_config::UploadMode::DrainReadOnly => Self::DrainReadOnly {
-                downloads: downloads(),
-            },
-            northstar_config::UploadMode::Disabled => Self::Disabled,
-        }
-    }
-
-    pub(in crate::node) fn request_admission(&self) -> Option<&UploadAdmission> {
-        match self {
-            Self::Enabled { requests, .. } => Some(requests),
-            Self::DrainReadOnly { .. } | Self::Disabled => None,
-        }
-    }
-
-    pub(in crate::node) fn download_admission(&self) -> Option<&UploadAdmission> {
-        match self {
-            Self::Enabled { downloads, .. } | Self::DrainReadOnly { downloads } => Some(downloads),
-            Self::Disabled => None,
-        }
     }
 }
 

@@ -2849,6 +2849,10 @@
     ],
     [
       "northstar-bosh",
+      "chrono"
+    ],
+    [
+      "northstar-bosh",
       "dashmap"
     ],
     [
@@ -2861,6 +2865,10 @@
     ],
     [
       "northstar-bosh",
+      "northstar-abuse-policy"
+    ],
+    [
+      "northstar-bosh",
       "northstar-auth-application"
     ],
     [
@@ -2869,7 +2877,15 @@
     ],
     [
       "northstar-bosh",
+      "northstar-federation-core"
+    ],
+    [
+      "northstar-bosh",
       "northstar-room-application"
+    ],
+    [
+      "northstar-bosh",
+      "northstar-roster-core"
     ],
     [
       "northstar-bosh",

@@ -1055,12 +1055,16 @@ digraph compile_time {
   "northstar-bosh" -> "anyhow";
   "northstar-bosh" -> "axum";
   "northstar-bosh" -> "base64";
+  "northstar-bosh" -> "chrono";
   "northstar-bosh" -> "dashmap";
   "northstar-bosh" -> "futures";
   "northstar-bosh" -> "hmac";
+  "northstar-bosh" -> "northstar-abuse-policy";
   "northstar-bosh" -> "northstar-auth-application";
   "northstar-bosh" -> "northstar-delivery-core";
+  "northstar-bosh" -> "northstar-federation-core";
   "northstar-bosh" -> "northstar-room-application";
+  "northstar-bosh" -> "northstar-roster-core";
   "northstar-bosh" -> "northstar-runtime";
   "northstar-bosh" -> "northstar-session-application";
   "northstar-bosh" -> "northstar-stream";

@@ -36,8 +36,12 @@ tracing = "0.1"
 uuid = { version = "1.12", features = ["v4", "serde"] }
 
 [dev-dependencies]
+chrono = "0.4"
+northstar-abuse-policy = { path = "../../contexts/abuse/northstar-abuse-policy", features = ["test-support"] }
 northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application", features = ["test-support"] }
+northstar-federation-core = { path = "../../contexts/federation/northstar-federation-core" }
 northstar-room-application = { path = "../../contexts/room/northstar-room-application", features = ["test-support"] }
+northstar-roster-core = { path = "../../contexts/roster/northstar-roster-core" }
 northstar-runtime = { path = "../../platform/northstar-runtime", features = ["test-support"] }
 northstar-session-application = { path = "../../contexts/session/northstar-session-application", features = ["test-support"] }
 northstar-stream = { path = "../../edges/northstar-stream", features = ["test-support"] }

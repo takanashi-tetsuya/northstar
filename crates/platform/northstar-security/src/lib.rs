@@ -8,6 +8,7 @@ pub mod cluster_bus;
 pub mod cluster_keys;
 pub mod crl;
 pub mod dane;
+pub mod dns_resolvers;
 pub mod lab_dnssec;
 pub mod ocsp;
 pub mod password_work;

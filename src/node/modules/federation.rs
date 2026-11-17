@@ -107,45 +107,10 @@ impl FederationModule {
             runtime_blacklist,
             runtime_whitelist,
         } = parts;
-        let (resolver_config, mut resolver_options) =
-            read_system_conf().context("failed to read the system DNS resolver configuration")?;
-        resolver_options.try_tcp_on_error = true;
-        resolver_options.server_ordering_strategy = ServerOrderingStrategy::RoundRobin;
-        resolver_options.cache_size = 1024;
-        let mut dnssec_options = resolver_options.clone();
-        dnssec_options.validate = true;
-        dnssec_options.use_hosts_file = ResolveHosts::Never;
-        dnssec_options.preserve_intermediates = true;
-        dnssec_options.positive_max_ttl = Some(Duration::from_secs(24 * 60 * 60));
-        dnssec_options.negative_max_ttl = Some(Duration::from_secs(5 * 60));
-        let s2s_dns_resolver = TokioResolver::builder_with_config(
-            resolver_config.clone(),
-            TokioRuntimeProvider::default(),
-        )
-        .with_options(resolver_options)
-        .build()
-        .context("failed to initialize the asynchronous DNS resolver")?;
-        let lab_dnssec_anchor = config
-            .federation_dnssec_lab_trust_anchor_path
-            .as_deref()
-            .map(northstar_security::lab_dnssec::load_anchor)
-            .transpose()?;
-        let s2s_dnssec_resolver = (config.federation_dane_mode
-            != northstar_security::dane::DaneMode::Off)
-            .then(|| {
-                let mut builder = TokioResolver::builder_with_config(
-                    resolver_config,
-                    TokioRuntimeProvider::default(),
-                )
-                .with_options(dnssec_options);
-                if let Some(anchor) = lab_dnssec_anchor {
-                    builder = builder.with_trust_anchor(Arc::new(anchor));
-                }
-                builder
-                    .build()
-                    .context("failed to initialize the locally validating DNSSEC resolver")
-            })
-            .transpose()?;
+        let resolvers = northstar_security::dns_resolvers::federation_resolvers(
+            config.federation_dane_mode,
+            config.federation_dnssec_lab_trust_anchor_path.as_deref(),
+        )?;
         let federation_runtime_policy =
             Arc::new(arc_swap::ArcSwap::from_pointee(RuntimeFederationPolicy {
                 blacklist: runtime_blacklist.into_iter().collect(),
@@ -173,8 +138,8 @@ impl FederationModule {
             components,
             s2s_connection_registry: Arc::new(S2sConnectionRegistry::default()),
             s2s_resumption: northstar_s2s::resume::Registry::default(),
-            s2s_dns_resolver,
-            s2s_dnssec_resolver,
+            s2s_dns_resolver: resolvers.s2s,
+            s2s_dnssec_resolver: resolvers.dnssec,
             dialback_secret,
             dialback_verifications: Arc::new(Semaphore::new(64)),
             s2s_connections: Arc::new(Semaphore::new(config.max_s2s_connections)),

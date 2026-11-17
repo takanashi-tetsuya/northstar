@@ -19,12 +19,7 @@ use crate::node::adapters::http_contexts::{
 };
 use anyhow::Context;
 use dashmap::DashMap;
-use hickory_resolver::{
-    config::{ResolveHosts, ServerOrderingStrategy},
-    net::runtime::TokioRuntimeProvider,
-    system_conf::read_system_conf,
-    TokioResolver,
-};
+use hickory_resolver::TokioResolver;
 use northstar_abuse_application::guard::AbuseGuard;
 use northstar_abuse_policy::AbuseConfig;
 use northstar_config::{

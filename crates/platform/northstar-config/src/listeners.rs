@@ -158,7 +158,10 @@ pub(super) struct TestListenerBindExplicitness {
 
 impl TestListenerBindExplicitness {
     pub(super) fn from_environment() -> Self {
-        let supplied = |name: &str| std::env::var_os(name).is_some();
+        Self::from_supplied(|name| std::env::var_os(name).is_some())
+    }
+
+    pub(super) fn from_supplied(supplied: impl Fn(&str) -> bool) -> Self {
         Self {
             xmpp: supplied("XMPP_BIND"),
             xmpps: supplied("XMPPS_BIND"),

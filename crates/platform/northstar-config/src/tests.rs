@@ -1017,3 +1017,32 @@ fn test_listener_addresses_overlap_port_zero() {
     let d = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5222);
     assert!(listener_addresses_overlap(c, d));
 }
+
+#[test]
+fn from_variables_loads_only_the_given_variables() {
+    let values =
+        dotenvy::from_read_iter(include_str!("../../../../.env.development.example").as_bytes())
+            .collect::<dotenvy::Result<Vec<(String, String)>>>()
+            .expect("the development example must be valid dotenv");
+    let mut variables: Vec<(&str, &str)> = values
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .filter(|(name, _)| *name != "SERVER_NAME")
+        .collect();
+    variables.push(("SERVER_NAME", "From Variables Probe"));
+    let config = super::Config::from_variables(&variables)
+        .expect("the development example loads from variables");
+    assert_eq!(config.server_name, "From Variables Probe");
+    let database_url = values
+        .iter()
+        .find(|(name, _)| name == "DATABASE_URL")
+        .map(|(_, value)| value.as_str());
+    assert_eq!(Some(config.database_url.as_str()), database_url);
+
+    let error = super::Config::from_variables(&[("XMPP_BIND", "not an address")])
+        .err()
+        .expect("an unparsable variable is refused");
+    assert!(error
+        .to_string()
+        .contains("Failed to parse config from variables"));
+}

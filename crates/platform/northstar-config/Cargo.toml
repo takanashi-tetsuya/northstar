@@ -7,6 +7,10 @@ license = "AGPL-3.0-only"
 description = "Validated process configuration for the Northstar XMPP server"
 publish = false
 
+[features]
+# Config::from_variables for tests in other crates.
+test-support = []
+
 [dependencies]
 anyhow = "1.0"
 axum = { version = "0.8", features = ["ws", "multipart"] }

@@ -9,8 +9,31 @@ impl Config {
         // variable was supplied. Retain that fact so test activation replaces
         // only inherited production listener defaults.
         let test_listener_bind_explicitness = TestListenerBindExplicitness::from_environment();
-        let mut raw: RawConfig =
-            envy::from_env().context("Failed to parse config from environment")?;
+        let raw: RawConfig = envy::from_env().context("Failed to parse config from environment")?;
+        Self::load(raw, test_listener_bind_explicitness)
+    }
+
+    /// Loads and validates exactly as [`Config::from_env`] does, from the given
+    /// variables instead of the process environment, so a test in another crate
+    /// can build a production configuration without touching process state.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn from_variables(variables: &[(&str, &str)]) -> Result<Self> {
+        let test_listener_bind_explicitness = TestListenerBindExplicitness::from_supplied(|name| {
+            variables.iter().any(|(supplied, _)| *supplied == name)
+        });
+        let raw: RawConfig = envy::from_iter(
+            variables
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
+        )
+        .context("Failed to parse config from variables")?;
+        Self::load(raw, test_listener_bind_explicitness)
+    }
+
+    fn load(
+        mut raw: RawConfig,
+        test_listener_bind_explicitness: TestListenerBindExplicitness,
+    ) -> Result<Self> {
         apply_test_listener_defaults(&mut raw, test_listener_bind_explicitness);
         let xmpp_extensions = Arc::new(northstar_xep_catalog::ExtensionRuntime::resolve(
             northstar_xep_catalog::ExtensionSwitches {

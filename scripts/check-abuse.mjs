@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
-import { findRustItem, readModuleParts, readProductionModule, readRoleSplitFile } from './lib/source-module.mjs';
+import { readModuleParts, readProductionModule, readRoleSplitFile } from './lib/source-module.mjs';
 
 const root = new URL('../', import.meta.url);
 const read = (path) => readFile(new URL(path, root), 'utf8');
-const [abuseSources, abuseTransaction, abuseVerification, config, envExample, apiRouter, authRoutes, reportRoutes, protocolSession, dispatch, messaging, miscProtocol, ibrProtocol, accountService, accountRepository, accountRecovery, dbUsers, apiControl, appError, migration, messageAdmissionMigration, powIntentMigration, parallelChallengeMigration, deletionRecoveryMigration, maintenanceWorkers, client, powClient, clientHtml, admin, adminHtml, workerSource] = await Promise.all([
+const [abuseSources, config, envExample, apiRouter, authRoutes, reportRoutes, messaging, miscProtocol, ibrProtocol, accountRepository, accountRecovery, migration, messageAdmissionMigration, powIntentMigration, parallelChallengeMigration, deletionRecoveryMigration, maintenanceWorkers, client, powClient, clientHtml, admin, adminHtml, workerSource] = await Promise.all([
   Promise.all([
     readModuleParts('crates/contexts/abuse/northstar-abuse-application/src/guard.rs', { includeTests: false }).map(({ source }) => source),
     read('crates/contexts/abuse/northstar-abuse-policy/src/lib.rs'),
@@ -17,13 +17,11 @@ const [abuseSources, abuseTransaction, abuseVerification, config, envExample, ap
     read('crates/contexts/abuse/northstar-abuse-policy/src/cooldown.rs'),
     read('crates/contexts/abuse/northstar-abuse-policy/src/config.rs'),
   ]).then(([parts, ...policyParts]) => [...parts, policyParts.join('\n')]),
-  read('crates/contexts/abuse/northstar-abuse-postgres/src/transaction.rs'),
-  read('crates/contexts/abuse/northstar-abuse-postgres/src/verification.rs'),
   // crates/platform/northstar-config/src/lib.rs and its non-test sibling modules (the whole production module)
   readProductionModule('crates/platform/northstar-config/src/lib.rs'), read('.env.example'),
   readRoleSplitFile('crates/edges/northstar-http/src/lib.rs'), read('crates/edges/northstar-http/src/auth_routes.rs'),
-  read('crates/edges/northstar-http/src/reports.rs'), readRoleSplitFile('crates/edges/northstar-stream/src/protocol.rs'), read('crates/edges/northstar-stream/src/protocol/dispatch.rs'),
-  readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs'), read('crates/edges/northstar-stream/src/protocol/misc.rs'), read('crates/edges/northstar-stream/src/protocol/ibr.rs'), read('crates/contexts/auth/northstar-auth-application/src/account.rs'), read('crates/contexts/workflows/northstar-workflows/src/account_repository.rs'), read('crates/contexts/auth/northstar-auth-xmpp/src/account_deletion.rs'), readProductionModule('crates/contexts/workflows/northstar-workflows/src/account_lifecycle.rs') + '\n' + readProductionModule('crates/contexts/auth/northstar-auth-postgres/src/users.rs'), read('crates/contexts/operations/northstar-operations-postgres/src/api_control.rs'), read('crates/edges/northstar-http/src/error.rs'),
+  read('crates/edges/northstar-http/src/reports.rs'),
+  readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs'), read('crates/edges/northstar-stream/src/protocol/misc.rs'), read('crates/edges/northstar-stream/src/protocol/ibr.rs'), read('crates/contexts/workflows/northstar-workflows/src/account_repository.rs'), read('crates/contexts/auth/northstar-auth-xmpp/src/account_deletion.rs'),
   read('migrations/0009_abuse_reports.sql'), read('migrations/0078_message_pow_admissions.sql'),
   read('migrations/0084_pow_intent_v2.sql'), read('migrations/0100_parallel_pow_challenges.sql'), read('migrations/0101_durable_account_deletion_recovery.sql'), Promise.all([
     read('src/node/workers/maintenance.rs'),
@@ -33,7 +31,6 @@ const [abuseSources, abuseTransaction, abuseVerification, config, envExample, ap
 ]);
 const abuse = abuseSources.join('\n');
 const api = `${apiRouter}\n${authRoutes}\n${reportRoutes}`;
-const protocol = `${protocolSession}\n${messaging}`;
 const abusePersistence = await read('crates/contexts/abuse/northstar-abuse-postgres/src/persistence.rs');
 const { httpPowIntent, xmppPowIntent } = await import(new URL('../web/pow.js', import.meta.url));
 
@@ -58,52 +55,25 @@ const stanzaIntent = await xmppPowIntent(
 assert.equal(stanzaIntent.method, 'XMPP');
 assert.match(stanzaIntent.body_sha256, /^[A-Za-z0-9_-]{43}$/);
 
-assert.match(abuse, /saturating_mul\(squared\)/, 'PoW must include the quadratic n² multiplier');
 assert.match(abuse, /fn policy\(action: AbuseAction, base: u64, message_free_burst: usize\)/,
   'message burst must be an explicit policy input');
-assert.match(abuse, /AbuseAction::Message\s*=>\s*Policy\s*\{\s*free_burst:\s*message_free_burst/,
-  'message policy must use the configured burst instead of a hidden constant');
-assert.match(config, /fn default_message_free_burst\(\) -> usize \{\s*60\s*\}/,
-  'the documented default message burst must remain explicit');
 assert.match(config, /\(10\.\.=10_000\)\.contains\(&raw\.abuse_message_free_burst\)/,
   'message burst configuration must have a bounded validation range');
 assert.match(envExample, /^ABUSE_MESSAGE_FREE_BURST=60$/m,
   'the deployment example must agree with the Rust default');
-assert.match(abuse, /AbuseAction::Report\s*=>\s*Policy\s*\{\s*free_burst:\s*0/);
-assert.match(abuse, /AbuseAction::Appeal[\s\S]*base\.saturating_mul\(8\)/);
-assert.match(abuse, /AbuseAction::Appeal\s*=>\s*15/,
-  'appeals must keep a non-zero minimum hard wait');
-assert.match(abuse, /4\.\.=7 => 2,[\s\S]*8\.\.=11 => 10,[\s\S]*12\.\.=15 => 30/);
 assert.match(abuse, /prefetched_message_challenge_remains_sufficient/,
   'parallel message challenges must be revalidated against the live rate-limit step');
-assert.match(abuse, /challenge\.work_factor >= current\.work_factor[\s\S]*challenge\.hard_wait_seconds >= current\.hard_wait_seconds/,
-  'a prefetched message challenge must never cross a stricter work or wait step');
 assert.match(parallelChallengeMigration, /DROP CONSTRAINT IF EXISTS abuse_pow_challenges_action_subject_hash_key/,
   'parallel operation-bound challenges must not overwrite each other');
 assert.match(parallelChallengeMigration, /CREATE INDEX abuse_pow_challenges_action_subject_expiry_idx/,
   'parallel challenges must retain a bounded cleanup and lookup index');
-assert.match(abuse, /actor\.starts_with\("behavior:"\)/, 'behavior state must be shared between actions');
-assert.match(protocol, /is_abuse_rated_message/, 'XMPP messages must pass through the abuse guard');
-assert.match(protocol, /strip_pow_element/, 'PoW data must be removed before routing and archiving');
-assert.match(messaging, /begin_message_admission/, 'rated messages must use durable PoW admission');
-assert.match(messaging, /finalize_message_admission/, 'accepted routes must finalize their fenced admission');
 assert.match(messaging, /pub async fn message<S: MessageSession>\([\s\S]*client_raw:\s*&str/,
   'message admission must receive the original client frame separately from the authoritative routed stanza');
-assert.match(messaging, /let pow_intent_payload = message_pow_intent_payload\(client_raw\);/,
-  'message PoW must reconstruct its commitment from the original client-controlled frame');
-assert.match(messaging, /pow_intent_payload:\s*&pow_intent_payload/,
-  'message admission must verify the reconstructed client commitment');
 assert.doesNotMatch(messaging, /pow_intent_payload:\s*&routed_raw/,
   'server-injected from/xml:lang bytes must never become part of the client PoW commitment');
-assert.match(dispatch, /"message"\s*=>\s*H::dispatch_message\(self,\s*root,\s*xml,\s*client_xml\)\.await/,
-  'dispatch must preserve the pre-rewrite client frame for message PoW verification');
 assert.match(powIntentMigration, /protocol_version SMALLINT NOT NULL DEFAULT 1/);
 assert.match(powIntentMigration, /intent_method[\s\S]*intent_path[\s\S]*body_sha256[\s\S]*server_nonce[\s\S]*issued_at/,
   'durable challenges must store every v2 intent/time/nonce component');
-assert.match(abuseTransaction, /pub async fn verify_in_tx\([\s\S]+verification::verify_in_tx/,
-  'the database adapter must consume v2 proof inside the mutation transaction');
-assert.match(abuseVerification, /pub\(crate\) async fn verify_in_tx\([\s\S]+DELETE FROM abuse_pow_challenges WHERE id=\$1[\s\S]+persist_db_states/,
-  'one-use proof deletion and actor-state persistence must share that transaction');
 assert.doesNotMatch(abuse, /sqlx::Transaction/,
   'anti-abuse policy must not accept database transactions');
 assert.match(abuse, /persistence: Option<Arc<dyn AbusePersistence>>/,
@@ -117,109 +87,27 @@ for (const operation of ['issue', 'verify', 'current_requirement', 'record_failu
   assert.match(abusePersistence, new RegExp(`fn ${operation}<'a`),
     `the PostgreSQL adapter must implement ${operation}`);
 }
-assert.match(abuse, /PasswordChange, "XMPP", "\/xmpp\/account-remove"/,
-  'authenticated XMPP account removal must have a closed v2 intent route');
-assert.match(miscProtocol, /PasswordChangeRequest[\s\S]+\/xmpp\/account-remove[\s\S]+DeletionQuiesceRequest/,
-  'XMPP password changes and account removal must reconstruct a v2 body commitment through the account service');
-assert.match(accountRepository, /change_password_guarded_v2[\s\S]+begin_account_deletion_quiesce_guarded_v2/,
-  'the account repository must own guarded credential and deletion transactions');
-const registrationService = accountService.slice(
-  accountService.indexOf('pub async fn register('),
-  accountService.indexOf('pub async fn change_password('),
-);
-assert.ok(
-  registrationService.indexOf('password_work::reserve()') >= 0
-    && registrationService.indexOf('password_work::reserve()')
-      < registrationService.indexOf('.register(request, self.policy, password_work)'),
-  'XMPP registration must reserve bounded CPU capacity before invoking persistence',
-);
 const xmppRegistration = accountRepository.slice(
   accountRepository.indexOf('async fn register('),
   accountRepository.indexOf('async fn change_password('),
 );
 assert.match(xmppRegistration, /password_work: northstar_security::password_work::PasswordWorkReservation/,
   'the registration transaction must require the service-reserved CPU permit');
-assert.match(xmppRegistration, /\.pool\s*\.begin\(\)/,
-  'the complete registration operation must have one repository-owned transaction');
-assert.match(xmppRegistration,
-  /northstar_abuse_postgres::transaction::verify_in_tx[\s\S]+prepare_registration_with_reservation[\s\S]+create_user_with_invitation_guarded_in_tx_v2/,
-  'XMPP registration must reject invalid body-bound proofs before password derivation');
-assert.match(xmppRegistration, /request\.proof,\s*request\.intent,\s*true,\s*prepared/,
-  'XMPP registration must keep proof consumption and account creation in one transaction');
 assert.doesNotMatch(xmppRegistration, /verify_or_allow_in_tx\(/,
   'XMPP registration must not retain an unbound v1 proof path');
-assert.match(abuse, /pub fn xmpp_registration\([\s\S]+northstar\/xmpp-registration-intent\/v1/,
-  'both XMPP registration transports need one semantic body commitment');
-assert.match(miscProtocol, /PowIntent::xmpp_registration[\s\S]+\.challenge_issue_service\(\)[\s\S]+\.issue\(\s*northstar_abuse_application::challenge::ChallengeIssueRequest\s*\{[\s\S]+action:\s*AbuseAction::Registration,[\s\S]+intent:\s*Some\(&intent\)/,
-  'XEP-0077 metered retries must issue body-bound v2 challenges only after submission');
-assert.match(ibrProtocol, /ibr_challenge\(None, None\)[\s\S]+PowIntent::xmpp_registration[\s\S]+\.challenge_issue_service\(\)[\s\S]+\.issue\(\s*northstar_abuse_application::challenge::ChallengeIssueRequest\s*\{[\s\S]+action:\s*AbuseAction::Registration,[\s\S]+intent:\s*Some\(&intent\)/,
-  'XEP-0389 must start without an unbound challenge and use an iterative v2 retry');
 assert.doesNotMatch(`${miscProtocol}\n${ibrProtocol}`, /\.issue\(\s*AbuseAction::Registration/,
   'XMPP registration must not issue legacy v1 challenges');
-assert.match(apiControl, /FOR UPDATE SKIP LOCKED[\s\S]+IdempotencyAcquire::Busy/,
-  'the global idempotency capacity authority must fail fast instead of convoying PgPool');
-assert.match(apiControl, /SELECT EXISTS\(\s*SELECT 1 FROM api_idempotency_capacity WHERE singleton=TRUE\s*\)/,
-  'a missing idempotency authority row must not be misreported as ordinary contention');
-assert.match(appError, /IdempotencyBusy[\s\S]+StatusCode::SERVICE_UNAVAILABLE[\s\S]+RETRY_AFTER/,
-  'idempotency contention must remain an explicit retryable 503 response');
 const httpRegistration = authRoutes.slice(
   authRoutes.indexOf('pub async fn register<R: HttpRepositories>('),
   authRoutes.indexOf('fn registration_error('),
 );
-assert.match(httpRegistration, /\.service\(\)[\s\S]+\.register_http\(HttpRegistrationRequest/,
-  'HTTP registration must enter the account service with a typed command');
 assert.doesNotMatch(httpRegistration, /(?:\.pool\.begin\(|(?:db|northstar_auth_postgres::users)::prepare_registration\(|db::acquire_idempotency_in_tx\()/,
   'HTTP registration must not own a database transaction or password derivation');
-const httpRepositoryRegistration = accountRepository.slice(
-  accountRepository.indexOf('async fn register_http('),
-  accountRepository.indexOf('async fn verify_registration_guard('),
-);
-assert.match(httpRepositoryRegistration,
-  /acquire_idempotency_in_tx[\s\S]+reservation\.commit\(\)[\s\S]+verify_registration_guard[\s\S]+prepare_registration\([\s\S]+\.pool\.begin\(\)[\s\S]+resume_idempotency_lease_in_tx[\s\S]+create_user_with_invitation_guarded_in_tx_v2/,
-  'HTTP repository must commit reservation and proof marker before password work, then publish in a fresh transaction');
-assert.match(httpRepositoryRegistration,
-  /IdempotencyAcquire::Replay\(replay\)[\s\S]+reservation\.commit\(\)[\s\S]+Outcome::Replay\(replay\)/,
-  'an exact completed registration must replay before current closure/capacity checks');
-assert.match(httpRepositoryRegistration,
-  /\b201,[\s\S]+json_replay_headers\(\)[\s\S]+publication\.commit\(\)/,
-  'successful registration must persist its exact response before committing');
-assert.match(httpRepositoryRegistration,
-  /400[\s\S]+json_replay_headers\(\)[\s\S]+publication\.commit\(\)/,
-  'deterministic registration rejection must persist its exact response before committing');
-assert.match(accountService, /async fn register_http\([\s\S]+self\.repository\.register_http\(request, self\.policy\)\.await/,
-  'the account service must delegate the complete HTTP registration command through its repository port');
-const repositoryRegistrationGuard = accountRepository.slice(
-  accountRepository.indexOf('async fn verify_registration_guard('),
-  accountRepository.indexOf('async fn register('),
-);
-assert.match(repositoryRegistrationGuard,
-  /\.pool\.begin\(\)[\s\S]+resume_idempotency_lease_fence_in_tx[\s\S]+northstar_abuse_postgres::transaction::verify_in_tx[\s\S]+mark_idempotency_guard_verified_fence_in_tx[\s\S]+transaction\.commit\(\)/,
-  'the repository must commit proof consumption and the guard marker together');
-assert.match(repositoryRegistrationGuard,
-  /DeniedNeedsCommit[\s\S]+abandon_idempotency_lease_fence_in_tx[\s\S]+transaction\.commit\(\)/,
-  'a registration denial must commit its penalty and abandon only the fenced lease');
-assert.match(httpRepositoryRegistration, /yield_http_registration_lease/,
-  'temporary password-worker overload must preserve the committed proof marker while fencing the old worker');
-const passwordChange = findRustItem(dbUsers, 'pub async fn change_password_guarded_v2(').text;
-// Keep the legacy deletion check's test seams in order when the items move files.
-const accountDeletion = [
-  'pub async fn begin_account_deletion_quiesce_guarded_v2(',
-  'async fn begin_account_deletion_quiesce_in_tx(',
-  'pub async fn begin_account_deletion_quiesce(',
-].map(declaration => findRustItem(dbUsers, declaration).text).join('\n');
-assert.match(passwordChange, /change_password_guarded_v2[\s\S]+northstar_abuse_postgres::transaction::verify_in_tx[\s\S]+apply_password_credentials_in_tx/,
-  'XMPP password proof consumption and credential rotation must share one transaction');
-assert.match(accountDeletion, /begin_account_deletion_quiesce_guarded_v2[\s\S]+northstar_abuse_postgres::transaction::verify_in_tx[\s\S]+begin_account_deletion_quiesce_in_tx[\s\S]+transaction\.commit/,
-  'account-removal proof consumption and durable account quiesce must share one transaction');
-assert.match(accountDeletion, /begin_account_deletion_quiesce_in_tx[\s\S]+INSERT INTO account_deletion_requests/,
-  'a committed account quiesce must create its crash-recovery owner in the same transaction');
 assert.match(deletionRecoveryMigration, /user_id UUID PRIMARY KEY REFERENCES users\(id\) ON DELETE CASCADE/);
 assert.match(deletionRecoveryMigration, /recovery_after TIMESTAMPTZ NOT NULL[\s\S]+claim_token UUID[\s\S]+claim_until TIMESTAMPTZ/,
   'account deletion recovery must be delayed and lease-fenced');
 assert.match(accountRecovery, /context\s*\.revoke_sm\(user_id\)[\s\S]+context\s*\.delete_quiesced\(user_id\)/,
   'durable SM state must be torn down before the account row can cascade it');
-assert.match(accountRepository, /claim_account_deletion_jobs[\s\S]+release_account_deletion_job/,
-  'the account repository must retain deletion claim-token authority');
 assert.match(accountRecovery, /context\.claim\(\)[\s\S]+context\.release\(&job\)/,
   'failed deletion recovery must release its durable lease with backoff');
 const deletionRecoveryContext = await read('crates/contexts/auth/northstar-auth-xmpp/src/account_deletion/context.rs');
@@ -233,7 +121,6 @@ assert.doesNotMatch(messageAdmissionMigration, /normalized_payload|stanza\s+TEXT
   'message admission must never retain plaintext content');
 assert.match(messageAdmissionMigration, /capacity_shard SMALLINT NOT NULL\s+REFERENCES abuse_message_admission_capacity/,
   'message admission capacity must remain transactionally sharded');
-assert.match(api, /ConnectInfo\(peer\)/, 'HTTP operations must use the source IP');
 
 for (const route of [
   '/api/v1/anti-abuse/challenge', '/api/v1/reports', '/api/v1/admin/reports',

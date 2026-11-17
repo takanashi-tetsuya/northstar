@@ -1098,6 +1098,7 @@ digraph compile_time {
   "northstar-cluster" -> "chrono";
   "northstar-cluster" -> "dashmap";
   "northstar-cluster" -> "futures";
+  "northstar-cluster" -> "northstar-abuse-policy";
   "northstar-cluster" -> "northstar-auth-application";
   "northstar-cluster" -> "northstar-config";
   "northstar-cluster" -> "northstar-delivery-core";

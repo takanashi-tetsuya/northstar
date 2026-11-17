@@ -3218,3 +3218,5 @@ async fn startup_authority_without_identity_only_activates() {
     );
     assert!(recording.events.lock().unwrap().is_empty());
 }
+
+mod owner_contracts;

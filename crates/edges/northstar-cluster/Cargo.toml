@@ -49,6 +49,7 @@ tracing = "0.1"
 uuid = { version = "1.12", features = ["v4", "serde"] }
 
 [dev-dependencies]
+northstar-abuse-policy = { path = "../../contexts/abuse/northstar-abuse-policy" }
 northstar-session-postgres = { path = "../../contexts/session/northstar-session-postgres" }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
 northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application", features = ["test-support"] }

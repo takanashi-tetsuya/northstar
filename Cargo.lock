@@ -2058,6 +2058,7 @@ dependencies = [
  "chrono",
  "dashmap",
  "futures",
+ "northstar-abuse-policy",
  "northstar-auth-application",
  "northstar-config",
  "northstar-delivery-core",

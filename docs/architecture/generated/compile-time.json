@@ -3021,6 +3021,10 @@
     ],
     [
       "northstar-cluster",
+      "northstar-abuse-policy"
+    ],
+    [
+      "northstar-cluster",
       "northstar-auth-application"
     ],
     [

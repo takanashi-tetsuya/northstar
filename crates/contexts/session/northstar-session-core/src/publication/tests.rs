@@ -1362,3 +1362,906 @@ fn late_transport_observations_cannot_erase_success() {
     assert!(bosh.transport(Transport::BoshRefused { rid: 10 }).is_err());
     assert_eq!(bosh.snapshot(), prior);
 }
+
+#[test]
+fn publication_and_credential_commands_keep_original_identity_and_phase() {
+    futures::executor::block_on(async {
+        for label in [
+            "not transported",
+            "recording",
+            "write entered",
+            "bosh entered",
+            "bosh refused",
+            "written",
+            "bosh accepted",
+            "retired",
+        ] {
+            let receipt = receipt();
+            let observation = Observation::returned_receipt(&receipt, Some(Uuid::from_u128(6)));
+            observation.sealed(true, false).unwrap();
+            match label {
+                "recording" | "write entered" | "written" | "retired" => {
+                    observation.transport(Transport::Recording).unwrap();
+                    if label != "recording" {
+                        observation.transport(Transport::WriteEntered).unwrap();
+                    }
+                    if matches!(label, "written" | "retired") {
+                        observation.transport(Transport::Written).unwrap();
+                    }
+                }
+                "bosh entered" | "bosh refused" | "bosh accepted" => {
+                    observation
+                        .transport(Transport::BoshExposureEntered { rid: 17 })
+                        .unwrap();
+                    if label == "bosh refused" {
+                        observation
+                            .transport(Transport::BoshRefused { rid: 17 })
+                            .unwrap();
+                    } else if label == "bosh accepted" {
+                        observation
+                            .transport(Transport::BoshAccepted { rid: 17 })
+                            .unwrap();
+                    }
+                }
+                _ => {}
+            }
+            if label == "retired" {
+                observation.retire(Terminal::Cancelled);
+            }
+            let before = observation.snapshot();
+            let result = observation.begin(&receipt);
+            assert_eq!(
+                result.is_ok(),
+                matches!(label, "written" | "bosh accepted"),
+                "{label}"
+            );
+            if result.is_err() {
+                assert_eq!(
+                    observation.snapshot(),
+                    before,
+                    "{label}: rejected begin changed facts"
+                );
+            } else {
+                assert_eq!(
+                    observation.snapshot().publication,
+                    Knowledge::BeforeCommit,
+                    "{label}"
+                );
+            }
+        }
+
+        for label in [
+            "foreign receipt",
+            "returned",
+            "commit entered",
+            "receipt known",
+            "terminal",
+        ] {
+            let receipt = receipt();
+            let foreign = CredentialCommitReceipt::new(None, receipt.staged_login_epoch(), None);
+            let observation = written(&receipt, true);
+            let invocation = observation.begin(&receipt).unwrap();
+            if label == "foreign receipt" {
+                // A borrowed call must validate again, even if its owner began
+                // with the correct receipt and the replacement has equal fields.
+                let foreign_call = Invocation {
+                    observation: &observation,
+                    receipt: &foreign,
+                };
+                assert!(foreign_call.enter_service().is_err(), "{label}");
+                assert!(foreign_call.enter_repository().is_err(), "{label}");
+                let calls = Cell::new(0);
+                assert!(
+                    matches!(
+                        foreign_call
+                            .commit(
+                                async {
+                                    calls.set(1);
+                                    Ok::<(), ()>(())
+                                },
+                                Some(7)
+                            )
+                            .await,
+                        Err(CommitError::Observation(_))
+                    ),
+                    "{label}"
+                );
+                assert_eq!(calls.get(), 0, "{label}");
+                continue;
+            }
+            invocation.enter_service().unwrap();
+            invocation.enter_repository().unwrap();
+            match label {
+                "returned" => {
+                    assert!(invocation.returned(&AuthenticationResult::ExpiredCredentials));
+                }
+                "commit entered" => {
+                    let mut commit = Box::pin(
+                        invocation.commit(std::future::pending::<Result<(), ()>>(), Some(7)),
+                    );
+                    assert!(poll_once(commit.as_mut()).is_pending());
+                }
+                "receipt known" => invocation
+                    .commit(std::future::ready(Ok::<(), ()>(())), Some(7))
+                    .await
+                    .unwrap(),
+                "terminal" => observation.retire(Terminal::Cancelled),
+                _ => unreachable!(),
+            }
+            let before = observation.snapshot();
+            assert!(invocation.enter_service().is_err(), "{label}");
+            assert!(invocation.enter_repository().is_err(), "{label}");
+            let calls = Cell::new(0);
+            assert!(
+                matches!(
+                    invocation
+                        .commit(
+                            async {
+                                calls.set(1);
+                                Ok::<(), ()>(())
+                            },
+                            Some(8)
+                        )
+                        .await,
+                    Err(CommitError::Observation(_))
+                ),
+                "{label}"
+            );
+            assert_eq!(calls.get(), 0, "{label}: stale invocation polled I/O");
+            assert_eq!(
+                observation.snapshot(),
+                before,
+                "{label}: first facts changed"
+            );
+        }
+
+        for handler in [
+            HandlerReturn::Completed,
+            HandlerReturn::Failed,
+            HandlerReturn::TimedOut,
+            HandlerReturn::Cancelled,
+            HandlerReturn::Panicked,
+        ] {
+            for sealed in [false, true] {
+                let receipt = receipt();
+                let observation = Observation::returned_receipt(&receipt, None);
+                if sealed {
+                    observation.sealed(true, false).unwrap();
+                    observation.transport(Transport::Recording).unwrap();
+                    observation.transport(Transport::WriteEntered).unwrap();
+                    observation.transport(Transport::Written).unwrap();
+                }
+                let before = observation.snapshot();
+                observation.handler_returned(handler);
+                observation.handler_returned(HandlerReturn::Completed);
+                assert_eq!(
+                    observation.snapshot().handler,
+                    Some(handler),
+                    "{handler:?}/{sealed}"
+                );
+                assert_eq!(
+                    observation.snapshot().publication,
+                    before.publication,
+                    "{handler:?}/{sealed}"
+                );
+                if sealed {
+                    assert_eq!(observation.snapshot().terminal, None, "{handler:?}");
+                    let invocation = observation.begin(&receipt).unwrap();
+                    invocation.enter_service().unwrap();
+                    invocation.enter_repository().unwrap();
+                    invocation
+                        .commit(std::future::ready(Ok::<(), ()>(())), Some(7))
+                        .await
+                        .unwrap();
+                    assert!(invocation.returned(&AuthenticationResult::Authenticated(Some(7))));
+                } else {
+                    assert_eq!(
+                        observation.snapshot().terminal,
+                        Some(Terminal::Abandoned),
+                        "{handler:?}"
+                    );
+                    assert!(observation.begin(&receipt).is_err(), "{handler:?}");
+                }
+            }
+        }
+
+        for label in [
+            "unbound",
+            "epoch missing",
+            "mapping refused",
+            "activation missing",
+            "caps not entered",
+            "caps not returned",
+            "notification not entered",
+            "notification pending",
+            "notification failed",
+            "complete",
+            "deferred",
+        ] {
+            let receipt = receipt();
+            let observation = Observation::returned_receipt(&receipt, None);
+            observation.sealed(true, true).unwrap();
+            observation.transport(Transport::Recording).unwrap();
+            observation.transport(Transport::WriteEntered).unwrap();
+            observation.transport(Transport::Written).unwrap();
+            let invocation = observation.begin(&receipt).unwrap();
+            invocation.enter_service().unwrap();
+            invocation.enter_repository().unwrap();
+            invocation
+                .commit(std::future::ready(Ok::<(), ()>(())), Some(7))
+                .await
+                .unwrap();
+            assert!(invocation.returned(&AuthenticationResult::Authenticated(Some(7))));
+            observation.effects(|effects| {
+                *effects = Effects {
+                    unbound: false,
+                    epoch_applied: true,
+                    route_mapping: Some(true),
+                    route_activation: Some(true),
+                    caps_entered: true,
+                    caps_returned: true,
+                    notification_entered: true,
+                    notification_returned: Some(true),
+                };
+                match label {
+                    "unbound" => effects.unbound = true,
+                    "epoch missing" => effects.epoch_applied = false,
+                    "mapping refused" => effects.route_mapping = Some(false),
+                    "activation missing" => effects.route_activation = None,
+                    "caps not entered" => effects.caps_entered = false,
+                    "caps not returned" => effects.caps_returned = false,
+                    "notification not entered" => effects.notification_entered = false,
+                    "notification pending" => effects.notification_returned = None,
+                    "notification failed" | "deferred" => {
+                        effects.notification_returned = Some(false)
+                    }
+                    "complete" => {}
+                    _ => unreachable!(),
+                }
+            });
+            assert!(
+                !observation.completed(),
+                "{label}: completion before retirement"
+            );
+            observation.retire(if label == "deferred" {
+                Terminal::DeferredNotification
+            } else {
+                Terminal::Completed
+            });
+            assert_eq!(
+                observation.completed(),
+                matches!(label, "complete" | "deferred"),
+                "{label}"
+            );
+            let before = observation.snapshot();
+            assert!(
+                observation.transport(Transport::WriteEntered).is_err(),
+                "{label}: retired transport accepted"
+            );
+            assert_eq!(observation.snapshot(), before, "{label}");
+        }
+
+        let frame = Uuid::from_u128(1);
+        let connection = Uuid::from_u128(3);
+        let user = Uuid::from_u128(2);
+        let device = Uuid::from_u128(4);
+        let plan = FastCommitPlan {
+            token_id: Some(Uuid::from_u128(10)),
+            token_was_new: true,
+            invalidate: true,
+            issue: None,
+        };
+        for kind in [
+            CredentialKind::UnboundFast,
+            CredentialKind::Binding,
+            CredentialKind::Resume,
+        ] {
+            let prepared = PreparedCredential::new(frame, connection, 2, kind);
+            let request = || crate::finalization::SmResumeFinalizationRequest {
+                session_id: Uuid::from_u128(6),
+                claim_token: Uuid::from_u128(8),
+                connection_id: connection,
+                user_id: user,
+                expected_auth_generation: 7,
+                client_h: 11,
+                acknowledged_count: 2,
+                peer_ip: "192.0.2.7".parse().unwrap(),
+                user_agent_id: Some(device),
+                active_privacy_list: Some("friends"),
+                ttl_seconds: 90,
+                live_lease_seconds: 43,
+                max_stanzas: 17,
+                max_bytes: 801,
+                fast_plan: Some(&plan),
+            };
+            let wrong_kind = if kind == CredentialKind::UnboundFast {
+                prepared.binding(
+                    connection,
+                    user,
+                    7,
+                    "alice@example.test/phone",
+                    43,
+                    Some(device),
+                    Some(&plan),
+                )
+            } else {
+                prepared.fast(user, 7, &plan, Some(device), connection)
+            };
+            assert!(wrong_kind.is_err(), "{kind:?}: wrong kind");
+            let mut foreign_request = request();
+            foreign_request.connection_id = Uuid::from_u128(99);
+            let wrong_connection = match kind {
+                CredentialKind::UnboundFast => {
+                    prepared.fast(user, 7, &plan, Some(device), foreign_request.connection_id)
+                }
+                CredentialKind::Binding => prepared.binding(
+                    foreign_request.connection_id,
+                    user,
+                    7,
+                    "alice@example.test/phone",
+                    43,
+                    Some(device),
+                    Some(&plan),
+                ),
+                CredentialKind::Resume => prepared.resume(&foreign_request),
+            };
+            assert!(wrong_connection.is_err(), "{kind:?}: foreign connection");
+            let retired = PreparedCredential::new(frame, connection, 2, kind);
+            retired
+                .observation()
+                .handler_returned(HandlerReturn::Completed);
+            let after_handler = match kind {
+                CredentialKind::UnboundFast => {
+                    retired.fast(user, 7, &plan, Some(device), connection)
+                }
+                CredentialKind::Binding => retired.binding(
+                    connection,
+                    user,
+                    7,
+                    "alice@example.test/phone",
+                    43,
+                    Some(device),
+                    Some(&plan),
+                ),
+                CredentialKind::Resume => retired.resume(&request()),
+            };
+            assert!(after_handler.is_err(), "{kind:?}: handler finished");
+            let invocation = match kind {
+                CredentialKind::UnboundFast => {
+                    prepared.fast(user, 7, &plan, Some(device), connection)
+                }
+                CredentialKind::Binding => prepared.binding(
+                    connection,
+                    user,
+                    7,
+                    "alice@example.test/phone",
+                    43,
+                    Some(device),
+                    Some(&plan),
+                ),
+                CredentialKind::Resume => prepared.resume(&request()),
+            }
+            .unwrap();
+            let labels: &[&str] = match kind {
+                CredentialKind::UnboundFast => &[
+                    "user",
+                    "generation",
+                    "connection",
+                    "device",
+                    "token",
+                    "token new",
+                    "invalidate",
+                    "issue",
+                ],
+                CredentialKind::Binding => &[
+                    "user",
+                    "generation",
+                    "connection",
+                    "device",
+                    "token",
+                    "token new",
+                    "invalidate",
+                    "issue",
+                    "jid",
+                    "lease",
+                    "fast absent",
+                ],
+                CredentialKind::Resume => &[
+                    "user",
+                    "generation",
+                    "connection",
+                    "device",
+                    "token",
+                    "token new",
+                    "invalidate",
+                    "issue",
+                    "lease",
+                    "fast absent",
+                    "session",
+                    "claim",
+                    "client h",
+                    "ack count",
+                    "peer ip",
+                    "privacy",
+                    "ttl",
+                    "stanza limit",
+                    "byte limit",
+                ],
+            };
+            for &label in labels {
+                let mut actual = request();
+                let mut actual_plan = plan.clone();
+                let mut jid = "alice@example.test/phone";
+                match label {
+                    "user" => actual.user_id = Uuid::from_u128(99),
+                    "generation" => actual.expected_auth_generation += 1,
+                    "connection" => actual.connection_id = Uuid::from_u128(99),
+                    "device" => actual.user_agent_id = None,
+                    "token" => actual_plan.token_id = None,
+                    "token new" => actual_plan.token_was_new = false,
+                    "invalidate" => actual_plan.invalidate = false,
+                    "issue" => {
+                        actual_plan.issue = Some(northstar_auth_core::credential::FastTokenIssue {
+                            device_id: Uuid::from_u128(9),
+                            mechanism: "HT-SHA-256-NONE".into(),
+                            ttl_days: 7,
+                            strong_reauth_max_days: 30,
+                            inherited_chain: None,
+                        })
+                    }
+                    "jid" => jid = "alice@example.test/other",
+                    "lease" => actual.live_lease_seconds += 1,
+                    "fast absent" => {}
+                    "session" => actual.session_id = Uuid::from_u128(99),
+                    "claim" => actual.claim_token = Uuid::from_u128(99),
+                    "client h" => actual.client_h += 1,
+                    "ack count" => actual.acknowledged_count += 1,
+                    "peer ip" => actual.peer_ip = "192.0.2.8".parse().unwrap(),
+                    "privacy" => actual.active_privacy_list = None,
+                    "ttl" => actual.ttl_seconds += 1,
+                    "stanza limit" => actual.max_stanzas += 1,
+                    "byte limit" => actual.max_bytes += 1,
+                    _ => unreachable!(),
+                }
+                actual.fast_plan = if label == "fast absent" {
+                    None
+                } else {
+                    Some(&actual_plan)
+                };
+                let result = match kind {
+                    CredentialKind::UnboundFast => invocation.enter_fast(
+                        actual.user_id,
+                        actual.expected_auth_generation,
+                        &actual_plan,
+                        actual.user_agent_id,
+                        actual.connection_id,
+                    ),
+                    CredentialKind::Binding => invocation.enter_binding(
+                        actual.connection_id,
+                        actual.user_id,
+                        actual.expected_auth_generation,
+                        jid,
+                        actual.live_lease_seconds,
+                        actual.user_agent_id,
+                        actual.fast_plan,
+                    ),
+                    CredentialKind::Resume => invocation.enter_resume(&actual),
+                };
+                assert!(
+                    result.is_err(),
+                    "{kind:?}/{label}: changed request accepted"
+                );
+                assert!(
+                    !prepared.observation().snapshot().repository_started,
+                    "{kind:?}/{label}"
+                );
+            }
+            match kind {
+                CredentialKind::UnboundFast => {
+                    invocation.enter_fast(user, 7, &plan, Some(device), connection)
+                }
+                CredentialKind::Binding => invocation.enter_binding(
+                    connection,
+                    user,
+                    7,
+                    "alice@example.test/phone",
+                    43,
+                    Some(device),
+                    Some(&plan),
+                ),
+                CredentialKind::Resume => invocation.enter_resume(&request()),
+            }
+            .unwrap();
+            assert!(
+                prepared.observation().snapshot().repository_started,
+                "{kind:?}: original request"
+            );
+            let duplicate = match kind {
+                CredentialKind::UnboundFast => {
+                    prepared.fast(user, 7, &plan, Some(device), connection)
+                }
+                CredentialKind::Binding => prepared.binding(
+                    connection,
+                    user,
+                    7,
+                    "alice@example.test/phone",
+                    43,
+                    Some(device),
+                    Some(&plan),
+                ),
+                CredentialKind::Resume => prepared.resume(&request()),
+            };
+            assert!(duplicate.is_err(), "{kind:?}: service bound twice");
+        }
+
+        for label in [
+            "original stage",
+            "sql operation",
+            "stage connection",
+            "stage user",
+            "stage generation",
+            "login device",
+            "issue device",
+            "fast absent stage",
+            "binding absent stage",
+            "resume absent stage",
+            "false eligibility",
+            "unknown eligibility",
+        ] {
+            let kind = match label {
+                "binding absent stage" => CredentialKind::Binding,
+                "resume absent stage" => CredentialKind::Resume,
+                _ => CredentialKind::UnboundFast,
+            };
+            let prepared = PreparedCredential::new(frame, connection, 0, kind);
+            let plan = FastCommitPlan {
+                issue: Some(northstar_auth_core::credential::FastTokenIssue {
+                    device_id: Uuid::from_u128(9),
+                    mechanism: "HT-SHA-256-NONE".into(),
+                    ttl_days: 7,
+                    strong_reauth_max_days: 30,
+                    inherited_chain: None,
+                }),
+                ..FastCommitPlan::default()
+            };
+            let request = crate::finalization::SmResumeFinalizationRequest {
+                session_id: Uuid::from_u128(6),
+                claim_token: Uuid::from_u128(8),
+                connection_id: connection,
+                user_id: user,
+                expected_auth_generation: 7,
+                client_h: 11,
+                acknowledged_count: 2,
+                peer_ip: "192.0.2.7".parse().unwrap(),
+                user_agent_id: Some(device),
+                active_privacy_list: Some("friends"),
+                ttl_seconds: 90,
+                live_lease_seconds: 43,
+                max_stanzas: 17,
+                max_bytes: 801,
+                fast_plan: Some(&plan),
+            };
+            let invocation = match kind {
+                CredentialKind::UnboundFast => {
+                    prepared.fast(user, 7, &plan, Some(device), connection)
+                }
+                CredentialKind::Binding => prepared.binding(
+                    connection,
+                    user,
+                    7,
+                    "alice@example.test/phone",
+                    43,
+                    Some(device),
+                    Some(&plan),
+                ),
+                CredentialKind::Resume => prepared.resume(&request),
+            }
+            .unwrap();
+            match kind {
+                CredentialKind::UnboundFast => {
+                    invocation.enter_fast(user, 7, &plan, Some(device), connection)
+                }
+                CredentialKind::Binding => invocation.enter_binding(
+                    connection,
+                    user,
+                    7,
+                    "alice@example.test/phone",
+                    43,
+                    Some(device),
+                    Some(&plan),
+                ),
+                CredentialKind::Resume => invocation.enter_resume(&request),
+            }
+            .unwrap();
+            CredentialInvocation::begin(Some(&invocation), std::future::ready(Ok::<(), ()>(())))
+                .await
+                .unwrap();
+            CredentialInvocation::eligibility(
+                Some(&invocation),
+                std::future::ready(Ok::<_, ()>(match label {
+                    "false eligibility" => Some(false),
+                    "unknown eligibility" => None,
+                    _ => Some(true),
+                })),
+            )
+            .await
+            .unwrap();
+            invocation.transaction_returned();
+            invocation.preparation_entered(CredentialPreparation::Stage);
+            invocation.stage_id(Uuid::from_u128(5));
+            let mut stage = StagedLoginEpoch {
+                operation_id: Uuid::from_u128(5),
+                connection_id: connection,
+                user_id: user,
+                device_id: device,
+                auth_generation: 7,
+                epoch: 19,
+            };
+            match label {
+                "sql operation" => stage.operation_id = Uuid::from_u128(99),
+                "stage connection" => stage.connection_id = Uuid::from_u128(99),
+                "stage user" => stage.user_id = Uuid::from_u128(99),
+                "stage generation" => stage.auth_generation += 1,
+                "login device" => stage.device_id = Uuid::from_u128(99),
+                "issue device" => stage.device_id = Uuid::from_u128(9),
+                _ => {}
+            }
+            invocation.stage_returned(&Ok(
+                if matches!(
+                    label,
+                    "fast absent stage" | "binding absent stage" | "resume absent stage"
+                ) {
+                    None
+                } else {
+                    Some(stage)
+                },
+            ));
+            for operation in [
+                CredentialPreparation::Fast,
+                CredentialPreparation::Binding,
+                CredentialPreparation::Activation,
+                CredentialPreparation::Privacy,
+            ] {
+                invocation.preparation_entered(operation);
+                invocation.preparation_returned(operation, PreparationResult::Present);
+            }
+            let calls = Cell::new(0);
+            let result = CredentialInvocation::commit(Some(&invocation), async {
+                calls.set(calls.get() + 1);
+                assert_eq!(
+                    prepared.observation().snapshot().commit,
+                    CredentialCall::Entered,
+                    "{label}"
+                );
+                Ok::<(), ()>(())
+            })
+            .await;
+            let accepted = matches!(label, "original stage" | "fast absent stage");
+            assert_eq!(result.is_ok(), accepted, "{label}");
+            assert_eq!(
+                calls.get(),
+                usize::from(accepted),
+                "{label}: rejected COMMIT polled"
+            );
+            assert_eq!(
+                prepared.observation().snapshot().commit,
+                if accepted {
+                    CredentialCall::Ok
+                } else {
+                    CredentialCall::NotEntered
+                },
+                "{label}"
+            );
+        }
+
+        for label in ["pending commit", "failed commit", "acknowledged commit"] {
+            let prepared =
+                PreparedCredential::new(frame, connection, 0, CredentialKind::UnboundFast);
+            let invocation = prepared
+                .fast(user, 7, &FastCommitPlan::default(), None, connection)
+                .unwrap();
+            prepare_empty_fast(&invocation).await;
+            let ready = Cell::new(None);
+            let mut commit = Box::pin(CredentialInvocation::commit(
+                Some(&invocation),
+                std::future::poll_fn(|_| {
+                    assert_eq!(
+                        prepared.observation().snapshot().commit,
+                        CredentialCall::Entered,
+                        "{label}: I/O preceded entry"
+                    );
+                    match ready.get() {
+                        None => Poll::Pending,
+                        Some(true) => Poll::Ready(Ok::<(), ()>(())),
+                        Some(false) => Poll::Ready(Err(())),
+                    }
+                }),
+            ));
+            assert!(poll_once(commit.as_mut()).is_pending(), "{label}");
+            assert_eq!(
+                prepared.observation().snapshot().commit,
+                CredentialCall::Entered,
+                "{label}"
+            );
+            assert!(
+                prepared.observation.0.lock().unwrap().witness.is_none(),
+                "{label}: pending COMMIT has a witness"
+            );
+            if label != "pending commit" {
+                ready.set(Some(label == "acknowledged commit"));
+                let result = poll_once(commit.as_mut());
+                assert_eq!(
+                    matches!(&result, Poll::Ready(Ok(()))),
+                    label == "acknowledged commit",
+                    "{label}"
+                );
+                if label == "failed commit" {
+                    assert!(
+                        matches!(result, Poll::Ready(Err(CommitError::Repository(())))),
+                        "{label}"
+                    );
+                }
+            }
+            drop(commit);
+            let snapshot = prepared.observation().snapshot();
+            assert_eq!(
+                snapshot.commit,
+                match label {
+                    "pending commit" => CredentialCall::Entered,
+                    "failed commit" => CredentialCall::Err,
+                    "acknowledged commit" => CredentialCall::Ok,
+                    _ => unreachable!(),
+                },
+                "{label}"
+            );
+            assert_eq!(snapshot.returned, None, "{label}: COMMIT invented a return");
+            let state = prepared.observation.0.lock().unwrap();
+            assert_eq!(
+                state.witness.is_some(),
+                label == "acknowledged commit",
+                "{label}"
+            );
+        }
+
+        for label in [
+            "raw receipt only",
+            "late begin",
+            "late eligibility",
+            "late rollback",
+        ] {
+            let prepared =
+                PreparedCredential::new(frame, connection, 0, CredentialKind::UnboundFast);
+            let invocation = prepared
+                .fast(user, 7, &FastCommitPlan::default(), None, connection)
+                .unwrap();
+            prepare_empty_fast(&invocation).await;
+            let receipt = CredentialCommitReceipt::new(None, None, None);
+            let receipt_id = receipt.publication_identity();
+            invocation.fast_returned(&AuthenticationResult::Authenticated(receipt));
+            let before = prepared.observation().snapshot();
+            assert_eq!(before.commit, CredentialCall::NotEntered, "{label}");
+            assert_eq!(
+                before.returned,
+                Some(CredentialReturned::Authenticated),
+                "{label}"
+            );
+            assert!(!before.return_matches, "{label}");
+            let joins = prepared.observation().joins();
+            assert_eq!(joins.constructed_receipt, None, "{label}");
+            assert_eq!(joins.returned_receipt, Some(receipt_id), "{label}");
+            assert_eq!(joins.transferred_receipt, None, "{label}");
+            let calls = Cell::new(0);
+            let rejected = match label {
+                "raw receipt only" => {
+                    let state = prepared.observation.0.lock().unwrap();
+                    assert!(state.witness.is_none());
+                    assert!(state.prospective.is_none());
+                    continue;
+                }
+                "late begin" => CredentialInvocation::begin(Some(&invocation), async {
+                    calls.set(1);
+                    Ok::<(), ()>(())
+                })
+                .await
+                .is_err(),
+                "late eligibility" => CredentialInvocation::eligibility(Some(&invocation), async {
+                    calls.set(1);
+                    Ok::<_, ()>(Some(true))
+                })
+                .await
+                .is_err(),
+                "late rollback" => CredentialInvocation::rollback(
+                    Some(&invocation),
+                    CredentialRollbackSite::FastExpired,
+                    async {
+                        calls.set(1);
+                        Ok::<(), ()>(())
+                    },
+                )
+                .await
+                .is_err(),
+                _ => unreachable!(),
+            };
+            assert!(rejected, "{label}");
+            assert_eq!(calls.get(), 0, "{label}");
+            let after = prepared.observation().snapshot();
+            assert_eq!(
+                (
+                    after.begin,
+                    after.eligibility,
+                    after.rollback,
+                    after.commit,
+                    after.returned
+                ),
+                (
+                    before.begin,
+                    before.eligibility,
+                    before.rollback,
+                    before.commit,
+                    before.returned
+                ),
+                "{label}: first facts changed"
+            );
+            assert_eq!(prepared.observation().joins(), joins, "{label}");
+        }
+
+        for label in ["observation error", "repository error"] {
+            let original = std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "original credential failure",
+            );
+            let error = credential_error(match label {
+                "observation error" => CommitError::<std::io::Error>::Observation(original.into()),
+                "repository error" => CommitError::Repository(original),
+                _ => unreachable!(),
+            });
+            let original = error
+                .downcast_ref::<std::io::Error>()
+                .expect("original error type");
+            assert_eq!(
+                original.kind(),
+                std::io::ErrorKind::ConnectionReset,
+                "{label}"
+            );
+            assert_eq!(
+                original.to_string(),
+                "original credential failure",
+                "{label}"
+            );
+        }
+    });
+}
+
+struct CloneProbe<T>(std::marker::PhantomData<T>);
+
+trait NotClone {
+    fn is_clone(&self) -> bool {
+        false
+    }
+}
+
+impl<T> NotClone for CloneProbe<T> {}
+
+impl<T: Clone> CloneProbe<T> {
+    fn is_clone(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn publication_invocation_is_affine() {
+    assert!(!CloneProbe::<Invocation<'static>>(std::marker::PhantomData).is_clone());
+    assert!(CloneProbe::<String>(std::marker::PhantomData).is_clone());
+}
+
+#[test]
+fn prepared_credential_is_affine() {
+    assert!(!CloneProbe::<PreparedCredential>(std::marker::PhantomData).is_clone());
+    assert!(CloneProbe::<String>(std::marker::PhantomData).is_clone());
+}
+
+#[test]
+fn credential_invocation_is_affine() {
+    assert!(!CloneProbe::<CredentialInvocation<'static>>(std::marker::PhantomData).is_clone());
+    assert!(CloneProbe::<String>(std::marker::PhantomData).is_clone());
+}

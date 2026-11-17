@@ -704,3 +704,94 @@ async fn resume_policy_releases_only_the_exact_mismatched_claim() {
         );
     }
 }
+
+#[tokio::test]
+async fn observed_finalization_rejects_mismatched_preparation_without_fallback() {
+    use northstar_session_core::publication::{CredentialKind, HandlerReturn, PreparedCredential};
+
+    for kind in [CredentialKind::Binding, CredentialKind::Resume] {
+        for label in ["wrong kind", "wrong connection", "handler finished"] {
+            let service = SmService::new(
+                ResumeRepository {
+                    credential_cut: None,
+                    device: Uuid::from_u128(4),
+                    session: Uuid::from_u128(6),
+                    token: Uuid::from_u128(8),
+                    fail_release: false,
+                    calls: std::sync::Mutex::new(Vec::new()),
+                },
+                "public".into(),
+            )
+            .unwrap();
+            let prepared = PreparedCredential::new(
+                Uuid::from_u128(1),
+                Uuid::from_u128(if label == "wrong connection" { 99 } else { 3 }),
+                0,
+                if label == "wrong kind" {
+                    CredentialKind::UnboundFast
+                } else {
+                    kind
+                },
+            );
+            if label == "handler finished" {
+                prepared
+                    .observation()
+                    .handler_returned(HandlerReturn::Completed);
+            }
+            // Both compatibility methods panic in this repository. The
+            // observed methods also require an explicit COMMIT cut, so an
+            // accidental call to either path fails this test immediately.
+            let result = match kind {
+                CredentialKind::Binding => service
+                    .finalize_binding_observed(
+                        Uuid::from_u128(3),
+                        Uuid::from_u128(2),
+                        7,
+                        "private@example.test/resource",
+                        43,
+                        Some(Uuid::from_u128(4)),
+                        None,
+                        Some(&prepared),
+                    )
+                    .await
+                    .map(|_| ()),
+                CredentialKind::Resume => service
+                    .finalize_resume_observed(
+                        SmResumeFinalizationRequest {
+                            session_id: Uuid::from_u128(6),
+                            claim_token: Uuid::from_u128(8),
+                            connection_id: Uuid::from_u128(3),
+                            user_id: Uuid::from_u128(2),
+                            expected_auth_generation: 7,
+                            client_h: 11,
+                            acknowledged_count: 2,
+                            peer_ip: "192.0.2.7".parse().unwrap(),
+                            user_agent_id: Some(Uuid::from_u128(4)),
+                            active_privacy_list: Some("private-list"),
+                            ttl_seconds: 90,
+                            live_lease_seconds: 43,
+                            max_stanzas: 17,
+                            max_bytes: 801,
+                            fast_plan: None,
+                        },
+                        Some(&prepared),
+                    )
+                    .await
+                    .map(|_| ()),
+                CredentialKind::UnboundFast => unreachable!(),
+            };
+            let Err(error) = result else {
+                panic!("{kind:?}/{label}: mismatch accepted")
+            };
+            assert_eq!(
+                error.to_string(),
+                "credential invocation mismatch",
+                "{kind:?}/{label}"
+            );
+            let snapshot = prepared.observation().snapshot();
+            assert!(!snapshot.service_started, "{kind:?}/{label}");
+            assert!(!snapshot.repository_started, "{kind:?}/{label}");
+            assert_eq!(snapshot.returned, None, "{kind:?}/{label}");
+        }
+    }
+}

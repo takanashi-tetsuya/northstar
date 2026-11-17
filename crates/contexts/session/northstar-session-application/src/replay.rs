@@ -539,4 +539,253 @@ mod tests {
             assert_eq!(service.repository.lease_calls.load(Ordering::SeqCst), calls);
         }
     }
+
+    struct ResponseRepository {
+        cut: &'static str,
+        calls: std::sync::Mutex<Vec<(&'static str, usize)>>,
+        dropped: AtomicUsize,
+    }
+
+    struct ResponseCallDrop<'a>(&'a AtomicUsize);
+
+    impl Drop for ResponseCallDrop<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl ResponseRepository {
+        async fn record(&self, method: &'static str, address: usize) -> Result<()> {
+            let _drop = ResponseCallDrop(&self.dropped);
+            self.calls.lock().unwrap().push((method, address));
+            match self.cut {
+                "pending" => std::future::pending().await,
+                "error" => Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "original response repository error",
+                )
+                .into()),
+                "success" => Ok(()),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    impl ReplayLeaseRepository for ResponseRepository {
+        async fn username(&self, _: Uuid) -> Result<Option<String>> {
+            unreachable!("response calls must not look up an account")
+        }
+        async fn acquire_lease(
+            &self,
+            _: Uuid,
+            _: &str,
+            _: Uuid,
+            _: Option<DateTime<Utc>>,
+            _: i64,
+        ) -> Result<OfflineReplayLeaseAcquire> {
+            unreachable!("response calls must not acquire replay ownership")
+        }
+    }
+
+    impl ReplayRepository for ResponseRepository {
+        async fn claim_page(
+            &self,
+            _: &ReplaySession,
+            _: Option<&str>,
+            _: bool,
+            _: i64,
+        ) -> Result<ReplayPageOutcome> {
+            unreachable!("unexpected replay claim")
+        }
+        async fn renew_before_send(&self, _: &ReplaySession, _: Uuid, _: &[Uuid]) -> Result<bool> {
+            unreachable!("unexpected replay renewal")
+        }
+        async fn release_unsent(&self, _: &ReplaySession, _: Uuid, _: &[Uuid]) -> Result<u64> {
+            unreachable!("unexpected replay release")
+        }
+        async fn finish(&self, _: &ReplaySession) -> Result<bool> {
+            unreachable!("unexpected replay finish")
+        }
+        async fn pending_presence_page(
+            &self,
+            _: Uuid,
+            _: &str,
+            _: Option<&str>,
+            _: Option<&PendingPresenceCursor>,
+            _: &str,
+        ) -> Result<PendingPresencePage> {
+            unreachable!("unexpected presence read")
+        }
+        async fn fence_socket_write(
+            &self,
+            _: northstar_delivery_core::DurableDelivery,
+        ) -> Result<northstar_delivery_core::DurableDelivery> {
+            unreachable!("unexpected socket fence")
+        }
+        async fn acknowledge_socket_write(
+            &self,
+            _: northstar_delivery_core::DurableDelivery,
+            _: Option<&northstar_delivery_core::native_write::AckRequest>,
+        ) -> Result<()> {
+            unreachable!("unexpected socket acknowledgement")
+        }
+        async fn bind_bosh_response_sources(
+            &self,
+            request: &northstar_delivery_core::bosh_ownership::response::BindRequest,
+        ) -> Result<northstar_delivery_core::bosh_ownership::BoshResponseOwnership> {
+            self.record("bind", std::ptr::from_ref(request) as usize)
+                .await?;
+            Ok(
+                northstar_delivery_core::bosh_ownership::BoshResponseOwnership {
+                    c2s_message_ids: vec![Uuid::from_u128(3)],
+                    mix_delivery_ids: vec![Uuid::from_u128(4)],
+                },
+            )
+        }
+        async fn renew_bosh_fences(
+            &self,
+            request: &northstar_delivery_core::bosh_ownership::response::RenewRequest,
+        ) -> Result<()> {
+            self.record("renew", std::ptr::from_ref(request) as usize)
+                .await
+        }
+        async fn acknowledge_bosh_responses(
+            &self,
+            request: &northstar_delivery_core::bosh_ownership::response::AckRequest,
+        ) -> Result<()> {
+            self.record("ack", std::ptr::from_ref(request) as usize)
+                .await
+        }
+        async fn release_bosh_fences(&self, _: Uuid) -> Result<()> {
+            unreachable!("unexpected fence release")
+        }
+    }
+
+    #[test]
+    fn bosh_response_services_forward_original_requests_and_repository_results() {
+        use northstar_delivery_core::bosh_ownership::{
+            response::ResponseKind, Operation, OperationKind, Scope,
+        };
+        use std::task::{Context, Poll, Waker};
+
+        for method in ["bind", "renew", "ack"] {
+            for cut in ["success", "error", "pending"] {
+                let operation = Operation::new(Scope {
+                    session_id: Uuid::from_u128(1),
+                    ttl_seconds: 43,
+                    kind: OperationKind::Request,
+                });
+                let source = northstar_delivery_core::TransportOwnershipSource::C2s(
+                    northstar_delivery_core::DurableDelivery {
+                        recipient_id: Uuid::from_u128(2),
+                        message_id: Uuid::from_u128(3),
+                        claim_id: Some(Uuid::from_u128(5)),
+                    },
+                );
+                let mix = northstar_delivery_core::TransportOwnershipSource::Mix(
+                    northstar_delivery_core::MixDelivery {
+                        delivery_id: Uuid::from_u128(4),
+                        lease_token: Uuid::from_u128(6),
+                    },
+                );
+                let lineage = [Some(source), None, Some(mix)];
+                let build = operation
+                    .begin_response(17, ResponseKind::Payload, lineage.to_vec())
+                    .unwrap();
+                let bind = build
+                    .attempt(vec![source, mix], lineage.into_iter())
+                    .unwrap();
+                let renew = operation
+                    .begin_renew(Some((
+                        17,
+                        Arc::new(
+                            northstar_delivery_core::bosh_ownership::BoshResponseOwnership {
+                                c2s_message_ids: vec![Uuid::from_u128(3)],
+                                mix_delivery_ids: vec![Uuid::from_u128(4)],
+                            },
+                        ),
+                    )))
+                    .unwrap();
+                let ack_renew = operation.begin_renew(None).unwrap();
+                ack_renew.enter_commit().unwrap().received();
+                let ack = ack_renew.returned().unwrap().begin_ack(19).unwrap();
+                let service = ReplayService::new(
+                    ResponseRepository {
+                        cut,
+                        calls: std::sync::Mutex::new(Vec::new()),
+                        dropped: AtomicUsize::new(0),
+                    },
+                    "example.test",
+                    30,
+                );
+                let expected_address = match method {
+                    "bind" => std::ptr::from_ref(&bind) as usize,
+                    "renew" => std::ptr::from_ref(&renew) as usize,
+                    "ack" => std::ptr::from_ref(&ack) as usize,
+                    _ => unreachable!(),
+                };
+                let mut call = Box::pin(async {
+                    match method {
+                        "bind" => service.bind_bosh_response_sources(&bind).await.map(Some),
+                        "renew" => service.renew_bosh_fences(&renew).await.map(|()| None),
+                        "ack" => service
+                            .acknowledge_bosh_responses(&ack)
+                            .await
+                            .map(|()| None),
+                        _ => unreachable!(),
+                    }
+                });
+                assert!(
+                    service.repository.calls.lock().unwrap().is_empty(),
+                    "{method}/{cut}: unpolled service called repository"
+                );
+                let result = call.as_mut().poll(&mut Context::from_waker(Waker::noop()));
+                assert_eq!(
+                    *service.repository.calls.lock().unwrap(),
+                    vec![(method, expected_address)],
+                    "{method}/{cut}"
+                );
+                match (cut, result) {
+                    ("pending", Poll::Pending) => {
+                        assert_eq!(
+                            service.repository.dropped.load(Ordering::SeqCst),
+                            0,
+                            "{method}/{cut}"
+                        );
+                    }
+                    ("error", Poll::Ready(Err(error))) => {
+                        let original = error
+                            .downcast_ref::<std::io::Error>()
+                            .expect("original error type");
+                        assert_eq!(
+                            original.kind(),
+                            std::io::ErrorKind::ConnectionReset,
+                            "{method}/{cut}"
+                        );
+                        assert_eq!(
+                            original.to_string(),
+                            "original response repository error",
+                            "{method}/{cut}"
+                        );
+                    }
+                    ("success", Poll::Ready(Ok(ownership))) => {
+                        if method == "bind" {
+                            let ownership = ownership.expect("bind result must be forwarded");
+                            assert_eq!(ownership.c2s_message_ids, vec![Uuid::from_u128(3)]);
+                            assert_eq!(ownership.mix_delivery_ids, vec![Uuid::from_u128(4)]);
+                        } else {
+                            assert!(ownership.is_none(), "{method}/{cut}");
+                        }
+                    }
+                    _ => panic!("{method}/{cut}: unexpected repository return"),
+                }
+                drop(call);
+                assert_eq!(
+                    service.repository.dropped.load(Ordering::SeqCst),
+                    1,
+                    "{method}/{cut}: repository child survived"
+                );
+            }
+        }
+    }
 }

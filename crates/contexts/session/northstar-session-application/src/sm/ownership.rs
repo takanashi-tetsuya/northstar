@@ -222,3 +222,6 @@ impl<'a> PreparedBatch<'a> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

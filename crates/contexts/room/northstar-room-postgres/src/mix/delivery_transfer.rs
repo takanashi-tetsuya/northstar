@@ -146,9 +146,10 @@ pub async fn transfer_mix_delivery_to_cluster(
     .rows_affected();
     anyhow::ensure!(updated == 1, "MIX lease changed during cluster hand-off");
     let inserted = sqlx::query(
-        "INSERT INTO mix_cluster_delivery_fences(
-            delivery_id,lease_token,node_id,request_id,expires_at
-         ) VALUES($1,$2,$3,$4,clock_timestamp()+make_interval(secs=>$5))",
+        "WITH owned(at) AS (SELECT clock_timestamp())
+         INSERT INTO mix_cluster_delivery_fences(
+            delivery_id,lease_token,node_id,request_id,first_owned_at,expires_at
+         ) SELECT $1,$2,$3,$4,owned.at,owned.at+make_interval(secs=>$5) FROM owned",
     )
     .bind(transferred.delivery_id)
     .bind(transferred.lease_token)
@@ -411,12 +412,10 @@ pub async fn transfer_mix_delivery_to_bosh(
         "MIX lease changed while BOSH ownership was being transferred"
     );
     let inserted = sqlx::query(
-        "INSERT INTO mix_bosh_delivery_fences(
-            delivery_id,lease_token,session_id,expires_at
-         ) VALUES(
-            $1,$2,$3,
-            clock_timestamp()+make_interval(secs=>$4)
-         )",
+        "WITH owned(at) AS (SELECT clock_timestamp())
+         INSERT INTO mix_bosh_delivery_fences(
+            delivery_id,lease_token,session_id,first_owned_at,expires_at
+         ) SELECT $1,$2,$3,owned.at,owned.at+make_interval(secs=>$4) FROM owned",
     )
     .bind(transferred.delivery_id)
     .bind(transferred.lease_token)

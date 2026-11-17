@@ -10,7 +10,15 @@ use northstar_room_postgres::mix as db;
 use northstar_workflows::room_effects::PostgresMixRepository;
 use uuid::Uuid;
 
-type FenceRow = (Uuid, Uuid, Option<i64>, DateTime<Utc>, Uuid, DateTime<Utc>);
+type FenceRow = (
+    Uuid,
+    Uuid,
+    Option<i64>,
+    DateTime<Utc>,
+    DateTime<Utc>,
+    Uuid,
+    DateTime<Utc>,
+);
 
 #[tokio::test]
 #[ignore = "requires the ordinary-role random schema and TEST_DATABASE_URL"]
@@ -237,16 +245,23 @@ async fn bosh_transfer_receipts_bind_clamped_inputs() {
             .unwrap();
         let rows: Vec<FenceRow> = sqlx::query_as(
             "SELECT fence.session_id,fence.lease_token,fence.response_rid,fence.expires_at,
-                    recipient.lease_token,recipient.lease_until
+                    fence.first_owned_at,recipient.lease_token,recipient.lease_until
              FROM mix_bosh_delivery_fences fence JOIN mix_delivery_recipients recipient USING(delivery_id)
              WHERE delivery_id=$1",
         ).bind(source.delivery_id).fetch_all(&mut *observer).await.unwrap();
         assert_eq!(rows.len(), 1, "{label}: exactly one pending fence");
-        let (owner, token, rid, expiry, recipient_token, lease) = rows[0];
+        let (owner, token, rid, expiry, first_owned, recipient_token, lease) = rows[0];
         assert_eq!(
             (owner, token, rid, recipient_token),
             (session, current.lease_token, None, current.lease_token),
             "{label}"
+        );
+        // One clock read: a separately read first-owned time could put the
+        // maximum TTL past the five-minute ownership CHECK.
+        assert_eq!(
+            expiry - first_owned,
+            TimeDelta::seconds(expected_ttl),
+            "{label}: expiry measured from the first-owned instant"
         );
         for deadline in [expiry, lease] {
             assert!(

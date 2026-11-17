@@ -34,4 +34,5 @@ uuid = { version = "1.12", features = ["v4", "serde"] }
 zeroize = "1.8"
 
 [dev-dependencies]
+northstar-runtime = { path = "../../../platform/northstar-runtime", features = ["test-support"] }
 tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "sync", "test-util", "time"] }

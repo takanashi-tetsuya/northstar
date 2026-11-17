@@ -17,6 +17,14 @@ pub struct RetentionPolicy {
 }
 
 impl RetentionPolicy {
+    pub fn max_silence(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(
+            self.retention_cleanup_interval_seconds
+                .saturating_mul(2)
+                .saturating_add(60),
+        )
+    }
+
     pub fn from_config(config: &Config) -> Self {
         Self {
             mam_retention_days: config.mam_retention_days,
@@ -154,6 +162,19 @@ impl MaintenanceConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retention_max_silence_saturates() {
+        let config: MaintenanceConfig =
+            serde_json::from_value(serde_json::json!({"xmpp_domain":"example.com"})).unwrap();
+        let mut policy = config.policy();
+        assert_eq!(policy.max_silence(), std::time::Duration::from_secs(180));
+        policy.retention_cleanup_interval_seconds = u64::MAX;
+        assert_eq!(
+            policy.max_silence(),
+            std::time::Duration::from_secs(u64::MAX)
+        );
+    }
 
     #[test]
     fn maintenance_configuration_needs_no_transport_or_signing_credentials() {

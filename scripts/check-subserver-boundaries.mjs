@@ -5,6 +5,7 @@ import { readProductionModule } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = { main: 'src/main.rs', workerComposition: 'src/node/workers.rs', subservers: 'src/runtime/subservers.rs', maintenanceOwnership: 'crates/contexts/operations/northstar-operations-postgres/src/maintenance_ownership.rs', retention: 'crates/contexts/operations/northstar-operations-application/src/retention_worker.rs',
+  maintenanceProcess: 'crates/contexts/operations/northstar-operations-application/src/maintenance_process.rs',
   maintenanceConfig: 'crates/platform/northstar-config/src/maintenance.rs',
   maintenanceHealth: 'crates/edges/northstar-http/src/maintenance_health.rs',
   subscriptionCleanup: 'crates/contexts/pubsub/northstar-pubsub-application/src/subscription_cleanup.rs',
@@ -51,7 +52,7 @@ export function readSubserverSources() {
       ? readProductionModule(file, { root }) : fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
-export function verifySubserverBoundaries({ main, workerComposition, subservers, maintenanceConfig, maintenanceHealth, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubDelivery, pubsubAdapter, pubsubService, state, runtimeControl, runtimeControlHealth, cluster, responsibility }) {
+export function verifySubserverBoundaries({ main, workerComposition, subservers, maintenanceProcess, maintenanceConfig, maintenanceHealth, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubDelivery, pubsubAdapter, pubsubService, state, runtimeControl, runtimeControlHealth, cluster, responsibility }) {
   // Alternate control ticks can legitimately perform no SQL. They must not
   // reset a lost advisory-lock session's consecutive database error count.
   const report = codeOnly(body(runtimeControlHealth, 'fn report_runtime_control_health(')).replace(/\s+/g, '');
@@ -74,7 +75,7 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
     requireBoundary(read.includes('observed_database = true;') && query.test(codeOnly(read)),
       'control coordinator must tie health observation to a read of its exact reserved connection');
   }
-  const subserverCode = codeOnly(subservers) + codeOnly(maintenanceConfig) + codeOnly(maintenanceHealth);
+  const subserverCode = codeOnly(subservers) + codeOnly(maintenanceProcess) + codeOnly(maintenanceConfig) + codeOnly(maintenanceHealth);
   requireBoundary(!/\b(?:ServerNode|AbuseGuard|FederationRouter|ReloadableTlsConfig|Keyring|KeyRing)\b/.test(subserverCode),
     'maintenance cannot construct or import core state, routing or key authorities');
   requireBoundary(!/\bConfig\s*::\s*from_env\b|crate\s*::\s*(?:auth|abuse|node|s2s|xmpp|tls|storage)\s*::/.test(subserverCode),
@@ -122,13 +123,17 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
   }
   requireBoundary(!health.includes('error.to_string()'), 'private health cannot return internal failure details');
   const run = body(subservers, 'async fn run_maintenance(');
+  const monitor = body(maintenanceProcess, 'async fn supervise_maintenance<');
+  const closeOwnership = body(maintenanceOwnership, 'async fn close(');
   const fromEnv = body(maintenanceConfig, 'pub fn from_env(');
   for (const marker of ['config.validate()?', 'northstar_postgres::role_attestation::attest_runtime_role(&pool)',
     'northstar_postgres::role_attestation::attest_development_database_is_loopback(&pool)', 'northstar_postgres::schema::verify_schema(&pool',
     'claim_maintenance(&pool)', '.max_connections(MAINTENANCE_POOL_MAX_CONNECTIONS)',
-    '.min_connections(0)', 'ownership.close().await', 'pool.close().await',
+    '.min_connections(0)', 'ownership.close().await', 'self.connection.close().await?', 'pool.close().await',
     'workers.shutdown_and_join(', 'cancel.cancel()']) {
-    const source = marker === 'config.validate()?' ? fromEnv : run;
+    const source = marker === 'config.validate()?' ? fromEnv
+      : ['self.connection.close().await?', 'pool.close().await'].includes(marker) ? closeOwnership
+      : ['ownership.close().await', 'workers.shutdown_and_join(', 'cancel.cancel()'].includes(marker) ? monitor : run;
     requireBoundary(source.replace(/\s+/g, '').includes(marker.replace(/\s+/g, '')), `maintenance startup/shutdown lost ${marker}`);
   }
   requireBoundary(subservers.includes('DATABASE_MAX_CONNECTIONS_LIMIT - MAINTENANCE_POOL_MAX_CONNECTIONS'),
@@ -140,7 +145,8 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
     claimExact.includes('connection.close_on_drop()') && claimExact.includes('pg_try_advisory_lock(') &&
     claimExact.includes('current_database()') && claimExact.includes('current_schema()') &&
     claimExact.includes('.fetch_one(&mut **connection)') && claimExact.includes('ensure!(') &&
-    run.includes('maintenance_ownership::probe_exact(&mut ownership)') &&
+    monitor.includes('ownership.probe()') &&
+    body(maintenanceOwnership, 'async fn probe(').includes('probe_exact(&mut self.connection)') &&
     probeExact.includes('SELECT 1') && probeExact.includes('.execute(&mut **connection)'),
   'all retention modes must claim the same schema-scoped physical session and close it on drop');
 
@@ -188,9 +194,9 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
   requireBoundary(/\.register_observer\("maintenance-ownership",\s*WorkerCriticality::Critical\)/.test(run),
     'maintenance ownership observer must remain critical');
   for (const marker of ['Duration::from_secs(5)', 'Duration::from_secs(3)',
-    'maintenance_ownership::probe_exact(&mut ownership)', 'if !matches!(probe, Ok(Ok(())))',
+    'ownership.probe()', 'if !matches!(probe, Ok(Ok(())))',
     'break Err(anyhow::anyhow!("maintenance database ownership connection failed"))']) {
-    requireBoundary(run.replace(/\s+/g, '').includes(marker.replace(/\s+/g, '')),
+    requireBoundary(monitor.replace(/\s+/g, '').includes(marker.replace(/\s+/g, '')),
       `maintenance exact-session loss detection changed: ${marker}`);
   }
   requireBoundary(cluster.includes('"$binary" serve standalone >"$redis_tmp/cluster-a.log"') &&

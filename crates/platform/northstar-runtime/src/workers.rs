@@ -349,6 +349,16 @@ impl WorkerRegistry {
         self.observer_heartbeat(name, Some(error.to_string()));
     }
 
+    /// Inspect a recorded observer error even after readiness enters shutdown.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn observer_last_error_for_test(&self, name: &'static str) -> Option<String> {
+        self.workers
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(name)
+            .and_then(|health| health.last_error.clone())
+    }
+
     pub fn supervise<F, Fut>(
         self: &Arc<Self>,
         name: &'static str,

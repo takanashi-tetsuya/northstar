@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result};
 use northstar_config::maintenance::MaintenanceConfig;
+use northstar_operations_application::maintenance_process::supervise_maintenance;
 use northstar_operations_application::retention_worker::RetentionContext;
 use northstar_operations_postgres::maintenance_ownership;
 use northstar_runtime::workers::WorkerCriticality;
@@ -135,7 +136,7 @@ pub(crate) async fn run_maintenance() -> Result<()> {
     northstar_postgres::schema::verify_schema(&pool, &config.xmpp_domain)
         .await
         .context("maintenance schema verification failed")?;
-    let mut ownership = claim_maintenance(&pool).await?;
+    let ownership = claim_maintenance(&pool).await?;
     let listener = TcpListener::bind(config.maintenance_bind)
         .await
         .context("maintenance health listener bind failed")?;
@@ -143,12 +144,7 @@ pub(crate) async fn run_maintenance() -> Result<()> {
     let workers = WorkerRegistry::new();
     let metrics = Arc::new(Metrics::default());
     let policy = config.policy();
-    let silence = Duration::from_secs(
-        policy
-            .retention_cleanup_interval_seconds
-            .saturating_mul(2)
-            .saturating_add(60),
-    );
+    let silence = policy.max_silence();
     let retention = Arc::new(RetentionContext::new(
         northstar_workflows::maintenance_repository::PostgresMaintenanceRepository::new(
             pool.clone(),
@@ -200,7 +196,7 @@ pub(crate) async fn run_maintenance() -> Result<()> {
     );
     workers.register_observer("maintenance-ownership", WorkerCriticality::Critical);
     workers.observer_ok("maintenance-ownership");
-    let mut health = tokio::spawn(northstar_http::maintenance_health::private_health(
+    let health = tokio::spawn(northstar_http::maintenance_health::private_health(
         listener,
         Arc::clone(&workers),
         metrics,
@@ -208,57 +204,15 @@ pub(crate) async fn run_maintenance() -> Result<()> {
         subscription_readiness,
         cancel.clone(),
     ));
-    let mut interval = tokio::time::interval(Duration::from_secs(5));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let shutdown = northstar_http::shutdown_signal();
-    tokio::pin!(shutdown);
     tracing::info!(role="maintenance", address=%config.maintenance_bind, "maintenance subserver started");
-    let outcome = loop {
-        tokio::select! {
-            biased;
-            _ = cancel.cancelled() => break Err(anyhow::anyhow!("maintenance worker authority failed")),
-            _ = &mut shutdown => break Ok(()),
-            result = &mut health => break match result {
-                Ok(Err(error)) => Err(error).context("maintenance health listener failed"),
-                Ok(Ok(())) => Err(anyhow::anyhow!("maintenance health listener stopped unexpectedly")),
-                Err(error) => Err(error).context("maintenance health listener panicked"),
-            },
-            _ = interval.tick() => {
-                // The exact locked connection is probed; substituting a pool
-                // connection would conceal loss of exclusive ownership.
-                let probe = tokio::time::timeout(
-                    Duration::from_secs(3),
-                    maintenance_ownership::probe_exact(&mut ownership),
-                ).await;
-                if !matches!(probe, Ok(Ok(()))) {
-                    workers.observer_error("maintenance-ownership", "database ownership connection failed");
-                    break Err(anyhow::anyhow!("maintenance database ownership connection failed"));
-                }
-                workers.observer_ok("maintenance-ownership");
-            }
-        }
-    };
-    cancel.cancel();
-    let report = workers
-        .shutdown_and_join(&cancel, Duration::from_secs(15))
-        .await;
-    if !health.is_finished()
-        && tokio::time::timeout(Duration::from_secs(1), &mut health)
-            .await
-            .is_err()
-    {
-        health.abort();
-        let _ = health.await;
-    }
-    // Closing the physical connection releases the session-level advisory
-    // lock; returning it to a live pool would retain the lock invisibly.
-    ownership.close().await?;
-    pool.close().await;
-    anyhow::ensure!(
-        report.is_clean(),
-        "maintenance worker shutdown was incomplete"
-    );
-    outcome
+    supervise_maintenance(
+        maintenance_ownership::MaintenanceOwnershipConnection::new(ownership, pool),
+        &workers,
+        &cancel,
+        health,
+        northstar_http::shutdown_signal(),
+    )
+    .await
 }
 
 #[cfg(test)]

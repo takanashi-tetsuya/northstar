@@ -1,7 +1,31 @@
 //! PostgreSQL session-lock operations for the maintenance process.
 
 use anyhow::{ensure, Result};
-use sqlx::{pool::PoolConnection, Postgres};
+use northstar_operations_application::maintenance_process::MaintenanceOwnership;
+use sqlx::{pool::PoolConnection, PgPool, Postgres};
+
+pub struct MaintenanceOwnershipConnection {
+    connection: PoolConnection<Postgres>,
+    pool: PgPool,
+}
+
+impl MaintenanceOwnershipConnection {
+    pub fn new(connection: PoolConnection<Postgres>, pool: PgPool) -> Self {
+        Self { connection, pool }
+    }
+}
+
+impl MaintenanceOwnership for MaintenanceOwnershipConnection {
+    async fn probe(&mut self) -> Result<()> {
+        probe_exact(&mut self.connection).await
+    }
+
+    async fn close(self) -> Result<()> {
+        self.connection.close().await?;
+        self.pool.close().await;
+        Ok(())
+    }
+}
 
 /// Lock the exact physical session reserved by the caller. Never return this
 /// connection to a live pool after an unsuccessful claim.

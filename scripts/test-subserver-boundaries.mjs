@@ -58,7 +58,8 @@ rejectsMutation('reject raw health error disclosure', 'maintenanceHealth', 'let 
 rejectsMutation('keep runtime role attestation', 'subservers', 'northstar_postgres::role_attestation::attest_runtime_role(&pool)', 'skip_attestation(&pool)', /startup\/shutdown/);
 rejectsMutation('close the exact advisory-lock session on early return', 'maintenanceOwnership', 'connection.close_on_drop()', 'connection.flush()', /physical session/);
 rejectsMutation('probe the exact ownership connection', 'maintenanceOwnership', 'execute(&mut **connection)', 'execute(&pool)', /physical session/);
-rejectsMutation('maintenance probes its reserved connection', 'subservers', 'probe_exact(&mut ownership)', 'probe_exact(&mut pool)', /physical session/);
+rejectsMutation('maintenance probes its reserved connection', 'maintenanceProcess', 'ownership.probe()', 'pool.probe()', /physical session/);
+rejectsMutation('ownership adapter probes its reserved connection', 'maintenanceOwnership', 'probe_exact(&mut self.connection)', 'probe_exact(&mut self.pool)', /physical session/);
 rejectsMutation('ownership observer stays critical', 'subservers', '.register_observer("maintenance-ownership", WorkerCriticality::Critical)', '.register_observer("maintenance-ownership", WorkerCriticality::Restartable)', /observer must remain critical/);
 rejectsMutation('core cannot acquire embedded retention authority', 'subservers', 'self == Self::Standalone', 'self != Self::Maintenance', /only standalone/);
 rejectsMutation('maintenance cannot load core dotenv', 'main', 'if arguments != ["serve", "maintenance"]', 'if true', /core .env/);

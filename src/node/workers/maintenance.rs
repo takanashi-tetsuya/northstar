@@ -195,13 +195,7 @@ fn retention_context(
 }
 
 fn retention_worker_max_silence(state: &ServerNode) -> Duration {
-    Duration::from_secs(
-        state
-            .config
-            .retention_cleanup_interval_seconds
-            .saturating_mul(2)
-            .saturating_add(60),
-    )
+    northstar_config::maintenance::RetentionPolicy::from_config(&state.config).max_silence()
 }
 
 fn subscription_cleanup_context(

@@ -11,6 +11,7 @@ pub mod admin_session_cleanup_worker;
 pub mod api_queries;
 pub mod background_housekeeping;
 pub mod governance;
+pub mod maintenance_process;
 pub mod maintenance_repositories;
 pub mod maintenance_worker;
 pub mod metrics_snapshot;

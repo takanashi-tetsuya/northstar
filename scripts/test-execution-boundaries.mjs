@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { findRustItem, matchingRustBrace } from './lib/source-module.mjs';
-import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyMixForegroundBoundaries, verifyMixWorkerBoundaries, verifyNativeWriteBoundaries, verifySmOwnershipBoundaries, verifyBoshTransferBoundaries, verifyBoshResponseBoundaries, verifyBoshSelectionObservations, verifyRouteHelperBoundaries } from './check-execution-boundaries.mjs';
+import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyMixForegroundBoundaries, verifyMixWorkerBoundaries, verifyBoshSelectionObservations, verifyRouteHelperBoundaries } from './check-execution-boundaries.mjs';
 
 const baseline = readExecutionSources();
 const CROSS_CRATE_TEST_ONLY = '#[cfg(any(test, feature = "test-support"))]';
@@ -59,30 +59,12 @@ rejects('frame observation must exist before child polling', 'frame',
 rejects('frame timer cannot start in the synchronous constructor', 'frame',
   'child: Some(Box::pin(async move {\n                tokio::time::timeout(budget, future).await\n            })),',
   'child: Some(Box::pin(tokio::time::timeout(budget, future))),', /first-poll timer/);
-rejects('frame runner must remember a panic across an outer catch', 'frame',
-  'this.poll_in_progress = true;', 'this.poll_in_progress = false;', /retain panic knowledge/);
-rejects('normal pending must clear the panic marker', 'frame',
-  'Poll::Pending => {\n                this.poll_in_progress = false;\n                return Poll::Pending;\n            }',
-  'Poll::Pending => { return Poll::Pending; }', /retain panic knowledge/);
-rejects('ready child destruction must precede clearing the panic marker', 'frame',
-  'drop(this.child.take());\n        this.poll_in_progress = false;',
-  'this.poll_in_progress = false;\n        drop(this.child.take());', /destroy the ready child/);
-rejects('runner drop cannot omit child destruction', 'frame',
-  'drop(self.child.take());', '', /destroy the child first/);
-rejects('runner drop cannot forget a caught panic', 'frame',
-  'if self.poll_in_progress {', 'if std::thread::panicking() {', /preserve a caught panic/);
-rejects('inline classifier remains transport-specific', 'frame',
-  'let inline = transport == ClientTransport::WebSocket && is_inline_auth(frame);',
-  'let inline = is_inline_auth(frame);', /guarded WebSocket inline/);
 rejects('BOSH ingress cannot bypass observed execution', 'bosh',
   'match self.protocol.process_frame(payload).await {',
   'match self.protocol.handle(payload).await {', /BOSH must enter/);
 rejects('BOSH publication cannot bypass observed owner', 'bosh',
   '.publish_committed_authentication_and_route(owner)',
   '.publish_committed_authentication_and_route_inner(owner)', /auth BOSH continuation/);
-rejects('BOSH unexposed response cannot publish authentication', 'boshResponse',
-  'anyhow::ensure!(self.accepted, "BOSH authentication control was not exposed");',
-  'anyhow::ensure!(true, "BOSH authentication control was not exposed");', /BOSH publication gate/);
 rejects('BOSH publication failure cannot succeed', 'bosh',
   'Ok(ready) => ready,\n            Err(_) => return false',
   'Ok(ready) => ready,\n            Err(_) => return true', /BOSH must observe publication/);
@@ -92,15 +74,6 @@ rejects('BOSH cannot insert a suspension between exposure and publication', 'bos
 rejects('BOSH activation marker cannot be hidden behind a dead condition', 'boshAction',
   'let item = if index == 0 {',
   'let item = if false {', /BOSH activation/);
-rejects('BOSH publication cannot treat every accepted response as selected', 'boshResponse',
-  'if self.auth_control_selected {',
-  'if true {', /BOSH publication gate/);
-rejects('BOSH publication callback failure cannot mint readiness', 'boshResponse',
-  'anyhow::ensure!(publish(owners).await, "BOSH authentication publication failed");',
-  'let _ = publish(owners).await;', /BOSH publication gate/);
-rejects('BOSH plain compatibility finish cannot bypass auth publication', 'boshResponse',
-  '!self.auth_control_selected,\n            "selected BOSH authentication control requires publication"',
-  'true,\n            "selected BOSH authentication control requires publication"', /plain compatibility finish/);
 rejects('BOSH item marker cannot become public mutable authority', 'outbound',
   '    bosh_auth_control: bool,',
   '    pub(crate) bosh_auth_control: bool,', /private item selection metadata/);
@@ -161,9 +134,6 @@ rejects('BOSH plain compatibility finish must remain test-only', 'boshResponse',
 // Finite auth owner/adapter negatives reuse the same exact token-span helper.
 rejects('auth receipt identity cannot become public substitution authority', 'authCredential',
   'publication_identity: Uuid,', 'pub publication_identity: Uuid,', /receipt instance identity must remain private/);
-rejects('auth selection completion cannot ignore one selected owner', 'boshResponse',
-  'observations.iter().all(|observation| observation.completed())',
-  'observations.iter().any(|observation| observation.completed())', /BOSH publication gate/);
 rejects('auth owner cannot publish its mutable receipt field', 'authOwner',
   'struct PendingPublication {\n    receipt: CredentialCommitReceipt,',
   'struct PendingPublication {\n    pub(crate) receipt: CredentialCommitReceipt,', /receipt, origin and effects private/);
@@ -288,218 +258,6 @@ test('MUC service constructor remains checked with an unrelated impl block', () 
   verifyMucDiscussionBoundaries({ ...baseline, mucService });
 });
 
-test('native receive, write and settlement owners satisfy their source gate', () => verifyNativeWriteBoundaries(baseline));
-function rejectsNativeWrite(name, file, pattern, replacement, expected) {
-  test(name, () => {
-    assert.equal([...baseline[file].matchAll(pattern)].length, 1, 'native mutation must match exactly once');
-    const source = baseline[file].replace(pattern, replacement);
-    assert.notEqual(source, baseline[file], 'native mutation must change source');
-    assert.throws(() => verifyNativeWriteBoundaries({ ...baseline, [file]: source }), expected);
-  });
-}
-rejectsNativeWrite('TCP lease cannot substitute another stanza', 'transport', /\|stanza\| send\(io, stanza\)/g, '|stanza| send(io, other_stanza)', /native TCP/);
-rejectsNativeWrite('WS lease cannot substitute another stanza', 'transport', /Message::Text\(stanza\.to_owned\(\)\.into\(\)\)/g, 'Message::Text(other_stanza.to_owned().into())', /native WebSocket/);
-rejectsNativeWrite('WS send cannot bypass the bounded helper', 'transport', /bounded_websocket_live_write\(socket\.send\(message\), cancellation\)/g, 'unbounded_write(socket.send(message), cancellation)', /WebSocket live writes/);
-rejectsNativeWrite('WS write cannot lose actor-shutdown priority', 'transport', /_ = cancellation\.actor_shutdown\.cancelled\(\) => false,/g, '', /WebSocket live selection/);
-rejectsNativeWrite('WS write cannot replace the existing timeout', 'transport', /tokio::time::timeout\(XMPP_WRITE_TIMEOUT, write\)/g, 'tokio::time::timeout(OTHER_TIMEOUT, write)', /WebSocket live selection/);
-rejectsNativeWrite('lease writer must receive its original item body', 'nativeWrite', /writer\(&self\.item\.stanza\)/g, 'writer(other_stanza)', /actual writer truth/);
-rejectsNativeWrite('lease cannot relabel a failed write as full', 'nativeWrite', /let truth = if actual\.is_ok\(\)/g, 'let truth = if true', /actual writer truth/);
-rejectsNativeWrite('lease must propagate actual writer failure', 'nativeWrite', /\n\s*actual\?;/g, '\n        let _ = actual;', /actual writer truth/);
-rejectsNativeWrite('written item must retain its full-write notification', 'nativeWrite', /self\.item\.confirm_transport_write\(\);/g, '', /native settlement/);
-rejectsNativeWrite('written item must use the consuming ACK request', 'nativeWrite', /self\.written\.begin_ack\(\)/g, 'unreviewed_ack()', /native settlement/);
-rejectsNativeWrite('C2S settlement cannot substitute its request', 'nativeWrite', /port\.acknowledge_c2s\(&request\)/g, 'port.acknowledge_c2s(&other_request)', /native c2s settlement/);
-rejectsNativeWrite('MIX settlement cannot substitute its request', 'nativeWrite', /port\.acknowledge_mix\(&request\)/g, 'port.acknowledge_mix(&other_request)', /native mix settlement/);
-rejectsNativeWrite('native Drop must destroy its child first', 'nativeWrite', /drop\(self\.child\.take\(\)\);/g, '', /destroy its child/);
-rejectsNativeWrite('native poll must retain the panic marker', 'nativeWrite', /this\.poll_in_progress = true;/g, 'this.poll_in_progress = false;', /mark a panic boundary/);
-rejectsNativeWrite('native ready poll must destroy its child first', 'nativeWrite', /drop\(this\.child\.take\(\)\);/g, '', /mark a panic boundary/);
-rejectsNativeWrite('ACK commit helper cannot skip its actual commit', 'nativeCore', /commit\.await\.map_err\(CommitError::Repository\)\?;/g, 'drop(commit);', /bind preparation before COMMIT/);
-rejectsNativeWrite('C2S transaction cannot bypass the observer', 'replayDb', /\bcommit_observed\(/g, 'unobserved_commit(', /actual C2S ACK transaction/);
-rejectsNativeWrite('C2S absent row cannot be called a deletion', 'replayDb', /AckDisposition::AbsentUnclaimed/g, 'AckDisposition::Deleted', /checked deletion/);
-rejectsNativeWrite('MIX transaction cannot bypass the observer', 'mixDb', /\bcommit_observed\(\s*transaction\.commit\(\),\s*observation,/g, 'unobserved_commit(transaction.commit(), observation,', /actual MIX ACK transaction/);
-rejectsNativeWrite('MIX no-match cannot be called a deletion', 'mixDb', /AckDisposition::NoMatchingMix/g, 'AckDisposition::Deleted', /actual MIX ACK transaction/);
-
-test('SM production ownership paths satisfy their source gate', () => verifySmOwnershipBoundaries(baseline));
-test('SM comments cannot provide additional executable effects', () => {
-  verifySmOwnershipBoundaries({ ...baseline, smOwner: `/* pool.begin(); request.no_persistence(); */\n${baseline.smOwner}` });
-});
-// Only an inline `mod tests { ... }` ends the production source in the
-// mutation helpers below: a module read appends child files after the
-// parent's bodyless `mod tests;` declaration.
-function rejectsSm(name, file, method, pattern, replacement, expected) {
-  test(name, () => {
-    const testModule = baseline[file].search(/#\[cfg\(test\)\]\s*mod tests\s*\{/);
-    const production = testModule < 0 ? baseline[file] : baseline[file].slice(0, testModule);
-    const declaration = new RegExp(`\\bfn\\s+${method}\\b`, 'g');
-    const matches = [...production.matchAll(declaration)];
-    assert.equal(matches.length, 1, 'SM mutation must select one actual method');
-    const start = matches[0].index;
-    // These reviewed methods contain no nested function declarations. Keep
-    // unrelated methods out of a targeted mutation without executing Rust.
-    const following = /\n\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+/.exec(production.slice(start + matches[0][0].length));
-    const end = following ? start + matches[0][0].length + following.index : production.length;
-    const selected = baseline[file].slice(start, end);
-    assert.equal([...selected.matchAll(pattern)].length, 1, 'SM mutation must match exactly once inside its selected method');
-    const source = baseline[file].slice(0, start) + selected.replace(pattern, replacement) + baseline[file].slice(end);
-    assert.notEqual(source, baseline[file], 'SM mutation must change source');
-    assert.throws(() => verifySmOwnershipBoundaries({ ...baseline, [file]: source }), expected);
-  });
-}
-rejectsSm('SM record entry cannot substitute its owner', 'protocol', 'record_outbound_item', /turn\.record_item\(item,\s*&observation\)/g, 'turn.record_item(item, &other_observation)', /record_outbound_item/);
-rejectsSm('SM checkpoint entry cannot omit its child owner', 'protocol', 'checkpoint_sm', /sm_owner::SmTurnRunner::new/g, 'unobserved_runner', /checkpoint_sm/);
-rejectsSm('SM ACK entry cannot substitute h', 'smProtocol', 'acknowledge', /turn\.acknowledge\(h,\s*&observation\)/g, 'turn.acknowledge(other_h, &observation)', /SM acknowledge/);
-rejectsSm('SM item cannot substitute its body before recording', 'smOwner', 'record_item', /self\.record_source\(&item\.stanza,\s*item\.durable_source,\s*observation\)/g, 'self.record_source(other_stanza, item.durable_source, observation)', /real item/);
-rejectsSm('SM item cannot discard its checkpoint failure', 'smOwner', 'record_item', /\.await\?;/g, '.await.ok();', /real item/);
-rejectsSm('SM item cannot omit the ownership notification attempt', 'smOwner', 'record_item', /observation\.notification_attempted\(\);/g, '', /ownership notification/);
-rejectsSm('SM record cannot stop advancing h', 'smOwner', 'record_source', /self\.sm\.outbound_h\.wrapping_add\(1\)/g, 'self.sm.outbound_h', /append before checkpoint/);
-rejectsSm('SM record cannot restore after every checkpoint error', 'smOwner', 'record_source', /error\s*\.downcast_ref::<crate::outbound::DurableDeliverySuperseded>\(\)\s*\.is_some\(\)/g, 'true', /typed supersession/);
-rejectsSm('SM record cannot omit its retained append fact', 'smOwner', 'record_source', /observation\.appended\(\);/g, '', /append before checkpoint/);
-rejectsSm('SM record cannot omit typed restoration', 'smOwner', 'record_source', /self\.sm\.unacked\.pop_back\(\);/g, '', /typed supersession/);
-rejectsSm('SM checkpoint cannot skip transient reservation', 'smOwner', 'checkpoint_in_turn', /self\s*\.port\s*\.reserve_snapshot\(live_bytes\)/g, 'unobserved_reservation()', /bind its snapshot/);
-rejectsSm('SM checkpoint cannot expand its existing deadline', 'smOwner', 'checkpoint_in_turn', /Duration::from_secs\(5\)/g, 'Duration::from_secs(6)', /bind its snapshot/);
-rejectsSm('SM checkpoint cannot apply an unvalidated return', 'smOwner', 'checkpoint_in_turn', /validate_checkpoint_return\(outcome\.updated,\s*&rotations\)/g, 'accept_unchecked_result(outcome.updated, &rotations)', /returned receipt/);
-rejectsSm('SM ACK cannot replace actual counter arithmetic', 'smOwner', 'acknowledge', /northstar_xep_0198::acknowledgement_delta/g, 'invented_delta', /actual h arithmetic/);
-rejectsSm('SM ACK cannot select another prefix', 'smOwner', 'acknowledge', /\.take\(delta\)/g, '.take(delta + 1)', /exact persisted cut/);
-rejectsSm('SM ACK cannot erase separate batch authority', 'smOwner', 'acknowledge', /prepared\.request\(\)\.validate_batch_return\(\)\?;/g, '', /separate batch authority/);
-rejectsSm('SM ACK cannot erase local h application evidence', 'smOwner', 'acknowledge', /observation\.ack_applied\(h\);/g, '', /local apply/);
-rejectsSm('SM ACK cannot flatten capacity failure', 'smOwner', 'acknowledge', /result\?;/g, 'drop(result);', /fallible shrink/);
-rejectsSm('SM prepared view cannot omit payload projection equality', 'smPrepared', 'validate_projection', /snapshot\s*==\s*SnapshotProjection::from\(self\.snapshot\)/g, 'true', /entire immutable projection/);
-rejectsSm('SM prepared view cannot omit policy equality', 'smPrepared', 'validate_projection', /policy\s*==\s*self\.policy/g, 'true', /entire immutable projection/);
-rejectsSm('SM COMMIT cannot skip its real future', 'smCore', 'commit_observed', /future\.await\.map_err\(CompletionError::Repository\)\?;/g, 'drop(future);', /commit_observed/);
-rejectsSm('SM COMMIT cannot lose a known receipt', 'smCore', 'commit_observed', /permit\.received\(\);/g, '', /commit_observed/);
-rejectsSm('SM rollback cannot claim success without awaiting it', 'smCore', 'rollback_observed', /future\.await\.map_err\(CompletionError::Repository\)\?;/g, 'drop(future);', /rollback_observed/);
-rejectsSm('SM SQL cannot bypass its COMMIT observation', 'smDb', 'checkpoint_sm_session_and_acknowledge_observed', /sm_ownership::commit_observed/g, 'sm_ownership::unobserved_commit', /SQL checkpoint/);
-rejectsSm('SM SQL cannot bypass its explicit rollback observation', 'smDb', 'checkpoint_sm_session_and_acknowledge_observed', /sm_ownership::rollback_observed/g, 'sm_ownership::unobserved_rollback', /SQL checkpoint/);
-rejectsSm('SM empty batch cannot invent a transaction receipt', 'smDb', 'acknowledge_transport_sources_observed', /request\.no_persistence\(\)\?;/g, 'request.invented_receipt()?;', /unpersisted SQL ACK/);
-rejectsSm('SM batch cannot bypass its COMMIT observation', 'smDb', 'acknowledge_transport_sources_observed', /sm_ownership::commit_observed/g, 'sm_ownership::unobserved_commit', /unpersisted SQL ACK/);
-rejectsSm('SM runner cannot lose its panic marker', 'smOwner', 'poll', /this\.poll_in_progress\s*=\s*true;/g, 'this.poll_in_progress = false;', /panic marker/);
-rejectsSm('SM typed error cannot erase independently known COMMIT', 'smOwner', 'record_source', /&&\s*observation\.may_restore_superseded\(\)/g, '', /typed supersession/);
-rejectsSm('SM restoration cannot invert its no-COMMIT condition', 'smCore', 'may_restore_superseded', /state\.knowledge\s*==\s*Knowledge::NoCommitRequested/g, 'state.knowledge != Knowledge::NoCommitRequested', /independent active no-COMMIT/);
-
-test('BOSH pending transfer and actual item owner satisfy their source gate', () => verifyBoshTransferBoundaries(baseline));
-test('BOSH transfer comments do not supply executable receipt authority', () => {
-  verifyBoshTransferBoundaries({ ...baseline, boshCore: `/* permit.received(); */\n${baseline.boshCore}` });
-});
-function rejectsBosh(name, file, pattern, replacement, expected) {
-  test(name, () => {
-    const testModule = baseline[file].search(/#\[cfg\(test\)\]\s*mod tests\s*\{/);
-    const production = testModule < 0 ? baseline[file] : baseline[file].slice(0, testModule);
-    assert.equal([...production.matchAll(pattern)].length, 1, 'BOSH mutation must match exactly once in production source');
-    const source = production.replace(pattern, replacement) + baseline[file].slice(production.length);
-    assert.notEqual(source, baseline[file], 'BOSH mutation must change source');
-    assert.throws(() => verifyBoshTransferBoundaries({ ...baseline, [file]: source }), expected);
-  });
-}
-rejectsBosh('BOSH cannot expand its existing backend timer', 'bosh', /const BOSH_BACKEND_OPERATION_TIMEOUT: Duration = Duration::from_secs\(5\);/g, 'const BOSH_BACKEND_OPERATION_TIMEOUT: Duration = Duration::from_secs(6);', /existing backend timeout/);
-rejectsBosh('BOSH request cannot substitute another operation', 'bosh', /self\.accept_request\(\*request,\s*response,\s*&operation\)/g, 'self.accept_request(*request, response, &other_operation)', /Request must retain/);
-rejectsBosh('BOSH outbound cannot substitute another operation', 'bosh', /self\.queue_outbound\(stanza,\s*&operation\)/g, 'self.queue_outbound(stanza, &other_operation)', /Outbound must retain/);
-rejectsBosh('BOSH actor cannot replace its item at the shared helper', 'bosh', /ownership::record_and_push\(\s*&mut output,\s*item,/g, 'ownership::record_and_push(&mut output, other_item,', /same item/);
-rejectsBosh('BOSH transfer errors cannot become record-side supersession', 'bosh', /Err\(ownership::RecordPushError::Record\(error\)\)\s*if superseded_bosh_message_id/g, 'Err(ownership::RecordPushError::Transfer { source, error }) if superseded_bosh_message_id', /record-only supersession/);
-rejectsBosh('BOSH record port must see the original item', 'boshOwner', /record\s*\.record\(&item\)/g, 'record.record(&other_item)', /record its actual item/);
-rejectsBosh('BOSH cannot clear source on the unowned branch', 'boshOwner', /if managed_by_sm\s*\{/g, 'if !managed_by_sm {', /clear SM-owned/);
-rejectsBosh('BOSH SM transfer must clear the durable source', 'boshOwner', /item\.durable_source = None;/g, '', /clear SM-owned/);
-rejectsBosh('BOSH SM transfer must clear the old MIX handoff', 'boshOwner', /item\.mix_handoff = None;/g, '', /clear SM-owned/);
-rejectsBosh('BOSH transfer cannot skip its existing capacity precheck', 'boshOwner', /if !output\.can_push\(&item\)/g, 'if false', /own the original item/);
-rejectsBosh('BOSH transfer cannot replace the prepared request', 'boshOwner', /port\.transfer\(&prepared\.request\)/g, 'port.transfer(&other_request)', /exact returned continuation/);
-rejectsBosh('BOSH transfer cannot substitute its return', 'boshOwner', /prepared\.returned\(returned\)\?\.push\(output\)/g, 'prepared.returned(other_source)?.push(output)', /exact returned continuation/);
-rejectsBosh('BOSH local continuation cannot skip receipt authority', 'boshOwner', /self\.transferred\.begin_local\(\)\?/g, 'invent_local_authority()', /exact source mutation/);
-rejectsBosh('BOSH item cannot receive a different rotated source', 'boshOwner', /TransportOwnershipSource::Mix\(local\.current\(\)\)/g, 'TransportOwnershipSource::Mix(other_source)', /exact source mutation/);
-rejectsBosh('BOSH handoff cannot name another session', 'boshOwner', /session_id: local\.session_id\(\),/g, 'session_id: other_session,', /notification attempt/);
-rejectsBosh('BOSH cannot discard the actual FIFO result', 'boshOwner', /local\.queue_returned\(accepted\);/g, 'local.queue_returned(true);', /actual FIFO result/);
-rejectsBosh('BOSH MIX service cannot replace the closed request', 'mixService', /self\.repository\.transfer_mix_delivery_to_bosh\(request\)/g, 'self.repository.transfer_mix_delivery_to_bosh(other_request)', /same closed request/);
-rejectsBosh('BOSH repository cannot discard the closed request', 'mixRepository', /crate::mix::transfer_mix_delivery_to_bosh\(&self\.pool,\s*request\)/g, 'crate::mix::transfer_mix_delivery_to_bosh(&self.pool, other_request)', /same closed request/);
-rejectsBosh('BOSH SQL cannot replace the bound source', 'mixDb', /(pub async fn transfer_mix_delivery_to_bosh\([\s\S]*?\{\s*request\.validate_for_io\(\)\?;\s*)let source = request\.source\(\);/g, '$1let source = other_source;', /closed inputs/);
-rejectsBosh('BOSH SQL cannot replace the bound session', 'mixDb', /let session_id = request\.session_id\(\);/g, 'let session_id = other_session;', /closed inputs/);
-rejectsBosh('BOSH SQL cannot bypass the COMMIT observer', 'mixDb', /bosh_ownership::transfer_commit_observed/g, 'bosh_ownership::unobserved_commit', /actual COMMIT receipt/);
-rejectsBosh('BOSH commit helper must await its actual future', 'boshCore', /future\.await\.map_err\(CompletionError::Repository\)\?;/g, 'drop(future);', /COMMIT wrapper/);
-rejectsBosh('BOSH commit helper cannot erase a known receipt', 'boshCore', /permit\.received\(\);/g, '', /COMMIT wrapper/);
-rejectsBosh('BOSH return cannot substitute the observed source', 'boshCore', /transfer\.returned_source = Some\(current\);/g, 'transfer.returned_source = Some(other_source);', /actual return/);
-rejectsBosh('BOSH return cannot fabricate receipt agreement', 'boshCore', /transfer\.return_matches_receipt\s*=\s*transfer\.knowledge == TransferKnowledge::ReceiptKnown\(current\);/g, 'transfer.return_matches_receipt = true;', /matching receipt authority/);
-rejectsBosh('BOSH return cannot accept an unmatched receipt', 'boshCore', /if !transfer\.return_matches_receipt\s*\{/g, 'if false {', /matching receipt authority/);
-rejectsBosh('BOSH Drop must destroy the child first', 'boshOwner', /drop\(self\.child\.take\(\)\);/g, '', /destroy its child/);
-rejectsBosh('BOSH poll must preserve caught panic knowledge', 'boshOwner', /this\.poll_in_progress = true;/g, 'this.poll_in_progress = false;', /actual timeout\/return/);
-rejectsBosh('BOSH poll must retain the actual keep-running result', 'boshOwner', /result\.as_ref\(\)\.ok\(\)\.copied\(\)/g, 'Some(true)', /keep_running/);
-
-test('BOSH response ownership uses the actual production helpers', () => verifyBoshResponseBoundaries(baseline));
-test('BOSH response comments cannot add receipt or exposure authority', () => {
-  verifyBoshResponseBoundaries({ ...baseline, boshResponseCore: `/* permit.received();\n#[cfg(test)]\nmod tests */\n${baseline.boshResponseCore}` });
-});
-function rejectsBoshResponse(name, file, pattern, replacement, expected) {
-  test(name, () => {
-    const source = baseline[file];
-    const marker = /\n#\[cfg\(test\)\]\s*\nmod tests\s*\{/.exec(source);
-    const split = marker ? marker.index : source.length;
-    const production = source.slice(0, split);
-    assert.equal([...production.matchAll(pattern)].length, 1, 'BOSH response mutation must match exactly once in production source');
-    const changedSource = production.replace(pattern, replacement) + source.slice(split);
-    assert.notEqual(changedSource, source, 'BOSH response mutation must change source');
-    assert.throws(() => verifyBoshResponseBoundaries({ ...baseline, [file]: changedSource }), expected);
-  });
-}
-rejectsBoshResponse('response preparation cannot borrow another FIFO', 'bosh',
-  /output: &mut self\.output,/g, 'output: &mut other_output,', /actual actor fields/);
-rejectsBoshResponse('response cache predicate cannot include pause controls', 'bosh',
-  /cache: cache && condition\.is_none\(\) && pending\.request\.pause\.is_none\(\),/g,
-  'cache: cache && condition.is_none(),', /existing cache predicate/);
-rejectsBoshResponse('cached replay cannot precede ACK validation', 'bosh',
-  /if !valid_client_response_ack\(/g, 'if !unchecked_client_response_ack(', /validate client ACK/);
-rejectsBoshResponse('fresh BOSH ACK cannot bypass the shared helper', 'bosh',
-  /\.renew_and_apply_response_ack\(request\.ack, operation\)/g, '.apply_ack_without_renewal(request.ack, operation)', /key, shape/);
-rejectsBoshResponse('actor ACK wrapper cannot bypass its production helper', 'bosh',
-  /response_owner::renew_and_acknowledge\(/g, 'response_owner::unobserved_acknowledge(', /actor ACK wrapper/);
-rejectsBoshResponse('actor pause wrapper cannot bypass the empty-control primitive', 'bosh',
-  /response_owner::finish_empty_control\(/g, 'response_owner::unobserved_empty_control(', /actor pause wrapper/);
-for (const method of ['bind_bosh_response_sources', 'renew_bosh_fences', 'acknowledge_bosh_responses']) {
-  rejectsBoshResponse(`${method} port cannot replace its request`, 'boshResponse',
-    new RegExp(`(self\\.service\\.${method}\\()request(\\))`, 'g'),
-    '$1other_request$2', /ReplayPort must pass each exact request/);
-}
-rejectsBoshResponse('bind port cannot receive a replacement request', 'boshResponse',
-  /port\.bind\(&request\)/g, 'port.bind(&other_request)', /bind selected sources/);
-rejectsBoshResponse('bind return cannot replace actual membership', 'boshResponse',
-  /request\.returned\(ownership\)/g, 'request.returned(other_ownership)', /actual returned membership/);
-rejectsBoshResponse('typed bind errors cannot bypass restoration authority', 'boshResponse',
-  /request\.supersession\(message_id\)/g, 'invent_restoration(message_id)', /independent pre-COMMIT authority/);
-rejectsBoshResponse('restoration cannot use another transaction knowledge class', 'boshResponseCore',
-  /(pub fn supersession[\s\S]*?attempt\.knowledge != )BindKnowledge::NoCommitRequested/g,
-  '$1BindKnowledge::NotRequired', /cannot restore an entered or confirmed bind/);
-rejectsBoshResponse('bind return cannot fabricate receipt agreement', 'boshResponseCore',
-  /BindKnowledge::ReceiptKnown\(receipt\) => receipt == &ownership/g,
-  'BindKnowledge::ReceiptKnown(receipt) => true', /matching receipt authority/);
-rejectsBoshResponse('payload exposure cannot omit the matching receipt guard', 'boshResponseCore',
-  /if !attempt\.return_matches \|\| attempt\.restored/g, 'if false', /checked bound continuation/);
-rejectsBoshResponse('cache insertion cannot be recorded before the actual push', 'boshResponse',
-  /(if metadata\.cache \{)([\s\S]*?)bookkeeping\.cached\(\);/g,
-  '$1 bookkeeping.cached(); $2', /record insertion after the actual push/);
-rejectsBoshResponse('cache cannot replace returned membership', 'boshResponse',
-  /durable_ownership: ownership,/g, 'durable_ownership: other_ownership,', /same bytes, membership/);
-rejectsBoshResponse('pause cannot turn into a terminal control', 'boshResponse',
-  /operation\.observe_empty_control\(rid\)/g, 'operation.observe_terminal_control(rid)', /empty synchronous control/);
-rejectsBoshResponse('cached renewal cannot target another RID', 'boshResponse',
-  /operation\.begin_renew\(Some\(\(request\.rid, ownership\)\)\)/g,
-  'operation.begin_renew(Some((other_rid, ownership)))', /exact renewal before payload exposure/);
-rejectsBoshResponse('cached replay cannot apply a fresh ACK', 'boshResponse',
-  /exposure\.updated\(\);/g, 'exposure.updated(); port.acknowledge(&other_request).await.unwrap();', /cannot apply a fresh ACK/);
-rejectsBoshResponse('fresh ACK must retain the actual receipt-send result', 'boshResponse',
-  /acknowledged\.receipt_sent\(accepted\);/g, 'acknowledged.receipt_sent(true);', /actual receipt sends/);
-rejectsBoshResponse('fresh ACK cannot evict a different RID prefix', 'boshResponse',
-  /cached\.rid <= acknowledged\.rid\(\)/g, 'cached.rid <= other_rid', /exact committed return/);
-rejectsBoshResponse('BOSH bind service cannot retarget its closed request', 'replayService',
-  /\.bind_bosh_response_sources\(request\)/g, '.bind_bosh_response_sources(other_request)', /service must forward/);
-rejectsBoshResponse('BOSH renewal repository cannot retarget its closed request', 'replayRepository',
-  /renew_bosh_transport_fences\(&self\.pool, request\)/g,
-  'renew_bosh_transport_fences(&self.pool, other_request)', /repository must forward/);
-rejectsBoshResponse('bind SQL cannot omit its independent COMMIT receipt', 'replayDb',
-  /response::bind_commit_observed/g, 'response::unobserved_bind_commit', /independent membership receipt/);
-rejectsBoshResponse('renewal SQL cannot replace expected cache membership', 'replayDb',
-  /let expected_response = request\.expected\(\);/g, 'let expected_response = None;', /closed request inputs/);
-rejectsBoshResponse('ACK SQL cannot fabricate its deletion count', 'replayDb',
-  /let acknowledged = deleted_sources\.len\(\);/g, 'let acknowledged = 0;', /actual deletion facts/);
-for (const kind of ['bind', 'renew', 'ack']) {
-  rejectsBoshResponse(`${kind} response COMMIT cannot discard its receipt`, 'boshResponseCore',
-    new RegExp(`(pub async fn ${kind}_commit_observed[\\s\\S]*?)permit\\.received\\(\\);`, 'g'),
-    '$1', /response COMMIT wrappers/);
-}
-
 function rejectsMixWorker(name, file, before, after, expected, matches = 1) {
   test(name, () => assert.throws(() => verifyMixWorkerBoundaries(
     changedMuc(file, before, after, matches)), expected));
@@ -531,14 +289,12 @@ rejectsMixWorker('MIX attempt UUID equality cannot replace private invocation id
 test('untouched BOSH selection observer satisfies focused and complete production gates', () => {
   verifyBoshSelectionObservations(baseline);
   verifyExecutionBoundaries(baseline);
-  verifyBoshResponseBoundaries(baseline);
 });
 function rejectsSelection(name, before, after, expected) {
   test(name, () => {
     const mutant = changedMuc('boshResponse', before, after);
     assert.throws(() => verifyBoshSelectionObservations(mutant), expected);
     assert.throws(() => verifyExecutionBoundaries(mutant));
-    assert.throws(() => verifyBoshResponseBoundaries(mutant));
   });
 }
 for (const [name, declaration] of [

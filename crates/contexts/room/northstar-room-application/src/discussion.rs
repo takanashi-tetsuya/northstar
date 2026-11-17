@@ -635,6 +635,53 @@ impl Fanout {
 }
 
 #[cfg(test)]
+pub(crate) fn assert_commit_fact_cannot_be_substituted() {
+    use crate::muc_service::discussion::fixture;
+
+    let application = fixture::application(fixture::Cut::Return);
+    let observation =
+        Observation::new(application.prepare_discussion(fixture::command(true, true)));
+    let request = observation.request().unwrap();
+    request.start().unwrap();
+    let outcome = MucDiscussionAdmission::Stored(request.command().id);
+    let entered = request.enter_commit(outcome).unwrap();
+    let before = observation.snapshot();
+    for (label, fact) in [
+        (
+            "substituted result identity",
+            CommitFact {
+                outcome: MucDiscussionAdmission::Stored(uuid::Uuid::from_u128(999)),
+                fresh_class: Some(AcceptanceClass::ArchiveAndIdentity),
+            },
+        ),
+        (
+            "substituted acceptance class",
+            CommitFact {
+                outcome,
+                fresh_class: Some(AcceptanceClass::ArchiveOnly),
+            },
+        ),
+    ] {
+        let substitute = PreparedCommit {
+            observation: observation.clone(),
+            fact,
+        };
+        assert_eq!(
+            request.received(substitute),
+            Err(Rejected::Knowledge),
+            "{label}"
+        );
+        assert_eq!(observation.snapshot(), before, "{label}");
+    }
+    request.received(entered).unwrap();
+    assert_eq!(
+        observation.snapshot().summary().knowledge,
+        KnowledgeClass::ReceiptKnown,
+        "original commit fact"
+    );
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{MucDiscussionRepository, RepositoryFuture, RoomApplication};

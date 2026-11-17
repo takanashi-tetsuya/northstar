@@ -643,6 +643,52 @@ impl WakePermit {
 }
 
 #[cfg(test)]
+pub(crate) fn assert_store_allocations_cannot_be_substituted() {
+    use crate::mix_service::foreground::fixture;
+
+    let observation = Observation::new(fixture::prepared(false));
+    let request = observation.store_request(fixture::command(false)).unwrap();
+    let substitute = StoreRequest {
+        observation: observation.clone(),
+        command: Arc::new(fixture::command(false)),
+    };
+    let before = observation.snapshot();
+    assert_eq!(
+        substitute.start("mix.local.test"),
+        Err(Rejected::Input),
+        "substituted command allocation"
+    );
+    assert_eq!(
+        observation.snapshot(),
+        before,
+        "substituted command allocation"
+    );
+
+    request.start("mix.local.test").unwrap();
+    let entered = request.enter_commit(fixture::stored(true)).unwrap();
+    let substitute = PreparedCommit {
+        observation: observation.clone(),
+        fact: Arc::new(fixture::stored(true)),
+    };
+    let before = observation.snapshot();
+    assert_eq!(
+        request.received(substitute),
+        Err(Rejected::Knowledge),
+        "substituted receipt allocation"
+    );
+    assert_eq!(
+        observation.snapshot(),
+        before,
+        "substituted receipt allocation"
+    );
+    request.received(entered).unwrap();
+    assert!(
+        matches!(observation.snapshot().knowledge, Knowledge::ReceiptKnown(_)),
+        "original receipt allocation"
+    );
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use northstar_room_core::mix::{

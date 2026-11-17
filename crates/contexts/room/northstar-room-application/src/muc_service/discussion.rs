@@ -221,3 +221,6 @@ pub mod fixture {
         (observation, completion)
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -3217,6 +3217,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-time"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "time",
+]
+
+[[package]]
 name = "northstar-upload-application"
 version = "0.1.0"
 dependencies = [

@@ -22,6 +22,7 @@ members = [
     "crates/kernel/northstar-xmpp-avatar",
     "crates/kernel/northstar-xml-framing",
     "crates/kernel/northstar-xml-builder",
+    "crates/kernel/northstar-time",
     "crates/kernel/northstar-xep-0059",
     "crates/kernel/northstar-xep-0060",
     "crates/kernel/northstar-xep-0115",

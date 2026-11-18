@@ -222,6 +222,7 @@
     "northstar-stream",
     "northstar-telemetry",
     "northstar-test-harness",
+    "northstar-time",
     "northstar-upload-application",
     "northstar-upload-core",
     "northstar-upload-postgres",
@@ -6634,6 +6635,22 @@
     [
       "northstar-test-harness",
       "uuid"
+    ],
+    [
+      "northstar-time",
+      "chrono"
+    ],
+    [
+      "northstar-time",
+      "serde_json"
+    ],
+    [
+      "northstar-time",
+      "sqlx"
+    ],
+    [
+      "northstar-time",
+      "time"
     ],
     [
       "northstar-upload-application",

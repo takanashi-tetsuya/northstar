@@ -598,6 +598,14 @@ crates:
     api_stability: internal
     publish_policy: never
 
+  - crate_id: northstar-time
+    package: northstar-time
+    path: crates/kernel/northstar-time
+    tier: kernel
+    owner_team: platform
+    api_stability: internal-stable
+    publish_policy: never
+
   - crate_id: northstar-upload-application
     package: northstar-upload-application
     path: crates/contexts/upload/northstar-upload-application

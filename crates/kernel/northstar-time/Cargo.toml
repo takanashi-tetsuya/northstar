@@ -1,0 +1,23 @@
+[package]
+name = "northstar-time"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "chrono-compatible timestamps for Northstar, built on the time crate"
+publish = false
+
+[features]
+default = []
+serde = ["dep:serde"]
+postgres = ["dep:sqlx"]
+
+[dependencies]
+time = { version = "0.3.55", default-features = false, features = ["std", "large-dates"] }
+serde = { version = "1.0", optional = true }
+sqlx = { version = "0.9", default-features = false, features = ["postgres"], optional = true }
+
+[dev-dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+serde_json = "1.0"
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "chrono"] }

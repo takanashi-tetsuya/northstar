@@ -21,12 +21,18 @@ struct Package {
     name: String,
     #[serde(default)]
     dependencies: Vec<PackageDependency>,
+    #[serde(default)]
+    features: BTreeMap<String, Vec<String>>,
 }
 #[derive(Debug, Deserialize)]
 struct PackageDependency {
     name: String,
     #[serde(default)]
     kind: Option<String>,
+    #[serde(default)]
+    optional: bool,
+    #[serde(default)]
+    features: Vec<String>,
 }
 #[derive(Debug, Deserialize)]
 struct Resolve {
@@ -593,6 +599,21 @@ fn check_tiers(
         let Some(from) = records.iter().find(|r| r.package == package.name) else {
             continue;
         };
+        let enables_postgres = package.dependencies.iter().any(|dep| {
+            dep.name == "northstar-time" && dep.features.iter().any(|feature| feature == "postgres")
+        }) || package.features.values().flatten().any(|feature| {
+            matches!(
+                feature.as_str(),
+                "northstar-time/postgres" | "northstar-time?/postgres"
+            )
+        });
+        if enables_postgres && !external_allowed(from, "sqlx") {
+            errors.push(format!(
+                "crate graph: {} ({}) must not enable northstar-time/postgres",
+                from.package,
+                tier_text(from)
+            ));
+        }
         for dep in &package.dependencies {
             let is_checked = matches!(dep.kind.as_deref(), None | Some("build"));
             if !is_checked {
@@ -608,7 +629,14 @@ fn check_tiers(
                         tier_text(to)
                     ));
                 }
-            } else if !external_allowed(from, &dep.name) {
+            } else if !external_allowed(from, &dep.name)
+                // The kernel time crate maps its values to PostgreSQL types behind
+                // its postgres feature and executes no SQL.
+                && !(package.name == "northstar-time"
+                    && dep.name == "sqlx"
+                    && dep.kind.is_none()
+                    && dep.optional)
+            {
                 errors.push(format!(
                     "crate graph: {} ({}) must not depend on external crate {}",
                     from.package,
@@ -745,14 +773,18 @@ mod tests {
             Package {
                 id: kernel.package.clone(),
                 name: kernel.package.clone(),
+                features: BTreeMap::new(),
                 dependencies: vec![PackageDependency {
                     name: context_core.package.clone(),
                     kind: None,
+                    optional: false,
+                    features: Vec::new(),
                 }],
             },
             Package {
                 id: context_core.package.clone(),
                 name: context_core.package.clone(),
+                features: BTreeMap::new(),
                 dependencies: vec![],
             },
         ];
@@ -781,14 +813,18 @@ mod tests {
             Package {
                 id: core1.package.clone(),
                 name: core1.package.clone(),
+                features: BTreeMap::new(),
                 dependencies: vec![PackageDependency {
                     name: core2.package.clone(),
                     kind: None,
+                    optional: false,
+                    features: Vec::new(),
                 }],
             },
             Package {
                 id: core2.package.clone(),
                 name: core2.package.clone(),
+                features: BTreeMap::new(),
                 dependencies: vec![],
             },
         ];
@@ -807,9 +843,12 @@ mod tests {
             vec![Package {
                 id: edge.package.clone(),
                 name: edge.package.clone(),
+                features: BTreeMap::new(),
                 dependencies: vec![PackageDependency {
                     name: dependency.to_string(),
                     kind: None,
+                    optional: false,
+                    features: Vec::new(),
                 }],
             }]
         };
@@ -832,9 +871,12 @@ mod tests {
         let packages_sqlx = vec![Package {
             id: app.package.clone(),
             name: app.package.clone(),
+            features: BTreeMap::new(),
             dependencies: vec![PackageDependency {
                 name: "sqlx".to_string(),
                 kind: None,
+                optional: false,
+                features: Vec::new(),
             }],
         }];
         let mut errors_sqlx = Vec::new();
@@ -853,9 +895,12 @@ mod tests {
         let packages_tokio = vec![Package {
             id: app.package.clone(),
             name: app.package.clone(),
+            features: BTreeMap::new(),
             dependencies: vec![PackageDependency {
                 name: "tokio".to_string(),
                 kind: None,
+                optional: false,
+                features: Vec::new(),
             }],
         }];
         let mut errors_tokio = Vec::new();
@@ -878,9 +923,12 @@ mod tests {
         let packages = vec![Package {
             id: core.package.clone(),
             name: core.package.clone(),
+            features: BTreeMap::new(),
             dependencies: vec![PackageDependency {
                 name: "tokio".to_string(),
                 kind: None,
+                optional: false,
+                features: Vec::new(),
             }],
         }];
         let workspace_members = vec![core.package.clone()];
@@ -904,14 +952,18 @@ mod tests {
             Package {
                 id: comp.package.clone(),
                 name: comp.package.clone(),
+                features: BTreeMap::new(),
                 dependencies: vec![PackageDependency {
                     name: tool.package.clone(),
                     kind: None,
+                    optional: false,
+                    features: Vec::new(),
                 }],
             },
             Package {
                 id: tool.package.clone(),
                 name: tool.package.clone(),
+                features: BTreeMap::new(),
                 dependencies: vec![],
             },
         ];
@@ -932,14 +984,18 @@ mod tests {
             Package {
                 id: comp.package.clone(),
                 name: comp.package.clone(),
+                features: BTreeMap::new(),
                 dependencies: vec![PackageDependency {
                     name: tool.package.clone(),
                     kind: Some("dev".to_string()),
+                    optional: false,
+                    features: Vec::new(),
                 }],
             },
             Package {
                 id: tool.package.clone(),
                 name: tool.package.clone(),
+                features: BTreeMap::new(),
                 dependencies: vec![],
             },
         ];
@@ -963,14 +1019,18 @@ mod tests {
             Package {
                 id: app1.package.clone(),
                 name: app1.package.clone(),
+                features: BTreeMap::new(),
                 dependencies: vec![PackageDependency {
                     name: app2.package.clone(),
                     kind: None,
+                    optional: false,
+                    features: Vec::new(),
                 }],
             },
             Package {
                 id: app2.package.clone(),
                 name: app2.package.clone(),
+                features: BTreeMap::new(),
                 dependencies: vec![],
             },
         ];
@@ -1035,5 +1095,120 @@ mod tests {
             expected_tier("crates/northstar-xep-0045", "northstar-xep-0045"),
             None
         );
+    }
+
+    fn time_sqlx_edge(package: &str, optional: bool) -> Vec<String> {
+        let from = record(package, &format!("crates/kernel/{package}"));
+        let packages = vec![Package {
+            id: package.to_string(),
+            name: package.to_string(),
+            features: BTreeMap::new(),
+            dependencies: vec![PackageDependency {
+                name: "sqlx".to_string(),
+                kind: None,
+                optional,
+                features: Vec::new(),
+            }],
+        }];
+        let mut errors = Vec::new();
+        check_tiers(&[from], &packages, &[], &mut errors);
+        errors
+    }
+
+    #[test]
+    fn time_kernel_optional_sqlx_mapping_is_accepted() {
+        assert!(time_sqlx_edge("northstar-time", true).is_empty());
+    }
+
+    #[test]
+    fn time_kernel_non_optional_sqlx_is_rejected() {
+        assert_eq!(
+            time_sqlx_edge("northstar-time", false),
+            vec!["crate graph: northstar-time (kernel) must not depend on external crate sqlx"]
+        );
+    }
+
+    #[test]
+    fn other_kernel_optional_sqlx_is_rejected() {
+        assert_eq!(
+            time_sqlx_edge("northstar-xep-core", true),
+            vec!["crate graph: northstar-xep-core (kernel) must not depend on external crate sqlx"]
+        );
+    }
+
+    fn time_postgres_feature_edge(path: &str, via_dependency: bool, weak: bool) -> Vec<String> {
+        let name = path.rsplit('/').next().unwrap();
+        let from = record(name, path);
+        let time = record("northstar-time", "crates/kernel/northstar-time");
+        let feature = if weak {
+            "northstar-time?/postgres"
+        } else {
+            "northstar-time/postgres"
+        };
+        let packages = vec![Package {
+            id: name.to_string(),
+            name: name.to_string(),
+            features: if via_dependency {
+                BTreeMap::new()
+            } else {
+                BTreeMap::from([("postgres".to_string(), vec![feature.to_string()])])
+            },
+            dependencies: vec![PackageDependency {
+                name: "northstar-time".to_string(),
+                kind: None,
+                optional: weak,
+                features: if via_dependency {
+                    vec!["postgres".to_string()]
+                } else {
+                    Vec::new()
+                },
+            }],
+        }];
+        let mut errors = Vec::new();
+        check_tiers(&[from, time], &packages, &[], &mut errors);
+        errors
+    }
+
+    #[test]
+    fn context_core_cannot_enable_time_postgres_on_dependency() {
+        assert_eq!(
+            time_postgres_feature_edge("crates/contexts/message/northstar-message-core", true, false),
+            vec!["crate graph: northstar-message-core (context message core) must not enable northstar-time/postgres"]
+        );
+    }
+
+    #[test]
+    fn context_core_cannot_forward_time_postgres_feature() {
+        for weak in [false, true] {
+            assert_eq!(
+                time_postgres_feature_edge("crates/contexts/message/northstar-message-core", false, weak),
+                vec!["crate graph: northstar-message-core (context message core) must not enable northstar-time/postgres"]
+            );
+        }
+    }
+
+    #[test]
+    fn context_adapter_can_enable_time_postgres_feature() {
+        for via_dependency in [false, true] {
+            for weak in [false, true] {
+                assert!(time_postgres_feature_edge(
+                    "crates/contexts/message/northstar-message-postgres",
+                    via_dependency,
+                    weak
+                )
+                .is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn cargo_metadata_dependency_feature_fields_default_when_absent() {
+        let package: Package = serde_json::from_str(
+            r#"{"id":"northstar-time","name":"northstar-time","dependencies":[{"name":"sqlx"}]}"#,
+        )
+        .unwrap();
+        assert!(package.features.is_empty());
+        assert!(!package.dependencies[0].optional);
+        assert!(package.dependencies[0].features.is_empty());
     }
 }

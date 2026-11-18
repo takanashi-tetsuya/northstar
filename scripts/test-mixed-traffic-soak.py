@@ -311,7 +311,9 @@ class DiagnosticTests(unittest.TestCase):
             while True:
                 try:
                     state = Path(f"/proc/{evidence['child_pid']}/stat").read_text().rsplit(')', 1)[1].split()[0]
-                except FileNotFoundError:
+                except (FileNotFoundError, ProcessLookupError):
+                    # Reaped before the open (ENOENT) or between the open and
+                    # the read (ESRCH).
                     break
                 if state == 'Z':
                     break

@@ -1,6 +1,6 @@
+use crate::wire::sasl2::*;
 use anyhow::{Context, Result};
 use northstar_auth_core as auth;
-use northstar_auth_xmpp::sasl2::*;
 use northstar_xml_builder::XmlElement;
 use northstar_xmpp_types::text::valid_language_tag;
 use roxmltree::{Document, Node};

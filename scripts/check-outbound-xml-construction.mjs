@@ -44,8 +44,8 @@ const BASELINE = new Map([
   ['crates/edges/northstar-s2s/src/outbound.rs', 0],
   ['crates/edges/northstar-s2s/src/sm.rs', 0],
   ['crates/edges/northstar-stream/src/protocol/ibr.rs', 0],
-  ['crates/contexts/auth/northstar-auth-xmpp/src/ibr.rs', 0],
-  ['crates/contexts/auth/northstar-auth-xmpp/src/sasl2.rs', 0],
+  ['crates/edges/northstar-stream/src/wire/ibr.rs', 0],
+  ['crates/edges/northstar-stream/src/wire/sasl2.rs', 0],
 ]);
 
 // This entry's directory holds independently owned modules, so it checks

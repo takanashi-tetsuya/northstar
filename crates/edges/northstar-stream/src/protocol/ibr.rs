@@ -1,9 +1,9 @@
 use super::{Action, ProtocolSession};
 use crate::protocol::SessionHost;
+use crate::wire::ibr::*;
 use anyhow::Result;
 use northstar_abuse_policy::{AbuseAction, PowChallenge, PowIntent, WorkRequirement};
 use northstar_auth_application::account::{RegistrationOutcome, RegistrationRequest};
-use northstar_auth_xmpp::ibr::*;
 use northstar_xml_builder::stanza::{iq_error, iq_result};
 use northstar_xml_builder::stream::stream_error;
 use northstar_xml_builder::xdata::xdata_value_field;

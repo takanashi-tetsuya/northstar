@@ -601,7 +601,7 @@ impl<H: DiscoveryHost> ProtocolSession<H> {
             // advertised only while that flow can actually be selected.
             features.push("jabber:iq:register");
             if !self.host().registration_is_closed() {
-                features.push(northstar_auth_xmpp::ibr::IBR2_NS);
+                features.push(crate::wire::ibr::IBR2_NS);
             }
             if H::commands_available_to(self).await? {
                 features.push("http://jabber.org/protocol/commands");

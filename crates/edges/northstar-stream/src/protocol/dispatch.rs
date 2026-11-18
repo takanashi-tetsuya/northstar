@@ -110,10 +110,7 @@ impl<H: SessionHost> ProtocolSession<H> {
         if self.sasl2_state.is_some()
             && !matches!(
                 (root.tag_name().name(), root.tag_name().namespace()),
-                (
-                    "response" | "abort",
-                    Some(northstar_auth_xmpp::sasl2::SASL2_NS)
-                )
+                ("response" | "abort", Some(crate::wire::sasl2::SASL2_NS))
             )
         {
             self.sasl_state = None;
@@ -139,13 +136,10 @@ impl<H: SessionHost> ProtocolSession<H> {
         }
         // A selected XEP-0389 flow is a stateful stream negotiation. Do not
         // allow SASL or application stanzas to interleave with its challenge.
-        if self.ibr_flow == Some(northstar_auth_xmpp::ibr::IbrFlowTransport::Stream)
+        if self.ibr_flow == Some(crate::wire::ibr::IbrFlowTransport::Stream)
             && !matches!(
                 (root.tag_name().name(), root.tag_name().namespace()),
-                (
-                    "response" | "cancel",
-                    Some(northstar_auth_xmpp::ibr::IBR2_NS)
-                )
+                ("response" | "cancel", Some(crate::wire::ibr::IBR2_NS))
             )
         {
             self.ibr_flow = None;
@@ -262,9 +256,7 @@ impl<H: SessionHost> ProtocolSession<H> {
         }
         self.enter_frame_stage(Stage::Handler);
         let action = match root.tag_name().name() {
-            "authenticate"
-                if root.tag_name().namespace() == Some(northstar_auth_xmpp::sasl2::SASL2_NS) =>
-            {
+            "authenticate" if root.tag_name().namespace() == Some(crate::wire::sasl2::SASL2_NS) => {
                 match self.begin_sasl_attempt() {
                     Some(action) => Ok(action),
                     None => self.authenticate2(root).await,
@@ -276,14 +268,10 @@ impl<H: SessionHost> ProtocolSession<H> {
                     None => self.authenticate(root).await,
                 }
             }
-            "response"
-                if root.tag_name().namespace() == Some(northstar_auth_xmpp::ibr::IBR2_NS) =>
-            {
+            "response" if root.tag_name().namespace() == Some(crate::wire::ibr::IBR2_NS) => {
                 self.handle_ibr_response(root).await
             }
-            "response"
-                if root.tag_name().namespace() == Some(northstar_auth_xmpp::sasl2::SASL2_NS) =>
-            {
+            "response" if root.tag_name().namespace() == Some(crate::wire::sasl2::SASL2_NS) => {
                 self.sasl2_response(root).await
             }
             "response"
@@ -291,20 +279,16 @@ impl<H: SessionHost> ProtocolSession<H> {
             {
                 self.sasl_response(root).await
             }
-            "abort"
-                if root.tag_name().namespace() == Some(northstar_auth_xmpp::sasl2::SASL2_NS) =>
-            {
+            "abort" if root.tag_name().namespace() == Some(crate::wire::sasl2::SASL2_NS) => {
                 Ok(self.sasl2_abort(root))
             }
             "abort" if root.tag_name().namespace() == Some("urn:ietf:params:xml:ns:xmpp-sasl") => {
                 Ok(self.sasl_abort(root))
             }
-            "register"
-                if root.tag_name().namespace() == Some(northstar_auth_xmpp::ibr::IBR2_NS) =>
-            {
+            "register" if root.tag_name().namespace() == Some(crate::wire::ibr::IBR2_NS) => {
                 self.handle_ibr_register(root).await
             }
-            "cancel" if root.tag_name().namespace() == Some(northstar_auth_xmpp::ibr::IBR2_NS) => {
+            "cancel" if root.tag_name().namespace() == Some(crate::wire::ibr::IBR2_NS) => {
                 Ok(self.handle_ibr_cancel(root))
             }
             "iq" => self.iq(root, xml).await,
@@ -857,8 +841,7 @@ fn pre_auth_registration_iq(root: Node<'_, '_>) -> bool {
     children.next().is_none()
         && matches!(
             (child.tag_name().name(), child.tag_name().namespace()),
-            ("query", Some("jabber:iq:register"))
-                | ("register", Some(northstar_auth_xmpp::ibr::IBR2_NS))
+            ("query", Some("jabber:iq:register")) | ("register", Some(crate::wire::ibr::IBR2_NS))
         )
 }
 

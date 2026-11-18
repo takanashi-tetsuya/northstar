@@ -22,7 +22,6 @@ northstar-abuse-application = { path = "../../contexts/abuse/northstar-abuse-app
 northstar-abuse-policy = { path = "../../contexts/abuse/northstar-abuse-policy" }
 northstar-auth-core = { path = "../../contexts/auth/northstar-auth-core" }
 northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application" }
-northstar-auth-xmpp = { path = "../../contexts/auth/northstar-auth-xmpp" }
 northstar-delivery-core = { path = "../../contexts/message/northstar-delivery-core" }
 northstar-federation-core = { path = "../../contexts/federation/northstar-federation-core" }
 northstar-message-application = { path = "../../contexts/message/northstar-message-application" }

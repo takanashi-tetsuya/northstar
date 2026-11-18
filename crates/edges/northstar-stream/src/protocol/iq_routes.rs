@@ -33,22 +33,22 @@ macro_rules! routes {
                 RouteGate::Always,
             ),
             (
-                IqRoute::new("register", northstar_auth_xmpp::ibr::IBR2_NS, IqKind::Get),
+                IqRoute::new("register", crate::wire::ibr::IBR2_NS, IqKind::Get),
                 $handler!(ibr2_register_get),
                 RouteGate::Always,
             ),
             (
-                IqRoute::new("register", northstar_auth_xmpp::ibr::IBR2_NS, IqKind::Set),
+                IqRoute::new("register", crate::wire::ibr::IBR2_NS, IqKind::Set),
                 $handler!(ibr2_register_set),
                 RouteGate::Always,
             ),
             (
-                IqRoute::new("response", northstar_auth_xmpp::ibr::IBR2_NS, IqKind::Set),
+                IqRoute::new("response", crate::wire::ibr::IBR2_NS, IqKind::Set),
                 $handler!(ibr2_response_set),
                 RouteGate::Always,
             ),
             (
-                IqRoute::new("cancel", northstar_auth_xmpp::ibr::IBR2_NS, IqKind::Set),
+                IqRoute::new("cancel", crate::wire::ibr::IBR2_NS, IqKind::Set),
                 $handler!(ibr2_cancel_set),
                 RouteGate::Always,
             ),

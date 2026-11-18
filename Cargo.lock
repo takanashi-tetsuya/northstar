@@ -1976,22 +1976,17 @@ name = "northstar-auth-xmpp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "northstar-auth-application",
- "northstar-auth-core",
  "northstar-roster-core",
  "northstar-runtime",
  "northstar-security",
  "northstar-telemetry",
- "northstar-time",
  "northstar-xml-builder",
  "northstar-xmpp-types",
- "roxmltree",
  "tokio",
  "tokio-util",
  "tracing",
  "uuid",
- "zeroize",
 ]
 
 [[package]]
@@ -3131,7 +3126,6 @@ dependencies = [
  "northstar-abuse-policy",
  "northstar-auth-application",
  "northstar-auth-core",
- "northstar-auth-xmpp",
  "northstar-config",
  "northstar-delivery-core",
  "northstar-federation-core",

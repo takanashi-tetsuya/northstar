@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::protocol::SessionHost;
-use northstar_auth_xmpp::sasl2::{legacy_sasl_auth, legacy_sasl_payload};
+use crate::wire::sasl2::{legacy_sasl_auth, legacy_sasl_payload};
 
 impl<H: SessionHost> ProtocolSession<H> {
     pub(crate) fn auth_replies(&mut self, replies: Vec<String>) -> Result<Action> {
@@ -161,7 +161,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                 )
                 .await;
         };
-        let payload = match northstar_auth_xmpp::sasl2::normalize_base64_payload(payload) {
+        let payload = match crate::wire::sasl2::normalize_base64_payload(payload) {
             Ok(payload) => payload,
             Err(condition) => {
                 return Ok(Action::Send(failure(
@@ -191,7 +191,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                 "not-authorized",
             )));
         }
-        let payload = match northstar_auth_xmpp::sasl2::normalize_base64_payload(payload) {
+        let payload = match crate::wire::sasl2::normalize_base64_payload(payload) {
             Ok(payload) => payload,
             Err(condition) => {
                 self.sasl_state = None;
@@ -466,7 +466,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                         self.sasl_state = None;
                         self.legacy_sasl_awaiting_initial_response = false;
                         if self.sasl2_state.take().is_some() {
-                            Ok(Action::Send(northstar_auth_xmpp::sasl2::failure_xml(
+                            Ok(Action::Send(crate::wire::sasl2::failure_xml(
                                 "not-authorized",
                                 None,
                             )))
@@ -484,7 +484,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                 let b64 = base64::engine::general_purpose::STANDARD.encode(challenge_data);
                 self.sasl_state = Some(sasl_mech);
                 let namespace = if self.sasl2_state.is_some() {
-                    northstar_auth_xmpp::sasl2::SASL2_NS
+                    crate::wire::sasl2::SASL2_NS
                 } else {
                     "urn:ietf:params:xml:ns:xmpp-sasl"
                 };
@@ -517,7 +517,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                     .c2s_authentication_telemetry()
                     .authentication_failed();
                 if self.sasl2_state.take().is_some() {
-                    Ok(Action::Send(northstar_auth_xmpp::sasl2::failure_xml(
+                    Ok(Action::Send(crate::wire::sasl2::failure_xml(
                         condition, None,
                     )))
                 } else {
@@ -572,7 +572,7 @@ impl<H: SessionHost> ProtocolSession<H> {
         self.sasl_scram_fence = None;
         self.host.c2s_authentication_telemetry().rate_limited();
         if self.sasl2_state.take().is_some() {
-            Action::Send(northstar_auth_xmpp::sasl2::failure_xml(
+            Action::Send(crate::wire::sasl2::failure_xml(
                 "temporary-auth-failure",
                 Some("login rate limit active; retry after cooldown"),
             ))
@@ -604,7 +604,7 @@ impl<H: SessionHost> ProtocolSession<H> {
             "XMPP authentication backend failed"
         );
         if self.sasl2_state.take().is_some() {
-            Action::Send(northstar_auth_xmpp::sasl2::failure_xml(
+            Action::Send(crate::wire::sasl2::failure_xml(
                 "temporary-auth-failure",
                 None,
             ))

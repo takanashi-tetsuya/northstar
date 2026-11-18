@@ -453,7 +453,7 @@ impl ResumeErrorCapture {
 #[tokio::test]
 async fn inline_resume_error_falls_back_to_a_distinct_unbound_attempt_on_the_original_frame() {
     use crate::auth_publication::SelectedControls;
-    use northstar_auth_xmpp::sasl2::{parse_authenticate, Sasl2Context};
+    use crate::wire::sasl2::{parse_authenticate, Sasl2Context};
     use northstar_session_core::publication::{CredentialKind, HandlerReturn, Terminal};
     let (errors, _subscriber) = ResumeErrorCapture::install();
     let mut host = TestHost::new();
@@ -681,7 +681,7 @@ async fn captured_caps_waits_on_original_gate_and_revalidates_original_connectio
 
 #[tokio::test]
 async fn standalone_and_inline_resume_seal_only_their_final_transport_envelopes() {
-    use northstar_auth_xmpp::sasl2::{parse_authenticate, Sasl2Context};
+    use crate::wire::sasl2::{parse_authenticate, Sasl2Context};
     for label in ["standalone", "inline"] {
         let mut host = TestHost::new();
         Arc::get_mut(&mut host).unwrap().resume_success = true;
@@ -782,7 +782,7 @@ async fn standalone_and_inline_resume_seal_only_their_final_transport_envelopes(
 
 #[tokio::test]
 async fn contradictory_resume_success_closes_without_starting_an_unbound_fallback() {
-    use northstar_auth_xmpp::sasl2::{parse_authenticate, Sasl2Context};
+    use crate::wire::sasl2::{parse_authenticate, Sasl2Context};
     let mut host = TestHost::new();
     Arc::get_mut(&mut host).unwrap().resume_contradiction = true;
     let mut session = host.session();
@@ -1075,7 +1075,7 @@ async fn protocol_receipt_handoff_retains_the_attempt_captured_before_a_later_fr
 
 #[tokio::test(start_paused = true)]
 async fn bind2_defers_the_same_busy_replay_until_transport_publication() {
-    use northstar_auth_xmpp::sasl2::{parse_authenticate, Sasl2Context};
+    use crate::wire::sasl2::{parse_authenticate, Sasl2Context};
     let host = TestHost::new();
     let mut session = host.session();
     let document = roxmltree::Document::parse(

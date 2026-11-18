@@ -2303,15 +2303,7 @@
       ],
       [
         "northstar-auth-xmpp",
-        "base64"
-      ],
-      [
-        "northstar-auth-xmpp",
         "northstar-auth-application"
-      ],
-      [
-        "northstar-auth-xmpp",
-        "northstar-auth-core"
       ],
       [
         "northstar-auth-xmpp",
@@ -2331,19 +2323,11 @@
       ],
       [
         "northstar-auth-xmpp",
-        "northstar-time"
-      ],
-      [
-        "northstar-auth-xmpp",
         "northstar-xml-builder"
       ],
       [
         "northstar-auth-xmpp",
         "northstar-xmpp-types"
-      ],
-      [
-        "northstar-auth-xmpp",
-        "roxmltree"
       ],
       [
         "northstar-auth-xmpp",
@@ -2360,10 +2344,6 @@
       [
         "northstar-auth-xmpp",
         "uuid"
-      ],
-      [
-        "northstar-auth-xmpp",
-        "zeroize"
       ],
       [
         "northstar-bosh",
@@ -5888,10 +5868,6 @@
       [
         "northstar-stream",
         "northstar-auth-core"
-      ],
-      [
-        "northstar-stream",
-        "northstar-auth-xmpp"
       ],
       [
         "northstar-stream",

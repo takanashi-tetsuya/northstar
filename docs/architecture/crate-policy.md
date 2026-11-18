@@ -29,7 +29,7 @@ and `*-storage` (object storage), `core` otherwise.
 | --- | --- |
 | core | kernel; any context's core |
 | application | kernel, platform; any context's core; an application of the same context |
-| adapter | kernel, platform; any context's core; the same context's application; the edge `northstar-stream` |
+| adapter | kernel, platform; any context's core; the same context's application; for `*-xmpp` adapters only, the edge `northstar-stream` |
 
 No runtime crate may depend on a tooling crate.
 

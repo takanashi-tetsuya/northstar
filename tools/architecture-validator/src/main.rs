@@ -530,7 +530,11 @@ fn internal_allowed(from: &CrateRecord, to: &CrateRecord) -> bool {
                         && to.role.as_deref() == Some("application")
                         && from.context.is_some()
                         && from.context == to.context)
-                    || (to.tier == "edge" && to.package == "northstar-stream")
+                    // An -xmpp adapter implements its handlers for the session core's
+                    // ProtocolSession; persistence and other adapters never see an edge.
+                    || (to.tier == "edge"
+                        && to.package == "northstar-stream"
+                        && from.package.ends_with("-xmpp"))
             }
             Some("workflows") => {
                 to.tier == "kernel"
@@ -552,9 +556,6 @@ fn internal_allowed(from: &CrateRecord, to: &CrateRecord) -> bool {
                 || (to.tier == "edge"
                     && to.package == "northstar-stream"
                     && from.package != to.package)
-                // The session core negotiates SASL, SASL2 and IBR in the auth context's wire formats;
-                // northstar-auth-xmpp depends on no edge.
-                || (from.package == "northstar-stream" && to.package == "northstar-auth-xmpp")
         }
         "composition" => true,
         "tooling" => true,
@@ -759,15 +760,35 @@ mod tests {
     }
 
     #[test]
-    fn only_the_session_core_may_use_the_auth_wire_adapter() {
+    fn no_edge_may_depend_on_a_context_adapter() {
         let auth_xmpp = record(
             "northstar-auth-xmpp",
             "crates/contexts/auth/northstar-auth-xmpp",
         );
         let stream = record("northstar-stream", "crates/edges/northstar-stream");
         let c2s = record("northstar-c2s", "crates/edges/northstar-c2s");
-        assert!(internal_allowed(&stream, &auth_xmpp));
+        assert!(!internal_allowed(&stream, &auth_xmpp));
         assert!(!internal_allowed(&c2s, &auth_xmpp));
+    }
+
+    #[test]
+    fn only_xmpp_adapters_may_depend_on_the_session_core() {
+        let stream = record("northstar-stream", "crates/edges/northstar-stream");
+        let muc_xmpp = record(
+            "northstar-muc-xmpp",
+            "crates/contexts/room/northstar-muc-xmpp",
+        );
+        let session_postgres = record(
+            "northstar-session-postgres",
+            "crates/contexts/session/northstar-session-postgres",
+        );
+        let upload_storage = record(
+            "northstar-upload-storage",
+            "crates/contexts/upload/northstar-upload-storage",
+        );
+        assert!(internal_allowed(&muc_xmpp, &stream));
+        assert!(!internal_allowed(&session_postgres, &stream));
+        assert!(!internal_allowed(&upload_storage, &stream));
     }
 
     #[test]

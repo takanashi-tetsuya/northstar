@@ -61,6 +61,7 @@ northstar-security = { path = "../../crates/platform/northstar-security", featur
 northstar-session-application = { path = "../../crates/contexts/session/northstar-session-application", features = ["test-support"] }
 northstar-session-postgres = { path = "../../crates/contexts/session/northstar-session-postgres", features = ["test-support"] }
 northstar-stream = { path = "../../crates/edges/northstar-stream", features = ["test-support"] }
+northstar-time = { path = "../../crates/kernel/northstar-time", features = ["serde", "postgres"] }
 northstar-upload-application = { path = "../../crates/contexts/upload/northstar-upload-application" }
 northstar-upload-postgres = { path = "../../crates/contexts/upload/northstar-upload-postgres", features = ["test-support"] }
 northstar-workflows = { path = "../../crates/contexts/workflows/northstar-workflows", features = ["test-support"] }

@@ -3043,6 +3043,10 @@
       ],
       [
         "northstar-db-it",
+        "northstar-time"
+      ],
+      [
+        "northstar-db-it",
         "northstar-upload-application"
       ],
       [
@@ -6176,6 +6180,10 @@
       [
         "northstar-time",
         "chrono"
+      ],
+      [
+        "northstar-time",
+        "serde"
       ],
       [
         "northstar-time",

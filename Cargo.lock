@@ -2197,6 +2197,7 @@ dependencies = [
  "northstar-session-application",
  "northstar-session-postgres",
  "northstar-stream",
+ "northstar-time",
  "northstar-upload-application",
  "northstar-upload-postgres",
  "northstar-workflows",

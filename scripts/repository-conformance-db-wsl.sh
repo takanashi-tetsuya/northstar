@@ -55,6 +55,7 @@ conformance_tests=(
   session::replay_fencing::replay_replacement_preserves_other_resources_and_rejects_stale_tokens
   session::sm_receipts::sm_checkpoint_receipts_preserve_atomic_queue
   session::sm_receipts::unpersisted_sm_ack_receipts_bind_the_batch
+  time_codec::northstar_time_and_chrono_store_and_read_identical_postgres_timestamps_and_dates
 )
 
 control_psql() {

@@ -1220,6 +1220,7 @@ digraph compile_time {
   "northstar-db-it" -> "northstar-session-application";
   "northstar-db-it" -> "northstar-session-postgres";
   "northstar-db-it" -> "northstar-stream";
+  "northstar-db-it" -> "northstar-time";
   "northstar-db-it" -> "northstar-upload-application";
   "northstar-db-it" -> "northstar-upload-postgres";
   "northstar-db-it" -> "northstar-workflows";
@@ -2004,6 +2005,7 @@ digraph compile_time {
   "northstar-test-harness" -> "tracing";
   "northstar-test-harness" -> "uuid";
   "northstar-time" -> "chrono";
+  "northstar-time" -> "serde";
   "northstar-time" -> "serde_json";
   "northstar-time" -> "sqlx";
   "northstar-time" -> "time";

@@ -16,4 +16,5 @@ mod room;
 mod roster;
 mod session;
 mod support;
+mod time_codec;
 mod upload;

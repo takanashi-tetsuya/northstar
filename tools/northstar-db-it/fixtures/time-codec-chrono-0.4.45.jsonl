@@ -1,0 +1,435 @@
+{"label":"construct/timestamptz/unix_epoch/0ns","result":"Ok(secs=0 nanos=0 off=0)"}
+{"label":"encode/timestamptz/unix_epoch/0ns/text","result":"Ok(1970-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/unix_epoch/0ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/unix_epoch/0ns/epoch","result":"Ok(0.000000)"}
+{"label":"construct/timestamptz/unix_epoch/-1ns","result":"Ok(secs=-1 nanos=999999999 off=0)"}
+{"label":"encode/timestamptz/unix_epoch/-1ns/text","result":"Ok(1970-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/unix_epoch/-1ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/unix_epoch/-1ns/epoch","result":"Ok(0.000000)"}
+{"label":"construct/timestamptz/unix_epoch/1ns","result":"Ok(secs=0 nanos=1 off=0)"}
+{"label":"encode/timestamptz/unix_epoch/1ns/text","result":"Ok(1970-01-01 00:00:00.000001+00)"}
+{"label":"encode/timestamptz/unix_epoch/1ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/unix_epoch/1ns/epoch","result":"Ok(0.000001)"}
+{"label":"construct/timestamptz/unix_epoch/-1000ns","result":"Ok(secs=-1 nanos=999999000 off=0)"}
+{"label":"encode/timestamptz/unix_epoch/-1000ns/text","result":"Ok(1969-12-31 23:59:59.999999+00)"}
+{"label":"encode/timestamptz/unix_epoch/-1000ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/unix_epoch/-1000ns/epoch","result":"Ok(-0.000001)"}
+{"label":"construct/timestamptz/unix_epoch/1000ns","result":"Ok(secs=0 nanos=1000 off=0)"}
+{"label":"encode/timestamptz/unix_epoch/1000ns/text","result":"Ok(1970-01-01 00:00:00.000001+00)"}
+{"label":"encode/timestamptz/unix_epoch/1000ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/unix_epoch/1000ns/epoch","result":"Ok(0.000001)"}
+{"label":"construct/timestamptz/unix_epoch/-1500ns","result":"Ok(secs=-1 nanos=999998500 off=0)"}
+{"label":"encode/timestamptz/unix_epoch/-1500ns/text","result":"Ok(1969-12-31 23:59:59.999999+00)"}
+{"label":"encode/timestamptz/unix_epoch/-1500ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/unix_epoch/-1500ns/epoch","result":"Ok(-0.000001)"}
+{"label":"construct/timestamptz/unix_epoch/1500ns","result":"Ok(secs=0 nanos=1500 off=0)"}
+{"label":"encode/timestamptz/unix_epoch/1500ns/text","result":"Ok(1970-01-01 00:00:00.000002+00)"}
+{"label":"encode/timestamptz/unix_epoch/1500ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/unix_epoch/1500ns/epoch","result":"Ok(0.000002)"}
+{"label":"construct/timestamptz/unix_epoch/-499ns","result":"Ok(secs=-1 nanos=999999501 off=0)"}
+{"label":"encode/timestamptz/unix_epoch/-499ns/text","result":"Ok(1970-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/unix_epoch/-499ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/unix_epoch/-499ns/epoch","result":"Ok(0.000000)"}
+{"label":"construct/timestamptz/unix_epoch/499ns","result":"Ok(secs=0 nanos=499 off=0)"}
+{"label":"encode/timestamptz/unix_epoch/499ns/text","result":"Ok(1970-01-01 00:00:00.000001+00)"}
+{"label":"encode/timestamptz/unix_epoch/499ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/unix_epoch/499ns/epoch","result":"Ok(0.000001)"}
+{"label":"construct/timestamptz/unix_epoch/-500ns","result":"Ok(secs=-1 nanos=999999500 off=0)"}
+{"label":"encode/timestamptz/unix_epoch/-500ns/text","result":"Ok(1970-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/unix_epoch/-500ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/unix_epoch/-500ns/epoch","result":"Ok(0.000000)"}
+{"label":"construct/timestamptz/unix_epoch/500ns","result":"Ok(secs=0 nanos=500 off=0)"}
+{"label":"encode/timestamptz/unix_epoch/500ns/text","result":"Ok(1970-01-01 00:00:00.000001+00)"}
+{"label":"encode/timestamptz/unix_epoch/500ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/unix_epoch/500ns/epoch","result":"Ok(0.000001)"}
+{"label":"construct/timestamptz/unix_epoch/-999ns","result":"Ok(secs=-1 nanos=999999001 off=0)"}
+{"label":"encode/timestamptz/unix_epoch/-999ns/text","result":"Ok(1970-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/unix_epoch/-999ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/unix_epoch/-999ns/epoch","result":"Ok(0.000000)"}
+{"label":"construct/timestamptz/unix_epoch/999ns","result":"Ok(secs=0 nanos=999 off=0)"}
+{"label":"encode/timestamptz/unix_epoch/999ns/text","result":"Ok(1970-01-01 00:00:00.000001+00)"}
+{"label":"encode/timestamptz/unix_epoch/999ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/unix_epoch/999ns/epoch","result":"Ok(0.000001)"}
+{"label":"construct/timestamptz/postgres_epoch/0ns","result":"Ok(secs=946684800 nanos=0 off=0)"}
+{"label":"encode/timestamptz/postgres_epoch/0ns/text","result":"Ok(2000-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/postgres_epoch/0ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/postgres_epoch/0ns/epoch","result":"Ok(946684800.000000)"}
+{"label":"construct/timestamptz/postgres_epoch/-1ns","result":"Ok(secs=946684799 nanos=999999999 off=0)"}
+{"label":"encode/timestamptz/postgres_epoch/-1ns/text","result":"Ok(2000-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/postgres_epoch/-1ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/postgres_epoch/-1ns/epoch","result":"Ok(946684800.000000)"}
+{"label":"construct/timestamptz/postgres_epoch/1ns","result":"Ok(secs=946684800 nanos=1 off=0)"}
+{"label":"encode/timestamptz/postgres_epoch/1ns/text","result":"Ok(2000-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/postgres_epoch/1ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/postgres_epoch/1ns/epoch","result":"Ok(946684800.000000)"}
+{"label":"construct/timestamptz/postgres_epoch/-499ns","result":"Ok(secs=946684799 nanos=999999501 off=0)"}
+{"label":"encode/timestamptz/postgres_epoch/-499ns/text","result":"Ok(2000-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/postgres_epoch/-499ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/postgres_epoch/-499ns/epoch","result":"Ok(946684800.000000)"}
+{"label":"construct/timestamptz/postgres_epoch/499ns","result":"Ok(secs=946684800 nanos=499 off=0)"}
+{"label":"encode/timestamptz/postgres_epoch/499ns/text","result":"Ok(2000-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/postgres_epoch/499ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/postgres_epoch/499ns/epoch","result":"Ok(946684800.000000)"}
+{"label":"construct/timestamptz/postgres_epoch/-500ns","result":"Ok(secs=946684799 nanos=999999500 off=0)"}
+{"label":"encode/timestamptz/postgres_epoch/-500ns/text","result":"Ok(2000-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/postgres_epoch/-500ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/postgres_epoch/-500ns/epoch","result":"Ok(946684800.000000)"}
+{"label":"construct/timestamptz/postgres_epoch/500ns","result":"Ok(secs=946684800 nanos=500 off=0)"}
+{"label":"encode/timestamptz/postgres_epoch/500ns/text","result":"Ok(2000-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/postgres_epoch/500ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/postgres_epoch/500ns/epoch","result":"Ok(946684800.000000)"}
+{"label":"construct/timestamptz/postgres_epoch/-501ns","result":"Ok(secs=946684799 nanos=999999499 off=0)"}
+{"label":"encode/timestamptz/postgres_epoch/-501ns/text","result":"Ok(2000-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/postgres_epoch/-501ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/postgres_epoch/-501ns/epoch","result":"Ok(946684800.000000)"}
+{"label":"construct/timestamptz/postgres_epoch/501ns","result":"Ok(secs=946684800 nanos=501 off=0)"}
+{"label":"encode/timestamptz/postgres_epoch/501ns/text","result":"Ok(2000-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/postgres_epoch/501ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/postgres_epoch/501ns/epoch","result":"Ok(946684800.000000)"}
+{"label":"construct/timestamptz/postgres_epoch/-999ns","result":"Ok(secs=946684799 nanos=999999001 off=0)"}
+{"label":"encode/timestamptz/postgres_epoch/-999ns/text","result":"Ok(2000-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/postgres_epoch/-999ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/postgres_epoch/-999ns/epoch","result":"Ok(946684800.000000)"}
+{"label":"construct/timestamptz/postgres_epoch/999ns","result":"Ok(secs=946684800 nanos=999 off=0)"}
+{"label":"encode/timestamptz/postgres_epoch/999ns/text","result":"Ok(2000-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/postgres_epoch/999ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/postgres_epoch/999ns/epoch","result":"Ok(946684800.000000)"}
+{"label":"construct/timestamptz/postgres_epoch/-1000ns","result":"Ok(secs=946684799 nanos=999999000 off=0)"}
+{"label":"encode/timestamptz/postgres_epoch/-1000ns/text","result":"Ok(1999-12-31 23:59:59.999999+00)"}
+{"label":"encode/timestamptz/postgres_epoch/-1000ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/postgres_epoch/-1000ns/epoch","result":"Ok(946684799.999999)"}
+{"label":"construct/timestamptz/postgres_epoch/1000ns","result":"Ok(secs=946684800 nanos=1000 off=0)"}
+{"label":"encode/timestamptz/postgres_epoch/1000ns/text","result":"Ok(2000-01-01 00:00:00.000001+00)"}
+{"label":"encode/timestamptz/postgres_epoch/1000ns/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/postgres_epoch/1000ns/epoch","result":"Ok(946684800.000001)"}
+{"label":"construct/timestamptz/1999_last_nanosecond","result":"Ok(secs=946684799 nanos=999999999 off=0)"}
+{"label":"encode/timestamptz/1999_last_nanosecond/text","result":"Ok(2000-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/1999_last_nanosecond/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/1999_last_nanosecond/epoch","result":"Ok(946684800.000000)"}
+{"label":"construct/timestamptz/2026_fraction","result":"Ok(secs=1788350400 nanos=123456789 off=0)"}
+{"label":"encode/timestamptz/2026_fraction/text","result":"Ok(2026-09-02 12:00:00.123456+00)"}
+{"label":"encode/timestamptz/2026_fraction/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/2026_fraction/epoch","result":"Ok(1788350400.123456)"}
+{"label":"construct/timestamptz/leap_second","result":"Ok(secs=1483228799 nanos=1000000000 off=0)"}
+{"label":"encode/timestamptz/leap_second/text","result":"Ok(2017-01-01 00:00:00+00)"}
+{"label":"encode/timestamptz/leap_second/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/leap_second/epoch","result":"Ok(1483228800.000000)"}
+{"label":"construct/timestamptz/leap_half","result":"Ok(secs=1483228799 nanos=1500000000 off=0)"}
+{"label":"encode/timestamptz/leap_half/text","result":"Ok(2017-01-01 00:00:00.5+00)"}
+{"label":"encode/timestamptz/leap_half/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/leap_half/epoch","result":"Ok(1483228800.500000)"}
+{"label":"construct/timestamptz/leap_last_nanosecond","result":"Ok(secs=1483228799 nanos=1999999999 off=0)"}
+{"label":"encode/timestamptz/leap_last_nanosecond/text","result":"Ok(2017-01-01 00:00:00.999999+00)"}
+{"label":"encode/timestamptz/leap_last_nanosecond/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/leap_last_nanosecond/epoch","result":"Ok(1483228800.999999)"}
+{"label":"construct/timestamptz/min_utc","result":"Ok(secs=-8334601228800 nanos=0 off=0)"}
+{"label":"encode/timestamptz/min_utc/text","result":"Err(database 22008: timestamp out of range)"}
+{"label":"encode/timestamptz/min_utc/equal","result":"Err(database 22008: timestamp out of range)"}
+{"label":"encode/timestamptz/min_utc/epoch","result":"Err(database 22008: timestamp out of range)"}
+{"label":"construct/timestamptz/max_utc","result":"Ok(secs=8210266876799 nanos=999999999 off=0)"}
+{"label":"encode/timestamptz/max_utc/text","result":"Ok(262142-12-31 23:59:59.999999+00)"}
+{"label":"encode/timestamptz/max_utc/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/max_utc/epoch","result":"Ok(8210266876799.999999)"}
+{"label":"construct/timestamptz/postgres_min","result":"Ok(secs=-210866803200 nanos=0 off=0)"}
+{"label":"encode/timestamptz/postgres_min/text","result":"Ok(4714-11-24 00:00:00+00 BC)"}
+{"label":"encode/timestamptz/postgres_min/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz/postgres_min/epoch","result":"Ok(-210866803200.000000)"}
+{"label":"construct/timestamptz/postgres_max","result":"Ok(null)"}
+{"label":"encode/timestamptz/null/text","result":"Ok(null)"}
+{"label":"encode/timestamptz/null/equal","result":"Ok(null)"}
+{"label":"encode/timestamptz/null/value","result":"Ok(null)"}
+{"label":"encode/timestamptz_array/values/text","result":"Ok({\"1970-01-01 00:00:00+00\",\"1970-01-01 00:00:00+00\",\"2000-01-01 00:00:00+00\",\"2017-01-01 00:00:00.5+00\",\"2026-09-02 12:00:00.123456+00\"})"}
+{"label":"encode/timestamptz_array/values/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz_array/values/value","result":"Ok([secs=0 nanos=0 off=0, secs=0 nanos=0 off=0, secs=946684800 nanos=0 off=0, secs=1483228800 nanos=500000000 off=0, secs=1788350400 nanos=123456000 off=0])"}
+{"label":"encode/timestamptz_array/empty/text","result":"Ok({})"}
+{"label":"encode/timestamptz_array/empty/equal","result":"Ok(true)"}
+{"label":"encode/timestamptz_array/empty/value","result":"Ok([])"}
+{"label":"construct/date/1970-01-01","result":"Ok(days=719163)"}
+{"label":"encode/date/1970-01-01","result":"Ok(1970-01-01)"}
+{"label":"construct/date/2000-01-01","result":"Ok(days=730120)"}
+{"label":"encode/date/2000-01-01","result":"Ok(2000-01-01)"}
+{"label":"construct/date/1999-12-31","result":"Ok(days=730119)"}
+{"label":"encode/date/1999-12-31","result":"Ok(1999-12-31)"}
+{"label":"construct/date/2000-01-02","result":"Ok(days=730121)"}
+{"label":"encode/date/2000-01-02","result":"Ok(2000-01-02)"}
+{"label":"construct/date/0001-01-01","result":"Ok(days=1)"}
+{"label":"encode/date/0001-01-01","result":"Ok(0001-01-01)"}
+{"label":"construct/date/4714-11-24 BC","result":"Ok(days=-1721425)"}
+{"label":"encode/date/4714-11-24 BC","result":"Ok(4714-11-24 BC)"}
+{"label":"construct/date/5874897-12-31","result":"Ok(null)"}
+{"label":"construct/date/262143-12-31","result":"Ok(null)"}
+{"label":"construct/date/262144-01-01","result":"Ok(null)"}
+{"label":"decode/binary/UTC/timestamptz/unix_epoch/utc","result":"Ok(secs=0 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/unix_epoch/fixed_offset","result":"Ok(secs=0 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/unix_epoch/option_utc","result":"Ok(secs=0 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz_array/unix_epoch","result":"Ok([secs=0 nanos=0 off=0])"}
+{"label":"decode/binary/UTC/timestamptz/before_unix_epoch/utc","result":"Ok(secs=-1 nanos=999999000 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/before_unix_epoch/fixed_offset","result":"Ok(secs=-1 nanos=999999000 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/before_unix_epoch/option_utc","result":"Ok(secs=-1 nanos=999999000 off=0)"}
+{"label":"decode/binary/UTC/timestamptz_array/before_unix_epoch","result":"Ok([secs=-1 nanos=999999000 off=0])"}
+{"label":"decode/binary/UTC/timestamptz/postgres_epoch/utc","result":"Ok(secs=946684800 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/postgres_epoch/fixed_offset","result":"Ok(secs=946684800 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/postgres_epoch/option_utc","result":"Ok(secs=946684800 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz_array/postgres_epoch","result":"Ok([secs=946684800 nanos=0 off=0])"}
+{"label":"decode/binary/UTC/timestamptz/before_postgres_epoch/utc","result":"Ok(secs=946684799 nanos=999999000 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/before_postgres_epoch/fixed_offset","result":"Ok(secs=946684799 nanos=999999000 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/before_postgres_epoch/option_utc","result":"Ok(secs=946684799 nanos=999999000 off=0)"}
+{"label":"decode/binary/UTC/timestamptz_array/before_postgres_epoch","result":"Ok([secs=946684799 nanos=999999000 off=0])"}
+{"label":"decode/binary/UTC/timestamptz/fraction/utc","result":"Ok(secs=1788350400 nanos=123456000 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/fraction/fixed_offset","result":"Ok(secs=1788350400 nanos=123456000 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/fraction/option_utc","result":"Ok(secs=1788350400 nanos=123456000 off=0)"}
+{"label":"decode/binary/UTC/timestamptz_array/fraction","result":"Ok([secs=1788350400 nanos=123456000 off=0])"}
+{"label":"decode/binary/UTC/timestamptz/east_offset/utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/east_offset/fixed_offset","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/east_offset/option_utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz_array/east_offset","result":"Ok([secs=1788350400 nanos=0 off=0])"}
+{"label":"decode/binary/UTC/timestamptz/west_offset/utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/west_offset/fixed_offset","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/west_offset/option_utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz_array/west_offset","result":"Ok([secs=1788350400 nanos=0 off=0])"}
+{"label":"decode/binary/UTC/timestamptz/first_ce_year/utc","result":"Ok(secs=-62135596800 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/first_ce_year/fixed_offset","result":"Ok(secs=-62135596800 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/first_ce_year/option_utc","result":"Ok(secs=-62135596800 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz_array/first_ce_year","result":"Ok([secs=-62135596800 nanos=0 off=0])"}
+{"label":"decode/binary/UTC/timestamptz/postgres_min/utc","result":"Ok(secs=-210866803200 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/postgres_min/fixed_offset","result":"Ok(secs=-210866803200 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz/postgres_min/option_utc","result":"Ok(secs=-210866803200 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamptz_array/postgres_min","result":"Ok([secs=-210866803200 nanos=0 off=0])"}
+{"label":"decode/binary/UTC/timestamptz/year_262143/utc","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz/year_262143/fixed_offset","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz/year_262143/option_utc","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz_array/year_262143","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz/year_262144/utc","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz/year_262144/fixed_offset","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz/year_262144/option_utc","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz_array/year_262144","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz/postgres_max/utc","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz/postgres_max/fixed_offset","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz/postgres_max/option_utc","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz_array/postgres_max","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz/infinity/utc","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz/infinity/fixed_offset","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz/infinity/option_utc","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz_array/infinity","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz/negative_infinity/utc","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz/negative_infinity/fixed_offset","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz/negative_infinity/option_utc","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz_array/negative_infinity","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz_array/all","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamptz_array/empty","result":"Ok([])"}
+{"label":"decode/binary/UTC/timestamptz/null","result":"Ok(null)"}
+{"label":"decode/binary/UTC/timestamp/unix_epoch","result":"Ok(secs=0 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamp/before_unix_epoch","result":"Ok(secs=-1 nanos=999999000 off=0)"}
+{"label":"decode/binary/UTC/timestamp/postgres_epoch","result":"Ok(secs=946684800 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamp/fraction","result":"Ok(secs=1788350400 nanos=123456000 off=0)"}
+{"label":"decode/binary/UTC/timestamp/postgres_min","result":"Ok(secs=-210866803200 nanos=0 off=0)"}
+{"label":"decode/binary/UTC/timestamp/year_262144","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamp/infinity","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/timestamp/negative_infinity","result":"panic(`NaiveDateTime + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/date/1970-01-01","result":"Ok(days=719163)"}
+{"label":"decode/binary/UTC/date/2000-01-01","result":"Ok(days=730120)"}
+{"label":"decode/binary/UTC/date/1999-12-31","result":"Ok(days=730119)"}
+{"label":"decode/binary/UTC/date/2000-01-02","result":"Ok(days=730121)"}
+{"label":"decode/binary/UTC/date/0001-01-01","result":"Ok(days=1)"}
+{"label":"decode/binary/UTC/date/4714-11-24 BC","result":"Ok(days=-1721425)"}
+{"label":"decode/binary/UTC/date/5874897-12-31","result":"panic(`NaiveDate + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/date/262143-12-31","result":"panic(`NaiveDate + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/date/262144-01-01","result":"panic(`NaiveDate + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/date/infinity","result":"panic(`NaiveDate + TimeDelta` overflowed)"}
+{"label":"decode/binary/UTC/date/-infinity","result":"panic(`NaiveDate + TimeDelta` overflowed)"}
+{"label":"decode/text/UTC/timestamptz/unix_epoch/utc","result":"Ok(secs=0 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamptz/unix_epoch/fixed_offset","result":"Ok(secs=0 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamptz/unix_epoch/option_utc","result":"Ok(secs=0 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamptz_array/unix_epoch","result":"Ok([secs=0 nanos=0 off=0])"}
+{"label":"decode/text/UTC/timestamptz/before_unix_epoch/utc","result":"Ok(secs=-1 nanos=999999000 off=0)"}
+{"label":"decode/text/UTC/timestamptz/before_unix_epoch/fixed_offset","result":"Ok(secs=-1 nanos=999999000 off=0)"}
+{"label":"decode/text/UTC/timestamptz/before_unix_epoch/option_utc","result":"Ok(secs=-1 nanos=999999000 off=0)"}
+{"label":"decode/text/UTC/timestamptz_array/before_unix_epoch","result":"Ok([secs=-1 nanos=999999000 off=0])"}
+{"label":"decode/text/UTC/timestamptz/postgres_epoch/utc","result":"Ok(secs=946684800 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamptz/postgres_epoch/fixed_offset","result":"Ok(secs=946684800 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamptz/postgres_epoch/option_utc","result":"Ok(secs=946684800 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamptz_array/postgres_epoch","result":"Ok([secs=946684800 nanos=0 off=0])"}
+{"label":"decode/text/UTC/timestamptz/before_postgres_epoch/utc","result":"Ok(secs=946684799 nanos=999999000 off=0)"}
+{"label":"decode/text/UTC/timestamptz/before_postgres_epoch/fixed_offset","result":"Ok(secs=946684799 nanos=999999000 off=0)"}
+{"label":"decode/text/UTC/timestamptz/before_postgres_epoch/option_utc","result":"Ok(secs=946684799 nanos=999999000 off=0)"}
+{"label":"decode/text/UTC/timestamptz_array/before_postgres_epoch","result":"Ok([secs=946684799 nanos=999999000 off=0])"}
+{"label":"decode/text/UTC/timestamptz/fraction/utc","result":"Ok(secs=1788350400 nanos=123456000 off=0)"}
+{"label":"decode/text/UTC/timestamptz/fraction/fixed_offset","result":"Ok(secs=1788350400 nanos=123456000 off=0)"}
+{"label":"decode/text/UTC/timestamptz/fraction/option_utc","result":"Ok(secs=1788350400 nanos=123456000 off=0)"}
+{"label":"decode/text/UTC/timestamptz_array/fraction","result":"Ok([secs=1788350400 nanos=123456000 off=0])"}
+{"label":"decode/text/UTC/timestamptz/east_offset/utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamptz/east_offset/fixed_offset","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamptz/east_offset/option_utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamptz_array/east_offset","result":"Ok([secs=1788350400 nanos=0 off=0])"}
+{"label":"decode/text/UTC/timestamptz/west_offset/utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamptz/west_offset/fixed_offset","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamptz/west_offset/option_utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamptz_array/west_offset","result":"Ok([secs=1788350400 nanos=0 off=0])"}
+{"label":"decode/text/UTC/timestamptz/first_ce_year/utc","result":"Ok(secs=-62135596800 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamptz/first_ce_year/fixed_offset","result":"Ok(secs=-62135596800 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamptz/first_ce_year/option_utc","result":"Ok(secs=-62135596800 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamptz_array/first_ce_year","result":"Ok([secs=-62135596800 nanos=0 off=0])"}
+{"label":"decode/text/UTC/timestamptz/postgres_min/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/postgres_min/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/postgres_min/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz_array/postgres_min","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/year_262143/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/year_262143/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/year_262143/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz_array/year_262143","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/year_262144/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/year_262144/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/year_262144/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz_array/year_262144","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/postgres_max/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/postgres_max/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/postgres_max/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz_array/postgres_max","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/infinity/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/infinity/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/infinity/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz_array/infinity","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/negative_infinity/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/negative_infinity/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz/negative_infinity/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz_array/negative_infinity","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz_array/all","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamptz_array/empty","result":"Ok([])"}
+{"label":"decode/text/UTC/timestamptz/null","result":"Ok(null)"}
+{"label":"decode/text/UTC/timestamp/unix_epoch","result":"Ok(secs=0 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamp/before_unix_epoch","result":"Ok(secs=-1 nanos=999999000 off=0)"}
+{"label":"decode/text/UTC/timestamp/postgres_epoch","result":"Ok(secs=946684800 nanos=0 off=0)"}
+{"label":"decode/text/UTC/timestamp/fraction","result":"Ok(secs=1788350400 nanos=123456000 off=0)"}
+{"label":"decode/text/UTC/timestamp/postgres_min","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/UTC/timestamp/year_262144","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamp/infinity","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/timestamp/negative_infinity","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/date/1970-01-01","result":"Ok(days=719163)"}
+{"label":"decode/text/UTC/date/2000-01-01","result":"Ok(days=730120)"}
+{"label":"decode/text/UTC/date/1999-12-31","result":"Ok(days=730119)"}
+{"label":"decode/text/UTC/date/2000-01-02","result":"Ok(days=730121)"}
+{"label":"decode/text/UTC/date/0001-01-01","result":"Ok(days=1)"}
+{"label":"decode/text/UTC/date/4714-11-24 BC","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/UTC/date/5874897-12-31","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/date/262143-12-31","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/date/262144-01-01","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/date/infinity","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/UTC/date/-infinity","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/unix_epoch/utc","result":"Ok(secs=0 nanos=0 off=0)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/unix_epoch/fixed_offset","result":"Ok(secs=0 nanos=0 off=32400)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/unix_epoch/option_utc","result":"Ok(secs=0 nanos=0 off=0)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/unix_epoch","result":"Ok([secs=0 nanos=0 off=0])"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/before_unix_epoch/utc","result":"Ok(secs=-1 nanos=999999000 off=0)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/before_unix_epoch/fixed_offset","result":"Ok(secs=-1 nanos=999999000 off=32400)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/before_unix_epoch/option_utc","result":"Ok(secs=-1 nanos=999999000 off=0)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/before_unix_epoch","result":"Ok([secs=-1 nanos=999999000 off=0])"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/postgres_epoch/utc","result":"Ok(secs=946684800 nanos=0 off=0)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/postgres_epoch/fixed_offset","result":"Ok(secs=946684800 nanos=0 off=32400)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/postgres_epoch/option_utc","result":"Ok(secs=946684800 nanos=0 off=0)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/postgres_epoch","result":"Ok([secs=946684800 nanos=0 off=0])"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/before_postgres_epoch/utc","result":"Ok(secs=946684799 nanos=999999000 off=0)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/before_postgres_epoch/fixed_offset","result":"Ok(secs=946684799 nanos=999999000 off=32400)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/before_postgres_epoch/option_utc","result":"Ok(secs=946684799 nanos=999999000 off=0)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/before_postgres_epoch","result":"Ok([secs=946684799 nanos=999999000 off=0])"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/fraction/utc","result":"Ok(secs=1788350400 nanos=123456000 off=0)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/fraction/fixed_offset","result":"Ok(secs=1788350400 nanos=123456000 off=32400)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/fraction/option_utc","result":"Ok(secs=1788350400 nanos=123456000 off=0)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/fraction","result":"Ok([secs=1788350400 nanos=123456000 off=0])"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/east_offset/utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/east_offset/fixed_offset","result":"Ok(secs=1788350400 nanos=0 off=32400)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/east_offset/option_utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/east_offset","result":"Ok([secs=1788350400 nanos=0 off=0])"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/west_offset/utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/west_offset/fixed_offset","result":"Ok(secs=1788350400 nanos=0 off=32400)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/west_offset/option_utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/west_offset","result":"Ok([secs=1788350400 nanos=0 off=0])"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/first_ce_year/utc","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/first_ce_year/fixed_offset","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/first_ce_year/option_utc","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/first_ce_year","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/postgres_min/utc","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/postgres_min/fixed_offset","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/postgres_min/option_utc","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/postgres_min","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/year_262143/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/year_262143/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/year_262143/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/year_262143","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/year_262144/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/year_262144/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/year_262144/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/year_262144","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/postgres_max/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/postgres_max/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/postgres_max/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/postgres_max","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/infinity/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/infinity/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/infinity/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/infinity","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/negative_infinity/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/negative_infinity/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/negative_infinity/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/negative_infinity","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/all","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/Asia/Tokyo/timestamptz_array/empty","result":"Ok([])"}
+{"label":"decode/text/Asia/Tokyo/timestamptz/null","result":"Ok(null)"}
+{"label":"decode/text/America/St_Johns/timestamptz/unix_epoch/utc","result":"Ok(secs=0 nanos=0 off=0)"}
+{"label":"decode/text/America/St_Johns/timestamptz/unix_epoch/fixed_offset","result":"Ok(secs=0 nanos=0 off=-12600)"}
+{"label":"decode/text/America/St_Johns/timestamptz/unix_epoch/option_utc","result":"Ok(secs=0 nanos=0 off=0)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/unix_epoch","result":"Ok([secs=0 nanos=0 off=0])"}
+{"label":"decode/text/America/St_Johns/timestamptz/before_unix_epoch/utc","result":"Ok(secs=-1 nanos=999999000 off=0)"}
+{"label":"decode/text/America/St_Johns/timestamptz/before_unix_epoch/fixed_offset","result":"Ok(secs=-1 nanos=999999000 off=-12600)"}
+{"label":"decode/text/America/St_Johns/timestamptz/before_unix_epoch/option_utc","result":"Ok(secs=-1 nanos=999999000 off=0)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/before_unix_epoch","result":"Ok([secs=-1 nanos=999999000 off=0])"}
+{"label":"decode/text/America/St_Johns/timestamptz/postgres_epoch/utc","result":"Ok(secs=946684800 nanos=0 off=0)"}
+{"label":"decode/text/America/St_Johns/timestamptz/postgres_epoch/fixed_offset","result":"Ok(secs=946684800 nanos=0 off=-12600)"}
+{"label":"decode/text/America/St_Johns/timestamptz/postgres_epoch/option_utc","result":"Ok(secs=946684800 nanos=0 off=0)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/postgres_epoch","result":"Ok([secs=946684800 nanos=0 off=0])"}
+{"label":"decode/text/America/St_Johns/timestamptz/before_postgres_epoch/utc","result":"Ok(secs=946684799 nanos=999999000 off=0)"}
+{"label":"decode/text/America/St_Johns/timestamptz/before_postgres_epoch/fixed_offset","result":"Ok(secs=946684799 nanos=999999000 off=-12600)"}
+{"label":"decode/text/America/St_Johns/timestamptz/before_postgres_epoch/option_utc","result":"Ok(secs=946684799 nanos=999999000 off=0)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/before_postgres_epoch","result":"Ok([secs=946684799 nanos=999999000 off=0])"}
+{"label":"decode/text/America/St_Johns/timestamptz/fraction/utc","result":"Ok(secs=1788350400 nanos=123456000 off=0)"}
+{"label":"decode/text/America/St_Johns/timestamptz/fraction/fixed_offset","result":"Ok(secs=1788350400 nanos=123456000 off=-9000)"}
+{"label":"decode/text/America/St_Johns/timestamptz/fraction/option_utc","result":"Ok(secs=1788350400 nanos=123456000 off=0)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/fraction","result":"Ok([secs=1788350400 nanos=123456000 off=0])"}
+{"label":"decode/text/America/St_Johns/timestamptz/east_offset/utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/text/America/St_Johns/timestamptz/east_offset/fixed_offset","result":"Ok(secs=1788350400 nanos=0 off=-9000)"}
+{"label":"decode/text/America/St_Johns/timestamptz/east_offset/option_utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/east_offset","result":"Ok([secs=1788350400 nanos=0 off=0])"}
+{"label":"decode/text/America/St_Johns/timestamptz/west_offset/utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/text/America/St_Johns/timestamptz/west_offset/fixed_offset","result":"Ok(secs=1788350400 nanos=0 off=-9000)"}
+{"label":"decode/text/America/St_Johns/timestamptz/west_offset/option_utc","result":"Ok(secs=1788350400 nanos=0 off=0)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/west_offset","result":"Ok([secs=1788350400 nanos=0 off=0])"}
+{"label":"decode/text/America/St_Johns/timestamptz/first_ce_year/utc","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/America/St_Johns/timestamptz/first_ce_year/fixed_offset","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/America/St_Johns/timestamptz/first_ce_year/option_utc","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/first_ce_year","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/America/St_Johns/timestamptz/postgres_min/utc","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/America/St_Johns/timestamptz/postgres_min/fixed_offset","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/America/St_Johns/timestamptz/postgres_min/option_utc","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/postgres_min","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/America/St_Johns/timestamptz/year_262143/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz/year_262143/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz/year_262143/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/year_262143","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz/year_262144/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz/year_262144/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz/year_262144/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/year_262144","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz/postgres_max/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz/postgres_max/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz/postgres_max/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/postgres_max","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz/infinity/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz/infinity/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz/infinity/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/infinity","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz/negative_infinity/utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz/negative_infinity/fixed_offset","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz/negative_infinity/option_utc","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/negative_infinity","result":"Err(error occurred while decoding column 0: input contains invalid characters)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/all","result":"Err(error occurred while decoding column 0: trailing input)"}
+{"label":"decode/text/America/St_Johns/timestamptz_array/empty","result":"Ok([])"}
+{"label":"decode/text/America/St_Johns/timestamptz/null","result":"Ok(null)"}

@@ -615,6 +615,15 @@ fn check_tiers(
             ));
         }
         for dep in &package.dependencies {
+            // Workspace timestamps come from northstar-time since S37; chrono
+            // reaches the build only through object_store.
+            if dep.name == "chrono" {
+                errors.push(format!(
+                    "crate graph: {} ({}) must not depend on chrono; use northstar-time",
+                    from.package,
+                    tier_text(from)
+                ));
+            }
             let is_checked = matches!(dep.kind.as_deref(), None | Some("build"));
             if !is_checked {
                 continue;
@@ -1095,6 +1104,46 @@ mod tests {
             expected_tier("crates/northstar-xep-0045", "northstar-xep-0045"),
             None
         );
+    }
+
+    fn platform_time_edge(dependency: &str, kind: Option<&str>) -> Vec<String> {
+        let from = record("northstar-config", "crates/platform/northstar-config");
+        let time = record("northstar-time", "crates/kernel/northstar-time");
+        let packages = vec![Package {
+            id: from.package.clone(),
+            name: from.package.clone(),
+            features: BTreeMap::new(),
+            dependencies: vec![PackageDependency {
+                name: dependency.to_string(),
+                kind: kind.map(str::to_string),
+                optional: false,
+                features: Vec::new(),
+            }],
+        }];
+        let mut errors = Vec::new();
+        check_tiers(&[from, time], &packages, &[], &mut errors);
+        errors
+    }
+
+    #[test]
+    fn platform_dev_dependency_on_chrono_is_rejected() {
+        assert_eq!(
+            platform_time_edge("chrono", Some("dev")),
+            vec!["crate graph: northstar-config (platform) must not depend on chrono; use northstar-time"]
+        );
+    }
+
+    #[test]
+    fn platform_normal_dependency_on_chrono_is_rejected() {
+        assert_eq!(
+            platform_time_edge("chrono", None),
+            vec!["crate graph: northstar-config (platform) must not depend on chrono; use northstar-time"]
+        );
+    }
+
+    #[test]
+    fn platform_dependency_on_northstar_time_without_chrono_is_accepted() {
+        assert!(platform_time_edge("northstar-time", None).is_empty());
     }
 
     fn time_sqlx_edge(package: &str, optional: bool) -> Vec<String> {

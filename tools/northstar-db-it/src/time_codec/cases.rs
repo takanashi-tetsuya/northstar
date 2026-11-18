@@ -82,13 +82,13 @@ pub(super) fn instants() -> Vec<Instant> {
         ("leap_last_nanosecond", 1_483_228_799, 1_999_999_999),
         (
             "min_utc",
-            chrono::DateTime::<chrono::Utc>::MIN_UTC.timestamp(),
-            chrono::DateTime::<chrono::Utc>::MIN_UTC.timestamp_subsec_nanos(),
+            northstar_time::DateTime::<northstar_time::Utc>::MIN_UTC.timestamp(),
+            northstar_time::DateTime::<northstar_time::Utc>::MIN_UTC.timestamp_subsec_nanos(),
         ),
         (
             "max_utc",
-            chrono::DateTime::<chrono::Utc>::MAX_UTC.timestamp(),
-            chrono::DateTime::<chrono::Utc>::MAX_UTC.timestamp_subsec_nanos(),
+            northstar_time::DateTime::<northstar_time::Utc>::MAX_UTC.timestamp(),
+            northstar_time::DateTime::<northstar_time::Utc>::MAX_UTC.timestamp_subsec_nanos(),
         ),
         // Julian day zero at midnight: 2,440,588 days before the Unix epoch.
         ("postgres_min", -2_440_588 * 86_400, 0),

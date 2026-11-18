@@ -874,19 +874,11 @@
     ],
     [
       "chrono",
-      "js-sys"
-    ],
-    [
-      "chrono",
       "num-traits"
     ],
     [
       "chrono",
       "serde"
-    ],
-    [
-      "chrono",
-      "wasm-bindgen"
     ],
     [
       "chrono",
@@ -3351,10 +3343,6 @@
     [
       "northstar-db-it",
       "base64"
-    ],
-    [
-      "northstar-db-it",
-      "chrono"
     ],
     [
       "northstar-db-it",
@@ -6642,10 +6630,6 @@
     ],
     [
       "northstar-time",
-      "chrono"
-    ],
-    [
-      "northstar-time",
       "serde"
     ],
     [
@@ -8790,10 +8774,6 @@
     ],
     [
       "sqlx-core",
-      "chrono"
-    ],
-    [
-      "sqlx-core",
       "crc"
     ],
     [
@@ -9002,10 +8982,6 @@
     ],
     [
       "sqlx-mysql",
-      "chrono"
-    ],
-    [
-      "sqlx-mysql",
       "crc"
     ],
     [
@@ -9083,10 +9059,6 @@
     [
       "sqlx-postgres",
       "byteorder"
-    ],
-    [
-      "sqlx-postgres",
-      "chrono"
     ],
     [
       "sqlx-postgres",
@@ -9187,10 +9159,6 @@
     [
       "sqlx-sqlite",
       "atoi"
-    ],
-    [
-      "sqlx-sqlite",
-      "chrono"
     ],
     [
       "sqlx-sqlite",

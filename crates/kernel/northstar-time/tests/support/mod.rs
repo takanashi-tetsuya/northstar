@@ -1,16 +1,14 @@
 //! Shared, manually serialized cases. No serde derive or random dependency is used.
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::cell::Cell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Once;
 
-mod corpus;
 mod json;
 mod native {
     use northstar_time as clock;
     include!("evaluate.rs");
 }
-pub use corpus::{corpus, golden_corpus};
 pub use native::eval;
 
 #[derive(Clone, Copy, Debug)]
@@ -149,25 +147,6 @@ pub fn capture(f: impl FnOnce() -> String) -> String {
     }
 }
 
-/// Reports at most the first twenty failures while evaluating the whole corpus.
-pub fn mismatches(
-    cases: impl IntoIterator<Item = Case>,
-    oracle: impl Fn(&Case) -> String,
-) -> Vec<String> {
-    let mut failures = Vec::new();
-    for case in cases {
-        if !case.enabled() {
-            continue;
-        }
-        let expected = oracle(&case);
-        let actual = eval(&case);
-        if expected != actual && failures.len() < 20 {
-            failures.push(format!("{case:?}\nchrono: {expected}\nnorthstar: {actual}"));
-        }
-    }
-    failures
-}
-
 pub fn fixture_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chrono-0.4.45.jsonl")
 }
@@ -175,7 +154,7 @@ pub fn fixture_path() -> std::path::PathBuf {
 pub fn read_goldens() -> Vec<(Case, String)> {
     let path = fixture_path();
     let text = std::fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!("missing chrono golden fixture at {}: {error}; generate it with NORTHSTAR_TIME_BLESS=1 and all features", path.display())
+        panic!("missing chrono golden fixture at {}: {error}; tests/fixtures/chrono-0.4.45.jsonl holds chrono 0.4.45's frozen results and cannot be regenerated", path.display())
     });
     let values: Vec<_> = text
         .lines()
@@ -194,10 +173,6 @@ pub fn read_goldens() -> Vec<(Case, String)> {
             (case, result.to_string())
         })
         .collect();
-    assert!(!values.is_empty(), "chrono golden fixture is empty: {}; generate it with NORTHSTAR_TIME_BLESS=1 and all features", path.display());
+    assert!(!values.is_empty(), "chrono golden fixture is empty: {}; tests/fixtures/chrono-0.4.45.jsonl holds chrono 0.4.45's frozen results and cannot be regenerated", path.display());
     values
-}
-
-pub fn golden_line(case: &Case, result: &str) -> String {
-    json!({"case": case.to_json(), "result": result}).to_string()
 }

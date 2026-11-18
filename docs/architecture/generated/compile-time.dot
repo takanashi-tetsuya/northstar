@@ -562,10 +562,8 @@ digraph compile_time {
   "chacha20" -> "cpufeatures";
   "chacha20" -> "rand_core";
   "chrono" -> "iana-time-zone";
-  "chrono" -> "js-sys";
   "chrono" -> "num-traits";
   "chrono" -> "serde";
-  "chrono" -> "wasm-bindgen";
   "chrono" -> "windows-link";
   "cmake" -> "cc";
   "combine" -> "bytes";
@@ -1182,7 +1180,6 @@ digraph compile_time {
   "northstar-db-it" -> "anyhow";
   "northstar-db-it" -> "axum";
   "northstar-db-it" -> "base64";
-  "northstar-db-it" -> "chrono";
   "northstar-db-it" -> "futures";
   "northstar-db-it" -> "northstar-abuse-application";
   "northstar-db-it" -> "northstar-abuse-policy";
@@ -2004,7 +2001,6 @@ digraph compile_time {
   "northstar-test-harness" -> "tokio";
   "northstar-test-harness" -> "tracing";
   "northstar-test-harness" -> "uuid";
-  "northstar-time" -> "chrono";
   "northstar-time" -> "serde";
   "northstar-time" -> "serde_json";
   "northstar-time" -> "sqlx";
@@ -2541,7 +2537,6 @@ digraph compile_time {
   "sqlx-core" -> "base64";
   "sqlx-core" -> "bytes";
   "sqlx-core" -> "cfg-if";
-  "sqlx-core" -> "chrono";
   "sqlx-core" -> "crc";
   "sqlx-core" -> "crossbeam-queue";
   "sqlx-core" -> "either";
@@ -2594,7 +2589,6 @@ digraph compile_time {
   "sqlx-mysql" -> "bitflags";
   "sqlx-mysql" -> "byteorder";
   "sqlx-mysql" -> "bytes";
-  "sqlx-mysql" -> "chrono";
   "sqlx-mysql" -> "crc";
   "sqlx-mysql" -> "digest";
   "sqlx-mysql" -> "dotenvy";
@@ -2615,7 +2609,6 @@ digraph compile_time {
   "sqlx-postgres" -> "base64";
   "sqlx-postgres" -> "bitflags";
   "sqlx-postgres" -> "byteorder";
-  "sqlx-postgres" -> "chrono";
   "sqlx-postgres" -> "crc";
   "sqlx-postgres" -> "dotenvy";
   "sqlx-postgres" -> "etcetera";
@@ -2641,7 +2634,6 @@ digraph compile_time {
   "sqlx-postgres" -> "uuid";
   "sqlx-postgres" -> "whoami";
   "sqlx-sqlite" -> "atoi";
-  "sqlx-sqlite" -> "chrono";
   "sqlx-sqlite" -> "flume";
   "sqlx-sqlite" -> "form_urlencoded";
   "sqlx-sqlite" -> "futures-channel";

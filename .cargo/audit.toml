@@ -9,9 +9,10 @@
 # (0.39 or later; SQLx 0.9.0 caps it below 0.38).
 # RUSTSEC-2026-0543 (chrono) and RUSTSEC-2026-0542 (humantime, which wraps
 # chrono) are informational "unmaintained" notices with no vulnerability.
-# chrono carries the timestamps of 51 workspace crates and SQLx's `chrono`
-# feature, and humantime arrives only through object_store. Keep both until the
-# planned migration to `time` (already in Cargo.lock) removes chrono.
+# Since S37 no workspace crate depends on chrono: timestamps use the
+# `northstar-time` kernel crate, and SQLx's `chrono` feature is off. chrono and
+# humantime arrive only through object_store, so both notices stay ignored until
+# object_store drops them.
 ignore = ["RUSTSEC-2026-0459", "RUSTSEC-2026-0543", "RUSTSEC-2026-0542"]
 informational_warnings = ["unmaintained"]
 severity_threshold = "low"

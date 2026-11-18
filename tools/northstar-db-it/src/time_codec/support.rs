@@ -1,22 +1,11 @@
 use anyhow::{ensure, Context};
-use serde_json::{json, Value};
+use serde_json::Value;
 use sqlx::{postgres::PgRow, Decode, Postgres, Row, Type};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 pub(super) trait Canonical {
     fn canonical(&self) -> String;
-}
-
-impl<Tz: chrono::TimeZone> Canonical for chrono::DateTime<Tz> {
-    fn canonical(&self) -> String {
-        format!(
-            "secs={} nanos={} off={}",
-            self.timestamp(),
-            self.timestamp_subsec_nanos(),
-            chrono::Offset::fix(self.offset()).local_minus_utc(),
-        )
-    }
 }
 
 impl<Tz: northstar_time::TimeZone> Canonical for northstar_time::DateTime<Tz> {
@@ -30,21 +19,9 @@ impl<Tz: northstar_time::TimeZone> Canonical for northstar_time::DateTime<Tz> {
     }
 }
 
-impl Canonical for chrono::NaiveDateTime {
-    fn canonical(&self) -> String {
-        self.and_utc().canonical()
-    }
-}
-
 impl Canonical for northstar_time::NaiveDateTime {
     fn canonical(&self) -> String {
         self.and_utc().canonical()
-    }
-}
-
-impl Canonical for chrono::NaiveDate {
-    fn canonical(&self) -> String {
-        format!("days={}", chrono::Datelike::num_days_from_ce(self))
     }
 }
 
@@ -143,73 +120,20 @@ where
     }
 }
 
-struct Record {
-    label: String,
-    chrono: String,
-    northstar: String,
-}
-
 #[derive(Default)]
-pub(super) struct Records(Vec<Record>);
+pub(super) struct Records(Vec<(String, String)>);
 
 impl Records {
-    pub fn push(&mut self, label: impl Into<String>, chrono: String, northstar: String) {
-        self.0.push(Record {
-            label: label.into(),
-            chrono,
-            northstar,
-        });
+    pub fn push(&mut self, label: impl Into<String>, result: String) {
+        self.0.push((label.into(), result));
     }
 
-    pub fn compare_libraries(&self) -> anyhow::Result<()> {
-        let failures: Vec<_> = self
-            .0
-            .iter()
-            .filter(|record| {
-                record.chrono != record.northstar
-                    || (record.label.ends_with("/equal") && record.chrono == "Ok(false)")
-            })
-            .take(20)
-            .map(|record| {
-                format!(
-                    "{}\nchrono: {}\nnorthstar: {}",
-                    record.label, record.chrono, record.northstar,
-                )
-            })
-            .collect();
-        ensure!(
-            failures.is_empty(),
-            "first codec mismatches (successful cross-driver equality must be true):\n{}",
-            failures.join("\n\n"),
-        );
-        Ok(())
-    }
-
-    pub fn compare_or_bless_fixture(&self) -> anyhow::Result<()> {
+    pub fn compare_fixture(&self) -> anyhow::Result<()> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures/time-codec-chrono-0.4.45.jsonl");
-        let stable: Vec<_> = self
-            .0
-            .iter()
-            .filter(|record| !record.label.starts_with("live:"))
-            .collect();
-        if std::env::var("NORTHSTAR_TIME_BLESS").as_deref() == Ok("1") {
-            use std::io::Write;
-            std::fs::create_dir_all(path.parent().context("fixture directory")?)?;
-            let mut output = std::io::BufWriter::new(std::fs::File::create(&path)?);
-            for record in stable {
-                writeln!(
-                    output,
-                    "{}",
-                    json!({"label": record.label, "result": record.chrono}),
-                )?;
-            }
-            output.flush()?;
-            return Ok(());
-        }
         let text = std::fs::read_to_string(&path).with_context(|| {
             format!(
-                "read {}; generate against PostgreSQL with NORTHSTAR_TIME_BLESS=1",
+                "read {}; this fixture holds chrono 0.4.45's frozen PostgreSQL results and cannot be regenerated",
                 path.display(),
             )
         })?;
@@ -222,24 +146,24 @@ impl Records {
             })
             .collect::<anyhow::Result<_>>()?;
         ensure!(!frozen.is_empty(), "empty chrono PostgreSQL fixture");
-        ensure!(
-            frozen.len() == stable.len(),
-            "fixture record count changed: frozen={}, actual={}; review before blessing",
-            frozen.len(),
-            stable.len(),
-        );
         let mut failures = Vec::new();
-        for (expected, actual) in frozen.iter().zip(stable) {
+        if frozen.len() != self.0.len() {
+            failures.push(format!(
+                "fixture record count changed: frozen={}, actual={}",
+                frozen.len(),
+                self.0.len(),
+            ));
+        }
+        for (expected, (actual_label, actual_result)) in frozen.iter().zip(&self.0) {
             let label = expected["label"]
                 .as_str()
                 .context("missing fixture label")?;
             let result = expected["result"]
                 .as_str()
                 .context("missing fixture result")?;
-            if (label != actual.label || result != actual.northstar) && failures.len() < 20 {
+            if (label != actual_label || result != actual_result) && failures.len() < 20 {
                 failures.push(format!(
-                    "frozen {label}: {result}\nactual {}: {}",
-                    actual.label, actual.northstar,
+                    "frozen {label}: {result}\nactual {actual_label}: {actual_result}",
                 ));
             }
         }

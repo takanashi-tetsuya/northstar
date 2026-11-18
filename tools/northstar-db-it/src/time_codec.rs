@@ -1,5 +1,4 @@
-//! Real-server differential codecs, with chrono results frozen for its removal.
-use anyhow::Context;
+//! northstar-time must reproduce chrono 0.4.45's frozen PostgreSQL results.
 use sqlx::{postgres::PgRow, Connection, Encode, PgConnection, Postgres, Type};
 
 mod cases;
@@ -24,20 +23,13 @@ where
         .await
 }
 
-fn encoded_columns(
-    records: &mut Records,
-    label: &str,
-    chrono: &Result<PgRow, sqlx::Error>,
-    northstar: &Result<PgRow, sqlx::Error>,
-) {
+fn encoded_columns(records: &mut Records, label: &str, northstar: &Result<PgRow, sqlx::Error>) {
     records.push(
         format!("{label}/text"),
-        column::<Option<String>>(chrono, 0),
         column::<Option<String>>(northstar, 0),
     );
     records.push(
         format!("{label}/equal"),
-        column::<Option<bool>>(chrono, 1),
         column::<Option<bool>>(northstar, 1),
     );
 }
@@ -46,25 +38,20 @@ async fn encode_timestamps(connection: &mut PgConnection, records: &mut Records)
     const SQL: &str = "SELECT $1::timestamptz::text, \
         $1::timestamptz = $2::timestamptz, extract(epoch from $1::timestamptz)::text";
     for instant in cases::instants() {
-        let chrono =
-            chrono::DateTime::<chrono::Utc>::from_timestamp(instant.seconds, instant.nanos);
         let northstar = northstar_time::DateTime::<northstar_time::Utc>::from_timestamp(
             instant.seconds,
             instant.nanos,
         );
         records.push(
             format!("construct/timestamptz/{}", instant.label),
-            outcome(Ok(chrono)),
             outcome(Ok(northstar)),
         );
-        if let (Some(chrono), Some(northstar)) = (chrono, northstar) {
-            let chrono_row = bound_pair(connection, SQL, chrono, northstar).await;
-            let northstar_row = bound_pair(connection, SQL, northstar, chrono).await;
+        if let Some(northstar) = northstar {
+            let northstar_row = bound_pair(connection, SQL, northstar, northstar).await;
             let label = format!("encode/timestamptz/{}", instant.label);
-            encoded_columns(records, &label, &chrono_row, &northstar_row);
+            encoded_columns(records, &label, &northstar_row);
             records.push(
                 format!("{label}/epoch"),
-                column::<Option<String>>(&chrono_row, 2),
                 column::<Option<String>>(&northstar_row, 2),
             );
         }
@@ -72,19 +59,11 @@ async fn encode_timestamps(connection: &mut PgConnection, records: &mut Records)
 
     const NULL_SQL: &str = "SELECT $1::timestamptz::text, \
         $1::timestamptz = $2::timestamptz, $1::timestamptz";
-    let chrono = None::<chrono::DateTime<chrono::Utc>>;
     let northstar = None::<northstar_time::DateTime<northstar_time::Utc>>;
-    let chrono_row = bound_pair(connection, NULL_SQL, chrono, northstar).await;
-    let northstar_row = bound_pair(connection, NULL_SQL, northstar, chrono).await;
-    encoded_columns(
-        records,
-        "encode/timestamptz/null",
-        &chrono_row,
-        &northstar_row,
-    );
+    let northstar_row = bound_pair(connection, NULL_SQL, northstar, northstar).await;
+    encoded_columns(records, "encode/timestamptz/null", &northstar_row);
     records.push(
         "encode/timestamptz/null/value",
-        column::<Option<chrono::DateTime<chrono::Utc>>>(&chrono_row, 2),
         column::<Option<northstar_time::DateTime<northstar_time::Utc>>>(&northstar_row, 2),
     );
 
@@ -97,13 +76,6 @@ async fn encode_timestamps(connection: &mut PgConnection, records: &mut Records)
         (1_483_228_799, 1_500_000_000),
         (1_788_350_400, 123_456_789),
     ];
-    let chrono: Vec<_> = values
-        .iter()
-        .map(|&(seconds, nanos)| {
-            chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, nanos)
-                .expect("representable array instant")
-        })
-        .collect();
     let northstar: Vec<_> = values
         .iter()
         .map(|&(seconds, nanos)| {
@@ -113,17 +85,12 @@ async fn encode_timestamps(connection: &mut PgConnection, records: &mut Records)
         .collect();
     const ARRAY_SQL: &str = "SELECT $1::timestamptz[]::text, \
         $1::timestamptz[] = $2::timestamptz[], $1::timestamptz[]";
-    for (label, chrono, northstar) in [
-        ("values", chrono, northstar),
-        ("empty", Vec::new(), Vec::new()),
-    ] {
-        let chrono_row = bound_pair(connection, ARRAY_SQL, chrono.clone(), northstar.clone()).await;
-        let northstar_row = bound_pair(connection, ARRAY_SQL, northstar, chrono).await;
+    for (label, northstar) in [("values", northstar), ("empty", Vec::new())] {
+        let northstar_row = bound_pair(connection, ARRAY_SQL, northstar.clone(), northstar).await;
         let label = format!("encode/timestamptz_array/{label}");
-        encoded_columns(records, &label, &chrono_row, &northstar_row);
+        encoded_columns(records, &label, &northstar_row);
         records.push(
             format!("{label}/value"),
-            column::<Vec<chrono::DateTime<chrono::Utc>>>(&chrono_row, 2),
             column::<Vec<northstar_time::DateTime<northstar_time::Utc>>>(&northstar_row, 2),
         );
     }
@@ -148,17 +115,14 @@ async fn fetch(
 fn timestamp_columns(records: &mut Records, label: &str, row: &Result<PgRow, sqlx::Error>) {
     records.push(
         format!("{label}/utc"),
-        column::<chrono::DateTime<chrono::Utc>>(row, 0),
         column::<northstar_time::DateTime<northstar_time::Utc>>(row, 0),
     );
     records.push(
         format!("{label}/fixed_offset"),
-        column::<chrono::DateTime<chrono::FixedOffset>>(row, 0),
         column::<northstar_time::DateTime<northstar_time::FixedOffset>>(row, 0),
     );
     records.push(
         format!("{label}/option_utc"),
-        column::<Option<chrono::DateTime<chrono::Utc>>>(row, 0),
         column::<Option<northstar_time::DateTime<northstar_time::Utc>>>(row, 0),
     );
 }
@@ -186,7 +150,6 @@ async fn decode_timestamps(
         .await;
         records.push(
             format!("decode/{protocol}/timestamptz_array/{label}"),
-            column::<Vec<chrono::DateTime<chrono::Utc>>>(&row, 0),
             column::<Vec<northstar_time::DateTime<northstar_time::Utc>>>(&row, 0),
         );
     }
@@ -204,75 +167,31 @@ async fn decode_timestamps(
         let row = fetch(connection, sql, text).await;
         records.push(
             format!("decode/{protocol}/timestamptz_array/{label}"),
-            column::<Vec<chrono::DateTime<chrono::Utc>>>(&row, 0),
             column::<Vec<northstar_time::DateTime<northstar_time::Utc>>>(&row, 0),
         );
     }
     let row = fetch(connection, "SELECT NULL::timestamptz".into(), text).await;
     records.push(
         format!("decode/{protocol}/timestamptz/null"),
-        column::<Option<chrono::DateTime<chrono::Utc>>>(&row, 0),
         column::<Option<northstar_time::DateTime<northstar_time::Utc>>>(&row, 0),
     );
 }
 
 async fn encode_dates(connection: &mut PgConnection, records: &mut Records) {
     for &(label, year, month, day) in cases::DATES {
-        let chrono = chrono::NaiveDate::from_ymd_opt(year, month, day);
         let northstar = northstar_time::NaiveDate::from_ymd_opt(year, month, day);
-        records.push(
-            format!("construct/date/{label}"),
-            outcome(Ok(chrono)),
-            outcome(Ok(northstar)),
-        );
-        if let (Some(chrono), Some(northstar)) = (chrono, northstar) {
-            let chrono_row = sqlx::query("SELECT $1::date::text")
-                .bind(chrono)
-                .fetch_one(&mut *connection)
-                .await;
+        records.push(format!("construct/date/{label}"), outcome(Ok(northstar)));
+        if let Some(northstar) = northstar {
             let northstar_row = sqlx::query("SELECT $1::date::text")
                 .bind(northstar)
                 .fetch_one(&mut *connection)
                 .await;
             records.push(
                 format!("encode/date/{label}"),
-                column::<String>(&chrono_row, 0),
                 column::<String>(&northstar_row, 0),
             );
         }
     }
-}
-
-async fn encode_current_date(
-    connection: &mut PgConnection,
-    records: &mut Records,
-) -> anyhow::Result<()> {
-    let (year, month, day): (i32, i32, i32) = sqlx::query_as(
-        "SELECT extract(year from CURRENT_DATE)::int, \
-         extract(month from CURRENT_DATE)::int, extract(day from CURRENT_DATE)::int",
-    )
-    .fetch_one(&mut *connection)
-    .await?;
-    let month = month.try_into()?;
-    let day = day.try_into()?;
-    let chrono = chrono::NaiveDate::from_ymd_opt(year, month, day)
-        .context("CURRENT_DATE must be representable by chrono")?;
-    let northstar = northstar_time::NaiveDate::from_ymd_opt(year, month, day)
-        .context("CURRENT_DATE must be representable by northstar-time")?;
-    let chrono_row = sqlx::query("SELECT $1::date::text")
-        .bind(chrono)
-        .fetch_one(&mut *connection)
-        .await;
-    let northstar_row = sqlx::query("SELECT $1::date::text")
-        .bind(northstar)
-        .fetch_one(connection)
-        .await;
-    records.push(
-        "live:encode/date/current_date",
-        column::<String>(&chrono_row, 0),
-        column::<String>(&northstar_row, 0),
-    );
-    Ok(())
 }
 
 async fn decode_naive_and_dates(
@@ -285,7 +204,6 @@ async fn decode_naive_and_dates(
         let row = fetch(connection, format!("SELECT {literal}::timestamp"), text).await;
         records.push(
             format!("decode/{protocol}/timestamp/{label}"),
-            column::<chrono::NaiveDateTime>(&row, 0),
             column::<northstar_time::NaiveDateTime>(&row, 0),
         );
     }
@@ -304,22 +222,14 @@ async fn decode_naive_and_dates(
             format!("'{literal}'::date"),
         ));
     }
-    dates.push((
-        format!("live:decode/{protocol}/date/current_date"),
-        "CURRENT_DATE".into(),
-    ));
     for (label, expression) in dates {
         let row = fetch(connection, format!("SELECT {expression}"), text).await;
-        records.push(
-            label,
-            column::<chrono::NaiveDate>(&row, 0),
-            column::<northstar_time::NaiveDate>(&row, 0),
-        );
+        records.push(label, column::<northstar_time::NaiveDate>(&row, 0));
     }
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL and TEST_DATABASE_URL; bless with NORTHSTAR_TIME_BLESS=1"]
+#[ignore = "requires PostgreSQL and TEST_DATABASE_URL to replay frozen chrono 0.4.45 results"]
 async fn northstar_time_and_chrono_store_and_read_identical_postgres_timestamps_and_dates(
 ) -> anyhow::Result<()> {
     let url = std::env::var("TEST_DATABASE_URL")?;
@@ -340,7 +250,6 @@ async fn northstar_time_and_chrono_store_and_read_identical_postgres_timestamps_
     let mut records = Records::default();
     encode_timestamps(&mut connection, &mut records).await;
     encode_dates(&mut connection, &mut records).await;
-    encode_current_date(&mut connection, &mut records).await?;
     decode_timestamps(&mut connection, &mut records, "binary/UTC", false).await;
     decode_naive_and_dates(&mut connection, &mut records, "binary/UTC", false).await;
     for zone in ["UTC", "Asia/Tokyo", "America/St_Johns"] {
@@ -353,7 +262,6 @@ async fn northstar_time_and_chrono_store_and_read_identical_postgres_timestamps_
             decode_naive_and_dates(&mut connection, &mut records, "text/UTC", true).await;
         }
     }
-    records.compare_libraries()?;
-    records.compare_or_bless_fixture()?;
+    records.compare_fixture()?;
     Ok(())
 }

@@ -1,10 +1,7 @@
 use super::{Case, Span, Stamp};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 impl Span {
-    fn json(self) -> Value {
-        json!([self.seconds, self.nanos])
-    }
     fn read(value: &Value) -> Result<Self, String> {
         let [seconds, nanos] = numbers(value)?;
         Ok(Self {
@@ -14,9 +11,6 @@ impl Span {
     }
 }
 impl Stamp {
-    fn json(self) -> Value {
-        json!([self.seconds, self.nanos, self.offset])
-    }
     fn read(value: &Value) -> Result<Self, String> {
         let [seconds, nanos, offset] = numbers(value)?;
         Ok(Self {
@@ -55,75 +49,6 @@ fn numbers<const N: usize>(value: &Value) -> Result<[i64; N], String> {
         .map_err(|_| format!("expected {N} integers"))
 }
 impl Case {
-    pub fn to_json(&self) -> Value {
-        match self {
-            Self::Delta { op, a, b, factor } => {
-                json!({"type":"delta","op":op,"a":a.json(),"b":b.json(),"factor":factor})
-            }
-            Self::Date {
-                op,
-                ymd,
-                hmsn,
-                other_days,
-                delta,
-            } => {
-                json!({"type":"date","op":op,"ymd":ymd,"hmsn":hmsn,"other_days":other_days,"delta":delta.json()})
-            }
-            Self::Time {
-                op,
-                hmsn,
-                other,
-                delta,
-            } => json!({"type":"time","op":op,"hmsn":hmsn,"other":other,"delta":delta.json()}),
-            Self::Naive { op, a, b, delta } => {
-                json!({"type":"naive","op":op,"a":a.json(),"b":b.json(),"delta":delta.json()})
-            }
-            Self::Timestamp {
-                op,
-                value,
-                nanos,
-                offset,
-            } => json!({"type":"timestamp","op":op,"value":value,"nanos":nanos,"offset":offset}),
-            Self::Local {
-                offset,
-                ymd,
-                hms,
-                utc,
-            } => json!({"type":"local","offset":offset,"ymd":ymd,"hms":hms,"utc":utc}),
-            Self::Zoned {
-                op,
-                a,
-                b,
-                delta,
-                format,
-                precision,
-                use_z,
-            } => {
-                json!({"type":"zoned","op":op,"a":a.json(),"b":b.json(),"delta":delta.json(),"format":format,"precision":precision,"use_z":use_z})
-            }
-            Self::Offset { op, value } => json!({"type":"offset","op":op,"value":value}),
-            Self::Mapping { op, variant, a, b } => {
-                json!({"type":"mapping","op":op,"variant":variant,"a":a,"b":b})
-            }
-            Self::Parse {
-                target,
-                input,
-                format,
-            } => json!({"type":"parse","target":target,"input":input,"format":format}),
-            Self::Serde {
-                target,
-                input,
-                stamp,
-            } => json!({"type":"serde","target":target,"input":input,"stamp":stamp.json()}),
-            Self::Postgres { target, stamp } => {
-                json!({"type":"postgres","target":target,"stamp":stamp.json()})
-            }
-            Self::System { op, seconds, nanos } => {
-                json!({"type":"system","op":op,"seconds":seconds,"nanos":nanos})
-            }
-            Self::Constants => json!({"type":"constants"}),
-        }
-    }
     pub fn from_json(v: &Value) -> Result<Self, String> {
         Ok(match string(v, "type")?.as_str() {
             "delta" => Self::Delta {

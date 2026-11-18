@@ -2,8 +2,8 @@
 
 #![forbid(unsafe_code)]
 
-use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
+use northstar_time::{DateTime, Utc};
 use northstar_xmpp_types::prepare_domainpart;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

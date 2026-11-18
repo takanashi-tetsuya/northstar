@@ -61,8 +61,10 @@ pub struct Sasl2Context {
     pub fast_token_was_new: bool,
     pub fast_invalidate: bool,
     pub authenticated_generation: Option<i64>,
-    pub inherited_fast_chain:
-        Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
+    pub inherited_fast_chain: Option<(
+        northstar_time::DateTime<northstar_time::Utc>,
+        northstar_time::DateTime<northstar_time::Utc>,
+    )>,
 }
 
 impl std::fmt::Debug for SmResumeRequest {
@@ -135,7 +137,7 @@ pub fn fast_token_xml(
             "expiry",
             issued
                 .expires_at
-                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                .to_rfc3339_opts(northstar_time::SecondsFormat::Secs, true),
         )
         .attr("token", issued.token.as_str())
         .finish()

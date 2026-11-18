@@ -1,7 +1,7 @@
 //! Authorized query transactions for REST snapshots and collections.
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use northstar_operations_application::api_queries::*;
+use northstar_time::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 

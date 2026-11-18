@@ -1,11 +1,11 @@
 //! PostgreSQL adapter for committed local direct-spool revision wakes.
 
 use anyhow::{ensure, Result};
-use chrono::{DateTime, Utc};
 use northstar_message_application::direct_spool_wake::{
     ClaimedDirectSpoolWake, DirectSpoolWakeRepository, DirectSpoolWakeRoute,
 };
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
+use northstar_time::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 use std::time::Duration;
 use uuid::Uuid;

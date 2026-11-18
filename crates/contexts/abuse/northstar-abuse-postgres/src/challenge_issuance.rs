@@ -2,10 +2,10 @@
 
 use crate::actor_state::{lock_db_states, persist_db_states};
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use northstar_abuse_application::guard::records::{DbActorState, IssueRecord, IssueRequest};
 use northstar_abuse_application::guard::ChallengeCapacityExceeded;
 use northstar_abuse_policy::PowChallenge;
+use northstar_time::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -156,8 +156,8 @@ pub(crate) async fn issue(
     Ok(challenge)
 }
 
-fn duration(value: Duration) -> chrono::Duration {
-    chrono::Duration::seconds(i64::try_from(value.as_secs()).unwrap_or(i64::MAX))
+fn duration(value: Duration) -> northstar_time::Duration {
+    northstar_time::Duration::seconds(i64::try_from(value.as_secs()).unwrap_or(i64::MAX))
 }
 
 fn trim_issue_events(events: &mut Vec<DateTime<Utc>>, now: DateTime<Utc>, window: Duration) {

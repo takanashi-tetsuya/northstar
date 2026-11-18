@@ -1628,7 +1628,7 @@ async fn credential_trace_retains_bounded_facts_without_private_request_receipt_
             let receipt = CredentialCommitReceipt::new(
                 Some(IssuedFastToken {
                     token: zeroize::Zeroizing::new(bearer.to_owned()),
-                    expires_at: chrono::Utc::now(),
+                    expires_at: northstar_time::Utc::now(),
                 }),
                 None,
                 None,

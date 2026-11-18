@@ -390,17 +390,18 @@ pub async fn muc_presence(
                         "item-not-found",
                     )));
                 };
-                let history_request = match parse_muc_history_request(root, chrono::Utc::now()) {
-                    Ok(request) => request,
-                    Err(MalformedMucStanza) => {
-                        return Ok(MucAction::Send(muc_stanza_error(
-                            root,
-                            &full_jid,
-                            "modify",
-                            "bad-request",
-                        )));
-                    }
-                };
+                let history_request =
+                    match parse_muc_history_request(root, northstar_time::Utc::now()) {
+                        Ok(request) => request,
+                        Err(MalformedMucStanza) => {
+                            return Ok(MucAction::Send(muc_stanza_error(
+                                root,
+                                &full_jid,
+                                "modify",
+                                "bad-request",
+                            )));
+                        }
+                    };
                 let owner_bare = bare_jid(&full_jid);
                 let blocked_patterns = session.host().muc_service().blocked_jids(user.id).await?;
                 let mut replies = Vec::new();
@@ -872,7 +873,7 @@ pub async fn muc_presence(
             "resource-constraint",
         )));
     }
-    let history_request = match parse_muc_history_request(root, chrono::Utc::now()) {
+    let history_request = match parse_muc_history_request(root, northstar_time::Utc::now()) {
         Ok(request) => request,
         Err(MalformedMucStanza) => {
             return Ok(MucAction::Send(muc_stanza_error(
@@ -911,7 +912,7 @@ pub async fn muc_presence(
         }
         Err(error) => return Err(error),
     };
-    if !created && room.configuration_is_expired(chrono::Utc::now()) {
+    if !created && room.configuration_is_expired(northstar_time::Utc::now()) {
         let _ = session
             .host()
             .muc_service()
@@ -926,7 +927,7 @@ pub async fn muc_presence(
     }
     if !created
         && room.is_locked()
-        && !room.can_configure_locked_room(&full_jid, chrono::Utc::now())
+        && !room.can_configure_locked_room(&full_jid, northstar_time::Utc::now())
     {
         return Ok(MucAction::Send(muc_stanza_error(
             root,
@@ -1074,8 +1075,9 @@ pub async fn muc_presence(
         }
     }
     let room = refreshed_room;
-    if room.configuration_is_expired(chrono::Utc::now())
-        || (room.is_locked() && !room.can_configure_locked_room(&full_jid, chrono::Utc::now()))
+    if room.configuration_is_expired(northstar_time::Utc::now())
+        || (room.is_locked()
+            && !room.can_configure_locked_room(&full_jid, northstar_time::Utc::now()))
     {
         return Ok(MucAction::Send(muc_stanza_error(
             root,

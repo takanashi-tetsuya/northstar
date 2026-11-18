@@ -17,11 +17,11 @@ pub(super) fn actor_state_keys(
 }
 
 pub(super) fn trim_db_events(
-    events: &mut Vec<chrono::DateTime<chrono::Utc>>,
-    now: chrono::DateTime<chrono::Utc>,
+    events: &mut Vec<northstar_time::DateTime<northstar_time::Utc>>,
+    now: northstar_time::DateTime<northstar_time::Utc>,
     window: Duration,
 ) {
-    let cutoff = now - chrono_duration(window);
+    let cutoff = now - time_delta(window);
     events.retain(|event| *event >= cutoff && *event <= now);
     // Independent of configuration mistakes or clock jumps, keep the row
     // bounded.  Counts above this cap already map to the maximum step.
@@ -32,7 +32,7 @@ pub(super) fn trim_db_events(
 
 pub(super) fn decay_db_states(
     states: &mut [DbActorState],
-    now: chrono::DateTime<chrono::Utc>,
+    now: northstar_time::DateTime<northstar_time::Utc>,
     config: &AbuseConfig,
 ) {
     for state in states {
@@ -51,7 +51,7 @@ pub(super) fn decay_db_states(
         );
         if level != state.penalty_level {
             state.penalty_level = level;
-            state.last_activity += chrono_duration(consumed);
+            state.last_activity += time_delta(consumed);
         }
     }
 }
@@ -60,7 +60,7 @@ pub(super) fn requirement_from_db(
     action: AbuseAction,
     states: &[DbActorState],
     shared_ip_keys: &HashSet<String>,
-    now: chrono::DateTime<chrono::Utc>,
+    now: northstar_time::DateTime<northstar_time::Utc>,
     config: &AbuseConfig,
 ) -> WorkRequirement {
     let policy = policy(action, config.base_work_factor, config.message_free_burst);
@@ -106,7 +106,7 @@ pub(super) fn requirement_from_db(
 pub(super) fn record_db_states(
     states: &mut [DbActorState],
     shared_ip_keys: &HashSet<String>,
-    now: chrono::DateTime<chrono::Utc>,
+    now: northstar_time::DateTime<northstar_time::Utc>,
     requirement: &WorkRequirement,
 ) {
     for state in states {
@@ -115,7 +115,7 @@ pub(super) fn record_db_states(
         state.last_activity = now;
         if requirement.hard_wait_seconds > 0 && !shared_ip_keys.contains(&state.key) {
             state.blocked_until =
-                now + chrono_duration(Duration::from_secs(requirement.hard_wait_seconds));
+                now + time_delta(Duration::from_secs(requirement.hard_wait_seconds));
         }
     }
 }
@@ -123,7 +123,7 @@ pub(super) fn record_db_states(
 pub(super) fn punish_db_states(
     states: &mut [DbActorState],
     shared_ip_keys: &HashSet<String>,
-    now: chrono::DateTime<chrono::Utc>,
+    now: northstar_time::DateTime<northstar_time::Utc>,
     config: &AbuseConfig,
 ) {
     for state in states {
@@ -137,7 +137,7 @@ pub(super) fn punish_db_states(
         let wait = 2_u64
             .saturating_pow(state.penalty_level.min(9))
             .min(config.max_wait.as_secs());
-        state.blocked_until = now + chrono_duration(Duration::from_secs(wait));
+        state.blocked_until = now + time_delta(Duration::from_secs(wait));
     }
 }
 
@@ -235,7 +235,7 @@ impl AbuseGuard {
         action: AbuseAction,
         actors: &[String],
         states: &mut [DbActorState],
-        now: chrono::DateTime<chrono::Utc>,
+        now: northstar_time::DateTime<northstar_time::Utc>,
     ) -> WorkRequirement {
         let shared_ip_keys = self.persistent_shared_ip_keys(action, actors);
         decay_db_states(states, now, &self.config);
@@ -248,7 +248,7 @@ impl AbuseGuard {
         action: AbuseAction,
         actors: &[String],
         states: &mut [DbActorState],
-        now: chrono::DateTime<chrono::Utc>,
+        now: northstar_time::DateTime<northstar_time::Utc>,
     ) {
         let shared_ip_keys = self.persistent_shared_ip_keys(action, actors);
         let requirement = self.current_requirement_decision(action, actors, states, now);
@@ -290,7 +290,7 @@ impl AbuseGuard {
                     let server_nonce = URL_SAFE_NO_PAD.encode(random);
                     let ttl = Duration::from_secs(120)
                         .max(Duration::from_secs(requirement.hard_wait_seconds + 30));
-                    let expires_at = now + chrono_duration(ttl);
+                    let expires_at = now + time_delta(ttl);
                     let version = if intent.is_some() {
                         POW_INTENT_VERSION
                     } else {
@@ -439,7 +439,7 @@ impl AbuseGuard {
         &self,
         input: PersistentVerificationInput<'_>,
         states: &mut [DbActorState],
-        now: chrono::DateTime<chrono::Utc>,
+        now: northstar_time::DateTime<northstar_time::Utc>,
         challenge: Option<super::records::ConsumedChallenge>,
     ) -> anyhow::Result<super::records::VerificationDecision> {
         use super::records::VerificationDecision;

@@ -320,7 +320,9 @@ pub(super) async fn execute_form_command(
                 let account = local_account_jid(&target.username, session.command_local_domain())?;
                 let value = target
                     .last_login_at
-                    .map(|timestamp| timestamp.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                    .map(|timestamp| {
+                        timestamp.to_rfc3339_opts(northstar_time::SecondsFormat::Secs, true)
+                    })
                     .unwrap_or_default();
                 return Ok(Some(
                     XmlElement::namespaced("x", DATA_NS)

@@ -2,8 +2,8 @@
 
 use crate::effects::RoomEffects;
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use northstar_room_application::muc_service::*;
+use northstar_time::{DateTime, Utc};
 use sqlx::PgPool;
 use std::time::Duration;
 use uuid::Uuid;

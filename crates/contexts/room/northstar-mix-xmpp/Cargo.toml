@@ -12,7 +12,7 @@ test-support = []
 
 [dependencies]
 anyhow = "1.0"
-chrono = "0.4"
+northstar-time = { path = "../../../kernel/northstar-time" }
 dashmap = "6.1"
 futures = "0.3"
 northstar-archive-core = { path = "../../archive/northstar-archive-core" }

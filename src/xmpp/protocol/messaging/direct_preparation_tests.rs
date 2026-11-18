@@ -118,7 +118,7 @@ async fn preparation_preserves_full_bare_delayed_live_self_and_unrated_controls(
         assert_eq!(source.rated_payload().is_some(), rated);
         let owner = owner(&source).await;
         let local = source.project_local(authority(target, own), false, None);
-        let delayed = local.delayed(chrono::DateTime::from_timestamp(100, 0).unwrap(), LocalArchivePolicy::default());
+        let delayed = local.delayed(northstar_time::DateTime::from_timestamp(100, 0).unwrap(), LocalArchivePolicy::default());
         assert_ne!(delayed.stanza, local.recipient_delivery);
         if own { assert_eq!(local.sender_archive, local.recipient_delivery); }
         let command = command(&local, &delayed);
@@ -167,7 +167,7 @@ async fn independently_changed_actor_origin_full_target_or_source_payload_cannot
         );
         let local = changed.project_local(authority(target, false), false, None);
         let delayed = local.delayed(
-            chrono::DateTime::from_timestamp(100, 0).unwrap(),
+            northstar_time::DateTime::from_timestamp(100, 0).unwrap(),
             LocalArchivePolicy::default(),
         );
         let before = owner.snapshot();
@@ -195,7 +195,7 @@ async fn changed_prepared_identity_payload_or_stored_projection_is_rejected_befo
     );
     let local = source.project_local(authority(source.target, false), false, None);
     let delayed = local.delayed(
-        chrono::DateTime::from_timestamp(100, 0).unwrap(),
+        northstar_time::DateTime::from_timestamp(100, 0).unwrap(),
         LocalArchivePolicy::default(),
     );
     for field in 0..3 {
@@ -241,7 +241,7 @@ async fn valid_unrated_frame_does_not_acquire_the_rated_normalized_payload_limit
     let owner = owner(&source).await;
     let local = source.project_local(authority(source.target, false), false, None);
     let delayed = local.delayed(
-        chrono::DateTime::from_timestamp(100, 0).unwrap(),
+        northstar_time::DateTime::from_timestamp(100, 0).unwrap(),
         LocalArchivePolicy::default(),
     );
     assert!(delayed.stanza.len() > 1_048_576);
@@ -277,7 +277,7 @@ async fn exact_policy_projection_set_and_mam_flag_reject_missing_duplicate_or_ch
             [(false, false), (true, false), (false, true), (true, true)]
         {
             let delayed = local.delayed(
-                chrono::DateTime::from_timestamp(100, 0).unwrap(),
+                northstar_time::DateTime::from_timestamp(100, 0).unwrap(),
                 LocalArchivePolicy {
                     sender_enabled,
                     recipient_enabled,
@@ -438,7 +438,7 @@ async fn actual_original_to_router_preserves_live_payload_after_delayed_command_
             let owner = owner(&original).await;
             let continuation = {
                 let delayed = local.delayed(
-                    chrono::DateTime::from_timestamp(100, 0).unwrap(),
+                    northstar_time::DateTime::from_timestamp(100, 0).unwrap(),
                     LocalArchivePolicy::default(),
                 );
                 let prepared = delayed

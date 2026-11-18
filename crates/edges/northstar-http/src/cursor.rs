@@ -10,8 +10,8 @@
 //! not; none of those operations compares a secret value.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
+use northstar_time::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
@@ -629,7 +629,7 @@ mod tests {
             );
         }
 
-        // A compromised/internal signer cannot smuggle an out-of-range chrono
+        // A compromised/internal signer cannot smuggle an out-of-range
         // timestamp through the public page-position decoder.
         let invalid_position = CursorPosition {
             last: vec![

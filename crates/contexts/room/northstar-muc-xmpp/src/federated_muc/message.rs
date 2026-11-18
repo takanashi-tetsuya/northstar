@@ -192,7 +192,8 @@ async fn federated_muc_message_owned(
                     .is_some();
             }
             if !delivered && request.temporary_storage {
-                let delayed = add_delay_from(&forwarded, chrono::Utc::now(), Some(&room_jid));
+                let delayed =
+                    add_delay_from(&forwarded, northstar_time::Utc::now(), Some(&room_jid));
                 let outcome = state
                     .muc_service()
                     .store_federated_muc_offline(
@@ -700,7 +701,8 @@ async fn federated_muc_message_owned(
                 }
                 let mut live_claim_id = None;
                 let durable_invite = if room.members_only {
-                    let delayed = add_delay_from(&invitation, chrono::Utc::now(), Some(&room_jid));
+                    let delayed =
+                        add_delay_from(&invitation, northstar_time::Utc::now(), Some(&room_jid));
                     let cluster_authority = if state.federated_muc_pg_authority_enabled() {
                         state.federated_muc_admit_mutation()?;
                         let Some(actor_target) = state
@@ -916,7 +918,8 @@ async fn federated_muc_message_owned(
                             .await;
                     }
                 } else if durable_invite.is_none() && request.temporary_storage {
-                    let delayed = add_delay_from(&invitation, chrono::Utc::now(), Some(&room_jid));
+                    let delayed =
+                        add_delay_from(&invitation, northstar_time::Utc::now(), Some(&room_jid));
                     let offline_outcome = state
                         .muc_service()
                         .store_federated_muc_offline(
@@ -1250,7 +1253,7 @@ async fn federated_muc_message_owned(
                 "not-acceptable",
             ));
         }
-        let stamp = chrono::Utc::now();
+        let stamp = northstar_time::Utc::now();
         let tombstone = XmlElement::namespaced("message", "jabber:client")
             .attr("from", original_root.attribute("from").unwrap_or(&room_jid))
             .attr("to", &room_jid)

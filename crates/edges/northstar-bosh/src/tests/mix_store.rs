@@ -1,8 +1,8 @@
 use super::actor_host::{Event, Trace};
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use northstar_federation_core::S2sOutboxPolicy;
 use northstar_room_application::mix_service::*;
+use northstar_time::{DateTime, Utc};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -391,7 +391,7 @@ impl MixRepository for MixStore {
         _inviter: &str,
         _invitee: &str,
         _token: &str,
-        _lifetime: chrono::Duration,
+        _lifetime: northstar_time::Duration,
         _federated: Option<&FederatedMixMutation>,
     ) -> Result<bool> {
         panic!("unexpected port call: issue_mix_invitation")

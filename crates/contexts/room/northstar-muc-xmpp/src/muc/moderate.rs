@@ -218,7 +218,7 @@ pub async fn muc_moderate(
 
     let moderator_occupant = format!("{room_jid}/{}", moderator.nick);
     let author_occupant_id = muc_occupant_id(&room.occupant_id_secret, &original.sender_jid);
-    let stamp = chrono::Utc::now();
+    let stamp = northstar_time::Utc::now();
     let action_id = uuid::Uuid::new_v4();
     let target_text = target_id.to_string();
     let moderated = XmlElement::namespaced("moderated", "urn:xmpp:message-moderate:1")

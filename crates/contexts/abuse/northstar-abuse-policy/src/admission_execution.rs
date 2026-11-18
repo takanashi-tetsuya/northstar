@@ -972,7 +972,7 @@ mod tests {
     fn already_accepted_observation_binds_request_fence_without_stored_token_equality() {
         use crate::admission_transaction::{decide_finalize, AdmissionRow, RowState};
         let request_fence = fence();
-        let now = chrono::DateTime::from_timestamp(1, 0).unwrap();
+        let now = northstar_time::DateTime::from_timestamp(1, 0).unwrap();
         let accepted = AdmissionRow {
             admission_key: request_fence.admission_key.clone(),
             key_id: "key".into(),
@@ -1029,7 +1029,7 @@ mod tests {
             operation: Uuid::from_u128(7),
             ..correlation
         };
-        let observed_at = chrono::DateTime::from_timestamp_micros(-123_456).unwrap();
+        let observed_at = northstar_time::DateTime::from_timestamp_micros(-123_456).unwrap();
         for field in 0..12 {
             let mut coordinator = Coordinator::new(
                 correlation,
@@ -1139,7 +1139,7 @@ mod tests {
                 },
             }),
             observation: TimedReconcileObservation {
-                observed_at: chrono::DateTime::from_timestamp_micros(1).unwrap(),
+                observed_at: northstar_time::DateTime::from_timestamp_micros(1).unwrap(),
                 observation: crate::admission_transaction::ReconcileObservation::Missing,
             },
         };

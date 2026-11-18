@@ -132,7 +132,7 @@ impl ClusterListenerSecurity {
             channel,
             expected_source,
             security.peers().as_ref(),
-            chrono::Utc::now().timestamp(),
+            northstar_time::Utc::now().timestamp(),
         )?;
         self.validate_verified_envelope(&envelope)?;
         Ok(envelope)
@@ -147,8 +147,10 @@ impl ClusterListenerSecurity {
             .security
             .as_ref()
             .context("cluster verifier is not configured")?;
-        envelope
-            .current_verification_key(security.peers().as_ref(), chrono::Utc::now().timestamp())?;
+        envelope.current_verification_key(
+            security.peers().as_ref(),
+            northstar_time::Utc::now().timestamp(),
+        )?;
         anyhow::ensure!(
             envelope.destination_connection_uuid == self.publisher.connection_uuid
                 && envelope.destination_connection_epoch

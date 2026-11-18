@@ -1,7 +1,7 @@
 use crate::maintenance_repositories::{RetentionRepository, RetentionStore};
-use chrono::Utc;
 pub use northstar_config::maintenance::RetentionPolicy;
 use northstar_telemetry::metrics::Metrics;
+use northstar_time::Utc;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
@@ -386,7 +386,7 @@ mod tests {
         async fn purge_resolved_retention_batch(
             &self,
             store: RetentionStore,
-            _now: chrono::DateTime<Utc>,
+            _now: northstar_time::DateTime<Utc>,
             _days: i64,
             _batch_size: i64,
         ) -> anyhow::Result<u64> {

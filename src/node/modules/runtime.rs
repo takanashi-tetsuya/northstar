@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 pub(in crate::node) struct RuntimeModule {
     started_at: Instant,
-    process_started_at: chrono::DateTime<chrono::Utc>,
+    process_started_at: northstar_time::DateTime<northstar_time::Utc>,
     service_shutdown: Arc<OnceLock<CancellationToken>>,
     runtime_control_liveness: Arc<()>,
     workers: Arc<WorkerRegistry>,
@@ -16,7 +16,7 @@ pub(in crate::node) struct RuntimeModule {
 impl RuntimeModule {
     pub(in crate::node) fn new(
         started_at: Instant,
-        process_started_at: chrono::DateTime<chrono::Utc>,
+        process_started_at: northstar_time::DateTime<northstar_time::Utc>,
         service_shutdown: Arc<OnceLock<CancellationToken>>,
         runtime_control_liveness: Arc<()>,
         workers: Arc<WorkerRegistry>,
@@ -34,7 +34,9 @@ impl RuntimeModule {
         self.started_at
     }
 
-    pub(in crate::node) fn process_started_at(&self) -> chrono::DateTime<chrono::Utc> {
+    pub(in crate::node) fn process_started_at(
+        &self,
+    ) -> northstar_time::DateTime<northstar_time::Utc> {
         self.process_started_at
     }
 

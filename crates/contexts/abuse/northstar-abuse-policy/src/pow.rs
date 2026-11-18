@@ -116,8 +116,8 @@ pub fn compute_pow_prefix(
     subject: &str,
     actors: &[String],
     work_factor: u64,
-    issued_at: chrono::DateTime<chrono::Utc>,
-    expires_at: chrono::DateTime<chrono::Utc>,
+    issued_at: northstar_time::DateTime<northstar_time::Utc>,
+    expires_at: northstar_time::DateTime<northstar_time::Utc>,
     server_nonce: &str,
     intent: Option<&PowIntent>,
 ) -> String {
@@ -150,8 +150,8 @@ pub fn compute_pow_prefix_with_commitment(
     subject: &str,
     actors: &[String],
     work_factor: u64,
-    issued_at: chrono::DateTime<chrono::Utc>,
-    expires_at: chrono::DateTime<chrono::Utc>,
+    issued_at: northstar_time::DateTime<northstar_time::Utc>,
+    expires_at: northstar_time::DateTime<northstar_time::Utc>,
     server_nonce: &str,
     intent: Option<PowIntentCommitment<'_>>,
 ) -> String {
@@ -205,8 +205,8 @@ pub fn verify_pow_prefix_binding(
     subject: &str,
     actors: &[String],
     work_factor: u64,
-    issued_at: chrono::DateTime<chrono::Utc>,
-    expires_at: chrono::DateTime<chrono::Utc>,
+    issued_at: northstar_time::DateTime<northstar_time::Utc>,
+    expires_at: northstar_time::DateTime<northstar_time::Utc>,
     server_nonce: &str,
     intent: Option<&PowIntent>,
 ) -> bool {
@@ -337,10 +337,10 @@ mod tests {
         let key_id = "test-key-id";
         let subject = "report:test-subject";
         let actors = vec!["user:alice".to_owned(), "ip:198.51.100.1".to_owned()];
-        let issued_at = chrono::DateTime::parse_from_rfc3339("2026-09-02T12:00:00Z")
+        let issued_at = northstar_time::DateTime::parse_from_rfc3339("2026-09-02T12:00:00Z")
             .unwrap()
-            .with_timezone(&chrono::Utc);
-        let expires_at = issued_at + chrono::Duration::seconds(120);
+            .with_timezone(&northstar_time::Utc);
+        let expires_at = issued_at + northstar_time::Duration::seconds(120);
         let server_nonce = "sample-server-nonce";
 
         let intent = PowIntent::http_json(

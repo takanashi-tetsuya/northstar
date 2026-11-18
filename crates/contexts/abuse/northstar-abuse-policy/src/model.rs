@@ -467,8 +467,8 @@ pub struct PowChallenge {
     pub challenge_id: Uuid,
     pub prefix: String,
     pub key_id: String,
-    pub issued_at: chrono::DateTime<chrono::Utc>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub issued_at: northstar_time::DateTime<northstar_time::Utc>,
+    pub expires_at: northstar_time::DateTime<northstar_time::Utc>,
     pub expires_in_seconds: u64,
     pub server_nonce: String,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -290,9 +290,10 @@ fn derive_turn_credentials(
     let password = Zeroizing::new(
         base64::engine::general_purpose::STANDARD.encode(hmac.finalize().into_bytes()),
     );
-    let expires = chrono::DateTime::<chrono::Utc>::from_timestamp(expires_at as i64, 0)?
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
+    let expires =
+        northstar_time::DateTime::<northstar_time::Utc>::from_timestamp(expires_at as i64, 0)?
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
     Some(TurnCredentials {
         username,
         password,

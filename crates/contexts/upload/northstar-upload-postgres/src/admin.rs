@@ -7,7 +7,7 @@
 //! physical operation complete.
 
 use anyhow::{ensure, Result};
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 use zeroize::Zeroizing;

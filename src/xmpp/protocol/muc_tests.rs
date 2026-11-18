@@ -843,9 +843,9 @@ fn author_retraction_parser_prefers_current_direct_shape_without_legacy_ambiguit
 
 #[test]
 fn history_controls_are_strict_combined_and_bounded() {
-    let now = chrono::DateTime::parse_from_rfc3339("2026-08-26T12:00:00Z")
+    let now = northstar_time::DateTime::parse_from_rfc3339("2026-08-26T12:00:00Z")
         .unwrap()
-        .with_timezone(&chrono::Utc);
+        .with_timezone(&northstar_time::Utc);
     let document = roxmltree::Document::parse(
         "<presence><x xmlns='http://jabber.org/protocol/muc'><history maxchars='4096' maxstanzas='500' seconds='3600' since='2026-08-26T11:30:00Z'/></x></presence>",
     )
@@ -856,9 +856,9 @@ fn history_controls_are_strict_combined_and_bounded() {
     assert_eq!(
         request.since,
         Some(
-            chrono::DateTime::parse_from_rfc3339("2026-08-26T11:30:00Z")
+            northstar_time::DateTime::parse_from_rfc3339("2026-08-26T11:30:00Z")
                 .unwrap()
-                .with_timezone(&chrono::Utc)
+                .with_timezone(&northstar_time::Utc)
         )
     );
 

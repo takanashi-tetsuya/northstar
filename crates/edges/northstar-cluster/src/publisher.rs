@@ -172,7 +172,7 @@ impl ClusterSignedPublisher {
             self.connection_uuid,
             self.instance_epoch.load(Ordering::Acquire),
             payload,
-            chrono::Utc::now().timestamp(),
+            northstar_time::Utc::now().timestamp(),
         )?;
         let encoded =
             serde_json::to_string(&envelope).context("could not encode signed cluster envelope")?;
@@ -482,7 +482,7 @@ impl ClusterManager {
             envelope.connection_uuid,
             envelope.event_id
         );
-        let now = chrono::Utc::now().timestamp();
+        let now = northstar_time::Utc::now().timestamp();
         let accept_until = envelope
             .expires_at
             .saturating_add(northstar_security::cluster_bus::CLOCK_SKEW_SECONDS);

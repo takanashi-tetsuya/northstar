@@ -711,8 +711,8 @@ async fn authentication_service_fences_all_credential_and_inline_state_transitio
 
 #[test]
 fn fast_service_dto_conversions_keep_secrets_move_only() {
-    let now = chrono::Utc::now();
-    let later = now + chrono::Duration::days(30);
+    let now = northstar_time::Utc::now();
+    let later = now + northstar_time::Duration::days(30);
     let device_id = Uuid::new_v4();
     let token_id = Uuid::new_v4();
 
@@ -761,7 +761,7 @@ fn fast_service_dto_conversions_keep_secrets_move_only() {
 fn issued_fast_token_redacts_secret_in_debug_format() {
     let issued = IssuedFastToken {
         token: Zeroizing::new("super-sensitive-token-data-12345".to_string()),
-        expires_at: chrono::Utc::now(),
+        expires_at: northstar_time::Utc::now(),
     };
     let debug_str = format!("{issued:?}");
     assert!(debug_str.contains("[REDACTED]"));

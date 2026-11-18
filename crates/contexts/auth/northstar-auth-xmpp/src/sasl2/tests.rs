@@ -243,7 +243,7 @@ fn sasl2_success_validates_fragments_and_escapes_authorization_identifier() {
 
 #[test]
 fn fast_token_xml_formats_valid_rfc3339_response() {
-    let now = chrono::Utc::now();
+    let now = northstar_time::Utc::now();
     let token = northstar_auth_application::authentication::IssuedFastToken {
         token: Zeroizing::new("fast-token-payload-abc".to_string()),
         expires_at: now,
@@ -251,6 +251,6 @@ fn fast_token_xml_formats_valid_rfc3339_response() {
     let xml = fast_token_xml(&token);
     assert!(xml.starts_with("<token xmlns='urn:xmpp:fast:0'"));
     assert!(xml.contains("token='fast-token-payload-abc'"));
-    let expected_expiry = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let expected_expiry = now.to_rfc3339_opts(northstar_time::SecondsFormat::Secs, true);
     assert!(xml.contains(&format!("expiry='{expected_expiry}'")));
 }

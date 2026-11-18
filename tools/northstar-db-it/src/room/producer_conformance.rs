@@ -37,7 +37,7 @@ async fn producer(pool: &PgPool, label: &str) -> anyhow::Result<()> {
         "expire presence" => {
             expire_unrefreshed_mix_presence(
                 pool,
-                chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                northstar_time::DateTime::from_timestamp(0, 0).unwrap(),
                 &payloads,
             )
             .await?;

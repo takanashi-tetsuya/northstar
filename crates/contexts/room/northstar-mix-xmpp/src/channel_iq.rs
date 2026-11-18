@@ -478,7 +478,7 @@ pub async fn handle_channel_iq(
                     actor_bare,
                     invitee,
                     &token,
-                    chrono::Duration::hours(1),
+                    northstar_time::Duration::hours(1),
                     federated,
                 )
                 .await?

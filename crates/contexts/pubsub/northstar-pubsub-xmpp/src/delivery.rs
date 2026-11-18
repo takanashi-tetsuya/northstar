@@ -106,7 +106,7 @@ impl<R: PubSubOutboxRepository, N: PubSubDeliveryRoutes> PubSubDigestWorkerConte
             .service
             .outbox_get_subscription(node_id, subscriber_jid)
             .await?;
-        let now = chrono::Utc::now();
+        let now = northstar_time::Utc::now();
         Ok(subscription
             .filter(|subscription| subscription.deliver && subscription.is_active_at(now))
             .map(|subscription| subscription.show_values))

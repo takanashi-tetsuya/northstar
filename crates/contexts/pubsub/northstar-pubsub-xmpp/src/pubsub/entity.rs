@@ -98,7 +98,7 @@ pub(super) async fn handle_entity_get<H: PubSubHost>(
                     "not-subscribed",
                 )));
             };
-            if subscription.is_expired_at(chrono::Utc::now()) {
+            if subscription.is_expired_at(northstar_time::Utc::now()) {
                 return Ok(PubSubReply::ExtendedError(PubSubError::new(
                     "unexpected-request",
                     "not-subscribed",
@@ -199,7 +199,7 @@ pub(super) async fn handle_entity_get<H: PubSubHost>(
                 .pubsub_application_service()
                 .subscriptions_for_jid(&requester_full, Some(node_name))
                 .await?;
-            let now = chrono::Utc::now();
+            let now = northstar_time::Utc::now();
             let subscriptions = subscriptions
                 .into_iter()
                 .filter(|subscription| subscription.is_active_at(now))

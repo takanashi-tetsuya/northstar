@@ -332,7 +332,7 @@ async fn prepare_expired_live_lease_cleanup(
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RetentionAllocation {
     shard: i16,
-    created_at: chrono::DateTime<chrono::Utc>,
+    created_at: northstar_time::DateTime<northstar_time::Utc>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -340,9 +340,9 @@ struct RetentionBinding {
     connection_id: Uuid,
     user_id: Uuid,
     full_jid: String,
-    lease_until: chrono::DateTime<chrono::Utc>,
-    created_at: chrono::DateTime<chrono::Utc>,
-    updated_at: chrono::DateTime<chrono::Utc>,
+    lease_until: northstar_time::DateTime<northstar_time::Utc>,
+    created_at: northstar_time::DateTime<northstar_time::Utc>,
+    updated_at: northstar_time::DateTime<northstar_time::Utc>,
     allocation: RetentionAllocation,
 }
 
@@ -535,7 +535,7 @@ async fn read_retention_projection(
     .await?;
     for row in rows {
         let shard: Option<i16> = row.try_get("shard")?;
-        let allocation_created_at: Option<chrono::DateTime<chrono::Utc>> =
+        let allocation_created_at: Option<northstar_time::DateTime<northstar_time::Utc>> =
             row.try_get("allocation_created_at")?;
         let allocation = RetentionAllocation {
             shard: shard.context("protected SM binding is missing its existing allocation")?,

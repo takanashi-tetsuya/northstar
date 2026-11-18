@@ -10,7 +10,7 @@ publish = false
 [dependencies]
 anyhow = "1.0"
 bb8 = "0.9.1"
-chrono = { version = "0.4", features = ["serde"] }
+northstar-time = { path = "../../kernel/northstar-time", features = ["serde"] }
 dashmap = "6.1"
 futures = "0.3"
 northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application" }
@@ -51,7 +51,7 @@ uuid = { version = "1.12", features = ["v4", "serde"] }
 [dev-dependencies]
 northstar-abuse-policy = { path = "../../contexts/abuse/northstar-abuse-policy" }
 northstar-session-postgres = { path = "../../contexts/session/northstar-session-postgres" }
-sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "json", "migrate", "macros"] }
 northstar-auth-application = { path = "../../contexts/auth/northstar-auth-application", features = ["test-support"] }
 northstar-message-application = { path = "../../contexts/message/northstar-message-application", features = ["test-support"] }
 northstar-operations-application = { path = "../../contexts/operations/northstar-operations-application", features = ["test-support"] }

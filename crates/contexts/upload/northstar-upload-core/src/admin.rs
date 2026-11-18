@@ -1,6 +1,6 @@
 //! Administrator views of upload-recovery dead letters: kinds, identities, keyset boundaries and pages.
 
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use uuid::{Uuid, Variant};
 use zeroize::Zeroizing;
 

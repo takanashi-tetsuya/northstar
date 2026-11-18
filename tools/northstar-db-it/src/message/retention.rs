@@ -1,6 +1,6 @@
-use chrono::DateTime;
-use chrono::Duration;
-use chrono::Utc;
+use northstar_time::DateTime;
+use northstar_time::Duration;
+use northstar_time::Utc;
 use northstar_workflows::retention::*;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;

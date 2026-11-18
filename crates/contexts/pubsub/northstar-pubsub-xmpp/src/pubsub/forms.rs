@@ -69,17 +69,17 @@ pub(super) fn parse_subscription_options(
             // which this service intentionally does not advertise.
             return Err(invalid_subscription_options());
         } else {
-            let now = chrono::Utc::now();
-            let expiry = chrono::DateTime::parse_from_rfc3339(value)
+            let now = northstar_time::Utc::now();
+            let expiry = northstar_time::DateTime::parse_from_rfc3339(value)
                 .map_err(|_| invalid_subscription_options())?
-                .with_timezone(&chrono::Utc);
+                .with_timezone(&northstar_time::Utc);
             if expiry <= now {
                 return Err(invalid_subscription_options());
             }
             // XEP-0060 requires a service with a maximum lease term to clamp
             // an overlong request rather than reject it. A finite policy also
             // prevents effectively immortal rows chosen by remote entities.
-            Some(expiry.min(now + chrono::Duration::days(MAX_SUBSCRIPTION_LEASE_DAYS)))
+            Some(expiry.min(now + northstar_time::Duration::days(MAX_SUBSCRIPTION_LEASE_DAYS)))
         };
     }
     if let Some(values) = fields.get("pubsub#show-values") {

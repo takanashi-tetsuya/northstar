@@ -15,7 +15,7 @@ test-support = ["northstar-auth-application/test-support", "northstar-session-co
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22"
-chrono = "0.4"
+northstar-time = { path = "../../kernel/northstar-time" }
 dashmap = "6.1"
 futures = "0.3"
 northstar-abuse-application = { path = "../../contexts/abuse/northstar-abuse-application" }

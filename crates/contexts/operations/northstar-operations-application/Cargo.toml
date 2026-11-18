@@ -13,7 +13,7 @@ test-support = []
 
 [dependencies]
 anyhow = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
+northstar-time = { path = "../../../kernel/northstar-time", features = ["serde"] }
 northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
 northstar-archive-core = { path = "../../archive/northstar-archive-core" }
 northstar-auth-core = { path = "../../auth/northstar-auth-core" }

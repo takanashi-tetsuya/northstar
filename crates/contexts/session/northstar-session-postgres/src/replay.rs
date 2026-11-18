@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use rand::Rng;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{

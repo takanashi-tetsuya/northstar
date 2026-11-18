@@ -43,8 +43,8 @@ pub(super) fn pow_prefix(
     subject: &str,
     actors: &[String],
     work_factor: u64,
-    issued_at: chrono::DateTime<chrono::Utc>,
-    expires_at: chrono::DateTime<chrono::Utc>,
+    issued_at: northstar_time::DateTime<northstar_time::Utc>,
+    expires_at: northstar_time::DateTime<northstar_time::Utc>,
     server_nonce: &str,
     intent: Option<&PowIntent>,
 ) -> String {
@@ -80,7 +80,9 @@ impl AbuseGuard {
             write_with_previous_actor_key: false,
             // In-memory guards exist only in unit tests. Production state
             // always overwrites this through the deployment constructor.
-            legacy_v1_compatibility_until: Some(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+            legacy_v1_compatibility_until: Some(
+                northstar_time::DateTime::<northstar_time::Utc>::MAX_UTC,
+            ),
             states: DashMap::new(),
             challenges: DashMap::new(),
             challenge_issues: DashMap::new(),
@@ -98,7 +100,7 @@ impl AbuseGuard {
         shared_secret: Option<&[u8]>,
         previous_shared_secret: Option<&[u8]>,
         write_with_previous_actor_key: bool,
-        legacy_v1_compatibility_until: Option<chrono::DateTime<chrono::Utc>>,
+        legacy_v1_compatibility_until: Option<northstar_time::DateTime<northstar_time::Utc>>,
     ) -> Self {
         let mut guard = Self::new(config);
         guard.persistence = Some(persistence);
@@ -128,7 +130,7 @@ impl AbuseGuard {
 
     pub(super) fn legacy_v1_allowed(&self) -> bool {
         self.legacy_v1_compatibility_until
-            .is_some_and(|deadline| chrono::Utc::now() <= deadline)
+            .is_some_and(|deadline| northstar_time::Utc::now() <= deadline)
     }
 
     /// Irreversible, purpose-separated identifiers used only to prove that

@@ -533,7 +533,7 @@ async fn postgres_challenges_are_one_use_restart_safe_and_deidentified() {
         Some(new_secret),
         Some(secret),
         true,
-        Some(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+        Some(northstar_time::DateTime::<northstar_time::Utc>::MAX_UTC),
     );
     tokio::time::sleep(
         Duration::from_secs(issued_before_rotation.requirement.hard_wait_seconds)
@@ -629,7 +629,7 @@ async fn postgres_challenges_are_one_use_restart_safe_and_deidentified() {
         Some(new_secret),
         Some(secret),
         true,
-        Some(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+        Some(northstar_time::DateTime::<northstar_time::Utc>::MAX_UTC),
     );
     rotated_issue_guard
         .issue(AbuseAction::Report, &issue_subject, &issue_actors)
@@ -1353,7 +1353,7 @@ async fn postgres_message_admission_is_crash_atomic_fenced_and_rotation_safe() {
         Some(new_secret),
         Some(old_secret),
         true,
-        Some(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+        Some(northstar_time::DateTime::<northstar_time::Utc>::MAX_UTC),
     );
     assert!(matches!(
         rotated

@@ -1,6 +1,6 @@
 //! Decisions evaluated against rows locked by the admission repository.
 //! These snapshots are inputs, never substitutes for transaction authority.
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use std::fmt;
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
@@ -229,7 +229,7 @@ pub fn validity(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> TemporalValidi
 }
 
 fn after(now: DateTime<Utc>, duration: std::time::Duration) -> DateTime<Utc> {
-    now + chrono::Duration::seconds(i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
+    now + northstar_time::Duration::seconds(i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
 }
 pub fn pending_expiry(now: DateTime<Utc>) -> DateTime<Utc> {
     after(now, MESSAGE_ADMISSION_PENDING_TTL)
@@ -280,7 +280,7 @@ mod tests {
             decide_begin(row.actor_id, std::slice::from_ref(&candidate), &[], now).unwrap(),
             BeginRowDecision::VerifyGuard
         );
-        row.lease_expires_at = now + chrono::Duration::microseconds(1_000_999);
+        row.lease_expires_at = now + northstar_time::Duration::microseconds(1_000_999);
         assert_eq!(
             decide_begin(
                 row.actor_id,
@@ -293,7 +293,7 @@ mod tests {
                 retry_after_seconds: 1
             }
         );
-        row.lease_expires_at += chrono::Duration::microseconds(1);
+        row.lease_expires_at += northstar_time::Duration::microseconds(1);
         assert_eq!(
             decide_begin(
                 row.actor_id,
@@ -370,7 +370,7 @@ mod tests {
             (1, TemporalValidity::Expired),
         ] {
             assert_eq!(
-                validity(now, now + chrono::Duration::microseconds(offset)),
+                validity(now, now + northstar_time::Duration::microseconds(offset)),
                 expected
             );
         }
@@ -386,7 +386,7 @@ mod tests {
             decide_finalize(Some(&row), &fence),
             FinalizeDecision::AcceptPending
         );
-        row.expires_at -= chrono::Duration::days(1);
+        row.expires_at -= northstar_time::Duration::days(1);
         assert_eq!(
             decide_finalize(Some(&row), &fence),
             FinalizeDecision::AcceptPending
@@ -441,8 +441,8 @@ mod tests {
         ] {
             let (now, _, mut row, fence) = fixture();
             row.state = state;
-            row.lease_expires_at = now - chrono::Duration::days(1);
-            row.expires_at = now - chrono::Duration::days(1);
+            row.lease_expires_at = now - northstar_time::Duration::days(1);
+            row.expires_at = now - northstar_time::Duration::days(1);
             if wrong_key {
                 row.admission_key[0] ^= 1;
             }
@@ -560,7 +560,7 @@ mod tests {
     fn reconcile_keeps_independent_lease_and_retention_boundaries() {
         use TemporalValidity::{Current, Expired};
         let (_, _, row, fence) = fixture();
-        let microsecond = chrono::Duration::microseconds(1);
+        let microsecond = northstar_time::Duration::microseconds(1);
         for (observed_at, lease, retention) in [
             (row.lease_expires_at - microsecond, Current, Current),
             (row.lease_expires_at, Expired, Current),
@@ -591,7 +591,7 @@ mod tests {
                 let observed = reconcile(
                     Some(&row),
                     &fence,
-                    row.expires_at + chrono::Duration::microseconds(offset),
+                    row.expires_at + northstar_time::Duration::microseconds(offset),
                 );
                 let expected = match state {
                     RowState::Pending => ReconcileObservation::ExactPending {
@@ -605,7 +605,7 @@ mod tests {
                 assert_eq!(observed.observation, expected);
                 assert_eq!(
                     observed.observed_at,
-                    row.expires_at + chrono::Duration::microseconds(offset)
+                    row.expires_at + northstar_time::Duration::microseconds(offset)
                 );
             }
         }

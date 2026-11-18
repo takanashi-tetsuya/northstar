@@ -307,8 +307,8 @@ mod challenge_ports {
                 prefix: "test-prefix".to_owned(),
                 key_id: "test-key".to_owned(),
                 server_nonce: "test-nonce".to_owned(),
-                issued_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
-                expires_at: chrono::DateTime::from_timestamp(1_700_000_300, 0).unwrap(),
+                issued_at: northstar_time::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                expires_at: northstar_time::DateTime::from_timestamp(1_700_000_300, 0).unwrap(),
                 expires_in_seconds: 300,
                 intent: Some(intent.view()),
                 requirement: super::registration_requirement(),
@@ -556,8 +556,8 @@ mod sm_ports {
 mod replay_ports {
     use super::UnusedRepository;
     use anyhow::Result;
-    use chrono::{DateTime, Utc};
     use northstar_session_application::replay::*;
+    use northstar_time::{DateTime, Utc};
     use uuid::Uuid;
 
     impl ReplayLeaseRepository for UnusedRepository {
@@ -720,8 +720,8 @@ mod replay_ports {
 mod presence_ports {
     use super::UnusedRepository;
     use anyhow::Result;
-    use chrono::{DateTime, Utc};
     use northstar_roster_application::presence::*;
+    use northstar_time::{DateTime, Utc};
     use uuid::Uuid;
 
     impl PresenceRepository for UnusedRepository {
@@ -990,9 +990,9 @@ mod push_ports {
 mod mix_ports {
     use super::UnusedRepository;
     use anyhow::Result;
-    use chrono::{DateTime, Utc};
     use northstar_federation_core::S2sOutboxPolicy;
     use northstar_room_application::mix_service::*;
+    use northstar_time::{DateTime, Utc};
     use uuid::Uuid;
 
     impl MixRepository for UnusedRepository {
@@ -1365,7 +1365,7 @@ mod mix_ports {
             _inviter: &str,
             _invitee: &str,
             _token: &str,
-            _lifetime: chrono::Duration,
+            _lifetime: northstar_time::Duration,
             _federated: Option<&FederatedMixMutation>,
         ) -> Result<bool> {
             panic!("unexpected port call: issue_mix_invitation")

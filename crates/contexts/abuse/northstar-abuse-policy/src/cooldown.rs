@@ -75,12 +75,12 @@ pub fn minimum_key_rotation_overlap(
 /// Bounded to a maximum of 4,096 entries to protect storage and memory
 /// against runaway event floods.
 pub fn trim_event_timestamps_utc(
-    events: &mut Vec<chrono::DateTime<chrono::Utc>>,
-    now: chrono::DateTime<chrono::Utc>,
+    events: &mut Vec<northstar_time::DateTime<northstar_time::Utc>>,
+    now: northstar_time::DateTime<northstar_time::Utc>,
     window: Duration,
 ) {
     let window_secs = i64::try_from(window.as_secs()).unwrap_or(i64::MAX);
-    let cutoff = now - chrono::Duration::seconds(window_secs);
+    let cutoff = now - northstar_time::Duration::seconds(window_secs);
     events.retain(|event| *event >= cutoff && *event <= now);
     if events.len() > 4_096 {
         events.drain(..events.len() - 4_096);
@@ -90,10 +90,10 @@ pub fn trim_event_timestamps_utc(
 /// Decays penalty level using injected UTC timestamps.
 pub fn decay_penalty_level_utc(
     penalty_level: u32,
-    last_activity: chrono::DateTime<chrono::Utc>,
-    now: chrono::DateTime<chrono::Utc>,
+    last_activity: northstar_time::DateTime<northstar_time::Utc>,
+    now: northstar_time::DateTime<northstar_time::Utc>,
     cooldown_step: Duration,
-) -> (u32, chrono::DateTime<chrono::Utc>) {
+) -> (u32, northstar_time::DateTime<northstar_time::Utc>) {
     if penalty_level == 0 || cooldown_step.is_zero() {
         return (penalty_level, last_activity);
     }
@@ -107,7 +107,7 @@ pub fn decay_penalty_level_utc(
         cooldown_step,
     );
     let consumed_secs = i64::try_from(consumed.as_secs()).unwrap_or(i64::MAX);
-    let updated_activity = last_activity + chrono::Duration::seconds(consumed_secs);
+    let updated_activity = last_activity + northstar_time::Duration::seconds(consumed_secs);
     (level, updated_activity)
 }
 
@@ -190,15 +190,15 @@ mod tests {
 
     #[test]
     fn trim_event_timestamps_retains_only_window_and_bounds_size() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-09-02T12:00:00Z")
+        let now = northstar_time::DateTime::parse_from_rfc3339("2026-09-02T12:00:00Z")
             .unwrap()
-            .with_timezone(&chrono::Utc);
+            .with_timezone(&northstar_time::Utc);
         let window = Duration::from_secs(60);
         let mut events = vec![
-            now - chrono::Duration::seconds(100),
-            now - chrono::Duration::seconds(50),
-            now - chrono::Duration::seconds(10),
-            now + chrono::Duration::seconds(5), // Future timestamp dropped
+            now - northstar_time::Duration::seconds(100),
+            now - northstar_time::Duration::seconds(50),
+            now - northstar_time::Duration::seconds(10),
+            now + northstar_time::Duration::seconds(5), // Future timestamp dropped
         ];
         trim_event_timestamps_utc(&mut events, now, window);
         assert_eq!(events.len(), 2);

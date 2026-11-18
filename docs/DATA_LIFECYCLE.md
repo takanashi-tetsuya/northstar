@@ -199,8 +199,9 @@ next          = SHA-256(previous_32_bytes || u64be(json_byte_length) ||
 
 Canonical row JSON is compact Serde JSON with the field order shown by
 `HeldRecordHashPayload` or `AuditHashPayload` in `src/db/data_lifecycle.rs`;
-UUIDs are lowercase hyphenated strings, UTC timestamps use Chrono's RFC 3339
-Serde representation, option absence is JSON `null`, and strings use standard
+UUIDs are lowercase hyphenated strings, UTC timestamps use the RFC 3339 Serde
+representation of `northstar_time` (identical to chrono 0.4.45's), option
+absence is JSON `null`, and strings use standard
 JSON escaping. `serde_json` is built without `preserve_order`, so decoded JSONB
 object keys are emitted in lexical order. The response's `previous_hash` and
 `entry_hash` expose every step. Implementations must hash the payload described

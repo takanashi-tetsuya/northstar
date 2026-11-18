@@ -7,12 +7,12 @@ use super::{
     valid_item_id, valid_node_id, DiscoItem, PubSubError, PubSubReply, MAX_PUBLISH_ITEMS,
     NODE_CONFIG_FORM, PUBLISH_OPTIONS_FORM, SERVICE_FEATURES, SUBSCRIBE_OPTIONS_FORM,
 };
-use chrono::Utc;
 use northstar_pubsub_application::PubSubCollectionEdgeResult;
 use northstar_pubsub_core::{
     CollectionUpdateOutcome, PubSubItem, PubSubNodeConfig, PubSubSubscription,
     PubSubSubscriptionOptions,
 };
+use northstar_time::Utc;
 use roxmltree::Document;
 
 #[test]
@@ -352,7 +352,7 @@ fn subscription_leases_are_clamped_to_the_service_maximum() {
     .unwrap();
     let expiry = parsed.expire.unwrap();
     assert!(expiry > before);
-    assert!(expiry <= before + chrono::Duration::days(366));
+    assert!(expiry <= before + northstar_time::Duration::days(366));
 }
 
 #[test]

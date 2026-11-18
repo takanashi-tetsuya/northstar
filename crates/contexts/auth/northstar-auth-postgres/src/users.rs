@@ -1,9 +1,9 @@
 //! Accounts, API sessions, credentials and user-agent login epochs.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use northstar_auth_core as auth;
 use northstar_config::Config;
+use northstar_time::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::HashMap;

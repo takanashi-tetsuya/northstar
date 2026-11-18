@@ -122,7 +122,7 @@ impl<R: HttpRepositories> MetricsContext<R> {
     pub fn process_snapshot(&self) -> ProcessGaugeSnapshot {
         let (tls_not_after, tls_generation) = self.tls.leaf_status();
         let certificate_sessions = self.tls.certificate_session_metrics();
-        let now_unix = chrono::Utc::now().timestamp();
+        let now_unix = northstar_time::Utc::now().timestamp();
         let tls_seconds_remaining = tls_not_after.saturating_sub(now_unix).max(0);
         let cluster = self.cluster.snapshot();
         let base_metrics = self.registry.render();

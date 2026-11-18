@@ -13,7 +13,7 @@ test-support = []
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22"
-chrono = { version = "0.4", default-features = false, features = ["serde"] }
+northstar-time = { path = "../../../kernel/northstar-time", features = ["serde"] }
 hmac = "0.12"
 northstar-xml-builder = { path = "../../../kernel/northstar-xml-builder" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }

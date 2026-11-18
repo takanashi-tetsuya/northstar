@@ -132,7 +132,7 @@ pub fn strip_untrusted_direct_delays(stanza: &str, trusted_domain: Option<&str>)
         && direct_delays[0].attribute("stamp").is_some_and(|stamp| {
             stamp.len() <= 64
                 && stamp.ends_with('Z')
-                && chrono::DateTime::parse_from_rfc3339(stamp)
+                && northstar_time::DateTime::parse_from_rfc3339(stamp)
                     .is_ok_and(|stamp| stamp.offset().local_minus_utc() == 0)
         })
         && !direct_delays[0].children().any(|node| node.is_element())

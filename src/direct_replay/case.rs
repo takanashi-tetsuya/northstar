@@ -55,7 +55,7 @@ impl Case {
                 || original.target.len() > 1024
                 || policy.domain.len() > 256
                 || policy.recipient_bare.len() > 1024
-                || chrono::DateTime::parse_from_rfc3339(&original.at_utc).is_err()
+                || northstar_time::DateTime::parse_from_rfc3339(&original.at_utc).is_err()
             {
                 return Err(Rejection::Limit);
             }

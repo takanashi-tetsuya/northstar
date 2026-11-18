@@ -472,7 +472,7 @@ pub async fn retry_operation_in_tx(
         .fetch_one(&mut **tx)
         .await?;
     let retry_after_seconds = retry_backoff_seconds(operation.id, operation.attempts);
-    let retry_at = now + chrono::Duration::seconds(retry_after_seconds);
+    let retry_at = now + northstar_time::Duration::seconds(retry_after_seconds);
     if operation.attempts >= operation.max_attempts || retry_at >= operation.deadline_at {
         return if fail_operation_in_tx(tx, lease, error_code, None).await? {
             Ok(RetryOutcome::Failed)

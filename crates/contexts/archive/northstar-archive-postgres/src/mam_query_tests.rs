@@ -1,7 +1,7 @@
 //! MAM query construction tests.
 
 use super::*;
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 
 fn query(with_jid: &str) -> MamArchiveQuery {
     MamArchiveQuery {

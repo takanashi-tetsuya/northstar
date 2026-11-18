@@ -767,7 +767,7 @@ async fn federated_muc_presence_owned(
         }
         Err(error) => return Err(error),
     };
-    if !created && room.configuration_is_expired(chrono::Utc::now()) {
+    if !created && room.configuration_is_expired(northstar_time::Utc::now()) {
         // PostgreSQL records the tombstone and terminal audience outbox in
         // one transaction. Redis is not an executable control plane.
         let _ = state
@@ -783,7 +783,7 @@ async fn federated_muc_presence_owned(
     }
     if !created
         && room.is_locked()
-        && !room.can_configure_locked_room(&actor_full_jid, chrono::Utc::now())
+        && !room.can_configure_locked_room(&actor_full_jid, northstar_time::Utc::now())
     {
         return Ok(federated_error(
             &request.stanza,
@@ -883,9 +883,10 @@ async fn federated_muc_presence_owned(
                 ));
             }
         }
-        if refreshed_room.configuration_is_expired(chrono::Utc::now())
+        if refreshed_room.configuration_is_expired(northstar_time::Utc::now())
             || (refreshed_room.is_locked()
-                && !refreshed_room.can_configure_locked_room(&actor_full_jid, chrono::Utc::now()))
+                && !refreshed_room
+                    .can_configure_locked_room(&actor_full_jid, northstar_time::Utc::now()))
         {
             return Ok(federated_error(
                 &request.stanza,

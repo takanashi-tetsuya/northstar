@@ -220,7 +220,7 @@ impl AbuseGuard {
         }
 
         let requirement = self.requirement(action, actors, now);
-        let issued_at = chrono::Utc::now();
+        let issued_at = northstar_time::Utc::now();
         let mut random = [0_u8; 18];
         rand::thread_rng().fill_bytes(&mut random);
         let id = Uuid::new_v4();
@@ -232,8 +232,8 @@ impl AbuseGuard {
         };
         let ttl =
             Duration::from_secs(120).max(Duration::from_secs(requirement.hard_wait_seconds + 30));
-        let expires_at =
-            issued_at + chrono::Duration::seconds(i64::try_from(ttl.as_secs()).unwrap_or(i64::MAX));
+        let expires_at = issued_at
+            + northstar_time::Duration::seconds(i64::try_from(ttl.as_secs()).unwrap_or(i64::MAX));
         let prefix = pow_prefix(
             &self.actor_key_secret,
             version,

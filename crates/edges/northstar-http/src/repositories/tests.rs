@@ -202,7 +202,7 @@ mod retention {
 
 mod queries {
     use super::*;
-    use chrono::{DateTime, Utc};
+    use northstar_time::{DateTime, Utc};
     use operations::api_queries::*;
 
     impl ApiQueryRepository for Unused {

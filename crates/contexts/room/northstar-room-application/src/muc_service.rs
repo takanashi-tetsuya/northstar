@@ -12,7 +12,6 @@ pub use crate::{
     MucSubjectCommand, MucSubjectResult, RepositoryFuture, RoomApplication,
 };
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 pub use northstar_room_core::{
     ClusterMucAffiliationSubject, ClusterMucConfigurationOutcome, ClusterMucInviteAuthority,
     ClusterMucJoin, ClusterMucJoinOutcome, ClusterMucOccupancy, ClusterMucOccupancyTarget,
@@ -26,6 +25,7 @@ pub use northstar_room_core::{
     MucRetractionKind, MucRetractionMutation, MucRetractionOutcome, MucRoom, MucSubjectMutation,
     MucSubjectOutcome, OfflineStoreOutcome, OfflineStorePolicy,
 };
+use northstar_time::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};
 use uuid::Uuid;

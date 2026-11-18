@@ -110,7 +110,7 @@ impl MessageAdmissionRepository for Repository {
         Ok(ReconcileResult {
             effect: Box::new(effect.clone()),
             observation: TimedReconcileObservation {
-                observed_at: chrono::DateTime::from_timestamp_micros(123_456).unwrap(),
+                observed_at: northstar_time::DateTime::from_timestamp_micros(123_456).unwrap(),
                 observation: ReconcileObservation::Missing,
             },
         })

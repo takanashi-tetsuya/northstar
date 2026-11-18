@@ -1,6 +1,6 @@
 //! Repository ports of the retention worker, implemented by the database adapter.
 
-use chrono::Utc;
+use northstar_time::Utc;
 
 /// A separately bounded retention source. These are intentionally the only
 /// tables touched by automated history cleanup. In particular, reports,
@@ -29,7 +29,7 @@ pub trait RetentionRepository: Send + Sync {
     fn purge_resolved_retention_batch(
         &self,
         store: RetentionStore,
-        now: chrono::DateTime<Utc>,
+        now: northstar_time::DateTime<Utc>,
         days: i64,
         batch_size: i64,
     ) -> impl std::future::Future<Output = anyhow::Result<u64>> + Send;

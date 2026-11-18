@@ -5,7 +5,7 @@
 //! optional `memory` provider exists only for local tests and is intentionally
 //! not enabled by default.
 
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

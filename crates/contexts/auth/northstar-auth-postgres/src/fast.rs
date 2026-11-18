@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use northstar_auth_core as auth;
+use northstar_time::{DateTime, Utc};
 use rand::RngCore;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -210,7 +210,7 @@ pub async fn issue_fast_token_in_transaction(
     let (strong_auth_at, chain_expires_at) = inherited_chain.unwrap_or_else(|| {
         (
             now,
-            now + chrono::Duration::days(i64::from(strong_reauth_max_days)),
+            now + northstar_time::Duration::days(i64::from(strong_reauth_max_days)),
         )
     });
     anyhow::ensure!(

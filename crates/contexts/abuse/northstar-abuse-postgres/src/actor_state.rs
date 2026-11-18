@@ -1,9 +1,9 @@
 //! PostgreSQL row locking and persistence for anti-abuse actor state.
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use northstar_abuse_application::guard::records::DbActorState;
 use northstar_abuse_policy::message_admission::AbuseStateBusy;
+use northstar_time::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
 
 pub(crate) async fn lock_db_states(

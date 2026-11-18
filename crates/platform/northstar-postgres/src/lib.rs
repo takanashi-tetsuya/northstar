@@ -11,7 +11,7 @@ pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../../migratio
 /// `clock_timestamp()` read inside the caller's transaction; keyset pages report it as `database_now`.
 pub async fn database_cursor_clock_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+) -> anyhow::Result<northstar_time::DateTime<northstar_time::Utc>> {
     Ok(sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut **tx)
         .await?)

@@ -1,9 +1,9 @@
 //! Durable operation projections, cancellation and reconciliation policy.
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use northstar_operations_core::api_mutations::{
     AdminMutationAdmission, ApiMutationOutcome, ApiMutationRejection, StoredApiResponse,
 };
+use northstar_time::{DateTime, Utc};
 use serde_json::Value;
 use uuid::Uuid;
 

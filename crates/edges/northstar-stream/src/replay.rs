@@ -139,7 +139,7 @@ async fn acquire_replay_session(
     outbound: &crate::outbound::OutboundSender,
     recipient_id: Uuid,
     current_full_jid: &str,
-    explicit_cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    explicit_cutoff: Option<northstar_time::DateTime<northstar_time::Utc>>,
     availability: Option<&AvailabilityFence>,
     recovery_deadline: tokio::time::Instant,
 ) -> Result<Option<ReplaySession>> {
@@ -222,7 +222,7 @@ async fn drain_offline(
     current_full_jid: &str,
     active_privacy_list: Option<&str>,
     bind2_mam_catchup: bool,
-    explicit_cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    explicit_cutoff: Option<northstar_time::DateTime<northstar_time::Utc>>,
     availability: Option<&AvailabilityFence>,
 ) -> Result<(usize, bool)> {
     let recovery_deadline = tokio::time::Instant::now() + REPLAY_RECOVERY_DEADLINE;
@@ -524,7 +524,7 @@ pub async fn replay_newly_available_resource(
     available: Arc<AtomicBool>,
     availability_generation: Arc<AtomicU64>,
     expected_generation: u64,
-    offline_replay_cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    offline_replay_cutoff: Option<northstar_time::DateTime<northstar_time::Utc>>,
 ) {
     let availability = AvailabilityFence {
         available,
@@ -679,7 +679,7 @@ pub async fn replay_newly_nonnegative_resource(
     available: Arc<AtomicBool>,
     availability_generation: Arc<AtomicU64>,
     expected_generation: u64,
-    offline_replay_cutoff: chrono::DateTime<chrono::Utc>,
+    offline_replay_cutoff: northstar_time::DateTime<northstar_time::Utc>,
 ) {
     let availability = AvailabilityFence {
         available,
@@ -726,7 +726,7 @@ pub async fn replay_after_cluster_reconciliation(
     available: Arc<AtomicBool>,
     availability_generation: Arc<AtomicU64>,
     expected_generation: u64,
-    cutoff: chrono::DateTime<chrono::Utc>,
+    cutoff: northstar_time::DateTime<northstar_time::Utc>,
     current_route: Arc<dyn Fn() -> bool + Send + Sync>,
     recovery_authority: RecoveryReplayAuthority,
 ) -> bool {

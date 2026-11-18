@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 #[cfg(any(test, feature = "test-support"))]
 pub use northstar_operations_core::api_mutations::{api_request_fingerprint, ApiPrincipalKind};
 pub use northstar_operations_core::api_mutations::{IdempotencyRequest, IdempotentResponse};
+use northstar_time::{DateTime, Utc};
 use rand::RngCore;
 use ring::aead;
 use sha2::{Digest, Sha256};

@@ -289,7 +289,7 @@ pub fn prepare_pep_last_item_outbox(
         message,
         &snapshot.node,
         &snapshot.local_domain,
-        chrono::Utc::now(),
+        northstar_time::Utc::now(),
     )?])
 }
 

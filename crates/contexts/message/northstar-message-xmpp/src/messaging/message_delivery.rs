@@ -742,7 +742,7 @@ pub async fn message<S: MessageSession>(
             }
         });
         let delayed_projection = local_projection.delayed(
-            chrono::Utc::now(),
+            northstar_time::Utc::now(),
             LocalArchivePolicy {
                 sender_enabled: sender_history_enabled,
                 recipient_enabled: recipient_history_enabled,
@@ -945,7 +945,7 @@ pub async fn message<S: MessageSession>(
         }
         let delayed_delivery = add_delay_from(
             recipient_delivery,
-            chrono::Utc::now(),
+            northstar_time::Utc::now(),
             Some(state.local_domain()),
         );
         let offline_limits = state.offline_delivery_limits();
@@ -1062,7 +1062,11 @@ pub async fn message<S: MessageSession>(
                 bare_jid: recipient_by.clone(),
             },
         )?;
-        let delayed = add_delay_from(recipient_delivery, chrono::Utc::now(), Some(bare_jid(from)));
+        let delayed = add_delay_from(
+            recipient_delivery,
+            northstar_time::Utc::now(),
+            Some(bare_jid(from)),
+        );
         let mut writes = Vec::with_capacity(2);
         if sender_history_enabled {
             writes.push(ArchiveWrite {
@@ -1278,7 +1282,7 @@ pub async fn message<S: MessageSession>(
                 UndeliveredDisposition::StoreOffline => {
                     let delayed = add_delay_from(
                         recipient_archive_stanza,
-                        chrono::Utc::now(),
+                        northstar_time::Utc::now(),
                         Some(state.local_domain()),
                     );
                     let offline = admit_offline_then_push(

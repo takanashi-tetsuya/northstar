@@ -68,7 +68,7 @@ pub async fn claim_admin_service_messages(
         .fetch_all(&mut *tx)
         .await?;
     let mut claimed = Vec::new();
-    let delivery_date: chrono::NaiveDate = sqlx::query_scalar("SELECT CURRENT_DATE")
+    let delivery_date: northstar_time::NaiveDate = sqlx::query_scalar("SELECT CURRENT_DATE")
         .fetch_one(&mut *tx)
         .await?;
     for row in rows {
@@ -78,7 +78,7 @@ pub async fn claim_admin_service_messages(
         let message_date = if kind == "motd" {
             delivery_date
         } else {
-            chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+            northstar_time::NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("fixed welcome delivery date is valid")
         };
         let claim_id = Uuid::new_v4();
@@ -252,7 +252,7 @@ pub async fn replace_federation_runtime_rules_command(
 /// controls, independently of the host's wall clock.
 pub async fn admin_service_control_startup_time(
     pool: &PgPool,
-) -> Result<chrono::DateTime<chrono::Utc>> {
+) -> Result<northstar_time::DateTime<northstar_time::Utc>> {
     Ok(sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(pool)
         .await?)

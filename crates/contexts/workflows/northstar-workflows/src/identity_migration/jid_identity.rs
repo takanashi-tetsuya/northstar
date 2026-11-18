@@ -576,7 +576,7 @@ mod tests {
             vec!["frank@bücher.example/Phone", "frank@bücher.example/phone"]
         );
 
-        let marker_before: (i64, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
+        let marker_before: (i64, northstar_time::DateTime<northstar_time::Utc>) = sqlx::query_as(
             "SELECT transformed_rows, completed_at FROM jid_identity_migrations WHERE migration = $1",
         )
         .bind(MIGRATION)
@@ -584,7 +584,7 @@ mod tests {
         .await
         .unwrap();
         canonicalize_identity_storage(&pool).await.unwrap();
-        let marker_after: (i64, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
+        let marker_after: (i64, northstar_time::DateTime<northstar_time::Utc>) = sqlx::query_as(
             "SELECT transformed_rows, completed_at FROM jid_identity_migrations WHERE migration = $1",
         )
         .bind(MIGRATION)

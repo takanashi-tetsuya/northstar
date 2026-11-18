@@ -187,8 +187,8 @@ fn message_admission_capacity_shard(admission_key: &[u8]) -> i16 {
     northstar_abuse_policy::message_admission_capacity_shard(admission_key)
 }
 
-fn chrono_duration(duration: Duration) -> chrono::Duration {
-    chrono::Duration::seconds(i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
+fn time_delta(duration: Duration) -> northstar_time::Duration {
+    northstar_time::Duration::seconds(i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
 }
 
 fn ceil_seconds(duration: Duration) -> u64 {
@@ -226,7 +226,7 @@ pub type AbusePersistenceFuture<'a, T> =
 pub type IssueDecision<'a> = Box<
     dyn FnOnce(
             &mut [DbActorState],
-            chrono::DateTime<chrono::Utc>,
+            northstar_time::DateTime<northstar_time::Utc>,
         ) -> anyhow::Result<records::IssueRecord>
         + Send
         + 'a,
@@ -234,17 +234,22 @@ pub type IssueDecision<'a> = Box<
 pub type VerificationPolicy<'a> = Box<
     dyn FnOnce(
             &mut [DbActorState],
-            chrono::DateTime<chrono::Utc>,
+            northstar_time::DateTime<northstar_time::Utc>,
             Option<records::ConsumedChallenge>,
         ) -> anyhow::Result<records::VerificationDecision>
         + Send
         + 'a,
 >;
 pub type RequirementPolicy<'a> = Box<
-    dyn FnOnce(&mut [DbActorState], chrono::DateTime<chrono::Utc>) -> WorkRequirement + Send + 'a,
+    dyn FnOnce(
+            &mut [DbActorState],
+            northstar_time::DateTime<northstar_time::Utc>,
+        ) -> WorkRequirement
+        + Send
+        + 'a,
 >;
 pub type FailurePolicy<'a> =
-    Box<dyn FnOnce(&mut [DbActorState], chrono::DateTime<chrono::Utc>) + Send + 'a>;
+    Box<dyn FnOnce(&mut [DbActorState], northstar_time::DateTime<northstar_time::Utc>) + Send + 'a>;
 
 /// Persistence operations own their transactions and connection pool. Policy,
 /// signing, and key-rotation decisions remain with the guard and run only
@@ -320,8 +325,8 @@ struct StoredChallenge {
     key_id: String,
     prefix: String,
     work_factor: u64,
-    issued_at: chrono::DateTime<chrono::Utc>,
-    expires_at_wall: chrono::DateTime<chrono::Utc>,
+    issued_at: northstar_time::DateTime<northstar_time::Utc>,
+    expires_at_wall: northstar_time::DateTime<northstar_time::Utc>,
     server_nonce: String,
     not_before: Instant,
     expires_at: Instant,
@@ -356,7 +361,7 @@ pub struct AbuseGuard {
     /// Durable artifacts must therefore remain old-key-primary until the
     /// PostgreSQL authority enters `retiring` and fences every old-only node.
     write_with_previous_actor_key: bool,
-    legacy_v1_compatibility_until: Option<chrono::DateTime<chrono::Utc>>,
+    legacy_v1_compatibility_until: Option<northstar_time::DateTime<northstar_time::Utc>>,
     states: DashMap<String, ActorState>,
     challenges: DashMap<Uuid, StoredChallenge>,
     challenge_issues: DashMap<String, VecDeque<Instant>>,

@@ -9,7 +9,6 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::Json;
-use chrono::{DateTime, Utc};
 use northstar_operations_application::api_queries::{
     UploadDeadLetterBoundary, UploadDeadLetterId, UploadDeadLetterKind, UploadDeadLetterRecord,
 };
@@ -17,6 +16,7 @@ pub use northstar_operations_application::upload_admin::admin_generation_bound_r
 use northstar_operations_core::api_mutations::{
     AdminMutationAdmission, ApiMutationOutcome, ApiPrincipalKind,
 };
+use northstar_time::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;

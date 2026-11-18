@@ -851,7 +851,7 @@ dependencies = [
 name = "foundation-eventing"
 version = "0.1.0"
 dependencies = [
- "chrono",
+ "northstar-time",
  "serde",
  "thiserror 2.0.20",
  "tokio",
@@ -862,8 +862,8 @@ dependencies = [
 name = "foundation-eventing-postgres"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "foundation-eventing",
+ "northstar-time",
  "sqlx",
  "thiserror 2.0.20",
  "uuid",
@@ -873,7 +873,7 @@ dependencies = [
 name = "foundation-kms"
 version = "0.1.0"
 dependencies = [
- "chrono",
+ "northstar-time",
  "ring",
  "thiserror 2.0.20",
  "zeroize",
@@ -1798,10 +1798,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "chrono",
  "dashmap",
  "hmac 0.12.1",
  "northstar-abuse-policy",
+ "northstar-time",
  "northstar-xmpp-types",
  "rand 0.8.7",
  "serde_json",
@@ -1819,8 +1819,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "chrono",
  "hmac 0.12.1",
+ "northstar-time",
  "northstar-xml-builder",
  "northstar-xmpp-types",
  "roxmltree",
@@ -1838,9 +1838,9 @@ name = "northstar-abuse-postgres"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "northstar-abuse-application",
  "northstar-abuse-policy",
+ "northstar-time",
  "serde_json",
  "sqlx",
  "tracing",
@@ -1852,8 +1852,8 @@ name = "northstar-archive-application"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "northstar-archive-core",
+ "northstar-time",
  "northstar-xep-0313",
  "northstar-xmpp-types",
  "tokio",
@@ -1864,7 +1864,7 @@ dependencies = [
 name = "northstar-archive-core"
 version = "0.1.0"
 dependencies = [
- "chrono",
+ "northstar-time",
  "northstar-xep-0313",
  "northstar-xmpp-types",
  "roxmltree",
@@ -1877,9 +1877,9 @@ name = "northstar-archive-postgres"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "northstar-archive-application",
  "northstar-archive-core",
+ "northstar-time",
  "northstar-xep-0313",
  "northstar-xmpp-types",
  "sqlx",
@@ -1891,11 +1891,11 @@ name = "northstar-archive-xmpp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "northstar-archive-application",
  "northstar-archive-core",
  "northstar-room-core",
  "northstar-stream",
+ "northstar-time",
  "northstar-xep-0313",
  "northstar-xep-0359",
  "northstar-xml-builder",
@@ -1910,7 +1910,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "chrono",
  "northstar-abuse-policy",
  "northstar-archive-core",
  "northstar-auth-core",
@@ -1919,6 +1918,7 @@ dependencies = [
  "northstar-security",
  "northstar-session-core",
  "northstar-telemetry",
+ "northstar-time",
  "ring",
  "serde",
  "serde_json",
@@ -1938,8 +1938,8 @@ dependencies = [
  "anyhow",
  "argon2",
  "base64 0.22.1",
- "chrono",
  "hmac 0.12.1",
+ "northstar-time",
  "northstar-xmpp-types",
  "pbkdf2",
  "rand 0.8.7",
@@ -1954,12 +1954,12 @@ name = "northstar-auth-postgres"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "northstar-auth-application",
  "northstar-auth-core",
  "northstar-config",
  "northstar-postgres",
  "northstar-security",
+ "northstar-time",
  "rand 0.8.7",
  "serde",
  "serde_json",
@@ -1979,13 +1979,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "chrono",
  "northstar-auth-application",
  "northstar-auth-core",
  "northstar-roster-core",
  "northstar-runtime",
  "northstar-security",
  "northstar-telemetry",
+ "northstar-time",
  "northstar-xml-builder",
  "northstar-xmpp-types",
  "roxmltree",
@@ -2003,7 +2003,6 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
- "chrono",
  "dashmap",
  "futures",
  "hmac 0.12.1",
@@ -2016,6 +2015,7 @@ dependencies = [
  "northstar-runtime",
  "northstar-session-application",
  "northstar-stream",
+ "northstar-time",
  "northstar-xml-builder",
  "northstar-xmpp-types",
  "rand 0.8.7",
@@ -2061,7 +2061,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bb8",
- "chrono",
  "dashmap",
  "futures",
  "northstar-abuse-policy",
@@ -2084,6 +2083,7 @@ dependencies = [
  "northstar-session-postgres",
  "northstar-stream",
  "northstar-telemetry",
+ "northstar-time",
  "northstar-xep-0016",
  "northstar-xep-0045",
  "northstar-xep-0191",
@@ -2109,10 +2109,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
- "chrono",
  "dotenvy",
  "envy",
  "northstar-security",
+ "northstar-time",
  "northstar-web-surface",
  "northstar-xep-0199",
  "northstar-xep-0363",
@@ -2134,12 +2134,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "chrono",
  "northstar-auth-core",
  "northstar-auth-postgres",
  "northstar-config",
  "northstar-postgres",
  "northstar-security",
+ "northstar-time",
  "northstar-workflows",
  "northstar-xmpp-types",
  "roxmltree",
@@ -2262,8 +2262,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "chrono",
  "hmac 0.12.1",
+ "northstar-time",
  "northstar-xml-builder",
  "northstar-xmpp-types",
  "roxmltree",
@@ -2298,7 +2298,6 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bytes",
- "chrono",
  "dashmap",
  "futures",
  "hmac 0.12.1",
@@ -2319,6 +2318,7 @@ dependencies = [
  "northstar-session-application",
  "northstar-stream",
  "northstar-telemetry",
+ "northstar-time",
  "northstar-upload-application",
  "northstar-xml-builder",
  "northstar-xmpp-types",
@@ -2343,7 +2343,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "chrono",
  "dashmap",
  "futures",
  "hmac 0.12.1",
@@ -2355,6 +2354,7 @@ dependencies = [
  "northstar-room-core",
  "northstar-security",
  "northstar-telemetry",
+ "northstar-time",
  "northstar-xep-0016",
  "northstar-xep-0215",
  "northstar-xep-0280",
@@ -2376,10 +2376,10 @@ name = "northstar-message-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "chrono",
  "northstar-abuse-policy",
  "northstar-delivery-core",
  "northstar-federation-core",
+ "northstar-time",
  "northstar-xep-0085",
  "northstar-xep-0184",
  "northstar-xep-0280",
@@ -2401,7 +2401,6 @@ name = "northstar-message-postgres"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "futures",
  "northstar-abuse-policy",
  "northstar-federation-core",
@@ -2409,6 +2408,7 @@ dependencies = [
  "northstar-message-core",
  "northstar-postgres",
  "northstar-security",
+ "northstar-time",
  "northstar-xmpp-types",
  "roxmltree",
  "sha2 0.10.9",
@@ -2423,7 +2423,6 @@ name = "northstar-message-xmpp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "northstar-abuse-policy",
  "northstar-delivery-core",
  "northstar-federation-core",
@@ -2432,6 +2431,7 @@ dependencies = [
  "northstar-room-core",
  "northstar-stream",
  "northstar-telemetry",
+ "northstar-time",
  "northstar-xep-0016",
  "northstar-xep-0215",
  "northstar-xep-0280",
@@ -2450,7 +2450,6 @@ name = "northstar-mix-xmpp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "dashmap",
  "futures",
  "northstar-abuse-policy",
@@ -2462,6 +2461,7 @@ dependencies = [
  "northstar-roster-core",
  "northstar-runtime",
  "northstar-stream",
+ "northstar-time",
  "northstar-xep-0199",
  "northstar-xep-0313",
  "northstar-xep-0359",
@@ -2482,7 +2482,6 @@ name = "northstar-muc-xmpp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "dashmap",
  "futures",
  "northstar-abuse-policy",
@@ -2497,6 +2496,7 @@ dependencies = [
  "northstar-security",
  "northstar-session-core",
  "northstar-stream",
+ "northstar-time",
  "northstar-xep-0045",
  "northstar-xep-0199",
  "northstar-xep-0280",
@@ -2519,7 +2519,6 @@ name = "northstar-operations-application"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "northstar-abuse-policy",
  "northstar-archive-core",
  "northstar-auth-core",
@@ -2528,6 +2527,7 @@ dependencies = [
  "northstar-runtime",
  "northstar-security",
  "northstar-telemetry",
+ "northstar-time",
  "northstar-upload-core",
  "northstar-xmpp-types",
  "serde",
@@ -2557,7 +2557,6 @@ name = "northstar-operations-postgres"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "hmac 0.12.1",
  "northstar-auth-core",
  "northstar-config",
@@ -2565,6 +2564,7 @@ dependencies = [
  "northstar-operations-core",
  "northstar-postgres",
  "northstar-roster-core",
+ "northstar-time",
  "northstar-xmpp-types",
  "rand 0.8.7",
  "ring",
@@ -2586,7 +2586,6 @@ name = "northstar-operations-xmpp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "dashmap",
  "northstar-auth-core",
  "northstar-operations-application",
@@ -2595,6 +2594,7 @@ dependencies = [
  "northstar-security",
  "northstar-session-application",
  "northstar-stream",
+ "northstar-time",
  "northstar-xml-builder",
  "northstar-xmpp-types",
  "roxmltree",
@@ -2611,7 +2611,7 @@ name = "northstar-postgres"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
+ "northstar-time",
  "sqlx",
  "tokio",
  "tracing",
@@ -2640,10 +2640,10 @@ name = "northstar-pubsub-application"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "northstar-pubsub-core",
  "northstar-runtime",
  "northstar-telemetry",
+ "northstar-time",
  "northstar-xep-0060",
  "northstar-xml-builder",
  "northstar-xmpp-avatar",
@@ -2661,7 +2661,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "chrono",
+ "northstar-time",
  "northstar-xmpp-types",
  "serde",
  "sha2 0.10.9",
@@ -2673,12 +2673,12 @@ name = "northstar-pubsub-postgres"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "futures",
  "northstar-postgres",
  "northstar-pubsub-application",
  "northstar-pubsub-core",
  "northstar-telemetry",
+ "northstar-time",
  "northstar-xep-0060",
  "northstar-xmpp-types",
  "serde",
@@ -2695,7 +2695,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "chrono",
  "northstar-federation-core",
  "northstar-pubsub-application",
  "northstar-pubsub-core",
@@ -2703,6 +2702,7 @@ dependencies = [
  "northstar-session-core",
  "northstar-stream",
  "northstar-telemetry",
+ "northstar-time",
  "northstar-xep-0060",
  "northstar-xml-builder",
  "northstar-xmpp-avatar",
@@ -2721,7 +2721,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "argon2",
- "chrono",
  "futures",
  "northstar-abuse-policy",
  "northstar-archive-core",
@@ -2730,6 +2729,7 @@ dependencies = [
  "northstar-room-core",
  "northstar-roster-core",
  "northstar-runtime",
+ "northstar-time",
  "northstar-xep-0016",
  "northstar-xep-0359",
  "northstar-xml-builder",
@@ -2751,11 +2751,11 @@ name = "northstar-room-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "dashmap",
  "hmac 0.12.1",
  "northstar-federation-core",
  "northstar-message-core",
+ "northstar-time",
  "northstar-xep-0045",
  "northstar-xml-builder",
  "northstar-xmpp-types",
@@ -2772,7 +2772,6 @@ name = "northstar-room-postgres"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "northstar-abuse-policy",
  "northstar-archive-core",
  "northstar-auth-core",
@@ -2784,6 +2783,7 @@ dependencies = [
  "northstar-roster-core",
  "northstar-session-core",
  "northstar-telemetry",
+ "northstar-time",
  "northstar-xep-0313",
  "northstar-xmpp-avatar",
  "northstar-xmpp-types",
@@ -2803,10 +2803,10 @@ name = "northstar-roster-application"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "northstar-auth-core",
  "northstar-federation-core",
  "northstar-roster-core",
+ "northstar-time",
  "northstar-xep-0016",
  "northstar-xmpp-types",
  "tokio",
@@ -2817,7 +2817,7 @@ dependencies = [
 name = "northstar-roster-core"
 version = "0.1.0"
 dependencies = [
- "chrono",
+ "northstar-time",
  "northstar-xmpp-types",
  "serde",
  "uuid",
@@ -2926,9 +2926,9 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "base64 0.22.1",
- "chrono",
  "hickory-resolver",
  "libc",
+ "northstar-time",
  "northstar-xmpp-types",
  "openssl",
  "ring",
@@ -2955,7 +2955,6 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "axum",
- "chrono",
  "dashmap",
  "envy",
  "futures",
@@ -3011,6 +3010,7 @@ dependencies = [
  "northstar-session-postgres",
  "northstar-stream",
  "northstar-telemetry",
+ "northstar-time",
  "northstar-upload-application",
  "northstar-upload-postgres",
  "northstar-upload-storage",
@@ -3064,7 +3064,6 @@ name = "northstar-session-application"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "dashmap",
  "futures",
  "northstar-auth-core",
@@ -3075,6 +3074,7 @@ dependencies = [
  "northstar-security",
  "northstar-session-core",
  "northstar-telemetry",
+ "northstar-time",
  "northstar-xml-builder",
  "northstar-xmpp-types",
  "serde",
@@ -3103,7 +3103,6 @@ name = "northstar-session-postgres"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "northstar-config",
  "northstar-delivery-core",
  "northstar-postgres",
@@ -3112,6 +3111,7 @@ dependencies = [
  "northstar-session-application",
  "northstar-session-core",
  "northstar-stream",
+ "northstar-time",
  "northstar-xep-0016",
  "northstar-xmpp-types",
  "rand 0.8.7",
@@ -3129,7 +3129,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "chrono",
  "dashmap",
  "futures",
  "northstar-abuse-application",
@@ -3156,6 +3155,7 @@ dependencies = [
  "northstar-session-core",
  "northstar-session-postgres",
  "northstar-telemetry",
+ "northstar-time",
  "northstar-xep-0016",
  "northstar-xep-0045",
  "northstar-xep-0060",
@@ -3205,9 +3205,9 @@ name = "northstar-test-harness"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "libc",
  "northstar-abuse-policy",
+ "northstar-time",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3233,11 +3233,11 @@ name = "northstar-upload-application"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "futures",
  "northstar-auth-core",
  "northstar-runtime",
  "northstar-telemetry",
+ "northstar-time",
  "northstar-upload-core",
  "northstar-xmpp-types",
  "sha2 0.10.9",
@@ -3253,7 +3253,7 @@ dependencies = [
 name = "northstar-upload-core"
 version = "0.1.0"
 dependencies = [
- "chrono",
+ "northstar-time",
  "northstar-xmpp-types",
  "serde",
  "uuid",
@@ -3265,9 +3265,9 @@ name = "northstar-upload-postgres"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "northstar-auth-core",
  "northstar-postgres",
+ "northstar-time",
  "northstar-upload-application",
  "serde_json",
  "sqlx",
@@ -3328,7 +3328,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "chrono",
  "futures",
  "northstar-abuse-application",
  "northstar-abuse-policy",
@@ -3365,6 +3364,7 @@ dependencies = [
  "northstar-session-core",
  "northstar-session-postgres",
  "northstar-telemetry",
+ "northstar-time",
  "northstar-upload-postgres",
  "northstar-xep-0016",
  "northstar-xep-0060",
@@ -3506,7 +3506,7 @@ dependencies = [
 name = "northstar-xep-0215"
 version = "0.1.0"
 dependencies = [
- "chrono",
+ "northstar-time",
  "northstar-xep-core",
  "northstar-xml-builder",
  "northstar-xmpp-types",
@@ -3666,7 +3666,7 @@ name = "northstar-xml-builder"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
+ "northstar-time",
  "northstar-xmpp-types",
  "roxmltree",
  "tracing",

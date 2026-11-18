@@ -1,7 +1,7 @@
 //! The anti-abuse maintenance steps that touch other contexts' tables.
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 use std::future::Future;
 

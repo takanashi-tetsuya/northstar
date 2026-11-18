@@ -164,7 +164,7 @@ pub struct MucRoom {
     pub non_anonymous: bool,
     pub max_occupants: i32,
     pub subject: Option<String>,
-    pub subject_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub subject_changed_at: Option<northstar_time::DateTime<northstar_time::Utc>>,
     pub allow_subject_change: bool,
     pub allow_invites: bool,
     pub allow_private_messages: bool,
@@ -173,7 +173,7 @@ pub struct MucRoom {
     pub password_hash: Option<String>,
     pub occupant_id_secret: Vec<u8>,
     pub configuration_owner_jid: Option<String>,
-    pub configuration_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub configuration_expires_at: Option<northstar_time::DateTime<northstar_time::Utc>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -203,7 +203,10 @@ impl MucRoom {
         self.configuration_owner_jid.is_some()
     }
 
-    pub fn configuration_is_expired(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
+    pub fn configuration_is_expired(
+        &self,
+        now: northstar_time::DateTime<northstar_time::Utc>,
+    ) -> bool {
         self.configuration_expires_at
             .is_some_and(|expires_at| expires_at <= now)
     }
@@ -211,7 +214,7 @@ impl MucRoom {
     pub fn can_configure_locked_room(
         &self,
         actor_full_jid: &str,
-        now: chrono::DateTime<chrono::Utc>,
+        now: northstar_time::DateTime<northstar_time::Utc>,
     ) -> bool {
         self.configuration_owner_jid.as_deref() == Some(actor_full_jid)
             && !self.configuration_is_expired(now)
@@ -222,7 +225,7 @@ impl MucRoom {
 pub struct MucMessage {
     pub sender_jid: String,
     pub stanza: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: northstar_time::DateTime<northstar_time::Utc>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -471,7 +474,7 @@ pub struct ClusterMucOccupancy {
     pub affiliation: String,
     pub state: String,
     pub presence_payload: String,
-    pub lease_until: chrono::DateTime<chrono::Utc>,
+    pub lease_until: northstar_time::DateTime<northstar_time::Utc>,
 }
 
 impl From<&ClusterMucOccupancy> for ClusterMucPolicySnapshot {

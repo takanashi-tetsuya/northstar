@@ -138,7 +138,7 @@ pub struct LocalArchivePolicy {
 impl<'source, 'local> LocalOriginalProjection<'source, 'local> {
     pub fn delayed(
         &self,
-        at: chrono::DateTime<chrono::Utc>,
+        at: northstar_time::DateTime<northstar_time::Utc>,
         archive_policy: LocalArchivePolicy,
     ) -> DelayedLocalProjection<'source, 'local, '_> {
         DelayedLocalProjection {

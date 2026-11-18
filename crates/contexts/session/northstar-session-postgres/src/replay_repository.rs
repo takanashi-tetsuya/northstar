@@ -1,7 +1,7 @@
 //! PostgreSQL ownership and claim transitions for offline and BOSH replay.
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use northstar_session_application::replay::*;
+use northstar_time::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 

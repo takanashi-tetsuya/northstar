@@ -19,7 +19,7 @@ pub(super) struct RecoveryReplayRoute {
 pub(super) struct RecoveryReplayPlan {
     pub(super) health_epoch: u64,
     pub(super) wake_epoch: u64,
-    pub(super) cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    pub(super) cutoff: Option<northstar_time::DateTime<northstar_time::Utc>>,
     pub(super) cursor: Option<String>,
     pub(super) pending: VecDeque<RecoveryReplayRoute>,
     pub(super) barrier_attempts: u8,

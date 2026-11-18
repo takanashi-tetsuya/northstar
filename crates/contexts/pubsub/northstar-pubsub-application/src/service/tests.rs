@@ -1,6 +1,6 @@
 use super::*;
 use crate::{PubSubCollectionDiscoSnapshot, PubSubLeafDiscoSnapshot};
-use chrono::{TimeZone, Utc};
+use northstar_time::{TimeZone, Utc};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 struct QueryOnlyItems;

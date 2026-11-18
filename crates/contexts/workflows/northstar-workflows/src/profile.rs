@@ -985,7 +985,7 @@ fn profile_outbox(
     deliveries: &[(String, String)],
 ) -> Result<Vec<northstar_pubsub_postgres::PubSubOutboxInsert>> {
     let event_id = Uuid::new_v4();
-    let created_at = chrono::Utc::now();
+    let created_at = northstar_time::Utc::now();
     deliveries
         .iter()
         .map(|(recipient, message)| {

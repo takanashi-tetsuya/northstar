@@ -5,7 +5,7 @@ pub use northstar_auth_application::omemo_recovery::{
 };
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use subtle::ConstantTimeEq;
@@ -934,7 +934,7 @@ mod tests {
         };
         assert_eq!(
             first.expires_at - first.created_at,
-            chrono::Duration::days(7)
+            northstar_time::Duration::days(7)
         );
         assert!(matches!(
             prepare_omemo_recovery_transfer(

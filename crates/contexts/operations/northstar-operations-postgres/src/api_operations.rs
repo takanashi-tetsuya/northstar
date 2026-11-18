@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use northstar_operations_application::operations::{
     contains_secret_key, validate_error_code, validate_json,
     validate_manual_reconciliation_content, MAX_RESULT_BYTES,
@@ -8,6 +7,7 @@ pub use northstar_operations_application::operations::{
     AuthorizationPolicy, OperationPage, OperationPageBoundary, OperationRecord, OperationStatus,
     OperationTargetPage, OperationTargetRecord,
 };
+use northstar_time::{DateTime, Utc};
 use serde_json::{json, Value};
 #[cfg(any(test, feature = "test-support"))]
 use sqlx::PgPool;

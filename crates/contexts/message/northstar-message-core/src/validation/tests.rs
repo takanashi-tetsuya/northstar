@@ -235,9 +235,9 @@ fn standalone_chat_signals_are_transient() {
 
 #[test]
 fn offline_delay_is_server_asserted_and_utc() {
-    let stamp = chrono::DateTime::parse_from_rfc3339("2026-08-25T12:34:56Z")
+    let stamp = northstar_time::DateTime::parse_from_rfc3339("2026-08-25T12:34:56Z")
         .unwrap()
-        .with_timezone(&chrono::Utc);
+        .with_timezone(&northstar_time::Utc);
     let delayed = add_delay_from(
         "<message><body>queued</body></message>",
         stamp,
@@ -333,9 +333,9 @@ fn authoritative_extensions_support_prefixed_and_self_closing_roots() {
 
     let delayed = add_delay_from(
         "<c:message xmlns:c='jabber:client'><c:body>queued</c:body></c:message>",
-        chrono::DateTime::parse_from_rfc3339("2026-08-25T12:34:56Z")
+        northstar_time::DateTime::parse_from_rfc3339("2026-08-25T12:34:56Z")
             .unwrap()
-            .with_timezone(&chrono::Utc),
+            .with_timezone(&northstar_time::Utc),
         Some("example.test"),
     );
     let document = Document::parse(&delayed).unwrap();

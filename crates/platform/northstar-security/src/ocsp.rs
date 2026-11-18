@@ -2,7 +2,7 @@
 //! URL is fetched; the signer and the leaf status are checked before use.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use northstar_time::{DateTime, Duration, NaiveDateTime, Utc};
 use openssl::{
     hash::MessageDigest,
     ocsp::{OcspCertId, OcspCertStatus, OcspFlag, OcspResponse, OcspResponseStatus},
@@ -173,7 +173,7 @@ impl ValidatedOcspResponse {
 #[cfg(test)]
 mod tests {
     use super::ValidatedOcspResponse;
-    use chrono::Duration;
+    use northstar_time::Duration;
     use std::{fs, path::PathBuf};
     use tokio_rustls::rustls::pki_types::CertificateDer;
 

@@ -1,7 +1,7 @@
 //! Records the abuse guard exchanges with its repositories: actor state rows, challenge issuance and verification, and the key deployment identity.
 
 use super::{AbuseAction, GuardError, PowChallenge, WorkRequirement};
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use std::time::Duration;
 
 #[derive(Debug)]

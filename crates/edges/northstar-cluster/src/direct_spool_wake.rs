@@ -5,11 +5,11 @@
 use super::recovery_replay_wake::RecoveryReplayStatus;
 use crate::{ClusterAdapters, DirectPostCommitMode};
 use anyhow::{ensure, Result};
-use chrono::{DateTime, Utc};
 use northstar_message_application::direct_spool_wake::{
     ClaimedDirectSpoolWake, DirectSpoolWakeRoute, DirectSpoolWakeService, DIRECT_SPOOL_WAKE_PAGE,
 };
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
+use northstar_time::{DateTime, Utc};
 use std::{
     collections::{HashMap, VecDeque},
     sync::Mutex,
@@ -289,7 +289,7 @@ mod tests {
             recipient_id,
             revision: Uuid::new_v4(),
             claim_token: Uuid::new_v4(),
-            cutoff: first.cutoff + chrono::Duration::seconds(1),
+            cutoff: first.cutoff + northstar_time::Duration::seconds(1),
         };
         let mut plans = HashMap::new();
         let instance_uuid = Uuid::new_v4();
@@ -339,7 +339,7 @@ mod tests {
 
         let reclaimed = ClaimedDirectSpoolWake {
             claim_token: Uuid::new_v4(),
-            cutoff: wake.cutoff + chrono::Duration::seconds(90),
+            cutoff: wake.cutoff + northstar_time::Duration::seconds(90),
             ..wake.clone()
         };
         let resumed = take_plan(&mut plans, &reclaimed, instance_uuid, 2, || {

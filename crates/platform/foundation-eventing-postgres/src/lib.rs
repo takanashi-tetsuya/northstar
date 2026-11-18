@@ -6,8 +6,8 @@
 //! atomic. Delivery transport is still at-least-once; consumers must make
 //! visible side effects idempotent.
 
-use chrono::{DateTime, Utc};
 use foundation_eventing::{ConsumerInboxEntry, OutboxEvent};
+use northstar_time::{DateTime, Utc};
 use sqlx::{Postgres, Row, Transaction};
 use thiserror::Error;
 use uuid::Uuid;

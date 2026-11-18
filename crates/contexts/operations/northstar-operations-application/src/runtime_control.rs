@@ -7,9 +7,9 @@ use uuid::Uuid;
 pub struct DurableServiceControl {
     pub generation: Uuid,
     pub action: String,
-    pub execute_at: chrono::DateTime<chrono::Utc>,
-    pub fired_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub execute_at: northstar_time::DateTime<northstar_time::Utc>,
+    pub fired_at: Option<northstar_time::DateTime<northstar_time::Utc>>,
+    pub expires_at: northstar_time::DateTime<northstar_time::Utc>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -57,7 +57,7 @@ impl<R: RuntimeControlRepository> RuntimeControlService<R> {
 }
 
 pub fn service_control_applies(
-    process_started_at: chrono::DateTime<chrono::Utc>,
+    process_started_at: northstar_time::DateTime<northstar_time::Utc>,
     control: &DurableServiceControl,
 ) -> bool {
     control
@@ -71,21 +71,21 @@ mod tests {
 
     #[test]
     fn service_control_only_stops_processes_started_before_the_fire_epoch() {
-        let fired_at = chrono::Utc::now();
+        let fired_at = northstar_time::Utc::now();
         let control = DurableServiceControl {
             generation: uuid::Uuid::new_v4(),
             action: "restart".to_owned(),
-            execute_at: fired_at - chrono::Duration::seconds(1),
+            execute_at: fired_at - northstar_time::Duration::seconds(1),
             fired_at: Some(fired_at),
-            expires_at: fired_at + chrono::Duration::minutes(5),
+            expires_at: fired_at + northstar_time::Duration::minutes(5),
         };
         assert!(service_control_applies(
-            fired_at - chrono::Duration::seconds(1),
+            fired_at - northstar_time::Duration::seconds(1),
             &control
         ));
         assert!(!service_control_applies(fired_at, &control));
         assert!(!service_control_applies(
-            fired_at + chrono::Duration::seconds(1),
+            fired_at + northstar_time::Duration::seconds(1),
             &control
         ));
         let pending = DurableServiceControl {
@@ -93,7 +93,7 @@ mod tests {
             ..control
         };
         assert!(!service_control_applies(
-            fired_at - chrono::Duration::seconds(1),
+            fired_at - northstar_time::Duration::seconds(1),
             &pending
         ));
     }

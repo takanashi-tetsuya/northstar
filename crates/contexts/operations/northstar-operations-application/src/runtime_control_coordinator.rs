@@ -152,7 +152,7 @@ pub struct RuntimeControlCoordinator<R, E> {
     effects: E,
     service_control_enabled: bool,
     service_shutdown: Arc<OnceLock<CancellationToken>>,
-    process_started_at: chrono::DateTime<chrono::Utc>,
+    process_started_at: northstar_time::DateTime<northstar_time::Utc>,
 }
 
 impl<R: RuntimeControlRepository, E: RuntimePolicyEffects> RuntimeControlCoordinator<R, E> {
@@ -162,7 +162,7 @@ impl<R: RuntimeControlRepository, E: RuntimePolicyEffects> RuntimeControlCoordin
         effects: E,
         service_control_enabled: bool,
         service_shutdown: Arc<OnceLock<CancellationToken>>,
-        process_started_at: chrono::DateTime<chrono::Utc>,
+        process_started_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Self {
         Self {
             liveness,
@@ -440,7 +440,7 @@ mod tests {
             effects.clone(),
             true,
             shutdown,
-            chrono::Utc::now(),
+            northstar_time::Utc::now(),
         );
         let mut run = Box::pin(coordinator.run(heartbeat, cancel.clone(), Duration::from_secs(5)));
         for (index, (island_mode, clear)) in
@@ -492,18 +492,18 @@ mod tests {
             let shutdown = CancellationToken::new();
             let installed = Arc::new(OnceLock::new());
             installed.set(shutdown.clone()).unwrap();
-            let process_started_at = chrono::Utc::now();
+            let process_started_at = northstar_time::Utc::now();
             let fired_at = if fired_after_start {
-                process_started_at + chrono::Duration::seconds(1)
+                process_started_at + northstar_time::Duration::seconds(1)
             } else {
-                process_started_at - chrono::Duration::seconds(1)
+                process_started_at - northstar_time::Duration::seconds(1)
             };
             let control = DurableServiceControl {
                 generation: uuid::Uuid::new_v4(),
                 action: "restart".to_owned(),
-                execute_at: fired_at - chrono::Duration::seconds(1),
+                execute_at: fired_at - northstar_time::Duration::seconds(1),
                 fired_at: Some(fired_at),
-                expires_at: fired_at + chrono::Duration::minutes(5),
+                expires_at: fired_at + northstar_time::Duration::minutes(5),
             };
             let (sender, mut reads) = tokio::sync::mpsc::unbounded_channel();
             let coordinator = RuntimeControlCoordinator::new(
@@ -561,7 +561,7 @@ mod tests {
             FakeEffects::default(),
             true,
             shutdown,
-            chrono::Utc::now(),
+            northstar_time::Utc::now(),
         );
         let mut run =
             Box::pin(coordinator.run(heartbeat.clone(), cancel.clone(), Duration::from_secs(5)));
@@ -681,7 +681,8 @@ mod tests {
 
         let actions = Arc::new(AtomicUsize::new(0));
         let _subscriber = tracing::subscriber::set_default(ControlActions(Arc::clone(&actions)));
-        let process_started_at = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let process_started_at =
+            northstar_time::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
         for (label, enabled, initially_installed, install_later) in [
             ("disabled control", false, true, false),
             ("missing shutdown", true, false, false),
@@ -702,10 +703,10 @@ mod tests {
                     action: "restart".to_owned(),
                     execute_at: process_started_at,
                     fired_at,
-                    expires_at: process_started_at + chrono::Duration::minutes(5),
+                    expires_at: process_started_at + northstar_time::Duration::minutes(5),
                 })
             };
-            let fired_at = process_started_at + chrono::Duration::seconds(1);
+            let fired_at = process_started_at + northstar_time::Duration::seconds(1);
             let (sender, mut reads) = tokio::sync::mpsc::unbounded_channel();
             let coordinator = RuntimeControlCoordinator::new(
                 Arc::downgrade(&liveness),
@@ -713,7 +714,10 @@ mod tests {
                     policies: VecDeque::new(),
                     controls: [
                         command(1, None),
-                        command(1, Some(process_started_at - chrono::Duration::seconds(1))),
+                        command(
+                            1,
+                            Some(process_started_at - northstar_time::Duration::seconds(1)),
+                        ),
                         command(1, Some(process_started_at)),
                         command(1, Some(fired_at)),
                         command(1, Some(fired_at)),
@@ -840,7 +844,7 @@ mod tests {
                 FakeEffects::default(),
                 enabled,
                 installed,
-                chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                northstar_time::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             );
             let mut run =
                 Box::pin(coordinator.run(heartbeat, cancel.clone(), Duration::from_secs(5)));

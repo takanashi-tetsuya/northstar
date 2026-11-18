@@ -146,7 +146,7 @@ pub fn validate_mam_preferences(prefs: &MamPreferences) -> Result<(), MamQueryVa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use northstar_time::Utc;
 
     #[test]
     fn federated_metadata_command_requires_authenticated_full_jid() {
@@ -249,7 +249,7 @@ mod tests {
         let valid_query = MamArchiveQuery {
             with_jid: Some("alice@example.test".to_string()),
             start: Some(Utc::now()),
-            end: Some(Utc::now() + chrono::Duration::seconds(10)),
+            end: Some(Utc::now() + northstar_time::Duration::seconds(10)),
             before_id: None,
             after_id: None,
             ids: Vec::new(),
@@ -265,7 +265,7 @@ mod tests {
         assert!(validate_mam_query_command(&cmd).is_ok());
 
         let mut invalid_time = cmd.clone();
-        invalid_time.query.start = Some(Utc::now() + chrono::Duration::seconds(100));
+        invalid_time.query.start = Some(Utc::now() + northstar_time::Duration::seconds(100));
         invalid_time.query.end = Some(Utc::now());
         assert_eq!(
             validate_mam_query_command(&invalid_time),

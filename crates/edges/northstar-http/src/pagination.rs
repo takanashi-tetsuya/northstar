@@ -2,8 +2,8 @@
 
 use crate::contexts::api_queries::ApiQueryContext;
 use crate::error::AppError;
-use chrono::{DateTime, Utc};
 use northstar_operations_application::api_queries::{ApiQueryRepository, PageBoundary};
+use northstar_time::{DateTime, Utc};
 use uuid::Uuid;
 
 use super::cursor::{CanonicalScope, CursorBinding, CursorDirection, CursorPosition, CursorValue};

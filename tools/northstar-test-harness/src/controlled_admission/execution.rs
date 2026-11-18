@@ -1,8 +1,8 @@
 use super::input::{
     bytes32, Command, CompletionInput, Envelope, Guard, InputError, Row, MODEL, OUTPUT_SCHEMA,
 };
-use chrono::{DateTime, Utc};
 use northstar_abuse_policy::{admission_execution as core, admission_transaction as tx, PowProof};
+use northstar_time::{DateTime, Utc};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;

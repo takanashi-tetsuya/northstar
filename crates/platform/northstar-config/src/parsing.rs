@@ -37,16 +37,16 @@ pub(super) fn parse_external_service(value: &str) -> Result<(String, u16)> {
 
 pub(super) fn parse_pow_v1_compatibility_until(
     value: Option<&str>,
-) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+) -> Result<Option<northstar_time::DateTime<northstar_time::Utc>>> {
     value
         .map(|value| {
-            let parsed = chrono::DateTime::parse_from_rfc3339(value)
+            let parsed = northstar_time::DateTime::parse_from_rfc3339(value)
                 .context("POW_V1_COMPATIBILITY_UNTIL must be an RFC 3339 timestamp")?;
             anyhow::ensure!(
                 parsed.offset().local_minus_utc() == 0 && value.ends_with('Z'),
                 "POW_V1_COMPATIBILITY_UNTIL must use the canonical UTC Z form"
             );
-            Ok(parsed.with_timezone(&chrono::Utc))
+            Ok(parsed.with_timezone(&northstar_time::Utc))
         })
         .transpose()
 }

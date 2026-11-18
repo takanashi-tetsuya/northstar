@@ -717,8 +717,10 @@ pub(super) fn validate_file_metadata(file: Node<'_, '_>) -> Result<(), &'static 
             ("urn:xmpp:file:metadata:0", "date") => {
                 validate_file_scalar(child, 64)?;
                 if !singletons.insert(name)
-                    || chrono::DateTime::parse_from_rfc3339(child.text().unwrap_or_default())
-                        .is_err()
+                    || northstar_time::DateTime::parse_from_rfc3339(
+                        child.text().unwrap_or_default(),
+                    )
+                    .is_err()
                 {
                     return Err("bad-request");
                 }

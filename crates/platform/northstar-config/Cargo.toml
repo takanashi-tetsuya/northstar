@@ -14,7 +14,7 @@ test-support = []
 [dependencies]
 anyhow = "1.0"
 axum = { version = "0.8", features = ["ws", "multipart"] }
-chrono = { version = "0.4", features = ["serde"] }
+northstar-time = { path = "../../kernel/northstar-time", features = ["serde"] }
 dotenvy = "0.15"
 envy = "0.4.2"
 northstar-security = { path = "../northstar-security" }

@@ -1,5 +1,5 @@
-use chrono::DateTime;
-use chrono::Utc;
+use northstar_time::DateTime;
+use northstar_time::Utc;
 use northstar_workflows::api_pages::*;
 use uuid::Uuid;
 

@@ -222,7 +222,7 @@ pub struct Config {
     /// Compatibility projection for older call sites.  The authority is the
     /// registration dependency lock in `web_capabilities`.
     pub invitation_policy_disabled_with_web_client: bool,
-    pub pow_v1_compatibility_until: Option<chrono::DateTime<chrono::Utc>>,
+    pub pow_v1_compatibility_until: Option<northstar_time::DateTime<northstar_time::Utc>>,
 }
 
 pub fn reserved_development_domain(domain: &str) -> bool {

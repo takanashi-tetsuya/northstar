@@ -135,7 +135,7 @@ pub async fn muc_owner_get(
             "item-not-found",
         )));
     };
-    if room.configuration_is_expired(chrono::Utc::now()) {
+    if room.configuration_is_expired(northstar_time::Utc::now()) {
         // The lifecycle helper commits the tombstone and immutable
         // audience outbox atomically.  Cluster workers poll that outbox;
         // never publish the old executable Redis destroy command here.
@@ -150,7 +150,7 @@ pub async fn muc_owner_get(
             "item-not-found",
         )));
     }
-    if room.is_locked() && !room.can_configure_locked_room(full_jid, chrono::Utc::now()) {
+    if room.is_locked() && !room.can_configure_locked_room(full_jid, northstar_time::Utc::now()) {
         return Ok(MucAction::Send(iq_error_from(id, room_jid, "forbidden")));
     }
     if session
@@ -235,7 +235,7 @@ pub async fn muc_owner_set(
             "item-not-found",
         )));
     }
-    if room.configuration_is_expired(chrono::Utc::now()) {
+    if room.configuration_is_expired(northstar_time::Utc::now()) {
         let _ = session
             .host()
             .muc_service()
@@ -247,7 +247,7 @@ pub async fn muc_owner_set(
             "item-not-found",
         )));
     }
-    if room.is_locked() && !room.can_configure_locked_room(full_jid, chrono::Utc::now()) {
+    if room.is_locked() && !room.can_configure_locked_room(full_jid, northstar_time::Utc::now()) {
         return Ok(MucAction::Send(iq_error_from(id, room_jid, "forbidden")));
     }
     if session

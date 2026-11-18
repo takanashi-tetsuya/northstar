@@ -165,7 +165,7 @@ pub async fn federated_muc_moderate<H: MucHost>(
     };
     let moderator_occupant = format!("{}/{}", moderator.room_jid, moderator.nick);
     let author_occupant_id = muc_occupant_id(&room.occupant_id_secret, &original.sender_jid);
-    let stamp = chrono::Utc::now();
+    let stamp = northstar_time::Utc::now();
     let moderated = XmlElement::namespaced("moderated", "urn:xmpp:message-moderate:1")
         .attr("by", &moderator_occupant)
         .child(

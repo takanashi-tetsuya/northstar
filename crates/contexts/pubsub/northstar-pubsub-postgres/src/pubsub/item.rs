@@ -143,7 +143,7 @@ pub async fn publish_items_with_renderer(
     .fetch_one(&mut *transaction)
     .await?;
     for (ordinal, (item_id, xml_payload)) in items.iter().enumerate() {
-        let item_time = first_item_time + chrono::Duration::microseconds(ordinal as i64);
+        let item_time = first_item_time + northstar_time::Duration::microseconds(ordinal as i64);
         // XEP-0060 section 12.9 requires an authorized publisher to overwrite
         // an existing NodeID+ItemID rather than rejecting the publication.
         // Node-level authorization has already happened at the protocol

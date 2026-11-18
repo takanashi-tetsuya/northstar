@@ -14,7 +14,7 @@ default = []
 test-support = []
 
 [dependencies]
-chrono = { version = "0.4", features = ["serde"] }
+northstar-time = { path = "../../kernel/northstar-time", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 uuid = { version = "1.12", features = ["v4", "serde"] }

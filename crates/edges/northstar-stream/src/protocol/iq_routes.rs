@@ -553,7 +553,7 @@ fn time<'a, H: IqRouteHost>(
         if northstar_xep_0202::parse_time_request_element(request.payload).is_err() {
             return Ok(Action::Send(iq_error(request.id, "bad-request")));
         }
-        let now = chrono::Utc::now();
+        let now = northstar_time::Utc::now();
         match northstar_xep_0202::build_response_from_parts(
             northstar_xep_0202::DEFAULT_TZO,
             &now.format("%Y-%m-%dT%H:%M:%SZ").to_string(),

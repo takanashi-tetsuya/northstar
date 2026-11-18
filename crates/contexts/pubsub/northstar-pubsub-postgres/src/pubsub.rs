@@ -1,7 +1,7 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use northstar_pubsub_application::{PubSubOwnerRead, PubSubOwnerReadKind};
 use northstar_pubsub_core::{pubsub_subscribe_policy, PubSubSubscribePolicy};
+use northstar_time::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{BTreeSet, HashMap};

@@ -12,7 +12,7 @@ pub const OMEMO2: &str = "urn:xmpp:omemo:2";
 
 pub fn add_delay_from(
     stanza: &str,
-    created_at: chrono::DateTime<chrono::Utc>,
+    created_at: northstar_time::DateTime<northstar_time::Utc>,
     from: Option<&str>,
 ) -> String {
     let mut delayed = stanza.to_owned();

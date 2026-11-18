@@ -264,30 +264,32 @@ mod tests {
             Some("bob@bücher.example/Phone")
         );
 
-        let markers_before = sqlx::query_as::<_, (String, i64, chrono::DateTime<chrono::Utc>)>(
-            "SELECT migration,transformed_rows,completed_at
+        let markers_before =
+            sqlx::query_as::<_, (String, i64, northstar_time::DateTime<northstar_time::Utc>)>(
+                "SELECT migration,transformed_rows,completed_at
                FROM jid_identity_migrations
               WHERE migration=ANY($1)
               ORDER BY migration",
-        )
-        .bind(vec![PUBSUB_MARKER, REMAINING_MARKER])
-        .fetch_all(&pool)
-        .await
-        .unwrap();
+            )
+            .bind(vec![PUBSUB_MARKER, REMAINING_MARKER])
+            .fetch_all(&pool)
+            .await
+            .unwrap();
         assert_eq!(markers_before.len(), 2);
         canonicalize_all_identity_storage(&pool, "example.test")
             .await
             .unwrap();
-        let markers_after = sqlx::query_as::<_, (String, i64, chrono::DateTime<chrono::Utc>)>(
-            "SELECT migration,transformed_rows,completed_at
+        let markers_after =
+            sqlx::query_as::<_, (String, i64, northstar_time::DateTime<northstar_time::Utc>)>(
+                "SELECT migration,transformed_rows,completed_at
                FROM jid_identity_migrations
               WHERE migration=ANY($1)
               ORDER BY migration",
-        )
-        .bind(vec![PUBSUB_MARKER, REMAINING_MARKER])
-        .fetch_all(&pool)
-        .await
-        .unwrap();
+            )
+            .bind(vec![PUBSUB_MARKER, REMAINING_MARKER])
+            .fetch_all(&pool)
+            .await
+            .unwrap();
         assert_eq!(markers_before, markers_after);
     }
 }

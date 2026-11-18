@@ -209,7 +209,7 @@ impl PostgresPubSubRepository {
             local_accounts.insert(bare, id);
         }
         let event_id = Uuid::new_v4();
-        let created_at = chrono::Utc::now();
+        let created_at = northstar_time::Utc::now();
         let mut seen = HashSet::new();
         let mut outbox = Vec::new();
         for (recipient, payload) in deliveries {
@@ -512,7 +512,7 @@ impl PostgresPubSubRepository {
             "PEP renderer escaped the transaction-owned audience"
         );
         let event_id = Uuid::new_v4();
-        let created_at = chrono::Utc::now();
+        let created_at = northstar_time::Utc::now();
         let mut seen = HashSet::new();
         deliveries
             .into_iter()

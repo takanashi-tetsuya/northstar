@@ -63,9 +63,10 @@ pub(crate) async fn begin_message_admission(
             .execute(&mut *tx)
             .await?;
     }
-    let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-        .fetch_one(&mut *tx)
-        .await?;
+    let now: northstar_time::DateTime<northstar_time::Utc> =
+        sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *tx)
+            .await?;
     sqlx::query(
         "DELETE FROM abuse_message_admissions
          WHERE admission_key=ANY($1::bytea[]) AND expires_at <= $2",
@@ -347,9 +348,10 @@ pub async fn accept_observed(
     let success = match result {
         FinalizeDecision::AlreadyAccepted => FinalizeSuccess::AlreadyAccepted,
         FinalizeDecision::AcceptPending => {
-            let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-                .fetch_one(&mut *tx)
-                .await?;
+            let now: northstar_time::DateTime<northstar_time::Utc> =
+                sqlx::query_scalar("SELECT clock_timestamp()")
+                    .fetch_one(&mut *tx)
+                    .await?;
             sqlx::query(
                 "UPDATE abuse_message_admissions
                  SET state='accepted',accepted_at=$2,updated_at=$2,expires_at=$3
@@ -412,9 +414,10 @@ impl PostgresMessageAdmissionRepository {
              FROM abuse_message_admissions WHERE admission_key=$1 FOR UPDATE",
         ).bind(&fence.admission_key).fetch_optional(&mut *tx).await?;
         let row = row.as_ref().map(admission_row).transpose()?;
-        let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-            .fetch_one(&mut *tx)
-            .await?;
+        let now: northstar_time::DateTime<northstar_time::Utc> =
+            sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&mut *tx)
+                .await?;
         let observation = decision::reconcile(row.as_ref(), fence, now);
         tx.rollback().await?;
         Ok(ReconcileResult {

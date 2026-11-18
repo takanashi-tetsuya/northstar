@@ -555,7 +555,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                             "timestamp",
                             boundary
                                 .created_at
-                                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                                .to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true),
                         ),
                     );
                 }
@@ -565,7 +565,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                             "timestamp",
                             boundary
                                 .created_at
-                                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                                .to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true),
                         ),
                     );
                 }

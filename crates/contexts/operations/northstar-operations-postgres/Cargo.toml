@@ -13,7 +13,7 @@ test-support = []
 
 [dependencies]
 anyhow = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
+northstar-time = { path = "../../../kernel/northstar-time", features = ["serde", "postgres"] }
 hmac = "0.12"
 northstar-auth-core = { path = "../../auth/northstar-auth-core" }
 northstar-config = { path = "../../../platform/northstar-config" }
@@ -28,7 +28,7 @@ roxmltree = "0.20"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
-sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid", "json", "macros"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "json", "macros"] }
 subtle = "2.6"
 thiserror = "2.0"
 tokio = { version = "1.43", features = ["time"] }

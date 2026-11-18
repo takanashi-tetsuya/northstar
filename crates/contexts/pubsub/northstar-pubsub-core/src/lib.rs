@@ -7,7 +7,7 @@
 //! and persistence adapters.
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 pub use northstar_xmpp_types::CanonicalJid;
 use serde::Serialize;
 use uuid::Uuid;
@@ -428,7 +428,7 @@ mod subscription_tests {
             subscription_type: "items".into(),
             subscription_depth: Some(1),
         };
-        let before = deadline - chrono::Duration::nanoseconds(1);
+        let before = deadline - northstar_time::Duration::nanoseconds(1);
         assert!(subscription.is_active_at(before));
         assert!(!subscription.is_expired_at(before));
         assert!(!subscription.is_active_at(deadline));

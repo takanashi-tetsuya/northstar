@@ -12,7 +12,7 @@ default = []
 memory = ["dep:ring", "dep:zeroize"]
 
 [dependencies]
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+northstar-time = { path = "../../kernel/northstar-time" }
 thiserror = "2.0"
 ring = { version = "0.17.14", optional = true }
 zeroize = { version = "1.8", optional = true }

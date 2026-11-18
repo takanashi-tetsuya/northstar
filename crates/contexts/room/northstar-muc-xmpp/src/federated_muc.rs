@@ -290,7 +290,10 @@ impl FederatedPresenceRequest {
             stanza: FederatedStanza::from_node(root, raw),
             password,
             payload,
-            history_request: super::muc::parse_muc_history_request(root, chrono::Utc::now()),
+            history_request: super::muc::parse_muc_history_request(
+                root,
+                northstar_time::Utc::now(),
+            ),
             muc_join: root.children().any(|node| {
                 node.is_element()
                     && node.tag_name().name() == "x"

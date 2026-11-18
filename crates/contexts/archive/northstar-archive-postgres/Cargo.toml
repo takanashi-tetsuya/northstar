@@ -17,8 +17,8 @@ northstar-archive-application = { path = "../northstar-archive-application" }
 northstar-archive-core = { path = "../northstar-archive-core" }
 northstar-xep-0313 = { path = "../../../kernel/northstar-xep-0313" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
-sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "uuid"] }
 uuid = "1.12"
 
 [dev-dependencies]
-chrono = "0.4"
+northstar-time = { path = "../../../kernel/northstar-time" }

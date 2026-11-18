@@ -1,6 +1,6 @@
 //! One-time OMEMO transfer lifecycle and source completion capabilities.
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Eq, PartialEq)]

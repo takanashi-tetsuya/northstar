@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result};
 #[cfg(test)]
-use chrono::Utc;
+use northstar_time::Utc;
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};

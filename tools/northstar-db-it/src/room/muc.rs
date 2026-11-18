@@ -184,8 +184,8 @@ async fn locked_room_configuration_is_atomic_restart_safe_and_bounded() {
         .unwrap();
     assert!(created);
     assert!(room.is_locked());
-    assert!(room.can_configure_locked_room(alice, chrono::Utc::now()));
-    assert!(!room.can_configure_locked_room(bob, chrono::Utc::now()));
+    assert!(room.can_configure_locked_room(alice, northstar_time::Utc::now()));
+    assert!(!room.can_configure_locked_room(bob, northstar_time::Utc::now()));
     assert!(public_muc_room_page(&pool, None, None, 100)
         .await
         .unwrap()
@@ -1234,7 +1234,7 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
         &pool,
         room_id,
         100,
-        Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+        Some(northstar_time::Utc::now() + northstar_time::Duration::hours(1)),
     )
     .await
     .unwrap()
@@ -2079,12 +2079,14 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
             .unwrap(),
         0
     );
-    let unchanged: (String, Option<chrono::DateTime<chrono::Utc>>) =
-        sqlx::query_as("SELECT stanza,retracted_at FROM muc_messages WHERE id=$1")
-            .bind(target_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let unchanged: (
+        String,
+        Option<northstar_time::DateTime<northstar_time::Utc>>,
+    ) = sqlx::query_as("SELECT stanza,retracted_at FROM muc_messages WHERE id=$1")
+        .bind(target_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(
         unchanged,
         (
@@ -2209,12 +2211,14 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
     )
     .await
     .is_err());
-    let target_after_failure: (String, Option<chrono::DateTime<chrono::Utc>>) =
-        sqlx::query_as("SELECT stanza,retracted_at FROM muc_messages WHERE id=$1")
-            .bind(target_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let target_after_failure: (
+        String,
+        Option<northstar_time::DateTime<northstar_time::Utc>>,
+    ) = sqlx::query_as("SELECT stanza,retracted_at FROM muc_messages WHERE id=$1")
+        .bind(target_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(
         target_after_failure,
         (

@@ -441,7 +441,11 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
                         payload: &authoritative_raw,
                     },
                 );
-        let delayed = add_delay_from(&annotated, chrono::Utc::now(), Some(state.local_domain()));
+        let delayed = add_delay_from(
+            &annotated,
+            northstar_time::Utc::now(),
+            Some(state.local_domain()),
+        );
         let delivery = ValidatedPersonalMessage {
             local_actor_id: None,
             identity,
@@ -577,7 +581,11 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
             })
             .into_iter()
             .collect::<Vec<_>>();
-        let delayed = add_delay_from(&annotated, chrono::Utc::now(), Some(state.local_domain()));
+        let delayed = add_delay_from(
+            &annotated,
+            northstar_time::Utc::now(),
+            Some(state.local_domain()),
+        );
         let limits = state.offline_delivery_limits();
         let delivery = DeliveryProjection {
             id: stable_id,
@@ -756,7 +764,11 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
                 return Ok(inbound_message_error(root, "wait", "service-unavailable"));
             }
         }
-        let delayed = add_delay_from(&archive, chrono::Utc::now(), Some(state.local_domain()));
+        let delayed = add_delay_from(
+            &archive,
+            northstar_time::Utc::now(),
+            Some(state.local_domain()),
+        );
         let offline_outcome = state
             .message_service()
             .store_offline(OfflineMessageAdmission {

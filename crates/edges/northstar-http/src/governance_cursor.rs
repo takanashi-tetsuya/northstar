@@ -2,8 +2,8 @@
 use crate::cursor::{
     CanonicalScope, CursorBinding, CursorDirection, CursorKeyring, CursorPosition, CursorValue,
 };
-use chrono::{DateTime, Utc};
 use northstar_operations_application::governance::*;
+use northstar_time::{DateTime, Utc};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -19,8 +19,8 @@ fn legal_hold_export_filter(hold_id: Uuid) -> Result<CanonicalScope, GovernanceF
 }
 
 fn audit_export_filter(
-    start: Option<chrono::DateTime<chrono::Utc>>,
-    end: Option<chrono::DateTime<chrono::Utc>>,
+    start: Option<northstar_time::DateTime<northstar_time::Utc>>,
+    end: Option<northstar_time::DateTime<northstar_time::Utc>>,
 ) -> Result<CanonicalScope, GovernanceFailure> {
     let start = start.map(|value| value.timestamp_micros().to_string());
     let end = end.map(|value| value.timestamp_micros().to_string());
@@ -59,10 +59,10 @@ fn decode_legal_hold_cursor(
                 export_id: *export_id,
                 after_resource_order: i64::try_from(*resource_order)
                     .map_err(|_| invalid_cursor())?,
-                after_created_at: chrono::DateTime::from_timestamp_micros(*created_at)
+                after_created_at: northstar_time::DateTime::from_timestamp_micros(*created_at)
                     .ok_or(invalid_cursor())?,
                 after_record_id: *record_id,
-                snapshot_at: chrono::DateTime::from_timestamp_micros(*snapshot_at)
+                snapshot_at: northstar_time::DateTime::from_timestamp_micros(*snapshot_at)
                     .ok_or(invalid_cursor())?,
                 chain_root: *chain_root,
             })
@@ -80,7 +80,7 @@ fn decode_audit_cursor(position: CursorPosition) -> Result<AuditExportCursor, Go
                 export_id: *export_id,
                 after_id: *after_id,
                 snapshot_max_id: *snapshot_max_id,
-                snapshot_at: chrono::DateTime::from_timestamp_micros(*snapshot_at)
+                snapshot_at: northstar_time::DateTime::from_timestamp_micros(*snapshot_at)
                     .ok_or(invalid_cursor())?,
                 chain_root: *chain_root,
             })
@@ -90,8 +90,8 @@ fn decode_audit_cursor(position: CursorPosition) -> Result<AuditExportCursor, Go
 }
 
 fn export_cursor_ttl_seconds(
-    exported_at: chrono::DateTime<chrono::Utc>,
-    expires_at: chrono::DateTime<chrono::Utc>,
+    exported_at: northstar_time::DateTime<northstar_time::Utc>,
+    expires_at: northstar_time::DateTime<northstar_time::Utc>,
 ) -> Result<i64, GovernanceFailure> {
     let remaining = expires_at
         .timestamp()
@@ -294,18 +294,22 @@ mod tests {
         let hold_a = legal_hold_export_filter(Uuid::from_u128(1)).unwrap();
         let hold_b = legal_hold_export_filter(Uuid::from_u128(2)).unwrap();
         assert_ne!(hold_a.as_bytes(), hold_b.as_bytes());
-        let start = chrono::DateTime::from_timestamp_micros(1_700_000_000_000_000);
-        let end = chrono::DateTime::from_timestamp_micros(1_700_000_100_000_000);
+        let start = northstar_time::DateTime::from_timestamp_micros(1_700_000_000_000_000);
+        let end = northstar_time::DateTime::from_timestamp_micros(1_700_000_100_000_000);
         assert_ne!(
             audit_export_filter(start, end).unwrap().as_bytes(),
             audit_export_filter(start, None).unwrap().as_bytes()
         );
-        let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let now = northstar_time::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
         assert_eq!(
-            export_cursor_ttl_seconds(now, now + chrono::Duration::seconds(900)).unwrap(),
+            export_cursor_ttl_seconds(now, now + northstar_time::Duration::seconds(900)).unwrap(),
             900
         );
-        assert!(export_cursor_ttl_seconds(now, now + chrono::Duration::seconds(29)).is_err());
-        assert!(export_cursor_ttl_seconds(now, now + chrono::Duration::seconds(901)).is_err());
+        assert!(
+            export_cursor_ttl_seconds(now, now + northstar_time::Duration::seconds(29)).is_err()
+        );
+        assert!(
+            export_cursor_ttl_seconds(now, now + northstar_time::Duration::seconds(901)).is_err()
+        );
     }
 }

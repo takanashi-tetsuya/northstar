@@ -282,7 +282,7 @@ pub async fn federated_muc_owner<H: MucHost>(
     if requester.affiliation != "owner" {
         return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"));
     }
-    if room.configuration_is_expired(chrono::Utc::now()) {
+    if room.configuration_is_expired(northstar_time::Utc::now()) {
         let _ = state
             .muc_service()
             .delete_expired_locked_room(room.id)
@@ -294,7 +294,8 @@ pub async fn federated_muc_owner<H: MucHost>(
             "item-not-found",
         ));
     }
-    if room.is_locked() && !room.can_configure_locked_room(&requester.full_jid, chrono::Utc::now())
+    if room.is_locked()
+        && !room.can_configure_locked_room(&requester.full_jid, northstar_time::Utc::now())
     {
         return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"));
     }

@@ -119,8 +119,8 @@ pub struct FastAuthenticationSuccess {
     token_id: Uuid,
     token_was_new: bool,
     auth_generation: i64,
-    strong_auth_at: chrono::DateTime<chrono::Utc>,
-    chain_expires_at: chrono::DateTime<chrono::Utc>,
+    strong_auth_at: northstar_time::DateTime<northstar_time::Utc>,
+    chain_expires_at: northstar_time::DateTime<northstar_time::Utc>,
 }
 
 impl FastAuthenticationSuccess {
@@ -132,8 +132,8 @@ impl FastAuthenticationSuccess {
         token_id: Uuid,
         token_was_new: bool,
         auth_generation: i64,
-        strong_auth_at: chrono::DateTime<chrono::Utc>,
-        chain_expires_at: chrono::DateTime<chrono::Utc>,
+        strong_auth_at: northstar_time::DateTime<northstar_time::Utc>,
+        chain_expires_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Self {
         Self {
             user,
@@ -157,8 +157,8 @@ impl FastAuthenticationSuccess {
         Uuid,
         bool,
         i64,
-        chrono::DateTime<chrono::Utc>,
-        chrono::DateTime<chrono::Utc>,
+        northstar_time::DateTime<northstar_time::Utc>,
+        northstar_time::DateTime<northstar_time::Utc>,
     ) {
         let Self {
             user,

@@ -1,5 +1,5 @@
-use chrono::{DateTime, Utc};
 use northstar_abuse_policy::{AbuseAction, PowIntent, PowIntentRequest, PowProof};
+use northstar_time::{DateTime, Utc};
 use serde::Deserialize;
 use zeroize::Zeroize;
 

@@ -6,7 +6,7 @@
 //! transitions through its repository port.
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use uuid::Uuid;
 
 pub use northstar_roster_core::{

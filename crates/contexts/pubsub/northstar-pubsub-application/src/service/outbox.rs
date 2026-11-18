@@ -189,7 +189,7 @@ impl PubSubEventRenderer {
         direct_recipients: &[String],
         event: &str,
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<PubSubOutboxInsert>> {
         let ordering_key = format!("pubsub:{}", node.id);
         let mut outbox = Vec::with_capacity(audience.len() + direct_recipients.len());
@@ -250,7 +250,7 @@ impl PubSubEventRenderer {
         node: &PubSubNode,
         audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<PubSubOutboxInsert>> {
         let event = XmlElement::new("create").attr("node", &node.node).finish();
         self.render_transactional_node_event(node, audience, &[], &event, event_id, created_at)
@@ -262,7 +262,7 @@ impl PubSubEventRenderer {
         items: &[(String, String)],
         audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<PubSubOutboxInsert>> {
         let mut event = XmlElement::new("items").attr("node", &node.node);
         for (item_id, payload) in items {
@@ -287,7 +287,7 @@ impl PubSubEventRenderer {
         node: &PubSubNode,
         audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<PubSubOutboxInsert>> {
         let event = XmlElement::new("purge").attr("node", &node.node).finish();
         self.render_transactional_node_event(node, audience, &[], &event, event_id, created_at)
@@ -299,7 +299,7 @@ impl PubSubEventRenderer {
         item_ids: &[String],
         audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<PubSubOutboxInsert>> {
         let mut items = XmlElement::new("items").attr("node", &node.node);
         for item_id in item_ids {
@@ -322,7 +322,7 @@ impl PubSubEventRenderer {
         audience: &[PubSubNotificationDelivery],
         nonactive_recipients: &[String],
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<PubSubOutboxInsert>> {
         if !node.notify_delete {
             return Ok(Vec::new());
@@ -347,7 +347,7 @@ impl PubSubEventRenderer {
         config: &PubSubNodeConfig,
         audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<PubSubOutboxInsert>> {
         let form = pubsub_node_config_form(config, "result");
         let mut event = XmlElement::new("configuration").attr("node", &node.node);
@@ -369,7 +369,7 @@ impl PubSubEventRenderer {
         target_node: &str,
         audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<PubSubOutboxInsert>> {
         anyhow::ensure!(matches!(action, "associate" | "dissociate"));
         let action = XmlElement::dynamic(action)
@@ -391,7 +391,7 @@ impl PubSubEventRenderer {
         authorization_recipients: &[String],
         last_item: Option<&PubSubItem>,
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<PubSubOutboxInsert>> {
         let transition = XmlElement::new("subscription")
             .attr("node", &node.node)
@@ -486,7 +486,7 @@ impl PubSubEventRenderer {
         jid: &str,
         affiliation: &str,
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<PubSubOutboxInsert>> {
         let event = XmlElement::new("affiliation")
             .attr("node", &node.node)

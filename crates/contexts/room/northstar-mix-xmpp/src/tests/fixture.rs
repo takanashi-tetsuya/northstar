@@ -1,8 +1,8 @@
 use super::*;
-use chrono::{DateTime, Utc};
 use northstar_abuse_policy::ContentIdentityAuthenticators;
 use northstar_federation_core::{FederationOutboxAdmission, S2sOutboxPolicy};
 use northstar_room_application::mix_service::*;
+use northstar_time::{DateTime, Utc};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Call {
@@ -398,7 +398,7 @@ impl MixRepository for Repository {
         register_mix_nick(service_domain: &str, actor: &str, nick: &str, federated: Option<&FederatedMixMutation>) -> RegisterMixNickOutcome;
         update_mix_participant_preference(channel_id: Uuid, actor: &str, preference: &MixParticipantPreference, federated: Option<&FederatedMixMutation>) -> Option<MixParticipantPreferenceUpdateOutcome>;
         authorized_mix_jid_map_entries(channel_id: Uuid, actor: &str, limit: i64) -> MixReadOutcome<Vec<(String, String)>>;
-        issue_mix_invitation(channel_id: Uuid, inviter: &str, invitee: &str, token: &str, lifetime: chrono::Duration, federated: Option<&FederatedMixMutation>) -> bool;
+        issue_mix_invitation(channel_id: Uuid, inviter: &str, invitee: &str, token: &str, lifetime: northstar_time::Duration, federated: Option<&FederatedMixMutation>) -> bool;
         mix_private_message_recipient(channel_id: Uuid, sender: &str, recipient_id: Uuid) -> Option<(MixParticipant, MixParticipant)>;
         begin_remote_pam_join(request: BeginRemotePamJoin) -> PamOperationReplay;
         lookup_remote_pam_operation(user_id: Uuid, requester_full_jid: &str, client_request_id: &str, request_digest: &[u8; 32]) -> PamOperationReplay;

@@ -160,15 +160,15 @@ pub fn build_message_dedupe_identity(
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ActorStateSnapshot {
     pub state_key: String,
-    pub events: Vec<chrono::DateTime<chrono::Utc>>,
+    pub events: Vec<northstar_time::DateTime<northstar_time::Utc>>,
     pub penalty_level: u32,
-    pub last_activity: chrono::DateTime<chrono::Utc>,
-    pub blocked_until: chrono::DateTime<chrono::Utc>,
+    pub last_activity: northstar_time::DateTime<northstar_time::Utc>,
+    pub blocked_until: northstar_time::DateTime<northstar_time::Utc>,
     pub sequence: i64,
 }
 
 impl ActorStateSnapshot {
-    pub fn new(state_key: String, now: chrono::DateTime<chrono::Utc>) -> Self {
+    pub fn new(state_key: String, now: northstar_time::DateTime<northstar_time::Utc>) -> Self {
         Self {
             state_key,
             events: Vec::new(),
@@ -183,7 +183,7 @@ impl ActorStateSnapshot {
 /// Pure state decay applied to an actor snapshot with an injected timestamp.
 pub fn decay_actor_state_snapshot(
     state: &mut ActorStateSnapshot,
-    now: chrono::DateTime<chrono::Utc>,
+    now: northstar_time::DateTime<northstar_time::Utc>,
     config: &AbuseConfig,
 ) {
     trim_event_timestamps_utc(&mut state.events, now, config.window);
@@ -200,7 +200,7 @@ pub fn decay_actor_state_snapshot(
 /// Pure state update on successful operation admission.
 pub fn record_success_in_snapshot(
     state: &mut ActorStateSnapshot,
-    now: chrono::DateTime<chrono::Utc>,
+    now: northstar_time::DateTime<northstar_time::Utc>,
     hard_wait_seconds: u64,
     is_shared_ip: bool,
 ) {
@@ -209,14 +209,14 @@ pub fn record_success_in_snapshot(
     state.last_activity = now;
     if hard_wait_seconds > 0 && !is_shared_ip {
         let wait_secs = i64::try_from(hard_wait_seconds).unwrap_or(i64::MAX);
-        state.blocked_until = now + chrono::Duration::seconds(wait_secs);
+        state.blocked_until = now + northstar_time::Duration::seconds(wait_secs);
     }
 }
 
 /// Pure state update on operation failure or malicious submission (punish).
 pub fn record_failure_in_snapshot(
     state: &mut ActorStateSnapshot,
-    now: chrono::DateTime<chrono::Utc>,
+    now: northstar_time::DateTime<northstar_time::Utc>,
     max_wait: Duration,
     is_shared_ip: bool,
 ) {
@@ -229,7 +229,7 @@ pub fn record_failure_in_snapshot(
     let (new_penalty, wait) = punish_penalty_and_wait(state.penalty_level, max_wait);
     state.penalty_level = new_penalty;
     let wait_secs = i64::try_from(wait.as_secs()).unwrap_or(i64::MAX);
-    state.blocked_until = now + chrono::Duration::seconds(wait_secs);
+    state.blocked_until = now + northstar_time::Duration::seconds(wait_secs);
 }
 
 /// Merges state from a previous key generation into a newly rotated state row.
@@ -252,7 +252,7 @@ pub fn requirement_from_snapshots(
     action: AbuseAction,
     states: &[ActorStateSnapshot],
     shared_ip_keys: &HashSet<String>,
-    now: chrono::DateTime<chrono::Utc>,
+    now: northstar_time::DateTime<northstar_time::Utc>,
     config: &AbuseConfig,
 ) -> WorkRequirement {
     let p = policy(action, config.base_work_factor, config.message_free_burst);
@@ -420,16 +420,16 @@ pub struct ChallengeVerificationContext<'a> {
     pub key_id: String,
     pub prefix: String,
     pub work_factor: u64,
-    pub issued_at: chrono::DateTime<chrono::Utc>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
-    pub not_before: chrono::DateTime<chrono::Utc>,
+    pub issued_at: northstar_time::DateTime<northstar_time::Utc>,
+    pub expires_at: northstar_time::DateTime<northstar_time::Utc>,
+    pub not_before: northstar_time::DateTime<northstar_time::Utc>,
     pub server_nonce: String,
     pub subject_hash: [u8; 32],
     pub actor_secret: &'a [u8],
     pub intent: Option<PowIntent>,
     pub requirement: WorkRequirement,
     pub sequences_match: bool,
-    pub now: chrono::DateTime<chrono::Utc>,
+    pub now: northstar_time::DateTime<northstar_time::Utc>,
 }
 
 #[cfg(test)]
@@ -467,9 +467,9 @@ mod tests {
 
     #[test]
     fn snapshot_state_transitions_and_merging() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-09-02T12:00:00Z")
+        let now = northstar_time::DateTime::parse_from_rfc3339("2026-09-02T12:00:00Z")
             .unwrap()
-            .with_timezone(&chrono::Utc);
+            .with_timezone(&northstar_time::Utc);
         let config = AbuseConfig::builder().build().unwrap();
 
         let mut state = ActorStateSnapshot::new("message:user:alice".to_owned(), now);

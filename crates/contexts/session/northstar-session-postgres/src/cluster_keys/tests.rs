@@ -70,7 +70,7 @@ fn authority_accepts_exact_state_and_one_step_overlap_only() {
 
 #[test]
 fn active_duplicate_node_fails_and_expired_takeover_advances_instance_epoch() {
-    let now = chrono::Utc::now();
+    let now = northstar_time::Utc::now();
     let current = uuid::Uuid::new_v4();
     let duplicate = uuid::Uuid::new_v4();
     assert!(next_instance_epoch(
@@ -79,7 +79,7 @@ fn active_duplicate_node_fails_and_expired_takeover_advances_instance_epoch() {
             7,
             "current-key".into(),
             4,
-            now + chrono::Duration::seconds(1),
+            now + northstar_time::Duration::seconds(1),
         )),
         duplicate,
         "current-key",
@@ -94,7 +94,7 @@ fn active_duplicate_node_fails_and_expired_takeover_advances_instance_epoch() {
                 7,
                 "current-key".into(),
                 4,
-                now - chrono::Duration::seconds(1),
+                now - northstar_time::Duration::seconds(1),
             )),
             duplicate,
             "current-key",
@@ -111,7 +111,7 @@ fn active_duplicate_node_fails_and_expired_takeover_advances_instance_epoch() {
                 7,
                 "current-key".into(),
                 4,
-                now + chrono::Duration::seconds(30),
+                now + northstar_time::Duration::seconds(30),
             )),
             current,
             "current-key",
@@ -127,7 +127,7 @@ fn active_duplicate_node_fails_and_expired_takeover_advances_instance_epoch() {
             7,
             "current-key".into(),
             4,
-            now + chrono::Duration::seconds(30),
+            now + northstar_time::Duration::seconds(30),
         )),
         current,
         "staged-key",

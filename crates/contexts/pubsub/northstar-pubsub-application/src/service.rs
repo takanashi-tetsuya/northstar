@@ -285,7 +285,7 @@ impl<
                     outcome: PubSubSubscribeOutcome::PendingSubscription,
                 });
             }
-            if existing.is_active_at(chrono::Utc::now()) && write.options.is_none() {
+            if existing.is_active_at(northstar_time::Utc::now()) && write.options.is_none() {
                 return Ok(PubSubSubscribeResult {
                     outcome: PubSubSubscribeOutcome::ExistingActive(existing.clone()),
                 });
@@ -353,7 +353,7 @@ impl<
                 outcome: PubSubUnsubscribeOutcome::NotSubscribed,
             });
         };
-        if subscription.is_expired_at(chrono::Utc::now()) {
+        if subscription.is_expired_at(northstar_time::Utc::now()) {
             return Ok(PubSubUnsubscribeResult {
                 outcome: PubSubUnsubscribeOutcome::NotSubscribed,
             });
@@ -919,7 +919,7 @@ impl<R: PubSubNodeQueryRepository + PubSubSubscriptionQueryRepository> PubSubSer
             return Ok(PubSubSubscriptionOptionsRead::NotSubscribed);
         };
         match subscription_options_precheck(
-            subscription.is_expired_at(chrono::Utc::now()),
+            subscription.is_expired_at(northstar_time::Utc::now()),
             &subscription.subid,
             echoed_subid,
         ) {
@@ -1165,7 +1165,7 @@ pub fn subscription_event_children(
     subscription: &PubSubSubscription,
     event: &str,
     collection: Option<&str>,
-    delay: Option<chrono::DateTime<chrono::Utc>>,
+    delay: Option<northstar_time::DateTime<northstar_time::Utc>>,
 ) -> Result<String> {
     let body = if subscription.include_body {
         northstar_xep_0060::extract_atom_event_body(event)

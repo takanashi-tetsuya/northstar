@@ -5,7 +5,7 @@ use northstar_operations_core::api_mutations::{
 };
 
 use axum::{extract::State, response::Response, Json};
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -302,7 +302,7 @@ mod read_tests {
             attempts: 0,
             max_attempts: 20,
             next_attempt_at: now,
-            deadline_at: now + chrono::Duration::hours(1),
+            deadline_at: now + northstar_time::Duration::hours(1),
             cancel_requested_at: None,
             point_of_no_return_at: None,
             created_at: now,
@@ -324,7 +324,7 @@ mod read_tests {
             attempts: 0,
             max_attempts: 20,
             next_attempt_at: now,
-            deadline_at: now + chrono::Duration::hours(1),
+            deadline_at: now + northstar_time::Duration::hours(1),
             cancel_requested_at: None,
             point_of_no_return_at: None,
             created_at: now,

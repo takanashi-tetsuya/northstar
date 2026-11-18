@@ -92,7 +92,7 @@ pub async fn issue_mix_invitation(
     inviter: &str,
     invitee: &str,
     token: &str,
-    lifetime: chrono::Duration,
+    lifetime: northstar_time::Duration,
     payloads: &dyn MixEventPayloadRenderer,
     federated: Option<&FederatedMixMutation>,
 ) -> Result<bool> {

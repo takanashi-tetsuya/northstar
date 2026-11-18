@@ -57,8 +57,8 @@ pub struct PasskeyAccount {
 pub struct StoredCredential {
     pub id: Uuid,
     pub label: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: northstar_time::DateTime<northstar_time::Utc>,
+    pub last_used_at: Option<northstar_time::DateTime<northstar_time::Utc>>,
     pub credential: serde_json::Value,
     pub revision: Uuid,
 }
@@ -73,8 +73,8 @@ pub struct StoredChallenge {
 pub struct PasskeySummary {
     pub id: Uuid,
     pub label: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: northstar_time::DateTime<northstar_time::Utc>,
+    pub last_used_at: Option<northstar_time::DateTime<northstar_time::Utc>>,
 }
 
 pub struct PasskeyOptions<T> {
@@ -106,7 +106,7 @@ pub struct PasskeyLoginSession {
     pub username: String,
     pub is_admin: bool,
     pub fast_token: zeroize::Zeroizing<String>,
-    pub fast_expires_at: chrono::DateTime<chrono::Utc>,
+    pub fast_expires_at: northstar_time::DateTime<northstar_time::Utc>,
 }
 
 pub trait PasskeyRepository: Send + Sync {

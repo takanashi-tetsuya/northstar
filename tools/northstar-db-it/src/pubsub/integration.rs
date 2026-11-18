@@ -1,5 +1,4 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use northstar_pubsub_application::service::PubSubEventRenderer;
 use northstar_pubsub_application::{
     service::{CollectionDiscoItems, LeafDiscoItems},
@@ -7,6 +6,7 @@ use northstar_pubsub_application::{
 };
 use northstar_pubsub_core::{PepAudienceSnapshot, PepOutboxFactory};
 use northstar_pubsub_postgres::*;
+use northstar_time::{DateTime, Utc};
 use sqlx::{PgPool, Transaction};
 use std::collections::BTreeSet;
 use std::sync::{Arc, Condvar, Mutex};

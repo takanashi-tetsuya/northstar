@@ -2,8 +2,8 @@
 //! A wake identifies an account to inspect; it never authorizes a delivery.
 
 use anyhow::{ensure, Result};
-use chrono::{DateTime, Utc};
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
+use northstar_time::{DateTime, Utc};
 use std::{future::Future, time::Duration};
 use uuid::Uuid;
 

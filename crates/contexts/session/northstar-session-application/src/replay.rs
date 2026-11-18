@@ -5,7 +5,7 @@
 //! can be released for another attempt.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use std::{future::Future, pin::Pin, sync::Arc};
 use uuid::Uuid;
 

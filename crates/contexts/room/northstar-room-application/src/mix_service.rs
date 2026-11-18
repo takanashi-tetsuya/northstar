@@ -4,10 +4,10 @@
 //! Repository operations preserve each cross-table transaction.
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use northstar_abuse_policy::content_identity::{
     MixMessageContentKeyring, MixRetractionContentKeyring,
 };
+use northstar_time::{DateTime, Utc};
 use northstar_xml_builder::XmlElement;
 use std::collections::BTreeSet;
 use std::sync::Arc;

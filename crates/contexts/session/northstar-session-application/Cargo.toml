@@ -13,7 +13,7 @@ test-support = ["northstar-session-core/test-support"]
 
 [dependencies]
 anyhow = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
+northstar-time = { path = "../../../kernel/northstar-time", features = ["serde"] }
 dashmap = "6.1"
 northstar-auth-core = { path = "../../auth/northstar-auth-core" }
 northstar-config = { path = "../../../platform/northstar-config" }
@@ -33,6 +33,6 @@ tracing = "0.1"
 uuid = { version = "1.12", features = ["v4", "serde"] }
 
 [dev-dependencies]
-chrono = "0.4"
+northstar-time = { path = "../../../kernel/northstar-time" }
 futures = "0.3"
 tokio = { version = "1.43", features = ["macros", "rt", "sync", "test-util", "time"] }

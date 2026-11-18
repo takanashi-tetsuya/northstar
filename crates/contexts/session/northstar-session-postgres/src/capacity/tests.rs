@@ -4,7 +4,7 @@ use std::time::Duration;
 fn protected_retention_fixture() -> ProtectedRetentionProjection {
     let lease = Uuid::from_u128(1);
     let owner = Uuid::from_u128(10);
-    let timestamp = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let timestamp = northstar_time::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
     let allocation = RetentionAllocation {
         shard: 3,
         created_at: timestamp,
@@ -76,11 +76,11 @@ fn protected_retention_final_rejects_changed_identity_and_protected_repair_sets(
             0 => binding.connection_id = Uuid::from_u128(90),
             1 => binding.user_id = Uuid::from_u128(90),
             2 => binding.full_jid = "other@example.test/device".to_owned(),
-            3 => binding.lease_until += chrono::Duration::seconds(1),
-            4 => binding.created_at += chrono::Duration::seconds(1),
-            5 => binding.updated_at += chrono::Duration::seconds(1),
+            3 => binding.lease_until += northstar_time::Duration::seconds(1),
+            4 => binding.created_at += northstar_time::Duration::seconds(1),
+            5 => binding.updated_at += northstar_time::Duration::seconds(1),
             6 => binding.allocation.shard = 4,
-            _ => binding.allocation.created_at += chrono::Duration::seconds(1),
+            _ => binding.allocation.created_at += northstar_time::Duration::seconds(1),
         }
         assert!(original
             .validate_final(&changed, &empty_delta, 128)

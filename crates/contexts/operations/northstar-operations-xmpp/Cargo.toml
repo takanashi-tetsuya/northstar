@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
+northstar-time = { path = "../../../kernel/northstar-time", features = ["serde"] }
 dashmap = "6.1"
 northstar-auth-core = { path = "../../auth/northstar-auth-core" }
 northstar-operations-application = { path = "../northstar-operations-application" }

@@ -1,7 +1,7 @@
 use crate::effects::AbuseEffects;
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use northstar_abuse_policy::model::AbuseKeyDeploymentIdentity;
+use northstar_time::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 use std::time::Duration;
 
@@ -309,8 +309,8 @@ async fn insert_initial_record(
     let overlap_seconds = overlap_seconds(identity.minimum_overlap)?;
     let transition_started_at = (phase != DeploymentPhase::Stable).then_some(now);
     let retirement_started_at = (phase == DeploymentPhase::Retiring).then_some(now);
-    let retire_not_before =
-        retirement_started_at.map(|started| started + chrono::Duration::seconds(overlap_seconds));
+    let retire_not_before = retirement_started_at
+        .map(|started| started + northstar_time::Duration::seconds(overlap_seconds));
     sqlx::query(
         "INSERT INTO abuse_key_deployments
          (xmpp_domain,epoch,phase,current_key_id,previous_key_id,
@@ -565,7 +565,7 @@ mod tests {
             decide_reconciliation(&record, &sealing, now).unwrap(),
             Reconciliation::BeginRetirement
         );
-        let sealed = retiring(8, NEW, OLD, now + chrono::Duration::hours(1));
+        let sealed = retiring(8, NEW, OLD, now + northstar_time::Duration::hours(1));
         assert_eq!(
             decide_reconciliation(&sealed, &sealing, now).unwrap(),
             Reconciliation::Compatible
@@ -576,9 +576,9 @@ mod tests {
     #[test]
     fn previous_key_cannot_be_removed_before_the_database_deadline() {
         let now = Utc::now();
-        let early = retiring(8, NEW, OLD, now + chrono::Duration::seconds(1));
+        let early = retiring(8, NEW, OLD, now + northstar_time::Duration::seconds(1));
         assert!(decide_reconciliation(&early, &identity(8, NEW, None), now).is_err());
-        let mature = retiring(8, NEW, OLD, now - chrono::Duration::seconds(1));
+        let mature = retiring(8, NEW, OLD, now - northstar_time::Duration::seconds(1));
         assert_eq!(
             decide_reconciliation(&mature, &identity(8, NEW, None), now).unwrap(),
             Reconciliation::FinishOverlap

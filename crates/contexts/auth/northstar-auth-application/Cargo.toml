@@ -14,7 +14,7 @@ test-support = ["northstar-session-core/test-support"]
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22"
-chrono = { version = "0.4", features = ["serde"] }
+northstar-time = { path = "../../../kernel/northstar-time", features = ["serde"] }
 northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
 northstar-archive-core = { path = "../../archive/northstar-archive-core" }
 northstar-auth-core = { path = "../northstar-auth-core" }

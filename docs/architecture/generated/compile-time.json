@@ -1138,7 +1138,7 @@
     ],
     [
       "foundation-eventing",
-      "chrono"
+      "northstar-time"
     ],
     [
       "foundation-eventing",
@@ -1158,11 +1158,11 @@
     ],
     [
       "foundation-eventing-postgres",
-      "chrono"
+      "foundation-eventing"
     ],
     [
       "foundation-eventing-postgres",
-      "foundation-eventing"
+      "northstar-time"
     ],
     [
       "foundation-eventing-postgres",
@@ -1178,7 +1178,7 @@
     ],
     [
       "foundation-kms",
-      "chrono"
+      "northstar-time"
     ],
     [
       "foundation-kms",
@@ -2294,10 +2294,6 @@
     ],
     [
       "northstar-abuse-application",
-      "chrono"
-    ],
-    [
-      "northstar-abuse-application",
       "dashmap"
     ],
     [
@@ -2307,6 +2303,10 @@
     [
       "northstar-abuse-application",
       "northstar-abuse-policy"
+    ],
+    [
+      "northstar-abuse-application",
+      "northstar-time"
     ],
     [
       "northstar-abuse-application",
@@ -2354,11 +2354,11 @@
     ],
     [
       "northstar-abuse-policy",
-      "chrono"
+      "hmac"
     ],
     [
       "northstar-abuse-policy",
-      "hmac"
+      "northstar-time"
     ],
     [
       "northstar-abuse-policy",
@@ -2406,15 +2406,15 @@
     ],
     [
       "northstar-abuse-postgres",
-      "chrono"
-    ],
-    [
-      "northstar-abuse-postgres",
       "northstar-abuse-application"
     ],
     [
       "northstar-abuse-postgres",
       "northstar-abuse-policy"
+    ],
+    [
+      "northstar-abuse-postgres",
+      "northstar-time"
     ],
     [
       "northstar-abuse-postgres",
@@ -2438,11 +2438,11 @@
     ],
     [
       "northstar-archive-application",
-      "chrono"
+      "northstar-archive-core"
     ],
     [
       "northstar-archive-application",
-      "northstar-archive-core"
+      "northstar-time"
     ],
     [
       "northstar-archive-application",
@@ -2462,7 +2462,7 @@
     ],
     [
       "northstar-archive-core",
-      "chrono"
+      "northstar-time"
     ],
     [
       "northstar-archive-core",
@@ -2490,15 +2490,15 @@
     ],
     [
       "northstar-archive-postgres",
-      "chrono"
-    ],
-    [
-      "northstar-archive-postgres",
       "northstar-archive-application"
     ],
     [
       "northstar-archive-postgres",
       "northstar-archive-core"
+    ],
+    [
+      "northstar-archive-postgres",
+      "northstar-time"
     ],
     [
       "northstar-archive-postgres",
@@ -2522,10 +2522,6 @@
     ],
     [
       "northstar-archive-xmpp",
-      "chrono"
-    ],
-    [
-      "northstar-archive-xmpp",
       "northstar-archive-application"
     ],
     [
@@ -2539,6 +2535,10 @@
     [
       "northstar-archive-xmpp",
       "northstar-stream"
+    ],
+    [
+      "northstar-archive-xmpp",
+      "northstar-time"
     ],
     [
       "northstar-archive-xmpp",
@@ -2574,10 +2574,6 @@
     ],
     [
       "northstar-auth-application",
-      "chrono"
-    ],
-    [
-      "northstar-auth-application",
       "northstar-abuse-policy"
     ],
     [
@@ -2607,6 +2603,10 @@
     [
       "northstar-auth-application",
       "northstar-telemetry"
+    ],
+    [
+      "northstar-auth-application",
+      "northstar-time"
     ],
     [
       "northstar-auth-application",
@@ -2662,11 +2662,11 @@
     ],
     [
       "northstar-auth-core",
-      "chrono"
+      "hmac"
     ],
     [
       "northstar-auth-core",
-      "hmac"
+      "northstar-time"
     ],
     [
       "northstar-auth-core",
@@ -2702,10 +2702,6 @@
     ],
     [
       "northstar-auth-postgres",
-      "chrono"
-    ],
-    [
-      "northstar-auth-postgres",
       "northstar-auth-application"
     ],
     [
@@ -2723,6 +2719,10 @@
     [
       "northstar-auth-postgres",
       "northstar-security"
+    ],
+    [
+      "northstar-auth-postgres",
+      "northstar-time"
     ],
     [
       "northstar-auth-postgres",
@@ -2778,10 +2778,6 @@
     ],
     [
       "northstar-auth-xmpp",
-      "chrono"
-    ],
-    [
-      "northstar-auth-xmpp",
       "northstar-auth-application"
     ],
     [
@@ -2803,6 +2799,10 @@
     [
       "northstar-auth-xmpp",
       "northstar-telemetry"
+    ],
+    [
+      "northstar-auth-xmpp",
+      "northstar-time"
     ],
     [
       "northstar-auth-xmpp",
@@ -2847,10 +2847,6 @@
     [
       "northstar-bosh",
       "base64"
-    ],
-    [
-      "northstar-bosh",
-      "chrono"
     ],
     [
       "northstar-bosh",
@@ -2899,6 +2895,10 @@
     [
       "northstar-bosh",
       "northstar-stream"
+    ],
+    [
+      "northstar-bosh",
+      "northstar-time"
     ],
     [
       "northstar-bosh",
@@ -3034,10 +3034,6 @@
     ],
     [
       "northstar-cluster",
-      "chrono"
-    ],
-    [
-      "northstar-cluster",
       "dashmap"
     ],
     [
@@ -3126,6 +3122,10 @@
     ],
     [
       "northstar-cluster",
+      "northstar-time"
+    ],
+    [
+      "northstar-cluster",
       "northstar-xep-0016"
     ],
     [
@@ -3202,10 +3202,6 @@
     ],
     [
       "northstar-config",
-      "chrono"
-    ],
-    [
-      "northstar-config",
       "dotenvy"
     ],
     [
@@ -3215,6 +3211,10 @@
     [
       "northstar-config",
       "northstar-security"
+    ],
+    [
+      "northstar-config",
+      "northstar-time"
     ],
     [
       "northstar-config",
@@ -3278,10 +3278,6 @@
     ],
     [
       "northstar-data-tools",
-      "chrono"
-    ],
-    [
-      "northstar-data-tools",
       "northstar-auth-core"
     ],
     [
@@ -3299,6 +3295,10 @@
     [
       "northstar-data-tools",
       "northstar-security"
+    ],
+    [
+      "northstar-data-tools",
+      "northstar-time"
     ],
     [
       "northstar-data-tools",
@@ -3694,11 +3694,11 @@
     ],
     [
       "northstar-federation-core",
-      "chrono"
+      "hmac"
     ],
     [
       "northstar-federation-core",
-      "hmac"
+      "northstar-time"
     ],
     [
       "northstar-federation-core",
@@ -3790,10 +3790,6 @@
     ],
     [
       "northstar-http",
-      "chrono"
-    ],
-    [
-      "northstar-http",
       "dashmap"
     ],
     [
@@ -3874,6 +3870,10 @@
     ],
     [
       "northstar-http",
+      "northstar-time"
+    ],
+    [
+      "northstar-http",
       "northstar-upload-application"
     ],
     [
@@ -3946,10 +3946,6 @@
     ],
     [
       "northstar-message-application",
-      "chrono"
-    ],
-    [
-      "northstar-message-application",
       "dashmap"
     ],
     [
@@ -3991,6 +3987,10 @@
     [
       "northstar-message-application",
       "northstar-telemetry"
+    ],
+    [
+      "northstar-message-application",
+      "northstar-time"
     ],
     [
       "northstar-message-application",
@@ -4054,10 +4054,6 @@
     ],
     [
       "northstar-message-core",
-      "chrono"
-    ],
-    [
-      "northstar-message-core",
       "northstar-abuse-policy"
     ],
     [
@@ -4067,6 +4063,10 @@
     [
       "northstar-message-core",
       "northstar-federation-core"
+    ],
+    [
+      "northstar-message-core",
+      "northstar-time"
     ],
     [
       "northstar-message-core",
@@ -4130,10 +4130,6 @@
     ],
     [
       "northstar-message-postgres",
-      "chrono"
-    ],
-    [
-      "northstar-message-postgres",
       "futures"
     ],
     [
@@ -4159,6 +4155,10 @@
     [
       "northstar-message-postgres",
       "northstar-security"
+    ],
+    [
+      "northstar-message-postgres",
+      "northstar-time"
     ],
     [
       "northstar-message-postgres",
@@ -4194,10 +4194,6 @@
     ],
     [
       "northstar-message-xmpp",
-      "chrono"
-    ],
-    [
-      "northstar-message-xmpp",
       "northstar-abuse-policy"
     ],
     [
@@ -4227,6 +4223,10 @@
     [
       "northstar-message-xmpp",
       "northstar-telemetry"
+    ],
+    [
+      "northstar-message-xmpp",
+      "northstar-time"
     ],
     [
       "northstar-message-xmpp",
@@ -4278,10 +4278,6 @@
     ],
     [
       "northstar-mix-xmpp",
-      "chrono"
-    ],
-    [
-      "northstar-mix-xmpp",
       "dashmap"
     ],
     [
@@ -4323,6 +4319,10 @@
     [
       "northstar-mix-xmpp",
       "northstar-stream"
+    ],
+    [
+      "northstar-mix-xmpp",
+      "northstar-time"
     ],
     [
       "northstar-mix-xmpp",
@@ -4382,10 +4382,6 @@
     ],
     [
       "northstar-muc-xmpp",
-      "chrono"
-    ],
-    [
-      "northstar-muc-xmpp",
       "dashmap"
     ],
     [
@@ -4439,6 +4435,10 @@
     [
       "northstar-muc-xmpp",
       "northstar-stream"
+    ],
+    [
+      "northstar-muc-xmpp",
+      "northstar-time"
     ],
     [
       "northstar-muc-xmpp",
@@ -4506,10 +4506,6 @@
     ],
     [
       "northstar-operations-application",
-      "chrono"
-    ],
-    [
-      "northstar-operations-application",
       "northstar-abuse-policy"
     ],
     [
@@ -4539,6 +4535,10 @@
     [
       "northstar-operations-application",
       "northstar-telemetry"
+    ],
+    [
+      "northstar-operations-application",
+      "northstar-time"
     ],
     [
       "northstar-operations-application",
@@ -4610,10 +4610,6 @@
     ],
     [
       "northstar-operations-postgres",
-      "chrono"
-    ],
-    [
-      "northstar-operations-postgres",
       "hmac"
     ],
     [
@@ -4639,6 +4635,10 @@
     [
       "northstar-operations-postgres",
       "northstar-roster-core"
+    ],
+    [
+      "northstar-operations-postgres",
+      "northstar-time"
     ],
     [
       "northstar-operations-postgres",
@@ -4702,10 +4702,6 @@
     ],
     [
       "northstar-operations-xmpp",
-      "chrono"
-    ],
-    [
-      "northstar-operations-xmpp",
       "dashmap"
     ],
     [
@@ -4735,6 +4731,10 @@
     [
       "northstar-operations-xmpp",
       "northstar-stream"
+    ],
+    [
+      "northstar-operations-xmpp",
+      "northstar-time"
     ],
     [
       "northstar-operations-xmpp",
@@ -4778,7 +4778,7 @@
     ],
     [
       "northstar-postgres",
-      "chrono"
+      "northstar-time"
     ],
     [
       "northstar-postgres",
@@ -4822,10 +4822,6 @@
     ],
     [
       "northstar-pubsub-application",
-      "chrono"
-    ],
-    [
-      "northstar-pubsub-application",
       "northstar-pubsub-core"
     ],
     [
@@ -4835,6 +4831,10 @@
     [
       "northstar-pubsub-application",
       "northstar-telemetry"
+    ],
+    [
+      "northstar-pubsub-application",
+      "northstar-time"
     ],
     [
       "northstar-pubsub-application",
@@ -4882,7 +4882,7 @@
     ],
     [
       "northstar-pubsub-core",
-      "chrono"
+      "northstar-time"
     ],
     [
       "northstar-pubsub-core",
@@ -4906,10 +4906,6 @@
     ],
     [
       "northstar-pubsub-postgres",
-      "chrono"
-    ],
-    [
-      "northstar-pubsub-postgres",
       "futures"
     ],
     [
@@ -4927,6 +4923,10 @@
     [
       "northstar-pubsub-postgres",
       "northstar-telemetry"
+    ],
+    [
+      "northstar-pubsub-postgres",
+      "northstar-time"
     ],
     [
       "northstar-pubsub-postgres",
@@ -4970,10 +4970,6 @@
     ],
     [
       "northstar-pubsub-xmpp",
-      "chrono"
-    ],
-    [
-      "northstar-pubsub-xmpp",
       "northstar-federation-core"
     ],
     [
@@ -4999,6 +4995,10 @@
     [
       "northstar-pubsub-xmpp",
       "northstar-telemetry"
+    ],
+    [
+      "northstar-pubsub-xmpp",
+      "northstar-time"
     ],
     [
       "northstar-pubsub-xmpp",
@@ -5050,10 +5050,6 @@
     ],
     [
       "northstar-room-application",
-      "chrono"
-    ],
-    [
-      "northstar-room-application",
       "futures"
     ],
     [
@@ -5083,6 +5079,10 @@
     [
       "northstar-room-application",
       "northstar-runtime"
+    ],
+    [
+      "northstar-room-application",
+      "northstar-time"
     ],
     [
       "northstar-room-application",
@@ -5146,10 +5146,6 @@
     ],
     [
       "northstar-room-core",
-      "chrono"
-    ],
-    [
-      "northstar-room-core",
       "dashmap"
     ],
     [
@@ -5163,6 +5159,10 @@
     [
       "northstar-room-core",
       "northstar-message-core"
+    ],
+    [
+      "northstar-room-core",
+      "northstar-time"
     ],
     [
       "northstar-room-core",
@@ -5203,10 +5203,6 @@
     [
       "northstar-room-postgres",
       "anyhow"
-    ],
-    [
-      "northstar-room-postgres",
-      "chrono"
     ],
     [
       "northstar-room-postgres",
@@ -5251,6 +5247,10 @@
     [
       "northstar-room-postgres",
       "northstar-telemetry"
+    ],
+    [
+      "northstar-room-postgres",
+      "northstar-time"
     ],
     [
       "northstar-room-postgres",
@@ -5306,10 +5306,6 @@
     ],
     [
       "northstar-roster-application",
-      "chrono"
-    ],
-    [
-      "northstar-roster-application",
       "northstar-auth-core"
     ],
     [
@@ -5319,6 +5315,10 @@
     [
       "northstar-roster-application",
       "northstar-roster-core"
+    ],
+    [
+      "northstar-roster-application",
+      "northstar-time"
     ],
     [
       "northstar-roster-application",
@@ -5338,7 +5338,7 @@
     ],
     [
       "northstar-roster-core",
-      "chrono"
+      "northstar-time"
     ],
     [
       "northstar-roster-core",
@@ -5654,15 +5654,15 @@
     ],
     [
       "northstar-security",
-      "chrono"
-    ],
-    [
-      "northstar-security",
       "hickory-resolver"
     ],
     [
       "northstar-security",
       "libc"
+    ],
+    [
+      "northstar-security",
+      "northstar-time"
     ],
     [
       "northstar-security",
@@ -5743,10 +5743,6 @@
     [
       "northstar-server",
       "axum"
-    ],
-    [
-      "northstar-server",
-      "chrono"
     ],
     [
       "northstar-server",
@@ -5970,6 +5966,10 @@
     ],
     [
       "northstar-server",
+      "northstar-time"
+    ],
+    [
+      "northstar-server",
       "northstar-upload-application"
     ],
     [
@@ -6158,10 +6158,6 @@
     ],
     [
       "northstar-session-application",
-      "chrono"
-    ],
-    [
-      "northstar-session-application",
       "dashmap"
     ],
     [
@@ -6199,6 +6195,10 @@
     [
       "northstar-session-application",
       "northstar-telemetry"
+    ],
+    [
+      "northstar-session-application",
+      "northstar-time"
     ],
     [
       "northstar-session-application",
@@ -6266,10 +6266,6 @@
     ],
     [
       "northstar-session-postgres",
-      "chrono"
-    ],
-    [
-      "northstar-session-postgres",
       "northstar-config"
     ],
     [
@@ -6299,6 +6295,10 @@
     [
       "northstar-session-postgres",
       "northstar-stream"
+    ],
+    [
+      "northstar-session-postgres",
+      "northstar-time"
     ],
     [
       "northstar-session-postgres",
@@ -6343,10 +6343,6 @@
     [
       "northstar-stream",
       "base64"
-    ],
-    [
-      "northstar-stream",
-      "chrono"
     ],
     [
       "northstar-stream",
@@ -6451,6 +6447,10 @@
     [
       "northstar-stream",
       "northstar-telemetry"
+    ],
+    [
+      "northstar-stream",
+      "northstar-time"
     ],
     [
       "northstar-stream",
@@ -6602,15 +6602,15 @@
     ],
     [
       "northstar-test-harness",
-      "chrono"
-    ],
-    [
-      "northstar-test-harness",
       "libc"
     ],
     [
       "northstar-test-harness",
       "northstar-abuse-policy"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-time"
     ],
     [
       "northstar-test-harness",
@@ -6666,10 +6666,6 @@
     ],
     [
       "northstar-upload-application",
-      "chrono"
-    ],
-    [
-      "northstar-upload-application",
       "futures"
     ],
     [
@@ -6683,6 +6679,10 @@
     [
       "northstar-upload-application",
       "northstar-telemetry"
+    ],
+    [
+      "northstar-upload-application",
+      "northstar-time"
     ],
     [
       "northstar-upload-application",
@@ -6722,7 +6722,7 @@
     ],
     [
       "northstar-upload-core",
-      "chrono"
+      "northstar-time"
     ],
     [
       "northstar-upload-core",
@@ -6746,15 +6746,15 @@
     ],
     [
       "northstar-upload-postgres",
-      "chrono"
-    ],
-    [
-      "northstar-upload-postgres",
       "northstar-auth-core"
     ],
     [
       "northstar-upload-postgres",
       "northstar-postgres"
+    ],
+    [
+      "northstar-upload-postgres",
+      "northstar-time"
     ],
     [
       "northstar-upload-postgres",
@@ -6902,10 +6902,6 @@
     ],
     [
       "northstar-workflows",
-      "chrono"
-    ],
-    [
-      "northstar-workflows",
       "futures"
     ],
     [
@@ -7047,6 +7043,10 @@
     [
       "northstar-workflows",
       "northstar-telemetry"
+    ],
+    [
+      "northstar-workflows",
+      "northstar-time"
     ],
     [
       "northstar-workflows",
@@ -7286,7 +7286,7 @@
     ],
     [
       "northstar-xep-0215",
-      "chrono"
+      "northstar-time"
     ],
     [
       "northstar-xep-0215",
@@ -7586,7 +7586,7 @@
     ],
     [
       "northstar-xml-builder",
-      "chrono"
+      "northstar-time"
     ],
     [
       "northstar-xml-builder",

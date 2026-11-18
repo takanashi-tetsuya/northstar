@@ -5,8 +5,8 @@
 //! extra row to determine whether another page exists.
 
 use anyhow::{ensure, Result};
-use chrono::{DateTime, Utc};
 use northstar_postgres::database_cursor_clock_in_tx;
+use northstar_time::{DateTime, Utc};
 #[cfg(any(test, feature = "test-support"))]
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};

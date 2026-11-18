@@ -72,6 +72,20 @@ function cleanModel() {
 
 assert.deepEqual(validatePluginArchitecture(cleanModel()).violations, []);
 
+for (const [dependency, allowed] of [
+  ['northstar-time', true],
+  ['northstar-security', false],
+]) {
+  const model = cleanModel();
+  model.packages[1].dependencies.push({
+    name: dependency,
+    path: path.join(root, 'crates', 'kernel', dependency),
+  });
+  const result = validatePluginArchitecture(model).violations.join('\n');
+  const message = `northstar-xep-0184 depends on local crate ${dependency} outside the isolated XEP crate graph`;
+  assert.equal(result.includes(message), !allowed, dependency);
+}
+
 {
   const model = cleanModel();
   model.rootSource = '// northstar_xep_0184::parse_message is intentionally only prose';

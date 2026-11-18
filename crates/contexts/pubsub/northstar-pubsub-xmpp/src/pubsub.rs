@@ -865,7 +865,7 @@ fn subscription_payload(
     jid: &str,
     state: &str,
     subid: Option<&str>,
-    expiry: Option<&chrono::DateTime<chrono::Utc>>,
+    expiry: Option<&northstar_time::DateTime<northstar_time::Utc>>,
 ) -> String {
     XmlElement::namespaced("pubsub", NS_PUBSUB)
         .child(subscription_element(
@@ -883,7 +883,7 @@ fn subscription_element(
     jid: &str,
     state: &str,
     subid: Option<&str>,
-    expiry: Option<chrono::DateTime<chrono::Utc>>,
+    expiry: Option<northstar_time::DateTime<northstar_time::Utc>>,
 ) -> XmlElement {
     XmlElement::new("subscription")
         .attr("node", node)

@@ -478,7 +478,7 @@ pub fn canonical_local_muc_room(value: &str, expected_domain: &str) -> Option<(S
 pub struct MucHistoryRequest {
     pub max_stanzas: usize,
     pub max_chars: Option<usize>,
-    pub since: Option<chrono::DateTime<chrono::Utc>>,
+    pub since: Option<northstar_time::DateTime<northstar_time::Utc>>,
 }
 
 impl Default for MucHistoryRequest {
@@ -496,7 +496,7 @@ impl Default for MucHistoryRequest {
 /// request at 100 complete stanzas.
 pub fn parse_muc_history_request(
     root: Node<'_, '_>,
-    now: chrono::DateTime<chrono::Utc>,
+    now: northstar_time::DateTime<northstar_time::Utc>,
 ) -> std::result::Result<MucHistoryRequest, MalformedMucStanza> {
     let muc_extensions = root
         .children()
@@ -552,14 +552,14 @@ pub fn parse_muc_history_request(
     let max_chars = parse_nonnegative("maxchars")?.map(|value| value.min(4 * 1024 * 1024) as usize);
     let seconds_since = parse_nonnegative("seconds")?.map(|seconds| {
         let seconds = seconds.min(i64::MAX as u64) as i64;
-        now.checked_sub_signed(chrono::Duration::seconds(seconds))
-            .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC)
+        now.checked_sub_signed(northstar_time::Duration::seconds(seconds))
+            .unwrap_or(northstar_time::DateTime::<northstar_time::Utc>::MIN_UTC)
     });
     let explicit_since = history
         .attribute("since")
         .map(|value| {
-            chrono::DateTime::parse_from_rfc3339(value)
-                .map(|value| value.with_timezone(&chrono::Utc))
+            northstar_time::DateTime::parse_from_rfc3339(value)
+                .map(|value| value.with_timezone(&northstar_time::Utc))
                 .map_err(|_| MalformedMucStanza)
         })
         .transpose()?;
@@ -600,7 +600,7 @@ pub fn apply_muc_history_bounds(
 pub fn current_muc_subject_stanza(room: &MucRoom, room_jid: &str, recipient: &str) -> String {
     let changed_at = room
         .subject_changed_at
-        .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+        .map(|value| value.to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true));
     northstar_xep_0045::build_subject_message(
         room_jid,
         recipient,

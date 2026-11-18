@@ -678,7 +678,7 @@ pub trait MixRepository: Send + Sync {
         inviter: &str,
         invitee: &str,
         token: &str,
-        lifetime: chrono::Duration,
+        lifetime: northstar_time::Duration,
         federated: Option<&FederatedMixMutation>,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
     fn mix_private_message_recipient(

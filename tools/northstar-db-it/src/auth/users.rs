@@ -1,7 +1,7 @@
-use chrono::Utc;
 use northstar_abuse_policy::AbuseAction;
 use northstar_auth_core as auth;
 use northstar_auth_postgres::users::*;
+use northstar_time::Utc;
 use northstar_workflows::account_lifecycle::*;
 use uuid::Uuid;
 use zeroize::Zeroizing;

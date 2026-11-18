@@ -602,7 +602,8 @@ pub async fn process_channel_message(
             "MIX retraction requires a bounded client action id"
         );
         let retraction_id = Uuid::new_v4();
-        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let now =
+            northstar_time::Utc::now().to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true);
         let archived_actor = if channel.jid_visibility == "visible" {
             actor_bare.to_owned()
         } else {

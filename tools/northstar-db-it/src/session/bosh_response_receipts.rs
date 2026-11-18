@@ -1,5 +1,4 @@
 use crate::support::delivery::{bosh_bind, bosh_operation, seed_c2s, seed_mix};
-use chrono::{DateTime, TimeDelta, Utc};
 use northstar_delivery_core::{
     bosh_ownership::{
         response::{self, BindKnowledge, BoshResponseOwnership, DeletedSource, Knowledge},
@@ -9,6 +8,7 @@ use northstar_delivery_core::{
 };
 use northstar_session_application::replay::ReplayRepository;
 use northstar_session_postgres::{replay as db, replay_repository::PostgresReplayRepository};
+use northstar_time::{DateTime, TimeDelta, Utc};
 use sqlx::{PgConnection, PgPool};
 use std::sync::Arc;
 use uuid::Uuid;

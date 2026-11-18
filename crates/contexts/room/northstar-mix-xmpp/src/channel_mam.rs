@@ -132,7 +132,7 @@ pub async fn handle_mix_mam_iq(
                             "timestamp",
                             value
                                 .created_at
-                                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                                .to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true),
                         ))
                     })
                     .transpose()
@@ -200,7 +200,7 @@ pub async fn handle_mix_mam_iq(
                 "stamp",
                 event
                     .created_at
-                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    .to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true),
             ),
         );
         forwarded.push_validated_fragment(&event.payload)?;

@@ -1,11 +1,11 @@
 //! One-use supplied repository replies. Every unneeded trait method rejects.
 //! No SQL, timers, network, spawned tasks or self-produced transport completions.
 use super::*;
-use chrono::{DateTime, Utc};
 use northstar_room_application::mix as foreground_core;
 use northstar_room_application::mix_service::foreground;
 use northstar_room_application::mix_service::*;
 use northstar_room_core::mix as room;
+use northstar_time::{DateTime, Utc};
 use std::sync::Mutex;
 
 #[derive(Clone)]
@@ -326,7 +326,7 @@ impl MixRepository for ControlledRepository {
         inviter: &str,
         invitee: &str,
         token: &str,
-        lifetime: chrono::Duration,
+        lifetime: northstar_time::Duration,
         federated: Option<&FederatedMixMutation>,
     ) -> impl std::future::Future<Output = Result<bool>> + Send {
         std::future::ready(Err(self.unused("issue_mix_invitation")))

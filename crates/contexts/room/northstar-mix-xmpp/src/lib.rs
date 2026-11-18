@@ -175,7 +175,7 @@ pub fn start_mix_iq_relay_expiry(
 pub fn start_mix_presence_recovery(
     context: Arc<impl MixPresenceRecoveryPort>,
     registry: Arc<northstar_runtime::workers::WorkerRegistry>,
-    cutoff: chrono::DateTime<chrono::Utc>,
+    cutoff: northstar_time::DateTime<northstar_time::Utc>,
     // The state layer snapshots these targets straight from its own
     // repository query; the persistence-type conversion happens on this
     // boundary so the protocol never names the storage DTO.

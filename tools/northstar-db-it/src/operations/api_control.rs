@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use sqlx::Row;
 use std::collections::BTreeMap;
 use uuid::Uuid;

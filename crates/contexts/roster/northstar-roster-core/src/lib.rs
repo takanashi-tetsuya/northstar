@@ -292,6 +292,6 @@ pub struct ServiceMessageDeliveryClaim {
     pub kind: String,
     pub body: String,
     pub revision: Uuid,
-    pub delivery_date: chrono::NaiveDate,
+    pub delivery_date: northstar_time::NaiveDate,
     pub claim_id: Uuid,
 }

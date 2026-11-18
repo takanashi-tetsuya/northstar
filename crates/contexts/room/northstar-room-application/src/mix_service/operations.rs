@@ -53,7 +53,7 @@ pub struct MixDiscoPage {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ArchiveBoundary {
     pub id: Uuid,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: northstar_time::DateTime<northstar_time::Utc>,
 }
 
 #[derive(Clone, Debug)]
@@ -335,7 +335,7 @@ impl<R: MixRepository> MixService<R> {
         inviter: &str,
         invitee: &str,
         token: &str,
-        lifetime: chrono::Duration,
+        lifetime: northstar_time::Duration,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<bool> {
         self.repository
@@ -574,7 +574,7 @@ pub fn valid_stable_participant_id(value: &str) -> bool {
         && !value.contains('#')
 }
 pub fn mix_timestamp_item_id() -> String {
-    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
+    Utc::now().to_rfc3339_opts(northstar_time::SecondsFormat::Nanos, true)
 }
 pub fn valid_join_nodes(nodes: &[String]) -> Result<Vec<String>> {
     let mut unique = std::collections::BTreeSet::new();

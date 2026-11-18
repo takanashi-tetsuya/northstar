@@ -7,7 +7,7 @@
 //! identity output.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};

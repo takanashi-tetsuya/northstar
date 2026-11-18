@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
-chrono = "0.4"
+northstar-time = { path = "../../../kernel/northstar-time" }
 northstar-auth-core = { path = "../../auth/northstar-auth-core" }
 northstar-federation-core = { path = "../../federation/northstar-federation-core" }
 northstar-roster-core = { path = "../northstar-roster-core" }

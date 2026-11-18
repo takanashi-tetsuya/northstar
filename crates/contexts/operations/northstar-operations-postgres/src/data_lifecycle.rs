@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Duration, Utc};
 pub use northstar_operations_application::governance::{
     AuditExport, AuditExportCursor, AuditExportEntry, HeldRecordExport, LegalHoldError,
     LegalHoldExport, LegalHoldExportCursor, LegalHoldSummary, LegalHoldTarget,
 };
+use northstar_time::{DateTime, Duration, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};

@@ -5,7 +5,7 @@
 
 pub mod mam_parse;
 
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -627,7 +627,7 @@ mod tests {
     #[test]
     fn time_range_validation() {
         let t1 = Utc::now();
-        let t2 = t1 + chrono::Duration::seconds(60);
+        let t2 = t1 + northstar_time::Duration::seconds(60);
         assert!(validate_query_time_range(Some(t1), Some(t2)));
         assert!(validate_query_time_range(Some(t1), Some(t1)));
         assert!(!validate_query_time_range(Some(t2), Some(t1)));
@@ -837,7 +837,7 @@ mod tests {
         let timestamp = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
         let query = MamArchiveQuery {
             with_jid: Some("alice@example.test".to_owned()),
-            start: Some(timestamp + chrono::Duration::days(1)),
+            start: Some(timestamp + northstar_time::Duration::days(1)),
             end: None,
             before_id: Some(later),
             after_id: Some(earlier),

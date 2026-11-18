@@ -9,8 +9,6 @@ mod protocol_session;
 mod session_host;
 
 #[cfg(test)]
-use chrono::Utc;
-#[cfg(test)]
 use northstar_archive_application::MamRsmPage;
 use northstar_archive_application::{
     ArchiveBoundary, ArchiveRow, MamMetadataCommand, MamMetadataResult, MamPreferences,
@@ -21,6 +19,8 @@ use northstar_archive_application::{
 #[cfg(test)]
 use northstar_archive_core::mam_parse::ParsedMamQuery;
 use northstar_archive_core::mam_parse::{mam_error_condition, parse_mam_query};
+#[cfg(test)]
+use northstar_time::Utc;
 #[cfg(test)]
 use northstar_xep_0313::MAX_MAM_RESULTS;
 use northstar_xep_0313::{
@@ -304,7 +304,7 @@ pub async fn mam_metadata<S: MamSession>(
             "timestamp",
             value
                 .created_at
-                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                .to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true),
         )
     };
     let mut metadata = XmlElement::namespaced("metadata", MAM_NS);
@@ -394,7 +394,7 @@ pub async fn mam_query<S: MamSession>(
                 XmlElement::namespaced("delay", "urn:xmpp:delay").attr(
                     "stamp",
                     item.created_at
-                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                        .to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true),
                 ),
             )
             .validated_fragment(&archived_stanza)?;

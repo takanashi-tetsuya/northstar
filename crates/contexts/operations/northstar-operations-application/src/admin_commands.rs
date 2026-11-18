@@ -173,7 +173,7 @@ pub struct BoundedAccountList {
 
 #[derive(Clone, Debug)]
 pub struct AnnouncementPageCursor {
-    pub snapshot_at: chrono::DateTime<chrono::Utc>,
+    pub snapshot_at: northstar_time::DateTime<northstar_time::Utc>,
     pub after_username: String,
     pub after_id: Uuid,
 }
@@ -202,7 +202,7 @@ pub struct AccountCommandTarget {
 pub struct AccountCommandView {
     pub user_id: Uuid,
     pub username: String,
-    pub last_login_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_login_at: Option<northstar_time::DateTime<northstar_time::Utc>>,
 }
 
 #[derive(Clone, Debug)]

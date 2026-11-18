@@ -139,7 +139,7 @@ struct HistoryMessageView {
     stanza: String,
     encrypted: bool,
     stanza_id: Option<String>,
-    created_at: chrono::DateTime<chrono::Utc>,
+    created_at: northstar_time::DateTime<northstar_time::Utc>,
 }
 
 impl TryFrom<northstar_archive_application::ArchiveRow> for HistoryMessageView {
@@ -375,7 +375,7 @@ pub async fn history<R: HttpRepositories>(
 #[cfg(test)]
 mod history_tests {
     use super::*;
-    use chrono::{TimeZone, Utc};
+    use northstar_time::{TimeZone, Utc};
 
     fn query() -> HistoryQuery {
         HistoryQuery {

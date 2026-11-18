@@ -1,7 +1,7 @@
 //! Parses a XEP-0313 query element into the archive query.
 
 use crate::{MamArchiveQuery, MamRsmPage};
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use northstar_xep_0313::{
     parse_mam_query as parse_xep_mam_query, MamError, MamRsmPage as ParsedMamRsmPage, UtcTimestamp,
 };
@@ -25,7 +25,7 @@ fn archive_id_to_uuid(
     Uuid::parse_str(id.as_str()).map_err(|_| "item-not-found")
 }
 
-fn mam_timestamp_to_chrono(
+fn mam_timestamp_to_datetime(
     timestamp: UtcTimestamp,
 ) -> std::result::Result<DateTime<Utc>, &'static str> {
     let seconds = timestamp.epoch_nanos().div_euclid(1_000_000_000);
@@ -41,8 +41,8 @@ pub fn parse_mam_query(query: Node<'_, '_>) -> std::result::Result<ParsedMamQuer
     Ok(ParsedMamQuery {
         query: MamArchiveQuery {
             with_jid: filter.with_jid.map(|jid| jid.to_string()),
-            start: filter.start.map(mam_timestamp_to_chrono).transpose()?,
-            end: filter.end.map(mam_timestamp_to_chrono).transpose()?,
+            start: filter.start.map(mam_timestamp_to_datetime).transpose()?,
+            end: filter.end.map(mam_timestamp_to_datetime).transpose()?,
             before_id: filter
                 .before_id
                 .as_ref()

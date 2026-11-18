@@ -14,7 +14,7 @@ test-support = []
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22"
-chrono = "0.4"
+northstar-time = { path = "../../../kernel/northstar-time" }
 northstar-auth-application = { path = "../northstar-auth-application" }
 northstar-auth-core = { path = "../northstar-auth-core" }
 northstar-roster-core = { path = "../../roster/northstar-roster-core" }

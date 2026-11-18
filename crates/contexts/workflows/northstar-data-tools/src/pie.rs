@@ -11,9 +11,9 @@ use crate::pie_repository::model::{
 };
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use chrono::{DateTime, Utc};
 use northstar_auth_core as auth;
 use northstar_config::Config;
+use northstar_time::{DateTime, Utc};
 use northstar_xmpp_types::jid;
 use roxmltree::{Document, Node};
 use sqlx::{PgPool, Row};

@@ -1,8 +1,8 @@
 //! The maintenance subserver's retention over the tables of every context.
 
 use anyhow::Result;
-use chrono::Utc;
 use northstar_operations_application::maintenance_repositories::RetentionStore;
+use northstar_time::Utc;
 use sqlx::PgPool;
 
 #[derive(Clone)]
@@ -22,7 +22,7 @@ impl northstar_operations_application::maintenance_repositories::RetentionReposi
     async fn purge_resolved_retention_batch(
         &self,
         store: RetentionStore,
-        now: chrono::DateTime<Utc>,
+        now: northstar_time::DateTime<Utc>,
         days: i64,
         batch_size: i64,
     ) -> Result<u64> {

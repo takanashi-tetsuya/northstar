@@ -5,9 +5,9 @@ pub use crate::operations::{
 };
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 pub use northstar_archive_core::{ArchivePage, MamArchiveQuery};
 pub use northstar_auth_core::api_session::{ApiPrincipal, ApiReadAuthority};
+use northstar_time::{DateTime, Utc};
 pub use northstar_upload_core::admin::{
     UploadDeadLetterBoundary, UploadDeadLetterId, UploadDeadLetterKind, UploadDeadLetterPage,
     UploadDeadLetterRecord,
@@ -479,7 +479,7 @@ mod tests {
                 _actor: ApiReadAuthority<'_>, _operation_id: Uuid, _target_id: Uuid,
             ) -> anyhow::Result<super::AuthorizedRead<Option<super::OperationTargetRecord>>>;
             fn principal(_token: &str) -> anyhow::Result<Option<super::ApiPrincipal>>;
-            fn cursor_clock() -> anyhow::Result<chrono::DateTime<chrono::Utc>>;
+            fn cursor_clock() -> anyhow::Result<northstar_time::DateTime<northstar_time::Utc>>;
             fn users(
                 _actor: ApiReadAuthority<'_>, _after: Option<super::PageBoundary>, _limit: i64,
             ) -> anyhow::Result<Option<super::KeysetPage<super::UserPageRow>>>;
@@ -534,7 +534,7 @@ mod tests {
             Ok(Some(SessionPage {
                 rows,
                 next,
-                database_now: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                database_now: northstar_time::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             }))
         }
 
@@ -622,7 +622,7 @@ mod tests {
             calls: std::sync::Mutex::new(Vec::new()),
         });
         let user_id = Uuid::from_u128(99);
-        let database_now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let database_now = northstar_time::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
         for (label, input, after, limit, expected, next) in [
             (
                 "descending first page",

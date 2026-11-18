@@ -610,7 +610,7 @@ mod tests {
                 released = wake.wait(released).expect("avatar gate poisoned");
             }
             let event_id = Uuid::new_v4();
-            let created_at = chrono::Utc::now();
+            let created_at = northstar_time::Utc::now();
             subscriber_jids
                 .iter()
                 .map(|jid| {

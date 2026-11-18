@@ -368,7 +368,7 @@ pub async fn muc_message(
                 "not-acceptable",
             )));
         }
-        let stamp = chrono::Utc::now();
+        let stamp = northstar_time::Utc::now();
         let retraction_message_id = root
             .attribute("id")
             .map(str::to_owned)

@@ -1,6 +1,6 @@
 use super::*;
-use chrono::{DateTime, Utc};
 use northstar_room_application::muc_service::*;
+use northstar_time::{DateTime, Utc};
 use std::time::Duration;
 
 // Unrelated ports fail loudly if a handler unexpectedly reaches them.
@@ -250,9 +250,9 @@ impl MucRepository for Repository {
 
 mod mix {
     use anyhow::Result;
-    use chrono::{DateTime, Utc};
     use northstar_abuse_policy::ContentIdentityAuthenticators;
     use northstar_room_application::mix_service::*;
+    use northstar_time::{DateTime, Utc};
     use uuid::Uuid;
 
     pub(crate) struct UnusedMix;
@@ -294,7 +294,7 @@ mod mix {
             fn mix_participant_preference(&self, channel_id: Uuid, actor: &str) -> Result<Option<MixParticipantPreference>>;
             fn update_mix_participant_preference(&self, channel_id: Uuid, actor: &str, preference: &MixParticipantPreference, federated: Option<&FederatedMixMutation>) -> Result<Option<MixParticipantPreferenceUpdateOutcome>>;
             fn authorized_mix_jid_map_entries(&self, channel_id: Uuid, actor: &str, limit: i64) -> Result<MixReadOutcome<Vec<(String, String)>>>;
-            fn issue_mix_invitation(&self, channel_id: Uuid, inviter: &str, invitee: &str, token: &str, lifetime: chrono::Duration, federated: Option<&FederatedMixMutation>) -> Result<bool>;
+            fn issue_mix_invitation(&self, channel_id: Uuid, inviter: &str, invitee: &str, token: &str, lifetime: northstar_time::Duration, federated: Option<&FederatedMixMutation>) -> Result<bool>;
             fn mix_private_message_recipient(&self, channel_id: Uuid, sender: &str, recipient_id: Uuid) -> Result<Option<(MixParticipant, MixParticipant)>>;
             fn retract_mix_message(&self, request: RetractMixMessageRequest<'_>, authenticators: Option<&ContentIdentityAuthenticators>) -> Result<RetractMixMessageAdmission>;
             fn begin_remote_pam_join(&self, request: BeginRemotePamJoin) -> Result<PamOperationReplay>;

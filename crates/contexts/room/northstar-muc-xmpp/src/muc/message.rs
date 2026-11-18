@@ -130,7 +130,7 @@ pub async fn handle_muc_invitation_decline(
                 .is_some();
         }
         if !delivered && temporary_storage {
-            let delayed = add_delay_from(&forwarded, chrono::Utc::now(), Some(&room_jid));
+            let delayed = add_delay_from(&forwarded, northstar_time::Utc::now(), Some(&room_jid));
             let outcome = session
                 .host()
                 .muc_service()
@@ -725,8 +725,11 @@ pub async fn handle_muc_invitation<S: MucSession>(
                         }
                         let mut live_claim_id = None;
                         let (durable_invite, affiliation_changed) = if room.members_only {
-                            let delayed =
-                                add_delay_from(&forwarded, chrono::Utc::now(), Some(&room_jid));
+                            let delayed = add_delay_from(
+                                &forwarded,
+                                northstar_time::Utc::now(),
+                                Some(&room_jid),
+                            );
                             let cluster_authority = if session.host().muc_pg_authority_enabled() {
                                 session.host().admit_muc_pg_mutation()?;
                                 let Some(actor_target) = session
@@ -1022,8 +1025,11 @@ pub async fn handle_muc_invitation<S: MucSession>(
                                 .await;
                         }
                         if !delivered && durable_invite.is_none() && temporary_storage {
-                            let delayed =
-                                add_delay_from(&forwarded, chrono::Utc::now(), Some(&room_jid));
+                            let delayed = add_delay_from(
+                                &forwarded,
+                                northstar_time::Utc::now(),
+                                Some(&room_jid),
+                            );
                             let offline_outcome = session
                                 .host()
                                 .muc_service()

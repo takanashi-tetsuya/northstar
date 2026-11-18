@@ -1,6 +1,6 @@
 //! What a credential commit leaves behind for the frame that requested it.
 
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 

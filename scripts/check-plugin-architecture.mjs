@@ -13,6 +13,8 @@ const ALLOWED_CAPABILITY_FREE_SHARED_CRATES = new Set([
   XEP_CORE_PACKAGE,
   'northstar-xmpp-types',
   'northstar-xml-builder',
+  // Timestamp types (chrono-compatible); plugins used chrono before S37.
+  'northstar-time',
 ]);
 
 const forbiddenDependencies = new Set([

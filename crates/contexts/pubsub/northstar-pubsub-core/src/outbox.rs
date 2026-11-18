@@ -1,7 +1,7 @@
 //! Immutable notification identities and recipient ordering.
 use anyhow::Result;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -367,7 +367,7 @@ impl PubSubOutboxInsert {
             digest_frequency_ms,
             security_sensitive,
             coalesce_key,
-            expires_at: now + chrono::Duration::seconds(PUBSUB_OUTBOX_DEFAULT_TTL_SECONDS),
+            expires_at: now + northstar_time::Duration::seconds(PUBSUB_OUTBOX_DEFAULT_TTL_SECONDS),
             pep_subject,
             legacy_unverifiable: false,
         })

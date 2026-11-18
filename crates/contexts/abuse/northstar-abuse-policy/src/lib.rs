@@ -246,9 +246,9 @@ mod tests {
         let secret = b"deterministic-policy-test-secret-at-least-32";
         let actor_secret = derive_actor_key_secret(secret);
         let key_id = actor_key_id(&actor_secret);
-        let now = chrono::DateTime::parse_from_rfc3339("2026-09-02T12:00:00Z")
+        let now = northstar_time::DateTime::parse_from_rfc3339("2026-09-02T12:00:00Z")
             .unwrap()
-            .with_timezone(&chrono::Utc);
+            .with_timezone(&northstar_time::Utc);
 
         let actors = vec!["user:alice".to_owned(), "ip:198.51.100.1".to_owned()];
         let mut alice_state = ActorStateSnapshot::new("user:alice".to_owned(), now);
@@ -321,7 +321,7 @@ mod tests {
         );
 
         let challenge_id = Uuid::from_u128(0xa000_0000_0000_4000_8000_0000_0000_0001);
-        let expires_at = now + chrono::Duration::seconds(120);
+        let expires_at = now + northstar_time::Duration::seconds(120);
         let server_nonce = "sample-server-nonce-123";
 
         let prefix = compute_pow_prefix(
@@ -400,9 +400,9 @@ mod tests {
     #[test]
     fn shared_nat_peers_do_not_exhaust_each_other() {
         let config = test_config();
-        let now = chrono::DateTime::parse_from_rfc3339("2026-09-02T12:00:00Z")
+        let now = northstar_time::DateTime::parse_from_rfc3339("2026-09-02T12:00:00Z")
             .unwrap()
-            .with_timezone(&chrono::Utc);
+            .with_timezone(&northstar_time::Utc);
         let ip_key = "ip:203.0.113.50".to_owned();
 
         let mut user_a = ActorStateSnapshot::new("user:alice".to_owned(), now);
@@ -526,9 +526,9 @@ mod tests {
             &config,
         );
 
-        let now = chrono::DateTime::parse_from_rfc3339("2026-09-02T12:00:00Z")
+        let now = northstar_time::DateTime::parse_from_rfc3339("2026-09-02T12:00:00Z")
             .unwrap()
-            .with_timezone(&chrono::Utc);
+            .with_timezone(&northstar_time::Utc);
         let proof = PowProof {
             challenge_id: Uuid::from_u128(0xb000_0000_0000_4000_8000_0000_0000_0002),
             nonce: "12345".to_owned(),
@@ -565,9 +565,9 @@ mod tests {
             key_id: key_id.clone(),
             prefix: "prefix".to_owned(),
             work_factor: 100,
-            issued_at: now - chrono::Duration::seconds(200),
-            expires_at: now - chrono::Duration::seconds(10), // Expired 10s ago
-            not_before: now - chrono::Duration::seconds(200),
+            issued_at: now - northstar_time::Duration::seconds(200),
+            expires_at: now - northstar_time::Duration::seconds(10), // Expired 10s ago
+            not_before: now - northstar_time::Duration::seconds(200),
             server_nonce: "nonce".to_owned(),
             subject_hash: sub_hash,
             actor_secret: &actor_secret,
@@ -594,8 +594,8 @@ mod tests {
 
         // 3. Hard cooldown still active (now < not_before)
         let cooldown_active_ctx = ChallengeVerificationContext {
-            not_before: now + chrono::Duration::seconds(30), // 30s remaining
-            expires_at: now + chrono::Duration::seconds(120),
+            not_before: now + northstar_time::Duration::seconds(30), // 30s remaining
+            expires_at: now + northstar_time::Duration::seconds(120),
             ..expired_ctx
         };
 
@@ -618,9 +618,9 @@ mod tests {
     #[test]
     fn property_deterministic_injected_time() {
         let config = test_config();
-        let t0 = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let t0 = northstar_time::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
         // For penalty level 2 with cooldown_step 60s, level 2 requires 60 * 4 = 240s to drop to level 1.
-        let t1 = chrono::DateTime::from_timestamp(1_700_000_250, 0).unwrap(); // +250s
+        let t1 = northstar_time::DateTime::from_timestamp(1_700_000_250, 0).unwrap(); // +250s
 
         let mut s1 = ActorStateSnapshot::new("message:user:alice".to_owned(), t0);
         s1.events.push(t0);

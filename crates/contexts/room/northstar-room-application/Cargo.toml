@@ -11,7 +11,7 @@ test-support = []
 [dependencies]
 anyhow = "1.0"
 argon2 = "0.5"
-chrono = { version = "0.4", features = ["serde"] }
+northstar-time = { path = "../../../kernel/northstar-time", features = ["serde"] }
 futures = "0.3"
 northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
 northstar-archive-core = { path = "../../archive/northstar-archive-core" }

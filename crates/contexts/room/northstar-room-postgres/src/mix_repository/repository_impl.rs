@@ -793,7 +793,7 @@ impl<E: RoomEffects> MixRepository for PostgresMixRepository<E> {
         inviter: &str,
         invitee: &str,
         token: &str,
-        lifetime: chrono::Duration,
+        lifetime: northstar_time::Duration,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<bool> {
         crate::mix::issue_mix_invitation(

@@ -5,8 +5,8 @@ pub(super) struct UnusedPorts;
 mod mix {
     use super::UnusedPorts;
     use anyhow::Result;
-    use chrono::{DateTime, Utc};
     use northstar_room_application::mix_service::*;
+    use northstar_time::{DateTime, Utc};
     use uuid::Uuid;
 
     impl MixRepository for UnusedPorts {
@@ -343,7 +343,7 @@ mod mix {
             _inviter: &str,
             _invitee: &str,
             _token: &str,
-            _lifetime: chrono::Duration,
+            _lifetime: northstar_time::Duration,
             _federated: Option<&FederatedMixMutation>,
         ) -> Result<bool> {
             panic!("unused MixRepository::issue_mix_invitation port");
@@ -725,8 +725,8 @@ mod mix {
 mod presence {
     use super::UnusedPorts;
     use anyhow::Result;
-    use chrono::{DateTime, Utc};
     use northstar_roster_application::presence::*;
+    use northstar_time::{DateTime, Utc};
     use uuid::Uuid;
 
     impl PresenceRepository for UnusedPorts {

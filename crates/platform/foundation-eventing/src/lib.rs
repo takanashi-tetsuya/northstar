@@ -2,7 +2,7 @@
 //!
 //! Defined per `northstar_microservices_deep_audit_2026-09-03.md` (Sections 9, 11, Appendix B.2, B.3).
 
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

@@ -644,7 +644,7 @@ fn pow_v1_cutover_requires_canonical_utc_and_defaults_closed() {
         parse_pow_v1_compatibility_until(Some("2026-10-01T00:00:00Z"))
             .unwrap()
             .unwrap()
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            .to_rfc3339_opts(northstar_time::SecondsFormat::Secs, true),
         "2026-10-01T00:00:00Z"
     );
     assert!(parse_pow_v1_compatibility_until(Some("2026-10-01T09:00:00+09:00")).is_err());

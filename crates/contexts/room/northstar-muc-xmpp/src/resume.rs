@@ -348,7 +348,7 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
         // From here through the final Entry publication the single-node
         // room gate remains held, so the exact room policy, nickname and
         // capacity decision cannot be invalidated by join/rename/config.
-        if room.configuration_is_expired(chrono::Utc::now()) {
+        if room.configuration_is_expired(northstar_time::Utc::now()) {
             failures.push(membership.clone());
             continue;
         };

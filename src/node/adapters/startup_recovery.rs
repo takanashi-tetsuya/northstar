@@ -1,12 +1,12 @@
 //! Root bindings for durable startup audits and restart recovery.
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use northstar_abuse_policy::model::AbuseKeyDeploymentIdentity;
 use northstar_operations_application::startup_recovery::{
     DurableCapacityAuditPorts, RestartRecoveryPorts,
 };
 use northstar_room_postgres::mix::MixPresenceProbeTarget;
+use northstar_time::{DateTime, Utc};
 use sqlx::PgPool;
 
 pub(in crate::node) struct StartupRecoveryAdapters<'a> {

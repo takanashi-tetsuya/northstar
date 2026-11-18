@@ -198,7 +198,7 @@ impl ServiceCredentials {
         if !valid_text(&username, MAX_CREDENTIAL_BYTES) {
             return Err(ExtDiscoError::InvalidCredentials);
         }
-        let parsed = chrono::DateTime::parse_from_rfc3339(&expires)
+        let parsed = northstar_time::DateTime::parse_from_rfc3339(&expires)
             .map_err(|_| ExtDiscoError::InvalidExpiry)?;
         if expires.as_bytes().get(10) != Some(&b'T')
             || !expires.ends_with('Z')

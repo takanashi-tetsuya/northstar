@@ -1,6 +1,6 @@
 use super::*;
-use chrono::Utc;
 use northstar_session_postgres::replay_repository::ReplayServiceTestFixture;
+use northstar_time::Utc;
 use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 
@@ -14,7 +14,7 @@ async fn elapsed_recovery_deadline_never_schedules_another_retry() {
     let (sender, _receiver) = mpsc::channel(1);
     let outbound = crate::outbound::OutboundSender::new(sender);
     let busy = ReplayBusyUntil {
-        expires_at: Utc::now() + chrono::Duration::seconds(30),
+        expires_at: Utc::now() + northstar_time::Duration::seconds(30),
         retry_after: Duration::from_secs(30),
     };
     let elapsed = tokio::time::Instant::now()
@@ -38,7 +38,7 @@ async fn already_invalid_availability_fence_cancels_without_waiting() {
         recovery_authority: None,
     };
     let busy = ReplayBusyUntil {
-        expires_at: Utc::now() + chrono::Duration::seconds(30),
+        expires_at: Utc::now() + northstar_time::Duration::seconds(30),
         retry_after: Duration::from_secs(30),
     };
 
@@ -67,7 +67,7 @@ async fn availability_generation_change_cancels_busy_wait() {
         recovery_authority: None,
     };
     let busy = ReplayBusyUntil {
-        expires_at: Utc::now() + chrono::Duration::seconds(30),
+        expires_at: Utc::now() + northstar_time::Duration::seconds(30),
         retry_after: Duration::from_secs(30),
     };
 
@@ -187,7 +187,7 @@ impl northstar_session_application::replay::ReplayLeaseRepository for ReplayRepo
         recipient_id: Uuid,
         resource: &str,
         owner_token: Uuid,
-        cutoff: Option<chrono::DateTime<Utc>>,
+        cutoff: Option<northstar_time::DateTime<Utc>>,
         lease_seconds: i64,
     ) -> Result<northstar_session_application::replay::OfflineReplayLeaseAcquire> {
         use northstar_session_application::replay::{
@@ -204,7 +204,7 @@ impl northstar_session_application::replay::ReplayLeaseRepository for ReplayRepo
             calls.busy_remaining -= 1;
             Ok(OfflineReplayLeaseAcquire::BusyUntil(
                 OfflineReplayBusyUntil {
-                    expires_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                    expires_at: northstar_time::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
                     retry_after: Duration::from_secs(30),
                 },
             ))
@@ -213,7 +213,8 @@ impl northstar_session_application::replay::ReplayLeaseRepository for ReplayRepo
                 recipient_id,
                 resource: resource.to_owned(),
                 owner_token,
-                replay_started_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                replay_started_at: northstar_time::DateTime::from_timestamp(1_700_000_000, 0)
+                    .unwrap(),
             }))
         }
     }

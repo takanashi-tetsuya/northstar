@@ -985,7 +985,7 @@ pub fn tombstone_message(original: Node<'_, '_>, retraction_id: &str) -> String 
     }) {
         message.push_child(stanza_id);
     }
-    let stamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+    let stamp = northstar_time::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
     message
         .child(
             XmlElement::namespaced("retracted", NS_RETRACT)

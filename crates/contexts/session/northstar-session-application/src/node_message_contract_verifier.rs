@@ -308,7 +308,7 @@ mod tests {
         let routed = stanza(message_id);
         let stored = northstar_xml_builder::message_policy::add_delay_from(
             &routed,
-            chrono::Utc::now(),
+            northstar_time::Utc::now(),
             Some("example.test"),
         );
         let repository = StubRepository {

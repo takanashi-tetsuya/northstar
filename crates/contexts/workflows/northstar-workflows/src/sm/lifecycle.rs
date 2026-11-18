@@ -69,8 +69,10 @@ pub async fn claim_sm_session_status(
             let old_connection_id: Uuid = row.try_get("old_connection_id")?;
             let full_jid: String = row.try_get("full_jid")?;
             let state_version: i64 = row.try_get("state_version")?;
-            let authority_now: chrono::DateTime<chrono::Utc> = row.try_get("authority_now")?;
-            let retry_at: chrono::DateTime<chrono::Utc> = row.try_get("retry_at")?;
+            let authority_now: northstar_time::DateTime<northstar_time::Utc> =
+                row.try_get("authority_now")?;
+            let retry_at: northstar_time::DateTime<northstar_time::Utc> =
+                row.try_get("retry_at")?;
             anyhow::ensure!(
                 !session_id.is_nil()
                     && !old_connection_id.is_nil()
@@ -115,8 +117,10 @@ pub async fn claim_sm_session_status(
     let directed_presence =
         serde_json::from_value(row.try_get::<serde_json::Value, _>("directed_presence")?)
             .context("invalid durable SM directed-presence JSON")?;
-    let authority_now: chrono::DateTime<chrono::Utc> = row.try_get("authority_now")?;
-    let claimed_until: chrono::DateTime<chrono::Utc> = row.try_get("claimed_until")?;
+    let authority_now: northstar_time::DateTime<northstar_time::Utc> =
+        row.try_get("authority_now")?;
+    let claimed_until: northstar_time::DateTime<northstar_time::Utc> =
+        row.try_get("claimed_until")?;
     anyhow::ensure!(
         claimed_until > authority_now,
         "invalid claimed SM ownership deadline"

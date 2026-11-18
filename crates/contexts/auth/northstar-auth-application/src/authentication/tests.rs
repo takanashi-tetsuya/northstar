@@ -294,7 +294,7 @@ fn fast_receipt() -> CredentialCommitReceipt {
     CredentialCommitReceipt::new(
         Some(IssuedFastToken {
             token: Zeroizing::new("FAST-returned-bearer-sentinel".to_owned()),
-            expires_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            expires_at: northstar_time::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
         }),
         Some(stage()),
         None,
@@ -454,7 +454,7 @@ async fn observed_services_preserve_repository_results_and_reject_publication_mi
         let receipt = CredentialCommitReceipt::new(
             Some(IssuedFastToken {
                 token: Zeroizing::new("publication-bearer-sentinel".to_owned()),
-                expires_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                expires_at: northstar_time::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             }),
             staged.then(stage),
             binding.clone(),
@@ -567,8 +567,8 @@ async fn observed_services_preserve_repository_results_and_reject_publication_mi
                     ttl_days: 9,
                     strong_reauth_max_days: 3,
                     inherited_chain: Some((
-                        chrono::DateTime::from_timestamp(1_600_000_000, 0).unwrap(),
-                        chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                        northstar_time::DateTime::from_timestamp(1_600_000_000, 0).unwrap(),
+                        northstar_time::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
                     )),
                 }),
             };
@@ -639,7 +639,7 @@ async fn observed_services_preserve_repository_results_and_reject_publication_mi
                 );
                 assert_eq!(
                     issued.expires_at,
-                    chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                    northstar_time::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
                     "{label}/{mode}: original bearer expiry"
                 );
                 if observed {

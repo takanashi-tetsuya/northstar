@@ -1,8 +1,8 @@
 //! The anti-abuse adapter's steps over other contexts' tables.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use northstar_abuse_postgres::effects::{AbuseEffects, ForeignKeyReferences};
+use northstar_time::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 
 pub struct WorkflowAbuseEffects;

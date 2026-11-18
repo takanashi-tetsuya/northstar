@@ -1207,7 +1207,7 @@ fn exact_signed_envelope_is_accepted_once_for_the_authoritative_instance() {
         instance_uuid,
         7,
         serde_json::json!({"target":"alice@example.test","stanza":"<message/>"}),
-        chrono::Utc::now().timestamp(),
+        northstar_time::Utc::now().timestamp(),
     )
     .unwrap();
     let encoded = serde_json::to_string(&envelope).unwrap();
@@ -1263,7 +1263,7 @@ fn staged_key_cannot_copy_the_current_instance_tuple_before_activation() {
         copied_uuid,
         7,
         serde_json::json!({"target":"alice@example.test","stanza":"<message/>"}),
-        chrono::Utc::now().timestamp(),
+        northstar_time::Utc::now().timestamp(),
     )
     .unwrap();
     envelope
@@ -1273,7 +1273,7 @@ fn staged_key_cannot_copy_the_current_instance_tuple_before_activation() {
             &channel,
             Some(&staged_sender.node_id),
             receiver_peers.as_ref(),
-            chrono::Utc::now().timestamp(),
+            northstar_time::Utc::now().timestamp(),
         )
         .unwrap();
     // The static peer file can verify the prepared public key for rolling
@@ -2477,7 +2477,7 @@ fn durable_contract_is_bound_to_the_exact_spooled_payload() {
     let routed = "<message from='alice@example.test/Phone' to='bob@example.test' type='chat' id='m1'><body>hello</body></message>";
     let stored = northstar_xml_builder::message_policy::add_delay_from(
         routed,
-        chrono::Utc::now(),
+        northstar_time::Utc::now(),
         Some("example.test"),
     );
     assert!(

@@ -1,5 +1,4 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use northstar_delivery_core::bosh_ownership::{
     response::{AckRequest, BindRequest, RenewRequest},
     BoshResponseOwnership,
@@ -9,6 +8,7 @@ use northstar_session_application::replay::{
     OfflineReplayLeaseAcquire, PendingPresenceCursor, PendingPresencePage, ReplayLeaseRepository,
     ReplayPageOutcome, ReplayRepository, ReplaySession,
 };
+use northstar_time::{DateTime, Utc};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;

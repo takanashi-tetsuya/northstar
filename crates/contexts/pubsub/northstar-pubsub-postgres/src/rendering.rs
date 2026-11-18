@@ -11,7 +11,7 @@ impl crate::PubSubMutationOutboxRenderer for PubSubEventRenderer {
         node: &crate::PubSubNode,
         audience: &[crate::PubSubNotificationDelivery],
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<crate::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_create(
             self,
@@ -34,7 +34,7 @@ impl crate::PubSubMutationOutboxRenderer for PubSubEventRenderer {
         items: &[(String, String)],
         audience: &[crate::PubSubNotificationDelivery],
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<crate::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_items(
             self,
@@ -57,7 +57,7 @@ impl crate::PubSubMutationOutboxRenderer for PubSubEventRenderer {
         node: &crate::PubSubNode,
         audience: &[crate::PubSubNotificationDelivery],
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<crate::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_purge(
             self,
@@ -80,7 +80,7 @@ impl crate::PubSubMutationOutboxRenderer for PubSubEventRenderer {
         item_ids: &[String],
         audience: &[crate::PubSubNotificationDelivery],
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<crate::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_retract(
             self,
@@ -105,7 +105,7 @@ impl crate::PubSubMutationOutboxRenderer for PubSubEventRenderer {
         audience: &[crate::PubSubNotificationDelivery],
         nonactive_recipients: &[String],
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<crate::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_delete(
             self,
@@ -130,7 +130,7 @@ impl crate::PubSubMutationOutboxRenderer for PubSubEventRenderer {
         config: &crate::PubSubNodeConfig,
         audience: &[crate::PubSubNotificationDelivery],
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<crate::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_configuration(
             self,
@@ -155,7 +155,7 @@ impl crate::PubSubMutationOutboxRenderer for PubSubEventRenderer {
         target_node: &str,
         audience: &[crate::PubSubNotificationDelivery],
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<crate::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_collection_edge(
             self,
@@ -183,7 +183,7 @@ impl crate::PubSubMutationOutboxRenderer for PubSubEventRenderer {
         authorization_recipients: &[String],
         last_item: Option<&crate::PubSubItem>,
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<crate::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_subscription_transition(
             self,
@@ -202,7 +202,7 @@ impl crate::PubSubMutationOutboxRenderer for PubSubEventRenderer {
         jid: &str,
         affiliation: &str,
         event_id: Uuid,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: northstar_time::DateTime<northstar_time::Utc>,
     ) -> Result<Vec<crate::PubSubOutboxInsert>> {
         PubSubEventRenderer::render_affiliation_transition(
             self,

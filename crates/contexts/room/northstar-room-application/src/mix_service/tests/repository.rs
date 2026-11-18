@@ -317,7 +317,7 @@ impl MixRepository for Repository {
         authorized_mix_access_entries(channel_id: Uuid, actor: &str, banned: bool, limit: i64) -> MixReadOutcome<Vec<String>>;
         mix_participant_preference(channel_id: Uuid, actor: &str) -> Option<MixParticipantPreference>;
         authorized_mix_jid_map_entries(channel_id: Uuid, actor: &str, limit: i64) -> MixReadOutcome<Vec<(String, String)>>;
-        issue_mix_invitation(channel_id: Uuid, inviter: &str, invitee: &str, token: &str, lifetime: chrono::Duration, federated: Option<&FederatedMixMutation>) -> bool;
+        issue_mix_invitation(channel_id: Uuid, inviter: &str, invitee: &str, token: &str, lifetime: northstar_time::Duration, federated: Option<&FederatedMixMutation>) -> bool;
         mix_private_message_recipient(channel_id: Uuid, sender: &str, recipient_id: Uuid) -> Option<(MixParticipant, MixParticipant)>;
         lookup_remote_pam_operation(user_id: Uuid, requester_full_jid: &str, client_request_id: &str, request_digest: &[u8; 32]) -> PamOperationReplay;
         complete_remote_pam_success(authenticated_domain: &str, channel_jid: &str, recipient_bare: &str, request_id: &str, response_digest: &[u8; 32], join: Option<RemotePamJoin<'_>>) -> RemotePamCompletionOutcome;

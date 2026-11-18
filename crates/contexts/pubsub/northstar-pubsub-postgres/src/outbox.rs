@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use chrono::Utc;
 pub use northstar_pubsub_core::{
     security_sensitive_pep_node, ClaimedPubSubOutboxDelivery, PepOutboxAuthorizationMode,
     PepOutboxEventKind, PepOutboxSubject, PubSubOutboxDeliveryKind, PubSubOutboxFailureDisposition,
@@ -9,6 +8,7 @@ use northstar_telemetry::delivery_counters::PUBSUB_OUTBOX_CAPACITY_REJECTIONS_TO
 use northstar_telemetry::delivery_counters::PUBSUB_OUTBOX_DEAD_LETTERS_TOTAL;
 use northstar_telemetry::delivery_counters::PUBSUB_OUTBOX_LEASE_LOST_TOTAL;
 use northstar_telemetry::delivery_counters::PUBSUB_OUTBOX_RETRIES_TOTAL;
+use northstar_time::Utc;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{collections::HashMap, sync::atomic::Ordering};
 use uuid::Uuid;
@@ -980,7 +980,7 @@ mod tests {
         )
         .unwrap();
         let expiring_id = expiring.delivery_id;
-        expiring.expires_at = Utc::now() + chrono::Duration::milliseconds(250);
+        expiring.expires_at = Utc::now() + northstar_time::Duration::milliseconds(250);
         let mut transaction = pool.begin().await.unwrap();
         enqueue_pubsub_outbox_in_transaction(&mut transaction, &[expiring])
             .await

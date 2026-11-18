@@ -1,7 +1,7 @@
 //! PostgreSQL presence policy snapshots and complete subscription mutations.
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use northstar_roster_application::presence::*;
+use northstar_time::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 

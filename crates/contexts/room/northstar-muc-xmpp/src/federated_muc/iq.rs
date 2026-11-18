@@ -225,7 +225,9 @@ async fn federated_muc_iq_owned(
     // Keep an unconfigured room invisible to every remote session except the
     // exact full JID that created it.  This matches the locked-room join and
     // owner-query boundary instead of leaking a reserved room via disco.
-    if room.is_locked() && !room.can_configure_locked_room(&actor_full_jid, chrono::Utc::now()) {
+    if room.is_locked()
+        && !room.can_configure_locked_room(&actor_full_jid, northstar_time::Utc::now())
+    {
         return Ok(federated_error(
             &request.stanza,
             from,
@@ -366,7 +368,8 @@ async fn federated_muc_iq_owned(
         &request.payload,
         FederatedIqPayload::RegisterGet | FederatedIqPayload::RegisterSet
     ) {
-        if room.is_locked() && !room.can_configure_locked_room(&actor_full_jid, chrono::Utc::now())
+        if room.is_locked()
+            && !room.can_configure_locked_room(&actor_full_jid, northstar_time::Utc::now())
         {
             return Ok(federated_error(
                 &request.stanza,
@@ -744,7 +747,7 @@ async fn federated_muc_iq_owned(
                             "timestamp",
                             value
                                 .created_at
-                                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                                .to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true),
                         ),
                     );
                 }
@@ -754,7 +757,7 @@ async fn federated_muc_iq_owned(
                             "timestamp",
                             value
                                 .created_at
-                                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                                .to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true),
                         ),
                     );
                 }
@@ -1068,7 +1071,7 @@ async fn federated_muc_mam(
                             XmlElement::namespaced("delay", "urn:xmpp:delay").attr(
                                 "stamp",
                                 item.created_at()
-                                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                                    .to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true),
                             ),
                         )
                         .validated_fragment(&archived)?;

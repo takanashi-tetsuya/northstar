@@ -771,7 +771,7 @@ async fn graph_cycle_subscription_quota_and_digest_claim_are_atomic() {
     let mut expired_options = PubSubSubscriptionOptions::for_node_type("collection");
     expired_options.digest = true;
     expired_options.digest_frequency = 1_000;
-    expired_options.expire = Some(Utc::now() + chrono::Duration::seconds(10));
+    expired_options.expire = Some(Utc::now() + northstar_time::Duration::seconds(10));
     set_subscription_limited_with_options(
         &pool,
         "example.test",

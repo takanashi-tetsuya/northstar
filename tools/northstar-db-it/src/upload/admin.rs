@@ -3,7 +3,7 @@
 
 use axum::body::to_bytes;
 use axum::http::StatusCode;
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use northstar_upload_application::admin::{UploadDeadLetterId, UploadDeadLetterKind};
 use northstar_upload_postgres::admin::{
     retry_upload_dead_letter_in_tx, upload_dead_letters_page_in_tx, RetryUploadDeadLetter,
@@ -391,8 +391,11 @@ async fn postgres_retry_authorization_pagination_concurrency_and_fencing() {
     );
     unauthorized_tx.rollback().await.unwrap();
 
-    let active_claim =
-        insert_storage_dead_letter(&pool, Some(Utc::now() + chrono::Duration::minutes(5))).await;
+    let active_claim = insert_storage_dead_letter(
+        &pool,
+        Some(Utc::now() + northstar_time::Duration::minutes(5)),
+    )
+    .await;
     let mut fenced_tx = pool.begin().await.unwrap();
     assert_eq!(
         retry_upload_dead_letter_in_tx(

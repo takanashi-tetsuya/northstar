@@ -784,8 +784,8 @@ fn challenge_issuance_is_hard_bounded_in_memory() {
                 key_id: global_guard.actor_key_id.clone(),
                 prefix: String::new(),
                 work_factor: 1,
-                issued_at: chrono::Utc::now(),
-                expires_at_wall: chrono::Utc::now() + chrono::Duration::seconds(60),
+                issued_at: northstar_time::Utc::now(),
+                expires_at_wall: northstar_time::Utc::now() + northstar_time::Duration::seconds(60),
                 server_nonce: "test-only-server-nonce".to_owned(),
                 not_before: now,
                 expires_at: now + Duration::from_secs(60),
@@ -1022,7 +1022,7 @@ async fn overlap_keeps_previous_primary_until_retirement_is_fenced() {
         Some(old_secret),
         None,
         false,
-        Some(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+        Some(northstar_time::DateTime::<northstar_time::Utc>::MAX_UTC),
     );
     let overlap = AbuseGuard::new_persistent_for_deployment(
         config,
@@ -1030,7 +1030,7 @@ async fn overlap_keeps_previous_primary_until_retirement_is_fenced() {
         Some(new_secret),
         Some(old_secret),
         true,
-        Some(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+        Some(northstar_time::DateTime::<northstar_time::Utc>::MAX_UTC),
     );
     let retiring = AbuseGuard::new_persistent_for_deployment(
         config,
@@ -1038,7 +1038,7 @@ async fn overlap_keeps_previous_primary_until_retirement_is_fenced() {
         Some(new_secret),
         Some(old_secret),
         false,
-        Some(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+        Some(northstar_time::DateTime::<northstar_time::Utc>::MAX_UTC),
     );
 
     assert_eq!(overlap.primary_actor_key().0, old.actor_key_id);

@@ -1,8 +1,8 @@
 //! PostgreSQL adapter for MIX membership, mutations and durable delivery.
 use crate::effects::RoomEffects;
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use northstar_room_application::mix_service::*;
+use northstar_time::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 

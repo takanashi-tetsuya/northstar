@@ -16,7 +16,7 @@ route-ids = [
 worker-ids = []
 
 [dependencies]
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+northstar-time = { path = "../northstar-time" }
 northstar-xml-builder = { path = "../northstar-xml-builder" }
 northstar-xep-core = { path = "../northstar-xep-core" }
 northstar-xmpp-types = { path = "../northstar-xmpp-types" }

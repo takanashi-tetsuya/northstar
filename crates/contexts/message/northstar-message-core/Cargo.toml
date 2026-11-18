@@ -13,7 +13,7 @@ test-support = []
 
 [dependencies]
 base64 = "0.22"
-chrono = "0.4"
+northstar-time = { path = "../../../kernel/northstar-time" }
 northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
 northstar-delivery-core = { path = "../northstar-delivery-core" }
 northstar-xep-0085 = { path = "../../../kernel/northstar-xep-0085" }

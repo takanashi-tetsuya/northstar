@@ -1,6 +1,6 @@
 //! The XEP-0227 account records shared by the PIE import tool and their PostgreSQL persistence.
 
-use chrono::{DateTime, Utc};
+use northstar_time::{DateTime, Utc};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use northstar_postgres::cluster_lock::CLUSTER_KEY_AUTHORITY_LOCK;
 use northstar_security::cluster_keys::ClusterKeyDeploymentIdentity;
 use northstar_security::cluster_keys::ClusterNodeInstance;
 use northstar_security::cluster_keys::ClusterPeerKeyAuthority;
 use northstar_security::cluster_keys::ExpectedClusterPeerKey;
+use northstar_time::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::time::Duration;
@@ -151,8 +151,9 @@ pub async fn admit_cluster_envelope_replay(
     envelope: &northstar_security::cluster_bus::SignedClusterEnvelope,
 ) -> Result<bool> {
     let event_id = Uuid::parse_str(&envelope.event_id)?;
-    let expires_at = chrono::DateTime::<chrono::Utc>::from_timestamp(envelope.expires_at, 0)
-        .context("cluster envelope expiry is outside PostgreSQL timestamp range")?;
+    let expires_at =
+        northstar_time::DateTime::<northstar_time::Utc>::from_timestamp(envelope.expires_at, 0)
+            .context("cluster envelope expiry is outside PostgreSQL timestamp range")?;
     Ok(sqlx::query_scalar(
         "SELECT northstar_admit_cluster_envelope_replay($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
     )
@@ -223,7 +224,13 @@ enum Reconciliation {
 
 const MAX_INSTANCE_LEASE_SECONDS: u64 = 3_600;
 
-type ClusterInstanceLeaseRow = (uuid::Uuid, i64, String, i64, chrono::DateTime<chrono::Utc>);
+type ClusterInstanceLeaseRow = (
+    uuid::Uuid,
+    i64,
+    String,
+    i64,
+    northstar_time::DateTime<northstar_time::Utc>,
+);
 type ClusterKeyDeploymentRow = (
     String,
     i64,
@@ -243,7 +250,7 @@ fn next_instance_epoch(
     requested_uuid: uuid::Uuid,
     requested_signing_key_id: &str,
     requested_signing_key_epoch: i64,
-    now: chrono::DateTime<chrono::Utc>,
+    now: northstar_time::DateTime<northstar_time::Utc>,
 ) -> Result<i64> {
     match existing {
         None => Ok(1),
@@ -467,9 +474,10 @@ pub async fn claim_cluster_node_instance(
         .bind(CLUSTER_KEY_AUTHORITY_LOCK)
         .execute(&mut *tx)
         .await?;
-    let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-        .fetch_one(&mut *tx)
-        .await?;
+    let now: northstar_time::DateTime<northstar_time::Utc> =
+        sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *tx)
+            .await?;
     let current_key: Option<(i64, String)> = sqlx::query_as(
         "SELECT epoch,current_key_id FROM cluster_key_deployments
          WHERE xmpp_domain=$1 AND node_id=$2 FOR UPDATE",
@@ -500,7 +508,7 @@ pub async fn claim_cluster_node_instance(
         signing_key_epoch,
         now,
     )?;
-    let lease_until = now + chrono::Duration::seconds(lease_seconds);
+    let lease_until = now + northstar_time::Duration::seconds(lease_seconds);
     sqlx::query(
         "INSERT INTO cluster_node_instances
          (xmpp_domain,node_id,instance_uuid,instance_epoch,
@@ -571,7 +579,7 @@ pub async fn heartbeat_cluster_node_instance(
     } = heartbeat;
     let lease_seconds = bounded_lease_seconds(lease)?;
     let mut tx = pool.begin().await?;
-    let row: Option<(chrono::DateTime<chrono::Utc>,)> = sqlx::query_as(
+    let row: Option<(northstar_time::DateTime<northstar_time::Utc>,)> = sqlx::query_as(
         "UPDATE cluster_node_instances
          SET lease_until=clock_timestamp() + ($7::bigint * INTERVAL '1 second'),
              updated_at=clock_timestamp()
@@ -615,7 +623,7 @@ pub async fn release_cluster_node_instance(
     signing_key_epoch: i64,
 ) -> Result<bool> {
     let mut tx = pool.begin().await?;
-    let row: Option<(chrono::DateTime<chrono::Utc>,)> = sqlx::query_as(
+    let row: Option<(northstar_time::DateTime<northstar_time::Utc>,)> = sqlx::query_as(
         "UPDATE cluster_node_instances
          SET lease_until=clock_timestamp(),updated_at=clock_timestamp()
          WHERE xmpp_domain=$1 AND node_id=$2
@@ -807,7 +815,7 @@ async fn record_instance_history(
     instance_epoch: i64,
     signing_key_id: &str,
     signing_key_epoch: i64,
-    lease_until: chrono::DateTime<chrono::Utc>,
+    lease_until: northstar_time::DateTime<northstar_time::Utc>,
     operation: &str,
 ) -> Result<()> {
     sqlx::query(

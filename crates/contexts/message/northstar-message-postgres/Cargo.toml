@@ -13,7 +13,7 @@ test-support = []
 
 [dependencies]
 anyhow = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
+northstar-time = { path = "../../../kernel/northstar-time", features = ["serde", "postgres"] }
 futures = "0.3"
 northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
 northstar-federation-core = { path = "../../federation/northstar-federation-core" }
@@ -24,7 +24,7 @@ northstar-security = { path = "../../../platform/northstar-security" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 roxmltree = "0.20"
 sha2 = "0.10"
-sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "uuid"] }
 subtle = "2.6"
 thiserror = "2.0"
 uuid = { version = "1.12", features = ["v4", "serde"] }

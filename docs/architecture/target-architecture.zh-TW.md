@@ -76,7 +76,7 @@ flowchart TB
 | context application | `northstar-<ctx>-application` | 本上下文 core、kernel、其他上下文的 core、platform 的契約型別 | sqlx、axum、tokio 網路、任何介面卡與 edge |
 | context adapter | `northstar-<ctx>-postgres`、`northstar-<ctx>-xmpp`（必要時 `-http`；物件儲存為 `-storage`） | 本上下文 application、任何 core、platform、kernel；`-xmpp` 另可依賴 `northstar-stream` | 其他上下文的介面卡；`-xmpp` 不可依賴 `-postgres` 與任何傳輸 |
 | workflows | `northstar-workflows` | kernel、platform、任何 core、任何 application、任何 `-postgres` | `-xmpp`、`-http`、edge |
-| edge | `northstar-stream`（會話核心）、`northstar-c2s`、`northstar-bosh`、`northstar-s2s`、`northstar-http`、`northstar-cluster` | application、core、platform、kernel；`stream` 以外的 edge 可依賴 `northstar-stream`；`northstar-stream` 另可依賴 `northstar-auth-xmpp`（SASL、SASL2、IBR 的線路格式，`auth-xmpp` 不依賴任何 edge）；`northstar-cluster` 以 Redis pub/sub 作跨節點傳輸，edge 可依賴 redis | 上下文的 `-postgres`、sqlx |
+| edge | `northstar-stream`（會話核心）、`northstar-c2s`、`northstar-bosh`、`northstar-s2s`、`northstar-http`、`northstar-cluster` | application、core、platform、kernel；`stream` 以外的 edge 可依賴 `northstar-stream`；`northstar-cluster` 以 Redis pub/sub 作跨節點傳輸，edge 可依賴 redis | 上下文的 `-postgres`、sqlx |
 | composition | `northstar-server`（bin） | 全部 | — |
 | tooling | `tools/*`、測試支援 crate | 全部 | 不得成為執行期依賴 |
 
@@ -107,7 +107,9 @@ flowchart TB
   auth、IBR、資源綁定）、SM、CSI、caps 與 stanza 分派，對組合根實作的 `SessionHost` 泛型；PostgreSQL repository 是
   `SessionHost` 的關聯型別。S33 起 `SessionHost` 是 13 個關注點 trait 的聚合（身分、帳號、路由、caps、SM、MUC、出席
   政策、訊息效果、MIX ACK、PubSub 效果、分派、生命週期、遙測），以 blanket impl 自動實作；repository 是各關注點的
-  關聯型別，只用到 host 參考的函式只約束它需要的關注點。
+  關聯型別，只用到 host 參考的函式只約束它需要的關注點。SASL2（含 Bind2、FAST）與 IBR 的線路格式在
+  `northstar_stream::wire`；每個會話的出站佇列 `OutboundSender` 屬於 session 上下文
+  （`northstar_session_application::outbound`，stream 以原路徑轉出）。
 - 每個上下文的 `-xmpp` crate 在 `protocol_session.rs` 為 `ProtocolSession<H>` 實作自己的處理器 trait，`H` 另受該上下文的
   host trait 約束（例如 `PubSubSessionHost`），組合根的 `ServerNode` 實作這些 host trait。核心需要上下文時呼叫取
   `&mut ProtocolSession<Self>` 的 host hook，由組合根以 `-xmpp` 的處理器填入。用戶端 IQ 路由表與服務探索在
@@ -202,6 +204,8 @@ S34 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.30）：`Server
 - S37 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.33）：crate 圖拒絕 workspace crate 以任何方式依賴 chrono，
   時間戳一律用 `northstar-time`；`northstar-time` 只能以 optional 依賴 `sqlx`，啟用其 `postgres` feature 的 crate 必須是
   可依賴 `sqlx` 的層級。XEP 插件門禁把 `northstar-time` 列為無能力的共享 crate。
+- S38 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.34）：context 介面卡依賴 `northstar-stream` 限於 `-xmpp`，
+  edge 不再依賴任何介面卡（刪除 stream 依賴 `northstar-auth-xmpp` 的例外）。
 
 ## 5. 遷移順序
 
@@ -224,6 +228,7 @@ S34 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.30）：`Server
 | S35 門禁改寫為測試 | 依 S34 的門禁審計，為 24 個擁有者套件（abuse、auth、config、postgres、telemetry、operations、pubsub、session、protocol-runtime、message、delivery-core、BOSH、C2S、cluster、HTTP、MIX、MUC、room、stream 與 `northstar-db-it`）補上行為測試，再逐支門禁刪除被涵蓋的檢查與對應的自測 | 每支刪除的檢查都對應到擁有 crate 的測試；結構規則與組合根接線檢查保留；全部門禁與完整 CI 通過。已完成（WP-556–580，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.31）：467 個審計案例有測試，門禁刪除 381 段被涵蓋的檢查；43 個 KEEP 案例與含它們的 4 個執行門禁完整驗證器留給 S36 |
 | S36 門禁改寫收尾 | `northstar-db-it` 加上 `northstar-delivery-core`、`northstar-config`、`northstar-auth-xmpp` 的 dev 依賴，寫出 S35 因缺依賴而 KEEP 的資料庫案例；為 BOSH actor 案例建 TransportHost fake；執行門禁的 4 個完整驗證器拆成逐謂詞，刪除已涵蓋的部分 | 每支刪除的檢查都對應到測試；結構規則與組合根接線檢查保留；全部門禁與完整 CI 通過。已完成（WP-581–595，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.32）：43 個 KEEP 中 37 個有測試，執行門禁的 4 個完整驗證器所附案例全部有測試、整支刪除；WP-581 的測試發現並修正 MIX 傳輸圍欄的到期時間缺陷（WP-589）；6 個需要生產 hook 的 KEEP 留在門禁 |
 | S37 時間型別遷移 | 工作區的時間戳由 chrono 改為新的 kernel crate `northstar-time`：以 chrono 0.4.45 的名稱與語義提供工作區用到的子集，曆法換算交給已在 Cargo.lock 中的 `time`，serde 與 SQLx 的 PostgreSQL 編解碼在 feature 之後；資料庫欄位、wire 格式與 JSON 表示不變 | 工作區 crate 不再直接依賴 chrono；測試名稱不變；全部門禁與完整 CI 通過。已完成（WP-597–601，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.33）：原計劃把 `DateTime<Utc>` 改為 `OffsetDateTime`，但兩者的文字、範圍、閏秒與溢位行為不同，改以相容 crate 做路徑替換；行為以 26,000 個 chrono 固定案例與 435 筆 PostgreSQL 結果凍結重播證明，crate 圖拒絕直接依賴 chrono。object_store 仍帶入 chrono 與 humantime，RUSTSEC-2026-0543、0542 的例外保留到上游移除 |
+| S38 會話核心收窄 | S37 後的量測：crate 圖比 4.1 寬的兩處。每個會話的出站佇列移入 session 上下文，`northstar-session-postgres` 不再依賴 edge；SASL2 與 IBR 的線路格式移入 `northstar-stream`；crate 圖只允許 `-xmpp` 介面卡依賴 `northstar-stream` | crate 圖與 4.1 一致，edge 不依賴介面卡；測試名稱不變；全部門禁與完整 CI 通過。已完成（WP-604–607，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.34） |
 
 與其他計劃的關係：模組化執行計劃的 C1（PubSub）與 C2（MAM）是語義上的重構，在對應上下文搬進新 crate 後於新
 結構中進行；D1 由 S18 與 S30 吸收；R1–R3 不受影響。

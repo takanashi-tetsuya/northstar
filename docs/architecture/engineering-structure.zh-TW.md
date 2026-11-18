@@ -139,6 +139,7 @@ WP-495 後，operation runtime 的現行位置為
 | S35 門禁改寫為測試 | WP-556–580 | 依 S34 的門禁審計為擁有者補上行為測試（WP-556–573）：abuse 政策與准入（WP-556）、auth 服務與憑證收據（WP-557）、config、啟動與 OMEMO 指標（WP-558）、operations 與 PubSub 清理（WP-559）、會話發佈與 SM 所有權（WP-560）、caps 閘道等待者與飽和佇列（WP-561）、訊息准入與直接流程（WP-562）、message-xmpp 准入與聯邦路由（WP-563）、HTTP 健康、上傳、OMEMO 與 CSP（WP-564）、delivery-core 提交與 MIX outbox（WP-565）、BOSH 所有權與回應快取（WP-566）、C2S 原生寫入與會話入口（WP-567）、叢集 MUC 投遞、權威與名冊（WP-568）、MIX outbox worker 通道與已認領效果（WP-569）、MUC 討論信封與訊息階段（WP-570）、MIX 與 MUC 討論服務（WP-571）、`northstar-stream` 的 SM、重播、caps 與 inline 恢復（WP-572）、PostgreSQL 介面卡一致性（WP-573，31 個 ignored 測試與新的資料庫 CI 套件）；再依案例帳本刪除被涵蓋的檢查：架構門禁（WP-574）、執行門禁（WP-575）、abuse 與准入門禁（WP-576）、subserver、會話生命週期、聯邦路由、OMEMO 與 CSP 門禁（WP-577）。關機事件的日誌 target 恢復為 `northstar_server`（WP-578），架構門禁的 worker 清單略過測試目錄（WP-579）；記錄階段（WP-580）。盤點見 5.31 | 測試名稱依路徑對應後不變，擁有 crate 新增 154 個測試（31 個是 `northstar-db-it` 的 ignored 測試，由新的資料庫 CI 套件執行）；全部門禁、Python 腳本測試與離線 CI 通過。未完成：43 個 KEEP 案例與含它們的 4 個執行門禁完整驗證器留給 S36 |
 | S36 門禁改寫收尾 | WP-581–595 | 寫出 S35 的 KEEP 案例：frame 與 runtime control 啟動預算的數值（WP-585）、帳號刪除恢復的分派（WP-582，`northstar-auth-xmpp`）、測試以明確變數表建構生產設定的 `Config::from_variables`（WP-587）、傳輸 ACK、SM 與 BOSH 收據的資料庫測試（WP-581，`northstar-db-it` 加上 `northstar-delivery-core`）、runtime control 的保留連線（WP-588，加上 `northstar-config`）、BOSH actor 的轉交與回應路徑（WP-583，新的測試 host）與入口、發佈、啟用與退出（WP-584）、訊息 burst 的驗證範圍（WP-594）；WP-581 的測試發現 MIX 傳輸圍欄在最大 TTL 時到期時間超過 TTL，兩個 INSERT 改為只讀一次時鐘（WP-589）；chrono 與 humantime 的 unmaintained 公告列為例外（WP-586）；再依案例帳本刪除被涵蓋的檢查：abuse 門禁（WP-592）、架構門禁（WP-591）、執行門禁的 4 個完整驗證器與 5 個謂詞（WP-590）、BOSH actor 的執行與會話生命週期檢查（WP-593）；記錄階段（WP-595）。盤點見 5.32 | 測試名稱依路徑對應後不變，擁有 crate 新增 33 個測試（9 個是 ignored 資料庫測試，資料庫套件由 31 個增為 40 個）；全部門禁、Python 腳本測試、資料庫套件與離線 CI 通過。43 個 KEEP 中 37 個有測試；其餘 6 個需要生產 hook，留在門禁，見 5.32 |
 | S37 時間型別遷移 | WP-597–603 | 新的 kernel crate `northstar-time` 以 chrono 0.4.45 的名稱與語義提供工作區用到的子集，曆法換算交給 `time`，serde 與 SQLx 的 PostgreSQL 編解碼在 feature 之後（WP-597）；以真實 PostgreSQL 跨程式庫比對 SQLx 編解碼（WP-598，`northstar-db-it`）；55 個 manifest 與 202 個檔案由 chrono 換為 `northstar-time`（WP-599）；凍結兩份證明、移除 chrono，crate 圖拒絕直接依賴 chrono（WP-600）；記錄階段（WP-601）；第三方聲明列出移植自 chrono 與 SQLx 的程式碼（WP-602）；修正 soak 測試讀 `/proc` 的競態（WP-603）。盤點見 5.33 | 測試名稱不變，新增 14 個測試（1 個是 ignored 資料庫測試，資料庫套件由 40 個增為 41 個）；26,000 個 chrono 固定案例與 435 筆 PostgreSQL 結果凍結重播；全部門禁、Python 腳本測試、資料庫套件與離線 CI 通過。object_store 仍帶入 chrono 與 humantime，RUSTSEC-2026-0543、0542 的例外保留 |
+| S38 會話核心收窄 | WP-604–607 | 每個會話的出站佇列（`OutboundSender`、`OutboundItem`）由 `northstar-stream` 移入 `northstar-session-application`，stream 以原路徑轉出，`northstar-session-postgres` 不再依賴 edge（WP-604）；SASL2 與 IBR 的線路格式由 `northstar-auth-xmpp` 移入 `northstar_stream::wire`（WP-605）；crate 圖只允許 `-xmpp` 介面卡依賴 `northstar-stream`，並刪除 stream 依賴 `auth-xmpp` 的例外（WP-606）；記錄階段（WP-607）。盤點見 5.34 | 23 個單元測試隨模組搬移、名稱不變，驗證器的例外測試改寫為規則測試並新增 1 個；全部門禁、Python 腳本測試與離線 CI 通過 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -1536,6 +1537,37 @@ S37 改動根 crate 9 個檔案（新增 23 行、刪除 20 行，只有路徑�
 的規則與測試（225 行），另有兩份 fixture（26,000 行與 435 行）。workspace 測試由 3,463 個增為 3,477 個（ignored 由 295 個
 增為 296 個），既有測試名稱不變。
 
+### 5.34 S38 盤點：會話核心收窄（`72361a13`）
+
+S37 後量測 `northstar-stream`：生產碼約 2.4 萬行、48 個內部依賴，是最大的 edge。目標架構 4.3 讓它負責串流協商、SM、
+CSI、caps 與分派，這部分符合目標；但 crate 圖有兩處和 4.1 的層級表不一致。其一，驗證器允許每個 context 介面卡依賴
+`northstar-stream`，4.1 只允許 `-xmpp`；`northstar-session-postgres` 因此依賴會話核心，只為了 `outbound` 模組（每個會話
+的出站佇列 `OutboundSender`、`OutboundItem`、密封的 `AuthControl`、MIX 傳輸交接，以及 `northstar-delivery-core` 持久
+投遞型別的轉出）。其二，`northstar-stream` 依賴 `northstar-auth-xmpp` 取得 SASL2 與 IBR 的線路格式，是 edge 依賴介面卡
+的例外；這兩個模組除了 stream 只有根 crate 的一個 Stage 4 測試使用。
+
+| WP | 內容 |
+| --- | --- |
+| WP-604 | `outbound` 原樣移入 `northstar-session-application`（它已有所需的全部依賴），stream 以 `pub use` 保留 `northstar_stream::outbound`，傳輸、`-xmpp` 介面卡與組合根的路徑不變；`northstar-session-postgres` 改用新路徑並移除 stream 依賴（含 test-support）。`send_durable_if_current` 由 `pub(crate)` 改為 `pub`。門禁與兩份文件的檔案路徑跟進 |
+| WP-605 | `auth-xmpp` 的 `sasl2`（含解析與測試）與 `ibr` 原樣移為 `northstar_stream::wire::{sasl2, ibr}`；stream 移除 `auth-xmpp` 依賴，`auth-xmpp` 只剩帳號刪除協調與帳號世代拆除，移除只有線路格式使用的 5 個依賴。outbound XML 門禁的零字面值基準跟著檔案移動 |
+| WP-606 | architecture-validator：介面卡依賴 `northstar-stream` 限於 `*-xmpp`，刪除 stream 依賴 `auth-xmpp` 的例外，edge 不再依賴任何介面卡。釘住例外的測試改為 `no_edge_may_depend_on_a_context_adapter`，新增 `only_xmpp_adapters_may_depend_on_the_session_core`；`crate-policy.md` 跟進 |
+| WP-607 | 記錄階段 |
+
+與計劃的差異：S38 沒有預先列在目標架構第 5 節；它來自 S37 後的量測，修正的是 crate 圖比 4.1 寬的地方，不改變 4.3 的
+分工。`muc_delivery`、`local_routes` 的 MUC 路由表與 `auth_publication` 留在 stream：它們是本機路由與傳輸授權，叢集
+edge 也要用，放進房間或 auth 的 application 會形成跨上下文的 application 依賴。
+
+新決定：
+
+- 只有 `-xmpp` 介面卡可以依賴 `northstar-stream`；持久化與物件儲存介面卡需要會話型別時，型別屬於 session 上下文的
+  application 或 core（WP-604、WP-606）。
+- 會話核心執行的協商，其線路格式放在 `northstar_stream::wire`；edge 不依賴任何介面卡（WP-605、WP-606）。
+
+S38 改動根 crate 1 行（Stage 4 測試的路徑）。crates 與 tools 涉及 28 個檔案（新增 215 行、刪除 187 行），幾乎全是搬移與
+路徑；生產碼的行為不變。`northstar-stream` 的內部依賴由 48 個減為 47 個，`northstar-session-postgres` 不再依賴 edge，
+`northstar-auth-xmpp` 少 5 個依賴。workspace 測試由 3,477 個增為 3,478 個（ignored 296 個不變），搬移的 23 個測試只換了
+所屬的測試二進位。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點），S31 的 WP-483 起 agy 額度用盡，再改由 Codex CLI 執行（第 10 點）。
@@ -2333,3 +2365,7 @@ Stage 證據仍綁定其原提交。
 | WP-601 | 完成：記錄 S37 的階段與盤點（5.33）、目標架構 4.1、4.7 與第 5 節。WP-597–600 接成一條鏈，整條鏈驗證 fmt、clippy、workspace 測試、模糊測試、受影響 crate 的單獨建置、全部門禁與 Python 腳本測試，資料庫測試以本機 PostgreSQL 執行，離線 CI 在推送前通過 | 見 `git log --grep '\[WP-601\]'` |
 | WP-602 | 完成：第三方聲明列出 `northstar-time` 移植自 chrono 0.4.45 與 SQLx 0.9.0 的程式碼；`Dockerfile` 與 `scripts/release-package.py` 帶上兩份授權檔 | 見 `git log --grep '\[WP-602\]'` |
 | WP-603 | 完成：soak 測試輪詢 `/proc/<pid>/stat` 時把 `ProcessLookupError` 視同 `FileNotFoundError` | 見 `git log --grep '\[WP-603\]'` |
+| WP-604 | 完成：`outbound` 移入 `northstar-session-application`，stream 以原路徑轉出；`northstar-session-postgres` 不再依賴 `northstar-stream` | 見 `git log --grep '\[WP-604\]'` |
+| WP-605 | 完成：SASL2 與 IBR 的線路格式由 `northstar-auth-xmpp` 移入 `northstar_stream::wire` | 見 `git log --grep '\[WP-605\]'` |
+| WP-606 | 完成：只有 `-xmpp` 介面卡可依賴 `northstar-stream`；刪除 stream 依賴 `auth-xmpp` 的例外 | 見 `git log --grep '\[WP-606\]'` |
+| WP-607 | 完成：記錄 S38 的階段與盤點（5.34）、目標架構 4.1、4.3、4.7 與第 5 節。WP-604–606 接成一條鏈驗證：fmt、clippy、workspace 測試、受影響 crate 的單獨建置、全部門禁與 Python 腳本測試、離線 CI | 見 `git log --grep '\[WP-607\]'` |

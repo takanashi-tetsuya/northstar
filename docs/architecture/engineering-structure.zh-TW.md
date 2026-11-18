@@ -140,6 +140,7 @@ WP-495 後，operation runtime 的現行位置為
 | S36 門禁改寫收尾 | WP-581–595 | 寫出 S35 的 KEEP 案例：frame 與 runtime control 啟動預算的數值（WP-585）、帳號刪除恢復的分派（WP-582，`northstar-auth-xmpp`）、測試以明確變數表建構生產設定的 `Config::from_variables`（WP-587）、傳輸 ACK、SM 與 BOSH 收據的資料庫測試（WP-581，`northstar-db-it` 加上 `northstar-delivery-core`）、runtime control 的保留連線（WP-588，加上 `northstar-config`）、BOSH actor 的轉交與回應路徑（WP-583，新的測試 host）與入口、發佈、啟用與退出（WP-584）、訊息 burst 的驗證範圍（WP-594）；WP-581 的測試發現 MIX 傳輸圍欄在最大 TTL 時到期時間超過 TTL，兩個 INSERT 改為只讀一次時鐘（WP-589）；chrono 與 humantime 的 unmaintained 公告列為例外（WP-586）；再依案例帳本刪除被涵蓋的檢查：abuse 門禁（WP-592）、架構門禁（WP-591）、執行門禁的 4 個完整驗證器與 5 個謂詞（WP-590）、BOSH actor 的執行與會話生命週期檢查（WP-593）；記錄階段（WP-595）。盤點見 5.32 | 測試名稱依路徑對應後不變，擁有 crate 新增 33 個測試（9 個是 ignored 資料庫測試，資料庫套件由 31 個增為 40 個）；全部門禁、Python 腳本測試、資料庫套件與離線 CI 通過。43 個 KEEP 中 37 個有測試；其餘 6 個需要生產 hook，留在門禁，見 5.32 |
 | S37 時間型別遷移 | WP-597–603 | 新的 kernel crate `northstar-time` 以 chrono 0.4.45 的名稱與語義提供工作區用到的子集，曆法換算交給 `time`，serde 與 SQLx 的 PostgreSQL 編解碼在 feature 之後（WP-597）；以真實 PostgreSQL 跨程式庫比對 SQLx 編解碼（WP-598，`northstar-db-it`）；55 個 manifest 與 202 個檔案由 chrono 換為 `northstar-time`（WP-599）；凍結兩份證明、移除 chrono，crate 圖拒絕直接依賴 chrono（WP-600）；記錄階段（WP-601）；第三方聲明列出移植自 chrono 與 SQLx 的程式碼（WP-602）；修正 soak 測試讀 `/proc` 的競態（WP-603）。盤點見 5.33 | 測試名稱不變，新增 14 個測試（1 個是 ignored 資料庫測試，資料庫套件由 40 個增為 41 個）；26,000 個 chrono 固定案例與 435 筆 PostgreSQL 結果凍結重播；全部門禁、Python 腳本測試、資料庫套件與離線 CI 通過。object_store 仍帶入 chrono 與 humantime，RUSTSEC-2026-0543、0542 的例外保留 |
 | S38 會話核心收窄 | WP-604–607 | 每個會話的出站佇列（`OutboundSender`、`OutboundItem`）由 `northstar-stream` 移入 `northstar-session-application`，stream 以原路徑轉出，`northstar-session-postgres` 不再依賴 edge（WP-604）；SASL2 與 IBR 的線路格式由 `northstar-auth-xmpp` 移入 `northstar_stream::wire`（WP-605）；crate 圖只允許 `-xmpp` 介面卡依賴 `northstar-stream`，並刪除 stream 依賴 `auth-xmpp` 的例外（WP-606）；記錄階段（WP-607）。盤點見 5.34 | 23 個單元測試隨模組搬移、名稱不變，驗證器的例外測試改寫為規則測試並新增 1 個；全部門禁、Python 腳本測試與離線 CI 通過 |
+| S39 依賴圖衛生 | WP-608–611 | 刪除 S16 為 `services/*` 原型保留、之後再無使用者的 5 個 `foundation-*` crate，crate 圖驗證器與 catalog 產生器移除 `foundation-`、`service-` 前綴規則（WP-608）；遷移政策、金鑰管理與資料庫不變式 3 份文件依現行程式碼改寫（WP-609）；移除 12 個 manifest 中 16 個沒有原始碼使用的依賴、`northstar-xep-0357` 的空 `serde` feature 與執行過的 `strip_serde.ps1`，以及 `northstar-auth-core` 下被 cargo 忽略的舊 `Cargo.lock`（WP-610）；記錄階段（WP-611）。盤點見 5.35 | 刪除的 12 個單元測試只測被刪的 crate，其餘測試名稱不變；Cargo.lock 由 493 個套件減為 488 個；全部門禁、Python 腳本測試與離線 CI 通過 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -1568,6 +1569,42 @@ S38 改動根 crate 1 行（Stage 4 測試的路徑）。crates 與 tools 涉及
 `northstar-auth-xmpp` 少 5 個依賴。workspace 測試由 3,477 個增為 3,478 個（ignored 296 個不變），搬移的 23 個測試只換了
 所屬的測試二進位。
 
+### 5.35 S39 盤點：依賴圖衛生（`6425cc21`）
+
+S38 後以 `cargo metadata` 與原始碼比對整個 crate 圖，找出三類殘留。其一，S16 刪除 `services/*` 時保留的 5 個
+`foundation-*` crate（`foundation-postgres`、`-db-test`、`-eventing`、`-eventing-postgres`、`-kms`，合計 1,363 行、12 個單元
+測試）此後沒有任何 workspace 成員、腳本或 CI 工作使用，但 3 份現行文件仍把它們寫成正在執行的設計：遷移政策說啟動時以
+`foundation-postgres::verify_migrations` 校驗發佈清單，金鑰管理說所有金鑰都在 `foundation-kms` 提供者與 SPIFFE 身分之後，
+資料庫不變式說明指向 `foundation-db-test` 的模型。其二，12 個 manifest 宣告了 16 個沒有任何原始碼使用的依賴。其三，
+兩個一次性產物留在 crate 目錄：`northstar-xep-0357` 的 `strip_serde.ps1`（已執行過，留下沒有任何 `cfg` 使用的 `serde`
+feature）與 `northstar-auth-core` 下的舊 `Cargo.lock`（workspace 成員的 lock 會被 cargo 忽略，但依賴掃描工具仍會讀它）。
+
+| WP | 內容 |
+| --- | --- |
+| WP-608 | 刪除 5 個 `foundation-*` crate 與其 workspace 成員；catalog、編譯期依賴圖與 Cargo.lock 重新產生（493 → 488 個套件）。architecture-validator 不再把 `foundation-` 前綴視為專案 crate，`generate-crate-catalog.mjs` 刪除已無對象的 `foundation-` 與 `service-` 擁有者規則 |
+| WP-609 | 依程式碼改寫 3 份文件：`docs/database/migration-policy.md`（內嵌的 `MIGRATOR`、產生的 SHA-384 帳本清單與其 CI 檢查、`migrate` 指令的角色、鎖與 schema 擁有者檢查、`attest_runtime_role` 與 `verify_schema` 兩道啟動校驗、共用的 SQLSTATE 判斷）；`docs/security/key-management.md`（掛載的 `*_FILE` 祕密清單、讀檔規則、分離檢查與各輪替程序的位置）；`tests/database-invariants/README.md`（每類不變式由哪個套件與 CI 工作測試） |
+| WP-610 | 移除沒有原始碼使用的依賴：根 crate 的 `envy`；`abuse-application` 的 `hmac`、`northstar-xmpp-types`；`message-postgres`、`muc-xmpp` 的 `sha2`；`room-postgres` 的 `northstar-session-core`；`roster-core`、`session-core`、`upload-core` 的 `northstar-xmpp-types`；`upload-application` 的 `northstar-time`、`northstar-xmpp-types`、`zeroize`；`upload-storage` 的 `thiserror`；`s2s` 的 `arc-swap`；`xep-0357` 的 optional `serde` 與其 feature。刪除 `strip_serde.ps1` 與 `northstar-auth-core/Cargo.lock` |
+| WP-611 | 記錄階段 |
+
+與計劃的差異：S39 沒有預先列在目標架構第 5 節，它來自 S38 後的量測。掃描報告的 `rustls-webpki`（`northstar-s2s`、
+`northstar-security`）是誤報：程式碼以函式庫名稱 `webpki` 使用它，保留。根 crate 看似未使用的 XEP 插件依賴是 XEP 插件
+門禁要求的組合根接線，保留。各 crate 的 `MIGRATION.md` 是搬移紀錄，其中的依賴清單不跟著改。
+
+尚未處理：S16「保留」列中的 `catalog/key-classes.yaml`、`topics.yaml`、`rpc-authorization.yaml`、Kafka 政策產生器、
+`deploy/spire` 仍描述微服務時代的設計；`key-classes.yaml` 沒有任何工具讀取，Kafka 政策產生器仍在 CI 中執行。改寫後的
+金鑰管理文件不再以 `key-classes.yaml` 為權威清單。
+
+新決定：
+
+- workspace 成員只放在 4.1 的層級目錄中，crate 名稱一律以 `northstar-` 開頭；驗證器與 catalog 產生器不保留其他前綴的
+  規則（WP-608）。
+- 現行文件描述的設計必須有程式碼對應；程式碼刪除時，描述它的現行文件同時改寫或刪除（WP-609）。
+- manifest 只宣告原始碼實際使用的依賴；只為啟用 feature 而存在的依賴要在 manifest 註明用途（WP-610）。
+
+S39 刪除 crates 與 tools 下 2,310 行（5 個 crate 1,443 行、舊 lock 840 行、腳本 8 行、依賴 19 行），新增 1 行；根 crate
+只少 1 行 manifest。workspace 測試由 3,478 個減為 3,466 個（ignored 296 個不變），減少的 12 個都屬於被刪的 crate。
+Cargo.lock 由 493 個套件減為 488 個。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點），S31 的 WP-483 起 agy 額度用盡，再改由 Codex CLI 執行（第 10 點）。
@@ -2369,3 +2406,7 @@ Stage 證據仍綁定其原提交。
 | WP-605 | 完成：SASL2 與 IBR 的線路格式由 `northstar-auth-xmpp` 移入 `northstar_stream::wire` | 見 `git log --grep '\[WP-605\]'` |
 | WP-606 | 完成：只有 `-xmpp` 介面卡可依賴 `northstar-stream`；刪除 stream 依賴 `auth-xmpp` 的例外 | 見 `git log --grep '\[WP-606\]'` |
 | WP-607 | 完成：記錄 S38 的階段與盤點（5.34）、目標架構 4.1、4.3、4.7 與第 5 節。WP-604–606 接成一條鏈驗證：fmt、clippy、workspace 測試、受影響 crate 的單獨建置、全部門禁與 Python 腳本測試、離線 CI | 見 `git log --grep '\[WP-607\]'` |
+| WP-608 | 完成：刪除 5 個沒有使用者的 `foundation-*` crate；驗證器與 catalog 產生器移除 `foundation-`、`service-` 前綴規則 | 見 `git log --grep '\[WP-608\]'` |
+| WP-609 | 完成：遷移政策、金鑰管理與資料庫不變式文件依現行程式碼改寫 | 見 `git log --grep '\[WP-609\]'` |
+| WP-610 | 完成：移除 16 個沒有原始碼使用的依賴、`northstar-xep-0357` 的空 `serde` feature、`strip_serde.ps1` 與 `northstar-auth-core/Cargo.lock` | 見 `git log --grep '\[WP-610\]'` |
+| WP-611 | 完成：記錄 S39 的階段與盤點（5.35）、目標架構 4.7 與第 5 節。WP-608–610 接成一條鏈驗證：fmt、clippy、workspace 測試、受影響 crate 的單獨建置、全部門禁與 Python 腳本測試、離線 CI | 見 `git log --grep '\[WP-611\]'` |

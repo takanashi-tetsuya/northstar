@@ -1747,10 +1747,8 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "dashmap",
- "hmac 0.12.1",
  "northstar-abuse-policy",
  "northstar-time",
- "northstar-xmpp-types",
  "rand 0.8.7",
  "serde_json",
  "sha2 0.10.9",
@@ -2353,7 +2351,6 @@ dependencies = [
  "northstar-time",
  "northstar-xmpp-types",
  "roxmltree",
- "sha2 0.10.9",
  "sqlx",
  "subtle",
  "thiserror 2.0.20",
@@ -2449,7 +2446,6 @@ dependencies = [
  "northstar-xmpp-types",
  "roxmltree",
  "serde_json",
- "sha2 0.10.9",
  "tokio",
  "tracing",
  "uuid",
@@ -2723,7 +2719,6 @@ dependencies = [
  "northstar-room-application",
  "northstar-room-core",
  "northstar-roster-core",
- "northstar-session-core",
  "northstar-telemetry",
  "northstar-time",
  "northstar-xep-0313",
@@ -2760,7 +2755,6 @@ name = "northstar-roster-core"
 version = "0.1.0"
 dependencies = [
  "northstar-time",
- "northstar-xmpp-types",
  "serde",
  "uuid",
 ]
@@ -2821,7 +2815,6 @@ name = "northstar-s2s"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "arc-swap",
  "base64 0.22.1",
  "dashmap",
  "futures",
@@ -2898,7 +2891,6 @@ dependencies = [
  "arc-swap",
  "axum",
  "dashmap",
- "envy",
  "futures",
  "hickory-resolver",
  "northstar-abuse-application",
@@ -3035,7 +3027,6 @@ dependencies = [
  "futures",
  "northstar-auth-core",
  "northstar-delivery-core",
- "northstar-xmpp-types",
  "serde",
  "uuid",
 ]
@@ -3176,16 +3167,13 @@ dependencies = [
  "northstar-auth-core",
  "northstar-runtime",
  "northstar-telemetry",
- "northstar-time",
  "northstar-upload-core",
- "northstar-xmpp-types",
  "sha2 0.10.9",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
  "tracing",
  "uuid",
- "zeroize",
 ]
 
 [[package]]
@@ -3193,7 +3181,6 @@ name = "northstar-upload-core"
 version = "0.1.0"
 dependencies = [
  "northstar-time",
- "northstar-xmpp-types",
  "serde",
  "uuid",
  "zeroize",
@@ -3231,7 +3218,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "thiserror 2.0.20",
  "tokio",
  "tokio-util",
  "tracing",
@@ -3512,7 +3498,6 @@ dependencies = [
  "northstar-xep-core",
  "northstar-xmpp-types",
  "roxmltree",
- "serde",
  "thiserror 2.0.20",
 ]
 

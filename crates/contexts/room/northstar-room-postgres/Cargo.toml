@@ -23,7 +23,6 @@ northstar-postgres = { path = "../../../platform/northstar-postgres" }
 northstar-room-application = { path = "../northstar-room-application" }
 northstar-room-core = { path = "../northstar-room-core" }
 northstar-roster-core = { path = "../../roster/northstar-roster-core" }
-northstar-session-core = { path = "../../session/northstar-session-core" }
 northstar-telemetry = { path = "../../../platform/northstar-telemetry" }
 northstar-xep-0313 = { path = "../../../kernel/northstar-xep-0313" }
 northstar-xmpp-avatar = { path = "../../../kernel/northstar-xmpp-avatar" }

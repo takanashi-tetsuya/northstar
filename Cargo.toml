@@ -138,7 +138,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1.12", features = ["v4", "serde"] }
 zeroize = "1.8"
-envy = "0.4.2"
 northstar-xep-0184 = { path = "crates/kernel/northstar-xep-0184" }
 northstar-xep-0085 = { path = "crates/kernel/northstar-xep-0085" }
 northstar-xep-0092 = { path = "crates/kernel/northstar-xep-0092" }

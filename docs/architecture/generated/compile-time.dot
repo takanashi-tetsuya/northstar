@@ -893,10 +893,8 @@ digraph compile_time {
   "northstar-abuse-application" -> "anyhow";
   "northstar-abuse-application" -> "base64";
   "northstar-abuse-application" -> "dashmap";
-  "northstar-abuse-application" -> "hmac";
   "northstar-abuse-application" -> "northstar-abuse-policy";
   "northstar-abuse-application" -> "northstar-time";
-  "northstar-abuse-application" -> "northstar-xmpp-types";
   "northstar-abuse-application" -> "rand";
   "northstar-abuse-application" -> "serde_json";
   "northstar-abuse-application" -> "sha2";
@@ -1355,7 +1353,6 @@ digraph compile_time {
   "northstar-message-postgres" -> "northstar-time";
   "northstar-message-postgres" -> "northstar-xmpp-types";
   "northstar-message-postgres" -> "roxmltree";
-  "northstar-message-postgres" -> "sha2";
   "northstar-message-postgres" -> "sqlx";
   "northstar-message-postgres" -> "subtle";
   "northstar-message-postgres" -> "thiserror";
@@ -1433,7 +1430,6 @@ digraph compile_time {
   "northstar-muc-xmpp" -> "northstar-xmpp-types";
   "northstar-muc-xmpp" -> "roxmltree";
   "northstar-muc-xmpp" -> "serde_json";
-  "northstar-muc-xmpp" -> "sha2";
   "northstar-muc-xmpp" -> "tokio";
   "northstar-muc-xmpp" -> "tracing";
   "northstar-muc-xmpp" -> "uuid";
@@ -1623,7 +1619,6 @@ digraph compile_time {
   "northstar-room-postgres" -> "northstar-room-application";
   "northstar-room-postgres" -> "northstar-room-core";
   "northstar-room-postgres" -> "northstar-roster-core";
-  "northstar-room-postgres" -> "northstar-session-core";
   "northstar-room-postgres" -> "northstar-telemetry";
   "northstar-room-postgres" -> "northstar-time";
   "northstar-room-postgres" -> "northstar-xep-0313";
@@ -1648,7 +1643,6 @@ digraph compile_time {
   "northstar-roster-application" -> "tokio";
   "northstar-roster-application" -> "uuid";
   "northstar-roster-core" -> "northstar-time";
-  "northstar-roster-core" -> "northstar-xmpp-types";
   "northstar-roster-core" -> "serde";
   "northstar-roster-core" -> "uuid";
   "northstar-roster-postgres" -> "anyhow";
@@ -1685,7 +1679,6 @@ digraph compile_time {
   "northstar-runtime" -> "tracing-subscriber";
   "northstar-runtime" -> "uuid";
   "northstar-s2s" -> "anyhow";
-  "northstar-s2s" -> "arc-swap";
   "northstar-s2s" -> "base64";
   "northstar-s2s" -> "dashmap";
   "northstar-s2s" -> "futures";
@@ -1750,7 +1743,6 @@ digraph compile_time {
   "northstar-server" -> "arc-swap";
   "northstar-server" -> "axum";
   "northstar-server" -> "dashmap";
-  "northstar-server" -> "envy";
   "northstar-server" -> "futures";
   "northstar-server" -> "hickory-resolver";
   "northstar-server" -> "northstar-abuse-application";
@@ -1875,7 +1867,6 @@ digraph compile_time {
   "northstar-session-core" -> "futures";
   "northstar-session-core" -> "northstar-auth-core";
   "northstar-session-core" -> "northstar-delivery-core";
-  "northstar-session-core" -> "northstar-xmpp-types";
   "northstar-session-core" -> "serde";
   "northstar-session-core" -> "uuid";
   "northstar-session-postgres" -> "anyhow";
@@ -1980,18 +1971,14 @@ digraph compile_time {
   "northstar-upload-application" -> "northstar-auth-core";
   "northstar-upload-application" -> "northstar-runtime";
   "northstar-upload-application" -> "northstar-telemetry";
-  "northstar-upload-application" -> "northstar-time";
   "northstar-upload-application" -> "northstar-upload-core";
-  "northstar-upload-application" -> "northstar-xmpp-types";
   "northstar-upload-application" -> "sha2";
   "northstar-upload-application" -> "thiserror";
   "northstar-upload-application" -> "tokio";
   "northstar-upload-application" -> "tokio-util";
   "northstar-upload-application" -> "tracing";
   "northstar-upload-application" -> "uuid";
-  "northstar-upload-application" -> "zeroize";
   "northstar-upload-core" -> "northstar-time";
-  "northstar-upload-core" -> "northstar-xmpp-types";
   "northstar-upload-core" -> "serde";
   "northstar-upload-core" -> "uuid";
   "northstar-upload-core" -> "zeroize";
@@ -2017,7 +2004,6 @@ digraph compile_time {
   "northstar-upload-storage" -> "serde";
   "northstar-upload-storage" -> "serde_json";
   "northstar-upload-storage" -> "sha2";
-  "northstar-upload-storage" -> "thiserror";
   "northstar-upload-storage" -> "tokio";
   "northstar-upload-storage" -> "tokio-util";
   "northstar-upload-storage" -> "tracing";

@@ -1755,19 +1755,11 @@
       ],
       [
         "northstar-abuse-application",
-        "hmac"
-      ],
-      [
-        "northstar-abuse-application",
         "northstar-abuse-policy"
       ],
       [
         "northstar-abuse-application",
         "northstar-time"
-      ],
-      [
-        "northstar-abuse-application",
-        "northstar-xmpp-types"
       ],
       [
         "northstar-abuse-application",
@@ -3603,10 +3595,6 @@
       ],
       [
         "northstar-message-postgres",
-        "sha2"
-      ],
-      [
-        "northstar-message-postgres",
         "sqlx"
       ],
       [
@@ -3912,10 +3900,6 @@
       [
         "northstar-muc-xmpp",
         "serde_json"
-      ],
-      [
-        "northstar-muc-xmpp",
-        "sha2"
       ],
       [
         "northstar-muc-xmpp",
@@ -4675,10 +4659,6 @@
       ],
       [
         "northstar-room-postgres",
-        "northstar-session-core"
-      ],
-      [
-        "northstar-room-postgres",
         "northstar-telemetry"
       ],
       [
@@ -4772,10 +4752,6 @@
       [
         "northstar-roster-core",
         "northstar-time"
-      ],
-      [
-        "northstar-roster-core",
-        "northstar-xmpp-types"
       ],
       [
         "northstar-roster-core",
@@ -4920,10 +4896,6 @@
       [
         "northstar-s2s",
         "anyhow"
-      ],
-      [
-        "northstar-s2s",
-        "arc-swap"
       ],
       [
         "northstar-s2s",
@@ -5180,10 +5152,6 @@
       [
         "northstar-server",
         "dashmap"
-      ],
-      [
-        "northstar-server",
-        "envy"
       ],
       [
         "northstar-server",
@@ -5683,10 +5651,6 @@
       ],
       [
         "northstar-session-core",
-        "northstar-xmpp-types"
-      ],
-      [
-        "northstar-session-core",
         "serde"
       ],
       [
@@ -6103,15 +6067,7 @@
       ],
       [
         "northstar-upload-application",
-        "northstar-time"
-      ],
-      [
-        "northstar-upload-application",
         "northstar-upload-core"
-      ],
-      [
-        "northstar-upload-application",
-        "northstar-xmpp-types"
       ],
       [
         "northstar-upload-application",
@@ -6138,16 +6094,8 @@
         "uuid"
       ],
       [
-        "northstar-upload-application",
-        "zeroize"
-      ],
-      [
         "northstar-upload-core",
         "northstar-time"
-      ],
-      [
-        "northstar-upload-core",
-        "northstar-xmpp-types"
       ],
       [
         "northstar-upload-core",
@@ -6248,10 +6196,6 @@
       [
         "northstar-upload-storage",
         "sha2"
-      ],
-      [
-        "northstar-upload-storage",
-        "thiserror"
       ],
       [
         "northstar-upload-storage",

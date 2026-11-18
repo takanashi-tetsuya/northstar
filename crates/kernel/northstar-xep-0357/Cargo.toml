@@ -20,8 +20,3 @@ northstar-xep-core = { path = "../northstar-xep-core" }
 northstar-xmpp-types = { path = "../northstar-xmpp-types" }
 roxmltree = "0.20"
 thiserror = "2.0"
-serde = { version = "1.0", features = ["derive"], optional = true }
-
-[features]
-default = []
-serde = ["dep:serde"]

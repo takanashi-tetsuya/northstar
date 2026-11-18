@@ -23,7 +23,6 @@ northstar-postgres = { path = "../../../platform/northstar-postgres" }
 northstar-security = { path = "../../../platform/northstar-security" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 roxmltree = "0.20"
-sha2 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "uuid"] }
 subtle = "2.6"
 thiserror = "2.0"

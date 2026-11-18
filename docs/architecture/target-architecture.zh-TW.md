@@ -83,7 +83,8 @@ flowchart TB
 ### 4.2 限界上下文
 
 上下文名稱沿用既有 crate 的前綴。來源欄列出目前的主要位置；`state` 中屬於該上下文的執行期狀態與 accessor
-一併移入。資料表歸屬以 `catalog/data-ownership.yaml` 為起點，在各上下文的階段中逐表確認。
+一併移入。資料表隨存取它的上下文 `-postgres` crate 搬移，跨上下文且須在同一交易內的存取放在 `northstar-workflows`；
+資料庫角色對各資料表的權限以 `deploy/postgres-init/lib/northstar-capability-manifest.sql` 為準。
 
 | 上下文 | 職責 | 主要來源 |
 | --- | --- | --- |

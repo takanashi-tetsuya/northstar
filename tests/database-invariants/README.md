@@ -1,20 +1,56 @@
-# Database invariant test suite
+# Database invariant tests
 
-The integration harness runs the `foundation-db-test` invariants against an
-isolated PostgreSQL database. Each service supplies its own migration/schema
-fixture; tests never connect to the shared development database.
+This directory holds no tests. Database invariants are tested where the
+code that owns them lives, against isolated PostgreSQL databases. No test
+connects to a shared development database.
 
-Required scenarios:
+## Where each invariant is tested
 
-- concurrent inserts prove unique authority keys and internal-only foreign
-  keys;
-- lease/session CAS rejects stale epochs and sequences never regress;
-- injected serialization failures/deadlocks are retried only before a visible
-  side effect commits;
-- migration checksum drift, missing indexes, long transactions, and query-plan
-  regressions fail the job;
-- 100–1000 concurrent bind, ingress, and outbox-claim operations leave one
-  authoritative result per idempotency key.
+**Migration ledger and schema drift**
 
-The current crate contains deterministic unit models. Live PostgreSQL,
-property-load, and EXPLAIN artifact jobs remain required evidence for M05-04.
+- The `northstar-postgres` unit tests reject a migration that is pending,
+  failed, duplicated, unknown or has drifted from its checksum.
+- `scripts/check-database-capability-manifest.py` checks the generated
+  SHA-384 ledger manifest.
+- `scripts/migration-upgrade-wsl.sh` and `scripts/migration-0056-db-wsl.sh`
+  upgrade real databases.
+
+See [migration policy](../../docs/database/migration-policy.md).
+
+**Role and privilege boundaries**
+
+- `scripts/check-database-role-boundaries.sh` checks the role boundaries
+  statically.
+- The `database-role-boundary` CI job runs
+  `scripts/database-role-boundary-db-ci.sh` against a live database.
+
+See [database roles](../../docs/DATABASE_ROLES.md).
+
+**Repository behaviour shared by adapters**
+
+`scripts/repository-conformance-db-wsl.sh` runs the `northstar-db-it`
+conformance suite. Each run uses its own `northstar_conformance_it_` schema.
+
+**Per-context concurrency, CAS, idempotency and outbox rules**
+
+The `*-db-wsl.sh` suites run the ignored database tests of each adapter
+crate. Two examples are `muc-db-wsl.sh` and `pubsub-outbox-db-wsl.sh`.
+
+## How CI runs them
+
+`scripts/stateful-database-ci.sh` groups most of these suites into shards.
+The `stateful-database-integration` CI job gives each shard its own runner
+and a loopback-only PostgreSQL fixture, and each suite creates its own
+schema. The MAM and MIX database suites run in the MIX validation job
+instead.
+
+## Adding an invariant
+
+Write the test next to the repository code that owns the rule.
+
+1. Mark it `#[ignore]` when it needs PostgreSQL.
+2. Add it to the suite of that context, or to the conformance suite when
+   every adapter must satisfy it.
+3. Make sure the suite is listed in a shard of
+   `scripts/stateful-database-ci.sh`. `scripts/check-stateful-database-ci.mjs`
+   keeps that shard manifest exact, so a suite cannot drop out unnoticed.

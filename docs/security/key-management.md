@@ -1,74 +1,109 @@
-# Key-management boundary
+# Key management
 
-Northstar treats key material as a provider capability, not as application
-configuration. Services receive a short-lived operation result or an opaque
-provider handle; they never read a master key, private signing key, or HMAC
-secret from `.env`, a database row, or an HTTP request.
+Northstar runs as one server binary: the standalone process, or the core and
+maintenance subservers. It has no KMS or HSM client. Each process reads its
+key material at startup from mounted files that the operator owns. This
+document describes:
 
-## Provider contract
+- which keys exist;
+- how they are loaded;
+- how they are kept apart;
+- where each rotation procedure lives.
 
-The `foundation-kms` crate defines the provider-neutral interfaces:
+## Loading rules
 
-- `Signer` signs assertion, registry, audit, or federation payloads by `key_id`.
-- `AeadKeyProvider` seals and opens data with associated data binding. The
-  wire format and nonce policy belong to the selected KMS/HSM adapter, not to
-  the protocol handlers.
-- `HmacKeyProvider` computes and verifies short-lived internal MACs such as
-  dialback or upload-token proofs.
+Every secret is configured by a `*_FILE` variable that names a mounted file.
+`northstar_security::secret_files::read_secret_file` refuses to start the
+process when the file:
 
-The interfaces return `KmsError` and fail closed when a key is missing,
-revoked, expired, or rejected. They do not expose key bytes.
+- is a symlink;
+- is not a regular file;
+- is empty or larger than 64 KiB;
+- has permissions other than `0400` or `0600` (on Unix).
 
-## Key classes and ownership
+Production files live outside the source checkout. The default location is
+`/etc/northstar/secrets`, created by `scripts/create-production-secrets.sh`.
+That script requires a root-owned `0700` parent directory and never prints a
+secret value.
 
-Every key has a stable class, owner service, region, environment, algorithm,
-creation time, and rotation deadline. The authoritative inventory is
-[`catalog/key-classes.yaml`](../../catalog/key-classes.yaml). A key is never
-shared merely because two services happen to run in the same PostgreSQL
-cluster; sharing requires an explicit provider policy and a separate audit
-record.
+Some variables also have an inline form for tests, such as
+`DIALBACK_SECRET`. Production uses the file form only.
 
-The supported lifecycle is:
+A process never generates a replacement for a missing production key.
+Process-local ephemeral keys exist only for the development deployment
+shape: every listener on loopback, no Redis, a reserved `localhost`,
+`*.localhost` or `*.test` domain, and that key's explicit opt-in switch.
+Enabling one ephemeral switch does not enable any other.
 
-```text
-Creating -> Active -> Retired -> Destroyed
-                  \-> Revoked -> Destroyed
-Retired ----------> Revoked
-```
+## Key inventory
 
-Transitions are monotonic. Rotation creates a new key before retiring the old
-one. Verification consumers may accept the retired key only during the
-provider's bounded grace window; revoked and destroyed keys are rejected
-immediately. Signing always selects the current active key.
+| Variable | Purpose | Rotation |
+| --- | --- | --- |
+| `FAST_TOKEN_SECRET_FILE` | Authenticates and encrypts XEP-0484 FAST token state | Rotating it revokes issued FAST tokens |
+| `DUMMY_SCRAM_SECRET_FILE` | Derives dummy SCRAM salt and verifier material for unknown accounts | No credential or token effect |
+| `DIALBACK_SECRET_FILE` | XEP-0220 Dialback key generation | Rotate during a controlled reconnect window |
+| `ABUSE_STATE_HMAC_KEY_FILE`, `ABUSE_STATE_HMAC_PREVIOUS_KEY_FILE` | HMAC over durable anti-abuse state | Three-phase rolling rotation with `ABUSE_STATE_HMAC_KEY_EPOCH` |
+| `CLUSTER_SIGNING_PRIVATE_KEY_FILE`, plus previous and staged-next public keys | Ed25519 signatures on Redis control-plane commands | Prepare, activate, retire with `CLUSTER_SIGNING_KEY_EPOCH` |
+| `API_CONTROL_SECRET_FILE`, `API_CONTROL_PREVIOUS_SECRET_FILE` | Root of the REST idempotency and pagination-cursor keyrings | Current and previous secret overlap |
+| `TURN_SHARED_SECRET_FILE` | XEP-0215 TURN credential derivation | Coordinate with the TURN server |
+| `METRICS_BEARER_TOKEN_FILE`, `WEB_ADMIN_GATEWAY_TOKEN_FILE` | Bearer tokens for `/metrics` and the web administration gateway | Replace and restart |
+| `UPLOAD_S3_*_FILE` | Object-store credentials and optional SSE-KMS key ID | Provider-managed |
 
-## Runtime and deployment rules
+Database connection strings (`*_DATABASE_URL_FILE`), the Redis URL, TLS
+private keys and external-component secrets are mounted the same way. Their
+details are in
+[production operations](../PRODUCTION_OPERATIONS.md) and
+[upload storage](../UPLOAD_STORAGE.md).
 
-- Production adapters must use an external KMS, HSM, or workload-identity
-  signer. Cloud-specific clients belong behind `foundation-kms` and are not
-  imported by protocol crates.
-- SPIFFE/SVID identity authorizes the service to request an operation. A
-  service identity alone does not authorize every key class.
-- Key identifiers, status, rotation and verification failures are safe audit
-  metadata. Key bytes, plaintext, MACs, signatures and provider credentials
-  are never logged.
-- Backup and restore preserve encrypted ciphertext and metadata only. A
-  restore must reacquire active keys from the provider before accepting
-  traffic; it must not restore key bytes from the database dump.
-- The optional `foundation-kms/memory` provider is compiled only for local
-  development tests. It is not enabled by default and is prohibited in a
-  production artifact.
+## Separation
 
-## Operational rotation
+Each capability has its own secret. Never copy one secret into another file,
+derive it from another secret or from a database password, or share it
+between capabilities.
 
-1. Create and attest the replacement key in the provider.
-2. Publish metadata and a signed control-plane change for the owning service.
-3. Activate the replacement and retain the previous key for the documented
-   verification grace period.
-4. Observe signature/MAC failures and replay metrics while both keys are
-   accepted.
-5. Retire, then revoke the old key after all valid envelopes and tokens have
-   expired. Destroy only after the retention and incident-response holds are
-   clear.
+The checks that enforce this:
 
-The application must fail readiness for a missing required active key rather
-than silently generating a process-local replacement.
+- The secret generator rejects any two independent secrets with the same
+  value, and the production preflight rejects exact reuse.
+- Configuration loading rejects a web-administration gateway token that
+  equals any other mounted secret.
+
+PostgreSQL never stores key material:
+
+- The anti-abuse key generation is recorded only as purpose-separated
+  96-bit identifiers.
+- The cluster key authority never stores a private key.
+
+Logs and audit records may contain key identifiers, epochs and
+verification outcomes. They never contain key bytes, MACs, signatures or
+provider credentials.
+
+## Rotation
+
+Each key with overlap support follows the same order:
+
+1. Mount the new key as current and the old key as previous.
+2. Advance the epoch where the key has one, and roll every node.
+3. Retire the previous key only after every value it protected has expired.
+
+For the anti-abuse and cluster keys, each node checks the epoch against
+PostgreSQL. A node with an unrelated key or a skipped epoch fails closed
+instead of serving.
+
+The exact procedures:
+
+- anti-abuse HMAC key:
+  [production operations](../PRODUCTION_OPERATIONS.md#durable-anti-abuse-state-and-calibration);
+- FAST and dummy-SCRAM keys:
+  [authentication key separation](../PRODUCTION_OPERATIONS.md#authentication-key-separation);
+- Dialback secret:
+  [federation credentials](../PRODUCTION_OPERATIONS.md#federation-credentials);
+- cluster signing keys: [clustering](../CLUSTERING.md);
+- backup signing and encryption keys:
+  [backup security](../BACKUP_SECURITY.md).
+
+## Backup and restore
+
+Database backups do not contain the mounted secrets. A restored deployment
+must mount the same secret files, or rotate them, before it serves. Back up
+the secret directory separately, as the release checklist requires.

@@ -6,10 +6,10 @@ pub(super) async fn bind_bosh_transport_response_inner(
     pool: &PgPool,
     session_id: Uuid,
     response_rid: u64,
-    sources: &[northstar_stream::outbound::TransportOwnershipSource],
+    sources: &[northstar_session_application::outbound::TransportOwnershipSource],
     ttl_seconds: u64,
     observation: Option<&northstar_delivery_core::bosh_ownership::response::BindRequest>,
-) -> Result<northstar_stream::outbound::BoshResponseOwnership> {
+) -> Result<northstar_session_application::outbound::BoshResponseOwnership> {
     let response_rid = i64::try_from(response_rid).context("BOSH RID exceeds bigint")?;
     let ttl_seconds = i64::try_from(ttl_seconds.clamp(1, BOSH_FENCE_MAX_AGE_SECONDS as u64))
         .context("BOSH delivery-fence TTL is too large")?;
@@ -17,13 +17,13 @@ pub(super) async fn bind_bosh_transport_response_inner(
     let mut mix = BTreeMap::new();
     for source in sources {
         match source {
-            northstar_stream::outbound::TransportOwnershipSource::C2s(delivery) => {
+            northstar_session_application::outbound::TransportOwnershipSource::C2s(delivery) => {
                 anyhow::ensure!(
                     c2s.insert(delivery.message_id, *delivery).is_none(),
                     "duplicate C2S durable delivery in one BOSH response"
                 );
             }
-            northstar_stream::outbound::TransportOwnershipSource::Mix(delivery) => {
+            northstar_session_application::outbound::TransportOwnershipSource::Mix(delivery) => {
                 anyhow::ensure!(
                     mix.insert(delivery.delivery_id, *delivery).is_none(),
                     "duplicate MIX durable delivery in one BOSH response"
@@ -83,10 +83,12 @@ pub(super) async fn bind_bosh_transport_response_inner(
         .fetch_optional(&mut *transaction)
         .await?;
         let Some(offline) = offline else {
-            return Err(northstar_stream::outbound::DurableDeliverySuperseded {
-                message_id: delivery.message_id,
-            }
-            .into());
+            return Err(
+                northstar_session_application::outbound::DurableDeliverySuperseded {
+                    message_id: delivery.message_id,
+                }
+                .into(),
+            );
         };
         let sm_owned: bool = sqlx::query_scalar(
             "SELECT EXISTS(
@@ -97,10 +99,12 @@ pub(super) async fn bind_bosh_transport_response_inner(
         .fetch_one(&mut *transaction)
         .await?;
         if sm_owned {
-            return Err(northstar_stream::outbound::DurableDeliverySuperseded {
-                message_id: delivery.message_id,
-            }
-            .into());
+            return Err(
+                northstar_session_application::outbound::DurableDeliverySuperseded {
+                    message_id: delivery.message_id,
+                }
+                .into(),
+            );
         }
         let existing = sqlx::query(
             "SELECT session_id,response_rid,expires_at>clock_timestamp() AS active
@@ -117,10 +121,12 @@ pub(super) async fn bind_bosh_transport_response_inner(
                     .try_get::<Option<Uuid>, _>("delivery_claim_id")?
                     .is_some()
                 {
-                    return Err(northstar_stream::outbound::DurableDeliverySuperseded {
-                        message_id: delivery.message_id,
-                    }
-                    .into());
+                    return Err(
+                        northstar_session_application::outbound::DurableDeliverySuperseded {
+                            message_id: delivery.message_id,
+                        }
+                        .into(),
+                    );
                 }
                 let renewed = sqlx::query(
                     "UPDATE bosh_delivery_fences
@@ -141,10 +147,12 @@ pub(super) async fn bind_bosh_transport_response_inner(
                 continue;
             }
             if existing.try_get::<bool, _>("active")? {
-                return Err(northstar_stream::outbound::DurableDeliverySuperseded {
-                    message_id: delivery.message_id,
-                }
-                .into());
+                return Err(
+                    northstar_session_application::outbound::DurableDeliverySuperseded {
+                        message_id: delivery.message_id,
+                    }
+                    .into(),
+                );
             }
             sqlx::query("DELETE FROM bosh_delivery_fences WHERE message_id=$1")
                 .bind(delivery.message_id)
@@ -152,10 +160,12 @@ pub(super) async fn bind_bosh_transport_response_inner(
                 .await?;
         }
         if offline.try_get::<Option<Uuid>, _>("delivery_claim_id")? != delivery.claim_id {
-            return Err(northstar_stream::outbound::DurableDeliverySuperseded {
-                message_id: delivery.message_id,
-            }
-            .into());
+            return Err(
+                northstar_session_application::outbound::DurableDeliverySuperseded {
+                    message_id: delivery.message_id,
+                }
+                .into(),
+            );
         }
         sqlx::query(
             "UPDATE offline_messages
@@ -242,7 +252,7 @@ pub(super) async fn bind_bosh_transport_response_inner(
         .rows_affected();
         anyhow::ensure!(bound == 1, "MIX BOSH response fence lost ownership");
     }
-    let ownership = northstar_stream::outbound::BoshResponseOwnership {
+    let ownership = northstar_session_application::outbound::BoshResponseOwnership {
         c2s_message_ids: c2s.into_keys().collect(),
         mix_delivery_ids: mix.into_keys().collect(),
     };
@@ -501,7 +511,7 @@ pub async fn acknowledge_bosh_transport_responses(
         anyhow::ensure!(deleted == 1, "MIX BOSH-owned delivery disappeared");
         deleted_sources.push(
             northstar_delivery_core::bosh_ownership::response::DeletedSource::Mix(
-                northstar_stream::outbound::MixDelivery {
+                northstar_session_application::outbound::MixDelivery {
                     delivery_id,
                     lease_token,
                 },

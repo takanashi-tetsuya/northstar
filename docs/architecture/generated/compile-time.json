@@ -6282,10 +6282,6 @@
     ],
     [
       "northstar-session-postgres",
-      "northstar-stream"
-    ],
-    [
-      "northstar-session-postgres",
       "northstar-time"
     ],
     [

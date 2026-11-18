@@ -654,7 +654,7 @@ pub async fn release_untransferred_offline_claims(
 /// worker lost its fence and must be reported.
 pub async fn acknowledge_durable_delivery(
     pool: &PgPool,
-    delivery: northstar_stream::outbound::DurableDelivery,
+    delivery: northstar_session_application::outbound::DurableDelivery,
 ) -> Result<()> {
     acknowledge_durable_deliveries(pool, std::slice::from_ref(&delivery)).await
 }
@@ -665,14 +665,14 @@ pub async fn acknowledge_durable_delivery(
 /// a returned error alone does not prove that the prefix was retained.
 pub async fn acknowledge_durable_deliveries(
     pool: &PgPool,
-    deliveries: &[northstar_stream::outbound::DurableDelivery],
+    deliveries: &[northstar_session_application::outbound::DurableDelivery],
 ) -> Result<()> {
     acknowledge_durable_deliveries_observed(pool, deliveries, None).await
 }
 
 pub async fn acknowledge_durable_deliveries_observed(
     pool: &PgPool,
-    deliveries: &[northstar_stream::outbound::DurableDelivery],
+    deliveries: &[northstar_session_application::outbound::DurableDelivery],
     observation: Option<&northstar_delivery_core::native_write::AckRequest>,
 ) -> Result<()> {
     use northstar_delivery_core::native_write::{commit_observed, AckDisposition};
@@ -681,9 +681,9 @@ pub async fn acknowledge_durable_deliveries_observed(
             deliveries.len() == 1,
             "native ACK observation requires its one exact source"
         );
-        observation.validate_source(northstar_stream::outbound::TransportOwnershipSource::C2s(
-            deliveries[0],
-        ))?;
+        observation.validate_source(
+            northstar_session_application::outbound::TransportOwnershipSource::C2s(deliveries[0]),
+        )?;
     }
     if deliveries.is_empty() {
         return Ok(());
@@ -793,8 +793,8 @@ pub async fn acknowledge_durable_deliveries_observed(
 /// lease expires after a crash/timeout.
 pub async fn fence_durable_socket_write(
     pool: &PgPool,
-    delivery: northstar_stream::outbound::DurableDelivery,
-) -> Result<northstar_stream::outbound::DurableDelivery> {
+    delivery: northstar_session_application::outbound::DurableDelivery,
+) -> Result<northstar_session_application::outbound::DurableDelivery> {
     // A newly committed clustered live row is reserved with its message UUID
     // until the primary route reaches a transport. Rotate that initial token
     // under the exact row lock: a concurrent no-route/degradation cleanup may
@@ -819,17 +819,21 @@ pub async fn fence_durable_socket_write(
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(row) = row else {
-        return Err(northstar_stream::outbound::DurableDeliverySuperseded {
-            message_id: delivery.message_id,
-        }
-        .into());
+        return Err(
+            northstar_session_application::outbound::DurableDeliverySuperseded {
+                message_id: delivery.message_id,
+            }
+            .into(),
+        );
     };
     let stored_claim: Option<Uuid> = row.try_get("delivery_claim_id")?;
     if stored_claim != delivery.claim_id {
-        return Err(northstar_stream::outbound::DurableDeliverySuperseded {
-            message_id: delivery.message_id,
-        }
-        .into());
+        return Err(
+            northstar_session_application::outbound::DurableDeliverySuperseded {
+                message_id: delivery.message_id,
+            }
+            .into(),
+        );
     }
     let transport_owned: bool = sqlx::query_scalar(
         "SELECT EXISTS(
@@ -842,10 +846,12 @@ pub async fn fence_durable_socket_write(
     .fetch_one(&mut *transaction)
     .await?;
     if transport_owned {
-        return Err(northstar_stream::outbound::DurableDeliverySuperseded {
-            message_id: delivery.message_id,
-        }
-        .into());
+        return Err(
+            northstar_session_application::outbound::DurableDeliverySuperseded {
+                message_id: delivery.message_id,
+            }
+            .into(),
+        );
     }
     let updated = sqlx::query(
         "UPDATE offline_messages
@@ -865,7 +871,7 @@ pub async fn fence_durable_socket_write(
         "durable delivery disappeared during socket write fencing"
     );
     transaction.commit().await?;
-    Ok(northstar_stream::outbound::DurableDelivery {
+    Ok(northstar_session_application::outbound::DurableDelivery {
         claim_id: Some(claim_id),
         ..delivery
     })

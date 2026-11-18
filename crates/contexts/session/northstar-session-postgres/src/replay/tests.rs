@@ -36,7 +36,7 @@ async fn replay_claim_wins_queued_live_socket_and_bosh_fences_without_stealing()
         .execute(&mut *winner)
         .await
         .unwrap();
-    let live = northstar_stream::outbound::DurableDelivery {
+    let live = northstar_session_application::outbound::DurableDelivery {
         recipient_id,
         message_id,
         claim_id: None,
@@ -51,8 +51,8 @@ async fn replay_claim_wins_queued_live_socket_and_bosh_fences_without_stealing()
     winner.commit().await.unwrap();
     let error = loser.await.unwrap().unwrap_err();
     assert_eq!(
-        error.downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>(),
-        Some(&northstar_stream::outbound::DurableDeliverySuperseded { message_id })
+        error.downcast_ref::<northstar_session_application::outbound::DurableDeliverySuperseded>(),
+        Some(&northstar_session_application::outbound::DurableDeliverySuperseded { message_id })
     );
     let stored_claim: Option<Uuid> =
         sqlx::query_scalar("SELECT delivery_claim_id FROM offline_messages WHERE id=$1")
@@ -70,20 +70,19 @@ async fn replay_claim_wins_queued_live_socket_and_bosh_fences_without_stealing()
         &pool,
         Uuid::new_v4(),
         1,
-        &[northstar_stream::outbound::TransportOwnershipSource::C2s(
-            live,
-        )],
+        &[northstar_session_application::outbound::TransportOwnershipSource::C2s(live)],
         60,
     )
     .await
     .unwrap_err();
     assert_eq!(
-        bosh_error.downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>(),
-        Some(&northstar_stream::outbound::DurableDeliverySuperseded { message_id })
+        bosh_error
+            .downcast_ref::<northstar_session_application::outbound::DurableDeliverySuperseded>(),
+        Some(&northstar_session_application::outbound::DurableDeliverySuperseded { message_id })
     );
     let winning_delivery = fence_durable_socket_write(
         &pool,
-        northstar_stream::outbound::DurableDelivery {
+        northstar_session_application::outbound::DurableDelivery {
             claim_id: Some(winner_claim),
             ..live
         },
@@ -95,8 +94,9 @@ async fn replay_claim_wins_queued_live_socket_and_bosh_fences_without_stealing()
         .unwrap();
     let missing = fence_durable_socket_write(&pool, live).await.unwrap_err();
     assert_eq!(
-        missing.downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>(),
-        Some(&northstar_stream::outbound::DurableDeliverySuperseded { message_id })
+        missing
+            .downcast_ref::<northstar_session_application::outbound::DurableDeliverySuperseded>(),
+        Some(&northstar_session_application::outbound::DurableDeliverySuperseded { message_id })
     );
 
     // A later C2S source losing ownership rolls back an earlier source's
@@ -114,8 +114,8 @@ async fn replay_claim_wins_queued_live_socket_and_bosh_fences_without_stealing()
         .await
         .unwrap();
     let batch = batch_ids.map(|message_id| {
-        northstar_stream::outbound::TransportOwnershipSource::C2s(
-            northstar_stream::outbound::DurableDelivery {
+        northstar_session_application::outbound::TransportOwnershipSource::C2s(
+            northstar_session_application::outbound::DurableDelivery {
                 recipient_id,
                 message_id,
                 claim_id: None,
@@ -126,10 +126,13 @@ async fn replay_claim_wins_queued_live_socket_and_bosh_fences_without_stealing()
         .await
         .unwrap_err();
     assert_eq!(
-        batch_error.downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>(),
-        Some(&northstar_stream::outbound::DurableDeliverySuperseded {
-            message_id: batch_ids[1]
-        })
+        batch_error
+            .downcast_ref::<northstar_session_application::outbound::DurableDeliverySuperseded>(),
+        Some(
+            &northstar_session_application::outbound::DurableDeliverySuperseded {
+                message_id: batch_ids[1]
+            }
+        )
     );
     let first_claim: Option<Uuid> =
         sqlx::query_scalar("SELECT delivery_claim_id FROM offline_messages WHERE id=$1")
@@ -165,7 +168,7 @@ async fn replay_claim_wins_queued_live_socket_and_bosh_fences_without_stealing()
         .await
         .unwrap_err();
     assert!(sql_error
-        .downcast_ref::<northstar_stream::outbound::DurableDeliverySuperseded>()
+        .downcast_ref::<northstar_session_application::outbound::DurableDeliverySuperseded>()
         .is_none());
     assert_eq!(
         sql_error
@@ -620,7 +623,7 @@ async fn logical_owner_is_exclusive_crash_recoverable_and_does_not_hold_the_pool
     // The blocked network await owns no PostgreSQL connection, so even a
     // two-connection pool remains immediately usable.
     let (slow_tx, mut slow_rx) = mpsc::channel(1);
-    let slow_tx = northstar_stream::outbound::OutboundSender::new(slow_tx);
+    let slow_tx = northstar_session_application::outbound::OutboundSender::new(slow_tx);
     slow_tx.send("occupied".to_owned()).await.unwrap();
     let slow_message = page.messages[0].clone();
     let slow_claim = page.claim_token;
@@ -629,7 +632,7 @@ async fn logical_owner_is_exclusive_crash_recoverable_and_does_not_hold_the_pool
         slow_sender
             .send_durable(
                 slow_message.stanza,
-                northstar_stream::outbound::DurableDelivery {
+                northstar_session_application::outbound::DurableDelivery {
                     recipient_id: recipient,
                     message_id: slow_message.id,
                     claim_id: Some(slow_claim),
@@ -679,7 +682,7 @@ async fn logical_owner_is_exclusive_crash_recoverable_and_does_not_hold_the_pool
     }
     acknowledge_durable_delivery(
         &pool,
-        northstar_stream::outbound::DurableDelivery {
+        northstar_session_application::outbound::DurableDelivery {
             recipient_id: recipient,
             message_id: accepted,
             claim_id: Some(page.claim_token),
@@ -1007,12 +1010,12 @@ async fn durable_ack_batch_validates_every_fence_before_deleting_any_row() {
         .await
         .unwrap();
     }
-    let first_delivery = northstar_stream::outbound::DurableDelivery {
+    let first_delivery = northstar_session_application::outbound::DurableDelivery {
         recipient_id: recipient,
         message_id: first,
         claim_id: None,
     };
-    let invalid_second = northstar_stream::outbound::DurableDelivery {
+    let invalid_second = northstar_session_application::outbound::DurableDelivery {
         recipient_id: recipient,
         message_id: second,
         claim_id: Some(Uuid::new_v4()),
@@ -1031,7 +1034,7 @@ async fn durable_ack_batch_validates_every_fence_before_deleting_any_row() {
         2,
         "a later invalid fence must roll back the valid prefix"
     );
-    let valid_second = northstar_stream::outbound::DurableDelivery {
+    let valid_second = northstar_session_application::outbound::DurableDelivery {
         claim_id: Some(actual_claim),
         ..invalid_second
     };
@@ -1086,7 +1089,7 @@ async fn replay_high_water_excludes_rows_inserted_after_replay_started() {
     }
 
     let (tx, mut rx) = mpsc::channel(1);
-    let tx = northstar_stream::outbound::OutboundSender::new(tx);
+    let tx = northstar_session_application::outbound::OutboundSender::new(tx);
     let delivery_pool = pool.clone();
     let delivery = tokio::spawn(async move {
         deliver_offline_leased(&delivery_pool, recipient, 30, &tx, false, None)
@@ -1191,7 +1194,7 @@ async fn replay_is_paged_exclusive_and_retryable() {
     // A closed queue must release the complete first claim immediately.
     let (closed_tx, closed_rx) = mpsc::channel(1);
     drop(closed_rx);
-    let closed_tx = northstar_stream::outbound::OutboundSender::new(closed_tx);
+    let closed_tx = northstar_session_application::outbound::OutboundSender::new(closed_tx);
     assert_eq!(
         deliver_offline_leased(&pool, recipient, 30, &closed_tx, false, None)
             .await
@@ -1216,7 +1219,7 @@ async fn replay_is_paged_exclusive_and_retryable() {
     .unwrap();
 
     let (tx, mut rx) = mpsc::channel(8);
-    let tx = northstar_stream::outbound::OutboundSender::new(tx);
+    let tx = northstar_session_application::outbound::OutboundSender::new(tx);
     let pool_for_delivery = pool.clone();
     let delivery = tokio::spawn(async move {
         deliver_offline_leased(&pool_for_delivery, recipient, 30, &tx, false, None)
@@ -1300,7 +1303,7 @@ async fn replay_is_paged_exclusive_and_retryable() {
         .unwrap();
     }
     let (policy_tx, mut policy_rx) = mpsc::channel(8);
-    let policy_tx = northstar_stream::outbound::OutboundSender::new(policy_tx);
+    let policy_tx = northstar_session_application::outbound::OutboundSender::new(policy_tx);
     assert_eq!(
         deliver_offline_leased(
             &pool,
@@ -1343,8 +1346,8 @@ async fn replay_is_paged_exclusive_and_retryable() {
     }
     let (first_tx, mut first_rx) = mpsc::channel(129);
     let (second_tx, mut second_rx) = mpsc::channel(129);
-    let first_tx = northstar_stream::outbound::OutboundSender::new(first_tx);
-    let second_tx = northstar_stream::outbound::OutboundSender::new(second_tx);
+    let first_tx = northstar_session_application::outbound::OutboundSender::new(first_tx);
+    let second_tx = northstar_session_application::outbound::OutboundSender::new(second_tx);
     let (first, second) = tokio::join!(
         deliver_offline_leased(&pool, recipient, 30, &first_tx, false, None),
         deliver_offline_leased(&pool, recipient, 30, &second_tx, false, None),
@@ -1455,7 +1458,7 @@ async fn bosh_delivery_is_owned_by_response_rid_until_a_live_client_ack() {
     .execute(&pool)
     .await
     .unwrap();
-    let delivery = northstar_stream::outbound::DurableDelivery {
+    let delivery = northstar_session_application::outbound::DurableDelivery {
         recipient_id: recipient,
         message_id,
         claim_id: Some(claim_id),
@@ -1463,7 +1466,7 @@ async fn bosh_delivery_is_owned_by_response_rid_until_a_live_client_ack() {
     assert!(
         acknowledge_durable_delivery(
             &pool,
-            northstar_stream::outbound::DurableDelivery {
+            northstar_session_application::outbound::DurableDelivery {
                 claim_id: None,
                 ..delivery
             },
@@ -1540,7 +1543,7 @@ async fn bosh_delivery_is_owned_by_response_rid_until_a_live_client_ack() {
     .execute(&pool)
     .await
     .unwrap();
-    let unfenced_socket = northstar_stream::outbound::DurableDelivery {
+    let unfenced_socket = northstar_session_application::outbound::DurableDelivery {
         recipient_id: recipient,
         message_id: socket_message,
         claim_id: None,
@@ -1577,7 +1580,7 @@ async fn bosh_delivery_is_owned_by_response_rid_until_a_live_client_ack() {
     .execute(&pool)
     .await
     .unwrap();
-    let expired_delivery = northstar_stream::outbound::DurableDelivery {
+    let expired_delivery = northstar_session_application::outbound::DurableDelivery {
         recipient_id: recipient,
         message_id: expired_message,
         claim_id: None,

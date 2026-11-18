@@ -167,7 +167,7 @@ pub async fn deliver_offline_leased(
     pool: &PgPool,
     recipient_id: Uuid,
     ttl_days: i64,
-    outbound: &northstar_stream::outbound::OutboundSender,
+    outbound: &northstar_session_application::outbound::OutboundSender,
     bind2_mam_catchup: bool,
     active_privacy_list: Option<&str>,
 ) -> Result<usize> {
@@ -193,7 +193,7 @@ pub async fn deliver_offline_leased_before(
     pool: &PgPool,
     recipient_id: Uuid,
     ttl_days: i64,
-    outbound: &northstar_stream::outbound::OutboundSender,
+    outbound: &northstar_session_application::outbound::OutboundSender,
     bind2_mam_catchup: bool,
     active_privacy_list: Option<&str>,
     replay_started_at: DateTime<Utc>,
@@ -239,7 +239,7 @@ async fn deliver_offline_pages_for_test(
     pool: &PgPool,
     lease: &OfflineReplayLease,
     ttl_days: i64,
-    outbound: &northstar_stream::outbound::OutboundSender,
+    outbound: &northstar_session_application::outbound::OutboundSender,
     bind2_mam_catchup: bool,
     active_privacy_list: Option<&str>,
     owner_bare_jid: &str,
@@ -288,7 +288,7 @@ async fn deliver_offline_pages_for_test(
                 std::time::Duration::from_secs(5),
                 outbound.send_durable(
                     row.stanza.clone(),
-                    northstar_stream::outbound::DurableDelivery {
+                    northstar_session_application::outbound::DurableDelivery {
                         recipient_id: lease.recipient_id,
                         message_id: row.id,
                         claim_id: Some(page.claim_token),
@@ -340,9 +340,9 @@ pub async fn bind_bosh_transport_response(
     pool: &PgPool,
     session_id: Uuid,
     response_rid: u64,
-    sources: &[northstar_stream::outbound::TransportOwnershipSource],
+    sources: &[northstar_session_application::outbound::TransportOwnershipSource],
     ttl_seconds: u64,
-) -> Result<northstar_stream::outbound::BoshResponseOwnership> {
+) -> Result<northstar_session_application::outbound::BoshResponseOwnership> {
     bind_bosh_transport_response_inner(pool, session_id, response_rid, sources, ttl_seconds, None)
         .await
 }
@@ -350,7 +350,7 @@ pub async fn bind_bosh_transport_response(
 pub async fn bind_bosh_transport_response_observed(
     pool: &PgPool,
     request: &northstar_delivery_core::bosh_ownership::response::BindRequest,
-) -> Result<northstar_stream::outbound::BoshResponseOwnership> {
+) -> Result<northstar_session_application::outbound::BoshResponseOwnership> {
     request.validate_for_io()?;
     bind_bosh_transport_response_inner(
         pool,
@@ -374,7 +374,7 @@ pub async fn bind_bosh_delivery_response(
     pool: &PgPool,
     session_id: Uuid,
     response_rid: u64,
-    deliveries: &[northstar_stream::outbound::DurableDelivery],
+    deliveries: &[northstar_session_application::outbound::DurableDelivery],
     ttl_seconds: u64,
 ) -> Result<()> {
     let response_rid = i64::try_from(response_rid).context("BOSH RID exceeds bigint")?;
@@ -427,10 +427,12 @@ pub async fn bind_bosh_delivery_response(
         .fetch_optional(&mut *transaction)
         .await?;
         let Some(offline) = offline else {
-            return Err(northstar_stream::outbound::DurableDeliverySuperseded {
-                message_id: delivery.message_id,
-            }
-            .into());
+            return Err(
+                northstar_session_application::outbound::DurableDeliverySuperseded {
+                    message_id: delivery.message_id,
+                }
+                .into(),
+            );
         };
         let sm_owned: bool = sqlx::query_scalar(
             "SELECT EXISTS(
@@ -441,10 +443,12 @@ pub async fn bind_bosh_delivery_response(
         .fetch_one(&mut *transaction)
         .await?;
         if sm_owned {
-            return Err(northstar_stream::outbound::DurableDeliverySuperseded {
-                message_id: delivery.message_id,
-            }
-            .into());
+            return Err(
+                northstar_session_application::outbound::DurableDeliverySuperseded {
+                    message_id: delivery.message_id,
+                }
+                .into(),
+            );
         }
         let existing = sqlx::query(
             "SELECT session_id,response_rid,expires_at>clock_timestamp() AS active
@@ -461,10 +465,12 @@ pub async fn bind_bosh_delivery_response(
                     .try_get::<Option<Uuid>, _>("delivery_claim_id")?
                     .is_some()
                 {
-                    return Err(northstar_stream::outbound::DurableDeliverySuperseded {
-                        message_id: delivery.message_id,
-                    }
-                    .into());
+                    return Err(
+                        northstar_session_application::outbound::DurableDeliverySuperseded {
+                            message_id: delivery.message_id,
+                        }
+                        .into(),
+                    );
                 }
                 let renewed = sqlx::query(
                     "UPDATE bosh_delivery_fences
@@ -484,10 +490,12 @@ pub async fn bind_bosh_delivery_response(
                 continue;
             }
             if existing.try_get::<bool, _>("active")? {
-                return Err(northstar_stream::outbound::DurableDeliverySuperseded {
-                    message_id: delivery.message_id,
-                }
-                .into());
+                return Err(
+                    northstar_session_application::outbound::DurableDeliverySuperseded {
+                        message_id: delivery.message_id,
+                    }
+                    .into(),
+                );
             }
             sqlx::query("DELETE FROM bosh_delivery_fences WHERE message_id=$1")
                 .bind(delivery.message_id)
@@ -496,10 +504,12 @@ pub async fn bind_bosh_delivery_response(
         }
         let stored_claim: Option<Uuid> = offline.try_get("delivery_claim_id")?;
         if stored_claim != delivery.claim_id {
-            return Err(northstar_stream::outbound::DurableDeliverySuperseded {
-                message_id: delivery.message_id,
-            }
-            .into());
+            return Err(
+                northstar_session_application::outbound::DurableDeliverySuperseded {
+                    message_id: delivery.message_id,
+                }
+                .into(),
+            );
         }
         sqlx::query(
             "UPDATE offline_messages

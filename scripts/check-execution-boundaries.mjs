@@ -15,7 +15,7 @@ const files = {
   sasl2: 'crates/edges/northstar-stream/src/protocol/sasl2.rs',
   protocol: 'crates/edges/northstar-stream/src/protocol.rs',
   bosh: 'crates/edges/northstar-bosh/src/lib.rs',
-  outbound: 'crates/edges/northstar-stream/src/outbound.rs',
+  outbound: 'crates/contexts/session/northstar-session-application/src/outbound.rs',
   mucCore: 'crates/contexts/room/northstar-room-application/src/discussion.rs',
   mucService: 'crates/contexts/room/northstar-room-application/src/muc_service.rs',
   mix: 'crates/contexts/room/northstar-mix-xmpp/src/lib.rs',

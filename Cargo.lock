@@ -3107,7 +3107,6 @@ dependencies = [
  "northstar-security",
  "northstar-session-application",
  "northstar-session-core",
- "northstar-stream",
  "northstar-time",
  "northstar-xep-0016",
  "northstar-xmpp-types",

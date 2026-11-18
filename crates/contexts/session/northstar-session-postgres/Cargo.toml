@@ -9,7 +9,7 @@ publish = false
 
 [features]
 # Test-only fixtures the root crate's database tests use.
-test-support = ["northstar-session-application/test-support", "northstar-stream/test-support"]
+test-support = ["northstar-session-application/test-support"]
 
 [dependencies]
 anyhow = "1.0"
@@ -20,7 +20,6 @@ northstar-postgres = { path = "../../../platform/northstar-postgres" }
 northstar-security = { path = "../../../platform/northstar-security" }
 northstar-session-application = { path = "../northstar-session-application" }
 northstar-session-core = { path = "../northstar-session-core" }
-northstar-stream = { path = "../../../edges/northstar-stream" }
 northstar-xep-0016 = { path = "../../../kernel/northstar-xep-0016" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 rand = "0.8"
@@ -34,5 +33,4 @@ uuid = { version = "1.12", features = ["v4", "serde"] }
 [dev-dependencies]
 northstar-roster-postgres = { path = "../../roster/northstar-roster-postgres" }
 northstar-session-application = { path = "../northstar-session-application", features = ["test-support"] }
-northstar-stream = { path = "../../../edges/northstar-stream", features = ["test-support"] }
 tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "sync", "time"] }

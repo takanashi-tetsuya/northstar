@@ -15,7 +15,7 @@ pub mod host;
 pub mod iq;
 pub mod local_routes;
 pub mod muc_delivery;
-pub mod outbound;
+pub use northstar_session_application::outbound;
 pub mod protocol;
 pub mod replay;
 pub mod resume;

@@ -10,6 +10,7 @@ pub mod cluster_replay_maintenance;
 pub mod cluster_session_route_maintenance;
 pub mod cluster_session_store;
 pub mod node_message_contract_verifier;
+pub mod outbound;
 pub mod post_actions;
 pub mod repository;
 pub mod session_authority_sweep;

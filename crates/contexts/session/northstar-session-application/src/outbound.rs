@@ -49,8 +49,7 @@ pub struct OutboundItem {
     /// shared hold to every control/replay fragment until the corresponding
     /// HTTP response body is completed or discarded. Ordinary routed stanzas
     /// never set this field.
-    pub transient_sm_capacity:
-        Option<std::sync::Arc<Vec<northstar_session_application::sm_capacity::SmCapacityLease>>>,
+    pub transient_sm_capacity: Option<std::sync::Arc<Vec<crate::sm_capacity::SmCapacityLease>>>,
 }
 
 pub type RouteEnqueue = northstar_message_core::route_item::RouteEnqueue<OutboundItem>;
@@ -171,7 +170,7 @@ impl OutboundItem {
 
     pub fn resume_fragment(
         stanza: String,
-        capacity: std::sync::Arc<Vec<northstar_session_application::sm_capacity::SmCapacityLease>>,
+        capacity: std::sync::Arc<Vec<crate::sm_capacity::SmCapacityLease>>,
     ) -> Self {
         Self {
             stanza,
@@ -393,7 +392,7 @@ impl OutboundSender {
     /// `Ok(false)` means the routing fence changed and the item was not queued;
     /// the caller still owns its durable database projection and must release
     /// or retry that projection. A transport closure remains an error.
-    pub(crate) async fn send_durable_if_current<F>(
+    pub async fn send_durable_if_current<F>(
         &self,
         stanza: String,
         delivery: DurableDelivery,

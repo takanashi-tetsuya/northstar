@@ -268,7 +268,7 @@ fn dedup_edges(graph: &mut Graph) {
 fn check_boundaries(graph: &Graph, _root: &Path, errors: &mut Vec<String>) {
     let forbidden_for_core = ["tokio", "sqlx", "axum", "hyper", "reqwest", "redis"];
     for (from, to) in &graph.edges {
-        let project_crate = from.starts_with("northstar-") || from.starts_with("foundation-");
+        let project_crate = from.starts_with("northstar-");
         if project_crate
             && from.ends_with("-core")
             && forbidden_for_core

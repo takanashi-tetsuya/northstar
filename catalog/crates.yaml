@@ -18,46 +18,6 @@ crates:
     api_stability: internal
     publish_policy: never
 
-  - crate_id: foundation-db-test
-    package: foundation-db-test
-    path: crates/platform/foundation-db-test
-    tier: platform
-    owner_team: platform
-    api_stability: internal
-    publish_policy: never
-
-  - crate_id: foundation-eventing
-    package: foundation-eventing
-    path: crates/platform/foundation-eventing
-    tier: platform
-    owner_team: platform
-    api_stability: internal
-    publish_policy: never
-
-  - crate_id: foundation-eventing-postgres
-    package: foundation-eventing-postgres
-    path: crates/platform/foundation-eventing-postgres
-    tier: platform
-    owner_team: platform
-    api_stability: internal
-    publish_policy: never
-
-  - crate_id: foundation-kms
-    package: foundation-kms
-    path: crates/platform/foundation-kms
-    tier: platform
-    owner_team: platform
-    api_stability: internal
-    publish_policy: never
-
-  - crate_id: foundation-postgres
-    package: foundation-postgres
-    path: crates/platform/foundation-postgres
-    tier: platform
-    owner_team: platform
-    api_stability: internal
-    publish_policy: never
-
   - crate_id: kafka-policy-generator
     package: kafka-policy-generator
     path: tools/kafka-policy-generator

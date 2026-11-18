@@ -838,56 +838,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "foundation-db-test"
-version = "0.1.0"
-dependencies = [
- "serde",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "foundation-eventing"
-version = "0.1.0"
-dependencies = [
- "northstar-time",
- "serde",
- "thiserror 2.0.20",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "foundation-eventing-postgres"
-version = "0.1.0"
-dependencies = [
- "foundation-eventing",
- "northstar-time",
- "sqlx",
- "thiserror 2.0.20",
- "uuid",
-]
-
-[[package]]
-name = "foundation-kms"
-version = "0.1.0"
-dependencies = [
- "northstar-time",
- "ring",
- "thiserror 2.0.20",
- "zeroize",
-]
-
-[[package]]
-name = "foundation-postgres"
-version = "0.1.0"
-dependencies = [
- "serde",
- "sqlx",
- "thiserror 2.0.20",
- "tokio",
-]
-
-[[package]]
 name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

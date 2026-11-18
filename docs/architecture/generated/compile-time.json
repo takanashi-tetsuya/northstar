@@ -81,11 +81,6 @@
     "foreign-types",
     "foreign-types-shared",
     "form_urlencoded",
-    "foundation-db-test",
-    "foundation-eventing",
-    "foundation-eventing-postgres",
-    "foundation-kms",
-    "foundation-postgres",
     "fs_extra",
     "futures",
     "futures-channel",
@@ -1119,78 +1114,6 @@
     [
       "form_urlencoded",
       "percent-encoding"
-    ],
-    [
-      "foundation-db-test",
-      "serde"
-    ],
-    [
-      "foundation-db-test",
-      "thiserror"
-    ],
-    [
-      "foundation-eventing",
-      "northstar-time"
-    ],
-    [
-      "foundation-eventing",
-      "serde"
-    ],
-    [
-      "foundation-eventing",
-      "thiserror"
-    ],
-    [
-      "foundation-eventing",
-      "tokio"
-    ],
-    [
-      "foundation-eventing",
-      "uuid"
-    ],
-    [
-      "foundation-eventing-postgres",
-      "foundation-eventing"
-    ],
-    [
-      "foundation-eventing-postgres",
-      "northstar-time"
-    ],
-    [
-      "foundation-eventing-postgres",
-      "sqlx"
-    ],
-    [
-      "foundation-eventing-postgres",
-      "thiserror"
-    ],
-    [
-      "foundation-eventing-postgres",
-      "uuid"
-    ],
-    [
-      "foundation-kms",
-      "northstar-time"
-    ],
-    [
-      "foundation-kms",
-      "thiserror"
-    ],
-    [
-      "foundation-postgres",
-      "serde"
-    ],
-    [
-      "foundation-postgres",
-      "sqlx"
-    ],
-    [
-      "foundation-postgres",
-      "thiserror"
-    ],
-    [
-      "foundation-postgres",
-      "tokio"
     ],
     [
       "futures",

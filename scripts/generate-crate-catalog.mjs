@@ -38,12 +38,10 @@ function tierOf(relativePath) {
   throw new Error(`${relativePath}: crate is outside the tier directories`);
 }
 function owner(name) {
-  if (name.startsWith('foundation-')) return 'platform';
   if (name.includes('message') || name.includes('archive') || name.includes('delivery')) return 'messaging';
   if (name.includes('room') || name.includes('pubsub') || name.includes('xep-0045') || name.includes('xep-0060')) return 'realtime';
   if (name.includes('auth') || name.includes('identity') || name.includes('session')) return 'identity-session';
   if (name.includes('upload')) return 'storage';
-  if (name.startsWith('service-')) return 'service-operations';
   return 'platform';
 }
 function stability(tier, role) {

@@ -94,9 +94,6 @@ members = [
     "crates/edges/northstar-stream",
     "tools/northstar-test-harness",
     "tools/northstar-db-it",
-    "tools/db-bootstrap",
-    "tools/restore-verifier",
-    "tools/kafka-policy-generator",
     "tools/architecture-validator",
 ]
 default-members = ["."]

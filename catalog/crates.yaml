@@ -10,22 +10,6 @@ crates:
     api_stability: internal
     publish_policy: never
 
-  - crate_id: db-bootstrap
-    package: db-bootstrap
-    path: tools/db-bootstrap
-    tier: tooling
-    owner_team: platform
-    api_stability: internal
-    publish_policy: never
-
-  - crate_id: kafka-policy-generator
-    package: kafka-policy-generator
-    path: tools/kafka-policy-generator
-    tier: tooling
-    owner_team: platform
-    api_stability: internal
-    publish_policy: never
-
   - crate_id: northstar-abuse-application
     package: northstar-abuse-application
     path: crates/contexts/abuse/northstar-abuse-application
@@ -872,12 +856,4 @@ crates:
     tier: kernel
     owner_team: platform
     api_stability: internal-stable
-    publish_policy: never
-
-  - crate_id: restore-verifier
-    package: restore-verifier
-    path: tools/restore-verifier
-    tier: tooling
-    owner_team: platform
-    api_stability: internal
     publish_policy: never

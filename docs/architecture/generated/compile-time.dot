@@ -56,7 +56,6 @@ digraph compile_time {
   "ctutils";
   "dashmap";
   "data-encoding";
-  "db-bootstrap";
   "der-parser";
   "deranged";
   "digest";
@@ -137,7 +136,6 @@ digraph compile_time {
   "jni-sys-macros";
   "jobserver";
   "js-sys";
-  "kafka-policy-generator";
   "lazy_static";
   "libc";
   "libsqlite3-sys";
@@ -302,7 +300,6 @@ digraph compile_time {
   "regex-syntax";
   "reqwest";
   "resolv-conf";
-  "restore-verifier";
   "ring";
   "roxmltree";
   "rustc-hash";
@@ -586,9 +583,6 @@ digraph compile_time {
   "dashmap" -> "lock_api";
   "dashmap" -> "once_cell";
   "dashmap" -> "parking_lot_core";
-  "db-bootstrap" -> "serde";
-  "db-bootstrap" -> "serde-saphyr";
-  "db-bootstrap" -> "thiserror";
   "der-parser" -> "asn1-rs";
   "der-parser" -> "displaydoc";
   "der-parser" -> "nom";
@@ -854,10 +848,6 @@ digraph compile_time {
   "js-sys" -> "cfg-if";
   "js-sys" -> "futures-util";
   "js-sys" -> "wasm-bindgen";
-  "kafka-policy-generator" -> "serde";
-  "kafka-policy-generator" -> "serde-saphyr";
-  "kafka-policy-generator" -> "serde_json";
-  "kafka-policy-generator" -> "thiserror";
   "libsqlite3-sys" -> "pkg-config";
   "libsqlite3-sys" -> "vcpkg";
   "lock_api" -> "scopeguard";
@@ -2393,9 +2383,6 @@ digraph compile_time {
   "reqwest" -> "wasm-bindgen-futures";
   "reqwest" -> "wasm-streams";
   "reqwest" -> "web-sys";
-  "restore-verifier" -> "serde";
-  "restore-verifier" -> "serde-saphyr";
-  "restore-verifier" -> "thiserror";
   "ring" -> "cc";
   "ring" -> "cfg-if";
   "ring" -> "getrandom";

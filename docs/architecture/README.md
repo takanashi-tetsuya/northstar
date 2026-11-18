@@ -6,13 +6,9 @@ lookup and the structural work-package ledger) is governed by the
 
 The [target architecture](target-architecture.zh-TW.md) defines the workspace
 structure that the restructure from S16 on moves toward. The current structure
-is described by two machine-readable catalogs:
-
-- `catalog/crates.yaml` — every workspace crate with its tier (from its
-  directory), owner and stability, generated from Cargo metadata; the
-  [crate policy](crate-policy.md) lists the dependencies each tier may have.
-- `catalog/data-ownership.yaml` — exclusive logical database and table
-  ownership, privacy, retention and recovery metadata.
+is described by `catalog/crates.yaml`: every workspace crate with its tier
+(from its directory), owner and stability, generated from Cargo metadata. The
+[crate policy](crate-policy.md) lists the dependencies each tier may have.
 
 Run the checks from the repository root:
 
@@ -21,11 +17,10 @@ node scripts/generate-crate-catalog.mjs
 cargo run --locked -p architecture-validator -- validate --write
 ```
 
-The second command regenerates `docs/architecture/generated/` in DOT, Mermaid
-and JSON formats. These artifacts are committed and CI rejects drift. The
-compile-time graph is derived from Cargo metadata and the data-access graph
-from the ownership catalog. A graph is evidence of a boundary; it is not a
-substitute for an integration test.
+The second command regenerates the compile-time crate graph in
+`docs/architecture/generated/` in DOT, Mermaid and JSON formats, derived from
+Cargo metadata. These artifacts are committed and CI rejects drift. A graph is
+evidence of a boundary; it is not a substitute for an integration test.
 
 For the supported runtime's diagnostic ownership and reproducible experiments,
 start with [Runtime experiment map](runtime-experiments.md) and the separate

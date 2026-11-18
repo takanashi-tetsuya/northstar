@@ -3,7 +3,7 @@ name = "architecture-validator"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-only"
-description = "Generate and validate Northstar compile-time, runtime, and data-access dependency graphs"
+description = "Generate and validate the Northstar compile-time crate dependency graph"
 publish = false
 
 [dependencies]

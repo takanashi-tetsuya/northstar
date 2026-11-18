@@ -58,7 +58,6 @@
     "ctutils",
     "dashmap",
     "data-encoding",
-    "db-bootstrap",
     "der-parser",
     "deranged",
     "digest",
@@ -139,7 +138,6 @@
     "jni-sys-macros",
     "jobserver",
     "js-sys",
-    "kafka-policy-generator",
     "lazy_static",
     "libc",
     "libsqlite3-sys",
@@ -304,7 +302,6 @@
     "regex-syntax",
     "reqwest",
     "resolv-conf",
-    "restore-verifier",
     "ring",
     "roxmltree",
     "rustc-hash",
@@ -982,18 +979,6 @@
     [
       "dashmap",
       "parking_lot_core"
-    ],
-    [
-      "db-bootstrap",
-      "serde"
-    ],
-    [
-      "db-bootstrap",
-      "serde-saphyr"
-    ],
-    [
-      "db-bootstrap",
-      "thiserror"
     ],
     [
       "der-parser",
@@ -2054,22 +2039,6 @@
     [
       "js-sys",
       "wasm-bindgen"
-    ],
-    [
-      "kafka-policy-generator",
-      "serde"
-    ],
-    [
-      "kafka-policy-generator",
-      "serde-saphyr"
-    ],
-    [
-      "kafka-policy-generator",
-      "serde_json"
-    ],
-    [
-      "kafka-policy-generator",
-      "thiserror"
     ],
     [
       "libsqlite3-sys",
@@ -8210,18 +8179,6 @@
     [
       "reqwest",
       "web-sys"
-    ],
-    [
-      "restore-verifier",
-      "serde"
-    ],
-    [
-      "restore-verifier",
-      "serde-saphyr"
-    ],
-    [
-      "restore-verifier",
-      "thiserror"
     ],
     [
       "ring",

@@ -180,19 +180,6 @@ jobs:
           grep -F 'license = "AGPL-3.0-only"' Cargo.toml
           grep -F 'GNU AFFERO GENERAL PUBLIC LICENSE' LICENSE
 
-      - name: Validate database bootstrap and recovery policy
-        run: |
-          cargo run --locked -p restore-verifier -- --catalog catalog/restore-order.yaml
-          cargo run --locked -p db-bootstrap -- \
-            --catalog catalog/data-ownership.yaml \
-            --output "$RUNNER_TEMP/northstar-role-bootstrap.sql"
-
-      - name: Validate Kafka topic and ACL policy
-        run: |
-          cargo run --locked -p kafka-policy-generator -- \
-            --catalog catalog/topics.yaml \
-            --output "$RUNNER_TEMP/northstar-kafka-policy.json"
-
       - name: Validate architecture boundaries and generated graphs
         run: |
           node scripts/generate-crate-catalog.mjs

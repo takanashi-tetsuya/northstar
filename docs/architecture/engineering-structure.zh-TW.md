@@ -141,6 +141,7 @@ WP-495 後，operation runtime 的現行位置為
 | S37 時間型別遷移 | WP-597–603 | 新的 kernel crate `northstar-time` 以 chrono 0.4.45 的名稱與語義提供工作區用到的子集，曆法換算交給 `time`，serde 與 SQLx 的 PostgreSQL 編解碼在 feature 之後（WP-597）；以真實 PostgreSQL 跨程式庫比對 SQLx 編解碼（WP-598，`northstar-db-it`）；55 個 manifest 與 202 個檔案由 chrono 換為 `northstar-time`（WP-599）；凍結兩份證明、移除 chrono，crate 圖拒絕直接依賴 chrono（WP-600）；記錄階段（WP-601）；第三方聲明列出移植自 chrono 與 SQLx 的程式碼（WP-602）；修正 soak 測試讀 `/proc` 的競態（WP-603）。盤點見 5.33 | 測試名稱不變，新增 14 個測試（1 個是 ignored 資料庫測試，資料庫套件由 40 個增為 41 個）；26,000 個 chrono 固定案例與 435 筆 PostgreSQL 結果凍結重播；全部門禁、Python 腳本測試、資料庫套件與離線 CI 通過。object_store 仍帶入 chrono 與 humantime，RUSTSEC-2026-0543、0542 的例外保留 |
 | S38 會話核心收窄 | WP-604–607 | 每個會話的出站佇列（`OutboundSender`、`OutboundItem`）由 `northstar-stream` 移入 `northstar-session-application`，stream 以原路徑轉出，`northstar-session-postgres` 不再依賴 edge（WP-604）；SASL2 與 IBR 的線路格式由 `northstar-auth-xmpp` 移入 `northstar_stream::wire`（WP-605）；crate 圖只允許 `-xmpp` 介面卡依賴 `northstar-stream`，並刪除 stream 依賴 `auth-xmpp` 的例外（WP-606）；記錄階段（WP-607）。盤點見 5.34 | 23 個單元測試隨模組搬移、名稱不變，驗證器的例外測試改寫為規則測試並新增 1 個；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S39 依賴圖衛生 | WP-608–611 | 刪除 S16 為 `services/*` 原型保留、之後再無使用者的 5 個 `foundation-*` crate，crate 圖驗證器與 catalog 產生器移除 `foundation-`、`service-` 前綴規則（WP-608）；遷移政策、金鑰管理與資料庫不變式 3 份文件依現行程式碼改寫（WP-609）；移除 12 個 manifest 中 16 個沒有原始碼使用的依賴、`northstar-xep-0357` 的空 `serde` feature 與執行過的 `strip_serde.ps1`，以及 `northstar-auth-core` 下被 cargo 忽略的舊 `Cargo.lock`（WP-610）；記錄階段（WP-611）。盤點見 5.35 | 刪除的 12 個單元測試只測被刪的 crate，其餘測試名稱不變；Cargo.lock 由 493 個套件減為 488 個；全部門禁、Python 腳本測試與離線 CI 通過 |
+| S40 微服務時代殘留清除 | WP-612–614 | 刪除 S16 保留的 `db-bootstrap`、`restore-verifier`、`kafka-policy-generator` 與它們讀取的 `data-ownership.yaml`、`restore-order.yaml`、`topics.yaml`，移除兩個丟棄產出的 CI 步驟；架構驗證器只產生編譯期 crate 圖，刪除 data-access 圖與重複的 `graphs.json`（WP-612）；刪除沒有讀取者的 `key-classes.yaml`、`rpc-authorization.yaml`、`deploy/spire`、`deploy/otel-collector` 與描述微服務設計的 3 份文件（WP-613）；記錄階段（WP-614）。盤點見 5.36 | 刪除的 4 個單元測試只測被刪的工具，其餘測試名稱不變；Cargo.lock 由 488 個套件減為 485 個；全部門禁、Python 腳本測試與離線 CI 通過 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -1605,6 +1606,36 @@ S39 刪除 crates 與 tools 下 2,310 行（5 個 crate 1,443 行、舊 lock 840
 只少 1 行 manifest。workspace 測試由 3,478 個減為 3,466 個（ignored 296 個不變），減少的 12 個都屬於被刪的 crate。
 Cargo.lock 由 493 個套件減為 488 個。
 
+### 5.36 S40 盤點：微服務時代殘留清除（`5b1cd3e2`）
+
+S39 的盤點（5.35）列出 S16「保留」列中仍描述微服務設計的項目。S40 逐項確認讀取者：伺服器只有一個 PostgreSQL 資料庫，
+角色見 `docs/DATABASE_ROLES.md`；沒有 Kafka、SPIRE 或 OTLP 用戶端。`db-bootstrap` 依 `data-ownership.yaml` 為每個服務的
+邏輯資料庫產生五角色 SQL，`restore-verifier` 檢查這些資料庫的還原順序，`kafka-policy-generator` 依 `topics.yaml` 產生 Kafka
+ACL；CI 執行這三個工具，但產出寫到暫存目錄後丟棄。架構驗證器讀 `data-ownership.yaml` 只為畫出服務、部署單元與資料庫之間的
+data-access 圖，沒有任何檢查或文件使用這張圖。`key-classes.yaml`、`rpc-authorization.yaml`、`deploy/spire`、
+`deploy/otel-collector` 與 `docs/database/role-model.md`、`backup-restore.md`、`docs/eventing/partitioning.md` 沒有任何讀取者
+或連結。
+
+| WP | 內容 |
+| --- | --- |
+| WP-612 | 刪除 3 個工具（647 行，含 4 個單元測試）、它們讀取的 3 份 catalog 與兩個 CI 步驟；architecture-validator 刪除 ownership catalog 的讀取與 data-access 圖，只寫編譯期圖的 DOT、Mermaid、JSON，刪除只是兩張圖合併副本的 `graphs.json`；`docs/architecture/README.md` 跟進。Cargo.lock 由 488 個套件減為 485 個 |
+| WP-613 | 刪除 `key-classes.yaml`、`rpc-authorization.yaml`、`deploy/spire`、`deploy/otel-collector` 與 3 份描述微服務設計的文件；現行設計分別在 `docs/security/key-management.md`（WP-609）、`docs/DATABASE_ROLES.md`、`docs/BACKUP_SECURITY.md`。目標架構 4.2 的資料表歸屬不再以 `data-ownership.yaml` 為起點 |
+| WP-614 | 記錄階段 |
+
+與計劃的差異：S40 沒有預先列在目標架構第 5 節，它接續 S39 的盤點。ADR 0002–0007 已在 S16 標為 superseded，作為決策紀錄
+保留；凍結的 Stage 4 工具中的路徑清單是歷史快照，不改。
+
+新決定：
+
+- `catalog/` 中的每份目錄都要有讀取它的工具或檢查；只被文件引用、沒有程式碼對應的目錄刪除（WP-612、WP-613）。
+- CI 步驟必須判定結果；只產生輸出再丟棄、驗證的對象又沒有執行期對應的步驟刪除（WP-612）。
+- 提交的產生物要有消費者；架構驗證器只產生編譯期 crate 圖（WP-612）。
+
+S40 刪除 14,443 行、新增 23 行，其中 11,160 行是產生的圖、2,320 行是 catalog、647 行是 3 個工具，其餘是文件、驗證器
+（新增 13 行、刪除 74 行）、CI 與 manifest。workspace 測試由 3,466 個減為 3,462 個（ignored 296 個不變），減少的 4 個都屬於
+被刪的工具。`catalog/` 剩下 `crates.yaml`、`runtime-experiments.json`（含 schema）、`source-role-splits.json`、
+`source-structure-baseline.json`，都有檢查讀取。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點），S31 的 WP-483 起 agy 額度用盡，再改由 Codex CLI 執行（第 10 點）。
@@ -2410,3 +2441,6 @@ Stage 證據仍綁定其原提交。
 | WP-609 | 完成：遷移政策、金鑰管理與資料庫不變式文件依現行程式碼改寫 | 見 `git log --grep '\[WP-609\]'` |
 | WP-610 | 完成：移除 16 個沒有原始碼使用的依賴、`northstar-xep-0357` 的空 `serde` feature、`strip_serde.ps1` 與 `northstar-auth-core/Cargo.lock` | 見 `git log --grep '\[WP-610\]'` |
 | WP-611 | 完成：記錄 S39 的階段與盤點（5.35）、目標架構 4.7 與第 5 節。WP-608–610 接成一條鏈驗證：fmt、clippy、workspace 測試、受影響 crate 的單獨建置、全部門禁與 Python 腳本測試、離線 CI | 見 `git log --grep '\[WP-611\]'` |
+| WP-612 | 完成：刪除 `db-bootstrap`、`restore-verifier`、`kafka-policy-generator`、它們的 catalog 與 CI 步驟；驗證器只產生編譯期 crate 圖 | 見 `git log --grep '\[WP-612\]'` |
+| WP-613 | 完成：刪除沒有讀取者的 `key-classes.yaml`、`rpc-authorization.yaml`、`deploy/spire`、`deploy/otel-collector` 與 3 份微服務設計文件 | 見 `git log --grep '\[WP-613\]'` |
+| WP-614 | 完成：記錄 S40 的階段與盤點（5.36）、目標架構 4.7 與第 5 節。WP-612–613 接成一條鏈驗證：fmt、clippy、workspace 測試、受影響 crate 的單獨建置、全部門禁與 Python 腳本測試、離線 CI | 見 `git log --grep '\[WP-614\]'` |

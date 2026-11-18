@@ -209,6 +209,9 @@ S34 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.30）：`Server
   edge 不再依賴任何介面卡（刪除 stream 依賴 `northstar-auth-xmpp` 的例外）。
 - S39 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.35）：platform 只有 6 個 `northstar-*` crate，S16 保留的
   `foundation-*` 全部刪除；驗證器只把 `northstar-` 開頭的套件視為專案 crate。manifest 只宣告原始碼使用的依賴。
+- S40 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.36）：`tools/` 只剩架構驗證器、測試支援
+  （`northstar-test-harness`）與資料庫整合測試（`northstar-db-it`）；`catalog/` 的每份目錄都由工具或檢查讀取，
+  架構驗證器只產生編譯期 crate 圖。
 
 ## 5. 遷移順序
 
@@ -233,6 +236,7 @@ S34 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.30）：`Server
 | S37 時間型別遷移 | 工作區的時間戳由 chrono 改為新的 kernel crate `northstar-time`：以 chrono 0.4.45 的名稱與語義提供工作區用到的子集，曆法換算交給已在 Cargo.lock 中的 `time`，serde 與 SQLx 的 PostgreSQL 編解碼在 feature 之後；資料庫欄位、wire 格式與 JSON 表示不變 | 工作區 crate 不再直接依賴 chrono；測試名稱不變；全部門禁與完整 CI 通過。已完成（WP-597–601，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.33）：原計劃把 `DateTime<Utc>` 改為 `OffsetDateTime`，但兩者的文字、範圍、閏秒與溢位行為不同，改以相容 crate 做路徑替換；行為以 26,000 個 chrono 固定案例與 435 筆 PostgreSQL 結果凍結重播證明，crate 圖拒絕直接依賴 chrono。object_store 仍帶入 chrono 與 humantime，RUSTSEC-2026-0543、0542 的例外保留到上游移除 |
 | S38 會話核心收窄 | S37 後的量測：crate 圖比 4.1 寬的兩處。每個會話的出站佇列移入 session 上下文，`northstar-session-postgres` 不再依賴 edge；SASL2 與 IBR 的線路格式移入 `northstar-stream`；crate 圖只允許 `-xmpp` 介面卡依賴 `northstar-stream` | crate 圖與 4.1 一致，edge 不依賴介面卡；測試名稱不變；全部門禁與完整 CI 通過。已完成（WP-604–607，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.34） |
 | S39 依賴圖衛生 | S38 後的量測：刪除 S16 保留、已無使用者的 5 個 `foundation-*` crate，把仍描述它們的遷移政策、金鑰管理與資料庫不變式文件改寫為現行設計，移除 16 個沒有原始碼使用的依賴與兩個一次性產物 | workspace 沒有孤立 crate，現行文件不引用不存在的 crate；測試名稱不變（刪除的測試只屬於被刪的 crate）；全部門禁與完整 CI 通過。已完成（WP-608–611，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.35） |
+| S40 微服務時代殘留清除 | S39 盤點列出的 S16 保留項目：刪除描述每服務一個資料庫、Kafka 主題、SPIFFE 身分與 OTLP 匯出的工具、catalog、部署說明與文件，以及架構驗證器的 data-access 圖 | 每份 catalog 都有讀取者，每個 CI 步驟都判定結果；測試名稱不變（刪除的測試只屬於被刪的工具）；全部門禁與完整 CI 通過。已完成（WP-612–614，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.36） |
 
 與其他計劃的關係：模組化執行計劃的 C1（PubSub）與 C2（MAM）是語義上的重構，在對應上下文搬進新 crate 後於新
 結構中進行；D1 由 S18 與 S30 吸收；R1–R3 不受影響。

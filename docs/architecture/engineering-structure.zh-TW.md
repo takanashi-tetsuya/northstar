@@ -138,7 +138,7 @@ WP-495 後，operation runtime 的現行位置為
 | S34 組合根狀態 | WP-540–555 | 依狀態審計（F1–F23）把 `ServerNode` 的即時狀態與組合根中剩下的流程移入擁有者：會話表、caps 索引、連線准入、連線 actor 與 BOSH 管理器移入 SessionModule（WP-540），程序生命週期狀態移入 RuntimeModule（WP-541），HTTP 探索與閘道憑證移入 HttpModule（WP-542）；維護設定移入 `northstar-config`（WP-543），聯邦 DNS 解析器的建構移入 `northstar-security`（WP-544）；推播守衛與 PubSub 位址後備移入上下文（WP-545）；叢集的發佈靜止後釋放與 MUC 探索順序移入擁有者（WP-546）；MIX 出席恢復、IQ 轉送路由與遠端節點排序移入 `northstar-mix-xmpp`（WP-547）；caps 快照與隱私查詢移入 protocol-runtime 與 stream（WP-548）；維護程序的所有權監控移入 operations 應用層（WP-549），核心程序的關機監督移入 `northstar-runtime`（WP-550）；上傳儲存的啟動與准入移入 upload-storage 與 HTTP（WP-551）；叢集啟動權威序列移入 `ClusterManager`（WP-552），持久稽核與重啟恢復移入 operations 應用層（WP-553）；passkey 與邀請制判斷移入 config（WP-554）；記錄階段（WP-555）。盤點見 5.30 | 測試名稱依路徑對應後不變，擁有 crate 新增 65 個測試；全部門禁、Python 腳本測試與離線 CI 通過。`ServerNode` 只持有設定、平台控制代碼、13 個上下文模組與 `ClusterManager`。未做：ClusterModule（決定不做，見 5.30）；門禁改寫為測試改為 S35 |
 | S35 門禁改寫為測試 | WP-556–580 | 依 S34 的門禁審計為擁有者補上行為測試（WP-556–573）：abuse 政策與准入（WP-556）、auth 服務與憑證收據（WP-557）、config、啟動與 OMEMO 指標（WP-558）、operations 與 PubSub 清理（WP-559）、會話發佈與 SM 所有權（WP-560）、caps 閘道等待者與飽和佇列（WP-561）、訊息准入與直接流程（WP-562）、message-xmpp 准入與聯邦路由（WP-563）、HTTP 健康、上傳、OMEMO 與 CSP（WP-564）、delivery-core 提交與 MIX outbox（WP-565）、BOSH 所有權與回應快取（WP-566）、C2S 原生寫入與會話入口（WP-567）、叢集 MUC 投遞、權威與名冊（WP-568）、MIX outbox worker 通道與已認領效果（WP-569）、MUC 討論信封與訊息階段（WP-570）、MIX 與 MUC 討論服務（WP-571）、`northstar-stream` 的 SM、重播、caps 與 inline 恢復（WP-572）、PostgreSQL 介面卡一致性（WP-573，31 個 ignored 測試與新的資料庫 CI 套件）；再依案例帳本刪除被涵蓋的檢查：架構門禁（WP-574）、執行門禁（WP-575）、abuse 與准入門禁（WP-576）、subserver、會話生命週期、聯邦路由、OMEMO 與 CSP 門禁（WP-577）。關機事件的日誌 target 恢復為 `northstar_server`（WP-578），架構門禁的 worker 清單略過測試目錄（WP-579）；記錄階段（WP-580）。盤點見 5.31 | 測試名稱依路徑對應後不變，擁有 crate 新增 154 個測試（31 個是 `northstar-db-it` 的 ignored 測試，由新的資料庫 CI 套件執行）；全部門禁、Python 腳本測試與離線 CI 通過。未完成：43 個 KEEP 案例與含它們的 4 個執行門禁完整驗證器留給 S36 |
 | S36 門禁改寫收尾 | WP-581–595 | 寫出 S35 的 KEEP 案例：frame 與 runtime control 啟動預算的數值（WP-585）、帳號刪除恢復的分派（WP-582，`northstar-auth-xmpp`）、測試以明確變數表建構生產設定的 `Config::from_variables`（WP-587）、傳輸 ACK、SM 與 BOSH 收據的資料庫測試（WP-581，`northstar-db-it` 加上 `northstar-delivery-core`）、runtime control 的保留連線（WP-588，加上 `northstar-config`）、BOSH actor 的轉交與回應路徑（WP-583，新的測試 host）與入口、發佈、啟用與退出（WP-584）、訊息 burst 的驗證範圍（WP-594）；WP-581 的測試發現 MIX 傳輸圍欄在最大 TTL 時到期時間超過 TTL，兩個 INSERT 改為只讀一次時鐘（WP-589）；chrono 與 humantime 的 unmaintained 公告列為例外（WP-586）；再依案例帳本刪除被涵蓋的檢查：abuse 門禁（WP-592）、架構門禁（WP-591）、執行門禁的 4 個完整驗證器與 5 個謂詞（WP-590）、BOSH actor 的執行與會話生命週期檢查（WP-593）；記錄階段（WP-595）。盤點見 5.32 | 測試名稱依路徑對應後不變，擁有 crate 新增 33 個測試（9 個是 ignored 資料庫測試，資料庫套件由 31 個增為 40 個）；全部門禁、Python 腳本測試、資料庫套件與離線 CI 通過。43 個 KEEP 中 37 個有測試；其餘 6 個需要生產 hook，留在門禁，見 5.32 |
-| S37 時間型別遷移 | WP-597–601 | 新的 kernel crate `northstar-time` 以 chrono 0.4.45 的名稱與語義提供工作區用到的子集，曆法換算交給 `time`，serde 與 SQLx 的 PostgreSQL 編解碼在 feature 之後（WP-597）；以真實 PostgreSQL 跨程式庫比對 SQLx 編解碼（WP-598，`northstar-db-it`）；55 個 manifest 與 202 個檔案由 chrono 換為 `northstar-time`（WP-599）；凍結兩份證明、移除 chrono，crate 圖拒絕直接依賴 chrono（WP-600）；記錄階段（WP-601）。盤點見 5.33 | 測試名稱不變，新增 14 個測試（1 個是 ignored 資料庫測試，資料庫套件由 40 個增為 41 個）；26,000 個 chrono 固定案例與 435 筆 PostgreSQL 結果凍結重播；全部門禁、Python 腳本測試、資料庫套件與離線 CI 通過。object_store 仍帶入 chrono 與 humantime，RUSTSEC-2026-0543、0542 的例外保留 |
+| S37 時間型別遷移 | WP-597–602 | 新的 kernel crate `northstar-time` 以 chrono 0.4.45 的名稱與語義提供工作區用到的子集，曆法換算交給 `time`，serde 與 SQLx 的 PostgreSQL 編解碼在 feature 之後（WP-597）；以真實 PostgreSQL 跨程式庫比對 SQLx 編解碼（WP-598，`northstar-db-it`）；55 個 manifest 與 202 個檔案由 chrono 換為 `northstar-time`（WP-599）；凍結兩份證明、移除 chrono，crate 圖拒絕直接依賴 chrono（WP-600）；記錄階段（WP-601）；第三方聲明列出移植自 chrono 與 SQLx 的程式碼（WP-602）。盤點見 5.33 | 測試名稱不變，新增 14 個測試（1 個是 ignored 資料庫測試，資料庫套件由 40 個增為 41 個）；26,000 個 chrono 固定案例與 435 筆 PostgreSQL 結果凍結重播；全部門禁、Python 腳本測試、資料庫套件與離線 CI 通過。object_store 仍帶入 chrono 與 humantime，RUSTSEC-2026-0543、0542 的例外保留 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -1511,6 +1511,7 @@ kernel crate `northstar-time`：以 chrono 0.4.45 的名稱與語義提供工作
 | WP-599 | 55 個 manifest 的 chrono 改為 `northstar-time` 的路徑依賴（chrono 開 serde 的加 `serde`，同表 SQLx 開 `chrono` 的加 `postgres`），SQLx 不再啟用 `chrono`，202 個檔案中 681 處 `chrono::` 改為 `northstar_time::`，其餘原始碼不變，workspace 無警告編譯。Cargo.lock 只有 51 條 workspace 邊改變；fuzz 的 lock 跟進，版本對齊主 lock。XEP 插件門禁允許 `northstar-time` 作為無能力的共享 crate（`northstar-xep-0215` 以它解析 RFC 3339）；以 chrono 命名的兩個輔助函式改名 |
 | WP-600 | 凍結：刪除 chrono oracle（差分測試、語料產生器、`time_codec` 的 chrono 一半），兩份 fixture 改為純重播，不能再生成。crate 圖拒絕 workspace crate 以任何方式（含 dev 依賴）依賴 chrono。`cargo tree -i chrono` 只剩 object_store，RUSTSEC-2026-0543、0542 的例外保留，`deny.toml` 與 `.cargo/audit.toml` 的說明改寫 |
 | WP-601 | 記錄階段 |
+| WP-602 | `THIRD_PARTY_NOTICES.md` 列出 `northstar-time` 移植自 chrono 0.4.45、SQLx 0.9.0 的程式碼（MIT OR Apache-2.0）；兩份授權檔隨主映像（`/usr/share/licenses/northstar/` 下同路徑）與發佈包出貨 |
 
 與計劃的差異：
 
@@ -1526,6 +1527,8 @@ kernel crate `northstar-time`：以 chrono 0.4.45 的名稱與語義提供工作
   `northstar-time` 尚未支援的功能（例如新的 strftime 項目）時，擴充 `northstar-time` 並寫測試，不重新引入 chrono。
 - 移除第三方程式庫以凍結的 oracle 結果證明：先讓相容實作與舊程式庫在同一份評估程式上差分比對，再把舊程式庫的結果寫成
   fixture，移除後持續重播。
+- 移植進 workspace crate 的第三方程式碼保留原授權檔於該 crate，並列入 `THIRD_PARTY_NOTICES.md`；授權檔隨主映像與發佈包
+  出貨（WP-602）。
 
 S37 改動根 crate 9 個檔案（新增 23 行、刪除 20 行，只有路徑）。crates 與 tools 的替換涉及 249 個檔案（新增 728 行、刪除
 637 行）；新增的程式碼是 `northstar-time`（原始碼 3,449 行、測試 1,077 行）、`time_codec`（549 行）與 architecture-validator
@@ -2327,3 +2330,4 @@ Stage 證據仍綁定其原提交。
 | WP-599 | 完成：55 個 manifest 與 202 個檔案由 chrono 換為 `northstar-time`；XEP 插件門禁允許 `northstar-time` | 見 `git log --grep '\[WP-599\]'` |
 | WP-600 | 完成：凍結兩份證明並移除 chrono；crate 圖拒絕直接依賴 chrono；RustSec 例外的說明改寫 | 見 `git log --grep '\[WP-600\]'` |
 | WP-601 | 完成：記錄 S37 的階段與盤點（5.33）、目標架構 4.1、4.7 與第 5 節。WP-597–600 接成一條鏈，整條鏈驗證 fmt、clippy、workspace 測試、模糊測試、受影響 crate 的單獨建置、全部門禁與 Python 腳本測試，資料庫測試以本機 PostgreSQL 執行，離線 CI 在推送前通過 | 見 `git log --grep '\[WP-601\]'` |
+| WP-602 | 完成：第三方聲明列出 `northstar-time` 移植自 chrono 0.4.45 與 SQLx 0.9.0 的程式碼；`Dockerfile` 與 `scripts/release-package.py` 帶上兩份授權檔 | 見 `git log --grep '\[WP-602\]'` |

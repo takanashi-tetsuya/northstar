@@ -22,7 +22,9 @@ TARGETS = {'linux-amd64': 'xmpp-server', 'windows-amd64': 'xmpp-server.exe'}
 SINGLE_FILES = {'.env.example', '.env.development.example', 'README.md', 'README.zh-TW.md',
                 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/INSTALL.md',
                 'third_party/swagger-ui/LICENSE', 'third_party/swagger-ui/NOTICE',
-                'third_party/webauthn-rs/LICENSE', 'third_party/openssl/LICENSE'}
+                'third_party/webauthn-rs/LICENSE', 'third_party/openssl/LICENSE',
+                'crates/kernel/northstar-time/LICENSE-chrono.txt',
+                'crates/kernel/northstar-time/LICENSE-sqlx.txt'}
 DISTRIBUTION_READMES = {name: 'docs/distribution/' + name + '.in' for name in ('README.md', 'README.zh-TW.md')}
 PREFIXES = ('web/', 'third_party/swagger-ui/dist/')
 MANIFEST = 'PACKAGE-MANIFEST.json'

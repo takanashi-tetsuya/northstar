@@ -48,3 +48,14 @@ The WebAuthn verifier uses OpenSSL, statically linked through `openssl` 0.10.81
 and `openssl-src` 300.6.1. The [OpenSSL source](https://github.com/openssl/openssl/tree/openssl-3.6.3)
 and included [license](third_party/openssl/LICENSE) cover that library.
 XMPP TLS connections continue to use rustls.
+
+## chrono 0.4.45 and SQLx 0.9.0 — MIT OR Apache-2.0
+
+The `northstar-time` crate, compiled into the server, ports duration
+arithmetic, leap-second handling, timestamp conversion, formatting, parsing
+and serialization from [chrono 0.4.45](https://github.com/chronotope/chrono/tree/v0.4.45),
+and adapts its PostgreSQL codecs from [SQLx 0.9.0](https://github.com/launchbadge/sqlx/tree/v0.9.0).
+Both projects are licensed under MIT OR Apache-2.0. The included
+[chrono license](crates/kernel/northstar-time/LICENSE-chrono.txt) and
+[SQLx license](crates/kernel/northstar-time/LICENSE-sqlx.txt) retain their
+copyright notices.

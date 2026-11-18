@@ -40,6 +40,7 @@ COPY third_party/swagger-ui/LICENSE third_party/swagger-ui/NOTICE ./third_party/
 COPY --chmod=0444 LICENSE THIRD_PARTY_NOTICES.md /usr/share/licenses/northstar/
 COPY --chmod=0444 third_party/webauthn-rs/LICENSE /usr/share/licenses/northstar/third_party/webauthn-rs/LICENSE
 COPY --chmod=0444 third_party/openssl/LICENSE /usr/share/licenses/northstar/third_party/openssl/LICENSE
+COPY --chmod=0444 crates/kernel/northstar-time/LICENSE-chrono.txt crates/kernel/northstar-time/LICENSE-sqlx.txt /usr/share/licenses/northstar/crates/kernel/northstar-time/
 RUN chmod 0755 /usr/share/licenses /usr/share/licenses/northstar
 USER 10001:10001
 EXPOSE 5222 5223 5269 5270 8080

@@ -48,6 +48,9 @@ COPY --chown=10001:10001 --chmod=0444 \
     deploy/postgres-init/lib/ensure-northstar-restore-outcome-marker.sql \
     /opt/deploy/postgres-init/lib/
 COPY --chown=10001:10001 --chmod=0444 LICENSE THIRD_PARTY_NOTICES.md /usr/share/licenses/northstar/
+COPY --chmod=0444 third_party/webauthn-rs/LICENSE /usr/share/licenses/northstar/third_party/webauthn-rs/LICENSE
+COPY --chmod=0444 third_party/openssl/LICENSE /usr/share/licenses/northstar/third_party/openssl/LICENSE
+COPY --chmod=0444 crates/kernel/northstar-time/LICENSE-chrono.txt crates/kernel/northstar-time/LICENSE-sqlx.txt /usr/share/licenses/northstar/crates/kernel/northstar-time/
 RUN chmod 0755 /usr/share/licenses /usr/share/licenses/northstar
 
 USER 10001:10001

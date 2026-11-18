@@ -3010,9 +3010,9 @@ console.log(
 
 // The experiment index consumes the exact production inventory already checked
 // above, never a second handwritten list of runtime authorities.
-// SQLx 0.8 can return a connection to its pool inside the transaction of a
-// cancelled BEGIN. Every server and tool pool starts from the options that
-// close such a connection on release.
+// SQLx 0.9, like 0.8, can return a connection to its pool inside the
+// transaction of a cancelled BEGIN. Every server and tool pool starts from
+// the options that close such a connection on release.
 const poolOptionsSource = read('crates/platform/northstar-postgres/src/pool.rs');
 const unguardedPools = productionRustSources
   .filter(({ relative }) => /^(?:src\/|crates\/(?:contexts|edges)\/|crates\/platform\/northstar-)/.test(relative))

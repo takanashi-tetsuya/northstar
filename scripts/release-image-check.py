@@ -34,6 +34,13 @@ test "$(id -u):$(id -g)" = 10001:10001
 test -r /usr/share/licenses/northstar/LICENSE
 test -r /usr/share/licenses/northstar/THIRD_PARTY_NOTICES.md
 '''
+    if name in ('northstar', 'northstar-backup'):
+        # Both images ship the server binary, which links the code these licenses cover.
+        check += '''test -r /usr/share/licenses/northstar/third_party/webauthn-rs/LICENSE
+test -r /usr/share/licenses/northstar/third_party/openssl/LICENSE
+test -r /usr/share/licenses/northstar/crates/kernel/northstar-time/LICENSE-chrono.txt
+test -r /usr/share/licenses/northstar/crates/kernel/northstar-time/LICENSE-sqlx.txt
+'''
     if name == 'northstar':
         if item['Config'].get('Healthcheck', {}).get('Test') != [
                 'CMD', '/usr/local/bin/xmpp-server', '--healthcheck', '127.0.0.1:8080']:

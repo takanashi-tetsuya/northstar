@@ -68,6 +68,26 @@ class PackageTests(unittest.TestCase):
                 self.assertTrue((destination / '.env.development.example').is_file())
                 self.assertTrue((destination / 'docs/INSTALL.md').is_file())
 
+    def test_images_with_the_server_binary_install_its_licenses(self):
+        # The licenses of code compiled into the server, in every image that ships it.
+        linked = {'third_party/webauthn-rs/LICENSE', 'third_party/openssl/LICENSE',
+                  'crates/kernel/northstar-time/LICENSE-chrono.txt',
+                  'crates/kernel/northstar-time/LICENSE-sqlx.txt'}
+        self.assertLessEqual(linked, PACKAGE.SINGLE_FILES)
+        for image in ('Dockerfile', 'deploy/backup.Dockerfile'):
+            text = (PACKAGE.ROOT / image).read_text()
+            self.assertIn('/target/release/northstar-server ', text, image)
+            installed = set()
+            for line in text.splitlines():
+                words = [word for word in line.split() if not word.startswith('--')]
+                if words[:1] != ['COPY'] or not words[-1].startswith('/usr/share/licenses/northstar/'):
+                    continue
+                target = words[-1].removeprefix('/usr/share/licenses/northstar/')
+                for source in words[1:-1]:
+                    if target in (source, str(Path(source).parent) + '/'):
+                        installed.add(source)
+            self.assertLessEqual(linked, installed, image)
+
     def test_packaged_readmes_link_to_included_files_or_the_matching_release(self):
         for target in PACKAGE.TARGETS:
             archive, raw = self.pack(target, target)

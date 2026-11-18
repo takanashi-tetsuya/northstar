@@ -1,12 +1,13 @@
 //! The options every Northstar connection pool starts from.
 //!
-//! SQLx 0.8 counts a transaction only after the server answers BEGIN. When the
-//! future that sent BEGIN is dropped first (a client disconnect, a timeout, a
-//! shutdown select), its rollback guard sees a depth of zero and does nothing:
-//! the connection goes back to the pool inside a transaction no one owns. The
-//! next borrower's statements then run in that transaction, and a later BEGIN
-//! only draws a warning, so its isolation level can no longer be set and its
-//! commit also commits whatever the earlier borrowers wrote.
+//! SQLx 0.9, like 0.8, counts a transaction only after the server answers
+//! BEGIN. When the future that sent BEGIN is dropped first (a client
+//! disconnect, a timeout, a shutdown select), its rollback guard sees a depth
+//! of zero and does nothing: the connection goes back to the pool inside a
+//! transaction no one owns. The next borrower's statements then run in that
+//! transaction, and a later BEGIN only draws a warning, so its isolation level
+//! can no longer be set and its commit also commits whatever the earlier
+//! borrowers wrote.
 //!
 //! A released connection is therefore checked with one simple-protocol query.
 //! A simple query is a single command message, so its statement timestamp

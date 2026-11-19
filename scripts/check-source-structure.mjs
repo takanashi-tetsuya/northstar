@@ -12,7 +12,8 @@ export function classify(p) {
   const parts = p.split('/');
   const basename = parts[parts.length - 1];
   
-  if (parts.includes('tests')) {
+  if (parts.includes('tests') || parts.includes('protocol_regression_tests') ||
+      p.startsWith('tools/northstar-db-it/src/')) {
     return 'test';
   }
   if (basename.startsWith('test_')) {
@@ -50,26 +51,23 @@ export function countInlineTestModules(text) {
 }
 
 /**
- * Scans the source directory and returns files with line counts and inline test modules.
+ * Scans src/, crates/ and tools/ and returns files with line counts and inline test modules.
+ * Required roots and their descendants must be readable; target/ and .git/ are skipped.
  * @param {string} root
  * @returns {Array<{path: string, lines: number, inlineTestModules: number}>}
  */
 export function scanSource(root) {
   root = path.resolve(root);
-  const srcDir = path.join(root, 'src');
   const results = [];
 
   function walk(dir) {
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch (e) {
-      return;
-    }
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        walk(fullPath);
+        if (entry.name !== 'target' && entry.name !== '.git') {
+          walk(fullPath);
+        }
       } else if (entry.isFile() && entry.name.endsWith('.rs')) {
         const buf = fs.readFileSync(fullPath);
         let lines = 0;
@@ -87,7 +85,9 @@ export function scanSource(root) {
     }
   }
 
-  walk(srcDir);
+  for (const sourceRoot of ['src', 'crates', 'tools']) {
+    walk(path.join(root, sourceRoot));
+  }
   results.sort((a, b) => a.path.localeCompare(b.path));
   return results;
 }
@@ -291,7 +291,13 @@ if (import.meta.url === url.pathToFileURL(process.argv[1]).href) {
   }
 
   const baselinePath = path.join(root, 'catalog', 'source-structure-baseline.json');
-  const files = scanSource(root);
+  let files;
+  try {
+    files = scanSource(root);
+  } catch (e) {
+    console.error(`error: could not scan source under ${root} (${e.message})`);
+    process.exit(1);
+  }
 
   if (init) {
     if (fs.existsSync(baselinePath) && !force) {

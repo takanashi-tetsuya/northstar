@@ -4,7 +4,12 @@
     "production": 1500,
     "test": 3000
   },
-  "oversize": {},
+  "oversize": {
+    "crates/contexts/session/northstar-protocol-runtime/src/caps.rs": 1574,
+    "crates/edges/northstar-cluster/src/tests.rs": 3222,
+    "tools/northstar-test-harness/tests/saved_replay/stage4_replay.rs": 4521,
+    "tools/northstar-test-harness/tests/saved_replay/stage4_replay/compact.rs": 3431
+  },
   "root_rust_files": [
     "src/main.rs",
     "src/node.rs"

@@ -124,3 +124,6 @@ impl MixIqRelayIndex {
         self.entries.is_empty()
     }
 }
+
+#[cfg(test)]
+mod concurrency_tests;

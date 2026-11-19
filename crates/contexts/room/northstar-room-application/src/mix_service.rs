@@ -997,3 +997,6 @@ pub use northstar_delivery_core::mix_outbox::RetryResult as MixDeliveryRetryOutc
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod retained_owner_tests;

@@ -655,9 +655,9 @@
           "id": "mix-settlement-owner",
           "level": "deterministic_unit",
           "status": "declared",
-          "command": "cargo test --locked --bin northstar-server transferred_mix_source_never_constructs_old_worker_acknowledgement",
+          "command": "cargo test --locked -p northstar-mix-xmpp transferred_mix_source_never_constructs_old_worker_acknowledgement",
           "test": {
-            "path": "src/xmpp/protocol/mix_tests.rs",
+            "path": "crates/contexts/room/northstar-mix-xmpp/src/protocol_regression_tests/mix_tests.rs",
             "anchor": "async fn transferred_mix_source_never_constructs_old_worker_acknowledgement() {"
           },
           "assertions": [

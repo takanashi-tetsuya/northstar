@@ -1295,3 +1295,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod mix_presence_tests;

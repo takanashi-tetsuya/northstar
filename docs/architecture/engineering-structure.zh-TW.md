@@ -82,7 +82,7 @@ WP-495 後，operation runtime 的現行位置為
 
 | 規則 | 內容 | 執行方式 |
 | --- | --- | --- |
-| R1 行數預算 | 生產 `.rs` 檔 ≤ 1,500 行；測試檔 ≤ 3,000 行。既有超標檔記錄在基線，只能縮小；新檔不得超標。超標的生產檔不得保留頂層內嵌測試模組（`#[cfg(test)] mod x { … }`），測試移為子檔（S7）。範圍是 `src/`、`crates/` 與 `tools/` 下的 `.rs`（S42 起，之前只有 `src/`）；`tests` 與 `protocol_regression_tests` 目錄、`tools/northstar-db-it/src` 算測試檔 | `scripts/check-source-structure.mjs`＋`catalog/source-structure-baseline.json` |
+| R1 行數預算 | 生產 `.rs` 檔 ≤ 1,500 行；測試檔 ≤ 3,000 行。既有超標檔記錄在基線，只能縮小（S43 起基線為空）；新檔不得超標。超標的生產檔不得保留頂層內嵌測試模組（`#[cfg(test)] mod x { … }`），測試移為子檔（S7）。範圍是 `src/`、`crates/` 與 `tools/` 下的 `.rs`（S42 起，之前只有 `src/`）；`tests` 與 `protocol_regression_tests` 目錄、`tools/northstar-db-it/src` 算測試檔 | `scripts/check-source-structure.mjs`＋`catalog/source-structure-baseline.json` |
 | R2 根目錄收斂 | `src/` 根目錄 `.rs` 數只能減少；不得新增根目錄測試檔 | 同上 |
 | R3 模組拆分方式 | 大檔拆成「`foo.rs`＋`foo/子模組.rs`」，保持原有模組路徑；拆分 WP 只移動程式碼，不改邏輯。可見性的不變式：搬移後每個名稱的可見範圍只能維持或縮小，不得擴大。維持原範圍的寫法是「私有→`pub(super)`、`pub(super)`→`pub(in <父模組的上層>)`（如 `pub(in crate::xmpp::protocol)`、`pub(in crate::db)`）、`pub(crate)`／`pub` 不動」，適用於搬入子檔的頂層項目、結構欄位與固有 impl 成員；不需跨檔使用者也可維持私有（範圍縮小）。WP-24 起一律採維持原範圍的寫法，由只移動檢查的 `VISIBILITY:` 行逐項核對，免去依編譯錯誤反覆補可見性。協議模組的父檔以明確的 `use self::子模組::{…};` 列出兄弟子檔與測試使用的名稱（只供測試者加 `#[cfg(test)]`），模組外使用者以原可見性轉出（`pub(super) use`／`pub(crate) use`）；已由 `db/mod.rs` 以 `pub use x::*` 整體轉出的 db 模組，父檔改以 `pub use self::子模組::*;` 轉出（bin crate 中未被使用的明確轉出是 unused import，`-D warnings` 下失敗） | 「只移動」差異檢查（第 6 節，`scripts/check-move-only.mjs`） |
 | R4 門禁定位 | 門禁以模組讀原始碼（`foo.rs` 與 `foo/**.rs` 視為同一模組），以括號配對擷取指定項目；禁止新增依函式相鄰順序的擷取。Rust 單元測試以 `include_str!` 讀自身模組原始碼者，拆分時改讀父檔的 `#[cfg(test)] const MODULE_SOURCE`（父檔＋各正式子檔），並以守衛測試確認清單與非測試的 `mod` 宣告一致。子檔依拆分前在單檔中的先後順序列出：有些契約以出現不只一次的標記切割原始碼，依字母排列會取錯片段（WP-25 的 `let exact_replay =`）。模組目錄另有獨立擁有模組的 `xmpp/protocol.rs`、`api/mod.rs`、`bosh.rs` 不以模組讀取（會納入無關模組），門禁改讀「父檔＋`catalog/source-role-splits.json` 所列角色子檔」（`roleSplitFiles`／`readRoleSplitFile`，CLI `--role-split`）；結構門禁驗證該清單（鍵依序排列、子檔為葉檔、父檔有非測試的 `mod` 宣告且清單依宣告順序），這些檔案的守衛測試改比對該清單（WP-82g） | `scripts/lib/source-module.mjs`、`catalog/source-role-splits.json`；Rust 測試見 `src/db/cluster_muc.rs`、`src/db/archive.rs` |
@@ -144,6 +144,7 @@ WP-495 後，operation runtime 的現行位置為
 | S40 微服務時代殘留清除 | WP-612–614 | 刪除 S16 保留的 `db-bootstrap`、`restore-verifier`、`kafka-policy-generator` 與它們讀取的 `data-ownership.yaml`、`restore-order.yaml`、`topics.yaml`，移除兩個丟棄產出的 CI 步驟；架構驗證器只產生編譯期 crate 圖，刪除 data-access 圖與重複的 `graphs.json`（WP-612）；刪除沒有讀取者的 `key-classes.yaml`、`rpc-authorization.yaml`、`deploy/spire`、`deploy/otel-collector` 與描述微服務設計的 3 份文件（WP-613）；記錄階段（WP-614）。盤點見 5.36 | 刪除的 4 個單元測試只測被刪的工具，其餘測試名稱不變；Cargo.lock 由 488 個套件減為 485 個；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S41 根 crate 測試碼遷出 | WP-615–623 | backup 映像檔補上伺服器二進位檔連結程式碼的 4 份授權檔，`pool.rs` 與邊界門禁的註解改為 SQLx 0.9（WP-615）；唯讀審計根 crate 的 358 個測試（WP-616）；直接訊息測試移入 `northstar-message-xmpp`（WP-617）；MUC 與聯邦 MUC 測試移入 `northstar-muc-xmpp`，PostCommitPlan 測試移入 room 應用層，刪除一個重複測試，`northstar-archive-postgres` 補上它需要的 `northstar-time` postgres feature（WP-618）；MIX 測試依擁有者移入 `northstar-mix-xmpp`、room 應用層、room core 與 stream（WP-619）；其餘 saved-case 重播、Stage 4 擷取介面卡與 native/frame harness 原樣移入 `northstar-test-harness` 的整合測試目標 `saved_replay`，根 crate 刪除只服務這些測試的依賴，腳本中的品質指令加上 `--workspace`（WP-620）；文件、CODEOWNERS 與 test-support 註解改指新位置，刪除空的 `northstar-auth-xmpp` test-support feature（WP-621）；`test-ocsp-stapling.sh` 改從 `northstar-s2s` 執行 OCSP 測試（WP-622）；記錄階段（WP-623）。盤點見 5.37 | 357 個測試依名稱對應後不變，1 個與 room 應用層測試重複的刪除；根 crate 的 `src/` 只剩組合根與它自己的測試；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S42 門禁再審計 | WP-624–634 | 唯讀審計架構與執行門禁（WP-624），以及其他 17 支讀 Rust 內容的門禁、結構門禁的範圍與兩份過時文件（WP-625）；擁有者 crate 補上 13 個測試：Drop、Clone、簽章與欄位型別探針（WP-626），會話路由移除、MIX 重試喚醒、ReplayService 傳輸方法與三個 context 的欄位清單（WP-627）；兩個內嵌測試模組移為子檔（WP-628）；架構門禁（WP-629）、執行門禁（WP-630）與其他 9 支門禁（WP-631）刪除空轉、重複、已有測試涵蓋與已改寫為測試的檢查；結構門禁擴及 `crates/` 與 `tools/`（WP-632）；改寫 `MODULARIZATION_PROGRESS_REPORT.md` 與 `LIBRARY_SPLIT_LEDGER.md`（WP-633）；記錄階段（WP-634）。盤點見 5.38 | 讀 Rust 的門禁淨減 471 行，自測減少 79 個案例；workspace 測試由 3,461 個增為 3,474 個，原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
+| S43 執行計劃與超標檔 | WP-635–642 | 唯讀審計重構前的執行計劃（WP-635）；依職責拆分 Caps 執行期（WP-636）、叢集單元測試（WP-637）、Stage 4 saved replay 模組（WP-638）與 compact 編解碼的支援程式碼（WP-639），全部只移動；清空結構門禁的超標基線（WP-640）；把執行計劃改寫為現況指南（WP-641）；記錄階段（WP-642）。盤點見 5.39 | 4 個超標檔都降到預算內，基線沒有例外；執行計劃由 1,027 行減為 203 行；workspace 測試仍是 3,474 個，76 個叢集測試依路徑改名；全部門禁、Python 腳本測試與離線 CI 通過 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -1731,6 +1732,44 @@ S42 後讀 Rust 的門禁淨減 471 行（架構 151 行、執行 106 行、其�
 測試由 3,461 個增為 3,474 個（ignored 296 個不變），新增的 13 個都是擁有者測試，原有名稱不變。結構門禁掃描 1,431 個
 檔案，4 個既有超標檔記錄在基線。Cargo.lock 仍是 485 個套件。
 
+### 5.39 S43 盤點：執行計劃與超標檔（`bdaff32d87ca4f38e0291ba2c779b5cb547abe71`）
+
+S42 結束時留下兩件事：`docs/MODULARIZATION_EXECUTION_PLAN.md`（1,027 行）仍是重構前的執行計劃；結構門禁擴及 `crates/`
+與 `tools/` 後，基線記錄 4 個既有超標檔。S43 先唯讀審計執行計劃，同時只移動地拆分 4 個檔案，再清空基線、改寫計劃。
+
+審計（WP-635）逐段標記計劃內容：已完成、被 S16–S42 取代、事實過時、規則已在其他文件說明，或仍開放。第 3 節的現況、
+第 4 節的目標職責與第 5 節的 Phase A–F 已過時或被取代；第 2 節的教訓與第 6 節的驗收清單大多在其他文件有規則，但有幾條
+沒有其他通則；C1、C2 的結構工作已完成，語義上的退出審查仍開放；R1–R3 與 8.2 的七個外部門禁仍開放，各有追蹤位置。
+計劃有 2 個連到 8.2 錨點的深層連結、文件一致性檢查要求 `docs/README.md` 的狀態表直接連到它，凍結的 handoff 也連到它。
+
+| WP | 內容 |
+| --- | --- |
+| WP-635 | 唯讀審計執行計劃：逐段分類與證據、引用它的文件與檢查、改寫建議（審計報告不入庫） |
+| WP-636 | `northstar-protocol-runtime` 的 `caps.rs`（1,574 行）依職責拆出 `cache_index.rs`（226 行）、`federated_gate.rs`（109 行）、`pending_index.rs`（172 行）與 `resource_index.rs`（648 行），父模組以 `pub use` 保留公開路徑，降為 458 行；架構門禁對它的讀取改用 `readProductionModule`，讀到子檔 |
+| WP-637 | `northstar-cluster` 的 `tests.rs`（3,222 行）依主題移為 7 個子模組：`delivery_contracts`、`direct_commit_recovery`、`health_and_listener`、`instance_authority`、`redis_soft_state`、`signed_envelopes`、`stanza_delivery`（298–760 行），父檔留下共用的輔助函式，降為 108 行；76 個測試依新路徑改名，`muc-cluster-wsl.sh` 的兩個選擇器跟著更新 |
+| WP-638 | `saved_replay` 的 `stage4_replay.rs`（4,521 行）拆出 `saved_dispatcher.rs`（1,005 行）、`case_validation.rs`（910 行）與 `envelope.rs`（206 行），父模組以 `pub(crate) use` 保留舊路徑，降為 2,420 行；測試名稱不變 |
+| WP-639 | `stage4_replay/compact.rs`（3,431 行）的支援程式碼移到 `compact/` 下的 `parser.rs`、`canonical.rs`、`framing.rs`、`identities.rs` 與 `scalars.rs`（58–388 行），降為 2,459 行；測試名稱不變 |
+| WP-640 | 結構門禁的超標基線清空：掃描 1,450 個檔案，沒有超標檔 |
+| WP-641 | 改寫 `docs/MODULARIZATION_EXECUTION_PLAN.md` 為現況指南：依賴方向與現況文件表、邊界規則與每個 packet 的驗收清單、仍開放的語義工作與它們的追蹤位置、其他文件沒有完整說明的交易與復原規則、原樣保留標題的 8.2 外部門禁，以及可選的 XEP 範圍；舊版以 25e6c3c 的固定連結保留。`docs/README.md` 與本文的說明跟著更新 |
+| WP-642 | 記錄階段 |
+
+拆分規則：只移動，`check-move-only.mjs` 比對每個拆分前後的項目多重集合；原本私有的項目在子模組改為 `pub(super)`，原本
+`pub(super)` 的改為 `pub(in 祖父模組)`；`macro_rules!` 依文字順序生效，用到巨集的子模組宣告在巨集之後。
+
+與計劃的差異：審計建議把目標架構第 2 節與第 5 節「與其他計劃的關係」中對 C1、C2、D1 與 R1–R3 的描述標為歷史排程。
+改寫後的計劃仍以這些名稱追蹤它們，兩處描述仍然正確，所以沒有改。
+
+尚未處理：C1、C2 的語義退出審查、R1–R3 與 8.2 的七個外部門禁仍開放，追蹤位置見執行計劃。S36 的 6 個 hook 案例仍由
+門禁以結構方式檢查。
+
+新決定：
+
+- 結構門禁的基線沒有例外；任何 Rust 檔超過預算都要先拆分（WP-640）。
+- 執行計劃只記錄仍開放的語義工作、邊界規則與發布驗證門禁；已完成的階段記錄在本文（WP-641）。
+
+S43 後最大的生產檔是 `northstar-listener` 的 `listener.rs`（1,492 行），最大的測試檔是 `stage4_replay/tests.rs`（2,742
+行）。workspace 測試仍是 3,474 個（ignored 296 個），76 個依路徑改名，其餘名稱不變。Cargo.lock 仍是 485 個套件。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點），S31 的 WP-483 起 agy 額度用盡，再改由 Codex CLI 執行（第 10 點）。
@@ -2559,3 +2598,11 @@ Stage 證據仍綁定其原提交。
 | WP-632 | 完成：結構門禁擴及 `crates/` 與 `tools/`，掃描根讀不到即失敗，基線加入 4 個既有超標檔 | 見 `git log --grep '\[WP-632\]'` |
 | WP-633 | 完成：改寫 `MODULARIZATION_PROGRESS_REPORT.md` 與 `LIBRARY_SPLIT_LEDGER.md` | 見 `git log --grep '\[WP-633\]'` |
 | WP-634 | 完成：記錄 S42 的階段與盤點（5.38）、R1 的範圍、目標架構 4.7 與第 5 節。WP-626–633 接成一條鏈驗證：fmt、clippy、workspace 測試、受影響 crate 的單獨建置、全部門禁與 Python 腳本測試、離線 CI | 見 `git log --grep '\[WP-634\]'` |
+| WP-635 | 完成：唯讀審計重構前的執行計劃與引用它的文件、檢查（審計報告不入庫） | 見 `git log --grep '\[WP-635\]'` |
+| WP-636 | 完成：`northstar-protocol-runtime` 的 `caps.rs` 依職責拆為 4 個子檔（1,574 行降為 458 行） | 見 `git log --grep '\[WP-636\]'` |
+| WP-637 | 完成：`northstar-cluster` 的 `tests.rs` 依主題移為 7 個子模組（3,222 行降為 108 行），76 個測試依路徑改名 | 見 `git log --grep '\[WP-637\]'` |
+| WP-638 | 完成：`saved_replay` 的 `stage4_replay.rs` 拆出 3 個子檔（4,521 行降為 2,420 行） | 見 `git log --grep '\[WP-638\]'` |
+| WP-639 | 完成：`stage4_replay/compact.rs` 的支援程式碼移到 5 個子檔（3,431 行降為 2,459 行） | 見 `git log --grep '\[WP-639\]'` |
+| WP-640 | 完成：清空結構門禁的超標基線 | 見 `git log --grep '\[WP-640\]'` |
+| WP-641 | 完成：改寫 `docs/MODULARIZATION_EXECUTION_PLAN.md` 為現況指南（1,027 行減為 203 行），舊版以固定連結保留 | 見 `git log --grep '\[WP-641\]'` |
+| WP-642 | 完成：記錄 S43 的階段與盤點（5.39）、R1、目標架構 4.7 與第 5 節。WP-636–641 接成一條鏈驗證：fmt、clippy、workspace 測試、受影響 crate 的單獨建置、測試名稱比對、全部門禁與 Python 腳本測試、離線 CI | 見 `git log --grep '\[WP-642\]'` |

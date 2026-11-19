@@ -1,196 +1,101 @@
 # Northstar Library-Split Ledger
 
-This document records the current crate boundary after the modularization
-integration pass. It is an implementation ledger, not a roadmap or a protocol
-support claim. Protocol coverage remains documented in `XEP_MATRIX.md`.
+This ledger maps each crate tier to what it owns and lists the operator switch
+for each XEP library. It describes the current tree; the tier rules, the
+bounded contexts and the migration history are recorded in the
+[target architecture](architecture/target-architecture.zh-TW.md) (§4 and §5)
+and the [engineering structure record](architecture/engineering-structure.zh-TW.md).
+Protocol coverage is documented in [`XEP_MATRIX.md`](XEP_MATRIX.md).
 
-## 1. Boundary rules
+## 1. Tiers
 
-Every `northstar-*` crate under `crates/` (in any tier directory) is a leaf library. A leaf library may
-own bounded parsing, validation, serialization, value types, pure state
-machines, immutable extension metadata and deterministic policy calculation.
-It must not own or import:
+Every workspace crate is listed in `catalog/crates.yaml` with its tier. The
+architecture validator (`tools/architecture-validator`) rejects a normal or
+build dependency that breaks the tier rules in target architecture §4.1 and
+limits external dependencies by tier (for example, core crates may not depend
+on SQLx, async runtimes or network crates, and application crates may not
+depend on SQLx or network crates).
 
-- `AppState`, SQLx, PostgreSQL, Redis or migrations;
-- Axum routers, HTTP requests, listeners, sockets or TLS streams;
-- filesystem/object-store access, process environment or global mutable state;
-- clocks, random-number acquisition or background task spawning;
-- application authorization or a user-visible multi-store transaction.
+| Tier | Location | Owns |
+| --- | --- | --- |
+| kernel | `crates/kernel/*` | JIDs (`northstar-xmpp-types`), XML framing and output, timestamps (`northstar-time`), avatar values, the XEP descriptor model (`northstar-xep-core`), the built-in XEP registry (`northstar-xep-catalog`) and the 24 `northstar-xep-*` wire and pure-policy libraries |
+| platform | `crates/platform/*` | configuration, the PostgreSQL pool and migrator, process runtime and shutdown, TLS and OCSP, telemetry, and the web capability graph |
+| context: core | `northstar-<context>-core` and the other `-core`/`-policy` crates under `crates/contexts/` | capability-free domain types, state machines and policy |
+| context: application | `northstar-<context>-application` | typed commands, validation, transaction ordering and post-commit effect plans behind repository ports |
+| context: adapters | `-postgres`, `-xmpp` and `northstar-upload-storage` | PostgreSQL repositories, XMPP protocol mapping and object storage for one context |
+| context: workflows | `crates/contexts/workflows/*` | use cases that span contexts (administration, data tools) |
+| edges | `crates/edges/*` | the stream engine (`northstar-stream`), C2S, BOSH, HTTP, S2S and cluster transports |
+| composition root | `src/` (package `northstar-server`) | process startup, `ServerNode` construction, worker registration and wiring adapters to edges |
+| tooling | `tools/*` | the architecture validator, the saved-replay test harness and the PostgreSQL integration tests |
 
-The root package is the composition adapter. It supplies facts to leaf crates,
-maps typed results to protocol errors, invokes application services and owns
-all external effects. The allowed dependency direction is therefore:
+The contexts are abuse, archive, auth, federation, message, operations,
+pubsub, room, roster, session, upload and workflows. Dependencies point from
+adapters and edges toward application, core, platform and kernel crates;
+adapters do not depend on other adapters, and edges do not depend on adapters.
+The exact rules are in target architecture §4.1 and the validator.
 
-```text
-northstar-server
-  -> application services / transport adapters
-  -> northstar-* leaf libraries
-  -> northstar-xep-core / northstar-xmpp-types
-```
+Only the kernel XEP libraries are pure leaves in the sense of owning no
+transport, database, clock or task authority. Platform crates, adapters, edges
+and the composition root own those effects by design.
 
-The reverse direction is forbidden. `scripts/check-plugin-architecture.mjs`
-enforces the capability boundary, unique route ownership and descriptor
-consistency.
+## 2. XEP libraries and switches
 
-## 2. Current inventory
-
-All listed crates are root workspace members, direct root dependencies and
-used by runtime code. There are no extracted-but-unintegrated crates in the
-tree.
-
-| Crate | Runtime responsibility | Tests | Operator switch |
-| --- | --- | ---: | --- |
-| `northstar-xep-core` | descriptor model, dependency/conflict resolution and exact route ownership | 6 | built-in foundation |
-| `northstar-xmpp-types` | prepared/canonical JIDs and shared bounded identity values | 24 | built-in foundation |
-| `northstar-session-core` | stream-open epochs, session routing models, staged route checks, and route priority algorithms | 5 | built-in session foundation |
-| `northstar-session-application` | typed session commands, incarnation removal watch signals, and cleanup models | 2 | session application foundation |
-| `northstar-delivery-core` | durable C2S fences, SM entries, recipient-authoritative stanza identity and loss-explicit ordered-output port | 3 | built-in delivery foundation |
-| `northstar-presence-core` | presence-session transitions, directed visibility and offline-replay eligibility | 4 | built-in presence foundation |
-| `northstar-xml-framing` | incremental byte/XML framing with depth and UTF-8 boundary tracking | 27 | selected by transport |
-| `northstar-xml-builder` | typed XML serialization, one-time escaping and bounded validated-fragment insertion | 6 | built-in foundation |
-| `northstar-auth-core` | password/SCRAM/SASL/FAST cryptographic state machines and channel binding | 27 | authentication configuration |
-| `northstar-abuse-policy` | pure actor identity, PoW, cooldown, escalation and admission calculations | 26 | abuse configuration |
-| `northstar-web-surface` | requested/effective web capability graph and companion-surface dependencies | 17 | `WEB_*`, registration and upload switches |
-| `northstar-message-core` | capability-free personal-message commands, routing policy, stable identity authority, destinations and commit/effect results | 6 | application foundation |
-| `northstar-message-application` | authority validation and capability-injected personal-message commit orchestration | 4 | application foundation |
-| `northstar-room-core` | pure room domain types, policy models, cluster occupancy targets and authority verification | 3 | room application foundation |
-| `northstar-room-application` | typed room mutation commands, pure command validation, capability-injected discussion admission, and bounded ordered post-commit effect plans | 7 | room application foundation |
-| `northstar-pubsub-core` | pure PubSub/PEP node, item, and audience access models | 0 | pubsub application foundation |
-| `northstar-pubsub-application` | typed PEP publish commands, payload bounds, and audience projection logic | 0 | pubsub application foundation |
-| `northstar-roster-core` | capability-free RFC 6121 roster domain entities, subscription state machines, presence effect definitions, and snapshot models | 4 | roster application foundation |
-| `northstar-roster-application` | typed roster commands, pure validation rules, and in-memory push synchronization gate | 2 | roster application foundation |
-| `northstar-archive-core` | capability-free XEP-0313 MAM domain entities, boundary models, and RSM paging boundaries | 3 | archive application foundation |
-| `northstar-archive-application` | typed MAM query/preferences commands, pure validation rules, and scope projections | 2 | archive application foundation |
-| `northstar-upload-core` | capability-free XEP-0363 upload domain entities, safety state, and IO classifications | 3 | upload application foundation |
-| `northstar-upload-application` | typed upload slot reservation commands and pure validation rules | 3 | upload application foundation |
-| `northstar-federation-core` | capability-free RFC 6120/XEP-0220/XEP-0185 S2S outbox domain entities, Dialback HMAC keys and constant-time verification | 3 | federation application foundation |
-| `northstar-federation-application` | typed S2S federation commands, envelopes (durable & volatile), and validation boundaries | 2 | federation application foundation |
-| `northstar-xep-0045` | MUC wire values, room/nick validation and pure role/affiliation policy | 47 | `XEP_0045_ENABLED` |
-| `northstar-xep-0016` | privacy-list domain types, first-match evaluation and scoped JID rules | 4 | `XEP_0016_ENABLED` |
-| `northstar-xep-0059` | canonical Result Set Management request/result/cursor types | 49 | `XEP_0059_ENABLED` |
-| `northstar-xep-0060` | PubSub wire operations, configuration, builders, paging and pure authorization decisions | 31 | `XEP_0060_ENABLED` |
-| `northstar-xep-0085` | chat-state parsing, classification and builders | 12 | `XEP_0085_ENABLED` |
-| `northstar-xep-0092` | software-version request/response wire support | 12 | `XEP_0092_ENABLED` |
-| `northstar-xep-0115` | capability hashes, canonical forms and scoped observation/cache policy | 31 | `XEP_0115_ENABLED` |
-| `northstar-xep-0184` | delivery-receipt request/received wire support | 4 | `XEP_0184_ENABLED` |
-| `northstar-xep-0191` | blocking commands, typed mutations and post-commit effect plans | 15 | `XEP_0191_ENABLED` |
-| `northstar-xep-0198` | stream-management counters, acknowledgements, replay and resume state transitions | 35 | `XEP_0198_ENABLED` |
-| `northstar-xep-0199` | XMPP Ping request/response wire support | 10 | `XEP_0199_ENABLED` |
-| `northstar-xep-0202` | entity-time request/response validation and formatting | 10 | `XEP_0202_ENABLED` |
-| `northstar-xep-0215` | external-service discovery models and credential-response policy | 15 | `XEP_0215_ENABLED` |
-| `northstar-xep-0280` | Carbons controls, copy/resource policy, peer extraction and safe wrapper construction | 5 | `XEP_0280_ENABLED` |
-| `northstar-xep-0308` | last-message-correction reference metadata | 15 | `XEP_0308_ENABLED` |
-| `northstar-xep-0313` | MAM queries/forms/pages over canonical XEP-0059 types | 25 | `XEP_0313_ENABLED` |
-| `northstar-xep-0333` | all four chat-marker forms and routing classification | 14 | `XEP_0333_ENABLED` |
-| `northstar-xep-0352` | CSI commands, queue/coalescing policy and loss-explicit overflow outcomes | 14 | `XEP_0352_ENABLED` |
-| `northstar-xep-0357` | push enable/disable wire types, privacy-safe notification facts and provider-independent retry policy | 73 | `XEP_0357_ENABLED` |
-| `northstar-xep-0359` | origin/stanza identifiers, canonical issuer validation and replay identity inputs | 19 | `XEP_0359_ENABLED` |
-| `northstar-xep-0363` | upload request parsing, filename/media validation and safe slot response builders | 8 | `XEP_0363_ENABLED` |
-| `northstar-xep-0380` | explicit-encryption metadata | 16 | `XEP_0380_ENABLED` |
-| `northstar-xep-0444` | bounded reactions metadata | 20 | `XEP_0444_ENABLED` |
-| `northstar-xep-0461` | reply references and fallback-related identity validation | 18 | `XEP_0461_ENABLED` |
-
-Test counts include crate unit and crate-local integration tests marked with
-`#[test]`; documentation tests are additional.
-
-## 3. Runtime composition
-
-`crates/kernel/northstar-xep-catalog` is the single built-in XEP registry. It resolves
-operator selection before listeners start. The resolved projection owns:
+`crates/kernel/northstar-xep-catalog` is the single built-in XEP registry.
+`ExtensionRuntime::resolve` turns the operator switches into one resolved
+projection before listeners start. That projection owns:
 
 - whether an extension is effective;
 - exact stanza route ownership;
 - discovery features contributed by enabled extensions;
 - fail-closed dependency and conflict outcomes.
 
-XEP-0030 remains a built-in server foundation. XEP-0059 is independently
-selectable and is a declared dependency of XEP-0060 and XEP-0313. Disabling
-XEP-0059 therefore disables PubSub and MAM rather than leaving their paging
-contracts partly active. Message metadata extensions are checked at the shared
-ingress boundary, so a disabled namespace cannot bypass the switch through
-C2S, S2S, federated MUC or MIX.
+XEP-0030 is a built-in server foundation. XEP-0059 is independently
+selectable and is a declared dependency of XEP-0060 and XEP-0313, so disabling
+it disables PubSub and MAM instead of leaving their paging partly active.
+Service-specific discovery belongs to the matching service adapter: MUC
+features to the conference domain and PubSub features to the PubSub domain.
+`scripts/check-plugin-architecture.mjs` checks that the XEP libraries stay
+capability-free and that the catalog, the root dependencies and the manifests
+agree.
 
-Service-specific discovery remains owned by the matching service adapter:
-MUC features belong to the conference domain, PubSub features to the PubSub
-domain, and client message metadata is not falsely advertised as a server-root
-handler capability.
-
-## 4. Compatibility facades and retained authorities
-
-Some root modules intentionally remain as compatibility facades while callers
-are migrated independently. S17 (WP-171) retired the `auth` and `jid` facades:
-root modules import `northstar_auth_core` and `northstar_xmpp_types::jid`
-directly.
-
-| Root facade/adapter | Leaf crate | Authority intentionally retained in root |
+| Crate | Responsibility | Switch |
 | --- | --- | --- |
-| `src/xmpp/framing.rs` | `northstar-xml-framing` | transport buffers, deadlines and socket closure |
-| `src/services/abuse.rs` | `northstar-abuse-policy` | actor-state storage, database locks, clock, randomness and challenge lifecycle |
-| `src/xmpp/protocol/*` | matching XEP crates | authentication, application authorization, transactions, delivery and error mapping |
-| `crates/edges/northstar-http/src/lib.rs`, `crates/platform/northstar-config/src/lib.rs`, `src/main.rs` | `northstar-web-surface` | listener binding, Axum routing, static assets and supervised task lifetime |
+| `northstar-xep-0016` | privacy-list domain types, first-match evaluation and scoped JID rules | `XEP_0016_ENABLED` |
+| `northstar-xep-0045` | MUC wire values, room/nick validation and pure role/affiliation policy | `XEP_0045_ENABLED` |
+| `northstar-xep-0059` | Result Set Management request/result/cursor types | `XEP_0059_ENABLED` |
+| `northstar-xep-0060` | PubSub wire operations, configuration, builders, paging and pure authorization decisions | `XEP_0060_ENABLED` |
+| `northstar-xep-0085` | chat-state parsing, classification and builders | `XEP_0085_ENABLED` |
+| `northstar-xep-0092` | software-version request/response wire support | `XEP_0092_ENABLED` |
+| `northstar-xep-0115` | capability hashes, canonical forms and observation/cache policy | `XEP_0115_ENABLED` |
+| `northstar-xep-0184` | delivery-receipt request/received wire support | `XEP_0184_ENABLED` |
+| `northstar-xep-0191` | blocking commands, typed mutations and post-commit effect plans | `XEP_0191_ENABLED` |
+| `northstar-xep-0198` | stream-management counters, acknowledgements, replay and resume state transitions | `XEP_0198_ENABLED` |
+| `northstar-xep-0199` | XMPP Ping request/response wire support | `XEP_0199_ENABLED` |
+| `northstar-xep-0202` | entity-time request/response validation and formatting | `XEP_0202_ENABLED` |
+| `northstar-xep-0215` | external-service discovery models and credential-response policy | `XEP_0215_ENABLED` |
+| `northstar-xep-0280` | Carbons controls, copy/resource policy and safe wrapper construction | `XEP_0280_ENABLED` |
+| `northstar-xep-0308` | last-message-correction reference metadata | `XEP_0308_ENABLED` |
+| `northstar-xep-0313` | MAM queries, forms and pages over the XEP-0059 types | `XEP_0313_ENABLED` |
+| `northstar-xep-0333` | chat-marker forms and routing classification | `XEP_0333_ENABLED` |
+| `northstar-xep-0352` | CSI commands, queue/coalescing policy and loss-explicit overflow outcomes | `XEP_0352_ENABLED` |
+| `northstar-xep-0357` | push enable/disable wire types, notification facts and retry policy | `XEP_0357_ENABLED` |
+| `northstar-xep-0359` | origin/stanza identifiers, issuer validation and replay identity inputs | `XEP_0359_ENABLED` |
+| `northstar-xep-0363` | upload request parsing, filename/media validation and slot response builders | `XEP_0363_ENABLED` |
+| `northstar-xep-0380` | explicit-encryption metadata | `XEP_0380_ENABLED` |
+| `northstar-xep-0444` | bounded reactions metadata | `XEP_0444_ENABLED` |
+| `northstar-xep-0461` | reply references and fallback-related identity validation | `XEP_0461_ENABLED` |
 
-A facade must delegate security-sensitive pure logic; it may not keep a second
-implementation. Architecture checks are updated when ownership legitimately
-moves (for example, credential zeroization now lives in
-`northstar-auth-core/src/password.rs`).
+## 3. Where tests live
 
-## 5. Integration completed in this pass
+Each crate's unit tests sit next to its code. Protocol regression tests that
+exercise one context live in that context's `-xmpp` or application crate (for
+example `northstar-muc-xmpp/src/protocol_regression_tests/`). Saved-case
+replays and the Stage 4 harnesses that wire several contexts together are one
+integration target, `tools/northstar-test-harness/tests/saved_replay/`.
+PostgreSQL adapter tests are in `tools/northstar-db-it` and run in the database
+CI suites. The root package keeps only the tests of the composition root.
 
-- Removed nested crate workspaces and made every crate part of the root lock
-  graph.
-- Replaced duplicate JID, XML framing, authentication and abuse-policy logic
-  with leaf-crate APIs.
-- Replaced root message-extension validators with XEP crate parsers.
-- Unified MAM, PubSub and discovery paging on XEP-0059 types.
-- Integrated XEP-0198 and XEP-0352 state/policy engines without giving either
-  persistence or socket authority.
-- Integrated XEP-0045 and XEP-0060 pure validation/policy helpers while
-  retaining their application transactions in root services.
-- Split public-client and loopback administration surfaces in the web
-  capability plan. Invitation registration is locked off when its required
-  public client surface is disabled.
-- Added explicit `.env` switches for every currently registered optional XEP,
-  including XEP-0059, XEP-0184 and XEP-0359.
-- Added route/manifest checks which reject duplicate plugin ownership and
-  capability imports.
-- Added XEP-0363 as the shared XMPP/HTTP upload protocol contract. Disabling
-  it prevents new slot and PUT admission while retaining read-only historical
-  retrieval and cleanup authority.
-- Replaced separate local, federation-ingress and federation-egress personal
-  message admission methods with one typed `ValidatedPersonalMessage`
-  command and one `MessageCommit` result. The PostgreSQL transactions remain
-  intact in the root adapter while every protocol origin now uses the same
-  application entry point.
-- Moved the typed XML serializer out of the binary. Root code now uses a thin
-  compatibility facade over the same independently tested escaping and
-  raw-fragment resource boundary.
-- Converted XEP-0280 from hard-coded dispatch/discovery behavior into a
-  runtime-resolved plugin. Disabled Carbons lose their IQ routes, discovery
-  features and every local/cluster fan-out path.
-- Added an injected personal-message commit repository. The application crate
-  rejects origin-authority and actor/destination mismatches before PostgreSQL
-  can run, and successful commits return an explicit local-route or federation
-  outbox-wake plan.
-- Moved XEP-0016 rule types and first-match evaluation out of PostgreSQL. The
-  plugin switch removes management routes/discovery while already stored
-  privacy rules continue to be enforced fail-closed.
-- Replaced five loosely coupled stream-negotiation fields with one session
-  state machine. STARTTLS now clears stream identity/language and renews the
-  SASL budget as one transition.
-- Split durable delivery/SM fence values and presence-session policy from the
-  Tokio and protocol adapters. Recipient stanza-id recovery, directed
-  presence capacity and offline replay eligibility are independently tested.
-- Replaced the session layer's concrete Tokio sender ownership with a
-  transport-neutral ordered-output port. The Tokio adapter retains the exact
-  disconnect latch and FIFO behavior, while backpressure, closure and stale
-  routing are now loss-explicit results which return the unaccepted item.
-- Added the first complete room-application slice. Local C2S and authenticated
-  federated MUC discussion messages now construct the same owned command,
-  validate domain/JID/nickname/occupancy authority before pool acquisition and
-  enter one injected PostgreSQL repository operation. Ordered MUC post-commit
-  plans are owned by the application library rather than the XML handler.
-
-## 6. Historical integration checkpoint
+## 4. Historical integration checkpoint
 
 The [2026-09-03 repository record](https://github.com/takanashi-tetsuya/northstar/blob/94b7d9d5ea100a176d010f0bd42a7ad8f5b1080f/docs/LIBRARY_SPLIT_LEDGER.md)
 contains these local results from the library integration:
@@ -202,28 +107,8 @@ contains these local results from the library integration:
 - program architecture-boundary check: passed after moving ownership checks to
   their new crate locations.
 
-This checkpoint covers static and unit checks. Subsequent CI results are
-recorded in the [CI validation log](handoff/2026-09-12/CI-PERFORMANCE-FOLLOWUP.md);
-release validation follows the [release checklist](RELEASE_CHECKLIST.md).
-
-## 7. Remaining split debt
-
-The leaf-crate graph is integrated, but the application server is not yet a
-set of independently deployable services. The remaining work is authority
-decomposition rather than more copies of parsers:
-
-1. Move complete messaging, room, PubSub, archive, upload and federation use
-   cases behind application-service interfaces.
-2. Replace remaining concrete `AppState` access in orchestration modules with
-   narrow capability handles.
-3. Split large protocol modules by command/query/effect ownership, not by line
-   count.
-4. Move PostgreSQL implementations behind repository ports while keeping one
-   transaction owner for every user-visible operation.
-5. Extract transport lifetimes only after protocol handlers no longer depend
-   on concrete global state.
-6. Preserve separate public-client, administration and observability listener
-   origins and authentication audiences.
-
-The detailed order and acceptance criteria are maintained in
-`MODULARIZATION_EXECUTION_PLAN.md`.
+This checkpoint covers static and unit checks at that commit. Subsequent CI
+results are recorded in the [CI validation log](handoff/2026-09-12/CI-PERFORMANCE-FOLLOWUP.md);
+release validation follows the [release checklist](RELEASE_CHECKLIST.md). The
+[2026-11-19 version of this ledger](https://github.com/takanashi-tetsuya/northstar/blob/880b48ebed4b19f2d42b050ffcd873de2b1b2fe1/docs/LIBRARY_SPLIT_LEDGER.md)
+is the last one written before the S16–S41 restructure was reflected here.

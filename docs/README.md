@@ -79,7 +79,7 @@ ignored `.local/` directory. Keep private configuration and runtime data out of 
 ## Development and releases
 
 - [Contributing](../.github/CONTRIBUTING.md): setup, checks and pull requests.
-- [Library split](LIBRARY_SPLIT_LEDGER.md), [modularization progress](MODULARIZATION_PROGRESS_REPORT.md) and [remaining work](MODULARIZATION_EXECUTION_PLAN.md).
+- [Crate tiers and XEP switches](LIBRARY_SPLIT_LEDGER.md), [modularization status](MODULARIZATION_PROGRESS_REPORT.md) and [execution plan](MODULARIZATION_EXECUTION_PLAN.md).
 - [Implementation and test coverage](TRACEABILITY.md).
 - [Release checklist](RELEASE_CHECKLIST.md) and [release responsibilities](governance/release-roles.md).
 - [Changelog](../CHANGELOG.md), [detailed 0.2 history](changelog/v0.2.md) and [0.2.0 release notes](releases/0.2.0.md).

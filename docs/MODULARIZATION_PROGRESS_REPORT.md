@@ -1,298 +1,76 @@
-# Northstar modularization progress and remaining work
+# Northstar modularization status
 
-## 1. Executive status
+## 1. Status
 
-Northstar currently builds as one deployable server binary. The root workspace
-lists 60 crate members, including 51 `northstar-*` crates. Extracted libraries
-are root workspace members and share the lockfile and strict workspace Clippy
-gate; their integration must still be assessed by actual call paths.
+Northstar builds as one deployable server binary, `northstar-server`. Its
+`src/` is the composition root: process startup, `ServerNode` construction,
+worker registration and the wiring of context adapters to the transport
+edges. Domain logic, application services, PostgreSQL repositories, protocol
+mapping and transports live in workspace crates under `crates/`, arranged in
+the tiers and bounded contexts described in the
+[target architecture](architecture/target-architecture.zh-TW.md) §4. The crate
+graph is enforced by the architecture validator (`tools/architecture-validator`);
+the [library-split ledger](LIBRARY_SPLIT_LEDGER.md) summarizes what each tier
+owns and the XEP operator switches.
 
-The protocol leaf layer is substantially separated. The application and
-infrastructure layers are not. The current work should therefore be described
-as **an integrated modular monolith with several real ports**, not as a set of
-fully independent services.
+The structural migration ran as stages S16–S41. Each stage, its work packages
+and its verification are recorded in the
+[engineering structure record](architecture/engineering-structure.zh-TW.md)
+§5; target architecture §5 gives the stage table. After S41 the root package
+contains only the composition root and its own tests.
 
-Evidence from the current pass:
+## 2. What this status does not claim
 
-| Gate | Result |
+The structural migration is verified by the workspace build, Clippy, the
+workspace tests, the database CI suites and the source gates. It does not
+qualify runtime behaviour in a target environment. PostgreSQL role separation,
+object-storage providers, cluster partitions, component interoperability,
+capacity and independent security review each have their own evidence
+requirements:
+
+| Area | Where it is tracked |
 | --- | --- |
-| Root unit suite | passed |
-| Workspace strict Clippy | passed with all targets and all features |
-| Root all-feature check | passed |
-| XEP plugin gate | 24 plugins, 56 exclusive routes, no forbidden capabilities |
-| Program architecture gate | `AppState` fields are private; protocol has zero DB/SQLx/pool references |
-| Library inventory | 60 crate workspace members, including 51 `northstar-*` crates; no nested workspace or library-local lockfile |
+| database role separation | [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) `ARCH-DB-ROLE` |
+| object-storage providers (conditional delete, versioning) | `KNOWN_ISSUES.md` `PROVIDER-S3` |
+| cluster, shared storage and partitions | `KNOWN_ISSUES.md` `EXT-CLUSTER`, `ARCH-CLU-VOLATILE`; [local VM qualification](LOCAL_VM_QUALIFICATION.md) |
+| external components (XEP-0114, XEP-0225) | `KNOWN_ISSUES.md` `EXT-COMPONENT`, `STD-COMPONENT` |
+| capacity and soak | `KNOWN_ISSUES.md` `EXT-CAPACITY` |
+| independent review | `KNOWN_ISSUES.md` `EXT-SECURITY` |
+| release candidate qualification | [release checklist](RELEASE_CHECKLIST.md); [execution plan](MODULARIZATION_EXECUTION_PLAN.md#82-isolated-vm-qualification-on-a-frozen-release-candidate) §8.2 |
+| implementation and test coverage | [`TRACEABILITY.md`](TRACEABILITY.md) |
 
-This is static/unit evidence only. PostgreSQL, Redis, browser, Gajim,
-federation, load, fuzz, backup/restore and packaging qualification remain part
-of the release gates and are not implied by this report.
+Third-party interoperability, independent security review and a 24–72 hour
+soak need separate calendar time on a frozen candidate; they cannot be
+inferred from code structure.
 
-## 2. What is now genuinely separated
+## 3. Completion criteria
 
-| Boundary | Current owner | What the root binary still owns |
-| --- | --- | --- |
-| canonical JIDs | `northstar-xmpp-types` | route lookup and authorization effects |
-| XML framing | `northstar-xml-framing` | transport buffers, timeouts and closure |
-| XML output | `northstar-xml-builder` | selection of protocol payloads |
-| authentication algorithms | `northstar-auth-core` | account lookup, credential transactions and TLS facts |
-| abuse policy | `northstar-abuse-policy` | persistent actor state, locks, clocks and challenges |
-| XEP wire/pure policy | 24 `northstar-xep-*` crates | application authorization, transactions and delivery |
-| personal messages | `northstar-message-core` + `northstar-message-application` | PostgreSQL adapter and post-commit Carbon/Push/route executors |
-| room / MUC domain & application commands | `northstar-room-core` + `northstar-room-application` | PostgreSQL repository adapter and cluster outbox coordination |
-| PubSub / PEP | `northstar-pubsub-core` + `northstar-pubsub-application` | PostgreSQL repository adapter and audience projection |
-| roster & subscription | `northstar-roster-core` + `northstar-roster-application` | PostgreSQL repository adapter and outbox delivery |
-| archive / MAM (XEP-0313 & 0059) | `northstar-archive-core` + `northstar-archive-application` | PostgreSQL repository adapter and outbox delivery |
-| upload (XEP-0363) | `northstar-upload-core` + `northstar-upload-application` | PostgreSQL reservation and object store I/O gates |
-| S2S federation & outbox (RFC 6120 & XEP-0220) | `northstar-federation-core` + `northstar-federation-application` | PostgreSQL outbox repository adapter, TLS handshake and socket loop |
-| stream opening & session routing | `northstar-session-core` + `northstar-session-application` | authenticated/bound/SM/CSI state and transport actions |
-| ordered outbound contract | `northstar-delivery-core` | Tokio sink adapter, BOSH/SM/socket acknowledgement execution |
-| presence session policy | `northstar-presence-core` | roster/privacy snapshots and live fan-out |
-| HTTP surface capability graph | `northstar-web-surface` | Axum routers, assets and listener supervision |
+Modularization is complete when all of the following hold for a release
+candidate:
 
-The message and room slices are important because they cross all four layers:
-protocol command, application validation, injected repository, and typed
-post-commit result/effect plan. A parser copied to a crate without these call
-paths is not counted as completed separation.
-
-## 3. Current dependency direction
-
-```text
-main / composition root
-  -> listeners, HTTP and XMPP adapters
-  -> application services and injected ports
-  -> domain and XEP libraries
-
-PostgreSQL / Redis / object store / push / sockets
-  -> root adapters implementing those ports
-  -> never imported by domain or XEP libraries
-```
-
-The architecture checks enforce the bottom half of this direction. The top
-half still contains broad root capabilities, especially in API, cluster,
-federation, upload, PubSub, MIX and worker orchestration.
-
-## 4. Remaining boundary work
-
-The earlier crate-count forecast is obsolete: PubSub, roster, archive, upload,
-federation and session core/application crates already exist. The remaining
-work is to move real callers and authority into those boundaries, then remove
-duplicate root logic. A new crate is justified only by a stable capability
-boundary, never by a file-count target.
-
-The next implementation packets and their exit tests are maintained in
-[MODULARIZATION_EXECUTION_PLAN.md](MODULARIZATION_EXECUTION_PLAN.md#8-next-execution-plan-domain-convergence-and-release-qualification).
-
-## 5. Ordered implementation packets
-
-### Packet 1 — PubSub/PEP command boundary
-
-Completed in this packet: the PEP publish flow now uses
-`northstar_pubsub_application::PepPublishItemsCommand` and
-`PepPublishItemsResult`. `PubSubService::publish_pep_items` now validates command
-input in the application layer, keeps the existing atomic DB transaction path, and
-returns a typed outcome + `content_changed` flag. `src/xmpp/protocol/pep.rs`
-now maps that typed result to protocol outcomes and does not own a publish DB
-pipeline.
-Root PubSub discovery now uses a read-only repository port returning its
-authorized count, cursor result, page and index from one PostgreSQL statement.
-This replaces four separately observed snapshots and preserves zero-length
-and reverse RSM pages.
-XEP-0060 subscription authorization replies now pass a typed command to the
-PubSub service. The service performs the read precheck; the PostgreSQL mutation
-still verifies owner, pending state and SubID under its existing locks before
-writing the event outbox.
-Collection-edge and subscription-options writes now have typed commands as
-well. The service owns their prechecks; the locked PostgreSQL mutations retain
-graph, subscription and outbox authority. Concurrent node reconfiguration
-is now rechecked under the node and subscription locks; the new PostgreSQL
-lock-wait fixture runs in CI.
-PEP node creation and owner batch-unsubscribe now enter through typed commands;
-the repository still owns their transactions and outbox plans.
-PubSub node discovery and last-item delivery use one service-level read decision
-for affiliation, access model and subscription; the protocol layer only maps
-the result to stanzas. This preserves the existing query order and error
-precedence. Affiliation and active subscription now come from one PostgreSQL
-statement snapshot. Node configuration is still loaded separately, so this is
-not an atomic snapshot of every authorization input.
-Subscription-options SET now checks the remote subscriber's presence filters
-in the service and again under the database mutation locks. The service keeps
-requester identity errors ahead of option errors. Subscribe-and-configure keeps
-its protocol precheck and now repeats the remote filter check under its
-existing mutation locks, before changing the subscription or outbox.
-Bookmarks2 publish notifications now use the item diff read under the publish
-transaction's locks. A concurrent write can no longer leave the notification
-based on an earlier protocol-layer read.
-The legacy Private XML bookmark bridge now enters through a typed PubSub
-application command and repository port. Its event plan compares the locked
-previous and replacement items inside the existing transaction; the protocol
-handler only renders the resulting XML. The compare-and-swap check and outbox
-write remain atomic with the bookmark replacement.
-
-Remaining for Packet 1: convert remaining PubSub mutation operations (including
-all subscription mutation adapters and remaining fan-out planning points) to the
-same command/result boundary, then separate the other read routes into query
-capabilities. XML handlers must retain zero commit composition.
-
-### Packet 2 — Complete room convergence
-
-Completed: Subject, moderation/retraction, affiliation, configuration and registration commands
-now run behind typed application commands (`MucSubjectCommand`, `MucRetractionCommand`,
-`MucAffiliationBatchCommand`, `MucConfigurationCommand`, `MucRegistrationCommand`) in
-`northstar-room-application` and pure domain types in `northstar-room-core`. `crates/contexts/room/northstar-room-application/src/muc_service.rs`
-provides unified `execute_muc_*` atomic methods, and `src/xmpp/protocol/muc.rs` exclusively dispatches
-typed commands without ad-hoc transaction composition.
-
-### Packet 3 — Session kernel
-
-Group authenticated identity, bind/route incarnation, SM and CSI into explicit
-substates. Inject authentication, bind, resume-store, publication and outbound
-ports. Move TCP, direct TLS, WebSocket and BOSH action execution outside the
-kernel while preserving BOSH response fences and XEP-0198 replay ownership.
-Exit when the session kernel imports no Tokio channel, socket or root service.
-Transport adapters can no longer traverse `ProtocolSession.state`; BOSH holds
-replay, MIX delivery and SM memory as specific backend handles. Direct socket
-delivery uses narrow fence and acknowledgment methods, and TCP/WebSocket
-backpressure guards hold only a counter handle. The session still owns
-`AppState`, so this closes an access path rather than the full kernel split.
-TCP, Direct TLS, STARTTLS and WebSocket now move that state into the session at
-construction. Their transport loops retain only a fixed SM lease polling
-interval and a narrow backpressure counter handle.
-The session also captures its immutable SM limits and IP binding at creation;
-enable, resume, checkpoint and ACK no longer repeatedly read those settings
-through `AppState`. Durable SM service authority remains unchanged.
-Deferred offline replay tasks now capture `ReplayService` directly instead of
-retaining the full `AppState`; the service still owns the same lease and policy
-checks.
-SASL2 authenticate, response and abort now retain only an owned authentication
-histogram timer across mutable session work. These paths no longer clone
-`AppState` for telemetry; the timer still records on every exit, including
-early failures. The session itself still owns `AppState` for its remaining
-application capabilities.
-
-### Packet 4 — Roster/visibility and archive
-
-Completed for Roster: Extracted capability-free RFC 6121 domain entities (`RosterChange`, `RosterReadSnapshot`,
-`RosterRemovalTransition`, `SubscriptionType`, `LocalPresenceTransition`, etc.) into `northstar-roster-core`.
-Extracted typed commands (`RosterGetCommand`, `RosterUpsertCommand`, `RosterRemoveCommand`), pure validation
-rules, and the memory-pure `RosterSyncGate` push fence into `northstar-roster-application`.
-`src/services/roster.rs` now provides atomic `execute_roster_*` methods, and `src/xmpp/protocol/roster.rs`
-dispatches typed commands without manual parameter passing or database coupling.
-
-Personal MAM archive admission now reads full-JID, bare-JID, account-default
-and roster facts in one PostgreSQL statement and applies their precedence in
-`northstar-archive-core`. The core also classifies blocked JIDs for personal,
-MUC and MIX queries while preserving MIX's bare-publisher rule. Other archive
-authorization and paging paths still need the same boundary review. MIX now
-uses the shared referenced-ID and cursor resolver while keeping its filtered
-item-ID rule in the PostgreSQL adapter. MIX MAM peer visibility and page
-contents are decided in one repeatable-read database snapshot. Complete the
-existing archive/MAM core and application integration without splitting an
-authorized query's consistent result snapshot.
-MUC archive page reads now apply the anonymous-room peer-filter rule in the
-same room authorization decision used by local and federated queries. Room
-metadata and boundary reads keep their existing policy.
-The Archive application now maps authorized room page and metadata reads to
-typed results; the PostgreSQL adapter still owns the consistent read.
-Federated MUC metadata now enters through a typed Archive application command
-built from the authenticated S2S actor. The PostgreSQL adapter retains the
-room guard and one repeatable-read snapshot for authorization and boundaries;
-generic federated metadata/page scopes remain forbidden, and page streams keep
-their atomic outbox admission.
-
-### Packet 5 — Upload/object lifecycle
-
-Separate XMPP/HTTP adapters, capacity/slot authority, object bytes and
-reconciliation. Local and S3 adapters must implement exact version/delete
-semantics. Exit when no HTTP handler can independently modify slot/object
-state and crash recovery is fault-injectable through ports.
-The HTTP idempotent replay path now asks the upload service to compare the
-presented and stored digests with the committed digest before consuming the
-database replay allowance. The handler still streams and verifies object bytes
-outside the transaction; the repository remains the authority for replay count.
-The upload service now returns the stage-cleanup decision with promotion
-finalization. The HTTP adapter follows that decision, retaining a committed
-direct-final object or an indeterminate stage for recovery.
-It also classifies an unrecorded stage handoff: a direct-final object stays
-available for reconciliation, while a distinct stage may be removed.
-S3 cleanup now removes a known provider version directly and checks that it
-is gone, so a newer version at the same key survives. When a multipart
-completion loses its version response, the adapter leaves the key intact for
-orphan recovery. Versionless cleanup requires explicit provider qualification;
-the pinned MinIO fixture fails the conditional-delete probe and retains the
-object for repair.
-
-### Packet 6 — Federation, components and cluster
-
-Separate transport connectivity from relay grants. S2S and components receive
-distinct authenticated-domain capabilities; Redis remains a hint/cache plane
-and PostgreSQL remains the lease/outbox authority. Exit when connect-mode
-components cannot inherit federation relay and Redis loss has an explicit
-durable fallback result.
-The component router now derives a relay grant from the negotiated protocol.
-XEP-0114 connect mode can address local services and configured local
-components, but cannot enqueue a stanza for a remote domain. Accept mode and
-XEP-0225 keep their existing federation route. The isolated VM component
-matrix still needs a wire-level check of this boundary.
-Component routing and inbound S2S identity checks now share one hosted-domain
-classifier. Upload remains a protected local identity but cannot be an S2S
-stream target; connect-mode components retain their local-only relay grant.
-The cluster direct-message path now counts a `DirectCommitTurn` across its final
-PostgreSQL authority check and acknowledged commit, deferring process-local
-health publication while that turn is active. Recovery takes a database-clock
-cutoff after locking this node's key and instance authority, then wakes exact
-eligible local resources through paged, capacity-limited replay with retries.
-A committed spool write also records a coalesced wake for each live node in
-the same PostgreSQL transaction. Each node claims its own revision, retries
-ineligible routes, and acknowledges only after the recipient spool is empty;
-NOTIFY is backed by a one-second poll. This covers a different node's late
-commit after the recovery cutoff. Packet 6 remains partial: a cancelled
-database commit has an uncertain caller outcome, and the transition and replay
-behavior still need isolated VM fault and scale evidence.
-
-### Packet 7 — Administration and final composition
-
-Move REST/admin operation transactions behind command-role ports, narrow the
-remaining broad transport capabilities, regenerate configuration/docs from
-the effective capability graph, and remove obsolete facades. Then execute the
-complete environment-dependent release matrix.
-REST idempotency requests, principals and replay responses now use the
-application service contract directly instead of importing those types from
-the database facade. TLS reload and panic disconnect now use separate,
-purpose-bound command-role routines. Each keeps administrator and bearer
-authorization, the operation journal, audit entry and encrypted replay in one
-transaction; the command role still has no table or sequence rights. Other
-REST management mutations remain on the runtime role and need their own
-reviewed capabilities and ACL and atomicity tests.
-The administrator's live-session page selection now belongs to the API query
-service. The route still verifies its node-bound cursor, while PostgreSQL
-authorizes the snapshot under the same read transaction before local sessions
-are inspected. This does not move administrative mutations to the command role.
-
-## 6. Scheduling
-
-Estimate each remaining packet after recording its call sites, database lock
-wait, external fixtures and release environment. Third-party interoperability,
-independent security review and 24–72 hour soak require separate calendar time;
-they cannot be inferred from code size. The critical path is preserving
-transaction and delivery behavior through PubSub, archive and session changes,
-then qualifying a frozen release candidate in its target environment.
-
-## 7. Completion definition
-
-Modularization is complete only when all of the following hold:
-
-1. protocol and HTTP adapters parse/map only and own no business transaction;
+1. protocol and HTTP adapters parse and map only, and own no business
+   transaction;
 2. every user-visible mutation has one application owner and one repository
    transaction owner;
 3. every external effect starts after commit and has explicit retry or
-   indeterminate recovery semantics;
-4. all service handles and infrastructure capabilities in `AppState` are
-   private and exposed through narrow ports;
+   indeterminate-recovery semantics;
+4. the composition root exposes services and infrastructure capabilities only
+   through narrow ports;
 5. optional XEP, web, admin and worker capabilities disappear coherently from
    routes, discovery, listeners and configuration when disabled;
-6. strict format/check/test/Clippy and architecture gates pass;
-7. isolated PostgreSQL/Redis, transport, browser/Gajim, federation/component,
-   load, fuzz, backup/restore and release packaging gates pass for the exact
-   candidate artifact;
-8. `KNOWN_ISSUES.md` contains only deliberate, justified compromises rather
-   than untracked architecture debt.
+6. format, check, test, Clippy, crate-graph and source gates pass;
+7. the isolated PostgreSQL/Redis, transport, browser and client, federation
+   and component, load, fuzz, backup/restore and release-packaging gates pass
+   for the exact candidate artifact;
+8. `KNOWN_ISSUES.md` contains only deliberate, justified compromises.
+
+Criteria 1–6 concern the code and its gates; criteria 7 and 8 belong to
+release qualification.
+
+## 4. History
+
+The [2026-11-19 version of this report](https://github.com/takanashi-tetsuya/northstar/blob/880b48ebed4b19f2d42b050ffcd873de2b1b2fe1/docs/MODULARIZATION_PROGRESS_REPORT.md)
+is the last one written before the restructure: it lists the
+pre-restructure ownership table and the seven implementation packets that
+stages S16–S41 replaced. Dated handoffs under [`handoff/`](handoff/) keep their
+original wording.

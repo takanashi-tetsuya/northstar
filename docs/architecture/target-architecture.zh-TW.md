@@ -217,6 +217,9 @@ S34 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.30）：`Server
   架構驗證器只產生編譯期 crate 圖。
 - S41 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.37）：架構門禁的內容用途掃描改讀 `saved_replay` 的原始碼；
   `default-members` 只有根 crate，文件與腳本中的整體品質指令帶 `--workspace`，每個 crate 都能單獨建置與測試。
+- S42 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.38）：再審計讀 Rust 原始碼的門禁，刪除空轉、重複與已有
+  測試涵蓋的檢查，可改寫的 13 項改為擁有者 crate 的測試，門禁淨減 471 行。保留的是結構規則、組合根接線、SQL 與
+  目錄、基礎設施與 S36 的 6 個 hook 案例。結構門禁的行數預算擴及 `crates/` 與 `tools/`。
 
 ## 5. 遷移順序
 
@@ -243,6 +246,7 @@ S34 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.30）：`Server
 | S39 依賴圖衛生 | S38 後的量測：刪除 S16 保留、已無使用者的 5 個 `foundation-*` crate，把仍描述它們的遷移政策、金鑰管理與資料庫不變式文件改寫為現行設計，移除 16 個沒有原始碼使用的依賴與兩個一次性產物 | workspace 沒有孤立 crate，現行文件不引用不存在的 crate；測試名稱不變（刪除的測試只屬於被刪的 crate）；全部門禁與完整 CI 通過。已完成（WP-608–611，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.35） |
 | S40 微服務時代殘留清除 | S39 盤點列出的 S16 保留項目：刪除描述每服務一個資料庫、Kafka 主題、SPIFFE 身分與 OTLP 匯出的工具、catalog、部署說明與文件，以及架構驗證器的 data-access 圖 | 每份 catalog 都有讀取者，每個 CI 步驟都判定結果；測試名稱不變（刪除的測試只屬於被刪的工具）；全部門禁與完整 CI 通過。已完成（WP-612–614，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.36） |
 | S41 根 crate 測試碼遷出 | S40 後的量測：根 crate 的 `src/` 約七成是只在測試中編譯的程式碼。只測單一擁有者的協定測試移入擁有者 crate，跨上下文的 saved-case 重播與 Stage 4 擷取介面卡移入 `northstar-test-harness` 的整合測試目標，根 crate 刪除只服務這些測試的依賴 | 根 crate 的 `src/` 只剩組合根與它自己的測試；測試名稱依路徑對應後不變（刪除 1 個重複測試）；每個受影響 crate 能單獨建置；全部門禁與完整 CI 通過。已完成（WP-615–623，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.37） |
+| S42 門禁再審計 | S37–S41 移動程式碼後，讀 Rust 原始碼的門禁中有空轉、與 crate 圖或其他檢查重複、已有測試涵蓋的檢查；結構門禁只掃描根 crate 的 `src/`；兩份模組化文件仍寫舊路徑。先唯讀審計，再刪除檢查、改寫為擁有者測試、擴大結構門禁的範圍並改寫文件 | 刪除的行為與型別檢查都有擁有者測試或既有測試涵蓋；結構規則與組合根接線保留；workspace 測試原有名稱不變；全部門禁與完整 CI 通過。已完成（WP-624–634，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.38） |
 
 與其他計劃的關係：模組化執行計劃的 C1（PubSub）與 C2（MAM）是語義上的重構，在對應上下文搬進新 crate 後於新
 結構中進行；D1 由 S18 與 S30 吸收；R1–R3 不受影響。

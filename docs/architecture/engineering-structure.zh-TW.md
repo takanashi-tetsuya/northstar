@@ -82,7 +82,7 @@ WP-495 後，operation runtime 的現行位置為
 
 | 規則 | 內容 | 執行方式 |
 | --- | --- | --- |
-| R1 行數預算 | 生產 `.rs` 檔 ≤ 1,500 行；測試檔 ≤ 3,000 行。既有超標檔記錄在基線，只能縮小；新檔不得超標。超標的生產檔不得保留頂層內嵌測試模組（`#[cfg(test)] mod x { … }`），測試移為子檔（S7） | `scripts/check-source-structure.mjs`＋`catalog/source-structure-baseline.json` |
+| R1 行數預算 | 生產 `.rs` 檔 ≤ 1,500 行；測試檔 ≤ 3,000 行。既有超標檔記錄在基線，只能縮小；新檔不得超標。超標的生產檔不得保留頂層內嵌測試模組（`#[cfg(test)] mod x { … }`），測試移為子檔（S7）。範圍是 `src/`、`crates/` 與 `tools/` 下的 `.rs`（S42 起，之前只有 `src/`）；`tests` 與 `protocol_regression_tests` 目錄、`tools/northstar-db-it/src` 算測試檔 | `scripts/check-source-structure.mjs`＋`catalog/source-structure-baseline.json` |
 | R2 根目錄收斂 | `src/` 根目錄 `.rs` 數只能減少；不得新增根目錄測試檔 | 同上 |
 | R3 模組拆分方式 | 大檔拆成「`foo.rs`＋`foo/子模組.rs`」，保持原有模組路徑；拆分 WP 只移動程式碼，不改邏輯。可見性的不變式：搬移後每個名稱的可見範圍只能維持或縮小，不得擴大。維持原範圍的寫法是「私有→`pub(super)`、`pub(super)`→`pub(in <父模組的上層>)`（如 `pub(in crate::xmpp::protocol)`、`pub(in crate::db)`）、`pub(crate)`／`pub` 不動」，適用於搬入子檔的頂層項目、結構欄位與固有 impl 成員；不需跨檔使用者也可維持私有（範圍縮小）。WP-24 起一律採維持原範圍的寫法，由只移動檢查的 `VISIBILITY:` 行逐項核對，免去依編譯錯誤反覆補可見性。協議模組的父檔以明確的 `use self::子模組::{…};` 列出兄弟子檔與測試使用的名稱（只供測試者加 `#[cfg(test)]`），模組外使用者以原可見性轉出（`pub(super) use`／`pub(crate) use`）；已由 `db/mod.rs` 以 `pub use x::*` 整體轉出的 db 模組，父檔改以 `pub use self::子模組::*;` 轉出（bin crate 中未被使用的明確轉出是 unused import，`-D warnings` 下失敗） | 「只移動」差異檢查（第 6 節，`scripts/check-move-only.mjs`） |
 | R4 門禁定位 | 門禁以模組讀原始碼（`foo.rs` 與 `foo/**.rs` 視為同一模組），以括號配對擷取指定項目；禁止新增依函式相鄰順序的擷取。Rust 單元測試以 `include_str!` 讀自身模組原始碼者，拆分時改讀父檔的 `#[cfg(test)] const MODULE_SOURCE`（父檔＋各正式子檔），並以守衛測試確認清單與非測試的 `mod` 宣告一致。子檔依拆分前在單檔中的先後順序列出：有些契約以出現不只一次的標記切割原始碼，依字母排列會取錯片段（WP-25 的 `let exact_replay =`）。模組目錄另有獨立擁有模組的 `xmpp/protocol.rs`、`api/mod.rs`、`bosh.rs` 不以模組讀取（會納入無關模組），門禁改讀「父檔＋`catalog/source-role-splits.json` 所列角色子檔」（`roleSplitFiles`／`readRoleSplitFile`，CLI `--role-split`）；結構門禁驗證該清單（鍵依序排列、子檔為葉檔、父檔有非測試的 `mod` 宣告且清單依宣告順序），這些檔案的守衛測試改比對該清單（WP-82g） | `scripts/lib/source-module.mjs`、`catalog/source-role-splits.json`；Rust 測試見 `src/db/cluster_muc.rs`、`src/db/archive.rs` |
@@ -143,6 +143,7 @@ WP-495 後，operation runtime 的現行位置為
 | S39 依賴圖衛生 | WP-608–611 | 刪除 S16 為 `services/*` 原型保留、之後再無使用者的 5 個 `foundation-*` crate，crate 圖驗證器與 catalog 產生器移除 `foundation-`、`service-` 前綴規則（WP-608）；遷移政策、金鑰管理與資料庫不變式 3 份文件依現行程式碼改寫（WP-609）；移除 12 個 manifest 中 16 個沒有原始碼使用的依賴、`northstar-xep-0357` 的空 `serde` feature 與執行過的 `strip_serde.ps1`，以及 `northstar-auth-core` 下被 cargo 忽略的舊 `Cargo.lock`（WP-610）；記錄階段（WP-611）。盤點見 5.35 | 刪除的 12 個單元測試只測被刪的 crate，其餘測試名稱不變；Cargo.lock 由 493 個套件減為 488 個；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S40 微服務時代殘留清除 | WP-612–614 | 刪除 S16 保留的 `db-bootstrap`、`restore-verifier`、`kafka-policy-generator` 與它們讀取的 `data-ownership.yaml`、`restore-order.yaml`、`topics.yaml`，移除兩個丟棄產出的 CI 步驟；架構驗證器只產生編譯期 crate 圖，刪除 data-access 圖與重複的 `graphs.json`（WP-612）；刪除沒有讀取者的 `key-classes.yaml`、`rpc-authorization.yaml`、`deploy/spire`、`deploy/otel-collector` 與描述微服務設計的 3 份文件（WP-613）；記錄階段（WP-614）。盤點見 5.36 | 刪除的 4 個單元測試只測被刪的工具，其餘測試名稱不變；Cargo.lock 由 488 個套件減為 485 個；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S41 根 crate 測試碼遷出 | WP-615–623 | backup 映像檔補上伺服器二進位檔連結程式碼的 4 份授權檔，`pool.rs` 與邊界門禁的註解改為 SQLx 0.9（WP-615）；唯讀審計根 crate 的 358 個測試（WP-616）；直接訊息測試移入 `northstar-message-xmpp`（WP-617）；MUC 與聯邦 MUC 測試移入 `northstar-muc-xmpp`，PostCommitPlan 測試移入 room 應用層，刪除一個重複測試，`northstar-archive-postgres` 補上它需要的 `northstar-time` postgres feature（WP-618）；MIX 測試依擁有者移入 `northstar-mix-xmpp`、room 應用層、room core 與 stream（WP-619）；其餘 saved-case 重播、Stage 4 擷取介面卡與 native/frame harness 原樣移入 `northstar-test-harness` 的整合測試目標 `saved_replay`，根 crate 刪除只服務這些測試的依賴，腳本中的品質指令加上 `--workspace`（WP-620）；文件、CODEOWNERS 與 test-support 註解改指新位置，刪除空的 `northstar-auth-xmpp` test-support feature（WP-621）；`test-ocsp-stapling.sh` 改從 `northstar-s2s` 執行 OCSP 測試（WP-622）；記錄階段（WP-623）。盤點見 5.37 | 357 個測試依名稱對應後不變，1 個與 room 應用層測試重複的刪除；根 crate 的 `src/` 只剩組合根與它自己的測試；全部門禁、Python 腳本測試與離線 CI 通過 |
+| S42 門禁再審計 | WP-624–634 | 唯讀審計架構與執行門禁（WP-624），以及其他 17 支讀 Rust 內容的門禁、結構門禁的範圍與兩份過時文件（WP-625）；擁有者 crate 補上 13 個測試：Drop、Clone、簽章與欄位型別探針（WP-626），會話路由移除、MIX 重試喚醒、ReplayService 傳輸方法與三個 context 的欄位清單（WP-627）；兩個內嵌測試模組移為子檔（WP-628）；架構門禁（WP-629）、執行門禁（WP-630）與其他 9 支門禁（WP-631）刪除空轉、重複、已有測試涵蓋與已改寫為測試的檢查；結構門禁擴及 `crates/` 與 `tools/`（WP-632）；改寫 `MODULARIZATION_PROGRESS_REPORT.md` 與 `LIBRARY_SPLIT_LEDGER.md`（WP-633）；記錄階段（WP-634）。盤點見 5.38 | 讀 Rust 的門禁淨減 471 行，自測減少 79 個案例；workspace 測試由 3,461 個增為 3,474 個，原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -1681,6 +1682,55 @@ S41 後根 crate 的 `src/` 由 51,684 行減為 15,487 行：6,511 行測試進
 根 crate 的測試由 423 個減為 65 個，`northstar-test-harness` 增加 207 個。workspace 測試由 3,462 個減為 3,461 個（ignored
 296 個不變），名稱依路徑對應後與基準相同；減少的 1 個是刪除的重複測試。Cargo.lock 仍是 485 個套件。
 
+### 5.38 S42 盤點：門禁再審計（`10028dc0`）
+
+S35、S36 把可改寫的門禁檢查改寫成擁有者測試後，S37–S41 又移動了大量程式碼。讀 Rust 原始碼的門禁因此可能留下讀不到
+東西、與 crate 圖或其他檢查重複、或已由新測試涵蓋的檢查。S42 先做兩份唯讀審計，再依審計刪除檢查、補上擁有者測試。
+
+審計 A（WP-624）逐段分類 `check-architecture-boundaries.mjs` 的 227 段（3,043 行）與 `check-execution-boundaries.mjs`
+的 81 段（562 行）。架構門禁中 124 段是結構規則、48 段檢查組合根接線、26 段是基礎設施、3 段是 S36 的 hook 案例；4 段
+空轉、18 段與 crate 圖或其他檢查重複、3 段已有測試涵蓋、1 段可改寫為測試。執行門禁中 16 段空轉（只釘住測試專用的事實
+型別），其餘是結構、接線、基礎設施與 hook。審計 B（WP-625）處理其他 17 支能讀 Rust 內容的門禁，以邏輯檢查組計：3 組
+空轉、6 組重複、13 組已涵蓋、2 組可改寫為測試，另有 62 組結構規則、14 組組合根接線、13 組 SQL 與目錄、22 組基礎設施；
+並量測結構門禁未涵蓋的範圍與 5.37 列出的兩份過時文件。
+
+| WP | 內容 |
+| --- | --- |
+| WP-624 | 唯讀審計架構與執行門禁：逐段分類、已涵蓋與空轉的證據、刪除範圍、擁有者測試提案與執行門禁自測的案例帳 |
+| WP-625 | 唯讀審計其他 17 支讀 Rust 內容的門禁、結構門禁的範圍與 `MODULARIZATION_PROGRESS_REPORT.md`、`LIBRARY_SPLIT_LEDGER.md` |
+| WP-626 | 7 個型別探針：auth core 的密碼憑證與 auth postgres 的預備憑證有自訂 Drop（`T: Drop` 約束）；BOSH 的回應續傳與 message 應用層的已套用直接訊息不可 Clone（固有方法探針）；abuse 政策的 `policy` 帶明確的訊息突發輸入（函式指標簽章）；abuse guard 只保留可選的共享持久化 port，abuse postgres 介面卡持有連線池（欄位型別存取函式） |
+| WP-627 | 6 個擁有者測試：stream 會話表的 Pending 路由移除拒絕不同身分、只通知被移除的路由；room 應用層的 MIX 重試完成只在終止或路由喚醒時發布本地提交（測試 repository 補上 `retry_mix_delivery`）；session 應用層的 ReplayService 保留傳輸需要的 6 個方法；config 的維護輸入與保留政策、operations 應用層的保留 context、pubsub 應用層的訂閱清理 context 以不帶 `..` 的完整解構列出審閱過的欄位 |
+| WP-628 | `northstar-pubsub-application` 的 `lib.rs`（1,548 行）與 `northstar-delivery-core` 的 `bosh_ownership/response.rs`（1,830 行）的內嵌測試模組移為子檔 `tests.rs`，只移動、不改測試；兩檔降為 1,205 與 1,078 行 |
+| WP-629 | 架構門禁刪除空轉、重複與已涵蓋的檢查，以及 WP-626 取代的自訂 Drop 檢查和只為它們存在的綁定；一則訊息與一則註解縮小為實際檢查的內容。3,043 行減為 2,892 行 |
+| WP-630 | 執行門禁刪除 16 段空轉的測試事實釘選、只檢查測試選擇的驗證器，以及 WP-626 取代的 BOSH 回應續傳 Clone 檢查；562 行減為 456 行，自測由 138 個案例減為 77 個 |
+| WP-631 | 資料庫角色、遷移版本、abuse、准入、子伺服器、會話生命週期、聯邦路由、OMEMO 與文件一致性 9 支門禁刪除空轉、重複、已涵蓋與由 WP-626、WP-627 取代的檢查，以及只供它們使用的讀取，共 214 行；自測刪除 18 個案例 |
+| WP-632 | 結構門禁改為掃描 `src/`、`crates/` 與 `tools/`（略過 `target/` 與 `.git/`），掃描根讀不到即失敗；`tools/northstar-db-it/src` 與 `protocol_regression_tests` 目錄算測試碼。基線加入 4 個既有超標檔：`northstar-protocol-runtime` 的 `caps.rs`（1,574 行）、`northstar-cluster` 的 `tests.rs`（3,222 行）與 `saved_replay` 的 `stage4_replay.rs`（4,521 行）、`compact.rs`（3,431 行） |
+| WP-633 | 改寫 `MODULARIZATION_PROGRESS_REPORT.md`（現況、它不宣稱的事項與各自的追蹤位置、完成條件）與 `LIBRARY_SPLIT_LEDGER.md`（層級、XEP 函式庫與開關、測試位置），舊版以固定提交的連結保留 |
+| WP-634 | 記錄階段 |
+
+與計劃的差異：審計 A 提議以 19 個需要 PostgreSQL 的 `northstar-db-it` 案例取代架構門禁中 8 行的 MIX producer 介面卡
+轉發檢查。介面卡方法逐一轉發到對應交易是一對一的結構對應，交易本身已由 `producer_conformance` 直接測試；為 8 行的
+結構檢查加 19 個資料庫案例不划算，這段檢查保留，其餘 13 個測試照審計補上。審計 B 有四處行號邊界與原始碼差一行：
+MV05 包含它上一行的註解，MV08 的最後一行是保留的 MV09 的開頭，MV14 只刪清單運算元而保留迴圈的 `do`，AD03 的最後
+一行是保留的輔助函式的右括號；依實際範圍刪除。
+
+尚未處理：`docs/MODULARIZATION_EXECUTION_PLAN.md`（1,027 行）仍是重構前的執行計劃，文件一致性檢查、
+`LOCAL_VM_QUALIFICATION.md` 與本文都引用它。S36 的 6 個 hook 案例，以及需要生產暫停點才能確定交錯的 caps 原子替換、
+啟用在儲存後的回滾，仍由門禁以結構方式檢查。
+
+新決定：
+
+- 讀原始碼的門禁只保留 crate 圖與測試表達不了的規則：結構規則（清單、匯入、欄位、文件同步）、組合根接線、SQL 與
+  目錄、基礎設施，以及不為測試加 hook 的案例。行為與型別形狀由擁有者 crate 的測試表達：不可 Clone 用固有方法探針，
+  自訂 Drop 用 `T: Drop` 約束，函式簽章用函式指標賦值，欄位清單用不帶 `..` 的完整解構（WP-626、WP-627）。
+- 結構門禁的行數預算涵蓋 workspace 的全部 Rust 原始碼：`src/`、`crates/` 與 `tools/`；`fuzz/` 有自己的 manifest，
+  不在範圍內（WP-632）。
+- 現行文件只描述現況；過去的狀態以固定提交的連結保留（WP-633）。
+
+S42 後讀 Rust 的門禁淨減 471 行（架構 151 行、執行 106 行、其他 9 支 214 行），自測減少 218 行、79 個案例。workspace
+測試由 3,461 個增為 3,474 個（ignored 296 個不變），新增的 13 個都是擁有者測試，原有名稱不變。結構門禁掃描 1,431 個
+檔案，4 個既有超標檔記錄在基線。Cargo.lock 仍是 485 個套件。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點），S31 的 WP-483 起 agy 額度用盡，再改由 Codex CLI 執行（第 10 點）。
@@ -2498,3 +2548,14 @@ Stage 證據仍綁定其原提交。
 | WP-621 | 完成：文件、CODEOWNERS 與 test-support 註解改指新位置；刪除空的 `northstar-auth-xmpp` test-support feature | 見 `git log --grep '\[WP-621\]'` |
 | WP-622 | 完成：`test-ocsp-stapling.sh` 改從 `northstar-s2s` 執行出站 OCSP 測試 | 見 `git log --grep '\[WP-622\]'` |
 | WP-623 | 完成：記錄 S41 的階段與盤點（5.37）、目標架構 4.6、4.7 與第 5 節。WP-615–622 接成一條鏈驗證：fmt、clippy、workspace 測試、受影響 crate 的單獨建置、測試本體比對、全部門禁與 Python 腳本測試、離線 CI | 見 `git log --grep '\[WP-623\]'` |
+| WP-624 | 完成：唯讀審計架構與執行門禁的每一段（審計報告不入庫） | 見 `git log --grep '\[WP-624\]'` |
+| WP-625 | 完成：唯讀審計其他 17 支讀 Rust 內容的門禁、結構門禁的範圍與兩份過時文件（審計報告不入庫） | 見 `git log --grep '\[WP-625\]'` |
+| WP-626 | 完成：7 個 Drop、Clone、簽章與欄位型別探針，分屬 auth、BOSH、message 與 abuse 的 7 個 crate | 見 `git log --grep '\[WP-626\]'` |
+| WP-627 | 完成：6 個擁有者測試：會話路由移除、MIX 重試喚醒、ReplayService 傳輸方法與三個 context 的欄位清單 | 見 `git log --grep '\[WP-627\]'` |
+| WP-628 | 完成：pubsub 應用層與 delivery core 的兩個內嵌測試模組移為子檔 | 見 `git log --grep '\[WP-628\]'` |
+| WP-629 | 完成：架構門禁刪除空轉、重複、已涵蓋與由 WP-626 取代的檢查（3,043 行減為 2,892 行） | 見 `git log --grep '\[WP-629\]'` |
+| WP-630 | 完成：執行門禁刪除空轉的測試事實釘選、測試選擇驗證器與由 WP-626 取代的檢查，自測刪除 61 個案例 | 見 `git log --grep '\[WP-630\]'` |
+| WP-631 | 完成：其他 9 支門禁刪除空轉、重複、已涵蓋與由 WP-626、WP-627 取代的檢查，自測刪除 18 個案例 | 見 `git log --grep '\[WP-631\]'` |
+| WP-632 | 完成：結構門禁擴及 `crates/` 與 `tools/`，掃描根讀不到即失敗，基線加入 4 個既有超標檔 | 見 `git log --grep '\[WP-632\]'` |
+| WP-633 | 完成：改寫 `MODULARIZATION_PROGRESS_REPORT.md` 與 `LIBRARY_SPLIT_LEDGER.md` | 見 `git log --grep '\[WP-633\]'` |
+| WP-634 | 完成：記錄 S42 的階段與盤點（5.38）、R1 的範圍、目標架構 4.7 與第 5 節。WP-626–633 接成一條鏈驗證：fmt、clippy、workspace 測試、受影響 crate 的單獨建置、全部門禁與 Python 腳本測試、離線 CI | 見 `git log --grep '\[WP-634\]'` |

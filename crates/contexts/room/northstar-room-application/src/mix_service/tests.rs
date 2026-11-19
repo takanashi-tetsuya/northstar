@@ -790,6 +790,86 @@ async fn observed_worker_turns_bind_results_and_wake_only_matching_settlements()
 }
 
 #[tokio::test]
+async fn retry_completion_wakes_only_terminal_or_route_woken_commits() {
+    let delivery_id = Uuid::from_u128(601);
+    let lease_token = Uuid::from_u128(602);
+    let attempt_count = 17;
+    let route_wake_generation = 19;
+    let error = "recorded retry failure";
+    for (label, reply, expected, wakes) in [
+        (
+            "lease lost",
+            Reply::Retry(MixDeliveryRetryOutcome::LeaseLost),
+            Some(false),
+            0,
+        ),
+        (
+            "retried",
+            Reply::Retry(MixDeliveryRetryOutcome::Retried),
+            Some(true),
+            0,
+        ),
+        (
+            "route woken at attempt limit",
+            Reply::Retry(MixDeliveryRetryOutcome::RouteWokenAtAttemptLimit),
+            Some(true),
+            1,
+        ),
+        (
+            "dead lettered",
+            Reply::Retry(MixDeliveryRetryOutcome::DeadLettered),
+            Some(true),
+            1,
+        ),
+        ("repository error", Reply::Error, None, 0),
+    ] {
+        let pause = Arc::new(tokio::sync::Semaphore::new(0));
+        let repository = Repository {
+            reply,
+            pause: Some(Arc::clone(&pause)),
+            ..Repository::default()
+        };
+        let service = recording_service(repository.clone());
+        let generation = service.delivery_wake.generation();
+        let expected_call = format!(
+            "retry_mix_delivery:{delivery_id}:{lease_token}:{attempt_count}:{route_wake_generation}:{error}"
+        );
+        let mut retry = Box::pin(service.retry_mix_delivery(
+            delivery_id,
+            lease_token,
+            attempt_count,
+            route_wake_generation,
+            error,
+        ));
+
+        assert!(futures::poll!(&mut retry).is_pending(), "{label}");
+        assert_eq!(
+            repository.calls(),
+            std::slice::from_ref(&expected_call),
+            "{label}"
+        );
+        assert_eq!(service.delivery_wake.generation(), generation, "{label}");
+
+        pause.add_permits(1);
+        let result = retry.await;
+        match expected {
+            Some(expected) => assert_eq!(result.unwrap(), expected, "{label}"),
+            None => assert_eq!(
+                result.unwrap_err().to_string(),
+                "recorded repository failure",
+                "{label}"
+            ),
+        }
+        assert_eq!(repository.calls(), [expected_call], "{label}");
+        assert_eq!(
+            service.delivery_wake.generation(),
+            generation + wakes,
+            "{label}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn injected_budget_tracks_admission() {
     use northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission;
     for (label, pool, capacity) in [

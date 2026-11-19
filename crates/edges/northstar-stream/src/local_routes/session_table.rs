@@ -825,6 +825,94 @@ mod tests {
     }
 
     #[test]
+    fn pending_removal_rejects_foreign_identity_and_signals_exact_route() {
+        let connection_id = Uuid::from_u128(1);
+        let user_id = Uuid::from_u128(2);
+        let sm_session_id = Uuid::from_u128(3);
+        for cancel_live_route in [false, true] {
+            for (label, key, connection, user, sm, exact) in [
+                (
+                    "missing route",
+                    "alice@example.test/missing",
+                    connection_id,
+                    user_id,
+                    sm_session_id,
+                    false,
+                ),
+                (
+                    "wrong connection",
+                    KEY,
+                    Uuid::from_u128(4),
+                    user_id,
+                    sm_session_id,
+                    false,
+                ),
+                (
+                    "wrong user",
+                    KEY,
+                    connection_id,
+                    Uuid::from_u128(5),
+                    sm_session_id,
+                    false,
+                ),
+                (
+                    "wrong SM identity",
+                    KEY,
+                    connection_id,
+                    user_id,
+                    Uuid::from_u128(6),
+                    false,
+                ),
+                (
+                    "exact tuple",
+                    KEY,
+                    connection_id,
+                    user_id,
+                    sm_session_id,
+                    true,
+                ),
+            ] {
+                let table = LocalSessionTable::new(Arc::new(DashMap::new()));
+                let (route, _outbound) = session(connection_id, user_id, true);
+                *route.sm_session_id.write().unwrap() = Some(sm_session_id);
+                let disconnect = route.disconnect.clone();
+                let incarnation = Arc::clone(&route.route_incarnation);
+                table.insert(KEY.to_owned(), route);
+                let (replacement, _replacement_outbound) =
+                    session(Uuid::from_u128(7), user_id, true);
+                *replacement.sm_session_id.write().unwrap() = Some(sm_session_id);
+                let replacement_disconnect = replacement.disconnect.clone();
+                let replacement_removal = replacement.route_incarnation.subscribe();
+
+                let removal = table.sm_pending_route_removal_signal(
+                    key,
+                    connection,
+                    user,
+                    sm,
+                    cancel_live_route,
+                );
+
+                assert_eq!(removal.is_some(), exact, "{label}");
+                assert_eq!(
+                    disconnect.is_cancelled(),
+                    exact && cancel_live_route,
+                    "{label}"
+                );
+                assert!(!replacement_disconnect.is_cancelled(), "{label}");
+                if let Some(removal) = removal {
+                    assert!(!*removal.borrow(), "{label}");
+                    // Reusing the full JID must not move the old receiver to the new route.
+                    table.insert(KEY.to_owned(), replacement);
+                    incarnation.publish_removed();
+                    assert!(*removal.borrow(), "{label}");
+                    assert!(!*replacement_removal.borrow(), "{label}");
+                    assert!(!replacement_disconnect.is_cancelled(), "{label}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn privacy_list_active_locally_matches_any_resource() {
         let table = LocalSessionTable::new(Arc::new(DashMap::new()));
         let (inactive, _inactive_receiver) = session(Uuid::new_v4(), Uuid::new_v4(), true);

@@ -163,6 +163,39 @@ impl MaintenanceConfig {
 mod tests {
     use super::*;
 
+    fn maintenance_config_shape(config: MaintenanceConfig) {
+        let MaintenanceConfig {
+            xmpp_domain: _,
+            database_url: _,
+            database_url_file: _,
+            database_allow_unsafe_role_for_development: _,
+            maintenance_bind: _,
+            mam_retention_days: _,
+            muc_mam_retention_days: _,
+            offline_message_ttl_days: _,
+            audit_log_retention_days: _,
+            retention_cleanup_batch_size: _,
+            retention_cleanup_interval_seconds: _,
+        } = config;
+    }
+
+    fn retention_policy_shape(policy: RetentionPolicy) {
+        let RetentionPolicy {
+            mam_retention_days: _,
+            muc_mam_retention_days: _,
+            offline_message_ttl_days: _,
+            audit_log_retention_days: _,
+            retention_cleanup_batch_size: _,
+            retention_cleanup_interval_seconds: _,
+        } = policy;
+    }
+
+    #[test]
+    fn maintenance_inputs_and_retention_policy_have_reviewed_fields() {
+        let _: fn(MaintenanceConfig) = maintenance_config_shape;
+        let _: fn(RetentionPolicy) = retention_policy_shape;
+    }
+
     #[test]
     fn retention_max_silence_saturates() {
         let config: MaintenanceConfig =

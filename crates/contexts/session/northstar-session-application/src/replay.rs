@@ -662,6 +662,16 @@ mod tests {
     }
 
     #[test]
+    fn transport_capabilities_remain_available() {
+        let _ = ReplayService::<ResponseRepository>::fence_socket_write;
+        let _ = ReplayService::<ResponseRepository>::acknowledge_socket_write;
+        let _ = ReplayService::<ResponseRepository>::renew_bosh_fences;
+        let _ = ReplayService::<ResponseRepository>::acknowledge_bosh_responses;
+        let _ = ReplayService::<ResponseRepository>::bind_bosh_response_sources;
+        let _ = ReplayService::<ResponseRepository>::release_bosh_fences;
+    }
+
+    #[test]
     fn bosh_response_services_forward_original_requests_and_repository_results() {
         use northstar_delivery_core::bosh_ownership::{
             response::ResponseKind, Operation, OperationKind, Scope,

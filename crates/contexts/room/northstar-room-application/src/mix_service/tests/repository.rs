@@ -12,6 +12,7 @@ pub(super) enum Reply {
     Bool(bool),
     Worker,
     Settlement(outbox::core::SettlementResult),
+    Retry(MixDeliveryRetryOutcome),
 }
 
 #[derive(Clone, Default)]
@@ -299,6 +300,24 @@ impl MixRepository for Repository {
         Ok(result)
     }
 
+    async fn retry_mix_delivery(
+        &self,
+        delivery_id: Uuid,
+        lease_token: Uuid,
+        attempt_count: i32,
+        route_wake_generation: i64,
+        error: &str,
+    ) -> Result<MixDeliveryRetryOutcome> {
+        self.record(format!(
+            "retry_mix_delivery:{delivery_id}:{lease_token}:{attempt_count}:{route_wake_generation}:{error}"
+        ))
+        .await?;
+        let Reply::Retry(result) = self.reply else {
+            panic!("retry reply")
+        };
+        Ok(result)
+    }
+
     unused_ports! {
         link_local_muc_mirror(mix_domain: &str, localpart: &str, actor_bare_jid: &str, local_domain: &str) -> MixMucLinkOutcome;
         create_mix_channel(service_domain: &str, requested_localpart: Option<&str>, creator_jid: &str, max_channels_per_owner: i64, federated: Option<&FederatedMixMutation>) -> (CreateChannelOutcome, String);
@@ -354,7 +373,6 @@ impl MixRepository for Repository {
         release_mix_cluster_delivery(source: MixDelivery, node_id: &str, request_id: Uuid) -> bool;
         renew_mix_delivery_lease(delivery_id: Uuid, lease_token: Uuid) -> bool;
         dead_letter_mix_delivery(delivery_id: Uuid, lease_token: Uuid, terminal_reason: &str, error: &str) -> bool;
-        retry_mix_delivery(delivery_id: Uuid, lease_token: Uuid, attempt_count: i32, route_wake_generation: i64, error: &str) -> MixDeliveryRetryOutcome;
         defer_mix_delivery(delivery_id: Uuid, lease_token: Uuid, route_wake_generation: i64, delay_seconds: i64) -> bool;
         wake_mix_delivery_recipient(recipient_jid: &str) -> u64;
         mix_delivery_dead_letters(before: Option<(DateTime<Utc>, Uuid)>, limit: i64) -> Vec<MixDeliveryDeadLetter>;

@@ -366,6 +366,20 @@ mod tests {
     use super::*;
     use std::{collections::BTreeSet, sync::Mutex};
 
+    fn retention_context_shape<R>(context: RetentionContext<R>) {
+        let RetentionContext {
+            repository: _,
+            policy: _,
+            counters: _,
+            readiness: _,
+        } = context;
+    }
+
+    #[test]
+    fn retention_context_has_only_reviewed_fields() {
+        let _: fn(RetentionContext<RecordingRepository>) = retention_context_shape;
+    }
+
     #[derive(Default)]
     struct RecordingRepository {
         calls: Mutex<Vec<&'static str>>,

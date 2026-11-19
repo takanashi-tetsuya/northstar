@@ -200,6 +200,19 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use tokio::sync::oneshot;
 
+    fn cleanup_context_shape<R>(context: SubscriptionCleanupContext<R>) {
+        let SubscriptionCleanupContext {
+            repository: _,
+            metrics: _,
+            readiness: _,
+        } = context;
+    }
+
+    #[test]
+    fn cleanup_context_has_only_reviewed_fields() {
+        let _: fn(SubscriptionCleanupContext<RecordingCleanupRepository>) = cleanup_context_shape;
+    }
+
     impl SubscriptionCleanupReadiness {
         fn for_test(ready: bool) -> Self {
             Self {

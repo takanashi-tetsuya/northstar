@@ -2114,7 +2114,7 @@ for (const credentialField of [
 // commit in the same chosen cross-stream order. Participant RAII makes a
 // waiter cancellation remove the registry entry without a background sweep.
 const capsProtocolSource =
-  read('crates/contexts/session/northstar-protocol-runtime/src/caps.rs') +
+  readProductionModule('crates/contexts/session/northstar-protocol-runtime/src/caps.rs', { root }) +
   read('crates/edges/northstar-stream/src/protocol/caps.rs') +
   read('crates/edges/northstar-stream/src/caps_effects.rs');
 const s2sInboundSource = readProductionModule('crates/edges/northstar-s2s/src/inbound.rs', { root })

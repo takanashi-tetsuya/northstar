@@ -4,14 +4,9 @@
     "production": 1500,
     "test": 3000
   },
-  "oversize": {
-    "src/stage4_replay.rs": 4521,
-    "src/stage4_replay/compact.rs": 3431
-  },
+  "oversize": {},
   "root_rust_files": [
-    "src/direct_replay.rs",
     "src/main.rs",
-    "src/stage4_replay.rs",
     "src/node.rs"
   ]
 }

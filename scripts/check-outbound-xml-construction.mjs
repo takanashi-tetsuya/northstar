@@ -437,7 +437,7 @@ if (
 }
 
 const mixModuleFiles = productionModuleFiles('crates/contexts/room/northstar-mix-xmpp/src/lib.rs', { root });
-const mixSeamFiles = productionModuleFiles('src/xmpp/protocol/mix.rs', { root });
+const mixSeamFiles = productionModuleFiles('tools/northstar-test-harness/tests/saved_replay/xmpp/protocol/mix.rs', { root });
 if (!mixModuleFiles.includes('crates/contexts/room/northstar-mix-xmpp/src/worker.rs') || mixSeamFiles.some(p => p.includes('/stage4_saved'))) {
   throw new Error('outbound XML gate lost module expansion');
 }

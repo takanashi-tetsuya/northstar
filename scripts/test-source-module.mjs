@@ -361,9 +361,9 @@ test('Real repository checks', () => {
   
   const prodFiles = productionModuleFiles('crates/contexts/room/northstar-mix-xmpp/src/lib.rs');
   assert.ok(prodFiles.includes('crates/contexts/room/northstar-mix-xmpp/src/worker.rs'));
-  // exclude every path under src/xmpp/protocol/mix/stage4_saved
-  assert.ok(moduleFiles('src/xmpp/protocol/mix.rs').some(f => f.includes('stage4_saved')));
-  for (const f of productionModuleFiles('src/xmpp/protocol/mix.rs')) {
+  // exclude every path under tools/northstar-test-harness/tests/saved_replay/xmpp/protocol/mix/stage4_saved
+  assert.ok(moduleFiles('tools/northstar-test-harness/tests/saved_replay/xmpp/protocol/mix.rs').some(f => f.includes('stage4_saved')));
+  for (const f of productionModuleFiles('tools/northstar-test-harness/tests/saved_replay/xmpp/protocol/mix.rs')) {
     assert.ok(!f.includes('stage4_saved'));
   }
 });
@@ -385,7 +385,7 @@ test('CLI tests', () => {
   res = spawnSync(process.execPath, [libraryPath, 'files', '--production', 'crates/contexts/room/northstar-mix-xmpp/src/lib.rs'], { encoding: 'utf8' });
   assert.equal(res.status, 0);
   assert.ok(res.stdout.includes('crates/contexts/room/northstar-mix-xmpp/src/worker.rs'));
-  res = spawnSync(process.execPath, [libraryPath, 'files', '--production', 'src/xmpp/protocol/mix.rs'], { encoding: 'utf8' });
+  res = spawnSync(process.execPath, [libraryPath, 'files', '--production', 'tools/northstar-test-harness/tests/saved_replay/xmpp/protocol/mix.rs'], { encoding: 'utf8' });
   assert.equal(res.status, 0);
   assert.ok(!res.stdout.includes('stage4_saved'));
 

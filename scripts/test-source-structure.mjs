@@ -22,7 +22,7 @@ test('classify', () => {
   assert.equal(classify('src/pubsub_integration_tests.rs'), 'test');
   assert.equal(classify('src/db/tests/x.rs'), 'test');
   
-  assert.equal(classify('src/stage4_replay.rs'), 'production');
+  assert.equal(classify('src/node.rs'), 'production');
   assert.equal(classify('src/latest.rs'), 'production');
   assert.equal(classify('src/contest.rs'), 'production');
 });

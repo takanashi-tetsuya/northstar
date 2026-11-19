@@ -64,9 +64,9 @@ node scripts/check-locales.mjs \
     || fail "generated static language packs are incomplete"
 
 cargo fmt --all -- --check
-cargo check --all-targets --all-features --locked
-cargo test --all-targets --all-features --locked
-cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo check --workspace --all-targets --all-features --locked
+cargo test --workspace --all-targets --all-features --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 if command -v cargo-audit >/dev/null 2>&1; then
     cargo audit || fail "RustSec dependency audit failed"
 else

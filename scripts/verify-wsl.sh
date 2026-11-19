@@ -17,19 +17,19 @@ case "${1:-all}" in
     cargo fmt --all -- --check
     ;;
   check)
-    cargo check --all-targets --locked --offline
+    cargo check --workspace --all-targets --locked --offline
     ;;
   test)
-    cargo test --locked --offline
+    cargo test --workspace --locked --offline
     ;;
   clippy)
-    cargo clippy --all-targets --locked --offline -- -D warnings
+    cargo clippy --workspace --all-targets --locked --offline -- -D warnings
     ;;
   all)
     cargo fmt --all -- --check
-    cargo check --all-targets --locked --offline
-    cargo test --locked --offline
-    cargo clippy --all-targets --locked --offline -- -D warnings
+    cargo check --workspace --all-targets --locked --offline
+    cargo test --workspace --locked --offline
+    cargo clippy --workspace --all-targets --locked --offline -- -D warnings
     ;;
   *)
     echo "usage: $0 [fetch|fmt|check|test|clippy|all]" >&2

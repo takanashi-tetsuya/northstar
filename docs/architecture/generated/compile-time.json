@@ -5934,15 +5934,7 @@
     ],
     [
       "northstar-server",
-      "northstar-xep-catalog"
-    ],
-    [
-      "northstar-server",
       "northstar-xep-core"
-    ],
-    [
-      "northstar-server",
-      "northstar-xml-builder"
     ],
     [
       "northstar-server",
@@ -5958,15 +5950,7 @@
     ],
     [
       "northstar-server",
-      "serde"
-    ],
-    [
-      "northstar-server",
       "serde_json"
-    ],
-    [
-      "northstar-server",
-      "sha2"
     ],
     [
       "northstar-server",
@@ -6438,7 +6422,19 @@
     ],
     [
       "northstar-test-harness",
+      "dashmap"
+    ],
+    [
+      "northstar-test-harness",
+      "futures"
+    ],
+    [
+      "northstar-test-harness",
       "libc"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-abuse-application"
     ],
     [
       "northstar-test-harness",
@@ -6446,7 +6442,99 @@
     ],
     [
       "northstar-test-harness",
+      "northstar-archive-core"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-auth-application"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-auth-core"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-bosh"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-c2s"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-config"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-delivery-core"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-message-application"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-message-core"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-message-xmpp"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-mix-xmpp"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-muc-xmpp"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-protocol-runtime"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-room-application"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-room-core"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-roster-core"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-runtime"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-session-application"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-session-core"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-stream"
+    ],
+    [
+      "northstar-test-harness",
       "northstar-time"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-xml-builder"
+    ],
+    [
+      "northstar-test-harness",
+      "northstar-xmpp-types"
+    ],
+    [
+      "northstar-test-harness",
+      "roxmltree"
     ],
     [
       "northstar-test-harness",
@@ -6470,11 +6558,19 @@
     ],
     [
       "northstar-test-harness",
+      "tokio-util"
+    ],
+    [
+      "northstar-test-harness",
       "tracing"
     ],
     [
       "northstar-test-harness",
       "uuid"
+    ],
+    [
+      "northstar-test-harness",
+      "zeroize"
     ],
     [
       "northstar-time",

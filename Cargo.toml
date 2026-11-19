@@ -124,9 +124,7 @@ futures = "0.3"
 hickory-resolver = { version = "0.26.2", default-features = false, features = ["dnssec-aws-lc-rs", "system-config", "tokio"] }
 rand = "0.8"
 roxmltree = "0.20"
-serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sha2 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "json", "migrate", "macros"] }
 tokio = { version = "1.43", features = ["full"] }
 tokio-rustls = "0.26"
@@ -146,7 +144,6 @@ northstar-xep-0380 = { path = "crates/kernel/northstar-xep-0380" }
 northstar-xep-0444 = { path = "crates/kernel/northstar-xep-0444" }
 northstar-xep-0461 = { path = "crates/kernel/northstar-xep-0461" }
 northstar-xep-core = { path = "crates/kernel/northstar-xep-core" }
-northstar-xep-catalog = { path = "crates/kernel/northstar-xep-catalog" }
 northstar-xep-0045 = { path = "crates/kernel/northstar-xep-0045" }
 northstar-xep-0016 = { path = "crates/kernel/northstar-xep-0016" }
 northstar-auth-application = { path = "crates/contexts/auth/northstar-auth-application" }
@@ -159,7 +156,6 @@ northstar-operations-postgres = { path = "crates/contexts/operations/northstar-o
 northstar-workflows = { path = "crates/contexts/workflows/northstar-workflows" }
 northstar-data-tools = { path = "crates/contexts/workflows/northstar-data-tools" }
 northstar-xmpp-types = { path = "crates/kernel/northstar-xmpp-types" }
-northstar-xml-builder = { path = "crates/kernel/northstar-xml-builder" }
 northstar-xep-0059 = { path = "crates/kernel/northstar-xep-0059" }
 northstar-xep-0060 = { path = "crates/kernel/northstar-xep-0060" }
 northstar-xep-0115 = { path = "crates/kernel/northstar-xep-0115" }
@@ -218,35 +214,15 @@ northstar-federation-application = { path = "crates/contexts/federation/northsta
 northstar-protocol-runtime = { path = "crates/contexts/session/northstar-protocol-runtime" }
 
 [dev-dependencies]
+# Test-support surfaces the root's own tests use: the S2S inbound
+# acceptance test (src/node/hosts/s2s_inbound_tests.rs, run by
+# scripts/message-pow-db-wsl.sh) and the MUC endpoint session-key tests.
 northstar-message-postgres = { path = "crates/contexts/message/northstar-message-postgres", features = ["test-support"] }
-northstar-message-xmpp = { path = "crates/contexts/message/northstar-message-xmpp", features = ["test-support"] }
-northstar-federation-postgres = { path = "crates/contexts/federation/northstar-federation-postgres", features = ["test-support"] }
-northstar-operations-application = { path = "crates/contexts/operations/northstar-operations-application", features = ["test-support"] }
-northstar-room-application = { path = "crates/contexts/room/northstar-room-application", features = ["test-support"] }
-northstar-mix-xmpp = { path = "crates/contexts/room/northstar-mix-xmpp", features = ["test-support"] }
-northstar-muc-xmpp = { path = "crates/contexts/room/northstar-muc-xmpp", features = ["test-support"] }
-northstar-room-postgres = { path = "crates/contexts/room/northstar-room-postgres", features = ["test-support"] }
 northstar-workflows = { path = "crates/contexts/workflows/northstar-workflows", features = ["test-support"] }
-northstar-data-tools = { path = "crates/contexts/workflows/northstar-data-tools", features = ["test-support"] }
-northstar-operations-postgres = { path = "crates/contexts/operations/northstar-operations-postgres", features = ["test-support"] }
-northstar-auth-postgres = { path = "crates/contexts/auth/northstar-auth-postgres", features = ["test-support"] }
-northstar-auth-xmpp = { path = "crates/contexts/auth/northstar-auth-xmpp", features = ["test-support"] }
-northstar-auth-application = { path = "crates/contexts/auth/northstar-auth-application", features = ["test-support"] }
 northstar-abuse-application = { path = "crates/contexts/abuse/northstar-abuse-application", features = ["test-support"] }
-northstar-abuse-policy = { path = "crates/contexts/abuse/northstar-abuse-policy", features = ["test-support"] }
-northstar-message-application = { path = "crates/contexts/message/northstar-message-application", features = ["test-support"] }
-northstar-runtime = { path = "crates/platform/northstar-runtime", features = ["test-support"] }
-northstar-pubsub-postgres = { path = "crates/contexts/pubsub/northstar-pubsub-postgres", features = ["test-support"] }
 northstar-roster-postgres = { path = "crates/contexts/roster/northstar-roster-postgres", features = ["test-support"] }
-northstar-security = { path = "crates/platform/northstar-security", features = ["test-support"] }
-northstar-session-application = { path = "crates/contexts/session/northstar-session-application", features = ["test-support"] }
-northstar-session-postgres = { path = "crates/contexts/session/northstar-session-postgres", features = ["test-support"] }
 northstar-stream = { path = "crates/edges/northstar-stream", features = ["test-support"] }
-northstar-bosh = { path = "crates/edges/northstar-bosh", features = ["test-support"] }
-northstar-upload-postgres = { path = "crates/contexts/upload/northstar-upload-postgres", features = ["test-support"] }
 northstar-archive-postgres = { path = "crates/contexts/archive/northstar-archive-postgres", features = ["test-support"] }
-# Deterministic cancellation/deadline experiments run on a paused test clock.
-tokio = { version = "1.43", features = ["test-util"] }
 
 [profile.release]
 lto = "thin"

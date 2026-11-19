@@ -637,7 +637,7 @@ function withSessionImpls(name, source) {
 // no module name has a file in both directories.
 const protocolModulePaths = new Map([
   ...[...sessionImplSections.keys()].map((name) => [name, null]),
-  ...['src/xmpp/protocol', 'crates/edges/northstar-stream/src/protocol'].flatMap((directory) =>
+  ...['crates/edges/northstar-stream/src/protocol'].flatMap((directory) =>
     fs
       .readdirSync(path.join(root, directory))
       .filter((name) => name.endsWith('.rs'))
@@ -2137,7 +2137,7 @@ if (/\bapi_control\b|ApiControlKeyring/.test(contentGenerationBody)) {
 }
 // The abuse context owns the purpose selector; its callers must not name it.
 const sourceFilesNamingContentPurpose = [];
-for (const directory of ['src/xmpp/protocol', 'crates/edges/northstar-stream/src/protocol', 'tools/northstar-db-it/src', 'crates/contexts']) {
+for (const directory of ['tools/northstar-test-harness/tests/saved_replay', 'crates/edges/northstar-stream/src/protocol', 'tools/northstar-db-it/src', 'crates/contexts']) {
   const pending = [path.join(root, directory)];
   while (pending.length > 0) {
     const current = pending.pop();

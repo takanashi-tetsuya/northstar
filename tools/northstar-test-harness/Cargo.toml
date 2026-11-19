@@ -18,3 +18,38 @@ northstar-abuse-policy = { path = "../../crates/contexts/abuse/northstar-abuse-p
 northstar-time = { path = "../../crates/kernel/northstar-time", features = ["serde"] }
 uuid = { version = "1.12", default-features = false, features = ["serde"] }
 sha2 = "0.10"
+
+# The saved_replay integration target (tests/saved_replay): Stage 4 and direct
+# saved-case replay, the capture adapters it drives and their controls.
+[dev-dependencies]
+northstar-abuse-application = { path = "../../crates/contexts/abuse/northstar-abuse-application", features = ["test-support"] }
+northstar-abuse-policy = { path = "../../crates/contexts/abuse/northstar-abuse-policy", features = ["test-support"] }
+northstar-archive-core = { path = "../../crates/contexts/archive/northstar-archive-core" }
+northstar-auth-application = { path = "../../crates/contexts/auth/northstar-auth-application", features = ["test-support"] }
+northstar-auth-core = { path = "../../crates/contexts/auth/northstar-auth-core" }
+northstar-bosh = { path = "../../crates/edges/northstar-bosh", features = ["test-support"] }
+northstar-c2s = { path = "../../crates/edges/northstar-c2s" }
+northstar-config = { path = "../../crates/platform/northstar-config" }
+northstar-delivery-core = { path = "../../crates/contexts/message/northstar-delivery-core" }
+northstar-message-application = { path = "../../crates/contexts/message/northstar-message-application", features = ["test-support"] }
+northstar-message-core = { path = "../../crates/contexts/message/northstar-message-core", features = ["test-support"] }
+northstar-message-xmpp = { path = "../../crates/contexts/message/northstar-message-xmpp", features = ["test-support"] }
+northstar-mix-xmpp = { path = "../../crates/contexts/room/northstar-mix-xmpp", features = ["test-support"] }
+northstar-muc-xmpp = { path = "../../crates/contexts/room/northstar-muc-xmpp", features = ["test-support"] }
+northstar-protocol-runtime = { path = "../../crates/contexts/session/northstar-protocol-runtime" }
+northstar-room-application = { path = "../../crates/contexts/room/northstar-room-application", features = ["test-support"] }
+northstar-room-core = { path = "../../crates/contexts/room/northstar-room-core" }
+northstar-roster-core = { path = "../../crates/contexts/roster/northstar-roster-core" }
+northstar-runtime = { path = "../../crates/platform/northstar-runtime" }
+northstar-session-application = { path = "../../crates/contexts/session/northstar-session-application", features = ["test-support"] }
+northstar-session-core = { path = "../../crates/contexts/session/northstar-session-core", features = ["test-support"] }
+northstar-stream = { path = "../../crates/edges/northstar-stream", features = ["test-support"] }
+northstar-xml-builder = { path = "../../crates/kernel/northstar-xml-builder" }
+northstar-xmpp-types = { path = "../../crates/kernel/northstar-xmpp-types" }
+dashmap = "6.1"
+futures = "0.3"
+roxmltree = "0.20"
+tokio = { version = "1.43", features = ["full", "test-util"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+uuid = { version = "1.12", features = ["v4", "serde"] }
+zeroize = "1.8"

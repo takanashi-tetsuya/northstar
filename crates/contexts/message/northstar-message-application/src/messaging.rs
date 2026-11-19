@@ -760,7 +760,8 @@ fn direct_commit_error(error: DirectCommitError<anyhow::Error>) -> anyhow::Error
     }
 }
 
-/// The retained route payload, for root tests that drive it over the real queue.
+/// The retained route payload, for the message XMPP adapter's unit tests and
+/// saved replay tests in `tools/northstar-test-harness` over the real queue.
 #[cfg(any(test, feature = "test-support"))]
 pub struct RoutePayloadFixture<'a, I>(RoutePayload<'a, I>);
 #[cfg(any(test, feature = "test-support"))]

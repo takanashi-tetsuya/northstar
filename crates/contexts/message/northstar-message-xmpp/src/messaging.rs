@@ -54,7 +54,8 @@ mod projection;
 pub use self::message_delivery::message;
 use self::projection::*;
 
-/// What the root crate's tests over the real outbound queue need to prepare an original.
+/// Prepares originals for this adapter's unit tests and the saved replay tests
+/// in `tools/northstar-test-harness` over the real outbound queue.
 #[cfg(any(test, feature = "test-support"))]
 pub mod preparation_fixture {
     pub use super::projection::{
@@ -283,3 +284,10 @@ fn message_pow_intent_payload(client_raw: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod direct_continuation_tests;
+#[cfg(test)]
+mod direct_preparation_tests;
+#[cfg(test)]
+mod direct_workflow_tests;

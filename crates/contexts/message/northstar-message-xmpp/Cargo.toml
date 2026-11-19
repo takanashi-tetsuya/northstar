@@ -8,7 +8,8 @@ description = "Personal message stanza pipeline of Northstar: admission, archivi
 publish = false
 
 [features]
-# Lets the root crate's real-queue tests prepare an original.
+# Supports the message XMPP adapter's unit tests and saved replay tests
+# in tools/northstar-test-harness.
 test-support = []
 
 [dependencies]
@@ -32,8 +33,12 @@ tracing = "0.1"
 uuid = "1.12"
 
 [dev-dependencies]
+futures = "0.3"
 northstar-message-application = { path = "../northstar-message-application", features = ["test-support"] }
 northstar-stream = { path = "../../../edges/northstar-stream", features = ["test-support"] }
 northstar-telemetry = { path = "../../../platform/northstar-telemetry" }
 northstar-xep-0016 = { path = "../../../kernel/northstar-xep-0016" }
+serde_json = "1.0"
 tokio = { version = "1.43", features = ["macros", "rt", "sync"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1.12", features = ["v4"] }

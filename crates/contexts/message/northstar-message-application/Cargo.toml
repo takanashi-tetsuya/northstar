@@ -8,7 +8,8 @@ description = "Capability-injected personal-message application service for Nort
 publish = false
 
 [features]
-# Test-only entry points the root crate's saved cases and continuation tests use.
+# Test-only entry points for the message XMPP adapter's unit tests and saved
+# replay tests in tools/northstar-test-harness.
 test-support = ["northstar-message-core/test-support"]
 
 [dependencies]

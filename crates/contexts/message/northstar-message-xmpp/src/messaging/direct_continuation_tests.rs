@@ -28,10 +28,34 @@ use northstar_message_core::{
 use northstar_message_core::{LocalDelivery, MessageIdentity};
 use northstar_stream::outbound::{OutboundSender, RouteEnqueue, RouteSendError};
 use std::{
+    future::Future,
     io::Write,
     sync::{Arc, Mutex},
 };
 use uuid::Uuid;
+
+const FRAME_MESSAGE: &str = "<message type='chat'/>";
+
+/// Ordinary controlled tests use the actual frame owner without constructing
+/// a session. The returned runner owns observation before child polling.
+fn retained_direct_frame_for_test<C, F, T>(
+    child: C,
+) -> (
+    DirectOperationHandle,
+    impl Future<Output = std::result::Result<T, northstar_stream::frame_execution::FrameFailure>>,
+)
+where
+    C: FnOnce(DirectOperationHandle) -> F,
+    F: Future<Output = anyhow::Result<T>>,
+{
+    let execution = northstar_stream::frame_execution::FrameExecution::new(
+        northstar_stream::transport::ClientTransport::Tcp,
+        FRAME_MESSAGE,
+    );
+    let operation = execution.direct_operation();
+    let future = child(operation.clone());
+    (operation, execution.run(future))
+}
 
 const LIVE: &str = "<message id='live'><body>private live</body></message>";
 const UNRATED_LIVE: &str = "<message id='live' type='chat' from='alice@example.test/device' to='bob@example.test'><store xmlns='urn:xmpp:hints'/></message>";
@@ -839,7 +863,7 @@ async fn unconfirmed_errors_keep_precommit_and_commit_unknown_separate() {
     let child_events = events.clone();
     let pair_returned = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let child_returned = pair_returned.clone();
-    let (owner, runner) = super::retained_direct_frame_for_test(move |owner| async move {
+    let (owner, runner) = retained_direct_frame_for_test(move |owner| async move {
         let (service, mut lease) = admit(
             &owner,
             Admission::Reserved,

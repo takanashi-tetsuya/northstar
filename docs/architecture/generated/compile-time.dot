@@ -1348,6 +1348,7 @@ digraph compile_time {
   "northstar-message-postgres" -> "thiserror";
   "northstar-message-postgres" -> "uuid";
   "northstar-message-xmpp" -> "anyhow";
+  "northstar-message-xmpp" -> "futures";
   "northstar-message-xmpp" -> "northstar-abuse-policy";
   "northstar-message-xmpp" -> "northstar-delivery-core";
   "northstar-message-xmpp" -> "northstar-federation-core";
@@ -1365,8 +1366,10 @@ digraph compile_time {
   "northstar-message-xmpp" -> "northstar-xml-builder";
   "northstar-message-xmpp" -> "northstar-xmpp-types";
   "northstar-message-xmpp" -> "roxmltree";
+  "northstar-message-xmpp" -> "serde_json";
   "northstar-message-xmpp" -> "tokio";
   "northstar-message-xmpp" -> "tracing";
+  "northstar-message-xmpp" -> "tracing-subscriber";
   "northstar-message-xmpp" -> "uuid";
   "northstar-mix-xmpp" -> "anyhow";
   "northstar-mix-xmpp" -> "dashmap";

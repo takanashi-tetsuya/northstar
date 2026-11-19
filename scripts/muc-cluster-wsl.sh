@@ -190,10 +190,10 @@ fi
 export TEST_REDIS_URL="redis+unix://$redis_socket"
 cargo test --locked --offline -p northstar-room-postgres cluster_muc::tests:: -- --nocapture
 cargo test --locked --offline -p northstar-cluster \
-  tests::redis_muc_nickname_and_voice_mutations_reject_conflicts_and_aba \
+  tests::redis_soft_state::redis_muc_nickname_and_voice_mutations_reject_conflicts_and_aba \
   -- --ignored --nocapture
 cargo test --locked --offline -p northstar-cluster \
-  tests::redis_ten_thousand_temporary_muc_rooms_leave_no_soft_state_keys \
+  tests::redis_soft_state::redis_ten_thousand_temporary_muc_rooms_leave_no_soft_state_keys \
   -- --ignored --nocapture
 cargo test --locked --offline -p northstar-cluster muc_routing_tests:: -- --ignored --nocapture
 

@@ -3,7 +3,7 @@
 更新：2026-10-21。基線提交：`10d598234c74fefcdc7b7856026e2dd654fe1e1c`。
 
 本文是**結構工作**（程式碼放在哪裡、由誰擁有、如何機械驗證）的唯一權威。
-它不改變任何協議、交易、migration 或安全語義。領域邏輯收斂仍依
+它不改變任何協議、交易、migration 或安全語義。剩餘的語義邊界工作與發布驗證依
 [模組化執行計劃](../MODULARIZATION_EXECUTION_PLAN.md)，實驗架構重建仍依
 [重建帳本](experimental-rebuild-plan.zh-TW.md)，產品限制仍依
 [已知問題](../KNOWN_ISSUES.md)。三者與本文分工見第 7 節。
@@ -422,7 +422,7 @@ S13 逐條核對 5.8 的 51 條引用。介面卡經 `state` 取得的不全是 
 
 S13 後剩 31 條，分布在 31 個檔案。R9 的門禁只計算具名路徑：`api/route_composition.rs` 經 `api/mod.rs` 的匯入仍收
 `Arc<AppState>`，這條依賴記在 `api/mod.rs`。剩下的都持有或傳遞組合根本身，要先有 session／傳輸 port，交給
-[模組化執行計劃](../MODULARIZATION_EXECUTION_PLAN.md)（Phase D 的 session／傳輸 port、Phase E 的基礎設施 port 與
+[模組化執行計劃（25e6c3c 版）](https://github.com/takanashi-tetsuya/northstar/blob/25e6c3c9640f7458acb1abaf82dda537f566e8f7/docs/MODULARIZATION_EXECUTION_PLAN.md)（Phase D 的 session／傳輸 port、Phase E 的基礎設施 port 與
 8.1 的 D1）；之後每減少一條，都由 R9 的基線 ratchet 記錄：
 
 - 介面卡經組合層取得狀態（29）：`xmpp` 15（`xmpp/mod.rs`、協議 actor `protocol.rs` 與 13 個協議子模組，actor 持有
@@ -2019,7 +2019,7 @@ WP 規格固定包含：目標、允許修改的檔案、不得改變的語義�
 | --- | --- |
 | 本文 | 檔案位置、模組邊界、行數預算、門禁定位方式、結構 WP 狀態 |
 | [目標架構](target-architecture.zh-TW.md) | S16 起的目標 workspace 架構、層級與上下文邊界、全面重構的階段順序 |
-| [模組化執行計劃](../MODULARIZATION_EXECUTION_PLAN.md) | 領域邏輯由根 crate 收斂到 crates 的順序與退出證據 |
+| [模組化執行計劃](../MODULARIZATION_EXECUTION_PLAN.md) | 剩餘的語義邊界工作（C1、C2、R1–R3）、邊界規則與發布驗證門禁 |
 | [重建帳本](experimental-rebuild-plan.zh-TW.md) | Stage 0–6 受控驗證；結構 WP 不改寫其證據，未來 record 須用新來源契約 |
 | [已知問題](../KNOWN_ISSUES.md) | 產品限制與發布門禁 |
 

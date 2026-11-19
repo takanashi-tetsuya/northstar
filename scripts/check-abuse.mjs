@@ -20,7 +20,7 @@ const [abuseSources, envExample, apiRouter, authRoutes, reportRoutes, messaging,
   read('.env.example'),
   readRoleSplitFile('crates/edges/northstar-http/src/lib.rs'), read('crates/edges/northstar-http/src/auth_routes.rs'),
   read('crates/edges/northstar-http/src/reports.rs'),
-  readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs'), read('crates/edges/northstar-stream/src/protocol/misc.rs'), read('crates/edges/northstar-stream/src/protocol/ibr.rs'), read('crates/contexts/workflows/northstar-workflows/src/account_repository.rs'),
+  readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs'), readProductionModule('crates/edges/northstar-stream/src/protocol/misc.rs'), read('crates/edges/northstar-stream/src/protocol/ibr.rs'), read('crates/contexts/workflows/northstar-workflows/src/account_repository.rs'),
   read('migrations/0009_abuse_reports.sql'), read('migrations/0078_message_pow_admissions.sql'),
   read('migrations/0084_pow_intent_v2.sql'), read('migrations/0100_parallel_pow_challenges.sql'), read('migrations/0101_durable_account_deletion_recovery.sql'), Promise.all([
     read('src/node/workers/maintenance.rs'),

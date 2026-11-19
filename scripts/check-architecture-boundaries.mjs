@@ -1772,7 +1772,7 @@ for (const accessor of ['mix_service', 'muc_service', 'pubsub_service']) {
 // ARCH-SVC account/push boundary: resource binding remains a deliberately
 // separate stateful session transaction, but XEP-0077 and XEP-0357 handlers
 // must not regain direct persistence authority.
-const miscSource = read('crates/edges/northstar-stream/src/protocol/misc.rs');
+const miscSource = readProductionModule('crates/edges/northstar-stream/src/protocol/misc.rs', { root });
 for (const authority of [
   'prepare_registration',
   'create_user_with_invitation_guarded_in_tx',
@@ -2686,7 +2686,7 @@ if (!read('crates/contexts/session/northstar-session-application/src/post_action
     || ['privacy.rs', 'blocking.rs', 'roster.rs'].some((name) =>
       /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(protocolModuleSource(name, read)))
     || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('crates/edges/northstar-stream/src/protocol/ibr.rs'))
-    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('crates/edges/northstar-stream/src/protocol/misc.rs'))
+    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(readProductionModule('crates/edges/northstar-stream/src/protocol/misc.rs', { root }))
     || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('crates/edges/northstar-stream/src/protocol/sm.rs'))
     || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(readProductionModule('crates/edges/northstar-stream/src/protocol/sasl2.rs', { root }))
     || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(c2sProtocol)

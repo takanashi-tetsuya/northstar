@@ -1,16 +1,9 @@
-//! Remote room actors. `northstar-muc-xmpp` holds the handlers; the root keeps
-//! their fault-injection tests.
+//! Regression tests for remote room actors.
 
-#[cfg(test)]
+use crate::federated_muc::*;
 use anyhow::Result;
-#[cfg(test)]
 use northstar_message_core::validation::validate_routed_message;
-#[cfg(test)]
-use northstar_muc_xmpp::federated_muc::*;
-#[cfg(test)]
 use northstar_room_application::muc_service::{MucRoom, SerializableMucOccupant};
-#[cfg(test)]
 use northstar_stream::local_routes::muc::{MucOccupant, MucOccupantEndpoint};
 
-#[cfg(test)]
 mod tests;

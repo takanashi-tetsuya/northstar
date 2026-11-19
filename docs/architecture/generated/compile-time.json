@@ -4258,6 +4258,10 @@
     ],
     [
       "northstar-muc-xmpp",
+      "northstar-archive-postgres"
+    ],
+    [
+      "northstar-muc-xmpp",
       "northstar-delivery-core"
     ],
     [
@@ -4319,6 +4323,10 @@
     [
       "northstar-muc-xmpp",
       "northstar-xep-0359"
+    ],
+    [
+      "northstar-muc-xmpp",
+      "northstar-xep-catalog"
     ],
     [
       "northstar-muc-xmpp",

@@ -15,10 +15,8 @@ test-support = []
 anyhow = "1.0"
 northstar-archive-application = { path = "../northstar-archive-application" }
 northstar-archive-core = { path = "../northstar-archive-core" }
+northstar-time = { path = "../../../kernel/northstar-time", features = ["postgres"] }
 northstar-xep-0313 = { path = "../../../kernel/northstar-xep-0313" }
 northstar-xmpp-types = { path = "../../../kernel/northstar-xmpp-types" }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "uuid"] }
 uuid = "1.12"
-
-[dev-dependencies]
-northstar-time = { path = "../../../kernel/northstar-time" }

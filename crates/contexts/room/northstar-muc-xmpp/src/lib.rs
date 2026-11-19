@@ -14,3 +14,6 @@ pub mod resume;
 pub mod shutdown;
 pub mod sm_teardown_projection;
 pub use self::protocol_session::MucHandlers;
+
+#[cfg(test)]
+mod protocol_regression_tests;

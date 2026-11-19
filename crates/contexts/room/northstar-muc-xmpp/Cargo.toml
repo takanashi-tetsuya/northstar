@@ -42,4 +42,8 @@ zeroize = "1.8"
 
 [dev-dependencies]
 northstar-abuse-policy = { path = "../../abuse/northstar-abuse-policy" }
+northstar-archive-postgres = { path = "../../archive/northstar-archive-postgres" }
+northstar-room-application = { path = "../northstar-room-application", features = ["test-support"] }
 northstar-roster-core = { path = "../../roster/northstar-roster-core" }
+northstar-xep-catalog = { path = "../../../kernel/northstar-xep-catalog" }
+tokio = { version = "1.43", features = ["macros", "rt", "sync", "time"] }

@@ -633,3 +633,6 @@ mod tests {
 
 #[cfg(test)]
 mod muc_stanza_tests;
+
+#[cfg(test)]
+mod post_commit_plan_tests;

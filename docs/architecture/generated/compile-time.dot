@@ -1402,6 +1402,7 @@ digraph compile_time {
   "northstar-muc-xmpp" -> "futures";
   "northstar-muc-xmpp" -> "northstar-abuse-policy";
   "northstar-muc-xmpp" -> "northstar-archive-core";
+  "northstar-muc-xmpp" -> "northstar-archive-postgres";
   "northstar-muc-xmpp" -> "northstar-delivery-core";
   "northstar-muc-xmpp" -> "northstar-federation-core";
   "northstar-muc-xmpp" -> "northstar-message-core";
@@ -1418,6 +1419,7 @@ digraph compile_time {
   "northstar-muc-xmpp" -> "northstar-xep-0280";
   "northstar-muc-xmpp" -> "northstar-xep-0313";
   "northstar-muc-xmpp" -> "northstar-xep-0359";
+  "northstar-muc-xmpp" -> "northstar-xep-catalog";
   "northstar-muc-xmpp" -> "northstar-xep-core";
   "northstar-muc-xmpp" -> "northstar-xml-builder";
   "northstar-muc-xmpp" -> "northstar-xmpp-types";

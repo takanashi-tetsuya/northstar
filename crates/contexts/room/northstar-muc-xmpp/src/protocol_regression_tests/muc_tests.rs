@@ -7,7 +7,7 @@ use super::{
     parse_muc_subject_command, parse_muc_voice_form, should_broadcast_offline_affiliation_change,
     MalformedMucStanza, ModerationRequest, MucAdminBatchChange, MucAdminBatchOutcome,
     MucAdminChange, MucAdminMutationKind, MucAdminParseError, MucAdminRawItem, MucHistoryRequest,
-    MucPostCommitAdmissionError, MucPostCommitPlan, MucVoiceForm,
+    MucVoiceForm,
 };
 
 #[test]
@@ -181,15 +181,6 @@ fn voice_request_preserves_room_and_occupant_fields() {
     assert_eq!(fields["muc#jid"], "alice@example.test/phone");
     assert_eq!(fields["muc#roomnick"], "Alice<&");
     assert_eq!(fields["muc#request_allow"], "false");
-}
-
-#[test]
-fn post_commit_plan_has_a_hard_capacity_and_rejects_work_after_seal() {
-    let mut plan = MucPostCommitPlan::<u8, 1>::new();
-    assert_eq!(plan.try_push(1), Ok(()));
-    assert_eq!(plan.try_push(2), Err(MucPostCommitAdmissionError::Full));
-    plan.seal();
-    assert_eq!(plan.try_push(3), Err(MucPostCommitAdmissionError::Sealed));
 }
 
 #[test]
@@ -486,39 +477,6 @@ fn role_kick_excludes_only_the_exact_target_from_room_delivery() {
     ));
     assert!(!is_exact_muc_removal_target(&replacement_epoch, &target));
     assert!(!is_exact_muc_removal_target(&other_occupant, &target));
-}
-
-#[tokio::test]
-async fn post_commit_plan_preserves_order_and_observes_failure_without_stopping() {
-    let mut plan = MucPostCommitPlan::<u8, 3>::new();
-    for step in [1, 2, 3] {
-        plan.try_push(step).unwrap();
-    }
-    let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let failures = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    plan.run(
-        {
-            let observed = observed.clone();
-            move |step| {
-                let observed = observed.clone();
-                async move {
-                    observed.lock().unwrap().push(step);
-                    if step == 2 {
-                        Err(step)
-                    } else {
-                        Ok(())
-                    }
-                }
-            }
-        },
-        {
-            let failures = failures.clone();
-            move |step| failures.lock().unwrap().push(step)
-        },
-    )
-    .await;
-    assert_eq!(*observed.lock().unwrap(), vec![1, 2, 3]);
-    assert_eq!(*failures.lock().unwrap(), vec![2]);
 }
 
 #[test]

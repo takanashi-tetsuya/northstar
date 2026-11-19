@@ -31,7 +31,6 @@ const BASELINE = new Map([
   ['crates/contexts/room/northstar-mix-xmpp/src/lib.rs', 0],
   ['crates/contexts/pubsub/northstar-pubsub-xmpp/src/lib.rs', 0],
   ['crates/contexts/roster/northstar-roster-xmpp/src/lib.rs', 0],
-  ['src/xmpp/protocol/federated_muc.rs', 0],
   ['crates/contexts/room/northstar-muc-xmpp/src/federated_muc.rs', 0],
   ['crates/edges/northstar-stream/src/protocol/misc.rs', 0],
   ['crates/edges/northstar-stream/src/protocol/sm.rs', 0],

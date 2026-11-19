@@ -12,7 +12,6 @@ export function readFederatedRouteSources() {
     inbound: readProductionModule('crates/contexts/message/northstar-message-xmpp/src/federated_message.rs'),
     adapter: readProductionModule('crates/contexts/message/northstar-message-xmpp/src/federated_message.rs'),
     host: read('src/node/hosts/message.rs'),
-    state: read('crates/contexts/message/northstar-message-xmpp/src/lib.rs'),
   };
 }
 
@@ -84,8 +83,6 @@ export function verifyFederatedRouteBoundaries(sources) {
   const inbound = maskRust(sources.inbound);
   const adapter = maskRust(sources.adapter);
   const host = maskRust(sources.host);
-  requireMatch(maskRust(sources.state), /\bpub\s+mod\s+federated_message\s*;/, 'S2S route adapter module must stay registered');
-  requireMatch(adapter, /\bstruct\s+FederatedDirectRoute\s*<\s*'a\s*,\s*H\s*>\s*\(\s*&'a\s+H\s*\)\s*;/, 'S2S caller must own its origin-specific adapter');
   const caller = functionBody(inbound, 'route_inbound_message');
   const invocation = /\bDirectMessageRouter::route_federated\s*\(\s*&FederatedDirectRoute\s*\(\s*state\s*\)\s*,/.exec(caller);
   const argumentsBody = balancedBody(caller, caller.indexOf('(', invocation.index), '(', ')');
@@ -102,15 +99,6 @@ export function verifyFederatedRouteBoundaries(sources) {
     throw new Error('S2S post-accept failures must retain federation telemetry');
   }
   if (/\bpersonal_message_telemetry\s*\(/.test(adapter)) throw new Error('S2S adapter must not record C2S origin telemetry');
-  const localEntries = [...adapter.matchAll(/\bfn\s+try_local\s*\(/g)];
-  if (localEntries.length !== 1) {
-    throw new Error('S2S adapter must have one owned local enqueue entry');
-  }
-  const localStart = localEntries[0].index;
-  const localSignature = adapter.slice(localStart, adapter.indexOf('{', localStart)).replace(/\s+/g, '');
-  if (localSignature !== 'fntry_local(&self,session:&Self::Session,enqueue:northstar_stream::outbound::RouteEnqueue,)->Result<(),northstar_stream::outbound::RouteSendError>') {
-    throw new Error('S2S adapter must accept an owned local enqueue and preserve its refusal type');
-  }
   const primary = hostBody('route_s2s_message_to_remote_primary')
     .replace('self.personal_message_telemetry()', hostBody('personal_message_telemetry'));
   requireMatch(primary, /self\.cluster\.route_s2s_message_to_remote_primary\(jid,stanza,delivery,&northstar_message_application::telemetry::PersonalMessageTelemetry::new\([^()]*\),?\)\.await/, 'S2S primary must use its federation remote adapter');

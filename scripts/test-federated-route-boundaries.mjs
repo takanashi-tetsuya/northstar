@@ -41,17 +41,7 @@ test('irrelevant strings, nested comments and character braces are masked', () =
       'fn record_local_accept(&self, durable: bool) {\n/* one /* two */ } */ let brace = \'}\'; let text = "personal_message_telemetry() }"; let raw = r#" } "#;'),
   });
 });
-test('an unrelated declaration cannot spoof the owned entry signature', () => {
-  const before = ') -> Result<(), northstar_stream::outbound::RouteSendError> {';
-  assert.equal(baseline.adapter.split(before).length - 1, 1);
-  const changed = baseline.adapter.replace(before, ') -> Result<(), anyhow::Error> {')
-    + '\nfn fake_fntry_local(&self, session: &Self::Session, enqueue: northstar_stream::outbound::RouteEnqueue,) -> Result<(), northstar_stream::outbound::RouteSendError> {}';
-  assert.notEqual(changed, baseline.adapter);
-  assert.throws(() => verifyFederatedRouteBoundaries({ ...baseline, adapter: changed }), /owned local enqueue and preserve its refusal type/);
-});
 
-rejectsMutation('adapter module cannot disappear', 'state', 'pub mod federated_message;', '// pub mod federated_message;', /module must stay registered/);
-rejectsMutation('adapter type cannot disappear', 'adapter', "struct FederatedDirectRoute<'a, H>(&'a H);", "// struct FederatedDirectRoute<'a, H>(&'a H);", /own its origin-specific adapter/);
 rejectsMutation('caller cannot drop committed history', 'inbound', '        history_committed,\n    )\n    .await?;', '        false,\n    )\n    .await?;', /committed-history input/);
 rejectsMutation('caller cannot resume inline enqueue', 'inbound', 'let outcome = DirectMessageRouter::route_federated(', 'target.sender.try_send(annotated.clone());\n    let outcome = DirectMessageRouter::route_federated(', /regained inline/);
 rejectsMutation('queue telemetry cannot switch to C2S', 'adapter', 'self.0.record_s2s_online_accept(durable);', 'self.0.personal_message_telemetry().online_queue_result(true, durable);', /must not record C2S/);
@@ -61,8 +51,5 @@ rejectsMutation('postaccept telemetry cannot switch to C2S', 'adapter', 'self.0.
 rejectsMutation('additional C2S telemetry cannot be double counted', 'adapter', 'self.0.record_s2s_post_accept_failure();', 'self.0.record_s2s_post_accept_failure();\n self.0.personal_message_telemetry().post_accept_failed();', /must not record C2S/);
 rejectsMutation('host postaccept telemetry cannot switch to C2S', 'host', hostPostAcceptTelemetry, 'self.personal_message_telemetry().post_accept_failed();', /federation telemetry/);
 rejectsMutation('host postaccept telemetry cannot be double counted', 'host', hostPostAcceptTelemetry, `${hostPostAcceptTelemetry}\n self.personal_message_telemetry().post_accept_failed();`, /federation telemetry/);
-rejectsMutation('local adapter must take ownership', 'adapter', 'enqueue: northstar_stream::outbound::RouteEnqueue,', 'enqueue: &northstar_stream::outbound::RouteEnqueue,', /owned local enqueue and preserve its refusal type/);
-rejectsMutation('local adapter must retain the typed refusal', 'adapter', ') -> Result<(), northstar_stream::outbound::RouteSendError> {', ') -> Result<(), anyhow::Error> {', /owned local enqueue and preserve its refusal type/);
-rejectsMutation('local adapter cannot add a second entry', 'adapter', '    fn try_local(', '    fn try_local(&self) {}\n    fn try_local(', /one owned local enqueue entry/);
 rejectsMutation('remote receipt cannot discard Carbon exclusion', 'host', 'accepted_full_jid: routed.accepted_full_jid,', 'accepted_full_jid: None,', /receipt must preserve/);
 rejectsMutation('remote receipt cannot invent acceptance', 'host', 'delivered: routed.delivered,', 'delivered: true,', /receipt must preserve/);

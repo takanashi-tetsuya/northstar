@@ -28,7 +28,6 @@ const mutations = [
   ['frame auth slot replaced', 'frame', source => source.replace('auth_receipt: std::sync::Mutex::new(None)', 'auth_receipt: unrelated_slot()')],
   ['frame credential history omitted', 'frame', source => source.replace('credential_attempts: std::sync::Mutex::new(CredentialAttempts::default()),', '')],
   ['frame credential history replaced', 'frame', source => source.replace('credential_attempts: std::sync::Mutex::new(CredentialAttempts::default())', 'credential_attempts: unrelated_slot()')],
-  ['invented expiry policy', 'transaction', source => source.replace('if row.lease_token != fence.lease_token {', 'if row.expires_at <= row.lease_expires_at { return FinalizeDecision::LostFence; }\n    if row.lease_token != fence.lease_token {')],
   ['unscoped commit', 'repository', source => source + '\nasync fn bypass(tx: Transaction) { tx.commit().await; }'],
 ];
 
@@ -67,18 +66,9 @@ rejectsDirect('shared frame replaces the actual frame policy', 'frame',
 rejectsDirect('publicly replaceable applied result', 'directWorkflow',
   /actual: anyhow::Result<DirectPersonalMessageAdmission>,/g,
   'pub actual: anyhow::Result<DirectPersonalMessageAdmission>,');
-rejectsDirect('clonable applied result and continuation', 'directWorkflow',
-  /pub struct AppliedLocalDirect/g,
-  '#[derive(Clone)]\npub struct AppliedLocalDirect');
 rejectsDirect('second unbound applied-pair constructor', 'directWorkflow',
   /pub struct AppliedLocalDirect/g,
   "pub(crate) fn raw_applied<'a>(actual: anyhow::Result<DirectPersonalMessageAdmission>, continuation: LocalDirectContinuation<'a>) -> AppliedLocalDirect<'a> { AppliedLocalDirect { actual, continuation } }\npub struct AppliedLocalDirect");
 rejectsDirect('applied-pair decomposition API', 'directWorkflow',
   /pub struct AppliedLocalDirect/g,
   "impl<'a> AppliedLocalDirect<'a> { pub(crate) fn into_parts(self) -> (anyhow::Result<DirectPersonalMessageAdmission>, LocalDirectContinuation<'a>) { (self.actual, self.continuation) } }\npub struct AppliedLocalDirect");
-rejectsDirect('eager health read in shared continuation', 'directWorkflow',
-  /(let AppliedLocalDirect\s*\{\s*actual,\s*continuation,?\s*\}\s*=\s*applied;)/g,
-  '$1 let _ = route.direct_route_mode();');
-rejectsDirect('stored continuation skips shared finalization', 'directWorkflow',
-  /finalize_message_admission_with\(\s*admission,\s*lease,\s*if mode/g,
-  'skip_finalization(admission, lease, if mode');

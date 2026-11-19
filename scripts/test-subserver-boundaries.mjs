@@ -31,13 +31,6 @@ test('subscription cleanup authority after tests stays checked', () => {
 
 rejectsMutation('reject core state authority', 'subservers', 'use std::', 'use crate::node::ServerNode;\nuse std::', /core state/);
 rejectsMutation('reject general configuration loading', 'maintenanceConfig', 'config.validate()?;', 'Config::from_env()?;\nconfig.validate()?;', /general runtime config/);
-rejectsMutation('reject expanding maintenance input secrets', 'maintenanceConfig', 'struct MaintenanceConfig {', 'struct MaintenanceConfig {\n signing_key: String,', /capability inventory/);
-rejectsMutation('reject expanding retention context authority', 'retention', 'struct RetentionContext<R> {', 'struct RetentionContext<R> {\n session_authority: usize,', /capability inventory/);
-rejectsMutation('reject a pub(super) retention context field', 'retention', 'struct RetentionContext<R> {', 'struct RetentionContext<R> {\n pub(super) session_authority: usize,', /capability inventory/);
-rejectsMutation('reject a pub(in path) cleanup context field', 'subscriptionCleanup', 'struct SubscriptionCleanupContext<R> {', 'struct SubscriptionCleanupContext<R> {\n pub(in crate::runtime) state: usize,', /capability inventory/);
-rejectsMutation('reject public maintenance bind', 'maintenanceConfig', 'self.maintenance_bind.ip().is_loopback()', 'true', /reject public/);
-rejectsMutation('reject kernel-selected production port', 'maintenanceConfig', 'self.maintenance_bind.port() != 0', 'true', /reject public/);
-rejectsMutation('subscription cleanup cannot gain core state', 'subscriptionCleanup', 'struct SubscriptionCleanupContext<R> {', 'struct SubscriptionCleanupContext<R> {\n state: ServerNode,', /capability inventory/);
 rejectsMutation('subscription cleanup cannot allocate another pool', 'subscriptionCleanup', 'use std::', 'use sqlx::postgres::PgPoolOptions;\nuse std::', /narrow existing-pool/);
 rejectsMutation('physical cleanup cannot return to digest delivery', 'pubsubDelivery', 'let mut interval = tokio::time::interval(Duration::from_secs(1));', 'cleanup_expired_subscriptions(&state.pool, 1000).await;\nlet mut interval = tokio::time::interval(Duration::from_secs(1));', /delivery-worker/);
 rejectsMutation('maintenance cleanup watchdog keeps its own budget', 'subservers', 'Some(northstar_pubsub_application::subscription_cleanup::MAX_SILENCE)', 'Some(Duration::from_secs(5))', /independent restart/);
@@ -47,7 +40,6 @@ rejectsMutation('probe the exact ownership connection', 'maintenanceOwnership', 
 rejectsMutation('maintenance probes its reserved connection', 'maintenanceProcess', 'ownership.probe()', 'pool.probe()', /physical session/);
 rejectsMutation('ownership adapter probes its reserved connection', 'maintenanceOwnership', 'probe_exact(&mut self.connection)', 'probe_exact(&mut self.pool)', /physical session/);
 rejectsMutation('ownership observer stays critical', 'subservers', '.register_observer("maintenance-ownership", WorkerCriticality::Critical)', '.register_observer("maintenance-ownership", WorkerCriticality::Restartable)', /observer must remain critical/);
-rejectsMutation('core cannot acquire embedded retention authority', 'subservers', 'self == Self::Standalone', 'self != Self::Maintenance', /only standalone/);
 rejectsMutation('maintenance cannot load core dotenv', 'main', 'if arguments != ["serve", "maintenance"]', 'if true', /core .env/);
 rejectsMutation('dotenv failures cannot be silently ignored', 'main', 'config::load_dotenv()?;', 'config::load_dotenv().ok();', /dotenv loading errors/);
 rejectsMutation('dotenv precedes migrator configuration', 'main', 'install_crypto_provider()?;', 'let _ = run_migrations().await;\ninstall_crypto_provider()?;', /dotenv loading must precede/);

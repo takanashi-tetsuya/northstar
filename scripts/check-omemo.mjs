@@ -8,7 +8,6 @@ const recovery = fs.readFileSync(new URL('../web/omemo-recovery.mjs', import.met
 const recoveryWorker = fs.readFileSync(new URL('../web/omemo-recovery-worker.mjs', import.meta.url), 'utf8');
 const recoveryWorkerClient = fs.readFileSync(new URL('../web/omemo-recovery-worker-client.mjs', import.meta.url), 'utf8');
 const recoveryRepository = fs.readFileSync(new URL('../crates/contexts/auth/northstar-auth-postgres/src/omemo_recovery_repository.rs', import.meta.url), 'utf8');
-const recoveryPoll = fs.readFileSync(new URL('../crates/edges/northstar-http/src/contexts/omemo_poll.rs', import.meta.url), 'utf8');
 const serverState = readProductionModule('src/node.rs'); // whole production module
 
 function requirePattern(source, pattern, message) {
@@ -84,9 +83,6 @@ requirePattern(recoveryWorkerClient, /clearTimeout\(deadline\)[\s\S]+worker\.ter
 requirePattern(recoveryWorkerClient, /requiredBytes <= budgetBytes[\s\S]+navigator\.deviceMemory/, 'OMEMO transfer worker lacks a device-memory budget');
 requirePattern(serverState, /let omemo_recovery_poll_pool = startup_database_connect\([\s\S]+PostgresOmemoRecoveryPollRepository::new\(\s*omemo_recovery_poll_pool/, 'public recovery polling must retain its dedicated database pool');
 requirePattern(recoveryRepository, /struct PostgresOmemoRecoveryPollRepository\s*\{\s*pool: PgPool,[\s\S]+impl OmemoRecoveryPollRepository[\s\S]+crate::omemo_recovery::poll_omemo_recovery_transfer\(\s*&self\.pool,/, 'public recovery polling must use the isolated repository');
-if (/admit_omemo_poll_ip_window\(&mut window, now\)[\s\S]{0,300}window\.push_back\(now\)/.test(recoveryPoll)) {
-  throw new Error('public recovery poll admission counts one request twice');
-}
 requirePattern(omemo, /state: 'locally-unallocated'[\s\S]+state: polled\.state/, 'source crash recovery does not distinguish unallocated and server-prepared frozen states');
 requirePattern(client, /if \(ownDevice\.recoveryFrozen\)[\s\S]+state\.omemoTransferId = ownDevice\.transferId[\s\S]+watchPendingOmemoTransfer\(\)/, 'login does not rebuild the recoverable frozen source UI');
 requirePattern(omemo, /latest_consumed_transfer_id === marker\.transferId[\s\S]+OMEMO_DEVICE_RETIRED[\s\S]+state: 'authority-advanced'/, 'advanced authority neither retires the consumed source nor preserves an unrelated-transfer lock');

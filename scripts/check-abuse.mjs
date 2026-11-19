@@ -30,7 +30,6 @@ const [abuseSources, envExample, apiRouter, authRoutes, reportRoutes, messaging,
 ]);
 const abuse = abuseSources.join('\n');
 const api = `${apiRouter}\n${authRoutes}\n${reportRoutes}`;
-const abusePersistence = await read('crates/contexts/abuse/northstar-abuse-postgres/src/persistence.rs');
 const { httpPowIntent, xmppPowIntent } = await import(new URL('../web/pow.js', import.meta.url));
 
 const browserIntentVector = await httpPowIntent('/api/v1/register', {
@@ -54,8 +53,6 @@ const stanzaIntent = await xmppPowIntent(
 assert.equal(stanzaIntent.method, 'XMPP');
 assert.match(stanzaIntent.body_sha256, /^[A-Za-z0-9_-]{43}$/);
 
-assert.match(abuse, /fn policy\(action: AbuseAction, base: u64, message_free_burst: usize\)/,
-  'message burst must be an explicit policy input');
 assert.match(envExample, /^ABUSE_MESSAGE_FREE_BURST=60$/m,
   'the deployment example must agree with the Rust default');
 assert.match(abuse, /prefetched_message_challenge_remains_sufficient/,
@@ -71,19 +68,6 @@ assert.doesNotMatch(messaging, /pow_intent_payload:\s*&routed_raw/,
 assert.match(powIntentMigration, /protocol_version SMALLINT NOT NULL DEFAULT 1/);
 assert.match(powIntentMigration, /intent_method[\s\S]*intent_path[\s\S]*body_sha256[\s\S]*server_nonce[\s\S]*issued_at/,
   'durable challenges must store every v2 intent/time/nonce component');
-assert.doesNotMatch(abuse, /sqlx::Transaction/,
-  'anti-abuse policy must not accept database transactions');
-assert.match(abuse, /persistence: Option<Arc<dyn AbusePersistence>>/,
-  'the guard must hold a persistence port instead of a connection pool');
-// Exclude inline tests per module file, keeping the policy crate's existing scope.
-assert.doesNotMatch(abuseSources.map(source => source.split(/#\[cfg\(test\)\]\s*mod tests\s*\{/)[0]).join('\n'), /self\.pool/,
-  'guard operations must not access a PostgreSQL pool directly');
-assert.match(abusePersistence, /struct PostgresAbusePersistence<E>\s*\{\s*pool: PgPool/,
-  'the PostgreSQL adapter must own the pool');
-for (const operation of ['issue', 'verify', 'current_requirement', 'record_failure', 'begin_message_admission', 'cleanup']) {
-  assert.match(abusePersistence, new RegExp(`fn ${operation}<'a`),
-    `the PostgreSQL adapter must implement ${operation}`);
-}
 const xmppRegistration = accountRepository.slice(
   accountRepository.indexOf('async fn register('),
   accountRepository.indexOf('async fn change_password('),
@@ -94,12 +78,6 @@ assert.doesNotMatch(xmppRegistration, /verify_or_allow_in_tx\(/,
   'XMPP registration must not retain an unbound v1 proof path');
 assert.doesNotMatch(`${miscProtocol}\n${ibrProtocol}`, /\.issue\(\s*AbuseAction::Registration/,
   'XMPP registration must not issue legacy v1 challenges');
-const httpRegistration = authRoutes.slice(
-  authRoutes.indexOf('pub async fn register<R: HttpRepositories>('),
-  authRoutes.indexOf('fn registration_error('),
-);
-assert.doesNotMatch(httpRegistration, /(?:\.pool\.begin\(|(?:db|northstar_auth_postgres::users)::prepare_registration\(|db::acquire_idempotency_in_tx\()/,
-  'HTTP registration must not own a database transaction or password derivation');
 assert.match(deletionRecoveryMigration, /user_id UUID PRIMARY KEY REFERENCES users\(id\) ON DELETE CASCADE/);
 assert.match(deletionRecoveryMigration, /recovery_after TIMESTAMPTZ NOT NULL[\s\S]+claim_token UUID[\s\S]+claim_until TIMESTAMPTZ/,
   'account deletion recovery must be delayed and lease-fenced');

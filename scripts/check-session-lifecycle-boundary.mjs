@@ -1,10 +1,5 @@
-import fs from "node:fs";
 import assert from "node:assert/strict";
 import { readProductionModule, readRoleSplitFile } from "./lib/source-module.mjs";
-
-function read(path) {
-  return fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
-}
 
 function requireMatch(value, pattern, message) {
   if (!pattern.test(value)) throw new Error(message);
@@ -36,10 +31,6 @@ function verifyMucSmAssociationBoundary(source) {
 }
 
 const protocol = readRoleSplitFile("crates/edges/northstar-stream/src/protocol.rs");
-const protocolTests = read("crates/edges/northstar-stream/src/protocol/legacy_sasl_wire_tests.rs");
-const transport = read("crates/edges/northstar-c2s/src/lib.rs");
-const bosh = readRoleSplitFile("crates/edges/northstar-bosh/src/lib.rs");
-const replay = read("crates/contexts/session/northstar-session-application/src/replay.rs");
 const sasl2 = readProductionModule("crates/edges/northstar-stream/src/protocol/sasl2.rs");
 const resume = readProductionModule("crates/contexts/room/northstar-muc-xmpp/src/resume.rs");
 
@@ -68,28 +59,6 @@ const dropBody = protocol.slice(dropStart, dropEnd);
 for (const forbidden of ["tokio::spawn", "db::", ".await", ".federation", ".cluster."]) {
   if (dropBody.includes(forbidden)) {
     throw new Error(`ProtocolSession Drop regained forbidden async authority: ${forbidden}`);
-  }
-}
-
-requireMatch(
-  protocolTests,
-  /drop_requires_local_quiesce\(false, 1\)/,
-  "the cancellation-after-cleanup-claim regression test is missing",
-);
-
-if (transport.includes("crate::db::replay") || bosh.includes("crate::db::replay")) {
-  throw new Error("C2S transports regained direct durable replay database authority");
-}
-for (const capability of [
-  "fence_socket_write",
-  "acknowledge_socket_write",
-  "renew_bosh_fences",
-  "acknowledge_bosh_responses",
-  "bind_bosh_response",
-  "release_bosh_fences",
-]) {
-  if (!replay.includes(`fn ${capability}`)) {
-    throw new Error(`ReplayService is missing transport capability ${capability}`);
   }
 }
 

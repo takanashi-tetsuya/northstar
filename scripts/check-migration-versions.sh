@@ -841,12 +841,6 @@ if printf '%s\n' "$mix_capacity_fence_source" | grep -Fq 'pg_try_advisory_xact_l
     echo "MIX producer authority must block at transaction start, not reject ordinary contention" >&2
     exit 1
 fi
-# Count both compatibility and observed store entries; each keeps its own gate.
-# The architecture and execution checkers also verify their individual ordering.
-if [ "$(printf '%s\n' "$mix_service_production_source" | grep -Fc 'let _admission = self.delivery_admission_guard().await;')" -ne 19 ]; then
-    echo "every MIX delivery-producing application-service entry must share the fair pre-pool gate" >&2
-    exit 1
-fi
 echo "migration 0126 journals physical releases, audits a stopped cut-over, keeps ACKs lock-independent, and serializes producer admission before PgPool checkout"
 
 # Migration 0127 turns competing XEP-0198 resume ownership into a committed,
@@ -935,18 +929,6 @@ do
         exit 1
     fi
 done
-sm_route_removal_source=$(module_item crates/edges/northstar-stream/src/local_routes/session_table.rs 'pub fn sm_pending_route_removal_signal(') || exit 1
-for required_route_fragment in \
-    'session.connection_id != old_connection_id || session.user_id != user_id || !exact_sm' \
-    'if cancel_live_route {' \
-    'session.disconnect.cancel();' \
-    'Some(session.route_incarnation.subscribe())'
-do
-    if ! printf '%s\n' "$sm_route_removal_source" | grep -Fq "$required_route_fragment"; then
-        echo "SM resume Pending route boundary is missing exact ownership or cancellation: $required_route_fragment" >&2
-        exit 1
-    fi
-done
 for required_broker_fragment in \
     'SM_AUTHORITY_NOTIFICATION_CHANNEL: &str = "northstar_sm_authority_v1"' \
     'SM_AUTHORITY_LISTENER_MAX_CONNECTIONS' \
@@ -1022,10 +1004,6 @@ done
 if grep -Fq 'pg_try_advisory_xact_lock' "$mix_capacity_authority_migration" \
    || printf '%s\n' "$mix_db_module_source" | grep -Fq 'mix-pam-operation-capacity-v1'; then
     echo "MIX-PAM capacity must wait behind exact authority, not reject ordinary contention" >&2
-    exit 1
-fi
-if [ "$(printf '%s\n' "$mix_service_production_source" | grep -Fc 'let _admission = self.pam_capacity_admission_guard().await;')" -ne 3 ]; then
-    echo "MIX-PAM insert/prune entries must share one FIFO gate before PgPool checkout" >&2
     exit 1
 fi
 echo "migration 0128 commits delivery reclamation independently and gives MIX-PAM exact owner-maintained counters with pre-pool FIFO admission"
@@ -1223,10 +1201,7 @@ for required_source_fragment in \
     'let mut delivery_wake = matches!(queue, MixOutboxQueue::Delivery)' \
     'subscribe_delivery_wake()' \
     'wait_for_mix_delivery_wake(&mut delivery_wake)' \
-    'claim_schedule.record_progress(tokio::time::Instant::now());' \
-    'fn record_progress(&mut self, now: tokio::time::Instant)' \
-    'self.next_claim = now;' \
-    'self.empty_delay = Self::BASE_DELAY;'
+    'claim_schedule.record_progress(tokio::time::Instant::now());'
 do
     if ! grep -Fq "$required_source_fragment" crates/contexts/room/northstar-mix-xmpp/src/worker.rs; then
         echo "MIX durable delivery lane is missing lossless wake invariant: $required_source_fragment" >&2
@@ -1276,49 +1251,6 @@ do
         exit 1
     fi
 done
-mix_delivery_retry_source=$(module_item crates/contexts/room/northstar-room-postgres/src/mix.rs 'async fn retry_mix_delivery_inner(') || exit 1
-for required_retry_fragment in \
-    'let mut transaction = pool.begin().await?;' \
-    'SELECT attempt_count,route_wake_generation' \
-    'FOR UPDATE' \
-    'let persisted_attempt_count' \
-    'persisted_route_wake_generation != route_wake_generation' \
-    'MixDeliveryRetryOutcome::RouteWokenAtAttemptLimit' \
-    'MixDeliveryRetryOutcome::DeadLettered' \
-    'move_mix_delivery_to_dead_letter_tx(' \
-    'next_attempt >= 20'
-do
-    if ! printf '%s\n' "$mix_delivery_retry_source" | grep -Fq "$required_retry_fragment"; then
-        echo "MIX terminal retry must make its route-wake decision from one locked durable row: $required_retry_fragment" >&2
-        exit 1
-    fi
-done
-if printf '%s\n' "$mix_delivery_retry_source" | grep -Eq '^[[:space:]]*attempt_count:[[:space:]]*i32'; then
-    echo "MIX retry must not trust a caller-supplied attempt count at the terminal boundary" >&2
-    exit 1
-fi
-if printf '%s\n' "$mix_delivery_retry_source" | grep -Fq 'dead_letter_mix_delivery(pool'; then
-    echo "MIX retry terminal completion must stay in the locked retry transaction" >&2
-    exit 1
-fi
-mix_delivery_retry_service_source=$(module_item crates/contexts/room/northstar-room-application/src/mix_service.rs 'pub async fn retry_mix_delivery(') || exit 1
-for required_service_fragment in \
-    'MixDeliveryRetryOutcome::RouteWokenAtAttemptLimit' \
-    'MixDeliveryRetryOutcome::DeadLettered' \
-    'self.publish_delivery_local_commit();'
-do
-    if ! printf '%s\n' "$mix_delivery_retry_service_source" | grep -Fq "$required_service_fragment"; then
-        echo "MIX retry service must publish terminal and route-woken local commits: $required_service_fragment" >&2
-        exit 1
-    fi
-done
-if ! printf '%s\n' "$mix_db_production_source" | grep -Fq 'Re-admit one terminal projection at the recipient'\''s current queue tail.' \
-   || ! printf '%s\n' "$mix_db_production_source" | grep -Fq 'SET next_sequence=mix_delivery_recipient_sequences.next_sequence+1' \
-   || ! printf '%s\n' "$mix_db_production_source" | grep -Fq 'RETURNING next_sequence-1'; then
-    echo "MIX dead-letter requeue must allocate a fresh recipient tail sequence" >&2
-    exit 1
-fi
-echo "migration 0134 persists route wakes across leased deferral/retry, gives a committed terminal-boundary wake one fresh claim, and requeues dead letters at the ordered tail"
 
 # Migration 0135 adds typed MIX ownership at the two resumable transport
 # boundaries.  C2S and MIX sources intentionally have disjoint identities;

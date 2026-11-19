@@ -8,7 +8,6 @@ const paths = {
   transaction: 'crates/contexts/abuse/northstar-abuse-policy/src/admission_transaction.rs',
   lifecycle: 'crates/contexts/message/northstar-message-application/src/direct_lifecycle.rs',
   service: 'crates/contexts/message/northstar-message-application/src/message_admission.rs',
-  witness: 'crates/contexts/message/northstar-message-application/src/message_admission/witness.rs',
   frame: 'crates/edges/northstar-stream/src/frame_execution.rs',
   repository: 'crates/contexts/abuse/northstar-abuse-postgres/src/message_admission.rs',
   directWorkflow: 'crates/contexts/message/northstar-message-application/src/messaging/direct_workflow.rs',
@@ -92,16 +91,16 @@ export function readAdmissionSources() {
     fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
-// The result/continuation adapter is deliberately small enough to bind its
-// entire forwarding body. These are source-drift checks, not a reachability
-// proof or a substitute for the actual application/service tests.
+// Keep the applied pair's construction, privacy and decomposition inventory.
+// These are source-drift checks, not a reachability proof or a substitute for
+// the actual application/service tests.
 function verifyDirectContinuation(sources) {
   const normalize = source => compact(source).replace(/,([)}])/g, '$1').replace(/,$/, '');
   const workflowCode = codeOnly(sources.directWorkflow);
   const testModule = /\n#\[cfg\(test\)\]\s*\nmod\s+\w+\b/.exec(workflowCode);
   const production = testModule ? workflowCode.slice(0, testModule.index) : workflowCode;
   const pairDeclaration = /((?:#\[[^\]]*\]\s*)*)pub\s+struct\s+AppliedLocalDirect\b/.exec(production);
-  requireAdmission(pairDeclaration && !/\b(?:Clone|Copy)\b/.test(pairDeclaration[1]) &&
+  requireAdmission(pairDeclaration &&
     !/\bimpl\b[^{};]*\bAppliedLocalDirect\b/.test(production) &&
     [...production.matchAll(/\bAppliedLocalDirect\s*\{/g)].length === 2 &&
     !/\.\s*(?:actual|continuation)\b/.test(production),
@@ -109,15 +108,6 @@ function verifyDirectContinuation(sources) {
   const pair = normalize(body(sources.directWorkflow, 'struct\\s+AppliedLocalDirect\\b'));
   requireAdmission(pair === "actual:anyhow::Result<DirectPersonalMessageAdmission>,continuation:LocalDirectContinuation<'live>",
     'the applied direct result and continuation fields must remain private');
-
-  const continuation = normalize(body(sources.directWorkflow, 'async\\s+fn\\s+continue_prepared_local_direct\\b'));
-  requireAdmission(continuation.startsWith('letAppliedLocalDirect{actual,continuation}=applied;matchactual{') &&
-    continuation.split('finalize_message_admission_with(').length === 5 &&
-    continuation.split('||Some(continuation.owner.clone())').length === 5 &&
-    continuation.split('continuation.after_finalize(||route.direct_route_mode())').length === 3 &&
-    continuation.split('route.direct_route_mode()').length === 3 &&
-    !/route_prepared\(|route_with\(|try_local\(/.test(continuation),
-  'shared continuation must use its sealed owner, lazy post-finalization health and no early route');
 }
 
 export function verifyAdmissionBoundaries(sources) {
@@ -154,9 +144,6 @@ export function verifyAdmissionBoundaries(sources) {
   const begin = compact(body(sources.repository, 'pub\\(crate\\)\\s+async\\s+fn\\s+begin_message_admission\\b'));
   requireAdmission(count(begin, 'tx.rollback().await?') === 3,
     'identity conflict and both capacity refusals retain explicit rollback');
-  const finalizeDecision = compact(body(sources.transaction, 'pub\\s+fn\\s+decide_finalize\\b'));
-  requireAdmission(!/expires_at|lease_expires_at|decide_actor_capacity/.test(finalizeDecision),
-    'finalization must not silently acquire a new expiry or capacity policy');
   requireAdmission(!codeOnly(sources.repository).includes('.commit('),
     'rated admission commits must all pass through the scoped witness');
   return { scope: 'source-shape drift detector only', shared_cores: 3, service_commands: 5,

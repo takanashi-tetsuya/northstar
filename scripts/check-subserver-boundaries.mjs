@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readProductionModule } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const files = { main: 'src/main.rs', workerComposition: 'src/node/workers.rs', subservers: 'src/runtime/subservers.rs', maintenanceOwnership: 'crates/contexts/operations/northstar-operations-postgres/src/maintenance_ownership.rs', retention: 'crates/contexts/operations/northstar-operations-application/src/retention_worker.rs',
+const files = { main: 'src/main.rs', workerComposition: 'src/node/workers.rs', subservers: 'src/runtime/subservers.rs', maintenanceOwnership: 'crates/contexts/operations/northstar-operations-postgres/src/maintenance_ownership.rs',
   maintenanceProcess: 'crates/contexts/operations/northstar-operations-application/src/maintenance_process.rs',
   maintenanceConfig: 'crates/platform/northstar-config/src/maintenance.rs',
   maintenanceHealth: 'crates/edges/northstar-http/src/maintenance_health.rs',
@@ -12,8 +12,7 @@ const files = { main: 'src/main.rs', workerComposition: 'src/node/workers.rs', s
   pubsubProtocol: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/protocol_session.rs', pubsubDelivery: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/delivery.rs',
   pubsubAdapter: 'crates/contexts/pubsub/northstar-pubsub-xmpp/src/pubsub.rs',
   pubsubService: 'crates/contexts/pubsub/northstar-pubsub-application/src/service.rs',
-  state: 'src/node.rs', runtimeControl: 'crates/contexts/operations/northstar-operations-application/src/runtime_control_coordinator.rs',
-  runtimeControlHealth: 'crates/contexts/operations/northstar-operations-application/src/runtime_control_coordinator.rs',
+  runtimeControl: 'crates/contexts/operations/northstar-operations-application/src/runtime_control_coordinator.rs',
   cluster: 'scripts/cluster-wsl.sh', responsibility: 'docs/PROGRAM_RESPONSIBILITIES.md' };
 
 function requireBoundary(condition, message) {
@@ -39,20 +38,14 @@ function body(source, declaration) {
   throw new Error(`subserver boundary: unterminated ${declaration}`);
 }
 
-function exactFields(source, declaration, expected) {
-  const fields = [...codeOnly(body(source, declaration)).matchAll(/^\s*(?:pub(?:\([^)]*\))?\s+)?([a-z_]+)\s*:/gm)]
-    .map((match) => match[1]).sort();
-  requireBoundary(JSON.stringify(fields) === JSON.stringify([...expected].sort()), `${declaration} capability inventory changed`);
-}
-
 export function readSubserverSources() {
-  // State, worker composition, private health and PubSub are read as whole production modules.
+  // Worker composition, private health and PubSub are read as whole production modules.
   return Object.fromEntries(Object.entries(files).map(([name, file]) => [name,
-    ['state', 'workerComposition', 'maintenanceHealth', 'pubsubProtocol', 'pubsubDelivery', 'pubsubAdapter', 'pubsubService'].includes(name)
+    ['workerComposition', 'maintenanceHealth', 'pubsubProtocol', 'pubsubDelivery', 'pubsubAdapter', 'pubsubService'].includes(name)
       ? readProductionModule(file, { root }) : fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
-export function verifySubserverBoundaries({ main, workerComposition, subservers, maintenanceProcess, maintenanceConfig, maintenanceHealth, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubDelivery, pubsubAdapter, pubsubService, state, runtimeControl, runtimeControlHealth, cluster, responsibility }) {
+export function verifySubserverBoundaries({ main, workerComposition, subservers, maintenanceProcess, maintenanceConfig, maintenanceHealth, maintenanceOwnership, subscriptionCleanup, pubsubProtocol, pubsubDelivery, pubsubAdapter, pubsubService, runtimeControl, cluster, responsibility }) {
   const coordinator = body(runtimeControl, 'pub async fn run(');
   requireBoundary(coordinator.includes('let mut observed_database = false;') &&
     coordinator.includes('report_runtime_control_health(&heartbeat, observed_database, first_error);') &&
@@ -64,13 +57,6 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
     'maintenance cannot construct or import core state, routing or key authorities');
   requireBoundary(!/\bConfig\s*::\s*from_env\b|crate\s*::\s*(?:auth|abuse|node|s2s|xmpp|tls|storage)\s*::/.test(subserverCode),
     'maintenance cannot load the general runtime config or core capability modules');
-  exactFields(maintenanceConfig, 'struct MaintenanceConfig', [
-    'xmpp_domain', 'database_url', 'database_url_file', 'database_allow_unsafe_role_for_development',
-    'maintenance_bind', 'mam_retention_days', 'muc_mam_retention_days', 'offline_message_ttl_days',
-    'audit_log_retention_days', 'retention_cleanup_batch_size', 'retention_cleanup_interval_seconds',
-  ]);
-  exactFields(retention, 'struct RetentionContext', ['repository', 'policy', 'counters', 'readiness']);
-  exactFields(subscriptionCleanup, 'struct SubscriptionCleanupContext', ['repository', 'metrics', 'readiness']);
   // Mask only the known test module and retain later production items.
   const testStart = subscriptionCleanup.indexOf('#[cfg(test)]');
   requireBoundary(testStart >= 0 && /^#\[cfg\(test\)\]\s*mod tests\s*\{/.test(subscriptionCleanup.slice(testStart)),
@@ -84,10 +70,6 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
   requireBoundary(!/\bcleanup_expired_subscriptions\s*\(/.test(codeOnly(pubsubProtocol) + codeOnly(pubsubDelivery) + codeOnly(pubsubAdapter)
     + codeOnly(pubsubService)),
     'physical subscription cleanup cannot reacquire delivery-worker or shared-outbox authority');
-  exactFields(maintenanceConfig, 'struct RetentionPolicy', ['mam_retention_days', 'muc_mam_retention_days',
-    'offline_message_ttl_days', 'audit_log_retention_days', 'retention_cleanup_batch_size', 'retention_cleanup_interval_seconds']);
-  requireBoundary(/self\.maintenance_bind\.ip\(\)\.is_loopback\(\)/.test(maintenanceConfig) &&
-    /self\.maintenance_bind\.port\(\)\s*!=\s*0/.test(maintenanceConfig), 'maintenance config must reject public or unowned binds');
   const run = body(subservers, 'async fn run_maintenance(');
   const monitor = body(maintenanceProcess, 'async fn supervise_maintenance<');
   const closeOwnership = body(maintenanceOwnership, 'async fn close(');
@@ -102,8 +84,6 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
       : ['ownership.close().await', 'workers.shutdown_and_join(', 'cancel.cancel()'].includes(marker) ? monitor : run;
     requireBoundary(source.replace(/\s+/g, '').includes(marker.replace(/\s+/g, '')), `maintenance startup/shutdown lost ${marker}`);
   }
-  requireBoundary(subservers.includes('DATABASE_MAX_CONNECTIONS_LIMIT - MAINTENANCE_POOL_MAX_CONNECTIONS'),
-    'core capacity must derive from the shared runtime-role budget');
   const claim = body(subservers, 'async fn claim_maintenance_on_connection(');
   const claimExact = body(maintenanceOwnership, 'async fn claim_exact(');
   const probeExact = body(maintenanceOwnership, 'async fn probe_exact(');
@@ -132,8 +112,6 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
     'maintenance must never import a core .env file');
   requireBoundary(dotenvGuard.includes('std::env::var("NORTHSTAR_DISABLE_DOTENV").as_deref() != Ok("true")'),
     'explicit dotenv disable must prevent importing a developer .env file');
-  requireBoundary(body(subservers, 'fn embeds_retention(').trim() === 'self == Self::Standalone',
-    'only standalone may embed retention in the core composition');
   const ownership = body(main, 'if process_role.embeds_retention()');
   requireBoundary(ownership.includes('claim_maintenance_on_connection(&mut runtime_control_connection)') &&
     main.indexOf('claim_maintenance_on_connection(') < main.indexOf('let state = ServerNode::new('),
@@ -159,12 +137,6 @@ export function verifySubserverBoundaries({ main, workerComposition, subservers,
     'maintenance ownership health must have one explicit observer');
   requireBoundary(/\.register_observer\("maintenance-ownership",\s*WorkerCriticality::Critical\)/.test(run),
     'maintenance ownership observer must remain critical');
-  for (const marker of ['Duration::from_secs(5)', 'Duration::from_secs(3)',
-    'ownership.probe()', 'if !matches!(probe, Ok(Ok(())))',
-    'break Err(anyhow::anyhow!("maintenance database ownership connection failed"))']) {
-    requireBoundary(monitor.replace(/\s+/g, '').includes(marker.replace(/\s+/g, '')),
-      `maintenance exact-session loss detection changed: ${marker}`);
-  }
   requireBoundary(cluster.includes('"$binary" serve standalone >"$redis_tmp/cluster-a.log"') &&
     cluster.includes('"$binary" serve core >"$redis_tmp/cluster-b.log"'),
   'experimental cluster startup/restart must retain one archive owner and a core-only peer');

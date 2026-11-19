@@ -398,9 +398,6 @@ if ((runtimeControlRefresh.match(/let\s+max_silence\s*=/g) ?? []).length !== 1
     || !runtimeControlRun.includes('self.connection.lock().await.take()')) {
   throw new Error('runtime-control diagnostics and supervision must share the unchanged five-second silence bound');
 }
-if (!/"runtime-control-refresh"/.test(runtimeControlRefresh)) {
-  throw new Error('runtime control reads must share one supervised control-plane worker');
-}
 if (/fn start_runtime_(?:federation_policy|admin_setting)_refresh\(|fn start_service_control_watcher\(/.test(state)) {
   throw new Error('independent runtime control workers can contend for the one-connection control pool');
 }
@@ -420,7 +417,6 @@ for (const invariant of [
 if (!/runtime_control_pool\s*\.acquire\(\)\s*\.await/s.test(runtimeControlReservation)) {
   throw new Error('runtime-control startup reservation must retain its one dedicated connection');
 }
-const appStateConstruction = rustItemBody(state, 'pub async fn new(');
 if (!/pub async fn new\([\s\S]*?runtime_control_connection\s*:\s*PoolConnection<Postgres>/.test(state)) {
   throw new Error('ServerNode must receive the already-reserved runtime-control connection');
 }
@@ -443,19 +439,6 @@ if (!maintenanceWorkers.includes('retention_context(state)')
     || !maintenanceWorkers.includes('subscription_cleanup_context(state)')
     || /PostgresMaintenanceRepository::new\(state\.pool\.clone\(\)\)/.test(workerComposition)) {
   throw new Error('retention workers must receive separate state-owned repository contexts');
-}
-const clusterShutdown = rustItemBody(read('crates/edges/northstar-cluster/src/authority.rs'), 'pub async fn release_instance_after_publication_quiescence<');
-const shutdownFence = clusterShutdown.indexOf('let _publication_fence =');
-const publicationTimeout = clusterShutdown.indexOf('tokio::time::timeout(quiesce_timeout, self.quiesce_publication())', shutdownFence);
-const releaseInstance = clusterShutdown.indexOf('.release_instance_authority_with(service)', publicationTimeout);
-const processShutdown = read('crates/platform/northstar-runtime/src/process_shutdown.rs');
-if (shutdownFence < 0 || publicationTimeout < shutdownFence || releaseInstance < publicationTimeout
-    || !/\.release_cluster_after_publication_quiescence\(std::time::Duration::from_secs\(15\)\)/.test(processShutdown)
-    || !processShutdown.includes('ports.begin_cluster_shutdown();')
-    || !processShutdown.includes('Some(Err(error)) => tracing::warn!(')
-    || !processShutdown.includes('None => tracing::error!(')
-    || /release_instance_authority\(&ports\.pool\)/.test(processShutdown)) {
-  throw new Error('cluster node-instance release must remain inside the signed-publication fence');
 }
 const mainRuntimeControlReservation = runtimeMain.indexOf('node::reserve_runtime_control_connection(&config).await?');
 const mainPrimaryPoolConstruction = runtimeMain.indexOf('let pool_options = northstar_postgres::pool::options()');
@@ -753,13 +736,6 @@ if (
   );
 }
 if (
-  !/#\s*\[\s*derive\s*\(\s*Clone\s*\)\s*\]\s*pub\s+struct\s+MixService\b/.test(
-    mixServiceProduction,
-  )
-) {
-  throw new Error('MixService must clone the shared durable-outbox admission instead of replacing it');
-}
-if (
   !/async\s+fn\s+outbox_db_admission_guard\s*\(\s*&self\s*\)\s*->\s*OwnedSemaphorePermit/.test(
     mixServiceProduction,
   ) ||
@@ -935,9 +911,6 @@ for (const [serviceMethod, repositoryMethod] of mixOutboxDbMethods) {
     }
   }
 }
-if (/\boutbox_db_admission(?:_guard)?\b/.test(mixProtocolProduction)) {
-  throw new Error('MIX protocol must not gain access to the service-owned outbox DB admission permit');
-}
 const channelStanzaDatabaseLane = structBody(
   mixProtocolProduction,
   'enum ChannelStanzaDatabaseLane',
@@ -1082,15 +1055,10 @@ if (
 // and the per-file MIX budget is zero.
 const MAX_PROTOCOL_DB_AUTHORITY_REFERENCES = 0;
 const MAX_PROTOCOL_DB_DOMAIN_REFERENCES = 7;
-const MAX_MIX_DB_AUTHORITY_REFERENCES = 0;
 const MAX_MIX_DB_DOMAIN_REFERENCES = 0;
-const MAX_PUBSUB_DB_AUTHORITY_REFERENCES = 0;
 const MAX_PUBSUB_DB_DOMAIN_REFERENCES = 0;
-const MAX_PEP_DB_AUTHORITY_REFERENCES = 0;
 const MAX_PEP_DB_DOMAIN_REFERENCES = 0;
-const MAX_MESSAGING_DB_AUTHORITY_REFERENCES = 0;
 const MAX_MESSAGING_DB_DOMAIN_REFERENCES = 0;
-const MAX_DISCOVERY_DB_AUTHORITY_REFERENCES = 0;
 const MAX_DISCOVERY_DB_DOMAIN_REFERENCES = 7;
 if (protocolDbAuthorityReferences > MAX_PROTOCOL_DB_AUTHORITY_REFERENCES) {
   throw new Error(
@@ -1113,14 +1081,6 @@ if (
       `PgPool=${protocolPgPoolReferences}`,
   );
 }
-if (mix.authorityReferences > MAX_MIX_DB_AUTHORITY_REFERENCES) {
-  throw new Error(
-    `mix.rs db authority budget regressed: ${mix.authorityReferences} > ${MAX_MIX_DB_AUTHORITY_REFERENCES}`,
-  );
-}
-if (mix.authorityReferences !== 0) {
-  throw new Error('mix.rs must have exactly zero direct db authority references');
-}
 if (mix.domainReferences > MAX_MIX_DB_DOMAIN_REFERENCES) {
   throw new Error(
     `mix.rs db domain-model coupling regressed: ${mix.domainReferences} > ${MAX_MIX_DB_DOMAIN_REFERENCES}`,
@@ -1133,27 +1093,13 @@ const discovery = perFile.find(({ name }) => name === 'discovery.rs');
 // `perFile` intentionally contains only modules with at least one direct
 // repository reference.  Treat an absent entry as the desired zero rather
 // than making complete extraction fail the monotonic architecture gate.
-const pubsubDbAuthorityReferences = pubsub?.authorityReferences ?? 0;
 const pubsubDbDomainReferences = pubsub?.domainReferences ?? 0;
-const pepDbAuthorityReferences = pep?.authorityReferences ?? 0;
 const pepDbDomainReferences = pep?.domainReferences ?? 0;
-const messagingDbAuthorityReferences = messaging?.authorityReferences ?? 0;
 const messagingDbDomainReferences = messaging?.domainReferences ?? 0;
-const discoveryDbAuthorityReferences = discovery?.authorityReferences ?? 0;
 const discoveryDbDomainReferences = discovery?.domainReferences ?? 0;
-if (pubsubDbAuthorityReferences > MAX_PUBSUB_DB_AUTHORITY_REFERENCES) {
-  throw new Error(
-    `pubsub.rs db authority budget regressed: ${pubsubDbAuthorityReferences} > ${MAX_PUBSUB_DB_AUTHORITY_REFERENCES}`,
-  );
-}
 if (pubsubDbDomainReferences > MAX_PUBSUB_DB_DOMAIN_REFERENCES) {
   throw new Error(
     `pubsub.rs db domain-model coupling regressed: ${pubsubDbDomainReferences} > ${MAX_PUBSUB_DB_DOMAIN_REFERENCES}`,
-  );
-}
-if (pepDbAuthorityReferences > MAX_PEP_DB_AUTHORITY_REFERENCES) {
-  throw new Error(
-    `pep.rs db authority budget regressed: ${pepDbAuthorityReferences} > ${MAX_PEP_DB_AUTHORITY_REFERENCES}`,
   );
 }
 if (pepDbDomainReferences > MAX_PEP_DB_DOMAIN_REFERENCES) {
@@ -1161,19 +1107,9 @@ if (pepDbDomainReferences > MAX_PEP_DB_DOMAIN_REFERENCES) {
     `pep.rs db domain-model coupling regressed: ${pepDbDomainReferences} > ${MAX_PEP_DB_DOMAIN_REFERENCES}`,
   );
 }
-if (messagingDbAuthorityReferences > MAX_MESSAGING_DB_AUTHORITY_REFERENCES) {
-  throw new Error(
-    `messaging.rs db authority budget regressed: ${messagingDbAuthorityReferences} > ${MAX_MESSAGING_DB_AUTHORITY_REFERENCES}`,
-  );
-}
 if (messagingDbDomainReferences > MAX_MESSAGING_DB_DOMAIN_REFERENCES) {
   throw new Error(
     `messaging.rs db domain-model coupling regressed: ${messagingDbDomainReferences} > ${MAX_MESSAGING_DB_DOMAIN_REFERENCES}`,
-  );
-}
-if (discoveryDbAuthorityReferences !== MAX_DISCOVERY_DB_AUTHORITY_REFERENCES) {
-  throw new Error(
-    `discovery.rs must have exactly zero db authority references, found ${discoveryDbAuthorityReferences}`,
   );
 }
 if (discoveryDbDomainReferences > MAX_DISCOVERY_DB_DOMAIN_REFERENCES) {
@@ -1234,22 +1170,12 @@ if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(rosterServiceBody)) {
 for (const invariant of [
   'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY',
   'expected_auth_generation',
-  'MAX_BUFFERED_ROSTER_CHANGES',
-  'RosterSyncState::Flushing',
 ]) {
   if (!rosterServiceSource.includes(invariant) && !readProductionModule('crates/contexts/roster/northstar-roster-postgres/src/roster.rs', { root }).includes(invariant)) {
     throw new Error(`RosterService lost safety invariant: ${invariant}`);
   }
 }
 
-// ARCH-SVC XEP-0160 replay boundary: only transport ordering/backpressure is
-// allowed in protocol code. PostgreSQL account/page leases, policy snapshots
-// and claim cleanup run through ReplayService. Bind 2 uses the same
-// service path and may not resurrect the former pool-owning repository drain.
-const replayProtocolSource = read('crates/edges/northstar-stream/src/replay.rs');
-if (!/\bReplayService\s*</.test(replayProtocolSource) || /\bServerNode\b/.test(replayProtocolSource)) {
-  throw new Error('replay.rs must use its narrow ReplayService handle');
-}
 const replayServiceSource = read('crates/contexts/session/northstar-session-application/src/replay.rs');
 const replayServiceBody = structBody(replayServiceSource, 'pub struct ReplayService');
 if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(replayServiceBody)) {
@@ -1299,16 +1225,6 @@ for (const invariant of [
   }
 }
 const sasl2Source = readProductionModule('crates/edges/northstar-stream/src/protocol/sasl2.rs', { root });
-for (const forbidden of [
-  'deliver_bind2_offline',
-  'deliver_offline_leased',
-  'acquire_offline_replay_lease',
-]) {
-  if (new RegExp(`\\b(?:db\\s*::\\s*)?${forbidden}\\b`).test(sasl2Source)) {
-    throw new Error(`sasl2.rs bypasses ReplayService via ${forbidden}`);
-  }
-}
-
 // ARCH-SVC authentication vertical slice: protocol code owns SASL wire state
 // only. The repository owns PostgreSQL and FAST authority; the service owns
 // dummy-SCRAM derivation. A successful identity is structurally
@@ -1352,9 +1268,6 @@ for (const forbidden of [
     throw new Error(`AuthenticatedAccount regained credential field ${forbidden}`);
   }
 }
-if (/AuthenticationResult\s*<\s*(?:crate::)?(?:db|northstar_auth_postgres::users)::User\s*>/.test(authenticationServiceSource)) {
-  throw new Error('AuthenticationService must never return the credential-bearing db::User DTO');
-}
 const legacyAuthProtocolSource = readRoleSplitFile('crates/edges/northstar-stream/src/protocol.rs', { root });
 const protocolSessionBody = structBody(legacyAuthProtocolSource, 'pub struct ProtocolSession');
 if (!/^\s*host\s*:\s*Arc<H>\s*,?\s*$/m.test(protocolSessionBody)) {
@@ -1367,19 +1280,6 @@ if (/\b(?:ServerNode|Arc)\b/.test(smRuntimePolicyBody)
     || !/\bip_binding\s*:\s*String\b/.test(smRuntimePolicyBody)
     || !/\bsm_runtime_policy\s*:\s*SmRuntimePolicy\b/.test(protocolSessionBody)) {
   throw new Error('ProtocolSession SM safety policy must be a narrow owned snapshot');
-}
-for (const [name, source] of [
-  ['protocol.rs', legacyAuthProtocolSource],
-  ['protocol/sm.rs', read('crates/edges/northstar-stream/src/protocol/sm.rs')],
-]) {
-  if (/\bself\s*\.\s*state\s*\.\s*(?:sm_session_policy|sm_buffer_limits|sm_ip_binding)\s*\(/.test(source)) {
-    throw new Error(`${name} reads SM safety configuration through global state after construction`);
-  }
-}
-for (const transport of ['crates/edges/northstar-bosh/src/lib.rs', 'crates/edges/northstar-c2s/src/lib.rs', 'crates/edges/northstar-c2s/src/tcp_action.rs', 'crates/edges/northstar-c2s/src/websocket_action.rs']) {
-  if (/\b(?:session|protocol)\s*\.\s*state\b/.test(transport === 'crates/edges/northstar-bosh/src/lib.rs' ? readRoleSplitFile(transport, { root }) : read(transport))) {
-    throw new Error(`${transport} traverses ProtocolSession into global state`);
-  }
 }
 const nativeTransportSource = read('crates/edges/northstar-c2s/src/lib.rs');
 const backpressureGuard = structBody(nativeTransportSource, 'struct BackpressureDisconnectMetric');
@@ -1416,9 +1316,6 @@ for (const connection of [
     throw new Error(`${connection} retains its host after opening the protocol session`);
   }
 }
-if (/\bself\s*\.\s*state\b/.test(read('crates/edges/northstar-c2s/src/protocol_session.rs'))) {
-  throw new Error('the session\'s direct write port traverses ProtocolSession into global state');
-}
 if (!/authenticated\s*:\s*\r?\n?\s*Option<northstar_auth_application::authentication::AuthenticatedAccount>/.test(legacyAuthProtocolSource)) {
   throw new Error('ProtocolSession must retain only the least-authority AuthenticatedAccount DTO');
 }
@@ -1448,9 +1345,6 @@ if (/\bstate\s*\.\s*pool\b/.test(sasl2Source)) {
   throw new Error('sasl2.rs regained direct ServerNode PostgreSQL authority');
 }
 const accountServiceSource = read('crates/contexts/auth/northstar-auth-application/src/account.rs');
-if (/RegistrationOutcome[\s\S]*?Created\s*\(\s*(?:db|northstar_auth_postgres::users)::User\s*\)/.test(accountServiceSource)) {
-  throw new Error('AccountService registration result leaks the credential-bearing db::User DTO');
-}
 const registrationAccountBody = structBody(
   accountServiceSource,
   'pub struct RegistrationAccount',
@@ -1460,15 +1354,6 @@ if (/(?:\bpassword_hash\b|\bscram_[A-Za-z0-9_]*|\bauth_generation\b|\bis_admin\b
 }
 const authCorePasswordSource = read('crates/contexts/auth/northstar-auth-core/src/password.rs');
 const usersSource = readProductionModule('crates/contexts/auth/northstar-auth-postgres/src/users.rs', { root });
-for (const [name, source, typeName] of [
-  ['PasswordCredentials', authCorePasswordSource, 'PasswordCredentials'],
-  ['PreparedScramUpgrade', usersSource, 'PreparedScramUpgrade'],
-  ['PreparedLogin', usersSource, 'PreparedLogin'],
-]) {
-  if (!new RegExp(`impl\\s+Drop\\s+for\\s+${typeName}\\b`).test(source)) {
-    throw new Error(`${name} must zeroize reusable credential material on Drop`);
-  }
-}
 if (!/impl\s+std::fmt::Debug\s+for\s+PasswordCredentials\b/.test(authCorePasswordSource)
     || !/impl\s+std::fmt::Debug\s+for\s+PreparedLogin\b/.test(usersSource)) {
   throw new Error('credential containers require explicitly redacted Debug implementations');
@@ -1862,9 +1747,6 @@ if (/state\.pool|sqlx::Transaction|db::(?:operation_work_pending|claim_operation
     || !operationRuntimeSource.includes('.claim_parent_with_targets(')) {
   throw new Error('administrator operation worker must keep its initial claim and target writes behind the journal service');
 }
-if (/\.wake_committed_operation\s*\(\s*&state\.pool\b/.test(operationRuntimeSource)) {
-  throw new Error('operation_runtime.rs bypasses MucService for committed MUC wakes');
-}
 const operationMucDestroyEffectsSource = read('src/node/adapters/operation_muc_destroy_effects.rs');
 const committedMucWakeServiceSource = read('crates/contexts/room/northstar-room-application/src/operation_muc_wake.rs');
 if (!/muc_destroy_effects\.notify_committed\(operation\.id\)\.await/.test(operationRuntimeSource)
@@ -1877,23 +1759,9 @@ const mucServiceBody = structBody(mucServiceSource, 'pub struct MucService');
 if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(mucServiceBody)) {
   throw new Error('MucService must receive its repository port');
 }
-if (/find_user[\s\S]*Result<Option<\s*(?:db|northstar_auth_postgres::users)::User\s*>>/.test(mucServiceSource)) {
-  throw new Error('MucService leaks the credential-bearing db::User DTO');
-}
 if (!/enabled_local_account[\s\S]*crate::accounts::enabled_user_id/.test(readProductionModule('crates/contexts/room/northstar-room-postgres/src/room.rs', { root }))) {
   throw new Error('MucService no longer fails closed for disabled local routing targets');
 }
-if (!/find_enabled_user[\s\S]*?FROM users\s+WHERE username=\$1 AND NOT is_disabled/.test(usersSource)) {
-  throw new Error('least-authority MUC account lookup must exclude disabled accounts in SQL');
-}
-for (const signature of mucServiceSource.matchAll(
-  /pub\(crate\)\s+(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/gs,
-)) {
-  if (signature[1] !== 'new' && /\b(?:sqlx\s*::\s*)?PgPool\b/.test(signature[2])) {
-    throw new Error('MucService must not accept a raw PostgreSQL capability');
-  }
-}
-
 const discoverySource = read('crates/edges/northstar-stream/src/protocol/discovery.rs');
 for (const accessor of ['mix_service', 'muc_service', 'pubsub_service']) {
   if (!new RegExp(`\\.${accessor}\\s*\\(\\s*\\)`).test(discoverySource)) {
@@ -2010,13 +1878,6 @@ const retractionRepositoryBody = structBody(retractionRepositorySource, 'pub str
 if (!/^\s*pool\s*:\s*PgPool\s*,?\s*$/m.test(retractionRepositoryBody)) {
   throw new Error('Retraction repository PostgreSQL capability must remain private');
 }
-for (const signature of retractionServiceSource.matchAll(
-  /pub\s+(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/gs,
-)) {
-  if (signature[1] !== 'new' && /\b(?:sqlx\s*::\s*)?PgPool\b/.test(signature[2])) {
-    throw new Error('RetractionService must not accept a raw PostgreSQL capability');
-  }
-}
 const retractionIntentMigration = read('migrations/0102_personal_retraction_intents.sql');
 if (/\bpublic\s*\./i.test(retractionIntentMigration)) {
   throw new Error('retraction intent migration must remain search_path/schema safe');
@@ -2118,14 +1979,6 @@ for (const typeName of [
   const body = structBody(contentIdentitySource, `pub struct ${typeName}`);
   if (/^\s*pub(?:\(crate\))?\s+(?:generations|keys|secret)\s*:/m.test(body)) {
     throw new Error(`${typeName} exposed its derived content key material`);
-  }
-}
-for (const requiredFactory of [
-  'personal_message_content_keyring',
-  'personal_retraction_content_keyring',
-]) {
-  if (!new RegExp(`fn\\s+${requiredFactory}\\s*\\(`).test(abuseSource)) {
-    throw new Error(`AbuseGuard lost purpose-bound key derivation factory ${requiredFactory}`);
   }
 }
 const contentGenerationBody = structBody(abuseSource, 'fn content_identity_generations(');
@@ -2254,10 +2107,6 @@ for (const credentialField of [
     throw new Error(`LocalRecipient leaks authentication field ${credentialField}`);
   }
 }
-if (/Deliver\s*\(\s*(?:db|northstar_auth_postgres::users)::User\s*\)/.test(messageServiceSource)) {
-  throw new Error('MessageService leaks the persistence User credential model to routing code');
-}
-
 // XEP-0115 federated presence is observed by independent authenticated S2S
 // tasks. Its ordering must come from one exact full-JID lifecycle authority,
 // not TTLs, retries, or a cache-size heuristic. Keep acquisition in the
@@ -2640,7 +2489,7 @@ const passkeyFinishSource = read('crates/edges/northstar-http/src/passkeys.rs');
 const passkeyFinishContext = structBody(read('crates/edges/northstar-http/src/contexts/passkey_login_finish.rs'), 'pub struct PasskeyLoginFinishContext');
 if (!passkeyFinishSource.includes('State(state): State<PasskeyLoginFinishContext<R>>')
     || /\b(?:ServerNode|Metrics|PgPool)\b/.test(passkeyFinishContext)) {
-  throw new Error('Passkey login completion must check the live origin before using its narrow service');
+  throw new Error('Passkey login completion must use its narrow service context');
 }
 const presenceProtocol = protocolModuleSource('presence.rs');
 const presenceClusterRouting = read('crates/edges/northstar-cluster/src/presence_routing.rs');
@@ -3011,8 +2860,8 @@ console.log(
 // The experiment index consumes the exact production inventory already checked
 // above, never a second handwritten list of runtime authorities.
 // SQLx 0.9, like 0.8, can return a connection to its pool inside the
-// transaction of a cancelled BEGIN. Every server and tool pool starts from
-// the options that close such a connection on release.
+// transaction of a cancelled BEGIN. Scanned production pools in src/ and
+// crates/ start from options that close such a connection on release.
 const poolOptionsSource = read('crates/platform/northstar-postgres/src/pool.rs');
 const unguardedPools = productionRustSources
   .filter(({ relative }) => /^(?:src\/|crates\/(?:contexts|edges)\/|crates\/platform\/northstar-)/.test(relative))

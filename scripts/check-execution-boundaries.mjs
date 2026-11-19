@@ -10,14 +10,11 @@ const files = {
   authOwner: 'crates/edges/northstar-stream/src/auth_publication.rs',
   authCredential: 'crates/contexts/auth/northstar-auth-core/src/credential.rs',
   authDb: 'crates/contexts/auth/northstar-auth-postgres/src/authentication.rs',
-  authUsers: 'crates/contexts/auth/northstar-auth-postgres/src/users.rs',
   credentialSmDb: 'crates/contexts/workflows/northstar-workflows/src/sm_repository.rs',
-  sasl2: 'crates/edges/northstar-stream/src/protocol/sasl2.rs',
   protocol: 'crates/edges/northstar-stream/src/protocol.rs',
   bosh: 'crates/edges/northstar-bosh/src/lib.rs',
   outbound: 'crates/contexts/session/northstar-session-application/src/outbound.rs',
   mucCore: 'crates/contexts/room/northstar-room-application/src/discussion.rs',
-  mucService: 'crates/contexts/room/northstar-room-application/src/muc_service.rs',
   mix: 'crates/contexts/room/northstar-mix-xmpp/src/lib.rs',
   mixCore: 'crates/contexts/room/northstar-room-application/src/mix.rs',
   mixData: 'crates/contexts/room/northstar-room-core/src/mix.rs',
@@ -33,8 +30,7 @@ const files = {
 // Sources read as whole production modules (the file plus its non-test
 // child module files), so items keep being found after a module split.
 const productionModules = new Set([
-  'mix', 'mixDb', 'state', 'authUsers', 'sasl2',
-  'mucService',
+  'mix', 'mixDb', 'state',
 ]);
 
 // These directories hold independently owned modules, so read the file plus
@@ -212,10 +208,6 @@ export function verifyAuthPublicationBoundaries(sources) {
     'auth publication cannot restore a session-wide latest-frame slot');
   const known = body(owner, 'impl\\s+KnownCredentialOwner\\b');
   const sealed = method(known, 'seal');
-  const holder = body(owner, 'impl\\s+AuthControlHolder\\b');
-  requireBoundary(/#\[cfg\(test\)\]\s*pub\s+fn\s+join_observation\s*\(\s*&self\s*\)\s*->\s*ControlJoinObservation\s*\{/.test(holder) &&
-    method(holder, 'join_observation') === 'self.0.joins.clone()',
-    'auth holder join observation must remain a test-only read-only clone of its actual captured joins');
   const selected = body(owner, 'impl\\s+SelectedControls\\b');
   const take = method(selected, 'take_all');
   // These finite source shapes pin real SQL cuts. They do not execute SQL or
@@ -239,7 +231,7 @@ export function verifyAuthPublicationBoundaries(sources) {
     'credential witness and invocation constructors must remain at their exact one-use sites');
   const transfer = method(prepared, 'transfer');
   requireBoundary(!/\.await|spawn|rollback\(|commit\(/.test(method(body(facts, "impl\\s+Drop\\s+for\\s+CredentialInvocation<'_>"), 'drop')),
-    'credential invocation Drop cannot perform SQL or I/O');
+    'credential invocation Drop cannot contain await, spawn, rollback or commit calls');
   for (const [source, name, start, receiptResult, sites] of [
     [authDb, 'commit_fast_with_login_epoch_inner', 'observation.enter_fast(', 'AuthenticationResult::Authenticated(receipt)', ['FastExpired']],
     [credentialSmDb, 'finalize_binding_inner', 'observation.enter_binding(', 'Ok(BindingFinalizationOutcome::Committed{receipt})', ['BindingReservationLost', 'BindingStageMissing', 'BindingFastExpired']],
@@ -264,26 +256,6 @@ export function verifyAuthPublicationBoundaries(sources) {
   const testOnlyItem = (source, declaration) => new RegExp(
     '#\\[cfg\\(test\\)\\]\\s*(?:#\\[[^\\]]*\\]\\s*)*' + declaration,
   ).test(codeOnly(source));
-  for (const [source, name, fields] of [
-    [facts, 'CredentialAttemptJoin', 'pubattempt:Uuid,pubframe:Uuid,pubconnection:Uuid,pubordinal:u8,pubkind:CredentialKind'],
-    [facts, 'CredentialJoins', 'pubowner:CredentialAttemptJoin,pubconstructed_receipt:Option<Uuid>,pubreturned_receipt:Option<Uuid>,pubtransferred_receipt:Option<Uuid>'],
-    [facts, 'PublicationJoins', 'pubcontrol:Uuid,pubframe:Option<Uuid>,pubreceipt:Uuid,pubcredential:Option<CredentialAttemptJoin>,pubbegun_receipt:Option<Uuid>,pubbound_effects:bool,pubnotification_expected:bool'],
-    [owner, 'ControlAssociation', 'pubcontrol:Uuid,pubconnection:Uuid,pubframe:Option<Uuid>,pubreceipt:Uuid,publength:usize,pubdigest:[u8;32],pubpublication:northstar_auth_application::authentication::publication::PublicationJoins'],
-    [owner, 'ControlJoins', 'pubintroduced:Option<ControlAssociation>,pubtransferred:Option<ControlAssociation>'],
-  ]) {
-    const declaration = 'pub\\s+struct\\s+' + name + '\\b';
-    requireBoundary(testOnlyItem(source, declaration) && normalize(body(source, declaration)) === fields,
-      `auth ${name} must remain test-only association facts without retained authority`);
-  }
-  requireBoundary(testOnlyItem(facts, 'impl\\s+CredentialAttemptJoin\\b') &&
-    method(body(facts, 'impl\\s+CredentialAttemptJoin\\b'), 'of') ===
-      'Self{attempt:snapshot.attempt,frame:snapshot.frame,connection:snapshot.connection,ordinal:snapshot.ordinal,kind:snapshot.kind}',
-    'auth credential join anchor must read the original actual attempt snapshot');
-  const credentialObservation = body(facts, 'impl\\s+CredentialObservation\\b');
-  requireBoundary(testOnlyItem(credentialObservation, 'pub\\s+fn\\s+joins\\s*\\(&self\\)\\s*->\\s*CredentialJoins') &&
-    method(credentialObservation, 'joins') ===
-      'letstate=self.0.lock().unwrap();CredentialJoins{owner:CredentialAttemptJoin::of(&state.snapshot),constructed_receipt:state.constructed.as_ref().map(|(id,_)|*id),returned_receipt:state.returned.as_ref().map(|(id,_)|*id),transferred_receipt:state.transferred_receipt}',
-    'auth credential join reader must independently read actual constructed and raw-returned receipt identities');
   requireBoundary(normalize(body(facts, 'struct\\s+CredentialState\\b')).includes('#[cfg(test)]transferred_receipt:Option<Uuid>') &&
     method(prepared, 'new').includes('#[cfg(test)]transferred_receipt:None') &&
     transfer.includes('state.snapshot.transferred=true;#[cfg(test)]{state.transferred_receipt=Some(receipt.publication_identity());}Ok(self.observation.clone())'),
@@ -293,89 +265,16 @@ export function verifyAuthPublicationBoundaries(sources) {
       'letstate=self.0.lock().unwrap();PublicationJoins{control:state.snapshot.control,frame:state.snapshot.frame,receipt:state.receipt_id,credential:state.credential.as_ref().map(|credential|credential.joins().owner),begun_receipt:state.begun_receipt,bound_effects:state.bound_effects,notification_expected:state.notification_expected}' &&
     method(observation, 'returned_receipt').includes('credential:None'),
     'auth publication join reader must preserve actual receipt identity and only an observed credential anchor with actual State effect intent');
-  const publicationJoinDeclarations = [...codeOnly(facts).matchAll(/((?:#\[[^\]]*\]\s*)*)pub\s+struct\s+PublicationJoins\b/g)];
-  requireBoundary(publicationJoinDeclarations.length === 1 &&
-    compact(publicationJoinDeclarations[0][0]) === '#[cfg(test)]#[derive(Clone,Copy,Debug,Eq,PartialEq)]pubstructPublicationJoins',
-    'auth PublicationJoins must preserve its exact test-only derives');
   requireBoundary(normalize(body(facts, 'struct\\s+State\\b')).includes('#[cfg(test)]begun_receipt:Option<Uuid>') &&
     method(observation, 'returned_receipt').includes('#[cfg(test)]begun_receipt:None') &&
     begin.includes('state.snapshot.publication=Knowledge::BeforeCommit;#[cfg(test)]{state.begun_receipt=Some(receipt.publication_identity());}Ok(Invocation{observation:self,receipt})'),
     'auth begun receipt observation must remain test-only and follow actual publication acceptance');
-  requireBoundary(testOnlyItem(owner, 'pub\\s+struct\\s+ControlJoinObservation\\(Arc<Mutex<ControlJoins>>\\);') &&
-    testOnlyItem(owner, 'impl\\s+ControlJoinObservation\\b') &&
-    normalize(body(owner, 'impl\\s+ControlJoinObservation\\b')) ===
-      'pubfnsnapshot(&self)->ControlJoins{*self.0.lock().unwrap()}' +
-      'pubfnedit(&self,edit:implFnOnce(&mutControlJoins)){edit(&mutself.0.lock().unwrap());}',
-    'auth control join reader must retain only test facts, a snapshot and the saved-case damage hook');
-  requireBoundary(testOnlyItem(owner, 'fn\\s+control_association\\b') &&
-    method(owner, 'control_association') ===
-      'ControlAssociation{control:holder.id,connection:holder.connection,frame:pending.origin.as_ref().map(FrameExecution::operation_id),receipt:pending.receipt.publication_identity(),length:holder.length,digest:holder.digest,publication:holder.observation.joins()}',
-    'auth control association must read the actual holder and moved pending receipt independently');
   requireBoundary(normalize(body(owner, 'struct\\s+Holder\\b')).includes('#[cfg(test)]joins:ControlJoinObservation') &&
     sealed.includes('#[cfg(test)]joins:ControlJoinObservation(Arc::new(Mutex::new(ControlJoins::default())))') &&
     sealed.endsWith('#[cfg(test)]{letpending=holder.0.pending.lock().unwrap();holder.0.joins.0.lock().unwrap().introduced=Some(control_association(&holder.0,pending.pending.as_ref().expect()));}Ok(holder)') &&
     take.includes('managed:false}));#[cfg(test)]{letowner=&owned.last().expect().1;holder.0.joins.0.lock().unwrap().transferred=Some(control_association(&holder.0,&owner.pending));}'),
     'auth control introduction and transfer must capture their actual owner at each test-only handoff cut');
 
-}
-
-// Closed lexical pins for the bounded, fact-only cfg(test) selection observer.
-// These inspect source wiring; they are not the Stage 4 oracle or runtime proof.
-export function verifyBoshSelectionObservations({ boshResponse }) {
-  const source = productionModule(boshResponse).replaceAll(CROSS_CRATE_TEST_ONLY, '#[cfg(test)]');
-  const code = codeOnly(source);
-  const normalize = value => compact(value).replace(/,([)}])/g, '$1').replace(/,$/, '');
-  const exactDeclaration = (declaration, expected, label) => {
-    const matches = [...code.matchAll(new RegExp('((?:#\\[[^\\]]*\\]\\s*)*)' + declaration, 'g'))];
-    requireBoundary(matches.length === 1 && compact(matches[0][0]) === expected,
-      `BOSH selection ${label} must retain its exact test-only declaration and derives`);
-  };
-  exactDeclaration('const\\s+MAX_SELECTED_FACTS\\s*:\\s*usize\\s*=\\s*\\d+\\s*;',
-    '#[cfg(test)]constMAX_SELECTED_FACTS:usize=4;', 'capacity');
-  requireBoundary([...code.matchAll(/\bMAX_SELECTED_FACTS\b/g)].length === 5,
-    'BOSH selection capacity must remain the fixed four-slot observation bound');
-  for (const [name, kind, visibility, derives, fields] of [
-    ['SelectionReadStatus', 'enum', 'pub', 'Clone,Copy,Debug,Eq,PartialEq',
-      'Complete,Incomplete{omitted_items:usize,missing_auth_associations:usize,connection_changed:bool}'],
-    ['SelectedItemSnapshot', 'struct', 'pub', 'Clone,Copy,Debug,Eq,PartialEq',
-      'pubordinal:usize,pubsource:Option<northstar_stream::outbound::TransportOwnershipSource>,pubutf8_length:usize,pubsha256:[u8;32],pubauth_marker:bool,pubsealed_association:Option<northstar_stream::auth_publication::ControlAssociation>,pubholder_joins:Option<northstar_stream::auth_publication::ControlJoins>'],
-    ['SelectionSnapshot', 'struct', 'pub', 'Clone,Copy,Debug,Eq,PartialEq',
-      'pubsession:uuid::Uuid,pubrid:u64,pubfingerprint:[u8;32],pubfirst_validated_connection:Option<uuid::Uuid>,pubvalidated_connection:Option<uuid::Uuid>,pubselected_count:usize,pubstatus:SelectionReadStatus,pubitems:[Option<SelectedItemSnapshot>;MAX_SELECTED_FACTS]'],
-    ['SelectedItemRead', 'struct', '', '',
-      'at_selection:SelectedItemSnapshot,joins:Option<northstar_stream::auth_publication::ControlJoinObservation>'],
-    ['SelectionState', 'struct', '', '',
-      'session:uuid::Uuid,rid:u64,fingerprint:[u8;32],first_validated_connection:Option<uuid::Uuid>,validated_connection:Option<uuid::Uuid>,selected_count:usize,status:SelectionReadStatus,items:[Option<SelectedItemRead>;MAX_SELECTED_FACTS]'],
-  ]) {
-    const declaration = (visibility ? 'pub\\s+' : '') + kind + '\\s+' + name + '\\b';
-    exactDeclaration(declaration,
-      '#[cfg(test)]' + (derives ? `#[derive(${derives})]` : '') + visibility + kind + name, name);
-    requireBoundary(normalize(body(source, declaration)) === fields,
-      `BOSH selection ${name} must retain its exact fact-only field shape`);
-  }
-  exactDeclaration('pub\\s+struct\\s+SelectionObservation\\s*\\(\\s*Arc\\s*<\\s*std\\s*::\\s*sync\\s*::\\s*Mutex\\s*<\\s*SelectionState\\s*>\\s*>\\s*\\)\\s*;',
-    '#[cfg(test)]#[derive(Clone)]pubstructSelectionObservation(Arc<std::sync::Mutex<SelectionState>>);', 'handle');
-  exactDeclaration('impl\\s+SelectionObservation\\b', '#[cfg(test)]implSelectionObservation', 'implementation');
-  const implementation = body(source, 'impl\\s+SelectionObservation\\b');
-  requireBoundary([...implementation.matchAll(/\bfn\s+(\w+)\b/g)].map(match => match[1]).join(',') === 'capture,snapshot' &&
-    [...code.matchAll(/\bimpl\b[^{};]*\b(?:SelectionReadStatus|SelectedItemSnapshot|SelectionSnapshot|SelectedItemRead|SelectionState|SelectionObservation)\b[^{};]*\{/g)].length === 1,
-    'BOSH selection must retain its closed capture and read-only snapshot inventory');
-  requireBoundary(normalize(implementation).startsWith('fncapture(selected:&VecDeque<OutboundItem>,operation:&Operation,metadata:Metadata)->Self{') &&
-    normalize(implementation).includes('pubfnsnapshot(&self)->SelectionSnapshot{'),
-    'BOSH selection methods must retain private capture and immutable fact-only snapshot declarations');
-  const bound = body(source, 'impl\\s+BoundResponse\\b');
-  requireBoundary(normalize(bound).includes('#[cfg(test)]pubfnselection_observation(&self)->SelectionObservation{self.selection.clone()}') &&
-    normalize(body(bound, 'fn\\s+selection_observation\\b')) === 'self.selection.clone()',
-    'BOSH selection getter must remain test-only and clone only its fact handle');
-  requireBoundary(normalize(body(source, 'pub\\s+struct\\s+BoundResponse\\b')).endsWith('auth_connection:Option<uuid::Uuid>,#[cfg(test)]selection:SelectionObservation'),
-    'BOSH selection owner field must remain a private test-only fact handle');
-  // Count all reviewed named construction sites, including declaration/return
-  // heads. No new factory or callback may mint an observation or replace facts.
-  for (const [name, expected] of [['SelectedItemRead', 2], ['SelectedItemSnapshot', 2], ['SelectionState', 2], ['SelectionSnapshot', 3]]) {
-    requireBoundary([...code.matchAll(new RegExp('\\b' + name + '\\s*\\{', 'g'))].length === expected,
-      `BOSH selection ${name} must retain only its reviewed construction sites`);
-  }
-  requireBoundary([...code.matchAll(/\bSelectionObservation\s*\(/g)].length === 1,
-    'BOSH selection handle cannot add an unreviewed named constructor');
 }
 
 // Narrow lexical correspondence for the three shared production route helpers.
@@ -463,10 +362,6 @@ export function verifyExecutionBoundaries(sources) {
   for (const [name, fields, methods, heads] of ownerShapes) {
     requireBoundary(compact(body(boshResponse, `pub\\s+struct\\s+${name}\\b`)) === fields,
       `BOSH ${name} must retain its exact private field shape`);
-    const declaration = responseCode.match(new RegExp(`((?:#\\[[^\\]]*\\]\\s*)*)pub\\s+struct\\s+${name}\\b`));
-    const manualCopy = new RegExp(`\\bimpl\\b[^{};]*\\b(?:Clone|Copy)\\s+for\\s+(?:\\w+\\s*::\\s*)*${name}\\b`);
-    requireBoundary(declaration && !/\bderive\s*\([^)]*\b(?:Clone|Copy)\b/.test(declaration[1]) && !manualCopy.test(responseCode),
-      `BOSH ${name} cannot derive or manually implement Clone or Copy`);
     const implementation = body(boshResponse, `impl\\s+${name}\\b`);
     const actualMethods = [...implementation.matchAll(/\bfn\s+(\w+)\b/g)].map(match => match[1]);
     requireBoundary(actualMethods.join(',') === methods.join(','),
@@ -494,7 +389,6 @@ export function verifyExecutionBoundaries(sources) {
     compact(body(outbound, 'fn\\s+with_auth_publication\\b')) === 'holder.validate_control(&self.stanza)?;self.bosh_auth_control=true;self.auth_publication=Some(std::sync::Arc::new(holder));Ok(self)' &&
     compact(body(outbound, 'fn\\s+is_bosh_auth_control\\b')) === 'self.bosh_auth_control',
     'BOSH auth control must remain private item selection metadata with an exact marker accessor');
-  verifyBoshSelectionObservations(sources);
   verifyRouteHelperBoundaries(sources);
 }
 

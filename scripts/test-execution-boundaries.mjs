@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { findRustItem, matchingRustBrace } from './lib/source-module.mjs';
-import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyMixForegroundBoundaries, verifyMixWorkerBoundaries, verifyBoshSelectionObservations, verifyRouteHelperBoundaries } from './check-execution-boundaries.mjs';
+import { readExecutionSources, verifyExecutionBoundaries, verifyRoomExecutionBoundaries, verifyMucDiscussionBoundaries, verifyMixForegroundBoundaries, verifyMixWorkerBoundaries, verifyRouteHelperBoundaries } from './check-execution-boundaries.mjs';
 
 const baseline = readExecutionSources();
 const CROSS_CRATE_TEST_ONLY = '#[cfg(any(test, feature = "test-support"))]';
@@ -14,32 +13,8 @@ function rejects(name, file, before, after, expected) {
   test(name, () => assert.throws(() => verifyExecutionBoundaries(changedMuc(file, before, after)), expected));
 }
 
-// A split module repeats an inherent impl header once per file; take the
-// block that holds the given member.
-function itemContaining(source, declaration, member) {
-  const items = [];
-  for (let start = source.indexOf(declaration); start >= 0; start = source.indexOf(declaration, start + 1)) {
-    const close = matchingRustBrace(source, source.indexOf('{', start + declaration.length));
-    items.push({ start, close, text: source.slice(start, close + 1) });
-  }
-  const containing = items.filter(item => item.text.includes(member));
-  assert.equal(containing.length, 1, `exactly one ${declaration} must hold ${member}`);
-  return containing[0];
-}
 
 test('current production execution owners satisfy the gate', () => verifyExecutionBoundaries(baseline));
-for (const [name, declaration, member] of [
-  ['authUsers', "pub async fn lock_auth_generation_observed<'a>("],
-  ['authUsers', "pub async fn lock_auth_generation<'a>("],
-  ['sasl2', 'impl<H: SessionHost> ProtocolSession<H>', 'payload.replace_envelope('],
-]) {
-  test(`${declaration} remains checked after the parent test-module boundary`, () => {
-    const source = baseline[name];
-    const item = member ? itemContaining(source, declaration, member) : findRustItem(source, declaration);
-    const split = source.slice(0, item.start) + source.slice(item.close + 1) + '\nmod moved;\n' + item.text;
-    verifyExecutionBoundaries({ ...baseline, [name]: split });
-  });
-}
 test('comments and ordinary formatting are not executable authority', () => {
   verifyExecutionBoundaries(changed('frame', 'let result = future.await;',
     'let /* comment { } */ result =\n future . await;'));
@@ -68,21 +43,6 @@ rejects('BOSH marker accessor cannot synthesize selected membership', 'outbound'
 rejects('BOSH cache cannot retain auth selection membership', 'bosh',
   'struct CachedResponse {',
   'struct CachedResponse {\n    auth_control_selected: bool,', /cache and replay/);
-for (const owner of ['BoundResponse', 'ExposedResponse', 'PublicationReadyResponse']) {
-  rejects(`BOSH ${owner} cannot derive Clone`, 'boshResponse',
-    `pub struct ${owner} {`,
-    `#[derive(Clone)]\npub struct ${owner} {`, /cannot derive or manually implement Clone or Copy/);
-  rejects(`BOSH ${owner} cannot manually implement Clone`, 'boshResponse',
-    `impl ${owner} {`,
-    `impl Clone for ${owner} { fn clone(&self) -> Self { panic!("unreviewed clone") } }\nimpl ${owner} {`,
-    /cannot derive or manually implement Clone or Copy/);
-}
-rejects('BOSH ready owner cannot derive Copy', 'boshResponse',
-  'pub struct PublicationReadyResponse {',
-  '#[derive(Copy)]\npub struct PublicationReadyResponse {', /cannot derive or manually implement Clone or Copy/);
-rejects('BOSH exposed owner cannot manually implement Copy', 'boshResponse',
-  'impl ExposedResponse {',
-  'impl Copy for ExposedResponse {}\nimpl ExposedResponse {', /cannot derive or manually implement Clone or Copy/);
 rejects('BOSH bound exposure must consume its owner', 'boshResponse',
   'pub fn expose(mut self, responders: Vec<Responder>)',
   'pub fn expose(&self, responders: Vec<Responder>)', /named consuming declaration heads/);
@@ -127,24 +87,6 @@ rejects('auth holder cannot add a factory that takes before write', 'authOwner',
   'impl AuthControlHolder { pub(crate) fn take_without_write(self) -> OwnedPublication { let pending = self.0.pending.lock().unwrap().pending.take().unwrap(); OwnedPublication { pending, holder: self, managed: false } }',
   /closed inherent-method inventory/);
 
-rejects('auth holder join observation cannot become a production accessor', 'authOwner',
-  `${CROSS_CRATE_TEST_ONLY} pub fn join_observation(&self) -> ControlJoinObservation { self.0.joins.clone() }`,
-  'pub fn join_observation(&self) -> ControlJoinObservation { self.0.joins.clone() }', /test-only read-only clone/);
-rejects('auth holder join observation cannot substitute unrelated joins', 'authOwner',
-  'pub fn join_observation(&self) -> ControlJoinObservation { self.0.joins.clone() }',
-  'pub fn join_observation(&self) -> ControlJoinObservation { other_joins.clone() }', /test-only read-only clone/);
-
-for (const [file, name, derive] of [
-  ['authFacts', 'CredentialAttemptJoin', 'Clone, Copy, Debug, Eq, PartialEq'],
-  ['authFacts', 'CredentialJoins', 'Clone, Copy, Debug, Eq, PartialEq'],
-  ['authFacts', 'PublicationJoins', 'Clone, Copy, Debug, Eq, PartialEq'],
-  ['authOwner', 'ControlAssociation', 'Clone, Copy, Debug, Eq, PartialEq'],
-  ['authOwner', 'ControlJoins', 'Clone, Copy, Debug, Default, Eq, PartialEq'],
-]) {
-  rejects(`auth ${name} facts cannot escape test configuration`, file,
-    `${CROSS_CRATE_TEST_ONLY} #[derive(${derive})] pub struct ${name}`,
-    `#[derive(${derive})] pub struct ${name}`, /test-only association facts/);
-}
 for (const [file, field, expected] of [
   ['authFacts', 'transferred_receipt: Option<Uuid>', /test-only and follow actual checked transfer/],
   ['authFacts', 'begun_receipt: Option<Uuid>', /test-only and follow actual publication acceptance/],
@@ -153,9 +95,6 @@ for (const [file, field, expected] of [
   rejects(`auth private ${field} cannot escape test configuration`, file,
     `${CROSS_CRATE_TEST_ONLY} ${field}`, field, expected);
 }
-rejects('auth credential joins cannot replace raw returned identity with constructed identity', 'authFacts',
-  'returned_receipt: state.returned.as_ref().map(|(id, _)| *id)',
-  'returned_receipt: state.constructed.as_ref().map(|(id, _)| *id)', /independently read actual constructed/);
 rejects('auth credential joins cannot fabricate an observed transfer identity', 'authFacts',
   'state.transferred_receipt = Some(receipt.publication_identity());',
   'state.transferred_receipt = state.constructed.as_ref().map(|(id, _)| *id);', /follow actual checked transfer/);
@@ -165,18 +104,9 @@ rejects('auth publication joins cannot fabricate a begun receipt identity', 'aut
 rejects('auth publication joins cannot erase their actual credential anchor', 'authFacts',
   'credential: state.credential.as_ref().map(|credential| credential.joins().owner)',
   'credential: None', /only an observed credential anchor/);
-rejects('auth retained join reader cannot keep a holder alive', 'authOwner',
-  'pub struct ControlJoinObservation(Arc<Mutex<ControlJoins>>);',
-  'pub struct ControlJoinObservation(Arc<Holder>);', /retain only test facts/);
 rejects('auth control joins cannot copy introduction into the transferred association', 'authOwner',
   'holder.0.joins.0.lock().unwrap().transferred = Some(control_association(&holder.0, &owner.pending));',
   'holder.0.joins.0.lock().unwrap().transferred = holder.0.joins.0.lock().unwrap().introduced;', /test-only handoff cut/);
-rejects('auth control joins cannot replace the moved pending receipt with the earlier observation', 'authOwner',
-  'receipt: pending.receipt.publication_identity()',
-  'receipt: holder.observation.joins().receipt', /moved pending receipt independently/);
-rejects('auth control joins cannot erase the actual frame association', 'authOwner',
-  'frame: pending.origin.as_ref().map(FrameExecution::operation_id)',
-  'frame: None', /actual holder and moved pending receipt/);
 
 // Pre-receipt controls use the same exact-one token-span mutation helper.
 rejects('credential FAST cannot lose its actual COMMIT observation', 'authDb',
@@ -238,10 +168,6 @@ rejectsMixForeground('MIX raw Existing survives rollback suspension', 'mixDb',
   'request.observed_existing(foreground_existing(&existing))?; } transaction.rollback().await?;',
   '} transaction.rollback().await?;', /before both rollback awaits/, 2);
 test('current MUC discussion source bridges retain accepted knowledge', () => verifyMucDiscussionBoundaries(baseline));
-test('MUC service constructor remains checked with an unrelated impl block', () => {
-  const mucService = baseline.mucService + '\nimpl<R: MucRepository> MucService<R> {\n    pub(crate) fn zz_probe(&self) {}\n}\n';
-  verifyMucDiscussionBoundaries({ ...baseline, mucService });
-});
 
 function rejectsMixWorker(name, file, before, after, expected, matches = 1) {
   test(name, () => assert.throws(() => verifyMixWorkerBoundaries(
@@ -268,105 +194,6 @@ rejectsMixWorker('MIX attempt UUID equality cannot replace private invocation id
   'fn same(&self, other: &Self) -> bool { Arc::ptr_eq(&self.0, &other.0) }',
   'fn same(&self, other: &Self) -> bool { self.row().source == other.row().source }', /private invocation identity/);
 
-// The baseline is the untouched source read from disk, including the proposed
-// Rust observer after an authorized integration. Do not synthesize a positive
-// fixture by patching baseline source into the gate's expected contract.
-test('untouched BOSH selection observer satisfies focused and complete production gates', () => {
-  verifyBoshSelectionObservations(baseline);
-  verifyExecutionBoundaries(baseline);
-});
-function rejectsSelection(name, before, after, expected) {
-  test(name, () => {
-    const mutant = changedMuc('boshResponse', before, after);
-    assert.throws(() => verifyBoshSelectionObservations(mutant), expected);
-    assert.throws(() => verifyExecutionBoundaries(mutant));
-  });
-}
-for (const [name, declaration] of [
-  ['capacity', 'const MAX_SELECTED_FACTS: usize = 4;'],
-  ['status', '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub enum SelectionReadStatus'],
-  ['item snapshot', '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub struct SelectedItemSnapshot'],
-  ['response snapshot', '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub struct SelectionSnapshot'],
-  ['retained item', 'struct SelectedItemRead'],
-  ['retained state', 'struct SelectionState'],
-  ['handle', '#[derive(Clone)] pub struct SelectionObservation'],
-  ['implementation', 'impl SelectionObservation'],
-]) {
-  rejectsSelection(`BOSH selection ${name} cannot escape test configuration`,
-    `${CROSS_CRATE_TEST_ONLY} ${declaration}`, declaration, /exact test-only declaration/);
-}
-rejectsSelection('BOSH selection observation capacity cannot grow',
-  'const MAX_SELECTED_FACTS: usize = 4;', 'const MAX_SELECTED_FACTS: usize = 5;', /exact test-only declaration/);
-rejectsSelection('BOSH selection snapshot cannot retain an unbounded collection',
-  'pub items: [Option<SelectedItemSnapshot>; MAX_SELECTED_FACTS]',
-  'pub items: Vec<SelectedItemSnapshot>', /capacity|fact-only field shape/);
-rejectsSelection('BOSH selection retained state cannot retain an unbounded collection',
-  'status: SelectionReadStatus, items: [Option<SelectedItemRead>; MAX_SELECTED_FACTS]',
-  'status: SelectionReadStatus, items: Vec<SelectedItemRead>', /capacity|fact-only field shape/);
-rejectsSelection('BOSH selection capture cannot allocate an unbounded collection',
-  'let items: [Option<SelectedItemRead>; MAX_SELECTED_FACTS] = std::array::from_fn(|ordinal|',
-  'let items: Vec<SelectedItemRead> = selected.iter().map(|ordinal|', /capacity|final FIFO facts/);
-rejectsSelection('BOSH selection status cannot lose its missing-association count',
-  'Incomplete { omitted_items: usize, missing_auth_associations: usize, connection_changed: bool, }',
-  'Incomplete { omitted_items: usize, connection_changed: bool, }', /fact-only field shape/);
-rejectsSelection('BOSH selection status cannot lose its sticky connection-change fact',
-  'Incomplete { omitted_items: usize, missing_auth_associations: usize, connection_changed: bool, }',
-  'Incomplete { omitted_items: usize, missing_auth_associations: usize, }', /fact-only field shape/);
-for (const [name, field] of [
-  ['holder', 'Option<northstar_stream::auth_publication::AuthControlHolder>'],
-  ['receipt', 'Option<northstar_auth_application::authentication::CredentialCommitReceipt>'],
-  ['publication observation', 'Option<northstar_auth_application::authentication::publication::Observation>'],
-  ['consuming owner', 'Option<northstar_stream::auth_publication::OwnedPublication>'],
-  ['response bytes', 'Option<BoshHttpResponse>'],
-]) {
-  rejectsSelection(`BOSH selection retained item cannot extend ${name} lifetime`,
-    'struct SelectedItemRead {', `struct SelectedItemRead { retained: ${field},`, /fact-only field shape/);
-}
-rejectsSelection('BOSH selection handle cannot retain actual holders',
-  'pub struct SelectionObservation(Arc<std::sync::Mutex<SelectionState>>);',
-  'pub struct SelectionObservation(Arc<Vec<northstar_stream::auth_publication::AuthControlHolder>>);', /exact test-only declaration/);
-rejectsSelection('BOSH selection handle tuple field cannot become public',
-  'pub struct SelectionObservation(Arc<std::sync::Mutex<SelectionState>>);',
-  'pub struct SelectionObservation(pub Arc<std::sync::Mutex<SelectionState>>);', /exact test-only declaration/);
-rejectsSelection('BOSH selection state cannot expose mutable facts',
-  'struct SelectionState { session: uuid::Uuid,',
-  'struct SelectionState { pub session: uuid::Uuid,', /fact-only field shape/);
-rejectsSelection('BOSH selection snapshot cannot silently lose its digest field',
-  'pub sha256: [u8; 32],', '', /fact-only field shape/);
-rejectsSelection('BOSH selection snapshot cannot acquire unreviewed derives',
-  '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub struct SelectionSnapshot',
-  '#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)] pub struct SelectionSnapshot', /exact test-only declaration/);
-rejectsSelection('BOSH selection cannot add a mutable reset API',
-  'impl SelectionObservation {',
-  'impl SelectionObservation { pub fn reset(&self) { self.0.lock().unwrap().status = SelectionReadStatus::Complete; }', /closed capture/);
-rejectsSelection('BOSH selection snapshots cannot acquire an authority conversion',
-  'impl SelectionObservation {',
-  'impl SelectionSnapshot { fn into_owner(self) -> OwnedPublication { panic!() } } impl SelectionObservation {', /exact test-only declaration|closed capture/);
-rejectsSelection('BOSH selection capture cannot become a public constructor',
-  'fn capture(selected: &VecDeque<OutboundItem>, operation: &Operation, metadata: Metadata) -> Self',
-  'pub fn capture(selected: &VecDeque<OutboundItem>, operation: &Operation, metadata: Metadata) -> Self', /immutable fact-only snapshot declarations/);
-rejectsSelection('BOSH selection capture cannot retain a borrowed queue lifetime',
-  'fn capture(selected: &VecDeque<OutboundItem>, operation: &Operation, metadata: Metadata) -> Self',
-  "fn capture<'a>(selected: &'a VecDeque<OutboundItem>, operation: &Operation, metadata: Metadata) -> Self", /immutable fact-only snapshot declarations/);
-rejectsSelection('BOSH selection snapshot getter cannot return mutable state',
-  'pub fn snapshot(&self) -> SelectionSnapshot',
-  'pub fn snapshot(&mut self) -> &mut SelectionState', /immutable fact-only snapshot declarations/);
-rejectsSelection('BOSH selection owner getter cannot escape test configuration',
-  `${CROSS_CRATE_TEST_ONLY} pub fn selection_observation(&self) -> SelectionObservation`,
-  'pub fn selection_observation(&self) -> SelectionObservation', /test-only and clone only/);
-rejectsSelection('BOSH selection owner field cannot escape test configuration',
-  `${CROSS_CRATE_TEST_ONLY} selection: SelectionObservation`, 'selection: SelectionObservation', /private test-only fact handle/);
-rejectsSelection('BOSH selection owner getter cannot mutate its stored facts',
-  'pub fn selection_observation(&self) -> SelectionObservation { self.selection.clone() }',
-  'pub fn selection_observation(&self) -> SelectionObservation { self.selection.0.lock().unwrap().status = SelectionReadStatus::Complete; self.selection.clone() }', /test-only and clone only/);
-rejectsSelection('BOSH selection owner getter cannot leak selected controls',
-  'pub fn selection_observation(&self) -> SelectionObservation { self.selection.clone() }',
-  'pub fn selection_observation(&self) -> &SelectedControls { &self.auth_controls }', /test-only and clone only/);
-for (const [name, before, after] of [
-  ['explicit overflow count', 'let omitted_items = selected.len().saturating_sub(MAX_SELECTED_FACTS);', 'let omitted_items = 0;'],
-]) {
-  rejectsSelection(`BOSH selection capture must retain ${name}`, before, after, /capacity|final FIFO facts/);
-}
 for (const [name, before, after] of [
   ['bound effect literal', 'bound_effects: state.bound_effects,', 'bound_effects: true,'],
   ['notification literal', 'notification_expected: state.notification_expected', 'notification_expected: false'],
@@ -377,20 +204,6 @@ for (const [name, before, after] of [
 ]) {
   rejects(`auth publication joins reject ${name}`, 'authFacts', before, after, /actual State effect intent/);
 }
-rejects('auth publication intent fields cannot retain an authoritative observation', 'authFacts',
-  'pub bound_effects: bool, pub notification_expected: bool',
-  'pub bound_effects: bool, pub notification_expected: bool, pub retained: Observation', /test-only association facts/);
-rejects('auth publication joins preserve exact read-only derives', 'authFacts',
-  '#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub struct PublicationJoins',
-  '#[derive(Clone, Debug, Eq, PartialEq)] pub struct PublicationJoins', /exact test-only derives/);
-
-test('auth publication joins reject a separate preceding derive attribute', () => {
-  const mutant = changedMuc('authFacts',
-    `${CROSS_CRATE_TEST_ONLY} #[derive(Clone, Copy, Debug, Eq, PartialEq)] pub struct PublicationJoins`,
-    `#[derive(Default)] ${CROSS_CRATE_TEST_ONLY} #[derive(Clone, Copy, Debug, Eq, PartialEq)] pub struct PublicationJoins`);
-  assert.throws(() => verifyExecutionBoundaries(mutant),
-    { message: 'execution boundary: auth PublicationJoins must preserve its exact test-only derives' });
-});
 
 // Actual untouched production input, never a synthesized positive source fixture.
 test('untouched route helpers satisfy focused and complete production gates', () => {

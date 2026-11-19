@@ -24,6 +24,25 @@ use northstar_message_core::route_item::{RouteEnqueue, RouteItem as _, RouteSend
 use northstar_message_core::{ArchiveProjection, LocalDelivery, MessageIdentity};
 use std::sync::{Arc, Mutex};
 
+struct CloneProbe<T>(std::marker::PhantomData<T>);
+trait NotClone {
+    fn is_clone(&self) -> bool {
+        false
+    }
+}
+impl<T> NotClone for CloneProbe<T> {}
+impl<T: Clone> CloneProbe<T> {
+    fn is_clone(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn applied_local_direct_is_not_cloneable() {
+    assert!(!CloneProbe::<AppliedLocalDirect<'static>>(std::marker::PhantomData).is_clone());
+    assert!(CloneProbe::<String>(std::marker::PhantomData).is_clone());
+}
+
 const LIVE: &str = "<message id='live'><body>private live</body></message>";
 
 fn prepared<'command>(

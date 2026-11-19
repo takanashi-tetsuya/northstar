@@ -719,3 +719,17 @@ pub fn user_from_row(row: &sqlx::postgres::PgRow) -> User {
         last_login_at: row.get("last_login_at"),
     }
 }
+
+#[cfg(test)]
+mod drop_contract_tests {
+    use super::{PreparedLogin, PreparedScramUpgrade};
+
+    #[test]
+    fn prepared_credentials_have_custom_drop() {
+        #[allow(drop_bounds)]
+        fn require_custom_drop<T: Drop>() {}
+
+        require_custom_drop::<PreparedScramUpgrade>();
+        require_custom_drop::<PreparedLogin>();
+    }
+}

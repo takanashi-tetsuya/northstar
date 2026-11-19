@@ -149,6 +149,11 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    #[test]
+    fn policy_requires_explicit_message_burst_input() {
+        let _: fn(AbuseAction, u64, usize) -> Policy = policy;
+    }
+
     fn test_config() -> AbuseConfig {
         AbuseConfig {
             base_work_factor: 100,

@@ -14,6 +14,27 @@ use std::{
 };
 use uuid::Uuid;
 
+struct CloneProbe<T>(std::marker::PhantomData<T>);
+trait NotClone {
+    fn is_clone(&self) -> bool {
+        false
+    }
+}
+impl<T> NotClone for CloneProbe<T> {}
+impl<T: Clone> CloneProbe<T> {
+    fn is_clone(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn response_continuations_are_not_cloneable() {
+    assert!(!CloneProbe::<BoundResponse>(std::marker::PhantomData).is_clone());
+    assert!(!CloneProbe::<ExposedResponse>(std::marker::PhantomData).is_clone());
+    assert!(!CloneProbe::<PublicationReadyResponse>(std::marker::PhantomData).is_clone());
+    assert!(CloneProbe::<String>(std::marker::PhantomData).is_clone());
+}
+
 fn operation() -> Operation {
     Operation::new(Scope {
         session_id: Uuid::from_u128(501),

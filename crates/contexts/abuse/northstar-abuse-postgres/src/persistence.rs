@@ -102,3 +102,17 @@ impl<E: AbuseEffects> AbusePersistence for PostgresAbusePersistence<E> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{PgPool, PostgresAbusePersistence};
+
+    #[test]
+    fn persistence_adapter_owns_the_pool() {
+        fn pool<E>(adapter: &PostgresAbusePersistence<E>) -> &PgPool {
+            &adapter.pool
+        }
+
+        let _ = pool::<()>;
+    }
+}

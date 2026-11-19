@@ -1,5 +1,14 @@
 use super::*;
 
+#[test]
+fn guard_retains_only_the_optional_shared_persistence_port() {
+    fn persistence_port(guard: &AbuseGuard) -> &Option<Arc<dyn AbusePersistence>> {
+        &guard.persistence
+    }
+
+    let _ = persistence_port;
+}
+
 fn guard() -> AbuseGuard {
     AbuseGuard::new(AbuseConfig {
         base_work_factor: 100,

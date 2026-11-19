@@ -262,6 +262,14 @@ mod tests {
     use crate::scram::DEFAULT_SCRAM_ITERATIONS;
 
     #[test]
+    fn password_credentials_have_custom_drop() {
+        #[allow(drop_bounds)]
+        fn require_custom_drop<T: Drop>() {}
+
+        require_custom_drop::<PasswordCredentials>();
+    }
+
+    #[test]
     fn password_round_trip() {
         let creds = hash_password(
             "correct horse battery staple",

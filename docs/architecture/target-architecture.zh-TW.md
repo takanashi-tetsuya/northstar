@@ -173,6 +173,9 @@ S34 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.30）：`Server
   `catalog/source-structure-baseline.json` 的 `pinned` 解除；已保存的 Stage 4 證據仍綁定其原提交，之後若要產生
   新的 Stage 4 record，需重新產生來源契約。S31 時 Stage 4 harness 仍是根 crate 二進位檔中的 `#[cfg(test)]` 模組，
   凍結的 Stage 4 工具保留舊的套件名稱，它的 CI lane 使用合成 record。
+  S41 把它們移出根 crate：saved-case 重播、Stage 4 擷取介面卡與 native/frame harness 是
+  `northstar-test-harness` 的整合測試目標 `saved_replay`，模組結構與測試名稱不變；只測單一擁有者的協定測試移入
+  該擁有者 crate。根 crate 的 `src/` 只剩組合根與它自己的測試。
 - 測試延續檢查改為整個 workspace：`cargo test --workspace -- --list` 的名稱集合，經「舊路徑 → crate 與新路徑」
   的對應後必須與基準相同。
 
@@ -212,6 +215,8 @@ S34 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.30）：`Server
 - S40 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.36）：`tools/` 只剩架構驗證器、測試支援
   （`northstar-test-harness`）與資料庫整合測試（`northstar-db-it`）；`catalog/` 的每份目錄都由工具或檢查讀取，
   架構驗證器只產生編譯期 crate 圖。
+- S41 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.37）：架構門禁的內容用途掃描改讀 `saved_replay` 的原始碼；
+  `default-members` 只有根 crate，文件與腳本中的整體品質指令帶 `--workspace`，每個 crate 都能單獨建置與測試。
 
 ## 5. 遷移順序
 
@@ -237,6 +242,7 @@ S34 後（[工程結構藍圖](engineering-structure.zh-TW.md) 5.30）：`Server
 | S38 會話核心收窄 | S37 後的量測：crate 圖比 4.1 寬的兩處。每個會話的出站佇列移入 session 上下文，`northstar-session-postgres` 不再依賴 edge；SASL2 與 IBR 的線路格式移入 `northstar-stream`；crate 圖只允許 `-xmpp` 介面卡依賴 `northstar-stream` | crate 圖與 4.1 一致，edge 不依賴介面卡；測試名稱不變；全部門禁與完整 CI 通過。已完成（WP-604–607，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.34） |
 | S39 依賴圖衛生 | S38 後的量測：刪除 S16 保留、已無使用者的 5 個 `foundation-*` crate，把仍描述它們的遷移政策、金鑰管理與資料庫不變式文件改寫為現行設計，移除 16 個沒有原始碼使用的依賴與兩個一次性產物 | workspace 沒有孤立 crate，現行文件不引用不存在的 crate；測試名稱不變（刪除的測試只屬於被刪的 crate）；全部門禁與完整 CI 通過。已完成（WP-608–611，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.35） |
 | S40 微服務時代殘留清除 | S39 盤點列出的 S16 保留項目：刪除描述每服務一個資料庫、Kafka 主題、SPIFFE 身分與 OTLP 匯出的工具、catalog、部署說明與文件，以及架構驗證器的 data-access 圖 | 每份 catalog 都有讀取者，每個 CI 步驟都判定結果；測試名稱不變（刪除的測試只屬於被刪的工具）；全部門禁與完整 CI 通過。已完成（WP-612–614，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.36） |
+| S41 根 crate 測試碼遷出 | S40 後的量測：根 crate 的 `src/` 約七成是只在測試中編譯的程式碼。只測單一擁有者的協定測試移入擁有者 crate，跨上下文的 saved-case 重播與 Stage 4 擷取介面卡移入 `northstar-test-harness` 的整合測試目標，根 crate 刪除只服務這些測試的依賴 | 根 crate 的 `src/` 只剩組合根與它自己的測試；測試名稱依路徑對應後不變（刪除 1 個重複測試）；每個受影響 crate 能單獨建置；全部門禁與完整 CI 通過。已完成（WP-615–623，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.37） |
 
 與其他計劃的關係：模組化執行計劃的 C1（PubSub）與 C2（MAM）是語義上的重構，在對應上下文搬進新 crate 後於新
 結構中進行；D1 由 S18 與 S30 吸收；R1–R3 不受影響。

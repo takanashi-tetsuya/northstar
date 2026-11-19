@@ -142,6 +142,7 @@ WP-495 後，operation runtime 的現行位置為
 | S38 會話核心收窄 | WP-604–607 | 每個會話的出站佇列（`OutboundSender`、`OutboundItem`）由 `northstar-stream` 移入 `northstar-session-application`，stream 以原路徑轉出，`northstar-session-postgres` 不再依賴 edge（WP-604）；SASL2 與 IBR 的線路格式由 `northstar-auth-xmpp` 移入 `northstar_stream::wire`（WP-605）；crate 圖只允許 `-xmpp` 介面卡依賴 `northstar-stream`，並刪除 stream 依賴 `auth-xmpp` 的例外（WP-606）；記錄階段（WP-607）。盤點見 5.34 | 23 個單元測試隨模組搬移、名稱不變，驗證器的例外測試改寫為規則測試並新增 1 個；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S39 依賴圖衛生 | WP-608–611 | 刪除 S16 為 `services/*` 原型保留、之後再無使用者的 5 個 `foundation-*` crate，crate 圖驗證器與 catalog 產生器移除 `foundation-`、`service-` 前綴規則（WP-608）；遷移政策、金鑰管理與資料庫不變式 3 份文件依現行程式碼改寫（WP-609）；移除 12 個 manifest 中 16 個沒有原始碼使用的依賴、`northstar-xep-0357` 的空 `serde` feature 與執行過的 `strip_serde.ps1`，以及 `northstar-auth-core` 下被 cargo 忽略的舊 `Cargo.lock`（WP-610）；記錄階段（WP-611）。盤點見 5.35 | 刪除的 12 個單元測試只測被刪的 crate，其餘測試名稱不變；Cargo.lock 由 493 個套件減為 488 個；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S40 微服務時代殘留清除 | WP-612–614 | 刪除 S16 保留的 `db-bootstrap`、`restore-verifier`、`kafka-policy-generator` 與它們讀取的 `data-ownership.yaml`、`restore-order.yaml`、`topics.yaml`，移除兩個丟棄產出的 CI 步驟；架構驗證器只產生編譯期 crate 圖，刪除 data-access 圖與重複的 `graphs.json`（WP-612）；刪除沒有讀取者的 `key-classes.yaml`、`rpc-authorization.yaml`、`deploy/spire`、`deploy/otel-collector` 與描述微服務設計的 3 份文件（WP-613）；記錄階段（WP-614）。盤點見 5.36 | 刪除的 4 個單元測試只測被刪的工具，其餘測試名稱不變；Cargo.lock 由 488 個套件減為 485 個；全部門禁、Python 腳本測試與離線 CI 通過 |
+| S41 根 crate 測試碼遷出 | WP-615–623 | backup 映像檔補上伺服器二進位檔連結程式碼的 4 份授權檔，`pool.rs` 與邊界門禁的註解改為 SQLx 0.9（WP-615）；唯讀審計根 crate 的 358 個測試（WP-616）；直接訊息測試移入 `northstar-message-xmpp`（WP-617）；MUC 與聯邦 MUC 測試移入 `northstar-muc-xmpp`，PostCommitPlan 測試移入 room 應用層，刪除一個重複測試，`northstar-archive-postgres` 補上它需要的 `northstar-time` postgres feature（WP-618）；MIX 測試依擁有者移入 `northstar-mix-xmpp`、room 應用層、room core 與 stream（WP-619）；其餘 saved-case 重播、Stage 4 擷取介面卡與 native/frame harness 原樣移入 `northstar-test-harness` 的整合測試目標 `saved_replay`，根 crate 刪除只服務這些測試的依賴，腳本中的品質指令加上 `--workspace`（WP-620）；文件、CODEOWNERS 與 test-support 註解改指新位置，刪除空的 `northstar-auth-xmpp` test-support feature（WP-621）；`test-ocsp-stapling.sh` 改從 `northstar-s2s` 執行 OCSP 測試（WP-622）；記錄階段（WP-623）。盤點見 5.37 | 357 個測試依名稱對應後不變，1 個與 room 應用層測試重複的刪除；根 crate 的 `src/` 只剩組合根與它自己的測試；全部門禁、Python 腳本測試與離線 CI 通過 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -1636,6 +1637,50 @@ S40 刪除 14,443 行、新增 23 行，其中 11,160 行是產生的圖、2,320
 被刪的工具。`catalog/` 剩下 `crates.yaml`、`runtime-experiments.json`（含 schema）、`source-role-splits.json`、
 `source-structure-baseline.json`，都有檢查讀取。
 
+### 5.37 S41 盤點：根 crate 測試碼遷出（`d331867e`）
+
+S40 後根 crate 的 `src/` 有 51,684 行 Rust，其中約 36,000 行只在測試中編譯：`src/xmpp`（S32 起只在測試中編譯）、
+`src/stage4_replay` 與 `src/direct_replay`，共 358 個測試。它們經各上下文 crate 提供的 port 驅動協定處理，不使用組合根
+的任何型別，根 crate 因此宣告 28 個 dev 項目與 4 個只有這些測試使用的正式依賴。S41 先做唯讀審計（WP-616）：逐一把
+測試分為擁有者測試或跨上下文重播，列出名稱對應、每個目的地需要的 dev 依賴與可見性，以及要改的門禁、腳本與文件。
+搬移只改匯入路徑，測試本體逐一比對後不變。
+
+| WP | 內容 |
+| --- | --- |
+| WP-615 | backup 映像檔安裝完整的 `northstar-server` 二進位檔，卻只帶 `LICENSE` 與 `THIRD_PARTY_NOTICES.md`；補上 webauthn-rs、OpenSSL 與 chrono、SQLx 移植碼的授權檔。`release-image-check.py` 檢查兩個帶二進位檔的映像檔，`test-release-package.py`（CI 執行）在任一 Dockerfile 漏複製時失敗。`pool.rs` 與邊界門禁的註解改為 SQLx 0.9，行為已對照 0.9 原始碼確認 |
+| WP-616 | 唯讀審計：358 個測試的分類與名稱對應、各目的地的 dev 依賴與可見性、要改的引用 |
+| WP-617 | 27 個直接訊息測試移入 `northstar-message-xmpp` 的 `messaging::direct_{preparation,continuation,workflow}_tests` |
+| WP-618 | 38 個 MUC 與聯邦 MUC 測試移入 `northstar-muc-xmpp` 的 `protocol_regression_tests`；PostCommitPlan 的順序測試移入 room 應用層；與應用層 `post_commit_plan_is_bounded_and_sealed` 斷言相同的容量測試刪除；根 crate 的聯邦 MUC 測試外殼刪除。`northstar-archive-postgres` 以 SQLx 解碼 `northstar-time` 的時間戳，卻只把它列為沒有 postgres feature 的 dev 依賴，只在同一建置中有其他 crate 啟用該 feature 時才能編譯；改為啟用 postgres 的正式依賴 |
+| WP-619 | MIX 測試依擁有者分開：69 個進 `northstar-mix-xmpp`，10 個 retained-owner 測試進 room 應用層的 `mix_service`，3 個 IQ relay 並行測試進 room core 的 `mix_iq_relay`，2 個出席測試進 stream 的會話表；`mix-settlement-owner` 實驗改由 MIX 介面卡執行 |
+| WP-620 | 其餘 207 個測試（saved-case 重播與其夾具、Stage 4 擷取介面卡、native/frame harness）原樣移入 `tools/northstar-test-harness/tests/saved_replay`：一個整合測試目標，模組結構不變，測試名稱保留 `stage4_replay::...`、`xmpp::protocol::...`。根 crate 刪除 serde、sha2、`northstar-xml-builder`、`northstar-xep-catalog` 與 22 個 dev 項目，只保留自身 node 測試用到的 6 個 test-support dev 依賴；Makefile、`release-preflight.sh`、`verify-wsl.sh` 加上 `--workspace`；架構、XML 與模組展開門禁改指新路徑，原始碼結構基準刪除搬走的根檔案 |
+| WP-621 | CODEOWNERS、CONTRIBUTING、ARCHITECTURE、PROGRAM_RESPONSIBILITIES、message-execution、TRACEABILITY、SASL2 證據與 16 個 manifest 的 test-support 註解改指新位置；CONTRIBUTING、RELEASE_CHECKLIST、`scripts/README.md` 的指令加上 `--workspace`；刪除不控制任何程式碼、也已無人啟用的 `northstar-auth-xmpp` test-support feature |
+| WP-622 | `test-ocsp-stapling.sh` 仍以 `--bin northstar-server` 選擇早已移到 `northstar-s2s` 的兩個出站 OCSP 測試，執行 0 個測試也不失敗；改為 `-p northstar-s2s`，本機執行兩個測試通過 |
+| WP-623 | 記錄階段 |
+
+與計劃的差異：審計建議 direct 與 Stage 4 重播各一個目標，但兩者共用 `xmpp` 下的擷取介面卡與 ordinary 控制，分開就要
+複製或抽出共用模組；S41 只做機械搬移，放在同一個目標。審計建議 21 個訊息測試放在 message 應用層的整合測試目標並以
+dev 自我依賴啟用 test-support；它們驅動的是介面卡，因此改為 `northstar-message-xmpp` 的單元測試，不需要自我依賴。審計
+建議在 `scripts/fixtures` 加入 `scripts/lib/stage4_saved_case.py` 的歷史快照並改 CI；該檔沒有修改，位元組仍是 historical75
+綁定的版本（6,331 bytes），因此不需要快照，它記錄的 `src/stage4_replay/fixtures` 路徑與其他凍結工具一樣是歷史快照。
+審計列出根 crate 保留 5 個 dev 項目；`src/node/session_key_tests.rs` 還用到 stream test-support 的
+`SuspendedMucEndpoint::new`，實際保留 6 個。
+
+尚未處理：`docs/MODULARIZATION_PROGRESS_REPORT.md` 與 `docs/LIBRARY_SPLIT_LEDGER.md` 仍以 `src/xmpp` 等舊路徑描述模組化
+進度。原始碼結構門禁只掃描根 crate 的 `src/`，搬到 `tools/` 的 `stage4_replay.rs`（4,521 行）與 `compact.rs`（3,431 行）
+不受測試檔 3,000 行的預算約束。
+
+新決定：
+
+- 根 crate 的 `src/` 只放組合根（`main.rs`、`node`、`runtime`）與它自己的測試。擁有者的測試放在擁有者 crate 中實作旁，
+  跨多個上下文的重播放在 `northstar-test-harness` 的整合測試目標（WP-617–620）。
+- `default-members` 是根 crate，文件與腳本中的整體品質指令一律帶 `--workspace`（WP-620、WP-621）。
+- 每個 crate 必須能以 `cargo test -p <crate>` 單獨建置，不依賴 workspace 的 feature 合併（WP-618）。
+- test-support feature 的註解寫明實際使用者；沒有使用者、也不控制任何程式碼的 feature 刪除（WP-621）。
+
+S41 後根 crate 的 `src/` 由 51,684 行減為 15,487 行：6,511 行測試進入 6 個擁有者 crate，29,668 行進入 `saved_replay`。
+根 crate 的測試由 423 個減為 65 個，`northstar-test-harness` 增加 207 個。workspace 測試由 3,462 個減為 3,461 個（ignored
+296 個不變），名稱依路徑對應後與基準相同；減少的 1 個是刪除的重複測試。Cargo.lock 仍是 485 個套件。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點），S31 的 WP-483 起 agy 額度用盡，再改由 Codex CLI 執行（第 10 點）。
@@ -2444,3 +2489,12 @@ Stage 證據仍綁定其原提交。
 | WP-612 | 完成：刪除 `db-bootstrap`、`restore-verifier`、`kafka-policy-generator`、它們的 catalog 與 CI 步驟；驗證器只產生編譯期 crate 圖 | 見 `git log --grep '\[WP-612\]'` |
 | WP-613 | 完成：刪除沒有讀取者的 `key-classes.yaml`、`rpc-authorization.yaml`、`deploy/spire`、`deploy/otel-collector` 與 3 份微服務設計文件 | 見 `git log --grep '\[WP-613\]'` |
 | WP-614 | 完成：記錄 S40 的階段與盤點（5.36）、目標架構 4.7 與第 5 節。WP-612–613 接成一條鏈驗證：fmt、clippy、workspace 測試、受影響 crate 的單獨建置、全部門禁與 Python 腳本測試、離線 CI | 見 `git log --grep '\[WP-614\]'` |
+| WP-615 | 完成：backup 映像檔補上 webauthn-rs、OpenSSL、chrono 與 SQLx 的授權檔，映像檔檢查與發佈測試涵蓋兩個映像檔；SQLx 註解改為 0.9 | 見 `git log --grep '\[WP-615\]'` |
+| WP-616 | 完成：唯讀審計根 crate 的 358 個測試：分類、名稱對應、dev 依賴、可見性與要改的引用（審計報告不入庫） | 見 `git log --grep '\[WP-616\]'` |
+| WP-617 | 完成：27 個直接訊息測試移入 `northstar-message-xmpp` | 見 `git log --grep '\[WP-617\]'` |
+| WP-618 | 完成：MUC 與聯邦 MUC 測試移入 `northstar-muc-xmpp`，PostCommitPlan 測試移入 room 應用層，刪除一個重複測試；`northstar-archive-postgres` 以正式依賴啟用 `northstar-time` 的 postgres feature | 見 `git log --grep '\[WP-618\]'` |
+| WP-619 | 完成：MIX 測試移入 `northstar-mix-xmpp`、room 應用層、room core 與 stream | 見 `git log --grep '\[WP-619\]'` |
+| WP-620 | 完成：其餘 207 個測試移入 `northstar-test-harness` 的 `saved_replay` 目標；根 crate 刪除 4 個正式依賴與 22 個 dev 項目；腳本的品質指令加上 `--workspace` | 見 `git log --grep '\[WP-620\]'` |
+| WP-621 | 完成：文件、CODEOWNERS 與 test-support 註解改指新位置；刪除空的 `northstar-auth-xmpp` test-support feature | 見 `git log --grep '\[WP-621\]'` |
+| WP-622 | 完成：`test-ocsp-stapling.sh` 改從 `northstar-s2s` 執行出站 OCSP 測試 | 見 `git log --grep '\[WP-622\]'` |
+| WP-623 | 完成：記錄 S41 的階段與盤點（5.37）、目標架構 4.6、4.7 與第 5 節。WP-615–622 接成一條鏈驗證：fmt、clippy、workspace 測試、受影響 crate 的單獨建置、測試本體比對、全部門禁與 Python 腳本測試、離線 CI | 見 `git log --grep '\[WP-623\]'` |

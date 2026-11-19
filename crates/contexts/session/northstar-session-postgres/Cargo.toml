@@ -8,7 +8,7 @@ description = "PostgreSQL persistence of Northstar's live-session capacity, clus
 publish = false
 
 [features]
-# Test-only fixtures the root crate's database tests use.
+# Test-only fixtures for northstar-db-it replay tests and northstar-stream database tests.
 test-support = ["northstar-session-application/test-support"]
 
 [dependencies]

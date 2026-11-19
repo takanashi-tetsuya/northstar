@@ -15,7 +15,7 @@ Existing domain transactions and transport-specific actions remain separate.
 3. `crates/edges/northstar-stream/src/protocol/dispatch.rs` owns validation, negotiation, authoritative
    sender/language materialization, extension dispatch, and the inbound SM
    checkpoint. It never obtains new persistence authority from observation
-4. `src/xmpp/protocol/messaging.rs` owns message XML, PoW, recipient/policy
+4. `crates/contexts/message/northstar-message-xmpp/src/messaging.rs` owns message XML, PoW, recipient/policy
    preparation, command construction and protocol error mapping
 5. Existing `MessageService` / `northstar-message-application` /
    `northstar-message-core` / repository operations still own authoritative
@@ -142,7 +142,7 @@ Fast deterministic checks, with no database or network:
 
 ```sh
 cargo test --locked -p northstar-stream frame_execution::tests
-cargo test --locked --bin northstar-server messaging::direct_route::tests
+cargo test --locked -p northstar-message-application --lib messaging::direct_route::tests
 python3 scripts/test-frame-trace.py
 python3 scripts/test-mixed-traffic-soak.py
 ```

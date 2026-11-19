@@ -8,7 +8,7 @@ description = "PostgreSQL persistence of personal message archives, MAM preferen
 publish = false
 
 [features]
-# Test-only archive writes and room reads the root crate's cross-context history tests use.
+# Test-only archive writes and room reads for northstar-db-it and root S2S acceptance tests.
 test-support = []
 
 [dependencies]

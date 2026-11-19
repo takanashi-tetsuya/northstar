@@ -8,7 +8,7 @@ description = "BOSH (XEP-0124 / XEP-0206) connection manager of Northstar"
 publish = false
 
 [features]
-# The response owner and replay surface the root crate's Stage 4 harnesses drive.
+# The response owner and replay surface northstar-test-harness's saved_replay tests drive.
 test-support = []
 
 [dependencies]

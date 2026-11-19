@@ -1331,7 +1331,7 @@ fn open_replay(
 
 #[cfg(any(test, feature = "test-support"))]
 impl ApiControlKeyring {
-    /// The current key's opaque identifier, which root tests compare with stored rows.
+    /// The current key's opaque identifier, which database integration tests compare with stored rows.
     pub fn current_key_id(&self) -> &str {
         &self.current.id
     }

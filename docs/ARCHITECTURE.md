@@ -82,7 +82,8 @@ flowchart TB
 Key ownership:
 
 - `northstar-xml-framing` incrementally frames XML with byte/depth/time limits.
-- `src/xmpp/protocol/` owns negotiated wire behavior and error mapping. The
+- `crates/edges/northstar-stream` and the contexts' `-xmpp` crates own negotiated
+  wire behavior and error mapping; the root owns composition only. The
   protocol tree no longer imports database authority/domain symbols, accesses
   a pool, or uses SQLx directly; persistence is reached only through the
   purpose-specific application-service capabilities exposed by `ServerNode`.

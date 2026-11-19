@@ -8,7 +8,7 @@ description = "PostgreSQL persistence of HTTP upload slots, storage jobs and cap
 publish = false
 
 [features]
-# Constants and the module source the root crate's cross-context upload tests use.
+# Constants and module source for owner tests and northstar-db-it upload tests.
 test-support = []
 
 [dependencies]

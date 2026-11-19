@@ -848,7 +848,7 @@ fn websocket_terminal_messages(replies: Vec<String>, stream_opened: bool) -> Vec
     messages
 }
 
-/// Writes one stanza and flushes it under the write deadline. The root's stage 4 harnesses write through it.
+/// Writes one stanza and flushes it under the write deadline. Tooling Stage 4 harnesses write through it.
 pub async fn send<S: AsyncWrite + Unpin>(io: &mut S, stanza: &str) -> Result<()> {
     tokio::time::timeout(XMPP_WRITE_TIMEOUT, async {
         io.write_all(stanza.as_bytes()).await?;

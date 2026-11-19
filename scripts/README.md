@@ -11,9 +11,9 @@ service:
 
 ```sh
 cargo fmt --all -- --check
-cargo check --all-targets --all-features --locked
-cargo test --all-targets --all-features --locked
-cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo check --workspace --all-targets --all-features --locked
+cargo test --workspace --all-targets --all-features --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 node scripts/check-architecture-boundaries.mjs
 node scripts/check-subserver-boundaries.mjs
 node scripts/check-documentation-consistency.mjs

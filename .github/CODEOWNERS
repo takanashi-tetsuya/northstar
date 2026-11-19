@@ -21,7 +21,6 @@
 /src/main.rs                          @takanashi-tetsuya
 /src/node.rs                          @takanashi-tetsuya
 /src/node/**                          @takanashi-tetsuya
-/src/xmpp/**                          @takanashi-tetsuya
 
 # Workspace crates
 /crates/**                            @takanashi-tetsuya

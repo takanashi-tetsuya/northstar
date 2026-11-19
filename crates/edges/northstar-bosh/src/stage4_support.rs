@@ -1,5 +1,6 @@
-//! What the root's Stage 4 harnesses drive BOSH through: the response owner, the ownership runner and the request
-//! and response values they replay. Compiled for tests and the `test-support` feature only.
+//! What northstar-test-harness's saved_replay integration target drives BOSH through: the response owner,
+//! the ownership runner and the request and response values it replays. Compiled for tests and the
+//! `test-support` feature only.
 
 pub mod ownership {
     pub use crate::ownership::{

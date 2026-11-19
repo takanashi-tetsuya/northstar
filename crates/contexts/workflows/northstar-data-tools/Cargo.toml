@@ -8,7 +8,7 @@ description = "Offline operator data tools of Northstar: XEP-0227 PIE import and
 publish = false
 
 [features]
-# Test-only entry points the root crate's source-contract tests use.
+# Test-only module source for northstar-db-it source-contract tests.
 test-support = []
 
 [dependencies]

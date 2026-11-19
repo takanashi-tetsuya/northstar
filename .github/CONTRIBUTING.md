@@ -16,9 +16,16 @@ backups.
 
 ## Change boundaries
 
-- Keep protocol parsing and error mapping in `src/xmpp/`; application services
+- Keep protocol parsing and error mapping in `crates/edges/northstar-stream`
+  and the contexts' `-xmpp` crates; application services
   own transaction and side-effect boundaries; repositories in the
   `crates/contexts/*/*-postgres` crates own SQL and database DTOs.
+- Keep owner unit tests beside their implementations. Saved-case replay,
+  Stage 4 capture adapters and native/frame harnesses belong in
+  `tools/northstar-test-harness/tests/saved_replay/` (entry `main.rs`, integration
+  target `saved_replay`); test names retain their `stage4_replay::...` and
+  `xmpp::protocol::...` paths. The root keeps only composition code in
+  `src/main.rs`, `src/node.rs`, `src/node/**` and `src/runtime/**`.
 - Published files in `migrations/` are immutable. Add a new monotonically
   numbered migration and update the migration/capability manifests instead of
   editing an applied migration.
@@ -40,9 +47,9 @@ Run the non-adversarial baseline before submitting a change:
 
 ```sh
 cargo fmt --all -- --check
-cargo check --all-targets --all-features --locked
-cargo test --all-targets --all-features --locked
-cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo check --workspace --all-targets --all-features --locked
+cargo test --workspace --all-targets --all-features --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 node scripts/check-architecture-boundaries.mjs
 node scripts/check-documentation-consistency.mjs
 node scripts/check-outbound-xml-construction.mjs

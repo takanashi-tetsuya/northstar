@@ -575,7 +575,7 @@ fn state_key(action: AbuseAction, actor: &str) -> String {
     }
 }
 
-/// What the root crate's cross-context tests need of the guard's internals.
+/// What integration and tooling tests need of the guard's internals.
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support {
     use super::*;

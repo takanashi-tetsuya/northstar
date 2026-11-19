@@ -8,7 +8,7 @@ description = "Typed commands, lifecycle signals, and application boundaries for
 publish = false
 
 [features]
-# Test-only observers the root crate's route tests use.
+# Test-only observers for session-postgres tests and tooling replay tests.
 test-support = ["northstar-session-core/test-support"]
 
 [dependencies]

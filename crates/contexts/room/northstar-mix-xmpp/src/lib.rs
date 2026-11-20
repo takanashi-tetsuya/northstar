@@ -66,7 +66,7 @@ use self::presence::{presence_children, process_channel_presence};
 pub use self::protocol_session::MixHandlers;
 use self::relay::{
     deliver_mix_relay_stanza, expire_mix_iq_relay, handle_channel_relay_request, parse_relay_iq,
-    register_mix_iq_relay, relay_error, relay_iq_xml, relay_vcard_payload, RelayIq,
+    register_mix_iq_relay, relay_error, relay_iq_xml, RelayIq,
 };
 use self::session::push_mix_roster_update;
 use anyhow::{Context, Result};

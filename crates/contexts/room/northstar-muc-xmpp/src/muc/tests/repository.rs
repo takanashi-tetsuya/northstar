@@ -268,8 +268,6 @@ mod mix {
             fn destroy_mix_channel(&self, channel_id: Uuid, actor: &str, federated: Option<&FederatedMixMutation>) -> Result<bool>;
             fn join_mix_channel(&self, channel_id: Uuid, request: JoinMixRequest, federated: Option<&FederatedMixMutation>) -> Result<JoinChannelOutcome>;
             fn mix_participant(&self, channel_id: Uuid, jid: &str) -> Result<Option<MixParticipant>>;
-            fn mix_participant_by_id(&self, channel_id: Uuid, participant_id: Uuid) -> Result<Option<MixParticipant>>;
-            fn mix_presence_source_jid(&self, channel_id: Uuid, item_id: &str) -> Result<Option<String>>;
             fn expire_unrefreshed_mix_presence(&self, cutoff: DateTime<Utc>) -> Result<Vec<ExpiredMixPresence>>;
             fn update_mix_subscriptions(&self, channel_id: Uuid, actor: &str, subscribe: &[String], unsubscribe: &[String], federated: Option<&FederatedMixMutation>) -> Result<Option<UpdateSubscriptionsOutcome>>;
             fn set_mix_nick(&self, channel_id: Uuid, actor: &str, nick: &str, federated: Option<&FederatedMixMutation>) -> Result<std::result::Result<MixParticipant, SetNickError>>;
@@ -315,9 +313,7 @@ mod mix {
             fn find_enabled_user(&self, username: &str) -> Result<Option<MixAccount>>;
             fn find_enabled_user_by_id(&self, user_id: Uuid) -> Result<Option<MixAccount>>;
             fn is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool>;
-            fn pep_node(&self, owner_id: Uuid, node: &str) -> Result<Option<PepNodeConfig>>;
-            fn pep_items(&self, owner_id: Uuid, node: &str, item_id: Option<&str>, limit: i64) -> Result<Vec<(String, String)>>;
-            fn get_vcard(&self, user_id: Uuid) -> Result<VCardRecord>;
+            fn relay_profile_snapshot(&self, query: MixRelayProfileQuery) -> Result<MixRelayProfileResult>;
             fn latest_roster_change_for_contact(&self, user_id: Uuid, contact_jid: &str) -> Result<Option<northstar_roster_core::RosterChange>>;
             fn mix_muc_mirror_for_mix(&self, mix_channel_id: Uuid) -> Result<Option<MixMucMirror>>;
             fn mix_muc_mirror_for_muc(&self, muc_room_id: Uuid) -> Result<Option<MixMucMirror>>;

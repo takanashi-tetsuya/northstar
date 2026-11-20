@@ -131,20 +131,6 @@ impl<E: RoomEffects> MixRepository for PostgresMixRepository<E> {
     async fn mix_participant(&self, channel_id: Uuid, jid: &str) -> Result<Option<MixParticipant>> {
         crate::mix::mix_participant(&self.pool, channel_id, jid).await
     }
-    async fn mix_participant_by_id(
-        &self,
-        channel_id: Uuid,
-        participant_id: Uuid,
-    ) -> Result<Option<MixParticipant>> {
-        crate::mix::mix_participant_by_id(&self.pool, channel_id, participant_id).await
-    }
-    async fn mix_presence_source_jid(
-        &self,
-        channel_id: Uuid,
-        item_id: &str,
-    ) -> Result<Option<String>> {
-        crate::mix::mix_presence_source_jid(&self.pool, channel_id, item_id).await
-    }
     async fn expire_unrefreshed_mix_presence(
         &self,
         cutoff: DateTime<Utc>,
@@ -1096,22 +1082,11 @@ impl<E: RoomEffects> MixRepository for PostgresMixRepository<E> {
             .await
     }
 
-    async fn pep_node(&self, owner_id: Uuid, node: &str) -> Result<Option<PepNodeConfig>> {
-        self.effects.pep_node(&self.pool, owner_id, node).await
-    }
-    async fn pep_items(
+    async fn relay_profile_snapshot(
         &self,
-        owner_id: Uuid,
-        node: &str,
-        item_id: Option<&str>,
-        limit: i64,
-    ) -> Result<Vec<(String, String)>> {
-        self.effects
-            .pep_items(&self.pool, owner_id, node, item_id, limit)
-            .await
-    }
-    async fn get_vcard(&self, user_id: Uuid) -> Result<VCardRecord> {
-        self.effects.get_vcard(&self.pool, user_id).await
+        query: MixRelayProfileQuery,
+    ) -> Result<MixRelayProfileResult> {
+        relay_profile_snapshot::read(&self.pool, &self.effects, query).await
     }
     async fn latest_roster_change_for_contact(
         &self,

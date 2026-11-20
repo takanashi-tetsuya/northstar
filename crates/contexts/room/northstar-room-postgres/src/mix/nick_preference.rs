@@ -175,8 +175,8 @@ pub async fn register_mix_nick(
     Ok(RegisterMixNickOutcome::Registered { nick })
 }
 
-pub async fn mix_participant_preference(
-    pool: &PgPool,
+pub async fn mix_participant_preference<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
     channel_id: Uuid,
     actor: &str,
 ) -> Result<Option<MixParticipantPreference>> {
@@ -186,7 +186,7 @@ pub async fn mix_participant_preference(
     )
     .bind(channel_id)
     .bind(actor)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
     Ok(row.map(|row| MixParticipantPreference {
         jid_visibility: row.get("jid_visibility"),

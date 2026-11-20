@@ -26,9 +26,10 @@ pub use self::contracts::{
     MixAccessEntryOperation, MixAccessEntryUpdate, MixAccessList, MixAccount, MixChannel,
     MixConfigUpdate, MixDeliveryDeadLetter, MixInfoUpdate, MixInvitationProof, MixMucLinkOutcome,
     MixMutationAdmission, MixMutationOutcome, MixParticipantPreference,
-    MixParticipantPreferenceUpdateOutcome, MixRepository, MixRoleUpdate, PamMembership,
-    PamOperationReplay, PresenceOutcome, RegisterMixNickOutcome, RemotePamCompletion,
-    RemotePamCompletionOutcome, RemotePamJoin, RetractMixMessageAdmission,
+    MixParticipantPreferenceUpdateOutcome, MixRelayProfileDenial, MixRelayProfileKind,
+    MixRelayProfileQuery, MixRelayProfileRequester, MixRelayProfileResult, MixRepository,
+    MixRoleUpdate, PamMembership, PamOperationReplay, PresenceOutcome, RegisterMixNickOutcome,
+    RemotePamCompletion, RemotePamCompletionOutcome, RemotePamJoin, RetractMixMessageAdmission,
     RetractMixMessageOutcome, RetractMixMessageRequest, SetNickError, SourceArchiveAdmission,
     StoreMixMessageRequest, UpdateSubscriptionsOutcome,
 };
@@ -36,7 +37,7 @@ pub use self::operations::{
     canonical_mix_access_pattern, mix_timestamp_item_id, participant_jid_visible, prepare_mix_nick,
     valid_join_nodes, valid_stable_participant_id, ArchiveBoundary, MamArchiveQuery, MamRsmPage,
     MixClusterRouteLookup, MixDiscoPage, MixEvent, MixEventPage, MixMamPage, MixMucMirror,
-    MixPresenceItem, MixPresenceProbeTarget, MixReadOutcome, PepNodeConfig, VCardRecord,
+    MixPresenceItem, MixPresenceProbeTarget, MixReadOutcome,
 };
 #[cfg(test)]
 use self::payloads::{

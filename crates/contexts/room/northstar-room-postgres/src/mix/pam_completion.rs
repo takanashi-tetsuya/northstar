@@ -214,18 +214,35 @@ pub async fn pam_membership(
     user_id: Uuid,
     channel_jid: &str,
 ) -> Result<Option<PamMembership>> {
+    match pam_membership_row(pool, user_id, channel_jid).await? {
+        Some(row) => pam_membership_from_row(pool, row).await.map(Some),
+        None => Ok(None),
+    }
+}
+
+pub(crate) async fn joined_pam_membership(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    channel_jid: &str,
+) -> Result<bool> {
+    Ok(pam_membership_row(&mut **transaction, user_id, channel_jid)
+        .await?
+        .is_some_and(|row| row.get::<&str, _>("state") == "joined"))
+}
+
+async fn pam_membership_row<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    user_id: Uuid,
+    channel_jid: &str,
+) -> Result<Option<sqlx::postgres::PgRow>> {
     let channel_jid = northstar_xmpp_types::jid::canonicalize_bare(channel_jid)?;
-    let row = sqlx::query(
+    Ok(sqlx::query(
         "SELECT id, user_id, channel_jid, participant_id, state, request_id, client_request_id, requester_full_jid FROM mix_pam_memberships WHERE user_id = $1 AND channel_jid = $2",
     )
     .bind(user_id)
     .bind(channel_jid)
-    .fetch_optional(pool)
-    .await?;
-    match row {
-        Some(row) => pam_membership_from_row(pool, row).await.map(Some),
-        None => Ok(None),
-    }
+    .fetch_optional(executor)
+    .await?)
 }
 
 pub async fn local_pam_users_for_channel(pool: &PgPool, channel_jid: &str) -> Result<Vec<Uuid>> {

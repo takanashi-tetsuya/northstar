@@ -378,8 +378,6 @@ impl MixRepository for Repository {
         mix_channel_discoverable_to(channel: &MixChannel, actor: &str) -> bool;
         destroy_mix_channel(channel_id: Uuid, actor: &str, federated: Option<&FederatedMixMutation>) -> bool;
         join_mix_channel(channel_id: Uuid, request: JoinMixRequest, federated: Option<&FederatedMixMutation>) -> JoinChannelOutcome;
-        mix_participant_by_id(channel_id: Uuid, participant_id: Uuid) -> Option<MixParticipant>;
-        mix_presence_source_jid(channel_id: Uuid, item_id: &str) -> Option<String>;
         expire_unrefreshed_mix_presence(cutoff: DateTime<Utc>) -> Vec<ExpiredMixPresence>;
         update_mix_subscriptions(channel_id: Uuid, actor: &str, subscribe: &[String], unsubscribe: &[String], federated: Option<&FederatedMixMutation>) -> Option<UpdateSubscriptionsOutcome>;
         set_mix_nick(channel_id: Uuid, actor: &str, nick: &str, federated: Option<&FederatedMixMutation>) -> std::result::Result<MixParticipant, SetNickError>;
@@ -411,9 +409,7 @@ impl MixRepository for Repository {
         renew_pam_result_lease(operation_id: Uuid, lease_token: Uuid) -> bool;
         retry_pam_result(operation_id: Uuid, lease_token: Uuid, attempt_count: i32, error: &str) -> bool;
         find_enabled_user_by_id(user_id: Uuid) -> Option<MixAccount>;
-        pep_node(owner_id: Uuid, node: &str) -> Option<PepNodeConfig>;
-        pep_items(owner_id: Uuid, node: &str, item_id: Option<&str>, limit: i64) -> Vec<(String, String)>;
-        get_vcard(user_id: Uuid) -> VCardRecord;
+        relay_profile_snapshot(query: MixRelayProfileQuery) -> MixRelayProfileResult;
         latest_roster_change_for_contact(user_id: Uuid, contact_jid: &str) -> Option<northstar_roster_core::RosterChange>;
         mix_muc_mirror_for_mix(mix_channel_id: Uuid) -> Option<MixMucMirror>;
         mix_muc_mirror_for_muc(muc_room_id: Uuid) -> Option<MixMucMirror>;

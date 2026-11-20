@@ -326,8 +326,6 @@ impl MixRepository for Repository {
         mix_role(channel_id: Uuid, jid: &str) -> Option<String>;
         mix_channel_discoverable_to(channel: &MixChannel, actor: &str) -> bool;
         mix_participant(channel_id: Uuid, jid: &str) -> Option<MixParticipant>;
-        mix_participant_by_id(channel_id: Uuid, participant_id: Uuid) -> Option<MixParticipant>;
-        mix_presence_source_jid(channel_id: Uuid, item_id: &str) -> Option<String>;
         lookup_mix_message_replay(channel_id: Uuid, actor: &str, identity: &MixReplayIdentity, authenticators: &northstar_abuse_policy::ContentIdentityAuthenticators) -> MixBusinessReplay;
         lookup_mix_retraction_replay(channel_id: Uuid, actor: &str, target_id: Uuid, identity: &MixReplayIdentity, authenticators: &northstar_abuse_policy::ContentIdentityAuthenticators) -> MixBusinessReplay;
         authorized_mix_event_page(channel_id: Uuid, actor: &str, node: &str, before: Option<(DateTime<Utc>, Uuid)>, limit: i64) -> MixReadOutcome<MixEventPage>;
@@ -353,9 +351,7 @@ impl MixRepository for Repository {
         find_enabled_user(username: &str) -> Option<MixAccount>;
         find_enabled_user_by_id(user_id: Uuid) -> Option<MixAccount>;
         is_blocked(owner_id: Uuid, candidate: &str) -> bool;
-        pep_node(owner_id: Uuid, node: &str) -> Option<PepNodeConfig>;
-        pep_items(owner_id: Uuid, node: &str, item_id: Option<&str>, limit: i64) -> Vec<(String, String)>;
-        get_vcard(user_id: Uuid) -> VCardRecord;
+        relay_profile_snapshot(query: MixRelayProfileQuery) -> MixRelayProfileResult;
         latest_roster_change_for_contact(user_id: Uuid, contact_jid: &str) -> Option<northstar_roster_core::RosterChange>;
         mix_muc_mirror_for_mix(mix_channel_id: Uuid) -> Option<MixMucMirror>;
         mix_muc_mirror_for_muc(muc_room_id: Uuid) -> Option<MixMucMirror>;

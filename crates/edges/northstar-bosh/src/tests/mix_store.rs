@@ -110,24 +110,6 @@ impl MixRepository for MixStore {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn mix_participant_by_id(
-        &self,
-        _channel_id: Uuid,
-        _participant_id: Uuid,
-    ) -> Result<Option<MixParticipant>> {
-        panic!("unexpected port call: mix_participant_by_id")
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn mix_presence_source_jid(
-        &self,
-        _channel_id: Uuid,
-        _item_id: &str,
-    ) -> Result<Option<String>> {
-        panic!("unexpected port call: mix_presence_source_jid")
-    }
-
-    #[allow(clippy::too_many_arguments)]
     async fn expire_unrefreshed_mix_presence(
         &self,
         _cutoff: DateTime<Utc>,
@@ -558,25 +540,11 @@ impl MixRepository for MixStore {
         panic!("unexpected port call: is_blocked")
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn pep_node(&self, _owner_id: Uuid, _node: &str) -> Result<Option<PepNodeConfig>> {
-        panic!("unexpected port call: pep_node")
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn pep_items(
+    async fn relay_profile_snapshot(
         &self,
-        _owner_id: Uuid,
-        _node: &str,
-        _item_id: Option<&str>,
-        _limit: i64,
-    ) -> Result<Vec<(String, String)>> {
-        panic!("unexpected port call: pep_items")
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn get_vcard(&self, _user_id: Uuid) -> Result<VCardRecord> {
-        panic!("unexpected port call: get_vcard")
+        _query: MixRelayProfileQuery,
+    ) -> Result<MixRelayProfileResult> {
+        panic!("unexpected port call: relay_profile_snapshot");
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -56,22 +56,6 @@ pub struct ArchiveBoundary {
     pub created_at: northstar_time::DateTime<northstar_time::Utc>,
 }
 
-#[derive(Clone, Debug)]
-pub struct VCardRecord {
-    pub payload_vcard_temp: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PepNodeConfig {
-    pub access_model: String,
-    pub max_items: i32,
-    pub persist_items: bool,
-    pub send_last_published_item: String,
-    pub deliver_notifications: bool,
-    pub roster_groups_allowed: Vec<String>,
-    pub access_whitelist: Vec<String>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MixMucMirror {
     pub mix_channel_id: Uuid,
@@ -212,24 +196,6 @@ impl<R: MixRepository> MixService<R> {
         jid: &str,
     ) -> Result<Option<MixParticipant>> {
         self.repository.mix_participant(channel_id, jid).await
-    }
-    pub async fn mix_participant_by_id(
-        &self,
-        channel_id: Uuid,
-        participant_id: Uuid,
-    ) -> Result<Option<MixParticipant>> {
-        self.repository
-            .mix_participant_by_id(channel_id, participant_id)
-            .await
-    }
-    pub async fn mix_presence_source_jid(
-        &self,
-        channel_id: Uuid,
-        item_id: &str,
-    ) -> Result<Option<String>> {
-        self.repository
-            .mix_presence_source_jid(channel_id, item_id)
-            .await
     }
 
     /// Consult the immutable replay commitment before any mutable participant
@@ -454,22 +420,11 @@ impl<R: MixRepository> MixService<R> {
         routes.lookup_nodes(jid).await
     }
 
-    pub async fn pep_node(&self, owner_id: Uuid, node: &str) -> Result<Option<PepNodeConfig>> {
-        self.repository.pep_node(owner_id, node).await
-    }
-    pub async fn pep_items(
+    pub async fn relay_profile_snapshot(
         &self,
-        owner_id: Uuid,
-        node: &str,
-        item_id: Option<&str>,
-        limit: i64,
-    ) -> Result<Vec<(String, String)>> {
-        self.repository
-            .pep_items(owner_id, node, item_id, limit)
-            .await
-    }
-    pub async fn get_vcard(&self, user_id: Uuid) -> Result<VCardRecord> {
-        self.repository.get_vcard(user_id).await
+        query: MixRelayProfileQuery,
+    ) -> Result<MixRelayProfileResult> {
+        self.repository.relay_profile_snapshot(query).await
     }
     pub async fn latest_roster_change_for_contact(
         &self,

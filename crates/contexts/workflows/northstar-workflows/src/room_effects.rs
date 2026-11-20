@@ -3,7 +3,9 @@
 use anyhow::Result;
 use northstar_delivery_core::mix_outbox::ArchiveRequest;
 use northstar_federation_core::S2sOutboxPolicy;
-use northstar_room_application::mix_service::{PepNodeConfig, SourceArchiveAdmission, VCardRecord};
+use northstar_room_application::mix_service::{
+    MixRelayProfileKind, MixRelayProfileResult, SourceArchiveAdmission,
+};
 use northstar_room_core::{OfflineStoreOutcome, OfflineStorePolicy};
 use northstar_room_postgres::effects::RoomEffects;
 use northstar_roster_core::RosterChange;
@@ -163,41 +165,52 @@ impl RoomEffects for WorkflowRoomEffects {
         northstar_roster_postgres::roster::is_blocked(pool, owner_id, candidate).await
     }
 
-    async fn pep_node(
+    async fn relay_is_blocked(
         &self,
-        pool: &PgPool,
+        transaction: &mut Transaction<'_, Postgres>,
         owner_id: Uuid,
-        node: &str,
-    ) -> Result<Option<PepNodeConfig>> {
-        Ok(northstar_pubsub_postgres::pep_node(pool, owner_id, node)
-            .await?
-            .map(|config| PepNodeConfig {
-                access_model: config.access_model,
-                max_items: config.max_items,
-                persist_items: config.persist_items,
-                send_last_published_item: config.send_last_published_item,
-                deliver_notifications: config.deliver_notifications,
-                roster_groups_allowed: config.roster_groups_allowed,
-                access_whitelist: config.access_whitelist,
-            }))
+        candidate: &str,
+    ) -> Result<bool> {
+        northstar_roster_postgres::roster::is_blocked(&mut **transaction, owner_id, candidate).await
     }
 
-    async fn pep_items(
+    async fn relay_profile_in_transaction(
         &self,
-        pool: &PgPool,
+        transaction: &mut Transaction<'_, Postgres>,
         owner_id: Uuid,
-        node: &str,
-        item_id: Option<&str>,
-        limit: i64,
-    ) -> Result<Vec<(String, String)>> {
-        northstar_pubsub_postgres::pep_items(pool, owner_id, node, item_id, limit).await
-    }
-
-    async fn get_vcard(&self, pool: &PgPool, user_id: Uuid) -> Result<VCardRecord> {
-        let record = northstar_pubsub_postgres::get_vcard(pool, user_id).await?;
-        Ok(VCardRecord {
-            payload_vcard_temp: record.payload_vcard_temp,
-        })
+        kind: &MixRelayProfileKind,
+    ) -> Result<MixRelayProfileResult> {
+        use MixRelayProfileResult as Profile;
+        match kind {
+            MixRelayProfileKind::VCardTemp => {
+                let record =
+                    northstar_pubsub_postgres::get_vcard(&mut **transaction, owner_id).await?;
+                Ok(record
+                    .payload_vcard_temp
+                    .map_or(Profile::EmptyCard, Profile::VCardTemp))
+            }
+            MixRelayProfileKind::VCard4 { item_id } => {
+                const NODE: &str = "urn:xmpp:vcard4";
+                // MIX admission controls visibility, including for legacy non-open nodes.
+                if northstar_pubsub_postgres::pep_node(&mut **transaction, owner_id, NODE)
+                    .await?
+                    .is_none()
+                {
+                    return Ok(Profile::VCard4Missing);
+                }
+                let mut items = northstar_pubsub_postgres::pep_items(
+                    &mut **transaction,
+                    owner_id,
+                    NODE,
+                    item_id.as_deref(),
+                    1,
+                )
+                .await?;
+                Ok(items
+                    .pop()
+                    .map_or(Profile::VCard4Missing, |(_, xml)| Profile::VCard4(xml)))
+            }
+        }
     }
 
     async fn latest_roster_change_for_contact(

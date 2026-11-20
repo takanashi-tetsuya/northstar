@@ -1,6 +1,10 @@
 //! Federated MIX: authenticated remote actors, disco#info, IQs, IQ relay, messages and presence.
 
+use super::relay::relay_profile_reply;
 use super::*;
+use northstar_room_application::mix_service::{
+    MixRelayProfileDenial, MixRelayProfileQuery, MixRelayProfileRequester, MixRelayProfileResult,
+};
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct AuthenticatedMixIqActor {
@@ -694,54 +698,31 @@ pub async fn federated_mix_iq_relay(
             authenticated_mix_service(source.domainpart(), authenticated_domain),
             "federated MIX IQ source service is not authenticated"
         );
-        let Some(username) = to.localpart() else {
+        if to.localpart().is_none() {
             return Ok(false);
-        };
-        let Some(user) = state.mix_service().find_enabled_user(username).await? else {
-            let response = relay_error(
-                &request.id,
-                &request.to,
-                &request.from,
-                "cancel",
-                "item-not-found",
-            );
-            let _ = state
-                .federation_outbox()
-                .send(authenticated_domain, response, None)
-                .await;
-            return Ok(true);
-        };
-        if !state
-            .mix_service()
-            .pam_membership(user.id, &channel_jid)
-            .await?
-            .is_some_and(|membership| membership.state == "joined")
-            || state
-                .mix_service()
-                .is_blocked(user.id, &channel_jid)
-                .await?
-            || (to.resourcepart().is_some() && state.sessions_for(&request.to).is_empty())
-        {
-            let response =
-                relay_error(&request.id, &request.to, &request.from, "auth", "forbidden");
-            let _ = state
-                .federation_outbox()
-                .send(authenticated_domain, response, None)
-                .await;
-            return Ok(true);
         }
-        let payload = relay_vcard_payload(
-            state,
-            &user,
-            request.request.as_ref().context("missing relay request")?,
-        )
-        .await?;
-        let response = match payload {
-            Ok(payload) => iq_result_to(&request.id, &request.to, &request.from, &payload),
-            Err(condition) => {
-                relay_error(&request.id, &request.to, &request.from, "cancel", condition)
-            }
-        };
+        let target_has_resource = to.resourcepart().is_some();
+        let mut result = state
+            .mix_service()
+            .relay_profile_snapshot(MixRelayProfileQuery {
+                channel: CanonicalJid::parse_bare(&channel_jid)?,
+                requester: MixRelayProfileRequester::FederatedPam {
+                    authenticated_service: authenticated_domain.to_owned(),
+                },
+                target: to,
+                kind: request.request.context("missing relay request")?,
+            })
+            .await?;
+        // Resource availability takes precedence over a missing profile for an admitted target.
+        if !matches!(
+            &result,
+            MixRelayProfileResult::Denied(_) | MixRelayProfileResult::TargetMissing
+        ) && target_has_resource
+            && state.sessions_for(&request.to).is_empty()
+        {
+            result = MixRelayProfileResult::Denied(MixRelayProfileDenial::Forbidden);
+        }
+        let response = relay_profile_reply(&request.id, &request.to, &request.from, result)?;
         let _ = state
             .federation_outbox()
             .send(authenticated_domain, response, None)

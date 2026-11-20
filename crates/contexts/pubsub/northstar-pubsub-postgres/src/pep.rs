@@ -17,13 +17,17 @@ pub struct PepNodeConfig {
     pub access_whitelist: Vec<String>,
 }
 
-pub async fn pep_node(pool: &PgPool, owner_id: Uuid, node: &str) -> Result<Option<PepNodeConfig>> {
+pub async fn pep_node<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    owner_id: Uuid,
+    node: &str,
+) -> Result<Option<PepNodeConfig>> {
     let row = sqlx::query(
         "SELECT access_model, max_items, persist_items, send_last_published_item, deliver_notifications, roster_groups_allowed, access_whitelist FROM pep_nodes WHERE owner_id = $1 AND node = $2",
     )
     .bind(owner_id)
     .bind(node)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
     Ok(row.map(|row| PepNodeConfig {
         access_model: row.get("access_model"),
@@ -853,15 +857,15 @@ pub fn default_pep_node_config(node: &str) -> PepNodeConfig {
     (&northstar_pubsub_core::default_pep_node_config(node)).into()
 }
 
-pub async fn pep_items(
-    pool: &PgPool,
+pub async fn pep_items<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
     owner_id: Uuid,
     node: &str,
     item_id: Option<&str>,
     limit: i64,
 ) -> Result<Vec<(String, String)>> {
     let rows = sqlx::query("SELECT item_id, payload FROM pep_items WHERE owner_id = $1 AND node = $2 AND ($3::text IS NULL OR item_id = $3) ORDER BY updated_at DESC LIMIT $4")
-        .bind(owner_id).bind(node).bind(item_id).bind(limit.clamp(1, 100)).fetch_all(pool).await?;
+        .bind(owner_id).bind(node).bind(item_id).bind(limit.clamp(1, 100)).fetch_all(executor).await?;
     Ok(rows
         .iter()
         .map(|r| (r.get("item_id"), r.get("payload")))

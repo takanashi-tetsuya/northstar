@@ -19,14 +19,17 @@ fn enabled_account(row: sqlx::postgres::PgRow) -> EnabledAccount {
     }
 }
 
-pub async fn find_enabled_user(pool: &PgPool, username: &str) -> Result<Option<EnabledAccount>> {
+pub async fn find_enabled_user<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    username: &str,
+) -> Result<Option<EnabledAccount>> {
     let Ok(username) = normalize_username(username) else {
         return Ok(None);
     };
     Ok(
         sqlx::query("SELECT id,username FROM users WHERE username=$1 AND NOT is_disabled")
             .bind(username)
-            .fetch_optional(pool)
+            .fetch_optional(executor)
             .await?
             .map(enabled_account),
     )

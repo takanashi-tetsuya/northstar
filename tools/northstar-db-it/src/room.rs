@@ -15,5 +15,6 @@ mod muc;
 mod muc_service;
 mod pam_conformance;
 mod producer_conformance;
+mod relay_profile_snapshot;
 mod transport_receipts;
 mod worker_conformance;

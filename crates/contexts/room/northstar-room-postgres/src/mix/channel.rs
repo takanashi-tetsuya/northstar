@@ -323,8 +323,8 @@ pub async fn create_mix_channel(
     Ok((CreateChannelOutcome::Created(id), localpart))
 }
 
-pub async fn mix_channel(
-    pool: &PgPool,
+pub async fn mix_channel<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
     service_domain: &str,
     localpart: &str,
 ) -> Result<Option<MixChannel>> {
@@ -334,7 +334,7 @@ pub async fn mix_channel(
         sqlx::query("SELECT * FROM mix_channels WHERE service_domain = $1 AND localpart = $2")
             .bind(service_domain)
             .bind(localpart)
-            .fetch_optional(pool)
+            .fetch_optional(executor)
             .await?;
     Ok(row.as_ref().map(channel_from_row))
 }

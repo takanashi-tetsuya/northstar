@@ -1661,3 +1661,38 @@ fn encoded_presence_resource_is_precis_case_sensitive() {
     );
     assert_ne!(upper, lower);
 }
+
+#[test]
+fn relay_profile_snapshot_results_map_to_existing_iq_replies() {
+    use crate::relay::relay_profile_reply;
+    use northstar_room_application::mix_service::{
+        MixRelayProfileDenial as Denial, MixRelayProfileResult as Profile,
+    };
+
+    let vcard = "<vCard xmlns='vcard-temp'><FN>Alice</FN></vCard>";
+    let item = "<item id='current'><vcard xmlns='urn:ietf:params:xml:ns:vcard-4.0'/></item>";
+    let pubsub = format!(
+        "<pubsub xmlns='http://jabber.org/protocol/pubsub'><items node='urn:xmpp:vcard4'>{item}</items></pubsub>"
+    );
+    let forbidden =
+        "<error type='auth'><forbidden xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error>";
+    let missing =
+        "<error type='cancel'><item-not-found xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error>";
+    let malformed =
+        "<error type='modify'><jid-malformed xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error>";
+    for (result, kind, payload) in [
+        (Profile::Denied(Denial::Forbidden), "error", forbidden),
+        (Profile::Denied(Denial::JidMalformed), "error", malformed),
+        (Profile::TargetMissing, "error", missing),
+        (Profile::EmptyCard, "result", "<vCard xmlns='vcard-temp'/>"),
+        (Profile::VCardTemp(vcard.to_owned()), "result", vcard),
+        (Profile::VCard4Missing, "error", missing),
+        (Profile::VCard4(item.to_owned()), "result", pubsub.as_str()),
+    ] {
+        assert_eq!(
+            relay_profile_reply("relay-1", "alice@example.test/Phone", "opaque#room@mix.remote.test", result)
+                .unwrap(),
+            format!("<iq xmlns='jabber:client' type='{kind}' from='alice@example.test/Phone' to='opaque#room@mix.remote.test' id='relay-1'>{payload}</iq>")
+        );
+    }
+}

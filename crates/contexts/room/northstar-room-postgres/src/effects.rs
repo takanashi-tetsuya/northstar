@@ -3,7 +3,9 @@
 use anyhow::Result;
 use northstar_delivery_core::mix_outbox::ArchiveRequest;
 use northstar_federation_core::S2sOutboxPolicy;
-use northstar_room_application::mix_service::{PepNodeConfig, SourceArchiveAdmission, VCardRecord};
+use northstar_room_application::mix_service::{
+    MixRelayProfileKind, MixRelayProfileResult, SourceArchiveAdmission,
+};
 use northstar_room_core::{OfflineStoreOutcome, OfflineStorePolicy};
 use northstar_roster_core::RosterChange;
 use sqlx::{PgPool, Postgres, Transaction};
@@ -98,30 +100,21 @@ pub trait RoomEffects: Clone + Default + Send + Sync + 'static {
         candidate: &str,
     ) -> impl Future<Output = Result<bool>> + Send;
 
-    /// The configuration of one of the account's PEP nodes.
-    fn pep_node(
+    /// The same block match as is_blocked, within the relay snapshot.
+    fn relay_is_blocked(
         &self,
-        pool: &PgPool,
+        transaction: &mut Transaction<'_, Postgres>,
         owner_id: Uuid,
-        node: &str,
-    ) -> impl Future<Output = Result<Option<PepNodeConfig>>> + Send;
+        candidate: &str,
+    ) -> impl Future<Output = Result<bool>> + Send;
 
-    /// Items of one of the account's PEP nodes.
-    fn pep_items(
+    /// Read the stored profile after MIX has admitted the relay in this transaction.
+    fn relay_profile_in_transaction(
         &self,
-        pool: &PgPool,
+        transaction: &mut Transaction<'_, Postgres>,
         owner_id: Uuid,
-        node: &str,
-        item_id: Option<&str>,
-        limit: i64,
-    ) -> impl Future<Output = Result<Vec<(String, String)>>> + Send;
-
-    /// The account's stored vCard.
-    fn get_vcard(
-        &self,
-        pool: &PgPool,
-        user_id: Uuid,
-    ) -> impl Future<Output = Result<VCardRecord>> + Send;
+        kind: &MixRelayProfileKind,
+    ) -> impl Future<Output = Result<MixRelayProfileResult>> + Send;
 
     /// The newest roster change that names `contact_jid`.
     fn latest_roster_change_for_contact(

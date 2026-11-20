@@ -186,13 +186,17 @@ pub async fn is_blocked_for_account(
 
 /// Fast indexed XEP-0191 lookup for contexts that cannot represent traffic
 /// between two resources of the owner (PEP, MIX, and other service actors).
-pub async fn is_blocked(pool: &PgPool, owner_id: Uuid, candidate: &str) -> Result<bool> {
+pub async fn is_blocked<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    owner_id: Uuid,
+    candidate: &str,
+) -> Result<bool> {
     let candidate = northstar_xmpp_types::jid::CanonicalJid::parse(candidate)?;
-    is_blocked_candidates(pool, owner_id, &candidate).await
+    is_blocked_candidates(executor, owner_id, &candidate).await
 }
 
-pub async fn is_blocked_candidates(
-    pool: &PgPool,
+pub async fn is_blocked_candidates<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
     owner_id: Uuid,
     candidate: &northstar_xmpp_types::jid::CanonicalJid,
 ) -> Result<bool> {
@@ -203,7 +207,7 @@ pub async fn is_blocked_candidates(
     )
     .bind(owner_id)
     .bind(&candidates)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await
     .map_err(Into::into)
 }

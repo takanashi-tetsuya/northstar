@@ -1,12 +1,10 @@
 //! MIX IQ relay: relay parsing, correlation, expiry and the channel relay request handler.
 
 use super::*;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RelayPayload {
-    VCardTemp,
-    VCard4 { item_id: Option<String> },
-}
+pub use northstar_room_application::mix_service::MixRelayProfileKind as RelayPayload;
+use northstar_room_application::mix_service::{
+    MixRelayProfileDenial, MixRelayProfileQuery, MixRelayProfileRequester, MixRelayProfileResult,
+};
 
 #[derive(Clone, Debug)]
 pub struct RelayIq {
@@ -189,43 +187,35 @@ pub async fn deliver_mix_relay_stanza(state: &Arc<impl MixHost>, recipient: &str
     state.mix_iq_relay_route().deliver(recipient, stanza).await;
 }
 
-pub async fn relay_vcard_payload(
-    state: &Arc<impl MixHost>,
-    user: &northstar_room_application::mix_service::MixAccount,
-    request: &RelayPayload,
-) -> Result<std::result::Result<String, &'static str>> {
-    match request {
-        RelayPayload::VCardTemp => Ok(Ok(state
-            .mix_service()
-            .get_vcard(user.id)
-            .await?
-            .payload_vcard_temp
-            .unwrap_or_else(|| XmlElement::namespaced("vCard", "vcard-temp").finish()))),
-        RelayPayload::VCard4 { item_id } => {
-            if state
-                .mix_service()
-                .pep_node(user.id, "urn:xmpp:vcard4")
-                .await?
-                .is_none()
-            {
-                return Ok(Err("item-not-found"));
-            }
-            let items = state
-                .mix_service()
-                .pep_items(user.id, "urn:xmpp:vcard4", item_id.as_deref(), 1)
-                .await?;
-            if items.is_empty() {
-                return Ok(Err("item-not-found"));
-            }
-            let mut item_elements = XmlElement::new("items").attr("node", "urn:xmpp:vcard4");
-            for (_, payload) in items {
-                item_elements.push_validated_fragment(&payload)?;
-            }
-            Ok(Ok(XmlElement::namespaced("pubsub", PUBSUB_NS)
-                .child(item_elements)
-                .finish()))
+pub(super) fn relay_profile_reply(
+    id: &str,
+    from: &str,
+    to: &str,
+    result: MixRelayProfileResult,
+) -> Result<String> {
+    use MixRelayProfileResult as Profile;
+    let payload = match result {
+        Profile::Denied(MixRelayProfileDenial::Forbidden) => {
+            return Ok(relay_error(id, from, to, "auth", "forbidden"));
         }
-    }
+        Profile::Denied(MixRelayProfileDenial::JidMalformed) => {
+            return Ok(relay_error(id, from, to, "modify", "jid-malformed"));
+        }
+        Profile::TargetMissing | Profile::VCard4Missing => {
+            return Ok(relay_error(id, from, to, "cancel", "item-not-found"));
+        }
+        Profile::EmptyCard => XmlElement::namespaced("vCard", "vcard-temp").finish(),
+        Profile::VCardTemp(payload) => payload,
+        Profile::VCard4(item) => {
+            let mut items = XmlElement::new("items").attr("node", "urn:xmpp:vcard4");
+            items.push_validated_fragment(&item)?;
+            XmlElement::namespaced("pubsub", PUBSUB_NS)
+                .child(items)
+                .finish()
+        }
+        Profile::RemoteRoute { .. } => anyhow::bail!("MIX profile requires a remote relay"),
+    };
+    Ok(iq_result_to(id, from, to, &payload))
 }
 
 pub fn encoded_participant_full_jid(
@@ -247,197 +237,39 @@ pub async fn handle_channel_relay_request(
         .resourcepart()
         .context("MIX IQ relay requires a full participant JID")?;
     let target = northstar_xmpp_types::jid::CanonicalJid::parse(&request.to)?;
-    let (target_id, channel_jid) = decode_participant_jid(&target.bare())?;
+    let (_, channel_jid) = decode_participant_jid(&target.bare())?;
     let channel = CanonicalJid::parse_bare(&channel_jid)?;
-    let channel_domain = channel.domainpart();
     let local_mix = local_mix_domain(state.local_domain());
     anyhow::ensure!(
-        channel_domain == local_mix,
+        channel.domainpart() == local_mix,
         "MIX relay channel is not hosted locally"
     );
-    let channel_localpart = channel
-        .localpart()
-        .context("MIX channel lacks a localpart")?;
-    let Some(channel) = state
+    let result = state
         .mix_service()
-        .mix_channel(channel_domain, channel_localpart)
-        .await?
+        .relay_profile_snapshot(MixRelayProfileQuery {
+            channel,
+            requester: MixRelayProfileRequester::ChannelParticipant {
+                actor: actor.clone(),
+                local_domain: state.local_domain().to_owned(),
+            },
+            target,
+            kind: request.request.clone().context("missing relay request")?,
+        })
+        .await?;
+    let MixRelayProfileResult::RemoteRoute {
+        requester_participant_id,
+        target_domain,
+        target_jid,
+    } = result
     else {
-        return Ok(relay_error(
-            &request.id,
-            &request.to,
-            actor_full,
-            "cancel",
-            "item-not-found",
-        ));
-    };
-    let Some(requester) = state
-        .mix_service()
-        .mix_participant(channel.id, &actor.bare())
-        .await?
-    else {
-        return Ok(relay_error(
-            &request.id,
-            &request.to,
-            actor_full,
-            "auth",
-            "forbidden",
-        ));
-    };
-    let target_id = match Uuid::parse_str(&target_id) {
-        Ok(target_id) => target_id,
-        Err(_) => {
-            return Ok(relay_error(
-                &request.id,
-                &request.to,
-                actor_full,
-                "modify",
-                "jid-malformed",
-            ));
-        }
-    };
-    let Some(target_participant) = state
-        .mix_service()
-        .mix_participant_by_id(channel.id, target_id)
-        .await?
-    else {
-        return Ok(relay_error(
-            &request.id,
-            &request.to,
-            actor_full,
-            "cancel",
-            "item-not-found",
-        ));
-    };
-    let target_preference = state
-        .mix_service()
-        .mix_participant_preference(channel.id, &target_participant.jid)
-        .await?
-        .unwrap_or_default();
-    if target_preference.vcard != "allow" {
-        return Ok(relay_error(
-            &request.id,
-            &request.to,
-            actor_full,
-            "auth",
-            "forbidden",
-        ));
-    }
-    let expected_target_bare = encoded_participant_jid(
-        &channel.jid(),
-        &target_participant.participant_id.to_string(),
-    )?;
-    anyhow::ensure!(
-        target.bare() == expected_target_bare,
-        "MIX encoded target does not belong to this channel"
-    );
-    let mapped_target = if target.resourcepart().is_some() {
-        match state
-            .mix_service()
-            .mix_presence_source_jid(channel.id, &request.to)
-            .await?
-        {
-            Some(source) => Some(source),
-            None => {
-                return Ok(relay_error(
-                    &request.id,
-                    &request.to,
-                    actor_full,
-                    "cancel",
-                    "item-not-found",
-                ));
-            }
-        }
-    } else {
-        None
+        return relay_profile_reply(&request.id, &request.to, actor_full, result);
     };
     let requester_encoded = encoded_participant_full_jid(
-        &channel.jid(),
-        &requester.participant_id.to_string(),
+        &channel_jid,
+        &requester_participant_id.to_string(),
         actor_resource,
     )?;
-    let target_real_jid = mapped_target.unwrap_or_else(|| target_participant.jid.clone());
-
-    let requester_jid = CanonicalJid::parse_bare(&requester.jid)?;
-    if same_jid_domain(requester_jid.domainpart(), state.local_domain()) {
-        if let Some(username) = requester_jid.localpart() {
-            if let Some(user) = state.mix_service().find_enabled_user(username).await? {
-                if state
-                    .mix_service()
-                    .is_blocked(user.id, &channel.jid())
-                    .await?
-                    || state
-                        .mix_service()
-                        .is_blocked(user.id, &target_participant.jid)
-                        .await?
-                {
-                    return Ok(relay_error(
-                        &request.id,
-                        &request.to,
-                        actor_full,
-                        "auth",
-                        "forbidden",
-                    ));
-                }
-            }
-        }
-    }
-    let target_participant_jid = CanonicalJid::parse_bare(&target_participant.jid)?;
-    let target_domain = target_participant_jid.domainpart();
-    if same_jid_domain(target_domain, state.local_domain()) {
-        let Some(target_username) = target_participant_jid.localpart() else {
-            return Ok(relay_error(
-                &request.id,
-                &request.to,
-                actor_full,
-                "modify",
-                "jid-malformed",
-            ));
-        };
-        let Some(target_user) = state
-            .mix_service()
-            .find_enabled_user(target_username)
-            .await?
-        else {
-            return Ok(relay_error(
-                &request.id,
-                &request.to,
-                actor_full,
-                "cancel",
-                "item-not-found",
-            ));
-        };
-        if state
-            .mix_service()
-            .is_blocked(target_user.id, &channel.jid())
-            .await?
-            || state
-                .mix_service()
-                .is_blocked(target_user.id, &requester.jid)
-                .await?
-        {
-            return Ok(relay_error(
-                &request.id,
-                &request.to,
-                actor_full,
-                "auth",
-                "forbidden",
-            ));
-        }
-        let payload = relay_vcard_payload(
-            state,
-            &target_user,
-            request.request.as_ref().context("missing relay request")?,
-        )
-        .await?;
-        return Ok(match payload {
-            Ok(payload) => iq_result_to(&request.id, &request.to, actor_full, &payload),
-            Err(condition) => {
-                relay_error(&request.id, &request.to, actor_full, "cancel", condition)
-            }
-        });
-    }
-    if !state.federation_domain_allowed(target_domain) {
+    if !state.federation_domain_allowed(&target_domain) {
         return Ok(relay_error(
             &request.id,
             &request.to,
@@ -454,9 +286,9 @@ pub async fn handle_channel_relay_request(
             requester_full_jid: actor_full.to_owned(),
             requester_encoded_jid: requester_encoded.clone(),
             original_id: request.id.clone(),
-            target_real_jid: target_real_jid.clone(),
+            target_real_jid: target_jid.clone(),
             target_encoded_jid: request.to.clone(),
-            channel_jid: channel.jid(),
+            channel_jid: channel_jid.clone(),
         },
     ) {
         return Ok(relay_error(
@@ -467,10 +299,10 @@ pub async fn handle_channel_relay_request(
             "resource-constraint",
         ));
     }
-    let outbound = relay_iq_xml(request, &relay_id, &requester_encoded, &target_real_jid);
+    let outbound = relay_iq_xml(request, &relay_id, &requester_encoded, &target_jid);
     if !state
         .federation_outbox()
-        .send(target_domain, outbound, Some(channel.jid()))
+        .send(&target_domain, outbound, Some(channel_jid))
         .await
     {
         state.pending_mix_iq().remove(&relay_id);

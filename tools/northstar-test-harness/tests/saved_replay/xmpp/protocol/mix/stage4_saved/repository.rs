@@ -106,20 +106,6 @@ impl MixRepository for ControlledRepository {
     ) -> impl std::future::Future<Output = Result<Option<MixParticipant>>> + Send {
         std::future::ready(Err(self.unused("mix_participant")))
     }
-    fn mix_participant_by_id(
-        &self,
-        channel_id: Uuid,
-        participant_id: Uuid,
-    ) -> impl std::future::Future<Output = Result<Option<MixParticipant>>> + Send {
-        std::future::ready(Err(self.unused("mix_participant_by_id")))
-    }
-    fn mix_presence_source_jid(
-        &self,
-        channel_id: Uuid,
-        item_id: &str,
-    ) -> impl std::future::Future<Output = Result<Option<String>>> + Send {
-        std::future::ready(Err(self.unused("mix_presence_source_jid")))
-    }
     fn expire_unrefreshed_mix_presence(
         &self,
         cutoff: DateTime<Utc>,
@@ -466,27 +452,11 @@ impl MixRepository for ControlledRepository {
     ) -> impl std::future::Future<Output = Result<Option<MixAccount>>> + Send {
         std::future::ready(Err(self.unused("find_enabled_user_by_id")))
     }
-    fn pep_node(
+    fn relay_profile_snapshot(
         &self,
-        owner_id: Uuid,
-        node: &str,
-    ) -> impl std::future::Future<Output = Result<Option<PepNodeConfig>>> + Send {
-        std::future::ready(Err(self.unused("pep_node")))
-    }
-    fn pep_items(
-        &self,
-        owner_id: Uuid,
-        node: &str,
-        item_id: Option<&str>,
-        limit: i64,
-    ) -> impl std::future::Future<Output = Result<Vec<(String, String)>>> + Send {
-        std::future::ready(Err(self.unused("pep_items")))
-    }
-    fn get_vcard(
-        &self,
-        user_id: Uuid,
-    ) -> impl std::future::Future<Output = Result<VCardRecord>> + Send {
-        std::future::ready(Err(self.unused("get_vcard")))
+        query: MixRelayProfileQuery,
+    ) -> impl std::future::Future<Output = Result<MixRelayProfileResult>> + Send {
+        std::future::ready(Err(self.unused("relay_profile_snapshot")))
     }
     fn latest_roster_change_for_contact(
         &self,

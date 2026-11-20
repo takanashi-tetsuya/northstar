@@ -88,22 +88,6 @@ mod mix {
             panic!("unused MixRepository::mix_participant port");
         }
 
-        async fn mix_participant_by_id(
-            &self,
-            _channel_id: Uuid,
-            _participant_id: Uuid,
-        ) -> Result<Option<MixParticipant>> {
-            panic!("unused MixRepository::mix_participant_by_id port");
-        }
-
-        async fn mix_presence_source_jid(
-            &self,
-            _channel_id: Uuid,
-            _item_id: &str,
-        ) -> Result<Option<String>> {
-            panic!("unused MixRepository::mix_presence_source_jid port");
-        }
-
         async fn expire_unrefreshed_mix_presence(
             &self,
             _cutoff: DateTime<Utc>,
@@ -490,22 +474,11 @@ mod mix {
             panic!("unused MixRepository::is_blocked port");
         }
 
-        async fn pep_node(&self, _owner_id: Uuid, _node: &str) -> Result<Option<PepNodeConfig>> {
-            panic!("unused MixRepository::pep_node port");
-        }
-
-        async fn pep_items(
+        async fn relay_profile_snapshot(
             &self,
-            _owner_id: Uuid,
-            _node: &str,
-            _item_id: Option<&str>,
-            _limit: i64,
-        ) -> Result<Vec<(String, String)>> {
-            panic!("unused MixRepository::pep_items port");
-        }
-
-        async fn get_vcard(&self, _user_id: Uuid) -> Result<VCardRecord> {
-            panic!("unused MixRepository::get_vcard port");
+            _query: MixRelayProfileQuery,
+        ) -> Result<MixRelayProfileResult> {
+            panic!("unused MixRepository::relay_profile_snapshot port");
         }
 
         async fn latest_roster_change_for_contact(

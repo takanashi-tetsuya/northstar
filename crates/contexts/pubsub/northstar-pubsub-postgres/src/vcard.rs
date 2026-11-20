@@ -29,10 +29,13 @@ pub struct VCardRecord {
     pub avatar_hash: Option<String>,
 }
 
-pub async fn get_vcard(pool: &PgPool, user_id: Uuid) -> Result<VCardRecord> {
+pub async fn get_vcard<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
+    user_id: Uuid,
+) -> Result<VCardRecord> {
     let row = sqlx::query("SELECT payload, avatar_hash FROM vcards WHERE user_id = $1")
         .bind(user_id)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await?;
     if let Some(row) = row {
         Ok(VCardRecord {

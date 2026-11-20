@@ -45,6 +45,24 @@ run_exact_ignored \
 run_exact_ignored \
   room::mix_muc::mirror_link_is_common_owner_only_one_to_one_and_idempotent
 
+run_exact_ignored \
+  room::relay_profile_snapshot::local_channel_block_does_not_relay_a_new_vcard
+
+run_exact_ignored \
+  room::relay_profile_snapshot::local_requester_block_does_not_relay_a_new_vcard
+
+run_exact_ignored \
+  room::relay_profile_snapshot::federated_pam_leave_does_not_relay_a_new_vcard4_item
+
+run_exact_ignored \
+  room::relay_profile_snapshot::deleted_vcard4_node_is_missing_for_an_authorized_relay
+
+run_exact_ignored \
+  room::relay_profile_snapshot::legacy_non_open_vcard4_relays_latest_or_requested_item
+
+run_exact_ignored \
+  room::relay_profile_snapshot::relay_profile_snapshots_work_on_a_read_only_connection
+
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline -p northstar-db-it \
   room::mix_mam::mix_anon_misc_permissions_are_atomic_and_private \

@@ -1,6 +1,7 @@
 //! Defines the MIX repository port, shared models, operation boundary data, and preference defaults.
 
 use super::*;
+use northstar_xmpp_types::jid::CanonicalJid;
 
 /// A MIX channel's authoritative configuration as observed by the protocol
 /// layer. Field names deliberately mirror the repository row so the mapping in
@@ -409,11 +410,58 @@ pub enum MixMucLinkOutcome {
     Conflict,
 }
 
-/// Minimum enabled local identity needed by MIX/PEP/vCard relays.
+/// Minimum enabled local identity needed by MIX.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MixAccount {
     pub id: Uuid,
     pub username: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MixRelayProfileQuery {
+    pub channel: CanonicalJid,
+    pub requester: MixRelayProfileRequester,
+    pub target: CanonicalJid,
+    pub kind: MixRelayProfileKind,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MixRelayProfileRequester {
+    /// A full participant JID addressing an encoded target on a hosted channel.
+    ChannelParticipant {
+        actor: CanonicalJid,
+        local_domain: String,
+    },
+    /// The authenticated service of a remote channel the target joined through PAM.
+    FederatedPam { authenticated_service: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MixRelayProfileKind {
+    VCardTemp,
+    VCard4 { item_id: Option<String> },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MixRelayProfileDenial {
+    Forbidden,
+    JidMalformed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MixRelayProfileResult {
+    Denied(MixRelayProfileDenial),
+    TargetMissing,
+    EmptyCard,
+    VCardTemp(String),
+    VCard4Missing,
+    VCard4(String),
+    /// An authorized relay whose profile is served by the target's home domain.
+    RemoteRoute {
+        requester_participant_id: Uuid,
+        target_domain: String,
+        target_jid: String,
+    },
 }
 
 /// Business target for one MIX access-list mutation.
@@ -498,16 +546,6 @@ pub trait MixRepository: Send + Sync {
         channel_id: Uuid,
         jid: &str,
     ) -> impl std::future::Future<Output = Result<Option<MixParticipant>>> + Send;
-    fn mix_participant_by_id(
-        &self,
-        channel_id: Uuid,
-        participant_id: Uuid,
-    ) -> impl std::future::Future<Output = Result<Option<MixParticipant>>> + Send;
-    fn mix_presence_source_jid(
-        &self,
-        channel_id: Uuid,
-        item_id: &str,
-    ) -> impl std::future::Future<Output = Result<Option<String>>> + Send;
     fn expire_unrefreshed_mix_presence(
         &self,
         cutoff: DateTime<Utc>,
@@ -790,22 +828,11 @@ pub trait MixRepository: Send + Sync {
         candidate: &str,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
 
-    fn pep_node(
+    /// Read MIX relay authority and the selected profile in the same snapshot.
+    fn relay_profile_snapshot(
         &self,
-        owner_id: Uuid,
-        node: &str,
-    ) -> impl std::future::Future<Output = Result<Option<PepNodeConfig>>> + Send;
-    fn pep_items(
-        &self,
-        owner_id: Uuid,
-        node: &str,
-        item_id: Option<&str>,
-        limit: i64,
-    ) -> impl std::future::Future<Output = Result<Vec<(String, String)>>> + Send;
-    fn get_vcard(
-        &self,
-        user_id: Uuid,
-    ) -> impl std::future::Future<Output = Result<VCardRecord>> + Send;
+        query: MixRelayProfileQuery,
+    ) -> impl std::future::Future<Output = Result<MixRelayProfileResult>> + Send;
     fn latest_roster_change_for_contact(
         &self,
         user_id: Uuid,

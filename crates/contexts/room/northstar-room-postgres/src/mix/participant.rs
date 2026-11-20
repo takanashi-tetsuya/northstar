@@ -2,8 +2,8 @@
 
 use super::*;
 
-pub async fn mix_participant(
-    pool: &PgPool,
+pub async fn mix_participant<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
     channel_id: Uuid,
     jid: &str,
 ) -> Result<Option<MixParticipant>> {
@@ -13,13 +13,13 @@ pub async fn mix_participant(
     )
     .bind(channel_id)
     .bind(jid)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
     Ok(row.as_ref().map(participant_from_row))
 }
 
-pub async fn mix_participant_by_id(
-    pool: &PgPool,
+pub async fn mix_participant_by_id<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
     channel_id: Uuid,
     participant_id: Uuid,
 ) -> Result<Option<MixParticipant>> {
@@ -28,13 +28,13 @@ pub async fn mix_participant_by_id(
     )
     .bind(channel_id)
     .bind(participant_id)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
     Ok(row.as_ref().map(participant_from_row))
 }
 
-pub async fn mix_presence_source_jid(
-    pool: &PgPool,
+pub async fn mix_presence_source_jid<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
     channel_id: Uuid,
     item_id: &str,
 ) -> Result<Option<String>> {
@@ -45,7 +45,7 @@ pub async fn mix_presence_source_jid(
     .bind(channel_id)
     .bind(NODE_PRESENCE)
     .bind(item_id)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .map_err(Into::into)
 }

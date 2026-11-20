@@ -1,10 +1,12 @@
 # Northstar Modularization Execution Plan
 
 This guide covers semantic boundary work and release qualification that are
-still open after the S16–S43 restructure. Each item links to the document that
-owns it, so facts are not repeated here. The original 1,027-line plan (its
-2026 baseline, Phases A–F, the service and role stages, the authority map and
-the C1/C2/D1/R1–R3 packet log) is kept as history at
+still open after the S16–S45 restructure. Each item links to the document that
+owns it, so facts are not repeated here. The order of the next stages, their
+work-package split and the working rules are in the
+[restructure roadmap](architecture/next-steps-roadmap.zh-TW.md). The original
+1,027-line plan (its 2026 baseline, Phases A–F, the service and role stages,
+the authority map and the C1/C2/D1/R1–R3 packet log) is kept as history at
 [commit 25e6c3c](https://github.com/takanashi-tetsuya/northstar/blob/25e6c3c9640f7458acb1abaf82dda537f566e8f7/docs/MODULARIZATION_EXECUTION_PLAN.md).
 Older records that cite its sections, including the frozen handoffs, should be
 read against that version.

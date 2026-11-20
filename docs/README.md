@@ -18,6 +18,7 @@ to it instead of restating it.
 | Source layout, module ownership, line budgets and structural work packages | [Engineering structure](architecture/engineering-structure.zh-TW.md) |
 | Target workspace architecture and the restructure from S16 on | [Target architecture](architecture/target-architecture.zh-TW.md) |
 | Remaining semantic boundary work and the release qualification gates | [Modularization execution plan](MODULARIZATION_EXECUTION_PLAN.md) |
+| Order, work-package split and working rules of the next stages (S46 on) | [Restructure roadmap](architecture/next-steps-roadmap.zh-TW.md) |
 | Experimental architecture rebuild, Stages 0–6 | [Experimental rebuild ledger](architecture/experimental-rebuild-plan.zh-TW.md) |
 | Branches, pushes and the local VM lab | [Development handoff](HANDOFF.md) |
 

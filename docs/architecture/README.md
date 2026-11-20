@@ -10,6 +10,14 @@ is described by `catalog/crates.yaml`: every workspace crate with its tier
 (from its directory), owner and stability, generated from Cargo metadata. The
 [crate policy](crate-policy.md) lists the dependencies each tier may have.
 
+The [restructure roadmap](next-steps-roadmap.zh-TW.md) is the plan from S46
+on: the backlog in priority order (the second C1 batch, the C2 product
+decisions, files near the line budget, the semantic audits of the remaining
+contexts, the `northstar-workflows` scope review, service capabilities,
+database roles, cluster evidence and release qualification), the suggested
+work-package split, and the workflow, verification and lessons every stage
+follows.
+
 Run the checks from the repository root:
 
 ```text

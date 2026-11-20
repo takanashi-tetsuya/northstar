@@ -5,6 +5,7 @@
 //! publication commits private XML, PEP and its outbox together.
 
 use anyhow::Result;
+use northstar_pubsub_core::PubSubAccount;
 use uuid::Uuid;
 
 pub const LEGACY_BOOKMARKS: &str = "storage:bookmarks";
@@ -26,26 +27,36 @@ pub struct LegacyBookmarkSnapshot {
     pub modern_items: Vec<(String, String)>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PrivateXmlReadEntry {
+    Stored(String),
+    Absent,
+    LegacyBookmarks(LegacyBookmarkSnapshot),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PrivateXmlWriteOutcome {
     Stored,
     QuotaExceeded,
+    StaleAuthority,
 }
 
 pub trait PrivateStorageRepository: Send + Sync {
-    fn get(
+    /// Read one entry per element name from the same snapshot, preserving order and duplicates.
+    /// The `storage` element in `storage:bookmarks` uses the legacy bookmark projection.
+    fn read_batch(
         &self,
         owner_id: Uuid,
-        element_name: &str,
-        element_ns: &str,
-    ) -> impl std::future::Future<Output = Result<Option<String>>> + Send;
+        namespace: &str,
+        element_names: &[&str],
+    ) -> impl std::future::Future<Output = Result<Vec<PrivateXmlReadEntry>>> + Send;
     fn legacy_bookmark_snapshot(
         &self,
         owner_id: Uuid,
     ) -> impl std::future::Future<Output = Result<LegacyBookmarkSnapshot>> + Send;
     fn set_batch(
         &self,
-        owner_id: Uuid,
+        owner: &PubSubAccount,
         entries: &[PrivateXmlEntry<'_>],
         max_bytes: i64,
     ) -> impl std::future::Future<Output = Result<PrivateXmlWriteOutcome>> + Send;
@@ -64,14 +75,14 @@ impl<R: PrivateStorageRepository> PrivateStorageService<R> {
             pep_max_storage_bytes,
         }
     }
-    pub async fn get(
+    pub async fn read_batch(
         &self,
         owner_id: Uuid,
-        element_name: &str,
-        element_ns: &str,
-    ) -> Result<Option<String>> {
+        namespace: &str,
+        element_names: &[&str],
+    ) -> Result<Vec<PrivateXmlReadEntry>> {
         self.repository
-            .get(owner_id, element_name, element_ns)
+            .read_batch(owner_id, namespace, element_names)
             .await
     }
     pub async fn legacy_bookmark_snapshot(&self, owner_id: Uuid) -> Result<LegacyBookmarkSnapshot> {
@@ -89,11 +100,11 @@ impl<R: PrivateStorageRepository> PrivateStorageService<R> {
     }
     pub async fn set_batch(
         &self,
-        owner_id: Uuid,
+        owner: &PubSubAccount,
         entries: &[PrivateXmlEntry<'_>],
     ) -> Result<PrivateXmlWriteOutcome> {
         self.repository
-            .set_batch(owner_id, entries, PRIVATE_XML_MAX_ACCOUNT_BYTES)
+            .set_batch(owner, entries, PRIVATE_XML_MAX_ACCOUNT_BYTES)
             .await
     }
     pub fn legacy_bookmark_limits(&self) -> (i64, i64, i64) {
@@ -135,7 +146,12 @@ mod tests {
 
     struct UnavailableSnapshot;
     impl PrivateStorageRepository for UnavailableSnapshot {
-        async fn get(&self, _: Uuid, _: &str, _: &str) -> Result<Option<String>> {
+        async fn read_batch(
+            &self,
+            _: Uuid,
+            _: &str,
+            _: &[&str],
+        ) -> Result<Vec<PrivateXmlReadEntry>> {
             unreachable!()
         }
         async fn legacy_bookmark_snapshot(&self, _: Uuid) -> Result<LegacyBookmarkSnapshot> {
@@ -143,7 +159,7 @@ mod tests {
         }
         async fn set_batch(
             &self,
-            _: Uuid,
+            _: &PubSubAccount,
             _: &[PrivateXmlEntry<'_>],
             _: i64,
         ) -> Result<PrivateXmlWriteOutcome> {

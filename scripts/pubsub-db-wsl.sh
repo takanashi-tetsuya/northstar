@@ -288,6 +288,14 @@ run_exact_ignored \
   vcard::tests::converted_avatar_uses_the_exact_locked_pep_subscription_snapshot northstar-pubsub-postgres
 run_exact_ignored \
   private::tests::private_xml_batch_and_account_quota_are_atomic northstar-pubsub-postgres
+run_exact_ignored \
+  private::tests::private_xml_read_batch_sees_one_revision_during_set northstar-pubsub-postgres
+run_exact_ignored \
+  private::tests::private_xml_read_batch_shares_the_legacy_bookmark_revision northstar-pubsub-postgres
+run_exact_ignored \
+  private::tests::private_xml_set_rejects_authority_lost_while_waiting_for_the_account_lock northstar-pubsub-postgres
+run_exact_ignored \
+  private::tests::private_xml_read_batch_succeeds_on_a_read_only_connection northstar-pubsub-postgres
 
 run_exact_ignored \
   profile::tests::profile_publish_uses_exact_subscribe_and_block_snapshot northstar-workflows

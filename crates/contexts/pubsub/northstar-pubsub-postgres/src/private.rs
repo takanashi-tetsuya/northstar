@@ -1,11 +1,13 @@
 use anyhow::Result;
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use northstar_pubsub_core::PubSubAccount;
+use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivateXmlWriteOutcome {
     Stored,
     QuotaExceeded,
+    StaleAuthority,
 }
 
 pub struct PrivateXmlEntry<'a> {
@@ -20,16 +22,26 @@ pub async fn get_private_xml(
     element_name: &str,
     element_ns: &str,
 ) -> Result<Option<String>> {
-    let result = sqlx::query_scalar::<_, String>(
-        "SELECT xml_data FROM private_xml WHERE user_id = $1 AND element_name = $2 AND element_ns = $3",
+    let mut connection = pool.acquire().await?;
+    let rows = private_xml_rows(&mut connection, user_id, element_ns, &[element_name]).await?;
+    Ok(rows.into_iter().next().map(|(_, xml)| xml))
+}
+
+async fn private_xml_rows(
+    connection: &mut PgConnection,
+    user_id: Uuid,
+    namespace: &str,
+    element_names: &[&str],
+) -> Result<Vec<(String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT element_name, xml_data FROM private_xml
+          WHERE user_id = $1 AND element_ns = $2 AND element_name = ANY($3::TEXT[])",
     )
     .bind(user_id)
-    .bind(element_name)
-    .bind(element_ns)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(result)
+    .bind(namespace)
+    .bind(element_names)
+    .fetch_all(connection)
+    .await?)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -50,23 +62,47 @@ pub async fn legacy_bookmark_snapshot(
     modern_node: &str,
     item_limit: i64,
 ) -> Result<LegacyBookmarkSnapshot> {
+    let mut transaction = begin_private_xml_snapshot(pool).await?;
+    let snapshot = legacy_bookmark_snapshot_in_transaction(
+        &mut transaction,
+        user_id,
+        private_namespace,
+        modern_node,
+        item_limit,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(snapshot)
+}
+
+async fn begin_private_xml_snapshot(pool: &PgPool) -> Result<Transaction<'_, Postgres>> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .execute(&mut *transaction)
         .await?;
+    Ok(transaction)
+}
+
+async fn legacy_bookmark_snapshot_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    private_namespace: &str,
+    modern_node: &str,
+    item_limit: i64,
+) -> Result<LegacyBookmarkSnapshot> {
     let private_xml = sqlx::query_scalar::<_, String>(
         "SELECT xml_data FROM private_xml
           WHERE user_id=$1 AND element_name='storage' AND element_ns=$2",
     )
     .bind(user_id)
     .bind(private_namespace)
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(&mut **transaction)
     .await?;
     let modern_node_exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pep_nodes WHERE owner_id=$1 AND node=$2)")
             .bind(user_id)
             .bind(modern_node)
-            .fetch_one(&mut *transaction)
+            .fetch_one(&mut **transaction)
             .await?;
     let modern_items = sqlx::query(
         "SELECT item_id,payload FROM pep_items
@@ -75,12 +111,11 @@ pub async fn legacy_bookmark_snapshot(
     .bind(user_id)
     .bind(modern_node)
     .bind(item_limit.clamp(1, super::PEP_MAX_ITEMS as i64))
-    .fetch_all(&mut *transaction)
+    .fetch_all(&mut **transaction)
     .await?
     .into_iter()
     .map(|row| (row.get("item_id"), row.get("payload")))
     .collect();
-    transaction.commit().await?;
     Ok(LegacyBookmarkSnapshot {
         private_xml,
         modern_node_exists,
@@ -106,15 +141,33 @@ pub async fn lock_private_xml_owner(
 /// writers to exceed the per-account storage budget.
 pub async fn set_private_xml_batch(
     pool: &PgPool,
-    user_id: Uuid,
+    owner: &PubSubAccount,
     entries: &[PrivateXmlEntry<'_>],
     max_account_bytes: i64,
 ) -> Result<PrivateXmlWriteOutcome> {
     let mut transaction = pool.begin().await?;
-    lock_private_xml_owner(&mut transaction, user_id).await?;
-    let outcome =
-        set_private_xml_batch_in_transaction(&mut transaction, user_id, entries, max_account_bytes)
-            .await?;
+    // Keep the account-wide quota lock and verify the captured session under it.
+    let locked_owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM users
+          WHERE id = $1 AND username = $2 AND auth_generation = $3 AND NOT is_disabled
+          FOR UPDATE",
+    )
+    .bind(owner.id)
+    .bind(&owner.username)
+    .bind(owner.auth_generation)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if locked_owner.is_none() {
+        transaction.rollback().await?;
+        return Ok(PrivateXmlWriteOutcome::StaleAuthority);
+    }
+    let outcome = set_private_xml_batch_in_transaction(
+        &mut transaction,
+        owner.id,
+        entries,
+        max_account_bytes,
+    )
+    .await?;
     if outcome == PrivateXmlWriteOutcome::Stored {
         transaction.commit().await?;
     } else {
@@ -311,48 +364,264 @@ pub enum BookmarkCompatibilityFailure {
     ConcurrentChange,
 }
 
+mod application_repository {
+    use super::{
+        begin_private_xml_snapshot, legacy_bookmark_snapshot_in_transaction, private_xml_rows,
+    };
+    use anyhow::Result;
+    use northstar_pubsub_application::private_storage::{
+        LegacyBookmarkSnapshot, PrivateStorageRepository, PrivateXmlEntry, PrivateXmlReadEntry,
+        PrivateXmlWriteOutcome, BOOKMARKS2, LEGACY_BOOKMARKS,
+    };
+    use northstar_pubsub_core::PubSubAccount;
+    use sqlx::PgPool;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    #[derive(Clone)]
+    pub struct PostgresPrivateStorageRepository {
+        pool: PgPool,
+    }
+    impl PostgresPrivateStorageRepository {
+        pub fn new(pool: PgPool) -> Self {
+            Self { pool }
+        }
+    }
+    impl PrivateStorageRepository for PostgresPrivateStorageRepository {
+        async fn read_batch(
+            &self,
+            owner_id: Uuid,
+            namespace: &str,
+            element_names: &[&str],
+        ) -> Result<Vec<PrivateXmlReadEntry>> {
+            let mut transaction = begin_private_xml_snapshot(&self.pool).await?;
+            let is_legacy = |name: &str| namespace == LEGACY_BOOKMARKS && name == "storage";
+            let ordinary_names = element_names
+                .iter()
+                .copied()
+                .filter(|&name| !is_legacy(name))
+                .collect::<Vec<_>>();
+            let mut ordinary = HashMap::new();
+            if !ordinary_names.is_empty() {
+                ordinary.extend(
+                    private_xml_rows(&mut transaction, owner_id, namespace, &ordinary_names)
+                        .await?,
+                );
+            }
+            let legacy = if ordinary_names.len() != element_names.len() {
+                Some(to_application_snapshot(
+                    legacy_bookmark_snapshot_in_transaction(
+                        &mut transaction,
+                        owner_id,
+                        LEGACY_BOOKMARKS,
+                        BOOKMARKS2,
+                        i64::from(crate::PEP_MAX_ITEMS),
+                    )
+                    .await?,
+                ))
+            } else {
+                None
+            };
+            transaction.commit().await?;
+
+            Ok(element_names
+                .iter()
+                .map(|&name| {
+                    if let Some(snapshot) = legacy.as_ref().filter(|_| is_legacy(name)) {
+                        PrivateXmlReadEntry::LegacyBookmarks(snapshot.clone())
+                    } else {
+                        ordinary
+                            .get(name)
+                            .cloned()
+                            .map_or(PrivateXmlReadEntry::Absent, PrivateXmlReadEntry::Stored)
+                    }
+                })
+                .collect())
+        }
+
+        async fn legacy_bookmark_snapshot(&self, owner_id: Uuid) -> Result<LegacyBookmarkSnapshot> {
+            let snapshot = crate::legacy_bookmark_snapshot(
+                &self.pool,
+                owner_id,
+                LEGACY_BOOKMARKS,
+                BOOKMARKS2,
+                i64::from(crate::PEP_MAX_ITEMS),
+            )
+            .await?;
+            Ok(to_application_snapshot(snapshot))
+        }
+
+        async fn set_batch(
+            &self,
+            owner: &PubSubAccount,
+            entries: &[PrivateXmlEntry<'_>],
+            max_bytes: i64,
+        ) -> Result<PrivateXmlWriteOutcome> {
+            let entries = entries
+                .iter()
+                .map(|entry| crate::PrivateXmlEntry {
+                    element_name: entry.element_name,
+                    element_ns: entry.element_ns,
+                    xml_data: entry.xml_data,
+                })
+                .collect::<Vec<_>>();
+            Ok(
+                match crate::set_private_xml_batch(&self.pool, owner, &entries, max_bytes).await? {
+                    crate::PrivateXmlWriteOutcome::Stored => PrivateXmlWriteOutcome::Stored,
+                    crate::PrivateXmlWriteOutcome::QuotaExceeded => {
+                        PrivateXmlWriteOutcome::QuotaExceeded
+                    }
+                    crate::PrivateXmlWriteOutcome::StaleAuthority => {
+                        PrivateXmlWriteOutcome::StaleAuthority
+                    }
+                },
+            )
+        }
+    }
+
+    fn to_application_snapshot(snapshot: super::LegacyBookmarkSnapshot) -> LegacyBookmarkSnapshot {
+        LegacyBookmarkSnapshot {
+            private_xml: snapshot.private_xml,
+            modern_node_exists: snapshot.modern_node_exists,
+            modern_items: snapshot.modern_items,
+        }
+    }
+}
+pub use application_repository::PostgresPrivateStorageRepository;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use northstar_pubsub_application::private_storage::{
+        LegacyBookmarkSnapshot as ApplicationBookmarkSnapshot, PrivateStorageRepository,
+        PrivateStorageService, PrivateXmlEntry as ApplicationXmlEntry, PrivateXmlReadEntry,
+        PrivateXmlWriteOutcome as ApplicationWriteOutcome, BOOKMARKS2, LEGACY_BOOKMARKS,
+    };
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::time::Duration;
+
+    struct PrivateXmlDatabase {
+        options: PgConnectOptions,
+        admin: PgPool,
+        pool: PgPool,
+        schema: String,
+        owner: PubSubAccount,
+    }
+
+    impl PrivateXmlDatabase {
+        async fn new() -> Self {
+            let url = std::env::var("TEST_DATABASE_URL")
+                .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+            let options = url.parse::<PgConnectOptions>().unwrap();
+            let admin = PgPoolOptions::new()
+                .max_connections(1)
+                .connect_with(options.clone())
+                .await
+                .unwrap();
+            let schema = format!("xmpp_test_private_{}", Uuid::new_v4().simple());
+            sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+                .execute(&admin)
+                .await
+                .unwrap();
+            let pool = PgPoolOptions::new()
+                .max_connections(8)
+                .connect_with(options.clone().options([("search_path", schema.as_str())]))
+                .await
+                .unwrap();
+            northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
+            let user_id = Uuid::new_v4();
+            let username = format!("private-{}", &user_id.simple().to_string()[..12]);
+            let auth_generation = sqlx::query_scalar(
+                "INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'test')
+                 RETURNING auth_generation",
+            )
+            .bind(user_id)
+            .bind(&username)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            Self {
+                options,
+                admin,
+                pool,
+                schema,
+                owner: PubSubAccount {
+                    id: user_id,
+                    username,
+                    auth_generation,
+                },
+            }
+        }
+
+        async fn named_pool(&self, purpose: &str, read_only: bool) -> (String, PgPool) {
+            let application_name = format!("private-{}-{purpose}", self.owner.id.simple());
+            let settings = [
+                ("search_path", self.schema.as_str()),
+                (
+                    "default_transaction_read_only",
+                    if read_only { "on" } else { "off" },
+                ),
+            ];
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .connect_with(
+                    self.options
+                        .clone()
+                        .application_name(&application_name)
+                        .options(settings),
+                )
+                .await
+                .unwrap();
+            (application_name, pool)
+        }
+
+        async fn cleanup(self) {
+            sqlx::query("DELETE FROM users WHERE id=$1")
+                .bind(self.owner.id)
+                .execute(&self.pool)
+                .await
+                .unwrap();
+            self.pool.close().await;
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DROP SCHEMA {} CASCADE",
+                self.schema
+            )))
+            .execute(&self.admin)
+            .await
+            .unwrap();
+            self.admin.close().await;
+        }
+    }
+
+    async fn wait_for_named_session_lock(pool: &PgPool, application_name: &str) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let waiting: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+                      WHERE datname = current_database() AND application_name = $1
+                        AND wait_event_type = 'Lock')",
+                )
+                .bind(application_name)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+                if waiting {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("session {application_name} never reached its lock wait"));
+    }
 
     #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
     async fn private_xml_batch_and_account_quota_are_atomic() {
-        let url = std::env::var("TEST_DATABASE_URL")
-            .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
-        let admin = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&url)
-            .await
-            .unwrap();
-        let schema = format!("xmpp_test_private_{}", Uuid::new_v4().simple());
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        let connection_schema = schema.clone();
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(8)
-            .after_connect(move |connection, _| {
-                let statement = format!("SET search_path TO {connection_schema}");
-                Box::pin(async move {
-                    sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
-                        .execute(connection)
-                        .await?;
-                    Ok(())
-                })
-            })
-            .connect(&url)
-            .await
-            .unwrap();
-        northstar_postgres::MIGRATOR.run(&pool).await.unwrap();
-        let user_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'test')")
-            .bind(user_id)
-            .bind(format!("private-{}", &user_id.simple().to_string()[..12]))
-            .execute(&pool)
-            .await
-            .unwrap();
+        let db = PrivateXmlDatabase::new().await;
+        let pool = &db.pool;
+        let owner = &db.owner;
+        let user_id = owner.id;
 
         let first = PrivateXmlEntry {
             element_name: "one",
@@ -366,7 +635,7 @@ mod tests {
         };
         let exact = i64::try_from(first.xml_data.len() + second.xml_data.len()).unwrap();
         assert_eq!(
-            set_private_xml_batch(&pool, user_id, &[first, second], exact)
+            set_private_xml_batch(pool, owner, &[first, second], exact)
                 .await
                 .unwrap(),
             PrivateXmlWriteOutcome::Stored
@@ -377,21 +646,21 @@ mod tests {
             xml_data: "<three xmlns='urn:example:private'>overflow</three>",
         };
         assert_eq!(
-            set_private_xml_batch(&pool, user_id, &[too_large], exact)
+            set_private_xml_batch(pool, owner, &[too_large], exact)
                 .await
                 .unwrap(),
             PrivateXmlWriteOutcome::QuotaExceeded
         );
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM private_xml WHERE user_id=$1")
             .bind(user_id)
-            .fetch_one(&pool)
+            .fetch_one(pool)
             .await
             .unwrap();
         assert_eq!(count, 2);
 
         sqlx::query("DELETE FROM private_xml WHERE user_id=$1")
             .bind(user_id)
-            .execute(&pool)
+            .execute(pool)
             .await
             .unwrap();
         let contender_bytes = i64::try_from("<a xmlns='urn:race'>same</a>".len()).unwrap();
@@ -401,13 +670,14 @@ mod tests {
             ("a", "<a xmlns='urn:race'>same</a>"),
             ("b", "<b xmlns='urn:race'>same</b>"),
         ] {
-            let pool = pool.clone();
+            let pool = db.pool.clone();
+            let owner = db.owner.clone();
             let barrier = std::sync::Arc::clone(&barrier);
             tasks.push(tokio::spawn(async move {
                 barrier.wait().await;
                 set_private_xml_batch(
                     &pool,
-                    user_id,
+                    &owner,
                     &[PrivateXmlEntry {
                         element_name: name,
                         element_ns: "urn:race",
@@ -442,7 +712,7 @@ mod tests {
 
         sqlx::query("DELETE FROM private_xml WHERE user_id=$1")
             .bind(user_id)
-            .execute(&pool)
+            .execute(pool)
             .await
             .unwrap();
         let bookmark_config = crate::default_pep_node_config("urn:xmpp:bookmarks:1");
@@ -455,7 +725,7 @@ mod tests {
         };
         let mut old_items = vec![("old@conference.test".to_owned(), old_item.to_owned())];
         assert!(replace_bookmarks_and_private_xml(
-            &pool,
+            pool,
             user_id,
             BookmarkCompatibilityWrite {
                 private_entry: PrivateXmlEntry {
@@ -479,7 +749,7 @@ mod tests {
             "<item id='old@conference.test'><conference xmlns='urn:xmpp:bookmarks:1'></conference></item>".to_owned(),
         )];
         let commit = replace_bookmarks_and_private_xml(
-            &pool,
+            pool,
             user_id,
             BookmarkCompatibilityWrite {
                 private_entry: PrivateXmlEntry {
@@ -507,7 +777,7 @@ mod tests {
         let mut new_items = vec![("new@conference.test".to_owned(), new_item.to_owned())];
         assert_eq!(
             replace_bookmarks_and_private_xml(
-                &pool,
+                pool,
                 user_id,
                 BookmarkCompatibilityWrite {
                     private_entry: PrivateXmlEntry {
@@ -528,13 +798,13 @@ mod tests {
             Err(BookmarkCompatibilityFailure::PrivateQuota)
         );
         assert_eq!(
-            get_private_xml(&pool, user_id, "storage", "storage:bookmarks")
+            get_private_xml(pool, user_id, "storage", "storage:bookmarks")
                 .await
                 .unwrap()
                 .as_deref(),
             Some(old_private)
         );
-        let items = crate::pep_items(&pool, user_id, "urn:xmpp:bookmarks:1", None, 10)
+        let items = crate::pep_items(pool, user_id, "urn:xmpp:bookmarks:1", None, 10)
             .await
             .unwrap();
         assert_eq!(
@@ -542,86 +812,327 @@ mod tests {
             vec![("old@conference.test".to_owned(), old_item.to_owned())]
         );
 
-        sqlx::query("DELETE FROM users WHERE id=$1")
-            .bind(user_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        pool.close().await;
-        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
+        db.cleanup().await;
     }
-}
 
-mod application_repository {
-    use anyhow::Result;
-    use northstar_pubsub_application::private_storage::{
-        LegacyBookmarkSnapshot, PrivateStorageRepository, PrivateXmlEntry, PrivateXmlWriteOutcome,
-        BOOKMARKS2, LEGACY_BOOKMARKS,
-    };
-    use sqlx::PgPool;
-    use uuid::Uuid;
-    #[derive(Clone)]
-    pub struct PostgresPrivateStorageRepository {
-        pool: PgPool,
-    }
-    impl PostgresPrivateStorageRepository {
-        pub fn new(pool: PgPool) -> Self {
-            Self { pool }
+    const PRIVATE_NAMESPACE: &str = "urn:example:private";
+    const PRIVATE_QUOTA: i64 = 1024;
+
+    fn entry<'a>(name: &'a str, namespace: &'a str, xml: &'a str) -> PrivateXmlEntry<'a> {
+        PrivateXmlEntry {
+            element_name: name,
+            element_ns: namespace,
+            xml_data: xml,
         }
     }
-    impl PrivateStorageRepository for PostgresPrivateStorageRepository {
-        async fn get(
-            &self,
-            owner_id: Uuid,
-            element_name: &str,
-            element_ns: &str,
-        ) -> Result<Option<String>> {
-            crate::get_private_xml(&self.pool, owner_id, element_name, element_ns).await
-        }
-        async fn legacy_bookmark_snapshot(&self, owner_id: Uuid) -> Result<LegacyBookmarkSnapshot> {
-            let snapshot = crate::legacy_bookmark_snapshot(
-                &self.pool,
-                owner_id,
-                LEGACY_BOOKMARKS,
-                BOOKMARKS2,
-                i64::from(crate::PEP_MAX_ITEMS),
-            )
-            .await?;
-            Ok(LegacyBookmarkSnapshot {
-                private_xml: snapshot.private_xml,
-                modern_node_exists: snapshot.modern_node_exists,
-                modern_items: snapshot.modern_items,
-            })
-        }
-        async fn set_batch(
-            &self,
-            owner_id: Uuid,
-            entries: &[PrivateXmlEntry<'_>],
-            max_bytes: i64,
-        ) -> Result<PrivateXmlWriteOutcome> {
-            let entries = entries
-                .iter()
-                .map(|entry| crate::PrivateXmlEntry {
-                    element_name: entry.element_name,
-                    element_ns: entry.element_ns,
-                    xml_data: entry.xml_data,
-                })
-                .collect::<Vec<_>>();
-            Ok(
-                match crate::set_private_xml_batch(&self.pool, owner_id, &entries, max_bytes)
-                    .await?
-                {
-                    crate::PrivateXmlWriteOutcome::Stored => PrivateXmlWriteOutcome::Stored,
-                    crate::PrivateXmlWriteOutcome::QuotaExceeded => {
-                        PrivateXmlWriteOutcome::QuotaExceeded
-                    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
+    async fn private_xml_read_batch_sees_one_revision_during_set() {
+        let db = PrivateXmlDatabase::new().await;
+        let old = [
+            entry(
+                "one",
+                PRIVATE_NAMESPACE,
+                "<one xmlns='urn:example:private'>old</one>",
+            ),
+            entry(
+                "two",
+                PRIVATE_NAMESPACE,
+                "<two xmlns='urn:example:private'>old</two>",
+            ),
+        ];
+        let new = [
+            entry(
+                "one",
+                PRIVATE_NAMESPACE,
+                "<one xmlns='urn:example:private'>new</one>",
+            ),
+            entry(
+                "two",
+                PRIVATE_NAMESPACE,
+                "<two xmlns='urn:example:private'>new</two>",
+            ),
+        ];
+        assert_eq!(
+            set_private_xml_batch(&db.pool, &db.owner, &old, PRIVATE_QUOTA)
+                .await
+                .unwrap(),
+            PrivateXmlWriteOutcome::Stored,
+        );
+
+        // Shadow the real table only on the reader. Pause after reading "one"
+        // so a split read would start its "two" query after the writer commits.
+        sqlx::query("CREATE TABLE private_read_pause (id INTEGER)")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE FUNCTION pause_private_read(row_xml TEXT) RETURNS TEXT LANGUAGE plpgsql VOLATILE AS $$
+             BEGIN
+                 PERFORM 1 FROM private_read_pause;
+                 RETURN row_xml;
+             END;
+             $$",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let (application_name, reader) = db.named_pool("ordinary", false).await;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE TEMP VIEW private_xml AS
+             SELECT user_id, element_name, element_ns,
+                    CASE WHEN element_name = 'one' THEN {schema}.pause_private_read(xml_data)
+                         ELSE xml_data END AS xml_data
+               FROM {schema}.private_xml",
+            schema = db.schema,
+        )))
+        .execute(&reader)
+        .await
+        .unwrap();
+        let mut blocker = db.pool.begin().await.unwrap();
+        sqlx::query("LOCK TABLE private_read_pause IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await
+            .unwrap();
+        let owner_id = db.owner.id;
+        let repository = PostgresPrivateStorageRepository::new(reader.clone());
+        let task = tokio::spawn(async move {
+            repository
+                .read_batch(owner_id, PRIVATE_NAMESPACE, &["one", "two"])
+                .await
+                .unwrap()
+        });
+        wait_for_named_session_lock(&db.pool, &application_name).await;
+        assert_eq!(
+            set_private_xml_batch(&db.pool, &db.owner, &new, PRIVATE_QUOTA)
+                .await
+                .unwrap(),
+            PrivateXmlWriteOutcome::Stored,
+        );
+        blocker.commit().await.unwrap();
+
+        let old_entries = old.map(|entry| PrivateXmlReadEntry::Stored(entry.xml_data.to_owned()));
+        assert_eq!(task.await.unwrap().as_slice(), &old_entries);
+        let new_entries = new.map(|entry| PrivateXmlReadEntry::Stored(entry.xml_data.to_owned()));
+        assert_eq!(
+            PostgresPrivateStorageRepository::new(reader.clone())
+                .read_batch(owner_id, PRIVATE_NAMESPACE, &["one", "two"])
+                .await
+                .unwrap()
+                .as_slice(),
+            &new_entries,
+        );
+        reader.close().await;
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
+    async fn private_xml_read_batch_shares_the_legacy_bookmark_revision() {
+        let db = PrivateXmlDatabase::new().await;
+        let owner_id = db.owner.id;
+        let old_prefs = "<prefs xmlns='storage:bookmarks'>old</prefs>";
+        let old_storage =
+            "<storage xmlns='storage:bookmarks'><url url='https://old.test'/></storage>";
+        let room = "room@conference.test";
+        let old_item = "<item id='room@conference.test'><conference xmlns='urn:xmpp:bookmarks:1' name='old'/></item>";
+        let new_item = "<item id='room@conference.test'><conference xmlns='urn:xmpp:bookmarks:1' name='new'/></item>";
+        let mut items = vec![(room.to_owned(), old_item.to_owned())];
+        assert!(replace_bookmarks_and_private_xml(
+            &db.pool,
+            owner_id,
+            BookmarkCompatibilityWrite {
+                private_entry: entry("storage", LEGACY_BOOKMARKS, old_storage),
+                max_private_bytes: PRIVATE_QUOTA,
+                bookmark_node: BOOKMARKS2,
+                bookmark_config: &crate::default_pep_node_config(BOOKMARKS2),
+                bookmark_items: &mut items,
+                pep_quotas: crate::PepQuotas {
+                    max_nodes: 10,
+                    max_storage_bytes: 1_000_000,
                 },
+                expected_previous_items: None,
+            },
+        )
+        .await
+        .unwrap()
+        .is_ok());
+        assert_eq!(
+            set_private_xml_batch(
+                &db.pool,
+                &db.owner,
+                &[entry("prefs", LEGACY_BOOKMARKS, old_prefs)],
+                PRIVATE_QUOTA,
             )
+            .await
+            .unwrap(),
+            PrivateXmlWriteOutcome::Stored,
+        );
+
+        let (application_name, reader) = db.named_pool("legacy", false).await;
+        let mut blocker = db.pool.begin().await.unwrap();
+        sqlx::query("LOCK TABLE pep_items IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await
+            .unwrap();
+        let repository = PostgresPrivateStorageRepository::new(reader.clone());
+        let task = tokio::spawn(async move {
+            repository
+                .read_batch(owner_id, LEGACY_BOOKMARKS, &["storage", "prefs", "storage"])
+                .await
+                .unwrap()
+        });
+        wait_for_named_session_lock(&db.pool, &application_name).await;
+        // Commit both bookmark representations under the table lock. Change
+        // the ordinary sibling in the same transaction to expose split reads.
+        let updated = sqlx::query(
+            "UPDATE pep_items SET payload = $1 WHERE owner_id = $2 AND node = $3 AND item_id = $4",
+        )
+        .bind(new_item)
+        .bind(owner_id)
+        .bind(BOOKMARKS2)
+        .bind(room)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+        assert_eq!(updated.rows_affected(), 1);
+        let new_storage =
+            "<storage xmlns='storage:bookmarks'><url url='https://new.test'/></storage>";
+        let new_prefs = "<prefs xmlns='storage:bookmarks'>new</prefs>";
+        assert_eq!(
+            set_private_xml_batch_in_transaction(
+                &mut blocker,
+                owner_id,
+                &[
+                    entry("storage", LEGACY_BOOKMARKS, new_storage),
+                    entry("prefs", LEGACY_BOOKMARKS, new_prefs),
+                ],
+                PRIVATE_QUOTA,
+            )
+            .await
+            .unwrap(),
+            PrivateXmlWriteOutcome::Stored,
+        );
+        blocker.commit().await.unwrap();
+
+        let legacy = PrivateXmlReadEntry::LegacyBookmarks(ApplicationBookmarkSnapshot {
+            private_xml: Some(old_storage.to_owned()),
+            modern_node_exists: true,
+            modern_items: vec![(room.to_owned(), old_item.to_owned())],
+        });
+        assert_eq!(
+            task.await.unwrap(),
+            vec![
+                legacy.clone(),
+                PrivateXmlReadEntry::Stored(old_prefs.to_owned()),
+                legacy,
+            ],
+        );
+        reader.close().await;
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
+    async fn private_xml_set_rejects_authority_lost_while_waiting_for_the_account_lock() {
+        let db = PrivateXmlDatabase::new().await;
+        let mut owner = db.owner.clone();
+        let (application_name, writer) = db.named_pool("set", false).await;
+        let service = PrivateStorageService::new(
+            PostgresPrivateStorageRepository::new(writer.clone()),
+            100,
+            8_000_000,
+        );
+        for revoke in [
+            "UPDATE users SET auth_generation = auth_generation + 1 WHERE id = $1 RETURNING auth_generation",
+            "UPDATE users SET is_disabled = TRUE WHERE id = $1 RETURNING auth_generation",
+        ] {
+            let mut blocker = db.pool.begin().await.unwrap();
+            lock_private_xml_owner(&mut blocker, owner.id).await.unwrap();
+            let captured_owner = owner.clone();
+            let service = service.clone();
+            let task = tokio::spawn(async move {
+                service
+                    .set_batch(
+                        &captured_owner,
+                        &[ApplicationXmlEntry {
+                            element_name: "prefs",
+                            element_ns: PRIVATE_NAMESPACE,
+                            xml_data: "<prefs xmlns='urn:example:private'/>",
+                        }],
+                    )
+                    .await
+                    .unwrap()
+            });
+            wait_for_named_session_lock(&db.pool, &application_name).await;
+            owner.auth_generation = sqlx::query_scalar(revoke)
+                .bind(owner.id)
+                .fetch_one(&mut *blocker)
+                .await
+                .unwrap();
+            blocker.commit().await.unwrap();
+
+            assert_eq!(task.await.unwrap(), ApplicationWriteOutcome::StaleAuthority);
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM private_xml WHERE user_id = $1")
+                .bind(owner.id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+            assert_eq!(count, 0);
         }
+        writer.close().await;
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
+    async fn private_xml_read_batch_succeeds_on_a_read_only_connection() {
+        let db = PrivateXmlDatabase::new().await;
+        let prefs = "<prefs xmlns='storage:bookmarks'/>";
+        let storage = "<storage xmlns='storage:bookmarks'/>";
+        assert_eq!(
+            set_private_xml_batch(
+                &db.pool,
+                &db.owner,
+                &[
+                    entry("prefs", LEGACY_BOOKMARKS, prefs),
+                    entry("storage", LEGACY_BOOKMARKS, storage),
+                ],
+                PRIVATE_QUOTA,
+            )
+            .await
+            .unwrap(),
+            PrivateXmlWriteOutcome::Stored,
+        );
+        let (_, reader) = db.named_pool("readonly", true).await;
+        let read_only: String = sqlx::query_scalar("SHOW default_transaction_read_only")
+            .fetch_one(&reader)
+            .await
+            .unwrap();
+        assert_eq!(read_only, "on");
+        let entries = PostgresPrivateStorageRepository::new(reader.clone())
+            .read_batch(
+                db.owner.id,
+                LEGACY_BOOKMARKS,
+                &["prefs", "storage", "absent", "prefs"],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            entries,
+            vec![
+                PrivateXmlReadEntry::Stored(prefs.to_owned()),
+                PrivateXmlReadEntry::LegacyBookmarks(ApplicationBookmarkSnapshot {
+                    private_xml: Some(storage.to_owned()),
+                    modern_node_exists: false,
+                    modern_items: Vec::new(),
+                }),
+                PrivateXmlReadEntry::Absent,
+                PrivateXmlReadEntry::Stored(prefs.to_owned()),
+            ],
+        );
+        reader.close().await;
+        db.cleanup().await;
     }
 }
-pub use application_repository::PostgresPrivateStorageRepository;

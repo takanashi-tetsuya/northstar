@@ -3,7 +3,7 @@
 use anyhow::Result;
 use northstar_pubsub_application::private_storage::{
     LegacyBookmarkSnapshot, PrivateStorageRepository, PrivateStorageService, PrivateXmlEntry,
-    PrivateXmlWriteOutcome, MAX_BOOKMARK_ITEMS,
+    PrivateXmlReadEntry, PrivateXmlWriteOutcome, BOOKMARKS2, LEGACY_BOOKMARKS, MAX_BOOKMARK_ITEMS,
 };
 use northstar_pubsub_application::{
     plan_pep_bookmark_event, PepBookmarkEventPlan, PepCommitLegacyBookmarksCommand, PubSubService,
@@ -17,8 +17,6 @@ use northstar_xmpp_types::jid::CanonicalJid;
 use roxmltree::Node;
 use std::collections::{HashMap, HashSet};
 
-const LEGACY_BOOKMARKS: &str = "storage:bookmarks";
-const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
 const PRIVATE_XML: &str = "jabber:iq:private";
 const PRIVATE_XML_MAX_ITEM_BYTES: usize = 512 * 1024;
 const PRIVATE_XML_MAX_REQUEST_BYTES: usize = 1024 * 1024;
@@ -124,20 +122,29 @@ pub async fn private_get<S: PrivateXmlSession>(
         return Ok(iq_error(id, "bad-request"));
     }
 
+    let element_names = children
+        .iter()
+        .map(|child| child.tag_name().name())
+        .collect::<Vec<_>>();
+    let entries = session
+        .private_storage_service()
+        .read_batch(user.id, namespace, &element_names)
+        .await?;
+    private_get_result(id, namespace, &element_names, entries)
+}
+
+fn private_get_result(
+    id: &str,
+    namespace: &str,
+    element_names: &[&str],
+    entries: Vec<PrivateXmlReadEntry>,
+) -> Result<String> {
     let mut response = XmlElement::namespaced("query", PRIVATE_XML);
-    for child in children {
-        let name = child.tag_name().name();
-        let xml_data = if name == "storage" && namespace == LEGACY_BOOKMARKS {
-            let snapshot = session
-                .private_storage_service()
-                .legacy_bookmark_snapshot(user.id)
-                .await?;
-            modern_bookmarks_as_legacy(snapshot)?
-        } else {
-            session
-                .private_storage_service()
-                .get(user.id, name, namespace)
-                .await?
+    for (name, entry) in element_names.iter().copied().zip(entries) {
+        let xml_data = match entry {
+            PrivateXmlReadEntry::Stored(xml) => Some(xml),
+            PrivateXmlReadEntry::Absent => None,
+            PrivateXmlReadEntry::LegacyBookmarks(snapshot) => modern_bookmarks_as_legacy(snapshot)?,
         };
         if let Some(data) = xml_data {
             response.push_validated_fragment(&data)?;
@@ -260,16 +267,19 @@ pub async fn private_set<S: PrivateXmlSession>(
             xml_data: &raw[child.range()],
         })
         .collect::<Vec<_>>();
-    if session
+    let outcome = session
         .private_storage_service()
-        .set_batch(user.id, &entries)
-        .await?
-        == PrivateXmlWriteOutcome::QuotaExceeded
-    {
-        return Ok(iq_error(id, "resource-constraint"));
-    }
+        .set_batch(&user, &entries)
+        .await?;
+    Ok(private_set_result(id, outcome))
+}
 
-    Ok(iq_result(id, ""))
+fn private_set_result(id: &str, outcome: PrivateXmlWriteOutcome) -> String {
+    match outcome {
+        PrivateXmlWriteOutcome::Stored => iq_result(id, ""),
+        PrivateXmlWriteOutcome::QuotaExceeded => iq_error(id, "resource-constraint"),
+        PrivateXmlWriteOutcome::StaleAuthority => iq_error(id, "not-authorized"),
+    }
 }
 
 fn bookmark_event_fragment(plan: &PepBookmarkEventPlan<'_>) -> Result<String> {
@@ -545,6 +555,66 @@ fn legacy_url_bookmarks(storage: &str) -> String {
 mod tests {
     use super::*;
     use roxmltree::Document;
+
+    #[test]
+    fn private_xml_get_preserves_order_duplicates_and_absent_elements() {
+        let second = "<second xmlns='urn:example:prefs'>two</second>";
+        let first = "<first xmlns='urn:example:prefs'>one</first>";
+        let reply = private_get_result(
+            "batch",
+            "urn:example:prefs",
+            &["second", "missing", "first", "second"],
+            vec![
+                PrivateXmlReadEntry::Stored(second.to_owned()),
+                PrivateXmlReadEntry::Absent,
+                PrivateXmlReadEntry::Stored(first.to_owned()),
+                PrivateXmlReadEntry::Stored(second.to_owned()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            reply,
+            iq_result(
+                "batch",
+                &format!(
+                    "<query xmlns='jabber:iq:private'>{second}<missing xmlns='urn:example:prefs'/>{first}{second}</query>"
+                ),
+            ),
+        );
+    }
+
+    #[test]
+    fn private_xml_get_falls_back_to_stored_legacy_bookmarks() {
+        let stored =
+            "<storage xmlns='storage:bookmarks'><conference jid='room@conference.test'/></storage>";
+        let reply = private_get_result(
+            "bookmarks",
+            LEGACY_BOOKMARKS,
+            &["storage"],
+            vec![PrivateXmlReadEntry::LegacyBookmarks(
+                LegacyBookmarkSnapshot {
+                    private_xml: Some(stored.to_owned()),
+                    modern_node_exists: false,
+                    modern_items: Vec::new(),
+                },
+            )],
+        )
+        .unwrap();
+        assert_eq!(
+            reply,
+            iq_result(
+                "bookmarks",
+                &format!("<query xmlns='jabber:iq:private'>{stored}</query>"),
+            ),
+        );
+    }
+
+    #[test]
+    fn private_xml_set_stale_authority_uses_the_unauthenticated_error() {
+        let reply = private_set_result("set", PrivateXmlWriteOutcome::StaleAuthority);
+        assert_eq!(reply, iq_error("set", "not-authorized"));
+        assert!(reply.contains("<error type='auth'>"));
+    }
 
     #[test]
     fn legacy_bookmarks_convert_without_leaking_url_entries() {

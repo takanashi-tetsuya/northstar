@@ -197,6 +197,7 @@ impl From<crate::PepCreateOutcome> for PepCreateOutcome {
             crate::PepCreateOutcome::Created => Self::Created,
             crate::PepCreateOutcome::Conflict => Self::Conflict,
             crate::PepCreateOutcome::QuotaExceeded => Self::QuotaExceeded,
+            crate::PepCreateOutcome::StaleAuthority => Self::StaleAuthority,
         }
     }
 }

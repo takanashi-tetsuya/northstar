@@ -26,11 +26,6 @@ impl PepNodeQueryRepository for PostgresPubSubRepository {
         .await;
         outcome.map_err(map_database_busy)
     }
-    async fn pep_nodes(&self, owner_id: Uuid) -> Result<Vec<String>> {
-        let outcome: Result<_> =
-            async { northstar_pubsub_postgres::pep_nodes(&self.pool, owner_id).await }.await;
-        outcome.map_err(map_database_busy)
-    }
     async fn find_enabled_user(&self, username: &str) -> Result<Option<PubSubAccount>> {
         let outcome: Result<_> = async {
             Ok(
@@ -61,14 +56,14 @@ impl PepNodeQueryRepository for PostgresPubSubRepository {
         .await;
         outcome.map_err(map_database_busy)
     }
-    async fn roster_group_allowed(
+    async fn roster_matching_groups(
         &self,
         owner_id: Uuid,
         jid: &str,
         groups: &[String],
-    ) -> Result<bool> {
+    ) -> Result<Vec<String>> {
         let outcome: Result<_> = async {
-            crate::pep_roster::roster_group_allowed(&self.pool, owner_id, jid, groups).await
+            crate::pep_roster::roster_matching_groups(&self.pool, owner_id, jid, groups).await
         }
         .await;
         outcome.map_err(map_database_busy)
@@ -77,7 +72,7 @@ impl PepNodeQueryRepository for PostgresPubSubRepository {
 impl PepNodeMutationRepository for PostgresPubSubRepository {
     async fn create_pep_node(
         &self,
-        owner_id: Uuid,
+        owner: &PubSubAccount,
         node: &str,
         config: &PepNodeConfig,
         max_nodes: i64,
@@ -85,7 +80,7 @@ impl PepNodeMutationRepository for PostgresPubSubRepository {
         let outcome: Result<_> = async {
             let config = northstar_pubsub_postgres::PepNodeConfig::from(config);
             Ok(northstar_pubsub_postgres::create_pep_node(
-                &self.pool, owner_id, node, &config, max_nodes,
+                &self.pool, owner, node, &config, max_nodes,
             )
             .await?
             .into())
@@ -255,20 +250,6 @@ impl PepItemQueryRepository for PostgresPubSubRepository {
     ) -> Result<Vec<(String, String)>> {
         let outcome: Result<_> = async {
             northstar_pubsub_postgres::pep_items(&self.pool, owner_id, node, item_id, limit).await
-        }
-        .await;
-        outcome.map_err(map_database_busy)
-    }
-    async fn pep_items_by_ids(
-        &self,
-        owner_id: Uuid,
-        node: &str,
-        item_ids: &[&str],
-        limit: i64,
-    ) -> Result<Vec<(String, String)>> {
-        let outcome: Result<_> = async {
-            northstar_pubsub_postgres::pep_items_by_ids(&self.pool, owner_id, node, item_ids, limit)
-                .await
         }
         .await;
         outcome.map_err(map_database_busy)

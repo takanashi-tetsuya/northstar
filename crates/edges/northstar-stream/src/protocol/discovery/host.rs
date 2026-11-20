@@ -3,9 +3,9 @@
 use crate::protocol::{ProtocolSession, SessionHost};
 use anyhow::Result;
 use northstar_pubsub_application::{
-    PepNodeQueryRepository, PubSubDiscoverySnapshotRepository, PubSubService,
+    PepNodeQueryRepository, PepSnapshotRepository, PubSubDiscoverySnapshotRepository, PubSubService,
 };
-use northstar_pubsub_core::{PubSubAccount, PubSubNode, PubSubNodeMetadata};
+use northstar_pubsub_core::{PubSubNode, PubSubNodeMetadata};
 use northstar_room_application::muc_service::{MucRepository, MucService, SerializableMucOccupant};
 use roxmltree::Node;
 use std::future::Future;
@@ -20,7 +20,9 @@ pub enum PubSubDiscoItemsReply {
 /// adapters depend on stream, so the composition root binds their calls here.
 pub trait DiscoveryHost: SessionHost {
     type MucStore: MucRepository;
-    type PubSubStore: PubSubDiscoverySnapshotRepository + PepNodeQueryRepository;
+    type PubSubStore: PubSubDiscoverySnapshotRepository
+        + PepNodeQueryRepository
+        + PepSnapshotRepository;
 
     fn muc_service(&self) -> &MucService<Self::MucStore>;
     fn pubsub_service(&self) -> &PubSubService<Self::PubSubStore>;
@@ -52,14 +54,6 @@ pub trait DiscoveryHost: SessionHost {
         requester: &str,
         request: Node<'_, '_>,
     ) -> impl Future<Output = Result<PubSubDiscoItemsReply>> + Send;
-    fn pep_access_allowed(
-        &self,
-        owner: &PubSubAccount,
-        domain: &str,
-        node: &str,
-        requester: &str,
-    ) -> impl Future<Output = Result<bool>> + Send;
-
     fn is_command(node: &str) -> bool;
     fn commands_available_to(
         session: &ProtocolSession<Self>,

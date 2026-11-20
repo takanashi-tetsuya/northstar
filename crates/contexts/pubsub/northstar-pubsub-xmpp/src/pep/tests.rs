@@ -571,3 +571,81 @@ fn vcard4_and_contact_nodes_reject_wrong_payload_shapes() {
         ));
     }
 }
+
+#[test]
+fn c2s_pep_item_read_preserves_error_precedence_and_extensions() {
+    let from = Some("owner@example.test");
+    assert_eq!(
+        c2s_pep_item_rows("read", from, None, PepItemRead::OwnerMissing).unwrap_err(),
+        iq_error("read", "item-not-found"),
+    );
+    assert_eq!(
+        c2s_pep_item_rows("read", from, None, PepItemRead::NodeMissing).unwrap_err(),
+        iq_error_from_optional("read", from, "item-not-found"),
+    );
+    for (reason, extension) in [
+        (
+            PepAccessDenial::PresenceSubscriptionRequired,
+            "presence-subscription-required",
+        ),
+        (PepAccessDenial::NotInRosterGroup, "not-in-roster-group"),
+        (PepAccessDenial::ClosedNode, "closed-node"),
+    ] {
+        let reply = c2s_pep_item_rows("read", from, None, PepItemRead::Denied(reason)).unwrap_err();
+        let doc = Document::parse(&reply).unwrap();
+        let iq = doc.root_element();
+        assert_eq!(iq.attribute("from"), from);
+        let error = iq.first_element_child().unwrap();
+        assert_eq!(error.attribute("type"), Some("auth"));
+        let children = error
+            .children()
+            .filter(Node::is_element)
+            .collect::<Vec<_>>();
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0].tag_name().name(), "not-authorized");
+        assert_eq!(children[1].tag_name().name(), extension);
+        assert_eq!(
+            children[1].tag_name().namespace(),
+            Some("http://jabber.org/protocol/pubsub#errors")
+        );
+    }
+
+    let no_items = || PepItemRead::Items {
+        config: northstar_pubsub_core::default_pep_node_config("news"),
+        items: Vec::new(),
+    };
+    assert_eq!(
+        c2s_pep_item_rows("read", from, None, no_items()).unwrap_err(),
+        iq_error_from_optional("read", from, "bad-request"),
+    );
+    let selected = PepItemSelection {
+        item_ids: vec!["missing".to_owned()],
+        max_items: 1,
+    };
+    assert_eq!(
+        c2s_pep_item_rows("read", from, Some(&selected), no_items()).unwrap_err(),
+        iq_error_from_optional("read", from, "item-not-found"),
+    );
+    let latest = PepItemSelection {
+        item_ids: Vec::new(),
+        max_items: 1,
+    };
+    assert!(c2s_pep_item_rows("read", from, Some(&latest), no_items())
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn c2s_pep_item_selection_canonicalizes_profile_ids_before_rejecting_duplicates() {
+    let xml = "<items xmlns='http://jabber.org/protocol/pubsub' subid='ignored' max_items='999'><item id='Room@BÜCHER.example'/></items>";
+    let doc = Document::parse(xml).unwrap();
+    let selection = parse_pep_item_selection(doc.root_element(), Some(BOOKMARKS2)).unwrap();
+    assert_eq!(selection.item_ids, ["room@bücher.example"]);
+    assert_eq!(selection.max_items, i64::from(PEP_MAX_ITEMS));
+    let duplicate = xml.replace(
+        "</items>",
+        "<item id='room@xn--bcher-kva.example'/></items>",
+    );
+    let doc = Document::parse(&duplicate).unwrap();
+    assert!(parse_pep_item_selection(doc.root_element(), Some(BOOKMARKS2)).is_none());
+}

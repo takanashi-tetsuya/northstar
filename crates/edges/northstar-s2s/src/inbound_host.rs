@@ -2,7 +2,6 @@
 
 use anyhow::Result;
 use northstar_pubsub_application::profile::PublicVCard;
-use northstar_pubsub_core::PubSubAccount;
 use northstar_roster_core::PresenceAccount;
 use northstar_stream::local_routes::session::OnlineSession;
 use roxmltree::Node;
@@ -150,10 +149,6 @@ pub trait InboundHost: Send + Sync + 'static {
     ) -> impl Future<Output = bool> + Send;
 
     fn public_vcard(&self, username: &str) -> impl Future<Output = Result<PublicVCard>> + Send;
-    fn find_enabled_pubsub_user(
-        &self,
-        username: &str,
-    ) -> impl Future<Output = Result<Option<PubSubAccount>>> + Send;
     fn handle_pubsub_request(
         &self,
         from: &str,
@@ -180,13 +175,13 @@ pub trait InboundHost: Send + Sync + 'static {
     ) -> impl Future<Output = Result<String>> + Send;
     fn pep_disco_info(
         &self,
-        owner: &PubSubAccount,
+        owner_username: &str,
         from: &str,
         node: Option<&str>,
     ) -> impl Future<Output = Result<Option<String>>> + Send;
     fn pep_disco_items(
         &self,
-        owner: &PubSubAccount,
+        owner_username: &str,
         from: &str,
         node: Option<&str>,
     ) -> impl Future<Output = Result<Option<String>>> + Send;

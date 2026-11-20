@@ -3,7 +3,7 @@
 use crate::node::ServerNode;
 use anyhow::Result;
 use northstar_pubsub_application::PubSubService;
-use northstar_pubsub_core::{PubSubAccount, PubSubNode, PubSubNodeMetadata};
+use northstar_pubsub_core::{PubSubNode, PubSubNodeMetadata};
 use northstar_room_application::muc_service::{MucService, SerializableMucOccupant};
 use northstar_stream::protocol::discovery::{DiscoveryHost, PubSubDiscoItemsReply};
 use northstar_stream::protocol::ProtocolSession;
@@ -90,23 +90,6 @@ impl DiscoveryHost for ServerNode {
         request: Node<'_, '_>,
     ) -> Result<PubSubDiscoItemsReply> {
         northstar_pubsub_xmpp::pubsub::disco_items_reply(self, requester, request).await
-    }
-
-    async fn pep_access_allowed(
-        &self,
-        owner: &PubSubAccount,
-        domain: &str,
-        node: &str,
-        requester: &str,
-    ) -> Result<bool> {
-        northstar_pubsub_xmpp::pep::pep_access_allowed(
-            self.pubsub.pubsub_service(),
-            owner,
-            domain,
-            node,
-            requester,
-        )
-        .await
     }
 
     fn is_command(node: &str) -> bool {

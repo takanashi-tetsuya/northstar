@@ -82,9 +82,14 @@ async fn bookmarks2_outbox_uses_locked_item_diff_after_lock_wait() {
     .fetch_one(&pool)
     .await
     .unwrap();
+    let owner = northstar_pubsub_core::PubSubAccount {
+        id: owner_id,
+        username: username.clone(),
+        auth_generation,
+    };
     let config = northstar_pubsub_postgres::default_pep_node_config(NODE);
     assert_eq!(
-        northstar_pubsub_postgres::create_pep_node(&pool, owner_id, NODE, &config, 10)
+        northstar_pubsub_postgres::create_pep_node(&pool, &owner, NODE, &config, 10)
             .await
             .unwrap(),
         northstar_pubsub_postgres::PepCreateOutcome::Created
@@ -256,7 +261,7 @@ async fn legacy_bookmark_commit_conflict_is_atomic_and_success_uses_locked_diff(
     };
     let config = northstar_pubsub_postgres::default_pep_node_config(NODE);
     assert_eq!(
-        northstar_pubsub_postgres::create_pep_node(&pool, owner_id, NODE, &config, 10)
+        northstar_pubsub_postgres::create_pep_node(&pool, &owner, NODE, &config, 10)
             .await
             .unwrap(),
         northstar_pubsub_postgres::PepCreateOutcome::Created

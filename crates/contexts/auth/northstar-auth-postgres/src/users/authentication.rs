@@ -79,7 +79,10 @@ pub async fn find_user(pool: &PgPool, username: &str) -> Result<Option<User>> {
 /// Least-authority local routing lookup. Disabled accounts are deliberately
 /// indistinguishable from missing accounts and no password/SCRAM verifier is
 /// loaded into the application service performing the route decision.
-pub async fn find_enabled_user(pool: &PgPool, username: &str) -> Result<Option<EnabledUser>> {
+pub async fn find_enabled_user<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    username: &str,
+) -> Result<Option<EnabledUser>> {
     let Ok(username) = auth::normalize_username(username) else {
         return Ok(None);
     };
@@ -88,7 +91,7 @@ pub async fn find_enabled_user(pool: &PgPool, username: &str) -> Result<Option<E
            FROM users WHERE username=$1 AND NOT is_disabled",
     )
     .bind(username)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?
     .map(|row| EnabledUser {
         id: row.get("id"),

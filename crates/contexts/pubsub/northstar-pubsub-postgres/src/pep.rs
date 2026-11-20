@@ -1,4 +1,5 @@
 use anyhow::Result;
+use northstar_pubsub_core::PubSubAccount;
 use northstar_time::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -15,29 +16,6 @@ pub struct PepNodeConfig {
     pub deliver_notifications: bool,
     pub roster_groups_allowed: Vec<String>,
     pub access_whitelist: Vec<String>,
-}
-
-pub async fn pep_node<'e>(
-    executor: impl sqlx::Executor<'e, Database = Postgres>,
-    owner_id: Uuid,
-    node: &str,
-) -> Result<Option<PepNodeConfig>> {
-    let row = sqlx::query(
-        "SELECT access_model, max_items, persist_items, send_last_published_item, deliver_notifications, roster_groups_allowed, access_whitelist FROM pep_nodes WHERE owner_id = $1 AND node = $2",
-    )
-    .bind(owner_id)
-    .bind(node)
-    .fetch_optional(executor)
-    .await?;
-    Ok(row.map(|row| PepNodeConfig {
-        access_model: row.get("access_model"),
-        max_items: row.get("max_items"),
-        persist_items: row.get("persist_items"),
-        send_last_published_item: row.get("send_last_published_item"),
-        deliver_notifications: row.get("deliver_notifications"),
-        roster_groups_allowed: row.get("roster_groups_allowed"),
-        access_whitelist: row.get("access_whitelist"),
-    }))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,6 +37,7 @@ pub enum PepCreateOutcome {
     Created,
     Conflict,
     QuotaExceeded,
+    StaleAuthority,
 }
 
 #[derive(Clone, Debug)]
@@ -81,18 +60,43 @@ pub struct PepItem {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Revalidate the captured owner after taking the PEP owner advisory lock.
+pub async fn lock_pep_owner_account(
+    transaction: &mut Transaction<'_, Postgres>,
+    owner: &PubSubAccount,
+) -> Result<Option<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT username FROM users
+          WHERE id=$1 AND username=$2 AND auth_generation=$3 AND NOT is_disabled
+          FOR SHARE",
+    )
+    .bind(owner.id)
+    .bind(&owner.username)
+    .bind(owner.auth_generation)
+    .fetch_optional(&mut **transaction)
+    .await?)
+}
+
 pub async fn create_pep_node(
     pool: &PgPool,
-    owner_id: Uuid,
+    owner: &PubSubAccount,
     node: &str,
     config: &PepNodeConfig,
     max_nodes: i64,
 ) -> Result<PepCreateOutcome> {
     let mut transaction = super::pubsub::begin_bounded_pubsub_mutation(pool).await?;
+    let owner_id = owner.id;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::TEXT, 2))")
         .bind(owner_id.to_string())
         .execute(&mut *transaction)
         .await?;
+    if lock_pep_owner_account(&mut transaction, owner)
+        .await?
+        .is_none()
+    {
+        transaction.rollback().await?;
+        return Ok(PepCreateOutcome::StaleAuthority);
+    }
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pep_nodes WHERE owner_id = $1")
         .bind(owner_id)
         .fetch_one(&mut *transaction)
@@ -447,22 +451,6 @@ async fn unsubscribe_pep_nodes_batch_inner(
     super::enqueue_pubsub_outbox_in_transaction(&mut transaction, outbox).await?;
     transaction.commit().await?;
     Ok(true)
-}
-
-pub async fn pep_subscribers(
-    pool: &PgPool,
-    owner_id: Uuid,
-    node: &str,
-) -> Result<Vec<PepSubscription>> {
-    let rows = sqlx::query("SELECT subscriber_jid, subid FROM pep_subscriptions WHERE owner_id=$1 AND node=$2 AND state='subscribed' ORDER BY subscriber_jid LIMIT 10000")
-        .bind(owner_id).bind(node).fetch_all(pool).await?;
-    Ok(rows
-        .iter()
-        .map(|row| PepSubscription {
-            jid: row.get("subscriber_jid"),
-            subid: row.get("subid"),
-        })
-        .collect())
 }
 
 /// Returns explicit subscriptions which should receive a last-item event when
@@ -845,53 +833,8 @@ pub async fn retract_pep_items_with_outbox(
     Ok(Some(result.rows_affected()))
 }
 
-pub async fn pep_nodes(pool: &PgPool, owner_id: Uuid) -> Result<Vec<String>> {
-    let rows = sqlx::query("SELECT node FROM pep_nodes WHERE owner_id = $1 ORDER BY node")
-        .bind(owner_id)
-        .fetch_all(pool)
-        .await?;
-    Ok(rows.iter().map(|r| r.get("node")).collect())
-}
-
 pub fn default_pep_node_config(node: &str) -> PepNodeConfig {
     (&northstar_pubsub_core::default_pep_node_config(node)).into()
-}
-
-pub async fn pep_items<'e>(
-    executor: impl sqlx::Executor<'e, Database = Postgres>,
-    owner_id: Uuid,
-    node: &str,
-    item_id: Option<&str>,
-    limit: i64,
-) -> Result<Vec<(String, String)>> {
-    let rows = sqlx::query("SELECT item_id, payload FROM pep_items WHERE owner_id = $1 AND node = $2 AND ($3::text IS NULL OR item_id = $3) ORDER BY updated_at DESC LIMIT $4")
-        .bind(owner_id).bind(node).bind(item_id).bind(limit.clamp(1, 100)).fetch_all(executor).await?;
-    Ok(rows
-        .iter()
-        .map(|r| (r.get("item_id"), r.get("payload")))
-        .collect())
-}
-
-pub async fn pep_items_by_ids(
-    pool: &PgPool,
-    owner_id: Uuid,
-    node: &str,
-    item_ids: &[&str],
-    limit: i64,
-) -> Result<Vec<(String, String)>> {
-    let rows = sqlx::query(
-        "SELECT item_id, payload FROM pep_items WHERE owner_id=$1 AND node=$2 AND item_id=ANY($3) ORDER BY updated_at DESC, item_id DESC LIMIT $4",
-    )
-    .bind(owner_id)
-    .bind(node)
-    .bind(item_ids)
-    .bind(limit.clamp(1, 100))
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .iter()
-        .map(|row| (row.get("item_id"), row.get("payload")))
-        .collect())
 }
 
 pub async fn pep_items_with_timestamp(

@@ -66,19 +66,29 @@ fn legacy_bookmark_command_requires_valid_owner() {
 
 #[test]
 fn pep_create_command_selects_node_policy_and_rejects_invalid_quota() {
-    let owner_id = Uuid::new_v4();
-    let command = PepCreateNodeCommand::new(owner_id, "urn:xmpp:bookmarks:1", 10);
+    let owner = PubSubAccount {
+        id: Uuid::new_v4(),
+        username: "owner".to_owned(),
+        auth_generation: 7,
+    };
+    let command = PepCreateNodeCommand::new(&owner, "urn:xmpp:bookmarks:1", 10);
     assert!(validate_pep_create_node_command(&command).is_ok());
+    assert_eq!(command.owner.id, owner.id);
+    assert_eq!(command.owner.username, owner.username);
+    assert_eq!(command.owner.auth_generation, owner.auth_generation);
     assert_eq!(command.config.access_model, "whitelist");
     assert_eq!(command.config.send_last_published_item, "never");
     assert!(validate_pep_create_node_command(&PepCreateNodeCommand::new(
-        owner_id,
+        &owner,
         "urn:xmpp:bookmarks:1",
         0,
     ))
     .is_err());
     assert!(validate_pep_create_node_command(&PepCreateNodeCommand::new(
-        Uuid::nil(),
+        &PubSubAccount {
+            id: Uuid::nil(),
+            ..owner
+        },
         "urn:xmpp:bookmarks:1",
         10,
     ))

@@ -13,7 +13,9 @@ use serde::Serialize;
 use uuid::Uuid;
 
 mod item_access;
+mod pep_policy;
 pub mod telemetry;
+pub use pep_policy::*;
 
 pub use item_access::item_retrieval_access;
 
@@ -46,6 +48,7 @@ pub enum PepCreateOutcome {
     Created,
     Conflict,
     QuotaExceeded,
+    StaleAuthority,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

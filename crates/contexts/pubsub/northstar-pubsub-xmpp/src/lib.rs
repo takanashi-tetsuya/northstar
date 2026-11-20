@@ -22,12 +22,13 @@ mod session_host;
 
 use northstar_pubsub_application::{
     PepAffiliationRepository, PepItemMutationRepository, PepItemQueryRepository,
-    PepNodeMutationRepository, PepNodeQueryRepository, PepSubscriptionMutationRepository,
-    PepSubscriptionQueryRepository, PubSubAffiliationMutationRepository,
-    PubSubAffiliationQueryRepository, PubSubDiscoverySnapshotRepository,
-    PubSubItemMutationRepository, PubSubItemQueryRepository, PubSubItemSnapshotRepository,
-    PubSubNodeMutationRepository, PubSubNodeQueryRepository, PubSubRootDiscoveryQueryRepository,
-    PubSubSubscriptionMutationRepository, PubSubSubscriptionQueryRepository,
+    PepNodeMutationRepository, PepNodeQueryRepository, PepSnapshotRepository,
+    PepSubscriptionMutationRepository, PepSubscriptionQueryRepository,
+    PubSubAffiliationMutationRepository, PubSubAffiliationQueryRepository,
+    PubSubDiscoverySnapshotRepository, PubSubItemMutationRepository, PubSubItemQueryRepository,
+    PubSubItemSnapshotRepository, PubSubNodeMutationRepository, PubSubNodeQueryRepository,
+    PubSubRootDiscoveryQueryRepository, PubSubSubscriptionMutationRepository,
+    PubSubSubscriptionQueryRepository,
 };
 
 /// The repository ports the PubSub and PEP handlers reach through the PubSub service.
@@ -44,6 +45,7 @@ pub trait PubSubRepositories:
     + PubSubAffiliationQueryRepository
     + PubSubAffiliationMutationRepository
     + PepNodeQueryRepository
+    + PepSnapshotRepository
     + PepNodeMutationRepository
     + PepItemQueryRepository
     + PepItemMutationRepository
@@ -66,6 +68,7 @@ impl<R> PubSubRepositories for R where
         + PubSubAffiliationQueryRepository
         + PubSubAffiliationMutationRepository
         + PepNodeQueryRepository
+        + PepSnapshotRepository
         + PepNodeMutationRepository
         + PepItemQueryRepository
         + PepItemMutationRepository

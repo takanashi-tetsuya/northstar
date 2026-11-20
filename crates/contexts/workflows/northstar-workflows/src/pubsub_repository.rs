@@ -38,6 +38,7 @@ use uuid::Uuid;
 mod discovery_snapshot_port;
 mod item_snapshot_port;
 mod pep_ports;
+mod pep_snapshot_port;
 mod pubsub_outbox;
 mod pubsub_ports;
 
@@ -557,16 +558,8 @@ impl PostgresPubSubRepository {
             .bind(owner.id.to_string())
             .execute(&mut *transaction)
             .await?;
-        let username = sqlx::query_scalar::<_, String>(
-            "SELECT username FROM users
-              WHERE id=$1 AND username=$2 AND auth_generation=$3 AND NOT is_disabled
-              FOR SHARE",
-        )
-        .bind(owner.id)
-        .bind(&owner.username)
-        .bind(owner.auth_generation)
-        .fetch_optional(&mut *transaction)
-        .await?;
+        let username =
+            northstar_pubsub_postgres::lock_pep_owner_account(&mut transaction, owner).await?;
         let Some(username) = username else {
             transaction.rollback().await?;
             return Ok(None);

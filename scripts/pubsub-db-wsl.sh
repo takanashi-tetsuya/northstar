@@ -305,6 +305,18 @@ run_exact_ignored \
 run_exact_ignored \
   pubsub::integration::bookmarks::legacy_bookmark_commit_conflict_is_atomic_and_success_uses_locked_diff
 run_exact_ignored \
+  pubsub::integration::pep_snapshot::item_read_never_combines_revoked_access_with_a_new_publication
+run_exact_ignored \
+  pubsub::integration::pep_snapshot::node_discovery_cannot_pair_the_old_open_model_with_a_new_unblock
+run_exact_ignored \
+  pubsub::integration::pep_snapshot::owner_subscriptions_do_not_return_empty_for_a_concurrently_deleted_node
+run_exact_ignored \
+  pubsub::integration::pep_snapshot::account_discovery_keeps_candidates_and_visibility_in_one_snapshot
+run_exact_ignored \
+  pubsub::integration::pep_snapshot::create_rechecks_owner_enablement_and_generation_after_the_advisory_wait
+run_exact_ignored \
+  pubsub::integration::pep_snapshot::pep_snapshot_queries_succeed_on_a_read_only_connection
+run_exact_ignored \
   pep_roster::integration_tests::pep_node_subscription_and_item_transitions_are_atomic northstar-workflows
 run_exact_ignored \
   vcard::tests::avatar_conversion_is_atomic_across_pep_and_vcard northstar-pubsub-postgres

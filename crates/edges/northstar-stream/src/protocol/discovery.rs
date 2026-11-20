@@ -1,6 +1,9 @@
 use super::{Action, ProtocolSession};
 use anyhow::Result;
-use northstar_pubsub_application::{PubSubNodeInfo, PubSubNodeInfoQuery};
+use northstar_pubsub_application::{
+    PepAccountItemsRead, PepAccountQuery, PepNodeInfoRead, PepNodeItemsRead, PepNodeQuery,
+    PepRequester, PubSubNodeInfo, PubSubNodeInfoQuery,
+};
 use northstar_room_application::mix_service::{
     CORE_NODES, NODE_ALLOWED, NODE_AVATAR_DATA, NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG,
     NODE_JIDMAP,
@@ -490,19 +493,6 @@ impl<H: DiscoveryHost> ProtocolSession<H> {
         let is_account = target.localpart().is_some()
             && target.resourcepart().is_none()
             && target.domainpart() == self.host().local_domain();
-        let owner = if is_account {
-            let Some(owner) = self
-                .host()
-                .pubsub_service()
-                .find_enabled_user(target.localpart().expect("account localpart checked"))
-                .await?
-            else {
-                return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
-            };
-            Some(owner)
-        } else {
-            None
-        };
         if !is_server && !is_account {
             return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
         }
@@ -520,29 +510,32 @@ impl<H: DiscoveryHost> ProtocolSession<H> {
             }
         }
 
-        if let (Some(owner), Some(node)) = (owner.as_ref(), request.attribute("node")) {
-            let Some(config) = self
-                .host()
-                .pubsub_service()
-                .pep_node(owner.id, node)
-                .await?
-            else {
-                return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
-            };
+        let owner_username = target.localpart().filter(|_| is_account);
+        if let (Some(owner_username), Some(node)) = (owner_username, request.attribute("node")) {
             let requester = self
                 .authenticated
                 .as_ref()
                 .map(|requester| format!("{}@{}", requester.username, self.host().local_domain()));
-            let allowed = if let Some(requester) = requester.as_deref() {
-                self.host()
-                    .pep_access_allowed(owner, self.host().local_domain(), node, requester)
-                    .await?
-            } else {
-                config.access_model == "open"
+            let read = self
+                .host()
+                .pubsub_service()
+                .pep_node_info(&PepNodeQuery {
+                    owner_username,
+                    requester: requester
+                        .as_deref()
+                        .map_or(PepRequester::LocalAnonymous, PepRequester::Jid),
+                    node,
+                })
+                .await?;
+            let config = match read {
+                PepNodeInfoRead::OwnerMissing | PepNodeInfoRead::NodeMissing => {
+                    return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
+                }
+                PepNodeInfoRead::Denied(_) => {
+                    return Ok(Action::Send(iq_error_from(id, from, "forbidden")));
+                }
+                PepNodeInfoRead::Info { config } => config,
             };
-            if !allowed {
-                return Ok(Action::Send(iq_error_from(id, from, "forbidden")));
-            }
             let mut query = disco_info_query(Some(node));
             query.push_child(disco_identity("pubsub", "leaf", None));
             for feature in [
@@ -561,6 +554,16 @@ impl<H: DiscoveryHost> ProtocolSession<H> {
                 ));
             }
             return Ok(Action::Send(iq_result_from(id, from, &query.finish())));
+        }
+        if is_account
+            && self
+                .host()
+                .pubsub_service()
+                .find_enabled_user(target.localpart().expect("account localpart checked"))
+                .await?
+                .is_none()
+        {
+            return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
         }
 
         let mut features = if is_account {
@@ -925,60 +928,47 @@ impl<H: DiscoveryHost> ProtocolSession<H> {
             && target.resourcepart().is_none()
             && target.domainpart() == self.host().local_domain()
         {
-            let Some(owner) = self
-                .host()
-                .pubsub_service()
-                .find_enabled_user(target.localpart().expect("account localpart checked"))
-                .await?
-            else {
-                return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
-            };
+            let owner_username = target.localpart().expect("account localpart checked");
+            let requester = self
+                .authenticated
+                .as_ref()
+                .map(|requester| format!("{}@{}", requester.username, self.host().local_domain()));
+            let requester = requester
+                .as_deref()
+                .map_or(PepRequester::LocalAnonymous, PepRequester::Jid);
             if let Some(node) = requested_node {
-                let Some(config) = self
+                let read = self
                     .host()
                     .pubsub_service()
-                    .pep_node(owner.id, node)
+                    .pep_node_items(&PepNodeQuery {
+                        owner_username,
+                        requester,
+                        node,
+                    })
+                    .await?;
+                match read {
+                    PepNodeItemsRead::OwnerMissing | PepNodeItemsRead::NodeMissing => {
+                        return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
+                    }
+                    PepNodeItemsRead::Denied => {
+                        return Ok(Action::Send(iq_error_from(id, from, "forbidden")));
+                    }
+                    PepNodeItemsRead::Visible => {}
+                }
+            } else {
+                let PepAccountItemsRead::Nodes { nodes, .. } = self
+                    .host()
+                    .pubsub_service()
+                    .pep_account_items(&PepAccountQuery {
+                        owner_username,
+                        requester,
+                    })
                     .await?
                 else {
                     return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
                 };
-                let requester = self.authenticated.as_ref().map(|requester| {
-                    format!("{}@{}", requester.username, self.host().local_domain())
-                });
-                let allowed = if let Some(requester) = requester.as_deref() {
-                    self.host()
-                        .pep_access_allowed(&owner, self.host().local_domain(), node, requester)
-                        .await?
-                } else {
-                    config.access_model == "open"
-                };
-                if !allowed {
-                    return Ok(Action::Send(iq_error_from(id, from, "forbidden")));
-                }
-            } else {
-                let requester = self.authenticated.as_ref().map(|requester| {
-                    format!("{}@{}", requester.username, self.host().local_domain())
-                });
-                for node in self.host().pubsub_service().pep_nodes(owner.id).await? {
-                    let allowed = if let Some(requester) = requester.as_deref() {
-                        self.host()
-                            .pep_access_allowed(
-                                &owner,
-                                self.host().local_domain(),
-                                &node,
-                                requester,
-                            )
-                            .await?
-                    } else {
-                        self.host()
-                            .pubsub_service()
-                            .pep_node(owner.id, &node)
-                            .await?
-                            .is_some_and(|config| config.access_model == "open")
-                    };
-                    if allowed {
-                        query.push_child(pep_disco_item(from, &node));
-                    }
+                for node in nodes {
+                    query.push_child(pep_disco_item(from, &node));
                 }
             }
         } else {

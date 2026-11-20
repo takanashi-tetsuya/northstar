@@ -41,8 +41,8 @@ pub async fn roster(
         .collect())
 }
 
-pub async fn roster_item(
-    pool: &PgPool,
+pub async fn roster_item<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
     owner_id: Uuid,
     jid: &str,
 ) -> Result<Option<(String, Option<String>, String, Option<String>)>> {
@@ -52,7 +52,7 @@ pub async fn roster_item(
     )
     .bind(owner_id)
     .bind(&jid)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
     Ok(row.map(|row| {
         (

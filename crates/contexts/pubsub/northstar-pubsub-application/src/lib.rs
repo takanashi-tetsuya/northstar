@@ -21,6 +21,8 @@ pub mod repository;
 pub use repository::*;
 pub mod item_snapshot;
 pub use item_snapshot::*;
+mod pep_snapshot;
+pub use pep_snapshot::*;
 pub mod private_storage;
 pub mod profile;
 pub mod service;
@@ -126,16 +128,16 @@ pub struct PepSubscribeCommand<'a> {
 }
 
 pub struct PepCreateNodeCommand<'a> {
-    pub owner_id: Uuid,
+    pub owner: &'a PubSubAccount,
     pub node: &'a str,
     pub max_nodes: i64,
     pub config: PepNodeConfig,
 }
 
 impl<'a> PepCreateNodeCommand<'a> {
-    pub fn new(owner_id: Uuid, node: &'a str, max_nodes: i64) -> Self {
+    pub fn new(owner: &'a PubSubAccount, node: &'a str, max_nodes: i64) -> Self {
         Self {
-            owner_id,
+            owner,
             node,
             max_nodes,
             config: northstar_pubsub_core::default_pep_node_config(node),
@@ -710,7 +712,7 @@ impl std::fmt::Display for PepSubscriptionCommandValidationError {
 impl std::error::Error for PepSubscriptionCommandValidationError {}
 
 pub fn validate_pep_create_node_command(command: &PepCreateNodeCommand<'_>) -> Result<()> {
-    if command.owner_id.is_nil() || command.node.trim().is_empty() || command.max_nodes < 1 {
+    if command.owner.id.is_nil() || command.node.trim().is_empty() || command.max_nodes < 1 {
         return Err(anyhow::anyhow!("invalid PEP create command"));
     }
     Ok(())

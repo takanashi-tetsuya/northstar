@@ -146,7 +146,7 @@ pub async fn pep_publish<S: PepSession>(
         return Ok(iq_error(id, "forbidden"));
     }
     if primary.tag_name().name() == "create" {
-        return pep_create(session, id, &user, primary).await;
+        return pep_create(session, id, &user, iq.attribute("to"), primary).await;
     }
     if primary.tag_name().name() == "subscribe" {
         return pep_subscribe(session, id, iq, &user, primary).await;

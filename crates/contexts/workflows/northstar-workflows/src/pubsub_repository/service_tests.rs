@@ -126,12 +126,19 @@ async fn same_owner_advisory_contention_does_not_exhaust_the_shared_pool() {
         .unwrap();
     let owner_id = Uuid::new_v4();
     let username = format!("poolguard{}", &owner_id.simple().to_string()[..10]);
-    sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
+    let auth_generation = sqlx::query_scalar(
+        "INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test') RETURNING auth_generation",
+    )
         .bind(owner_id)
         .bind(&username)
-        .execute(&pool)
+        .fetch_one(&pool)
         .await
         .unwrap();
+    let owner = PubSubAccount {
+        id: owner_id,
+        username,
+        auth_generation,
+    };
 
     let mut blocker = pool.begin().await.unwrap();
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::TEXT, 2))")
@@ -146,10 +153,11 @@ async fn same_owner_advisory_contention_does_not_exhaust_the_shared_pool() {
     let mut requests = Vec::new();
     for index in 0..16 {
         let service = Arc::clone(&service);
+        let owner = owner.clone();
         requests.push(tokio::spawn(async move {
             let node = format!("urn:test:pool-admission:{owner_id}:{index}");
             service
-                .execute_pep_create_node(PepCreateNodeCommand::new(owner_id, &node, 100))
+                .execute_pep_create_node(PepCreateNodeCommand::new(&owner, &node, 100))
                 .await
                 .map(|result| result.outcome)
         }));
@@ -430,12 +438,21 @@ async fn paused_pep_delivery_rechecks_block_privacy_disable_and_sensitive_acl() 
     let sender_bare = format!("{sender_username}@example.test");
     let recipient_bare = format!("{recipient_username}@example.test");
     let recipient_full = format!("{recipient_bare}/phone");
+    let sender = PubSubAccount {
+        id: sender_id,
+        username: sender_username.clone(),
+        auth_generation: sqlx::query_scalar("SELECT auth_generation FROM users WHERE id=$1")
+            .bind(sender_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+    };
     let node = format!("urn:xmpp:omemo:2:devices:{suffix}");
     let mut config = northstar_pubsub_postgres::default_pep_node_config(&node);
     config.access_model = "open".to_owned();
     config.deliver_notifications = true;
     assert_eq!(
-        northstar_pubsub_postgres::create_pep_node(&pool, sender_id, &node, &config, 20)
+        northstar_pubsub_postgres::create_pep_node(&pool, &sender, &node, &config, 20)
             .await
             .unwrap(),
         northstar_pubsub_postgres::PepCreateOutcome::Created
@@ -598,10 +615,15 @@ async fn pep_publish_audience_is_linearizable_with_every_revocation_input() {
     .await
     .unwrap();
     let node = format!("urn:test:pep:audience:{}", Uuid::new_v4().simple());
+    let owner = PubSubAccount {
+        id: owner_id,
+        username: username.clone(),
+        auth_generation,
+    };
     let mut config = northstar_pubsub_postgres::default_pep_node_config(&node);
     config.access_model = "open".to_owned();
     assert_eq!(
-        northstar_pubsub_postgres::create_pep_node(&pool, owner_id, &node, &config, 10)
+        northstar_pubsub_postgres::create_pep_node(&pool, &owner, &node, &config, 10)
             .await
             .unwrap(),
         northstar_pubsub_postgres::PepCreateOutcome::Created
@@ -856,7 +878,7 @@ async fn pep_subscription_admission_is_linearizable_and_principal_scoped() {
     config.access_model = "roster".to_owned();
     config.roster_groups_allowed = vec!["friends".to_owned()];
     assert_eq!(
-        northstar_pubsub_postgres::create_pep_node(&pool, owner_id, &node, &config, 20)
+        northstar_pubsub_postgres::create_pep_node(&pool, &owner, &node, &config, 20)
             .await
             .unwrap(),
         northstar_pubsub_postgres::PepCreateOutcome::Created
@@ -1012,7 +1034,7 @@ async fn pep_subscription_admission_is_linearizable_and_principal_scoped() {
     let mut open = northstar_pubsub_postgres::default_pep_node_config(&blocked_node);
     open.access_model = "open".to_owned();
     assert_eq!(
-        northstar_pubsub_postgres::create_pep_node(&pool, owner_id, &blocked_node, &open, 20)
+        northstar_pubsub_postgres::create_pep_node(&pool, &owner, &blocked_node, &open, 20)
             .await
             .unwrap(),
         northstar_pubsub_postgres::PepCreateOutcome::Created
@@ -1086,15 +1108,9 @@ async fn pep_subscription_admission_is_linearizable_and_principal_scoped() {
     roster_config.access_model = "roster".to_owned();
     roster_config.roster_groups_allowed = vec!["friends".to_owned()];
     assert_eq!(
-        northstar_pubsub_postgres::create_pep_node(
-            &pool,
-            owner_id,
-            &roster_node,
-            &roster_config,
-            20
-        )
-        .await
-        .unwrap(),
+        northstar_pubsub_postgres::create_pep_node(&pool, &owner, &roster_node, &roster_config, 20)
+            .await
+            .unwrap(),
         northstar_pubsub_postgres::PepCreateOutcome::Created
     );
     let roster_denied_subid = Uuid::new_v4().to_string();
@@ -1129,7 +1145,7 @@ async fn pep_subscription_admission_is_linearizable_and_principal_scoped() {
     assert_eq!(
         northstar_pubsub_postgres::create_pep_node(
             &pool,
-            owner_id,
+            &owner,
             &presence_node,
             &presence_config,
             20
@@ -1165,7 +1181,7 @@ async fn pep_subscription_admission_is_linearizable_and_principal_scoped() {
     assert_eq!(
         northstar_pubsub_postgres::create_pep_node(
             &pool,
-            owner_id,
+            &owner,
             &deleted_node,
             &northstar_pubsub_postgres::default_pep_node_config(&deleted_node),
             20,
@@ -1210,7 +1226,7 @@ async fn pep_subscription_admission_is_linearizable_and_principal_scoped() {
     assert_eq!(
         northstar_pubsub_postgres::create_pep_node(
             &pool,
-            owner_id,
+            &owner,
             &duplicate_node,
             &duplicate_config,
             20,

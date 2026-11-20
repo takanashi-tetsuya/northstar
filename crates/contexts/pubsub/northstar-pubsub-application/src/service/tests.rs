@@ -136,16 +136,6 @@ impl PepItemQueryRepository for QueryOnlyPepItems {
         Ok(Vec::new())
     }
 
-    async fn pep_items_by_ids(
-        &self,
-        _owner_id: Uuid,
-        _node: &str,
-        _item_ids: &[&str],
-        _limit: i64,
-    ) -> Result<Vec<(String, String)>> {
-        Ok(Vec::new())
-    }
-
     async fn pep_items_with_timestamp(
         &self,
         _owner_id: Uuid,

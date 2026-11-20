@@ -557,12 +557,19 @@ mod tests {
 
         let user_id = Uuid::new_v4();
         let username = format!("vcard-race-{}", &user_id.simple().to_string()[..12]);
-        sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
-            .bind(user_id)
-            .bind(&username)
-            .execute(&pool)
-            .await
-            .unwrap();
+        let auth_generation = sqlx::query_scalar(
+            "INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test') RETURNING auth_generation",
+        )
+        .bind(user_id)
+        .bind(&username)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let owner = northstar_pubsub_core::PubSubAccount {
+            id: user_id,
+            username: username.clone(),
+            auth_generation,
+        };
         // An explicit PEP subscription is a child of the metadata node.  Set
         // up that parent through the same default configuration that the
         // avatar conversion validates, rather than relying on the conversion
@@ -571,7 +578,7 @@ mod tests {
         assert_eq!(
             super::super::create_pep_node(
                 &pool,
-                user_id,
+                &owner,
                 "urn:xmpp:avatar:metadata",
                 &metadata_config,
                 10,

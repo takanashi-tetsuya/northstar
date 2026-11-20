@@ -121,10 +121,15 @@ fn vcard_photo_projection_preserves_non_photo_profile_fields() {
 #[ignore = "requires TEST_DATABASE_URL; creates and removes a random isolated schema"]
 async fn profile_publish_uses_exact_subscribe_and_block_snapshot() {
     let database = IsolatedDatabase::create("audience").await;
-    let (owner_id, _, auth_generation) = insert_user(&database.pool, "owner").await;
+    let (owner_id, username, auth_generation) = insert_user(&database.pool, "owner").await;
+    let owner = northstar_pubsub_core::PubSubAccount {
+        id: owner_id,
+        username,
+        auth_generation,
+    };
     let config = northstar_pubsub_postgres::default_pep_node_config(VCARD4);
     assert!(matches!(
-        northstar_pubsub_postgres::create_pep_node(&database.pool, owner_id, VCARD4, &config, 10)
+        northstar_pubsub_postgres::create_pep_node(&database.pool, &owner, VCARD4, &config, 10)
             .await
             .unwrap(),
         northstar_pubsub_postgres::PepCreateOutcome::Created

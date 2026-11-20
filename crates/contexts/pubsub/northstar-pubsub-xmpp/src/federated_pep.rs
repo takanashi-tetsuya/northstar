@@ -2,8 +2,10 @@
 
 use anyhow::{Context, Result};
 use northstar_federation_core::wire::{s2s_iq_error, s2s_iq_result};
+use northstar_pubsub_application::{PepItemQuery, PepItemRead, PepItemSelection};
 use roxmltree::Node;
 
+use crate::pep::parse_pep_item_selection;
 use crate::pubsub::PubSubHost;
 
 /// Answers a federated PEP items request: `<pubsub><items node='...'/></pubsub>` of type `get`.
@@ -39,70 +41,38 @@ pub async fn federated_pep_items<H: PubSubHost>(
     let Some(owner_name) = owner_name else {
         return Ok(s2s_iq_error(id, to, from, "item-not-found"));
     };
-    let Some(owner) = host
-        .pubsub_application_service()
-        .find_enabled_user(owner_name)
-        .await?
-    else {
-        return Ok(s2s_iq_error(id, to, from, "item-not-found"));
-    };
-    if host
-        .pubsub_application_service()
-        .pep_node(owner.id, node)
-        .await?
-        .is_none()
-    {
-        return Ok(s2s_iq_error(id, to, from, "item-not-found"));
-    }
-    if !crate::pep::pep_access_allowed(
-        host.pubsub_application_service(),
-        &owner,
-        host.pubsub_local_domain(),
+    let query = PepItemQuery {
+        owner_username: owner_name,
+        requester_jid: from,
         node,
-        from,
-    )
-    .await?
-    {
-        return Ok(s2s_iq_error(id, to, from, "not-authorized"));
-    }
-    let requested = items
-        .children()
-        .filter(|node| node.is_element())
-        .map(|item| {
-            (item.tag_name().namespace() == Some("http://jabber.org/protocol/pubsub")
-                && item.tag_name().name() == "item"
-                && item.attributes().len() == 1
-                && item.attribute("id").is_some_and(|item_id| {
-                    !item_id.is_empty()
-                        && item_id.len() <= 1_024
-                        && !item_id.chars().any(char::is_control)
-                })
-                && !item.children().any(|child| child.is_element()))
-            .then(|| item.attribute("id").unwrap_or_default())
-        })
-        .collect::<Option<Vec<_>>>();
-    let Some(requested) =
-        requested.filter(|items| items.len() <= northstar_pubsub_core::PEP_MAX_ITEMS as usize)
-    else {
+        selection: parse_pep_item_selection(items, None),
+    };
+    let read = host
+        .pubsub_application_service()
+        .pep_items_read(&query)
+        .await?;
+    federated_pep_item_reply(id, to, from, node, query.selection.as_ref(), read)
+}
+
+fn federated_pep_item_reply(
+    id: &str,
+    to: &str,
+    from: &str,
+    node: &str,
+    selection: Option<&PepItemSelection>,
+    read: PepItemRead,
+) -> Result<String> {
+    let stored = match read {
+        PepItemRead::OwnerMissing | PepItemRead::NodeMissing => {
+            return Ok(s2s_iq_error(id, to, from, "item-not-found"));
+        }
+        PepItemRead::Denied(_) => return Ok(s2s_iq_error(id, to, from, "not-authorized")),
+        PepItemRead::Items { items, .. } => items,
+    };
+    let Some(selection) = selection else {
         return Ok(s2s_iq_error(id, to, from, "bad-request"));
     };
-    let max_items = match items.attribute("max_items") {
-        Some(value) => match value.parse::<i64>() {
-            Ok(value) if value > 0 => value.min(northstar_pubsub_core::PEP_MAX_ITEMS as i64),
-            _ => return Ok(s2s_iq_error(id, to, from, "bad-request")),
-        },
-        None => northstar_pubsub_core::PEP_MAX_ITEMS as i64,
-    };
-    let stored = if requested.is_empty() {
-        host.pubsub_application_service()
-            .pep_items(owner.id, node, None, max_items)
-            .await?
-    } else {
-        host.pubsub_application_service()
-            .pep_items_by_ids(owner.id, node, &requested, max_items)
-            .await?
-    };
-    if stored.is_empty() && !requested.is_empty() {
+    if stored.is_empty() && !selection.item_ids.is_empty() {
         return Ok(s2s_iq_error(id, to, from, "item-not-found"));
     }
     let mut item_list = northstar_xml_builder::XmlElement::new("items").attr("node", node);
@@ -270,5 +240,4 @@ pub async fn federated_pep_subscription<H: PubSubHost>(
 }
 
 #[cfg(test)]
-#[path = "federated_pep_tests.rs"]
 mod tests;

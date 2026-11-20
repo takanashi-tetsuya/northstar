@@ -20,6 +20,7 @@ pub(super) async fn pep_create<S: PepSession>(
     session: &S,
     id: &str,
     user: &PubSubAccount,
+    from: Option<&str>,
     create: Node<'_, '_>,
 ) -> Result<String> {
     let Some(node) = create
@@ -34,30 +35,35 @@ pub(super) async fn pep_create<S: PepSession>(
             Some("nodeid-required"),
         ));
     };
-    match session
+    let outcome = session
         .pep_pubsub_service()
         .execute_pep_create_node(PepCreateNodeCommand::new(
-            user.id,
+            user,
             node,
             session.pep_quotas().max_nodes,
         ))
         .await?
-        .outcome
-    {
+        .outcome;
+    Ok(pep_create_reply(id, from, node, outcome))
+}
+
+fn pep_create_reply(id: &str, from: Option<&str>, node: &str, outcome: PepCreateOutcome) -> String {
+    match outcome {
         PepCreateOutcome::Created => {
             let payload = XmlElement::namespaced("pubsub", NS_PUBSUB)
                 .child(XmlElement::new("create").attr("node", node))
                 .finish();
-            Ok(iq_result(id, &payload))
+            iq_result(id, &payload)
         }
-        PepCreateOutcome::Conflict => Ok(iq_error(id, "conflict")),
-        PepCreateOutcome::QuotaExceeded => Ok(pep_error(
+        PepCreateOutcome::Conflict => iq_error(id, "conflict"),
+        PepCreateOutcome::QuotaExceeded => pep_error(
             id,
             None,
             "wait",
             "resource-constraint",
             Some("max-nodes-exceeded"),
-        )),
+        ),
+        PepCreateOutcome::StaleAuthority => pep_owner_forbidden(id, from),
     }
 }
 
@@ -93,57 +99,59 @@ pub async fn pep_owner_get<S: PepSession>(
             Some("nodeid-required"),
         ));
     };
-    let Some(config) = session.pep_pubsub_service().pep_node(user.id, node).await? else {
-        return Ok(iq_error_from_optional(
-            id,
-            iq.attribute("to"),
-            "item-not-found",
-        ));
-    };
-    let owner_jid = canonical_account_jid(&user.username, session.pep_local_domain())?;
-    let inner = match operation.tag_name().name() {
-        "configure" => {
-            let mut configure = XmlElement::new("configure").attr("node", node);
-            configure.push_validated_fragment(&pep_config_form(&config, "form"))?;
-            configure
-        }
-        "subscriptions" => {
-            let subscriptions = session
-                .pep_pubsub_service()
-                .pep_subscribers(user.id, node)
-                .await?;
-            let mut entries = XmlElement::new("subscriptions").attr("node", node);
-            for subscription in subscriptions {
-                entries.push_child(
-                    XmlElement::new("subscription")
-                        .attr("jid", subscription.jid)
-                        .attr("subscription", "subscribed")
-                        .attr("subid", subscription.subid),
-                );
-            }
-            entries
-        }
-        "affiliations" => {
-            let mut entries = XmlElement::new("affiliations").attr("node", node).child(
-                XmlElement::new("affiliation")
-                    .attr("jid", &owner_jid)
-                    .attr("affiliation", "owner"),
+    let from = iq.attribute("to");
+    let operation_name = operation.tag_name().name();
+    let inner = if operation_name == "subscriptions" {
+        let PepOwnerSubscriptionsRead::Subscribers(subscriptions) = session
+            .pep_pubsub_service()
+            .pep_owner_subscriptions(&PepOwnerQuery { owner: &user, node })
+            .await?
+        else {
+            return Ok(iq_error_from_optional(id, from, "item-not-found"));
+        };
+        let mut entries = XmlElement::new("subscriptions").attr("node", node);
+        for subscription in subscriptions {
+            entries.push_child(
+                XmlElement::new("subscription")
+                    .attr("jid", subscription.jid)
+                    .attr("subscription", "subscribed")
+                    .attr("subid", subscription.subid),
             );
-            for member in &config.access_whitelist {
-                entries.push_child(
-                    XmlElement::new("affiliation")
-                        .attr("jid", member)
-                        .attr("affiliation", "member"),
-                );
-            }
-            entries
         }
-        _ => return Ok(iq_error(id, "feature-not-implemented")),
+        entries
+    } else {
+        let Some(config) = session.pep_pubsub_service().pep_node(user.id, node).await? else {
+            return Ok(iq_error_from_optional(id, from, "item-not-found"));
+        };
+        let owner_jid = canonical_account_jid(&user.username, session.pep_local_domain())?;
+        match operation_name {
+            "configure" => {
+                let mut configure = XmlElement::new("configure").attr("node", node);
+                configure.push_validated_fragment(&pep_config_form(&config, "form"))?;
+                configure
+            }
+            "affiliations" => {
+                let mut entries = XmlElement::new("affiliations").attr("node", node).child(
+                    XmlElement::new("affiliation")
+                        .attr("jid", &owner_jid)
+                        .attr("affiliation", "owner"),
+                );
+                for member in &config.access_whitelist {
+                    entries.push_child(
+                        XmlElement::new("affiliation")
+                            .attr("jid", member)
+                            .attr("affiliation", "member"),
+                    );
+                }
+                entries
+            }
+            _ => return Ok(iq_error(id, "feature-not-implemented")),
+        }
     };
     let payload = XmlElement::namespaced("pubsub", "http://jabber.org/protocol/pubsub#owner")
         .child(inner)
         .finish();
-    Ok(iq_result_from_optional(id, iq.attribute("to"), &payload))
+    Ok(iq_result_from_optional(id, from, &payload))
 }
 
 pub async fn pep_owner_set<S: PepSession>(
@@ -412,7 +420,7 @@ pub(super) fn pep_owner_mutation_error(
         PepOwnerMutationOutcome::NotFound => {
             Some(iq_error_from_optional(id, from, "item-not-found"))
         }
-        PepOwnerMutationOutcome::Forbidden => Some(iq_error_from_optional(id, from, "forbidden")),
+        PepOwnerMutationOutcome::Forbidden => Some(pep_owner_forbidden(id, from)),
         PepOwnerMutationOutcome::Stale => Some(iq_error_from_optional(id, from, "conflict")),
         PepOwnerMutationOutcome::NotSubscribed => Some(pep_error(
             id,
@@ -422,6 +430,10 @@ pub(super) fn pep_owner_mutation_error(
             Some("not-subscribed"),
         )),
     }
+}
+
+fn pep_owner_forbidden(id: &str, from: Option<&str>) -> String {
+    iq_error_from_optional(id, from, "forbidden")
 }
 
 pub(super) fn pep_owner_target_allowed<S: PepSession>(
@@ -594,5 +606,21 @@ pub(super) fn parse_form_bool(value: &str) -> std::result::Result<bool, ()> {
         "1" | "true" => Ok(true),
         "0" | "false" => Ok(false),
         _ => Err(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_pep_create_uses_the_owner_mutation_forbidden_reply() {
+        for from in [None, Some("owner@example.test")] {
+            assert_eq!(
+                pep_create_reply("create", from, "news", PepCreateOutcome::StaleAuthority),
+                pep_owner_mutation_error("create", from, PepOwnerMutationOutcome::Forbidden)
+                    .unwrap(),
+            );
+        }
     }
 }

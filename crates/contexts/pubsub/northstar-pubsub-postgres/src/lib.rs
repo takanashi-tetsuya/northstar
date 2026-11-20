@@ -7,6 +7,7 @@
 mod conversions;
 mod outbox;
 mod pep;
+mod pep_snapshot;
 mod private;
 mod pubsub;
 mod rendering;
@@ -15,6 +16,7 @@ mod vcard;
 
 pub use outbox::*;
 pub use pep::*;
+pub use pep_snapshot::*;
 pub use private::*;
 pub use pubsub::*;
 pub use vcard::*;

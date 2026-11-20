@@ -4,23 +4,25 @@ use crate::pubsub::PubSubHost;
 use anyhow::Result;
 #[cfg(test)]
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use northstar_pubsub_application::PepPublishItemsCommand;
 use northstar_pubsub_application::{
     profile::{
         AvatarPresenceUpdate, ProfileAudienceSnapshot, ProfilePublishResult, ProfilePublishStatus,
         ProfileRepository, ProfileService,
     },
-    PepConfigureNodeCommand, PepCreateNodeCommand, PepDeleteNodeCommand, PepPurgeNodeCommand,
-    PepRetractCommand, PepSetAffiliationsCommand, PepUnsubscribeBatchCommand, PubSubService,
+    PepAccountItemsRead, PepAccountQuery, PepConfigureNodeCommand, PepCreateNodeCommand,
+    PepDeleteNodeCommand, PepItemQuery, PepItemRead, PepItemSelection, PepNodeInfoRead,
+    PepNodeItemsRead, PepNodeQuery, PepOwnerQuery, PepOwnerSubscriptionsRead,
+    PepPublishItemsCommand, PepPurgeNodeCommand, PepRequester, PepRetractCommand,
+    PepSetAffiliationsCommand, PepUnsubscribeBatchCommand, PubSubService,
 };
 use northstar_pubsub_core::{
-    PepAudienceSnapshot, PepConfigureNodeWrite, PepCreateOutcome, PepDeleteNodeWrite,
-    PepDirectStateSnapshot, PepDirectStateTransition, PepNodeConfig, PepOutboxAuthorizationMode,
-    PepOutboxEventKind, PepOutboxFactory, PepOwnerMutationOutcome, PepProfileWrite,
-    PepPublishOutcome, PepPublishWrite, PepPurgeNodeWrite, PepQuotas, PepRetractWrite,
-    PepSetAffiliationsWrite, PepSubscribeOutcome, PepSubscribeSnapshot, PepSubscribeWrite,
-    PepSubscriptionActor, PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount,
-    PubSubOutboxInsert,
+    pep_read_access, PepAccessDenial, PepAccessFacts, PepAudienceSnapshot, PepBlockFacts,
+    PepConfigureNodeWrite, PepCreateOutcome, PepDeleteNodeWrite, PepDirectStateSnapshot,
+    PepDirectStateTransition, PepNodeConfig, PepOutboxAuthorizationMode, PepOutboxEventKind,
+    PepOutboxFactory, PepOwnerMutationOutcome, PepProfileWrite, PepPublishOutcome, PepPublishWrite,
+    PepPurgeNodeWrite, PepQuotas, PepRequesterRelation, PepRetractWrite, PepSetAffiliationsWrite,
+    PepSubscribeOutcome, PepSubscribeSnapshot, PepSubscribeWrite, PepSubscriptionActor,
+    PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount, PubSubOutboxInsert, PEP_MAX_ITEMS,
 };
 use northstar_xml_builder::rewrite::set_root_attribute;
 use northstar_xml_builder::stanza::{
@@ -413,104 +415,19 @@ pub async fn pep_get<S: PepSession>(
         },
         None => requester.username.clone(),
     };
-    let Some(owner) = session
-        .pep_pubsub_service()
-        .find_enabled_user(&owner_name)
-        .await?
-    else {
-        return Ok(iq_error(id, "item-not-found"));
-    };
     let from = iq.attribute("to");
-    let Some(config) = session
-        .pep_pubsub_service()
-        .pep_node(owner.id, node)
-        .await?
-    else {
-        return Ok(if let Some(from) = from {
-            iq_error_from(id, from, "item-not-found")
-        } else {
-            iq_error(id, "item-not-found")
-        });
-    };
     let requester_jid = canonical_account_jid(&requester.username, session.pep_local_domain())?;
-    if !pep_access_allowed(
-        session.pep_pubsub_service(),
-        &owner,
-        session.pep_local_domain(),
+    let query = PepItemQuery {
+        owner_username: &owner_name,
+        requester_jid: &requester_jid,
         node,
-        &requester_jid,
-    )
-    .await?
-    {
-        return Ok(pep_error(
-            id,
-            from,
-            "auth",
-            "not-authorized",
-            Some(access_error(&config)),
-        ));
-    }
-    let requested = items
-        .children()
-        .filter(Node::is_element)
-        .map(|item| {
-            (item.tag_name().namespace() == Some(NS_PUBSUB)
-                && item.tag_name().name() == "item"
-                && item.attributes().len() == 1
-                && item.attribute("id").is_some_and(|id| {
-                    !id.is_empty() && id.len() <= 1_024 && !id.chars().any(char::is_control)
-                })
-                && !item.children().any(|child| child.is_element()))
-            .then(|| item.attribute("id").unwrap_or_default())
-        })
-        .collect::<Option<Vec<_>>>();
-    let Some(requested) =
-        requested.filter(|ids| ids.len() <= northstar_pubsub_core::PEP_MAX_ITEMS as usize)
-    else {
-        return Ok(iq_error_from_optional(id, from, "bad-request"));
+        selection: parse_pep_item_selection(items, Some(node)),
     };
-    let mut canonical_requested = Vec::with_capacity(requested.len());
-    let mut unique_requested = HashSet::new();
-    for item_id in requested {
-        let Ok(item_id) = northstar_pubsub_core::canonical_profile_item_id(node, item_id) else {
-            return Ok(iq_error_from_optional(id, from, "bad-request"));
-        };
-        if !unique_requested.insert(item_id.clone()) {
-            return Ok(iq_error_from_optional(id, from, "bad-request"));
-        }
-        canonical_requested.push(item_id);
-    }
-    let requested = canonical_requested
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    let max_items = match items.attribute("max_items") {
-        Some(value) => match value.parse::<i64>() {
-            Ok(value) if value > 0 => value.min(northstar_pubsub_core::PEP_MAX_ITEMS as i64),
-            _ => {
-                return Ok(iq_error_from_optional(id, from, "bad-request"));
-            }
-        },
-        None => northstar_pubsub_core::PEP_MAX_ITEMS as i64,
+    let read = session.pep_pubsub_service().pep_items_read(&query).await?;
+    let stored = match c2s_pep_item_rows(id, from, query.selection.as_ref(), read) {
+        Ok(items) => items,
+        Err(reply) => return Ok(reply),
     };
-    let stored = if requested.is_empty() {
-        session
-            .pep_pubsub_service()
-            .pep_items(owner.id, node, None, max_items)
-            .await?
-    } else {
-        session
-            .pep_pubsub_service()
-            .pep_items_by_ids(owner.id, node, &requested, max_items)
-            .await?
-    };
-    if stored.is_empty() && !requested.is_empty() {
-        return Ok(if let Some(from) = from {
-            iq_error_from(id, from, "item-not-found")
-        } else {
-            iq_error(id, "item-not-found")
-        });
-    }
     let mut items = XmlElement::new("items").attr("node", node);
     for (_, item) in stored {
         items.push_validated_fragment(&item)?;
@@ -526,6 +443,84 @@ pub async fn pep_get<S: PepSession>(
     }
 }
 
+pub(crate) fn parse_pep_item_selection(
+    items: Node<'_, '_>,
+    canonical_profile_node: Option<&str>,
+) -> Option<PepItemSelection> {
+    let mut item_ids = Vec::new();
+    let mut unique = HashSet::new();
+    for (index, item) in items.children().filter(Node::is_element).enumerate() {
+        let id = item.attribute("id")?;
+        if index >= PEP_MAX_ITEMS as usize
+            || item.tag_name().namespace() != Some(NS_PUBSUB)
+            || item.tag_name().name() != "item"
+            || item.attributes().len() != 1
+            || id.is_empty()
+            || id.len() > 1_024
+            || id.chars().any(char::is_control)
+            || item.children().any(|child| child.is_element())
+        {
+            return None;
+        }
+        let id = match canonical_profile_node {
+            Some(node) => northstar_pubsub_core::canonical_profile_item_id(node, id).ok()?,
+            None => id.to_owned(),
+        };
+        if unique.insert(id.clone()) {
+            item_ids.push(id);
+        } else if canonical_profile_node.is_some() {
+            return None;
+        }
+    }
+    let cap = i64::from(PEP_MAX_ITEMS);
+    let max_items = match items.attribute("max_items") {
+        Some(value) => {
+            let value = value.parse::<i64>().ok()?;
+            (value > 0).then_some(value.min(cap))?
+        }
+        None => cap,
+    };
+    Some(PepItemSelection {
+        item_ids,
+        max_items,
+    })
+}
+
+fn c2s_pep_item_rows(
+    id: &str,
+    from: Option<&str>,
+    selection: Option<&PepItemSelection>,
+    read: PepItemRead,
+) -> std::result::Result<Vec<(String, String)>, String> {
+    match read {
+        PepItemRead::OwnerMissing => Err(iq_error(id, "item-not-found")),
+        PepItemRead::NodeMissing => Err(iq_error_from_optional(id, from, "item-not-found")),
+        PepItemRead::Denied(reason) => {
+            let extension = match reason {
+                PepAccessDenial::PresenceSubscriptionRequired => "presence-subscription-required",
+                PepAccessDenial::NotInRosterGroup => "not-in-roster-group",
+                PepAccessDenial::ClosedNode => "closed-node",
+            };
+            Err(pep_error(
+                id,
+                from,
+                "auth",
+                "not-authorized",
+                Some(extension),
+            ))
+        }
+        PepItemRead::Items { items, .. } => {
+            let Some(selection) = selection else {
+                return Err(iq_error_from_optional(id, from, "bad-request"));
+            };
+            if items.is_empty() && !selection.item_ids.is_empty() {
+                return Err(iq_error_from_optional(id, from, "item-not-found"));
+            }
+            Ok(items)
+        }
+    }
+}
+
 fn iq_result_from_optional(id: &str, from: Option<&str>, payload: &str) -> String {
     from.map_or_else(
         || iq_result(id, payload),
@@ -538,10 +533,6 @@ fn iq_error_from_optional(id: &str, from: Option<&str>, condition: &str) -> Stri
         || iq_error(id, condition),
         |from| iq_error_from(id, from, condition),
     )
-}
-
-fn access_error(config: &PepNodeConfig) -> &'static str {
-    access_error_for_model(&config.access_model)
 }
 
 fn access_error_for_model(access_model: &str) -> &'static str {
@@ -563,8 +554,8 @@ fn xdata_field<'a, 'input>(form: Node<'a, 'input>, name: &str) -> Option<&'a str
         .and_then(|node| child_text(node, "value"))
 }
 
-/// Whether `requester_jid` is authorized to access the PEP `node` of `owner`.
-pub async fn pep_access_allowed(
+// Send-last replay still gathers its own facts. Its policy is shared with IQ reads.
+async fn pep_access_allowed(
     service: &PubSubService<impl northstar_pubsub_application::PepNodeQueryRepository>,
     owner: &northstar_pubsub_core::PubSubAccount,
     domain: &str,
@@ -591,94 +582,72 @@ async fn pep_access_allowed_for_owner(
     requester_jid: &str,
 ) -> Result<bool> {
     let owner_jid = canonical_account_jid(owner_username, domain)?;
-    let requester_bare = match northstar_xmpp_types::jid::canonical_bare_key(requester_jid) {
-        Ok(requester) => requester,
-        Err(_) => return Ok(false),
+    let requester_bare = northstar_xmpp_types::jid::canonical_bare_key(requester_jid).ok();
+    let requester = match requester_bare.as_deref() {
+        Some(bare) if bare == owner_jid => PepRequesterRelation::Owner,
+        Some(bare) => PepRequesterRelation::Other(bare),
+        None => PepRequesterRelation::Invalid,
     };
-    if requester_bare == owner_jid {
-        return Ok(true);
-    }
-    let Some(config) = service.pep_node(owner_id, node).await? else {
-        return Ok(false);
+    let config = if matches!(requester, PepRequesterRelation::Other(_)) {
+        service.pep_node(owner_id, node).await?
+    } else {
+        None
     };
-    pep_access_allowed_with_config(
-        service,
-        owner_id,
-        owner_username,
-        domain,
-        &config,
-        requester_jid,
-    )
-    .await
-}
-
-async fn pep_access_allowed_with_config(
-    service: &PubSubService<impl northstar_pubsub_application::PepNodeQueryRepository>,
-    owner_id: uuid::Uuid,
-    owner_username: &str,
-    domain: &str,
-    config: &PepNodeConfig,
-    requester_jid: &str,
-) -> Result<bool> {
-    let owner_jid = canonical_account_jid(owner_username, domain)?;
-    let requester_bare = match northstar_xmpp_types::jid::canonical_bare_key(requester_jid) {
-        Ok(requester) => requester,
-        Err(_) => return Ok(false),
-    };
-    if requester_bare == owner_jid {
-        return Ok(true);
-    }
-    if service.is_blocked(owner_id, &requester_bare).await? {
-        return Ok(false);
-    }
-    match config.access_model.as_str() {
-        "open" => return Ok(true),
-        "whitelist" => {
-            return Ok(config.access_whitelist.iter().any(|jid| {
-                northstar_xmpp_types::jid::canonical_bare_key(jid)
-                    .is_ok_and(|jid| jid == requester_bare)
-            }));
+    let mut blocks = PepBlockFacts::default();
+    let mut subscription = None;
+    let mut groups = Vec::new();
+    if let (PepRequesterRelation::Other(bare), Some(config)) = (requester, config.as_ref()) {
+        blocks.owner_blocks_requester = service.is_blocked(owner_id, bare).await?;
+        if !blocks.owner_blocks_requester {
+            match config.access_model.as_str() {
+                "presence" => {
+                    subscription = service
+                        .roster_item(owner_id, bare)
+                        .await?
+                        .map(|(_, _, subscription, _)| subscription);
+                }
+                "roster" => {
+                    groups = service
+                        .roster_matching_groups(
+                            owner_id,
+                            requester_jid,
+                            &config.roster_groups_allowed,
+                        )
+                        .await?;
+                }
+                _ => {}
+            }
         }
-        "roster" => {
-            return service
-                .roster_group_allowed(owner_id, requester_jid, &config.roster_groups_allowed)
-                .await;
-        }
-        "presence" => {}
-        _ => return Ok(false),
     }
-    Ok(service
-        .roster_item(owner_id, &requester_bare)
-        .await?
-        .is_some_and(|(_, _, subscription, _)| matches!(subscription.as_str(), "from" | "both")))
+    Ok(pep_read_access(&PepAccessFacts {
+        requester,
+        blocks,
+        roster_subscription: subscription.as_deref(),
+        roster_groups: &groups,
+        config: config.as_ref(),
+    })
+    .is_ok())
 }
 
 /// Discovers identity, features, and node metadata for federated PEP queries.
 pub async fn federated_pep_disco_info<H: PubSubHost>(
     host: &H,
-    owner: &northstar_pubsub_core::PubSubAccount,
+    owner_username: &str,
     requester: &str,
     requested_node: Option<&str>,
 ) -> Result<Option<String>> {
     if let Some(node) = requested_node {
-        let Some(config) = host
+        let PepNodeInfoRead::Info { config } = host
             .pubsub_application_service()
-            .pep_node(owner.id, node)
+            .pep_node_info(&PepNodeQuery {
+                owner_username,
+                requester: PepRequester::Jid(requester),
+                node,
+            })
             .await?
         else {
             return Ok(None);
         };
-        if !pep_access_allowed(
-            host.pubsub_application_service(),
-            owner,
-            host.pubsub_local_domain(),
-            node,
-            requester,
-        )
-        .await?
-        {
-            return Ok(None);
-        }
         let mut query = XmlElement::namespaced("query", "http://jabber.org/protocol/disco#info")
             .attr("node", node)
             .child(
@@ -705,6 +674,14 @@ pub async fn federated_pep_disco_info<H: PubSubHost>(
             );
         }
         return Ok(Some(query.finish()));
+    }
+    if host
+        .pubsub_application_service()
+        .find_enabled_user(owner_username)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
     }
     let features = [
         "http://jabber.org/protocol/disco#info",
@@ -760,26 +737,20 @@ pub async fn federated_pep_disco_info<H: PubSubHost>(
 /// Discovers published PEP nodes for federated PEP queries.
 pub async fn federated_pep_disco_items<H: PubSubHost>(
     host: &H,
-    owner: &northstar_pubsub_core::PubSubAccount,
+    owner_username: &str,
     requester: &str,
     requested_node: Option<&str>,
 ) -> Result<Option<String>> {
     if let Some(node) = requested_node {
-        let exists = host
+        let read = host
             .pubsub_application_service()
-            .pep_node(owner.id, node)
-            .await?
-            .is_some();
-        if !exists
-            || !pep_access_allowed(
-                host.pubsub_application_service(),
-                owner,
-                host.pubsub_local_domain(),
+            .pep_node_items(&PepNodeQuery {
+                owner_username,
+                requester: PepRequester::Jid(requester),
                 node,
-                requester,
-            )
-            .await?
-        {
+            })
+            .await?;
+        if read != PepNodeItemsRead::Visible {
             return Ok(None);
         }
         return Ok(Some(
@@ -788,28 +759,23 @@ pub async fn federated_pep_disco_items<H: PubSubHost>(
                 .finish(),
         ));
     }
-    let owner_jid = canonical_account_jid(&owner.username, host.pubsub_local_domain())?;
-    let mut query = XmlElement::namespaced("query", "http://jabber.org/protocol/disco#items");
-    for node in host
+    let PepAccountItemsRead::Nodes { owner_jid, nodes } = host
         .pubsub_application_service()
-        .pep_nodes(owner.id)
+        .pep_account_items(&PepAccountQuery {
+            owner_username,
+            requester: PepRequester::Jid(requester),
+        })
         .await?
-    {
-        if pep_access_allowed(
-            host.pubsub_application_service(),
-            owner,
-            host.pubsub_local_domain(),
-            &node,
-            requester,
-        )
-        .await?
-        {
-            query.push_child(
-                XmlElement::new("item")
-                    .attr("jid", &owner_jid)
-                    .attr("node", &node),
-            );
-        }
+    else {
+        return Ok(None);
+    };
+    let mut query = XmlElement::namespaced("query", "http://jabber.org/protocol/disco#items");
+    for node in nodes {
+        query.push_child(
+            XmlElement::new("item")
+                .attr("jid", &owner_jid)
+                .attr("node", &node),
+        );
     }
     Ok(Some(query.finish()))
 }

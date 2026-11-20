@@ -300,11 +300,8 @@ pub(super) async fn route_inbound_iq<H: InboundHost>(
                 }));
             }
             if let Some(owner_name) = recipient_name {
-                let Some(owner) = state.find_enabled_pubsub_user(owner_name).await? else {
-                    return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
-                };
                 let Some(payload) = state
-                    .pep_disco_info(&owner, from, child.attribute("node"))
+                    .pep_disco_info(owner_name, from, child.attribute("node"))
                     .await?
                 else {
                     return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
@@ -352,11 +349,8 @@ pub(super) async fn route_inbound_iq<H: InboundHost>(
             if recipient_name.is_some() && to_jid.resourcepart().is_none() =>
         {
             let owner_name = recipient_name.expect("guarded above");
-            let Some(owner) = state.find_enabled_pubsub_user(owner_name).await? else {
-                return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
-            };
             let Some(payload) = state
-                .pep_disco_items(&owner, from, child.attribute("node"))
+                .pep_disco_items(owner_name, from, child.attribute("node"))
                 .await?
             else {
                 return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));

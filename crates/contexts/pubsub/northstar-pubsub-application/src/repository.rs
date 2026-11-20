@@ -396,10 +396,6 @@ pub trait PepNodeQueryRepository: Send + Sync {
         owner_id: Uuid,
         node: &str,
     ) -> impl std::future::Future<Output = Result<Option<PepNodeConfig>>> + Send;
-    fn pep_nodes(
-        &self,
-        owner_id: Uuid,
-    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
     fn find_enabled_user(
         &self,
         username: &str,
@@ -413,17 +409,17 @@ pub trait PepNodeQueryRepository: Send + Sync {
         owner_id: Uuid,
         candidate: &str,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
-    fn roster_group_allowed(
+    fn roster_matching_groups(
         &self,
         owner_id: Uuid,
         jid: &str,
         groups: &[String],
-    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
 }
 pub trait PepNodeMutationRepository: Send + Sync {
     fn create_pep_node(
         &self,
-        owner_id: Uuid,
+        owner: &PubSubAccount,
         node: &str,
         config: &PepNodeConfig,
         max_nodes: i64,
@@ -458,13 +454,6 @@ pub trait PepItemQueryRepository: Send + Sync {
         owner_id: Uuid,
         node: &str,
         item_id: Option<&str>,
-        limit: i64,
-    ) -> impl std::future::Future<Output = Result<Vec<(String, String)>>> + Send;
-    fn pep_items_by_ids(
-        &self,
-        owner_id: Uuid,
-        node: &str,
-        item_ids: &[&str],
         limit: i64,
     ) -> impl std::future::Future<Output = Result<Vec<(String, String)>>> + Send;
     fn pep_items_with_timestamp(

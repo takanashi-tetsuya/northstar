@@ -68,6 +68,7 @@ use uuid::Uuid;
 mod discovery_queries;
 mod item_queries;
 mod outbox;
+mod pep_queries;
 mod repository_access;
 
 #[derive(Clone)]
@@ -656,13 +657,13 @@ impl<
         command: PepCreateNodeCommand<'_>,
     ) -> Result<PepCreateNodeResult> {
         validate_pep_create_node_command(&command)?;
-        let owner_key = command.owner_id.to_string();
+        let owner_key = command.owner.id.to_string();
         let _permit = self
             .admit_mutation(&[&owner_key, command.node], false)
             .await?;
         self.repository
             .create_pep_node(
-                command.owner_id,
+                command.owner,
                 command.node,
                 &command.config,
                 command.max_nodes,

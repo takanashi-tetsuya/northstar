@@ -2,21 +2,25 @@
 //! subscriber presence. They stay in the workflows until the roster context provides them through a port.
 
 use anyhow::Result;
-use sqlx::{PgPool, Row};
+use sqlx::{Executor, PgPool, Postgres, Row};
 use uuid::Uuid;
 
-pub async fn roster_group_allowed(
-    pool: &PgPool,
+pub(crate) async fn roster_matching_groups<'e>(
+    executor: impl Executor<'e, Database = Postgres>,
     owner_id: Uuid,
     jid: &str,
     groups: &[String],
-) -> Result<bool> {
+) -> Result<Vec<String>> {
     if groups.is_empty() {
-        return Ok(false);
+        return Ok(Vec::new());
     }
     let jid = northstar_xmpp_types::jid::canonical_bare_key(jid)?;
-    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roster_items r, jsonb_array_elements_text(r.groups) g(name) WHERE r.owner_id=$1 AND r.contact_jid=$2 AND g.name = ANY($3))")
-        .bind(owner_id).bind(&jid).bind(groups).fetch_one(pool).await.map_err(Into::into)
+    Ok(sqlx::query_scalar("SELECT g.name FROM roster_items r, jsonb_array_elements_text(r.groups) g(name) WHERE r.owner_id=$1 AND r.contact_jid=$2 AND g.name = ANY($3)")
+        .bind(owner_id)
+        .bind(&jid)
+        .bind(groups)
+        .fetch_all(executor)
+        .await?)
 }
 
 /// Returns local PEP owners whose roster grants presence visibility to the
@@ -39,7 +43,25 @@ pub async fn pep_owner_usernames_for_presence_subscriber(
 #[cfg(test)]
 mod integration_tests {
     use super::*;
+    use northstar_pubsub_core::PubSubAccount;
     use northstar_pubsub_postgres::*;
+
+    async fn insert_pep_account(pool: &PgPool, username: String) -> PubSubAccount {
+        let id = Uuid::new_v4();
+        let auth_generation = sqlx::query_scalar(
+            "INSERT INTO users(id,username,password_hash) VALUES($1,$2,'integration-test') RETURNING auth_generation",
+        )
+        .bind(id)
+        .bind(&username)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        PubSubAccount {
+            id,
+            username,
+            auth_generation,
+        }
+    }
 
     #[tokio::test]
     #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
@@ -55,26 +77,15 @@ mod integration_tests {
             .await
             .unwrap();
         let suffix = Uuid::new_v4().simple().to_string();
-        let first_owner = Uuid::new_v4();
-        let second_owner = Uuid::new_v4();
-        for (id, username) in [
-            (first_owner, format!("pep-a-{}", &suffix[..12])),
-            (second_owner, format!("pep-b-{}", &suffix[..12])),
-        ] {
-            sqlx::query(
-                "INSERT INTO users(id,username,password_hash) VALUES($1,$2,'integration-test')",
-            )
-            .bind(id)
-            .bind(username)
-            .execute(&pool)
-            .await
-            .unwrap();
-        }
+        let first_account = insert_pep_account(&pool, format!("pep-a-{}", &suffix[..12])).await;
+        let second_account = insert_pep_account(&pool, format!("pep-b-{}", &suffix[..12])).await;
+        let first_owner = first_account.id;
+        let second_owner = second_account.id;
 
         let config = default_pep_node_config("urn:example:pep");
         let (left, right) = tokio::join!(
-            create_pep_node(&pool, first_owner, "urn:example:first", &config, 1),
-            create_pep_node(&pool, first_owner, "urn:example:second", &config, 1),
+            create_pep_node(&pool, &first_account, "urn:example:first", &config, 1),
+            create_pep_node(&pool, &first_account, "urn:example:second", &config, 1),
         );
         let outcomes = [left.unwrap(), right.unwrap()];
         assert_eq!(
@@ -97,7 +108,7 @@ mod integration_tests {
             "urn:example:second"
         };
         assert_eq!(
-            create_pep_node(&pool, second_owner, "urn:example:other", &config, 10)
+            create_pep_node(&pool, &second_account, "urn:example:other", &config, 10)
                 .await
                 .unwrap(),
             PepCreateOutcome::Created

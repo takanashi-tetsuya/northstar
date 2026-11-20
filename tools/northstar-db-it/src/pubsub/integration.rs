@@ -31,6 +31,8 @@ mod discovery_snapshot;
 mod item_snapshot;
 #[path = "integration/mutation_transaction_tests.rs"]
 mod mutation_transaction;
+#[path = "integration/pep_snapshot_tests.rs"]
+mod pep_snapshot;
 #[path = "integration/read_only_disco_tests.rs"]
 mod read_only_disco;
 #[path = "integration/subscription_lock_wait_tests.rs"]

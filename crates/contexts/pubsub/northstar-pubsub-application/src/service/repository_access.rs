@@ -20,17 +20,6 @@ impl<R: PepItemQueryRepository> PubSubService<R> {
             .pep_items(owner_id, node, item_id, limit)
             .await
     }
-    pub async fn pep_items_by_ids(
-        &self,
-        owner_id: Uuid,
-        node: &str,
-        item_ids: &[&str],
-        limit: i64,
-    ) -> Result<Vec<(String, String)>> {
-        self.repository
-            .pep_items_by_ids(owner_id, node, item_ids, limit)
-            .await
-    }
     pub async fn pep_items_with_timestamp(
         &self,
         owner_id: Uuid,
@@ -40,12 +29,6 @@ impl<R: PepItemQueryRepository> PubSubService<R> {
         self.repository
             .pep_items_with_timestamp(owner_id, node, limit)
             .await
-    }
-}
-
-impl<R: PepNodeQueryRepository> PubSubService<R> {
-    pub async fn pep_nodes(&self, owner_id: Uuid) -> Result<Vec<String>> {
-        self.repository.pep_nodes(owner_id).await
     }
 }
 
@@ -95,14 +78,14 @@ impl<R: PepNodeQueryRepository> PubSubService<R> {
     pub async fn is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool> {
         self.repository.is_blocked(owner_id, candidate).await
     }
-    pub async fn roster_group_allowed(
+    pub async fn roster_matching_groups(
         &self,
         owner_id: Uuid,
         jid: &str,
         groups: &[String],
-    ) -> Result<bool> {
+    ) -> Result<Vec<String>> {
         self.repository
-            .roster_group_allowed(owner_id, jid, groups)
+            .roster_matching_groups(owner_id, jid, groups)
             .await
     }
 }

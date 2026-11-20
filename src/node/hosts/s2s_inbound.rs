@@ -3,7 +3,6 @@
 use crate::node::ServerNode;
 use anyhow::Result;
 use northstar_pubsub_application::profile::PublicVCard;
-use northstar_pubsub_core::PubSubAccount;
 use northstar_roster_core::PresenceAccount;
 use northstar_s2s::inbound_host::{InboundHost, InboundPepRequest, PubSubReply};
 use northstar_stream::local_routes::session::OnlineSession;
@@ -248,13 +247,6 @@ impl InboundHost for ServerNode {
         self.pubsub.profile_service().public_vcard(username).await
     }
 
-    async fn find_enabled_pubsub_user(&self, username: &str) -> Result<Option<PubSubAccount>> {
-        self.pubsub
-            .pubsub_service()
-            .find_enabled_user(username)
-            .await
-    }
-
     async fn handle_pubsub_request(
         &self,
         from: &str,
@@ -309,20 +301,21 @@ impl InboundHost for ServerNode {
 
     async fn pep_disco_info(
         &self,
-        owner: &PubSubAccount,
+        owner_username: &str,
         from: &str,
         node: Option<&str>,
     ) -> Result<Option<String>> {
-        northstar_pubsub_xmpp::pep::federated_pep_disco_info(self, owner, from, node).await
+        northstar_pubsub_xmpp::pep::federated_pep_disco_info(self, owner_username, from, node).await
     }
 
     async fn pep_disco_items(
         &self,
-        owner: &PubSubAccount,
+        owner_username: &str,
         from: &str,
         node: Option<&str>,
     ) -> Result<Option<String>> {
-        northstar_pubsub_xmpp::pep::federated_pep_disco_items(self, owner, from, node).await
+        northstar_pubsub_xmpp::pep::federated_pep_disco_items(self, owner_username, from, node)
+            .await
     }
 }
 

@@ -225,6 +225,16 @@ run_exact_ignored \
 run_exact_ignored \
   pubsub::integration::read_only_disco::collection_disco_rechecks_parent_and_edges_after_stale_lookup
 run_exact_ignored \
+  pubsub::integration::discovery_snapshot::node_items_selects_kind_and_entries_from_one_snapshot
+run_exact_ignored \
+  pubsub::integration::discovery_snapshot::node_info_keeps_metadata_when_node_is_deleted_mid_read
+run_exact_ignored \
+  pubsub::integration::discovery_snapshot::filtered_self_lists_keep_rows_when_node_is_deleted_mid_read
+run_exact_ignored \
+  pubsub::integration::discovery_snapshot::node_miss_keeps_live_redirect_during_concurrent_create_and_expiry
+run_exact_ignored \
+  pubsub::integration::discovery_snapshot::discovery_snapshot_queries_work_on_read_only_connections
+run_exact_ignored \
   pubsub::integration::access_policy::node_metadata_keeps_affiliation_order_and_live_subscription_scope
 run_exact_ignored \
   pubsub::integration::access_policy::restricted_open_publish_is_denied_by_locked_publish_and_retract

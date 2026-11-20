@@ -1,5 +1,6 @@
 use super::{Action, ProtocolSession};
 use anyhow::Result;
+use northstar_pubsub_application::{PubSubNodeInfo, PubSubNodeInfoQuery};
 use northstar_room_application::mix_service::{
     CORE_NODES, NODE_ALLOWED, NODE_AVATAR_DATA, NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG,
     NODE_JIDMAP,
@@ -258,18 +259,24 @@ impl<H: DiscoveryHost> ProtocolSession<H> {
                     query.push_child(form);
                     return Ok(Action::Send(iq_result_from(id, from, &query.finish())));
                 }
-                let Some(node) = self.host().pubsub_service().get_node(node_name).await? else {
-                    return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
-                };
                 let requester = self.full_jid.as_deref().unwrap_or_default();
-                if !self
+                let outcome = self
                     .host()
                     .pubsub_service()
-                    .can_retrieve_node(&node, requester)
-                    .await?
-                {
-                    return Ok(Action::Send(iq_error_from(id, from, "forbidden")));
-                }
+                    .node_info(&PubSubNodeInfoQuery {
+                        node: node_name,
+                        requester,
+                    })
+                    .await?;
+                let (node, metadata) = match outcome {
+                    PubSubNodeInfo::Missing { .. } => {
+                        return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
+                    }
+                    PubSubNodeInfo::Forbidden => {
+                        return Ok(Action::Send(iq_error_from(id, from, "forbidden")));
+                    }
+                    PubSubNodeInfo::Info { node, metadata } => (node, metadata),
+                };
                 let mut query = disco_info_query(Some(node_name));
                 query.push_child(disco_identity("pubsub", &node.node_type, None));
                 query.push_child(disco_feature("http://jabber.org/protocol/pubsub"));
@@ -283,9 +290,7 @@ impl<H: DiscoveryHost> ProtocolSession<H> {
                         "http://jabber.org/protocol/pubsub#retrieve-items",
                     ));
                 }
-                query.push_validated_fragment(
-                    &self.host().pubsub_node_metadata_form(&node).await?,
-                )?;
+                query.push_validated_fragment(&H::pubsub_node_metadata_form(&node, &metadata))?;
                 return Ok(Action::Send(iq_result_from(id, from, &query.finish())));
             }
             let query = self.host().pubsub_service_disco_payload();

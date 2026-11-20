@@ -68,6 +68,7 @@ use northstar_xml_builder::XmlElement;
 use std::sync::Arc;
 use uuid::Uuid;
 
+mod discovery_queries;
 mod outbox;
 mod repository_access;
 

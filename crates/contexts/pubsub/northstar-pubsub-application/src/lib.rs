@@ -24,6 +24,8 @@ pub mod profile;
 pub mod service;
 pub mod subscription_cleanup;
 pub use service::PubSubService;
+mod discovery_snapshot;
+pub use discovery_snapshot::*;
 mod list_page;
 pub use list_page::{page_pubsub_list, PubSubListPage, PubSubListPageError, PubSubListPageQuery};
 mod root_discovery;

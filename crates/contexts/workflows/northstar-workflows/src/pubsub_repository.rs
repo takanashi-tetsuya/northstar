@@ -9,9 +9,9 @@ use northstar_pubsub_application::{
     PepPublishItemsOutcome, PepPublishItemsResult, PepSubscribeCommand, PepSubscribeResult,
     PepSubscriptionMutationRepository, PepSubscriptionQueryRepository, PepUnsubscribeCommand,
     PepUnsubscribeResult, PubSubAffiliationMutationRepository, PubSubAffiliationQueryRepository,
-    PubSubCollectionDiscoChild, PubSubCollectionDiscoSnapshot, PubSubItemMutationRepository,
-    PubSubItemQueryRepository, PubSubLeafDiscoSnapshot, PubSubNodeMutationRepository,
-    PubSubNodeQueryRepository, PubSubOutboxRepository, PubSubOwnerRead, PubSubOwnerReadKind,
+    PubSubCollectionDiscoSnapshot, PubSubItemMutationRepository, PubSubItemQueryRepository,
+    PubSubLeafDiscoSnapshot, PubSubNodeMutationRepository, PubSubNodeQueryRepository,
+    PubSubOutboxRepository, PubSubOwnerRead, PubSubOwnerReadKind,
     PubSubRootDiscoveryQueryRepository, PubSubSubscriptionMutationRepository,
     PubSubSubscriptionQueryRepository,
 };
@@ -35,6 +35,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
 
+mod discovery_snapshot_port;
 mod pep_ports;
 mod pubsub_outbox;
 mod pubsub_ports;

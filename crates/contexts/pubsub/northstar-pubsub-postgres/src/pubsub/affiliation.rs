@@ -22,11 +22,19 @@ pub async fn affiliations_for_jid(
     jid: &str,
     node: Option<&str>,
 ) -> Result<Vec<PubSubAffiliation>> {
+    affiliations_for_jid_on(pool, jid, node).await
+}
+
+pub(super) async fn affiliations_for_jid_on<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    jid: &str,
+    node: Option<&str>,
+) -> Result<Vec<PubSubAffiliation>> {
     let jid = northstar_xmpp_types::jid::canonical_bare_key(jid)?;
     let rows = sqlx::query("SELECT n.node, a.jid, a.affiliation FROM pubsub_affiliations a JOIN pubsub_nodes n ON n.id = a.node_id WHERE a.jid = $1 AND a.affiliation <> 'none' AND ($2::TEXT IS NULL OR n.node = $2) ORDER BY n.node")
         .bind(jid)
         .bind(node)
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?;
     Ok(rows.iter().map(row_to_affiliation).collect())
 }

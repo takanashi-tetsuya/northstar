@@ -24,6 +24,14 @@ pub async fn node_authorization_facts(
     node_id: Uuid,
     requester: &str,
 ) -> Result<(Option<String>, bool)> {
+    node_authorization_facts_on(pool, node_id, requester).await
+}
+
+pub(super) async fn node_authorization_facts_on<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    node_id: Uuid,
+    requester: &str,
+) -> Result<(Option<String>, bool)> {
     let full = northstar_xmpp_types::jid::canonicalize(requester)?;
     let bare = northstar_xmpp_types::jid::canonical_bare_key(&full)?;
     let row = sqlx::query(
@@ -38,7 +46,7 @@ pub async fn node_authorization_facts(
     .bind(node_id)
     .bind(bare)
     .bind(full)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
     Ok((row.try_get("affiliation")?, row.try_get("subscribed")?))
 }
@@ -48,12 +56,20 @@ pub async fn subscriptions_for_jid(
     jid: &str,
     node: Option<&str>,
 ) -> Result<Vec<PubSubSubscription>> {
+    subscriptions_for_jid_on(pool, jid, node).await
+}
+
+pub(super) async fn subscriptions_for_jid_on<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    jid: &str,
+    node: Option<&str>,
+) -> Result<Vec<PubSubSubscription>> {
     let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
     let bare = northstar_xmpp_types::jid::canonical_bare_key(&jid)?;
     let rows = sqlx::query("SELECT n.node, s.jid, s.state, s.subid, s.deliver, s.digest, s.digest_frequency, s.expire, s.include_body, s.show_values, s.subscription_type, s.subscription_depth FROM pubsub_subscriptions s JOIN pubsub_nodes n ON n.id = s.node_id WHERE split_part(s.jid, '/', 1) = $1 AND ($2::TEXT IS NULL OR n.node = $2) AND (s.expire IS NULL OR s.expire > NOW()) ORDER BY n.node, s.jid")
         .bind(bare)
         .bind(node)
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?;
     Ok(rows.iter().map(row_to_subscription).collect())
 }

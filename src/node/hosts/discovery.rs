@@ -3,7 +3,7 @@
 use crate::node::ServerNode;
 use anyhow::Result;
 use northstar_pubsub_application::PubSubService;
-use northstar_pubsub_core::{PubSubAccount, PubSubNode};
+use northstar_pubsub_core::{PubSubAccount, PubSubNode, PubSubNodeMetadata};
 use northstar_room_application::muc_service::{MucService, SerializableMucOccupant};
 use northstar_stream::protocol::discovery::{DiscoveryHost, PubSubDiscoItemsReply};
 use northstar_stream::protocol::ProtocolSession;
@@ -76,8 +76,8 @@ impl DiscoveryHost for ServerNode {
         )
     }
 
-    async fn pubsub_node_metadata_form(&self, node: &PubSubNode) -> Result<String> {
-        northstar_pubsub_xmpp::pubsub::node_metadata_form(self, node).await
+    fn pubsub_node_metadata_form(node: &PubSubNode, metadata: &PubSubNodeMetadata) -> String {
+        northstar_pubsub_xmpp::pubsub::node_metadata_form(node, metadata)
     }
 
     fn pubsub_service_disco_payload(&self) -> String {

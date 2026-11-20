@@ -311,9 +311,16 @@ pub(super) async fn create_node_in_transaction(
 }
 
 pub async fn get_node(pool: &PgPool, node: &str) -> Result<Option<PubSubNode>> {
+    get_node_on(pool, node).await
+}
+
+pub(super) async fn get_node_on<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    node: &str,
+) -> Result<Option<PubSubNode>> {
     let row = sqlx::query("SELECT id, node, creator_jid, access_model, publish_model, max_items, title, description, deliver_payloads, notify_delete, notify_retract, persist_items, send_last_published_item, node_type, deliver_notifications, notify_config, notify_sub, language, payload_type, max_payload_size, children_max, children_association_policy, children_association_whitelist, created_at FROM pubsub_nodes WHERE node = $1")
         .bind(node)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await?;
 
     Ok(row.as_ref().map(row_to_node))
@@ -859,6 +866,13 @@ pub async fn update_node_config_and_graph_with_outbox(
 /// One read-only statement keeps the metadata fields on the same snapshot.
 /// The caller must already have authorized discovery of this node.
 pub async fn node_metadata(pool: &PgPool, node_id: Uuid) -> Result<PubSubNodeMetadata> {
+    node_metadata_on(pool, node_id).await
+}
+
+pub(super) async fn node_metadata_on<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    node_id: Uuid,
+) -> Result<PubSubNodeMetadata> {
     let row = sqlx::query(
         "SELECT ARRAY(
              SELECT jid FROM pubsub_affiliations
@@ -873,7 +887,7 @@ pub async fn node_metadata(pool: &PgPool, node_id: Uuid) -> Result<PubSubNodeMet
              AND (expire IS NULL OR expire>NOW())) AS active_subscribers",
     )
     .bind(node_id)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
     Ok(PubSubNodeMetadata {
         owners: row.get("owners"),
@@ -1092,11 +1106,18 @@ pub async fn delete_node_as_owner_with_redirect_and_outbox(
 }
 
 pub async fn node_redirect(pool: &PgPool, node: &str) -> Result<Option<String>> {
+    node_redirect_on(pool, node).await
+}
+
+pub(super) async fn node_redirect_on<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    node: &str,
+) -> Result<Option<String>> {
     sqlx::query_scalar(
         "SELECT uri FROM pubsub_node_redirects WHERE node = $1 AND expires_at > NOW()",
     )
     .bind(node)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .map_err(Into::into)
 }

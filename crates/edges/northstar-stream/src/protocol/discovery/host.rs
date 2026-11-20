@@ -3,10 +3,9 @@
 use crate::protocol::{ProtocolSession, SessionHost};
 use anyhow::Result;
 use northstar_pubsub_application::{
-    PepNodeQueryRepository, PubSubAffiliationQueryRepository, PubSubNodeQueryRepository,
-    PubSubService,
+    PepNodeQueryRepository, PubSubDiscoverySnapshotRepository, PubSubService,
 };
-use northstar_pubsub_core::{PubSubAccount, PubSubNode};
+use northstar_pubsub_core::{PubSubAccount, PubSubNode, PubSubNodeMetadata};
 use northstar_room_application::muc_service::{MucRepository, MucService, SerializableMucOccupant};
 use roxmltree::Node;
 use std::future::Future;
@@ -21,9 +20,7 @@ pub enum PubSubDiscoItemsReply {
 /// adapters depend on stream, so the composition root binds their calls here.
 pub trait DiscoveryHost: SessionHost {
     type MucStore: MucRepository;
-    type PubSubStore: PubSubNodeQueryRepository
-        + PubSubAffiliationQueryRepository
-        + PepNodeQueryRepository;
+    type PubSubStore: PubSubDiscoverySnapshotRepository + PepNodeQueryRepository;
 
     fn muc_service(&self) -> &MucService<Self::MucStore>;
     fn pubsub_service(&self) -> &PubSubService<Self::PubSubStore>;
@@ -48,10 +45,7 @@ pub trait DiscoveryHost: SessionHost {
         mirror: &str,
     ) -> Result<String>;
 
-    fn pubsub_node_metadata_form(
-        &self,
-        node: &PubSubNode,
-    ) -> impl Future<Output = Result<String>> + Send;
+    fn pubsub_node_metadata_form(node: &PubSubNode, metadata: &PubSubNodeMetadata) -> String;
     fn pubsub_service_disco_payload(&self) -> String;
     fn pubsub_disco_items(
         &self,

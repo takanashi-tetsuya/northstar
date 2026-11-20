@@ -24,8 +24,9 @@ use northstar_pubsub_application::{
     PepAffiliationRepository, PepItemMutationRepository, PepItemQueryRepository,
     PepNodeMutationRepository, PepNodeQueryRepository, PepSubscriptionMutationRepository,
     PepSubscriptionQueryRepository, PubSubAffiliationMutationRepository,
-    PubSubAffiliationQueryRepository, PubSubItemMutationRepository, PubSubItemQueryRepository,
-    PubSubNodeMutationRepository, PubSubNodeQueryRepository, PubSubRootDiscoveryQueryRepository,
+    PubSubAffiliationQueryRepository, PubSubDiscoverySnapshotRepository,
+    PubSubItemMutationRepository, PubSubItemQueryRepository, PubSubNodeMutationRepository,
+    PubSubNodeQueryRepository, PubSubRootDiscoveryQueryRepository,
     PubSubSubscriptionMutationRepository, PubSubSubscriptionQueryRepository,
 };
 
@@ -34,6 +35,7 @@ pub trait PubSubRepositories:
     PubSubNodeQueryRepository
     + PubSubNodeMutationRepository
     + PubSubRootDiscoveryQueryRepository
+    + PubSubDiscoverySnapshotRepository
     + PubSubItemQueryRepository
     + PubSubItemMutationRepository
     + PubSubSubscriptionQueryRepository
@@ -54,6 +56,7 @@ impl<R> PubSubRepositories for R where
     R: PubSubNodeQueryRepository
         + PubSubNodeMutationRepository
         + PubSubRootDiscoveryQueryRepository
+        + PubSubDiscoverySnapshotRepository
         + PubSubItemQueryRepository
         + PubSubItemMutationRepository
         + PubSubSubscriptionQueryRepository

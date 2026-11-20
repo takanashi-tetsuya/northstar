@@ -2,19 +2,23 @@
 
 use super::*;
 
-/// Keep leaf discovery authority and item IDs on one PostgreSQL statement
-/// snapshot. A configuration or affiliation change cannot split the access
-/// decision from the visible item list.
-pub struct LeafDiscoSnapshot {
-    pub node_type: String,
-    pub access_model: String,
-    pub affiliation: Option<String>,
-    pub subscribed: bool,
-    pub item_ids: Vec<String>,
-}
+pub use northstar_pubsub_application::{
+    PubSubCollectionDiscoChild as CollectionDiscoChild,
+    PubSubCollectionDiscoSnapshot as CollectionDiscoSnapshot,
+    PubSubLeafDiscoSnapshot as LeafDiscoSnapshot,
+};
 
+/// Read leaf discovery authority and item IDs on one PostgreSQL statement snapshot.
 pub async fn leaf_disco_snapshot(
     pool: &PgPool,
+    node: &str,
+    requester: &str,
+) -> Result<Option<LeafDiscoSnapshot>> {
+    leaf_disco_snapshot_on(pool, node, requester).await
+}
+
+pub(super) async fn leaf_disco_snapshot_on<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
     node: &str,
     requester: &str,
 ) -> Result<Option<LeafDiscoSnapshot>> {
@@ -49,7 +53,7 @@ pub async fn leaf_disco_snapshot(
     )
     .bind(node)
     .bind(requester)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
     Ok(row.map(|row| LeafDiscoSnapshot {
         node_type: row.get("node_type"),
@@ -60,24 +64,19 @@ pub async fn leaf_disco_snapshot(
     }))
 }
 
-pub struct CollectionDiscoChild {
-    pub node: String,
-    pub title: Option<String>,
-}
-
-pub struct CollectionDiscoSnapshot {
-    pub node_type: String,
-    pub access_model: String,
-    pub affiliation: Option<String>,
-    pub subscribed: bool,
-    pub children: Vec<CollectionDiscoChild>,
-}
-
 /// Read the parent policy and its immediate children from one statement.
 /// The SQL gate avoids scanning edges for denied requests; the service checks
 /// the same authority facts with can_retrieve_pure before exposing the list.
 pub async fn collection_disco_snapshot(
     pool: &PgPool,
+    node: &str,
+    requester: &str,
+) -> Result<Option<CollectionDiscoSnapshot>> {
+    collection_disco_snapshot_on(pool, node, requester).await
+}
+
+pub(super) async fn collection_disco_snapshot_on<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
     node: &str,
     requester: &str,
 ) -> Result<Option<CollectionDiscoSnapshot>> {
@@ -114,7 +113,7 @@ pub async fn collection_disco_snapshot(
     )
     .bind(node)
     .bind(requester)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
     let Some(first) = rows.first() else {
         return Ok(None);

@@ -1,15 +1,19 @@
 use super::{
     collection_edge_reply, config_equivalent, data_form_fields, disco_item_xml, disco_rsm_page,
-    error_condition, item_retrieval_access, node_config_form, normalized_bare, parse_node_config,
-    parse_publish_options, parse_pubsub_rsm, parse_subscription_options,
-    publish_batch_size_allowed, pubsub_policy_suppression_is_terminal, pubsub_rsm_page,
-    reply_error, serialize_pubsub_item, subscription_options_form, subscription_payload,
-    valid_item_id, valid_node_id, DiscoItem, PubSubError, PubSubReply, MAX_PUBLISH_ITEMS,
-    NODE_CONFIG_FORM, PUBLISH_OPTIONS_FORM, SERVICE_FEATURES, SUBSCRIBE_OPTIONS_FORM,
+    error_condition, item_retrieval_access, node_config_form, node_disco_items, node_info_reply,
+    normalized_bare, parse_node_config, parse_publish_options, parse_pubsub_rsm,
+    parse_subscription_options, publish_batch_size_allowed, pubsub_policy_suppression_is_terminal,
+    pubsub_rsm_page, reply_error, self_affiliations_reply, self_subscriptions_reply,
+    serialize_pubsub_item, subscription_options_form, subscription_payload, valid_item_id,
+    valid_node_id, DiscoItem, PubSubError, PubSubReply, MAX_PUBLISH_ITEMS, NODE_CONFIG_FORM,
+    PUBLISH_OPTIONS_FORM, SERVICE_FEATURES, SUBSCRIBE_OPTIONS_FORM,
 };
-use northstar_pubsub_application::PubSubCollectionEdgeResult;
+use northstar_pubsub_application::{
+    PubSubCollectionDiscoChild, PubSubCollectionDiscoSnapshot, PubSubCollectionEdgeResult,
+    PubSubLeafDiscoSnapshot, PubSubNodeInfo, PubSubNodeItems, PubSubSelfList,
+};
 use northstar_pubsub_core::{
-    CollectionUpdateOutcome, PubSubItem, PubSubNodeConfig, PubSubSubscription,
+    CollectionUpdateOutcome, PubSubAffiliation, PubSubItem, PubSubNodeConfig, PubSubSubscription,
     PubSubSubscriptionOptions,
 };
 use northstar_time::Utc;
@@ -127,6 +131,142 @@ fn leaf_disco_items_use_name_and_never_masquerade_as_nodes() {
     assert_eq!(root.attribute("jid"), Some("pubsub.example.test"));
     assert_eq!(root.attribute("name"), Some("item<&1"));
     assert_eq!(root.attribute("node"), None);
+}
+
+#[test]
+fn discovery_snapshot_errors_preserve_missing_redirect_and_forbidden() {
+    let uri = "xmpp:pubsub.example.test?;node=new&view=1";
+    for redirect in [None, Some(uri.to_owned())] {
+        let replies = [
+            node_info_reply(
+                "old",
+                PubSubNodeInfo::Missing {
+                    redirect: redirect.clone(),
+                },
+            )
+            .unwrap(),
+            node_disco_items(PubSubNodeItems::Missing {
+                redirect: redirect.clone(),
+            })
+            .unwrap_err(),
+            self_subscriptions_reply(
+                Some("old"),
+                PubSubSelfList::Missing {
+                    redirect: redirect.clone(),
+                },
+            ),
+            self_affiliations_reply(PubSubSelfList::Missing {
+                redirect: redirect.clone(),
+            }),
+        ];
+        for reply in replies {
+            if redirect.is_some() {
+                let xml = super::pubsub_s2s_iq_error(
+                    "i1",
+                    "pubsub.example.test",
+                    "remote.example.test",
+                    &reply,
+                );
+                let document = Document::parse(&xml).unwrap();
+                let gone = document
+                    .descendants()
+                    .find(|element| element.has_tag_name("gone"))
+                    .unwrap();
+                assert_eq!(gone.text(), Some(uri));
+                assert_eq!(error_condition(&reply), Some("gone"));
+            } else {
+                assert!(matches!(reply, PubSubReply::Error("item-not-found")));
+            }
+        }
+    }
+    assert!(matches!(
+        node_info_reply("private", PubSubNodeInfo::Forbidden).unwrap(),
+        PubSubReply::Error("forbidden")
+    ));
+    for outcome in [PubSubNodeItems::Forbidden, PubSubNodeItems::UnsupportedKind] {
+        assert!(matches!(
+            node_disco_items(outcome),
+            Err(PubSubReply::Error("forbidden"))
+        ));
+    }
+}
+
+#[test]
+fn discovery_snapshot_items_keep_leaf_and_collection_cursor_keys() {
+    let leaf = PubSubNodeItems::Leaf(PubSubLeafDiscoSnapshot {
+        node_type: "leaf".to_owned(),
+        access_model: "open".to_owned(),
+        affiliation: None,
+        subscribed: false,
+        item_ids: vec!["alpha".to_owned(), "beta".to_owned()],
+    });
+    let collection = PubSubNodeItems::Collection(PubSubCollectionDiscoSnapshot {
+        node_type: "collection".to_owned(),
+        access_model: "open".to_owned(),
+        affiliation: None,
+        subscribed: false,
+        children: vec![
+            PubSubCollectionDiscoChild {
+                node: "alpha".to_owned(),
+                title: None,
+            },
+            PubSubCollectionDiscoChild {
+                node: "beta".to_owned(),
+                title: Some("Title".to_owned()),
+            },
+        ],
+    });
+    let rsm = Document::parse(
+        "<set xmlns='http://jabber.org/protocol/rsm'><max>1</max><after>alpha</after></set>",
+    )
+    .unwrap();
+    let request = parse_pubsub_rsm(rsm.root_element()).unwrap();
+    for (outcome, expected_node, expected_name) in
+        [(leaf, None, "beta"), (collection, Some("beta"), "Title")]
+    {
+        let items = node_disco_items(outcome).unwrap();
+        let (items, rsm) = disco_rsm_page(items, &request, 100).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(rsm.contains("<first index='1'>beta</first><last>beta</last><count>2</count>"));
+        let xml = disco_item_xml("pubsub.example.test", &items[0]);
+        let document = Document::parse(&xml).unwrap();
+        let item = document.root_element();
+        assert_eq!(item.attribute("node"), expected_node);
+        assert_eq!(item.attribute("name"), Some(expected_name));
+    }
+}
+
+#[test]
+fn self_list_snapshot_replies_preserve_filtered_and_unfiltered_xml() {
+    for node_filter in [Some("n"), None] {
+        let reply =
+            self_subscriptions_reply(node_filter, PubSubSelfList::List(vec![subscription("id")]));
+        let PubSubReply::Result(xml) = reply else {
+            panic!("expected subscriptions result");
+        };
+        let document = Document::parse(&xml).unwrap();
+        let entries = document.root_element().first_element_child().unwrap();
+        assert_eq!(entries.tag_name().name(), "subscriptions");
+        assert_eq!(entries.attribute("node"), node_filter);
+        let entry = entries.first_element_child().unwrap();
+        assert_eq!(entry.attribute("node"), Some("n"));
+        assert_eq!(entry.attribute("subid"), Some("id"));
+    }
+    let reply = self_affiliations_reply(PubSubSelfList::List(vec![PubSubAffiliation {
+        node: "n".to_owned(),
+        jid: "alice@example.test".to_owned(),
+        affiliation: "owner".to_owned(),
+    }]));
+    let PubSubReply::Result(xml) = reply else {
+        panic!("expected affiliations result");
+    };
+    let document = Document::parse(&xml).unwrap();
+    let entries = document.root_element().first_element_child().unwrap();
+    assert_eq!(entries.tag_name().name(), "affiliations");
+    assert_eq!(entries.attribute("node"), None);
+    let entry = entries.first_element_child().unwrap();
+    assert_eq!(entry.attribute("node"), Some("n"));
+    assert_eq!(entry.attribute("affiliation"), Some("owner"));
 }
 
 #[test]

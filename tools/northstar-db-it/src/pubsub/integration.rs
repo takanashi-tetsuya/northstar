@@ -25,6 +25,8 @@ mod bookmarks;
 mod collection_graph;
 #[path = "integration/digest_lease_tests.rs"]
 mod digest_lease;
+#[path = "integration/discovery_snapshot_tests.rs"]
+mod discovery_snapshot;
 #[path = "integration/mutation_transaction_tests.rs"]
 mod mutation_transaction;
 #[path = "integration/read_only_disco_tests.rs"]

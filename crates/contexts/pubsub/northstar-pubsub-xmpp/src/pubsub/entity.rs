@@ -354,74 +354,34 @@ pub(super) async fn handle_entity_get<H: PubSubHost>(
                 return Ok(PubSubReply::Error("bad-request"));
             }
             let node_name = operation.attribute("node");
-            if let Some(name) = node_name {
-                if valid_node_id(Some(name)).is_none() {
-                    return Ok(PubSubReply::Error("bad-request"));
-                }
-                if host
-                    .pubsub_application_service()
-                    .get_node(name)
-                    .await?
-                    .is_none()
-                {
-                    return missing_node_reply(host, name).await;
-                }
+            if node_name.is_some_and(|name| valid_node_id(Some(name)).is_none()) {
+                return Ok(PubSubReply::Error("bad-request"));
             }
-            let subscriptions = host
+            let outcome = host
                 .pubsub_application_service()
-                .subscriptions_for_jid(&requester_full, node_name)
+                .self_subscriptions(&PubSubSelfListQuery {
+                    node: node_name,
+                    requester: &requester_full,
+                })
                 .await?;
-            let mut entries = XmlElement::new("subscriptions").optional_attr("node", node_name);
-            for subscription in &subscriptions {
-                entries.push_child(subscription_element(
-                    &subscription.node,
-                    &subscription.jid,
-                    &subscription.state,
-                    Some(&subscription.subid),
-                    subscription.expire,
-                ));
-            }
-            Ok(PubSubReply::Result(
-                XmlElement::namespaced("pubsub", NS_PUBSUB)
-                    .child(entries)
-                    .finish(),
-            ))
+            Ok(self_subscriptions_reply(node_name, outcome))
         }
         "affiliations" => {
             if !has_only_attributes(operation, &["node"]) || !has_no_element_content(operation) {
                 return Ok(PubSubReply::Error("bad-request"));
             }
             let node_name = operation.attribute("node");
-            if let Some(name) = node_name {
-                if valid_node_id(Some(name)).is_none() {
-                    return Ok(PubSubReply::Error("bad-request"));
-                }
-                if host
-                    .pubsub_application_service()
-                    .get_node(name)
-                    .await?
-                    .is_none()
-                {
-                    return missing_node_reply(host, name).await;
-                }
+            if node_name.is_some_and(|name| valid_node_id(Some(name)).is_none()) {
+                return Ok(PubSubReply::Error("bad-request"));
             }
-            let affiliations = host
+            let outcome = host
                 .pubsub_application_service()
-                .affiliations_for_jid(&requester, node_name)
+                .self_affiliations(&PubSubSelfListQuery {
+                    node: node_name,
+                    requester: &requester,
+                })
                 .await?;
-            let mut entries = XmlElement::new("affiliations");
-            for affiliation in &affiliations {
-                entries.push_child(
-                    XmlElement::new("affiliation")
-                        .attr("node", &affiliation.node)
-                        .attr("affiliation", &affiliation.affiliation),
-                );
-            }
-            Ok(PubSubReply::Result(
-                XmlElement::namespaced("pubsub", NS_PUBSUB)
-                    .child(entries)
-                    .finish(),
-            ))
+            Ok(self_affiliations_reply(outcome))
         }
         _ => Ok(PubSubReply::Error("feature-not-implemented")),
     }

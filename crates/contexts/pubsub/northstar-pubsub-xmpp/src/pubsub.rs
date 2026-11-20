@@ -2,22 +2,25 @@
 
 use anyhow::Result;
 use northstar_pubsub_application::{
-    service::{CollectionDiscoItems, LeafDiscoItems, PubSubSubscriptionOptionsRead},
-    PubSubAuthorizeSubscriptionCommand, PubSubCollectionEdgeCommand, PubSubCollectionEdgeOperation,
-    PubSubCollectionEdgeResult, PubSubConfigureNodeCommand, PubSubCreateNodeCommand,
-    PubSubDeleteNodeCommand, PubSubListPageQuery, PubSubOwnerRead, PubSubOwnerReadKind,
-    PubSubPublishCommand, PubSubPurgeNodeCommand, PubSubRetractCommand, PubSubRootDiscoQuery,
-    PubSubService, PubSubSetAffiliationsCommand, PubSubSetSubscriptionsCommand,
-    PubSubSubscribeCommand, PubSubUnsubscribeCommand, PubSubUpdateSubscriptionOptionsCommand,
+    service::PubSubSubscriptionOptionsRead, PubSubAuthorizeSubscriptionCommand,
+    PubSubCollectionEdgeCommand, PubSubCollectionEdgeOperation, PubSubCollectionEdgeResult,
+    PubSubConfigureNodeCommand, PubSubCreateNodeCommand, PubSubDeleteNodeCommand,
+    PubSubListPageQuery, PubSubNodeInfo, PubSubNodeInfoQuery, PubSubNodeItems,
+    PubSubNodeItemsQuery, PubSubOwnerRead, PubSubOwnerReadKind, PubSubPublishCommand,
+    PubSubPurgeNodeCommand, PubSubRetractCommand, PubSubRootDiscoQuery, PubSubSelfList,
+    PubSubSelfListQuery, PubSubService, PubSubSetAffiliationsCommand,
+    PubSubSetSubscriptionsCommand, PubSubSubscribeCommand, PubSubUnsubscribeCommand,
+    PubSubUpdateSubscriptionOptionsCommand,
 };
 use northstar_pubsub_core::{
-    CollectionUpdateOutcome, CreateNodeOutcome, OwnerMutationOutcome, PubSubConfigOutcome,
-    PubSubConfigureNodeWrite, PubSubCreateNodeWrite, PubSubDeleteNodeWrite, PubSubItem, PubSubNode,
-    PubSubNodeConfig, PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeWrite,
-    PubSubRetractOutcome, PubSubRetractWrite, PubSubSetAffiliationsWrite,
-    PubSubSetSubscriptionsWrite, PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription,
-    PubSubSubscriptionOptions, PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite,
-    SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscriptionOptionsOutcome,
+    CollectionUpdateOutcome, CreateNodeOutcome, OwnerMutationOutcome, PubSubAffiliation,
+    PubSubConfigOutcome, PubSubConfigureNodeWrite, PubSubCreateNodeWrite, PubSubDeleteNodeWrite,
+    PubSubItem, PubSubNode, PubSubNodeConfig, PubSubNodeMetadata, PubSubPublishOutcome,
+    PubSubPublishWrite, PubSubPurgeNodeWrite, PubSubRetractOutcome, PubSubRetractWrite,
+    PubSubSetAffiliationsWrite, PubSubSetSubscriptionsWrite, PubSubSubscribeOutcome,
+    PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions, PubSubUnsubscribeOutcome,
+    PubSubUnsubscribeWrite, SetAffiliationsOutcome, SetSubscriptionsOutcome,
+    SubscriptionOptionsOutcome,
 };
 use northstar_stream::protocol::discovery::PubSubDiscoItemsReply;
 use northstar_xml_builder::XmlElement;
@@ -192,20 +195,24 @@ pub async fn federated_disco_info<H: PubSubHost>(
                 .finish(),
         ));
     }
-    let Some(node) = host
+    let outcome = host
         .pubsub_application_service()
-        .get_node(node_name)
-        .await?
-    else {
-        return missing_node_reply(host, node_name).await;
+        .node_info(&PubSubNodeInfoQuery {
+            node: node_name,
+            requester,
+        })
+        .await?;
+    node_info_reply(node_name, outcome)
+}
+
+fn node_info_reply(node_name: &str, outcome: PubSubNodeInfo) -> Result<PubSubReply> {
+    let (node, metadata) = match outcome {
+        PubSubNodeInfo::Missing { redirect } => {
+            return Ok(missing_node_reply_from_redirect(redirect))
+        }
+        PubSubNodeInfo::Forbidden => return Ok(PubSubReply::Error("forbidden")),
+        PubSubNodeInfo::Info { node, metadata } => (node, metadata),
     };
-    if !host
-        .pubsub_application_service()
-        .can_retrieve_node(&node, &normalized_bare(requester)?)
-        .await?
-    {
-        return Ok(PubSubReply::Error("forbidden"));
-    }
     let mut query = XmlElement::namespaced("query", "http://jabber.org/protocol/disco#info")
         .attr("node", node_name)
         .child(
@@ -223,7 +230,7 @@ pub async fn federated_disco_info<H: PubSubHost>(
     query.push_child(
         XmlElement::new("feature").attr("var", "http://jabber.org/protocol/pubsub#retrieve-items"),
     );
-    query.push_validated_fragment(&node_metadata_form(host, &node).await?)?;
+    query.push_validated_fragment(&node_metadata_form(&node, &metadata))?;
     Ok(PubSubReply::Result(query.finish()))
 }
 
@@ -256,75 +263,29 @@ pub async fn federated_disco_items<H: PubSubHost>(
             Err(error) => return Ok(error),
         };
     }
-    let requested_node = request.attribute("node");
     let service = pubsub_domain(host);
     let requester_full = normalized_jid(requester)?;
     let requester = normalized_bare(&requester_full)?;
-    if requested_node.is_none() {
+    let Some(node_name) = request.attribute("node") else {
         return root_disco_items(host, &service, &requester, rsm.as_ref()).await;
-    }
-    let mut visible = Vec::new();
-    if let Some(node_name) = requested_node {
-        if node_name == "serverinfo" {
-            // The synthetic serverinfo node has one current PubSub item, but
-            // its data is retrieved via XEP-0060 rather than disco#items.
-        } else {
-            let Some(node) = host
-                .pubsub_application_service()
-                .get_node(node_name)
-                .await?
-            else {
-                return missing_node_reply(host, node_name).await;
-            };
-            if node.node_type == "collection" {
-                let children = match host
-                    .pubsub_application_service()
-                    .collection_disco_items(node_name, &requester)
-                    .await?
-                {
-                    CollectionDiscoItems::Items(children) => children,
-                    CollectionDiscoItems::NotFound => {
-                        return missing_node_reply(host, node_name).await;
-                    }
-                    CollectionDiscoItems::NotCollection | CollectionDiscoItems::Forbidden => {
-                        return Ok(PubSubReply::Error("forbidden"));
-                    }
-                };
-                for child in children {
-                    // XEP-0248 defines collection visibility using the
-                    // collection's access model, not each child's model.
-                    visible.push(DiscoItem {
-                        node: child.node,
-                        title: child.title,
-                        published_item: false,
-                    });
-                }
-            } else if node.node_type == "leaf" {
-                let item_ids = match host
-                    .pubsub_application_service()
-                    .leaf_disco_items(node_name, &requester)
-                    .await?
-                {
-                    LeafDiscoItems::Items(item_ids) => item_ids,
-                    LeafDiscoItems::NotFound => {
-                        return missing_node_reply(host, node_name).await;
-                    }
-                    LeafDiscoItems::NotLeaf | LeafDiscoItems::Forbidden => {
-                        return Ok(PubSubReply::Error("forbidden"));
-                    }
-                };
-                for item_id in item_ids {
-                    visible.push(DiscoItem {
-                        node: item_id,
-                        title: None,
-                        published_item: true,
-                    });
-                }
-            } else {
-                return Ok(PubSubReply::Error("forbidden"));
-            }
+    };
+    let visible = if node_name == "serverinfo" {
+        // The synthetic serverinfo node has one current PubSub item, but
+        // its data is retrieved via XEP-0060 rather than disco#items.
+        Vec::new()
+    } else {
+        let outcome = host
+            .pubsub_application_service()
+            .node_items(&PubSubNodeItemsQuery {
+                node: node_name,
+                requester: &requester,
+            })
+            .await?;
+        match node_disco_items(outcome) {
+            Ok(items) => items,
+            Err(error) => return Ok(error),
         }
-    }
+    };
     let (visible, rsm_xml) = if let Some(rsm) = &rsm {
         match disco_rsm_page(visible, rsm, 100) {
             Ok(page) => page,
@@ -334,12 +295,39 @@ pub async fn federated_disco_items<H: PubSubHost>(
         (visible, String::new())
     };
     let mut query = XmlElement::namespaced("query", "http://jabber.org/protocol/disco#items")
-        .optional_attr("node", requested_node);
+        .attr("node", node_name);
     for item in visible {
         query.push_child(disco_item_element(&service, &item));
     }
     query.push_validated_fragment(&rsm_xml)?;
     Ok(PubSubReply::Result(query.finish()))
+}
+
+fn node_disco_items(outcome: PubSubNodeItems) -> Result<Vec<DiscoItem>, PubSubReply> {
+    match outcome {
+        PubSubNodeItems::Missing { redirect } => Err(missing_node_reply_from_redirect(redirect)),
+        PubSubNodeItems::Forbidden | PubSubNodeItems::UnsupportedKind => {
+            Err(PubSubReply::Error("forbidden"))
+        }
+        PubSubNodeItems::Leaf(snapshot) => Ok(snapshot
+            .item_ids
+            .into_iter()
+            .map(|node| DiscoItem {
+                node,
+                title: None,
+                published_item: true,
+            })
+            .collect()),
+        PubSubNodeItems::Collection(snapshot) => Ok(snapshot
+            .children
+            .into_iter()
+            .map(|child| DiscoItem {
+                node: child.node,
+                title: child.title,
+                published_item: false,
+            })
+            .collect()),
+    }
 }
 
 /// Map PubSub disco items to the discovery port's reply, including its error fallback.
@@ -684,26 +672,69 @@ pub fn event_item_xml(stored: &str) -> String {
 }
 
 async fn missing_node_reply<H: PubSubHost>(host: &H, node: &str) -> Result<PubSubReply> {
-    Ok(
-        match host
-            .pubsub_application_service()
-            .node_redirect(node)
-            .await?
-        {
-            Some(uri) => PubSubReply::ExtendedError(PubSubError::moved(uri)),
-            None => PubSubReply::Error("item-not-found"),
-        },
+    let redirect = host
+        .pubsub_application_service()
+        .node_redirect(node)
+        .await?;
+    Ok(missing_node_reply_from_redirect(redirect))
+}
+
+fn missing_node_reply_from_redirect(redirect: Option<String>) -> PubSubReply {
+    match redirect {
+        Some(uri) => PubSubReply::ExtendedError(PubSubError::moved(uri)),
+        None => PubSubReply::Error("item-not-found"),
+    }
+}
+
+fn self_subscriptions_reply(
+    node: Option<&str>,
+    outcome: PubSubSelfList<PubSubSubscription>,
+) -> PubSubReply {
+    let subscriptions = match outcome {
+        PubSubSelfList::Missing { redirect } => return missing_node_reply_from_redirect(redirect),
+        PubSubSelfList::List(rows) => rows,
+    };
+    let mut entries = XmlElement::new("subscriptions").optional_attr("node", node);
+    for subscription in &subscriptions {
+        entries.push_child(subscription_element(
+            &subscription.node,
+            &subscription.jid,
+            &subscription.state,
+            Some(&subscription.subid),
+            subscription.expire,
+        ));
+    }
+    PubSubReply::Result(
+        XmlElement::namespaced("pubsub", NS_PUBSUB)
+            .child(entries)
+            .finish(),
+    )
+}
+
+fn self_affiliations_reply(outcome: PubSubSelfList<PubSubAffiliation>) -> PubSubReply {
+    let affiliations = match outcome {
+        PubSubSelfList::Missing { redirect } => return missing_node_reply_from_redirect(redirect),
+        PubSubSelfList::List(rows) => rows,
+    };
+    let mut entries = XmlElement::new("affiliations");
+    for affiliation in &affiliations {
+        entries.push_child(
+            XmlElement::new("affiliation")
+                .attr("node", &affiliation.node)
+                .attr("affiliation", &affiliation.affiliation),
+        );
+    }
+    PubSubReply::Result(
+        XmlElement::namespaced("pubsub", NS_PUBSUB)
+            .child(entries)
+            .finish(),
     )
 }
 
 /// Render the XEP-0060 node metadata form for disco#info queries.
-pub async fn node_metadata_form<H: PubSubHost>(host: &H, node: &PubSubNode) -> Result<String> {
+pub fn node_metadata_form(node: &PubSubNode, metadata: &PubSubNodeMetadata) -> String {
     let title = node.title.as_deref().unwrap_or(&node.node);
     let description = node.description.as_deref().unwrap_or_default();
-    let metadata = host
-        .pubsub_application_service()
-        .node_metadata(node.id)
-        .await?;
     let mut form = XmlElement::namespaced("x", NS_DATA)
         .attr("type", "result")
         .child(data_field_element(
@@ -738,7 +769,7 @@ pub async fn node_metadata_form<H: PubSubHost>(host: &H, node: &PubSubNode) -> R
         Some("jid-multi"),
         metadata.publishers.iter(),
     ));
-    Ok(form.finish())
+    form.finish()
 }
 
 #[cfg(test)]

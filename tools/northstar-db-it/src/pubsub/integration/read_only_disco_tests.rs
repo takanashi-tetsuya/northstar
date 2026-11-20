@@ -2,14 +2,8 @@
 
 use super::*;
 
-#[tokio::test]
-#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
-async fn query_ports_succeed_with_read_only_database_connections() {
-    let (url, setup_pool) = integration_pool(2).await;
-    let node_name = format!("readonly-{}", Uuid::new_v4().simple());
-    let node = create_default_test_node(&setup_pool, &node_name, "alice@example.test").await;
-
-    let read_pool = sqlx::postgres::PgPoolOptions::new()
+pub(super) async fn read_only_pool(url: &str) -> PgPool {
+    sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
         .after_connect(|connection, _| {
             Box::pin(async move {
@@ -19,9 +13,19 @@ async fn query_ports_succeed_with_read_only_database_connections() {
                 Ok(())
             })
         })
-        .connect(&url)
+        .connect(url)
         .await
-        .unwrap();
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn query_ports_succeed_with_read_only_database_connections() {
+    let (url, setup_pool) = integration_pool(2).await;
+    let node_name = format!("readonly-{}", Uuid::new_v4().simple());
+    let node = create_default_test_node(&setup_pool, &node_name, "alice@example.test").await;
+
+    let read_pool = read_only_pool(&url).await;
     let read_only: String = sqlx::query_scalar("SHOW default_transaction_read_only")
         .fetch_one(&read_pool)
         .await
@@ -336,19 +340,7 @@ async fn leaf_disco_uses_read_only_snapshot_and_live_subscription_scope() {
         .unwrap();
     }
 
-    let read_pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(1)
-        .after_connect(|connection, _| {
-            Box::pin(async move {
-                sqlx::query("SET default_transaction_read_only = on")
-                    .execute(connection)
-                    .await?;
-                Ok(())
-            })
-        })
-        .connect(&url)
-        .await
-        .unwrap();
+    let read_pool = read_only_pool(&url).await;
     let service =
         northstar_workflows::pubsub_repository::test_pubsub_service(read_pool, "example.test");
     assert_eq!(
@@ -664,19 +656,7 @@ async fn collection_disco_sql_gate_matches_parent_policy_on_read_only_pool() {
         );
     }
 
-    let read_pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(1)
-        .after_connect(|connection, _| {
-            Box::pin(async move {
-                sqlx::query("SET default_transaction_read_only = on")
-                    .execute(connection)
-                    .await?;
-                Ok(())
-            })
-        })
-        .connect(&url)
-        .await
-        .unwrap();
+    let read_pool = read_only_pool(&url).await;
     let service = northstar_workflows::pubsub_repository::test_pubsub_service(
         read_pool.clone(),
         "example.test",
